@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/binary"
 	"sync"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -39,9 +40,11 @@ type Builder struct {
 	leafColumnarV2KeyBytes int
 	leafColumnarV2ValBytes int
 
-	leafColumnarPrefixV2Entries  []leafColumnarPrefixV2Entry
-	leafColumnarPrefixV2KeyBytes int
-	leafColumnarPrefixV2ValBytes int
+	leafColumnarPrefixV2Entries    []leafColumnarPrefixV2Entry
+	leafColumnarPrefixV2KeyBytes   int
+	leafColumnarPrefixV2ValBytes   int
+	leafColumnarPrefixV2AllInline  bool
+	leafColumnarPrefixV2ValueArena []byte
 
 	internalBaseEntries       []internalBaseDeltaEntry
 	internalBaseArena         []byte
@@ -51,6 +54,13 @@ type Builder struct {
 const internalBaseDeltaFooterTailSize = 14 // u16 lowLen + u16 highLen + u16 prefixLen + u64 baseChildID
 
 var leafColumnarV2ArenaPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, page.PageSize)
+		return buf[:0]
+	},
+}
+
+var leafColumnarPrefixV2ValueArenaPool = sync.Pool{
 	New: func() any {
 		buf := make([]byte, page.PageSize)
 		return buf[:0]
@@ -88,6 +98,11 @@ var internalBaseArenaPool = sync.Pool{
 		return buf[:0]
 	},
 }
+
+var builderNativeLittleEndian = func() bool {
+	var x uint16 = 1
+	return *(*byte)(unsafe.Pointer(&x)) == 1
+}()
 
 type BuilderOptions struct {
 	LeafPrefixCompression bool
@@ -143,6 +158,7 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 	}
 	if pType == page.PageTypeLeaf && opts.LeafColumnar {
 		if leafPrefix {
+			b.leafColumnarPrefixV2AllInline = true
 			if pooled, ok := leafColumnarPrefixV2EntriesPool.Get().([]leafColumnarPrefixV2Entry); ok {
 				b.leafColumnarPrefixV2Entries = pooled[:0]
 			}
@@ -447,7 +463,9 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 	suffixOff, suffixLenU16 := b.leafColumnarV2AppendBytes(key[prefixLen:])
 	valueOff, valueLen := uint32(0), uint16(0)
 	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
-		valueOff, valueLen = b.leafColumnarV2AppendBytes(value)
+		valueOff, valueLen = b.leafColumnarPrefixV2AppendValueBytes(value)
+	} else {
+		b.leafColumnarPrefixV2AllInline = false
 	}
 
 	b.leafColumnarPrefixV2Entries = append(b.leafColumnarPrefixV2Entries, leafColumnarPrefixV2Entry{
@@ -793,34 +811,123 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 
 	valOff := valuesStart
 	keyOff := suffixStart
-	for i := 0; i < count; i++ {
-		e := &b.leafColumnarPrefixV2Entries[i]
-		keyDirPos := keyDirStart + i*2
-		valDirPos := valDirStart + i*2
-		prefixPos := prefixStart + i*2
-		putUint16At(b.data, keyDirPos, uint16(keyOff))
-		putUint16At(b.data, valDirPos, uint16(valOff))
-		b.data[flagsStart+i] = e.flags
-		putUint16At(b.data, prefixPos, e.prefixLen)
+	entries := b.leafColumnarPrefixV2Entries
+	suffixArena := b.leafColumnarV2Arena
+	valueArena := b.leafColumnarPrefixV2ValueArena
+	allInline := b.leafColumnarPrefixV2AllInline
+	flagsCol := b.data[flagsStart:prefixStart]
+	prefixCol := b.data[prefixStart:metaEnd]
 
-		if e.flags&FlagPointer != 0 {
-			if b.leafPackedValuePtr {
-				page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
-			} else {
-				e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
-			}
-			valOff += valPtrSize
-		} else if e.flags&FlagTombstone == 0 {
-			valueStart := int(e.valueOff)
-			valueEnd := valueStart + int(e.valueLen)
-			copy(b.data[valOff:valOff+int(e.valueLen)], b.leafColumnarV2Arena[valueStart:valueEnd])
-			valOff += int(e.valueLen)
+	if allInline {
+		if len(valueArena) != b.leafColumnarPrefixV2ValBytes || len(suffixArena) != b.leafColumnarPrefixV2KeyBytes {
+			panic("leaf columnar+prefix v2 inline arena size mismatch")
 		}
+		copy(b.data[valuesStart:suffixStart], valueArena)
+		copy(b.data[suffixStart:], suffixArena)
+	}
 
-		suffixStart := int(e.suffixOff)
-		suffixEnd := suffixStart + int(e.suffixLen)
-		copy(b.data[keyOff:keyOff+int(e.suffixLen)], b.leafColumnarV2Arena[suffixStart:suffixEnd])
-		keyOff += int(e.suffixLen)
+	if builderNativeLittleEndian {
+		keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
+		valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
+
+		if prefixStart&1 == 0 {
+			prefixDirU16 := bytesAsUint16Slice(prefixCol)
+			for i := 0; i < count; i++ {
+				e := &entries[i]
+				keyDirU16[i] = uint16(keyOff)
+				valDirU16[i] = uint16(valOff)
+				flagsCol[i] = e.flags
+				prefixDirU16[i] = e.prefixLen
+
+				if allInline {
+					valOff += int(e.valueLen)
+				} else if e.flags&FlagPointer != 0 {
+					if b.leafPackedValuePtr {
+						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+					} else {
+						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+					}
+					valOff += valPtrSize
+				} else if e.flags&FlagTombstone == 0 {
+					valueLen := int(e.valueLen)
+					valueStart := int(e.valueOff)
+					copy(b.data[valOff:valOff+valueLen], valueArena[valueStart:valueStart+valueLen])
+					valOff += valueLen
+				}
+
+				suffixLen := int(e.suffixLen)
+				if !allInline {
+					suffixStart := int(e.suffixOff)
+					copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
+				}
+				keyOff += suffixLen
+			}
+		} else {
+			for i := 0; i < count; i++ {
+				e := &entries[i]
+				keyDirU16[i] = uint16(keyOff)
+				valDirU16[i] = uint16(valOff)
+				flagsCol[i] = e.flags
+				putUint16At(prefixCol, i*2, e.prefixLen)
+
+				if allInline {
+					valOff += int(e.valueLen)
+				} else if e.flags&FlagPointer != 0 {
+					if b.leafPackedValuePtr {
+						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+					} else {
+						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+					}
+					valOff += valPtrSize
+				} else if e.flags&FlagTombstone == 0 {
+					valueLen := int(e.valueLen)
+					valueStart := int(e.valueOff)
+					copy(b.data[valOff:valOff+valueLen], valueArena[valueStart:valueStart+valueLen])
+					valOff += valueLen
+				}
+
+				suffixLen := int(e.suffixLen)
+				if !allInline {
+					suffixStart := int(e.suffixOff)
+					copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
+				}
+				keyOff += suffixLen
+			}
+		}
+	} else {
+		for i := 0; i < count; i++ {
+			e := &entries[i]
+			keyDirPos := keyDirStart + i*2
+			valDirPos := valDirStart + i*2
+			prefixPos := prefixStart + i*2
+			putUint16At(b.data, keyDirPos, uint16(keyOff))
+			putUint16At(b.data, valDirPos, uint16(valOff))
+			flagsCol[i] = e.flags
+			putUint16At(b.data, prefixPos, e.prefixLen)
+
+			if allInline {
+				valOff += int(e.valueLen)
+			} else if e.flags&FlagPointer != 0 {
+				if b.leafPackedValuePtr {
+					page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+				} else {
+					e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+				}
+				valOff += valPtrSize
+			} else if e.flags&FlagTombstone == 0 {
+				valueLen := int(e.valueLen)
+				valueStart := int(e.valueOff)
+				copy(b.data[valOff:valOff+valueLen], valueArena[valueStart:valueStart+valueLen])
+				valOff += valueLen
+			}
+
+			suffixLen := int(e.suffixLen)
+			if !allInline {
+				suffixStart := int(e.suffixOff)
+				copy(b.data[keyOff:keyOff+suffixLen], suffixArena[suffixStart:suffixStart+suffixLen])
+			}
+			keyOff += suffixLen
+		}
 	}
 
 	if valOff != suffixStart || keyOff != len(b.data) {
@@ -831,6 +938,13 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 	b.heapStart = valuesStart
 
 	b.releaseLeafColumnarPrefixV2Scratch()
+}
+
+func bytesAsUint16Slice(buf []byte) []uint16 {
+	if len(buf) == 0 {
+		return nil
+	}
+	return unsafe.Slice((*uint16)(unsafe.Pointer(&buf[0])), len(buf)/2)
 }
 
 func (b *Builder) releaseLeafColumnarV2Scratch() {
@@ -857,9 +971,14 @@ func (b *Builder) releaseLeafColumnarPrefixV2Scratch() {
 	}
 	b.leafColumnarPrefixV2KeyBytes = 0
 	b.leafColumnarPrefixV2ValBytes = 0
+	b.leafColumnarPrefixV2AllInline = false
 	if b.leafColumnarV2Arena != nil {
 		leafColumnarV2ArenaPool.Put(b.leafColumnarV2Arena[:0])
 		b.leafColumnarV2Arena = nil
+	}
+	if b.leafColumnarPrefixV2ValueArena != nil {
+		leafColumnarPrefixV2ValueArenaPool.Put(b.leafColumnarPrefixV2ValueArena[:0])
+		b.leafColumnarPrefixV2ValueArena = nil
 	}
 }
 
@@ -905,6 +1024,36 @@ func (b *Builder) leafColumnarV2AppendBytes(src []byte) (off uint32, n uint16) {
 		b.leafColumnarV2Arena = b.leafColumnarV2Arena[:end]
 	}
 	copy(b.leafColumnarV2Arena[start:end], src)
+	return uint32(start), uint16(len(src))
+}
+
+func (b *Builder) leafColumnarPrefixV2AppendValueBytes(src []byte) (off uint32, n uint16) {
+	if len(src) == 0 {
+		return 0, 0
+	}
+	if len(src) > int(^uint16(0)) {
+		panic("leaf columnar prefix value too large")
+	}
+	if b.leafColumnarPrefixV2ValueArena == nil {
+		arenaAny := leafColumnarPrefixV2ValueArenaPool.Get()
+		arena := arenaAny.([]byte)
+		b.leafColumnarPrefixV2ValueArena = arena[:0]
+	}
+
+	start := len(b.leafColumnarPrefixV2ValueArena)
+	end := start + len(src)
+	if end > cap(b.leafColumnarPrefixV2ValueArena) {
+		expandedCap := cap(b.leafColumnarPrefixV2ValueArena) * 2
+		if expandedCap < end {
+			expandedCap = end
+		}
+		expanded := make([]byte, end, expandedCap)
+		copy(expanded, b.leafColumnarPrefixV2ValueArena)
+		b.leafColumnarPrefixV2ValueArena = expanded
+	} else {
+		b.leafColumnarPrefixV2ValueArena = b.leafColumnarPrefixV2ValueArena[:end]
+	}
+	copy(b.leafColumnarPrefixV2ValueArena[start:end], src)
 	return uint32(start), uint16(len(src))
 }
 
