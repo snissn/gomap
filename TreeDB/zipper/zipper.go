@@ -676,8 +676,11 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	opIdx := 0
 
-	children := getChildWorkSlice(int(count))
-	defer putChildWorkSlice(children)
+	const (
+		minParallelChildren = 4
+		minParallelOps      = 1024
+	)
+	useParallel := int(count) >= minParallelChildren && len(ops) >= minParallelOps && runtime.GOMAXPROCS(0) > 1
 
 	copyKeys := oldNode.InternalBaseDeltaEnabled()
 	var keyArena []byte
@@ -702,6 +705,118 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		return keyArena[start : start+len(src)]
 	}
 
+	target := builder
+	appendInternal := func(key []byte, childID uint64, first bool) error {
+		if childID >= z.pager.PageCount() {
+			return errors.New("zipper: detected OOB child ID")
+		}
+		if first && key == nil {
+			key = []byte{}
+		}
+		entrySize := 2 + 8 + len(key)
+		if z.indexInternalBaseDelta {
+			entrySize = 2 + 4 + len(key)
+		}
+		if z.internalSoftFull(target, entrySize) {
+			err = node.ErrNodeFull
+		} else {
+			err = target.AddInternalChild(key, childID)
+		}
+		if err == node.ErrNodeFull {
+			target, err = z.createNewSplitInternal(target, builder, &splits, key, childID, metrics)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+		return err
+	}
+
+	// Fast path: most benchmarked writes are non-maintenance and below the
+	// parallel threshold. Stream child processing directly and avoid building a
+	// large childWork slice.
+	if !maintenance && !useParallel {
+		firstEntry := true
+		var curKey []byte
+		var curChild uint64
+		if count > 0 {
+			curKey, curChild, err = oldNode.GetInternalEntryView(0)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			if curKey == nil {
+				curKey = []byte{}
+			}
+		}
+		for i := uint16(0); i < count; i++ {
+			lowKey := cloneKey(curKey)
+
+			var (
+				endKey    []byte
+				nextKey   []byte
+				nextChild uint64
+			)
+			if i+1 < count {
+				nextKey, nextChild, err = oldNode.GetInternalEntryView(i + 1)
+				if err != nil {
+					return 0, nil, nil, err
+				}
+				if nextKey == nil {
+					nextKey = []byte{}
+				}
+				endKey = nextKey
+			}
+			childHigh := high
+			if endKey != nil {
+				childHigh = endKey
+			}
+
+			startOpIdx := opIdx
+			for opIdx < len(ops) {
+				if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
+					opIdx++
+					continue
+				}
+				break
+			}
+			childOps := ops[startOpIdx:opIdx]
+
+			newChildID := curChild
+			var childSplits []Split
+			if len(childOps) > 0 {
+				var childRet []uint64
+				newChildID, childSplits, childRet, err = z.writeRecursive(curChild, childOps, maintenance, budget, metrics, lowKey, childHigh)
+				if err != nil {
+					return 0, nil, nil, err
+				}
+				retired = append(retired, childRet...)
+			}
+
+			if err := appendInternal(lowKey, newChildID, firstEntry); err != nil {
+				return 0, nil, nil, err
+			}
+			firstEntry = false
+			for _, s := range childSplits {
+				if err := appendInternal(s.Key, s.NodeID, firstEntry); err != nil {
+					return 0, nil, nil, err
+				}
+				firstEntry = false
+			}
+
+			curKey = nextKey
+			curChild = nextChild
+		}
+
+		if target != builder {
+			_ = target.Finish()
+			metrics.IndexWriteBytes += page.PageSize
+		}
+		return builder.PageID(), splits, retired, nil
+	}
+
+	children := getChildWorkSlice(int(count))
+	defer putChildWorkSlice(children)
+
 	for i := uint16(0); i < count; i++ {
 		key, childID, err := oldNode.GetInternalEntryView(i)
 		if err != nil {
@@ -716,10 +831,6 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			low:     keyCopy,
 			childID: childID,
 		})
-	}
-
-	if count > 0 {
-		retired = make([]uint64, 0, count)
 	}
 
 	for i := range children {
@@ -743,13 +854,6 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 		children[i].ops = ops[startOpIdx:opIdx]
 	}
-
-	const (
-		minParallelChildren = 4
-		minParallelOps      = 1024
-	)
-
-	useParallel := len(children) >= minParallelChildren && len(ops) >= minParallelOps && runtime.GOMAXPROCS(0) > 1
 
 	// Best-effort: prefetch child pages before we start rewriting them. This can
 	// help overlap read-ahead / fault handling with compute, especially in the
@@ -827,33 +931,6 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 				children[i].newChild = children[i].childID
 			}
 		}
-	}
-
-	target := builder
-	appendInternal := func(key []byte, childID uint64, first bool) error {
-		if childID >= z.pager.PageCount() {
-			return errors.New("zipper: detected OOB child ID")
-		}
-		if first && key == nil {
-			key = []byte{}
-		}
-		entrySize := 2 + 8 + len(key)
-		if z.indexInternalBaseDelta {
-			entrySize = 2 + 4 + len(key)
-		}
-		if z.internalSoftFull(target, entrySize) {
-			err = node.ErrNodeFull
-		} else {
-			err = target.AddInternalChild(key, childID)
-		}
-		if err == node.ErrNodeFull {
-			target, err = z.createNewSplitInternal(target, builder, &splits, key, childID, metrics)
-			if err != nil {
-				return err
-			}
-			return nil
-		}
-		return err
 	}
 
 	if !maintenance {
