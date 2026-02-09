@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/golang/snappy"
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
@@ -1031,6 +1032,23 @@ func TestValueLogBlockCodecRoundTrip(t *testing.T) {
 				t.Fatalf("codec id mismatch: got=%d want=%d", hdr.Reserved, codec)
 			}
 		})
+	}
+}
+
+func TestValueLogBlockCodecSnappy_ReusesProvidedBuffer(t *testing.T) {
+	raw := bytes.Repeat([]byte("compressible-payload-"), 256)
+	need := snappy.MaxEncodedLen(len(raw))
+	dst := make([]byte, need)
+
+	out, err := encodeBlockPayload(BlockCodecSnappy, raw, dst[:0])
+	if err != nil {
+		t.Fatalf("encode block payload: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatalf("expected non-empty encoded payload")
+	}
+	if &out[0] != &dst[0] {
+		t.Fatalf("expected encode to reuse provided destination buffer")
 	}
 }
 

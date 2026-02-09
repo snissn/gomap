@@ -43,7 +43,17 @@ func encodeBlockPayload(codec BlockCodec, raw []byte, dst []byte) ([]byte, error
 	}
 	switch normalizeBlockCodec(codec) {
 	case BlockCodecSnappy:
-		return snappy.Encode(dst[:0], raw), nil
+		need := snappy.MaxEncodedLen(len(raw))
+		if len(dst) < need {
+			if cap(dst) < need {
+				dst = make([]byte, need)
+			} else {
+				dst = dst[:need]
+			}
+		} else {
+			dst = dst[:need]
+		}
+		return snappy.Encode(dst, raw), nil
 	case BlockCodecLZ4:
 		bound := lz4.CompressBlockBound(len(raw))
 		if cap(dst) < bound {
