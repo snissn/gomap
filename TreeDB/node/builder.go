@@ -44,6 +44,7 @@ type Builder struct {
 	leafColumnarPrefixV2KeyBytes   int
 	leafColumnarPrefixV2ValBytes   int
 	leafColumnarPrefixV2AllInline  bool
+	leafColumnarPrefixV2AllPointer bool
 	leafColumnarPrefixV2ValueArena []byte
 
 	internalBaseEntries       []internalBaseDeltaEntry
@@ -159,6 +160,7 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 	if pType == page.PageTypeLeaf && opts.LeafColumnar {
 		if leafPrefix {
 			b.leafColumnarPrefixV2AllInline = true
+			b.leafColumnarPrefixV2AllPointer = true
 			if pooled, ok := leafColumnarPrefixV2EntriesPool.Get().([]leafColumnarPrefixV2Entry); ok {
 				b.leafColumnarPrefixV2Entries = pooled[:0]
 			}
@@ -466,6 +468,9 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 		valueOff, valueLen = b.leafColumnarPrefixV2AppendValueBytes(value)
 	} else {
 		b.leafColumnarPrefixV2AllInline = false
+	}
+	if flags&FlagPointer == 0 {
+		b.leafColumnarPrefixV2AllPointer = false
 	}
 
 	b.leafColumnarPrefixV2Entries = append(b.leafColumnarPrefixV2Entries, leafColumnarPrefixV2Entry{
@@ -813,6 +818,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 	suffixArena := b.leafColumnarV2Arena
 	valueArena := b.leafColumnarPrefixV2ValueArena
 	allInline := b.leafColumnarPrefixV2AllInline
+	allPointer := b.leafColumnarPrefixV2AllPointer
 	flagsCol := b.data[flagsStart:prefixStart]
 	prefixCol := b.data[prefixStart:metaEnd]
 
@@ -852,6 +858,72 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				flagsCol[i] = e.flags
 				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
 			}
+		}
+
+		b.dirEnd = metaEnd
+		b.heapStart = valuesStart
+		b.releaseLeafColumnarPrefixV2Scratch()
+		return
+	}
+
+	if allPointer {
+		if len(suffixArena) != b.leafColumnarPrefixV2KeyBytes {
+			panic("leaf columnar+prefix v2 pointer arena size mismatch")
+		}
+		copy(b.data[suffixStart:], suffixArena)
+
+		valOff := valuesStart
+		if builderNativeLittleEndian {
+			keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
+			valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
+			if prefixStart&1 == 0 {
+				prefixDirU16 := bytesAsUint16Slice(prefixCol)
+				for i := 0; i < count; i++ {
+					e := &entries[i]
+					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+					valDirU16[i] = uint16(valOff)
+					flagsCol[i] = e.flags
+					prefixDirU16[i] = e.prefixLen
+					if b.leafPackedValuePtr {
+						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+					} else {
+						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+					}
+					valOff += valPtrSize
+				}
+			} else {
+				for i := 0; i < count; i++ {
+					e := &entries[i]
+					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+					valDirU16[i] = uint16(valOff)
+					flagsCol[i] = e.flags
+					putUint16At(prefixCol, i*2, e.prefixLen)
+					if b.leafPackedValuePtr {
+						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+					} else {
+						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+					}
+					valOff += valPtrSize
+				}
+			}
+		} else {
+			for i := 0; i < count; i++ {
+				e := &entries[i]
+				putUint16At(b.data, keyDirStart+i*2, uint16(suffixStart+int(e.suffixOff)))
+				putUint16At(b.data, valDirStart+i*2, uint16(valOff))
+				flagsCol[i] = e.flags
+				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
+				if b.leafPackedValuePtr {
+					page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+				} else {
+					e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+				}
+				valOff += valPtrSize
+			}
+		}
+
+		if valOff != suffixStart {
+			panic("leaf columnar+prefix v2 pointer packing mismatch")
 		}
 
 		b.dirEnd = metaEnd
@@ -997,6 +1069,7 @@ func (b *Builder) releaseLeafColumnarPrefixV2Scratch() {
 	b.leafColumnarPrefixV2KeyBytes = 0
 	b.leafColumnarPrefixV2ValBytes = 0
 	b.leafColumnarPrefixV2AllInline = false
+	b.leafColumnarPrefixV2AllPointer = false
 	if b.leafColumnarV2Arena != nil {
 		leafColumnarV2ArenaPool.Put(b.leafColumnarV2Arena[:0])
 		b.leafColumnarV2Arena = nil
