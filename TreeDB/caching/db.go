@@ -4860,7 +4860,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			}
 			policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, keepSafetyMargin)
 		}
-		db.setVlogWriterMode(w, plan.writeMode, plan.blockCodec)
+		db.setVlogWriterMode(l, w, plan.writeMode, plan.blockCodec)
 		planStart := time.Now()
 		beforePlanSize := w.Size()
 		planStoredBytes := 0
@@ -5722,7 +5722,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		l.vlogCaps = computeVlogWriterCaps(w)
 	}
 	caps := l.vlogCaps
-	db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+	db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
@@ -5774,7 +5774,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 					l.vlogCaps = computeVlogWriterCaps(w)
 				}
 				caps = l.vlogCaps
-				db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+				db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 				statsWriter = caps.stats
 				statsWriterInto = caps.statsInto
 				rawWriterInto = caps.rawInto
@@ -5877,7 +5877,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 						l.vlogCaps = computeVlogWriterCaps(w)
 					}
 					caps = l.vlogCaps
-					db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+					db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 					statsWriter = caps.stats
 					statsWriterInto = caps.statsInto
 					hasStats = statsWriter != nil
@@ -6223,7 +6223,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 				l.vlogCaps = computeVlogWriterCaps(w)
 			}
 			caps := l.vlogCaps
-			db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+			db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 			policySetter := caps.keep
 			startSize := w.Size()
 
@@ -6380,7 +6380,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		l.vlogCaps = computeVlogWriterCaps(w)
 	}
 	caps := l.vlogCaps
-	db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+	db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
@@ -7428,6 +7428,8 @@ func (db *DB) Close() error {
 			l.vlogCaps = vlogWriterCaps{}
 			l.vlogLiveBytes.Store(0)
 		}
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
 		l.vlogMu.Unlock()
 	}
 
@@ -8623,6 +8625,8 @@ func (db *DB) cleanupLaneWALWriters(l *lane) {
 		l.vlog = nil
 		l.vlogCaps = vlogWriterCaps{}
 	}
+	l.vlogModeSet = false
+	l.vlogModeWriter = nil
 	l.vlogMu.Unlock()
 }
 
@@ -8640,8 +8644,11 @@ func (db *DB) defaultVlogWriteMode() vlogCompressionWriteMode {
 	}
 }
 
-func (db *DB) setVlogWriterMode(w valueWriter, mode vlogCompressionWriteMode, codec valuelog.BlockCodec) {
+func (db *DB) setVlogWriterMode(l *lane, w valueWriter, mode vlogCompressionWriteMode, codec valuelog.BlockCodec) {
 	if db == nil || w == nil {
+		return
+	}
+	if l != nil && l.vlogModeSet && l.vlogModeWriter == w && l.vlogMode == mode && l.vlogBlockCodec == codec {
 		return
 	}
 	setter, ok := any(w).(blockCompressionSetter)
@@ -8649,6 +8656,12 @@ func (db *DB) setVlogWriterMode(w valueWriter, mode vlogCompressionWriteMode, co
 		return
 	}
 	setter.SetBlockCompression(codec, mode == vlogWriteBlock)
+	if l != nil {
+		l.vlogModeWriter = w
+		l.vlogModeSet = true
+		l.vlogMode = mode
+		l.vlogBlockCodec = codec
+	}
 }
 
 func (db *DB) rotateWALLocked(l *lane) error {
@@ -8733,7 +8746,10 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 			return err
 		}
 		l.vlog.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
-		db.setVlogWriterMode(l.vlog, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
+		// Rotation can reset writer internals; force mode reapply.
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
+		db.setVlogWriterMode(l, l.vlog, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
 		if setter, ok := any(l.vlog).(rawWritevStrategySetter); ok {
 			setter.SetRawWritevStrategy(db.valueLogRawWritevMinAvgBytes, db.valueLogRawWritevMinRecords)
 		}
@@ -8755,7 +8771,9 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 			return err
 		}
 		w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
-		db.setVlogWriterMode(w, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
+		db.setVlogWriterMode(l, w, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
 		w.SetRawWritevStrategy(db.valueLogRawWritevMinAvgBytes, db.valueLogRawWritevMinRecords)
 		l.vlog = w
 		l.vlogLiveBytes.Store(0)

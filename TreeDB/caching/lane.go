@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 type lane struct {
@@ -27,6 +29,10 @@ type lane struct {
 	vlogPath                string
 	vlogSeq                 int
 	vlogRetainedPath        string
+	vlogModeWriter          valueWriter
+	vlogModeSet             bool
+	vlogMode                vlogCompressionWriteMode
+	vlogBlockCodec          valuelog.BlockCodec
 	vlogCaps                vlogWriterCaps
 	vlogMu                  sync.Mutex
 	vlogCh                  chan vlogWriteRequest

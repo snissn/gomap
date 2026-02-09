@@ -20,6 +20,8 @@ FORCE_FLAGS="${FORCE_FLAGS:-false,true}"
 
 MEMTABLE_MODE="${MEMTABLE_MODE:-append_only}"
 CHECKPOINT_BETWEEN_TESTS="${CHECKPOINT_BETWEEN_TESTS:-1}"
+PROFILE_LIGHT="${PROFILE_LIGHT:-1}"
+PROFILE_SAMPLE_ONLY="${PROFILE_SAMPLE_ONLY:-1}"
 EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 PYTHON_BIN="${PYTHON:-}"
@@ -48,6 +50,8 @@ mkdir -p "$OUT/runs"
   echo "force_flags=$FORCE_FLAGS"
   echo "memtable_mode=$MEMTABLE_MODE"
   echo "checkpoint_between_tests=$CHECKPOINT_BETWEEN_TESTS"
+  echo "profile_light=$PROFILE_LIGHT"
+  echo "profile_sample_only=$PROFILE_SAMPLE_ONLY"
   echo "extra_args=$EXTRA_ARGS"
 } >"$OUT/meta.txt"
 
@@ -65,26 +69,26 @@ IFS=',' read -r -a valsize_list <<<"$VALSIZES"
 IFS=',' read -r -a worker_list <<<"$WORKERS"
 IFS=',' read -r -a force_list <<<"$FORCE_FLAGS"
 
-for force in "${force_list[@]}"; do
-  force=$(echo "$force" | xargs)
-  [[ -z "$force" ]] && continue
-  case "$force" in
-    true|false) ;;
-    *)
-      echo "invalid force flag value: '$force' (expected true|false)" >&2
-      exit 2
-      ;;
-  esac
+for valsize in "${valsize_list[@]}"; do
+  valsize=$(echo "$valsize" | xargs)
+  [[ -z "$valsize" ]] && continue
 
-  for valsize in "${valsize_list[@]}"; do
-    valsize=$(echo "$valsize" | xargs)
-    [[ -z "$valsize" ]] && continue
+  for workers in "${worker_list[@]}"; do
+    workers=$(echo "$workers" | xargs)
+    [[ -z "$workers" ]] && continue
 
-    for workers in "${worker_list[@]}"; do
-      workers=$(echo "$workers" | xargs)
-      [[ -z "$workers" ]] && continue
+    for run_idx in $(seq 1 "$RUNS"); do
+      for force in "${force_list[@]}"; do
+        force=$(echo "$force" | xargs)
+        [[ -z "$force" ]] && continue
+        case "$force" in
+          true|false) ;;
+          *)
+            echo "invalid force flag value: '$force' (expected true|false)" >&2
+            exit 2
+            ;;
+        esac
 
-      for run_idx in $(seq 1 "$RUNS"); do
         run_dir="$OUT/runs/f${force}_v${valsize}_w${workers}_r${run_idx}"
         mkdir -p "$run_dir"
 
@@ -98,12 +102,23 @@ for force in "${force_list[@]}"; do
           -write-workers "$workers"
           -treedb-force-value-pointers="$force"
           -treedb-memtable-mode="$MEMTABLE_MODE"
-          -profile-dir "$run_dir"
           -progress=false
           -format markdown
         )
         if [[ "$CHECKPOINT_BETWEEN_TESTS" != "0" ]]; then
           ub_args+=(-checkpoint-between-tests)
+        fi
+        # Keep benchprof-compatible CPU/alloc artifacts while avoiding heavy
+        # trace/block/mutex/checkpoint profiling overhead in throughput matrix runs.
+        if [[ "$PROFILE_LIGHT" != "0" ]]; then
+          ub_args+=(
+            -blockprofile=
+            -mutexprofile=
+            -trace=
+            -checkpoint-cpuprofile=
+            -blockprofilerate=0
+            -mutexprofilefraction=0
+          )
         fi
         if [[ -n "$EXTRA_ARGS" ]]; then
           # shellcheck disable=SC2206
@@ -111,13 +126,21 @@ for force in "${force_list[@]}"; do
           ub_args+=("${extra_arr[@]}")
         fi
 
+        profiled_run=1
+        if [[ "$PROFILE_SAMPLE_ONLY" != "0" && "$run_idx" != "1" ]]; then
+          profiled_run=0
+        fi
+        if [[ "$profiled_run" = "1" ]]; then
+          ub_args+=(-profile-dir "$run_dir")
+        fi
+
         echo "--- force=$force valsize=$valsize workers=$workers run=$run_idx ---" >&2
         env GOMAXPROCS="$workers" /usr/bin/time -p -o "$run_dir/time.txt" \
           ./bin/unified-bench "${ub_args[@]}" 2>&1 | tee "$run_dir/unified_bench.log" >/dev/null
 
-        ./bin/benchprof -profiles-dir "$run_dir" >"$run_dir/benchprof.log" 2>&1
-
-        ops=$("$PYTHON_BIN" - "$run_dir/benchprof_results.json" <<'PY'
+        if [[ "$profiled_run" = "1" ]]; then
+          ./bin/benchprof -profiles-dir "$run_dir" >"$run_dir/benchprof.log" 2>&1
+          ops=$("$PYTHON_BIN" - "$run_dir/benchprof_results.json" <<'PY'
 import json
 import sys
 path = sys.argv[1]
@@ -140,11 +163,7 @@ else:
     print(v)
 PY
 )
-        wall=$(awk '/^real / {print $2}' "$run_dir/time.txt")
-        if [[ -z "$wall" ]]; then
-          wall="nan"
-        fi
-        top_target=$("$PYTHON_BIN" - "$run_dir/insights.json" <<'PY'
+          top_target=$("$PYTHON_BIN" - "$run_dir/insights.json" <<'PY'
 import json
 import sys
 path = sys.argv[1]
@@ -158,7 +177,7 @@ top = targets[0]
 print(top.get("function") or top.get("reference") or "")
 PY
 )
-        top_flat_pct=$("$PYTHON_BIN" - "$run_dir/insights.json" <<'PY'
+          top_flat_pct=$("$PYTHON_BIN" - "$run_dir/insights.json" <<'PY'
 import json
 import sys
 path = sys.argv[1]
@@ -172,6 +191,25 @@ v = targets[0].get("flat_pct")
 print("nan" if v is None else v)
 PY
 )
+        else
+          ops=$("$PYTHON_BIN" - "$run_dir/unified_bench.log" <<'PY'
+import re
+import sys
+text = open(sys.argv[1], "r", encoding="utf-8").read()
+m = re.findall(r"/ TreeDB = ([0-9,]+)", text)
+if not m:
+    print("nan")
+else:
+    print(m[-1].replace(",", ""))
+PY
+)
+          top_target=""
+          top_flat_pct="nan"
+        fi
+        wall=$(awk '/^real / {print $2}' "$run_dir/time.txt")
+        if [[ -z "$wall" ]]; then
+          wall="nan"
+        fi
 
         esc_target=${top_target//,/;}
         printf "%s,%s,%s,%s,%s,%s,%s,%s,%s\n" \
@@ -298,6 +336,8 @@ lines.append(f"- test/profile: `{meta.get('test', '-')}` / `{meta.get('profile',
 lines.append(f"- keys/batchsize: `{meta.get('keys', '-')}` / `{meta.get('batchsize', '-')}`")
 lines.append(f"- runs per cell: `{meta.get('runs', '-')}`")
 lines.append(f"- memtable mode: `{meta.get('memtable_mode', '-')}`")
+lines.append(f"- profile light mode: `{meta.get('profile_light', '-')}`")
+lines.append(f"- profile sample only: `{meta.get('profile_sample_only', '-')}`")
 lines.append("")
 
 header = [
@@ -329,7 +369,7 @@ lines.append("")
 lines.append(f"- raw csv: `{raw_csv}`")
 lines.append(f"- summary csv: `{summary_csv}`")
 lines.append("- per-run dirs: `runs/f<force>_v<valsize>_w<workers>_r<run>/`")
-lines.append("  each contains unified-bench output, benchprof outputs, pprof files, and timing.")
+lines.append("  each contains unified-bench output and timing; profiled runs include benchprof outputs and pprof files.")
 
 summary_md.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
