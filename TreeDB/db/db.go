@@ -1102,7 +1102,7 @@ type finalizeCommitPost struct {
 // finalizeCommitLocked performs the durability-critical publish path.
 // Callers that already hold commit serialization may run post work after
 // releasing the serialization lock.
-func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) (finalizeCommitPost, error) {
+func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -1184,11 +1184,19 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.metaPageID = targetPageID
 	idx.graveyard.Add(nextMeta.CommitSeq-1, retired)
 	post.oldState = db.state.Load()
+	var valueLogSet *valuelog.Set
+	if db.valueLogManager != nil {
+		if refreshValueLogSet {
+			valueLogSet = db.valueLogManager.CurrentSet()
+		} else {
+			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+		}
+	}
 	newState := &DBState{
 		CommitSeq:        nextMeta.CommitSeq,
 		RootPageID:       nextMeta.UserRootPageID,
 		SystemRootPageID: nextMeta.SystemRootPageID,
-		ValueLogSet:      db.valueLogManager.CurrentSet(),
+		ValueLogSet:      valueLogSet,
 	}
 	db.state.Store(newState)
 	db.mu.Unlock()
@@ -1245,8 +1253,8 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 }
 
 // finalizeCommit handles durability and state updates.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
-	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics)
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool) error {
+	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, refreshValueLogSet)
 	if err != nil {
 		return err
 	}
@@ -1278,7 +1286,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{})
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, true)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -1446,7 +1454,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{})
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, true)
 }
 
 type pagerAllocator struct {

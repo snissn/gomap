@@ -106,3 +106,29 @@ func TestBatchSetOps_UsesSlabPointersForLargeValues(t *testing.T) {
 		t.Fatalf("k3 value mismatch")
 	}
 }
+
+func TestHasValueLogPointers(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	if got := b.HasValueLogPointers(); got {
+		t.Fatalf("empty batch: HasValueLogPointers() = %v, want false", got)
+	}
+	if err := b.Set([]byte("k-inline"), []byte("v")); err != nil {
+		t.Fatalf("Set inline: %v", err)
+	}
+	if got := b.HasValueLogPointers(); got {
+		t.Fatalf("inline-only batch: HasValueLogPointers() = %v, want false", got)
+	}
+
+	if err := b.SetPointer([]byte("k-vlog"), page.ValuePtr{
+		FileID: page.ValueLogFileID(1),
+		Offset: 42,
+		Length: 7,
+	}); err != nil {
+		t.Fatalf("SetPointer value-log: %v", err)
+	}
+	if got := b.HasValueLogPointers(); !got {
+		t.Fatalf("value-log pointer batch: HasValueLogPointers() = %v, want true", got)
+	}
+}

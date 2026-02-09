@@ -100,6 +100,8 @@ func (b *Batch) write(sync bool) error {
 }
 
 func (b *Batch) writeOptimistic(sync bool) (bool, error) {
+	refreshValueLogSet := b.batch.HasValueLogPointers()
+
 	b.db.writeMu.RLock()
 	idx := b.db.idx.Load()
 	if idx == nil {
@@ -143,7 +145,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, refreshValueLogSet)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -158,6 +160,8 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 }
 
 func (b *Batch) writeSerialized(sync bool) error {
+	refreshValueLogSet := b.batch.HasValueLogPointers()
+
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
 
@@ -188,7 +192,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, refreshValueLogSet); err != nil {
 		return err
 	}
 	if b.db.vacuum.Active() {
