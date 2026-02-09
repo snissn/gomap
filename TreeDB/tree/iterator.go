@@ -303,8 +303,14 @@ type Iterator struct {
 	flags        byte
 	valOK        bool
 	ptrOK        bool
+	ptrScratch   []byte
+	slabAppender slabUnsafeAppender
 	reverse      bool
 	verifyAlways bool
+}
+
+type slabUnsafeAppender interface {
+	ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error)
 }
 
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
@@ -317,6 +323,9 @@ func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 		end:          end,
 		reverse:      false,
 		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
+	}
+	if app, ok := t.slabReader.(slabUnsafeAppender); ok {
+		it.slabAppender = app
 	}
 	it.resetStack()
 	it.Seek(start)
@@ -333,6 +342,9 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 		end:          end,
 		reverse:      true,
 		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
+	}
+	if app, ok := t.slabReader.(slabUnsafeAppender); ok {
+		it.slabAppender = app
 	}
 	it.resetStack()
 	// Reverse seek: Find >= end, then step back.
@@ -703,6 +715,18 @@ func (it *Iterator) UnsafeValue() []byte {
 			return nil
 		}
 		if it.valOK {
+			return it.currVal
+		}
+		if it.slabAppender != nil {
+			val, err := it.slabAppender.ReadUnsafeAppend(it.currPtr, it.ptrScratch[:0])
+			if err != nil {
+				it.err = err
+				it.valid = false
+				return nil
+			}
+			it.ptrScratch = val
+			it.currVal = it.ptrScratch
+			it.valOK = true
 			return it.currVal
 		}
 		val, err := it.tree.slabReader.ReadUnsafe(it.currPtr)

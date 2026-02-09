@@ -116,27 +116,11 @@ func (it *DBIterator) Valid() bool {
 }
 
 func (it *DBIterator) Key() []byte {
-	k := it.iter.Key()
-	if k == nil {
-		return nil
-	}
-	dst := make([]byte, len(k))
-	copy(dst, k)
-	return dst
+	return it.iter.UnsafeKey()
 }
 
 func (it *DBIterator) Value() []byte {
-	val := it.UnsafeValue()
-	if it.err != nil {
-		return nil
-	}
-	if val == nil {
-		return nil
-	}
-	// Copy to ensure safety after iterator/snapshot close.
-	dst := make([]byte, len(val))
-	copy(dst, val)
-	return dst
+	return it.UnsafeValue()
 }
 
 func (it *DBIterator) KeyCopy(dst []byte) []byte {

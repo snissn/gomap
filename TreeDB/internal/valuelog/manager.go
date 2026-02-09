@@ -35,6 +35,7 @@ type File struct {
 	cacheFlags byte
 	cacheLen   int
 	cacheOffs  [MaxFrameK + 1]uint32
+	cacheRaw   []byte
 
 	closed atomic.Bool
 
@@ -65,6 +66,13 @@ func (f *File) Close() error {
 		return nil
 	}
 	f.closed.Store(true)
+	f.cacheMu.Lock()
+	f.cacheK = 0
+	f.cacheFlags = 0
+	f.cacheLen = 0
+	f.cacheRaw = nil
+	f.cacheStart.Store(0)
+	f.cacheMu.Unlock()
 
 	f.remapMu.Lock()
 	data, _ := f.mmapData.Load().([]byte)
