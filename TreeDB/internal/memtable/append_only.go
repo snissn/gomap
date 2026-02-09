@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sort"
 	"sync"
+	"unsafe"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -79,6 +80,13 @@ func cloneBytes(src []byte) []byte {
 	dst := make([]byte, len(src))
 	copy(dst, src)
 	return dst
+}
+
+func appendOnlyKeyString(key []byte) string {
+	if len(key) == 0 {
+		return ""
+	}
+	return unsafe.String(&key[0], len(key))
 }
 
 func entryValueSize(flags byte, value []byte) int {
@@ -285,7 +293,7 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 	active := m.entries[:m.count]
 	latest := make(map[string]int, len(active))
 	for i := range active {
-		latest[string(appendOnlyEntryKey(&active[i]))] = i
+		latest[appendOnlyKeyString(appendOnlyEntryKey(&active[i]))] = i
 	}
 	indices := make([]int, 0, len(latest))
 	for _, idx := range latest {
