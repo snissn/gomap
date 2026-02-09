@@ -20,9 +20,10 @@ const (
 )
 
 type hashSortedIndexWork struct {
-	mt   *HashSorted
-	seq  uint64
-	keys []string
+	mt     *HashSorted
+	seq    uint64
+	keys   []string
+	sorted bool
 }
 
 // HashSortedIndexer processes sealed key chunks in the background.
@@ -66,13 +67,15 @@ func (x *HashSortedIndexer) loop() {
 		if work.mt == nil || len(work.keys) == 0 {
 			continue
 		}
-		sort.Strings(work.keys)
+		if !work.sorted {
+			sort.Strings(work.keys)
+		}
 		work.mt.indexApplySortedChunk(work.seq, work.keys)
 	}
 }
 
-func (x *HashSortedIndexer) enqueue(mt *HashSorted, seq uint64, keys []string) {
-	x.ch <- hashSortedIndexWork{mt: mt, seq: seq, keys: keys}
+func (x *HashSortedIndexer) enqueue(mt *HashSorted, seq uint64, keys []string, sorted bool) {
+	x.ch <- hashSortedIndexWork{mt: mt, seq: seq, keys: keys, sorted: sorted}
 }
 
 // Close stops the indexer after draining queued work.
