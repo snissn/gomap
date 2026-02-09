@@ -387,6 +387,8 @@ func Open(opts Options) (*DB, error) {
 		FlushThreshold:                      opts.FlushThreshold,
 		MemtableMode:                        opts.MemtableMode,
 		MemtableShards:                      opts.MemtableShards,
+		DomainIngressWorkers:                opts.DomainIngressWorkers,
+		DomainIngressQueueSize:              opts.DomainIngressQueueSize,
 		MaxQueuedMemtables:                  opts.MaxQueuedMemtables,
 		SlowdownBacklogSeconds:              opts.SlowdownBacklogSeconds,
 		StopBacklogSeconds:                  opts.StopBacklogSeconds,

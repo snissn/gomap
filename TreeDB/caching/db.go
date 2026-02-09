@@ -1558,6 +1558,12 @@ type Options struct {
 	// use a default derived from GOMAXPROCS. The count is rounded down to a power
 	// of two.
 	MemtableShards int
+	// DomainIngressWorkers enables experimental domain-local write ingress queues.
+	// Values <= 0 keep the legacy direct caller write path.
+	DomainIngressWorkers int
+	// DomainIngressQueueSize configures the per-worker ingress queue length.
+	// Values <= 0 use a default.
+	DomainIngressQueueSize int
 
 	// Legacy backpressure knob: queue length limit.
 	// 0 uses the default (4). <0 disables writer backpressure entirely.
@@ -1906,6 +1912,8 @@ type DB struct {
 	adaptiveShardedStats    bool
 	memtableWarmupActive    bool
 	memtableWarmupThreshold int64
+	domainIngressWorkers    int
+	domainIngressQueueSize  int
 	maxQueuedMemtables      int
 	slowdownBacklogSeconds  float64
 	stopBacklogSeconds      float64
@@ -1945,6 +1953,12 @@ type DB struct {
 	flushBpsEWMA             float64
 	queueLaneIDMisses        atomic.Int64
 	backendWriteBatchesTotal atomic.Int64
+	domainIngressMu          sync.Mutex
+	domainIngressCh          []chan domainIngressRequest
+	domainIngressEnqueued    atomic.Uint64
+	domainIngressProcessed   atomic.Uint64
+	domainIngressFallback    atomic.Uint64
+	domainIngressDepthMax    atomic.Uint64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -2420,6 +2434,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if shardCount < 1 {
 		shardCount = 1
 	}
+	domainIngressWorkers := opts.DomainIngressWorkers
+	if domainIngressWorkers < 0 {
+		domainIngressWorkers = 0
+	}
+	if domainIngressWorkers > shardCount {
+		domainIngressWorkers = shardCount
+	}
+	domainIngressQueueSize := opts.DomainIngressQueueSize
+	if domainIngressWorkers > 0 && domainIngressQueueSize <= 0 {
+		domainIngressQueueSize = defaultDomainIngressQueueSize
+	}
 	if opts.MaxQueuedMemtables == 0 {
 		// Keep the default queued backlog roughly stable in bytes when callers
 		// tune FlushThreshold. Historically: 64MB flush threshold with a queue
@@ -2778,6 +2803,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableAdaptive:                     adaptive,
 		memtableWarmupActive:                 adaptive && warmupThreshold < opts.FlushThreshold,
 		memtableWarmupThreshold:              warmupThreshold,
+		domainIngressWorkers:                 domainIngressWorkers,
+		domainIngressQueueSize:               domainIngressQueueSize,
 		maxQueuedMemtables:                   opts.MaxQueuedMemtables,
 		slowdownBacklogSeconds:               opts.SlowdownBacklogSeconds,
 		stopBacklogSeconds:                   opts.StopBacklogSeconds,
@@ -2951,6 +2978,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 	db.mu.Unlock()
+
+	db.startDomainIngressWorkers()
 
 	// Start background flusher
 	db.wg.Add(1)
@@ -3302,6 +3331,21 @@ func (db *DB) assignCommitSeq(records []logRecord) {
 	}
 }
 
+type domainIngressOp uint8
+
+const (
+	domainIngressOpSet domainIngressOp = iota + 1
+	domainIngressOpDelete
+)
+
+type domainIngressRequest struct {
+	op    domainIngressOp
+	key   []byte
+	value []byte
+	sync  bool
+	done  chan error
+}
+
 type walWriteRequest struct {
 	records []logRecord
 	sync    bool
@@ -3651,10 +3695,11 @@ type walFastItem struct {
 }
 
 const (
-	walWriteBuffer   = 4096
-	walWriteBatchMax = 512
-	walFastBatchMax  = 2048
-	walFastQueueMax  = 16384
+	walWriteBuffer                = 4096
+	walWriteBatchMax              = 512
+	walFastBatchMax               = 2048
+	walFastQueueMax               = 16384
+	defaultDomainIngressQueueSize = 1024
 )
 
 const (
@@ -3684,6 +3729,123 @@ func defaultJournalLaneCount(procs int) int {
 		lanes = 4
 	}
 	return lanes
+}
+
+func (db *DB) startDomainIngressWorkers() {
+	if db == nil || db.domainIngressWorkers <= 0 {
+		return
+	}
+	queueSize := db.domainIngressQueueSize
+	if queueSize <= 0 {
+		queueSize = defaultDomainIngressQueueSize
+	}
+	db.domainIngressMu.Lock()
+	defer db.domainIngressMu.Unlock()
+	if len(db.domainIngressCh) > 0 {
+		return
+	}
+	workers := db.domainIngressWorkers
+	if workers < 1 {
+		return
+	}
+	db.domainIngressQueueSize = queueSize
+	db.domainIngressCh = make([]chan domainIngressRequest, workers)
+	for workerID := 0; workerID < workers; workerID++ {
+		ch := make(chan domainIngressRequest, queueSize)
+		db.domainIngressCh[workerID] = ch
+		db.wg.Add(1)
+		go db.domainIngressLoop(ch)
+	}
+}
+
+func (db *DB) stopDomainIngressWorkers() {
+	if db == nil {
+		return
+	}
+	db.domainIngressMu.Lock()
+	queues := db.domainIngressCh
+	db.domainIngressCh = nil
+	db.domainIngressMu.Unlock()
+	for _, ch := range queues {
+		close(ch)
+	}
+}
+
+func (db *DB) domainIngressLoop(ch <-chan domainIngressRequest) {
+	defer db.wg.Done()
+	for req := range ch {
+		var err error
+		switch req.op {
+		case domainIngressOpSet:
+			err = db.setDirect(req.key, req.value, req.sync)
+		case domainIngressOpDelete:
+			err = db.deleteDirect(req.key, req.sync)
+		default:
+			err = fmt.Errorf("cachingdb: unknown ingress op %d", req.op)
+		}
+		db.domainIngressProcessed.Add(1)
+		if req.done != nil {
+			req.done <- err
+			close(req.done)
+		}
+	}
+}
+
+func (db *DB) observeDomainIngressDepth(depth int) {
+	if depth < 0 {
+		return
+	}
+	depthU := uint64(depth)
+	for {
+		prev := db.domainIngressDepthMax.Load()
+		if depthU <= prev {
+			return
+		}
+		if db.domainIngressDepthMax.CompareAndSwap(prev, depthU) {
+			return
+		}
+	}
+}
+
+func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync bool) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	if db.closing.Load() {
+		return true, errDBClosing
+	}
+	req := domainIngressRequest{
+		op:    op,
+		key:   key,
+		value: value,
+		sync:  sync,
+		done:  make(chan error, 1),
+	}
+
+	db.domainIngressMu.Lock()
+	if len(db.domainIngressCh) == 0 {
+		db.domainIngressMu.Unlock()
+		return false, nil
+	}
+	shardID := db.shardIndex(key)
+	workerID := shardID % len(db.domainIngressCh)
+	ch := db.domainIngressCh[workerID]
+	select {
+	case ch <- req:
+		db.domainIngressEnqueued.Add(1)
+		db.observeDomainIngressDepth(len(ch))
+		db.domainIngressMu.Unlock()
+	default:
+		db.domainIngressFallback.Add(1)
+		db.domainIngressMu.Unlock()
+		return false, nil
+	}
+
+	err, ok := <-req.done
+	if !ok {
+		return true, errDBClosing
+	}
+	return true, err
 }
 
 func (db *DB) startWALWriter(l *lane) {
@@ -7026,6 +7188,7 @@ func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
 	db.closing.Store(true)
+	db.stopDomainIngressWorkers()
 
 	// Lock order must match Checkpoint (flushMu -> writeMu) to avoid a deadlock
 	// with the auto-checkpoint goroutine:
@@ -7240,6 +7403,13 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
+	if handled, err := db.enqueueDomainIngress(domainIngressOpSet, key, value, sync); handled {
+		return err
+	}
+	return db.setDirect(key, value, sync)
+}
+
+func (db *DB) setDirect(key, value []byte, sync bool) error {
 	db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -7998,6 +8168,13 @@ func (db *DB) DeleteSync(key []byte) error {
 }
 
 func (db *DB) delete(key []byte, sync bool) error {
+	if handled, err := db.enqueueDomainIngress(domainIngressOpDelete, key, nil, sync); handled {
+		return err
+	}
+	return db.deleteDirect(key, sync)
+}
+
+func (db *DB) deleteDirect(key []byte, sync bool) error {
 	db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -10235,6 +10412,22 @@ func (db *DB) Stats() map[string]string {
 	}
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
+	db.domainIngressMu.Lock()
+	ingressWorkers := len(db.domainIngressCh)
+	ingressQueueSize := db.domainIngressQueueSize
+	ingressDepth := 0
+	for _, ch := range db.domainIngressCh {
+		ingressDepth += len(ch)
+	}
+	db.domainIngressMu.Unlock()
+	stats["treedb.cache.domain_ingress.enabled"] = fmt.Sprintf("%t", ingressWorkers > 0)
+	stats["treedb.cache.domain_ingress.workers"] = fmt.Sprintf("%d", ingressWorkers)
+	stats["treedb.cache.domain_ingress.queue_size"] = fmt.Sprintf("%d", ingressQueueSize)
+	stats["treedb.cache.domain_ingress.queue_depth"] = fmt.Sprintf("%d", ingressDepth)
+	stats["treedb.cache.domain_ingress.queue_depth_max"] = fmt.Sprintf("%d", db.domainIngressDepthMax.Load())
+	stats["treedb.cache.domain_ingress.enqueued"] = fmt.Sprintf("%d", db.domainIngressEnqueued.Load())
+	stats["treedb.cache.domain_ingress.processed"] = fmt.Sprintf("%d", db.domainIngressProcessed.Load())
+	stats["treedb.cache.domain_ingress.fallback_direct"] = fmt.Sprintf("%d", db.domainIngressFallback.Load())
 	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes+walCurrentBytes)
 	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes)
 	stats["treedb.cache.wal_current_bytes_estimate"] = fmt.Sprintf("%d", walCurrentBytes)

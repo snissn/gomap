@@ -341,6 +341,12 @@ type Options struct {
 	// MemtableShards controls the number of mutable memtable shards in cached
 	// mode. Values <= 0 use a runtime-dependent default.
 	MemtableShards int
+	// DomainIngressWorkers enables experimental domain-local ingress workers in
+	// cached mode. Values <= 0 keep the legacy direct write path.
+	DomainIngressWorkers int
+	// DomainIngressQueueSize configures the per-worker ingress queue length when
+	// DomainIngressWorkers is enabled. Values <= 0 use a default.
+	DomainIngressQueueSize int
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
