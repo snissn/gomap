@@ -6236,25 +6236,29 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 			durableBoundary := false
 			if finalWriteMode == vlogWriteBlock {
-				var (
-					rec        [1]valuelog.Record
-					ptrScratch [1]page.ValuePtr
-					ptrs       []page.ValuePtr
-				)
-				rec[0] = valuelog.Record{RID: rid, Value: value}
-				switch {
-				case caps.statsInto != nil:
-					ptrs, stats, err = caps.statsInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
-				case caps.stats != nil:
-					ptrs, stats, err = caps.stats.AppendFrameWithStats(0, nil, rec[:])
-				default:
-					ptr, err = w.Append(0, nil, rid, value)
-				}
-				if err == nil && ptr == (page.ValuePtr{}) {
-					if len(ptrs) != 1 {
-						err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
-					} else {
-						ptr = ptrs[0]
+				if concrete, ok := w.(*valuelog.Writer); ok {
+					ptr, stats, err = concrete.AppendOneFrameWithStats(0, nil, rid, value)
+				} else {
+					var (
+						rec        [1]valuelog.Record
+						ptrScratch [1]page.ValuePtr
+						ptrs       []page.ValuePtr
+					)
+					rec[0] = valuelog.Record{RID: rid, Value: value}
+					switch {
+					case caps.statsInto != nil:
+						ptrs, stats, err = caps.statsInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
+					case caps.stats != nil:
+						ptrs, stats, err = caps.stats.AppendFrameWithStats(0, nil, rec[:])
+					default:
+						ptr, err = w.Append(0, nil, rid, value)
+					}
+					if err == nil && ptr == (page.ValuePtr{}) {
+						if len(ptrs) != 1 {
+							err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+						} else {
+							ptr = ptrs[0]
+						}
 					}
 				}
 			} else {
@@ -6391,25 +6395,29 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 	if finalWriteMode == vlogWriteBlock {
-		var ptrScratch [1]page.ValuePtr
-		var rec [1]valuelog.Record
-		rec[0] = valuelog.Record{RID: rid, Value: value}
-		var ptrs []page.ValuePtr
-		var frameErr error
-		if statsWriterInto != nil {
-			ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
-		} else if statsWriter != nil {
-			ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(0, nil, rec[:])
+		if concrete, ok := w.(*valuelog.Writer); ok {
+			ptr, stats, err = concrete.AppendOneFrameWithStats(0, nil, rid, value)
 		} else {
-			ptr, err = w.Append(0, nil, rid, value)
-		}
-		if frameErr != nil {
-			err = frameErr
-		} else if err == nil && ptr == (page.ValuePtr{}) {
-			if len(ptrs) != 1 {
-				err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+			var ptrScratch [1]page.ValuePtr
+			var rec [1]valuelog.Record
+			rec[0] = valuelog.Record{RID: rid, Value: value}
+			var ptrs []page.ValuePtr
+			var frameErr error
+			if statsWriterInto != nil {
+				ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
+			} else if statsWriter != nil {
+				ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(0, nil, rec[:])
 			} else {
-				ptr = ptrs[0]
+				ptr, err = w.Append(0, nil, rid, value)
+			}
+			if frameErr != nil {
+				err = frameErr
+			} else if err == nil && ptr == (page.ValuePtr{}) {
+				if len(ptrs) != 1 {
+					err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+				} else {
+					ptr = ptrs[0]
+				}
 			}
 		}
 	} else if dictID == 0 {
@@ -6417,24 +6425,28 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	} else if len(dict) == 0 {
 		ptr, err = w.Append(0, nil, rid, value)
 	} else {
-		var ptrScratch [1]page.ValuePtr
-		var rec [1]valuelog.Record
-		rec[0] = valuelog.Record{RID: rid, Value: value}
-		var ptrs []page.ValuePtr
-		var frameErr error
-		if statsWriterInto != nil {
-			ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(dictID, dict, rec[:], ptrScratch[:])
-		} else if statsWriter != nil {
-			ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(dictID, dict, rec[:])
+		if concrete, ok := w.(*valuelog.Writer); ok {
+			ptr, stats, err = concrete.AppendOneFrameWithStats(dictID, dict, rid, value)
 		} else {
-			ptrs, frameErr = w.AppendFrame(dictID, dict, rec[:])
-		}
-		if frameErr != nil {
-			err = frameErr
-		} else if len(ptrs) != 1 {
-			err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
-		} else {
-			ptr = ptrs[0]
+			var ptrScratch [1]page.ValuePtr
+			var rec [1]valuelog.Record
+			rec[0] = valuelog.Record{RID: rid, Value: value}
+			var ptrs []page.ValuePtr
+			var frameErr error
+			if statsWriterInto != nil {
+				ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(dictID, dict, rec[:], ptrScratch[:])
+			} else if statsWriter != nil {
+				ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(dictID, dict, rec[:])
+			} else {
+				ptrs, frameErr = w.AppendFrame(dictID, dict, rec[:])
+			}
+			if frameErr != nil {
+				err = frameErr
+			} else if len(ptrs) != 1 {
+				err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+			} else {
+				ptr = ptrs[0]
+			}
 		}
 	}
 	if err == nil {

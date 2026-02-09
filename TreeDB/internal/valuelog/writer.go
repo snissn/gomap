@@ -763,6 +763,28 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 	return ptrs[0], nil
 }
 
+func (w *Writer) AppendOneFrameWithStats(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, FrameStats, error) {
+	if w == nil {
+		return page.ValuePtr{}, FrameStats{}, errors.New("valuelog: nil writer")
+	}
+	if rid == 0 {
+		return page.ValuePtr{}, FrameStats{}, errors.New("valuelog: missing rid")
+	}
+	var (
+		rec [1]Record
+		dst [1]page.ValuePtr
+	)
+	rec[0] = Record{RID: rid, Value: value}
+	ptrs, stats, err := w.AppendFrameWithStatsInto(dictID, dict, rec[:], dst[:])
+	if err != nil {
+		return page.ValuePtr{}, FrameStats{}, err
+	}
+	if len(ptrs) != 1 {
+		return page.ValuePtr{}, FrameStats{}, ErrCorrupt
+	}
+	return ptrs[0], stats, nil
+}
+
 // AppendRawRecord appends a raw value-log record (CRC + header + payload)
 // without re-encoding. The length argument should include any pointer flags.
 func (w *Writer) AppendRawRecord(raw []byte, length uint32) (page.ValuePtr, error) {
