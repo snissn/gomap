@@ -1903,37 +1903,38 @@ type DB struct {
 	dictCurrentOps    atomic.Uint64
 
 	// Config
-	dir                     string
-	flushThreshold          int64
-	memtableCap             int
-	memtableMode            memtable.Mode
-	memtableStats           memtableStats
-	memtableAdaptive        bool
-	adaptiveShardedStats    bool
-	memtableWarmupActive    bool
-	memtableWarmupThreshold int64
-	domainIngressWorkers    int
-	domainIngressQueueSize  int
-	maxQueuedMemtables      int
-	slowdownBacklogSeconds  float64
-	stopBacklogSeconds      float64
-	maxBacklogBytes         int64
-	writerFlushMaxMemtables int
-	writerFlushMaxDuration  time.Duration
-	flushBuildConcurrency   int
-	flushBuildMinEntries    int
-	flushBuildMinUnits      int
-	flushBuildChunkCap      int
-	flushBuildChunkTarget   int
-	flushBuildChunkMinBytes int
-	flushBuildChunkMaxBytes int
-	flushBuildPrefetchUnits int
-	flushBackendMaxEntries  int
-	flushBackendInitEntries int
-	flushBackendMaxBatches  int
-	walMaxSegmentBytes      int64
-	valueLogMaxSegmentBytes int64
-	journalCompression      bool
+	dir                       string
+	flushThreshold            int64
+	memtableCap               int
+	memtableMode              memtable.Mode
+	memtableStats             memtableStats
+	memtableAdaptive          bool
+	adaptiveShardedStats      bool
+	memtableWarmupActive      bool
+	memtableWarmupThreshold   int64
+	domainIngressWorkers      int
+	domainIngressQueueSize    int
+	maxQueuedMemtables        int
+	slowdownBacklogSeconds    float64
+	stopBacklogSeconds        float64
+	maxBacklogBytes           int64
+	writerFlushMaxMemtables   int
+	writerFlushMaxDuration    time.Duration
+	flushBuildConcurrency     int
+	flushBuildAutoConcurrency bool
+	flushBuildMinEntries      int
+	flushBuildMinUnits        int
+	flushBuildChunkCap        int
+	flushBuildChunkTarget     int
+	flushBuildChunkMinBytes   int
+	flushBuildChunkMaxBytes   int
+	flushBuildPrefetchUnits   int
+	flushBackendMaxEntries    int
+	flushBackendInitEntries   int
+	flushBackendMaxBatches    int
+	walMaxSegmentBytes        int64
+	valueLogMaxSegmentBytes   int64
+	journalCompression        bool
 
 	disableJournal     bool
 	relaxedSync        bool
@@ -2454,6 +2455,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if opts.WriterFlushMaxMemtables == 0 {
 		opts.WriterFlushMaxMemtables = 1
 	}
+	flushBuildAutoConcurrency := opts.FlushBuildConcurrency <= 0
 	if opts.FlushBuildConcurrency <= 0 {
 		opts.FlushBuildConcurrency = runtime.GOMAXPROCS(0)
 		if opts.FlushBuildConcurrency < 1 {
@@ -2812,6 +2814,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		writerFlushMaxMemtables:              opts.WriterFlushMaxMemtables,
 		writerFlushMaxDuration:               opts.WriterFlushMaxDuration,
 		flushBuildConcurrency:                opts.FlushBuildConcurrency,
+		flushBuildAutoConcurrency:            flushBuildAutoConcurrency,
 		flushBuildMinEntries:                 opts.FlushBuildMinEntries,
 		flushBuildMinUnits:                   opts.FlushBuildMinUnits,
 		flushBuildChunkCap:                   opts.FlushBuildChunkCap,
@@ -9132,6 +9135,23 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		workers := db.flushBuildConcurrency
 		if workers <= 0 {
 			workers = 1
+		}
+		if db.flushBuildAutoConcurrency && totalLen > 0 {
+			// Small inline-heavy entries are typically memory-copy bound; high
+			// worker counts can over-parallelize and add scheduler overhead.
+			// Keep wider concurrency for larger entries where per-entry work is
+			// heavier (pointer/value encoding and compression).
+			bytesPerEntry := totalBytes / int64(totalLen)
+			switch {
+			case bytesPerEntry <= 64:
+				if workers > 4 {
+					workers = 4
+				}
+			case bytesPerEntry <= 256:
+				if workers > 6 {
+					workers = 6
+				}
+			}
 		}
 		if workers > len(units) {
 			workers = len(units)
