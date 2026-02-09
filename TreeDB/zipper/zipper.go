@@ -668,8 +668,24 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	children := getChildWorkSlice(int(count))
 	defer putChildWorkSlice(children)
 
+	keyArenaCap := int(count) * 16
+	if keyArenaCap < 64 {
+		keyArenaCap = 64
+	}
+	keyArena := make([]byte, 0, keyArenaCap)
+	cloneKey := func(src []byte) []byte {
+		if src == nil {
+			return nil
+		}
+		if len(src) == 0 {
+			return []byte{}
+		}
+		start := len(keyArena)
+		keyArena = append(keyArena, src...)
+		return keyArena[start : start+len(src)]
+	}
+
 	for i := uint16(0); i < count; i++ {
-		// Optimization: Use View to avoid alloc
 		key, childID, err := oldNode.GetInternalEntryView(i)
 		if err != nil {
 			return 0, nil, nil, err
@@ -677,41 +693,34 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if key == nil {
 			key = []byte{}
 		}
-		keyCopy := append([]byte(nil), key...)
+		keyCopy := cloneKey(key)
+		children = append(children, childWork{
+			key:     keyCopy,
+			low:     keyCopy,
+			childID: childID,
+		})
+	}
 
-		// Determine End Key for this child
+	for i := range children {
 		var endKey []byte
-		if i+1 < count {
-			nextKey, _, err := oldNode.GetInternalEntryView(i + 1)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-			endKey = nextKey
+		if i+1 < len(children) {
+			endKey = children[i+1].key
 		}
 		childHigh := high
 		if endKey != nil {
-			childHigh = append([]byte(nil), endKey...)
+			childHigh = endKey
 		}
+		children[i].high = childHigh
 
-		// Identify ops range for this child
-		// ops[opIdx] ... until op.Key >= endKey
 		startOpIdx := opIdx
 		for opIdx < len(ops) {
 			if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
 				opIdx++
-			} else {
-				break
+				continue
 			}
+			break
 		}
-		childOps := ops[startOpIdx:opIdx]
-
-		children = append(children, childWork{
-			key:     keyCopy,
-			low:     append([]byte(nil), keyCopy...),
-			high:    childHigh,
-			childID: childID,
-			ops:     childOps,
-		})
+		children[i].ops = ops[startOpIdx:opIdx]
 	}
 
 	const (
@@ -812,7 +821,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			if s.NodeID >= z.pager.PageCount() {
 				return 0, nil, nil, errors.New("zipper: detected OOB child ID (split)")
 			}
-			entries = append(entries, internalEntry{key: append([]byte(nil), s.Key...), child: s.NodeID})
+			entries = append(entries, internalEntry{key: s.Key, child: s.NodeID})
 		}
 	}
 

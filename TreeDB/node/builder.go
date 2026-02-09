@@ -43,12 +43,46 @@ type Builder struct {
 	leafColumnarPrefixV2KeyBytes int
 	leafColumnarPrefixV2ValBytes int
 
-	internalBaseEntries []internalBaseDeltaEntry
+	internalBaseEntries       []internalBaseDeltaEntry
+	internalBaseArena         []byte
+	internalBaseTotalKeyBytes int
 }
 
 const internalBaseDeltaFooterTailSize = 14 // u16 lowLen + u16 highLen + u16 prefixLen + u64 baseChildID
 
 var leafColumnarV2ArenaPool = sync.Pool{
+	New: func() any {
+		buf := make([]byte, page.PageSize)
+		return buf[:0]
+	},
+}
+
+const (
+	leafColumnarEntriesPoolInitCap = 256
+	leafColumnarEntriesPoolMaxCap  = 1024
+	internalBaseEntriesPoolInitCap = 256
+	internalBaseEntriesPoolMaxCap  = 1024
+)
+
+var leafColumnarV2EntriesPool = sync.Pool{
+	New: func() any {
+		return make([]leafColumnarV2Entry, 0, leafColumnarEntriesPoolInitCap)
+	},
+}
+
+var leafColumnarPrefixV2EntriesPool = sync.Pool{
+	New: func() any {
+		return make([]leafColumnarPrefixV2Entry, 0, leafColumnarEntriesPoolInitCap)
+	},
+}
+
+var internalBaseEntriesPool = sync.Pool{
+	New: func() any {
+		return make([]internalBaseDeltaEntry, 0, internalBaseEntriesPoolInitCap)
+	},
+}
+
+var internalBaseArenaPool = sync.Pool{
 	New: func() any {
 		buf := make([]byte, page.PageSize)
 		return buf[:0]
@@ -63,15 +97,19 @@ type BuilderOptions struct {
 }
 
 type leafColumnarV2Entry struct {
-	key    []byte
-	value  []byte
-	valPtr page.ValuePtr
-	flags  byte
+	keyOff   uint32
+	keyLen   uint16
+	valueOff uint32
+	valueLen uint16
+	valPtr   page.ValuePtr
+	flags    byte
 }
 
 type leafColumnarPrefixV2Entry struct {
-	suffix    []byte
-	value     []byte
+	suffixOff uint32
+	suffixLen uint16
+	valueOff  uint32
+	valueLen  uint16
 	valPtr    page.ValuePtr
 	flags     byte
 	prefixLen uint16
@@ -91,7 +129,7 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 	leafPrefix := opts.LeafPrefixCompression
 	leafColumnarV2 := pType == page.PageTypeLeaf && opts.LeafColumnar && !leafPrefix
 	heapStart := len(data)
-	return &Builder{
+	b := &Builder{
 		data:                  data,
 		pType:                 pType,
 		dirEnd:                NodeHeaderSize,
@@ -103,6 +141,26 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 		leafPackedValuePtr:    opts.PackedValuePtr,
 		internalBaseDelta:     opts.InternalBaseDelta,
 	}
+	if pType == page.PageTypeLeaf && opts.LeafColumnar {
+		if leafPrefix {
+			if pooled, ok := leafColumnarPrefixV2EntriesPool.Get().([]leafColumnarPrefixV2Entry); ok {
+				b.leafColumnarPrefixV2Entries = pooled[:0]
+			}
+		} else if leafColumnarV2 {
+			if pooled, ok := leafColumnarV2EntriesPool.Get().([]leafColumnarV2Entry); ok {
+				b.leafColumnarV2Entries = pooled[:0]
+			}
+		}
+	}
+	if pType == page.PageTypeInternal && opts.InternalBaseDelta {
+		if pooled, ok := internalBaseEntriesPool.Get().([]internalBaseDeltaEntry); ok {
+			b.internalBaseEntries = pooled[:0]
+		}
+		if arena, ok := internalBaseArenaPool.Get().([]byte); ok {
+			b.internalBaseArena = arena[:0]
+		}
+	}
+	return b
 }
 
 // SetPageID sets the page ID (can be done at finish too).
@@ -328,17 +386,19 @@ func (b *Builder) addLeafEntryColumnarV2(key, value []byte, flags byte, valPtr p
 		return ErrNodeFull
 	}
 
-	keyCopy := b.leafColumnarV2CopyBytes(key)
-	var valueCopy []byte
+	keyOff, keyLen := b.leafColumnarV2AppendBytes(key)
+	valueOff, valueLen := uint32(0), uint16(0)
 	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
-		valueCopy = b.leafColumnarV2CopyBytes(value)
+		valueOff, valueLen = b.leafColumnarV2AppendBytes(value)
 	}
 
 	b.leafColumnarV2Entries = append(b.leafColumnarV2Entries, leafColumnarV2Entry{
-		key:    keyCopy,
-		value:  valueCopy,
-		valPtr: valPtr,
-		flags:  flags,
+		keyOff:   keyOff,
+		keyLen:   keyLen,
+		valueOff: valueOff,
+		valueLen: valueLen,
+		valPtr:   valPtr,
+		flags:    flags,
 	})
 	b.leafColumnarV2KeyBytes += len(key)
 	b.leafColumnarV2ValBytes += valSize
@@ -384,15 +444,17 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 		return ErrNodeFull
 	}
 
-	suffixCopy := b.leafColumnarV2CopyBytes(key[prefixLen:])
-	var valueCopy []byte
+	suffixOff, suffixLenU16 := b.leafColumnarV2AppendBytes(key[prefixLen:])
+	valueOff, valueLen := uint32(0), uint16(0)
 	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
-		valueCopy = b.leafColumnarV2CopyBytes(value)
+		valueOff, valueLen = b.leafColumnarV2AppendBytes(value)
 	}
 
 	b.leafColumnarPrefixV2Entries = append(b.leafColumnarPrefixV2Entries, leafColumnarPrefixV2Entry{
-		suffix:    suffixCopy,
-		value:     valueCopy,
+		suffixOff: suffixOff,
+		suffixLen: suffixLenU16,
+		valueOff:  valueOff,
+		valueLen:  valueLen,
 		valPtr:    valPtr,
 		flags:     flags,
 		prefixLen: uint16(prefixLen),
@@ -638,12 +700,11 @@ func (b *Builder) Finish() *Node {
 }
 
 func (b *Builder) finishLeafColumnarV2() {
-	clear(b.data)
-
 	count := int(b.count)
 	if count == 0 {
 		b.dirEnd = NodeHeaderSize
 		b.heapStart = len(b.data)
+		b.releaseLeafColumnarV2Scratch()
 		return
 	}
 
@@ -667,10 +728,11 @@ func (b *Builder) finishLeafColumnarV2() {
 	keyOff := keysStart
 
 	for i := 0; i < count; i++ {
-		e := b.leafColumnarV2Entries[i]
-
-		putUint16(b.data[keyDirStart+i*2:keyDirStart+i*2+2], uint16(keyOff))
-		putUint16(b.data[valDirStart+i*2:valDirStart+i*2+2], uint16(valOff))
+		e := &b.leafColumnarV2Entries[i]
+		keyDirPos := keyDirStart + i*2
+		valDirPos := valDirStart + i*2
+		putUint16At(b.data, keyDirPos, uint16(keyOff))
+		putUint16At(b.data, valDirPos, uint16(valOff))
 		b.data[flagsStart+i] = e.flags
 
 		if e.flags&FlagPointer != 0 {
@@ -681,12 +743,16 @@ func (b *Builder) finishLeafColumnarV2() {
 			}
 			valOff += valPtrSize
 		} else if e.flags&FlagTombstone == 0 {
-			copy(b.data[valOff:valOff+len(e.value)], e.value)
-			valOff += len(e.value)
+			valueStart := int(e.valueOff)
+			valueEnd := valueStart + int(e.valueLen)
+			copy(b.data[valOff:valOff+int(e.valueLen)], b.leafColumnarV2Arena[valueStart:valueEnd])
+			valOff += int(e.valueLen)
 		}
 
-		copy(b.data[keyOff:keyOff+len(e.key)], e.key)
-		keyOff += len(e.key)
+		keyStart := int(e.keyOff)
+		keyEnd := keyStart + int(e.keyLen)
+		copy(b.data[keyOff:keyOff+int(e.keyLen)], b.leafColumnarV2Arena[keyStart:keyEnd])
+		keyOff += int(e.keyLen)
 	}
 
 	if valOff != keysStart || keyOff != len(b.data) {
@@ -696,22 +762,15 @@ func (b *Builder) finishLeafColumnarV2() {
 	b.dirEnd = metaEnd
 	b.heapStart = valuesStart
 
-	b.leafColumnarV2Entries = nil
-	b.leafColumnarV2KeyBytes = 0
-	b.leafColumnarV2ValBytes = 0
-	if b.leafColumnarV2Arena != nil {
-		leafColumnarV2ArenaPool.Put(b.leafColumnarV2Arena[:0])
-		b.leafColumnarV2Arena = nil
-	}
+	b.releaseLeafColumnarV2Scratch()
 }
 
 func (b *Builder) finishLeafColumnarPrefixV2() {
-	clear(b.data)
-
 	count := int(b.count)
 	if count == 0 {
 		b.dirEnd = NodeHeaderSize
 		b.heapStart = len(b.data)
+		b.releaseLeafColumnarPrefixV2Scratch()
 		return
 	}
 
@@ -735,12 +794,14 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 	valOff := valuesStart
 	keyOff := suffixStart
 	for i := 0; i < count; i++ {
-		e := b.leafColumnarPrefixV2Entries[i]
-
-		putUint16(b.data[keyDirStart+i*2:keyDirStart+i*2+2], uint16(keyOff))
-		putUint16(b.data[valDirStart+i*2:valDirStart+i*2+2], uint16(valOff))
+		e := &b.leafColumnarPrefixV2Entries[i]
+		keyDirPos := keyDirStart + i*2
+		valDirPos := valDirStart + i*2
+		prefixPos := prefixStart + i*2
+		putUint16At(b.data, keyDirPos, uint16(keyOff))
+		putUint16At(b.data, valDirPos, uint16(valOff))
 		b.data[flagsStart+i] = e.flags
-		putUint16(b.data[prefixStart+i*2:prefixStart+i*2+2], e.prefixLen)
+		putUint16At(b.data, prefixPos, e.prefixLen)
 
 		if e.flags&FlagPointer != 0 {
 			if b.leafPackedValuePtr {
@@ -750,12 +811,16 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 			}
 			valOff += valPtrSize
 		} else if e.flags&FlagTombstone == 0 {
-			copy(b.data[valOff:valOff+len(e.value)], e.value)
-			valOff += len(e.value)
+			valueStart := int(e.valueOff)
+			valueEnd := valueStart + int(e.valueLen)
+			copy(b.data[valOff:valOff+int(e.valueLen)], b.leafColumnarV2Arena[valueStart:valueEnd])
+			valOff += int(e.valueLen)
 		}
 
-		copy(b.data[keyOff:keyOff+len(e.suffix)], e.suffix)
-		keyOff += len(e.suffix)
+		suffixStart := int(e.suffixOff)
+		suffixEnd := suffixStart + int(e.suffixLen)
+		copy(b.data[keyOff:keyOff+int(e.suffixLen)], b.leafColumnarV2Arena[suffixStart:suffixEnd])
+		keyOff += int(e.suffixLen)
 	}
 
 	if valOff != suffixStart || keyOff != len(b.data) {
@@ -765,7 +830,31 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 	b.dirEnd = metaEnd
 	b.heapStart = valuesStart
 
-	b.leafColumnarPrefixV2Entries = nil
+	b.releaseLeafColumnarPrefixV2Scratch()
+}
+
+func (b *Builder) releaseLeafColumnarV2Scratch() {
+	if b.leafColumnarV2Entries != nil {
+		if cap(b.leafColumnarV2Entries) <= leafColumnarEntriesPoolMaxCap {
+			leafColumnarV2EntriesPool.Put(b.leafColumnarV2Entries[:0])
+		}
+		b.leafColumnarV2Entries = nil
+	}
+	b.leafColumnarV2KeyBytes = 0
+	b.leafColumnarV2ValBytes = 0
+	if b.leafColumnarV2Arena != nil {
+		leafColumnarV2ArenaPool.Put(b.leafColumnarV2Arena[:0])
+		b.leafColumnarV2Arena = nil
+	}
+}
+
+func (b *Builder) releaseLeafColumnarPrefixV2Scratch() {
+	if b.leafColumnarPrefixV2Entries != nil {
+		if cap(b.leafColumnarPrefixV2Entries) <= leafColumnarEntriesPoolMaxCap {
+			leafColumnarPrefixV2EntriesPool.Put(b.leafColumnarPrefixV2Entries[:0])
+		}
+		b.leafColumnarPrefixV2Entries = nil
+	}
 	b.leafColumnarPrefixV2KeyBytes = 0
 	b.leafColumnarPrefixV2ValBytes = 0
 	if b.leafColumnarV2Arena != nil {
@@ -774,9 +863,27 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 	}
 }
 
-func (b *Builder) leafColumnarV2CopyBytes(src []byte) []byte {
+func (b *Builder) releaseInternalBaseDeltaScratch() {
+	if b.internalBaseEntries != nil {
+		if cap(b.internalBaseEntries) <= internalBaseEntriesPoolMaxCap {
+			clear(b.internalBaseEntries)
+			internalBaseEntriesPool.Put(b.internalBaseEntries[:0])
+		}
+		b.internalBaseEntries = nil
+	}
+	b.internalBaseTotalKeyBytes = 0
+	if b.internalBaseArena != nil {
+		internalBaseArenaPool.Put(b.internalBaseArena[:0])
+		b.internalBaseArena = nil
+	}
+}
+
+func (b *Builder) leafColumnarV2AppendBytes(src []byte) (off uint32, n uint16) {
 	if len(src) == 0 {
-		return nil
+		return 0, 0
+	}
+	if len(src) > int(^uint16(0)) {
+		panic("leaf columnar blob too large")
 	}
 	if b.leafColumnarV2Arena == nil {
 		arenaAny := leafColumnarV2ArenaPool.Get()
@@ -787,12 +894,44 @@ func (b *Builder) leafColumnarV2CopyBytes(src []byte) []byte {
 	start := len(b.leafColumnarV2Arena)
 	end := start + len(src)
 	if end > cap(b.leafColumnarV2Arena) {
-		dst := make([]byte, len(src))
-		copy(dst, src)
-		return dst
+		expandedCap := cap(b.leafColumnarV2Arena) * 2
+		if expandedCap < end {
+			expandedCap = end
+		}
+		expanded := make([]byte, end, expandedCap)
+		copy(expanded, b.leafColumnarV2Arena)
+		b.leafColumnarV2Arena = expanded
+	} else {
+		b.leafColumnarV2Arena = b.leafColumnarV2Arena[:end]
 	}
-	b.leafColumnarV2Arena = b.leafColumnarV2Arena[:end]
-	dst := b.leafColumnarV2Arena[start:end]
+	copy(b.leafColumnarV2Arena[start:end], src)
+	return uint32(start), uint16(len(src))
+}
+
+func (b *Builder) internalBaseCopyBytes(src []byte) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	if b.internalBaseArena == nil {
+		arenaAny := internalBaseArenaPool.Get()
+		arena := arenaAny.([]byte)
+		b.internalBaseArena = arena[:0]
+	}
+
+	start := len(b.internalBaseArena)
+	end := start + len(src)
+	if end > cap(b.internalBaseArena) {
+		expandedCap := cap(b.internalBaseArena) * 2
+		if expandedCap < end {
+			expandedCap = end
+		}
+		expanded := make([]byte, end, expandedCap)
+		copy(expanded, b.internalBaseArena)
+		b.internalBaseArena = expanded
+	} else {
+		b.internalBaseArena = b.internalBaseArena[:end]
+	}
+	dst := b.internalBaseArena[start:end]
 	copy(dst, src)
 	return dst
 }
@@ -829,8 +968,9 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 		deltaWidth = 2
 	}
 
+	existingCount := len(b.internalBaseEntries)
 	firstKey := key
-	if len(b.internalBaseEntries) > 0 {
+	if existingCount > 0 {
 		firstKey = b.internalBaseEntries[0].key
 	}
 	prefixLen := 0
@@ -841,14 +981,11 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 		return ErrKeyTooLarge
 	}
 
-	totalSuffixBytes := len(key) - prefixLen
-	for i := range b.internalBaseEntries {
-		k := b.internalBaseEntries[i].key
-		if len(k) < prefixLen {
-			return ErrCorruptedNode
-		}
-		totalSuffixBytes += len(k) - prefixLen
+	existingSuffixBytes := b.internalBaseTotalKeyBytes - existingCount*prefixLen
+	if existingSuffixBytes < 0 {
+		return ErrCorruptedNode
 	}
+	totalSuffixBytes := existingSuffixBytes + len(key) - prefixLen
 
 	lowLen := 0
 	highLen := 0
@@ -864,12 +1001,13 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 		return ErrNodeFull
 	}
 
-	keyCopy := append([]byte(nil), key...)
+	keyCopy := b.internalBaseCopyBytes(key)
 	b.internalBaseEntries = append(b.internalBaseEntries, internalBaseDeltaEntry{
 		key:   keyCopy,
 		child: childPageID,
 	})
 	b.count++
+	b.internalBaseTotalKeyBytes += len(keyCopy)
 	b.internalBaseHasChild = true
 	b.internalBaseMinChild = minChild
 	b.internalBaseMaxChild = maxChild
@@ -883,9 +1021,11 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 func (b *Builder) finishInternalBaseDelta() bool {
 	count := int(b.count)
 	if count == 0 {
+		b.releaseInternalBaseDeltaScratch()
 		return false
 	}
 	if len(b.internalBaseEntries) != count {
+		b.releaseInternalBaseDeltaScratch()
 		return false
 	}
 
@@ -936,8 +1076,6 @@ func (b *Builder) finishInternalBaseDelta() bool {
 		panic("internal base-delta packing overflow")
 	}
 
-	clear(b.data)
-
 	payloadPos := footerStart
 	if lowLen > 0 {
 		copy(b.data[payloadPos:payloadPos+lowLen], b.internalFenceLow)
@@ -953,33 +1091,33 @@ func (b *Builder) finishInternalBaseDelta() bool {
 	}
 
 	tailPos := len(b.data) - internalBaseDeltaFooterTailSize
-	putUint16(b.data[tailPos:tailPos+2], uint16(lowLen))
-	putUint16(b.data[tailPos+2:tailPos+4], uint16(highLen))
-	putUint16(b.data[tailPos+4:tailPos+6], uint16(prefixLen))
-	putUint64(b.data[tailPos+6:tailPos+14], baseChildID)
+	putUint16At(b.data, tailPos, uint16(lowLen))
+	putUint16At(b.data, tailPos+2, uint16(highLen))
+	putUint16At(b.data, tailPos+4, uint16(prefixLen))
+	putUint64At(b.data, tailPos+6, baseChildID)
 
 	writePos := footerStart
 	for i := 0; i < count; i++ {
-		e := b.internalBaseEntries[i]
+		e := &b.internalBaseEntries[i]
 		suffix := e.key[prefixLen:]
 		entrySize := 2 + deltaWidth + len(suffix)
 		writePos -= entrySize
 
-		putUint16(b.data[writePos:writePos+2], uint16(len(suffix)))
+		putUint16At(b.data, writePos, uint16(len(suffix)))
 		delta := e.child - baseChildID
 		if deltaWidth == 2 {
-			putUint16(b.data[writePos+2:writePos+4], uint16(delta))
+			putUint16At(b.data, writePos+2, uint16(delta))
 			copy(b.data[writePos+4:writePos+4+len(suffix)], suffix)
 		} else {
 			putUint32(b.data[writePos+2:writePos+6], uint32(delta))
 			copy(b.data[writePos+6:writePos+6+len(suffix)], suffix)
 		}
-		putUint16(b.data[NodeHeaderSize+i*2:NodeHeaderSize+i*2+2], uint16(writePos))
+		putUint16At(b.data, NodeHeaderSize+i*2, uint16(writePos))
 	}
 
 	b.heapStart = heapStart
 	b.dirEnd = dirEnd
-	b.internalBaseEntries = nil
+	b.releaseInternalBaseDeltaScratch()
 	return true
 }
 
@@ -996,19 +1134,28 @@ func sharedPrefixLen(a, b []byte) int {
 	return n
 }
 
+func putUint16At(dst []byte, pos int, v uint16) {
+	_ = dst[pos+1]
+	dst[pos] = byte(v)
+	dst[pos+1] = byte(v >> 8)
+}
+
 func putUint16(dst []byte, v uint16) {
-	_ = dst[1]
-	dst[0] = byte(v)
-	dst[1] = byte(v >> 8)
+	putUint16At(dst, 0, v)
+}
+
+func putUint64At(dst []byte, pos int, v uint64) {
+	_ = dst[pos+7]
+	dst[pos] = byte(v)
+	dst[pos+1] = byte(v >> 8)
+	dst[pos+2] = byte(v >> 16)
+	dst[pos+3] = byte(v >> 24)
+	dst[pos+4] = byte(v >> 32)
+	dst[pos+5] = byte(v >> 40)
+	dst[pos+6] = byte(v >> 48)
+	dst[pos+7] = byte(v >> 56)
 }
 
 func putUint64(dst []byte, v uint64) {
-	dst[0] = byte(v)
-	dst[1] = byte(v >> 8)
-	dst[2] = byte(v >> 16)
-	dst[3] = byte(v >> 24)
-	dst[4] = byte(v >> 32)
-	dst[5] = byte(v >> 40)
-	dst[6] = byte(v >> 48)
-	dst[7] = byte(v >> 56)
+	putUint64At(dst, 0, v)
 }
