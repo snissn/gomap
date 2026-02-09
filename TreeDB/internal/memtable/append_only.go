@@ -31,6 +31,7 @@ type AppendOnly struct {
 	mu sync.RWMutex
 
 	entries   []appendOnlyEntry
+	count     int
 	sizeBytes int64
 
 	ordered bool
@@ -52,7 +53,8 @@ func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 		n = appendOnlyMaxInitialEntries
 	}
 	return &AppendOnly{
-		entries:   make([]appendOnlyEntry, 0, n),
+		entries:   make([]appendOnlyEntry, n),
+		count:     0,
 		ordered:   true,
 		hasLast:   false,
 		lastIdx:   -1,
@@ -93,11 +95,24 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	if key == nil {
 		return
 	}
-	m.entries = append(m.entries, appendOnlyEntry{})
-	idx := len(m.entries) - 1
+	if m.count == len(m.entries) {
+		nextCap := len(m.entries) * 2
+		if nextCap < appendOnlyMinInitialEntries {
+			nextCap = appendOnlyMinInitialEntries
+		}
+		if nextCap == 0 {
+			nextCap = appendOnlyMinInitialEntries
+		}
+		grown := make([]appendOnlyEntry, nextCap)
+		copy(grown, m.entries[:m.count])
+		m.entries = grown
+	}
+	idx := m.count
+	m.count++
 	ent := &m.entries[idx]
 	ent.ptr = ptr
 	ent.flags = flags
+	ent.keyInline = false
 	if steal {
 		ent.key = key
 		ent.value = value
@@ -225,7 +240,7 @@ func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []
 func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	for i := len(m.entries) - 1; i >= 0; i-- {
+	for i := m.count - 1; i >= 0; i-- {
 		ent := &m.entries[i]
 		if bytes.Equal(appendOnlyEntryKey(ent), key) {
 			if ent.flags&node.FlagTombstone != 0 {
@@ -240,7 +255,7 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	for i := len(m.entries) - 1; i >= 0; i-- {
+	for i := m.count - 1; i >= 0; i-- {
 		ent := &m.entries[i]
 		if bytes.Equal(appendOnlyEntryKey(ent), key) {
 			return ent.value, ent.ptr, ent.flags, true
@@ -258,18 +273,19 @@ func (m *AppendOnly) Size() int64 {
 func (m *AppendOnly) Len() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return len(m.entries)
+	return m.count
 }
 
 func (m *AppendOnly) Freeze() {}
 
 func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
-	if len(m.entries) == 0 {
+	if m.count == 0 {
 		return nil
 	}
-	latest := make(map[string]int, len(m.entries))
-	for i := range m.entries {
-		latest[string(appendOnlyEntryKey(&m.entries[i]))] = i
+	active := m.entries[:m.count]
+	latest := make(map[string]int, len(active))
+	for i := range active {
+		latest[string(appendOnlyEntryKey(&active[i]))] = i
 	}
 	indices := make([]int, 0, len(latest))
 	for _, idx := range latest {
@@ -277,20 +293,20 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 	}
 	sort.Slice(indices, func(i, j int) bool {
 		return bytes.Compare(
-			appendOnlyEntryKey(&m.entries[indices[i]]),
-			appendOnlyEntryKey(&m.entries[indices[j]]),
+			appendOnlyEntryKey(&active[indices[i]]),
+			appendOnlyEntryKey(&active[indices[j]]),
 		) < 0
 	})
 	snapshot := make([]appendOnlyEntry, len(indices))
 	for i, idx := range indices {
-		snapshot[i] = m.entries[idx]
+		snapshot[i] = active[idx]
 	}
 	return snapshot
 }
 
 func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RLock()
-	entries := m.entries
+	entries := m.entries[:m.count]
 	if !m.ordered {
 		entries = m.buildSortedLatestSnapshotLocked()
 	}
