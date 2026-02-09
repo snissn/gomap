@@ -89,6 +89,10 @@ const maxChildWorkCap = 1 << 14
 
 var childWorkPool sync.Pool
 
+const maxInternalEntryCap = 1 << 15
+
+var internalEntryPool sync.Pool
+
 const (
 	internalKeyArenaInitCap = page.PageSize
 	internalKeyArenaMaxCap  = 1 << 16
@@ -171,6 +175,32 @@ func putChildWorkSlice(children []childWork) {
 		children[i] = childWork{}
 	}
 	childWorkPool.Put(children[:0])
+}
+
+func getInternalEntrySlice(capacity int) []internalEntry {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxInternalEntryCap {
+		return make([]internalEntry, 0, capacity)
+	}
+	if v := internalEntryPool.Get(); v != nil {
+		s := v.([]internalEntry)
+		if cap(s) >= capacity {
+			return s[:0]
+		}
+	}
+	return make([]internalEntry, 0, capacity)
+}
+
+func putInternalEntrySlice(entries []internalEntry) {
+	if cap(entries) > maxInternalEntryCap {
+		return
+	}
+	for i := range entries {
+		entries[i] = internalEntry{}
+	}
+	internalEntryPool.Put(entries[:0])
 }
 
 func New(p *pager.Pager, a PageAllocator) *Zipper {
@@ -872,21 +902,25 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if maxParallel < 1 {
 			maxParallel = 1
 		}
-		jobs := make(chan int, len(children))
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				children[i].newChild = children[i].childID
-				continue
 			}
-			jobs <- i
 		}
-		close(jobs)
+		var nextJob int64 = -1
 		var wg sync.WaitGroup
 		var firstErr error
 		var errOnce sync.Once
 		worker := func() {
 			defer wg.Done()
-			for i := range jobs {
+			for {
+				i := int(atomic.AddInt64(&nextJob, 1))
+				if i >= len(children) {
+					return
+				}
+				if len(children[i].ops) == 0 {
+					continue
+				}
 				var childMetrics adaptive.Metrics
 				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, budget, &childMetrics, children[i].low, children[i].high)
 				if err != nil {
@@ -959,7 +993,8 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	for i := range children {
 		totalEntries += len(children[i].splits)
 	}
-	entries := make([]internalEntry, 0, totalEntries)
+	entries := getInternalEntrySlice(totalEntries)
+	defer func() { putInternalEntrySlice(entries) }()
 	for i := range children {
 		child := children[i]
 		if child.newChild >= z.pager.PageCount() {
