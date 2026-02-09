@@ -36,9 +36,6 @@ type File struct {
 	cacheLen   int
 	cacheOffs  [MaxFrameK + 1]uint32
 	cacheRaw   []byte
-	// cacheRawPooled tracks whether cacheRaw currently owns a pooled decode
-	// scratch buffer that must be returned on eviction.
-	cacheRawPooled bool
 
 	closed atomic.Bool
 
@@ -64,12 +61,8 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 	return vf, nil
 }
 
-func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
-	if f.cacheRawPooled && len(f.cacheRaw) > 0 {
-		putDecodeScratch(f.cacheRaw)
-	}
+func (f *File) setCacheRawLocked(raw []byte) {
 	f.cacheRaw = raw
-	f.cacheRawPooled = pooled
 }
 
 func (f *File) Close() error {
@@ -81,7 +74,7 @@ func (f *File) Close() error {
 	f.cacheK = 0
 	f.cacheFlags = 0
 	f.cacheLen = 0
-	f.setCacheRawLocked(nil, false)
+	f.setCacheRawLocked(nil)
 	f.cacheStart.Store(0)
 	f.cacheMu.Unlock()
 

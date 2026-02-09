@@ -286,7 +286,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		f.cacheFlags = fFlags
 		f.cacheLen = prefixLen
 		f.cacheOffs = offsets
-		f.setCacheRawLocked(raw, false)
+		f.setCacheRawLocked(raw)
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
 
@@ -303,7 +303,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	f.cacheFlags = fFlags
 	f.cacheLen = prefixLen
 	f.cacheOffs = offsets
-	f.setCacheRawLocked(nil, false)
+	f.setCacheRawLocked(nil)
 	f.cacheStart.Store(start)
 	f.cacheMu.Unlock()
 
@@ -484,7 +484,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		f.cacheFlags = fFlags
 		f.cacheLen = prefixLen
 		f.cacheOffs = offsets
-		f.setCacheRawLocked(nil, false)
+		f.setCacheRawLocked(nil)
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
 
@@ -593,14 +593,11 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		Reserved: frameHeader[3],
 		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
 	}
-	scratch := getDecodeScratch(int(rawLen))
-	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, scratch)
+	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, nil)
 	if err != nil {
-		putDecodeScratch(scratch)
 		return nil, err, true
 	}
 	if uint32(len(raw)) != rawLen {
-		putDecodeScratch(raw)
 		return nil, ErrCorrupt, true
 	}
 
@@ -609,7 +606,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	f.cacheFlags = fFlags
 	f.cacheLen = prefixLen
 	f.cacheOffs = offsets
-	f.setCacheRawLocked(raw, true)
+	f.setCacheRawLocked(raw)
 	f.cacheStart.Store(start)
 	f.cacheMu.Unlock()
 
