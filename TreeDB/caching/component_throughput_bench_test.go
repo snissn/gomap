@@ -2,6 +2,7 @@ package caching
 
 import (
 	"encoding/binary"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -107,4 +108,66 @@ func BenchmarkComponentValueLaneAppendQueuedParallel(b *testing.B) {
 			}
 		}
 	})
+}
+
+func BenchmarkComponentValueLanesParallel(b *testing.B) {
+	for _, queueOn := range []bool{false, true} {
+		queueName := "queue_off"
+		if queueOn {
+			queueName = "queue_on"
+		}
+		for _, laneCount := range []int{1, 2, 4, 8} {
+			b.Run(fmt.Sprintf("%s/lanes_%d", queueName, laneCount), func(b *testing.B) {
+				clock := valuelog.NewVirtualClock(time.Unix(0, 0))
+				sink := &valuelog.VirtualSink{Clock: clock}
+				lanes := make([]lane, laneCount)
+				for i := range lanes {
+					fileID, _ := valuelog.EncodeFileID(uint32(i), 1)
+					writer := valuelog.NewWriterWithSink(sink, fileID)
+					writer.SetEncodeSampleStride(0)
+					lanes[i] = lane{id: i, vlog: writer}
+				}
+
+				db := &DB{
+					closeCh: make(chan struct{}),
+					valueLogAutotuneOptions: valuelog.AutotuneOptions{
+						Mode: valuelog.AutotuneOff,
+					},
+					disableJournal:        true,
+					forceValueLogPointers: true,
+					lanes:                 lanes,
+				}
+				if queueOn {
+					for i := range db.lanes {
+						db.startVlogWriter(&db.lanes[i])
+						db.lanes[i].vlogQueueing.Store(true)
+					}
+				}
+				defer func() {
+					close(db.closeCh)
+					db.wg.Wait()
+				}()
+
+				value := make([]byte, vlogQueueMinValueSize)
+				for i := range value {
+					value[i] = byte(i)
+				}
+				var rid atomic.Uint64
+				var lanePick atomic.Uint64
+
+				b.ReportAllocs()
+				b.SetBytes(int64(len(value)))
+				b.ResetTimer()
+				b.RunParallel(func(pb *testing.PB) {
+					for pb.Next() {
+						id := rid.Add(1)
+						idx := int(lanePick.Add(1)-1) % laneCount
+						if _, _, err := db.appendValueLogOne(&db.lanes[idx], 0, nil, id, value, journalDurabilityNone); err != nil {
+							panic(err)
+						}
+					}
+				})
+			})
+		}
+	}
 }
