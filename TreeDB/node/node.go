@@ -293,8 +293,7 @@ func (n *Node) Checksum() uint32 {
 
 // UpdateChecksum calculates and updates the checksum in the header.
 func (n *Node) UpdateChecksum() {
-	sum := page.CalculateChecksum(n.data)
-	binary.LittleEndian.PutUint32(n.data[8:12], sum)
+	page.UpdateChecksum(n.data)
 }
 
 // VerifyChecksum validates the node's checksum.

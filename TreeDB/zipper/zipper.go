@@ -409,7 +409,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 				}
 				if err == node.ErrNodeFull {
 					// Finish current
-					_ = currentBuilder.Finish()
+					currentBuilder.FinishNoNode()
 					// Promote
 					nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, NodeID: currentBuilder.PageID()})
 
@@ -436,7 +436,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 
 				// If this was the last child, finish
 				if i == len(currentLevelNodes)-1 {
-					_ = currentBuilder.Finish()
+					currentBuilder.FinishNoNode()
 					nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, NodeID: currentBuilder.PageID()})
 					currentBuilder = nil
 				}
@@ -486,10 +486,10 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		// Merge Leaf
 		nr, splits, err := z.mergeLeaf(oldNode, builder, ops, metrics)
 		if err == nil {
-			n := builder.Finish() // Finish writes header/checksum
+			builder.FinishNoNode() // Finish writes header/checksum
 			// Update Metrics
 			metrics.IndexWriteBytes += page.PageSize
-			metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+			metrics.LeafFill += float64(page.PageSize-builder.FreeSpace()) / float64(page.PageSize)
 		}
 		return nr, splits, retired, err
 	} else if oldNode.Type() == page.PageTypeInternal {
@@ -526,9 +526,9 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 
 			nr, splits, err := z.mergeLeaf(oldNode, builder, ops, metrics)
 			if err == nil {
-				n := builder.Finish()
+				builder.FinishNoNode()
 				metrics.IndexWriteBytes += page.PageSize
-				metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+				metrics.LeafFill += float64(page.PageSize-builder.FreeSpace()) / float64(page.PageSize)
 			}
 			return nr, splits, retired, err
 		}
@@ -641,9 +641,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 			// 1. Finish current target (writes header/checksum)
 			if target != builder {
-				n := target.Finish()
+				target.FinishNoNode()
 				metrics.IndexWriteBytes += page.PageSize
-				metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+				metrics.LeafFill += float64(page.PageSize-target.FreeSpace()) / float64(page.PageSize)
 				metrics.Splits++
 			}
 
@@ -684,9 +684,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 	// Finalize last split node
 	if target != builder {
-		n := target.Finish()
+		target.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
-		metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-target.FreeSpace()) / float64(page.PageSize)
 		metrics.Splits++
 	}
 
@@ -838,7 +838,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 
 		if target != builder {
-			_ = target.Finish()
+			target.FinishNoNode()
 			metrics.IndexWriteBytes += page.PageSize
 		}
 		return builder.PageID(), splits, retired, nil
@@ -983,7 +983,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			}
 		}
 		if target != builder {
-			_ = target.Finish()
+			target.FinishNoNode()
 			metrics.IndexWriteBytes += page.PageSize
 		}
 		return builder.PageID(), splits, retired, nil
@@ -1038,7 +1038,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	// Finalize last split node
 	if target != builder {
-		_ = target.Finish()
+		target.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 	}
 
@@ -1200,9 +1200,9 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			return 0, false, err
 		}
 
-		n := b.Finish()
+		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
-		metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-b.FreeSpace()) / float64(page.PageSize)
 		return pid, true, nil
 	}
 
@@ -1238,7 +1238,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 				return 0, err
 			}
 		}
-		b.Finish()
+		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 		return pid, nil
 	}
@@ -1370,11 +1370,11 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			}
 		}
 
-		ln := lb.Finish()
-		rn := rb.Finish()
+		lb.FinishNoNode()
+		rb.FinishNoNode()
 		metrics.IndexWriteBytes += 2 * page.PageSize
-		metrics.LeafFill += float64(page.PageSize-ln.FreeSpace()) / float64(page.PageSize)
-		metrics.LeafFill += float64(page.PageSize-rn.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-lb.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-rb.FreeSpace()) / float64(page.PageSize)
 		return lid, rid, rightStart, true, nil
 	}
 
@@ -1594,7 +1594,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 			return 0, false, err
 		}
 
-		_ = b.Finish()
+		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 		return pid, true, nil
 	}
@@ -1705,8 +1705,8 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 				}
 				return nil, false, err
 			}
-			lb2.Finish()
-			rb2.Finish()
+			lb2.FinishNoNode()
+			rb2.FinishNoNode()
 			rs := combined[splitAt].key
 			if rs == nil {
 				rs = []byte{}
@@ -1834,7 +1834,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder, splits *[]Split, key []byte, val uint64, metrics *adaptive.Metrics) (*node.Builder, error) {
 	// 1. Finish current (if not rootBuilder)
 	if currentTarget != rootBuilder {
-		_ = currentTarget.Finish()
+		currentTarget.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 	}
 

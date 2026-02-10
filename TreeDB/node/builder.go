@@ -710,9 +710,7 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 	return nil
 }
 
-// Finish finalizes the page header and checksum.
-// Returns a Node wrapper for convenience.
-func (b *Builder) Finish() *Node {
+func (b *Builder) finalize() {
 	internalBaseDeltaApplied := false
 	if b.pType == page.PageTypeInternal && b.internalBaseDelta {
 		internalBaseDeltaApplied = b.finishInternalBaseDelta()
@@ -758,9 +756,24 @@ func (b *Builder) Finish() *Node {
 	binary.LittleEndian.PutUint16(b.data[12:14], flags)
 	binary.LittleEndian.PutUint16(b.data[14:16], b.count)
 
-	n := NewNode(b.data)
-	n.UpdateChecksum()
-	return n
+	page.UpdateChecksum(b.data)
+}
+
+// Finish finalizes the page header and checksum.
+// Returns a Node wrapper for convenience.
+func (b *Builder) Finish() *Node {
+	b.finalize()
+	return &Node{
+		data:  b.data,
+		count: b.count,
+		ptype: b.pType,
+	}
+}
+
+// FinishNoNode finalizes the page header and checksum without allocating a
+// Node wrapper. Use this in hot paths that only need the encoded page bytes.
+func (b *Builder) FinishNoNode() {
+	b.finalize()
 }
 
 func (b *Builder) finishLeafColumnarV2() {
