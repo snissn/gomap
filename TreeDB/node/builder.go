@@ -427,9 +427,9 @@ func (b *Builder) addLeafEntryColumnar(key, value []byte, flags byte, valPtr pag
 	valueStart := entryStart + leafColumnarHeaderSize
 	if flags&FlagPointer != 0 {
 		if b.leafPackedValuePtr {
-			page.EncodePackedValuePtr(b.data[valueStart:valueStart+valPtrSize], valPtr)
+			encodePackedValuePtrAt(b.data, valueStart, valPtr)
 		} else {
-			valPtr.Encode(b.data[valueStart : valueStart+valPtrSize])
+			encodeValuePtrAt(b.data, valueStart, valPtr)
 		}
 	} else if flags&FlagTombstone == 0 {
 		copy(b.data[valueStart:valueStart+valLen], value)
@@ -660,12 +660,10 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 
 	valueStart := keyStart + suffixLen
 	if flags&FlagPointer != 0 {
-		valPtrSize := page.ValuePtrSize
 		if b.leafPackedValuePtr {
-			valPtrSize = page.PackedValuePtrSize
-			page.EncodePackedValuePtr(b.data[valueStart:valueStart+valPtrSize], valPtr)
+			encodePackedValuePtrAt(b.data, valueStart, valPtr)
 		} else {
-			valPtr.Encode(b.data[valueStart : valueStart+valPtrSize])
+			encodeValuePtrAt(b.data, valueStart, valPtr)
 		}
 	} else {
 		copy(b.data[valueStart:valueStart+len(value)], value)
@@ -837,9 +835,9 @@ func (b *Builder) finishLeafColumnarV2() {
 
 		if e.flags&FlagPointer != 0 {
 			if b.leafPackedValuePtr {
-				page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+				encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 			} else {
-				e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+				encodeValuePtrAt(b.data, valOff, e.valPtr)
 			}
 			valOff += valPtrSize
 		} else if e.flags&FlagTombstone == 0 {
@@ -962,9 +960,9 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 					flagsCol[i] = e.flags
 					prefixDirU16[i] = e.prefixLen
 					if b.leafPackedValuePtr {
-						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 					} else {
-						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+						encodeValuePtrAt(b.data, valOff, e.valPtr)
 					}
 					valOff += valPtrSize
 				}
@@ -976,9 +974,9 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 					flagsCol[i] = e.flags
 					putUint16At(prefixCol, i*2, e.prefixLen)
 					if b.leafPackedValuePtr {
-						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 					} else {
-						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+						encodeValuePtrAt(b.data, valOff, e.valPtr)
 					}
 					valOff += valPtrSize
 				}
@@ -991,9 +989,9 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				flagsCol[i] = e.flags
 				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
 				if b.leafPackedValuePtr {
-					page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+					encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 				} else {
-					e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+					encodeValuePtrAt(b.data, valOff, e.valPtr)
 				}
 				valOff += valPtrSize
 			}
@@ -1027,9 +1025,9 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 
 				if e.flags&FlagPointer != 0 {
 					if b.leafPackedValuePtr {
-						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 					} else {
-						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+						encodeValuePtrAt(b.data, valOff, e.valPtr)
 					}
 					valOff += valPtrSize
 				} else if e.flags&FlagTombstone == 0 {
@@ -1054,9 +1052,9 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 
 				if e.flags&FlagPointer != 0 {
 					if b.leafPackedValuePtr {
-						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+						encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 					} else {
-						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+						encodeValuePtrAt(b.data, valOff, e.valPtr)
 					}
 					valOff += valPtrSize
 				} else if e.flags&FlagTombstone == 0 {
@@ -1085,9 +1083,9 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 
 			if e.flags&FlagPointer != 0 {
 				if b.leafPackedValuePtr {
-					page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+					encodePackedValuePtrAt(b.data, valOff, e.valPtr)
 				} else {
-					e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+					encodeValuePtrAt(b.data, valOff, e.valPtr)
 				}
 				valOff += valPtrSize
 			} else if e.flags&FlagTombstone == 0 {
@@ -1494,6 +1492,31 @@ func putUint16At(dst []byte, pos int, v uint16) {
 	_ = dst[pos+1]
 	dst[pos] = byte(v)
 	dst[pos+1] = byte(v >> 8)
+}
+
+func putUint32At(dst []byte, pos int, v uint32) {
+	_ = dst[pos+3]
+	dst[pos] = byte(v)
+	dst[pos+1] = byte(v >> 8)
+	dst[pos+2] = byte(v >> 16)
+	dst[pos+3] = byte(v >> 24)
+}
+
+func encodePackedValuePtrAt(dst []byte, pos int, ptr page.ValuePtr) {
+	_ = dst[pos+page.PackedValuePtrSize-1]
+	if ptr.Offset > uint64(^uint32(0)) {
+		panic("page: packed ValuePtr offset overflows u32")
+	}
+	putUint32At(dst, pos, uint32(ptr.Offset))
+	putUint32At(dst, pos+4, ptr.Length)
+	putUint32At(dst, pos+8, ptr.FileID)
+}
+
+func encodeValuePtrAt(dst []byte, pos int, ptr page.ValuePtr) {
+	_ = dst[pos+page.ValuePtrSize-1]
+	putUint64At(dst, pos, ptr.Offset)
+	putUint32At(dst, pos+8, ptr.Length)
+	putUint32At(dst, pos+12, ptr.FileID)
 }
 
 func putUint16(dst []byte, v uint16) {
