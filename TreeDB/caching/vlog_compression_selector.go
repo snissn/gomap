@@ -63,6 +63,9 @@ const (
 	// Throughput policy favors a stable, low-overhead block path for medium+
 	// payloads to avoid per-write selector churn in hot write workloads.
 	throughputAutoBlockMinPayloadBytes = 256
+	// Force-pointer workloads with large values are write-path throughput-bound.
+	// Keep them on a stable block codec path and avoid selector overhead.
+	forcePointerAutoBlockMinPayloadBytes = 1024
 )
 
 func normalizeVlogCompressionMode(v uint8) vlogCompressionMode {
@@ -1019,6 +1022,9 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 		if unitPayloadBytes <= 0 {
 			unitPayloadBytes = rawPayloadBytes
 		}
+		if dictID == 0 && db.forceValueLogPointers && unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
+			return vlogWriteBlock, db.valueLogBlockCodec, false
+		}
 		if dictID == 0 && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && unitPayloadBytes >= throughputAutoBlockMinPayloadBytes {
 			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
@@ -1052,6 +1058,13 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 		rawPayloadBytes >= throughputAutoBlockMinPayloadBytes {
 		// Throughput policy forces block mode for medium+ payloads in resolve.
 		// Skip selector updates here to avoid unnecessary per-write churn.
+		return
+	}
+	if db.forceValueLogPointers &&
+		mode == vlogWriteBlock &&
+		rawPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
+		// Force-pointer large-value writes run on a stable block path; skip
+		// selector updates to keep the hot path lean.
 		return
 	}
 	if l.vlogCompressionSelector == nil {
