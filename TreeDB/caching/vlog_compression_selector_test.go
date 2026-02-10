@@ -226,7 +226,7 @@ func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadUsesLargerTarget(t *t
 	}
 
 	// Seed a compressible observed ratio so K can grow above 1.
-	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 1024, false, 1000)
+	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 1024, false, 1000)
 
 	records := 64
 	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
@@ -234,6 +234,43 @@ func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadUsesLargerTarget(t *t
 	kForce := force.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
 	if kForce <= kBase {
 		t.Fatalf("expected forced-pointer K to increase for large payloads, base=%d force=%d", kBase, kForce)
+	}
+}
+
+func TestChooseValueLogBlockWriteK_ForcePointerAutoWithSelectorUsesLaneRatio(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoBalanced),
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+	}
+	selector := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	selector.dwellBytes = 0
+	l := &lane{vlogCompressionSelector: selector}
+
+	// Large force-pointer payloads skip selector.observe() by design, but lane
+	// block-ratio stats are still updated and should drive K selection.
+	for i := 0; i < 8; i++ {
+		db.observeVlogWriteMode(
+			l,
+			vlogWriteBlock,
+			valuelog.BlockCodecSnappy,
+			forcePointerAutoBlockMinPayloadBytes,
+			forcePointerAutoBlockMinPayloadBytes,
+			forcePointerAutoBlockMinPayloadBytes/4,
+			false,
+			1000,
+		)
+	}
+	if samples := selector.metrics[vlogAutoCandidateBlockSnappy].samples; samples != 0 {
+		t.Fatalf("expected selector samples to remain zero on forced-pointer fast path, got %d", samples)
+	}
+
+	records := 128
+	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
+	k := db.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	if k <= 1 {
+		t.Fatalf("expected k>1 using lane ratio for forced-pointer auto path, got %d", k)
 	}
 }
 
@@ -249,7 +286,7 @@ func TestChooseValueLogBlockWriteK_ForcePointerSmallPayloadKeepsBaseTarget(t *te
 		forceValueLogPointers:    true,
 	}
 
-	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 1024, false, 1000)
+	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 1024, false, 1000)
 
 	records := 64
 	rawPayloadBytes := records * (forcePointerAutoBlockMinPayloadBytes - 1)
