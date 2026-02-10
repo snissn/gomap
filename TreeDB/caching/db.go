@@ -129,6 +129,11 @@ func putValueLogRecordsNoClear(s []valuelog.Record) {
 	if s == nil {
 		return
 	}
+	for i := range s {
+		// Drop value references before pooling to avoid retaining large backing
+		// arrays when callers provide subslices/views.
+		s[i].Value = nil
+	}
 	// Avoid retaining huge slices in the pool.
 	if cap(s) > 1<<20 {
 		return
