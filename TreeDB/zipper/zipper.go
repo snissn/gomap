@@ -195,6 +195,10 @@ var leafSplitKeyArenaPool = sync.Pool{
 	},
 }
 
+// TestHookPutLeafSplitKeyArena is a test-only hook that observes the capacity
+// of the slice returned to the split-key arena pool.
+var TestHookPutLeafSplitKeyArena func(capacity int)
+
 func putInternalKeyArena(arena []byte) {
 	if cap(arena) <= internalKeyArenaMaxCap {
 		internalKeyArenaPool.Put(arena[:0])
@@ -202,6 +206,9 @@ func putInternalKeyArena(arena []byte) {
 }
 
 func putLeafSplitKeyArena(arena []byte) {
+	if TestHookPutLeafSplitKeyArena != nil {
+		TestHookPutLeafSplitKeyArena(cap(arena))
+	}
 	if cap(arena) <= leafSplitKeyArenaMaxCap {
 		leafSplitKeyArenaPool.Put(arena[:0])
 	}
@@ -672,7 +679,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 	var splits []Split
 	splitKeyArena := leafSplitKeyArenaPool.Get().([]byte)[:0]
-	defer putLeafSplitKeyArena(splitKeyArena)
+	defer func() { putLeafSplitKeyArena(splitKeyArena) }()
 
 	// Current target builder
 	target := builder
