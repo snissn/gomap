@@ -39,6 +39,7 @@ type AppendOnly struct {
 	latest    map[string]int
 	latest64  map[uint64]int
 	snapshot  []appendOnlyEntry
+	indexBuf  []int
 	count     int
 	snapCount int
 	sizeBytes int64
@@ -117,7 +118,9 @@ func entryValueSize(flags byte, value []byte) int {
 }
 
 func (m *AppendOnly) clearSnapshotLocked() {
-	m.snapshot = nil
+	if m.snapshot != nil {
+		m.snapshot = m.snapshot[:0]
+	}
 	m.snapCount = 0
 }
 
@@ -139,10 +142,7 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 	if m.latest64 != nil {
 		clear(m.latest64)
 	}
-	reserve := len(m.entries)
-	if reserve < m.count {
-		reserve = m.count
-	}
+	reserve := m.count
 	active := m.entries[:m.count]
 	for i := range active {
 		k := appendOnlyEntryKey(&active[i])
@@ -159,22 +159,6 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 		m.latest[appendOnlyKeyString(k)] = i
 	}
 	m.latestDirty = false
-	m.clearSnapshotLocked()
-}
-
-func (m *AppendOnly) updateLatestIndexLocked(k []byte, idx int) {
-	if k64, ok := appendOnlyKeyU64(k); ok {
-		if m.latest64 == nil {
-			m.latest64 = make(map[uint64]int, appendOnlyMinInitialEntries)
-		}
-		m.latest64[k64] = idx
-		m.clearSnapshotLocked()
-		return
-	}
-	if m.latest == nil {
-		m.latest = make(map[string]int, appendOnlyMinInitialEntries)
-	}
-	m.latest[appendOnlyKeyString(k)] = idx
 	m.clearSnapshotLocked()
 }
 
@@ -438,7 +422,11 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
 	}
-	indices := make([]int, 0, len(m.latest)+len(m.latest64))
+	need := len(m.latest) + len(m.latest64)
+	indices := m.indexBuf[:0]
+	if cap(indices) < need {
+		indices = make([]int, 0, need)
+	}
 	for _, idx := range m.latest {
 		indices = append(indices, idx)
 	}
@@ -451,10 +439,16 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 			appendOnlyEntryKey(&active[indices[j]]),
 		) < 0
 	})
-	snapshot := make([]appendOnlyEntry, len(indices))
+	snapshot := m.snapshot
+	if cap(snapshot) < len(indices) {
+		snapshot = make([]appendOnlyEntry, len(indices))
+	} else {
+		snapshot = snapshot[:len(indices)]
+	}
 	for i, idx := range indices {
 		snapshot[i] = active[idx]
 	}
+	m.indexBuf = indices[:0]
 	m.snapshot = snapshot
 	m.snapCount = m.count
 	return snapshot
