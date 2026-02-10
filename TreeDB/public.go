@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -83,17 +84,62 @@ type writePathInfo struct {
 type maintenanceCoordinator struct {
 	mu sync.Mutex
 
-	active string
+	active atomic.Int32
 
-	deferrals uint64
-	waitTotal time.Duration
-	waitMax   time.Duration
+	deferrals atomic.Uint64
+	waitTotal atomic.Int64
+	waitMax   atomic.Int64
 
-	gcRuns     uint64
-	vacuumRuns uint64
+	gcRuns     atomic.Uint64
+	vacuumRuns atomic.Uint64
 
-	lastGCAt     time.Time
-	lastVacuumAt time.Time
+	lastGCAt     atomic.Int64
+	lastVacuumAt atomic.Int64
+}
+
+const (
+	maintenanceOpNone int32 = iota
+	maintenanceOpGC
+	maintenanceOpVacuum
+	maintenanceOpOther
+)
+
+func maintenanceOpCode(op string) int32 {
+	switch op {
+	case "gc":
+		return maintenanceOpGC
+	case "vacuum":
+		return maintenanceOpVacuum
+	case "":
+		return maintenanceOpNone
+	default:
+		return maintenanceOpOther
+	}
+}
+
+func maintenanceActiveLabel(code int32) string {
+	switch code {
+	case maintenanceOpGC:
+		return "gc"
+	case maintenanceOpVacuum:
+		return "vacuum"
+	case maintenanceOpOther:
+		return "other"
+	default:
+		return ""
+	}
+}
+
+func atomicStoreMaxInt64(dst *atomic.Int64, value int64) {
+	for {
+		cur := dst.Load()
+		if value <= cur {
+			return
+		}
+		if dst.CompareAndSwap(cur, value) {
+			return
+		}
+	}
 }
 
 func writePathFromOptions(opts Options) writePathInfo {
@@ -138,27 +184,25 @@ func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success b
 		waitStart := time.Now()
 		db.maintenance.mu.Lock()
 		wait = time.Since(waitStart)
-		db.maintenance.deferrals++
-		db.maintenance.waitTotal += wait
-		if wait > db.maintenance.waitMax {
-			db.maintenance.waitMax = wait
-		}
+		db.maintenance.deferrals.Add(1)
+		db.maintenance.waitTotal.Add(wait.Nanoseconds())
+		atomicStoreMaxInt64(&db.maintenance.waitMax, wait.Nanoseconds())
 	}
-	db.maintenance.active = op
+	db.maintenance.active.Store(maintenanceOpCode(op))
 
 	return wait, func(success bool) {
 		if success {
-			now := time.Now()
+			now := time.Now().UnixNano()
 			switch op {
 			case "gc":
-				db.maintenance.gcRuns++
-				db.maintenance.lastGCAt = now
+				db.maintenance.gcRuns.Add(1)
+				db.maintenance.lastGCAt.Store(now)
 			case "vacuum":
-				db.maintenance.vacuumRuns++
-				db.maintenance.lastVacuumAt = now
+				db.maintenance.vacuumRuns.Add(1)
+				db.maintenance.lastVacuumAt.Store(now)
 			}
 		}
-		db.maintenance.active = ""
+		db.maintenance.active.Store(maintenanceOpNone)
 		db.maintenance.mu.Unlock()
 	}
 }
@@ -167,16 +211,14 @@ func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
 	if stats == nil || m == nil {
 		return
 	}
-	m.mu.Lock()
-	active := m.active
-	deferrals := m.deferrals
-	waitTotal := m.waitTotal
-	waitMax := m.waitMax
-	gcRuns := m.gcRuns
-	vacuumRuns := m.vacuumRuns
-	lastGCAt := m.lastGCAt
-	lastVacuumAt := m.lastVacuumAt
-	m.mu.Unlock()
+	active := maintenanceActiveLabel(m.active.Load())
+	deferrals := m.deferrals.Load()
+	waitTotal := time.Duration(m.waitTotal.Load())
+	waitMax := time.Duration(m.waitMax.Load())
+	gcRuns := m.gcRuns.Load()
+	vacuumRuns := m.vacuumRuns.Load()
+	lastGCAt := m.lastGCAt.Load()
+	lastVacuumAt := m.lastVacuumAt.Load()
 
 	stats["treedb.maintenance.full_scan.active"] = active
 	stats["treedb.maintenance.full_scan.deferrals"] = fmt.Sprintf("%d", deferrals)
@@ -184,13 +226,13 @@ func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
 	stats["treedb.maintenance.full_scan.wait_max_ms"] = fmt.Sprintf("%.3f", float64(waitMax)/float64(time.Millisecond))
 	stats["treedb.maintenance.full_scan.gc_runs"] = fmt.Sprintf("%d", gcRuns)
 	stats["treedb.maintenance.full_scan.vacuum_runs"] = fmt.Sprintf("%d", vacuumRuns)
-	if !lastGCAt.IsZero() {
-		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = fmt.Sprintf("%d", lastGCAt.UnixNano())
+	if lastGCAt > 0 {
+		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = fmt.Sprintf("%d", lastGCAt)
 	} else {
 		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = "0"
 	}
-	if !lastVacuumAt.IsZero() {
-		stats["treedb.maintenance.full_scan.last_vacuum_unix_nano"] = fmt.Sprintf("%d", lastVacuumAt.UnixNano())
+	if lastVacuumAt > 0 {
+		stats["treedb.maintenance.full_scan.last_vacuum_unix_nano"] = fmt.Sprintf("%d", lastVacuumAt)
 	} else {
 		stats["treedb.maintenance.full_scan.last_vacuum_unix_nano"] = "0"
 	}
