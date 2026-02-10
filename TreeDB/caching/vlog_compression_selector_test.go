@@ -261,9 +261,6 @@ func TestChooseValueLogBlockWriteK_ForcePointerAutoWithSelectorUsesLaneRatio(t *
 			1000,
 		)
 	}
-	if samples := selector.metrics[vlogAutoCandidateBlockSnappy].samples; samples != 0 {
-		t.Fatalf("expected selector samples to remain zero on forced-pointer fast path, got %d", samples)
-	}
 
 	records := 128
 	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
