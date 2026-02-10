@@ -418,3 +418,35 @@ func TestResolveVlogWriteMode_ThroughputPolicyBypassesSelectorForMediumPayload(t
 		t.Fatalf("expected throughput policy medium payload to force configured block codec, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
 }
+
+func TestObserveVlogWriteMode_ThroughputMediumSkipsSelectorObserve(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
+	}
+	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	l := &lane{vlogCompressionSelector: s}
+
+	before := s.metrics[vlogAutoCandidateBlockSnappy].samples
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, throughputAutoBlockMinPayloadBytes, throughputAutoBlockMinPayloadBytes/2, false, 1000)
+	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
+	if after != before {
+		t.Fatalf("expected selector observe to be skipped for throughput medium payload, samples %d -> %d", before, after)
+	}
+}
+
+func TestObserveVlogWriteMode_ThroughputSmallStillObserves(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
+	}
+	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	l := &lane{vlogCompressionSelector: s}
+
+	before := s.metrics[vlogAutoCandidateBlockSnappy].samples
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, throughputAutoBlockMinPayloadBytes-1, throughputAutoBlockMinPayloadBytes-1, false, 1000)
+	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
+	if after <= before {
+		t.Fatalf("expected selector observe for small payloads, samples %d -> %d", before, after)
+	}
+}

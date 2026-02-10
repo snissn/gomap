@@ -1047,6 +1047,13 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 	if normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
 		return
 	}
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput &&
+		mode == vlogWriteBlock &&
+		rawPayloadBytes >= throughputAutoBlockMinPayloadBytes {
+		// Throughput policy forces block mode for medium+ payloads in resolve.
+		// Skip selector updates here to avoid unnecessary per-write churn.
+		return
+	}
 	if l.vlogCompressionSelector == nil {
 		return
 	}
