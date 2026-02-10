@@ -43,9 +43,10 @@ type AppendOnly struct {
 	snapCount int
 	sizeBytes int64
 
-	ordered bool
-	hasLast bool
-	lastIdx int
+	ordered     bool
+	latestDirty bool
+	hasLast     bool
+	lastIdx     int
 }
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
@@ -128,6 +129,7 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 		if m.latest64 != nil {
 			clear(m.latest64)
 		}
+		m.latestDirty = false
 		m.clearSnapshotLocked()
 		return
 	}
@@ -156,6 +158,7 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 		}
 		m.latest[appendOnlyKeyString(k)] = i
 	}
+	m.latestDirty = false
 	m.clearSnapshotLocked()
 }
 
@@ -229,10 +232,12 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 			return
 		}
 		m.ordered = false
-		m.rebuildLatestIndexLocked()
+		m.latestDirty = true
+		m.clearSnapshotLocked()
 		return
 	}
-	m.updateLatestIndexLocked(k, idx)
+	m.latestDirty = true
+	m.clearSnapshotLocked()
 }
 
 func (m *AppendOnly) Set(key, value []byte) {
@@ -326,7 +331,7 @@ func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []
 func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if !m.ordered {
+	if !m.ordered && !m.latestDirty {
 		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
 				ent := &m.entries[idx]
@@ -363,7 +368,7 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if !m.ordered {
+	if !m.ordered && !m.latestDirty {
 		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
 				ent := &m.entries[idx]
@@ -414,6 +419,7 @@ func (m *AppendOnly) Reset() {
 	m.count = 0
 	m.sizeBytes = 0
 	m.ordered = true
+	m.latestDirty = false
 	m.hasLast = false
 	m.lastIdx = -1
 }
@@ -429,7 +435,7 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 		return m.snapshot
 	}
 	active := m.entries[:m.count]
-	if len(m.latest) == 0 && len(m.latest64) == 0 {
+	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
 	}
 	indices := make([]int, 0, len(m.latest)+len(m.latest64))
