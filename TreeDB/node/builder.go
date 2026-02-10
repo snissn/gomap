@@ -167,10 +167,19 @@ func NewBuilder(data []byte, pType page.PageType) *Builder {
 }
 
 func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions) *Builder {
+	b := &Builder{}
+	b.ResetWithOptions(data, pType, opts)
+	return b
+}
+
+// ResetWithOptions reinitializes an existing builder instance for reuse.
+func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts BuilderOptions) {
+	b.ReleaseScratch()
+
 	leafPrefix := opts.LeafPrefixCompression
 	leafColumnarV2 := pType == page.PageTypeLeaf && opts.LeafColumnar && !leafPrefix
 	heapStart := len(data)
-	b := &Builder{
+	*b = Builder{
 		data:                  data,
 		pType:                 pType,
 		dirEnd:                NodeHeaderSize,
@@ -219,7 +228,21 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 			b.internalBaseArena = arena.buf[:0]
 		}
 	}
-	return b
+}
+
+// ReleaseScratch returns pooled scratch resources held by the builder and
+// drops references so the builder can be reused safely.
+func (b *Builder) ReleaseScratch() {
+	if b == nil {
+		return
+	}
+	b.releaseLeafColumnarV2Scratch()
+	b.releaseLeafColumnarPrefixV2Scratch()
+	b.releaseInternalBaseDeltaScratch()
+	b.data = nil
+	b.leafPrevKey = nil
+	b.internalFenceLow = nil
+	b.internalFenceHigh = nil
 }
 
 // SetPageID sets the page ID (can be done at finish too).

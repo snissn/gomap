@@ -104,6 +104,12 @@ var internalKeyArenaPool = sync.Pool{
 	},
 }
 
+var leafBuilderPool = sync.Pool{
+	New: func() any {
+		return &node.Builder{}
+	},
+}
+
 type maintenanceBudget struct {
 	remaining int64
 }
@@ -270,6 +276,26 @@ func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
 		})
 	}
 	return node.NewBuilder(data, page.PageTypeLeaf)
+}
+
+func (z *Zipper) newPooledLeafBuilder(data []byte) *node.Builder {
+	b := leafBuilderPool.Get().(*node.Builder)
+	opts := node.BuilderOptions{
+		LeafPrefixCompression: z != nil && z.leafPrefixCompression,
+		LeafColumnar:          z != nil && z.indexColumnarLeaves,
+		PackedValuePtr:        z != nil && z.indexPackedValuePtr,
+		InternalBaseDelta:     z != nil && z.indexInternalBaseDelta,
+	}
+	b.ResetWithOptions(data, page.PageTypeLeaf, opts)
+	return b
+}
+
+func releasePooledLeafBuilder(b *node.Builder) {
+	if b == nil {
+		return
+	}
+	b.ReleaseScratch()
+	leafBuilderPool.Put(b)
 }
 
 func (z *Zipper) newBuilderForType(data []byte, typ page.PageType) *node.Builder {
@@ -545,6 +571,12 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 	// Current target builder
 	target := builder
+	targetPooled := false
+	defer func() {
+		if target != builder && targetPooled {
+			releasePooledLeafBuilder(target)
+		}
+	}()
 
 	for {
 		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
@@ -665,6 +697,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				metrics.IndexWriteBytes += page.PageSize
 				metrics.LeafFill += float64(page.PageSize-target.FreeSpace()) / float64(page.PageSize)
 				metrics.Splits++
+				if targetPooled {
+					releasePooledLeafBuilder(target)
+					targetPooled = false
+				}
 			}
 
 			// 2. Allocate NEW split node
@@ -679,7 +715,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 
 			// New Builder
-			splitBuilder := z.newLeafBuilder(sdata)
+			splitBuilder := z.newPooledLeafBuilder(sdata)
 			splitBuilder.SetPageID(sid)
 
 			// Record split
@@ -692,6 +728,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			splits = append(splits, Split{Key: splitKey, NodeID: sid})
 
 			target = splitBuilder
+			targetPooled = true
 
 			// Retry insert
 			entrySize, prefixLen, suffixLen = target.LeafEntrySizeWithPrefix(key, val, flags)
@@ -710,6 +747,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		metrics.IndexWriteBytes += page.PageSize
 		metrics.LeafFill += float64(page.PageSize-target.FreeSpace()) / float64(page.PageSize)
 		metrics.Splits++
+		if targetPooled {
+			releasePooledLeafBuilder(target)
+			targetPooled = false
+		}
 	}
 
 	// 'builder' is finalized by caller.
