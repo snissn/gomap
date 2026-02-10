@@ -9,6 +9,9 @@ import (
 )
 
 func preallocateFile(f *os.File, size int64) error {
+	if disablePreallocate() {
+		return nil
+	}
 	// Best-effort: on some filesystems fallocate may fail with EOPNOTSUPP.
 	// If it's unsupported, fall back to Truncate only.
 	if err := unix.Fallocate(int(f.Fd()), 0, 0, size); err != nil {
