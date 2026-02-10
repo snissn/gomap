@@ -192,15 +192,61 @@ print("nan" if v is None else v)
 PY
 )
         else
-          ops=$("$PYTHON_BIN" - "$run_dir/unified_bench.log" <<'PY'
+          ops=$("$PYTHON_BIN" - "$run_dir/unified_bench.log" "$TEST" <<'PY'
 import re
 import sys
-text = open(sys.argv[1], "r", encoding="utf-8").read()
+
+path = sys.argv[1]
+test_name = sys.argv[2] if len(sys.argv) > 2 else ""
+lines = open(path, "r", encoding="utf-8").read().splitlines()
+
+# Fast path: progress-style output.
+text = "\n".join(lines)
 m = re.findall(r"/ TreeDB = ([0-9,]+)", text)
-if not m:
+if m:
+    print(m[-1].replace(",", ""))
+    raise SystemExit(0)
+
+# Fallback: markdown table output.
+header = None
+for line in lines:
+    s = line.strip()
+    if s.startswith("|") and "TreeDB" in s:
+        cols = [c.strip() for c in s.strip("|").split("|")]
+        if "TreeDB" in cols:
+            header = cols
+            break
+
+if not header:
+    print("nan")
+    raise SystemExit(0)
+
+try:
+    treedb_idx = header.index("TreeDB")
+except ValueError:
+    print("nan")
+    raise SystemExit(0)
+
+value = None
+for line in lines:
+    s = line.strip()
+    if not s.startswith("|"):
+        continue
+    cols = [c.strip() for c in s.strip("|").split("|")]
+    if not cols or len(cols) <= treedb_idx:
+        continue
+    if test_name and cols[0] != test_name:
+        continue
+    if set(cols[0]) == {"-"}:
+        continue
+    value = cols[treedb_idx]
+    break
+
+if value is None:
     print("nan")
 else:
-    print(m[-1].replace(",", ""))
+    cleaned = re.sub(r"[^\d.]", "", value)
+    print(cleaned if cleaned else "nan")
 PY
 )
           top_target=""

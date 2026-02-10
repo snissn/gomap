@@ -1043,9 +1043,12 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 	}
 }
 
-func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, storedPayloadBytes int, probe bool, wallNs int64) {
+func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, unitPayloadBytes, storedPayloadBytes int, probe bool, wallNs int64) {
 	if db == nil || l == nil {
 		return
+	}
+	if unitPayloadBytes <= 0 {
+		unitPayloadBytes = rawPayloadBytes
 	}
 	if mode == vlogWriteBlock {
 		observeLaneVlogBlockRatio(l, blockCodec, rawPayloadBytes, storedPayloadBytes)
@@ -1055,14 +1058,14 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 	}
 	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput &&
 		mode == vlogWriteBlock &&
-		rawPayloadBytes >= throughputAutoBlockMinPayloadBytes {
+		unitPayloadBytes >= throughputAutoBlockMinPayloadBytes {
 		// Throughput policy forces block mode for medium+ payloads in resolve.
 		// Skip selector updates here to avoid unnecessary per-write churn.
 		return
 	}
 	if db.forceValueLogPointers &&
 		mode == vlogWriteBlock &&
-		rawPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
+		unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
 		// Force-pointer large-value writes run on a stable block path; skip
 		// selector updates to keep the hot path lean.
 		return

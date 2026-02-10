@@ -179,7 +179,7 @@ func TestObserveVlogWriteMode_NonAutoUpdatesBlockRatioForK(t *testing.T) {
 
 	// Feed compressible observations in non-auto mode.
 	for i := 0; i < 8; i++ {
-		db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecLZ4, 4096, 512, false, 1000)
+		db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecLZ4, 4096, 4096, 512, false, 1000)
 	}
 
 	k1 := db.chooseValueLogBlockWriteK(l, 128, 128*256, valuelog.BlockCodecLZ4)
@@ -195,7 +195,7 @@ func TestChooseValueLogBlockWriteK_RecordsBlockKStats(t *testing.T) {
 	}
 	l := &lane{}
 
-	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 1024, false, 1000)
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 1024, false, 1000)
 	k := db.chooseValueLogBlockWriteK(l, 64, 64*512, valuelog.BlockCodecSnappy)
 	if k < 1 {
 		t.Fatalf("invalid k=%d", k)
@@ -428,7 +428,7 @@ func TestObserveVlogWriteMode_ThroughputMediumSkipsSelectorObserve(t *testing.T)
 	l := &lane{vlogCompressionSelector: s}
 
 	before := s.metrics[vlogAutoCandidateBlockSnappy].samples
-	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, throughputAutoBlockMinPayloadBytes, throughputAutoBlockMinPayloadBytes/2, false, 1000)
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, throughputAutoBlockMinPayloadBytes, throughputAutoBlockMinPayloadBytes, throughputAutoBlockMinPayloadBytes/2, false, 1000)
 	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
 	if after != before {
 		t.Fatalf("expected selector observe to be skipped for throughput medium payload, samples %d -> %d", before, after)
@@ -444,7 +444,7 @@ func TestObserveVlogWriteMode_ThroughputSmallStillObserves(t *testing.T) {
 	l := &lane{vlogCompressionSelector: s}
 
 	before := s.metrics[vlogAutoCandidateBlockSnappy].samples
-	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, throughputAutoBlockMinPayloadBytes-1, throughputAutoBlockMinPayloadBytes-1, false, 1000)
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, throughputAutoBlockMinPayloadBytes-1, throughputAutoBlockMinPayloadBytes-1, throughputAutoBlockMinPayloadBytes-1, false, 1000)
 	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
 	if after <= before {
 		t.Fatalf("expected selector observe for small payloads, samples %d -> %d", before, after)
@@ -481,7 +481,7 @@ func TestObserveVlogWriteMode_ForcePointersLargeSkipsSelectorObserve(t *testing.
 	l := &lane{vlogCompressionSelector: s}
 
 	before := s.metrics[vlogAutoCandidateBlockSnappy].samples
-	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, forcePointerAutoBlockMinPayloadBytes, forcePointerAutoBlockMinPayloadBytes, false, 1000)
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, forcePointerAutoBlockMinPayloadBytes, forcePointerAutoBlockMinPayloadBytes, forcePointerAutoBlockMinPayloadBytes, false, 1000)
 	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
 	if after != before {
 		t.Fatalf("expected selector observe to be skipped for force-pointer large payload, samples %d -> %d", before, after)
@@ -498,9 +498,37 @@ func TestObserveVlogWriteMode_ForcePointersSmallStillObserves(t *testing.T) {
 	l := &lane{vlogCompressionSelector: s}
 
 	before := s.metrics[vlogAutoCandidateBlockSnappy].samples
-	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, forcePointerAutoBlockMinPayloadBytes-1, forcePointerAutoBlockMinPayloadBytes-1, false, 1000)
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, forcePointerAutoBlockMinPayloadBytes-1, forcePointerAutoBlockMinPayloadBytes-1, forcePointerAutoBlockMinPayloadBytes-1, false, 1000)
 	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
 	if after <= before {
 		t.Fatalf("expected selector observe for force-pointer sub-threshold payloads, samples %d -> %d", before, after)
+	}
+}
+
+func TestObserveVlogWriteMode_UsesUnitPayloadForSkipDecision(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoBalanced),
+		forceValueLogPointers:   true,
+	}
+	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
+	l := &lane{vlogCompressionSelector: s}
+
+	before := s.metrics[vlogAutoCandidateBlockSnappy].samples
+	rawPayload := forcePointerAutoBlockMinPayloadBytes * 8
+	unitPayload := forcePointerAutoBlockMinPayloadBytes / 8
+	db.observeVlogWriteMode(
+		l,
+		vlogWriteBlock,
+		valuelog.BlockCodecSnappy,
+		rawPayload,
+		unitPayload,
+		rawPayload/2,
+		false,
+		1000,
+	)
+	after := s.metrics[vlogAutoCandidateBlockSnappy].samples
+	if after <= before {
+		t.Fatalf("expected selector observe to use unit payload threshold, samples %d -> %d", before, after)
 	}
 }

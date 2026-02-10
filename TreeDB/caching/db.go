@@ -5134,7 +5134,11 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			if plan.writeMode != vlogWriteBlock {
 				codec = db.valueLogBlockCodec
 			}
-			db.observeVlogWriteMode(l, plan.writeMode, codec, rawForSelector, storedForSelector, plan.probe, plan.wallNs)
+			unitForSelector := rawForSelector
+			if recordsInPlan := plan.end - plan.start; recordsInPlan > 0 {
+				unitForSelector = rawForSelector / recordsInPlan
+			}
+			db.observeVlogWriteMode(l, plan.writeMode, codec, rawForSelector, unitForSelector, storedForSelector, plan.probe, plan.wallNs)
 		}
 	}
 
@@ -6054,6 +6058,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if rawForSelector == 0 {
 		rawForSelector = rawPayloadBytes
 	}
+	unitForSelector := rawForSelector
+	if n := len(records); n > 0 {
+		unitForSelector = rawForSelector / n
+	}
 	storedForSelector := storedPayloadBytes
 	if storedForSelector <= 0 {
 		switch finalWriteMode {
@@ -6068,7 +6076,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	selectorWallNs := time.Since(selectorStart).Nanoseconds()
-	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, rawForSelector, storedForSelector, probeCompression, selectorWallNs)
+	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, rawForSelector, unitForSelector, storedForSelector, probeCompression, selectorWallNs)
 
 	if bytesWrittenLive > 0 {
 		l.vlogLiveBytes.Add(bytesWrittenLive)
@@ -6347,7 +6355,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 				}
 			}
 			selectorWallNs := time.Since(selectorStart).Nanoseconds()
-			db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), storedForSelector, probeCompression, selectorWallNs)
+			db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), len(value), storedForSelector, probeCompression, selectorWallNs)
 			return ptr, retainPath, nil
 		}
 
@@ -6546,7 +6554,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 	selectorWallNs := time.Since(selectorStart).Nanoseconds()
-	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), storedForSelector, probeCompression, selectorWallNs)
+	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), len(value), storedForSelector, probeCompression, selectorWallNs)
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
