@@ -74,6 +74,39 @@ func parseMaintenanceStatFloat(stats map[string]string, key string) (float64, bo
 	return v, true
 }
 
+func parseMaintenanceStatInt64(stats map[string]string, key string) (int64, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	raw, ok := stats[key]
+	if !ok {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+func checkpointCutoverDurationFromStats(stats map[string]string) (time.Duration, bool) {
+	// `cutover_last_ms` is always emitted by cached stats, including a default
+	// zero before any checkpoint cutover is measured. Require evidence that a
+	// cutover sample was recorded before trusting this metric.
+	cutoverMS, ok := parseMaintenanceStatFloat(stats, "treedb.cache.checkpoint.cutover_last_ms")
+	if !ok || cutoverMS < 0 {
+		return 0, false
+	}
+
+	if samples, ok := parseMaintenanceStatInt64(stats, "treedb.cache.checkpoint.cutover_samples"); ok && samples > 0 {
+		return time.Duration(cutoverMS*float64(time.Millisecond) + 0.5), true
+	}
+	if lastUnixNano, ok := parseMaintenanceStatInt64(stats, "treedb.cache.checkpoint.cutover_last_unix_nano"); ok && lastUnixNano > 0 {
+		return time.Duration(cutoverMS*float64(time.Millisecond) + 0.5), true
+	}
+	return 0, false
+}
+
 func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 	ks, err := parseIntList(*maintBudgetSweepKList)
 	if err != nil {
@@ -123,8 +156,8 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 			}
 			checkpoint = dur
 			if treeStats, ok := run.TreeDBStats[name]; ok {
-				if cutoverMS, ok := parseMaintenanceStatFloat(treeStats, "treedb.cache.checkpoint.cutover_last_ms"); ok && cutoverMS >= 0 {
-					checkpoint = time.Duration(cutoverMS*float64(time.Millisecond) + 0.5)
+				if cutoverDur, ok := checkpointCutoverDurationFromStats(treeStats); ok {
+					checkpoint = cutoverDur
 					usedCutoverMetric = true
 				}
 			}
@@ -256,9 +289,9 @@ func runMaintenanceBudgetSuite(baseCfg BenchConfig) (string, error) {
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString(fmt.Sprintf("- cutover pause p99: %s\n", checkpointP99.Truncate(time.Millisecond)))
-	sb.WriteString(fmt.Sprintf("- cutover pause p999: %s\n", checkpointP999.Truncate(time.Millisecond)))
-	sb.WriteString(fmt.Sprintf("- cutover pause max: %s\n", checkpointMax.Truncate(time.Millisecond)))
+	sb.WriteString(fmt.Sprintf("- cutover pause p99: %s\n", formatDuration(checkpointP99)))
+	sb.WriteString(fmt.Sprintf("- cutover pause p999: %s\n", formatDuration(checkpointP999)))
+	sb.WriteString(fmt.Sprintf("- cutover pause max: %s\n", formatDuration(checkpointMax)))
 	if len(dutySamplesPct) > 0 {
 		sb.WriteString(fmt.Sprintf("- cutover pause duty cycle p99 (checkpoint/(random_write+checkpoint)): %.3f%%\n", dutyP99))
 		sb.WriteString(fmt.Sprintf("- cutover pause duty cycle max: %.3f%%\n", dutyMax))
