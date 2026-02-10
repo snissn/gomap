@@ -195,6 +195,18 @@ var leafSplitKeyArenaPool = sync.Pool{
 	},
 }
 
+func putInternalKeyArena(arena []byte) {
+	if cap(arena) <= internalKeyArenaMaxCap {
+		internalKeyArenaPool.Put(arena[:0])
+	}
+}
+
+func putLeafSplitKeyArena(arena []byte) {
+	if cap(arena) <= leafSplitKeyArenaMaxCap {
+		leafSplitKeyArenaPool.Put(arena[:0])
+	}
+}
+
 var leafBuilderPool = sync.Pool{
 	New: func() any {
 		return &node.Builder{}
@@ -660,11 +672,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 	var splits []Split
 	splitKeyArena := leafSplitKeyArenaPool.Get().([]byte)[:0]
-	defer func() {
-		if cap(splitKeyArena) <= leafSplitKeyArenaMaxCap {
-			leafSplitKeyArenaPool.Put(splitKeyArena[:0])
-		}
-	}()
+	defer putLeafSplitKeyArena(splitKeyArena)
 
 	// Current target builder
 	target := builder
@@ -791,7 +799,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// builder pool (and potentially reused/reset).
 			var leftMax []byte
 			if lm := target.LeafPrevKey(); len(lm) > 0 {
-				leftMax = append([]byte(nil), lm...)
+				leftMax = cloneKeyIntoArena(lm, &splitKeyArena)
 			}
 
 			// 1. Finish current target (writes header/checksum)
@@ -884,11 +892,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		} else {
 			keyArena = make([]byte, 0, internalKeyArenaInitCap)
 		}
-		defer func() {
-			if cap(keyArena) <= internalKeyArenaMaxCap {
-				internalKeyArenaPool.Put(keyArena[:0])
-			}
-		}()
+		defer putInternalKeyArena(keyArena)
 	}
 	cloneKey := func(src []byte) []byte {
 		if !copyKeys || len(src) == 0 {
