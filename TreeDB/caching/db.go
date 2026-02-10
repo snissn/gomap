@@ -7593,10 +7593,6 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	debugPtr := db.debugFlushPointers
 
 	shard := db.shardForKey(key)
-	if maxMemtableBytesPerShard > 0 && int64(len(key)+len(value)) > maxMemtableBytesPerShard {
-		db.writeMu.RUnlock()
-		return ErrMemtableFull
-	}
 
 	durability := journalDurabilityNone
 	if sync {
@@ -7613,6 +7609,24 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
 		allowPointers = false
+	}
+	addBytesForLimit := int64(len(key) + len(value))
+	if allowPointers && db.memtableValueLogPointers {
+		// Pointer-in-memtable mode stores only the key plus packed pointer payload.
+		addBytesForLimit = int64(len(key) + page.ValuePtrSize)
+	}
+	if maxMemtableBytesPerShard > 0 {
+		if addBytesForLimit > maxMemtableBytesPerShard {
+			db.writeMu.RUnlock()
+			return ErrMemtableFull
+		}
+		shard.mu.Lock()
+		exceedsLimit := db.shardExceedsLimit(shard, addBytesForLimit)
+		shard.mu.Unlock()
+		if exceedsLimit {
+			db.writeMu.RUnlock()
+			return ErrMemtableFull
+		}
 	}
 	if debugPtr && eligible {
 		db.debugPtrEligible.Add(1)

@@ -985,6 +985,34 @@ func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
 	}
 }
 
+func TestCachingDB_SetRejectsWhenShardNearHardCap(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold: 1 << 30,
+		MemtableShards: 1,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	shard := &cache.mutableShards[0]
+	shard.mu.Lock()
+	shard.bytes = maxMemtableBytesPerShard - 8
+	shard.mu.Unlock()
+
+	err = cache.Set([]byte("k1"), bytes.Repeat([]byte("a"), 16))
+	if !errors.Is(err, ErrMemtableFull) {
+		t.Fatalf("Set(k1): expected ErrMemtableFull, got %v", err)
+	}
+}
+
 func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})

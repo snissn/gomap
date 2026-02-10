@@ -299,6 +299,21 @@ func (m *HashSorted) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags b
 	}
 }
 
+func (m *HashSorted) entryForWriteLocked(key string) (*hashEntry, bool) {
+	idx, ok := m.items[key]
+	if !ok {
+		return nil, false
+	}
+	i := int(idx)
+	if i < 0 || i >= len(m.entries) {
+		// Corrupted/stale index entry: drop it and treat this operation as a miss
+		// so callers still apply the mutation instead of silently losing it.
+		delete(m.items, key)
+		return nil, false
+	}
+	return &m.entries[i], true
+}
+
 func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
 	if key == nil {
 		return nil
@@ -309,13 +324,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 
 	m.mu.Lock()
 	keyLookup := bytesToStringNoCopy(key)
-	if idx, ok := m.items[keyLookup]; ok {
-		i := int(idx)
-		if i < 0 || i >= len(m.entries) {
-			m.mu.Unlock()
-			return nil
-		}
-		ent := &m.entries[i]
+	if ent, ok := m.entryForWriteLocked(keyLookup); ok {
 		valCopy := m.encodeEntryValueLocked(value, page.ValuePtr{}, node.FlagInline, false)
 		if cb != nil {
 			keyView := key
@@ -377,13 +386,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	m.hasDeletes = true
 
 	keyLookup := bytesToStringNoCopy(key)
-	if idx, ok := m.items[keyLookup]; ok {
-		i := int(idx)
-		if i < 0 || i >= len(m.entries) {
-			m.mu.Unlock()
-			return nil
-		}
-		ent := &m.entries[i]
+	if ent, ok := m.entryForWriteLocked(keyLookup); ok {
 		if cb != nil {
 			keyView := key
 			if len(key) > 0 {
@@ -763,12 +766,7 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 		return nil, 0
 	}
 	keyLookup := bytesToStringNoCopy(key)
-	if idx, ok := m.items[keyLookup]; ok {
-		i := int(idx)
-		if i < 0 || i >= len(m.entries) {
-			return nil, 0
-		}
-		ent := &m.entries[i]
+	if ent, ok := m.entryForWriteLocked(keyLookup); ok {
 		oldLen := hashEntryValueSize(ent.flags, ent.value)
 		ent.value = m.encodeEntryValueLocked(value, ptr, flags, steal)
 		if flags&node.FlagPointer != 0 {
