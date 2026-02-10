@@ -213,6 +213,53 @@ func TestChooseValueLogBlockWriteK_RecordsBlockKStats(t *testing.T) {
 	}
 }
 
+func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadUsesLargerTarget(t *testing.T) {
+	l := &lane{}
+	base := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: 4096,
+	}
+	force := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+	}
+
+	// Seed a compressible observed ratio so K can grow above 1.
+	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 1024, false, 1000)
+
+	records := 64
+	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
+	kBase := base.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	kForce := force.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	if kForce <= kBase {
+		t.Fatalf("expected forced-pointer K to increase for large payloads, base=%d force=%d", kBase, kForce)
+	}
+}
+
+func TestChooseValueLogBlockWriteK_ForcePointerSmallPayloadKeepsBaseTarget(t *testing.T) {
+	l := &lane{}
+	base := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: 4096,
+	}
+	force := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+	}
+
+	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 1024, false, 1000)
+
+	records := 64
+	rawPayloadBytes := records * (forcePointerAutoBlockMinPayloadBytes - 1)
+	kBase := base.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	kForce := force.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	if kForce != kBase {
+		t.Fatalf("expected forced-pointer small payload K to match base, base=%d force=%d", kBase, kForce)
+	}
+}
+
 func TestVlogCompressionSelector_AvoidsOffWithStrongCompressionSignal(t *testing.T) {
 	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
 	s.dwellBytes = 0
