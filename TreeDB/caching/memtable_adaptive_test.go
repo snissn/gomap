@@ -17,7 +17,7 @@ func TestAdaptiveMemtableMode_SwitchesAfterWarmupRotation(t *testing.T) {
 		AllowUnsafe:              true,
 		DisableWAL:               true,
 		FlushThreshold:           1 << 30,
-		MemtableMode:             "adaptive",
+		MemtableMode:             "adaptive:skiplist",
 		MemtableShards:           1,
 		ValueLogPointerThreshold: 1 << 20,
 	})

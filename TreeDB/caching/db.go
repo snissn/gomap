@@ -1947,6 +1947,7 @@ type DB struct {
 	memtableMode              memtable.Mode
 	memtableStats             memtableStats
 	memtableAdaptive          bool
+	memtableAdaptiveObserve   atomic.Bool
 	adaptiveShardedStats      bool
 	memtableWarmupActive      bool
 	memtableWarmupThreshold   int64
@@ -2330,13 +2331,14 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 	db.memtableStats.lastKeyMu.Lock()
 	db.memtableStats.hasLastKey = false
 	db.memtableStats.lastKeyMu.Unlock()
+	db.updateAdaptiveObservationLocked()
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 	return nil
 }
 
 func (db *DB) noteWriteKey(key []byte) {
-	if !db.memtableAdaptive {
+	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() {
 		return
 	}
 	stats := &db.memtableStats
@@ -2362,7 +2364,7 @@ func (db *DB) noteWriteKey(key []byte) {
 
 // noteWriteSortedRun records a strictly increasing key run in one shot.
 func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
-	if !db.memtableAdaptive || count <= 0 {
+	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() || count <= 0 {
 		return
 	}
 	stats := &db.memtableStats
@@ -2390,7 +2392,7 @@ func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
 }
 
 func (db *DB) noteIterator(start, end []byte) {
-	if !db.memtableAdaptive {
+	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() {
 		return
 	}
 	stats := &db.memtableStats
@@ -2446,9 +2448,18 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	return memtable.ModeHashSorted
 }
 
+func (db *DB) updateAdaptiveObservationLocked() {
+	observe := db.memtableAdaptive
+	if observe && !db.memtableWarmupActive && db.memtableMode == memtable.ModeAppendOnly {
+		observe = false
+	}
+	db.memtableAdaptiveObserve.Store(observe)
+}
+
 func (db *DB) applyAdaptiveMemtableModeLocked() memtable.Mode {
 	desired := db.chooseAdaptiveMemtableModeLocked()
 	db.memtableMode = desired
+	db.updateAdaptiveObservationLocked()
 	return desired
 }
 
@@ -2467,7 +2478,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	adaptive := false
 	if modeStr == "adaptive" || modeStr == "auto" {
 		adaptive = true
-		modeStr = ""
+		modeStr = "append_only"
 	} else if strings.HasPrefix(modeStr, "adaptive:") {
 		adaptive = true
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
@@ -2647,7 +2658,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 
 	warmupThreshold := opts.FlushThreshold
-	if adaptive && adaptiveWarmupBytes > 0 && int64(adaptiveWarmupBytes) < opts.FlushThreshold {
+	if adaptive && mode != memtable.ModeAppendOnly && adaptiveWarmupBytes > 0 && int64(adaptiveWarmupBytes) < opts.FlushThreshold {
 		warmupThreshold = int64(adaptiveWarmupBytes)
 	}
 	memCap = shardCapacity(memCap, shardCount)
@@ -2939,6 +2950,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	db.updateAdaptiveObservationLocked()
 	nowNS := time.Now().UnixNano()
 	db.materializationLastDrainUnixNano.Store(nowNS)
 	db.publishWatermarkLastUnixNano = nowNS
@@ -7971,6 +7983,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
+				db.updateAdaptiveObservationLocked()
 			}
 
 			db.queue = nil
@@ -8031,6 +8044,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
+				db.updateAdaptiveObservationLocked()
 			}
 
 			db.queue = nil
@@ -8440,6 +8454,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
+		db.updateAdaptiveObservationLocked()
 	}
 	db.mutableBytes.Store(0)
 	enqueueNS := time.Now().UnixNano()
@@ -8553,6 +8568,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
+		db.updateAdaptiveObservationLocked()
 	}
 	var walPaths []string
 	if !db.disableJournal {
