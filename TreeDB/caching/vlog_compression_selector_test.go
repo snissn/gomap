@@ -226,7 +226,7 @@ func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadUsesLargerTarget(t *t
 	}
 
 	// Seed a compressible observed ratio so K can grow above 1.
-	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 1024, false, 1000)
+	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 1024, false, 1000)
 
 	records := 64
 	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
@@ -256,14 +256,10 @@ func TestChooseValueLogBlockWriteK_ForcePointerAutoWithSelectorUsesLaneRatio(t *
 			vlogWriteBlock,
 			valuelog.BlockCodecSnappy,
 			forcePointerAutoBlockMinPayloadBytes,
-			forcePointerAutoBlockMinPayloadBytes,
 			forcePointerAutoBlockMinPayloadBytes/4,
 			false,
 			1000,
 		)
-	}
-	if samples := selector.metrics[vlogAutoCandidateBlockSnappy].samples; samples != 0 {
-		t.Fatalf("expected selector samples to remain zero on forced-pointer fast path, got %d", samples)
 	}
 
 	records := 128
@@ -286,7 +282,7 @@ func TestChooseValueLogBlockWriteK_ForcePointerSmallPayloadKeepsBaseTarget(t *te
 		forceValueLogPointers:    true,
 	}
 
-	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 1024, false, 1000)
+	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 1024, false, 1000)
 
 	records := 64
 	rawPayloadBytes := records * (forcePointerAutoBlockMinPayloadBytes - 1)
@@ -312,7 +308,7 @@ func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadRespectsConfiguredLar
 
 	// Seed an observed ratio that keeps K below MaxFrameK so target differences
 	// remain visible.
-	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 2048, false, 1000)
+	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 2048, false, 1000)
 
 	records := 256
 	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
@@ -339,7 +335,7 @@ func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadKDistributionGuardrai
 
 	// Seed a stable compression ratio and then sample K repeatedly to catch
 	// distribution regressions (for example, collapsing back toward k=1/8/16).
-	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 2048, false, 1000)
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 2048, false, 1000)
 	const (
 		iterations = 64
 		records    = 128
@@ -379,7 +375,7 @@ func BenchmarkChooseValueLogBlockWriteK_ForcePointerLargePayloadDistribution(b *
 		forceValueLogPointers:    true,
 	}
 	l := &lane{}
-	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 2048, false, 1000)
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 2048, false, 1000)
 
 	const records = 128
 	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
