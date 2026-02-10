@@ -58,3 +58,28 @@ func TestAppendOnlyIteratorSortedLatest(t *testing.T) {
 		t.Fatalf("iterator should be exhausted")
 	}
 }
+
+func TestAppendOnlyResetClearsLatestIndex(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k1"), []byte("v1"))
+	m.Set([]byte("k2"), []byte("v2"))
+	m.Reset()
+
+	if v, del, ok := m.Get([]byte("k1")); ok || del || v != nil {
+		t.Fatalf("Get(k1) after reset = (%v,%v,%v), want (nil,false,false)", v, del, ok)
+	}
+
+	it := m.NewIterator(nil, nil)
+	if it.Valid() {
+		t.Fatalf("iterator should be empty after reset")
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close after reset: %v", err)
+	}
+
+	m.Set([]byte("k1"), []byte("v1b"))
+	v, del, ok := m.Get([]byte("k1"))
+	if !ok || del || string(v) != "v1b" {
+		t.Fatalf("Get(k1) after reset+set = (%q,%v,%v), want (v1b,false,true)", string(v), del, ok)
+	}
+}

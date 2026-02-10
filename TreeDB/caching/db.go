@@ -300,6 +300,8 @@ const (
 	maxMemtablePrealloc              = 256 << 20
 	adaptiveMinWrites                = 1024
 	adaptiveSequentialWritePct       = 0.85
+	adaptiveRangeIteratorPct         = 0.40
+	adaptiveOverwriteWritePct        = 0.25
 	adaptiveWarmupBytes              = 16 * 1024 * 1024
 	maxMemtableBytesPerShard         = int64(3 << 30)
 	maxVlogPreparedBodyPoolCap       = 8 << 20
@@ -2180,13 +2182,14 @@ func (db *DB) ensureQueueLaneIDsLocked() {
 }
 
 type memtableStats struct {
-	writes     atomic.Uint64
-	seqWrites  atomic.Uint64
-	iterators  atomic.Uint64
-	rangeIters atomic.Uint64
-	lastKeyMu  sync.Mutex
-	lastKey    []byte
-	hasLastKey bool
+	writes          atomic.Uint64
+	seqWrites       atomic.Uint64
+	overwriteWrites atomic.Uint64
+	iterators       atomic.Uint64
+	rangeIters      atomic.Uint64
+	lastKeyMu       sync.Mutex
+	lastKey         []byte
+	hasLastKey      bool
 }
 
 func (r *keyRange) add(key []byte) {
@@ -2321,6 +2324,7 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 	}
 	db.memtableStats.writes.Store(0)
 	db.memtableStats.seqWrites.Store(0)
+	db.memtableStats.overwriteWrites.Store(0)
 	db.memtableStats.iterators.Store(0)
 	db.memtableStats.rangeIters.Store(0)
 	db.memtableStats.lastKeyMu.Lock()
@@ -2345,8 +2349,12 @@ func (db *DB) noteWriteKey(key []byte) {
 	}
 	stats.lastKeyMu.Lock()
 	defer stats.lastKeyMu.Unlock()
-	if stats.hasLastKey && bytes.Compare(stats.lastKey, key) < 0 {
-		stats.seqWrites.Add(1)
+	if stats.hasLastKey {
+		if bytes.Equal(stats.lastKey, key) {
+			stats.overwriteWrites.Add(1)
+		} else if bytes.Compare(stats.lastKey, key) < 0 {
+			stats.seqWrites.Add(1)
+		}
 	}
 	stats.lastKey = append(stats.lastKey[:0], key...)
 	stats.hasLastKey = true
@@ -2408,6 +2416,7 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	// Read stats atomially (no global lock needed for counts)
 	writes := db.memtableStats.writes.Load()
 	seqWrites := db.memtableStats.seqWrites.Load()
+	overwriteWrites := db.memtableStats.overwriteWrites.Load()
 	iters := db.memtableStats.iterators.Load()
 	rangeIters := db.memtableStats.rangeIters.Load()
 
@@ -2416,20 +2425,24 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 		return db.memtableMode
 	}
 
-	// Heuristics:
-	// 1. High sequential writes -> use HashSorted (append-only speed)
-	//    Threshold: > 80% sequential
-	if float64(seqWrites)/float64(writes) > 0.8 {
-		return memtable.ModeHashSorted
+	seqWritePct := float64(seqWrites) / float64(writes)
+	overwriteWritePct := float64(overwriteWrites) / float64(writes)
+	rangeIterPct := 0.0
+	if iters > 0 {
+		rangeIterPct = float64(rangeIters) / float64(iters)
 	}
 
-	// 2. High range iteration -> use BTree (better range scan performance)
-	//    Threshold: significant portion of ops are range scans
-	if iters > 0 && float64(rangeIters)/float64(iters) > 0.5 {
+	// 1) Range-heavy read paths benefit most from BTree order stability.
+	if rangeIterPct >= adaptiveRangeIteratorPct {
 		return memtable.ModeBTree
 	}
 
-	// 3. Random writes dominating -> use HashSorted
+	// 2) Mostly increasing writes with low overwrite pressure favor append-only.
+	if seqWritePct >= adaptiveSequentialWritePct && overwriteWritePct < adaptiveOverwriteWritePct {
+		return memtable.ModeAppendOnly
+	}
+
+	// 3) Overwrite-heavy or mixed-write traffic defaults to hash-sorted.
 	return memtable.ModeHashSorted
 }
 
@@ -10609,6 +10622,23 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.memtable_mode_config"] = "adaptive"
 	} else {
 		stats["treedb.cache.memtable_mode_config"] = "fixed"
+	}
+	memWrites := db.memtableStats.writes.Load()
+	memSeqWrites := db.memtableStats.seqWrites.Load()
+	memOverwriteWrites := db.memtableStats.overwriteWrites.Load()
+	memIters := db.memtableStats.iterators.Load()
+	memRangeIters := db.memtableStats.rangeIters.Load()
+	stats["treedb.cache.memtable_stats.writes"] = fmt.Sprintf("%d", memWrites)
+	stats["treedb.cache.memtable_stats.seq_writes"] = fmt.Sprintf("%d", memSeqWrites)
+	stats["treedb.cache.memtable_stats.overwrite_writes"] = fmt.Sprintf("%d", memOverwriteWrites)
+	if memWrites > 0 {
+		stats["treedb.cache.memtable_stats.seq_write_pct"] = fmt.Sprintf("%.4f", float64(memSeqWrites)/float64(memWrites))
+		stats["treedb.cache.memtable_stats.overwrite_write_pct"] = fmt.Sprintf("%.4f", float64(memOverwriteWrites)/float64(memWrites))
+	}
+	stats["treedb.cache.memtable_stats.iterators"] = fmt.Sprintf("%d", memIters)
+	stats["treedb.cache.memtable_stats.range_iterators"] = fmt.Sprintf("%d", memRangeIters)
+	if memIters > 0 {
+		stats["treedb.cache.memtable_stats.range_iter_pct"] = fmt.Sprintf("%.4f", float64(memRangeIters)/float64(memIters))
 	}
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)

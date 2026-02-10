@@ -44,6 +44,9 @@ func TestAtomicStats(t *testing.T) {
 	if got := db.memtableStats.writes.Load(); got != expectedWrites {
 		t.Errorf("concurrent writes = %d, want %d", got, expectedWrites)
 	}
+	if got := db.memtableStats.overwriteWrites.Load(); got != expectedWrites-2 {
+		t.Errorf("overwrite writes = %d, want %d", got, expectedWrites-2)
+	}
 
 	expectedIters := uint64(workers * iterations)
 	if got := db.memtableStats.iterators.Load(); got != expectedIters {
@@ -85,6 +88,7 @@ func TestNoteWriteKeyDeadlock(t *testing.T) {
 					// Simulate occasionally resetting stats (like a rotation would)
 					if rng.Intn(100) == 0 {
 						db.memtableStats.writes.Store(0)
+						db.memtableStats.overwriteWrites.Store(0)
 						db.memtableStats.lastKeyMu.Lock()
 						db.memtableStats.hasLastKey = false
 						db.memtableStats.lastKeyMu.Unlock()
@@ -110,22 +114,34 @@ func TestChooseAdaptiveMode(t *testing.T) {
 		t.Errorf("low data mode = %v, want %v", got, memtable.ModeSkiplist)
 	}
 
-	// 2. High sequential -> HashSorted
+	// 2. High sequential with low overwrites -> AppendOnly
 	// adaptiveMinWrites writes, 90% sequential
 	db.memtableStats.writes.Store(adaptiveMinWrites)
 	db.memtableStats.seqWrites.Store(adaptiveMinWrites * 9 / 10)
-	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
-		t.Errorf("sequential mode = %v, want %v", got, memtable.ModeHashSorted)
+	db.memtableStats.overwriteWrites.Store(0)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeAppendOnly {
+		t.Errorf("sequential mode = %v, want %v", got, memtable.ModeAppendOnly)
 	}
 
 	// 3. High range scans -> BTree
 	// Reset
 	db.memtableStats.writes.Store(adaptiveMinWrites)
 	db.memtableStats.seqWrites.Store(adaptiveMinWrites / 10) // Low seq
+	db.memtableStats.overwriteWrites.Store(0)
 	db.memtableStats.iterators.Store(100)
 	db.memtableStats.rangeIters.Store(80) // 80% range
 	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeBTree {
 		t.Errorf("range scan mode = %v, want %v", got, memtable.ModeBTree)
+	}
+
+	// 4. High overwrites -> HashSorted
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(adaptiveMinWrites)
+	db.memtableStats.overwriteWrites.Store(adaptiveMinWrites / 2)
+	db.memtableStats.iterators.Store(0)
+	db.memtableStats.rangeIters.Store(0)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
+		t.Errorf("overwrite mode = %v, want %v", got, memtable.ModeHashSorted)
 	}
 }
 
@@ -176,6 +192,9 @@ func assertStatsEquivalent(t *testing.T, want, got *DB) {
 	}
 	if w, g := want.memtableStats.seqWrites.Load(), got.memtableStats.seqWrites.Load(); w != g {
 		t.Fatalf("seqWrites mismatch: want=%d got=%d", w, g)
+	}
+	if w, g := want.memtableStats.overwriteWrites.Load(), got.memtableStats.overwriteWrites.Load(); w != g {
+		t.Fatalf("overwriteWrites mismatch: want=%d got=%d", w, g)
 	}
 
 	want.memtableStats.lastKeyMu.Lock()
