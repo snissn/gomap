@@ -396,3 +396,25 @@ func TestResolveVlogWriteMode_LargePayloadBalancedBypassesSelectorToLZ4(t *testi
 		t.Fatalf("expected lz4 block write without probe for large payload, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
 }
+
+func TestResolveVlogWriteMode_ThroughputPolicyBypassesSelectorForMediumPayload(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
+		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
+	}
+	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	s.dwellBytes = 0
+	// Bias selector away from block so we can verify the throughput fast path
+	// bypasses selector scoring for medium+ payloads.
+	s.currentCandidate = vlogAutoCandidateOff
+	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.5, samples: 16}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.99, throughput: 0.5, samples: 16}
+	l := &lane{vlogCompressionSelector: s}
+
+	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 256, 256)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("expected throughput policy medium payload to force configured block codec, got mode=%v codec=%v probe=%t", mode, codec, probe)
+	}
+}

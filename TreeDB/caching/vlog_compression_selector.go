@@ -60,6 +60,9 @@ const (
 	defaultVlogProbeBytes     = 8 << 20
 	defaultVlogExploreBytes   = 8 << 20
 	defaultVlogModeDwellBytes = 4 << 20
+	// Throughput policy favors a stable, low-overhead block path for medium+
+	// payloads to avoid per-write selector churn in hot write workloads.
+	throughputAutoBlockMinPayloadBytes = 256
 )
 
 func normalizeVlogCompressionMode(v uint8) vlogCompressionMode {
@@ -1015,6 +1018,9 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 		// Default/unset compression behavior follows auto mode.
 		if unitPayloadBytes <= 0 {
 			unitPayloadBytes = rawPayloadBytes
+		}
+		if dictID == 0 && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && unitPayloadBytes >= throughputAutoBlockMinPayloadBytes {
+			return vlogWriteBlock, db.valueLogBlockCodec, false
 		}
 		if dictID == 0 && unitPayloadBytes >= 2048 && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput {
 			// For large payloads in balanced/size policies, prefer the stable lz4
