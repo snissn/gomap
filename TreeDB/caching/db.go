@@ -7568,13 +7568,10 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	debugPtr := db.debugFlushPointers
 
 	shard := db.shardForKey(key)
-	shard.mu.Lock()
-	if db.shardExceedsLimit(shard, int64(len(key)+len(value))) {
-		shard.mu.Unlock()
+	if maxMemtableBytesPerShard > 0 && int64(len(key)+len(value)) > maxMemtableBytesPerShard {
 		db.writeMu.RUnlock()
 		return ErrMemtableFull
 	}
-	shard.mu.Unlock()
 
 	durability := journalDurabilityNone
 	if sync {
