@@ -679,25 +679,10 @@ func (m *HashSorted) startFinalize() {
 
 func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 	m.sortedValid = false
-	if len(m.items) > cap(m.sortedKeys) {
-		newCap := cap(m.sortedKeys)
-		if newCap < hashSortedSortedKeysInitCap {
-			newCap = hashSortedSortedKeysInitCap
-		}
-		for newCap < len(m.items) {
-			newCap *= 2
-		}
-		m.sortedKeys = make([]string, 0, newCap)
-	}
 	if m.pendingKeys == nil {
-		m.pendingKeys = make([]string, 0, hashSortedPendingKeysInitCap)
+		m.pendingKeys = make([]string, 0, hashSortedSealKeysThreshold)
 	}
 	m.pendingKeys = append(m.pendingKeys, key)
-	if len(m.pendingKeys) == hashSortedPendingKeysUpgradeThreshold && cap(m.pendingKeys) < hashSortedSealKeysThreshold {
-		expanded := make([]string, len(m.pendingKeys), hashSortedSealKeysThreshold)
-		copy(expanded, m.pendingKeys)
-		m.pendingKeys = expanded
-	}
 	m.pendingBytes += len(key)
 	if m.pendingBytes < hashSortedSealBytesThreshold && len(m.pendingKeys) < hashSortedSealKeysThreshold {
 		return nil, 0
@@ -715,33 +700,14 @@ func (m *HashSorted) noteNewKeysBatchLocked(keys []string, keyBytes int) (chunk 
 		return nil, 0
 	}
 	m.sortedValid = false
-	if len(m.items) > cap(m.sortedKeys) {
-		newCap := cap(m.sortedKeys)
-		if newCap < hashSortedSortedKeysInitCap {
-			newCap = hashSortedSortedKeysInitCap
-		}
-		for newCap < len(m.items) {
-			newCap *= 2
-		}
-		m.sortedKeys = make([]string, 0, newCap)
-	}
 	if m.pendingKeys == nil {
-		c := hashSortedPendingKeysInitCap
+		c := hashSortedSealKeysThreshold
 		if len(keys) > c {
 			c = len(keys)
 		}
 		m.pendingKeys = make([]string, 0, c)
 	}
 	m.pendingKeys = append(m.pendingKeys, keys...)
-	if len(m.pendingKeys) >= hashSortedPendingKeysUpgradeThreshold && cap(m.pendingKeys) < hashSortedSealKeysThreshold {
-		newCap := cap(m.pendingKeys) * 2
-		if newCap < hashSortedSealKeysThreshold {
-			newCap = hashSortedSealKeysThreshold
-		}
-		expanded := make([]string, len(m.pendingKeys), newCap)
-		copy(expanded, m.pendingKeys)
-		m.pendingKeys = expanded
-	}
 	m.pendingBytes += keyBytes
 	if m.pendingBytes < hashSortedSealBytesThreshold && len(m.pendingKeys) < hashSortedSealKeysThreshold {
 		return nil, 0

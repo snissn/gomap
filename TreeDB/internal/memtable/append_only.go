@@ -38,7 +38,7 @@ type AppendOnly struct {
 	entries   []appendOnlyEntry
 	latest    map[string]int
 	latest64  map[uint64]int
-	snapshot  []appendOnlyEntry
+	snapshot  []*appendOnlyEntry
 	indexBuf  []int
 	count     int
 	snapCount int
@@ -408,12 +408,12 @@ func (m *AppendOnly) Reset() {
 	m.lastIdx = -1
 }
 
-func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
+func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 	if m.count == 0 {
 		return nil
 	}
 	if m.ordered {
-		return m.entries[:m.count]
+		return nil
 	}
 	if m.snapshot != nil && m.snapCount == m.count {
 		return m.snapshot
@@ -441,12 +441,12 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 	})
 	snapshot := m.snapshot
 	if cap(snapshot) < len(indices) {
-		snapshot = make([]appendOnlyEntry, len(indices))
+		snapshot = make([]*appendOnlyEntry, len(indices))
 	} else {
 		snapshot = snapshot[:len(indices)]
 	}
 	for i, idx := range indices {
-		snapshot[i] = active[idx]
+		snapshot[i] = &active[idx]
 	}
 	m.indexBuf = indices[:0]
 	m.snapshot = snapshot
@@ -457,13 +457,15 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RLock()
 	entries := m.entries[:m.count]
+	var snapshot []*appendOnlyEntry
 	if !m.ordered {
-		entries = m.buildSortedLatestSnapshotLocked()
+		snapshot = m.buildSortedLatestSnapshotLocked()
 	}
 	it := &appendOnlyIterator{
-		entries: entries,
-		end:     end,
-		mu:      &m.mu,
+		entries:  entries,
+		snapshot: snapshot,
+		end:      end,
+		mu:       &m.mu,
 	}
 	if start != nil {
 		it.Seek(start)
@@ -472,17 +474,49 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 type appendOnlyIterator struct {
-	entries []appendOnlyEntry
-	idx     int
-	end     []byte
-	mu      *sync.RWMutex
+	entries  []appendOnlyEntry
+	snapshot []*appendOnlyEntry
+	idx      int
+	end      []byte
+	mu       *sync.RWMutex
+}
+
+func (it *appendOnlyIterator) len() int {
+	if it.snapshot != nil {
+		return len(it.snapshot)
+	}
+	return len(it.entries)
+}
+
+func (it *appendOnlyIterator) entryAt(i int) *appendOnlyEntry {
+	if i < 0 {
+		return nil
+	}
+	if it.snapshot != nil {
+		if i >= len(it.snapshot) {
+			return nil
+		}
+		return it.snapshot[i]
+	}
+	if i >= len(it.entries) {
+		return nil
+	}
+	return &it.entries[i]
+}
+
+func (it *appendOnlyIterator) keyAt(i int) []byte {
+	ent := it.entryAt(i)
+	if ent == nil {
+		return nil
+	}
+	return appendOnlyEntryKey(ent)
 }
 
 func (it *appendOnlyIterator) validIndex() bool {
-	if it.idx < 0 || it.idx >= len(it.entries) {
+	if it.idx < 0 || it.idx >= it.len() {
 		return false
 	}
-	if it.end != nil && bytes.Compare(appendOnlyEntryKey(&it.entries[it.idx]), it.end) >= 0 {
+	if it.end != nil && bytes.Compare(it.keyAt(it.idx), it.end) >= 0 {
 		return false
 	}
 	return true
@@ -493,14 +527,14 @@ func (it *appendOnlyIterator) Valid() bool {
 }
 
 func (it *appendOnlyIterator) Next() {
-	if it.idx < len(it.entries) {
+	if it.idx < it.len() {
 		it.idx++
 	}
 }
 
 func (it *appendOnlyIterator) Seek(key []byte) {
-	it.idx = sort.Search(len(it.entries), func(i int) bool {
-		return bytes.Compare(appendOnlyEntryKey(&it.entries[i]), key) >= 0
+	it.idx = sort.Search(it.len(), func(i int) bool {
+		return bytes.Compare(it.keyAt(i), key) >= 0
 	})
 }
 
@@ -508,14 +542,17 @@ func (it *appendOnlyIterator) UnsafeKey() []byte {
 	if !it.validIndex() {
 		return nil
 	}
-	return appendOnlyEntryKey(&it.entries[it.idx])
+	return it.keyAt(it.idx)
 }
 
 func (it *appendOnlyIterator) UnsafeValue() []byte {
 	if !it.validIndex() {
 		return nil
 	}
-	ent := it.entries[it.idx]
+	ent := it.entryAt(it.idx)
+	if ent == nil {
+		return nil
+	}
 	if ent.flags&node.FlagTombstone != 0 {
 		return nil
 	}
@@ -526,7 +563,10 @@ func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if !it.validIndex() {
 		return nil, page.ValuePtr{}, 0
 	}
-	ent := it.entries[it.idx]
+	ent := it.entryAt(it.idx)
+	if ent == nil {
+		return nil, page.ValuePtr{}, 0
+	}
 	return ent.value, ent.ptr, ent.flags
 }
 
@@ -534,7 +574,8 @@ func (it *appendOnlyIterator) IsDeleted() bool {
 	if !it.validIndex() {
 		return false
 	}
-	return it.entries[it.idx].flags&node.FlagTombstone != 0
+	ent := it.entryAt(it.idx)
+	return ent != nil && ent.flags&node.FlagTombstone != 0
 }
 
 func (it *appendOnlyIterator) Key() []byte {
