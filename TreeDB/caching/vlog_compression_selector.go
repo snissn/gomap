@@ -55,6 +55,15 @@ const (
 	defaultVlogProbeBytes     = 8 << 20
 	defaultVlogExploreBytes   = 8 << 20
 	defaultVlogModeDwellBytes = 4 << 20
+	// Throughput policy favors a stable, low-overhead block path for medium+
+	// payloads to avoid per-write selector churn in hot write workloads.
+	throughputAutoBlockMinPayloadBytes = 256
+	// Force-pointer workloads with large values are write-path throughput-bound.
+	// Keep them on a stable block codec path and avoid selector overhead.
+	forcePointerAutoBlockMinPayloadBytes = 1024
+	// Larger grouped-frame targets reduce per-record compression overhead for
+	// large forced-pointer streams.
+	forcePointerBlockTargetCompressedBytes = 32 << 10
 )
 
 func normalizeVlogCompressionMode(v uint8) vlogCompressionMode {
@@ -1055,7 +1064,14 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	} else {
 		ratio = laneVlogBlockObservedRatio(l, codec)
 	}
-	k := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, db.valueLogBlockTargetBytes, ratio)
+	targetCompressedBytes := db.valueLogBlockTargetBytes
+	if db.forceValueLogPointers && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
+		avgPayloadBytes := rawPayloadBytes / records
+		if avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
+			targetCompressedBytes = forcePointerBlockTargetCompressedBytes
+		}
+	}
+	k := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, targetCompressedBytes, ratio)
 	if k < 1 {
 		k = 1
 	}
