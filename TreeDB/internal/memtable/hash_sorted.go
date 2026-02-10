@@ -77,7 +77,8 @@ func (a *hashArena) copyBytes(src []byte) []byte {
 
 type HashSorted struct {
 	mu          sync.RWMutex
-	items       map[string]hashEntry
+	items       map[string]uint32
+	entries     []hashEntry
 	sizeBytes   int64
 	maxKey      string
 	hasMaxKey   bool
@@ -129,7 +130,8 @@ func NewHashSortedWithCapacityAndIndexer(capacity int, indexer *HashSortedIndexe
 	}
 	initialEntries := hashSortedInitialEntries(capacity)
 	m := &HashSorted{
-		items:       make(map[string]hashEntry, initialEntries),
+		items:       make(map[string]uint32, initialEntries),
+		entries:     make([]hashEntry, 0, initialEntries),
 		sortedValid: true,
 		indexer:     indexer,
 	}
@@ -185,6 +187,10 @@ func (m *HashSorted) Reset() {
 	m.mu.Lock()
 
 	clear(m.items)
+	for i := range m.entries {
+		m.entries[i] = hashEntry{}
+	}
+	m.entries = m.entries[:0]
 	m.sizeBytes = 0
 	m.sortedKeys = m.sortedKeys[:0]
 	m.sortedDel = m.sortedDel[:0]
@@ -303,7 +309,13 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 
 	m.mu.Lock()
 	keyLookup := bytesToStringNoCopy(key)
-	if ent, ok := m.items[keyLookup]; ok {
+	if idx, ok := m.items[keyLookup]; ok {
+		i := int(idx)
+		if i < 0 || i >= len(m.entries) {
+			m.mu.Unlock()
+			return nil
+		}
+		ent := &m.entries[i]
 		valCopy := m.encodeEntryValueLocked(value, page.ValuePtr{}, node.FlagInline, false)
 		if cb != nil {
 			keyView := key
@@ -320,7 +332,6 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		ent.ptr = page.ValuePtr{}
 		ent.flags = node.FlagInline
 		m.sizeBytes += int64(hashEntryValueSize(ent.flags, ent.value) - oldLen)
-		m.items[keyLookup] = ent
 		m.mu.Unlock()
 		return nil
 	}
@@ -334,7 +345,8 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{value: valCopy, flags: node.FlagInline}
+	m.entries = append(m.entries, hashEntry{value: valCopy, flags: node.FlagInline})
+	m.items[keyStored] = uint32(len(m.entries) - 1)
 	m.sizeBytes += int64(len(keyCopy) + hashEntryValueSize(node.FlagInline, valCopy))
 	m.updateMaxKeyLocked(keyStored)
 	chunk, seq = m.noteNewKeyLocked(keyStored)
@@ -365,7 +377,13 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	m.hasDeletes = true
 
 	keyLookup := bytesToStringNoCopy(key)
-	if ent, ok := m.items[keyLookup]; ok {
+	if idx, ok := m.items[keyLookup]; ok {
+		i := int(idx)
+		if i < 0 || i >= len(m.entries) {
+			m.mu.Unlock()
+			return nil
+		}
+		ent := &m.entries[i]
 		if cb != nil {
 			keyView := key
 			if len(key) > 0 {
@@ -382,7 +400,6 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 			ent.ptr = page.ValuePtr{}
 			ent.flags = node.FlagTombstone
 		}
-		m.items[keyLookup] = ent
 		m.mu.Unlock()
 		return nil
 	}
@@ -395,7 +412,8 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		}
 	}
 	keyStored := bytesToStringNoCopy(keyCopy)
-	m.items[keyStored] = hashEntry{flags: node.FlagTombstone}
+	m.entries = append(m.entries, hashEntry{flags: node.FlagTombstone})
+	m.items[keyStored] = uint32(len(m.entries) - 1)
 	m.sizeBytes += int64(len(keyCopy))
 	m.updateMaxKeyLocked(keyStored)
 	chunk, seq = m.noteNewKeyLocked(keyStored)
@@ -409,10 +427,15 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 func (m *HashSorted) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	ent, ok := m.items[bytesToStringNoCopy(key)]
+	idx, ok := m.items[bytesToStringNoCopy(key)]
 	if !ok {
 		return nil, false, false
 	}
+	i := int(idx)
+	if i < 0 || i >= len(m.entries) {
+		return nil, false, false
+	}
+	ent := m.entries[i]
 	if ent.flags&node.FlagPointer != 0 {
 		return ent.value, ent.flags&node.FlagTombstone != 0, true
 	}
@@ -422,10 +445,15 @@ func (m *HashSorted) Get(key []byte) ([]byte, bool, bool) {
 func (m *HashSorted) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	ent, ok := m.items[bytesToStringNoCopy(key)]
+	idx, ok := m.items[bytesToStringNoCopy(key)]
 	if !ok {
 		return nil, page.ValuePtr{}, 0, false
 	}
+	i := int(idx)
+	if i < 0 || i >= len(m.entries) {
+		return nil, page.ValuePtr{}, 0, false
+	}
+	ent := m.entries[i]
 	if ent.flags&node.FlagPointer != 0 {
 		return ent.value, ent.ptr, ent.flags, true
 	}
@@ -603,10 +631,15 @@ func (m *HashSorted) ensureIndexFrozen() {
 		}
 		m.mu.RLock()
 		for i, k := range dst {
-			ent, ok := m.items[k]
+			idx, ok := m.items[k]
 			if !ok {
 				continue
 			}
+			ei := int(idx)
+			if ei < 0 || ei >= len(m.entries) {
+				continue
+			}
+			ent := m.entries[ei]
 			del[i] = ent.flags&node.FlagTombstone != 0
 		}
 		m.mu.RUnlock()
@@ -634,10 +667,15 @@ func (m *HashSorted) ensureIndexFrozen() {
 			}
 			m.mu.RLock()
 			for i, k := range keys {
-				ent, ok := m.items[k]
+				idx, ok := m.items[k]
 				if !ok {
 					continue
 				}
+				ei := int(idx)
+				if ei < 0 || ei >= len(m.entries) {
+					continue
+				}
+				ent := m.entries[ei]
 				del[i] = ent.flags&node.FlagTombstone != 0
 			}
 			m.mu.RUnlock()
@@ -725,7 +763,12 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 		return nil, 0
 	}
 	keyLookup := bytesToStringNoCopy(key)
-	if ent, ok := m.items[keyLookup]; ok {
+	if idx, ok := m.items[keyLookup]; ok {
+		i := int(idx)
+		if i < 0 || i >= len(m.entries) {
+			return nil, 0
+		}
+		ent := &m.entries[i]
 		oldLen := hashEntryValueSize(ent.flags, ent.value)
 		ent.value = m.encodeEntryValueLocked(value, ptr, flags, steal)
 		if flags&node.FlagPointer != 0 {
@@ -738,7 +781,6 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 		if flags&node.FlagTombstone != 0 {
 			m.hasDeletes = true
 		}
-		m.items[keyLookup] = ent
 		return nil, 0
 	}
 
@@ -754,7 +796,8 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	if flags&node.FlagPointer != 0 {
 		ent.ptr = ptr
 	}
-	m.items[keyStored] = ent
+	m.entries = append(m.entries, ent)
+	m.items[keyStored] = uint32(len(m.entries) - 1)
 	m.sizeBytes += int64(len(keyCopy) + hashEntryValueSize(flags, valCopy))
 	if flags&node.FlagTombstone != 0 {
 		m.hasDeletes = true
@@ -785,7 +828,8 @@ func (m *HashSorted) setEntryNewStealNoChunkLocked(op batchpkg.Entry) (string, i
 	if flags&node.FlagPointer != 0 {
 		ent.ptr = ptr
 	}
-	m.items[keyStored] = ent
+	m.entries = append(m.entries, ent)
+	m.items[keyStored] = uint32(len(m.entries) - 1)
 	m.sizeBytes += int64(len(op.Key) + hashEntryValueSize(flags, val))
 	if flags&node.FlagTombstone != 0 {
 		m.hasDeletes = true
@@ -1199,11 +1243,17 @@ func (it *hashIterator) ensureLoaded() {
 	if !it.valid || it.curKey == "" {
 		return
 	}
-	ent, ok := it.mt.items[it.curKey]
+	idx, ok := it.mt.items[it.curKey]
 	if !ok {
 		it.valid = false
 		return
 	}
+	i := int(idx)
+	if i < 0 || i >= len(it.mt.entries) {
+		it.valid = false
+		return
+	}
+	ent := it.mt.entries[i]
 	it.cur = ent
 	it.loaded = true
 }
