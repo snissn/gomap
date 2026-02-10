@@ -2,7 +2,9 @@ package zipper
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"math/bits"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -45,6 +47,25 @@ func shortestSeparator(left, right []byte) []byte {
 		return append([]byte(nil), right...)
 	}
 	if bytes.Compare(left, right) >= 0 {
+		return append([]byte(nil), right...)
+	}
+	if len(left) == 8 && len(right) == 8 {
+		lv := binary.BigEndian.Uint64(left)
+		rv := binary.BigEndian.Uint64(right)
+		if lv < rv {
+			x := lv ^ rv
+			if x != 0 {
+				i := bits.LeadingZeros64(x) / 8
+				lb := left[i]
+				rb := right[i]
+				if int(lb)+1 < int(rb) {
+					sep := make([]byte, i+1)
+					copy(sep, left[:i])
+					sep[i] = lb + 1
+					return sep
+				}
+			}
+		}
 		return append([]byte(nil), right...)
 	}
 
