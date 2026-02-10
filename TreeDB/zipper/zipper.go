@@ -549,6 +549,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	for {
 		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
 		var useBatch bool
+		var oldLoaded bool
+		var oldKey, oldVal []byte
+		var oldPtr page.ValuePtr
+		var oldFlags byte
 
 		if oldIdx >= oldCount && opIdx >= len(ops) {
 			break
@@ -560,11 +564,17 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// useOld = true
 		} else {
 			// Compare
-			// Optimization: GetLeafEntryView (Zero Copy)
-			k, _, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
+			// Optimization: decode old entry once; reuse it below when we
+			// consume from oldNode in the same loop iteration.
+			k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
 			if err != nil {
 				return 0, nil, err
 			}
+			oldLoaded = true
+			oldKey = k
+			oldVal = v
+			oldPtr = ptr
+			oldFlags = f
 			batchKey := ops[opIdx].Key
 
 			cmp := bytes.Compare(k, batchKey)
@@ -610,21 +620,31 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 		} else {
 			// useOld
-			// Optimization: View
-			k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
-			if err != nil {
-				return 0, nil, err
+			if oldLoaded {
+				key = oldKey
+				flags = oldFlags
+				if oldFlags&node.FlagPointer != 0 {
+					valPtr = oldPtr
+				} else {
+					val = oldVal
+				}
+			} else {
+				// Optimization: View
+				k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
+				if err != nil {
+					return 0, nil, err
+				}
+				key = k
+				flags = f
+				if f&node.FlagPointer != 0 {
+					valPtr = ptr
+				} else {
+					val = v
+				}
 			}
 			oldIdx++
-			key = k
-			if f&node.FlagTombstone != 0 {
+			if flags&node.FlagTombstone != 0 {
 				continue // Skip tombstones
-			}
-			flags = f
-			if f&node.FlagPointer != 0 {
-				valPtr = ptr
-			} else {
-				val = v
 			}
 		}
 
@@ -663,9 +683,11 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			splitBuilder.SetPageID(sid)
 
 			// Record split
-			splitKey := append([]byte(nil), key...) // Deep copy
+			var splitKey []byte
 			if leftMax := target.LeafPrevKey(); len(leftMax) > 0 {
 				splitKey = shortestSeparator(leftMax, key)
+			} else {
+				splitKey = append([]byte(nil), key...)
 			}
 			splits = append(splits, Split{Key: splitKey, NodeID: sid})
 
