@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"bytes"
+	"encoding/binary"
 	"sort"
 	"sync"
 	"unsafe"
@@ -13,7 +14,10 @@ import (
 )
 
 const (
-	appendOnlyEstimatedBytesPerEntry = 32
+	// Size accounting uses key+value/pointer payload bytes, not the in-memory
+	// appendOnlyEntry struct footprint. A lower estimate reduces growth/copy
+	// churn for pointer-heavy write paths.
+	appendOnlyEstimatedBytesPerEntry = 24
 	appendOnlyMinInitialEntries      = 128
 	appendOnlyMaxInitialEntries      = 1 << 20
 	appendOnlyInlineKeyLen           = 8
@@ -33,6 +37,7 @@ type AppendOnly struct {
 
 	entries   []appendOnlyEntry
 	latest    map[string]int
+	latest64  map[uint64]int
 	snapshot  []appendOnlyEntry
 	count     int
 	snapCount int
@@ -58,7 +63,6 @@ func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 	}
 	return &AppendOnly{
 		entries:   make([]appendOnlyEntry, n),
-		latest:    make(map[string]int, n),
 		count:     0,
 		ordered:   true,
 		hasLast:   false,
@@ -94,6 +98,13 @@ func appendOnlyKeyString(key []byte) string {
 	return unsafe.String(&key[0], len(key))
 }
 
+func appendOnlyKeyU64(key []byte) (uint64, bool) {
+	if len(key) != appendOnlyInlineKeyLen {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(key), true
+}
+
 func entryValueSize(flags byte, value []byte) int {
 	if flags&node.FlagPointer != 0 {
 		return page.ValuePtrSize + len(value)
@@ -114,22 +125,49 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 		if m.latest != nil {
 			clear(m.latest)
 		}
+		if m.latest64 != nil {
+			clear(m.latest64)
+		}
 		m.clearSnapshotLocked()
 		return
 	}
-	if m.latest == nil {
-		m.latest = make(map[string]int, m.count)
-	} else {
+	if m.latest != nil {
 		clear(m.latest)
+	}
+	if m.latest64 != nil {
+		clear(m.latest64)
+	}
+	reserve := len(m.entries)
+	if reserve < m.count {
+		reserve = m.count
 	}
 	active := m.entries[:m.count]
 	for i := range active {
-		m.latest[appendOnlyKeyString(appendOnlyEntryKey(&active[i]))] = i
+		k := appendOnlyEntryKey(&active[i])
+		if k64, ok := appendOnlyKeyU64(k); ok {
+			if m.latest64 == nil {
+				m.latest64 = make(map[uint64]int, reserve)
+			}
+			m.latest64[k64] = i
+			continue
+		}
+		if m.latest == nil {
+			m.latest = make(map[string]int, reserve)
+		}
+		m.latest[appendOnlyKeyString(k)] = i
 	}
 	m.clearSnapshotLocked()
 }
 
 func (m *AppendOnly) updateLatestIndexLocked(k []byte, idx int) {
+	if k64, ok := appendOnlyKeyU64(k); ok {
+		if m.latest64 == nil {
+			m.latest64 = make(map[uint64]int, appendOnlyMinInitialEntries)
+		}
+		m.latest64[k64] = idx
+		m.clearSnapshotLocked()
+		return
+	}
 	if m.latest == nil {
 		m.latest = make(map[string]int, appendOnlyMinInitialEntries)
 	}
@@ -289,6 +327,17 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if !m.ordered {
+		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
+			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
+				ent := &m.entries[idx]
+				if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					if ent.flags&node.FlagTombstone != 0 {
+						return nil, true, true
+					}
+					return ent.value, false, true
+				}
+			}
+		}
 		if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
 			ent := &m.entries[idx]
 			if bytes.Equal(appendOnlyEntryKey(ent), key) {
@@ -315,6 +364,14 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if !m.ordered {
+		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
+			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
+				ent := &m.entries[idx]
+				if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					return ent.value, ent.ptr, ent.flags, true
+				}
+			}
+		}
 		if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
 			ent := &m.entries[idx]
 			if bytes.Equal(appendOnlyEntryKey(ent), key) {
@@ -352,6 +409,7 @@ func (m *AppendOnly) Reset() {
 		m.entries[i] = appendOnlyEntry{}
 	}
 	clear(m.latest)
+	clear(m.latest64)
 	m.clearSnapshotLocked()
 	m.count = 0
 	m.sizeBytes = 0
@@ -371,11 +429,14 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 		return m.snapshot
 	}
 	active := m.entries[:m.count]
-	if len(m.latest) == 0 {
+	if len(m.latest) == 0 && len(m.latest64) == 0 {
 		m.rebuildLatestIndexLocked()
 	}
-	indices := make([]int, 0, len(m.latest))
+	indices := make([]int, 0, len(m.latest)+len(m.latest64))
 	for _, idx := range m.latest {
+		indices = append(indices, idx)
+	}
+	for _, idx := range m.latest64 {
 		indices = append(indices, idx)
 	}
 	sort.Slice(indices, func(i, j int) bool {
