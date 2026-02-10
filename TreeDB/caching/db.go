@@ -9301,7 +9301,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		type ptrSetterView interface {
 			SetPointerView(key []byte, ptr page.ValuePtr) error
 		}
+		type ptrSetter interface {
+			SetPointer(key []byte, ptr page.ValuePtr) error
+		}
 		psv, _ := backendBatch.(ptrSetterView)
+		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
 
 		// Best-effort: ensure value-log bytes are flushed before we start committing
@@ -9339,6 +9343,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
 			psv, _ = backendBatch.(ptrSetterView)
+			ps, _ = backendBatch.(ptrSetter)
 			backendPendingOps = 0
 			return nil
 		}
@@ -9384,6 +9389,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			} else if entry.IsPtr {
 				if psv != nil {
 					err = psv.SetPointerView(entry.Key, entry.ValuePtr)
+				} else if ps != nil {
+					err = ps.SetPointer(entry.Key, entry.ValuePtr)
 				} else {
 					single[0] = batch.Entry{Type: batch.OpPut, Key: entry.Key, ValuePtr: entry.ValuePtr, IsPtr: true}
 					err = backendBatch.SetOps(single[:])
