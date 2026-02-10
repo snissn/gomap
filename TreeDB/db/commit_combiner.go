@@ -75,8 +75,8 @@ func (db *DB) writeViaCommitCombiner(key, value []byte, del, sync bool) (bool, e
 		return false, nil
 	}
 
-	// Fast saturation probe avoids copy/alloc overhead when the queue is already
-	// full and we can immediately fall back to the direct write path.
+// Fast saturation probe avoids copy/alloc overhead when the queue is already
+// full and we can immediately fall back to the direct write path.
 	if cap(reqCh) > 0 && len(reqCh) == cap(reqCh) {
 		select {
 		case <-stopCh:
