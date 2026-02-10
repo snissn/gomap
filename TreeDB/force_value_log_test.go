@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -73,6 +74,7 @@ func TestForceValueLogPointers_DictTrainingPublishesDictionary(t *testing.T) {
 		ValueLog: ValueLogOptions{
 			ForcePointers:    true,
 			PointerThreshold: 1,
+			Compression:      ValueLogCompressionDict,
 			DictTrain: TrainConfig{
 				TrainBytes:     64 << 10,
 				DictBytes:      8 << 10,
@@ -81,6 +83,12 @@ func TestForceValueLogPointers_DictTrainingPublishesDictionary(t *testing.T) {
 				SampleStride:   1,
 				DedupWindow:    16,
 			},
+			// Keep this test deterministic: publish the first accepted dictionary
+			// profile without autotune dwell/gain gating.
+			CompressionAutotune: valuelog.AutotuneOptions{Mode: valuelog.AutotuneOff},
+			// Disable adaptive pause defaults so trainer publication can be observed
+			// reliably under race/slow CI hosts.
+			DictAdaptiveRatio: -1,
 		},
 		NotifyError: func(err error) {
 			select {

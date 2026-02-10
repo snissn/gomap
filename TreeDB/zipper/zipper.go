@@ -797,6 +797,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// SPLIT!
 			// Capture the left boundary key before target may be returned to the
 			// builder pool (and potentially reused/reset).
+			allocHint := target.PageID()
 			var leftMax []byte
 			if lm := target.LeafPrevKey(); len(lm) > 0 {
 				leftMax = cloneKeyIntoArena(lm, &splitKeyArena)
@@ -815,7 +816,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 
 			// 2. Allocate NEW split node
-			sid, err := z.allocator.Alloc(target.PageID())
+			sid, err := z.allocator.Alloc(allocHint)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -836,6 +837,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			} else {
 				splitKey = cloneKeyIntoArena(key, &splitKeyArena)
 			}
+			// Split keys escape this call via the returned []Split, so clone out of
+			// the local arena before appending.
+			splitKey = append([]byte(nil), splitKey...)
 			splits = append(splits, Split{Key: splitKey, NodeID: sid})
 
 			target = splitBuilder
