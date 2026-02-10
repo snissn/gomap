@@ -2,7 +2,9 @@ package zipper
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"path/filepath"
 	"testing"
 
@@ -226,6 +228,33 @@ func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
 	for i, k := range expected {
 		if got[i] != k {
 			t.Fatalf("key[%d] = %q, want %q (all=%v)", i, got[i], k, got)
+		}
+	}
+}
+
+func TestShortestSeparatorBE8Bounds(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	left := make([]byte, 8)
+	right := make([]byte, 8)
+
+	for i := 0; i < 200000; i++ {
+		a := rng.Uint64()
+		b := rng.Uint64()
+		if a == b {
+			continue
+		}
+		if a > b {
+			a, b = b, a
+		}
+		binary.BigEndian.PutUint64(left, a)
+		binary.BigEndian.PutUint64(right, b)
+
+		sep := shortestSeparator(left, right)
+		if bytes.Compare(sep, left) <= 0 {
+			t.Fatalf("separator not > left: left=%x right=%x sep=%x", left, right, sep)
+		}
+		if bytes.Compare(sep, right) > 0 {
+			t.Fatalf("separator > right: left=%x right=%x sep=%x", left, right, sep)
 		}
 	}
 }

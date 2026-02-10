@@ -711,6 +711,12 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 		if err == node.ErrNodeFull {
 			// SPLIT!
+			// Capture the left boundary key before target may be returned to the
+			// builder pool (and potentially reused/reset).
+			var leftMax []byte
+			if lm := target.LeafPrevKey(); len(lm) > 0 {
+				leftMax = append([]byte(nil), lm...)
+			}
 
 			// 1. Finish current target (writes header/checksum)
 			if target != builder {
@@ -741,7 +747,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 			// Record split
 			var splitKey []byte
-			if leftMax := target.LeafPrevKey(); len(leftMax) > 0 {
+			if len(leftMax) > 0 {
 				splitKey = shortestSeparator(leftMax, key)
 			} else {
 				splitKey = append([]byte(nil), key...)
