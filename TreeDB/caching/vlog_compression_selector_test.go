@@ -297,6 +297,117 @@ func TestChooseValueLogBlockWriteK_ForcePointerSmallPayloadKeepsBaseTarget(t *te
 	}
 }
 
+func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadRespectsConfiguredLargeTarget(t *testing.T) {
+	l := &lane{}
+	configuredTargetBytes := forcePointerBlockTargetCompressedBytes + (16 << 10)
+	base := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: configuredTargetBytes,
+	}
+	force := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: configuredTargetBytes,
+		forceValueLogPointers:    true,
+	}
+
+	// Seed an observed ratio that keeps K below MaxFrameK so target differences
+	// remain visible.
+	base.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 2048, false, 1000)
+
+	records := 256
+	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
+	kBase := base.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	kForce := force.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	if kForce != kBase {
+		t.Fatalf("expected forced-pointer K to preserve configured target>=32KiB, base=%d force=%d", kBase, kForce)
+	}
+
+	ratio := laneVlogBlockObservedRatio(l, valuelog.BlockCodecSnappy)
+	want := valuelog.ChooseBlockGroupK(records, rawPayloadBytes, configuredTargetBytes, ratio)
+	if kForce != want {
+		t.Fatalf("expected forced-pointer K to use configured target=%d, got=%d want=%d", configuredTargetBytes, kForce, want)
+	}
+}
+
+func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadKDistributionGuardrail(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+	}
+	l := &lane{}
+
+	// Seed a stable compression ratio and then sample K repeatedly to catch
+	// distribution regressions (for example, collapsing back toward k=1/8/16).
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 2048, false, 1000)
+	const (
+		iterations = 64
+		records    = 128
+	)
+	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
+	for i := 0; i < iterations; i++ {
+		_ = db.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	}
+
+	idx := vlogBlockCodecIndex(valuelog.BlockCodecSnappy)
+	snap := snapshotLaneVlogBlockK(l)
+	count := snap.Count[idx]
+	if count != iterations {
+		t.Fatalf("expected %d K samples, got %d", iterations, count)
+	}
+	avgK := float64(snap.Sum[idx]) / float64(count)
+	if avgK < 32 {
+		t.Fatalf("expected avg K >= 32 for large forced-pointer payloads, got %.2f", avgK)
+	}
+	kEq1 := snap.Buckets[idx][vlogBlockKBucketIndex(1)]
+	if kEq1 > count/20 { // <=5% may be k=1
+		t.Fatalf("expected k=1 share <=5%%, k_eq_1=%d total=%d", kEq1, count)
+	}
+	var kGe32 uint64
+	for bucket := vlogBlockKBucketIndex(32); bucket < vlogBlockKBucketCount; bucket++ {
+		kGe32 += snap.Buckets[idx][bucket]
+	}
+	if kGe32*10 < count*9 { // >=90%
+		t.Fatalf("expected >=90%% of samples with K>=32, got k_ge_32=%d total=%d", kGe32, count)
+	}
+}
+
+func BenchmarkChooseValueLogBlockWriteK_ForcePointerLargePayloadDistribution(b *testing.B) {
+	db := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionBlock),
+		valueLogBlockTargetBytes: 4096,
+		forceValueLogPointers:    true,
+	}
+	l := &lane{}
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecSnappy, 4096, 4096, 2048, false, 1000)
+
+	const records = 128
+	rawPayloadBytes := records * forcePointerAutoBlockMinPayloadBytes
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = db.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	}
+	b.StopTimer()
+
+	idx := vlogBlockCodecIndex(valuelog.BlockCodecSnappy)
+	snap := snapshotLaneVlogBlockK(l)
+	count := snap.Count[idx]
+	if count == 0 {
+		b.Fatalf("expected non-zero K sample count")
+	}
+	avgK := float64(snap.Sum[idx]) / float64(count)
+	b.ReportMetric(avgK, "k_avg")
+	kEq1 := snap.Buckets[idx][vlogBlockKBucketIndex(1)]
+	b.ReportMetric((float64(kEq1)*100.0)/float64(count), "k_eq_1_pct")
+	var kGe32 uint64
+	for bucket := vlogBlockKBucketIndex(32); bucket < vlogBlockKBucketCount; bucket++ {
+		kGe32 += snap.Buckets[idx][bucket]
+	}
+	b.ReportMetric((float64(kGe32)*100.0)/float64(count), "k_ge_32_pct")
+}
+
 func TestVlogCompressionSelector_AvoidsOffWithStrongCompressionSignal(t *testing.T) {
 	s := newVlogCompressionSelector(vlogAutoBalanced, 0, 0)
 	s.dwellBytes = 0
