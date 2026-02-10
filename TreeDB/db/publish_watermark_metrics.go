@@ -55,10 +55,12 @@ func estimatePublishWatermarkPercentile(buckets [publishWatermarkLatencyBucketCo
 			if i < len(publishWatermarkLatencyBucketUpperBounds) {
 				return publishWatermarkLatencyBucketUpperBounds[i]
 			}
-			return publishWatermarkLatencyBucketUpperBounds[len(publishWatermarkLatencyBucketUpperBounds)-1]
+			// Overflow bucket (> last configured bound).
+			return publishWatermarkLatencyBucketUpperBounds[len(publishWatermarkLatencyBucketUpperBounds)-1] + time.Nanosecond
 		}
 	}
-	return publishWatermarkLatencyBucketUpperBounds[len(publishWatermarkLatencyBucketUpperBounds)-1]
+	// Shouldn't happen for a well-formed histogram, but treat as overflow.
+	return publishWatermarkLatencyBucketUpperBounds[len(publishWatermarkLatencyBucketUpperBounds)-1] + time.Nanosecond
 }
 
 func (db *DB) observePublishWatermark(wait, hold, latency time.Duration) {

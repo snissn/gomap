@@ -232,7 +232,7 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 			}
 			if isTruncatedLogError(err) {
 				// Treat EOF/truncated tail as end-of-segment and continue replaying
-				// other segments/l lanes. Each segment is replayed as far as valid
+				// other segments/lanes. Each segment is replayed as far as valid
 				// batches permit.
 				break
 			}
