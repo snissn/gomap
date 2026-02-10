@@ -455,7 +455,14 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 }
 
 func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
-	m.mu.RLock()
+	writeLock := !m.ordered
+	if writeLock {
+		// Snapshot construction updates internal caches, so keep an exclusive lock
+		// for unordered mode for the lifetime of this iterator.
+		m.mu.Lock()
+	} else {
+		m.mu.RLock()
+	}
 	entries := m.entries[:m.count]
 	var snapshot []*appendOnlyEntry
 	if !m.ordered {
@@ -466,6 +473,7 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		snapshot: snapshot,
 		end:      end,
 		mu:       &m.mu,
+		write:    writeLock,
 	}
 	if start != nil {
 		it.Seek(start)
@@ -479,6 +487,7 @@ type appendOnlyIterator struct {
 	idx      int
 	end      []byte
 	mu       *sync.RWMutex
+	write    bool
 }
 
 func (it *appendOnlyIterator) len() int {
@@ -606,7 +615,11 @@ func (it *appendOnlyIterator) Error() error { return nil }
 
 func (it *appendOnlyIterator) Close() error {
 	if it.mu != nil {
-		it.mu.RUnlock()
+		if it.write {
+			it.mu.Unlock()
+		} else {
+			it.mu.RUnlock()
+		}
 		it.mu = nil
 	}
 	return nil

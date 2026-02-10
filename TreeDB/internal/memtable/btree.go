@@ -138,9 +138,9 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 	if key == nil {
 		return nil
 	}
-	keyCopy := append([]byte(nil), key...)
-	valCopy := append([]byte(nil), value...)
 	if cb != nil {
+		keyCopy := append([]byte(nil), key...)
+		valCopy := append([]byte(nil), value...)
 		if err := cb(keyCopy, valCopy); err != nil {
 			return err
 		}
@@ -233,8 +233,8 @@ func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 	if key == nil {
 		return nil
 	}
-	keyCopy := append([]byte(nil), key...)
 	if cb != nil {
+		keyCopy := append([]byte(nil), key...)
 		if err := cb(keyCopy, nil); err != nil {
 			return err
 		}

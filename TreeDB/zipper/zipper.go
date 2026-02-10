@@ -896,7 +896,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		} else {
 			keyArena = make([]byte, 0, internalKeyArenaInitCap)
 		}
-		defer putInternalKeyArena(keyArena)
+		defer func() { putInternalKeyArena(keyArena) }()
 	}
 	cloneKey := func(src []byte) []byte {
 		if !copyKeys || len(src) == 0 {
