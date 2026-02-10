@@ -89,6 +89,9 @@ func (db *DB) writeViaCommitCombiner(key, value []byte, del, sync bool) (bool, e
 	case reqCh <- req:
 	case <-stopCh:
 		return true, errCommitCombinerClosed
+	default:
+		// Queue saturation fallback: let caller use direct write path.
+		return false, nil
 	}
 
 	select {
@@ -194,22 +197,46 @@ func (db *DB) commitCombinerLoop(reqCh <-chan *commitCombineReq, stopCh <-chan s
 			batch := make([]*commitCombineReq, 0, commitCombineMaxBatch)
 			batch = append(batch, first)
 			deadline := time.Now().Add(commitCombineLinger)
+			timer := time.NewTimer(commitCombineLinger)
 			for len(batch) < commitCombineMaxBatch {
 				wait := time.Until(deadline)
 				if wait <= 0 {
 					break
 				}
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(wait)
 				select {
 				case req := <-reqCh:
 					if req != nil {
 						batch = append(batch, req)
 					}
-				case <-time.After(wait):
+				case <-timer.C:
 					// Linger elapsed.
-					wait = 0
+				case <-stopCh:
+					if !timer.Stop() {
+						select {
+						case <-timer.C:
+						default:
+						}
+					}
+					err := db.applyCombinedBatch(batch)
+					db.finishCombined(batch, err)
+					db.drainCombined(reqCh, errCommitCombinerClosed)
+					return
 				}
-				if wait <= 0 || time.Now().After(deadline) {
+				if time.Now().After(deadline) {
 					break
+				}
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
 				}
 			}
 			err := db.applyCombinedBatch(batch)

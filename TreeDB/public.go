@@ -131,10 +131,13 @@ func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success b
 	if db == nil {
 		return 0, func(bool) {}
 	}
-	waitStart := time.Now()
-	db.maintenance.mu.Lock()
-	wait := time.Since(waitStart)
-	if wait > 0 {
+	wait := time.Duration(0)
+	if db.maintenance.mu.TryLock() {
+		// uncontended fast path
+	} else {
+		waitStart := time.Now()
+		db.maintenance.mu.Lock()
+		wait = time.Since(waitStart)
 		db.maintenance.deferrals++
 		db.maintenance.waitTotal += wait
 		if wait > db.maintenance.waitMax {

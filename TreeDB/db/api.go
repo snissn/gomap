@@ -263,9 +263,6 @@ func (db *DB) Stats() map[string]string {
 	watermarkLockDelaySharePct, watermarkLatencyP99Ms := db.publishWatermarkStats()
 	stats["treedb.publish.watermark.lock_delay_share_pct"] = fmt.Sprintf("%.3f", watermarkLockDelaySharePct)
 	stats["treedb.publish.watermark.latency_p99_ms"] = fmt.Sprintf("%.3f", watermarkLatencyP99Ms)
-	if _, ok := stats["treedb.publish.watermark.lag_drift_bytes_per_sec"]; !ok {
-		stats["treedb.publish.watermark.lag_drift_bytes_per_sec"] = "0.000"
-	}
 
 	pruneStatsInto(stats, &db.pruner)
 
