@@ -416,12 +416,18 @@ func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 	if z == nil || !z.adaptiveLeafEncoding {
 		return base
 	}
+	if len(ops) == 0 {
+		return base
+	}
 	entries, _ := leafHeuristicEntriesPool.Get().([]node.LeafHeuristicEntry)
 	if cap(entries) < len(ops) {
 		entries = make([]node.LeafHeuristicEntry, 0, len(ops))
 	}
 	entries = entries[:0]
 	defer func() {
+		for i := range entries {
+			entries[i] = node.LeafHeuristicEntry{}
+		}
 		if cap(entries) <= maxLeafHeuristicScratchCap {
 			leafHeuristicEntriesPool.Put(entries[:0])
 		}
@@ -438,13 +444,23 @@ func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 		}
 		entries = append(entries, node.LeafHeuristicEntry{Key: op.Key, Flags: flags})
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		cmp := bytes.Compare(entries[i].Key, entries[j].Key)
-		if cmp != 0 {
-			return cmp < 0
+	sorted := true
+	for i := 1; i < len(entries); i++ {
+		cmp := bytes.Compare(entries[i-1].Key, entries[i].Key)
+		if cmp > 0 || (cmp == 0 && entries[i-1].Flags > entries[i].Flags) {
+			sorted = false
+			break
 		}
-		return entries[i].Flags < entries[j].Flags
-	})
+	}
+	if !sorted {
+		sort.Slice(entries, func(i, j int) bool {
+			cmp := bytes.Compare(entries[i].Key, entries[j].Key)
+			if cmp != 0 {
+				return cmp < 0
+			}
+			return entries[i].Flags < entries[j].Flags
+		})
+	}
 	return node.AdaptiveLeafBuilderOptions(base, entries)
 }
 
