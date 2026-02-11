@@ -129,6 +129,13 @@ func (w *Writer) writeBytes(buf []byte) error {
 	if max <= 0 {
 		max = defaultBufferSize
 	}
+	directThreshold := max >> 10
+	if directThreshold < 8<<10 {
+		directThreshold = 8 << 10
+	}
+	if directThreshold > 256<<10 {
+		directThreshold = 256 << 10
+	}
 	if len(buf) >= max {
 		if err := w.flushAppendBuf(); err != nil {
 			return err
@@ -148,9 +155,41 @@ func (w *Writer) writeBytes(buf []byte) error {
 		}
 		return nil
 	}
+	if len(w.appendBuf) == 0 && len(buf) >= directThreshold {
+		written := 0
+		for written < len(buf) {
+			n, err := w.f.Write(buf[written:])
+			if n > 0 {
+				written += n
+			}
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return errors.New("valuelog: short write")
+			}
+		}
+		return nil
+	}
 	if len(w.appendBuf)+len(buf) > max {
 		if err := w.flushAppendBuf(); err != nil {
 			return err
+		}
+		if len(buf) >= directThreshold {
+			written := 0
+			for written < len(buf) {
+				n, err := w.f.Write(buf[written:])
+				if n > 0 {
+					written += n
+				}
+				if err != nil {
+					return err
+				}
+				if n == 0 {
+					return errors.New("valuelog: short write")
+				}
+			}
+			return nil
 		}
 	}
 	w.appendBuf = append(w.appendBuf, buf...)

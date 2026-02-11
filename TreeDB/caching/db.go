@@ -189,6 +189,18 @@ func putValueLogPtrs(s []page.ValuePtr) {
 	valueLogPtrPool.Put(s[:0])
 }
 
+func putValueLogPtrsNoClear(s []page.ValuePtr) {
+	if s == nil {
+		return
+	}
+	// page.ValuePtr contains no pointer fields, so we can safely skip element
+	// clearing in hot paths to reduce memclr overhead.
+	if cap(s) > 1<<20 {
+		return
+	}
+	valueLogPtrPool.Put(s[:0])
+}
+
 func getValueLogKeys(capacity int) [][]byte {
 	if capacity < 0 {
 		capacity = 0
@@ -4491,7 +4503,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		sawDictID       bool
 		multipleDictIDs bool
 	)
-	records := getValueLogRecords(len(requests))
+	records := getValueLogRecordsCap(len(requests))
+	records = records[:len(requests)]
+	defer putValueLogRecordsNoClear(records)
 	for i := range requests {
 		req := &requests[i]
 		if !req.enqueuedAt.IsZero() {
@@ -4556,7 +4570,11 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		wallNs      int64
 	}
 	rawPaused := db.valueLogDictPauseRemaining.Load() > 0
-	plans := make([]vlogBatchPlan, 0, len(requests))
+	var planScratch [16]vlogBatchPlan
+	plans := planScratch[:0]
+	if len(requests) > len(planScratch) {
+		plans = make([]vlogBatchPlan, 0, len(requests))
+	}
 	for i := 0; i < len(requests); {
 		writeMode := requests[i].writeMode
 		blockCodec := normalizeSelectorBlockCodec(requests[i].blockCodec)
@@ -4695,7 +4713,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			putVlogPreparedFrames(plans[i].frames)
 			plans[i].frames = nil
 		}
-		putValueLogRecords(records)
 		for i := range requests {
 			ack := requests[i].ack
 			if ack == nil {
@@ -4738,7 +4755,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
-		putValueLogRecords(records)
 		for i := range requests {
 			ack := requests[i].ack
 			if ack == nil {
@@ -4770,7 +4786,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
 		l.vlogMu.Unlock()
-		putValueLogRecords(records)
 		for i := range requests {
 			ack := requests[i].ack
 			if ack == nil {
@@ -4788,7 +4803,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	w = l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
-		putValueLogRecords(records)
 		for i := range requests {
 			ack := requests[i].ack
 			if ack == nil {
@@ -4811,7 +4825,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		if est > 0 && w.Size() > maxBytes-est {
 			if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
 				l.vlogMu.Unlock()
-				putValueLogRecords(records)
 				for i := range requests {
 					ack := requests[i].ack
 					if ack == nil {
@@ -4829,7 +4842,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			w = l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
-				putValueLogRecords(records)
 				for i := range requests {
 					ack := requests[i].ack
 					if ack == nil {
@@ -4870,7 +4882,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 	autoSelectorMode := normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto
 
-	ptrs = getValueLogPtrs(len(records))
+	ptrs = getValueLogPtrsCap(len(records))
+	ptrs = ptrs[:len(records)]
+	defer putValueLogPtrsNoClear(ptrs)
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
 	for pi := range plans {
@@ -5146,11 +5160,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		}
 	}
 
-	if ptrs != nil {
-		defer putValueLogPtrs(ptrs)
-	}
-	putValueLogRecords(records)
-
 	if err != nil {
 		for i := range requests {
 			ack := requests[i].ack
@@ -5332,7 +5341,8 @@ func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durab
 	if writeMode == vlogWriteBlock {
 		return false
 	}
-	// Force-pointer profiles intentionally run with actor-owned value-log appends.
+	// Force-pointer profiles prefer queue coalescing; appendValueLogOne still
+	// takes an uncontended direct fast path before enqueueing.
 	if db.forceValueLogPointers {
 		return true
 	}
@@ -6240,7 +6250,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 
 	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
-		if dictID == 0 && !db.forceValueLogPointers && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
