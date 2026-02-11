@@ -58,7 +58,8 @@ Journal and value-log writes are decoupled resources with separate rotation/sync
 For commit-log batches that carry sequence numbers (`Record.Seq > 0`), the
 sequence acts as a durable commit fence:
 
-- all records in a batch share one commit sequence,
+- all records in a batch share one commit sequence (enforced by commit-log
+  batch writer and validated during recovery replay),
 - RID-backed records in that batch are only published during recovery when all
   referenced RIDs are present in the scanned value-log set,
 - if any RID is missing (for example, partial/torn value-log flush), the whole

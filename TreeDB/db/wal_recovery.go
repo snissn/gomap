@@ -219,7 +219,11 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 				if len(records) == 0 {
 					continue
 				}
-				seq := records[0].Seq
+				seq, err := commitBatchSeq(records)
+				if err != nil {
+					_ = reader.Close()
+					return err
+				}
 				batch := commitBatch{seq: seq, order: readOrder, records: records}
 				readOrder++
 				if seq == 0 {
@@ -274,6 +278,19 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		}
 	}
 	return nil
+}
+
+func commitBatchSeq(records []commitlog.Record) (uint64, error) {
+	if len(records) == 0 {
+		return 0, nil
+	}
+	seq := records[0].Seq
+	for i := 1; i < len(records); i++ {
+		if records[i].Seq != seq {
+			return 0, fmt.Errorf("%w: first=%d index=%d got=%d", commitlog.ErrMixedBatchSeq, seq, i, records[i].Seq)
+		}
+	}
+	return seq, nil
 }
 
 func commitFenceSatisfied(records []commitlog.Record, ridMap map[uint64]page.ValuePtr) bool {

@@ -100,8 +100,9 @@ func TestUnifiedWAL_CrashRecoveryMissingCommit(t *testing.T) {
 	}
 }
 
-// TestUnifiedWAL_CrashRecoveryMissingPayload ensures commit intent without payload fails fast.
-func TestUnifiedWAL_CrashRecoveryMissingPayload(t *testing.T) {
+// TestUnifiedWAL_CrashRecoveryMissingPayloadSkipped ensures missing RID payloads
+// are skipped during replay instead of surfacing as hard open failures.
+func TestUnifiedWAL_CrashRecoveryMissingPayloadSkipped(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "wal")
 	if err := os.MkdirAll(walDir, 0755); err != nil {
