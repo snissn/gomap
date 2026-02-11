@@ -69,6 +69,7 @@ type DB struct {
 	indexColumnarLeaves       bool
 	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
+	indexAdaptiveLeafEncoding bool
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
 
@@ -390,6 +391,11 @@ type Options struct {
 	IndexPackedValuePtr bool
 	// IndexInternalBaseDelta enables the experimental internal-node base-delta encoding.
 	IndexInternalBaseDelta bool
+	// IndexAdaptiveLeafEncoding enables per-page adaptive selection of leaf
+	// encoding flags using deterministic heuristics from key/value shape.
+	//
+	// This option only affects newly-written leaf pages.
+	IndexAdaptiveLeafEncoding bool
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -759,6 +765,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexColumnarLeaves:       opts.IndexColumnarLeaves,
 		indexPackedValuePtr:       opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
+		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
 		dir:                       opts.Dir,
@@ -787,6 +794,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
+	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {

@@ -137,6 +137,82 @@ type BuilderOptions struct {
 	PackedValuePtr        bool
 }
 
+// LeafHeuristicEntry describes one logical leaf entry for adaptive encoding
+// selection.
+type LeafHeuristicEntry struct {
+	Key   []byte
+	Flags byte
+}
+
+// AdaptiveLeafBuilderOptions chooses per-page leaf encoding flags from a base
+// capability set using a deterministic lightweight heuristic.
+//
+// Heuristic goals:
+// - prefer columnar for pointer-heavy pages,
+// - prefer prefix compression for high shared-prefix key runs,
+// - avoid extra metadata overhead on short, low-prefix, pointer-dense pages.
+func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntry) BuilderOptions {
+	if len(entries) == 0 {
+		return base
+	}
+
+	putCount := 0
+	pointerCount := 0
+	deleteCount := 0
+	prefixPairs := 0
+	prefixBytes := 0
+	var prevKey []byte
+
+	for i := range entries {
+		e := entries[i]
+		if e.Flags&FlagTombstone != 0 {
+			deleteCount++
+			continue
+		}
+		putCount++
+		if e.Flags&FlagPointer != 0 {
+			pointerCount++
+		}
+		if prevKey != nil {
+			prefixPairs++
+			prefixBytes += sharedPrefixLen(prevKey, e.Key)
+		}
+		prevKey = e.Key
+	}
+
+	if putCount == 0 {
+		return base
+	}
+	pointerRatio := float64(pointerCount) / float64(putCount)
+	deleteRatio := float64(deleteCount) / float64(len(entries))
+	avgPrefix := 0.0
+	if prefixPairs > 0 {
+		avgPrefix = float64(prefixBytes) / float64(prefixPairs)
+	}
+
+	out := base
+	if out.LeafColumnar {
+		if pointerRatio < 0.20 {
+			out.LeafColumnar = false
+		}
+		if avgPrefix >= 6.0 && pointerRatio < 0.35 {
+			out.LeafColumnar = false
+		}
+		if deleteRatio > 0.35 && pointerRatio < 0.40 {
+			out.LeafColumnar = false
+		}
+	}
+	if out.LeafPrefixCompression {
+		if avgPrefix < 1.5 && pointerRatio > 0.75 {
+			out.LeafPrefixCompression = false
+		}
+		if avgPrefix < 1.0 && deleteRatio > 0.40 {
+			out.LeafPrefixCompression = false
+		}
+	}
+	return out
+}
+
 type leafColumnarV2Entry struct {
 	keyOff   uint32
 	keyLen   uint16
