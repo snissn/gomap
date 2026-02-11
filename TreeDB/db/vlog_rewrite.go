@@ -197,8 +197,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, err
 	}
 
-	// After swaps are published, run cleanup against a non-cancelable context so
-	// cleanup bookkeeping is not skipped due to caller cancellation.
+	// After swaps are published (i.e. pointer updates have been flushed and made
+	// visible), run cleanup against a non-cancelable context. At this point the
+	// rewrite is logically committed, so value-log segment bookkeeping must always
+	// complete to keep the value-log set and on-disk metadata consistent with the
+	// already-committed pointer swaps, even if the caller's context is canceled.
 	referencedAfter, err := db.referencedValueLogSegments(context.Background())
 	if err != nil {
 		return stats, err

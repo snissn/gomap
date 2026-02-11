@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -650,6 +651,7 @@ func (m *Manager) retryZombieDelete(f *File) {
 		return
 	}
 	if err := removeSegmentFileWithRetry(f.Path); err != nil {
+		log.Printf("valuelog: retry zombie delete failed for %s: %v", f.Path, err)
 		return
 	}
 	m.mu.Lock()
@@ -757,7 +759,8 @@ func removeSegmentFileWithRetry(path string) error {
 			return nil
 		}
 		lastErr = err
-		if runtime.GOOS != "windows" || i == attempts-1 {
+		// On non-Windows, or on the final retry attempt, stop retrying.
+		if runtime.GOOS != "windows" || i >= attempts-1 {
 			break
 		}
 		if !isWindowsSharingViolationError(err) {
