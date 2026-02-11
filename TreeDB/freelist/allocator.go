@@ -26,6 +26,25 @@ type Allocator struct {
 	preferAppend bool
 }
 
+func freelistNextPageID(data []byte) uint64 {
+	return binary.LittleEndian.Uint64(data[page.PageHeaderSize : page.PageHeaderSize+8])
+}
+
+func freelistIDAt(data []byte, idx int) uint64 {
+	off := page.PageHeaderSize + 8 + idx*8
+	return binary.LittleEndian.Uint64(data[off : off+8])
+}
+
+func setFreelistIDAt(data []byte, idx int, id uint64) {
+	off := page.PageHeaderSize + 8 + idx*8
+	binary.LittleEndian.PutUint64(data[off:off+8], id)
+}
+
+func clearFreelistIDAt(data []byte, idx int) {
+	off := page.PageHeaderSize + 8 + idx*8
+	clear(data[off : off+8])
+}
+
 // TestHookFreeBeforeChecksum is a test-only hook that fires after a freelist
 // entry is written but before the page checksum is updated. It should remain
 // nil in production.
@@ -133,8 +152,7 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 
 		countFree := int(n.Count())
 		if countFree == 0 {
-			body := page.DecodeFreelistBody(data[page.PageHeaderSize:], 0)
-			next := body.NextPageID
+			next := freelistNextPageID(data)
 
 			recycled := a.head
 			a.head = next
@@ -144,19 +162,16 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 			continue
 		}
 
-		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], uint16(countFree))
 		for countFree > 0 && len(ids) < count {
-			countFree--
-			id := body.FreeIDs[countFree]
-			slotOff := page.PageHeaderSize + 8 + countFree*8
-			clear(data[slotOff : slotOff+8])
+			idx := countFree - 1
+			id := freelistIDAt(data, idx)
+			clearFreelistIDAt(data, idx)
 			a.pager.MarkUnverified(id)
 			a.lastAlloc = id
 			ids = append(ids, id)
+			countFree--
 		}
 
-		body.FreeIDs = body.FreeIDs[:countFree]
-		body.Encode(data[page.PageHeaderSize:])
 		n.SetCount(uint16(countFree))
 		n.UpdateChecksum()
 	}
@@ -192,10 +207,9 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		return 0, errors.New("invalid freelist page type")
 	}
 
-	count := n.Count()
+	count := int(n.Count())
 	if count > 0 {
-		body := page.DecodeFreelistBody(data[page.PageHeaderSize:], count)
-		id := body.FreeIDs[count-1]
+		id := freelistIDAt(data, count-1)
 
 		target := hint
 		if target == 0 {
@@ -205,8 +219,8 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		if a.regionPages > 0 && a.regionRadius > 0 && target != 0 {
 			targetRegion := target / a.regionPages
 			idx := -1
-			for i := int(count) - 1; i >= 0; i-- {
-				candidate := body.FreeIDs[i]
+			for i := count - 1; i >= 0; i-- {
+				candidate := freelistIDAt(data, i)
 				candidateRegion := candidate / a.regionPages
 				var diff uint64
 				if candidateRegion >= targetRegion {
@@ -221,15 +235,12 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 				}
 			}
 			if idx >= 0 {
-				lastIdx := int(count) - 1
+				lastIdx := count - 1
 				if idx != lastIdx {
-					body.FreeIDs[idx] = body.FreeIDs[lastIdx]
+					setFreelistIDAt(data, idx, freelistIDAt(data, lastIdx))
 				}
-				body.FreeIDs = body.FreeIDs[:lastIdx]
-				body.Encode(data[page.PageHeaderSize:])
-				slotOff := page.PageHeaderSize + 8 + lastIdx*8
-				clear(data[slotOff : slotOff+8])
-				n.SetCount(count - 1)
+				clearFreelistIDAt(data, lastIdx)
+				n.SetCount(uint16(lastIdx))
 				n.UpdateChecksum()
 
 				a.pager.MarkUnverified(id)
@@ -238,12 +249,9 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 			}
 		}
 
-		lastIdx := int(count) - 1
-		body.FreeIDs = body.FreeIDs[:lastIdx]
-		body.Encode(data[page.PageHeaderSize:])
-		slotOff := page.PageHeaderSize + 8 + lastIdx*8
-		clear(data[slotOff : slotOff+8])
-		n.SetCount(count - 1)
+		lastIdx := count - 1
+		clearFreelistIDAt(data, lastIdx)
+		n.SetCount(uint16(lastIdx))
 		n.UpdateChecksum()
 
 		a.pager.MarkUnverified(id)
@@ -251,8 +259,7 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 		return id, nil
 	}
 
-	body := page.DecodeFreelistBody(data[page.PageHeaderSize:], 0)
-	next := body.NextPageID
+	next := freelistNextPageID(data)
 
 	recycled := a.head
 	a.head = next

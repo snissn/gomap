@@ -138,28 +138,30 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 	if key == nil {
 		return nil
 	}
-	keyCopy := m.arena.Copy(key)
-	valCopy := m.encodeEntryValue(value, page.ValuePtr{}, node.FlagInline, false)
 	if cb != nil {
+		keyCopy := append([]byte(nil), key...)
+		valCopy := append([]byte(nil), value...)
 		if err := cb(keyCopy, valCopy); err != nil {
 			return err
 		}
 	}
-	keyStr := bytesToStringNoCopy(keyCopy)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valCopy, flags: node.FlagInline})
+	keyStored := m.arena.Copy(key)
+	valStored := m.encodeEntryValue(value, page.ValuePtr{}, node.FlagInline, false)
+	keyStr := bytesToStringNoCopy(keyStored)
+	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valStored, flags: node.FlagInline})
 	if replaced {
 		oldLen := len(prev.value)
 		if prev.flags&node.FlagTombstone != 0 {
 			oldLen = 0
 		}
-		m.sizeBytes += int64(len(valCopy) - oldLen)
+		m.sizeBytes += int64(len(valStored) - oldLen)
 		return nil
 	}
-	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
+	m.sizeBytes += int64(len(keyStored) + len(valStored))
 	if !m.hasLast || keyStr > m.lastKey {
 		m.lastKey = keyStr
 		m.hasLast = true
@@ -175,13 +177,12 @@ func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	if key == nil {
 		return
 	}
-	keyCopy := m.arena.Copy(key)
-	valCopy := m.encodeEntryValue(value, ptr, flags, false)
-	keyStr := bytesToStringNoCopy(keyCopy)
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	keyCopy := m.arena.Copy(key)
+	valCopy := m.encodeEntryValue(value, ptr, flags, false)
+	keyStr := bytesToStringNoCopy(keyCopy)
 	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valCopy, flags: flags})
 	if replaced {
 		oldLen := len(prev.value)
@@ -202,12 +203,12 @@ func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) 
 	if key == nil {
 		return
 	}
-	keyStr := bytesToStringNoCopy(key)
-	valCopy := m.encodeEntryValue(value, ptr, flags, true)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	keyStr := bytesToStringNoCopy(key)
+	valCopy := m.encodeEntryValue(value, ptr, flags, true)
 	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valCopy, flags: flags})
 	if replaced {
 		oldLen := len(prev.value)
@@ -232,17 +233,18 @@ func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 	if key == nil {
 		return nil
 	}
-	keyCopy := m.arena.Copy(key)
 	if cb != nil {
+		keyCopy := append([]byte(nil), key...)
 		if err := cb(keyCopy, nil); err != nil {
 			return err
 		}
 	}
-	keyStr := bytesToStringNoCopy(keyCopy)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	keyStored := m.arena.Copy(key)
+	keyStr := bytesToStringNoCopy(keyStored)
 	prev, replaced := m.tree.Set(keyStr, btreeEntry{flags: node.FlagTombstone})
 	if replaced {
 		if prev.flags&node.FlagTombstone == 0 {
@@ -250,7 +252,7 @@ func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 		}
 		return nil
 	}
-	m.sizeBytes += int64(len(keyCopy))
+	m.sizeBytes += int64(len(keyStored))
 	return nil
 }
 

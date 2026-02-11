@@ -9,12 +9,19 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
-func TestAtomicStats(t *testing.T) {
-	// Setup a minimal DB instance with adaptive mode enabled
+func newAdaptiveStatsDB(mode memtable.Mode) *DB {
 	db := &DB{
 		memtableAdaptive: true,
 		memtableStats:    memtableStats{},
+		memtableMode:     mode,
 	}
+	db.memtableAdaptiveObserve.Store(true)
+	return db
+}
+
+func TestAtomicStats(t *testing.T) {
+	// Setup a minimal DB instance with adaptive mode enabled
+	db := newAdaptiveStatsDB(0)
 
 	// 1. Verify basic increments
 	db.noteWriteKey([]byte("a"))
@@ -44,6 +51,9 @@ func TestAtomicStats(t *testing.T) {
 	if got := db.memtableStats.writes.Load(); got != expectedWrites {
 		t.Errorf("concurrent writes = %d, want %d", got, expectedWrites)
 	}
+	if got := db.memtableStats.overwriteWrites.Load(); got != expectedWrites-2 {
+		t.Errorf("overwrite writes = %d, want %d", got, expectedWrites-2)
+	}
 
 	expectedIters := uint64(workers * iterations)
 	if got := db.memtableStats.iterators.Load(); got != expectedIters {
@@ -54,10 +64,7 @@ func TestAtomicStats(t *testing.T) {
 func TestNoteWriteKeyDeadlock(t *testing.T) {
 	// This test simulates high contention on noteWriteKey to check for
 	// deadlocks or race conditions in the new fine-grained locking.
-	db := &DB{
-		memtableAdaptive: true,
-		memtableStats:    memtableStats{},
-	}
+	db := newAdaptiveStatsDB(0)
 
 	done := make(chan struct{})
 	go func() {
@@ -85,6 +92,7 @@ func TestNoteWriteKeyDeadlock(t *testing.T) {
 					// Simulate occasionally resetting stats (like a rotation would)
 					if rng.Intn(100) == 0 {
 						db.memtableStats.writes.Store(0)
+						db.memtableStats.overwriteWrites.Store(0)
 						db.memtableStats.lastKeyMu.Lock()
 						db.memtableStats.hasLastKey = false
 						db.memtableStats.lastKeyMu.Unlock()
@@ -99,56 +107,64 @@ func TestNoteWriteKeyDeadlock(t *testing.T) {
 }
 
 func TestChooseAdaptiveMode(t *testing.T) {
-	db := &DB{
-		memtableAdaptive: true,
-		memtableStats:    memtableStats{},
-		memtableMode:     memtable.ModeSkiplist,
-	}
+	db := newAdaptiveStatsDB(memtable.ModeSkiplist)
 
 	// 1. Not enough data -> default
 	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeSkiplist {
 		t.Errorf("low data mode = %v, want %v", got, memtable.ModeSkiplist)
 	}
 
-	// 2. High sequential -> HashSorted
+	// 2. High sequential with low overwrites -> AppendOnly
 	// adaptiveMinWrites writes, 90% sequential
 	db.memtableStats.writes.Store(adaptiveMinWrites)
 	db.memtableStats.seqWrites.Store(adaptiveMinWrites * 9 / 10)
-	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
-		t.Errorf("sequential mode = %v, want %v", got, memtable.ModeHashSorted)
+	db.memtableStats.overwriteWrites.Store(0)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeAppendOnly {
+		t.Errorf("sequential mode = %v, want %v", got, memtable.ModeAppendOnly)
 	}
 
 	// 3. High range scans -> BTree
 	// Reset
 	db.memtableStats.writes.Store(adaptiveMinWrites)
 	db.memtableStats.seqWrites.Store(adaptiveMinWrites / 10) // Low seq
+	db.memtableStats.overwriteWrites.Store(0)
 	db.memtableStats.iterators.Store(100)
 	db.memtableStats.rangeIters.Store(80) // 80% range
 	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeBTree {
 		t.Errorf("range scan mode = %v, want %v", got, memtable.ModeBTree)
 	}
+
+	// 4. High overwrites -> HashSorted
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(adaptiveMinWrites)
+	db.memtableStats.overwriteWrites.Store(adaptiveMinWrites / 2)
+	db.memtableStats.iterators.Store(0)
+	db.memtableStats.rangeIters.Store(0)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
+		t.Errorf("overwrite mode = %v, want %v", got, memtable.ModeHashSorted)
+	}
 }
 
 func TestNoteWriteSortedRunMatchesPerKey_NoPrior(t *testing.T) {
-	perKey := &DB{memtableAdaptive: true}
+	perKey := newAdaptiveStatsDB(0)
 	perKey.noteWriteKey([]byte("a"))
 	perKey.noteWriteKey([]byte("b"))
 	perKey.noteWriteKey([]byte("c"))
 
-	run := &DB{memtableAdaptive: true}
+	run := newAdaptiveStatsDB(0)
 	run.noteWriteSortedRun([]byte("a"), []byte("c"), 3)
 
 	assertStatsEquivalent(t, perKey, run)
 }
 
 func TestNoteWriteSortedRunMatchesPerKey_WithPriorSmaller(t *testing.T) {
-	perKey := &DB{memtableAdaptive: true}
+	perKey := newAdaptiveStatsDB(0)
 	perKey.noteWriteKey([]byte("c"))
 	perKey.noteWriteKey([]byte("d"))
 	perKey.noteWriteKey([]byte("e"))
 	perKey.noteWriteKey([]byte("f"))
 
-	run := &DB{memtableAdaptive: true}
+	run := newAdaptiveStatsDB(0)
 	run.noteWriteKey([]byte("c"))
 	run.noteWriteSortedRun([]byte("d"), []byte("f"), 3)
 
@@ -156,12 +172,12 @@ func TestNoteWriteSortedRunMatchesPerKey_WithPriorSmaller(t *testing.T) {
 }
 
 func TestNoteWriteSortedRunMatchesPerKey_WithPriorGreater(t *testing.T) {
-	perKey := &DB{memtableAdaptive: true}
+	perKey := newAdaptiveStatsDB(0)
 	perKey.noteWriteKey([]byte("z"))
 	perKey.noteWriteKey([]byte("a"))
 	perKey.noteWriteKey([]byte("b"))
 
-	run := &DB{memtableAdaptive: true}
+	run := newAdaptiveStatsDB(0)
 	run.noteWriteKey([]byte("z"))
 	run.noteWriteSortedRun([]byte("a"), []byte("b"), 2)
 
@@ -176,6 +192,9 @@ func assertStatsEquivalent(t *testing.T, want, got *DB) {
 	}
 	if w, g := want.memtableStats.seqWrites.Load(), got.memtableStats.seqWrites.Load(); w != g {
 		t.Fatalf("seqWrites mismatch: want=%d got=%d", w, g)
+	}
+	if w, g := want.memtableStats.overwriteWrites.Load(), got.memtableStats.overwriteWrites.Load(); w != g {
+		t.Fatalf("overwriteWrites mismatch: want=%d got=%d", w, g)
 	}
 
 	want.memtableStats.lastKeyMu.Lock()

@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"bytes"
+	"encoding/binary"
 	"sort"
 	"sync"
 	"unsafe"
@@ -13,7 +14,10 @@ import (
 )
 
 const (
-	appendOnlyEstimatedBytesPerEntry = 32
+	// Size accounting uses key+value/pointer payload bytes, not the in-memory
+	// appendOnlyEntry struct footprint. A lower estimate reduces growth/copy
+	// churn for pointer-heavy write paths.
+	appendOnlyEstimatedBytesPerEntry = 24
 	appendOnlyMinInitialEntries      = 128
 	appendOnlyMaxInitialEntries      = 1 << 20
 	appendOnlyInlineKeyLen           = 8
@@ -32,12 +36,18 @@ type AppendOnly struct {
 	mu sync.RWMutex
 
 	entries   []appendOnlyEntry
+	latest    map[string]int
+	latest64  map[uint64]int
+	snapshot  []*appendOnlyEntry
+	indexBuf  []int
 	count     int
+	snapCount int
 	sizeBytes int64
 
-	ordered bool
-	hasLast bool
-	lastIdx int
+	ordered     bool
+	latestDirty bool
+	hasLast     bool
+	lastIdx     int
 }
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
@@ -59,6 +69,7 @@ func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 		ordered:   true,
 		hasLast:   false,
 		lastIdx:   -1,
+		snapCount: 0,
 		sizeBytes: 0,
 	}
 }
@@ -89,6 +100,13 @@ func appendOnlyKeyString(key []byte) string {
 	return unsafe.String(&key[0], len(key))
 }
 
+func appendOnlyKeyU64(key []byte) (uint64, bool) {
+	if len(key) != appendOnlyInlineKeyLen {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(key), true
+}
+
 func entryValueSize(flags byte, value []byte) int {
 	if flags&node.FlagPointer != 0 {
 		return page.ValuePtrSize + len(value)
@@ -97,6 +115,51 @@ func entryValueSize(flags byte, value []byte) int {
 		return 0
 	}
 	return len(value)
+}
+
+func (m *AppendOnly) clearSnapshotLocked() {
+	if m.snapshot != nil {
+		m.snapshot = m.snapshot[:0]
+	}
+	m.snapCount = 0
+}
+
+func (m *AppendOnly) rebuildLatestIndexLocked() {
+	if m.count == 0 {
+		if m.latest != nil {
+			clear(m.latest)
+		}
+		if m.latest64 != nil {
+			clear(m.latest64)
+		}
+		m.latestDirty = false
+		m.clearSnapshotLocked()
+		return
+	}
+	if m.latest != nil {
+		clear(m.latest)
+	}
+	if m.latest64 != nil {
+		clear(m.latest64)
+	}
+	reserve := m.count
+	active := m.entries[:m.count]
+	for i := range active {
+		k := appendOnlyEntryKey(&active[i])
+		if k64, ok := appendOnlyKeyU64(k); ok {
+			if m.latest64 == nil {
+				m.latest64 = make(map[uint64]int, reserve)
+			}
+			m.latest64[k64] = i
+			continue
+		}
+		if m.latest == nil {
+			m.latest = make(map[string]int, reserve)
+		}
+		m.latest[appendOnlyKeyString(k)] = i
+	}
+	m.latestDirty = false
+	m.clearSnapshotLocked()
 }
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) {
@@ -145,16 +208,20 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		m.hasLast = true
 		return
 	}
-	if !m.ordered {
-		return
-	}
-	prev := appendOnlyEntryKey(&m.entries[m.lastIdx])
-	cmp := bytes.Compare(k, prev)
-	if cmp <= 0 {
+	if m.ordered {
+		prev := appendOnlyEntryKey(&m.entries[m.lastIdx])
+		cmp := bytes.Compare(k, prev)
+		if cmp > 0 {
+			m.lastIdx = idx
+			return
+		}
 		m.ordered = false
+		m.latestDirty = true
+		m.clearSnapshotLocked()
 		return
 	}
-	m.lastIdx = idx
+	m.latestDirty = true
+	m.clearSnapshotLocked()
 }
 
 func (m *AppendOnly) Set(key, value []byte) {
@@ -248,6 +315,30 @@ func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []
 func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if !m.ordered && !m.latestDirty {
+		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
+			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
+				ent := &m.entries[idx]
+				if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					if ent.flags&node.FlagTombstone != 0 {
+						return nil, true, true
+					}
+					return ent.value, false, true
+				}
+			}
+		}
+		if m.latest != nil {
+			if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+				ent := &m.entries[idx]
+				if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					if ent.flags&node.FlagTombstone != 0 {
+						return nil, true, true
+					}
+					return ent.value, false, true
+				}
+			}
+		}
+	}
 	for i := m.count - 1; i >= 0; i-- {
 		ent := &m.entries[i]
 		if bytes.Equal(appendOnlyEntryKey(ent), key) {
@@ -263,6 +354,24 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if !m.ordered && !m.latestDirty {
+		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
+			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
+				ent := &m.entries[idx]
+				if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					return ent.value, ent.ptr, ent.flags, true
+				}
+			}
+		}
+		if m.latest != nil {
+			if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+				ent := &m.entries[idx]
+				if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					return ent.value, ent.ptr, ent.flags, true
+				}
+			}
+		}
+	}
 	for i := m.count - 1; i >= 0; i-- {
 		ent := &m.entries[i]
 		if bytes.Equal(appendOnlyEntryKey(ent), key) {
@@ -286,17 +395,46 @@ func (m *AppendOnly) Len() int {
 
 func (m *AppendOnly) Freeze() {}
 
-func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
+func (m *AppendOnly) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := 0; i < m.count; i++ {
+		m.entries[i] = appendOnlyEntry{}
+	}
+	clear(m.latest)
+	clear(m.latest64)
+	m.clearSnapshotLocked()
+	m.count = 0
+	m.sizeBytes = 0
+	m.ordered = true
+	m.latestDirty = false
+	m.hasLast = false
+	m.lastIdx = -1
+}
+
+func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 	if m.count == 0 {
 		return nil
 	}
-	active := m.entries[:m.count]
-	latest := make(map[string]int, len(active))
-	for i := range active {
-		latest[appendOnlyKeyString(appendOnlyEntryKey(&active[i]))] = i
+	if m.ordered {
+		return nil
 	}
-	indices := make([]int, 0, len(latest))
-	for _, idx := range latest {
+	if m.snapshot != nil && m.snapCount == m.count {
+		return m.snapshot
+	}
+	active := m.entries[:m.count]
+	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
+		m.rebuildLatestIndexLocked()
+	}
+	need := len(m.latest) + len(m.latest64)
+	indices := m.indexBuf[:0]
+	if cap(indices) < need {
+		indices = make([]int, 0, need)
+	}
+	for _, idx := range m.latest {
+		indices = append(indices, idx)
+	}
+	for _, idx := range m.latest64 {
 		indices = append(indices, idx)
 	}
 	sort.Slice(indices, func(i, j int) bool {
@@ -305,23 +443,53 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []appendOnlyEntry {
 			appendOnlyEntryKey(&active[indices[j]]),
 		) < 0
 	})
-	snapshot := make([]appendOnlyEntry, len(indices))
-	for i, idx := range indices {
-		snapshot[i] = active[idx]
+	snapshot := m.snapshot
+	if cap(snapshot) < len(indices) {
+		snapshot = make([]*appendOnlyEntry, len(indices))
+	} else {
+		snapshot = snapshot[:len(indices)]
 	}
+	for i, idx := range indices {
+		snapshot[i] = &active[idx]
+	}
+	m.indexBuf = indices[:0]
+	m.snapshot = snapshot
+	m.snapCount = m.count
 	return snapshot
 }
 
 func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RLock()
-	entries := m.entries[:m.count]
-	if !m.ordered {
-		entries = m.buildSortedLatestSnapshotLocked()
+	if m.ordered {
+		entries := m.entries[:m.count]
+		it := &appendOnlyIterator{
+			entries: entries,
+			end:     end,
+			mu:      &m.mu,
+		}
+		if start != nil {
+			it.Seek(start)
+		}
+		return it
 	}
+	m.mu.RUnlock()
+
+	// Unordered iterators need a sorted latest-key view. Build/update shared
+	// caches under an exclusive lock, then copy the snapshot so iteration does
+	// not hold the write lock for its lifetime.
+	m.mu.Lock()
+	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
+	entries := make([]appendOnlyEntry, len(snapshotPtrs))
+	for i := range snapshotPtrs {
+		if snapshotPtrs[i] != nil {
+			entries[i] = *snapshotPtrs[i]
+		}
+	}
+	m.mu.Unlock()
+
 	it := &appendOnlyIterator{
 		entries: entries,
 		end:     end,
-		mu:      &m.mu,
 	}
 	if start != nil {
 		it.Seek(start)

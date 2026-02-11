@@ -1025,6 +1025,12 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 		if unitPayloadBytes <= 0 {
 			unitPayloadBytes = rawPayloadBytes
 		}
+		if dictID == 0 && db.forceValueLogPointers && unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
+			return vlogWriteBlock, db.valueLogBlockCodec, false
+		}
+		if dictID == 0 && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && unitPayloadBytes >= throughputAutoBlockMinPayloadBytes {
+			return vlogWriteBlock, db.valueLogBlockCodec, false
+		}
 		if dictID == 0 && unitPayloadBytes >= 2048 && normalizeVlogAutoPolicy(db.valueLogAutoPolicy) != vlogAutoThroughput {
 			// For large payloads in balanced/size policies, prefer the stable lz4
 			// block path and avoid per-write selector overhead in the hot path.
@@ -1040,14 +1046,31 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 	}
 }
 
-func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, storedPayloadBytes int, probe bool, wallNs int64) {
+func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, unitPayloadBytes, storedPayloadBytes int, probe bool, wallNs int64) {
 	if db == nil || l == nil {
 		return
+	}
+	if unitPayloadBytes <= 0 {
+		unitPayloadBytes = rawPayloadBytes
 	}
 	if mode == vlogWriteBlock {
 		observeLaneVlogBlockRatio(l, blockCodec, rawPayloadBytes, storedPayloadBytes)
 	}
 	if normalizeVlogCompressionMode(db.valueLogCompressionMode) != vlogCompressionAuto {
+		return
+	}
+	if normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput &&
+		mode == vlogWriteBlock &&
+		unitPayloadBytes >= throughputAutoBlockMinPayloadBytes {
+		// Throughput policy forces block mode for medium+ payloads in resolve.
+		// Skip selector updates here to avoid unnecessary per-write churn.
+		return
+	}
+	if db.forceValueLogPointers &&
+		mode == vlogWriteBlock &&
+		unitPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
+		// Force-pointer large-value writes run on a stable block path; skip
+		// selector updates to keep the hot path lean.
 		return
 	}
 	if l.vlogCompressionSelector == nil {

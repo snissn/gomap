@@ -2,8 +2,11 @@ package zipper
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"math/rand"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -227,5 +230,110 @@ func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
 		if got[i] != k {
 			t.Fatalf("key[%d] = %q, want %q (all=%v)", i, got[i], k, got)
 		}
+	}
+}
+
+func TestShortestSeparatorBE8Bounds(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	left := make([]byte, 8)
+	right := make([]byte, 8)
+
+	for i := 0; i < 200000; i++ {
+		a := rng.Uint64()
+		b := rng.Uint64()
+		if a == b {
+			continue
+		}
+		if a > b {
+			a, b = b, a
+		}
+		binary.BigEndian.PutUint64(left, a)
+		binary.BigEndian.PutUint64(right, b)
+
+		sep := shortestSeparator(left, right)
+		if bytes.Compare(sep, left) <= 0 {
+			t.Fatalf("separator not > left: left=%x right=%x sep=%x", left, right, sep)
+		}
+		if bytes.Compare(sep, right) > 0 {
+			t.Fatalf("separator > right: left=%x right=%x sep=%x", left, right, sep)
+		}
+	}
+}
+
+func TestMergeLeaf_ReturnsGrownSplitKeyArenaToPool(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+
+	rootID, err := p.Alloc(1)
+	if err != nil {
+		t.Fatalf("alloc root: %v", err)
+	}
+	data, err := p.Get(rootID)
+	if err != nil {
+		t.Fatalf("get root: %v", err)
+	}
+	n := node.NewNode(data)
+	n.SetPageID(rootID)
+	n.SetType(page.PageTypeLeaf)
+	n.UpdateChecksum()
+
+	prevHook := TestHookPutLeafSplitKeyArena
+	var maxReturnedCap atomic.Int64
+	TestHookPutLeafSplitKeyArena = func(capacity int) {
+		for {
+			cur := maxReturnedCap.Load()
+			if int64(capacity) <= cur {
+				return
+			}
+			if maxReturnedCap.CompareAndSwap(cur, int64(capacity)) {
+				return
+			}
+		}
+	}
+	t.Cleanup(func() {
+		TestHookPutLeafSplitKeyArena = prevHook
+	})
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+
+	prefix := bytes.Repeat([]byte{'k'}, 1022)
+	value := bytes.Repeat([]byte("v"), 8)
+	for i := 0; i < 240; i++ {
+		key := make([]byte, len(prefix)+2)
+		copy(key, prefix)
+		binary.BigEndian.PutUint16(key[len(prefix):], uint16(i))
+		b.Set(key, value)
+	}
+
+	newRootID, _, _, err := z.Apply(rootID, b)
+	if err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	tr := tree.New(p, panicValueReader{}, newRootID)
+	for _, idx := range []int{0, 120, 239} {
+		key := make([]byte, len(prefix)+2)
+		copy(key, prefix)
+		binary.BigEndian.PutUint16(key[len(prefix):], uint16(idx))
+		gotVal, getErr := tr.Get(key)
+		if getErr != nil {
+			t.Fatalf("Get(%d) failed: %v", idx, getErr)
+		}
+		if !bytes.Equal(gotVal, value) {
+			t.Fatalf("Get(%d) value mismatch: got=%q want=%q", idx, gotVal, value)
+		}
+	}
+
+	got := int(maxReturnedCap.Load())
+	if got <= leafSplitKeyArenaInitCap {
+		t.Fatalf("expected returned split-key arena cap > %d after growth, got %d", leafSplitKeyArenaInitCap, got)
 	}
 }

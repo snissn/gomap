@@ -1,6 +1,7 @@
 package page
 
 import (
+	"encoding/binary"
 	"testing"
 	"unsafe"
 )
@@ -107,6 +108,26 @@ func TestCRC32C(t *testing.T) {
 	sum := Checksum(data)
 	if sum != expected {
 		t.Errorf("Checksum mismatch. Got 0x%x, want 0x%x", sum, expected)
+	}
+}
+
+func TestUpdateChecksum(t *testing.T) {
+	data := make([]byte, PageSize)
+	for i := range data {
+		data[i] = byte((i * 17) & 0xff)
+	}
+	binary.LittleEndian.PutUint32(data[8:12], 0xdeadbeef)
+
+	want := CalculateChecksum(data)
+	got := UpdateChecksum(data)
+	if got != want {
+		t.Fatalf("UpdateChecksum returned 0x%x, want 0x%x", got, want)
+	}
+	if binary.LittleEndian.Uint32(data[8:12]) != want {
+		t.Fatalf("header checksum not updated: got 0x%x want 0x%x", binary.LittleEndian.Uint32(data[8:12]), want)
+	}
+	if !VerifyChecksumNonMutating(data) {
+		t.Fatalf("checksum should verify after UpdateChecksum")
 	}
 }
 

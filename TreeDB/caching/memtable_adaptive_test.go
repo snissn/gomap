@@ -17,7 +17,7 @@ func TestAdaptiveMemtableMode_SwitchesAfterWarmupRotation(t *testing.T) {
 		AllowUnsafe:              true,
 		DisableWAL:               true,
 		FlushThreshold:           1 << 30,
-		MemtableMode:             "adaptive",
+		MemtableMode:             "adaptive:skiplist",
 		MemtableShards:           1,
 		ValueLogPointerThreshold: 1 << 20,
 	})
@@ -63,7 +63,7 @@ func TestAdaptiveMemtableMode_SwitchesAfterWarmupRotation(t *testing.T) {
 	}
 }
 
-func TestAdaptiveMemtableMode_SequentialWritesSwitchToHashSorted(t *testing.T) {
+func TestAdaptiveMemtableMode_SequentialWritesSwitchToAppendOnly(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
@@ -103,7 +103,74 @@ func TestAdaptiveMemtableMode_SequentialWritesSwitchToHashSorted(t *testing.T) {
 	if got := stats["treedb.cache.memtable_warmup_active"]; got != "false" {
 		t.Fatalf("expected warmup to be finished after rotation, got %q", got)
 	}
+	if got := stats["treedb.cache.memtable_mode"]; got != "append_only" {
+		t.Fatalf("expected sequential workload to switch to append_only, got %q", got)
+	}
+}
+
+func TestAdaptiveMemtableMode_DefaultAdaptiveStartsWarmup(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		FlushThreshold:           1 << 30,
+		MemtableMode:             "adaptive",
+		MemtableShards:           1,
+		ValueLogPointerThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.memtable_mode_config"]; got != "adaptive" {
+		t.Fatalf("expected adaptive memtable config, got %q", got)
+	}
+	if got := stats["treedb.cache.memtable_warmup_active"]; got != "true" {
+		t.Fatalf("expected default adaptive mode to start with warmup active, got %q", got)
+	}
+}
+
+func TestAdaptiveMemtableMode_DefaultAdaptiveOverwriteHeavySwitchesToHashSorted(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		FlushThreshold:           1 << 30,
+		MemtableMode:             "adaptive",
+		MemtableShards:           1,
+		ValueLogPointerThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	const uniqueKeys = adaptiveMinWrites + 1200
+	value := make([]byte, 8<<10) // 8KiB
+
+	for i := 0; i < uniqueKeys; i++ {
+		var key [16]byte
+		binary.BigEndian.PutUint64(key[8:16], uint64(i))
+		// First write introduces a new key; second write is an overwrite.
+		if err := db.Set(key[:], value); err != nil {
+			t.Fatalf("Set(first %d): %v", i, err)
+		}
+		if err := db.Set(key[:], value); err != nil {
+			t.Fatalf("Set(overwrite %d): %v", i, err)
+		}
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.memtable_warmup_active"]; got != "false" {
+		t.Fatalf("expected warmup to be finished after rotation, got %q", got)
+	}
 	if got := stats["treedb.cache.memtable_mode"]; got != "hash_sorted" {
-		t.Fatalf("expected sequential workload to switch to hash_sorted, got %q", got)
+		t.Fatalf("expected overwrite-heavy adaptive workload to switch to hash_sorted, got %q", got)
 	}
 }

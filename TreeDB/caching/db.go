@@ -304,6 +304,8 @@ const (
 	maxMemtablePrealloc              = 256 << 20
 	adaptiveMinWrites                = 1024
 	adaptiveSequentialWritePct       = 0.85
+	adaptiveRangeIteratorPct         = 0.40
+	adaptiveOverwriteWritePct        = 0.25
 	adaptiveWarmupBytes              = 16 * 1024 * 1024
 	maxMemtableBytesPerShard         = int64(3 << 30)
 	maxVlogPreparedBodyPoolCap       = 8 << 20
@@ -1949,6 +1951,7 @@ type DB struct {
 	memtableMode              memtable.Mode
 	memtableStats             memtableStats
 	memtableAdaptive          bool
+	memtableAdaptiveObserve   atomic.Bool
 	adaptiveShardedStats      bool
 	memtableWarmupActive      bool
 	memtableWarmupThreshold   int64
@@ -2184,13 +2187,14 @@ func (db *DB) ensureQueueLaneIDsLocked() {
 }
 
 type memtableStats struct {
-	writes     atomic.Uint64
-	seqWrites  atomic.Uint64
-	iterators  atomic.Uint64
-	rangeIters atomic.Uint64
-	lastKeyMu  sync.Mutex
-	lastKey    []byte
-	hasLastKey bool
+	writes          atomic.Uint64
+	seqWrites       atomic.Uint64
+	overwriteWrites atomic.Uint64
+	iterators       atomic.Uint64
+	rangeIters      atomic.Uint64
+	lastKeyMu       sync.Mutex
+	lastKey         []byte
+	hasLastKey      bool
 }
 
 func (r *keyRange) add(key []byte) {
@@ -2325,18 +2329,20 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 	}
 	db.memtableStats.writes.Store(0)
 	db.memtableStats.seqWrites.Store(0)
+	db.memtableStats.overwriteWrites.Store(0)
 	db.memtableStats.iterators.Store(0)
 	db.memtableStats.rangeIters.Store(0)
 	db.memtableStats.lastKeyMu.Lock()
 	db.memtableStats.hasLastKey = false
 	db.memtableStats.lastKeyMu.Unlock()
+	db.updateAdaptiveObservationLocked()
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 	return nil
 }
 
 func (db *DB) noteWriteKey(key []byte) {
-	if !db.memtableAdaptive {
+	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() {
 		return
 	}
 	stats := &db.memtableStats
@@ -2349,8 +2355,12 @@ func (db *DB) noteWriteKey(key []byte) {
 	}
 	stats.lastKeyMu.Lock()
 	defer stats.lastKeyMu.Unlock()
-	if stats.hasLastKey && bytes.Compare(stats.lastKey, key) < 0 {
-		stats.seqWrites.Add(1)
+	if stats.hasLastKey {
+		if bytes.Equal(stats.lastKey, key) {
+			stats.overwriteWrites.Add(1)
+		} else if bytes.Compare(stats.lastKey, key) < 0 {
+			stats.seqWrites.Add(1)
+		}
 	}
 	stats.lastKey = append(stats.lastKey[:0], key...)
 	stats.hasLastKey = true
@@ -2358,7 +2368,7 @@ func (db *DB) noteWriteKey(key []byte) {
 
 // noteWriteSortedRun records a strictly increasing key run in one shot.
 func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
-	if !db.memtableAdaptive || count <= 0 {
+	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() || count <= 0 {
 		return
 	}
 	stats := &db.memtableStats
@@ -2386,7 +2396,7 @@ func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
 }
 
 func (db *DB) noteIterator(start, end []byte) {
-	if !db.memtableAdaptive {
+	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() {
 		return
 	}
 	stats := &db.memtableStats
@@ -2412,6 +2422,7 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	// Read stats atomially (no global lock needed for counts)
 	writes := db.memtableStats.writes.Load()
 	seqWrites := db.memtableStats.seqWrites.Load()
+	overwriteWrites := db.memtableStats.overwriteWrites.Load()
 	iters := db.memtableStats.iterators.Load()
 	rangeIters := db.memtableStats.rangeIters.Load()
 
@@ -2420,26 +2431,39 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 		return db.memtableMode
 	}
 
-	// Heuristics:
-	// 1. High sequential writes -> use HashSorted (append-only speed)
-	//    Threshold: > 80% sequential
-	if float64(seqWrites)/float64(writes) > 0.8 {
-		return memtable.ModeHashSorted
+	seqWritePct := float64(seqWrites) / float64(writes)
+	overwriteWritePct := float64(overwriteWrites) / float64(writes)
+	rangeIterPct := 0.0
+	if iters > 0 {
+		rangeIterPct = float64(rangeIters) / float64(iters)
 	}
 
-	// 2. High range iteration -> use BTree (better range scan performance)
-	//    Threshold: significant portion of ops are range scans
-	if iters > 0 && float64(rangeIters)/float64(iters) > 0.5 {
+	// 1) Range-heavy read paths benefit most from BTree order stability.
+	if rangeIterPct >= adaptiveRangeIteratorPct {
 		return memtable.ModeBTree
 	}
 
-	// 3. Random writes dominating -> use HashSorted
+	// 2) Mostly increasing writes with low overwrite pressure favor append-only.
+	if seqWritePct >= adaptiveSequentialWritePct && overwriteWritePct < adaptiveOverwriteWritePct {
+		return memtable.ModeAppendOnly
+	}
+
+	// 3) Overwrite-heavy or mixed-write traffic defaults to hash-sorted.
 	return memtable.ModeHashSorted
+}
+
+func (db *DB) updateAdaptiveObservationLocked() {
+	observe := db.memtableAdaptive
+	if observe && !db.memtableWarmupActive && db.memtableMode == memtable.ModeAppendOnly {
+		observe = false
+	}
+	db.memtableAdaptiveObserve.Store(observe)
 }
 
 func (db *DB) applyAdaptiveMemtableModeLocked() memtable.Mode {
 	desired := db.chooseAdaptiveMemtableModeLocked()
 	db.memtableMode = desired
+	db.updateAdaptiveObservationLocked()
 	return desired
 }
 
@@ -2458,7 +2482,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	adaptive := false
 	if modeStr == "adaptive" || modeStr == "auto" {
 		adaptive = true
-		modeStr = ""
+		modeStr = "append_only"
 	} else if strings.HasPrefix(modeStr, "adaptive:") {
 		adaptive = true
 		modeStr = strings.TrimPrefix(modeStr, "adaptive:")
@@ -2930,6 +2954,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	db.updateAdaptiveObservationLocked()
 	nowNS := time.Now().UnixNano()
 	db.materializationLastDrainUnixNano.Store(nowNS)
 	db.publishWatermarkLastUnixNano = nowNS
@@ -4864,7 +4889,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			}
 			policySetter.SetKeepPolicy(ioNsPerStored, encodeNsPerRaw, keepSafetyMargin)
 		}
-		db.setVlogWriterMode(w, plan.writeMode, plan.blockCodec)
+		db.setVlogWriterMode(l, w, plan.writeMode, plan.blockCodec)
 		planStart := time.Now()
 		beforePlanSize := w.Size()
 		planStoredBytes := 0
@@ -5113,7 +5138,11 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			if plan.writeMode != vlogWriteBlock {
 				codec = db.valueLogBlockCodec
 			}
-			db.observeVlogWriteMode(l, plan.writeMode, codec, rawForSelector, storedForSelector, plan.probe, plan.wallNs)
+			unitForSelector := rawForSelector
+			if recordsInPlan := plan.end - plan.start; recordsInPlan > 0 {
+				unitForSelector = rawForSelector / recordsInPlan
+			}
+			db.observeVlogWriteMode(l, plan.writeMode, codec, rawForSelector, unitForSelector, storedForSelector, plan.probe, plan.wallNs)
 		}
 	}
 
@@ -5726,7 +5755,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		l.vlogCaps = computeVlogWriterCaps(w)
 	}
 	caps := l.vlogCaps
-	db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+	db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
@@ -5778,7 +5807,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 					l.vlogCaps = computeVlogWriterCaps(w)
 				}
 				caps = l.vlogCaps
-				db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+				db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 				statsWriter = caps.stats
 				statsWriterInto = caps.statsInto
 				rawWriterInto = caps.rawInto
@@ -5881,7 +5910,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 						l.vlogCaps = computeVlogWriterCaps(w)
 					}
 					caps = l.vlogCaps
-					db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+					db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 					statsWriter = caps.stats
 					statsWriterInto = caps.statsInto
 					hasStats = statsWriter != nil
@@ -6033,6 +6062,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if rawForSelector == 0 {
 		rawForSelector = rawPayloadBytes
 	}
+	unitForSelector := rawForSelector
+	if n := len(records); n > 0 {
+		unitForSelector = rawForSelector / n
+	}
 	storedForSelector := storedPayloadBytes
 	if storedForSelector <= 0 {
 		switch finalWriteMode {
@@ -6047,7 +6080,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 	selectorWallNs := time.Since(selectorStart).Nanoseconds()
-	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, rawForSelector, storedForSelector, probeCompression, selectorWallNs)
+	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, rawForSelector, unitForSelector, storedForSelector, probeCompression, selectorWallNs)
 
 	if bytesWrittenLive > 0 {
 		l.vlogLiveBytes.Add(bytesWrittenLive)
@@ -6227,7 +6260,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 				l.vlogCaps = computeVlogWriterCaps(w)
 			}
 			caps := l.vlogCaps
-			db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+			db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 			policySetter := caps.keep
 			startSize := w.Size()
 
@@ -6326,7 +6359,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 				}
 			}
 			selectorWallNs := time.Since(selectorStart).Nanoseconds()
-			db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), storedForSelector, probeCompression, selectorWallNs)
+			db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), len(value), storedForSelector, probeCompression, selectorWallNs)
 			return ptr, retainPath, nil
 		}
 
@@ -6384,7 +6417,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		l.vlogCaps = computeVlogWriterCaps(w)
 	}
 	caps := l.vlogCaps
-	db.setVlogWriterMode(w, finalWriteMode, finalBlockCodec)
+	db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
@@ -6525,7 +6558,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		}
 	}
 	selectorWallNs := time.Since(selectorStart).Nanoseconds()
-	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), storedForSelector, probeCompression, selectorWallNs)
+	db.observeVlogWriteMode(l, finalWriteMode, finalBlockCodec, len(value), len(value), storedForSelector, probeCompression, selectorWallNs)
 	if totalBytes > 0 {
 		l.vlogLiveBytes.Add(totalBytes)
 	}
@@ -7432,6 +7465,8 @@ func (db *DB) Close() error {
 			l.vlogCaps = vlogWriterCaps{}
 			l.vlogLiveBytes.Store(0)
 		}
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
 		l.vlogMu.Unlock()
 	}
 
@@ -7570,13 +7605,6 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	debugPtr := db.debugFlushPointers
 
 	shard := db.shardForKey(key)
-	shard.mu.Lock()
-	if db.shardExceedsLimit(shard, int64(len(key)+len(value))) {
-		shard.mu.Unlock()
-		db.writeMu.RUnlock()
-		return ErrMemtableFull
-	}
-	shard.mu.Unlock()
 
 	durability := journalDurabilityNone
 	if sync {
@@ -7593,6 +7621,24 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
 		allowPointers = false
+	}
+	addBytesForLimit := int64(len(key) + len(value))
+	if allowPointers && db.memtableValueLogPointers {
+		// Pointer-in-memtable mode stores only the key plus packed pointer payload.
+		addBytesForLimit = int64(len(key) + page.ValuePtrSize)
+	}
+	if maxMemtableBytesPerShard > 0 {
+		if addBytesForLimit > maxMemtableBytesPerShard {
+			db.writeMu.RUnlock()
+			return ErrMemtableFull
+		}
+		shard.mu.Lock()
+		exceedsLimit := db.shardExceedsLimit(shard, addBytesForLimit)
+		shard.mu.Unlock()
+		if exceedsLimit {
+			db.writeMu.RUnlock()
+			return ErrMemtableFull
+		}
 	}
 	if debugPtr && eligible {
 		db.debugPtrEligible.Add(1)
@@ -7963,6 +8009,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
+				db.updateAdaptiveObservationLocked()
 			}
 
 			db.queue = nil
@@ -8023,6 +8070,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
 				db.memtableWarmupActive = false
+				db.updateAdaptiveObservationLocked()
 			}
 
 			db.queue = nil
@@ -8432,6 +8480,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
+		db.updateAdaptiveObservationLocked()
 	}
 	db.mutableBytes.Store(0)
 	enqueueNS := time.Now().UnixNano()
@@ -8545,6 +8594,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	}
 	if db.memtableWarmupActive {
 		db.memtableWarmupActive = false
+		db.updateAdaptiveObservationLocked()
 	}
 	var walPaths []string
 	if !db.disableJournal {
@@ -8627,6 +8677,8 @@ func (db *DB) cleanupLaneWALWriters(l *lane) {
 		l.vlog = nil
 		l.vlogCaps = vlogWriterCaps{}
 	}
+	l.vlogModeSet = false
+	l.vlogModeWriter = nil
 	l.vlogMu.Unlock()
 }
 
@@ -8644,8 +8696,11 @@ func (db *DB) defaultVlogWriteMode() vlogCompressionWriteMode {
 	}
 }
 
-func (db *DB) setVlogWriterMode(w valueWriter, mode vlogCompressionWriteMode, codec valuelog.BlockCodec) {
+func (db *DB) setVlogWriterMode(l *lane, w valueWriter, mode vlogCompressionWriteMode, codec valuelog.BlockCodec) {
 	if db == nil || w == nil {
+		return
+	}
+	if l != nil && l.vlogModeSet && l.vlogModeWriter == w && l.vlogMode == mode && l.vlogBlockCodec == codec {
 		return
 	}
 	setter, ok := any(w).(blockCompressionSetter)
@@ -8653,6 +8708,12 @@ func (db *DB) setVlogWriterMode(w valueWriter, mode vlogCompressionWriteMode, co
 		return
 	}
 	setter.SetBlockCompression(codec, mode == vlogWriteBlock)
+	if l != nil {
+		l.vlogModeWriter = w
+		l.vlogModeSet = true
+		l.vlogMode = mode
+		l.vlogBlockCodec = codec
+	}
 }
 
 func (db *DB) rotateWALLocked(l *lane) error {
@@ -8737,7 +8798,10 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 			return err
 		}
 		l.vlog.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
-		db.setVlogWriterMode(l.vlog, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
+		// Rotation can reset writer internals; force mode reapply.
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
+		db.setVlogWriterMode(l, l.vlog, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
 		if setter, ok := any(l.vlog).(rawWritevStrategySetter); ok {
 			setter.SetRawWritevStrategy(db.valueLogRawWritevMinAvgBytes, db.valueLogRawWritevMinRecords)
 		}
@@ -8759,7 +8823,9 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 			return err
 		}
 		w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
-		db.setVlogWriterMode(w, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
+		l.vlogModeSet = false
+		l.vlogModeWriter = nil
+		db.setVlogWriterMode(l, w, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
 		w.SetRawWritevStrategy(db.valueLogRawWritevMinAvgBytes, db.valueLogRawWritevMinRecords)
 		l.vlog = w
 		l.vlogLiveBytes.Store(0)
@@ -10598,6 +10664,23 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.memtable_mode_config"] = "adaptive"
 	} else {
 		stats["treedb.cache.memtable_mode_config"] = "fixed"
+	}
+	memWrites := db.memtableStats.writes.Load()
+	memSeqWrites := db.memtableStats.seqWrites.Load()
+	memOverwriteWrites := db.memtableStats.overwriteWrites.Load()
+	memIters := db.memtableStats.iterators.Load()
+	memRangeIters := db.memtableStats.rangeIters.Load()
+	stats["treedb.cache.memtable_stats.writes"] = fmt.Sprintf("%d", memWrites)
+	stats["treedb.cache.memtable_stats.seq_writes"] = fmt.Sprintf("%d", memSeqWrites)
+	stats["treedb.cache.memtable_stats.overwrite_writes"] = fmt.Sprintf("%d", memOverwriteWrites)
+	if memWrites > 0 {
+		stats["treedb.cache.memtable_stats.seq_write_pct"] = fmt.Sprintf("%.4f", float64(memSeqWrites)/float64(memWrites))
+		stats["treedb.cache.memtable_stats.overwrite_write_pct"] = fmt.Sprintf("%.4f", float64(memOverwriteWrites)/float64(memWrites))
+	}
+	stats["treedb.cache.memtable_stats.iterators"] = fmt.Sprintf("%d", memIters)
+	stats["treedb.cache.memtable_stats.range_iterators"] = fmt.Sprintf("%d", memRangeIters)
+	if memIters > 0 {
+		stats["treedb.cache.memtable_stats.range_iter_pct"] = fmt.Sprintf("%.4f", float64(memRangeIters)/float64(memIters))
 	}
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)

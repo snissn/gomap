@@ -2,7 +2,9 @@ package zipper
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"math/bits"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -47,6 +49,25 @@ func shortestSeparator(left, right []byte) []byte {
 	if bytes.Compare(left, right) >= 0 {
 		return append([]byte(nil), right...)
 	}
+	if len(left) == 8 && len(right) == 8 {
+		lv := binary.BigEndian.Uint64(left)
+		rv := binary.BigEndian.Uint64(right)
+		if lv < rv {
+			x := lv ^ rv
+			if x != 0 {
+				i := bits.LeadingZeros64(x) / 8
+				lb := left[i]
+				rb := right[i]
+				if int(lb)+1 < int(rb) {
+					sep := make([]byte, i+1)
+					copy(sep, left[:i])
+					sep[i] = lb + 1
+					return sep
+				}
+			}
+		}
+		return append([]byte(nil), right...)
+	}
 
 	n := len(left)
 	if len(right) < n {
@@ -66,6 +87,65 @@ func shortestSeparator(left, right []byte) []byte {
 		return sep
 	}
 	return append([]byte(nil), right...)
+}
+
+func cloneKeyIntoArena(src []byte, arena *[]byte) []byte {
+	if len(src) == 0 {
+		return []byte{}
+	}
+	start := len(*arena)
+	*arena = append(*arena, src...)
+	return (*arena)[start : start+len(src)]
+}
+
+func shortestSeparatorIntoArena(left, right []byte, arena *[]byte) []byte {
+	if len(right) == 0 {
+		return nil
+	}
+	if len(left) == 0 {
+		return cloneKeyIntoArena(right, arena)
+	}
+	if bytes.Compare(left, right) >= 0 {
+		return cloneKeyIntoArena(right, arena)
+	}
+	if len(left) == 8 && len(right) == 8 {
+		lv := binary.BigEndian.Uint64(left)
+		rv := binary.BigEndian.Uint64(right)
+		if lv < rv {
+			x := lv ^ rv
+			if x != 0 {
+				i := bits.LeadingZeros64(x) / 8
+				lb := left[i]
+				rb := right[i]
+				if int(lb)+1 < int(rb) {
+					start := len(*arena)
+					*arena = append(*arena, left[:i]...)
+					*arena = append(*arena, lb+1)
+					return (*arena)[start : start+i+1]
+				}
+			}
+		}
+		return cloneKeyIntoArena(right, arena)
+	}
+
+	n := len(left)
+	if len(right) < n {
+		n = len(right)
+	}
+	i := 0
+	for i < n && left[i] == right[i] {
+		i++
+	}
+	if i == n {
+		return cloneKeyIntoArena(right, arena)
+	}
+	if left[i]+1 < right[i] {
+		start := len(*arena)
+		*arena = append(*arena, left[:i]...)
+		*arena = append(*arena, left[i]+1)
+		return (*arena)[start : start+i+1]
+	}
+	return cloneKeyIntoArena(right, arena)
 }
 
 type internalEntry struct {
@@ -101,6 +181,42 @@ const (
 var internalKeyArenaPool = sync.Pool{
 	New: func() any {
 		return make([]byte, 0, internalKeyArenaInitCap)
+	},
+}
+
+const (
+	leafSplitKeyArenaInitCap = page.PageSize
+	leafSplitKeyArenaMaxCap  = 1 << 16
+)
+
+var leafSplitKeyArenaPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, leafSplitKeyArenaInitCap)
+	},
+}
+
+// TestHookPutLeafSplitKeyArena is a test-only hook that observes the capacity
+// of the slice returned to the split-key arena pool.
+var TestHookPutLeafSplitKeyArena func(capacity int)
+
+func putInternalKeyArena(arena []byte) {
+	if cap(arena) <= internalKeyArenaMaxCap {
+		internalKeyArenaPool.Put(arena[:0])
+	}
+}
+
+func putLeafSplitKeyArena(arena []byte) {
+	if TestHookPutLeafSplitKeyArena != nil {
+		TestHookPutLeafSplitKeyArena(cap(arena))
+	}
+	if cap(arena) <= leafSplitKeyArenaMaxCap {
+		leafSplitKeyArenaPool.Put(arena[:0])
+	}
+}
+
+var leafBuilderPool = sync.Pool{
+	New: func() any {
+		return &node.Builder{}
 	},
 }
 
@@ -272,6 +388,26 @@ func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
 	return node.NewBuilder(data, page.PageTypeLeaf)
 }
 
+func (z *Zipper) newPooledLeafBuilder(data []byte) *node.Builder {
+	b := leafBuilderPool.Get().(*node.Builder)
+	opts := node.BuilderOptions{
+		LeafPrefixCompression: z != nil && z.leafPrefixCompression,
+		LeafColumnar:          z != nil && z.indexColumnarLeaves,
+		PackedValuePtr:        z != nil && z.indexPackedValuePtr,
+		InternalBaseDelta:     z != nil && z.indexInternalBaseDelta,
+	}
+	b.ResetWithOptions(data, page.PageTypeLeaf, opts)
+	return b
+}
+
+func releasePooledLeafBuilder(b *node.Builder) {
+	if b == nil {
+		return
+	}
+	b.ReleaseScratch()
+	leafBuilderPool.Put(b)
+}
+
 func (z *Zipper) newBuilderForType(data []byte, typ page.PageType) *node.Builder {
 	if typ == page.PageTypeLeaf {
 		return z.newLeafBuilder(data)
@@ -344,7 +480,8 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 		budget = newMaintenanceBudget(len(ops), deleteCount, z.maintenanceOpsPerCoalesce)
 	}
 
-	newRoot, splits, retired, err := z.writeRecursive(rootID, ops, maintenance, budget, &metrics, nil, nil)
+	var retired []uint64
+	newRoot, splits, err := z.writeRecursive(rootID, ops, maintenance, budget, &metrics, nil, nil, &retired)
 	if err != nil {
 		return 0, nil, metrics, err
 	}
@@ -409,7 +546,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 				}
 				if err == node.ErrNodeFull {
 					// Finish current
-					_ = currentBuilder.Finish()
+					currentBuilder.FinishNoNode()
 					// Promote
 					nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, NodeID: currentBuilder.PageID()})
 
@@ -436,7 +573,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 
 				// If this was the last child, finish
 				if i == len(currentLevelNodes)-1 {
-					_ = currentBuilder.Finish()
+					currentBuilder.FinishNoNode()
 					nextLevelNodes = append(nextLevelNodes, Split{Key: currentStartKey, NodeID: currentBuilder.PageID()})
 					currentBuilder = nil
 				}
@@ -451,24 +588,24 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 }
 
 // writeRecursive handles the COW merge.
-// Returns: newPageID, splits, retiredPages, error.
-func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte) (uint64, []Split, []uint64, error) {
+// Returns: newPageID, splits, error.
+func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64) (uint64, []Split, error) {
 	// 1. Allocate New Page (COW)
 	// Hint: Try to stay near the old page to preserve general tree locality structure
 	newPageID, err := z.allocator.Alloc(pageID)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, err
 	}
 
 	newData, err := z.pager.GetForWrite(newPageID)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, err
 	}
 
 	// Zero-Copy Read: Use Get instead of ReadPage
 	oldData, err := z.pager.Get(pageID)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, err
 	}
 	oldNode := node.NewNode(oldData)
 
@@ -476,34 +613,31 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 	builder := z.newBuilderForType(newData, oldNode.Type())
 	builder.SetPageID(newPageID)
 
-	// Track retired page
-	var retired []uint64
-	if pageID != 0 {
-		retired = append(retired, pageID)
+	// Track retired page in caller-owned accumulator.
+	if retired != nil && pageID != 0 {
+		*retired = append(*retired, pageID)
 	}
 
 	if oldNode.Type() == page.PageTypeLeaf {
 		// Merge Leaf
 		nr, splits, err := z.mergeLeaf(oldNode, builder, ops, metrics)
 		if err == nil {
-			n := builder.Finish() // Finish writes header/checksum
+			builder.FinishNoNode() // Finish writes header/checksum
 			// Update Metrics
 			metrics.IndexWriteBytes += page.PageSize
-			metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+			metrics.LeafFill += float64(page.PageSize-builder.FreeSpace()) / float64(page.PageSize)
 		}
-		return nr, splits, retired, err
+		return nr, splits, err
 	} else if oldNode.Type() == page.PageTypeInternal {
 		// Internal merge
 		builder.SetInternalFenceBounds(low, high)
-		nr, splits, childRetired, err := z.mergeInternal(oldNode, builder, ops, maintenance, budget, metrics, low, high)
+		nr, splits, err := z.mergeInternal(oldNode, builder, ops, maintenance, budget, metrics, retired, low, high)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, err
 		}
 
 		n := builder.Finish()
 		metrics.IndexWriteBytes += page.PageSize
-
-		retired = append(retired, childRetired...)
 
 		// If this internal page collapsed to a single child and produced no splits,
 		// skip writing the redundant level by returning the child directly.
@@ -512,28 +646,30 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		if len(splits) == 0 && n.Count() == 1 {
 			childID, err := n.GetInternalChildID(0)
 			if err == nil {
-				retired = append(retired, nr)
-				return childID, nil, retired, nil
+				if retired != nil {
+					*retired = append(*retired, nr)
+				}
+				return childID, nil, nil
 			}
 		}
-		return nr, splits, retired, nil
-	} else {
-		// Handle Page 0 / Empty / New Tree case
-		if oldNode.Type() == 0 {
-			// Reuse builder, set type
-			builder = z.newLeafBuilder(newData)
-			builder.SetPageID(newPageID)
-
-			nr, splits, err := z.mergeLeaf(oldNode, builder, ops, metrics)
-			if err == nil {
-				n := builder.Finish()
-				metrics.IndexWriteBytes += page.PageSize
-				metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
-			}
-			return nr, splits, retired, err
-		}
-		return 0, nil, nil, page.ErrInvalidPageType
+		return nr, splits, nil
 	}
+
+	// Handle Page 0 / Empty / New Tree case
+	if oldNode.Type() == 0 {
+		// Reuse builder, set type
+		builder = z.newLeafBuilder(newData)
+		builder.SetPageID(newPageID)
+
+		nr, splits, err := z.mergeLeaf(oldNode, builder, ops, metrics)
+		if err == nil {
+			builder.FinishNoNode()
+			metrics.IndexWriteBytes += page.PageSize
+			metrics.LeafFill += float64(page.PageSize-builder.FreeSpace()) / float64(page.PageSize)
+		}
+		return nr, splits, err
+	}
+	return 0, nil, page.ErrInvalidPageType
 }
 
 func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, metrics *adaptive.Metrics) (uint64, []Split, error) {
@@ -542,13 +678,25 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	opIdx := 0
 
 	var splits []Split
+	splitKeyArena := leafSplitKeyArenaPool.Get().([]byte)[:0]
+	defer func() { putLeafSplitKeyArena(splitKeyArena) }()
 
 	// Current target builder
 	target := builder
+	targetPooled := false
+	defer func() {
+		if target != builder && targetPooled {
+			releasePooledLeafBuilder(target)
+		}
+	}()
 
 	for {
 		// Pick next key: min(oldNode[oldIdx], ops[opIdx])
 		var useBatch bool
+		var oldLoaded bool
+		var oldKey, oldVal []byte
+		var oldPtr page.ValuePtr
+		var oldFlags byte
 
 		if oldIdx >= oldCount && opIdx >= len(ops) {
 			break
@@ -560,11 +708,17 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// useOld = true
 		} else {
 			// Compare
-			// Optimization: GetLeafEntryView (Zero Copy)
-			k, _, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
+			// Optimization: decode old entry once; reuse it below when we
+			// consume from oldNode in the same loop iteration.
+			k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
 			if err != nil {
 				return 0, nil, err
 			}
+			oldLoaded = true
+			oldKey = k
+			oldVal = v
+			oldPtr = ptr
+			oldFlags = f
 			batchKey := ops[opIdx].Key
 
 			cmp := bytes.Compare(k, batchKey)
@@ -610,21 +764,31 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 		} else {
 			// useOld
-			// Optimization: View
-			k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
-			if err != nil {
-				return 0, nil, err
+			if oldLoaded {
+				key = oldKey
+				flags = oldFlags
+				if oldFlags&node.FlagPointer != 0 {
+					valPtr = oldPtr
+				} else {
+					val = oldVal
+				}
+			} else {
+				// Optimization: View
+				k, v, ptr, f, err := oldNode.GetLeafEntryView(oldIdx)
+				if err != nil {
+					return 0, nil, err
+				}
+				key = k
+				flags = f
+				if f&node.FlagPointer != 0 {
+					valPtr = ptr
+				} else {
+					val = v
+				}
 			}
 			oldIdx++
-			key = k
-			if f&node.FlagTombstone != 0 {
+			if flags&node.FlagTombstone != 0 {
 				continue // Skip tombstones
-			}
-			flags = f
-			if f&node.FlagPointer != 0 {
-				valPtr = ptr
-			} else {
-				val = v
 			}
 		}
 
@@ -638,17 +802,28 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 		if err == node.ErrNodeFull {
 			// SPLIT!
+			// Capture the left boundary key before target may be returned to the
+			// builder pool (and potentially reused/reset).
+			allocHint := target.PageID()
+			var leftMax []byte
+			if lm := target.LeafPrevKey(); len(lm) > 0 {
+				leftMax = cloneKeyIntoArena(lm, &splitKeyArena)
+			}
 
 			// 1. Finish current target (writes header/checksum)
 			if target != builder {
-				n := target.Finish()
+				target.FinishNoNode()
 				metrics.IndexWriteBytes += page.PageSize
-				metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+				metrics.LeafFill += float64(page.PageSize-target.FreeSpace()) / float64(page.PageSize)
 				metrics.Splits++
+				if targetPooled {
+					releasePooledLeafBuilder(target)
+					targetPooled = false
+				}
 			}
 
 			// 2. Allocate NEW split node
-			sid, err := z.allocator.Alloc(target.PageID())
+			sid, err := z.allocator.Alloc(allocHint)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -659,17 +834,23 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 
 			// New Builder
-			splitBuilder := z.newLeafBuilder(sdata)
+			splitBuilder := z.newPooledLeafBuilder(sdata)
 			splitBuilder.SetPageID(sid)
 
 			// Record split
-			splitKey := append([]byte(nil), key...) // Deep copy
-			if leftMax := target.LeafPrevKey(); len(leftMax) > 0 {
-				splitKey = shortestSeparator(leftMax, key)
+			var splitKey []byte
+			if len(leftMax) > 0 {
+				splitKey = shortestSeparatorIntoArena(leftMax, key, &splitKeyArena)
+			} else {
+				splitKey = cloneKeyIntoArena(key, &splitKeyArena)
 			}
+			// Split keys escape this call via the returned []Split, so clone out of
+			// the local arena before appending.
+			splitKey = append([]byte(nil), splitKey...)
 			splits = append(splits, Split{Key: splitKey, NodeID: sid})
 
 			target = splitBuilder
+			targetPooled = true
 
 			// Retry insert
 			entrySize, prefixLen, suffixLen = target.LeafEntrySizeWithPrefix(key, val, flags)
@@ -684,10 +865,14 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 	// Finalize last split node
 	if target != builder {
-		n := target.Finish()
+		target.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
-		metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-target.FreeSpace()) / float64(page.PageSize)
 		metrics.Splits++
+		if targetPooled {
+			releasePooledLeafBuilder(target)
+			targetPooled = false
+		}
 	}
 
 	// 'builder' is finalized by caller.
@@ -695,12 +880,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	return builder.PageID(), splits, nil
 }
 
-func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte) (uint64, []Split, []uint64, error) {
+func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, retired *[]uint64, low, high []byte) (uint64, []Split, error) {
 	count := oldNode.Count()
 
 	var splits []Split
-
-	var retired []uint64
 
 	var err error
 
@@ -720,11 +903,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		} else {
 			keyArena = make([]byte, 0, internalKeyArenaInitCap)
 		}
-		defer func() {
-			if cap(keyArena) <= internalKeyArenaMaxCap {
-				internalKeyArenaPool.Put(keyArena[:0])
-			}
-		}()
+		defer func() { putInternalKeyArena(keyArena) }()
 	}
 	cloneKey := func(src []byte) []byte {
 		if !copyKeys || len(src) == 0 {
@@ -772,7 +951,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if count > 0 {
 			curKey, curChild, err = oldNode.GetInternalEntryView(0)
 			if err != nil {
-				return 0, nil, nil, err
+				return 0, nil, err
 			}
 			if curKey == nil {
 				curKey = []byte{}
@@ -789,7 +968,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			if i+1 < count {
 				nextKey, nextChild, err = oldNode.GetInternalEntryView(i + 1)
 				if err != nil {
-					return 0, nil, nil, err
+					return 0, nil, err
 				}
 				if nextKey == nil {
 					nextKey = []byte{}
@@ -814,21 +993,19 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			newChildID := curChild
 			var childSplits []Split
 			if len(childOps) > 0 {
-				var childRet []uint64
-				newChildID, childSplits, childRet, err = z.writeRecursive(curChild, childOps, maintenance, budget, metrics, lowKey, childHigh)
+				newChildID, childSplits, err = z.writeRecursive(curChild, childOps, maintenance, budget, metrics, lowKey, childHigh, retired)
 				if err != nil {
-					return 0, nil, nil, err
+					return 0, nil, err
 				}
-				retired = append(retired, childRet...)
 			}
 
 			if err := appendInternal(lowKey, newChildID, firstEntry); err != nil {
-				return 0, nil, nil, err
+				return 0, nil, err
 			}
 			firstEntry = false
 			for _, s := range childSplits {
 				if err := appendInternal(s.Key, s.NodeID, firstEntry); err != nil {
-					return 0, nil, nil, err
+					return 0, nil, err
 				}
 				firstEntry = false
 			}
@@ -838,10 +1015,10 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 
 		if target != builder {
-			_ = target.Finish()
+			target.FinishNoNode()
 			metrics.IndexWriteBytes += page.PageSize
 		}
-		return builder.PageID(), splits, retired, nil
+		return builder.PageID(), splits, nil
 	}
 
 	children := getChildWorkSlice(int(count))
@@ -850,7 +1027,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	for i := uint16(0); i < count; i++ {
 		key, childID, err := oldNode.GetInternalEntryView(i)
 		if err != nil {
-			return 0, nil, nil, err
+			return 0, nil, err
 		}
 		if key == nil {
 			key = []byte{}
@@ -922,7 +1099,8 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 					continue
 				}
 				var childMetrics adaptive.Metrics
-				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, budget, &childMetrics, children[i].low, children[i].high)
+				childRet := children[i].retired[:0]
+				ncID, cs, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, budget, &childMetrics, children[i].low, children[i].high, &childRet)
 				if err != nil {
 					errOnce.Do(func() { firstErr = err })
 					continue
@@ -939,28 +1117,26 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 		wg.Wait()
 		if firstErr != nil {
-			return 0, nil, nil, firstErr
+			return 0, nil, firstErr
 		}
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				continue
 			}
 			mergeMetrics(metrics, &children[i].childStat)
-			if len(children[i].retired) > 0 {
-				retired = append(retired, children[i].retired...)
+			if retired != nil && len(children[i].retired) > 0 {
+				*retired = append(*retired, children[i].retired...)
 			}
 		}
 	} else {
 		for i := range children {
 			if len(children[i].ops) > 0 {
-				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, budget, metrics, children[i].low, children[i].high)
+				ncID, cs, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, budget, metrics, children[i].low, children[i].high, retired)
 				if err != nil {
-					return 0, nil, nil, err
+					return 0, nil, err
 				}
 				children[i].newChild = ncID
 				children[i].splits = cs
-				children[i].retired = childRet
-				retired = append(retired, childRet...)
 			} else {
 				children[i].newChild = children[i].childID
 			}
@@ -972,21 +1148,21 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		for i := range children {
 			child := &children[i]
 			if err := appendInternal(child.key, child.newChild, firstEntry); err != nil {
-				return 0, nil, nil, err
+				return 0, nil, err
 			}
 			firstEntry = false
 			for _, s := range child.splits {
 				if err := appendInternal(s.Key, s.NodeID, firstEntry); err != nil {
-					return 0, nil, nil, err
+					return 0, nil, err
 				}
 				firstEntry = false
 			}
 		}
 		if target != builder {
-			_ = target.Finish()
+			target.FinishNoNode()
 			metrics.IndexWriteBytes += page.PageSize
 		}
-		return builder.PageID(), splits, retired, nil
+		return builder.PageID(), splits, nil
 	}
 
 	totalEntries := len(children)
@@ -998,14 +1174,14 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	for i := range children {
 		child := children[i]
 		if child.newChild >= z.pager.PageCount() {
-			return 0, nil, nil, errors.New("zipper: detected OOB child ID")
+			return 0, nil, errors.New("zipper: detected OOB child ID")
 		}
 		entries = append(entries, internalEntry{key: child.key, child: child.newChild})
 
 		// Add sibling splits
 		for _, s := range child.splits {
 			if s.NodeID >= z.pager.PageCount() {
-				return 0, nil, nil, errors.New("zipper: detected OOB child ID (split)")
+				return 0, nil, errors.New("zipper: detected OOB child ID (split)")
 			}
 			entries = append(entries, internalEntry{key: s.Key, child: s.NodeID})
 		}
@@ -1015,35 +1191,35 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	var extraRetired []uint64
 	coalesced, extraRetired, err = z.coalesceLeafChildren(entries, budget, metrics)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, err
 	}
-	if len(extraRetired) > 0 {
-		retired = append(retired, extraRetired...)
+	if retired != nil && len(extraRetired) > 0 {
+		*retired = append(*retired, extraRetired...)
 	}
 
 	coalesced, extraRetired, err = z.coalesceInternalChildren(coalesced, budget, metrics)
 	if err != nil {
-		return 0, nil, nil, err
+		return 0, nil, err
 	}
-	if len(extraRetired) > 0 {
-		retired = append(retired, extraRetired...)
+	if retired != nil && len(extraRetired) > 0 {
+		*retired = append(*retired, extraRetired...)
 	}
 
 	// Write final internal entries, splitting if needed.
 	for i := range coalesced {
 		if err := appendInternal(coalesced[i].key, coalesced[i].child, i == 0); err != nil {
-			return 0, nil, nil, err
+			return 0, nil, err
 		}
 	}
 
 	// Finalize last split node
 	if target != builder {
-		_ = target.Finish()
+		target.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 	}
 
 	// builder finalized by caller.
-	return builder.PageID(), splits, retired, nil
+	return builder.PageID(), splits, nil
 }
 
 func mergeMetrics(dst, src *adaptive.Metrics) {
@@ -1200,9 +1376,9 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			return 0, false, err
 		}
 
-		n := b.Finish()
+		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
-		metrics.LeafFill += float64(page.PageSize-n.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-b.FreeSpace()) / float64(page.PageSize)
 		return pid, true, nil
 	}
 
@@ -1238,7 +1414,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 				return 0, err
 			}
 		}
-		b.Finish()
+		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 		return pid, nil
 	}
@@ -1370,11 +1546,11 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			}
 		}
 
-		ln := lb.Finish()
-		rn := rb.Finish()
+		lb.FinishNoNode()
+		rb.FinishNoNode()
 		metrics.IndexWriteBytes += 2 * page.PageSize
-		metrics.LeafFill += float64(page.PageSize-ln.FreeSpace()) / float64(page.PageSize)
-		metrics.LeafFill += float64(page.PageSize-rn.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-lb.FreeSpace()) / float64(page.PageSize)
+		metrics.LeafFill += float64(page.PageSize-rb.FreeSpace()) / float64(page.PageSize)
 		return lid, rid, rightStart, true, nil
 	}
 
@@ -1594,7 +1770,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 			return 0, false, err
 		}
 
-		_ = b.Finish()
+		b.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 		return pid, true, nil
 	}
@@ -1705,8 +1881,8 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 				}
 				return nil, false, err
 			}
-			lb2.Finish()
-			rb2.Finish()
+			lb2.FinishNoNode()
+			rb2.FinishNoNode()
 			rs := combined[splitAt].key
 			if rs == nil {
 				rs = []byte{}
@@ -1834,7 +2010,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder, splits *[]Split, key []byte, val uint64, metrics *adaptive.Metrics) (*node.Builder, error) {
 	// 1. Finish current (if not rootBuilder)
 	if currentTarget != rootBuilder {
-		_ = currentTarget.Finish()
+		currentTarget.FinishNoNode()
 		metrics.IndexWriteBytes += page.PageSize
 	}
 
