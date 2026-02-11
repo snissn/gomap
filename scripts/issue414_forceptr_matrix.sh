@@ -140,10 +140,11 @@ for valsize in "${valsize_list[@]}"; do
 
         if [[ "$profiled_run" = "1" ]]; then
           ./bin/benchprof -profiles-dir "$run_dir" >"$run_dir/benchprof.log" 2>&1
-          ops=$("$PYTHON_BIN" - "$run_dir/benchprof_results.json" <<'PY'
+          ops=$("$PYTHON_BIN" - "$run_dir/benchprof_results.json" "$TEST" <<'PY'
 import json
 import sys
 path = sys.argv[1]
+requested = [t.strip() for t in (sys.argv[2] if len(sys.argv) > 2 else "").split(",") if t.strip()]
 with open(path, "r", encoding="utf-8") as f:
     data = json.load(f)
 runs = data.get("runs") or []
@@ -151,16 +152,25 @@ if not runs:
     print("nan")
     raise SystemExit(0)
 results = runs[0].get("results") or {}
-test_name = next(iter(results.keys()), None)
-if not test_name:
+if not results:
     print("nan")
     raise SystemExit(0)
+if not requested:
+    requested = list(results.keys())
+test_name = None
+for candidate in requested:
+    if candidate in results:
+        test_name = candidate
+        break
+if not test_name:
+    available = ",".join(sorted(results.keys()))
+    raise SystemExit(f"missing requested test in benchprof results; requested={requested} available={available}")
 db_vals = results.get(test_name) or {}
 v = db_vals.get("TreeDB")
 if v is None:
-    print("nan")
-else:
-    print(v)
+    available = ",".join(sorted(db_vals.keys()))
+    raise SystemExit(f"missing TreeDB metric for test={test_name}; labels={available}")
+print(v)
 PY
 )
           top_target=$("$PYTHON_BIN" - "$run_dir/insights.json" <<'PY'
@@ -197,15 +207,25 @@ import re
 import sys
 
 path = sys.argv[1]
-test_name = sys.argv[2] if len(sys.argv) > 2 else ""
+requested_tests = [t.strip() for t in (sys.argv[2] if len(sys.argv) > 2 else "").split(",") if t.strip()]
 lines = open(path, "r", encoding="utf-8").read().splitlines()
+
+def title_test(t: str) -> str:
+    return " ".join(w.capitalize() for w in t.split("_"))
 
 # Fast path: progress-style output.
 text = "\n".join(lines)
-m = re.findall(r"/ TreeDB = ([0-9,]+)", text)
-if m:
-    print(m[-1].replace(",", ""))
-    raise SystemExit(0)
+if requested_tests:
+    for t in requested_tests:
+        m = re.findall(rf"^{re.escape(title_test(t))} / TreeDB = ([0-9,]+)\s*$", text, flags=re.M)
+        if m:
+            print(m[-1].replace(",", ""))
+            raise SystemExit(0)
+else:
+    m = re.findall(r"/ TreeDB = ([0-9,]+)", text)
+    if m:
+        print(m[-1].replace(",", ""))
+        raise SystemExit(0)
 
 # Fallback: markdown table output.
 header = None
@@ -227,6 +247,7 @@ except ValueError:
     print("nan")
     raise SystemExit(0)
 
+requested_names = {title_test(t) for t in requested_tests}
 value = None
 for line in lines:
     s = line.strip()
@@ -235,7 +256,7 @@ for line in lines:
     cols = [c.strip() for c in s.strip("|").split("|")]
     if not cols or len(cols) <= treedb_idx:
         continue
-    if test_name and cols[0] != test_name:
+    if requested_names and cols[0] not in requested_names:
         continue
     if set(cols[0]) == {"-"}:
         continue
