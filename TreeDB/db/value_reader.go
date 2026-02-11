@@ -15,6 +15,10 @@ type unsafeAppendReader interface {
 	ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error)
 }
 
+type unsafeAppendBatchReader interface {
+	ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error)
+}
+
 // ValueReaderForState returns a reader that resolves value-log pointers.
 func ValueReaderForState(state *DBState) tree.SlabReader {
 	if state == nil {
@@ -58,5 +62,27 @@ func (r valueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, er
 		return nil, err
 	}
 	dst = append(dst[:0], val...)
+	return dst, nil
+}
+
+func (r valueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error) {
+	if len(ptrs) == 0 {
+		return dst[:0], nil
+	}
+	if app, ok := r.vlogs.(unsafeAppendBatchReader); ok {
+		return app.ReadUnsafeAppendBatch(ptrs, dst)
+	}
+	if cap(dst) < len(ptrs) {
+		dst = make([][]byte, len(ptrs))
+	} else {
+		dst = dst[:len(ptrs)]
+	}
+	for i, ptr := range ptrs {
+		var err error
+		dst[i], err = r.ReadUnsafeAppend(ptr, dst[i][:0])
+		if err != nil {
+			return nil, err
+		}
+	}
 	return dst, nil
 }
