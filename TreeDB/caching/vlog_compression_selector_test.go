@@ -325,6 +325,33 @@ func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadRespectsConfiguredLar
 	}
 }
 
+func TestChooseValueLogBlockWriteK_ThroughputFastPathUsesAveragePayload(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode:  uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:       uint8(vlogAutoThroughput),
+		valueLogBlockTargetBytes: 4096,
+	}
+	selector := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	l := &lane{vlogCompressionSelector: selector}
+
+	records := 64
+	avgPayloadBytes := throughputAutoBlockMinPayloadBytes / 2
+	rawPayloadBytes := records * avgPayloadBytes
+
+	got := db.chooseValueLogBlockWriteK(l, records, rawPayloadBytes, valuelog.BlockCodecSnappy)
+	want := valuelog.ChooseBlockGroupK(
+		records,
+		rawPayloadBytes,
+		db.valueLogBlockTargetBytes,
+		selector.blockObservedRatio(valuelog.BlockCodecSnappy),
+	)
+	if got != want {
+		t.Fatalf("expected selector-ratio K for small average payloads, got=%d want=%d", got, want)
+	}
+	if got <= 1 {
+		t.Fatalf("expected K>1 when avg payload=%d is below throughput fast-path threshold=%d", avgPayloadBytes, throughputAutoBlockMinPayloadBytes)
+	}
+}
 func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadKDistributionGuardrail(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode:  uint8(vlogCompressionBlock),

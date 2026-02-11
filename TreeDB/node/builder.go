@@ -36,34 +36,55 @@ type Builder struct {
 	leafIndex             int
 
 	leafColumnarV2Entries  []leafColumnarV2Entry
+	leafColumnarV2EntriesH *leafColumnarV2EntriesHandle
 	leafColumnarV2Arena    []byte
+	leafColumnarV2ArenaH   *byteArenaHandle
 	leafColumnarV2KeyBytes int
 	leafColumnarV2ValBytes int
 
-	leafColumnarPrefixV2Entries    []leafColumnarPrefixV2Entry
-	leafColumnarPrefixV2KeyBytes   int
-	leafColumnarPrefixV2ValBytes   int
-	leafColumnarPrefixV2AllInline  bool
-	leafColumnarPrefixV2ValueArena []byte
+	leafColumnarPrefixV2Entries     []leafColumnarPrefixV2Entry
+	leafColumnarPrefixV2EntriesH    *leafColumnarPrefixV2EntriesHandle
+	leafColumnarPrefixV2KeyBytes    int
+	leafColumnarPrefixV2ValBytes    int
+	leafColumnarPrefixV2AllInline   bool
+	leafColumnarPrefixV2AllPointer  bool
+	leafColumnarPrefixV2ValueArena  []byte
+	leafColumnarPrefixV2ValueArenaH *byteArenaHandle
 
 	internalBaseEntries       []internalBaseDeltaEntry
+	internalBaseEntriesH      *internalBaseEntriesHandle
 	internalBaseArena         []byte
+	internalBaseArenaH        *byteArenaHandle
 	internalBaseTotalKeyBytes int
 }
 
 const internalBaseDeltaFooterTailSize = 14 // u16 lowLen + u16 highLen + u16 prefixLen + u64 baseChildID
 
+type byteArenaHandle struct {
+	buf []byte
+}
+
+type leafColumnarV2EntriesHandle struct {
+	entries []leafColumnarV2Entry
+}
+
+type leafColumnarPrefixV2EntriesHandle struct {
+	entries []leafColumnarPrefixV2Entry
+}
+
+type internalBaseEntriesHandle struct {
+	entries []internalBaseDeltaEntry
+}
+
 var leafColumnarV2ArenaPool = sync.Pool{
 	New: func() any {
-		buf := make([]byte, page.PageSize)
-		return buf[:0]
+		return &byteArenaHandle{buf: make([]byte, 0, page.PageSize)}
 	},
 }
 
 var leafColumnarPrefixV2ValueArenaPool = sync.Pool{
 	New: func() any {
-		buf := make([]byte, page.PageSize)
-		return buf[:0]
+		return &byteArenaHandle{buf: make([]byte, 0, page.PageSize)}
 	},
 }
 
@@ -76,26 +97,31 @@ const (
 
 var leafColumnarV2EntriesPool = sync.Pool{
 	New: func() any {
-		return make([]leafColumnarV2Entry, 0, leafColumnarEntriesPoolInitCap)
+		return &leafColumnarV2EntriesHandle{
+			entries: make([]leafColumnarV2Entry, 0, leafColumnarEntriesPoolInitCap),
+		}
 	},
 }
 
 var leafColumnarPrefixV2EntriesPool = sync.Pool{
 	New: func() any {
-		return make([]leafColumnarPrefixV2Entry, 0, leafColumnarEntriesPoolInitCap)
+		return &leafColumnarPrefixV2EntriesHandle{
+			entries: make([]leafColumnarPrefixV2Entry, 0, leafColumnarEntriesPoolInitCap),
+		}
 	},
 }
 
 var internalBaseEntriesPool = sync.Pool{
 	New: func() any {
-		return make([]internalBaseDeltaEntry, 0, internalBaseEntriesPoolInitCap)
+		return &internalBaseEntriesHandle{
+			entries: make([]internalBaseDeltaEntry, 0, internalBaseEntriesPoolInitCap),
+		}
 	},
 }
 
 var internalBaseArenaPool = sync.Pool{
 	New: func() any {
-		buf := make([]byte, page.PageSize)
-		return buf[:0]
+		return &byteArenaHandle{buf: make([]byte, 0, page.PageSize)}
 	},
 }
 
@@ -159,21 +185,38 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 	if pType == page.PageTypeLeaf && opts.LeafColumnar {
 		if leafPrefix {
 			b.leafColumnarPrefixV2AllInline = true
-			if pooled, ok := leafColumnarPrefixV2EntriesPool.Get().([]leafColumnarPrefixV2Entry); ok {
-				b.leafColumnarPrefixV2Entries = pooled[:0]
+			b.leafColumnarPrefixV2AllPointer = true
+			if pooled, ok := leafColumnarPrefixV2EntriesPool.Get().(*leafColumnarPrefixV2EntriesHandle); ok {
+				if cap(pooled.entries) == 0 {
+					pooled.entries = make([]leafColumnarPrefixV2Entry, 0, leafColumnarEntriesPoolInitCap)
+				}
+				b.leafColumnarPrefixV2EntriesH = pooled
+				b.leafColumnarPrefixV2Entries = pooled.entries[:0]
 			}
 		} else if leafColumnarV2 {
-			if pooled, ok := leafColumnarV2EntriesPool.Get().([]leafColumnarV2Entry); ok {
-				b.leafColumnarV2Entries = pooled[:0]
+			if pooled, ok := leafColumnarV2EntriesPool.Get().(*leafColumnarV2EntriesHandle); ok {
+				if cap(pooled.entries) == 0 {
+					pooled.entries = make([]leafColumnarV2Entry, 0, leafColumnarEntriesPoolInitCap)
+				}
+				b.leafColumnarV2EntriesH = pooled
+				b.leafColumnarV2Entries = pooled.entries[:0]
 			}
 		}
 	}
 	if pType == page.PageTypeInternal && opts.InternalBaseDelta {
-		if pooled, ok := internalBaseEntriesPool.Get().([]internalBaseDeltaEntry); ok {
-			b.internalBaseEntries = pooled[:0]
+		if pooled, ok := internalBaseEntriesPool.Get().(*internalBaseEntriesHandle); ok {
+			if cap(pooled.entries) == 0 {
+				pooled.entries = make([]internalBaseDeltaEntry, 0, internalBaseEntriesPoolInitCap)
+			}
+			b.internalBaseEntriesH = pooled
+			b.internalBaseEntries = pooled.entries[:0]
 		}
-		if arena, ok := internalBaseArenaPool.Get().([]byte); ok {
-			b.internalBaseArena = arena[:0]
+		if arena, ok := internalBaseArenaPool.Get().(*byteArenaHandle); ok {
+			if arena.buf == nil {
+				arena.buf = make([]byte, 0, page.PageSize)
+			}
+			b.internalBaseArenaH = arena
+			b.internalBaseArena = arena.buf[:0]
 		}
 	}
 	return b
@@ -466,6 +509,9 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 		valueOff, valueLen = b.leafColumnarPrefixV2AppendValueBytes(value)
 	} else {
 		b.leafColumnarPrefixV2AllInline = false
+	}
+	if flags&FlagPointer == 0 {
+		b.leafColumnarPrefixV2AllPointer = false
 	}
 
 	b.leafColumnarPrefixV2Entries = append(b.leafColumnarPrefixV2Entries, leafColumnarPrefixV2Entry{
@@ -813,6 +859,7 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 	suffixArena := b.leafColumnarV2Arena
 	valueArena := b.leafColumnarPrefixV2ValueArena
 	allInline := b.leafColumnarPrefixV2AllInline
+	allPointer := b.leafColumnarPrefixV2AllPointer
 	flagsCol := b.data[flagsStart:prefixStart]
 	prefixCol := b.data[prefixStart:metaEnd]
 
@@ -852,6 +899,72 @@ func (b *Builder) finishLeafColumnarPrefixV2() {
 				flagsCol[i] = e.flags
 				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
 			}
+		}
+
+		b.dirEnd = metaEnd
+		b.heapStart = valuesStart
+		b.releaseLeafColumnarPrefixV2Scratch()
+		return
+	}
+
+	if allPointer {
+		if len(suffixArena) != b.leafColumnarPrefixV2KeyBytes {
+			panic("leaf columnar+prefix v2 pointer arena size mismatch")
+		}
+		copy(b.data[suffixStart:], suffixArena)
+
+		valOff := valuesStart
+		if builderNativeLittleEndian {
+			keyDirU16 := bytesAsUint16Slice(b.data[keyDirStart:valDirStart])
+			valDirU16 := bytesAsUint16Slice(b.data[valDirStart:flagsStart])
+			if prefixStart&1 == 0 {
+				prefixDirU16 := bytesAsUint16Slice(prefixCol)
+				for i := 0; i < count; i++ {
+					e := &entries[i]
+					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+					valDirU16[i] = uint16(valOff)
+					flagsCol[i] = e.flags
+					prefixDirU16[i] = e.prefixLen
+					if b.leafPackedValuePtr {
+						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+					} else {
+						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+					}
+					valOff += valPtrSize
+				}
+			} else {
+				for i := 0; i < count; i++ {
+					e := &entries[i]
+					keyDirU16[i] = uint16(suffixStart + int(e.suffixOff))
+					valDirU16[i] = uint16(valOff)
+					flagsCol[i] = e.flags
+					putUint16At(prefixCol, i*2, e.prefixLen)
+					if b.leafPackedValuePtr {
+						page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+					} else {
+						e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+					}
+					valOff += valPtrSize
+				}
+			}
+		} else {
+			for i := 0; i < count; i++ {
+				e := &entries[i]
+				putUint16At(b.data, keyDirStart+i*2, uint16(suffixStart+int(e.suffixOff)))
+				putUint16At(b.data, valDirStart+i*2, uint16(valOff))
+				flagsCol[i] = e.flags
+				putUint16At(b.data, prefixStart+i*2, e.prefixLen)
+				if b.leafPackedValuePtr {
+					page.EncodePackedValuePtr(b.data[valOff:valOff+valPtrSize], e.valPtr)
+				} else {
+					e.valPtr.Encode(b.data[valOff : valOff+valPtrSize])
+				}
+				valOff += valPtrSize
+			}
+		}
+
+		if valOff != suffixStart {
+			panic("leaf columnar+prefix v2 pointer packing mismatch")
 		}
 
 		b.dirEnd = metaEnd
@@ -973,53 +1086,74 @@ func bytesAsUint16Slice(buf []byte) []uint16 {
 }
 
 func (b *Builder) releaseLeafColumnarV2Scratch() {
-	if b.leafColumnarV2Entries != nil {
+	if b.leafColumnarV2EntriesH != nil {
 		if cap(b.leafColumnarV2Entries) <= leafColumnarEntriesPoolMaxCap {
-			leafColumnarV2EntriesPool.Put(b.leafColumnarV2Entries[:0])
+			b.leafColumnarV2EntriesH.entries = b.leafColumnarV2Entries[:0]
+		} else {
+			b.leafColumnarV2EntriesH.entries = nil
 		}
-		b.leafColumnarV2Entries = nil
+		leafColumnarV2EntriesPool.Put(b.leafColumnarV2EntriesH)
+		b.leafColumnarV2EntriesH = nil
 	}
+	b.leafColumnarV2Entries = nil
 	b.leafColumnarV2KeyBytes = 0
 	b.leafColumnarV2ValBytes = 0
-	if b.leafColumnarV2Arena != nil {
-		leafColumnarV2ArenaPool.Put(b.leafColumnarV2Arena[:0])
-		b.leafColumnarV2Arena = nil
+	if b.leafColumnarV2ArenaH != nil {
+		b.leafColumnarV2ArenaH.buf = b.leafColumnarV2Arena[:0]
+		leafColumnarV2ArenaPool.Put(b.leafColumnarV2ArenaH)
+		b.leafColumnarV2ArenaH = nil
 	}
+	b.leafColumnarV2Arena = nil
 }
 
 func (b *Builder) releaseLeafColumnarPrefixV2Scratch() {
-	if b.leafColumnarPrefixV2Entries != nil {
+	if b.leafColumnarPrefixV2EntriesH != nil {
 		if cap(b.leafColumnarPrefixV2Entries) <= leafColumnarEntriesPoolMaxCap {
-			leafColumnarPrefixV2EntriesPool.Put(b.leafColumnarPrefixV2Entries[:0])
+			b.leafColumnarPrefixV2EntriesH.entries = b.leafColumnarPrefixV2Entries[:0]
+		} else {
+			b.leafColumnarPrefixV2EntriesH.entries = nil
 		}
-		b.leafColumnarPrefixV2Entries = nil
+		leafColumnarPrefixV2EntriesPool.Put(b.leafColumnarPrefixV2EntriesH)
+		b.leafColumnarPrefixV2EntriesH = nil
 	}
+	b.leafColumnarPrefixV2Entries = nil
 	b.leafColumnarPrefixV2KeyBytes = 0
 	b.leafColumnarPrefixV2ValBytes = 0
 	b.leafColumnarPrefixV2AllInline = false
-	if b.leafColumnarV2Arena != nil {
-		leafColumnarV2ArenaPool.Put(b.leafColumnarV2Arena[:0])
-		b.leafColumnarV2Arena = nil
+	b.leafColumnarPrefixV2AllPointer = false
+	if b.leafColumnarV2ArenaH != nil {
+		b.leafColumnarV2ArenaH.buf = b.leafColumnarV2Arena[:0]
+		leafColumnarV2ArenaPool.Put(b.leafColumnarV2ArenaH)
+		b.leafColumnarV2ArenaH = nil
 	}
-	if b.leafColumnarPrefixV2ValueArena != nil {
-		leafColumnarPrefixV2ValueArenaPool.Put(b.leafColumnarPrefixV2ValueArena[:0])
-		b.leafColumnarPrefixV2ValueArena = nil
+	b.leafColumnarV2Arena = nil
+	if b.leafColumnarPrefixV2ValueArenaH != nil {
+		b.leafColumnarPrefixV2ValueArenaH.buf = b.leafColumnarPrefixV2ValueArena[:0]
+		leafColumnarPrefixV2ValueArenaPool.Put(b.leafColumnarPrefixV2ValueArenaH)
+		b.leafColumnarPrefixV2ValueArenaH = nil
 	}
+	b.leafColumnarPrefixV2ValueArena = nil
 }
 
 func (b *Builder) releaseInternalBaseDeltaScratch() {
-	if b.internalBaseEntries != nil {
+	if b.internalBaseEntriesH != nil {
 		if cap(b.internalBaseEntries) <= internalBaseEntriesPoolMaxCap {
 			clear(b.internalBaseEntries)
-			internalBaseEntriesPool.Put(b.internalBaseEntries[:0])
+			b.internalBaseEntriesH.entries = b.internalBaseEntries[:0]
+		} else {
+			b.internalBaseEntriesH.entries = nil
 		}
-		b.internalBaseEntries = nil
+		internalBaseEntriesPool.Put(b.internalBaseEntriesH)
+		b.internalBaseEntriesH = nil
 	}
+	b.internalBaseEntries = nil
 	b.internalBaseTotalKeyBytes = 0
-	if b.internalBaseArena != nil {
-		internalBaseArenaPool.Put(b.internalBaseArena[:0])
-		b.internalBaseArena = nil
+	if b.internalBaseArenaH != nil {
+		b.internalBaseArenaH.buf = b.internalBaseArena[:0]
+		internalBaseArenaPool.Put(b.internalBaseArenaH)
+		b.internalBaseArenaH = nil
 	}
+	b.internalBaseArena = nil
 }
 
 func (b *Builder) leafColumnarV2AppendBytes(src []byte) (off uint32, n uint16) {
@@ -1031,8 +1165,12 @@ func (b *Builder) leafColumnarV2AppendBytes(src []byte) (off uint32, n uint16) {
 	}
 	if b.leafColumnarV2Arena == nil {
 		arenaAny := leafColumnarV2ArenaPool.Get()
-		arena := arenaAny.([]byte)
-		b.leafColumnarV2Arena = arena[:0]
+		arena := arenaAny.(*byteArenaHandle)
+		if arena.buf == nil {
+			arena.buf = make([]byte, 0, page.PageSize)
+		}
+		b.leafColumnarV2ArenaH = arena
+		b.leafColumnarV2Arena = arena.buf[:0]
 	}
 
 	start := len(b.leafColumnarV2Arena)
@@ -1061,8 +1199,12 @@ func (b *Builder) leafColumnarPrefixV2AppendValueBytes(src []byte) (off uint32, 
 	}
 	if b.leafColumnarPrefixV2ValueArena == nil {
 		arenaAny := leafColumnarPrefixV2ValueArenaPool.Get()
-		arena := arenaAny.([]byte)
-		b.leafColumnarPrefixV2ValueArena = arena[:0]
+		arena := arenaAny.(*byteArenaHandle)
+		if arena.buf == nil {
+			arena.buf = make([]byte, 0, page.PageSize)
+		}
+		b.leafColumnarPrefixV2ValueArenaH = arena
+		b.leafColumnarPrefixV2ValueArena = arena.buf[:0]
 	}
 
 	start := len(b.leafColumnarPrefixV2ValueArena)
@@ -1088,8 +1230,12 @@ func (b *Builder) internalBaseCopyBytes(src []byte) []byte {
 	}
 	if b.internalBaseArena == nil {
 		arenaAny := internalBaseArenaPool.Get()
-		arena := arenaAny.([]byte)
-		b.internalBaseArena = arena[:0]
+		arena := arenaAny.(*byteArenaHandle)
+		if arena.buf == nil {
+			arena.buf = make([]byte, 0, page.PageSize)
+		}
+		b.internalBaseArenaH = arena
+		b.internalBaseArena = arena.buf[:0]
 	}
 
 	start := len(b.internalBaseArena)

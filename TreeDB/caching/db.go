@@ -125,6 +125,26 @@ func putValueLogRecords(s []valuelog.Record) {
 	valueLogRecordPool.Put(s[:0])
 }
 
+func clearValueLogRecordValues(s []valuelog.Record) {
+	for i := range s {
+		// Drop value references before pooling to avoid retaining large backing
+		// arrays when callers provide subslices/views.
+		s[i].Value = nil
+	}
+}
+
+func putValueLogRecordsNoClear(s []valuelog.Record) {
+	if s == nil {
+		return
+	}
+	clearValueLogRecordValues(s)
+	// Avoid retaining huge slices in the pool.
+	if cap(s) > 1<<20 {
+		return
+	}
+	valueLogRecordPool.Put(s[:0])
+}
+
 func getValueLogPtrs(n int) []page.ValuePtr {
 	if n < 0 {
 		n = 0
@@ -445,6 +465,26 @@ func (db *DB) valueLogEnabled() bool {
 
 func (db *DB) splitValueLogEnabled() bool {
 	return true
+}
+
+func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode) vlogCompressionWriteMode {
+	if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
+		return vlogWriteBlock
+	}
+	return writeMode
+}
+
+func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, dictByID map[uint64][]byte) []byte {
+	if dictID == 0 {
+		return nil
+	}
+	if dictByID == nil {
+		if dictID == singleDictID {
+			return singleDict
+		}
+		return nil
+	}
+	return dictByID[dictID]
 }
 
 func (db *DB) deferredValueLogEnabled() bool {
@@ -4422,9 +4462,11 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		needFlush       bool
 		needSync        bool
 		rawPayloadBytes int
+		singleDictID    uint64
+		sawDictID       bool
+		multipleDictIDs bool
 	)
 	records := getValueLogRecords(len(requests))
-	dictNeeded := make(map[uint64]struct{})
 	for i := range requests {
 		req := &requests[i]
 		if !req.enqueuedAt.IsZero() {
@@ -4437,16 +4479,40 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			needFlush = true
 		}
 		if req.dictID != 0 {
-			dictNeeded[req.dictID] = struct{}{}
+			if !sawDictID {
+				sawDictID = true
+				singleDictID = req.dictID
+			} else if req.dictID != singleDictID {
+				multipleDictIDs = true
+			}
 		}
 		rawPayloadBytes += len(req.value)
 	}
 
-	dictByID := make(map[uint64][]byte, len(dictNeeded))
-	for dictID := range dictNeeded {
-		dictBytes, err := db.dictBytesForLane(context.Background(), l, dictID)
-		if err == nil && len(dictBytes) > 0 {
-			dictByID[dictID] = dictBytes
+	var (
+		singleDict []byte
+		dictByID   map[uint64][]byte
+	)
+	if sawDictID {
+		if !multipleDictIDs {
+			dictBytes, err := db.dictBytesForLane(context.Background(), l, singleDictID)
+			if err == nil && len(dictBytes) > 0 {
+				singleDict = dictBytes
+			}
+		} else {
+			dictNeeded := make(map[uint64]struct{})
+			for i := range requests {
+				if dictID := requests[i].dictID; dictID != 0 {
+					dictNeeded[dictID] = struct{}{}
+				}
+			}
+			dictByID = make(map[uint64][]byte, len(dictNeeded))
+			for dictID := range dictNeeded {
+				dictBytes, err := db.dictBytesForLane(context.Background(), l, dictID)
+				if err == nil && len(dictBytes) > 0 {
+					dictByID[dictID] = dictBytes
+				}
+			}
 		}
 	}
 
@@ -4473,7 +4539,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		if writeMode != vlogWriteDict {
 			dictID = 0
 		}
-		dict := dictByID[dictID]
+		dict := lookupVlogDictBytes(dictID, singleDictID, singleDict, dictByID)
 		if dictID == 0 || len(dict) == 0 || writeMode != vlogWriteDict {
 			dictID = 0
 			dict = nil
@@ -4489,7 +4555,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			nextMode := requests[end].writeMode
 			nextCodec := normalizeSelectorBlockCodec(requests[end].blockCodec)
 			nextDictID := requests[end].dictID
-			nextDict := dictByID[nextDictID]
+			nextDict := lookupVlogDictBytes(nextDictID, singleDictID, singleDict, dictByID)
 			if nextMode != vlogWriteDict {
 				nextDictID = 0
 			}
@@ -5458,12 +5524,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false
-	fallbackToBlock := func() {
-		if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
-			writeMode = vlogWriteBlock
-		}
-		blockMode = writeMode == vlogWriteBlock
-	}
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
@@ -5476,20 +5536,23 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			blockMode = writeMode == vlogWriteBlock
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForRecords(records, probeCompression) {
 		dictID = 0
 		dict = nil
-		fallbackToBlock()
+		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+		blockMode = writeMode == vlogWriteBlock
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 {
 		avg := rawPayloadBytes / len(records)
 		if avg < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			blockMode = writeMode == vlogWriteBlock
 		}
 	}
 	if dictID != 0 && len(dict) == 0 {
@@ -5498,7 +5561,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		} else {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
+			blockMode = writeMode == vlogWriteBlock
 		}
 	}
 	switch mode {
@@ -6075,11 +6139,6 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value))
 	probeCompression := selectorProbe
-	fallbackToBlock := func() {
-		if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
-			writeMode = vlogWriteBlock
-		}
-	}
 	if writeMode != vlogWriteDict {
 		dictID = 0
 		dict = nil
@@ -6090,18 +6149,18 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		if !attemptCompression {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
 		}
 	}
 	if dictID != 0 && db.shouldBypassValueLogDictForValue(value, probeCompression) {
 		dictID = 0
 		dict = nil
-		fallbackToBlock()
+		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
 	}
 	if dictID != 0 && db.valueLogAutotuneOptions.DisableBelowValueBytes > 0 && len(value) < db.valueLogAutotuneOptions.DisableBelowValueBytes {
 		dictID = 0
 		dict = nil
-		fallbackToBlock()
+		writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
 	}
 	if dictID != 0 && len(dict) == 0 {
 		if b, dictErr := db.dictBytes(context.Background(), dictID); dictErr == nil {
@@ -6109,7 +6168,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		} else {
 			dictID = 0
 			dict = nil
-			fallbackToBlock()
+			writeMode = fallbackAutoVlogWriteMode(mode, writeMode)
 		}
 	}
 	finalWriteMode := vlogWriteOff
@@ -6186,25 +6245,29 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 			durableBoundary := false
 			if finalWriteMode == vlogWriteBlock {
-				var (
-					rec        [1]valuelog.Record
-					ptrScratch [1]page.ValuePtr
-					ptrs       []page.ValuePtr
-				)
-				rec[0] = valuelog.Record{RID: rid, Value: value}
-				switch {
-				case caps.statsInto != nil:
-					ptrs, stats, err = caps.statsInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
-				case caps.stats != nil:
-					ptrs, stats, err = caps.stats.AppendFrameWithStats(0, nil, rec[:])
-				default:
-					ptr, err = w.Append(0, nil, rid, value)
-				}
-				if err == nil && ptr == (page.ValuePtr{}) {
-					if len(ptrs) != 1 {
-						err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
-					} else {
-						ptr = ptrs[0]
+				if concrete, ok := w.(*valuelog.Writer); ok {
+					ptr, stats, err = concrete.AppendOneFrameWithStats(0, nil, rid, value)
+				} else {
+					var (
+						rec        [1]valuelog.Record
+						ptrScratch [1]page.ValuePtr
+						ptrs       []page.ValuePtr
+					)
+					rec[0] = valuelog.Record{RID: rid, Value: value}
+					switch {
+					case caps.statsInto != nil:
+						ptrs, stats, err = caps.statsInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
+					case caps.stats != nil:
+						ptrs, stats, err = caps.stats.AppendFrameWithStats(0, nil, rec[:])
+					default:
+						ptr, err = w.Append(0, nil, rid, value)
+					}
+					if err == nil && ptr == (page.ValuePtr{}) {
+						if len(ptrs) != 1 {
+							err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+						} else {
+							ptr = ptrs[0]
+						}
 					}
 				}
 			} else {
@@ -6341,25 +6404,29 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 	if finalWriteMode == vlogWriteBlock {
-		var ptrScratch [1]page.ValuePtr
-		var rec [1]valuelog.Record
-		rec[0] = valuelog.Record{RID: rid, Value: value}
-		var ptrs []page.ValuePtr
-		var frameErr error
-		if statsWriterInto != nil {
-			ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
-		} else if statsWriter != nil {
-			ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(0, nil, rec[:])
+		if concrete, ok := w.(*valuelog.Writer); ok {
+			ptr, stats, err = concrete.AppendOneFrameWithStats(0, nil, rid, value)
 		} else {
-			ptr, err = w.Append(0, nil, rid, value)
-		}
-		if frameErr != nil {
-			err = frameErr
-		} else if err == nil && ptr == (page.ValuePtr{}) {
-			if len(ptrs) != 1 {
-				err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+			var ptrScratch [1]page.ValuePtr
+			var rec [1]valuelog.Record
+			rec[0] = valuelog.Record{RID: rid, Value: value}
+			var ptrs []page.ValuePtr
+			var frameErr error
+			if statsWriterInto != nil {
+				ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(0, nil, rec[:], ptrScratch[:])
+			} else if statsWriter != nil {
+				ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(0, nil, rec[:])
 			} else {
-				ptr = ptrs[0]
+				ptr, err = w.Append(0, nil, rid, value)
+			}
+			if frameErr != nil {
+				err = frameErr
+			} else if err == nil && ptr == (page.ValuePtr{}) {
+				if len(ptrs) != 1 {
+					err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+				} else {
+					ptr = ptrs[0]
+				}
 			}
 		}
 	} else if dictID == 0 {
@@ -6367,24 +6434,28 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	} else if len(dict) == 0 {
 		ptr, err = w.Append(0, nil, rid, value)
 	} else {
-		var ptrScratch [1]page.ValuePtr
-		var rec [1]valuelog.Record
-		rec[0] = valuelog.Record{RID: rid, Value: value}
-		var ptrs []page.ValuePtr
-		var frameErr error
-		if statsWriterInto != nil {
-			ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(dictID, dict, rec[:], ptrScratch[:])
-		} else if statsWriter != nil {
-			ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(dictID, dict, rec[:])
+		if concrete, ok := w.(*valuelog.Writer); ok {
+			ptr, stats, err = concrete.AppendOneFrameWithStats(dictID, dict, rid, value)
 		} else {
-			ptrs, frameErr = w.AppendFrame(dictID, dict, rec[:])
-		}
-		if frameErr != nil {
-			err = frameErr
-		} else if len(ptrs) != 1 {
-			err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
-		} else {
-			ptr = ptrs[0]
+			var ptrScratch [1]page.ValuePtr
+			var rec [1]valuelog.Record
+			rec[0] = valuelog.Record{RID: rid, Value: value}
+			var ptrs []page.ValuePtr
+			var frameErr error
+			if statsWriterInto != nil {
+				ptrs, stats, frameErr = statsWriterInto.AppendFrameWithStatsInto(dictID, dict, rec[:], ptrScratch[:])
+			} else if statsWriter != nil {
+				ptrs, stats, frameErr = statsWriter.AppendFrameWithStats(dictID, dict, rec[:])
+			} else {
+				ptrs, frameErr = w.AppendFrame(dictID, dict, rec[:])
+			}
+			if frameErr != nil {
+				err = frameErr
+			} else if len(ptrs) != 1 {
+				err = fmt.Errorf("cachingdb: value-log wrote %d ptrs for 1 record", len(ptrs))
+			} else {
+				ptr = ptrs[0]
+			}
 		}
 	}
 	if err == nil {
@@ -9236,9 +9307,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		chunkBackend := totalLen > backendEntriesCap
 		emittedChunk := false
 
+		type ptrSetterView interface {
+			SetPointerView(key []byte, ptr page.ValuePtr) error
+		}
 		type ptrSetter interface {
 			SetPointer(key []byte, ptr page.ValuePtr) error
 		}
+		psv, _ := backendBatch.(ptrSetterView)
 		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
 
@@ -9276,6 +9351,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				return err
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
+			psv, _ = backendBatch.(ptrSetterView)
 			ps, _ = backendBatch.(ptrSetter)
 			backendPendingOps = 0
 			return nil
@@ -9320,7 +9396,9 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			if entry.Type == batch.OpDelete {
 				err = backendBatch.Delete(entry.Key)
 			} else if entry.IsPtr {
-				if ps != nil {
+				if psv != nil {
+					err = psv.SetPointerView(entry.Key, entry.ValuePtr)
+				} else if ps != nil {
 					err = ps.SetPointer(entry.Key, entry.ValuePtr)
 				} else {
 					single[0] = batch.Entry{Type: batch.OpPut, Key: entry.Key, ValuePtr: entry.ValuePtr, IsPtr: true}
@@ -9527,9 +9605,15 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		// ensure we commit it below.
 		backendPendingOps = totalLen
 	} else {
-		type ptrSetter interface {
-			SetPointer(key []byte, ptr page.ValuePtr) error
-		}
+		type (
+			ptrSetter interface {
+				SetPointer(key []byte, ptr page.ValuePtr) error
+			}
+			ptrSetterView interface {
+				SetPointerView(key []byte, ptr page.ValuePtr) error
+			}
+		)
+		psv, _ := backendBatch.(ptrSetterView)
 		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
 
@@ -9564,6 +9648,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				return err
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
+			psv, _ = backendBatch.(ptrSetterView)
 			ps, _ = backendBatch.(ptrSetter)
 			backendPendingOps = 0
 			return nil
@@ -9589,7 +9674,14 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
-					if ps != nil {
+					if psv != nil {
+						if err := psv.SetPointerView(key, ptr); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+					} else if ps != nil {
 						if err := ps.SetPointer(key, ptr); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 							_ = iter.Close()
@@ -11429,6 +11521,9 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 const (
 	streamSwitchMinEntries = 4096
 	streamSwitchMinBytes   = 1 << 20 // 1MiB
+	// Only fan out value-log appends across multiple lanes when a batch is large
+	// enough to amortize per-lane setup and goroutine overhead.
+	multiLaneValueLogMinRecords = 1024
 )
 
 func (b *Batch) maybeSwitchToStreaming() {
@@ -11684,7 +11779,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	return true, nil
 }
 
-func (b *Batch) writeRegular(sync bool) error {
+func (b *Batch) writeRegular(syncWrite bool) error {
 	b.db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -11749,7 +11844,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	// - When DisableWAL=false, we also append commit-intent records that can
 	//   be replayed to recover unflushed writes.
 	durability := journalDurabilityNone
-	if sync {
+	if syncWrite {
 		if b.db.relaxedSync {
 			durability = journalDurabilityFlush
 		} else {
@@ -11790,12 +11885,17 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.debugPtrDenied.Add(int64(eligibleCount))
 		}
 	}
+	multiLanePointers := allowPointers &&
+		b.db.disableJournal &&
+		durability == journalDurabilityNone &&
+		len(b.db.lanes) > 1 &&
+		eligibleCount >= multiLaneValueLogMinRecords
 
 	var (
 		lane *lane
 		rids []uint64
 	)
-	if allowPointers || !b.db.disableJournal {
+	if (!multiLanePointers && allowPointers) || !b.db.disableJournal {
 		l, err := b.db.pickLane(durability == journalDurabilitySync, -1)
 		if err != nil {
 			b.db.writeMu.RUnlock()
@@ -11815,40 +11915,169 @@ func (b *Batch) writeRegular(sync bool) error {
 			b.db.writeMu.RUnlock()
 			return err
 		}
-		valueRecords := make([]valuelog.Record, eligibleCount)
-		for i, idx := range eligibleIdxs {
-			op := &b.entries[idx]
-			rid := b.db.nextRID.Add(1)
-			if rids != nil {
-				rids[idx] = rid
+		if multiLanePointers {
+			type laneValueLogBatch struct {
+				laneID      int
+				idxs        []int
+				records     []valuelog.Record
+				safeNoClear bool
+				ptrs        []page.ValuePtr
+				err         error
 			}
-			valueRecords[i] = valuelog.Record{RID: rid, Value: op.Value}
-		}
-		ptrs, err := b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
-		if err != nil {
-			b.db.writeMu.RUnlock()
-			return err
-		}
-		if len(ptrs) == eligibleCount {
-			for i, idx := range eligibleIdxs {
+
+			laneCounts := make([]int, len(b.db.lanes))
+			for _, idx := range eligibleIdxs {
+				laneID := b.db.laneForShardIndex(shardIdxs[idx])
+				if laneID < 0 || laneID >= len(b.db.lanes) {
+					laneID = 0
+				}
+				laneCounts[laneID]++
+			}
+
+			laneBatches := make([]laneValueLogBatch, len(b.db.lanes))
+			activeLaneIDs := make([]int, 0, len(b.db.lanes))
+			for laneID, count := range laneCounts {
+				if count == 0 {
+					continue
+				}
+				lb := &laneBatches[laneID]
+				lb.laneID = laneID
+				lb.idxs = make([]int, 0, count)
+				lb.records = getValueLogRecordsCap(count)
+				lb.safeNoClear = true
+				activeLaneIDs = append(activeLaneIDs, laneID)
+			}
+
+			defer func() {
+				for _, laneID := range activeLaneIDs {
+					lb := &laneBatches[laneID]
+					if lb.records != nil {
+						if lb.safeNoClear {
+							putValueLogRecordsNoClear(lb.records)
+						} else {
+							putValueLogRecords(lb.records)
+						}
+						lb.records = nil
+					}
+					if lb.ptrs != nil {
+						putValueLogPtrs(lb.ptrs)
+						lb.ptrs = nil
+					}
+				}
+			}()
+
+			for _, idx := range eligibleIdxs {
 				op := &b.entries[idx]
-				op.ValuePtr = ptrs[i]
-				op.IsPtr = true
-				if b.db.memtableValueLogPointers {
-					op.Value = nil
+				rid := b.db.nextRID.Add(1)
+				if rids != nil {
+					rids[idx] = rid
+				}
+				laneID := b.db.laneForShardIndex(shardIdxs[idx])
+				if laneID < 0 || laneID >= len(b.db.lanes) {
+					laneID = 0
+				}
+				lb := &laneBatches[laneID]
+				if lb.safeNoClear && (len(op.Value) > 64 || cap(op.Value) > 64) {
+					lb.safeNoClear = false
+				}
+				lb.idxs = append(lb.idxs, idx)
+				lb.records = append(lb.records, valuelog.Record{RID: rid, Value: op.Value})
+			}
+
+			var wg sync.WaitGroup
+			for _, laneID := range activeLaneIDs {
+				lb := &laneBatches[laneID]
+				wg.Add(1)
+				go func(batch *laneValueLogBatch) {
+					defer wg.Done()
+					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], b.dictID, nil, batch.records, durability)
+				}(lb)
+			}
+			wg.Wait()
+
+			for _, laneID := range activeLaneIDs {
+				lb := &laneBatches[laneID]
+				if lb.err != nil {
+					b.db.writeMu.RUnlock()
+					return lb.err
+				}
+			}
+
+			for _, laneID := range activeLaneIDs {
+				lb := &laneBatches[laneID]
+				if len(lb.ptrs) != len(lb.idxs) {
+					if debugPtr {
+						b.db.debugPtrNoPtr.Add(int64(len(lb.idxs)))
+					}
+					continue
+				}
+				for i, idx := range lb.idxs {
+					op := &b.entries[idx]
+					op.ValuePtr = lb.ptrs[i]
+					op.IsPtr = true
+					if b.db.memtableValueLogPointers {
+						op.Value = nil
+					}
 				}
 				if debugPtr {
-					b.db.debugPtrUsed.Add(1)
+					b.db.debugPtrUsed.Add(int64(len(lb.idxs)))
 				}
+				retainPath := b.db.currentValueLogPath(&b.db.lanes[lb.laneID])
+				if retainPath != "" {
+					b.db.markValueLogRetain(retainPath)
+				}
+				putValueLogPtrs(lb.ptrs)
+				lb.ptrs = nil
 			}
-			retainPath := b.db.currentValueLogPath(lane)
-			if retainPath != "" {
-				b.db.markValueLogRetain(retainPath)
+		} else {
+			valueRecords := getValueLogRecords(eligibleCount)
+			safeNoClear := true
+			defer func() {
+				if safeNoClear {
+					putValueLogRecordsNoClear(valueRecords)
+					return
+				}
+				putValueLogRecords(valueRecords)
+			}()
+			for i, idx := range eligibleIdxs {
+				op := &b.entries[idx]
+				rid := b.db.nextRID.Add(1)
+				if rids != nil {
+					rids[idx] = rid
+				}
+				if safeNoClear {
+					if len(op.Value) > 64 || cap(op.Value) > 64 {
+						safeNoClear = false
+					}
+				}
+				valueRecords[i] = valuelog.Record{RID: rid, Value: op.Value}
 			}
-		} else if debugPtr && eligibleCount > 0 {
-			b.db.debugPtrNoPtr.Add(int64(eligibleCount))
+			ptrs, err := b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
+			if err != nil {
+				b.db.writeMu.RUnlock()
+				return err
+			}
+			if len(ptrs) == eligibleCount {
+				for i, idx := range eligibleIdxs {
+					op := &b.entries[idx]
+					op.ValuePtr = ptrs[i]
+					op.IsPtr = true
+					if b.db.memtableValueLogPointers {
+						op.Value = nil
+					}
+					if debugPtr {
+						b.db.debugPtrUsed.Add(1)
+					}
+				}
+				retainPath := b.db.currentValueLogPath(lane)
+				if retainPath != "" {
+					b.db.markValueLogRetain(retainPath)
+				}
+			} else if debugPtr && eligibleCount > 0 {
+				b.db.debugPtrNoPtr.Add(int64(eligibleCount))
+			}
+			putValueLogPtrs(ptrs)
 		}
-		putValueLogPtrs(ptrs)
 	}
 
 	if !b.db.disableJournal {
@@ -11971,7 +12200,7 @@ func (b *Batch) writeRegular(sync bool) error {
 	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
 		needRotate = true
 	}
-	if sync && b.db.disableJournal {
+	if syncWrite && b.db.disableJournal {
 		needSyncBarrier = true
 	}
 	b.db.writeMu.RUnlock()

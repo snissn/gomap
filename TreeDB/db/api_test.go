@@ -125,3 +125,64 @@ func TestConcurrentReads(t *testing.T) {
 		t.Fatalf("Final state should be v2, got %q", val)
 	}
 }
+
+func TestIteratorKeyValueAreDefensiveCopies(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("k1"), []byte("value1")); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer it.Close()
+	if !it.Valid() {
+		t.Fatalf("iterator invalid")
+	}
+
+	unsafeKeyBefore := append([]byte(nil), it.UnsafeKey()...)
+	unsafeValBefore := append([]byte(nil), it.UnsafeValue()...)
+	key := it.Key()
+	val := it.Value()
+
+	if len(key) > 0 && len(it.UnsafeKey()) > 0 && &key[0] == &it.UnsafeKey()[0] {
+		t.Fatalf("Key returned unsafe alias")
+	}
+	if len(val) > 0 && len(it.UnsafeValue()) > 0 && &val[0] == &it.UnsafeValue()[0] {
+		t.Fatalf("Value returned unsafe alias")
+	}
+
+	if len(key) > 0 {
+		key[0] ^= 0x1
+	}
+	if len(val) > 0 {
+		val[0] ^= 0x1
+	}
+	if !bytes.Equal(it.UnsafeKey(), unsafeKeyBefore) {
+		t.Fatalf("mutating Key() changed iterator state")
+	}
+	if !bytes.Equal(it.UnsafeValue(), unsafeValBefore) {
+		t.Fatalf("mutating Value() changed iterator state")
+	}
+}
+
+func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	stats := db.Stats()
+	if _, ok := stats["treedb.publish.watermark.lag_drift_bytes_per_sec"]; !ok {
+		t.Fatalf("missing treedb.publish.watermark.lag_drift_bytes_per_sec")
+	}
+}

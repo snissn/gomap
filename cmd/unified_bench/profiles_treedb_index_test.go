@@ -9,6 +9,7 @@ type savedTreeDBFlagState struct {
 	columnarLeaves     bool
 	packedValuePtr     bool
 	internalBaseDelta  bool
+	vlogAutoPolicy     string
 	disableWAL         bool
 	relaxedSync        bool
 	disableChecksum    bool
@@ -29,6 +30,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		columnarLeaves:     *treedbIndexColumnarLeaves,
 		packedValuePtr:     *treedbIndexPackedValuePtr,
 		internalBaseDelta:  *treedbIndexInternalBaseDelta,
+		vlogAutoPolicy:     *treedbVlogAutoPolicy,
 		disableWAL:         *treedbDisableWAL,
 		relaxedSync:        *treedbRelaxedSync,
 		disableChecksum:    *treedbDisableReadChecksum,
@@ -45,6 +47,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexColumnarLeaves = s.columnarLeaves
 	*treedbIndexPackedValuePtr = s.packedValuePtr
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
+	*treedbVlogAutoPolicy = s.vlogAutoPolicy
 	*treedbDisableWAL = s.disableWAL
 	*treedbRelaxedSync = s.relaxedSync
 	*treedbDisableReadChecksum = s.disableChecksum
@@ -60,6 +63,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexColumnarLeaves = false
 	*treedbIndexPackedValuePtr = false
 	*treedbIndexInternalBaseDelta = false
+	*treedbVlogAutoPolicy = "balanced"
 	*treedbDisableWAL = false
 	*treedbRelaxedSync = false
 	*treedbDisableReadChecksum = false
@@ -79,6 +83,9 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbIndexOptimizations {
 		t.Fatalf("expected fast profile to set treedb-index-optimizations")
 	}
+	if got := *treedbVlogAutoPolicy; got != "throughput" {
+		t.Fatalf("expected fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
+	}
 
 	resetTreeDBIndexFlagsForTest()
 	if err := applyProfile("wal_on_fast", map[string]bool{}); err != nil {
@@ -86,6 +93,9 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if !*treedbIndexOptimizations {
 		t.Fatalf("expected wal_on_fast profile to set treedb-index-optimizations")
+	}
+	if got := *treedbVlogAutoPolicy; got != "throughput" {
+		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
 	}
 }
 

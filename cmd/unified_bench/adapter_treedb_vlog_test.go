@@ -35,6 +35,9 @@ func TestBuildTreeDBOptions_DefaultVlogCompressionAuto(t *testing.T) {
 	if opts.ValueLog.Compression != treedb.ValueLogCompressionAuto {
 		t.Fatalf("unexpected default compression mode: %v", opts.ValueLog.Compression)
 	}
+	if opts.ValueLog.AutoPolicy != treedb.ValueLogAutoBalanced {
+		t.Fatalf("unexpected default auto policy: %v", opts.ValueLog.AutoPolicy)
+	}
 }
 
 func TestBuildTreeDBOptions_VlogCompressionBlockFlags(t *testing.T) {
@@ -93,6 +96,29 @@ func TestBuildTreeDBOptions_InvalidVlogBlockCodec(t *testing.T) {
 	*treedbVlogBlockCodec = "nope"
 	if _, _, err := buildTreeDBOptions(""); err == nil {
 		t.Fatalf("expected error for invalid block codec")
+	}
+}
+
+func TestBuildTreeDBOptions_VlogAutoPolicyFlag(t *testing.T) {
+	oldPolicy := *treedbVlogAutoPolicy
+	defer func() { *treedbVlogAutoPolicy = oldPolicy }()
+	*treedbVlogAutoPolicy = "throughput"
+
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ValueLog.AutoPolicy != treedb.ValueLogAutoThroughput {
+		t.Fatalf("unexpected auto policy: %v", opts.ValueLog.AutoPolicy)
+	}
+}
+
+func TestBuildTreeDBOptions_InvalidVlogAutoPolicy(t *testing.T) {
+	oldPolicy := *treedbVlogAutoPolicy
+	defer func() { *treedbVlogAutoPolicy = oldPolicy }()
+	*treedbVlogAutoPolicy = "invalid"
+	if _, _, err := buildTreeDBOptions(""); err == nil {
+		t.Fatalf("expected error for invalid auto policy")
 	}
 }
 

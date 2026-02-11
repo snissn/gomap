@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"testing"
 
+	"github.com/golang/snappy"
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
@@ -170,6 +171,176 @@ func TestValueLogManager_MmapReadAppend(t *testing.T) {
 	}
 	if string(got) != "hello" {
 		t.Fatalf("mmap read mismatch: %q", string(got))
+	}
+}
+
+func TestValueLogManager_MmapReadUnsafeCompressedGroupedCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	records := make([]Record, 16)
+	want := make([][]byte, len(records))
+	for i := range records {
+		v := make([]byte, 320)
+		copy(v, []byte(fmt.Sprintf("record-%02d:", i)))
+		for j := 32; j < len(v); j++ {
+			v[j] = 'x'
+		}
+		records[i] = Record{RID: uint64(i + 1), Value: v}
+		want[i] = append([]byte(nil), v...)
+	}
+	dst := make([]page.ValuePtr, len(records))
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, records, dst)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append frame: %v", err)
+	}
+	if !stats.Kept {
+		_ = writer.Close()
+		t.Fatalf("expected block-compressed frame to be kept")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	var hdr [HeaderSize + FrameHeaderSize]byte
+	if _, err := file.ReadAt(hdr[:], int64(ptrs[0].Offset)-4); err != nil {
+		_ = file.Close()
+		t.Fatalf("read header: %v", err)
+	}
+	_ = file.Close()
+	if hdr[5]&recordFlagGrouped == 0 {
+		t.Fatalf("expected grouped record flag")
+	}
+	if hdr[HeaderSize+1]&FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed grouped frame")
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	m.SetDisableReadChecksum(true)
+	defer func() { _ = m.Close() }()
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+
+	for i, ptr := range ptrs {
+		got, err := m.ReadUnsafe(ptr)
+		if err != nil {
+			t.Fatalf("read unsafe %d: %v", i, err)
+		}
+		if !bytes.Equal(got, want[i]) {
+			t.Fatalf("value mismatch at %d: got=%q want=%q", i, got, want[i])
+		}
+	}
+
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.cacheFlags&FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame cache flags, got=%d", f.cacheFlags)
+	}
+	if f.cacheK != len(records) {
+		t.Fatalf("cacheK=%d want=%d", f.cacheK, len(records))
+	}
+	if len(f.cacheRaw) == 0 {
+		t.Fatalf("expected cached decoded raw payload for compressed frame")
+	}
+}
+
+func TestValueLogManager_MmapReadAppendCompressedGroupedCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	records := make([]Record, 12)
+	want := make([][]byte, len(records))
+	for i := range records {
+		v := make([]byte, 320)
+		copy(v, []byte(fmt.Sprintf("append-record-%02d:", i)))
+		for j := 40; j < len(v); j++ {
+			v[j] = 'y'
+		}
+		records[i] = Record{RID: uint64(i + 1), Value: v}
+		want[i] = append([]byte(nil), v...)
+	}
+	dst := make([]page.ValuePtr, len(records))
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, records, dst)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append frame: %v", err)
+	}
+	if !stats.Kept {
+		_ = writer.Close()
+		t.Fatalf("expected block-compressed frame to be kept")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	m.SetDisableReadChecksum(true)
+	defer func() { _ = m.Close() }()
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+
+	var got []byte
+	for i, ptr := range ptrs {
+		got, err = m.ReadAppend(ptr, got[:0])
+		if err != nil {
+			t.Fatalf("read append %d: %v", i, err)
+		}
+		if !bytes.Equal(got, want[i]) {
+			t.Fatalf("value mismatch at %d: got=%q want=%q", i, got, want[i])
+		}
+	}
+
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.cacheFlags&FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame cache flags, got=%d", f.cacheFlags)
+	}
+	if f.cacheK != len(records) {
+		t.Fatalf("cacheK=%d want=%d", f.cacheK, len(records))
+	}
+	if len(f.cacheRaw) == 0 {
+		t.Fatalf("expected cached decoded raw payload for compressed frame")
 	}
 }
 
@@ -861,6 +1032,23 @@ func TestValueLogBlockCodecRoundTrip(t *testing.T) {
 				t.Fatalf("codec id mismatch: got=%d want=%d", hdr.Reserved, codec)
 			}
 		})
+	}
+}
+
+func TestValueLogBlockCodecSnappy_ReusesProvidedBuffer(t *testing.T) {
+	raw := bytes.Repeat([]byte("compressible-payload-"), 256)
+	need := snappy.MaxEncodedLen(len(raw))
+	dst := make([]byte, need)
+
+	out, err := encodeBlockPayload(BlockCodecSnappy, raw, dst[:0])
+	if err != nil {
+		t.Fatalf("encode block payload: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatalf("expected non-empty encoded payload")
+	}
+	if &out[0] != &dst[0] {
+		t.Fatalf("expected encode to reuse provided destination buffer")
 	}
 }
 
