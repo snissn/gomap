@@ -108,6 +108,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
 	swaps := make([]rewriteSwap, 0, batchSize)
+	ridExhausted := false
 
 	flushBatch := func() error {
 		if len(swaps) == 0 {
@@ -147,6 +148,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
 			continue
 		}
+		if ridExhausted {
+			_ = it.Close()
+			_ = snap.Close()
+			return stats, fmt.Errorf("value-log rid space exhausted")
+		}
 		val, err := db.valueLogManager.Read(oldPtr)
 		if err != nil {
 			_ = it.Close()
@@ -160,6 +166,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			return stats, err
 		}
 		nextRID++
+		if nextRID == 0 {
+			ridExhausted = true
+		}
 		stats.RecordsCopied++
 		key := append([]byte(nil), it.UnsafeKey()...)
 		swaps = append(swaps, rewriteSwap{
