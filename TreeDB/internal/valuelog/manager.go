@@ -348,6 +348,39 @@ func (s *Set) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	return f.ReadUnsafeAppend(ptr, !s.disableReadChecksum, dst)
 }
 
+// ReadUnsafeAppendBatch resolves pointers in order, reusing file lookups for
+// contiguous same-file runs to reduce scan-path overhead.
+func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error) {
+	if len(ptrs) == 0 {
+		return dst[:0], nil
+	}
+	if cap(dst) < len(ptrs) {
+		dst = make([][]byte, len(ptrs))
+	} else {
+		dst = dst[:len(ptrs)]
+	}
+	var (
+		fileID uint32
+		f      *File
+	)
+	for i, ptr := range ptrs {
+		if i == 0 || ptr.FileID != fileID {
+			next, ok := s.Files[ptr.FileID]
+			if !ok {
+				return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+			}
+			fileID = ptr.FileID
+			f = next
+		}
+		var err error
+		dst[i], err = f.ReadUnsafeAppend(ptr, !s.disableReadChecksum, dst[i][:0])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
 type Manager struct {
 	dir string
 
@@ -505,6 +538,37 @@ func (m *Manager) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error
 		return nil, err
 	}
 	return f.ReadUnsafeAppend(ptr, !m.disableReadChecksum, dst)
+}
+
+func (m *Manager) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error) {
+	if len(ptrs) == 0 {
+		return dst[:0], nil
+	}
+	if cap(dst) < len(ptrs) {
+		dst = make([][]byte, len(ptrs))
+	} else {
+		dst = dst[:len(ptrs)]
+	}
+	var (
+		fileID uint32
+		f      *File
+	)
+	for i, ptr := range ptrs {
+		if i == 0 || ptr.FileID != fileID {
+			next, err := m.fileFor(ptr.FileID)
+			if err != nil {
+				return nil, err
+			}
+			fileID = ptr.FileID
+			f = next
+		}
+		var err error
+		dst[i], err = f.ReadUnsafeAppend(ptr, !m.disableReadChecksum, dst[i][:0])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
 }
 
 func (m *Manager) fileFor(id uint32) (*File, error) {

@@ -494,3 +494,210 @@ func TestIterator_CombinedColumnarPrefixV2_MultiRestartBlocks(t *testing.T) {
 		}
 	})
 }
+
+type countingBatchValueReader struct {
+	values      map[page.ValuePtr][]byte
+	singleCalls int
+	batchCalls  int
+}
+
+func newCountingBatchValueReader() *countingBatchValueReader {
+	return &countingBatchValueReader{
+		values: make(map[page.ValuePtr][]byte),
+	}
+}
+
+func (r *countingBatchValueReader) add(fileID uint32, offset uint64, value string) page.ValuePtr {
+	ptr := page.ValuePtr{
+		FileID: fileID,
+		Offset: offset,
+		Length: uint32(len(value)),
+	}
+	r.values[ptr] = []byte(value)
+	return ptr
+}
+
+func (r *countingBatchValueReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	v, ok := r.values[ptr]
+	if !ok {
+		return nil, fmt.Errorf("value pointer not found: %+v", ptr)
+	}
+	out := make([]byte, len(v))
+	copy(out, v)
+	return out, nil
+}
+
+func (r *countingBatchValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	v, ok := r.values[ptr]
+	if !ok {
+		return nil, fmt.Errorf("value pointer not found: %+v", ptr)
+	}
+	return v, nil
+}
+
+func (r *countingBatchValueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	r.singleCalls++
+	v, err := r.ReadUnsafe(ptr)
+	if err != nil {
+		return nil, err
+	}
+	dst = append(dst[:0], v...)
+	return dst, nil
+}
+
+func (r *countingBatchValueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error) {
+	r.batchCalls++
+	if cap(dst) < len(ptrs) {
+		dst = make([][]byte, len(ptrs))
+	} else {
+		dst = dst[:len(ptrs)]
+	}
+	for i, ptr := range ptrs {
+		v, err := r.ReadUnsafe(ptr)
+		if err != nil {
+			return nil, err
+		}
+		dst[i] = append(dst[i][:0], v...)
+	}
+	return dst, nil
+}
+
+func TestIterator_GroupedPointerBatching_StableOrdering(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1)
+	data, _ := p.Get(0)
+	n := node.NewNode(data)
+	n.SetPageID(0)
+	n.SetType(page.PageTypeLeaf)
+
+	reader := newCountingBatchValueReader()
+	var wantKeys []string
+	var wantVals []string
+	for i := 0; i < 12; i++ {
+		key := fmt.Sprintf("k%02d", i)
+		val := fmt.Sprintf("v%02d", i)
+		ptr := reader.add(page.ValueLogFileID(1), uint64(100+i*8), val)
+		if err := n.AddLeafEntry([]byte(key), nil, node.FlagPointer, ptr); err != nil {
+			t.Fatalf("AddLeafEntry(%s): %v", key, err)
+		}
+		wantKeys = append(wantKeys, key)
+		wantVals = append(wantVals, val)
+	}
+	n.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator(nil, nil)
+	defer it.Close()
+
+	var gotKeys []string
+	var gotVals []string
+	for ; it.Valid(); it.Next() {
+		gotKeys = append(gotKeys, string(it.Key()))
+		gotVals = append(gotVals, string(it.ValueCopy(nil)))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(gotKeys) != len(wantKeys) {
+		t.Fatalf("keys length mismatch: got=%d want=%d", len(gotKeys), len(wantKeys))
+	}
+	for i := range wantKeys {
+		if gotKeys[i] != wantKeys[i] || gotVals[i] != wantVals[i] {
+			t.Fatalf("entry %d mismatch: got=(%q,%q) want=(%q,%q)", i, gotKeys[i], gotVals[i], wantKeys[i], wantVals[i])
+		}
+	}
+	if reader.batchCalls == 0 {
+		t.Fatalf("expected batched pointer reads, got batchCalls=0")
+	}
+	if reader.singleCalls != 0 {
+		t.Fatalf("expected no single pointer reads for contiguous pointer run, got singleCalls=%d", reader.singleCalls)
+	}
+}
+
+func TestIterator_GroupedPointerBatching_MixedInlineAndPtr(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1)
+	data, _ := p.Get(0)
+	n := node.NewNode(data)
+	n.SetPageID(0)
+	n.SetType(page.PageTypeLeaf)
+
+	reader := newCountingBatchValueReader()
+	ptr := func(off uint64, val string) page.ValuePtr {
+		return reader.add(page.ValueLogFileID(1), off, val)
+	}
+
+	type kv struct {
+		key   string
+		flags byte
+		val   string
+		ptr   page.ValuePtr
+	}
+	entries := []kv{
+		{key: "k00", flags: node.FlagPointer, val: "pv00", ptr: ptr(10, "pv00")},
+		{key: "k01", flags: node.FlagPointer, val: "pv01", ptr: ptr(18, "pv01")},
+		{key: "k02", flags: node.FlagInline, val: "iv02"},
+		{key: "k03", flags: node.FlagPointer, val: "pv03", ptr: ptr(26, "pv03")},
+		{key: "k04", flags: node.FlagInline, val: "iv04"},
+		{key: "k05", flags: node.FlagPointer, val: "pv05", ptr: ptr(34, "pv05")},
+		{key: "k06", flags: node.FlagPointer, val: "pv06", ptr: ptr(42, "pv06")},
+	}
+	for _, e := range entries {
+		var value []byte
+		if e.flags&node.FlagPointer == 0 {
+			value = []byte(e.val)
+		}
+		if err := n.AddLeafEntry([]byte(e.key), value, e.flags, e.ptr); err != nil {
+			t.Fatalf("AddLeafEntry(%s): %v", e.key, err)
+		}
+	}
+	n.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator(nil, nil)
+	defer it.Close()
+
+	var got []string
+	for ; it.Valid(); it.Next() {
+		got = append(got, fmt.Sprintf("%s=%s", it.Key(), it.ValueCopy(nil)))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+
+	want := []string{
+		"k00=pv00",
+		"k01=pv01",
+		"k02=iv02",
+		"k03=pv03",
+		"k04=iv04",
+		"k05=pv05",
+		"k06=pv06",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("result length mismatch: got=%d want=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("result mismatch at %d: got=%q want=%q", i, got[i], want[i])
+		}
+	}
+	if reader.batchCalls == 0 {
+		t.Fatalf("expected at least one batched pointer read")
+	}
+	if reader.singleCalls == 0 {
+		t.Fatalf("expected isolated pointer fallback to single read in mixed stream")
+	}
+}

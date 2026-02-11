@@ -248,6 +248,67 @@ func TestReopenVerify_WALOn_WriteSync(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
+func TestIterator_GroupedPointerBatching_ReopenDurability(t *testing.T) {
+	dir := t.TempDir()
+	keys, values, hash := buildVerifyDataset(2000)
+
+	opts := treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	writeDataset(t, db, keys, values, false)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	checkGets(t, reopen, keys, values, false)
+	scanAndCheck(t, reopen, values, false, hash)
+
+	rit, err := reopen.ReverseIterator(nil, nil)
+	if err != nil {
+		t.Fatalf("reverse iterator: %v", err)
+	}
+	defer rit.Close()
+
+	count := 0
+	for idx := len(keys) - 1; rit.Valid(); rit.Next() {
+		key := rit.KeyCopy(nil)
+		if !bytes.Equal(key, keys[idx]) {
+			t.Fatalf("reverse key mismatch at %d: got %x want %x", idx, key, keys[idx])
+		}
+		val := rit.ValueCopy(nil)
+		want := values[string(keys[idx])]
+		if !bytes.Equal(val, want) {
+			t.Fatalf("reverse value mismatch for key %x", key)
+		}
+		idx--
+		count++
+	}
+	if err := rit.Error(); err != nil {
+		t.Fatalf("reverse iterator error: %v", err)
+	}
+	if count != len(keys) {
+		t.Fatalf("reverse scan count mismatch: got %d want %d", count, len(keys))
+	}
+}
+
 func TestReopenVerify_WALOn_Checkpoint_CompressionModes(t *testing.T) {
 	cases := []struct {
 		name        string
