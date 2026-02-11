@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -127,5 +128,61 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	}
 	if !bytes.Equal(val, bytes.Repeat([]byte{0x03}, 128)) {
 		t.Fatalf("k2 mismatch")
+	}
+}
+
+func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 90_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i + 1)}, 256)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before rewrite: %v", err)
+	}
+
+	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+
+	healthPath := valueLogHealthPath(dir)
+	beforeReopen, err := loadValueLogHealth(healthPath)
+	if err != nil {
+		t.Fatalf("load health before reopen: %v", err)
+	}
+	if len(beforeReopen) == 0 {
+		t.Fatalf("expected health metadata after rewrite")
+	}
+
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if err := reopen.Close(); err != nil {
+		t.Fatalf("close reopen: %v", err)
+	}
+
+	afterReopen, err := loadValueLogHealth(healthPath)
+	if err != nil {
+		t.Fatalf("load health after reopen: %v", err)
+	}
+	if !reflect.DeepEqual(beforeReopen, afterReopen) {
+		t.Fatalf("health metadata changed across reopen: before=%+v after=%+v", beforeReopen, afterReopen)
 	}
 }

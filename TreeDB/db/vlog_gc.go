@@ -138,6 +138,15 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		}
 	}
 
+	currentSet := db.valueLogManager.CurrentSetNoRefresh()
+	if currentSet != nil {
+		if err := updateValueLogHealthAfterGC(db.dir, currentSet, referenced); err != nil {
+			_ = db.valueLogManager.Release(currentSet)
+			return stats, err
+		}
+		_ = db.valueLogManager.Release(currentSet)
+	}
+
 	db.persistValueLogRefTrackerBestEffort()
 	return stats, nil
 }

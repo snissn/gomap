@@ -56,7 +56,11 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if err != nil {
 		return stats, err
 	}
+	oldValueIDs := make(map[uint32]struct{})
 	for _, seg := range segments {
+		if seg.valueLog {
+			oldValueIDs[seg.fileID] = struct{}{}
+		}
 		if seg.valueLog {
 			continue
 		}
@@ -233,6 +237,9 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 
 	if err := removeOldValueLogSegments(walDir, segments); err != nil {
+		return stats, err
+	}
+	if err := updateValueLogHealthAfterRewrite(opts.Dir, oldValueIDs); err != nil {
 		return stats, err
 	}
 

@@ -300,6 +300,86 @@ func TestValueLogGC_IncrementalMode_RebuildOnCorruption(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptrsA := appendPointersInNewSegment(t, dir, 0, 1, 70_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 512)
+	})
+	ptrsB := appendPointersInNewSegment(t, dir, 0, 2, 80_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 512)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrsA[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrsB[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	if err := db.Delete([]byte("k1")); err != nil {
+		t.Fatalf("delete k1: %v", err)
+	}
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+
+	healthPath := valueLogHealthPath(dir)
+	health, err := loadValueLogHealth(healthPath)
+	if err != nil {
+		t.Fatalf("load health after GC: %v", err)
+	}
+	if _, ok := health[ptrsA[0].FileID]; ok {
+		t.Fatalf("expected deleted segment %d removed from health metadata", ptrsA[0].FileID)
+	}
+	h2, ok := health[ptrsB[0].FileID]
+	if !ok {
+		t.Fatalf("expected referenced segment %d in health metadata", ptrsB[0].FileID)
+	}
+	if h2.LiveBytes <= 0 || h2.SegmentBytes <= 0 {
+		t.Fatalf("expected positive bytes for segment %d, got %+v", ptrsB[0].FileID, h2)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	stats, err := ValueLogRewriteOffline(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.SegmentsAfter == 0 {
+		t.Fatalf("expected rewritten segments, got %+v", stats)
+	}
+
+	healthAfterRewrite, err := loadValueLogHealth(healthPath)
+	if err != nil {
+		t.Fatalf("load health after rewrite: %v", err)
+	}
+	if len(healthAfterRewrite) == 0 {
+		t.Fatalf("expected health metadata entries after rewrite")
+	}
+	foundRewrite := false
+	for _, h := range healthAfterRewrite {
+		if h.RewriteCount > 0 {
+			foundRewrite = true
+			break
+		}
+	}
+	if !foundRewrite {
+		t.Fatalf("expected rewrite_count > 0 after rewrite, got %+v", healthAfterRewrite)
+	}
+}
+
 func valueLogRefSetFromCounts(counts map[uint32]uint64) map[uint32]struct{} {
 	out := make(map[uint32]struct{}, len(counts))
 	for fileID, n := range counts {
