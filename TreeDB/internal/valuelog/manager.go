@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -616,7 +618,7 @@ func (m *Manager) Release(set *Set) error {
 					if e := f.Close(); e != nil {
 						err = e
 					}
-					if e := os.Remove(f.Path); e != nil {
+					if e := removeSegmentFileWithRetry(f.Path); e != nil {
 						err = e
 					}
 					delete(m.files, f.ID)
@@ -695,7 +697,7 @@ func (m *Manager) RemoveSegment(id uint32) error {
 	m.mu.Unlock()
 
 	_ = f.Close()
-	return os.Remove(f.Path)
+	return removeSegmentFileWithRetry(f.Path)
 }
 
 // RemoveSegmentForce removes a segment without refcount checks.
@@ -711,7 +713,25 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 	m.mu.Unlock()
 
 	_ = f.Close()
-	return os.Remove(f.Path)
+	return removeSegmentFileWithRetry(f.Path)
+}
+
+func removeSegmentFileWithRetry(path string) error {
+	const (
+		attempts = 8
+		backoff  = 20 * time.Millisecond
+	)
+	for i := 0; i < attempts; i++ {
+		err := os.Remove(path)
+		if err == nil || os.IsNotExist(err) {
+			return nil
+		}
+		if runtime.GOOS != "windows" || i == attempts-1 {
+			return err
+		}
+		time.Sleep(backoff)
+	}
+	return nil
 }
 
 type segmentInfo struct {
