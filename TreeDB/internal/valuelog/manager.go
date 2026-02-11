@@ -78,7 +78,9 @@ func (f *File) Close() error {
 	if f == nil || f.File == nil {
 		return nil
 	}
-	f.closed.Store(true)
+	if !f.closed.CompareAndSwap(false, true) {
+		return nil
+	}
 	f.cacheMu.Lock()
 	f.cacheK = 0
 	f.cacheFlags = 0
@@ -100,7 +102,12 @@ func (f *File) Close() error {
 	f.mmapData.Store([]byte(nil))
 	f.remapMu.Unlock()
 
-	return f.File.Close()
+	file := f.File
+	f.File = nil
+	if file == nil {
+		return nil
+	}
+	return file.Close()
 }
 
 func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
@@ -615,8 +622,7 @@ func (m *Manager) Release(set *Set) error {
 			shouldRemove := false
 			m.mu.Lock()
 			if f.RefCount.Load() == 0 {
-				if _, exists := m.files[f.ID]; exists {
-					delete(m.files, f.ID)
+				if cur, exists := m.files[f.ID]; exists && cur == f {
 					shouldRemove = true
 				}
 			}
@@ -626,12 +632,36 @@ func (m *Manager) Release(set *Set) error {
 					err = e
 				}
 				if e := removeSegmentFileWithRetry(f.Path); e != nil {
+					if isWindowsSharingViolationError(e) {
+						go m.retryZombieDelete(f)
+						continue
+					}
 					err = e
+					continue
 				}
+				m.mu.Lock()
+				if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
+					delete(m.files, f.ID)
+				}
+				m.mu.Unlock()
 			}
 		}
 	}
 	return err
+}
+
+func (m *Manager) retryZombieDelete(f *File) {
+	if m == nil || f == nil {
+		return
+	}
+	if err := removeSegmentFileWithRetry(f.Path); err != nil {
+		return
+	}
+	m.mu.Lock()
+	if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
+		delete(m.files, f.ID)
+	}
+	m.mu.Unlock()
 }
 
 func (m *Manager) MarkZombie(id uint32) error {
@@ -720,12 +750,14 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 	return removeSegmentFileWithRetry(f.Path)
 }
 
+var removeSegmentPath = os.Remove
+
 func removeSegmentFileWithRetry(path string) error {
 	const attempts = 40
 	backoff := 25 * time.Millisecond
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		err := os.Remove(path)
+		err := removeSegmentPath(path)
 		if err == nil || os.IsNotExist(err) {
 			return nil
 		}
@@ -739,6 +771,18 @@ func removeSegmentFileWithRetry(path string) error {
 		}
 	}
 	return lastErr
+}
+
+func isWindowsSharingViolationError(err error) bool {
+	if runtime.GOOS != "windows" || err == nil {
+		return false
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && pathErr.Err != nil {
+		err = pathErr.Err
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "sharing violation") || strings.Contains(msg, "used by another process")
 }
 
 type segmentInfo struct {
