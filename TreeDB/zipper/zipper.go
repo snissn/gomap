@@ -89,6 +89,21 @@ const maxChildWorkCap = 1 << 14
 
 var childWorkPool sync.Pool
 
+const maxInternalEntryCap = 1 << 15
+
+var internalEntryPool sync.Pool
+
+const (
+	internalKeyArenaInitCap = page.PageSize
+	internalKeyArenaMaxCap  = 1 << 16
+)
+
+var internalKeyArenaPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, internalKeyArenaInitCap)
+	},
+}
+
 type maintenanceBudget struct {
 	remaining int64
 }
@@ -160,6 +175,32 @@ func putChildWorkSlice(children []childWork) {
 		children[i] = childWork{}
 	}
 	childWorkPool.Put(children[:0])
+}
+
+func getInternalEntrySlice(capacity int) []internalEntry {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxInternalEntryCap {
+		return make([]internalEntry, 0, capacity)
+	}
+	if v := internalEntryPool.Get(); v != nil {
+		s := v.([]internalEntry)
+		if cap(s) >= capacity {
+			return s[:0]
+		}
+	}
+	return make([]internalEntry, 0, capacity)
+}
+
+func putInternalEntrySlice(entries []internalEntry) {
+	if cap(entries) > maxInternalEntryCap {
+		return
+	}
+	for i := range entries {
+		entries[i] = internalEntry{}
+	}
+	internalEntryPool.Put(entries[:0])
 }
 
 func New(p *pager.Pager, a PageAllocator) *Zipper {
@@ -665,11 +706,148 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	opIdx := 0
 
+	const (
+		minParallelChildren = 4
+		minParallelOps      = 1024
+	)
+	useParallel := int(count) >= minParallelChildren && len(ops) >= minParallelOps && runtime.GOMAXPROCS(0) > 1
+
+	copyKeys := oldNode.InternalBaseDeltaEnabled()
+	var keyArena []byte
+	if copyKeys {
+		if v := internalKeyArenaPool.Get(); v != nil {
+			keyArena = v.([]byte)[:0]
+		} else {
+			keyArena = make([]byte, 0, internalKeyArenaInitCap)
+		}
+		defer func() {
+			if cap(keyArena) <= internalKeyArenaMaxCap {
+				internalKeyArenaPool.Put(keyArena[:0])
+			}
+		}()
+	}
+	cloneKey := func(src []byte) []byte {
+		if !copyKeys || len(src) == 0 {
+			return src
+		}
+		start := len(keyArena)
+		keyArena = append(keyArena, src...)
+		return keyArena[start : start+len(src)]
+	}
+
+	target := builder
+	appendInternal := func(key []byte, childID uint64, first bool) error {
+		if childID >= z.pager.PageCount() {
+			return errors.New("zipper: detected OOB child ID")
+		}
+		if first && key == nil {
+			key = []byte{}
+		}
+		entrySize := 2 + 8 + len(key)
+		if z.indexInternalBaseDelta {
+			entrySize = 2 + 4 + len(key)
+		}
+		if z.internalSoftFull(target, entrySize) {
+			err = node.ErrNodeFull
+		} else {
+			err = target.AddInternalChild(key, childID)
+		}
+		if err == node.ErrNodeFull {
+			target, err = z.createNewSplitInternal(target, builder, &splits, key, childID, metrics)
+			if err != nil {
+				return err
+			}
+			return nil
+		}
+		return err
+	}
+
+	// Fast path: most benchmarked writes are non-maintenance and below the
+	// parallel threshold. Stream child processing directly and avoid building a
+	// large childWork slice.
+	if !maintenance && !useParallel {
+		firstEntry := true
+		var curKey []byte
+		var curChild uint64
+		if count > 0 {
+			curKey, curChild, err = oldNode.GetInternalEntryView(0)
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			if curKey == nil {
+				curKey = []byte{}
+			}
+		}
+		for i := uint16(0); i < count; i++ {
+			lowKey := cloneKey(curKey)
+
+			var (
+				endKey    []byte
+				nextKey   []byte
+				nextChild uint64
+			)
+			if i+1 < count {
+				nextKey, nextChild, err = oldNode.GetInternalEntryView(i + 1)
+				if err != nil {
+					return 0, nil, nil, err
+				}
+				if nextKey == nil {
+					nextKey = []byte{}
+				}
+				endKey = nextKey
+			}
+			childHigh := high
+			if endKey != nil {
+				childHigh = endKey
+			}
+
+			startOpIdx := opIdx
+			for opIdx < len(ops) {
+				if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
+					opIdx++
+					continue
+				}
+				break
+			}
+			childOps := ops[startOpIdx:opIdx]
+
+			newChildID := curChild
+			var childSplits []Split
+			if len(childOps) > 0 {
+				var childRet []uint64
+				newChildID, childSplits, childRet, err = z.writeRecursive(curChild, childOps, maintenance, budget, metrics, lowKey, childHigh)
+				if err != nil {
+					return 0, nil, nil, err
+				}
+				retired = append(retired, childRet...)
+			}
+
+			if err := appendInternal(lowKey, newChildID, firstEntry); err != nil {
+				return 0, nil, nil, err
+			}
+			firstEntry = false
+			for _, s := range childSplits {
+				if err := appendInternal(s.Key, s.NodeID, firstEntry); err != nil {
+					return 0, nil, nil, err
+				}
+				firstEntry = false
+			}
+
+			curKey = nextKey
+			curChild = nextChild
+		}
+
+		if target != builder {
+			_ = target.Finish()
+			metrics.IndexWriteBytes += page.PageSize
+		}
+		return builder.PageID(), splits, retired, nil
+	}
+
 	children := getChildWorkSlice(int(count))
 	defer putChildWorkSlice(children)
 
 	for i := uint16(0); i < count; i++ {
-		// Optimization: Use View to avoid alloc
 		key, childID, err := oldNode.GetInternalEntryView(i)
 		if err != nil {
 			return 0, nil, nil, err
@@ -677,49 +855,35 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if key == nil {
 			key = []byte{}
 		}
-		keyCopy := append([]byte(nil), key...)
+		keyCopy := cloneKey(key)
+		children = append(children, childWork{
+			key:     keyCopy,
+			low:     keyCopy,
+			childID: childID,
+		})
+	}
 
-		// Determine End Key for this child
+	for i := range children {
 		var endKey []byte
-		if i+1 < count {
-			nextKey, _, err := oldNode.GetInternalEntryView(i + 1)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-			endKey = nextKey
+		if i+1 < len(children) {
+			endKey = children[i+1].key
 		}
 		childHigh := high
 		if endKey != nil {
-			childHigh = append([]byte(nil), endKey...)
+			childHigh = endKey
 		}
+		children[i].high = childHigh
 
-		// Identify ops range for this child
-		// ops[opIdx] ... until op.Key >= endKey
 		startOpIdx := opIdx
 		for opIdx < len(ops) {
 			if endKey == nil || bytes.Compare(ops[opIdx].Key, endKey) < 0 {
 				opIdx++
-			} else {
-				break
+				continue
 			}
+			break
 		}
-		childOps := ops[startOpIdx:opIdx]
-
-		children = append(children, childWork{
-			key:     keyCopy,
-			low:     append([]byte(nil), keyCopy...),
-			high:    childHigh,
-			childID: childID,
-			ops:     childOps,
-		})
+		children[i].ops = ops[startOpIdx:opIdx]
 	}
-
-	const (
-		minParallelChildren = 4
-		minParallelOps      = 1024
-	)
-
-	useParallel := len(children) >= minParallelChildren && len(ops) >= minParallelOps && runtime.GOMAXPROCS(0) > 1
 
 	// Best-effort: prefetch child pages before we start rewriting them. This can
 	// help overlap read-ahead / fault handling with compute, especially in the
@@ -738,21 +902,25 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		if maxParallel < 1 {
 			maxParallel = 1
 		}
-		jobs := make(chan int, len(children))
 		for i := range children {
 			if len(children[i].ops) == 0 {
 				children[i].newChild = children[i].childID
-				continue
 			}
-			jobs <- i
 		}
-		close(jobs)
+		var nextJob int64 = -1
 		var wg sync.WaitGroup
 		var firstErr error
 		var errOnce sync.Once
 		worker := func() {
 			defer wg.Done()
-			for i := range jobs {
+			for {
+				i := int(atomic.AddInt64(&nextJob, 1))
+				if i >= len(children) {
+					return
+				}
+				if len(children[i].ops) == 0 {
+					continue
+				}
 				var childMetrics adaptive.Metrics
 				ncID, cs, childRet, err := z.writeRecursive(children[i].childID, children[i].ops, maintenance, budget, &childMetrics, children[i].low, children[i].high)
 				if err != nil {
@@ -799,7 +967,34 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		}
 	}
 
-	entries := make([]internalEntry, 0, len(children)+4)
+	if !maintenance {
+		firstEntry := true
+		for i := range children {
+			child := &children[i]
+			if err := appendInternal(child.key, child.newChild, firstEntry); err != nil {
+				return 0, nil, nil, err
+			}
+			firstEntry = false
+			for _, s := range child.splits {
+				if err := appendInternal(s.Key, s.NodeID, firstEntry); err != nil {
+					return 0, nil, nil, err
+				}
+				firstEntry = false
+			}
+		}
+		if target != builder {
+			_ = target.Finish()
+			metrics.IndexWriteBytes += page.PageSize
+		}
+		return builder.PageID(), splits, retired, nil
+	}
+
+	totalEntries := len(children)
+	for i := range children {
+		totalEntries += len(children[i].splits)
+	}
+	entries := getInternalEntrySlice(totalEntries)
+	defer func() { putInternalEntrySlice(entries) }()
 	for i := range children {
 		child := children[i]
 		if child.newChild >= z.pager.PageCount() {
@@ -812,51 +1007,31 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			if s.NodeID >= z.pager.PageCount() {
 				return 0, nil, nil, errors.New("zipper: detected OOB child ID (split)")
 			}
-			entries = append(entries, internalEntry{key: append([]byte(nil), s.Key...), child: s.NodeID})
+			entries = append(entries, internalEntry{key: s.Key, child: s.NodeID})
 		}
 	}
 
 	coalesced := entries
-	if maintenance {
-		var extraRetired []uint64
-		coalesced, extraRetired, err = z.coalesceLeafChildren(entries, budget, metrics)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		if len(extraRetired) > 0 {
-			retired = append(retired, extraRetired...)
-		}
+	var extraRetired []uint64
+	coalesced, extraRetired, err = z.coalesceLeafChildren(entries, budget, metrics)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	if len(extraRetired) > 0 {
+		retired = append(retired, extraRetired...)
+	}
 
-		coalesced, extraRetired, err = z.coalesceInternalChildren(coalesced, budget, metrics)
-		if err != nil {
-			return 0, nil, nil, err
-		}
-		if len(extraRetired) > 0 {
-			retired = append(retired, extraRetired...)
-		}
+	coalesced, extraRetired, err = z.coalesceInternalChildren(coalesced, budget, metrics)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	if len(extraRetired) > 0 {
+		retired = append(retired, extraRetired...)
 	}
 
 	// Write final internal entries, splitting if needed.
-	target := builder
-	for i, e := range coalesced {
-		if i == 0 && (e.key == nil) {
-			e.key = []byte{}
-		}
-		entrySize := 2 + 8 + len(e.key)
-		if z.indexInternalBaseDelta {
-			entrySize = 2 + 4 + len(e.key)
-		}
-		if z.internalSoftFull(target, entrySize) {
-			err = node.ErrNodeFull
-		} else {
-			err = target.AddInternalChild(e.key, e.child)
-		}
-		if err == node.ErrNodeFull {
-			target, err = z.createNewSplitInternal(target, builder, &splits, e.key, e.child, metrics)
-			if err != nil {
-				return 0, nil, nil, err
-			}
-		} else if err != nil {
+	for i := range coalesced {
+		if err := appendInternal(coalesced[i].key, coalesced[i].child, i == 0); err != nil {
 			return 0, nil, nil, err
 		}
 	}

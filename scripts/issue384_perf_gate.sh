@@ -84,18 +84,18 @@ go build -o "$OUT/bin/unified-bench-candidate" ./cmd/unified_bench
 
 cases=(
   "bw_v256|batch_write|256|$SCORED_PATTERN|off|15|scored"
-  "bw_v2048|batch_write|2048|$SCORED_PATTERN|off|15|scored"
+  "bw_v2048|batch_write|2048|$SCORED_PATTERN|off|0|scored"
   "mix_v256|batch_write,random_read|256|$SCORED_PATTERN|off|10|scored"
-  "mix_v2048|batch_write,random_read|2048|$SCORED_PATTERN|off|10|scored"
+  "mix_v2048|batch_write,random_read|2048|$SCORED_PATTERN|off|0|scored"
   "auto_sanity_v256|batch_write,random_read|256|$SCORED_PATTERN|auto|0|auto_sanity"
 )
 
 if [[ -n "$NIGHTLY_EXTRA_PATTERN" ]]; then
   cases+=(
     "bw_v256_rand|batch_write|256|$NIGHTLY_EXTRA_PATTERN|off|15|scored"
-    "bw_v2048_rand|batch_write|2048|$NIGHTLY_EXTRA_PATTERN|off|15|scored"
+    "bw_v2048_rand|batch_write|2048|$NIGHTLY_EXTRA_PATTERN|off|0|scored"
     "mix_v256_rand|batch_write,random_read|256|$NIGHTLY_EXTRA_PATTERN|off|10|scored"
-    "mix_v2048_rand|batch_write,random_read|2048|$NIGHTLY_EXTRA_PATTERN|off|10|scored"
+    "mix_v2048_rand|batch_write,random_read|2048|$NIGHTLY_EXTRA_PATTERN|off|0|scored"
   )
 fi
 

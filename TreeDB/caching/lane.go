@@ -45,6 +45,19 @@ type lane struct {
 	vlogBlockKMax           [vlogBlockCodecCount]atomic.Uint64
 	vlogBlockKBuckets       [vlogBlockCodecCount][vlogBlockKBucketCount]atomic.Uint64
 	vlogQueueing            atomic.Bool
+	vlogQueueEnqueued       atomic.Uint64
+	vlogQueueLagCount       atomic.Uint64
+	vlogQueueLagTotalNs     atomic.Uint64
+	vlogQueueLagMaxNs       atomic.Uint64
+	vlogQueueLagBuckets     [vlogQueueLagBucketCount]atomic.Uint64
+	vlogQueueDepthSamples   atomic.Uint64
+	vlogQueueDepthSum       atomic.Uint64
+	vlogQueueDepthMax       atomic.Uint64
+	vlogQueueDepthLast      atomic.Uint64
+	vlogQueuePositiveRunMax atomic.Uint64
+	vlogQueueDriftLastDepth int
+	vlogQueueDriftLastAtNs  int64
+	vlogQueueDriftCurrentNs uint64
 	vlogDirty               atomic.Bool
 	vlogLiveBytes           atomic.Int64
 	vlogClosedBytes         atomic.Int64

@@ -33,7 +33,7 @@ var (
 	treedbPagerMmapPopulate               = flag.Bool("treedb-pager-mmap-populate", false, "TreeDB (Linux): enable MAP_POPULATE on index.db mmap")
 	treedbPagerPrefetchOnRead             = flag.Bool("treedb-pager-prefetch-on-read", false, "TreeDB (Linux): enable best-effort mmap prefetch hints (madvise WILLNEED) during checkpoint/merge rewrites")
 	treedbChunkSize                       = flag.Int64("treedb-chunk-size", 64*1024*1024, "TreeDB: pager chunk size in bytes (default 64MiB)")
-	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=default)")
+	treedbJournalLanes                    = flag.Int("treedb-journal-lanes", 0, "TreeDB: journal lane count (0=auto)")
 	treedbJournalCompress                 = flag.Bool("treedb-journal-compress", false, "TreeDB: compress journal/commitlog segments (zstd)")
 	treedbKeepRecent                      = flag.Uint64("treedb-keep-recent", 0, "TreeDB: KeepRecent commit versions to retain before page reuse (0=default; cached defaults to 1)")
 	treedbMaxQueuedMems                   = flag.Int("treedb-max-queued-memtables", 0, "TreeDB (cached): max queued immutable memtables before backpressure flush (0=default, <0=disable)")
@@ -84,17 +84,20 @@ var (
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 
-	treedbDisableWAL          = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
-	treedbRelaxedSync         = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
-	treedbDisableReadChecksum = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
-	treedbAllowUnsafe         = flag.Bool("treedb-allow-unsafe", false, "TreeDB: allow unsafe durability/integrity options (required for -treedb-disable-wal/-treedb-relaxed-sync/-treedb-disable-read-checksum)")
-	treedbDisablePiggyback    = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
-	treedbMemtableMode        = flag.String("treedb-memtable-mode", "", "TreeDB (cached): memtable mode (adaptive|skiplist|hash_sorted)")
+	treedbDisableWAL             = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
+	treedbRelaxedSync            = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
+	treedbDisableReadChecksum    = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
+	treedbAllowUnsafe            = flag.Bool("treedb-allow-unsafe", false, "TreeDB: allow unsafe durability/integrity options (required for -treedb-disable-wal/-treedb-relaxed-sync/-treedb-disable-read-checksum)")
+	treedbDisablePiggyback       = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
+	treedbMemtableMode           = flag.String("treedb-memtable-mode", "", "TreeDB (cached): memtable mode (adaptive|skiplist|hash_sorted|btree|append_only)")
+	treedbDomainIngressWorkers   = flag.Int("treedb-domain-ingress-workers", 0, "TreeDB (cached): experimental domain ingress worker count (0=disabled)")
+	treedbDomainIngressQueueSize = flag.Int("treedb-domain-ingress-queue-size", 0, "TreeDB (cached): per-worker ingress queue length (0=default)")
 )
 
 func init() {
 	RegisterDB("treedb", NewTreeDB)
 	RegisterAlias("treedbcached", "treedb")
+	RegisterHiddenDB("treedb_backend", NewTreeDBBackend)
 	RegisterHiddenDB("treedb_vlog_off", NewTreeDBVlogOff)
 	RegisterHiddenDB("treedb_vlog_dict", NewTreeDBVlogDict)
 	RegisterHiddenDB("treedb_vlog_block_snappy", NewTreeDBVlogBlockSnappy)
@@ -263,6 +266,8 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("index_columnar_leaves=%t", r.opts.IndexColumnarLeaves))
 	lines = append(lines, fmt.Sprintf("index_packed_valueptr=%t", r.opts.IndexPackedValuePtr))
 	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
+	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
+	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 
 	threshold := r.opts.ValueLog.PointerThreshold
@@ -452,6 +457,8 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		IndexInternalBaseDelta: internalBaseDeltaEffective,
 
 		MemtableMode:               *treedbMemtableMode,
+		DomainIngressWorkers:       *treedbDomainIngressWorkers,
+		DomainIngressQueueSize:     *treedbDomainIngressQueueSize,
 		FlushThreshold:             *treedbFlushThreshold,
 		MaxQueuedMemtables:         *treedbMaxQueuedMems,
 		SlowdownBacklogSeconds:     *treedbSlowdownBacklogSeconds,

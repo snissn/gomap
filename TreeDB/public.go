@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -70,6 +71,7 @@ type DB struct {
 	bgErr          error
 	durabilityMode string
 	dir            string
+	maintenance    maintenanceCoordinator
 }
 
 type writePathInfo struct {
@@ -77,6 +79,67 @@ type writePathInfo struct {
 	valueStore string
 	redoLog    string
 	warn       bool
+}
+
+type maintenanceCoordinator struct {
+	mu sync.Mutex
+
+	active atomic.Int32
+
+	deferrals atomic.Uint64
+	waitTotal atomic.Int64
+	waitMax   atomic.Int64
+
+	gcRuns     atomic.Uint64
+	vacuumRuns atomic.Uint64
+
+	lastGCAt     atomic.Int64
+	lastVacuumAt atomic.Int64
+}
+
+const (
+	maintenanceOpNone int32 = iota
+	maintenanceOpGC
+	maintenanceOpVacuum
+	maintenanceOpOther
+)
+
+func maintenanceOpCode(op string) int32 {
+	switch op {
+	case "gc":
+		return maintenanceOpGC
+	case "vacuum":
+		return maintenanceOpVacuum
+	case "":
+		return maintenanceOpNone
+	default:
+		return maintenanceOpOther
+	}
+}
+
+func maintenanceActiveLabel(code int32) string {
+	switch code {
+	case maintenanceOpGC:
+		return "gc"
+	case maintenanceOpVacuum:
+		return "vacuum"
+	case maintenanceOpOther:
+		return "other"
+	default:
+		return ""
+	}
+}
+
+func atomicStoreMaxInt64(dst *atomic.Int64, value int64) {
+	for {
+		cur := dst.Load()
+		if value <= cur {
+			return
+		}
+		if dst.CompareAndSwap(cur, value) {
+			return
+		}
+	}
 }
 
 func writePathFromOptions(opts Options) writePathInfo {
@@ -108,6 +171,71 @@ func (db *DB) ensureOpen() error {
 		return ErrClosed
 	}
 	return nil
+}
+
+func (db *DB) beginFullScanMaintenance(op string) (time.Duration, func(success bool)) {
+	if db == nil {
+		return 0, func(bool) {}
+	}
+	wait := time.Duration(0)
+	if db.maintenance.mu.TryLock() {
+		// uncontended fast path
+	} else {
+		waitStart := time.Now()
+		db.maintenance.mu.Lock()
+		wait = time.Since(waitStart)
+		db.maintenance.deferrals.Add(1)
+		db.maintenance.waitTotal.Add(wait.Nanoseconds())
+		atomicStoreMaxInt64(&db.maintenance.waitMax, wait.Nanoseconds())
+	}
+	db.maintenance.active.Store(maintenanceOpCode(op))
+
+	return wait, func(success bool) {
+		if success {
+			now := time.Now().UnixNano()
+			switch op {
+			case "gc":
+				db.maintenance.gcRuns.Add(1)
+				db.maintenance.lastGCAt.Store(now)
+			case "vacuum":
+				db.maintenance.vacuumRuns.Add(1)
+				db.maintenance.lastVacuumAt.Store(now)
+			}
+		}
+		db.maintenance.active.Store(maintenanceOpNone)
+		db.maintenance.mu.Unlock()
+	}
+}
+
+func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
+	if stats == nil || m == nil {
+		return
+	}
+	active := maintenanceActiveLabel(m.active.Load())
+	deferrals := m.deferrals.Load()
+	waitTotal := time.Duration(m.waitTotal.Load())
+	waitMax := time.Duration(m.waitMax.Load())
+	gcRuns := m.gcRuns.Load()
+	vacuumRuns := m.vacuumRuns.Load()
+	lastGCAt := m.lastGCAt.Load()
+	lastVacuumAt := m.lastVacuumAt.Load()
+
+	stats["treedb.maintenance.full_scan.active"] = active
+	stats["treedb.maintenance.full_scan.deferrals"] = fmt.Sprintf("%d", deferrals)
+	stats["treedb.maintenance.full_scan.wait_total_ms"] = fmt.Sprintf("%.3f", float64(waitTotal)/float64(time.Millisecond))
+	stats["treedb.maintenance.full_scan.wait_max_ms"] = fmt.Sprintf("%.3f", float64(waitMax)/float64(time.Millisecond))
+	stats["treedb.maintenance.full_scan.gc_runs"] = fmt.Sprintf("%d", gcRuns)
+	stats["treedb.maintenance.full_scan.vacuum_runs"] = fmt.Sprintf("%d", vacuumRuns)
+	if lastGCAt > 0 {
+		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = fmt.Sprintf("%d", lastGCAt)
+	} else {
+		stats["treedb.maintenance.full_scan.last_gc_unix_nano"] = "0"
+	}
+	if lastVacuumAt > 0 {
+		stats["treedb.maintenance.full_scan.last_vacuum_unix_nano"] = fmt.Sprintf("%d", lastVacuumAt)
+	} else {
+		stats["treedb.maintenance.full_scan.last_vacuum_unix_nano"] = "0"
+	}
 }
 
 // Open opens TreeDB. By default it enables caching (write-back layer).
@@ -304,6 +432,8 @@ func Open(opts Options) (*DB, error) {
 		FlushThreshold:                      opts.FlushThreshold,
 		MemtableMode:                        opts.MemtableMode,
 		MemtableShards:                      opts.MemtableShards,
+		DomainIngressWorkers:                opts.DomainIngressWorkers,
+		DomainIngressQueueSize:              opts.DomainIngressQueueSize,
 		MaxQueuedMemtables:                  opts.MaxQueuedMemtables,
 		SlowdownBacklogSeconds:              opts.SlowdownBacklogSeconds,
 		StopBacklogSeconds:                  opts.StopBacklogSeconds,
@@ -791,6 +921,7 @@ func (db *DB) Stats() map[string]string {
 		writePathStatsInto(stats, db.writePath)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
+		maintenanceStatsInto(stats, &db.maintenance)
 		return stats
 	}
 	stats := db.backend.Stats()
@@ -800,6 +931,7 @@ func (db *DB) Stats() map[string]string {
 	writePathStatsInto(stats, db.writePath)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
+	maintenanceStatsInto(stats, &db.maintenance)
 	return stats
 }
 
@@ -872,6 +1004,9 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if db.backend == nil {
 		return ErrClosed
 	}
+	_, finishMaintenance := db.beginFullScanMaintenance("vacuum")
+	success := false
+	defer func() { finishMaintenance(success) }()
 
 	// In cached mode, ensure the backend reflects all buffered writes before
 	// rebuilding/switching the index file. This avoids exposing a backend state
@@ -883,7 +1018,11 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		}
 	}
 
-	return db.backend.VacuumIndexOnline(ctx)
+	if err := db.backend.VacuumIndexOnline(ctx); err != nil {
+		return err
+	}
+	success = true
+	return nil
 }
 
 // VacuumIndexOffline rewrites `index.db` into a fresh file and swaps it in.

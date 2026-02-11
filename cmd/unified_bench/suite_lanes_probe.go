@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -60,6 +61,7 @@ func runLaneProbeSuite(baseCfg BenchConfig) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("lanes_probe: wal size: %w", err)
 	}
+	stats := run.TreeDBStats[dbName]
 
 	if err := suiteCleanupDirs(run.Instances); err != nil {
 		return "", err
@@ -75,6 +77,28 @@ func runLaneProbeSuite(baseCfg BenchConfig) (string, error) {
 	sb.WriteString(fmt.Sprintf("- wall time: %s\n", wall.Truncate(time.Millisecond)))
 	sb.WriteString(fmt.Sprintf("- index.db bytes: %s\n", formatFloat(float64(indexBytes))))
 	sb.WriteString(fmt.Sprintf("- wal bytes: %s\n", formatFloat(float64(walBytes))))
+	if lagP99, ok := parseStatFloat(stats, "treedb.cache.vlog_queue.lag_p99_ms"); ok {
+		sb.WriteString(fmt.Sprintf("- queue lag p99: %.3fms\n", lagP99))
+	}
+	if lagP999, ok := parseStatFloat(stats, "treedb.cache.vlog_queue.lag_p999_ms"); ok {
+		sb.WriteString(fmt.Sprintf("- queue lag p999: %.3fms\n", lagP999))
+	}
+	sb.WriteString(fmt.Sprintf("- queue enqueued total: %s\n", formatInt(int(parseUint(stats, "treedb.cache.vlog_queue.enqueued_total")))))
+	sb.WriteString(fmt.Sprintf("- queue depth max: %s\n", formatInt(int(parseUint(stats, "treedb.cache.vlog_queue.depth_max")))))
+
+	laneDepthKeys := make([]string, 0)
+	for k := range stats {
+		if strings.HasPrefix(k, "treedb.cache.vlog_queue.lane.") && strings.HasSuffix(k, ".depth_max") {
+			laneDepthKeys = append(laneDepthKeys, k)
+		}
+	}
+	sort.Strings(laneDepthKeys)
+	if len(laneDepthKeys) > 0 {
+		sb.WriteString("- lane queue depth max:\n")
+		for _, k := range laneDepthKeys {
+			sb.WriteString(fmt.Sprintf("  - %s = %s\n", k, stats[k]))
+		}
+	}
 	sb.WriteString("\n")
 
 	return sb.String(), nil

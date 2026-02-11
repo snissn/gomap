@@ -423,9 +423,23 @@ func (m *Manager) Refresh() error {
 // CurrentSet returns a snapshot of the current value-log files.
 func (m *Manager) CurrentSet() *Set {
 	_ = m.Refresh()
+	return m.CurrentSetNoRefresh()
+}
+
+// CurrentSetNoRefresh returns a snapshot of the currently registered value-log
+// files without scanning the filesystem for newly created segments.
+//
+// Callers in hot paths should prefer this when they know no new value-log
+// segments can be referenced by the state being published.
+func (m *Manager) CurrentSetNoRefresh() *Set {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.currentSetLocked()
+}
 
+// currentSetLocked builds a ref-counted snapshot.
+// m.mu must be held (read or write).
+func (m *Manager) currentSetLocked() *Set {
 	files := make(map[uint32]*File, len(m.files))
 	for id, f := range m.files {
 		if f.IsZombie.Load() {

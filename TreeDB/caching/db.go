@@ -419,8 +419,8 @@ func defaultMemtableShards() int {
 		n = 1
 	}
 	n *= 2
-	if n > 8 {
-		n = 8
+	if n > 16 {
+		n = 16
 	}
 	return normalizeShardCount(n)
 }
@@ -1318,6 +1318,12 @@ func (db *DB) valueLogRetainedPaths() []string {
 	return paths
 }
 
+// ValueLogRetainedPaths returns a best-effort snapshot of retained value-log
+// segment paths currently pinned by cached-mode pointer lifecycle tracking.
+func (db *DB) ValueLogRetainedPaths() []string {
+	return db.valueLogRetainedPaths()
+}
+
 func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 	it, err := db.backend.Iterator(nil, nil)
 	if err != nil {
@@ -1544,7 +1550,7 @@ type Options struct {
 	FlushThreshold int64
 
 	// MemtableMode selects the in-memory write buffer implementation.
-	// Supported: "skiplist", "hash_sorted", "btree", "adaptive".
+	// Supported: "skiplist", "hash_sorted", "btree", "append_only", "adaptive".
 	// Use "adaptive" or "adaptive:<mode>" to switch per-rotation based on workload.
 	MemtableMode string
 
@@ -1552,6 +1558,12 @@ type Options struct {
 	// use a default derived from GOMAXPROCS. The count is rounded down to a power
 	// of two.
 	MemtableShards int
+	// DomainIngressWorkers enables experimental domain-local write ingress queues.
+	// Values <= 0 keep the legacy direct caller write path.
+	DomainIngressWorkers int
+	// DomainIngressQueueSize configures the per-worker ingress queue length.
+	// Values <= 0 use a default.
+	DomainIngressQueueSize int
 
 	// Legacy backpressure knob: queue length limit.
 	// 0 uses the default (4). <0 disables writer backpressure entirely.
@@ -1613,7 +1625,8 @@ type Options struct {
 
 	// DisableWAL disables the redo/journal log while keeping the value log enabled.
 	DisableWAL bool
-	// JournalLanes controls the number of active commit/value log lanes (0=default).
+	// JournalLanes controls the number of active commit/value log lanes
+	// (0=GOMAXPROCS-aware default).
 	// Max supported lanes is 255; value-log segment sequence per lane is capped at 8,388,607.
 	JournalLanes int
 	// WALMaxSegmentBytes caps the size of a single WAL segment payload.
@@ -1766,6 +1779,7 @@ type DB struct {
 	queueShardIDs    []uint16
 	queueLaneIDs     []uint16
 	queueIDs         []uint64
+	queueEnqueueNS   []int64
 	nextQueueID      atomic.Uint64
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
@@ -1889,35 +1903,38 @@ type DB struct {
 	dictCurrentOps    atomic.Uint64
 
 	// Config
-	dir                     string
-	flushThreshold          int64
-	memtableCap             int
-	memtableMode            memtable.Mode
-	memtableStats           memtableStats
-	memtableAdaptive        bool
-	adaptiveShardedStats    bool
-	memtableWarmupActive    bool
-	memtableWarmupThreshold int64
-	maxQueuedMemtables      int
-	slowdownBacklogSeconds  float64
-	stopBacklogSeconds      float64
-	maxBacklogBytes         int64
-	writerFlushMaxMemtables int
-	writerFlushMaxDuration  time.Duration
-	flushBuildConcurrency   int
-	flushBuildMinEntries    int
-	flushBuildMinUnits      int
-	flushBuildChunkCap      int
-	flushBuildChunkTarget   int
-	flushBuildChunkMinBytes int
-	flushBuildChunkMaxBytes int
-	flushBuildPrefetchUnits int
-	flushBackendMaxEntries  int
-	flushBackendInitEntries int
-	flushBackendMaxBatches  int
-	walMaxSegmentBytes      int64
-	valueLogMaxSegmentBytes int64
-	journalCompression      bool
+	dir                       string
+	flushThreshold            int64
+	memtableCap               int
+	memtableMode              memtable.Mode
+	memtableStats             memtableStats
+	memtableAdaptive          bool
+	adaptiveShardedStats      bool
+	memtableWarmupActive      bool
+	memtableWarmupThreshold   int64
+	domainIngressWorkers      int
+	domainIngressQueueSize    int
+	maxQueuedMemtables        int
+	slowdownBacklogSeconds    float64
+	stopBacklogSeconds        float64
+	maxBacklogBytes           int64
+	writerFlushMaxMemtables   int
+	writerFlushMaxDuration    time.Duration
+	flushBuildConcurrency     int
+	flushBuildAutoConcurrency bool
+	flushBuildMinEntries      int
+	flushBuildMinUnits        int
+	flushBuildChunkCap        int
+	flushBuildChunkTarget     int
+	flushBuildChunkMinBytes   int
+	flushBuildChunkMaxBytes   int
+	flushBuildPrefetchUnits   int
+	flushBackendMaxEntries    int
+	flushBackendInitEntries   int
+	flushBackendMaxBatches    int
+	walMaxSegmentBytes        int64
+	valueLogMaxSegmentBytes   int64
+	journalCompression        bool
 
 	disableJournal     bool
 	relaxedSync        bool
@@ -1937,6 +1954,12 @@ type DB struct {
 	flushBpsEWMA             float64
 	queueLaneIDMisses        atomic.Int64
 	backendWriteBatchesTotal atomic.Int64
+	domainIngressMu          sync.Mutex
+	domainIngressCh          []chan domainIngressRequest
+	domainIngressEnqueued    atomic.Uint64
+	domainIngressProcessed   atomic.Uint64
+	domainIngressFallback    atomic.Uint64
+	domainIngressDepthMax    atomic.Uint64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -1963,6 +1986,18 @@ type DB struct {
 	autoCheckpointLastWALTrimmed           atomic.Int64
 	autoCheckpointLastWALBytes             atomic.Int64
 	autoCheckpointMaxWALBytes              atomic.Int64
+
+	checkpointCutoverLastNanos    atomic.Int64
+	checkpointCutoverMaxNanos     atomic.Int64
+	checkpointCutoverTotalNanos   atomic.Int64
+	checkpointCutoverSamples      atomic.Uint64
+	checkpointCutoverLastUnixNano atomic.Int64
+
+	materializationLastDrainUnixNano atomic.Int64
+
+	publishWatermarkLagMu            sync.Mutex
+	publishWatermarkLastBacklogBytes int64
+	publishWatermarkLastUnixNano     int64
 
 	// testing hooks
 	testOnVlogFlush      func(laneID int)
@@ -2400,6 +2435,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if shardCount < 1 {
 		shardCount = 1
 	}
+	domainIngressWorkers := opts.DomainIngressWorkers
+	if domainIngressWorkers < 0 {
+		domainIngressWorkers = 0
+	}
+	if domainIngressWorkers > shardCount {
+		domainIngressWorkers = shardCount
+	}
+	domainIngressQueueSize := opts.DomainIngressQueueSize
+	if domainIngressWorkers > 0 && domainIngressQueueSize <= 0 {
+		domainIngressQueueSize = defaultDomainIngressQueueSize
+	}
 	if opts.MaxQueuedMemtables == 0 {
 		// Keep the default queued backlog roughly stable in bytes when callers
 		// tune FlushThreshold. Historically: 64MB flush threshold with a queue
@@ -2409,6 +2455,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if opts.WriterFlushMaxMemtables == 0 {
 		opts.WriterFlushMaxMemtables = 1
 	}
+	flushBuildAutoConcurrency := opts.FlushBuildConcurrency <= 0
 	if opts.FlushBuildConcurrency <= 0 {
 		opts.FlushBuildConcurrency = runtime.GOMAXPROCS(0)
 		if opts.FlushBuildConcurrency < 1 {
@@ -2500,7 +2547,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	laneCount := opts.JournalLanes
 	if laneCount <= 0 {
-		laneCount = 1
+		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
 	}
 	// Temporarily remove the logic that increases laneCount based on maxLaneID
 	if maxLaneID+1 > laneCount {
@@ -2758,6 +2805,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableAdaptive:                     adaptive,
 		memtableWarmupActive:                 adaptive && warmupThreshold < opts.FlushThreshold,
 		memtableWarmupThreshold:              warmupThreshold,
+		domainIngressWorkers:                 domainIngressWorkers,
+		domainIngressQueueSize:               domainIngressQueueSize,
 		maxQueuedMemtables:                   opts.MaxQueuedMemtables,
 		slowdownBacklogSeconds:               opts.SlowdownBacklogSeconds,
 		stopBacklogSeconds:                   opts.StopBacklogSeconds,
@@ -2765,6 +2814,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		writerFlushMaxMemtables:              opts.WriterFlushMaxMemtables,
 		writerFlushMaxDuration:               opts.WriterFlushMaxDuration,
 		flushBuildConcurrency:                opts.FlushBuildConcurrency,
+		flushBuildAutoConcurrency:            flushBuildAutoConcurrency,
 		flushBuildMinEntries:                 opts.FlushBuildMinEntries,
 		flushBuildMinUnits:                   opts.FlushBuildMinUnits,
 		flushBuildChunkCap:                   opts.FlushBuildChunkCap,
@@ -2840,6 +2890,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
+	nowNS := time.Now().UnixNano()
+	db.materializationLastDrainUnixNano.Store(nowNS)
+	db.publishWatermarkLastUnixNano = nowNS
 
 	// Open initial value-log segments (if enabled) and journal/commit log
 	// segments (if enabled). Journal and value log are decoupled.
@@ -2928,6 +2981,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
 	db.mu.Unlock()
+
+	db.startDomainIngressWorkers()
 
 	// Start background flusher
 	db.wg.Add(1)
@@ -3279,6 +3334,21 @@ func (db *DB) assignCommitSeq(records []logRecord) {
 	}
 }
 
+type domainIngressOp uint8
+
+const (
+	domainIngressOpSet domainIngressOp = iota + 1
+	domainIngressOpDelete
+)
+
+type domainIngressRequest struct {
+	op    domainIngressOp
+	key   []byte
+	value []byte
+	sync  bool
+	done  chan error
+}
+
 type walWriteRequest struct {
 	records []logRecord
 	sync    bool
@@ -3302,6 +3372,7 @@ type vlogWriteRequest struct {
 	blockCodec       valuelog.BlockCodec
 	probeCompression bool
 	durability       journalDurability
+	enqueuedAt       time.Time
 	ack              *vlogAck
 }
 
@@ -3627,10 +3698,12 @@ type walFastItem struct {
 }
 
 const (
-	walWriteBuffer   = 4096
-	walWriteBatchMax = 512
-	walFastBatchMax  = 2048
-	walFastQueueMax  = 16384
+	walWriteBuffer                = 4096
+	walWriteBatchMax              = 512
+	walFastBatchMax               = 2048
+	walFastQueueMax               = 16384
+	defaultDomainIngressQueueSize = 1024
+	domainIngressBatchMax         = 128
 )
 
 const (
@@ -3641,10 +3714,219 @@ const (
 
 // Always queue values at or above this size to avoid blocking callers on large
 // appends and to improve value-log batching efficiency.
-const vlogQueueMinValueSize = 16 << 10
+const vlogQueueMinValueSize = 1 << 10
 
 // Linger briefly to coalesce micro-batches for small/medium queued writes.
 const vlogWriteLinger = 75 * time.Microsecond
+
+func defaultJournalLaneCount(procs int) int {
+	if procs <= 2 {
+		return 1
+	}
+	// Keep defaults conservative on low/mid core hosts.
+	lanes := procs / 4
+	if lanes < 1 {
+		lanes = 1
+	}
+	// On high-core hosts, increase lane fanout to unlock journal/value-log
+	// parallelism, but avoid the most aggressive split to limit queue overhead.
+	if procs >= 16 {
+		highCoreLanes := (procs * 3) / 8
+		if highCoreLanes > lanes {
+			lanes = highCoreLanes
+		}
+	}
+	if lanes > 8 {
+		lanes = 8
+	}
+	return lanes
+}
+
+func (db *DB) startDomainIngressWorkers() {
+	if db == nil || db.domainIngressWorkers <= 0 {
+		return
+	}
+	queueSize := db.domainIngressQueueSize
+	if queueSize <= 0 {
+		queueSize = defaultDomainIngressQueueSize
+	}
+	db.domainIngressMu.Lock()
+	defer db.domainIngressMu.Unlock()
+	if len(db.domainIngressCh) > 0 {
+		return
+	}
+	workers := db.domainIngressWorkers
+	if workers < 1 {
+		return
+	}
+	db.domainIngressQueueSize = queueSize
+	db.domainIngressCh = make([]chan domainIngressRequest, workers)
+	for workerID := 0; workerID < workers; workerID++ {
+		ch := make(chan domainIngressRequest, queueSize)
+		db.domainIngressCh[workerID] = ch
+		db.wg.Add(1)
+		go db.domainIngressLoop(ch)
+	}
+}
+
+func (db *DB) stopDomainIngressWorkers() {
+	if db == nil {
+		return
+	}
+	db.domainIngressMu.Lock()
+	queues := db.domainIngressCh
+	db.domainIngressCh = nil
+	db.domainIngressMu.Unlock()
+	for _, ch := range queues {
+		close(ch)
+	}
+}
+
+func (db *DB) domainIngressLoop(ch <-chan domainIngressRequest) {
+	defer db.wg.Done()
+	batchReqs := make([]domainIngressRequest, 0, domainIngressBatchMax)
+	for {
+		req, ok := <-ch
+		if !ok {
+			return
+		}
+		batchReqs = append(batchReqs[:0], req)
+	drain:
+		for len(batchReqs) < domainIngressBatchMax {
+			select {
+			case req, ok = <-ch:
+				if !ok {
+					db.processDomainIngressBatch(batchReqs)
+					return
+				}
+				batchReqs = append(batchReqs, req)
+			default:
+				break drain
+			}
+		}
+		db.processDomainIngressBatch(batchReqs)
+	}
+}
+
+func (db *DB) processDomainIngressBatch(reqs []domainIngressRequest) {
+	if len(reqs) == 0 {
+		return
+	}
+	if len(reqs) == 1 {
+		req := reqs[0]
+		var err error
+		switch req.op {
+		case domainIngressOpSet:
+			err = db.setDirect(req.key, req.value, false)
+		case domainIngressOpDelete:
+			err = db.deleteDirect(req.key, false)
+		default:
+			err = fmt.Errorf("cachingdb: unknown ingress op %d", req.op)
+		}
+		db.domainIngressProcessed.Add(1)
+		if req.done != nil {
+			req.done <- err
+			close(req.done)
+		}
+		return
+	}
+
+	b := db.NewBatchWithSize(len(reqs))
+	var err error
+	for i := range reqs {
+		req := reqs[i]
+		switch req.op {
+		case domainIngressOpSet:
+			err = b.Set(req.key, req.value)
+		case domainIngressOpDelete:
+			err = b.Delete(req.key)
+		default:
+			err = fmt.Errorf("cachingdb: unknown ingress op %d", req.op)
+		}
+		if err != nil {
+			break
+		}
+	}
+	if err == nil {
+		err = b.Write()
+	}
+	if closeErr := b.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	db.domainIngressProcessed.Add(uint64(len(reqs)))
+	for i := range reqs {
+		req := reqs[i]
+		if req.done != nil {
+			req.done <- err
+			close(req.done)
+		}
+	}
+}
+
+func (db *DB) observeDomainIngressDepth(depth int) {
+	if depth < 0 {
+		return
+	}
+	depthU := uint64(depth)
+	for {
+		prev := db.domainIngressDepthMax.Load()
+		if depthU <= prev {
+			return
+		}
+		if db.domainIngressDepthMax.CompareAndSwap(prev, depthU) {
+			return
+		}
+	}
+}
+
+func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync bool) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	if db.domainIngressWorkers <= 0 {
+		return false, nil
+	}
+	// Preserve legacy sync behavior until ingress batching has explicit sync-fence
+	// handling and per-request durable completion accounting.
+	if sync {
+		return false, nil
+	}
+	if db.closing.Load() {
+		return true, errDBClosing
+	}
+
+	db.domainIngressMu.Lock()
+	if len(db.domainIngressCh) == 0 {
+		db.domainIngressMu.Unlock()
+		return false, nil
+	}
+	req := domainIngressRequest{
+		op:    op,
+		key:   key,
+		value: value,
+		sync:  sync,
+		done:  make(chan error, 1),
+	}
+	shardID := db.shardIndex(key)
+	workerID := shardID % len(db.domainIngressCh)
+	ch := db.domainIngressCh[workerID]
+	select {
+	case ch <- req:
+		db.domainIngressEnqueued.Add(1)
+		db.observeDomainIngressDepth(len(ch))
+		db.domainIngressMu.Unlock()
+	default:
+		db.domainIngressFallback.Add(1)
+		db.domainIngressMu.Unlock()
+		return false, nil
+	}
+
+	err, ok := <-req.done
+	if !ok {
+		return true, errDBClosing
+	}
+	return true, err
+}
 
 func (db *DB) startWALWriter(l *lane) {
 	if l == nil {
@@ -3884,6 +4166,7 @@ func (db *DB) vlogWriteLoop(l *lane) {
 		}
 		batch = append(batch, req)
 		backlog := len(l.vlogCh)
+		observeLaneVlogQueueDepthSample(l, backlog)
 		lingerAllowed := backlog < (vlogWriteBatchMax/4) && !l.vlogQueueing.Load()
 		if len(batch) < vlogWriteBatchMax && len(req.value) < vlogQueueMinValueSize && lingerAllowed {
 			timer.Reset(vlogWriteLinger)
@@ -3922,6 +4205,7 @@ func (db *DB) vlogWriteLoop(l *lane) {
 				break drain
 			}
 		}
+		observeLaneVlogQueueDepthSample(l, len(l.vlogCh))
 
 		db.flushVlogRequests(l, batch)
 		if len(l.vlogCh) == 0 {
@@ -4042,6 +4326,7 @@ func (db *DB) drainVlogWriter(l *lane, batch []vlogWriteRequest) {
 					break drain
 				}
 			}
+			observeLaneVlogQueueDepthSample(l, len(l.vlogCh))
 			db.flushVlogRequests(l, batch)
 		default:
 			return
@@ -4142,6 +4427,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	dictNeeded := make(map[uint64]struct{})
 	for i := range requests {
 		req := &requests[i]
+		if !req.enqueuedAt.IsZero() {
+			observeLaneVlogQueueLag(l, time.Since(req.enqueuedAt))
+		}
 		records[i] = valuelog.Record{RID: req.rid, Value: req.value}
 		if req.durability == journalDurabilitySync {
 			needSync = true
@@ -4832,6 +5120,10 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 	}
 	db.walAckMu.Unlock()
 
+	if len(records) == 1 {
+		return db.appendWALOneChecked(l, records[0], durability)
+	}
+
 	db.assignCommitSeq(records)
 
 	switch durability {
@@ -4841,6 +5133,40 @@ func (db *DB) appendWAL(l *lane, records []logRecord, durability journalDurabili
 		return db.appendWALInline(l, records, true)
 	default:
 		return db.appendWALInline(l, records, false)
+	}
+}
+
+func (db *DB) appendWALOne(l *lane, record logRecord, durability journalDurability) error {
+	if db.disableJournal {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+	select {
+	case <-db.closeCh:
+		return errWALClosed
+	default:
+	}
+	db.walAckMu.Lock()
+	if db.walErr != nil {
+		err := db.walErr
+		db.walAckMu.Unlock()
+		return err
+	}
+	db.walAckMu.Unlock()
+	return db.appendWALOneChecked(l, record, durability)
+}
+
+func (db *DB) appendWALOneChecked(l *lane, record logRecord, durability journalDurability) error {
+	record.Seq = db.nextCommitSeq.Add(1)
+	switch durability {
+	case journalDurabilitySync:
+		return db.appendWALDirect(l, []logRecord{record}, true)
+	case journalDurabilityFlush:
+		return db.appendWALInlineOne(l, record, true)
+	default:
+		return db.appendWALInlineOne(l, record, false)
 	}
 }
 
@@ -4907,9 +5233,13 @@ func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durab
 		return false
 	}
 	// Block mode requires direct append so per-frame codec metadata and grouping
-	// are applied in the hot path.
+	// stay on the caller path.
 	if writeMode == vlogWriteBlock {
 		return false
+	}
+	// Force-pointer profiles intentionally run with actor-owned value-log appends.
+	if db.forceValueLogPointers {
+		return true
 	}
 	// Dict path benefits from queue coalescing even for small values.
 	if writeMode == vlogWriteDict && dictID != 0 {
@@ -5818,7 +6148,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 
 	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
-		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+		if dictID == 0 && !db.forceValueLogPointers && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
@@ -5952,10 +6282,12 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 			blockCodec:       finalBlockCodec,
 			probeCompression: probeCompression,
 			durability:       durability,
+			enqueuedAt:       time.Now(),
 			ack:              ack,
 		}
 		select {
 		case l.vlogCh <- req:
+			observeLaneVlogQueueEnqueue(l, len(l.vlogCh))
 		case <-db.closeCh:
 			ack.err = errWALClosed
 			ack.wg.Done()
@@ -6146,6 +6478,9 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 	if l == nil {
 		return errWALUnavailable
 	}
+	if len(records) == 1 {
+		return db.appendWALInlineOne(l, records[0], flush)
+	}
 
 	var (
 		totalBytes int64
@@ -6166,6 +6501,39 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 		err = w.AppendBatch(records)
 		totalBytes = db.logBatchSize(records)
 	}
+	if err == nil && flush {
+		err = w.Flush()
+	}
+	l.walMu.Unlock()
+
+	if err != nil {
+		db.walAckMu.Lock()
+		if db.walErr == nil {
+			db.walErr = err
+		}
+		db.walAckMu.Unlock()
+		return err
+	}
+
+	if totalBytes > 0 {
+		l.walLiveBytes.Add(totalBytes)
+	}
+	return nil
+}
+
+func (db *DB) appendWALInlineOne(l *lane, record logRecord, flush bool) error {
+	if l == nil {
+		return errWALUnavailable
+	}
+
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return errWALUnavailable
+	}
+	err := w.Append(record)
+	totalBytes := db.logRecordSize(record.Key, record.Value)
 	if err == nil && flush {
 		err = w.Flush()
 	}
@@ -6447,6 +6815,66 @@ func (db *DB) waitForCheckpoint() {
 	db.checkpointMu.Unlock()
 }
 
+func (db *DB) recordCheckpointCutover(d time.Duration) {
+	if db == nil {
+		return
+	}
+	if d < 0 {
+		d = 0
+	}
+	ns := d.Nanoseconds()
+	db.checkpointCutoverLastNanos.Store(ns)
+	db.checkpointCutoverLastUnixNano.Store(time.Now().UnixNano())
+	db.checkpointCutoverTotalNanos.Add(ns)
+	db.checkpointCutoverSamples.Add(1)
+	for {
+		cur := db.checkpointCutoverMaxNanos.Load()
+		if ns <= cur || db.checkpointCutoverMaxNanos.CompareAndSwap(cur, ns) {
+			break
+		}
+	}
+}
+
+// checkpointRotateCapacity returns the memtable capacity used when checkpoint
+// rotates mutable shards. We intentionally cap checkpoint-time preallocation to
+// keep write-locked cutover latency bounded; normal growth resumes as writers
+// repopulate the fresh mutable shard.
+func (db *DB) checkpointRotateCapacity() int {
+	if db == nil {
+		return -1
+	}
+	capacity := db.memtableCap
+	if capacity <= 0 {
+		return -1
+	}
+	const checkpointRotateCapMax = 256 * 1024
+	if capacity > checkpointRotateCapMax {
+		return checkpointRotateCapMax
+	}
+	return capacity
+}
+
+func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time) float64 {
+	if db == nil {
+		return 0
+	}
+	nowNS := now.UnixNano()
+	db.publishWatermarkLagMu.Lock()
+	defer db.publishWatermarkLagMu.Unlock()
+	prevNS := db.publishWatermarkLastUnixNano
+	prevBacklog := db.publishWatermarkLastBacklogBytes
+	db.publishWatermarkLastUnixNano = nowNS
+	db.publishWatermarkLastBacklogBytes = backlogBytes
+	if prevNS <= 0 || nowNS <= prevNS {
+		return 0
+	}
+	dt := float64(nowNS-prevNS) / float64(time.Second)
+	if dt <= 0 {
+		return 0
+	}
+	return float64(backlogBytes-prevBacklog) / dt
+}
+
 // Checkpoint forces a durable backend boundary and trims the WAL so long-running
 // cached-mode runs do not accumulate unbounded `wal/` growth.
 //
@@ -6477,26 +6905,65 @@ func (db *DB) Checkpoint() error {
 	}()
 
 	db.writeMu.Lock()
+	cutoverStart := time.Now()
+	releaseWriteMu := func() {
+		db.writeMu.Unlock()
+		db.recordCheckpointCutover(time.Since(cutoverStart))
+	}
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
 	db.mu.Lock()
 	if db.mutableBytes.Load() > 0 {
-		if err := db.rotateMemtableLocked(true); err != nil {
+		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
 			db.mu.Unlock()
-			db.writeMu.Unlock()
+			releaseWriteMu()
 			return err
 		}
 	}
 	walDir := db.dir
+	preRotateWALPaths := db.currentWALPaths()
+	ridBeforeWALRotate := db.nextRID.Load()
 	db.mu.Unlock()
+	rotateLaneIDs := make([]int, 0, len(db.lanes))
 	for i := range db.lanes {
-		if err := db.rotateWALLocked(&db.lanes[i]); err != nil {
-			db.writeMu.Unlock()
+		if db.lanes[i].walLiveBytes.Load() > 0 {
+			rotateLaneIDs = append(rotateLaneIDs, i)
+		}
+	}
+	if len(rotateLaneIDs) == 0 {
+		for i := range db.lanes {
+			rotateLaneIDs = append(rotateLaneIDs, i)
+		}
+	}
+	releaseWriteMu()
+
+	errCh := make(chan error, len(rotateLaneIDs))
+	var rotateWG sync.WaitGroup
+	for _, laneID := range rotateLaneIDs {
+		rotateWG.Add(1)
+		go func(id int) {
+			defer rotateWG.Done()
+			if err := db.rotateWALCheckpointLocked(&db.lanes[id]); err != nil {
+				errCh <- err
+			}
+		}(laneID)
+	}
+	rotateWG.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
 			return err
 		}
 	}
-	db.writeMu.Unlock()
+	wroteDuringWALRotate := db.nextRID.Load() != ridBeforeWALRotate
+	if db.splitValueLogEnabled() {
+		for i := range db.lanes {
+			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
+				return err
+			}
+		}
+	}
 
 	// Flush all queued memtables with backend sync.
 	db.flushAllLocked(true)
@@ -6540,11 +7007,23 @@ func (db *DB) Checkpoint() error {
 	for _, path := range db.currentWALPaths() {
 		currentWALs[path] = struct{}{}
 	}
+	unsafeWALDeletes := make(map[string]struct{})
+	if wroteDuringWALRotate {
+		for _, path := range preRotateWALPaths {
+			if path == "" {
+				continue
+			}
+			unsafeWALDeletes[path] = struct{}{}
+		}
+	}
 
 	removed := false
 	for _, seg := range segments {
 		path := seg.path
 		if _, ok := currentWALs[path]; ok {
+			continue
+		}
+		if _, ok := unsafeWALDeletes[path]; ok {
 			continue
 		}
 		if db.valueLogRetained(path) {
@@ -6646,6 +7125,34 @@ func (db *DB) waitForStop() {
 	}
 }
 
+func (db *DB) shouldWaitForStop() bool {
+	if !db.adaptiveBackpressureEnabled() {
+		return false
+	}
+	backlog := db.queueBacklogBytes.Load()
+	if backlog <= 0 {
+		return false
+	}
+	// Self-heal stale backlog accounting when the queue is already empty.
+	if view := db.memtables.Load(); view == nil || len(view.queue) == 0 {
+		db.queueBacklogBytes.Store(0)
+		return false
+	}
+	db.bpMu.Lock()
+	_, stopBytes, _ := db.thresholdsLocked()
+	db.bpMu.Unlock()
+	if stopBytes <= 0 {
+		return false
+	}
+	return backlog >= stopBytes
+}
+
+func (db *DB) maybeWaitForStop() {
+	if db.shouldWaitForStop() {
+		db.waitForStop()
+	}
+}
+
 func (db *DB) maybeAssistFlush() {
 	if db.writerFlushMaxMemtables <= 0 && db.writerFlushMaxDuration <= 0 {
 		return
@@ -6653,11 +7160,20 @@ func (db *DB) maybeAssistFlush() {
 
 	// Adaptive policy: thresholds based on queued backlog bytes.
 	if db.adaptiveBackpressureEnabled() {
+		backlog := db.queueBacklogBytes.Load()
+		// Self-heal stale backlog accounting when the queue is empty.
+		if backlog > 0 {
+			if view := db.memtables.Load(); view == nil || len(view.queue) == 0 {
+				db.queueBacklogBytes.Store(0)
+				return
+			}
+		}
+
 		db.bpMu.Lock()
 		slowdownBytes, stopBytes, _ := db.thresholdsLocked()
 		db.bpMu.Unlock()
 
-		backlog := db.queueBacklogBytes.Load()
+		backlog = db.queueBacklogBytes.Load()
 		if stopBytes > 0 && backlog >= stopBytes {
 			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			return
@@ -6752,6 +7268,7 @@ func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
 	db.closing.Store(true)
+	db.stopDomainIngressWorkers()
 
 	// Lock order must match Checkpoint (flushMu -> writeMu) to avoid a deadlock
 	// with the auto-checkpoint goroutine:
@@ -6912,7 +7429,6 @@ func (db *DB) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
 	return db.set(key, value, false)
 }
 
@@ -6924,7 +7440,6 @@ func (db *DB) SetSync(key, value []byte) error {
 		return ErrValueNil
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
 	return db.set(key, value, true)
 }
 
@@ -6968,6 +7483,13 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
+	if handled, err := db.enqueueDomainIngress(domainIngressOpSet, key, value, sync); handled {
+		return err
+	}
+	return db.setDirect(key, value, sync)
+}
+
+func (db *DB) setDirect(key, value []byte, sync bool) error {
 	db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -7047,7 +7569,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 
 		if !db.disableJournal {
 			rec := logRecord{Op: logOpSetRID, Key: key, RID: rid}
-			if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
+			if err := db.appendWALOne(lane, rec, durability); err != nil {
 				db.writeMu.RUnlock()
 				return err
 			}
@@ -7061,7 +7583,7 @@ func (db *DB) set(key, value []byte, sync bool) error {
 			}
 		}
 		rec := logRecord{Op: logOpSetInline, Key: key, Value: value}
-		if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
+		if err := db.appendWALOne(lane, rec, durability); err != nil {
 			db.writeMu.RUnlock()
 			return err
 		}
@@ -7125,7 +7647,6 @@ func (db *DB) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
 	return db.delete(key, false)
 }
 
@@ -7141,7 +7662,6 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		return nil
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
 
 	// Journal-enabled mode: do a snapshot scan and apply per-key deletes directly.
 	// Append journal records one-by-one to preserve batch atomicity and to avoid
@@ -7251,7 +7771,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if err := preRotate(key); err != nil {
 				return err
 			}
-			if err := db.appendWAL(lane, []logRecord{{Op: logOpDelete, Key: key}}, journalDurabilityNone); err != nil {
+			if err := db.appendWALOne(lane, logRecord{Op: logOpDelete, Key: key}, journalDurabilityNone); err != nil {
 				return err
 			}
 			if err := applyDelete(key); err != nil {
@@ -7378,10 +7898,12 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueShardIDs = nil
 			db.queueLaneIDs = nil
 			db.queueIDs = nil
+			db.queueEnqueueNS = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
 			db.queueBacklogBytes.Store(0)
+			db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 			if err := db.resetMutableShardsLocked(nextMode, nextMode == curMode); err != nil {
 				db.mu.Unlock()
 				db.flushMu.Unlock()
@@ -7436,10 +7958,12 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueShardIDs = nil
 			db.queueLaneIDs = nil
 			db.queueIDs = nil
+			db.queueEnqueueNS = nil
 			db.queueRanges = nil
 			db.queueWALPaths = nil
 			db.queueValueLogPaths = nil
 			db.queueBacklogBytes.Store(0)
+			db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 			if err := db.resetMutableShardsLocked(nextMode, nextMode == curMode); err != nil {
 				db.mu.Unlock()
 				return err
@@ -7504,6 +8028,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			dstShardIDs := db.queueShardIDs[:0]
 			dstLaneIDs := db.queueLaneIDs[:0]
 			dstIDs := db.queueIDs[:0]
+			dstEnqueueNS := db.queueEnqueueNS[:0]
 			dstRanges := db.queueRanges[:0]
 			dstWALPaths := db.queueWALPaths[:0]
 			dstValueLogPaths := db.queueValueLogPaths[:0]
@@ -7532,6 +8057,11 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				} else {
 					dstIDs = append(dstIDs, 0)
 				}
+				if i < len(db.queueEnqueueNS) {
+					dstEnqueueNS = append(dstEnqueueNS, db.queueEnqueueNS[i])
+				} else {
+					dstEnqueueNS = append(dstEnqueueNS, 0)
+				}
 				dstRanges = append(dstRanges, r)
 				if i < len(db.queueWALPaths) {
 					dstWALPaths = append(dstWALPaths, db.queueWALPaths[i])
@@ -7548,9 +8078,13 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueShardIDs = dstShardIDs
 			db.queueLaneIDs = dstLaneIDs
 			db.queueIDs = dstIDs
+			db.queueEnqueueNS = dstEnqueueNS
 			db.queueRanges = dstRanges
 			db.queueWALPaths = dstWALPaths
 			db.queueValueLogPaths = dstValueLogPaths
+			if len(db.queue) == 0 {
+				db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
+			}
 		}
 		db.publishMemtablesLocked()
 
@@ -7710,11 +8244,17 @@ func (db *DB) DeleteSync(key []byte) error {
 		return ErrKeyEmpty
 	}
 	db.waitForCheckpoint()
-	db.waitForStop()
 	return db.delete(key, true)
 }
 
 func (db *DB) delete(key []byte, sync bool) error {
+	if handled, err := db.enqueueDomainIngress(domainIngressOpDelete, key, nil, sync); handled {
+		return err
+	}
+	return db.deleteDirect(key, sync)
+}
+
+func (db *DB) deleteDirect(key []byte, sync bool) error {
 	db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
@@ -7746,7 +8286,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 			defer db.releaseLaneSync(lane)
 		}
 		rec := logRecord{Op: logOpDelete, Key: key}
-		if err := db.appendWAL(lane, []logRecord{rec}, durability); err != nil {
+		if err := db.appendWALOne(lane, rec, durability); err != nil {
 			db.writeMu.RUnlock()
 			return err
 		}
@@ -7823,6 +8363,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.memtableWarmupActive = false
 	}
 	db.mutableBytes.Store(0)
+	enqueueNS := time.Now().UnixNano()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
@@ -7832,6 +8373,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
 		db.queueLaneIDs = append(db.queueLaneIDs, uint16(db.laneForShardIndex(i)))
 		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
@@ -7948,6 +8490,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			locked[i].mu.Unlock()
 		}
 	}()
+	enqueueNS := time.Now().UnixNano()
 
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
@@ -7967,6 +8510,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
 		db.queueLaneIDs = append(db.queueLaneIDs, uint16(db.laneForShardIndex(i)))
 		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
 		db.queueBacklogBytes.Add(memBytes)
 		db.queueRanges = append(db.queueRanges, shard.rng)
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
@@ -8041,6 +8585,14 @@ func (db *DB) setVlogWriterMode(w valueWriter, mode vlogCompressionWriteMode, co
 }
 
 func (db *DB) rotateWALLocked(l *lane) error {
+	return db.rotateWALLockedWithOptions(l, true)
+}
+
+func (db *DB) rotateWALCheckpointLocked(l *lane) error {
+	return db.rotateWALLockedWithOptions(l, false)
+}
+
+func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 	if db.disableJournal {
 		return nil
 	}
@@ -8078,7 +8630,7 @@ func (db *DB) rotateWALLocked(l *lane) error {
 	}
 	l.walPath = path
 	l.walLiveBytes.Store(0)
-	if db.splitValueLogEnabled() {
+	if rotateValueLog && db.splitValueLogEnabled() {
 		if err := db.rotateValueLogLocked(l); err != nil {
 			return err
 		}
@@ -8453,6 +9005,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	dstShardIDs := db.queueShardIDs[:0]
 	dstLaneIDs := db.queueLaneIDs[:0]
 	dstIDs := db.queueIDs[:0]
+	dstEnqueueNS := db.queueEnqueueNS[:0]
 	dstRanges := db.queueRanges[:0]
 	dstWALPaths := db.queueWALPaths[:0]
 	dstValueLogPaths := db.queueValueLogPaths[:0]
@@ -8478,6 +9031,11 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 		if i < len(db.queueIDs) {
 			dstIDs = append(dstIDs, db.queueIDs[i])
 		}
+		if i < len(db.queueEnqueueNS) {
+			dstEnqueueNS = append(dstEnqueueNS, db.queueEnqueueNS[i])
+		} else {
+			dstEnqueueNS = append(dstEnqueueNS, 0)
+		}
 		if i < len(db.queueRanges) {
 			dstRanges = append(dstRanges, db.queueRanges[i])
 		}
@@ -8493,10 +9051,14 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	db.queueShardIDs = dstShardIDs
 	db.queueLaneIDs = dstLaneIDs
 	db.queueIDs = dstIDs
+	db.queueEnqueueNS = dstEnqueueNS
 	db.queueRanges = dstRanges
 	db.queueWALPaths = dstWALPaths
 	db.queueValueLogPaths = dstValueLogPaths
 	db.queueBacklogBytes.Add(-totalBytes)
+	if len(db.queue) == 0 {
+		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
+	}
 	db.publishMemtablesLocked()
 }
 
@@ -8573,6 +9135,23 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		workers := db.flushBuildConcurrency
 		if workers <= 0 {
 			workers = 1
+		}
+		if db.flushBuildAutoConcurrency && totalLen > 0 {
+			// Small inline-heavy entries are typically memory-copy bound; high
+			// worker counts can over-parallelize and add scheduler overhead.
+			// Keep wider concurrency for larger entries where per-entry work is
+			// heavier (pointer/value encoding and compression).
+			bytesPerEntry := totalBytes / int64(totalLen)
+			switch {
+			case bytesPerEntry <= 64:
+				if workers > 4 {
+					workers = 4
+				}
+			case bytesPerEntry <= 256:
+				if workers > 6 {
+					workers = 6
+				}
+			}
 		}
 		if workers > len(units) {
 			workers = len(units)
@@ -9513,6 +10092,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueIDs) > 0 {
 		db.queueIDs = db.queueIDs[1:]
 	}
+	if len(db.queueEnqueueNS) > 0 {
+		db.queueEnqueueNS = db.queueEnqueueNS[1:]
+	}
 	if len(db.queueRanges) > 0 {
 		db.queueRanges = db.queueRanges[1:]
 	}
@@ -9523,6 +10105,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		db.queueValueLogPaths = db.queueValueLogPaths[1:]
 	}
 	db.queueBacklogBytes.Add(-memBytes)
+	if len(db.queue) == 0 {
+		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
+	}
 	db.publishMemtablesLocked()
 
 	deletable := make([]string, 0, len(walPaths))
@@ -9848,13 +10433,69 @@ func (db *DB) Stats() map[string]string {
 	memtableWarmupActive := db.memtableWarmupActive
 	maxQueued := db.maxQueuedMemtables
 	vlogAutotuneMode := db.valueLogAutotuneOptions.Mode
+	oldestQueueEnqueueNS := int64(0)
+	for i := range db.queueEnqueueNS {
+		ts := db.queueEnqueueNS[i]
+		if ts <= 0 {
+			continue
+		}
+		if oldestQueueEnqueueNS == 0 || ts < oldestQueueEnqueueNS {
+			oldestQueueEnqueueNS = ts
+		}
+	}
 	db.mu.RUnlock()
 	var walCurrentBytes int64
 	var walClosedBytes int64
+	var queueLagBuckets [vlogQueueLagBucketCount]uint64
+	var queueLagCount uint64
+	var queueLagTotalNs uint64
+	var queueLagMaxNs uint64
+	var queueDepthEnqueued uint64
+	var queueDepthSamples uint64
+	var queueDepthSum uint64
+	var queueDepthMax uint64
+	var queueDepthLast uint64
+	var queueDepthPositiveRunMaxNs uint64
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		walCurrentBytes += l.walLiveBytes.Load()
 		walClosedBytes += l.walClosedBytes.Load()
+
+		lagSnap := snapshotLaneVlogQueueLag(l)
+		depthSnap := snapshotLaneVlogQueueDepth(l)
+		queueLagCount += lagSnap.Count
+		queueLagTotalNs += lagSnap.TotalNs
+		if lagSnap.MaxNs > queueLagMaxNs {
+			queueLagMaxNs = lagSnap.MaxNs
+		}
+		for bucket := 0; bucket < vlogQueueLagBucketCount; bucket++ {
+			queueLagBuckets[bucket] += lagSnap.Buckets[bucket]
+		}
+		queueDepthEnqueued += depthSnap.Enqueued
+		queueDepthSamples += depthSnap.Samples
+		queueDepthSum += depthSnap.Sum
+		if depthSnap.Max > queueDepthMax {
+			queueDepthMax = depthSnap.Max
+		}
+		queueDepthLast += depthSnap.Last
+		if depthSnap.PositiveRunMaxNs > queueDepthPositiveRunMaxNs {
+			queueDepthPositiveRunMaxNs = depthSnap.PositiveRunMaxNs
+		}
+
+		laneLagP99 := estimateVlogQueueLagPercentile(lagSnap.Buckets, lagSnap.Count, 0.99)
+		laneLagP999 := estimateVlogQueueLagPercentile(lagSnap.Buckets, lagSnap.Count, 0.999)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.enqueued", i)] = fmt.Sprintf("%d", depthSnap.Enqueued)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.depth_samples", i)] = fmt.Sprintf("%d", depthSnap.Samples)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.depth_last", i)] = fmt.Sprintf("%d", depthSnap.Last)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.depth_max", i)] = fmt.Sprintf("%d", depthSnap.Max)
+		if depthSnap.Samples > 0 {
+			stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.depth_avg", i)] = fmt.Sprintf("%.3f", float64(depthSnap.Sum)/float64(depthSnap.Samples))
+		}
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.positive_drift_run_max_ms", i)] = fmt.Sprintf("%.3f", float64(depthSnap.PositiveRunMaxNs)/float64(time.Millisecond))
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_samples", i)] = fmt.Sprintf("%d", lagSnap.Count)
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_max_ms", i)] = fmt.Sprintf("%.3f", float64(lagSnap.MaxNs)/float64(time.Millisecond))
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p99_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP99)/float64(time.Millisecond))
+		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p999_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP999)/float64(time.Millisecond))
 	}
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
@@ -9868,9 +10509,47 @@ func (db *DB) Stats() map[string]string {
 	}
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
+	db.domainIngressMu.Lock()
+	ingressWorkers := len(db.domainIngressCh)
+	ingressQueueSize := db.domainIngressQueueSize
+	ingressDepth := 0
+	for _, ch := range db.domainIngressCh {
+		ingressDepth += len(ch)
+	}
+	db.domainIngressMu.Unlock()
+	stats["treedb.cache.domain_ingress.enabled"] = fmt.Sprintf("%t", ingressWorkers > 0)
+	stats["treedb.cache.domain_ingress.workers"] = fmt.Sprintf("%d", ingressWorkers)
+	stats["treedb.cache.domain_ingress.queue_size"] = fmt.Sprintf("%d", ingressQueueSize)
+	stats["treedb.cache.domain_ingress.queue_depth"] = fmt.Sprintf("%d", ingressDepth)
+	stats["treedb.cache.domain_ingress.queue_depth_max"] = fmt.Sprintf("%d", db.domainIngressDepthMax.Load())
+	stats["treedb.cache.domain_ingress.enqueued"] = fmt.Sprintf("%d", db.domainIngressEnqueued.Load())
+	stats["treedb.cache.domain_ingress.processed"] = fmt.Sprintf("%d", db.domainIngressProcessed.Load())
+	stats["treedb.cache.domain_ingress.fallback_direct"] = fmt.Sprintf("%d", db.domainIngressFallback.Load())
 	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes+walCurrentBytes)
 	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes)
 	stats["treedb.cache.wal_current_bytes_estimate"] = fmt.Sprintf("%d", walCurrentBytes)
+	stats["treedb.cache.vlog_queue.enqueued_total"] = fmt.Sprintf("%d", queueDepthEnqueued)
+	stats["treedb.cache.vlog_queue.depth_samples"] = fmt.Sprintf("%d", queueDepthSamples)
+	stats["treedb.cache.vlog_queue.depth_last_sum"] = fmt.Sprintf("%d", queueDepthLast)
+	stats["treedb.cache.vlog_queue.depth_max"] = fmt.Sprintf("%d", queueDepthMax)
+	if queueDepthSamples > 0 {
+		stats["treedb.cache.vlog_queue.depth_avg"] = fmt.Sprintf("%.3f", float64(queueDepthSum)/float64(queueDepthSamples))
+	}
+	stats["treedb.cache.vlog_queue.positive_drift_run_max_ms"] = fmt.Sprintf("%.3f", float64(queueDepthPositiveRunMaxNs)/float64(time.Millisecond))
+	stats["treedb.cache.vlog_queue.lag_samples"] = fmt.Sprintf("%d", queueLagCount)
+	stats["treedb.cache.vlog_queue.lag_max_ms"] = fmt.Sprintf("%.3f", float64(queueLagMaxNs)/float64(time.Millisecond))
+	if queueLagCount > 0 {
+		stats["treedb.cache.vlog_queue.lag_avg_ms"] = fmt.Sprintf("%.3f", (float64(queueLagTotalNs)/float64(queueLagCount))/float64(time.Millisecond))
+		stats["treedb.cache.vlog_queue.lag_p50_ms"] = fmt.Sprintf("%.3f", float64(estimateVlogQueueLagPercentile(queueLagBuckets, queueLagCount, 0.50))/float64(time.Millisecond))
+		stats["treedb.cache.vlog_queue.lag_p95_ms"] = fmt.Sprintf("%.3f", float64(estimateVlogQueueLagPercentile(queueLagBuckets, queueLagCount, 0.95))/float64(time.Millisecond))
+		stats["treedb.cache.vlog_queue.lag_p99_ms"] = fmt.Sprintf("%.3f", float64(estimateVlogQueueLagPercentile(queueLagBuckets, queueLagCount, 0.99))/float64(time.Millisecond))
+		stats["treedb.cache.vlog_queue.lag_p999_ms"] = fmt.Sprintf("%.3f", float64(estimateVlogQueueLagPercentile(queueLagBuckets, queueLagCount, 0.999))/float64(time.Millisecond))
+	}
+	for bucket := 0; bucket < vlogQueueLagBucketCount; bucket++ {
+		upperUS := vlogQueueLagBucketUpperBounds[bucket].Microseconds()
+		key := fmt.Sprintf("treedb.cache.vlog_queue.lag_bucket.le_us.%d", upperUS)
+		stats[key] = fmt.Sprintf("%d", queueLagBuckets[bucket])
+	}
 	vlogSegments, vlogBytes := db.valueLogRetainedStats()
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
@@ -9879,9 +10558,35 @@ func (db *DB) Stats() map[string]string {
 	} else {
 		stats["treedb.cache.backpressure_mode"] = "queue_len"
 	}
-	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", db.queueBacklogBytes.Load())
+	now := time.Now()
+	backlogBytes := db.queueBacklogBytes.Load()
+	if backlogBytes <= 0 {
+		db.materializationLastDrainUnixNano.Store(now.UnixNano())
+	}
+	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", backlogBytes)
 	stats["treedb.cache.queue_laneid_misses"] = fmt.Sprintf("%d", db.queueLaneIDMisses.Load())
 	stats["treedb.cache.stats.backend_write_batches_total"] = fmt.Sprintf("%d", db.backendWriteBatchesTotal.Load())
+	watermarkLagDriftBps := db.observePublishWatermarkLagDrift(backlogBytes, now)
+	stats["treedb.publish.watermark.lag_drift_bytes_per_sec"] = fmt.Sprintf("%.3f", watermarkLagDriftBps)
+	if _, ok := stats["treedb.publish.watermark.lock_delay_share_pct"]; !ok {
+		stats["treedb.publish.watermark.lock_delay_share_pct"] = "0.000"
+	}
+	if _, ok := stats["treedb.publish.watermark.latency_p99_ms"]; !ok {
+		stats["treedb.publish.watermark.latency_p99_ms"] = "0.000"
+	}
+	materializationMarkNS := db.materializationLastDrainUnixNano.Load()
+	if backlogBytes > 0 && oldestQueueEnqueueNS > 0 {
+		materializationMarkNS = oldestQueueEnqueueNS
+	}
+	materializationLagAge := time.Duration(0)
+	if materializationMarkNS > 0 {
+		if ageNS := now.UnixNano() - materializationMarkNS; ageNS > 0 {
+			materializationLagAge = time.Duration(ageNS)
+		}
+	}
+	stats["treedb.cache.materialization.last_unix_nano"] = fmt.Sprintf("%d", materializationMarkNS)
+	stats["treedb.cache.materialization.oldest_enqueue_unix_nano"] = fmt.Sprintf("%d", oldestQueueEnqueueNS)
+	stats["treedb.cache.materialization.lag_age_ms"] = fmt.Sprintf("%.3f", float64(materializationLagAge)/float64(time.Millisecond))
 	db.bpMu.Lock()
 	stats["treedb.cache.flush_bps_ewma"] = fmt.Sprintf("%.0f", db.flushBpsEWMA)
 	db.bpMu.Unlock()
@@ -9895,6 +10600,17 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.auto_checkpoint.last_wal_reclaimable_after"] = fmt.Sprintf("%d", db.autoCheckpointLastWALReclaimableAfter.Load())
 	stats["treedb.cache.auto_checkpoint.last_wal_bytes_trimmed"] = fmt.Sprintf("%d", db.autoCheckpointLastWALTrimmed.Load())
 	stats["treedb.cache.auto_checkpoint.last_unix_nano"] = fmt.Sprintf("%d", db.autoCheckpointLastUnixNano.Load())
+	cutoverSamples := db.checkpointCutoverSamples.Load()
+	cutoverTotalNS := db.checkpointCutoverTotalNanos.Load()
+	cutoverAvgMS := 0.0
+	if cutoverSamples > 0 {
+		cutoverAvgMS = (float64(cutoverTotalNS) / float64(cutoverSamples)) / float64(time.Millisecond)
+	}
+	stats["treedb.cache.checkpoint.cutover_samples"] = fmt.Sprintf("%d", cutoverSamples)
+	stats["treedb.cache.checkpoint.cutover_last_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointCutoverLastNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.checkpoint.cutover_max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointCutoverMaxNanos.Load())/float64(time.Millisecond))
+	stats["treedb.cache.checkpoint.cutover_avg_ms"] = fmt.Sprintf("%.3f", cutoverAvgMS)
+	stats["treedb.cache.checkpoint.cutover_last_unix_nano"] = fmt.Sprintf("%d", db.checkpointCutoverLastUnixNano.Load())
 
 	vlogFramesTotal := db.valueLogDictFrames.total.Load()
 	vlogFramesAttempted := db.valueLogDictFrames.attempted.Load()
@@ -10738,7 +11454,9 @@ func (b *Batch) maybeSwitchToStreaming() {
 	// We intentionally use a small threshold (rather than flushThreshold) so
 	// "BatchWrite1M" style workloads can switch early and avoid materializing the
 	// entire batch in memory before Write().
-	if len(b.entries) < streamSwitchMinEntries && b.size < streamSwitchMinBytes {
+	// Require both entry-count and byte-size thresholds to avoid switching tiny-value
+	// batches to backend streaming solely due to key count.
+	if len(b.entries) < streamSwitchMinEntries || b.size < streamSwitchMinBytes {
 		return
 	}
 
@@ -10829,7 +11547,6 @@ func (b *Batch) write(sync bool) error {
 		return ErrBatchClosed
 	}
 	b.db.waitForCheckpoint()
-	b.db.waitForStop()
 
 	if b.backend != nil {
 		var err error
@@ -10888,7 +11605,8 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if b.firstKey == nil || b.lastKey == nil {
 		return false, nil
 	}
-	if len(b.entries) < streamSwitchMinEntries && b.size < streamSwitchMinBytes {
+	// Mirror maybeSwitchToStreaming: bypass only when both dimensions are large.
+	if len(b.entries) < streamSwitchMinEntries || b.size < streamSwitchMinBytes {
 		return false, nil
 	}
 

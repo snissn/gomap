@@ -13,6 +13,7 @@ type savedTreeDBFlagState struct {
 	relaxedSync        bool
 	disableChecksum    bool
 	allowUnsafe        bool
+	flushThreshold     int64
 	explicitFlags      map[string]bool
 }
 
@@ -32,6 +33,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		relaxedSync:        *treedbRelaxedSync,
 		disableChecksum:    *treedbDisableReadChecksum,
 		allowUnsafe:        *treedbAllowUnsafe,
+		flushThreshold:     *treedbFlushThreshold,
 		explicitFlags:      copyMap,
 	}
 }
@@ -47,6 +49,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbRelaxedSync = s.relaxedSync
 	*treedbDisableReadChecksum = s.disableChecksum
 	*treedbAllowUnsafe = s.allowUnsafe
+	*treedbFlushThreshold = s.flushThreshold
 	explicitFlags = s.explicitFlags
 }
 
@@ -61,6 +64,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbRelaxedSync = false
 	*treedbDisableReadChecksum = false
 	*treedbAllowUnsafe = false
+	*treedbFlushThreshold = 64 * 1024 * 1024
 	explicitFlags = map[string]bool{}
 }
 
@@ -82,6 +86,27 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if !*treedbIndexOptimizations {
 		t.Fatalf("expected wal_on_fast profile to set treedb-index-optimizations")
+	}
+}
+
+func TestApplyProfile_FastKeepsDefaultFlushThreshold(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	if err := applyProfile("fast", map[string]bool{}); err != nil {
+		t.Fatalf("applyProfile fast: %v", err)
+	}
+	if got, want := *treedbFlushThreshold, int64(64*1024*1024); got != want {
+		t.Fatalf("fast profile flush threshold = %d want %d", got, want)
+	}
+
+	resetTreeDBIndexFlagsForTest()
+	if err := applyProfile("wal_on_fast", map[string]bool{}); err != nil {
+		t.Fatalf("applyProfile wal_on_fast: %v", err)
+	}
+	if got, want := *treedbFlushThreshold, int64(64*1024*1024); got != want {
+		t.Fatalf("wal_on_fast profile flush threshold = %d want %d", got, want)
 	}
 }
 

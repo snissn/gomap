@@ -411,3 +411,18 @@ func (b *Batch) Ops() map[string]Entry {
 func (b *Batch) ByteSize() int {
 	return b.byteSize
 }
+
+// HasValueLogPointers reports whether this batch contains any value-log
+// pointer operations.
+func (b *Batch) HasValueLogPointers() bool {
+	if b == nil {
+		return false
+	}
+	for i := range b.entries {
+		e := b.entries[i]
+		if e.IsPtr && page.IsValueLogFileID(e.ValuePtr.FileID) {
+			return true
+		}
+	}
+	return false
+}

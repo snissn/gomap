@@ -74,6 +74,10 @@ type DB struct {
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
 	commitMu         sync.Mutex
+	combineMu        sync.RWMutex
+	combineReqCh     chan *commitCombineReq
+	combineStopCh    chan struct{}
+	combineDoneCh    chan struct{}
 	vacuumInProgress atomic.Bool
 	vacuum           vacuumRecorder
 	meta             page.MetaPageBody
@@ -84,6 +88,13 @@ type DB struct {
 	notifyError func(error)
 	bgErrMu     sync.Mutex
 	bgErr       error
+
+	// Stage-5 publish watermark metrics (backend commit publish path).
+	publishWatermarkWaitTotalNs    atomic.Uint64
+	publishWatermarkHoldTotalNs    atomic.Uint64
+	publishWatermarkLatencySamples atomic.Uint64
+	publishWatermarkLatencyMaxNs   atomic.Uint64
+	publishWatermarkLatencyBuckets [publishWatermarkLatencyBucketCount]atomic.Uint64
 }
 
 const (
@@ -325,11 +336,17 @@ type Options struct {
 
 	FlushThreshold int64
 	// MemtableMode selects the cached-mode memtable implementation.
-	// Supported values: "skiplist", "hash_sorted", "btree", "adaptive".
+	// Supported values: "skiplist", "hash_sorted", "btree", "append_only", "adaptive".
 	MemtableMode string
 	// MemtableShards controls the number of mutable memtable shards in cached
 	// mode. Values <= 0 use a runtime-dependent default.
 	MemtableShards int
+	// DomainIngressWorkers enables experimental domain-local ingress workers in
+	// cached mode. Values <= 0 keep the legacy direct write path.
+	DomainIngressWorkers int
+	// DomainIngressQueueSize configures the per-worker ingress queue length when
+	// DomainIngressWorkers is enabled. Values <= 0 use a default.
+	DomainIngressQueueSize int
 	// PreferAppendAlloc makes the page allocator ignore the freelist and append
 	// new pages instead. This can improve scan locality under churn at the cost
 	// of file growth (space is reclaimed later via vacuum).
@@ -796,11 +813,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		maxPages:    opts.PruneMaxPages,
 		maxDuration: opts.PruneMaxDuration,
 	})
+	db.startCommitCombiner()
 
 	return db, nil
 }
 
 func (db *DB) Close() error {
+	db.stopCommitCombiner()
 	db.pruner.Stop()
 	if db.ghostManager != nil {
 		db.ghostManager.stop()
@@ -1067,14 +1086,32 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 	return nil
 }
 
-// finalizeCommit handles durability and state updates with minimal lock contention.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics) error {
+type finalizeCommitPost struct {
+	oldState  *DBState
+	metrics   adaptive.Metrics
+	kickPrune bool
+	doPrune   bool
+	debug     bool
+	sync      bool
+	start     time.Time
+	durSync1  time.Duration
+	durMeta   time.Duration
+	durSync2  time.Duration
+}
+
+// finalizeCommitLocked performs the durability-critical publish path.
+// Callers that already hold commit serialization may run post work after
+// releasing the serialization lock.
+func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool) (finalizeCommitPost, error) {
+	post := finalizeCommitPost{
+		metrics: metrics,
+	}
 	if db.readOnly {
-		return ErrReadOnly
+		return post, ErrReadOnly
 	}
 	idx := db.idx.Load()
 	if idx == nil {
-		return errors.New("missing index")
+		return post, errors.New("missing index")
 	}
 	debugTiming := commitTimingEnabled()
 	var (
@@ -1082,17 +1119,17 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		durSync1 time.Duration
 		durMeta  time.Duration
 		durSync2 time.Duration
-		durPrune time.Duration
 	)
 	if debugTiming {
 		start = time.Now()
 	}
+	var watermarkWait, watermarkHold time.Duration
 
 	// 1. Sync Data (Index Pages) - No DB Lock
 	if sync {
 		t0 := time.Now()
 		if err := idx.pager.Sync(); err != nil {
-			return err
+			return post, err
 		}
 		if debugTiming {
 			durSync1 = time.Since(t0)
@@ -1100,7 +1137,10 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	}
 
 	// 2. Prepare Meta - Short Lock
+	lockStart := time.Now()
 	db.mu.Lock()
+	watermarkWait += time.Since(lockStart)
+	holdStart := time.Now()
 	nextMeta := db.meta
 	nextMeta.CommitSeq++
 	nextMeta.UserRootPageID = newRootID
@@ -1113,11 +1153,12 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 		targetPageID = 1
 	}
 	db.mu.Unlock()
+	watermarkHold += time.Since(holdStart)
 
 	// 3. Write Meta - No DB Lock
 	t0 := time.Now()
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
-		return err
+		return post, err
 	}
 	if debugTiming {
 		durMeta = time.Since(t0)
@@ -1127,73 +1168,97 @@ func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint6
 	if sync {
 		t1 := time.Now()
 		if err := idx.pager.Sync(); err != nil {
-			return err
+			return post, err
 		}
 		if debugTiming {
 			durSync2 = time.Since(t1)
 		}
 	}
 
-	// 5. Update State (Visible) - Short Lock
+	// 5. Update visible state and retire pages.
+	lockStart = time.Now()
 	db.mu.Lock()
-	defer db.mu.Unlock()
-
+	watermarkWait += time.Since(lockStart)
+	holdStart = time.Now()
 	db.meta = nextMeta
 	db.metaPageID = targetPageID
-
-	// Add retired pages to the graveyard.
-	//
-	// IMPORTANT: We tag pages with the *base* commit sequence they were last
-	// reachable from (the state we just applied against), not the new commit
-	// sequence. This keeps pruning semantics aligned with ReaderRegistry:
-	//   - readers pinned at baseSeq must continue to see those pages
-	//   - pages become eligible for reuse once MinPinnedSeq advances past baseSeq
-	//
-	// This also reduces index.db high-watermark growth under small KeepRecent
-	// windows by making pages eligible one commit earlier.
 	idx.graveyard.Add(nextMeta.CommitSeq-1, retired)
-
-	// Prune asynchronously to keep commit latency stable under churn.
-	// If background pruning is disabled, fall back to legacy on-commit pruning.
-	if db.pruner.Enabled() {
-		db.pruner.Kick()
-	} else {
-		tp := time.Now()
-		db.Prune()
-		if debugTiming {
-			durPrune = time.Since(tp)
+	post.oldState = db.state.Load()
+	var valueLogSet *valuelog.Set
+	if db.valueLogManager != nil {
+		if refreshValueLogSet {
+			valueLogSet = db.valueLogManager.CurrentSet()
+		} else {
+			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 		}
 	}
-
-	// Update State
-	oldState := db.state.Load()
 	newState := &DBState{
 		CommitSeq:        nextMeta.CommitSeq,
 		RootPageID:       nextMeta.UserRootPageID,
 		SystemRootPageID: nextMeta.SystemRootPageID,
-		ValueLogSet:      db.valueLogManager.CurrentSet(),
+		ValueLogSet:      valueLogSet,
 	}
 	db.state.Store(newState)
+	db.mu.Unlock()
+	watermarkHold += time.Since(holdStart)
+	db.observePublishWatermark(watermarkWait, watermarkHold, watermarkWait+watermarkHold)
 
-	if oldState != nil {
-		_ = db.valueLogManager.Release(oldState.ValueLogSet)
+	post.kickPrune = db.pruner.Enabled()
+	post.doPrune = !post.kickPrune
+	if debugTiming {
+		post.debug = true
+		post.sync = sync
+		post.start = start
+		post.durSync1 = durSync1
+		post.durMeta = durMeta
+		post.durSync2 = durSync2
+	}
+
+	return post, nil
+}
+
+func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
+	var durPrune time.Duration
+
+	// Keep pruning out of the commit serialization critical section.
+	if post.kickPrune {
+		db.pruner.Kick()
+	} else if post.doPrune {
+		t0 := time.Now()
+		db.Prune()
+		if post.debug {
+			durPrune = time.Since(t0)
+		}
+	}
+
+	if post.oldState != nil {
+		_ = db.valueLogManager.Release(post.oldState.ValueLogSet)
 	}
 
 	if db.adaptive != nil {
-		db.adaptive.RecordCommit(metrics)
-	}
-	if debugTiming {
-		commitTimingPrintf(
-			"treedb: commit_timing sync=%t sync1=%s meta=%s sync2=%s prune=%s total=%s\n",
-			sync,
-			durSync1,
-			durMeta,
-			durSync2,
-			durPrune,
-			time.Since(start),
-		)
+		db.adaptive.RecordCommit(post.metrics)
 	}
 
+	if post.debug {
+		commitTimingPrintf(
+			"treedb: commit_timing sync=%t sync1=%s meta=%s sync2=%s prune=%s total=%s\n",
+			post.sync,
+			post.durSync1,
+			post.durMeta,
+			post.durSync2,
+			durPrune,
+			time.Since(post.start),
+		)
+	}
+}
+
+// finalizeCommit handles durability and state updates.
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool) error {
+	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, refreshValueLogSet)
+	if err != nil {
+		return err
+	}
+	db.finalizeCommitPostWork(post)
 	return nil
 }
 
@@ -1221,7 +1286,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{})
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, true)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -1237,7 +1302,9 @@ func (db *DB) Prune() {
 	defer db.releaseIndex(idx)
 
 	min := idx.registry.MinPinnedSeq()
+	db.mu.RLock()
 	current := db.meta.CommitSeq
+	db.mu.RUnlock()
 
 	freed := idx.graveyard.Extract(min, current, db.keepRecent)
 
@@ -1387,7 +1454,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{})
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, true)
 }
 
 type pagerAllocator struct {

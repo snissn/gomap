@@ -222,13 +222,19 @@ func (m *HashSorted) applyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 		canAppend = m.canAppendSortedBatchLocked(entries)
 	}
 	if canAppend {
+		keys := make([]string, 0, len(entries))
+		keyBytes := 0
 		for _, op := range entries {
-			if chunk, seq := m.setEntryNewStealLocked(op); seq != 0 {
-				chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk})
+			if keyStored, n, ok := m.setEntryNewStealNoChunkLocked(op); ok {
+				keys = append(keys, keyStored)
+				keyBytes += n
 			}
 			if onKey != nil {
 				onKey(op.Key)
 			}
+		}
+		if chunk, seq := m.noteNewKeysBatchLocked(keys, keyBytes); seq != 0 {
+			chunks = append(chunks, hashSortedIndexWork{mt: m, seq: seq, keys: chunk, sorted: true})
 		}
 	} else {
 		for _, op := range entries {
@@ -253,7 +259,7 @@ func (m *HashSorted) applyStealSortedBatch(entries []batchpkg.Entry, onKey func(
 	m.mu.Unlock()
 
 	for _, c := range chunks {
-		c.mt.indexer.enqueue(c.mt, c.seq, c.keys)
+		c.mt.indexer.enqueue(c.mt, c.seq, c.keys, c.sorted)
 	}
 }
 
@@ -274,7 +280,7 @@ func (m *HashSorted) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) 
 	chunk, seq := m.setEntryLocked(key, value, ptr, flags, false)
 	m.mu.Unlock()
 	if seq != 0 {
-		m.indexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, chunk, false)
 	}
 }
 
@@ -283,7 +289,7 @@ func (m *HashSorted) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags b
 	chunk, seq := m.setEntryLocked(key, value, ptr, flags, true)
 	m.mu.Unlock()
 	if seq != 0 {
-		m.indexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, chunk, false)
 	}
 }
 
@@ -335,7 +341,7 @@ func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	m.mu.Unlock()
 
 	if seq != 0 {
-		m.indexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, chunk, false)
 	}
 	return nil
 }
@@ -395,7 +401,7 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	chunk, seq = m.noteNewKeyLocked(keyStored)
 	m.mu.Unlock()
 	if seq != 0 {
-		m.indexer.enqueue(m, seq, chunk)
+		m.indexer.enqueue(m, seq, chunk, false)
 	}
 	return nil
 }
@@ -704,6 +710,50 @@ func (m *HashSorted) noteNewKeyLocked(key string) (chunk []string, seq uint64) {
 	return chunk, m.nextSeq
 }
 
+func (m *HashSorted) noteNewKeysBatchLocked(keys []string, keyBytes int) (chunk []string, seq uint64) {
+	if len(keys) == 0 {
+		return nil, 0
+	}
+	m.sortedValid = false
+	if len(m.items) > cap(m.sortedKeys) {
+		newCap := cap(m.sortedKeys)
+		if newCap < hashSortedSortedKeysInitCap {
+			newCap = hashSortedSortedKeysInitCap
+		}
+		for newCap < len(m.items) {
+			newCap *= 2
+		}
+		m.sortedKeys = make([]string, 0, newCap)
+	}
+	if m.pendingKeys == nil {
+		c := hashSortedPendingKeysInitCap
+		if len(keys) > c {
+			c = len(keys)
+		}
+		m.pendingKeys = make([]string, 0, c)
+	}
+	m.pendingKeys = append(m.pendingKeys, keys...)
+	if len(m.pendingKeys) >= hashSortedPendingKeysUpgradeThreshold && cap(m.pendingKeys) < hashSortedSealKeysThreshold {
+		newCap := cap(m.pendingKeys) * 2
+		if newCap < hashSortedSealKeysThreshold {
+			newCap = hashSortedSealKeysThreshold
+		}
+		expanded := make([]string, len(m.pendingKeys), newCap)
+		copy(expanded, m.pendingKeys)
+		m.pendingKeys = expanded
+	}
+	m.pendingBytes += keyBytes
+	if m.pendingBytes < hashSortedSealBytesThreshold && len(m.pendingKeys) < hashSortedSealKeysThreshold {
+		return nil, 0
+	}
+
+	chunk = m.pendingKeys
+	m.pendingKeys = nil
+	m.pendingBytes = 0
+	m.nextSeq++
+	return chunk, m.nextSeq
+}
+
 func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) ([]string, uint64) {
 	if key == nil {
 		return nil, 0
@@ -747,9 +797,9 @@ func (m *HashSorted) setEntryLocked(key, value []byte, ptr page.ValuePtr, flags 
 	return m.noteNewKeyLocked(keyStored)
 }
 
-func (m *HashSorted) setEntryNewStealLocked(op batchpkg.Entry) ([]string, uint64) {
+func (m *HashSorted) setEntryNewStealNoChunkLocked(op batchpkg.Entry) (string, int, bool) {
 	if op.Key == nil {
-		return nil, 0
+		return "", 0, false
 	}
 
 	keyStored := bytesToStringNoCopy(op.Key)
@@ -777,6 +827,14 @@ func (m *HashSorted) setEntryNewStealLocked(op batchpkg.Entry) ([]string, uint64
 	// The fast path is append-only and entries are strictly increasing.
 	m.maxKey = keyStored
 	m.hasMaxKey = true
+	return keyStored, len(op.Key), true
+}
+
+func (m *HashSorted) setEntryNewStealLocked(op batchpkg.Entry) ([]string, uint64) {
+	keyStored, _, ok := m.setEntryNewStealNoChunkLocked(op)
+	if !ok {
+		return nil, 0
+	}
 	return m.noteNewKeyLocked(keyStored)
 }
 

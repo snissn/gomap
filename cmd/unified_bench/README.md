@@ -42,7 +42,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-val-pattern` value pattern for non-dataset write tests (`zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|random`)
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-dataset-val-pattern` dataset value pattern for `dataset_write_*` (`random|zero|repeat|repeat_tail64|half_repeat_half_random`)
-- `-batchsize` batch size (default 1000)
+- `-batchsize` batch size (default 8000)
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)

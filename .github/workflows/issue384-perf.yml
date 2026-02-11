@@ -17,9 +17,9 @@ permissions:
 
 jobs:
   per_pr_gate:
-    name: per-pr 4m gate (self-hosted)
+    name: per-pr 4m gate (github-hosted)
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, perf]
+    runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -53,9 +53,9 @@ jobs:
           path: artifacts/perf/issue384_gate_*/
 
   nightly_12m:
-    name: nightly 12m gate (self-hosted)
+    name: nightly 12m gate (github-hosted)
     if: github.event_name != 'pull_request'
-    runs-on: [self-hosted, linux, perf]
+    runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
       - name: Checkout

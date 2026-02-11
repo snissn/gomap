@@ -14,7 +14,8 @@ import (
 
 // ValueLogGCOptions controls value-log garbage collection.
 type ValueLogGCOptions struct {
-	DryRun bool
+	DryRun         bool
+	ProtectedPaths []string
 }
 
 // ValueLogGCStats summarizes value-log GC work.
@@ -22,11 +23,13 @@ type ValueLogGCStats struct {
 	SegmentsTotal      int
 	SegmentsReferenced int
 	SegmentsActive     int
+	SegmentsProtected  int
 	SegmentsEligible   int
 	SegmentsDeleted    int
 	BytesTotal         int64
 	BytesReferenced    int64
 	BytesActive        int64
+	BytesProtected     int64
 	BytesEligible      int64
 	BytesDeleted       int64
 }
@@ -83,6 +86,13 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 
 	set := db.valueLogManager.CurrentSet()
 	activeIDs := currentValueLogIDs(set)
+	protectedPaths := make(map[string]struct{}, len(opts.ProtectedPaths))
+	for _, path := range opts.ProtectedPaths {
+		if path == "" {
+			continue
+		}
+		protectedPaths[path] = struct{}{}
+	}
 	type candidate struct {
 		path string
 		size int64
@@ -105,6 +115,11 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if _, ok := activeIDs[id]; ok {
 			stats.SegmentsActive++
 			stats.BytesActive += size
+			continue
+		}
+		if _, ok := protectedPaths[f.Path]; ok {
+			stats.SegmentsProtected++
+			stats.BytesProtected += size
 			continue
 		}
 
