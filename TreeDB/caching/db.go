@@ -2658,7 +2658,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 
 	warmupThreshold := opts.FlushThreshold
-	if adaptive && mode != memtable.ModeAppendOnly && adaptiveWarmupBytes > 0 && int64(adaptiveWarmupBytes) < opts.FlushThreshold {
+	if adaptive && adaptiveWarmupBytes > 0 && int64(adaptiveWarmupBytes) < opts.FlushThreshold {
 		warmupThreshold = int64(adaptiveWarmupBytes)
 	}
 	memCap = shardCapacity(memCap, shardCount)
