@@ -129,11 +129,10 @@ func (b *Batch) resetForPool() {
 		}
 	}
 	b.byteSize = 0
-	if len(b.touchedValueLog) > 0 {
-		clear(b.touchedValueLog)
-	}
 	if len(b.touchedValueLog) > 1024 {
 		b.touchedValueLog = nil
+	} else if len(b.touchedValueLog) > 0 {
+		clear(b.touchedValueLog)
 	}
 	b.sorted = true
 	b.lastKey = nil
