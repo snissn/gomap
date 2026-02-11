@@ -8,6 +8,32 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 )
 
+func TestAppendOnlyNextCapacityGrowthPolicy(t *testing.T) {
+	tests := []struct {
+		name    string
+		current int
+		flags   byte
+		want    int
+	}{
+		{name: "below-min", current: appendOnlyMinInitialEntries - 1, flags: 0, want: appendOnlyMinInitialEntries},
+		{name: "non-pointer-doubles", current: appendOnlyMinInitialEntries, flags: 0, want: appendOnlyMinInitialEntries * 2},
+		{name: "pointer-below-cutoff-quadruples", current: appendOnlyMinInitialEntries, flags: node.FlagPointer, want: appendOnlyMinInitialEntries * 4},
+		{name: "pointer-just-below-cutoff-quadruples", current: appendOnlyPointerGrowCutoff - 1, flags: node.FlagPointer, want: (appendOnlyPointerGrowCutoff - 1) * 4},
+		{name: "pointer-at-cutoff-doubles", current: appendOnlyPointerGrowCutoff, flags: node.FlagPointer, want: appendOnlyPointerGrowCutoff * 2},
+		{name: "pointer-above-cutoff-doubles", current: appendOnlyPointerGrowCutoff + 1, flags: node.FlagPointer, want: (appendOnlyPointerGrowCutoff + 1) * 2},
+		{name: "non-pointer-below-cutoff-doubles", current: appendOnlyPointerGrowCutoff - 1, flags: 0, want: (appendOnlyPointerGrowCutoff - 1) * 2},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := appendOnlyNextCapacity(tc.current, tc.flags); got != tc.want {
+				t.Fatalf("appendOnlyNextCapacity(%d, %#x)=%d want=%d", tc.current, tc.flags, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAppendOnlyCRUD(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 
