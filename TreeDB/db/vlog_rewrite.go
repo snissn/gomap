@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,224 @@ type ValueLogRewriteStats struct {
 	BytesBefore    int64
 	BytesAfter     int64
 	RecordsCopied  int
+}
+
+// ValueLogRewriteOnlineOptions controls online rewrite behavior.
+type ValueLogRewriteOnlineOptions struct {
+	// BatchSize bounds pointer swaps per commit.
+	BatchSize int
+	// SyncEachBatch forces fsync durability boundaries for each rewritten batch.
+	SyncEachBatch bool
+	// MaxSegmentBytes bounds new value-log segment size during rewrite.
+	// <=0 uses a default.
+	MaxSegmentBytes int64
+}
+
+type rewriteSwap struct {
+	key    []byte
+	oldPtr page.ValuePtr
+	newPtr page.ValuePtr
+}
+
+const defaultValueLogRewriteBatchSize = 256
+
+func normalizeValueLogRewriteBatchSize(n int) int {
+	if n <= 0 {
+		return defaultValueLogRewriteBatchSize
+	}
+	return n
+}
+
+// ValueLogRewriteOnline rewrites pointer-backed values in bounded commit
+// batches, then atomically swaps keys to rewritten pointers.
+func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewriteStats, error) {
+	var stats ValueLogRewriteStats
+	if db == nil {
+		return stats, errors.New("missing db")
+	}
+	if db.readOnly {
+		return stats, ErrReadOnly
+	}
+	if db.valueLogManager == nil {
+		return stats, errors.New("value log manager unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	set := db.valueLogManager.CurrentSet()
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		return stats, nil
+	}
+	oldValueIDs := make(map[uint32]struct{}, len(set.Files))
+	for id := range set.Files {
+		oldValueIDs[id] = struct{}{}
+		stats.SegmentsBefore++
+		stats.BytesBefore += fileSize(set.Files[id])
+	}
+	_ = db.valueLogManager.Release(set)
+
+	segments, err := listWALSegments(db.dir)
+	if err != nil {
+		return stats, err
+	}
+	lane, startSeq := chooseRewriteLane(segments)
+	maxBytes := opts.MaxSegmentBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultValueLogRewriteSegmentBytes
+	}
+	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), lane, startSeq, maxBytes)
+	if err := writer.ensureWriter(); err != nil {
+		return stats, err
+	}
+	defer func() { _ = writer.Close() }()
+
+	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
+	swaps := make([]rewriteSwap, 0, batchSize)
+	nextRID := uint64(1)
+
+	flushBatch := func() error {
+		if len(swaps) == 0 {
+			return nil
+		}
+		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
+			return err
+		}
+		swaps = swaps[:0]
+		return nil
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return stats, errors.New("missing snapshot state")
+	}
+	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	for ; it.Valid(); it.Next() {
+		if err := ctx.Err(); err != nil {
+			_ = it.Close()
+			_ = snap.Close()
+			return stats, err
+		}
+		_, oldPtr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
+			continue
+		}
+		val, err := db.valueLogManager.Read(oldPtr)
+		if err != nil {
+			_ = it.Close()
+			_ = snap.Close()
+			return stats, err
+		}
+		newPtr, err := writer.appendValue(nextRID, val)
+		if err != nil {
+			_ = it.Close()
+			_ = snap.Close()
+			return stats, err
+		}
+		nextRID++
+		stats.RecordsCopied++
+		key := append([]byte(nil), it.UnsafeKey()...)
+		swaps = append(swaps, rewriteSwap{
+			key:    key,
+			oldPtr: oldPtr,
+			newPtr: newPtr,
+		})
+		if len(swaps) >= batchSize {
+			if err := flushBatch(); err != nil {
+				_ = it.Close()
+				_ = snap.Close()
+				return stats, err
+			}
+		}
+	}
+	iterErr := it.Error()
+	_ = it.Close()
+	_ = snap.Close()
+	if iterErr != nil {
+		return stats, iterErr
+	}
+	if err := flushBatch(); err != nil {
+		return stats, err
+	}
+	if err := writer.Sync(); err != nil {
+		return stats, err
+	}
+
+	referencedAfter, err := db.referencedValueLogSegments(ctx)
+	if err != nil {
+		return stats, err
+	}
+	for id := range oldValueIDs {
+		if _, ok := referencedAfter[id]; ok {
+			continue
+		}
+		if err := db.valueLogManager.MarkZombie(id); err != nil {
+			return stats, err
+		}
+	}
+	if err := db.RefreshValueLogSet(); err != nil {
+		return stats, err
+	}
+	if err := updateValueLogHealthAfterRewrite(db.dir, oldValueIDs); err != nil {
+		return stats, err
+	}
+
+	afterSegs, afterBytes, err := valueLogSegmentStats(db.dir)
+	if err != nil {
+		return stats, err
+	}
+	stats.SegmentsAfter = afterSegs
+	stats.BytesAfter = afterBytes
+	return stats, nil
+}
+
+func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
+	if len(swaps) == 0 {
+		return nil
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return errors.New("missing snapshot")
+	}
+	eligible := make([]rewriteSwap, 0, len(swaps))
+	for _, swap := range swaps {
+		entry, err := snap.GetEntry(swap.key)
+		if err != nil {
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				continue
+			}
+			_ = snap.Close()
+			return err
+		}
+		if entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != swap.oldPtr {
+			continue
+		}
+		eligible = append(eligible, swap)
+	}
+	if err := snap.Close(); err != nil {
+		return err
+	}
+	if len(eligible) == 0 {
+		return nil
+	}
+
+	b := db.NewBatch().(*Batch)
+	defer func() { _ = b.Close() }()
+	for _, swap := range eligible {
+		if err := b.SetPointer(swap.key, swap.newPtr); err != nil {
+			return err
+		}
+	}
+	if sync {
+		return b.WriteSync()
+	}
+	return b.Write()
 }
 
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and
@@ -300,6 +519,23 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 		}
 	}
 	ptr, err := w.w.AppendRawRecord(raw, length)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	w.records++
+	return ptr, nil
+}
+
+func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, error) {
+	if err := w.ensureWriter(); err != nil {
+		return page.ValuePtr{}, err
+	}
+	if w.maxSize > 0 && w.w.Size()+int64(valuelog.HeaderSize+len(value)) > w.maxSize {
+		if err := w.rotate(); err != nil {
+			return page.ValuePtr{}, err
+		}
+	}
+	ptr, err := w.w.Append(0, nil, rid, value)
 	if err != nil {
 		return page.ValuePtr{}, err
 	}

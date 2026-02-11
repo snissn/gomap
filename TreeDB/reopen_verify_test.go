@@ -2,6 +2,7 @@ package treedb_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"hash/fnv"
 	"math/rand"
@@ -283,6 +284,62 @@ func TestReopenVerify_CommitFence_CheckpointAndWriteSync(t *testing.T) {
 	}
 	if !bytes.Equal(got, valueCP) {
 		t.Fatalf("get k-checkpoint mismatch: got %d bytes want %d", len(got), len(valueCP))
+	}
+}
+
+func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	values := map[string][]byte{
+		"k1": bytes.Repeat([]byte("a"), 4*1024),
+		"k2": bytes.Repeat([]byte("b"), 4*1024),
+		"k3": bytes.Repeat([]byte("c"), 4*1024),
+	}
+	for k, v := range values {
+		if err := db.Set([]byte(k), v); err != nil {
+			_ = db.Close()
+			t.Fatalf("set %s: %v", k, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint before rewrite: %v", err)
+	}
+	if _, err := db.ValueLogRewriteOnline(context.Background(), treedb.ValueLogRewriteOnlineOptions{
+		BatchSize:     2,
+		SyncEachBatch: true,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after rewrite: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	for k, want := range values {
+		got, err := reopen.Get([]byte(k))
+		if err != nil {
+			t.Fatalf("reopen get %s: %v", k, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("reopen mismatch key=%s got=%dB want=%dB", k, len(got), len(want))
+		}
 	}
 }
 
