@@ -3,6 +3,7 @@ package docs_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -25,6 +26,7 @@ func TestDocs_NoTreeDBSlabTerminology(t *testing.T) {
 		t.Fatalf("glob spec docs: %v", err)
 	}
 	paths = append(paths, specPaths...)
+	allowedLegacyFields := regexp.MustCompile(`\b(activeslabid|activeslabtail)\b`)
 
 	for _, p := range paths {
 		content, err := os.ReadFile(p)
@@ -34,8 +36,7 @@ func TestDocs_NoTreeDBSlabTerminology(t *testing.T) {
 		text := strings.ToLower(string(content))
 		// Preserve on-disk identifier accuracy where code still uses legacy
 		// field names in MetaPageBody.
-		text = strings.ReplaceAll(text, "activeslabid", "")
-		text = strings.ReplaceAll(text, "activeslabtail", "")
+		text = allowedLegacyFields.ReplaceAllString(text, "")
 		if strings.Contains(text, "slab") {
 			t.Fatalf("legacy slab terminology found in %s; use persistent value-log wording", p)
 		}
