@@ -17,7 +17,10 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
-const defaultGroupedFrameCacheEntries = 4
+const (
+	defaultGroupedFrameCacheEntries     = 4
+	defaultGroupedFrameCacheMaxRawBytes = 4 << 20
+)
 
 type groupedFrameCacheEntry struct {
 	start     int64
@@ -52,6 +55,7 @@ type File struct {
 	cacheRawPooled bool
 
 	groupedFrameCacheEntries int
+	groupedFrameCacheMaxRaw  int
 	groupedFrameCacheClock   uint64
 	groupedFrameCache        []groupedFrameCacheEntry
 	groupedFrameCacheHits    uint64
@@ -84,6 +88,7 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 		templateDecodeOpts:       templateOpts,
 		templateDefCache:         templateCache,
 		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
+		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
 	}
 	vf.mmapData.Store([]byte(nil))
 	vf.maybeScheduleRemap()
@@ -161,6 +166,9 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 	if f.groupedFrameCacheEntries <= 0 {
 		return
 	}
+	if f.groupedFrameCacheMaxRaw > 0 && len(raw) > f.groupedFrameCacheMaxRaw {
+		return
+	}
 
 	f.groupedFrameCacheClock++
 	used := f.groupedFrameCacheClock
@@ -205,6 +213,21 @@ func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity 
 	f.cacheMu.Lock()
 	defer f.cacheMu.Unlock()
 	return f.groupedFrameCacheHits, f.groupedFrameCacheMisses, len(f.groupedFrameCache), f.groupedFrameCacheEntries
+}
+
+func (f *File) setGroupedFrameCacheMaxRawBytes(maxRaw int) {
+	if maxRaw < 0 {
+		maxRaw = 0
+	}
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.groupedFrameCacheMaxRaw == maxRaw {
+		return
+	}
+	f.clearGroupedFrameCacheLocked()
+	f.groupedFrameCacheMaxRaw = maxRaw
+	f.groupedFrameCacheHits = 0
+	f.groupedFrameCacheMisses = 0
 }
 
 func (f *File) groupedFrameCacheStarts() []int64 {
@@ -542,6 +565,7 @@ type Manager struct {
 	templateDecodeOpts       templ.DecodeOptions
 	templateDefCache         *templateDefCache
 	groupedFrameCacheEntries int
+	groupedFrameCacheMaxRaw  int
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -549,6 +573,7 @@ func NewManager(dir string) (*Manager, error) {
 		dir:                      dir,
 		files:                    make(map[uint32]*File),
 		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
+		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
 	}
 	if err := m.Refresh(); err != nil {
 		return nil, err
@@ -596,6 +621,18 @@ func (m *Manager) SetGroupedFrameCacheEntries(entries int) {
 	}
 }
 
+func (m *Manager) SetGroupedFrameCacheMaxRawBytes(maxRaw int) {
+	if maxRaw < 0 {
+		maxRaw = 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.groupedFrameCacheMaxRaw = maxRaw
+	for _, f := range m.files {
+		f.setGroupedFrameCacheMaxRawBytes(maxRaw)
+	}
+}
+
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -632,6 +669,7 @@ func (m *Manager) Refresh() error {
 			return err
 		}
 		f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
+		f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
 		m.files[seg.id] = f
 	}
 	return nil

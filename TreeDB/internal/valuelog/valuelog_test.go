@@ -592,6 +592,65 @@ func TestValueLogManager_GroupedFrameCache_DisabledConfigParity(t *testing.T) {
 	}
 }
 
+func TestValueLogManager_GroupedFrameCache_MaxRawBytesSkipsOversize(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	ptrs, want := appendCompressedFrameForCacheTests(t, writer, 0, 4)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetDisableReadChecksum(true)
+	m.SetGroupedFrameCacheEntries(4)
+	m.SetGroupedFrameCacheMaxRawBytes(8)
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+
+	for i := 0; i < 2; i++ {
+		got, err := m.ReadUnsafe(ptrs[0])
+		if err != nil {
+			t.Fatalf("read unsafe #%d: %v", i+1, err)
+		}
+		if !bytes.Equal(got, want[0]) {
+			t.Fatalf("value mismatch #%d", i+1)
+		}
+	}
+
+	hits, misses, entries, capacity := f.groupedFrameCacheStats()
+	if capacity != 4 {
+		t.Fatalf("cache capacity=%d want=4", capacity)
+	}
+	if entries != 0 {
+		t.Fatalf("expected no cached entries when frame exceeds max raw bytes, got=%d", entries)
+	}
+	if hits != 0 {
+		t.Fatalf("expected zero cache hits for oversized frame, got=%d", hits)
+	}
+	if misses < 2 {
+		t.Fatalf("expected misses on both reads for oversized frame, got=%d", misses)
+	}
+}
+
 func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
