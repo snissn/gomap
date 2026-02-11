@@ -109,10 +109,15 @@ func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map
 		h := health[id]
 		size := fileSize(f)
 		h.SegmentBytes = size
-		if _, ok := referenced[id]; ok {
-			h.LiveBytes = size
-		} else {
+		// GC currently tracks referenced-vs-unreferenced membership, not exact
+		// per-segment live bytes. Keep any previously-computed live byte estimate
+		// for referenced segments, and clear only when a segment is unreferenced.
+		if _, ok := referenced[id]; !ok {
 			h.LiveBytes = 0
+		} else if h.LiveBytes < 0 {
+			h.LiveBytes = 0
+		} else if size > 0 && h.LiveBytes > size {
+			h.LiveBytes = size
 		}
 		h.AgeSeconds = segmentAgeSeconds(f.Path, now)
 		h.LastUpdatedUnixNano = now.UnixNano()

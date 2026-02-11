@@ -346,8 +346,11 @@ func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected referenced segment %d in health metadata", ptrsB[0].FileID)
 	}
-	if h2.LiveBytes <= 0 || h2.SegmentBytes <= 0 {
-		t.Fatalf("expected positive bytes for segment %d, got %+v", ptrsB[0].FileID, h2)
+	if h2.SegmentBytes <= 0 {
+		t.Fatalf("expected positive segment bytes for segment %d, got %+v", ptrsB[0].FileID, h2)
+	}
+	if h2.LiveBytes < 0 || h2.LiveBytes > h2.SegmentBytes {
+		t.Fatalf("expected bounded live bytes for segment %d, got %+v", ptrsB[0].FileID, h2)
 	}
 
 	if err := db.Close(); err != nil {
