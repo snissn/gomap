@@ -193,6 +193,15 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err := writer.Sync(); err != nil {
 		return stats, err
 	}
+	newValueIDs, err := writer.createdFileIDs()
+	if err != nil {
+		return stats, err
+	}
+	if len(newValueIDs) > 0 {
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return stats, err
+		}
+	}
 
 	// After swaps are published (i.e. pointer updates have been flushed and made
 	// visible), run cleanup against a non-cancelable context. At this point the
@@ -203,7 +212,14 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
+	zombieCandidates := make(map[uint32]struct{}, len(oldValueIDs)+len(newValueIDs))
 	for id := range oldValueIDs {
+		zombieCandidates[id] = struct{}{}
+	}
+	for _, id := range newValueIDs {
+		zombieCandidates[id] = struct{}{}
+	}
+	for id := range zombieCandidates {
 		if _, ok := referencedAfter[id]; ok {
 			continue
 		}
@@ -533,13 +549,14 @@ type rewriteWriter struct {
 	walDir  string
 	lane    uint32
 	seq     uint32
+	start   uint32
 	maxSize int64
 	w       *valuelog.Writer
 	records int
 }
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
-	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize}
+	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, start: startSeq, maxSize: maxSize}
 }
 
 func (w *rewriteWriter) ensureWriter() error {
@@ -620,6 +637,21 @@ func (w *rewriteWriter) Close() error {
 		return nil
 	}
 	return w.w.Close()
+}
+
+func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
+	if w == nil || w.seq <= w.start {
+		return nil, nil
+	}
+	out := make([]uint32, 0, int(w.seq-w.start))
+	for seq := w.start + 1; seq <= w.seq; seq++ {
+		id, err := valuelog.EncodeFileID(w.lane, seq)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 type rewriteIterator struct {
