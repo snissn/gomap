@@ -58,13 +58,10 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	oldValueIDs := make(map[uint32]struct{})
 	for _, seg := range segments {
-		if seg.valueLog {
-			oldValueIDs[seg.fileID] = struct{}{}
+		if !seg.valueLog {
+			return stats, fmt.Errorf("vlog-rewrite requires a clean commitlog; found %s", filepath.Base(seg.path))
 		}
-		if seg.valueLog {
-			continue
-		}
-		return stats, fmt.Errorf("vlog-rewrite requires a clean commitlog; found %s", filepath.Base(seg.path))
+		oldValueIDs[seg.fileID] = struct{}{}
 	}
 
 	d, err := openReadOnlyNoLock(opts)

@@ -47,7 +47,8 @@ func loadValueLogHealth(path string) (map[uint32]valueLogSegmentHealth, error) {
 	var raw valueLogHealthFile
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &raw); err != nil {
-			return nil, err
+			// Health metadata is rebuildable; tolerate torn/corrupt JSON.
+			return out, nil
 		}
 	}
 	for k, v := range raw.Segments {
@@ -74,7 +75,7 @@ func saveValueLogHealth(path string, health map[uint32]valueLogSegmentHealth) er
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return writeFileAtomic(path, data, 0o644)
 }
 
 func segmentAgeSeconds(path string, now time.Time) int64 {

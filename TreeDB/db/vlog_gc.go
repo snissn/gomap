@@ -141,8 +141,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	currentSet := db.valueLogManager.CurrentSetNoRefresh()
 	if currentSet != nil {
 		if err := updateValueLogHealthAfterGC(db.dir, currentSet, referenced); err != nil {
-			_ = db.valueLogManager.Release(currentSet)
-			return stats, err
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("value-log health update after gc: %w", err))
+			}
 		}
 		_ = db.valueLogManager.Release(currentSet)
 	}
