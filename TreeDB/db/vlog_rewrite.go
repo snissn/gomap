@@ -91,6 +91,10 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
+	nextRID, err := nextRewriteRIDStart(segments)
+	if err != nil {
+		return stats, err
+	}
 	lane, startSeq := chooseRewriteLane(segments)
 	maxBytes := opts.MaxSegmentBytes
 	if maxBytes <= 0 {
@@ -104,11 +108,19 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
 	swaps := make([]rewriteSwap, 0, batchSize)
-	nextRID := uint64(1)
 
 	flushBatch := func() error {
 		if len(swaps) == 0 {
 			return nil
+		}
+		if opts.SyncEachBatch {
+			if err := writer.Sync(); err != nil {
+				return err
+			}
+		} else {
+			if err := writer.Flush(); err != nil {
+				return err
+			}
 		}
 		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
 			return err
@@ -202,6 +214,41 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	stats.SegmentsAfter = afterSegs
 	stats.BytesAfter = afterBytes
 	return stats, nil
+}
+
+func nextRewriteRIDStart(segments []logSegment) (uint64, error) {
+	maxRID := uint64(0)
+	for _, segment := range segments {
+		if !segment.valueLog {
+			continue
+		}
+		reader, err := valuelog.NewReader(segment.path, segment.fileID)
+		if err != nil {
+			return 0, err
+		}
+		reader.DisableValueDecode()
+		for {
+			rid, _, _, err := reader.ReadNext()
+			if err == nil {
+				if rid > maxRID {
+					maxRID = rid
+				}
+				continue
+			}
+			if isTruncatedLogError(err) {
+				break
+			}
+			_ = reader.Close()
+			return 0, err
+		}
+		if err := reader.Close(); err != nil {
+			return 0, err
+		}
+	}
+	if maxRID == ^uint64(0) {
+		return 0, fmt.Errorf("value-log rid space exhausted")
+	}
+	return maxRID + 1, nil
 }
 
 func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
@@ -548,6 +595,13 @@ func (w *rewriteWriter) Sync() error {
 		return nil
 	}
 	return w.w.Sync()
+}
+
+func (w *rewriteWriter) Flush() error {
+	if w == nil || w.w == nil {
+		return nil
+	}
+	return w.w.Flush()
 }
 
 func (w *rewriteWriter) Close() error {

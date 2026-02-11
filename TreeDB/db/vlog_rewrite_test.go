@@ -194,7 +194,7 @@ func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	}
 }
 
-func TestValueLogRewrite_BatchedPointerSwap_CrashSafe(t *testing.T) {
+func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 	dir := t.TempDir()
 
 	db, err := Open(Options{Dir: dir})

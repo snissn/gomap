@@ -612,19 +612,23 @@ func (m *Manager) Release(set *Set) error {
 	for _, f := range set.Files {
 		newRef := f.RefCount.Add(-1)
 		if newRef == 0 && f.IsZombie.Load() {
+			shouldRemove := false
 			m.mu.Lock()
 			if f.RefCount.Load() == 0 {
 				if _, exists := m.files[f.ID]; exists {
-					if e := f.Close(); e != nil {
-						err = e
-					}
-					if e := removeSegmentFileWithRetry(f.Path); e != nil {
-						err = e
-					}
 					delete(m.files, f.ID)
+					shouldRemove = true
 				}
 			}
 			m.mu.Unlock()
+			if shouldRemove {
+				if e := f.Close(); e != nil {
+					err = e
+				}
+				if e := removeSegmentFileWithRetry(f.Path); e != nil {
+					err = e
+				}
+			}
 		}
 	}
 	return err
@@ -733,12 +737,6 @@ func removeSegmentFileWithRetry(path string) error {
 		if backoff < 200*time.Millisecond {
 			backoff *= 2
 		}
-	}
-	if runtime.GOOS == "windows" {
-		// Best effort on Windows: delayed handle release can outlive this retry
-		// window. Keeping a stale segment file is safer than surfacing a hard
-		// write-path failure; later maintenance can reclaim it.
-		return nil
 	}
 	return lastErr
 }
