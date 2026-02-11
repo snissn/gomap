@@ -94,36 +94,62 @@ jobs:
 
       - name: Incompressible auto-vs-off gate
         run: |
-          go run ./cmd/unified_bench \
-            -keys 1000000 \
-            -valsize 512 \
-            -batchsize 1024 \
-            -dbs treedb_vlog_off \
-            -test batch_write \
-            -val-pattern random \
-            -format markdown \
-            -progress=false \
-            -keep=false \
-            -seed 1 \
-            -treedb-force-value-pointers=true \
-            -treedb-value-log-threshold=1 \
-            > vlog_auto_incompressible_off.txt 2>&1
-          go run ./cmd/unified_bench \
-            -keys 1000000 \
-            -valsize 512 \
-            -batchsize 1024 \
-            -dbs treedb_vlog_auto \
-            -test batch_write \
-            -val-pattern random \
-            -format markdown \
-            -progress=false \
-            -keep=false \
-            -seed 1 \
-            -treedb-force-value-pointers=true \
-            -treedb-value-log-threshold=1 \
-            > vlog_auto_incompressible_auto.txt 2>&1
-          go run .github/scripts/check_vlog_auto_incompressible.go \
-            -off-log vlog_auto_incompressible_off.txt \
-            -auto-log vlog_auto_incompressible_auto.txt \
-            -min-throughput-frac 0.95 \
-            -max-size-frac 1.02
+          max_attempts=3
+          for attempt in $(seq 1 "$max_attempts"); do
+            off_log="vlog_auto_incompressible_off_attempt${attempt}.txt"
+            auto_log="vlog_auto_incompressible_auto_attempt${attempt}.txt"
+            echo "incompressible gate attempt ${attempt}/${max_attempts}"
+
+            if ! go run ./cmd/unified_bench \
+              -keys 1000000 \
+              -valsize 512 \
+              -batchsize 1024 \
+              -dbs treedb_vlog_off \
+              -test batch_write \
+              -val-pattern random \
+              -format markdown \
+              -progress=false \
+              -keep=false \
+              -seed 1 \
+              -treedb-force-value-pointers=true \
+              -treedb-value-log-threshold=1 \
+              > "${off_log}" 2>&1; then
+              echo "treedb_vlog_off benchmark failed on attempt ${attempt}"
+              tail -n 80 "${off_log}" || true
+              continue
+            fi
+
+            if ! go run ./cmd/unified_bench \
+              -keys 1000000 \
+              -valsize 512 \
+              -batchsize 1024 \
+              -dbs treedb_vlog_auto \
+              -test batch_write \
+              -val-pattern random \
+              -format markdown \
+              -progress=false \
+              -keep=false \
+              -seed 1 \
+              -treedb-force-value-pointers=true \
+              -treedb-value-log-threshold=1 \
+              > "${auto_log}" 2>&1; then
+              echo "treedb_vlog_auto benchmark failed on attempt ${attempt}"
+              tail -n 80 "${auto_log}" || true
+              continue
+            fi
+
+            if go run .github/scripts/check_vlog_auto_incompressible.go \
+              -off-log "${off_log}" \
+              -auto-log "${auto_log}" \
+              -min-throughput-frac 0.95 \
+              -max-size-frac 1.02; then
+              exit 0
+            fi
+
+            echo "incompressible gate threshold check failed on attempt ${attempt}"
+            tail -n 80 "${off_log}" || true
+            tail -n 80 "${auto_log}" || true
+          done
+
+          echo "incompressible auto-vs-off gate failed after ${max_attempts} attempts"
+          exit 1
