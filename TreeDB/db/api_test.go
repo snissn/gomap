@@ -401,3 +401,31 @@ func TestNewBatchWithSize_ResolverUsesBatchSnapshot(t *testing.T) {
 		t.Fatalf("batch.Close: %v", err)
 	}
 }
+
+func TestNewBatchWithSize_ForcePointersOverridesDomainThresholds(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 1024},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(2).(*Batch)
+	hotKey := []byte("hot/key")
+	hotValue := bytes.Repeat([]byte("h"), 64)
+	if err := b.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch.Close: %v", err)
+	}
+}
