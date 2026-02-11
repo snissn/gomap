@@ -182,6 +182,48 @@ func TestReopenVerify_WALOn_Checkpoint(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
+func TestReopenVerify_CurrentSetPublishedOnCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	key := []byte("checkpoint-pointer-key")
+	want := bytes.Repeat([]byte("z"), 32*1024)
+	if err := db.Set(key, want); err != nil {
+		_ = db.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get(key)
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("get mismatch after reopen: got %d bytes want %d", len(got), len(want))
+	}
+}
+
 func TestReopenVerify_InternalBaseDelta_WALOn_Checkpoint(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)

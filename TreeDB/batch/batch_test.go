@@ -132,3 +132,56 @@ func TestHasValueLogPointers(t *testing.T) {
 		t.Fatalf("value-log pointer batch: HasValueLogPointers() = %v, want true", got)
 	}
 }
+
+func TestTouchedValueLogSegments(t *testing.T) {
+	b := New(newMapValueReader(), page.DefaultInlineThreshold)
+	t.Cleanup(func() { _ = b.Close() })
+
+	if got := b.TouchedValueLogSegments(); len(got) != 0 {
+		t.Fatalf("empty batch touched segments = %v, want []", got)
+	}
+	if err := b.Set([]byte("k-inline"), []byte("v")); err != nil {
+		t.Fatalf("Set inline: %v", err)
+	}
+	if got := b.TouchedValueLogSegments(); len(got) != 0 {
+		t.Fatalf("inline-only touched segments = %v, want []", got)
+	}
+
+	if err := b.SetPointer([]byte("k-a"), page.ValuePtr{
+		FileID: page.ValueLogFileID(3),
+		Offset: 10,
+		Length: 2,
+	}); err != nil {
+		t.Fatalf("SetPointer k-a: %v", err)
+	}
+	if err := b.SetPointer([]byte("k-b"), page.ValuePtr{
+		FileID: page.ValueLogFileID(1),
+		Offset: 12,
+		Length: 2,
+	}); err != nil {
+		t.Fatalf("SetPointer k-b: %v", err)
+	}
+	if err := b.SetPointer([]byte("k-c"), page.ValuePtr{
+		FileID: page.ValueLogFileID(3),
+		Offset: 14,
+		Length: 2,
+	}); err != nil {
+		t.Fatalf("SetPointer k-c: %v", err)
+	}
+
+	got := b.TouchedValueLogSegments()
+	want := []uint32{page.ValueLogFileID(1), page.ValueLogFileID(3)}
+	if len(got) != len(want) {
+		t.Fatalf("touched segments len=%d want=%d (got=%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("touched segments[%d]=%d want=%d (all=%v)", i, got[i], want[i], got)
+		}
+	}
+
+	b.Reset()
+	if got := b.TouchedValueLogSegments(); len(got) != 0 {
+		t.Fatalf("after Reset touched segments = %v, want []", got)
+	}
+}
