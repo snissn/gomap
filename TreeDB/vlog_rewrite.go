@@ -47,6 +47,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if db.backend == nil {
 		return ValueLogRewriteStats{}, ErrClosed
 	}
+	_, finishMaintenance := db.beginFullScanMaintenance("rewrite")
+	success := false
+	defer func() { finishMaintenance(success) }()
 	if db.cached != nil {
 		if err := db.Checkpoint(); err != nil {
 			return ValueLogRewriteStats{}, err
@@ -56,5 +59,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return ValueLogRewriteStats{}, err
 	}
+	success = true
 	return ValueLogRewriteStats(stats), nil
 }

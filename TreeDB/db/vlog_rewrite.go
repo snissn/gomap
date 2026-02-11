@@ -60,13 +60,13 @@ func normalizeValueLogRewriteBatchSize(n int) int {
 func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewriteStats, error) {
 	var stats ValueLogRewriteStats
 	if db == nil {
-		return stats, errors.New("missing db")
+		return stats, fmt.Errorf("missing db")
 	}
 	if db.readOnly {
 		return stats, ErrReadOnly
 	}
 	if db.valueLogManager == nil {
-		return stats, errors.New("value log manager unavailable")
+		return stats, fmt.Errorf("value log manager unavailable")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -122,7 +122,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if snap != nil {
 			_ = snap.Close()
 		}
-		return stats, errors.New("missing snapshot state")
+		return stats, fmt.Errorf("missing snapshot state")
 	}
 	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	for ; it.Valid(); it.Next() {
@@ -210,7 +210,7 @@ func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
 	}
 	snap := db.AcquireSnapshot()
 	if snap == nil {
-		return errors.New("missing snapshot")
+		return fmt.Errorf("missing snapshot")
 	}
 	eligible := make([]rewriteSwap, 0, len(swaps))
 	for _, swap := range swaps {
