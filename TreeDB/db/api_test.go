@@ -247,6 +247,12 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 	}
 	defer keysOnly.Close()
 
+	proj, err := db.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModePointerProjection})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions projection: %v", err)
+	}
+	defer proj.Close()
+
 	if err := db.Delete([]byte("k-pointer")); err != nil {
 		t.Fatalf("Delete after iterator acquire: %v", err)
 	}
@@ -265,15 +271,11 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 		t.Fatalf("expected snapshot iterator to see 2 keys, got %d (%v)", len(seenKeys), seenKeys)
 	}
 
-	proj, err := db.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModePointerProjection})
-	if err != nil {
-		t.Fatalf("IteratorWithOptions projection: %v", err)
-	}
-	defer proj.Close()
-
+	seenPointer := false
 	for ; proj.Valid(); proj.Next() {
 		val, ptr, flags := proj.UnsafeEntry()
 		if string(proj.Key()) == "k-pointer" {
+			seenPointer = true
 			if flags&node.FlagPointer == 0 {
 				t.Fatalf("expected pointer flag for k-pointer")
 			}
@@ -287,5 +289,8 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 	}
 	if err := proj.Error(); err != nil {
 		t.Fatalf("projection iterator error: %v", err)
+	}
+	if !seenPointer {
+		t.Fatalf("projection iterator did not observe k-pointer")
 	}
 }
