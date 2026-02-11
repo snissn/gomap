@@ -258,6 +258,12 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		}
 	}
 	for _, batch := range batches {
+		if !commitFenceSatisfied(batch.records, ridMap) {
+			// Sequence-numbered commit batches act as recovery fences. If any RID
+			// referenced by the batch is absent from the scanned value-log set, we
+			// treat the whole batch as not committed and skip it.
+			continue
+		}
 		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
 			return err
 		}
@@ -268,6 +274,18 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		}
 	}
 	return nil
+}
+
+func commitFenceSatisfied(records []commitlog.Record, ridMap map[uint64]page.ValuePtr) bool {
+	for _, rec := range records {
+		if rec.Op != commitlog.OpSetRID {
+			continue
+		}
+		if _, ok := ridMap[rec.RID]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr) error {

@@ -224,6 +224,68 @@ func TestReopenVerify_CurrentSetPublishedOnCheckpoint(t *testing.T) {
 	}
 }
 
+func TestReopenVerify_CommitFence_CheckpointAndWriteSync(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	valueSync := bytes.Repeat([]byte("s"), 24*1024)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k-sync"), valueSync); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		_ = db.Close()
+		t.Fatalf("batch writesync: %v", err)
+	}
+	_ = b.Close()
+
+	valueCP := bytes.Repeat([]byte("c"), 24*1024)
+	if err := db.Set([]byte("k-checkpoint"), valueCP); err != nil {
+		_ = db.Close()
+		t.Fatalf("set checkpoint key: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("k-sync"))
+	if err != nil {
+		t.Fatalf("get k-sync: %v", err)
+	}
+	if !bytes.Equal(got, valueSync) {
+		t.Fatalf("get k-sync mismatch: got %d bytes want %d", len(got), len(valueSync))
+	}
+	got, err = reopen.Get([]byte("k-checkpoint"))
+	if err != nil {
+		t.Fatalf("get k-checkpoint: %v", err)
+	}
+	if !bytes.Equal(got, valueCP) {
+		t.Fatalf("get k-checkpoint mismatch: got %d bytes want %d", len(got), len(valueCP))
+	}
+}
+
 func TestReopenVerify_InternalBaseDelta_WALOn_Checkpoint(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)

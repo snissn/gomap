@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
@@ -127,11 +126,18 @@ func TestUnifiedWAL_CrashRecoveryMissingPayload(t *testing.T) {
 		t.Fatalf("commitlog.Close: %v", err)
 	}
 
-	if opened, err := db.Open(db.Options{Dir: dir}); err == nil {
-		_ = opened.Close()
-		t.Fatalf("expected recovery to fail on missing payload, got nil error")
-	} else if !strings.Contains(err.Error(), "missing rid") {
-		t.Fatalf("expected pointer payload error, got %v", err)
+	opened, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer opened.Close()
+
+	got, err := opened.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("get k2: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected missing payload commit to be skipped, got %q", string(got))
 	}
 }
 
