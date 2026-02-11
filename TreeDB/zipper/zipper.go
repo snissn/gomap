@@ -34,7 +34,6 @@ type Zipper struct {
 	indexInternalBaseDelta    bool
 	adaptiveLeafEncoding      bool
 	maintenanceOpsPerCoalesce int
-	leafHeuristicEntries      []node.LeafHeuristicEntry
 }
 
 type Split struct {
@@ -223,6 +222,14 @@ var leafBuilderPool = sync.Pool{
 	},
 }
 
+const maxLeafHeuristicScratchCap = 2048
+
+var leafHeuristicEntriesPool = sync.Pool{
+	New: func() any {
+		return make([]node.LeafHeuristicEntry, 0, 256)
+	},
+}
+
 type maintenanceBudget struct {
 	remaining int64
 }
@@ -385,7 +392,7 @@ func (z *Zipper) SetMaintenanceOpsPerCoalesce(opsPerCoalesce int) {
 }
 
 func (z *Zipper) newLeafBuilder(data []byte, ops []batch.Entry) *node.Builder {
-	opts := z.leafBuilderOptions(data, ops)
+	opts := z.leafBuilderOptions(ops)
 	if opts.LeafPrefixCompression || opts.LeafColumnar || opts.PackedValuePtr || opts.InternalBaseDelta {
 		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, opts)
 	}
@@ -394,48 +401,12 @@ func (z *Zipper) newLeafBuilder(data []byte, ops []batch.Entry) *node.Builder {
 
 func (z *Zipper) newPooledLeafBuilder(data []byte, ops []batch.Entry) *node.Builder {
 	b := leafBuilderPool.Get().(*node.Builder)
-	opts := z.leafBuilderOptions(data, ops)
+	opts := z.leafBuilderOptions(ops)
 	b.ResetWithOptions(data, page.PageTypeLeaf, opts)
 	return b
 }
 
-func appendLeafHeuristicFromPage(entries []node.LeafHeuristicEntry, data []byte, ops []batch.Entry) []node.LeafHeuristicEntry {
-	if len(data) < node.NodeHeaderSize {
-		return entries
-	}
-	n := node.NewNode(data)
-	if n == nil || n.Type() != page.PageTypeLeaf {
-		return entries
-	}
-	count := n.Count()
-	for i := uint16(0); i < count; i++ {
-		key, _, _, flags, err := n.GetLeafEntryView(i)
-		if err != nil {
-			break
-		}
-		if len(ops) > 0 && hasLeafHeuristicOpForKey(ops, key) {
-			continue
-		}
-		entries = append(entries, node.LeafHeuristicEntry{Key: key, Flags: flags})
-	}
-	return entries
-}
-
-func hasLeafHeuristicOpForKey(ops []batch.Entry, key []byte) bool {
-	lo, hi := 0, len(ops)
-	for lo < hi {
-		mid := lo + (hi-lo)/2
-		cmp := bytes.Compare(ops[mid].Key, key)
-		if cmp < 0 {
-			lo = mid + 1
-			continue
-		}
-		hi = mid
-	}
-	return lo < len(ops) && bytes.Equal(ops[lo].Key, key)
-}
-
-func (z *Zipper) leafBuilderOptions(data []byte, ops []batch.Entry) node.BuilderOptions {
+func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 	base := node.BuilderOptions{
 		LeafPrefixCompression: z != nil && z.leafPrefixCompression,
 		LeafColumnar:          z != nil && z.indexColumnarLeaves,
@@ -445,18 +416,16 @@ func (z *Zipper) leafBuilderOptions(data []byte, ops []batch.Entry) node.Builder
 	if z == nil || !z.adaptiveLeafEncoding {
 		return base
 	}
-	estimated := len(ops)
-	if len(data) >= node.NodeHeaderSize {
-		view := node.NewNodeView(data)
-		if view.Type() == page.PageTypeLeaf {
-			estimated += int(view.Count())
+	entries, _ := leafHeuristicEntriesPool.Get().([]node.LeafHeuristicEntry)
+	if cap(entries) < len(ops) {
+		entries = make([]node.LeafHeuristicEntry, 0, len(ops))
+	}
+	entries = entries[:0]
+	defer func() {
+		if cap(entries) <= maxLeafHeuristicScratchCap {
+			leafHeuristicEntriesPool.Put(entries[:0])
 		}
-	}
-	entries := z.leafHeuristicEntries[:0]
-	if cap(entries) < estimated {
-		entries = make([]node.LeafHeuristicEntry, 0, estimated)
-	}
-	entries = appendLeafHeuristicFromPage(entries, data, ops)
+	}()
 	for i := range ops {
 		op := ops[i]
 		if op.Type == batch.OpDelete {
@@ -476,13 +445,7 @@ func (z *Zipper) leafBuilderOptions(data []byte, ops []batch.Entry) node.Builder
 		}
 		return entries[i].Flags < entries[j].Flags
 	})
-	out := node.AdaptiveLeafBuilderOptions(base, entries)
-	if cap(entries) > 2048 {
-		z.leafHeuristicEntries = nil
-	} else {
-		z.leafHeuristicEntries = entries[:0]
-	}
-	return out
+	return node.AdaptiveLeafBuilderOptions(base, entries)
 }
 
 func releasePooledLeafBuilder(b *node.Builder) {
