@@ -130,6 +130,16 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 		return false, err
 	}
+	entries := b.batch.SortedEntries()
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	if err != nil {
+		freeErr := tracker.FreeAll()
+		b.db.writeMu.RUnlock()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, err
+	}
 	b.db.commitMu.Lock()
 	b.db.mu.RLock()
 	currentRoot := b.db.meta.UserRootPageID
@@ -145,7 +155,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, refreshValueLogSet)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, refreshValueLogSet, vlogRefDelta)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -182,6 +192,11 @@ func (b *Batch) writeSerialized(sync bool) error {
 	if err != nil {
 		return err
 	}
+	entries := b.batch.SortedEntries()
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	if err != nil {
+		return err
+	}
 
 	b.db.mu.Lock()
 	if b.db.meta.UserRootPageID != rootID {
@@ -192,7 +207,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, refreshValueLogSet); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, refreshValueLogSet, vlogRefDelta); err != nil {
 		return err
 	}
 	if b.db.vacuum.Active() {

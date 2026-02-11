@@ -29,11 +29,22 @@ Reachability is defined by pointer references found in index trees.
 
 Entries with `node.FlagPointer` and `IsValueLogFileID(ptr.FileID)` mark a segment as referenced.
 
+### 3.1 Incremental Accounting Fast Path
+
+TreeDB maintains commit-time reference counters per value-log segment.
+
+- Counters are updated from commit deltas (old pointer removal / new pointer add).
+- `ValueLogGC` may use these counters as a fast path instead of full-tree scans.
+- A compact metadata snapshot (`vlog_ref_counts.meta`) is stored in the DB dir.
+
+If counters are unavailable, stale, or corrupt, TreeDB rebuilds by scanning trees
+and rewrites metadata.
+
 ## 4. GC Algorithm (`DB.ValueLogGC`)
 
 For each segment in current value-log set:
 
-1. classify as referenced/unreferenced,
+1. determine referenced set (incremental counters when valid; otherwise full scan),
 2. keep if referenced,
 3. keep if current active segment for that lane,
 4. otherwise mark eligible.

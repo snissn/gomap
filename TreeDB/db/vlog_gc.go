@@ -5,11 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/node"
-	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 // ValueLogGCOptions controls value-log garbage collection.
@@ -56,31 +52,8 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
 
-	snap := db.AcquireSnapshot()
-	if snap == nil || snap.idx == nil || snap.state == nil {
-		if snap != nil {
-			_ = snap.Close()
-		}
-		return stats, fmt.Errorf("missing db state")
-	}
-
-	referenced := make(map[uint32]struct{})
-
-	userIter := snap.tree.Iterator(nil, nil)
-	if err := collectValueLogRefs(userIter, referenced); err != nil {
-		_ = userIter.Close()
-		return stats, err
-	}
-	_ = userIter.Close()
-
-	sysIter := tree.New(snap.idx.pager, valueReader{vlogs: snap.state.ValueLogSet}, snap.state.SystemRootPageID).Iterator(nil, nil)
-	if err := collectValueLogRefs(sysIter, referenced); err != nil {
-		_ = sysIter.Close()
-		return stats, err
-	}
-	_ = sysIter.Close()
-
-	if err := snap.Close(); err != nil {
+	referenced, err := db.referencedValueLogSegments(ctx)
+	if err != nil {
 		return stats, err
 	}
 
@@ -139,6 +112,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if set != nil {
 			_ = db.valueLogManager.Release(set)
 		}
+		db.persistValueLogRefTrackerBestEffort()
 		return stats, nil
 	}
 
@@ -164,18 +138,8 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		}
 	}
 
+	db.persistValueLogRefTrackerBestEffort()
 	return stats, nil
-}
-
-func collectValueLogRefs(it iterator.UnsafeIterator, refs map[uint32]struct{}) error {
-	for it.Valid() {
-		_, ptr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
-			refs[ptr.FileID] = struct{}{}
-		}
-		it.Next()
-	}
-	return it.Error()
 }
 
 func currentValueLogIDs(set *valuelog.Set) map[uint32]struct{} {

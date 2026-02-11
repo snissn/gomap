@@ -37,10 +37,11 @@ type DBState struct {
 }
 
 type DB struct {
-	valueLogManager *valuelog.Manager
-	lock            *lockfile.Lock
-	adaptive        *adaptive.Controller
-	pruner          pruneWorker
+	valueLogManager    *valuelog.Manager
+	valueLogRefTracker *valueLogRefTracker
+	lock               *lockfile.Lock
+	adaptive           *adaptive.Controller
+	pruner             pruneWorker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -95,12 +96,18 @@ type DB struct {
 	publishWatermarkLatencySamples atomic.Uint64
 	publishWatermarkLatencyMaxNs   atomic.Uint64
 	publishWatermarkLatencyBuckets [publishWatermarkLatencyBucketCount]atomic.Uint64
+
+	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
+	// the next meta page. Used by crash-safety tests.
+	testFailFinalizeCommit atomic.Bool
 }
 
 const (
 	defaultChunkSize                 = 16 * 1024 * 1024
 	defaultMaintenanceOpsPerCoalesce = 400_000
 )
+
+var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
 
 // DurabilityMode configures cached-mode durability semantics.
 //
@@ -742,6 +749,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	db := &DB{
 		valueLogManager:           vm,
+		valueLogRefTracker:        newValueLogRefTracker(),
 		lock:                      lock,
 		adaptive:                  adaptiveCtrl,
 		keepRecent:                opts.KeepRecent,
@@ -806,6 +814,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)
+	if err := db.initValueLogRefTracker(); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	db.pruner.Start(db, pruneWorkerOptions{
 		enabled:     !opts.DisableBackgroundPrune,
@@ -1087,22 +1099,24 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 }
 
 type finalizeCommitPost struct {
-	oldState  *DBState
-	metrics   adaptive.Metrics
-	kickPrune bool
-	doPrune   bool
-	debug     bool
-	sync      bool
-	start     time.Time
-	durSync1  time.Duration
-	durMeta   time.Duration
-	durSync2  time.Duration
+	oldState     *DBState
+	metrics      adaptive.Metrics
+	vlogRefDelta *valueLogRefDelta
+	commitSeq    uint64
+	kickPrune    bool
+	doPrune      bool
+	debug        bool
+	sync         bool
+	start        time.Time
+	durSync1     time.Duration
+	durMeta      time.Duration
+	durSync2     time.Duration
 }
 
 // finalizeCommitLocked performs the durability-critical publish path.
 // Callers that already hold commit serialization may run post work after
 // releasing the serialization lock.
-func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool) (finalizeCommitPost, error) {
+func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool, vlogRefDelta *valueLogRefDelta) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -1155,6 +1169,10 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 
+	if db.testFailFinalizeCommit.Load() {
+		return post, errTestFinalizeCommitFailpoint
+	}
+
 	// 3. Write Meta - No DB Lock
 	t0 := time.Now()
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
@@ -1199,6 +1217,8 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		ValueLogSet:      valueLogSet,
 	}
 	db.state.Store(newState)
+	post.commitSeq = nextMeta.CommitSeq
+	post.vlogRefDelta = vlogRefDelta
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 	db.observePublishWatermark(watermarkWait, watermarkHold, watermarkWait+watermarkHold)
@@ -1219,6 +1239,17 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 
 func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	var durPrune time.Duration
+
+	if db.valueLogRefTracker != nil {
+		if post.vlogRefDelta != nil {
+			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {
+				db.valueLogRefTracker.invalidate()
+				db.reportError(err)
+			}
+		} else {
+			db.valueLogRefTracker.invalidate()
+		}
+	}
 
 	// Keep pruning out of the commit serialization critical section.
 	if post.kickPrune {
@@ -1253,8 +1284,8 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 }
 
 // finalizeCommit handles durability and state updates.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool) error {
-	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, refreshValueLogSet)
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool, vlogRefDelta *valueLogRefDelta) error {
+	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, refreshValueLogSet, vlogRefDelta)
 	if err != nil {
 		return err
 	}
@@ -1286,7 +1317,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, true)
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, true, nil)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -1454,7 +1485,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, true)
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, true, nil)
 }
 
 type pagerAllocator struct {
