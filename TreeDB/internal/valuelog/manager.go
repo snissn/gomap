@@ -17,6 +17,17 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
+const defaultGroupedFrameCacheEntries = 4
+
+type groupedFrameCacheEntry struct {
+	start     int64
+	verifyCRC bool
+	k         int
+	offsets   [MaxFrameK + 1]uint32
+	raw       []byte
+	used      uint64
+}
+
 // File represents a value-log segment on disk.
 type File struct {
 	ID                 uint32
@@ -40,6 +51,12 @@ type File struct {
 	// scratch buffer that must be returned on eviction.
 	cacheRawPooled bool
 
+	groupedFrameCacheEntries int
+	groupedFrameCacheClock   uint64
+	groupedFrameCache        []groupedFrameCacheEntry
+	groupedFrameCacheHits    uint64
+	groupedFrameCacheMisses  uint64
+
 	closed atomic.Bool
 
 	// mmapData holds the current read-only mapping. Readers load it without locks.
@@ -58,7 +75,16 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 	if err != nil {
 		return nil, err
 	}
-	vf := &File{ID: id, Path: path, File: f, dictLookup: dictLookup, templateLookup: templateLookup, templateDecodeOpts: templateOpts, templateDefCache: templateCache}
+	vf := &File{
+		ID:                       id,
+		Path:                     path,
+		File:                     f,
+		dictLookup:               dictLookup,
+		templateLookup:           templateLookup,
+		templateDecodeOpts:       templateOpts,
+		templateDefCache:         templateCache,
+		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
+	}
 	vf.mmapData.Store([]byte(nil))
 	vf.maybeScheduleRemap()
 	return vf, nil
@@ -72,6 +98,124 @@ func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 	f.cacheRawPooled = pooled
 }
 
+func (f *File) clearGroupedFrameCacheLocked() {
+	for i := range f.groupedFrameCache {
+		f.groupedFrameCache[i].raw = nil
+		f.groupedFrameCache[i].k = 0
+	}
+	f.groupedFrameCache = nil
+	f.groupedFrameCacheClock = 0
+}
+
+func (f *File) setGroupedFrameCacheEntries(entries int) {
+	if entries < 0 {
+		entries = 0
+	}
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.groupedFrameCacheEntries == entries {
+		return
+	}
+	f.clearGroupedFrameCacheLocked()
+	f.groupedFrameCacheEntries = entries
+	f.groupedFrameCacheHits = 0
+	f.groupedFrameCacheMisses = 0
+}
+
+func (f *File) groupedFrameCacheLookup(start int64, verifyCRC bool, subIndex int) (raw []byte, valStart, valEnd, rawLen uint32, ok bool) {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.groupedFrameCacheEntries <= 0 || len(f.groupedFrameCache) == 0 {
+		return nil, 0, 0, 0, false
+	}
+	for i := range f.groupedFrameCache {
+		e := &f.groupedFrameCache[i]
+		if e.k <= 0 || e.start != start || e.verifyCRC != verifyCRC || subIndex < 0 || subIndex >= e.k {
+			continue
+		}
+		valStart = e.offsets[subIndex]
+		valEnd = e.offsets[subIndex+1]
+		rawLen = e.offsets[e.k]
+		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen {
+			continue
+		}
+		f.groupedFrameCacheClock++
+		e.used = f.groupedFrameCacheClock
+		f.groupedFrameCacheHits++
+		return e.raw, valStart, valEnd, rawLen, true
+	}
+	f.groupedFrameCacheMisses++
+	return nil, 0, 0, 0, false
+}
+
+func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte) {
+	if k <= 0 || len(raw) == 0 {
+		return
+	}
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.groupedFrameCacheEntries <= 0 {
+		return
+	}
+
+	f.groupedFrameCacheClock++
+	used := f.groupedFrameCacheClock
+
+	for i := range f.groupedFrameCache {
+		e := &f.groupedFrameCache[i]
+		if e.k > 0 && e.start == start && e.verifyCRC == verifyCRC {
+			e.k = k
+			e.offsets = offsets
+			e.raw = raw
+			e.used = used
+			return
+		}
+	}
+
+	idx := -1
+	if len(f.groupedFrameCache) < f.groupedFrameCacheEntries {
+		f.groupedFrameCache = append(f.groupedFrameCache, groupedFrameCacheEntry{})
+		idx = len(f.groupedFrameCache) - 1
+	} else {
+		oldest := f.groupedFrameCache[0].used
+		idx = 0
+		for i := 1; i < len(f.groupedFrameCache); i++ {
+			if f.groupedFrameCache[i].used < oldest {
+				oldest = f.groupedFrameCache[i].used
+				idx = i
+			}
+		}
+	}
+
+	f.groupedFrameCache[idx] = groupedFrameCacheEntry{
+		start:     start,
+		verifyCRC: verifyCRC,
+		k:         k,
+		offsets:   offsets,
+		raw:       raw,
+		used:      used,
+	}
+}
+
+func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	return f.groupedFrameCacheHits, f.groupedFrameCacheMisses, len(f.groupedFrameCache), f.groupedFrameCacheEntries
+}
+
+func (f *File) groupedFrameCacheStarts() []int64 {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	starts := make([]int64, 0, len(f.groupedFrameCache))
+	for i := range f.groupedFrameCache {
+		if f.groupedFrameCache[i].k > 0 {
+			starts = append(starts, f.groupedFrameCache[i].start)
+		}
+	}
+	sort.Slice(starts, func(i, j int) bool { return starts[i] < starts[j] })
+	return starts
+}
+
 func (f *File) Close() error {
 	if f == nil || f.File == nil {
 		return nil
@@ -82,6 +226,7 @@ func (f *File) Close() error {
 	f.cacheFlags = 0
 	f.cacheLen = 0
 	f.setCacheRawLocked(nil, false)
+	f.clearGroupedFrameCacheLocked()
 	f.cacheStart.Store(0)
 	f.cacheMu.Unlock()
 
@@ -387,17 +532,19 @@ type Manager struct {
 	mu    sync.RWMutex
 	files map[uint32]*File
 
-	disableReadChecksum bool
-	dictLookup          DictLookup
-	templateLookup      TemplateLookup
-	templateDecodeOpts  templ.DecodeOptions
-	templateDefCache    *templateDefCache
+	disableReadChecksum      bool
+	dictLookup               DictLookup
+	templateLookup           TemplateLookup
+	templateDecodeOpts       templ.DecodeOptions
+	templateDefCache         *templateDefCache
+	groupedFrameCacheEntries int
 }
 
 func NewManager(dir string) (*Manager, error) {
 	m := &Manager{
-		dir:   dir,
-		files: make(map[uint32]*File),
+		dir:                      dir,
+		files:                    make(map[uint32]*File),
+		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
 	}
 	if err := m.Refresh(); err != nil {
 		return nil, err
@@ -432,6 +579,19 @@ func (m *Manager) SetTemplateLookup(lookup TemplateLookup, opts templ.DecodeOpti
 		f.templateDefCache = m.templateDefCache
 	}
 }
+
+func (m *Manager) SetGroupedFrameCacheEntries(entries int) {
+	if entries < 0 {
+		entries = 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.groupedFrameCacheEntries = entries
+	for _, f := range m.files {
+		f.setGroupedFrameCacheEntries(entries)
+	}
+}
+
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -467,6 +627,7 @@ func (m *Manager) Refresh() error {
 		if err != nil {
 			return err
 		}
+		f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
 		m.files[seg.id] = f
 	}
 	return nil
