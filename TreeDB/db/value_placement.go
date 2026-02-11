@@ -7,6 +7,9 @@ import (
 
 // NormalizeValueLogDomainThresholds returns a deterministic longest-prefix-first
 // copy suitable for hot-path threshold lookups.
+//
+// It filters invalid entries (empty prefix or negative thresholds) and
+// de-duplicates identical prefixes after sorting.
 func NormalizeValueLogDomainThresholds(in []ValueLogDomainThreshold) []ValueLogDomainThreshold {
 	if len(in) == 0 {
 		return nil
@@ -45,6 +48,9 @@ func NormalizeValueLogDomainThresholds(in []ValueLogDomainThreshold) []ValueLogD
 
 // ResolveInlineThresholdForKey chooses an inline threshold for key using
 // longest-prefix domain overrides and a global fallback.
+//
+// Callers should pass NormalizeValueLogDomainThresholds output so that the
+// first match is the intended longest-prefix override.
 func ResolveInlineThresholdForKey(baseThreshold int, key []byte, domains []ValueLogDomainThreshold) int {
 	for i := range domains {
 		d := domains[i]
