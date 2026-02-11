@@ -36,6 +36,9 @@ type File struct {
 	cacheLen   int
 	cacheOffs  [MaxFrameK + 1]uint32
 	cacheRaw   []byte
+	// decodeScratch retains one reusable decode buffer for compressed grouped
+	// reads, reducing sync.Pool churn across adjacent frame misses.
+	decodeScratch []byte
 	// cacheRawPooled tracks whether cacheRaw currently owns a pooled decode
 	// scratch buffer that must be returned on eviction.
 	cacheRawPooled bool
@@ -65,11 +68,68 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 }
 
 func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
-	if f.cacheRawPooled && len(f.cacheRaw) > 0 {
-		putDecodeScratch(f.cacheRaw)
+	if f.cacheRawPooled && cap(f.cacheRaw) > 0 {
+		f.stashDecodeScratchLocked(f.cacheRaw)
 	}
 	f.cacheRaw = raw
 	f.cacheRawPooled = pooled
+}
+
+func (f *File) stashDecodeScratchLocked(buf []byte) {
+	if cap(buf) == 0 || cap(buf) > maxDecodeScratchKeep {
+		return
+	}
+	buf = buf[:0]
+	if cap(f.decodeScratch) == 0 {
+		f.decodeScratch = buf
+		return
+	}
+	if cap(buf) > cap(f.decodeScratch) {
+		old := f.decodeScratch
+		f.decodeScratch = buf
+		putDecodeScratch(old)
+		return
+	}
+	putDecodeScratch(buf)
+}
+
+func (f *File) takeDecodeScratch(minCap int) []byte {
+	if minCap <= 0 {
+		return nil
+	}
+	f.cacheMu.Lock()
+	scratch := f.decodeScratch
+	f.decodeScratch = nil
+	f.cacheMu.Unlock()
+	if cap(scratch) >= minCap {
+		return scratch[:0]
+	}
+	if scratch != nil {
+		putDecodeScratch(scratch)
+	}
+	return getDecodeScratch(minCap)
+}
+
+func (f *File) releaseDecodeScratch(buf []byte) {
+	if cap(buf) == 0 || cap(buf) > maxDecodeScratchKeep {
+		return
+	}
+	buf = buf[:0]
+	f.cacheMu.Lock()
+	if cap(f.decodeScratch) == 0 {
+		f.decodeScratch = buf
+		f.cacheMu.Unlock()
+		return
+	}
+	if cap(buf) > cap(f.decodeScratch) {
+		old := f.decodeScratch
+		f.decodeScratch = buf
+		f.cacheMu.Unlock()
+		putDecodeScratch(old)
+		return
+	}
+	f.cacheMu.Unlock()
+	putDecodeScratch(buf)
 }
 
 func (f *File) Close() error {
@@ -77,13 +137,19 @@ func (f *File) Close() error {
 		return nil
 	}
 	f.closed.Store(true)
+	var scratch []byte
 	f.cacheMu.Lock()
 	f.cacheK = 0
 	f.cacheFlags = 0
 	f.cacheLen = 0
 	f.setCacheRawLocked(nil, false)
+	scratch = f.decodeScratch
+	f.decodeScratch = nil
 	f.cacheStart.Store(0)
 	f.cacheMu.Unlock()
+	if scratch != nil {
+		putDecodeScratch(scratch)
+	}
 
 	f.remapMu.Lock()
 	data, _ := f.mmapData.Load().([]byte)
