@@ -307,6 +307,11 @@ func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
 
 	ptrsA := appendPointersInNewSegment(t, dir, 0, 1, 70_000, 1, func(i int) []byte {
 		return bytes.Repeat([]byte("a"), 512)
@@ -356,6 +361,7 @@ func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+	db = nil
 	stats, err := ValueLogRewriteOffline(Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("ValueLogRewriteOffline: %v", err)
@@ -380,6 +386,72 @@ func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
 	}
 	if !foundRewrite {
 		t.Fatalf("expected rewrite_count > 0 after rewrite, got %+v", healthAfterRewrite)
+	}
+}
+
+func TestValueLogGC_HealthMetadata_PreservesPinnedZombieSegment(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptrsA := appendPointersInNewSegment(t, dir, 0, 1, 81_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 256)
+	})
+	ptrsB := appendPointersInNewSegment(t, dir, 0, 2, 82_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrsA[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrsB[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	pinned := db.valueLogManager.CurrentSetNoRefresh()
+	if pinned == nil {
+		t.Fatalf("expected pinned value-log set")
+	}
+	defer func() { _ = db.valueLogManager.Release(pinned) }()
+
+	zombieFile, ok := pinned.Files[ptrsA[0].FileID]
+	if !ok || zombieFile == nil || zombieFile.Path == "" {
+		t.Fatalf("missing pinned segment for %d", ptrsA[0].FileID)
+	}
+
+	if err := db.Delete([]byte("k1")); err != nil {
+		t.Fatalf("delete k1: %v", err)
+	}
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+
+	if _, err := os.Stat(zombieFile.Path); err != nil {
+		t.Fatalf("expected pinned zombie segment to remain on disk: %v", err)
+	}
+
+	health, err := loadValueLogHealth(valueLogHealthPath(dir))
+	if err != nil {
+		t.Fatalf("load health after gc: %v", err)
+	}
+	h, ok := health[ptrsA[0].FileID]
+	if !ok {
+		t.Fatalf("expected health entry for pinned zombie segment %d", ptrsA[0].FileID)
+	}
+	if h.SegmentBytes <= 0 {
+		t.Fatalf("expected positive segment bytes for pinned zombie segment: %+v", h)
+	}
+	if h.LiveBytes != 0 {
+		t.Fatalf("expected zero live bytes for unreferenced pinned zombie segment: %+v", h)
 	}
 }
 

@@ -138,6 +138,11 @@ func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
 
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 90_000, 2, func(i int) []byte {
 		return bytes.Repeat([]byte{byte(i + 1)}, 256)
@@ -156,6 +161,7 @@ func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("close before rewrite: %v", err)
 	}
+	db = nil
 
 	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); err != nil {
 		t.Fatalf("ValueLogRewriteOffline: %v", err)

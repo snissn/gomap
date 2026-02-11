@@ -103,25 +103,56 @@ func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map
 	}
 	now := time.Now()
 
-	present := make(map[uint32]struct{}, len(set.Files))
-	for id, f := range set.Files {
-		present[id] = struct{}{}
+	present := make(map[uint32]struct{}, len(health))
+	if set != nil {
+		for id, f := range set.Files {
+			present[id] = struct{}{}
+			h := health[id]
+			size := fileSize(f)
+			h.SegmentBytes = size
+			// GC currently tracks referenced-vs-unreferenced membership, not exact
+			// per-segment live bytes. Keep any previously-computed live byte estimate
+			// for referenced segments, and clear only when a segment is unreferenced.
+			if _, ok := referenced[id]; !ok {
+				h.LiveBytes = 0
+			} else if h.LiveBytes < 0 {
+				h.LiveBytes = 0
+			} else if size > 0 && h.LiveBytes > size {
+				h.LiveBytes = size
+			}
+			h.AgeSeconds = segmentAgeSeconds(f.Path, now)
+			h.LastUpdatedUnixNano = now.UnixNano()
+			health[id] = h
+		}
+	}
+
+	segments, err := listWALSegments(dbDir)
+	if err != nil {
+		return err
+	}
+	for _, seg := range segments {
+		if !seg.valueLog {
+			continue
+		}
+		id := seg.fileID
+		if _, ok := present[id]; ok {
+			continue
+		}
 		h := health[id]
-		size := fileSize(f)
-		h.SegmentBytes = size
-		// GC currently tracks referenced-vs-unreferenced membership, not exact
-		// per-segment live bytes. Keep any previously-computed live byte estimate
-		// for referenced segments, and clear only when a segment is unreferenced.
+		if info, err := os.Stat(seg.path); err == nil {
+			h.SegmentBytes = info.Size()
+		}
 		if _, ok := referenced[id]; !ok {
 			h.LiveBytes = 0
 		} else if h.LiveBytes < 0 {
 			h.LiveBytes = 0
-		} else if size > 0 && h.LiveBytes > size {
-			h.LiveBytes = size
+		} else if h.SegmentBytes > 0 && h.LiveBytes > h.SegmentBytes {
+			h.LiveBytes = h.SegmentBytes
 		}
-		h.AgeSeconds = segmentAgeSeconds(f.Path, now)
+		h.AgeSeconds = segmentAgeSeconds(seg.path, now)
 		h.LastUpdatedUnixNano = now.UnixNano()
 		health[id] = h
+		present[id] = struct{}{}
 	}
 
 	for id := range health {
