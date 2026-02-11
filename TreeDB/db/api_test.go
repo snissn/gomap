@@ -294,3 +294,25 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 		t.Fatalf("projection iterator did not observe k-pointer")
 	}
 }
+
+func TestValuePlacement_PerDomainThreshold_DefaultFallback(t *testing.T) {
+	domains := NormalizeValueLogDomainThresholds([]ValueLogDomainThreshold{
+		{Prefix: []byte("hot/"), InlineThreshold: 16},
+		{Prefix: []byte("hot/user/"), InlineThreshold: 8},
+		{Prefix: []byte("cold/"), InlineThreshold: 1024},
+	})
+	base := 256
+
+	if got := ResolveInlineThresholdForKey(base, []byte("hot/user/001"), domains); got != 8 {
+		t.Fatalf("expected longest-prefix threshold=8, got %d", got)
+	}
+	if got := ResolveInlineThresholdForKey(base, []byte("hot/other"), domains); got != 16 {
+		t.Fatalf("expected hot prefix threshold=16, got %d", got)
+	}
+	if got := ResolveInlineThresholdForKey(base, []byte("cold/key"), domains); got != 1024 {
+		t.Fatalf("expected cold prefix threshold=1024, got %d", got)
+	}
+	if got := ResolveInlineThresholdForKey(base, []byte("neutral/key"), domains); got != base {
+		t.Fatalf("expected fallback threshold=%d, got %d", base, got)
+	}
+}
