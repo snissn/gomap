@@ -2491,6 +2491,25 @@ func (db *DB) applyAdaptiveMemtableModeLocked() memtable.Mode {
 	return desired
 }
 
+func validateValueLogDomainThresholds(domains []backenddb.ValueLogDomainThreshold) error {
+	seen := make(map[string]struct{}, len(domains))
+	for i := range domains {
+		d := domains[i]
+		if len(d.Prefix) == 0 {
+			return fmt.Errorf("cachingdb: value-log domain threshold[%d] has empty prefix", i)
+		}
+		if d.InlineThreshold < 0 {
+			return fmt.Errorf("cachingdb: value-log domain threshold[%d] has negative inline threshold %d", i, d.InlineThreshold)
+		}
+		key := string(d.Prefix)
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("cachingdb: duplicate value-log domain threshold prefix %q", d.Prefix)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum) {
 		return nil, ErrUnsafeOptions
@@ -2609,6 +2628,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	if flushBackendInitEntries < 1 {
 		flushBackendInitEntries = 1
+	}
+	if err := validateValueLogDomainThresholds(opts.ValueLogDomainInlineThresholds); err != nil {
+		return nil, err
 	}
 
 	// Ensure wal dir exists

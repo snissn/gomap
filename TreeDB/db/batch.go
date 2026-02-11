@@ -20,14 +20,12 @@ func (db *DB) NewBatch() batch.Interface {
 }
 
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
-	threshold := db.policy.InlineThreshold
-	if db.adaptive != nil {
-		threshold = db.adaptive.GetThreshold()
-	}
+	threshold := db.InlineThreshold()
 	if size < 0 {
 		size = 0
 	}
 	internal := batch.New(db.valueLogManager, threshold)
+	internal.SetInlineThresholdResolver(db.InlineThresholdForKey)
 	internal.Reserve(size)
 	return &Batch{
 		db:    db,

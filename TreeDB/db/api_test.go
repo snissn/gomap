@@ -2,12 +2,14 @@ package db
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -314,5 +316,40 @@ func TestValuePlacement_PerDomainThreshold_DefaultFallback(t *testing.T) {
 	}
 	if got := ResolveInlineThresholdForKey(base, []byte("neutral/key"), domains); got != base {
 		t.Fatalf("expected fallback threshold=%d, got %d", base, got)
+	}
+}
+
+func TestNewBatchWithSize_AppliesPerDomainInlineThresholds(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+				{Prefix: []byte("cold/"), InlineThreshold: 1024},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	hotKey := []byte("hot/key")
+	coldKey := []byte("cold/key")
+	defaultKey := []byte("other/key")
+	hotValue := bytes.Repeat([]byte("h"), 64)
+	coldValue := bytes.Repeat([]byte("c"), 64)
+	defaultValue := bytes.Repeat([]byte("d"), 300)
+
+	if err := db.Set(coldKey, coldValue); err != nil {
+		t.Fatalf("Set cold: %v", err)
+	}
+	if err := db.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		t.Fatalf("Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+	if err := db.Set(defaultKey, defaultValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		t.Fatalf("Set default err = %v, want %v", err, batchpkg.ErrValueTooLarge)
 	}
 }
