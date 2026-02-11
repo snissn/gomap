@@ -52,14 +52,15 @@ u64 UserRootPageID
 u64 SystemRootPageID
 u64 FreelistHeadID
 u64 TotalPages
-u32 ActiveLegacyStreamID   // reserved legacy field (ignored)
-u64 ActiveLegacyStreamTail // reserved legacy field (ignored)
+u32 ActiveSlabID      // legacy/reserved field name in MetaPageBody
+u64 ActiveSlabTail    // legacy/reserved field name in MetaPageBody
 u64 LastCommitHeight  // reserved
 ```
 
 Notes:
 
-- The legacy stream id/tail bytes remain reserved for layout stability.
+- Field names intentionally match `page.MetaPageBody.ActiveSlabID` and
+  `page.MetaPageBody.ActiveSlabTail` for binary compatibility.
 - Current TreeDB value storage uses persistent value-log segments and `ValuePtr` references.
 
 ## 4. Value Pointer Encoding (`page.ValuePtr`)

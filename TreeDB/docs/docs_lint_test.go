@@ -31,7 +31,12 @@ func TestDocs_NoTreeDBSlabTerminology(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", p, err)
 		}
-		if strings.Contains(strings.ToLower(string(content)), "slab") {
+		text := strings.ToLower(string(content))
+		// Preserve on-disk identifier accuracy where code still uses legacy
+		// field names in MetaPageBody.
+		text = strings.ReplaceAll(text, "activeslabid", "")
+		text = strings.ReplaceAll(text, "activeslabtail", "")
+		if strings.Contains(text, "slab") {
 			t.Fatalf("legacy slab terminology found in %s; use persistent value-log wording", p)
 		}
 	}
