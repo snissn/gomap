@@ -95,16 +95,6 @@ Coverage:
 - `TreeDB/db/compact_index_sequential_alloc_test.go`
 - `TreeDB/db/vacuum_online_swap_test.go`
 
-## 9. Documentation Terminology Integrity
-
-Invariant:
-- TreeDB docs consistently describe persistent value-log storage and avoid
-  legacy alternate value-store terminology.
-
-Coverage:
-- `TreeDB/docs/docs_lint_test.go`:
-  - docs terminology lint test
-
 ## 8. Required Checks for Format/Behavior Changes
 
 When changing on-disk format, replay behavior, or pointer lifecycle:
@@ -115,3 +105,13 @@ When changing on-disk format, replay behavior, or pointer lifecycle:
    - `go test ./TreeDB/...`
 4. for leaf-encoding work, run:
    - `go test ./TreeDB/node -run '^$' -bench BenchmarkLeafPageDensity -benchmem -count=1`
+
+## 9. Documentation Terminology Integrity
+
+Invariant:
+- TreeDB docs consistently describe persistent value-log storage and avoid
+  legacy alternate value-store terminology.
+
+Coverage:
+- `TreeDB/docs/docs_lint_test.go`:
+  - docs terminology lint test
