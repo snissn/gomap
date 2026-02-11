@@ -719,20 +719,28 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 func removeSegmentFileWithRetry(path string) error {
 	const attempts = 40
 	backoff := 25 * time.Millisecond
+	var lastErr error
 	for i := 0; i < attempts; i++ {
 		err := os.Remove(path)
 		if err == nil || os.IsNotExist(err) {
 			return nil
 		}
+		lastErr = err
 		if runtime.GOOS != "windows" || i == attempts-1 {
-			return err
+			break
 		}
 		time.Sleep(backoff)
 		if backoff < 200*time.Millisecond {
 			backoff *= 2
 		}
 	}
-	return nil
+	if runtime.GOOS == "windows" {
+		// Best effort on Windows: delayed handle release can outlive this retry
+		// window. Keeping a stale segment file is safer than surfacing a hard
+		// write-path failure; later maintenance can reclaim it.
+		return nil
+	}
+	return lastErr
 }
 
 type segmentInfo struct {
