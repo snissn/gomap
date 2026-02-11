@@ -327,13 +327,15 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 				}
 			}
 		}
-		if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
-			ent := &m.entries[idx]
-			if bytes.Equal(appendOnlyEntryKey(ent), key) {
-				if ent.flags&node.FlagTombstone != 0 {
-					return nil, true, true
+		if m.latest != nil {
+			if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+				ent := &m.entries[idx]
+				if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					if ent.flags&node.FlagTombstone != 0 {
+						return nil, true, true
+					}
+					return ent.value, false, true
 				}
-				return ent.value, false, true
 			}
 		}
 	}
@@ -361,10 +363,12 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 				}
 			}
 		}
-		if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
-			ent := &m.entries[idx]
-			if bytes.Equal(appendOnlyEntryKey(ent), key) {
-				return ent.value, ent.ptr, ent.flags, true
+		if m.latest != nil {
+			if idx, ok := m.latest[appendOnlyKeyString(key)]; ok && idx >= 0 && idx < m.count {
+				ent := &m.entries[idx]
+				if bytes.Equal(appendOnlyEntryKey(ent), key) {
+					return ent.value, ent.ptr, ent.flags, true
+				}
 			}
 		}
 	}
@@ -455,25 +459,37 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 }
 
 func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
-	writeLock := !m.ordered
-	if writeLock {
-		// Snapshot construction updates internal caches, so keep an exclusive lock
-		// for unordered mode for the lifetime of this iterator.
-		m.mu.Lock()
-	} else {
-		m.mu.RLock()
+	m.mu.RLock()
+	if m.ordered {
+		entries := m.entries[:m.count]
+		it := &appendOnlyIterator{
+			entries: entries,
+			end:     end,
+			mu:      &m.mu,
+		}
+		if start != nil {
+			it.Seek(start)
+		}
+		return it
 	}
-	entries := m.entries[:m.count]
-	var snapshot []*appendOnlyEntry
-	if !m.ordered {
-		snapshot = m.buildSortedLatestSnapshotLocked()
+	m.mu.RUnlock()
+
+	// Unordered iterators need a sorted latest-key view. Build/update shared
+	// caches under an exclusive lock, then copy the snapshot so iteration does
+	// not hold the write lock for its lifetime.
+	m.mu.Lock()
+	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
+	entries := make([]appendOnlyEntry, len(snapshotPtrs))
+	for i := range snapshotPtrs {
+		if snapshotPtrs[i] != nil {
+			entries[i] = *snapshotPtrs[i]
+		}
 	}
+	m.mu.Unlock()
+
 	it := &appendOnlyIterator{
-		entries:  entries,
-		snapshot: snapshot,
-		end:      end,
-		mu:       &m.mu,
-		write:    writeLock,
+		entries: entries,
+		end:     end,
 	}
 	if start != nil {
 		it.Seek(start)
@@ -482,50 +498,17 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 type appendOnlyIterator struct {
-	entries  []appendOnlyEntry
-	snapshot []*appendOnlyEntry
-	idx      int
-	end      []byte
-	mu       *sync.RWMutex
-	write    bool
-}
-
-func (it *appendOnlyIterator) len() int {
-	if it.snapshot != nil {
-		return len(it.snapshot)
-	}
-	return len(it.entries)
-}
-
-func (it *appendOnlyIterator) entryAt(i int) *appendOnlyEntry {
-	if i < 0 {
-		return nil
-	}
-	if it.snapshot != nil {
-		if i >= len(it.snapshot) {
-			return nil
-		}
-		return it.snapshot[i]
-	}
-	if i >= len(it.entries) {
-		return nil
-	}
-	return &it.entries[i]
-}
-
-func (it *appendOnlyIterator) keyAt(i int) []byte {
-	ent := it.entryAt(i)
-	if ent == nil {
-		return nil
-	}
-	return appendOnlyEntryKey(ent)
+	entries []appendOnlyEntry
+	idx     int
+	end     []byte
+	mu      *sync.RWMutex
 }
 
 func (it *appendOnlyIterator) validIndex() bool {
-	if it.idx < 0 || it.idx >= it.len() {
+	if it.idx < 0 || it.idx >= len(it.entries) {
 		return false
 	}
-	if it.end != nil && bytes.Compare(it.keyAt(it.idx), it.end) >= 0 {
+	if it.end != nil && bytes.Compare(appendOnlyEntryKey(&it.entries[it.idx]), it.end) >= 0 {
 		return false
 	}
 	return true
@@ -536,14 +519,14 @@ func (it *appendOnlyIterator) Valid() bool {
 }
 
 func (it *appendOnlyIterator) Next() {
-	if it.idx < it.len() {
+	if it.idx < len(it.entries) {
 		it.idx++
 	}
 }
 
 func (it *appendOnlyIterator) Seek(key []byte) {
-	it.idx = sort.Search(it.len(), func(i int) bool {
-		return bytes.Compare(it.keyAt(i), key) >= 0
+	it.idx = sort.Search(len(it.entries), func(i int) bool {
+		return bytes.Compare(appendOnlyEntryKey(&it.entries[i]), key) >= 0
 	})
 }
 
@@ -551,17 +534,14 @@ func (it *appendOnlyIterator) UnsafeKey() []byte {
 	if !it.validIndex() {
 		return nil
 	}
-	return it.keyAt(it.idx)
+	return appendOnlyEntryKey(&it.entries[it.idx])
 }
 
 func (it *appendOnlyIterator) UnsafeValue() []byte {
 	if !it.validIndex() {
 		return nil
 	}
-	ent := it.entryAt(it.idx)
-	if ent == nil {
-		return nil
-	}
+	ent := it.entries[it.idx]
 	if ent.flags&node.FlagTombstone != 0 {
 		return nil
 	}
@@ -572,10 +552,7 @@ func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if !it.validIndex() {
 		return nil, page.ValuePtr{}, 0
 	}
-	ent := it.entryAt(it.idx)
-	if ent == nil {
-		return nil, page.ValuePtr{}, 0
-	}
+	ent := it.entries[it.idx]
 	return ent.value, ent.ptr, ent.flags
 }
 
@@ -583,8 +560,7 @@ func (it *appendOnlyIterator) IsDeleted() bool {
 	if !it.validIndex() {
 		return false
 	}
-	ent := it.entryAt(it.idx)
-	return ent != nil && ent.flags&node.FlagTombstone != 0
+	return it.entries[it.idx].flags&node.FlagTombstone != 0
 }
 
 func (it *appendOnlyIterator) Key() []byte {
@@ -615,11 +591,7 @@ func (it *appendOnlyIterator) Error() error { return nil }
 
 func (it *appendOnlyIterator) Close() error {
 	if it.mu != nil {
-		if it.write {
-			it.mu.Unlock()
-		} else {
-			it.mu.RUnlock()
-		}
+		it.mu.RUnlock()
 		it.mu = nil
 	}
 	return nil
