@@ -14,6 +14,7 @@ Coverage:
   - `TestReopenVerify_WALOn_Checkpoint_CompressionModes`
   - `TestReopenVerify_WALOff_NoJournal`
   - `TestReopenVerify_IndexColumnarLeaves`
+  - `TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages`
   - `TestReopenVerify_InternalBaseDelta_WALOn_Checkpoint`
 
 ## 2. Recovery Coherence

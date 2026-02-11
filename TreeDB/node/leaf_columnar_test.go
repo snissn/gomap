@@ -174,3 +174,18 @@ func TestLeafBuilder_AdaptiveEncoding_HeuristicDeterminism(t *testing.T) {
 		t.Fatalf("expected delete-heavy pages to disable columnar mode")
 	}
 }
+
+func TestLeafHeuristicEntriesSorted_EqualKeyRespectsFlags(t *testing.T) {
+	if leafHeuristicEntriesSorted([]LeafHeuristicEntry{
+		{Key: []byte("dup"), Flags: FlagPointer},
+		{Key: []byte("dup"), Flags: FlagInline},
+	}) {
+		t.Fatalf("expected duplicate-key entries out of flag order to be unsorted")
+	}
+	if !leafHeuristicEntriesSorted([]LeafHeuristicEntry{
+		{Key: []byte("dup"), Flags: FlagInline},
+		{Key: []byte("dup"), Flags: FlagPointer},
+	}) {
+		t.Fatalf("expected duplicate-key entries in flag order to be sorted")
+	}
+}

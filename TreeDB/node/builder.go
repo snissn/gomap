@@ -229,7 +229,8 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 
 func leafHeuristicEntriesSorted(entries []LeafHeuristicEntry) bool {
 	for i := 1; i < len(entries); i++ {
-		if bytes.Compare(entries[i-1].Key, entries[i].Key) > 0 {
+		cmp := bytes.Compare(entries[i-1].Key, entries[i].Key)
+		if cmp > 0 || (cmp == 0 && entries[i-1].Flags > entries[i].Flags) {
 			return false
 		}
 	}
