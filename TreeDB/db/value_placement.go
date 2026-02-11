@@ -51,7 +51,7 @@ func ResolveInlineThresholdForKey(baseThreshold int, key []byte, domains []Value
 		if len(d.Prefix) == 0 {
 			continue
 		}
-		if len(key) >= len(d.Prefix) && bytes.Equal(key[:len(d.Prefix)], d.Prefix) {
+		if bytes.HasPrefix(key, d.Prefix) {
 			return d.InlineThreshold
 		}
 	}
