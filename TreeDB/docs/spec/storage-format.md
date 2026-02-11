@@ -52,14 +52,14 @@ u64 UserRootPageID
 u64 SystemRootPageID
 u64 FreelistHeadID
 u64 TotalPages
-u32 ActiveSlabID      // legacy/reserved name; not used as active TreeDB slab storage
-u64 ActiveSlabTail    // legacy/reserved name
+u32 ActiveLegacyStreamID   // reserved legacy field (ignored)
+u64 ActiveLegacyStreamTail // reserved legacy field (ignored)
 u64 LastCommitHeight  // reserved
 ```
 
 Notes:
 
-- The `ActiveSlab*` field names are legacy identifiers in the struct layout.
+- The legacy stream id/tail bytes remain reserved for layout stability.
 - Current TreeDB value storage uses persistent value-log segments and `ValuePtr` references.
 
 ## 4. Value Pointer Encoding (`page.ValuePtr`)

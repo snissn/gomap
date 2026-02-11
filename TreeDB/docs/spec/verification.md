@@ -16,6 +16,7 @@ Coverage:
   - `TestReopenVerify_IndexColumnarLeaves`
   - `TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages`
   - `TestReopenVerify_InternalBaseDelta_WALOn_Checkpoint`
+  - `TestValuePlacement_PerDomainThreshold_ReopenDurability`
 
 ## 2. Recovery Coherence
 
@@ -65,6 +66,9 @@ Coverage:
   - `TestLeafColumnarPrefixCompression_IncreasesPageDensity_PointerEntries`
   - `TestLeafColumnar_DoesNotReducePageDensity_PointerEntries`
   - `TestLeafColumnarPrefixPacked_PointerDensityWithinTolerance`
+  - `TestLeafAdaptiveEncoding_DensityFixture_HighPrefixInline`
+  - `TestLeafAdaptiveEncoding_DensityFixture_PointerLowPrefix`
+  - `TestLeafBuilder_AdaptiveEncoding_HeuristicDeterminism`
   - `BenchmarkLeafPageDensity`
 
 ## 6. Durability/Profile Defaults
@@ -76,6 +80,10 @@ Coverage:
 - `TreeDB/vlog_default_threshold_test.go`
 - `TreeDB/profiles_test.go`
 - `TreeDB/unsafe_options_test.go`
+- `TreeDB/force_value_log_test.go`:
+  - `TestValuePlacement_PerDomainThreshold_Respected`
+- `TreeDB/db/api_test.go`:
+  - `TestValuePlacement_PerDomainThreshold_DefaultFallback`
 
 ## 7. Maintenance/Compaction Behavior
 
@@ -86,6 +94,16 @@ Coverage:
 - `TreeDB/db/compact_index_test.go`
 - `TreeDB/db/compact_index_sequential_alloc_test.go`
 - `TreeDB/db/vacuum_online_swap_test.go`
+
+## 9. Documentation Terminology Integrity
+
+Invariant:
+- TreeDB docs consistently describe persistent value-log storage and avoid
+  legacy alternate value-store terminology.
+
+Coverage:
+- `TreeDB/docs/docs_lint_test.go`:
+  - docs terminology lint test
 
 ## 8. Required Checks for Format/Behavior Changes
 

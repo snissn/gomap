@@ -13,7 +13,7 @@ The runtime consists of:
   - `dictdb/` for persistent dictionary bytes,
   - `templatedb/` for template compression definitions.
 
-TreeDB has no slab storage path for values.
+TreeDB has no alternate legacy value-store path for values.
 
 ## 2. Component Responsibilities
 
