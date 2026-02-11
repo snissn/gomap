@@ -13,10 +13,12 @@ import (
 const valueLogHealthFileName = "vlog_health.json"
 
 type valueLogSegmentHealth struct {
-	SegmentBytes        int64  `json:"segment_bytes"`
-	LiveBytes           int64  `json:"live_bytes"`
-	AgeSeconds          int64  `json:"age_seconds"`
-	RewriteCount        uint64 `json:"rewrite_count"`
+	SegmentBytes int64  `json:"segment_bytes"`
+	LiveBytes    int64  `json:"live_bytes"`
+	AgeSeconds   int64  `json:"age_seconds"`
+	RewriteCount uint64 `json:"rewrite_count"`
+	// ReadHotness is reserved for future per-segment read-frequency tracking.
+	// It is persisted for schema stability but not actively updated yet.
 	ReadHotness         uint64 `json:"read_hotness"`
 	LastUpdatedUnixNano int64  `json:"last_updated_unix_nano"`
 }
