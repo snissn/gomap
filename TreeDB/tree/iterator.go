@@ -14,6 +14,24 @@ type CursorItem struct {
 	Index  int
 }
 
+// IteratorMode controls value materialization behavior while scanning.
+type IteratorMode uint8
+
+const (
+	// IteratorModeFull resolves inline and pointer-backed values on demand.
+	IteratorModeFull IteratorMode = iota
+	// IteratorModeKeysOnly skips value materialization entirely.
+	IteratorModeKeysOnly
+	// IteratorModePointerProjection keeps pointer metadata visible via UnsafeEntry
+	// but skips pointer payload decoding.
+	IteratorModePointerProjection
+)
+
+// IteratorOptions configures scan-time value materialization behavior.
+type IteratorOptions struct {
+	Mode IteratorMode
+}
+
 const (
 	iteratorLeafPrefixCompressedFlag uint16 = 0x8000
 	iteratorLeafColumnarFlag         uint16 = 0x4000
@@ -314,6 +332,7 @@ type Iterator struct {
 	prefetchPtrs   []page.ValuePtr
 	prefetchVals   [][]byte
 	prefetchArmed  bool
+	mode           IteratorMode
 	reverse        bool
 	verifyAlways   bool
 }
@@ -329,6 +348,21 @@ type slabUnsafeBatchAppender interface {
 const iteratorPointerBatchMax = 2
 
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
+	return t.IteratorWithOptions(start, end, IteratorOptions{})
+}
+
+func normalizeIteratorMode(mode IteratorMode) IteratorMode {
+	switch mode {
+	case IteratorModeKeysOnly, IteratorModePointerProjection:
+		return mode
+	default:
+		return IteratorModeFull
+	}
+}
+
+// IteratorWithOptions returns a forward iterator over [start, end) using the
+// provided value materialization mode.
+func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
 		return &Iterator{tree: t, valid: false, err: nil} // Invalid immediately
 	}
@@ -336,6 +370,7 @@ func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 		tree:         t,
 		start:        start,
 		end:          end,
+		mode:         normalizeIteratorMode(opts.Mode),
 		reverse:      false,
 		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
@@ -354,6 +389,12 @@ func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	return t.ReverseIteratorWithOptions(start, end, IteratorOptions{})
+}
+
+// ReverseIteratorWithOptions returns a reverse iterator over [start, end)
+// using the provided value materialization mode.
+func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
 		return &Iterator{tree: t, valid: false, err: nil}
 	}
@@ -361,6 +402,7 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 		tree:         t,
 		start:        start,
 		end:          end,
+		mode:         normalizeIteratorMode(opts.Mode),
 		reverse:      true,
 		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
@@ -742,7 +784,16 @@ func (it *Iterator) UnsafeValue() []byte {
 	if it.currKey == nil {
 		return nil
 	}
+	if it.mode == IteratorModeKeysOnly {
+		return nil
+	}
 	if it.flags&node.FlagPointer != 0 {
+		if it.mode == IteratorModePointerProjection {
+			if !it.ensurePointerLoaded() {
+				return nil
+			}
+			return nil
+		}
 		if it.valOK {
 			return it.currVal
 		}
@@ -787,9 +838,15 @@ func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if it.currKey == nil {
 		return nil, page.ValuePtr{}, 0
 	}
+	if it.mode == IteratorModeKeysOnly {
+		return nil, page.ValuePtr{}, it.flags
+	}
 	if it.flags&node.FlagPointer != 0 {
 		if !it.ensurePointerLoaded() {
 			return nil, page.ValuePtr{}, it.flags
+		}
+		if it.mode == IteratorModePointerProjection {
+			return nil, it.currPtr, it.flags
 		}
 	} else if !it.ensureInlineValueLoaded() {
 		return nil, page.ValuePtr{}, it.flags
