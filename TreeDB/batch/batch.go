@@ -175,7 +175,7 @@ func (b *Batch) inlineThresholdForKey(key []byte) int {
 		if threshold := b.thresholdForKey(key); threshold >= 0 {
 			return threshold
 		}
-		return page.DefaultInlineThreshold
+		return b.inlineThreshold
 	}
 	return b.inlineThreshold
 }

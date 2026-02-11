@@ -343,13 +343,20 @@ func TestNewBatchWithSize_AppliesPerDomainInlineThresholds(t *testing.T) {
 	coldValue := bytes.Repeat([]byte("c"), 64)
 	defaultValue := bytes.Repeat([]byte("d"), 300)
 
-	if err := db.Set(coldKey, coldValue); err != nil {
-		t.Fatalf("Set cold: %v", err)
+	b := db.NewBatchWithSize(3).(*Batch)
+	if err := b.Set(coldKey, coldValue); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch.Set cold: %v", err)
 	}
-	if err := db.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
-		t.Fatalf("Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	if err := b.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
 	}
-	if err := db.Set(defaultKey, defaultValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
-		t.Fatalf("Set default err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	if err := b.Set(defaultKey, defaultValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set default err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch.Close: %v", err)
 	}
 }
