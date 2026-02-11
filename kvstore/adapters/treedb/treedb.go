@@ -204,11 +204,13 @@ func wrapIterator(inner kvstore.Iterator) kvstore.Iterator {
 	if inner == nil {
 		return nil
 	}
-	it := &adapterIterator{inner: inner}
-	if u, ok := inner.(unsafeKVIterator); ok {
-		it.unsafe = u
+	u, ok := inner.(unsafeKVIterator)
+	if !ok {
+		// Preserve any optional iterator interfaces when there is no unsafe
+		// fast-path to expose.
+		return inner
 	}
-	return it
+	return &adapterIterator{inner: inner, unsafe: u}
 }
 
 func (it *adapterIterator) Valid() bool {
@@ -234,19 +236,34 @@ func (it *adapterIterator) Value() []byte {
 }
 
 func (it *adapterIterator) KeyCopy(dst []byte) []byte {
-	key := it.Key()
-	if key == nil {
-		return nil
+	if it.unsafe != nil {
+		key := it.unsafe.UnsafeKey()
+		if key == nil {
+			return nil
+		}
+		return append(dst[:0], key...)
 	}
-	return append(dst[:0], key...)
+	return it.inner.KeyCopy(dst)
 }
 
 func (it *adapterIterator) ValueCopy(dst []byte) []byte {
-	value := it.Value()
-	if value == nil {
-		return nil
+	if it.unsafe != nil {
+		value := it.unsafe.UnsafeValue()
+		if value == nil {
+			return nil
+		}
+		return append(dst[:0], value...)
 	}
-	return append(dst[:0], value...)
+	return it.inner.ValueCopy(dst)
+}
+
+func (it *adapterIterator) DebugStats() (queueLen int, sourcesUsed int) {
+	if ds, ok := it.inner.(interface {
+		DebugStats() (queueLen int, sourcesUsed int)
+	}); ok {
+		return ds.DebugStats()
+	}
+	return 0, 0
 }
 
 func (it *adapterIterator) Error() error {
