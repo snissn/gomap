@@ -75,7 +75,7 @@ func saveValueLogHealth(path string, health map[uint32]valueLogSegmentHealth) er
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(path, data, 0o644)
+	return writeFileAtomic(path, data, 0o600)
 }
 
 func segmentAgeSeconds(path string, now time.Time) int64 {

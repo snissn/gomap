@@ -237,7 +237,9 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return stats, err
 	}
 	if err := updateValueLogHealthAfterRewrite(opts.Dir, oldValueIDs); err != nil {
-		return stats, err
+		if opts.NotifyError != nil {
+			opts.NotifyError(fmt.Errorf("value-log health update after rewrite: %w", err))
+		}
 	}
 
 	afterSegs, afterBytes, err := valueLogSegmentStats(opts.Dir)
