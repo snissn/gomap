@@ -360,3 +360,43 @@ func TestNewBatchWithSize_AppliesPerDomainInlineThresholds(t *testing.T) {
 		t.Fatalf("batch.Close: %v", err)
 	}
 }
+
+func TestNewBatchWithSize_ResolverUsesBatchSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(2).(*Batch)
+	// Mutate policy after batch creation; this should not affect an in-flight
+	// batch's threshold resolution for default-domain keys.
+	db.policy.InlineThreshold = 8
+
+	defaultKey := []byte("other/key")
+	defaultValue := bytes.Repeat([]byte("d"), 64)
+	if err := b.Set(defaultKey, defaultValue); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch.Set default with snapshot threshold: %v", err)
+	}
+
+	hotKey := []byte("hot/key")
+	hotValue := bytes.Repeat([]byte("h"), 64)
+	if err := b.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch.Close: %v", err)
+	}
+}

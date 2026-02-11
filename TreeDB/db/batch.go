@@ -21,11 +21,14 @@ func (db *DB) NewBatch() batch.Interface {
 
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	threshold := db.InlineThreshold()
+	domains := db.valueLogDomainThresholds
 	if size < 0 {
 		size = 0
 	}
 	internal := batch.New(db.valueLogManager, threshold)
-	internal.SetInlineThresholdResolver(db.InlineThresholdForKey)
+	internal.SetInlineThresholdResolver(func(key []byte) int {
+		return ResolveInlineThresholdForKey(threshold, key, domains)
+	})
 	internal.Reserve(size)
 	return &Batch{
 		db:    db,
