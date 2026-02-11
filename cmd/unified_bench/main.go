@@ -2194,7 +2194,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				expected := endIdx - startIdx
 				itemsThisQuery := 0
 				iterStart := time.Now()
-				var keyBuf []byte
 				for iter.Valid() {
 					if itemsThisQuery&8191 == 0 {
 						if err := guard.Checkpoint(); err != nil {
@@ -2202,7 +2201,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 							return 0, err
 						}
 					}
-					keyBuf = iter.KeyCopy(keyBuf[:0])
+					_ = iter.Key()
 					iter.Next()
 					itemsThisQuery++
 				}
@@ -2286,8 +2285,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 
 				itemsThisQuery := 0
-				var keyBuf []byte
-				var valBuf []byte
 				for iter.Valid() {
 					if itemsThisQuery&8191 == 0 {
 						if err := guard.Checkpoint(); err != nil {
@@ -2295,8 +2292,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 							return 0, err
 						}
 					}
-					keyBuf = iter.KeyCopy(keyBuf[:0])
-					valBuf = iter.ValueCopy(valBuf[:0])
+					_ = iter.Key()
+					_ = iter.Value()
 					iter.Next()
 					itemsThisQuery++
 				}
