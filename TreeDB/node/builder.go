@@ -165,6 +165,12 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 
 	for i := range entries {
 		e := entries[i]
+		if prevKey != nil {
+			prefixPairs++
+			prefixBytes += sharedPrefixLen(prevKey, e.Key)
+		}
+		prevKey = e.Key
+
 		if e.Flags&FlagTombstone != 0 {
 			deleteCount++
 			continue
@@ -173,11 +179,6 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 		if e.Flags&FlagPointer != 0 {
 			pointerCount++
 		}
-		if prevKey != nil {
-			prefixPairs++
-			prefixBytes += sharedPrefixLen(prevKey, e.Key)
-		}
-		prevKey = e.Key
 	}
 
 	if putCount == 0 {

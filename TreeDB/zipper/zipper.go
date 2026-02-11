@@ -770,6 +770,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		var key, val []byte
 		var flags byte
 		var valPtr page.ValuePtr
+		insertedFromBatch := false
 
 		if useBatch {
 			op := ops[opIdx]
@@ -777,6 +778,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			if op.Type == batch.OpDelete {
 				continue // Skip insert
 			}
+			insertedFromBatch = true
 			key = op.Key
 			if op.IsPtr {
 				flags = node.FlagPointer
@@ -857,7 +859,11 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 
 			// New Builder
-			splitBuilder := z.newPooledLeafBuilder(sdata, ops[opIdx:])
+			startIdx := opIdx
+			if insertedFromBatch && startIdx > 0 {
+				startIdx--
+			}
+			splitBuilder := z.newPooledLeafBuilder(sdata, ops[startIdx:])
 			splitBuilder.SetPageID(sid)
 
 			// Record split
