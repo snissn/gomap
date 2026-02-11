@@ -90,11 +90,19 @@ func (d *DB) Checkpoint() error { return d.DB.Checkpoint() }
 func (d *DB) VacuumIndexOnline(ctx context.Context) error { return d.DB.VacuumIndexOnline(ctx) }
 
 func (d *DB) Iterator(start, end []byte) (kvstore.Iterator, error) {
-	return d.DB.Iterator(start, end)
+	it, err := d.DB.Iterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	return wrapIterator(it), nil
 }
 
 func (d *DB) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
-	return d.DB.ReverseIterator(start, end)
+	it, err := d.DB.ReverseIterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	return wrapIterator(it), nil
 }
 
 func (d *DB) NewBatch() (kvstore.Batch, error) {
@@ -180,4 +188,71 @@ func (b *batch) Reset() {
 	if r, ok := b.b.(interface{ Reset() }); ok {
 		r.Reset()
 	}
+}
+
+type unsafeKVIterator interface {
+	UnsafeKey() []byte
+	UnsafeValue() []byte
+}
+
+type adapterIterator struct {
+	inner  kvstore.Iterator
+	unsafe unsafeKVIterator
+}
+
+func wrapIterator(inner kvstore.Iterator) kvstore.Iterator {
+	if inner == nil {
+		return nil
+	}
+	it := &adapterIterator{inner: inner}
+	if u, ok := inner.(unsafeKVIterator); ok {
+		it.unsafe = u
+	}
+	return it
+}
+
+func (it *adapterIterator) Valid() bool {
+	return it.inner.Valid()
+}
+
+func (it *adapterIterator) Next() {
+	it.inner.Next()
+}
+
+func (it *adapterIterator) Key() []byte {
+	if it.unsafe != nil {
+		return it.unsafe.UnsafeKey()
+	}
+	return it.inner.Key()
+}
+
+func (it *adapterIterator) Value() []byte {
+	if it.unsafe != nil {
+		return it.unsafe.UnsafeValue()
+	}
+	return it.inner.Value()
+}
+
+func (it *adapterIterator) KeyCopy(dst []byte) []byte {
+	key := it.Key()
+	if key == nil {
+		return nil
+	}
+	return append(dst[:0], key...)
+}
+
+func (it *adapterIterator) ValueCopy(dst []byte) []byte {
+	value := it.Value()
+	if value == nil {
+		return nil
+	}
+	return append(dst[:0], value...)
+}
+
+func (it *adapterIterator) Error() error {
+	return it.inner.Error()
+}
+
+func (it *adapterIterator) Close() error {
+	return it.inner.Close()
 }
