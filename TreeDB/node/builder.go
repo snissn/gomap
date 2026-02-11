@@ -1,7 +1,9 @@
 package node
 
 import (
+	"bytes"
 	"encoding/binary"
+	"sort"
 	"sync"
 	"unsafe"
 
@@ -155,6 +157,17 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 	if len(entries) == 0 {
 		return base
 	}
+	ordered := entries
+	if !leafHeuristicEntriesSorted(entries) {
+		ordered = append(make([]LeafHeuristicEntry, 0, len(entries)), entries...)
+		sort.Slice(ordered, func(i, j int) bool {
+			cmp := bytes.Compare(ordered[i].Key, ordered[j].Key)
+			if cmp != 0 {
+				return cmp < 0
+			}
+			return ordered[i].Flags < ordered[j].Flags
+		})
+	}
 
 	putCount := 0
 	pointerCount := 0
@@ -163,8 +176,8 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 	prefixBytes := 0
 	var prevKey []byte
 
-	for i := range entries {
-		e := entries[i]
+	for i := range ordered {
+		e := ordered[i]
 		if prevKey != nil {
 			prefixPairs++
 			prefixBytes += sharedPrefixLen(prevKey, e.Key)
@@ -185,7 +198,7 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 		return base
 	}
 	pointerRatio := float64(pointerCount) / float64(putCount)
-	deleteRatio := float64(deleteCount) / float64(len(entries))
+	deleteRatio := float64(deleteCount) / float64(len(ordered))
 	avgPrefix := 0.0
 	if prefixPairs > 0 {
 		avgPrefix = float64(prefixBytes) / float64(prefixPairs)
@@ -212,6 +225,15 @@ func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntr
 		}
 	}
 	return out
+}
+
+func leafHeuristicEntriesSorted(entries []LeafHeuristicEntry) bool {
+	for i := 1; i < len(entries); i++ {
+		if bytes.Compare(entries[i-1].Key, entries[i].Key) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 type leafColumnarV2Entry struct {
