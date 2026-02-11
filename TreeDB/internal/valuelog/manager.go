@@ -717,10 +717,8 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 }
 
 func removeSegmentFileWithRetry(path string) error {
-	const (
-		attempts = 8
-		backoff  = 20 * time.Millisecond
-	)
+	const attempts = 40
+	backoff := 25 * time.Millisecond
 	for i := 0; i < attempts; i++ {
 		err := os.Remove(path)
 		if err == nil || os.IsNotExist(err) {
@@ -730,6 +728,9 @@ func removeSegmentFileWithRetry(path string) error {
 			return err
 		}
 		time.Sleep(backoff)
+		if backoff < 200*time.Millisecond {
+			backoff *= 2
+		}
 	}
 	return nil
 }
