@@ -245,6 +245,63 @@ func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 120_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("p"), 512)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Delete([]byte("k1")); err != nil {
+		t.Fatalf("delete pointer key: %v", err)
+	}
+
+	segmentsBefore, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments before rewrite: %v", err)
+	}
+	var maxValueSeqBefore uint64
+	for _, seg := range segmentsBefore {
+		if seg.valueLog && seg.seq > maxValueSeqBefore {
+			maxValueSeqBefore = seg.seq
+		}
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     1,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 0 {
+		t.Fatalf("expected no copied records, got %+v", stats)
+	}
+
+	segmentsAfter, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments after rewrite: %v", err)
+	}
+	for _, seg := range segmentsAfter {
+		if seg.valueLog && seg.seq > maxValueSeqBefore {
+			t.Fatalf("unexpected new value-log segment created for no-op rewrite: %+v", seg)
+		}
+	}
+}
+
 func TestValueLogRewrite_BatchedPointerSwap_SnapshotIsolation(t *testing.T) {
 	dir := t.TempDir()
 

@@ -101,9 +101,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		maxBytes = defaultValueLogRewriteSegmentBytes
 	}
 	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), lane, startSeq, maxBytes)
-	if err := writer.ensureWriter(); err != nil {
-		return stats, err
-	}
 	defer func() { _ = writer.Close() }()
 
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)

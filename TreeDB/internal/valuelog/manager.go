@@ -27,6 +27,7 @@ type File struct {
 	File               *os.File
 	RefCount           atomic.Int64
 	IsZombie           atomic.Bool
+	retryDeletePending atomic.Bool
 	dictLookup         DictLookup
 	templateLookup     TemplateLookup
 	templateDecodeOpts templ.DecodeOptions
@@ -629,7 +630,9 @@ func (m *Manager) Release(set *Set) error {
 				}
 				if e := removeSegmentFileWithRetry(f.Path); e != nil {
 					if isWindowsSharingViolationError(e) {
-						go m.retryZombieDelete(f)
+						if f.retryDeletePending.CompareAndSwap(false, true) {
+							go m.retryZombieDelete(f)
+						}
 						continue
 					}
 					err = e
@@ -650,15 +653,35 @@ func (m *Manager) retryZombieDelete(f *File) {
 	if m == nil || f == nil {
 		return
 	}
-	if err := removeSegmentFileWithRetry(f.Path); err != nil {
-		log.Printf("valuelog: retry zombie delete failed for %s: %v", f.Path, err)
-		return
+	defer f.retryDeletePending.Store(false)
+
+	backoff := 200 * time.Millisecond
+	for {
+		m.mu.RLock()
+		cur, exists := m.files[f.ID]
+		keepRetrying := exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load()
+		m.mu.RUnlock()
+		if !keepRetrying {
+			return
+		}
+
+		if err := removeSegmentFileWithRetry(f.Path); err == nil {
+			m.mu.Lock()
+			if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
+				delete(m.files, f.ID)
+			}
+			m.mu.Unlock()
+			return
+		} else if !isWindowsSharingViolationError(err) {
+			log.Printf("valuelog: retry zombie delete failed for %s: %v", f.Path, err)
+			return
+		}
+
+		time.Sleep(backoff)
+		if backoff < 2*time.Second {
+			backoff *= 2
+		}
 	}
-	m.mu.Lock()
-	if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
-		delete(m.files, f.ID)
-	}
-	m.mu.Unlock()
 }
 
 func (m *Manager) MarkZombie(id uint32) error {
