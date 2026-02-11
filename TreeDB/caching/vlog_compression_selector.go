@@ -1061,10 +1061,11 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 		recordLaneVlogBlockK(l, codec, 1)
 		return 1
 	}
+	avgPayloadBytes := rawPayloadBytes / records
 	ratio := 1.0
 	useSelectorRatio := normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto && l != nil && l.vlogCompressionSelector != nil
-	stableFastPath := (db.forceValueLogPointers && rawPayloadBytes >= forcePointerAutoBlockMinPayloadBytes) ||
-		(normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && rawPayloadBytes >= throughputAutoBlockMinPayloadBytes)
+	stableFastPath := (db.forceValueLogPointers && avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes) ||
+		(normalizeVlogAutoPolicy(db.valueLogAutoPolicy) == vlogAutoThroughput && avgPayloadBytes >= throughputAutoBlockMinPayloadBytes)
 	if useSelectorRatio && !stableFastPath {
 		ratio = l.vlogCompressionSelector.blockObservedRatio(codec)
 	}
@@ -1073,7 +1074,6 @@ func (db *DB) chooseValueLogBlockWriteK(l *lane, records, rawPayloadBytes int, c
 	}
 	targetCompressedBytes := db.valueLogBlockTargetBytes
 	if db.forceValueLogPointers && targetCompressedBytes < forcePointerBlockTargetCompressedBytes {
-		avgPayloadBytes := rawPayloadBytes / records
 		if avgPayloadBytes >= forcePointerAutoBlockMinPayloadBytes {
 			targetCompressedBytes = forcePointerBlockTargetCompressedBytes
 		}
