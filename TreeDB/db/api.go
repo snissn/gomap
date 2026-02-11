@@ -209,7 +209,7 @@ func (db *DB) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
 }
 
 // IteratorWithOptions returns an iterator with explicit value materialization
-// behavior controls.
+// controls.
 func (db *DB) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
 	snap := db.AcquireSnapshot()
 	it := snap.tree.IteratorWithOptions(start, end, opts)
@@ -222,7 +222,7 @@ func (db *DB) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error
 }
 
 // ReverseIteratorWithOptions returns a reverse iterator with explicit value
-// materialization behavior controls.
+// materialization controls.
 func (db *DB) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
 	snap := db.AcquireSnapshot()
 	it := snap.tree.ReverseIteratorWithOptions(start, end, opts)

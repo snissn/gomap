@@ -279,7 +279,7 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 			if flags&node.FlagPointer == 0 {
 				t.Fatalf("expected pointer flag for k-pointer")
 			}
-			if len(val) != 0 {
+			if val != nil {
 				t.Fatalf("projection expected nil value for pointer key")
 			}
 			if !page.IsValueLogFileID(ptr.FileID) {

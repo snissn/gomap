@@ -381,7 +381,7 @@ func TestIterator_ProjectionMode_PartialDecodeParity(t *testing.T) {
 			t.Fatalf("flags mismatch at %d: projection=%d full=%d", i, projRows[i].flags, fullRows[i].flags)
 		}
 		if fullRows[i].flags&node.FlagPointer != 0 {
-			if len(projRows[i].value) != 0 {
+			if projRows[i].value != nil {
 				t.Fatalf("projection expected nil value for pointer key %q", projRows[i].key)
 			}
 			if projRows[i].ptr != fullRows[i].ptr {
