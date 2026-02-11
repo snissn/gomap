@@ -378,8 +378,9 @@ func TestNewBatchWithSize_ResolverUsesBatchSnapshot(t *testing.T) {
 	defer db.Close()
 
 	b := db.NewBatchWithSize(2).(*Batch)
-	// Mutate policy after batch creation; this should not affect an in-flight
-	// batch's threshold resolution for default-domain keys.
+	// Mutate effective threshold source after batch creation; this should not
+	// affect an in-flight batch's threshold resolution for default-domain keys.
+	db.adaptive = nil
 	db.policy.InlineThreshold = 8
 
 	defaultKey := []byte("other/key")
