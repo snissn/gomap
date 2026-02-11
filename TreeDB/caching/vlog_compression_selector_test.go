@@ -352,7 +352,6 @@ func TestChooseValueLogBlockWriteK_ThroughputFastPathUsesAveragePayload(t *testi
 		t.Fatalf("expected K>1 when avg payload=%d is below throughput fast-path threshold=%d", avgPayloadBytes, throughputAutoBlockMinPayloadBytes)
 	}
 }
-
 func TestChooseValueLogBlockWriteK_ForcePointerLargePayloadKDistributionGuardrail(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode:  uint8(vlogCompressionBlock),
