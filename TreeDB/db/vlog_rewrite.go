@@ -197,7 +197,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, err
 	}
 
-	referencedAfter, err := db.referencedValueLogSegments(ctx)
+	// After swaps are published, run cleanup against a non-cancelable context so
+	// cleanup bookkeeping is not skipped due to caller cancellation.
+	referencedAfter, err := db.referencedValueLogSegments(context.Background())
 	if err != nil {
 		return stats, err
 	}

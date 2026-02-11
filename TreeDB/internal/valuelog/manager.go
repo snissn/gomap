@@ -760,6 +760,9 @@ func removeSegmentFileWithRetry(path string) error {
 		if runtime.GOOS != "windows" || i == attempts-1 {
 			break
 		}
+		if !isWindowsSharingViolationError(err) {
+			break
+		}
 		time.Sleep(backoff)
 		if backoff < 200*time.Millisecond {
 			backoff *= 2
