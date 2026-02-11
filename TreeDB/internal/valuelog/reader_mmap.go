@@ -570,29 +570,56 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		Reserved: frameHeader[3],
 		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
 	}
-	rawStable := make([]byte, 0, int(rawLen))
-	rawStable, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, rawStable)
+	cacheableRaw := false
+	f.cacheMu.Lock()
+	if f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
+		cacheableRaw = true
+	}
+	f.cacheMu.Unlock()
+
+	raw := make([]byte, 0, int(rawLen))
+	pooledRaw := false
+	if !cacheableRaw {
+		raw = getDecodeScratch(int(rawLen))
+		pooledRaw = true
+	}
+	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
 	if err != nil {
+		if pooledRaw {
+			putDecodeScratch(raw)
+		}
 		return nil, err, true
 	}
-	if uint32(len(rawStable)) != rawLen {
+	if uint32(len(raw)) != rawLen {
+		if pooledRaw {
+			putDecodeScratch(raw)
+		}
 		return nil, ErrCorrupt, true
 	}
-	f.groupedFrameCacheStore(start, verifyCRC, k, offsets, rawStable)
+	if cacheableRaw {
+		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw)
+	}
 
 	n := int(valEnd - valStart)
 	oldLen := len(dst)
 	dst = grow(dst, n)
-	copy(dst[oldLen:], rawStable[valStart:valEnd])
+	copy(dst[oldLen:], raw[valStart:valEnd])
 
 	f.cacheMu.Lock()
 	f.cacheK = k
 	f.cacheFlags = fFlags
 	f.cacheLen = prefixLen
 	f.cacheOffs = offsets
-	f.setCacheRawLocked(rawStable, false)
+	if cacheableRaw {
+		f.setCacheRawLocked(raw, false)
+	} else {
+		f.setCacheRawLocked(nil, false)
+	}
 	f.cacheStart.Store(start)
 	f.cacheMu.Unlock()
+	if pooledRaw {
+		putDecodeScratch(raw)
+	}
 
 	if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
 		payload := dst[oldLen:]

@@ -230,19 +230,6 @@ func (f *File) setGroupedFrameCacheMaxRawBytes(maxRaw int) {
 	f.groupedFrameCacheMisses = 0
 }
 
-func (f *File) groupedFrameCacheStarts() []int64 {
-	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
-	starts := make([]int64, 0, len(f.groupedFrameCache))
-	for i := range f.groupedFrameCache {
-		if f.groupedFrameCache[i].k > 0 {
-			starts = append(starts, f.groupedFrameCache[i].start)
-		}
-	}
-	sort.Slice(starts, func(i, j int) bool { return starts[i] < starts[j] })
-	return starts
-}
-
 func (f *File) Close() error {
 	if f == nil || f.File == nil {
 		return nil
