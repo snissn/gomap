@@ -102,12 +102,7 @@ func (f *File) Close() error {
 	f.mmapData.Store([]byte(nil))
 	f.remapMu.Unlock()
 
-	file := f.File
-	f.File = nil
-	if file == nil {
-		return nil
-	}
-	return file.Close()
+	return f.File.Close()
 }
 
 func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
