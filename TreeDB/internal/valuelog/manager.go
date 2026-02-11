@@ -125,7 +125,11 @@ func (f *File) setGroupedFrameCacheEntries(entries int) {
 func (f *File) groupedFrameCacheLookup(start int64, verifyCRC bool, subIndex int) (raw []byte, valStart, valEnd, rawLen uint32, ok bool) {
 	f.cacheMu.Lock()
 	defer f.cacheMu.Unlock()
-	if f.groupedFrameCacheEntries <= 0 || len(f.groupedFrameCache) == 0 {
+	if f.groupedFrameCacheEntries <= 0 {
+		return nil, 0, 0, 0, false
+	}
+	if len(f.groupedFrameCache) == 0 {
+		f.groupedFrameCacheMisses++
 		return nil, 0, 0, 0, false
 	}
 	for i := range f.groupedFrameCache {

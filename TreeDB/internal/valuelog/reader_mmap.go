@@ -570,19 +570,14 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		Reserved: frameHeader[3],
 		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
 	}
-	scratch := getDecodeScratch(int(rawLen))
-	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, scratch)
+	rawStable := make([]byte, 0, int(rawLen))
+	rawStable, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, rawStable)
 	if err != nil {
-		putDecodeScratch(scratch)
 		return nil, err, true
 	}
-	if uint32(len(raw)) != rawLen {
-		putDecodeScratch(raw)
+	if uint32(len(rawStable)) != rawLen {
 		return nil, ErrCorrupt, true
 	}
-
-	rawStable := append([]byte(nil), raw...)
-	putDecodeScratch(scratch)
 	f.groupedFrameCacheStore(start, verifyCRC, k, offsets, rawStable)
 
 	n := int(valEnd - valStart)
