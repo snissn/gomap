@@ -137,7 +137,11 @@ func putValueLogRecordsNoClear(s []valuelog.Record) {
 	if s == nil {
 		return
 	}
-	clearValueLogRecordValues(s)
+	records := s
+	if cap(records) > len(records) {
+		records = records[:cap(records)]
+	}
+	clearValueLogRecordValues(records)
 	// Avoid retaining huge slices in the pool.
 	if cap(s) > 1<<20 {
 		return
