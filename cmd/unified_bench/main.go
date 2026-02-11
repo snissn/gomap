@@ -2066,6 +2066,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				defer func() { _ = iter.Close() }()
 
+				var keyBuf []byte
+				var valBuf []byte
 				count := 0
 				for iter.Valid() {
 					if count&8191 == 0 {
@@ -2073,8 +2075,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 							return 0, err
 						}
 					}
-					_ = iter.Key()
-					_ = iter.Value()
+					keyBuf = iter.KeyCopy(keyBuf[:0])
+					valBuf = iter.ValueCopy(valBuf[:0])
 					iter.Next()
 					count++
 				}
@@ -2114,6 +2116,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				defer func() { _ = iter.Close() }()
 
+				var keyBuf []byte
+				var valBuf []byte
 				count := 0
 				for iter.Valid() {
 					if count&8191 == 0 {
@@ -2121,8 +2125,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 							return 0, err
 						}
 					}
-					_ = iter.Key()
-					_ = iter.Value()
+					keyBuf = iter.KeyCopy(keyBuf[:0])
+					valBuf = iter.ValueCopy(valBuf[:0])
 					iter.Next()
 					count++
 				}
@@ -2194,6 +2198,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				expected := endIdx - startIdx
 				itemsThisQuery := 0
 				iterStart := time.Now()
+				var keyBuf []byte
 				for iter.Valid() {
 					if itemsThisQuery&8191 == 0 {
 						if err := guard.Checkpoint(); err != nil {
@@ -2201,7 +2206,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 							return 0, err
 						}
 					}
-					_ = iter.Key()
+					keyBuf = iter.KeyCopy(keyBuf[:0])
 					iter.Next()
 					itemsThisQuery++
 				}
@@ -2285,6 +2290,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 
 				itemsThisQuery := 0
+				var keyBuf []byte
+				var valBuf []byte
 				for iter.Valid() {
 					if itemsThisQuery&8191 == 0 {
 						if err := guard.Checkpoint(); err != nil {
@@ -2292,8 +2299,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 							return 0, err
 						}
 					}
-					_ = iter.Key()
-					_ = iter.Value()
+					keyBuf = iter.KeyCopy(keyBuf[:0])
+					valBuf = iter.ValueCopy(valBuf[:0])
 					iter.Next()
 					itemsThisQuery++
 				}
