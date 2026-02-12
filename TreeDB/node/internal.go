@@ -561,6 +561,11 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 	}
 	data := n.data
 	deltaWidth, entryHeader := n.internalBaseDeltaEntryWidths()
+	footerStart := meta.footerStart
+	entryLimit := footerStart - entryHeader
+	if entryLimit < NodeHeaderSize {
+		return 0, false, ErrCorruptedNode
+	}
 	keySuffix := key
 	if len(meta.prefix) > 0 {
 		prefixLen := len(meta.prefix)
@@ -611,13 +616,13 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 		for i := 0; i < int(count); i++ {
 			offset := getUint16At(data, NodeHeaderSize+i*2)
 			ptr := int(offset)
-			if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+			if ptr < NodeHeaderSize || ptr > entryLimit {
 				return 0, false, ErrCorruptedNode
 			}
 			suffixLen := int(getUint16At(data, ptr))
 			suffixStart := ptr + entryHeader
 			suffixEnd := suffixStart + suffixLen
-			if suffixLen < 0 || suffixEnd > meta.footerStart {
+			if suffixEnd > footerStart {
 				return 0, false, ErrCorruptedNode
 			}
 
@@ -682,13 +687,13 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 		h := int(uint(i+j) >> 1)
 		offset := getUint16At(data, NodeHeaderSize+h*2)
 		ptr := int(offset)
-		if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+		if ptr < NodeHeaderSize || ptr > entryLimit {
 			return 0, false, ErrCorruptedNode
 		}
 		suffixLen := int(getUint16At(data, ptr))
 		suffixStart := ptr + entryHeader
 		suffixEnd := suffixStart + suffixLen
-		if suffixLen < 0 || suffixEnd > meta.footerStart {
+		if suffixEnd > footerStart {
 			return 0, false, ErrCorruptedNode
 		}
 
