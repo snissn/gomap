@@ -56,6 +56,7 @@ type Batch struct {
 	entries         []Entry
 	byteSize        int
 	inlineThreshold int
+	thresholdForKey func([]byte) int
 	touchedValueLog map[uint32]struct{}
 	sorted          bool
 	lastKey         []byte
@@ -90,6 +91,15 @@ func Acquire(reader ValueReader, threshold int) *Batch {
 	b.closed = false
 	b.resetLocked()
 	return b
+}
+
+// SetInlineThresholdResolver installs an optional per-key threshold resolver
+// used by Set/SetView/SetOps inline-size checks.
+func (b *Batch) SetInlineThresholdResolver(resolver func([]byte) int) {
+	if b == nil {
+		return
+	}
+	b.thresholdForKey = resolver
 }
 
 func (b *Batch) ensureOpen() error {
@@ -152,8 +162,22 @@ func Release(b *Batch) {
 	b.resetForPool()
 	b.reader = nil
 	b.inlineThreshold = 0
+	b.thresholdForKey = nil
 	b.closed = true
 	batchPool.Put(b)
+}
+
+func (b *Batch) inlineThresholdForKey(key []byte) int {
+	if b == nil {
+		return page.DefaultInlineThreshold
+	}
+	if b.thresholdForKey != nil {
+		if threshold := b.thresholdForKey(key); threshold >= 0 {
+			return threshold
+		}
+		return b.inlineThreshold
+	}
+	return b.inlineThreshold
 }
 
 func (b *Batch) noteKeyOrder(key []byte) {
@@ -195,7 +219,7 @@ func (b *Batch) SetView(key, value []byte) error {
 		Key:  key,
 	}
 
-	if len(value) > b.inlineThreshold {
+	if len(value) > b.inlineThresholdForKey(key) {
 		return ErrValueTooLarge
 	}
 	entry.Value = value
@@ -225,7 +249,7 @@ func (b *Batch) Set(key, value []byte) error {
 	}
 
 	// Check threshold
-	if len(value) > b.inlineThreshold {
+	if len(value) > b.inlineThresholdForKey(key) {
 		return ErrValueTooLarge
 	}
 	// Store inline
@@ -363,7 +387,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 		if op.Type != OpPut || op.IsPtr {
 			continue
 		}
-		if len(op.Value) > b.inlineThreshold {
+		if len(op.Value) > b.inlineThresholdForKey(op.Key) {
 			return ErrValueTooLarge
 		}
 	}

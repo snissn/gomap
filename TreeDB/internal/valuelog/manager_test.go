@@ -2,7 +2,9 @@ package valuelog
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -66,5 +68,85 @@ func TestManagerCurrentSetNoRefresh(t *testing.T) {
 	}
 	if err := mgr.Release(set3); err != nil {
 		t.Fatalf("Release(set3): %v", err)
+	}
+}
+
+func TestManagerReleaseZombieDeletesSegmentOnSuccess(t *testing.T) {
+	dir := t.TempDir()
+	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("x"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	set := mgr.CurrentSet()
+	f, ok := set.Files[segID]
+	if !ok {
+		_ = mgr.Release(set)
+		t.Fatalf("CurrentSet missing segment %d", segID)
+	}
+	path := f.Path
+	if err := mgr.MarkZombie(segID); err != nil {
+		_ = mgr.Release(set)
+		t.Fatalf("MarkZombie(%d): %v", segID, err)
+	}
+	if err := mgr.Release(set); err != nil {
+		t.Fatalf("Release(set): %v", err)
+	}
+
+	mgr.mu.RLock()
+	_, stillTracked := mgr.files[segID]
+	mgr.mu.RUnlock()
+	if stillTracked {
+		t.Fatalf("zombie segment %d still tracked after successful delete", segID)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected deleted segment file, stat err=%v", err)
+	}
+}
+
+func TestManagerReleaseZombieDeleteFailureKeepsSegmentTracked(t *testing.T) {
+	dir := t.TempDir()
+	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("y"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	set := mgr.CurrentSet()
+	f, ok := set.Files[segID]
+	if !ok {
+		_ = mgr.Release(set)
+		t.Fatalf("CurrentSet missing segment %d", segID)
+	}
+	path := f.Path
+	if err := mgr.MarkZombie(segID); err != nil {
+		_ = mgr.Release(set)
+		t.Fatalf("MarkZombie(%d): %v", segID, err)
+	}
+
+	origRemove := removeSegmentPath
+	removeSegmentPath = func(string) error { return errors.New("remove failed") }
+	t.Cleanup(func() { removeSegmentPath = origRemove })
+
+	if err := mgr.Release(set); err == nil {
+		t.Fatalf("Release(set) err=nil, want remove failure")
+	}
+
+	mgr.mu.RLock()
+	tracked, stillTracked := mgr.files[segID]
+	mgr.mu.RUnlock()
+	if !stillTracked {
+		t.Fatalf("segment %d unexpectedly untracked after failed delete", segID)
+	}
+	if !tracked.IsZombie.Load() {
+		t.Fatalf("segment %d should remain zombie after failed delete", segID)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected segment file to remain on disk, stat err=%v", err)
 	}
 }

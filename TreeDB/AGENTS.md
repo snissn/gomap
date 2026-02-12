@@ -1,7 +1,7 @@
 # TreeDB agent notes (current)
 
 TreeDB stores large values in a **persistent value log** under `Options.Dir/maindb/wal/`.
-There is **no slab storage path** in TreeDB.
+There is **no legacy alternate value-store path** in TreeDB.
 
 ## Project status (pre-alpha)
 

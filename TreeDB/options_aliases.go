@@ -26,6 +26,7 @@ const (
 )
 
 type ValueLogOptions = db.ValueLogOptions
+type ValueLogDomainThreshold = db.ValueLogDomainThreshold
 
 type ValueLogCompressionMode = db.ValueLogCompressionMode
 
