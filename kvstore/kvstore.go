@@ -16,6 +16,11 @@ type DB interface {
 	Delete(key []byte) error
 }
 
+// MultiGetter is an optional capability for batched point reads.
+type MultiGetter interface {
+	GetMany(keys [][]byte) ([][]byte, error)
+}
+
 // Haser is an optional capability for checking existence without retrieving values.
 type Haser interface {
 	Has(key []byte) (bool, error)

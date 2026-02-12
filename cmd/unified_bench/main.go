@@ -52,7 +52,7 @@ var (
 	keysMax            = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg             = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
 	dbsExcludeArg      = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
-	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
+	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
 	formatArg          = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg           = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
 	outDirArg          = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
@@ -2040,6 +2040,44 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
+		"random_read_batch": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+			start := time.Now()
+			batchSize := cfg.BatchSize
+			if batchSize <= 0 {
+				batchSize = 1
+			}
+			keys := make([][]byte, batchSize)
+			keyBuf := make([]byte, batchSize*8)
+			for i := 0; i < batchSize; i++ {
+				keys[i] = keyBuf[i*8 : (i+1)*8]
+			}
+			mg, hasMany := db.(kvstore.MultiGetter)
+			nextGuard := 0
+			for i := 0; i < cfg.Keys; {
+				if i >= nextGuard {
+					if err := guard.Checkpoint(); err != nil {
+						return 0, err
+					}
+					nextGuard = i + 8192
+				}
+				n := batchSize
+				if remaining := cfg.Keys - i; remaining < n {
+					n = remaining
+				}
+				for j := 0; j < n; j++ {
+					encodeKey(keys[j], uint64(rng.Intn(cfg.Keys)))
+				}
+				if hasMany {
+					_, _ = mg.GetMany(keys[:n])
+				} else {
+					for j := 0; j < n; j++ {
+						_, _ = db.Get(keys[j])
+					}
+				}
+				i += n
+			}
+			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
+		},
 		"dataset_read_random": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			if err := ensureWriteDatasets(); err != nil {
 				return 0, fmt.Errorf("dataset_read_random: %w", err)
@@ -2311,7 +2349,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
-	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "full_scan", "prefix_scan"}
+	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "random_read_batch", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
 		"vacuum_index":               "VACUUM (Index)",
 		"fragmentation_report_pre":   "Fragmentation Report (Pre-Settle)",
@@ -2322,6 +2360,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"dataset_write_random":       "Dataset Write (Random)",
 		"dataset_write_sorted":       "Dataset Write (Sorted)",
 		"random_read":                "Random Read",
+		"random_read_batch":          "Random Read (Batch)",
 		"full_scan":                  "Full Scan",
 		"full_scan2":                 "Full Scan (After VACUUM)",
 		"prefix_scan":                "Prefix Scan",
@@ -2391,6 +2430,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	)
 	needsExistingData := containsAny(finalTestOrder,
 		"random_read",
+		"random_read_batch",
 		"random_delete",
 		"batch_delete",
 		"full_scan",
@@ -2423,7 +2463,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 
 	// Settle before scans?
-	if cfg.SettleBeforeScans && containsAny(finalTestOrder, "full_scan", "prefix_scan", "random_read") {
+	if cfg.SettleBeforeScans && containsAny(finalTestOrder, "full_scan", "prefix_scan", "random_read", "random_read_batch") {
 		fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open)...\n")
 		for _, inst := range instances {
 			// Close
@@ -2514,7 +2554,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		fn := testFuncs[testName]
 		seed := testSeed(cfg.SeedUsed, testName)
 
-		if cfg.TreeDBCacheStatsBeforeReads && containsAny([]string{testName}, "random_read", "dataset_read_random", "full_scan", "prefix_scan", "full_scan2", "prefix_scan2") {
+		if cfg.TreeDBCacheStatsBeforeReads && containsAny([]string{testName}, "random_read", "random_read_batch", "dataset_read_random", "full_scan", "prefix_scan", "full_scan2", "prefix_scan2") {
 			for _, inst := range instances {
 				printTreeDBCacheStats(os.Stderr, inst, "pre-"+testName+" treedb.cache")
 			}
@@ -3937,6 +3977,8 @@ func normalizeTests(list []string) []string {
 			t = "dataset_write_random"
 		case "read_rand":
 			t = "random_read"
+		case "read_rand_batch", "read_random_batch":
+			t = "random_read_batch"
 		case "delete_rand":
 			t = "random_delete"
 		case "batch_write_random":

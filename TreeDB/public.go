@@ -741,6 +741,20 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return db.backend.Get(key)
 }
 
+// GetMany returns values for keys.
+//
+// Semantics: Returns safe copies of values. Missing keys are returned as nil
+// entries with no error.
+func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if db.cached != nil {
+		return db.cached.GetMany(keys)
+	}
+	return db.backend.GetMany(keys)
+}
+
 // GetUnsafe returns the value for a key.
 //
 // Semantics: Returns a safe copy of the value. For zero-copy views tied to a
