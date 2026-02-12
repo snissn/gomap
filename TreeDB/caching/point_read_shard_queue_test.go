@@ -2,7 +2,6 @@ package caching
 
 import (
 	"encoding/binary"
-	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -311,15 +310,14 @@ func TestPointReads_GetMany_PartialMemtableAndBackendPaths(t *testing.T) {
 	ct.SetEntry([]byte("hot"), []byte("mem"), page.ValuePtr{}, node.FlagInline)
 
 	backend := &countingBackend{}
-	var views atomic.Pointer[memtableView]
-	views.Store(&memtableView{
-		mutables: []memtable.Table{ct},
-	})
+	// Publish a memtable snapshot for GetMany to consult, then read misses from backend.
 	db := &DB{
 		backend:       backend,
 		mutableShards: make([]memShard, 1),
-		memtables:     views,
 	}
+	db.memtables.Store(&memtableView{
+		mutables: []memtable.Table{ct},
+	})
 
 	got, err := db.GetMany([][]byte{[]byte("hot"), []byte("cold"), []byte("cold"), []byte("hot"), []byte("missing")})
 	if err != nil {
