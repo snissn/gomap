@@ -45,6 +45,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.db = nil
 	s.idx = nil
 	s.state = nil
+	s.vreader = valueReader{}
 	s.tree.Reset(nil, nil, 0)
 	s.registryID = 0
 	p.pool.Put(s)

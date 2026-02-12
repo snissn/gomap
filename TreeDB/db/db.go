@@ -541,6 +541,7 @@ type Snapshot struct {
 	db         *DB
 	idx        *indexGen
 	state      *DBState
+	vreader    valueReader
 	tree       tree.Tree
 	registryID int64
 }
@@ -584,7 +585,10 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.idx = idx
 	snap.state = state
 	if idx != nil {
-		snap.tree.Reset(idx.pager, valueReader{vlogs: state.ValueLogSet}, state.RootPageID)
+		snap.vreader.vlogs = state.ValueLogSet
+		snap.tree.Reset(idx.pager, &snap.vreader, state.RootPageID)
+	} else {
+		snap.vreader.vlogs = nil
 	}
 	snap.registryID = id
 	return snap
