@@ -1769,11 +1769,29 @@ func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, targ
 	}
 
 	prevKey := restartKey
+	curStart := restartEnd
+	nextKeyDirOff := restartKeyDirOff + 4
+	prefixOff := prefixStart + int(blockStart+1)*2
 	for idx := blockStart + 1; idx < blockEnd; idx++ {
-		prefixLen, suffix, err := leafColumnarPrefixV2KeyPartsAtFast(data, count, keysBlobBase, prefixStart, idx)
-		if err != nil {
-			return 0, false, err
+		curEnd := len(data)
+		if idx+1 < count {
+			if nextKeyDirOff+2 > len(data) {
+				return 0, false, ErrCorruptedNode
+			}
+			curEnd = int(getUint16At(data, nextKeyDirOff))
+			nextKeyDirOff += 2
 		}
+		if curStart < keysBlobBase || curEnd < curStart || curEnd > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
+		if prefixOff+2 > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
+		prefixLen := int(getUint16At(data, prefixOff))
+		prefixOff += 2
+		suffix := data[curStart:curEnd]
+		curStart = curEnd
+
 		if prefixLen > len(prevKey) {
 			return 0, false, ErrCorruptedNode
 		}
