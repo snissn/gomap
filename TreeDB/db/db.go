@@ -63,12 +63,14 @@ type DB struct {
 
 	keepRecent                uint64
 	policy                    WritePolicy
+	valueLogDomainThresholds  []ValueLogDomainThreshold
 	leafFillTargetPPM         uint32
 	internalFillTargetPPM     uint32
 	leafPrefixCompression     bool
 	indexColumnarLeaves       bool
 	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
+	indexAdaptiveLeafEncoding bool
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
 
@@ -170,6 +172,20 @@ const (
 	ValueLogAutoSize
 )
 
+// ValueLogDomainThreshold overrides inline-vs-pointer placement policy for keys
+// under a domain prefix.
+//
+// A key belongs to the first matching prefix after normalization
+// (longest-prefix wins).
+type ValueLogDomainThreshold struct {
+	// Prefix selects the key domain this override applies to.
+	Prefix []byte
+	// InlineThreshold is the maximum inline value size for keys in Prefix.
+	// Values larger than this threshold are eligible for value-log pointers.
+	// Zero forces all non-empty values in this domain to pointer placement.
+	InlineThreshold int
+}
+
 // ValueLogOptions configures value-log pointer behavior and optional compression/dict tuning.
 type ValueLogOptions struct {
 	// Compression selects value-log compression behavior.
@@ -200,6 +216,11 @@ type ValueLogOptions struct {
 	PointerThreshold int
 	// ForcePointers stores all values out-of-line in the value log (no inline values).
 	ForcePointers bool
+	// DomainInlineThresholds provides optional per-domain overrides for
+	// inline-vs-pointer placement. These overrides are evaluated by
+	// longest-prefix match and fall back to PointerThreshold/default behavior
+	// when no domain matches.
+	DomainInlineThresholds []ValueLogDomainThreshold
 	// RawWritevMinAvgBytes controls raw grouped-frame writev usage.
 	//
 	// 0 enables adaptive mode (no average-bytes floor).
@@ -390,6 +411,11 @@ type Options struct {
 	IndexPackedValuePtr bool
 	// IndexInternalBaseDelta enables the experimental internal-node base-delta encoding.
 	IndexInternalBaseDelta bool
+	// IndexAdaptiveLeafEncoding enables per-page adaptive selection of leaf
+	// encoding flags using deterministic heuristics from key/value shape.
+	//
+	// This option only affects newly-written leaf pages.
+	IndexAdaptiveLeafEncoding bool
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -701,6 +727,21 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid value-log auto policy %d", opts.ValueLog.AutoPolicy)
 	}
+	seenDomains := make(map[string]struct{}, len(opts.ValueLog.DomainInlineThresholds))
+	for i := range opts.ValueLog.DomainInlineThresholds {
+		d := opts.ValueLog.DomainInlineThresholds[i]
+		if len(d.Prefix) == 0 {
+			return fmt.Errorf("treedb: value-log domain threshold[%d] has empty prefix", i)
+		}
+		if d.InlineThreshold < 0 {
+			return fmt.Errorf("treedb: value-log domain threshold[%d] has negative inline threshold %d", i, d.InlineThreshold)
+		}
+		key := string(d.Prefix)
+		if _, dup := seenDomains[key]; dup {
+			return fmt.Errorf("treedb: duplicate value-log domain threshold prefix %q", d.Prefix)
+		}
+		seenDomains[key] = struct{}{}
+	}
 	return nil
 }
 
@@ -753,12 +794,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		lock:                      lock,
 		adaptive:                  adaptiveCtrl,
 		keepRecent:                opts.KeepRecent,
+		valueLogDomainThresholds:  NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafFillTargetPPM:         opts.LeafFillTargetPPM,
 		internalFillTargetPPM:     opts.InternalFillTargetPPM,
 		leafPrefixCompression:     opts.LeafPrefixCompression,
 		indexColumnarLeaves:       opts.IndexColumnarLeaves,
 		indexPackedValuePtr:       opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
+		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
 		dir:                       opts.Dir,
@@ -787,6 +830,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
+	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
@@ -1393,6 +1437,14 @@ func (db *DB) InlineThreshold() int {
 	}
 	return page.DefaultInlineThreshold
 }
+
+func (db *DB) InlineThresholdForKey(key []byte) int {
+	if db == nil {
+		return page.DefaultInlineThreshold
+	}
+	return ResolveInlineThresholdForKey(db.InlineThreshold(), key, db.valueLogDomainThresholds)
+}
+
 func (db *DB) State() *DBState {
 	return db.state.Load()
 }

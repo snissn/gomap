@@ -100,6 +100,16 @@ type DBIterator struct {
 	err  error
 }
 
+type IteratorMode = tree.IteratorMode
+
+const (
+	IteratorModeFull              = tree.IteratorModeFull
+	IteratorModeKeysOnly          = tree.IteratorModeKeysOnly
+	IteratorModePointerProjection = tree.IteratorModePointerProjection
+)
+
+type IteratorOptions = tree.IteratorOptions
+
 func (it *DBIterator) DebugStats() (queueLen int, sourcesUsed int) {
 	return 0, 1
 }
@@ -195,15 +205,27 @@ func (it *DBIterator) Domain() (start, end []byte) {
 
 // Iterator returns an iterator.
 func (db *DB) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return db.IteratorWithOptions(start, end, IteratorOptions{})
+}
+
+// IteratorWithOptions returns an iterator with explicit value materialization
+// controls.
+func (db *DB) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
 	snap := db.AcquireSnapshot()
-	it := snap.tree.Iterator(start, end)
+	it := snap.tree.IteratorWithOptions(start, end, opts)
 	return &DBIterator{snap: snap, iter: it}, nil
 }
 
 // ReverseIterator returns a reverse iterator.
 func (db *DB) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return db.ReverseIteratorWithOptions(start, end, IteratorOptions{})
+}
+
+// ReverseIteratorWithOptions returns a reverse iterator with explicit value
+// materialization controls.
+func (db *DB) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
 	snap := db.AcquireSnapshot()
-	it := snap.tree.ReverseIterator(start, end)
+	it := snap.tree.ReverseIteratorWithOptions(start, end, opts)
 	return &DBIterator{snap: snap, iter: it}, nil
 }
 
