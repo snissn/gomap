@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math/rand"
 	"testing"
 
@@ -178,4 +179,59 @@ func BenchmarkSearchLeaf_ColumnarPrefixV2(b *testing.B) {
 		LeafPrefixCompression: true,
 		LeafColumnar:          true,
 	})
+}
+
+func benchmarkSearchLeafColumnarPrefixV2FixedBE8(b *testing.B, misses bool) {
+	data := make([]byte, page.PageSize)
+	builder := NewBuilderWithOptions(data, page.PageTypeLeaf, BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+	})
+	builder.SetPageID(1)
+
+	inserted := 0
+	for i := 0; ; i++ {
+		var k [8]byte
+		// Use even keys only so odd keys become deterministic misses.
+		binary.BigEndian.PutUint64(k[:], uint64(i*2))
+		if err := builder.AddLeafEntry(k[:], []byte{0x01}, FlagInline, page.ValuePtr{}); err != nil {
+			if err == ErrNodeFull {
+				break
+			}
+			b.Fatalf("AddLeafEntry: %v", err)
+		}
+		inserted++
+	}
+	if inserted == 0 {
+		b.Fatalf("expected at least one key")
+	}
+	n := builder.Finish()
+
+	queries := make([][]byte, inserted)
+	for i := 0; i < inserted; i++ {
+		var k [8]byte
+		if misses {
+			binary.BigEndian.PutUint64(k[:], uint64(i*2+1))
+		} else {
+			binary.BigEndian.PutUint64(k[:], uint64(i*2))
+		}
+		queries[i] = append([]byte(nil), k[:]...)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q := queries[i%len(queries)]
+		if _, _, err := n.SearchLeaf(q); err != nil {
+			b.Fatalf("SearchLeaf: %v", err)
+		}
+	}
+}
+
+func BenchmarkSearchLeaf_ColumnarPrefixV2_FixedBE8_Hit(b *testing.B) {
+	benchmarkSearchLeafColumnarPrefixV2FixedBE8(b, false)
+}
+
+func BenchmarkSearchLeaf_ColumnarPrefixV2_FixedBE8_Miss(b *testing.B) {
+	benchmarkSearchLeafColumnarPrefixV2FixedBE8(b, true)
 }
