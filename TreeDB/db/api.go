@@ -23,6 +23,55 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	return val, err
 }
 
+// GetMany returns values for keys.
+//
+// Semantics: Returns safe copies of values. Missing keys are returned as nil
+// entries with no error.
+func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	out := make([][]byte, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	snap := db.AcquireSnapshot()
+	defer snap.Close()
+
+	// Copy all found values into a single arena to avoid one allocation per key.
+	// Each returned slice is capacity-capped to preserve safe-copy semantics.
+	const (
+		getManyValueGuessBytes = 128
+		getManyMaxArenaBytes   = 1 << 20
+	)
+	arenaCap := len(keys) * getManyValueGuessBytes
+	if arenaCap < 0 {
+		arenaCap = 0
+	}
+	if arenaCap > getManyMaxArenaBytes {
+		arenaCap = getManyMaxArenaBytes
+	}
+	arena := make([]byte, 0, arenaCap)
+	for i, key := range keys {
+		val, err := snap.GetUnsafe(key)
+		if err == tree.ErrKeyNotFound {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if val == nil {
+			continue
+		}
+		n := len(val)
+		if n == 0 {
+			out[i] = []byte{}
+			continue
+		}
+		start := len(arena)
+		arena = append(arena, val...)
+		out[i] = arena[start : start+n : start+n]
+	}
+	return out, nil
+}
+
 // GetUnsafe returns the value for a key.
 //
 // Semantics: Returns a safe copy of the value. For zero-copy views tied to a

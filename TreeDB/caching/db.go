@@ -10574,6 +10574,38 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	return dst, false, nil
 }
 
+type backendManyGetter interface {
+	GetMany(keys [][]byte) ([][]byte, error)
+}
+
+func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
+	if mg, ok := db.backend.(backendManyGetter); ok {
+		return mg.GetMany(keys)
+	}
+	out := make([][]byte, len(keys))
+	for i, key := range keys {
+		val, err := db.backend.Get(key)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = val
+	}
+	return out, nil
+}
+
+func (db *DB) inMemoryWritesEmpty() bool {
+	if db.mutableBytes.Load() != 0 {
+		return false
+	}
+	if view := db.memtables.Load(); view != nil {
+		return len(view.queue) == 0
+	}
+	db.mu.RLock()
+	empty := len(db.queue) == 0
+	db.mu.RUnlock()
+	return empty
+}
+
 // GetUnsafe returns a safe copy of the value.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 	return db.Get(key)
@@ -10581,6 +10613,9 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	if db.inMemoryWritesEmpty() {
+		return db.backend.Get(key)
+	}
 	val, found, err := db.getMemtable(key)
 	if err != nil {
 		return nil, err
@@ -10594,6 +10629,57 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return cpy, nil
 	}
 	return db.backend.Get(key)
+}
+
+// GetMany returns safe copies of values for keys.
+//
+// Missing keys are returned as nil entries with no error.
+func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	if len(keys) == 0 {
+		return make([][]byte, 0), nil
+	}
+
+	// Fast path: no mutable/queued state, so we can delegate straight to the
+	// backend and let it use a single snapshot when supported.
+	if db.inMemoryWritesEmpty() {
+		return db.backendGetMany(keys)
+	}
+
+	out := make([][]byte, len(keys))
+	backendIdx := make([]int, 0, len(keys))
+	backendKeys := make([][]byte, 0, len(keys))
+	for i, key := range keys {
+		val, found, err := db.getMemtable(key)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			if val == nil {
+				continue
+			}
+			cpy := make([]byte, len(val))
+			copy(cpy, val)
+			out[i] = cpy
+			continue
+		}
+		backendIdx = append(backendIdx, i)
+		backendKeys = append(backendKeys, key)
+	}
+	if len(backendKeys) == 0 {
+		return out, nil
+	}
+
+	backendVals, err := db.backendGetMany(backendKeys)
+	if err != nil {
+		return nil, err
+	}
+	if len(backendVals) != len(backendKeys) {
+		return nil, fmt.Errorf("cachingdb: backend GetMany returned %d values for %d keys", len(backendVals), len(backendKeys))
+	}
+	for i, outIdx := range backendIdx {
+		out[outIdx] = backendVals[i]
+	}
+	return out, nil
 }
 
 // GetAppend appends the value for the key to dst and returns the new slice.

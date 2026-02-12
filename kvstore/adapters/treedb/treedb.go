@@ -41,6 +41,14 @@ func (d *DB) Get(key []byte) ([]byte, error) {
 	return val, err
 }
 
+func (d *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	vals, err := d.DB.GetMany(keys)
+	if errors.Is(err, treedb.ErrClosed) {
+		return make([][]byte, len(keys)), nil
+	}
+	return vals, err
+}
+
 func (d *DB) GetUnsafe(key []byte) ([]byte, error) {
 	val, err := d.DB.GetUnsafe(key)
 	if errors.Is(err, treedb.ErrClosed) {
