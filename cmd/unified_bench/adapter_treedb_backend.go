@@ -33,6 +33,13 @@ func (d *treeDBBackendAdapter) Get(key []byte) ([]byte, error) {
 	return d.db.Get(key)
 }
 
+func (d *treeDBBackendAdapter) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
+	if d == nil || d.db == nil {
+		return nil, kvstore.ErrUnsupported
+	}
+	return d.db.AcquireSnapshot(), nil
+}
+
 func (d *treeDBBackendAdapter) Set(key, value []byte) error     { return d.db.Set(key, value) }
 func (d *treeDBBackendAdapter) Delete(key []byte) error         { return d.db.Delete(key) }
 func (d *treeDBBackendAdapter) SetSync(key, value []byte) error { return d.db.SetSync(key, value) }

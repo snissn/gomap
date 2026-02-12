@@ -86,6 +86,44 @@ type LevelDBWrapper struct {
 	compression opt.Compression
 }
 
+type levelDBReadSnapshot struct {
+	snap *leveldb.Snapshot
+}
+
+func (s *levelDBReadSnapshot) Get(key []byte) ([]byte, error) {
+	if s == nil || s.snap == nil {
+		return nil, nil
+	}
+	val, err := s.snap.Get(key, nil)
+	if errors.Is(err, leveldb.ErrNotFound) {
+		return nil, nil
+	}
+	return val, err
+}
+
+func (s *levelDBReadSnapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	if s == nil || s.snap == nil {
+		return dst, nil
+	}
+	val, err := s.snap.Get(key, nil)
+	if errors.Is(err, leveldb.ErrNotFound) {
+		return dst, nil
+	}
+	if err != nil {
+		return dst, err
+	}
+	return append(dst, val...), nil
+}
+
+func (s *levelDBReadSnapshot) Close() error {
+	if s == nil || s.snap == nil {
+		return nil
+	}
+	s.snap.Release()
+	s.snap = nil
+	return nil
+}
+
 func leveldbBenchOptions(compression opt.Compression) *opt.Options {
 	cache := *leveldbCacheMB
 	handles := *leveldbHandles
@@ -135,6 +173,13 @@ func (l *LevelDBWrapper) Name() string {
 }
 func (l *LevelDBWrapper) Set(k, v []byte) error        { return l.db.Put(k, v, nil) }
 func (l *LevelDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k, nil) }
+func (l *LevelDBWrapper) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
+	snap, err := l.db.GetSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return &levelDBReadSnapshot{snap: snap}, nil
+}
 func (l *LevelDBWrapper) GetMany(keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
 	if len(keys) == 0 {
