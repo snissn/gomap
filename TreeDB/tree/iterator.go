@@ -337,14 +337,6 @@ type Iterator struct {
 	verifyAlways   bool
 }
 
-type slabUnsafeAppender interface {
-	ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error)
-}
-
-type slabUnsafeBatchAppender interface {
-	ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error)
-}
-
 const iteratorPointerBatchMax = 2
 
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
