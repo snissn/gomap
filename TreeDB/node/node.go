@@ -51,7 +51,7 @@ func getUint16(b []byte) uint16 {
 }
 
 func getUint16At(b []byte, off int) uint16 {
-	return uint16(b[off]) | uint16(b[off+1])<<8
+	return binary.LittleEndian.Uint16(b[off : off+2])
 }
 
 func getUint64LEAt(b []byte, off int) uint64 {
@@ -66,14 +66,7 @@ func getUint64LEAt(b []byte, off int) uint64 {
 }
 
 func getUint64BEAt(b []byte, off int) uint64 {
-	return uint64(b[off])<<56 |
-		uint64(b[off+1])<<48 |
-		uint64(b[off+2])<<40 |
-		uint64(b[off+3])<<32 |
-		uint64(b[off+4])<<24 |
-		uint64(b[off+5])<<16 |
-		uint64(b[off+6])<<8 |
-		uint64(b[off+7])
+	return binary.BigEndian.Uint64(b[off : off+8])
 }
 
 func putUint32(dst []byte, v uint32) {
