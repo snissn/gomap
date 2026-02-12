@@ -593,23 +593,200 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 	}
 
 	keySuffixLen := len(keySuffix)
-	var keySuffixU16 uint16
-	var keySuffixU32 uint32
-	var keySuffixU64 uint64
-	switch keySuffixLen {
-	case 2:
-		keySuffixU16 = binary.BigEndian.Uint16(keySuffix)
-	case 4:
-		keySuffixU32 = binary.BigEndian.Uint32(keySuffix)
-	case 8:
-		keySuffixU64 = binary.BigEndian.Uint64(keySuffix)
-	}
 
 	if count <= smallSearchThreshold {
 		last := -1
 		lastChildID := uint64(0)
-		for i := 0; i < int(count); i++ {
-			offset := getUint16At(data, NodeHeaderSize+i*2)
+		switch keySuffixLen {
+		case 1:
+			keyByte := keySuffix[0]
+			for i := 0; i < int(count); i++ {
+				offset := getUint16At(data, NodeHeaderSize+i*2)
+				ptr := int(offset)
+				if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+				suffixLen := int(getUint16At(data, ptr))
+				suffixStart := ptr + entryHeader
+				suffixEnd := suffixStart + suffixLen
+				if suffixLen < 0 || suffixEnd > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+
+				var cmp int
+				if suffixLen == 1 {
+					a := data[suffixStart]
+					if a < keyByte {
+						cmp = -1
+					} else if a > keyByte {
+						cmp = 1
+					}
+				} else {
+					cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+				}
+				if cmp <= 0 {
+					last = i
+					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
+					if err != nil {
+						return 0, false, err
+					}
+					lastChildID = childID
+					continue
+				}
+				break
+			}
+		case 2:
+			keyU16 := binary.BigEndian.Uint16(keySuffix)
+			for i := 0; i < int(count); i++ {
+				offset := getUint16At(data, NodeHeaderSize+i*2)
+				ptr := int(offset)
+				if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+				suffixLen := int(getUint16At(data, ptr))
+				suffixStart := ptr + entryHeader
+				suffixEnd := suffixStart + suffixLen
+				if suffixLen < 0 || suffixEnd > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+
+				var cmp int
+				if suffixLen == 2 {
+					a := binary.BigEndian.Uint16(data[suffixStart : suffixStart+2])
+					if a < keyU16 {
+						cmp = -1
+					} else if a > keyU16 {
+						cmp = 1
+					}
+				} else {
+					cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+				}
+				if cmp <= 0 {
+					last = i
+					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
+					if err != nil {
+						return 0, false, err
+					}
+					lastChildID = childID
+					continue
+				}
+				break
+			}
+		case 4:
+			keyU32 := binary.BigEndian.Uint32(keySuffix)
+			for i := 0; i < int(count); i++ {
+				offset := getUint16At(data, NodeHeaderSize+i*2)
+				ptr := int(offset)
+				if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+				suffixLen := int(getUint16At(data, ptr))
+				suffixStart := ptr + entryHeader
+				suffixEnd := suffixStart + suffixLen
+				if suffixLen < 0 || suffixEnd > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+
+				var cmp int
+				if suffixLen == 4 {
+					a := binary.BigEndian.Uint32(data[suffixStart : suffixStart+4])
+					if a < keyU32 {
+						cmp = -1
+					} else if a > keyU32 {
+						cmp = 1
+					}
+				} else {
+					cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+				}
+				if cmp <= 0 {
+					last = i
+					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
+					if err != nil {
+						return 0, false, err
+					}
+					lastChildID = childID
+					continue
+				}
+				break
+			}
+		case 8:
+			keyU64 := binary.BigEndian.Uint64(keySuffix)
+			for i := 0; i < int(count); i++ {
+				offset := getUint16At(data, NodeHeaderSize+i*2)
+				ptr := int(offset)
+				if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+				suffixLen := int(getUint16At(data, ptr))
+				suffixStart := ptr + entryHeader
+				suffixEnd := suffixStart + suffixLen
+				if suffixLen < 0 || suffixEnd > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+
+				var cmp int
+				if suffixLen == 8 {
+					a := getUint64BEAt(data, suffixStart)
+					if a < keyU64 {
+						cmp = -1
+					} else if a > keyU64 {
+						cmp = 1
+					}
+				} else {
+					cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+				}
+				if cmp <= 0 {
+					last = i
+					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
+					if err != nil {
+						return 0, false, err
+					}
+					lastChildID = childID
+					continue
+				}
+				break
+			}
+		default:
+			for i := 0; i < int(count); i++ {
+				offset := getUint16At(data, NodeHeaderSize+i*2)
+				ptr := int(offset)
+				if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+				suffixLen := int(getUint16At(data, ptr))
+				suffixStart := ptr + entryHeader
+				suffixEnd := suffixStart + suffixLen
+				if suffixLen < 0 || suffixEnd > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+
+				cmp := bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+				if cmp <= 0 {
+					last = i
+					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
+					if err != nil {
+						return 0, false, err
+					}
+					lastChildID = childID
+					continue
+				}
+				break
+			}
+		}
+		if last >= 0 {
+			return lastChildID, true, nil
+		}
+		childID, err := n.internalBaseDeltaChildIDAtIndex(meta, 0, deltaWidth, entryHeader)
+		return childID, false, err
+	}
+
+	i, j := 0, int(count)
+	switch keySuffixLen {
+	case 1:
+		keyByte := keySuffix[0]
+		for i < j {
+			h := int(uint(i+j) >> 1)
+			offset := getUint16At(data, NodeHeaderSize+h*2)
 			ptr := int(offset)
 			if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
 				return 0, false, ErrCorruptedNode
@@ -622,118 +799,142 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 			}
 
 			var cmp int
-			if suffixLen == keySuffixLen {
-				switch suffixLen {
-				case 1:
-					a := data[suffixStart]
-					b := keySuffix[0]
-					if a < b {
-						cmp = -1
-					} else if a > b {
-						cmp = 1
-					}
-				case 2:
-					a := binary.BigEndian.Uint16(data[suffixStart : suffixStart+2])
-					if a < keySuffixU16 {
-						cmp = -1
-					} else if a > keySuffixU16 {
-						cmp = 1
-					}
-				case 4:
-					a := binary.BigEndian.Uint32(data[suffixStart : suffixStart+4])
-					if a < keySuffixU32 {
-						cmp = -1
-					} else if a > keySuffixU32 {
-						cmp = 1
-					}
-				case 8:
-					a := getUint64BEAt(data, suffixStart)
-					if a < keySuffixU64 {
-						cmp = -1
-					} else if a > keySuffixU64 {
-						cmp = 1
-					}
-				default:
-					cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+			if suffixLen == 1 {
+				a := data[suffixStart]
+				if a < keyByte {
+					cmp = -1
+				} else if a > keyByte {
+					cmp = 1
 				}
 			} else {
 				cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
 			}
 			if cmp <= 0 {
-				last = i
-				childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
-				if err != nil {
-					return 0, false, err
-				}
-				lastChildID = childID
-				continue
+				i = h + 1
+			} else {
+				j = h
 			}
-			break
 		}
-		if last >= 0 {
-			return lastChildID, true, nil
-		}
-		childID, err := n.internalBaseDeltaChildIDAtIndex(meta, 0, deltaWidth, entryHeader)
-		return childID, false, err
-	}
+	case 2:
+		keyU16 := binary.BigEndian.Uint16(keySuffix)
+		for i < j {
+			h := int(uint(i+j) >> 1)
+			offset := getUint16At(data, NodeHeaderSize+h*2)
+			ptr := int(offset)
+			if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
+			suffixLen := int(getUint16At(data, ptr))
+			suffixStart := ptr + entryHeader
+			suffixEnd := suffixStart + suffixLen
+			if suffixLen < 0 || suffixEnd > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
 
-	i, j := 0, int(count)
-	for i < j {
-		h := int(uint(i+j) >> 1)
-		offset := getUint16At(data, NodeHeaderSize+h*2)
-		ptr := int(offset)
-		if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
-			return 0, false, ErrCorruptedNode
-		}
-		suffixLen := int(getUint16At(data, ptr))
-		suffixStart := ptr + entryHeader
-		suffixEnd := suffixStart + suffixLen
-		if suffixLen < 0 || suffixEnd > meta.footerStart {
-			return 0, false, ErrCorruptedNode
-		}
-
-		var cmp int
-		if suffixLen == keySuffixLen {
-			switch suffixLen {
-			case 1:
-				a := data[suffixStart]
-				b := keySuffix[0]
-				if a < b {
-					cmp = -1
-				} else if a > b {
-					cmp = 1
-				}
-			case 2:
+			var cmp int
+			if suffixLen == 2 {
 				a := binary.BigEndian.Uint16(data[suffixStart : suffixStart+2])
-				if a < keySuffixU16 {
+				if a < keyU16 {
 					cmp = -1
-				} else if a > keySuffixU16 {
+				} else if a > keyU16 {
 					cmp = 1
 				}
-			case 4:
-				a := binary.BigEndian.Uint32(data[suffixStart : suffixStart+4])
-				if a < keySuffixU32 {
-					cmp = -1
-				} else if a > keySuffixU32 {
-					cmp = 1
-				}
-			case 8:
-				a := getUint64BEAt(data, suffixStart)
-				if a < keySuffixU64 {
-					cmp = -1
-				} else if a > keySuffixU64 {
-					cmp = 1
-				}
-			default:
+			} else {
 				cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
 			}
-		} else {
-			cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+			if cmp <= 0 {
+				i = h + 1
+			} else {
+				j = h
+			}
 		}
-		if cmp <= 0 {
-			i = h + 1
-		} else {
-			j = h
+	case 4:
+		keyU32 := binary.BigEndian.Uint32(keySuffix)
+		for i < j {
+			h := int(uint(i+j) >> 1)
+			offset := getUint16At(data, NodeHeaderSize+h*2)
+			ptr := int(offset)
+			if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
+			suffixLen := int(getUint16At(data, ptr))
+			suffixStart := ptr + entryHeader
+			suffixEnd := suffixStart + suffixLen
+			if suffixLen < 0 || suffixEnd > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
+
+			var cmp int
+			if suffixLen == 4 {
+				a := binary.BigEndian.Uint32(data[suffixStart : suffixStart+4])
+				if a < keyU32 {
+					cmp = -1
+				} else if a > keyU32 {
+					cmp = 1
+				}
+			} else {
+				cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+			}
+			if cmp <= 0 {
+				i = h + 1
+			} else {
+				j = h
+			}
+		}
+	case 8:
+		keyU64 := binary.BigEndian.Uint64(keySuffix)
+		for i < j {
+			h := int(uint(i+j) >> 1)
+			offset := getUint16At(data, NodeHeaderSize+h*2)
+			ptr := int(offset)
+			if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
+			suffixLen := int(getUint16At(data, ptr))
+			suffixStart := ptr + entryHeader
+			suffixEnd := suffixStart + suffixLen
+			if suffixLen < 0 || suffixEnd > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
+
+			var cmp int
+			if suffixLen == 8 {
+				a := getUint64BEAt(data, suffixStart)
+				if a < keyU64 {
+					cmp = -1
+				} else if a > keyU64 {
+					cmp = 1
+				}
+			} else {
+				cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+			}
+			if cmp <= 0 {
+				i = h + 1
+			} else {
+				j = h
+			}
+		}
+	default:
+		for i < j {
+			h := int(uint(i+j) >> 1)
+			offset := getUint16At(data, NodeHeaderSize+h*2)
+			ptr := int(offset)
+			if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
+			suffixLen := int(getUint16At(data, ptr))
+			suffixStart := ptr + entryHeader
+			suffixEnd := suffixStart + suffixLen
+			if suffixLen < 0 || suffixEnd > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
+
+			cmp := bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+			if cmp <= 0 {
+				i = h + 1
+			} else {
+				j = h
+			}
 		}
 	}
 
