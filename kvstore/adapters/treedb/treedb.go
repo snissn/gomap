@@ -30,6 +30,8 @@ func WrapNamedWithReadWorkers(db *treedb.DB, name string, readWorkers int) *DB {
 }
 
 func resolveReadWorkers(workers int) int {
+	// Kept local to avoid introducing a dependency from storage adapters back to
+	// benchmark CLI configuration while preserving a stable standalone API.
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
@@ -71,9 +73,6 @@ func (d *DB) ReadBatch(keys [][]byte) error {
 		return nil
 	}
 	workers := d.readWorkers
-	if workers < 1 {
-		workers = 1
-	}
 	if len(keys) <= 1 || workers <= 1 {
 		snap := d.DB.AcquireSnapshot()
 		if snap == nil {
@@ -92,9 +91,8 @@ func (d *DB) ReadBatch(keys [][]byte) error {
 	if workers > len(keys) {
 		workers = len(keys)
 	}
-	if workers < 1 {
-		workers = 1
-	}
+	// Snapshots are immutable point-in-time readers in TreeDB, so concurrent
+	// GetUnsafe calls are issued against one snapshot for improved read-bandwidth.
 	snap := d.DB.AcquireSnapshot()
 	if snap == nil {
 		return nil

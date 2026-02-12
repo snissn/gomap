@@ -45,7 +45,7 @@ var (
 	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
 	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
 	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
-	readWorkers        = flag.Int("read-workers", runtime.GOMAXPROCS(0), "Number of goroutines for random read batch and random read parallel tests (default GOMAXPROCS)")
+	readWorkers        = flag.Int("read-workers", 0, "Number of goroutines for random read batch and random read parallel tests (<=0 uses current GOMAXPROCS)")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
 	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
@@ -256,6 +256,7 @@ func parseBenchKeyShape(s string) (benchKeyShape, error) {
 }
 
 func resolveReadWorkers(workers int) int {
+	// Keep this local to avoid coupling benchmark CLI parsing with storage adapters.
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
@@ -1119,9 +1120,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
 	}
 	cfg.ReadWorkers = resolveReadWorkers(cfg.ReadWorkers)
-	prevReadWorkers := *readWorkers
-	*readWorkers = cfg.ReadWorkers
-	defer func() { *readWorkers = prevReadWorkers }()
+	setTreeDBAdapterReadWorkers(cfg.ReadWorkers)
 
 	if cfg.AllocsProfile != "" {
 		rate := cfg.AllocsProfileRate
