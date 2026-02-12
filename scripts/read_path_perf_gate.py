@@ -42,22 +42,49 @@ class RunPoint:
 
 
 def run(cmd: List[str], cwd: Path, capture: bool = False) -> subprocess.CompletedProcess:
-    if capture:
-        return subprocess.run(cmd, cwd=str(cwd), check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    return subprocess.run(cmd, cwd=str(cwd), check=True)
+    try:
+        if capture:
+            return subprocess.run(
+                cmd,
+                cwd=str(cwd),
+                check=True,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+        return subprocess.run(cmd, cwd=str(cwd), check=True)
+    except subprocess.CalledProcessError as exc:
+        if exc.stdout:
+            print(f"command failed: {' '.join(cmd)}", file=sys.stderr)
+            print(exc.stdout, file=sys.stderr)
+        raise
+
+
+def parse_table_last_numeric(prefix: str, line: str) -> int | None:
+    if not (line.startswith(prefix) or line.startswith("| " + prefix)):
+        return None
+
+    suffix = line.split("|")[-1].strip()
+    if not suffix:
+        return None
+
+    m = re.search(r"([0-9][0-9,]*)\s*$", suffix)
+    if not m:
+        return None
+
+    value_str = m.group(1)
+    if len(value_str) > 1 and value_str.startswith("0"):
+        return None
+
+    value = int(value_str.replace(",", ""))
+    if value <= 0:
+        return None
+    return value
 
 
 def parse_metrics(text: str) -> Tuple[int, int]:
     rr = None
     rb = None
-
-    def parse_table_last_numeric(prefix: str, line: str) -> int | None:
-        if not line.startswith(prefix):
-            return None
-        nums = re.findall(r"[0-9][0-9,]*", line)
-        if not nums:
-            return None
-        return int(nums[-1].replace(",", ""))
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -132,7 +159,7 @@ def metric_summary(base_runs: List[RunPoint], cand_runs: List[RunPoint], metric:
     cand_vals = [getattr(r, metric) for r in cand_runs]
     m3_base = middle3(base_vals)
     m3_cand = middle3(cand_vals)
-    eff = (m3_cand - m3_base) / m3_base * 100.0 if m3_base > 0 else math.nan
+    eff = (m3_cand - m3_base) / m3_base * 100.0 if m3_base > 0 else 0.0
     ci_lo, ci_hi = bootstrap_ci95_effect_pct(base_vals, cand_vals, seed=17)
     cls = classify_metric(eff, ci_lo, ci_hi, thresh=thresh)
     return {
@@ -191,6 +218,8 @@ def run_unified_once(
 def build_binaries(args: argparse.Namespace, out_dir: Path) -> Tuple[Path, Path, Dict[str, str]]:
     wt_root = out_dir / "worktrees"
     wt_root.mkdir(parents=True, exist_ok=True)
+    # Recover from stale worktrees left behind by an interrupted earlier run.
+    cleanup_worktrees(args, out_dir)
     baseline_wt = wt_root / "baseline"
     candidate_wt = wt_root / "candidate"
 
@@ -277,22 +306,11 @@ def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -
     ]
     p = run(cmd, cwd=args.repo, capture=True)
     out_file.write_text(p.stdout)
+    rr_treedb, rb_treedb = parse_metrics(p.stdout)
 
-    rr_treedb = None
-    rb_treedb = None
-    for ln in p.stdout.splitlines():
-        ln = ln.strip()
-        m = RR_LINE.match(ln)
-        if m:
-            rr_treedb = int(m.group(1).replace(",", ""))
-            continue
-        m = RB_LINE.match(ln)
-        if m:
-            rb_treedb = int(m.group(1).replace(",", ""))
-            continue
     return {
-        "random_read_treedb": rr_treedb if rr_treedb is not None else 0,
-        "random_read_batch_treedb": rb_treedb if rb_treedb is not None else 0,
+        "random_read_treedb": rr_treedb,
+        "random_read_batch_treedb": rb_treedb,
         "log": str(out_file),
     }
 
@@ -333,7 +351,21 @@ def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Dict[str,
     p2 = subprocess.run(cmd, cwd=str(candidate_wt), check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
     cand_txt.write_text(p2.stdout)
 
-    p3 = subprocess.run(["benchstat", str(base_txt), str(cand_txt)], cwd=str(args.repo), check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        p3 = subprocess.run(
+            ["benchstat", str(base_txt), str(cand_txt)],
+            cwd=str(args.repo),
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+    except FileNotFoundError:
+        print(
+            "Error: 'benchstat' command not found. Install it with: go install golang.org/x/perf/cmd/benchstat@latest",
+            file=sys.stderr,
+        )
+        return None
     stat_txt.write_text(p3.stdout)
 
     return {
@@ -362,8 +394,10 @@ def render_summary_md(result: Dict, path: Path) -> None:
         for metric_key, metric_name in (("rr", "Random Read"), ("rb", "Random Read (Batch)")):
             m = vs["metrics"][metric_key]
             lo, hi = m["ci95_pct"]
+            effect = m["effect_middle3_pct"]
+            effect_str = f"{effect:+.2f}%" if math.isfinite(effect) else "N/A"
             lines.append(
-                f"| {valsize} | {n} | {metric_name} | {m['base_middle3']:,.0f} | {m['candidate_middle3']:,.0f} | {m['effect_middle3_pct']:+.2f}% | [{lo:+.2f}, {hi:+.2f}] | {m['classification']} |"
+                f"| {valsize} | {n} | {metric_name} | {m['base_middle3']:,.0f} | {m['candidate_middle3']:,.0f} | {effect_str} | [{lo:+.2f}, {hi:+.2f}] | {m['classification']} |"
             )
     lines.append("")
     lines.append("## Broad Sanity (Single Run)")
@@ -408,6 +442,8 @@ def parse_args() -> argparse.Namespace:
     args = ap.parse_args()
     if args.initial_rounds <= 0:
         raise SystemExit("--initial-rounds must be > 0")
+    if args.initial_rounds < 5:
+        raise SystemExit("--initial-rounds must be >= 5 to support middle-3 on 5 samples")
     if args.step_rounds <= 0:
         raise SystemExit("--step-rounds must be > 0")
     if args.max_rounds <= 0:
@@ -474,8 +510,7 @@ def main() -> int:
                     turn = start_turn + i
                     order = ("base", "cand") if (turn % 2 == 0) else ("cand", "base")
                     for side in order:
-                        side_idx = len(base_runs) + 1 if side == "base" else len(cand_runs) + 1
-                        log_file = vdir / f"run_{side}_{side_idx:02d}.md"
+                        log_file = vdir / f"run_{side}_{(len(base_runs) + 1 if side == 'base' else len(cand_runs) + 1):02d}.md"
                         rec = run_unified_once(
                             base_bin if side == "base" else cand_bin,
                             valsize,
