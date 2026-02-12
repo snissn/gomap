@@ -1,12 +1,15 @@
 package db
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -26,6 +29,361 @@ type ValueLogRewriteStats struct {
 	BytesBefore    int64
 	BytesAfter     int64
 	RecordsCopied  int
+}
+
+// ValueLogRewriteOnlineOptions controls online rewrite behavior.
+type ValueLogRewriteOnlineOptions struct {
+	// BatchSize bounds pointer swaps per commit.
+	BatchSize int
+	// SyncEachBatch forces fsync durability boundaries for each rewritten batch.
+	SyncEachBatch bool
+	// MaxSegmentBytes bounds new value-log segment size during rewrite.
+	// <=0 uses a default.
+	MaxSegmentBytes int64
+	// LocalityPolicy controls ordering of rewritten pointer candidates within
+	// each batch.
+	LocalityPolicy ValueLogRewriteLocalityPolicy
+}
+
+type rewriteSwap struct {
+	key    []byte
+	oldPtr page.ValuePtr
+	newPtr page.ValuePtr
+}
+
+type rewriteCandidate struct {
+	key    []byte
+	oldPtr page.ValuePtr
+}
+
+// ValueLogRewriteLocalityPolicy controls pointer rewrite ordering.
+type ValueLogRewriteLocalityPolicy string
+
+const (
+	// ValueLogRewriteLocalityDefault preserves scan/input order.
+	ValueLogRewriteLocalityDefault ValueLogRewriteLocalityPolicy = "default"
+	// ValueLogRewriteLocalityGrouped orders by old segment+offset locality.
+	ValueLogRewriteLocalityGrouped ValueLogRewriteLocalityPolicy = "grouped"
+)
+
+const defaultValueLogRewriteBatchSize = 256
+
+func normalizeValueLogRewriteBatchSize(n int) int {
+	if n <= 0 {
+		return defaultValueLogRewriteBatchSize
+	}
+	return n
+}
+
+func normalizeValueLogRewriteLocalityPolicy(policy ValueLogRewriteLocalityPolicy) ValueLogRewriteLocalityPolicy {
+	switch policy {
+	case ValueLogRewriteLocalityGrouped:
+		return ValueLogRewriteLocalityGrouped
+	default:
+		return ValueLogRewriteLocalityDefault
+	}
+}
+
+func orderRewriteCandidates(candidates []rewriteCandidate, policy ValueLogRewriteLocalityPolicy) {
+	if len(candidates) <= 1 {
+		return
+	}
+	if policy != ValueLogRewriteLocalityGrouped {
+		return
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.oldPtr.FileID != b.oldPtr.FileID {
+			return a.oldPtr.FileID < b.oldPtr.FileID
+		}
+		if a.oldPtr.Offset != b.oldPtr.Offset {
+			return a.oldPtr.Offset < b.oldPtr.Offset
+		}
+		if a.oldPtr.Length != b.oldPtr.Length {
+			return a.oldPtr.Length < b.oldPtr.Length
+		}
+		return bytes.Compare(a.key, b.key) < 0
+	})
+}
+
+// ValueLogRewriteOnline rewrites pointer-backed values in bounded commit
+// batches, then atomically swaps keys to rewritten pointers.
+func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewriteStats, error) {
+	var stats ValueLogRewriteStats
+	if db == nil {
+		return stats, fmt.Errorf("missing db")
+	}
+	if db.readOnly {
+		return stats, ErrReadOnly
+	}
+	if db.valueLogManager == nil {
+		return stats, fmt.Errorf("value log manager unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	set := db.valueLogManager.CurrentSet()
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		return stats, nil
+	}
+	oldValueIDs := make(map[uint32]struct{}, len(set.Files))
+	for id := range set.Files {
+		oldValueIDs[id] = struct{}{}
+		stats.SegmentsBefore++
+		stats.BytesBefore += fileSize(set.Files[id])
+	}
+	_ = db.valueLogManager.Release(set)
+
+	segments, err := listWALSegments(db.dir)
+	if err != nil {
+		return stats, err
+	}
+	nextRID, err := nextRewriteRIDStart(segments)
+	if err != nil {
+		return stats, err
+	}
+	lane, startSeq := chooseRewriteLane(segments)
+	maxBytes := opts.MaxSegmentBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultValueLogRewriteSegmentBytes
+	}
+	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), lane, startSeq, maxBytes)
+	defer func() { _ = writer.Close() }()
+
+	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
+	swaps := make([]rewriteSwap, 0, batchSize)
+	localityPolicy := normalizeValueLogRewriteLocalityPolicy(opts.LocalityPolicy)
+	candidates := make([]rewriteCandidate, 0, batchSize)
+	ridExhausted := false
+	var canceledErr error
+
+	flushBatch := func() error {
+		if len(candidates) == 0 {
+			return nil
+		}
+		orderRewriteCandidates(candidates, localityPolicy)
+		swaps = swaps[:0]
+		for _, candidate := range candidates {
+			if ridExhausted {
+				return fmt.Errorf("value-log rid space exhausted")
+			}
+			val, err := db.valueLogManager.Read(candidate.oldPtr)
+			if err != nil {
+				return err
+			}
+			newPtr, err := writer.appendValue(nextRID, val)
+			if err != nil {
+				return err
+			}
+			nextRID++
+			if nextRID == 0 {
+				ridExhausted = true
+			}
+			stats.RecordsCopied++
+			swaps = append(swaps, rewriteSwap{
+				key:    candidate.key,
+				oldPtr: candidate.oldPtr,
+				newPtr: newPtr,
+			})
+		}
+		if opts.SyncEachBatch {
+			if err := writer.Sync(); err != nil {
+				return err
+			}
+		} else {
+			if err := writer.Flush(); err != nil {
+				return err
+			}
+		}
+		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
+			return err
+		}
+		candidates = candidates[:0]
+		return nil
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return stats, fmt.Errorf("missing snapshot state")
+	}
+	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	for ; it.Valid(); it.Next() {
+		if err := ctx.Err(); err != nil {
+			canceledErr = err
+			break
+		}
+		_, oldPtr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
+			continue
+		}
+		key := append([]byte(nil), it.UnsafeKey()...)
+		candidates = append(candidates, rewriteCandidate{
+			key:    key,
+			oldPtr: oldPtr,
+		})
+		if len(candidates) >= batchSize {
+			if err := flushBatch(); err != nil {
+				_ = it.Close()
+				_ = snap.Close()
+				return stats, err
+			}
+		}
+	}
+	iterErr := it.Error()
+	_ = it.Close()
+	_ = snap.Close()
+	if iterErr != nil {
+		return stats, iterErr
+	}
+	if canceledErr == nil {
+		if err := flushBatch(); err != nil {
+			return stats, err
+		}
+	} else {
+		// Stop publishing further swaps after cancellation; cleanup below still
+		// reconciles already-committed rewrite batches and rewrite-created files.
+		swaps = swaps[:0]
+	}
+	if err := writer.Sync(); err != nil {
+		return stats, err
+	}
+	newValueIDs, err := writer.createdFileIDs()
+	if err != nil {
+		return stats, err
+	}
+	if len(newValueIDs) > 0 {
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return stats, err
+		}
+	}
+
+	// After swaps are published (i.e. pointer updates have been flushed and made
+	// visible), run cleanup against a non-cancelable context. At this point the
+	// rewrite is logically committed, so value-log segment bookkeeping must always
+	// complete to keep the value-log set and on-disk metadata consistent with the
+	// already-committed pointer swaps, even if the caller's context is canceled.
+	referencedAfter, err := db.referencedValueLogSegments(context.Background())
+	if err != nil {
+		return stats, err
+	}
+	zombieCandidates := make(map[uint32]struct{}, len(oldValueIDs)+len(newValueIDs))
+	for id := range oldValueIDs {
+		zombieCandidates[id] = struct{}{}
+	}
+	for _, id := range newValueIDs {
+		zombieCandidates[id] = struct{}{}
+	}
+	for id := range zombieCandidates {
+		if _, ok := referencedAfter[id]; ok {
+			continue
+		}
+		if err := db.valueLogManager.MarkZombie(id); err != nil {
+			return stats, err
+		}
+	}
+	if err := db.RefreshValueLogSet(); err != nil {
+		return stats, err
+	}
+	if err := updateValueLogHealthAfterRewrite(db.dir, oldValueIDs); err != nil {
+		return stats, err
+	}
+
+	afterSegs, afterBytes, err := valueLogSegmentStats(db.dir)
+	if err != nil {
+		return stats, err
+	}
+	stats.SegmentsAfter = afterSegs
+	stats.BytesAfter = afterBytes
+	if canceledErr != nil {
+		return stats, canceledErr
+	}
+	return stats, nil
+}
+
+func nextRewriteRIDStart(segments []logSegment) (uint64, error) {
+	maxRID := uint64(0)
+	for _, segment := range segments {
+		if !segment.valueLog {
+			continue
+		}
+		reader, err := valuelog.NewReader(segment.path, segment.fileID)
+		if err != nil {
+			return 0, err
+		}
+		reader.DisableValueDecode()
+		for {
+			rid, _, _, err := reader.ReadNext()
+			if err == nil {
+				if rid > maxRID {
+					maxRID = rid
+				}
+				continue
+			}
+			if isTruncatedLogError(err) {
+				break
+			}
+			_ = reader.Close()
+			return 0, err
+		}
+		if err := reader.Close(); err != nil {
+			return 0, err
+		}
+	}
+	if maxRID == ^uint64(0) {
+		return 0, fmt.Errorf("value-log rid space exhausted")
+	}
+	return maxRID + 1, nil
+}
+
+func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
+	if len(swaps) == 0 {
+		return nil
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return fmt.Errorf("missing snapshot")
+	}
+	eligible := make([]rewriteSwap, 0, len(swaps))
+	for _, swap := range swaps {
+		entry, err := snap.GetEntry(swap.key)
+		if err != nil {
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				continue
+			}
+			_ = snap.Close()
+			return err
+		}
+		if entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != swap.oldPtr {
+			continue
+		}
+		eligible = append(eligible, swap)
+	}
+	if err := snap.Close(); err != nil {
+		return err
+	}
+	if len(eligible) == 0 {
+		return nil
+	}
+
+	b := db.NewBatch().(*Batch)
+	defer func() { _ = b.Close() }()
+	for _, swap := range eligible {
+		if err := b.SetPointer(swap.key, swap.newPtr); err != nil {
+			return err
+		}
+	}
+	if sync {
+		return b.WriteSync()
+	}
+	return b.Write()
 }
 
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and
@@ -256,13 +614,14 @@ type rewriteWriter struct {
 	walDir  string
 	lane    uint32
 	seq     uint32
+	start   uint32
 	maxSize int64
 	w       *valuelog.Writer
 	records int
 }
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
-	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, maxSize: maxSize}
+	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, start: startSeq, maxSize: maxSize}
 }
 
 func (w *rewriteWriter) ensureWriter() error {
@@ -307,6 +666,23 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 	return ptr, nil
 }
 
+func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, error) {
+	if err := w.ensureWriter(); err != nil {
+		return page.ValuePtr{}, err
+	}
+	if w.maxSize > 0 && w.w.Size()+int64(valuelog.HeaderSize+len(value)) > w.maxSize {
+		if err := w.rotate(); err != nil {
+			return page.ValuePtr{}, err
+		}
+	}
+	ptr, err := w.w.Append(0, nil, rid, value)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	w.records++
+	return ptr, nil
+}
+
 func (w *rewriteWriter) Sync() error {
 	if w == nil || w.w == nil {
 		return nil
@@ -314,11 +690,33 @@ func (w *rewriteWriter) Sync() error {
 	return w.w.Sync()
 }
 
+func (w *rewriteWriter) Flush() error {
+	if w == nil || w.w == nil {
+		return nil
+	}
+	return w.w.Flush()
+}
+
 func (w *rewriteWriter) Close() error {
 	if w == nil || w.w == nil {
 		return nil
 	}
 	return w.w.Close()
+}
+
+func (w *rewriteWriter) createdFileIDs() ([]uint32, error) {
+	if w == nil || w.seq <= w.start {
+		return nil, nil
+	}
+	out := make([]uint32, 0, int(w.seq-w.start))
+	for seq := w.start + 1; seq <= w.seq; seq++ {
+		id, err := valuelog.EncodeFileID(w.lane, seq)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 type rewriteIterator struct {

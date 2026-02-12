@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math/bits"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -31,6 +32,7 @@ type Zipper struct {
 	indexColumnarLeaves       bool
 	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
+	adaptiveLeafEncoding      bool
 	maintenanceOpsPerCoalesce int
 }
 
@@ -220,6 +222,14 @@ var leafBuilderPool = sync.Pool{
 	},
 }
 
+const maxLeafHeuristicScratchCap = 2048
+
+var leafHeuristicEntriesPool = sync.Pool{
+	New: func() any {
+		return make([]node.LeafHeuristicEntry, 0, 256)
+	},
+}
+
 type maintenanceBudget struct {
 	remaining int64
 }
@@ -339,6 +349,7 @@ func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 		indexColumnarLeaves:       z.indexColumnarLeaves,
 		indexPackedValuePtr:       z.indexPackedValuePtr,
 		indexInternalBaseDelta:    z.indexInternalBaseDelta,
+		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
 		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
 	}
 }
@@ -370,34 +381,87 @@ func (z *Zipper) SetIndexInternalBaseDelta(enabled bool) {
 	z.indexInternalBaseDelta = enabled
 }
 
+func (z *Zipper) SetAdaptiveLeafEncoding(enabled bool) {
+	z.adaptiveLeafEncoding = enabled
+}
+
 // SetMaintenanceOpsPerCoalesce sets the approximate ops-per-maintenance ratio.
 // Values <= 0 disable maintenance budgeting (full coalesce behavior).
 func (z *Zipper) SetMaintenanceOpsPerCoalesce(opsPerCoalesce int) {
 	z.maintenanceOpsPerCoalesce = opsPerCoalesce
 }
 
-func (z *Zipper) newLeafBuilder(data []byte) *node.Builder {
-	if z != nil && (z.leafPrefixCompression || z.indexColumnarLeaves || z.indexPackedValuePtr || z.indexInternalBaseDelta) {
-		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
-			LeafPrefixCompression: z.leafPrefixCompression,
-			LeafColumnar:          z.indexColumnarLeaves,
-			PackedValuePtr:        z.indexPackedValuePtr,
-			InternalBaseDelta:     z.indexInternalBaseDelta,
-		})
+func (z *Zipper) newLeafBuilder(data []byte, ops []batch.Entry) *node.Builder {
+	opts := z.leafBuilderOptions(ops)
+	if opts.LeafPrefixCompression || opts.LeafColumnar || opts.PackedValuePtr || opts.InternalBaseDelta {
+		return node.NewBuilderWithOptions(data, page.PageTypeLeaf, opts)
 	}
 	return node.NewBuilder(data, page.PageTypeLeaf)
 }
 
-func (z *Zipper) newPooledLeafBuilder(data []byte) *node.Builder {
+func (z *Zipper) newPooledLeafBuilder(data []byte, ops []batch.Entry) *node.Builder {
 	b := leafBuilderPool.Get().(*node.Builder)
-	opts := node.BuilderOptions{
+	opts := z.leafBuilderOptions(ops)
+	b.ResetWithOptions(data, page.PageTypeLeaf, opts)
+	return b
+}
+
+func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
+	base := node.BuilderOptions{
 		LeafPrefixCompression: z != nil && z.leafPrefixCompression,
 		LeafColumnar:          z != nil && z.indexColumnarLeaves,
 		PackedValuePtr:        z != nil && z.indexPackedValuePtr,
 		InternalBaseDelta:     z != nil && z.indexInternalBaseDelta,
 	}
-	b.ResetWithOptions(data, page.PageTypeLeaf, opts)
-	return b
+	if z == nil || !z.adaptiveLeafEncoding {
+		return base
+	}
+	if len(ops) == 0 {
+		return base
+	}
+	entries, _ := leafHeuristicEntriesPool.Get().([]node.LeafHeuristicEntry)
+	if cap(entries) < len(ops) {
+		entries = make([]node.LeafHeuristicEntry, 0, len(ops))
+	}
+	entries = entries[:0]
+	defer func() {
+		for i := range entries {
+			entries[i] = node.LeafHeuristicEntry{}
+		}
+		if cap(entries) <= maxLeafHeuristicScratchCap {
+			leafHeuristicEntriesPool.Put(entries[:0])
+		}
+	}()
+	for i := range ops {
+		op := ops[i]
+		if op.Type == batch.OpDelete {
+			entries = append(entries, node.LeafHeuristicEntry{Key: op.Key, Flags: node.FlagTombstone})
+			continue
+		}
+		flags := byte(node.FlagInline)
+		if op.IsPtr {
+			flags = node.FlagPointer
+		}
+		entries = append(entries, node.LeafHeuristicEntry{Key: op.Key, Flags: flags})
+	}
+	sorted := true
+	for i := 1; i < len(entries); i++ {
+		cmp := bytes.Compare(entries[i-1].Key, entries[i].Key)
+		if cmp > 0 || (cmp == 0 && entries[i-1].Flags > entries[i].Flags) {
+			sorted = false
+			break
+		}
+	}
+	if !sorted {
+		sort.Slice(entries, func(i, j int) bool {
+			cmp := bytes.Compare(entries[i].Key, entries[j].Key)
+			if cmp != 0 {
+				return cmp < 0
+			}
+			return entries[i].Flags < entries[j].Flags
+		})
+	}
+	return node.AdaptiveLeafBuilderOptions(base, entries)
 }
 
 func releasePooledLeafBuilder(b *node.Builder) {
@@ -408,9 +472,9 @@ func releasePooledLeafBuilder(b *node.Builder) {
 	leafBuilderPool.Put(b)
 }
 
-func (z *Zipper) newBuilderForType(data []byte, typ page.PageType) *node.Builder {
+func (z *Zipper) newBuilderForType(data []byte, typ page.PageType, ops []batch.Entry) *node.Builder {
 	if typ == page.PageTypeLeaf {
-		return z.newLeafBuilder(data)
+		return z.newLeafBuilder(data, ops)
 	}
 	if z != nil && z.indexInternalBaseDelta {
 		return node.NewBuilderWithOptions(data, typ, node.BuilderOptions{
@@ -522,7 +586,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 						return 0, nil, metrics, err
 					}
 
-					currentBuilder = z.newBuilderForType(data, page.PageTypeInternal)
+					currentBuilder = z.newBuilderForType(data, page.PageTypeInternal, nil)
 					currentBuilder.SetPageID(pid)
 
 					currentStartKey = child.Key
@@ -559,7 +623,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 					if err != nil {
 						return 0, nil, metrics, err
 					}
-					currentBuilder = z.newBuilderForType(data, page.PageTypeInternal)
+					currentBuilder = z.newBuilderForType(data, page.PageTypeInternal, nil)
 					currentBuilder.SetPageID(pid)
 					currentStartKey = child.Key
 					currentBuilder.SetInternalFenceBounds(currentStartKey, nil)
@@ -610,7 +674,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 	oldNode := node.NewNode(oldData)
 
 	// Create Builder for new page
-	builder := z.newBuilderForType(newData, oldNode.Type())
+	builder := z.newBuilderForType(newData, oldNode.Type(), ops)
 	builder.SetPageID(newPageID)
 
 	// Track retired page in caller-owned accumulator.
@@ -658,7 +722,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 	// Handle Page 0 / Empty / New Tree case
 	if oldNode.Type() == 0 {
 		// Reuse builder, set type
-		builder = z.newLeafBuilder(newData)
+		builder = z.newLeafBuilder(newData, ops)
 		builder.SetPageID(newPageID)
 
 		nr, splits, err := z.mergeLeaf(oldNode, builder, ops, metrics)
@@ -747,6 +811,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		var key, val []byte
 		var flags byte
 		var valPtr page.ValuePtr
+		insertedFromBatch := false
 
 		if useBatch {
 			op := ops[opIdx]
@@ -754,6 +819,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			if op.Type == batch.OpDelete {
 				continue // Skip insert
 			}
+			insertedFromBatch = true
 			key = op.Key
 			if op.IsPtr {
 				flags = node.FlagPointer
@@ -834,7 +900,11 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			}
 
 			// New Builder
-			splitBuilder := z.newPooledLeafBuilder(sdata)
+			startIdx := opIdx
+			if insertedFromBatch && startIdx > 0 {
+				startIdx--
+			}
+			splitBuilder := z.newPooledLeafBuilder(sdata, ops[startIdx:])
 			splitBuilder.SetPageID(sid)
 
 			// Record split
@@ -1342,7 +1412,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		if err != nil {
 			return 0, false, err
 		}
-		b := z.newLeafBuilder(data)
+		b := z.newLeafBuilder(data, nil)
 		b.SetPageID(pid)
 
 		addAll := func(n *node.Node) error {
@@ -1399,7 +1469,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		if err != nil {
 			return 0, err
 		}
-		b := z.newLeafBuilder(data)
+		b := z.newLeafBuilder(data, nil)
 		b.SetPageID(pid)
 
 		for i := uint16(0); i < n.Count(); i++ {
@@ -1453,7 +1523,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		if err != nil {
 			return 0, 0, nil, false, err
 		}
-		lb := z.newLeafBuilder(ldata)
+		lb := z.newLeafBuilder(ldata, nil)
 		lb.SetPageID(lid)
 
 		rdata, err := z.pager.GetForWrite(rid)
@@ -1529,7 +1599,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			return 0, 0, nil, false, nil
 		}
 
-		rb := z.newLeafBuilder(rdata)
+		rb := z.newLeafBuilder(rdata, nil)
 		rb.SetPageID(rid)
 
 		for i := 0; i < bestSplitAt; i++ {
@@ -1729,7 +1799,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 		if err != nil {
 			return 0, false, err
 		}
-		b := z.newBuilderForType(data, page.PageTypeInternal)
+		b := z.newBuilderForType(data, page.PageTypeInternal, nil)
 		b.SetPageID(pid)
 
 		addAll := func(n *node.Node) error {
@@ -1864,9 +1934,9 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 		}
 
 		try := func(splitAt int) ([]byte, bool, error) {
-			lb2 := z.newBuilderForType(ldata, page.PageTypeInternal)
+			lb2 := z.newBuilderForType(ldata, page.PageTypeInternal, nil)
 			lb2.SetPageID(lid)
-			rb2 := z.newBuilderForType(rdata, page.PageTypeInternal)
+			rb2 := z.newBuilderForType(rdata, page.PageTypeInternal, nil)
 			rb2.SetPageID(rid)
 
 			if err := build(lb2, combined[:splitAt]); err != nil {
@@ -2025,7 +2095,7 @@ func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder
 		return nil, err
 	}
 
-	sb := z.newBuilderForType(sdata, page.PageTypeInternal)
+	sb := z.newBuilderForType(sdata, page.PageTypeInternal, nil)
 	sb.SetPageID(sid)
 	sb.SetInternalFenceBounds(key, nil)
 

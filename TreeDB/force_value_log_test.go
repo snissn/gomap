@@ -65,6 +65,95 @@ func TestForceValueLogPointers_UsesPointersForSmallValues(t *testing.T) {
 	}
 }
 
+func TestValuePlacement_PerDomainThreshold_Respected(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:            dir,
+		FlushThreshold: 1,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+				{Prefix: []byte("cold/"), InlineThreshold: 1024},
+			},
+		},
+	}
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	hotKey := []byte("hot/key")
+	coldKey := []byte("cold/key")
+	defaultKey := []byte("other/key")
+	hotVal := bytes.Repeat([]byte("h"), 64)
+	coldVal := bytes.Repeat([]byte("c"), 64)
+	defaultVal := bytes.Repeat([]byte("d"), 300)
+
+	if err := db.Set(hotKey, hotVal); err != nil {
+		t.Fatalf("Set hot: %v", err)
+	}
+	if err := db.Set(coldKey, coldVal); err != nil {
+		t.Fatalf("Set cold: %v", err)
+	}
+	if err := db.Set(defaultKey, defaultVal); err != nil {
+		t.Fatalf("Set default: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	backend := db.backend
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	defer func() {
+		if err := snap.Close(); err != nil {
+			t.Fatalf("snapshot close: %v", err)
+		}
+	}()
+
+	hotEntry, err := snap.GetEntry(hotKey)
+	if err != nil {
+		t.Fatalf("GetEntry hot: %v", err)
+	}
+	if hotEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected hot domain key to use pointer placement")
+	}
+
+	coldEntry, err := snap.GetEntry(coldKey)
+	if err != nil {
+		t.Fatalf("GetEntry cold: %v", err)
+	}
+	if coldEntry.Flags&node.FlagPointer != 0 {
+		t.Fatalf("expected cold domain key to stay inline")
+	}
+
+	defaultEntry, err := snap.GetEntry(defaultKey)
+	if err != nil {
+		t.Fatalf("GetEntry default: %v", err)
+	}
+	if defaultEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected non-domain key to use default threshold fallback")
+	}
+
+	gotHot, err := db.Get(hotKey)
+	if err != nil || !bytes.Equal(gotHot, hotVal) {
+		t.Fatalf("Get hot mismatch: err=%v", err)
+	}
+	gotCold, err := db.Get(coldKey)
+	if err != nil || !bytes.Equal(gotCold, coldVal) {
+		t.Fatalf("Get cold mismatch: err=%v", err)
+	}
+	gotDefault, err := db.Get(defaultKey)
+	if err != nil || !bytes.Equal(gotDefault, defaultVal) {
+		t.Fatalf("Get default mismatch: err=%v", err)
+	}
+}
+
 func TestForceValueLogPointers_DictTrainingPublishesDictionary(t *testing.T) {
 	dir := t.TempDir()
 	bgErrCh := make(chan error, 16)

@@ -1,7 +1,7 @@
 # TreeDB Audit Tracking
 
 This repo previously kept a detailed audit tracker here. It referenced removed
-components and legacy design docs (e.g. “slabs”, old specs/options) and was
+components and legacy design docs (e.g. old value-store terms, old specs/options) and was
 removed to avoid misleading future agents.
 
 ## Current safety anchors (start here)
