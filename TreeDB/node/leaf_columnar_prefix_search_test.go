@@ -217,6 +217,18 @@ func benchmarkSearchLeafColumnarPrefixV2FixedBE8(b *testing.B, misses bool) {
 		}
 		queries[i] = append([]byte(nil), k[:]...)
 	}
+	// Validate representative query semantics once outside the timed loop so the
+	// benchmark actually measures the intended hit/miss path.
+	_, found, err := n.SearchLeaf(queries[0])
+	if err != nil {
+		b.Fatalf("SearchLeaf probe: %v", err)
+	}
+	if misses && found {
+		b.Fatalf("expected probe miss, got hit")
+	}
+	if !misses && !found {
+		b.Fatalf("expected probe hit, got miss")
+	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
