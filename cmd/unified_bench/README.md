@@ -43,6 +43,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-dataset-val-pattern` dataset value pattern for `dataset_write_*` (`random|zero|repeat|repeat_tail64|half_repeat_half_random`)
 - `-batchsize` batch size (default 8000)
+- `-treedb-read-workers` TreeDB read worker count for batched reads (`0` = auto, currently resolves to `GOMAXPROCS()+1`; clamped by batch size)
+- `-treedb-read-worker-sweep` Comma-separated TreeDB read worker counts for `-suite treedb_read_workers` (empty = `1,2,4,8,16,GOMAXPROCS,GOMAXPROCS+1`; non-positive -> auto)
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)
@@ -94,6 +96,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
   - `bigkeys_guard` — small TreeDB flush threshold + large keycount, with wall/RSS caps for CI guardrails
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
   - `sload_readheavy` — settled point reads with value-log pointers + forkchoice-style batch commits
+  - `treedb_read_workers` — sweeps TreeDB read worker counts for `random_read_batch` and renders throughput results
   - `maintenance_budget` — sweep TreeDB maintenance K values; reports checkpoint time vs index size, recommends K
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
 

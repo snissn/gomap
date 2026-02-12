@@ -520,6 +520,12 @@ func main() {
 				log.Fatalf("vlog_dict suite: %v", err)
 			}
 			fmt.Print(out)
+		case "treedb_read_workers", "treedb-read-workers", "treedb_readworker", "treedb-readworker":
+			out, err := runReadWorkersSweepSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("treedb_read_workers suite: %v", err)
+			}
+			fmt.Print(out)
 		case "maintenance_budget", "maintenance-budget":
 			out, err := runMaintenanceBudgetSuite(baseCfg)
 			if err != nil {
@@ -3574,6 +3580,82 @@ func runSloadReadHeavySuite(baseCfg BenchConfig) (string, error) {
 	return renderMarkdownSingle(run), nil
 }
 
+func runReadWorkersSweepSuite(baseCfg BenchConfig) (string, error) {
+	candidates, err := parseTreeDBReadWorkerCandidates(*treedbReadWorkerSweep, baseCfg.BatchSize)
+	if err != nil {
+		return "", fmt.Errorf("read-workers sweep candidates: %w", err)
+	}
+
+	cfg := baseCfg
+	cfg.Progress = false
+	cfg.DBsArg = "treedb"
+	cfg.TestsArg = "sequential_write,random_read_batch"
+
+	prevWorkers := *treedbReadWorkers
+	defer func() { *treedbReadWorkers = prevWorkers }()
+
+	type candidateResult struct {
+		workers    int
+		throughput float64
+	}
+	results := make([]candidateResult, 0, len(candidates))
+
+	for _, workers := range candidates {
+		*treedbReadWorkers = workers
+		run, runErr := runBenchmark(cfg)
+		if runErr != nil {
+			return "", fmt.Errorf("read-workers sweep (%s): %w", formatReadWorkerLabel(workers), runErr)
+		}
+
+		throughput := run.Results["random_read_batch"]["TreeDB"]
+		if math.IsNaN(throughput) {
+			return "", fmt.Errorf("read-workers sweep (%s): random_read_batch result missing for TreeDB", formatReadWorkerLabel(workers))
+		}
+		results = append(results, candidateResult{
+			workers:    workers,
+			throughput: throughput,
+		})
+	}
+
+	bestThroughput := math.Inf(-1)
+	for _, r := range results {
+		if r.throughput > bestThroughput {
+			bestThroughput = r.throughput
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# unified_bench suite: treedb_read_workers\n\n")
+	sb.WriteString(fmt.Sprintf("- keys=%s\n", formatInt(cfg.Keys)))
+	sb.WriteString(fmt.Sprintf("- valsize=%d\n", cfg.ValueSize))
+	sb.WriteString(fmt.Sprintf("- batchsize=%d\n", cfg.BatchSize))
+	sb.WriteString(fmt.Sprintf("- candidates=%s\n\n", strings.Join(parseReadWorkerCandidateLabels(candidates), ", ")))
+
+	sb.WriteString("| read_workers | random_read_batch (ops/s) | normalized |\n")
+	sb.WriteString("|---:|---:|---:|\n")
+	for _, r := range results {
+		normalized := 0.0
+		if !math.IsInf(bestThroughput, -1) && bestThroughput > 0 {
+			normalized = r.throughput / bestThroughput
+		}
+		sb.WriteString(fmt.Sprintf("| %s | %s | %0.2f |\n", formatReadWorkerLabel(r.workers), formatFloat(r.throughput), normalized))
+	}
+	sb.WriteString("\n")
+
+	if len(results) > 0 && bestThroughput > 0 {
+		var bestLabel string
+		for _, r := range results {
+			if r.throughput == bestThroughput {
+				bestLabel = formatReadWorkerLabel(r.workers)
+				break
+			}
+		}
+		sb.WriteString(fmt.Sprintf("Best: %s workers\n\n", bestLabel))
+	}
+
+	return sb.String(), nil
+}
+
 func suiteTreeDBCacheStats(instances []*DBInstance) (string, error) {
 	var sb strings.Builder
 	for _, inst := range instances {
@@ -3947,6 +4029,67 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%.2fms", float64(d)/float64(time.Millisecond))
 	}
 	return fmt.Sprintf("%dµs", d.Microseconds())
+}
+
+func parseTreeDBReadWorkerCandidates(raw string, batchSize int) ([]int, error) {
+	workers := make([]int, 0)
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		workers = append(workers, 1, 2, 4, 8, 16, runtime.GOMAXPROCS(0), runtime.GOMAXPROCS(0)+1)
+	} else {
+		for _, token := range strings.Split(raw, ",") {
+			token = strings.TrimSpace(token)
+			if token == "" {
+				continue
+			}
+			parsed, err := strconv.Atoi(token)
+			if err != nil {
+				return nil, fmt.Errorf("invalid -treedb-read-worker-sweep value %q: %w", token, err)
+			}
+			workers = append(workers, parsed)
+		}
+		if len(workers) == 0 {
+			workers = append(workers, 1, 2, 4, 8, 16, runtime.GOMAXPROCS(0), runtime.GOMAXPROCS(0)+1)
+		}
+	}
+
+	out := make([]int, 0, len(workers))
+	seen := make(map[int]struct{}, len(workers))
+	maxWorkers := batchSize
+	if maxWorkers <= 0 {
+		maxWorkers = 1
+	}
+	for _, worker := range workers {
+		if worker <= 0 {
+			worker = 0
+		} else if worker > maxWorkers {
+			worker = maxWorkers
+		}
+		if _, ok := seen[worker]; ok {
+			continue
+		}
+		seen[worker] = struct{}{}
+		out = append(out, worker)
+	}
+	if len(out) == 0 {
+		out = []int{0}
+	}
+	return out, nil
+}
+
+func parseReadWorkerCandidateLabels(candidates []int) []string {
+	out := make([]string, 0, len(candidates))
+	for _, workers := range candidates {
+		out = append(out, formatReadWorkerLabel(workers))
+	}
+	return out
+}
+
+func formatReadWorkerLabel(workers int) string {
+	if workers <= 0 {
+		return "auto"
+	}
+	return fmt.Sprintf("%d", workers)
 }
 
 func parseList(s string) []string {

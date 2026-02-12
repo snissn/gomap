@@ -54,6 +54,8 @@ var (
 	treedbIndexOptimizations              = flag.Bool("treedb-index-optimizations", false, "TreeDB: enable profile-driven index optimization bundle (force value pointers + leaf prefix compression + columnar leaves + packed value pointers + internal base-delta)")
 	treedbLeafPrefixCompression           = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable front-coded leaf key compression (restart points; compact entry header)")
 	treedbValueLogThreshold               = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
+	treedbReadWorkers                     = flag.Int("treedb-read-workers", 0, "TreeDB: number of goroutines for GetMany reads (0=auto; resolved as GOMAXPROCS()+1; clamped by batch size)")
+	treedbReadWorkerSweep                 = flag.String("treedb-read-worker-sweep", "", "Comma-separated TreeDB read worker counts for the read-workers sweep suite (empty=default 1,2,4,8,16,GOMAXPROCS,GOMAXPROCS+1; values<=0 become auto)")
 	treedbVlogRawWritevMinAvgBytes        = flag.Int("treedb-vlog-raw-writev-min-avg-bytes", 0, "TreeDB: raw grouped-frame writev min average payload bytes/record (0=adaptive)")
 	treedbVlogRawWritevMinBatchRecs       = flag.Int("treedb-vlog-raw-writev-min-batch-records", 0, "TreeDB: raw grouped-frame writev min records/batch (0=default)")
 	treedbVlogCompression                 = flag.String("treedb-vlog-compression", "default", "TreeDB: value-log compression mode (default=auto; values: off|block|dict|auto)")
@@ -282,6 +284,11 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
+	if r.opts.ReadWorkers <= 0 {
+		lines = append(lines, "read_workers=auto")
+	} else {
+		lines = append(lines, fmt.Sprintf("read_workers=%d", r.opts.ReadWorkers))
+	}
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
 
 	threshold := r.opts.ValueLog.PointerThreshold
@@ -503,6 +510,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		FlushBuildPrefetchUnits:    *treedbFlushBuildPrefetchUnits,
 		FlushBackendMaxEntries:     *treedbFlushBackendMaxEntries,
 		FlushBackendMaxBatches:     *treedbFlushBackendMaxBatches,
+		ReadWorkers:                *treedbReadWorkers,
 
 		JournalLanes:               *treedbJournalLanes,
 		JournalCompression:         *treedbJournalCompress,

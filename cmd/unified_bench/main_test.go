@@ -211,6 +211,57 @@ func TestRunBigKeysGuardSuite_Smoke(t *testing.T) {
 	}
 }
 
+func TestParseTreeDBReadWorkerCandidates_Default(t *testing.T) {
+	workers, err := parseTreeDBReadWorkerCandidates("", 64)
+	if err != nil {
+		t.Fatalf("parseTreeDBReadWorkerCandidates: %v", err)
+	}
+	if len(workers) == 0 {
+		t.Fatalf("expected non-empty worker candidates")
+	}
+	seen := map[int]struct{}{}
+	for _, candidate := range workers {
+		if candidate > 64 {
+			t.Fatalf("candidate %d not clamped by batch size 64", candidate)
+		}
+		if _, ok := seen[candidate]; ok {
+			t.Fatalf("candidate %d duplicated", candidate)
+		}
+		seen[candidate] = struct{}{}
+	}
+}
+
+func TestRunReadWorkersSweepSuite_Smoke(t *testing.T) {
+	prevSweep := *treedbReadWorkerSweep
+	prevReadWorkers := *treedbReadWorkers
+	defer func() {
+		*treedbReadWorkerSweep = prevSweep
+		*treedbReadWorkers = prevReadWorkers
+	}()
+
+	*treedbReadWorkerSweep = "1,2"
+	*treedbReadWorkers = 3
+
+	out, err := runReadWorkersSweepSuite(BenchConfig{
+		Keys:         200,
+		ValueSize:    16,
+		BatchSize:    64,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       "treedb",
+		TestsArg:     "all",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runReadWorkersSweepSuite: %v", err)
+	}
+	if !strings.Contains(out, "treedb_read_workers") {
+		t.Fatalf("expected suite output header, got %q", out)
+	}
+}
+
 func TestRunBenchmark_CheckpointBetweenTests_Smoke(t *testing.T) {
 	run, err := runBenchmark(BenchConfig{
 		Keys:         2_000,
