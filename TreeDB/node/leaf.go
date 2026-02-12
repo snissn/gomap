@@ -1814,7 +1814,15 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 	return blockEnd, false, nil
 }
 
-func (n *Node) searchLeafColumnarPrefixV2WithMeta(data []byte, count uint16, keysBlobBase int, prefixStart int, key []byte) (uint16, bool, error) {
+func (n *Node) searchLeafColumnarPrefixV2(key []byte) (uint16, bool, error) {
+	if err := n.leafColumnarPrefixV2EnsureMeta(); err != nil {
+		return 0, false, err
+	}
+
+	data := n.data
+	count := n.Count()
+	keysBlobBase := n.leafColPrefixKeysBlobBase
+	prefixStart := n.leafColPrefixPrefixStart
 	if count == 0 {
 		return 0, false, nil
 	}
@@ -1891,19 +1899,6 @@ func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, targ
 		blockStart,
 		blockEnd,
 		target,
-	)
-}
-
-func (n *Node) searchLeafColumnarPrefixV2(key []byte) (uint16, bool, error) {
-	if err := n.leafColumnarPrefixV2EnsureMeta(); err != nil {
-		return 0, false, err
-	}
-	return n.searchLeafColumnarPrefixV2WithMeta(
-		n.data,
-		n.Count(),
-		n.leafColPrefixKeysBlobBase,
-		n.leafColPrefixPrefixStart,
-		key,
 	)
 }
 
