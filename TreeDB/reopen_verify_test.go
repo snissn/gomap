@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 const (
@@ -677,5 +678,97 @@ func TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages(t *testing.T) {
 	}
 	if scanCount != len(values) {
 		t.Fatalf("scan count mismatch: got=%d want=%d", scanCount, len(values))
+	}
+}
+
+func TestValuePlacement_PerDomainThreshold_ReopenDurability(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []treedb.ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+				{Prefix: []byte("cold/"), InlineThreshold: 1024},
+			},
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	hotKey := []byte("hot/reopen")
+	coldKey := []byte("cold/reopen")
+	defaultKey := []byte("other/reopen")
+	hotVal := bytes.Repeat([]byte("h"), 64)
+	coldVal := bytes.Repeat([]byte("c"), 64)
+	defaultVal := bytes.Repeat([]byte("d"), 300)
+
+	if err := db.Set(hotKey, hotVal); err != nil {
+		_ = db.Close()
+		t.Fatalf("set hot: %v", err)
+	}
+	if err := db.Set(coldKey, coldVal); err != nil {
+		_ = db.Close()
+		t.Fatalf("set cold: %v", err)
+	}
+	if err := db.Set(defaultKey, defaultVal); err != nil {
+		_ = db.Close()
+		t.Fatalf("set default: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	snap := reopen.AcquireSnapshot()
+	defer snap.Close()
+
+	hotEntry, err := snap.GetEntry(hotKey)
+	if err != nil {
+		t.Fatalf("snapshot GetEntry hot: %v", err)
+	}
+	if hotEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected hot domain key to remain pointer-backed after reopen")
+	}
+
+	coldEntry, err := snap.GetEntry(coldKey)
+	if err != nil {
+		t.Fatalf("snapshot GetEntry cold: %v", err)
+	}
+	if coldEntry.Flags&node.FlagPointer != 0 {
+		t.Fatalf("expected cold domain key to remain inline after reopen")
+	}
+
+	defaultEntry, err := snap.GetEntry(defaultKey)
+	if err != nil {
+		t.Fatalf("snapshot GetEntry default: %v", err)
+	}
+	if defaultEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected default fallback key to remain pointer-backed after reopen")
+	}
+
+	gotHot, err := reopen.Get(hotKey)
+	if err != nil || !bytes.Equal(gotHot, hotVal) {
+		t.Fatalf("reopen get hot mismatch: err=%v", err)
+	}
+	gotCold, err := reopen.Get(coldKey)
+	if err != nil || !bytes.Equal(gotCold, coldVal) {
+		t.Fatalf("reopen get cold mismatch: err=%v", err)
+	}
+	gotDefault, err := reopen.Get(defaultKey)
+	if err != nil || !bytes.Equal(gotDefault, defaultVal) {
+		t.Fatalf("reopen get default mismatch: err=%v", err)
 	}
 }
