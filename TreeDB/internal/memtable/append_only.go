@@ -416,7 +416,7 @@ func appendOnlyOrderedSearch(entries []appendOnlyEntry, key []byte) (int, bool) 
 	}
 	lo, hi := 0, len(entries)
 	for lo < hi {
-		mid := int(uint(lo+hi) >> 1)
+		mid := lo + (hi-lo)/2
 		if bytes.Compare(appendOnlyEntryKey(&entries[mid]), key) < 0 {
 			lo = mid + 1
 		} else {
