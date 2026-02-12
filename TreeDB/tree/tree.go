@@ -230,36 +230,54 @@ func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 	return val, nil
 }
 
-func (t *Tree) Get(key []byte) ([]byte, error) {
+// GetAppend appends the value for key to dst and returns the grown slice.
+// If key is missing/tombstoned, it returns dst and ErrKeyNotFound.
+func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 	val, ptr, flags, err := t.lookupLeafValueView(key)
 	if err != nil {
-		return nil, err
+		return dst, err
 	}
 	if flags&node.FlagTombstone != 0 {
-		return nil, ErrKeyNotFound
+		return dst, ErrKeyNotFound
 	}
 	if flags&node.FlagPointer != 0 {
 		if t.slabAppender != nil {
-			return t.slabAppender.ReadUnsafeAppend(ptr, nil)
+			oldLen := len(dst)
+			tail, err := t.slabAppender.ReadUnsafeAppend(ptr, dst[oldLen:oldLen])
+			if err != nil {
+				return dst, err
+			}
+			if oldLen == 0 {
+				return tail, nil
+			}
+			if len(tail) == 0 {
+				return dst[:oldLen], nil
+			}
+			if cap(dst) > oldLen {
+				base := dst[:cap(dst)]
+				if &tail[0] == &base[oldLen] {
+					return dst[:oldLen+len(tail)], nil
+				}
+			}
+			return append(dst[:oldLen], tail...), nil
 		}
 		out, err := t.slabReader.ReadUnsafe(ptr)
 		if err != nil {
-			return nil, err
+			return dst, err
 		}
 		if out == nil {
-			return nil, nil
+			return dst, nil
 		}
-		cpy := make([]byte, len(out))
-		copy(cpy, out)
-		return cpy, nil
+		return append(dst, out...), nil
 	}
 	if val == nil {
-		return nil, nil
+		return dst, nil
 	}
-	// Copy value before returning to user
-	cpy := make([]byte, len(val))
-	copy(cpy, val)
-	return cpy, nil
+	return append(dst, val...), nil
+}
+
+func (t *Tree) Get(key []byte) ([]byte, error) {
+	return t.GetAppend(key, nil)
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {

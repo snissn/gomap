@@ -1397,6 +1397,12 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	return s.tree.Get(key)
 }
 
+// GetAppend appends the value for key to dst and returns the grown slice.
+// If key is not found, it returns dst and tree.ErrKeyNotFound.
+func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	return s.tree.GetAppend(key, dst)
+}
+
 // GetUnsafe returns a zero-copy view of the value from the snapshot.
 // The slice is valid until the snapshot is closed.
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {

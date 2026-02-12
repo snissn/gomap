@@ -166,6 +166,44 @@ func TestTreeGet_UsesAppendReaderForPointers(t *testing.T) {
 	}
 }
 
+func TestTreeGetAppend_AppendsAndUsesAppendReaderForPointers(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
+	ptr := tracked.Add([]byte("pointer-value"))
+
+	rootData, _ := p.Get(0)
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	root.AddLeafEntry([]byte("k"), nil, node.FlagPointer, ptr)
+	root.UpdateChecksum()
+
+	tr := New(p, tracked, 0)
+	got, err := tr.GetAppend([]byte("k"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAppend failed: %v", err)
+	}
+	if string(got) != "prefix:pointer-value" {
+		t.Fatalf("unexpected value: %q", got)
+	}
+	if tracked.readUnsafeAppendCalls != 1 {
+		t.Fatalf("expected ReadUnsafeAppend to be used once, got %d", tracked.readUnsafeAppendCalls)
+	}
+	if tracked.readUnsafeCalls != 0 {
+		t.Fatalf("expected ReadUnsafe to be bypassed, got %d calls", tracked.readUnsafeCalls)
+	}
+}
+
 func TestTreeGetUnsafe_UsesUnsafeReaderForPointers(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")

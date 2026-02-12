@@ -10382,6 +10382,32 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	return true
 }
 
+// canBypassMemtableRead reports whether point-lookups can skip memtable probes
+// and go directly to backend lookups for this key.
+//
+// Safety notes:
+//   - We require an empty immutable queue.
+//   - We require global mutable bytes to be zero.
+//   - We additionally check the target mutable shard length to avoid races where
+//     mutableBytes is transiently zero while an old view still has entries.
+func (db *DB) canBypassMemtableRead(view *memtableView, key []byte) bool {
+	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+		return false
+	}
+	if len(view.mutables) == 0 {
+		return true
+	}
+	idx := db.shardIndex(key)
+	if idx >= len(view.mutables) {
+		return true
+	}
+	mt := view.mutables[idx]
+	if mt == nil {
+		return true
+	}
+	return mt.Len() == 0
+}
+
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	view := db.memtables.Load()
 	var (
@@ -10406,6 +10432,10 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 		queue = append([]memtable.Table(nil), db.queue...)
 		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
 		db.mu.RUnlock()
+	}
+
+	if db.canBypassMemtableRead(view, key) {
+		return nil, false, nil
 	}
 
 	// check mutable
@@ -10484,6 +10514,10 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 		queue = append([]memtable.Table(nil), db.queue...)
 		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
 		db.mu.RUnlock()
+	}
+
+	if db.canBypassMemtableRead(view, key) {
+		return dst, false, nil
 	}
 
 	// check mutable

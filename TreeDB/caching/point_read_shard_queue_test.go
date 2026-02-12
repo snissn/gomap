@@ -71,6 +71,22 @@ func (panicBackend) Close() error              { panic("backend Close should not
 func (panicBackend) Print() error              { panic("backend Print should not be called") }
 func (panicBackend) Stats() map[string]string  { return nil }
 
+type countingBackend struct {
+	panicBackend
+	getCalls       int
+	getAppendCalls int
+}
+
+func (b *countingBackend) Get(_ []byte) ([]byte, error) {
+	b.getCalls++
+	return []byte("backend"), nil
+}
+
+func (b *countingBackend) GetAppend(_ []byte, dst []byte) ([]byte, error) {
+	b.getAppendCalls++
+	return append(dst, []byte("backend")...), nil
+}
+
 func TestPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
 	const shards = 8
 	const targetShard = 5
@@ -154,5 +170,94 @@ func TestPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
 		if calls != 0 {
 			t.Fatalf("expected non-target shard %d Get calls = 0, got %d", shard, calls)
 		}
+	}
+}
+
+func TestPointReads_EmptyMemtablesBypassToBackend(t *testing.T) {
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	ct := &countingTable{inner: mt}
+	backend := &countingBackend{}
+
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	db.memtables.Store(&memtableView{
+		mutables: []memtable.Table{ct},
+	})
+
+	key := []byte("k")
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "backend" {
+		t.Fatalf("unexpected Get value: %q", got)
+	}
+	if backend.getCalls != 1 {
+		t.Fatalf("expected backend Get calls = 1, got %d", backend.getCalls)
+	}
+	if ct.getEntryCalls != 0 {
+		t.Fatalf("expected memtable GetEntry calls = 0, got %d", ct.getEntryCalls)
+	}
+
+	gotAppend, err := db.GetAppend(key, []byte("p:"))
+	if err != nil {
+		t.Fatalf("GetAppend: %v", err)
+	}
+	if string(gotAppend) != "p:backend" {
+		t.Fatalf("unexpected GetAppend value: %q", gotAppend)
+	}
+	if backend.getAppendCalls != 1 {
+		t.Fatalf("expected backend GetAppend calls = 1, got %d", backend.getAppendCalls)
+	}
+	if ct.getEntryCalls != 0 {
+		t.Fatalf("expected memtable GetEntry calls = 0 after GetAppend, got %d", ct.getEntryCalls)
+	}
+}
+
+func TestPointReads_EmptyMemtableBypassGuardChecksMutableLen(t *testing.T) {
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	ct := &countingTable{inner: mt}
+	key := []byte("k")
+	ct.SetEntry(key, []byte("v"), page.ValuePtr{}, node.FlagInline)
+
+	// Simulate a stale mutableBytes==0 window while mutable view still has data.
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	db.memtables.Store(&memtableView{
+		mutables: []memtable.Table{ct},
+	})
+
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "v" {
+		t.Fatalf("unexpected Get value: %q", got)
+	}
+	if ct.getEntryCalls == 0 {
+		t.Fatalf("expected memtable GetEntry to be consulted")
+	}
+
+	gotAppend, err := db.GetAppend(key, []byte("p:"))
+	if err != nil {
+		t.Fatalf("GetAppend: %v", err)
+	}
+	if string(gotAppend) != "p:v" {
+		t.Fatalf("unexpected GetAppend value: %q", gotAppend)
+	}
+	if ct.getEntryCalls < 2 {
+		t.Fatalf("expected memtable GetEntry to be consulted by GetAppend")
 	}
 }

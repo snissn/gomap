@@ -44,14 +44,14 @@ func (db *DB) Dir() string {
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
-	val, err := snap.Get(key)
+	val, err := snap.GetAppend(key, dst)
 	if err == tree.ErrKeyNotFound {
 		return dst, err
 	}
 	if err != nil {
 		return dst, err
 	}
-	return append(dst, val...), nil
+	return val, nil
 }
 
 // Has checks if a key exists.

@@ -2029,6 +2029,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"random_read": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			var k [8]byte
+			appendGetter, hasAppendGetter := db.(interface {
+				GetAppend(key, dst []byte) ([]byte, error)
+			})
+			buf := make([]byte, 0, cfg.ValueSize)
 			for i := 0; i < cfg.Keys; i++ {
 				if i&8191 == 0 {
 					if err := guard.Checkpoint(); err != nil {
@@ -2036,7 +2040,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 				}
 				encodeKey(k[:], uint64(rng.Intn(cfg.Keys)))
-				_, _ = db.Get(k[:])
+				if hasAppendGetter {
+					buf, _ = appendGetter.GetAppend(k[:], buf[:0])
+				} else {
+					_, _ = db.Get(k[:])
+				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
 		},
