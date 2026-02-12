@@ -1073,6 +1073,9 @@ func (n *Node) leafColumnarPrefixV2KeyMetaAt(index uint16) (prefixLen int, suffi
 	return prefixLen, suffix, flags, nil
 }
 
+// leafColumnarPrefixV2ValueMetaAt returns int offsets intentionally: callers
+// immediately use valStart/valEnd for slice indexing and len(int)-based bounds
+// checks, so keeping these as int avoids extra casts at call sites.
 func (n *Node) leafColumnarPrefixV2ValueMetaAt(index uint16) (flags byte, valStart int, valEnd int, err error) {
 	count := n.Count()
 	if index >= count {
