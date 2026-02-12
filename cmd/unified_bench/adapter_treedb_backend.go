@@ -37,7 +37,11 @@ func (d *treeDBBackendAdapter) AcquireReadSnapshot() (kvstore.ReadSnapshot, erro
 	if d == nil || d.db == nil {
 		return nil, kvstore.ErrUnsupported
 	}
-	return d.db.AcquireSnapshot(), nil
+	snap := d.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, kvstore.ErrUnsupported
+	}
+	return snap, nil
 }
 
 func (d *treeDBBackendAdapter) Set(key, value []byte) error     { return d.db.Set(key, value) }

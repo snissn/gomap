@@ -178,6 +178,9 @@ func (l *LevelDBWrapper) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
+	if snap == nil {
+		return nil, errors.New("leveldb: GetSnapshot returned nil without error")
+	}
 	return &levelDBReadSnapshot{snap: snap}, nil
 }
 func (l *LevelDBWrapper) GetMany(keys [][]byte) ([][]byte, error) {

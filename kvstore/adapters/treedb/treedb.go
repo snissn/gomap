@@ -53,7 +53,11 @@ func (d *DB) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
 	if d == nil || d.DB == nil {
 		return nil, kvstore.ErrUnsupported
 	}
-	return d.DB.AcquireSnapshot(), nil
+	snap := d.DB.AcquireSnapshot()
+	if snap == nil {
+		return nil, kvstore.ErrUnsupported
+	}
+	return snap, nil
 }
 
 func (d *DB) GetUnsafe(key []byte) ([]byte, error) {
