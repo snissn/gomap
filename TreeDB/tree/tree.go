@@ -34,23 +34,33 @@ type SlabReader interface {
 }
 
 type Tree struct {
-	pager      *pager.Pager
-	slabReader SlabReader
-	rootPageID uint64
+	pager        *pager.Pager
+	slabReader   SlabReader
+	slabAppender slabUnsafeAppender
+	rootPageID   uint64
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
-	return &Tree{
+	t := &Tree{
 		pager:      p,
 		slabReader: sr,
 		rootPageID: root,
 	}
+	if app, ok := sr.(slabUnsafeAppender); ok {
+		t.slabAppender = app
+	}
+	return t
 }
 
 // Reset re-initializes the tree with new parameters for reuse.
 func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	t.pager = p
 	t.slabReader = sr
+	if app, ok := sr.(slabUnsafeAppender); ok {
+		t.slabAppender = app
+	} else {
+		t.slabAppender = nil
+	}
 	t.rootPageID = root
 }
 
@@ -136,7 +146,7 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 	return node.LeafEntry{}, errors.New("tree too deep")
 }
 
-func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
+func (t *Tree) lookupLeafValueView(key []byte) ([]byte, page.ValuePtr, byte, error) {
 	currID := t.rootPageID
 	verifyAlways := false
 	if t.pager != nil {
@@ -146,13 +156,13 @@ func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 	for depth := 0; depth < 50; depth++ {
 		data, err := t.pager.Get(currID)
 		if err != nil {
-			return nil, err
+			return nil, page.ValuePtr{}, 0, err
 		}
 
 		n := node.NewNodeView(data)
 		if verifyAlways || !t.pager.IsVerified(currID) {
 			if !n.VerifyChecksum() {
-				return nil, fmt.Errorf("checksum mismatch on page %d", currID)
+				return nil, page.ValuePtr{}, 0, fmt.Errorf("checksum mismatch on page %d", currID)
 			}
 			if !verifyAlways {
 				t.pager.MarkVerified(currID)
@@ -163,59 +173,85 @@ func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 		case page.PageTypeInternal:
 			if depth == 0 {
 				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
-					return nil, err
+					return nil, page.ValuePtr{}, 0, err
 				} else if ok {
 					if len(low) > 0 && compareTreeKey(key, low) < 0 {
-						return nil, ErrKeyNotFound
+						return nil, page.ValuePtr{}, 0, ErrKeyNotFound
 					}
 					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
-						return nil, ErrKeyNotFound
+						return nil, page.ValuePtr{}, 0, ErrKeyNotFound
 					}
 				}
 			}
 			childID, _, err := n.SearchInternalChildID(key)
 			if err != nil {
-				return nil, err
+				return nil, page.ValuePtr{}, 0, err
 			}
 			currID = childID
 
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)
 			if err != nil {
-				return nil, err
+				return nil, page.ValuePtr{}, 0, err
 			}
 			if !found {
-				return nil, ErrKeyNotFound
+				return nil, page.ValuePtr{}, 0, ErrKeyNotFound
 			}
 
 			val, ptr, flags, err := n.GetLeafValueView(idx)
 			if err != nil {
-				return nil, err
+				return nil, page.ValuePtr{}, 0, err
 			}
-			if flags&node.FlagTombstone != 0 {
-				return nil, ErrKeyNotFound
-			}
-			if flags&node.FlagPointer != 0 {
-				out, err := t.slabReader.ReadUnsafe(ptr)
-				if err != nil {
-					return nil, err
-				}
-				return out, nil
-			}
-			return val, nil
+			return val, ptr, flags, nil
 
 		default:
-			return nil, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+			return nil, page.ValuePtr{}, 0, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
 		}
 	}
 
-	return nil, errors.New("tree too deep")
+	return nil, page.ValuePtr{}, 0, errors.New("tree too deep")
+}
+
+func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
+	val, ptr, flags, err := t.lookupLeafValueView(key)
+	if err != nil {
+		return nil, err
+	}
+	if flags&node.FlagTombstone != 0 {
+		return nil, ErrKeyNotFound
+	}
+	if flags&node.FlagPointer != 0 {
+		out, err := t.slabReader.ReadUnsafe(ptr)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+	return val, nil
 }
 
 func (t *Tree) Get(key []byte) ([]byte, error) {
-	val, err := t.GetUnsafe(key)
+	val, ptr, flags, err := t.lookupLeafValueView(key)
 	if err != nil {
 		return nil, err
+	}
+	if flags&node.FlagTombstone != 0 {
+		return nil, ErrKeyNotFound
+	}
+	if flags&node.FlagPointer != 0 {
+		if t.slabAppender != nil {
+			return t.slabAppender.ReadUnsafeAppend(ptr, nil)
+		}
+		out, err := t.slabReader.ReadUnsafe(ptr)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			return nil, nil
+		}
+		cpy := make([]byte, len(out))
+		copy(cpy, out)
+		return cpy, nil
 	}
 	if val == nil {
 		return nil, nil
