@@ -596,7 +596,7 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 
 	if count <= smallSearchThreshold {
 		last := -1
-		lastChildID := uint64(0)
+		lastPtr := -1
 		switch keySuffixLen {
 		case 1:
 			keyByte := keySuffix[0]
@@ -626,11 +626,7 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 				}
 				if cmp <= 0 {
 					last = i
-					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
-					if err != nil {
-						return 0, false, err
-					}
-					lastChildID = childID
+					lastPtr = ptr
 					continue
 				}
 				break
@@ -663,11 +659,7 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 				}
 				if cmp <= 0 {
 					last = i
-					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
-					if err != nil {
-						return 0, false, err
-					}
-					lastChildID = childID
+					lastPtr = ptr
 					continue
 				}
 				break
@@ -700,11 +692,7 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 				}
 				if cmp <= 0 {
 					last = i
-					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
-					if err != nil {
-						return 0, false, err
-					}
-					lastChildID = childID
+					lastPtr = ptr
 					continue
 				}
 				break
@@ -737,11 +725,7 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 				}
 				if cmp <= 0 {
 					last = i
-					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
-					if err != nil {
-						return 0, false, err
-					}
-					lastChildID = childID
+					lastPtr = ptr
 					continue
 				}
 				break
@@ -763,18 +747,15 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 				cmp := bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
 				if cmp <= 0 {
 					last = i
-					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
-					if err != nil {
-						return 0, false, err
-					}
-					lastChildID = childID
+					lastPtr = ptr
 					continue
 				}
 				break
 			}
 		}
 		if last >= 0 {
-			return lastChildID, true, nil
+			childID, err := n.internalBaseDeltaChildIDAtPtr(meta, lastPtr, deltaWidth, entryHeader)
+			return childID, true, err
 		}
 		childID, err := n.internalBaseDeltaChildIDAtIndex(meta, 0, deltaWidth, entryHeader)
 		return childID, false, err
