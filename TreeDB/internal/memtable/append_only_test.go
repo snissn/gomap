@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestAppendOnlyNextCapacityGrowthPolicy(t *testing.T) {
@@ -143,6 +144,33 @@ func TestAppendOnlyGetOnly8ByteKeysNoPanic(t *testing.T) {
 	}
 	if _, _, _, ok := m.GetEntry([]byte("another-miss")); ok {
 		t.Fatalf("expected GetEntry miss")
+	}
+}
+
+func TestAppendOnlyOrderedGetAndGetEntry(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k1"), []byte("v1"))
+	m.Set([]byte("k2"), []byte("v2"))
+	m.Set([]byte("k3"), []byte("v3"))
+	m.Delete([]byte("k4"))
+
+	if !m.ordered {
+		t.Fatalf("expected ordered table for strictly increasing inserts")
+	}
+
+	if v, del, ok := m.Get([]byte("k2")); !ok || del || string(v) != "v2" {
+		t.Fatalf("Get(k2)=(%q,%v,%v), want (v2,false,true)", string(v), del, ok)
+	}
+	if v, del, ok := m.Get([]byte("k4")); !ok || !del || v != nil {
+		t.Fatalf("Get(k4)=(%v,%v,%v), want (nil,true,true)", v, del, ok)
+	}
+	if v, del, ok := m.Get([]byte("k0")); ok || del || v != nil {
+		t.Fatalf("Get(k0)=(%v,%v,%v), want (nil,false,false)", v, del, ok)
+	}
+
+	v, ptr, flags, ok := m.GetEntry([]byte("k3"))
+	if !ok || string(v) != "v3" || flags&node.FlagTombstone != 0 || ptr != (page.ValuePtr{}) {
+		t.Fatalf("GetEntry(k3) unexpected result: v=%q ptr=%v flags=%d ok=%v", string(v), ptr, flags, ok)
 	}
 }
 
