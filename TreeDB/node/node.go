@@ -43,7 +43,7 @@ const (
 	nodeFlagMask         = leafNodeFlagMask | internalNodeFlagMask
 	pageTypeMask         = ^nodeFlagMask
 
-	leafPrefixRestartInterval = 16
+	leafPrefixRestartInterval = 8
 )
 
 func getUint16(b []byte) uint16 {
