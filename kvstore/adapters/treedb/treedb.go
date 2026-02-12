@@ -49,6 +49,17 @@ func (d *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	return vals, err
 }
 
+func (d *DB) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
+	if d == nil || d.DB == nil {
+		return nil, kvstore.ErrUnsupported
+	}
+	snap := d.DB.AcquireSnapshot()
+	if snap == nil {
+		return nil, kvstore.ErrUnsupported
+	}
+	return snap, nil
+}
+
 func (d *DB) GetUnsafe(key []byte) ([]byte, error) {
 	val, err := d.DB.GetUnsafe(key)
 	if errors.Is(err, treedb.ErrClosed) {
