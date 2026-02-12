@@ -20,11 +20,9 @@ import math
 import os
 import random
 import re
-import shutil
 import statistics
 import subprocess
 import sys
-import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +50,15 @@ def run(cmd: List[str], cwd: Path, capture: bool = False) -> subprocess.Complete
 def parse_metrics(text: str) -> Tuple[int, int]:
     rr = None
     rb = None
+
+    def parse_table_last_numeric(prefix: str, line: str) -> int | None:
+        if not line.startswith(prefix):
+            return None
+        nums = re.findall(r"[0-9][0-9,]*", line)
+        if not nums:
+            return None
+        return int(nums[-1].replace(",", ""))
+
     for raw in text.splitlines():
         line = raw.strip()
         m = RR_LINE.match(line)
@@ -62,6 +69,16 @@ def parse_metrics(text: str) -> Tuple[int, int]:
         if m:
             rb = int(m.group(1).replace(",", ""))
             continue
+        if rr is None and "(Batch)" not in line and "/ TreeDB" not in line:
+            parsed = parse_table_last_numeric("Random Read", line)
+            if parsed is not None:
+                rr = parsed
+                continue
+        if rb is None and "/ TreeDB" not in line:
+            parsed = parse_table_last_numeric("Random Read (Batch)", line)
+            if parsed is not None:
+                rb = parsed
+                continue
     if rr is None or rb is None:
         raise RuntimeError("failed to parse Random Read metrics from unified-bench output")
     return rr, rb
@@ -70,8 +87,10 @@ def parse_metrics(text: str) -> Tuple[int, int]:
 def middle3(values: List[int]) -> float:
     if len(values) < 5:
         raise ValueError("need at least 5 samples for middle-3")
-    s = sorted(values[:5])
-    return float(sum(s[1:4])) / 3.0
+    # Best-of-5 middle-3 estimator from the full sample set (higher is better).
+    best_five = sorted(values, reverse=True)[:5]
+    best_five.sort()
+    return float(sum(best_five[1:4])) / 3.0
 
 
 def bootstrap_ci95_effect_pct(base_vals: List[int], cand_vals: List[int], n_boot: int = 20000, seed: int = 1) -> Tuple[float, float]:
@@ -200,8 +219,8 @@ def cleanup_worktrees(args: argparse.Namespace, out_dir: Path) -> None:
         if wt.exists():
             try:
                 run(["git", "worktree", "remove", "--force", str(wt)], cwd=args.repo)
-            except Exception:
-                pass
+            except Exception as exc:
+                print(f"Warning: failed to remove worktree {wt}: {exc}", file=sys.stderr)
 
 
 def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
@@ -386,7 +405,16 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--microbench", action="append", default=[])
     ap.add_argument("--microbench-count", type=int, default=20)
     ap.add_argument("--microbench-gomaxprocs", type=int, default=1)
-    return ap.parse_args()
+    args = ap.parse_args()
+    if args.initial_rounds <= 0:
+        raise SystemExit("--initial-rounds must be > 0")
+    if args.step_rounds <= 0:
+        raise SystemExit("--step-rounds must be > 0")
+    if args.max_rounds <= 0:
+        raise SystemExit("--max-rounds must be > 0")
+    if args.initial_rounds > args.max_rounds:
+        raise SystemExit("--initial-rounds must be <= --max-rounds")
+    return args
 
 
 def main() -> int:
@@ -437,8 +465,13 @@ def main() -> int:
 
             while True:
                 add_n = args.initial_rounds if len(base_runs) == 0 else args.step_rounds
+                remaining = args.max_rounds - len(base_runs)
+                if remaining <= 0:
+                    break
+                add_n = min(add_n, remaining)
+                start_turn = len(base_runs)
                 for i in range(add_n):
-                    turn = len(base_runs) + i
+                    turn = start_turn + i
                     order = ("base", "cand") if (turn % 2 == 0) else ("cand", "base")
                     for side in order:
                         side_idx = len(base_runs) + 1 if side == "base" else len(cand_runs) + 1
