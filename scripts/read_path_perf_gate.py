@@ -74,13 +74,22 @@ def parse_table_last_numeric(prefix: str, line: str) -> int | None:
         value = int(value_str.replace(",", ""))
         return value if value > 0 else None
 
-    # Pipe table-style row: parse trailing cell after trimming pipes.
-    cells = [part.strip() for part in plain.strip("|").split("|") if part.strip()]
+    # Pipe table-style row: parse the last non-empty cell (last cell may be empty due
+    # trailing pipe in markdown table format).
+    cells = [part.strip() for part in plain.strip("|").split("|")]
+    suffix = ""
+    for part in reversed(cells):
+        part = part.strip()
+        if part:
+            suffix = part
+            break
+    if not suffix:
+        return None
+
     if not cells:
         return None
     if not cells[0].startswith(prefix):
         return None
-    suffix = cells[-1]
 
     m = re.search(r"([0-9][0-9,]*)\s*$", suffix)
     if not m:
