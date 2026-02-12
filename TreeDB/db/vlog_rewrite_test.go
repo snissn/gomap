@@ -360,3 +360,90 @@ func TestValueLogRewrite_BatchedPointerSwap_SnapshotIsolation(t *testing.T) {
 		t.Fatalf("old segment %d still visible in current state after rewrite", oldID)
 	}
 }
+
+func TestValueLogRewrite_LocalityPolicy_PreservesGroupedAdjacency(t *testing.T) {
+	candidates := []rewriteCandidate{
+		{key: []byte("k3"), oldPtr: page.ValuePtr{FileID: 2, Offset: 400, Length: 1}},
+		{key: []byte("k1"), oldPtr: page.ValuePtr{FileID: 1, Offset: 100, Length: 1}},
+		{key: []byte("k2"), oldPtr: page.ValuePtr{FileID: 1, Offset: 120, Length: 1}},
+		{key: []byte("k4"), oldPtr: page.ValuePtr{FileID: 2, Offset: 430, Length: 1}},
+		{key: []byte("k0"), oldPtr: page.ValuePtr{FileID: 1, Offset: 80, Length: 1}},
+	}
+
+	orderRewriteCandidates(candidates, ValueLogRewriteLocalityGrouped)
+	for i := 1; i < len(candidates); i++ {
+		prev := candidates[i-1].oldPtr
+		cur := candidates[i].oldPtr
+		if prev.FileID > cur.FileID {
+			t.Fatalf("file id order regressed at %d: prev=%d cur=%d", i, prev.FileID, cur.FileID)
+		}
+		if prev.FileID == cur.FileID && prev.Offset > cur.Offset {
+			t.Fatalf("offset order regressed at %d: prev=%d cur=%d", i, prev.Offset, cur.Offset)
+		}
+	}
+}
+
+func TestValueLogRewrite_LocalityPolicy_NoWorseThanDefaultOnMixedSets(t *testing.T) {
+	candidates := []rewriteCandidate{
+		{key: []byte("a"), oldPtr: page.ValuePtr{FileID: 2, Offset: 1000, Length: 1}},
+		{key: []byte("b"), oldPtr: page.ValuePtr{FileID: 1, Offset: 10, Length: 1}},
+		{key: []byte("c"), oldPtr: page.ValuePtr{FileID: 2, Offset: 1040, Length: 1}},
+		{key: []byte("d"), oldPtr: page.ValuePtr{FileID: 1, Offset: 30, Length: 1}},
+		{key: []byte("e"), oldPtr: page.ValuePtr{FileID: 3, Offset: 7, Length: 1}},
+		{key: []byte("f"), oldPtr: page.ValuePtr{FileID: 2, Offset: 1080, Length: 1}},
+	}
+
+	defaultOrdered := append([]rewriteCandidate(nil), candidates...)
+	groupedOrdered := append([]rewriteCandidate(nil), candidates...)
+	orderRewriteCandidates(defaultOrdered, ValueLogRewriteLocalityDefault)
+	orderRewriteCandidates(groupedOrdered, ValueLogRewriteLocalityGrouped)
+
+	defaultCost := rewriteLocalityTransitionCost(defaultOrdered)
+	groupedCost := rewriteLocalityTransitionCost(groupedOrdered)
+	if groupedCost > defaultCost {
+		t.Fatalf("grouped locality cost regressed: grouped=%d default=%d", groupedCost, defaultCost)
+	}
+}
+
+func TestValueLogRewrite_LocalityPolicy_DeterministicOrderingFixture(t *testing.T) {
+	input := []rewriteCandidate{
+		{key: []byte("k5"), oldPtr: page.ValuePtr{FileID: 2, Offset: 200, Length: 1}},
+		{key: []byte("k2"), oldPtr: page.ValuePtr{FileID: 1, Offset: 30, Length: 1}},
+		{key: []byte("k3"), oldPtr: page.ValuePtr{FileID: 1, Offset: 30, Length: 1}},
+		{key: []byte("k1"), oldPtr: page.ValuePtr{FileID: 1, Offset: 10, Length: 1}},
+	}
+	orderRewriteCandidates(input, ValueLogRewriteLocalityGrouped)
+
+	got := make([]string, 0, len(input))
+	for _, c := range input {
+		got = append(got, string(c.key))
+	}
+	want := []string{"k1", "k2", "k3", "k5"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("deterministic grouped order mismatch: got=%v want=%v", got, want)
+	}
+}
+
+func rewriteLocalityTransitionCost(candidates []rewriteCandidate) int {
+	if len(candidates) <= 1 {
+		return 0
+	}
+	cost := 0
+	for i := 1; i < len(candidates); i++ {
+		prev := candidates[i-1].oldPtr
+		cur := candidates[i].oldPtr
+		if prev.FileID != cur.FileID {
+			cost += 10
+			continue
+		}
+		if cur.Offset < prev.Offset {
+			cost += 5
+			continue
+		}
+		delta := cur.Offset - prev.Offset
+		if delta > 256 {
+			cost++
+		}
+	}
+	return cost
+}

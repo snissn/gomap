@@ -126,6 +126,57 @@ func TestLeafColumnarPrefixPacked_PointerDensityWithinTolerance(t *testing.T) {
 	}
 }
 
+func TestLeafAdaptiveEncoding_DensityFixture_HighPrefixInline(t *testing.T) {
+	base := BuilderOptions{LeafPrefixCompression: true, LeafColumnar: true}
+	keys := makeBenchKeys(128, 16)
+	entries := make([]LeafHeuristicEntry, 0, len(keys))
+	for i := range keys {
+		entries = append(entries, LeafHeuristicEntry{Key: keys[i], Flags: FlagInline})
+	}
+
+	adaptive := AdaptiveLeafBuilderOptions(base, entries)
+	if adaptive.LeafColumnar {
+		t.Fatalf("expected high-prefix inline fixture to disable columnar mode")
+	}
+	if !adaptive.LeafPrefixCompression {
+		t.Fatalf("expected high-prefix inline fixture to keep prefix compression")
+	}
+
+	adaptiveDensity := leafKeysPerPage(t, adaptive, 16, FlagInline, 128)
+	columnarPrefixDensity := leafKeysPerPage(t, base, 16, FlagInline, 128)
+	if adaptiveDensity < columnarPrefixDensity {
+		t.Fatalf("expected adaptive high-prefix inline density to be >= fixed columnar+prefix; adaptive=%d fixed=%d", adaptiveDensity, columnarPrefixDensity)
+	}
+}
+
+func TestLeafAdaptiveEncoding_DensityFixture_PointerLowPrefix(t *testing.T) {
+	base := BuilderOptions{LeafPrefixCompression: true, LeafColumnar: true}
+	keys := makeBenchKeys(128, 1)
+	entries := make([]LeafHeuristicEntry, 0, len(keys))
+	for i := range keys {
+		flags := byte(FlagPointer)
+		if i%8 == 0 {
+			flags = FlagInline
+		}
+		entries = append(entries, LeafHeuristicEntry{Key: keys[i], Flags: flags})
+	}
+
+	adaptive := AdaptiveLeafBuilderOptions(base, entries)
+	if !adaptive.LeafColumnar {
+		t.Fatalf("expected low-prefix pointer fixture to keep columnar mode")
+	}
+	if adaptive.LeafPrefixCompression {
+		t.Fatalf("expected low-prefix pointer fixture to disable prefix compression")
+	}
+
+	adaptiveDensity := leafKeysPerPage(t, adaptive, 1, FlagPointer, 0)
+	columnarPrefixDensity := leafKeysPerPage(t, base, 1, FlagPointer, 0)
+	min := columnarPrefixDensity - columnarPrefixDensity/20 // allow up to 5% drop
+	if adaptiveDensity < min {
+		t.Fatalf("expected adaptive low-prefix pointer density within 5%% of fixed columnar+prefix; adaptive=%d fixed=%d min=%d", adaptiveDensity, columnarPrefixDensity, min)
+	}
+}
+
 func BenchmarkLeafPageDensity(b *testing.B) {
 	type variant struct {
 		name              string

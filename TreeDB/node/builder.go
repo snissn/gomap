@@ -1,7 +1,9 @@
 package node
 
 import (
+	"bytes"
 	"encoding/binary"
+	"sort"
 	"sync"
 	"unsafe"
 
@@ -135,6 +137,104 @@ type BuilderOptions struct {
 	LeafColumnar          bool
 	InternalBaseDelta     bool
 	PackedValuePtr        bool
+}
+
+// LeafHeuristicEntry describes one logical leaf entry for adaptive encoding
+// selection.
+type LeafHeuristicEntry struct {
+	Key   []byte
+	Flags byte
+}
+
+// AdaptiveLeafBuilderOptions chooses per-page leaf encoding flags from a base
+// capability set using a deterministic lightweight heuristic.
+//
+// Heuristic goals:
+// - prefer columnar for pointer-heavy pages,
+// - prefer prefix compression for high shared-prefix key runs,
+// - avoid extra metadata overhead on short, low-prefix, pointer-dense pages.
+func AdaptiveLeafBuilderOptions(base BuilderOptions, entries []LeafHeuristicEntry) BuilderOptions {
+	if len(entries) == 0 {
+		return base
+	}
+	ordered := entries
+	if !leafHeuristicEntriesSorted(entries) {
+		ordered = append(make([]LeafHeuristicEntry, 0, len(entries)), entries...)
+		sort.Slice(ordered, func(i, j int) bool {
+			cmp := bytes.Compare(ordered[i].Key, ordered[j].Key)
+			if cmp != 0 {
+				return cmp < 0
+			}
+			return ordered[i].Flags < ordered[j].Flags
+		})
+	}
+
+	putCount := 0
+	pointerCount := 0
+	deleteCount := 0
+	prefixPairs := 0
+	prefixBytes := 0
+	var prevKey []byte
+
+	for i := range ordered {
+		e := ordered[i]
+		if prevKey != nil {
+			prefixPairs++
+			prefixBytes += sharedPrefixLen(prevKey, e.Key)
+		}
+		prevKey = e.Key
+
+		if e.Flags&FlagTombstone != 0 {
+			deleteCount++
+			continue
+		}
+		putCount++
+		if e.Flags&FlagPointer != 0 {
+			pointerCount++
+		}
+	}
+
+	if putCount == 0 {
+		return base
+	}
+	pointerRatio := float64(pointerCount) / float64(putCount)
+	deleteRatio := float64(deleteCount) / float64(len(ordered))
+	avgPrefix := 0.0
+	if prefixPairs > 0 {
+		avgPrefix = float64(prefixBytes) / float64(prefixPairs)
+	}
+
+	out := base
+	if out.LeafColumnar {
+		if pointerRatio < 0.20 {
+			out.LeafColumnar = false
+		}
+		if avgPrefix >= 6.0 && pointerRatio < 0.35 {
+			out.LeafColumnar = false
+		}
+		if deleteRatio > 0.35 && pointerRatio < 0.40 {
+			out.LeafColumnar = false
+		}
+	}
+	if out.LeafPrefixCompression {
+		if avgPrefix < 1.5 && pointerRatio > 0.75 {
+			out.LeafPrefixCompression = false
+		}
+		if avgPrefix < 1.0 && deleteRatio > 0.40 {
+			out.LeafPrefixCompression = false
+		}
+	}
+	return out
+}
+
+func leafHeuristicEntriesSorted(entries []LeafHeuristicEntry) bool {
+	for i := 1; i < len(entries); i++ {
+		cmp := bytes.Compare(entries[i-1].Key, entries[i].Key)
+		if cmp > 0 || (cmp == 0 && entries[i-1].Flags > entries[i].Flags) {
+			return false
+		}
+	}
+	return true
 }
 
 type leafColumnarV2Entry struct {

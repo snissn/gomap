@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -38,6 +40,9 @@ type ValueLogRewriteOnlineOptions struct {
 	// MaxSegmentBytes bounds new value-log segment size during rewrite.
 	// <=0 uses a default.
 	MaxSegmentBytes int64
+	// LocalityPolicy controls ordering of rewritten pointer candidates within
+	// each batch.
+	LocalityPolicy ValueLogRewriteLocalityPolicy
 }
 
 type rewriteSwap struct {
@@ -46,6 +51,21 @@ type rewriteSwap struct {
 	newPtr page.ValuePtr
 }
 
+type rewriteCandidate struct {
+	key    []byte
+	oldPtr page.ValuePtr
+}
+
+// ValueLogRewriteLocalityPolicy controls pointer rewrite ordering.
+type ValueLogRewriteLocalityPolicy string
+
+const (
+	// ValueLogRewriteLocalityDefault preserves scan/input order.
+	ValueLogRewriteLocalityDefault ValueLogRewriteLocalityPolicy = "default"
+	// ValueLogRewriteLocalityGrouped orders by old segment+offset locality.
+	ValueLogRewriteLocalityGrouped ValueLogRewriteLocalityPolicy = "grouped"
+)
+
 const defaultValueLogRewriteBatchSize = 256
 
 func normalizeValueLogRewriteBatchSize(n int) int {
@@ -53,6 +73,38 @@ func normalizeValueLogRewriteBatchSize(n int) int {
 		return defaultValueLogRewriteBatchSize
 	}
 	return n
+}
+
+func normalizeValueLogRewriteLocalityPolicy(policy ValueLogRewriteLocalityPolicy) ValueLogRewriteLocalityPolicy {
+	switch policy {
+	case ValueLogRewriteLocalityGrouped:
+		return ValueLogRewriteLocalityGrouped
+	default:
+		return ValueLogRewriteLocalityDefault
+	}
+}
+
+func orderRewriteCandidates(candidates []rewriteCandidate, policy ValueLogRewriteLocalityPolicy) {
+	if len(candidates) <= 1 {
+		return
+	}
+	if policy != ValueLogRewriteLocalityGrouped {
+		return
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.oldPtr.FileID != b.oldPtr.FileID {
+			return a.oldPtr.FileID < b.oldPtr.FileID
+		}
+		if a.oldPtr.Offset != b.oldPtr.Offset {
+			return a.oldPtr.Offset < b.oldPtr.Offset
+		}
+		if a.oldPtr.Length != b.oldPtr.Length {
+			return a.oldPtr.Length < b.oldPtr.Length
+		}
+		return bytes.Compare(a.key, b.key) < 0
+	})
 }
 
 // ValueLogRewriteOnline rewrites pointer-backed values in bounded commit
@@ -105,12 +157,39 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
 	swaps := make([]rewriteSwap, 0, batchSize)
+	localityPolicy := normalizeValueLogRewriteLocalityPolicy(opts.LocalityPolicy)
+	candidates := make([]rewriteCandidate, 0, batchSize)
 	ridExhausted := false
 	var canceledErr error
 
 	flushBatch := func() error {
-		if len(swaps) == 0 {
+		if len(candidates) == 0 {
 			return nil
+		}
+		orderRewriteCandidates(candidates, localityPolicy)
+		swaps = swaps[:0]
+		for _, candidate := range candidates {
+			if ridExhausted {
+				return fmt.Errorf("value-log rid space exhausted")
+			}
+			val, err := db.valueLogManager.Read(candidate.oldPtr)
+			if err != nil {
+				return err
+			}
+			newPtr, err := writer.appendValue(nextRID, val)
+			if err != nil {
+				return err
+			}
+			nextRID++
+			if nextRID == 0 {
+				ridExhausted = true
+			}
+			stats.RecordsCopied++
+			swaps = append(swaps, rewriteSwap{
+				key:    candidate.key,
+				oldPtr: candidate.oldPtr,
+				newPtr: newPtr,
+			})
 		}
 		if opts.SyncEachBatch {
 			if err := writer.Sync(); err != nil {
@@ -124,7 +203,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
 			return err
 		}
-		swaps = swaps[:0]
+		candidates = candidates[:0]
 		return nil
 	}
 
@@ -145,35 +224,12 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
 			continue
 		}
-		if ridExhausted {
-			_ = it.Close()
-			_ = snap.Close()
-			return stats, fmt.Errorf("value-log rid space exhausted")
-		}
-		val, err := db.valueLogManager.Read(oldPtr)
-		if err != nil {
-			_ = it.Close()
-			_ = snap.Close()
-			return stats, err
-		}
-		newPtr, err := writer.appendValue(nextRID, val)
-		if err != nil {
-			_ = it.Close()
-			_ = snap.Close()
-			return stats, err
-		}
-		nextRID++
-		if nextRID == 0 {
-			ridExhausted = true
-		}
-		stats.RecordsCopied++
 		key := append([]byte(nil), it.UnsafeKey()...)
-		swaps = append(swaps, rewriteSwap{
+		candidates = append(candidates, rewriteCandidate{
 			key:    key,
 			oldPtr: oldPtr,
-			newPtr: newPtr,
 		})
-		if len(swaps) >= batchSize {
+		if len(candidates) >= batchSize {
 			if err := flushBatch(); err != nil {
 				_ = it.Close()
 				_ = snap.Close()

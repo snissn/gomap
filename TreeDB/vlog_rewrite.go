@@ -18,6 +18,14 @@ type ValueLogRewriteStats struct {
 // ValueLogRewriteOnlineOptions controls online rewrite batching behavior.
 type ValueLogRewriteOnlineOptions = treedbdb.ValueLogRewriteOnlineOptions
 
+// ValueLogRewriteLocalityPolicy controls pointer rewrite ordering.
+type ValueLogRewriteLocalityPolicy = treedbdb.ValueLogRewriteLocalityPolicy
+
+const (
+	ValueLogRewriteLocalityDefault = treedbdb.ValueLogRewriteLocalityDefault
+	ValueLogRewriteLocalityGrouped = treedbdb.ValueLogRewriteLocalityGrouped
+)
+
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and swaps
 // index.db to reference the new log. This is an offline operation that requires
 // an exclusive lock and a clean commitlog.
