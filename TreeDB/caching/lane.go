@@ -14,6 +14,7 @@ type lane struct {
 	wal            commitWriter
 	walPath        string
 	walSeq         int
+	walSeqAtomic   atomic.Int64
 	walMu          sync.Mutex
 	walCh          chan walWriteRequest
 	walFastMu      sync.Mutex
@@ -28,6 +29,7 @@ type lane struct {
 	vlog                    valueWriter
 	vlogPath                string
 	vlogSeq                 int
+	vlogSeqAtomic           atomic.Int64
 	vlogRetainedPath        string
 	vlogModeWriter          valueWriter
 	vlogModeSet             bool

@@ -425,6 +425,7 @@ func installBenchWriter(db *DB, clock *valuelog.VirtualClock) (*benchValueWriter
 	l.vlog = bw
 	l.vlogPath = "bench://vlog"
 	l.vlogSeq = 1
+	l.vlogSeqAtomic.Store(1)
 	l.vlogMu.Unlock()
 	return bw, ioSink, nil
 }

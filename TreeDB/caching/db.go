@@ -616,15 +616,9 @@ func (db *DB) currentValueLogSeq(l *lane) int {
 		return 0
 	}
 	if db.splitValueLogEnabled() {
-		l.vlogMu.Lock()
-		seq := l.vlogSeq
-		l.vlogMu.Unlock()
-		return seq
+		return int(l.vlogSeqAtomic.Load())
 	}
-	l.walMu.Lock()
-	seq := l.walSeq
-	l.walMu.Unlock()
-	return seq
+	return int(l.walSeqAtomic.Load())
 }
 
 func (db *DB) currentWALPaths() []string {
@@ -1109,6 +1103,9 @@ func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
 	l := &db.lanes[laneID]
 	currentSeq := db.currentValueLogSeq(l)
 	if currentSeq == int(seq) {
+		if db.splitValueLogEnabled() && !l.vlogDirty.Load() {
+			return nil
+		}
 		return db.flushValueLogLane(l)
 	}
 	return nil
@@ -2905,6 +2902,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes[i].id = i
 		lanes[i].walSeq = maxWALSeq[i]
 		lanes[i].vlogSeq = maxVlogSeq[i]
+		lanes[i].walSeqAtomic.Store(int64(maxWALSeq[i]))
+		lanes[i].vlogSeqAtomic.Store(int64(maxVlogSeq[i]))
 		lanes[i].vlogCompressionSelector = newVlogCompressionSelectorWithSeed(
 			valueLogAutoPolicy,
 			uint64(valueLogIncompressibleHold),
@@ -8785,6 +8784,7 @@ func (db *DB) rotateWALLockedWithOptions(l *lane, rotateValueLog bool) error {
 	l.walMu.Lock()
 	defer l.walMu.Unlock()
 	l.walSeq++
+	l.walSeqAtomic.Store(int64(l.walSeq))
 	name := commitLogName(l.id, l.walSeq)
 	path := filepath.Join(db.dir, name)
 
@@ -8835,6 +8835,7 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 
 func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	l.vlogSeq++
+	l.vlogSeqAtomic.Store(int64(l.vlogSeq))
 	name := valueLogName(l.id, l.vlogSeq)
 	path := filepath.Join(db.dir, name)
 	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
