@@ -572,14 +572,19 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	cacheableRaw := false
 	f.cacheMu.Lock()
-	if f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
+	// One-shot reads (dst=nil) are typically point gets. Avoid caching decoded
+	// grouped frames there and decode into pooled scratch to cut allocation
+	// pressure in random-read heavy paths.
+	if dst != nil && f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
 		cacheableRaw = true
 	}
 	f.cacheMu.Unlock()
 
-	raw := make([]byte, 0, int(rawLen))
+	var raw []byte
 	pooledRaw := false
-	if !cacheableRaw {
+	if cacheableRaw {
+		raw = make([]byte, 0, int(rawLen))
+	} else {
 		raw = f.takeDecodeScratch(int(rawLen))
 		pooledRaw = true
 	}
