@@ -20,14 +20,17 @@ func (db *DB) NewBatch() batch.Interface {
 }
 
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
-	threshold := db.policy.InlineThreshold
-	if db.adaptive != nil {
-		threshold = db.adaptive.GetThreshold()
-	}
+	threshold := db.InlineThreshold()
+	domains := db.valueLogDomainThresholds
 	if size < 0 {
 		size = 0
 	}
 	internal := batch.New(db.valueLogManager, threshold)
+	if threshold > 0 {
+		internal.SetInlineThresholdResolver(func(key []byte) int {
+			return ResolveInlineThresholdForKey(threshold, key, domains)
+		})
+	}
 	internal.Reserve(size)
 	return &Batch{
 		db:    db,
@@ -100,7 +103,7 @@ func (b *Batch) write(sync bool) error {
 }
 
 func (b *Batch) writeOptimistic(sync bool) (bool, error) {
-	refreshValueLogSet := b.batch.HasValueLogPointers()
+	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
 	b.db.writeMu.RLock()
 	idx := b.db.idx.Load()
@@ -155,7 +158,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, refreshValueLogSet, vlogRefDelta)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, false, vlogRefDelta)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -170,7 +173,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 }
 
 func (b *Batch) writeSerialized(sync bool) error {
-	refreshValueLogSet := b.batch.HasValueLogPointers()
+	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
 	b.db.writeMu.Lock()
 	defer b.db.writeMu.Unlock()
@@ -207,7 +210,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, refreshValueLogSet, vlogRefDelta); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, false, vlogRefDelta); err != nil {
 		return err
 	}
 	if b.db.vacuum.Active() {

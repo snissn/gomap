@@ -202,6 +202,25 @@ func TestCommitLogCorruptCRC(t *testing.T) {
 	_ = reader.Close()
 }
 
+func TestCommitLogAppendBatchRejectsMixedSequence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+
+	err = writer.AppendBatch([]Record{
+		{Op: OpSetInline, Key: []byte("k1"), Value: []byte("v1"), Seq: 1},
+		{Op: OpSetInline, Key: []byte("k2"), Value: []byte("v2"), Seq: 2},
+	})
+	if !errors.Is(err, ErrMixedBatchSeq) {
+		t.Fatalf("expected ErrMixedBatchSeq, got %v", err)
+	}
+}
+
 func TestCommitLogTruncatedPayload(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "commit.log")

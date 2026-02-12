@@ -53,6 +53,21 @@ For each write batch, implementation conceptually performs:
 
 Journal and value-log writes are decoupled resources with separate rotation/sync paths.
 
+### 3.1 Commit Fence Metadata (WAL + Value Log)
+
+For commit-log batches that carry sequence numbers (`Record.Seq > 0`), the
+sequence acts as a durable commit fence:
+
+- all records in a batch share one commit sequence (enforced by commit-log
+  batch writer and validated during recovery replay),
+- RID-backed records in that batch are only published during recovery when all
+  referenced RIDs are present in the scanned value-log set,
+- if any RID is missing (for example, partial/torn value-log flush), the whole
+  fenced batch is skipped.
+
+This prevents replaying partial pointer commits and avoids phantom pointer
+visibility after crash recovery.
+
 ## 4. Backend Commit Model
 
 Backend applies flushed operations through copy-on-write zipper merge.

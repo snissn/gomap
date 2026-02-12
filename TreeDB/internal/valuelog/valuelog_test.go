@@ -344,6 +344,313 @@ func TestValueLogManager_MmapReadAppendCompressedGroupedCache(t *testing.T) {
 	}
 }
 
+func appendCompressedFrameForCacheTests(t *testing.T, writer *Writer, frame int, n int) ([]page.ValuePtr, [][]byte) {
+	t.Helper()
+	records := make([]Record, n)
+	want := make([][]byte, n)
+	for i := 0; i < n; i++ {
+		v := make([]byte, 384)
+		copy(v, []byte(fmt.Sprintf("frame-%02d-record-%02d:", frame, i)))
+		for j := 48; j < len(v); j++ {
+			v[j] = byte('a' + frame)
+		}
+		records[i] = Record{RID: uint64(frame*100 + i + 1), Value: v}
+		want[i] = append([]byte(nil), v...)
+	}
+	dst := make([]page.ValuePtr, len(records))
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, records, dst)
+	if err != nil {
+		t.Fatalf("append frame %d: %v", frame, err)
+	}
+	if !stats.Kept {
+		t.Fatalf("expected block-compressed frame %d to be kept", frame)
+	}
+	return ptrs, want
+}
+
+func TestValueLogManager_GroupedFrameCache_HitAndEvict(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	ptrs0, want0 := appendCompressedFrameForCacheTests(t, writer, 0, 4)
+	ptrs1, want1 := appendCompressedFrameForCacheTests(t, writer, 1, 4)
+	ptrs2, want2 := appendCompressedFrameForCacheTests(t, writer, 2, 4)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetDisableReadChecksum(true)
+	m.SetGroupedFrameCacheEntries(2)
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+
+	readAndCheck := func(ptr page.ValuePtr, want []byte) {
+		got, err := m.ReadUnsafe(ptr)
+		if err != nil {
+			t.Fatalf("read unsafe: %v", err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("value mismatch: got=%q want=%q", got, want)
+		}
+	}
+
+	readAndCheck(ptrs0[0], want0[0]) // miss frame0
+	readAndCheck(ptrs0[1], want0[1]) // hit frame0
+	readAndCheck(ptrs1[0], want1[0]) // miss frame1
+	readAndCheck(ptrs2[0], want2[0]) // miss frame2, evicts one frame
+
+	hitsBefore, missesBefore, _, _ := f.groupedFrameCacheStats()
+	readAndCheck(ptrs0[2], want0[2]) // expected miss if frame0 was evicted
+	hitsAfter, missesAfter, entries, capacity := f.groupedFrameCacheStats()
+
+	if capacity != 2 {
+		t.Fatalf("cache capacity=%d want=2", capacity)
+	}
+	if entries > 2 {
+		t.Fatalf("cache entries=%d exceed capacity", entries)
+	}
+	if hitsBefore == 0 {
+		t.Fatalf("expected at least one cache hit before eviction check")
+	}
+	if missesAfter != missesBefore+1 {
+		t.Fatalf("expected frame0 reread to miss after eviction: misses before=%d after=%d (hits before=%d after=%d)", missesBefore, missesAfter, hitsBefore, hitsAfter)
+	}
+}
+
+func TestValueLogManager_GroupedFrameCache_ChecksumModeIsolation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	ptrs, want := appendCompressedFrameForCacheTests(t, writer, 0, 4)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetGroupedFrameCacheEntries(4)
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+
+	readAndCheck := func(ptr page.ValuePtr, expected []byte) {
+		got, err := m.ReadUnsafe(ptr)
+		if err != nil {
+			t.Fatalf("read unsafe: %v", err)
+		}
+		if !bytes.Equal(got, expected) {
+			t.Fatalf("value mismatch: got=%q want=%q", got, expected)
+		}
+	}
+
+	m.SetDisableReadChecksum(true) // verifyCRC=false
+	readAndCheck(ptrs[0], want[0]) // miss(false)
+	_, misses1, _, _ := f.groupedFrameCacheStats()
+
+	m.SetDisableReadChecksum(false) // verifyCRC=true
+	readAndCheck(ptrs[0], want[0])  // miss(true) due to mode isolation
+	hits2, misses2, _, _ := f.groupedFrameCacheStats()
+	if misses2 != misses1+1 {
+		t.Fatalf("expected checksum-mode switch to miss: before=%d after=%d", misses1, misses2)
+	}
+
+	readAndCheck(ptrs[1], want[1]) // hit(true)
+	hits3, misses3, entries, _ := f.groupedFrameCacheStats()
+	if hits3 != hits2+1 {
+		t.Fatalf("expected verify-on second read to hit: hits before=%d after=%d", hits2, hits3)
+	}
+	if misses3 != misses2 {
+		t.Fatalf("unexpected miss increase: before=%d after=%d", misses2, misses3)
+	}
+
+	m.SetDisableReadChecksum(true) // verifyCRC=false
+	readAndCheck(ptrs[2], want[2]) // hit(false)
+	hits4, _, _, _ := f.groupedFrameCacheStats()
+	if hits4 != hits3+1 {
+		t.Fatalf("expected verify-off second read to hit: hits before=%d after=%d", hits3, hits4)
+	}
+	if entries < 2 {
+		t.Fatalf("expected separate cache entries for checksum modes, got entries=%d", entries)
+	}
+}
+
+func TestValueLogManager_GroupedFrameCache_DisabledConfigParity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	ptrs, want := appendCompressedFrameForCacheTests(t, writer, 0, 5)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	readAll := func(m *Manager) [][]byte {
+		got := make([][]byte, 0, len(ptrs)*2)
+		for round := 0; round < 2; round++ {
+			for i, ptr := range ptrs {
+				v, err := m.ReadUnsafe(ptr)
+				if err != nil {
+					t.Fatalf("read unsafe round=%d idx=%d: %v", round, i, err)
+				}
+				if !bytes.Equal(v, want[i]) {
+					t.Fatalf("value mismatch round=%d idx=%d", round, i)
+				}
+				got = append(got, append([]byte(nil), v...))
+			}
+		}
+		return got
+	}
+
+	mDisabled, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager (disabled): %v", err)
+	}
+	mDisabled.SetDisableReadChecksum(true)
+	mDisabled.SetGroupedFrameCacheEntries(0)
+	fDisabled := mDisabled.files[fileID]
+	fDisabled.remapToFileSize()
+	gotDisabled := readAll(mDisabled)
+	hitsDisabled, _, entriesDisabled, capDisabled := fDisabled.groupedFrameCacheStats()
+	if hitsDisabled != 0 {
+		t.Fatalf("expected disabled cache to produce zero hits, got=%d", hitsDisabled)
+	}
+	if entriesDisabled != 0 || capDisabled != 0 {
+		t.Fatalf("expected disabled cache to have no entries/capacity, entries=%d capacity=%d", entriesDisabled, capDisabled)
+	}
+	_ = mDisabled.Close()
+
+	mEnabled, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager (enabled): %v", err)
+	}
+	defer func() { _ = mEnabled.Close() }()
+	mEnabled.SetDisableReadChecksum(true)
+	mEnabled.SetGroupedFrameCacheEntries(4)
+	fEnabled := mEnabled.files[fileID]
+	fEnabled.remapToFileSize()
+	gotEnabled := readAll(mEnabled)
+	hitsEnabled, _, _, _ := fEnabled.groupedFrameCacheStats()
+	if hitsEnabled == 0 {
+		t.Fatalf("expected enabled cache to produce hits")
+	}
+
+	if len(gotDisabled) != len(gotEnabled) {
+		t.Fatalf("result length mismatch disabled=%d enabled=%d", len(gotDisabled), len(gotEnabled))
+	}
+	for i := range gotDisabled {
+		if !bytes.Equal(gotDisabled[i], gotEnabled[i]) {
+			t.Fatalf("disabled/enabled parity mismatch at %d", i)
+		}
+	}
+}
+
+func TestValueLogManager_GroupedFrameCache_MaxRawBytesSkipsOversize(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	ptrs, want := appendCompressedFrameForCacheTests(t, writer, 0, 4)
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	defer func() { _ = m.Close() }()
+	m.SetDisableReadChecksum(true)
+	m.SetGroupedFrameCacheEntries(4)
+	m.SetGroupedFrameCacheMaxRawBytes(8)
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+
+	for i := 0; i < 2; i++ {
+		got, err := m.ReadUnsafe(ptrs[0])
+		if err != nil {
+			t.Fatalf("read unsafe #%d: %v", i+1, err)
+		}
+		if !bytes.Equal(got, want[0]) {
+			t.Fatalf("value mismatch #%d", i+1)
+		}
+	}
+
+	hits, misses, entries, capacity := f.groupedFrameCacheStats()
+	if capacity != 4 {
+		t.Fatalf("cache capacity=%d want=4", capacity)
+	}
+	if entries != 0 {
+		t.Fatalf("expected no cached entries when frame exceeds max raw bytes, got=%d", entries)
+	}
+	if hits != 0 {
+		t.Fatalf("expected zero cache hits for oversized frame, got=%d", hits)
+	}
+	if misses < 2 {
+		t.Fatalf("expected misses on both reads for oversized frame, got=%d", misses)
+	}
+}
+
 func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")

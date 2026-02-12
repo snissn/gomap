@@ -435,6 +435,143 @@ func TestRecovery_RIDJoinReplaysValueLog(t *testing.T) {
 	}
 }
 
+func TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("valuelog.NewWriter: %v", err)
+	}
+	if _, err := vw.Append(0, nil, 1, []byte("v1")); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Append: %v", err)
+	}
+	if err := vw.Sync(); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Sync: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("valuelog.Close: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	cw, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	if err := cw.AppendBatch([]commitlog.Record{
+		{Op: commitlog.OpSetRID, Key: []byte("k1"), RID: 1, Seq: 1},
+	}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch seq1: %v", err)
+	}
+	if err := cw.AppendBatch([]commitlog.Record{
+		{Op: commitlog.OpSetRID, Key: []byte("k2"), RID: 2, Seq: 2},
+	}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch seq2: %v", err)
+	}
+	if err := cw.Sync(); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	got, err := db.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get k1: %v", err)
+	}
+	if string(got) != "v1" {
+		t.Fatalf("get k1: got %q want %q", string(got), "v1")
+	}
+	got, err = db.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("get k2: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected k2 to be absent because seq2 fence is unsatisfied, got %q", string(got))
+	}
+}
+
+func TestRecovery_PartialFlushFence_NoPhantomPointers(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("valuelog.NewWriter: %v", err)
+	}
+	if _, err := vw.Append(0, nil, 1, []byte("v1")); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Append: %v", err)
+	}
+	if err := vw.Sync(); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Sync: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("valuelog.Close: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	cw, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	if err := cw.AppendBatch([]commitlog.Record{
+		{Op: commitlog.OpSetRID, Key: []byte("k-good"), RID: 1, Seq: 1},
+		{Op: commitlog.OpSetRID, Key: []byte("k-missing"), RID: 2, Seq: 1},
+	}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := cw.Sync(); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	got, err := db.Get([]byte("k-good"))
+	if err != nil {
+		t.Fatalf("get k-good: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected k-good to be absent when mixed RID batch fence is unsatisfied, got %q", string(got))
+	}
+	got, err = db.Get([]byte("k-missing"))
+	if err != nil {
+		t.Fatalf("get k-missing: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected k-missing to be absent, got %q", string(got))
+	}
+}
+
 func TestRecovery_MultiLaneOrdering(t *testing.T) {
 	dir := t.TempDir()
 
