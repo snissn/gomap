@@ -2185,11 +2185,61 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			})
 			baseSeed := testSeed(cfg.SeedUsed, "random_read_parallel_acquire_snapshot")
 
-			runWorker := func(workerRng *rand.Rand, stop *atomic.Bool) error {
-				var k [8]byte
-				buf := make([]byte, 0, cfg.ValueSize)
-				useSnapshot := hasSnapshotter
+			var runSnapshotWorker func(workerRng *rand.Rand, stop *atomic.Bool) error
+			if hasAppendGetter {
+				runSnapshotWorker = func(workerRng *rand.Rand, stop *atomic.Bool) error {
+					var k [8]byte
+					buf := make([]byte, 0, cfg.ValueSize)
+					for i := 0; i < cfg.Keys; i++ {
+						if stop != nil && stop.Load() {
+							return nil
+						}
+						if i&8191 == 0 {
+							if err := guard.Checkpoint(); err != nil {
+								return err
+							}
+						}
+						encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
 
+						snap, snapErr := snapshotter.AcquireReadSnapshot()
+						if snapErr != nil {
+							return snapErr
+						}
+						buf, _ = snap.GetAppend(k[:], buf[:0])
+						if err := snap.Close(); err != nil {
+							return fmt.Errorf("random_read_parallel_acquire_snapshot close: %w", err)
+						}
+					}
+					return nil
+				}
+			} else {
+				runSnapshotWorker = func(workerRng *rand.Rand, stop *atomic.Bool) error {
+					var k [8]byte
+					for i := 0; i < cfg.Keys; i++ {
+						if stop != nil && stop.Load() {
+							return nil
+						}
+						if i&8191 == 0 {
+							if err := guard.Checkpoint(); err != nil {
+								return err
+							}
+						}
+						encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
+
+						snap, snapErr := snapshotter.AcquireReadSnapshot()
+						if snapErr != nil {
+							return snapErr
+						}
+						_, _ = snap.Get(k[:])
+						if err := snap.Close(); err != nil {
+							return fmt.Errorf("random_read_parallel_acquire_snapshot close: %w", err)
+						}
+					}
+					return nil
+				}
+			}
+			runNoAppendWorker := func(workerRng *rand.Rand, stop *atomic.Bool) error {
+				var k [8]byte
 				for i := 0; i < cfg.Keys; i++ {
 					if stop != nil && stop.Load() {
 						return nil
@@ -2199,32 +2249,33 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 							return err
 						}
 					}
-
 					encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
-
-					if useSnapshot {
-						snap, snapErr := snapshotter.AcquireReadSnapshot()
-						if snapErr != nil {
-							if !errors.Is(snapErr, kvstore.ErrUnsupported) {
-								return snapErr
-							}
-							useSnapshot = false
-						} else {
-							buf, _ = snap.GetAppend(k[:], buf[:0])
-							if err := snap.Close(); err != nil {
-								return fmt.Errorf("random_read_parallel_acquire_snapshot close: %w", err)
-							}
-							continue
-						}
-					}
-
-					if hasAppendGetter {
-						buf, _ = appendGetter.GetAppend(k[:], buf[:0])
-					} else {
-						_, _ = db.Get(k[:])
-					}
+					_, _ = db.Get(k[:])
 				}
 				return nil
+			}
+			runNoSnapshotWorkerAppend := func(workerRng *rand.Rand, stop *atomic.Bool) error {
+				var k [8]byte
+				buf := make([]byte, 0, cfg.ValueSize)
+				for i := 0; i < cfg.Keys; i++ {
+					if stop != nil && stop.Load() {
+						return nil
+					}
+					if i&8191 == 0 {
+						if err := guard.Checkpoint(); err != nil {
+							return err
+						}
+					}
+					encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
+					buf, _ = appendGetter.GetAppend(k[:], buf[:0])
+				}
+				return nil
+			}
+			runWorker := runNoAppendWorker
+			if hasSnapshotter {
+				runWorker = runSnapshotWorker
+			} else if hasAppendGetter {
+				runWorker = runNoSnapshotWorkerAppend
 			}
 
 			start := time.Now()
