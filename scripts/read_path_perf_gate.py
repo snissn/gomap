@@ -41,16 +41,26 @@ class RunPoint:
     log_path: str
 
 
-def run(cmd: List[str], cwd: Path, capture: bool = False) -> subprocess.CompletedProcess:
+def run(
+    cmd: List[str],
+    cwd: Path,
+    capture: bool = False,
+    env: Dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     try:
         if capture:
+            kwargs = {
+                "text": True,
+                "stdout": subprocess.PIPE,
+                "stderr": subprocess.STDOUT,
+            }
+            if env is not None:
+                kwargs["env"] = env
             return subprocess.run(
                 cmd,
                 cwd=str(cwd),
                 check=True,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
+                **kwargs,
             )
         return subprocess.run(cmd, cwd=str(cwd), check=True)
     except subprocess.CalledProcessError as exc:
@@ -60,13 +70,26 @@ def run(cmd: List[str], cwd: Path, capture: bool = False) -> subprocess.Complete
         raise
 
 
+def ensure_ref(args: argparse.Namespace, ref: str) -> None:
+    try:
+        run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=args.repo, capture=True)
+        return
+    except subprocess.CalledProcessError:
+        print(f"warning: reference '{ref}' not present locally; fetching remotes", file=sys.stderr)
+
+    run(["git", "fetch", "--all", "--prune"], cwd=args.repo)
+    run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=args.repo, capture=True)
+
+
 def parse_table_last_numeric(prefix: str, line: str) -> int | None:
     if not (line.startswith(prefix) or line.startswith("| " + prefix) or line.startswith("|" + prefix)):
         return None
 
-    # Plain text line (legacy format): take trailing number.
+    # Plain text line: take trailing number.
     plain = line.strip()
     if "|" not in plain:
+        if not plain.startswith(prefix):
+            return None
         m = re.search(r"([0-9][0-9,]*)\s*$", plain)
         if not m:
             return None
@@ -141,6 +164,68 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
             rb = int(m.group(1).replace(",", ""))
             continue
 
+        # Fixed-width markdown tables in unified-bench output use repeated spaces.
+        if "|" not in line:
+            if line.startswith("```"):
+                continue
+            cols = [part.strip() for part in re.split(r"\s{2,}", raw.rstrip()) if part.strip()]
+            if not cols:
+                continue
+
+            if cols[0].strip().lower() == "test" and len(cols) >= 2:
+                lower_cols = [c.lower() for c in cols]
+                for db in normalized_dbs:
+                    db_lower = db.lower()
+                    if db_lower in lower_cols:
+                        tree_col_idx = lower_cols.index(db_lower)
+                        break
+                if "treedb" in lower_cols:
+                    tree_col_idx = lower_cols.index("treedb")
+                continue
+
+            metric = cols[0].strip()
+            if metric == "Random Read" and rr is None and len(cols) >= 2:
+                if tree_db_present:
+                    if tree_col_idx is None:
+                        if len(normalized_dbs) > 1:
+                            continue
+                        idx = len(cols) - 1
+                    else:
+                        idx = tree_col_idx
+                    parsed = parse_table_cell_int(cols[idx]) if idx < len(cols) else None
+                else:
+                    parsed = parse_table_cell_int(cols[-1])
+                if parsed is not None:
+                    rr = parsed
+                    continue
+
+            if metric == "Random Read (Batch)" and rb is None and len(cols) >= 2:
+                if tree_db_present:
+                    if tree_col_idx is None:
+                        if len(normalized_dbs) > 1:
+                            continue
+                        idx = len(cols) - 1
+                    else:
+                        idx = tree_col_idx
+                    parsed = parse_table_cell_int(cols[idx]) if idx < len(cols) else None
+                else:
+                    parsed = parse_table_cell_int(cols[-1])
+                if parsed is not None:
+                    rb = parsed
+                    continue
+
+            if rr is None and metric == "Random Read":
+                parsed = parse_table_last_numeric("Random Read", line)
+                if parsed is not None:
+                    rr = parsed
+                    continue
+            if rb is None and metric == "Random Read (Batch)":
+                parsed = parse_table_last_numeric("Random Read (Batch)", line)
+                if parsed is not None:
+                    rb = parsed
+                    continue
+            continue
+
         if "|" in line:
             row = [part.strip() for part in line.strip("|").split("|") if part.strip()]
             if not row:
@@ -182,15 +267,15 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
                 if parsed is not None:
                     rb = parsed
 
-        if "|" not in line and rr is None and re.fullmatch(r"Random Read", line.strip()) is not None:
-            parsed = parse_table_last_numeric("Random Read", line)
-            if parsed is not None:
-                rr = parsed
-                continue
-        if "|" not in line and rb is None and re.fullmatch(r"Random Read \(Batch\)", line.strip()) is not None:
-            parsed = parse_table_last_numeric("Random Read (Batch)", line)
-            if parsed is not None:
-                rb = parsed
+            if rr is None and re.fullmatch(r"Random Read", line.strip()) is not None:
+                parsed = parse_table_last_numeric("Random Read", line)
+                if parsed is not None:
+                    rr = parsed
+                    continue
+            if rb is None and re.fullmatch(r"Random Read \(Batch\)", line.strip()) is not None:
+                parsed = parse_table_last_numeric("Random Read (Batch)", line)
+                if parsed is not None:
+                    rb = parsed
                 continue
 
     if rr is None or rb is None:
@@ -300,7 +385,7 @@ def run_unified_once(
     ]
     t0 = time.time()
     p = run(cmd, cwd=args.repo, capture=True)
-    rr, rb = parse_metrics(p.stdout)
+    rr, rb = parse_metrics(p.stdout, args.dbs)
     log_file.write_text(p.stdout)
     return RunPoint(rr=rr, rb=rb, secs=time.time() - t0, log_path=str(log_file))
 
@@ -310,6 +395,8 @@ def build_binaries(args: argparse.Namespace, out_dir: Path) -> Tuple[Path, Path,
     wt_root.mkdir(parents=True, exist_ok=True)
     # Recover from stale worktrees left behind by an interrupted earlier run.
     cleanup_worktrees(args, out_dir)
+    ensure_ref(args, args.baseline_ref)
+    ensure_ref(args, args.candidate_ref)
     baseline_wt = wt_root / "baseline"
     candidate_wt = wt_root / "candidate"
 
@@ -396,7 +483,7 @@ def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -
     ]
     p = run(cmd, cwd=args.repo, capture=True)
     out_file.write_text(p.stdout)
-    rr_treedb, rb_treedb = parse_metrics(p.stdout)
+    rr_treedb, rb_treedb = parse_metrics(p.stdout, "leveldb,treedb")
 
     return {
         "random_read_treedb": rr_treedb,
@@ -436,20 +523,13 @@ def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Dict[str,
     env = os.environ.copy()
     env["GOMAXPROCS"] = str(args.microbench_gomaxprocs)
 
-    p1 = subprocess.run(cmd, cwd=str(baseline_wt), check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    p1 = run(cmd, cwd=baseline_wt, capture=True, env=env)
     base_txt.write_text(p1.stdout)
-    p2 = subprocess.run(cmd, cwd=str(candidate_wt), check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env)
+    p2 = run(cmd, cwd=candidate_wt, capture=True, env=env)
     cand_txt.write_text(p2.stdout)
 
     try:
-        p3 = subprocess.run(
-            ["benchstat", str(base_txt), str(cand_txt)],
-            cwd=str(args.repo),
-            check=True,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        p3 = run(["benchstat", str(base_txt), str(cand_txt)], cwd=args.repo, capture=True)
     except FileNotFoundError:
         print(
             "Error: 'benchstat' command not found. Install it with: go install golang.org/x/perf/cmd/benchstat@latest",
