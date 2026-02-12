@@ -409,7 +409,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 			return nil, ErrCorrupt, true
 		}
 
-		if f.cacheStart.Load() == start {
+		if dst == nil && f.cacheStart.Load() == start {
 			f.cacheMu.Lock()
 			hit := f.cacheStart.Load() == start && f.cacheK > 0 && f.cacheLen > 0 && subIndex < f.cacheK && f.cacheFlags&FrameFlagCompressed == 0
 			if hit {
@@ -475,14 +475,16 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 			return nil, ErrCorrupt, true
 		}
 
-		f.cacheMu.Lock()
-		f.cacheK = k
-		f.cacheFlags = fFlags
-		f.cacheLen = prefixLen
-		f.cacheOffs = offsets
-		f.setCacheRawLocked(nil, false)
-		f.cacheStart.Store(start)
-		f.cacheMu.Unlock()
+		if dst == nil {
+			f.cacheMu.Lock()
+			f.cacheK = k
+			f.cacheFlags = fFlags
+			f.cacheLen = prefixLen
+			f.cacheOffs = offsets
+			f.setCacheRawLocked(nil, false)
+			f.cacheStart.Store(start)
+			f.cacheMu.Unlock()
+		}
 
 		n := int(valEnd - valStart)
 		oldLen := len(dst)
@@ -517,29 +519,31 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 
-	if cachedRaw, valStart, valEnd, rawLen, hit := f.groupedFrameCacheLookup(start, verifyCRC, subIndex); hit {
-		if uint32(len(cachedRaw)) != rawLen || valEnd < valStart || valEnd > rawLen {
-			return nil, ErrCorrupt, true
-		}
-		n := int(valEnd - valStart)
-		oldLen := len(dst)
-		dst = grow(dst, n)
-		copy(dst[oldLen:], cachedRaw[valStart:valEnd])
-		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-			payload := dst[oldLen:]
-			decodedStart := len(dst)
-			var err error
-			dst, err = templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-			}, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err, true
+	if dst == nil {
+		if cachedRaw, valStart, valEnd, rawLen, hit := f.groupedFrameCacheLookup(start, verifyCRC, subIndex); hit {
+			if uint32(len(cachedRaw)) != rawLen || valEnd < valStart || valEnd > rawLen {
+				return nil, ErrCorrupt, true
 			}
-			decodedLen := len(dst) - decodedStart
-			copy(dst[oldLen:], dst[decodedStart:])
-			dst = dst[:oldLen+decodedLen]
+			n := int(valEnd - valStart)
+			oldLen := len(dst)
+			dst = grow(dst, n)
+			copy(dst[oldLen:], cachedRaw[valStart:valEnd])
+			if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+				payload := dst[oldLen:]
+				decodedStart := len(dst)
+				var err error
+				dst, err = templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+					return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+				}, f.templateDecodeOpts)
+				if err != nil {
+					return nil, err, true
+				}
+				decodedLen := len(dst) - decodedStart
+				copy(dst[oldLen:], dst[decodedStart:])
+				dst = dst[:oldLen+decodedLen]
+			}
+			return dst, nil, true
 		}
-		return dst, nil, true
 	}
 	off := FrameHeaderSize + ridBytes
 	var offsets [MaxFrameK + 1]uint32
@@ -570,12 +574,46 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		Reserved: frameHeader[3],
 		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
 	}
+	if dst != nil {
+		// High-concurrency GetAppend path: decode directly into caller-owned dst
+		// capacity to avoid shared cache locks and scratch churn.
+		oldLen := len(dst)
+		dst = grow(dst, int(rawLen))
+		rawStart := oldLen
+		raw := dst[rawStart:rawStart]
+		raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
+		if err != nil {
+			return nil, err, true
+		}
+		if uint32(len(raw)) != rawLen {
+			return nil, ErrCorrupt, true
+		}
+		n := int(valEnd - valStart)
+		copy(dst[oldLen:oldLen+n], raw[valStart:valEnd])
+		dst = dst[:oldLen+n]
+		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
+			payload := dst[oldLen:]
+			decodedStart := len(dst)
+			dst, err = templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, err, true
+			}
+			decodedLen := len(dst) - decodedStart
+			copy(dst[oldLen:], dst[decodedStart:])
+			dst = dst[:oldLen+decodedLen]
+		}
+		return dst, nil, true
+	}
+
 	cacheableRaw := false
 	f.cacheMu.Lock()
-	// One-shot reads (dst=nil) are typically point gets. Avoid caching decoded
-	// grouped frames there and decode into pooled scratch to cut allocation
-	// pressure in random-read heavy paths.
-	if dst != nil && f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
+	// With a reusable destination buffer (GetAppend style), caching decoded raw
+	// grouped frames can create sustained allocation churn under random-key
+	// reads. Prefer pooled decode scratch in that path and reserve raw-frame
+	// caching for nil-dst callers.
+	if dst == nil && f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
 		cacheableRaw = true
 	}
 	f.cacheMu.Unlock()
