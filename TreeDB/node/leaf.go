@@ -1769,6 +1769,12 @@ func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, targ
 	}
 
 	prevKey := restartKey
+	const (
+		leafKeyBackingPage uint8 = iota
+		leafKeyBackingStack
+		leafKeyBackingHeap
+	)
+	prevBacking := leafKeyBackingPage
 	for idx := blockStart + 1; idx < blockEnd; idx++ {
 		prefixLen, suffix, err := leafColumnarPrefixV2KeyPartsAtFast(data, count, keysBlobBase, prefixStart, idx)
 		if err != nil {
@@ -1785,24 +1791,29 @@ func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, targ
 
 		if prefixLen == 0 {
 			prevKey = suffix
+			prevBacking = leafKeyBackingPage
 			continue
 		}
 
 		keyLen := prefixLen + len(suffix)
 		var cur []byte
+		curBacking := leafKeyBackingStack
 		if keyLen <= len(stackScratch) {
 			cur = stackScratch[:keyLen]
 		} else {
 			cur = n.ensureKeyScratch(keyLen)
+			curBacking = leafKeyBackingHeap
 		}
-		// If prevKey and cur share backing storage, the existing prefix bytes are
-		// already in place and we only need to overwrite the suffix below.
-		sameBacking := len(prevKey) > 0 && len(cur) > 0 && &prevKey[0] == &cur[0]
-		if !sameBacking && prefixLen > 0 {
+		needPrefixCopy := prevBacking != curBacking
+		if !needPrefixCopy && curBacking == leafKeyBackingHeap && len(prevKey) > 0 && len(cur) > 0 {
+			needPrefixCopy = &prevKey[0] != &cur[0]
+		}
+		if needPrefixCopy {
 			copy(cur, prevKey[:prefixLen])
 		}
 		copy(cur[prefixLen:], suffix)
 		prevKey = cur
+		prevBacking = curBacking
 	}
 
 	return blockEnd, false, nil
