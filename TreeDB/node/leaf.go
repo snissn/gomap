@@ -1683,39 +1683,33 @@ func leafColumnarPrefixV2KeyPartsAtFast(data []byte, count uint16, keysBlobBase 
 	return prefixLen, suffix, nil
 }
 
-func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, target []byte) (uint16, bool, error) {
+func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16, keysBlobBase int, prefixStart int, blockStart, blockEnd uint16, target []byte) (uint16, bool, error) {
 	if blockStart >= blockEnd {
 		return blockEnd, false, nil
 	}
-	if err := n.leafColumnarPrefixV2EnsureMeta(); err != nil {
-		return 0, false, err
-	}
-	data := n.data
-	count := n.Count()
-	keysBlobBase := n.leafColPrefixKeysBlobBase
-	prefixStart := n.leafColPrefixPrefixStart
 
 	var stackScratch [128]byte
 	restartKeyDirOff := NodeHeaderSize + int(blockStart)*2
-	if restartKeyDirOff+2 > len(data) {
+	keyDirNeeded := NodeHeaderSize + int(blockEnd)*2
+	if blockEnd < count {
+		keyDirNeeded += 2
+	}
+	if restartKeyDirOff < NodeHeaderSize || keyDirNeeded > len(data) {
+		return 0, false, ErrCorruptedNode
+	}
+	prefixDirNeeded := prefixStart + int(blockEnd)*2
+	if prefixStart < NodeHeaderSize || prefixDirNeeded > len(data) {
 		return 0, false, ErrCorruptedNode
 	}
 	restartStart := int(getUint16At(data, restartKeyDirOff))
 	restartEnd := len(data)
 	if blockStart+1 < count {
-		nextKeyOff := restartKeyDirOff + 2
-		if nextKeyOff+2 > len(data) {
-			return 0, false, ErrCorruptedNode
-		}
-		restartEnd = int(getUint16At(data, nextKeyOff))
+		restartEnd = int(getUint16At(data, restartKeyDirOff+2))
 	}
 	if restartStart < keysBlobBase || restartEnd < restartStart || restartEnd > len(data) {
 		return 0, false, ErrCorruptedNode
 	}
 	restartPrefixOff := prefixStart + int(blockStart)*2
-	if restartPrefixOff+2 > len(data) {
-		return 0, false, ErrCorruptedNode
-	}
 	if getUint16At(data, restartPrefixOff) != 0 {
 		return 0, false, ErrCorruptedNode
 	}
@@ -1736,16 +1730,10 @@ func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, targ
 		for idx := blockStart + 1; idx < blockEnd; idx++ {
 			curEnd := len(data)
 			if idx+1 < count {
-				if nextKeyDirOff+2 > len(data) {
-					return 0, false, ErrCorruptedNode
-				}
 				curEnd = int(getUint16At(data, nextKeyDirOff))
 				nextKeyDirOff += 2
 			}
 			if curStart < keysBlobBase || curEnd < curStart || curEnd > len(data) {
-				return 0, false, ErrCorruptedNode
-			}
-			if prefixOff+2 > len(data) {
 				return 0, false, ErrCorruptedNode
 			}
 			prefixLen := int(getUint16At(data, prefixOff))
@@ -1769,11 +1757,29 @@ func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, targ
 	}
 
 	prevKey := restartKey
+	curStart := restartEnd
+	nextKeyDirOff := restartKeyDirOff + 4
+	prefixOff := prefixStart + int(blockStart+1)*2
 	for idx := blockStart + 1; idx < blockEnd; idx++ {
-		prefixLen, suffix, err := leafColumnarPrefixV2KeyPartsAtFast(data, count, keysBlobBase, prefixStart, idx)
-		if err != nil {
-			return 0, false, err
+		curEnd := len(data)
+		if idx+1 < count {
+			if nextKeyDirOff+2 > len(data) {
+				return 0, false, ErrCorruptedNode
+			}
+			curEnd = int(getUint16At(data, nextKeyDirOff))
+			nextKeyDirOff += 2
 		}
+		if curStart < keysBlobBase || curEnd < curStart || curEnd > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
+		if prefixOff+2 > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
+		prefixLen := int(getUint16At(data, prefixOff))
+		prefixOff += 2
+		suffix := data[curStart:curEnd]
+		curStart = curEnd
+
 		if prefixLen > len(prevKey) {
 			return 0, false, ErrCorruptedNode
 		}
@@ -1809,18 +1815,27 @@ func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, targ
 }
 
 func (n *Node) searchLeafColumnarPrefixV2(key []byte) (uint16, bool, error) {
-	count := n.Count()
-	if count == 0 {
-		return 0, false, nil
-	}
 	if err := n.leafColumnarPrefixV2EnsureMeta(); err != nil {
 		return 0, false, err
 	}
+
 	data := n.data
+	count := n.Count()
 	keysBlobBase := n.leafColPrefixKeysBlobBase
 	prefixStart := n.leafColPrefixPrefixStart
+	if count == 0 {
+		return 0, false, nil
+	}
+	keyDirEnd := NodeHeaderSize + int(count)*2
+	if keyDirEnd > len(data) {
+		return 0, false, ErrCorruptedNode
+	}
+	prefixDirEnd := prefixStart + int(count)*2
+	if prefixStart < NodeHeaderSize || prefixDirEnd > len(data) {
+		return 0, false, ErrCorruptedNode
+	}
 	if count <= smallSearchThreshold {
-		return n.searchLeafColumnarPrefixV2Block(0, count, key)
+		return n.searchLeafColumnarPrefixV2BlockWithMeta(data, count, keysBlobBase, prefixStart, 0, count, key)
 	}
 
 	interval := leafPrefixRestartInterval
@@ -1838,13 +1853,20 @@ func (n *Node) searchLeafColumnarPrefixV2(key []byte) (uint16, bool, error) {
 			hi = mid
 			continue
 		}
-		restartPrefixLen, k, err := leafColumnarPrefixV2KeyPartsAtFast(data, count, keysBlobBase, prefixStart, idx)
-		if err != nil {
-			return 0, false, err
+		keyOff := NodeHeaderSize + int(idx)*2
+		keyStart := int(getUint16At(data, keyOff))
+		keyEnd := len(data)
+		if idx+1 < count {
+			keyEnd = int(getUint16At(data, keyOff+2))
 		}
+		if keyStart < keysBlobBase || keyEnd < keyStart || keyEnd > len(data) {
+			return 0, false, ErrCorruptedNode
+		}
+		restartPrefixLen := int(getUint16At(data, prefixStart+int(idx)*2))
 		if restartPrefixLen != 0 {
 			return 0, false, ErrCorruptedNode
 		}
+		k := data[keyStart:keyEnd]
 		if compareLeafKey(k, key) <= 0 {
 			lo = mid + 1
 		} else {
@@ -1862,7 +1884,22 @@ func (n *Node) searchLeafColumnarPrefixV2(key []byte) (uint16, bool, error) {
 		blockEnd = count
 	}
 
-	return n.searchLeafColumnarPrefixV2Block(blockStart, blockEnd, key)
+	return n.searchLeafColumnarPrefixV2BlockWithMeta(data, count, keysBlobBase, prefixStart, blockStart, blockEnd, key)
+}
+
+func (n *Node) searchLeafColumnarPrefixV2Block(blockStart, blockEnd uint16, target []byte) (uint16, bool, error) {
+	if err := n.leafColumnarPrefixV2EnsureMeta(); err != nil {
+		return 0, false, err
+	}
+	return n.searchLeafColumnarPrefixV2BlockWithMeta(
+		n.data,
+		n.Count(),
+		n.leafColPrefixKeysBlobBase,
+		n.leafColPrefixPrefixStart,
+		blockStart,
+		blockEnd,
+		target,
+	)
 }
 
 // AddLeafEntry inserts a new entry into the Leaf Node.
