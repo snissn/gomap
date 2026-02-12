@@ -56,6 +56,8 @@ type Batch struct {
 	entries         []Entry
 	byteSize        int
 	inlineThreshold int
+	thresholdForKey func([]byte) int
+	touchedValueLog map[uint32]struct{}
 	sorted          bool
 	lastKey         []byte
 	closed          bool
@@ -91,6 +93,15 @@ func Acquire(reader ValueReader, threshold int) *Batch {
 	return b
 }
 
+// SetInlineThresholdResolver installs an optional per-key threshold resolver
+// used by Set/SetView/SetOps inline-size checks.
+func (b *Batch) SetInlineThresholdResolver(resolver func([]byte) int) {
+	if b == nil {
+		return
+	}
+	b.thresholdForKey = resolver
+}
+
 func (b *Batch) ensureOpen() error {
 	if b.closed {
 		return ErrBatchClosed
@@ -110,6 +121,9 @@ func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
+	if len(b.touchedValueLog) > 0 {
+		clear(b.touchedValueLog)
+	}
 	b.byteSize = 0
 	b.sorted = true
 	b.lastKey = nil
@@ -125,6 +139,11 @@ func (b *Batch) resetForPool() {
 		}
 	}
 	b.byteSize = 0
+	if len(b.touchedValueLog) > 1024 {
+		b.touchedValueLog = nil
+	} else if len(b.touchedValueLog) > 0 {
+		clear(b.touchedValueLog)
+	}
 	b.sorted = true
 	b.lastKey = nil
 }
@@ -143,8 +162,22 @@ func Release(b *Batch) {
 	b.resetForPool()
 	b.reader = nil
 	b.inlineThreshold = 0
+	b.thresholdForKey = nil
 	b.closed = true
 	batchPool.Put(b)
+}
+
+func (b *Batch) inlineThresholdForKey(key []byte) int {
+	if b == nil {
+		return page.DefaultInlineThreshold
+	}
+	if b.thresholdForKey != nil {
+		if threshold := b.thresholdForKey(key); threshold >= 0 {
+			return threshold
+		}
+		return b.inlineThreshold
+	}
+	return b.inlineThreshold
 }
 
 func (b *Batch) noteKeyOrder(key []byte) {
@@ -186,7 +219,7 @@ func (b *Batch) SetView(key, value []byte) error {
 		Key:  key,
 	}
 
-	if len(value) > b.inlineThreshold {
+	if len(value) > b.inlineThresholdForKey(key) {
 		return ErrValueTooLarge
 	}
 	entry.Value = value
@@ -216,7 +249,7 @@ func (b *Batch) Set(key, value []byte) error {
 	}
 
 	// Check threshold
-	if len(value) > b.inlineThreshold {
+	if len(value) > b.inlineThresholdForKey(key) {
 		return ErrValueTooLarge
 	}
 	// Store inline
@@ -271,6 +304,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		IsPtr:    true,
 	}
 	b.entries = append(b.entries, entry)
+	b.noteTouchedValueLog(ptr)
 	b.noteKeyOrder(entry.Key)
 	return nil
 }
@@ -295,6 +329,7 @@ func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
 		ValuePtr: ptr,
 		IsPtr:    true,
 	})
+	b.noteTouchedValueLog(ptr)
 	b.noteKeyOrder(key)
 	return nil
 }
@@ -352,13 +387,16 @@ func (b *Batch) SetOps(ops []Entry) error {
 		if op.Type != OpPut || op.IsPtr {
 			continue
 		}
-		if len(op.Value) > b.inlineThreshold {
+		if len(op.Value) > b.inlineThresholdForKey(op.Key) {
 			return ErrValueTooLarge
 		}
 	}
 
 	// Just append them. Deduplication happens at Ops() time.
 	for _, op := range ops {
+		if op.IsPtr {
+			b.noteTouchedValueLog(op.ValuePtr)
+		}
 		b.noteKeyOrder(op.Key)
 		b.entries = append(b.entries, op)
 		b.byteSize += len(op.Key) + len(op.Value) // Value is nil for pointers.
@@ -418,11 +456,30 @@ func (b *Batch) HasValueLogPointers() bool {
 	if b == nil {
 		return false
 	}
-	for i := range b.entries {
-		e := b.entries[i]
-		if e.IsPtr && page.IsValueLogFileID(e.ValuePtr.FileID) {
-			return true
-		}
+	return len(b.touchedValueLog) > 0
+}
+
+// TouchedValueLogSegments reports the value-log segments that were touched by
+// pointer puts in this batch. The returned slice is sorted for deterministic
+// commit/publish behavior.
+func (b *Batch) TouchedValueLogSegments() []uint32 {
+	if b == nil || len(b.touchedValueLog) == 0 {
+		return nil
 	}
-	return false
+	out := make([]uint32, 0, len(b.touchedValueLog))
+	for id := range b.touchedValueLog {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
+func (b *Batch) noteTouchedValueLog(ptr page.ValuePtr) {
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return
+	}
+	if b.touchedValueLog == nil {
+		b.touchedValueLog = make(map[uint32]struct{}, 4)
+	}
+	b.touchedValueLog[ptr.FileID] = struct{}{}
 }

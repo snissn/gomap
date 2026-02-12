@@ -17,6 +17,7 @@ import (
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -183,6 +184,18 @@ func putValueLogPtrs(s []page.ValuePtr) {
 	}
 	clear(s)
 	// Avoid retaining huge slices in the pool.
+	if cap(s) > 1<<20 {
+		return
+	}
+	valueLogPtrPool.Put(s[:0])
+}
+
+func putValueLogPtrsNoClear(s []page.ValuePtr) {
+	if s == nil {
+		return
+	}
+	// page.ValuePtr contains no pointer fields, so we can safely skip element
+	// clearing in hot paths to reduce memclr overhead.
 	if cap(s) > 1<<20 {
 		return
 	}
@@ -469,6 +482,13 @@ func (db *DB) splitValueLogEnabled() bool {
 	return true
 }
 
+func (db *DB) valueLogThresholdForKey(key []byte) int {
+	if db == nil {
+		return page.DefaultInlineThreshold
+	}
+	return backenddb.ResolveInlineThresholdForKey(db.valueLogThreshold, key, db.valueLogDomainThresholds)
+}
+
 func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode) vlogCompressionWriteMode {
 	if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
 		return vlogWriteBlock
@@ -657,7 +677,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		if op.Type != batch.OpPut || op.IsPtr {
 			continue
 		}
-		if !db.forceValueLogPointers && len(op.Value) <= db.valueLogThreshold {
+		if !db.forceValueLogPointers && len(op.Value) <= db.valueLogThresholdForKey(op.Key) {
 			continue
 		}
 		eligible = append(eligible, i)
@@ -789,7 +809,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			return errors.New("cachingdb: flush missing value-log ptr for key")
 		}
 
-		if allowPointers && (db.forceValueLogPointers || len(val) > db.valueLogThreshold) {
+		if allowPointers && (db.forceValueLogPointers || len(val) > db.valueLogThresholdForKey(key)) {
 			if records == nil {
 				hint := memLen
 				if hint > db.flushBackendInitEntries {
@@ -1686,6 +1706,9 @@ type Options struct {
 	// default is smaller to avoid catastrophic update-heavy cliffs at large key
 	// counts by pushing moderate values into the value log.
 	ValueLogPointerThreshold int
+	// ValueLogDomainInlineThresholds configures optional per-domain overrides
+	// for inline-vs-pointer placement. Longest-prefix match wins.
+	ValueLogDomainInlineThresholds []backenddb.ValueLogDomainThreshold
 	// ValueLogRawWritevMinAvgBytes controls raw grouped-frame writev usage for
 	// the value log.
 	//
@@ -1854,6 +1877,7 @@ type DB struct {
 
 	inlineThreshold              int
 	valueLogThreshold            int
+	valueLogDomainThresholds     []backenddb.ValueLogDomainThreshold
 	forceValueLogPointers        bool
 	valueLogRawWritevMinAvgBytes int
 	valueLogRawWritevMinRecords  int
@@ -2467,6 +2491,25 @@ func (db *DB) applyAdaptiveMemtableModeLocked() memtable.Mode {
 	return desired
 }
 
+func validateValueLogDomainThresholds(domains []backenddb.ValueLogDomainThreshold) error {
+	seen := make(map[string]struct{}, len(domains))
+	for i := range domains {
+		d := domains[i]
+		if len(d.Prefix) == 0 {
+			return fmt.Errorf("cachingdb: value-log domain threshold[%d] has empty prefix", i)
+		}
+		if d.InlineThreshold < 0 {
+			return fmt.Errorf("cachingdb: value-log domain threshold[%d] has negative inline threshold %d", i, d.InlineThreshold)
+		}
+		key := string(d.Prefix)
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("cachingdb: duplicate value-log domain threshold prefix %q", d.Prefix)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
 func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if !opts.AllowUnsafe && (opts.DisableWAL || opts.RelaxedSync || opts.DisableReadChecksum) {
 		return nil, ErrUnsafeOptions
@@ -2586,6 +2629,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if flushBackendInitEntries < 1 {
 		flushBackendInitEntries = 1
 	}
+	if err := validateValueLogDomainThresholds(opts.ValueLogDomainInlineThresholds); err != nil {
+		return nil, err
+	}
 
 	// Ensure wal dir exists
 	walDir := filepath.Join(dir, "wal")
@@ -2637,6 +2683,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			valueLogThreshold = defaultRelaxedValueLogThreshold
 		}
 	}
+	valueLogDomainThresholds := backenddb.NormalizeValueLogDomainThresholds(opts.ValueLogDomainInlineThresholds)
 	valueLogMaxSegmentBytes := opts.ValueLogMaxSegmentBytes
 	if valueLogMaxSegmentBytes < 0 {
 		valueLogMaxSegmentBytes = 0
@@ -2899,6 +2946,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		notifyError:                          opts.NotifyError,
 		inlineThreshold:                      inlineThreshold,
 		valueLogThreshold:                    valueLogThreshold,
+		valueLogDomainThresholds:             valueLogDomainThresholds,
 		forceValueLogPointers:                opts.ForceValueLogPointers,
 		valueLogRawWritevMinAvgBytes:         valueLogRawWritevMinAvgBytes,
 		valueLogRawWritevMinRecords:          valueLogRawWritevMinRecords,
@@ -4491,7 +4539,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		sawDictID       bool
 		multipleDictIDs bool
 	)
-	records := getValueLogRecords(len(requests))
+	records := getValueLogRecordsCap(len(requests))
+	records = records[:len(requests)]
+	defer putValueLogRecordsNoClear(records)
 	for i := range requests {
 		req := &requests[i]
 		if !req.enqueuedAt.IsZero() {
@@ -4556,7 +4606,11 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		wallNs      int64
 	}
 	rawPaused := db.valueLogDictPauseRemaining.Load() > 0
-	plans := make([]vlogBatchPlan, 0, len(requests))
+	var planScratch [16]vlogBatchPlan
+	plans := planScratch[:0]
+	if len(requests) > len(planScratch) {
+		plans = make([]vlogBatchPlan, 0, len(requests))
+	}
 	for i := 0; i < len(requests); {
 		writeMode := requests[i].writeMode
 		blockCodec := normalizeSelectorBlockCodec(requests[i].blockCodec)
@@ -4695,7 +4749,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			putVlogPreparedFrames(plans[i].frames)
 			plans[i].frames = nil
 		}
-		putValueLogRecords(records)
 		for i := range requests {
 			ack := requests[i].ack
 			if ack == nil {
@@ -4738,7 +4791,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	w := l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
-		putValueLogRecords(records)
 		for i := range requests {
 			ack := requests[i].ack
 			if ack == nil {
@@ -4770,7 +4822,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
 		l.vlogMu.Unlock()
-		putValueLogRecords(records)
 		for i := range requests {
 			ack := requests[i].ack
 			if ack == nil {
@@ -4788,7 +4839,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	w = l.vlog
 	if w == nil {
 		l.vlogMu.Unlock()
-		putValueLogRecords(records)
 		for i := range requests {
 			ack := requests[i].ack
 			if ack == nil {
@@ -4811,7 +4861,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		if est > 0 && w.Size() > maxBytes-est {
 			if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
 				l.vlogMu.Unlock()
-				putValueLogRecords(records)
 				for i := range requests {
 					ack := requests[i].ack
 					if ack == nil {
@@ -4829,7 +4878,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			w = l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
-				putValueLogRecords(records)
 				for i := range requests {
 					ack := requests[i].ack
 					if ack == nil {
@@ -4870,7 +4918,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 	autoSelectorMode := normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto
 
-	ptrs = getValueLogPtrs(len(records))
+	ptrs = getValueLogPtrsCap(len(records))
+	ptrs = ptrs[:len(records)]
+	defer putValueLogPtrsNoClear(ptrs)
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
 	for pi := range plans {
@@ -5146,11 +5196,6 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		}
 	}
 
-	if ptrs != nil {
-		defer putValueLogPtrs(ptrs)
-	}
-	putValueLogRecords(records)
-
 	if err != nil {
 		for i := range requests {
 			ack := requests[i].ack
@@ -5332,7 +5377,8 @@ func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durab
 	if writeMode == vlogWriteBlock {
 		return false
 	}
-	// Force-pointer profiles intentionally run with actor-owned value-log appends.
+	// Force-pointer profiles prefer queue coalescing; appendValueLogOne still
+	// takes an uncontended direct fast path before enqueueing.
 	if db.forceValueLogPointers {
 		return true
 	}
@@ -6240,7 +6286,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	}
 
 	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
-		if dictID == 0 && !db.forceValueLogPointers && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
@@ -7614,7 +7660,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 			durability = journalDurabilitySync
 		}
 	}
-	eligible := db.forceValueLogPointers || len(value) > db.valueLogThreshold
+	eligible := db.forceValueLogPointers || len(value) > db.valueLogThresholdForKey(key)
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
 	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
@@ -11947,7 +11993,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if valueLogEnabled || debugPtr {
 		for i := range b.entries {
 			op := &b.entries[i]
-			if op.Type != batch.OpPut || (!b.db.forceValueLogPointers && len(op.Value) <= b.db.valueLogThreshold) {
+			if op.Type != batch.OpPut || (!b.db.forceValueLogPointers && len(op.Value) <= b.db.valueLogThresholdForKey(op.Key)) {
 				continue
 			}
 			eligibleIdxs = append(eligibleIdxs, i)

@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"bytes"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,29 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
+
+type countingValueReader struct {
+	inner *mapValueReader
+	reads int
+}
+
+func newCountingValueReader() *countingValueReader {
+	return &countingValueReader{inner: newMapValueReader()}
+}
+
+func (r *countingValueReader) Add(value []byte) page.ValuePtr {
+	return r.inner.Add(value)
+}
+
+func (r *countingValueReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	r.reads++
+	return r.inner.Read(ptr)
+}
+
+func (r *countingValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	r.reads++
+	return r.inner.ReadUnsafe(ptr)
+}
 
 func TestIterator(t *testing.T) {
 	dir := t.TempDir()
@@ -231,6 +255,146 @@ func TestIterator_PointerKeysOnly_DoesNotReadValues(t *testing.T) {
 	}
 	if len(keys) != 2 || keys[0] != "A" || keys[1] != "C" {
 		t.Fatalf("expected [A C], got %v", keys)
+	}
+}
+
+func TestIterator_KeysOnly_DoesNotResolveValuePointers(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1)
+	reader := newCountingValueReader()
+	ptrA := reader.Add([]byte("pointer-A"))
+	ptrC := reader.Add([]byte("pointer-C"))
+
+	d0, _ := p.Get(0)
+	n0 := node.NewNode(d0)
+	n0.SetPageID(0)
+	n0.SetType(page.PageTypeLeaf)
+	n0.AddLeafEntry([]byte("A"), nil, node.FlagPointer, ptrA)
+	n0.AddLeafEntry([]byte("B"), []byte("inline-B"), node.FlagInline, page.ValuePtr{})
+	n0.AddLeafEntry([]byte("C"), nil, node.FlagPointer, ptrC)
+	n0.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModeKeysOnly})
+	defer it.Close()
+
+	var keys []string
+	for ; it.Valid(); it.Next() {
+		keys = append(keys, string(it.Key()))
+		if got := it.Value(); got != nil {
+			t.Fatalf("keys-only iterator returned value for key %q", string(it.Key()))
+		}
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(keys) != 3 || keys[0] != "A" || keys[1] != "B" || keys[2] != "C" {
+		t.Fatalf("expected [A B C], got %v", keys)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("keys-only iterator performed %d pointer reads, want 0", reader.reads)
+	}
+}
+
+func TestIterator_ProjectionMode_PartialDecodeParity(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1)
+	reader := newCountingValueReader()
+	ptrA := reader.Add([]byte("pointer-A"))
+	ptrC := reader.Add([]byte("pointer-C"))
+
+	d0, _ := p.Get(0)
+	n0 := node.NewNode(d0)
+	n0.SetPageID(0)
+	n0.SetType(page.PageTypeLeaf)
+	n0.AddLeafEntry([]byte("A"), nil, node.FlagPointer, ptrA)
+	n0.AddLeafEntry([]byte("B"), []byte("inline-B"), node.FlagInline, page.ValuePtr{})
+	n0.AddLeafEntry([]byte("C"), nil, node.FlagPointer, ptrC)
+	n0.UpdateChecksum()
+
+	type row struct {
+		key   []byte
+		value []byte
+		ptr   page.ValuePtr
+		flags byte
+	}
+
+	tr := New(p, reader, 0)
+	proj := tr.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModePointerProjection})
+	projRows := make([]row, 0, 3)
+	for ; proj.Valid(); proj.Next() {
+		val, ptr, flags := proj.UnsafeEntry()
+		projRows = append(projRows, row{
+			key:   append([]byte(nil), proj.Key()...),
+			value: append([]byte(nil), val...),
+			ptr:   ptr,
+			flags: flags,
+		})
+	}
+	if err := proj.Error(); err != nil {
+		_ = proj.Close()
+		t.Fatalf("projection iterator error: %v", err)
+	}
+	_ = proj.Close()
+	if reader.reads != 0 {
+		t.Fatalf("projection iterator performed %d pointer reads, want 0", reader.reads)
+	}
+
+	full := tr.Iterator(nil, nil)
+	fullRows := make([]row, 0, 3)
+	for ; full.Valid(); full.Next() {
+		_, ptr, flags := full.UnsafeEntry()
+		val := full.Value()
+		fullRows = append(fullRows, row{
+			key:   append([]byte(nil), full.Key()...),
+			value: append([]byte(nil), val...),
+			ptr:   ptr,
+			flags: flags,
+		})
+	}
+	if err := full.Error(); err != nil {
+		_ = full.Close()
+		t.Fatalf("full iterator error: %v", err)
+	}
+	_ = full.Close()
+
+	if len(projRows) != len(fullRows) {
+		t.Fatalf("row count mismatch: projection=%d full=%d", len(projRows), len(fullRows))
+	}
+	for i := range fullRows {
+		if !bytes.Equal(projRows[i].key, fullRows[i].key) {
+			t.Fatalf("key mismatch at %d: projection=%q full=%q", i, projRows[i].key, fullRows[i].key)
+		}
+		if projRows[i].flags != fullRows[i].flags {
+			t.Fatalf("flags mismatch at %d: projection=%d full=%d", i, projRows[i].flags, fullRows[i].flags)
+		}
+		if fullRows[i].flags&node.FlagPointer != 0 {
+			if projRows[i].value != nil {
+				t.Fatalf("projection expected nil value for pointer key %q", projRows[i].key)
+			}
+			if projRows[i].ptr != fullRows[i].ptr {
+				t.Fatalf("pointer metadata mismatch for key %q", projRows[i].key)
+			}
+			continue
+		}
+		if !bytes.Equal(projRows[i].value, fullRows[i].value) {
+			t.Fatalf("inline projection mismatch for key %q", projRows[i].key)
+		}
+	}
+	if reader.reads == 0 {
+		t.Fatalf("full iterator expected to perform pointer reads")
 	}
 }
 

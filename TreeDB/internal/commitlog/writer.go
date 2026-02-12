@@ -236,10 +236,14 @@ func (w *Writer) AppendBatch(records []Record) error {
 	}
 
 	total := int64(batchHeaderSize)
+	batchSeq := records[0].Seq
 	for i := range records {
 		r := &records[i]
 		if err := validateRecord(r); err != nil {
 			return err
+		}
+		if r.Seq != batchSeq {
+			return ErrMixedBatchSeq
 		}
 		if len(r.Key) > int(^uint16(0)) {
 			return ErrRecordTooLarge
