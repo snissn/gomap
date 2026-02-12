@@ -3,6 +3,7 @@ package treedbadapter
 import (
 	"context"
 	"errors"
+	"sync"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
@@ -47,6 +48,78 @@ func (d *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		return make([][]byte, len(keys)), nil
 	}
 	return vals, err
+}
+
+// ReadBatch performs repeated point reads for benchmark-style batch workloads and
+// does not materialize/return result values.
+func (d *DB) ReadBatch(keys [][]byte) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	snap := d.DB.AcquireSnapshot()
+	defer func() { _ = snap.Close() }()
+	for _, key := range keys {
+		_, err := snap.GetUnsafe(key)
+		if err == nil || errors.Is(err, treedb.ErrKeyNotFound) {
+			continue
+		}
+		return err
+	}
+	return nil
+}
+
+// ReadBatchWithWorkers performs repeated point reads for benchmark-style batch
+// workloads in parallel. It retains a single snapshot for the entire call.
+func (d *DB) ReadBatchWithWorkers(keys [][]byte, workers int) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if workers <= 1 {
+		return d.ReadBatch(keys)
+	}
+	if workers > len(keys) {
+		workers = len(keys)
+	}
+	snap := d.DB.AcquireSnapshot()
+	defer func() { _ = snap.Close() }()
+
+	var (
+		wg  sync.WaitGroup
+		mu  sync.Mutex
+		err error
+	)
+	chunk := (len(keys) + workers - 1) / workers
+	if chunk < 1 {
+		chunk = 1
+	}
+	for w := 0; w < workers; w++ {
+		start := w * chunk
+		if start >= len(keys) {
+			break
+		}
+		end := start + chunk
+		if end > len(keys) {
+			end = len(keys)
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			for i := lo; i < hi; i++ {
+				if _, readErr := snap.GetUnsafe(keys[i]); readErr != nil && !errors.Is(readErr, treedb.ErrKeyNotFound) {
+					mu.Lock()
+					if err == nil {
+						err = readErr
+					}
+					mu.Unlock()
+					return
+				}
+			}
+		}(start, end)
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	return err
 }
 
 func (d *DB) GetUnsafe(key []byte) ([]byte, error) {

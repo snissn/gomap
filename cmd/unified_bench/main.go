@@ -43,6 +43,7 @@ var (
 	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
 	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
 	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
+	readWorkers        = flag.Int("read-workers", 1, "Number of goroutines for random read batch tests (default 1)")
 	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
@@ -100,11 +101,20 @@ type DBInstance struct {
 	Dir     string
 }
 
+type readBatchNoResult interface {
+	ReadBatch(keys [][]byte) error
+}
+
+type readBatchWithWorkers interface {
+	ReadBatchWithWorkers(keys [][]byte, workers int) error
+}
+
 type BenchConfig struct {
 	Keys          int
 	KeyShape      string
 	ValueSize     int
 	BatchSize     int
+	ReadWorkers   int
 	WriteWorkers  int
 	RangeQueries  int
 	RangeSpan     int
@@ -300,6 +310,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Profile:     (none/custom)\n")
 	}
 	fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d val_pattern=%s\n", *numKeys, *valSize, *batchSize, *valPattern)
+	if *readWorkers != 1 {
+		fmt.Fprintf(os.Stderr, "             read_workers=%d\n", *readWorkers)
+	}
 	fmt.Fprintf(os.Stderr, "             key_shape=%s\n", strings.TrimSpace(*keyShapeArg))
 	if *rangeQueries > 0 {
 		fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
@@ -317,6 +330,7 @@ func main() {
 		KeyShape:                         *keyShapeArg,
 		ValueSize:                        *valSize,
 		BatchSize:                        *batchSize,
+		ReadWorkers:                      *readWorkers,
 		WriteWorkers:                     *writeWorkers,
 		RangeQueries:                     *rangeQueries,
 		RangeSpan:                        *rangeSpan,
@@ -2050,14 +2064,27 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 		"random_read_batch": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
+			workers := cfg.ReadWorkers
+			if workers < 1 {
+				workers = 1
+			}
 			batchSize := cfg.BatchSize
 			if batchSize <= 0 {
 				batchSize = 1
 			}
+			rb, hasReadBatch := db.(readBatchNoResult)
+			rbw, hasReadBatchWorkers := db.(readBatchWithWorkers)
 			keys := make([][]byte, batchSize)
 			keyBuf := make([]byte, batchSize*8)
 			for i := 0; i < batchSize; i++ {
 				keys[i] = keyBuf[i*8 : (i+1)*8]
+			}
+			readPool := make([][]byte, cfg.Keys)
+			readKeyBuf := make([]byte, cfg.Keys*8)
+			for i := 0; i < cfg.Keys; i++ {
+				key := readKeyBuf[i*8 : (i+1)*8]
+				encodeKey(key, uint64(rng.Intn(cfg.Keys)))
+				readPool[i] = key
 			}
 			mg, hasMany := db.(kvstore.MultiGetter)
 			nextGuard := 0
@@ -2073,13 +2100,73 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					n = remaining
 				}
 				for j := 0; j < n; j++ {
-					encodeKey(keys[j], uint64(rng.Intn(cfg.Keys)))
+					keys[j] = readPool[i+j]
 				}
-				if hasMany {
-					_, _ = mg.GetMany(keys[:n])
-				} else {
-					for j := 0; j < n; j++ {
-						_, _ = db.Get(keys[j])
+				chunk := keys[:n]
+				chunkWorkers := workers
+				if chunkWorkers > n {
+					chunkWorkers = n
+				}
+				if hasReadBatchWorkers {
+					if err := rbw.ReadBatchWithWorkers(chunk, chunkWorkers); err != nil {
+						return 0, err
+					}
+					i += n
+					continue
+				}
+				if chunkWorkers <= 1 || (!hasReadBatch && !hasMany) {
+					if hasReadBatch {
+						if err := rb.ReadBatch(chunk); err != nil {
+							return 0, err
+						}
+					} else if hasMany {
+						_, _ = mg.GetMany(chunk)
+					} else {
+						for j := 0; j < n; j++ {
+							_, _ = db.Get(chunk[j])
+						}
+					}
+					i += n
+					continue
+				}
+				chunkSize := (n + chunkWorkers - 1) / chunkWorkers
+				if chunkSize < 1 {
+					chunkSize = 1
+				}
+				errCh := make(chan error, chunkWorkers)
+				var wg sync.WaitGroup
+				for w := 0; w < chunkWorkers; w++ {
+					start := w * chunkSize
+					if start >= n {
+						break
+					}
+					end := start + chunkSize
+					if end > n {
+						end = n
+					}
+					wg.Add(1)
+					go func(lo, hi int) {
+						defer wg.Done()
+						var err error
+						if hasReadBatch {
+							err = rb.ReadBatch(chunk[lo:hi])
+						} else if hasMany {
+							_, err = mg.GetMany(chunk[lo:hi])
+						} else {
+							for j := lo; j < hi; j++ {
+								_, _ = db.Get(chunk[j])
+							}
+						}
+						if err != nil {
+							errCh <- err
+						}
+					}(start, end)
+				}
+				wg.Wait()
+				close(errCh)
+				for err := range errCh {
+					if err != nil {
+						return 0, err
 					}
 				}
 				i += n
