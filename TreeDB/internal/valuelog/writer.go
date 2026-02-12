@@ -84,6 +84,23 @@ func (w *limitedSliceWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+func writeAllToFile(f *os.File, buf []byte) error {
+	written := 0
+	for written < len(buf) {
+		n, err := f.Write(buf[written:])
+		if n > 0 {
+			written += n
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errors.New("valuelog: short write")
+		}
+	}
+	return nil
+}
+
 func (w *Writer) flushAppendBuf() error {
 	if w == nil {
 		return errors.New("valuelog: nil writer")
@@ -96,18 +113,8 @@ func (w *Writer) flushAppendBuf() error {
 		w.appendBuf = w.appendBuf[:0]
 		return err
 	}
-	written := 0
-	for written < len(w.appendBuf) {
-		n, err := w.f.Write(w.appendBuf[written:])
-		if n > 0 {
-			written += n
-		}
-		if err != nil {
-			return err
-		}
-		if n == 0 {
-			return errors.New("valuelog: short write")
-		}
+	if err := writeAllToFile(w.f, w.appendBuf); err != nil {
+		return err
 	}
 	w.appendBuf = w.appendBuf[:0]
 	return nil
@@ -140,56 +147,17 @@ func (w *Writer) writeBytes(buf []byte) error {
 		if err := w.flushAppendBuf(); err != nil {
 			return err
 		}
-		written := 0
-		for written < len(buf) {
-			n, err := w.f.Write(buf[written:])
-			if n > 0 {
-				written += n
-			}
-			if err != nil {
-				return err
-			}
-			if n == 0 {
-				return errors.New("valuelog: short write")
-			}
-		}
-		return nil
+		return writeAllToFile(w.f, buf)
 	}
 	if len(w.appendBuf) == 0 && len(buf) >= directThreshold {
-		written := 0
-		for written < len(buf) {
-			n, err := w.f.Write(buf[written:])
-			if n > 0 {
-				written += n
-			}
-			if err != nil {
-				return err
-			}
-			if n == 0 {
-				return errors.New("valuelog: short write")
-			}
-		}
-		return nil
+		return writeAllToFile(w.f, buf)
 	}
 	if len(w.appendBuf)+len(buf) > max {
 		if err := w.flushAppendBuf(); err != nil {
 			return err
 		}
 		if len(buf) >= directThreshold {
-			written := 0
-			for written < len(buf) {
-				n, err := w.f.Write(buf[written:])
-				if n > 0 {
-					written += n
-				}
-				if err != nil {
-					return err
-				}
-				if n == 0 {
-					return errors.New("valuelog: short write")
-				}
-			}
-			return nil
+			return writeAllToFile(w.f, buf)
 		}
 	}
 	w.appendBuf = append(w.appendBuf, buf...)
