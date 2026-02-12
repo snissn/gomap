@@ -23,6 +23,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `delete_rand` — Random Delete
 - `read_rand` — Random Read
 - `read_rand_parallel` — Random Read (Parallel aggregate throughput)
+- `random_read_parallel_acquire_snapshot` — Random Read (Parallel, Snapshot Per Key)
 - `full_scan` — Full Scan (iterate the full keyspace)
 - `prefix_scan` — Prefix Scan (range scans over `[start,end)`)
   - Aliases: `scan` → `full_scan`, `range_scan` → `prefix_scan`
