@@ -59,6 +59,9 @@ func (panicBackend) GetUnsafe(_ []byte) ([]byte, error) {
 func (panicBackend) GetAppend(_ []byte, _ []byte) ([]byte, error) {
 	panic("backend GetAppend should not be called")
 }
+func (panicBackend) GetMany(_ [][]byte) ([][]byte, error) {
+	panic("backend GetMany should not be called")
+}
 func (panicBackend) Has(_ []byte) (bool, error) { panic("backend Has should not be called") }
 func (panicBackend) Iterator(_, _ []byte) (iterator.UnsafeIterator, error) {
 	panic("backend Iterator should not be called")
@@ -75,6 +78,7 @@ type countingBackend struct {
 	panicBackend
 	getCalls       int
 	getAppendCalls int
+	getManyCalls   int
 }
 
 func (b *countingBackend) Get(_ []byte) ([]byte, error) {
@@ -85,6 +89,15 @@ func (b *countingBackend) Get(_ []byte) ([]byte, error) {
 func (b *countingBackend) GetAppend(_ []byte, dst []byte) ([]byte, error) {
 	b.getAppendCalls++
 	return append(dst, []byte("backend")...), nil
+}
+
+func (b *countingBackend) GetMany(keys [][]byte) ([][]byte, error) {
+	b.getManyCalls++
+	out := make([][]byte, len(keys))
+	for i := range keys {
+		out[i] = []byte("backend")
+	}
+	return out, nil
 }
 
 func TestPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
@@ -218,6 +231,20 @@ func TestPointReads_EmptyMemtablesBypassToBackend(t *testing.T) {
 	if ct.getEntryCalls != 0 {
 		t.Fatalf("expected memtable GetEntry calls = 0 after GetAppend, got %d", ct.getEntryCalls)
 	}
+
+	gotMany, err := db.GetMany([][]byte{key, []byte("k2")})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(gotMany) != 2 || string(gotMany[0]) != "backend" || string(gotMany[1]) != "backend" {
+		t.Fatalf("unexpected GetMany values: %#v", gotMany)
+	}
+	if backend.getManyCalls != 1 {
+		t.Fatalf("expected backend GetMany calls = 1, got %d", backend.getManyCalls)
+	}
+	if ct.getEntryCalls != 0 {
+		t.Fatalf("expected memtable GetEntry calls = 0 after GetMany, got %d", ct.getEntryCalls)
+	}
 }
 
 func TestPointReads_EmptyMemtableBypassGuardChecksMutableLen(t *testing.T) {
@@ -248,6 +275,18 @@ func TestPointReads_EmptyMemtableBypassGuardChecksMutableLen(t *testing.T) {
 	}
 	if ct.getEntryCalls == 0 {
 		t.Fatalf("expected memtable GetEntry to be consulted")
+	}
+	callsAfterGet := ct.getEntryCalls
+
+	gotMany, err := db.GetMany([][]byte{key})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(gotMany) != 1 || string(gotMany[0]) != "v" {
+		t.Fatalf("unexpected GetMany value: %#v", gotMany)
+	}
+	if ct.getEntryCalls <= callsAfterGet {
+		t.Fatalf("expected memtable GetEntry to be consulted by GetMany")
 	}
 
 	gotAppend, err := db.GetAppend(key, []byte("p:"))

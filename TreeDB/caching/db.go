@@ -10408,6 +10408,34 @@ func (db *DB) canBypassMemtableRead(view *memtableView, key []byte) bool {
 	return mt.Len() == 0
 }
 
+// canBypassMemtableReadMany is the multi-key equivalent of
+// canBypassMemtableRead. It only bypasses memtables when every touched mutable
+// shard is observably empty.
+func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+		return false
+	}
+	if len(view.mutables) == 0 {
+		return true
+	}
+	checked := make([]bool, len(view.mutables))
+	for _, key := range keys {
+		idx := db.shardIndex(key)
+		if idx >= len(view.mutables) || checked[idx] {
+			continue
+		}
+		checked[idx] = true
+		mt := view.mutables[idx]
+		if mt != nil && mt.Len() != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	view := db.memtables.Load()
 	var (
@@ -10593,19 +10621,6 @@ func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
 	return out, nil
 }
 
-func (db *DB) inMemoryWritesEmpty() bool {
-	if db.mutableBytes.Load() != 0 {
-		return false
-	}
-	if view := db.memtables.Load(); view != nil {
-		return len(view.queue) == 0
-	}
-	db.mu.RLock()
-	empty := len(db.queue) == 0
-	db.mu.RUnlock()
-	return empty
-}
-
 // GetUnsafe returns a safe copy of the value.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 	return db.Get(key)
@@ -10613,7 +10628,7 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	if db.inMemoryWritesEmpty() {
+	if db.canBypassMemtableRead(db.memtables.Load(), key) {
 		return db.backend.Get(key)
 	}
 	val, found, err := db.getMemtable(key)
@@ -10639,9 +10654,9 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		return make([][]byte, 0), nil
 	}
 
-	// Fast path: no mutable/queued state, so we can delegate straight to the
-	// backend and let it use a single snapshot when supported.
-	if db.inMemoryWritesEmpty() {
+	// Fast path: no mutable/queued state and all touched mutable shards are
+	// observably empty, so we can delegate to backend single-snapshot GetMany.
+	if db.canBypassMemtableReadMany(db.memtables.Load(), keys) {
 		return db.backendGetMany(keys)
 	}
 
