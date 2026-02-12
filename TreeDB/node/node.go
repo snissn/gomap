@@ -50,6 +50,32 @@ func getUint16(b []byte) uint16 {
 	return uint16(b[0]) | uint16(b[1])<<8
 }
 
+func getUint16At(b []byte, off int) uint16 {
+	return uint16(b[off]) | uint16(b[off+1])<<8
+}
+
+func getUint64LEAt(b []byte, off int) uint64 {
+	return uint64(b[off]) |
+		uint64(b[off+1])<<8 |
+		uint64(b[off+2])<<16 |
+		uint64(b[off+3])<<24 |
+		uint64(b[off+4])<<32 |
+		uint64(b[off+5])<<40 |
+		uint64(b[off+6])<<48 |
+		uint64(b[off+7])<<56
+}
+
+func getUint64BEAt(b []byte, off int) uint64 {
+	return uint64(b[off])<<56 |
+		uint64(b[off+1])<<48 |
+		uint64(b[off+2])<<40 |
+		uint64(b[off+3])<<32 |
+		uint64(b[off+4])<<24 |
+		uint64(b[off+5])<<16 |
+		uint64(b[off+6])<<8 |
+		uint64(b[off+7])
+}
+
 func putUint32(dst []byte, v uint32) {
 	dst[0] = byte(v)
 	dst[1] = byte(v >> 8)
@@ -89,9 +115,9 @@ type Node struct {
 func NewNode(data []byte) *Node {
 	n := &Node{data: data}
 	if len(data) >= NodeHeaderSize {
-		flags := getUint16(data[12:14])
+		flags := getUint16At(data, 12)
 		n.ptype = page.PageType(flags & pageTypeMask)
-		n.count = getUint16(data[14:16])
+		n.count = getUint16At(data, 14)
 	}
 	return n
 }
@@ -101,9 +127,9 @@ func NewNode(data []byte) *Node {
 func NewNodeView(data []byte) Node {
 	n := Node{data: data}
 	if len(data) >= NodeHeaderSize {
-		flags := getUint16(data[12:14])
+		flags := getUint16At(data, 12)
 		n.ptype = page.PageType(flags & pageTypeMask)
-		n.count = getUint16(data[14:16])
+		n.count = getUint16At(data, 14)
 	}
 	return n
 }
@@ -131,13 +157,13 @@ func (n *Node) Type() page.PageType {
 // SetType sets the page type in the header.
 func (n *Node) SetType(t page.PageType) {
 	n.ptype = t
-	flags := getUint16(n.data[12:14])
+	flags := getUint16At(n.data, 12)
 	flags = (flags & nodeFlagMask) | uint16(t)
 	binary.LittleEndian.PutUint16(n.data[12:14], flags)
 }
 
 func (n *Node) rawFlags() uint16 {
-	return getUint16(n.data[12:14])
+	return getUint16At(n.data, 12)
 }
 
 func (n *Node) setRawFlags(flags uint16) {
