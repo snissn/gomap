@@ -179,7 +179,7 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
                     if db_lower in lower_cols:
                         tree_col_idx = lower_cols.index(db_lower)
                         break
-                if "treedb" in lower_cols:
+                if tree_col_idx is None and "treedb" in lower_cols:
                     tree_col_idx = lower_cols.index("treedb")
                 continue
 
@@ -461,10 +461,11 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
 
 
 def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -> Dict[str, int | str]:
+    dbs = args.dbs
     cmd = [
         str(bin_path),
         "-dbs",
-        "leveldb,treedb",
+        dbs,
         "-profile",
         args.profile,
         "-keys",
@@ -483,7 +484,7 @@ def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -
     ]
     p = run(cmd, cwd=args.repo, capture=True)
     out_file.write_text(p.stdout)
-    rr_treedb, rb_treedb = parse_metrics(p.stdout, "leveldb,treedb")
+    rr_treedb, rb_treedb = parse_metrics(p.stdout, dbs)
 
     return {
         "random_read_treedb": rr_treedb,
