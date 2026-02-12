@@ -34,22 +34,65 @@ type leafEntryLayout struct {
 }
 
 func compareLeafKey(a, b []byte) int {
-	if len(a) == 8 && len(b) == 8 {
-		av := binary.BigEndian.Uint64(a)
-		bv := binary.BigEndian.Uint64(b)
-		if av < bv {
-			return -1
+	if len(a) == len(b) {
+		switch len(a) {
+		case 8:
+			av := binary.BigEndian.Uint64(a)
+			bv := binary.BigEndian.Uint64(b)
+			if av < bv {
+				return -1
+			}
+			if av > bv {
+				return 1
+			}
+			return 0
+		case 16:
+			ahi := binary.BigEndian.Uint64(a[:8])
+			bhi := binary.BigEndian.Uint64(b[:8])
+			if ahi < bhi {
+				return -1
+			}
+			if ahi > bhi {
+				return 1
+			}
+			alo := binary.BigEndian.Uint64(a[8:])
+			blo := binary.BigEndian.Uint64(b[8:])
+			if alo < blo {
+				return -1
+			}
+			if alo > blo {
+				return 1
+			}
+			return 0
 		}
-		if av > bv {
-			return 1
-		}
-		return 0
 	}
 	return bytes.Compare(a, b)
 }
 
 func compareSmallBigEndian(a, b []byte) (int, bool) {
-	if len(a) != len(b) || len(a) > 8 {
+	if len(a) != len(b) {
+		return 0, false
+	}
+	if len(a) == 16 {
+		ahi := binary.BigEndian.Uint64(a[:8])
+		bhi := binary.BigEndian.Uint64(b[:8])
+		if ahi < bhi {
+			return -1, true
+		}
+		if ahi > bhi {
+			return 1, true
+		}
+		alo := binary.BigEndian.Uint64(a[8:])
+		blo := binary.BigEndian.Uint64(b[8:])
+		if alo < blo {
+			return -1, true
+		}
+		if alo > blo {
+			return 1, true
+		}
+		return 0, true
+	}
+	if len(a) > 8 {
 		return 0, false
 	}
 	if len(a) == 0 {

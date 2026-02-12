@@ -98,6 +98,38 @@ func comparePrefixedKey(prefix, suffix, key []byte) int {
 }
 
 func compareInternalSuffix(suffix, keySuffix []byte) int {
+	if len(suffix) == len(keySuffix) {
+		switch len(suffix) {
+		case 8:
+			a := binary.BigEndian.Uint64(suffix)
+			b := binary.BigEndian.Uint64(keySuffix)
+			if a < b {
+				return -1
+			}
+			if a > b {
+				return 1
+			}
+			return 0
+		case 16:
+			aHi := binary.BigEndian.Uint64(suffix[:8])
+			bHi := binary.BigEndian.Uint64(keySuffix[:8])
+			if aHi < bHi {
+				return -1
+			}
+			if aHi > bHi {
+				return 1
+			}
+			aLo := binary.BigEndian.Uint64(suffix[8:])
+			bLo := binary.BigEndian.Uint64(keySuffix[8:])
+			if aLo < bLo {
+				return -1
+			}
+			if aLo > bLo {
+				return 1
+			}
+			return 0
+		}
+	}
 	return bytes.Compare(suffix, keySuffix)
 }
 
@@ -141,6 +173,24 @@ func compareInternalSuffixAt(data []byte, suffixStart int, suffixLen int, keySuf
 				return -1
 			}
 			if a > b {
+				return 1
+			}
+			return 0
+		case 16:
+			aHi := binary.BigEndian.Uint64(data[suffixStart : suffixStart+8])
+			bHi := binary.BigEndian.Uint64(keySuffix[:8])
+			if aHi < bHi {
+				return -1
+			}
+			if aHi > bHi {
+				return 1
+			}
+			aLo := binary.BigEndian.Uint64(data[suffixStart+8 : suffixStart+16])
+			bLo := binary.BigEndian.Uint64(keySuffix[8:])
+			if aLo < bLo {
+				return -1
+			}
+			if aLo > bLo {
 				return 1
 			}
 			return 0
@@ -746,6 +796,51 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 				}
 				break
 			}
+		case 16:
+			keyHi := binary.BigEndian.Uint64(keySuffix[:8])
+			keyLo := binary.BigEndian.Uint64(keySuffix[8:])
+			for i := 0; i < int(count); i++ {
+				offset := getUint16At(data, NodeHeaderSize+i*2)
+				ptr := int(offset)
+				if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+				suffixLen := int(getUint16At(data, ptr))
+				suffixStart := ptr + entryHeader
+				suffixEnd := suffixStart + suffixLen
+				if suffixLen < 0 || suffixEnd > meta.footerStart {
+					return 0, false, ErrCorruptedNode
+				}
+
+				var cmp int
+				if suffixLen == 16 {
+					aHi := getUint64BEAt(data, suffixStart)
+					if aHi < keyHi {
+						cmp = -1
+					} else if aHi > keyHi {
+						cmp = 1
+					} else {
+						aLo := getUint64BEAt(data, suffixStart+8)
+						if aLo < keyLo {
+							cmp = -1
+						} else if aLo > keyLo {
+							cmp = 1
+						}
+					}
+				} else {
+					cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+				}
+				if cmp <= 0 {
+					last = i
+					childID, err := n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
+					if err != nil {
+						return 0, false, err
+					}
+					lastChildID = childID
+					continue
+				}
+				break
+			}
 		default:
 			for i := 0; i < int(count); i++ {
 				offset := getUint16At(data, NodeHeaderSize+i*2)
@@ -904,6 +999,47 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 					cmp = -1
 				} else if a > keyU64 {
 					cmp = 1
+				}
+			} else {
+				cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)
+			}
+			if cmp <= 0 {
+				i = h + 1
+			} else {
+				j = h
+			}
+		}
+	case 16:
+		keyHi := binary.BigEndian.Uint64(keySuffix[:8])
+		keyLo := binary.BigEndian.Uint64(keySuffix[8:])
+		for i < j {
+			h := int(uint(i+j) >> 1)
+			offset := getUint16At(data, NodeHeaderSize+h*2)
+			ptr := int(offset)
+			if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
+			suffixLen := int(getUint16At(data, ptr))
+			suffixStart := ptr + entryHeader
+			suffixEnd := suffixStart + suffixLen
+			if suffixLen < 0 || suffixEnd > meta.footerStart {
+				return 0, false, ErrCorruptedNode
+			}
+
+			var cmp int
+			if suffixLen == 16 {
+				aHi := getUint64BEAt(data, suffixStart)
+				if aHi < keyHi {
+					cmp = -1
+				} else if aHi > keyHi {
+					cmp = 1
+				} else {
+					aLo := getUint64BEAt(data, suffixStart+8)
+					if aLo < keyLo {
+						cmp = -1
+					} else if aLo > keyLo {
+						cmp = 1
+					}
 				}
 			} else {
 				cmp = bytes.Compare(data[suffixStart:suffixEnd], keySuffix)

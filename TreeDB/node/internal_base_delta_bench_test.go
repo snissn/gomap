@@ -136,6 +136,55 @@ func BenchmarkSearchInternal_BaseDelta_FixedBE8(b *testing.B) {
 	benchmarkSearchInternalFixedBE8(b, true)
 }
 
+func benchmarkSearchInternalFixedBE16(b *testing.B, baseDelta bool) {
+	buf := make([]byte, page.PageSize)
+	opts := BuilderOptions{}
+	if baseDelta {
+		opts.InternalBaseDelta = true
+	}
+
+	builder := NewBuilderWithOptions(buf, page.PageTypeInternal, opts)
+	builder.SetPageID(1)
+
+	var key [16]byte
+	nKeys := 0
+	for ; nKeys < benchKeyCount; nKeys++ {
+		binary.BigEndian.PutUint64(key[:8], uint64(nKeys))
+		binary.BigEndian.PutUint64(key[8:], uint64(nKeys*17+3))
+		if err := builder.AddInternalChild(key[:], uint64(1_000_000+nKeys)); err != nil {
+			if err == ErrNodeFull {
+				break
+			}
+			b.Fatalf("AddInternalChild: %v", err)
+		}
+	}
+	n := builder.Finish()
+	if n.Count() == 0 {
+		b.Fatalf("expected at least one key")
+	}
+
+	queries := make([][16]byte, n.Count())
+	for i := range queries {
+		binary.BigEndian.PutUint64(queries[i][:8], uint64(i))
+		binary.BigEndian.PutUint64(queries[i][8:], uint64(i*17+3))
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q := queries[i%len(queries)]
+		_, _ = n.SearchInternal(q[:])
+	}
+}
+
+func BenchmarkSearchInternal_Plain_FixedBE16(b *testing.B) {
+	benchmarkSearchInternalFixedBE16(b, false)
+}
+
+func BenchmarkSearchInternal_BaseDelta_FixedBE16(b *testing.B) {
+	benchmarkSearchInternalFixedBE16(b, true)
+}
+
 func benchmarkSearchInternalChildIDFixedBE8(b *testing.B, baseDelta bool) {
 	buf := make([]byte, page.PageSize)
 	opts := BuilderOptions{}
@@ -181,4 +230,53 @@ func BenchmarkSearchInternalChildID_Plain_FixedBE8(b *testing.B) {
 
 func BenchmarkSearchInternalChildID_BaseDelta_FixedBE8(b *testing.B) {
 	benchmarkSearchInternalChildIDFixedBE8(b, true)
+}
+
+func benchmarkSearchInternalChildIDFixedBE16(b *testing.B, baseDelta bool) {
+	buf := make([]byte, page.PageSize)
+	opts := BuilderOptions{}
+	if baseDelta {
+		opts.InternalBaseDelta = true
+	}
+
+	builder := NewBuilderWithOptions(buf, page.PageTypeInternal, opts)
+	builder.SetPageID(1)
+
+	var key [16]byte
+	nKeys := 0
+	for ; nKeys < benchKeyCount; nKeys++ {
+		binary.BigEndian.PutUint64(key[:8], uint64(nKeys))
+		binary.BigEndian.PutUint64(key[8:], uint64(nKeys*17+3))
+		if err := builder.AddInternalChild(key[:], uint64(1_000_000+nKeys)); err != nil {
+			if err == ErrNodeFull {
+				break
+			}
+			b.Fatalf("AddInternalChild: %v", err)
+		}
+	}
+	n := builder.Finish()
+	if n.Count() == 0 {
+		b.Fatalf("expected at least one key")
+	}
+
+	queries := make([][16]byte, n.Count())
+	for i := range queries {
+		binary.BigEndian.PutUint64(queries[i][:8], uint64(i))
+		binary.BigEndian.PutUint64(queries[i][8:], uint64(i*17+3))
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q := queries[i%len(queries)]
+		_, _, _ = n.SearchInternalChildID(q[:])
+	}
+}
+
+func BenchmarkSearchInternalChildID_Plain_FixedBE16(b *testing.B) {
+	benchmarkSearchInternalChildIDFixedBE16(b, false)
+}
+
+func BenchmarkSearchInternalChildID_BaseDelta_FixedBE16(b *testing.B) {
+	benchmarkSearchInternalChildIDFixedBE16(b, true)
 }
