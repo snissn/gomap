@@ -2,6 +2,7 @@ package caching
 
 import (
 	"encoding/binary"
+	"sync/atomic"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -298,5 +299,45 @@ func TestPointReads_EmptyMemtableBypassGuardChecksMutableLen(t *testing.T) {
 	}
 	if ct.getEntryCalls < 2 {
 		t.Fatalf("expected memtable GetEntry to be consulted by GetAppend")
+	}
+}
+
+func TestPointReads_GetMany_PartialMemtableAndBackendPaths(t *testing.T) {
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	ct := &countingTable{inner: mt}
+	ct.SetEntry([]byte("hot"), []byte("mem"), page.ValuePtr{}, node.FlagInline)
+
+	backend := &countingBackend{}
+	var views atomic.Pointer[memtableView]
+	views.Store(&memtableView{
+		mutables: []memtable.Table{ct},
+	})
+	db := &DB{
+		backend:       backend,
+		mutableShards: make([]memShard, 1),
+		memtables:     views,
+	}
+
+	got, err := db.GetMany([][]byte{[]byte("hot"), []byte("cold"), []byte("cold"), []byte("hot"), []byte("missing")})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("unexpected output length: %d", len(got))
+	}
+	want := [][]byte{[]byte("mem"), []byte("backend"), []byte("backend"), []byte("mem"), []byte("backend")}
+	for i := range want {
+		if string(got[i]) != string(want[i]) {
+			t.Fatalf("unexpected value at %d: got=%q want=%q", i, got[i], want[i])
+		}
+	}
+	if backend.getManyCalls != 1 {
+		t.Fatalf("expected backend GetMany to be called once, got %d", backend.getManyCalls)
+	}
+	if ct.getEntryCalls < 4 {
+		t.Fatalf("expected memtable GetEntry to be called for each key lookup, got %d", ct.getEntryCalls)
 	}
 }

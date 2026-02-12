@@ -59,6 +59,7 @@ func openReadOnly(opts Options) (*DB, error) {
 	db := &DB{
 		readOnly:                  true,
 		valueLogManager:           vm,
+		readWorkers:               opts.ReadWorkers,
 		lock:                      lock,
 		adaptive:                  adaptive.New(),
 		keepRecent:                opts.KeepRecent,
@@ -137,6 +138,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	db := &DB{
 		readOnly:                  true,
 		valueLogManager:           vm,
+		readWorkers:               opts.ReadWorkers,
 		adaptive:                  adaptive.New(),
 		keepRecent:                opts.KeepRecent,
 		leafFillTargetPPM:         opts.LeafFillTargetPPM,

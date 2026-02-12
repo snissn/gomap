@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -35,39 +36,104 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
 
-	// Copy all found values into a single arena to avoid one allocation per key.
-	// Each returned slice is capacity-capped to preserve safe-copy semantics.
 	const (
 		getManyValueGuessBytes = 128
 		getManyMaxArenaBytes   = 1 << 20
 	)
-	arenaCap := len(keys) * getManyValueGuessBytes
-	if arenaCap < 0 {
-		arenaCap = 0
+	workers := db.effectiveReadWorkers(len(keys))
+	if workers <= 1 {
+		arenaCap := len(keys) * getManyValueGuessBytes
+		if arenaCap < 0 {
+			arenaCap = 0
+		}
+		if arenaCap > getManyMaxArenaBytes {
+			arenaCap = getManyMaxArenaBytes
+		}
+		arena := make([]byte, 0, arenaCap)
+		for i, key := range keys {
+			val, err := snap.GetUnsafe(key)
+			if err == tree.ErrKeyNotFound {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			if val == nil {
+				continue
+			}
+			n := len(val)
+			if n == 0 {
+				out[i] = []byte{}
+				continue
+			}
+			start := len(arena)
+			arena = append(arena, val...)
+			out[i] = arena[start : start+n : start+n]
+		}
+		return out, nil
 	}
-	if arenaCap > getManyMaxArenaBytes {
-		arenaCap = getManyMaxArenaBytes
+
+	chunkSize := (len(keys) + workers - 1) / workers
+	errCh := make(chan error, 1)
+
+	sendErr := func(err error) {
+		if err == nil {
+			return
+		}
+		select {
+		case errCh <- err:
+		default:
+		}
 	}
-	arena := make([]byte, 0, arenaCap)
-	for i, key := range keys {
-		val, err := snap.GetUnsafe(key)
-		if err == tree.ErrKeyNotFound {
+
+	var wg sync.WaitGroup
+	for start := 0; start < len(keys); start += chunkSize {
+		end := start + chunkSize
+		if end > len(keys) {
+			end = len(keys)
+		}
+		if start == end {
 			continue
 		}
-		if err != nil {
-			return nil, err
-		}
-		if val == nil {
-			continue
-		}
-		n := len(val)
-		if n == 0 {
-			out[i] = []byte{}
-			continue
-		}
-		start := len(arena)
-		arena = append(arena, val...)
-		out[i] = arena[start : start+n : start+n]
+
+		wg.Add(1)
+		go func(start, end int) {
+			defer wg.Done()
+			arenaCap := (end - start) * getManyValueGuessBytes
+			if arenaCap > getManyMaxArenaBytes {
+				arenaCap = getManyMaxArenaBytes
+			}
+			arena := make([]byte, 0, arenaCap)
+
+			for i := start; i < end; i++ {
+				val, err := snap.GetUnsafe(keys[i])
+				if err == tree.ErrKeyNotFound {
+					continue
+				}
+				if err != nil {
+					sendErr(err)
+					return
+				}
+				if val == nil {
+					continue
+				}
+				n := len(val)
+				if n == 0 {
+					out[i] = []byte{}
+					continue
+				}
+				start := len(arena)
+				arena = append(arena, val...)
+				out[i] = arena[start : start+n : start+n]
+			}
+		}(start, end)
+	}
+	wg.Wait()
+
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
 	}
 	return out, nil
 }

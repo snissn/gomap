@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,7 +60,8 @@ type DB struct {
 	freelistRegionPages  uint64
 	freelistRegionRadius int
 
-	readOnly bool
+	readOnly    bool
+	readWorkers int
 
 	keepRecent                uint64
 	policy                    WritePolicy
@@ -535,6 +537,12 @@ type Options struct {
 	// size trigger). This is an operational safety cap; it does not make each
 	// individual write durable (use *Sync APIs for that).
 	MaxWALBytes int64
+
+	// ReadWorkers controls multi-key read parallelism.
+	//
+	// A value of 0 means auto (resolved per-call as GOMAXPROCS()+1, clamped by
+	// key-count). Set to 1 to disable parallelism.
+	ReadWorkers int
 }
 
 type Snapshot struct {
@@ -678,6 +686,30 @@ func Open(opts Options) (*DB, error) {
 	return db, nil
 }
 
+func resolveReadWorkers(raw, keyCount int) int {
+	workers := raw
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0) + 1
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	if keyCount <= 0 {
+		return 1
+	}
+	if workers > keyCount {
+		workers = keyCount
+	}
+	return workers
+}
+
+func (db *DB) effectiveReadWorkers(keyCount int) int {
+	if db == nil {
+		return resolveReadWorkers(1, keyCount)
+	}
+	return resolveReadWorkers(db.readWorkers, keyCount)
+}
+
 func validateOptions(opts Options) error {
 	if opts.ReadOnly {
 		// Read-only opens never mutate on-disk state, so "unsafe" write options do
@@ -796,6 +828,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		lock:                      lock,
 		adaptive:                  adaptiveCtrl,
 		keepRecent:                opts.KeepRecent,
+		readWorkers:               opts.ReadWorkers,
 		valueLogDomainThresholds:  NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafFillTargetPPM:         opts.LeafFillTargetPPM,
 		internalFillTargetPPM:     opts.InternalFillTargetPPM,
