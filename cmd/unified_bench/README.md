@@ -22,6 +22,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `batch_delete` — Batch Delete
 - `delete_rand` — Random Delete
 - `read_rand` — Random Read
+- `read_rand_parallel` — Random Read (Parallel aggregate throughput)
 - `full_scan` — Full Scan (iterate the full keyspace)
 - `prefix_scan` — Prefix Scan (range scans over `[start,end)`)
   - Aliases: `scan` → `full_scan`, `range_scan` → `prefix_scan`
@@ -43,6 +44,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-dataset-val-pattern` dataset value pattern for `dataset_write_*` (`random|zero|repeat|repeat_tail64|half_repeat_half_random`)
 - `-batchsize` batch size (default 8000)
+- `-read-workers` number of goroutines for `random_read_parallel` (default 1)
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)
@@ -170,4 +172,21 @@ To sweep dict-frame encoder knobs (zstd level × entropy coding), use:
   -treedb-vlog-dict on \\
   -treedb-vlog-dict-frame-encode-level all \\
   -treedb-vlog-dict-frame-entropy both
+```
+
+### Repro: random read parallel sweep
+
+Run `random_read_parallel` with separate worker counts:
+
+```bash
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 1 -progress=false
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 2 -progress=false
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 4 -progress=false
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 8 -progress=false
+```
+
+`-test all` now includes `random_read_parallel` in the output table:
+
+```bash
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test all -read-workers 4 -format markdown -progress=false
 ```
