@@ -61,30 +61,65 @@ def run(cmd: List[str], cwd: Path, capture: bool = False) -> subprocess.Complete
 
 
 def parse_table_last_numeric(prefix: str, line: str) -> int | None:
-    if not (line.startswith(prefix) or line.startswith("| " + prefix)):
+    if not (line.startswith(prefix) or line.startswith("| " + prefix) or line.startswith("|" + prefix)):
         return None
 
-    suffix = line.split("|")[-1].strip()
-    if not suffix:
+    # Plain text line (legacy format): take trailing number.
+    plain = line.strip()
+    if "|" not in plain:
+        m = re.search(r"([0-9][0-9,]*)\s*$", plain)
+        if not m:
+            return None
+        value_str = m.group(1)
+        value = int(value_str.replace(",", ""))
+        return value if value > 0 else None
+
+    # Pipe table-style row: parse trailing cell after trimming pipes.
+    cells = [part.strip() for part in plain.strip("|").split("|") if part.strip()]
+    if not cells:
         return None
+    if not cells[0].startswith(prefix):
+        return None
+    suffix = cells[-1]
 
     m = re.search(r"([0-9][0-9,]*)\s*$", suffix)
     if not m:
         return None
-
     value_str = m.group(1)
-    if len(value_str) > 1 and value_str.startswith("0"):
-        return None
-
     value = int(value_str.replace(",", ""))
     if value <= 0:
         return None
     return value
 
 
-def parse_metrics(text: str) -> Tuple[int, int]:
+def parse_table_cell_int(raw: str) -> int | None:
+    m = re.search(r"([0-9][0-9,]*)\s*$", raw.strip())
+    if not m:
+        return None
+    value = int(m.group(1).replace(",", ""))
+    return value if value > 0 else None
+
+
+def _normalize_db_names(raw_dbs: str | List[str] | None) -> List[str]:
+    if raw_dbs is None:
+        return ["treedb"]
+    if isinstance(raw_dbs, str):
+        parts = [d.strip() for d in raw_dbs.split(",") if d.strip()]
+    else:
+        parts = [d.strip() for d in raw_dbs if d.strip()]
+    return parts if parts else ["treedb"]
+
+
+def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]:
     rr = None
     rb = None
+    tree_db_present = False
+    tree_col_idx: int | None = None
+    normalized_dbs = _normalize_db_names(dbs)
+    for db in normalized_dbs:
+        if db.lower() == "treedb":
+            tree_db_present = True
+            break
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -96,16 +131,59 @@ def parse_metrics(text: str) -> Tuple[int, int]:
         if m:
             rb = int(m.group(1).replace(",", ""))
             continue
-        if rr is None and "(Batch)" not in line and "/ TreeDB" not in line:
+
+        if "|" in line:
+            row = [part.strip() for part in line.strip("|").split("|") if part.strip()]
+            if not row:
+                continue
+
+            if row[0].strip().lower() == "test" and len(row) >= 2:
+                lower_cells = [c.lower() for c in row]
+                if "treedb" in lower_cells:
+                    tree_col_idx = lower_cells.index("treedb")
+                elif len(row) == 2 and row[1].lower() == "treedb":
+                    tree_col_idx = 1
+
+            metric = row[0].strip()
+            if rr is None and metric == "Random Read" and len(row) >= 2:
+                if tree_db_present:
+                    if tree_col_idx is None:
+                        if len(normalized_dbs) > 1:
+                            continue
+                        idx = len(row) - 1
+                    else:
+                        idx = tree_col_idx
+                    parsed = parse_table_cell_int(row[idx])
+                else:
+                    parsed = parse_table_cell_int(row[len(row) - 1])
+                if parsed is not None:
+                    rr = parsed
+
+            if rb is None and metric == "Random Read (Batch)" and len(row) >= 2:
+                if tree_db_present:
+                    if tree_col_idx is None:
+                        if len(normalized_dbs) > 1:
+                            continue
+                        idx = len(row) - 1
+                    else:
+                        idx = tree_col_idx
+                    parsed = parse_table_cell_int(row[idx])
+                else:
+                    parsed = parse_table_cell_int(row[len(row) - 1])
+                if parsed is not None:
+                    rb = parsed
+
+        if "|" not in line and rr is None and re.fullmatch(r"Random Read", line.strip()) is not None:
             parsed = parse_table_last_numeric("Random Read", line)
             if parsed is not None:
                 rr = parsed
                 continue
-        if rb is None and "/ TreeDB" not in line:
+        if "|" not in line and rb is None and re.fullmatch(r"Random Read \(Batch\)", line.strip()) is not None:
             parsed = parse_table_last_numeric("Random Read (Batch)", line)
             if parsed is not None:
                 rb = parsed
                 continue
+
     if rr is None or rb is None:
         raise RuntimeError("failed to parse Random Read metrics from unified-bench output")
     return rr, rb
@@ -123,21 +201,24 @@ def middle3(values: List[int]) -> float:
 def bootstrap_ci95_effect_pct(base_vals: List[int], cand_vals: List[int], n_boot: int = 20000, seed: int = 1) -> Tuple[float, float]:
     if len(base_vals) != len(cand_vals):
         raise ValueError("paired sample count mismatch")
-    if not base_vals:
-        return (0.0, 0.0)
-    mean_base = sum(base_vals) / len(base_vals)
-    if mean_base <= 0:
+    if not base_vals or len(base_vals) < 5:
         return (0.0, 0.0)
 
-    diffs = [c - b for b, c in zip(base_vals, cand_vals)]
     rng = random.Random(seed)
-    n = len(diffs)
+    paired = list(zip(base_vals, cand_vals))
+    n = len(paired)
     boots: List[float] = []
     for _ in range(n_boot):
-        sm = 0.0
+        sampled_base = []
+        sampled_cand = []
         for __ in range(n):
-            sm += diffs[rng.randrange(n)]
-        boots.append((sm / n) / mean_base * 100.0)
+            b, c = paired[rng.randrange(n)]
+            sampled_base.append(b)
+            sampled_cand.append(c)
+        m3_base = middle3(sampled_base)
+        m3_cand = middle3(sampled_cand)
+        eff = (m3_cand - m3_base) / m3_base * 100.0 if m3_base > 0 else 0.0
+        boots.append(eff)
     boots.sort()
     lo = boots[int(0.025 * n_boot)]
     hi = boots[int(0.975 * n_boot)]
