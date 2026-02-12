@@ -43,7 +43,10 @@ const (
 	nodeFlagMask         = leafNodeFlagMask | internalNodeFlagMask
 	pageTypeMask         = ^nodeFlagMask
 
-	leafPrefixRestartInterval = 4
+	// leafPrefixRestartInterval is part of the on-disk leaf encoding; do not
+	// change without introducing an explicit format/version indicator and
+	// compatible decoding.
+	leafPrefixRestartInterval = 16
 )
 
 func getUint16(b []byte) uint16 {
