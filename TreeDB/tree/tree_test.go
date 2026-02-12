@@ -167,6 +167,18 @@ func TestTreeGet_UsesAppendReaderForPointers(t *testing.T) {
 	if tracked.readUnsafeCalls != 0 {
 		t.Fatalf("expected ReadUnsafe to be bypassed, got %d calls", tracked.readUnsafeCalls)
 	}
+
+	// Regression: caller-provided dst commonly has spare capacity.
+	// GetAppend must not panic when probing in-place append reuse.
+	prefixed := make([]byte, 1, 32)
+	prefixed[0] = 'x'
+	gotAppend, err := tr.GetAppend([]byte("k"), prefixed)
+	if err != nil {
+		t.Fatalf("GetAppend failed: %v", err)
+	}
+	if string(gotAppend) != "xpointer-value" {
+		t.Fatalf("unexpected appended value: %q", gotAppend)
+	}
 }
 
 func TestTreeGetAppend_AppendsAndUsesAppendReaderForPointers(t *testing.T) {

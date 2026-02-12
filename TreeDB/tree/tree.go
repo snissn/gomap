@@ -265,7 +265,7 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 				return dst[:oldLen], nil
 			}
 			if cap(dst) > oldLen {
-				base := dst[:cap(dst)]
+				base := dst[:cap(dst):cap(dst)]
 				if &tail[0] == &base[oldLen] {
 					return dst[:oldLen+len(tail)], nil
 				}

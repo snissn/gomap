@@ -10418,13 +10418,36 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
 		return false
 	}
-	if len(view.mutables) == 0 {
+	n := len(view.mutables)
+	if n == 0 {
 		return true
 	}
-	checked := make([]bool, len(view.mutables))
+	// Fast path: common shard counts are small; use a stack bitset to avoid
+	// per-call allocations in read-heavy GetMany paths.
+	if n <= 64 {
+		var checkedBits uint64
+		for _, key := range keys {
+			idx := db.shardIndex(key)
+			if idx >= n {
+				continue
+			}
+			bit := uint64(1) << uint(idx)
+			if checkedBits&bit != 0 {
+				continue
+			}
+			checkedBits |= bit
+			mt := view.mutables[idx]
+			if mt != nil && mt.Len() != 0 {
+				return false
+			}
+		}
+		return true
+	}
+
+	checked := make([]bool, n)
 	for _, key := range keys {
 		idx := db.shardIndex(key)
-		if idx >= len(view.mutables) || checked[idx] {
+		if idx >= n || checked[idx] {
 			continue
 		}
 		checked[idx] = true
