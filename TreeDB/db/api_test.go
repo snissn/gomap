@@ -2,12 +2,14 @@ package db
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -292,5 +294,138 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 	}
 	if !seenPointer {
 		t.Fatalf("projection iterator did not observe k-pointer")
+	}
+}
+
+func TestValuePlacement_PerDomainThreshold_DefaultFallback(t *testing.T) {
+	domains := NormalizeValueLogDomainThresholds([]ValueLogDomainThreshold{
+		{Prefix: []byte("hot/"), InlineThreshold: 16},
+		{Prefix: []byte("hot/user/"), InlineThreshold: 8},
+		{Prefix: []byte("cold/"), InlineThreshold: 1024},
+	})
+	base := 256
+
+	if got := ResolveInlineThresholdForKey(base, []byte("hot/user/001"), domains); got != 8 {
+		t.Fatalf("expected longest-prefix threshold=8, got %d", got)
+	}
+	if got := ResolveInlineThresholdForKey(base, []byte("hot/other"), domains); got != 16 {
+		t.Fatalf("expected hot prefix threshold=16, got %d", got)
+	}
+	if got := ResolveInlineThresholdForKey(base, []byte("cold/key"), domains); got != 1024 {
+		t.Fatalf("expected cold prefix threshold=1024, got %d", got)
+	}
+	if got := ResolveInlineThresholdForKey(base, []byte("neutral/key"), domains); got != base {
+		t.Fatalf("expected fallback threshold=%d, got %d", base, got)
+	}
+}
+
+func TestNewBatchWithSize_AppliesPerDomainInlineThresholds(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+				{Prefix: []byte("cold/"), InlineThreshold: 1024},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	hotKey := []byte("hot/key")
+	coldKey := []byte("cold/key")
+	defaultKey := []byte("other/key")
+	hotValue := bytes.Repeat([]byte("h"), 64)
+	coldValue := bytes.Repeat([]byte("c"), 64)
+	defaultValue := bytes.Repeat([]byte("d"), 300)
+
+	b := db.NewBatchWithSize(3).(*Batch)
+	if err := b.Set(coldKey, coldValue); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch.Set cold: %v", err)
+	}
+	if err := b.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+	if err := b.Set(defaultKey, defaultValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set default err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch.Close: %v", err)
+	}
+}
+
+func TestNewBatchWithSize_ResolverUsesBatchSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(2).(*Batch)
+	// Mutate effective threshold source after batch creation; this should not
+	// affect an in-flight batch's threshold resolution for default-domain keys.
+	db.adaptive = nil
+	db.policy.InlineThreshold = 8
+
+	defaultKey := []byte("other/key")
+	defaultValue := bytes.Repeat([]byte("d"), 64)
+	if err := b.Set(defaultKey, defaultValue); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch.Set default with snapshot threshold: %v", err)
+	}
+
+	hotKey := []byte("hot/key")
+	hotValue := bytes.Repeat([]byte("h"), 64)
+	if err := b.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch.Close: %v", err)
+	}
+}
+
+func TestNewBatchWithSize_ForcePointersOverridesDomainThresholds(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 1024},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(2).(*Batch)
+	hotKey := []byte("hot/key")
+	hotValue := bytes.Repeat([]byte("h"), 64)
+	if err := b.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch.Close: %v", err)
 	}
 }

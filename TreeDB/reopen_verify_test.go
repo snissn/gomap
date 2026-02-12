@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"hash/fnv"
 	"math/rand"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
 const (
@@ -579,4 +581,194 @@ func TestReopenVerify_IndexColumnarLeaves(t *testing.T) {
 
 	checkGets(t, reopen, keys, values, false)
 	scanAndCheck(t, reopen, values, false, hash)
+}
+
+func TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir:                       dir,
+		ChunkSize:                 64 * 1024,
+		LeafPrefixCompression:     true,
+		IndexColumnarLeaves:       true,
+		IndexPackedValuePtr:       true,
+		IndexAdaptiveLeafEncoding: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 128,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	keys := make([][]byte, 0, 6000)
+	values := make(map[string][]byte, 6000)
+
+	largeTemplate := bytes.Repeat([]byte("P"), 2048)
+	for i := 0; i < 3000; i++ {
+		k := []byte(fmt.Sprintf("a/%06d", i))
+		v := append([]byte(nil), largeTemplate...)
+		binary.LittleEndian.PutUint32(v[:4], uint32(i))
+		if err := db.Set(k, v); err != nil {
+			_ = db.Close()
+			t.Fatalf("set pointer-heavy key %q: %v", k, err)
+		}
+		keys = append(keys, k)
+		values[string(k)] = append([]byte(nil), v...)
+	}
+
+	for i := 0; i < 3000; i++ {
+		k := []byte(fmt.Sprintf("zz/tenant/orders/%06d", i))
+		v := []byte(fmt.Sprintf("inline-%06d", i))
+		if err := db.Set(k, v); err != nil {
+			_ = db.Close()
+			t.Fatalf("set inline key %q: %v", k, err)
+		}
+		keys = append(keys, k)
+		values[string(k)] = append([]byte(nil), v...)
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	for _, key := range keys {
+		got, err := reopen.Get(key)
+		if err != nil {
+			t.Fatalf("get %q after reopen: %v", key, err)
+		}
+		want := values[string(key)]
+		if !bytes.Equal(got, want) {
+			t.Fatalf("value mismatch for %q after reopen: got=%d want=%d", key, len(got), len(want))
+		}
+	}
+
+	it, err := reopen.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("iterator: %v", err)
+	}
+	defer it.Close()
+
+	scanCount := 0
+	for ; it.Valid(); it.Next() {
+		k := it.KeyCopy(nil)
+		v := it.ValueCopy(nil)
+		want, ok := values[string(k)]
+		if !ok {
+			t.Fatalf("unexpected key in scan: %q", k)
+		}
+		if !bytes.Equal(v, want) {
+			t.Fatalf("scan mismatch for %q", k)
+		}
+		scanCount++
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if scanCount != len(values) {
+		t.Fatalf("scan count mismatch: got=%d want=%d", scanCount, len(values))
+	}
+}
+
+func TestValuePlacement_PerDomainThreshold_ReopenDurability(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []treedb.ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+				{Prefix: []byte("cold/"), InlineThreshold: 1024},
+			},
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	hotKey := []byte("hot/reopen")
+	coldKey := []byte("cold/reopen")
+	defaultKey := []byte("other/reopen")
+	hotVal := bytes.Repeat([]byte("h"), 64)
+	coldVal := bytes.Repeat([]byte("c"), 64)
+	defaultVal := bytes.Repeat([]byte("d"), 300)
+
+	if err := db.Set(hotKey, hotVal); err != nil {
+		_ = db.Close()
+		t.Fatalf("set hot: %v", err)
+	}
+	if err := db.Set(coldKey, coldVal); err != nil {
+		_ = db.Close()
+		t.Fatalf("set cold: %v", err)
+	}
+	if err := db.Set(defaultKey, defaultVal); err != nil {
+		_ = db.Close()
+		t.Fatalf("set default: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	snap := reopen.AcquireSnapshot()
+	defer snap.Close()
+
+	hotEntry, err := snap.GetEntry(hotKey)
+	if err != nil {
+		t.Fatalf("snapshot GetEntry hot: %v", err)
+	}
+	if hotEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected hot domain key to remain pointer-backed after reopen")
+	}
+
+	coldEntry, err := snap.GetEntry(coldKey)
+	if err != nil {
+		t.Fatalf("snapshot GetEntry cold: %v", err)
+	}
+	if coldEntry.Flags&node.FlagPointer != 0 {
+		t.Fatalf("expected cold domain key to remain inline after reopen")
+	}
+
+	defaultEntry, err := snap.GetEntry(defaultKey)
+	if err != nil {
+		t.Fatalf("snapshot GetEntry default: %v", err)
+	}
+	if defaultEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected default fallback key to remain pointer-backed after reopen")
+	}
+
+	gotHot, err := reopen.Get(hotKey)
+	if err != nil || !bytes.Equal(gotHot, hotVal) {
+		t.Fatalf("reopen get hot mismatch: err=%v", err)
+	}
+	gotCold, err := reopen.Get(coldKey)
+	if err != nil || !bytes.Equal(gotCold, coldVal) {
+		t.Fatalf("reopen get cold mismatch: err=%v", err)
+	}
+	gotDefault, err := reopen.Get(defaultKey)
+	if err != nil || !bytes.Equal(gotDefault, defaultVal) {
+		t.Fatalf("reopen get default mismatch: err=%v", err)
+	}
 }
