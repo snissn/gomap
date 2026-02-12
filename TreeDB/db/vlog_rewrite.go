@@ -106,6 +106,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
 	swaps := make([]rewriteSwap, 0, batchSize)
 	ridExhausted := false
+	var canceledErr error
 
 	flushBatch := func() error {
 		if len(swaps) == 0 {
@@ -137,9 +138,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	for ; it.Valid(); it.Next() {
 		if err := ctx.Err(); err != nil {
-			_ = it.Close()
-			_ = snap.Close()
-			return stats, err
+			canceledErr = err
+			break
 		}
 		_, oldPtr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
@@ -187,8 +187,14 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if iterErr != nil {
 		return stats, iterErr
 	}
-	if err := flushBatch(); err != nil {
-		return stats, err
+	if canceledErr == nil {
+		if err := flushBatch(); err != nil {
+			return stats, err
+		}
+	} else {
+		// Stop publishing further swaps after cancellation; cleanup below still
+		// reconciles already-committed rewrite batches and rewrite-created files.
+		swaps = swaps[:0]
 	}
 	if err := writer.Sync(); err != nil {
 		return stats, err
@@ -240,6 +246,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	stats.SegmentsAfter = afterSegs
 	stats.BytesAfter = afterBytes
+	if canceledErr != nil {
+		return stats, canceledErr
+	}
 	return stats, nil
 }
 

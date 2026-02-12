@@ -665,7 +665,7 @@ func (m *Manager) retryZombieDelete(f *File) {
 			return
 		}
 
-		if err := removeSegmentFileWithRetry(f.Path); err == nil {
+		if err := removeSegmentFileOnce(f.Path); err == nil {
 			m.mu.Lock()
 			if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
 				delete(m.files, f.ID)
@@ -772,13 +772,21 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 
 var removeSegmentPath = os.Remove
 
+func removeSegmentFileOnce(path string) error {
+	err := removeSegmentPath(path)
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func removeSegmentFileWithRetry(path string) error {
 	const attempts = 40
 	backoff := 25 * time.Millisecond
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		err := removeSegmentPath(path)
-		if err == nil || os.IsNotExist(err) {
+		err := removeSegmentFileOnce(path)
+		if err == nil {
 			return nil
 		}
 		lastErr = err
