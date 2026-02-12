@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -93,6 +94,11 @@ var (
 	treedbMemtableMode           = flag.String("treedb-memtable-mode", "", "TreeDB (cached): memtable mode (adaptive|skiplist|hash_sorted|btree|append_only)")
 	treedbDomainIngressWorkers   = flag.Int("treedb-domain-ingress-workers", 0, "TreeDB (cached): experimental domain ingress worker count (0=disabled)")
 	treedbDomainIngressQueueSize = flag.Int("treedb-domain-ingress-queue-size", 0, "TreeDB (cached): per-worker ingress queue length (0=default)")
+)
+
+var (
+	treedbAdapterReadWorkersMu sync.RWMutex
+	treedbAdapterReadWorkers   = 0
 )
 
 func init() {
@@ -644,7 +650,19 @@ func treeDBResolvedOptionsText(indent string) (string, error) {
 }
 
 func wrapTreeDBAdapter(db *treedb.DB, name string) kvstore.DB {
-	return treedbadapter.WrapNamedWithReadWorkers(db, name, *readWorkers)
+	return treedbadapter.WrapNamedWithReadWorkers(db, name, getTreeDBAdapterReadWorkers())
+}
+
+func setTreeDBAdapterReadWorkers(readWorkers int) {
+	treedbAdapterReadWorkersMu.Lock()
+	treedbAdapterReadWorkers = readWorkers
+	treedbAdapterReadWorkersMu.Unlock()
+}
+
+func getTreeDBAdapterReadWorkers() int {
+	treedbAdapterReadWorkersMu.RLock()
+	defer treedbAdapterReadWorkersMu.RUnlock()
+	return treedbAdapterReadWorkers
 }
 
 func NewTreeDB(dir string) (kvstore.DB, error) {
