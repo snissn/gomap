@@ -3,6 +3,8 @@ package treedbadapter
 import (
 	"context"
 	"errors"
+	"runtime"
+	"sync"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
@@ -10,16 +12,31 @@ import (
 
 // DB adapts TreeDB's public API to kvstore interfaces.
 type DB struct {
-	DB      *treedb.DB
-	NameStr string
+	DB          *treedb.DB
+	NameStr     string
+	readWorkers int
 }
 
 func Wrap(db *treedb.DB) *DB {
-	return &DB{DB: db, NameStr: "TreeDB"}
+	return &DB{DB: db, NameStr: "TreeDB", readWorkers: resolveReadWorkers(1)}
 }
 
 func WrapNamed(db *treedb.DB, name string) *DB {
-	return &DB{DB: db, NameStr: name}
+	return &DB{DB: db, NameStr: name, readWorkers: resolveReadWorkers(1)}
+}
+
+func WrapNamedWithReadWorkers(db *treedb.DB, name string, readWorkers int) *DB {
+	return &DB{DB: db, NameStr: name, readWorkers: resolveReadWorkers(readWorkers)}
+}
+
+func resolveReadWorkers(workers int) int {
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	if workers < 1 {
+		return 1
+	}
+	return workers
 }
 
 func (d *DB) Name() string {
@@ -47,6 +64,80 @@ func (d *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		return make([][]byte, len(keys)), nil
 	}
 	return vals, err
+}
+
+func (d *DB) ReadBatch(keys [][]byte) error {
+	if d == nil || d.DB == nil {
+		return nil
+	}
+	workers := d.readWorkers
+	if workers < 1 {
+		workers = 1
+	}
+	if len(keys) <= 1 || workers <= 1 {
+		snap := d.DB.AcquireSnapshot()
+		if snap == nil {
+			return nil
+		}
+		defer func() { _ = snap.Close() }()
+		for _, key := range keys {
+			_, err := snap.GetUnsafe(key)
+			if err == nil || errors.Is(err, treedb.ErrKeyNotFound) {
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	if workers > len(keys) {
+		workers = len(keys)
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	snap := d.DB.AcquireSnapshot()
+	if snap == nil {
+		return nil
+	}
+	defer func() { _ = snap.Close() }()
+
+	chunk := (len(keys) + workers - 1) / workers
+	if chunk < 1 {
+		chunk = 1
+	}
+	var (
+		wg       sync.WaitGroup
+		errMu    sync.Mutex
+		firstErr error
+	)
+	for w := 0; w < workers; w++ {
+		start := w * chunk
+		if start >= len(keys) {
+			break
+		}
+		end := start + chunk
+		if end > len(keys) {
+			end = len(keys)
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			for i := lo; i < hi; i++ {
+				_, readErr := snap.GetUnsafe(keys[i])
+				if readErr == nil || errors.Is(readErr, treedb.ErrKeyNotFound) {
+					continue
+				}
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = readErr
+				}
+				errMu.Unlock()
+				return
+			}
+		}(start, end)
+	}
+	wg.Wait()
+	return firstErr
 }
 
 func (d *DB) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {

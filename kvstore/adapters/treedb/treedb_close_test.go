@@ -1,6 +1,7 @@
 package treedbadapter
 
 import (
+	"runtime"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -28,5 +29,55 @@ func TestAdapterGetAfterCloseDoesNotError(t *testing.T) {
 	}
 	if ok, err := adapter.Has([]byte("missing")); err != nil || ok {
 		t.Fatalf("has after close err=%v ok=%v", err, ok)
+	}
+}
+
+func TestAdapterReadBatch_IgnoresMissingAndDuplicates(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := db.Set([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+
+	adapter := WrapNamedWithReadWorkers(db, "TreeDB", 8)
+	err = adapter.ReadBatch([][]byte{
+		[]byte("k1"),
+		[]byte("missing"),
+		[]byte("k1"),
+		[]byte("k2"),
+		[]byte("missing2"),
+	})
+	if err != nil {
+		t.Fatalf("readbatch: %v", err)
+	}
+}
+
+func TestAdapterReadBatch_ClampsWorkerCount(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("set k: %v", err)
+	}
+
+	adapter := WrapNamedWithReadWorkers(db, "TreeDB", -1)
+	if got := adapter.readWorkers; got != runtime.GOMAXPROCS(0) {
+		t.Fatalf("expected resolved readWorkers=%d got=%d", runtime.GOMAXPROCS(0), got)
+	}
+
+	if err := adapter.ReadBatch([][]byte{[]byte("k"), []byte("missing")}); err != nil {
+		t.Fatalf("readbatch: %v", err)
 	}
 }
