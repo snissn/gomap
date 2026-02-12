@@ -580,19 +580,19 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	raw := make([]byte, 0, int(rawLen))
 	pooledRaw := false
 	if !cacheableRaw {
-		raw = getDecodeScratch(int(rawLen))
+		raw = f.takeDecodeScratch(int(rawLen))
 		pooledRaw = true
 	}
 	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
 	if err != nil {
 		if pooledRaw {
-			putDecodeScratch(raw)
+			f.releaseDecodeScratch(raw)
 		}
 		return nil, err, true
 	}
 	if uint32(len(raw)) != rawLen {
 		if pooledRaw {
-			putDecodeScratch(raw)
+			f.releaseDecodeScratch(raw)
 		}
 		return nil, ErrCorrupt, true
 	}
@@ -618,7 +618,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	f.cacheStart.Store(start)
 	f.cacheMu.Unlock()
 	if pooledRaw {
-		putDecodeScratch(raw)
+		f.releaseDecodeScratch(raw)
 	}
 
 	if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {

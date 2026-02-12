@@ -90,11 +90,19 @@ func (d *DB) Checkpoint() error { return d.DB.Checkpoint() }
 func (d *DB) VacuumIndexOnline(ctx context.Context) error { return d.DB.VacuumIndexOnline(ctx) }
 
 func (d *DB) Iterator(start, end []byte) (kvstore.Iterator, error) {
-	return d.DB.Iterator(start, end)
+	it, err := d.DB.Iterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	return wrapIterator(it), nil
 }
 
 func (d *DB) ReverseIterator(start, end []byte) (kvstore.Iterator, error) {
-	return d.DB.ReverseIterator(start, end)
+	it, err := d.DB.ReverseIterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	return wrapIterator(it), nil
 }
 
 func (d *DB) NewBatch() (kvstore.Batch, error) {
@@ -180,4 +188,88 @@ func (b *batch) Reset() {
 	if r, ok := b.b.(interface{ Reset() }); ok {
 		r.Reset()
 	}
+}
+
+type unsafeKVIterator interface {
+	UnsafeKey() []byte
+	UnsafeValue() []byte
+}
+
+type adapterIterator struct {
+	inner  kvstore.Iterator
+	unsafe unsafeKVIterator
+}
+
+func wrapIterator(inner kvstore.Iterator) kvstore.Iterator {
+	if inner == nil {
+		return nil
+	}
+	u, ok := inner.(unsafeKVIterator)
+	if !ok {
+		// Preserve any optional iterator interfaces when there is no unsafe
+		// fast-path to expose.
+		return inner
+	}
+	return &adapterIterator{inner: inner, unsafe: u}
+}
+
+func (it *adapterIterator) Valid() bool {
+	return it.inner.Valid()
+}
+
+func (it *adapterIterator) Next() {
+	it.inner.Next()
+}
+
+func (it *adapterIterator) Key() []byte {
+	if it.unsafe != nil {
+		return it.unsafe.UnsafeKey()
+	}
+	return it.inner.Key()
+}
+
+func (it *adapterIterator) Value() []byte {
+	if it.unsafe != nil {
+		return it.unsafe.UnsafeValue()
+	}
+	return it.inner.Value()
+}
+
+func (it *adapterIterator) KeyCopy(dst []byte) []byte {
+	if it.unsafe != nil {
+		key := it.unsafe.UnsafeKey()
+		if key == nil {
+			return nil
+		}
+		return append(dst[:0], key...)
+	}
+	return it.inner.KeyCopy(dst)
+}
+
+func (it *adapterIterator) ValueCopy(dst []byte) []byte {
+	if it.unsafe != nil {
+		value := it.unsafe.UnsafeValue()
+		if value == nil {
+			return nil
+		}
+		return append(dst[:0], value...)
+	}
+	return it.inner.ValueCopy(dst)
+}
+
+func (it *adapterIterator) DebugStats() (queueLen int, sourcesUsed int) {
+	if ds, ok := it.inner.(interface {
+		DebugStats() (queueLen int, sourcesUsed int)
+	}); ok {
+		return ds.DebugStats()
+	}
+	return 0, 0
+}
+
+func (it *adapterIterator) Error() error {
+	return it.inner.Error()
+}
+
+func (it *adapterIterator) Close() error {
+	return it.inner.Close()
 }
