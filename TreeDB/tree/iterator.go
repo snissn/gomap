@@ -14,6 +14,24 @@ type CursorItem struct {
 	Index  int
 }
 
+// IteratorMode controls value materialization behavior while scanning.
+type IteratorMode uint8
+
+const (
+	// IteratorModeFull resolves inline and pointer-backed values on demand.
+	IteratorModeFull IteratorMode = iota
+	// IteratorModeKeysOnly skips value materialization entirely.
+	IteratorModeKeysOnly
+	// IteratorModePointerProjection keeps pointer metadata visible via UnsafeEntry
+	// but skips pointer payload decoding.
+	IteratorModePointerProjection
+)
+
+// IteratorOptions configures scan-time value materialization behavior.
+type IteratorOptions struct {
+	Mode IteratorMode
+}
+
 const (
 	iteratorLeafPrefixCompressedFlag uint16 = 0x8000
 	iteratorLeafColumnarFlag         uint16 = 0x4000
@@ -305,15 +323,46 @@ type Iterator struct {
 	ptrOK        bool
 	ptrScratch   []byte
 	slabAppender slabUnsafeAppender
-	reverse      bool
-	verifyAlways bool
+	slabBatcher  slabUnsafeBatchAppender
+
+	prefetchPageID uint64
+	prefetchStart  int
+	prefetchLen    int
+	prefetchStep   int
+	prefetchPtrs   []page.ValuePtr
+	prefetchVals   [][]byte
+	prefetchArmed  bool
+	mode           IteratorMode
+	reverse        bool
+	verifyAlways   bool
 }
 
 type slabUnsafeAppender interface {
 	ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error)
 }
 
+type slabUnsafeBatchAppender interface {
+	ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error)
+}
+
+const iteratorPointerBatchMax = 2
+
 func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
+	return t.IteratorWithOptions(start, end, IteratorOptions{})
+}
+
+func normalizeIteratorMode(mode IteratorMode) IteratorMode {
+	switch mode {
+	case IteratorModeKeysOnly, IteratorModePointerProjection:
+		return mode
+	default:
+		return IteratorModeFull
+	}
+}
+
+// IteratorWithOptions returns a forward iterator over [start, end) using the
+// provided value materialization mode.
+func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
 		return &Iterator{tree: t, valid: false, err: nil} // Invalid immediately
 	}
@@ -321,18 +370,31 @@ func (t *Tree) Iterator(start, end []byte) iterator.UnsafeIterator {
 		tree:         t,
 		start:        start,
 		end:          end,
+		mode:         normalizeIteratorMode(opts.Mode),
 		reverse:      false,
 		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
 	if app, ok := t.slabReader.(slabUnsafeAppender); ok {
 		it.slabAppender = app
 	}
+	if batch, ok := t.slabReader.(slabUnsafeBatchAppender); ok {
+		it.slabBatcher = batch
+	}
 	it.resetStack()
 	it.Seek(start)
+	if start == nil {
+		it.prefetchArmed = true
+	}
 	return it
 }
 
 func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	return t.ReverseIteratorWithOptions(start, end, IteratorOptions{})
+}
+
+// ReverseIteratorWithOptions returns a reverse iterator over [start, end)
+// using the provided value materialization mode.
+func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
 		return &Iterator{tree: t, valid: false, err: nil}
 	}
@@ -340,11 +402,15 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 		tree:         t,
 		start:        start,
 		end:          end,
+		mode:         normalizeIteratorMode(opts.Mode),
 		reverse:      true,
 		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
 	if app, ok := t.slabReader.(slabUnsafeAppender); ok {
 		it.slabAppender = app
+	}
+	if batch, ok := t.slabReader.(slabUnsafeBatchAppender); ok {
+		it.slabBatcher = batch
 	}
 	it.resetStack()
 	// Reverse seek: Find >= end, then step back.
@@ -364,12 +430,17 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 	if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
 		it.valid = false
 	}
+	if end == nil {
+		it.prefetchArmed = true
+	}
 
 	return it
 }
 
 func (it *Iterator) seekRightMost() {
 	it.resetStack()
+	it.resetPointerPrefetch()
+	it.prefetchArmed = false
 	it.leafState.resetPage()
 	it.valid = false
 	it.err = nil
@@ -409,6 +480,8 @@ func (it *Iterator) seekRightMost() {
 
 func (it *Iterator) seek(key []byte) {
 	it.resetStack()
+	it.resetPointerPrefetch()
+	it.prefetchArmed = false
 	it.leafState.resetPage()
 	it.valid = false
 	it.err = nil
@@ -682,6 +755,7 @@ func (it *Iterator) Next() {
 		panic("iterator invalid")
 	}
 	if len(it.stack) > 0 {
+		it.prefetchArmed = true
 		if it.reverse {
 			it.stack[len(it.stack)-1].Index--
 		} else {
@@ -710,12 +784,27 @@ func (it *Iterator) UnsafeValue() []byte {
 	if it.currKey == nil {
 		return nil
 	}
+	if it.mode == IteratorModeKeysOnly {
+		return nil
+	}
 	if it.flags&node.FlagPointer != 0 {
-		if !it.ensurePointerLoaded() {
+		if it.mode == IteratorModePointerProjection {
+			if !it.ensurePointerLoaded() {
+				return nil
+			}
 			return nil
 		}
 		if it.valOK {
 			return it.currVal
+		}
+		if it.tryUsePrefetchedPointerValue() {
+			return it.currVal
+		}
+		if it.prefetchArmed && it.prefetchPointerRun() && it.tryUsePrefetchedPointerValue() {
+			return it.currVal
+		}
+		if !it.ensurePointerLoaded() {
+			return nil
 		}
 		if it.slabAppender != nil {
 			val, err := it.slabAppender.ReadUnsafeAppend(it.currPtr, it.ptrScratch[:0])
@@ -749,9 +838,15 @@ func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if it.currKey == nil {
 		return nil, page.ValuePtr{}, 0
 	}
+	if it.mode == IteratorModeKeysOnly {
+		return nil, page.ValuePtr{}, it.flags
+	}
 	if it.flags&node.FlagPointer != 0 {
 		if !it.ensurePointerLoaded() {
 			return nil, page.ValuePtr{}, it.flags
+		}
+		if it.mode == IteratorModePointerProjection {
+			return nil, it.currPtr, it.flags
 		}
 	} else if !it.ensureInlineValueLoaded() {
 		return nil, page.ValuePtr{}, it.flags
@@ -785,6 +880,8 @@ func (it *Iterator) ValueCopy(dst []byte) []byte {
 
 func (it *Iterator) Close() error {
 	it.stack = nil
+	it.resetPointerPrefetch()
+	it.ptrScratch = nil
 	return nil
 }
 
@@ -880,5 +977,125 @@ func (it *Iterator) ensureInlineValueLoaded() bool {
 	it.currVal = val
 	it.valOK = true
 	it.ptrOK = true
+	return true
+}
+
+func (it *Iterator) resetPointerPrefetch() {
+	it.prefetchPageID = 0
+	it.prefetchStart = 0
+	it.prefetchLen = 0
+	it.prefetchStep = 0
+	it.prefetchPtrs = it.prefetchPtrs[:0]
+	it.prefetchVals = it.prefetchVals[:0]
+}
+
+func (it *Iterator) tryUsePrefetchedPointerValue() bool {
+	if len(it.stack) == 0 || it.prefetchLen == 0 {
+		return false
+	}
+	top := &it.stack[len(it.stack)-1]
+	if it.prefetchPageID != top.PageID {
+		return false
+	}
+	var pos int
+	switch it.prefetchStep {
+	case 1:
+		pos = top.Index - it.prefetchStart
+	case -1:
+		pos = it.prefetchStart - top.Index
+	default:
+		return false
+	}
+	if pos < 0 || pos >= it.prefetchLen {
+		return false
+	}
+	it.currVal = it.prefetchVals[pos]
+	it.valOK = true
+	return true
+}
+
+func (it *Iterator) prefetchPointerRun() bool {
+	if len(it.stack) == 0 {
+		return false
+	}
+	top := &it.stack[len(it.stack)-1]
+	if top.Node.Type() != page.PageTypeLeaf {
+		return false
+	}
+	count := int(top.Node.Count())
+	if count == 0 {
+		return false
+	}
+	step := 1
+	if it.reverse {
+		step = -1
+	}
+
+	it.prefetchPageID = top.PageID
+	it.prefetchStart = top.Index
+	it.prefetchLen = 0
+	it.prefetchStep = step
+	it.prefetchPtrs = it.prefetchPtrs[:0]
+
+	for idx := top.Index; idx >= 0 && idx < count && len(it.prefetchPtrs) < iteratorPointerBatchMax; idx += step {
+		_, ptr, flags, err := top.Node.GetLeafValueView(uint16(idx))
+		if err != nil {
+			it.err = err
+			it.valid = false
+			it.resetPointerPrefetch()
+			return false
+		}
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			if len(it.prefetchPtrs) == 0 {
+				return false
+			}
+			break
+		}
+		it.prefetchPtrs = append(it.prefetchPtrs, ptr)
+	}
+
+	// Keep isolated pointers on the single-read path.
+	prefetchLen := len(it.prefetchPtrs)
+	if prefetchLen < 2 {
+		it.resetPointerPrefetch()
+		return false
+	}
+
+	if cap(it.prefetchVals) < prefetchLen {
+		it.prefetchVals = make([][]byte, prefetchLen)
+	} else {
+		it.prefetchVals = it.prefetchVals[:prefetchLen]
+	}
+	for i := range it.prefetchVals {
+		it.prefetchVals[i] = it.prefetchVals[i][:0]
+	}
+
+	var err error
+	if it.slabBatcher != nil {
+		it.prefetchVals, err = it.slabBatcher.ReadUnsafeAppendBatch(it.prefetchPtrs, it.prefetchVals)
+	} else if it.slabAppender != nil {
+		for i := range it.prefetchPtrs {
+			it.prefetchVals[i], err = it.slabAppender.ReadUnsafeAppend(it.prefetchPtrs[i], it.prefetchVals[i][:0])
+			if err != nil {
+				break
+			}
+		}
+	} else {
+		for i := range it.prefetchPtrs {
+			var val []byte
+			val, err = it.tree.slabReader.ReadUnsafe(it.prefetchPtrs[i])
+			if err != nil {
+				break
+			}
+			it.prefetchVals[i] = append(it.prefetchVals[i][:0], val...)
+		}
+	}
+	if err != nil {
+		it.err = err
+		it.valid = false
+		it.resetPointerPrefetch()
+		return false
+	}
+	it.prefetchLen = prefetchLen
 	return true
 }

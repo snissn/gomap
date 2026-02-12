@@ -21,6 +21,7 @@ const (
 	appendOnlyMinInitialEntries      = 128
 	appendOnlyMaxInitialEntries      = 1 << 20
 	appendOnlyInlineKeyLen           = 8
+	appendOnlyPointerGrowCutoff      = 1 << 15
 )
 
 type appendOnlyEntry struct {
@@ -91,6 +92,23 @@ func cloneBytes(src []byte) []byte {
 	dst := make([]byte, len(src))
 	copy(dst, src)
 	return dst
+}
+
+func appendOnlyNextCapacity(current int, flags byte) int {
+	if current < appendOnlyMinInitialEntries {
+		return appendOnlyMinInitialEntries
+	}
+	next := current * 2
+	// Pointer-heavy write paths can spend a disproportionate amount of time
+	// copying entry arrays during growth. Grow more aggressively early, then
+	// fall back to 2x to keep memory expansion bounded.
+	if flags&node.FlagPointer != 0 && current < appendOnlyPointerGrowCutoff {
+		next = current * 4
+	}
+	if next <= current {
+		return current + appendOnlyMinInitialEntries
+	}
+	return next
 }
 
 func appendOnlyKeyString(key []byte) string {
@@ -167,13 +185,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		return
 	}
 	if m.count == len(m.entries) {
-		nextCap := len(m.entries) * 2
-		if nextCap < appendOnlyMinInitialEntries {
-			nextCap = appendOnlyMinInitialEntries
-		}
-		if nextCap == 0 {
-			nextCap = appendOnlyMinInitialEntries
-		}
+		nextCap := appendOnlyNextCapacity(len(m.entries), flags)
 		grown := make([]appendOnlyEntry, nextCap)
 		copy(grown, m.entries[:m.count])
 		m.entries = grown

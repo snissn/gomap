@@ -37,10 +37,11 @@ type DBState struct {
 }
 
 type DB struct {
-	valueLogManager *valuelog.Manager
-	lock            *lockfile.Lock
-	adaptive        *adaptive.Controller
-	pruner          pruneWorker
+	valueLogManager    *valuelog.Manager
+	valueLogRefTracker *valueLogRefTracker
+	lock               *lockfile.Lock
+	adaptive           *adaptive.Controller
+	pruner             pruneWorker
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
@@ -62,12 +63,14 @@ type DB struct {
 
 	keepRecent                uint64
 	policy                    WritePolicy
+	valueLogDomainThresholds  []ValueLogDomainThreshold
 	leafFillTargetPPM         uint32
 	internalFillTargetPPM     uint32
 	leafPrefixCompression     bool
 	indexColumnarLeaves       bool
 	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
+	indexAdaptiveLeafEncoding bool
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
 
@@ -95,12 +98,18 @@ type DB struct {
 	publishWatermarkLatencySamples atomic.Uint64
 	publishWatermarkLatencyMaxNs   atomic.Uint64
 	publishWatermarkLatencyBuckets [publishWatermarkLatencyBucketCount]atomic.Uint64
+
+	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
+	// the next meta page. Used by crash-safety tests.
+	testFailFinalizeCommit atomic.Bool
 }
 
 const (
 	defaultChunkSize                 = 16 * 1024 * 1024
 	defaultMaintenanceOpsPerCoalesce = 400_000
 )
+
+var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
 
 // DurabilityMode configures cached-mode durability semantics.
 //
@@ -163,6 +172,20 @@ const (
 	ValueLogAutoSize
 )
 
+// ValueLogDomainThreshold overrides inline-vs-pointer placement policy for keys
+// under a domain prefix.
+//
+// A key belongs to the first matching prefix after normalization
+// (longest-prefix wins).
+type ValueLogDomainThreshold struct {
+	// Prefix selects the key domain this override applies to.
+	Prefix []byte
+	// InlineThreshold is the maximum inline value size for keys in Prefix.
+	// Values larger than this threshold are eligible for value-log pointers.
+	// Zero forces all non-empty values in this domain to pointer placement.
+	InlineThreshold int
+}
+
 // ValueLogOptions configures value-log pointer behavior and optional compression/dict tuning.
 type ValueLogOptions struct {
 	// Compression selects value-log compression behavior.
@@ -193,6 +216,11 @@ type ValueLogOptions struct {
 	PointerThreshold int
 	// ForcePointers stores all values out-of-line in the value log (no inline values).
 	ForcePointers bool
+	// DomainInlineThresholds provides optional per-domain overrides for
+	// inline-vs-pointer placement. These overrides are evaluated by
+	// longest-prefix match and fall back to PointerThreshold/default behavior
+	// when no domain matches.
+	DomainInlineThresholds []ValueLogDomainThreshold
 	// RawWritevMinAvgBytes controls raw grouped-frame writev usage.
 	//
 	// 0 enables adaptive mode (no average-bytes floor).
@@ -383,6 +411,11 @@ type Options struct {
 	IndexPackedValuePtr bool
 	// IndexInternalBaseDelta enables the experimental internal-node base-delta encoding.
 	IndexInternalBaseDelta bool
+	// IndexAdaptiveLeafEncoding enables per-page adaptive selection of leaf
+	// encoding flags using deterministic heuristics from key/value shape.
+	//
+	// This option only affects newly-written leaf pages.
+	IndexAdaptiveLeafEncoding bool
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -694,6 +727,21 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid value-log auto policy %d", opts.ValueLog.AutoPolicy)
 	}
+	seenDomains := make(map[string]struct{}, len(opts.ValueLog.DomainInlineThresholds))
+	for i := range opts.ValueLog.DomainInlineThresholds {
+		d := opts.ValueLog.DomainInlineThresholds[i]
+		if len(d.Prefix) == 0 {
+			return fmt.Errorf("treedb: value-log domain threshold[%d] has empty prefix", i)
+		}
+		if d.InlineThreshold < 0 {
+			return fmt.Errorf("treedb: value-log domain threshold[%d] has negative inline threshold %d", i, d.InlineThreshold)
+		}
+		key := string(d.Prefix)
+		if _, dup := seenDomains[key]; dup {
+			return fmt.Errorf("treedb: duplicate value-log domain threshold prefix %q", d.Prefix)
+		}
+		seenDomains[key] = struct{}{}
+	}
 	return nil
 }
 
@@ -742,15 +790,18 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	db := &DB{
 		valueLogManager:           vm,
+		valueLogRefTracker:        newValueLogRefTracker(),
 		lock:                      lock,
 		adaptive:                  adaptiveCtrl,
 		keepRecent:                opts.KeepRecent,
+		valueLogDomainThresholds:  NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		leafFillTargetPPM:         opts.LeafFillTargetPPM,
 		internalFillTargetPPM:     opts.InternalFillTargetPPM,
 		leafPrefixCompression:     opts.LeafPrefixCompression,
 		indexColumnarLeaves:       opts.IndexColumnarLeaves,
 		indexPackedValuePtr:       opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
+		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
 		dir:                       opts.Dir,
@@ -779,6 +830,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexColumnarLeaves(opts.IndexColumnarLeaves)
 	gen.zipper.SetIndexPackedValuePtr(opts.IndexPackedValuePtr)
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
+	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
@@ -806,6 +858,10 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)
+	if err := db.initValueLogRefTracker(); err != nil {
+		db.Close()
+		return nil, err
+	}
 
 	db.pruner.Start(db, pruneWorkerOptions{
 		enabled:     !opts.DisableBackgroundPrune,
@@ -1087,22 +1143,24 @@ func (db *DB) writeMeta(pageID uint64, meta page.MetaPageBody) error {
 }
 
 type finalizeCommitPost struct {
-	oldState  *DBState
-	metrics   adaptive.Metrics
-	kickPrune bool
-	doPrune   bool
-	debug     bool
-	sync      bool
-	start     time.Time
-	durSync1  time.Duration
-	durMeta   time.Duration
-	durSync2  time.Duration
+	oldState     *DBState
+	metrics      adaptive.Metrics
+	vlogRefDelta *valueLogRefDelta
+	commitSeq    uint64
+	kickPrune    bool
+	doPrune      bool
+	debug        bool
+	sync         bool
+	start        time.Time
+	durSync1     time.Duration
+	durMeta      time.Duration
+	durSync2     time.Duration
 }
 
 // finalizeCommitLocked performs the durability-critical publish path.
 // Callers that already hold commit serialization may run post work after
 // releasing the serialization lock.
-func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool) (finalizeCommitPost, error) {
+func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta) (finalizeCommitPost, error) {
 	post := finalizeCommitPost{
 		metrics: metrics,
 	}
@@ -1155,6 +1213,10 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 
+	if db.testFailFinalizeCommit.Load() {
+		return post, errTestFinalizeCommitFailpoint
+	}
+
 	// 3. Write Meta - No DB Lock
 	t0 := time.Now()
 	if err := db.writeMeta(targetPageID, nextMeta); err != nil {
@@ -1186,7 +1248,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		if refreshValueLogSet {
+		if forceValueLogRefresh || len(touchedValueLogSegments) > 0 {
 			valueLogSet = db.valueLogManager.CurrentSet()
 		} else {
 			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
@@ -1199,6 +1261,8 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		ValueLogSet:      valueLogSet,
 	}
 	db.state.Store(newState)
+	post.commitSeq = nextMeta.CommitSeq
+	post.vlogRefDelta = vlogRefDelta
 	db.mu.Unlock()
 	watermarkHold += time.Since(holdStart)
 	db.observePublishWatermark(watermarkWait, watermarkHold, watermarkWait+watermarkHold)
@@ -1219,6 +1283,17 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 
 func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 	var durPrune time.Duration
+
+	if db.valueLogRefTracker != nil {
+		if post.vlogRefDelta != nil {
+			if err := db.valueLogRefTracker.applyDelta(post.commitSeq, post.vlogRefDelta); err != nil {
+				db.valueLogRefTracker.invalidate()
+				db.reportError(err)
+			}
+		} else {
+			db.valueLogRefTracker.invalidate()
+		}
+	}
 
 	// Keep pruning out of the commit serialization critical section.
 	if post.kickPrune {
@@ -1253,8 +1328,8 @@ func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {
 }
 
 // finalizeCommit handles durability and state updates.
-func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, refreshValueLogSet bool) error {
-	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, refreshValueLogSet)
+func (db *DB) finalizeCommit(newRootID uint64, sysRootID uint64, retired []uint64, sync bool, metrics adaptive.Metrics, touchedValueLogSegments []uint32, forceValueLogRefresh bool, vlogRefDelta *valueLogRefDelta) error {
+	post, err := db.finalizeCommitLocked(newRootID, sysRootID, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta)
 	if err != nil {
 		return err
 	}
@@ -1286,7 +1361,7 @@ func (db *DB) Commit(newRootID uint64) error {
 	sysRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, true)
+	return db.finalizeCommit(newRootID, sysRoot, nil, true, adaptive.Metrics{}, nil, true, nil)
 }
 
 // Prune reclaims pages from the graveyard.
@@ -1362,6 +1437,14 @@ func (db *DB) InlineThreshold() int {
 	}
 	return page.DefaultInlineThreshold
 }
+
+func (db *DB) InlineThresholdForKey(key []byte) int {
+	if db == nil {
+		return page.DefaultInlineThreshold
+	}
+	return ResolveInlineThresholdForKey(db.InlineThreshold(), key, db.valueLogDomainThresholds)
+}
+
 func (db *DB) State() *DBState {
 	return db.state.Load()
 }
@@ -1454,7 +1537,7 @@ func (db *DB) CompactIndex() error {
 	db.mu.Unlock()
 
 	// Commit new root and retire the old tree pages.
-	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, true)
+	return db.finalizeCommit(newRoot, sysRoot, retired, true, adaptive.Metrics{}, nil, true, nil)
 }
 
 type pagerAllocator struct {

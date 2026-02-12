@@ -114,3 +114,78 @@ func TestLeafColumnarAddLeafEntryWithPrefix(t *testing.T) {
 		t.Fatalf("unexpected pointer entry: val=%v flags=%v ptr=%v", v, flags, vp)
 	}
 }
+
+func TestLeafBuilder_AdaptiveEncoding_HeuristicDeterminism(t *testing.T) {
+	base := BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	}
+
+	pointerHeavyLowPrefix := []LeafHeuristicEntry{
+		{Key: []byte("a00"), Flags: FlagPointer},
+		{Key: []byte("b00"), Flags: FlagPointer},
+		{Key: []byte("c00"), Flags: FlagPointer},
+		{Key: []byte("d00"), Flags: FlagPointer},
+		{Key: []byte("e00"), Flags: FlagInline},
+	}
+	wantPointerHeavy := AdaptiveLeafBuilderOptions(base, pointerHeavyLowPrefix)
+	for i := 0; i < 8; i++ {
+		got := AdaptiveLeafBuilderOptions(base, pointerHeavyLowPrefix)
+		if got != wantPointerHeavy {
+			t.Fatalf("pointer-heavy heuristic must be deterministic: got=%+v want=%+v", got, wantPointerHeavy)
+		}
+	}
+	if !wantPointerHeavy.LeafColumnar {
+		t.Fatalf("expected pointer-heavy low-prefix pages to keep columnar mode")
+	}
+	if wantPointerHeavy.LeafPrefixCompression {
+		t.Fatalf("expected pointer-heavy low-prefix pages to disable prefix compression")
+	}
+
+	highPrefixInline := []LeafHeuristicEntry{
+		{Key: []byte("orders/us/0001"), Flags: FlagInline},
+		{Key: []byte("orders/us/0002"), Flags: FlagInline},
+		{Key: []byte("orders/us/0003"), Flags: FlagInline},
+		{Key: []byte("orders/us/0004"), Flags: FlagInline},
+	}
+	wantHighPrefix := AdaptiveLeafBuilderOptions(base, highPrefixInline)
+	for i := 0; i < 8; i++ {
+		got := AdaptiveLeafBuilderOptions(base, highPrefixInline)
+		if got != wantHighPrefix {
+			t.Fatalf("high-prefix heuristic must be deterministic: got=%+v want=%+v", got, wantHighPrefix)
+		}
+	}
+	if wantHighPrefix.LeafColumnar {
+		t.Fatalf("expected high-prefix inline pages to disable columnar mode")
+	}
+	if !wantHighPrefix.LeafPrefixCompression {
+		t.Fatalf("expected high-prefix inline pages to keep prefix compression")
+	}
+
+	deleteHeavy := []LeafHeuristicEntry{
+		{Key: []byte("acct/1"), Flags: FlagInline},
+		{Key: []byte("acct/2"), Flags: FlagTombstone},
+		{Key: []byte("acct/3"), Flags: FlagTombstone},
+		{Key: []byte("acct/4"), Flags: FlagTombstone},
+	}
+	gotDeleteHeavy := AdaptiveLeafBuilderOptions(base, deleteHeavy)
+	if gotDeleteHeavy.LeafColumnar {
+		t.Fatalf("expected delete-heavy pages to disable columnar mode")
+	}
+}
+
+func TestLeafHeuristicEntriesSorted_EqualKeyRespectsFlags(t *testing.T) {
+	if leafHeuristicEntriesSorted([]LeafHeuristicEntry{
+		{Key: []byte("dup"), Flags: FlagPointer},
+		{Key: []byte("dup"), Flags: FlagInline},
+	}) {
+		t.Fatalf("expected duplicate-key entries out of flag order to be unsorted")
+	}
+	if !leafHeuristicEntriesSorted([]LeafHeuristicEntry{
+		{Key: []byte("dup"), Flags: FlagInline},
+		{Key: []byte("dup"), Flags: FlagPointer},
+	}) {
+		t.Fatalf("expected duplicate-key entries in flag order to be sorted")
+	}
+}

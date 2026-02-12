@@ -2,9 +2,17 @@ package db
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
+
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestCRUD(t *testing.T) {
@@ -184,5 +192,240 @@ func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
 	stats := db.Stats()
 	if _, ok := stats["treedb.publish.watermark.lag_drift_bytes_per_sec"]; !ok {
 		t.Fatalf("missing treedb.publish.watermark.lag_drift_bytes_per_sec")
+	}
+}
+
+func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("k-inline"), []byte("inline")); err != nil {
+		t.Fatalf("Set inline: %v", err)
+	}
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	vw, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("new valuelog writer: %v", err)
+	}
+	large := bytes.Repeat([]byte("p"), 8*1024)
+	ptr, err := vw.Append(0, nil, 1, large)
+	if err != nil {
+		_ = vw.Close()
+		t.Fatalf("append valuelog: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("close valuelog writer: %v", err)
+	}
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k-pointer"), ptr); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write pointer batch: %v", err)
+	}
+	_ = b.Close()
+
+	keysOnly, err := db.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModeKeysOnly})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions keys-only: %v", err)
+	}
+	defer keysOnly.Close()
+
+	proj, err := db.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModePointerProjection})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions projection: %v", err)
+	}
+	defer proj.Close()
+
+	if err := db.Delete([]byte("k-pointer")); err != nil {
+		t.Fatalf("Delete after iterator acquire: %v", err)
+	}
+
+	var seenKeys []string
+	for ; keysOnly.Valid(); keysOnly.Next() {
+		seenKeys = append(seenKeys, string(keysOnly.Key()))
+		if val := keysOnly.Value(); val != nil {
+			t.Fatalf("keys-only iterator returned value for key %q", string(keysOnly.Key()))
+		}
+	}
+	if err := keysOnly.Error(); err != nil {
+		t.Fatalf("keys-only iterator error: %v", err)
+	}
+	if len(seenKeys) != 2 {
+		t.Fatalf("expected snapshot iterator to see 2 keys, got %d (%v)", len(seenKeys), seenKeys)
+	}
+
+	seenPointer := false
+	for ; proj.Valid(); proj.Next() {
+		val, ptr, flags := proj.UnsafeEntry()
+		if string(proj.Key()) == "k-pointer" {
+			seenPointer = true
+			if flags&node.FlagPointer == 0 {
+				t.Fatalf("expected pointer flag for k-pointer")
+			}
+			if val != nil {
+				t.Fatalf("projection expected nil value for pointer key")
+			}
+			if !page.IsValueLogFileID(ptr.FileID) {
+				t.Fatalf("projection expected value-log pointer for k-pointer, got file %d", ptr.FileID)
+			}
+		}
+	}
+	if err := proj.Error(); err != nil {
+		t.Fatalf("projection iterator error: %v", err)
+	}
+	if !seenPointer {
+		t.Fatalf("projection iterator did not observe k-pointer")
+	}
+}
+
+func TestValuePlacement_PerDomainThreshold_DefaultFallback(t *testing.T) {
+	domains := NormalizeValueLogDomainThresholds([]ValueLogDomainThreshold{
+		{Prefix: []byte("hot/"), InlineThreshold: 16},
+		{Prefix: []byte("hot/user/"), InlineThreshold: 8},
+		{Prefix: []byte("cold/"), InlineThreshold: 1024},
+	})
+	base := 256
+
+	if got := ResolveInlineThresholdForKey(base, []byte("hot/user/001"), domains); got != 8 {
+		t.Fatalf("expected longest-prefix threshold=8, got %d", got)
+	}
+	if got := ResolveInlineThresholdForKey(base, []byte("hot/other"), domains); got != 16 {
+		t.Fatalf("expected hot prefix threshold=16, got %d", got)
+	}
+	if got := ResolveInlineThresholdForKey(base, []byte("cold/key"), domains); got != 1024 {
+		t.Fatalf("expected cold prefix threshold=1024, got %d", got)
+	}
+	if got := ResolveInlineThresholdForKey(base, []byte("neutral/key"), domains); got != base {
+		t.Fatalf("expected fallback threshold=%d, got %d", base, got)
+	}
+}
+
+func TestNewBatchWithSize_AppliesPerDomainInlineThresholds(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+				{Prefix: []byte("cold/"), InlineThreshold: 1024},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	hotKey := []byte("hot/key")
+	coldKey := []byte("cold/key")
+	defaultKey := []byte("other/key")
+	hotValue := bytes.Repeat([]byte("h"), 64)
+	coldValue := bytes.Repeat([]byte("c"), 64)
+	defaultValue := bytes.Repeat([]byte("d"), 300)
+
+	b := db.NewBatchWithSize(3).(*Batch)
+	if err := b.Set(coldKey, coldValue); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch.Set cold: %v", err)
+	}
+	if err := b.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+	if err := b.Set(defaultKey, defaultValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set default err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch.Close: %v", err)
+	}
+}
+
+func TestNewBatchWithSize_ResolverUsesBatchSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 16},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(2).(*Batch)
+	// Mutate effective threshold source after batch creation; this should not
+	// affect an in-flight batch's threshold resolution for default-domain keys.
+	db.adaptive = nil
+	db.policy.InlineThreshold = 8
+
+	defaultKey := []byte("other/key")
+	defaultValue := bytes.Repeat([]byte("d"), 64)
+	if err := b.Set(defaultKey, defaultValue); err != nil {
+		_ = b.Close()
+		t.Fatalf("batch.Set default with snapshot threshold: %v", err)
+	}
+
+	hotKey := []byte("hot/key")
+	hotValue := bytes.Repeat([]byte("h"), 64)
+	if err := b.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch.Close: %v", err)
+	}
+}
+
+func TestNewBatchWithSize_ForcePointersOverridesDomainThresholds(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("hot/"), InlineThreshold: 1024},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(2).(*Batch)
+	hotKey := []byte("hot/key")
+	hotValue := bytes.Repeat([]byte("h"), 64)
+	if err := b.Set(hotKey, hotValue); !errors.Is(err, batchpkg.ErrValueTooLarge) {
+		_ = b.Close()
+		t.Fatalf("batch.Set hot err = %v, want %v", err, batchpkg.ErrValueTooLarge)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch.Close: %v", err)
 	}
 }

@@ -4,18 +4,35 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
+
+const (
+	defaultGroupedFrameCacheEntries     = 4
+	defaultGroupedFrameCacheMaxRawBytes = 4 << 20
+)
+
+type groupedFrameCacheEntry struct {
+	start     int64
+	verifyCRC bool
+	k         int
+	offsets   [MaxFrameK + 1]uint32
+	raw       []byte
+	used      uint64
+}
 
 // File represents a value-log segment on disk.
 type File struct {
@@ -24,6 +41,7 @@ type File struct {
 	File               *os.File
 	RefCount           atomic.Int64
 	IsZombie           atomic.Bool
+	retryDeletePending atomic.Bool
 	dictLookup         DictLookup
 	templateLookup     TemplateLookup
 	templateDecodeOpts templ.DecodeOptions
@@ -43,6 +61,13 @@ type File struct {
 	// scratch buffer that must be returned on eviction.
 	cacheRawPooled bool
 
+	groupedFrameCacheEntries int
+	groupedFrameCacheMaxRaw  int
+	groupedFrameCacheClock   uint64
+	groupedFrameCache        []groupedFrameCacheEntry
+	groupedFrameCacheHits    uint64
+	groupedFrameCacheMisses  uint64
+
 	closed atomic.Bool
 
 	// mmapData holds the current read-only mapping. Readers load it without locks.
@@ -61,7 +86,17 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 	if err != nil {
 		return nil, err
 	}
-	vf := &File{ID: id, Path: path, File: f, dictLookup: dictLookup, templateLookup: templateLookup, templateDecodeOpts: templateOpts, templateDefCache: templateCache}
+	vf := &File{
+		ID:                       id,
+		Path:                     path,
+		File:                     f,
+		dictLookup:               dictLookup,
+		templateLookup:           templateLookup,
+		templateDecodeOpts:       templateOpts,
+		templateDefCache:         templateCache,
+		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
+		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
+	}
 	vf.mmapData.Store([]byte(nil))
 	vf.maybeScheduleRemap()
 	return vf, nil
@@ -132,12 +167,141 @@ func (f *File) releaseDecodeScratch(buf []byte) {
 	putDecodeScratch(buf)
 }
 
+func (f *File) clearGroupedFrameCacheLocked() {
+	for i := range f.groupedFrameCache {
+		f.groupedFrameCache[i].raw = nil
+		f.groupedFrameCache[i].k = 0
+	}
+	f.groupedFrameCache = nil
+	f.groupedFrameCacheClock = 0
+}
+
+func (f *File) setGroupedFrameCacheEntries(entries int) {
+	if entries < 0 {
+		entries = 0
+	}
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.groupedFrameCacheEntries == entries {
+		return
+	}
+	f.clearGroupedFrameCacheLocked()
+	f.groupedFrameCacheEntries = entries
+	f.groupedFrameCacheHits = 0
+	f.groupedFrameCacheMisses = 0
+}
+
+func (f *File) groupedFrameCacheLookup(start int64, verifyCRC bool, subIndex int) (raw []byte, valStart, valEnd, rawLen uint32, ok bool) {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.groupedFrameCacheEntries <= 0 {
+		return nil, 0, 0, 0, false
+	}
+	if len(f.groupedFrameCache) == 0 {
+		f.groupedFrameCacheMisses++
+		return nil, 0, 0, 0, false
+	}
+	for i := range f.groupedFrameCache {
+		e := &f.groupedFrameCache[i]
+		if e.k <= 0 || e.start != start || e.verifyCRC != verifyCRC || subIndex < 0 || subIndex >= e.k {
+			continue
+		}
+		valStart = e.offsets[subIndex]
+		valEnd = e.offsets[subIndex+1]
+		rawLen = e.offsets[e.k]
+		if valEnd < valStart || valEnd > rawLen || uint32(len(e.raw)) != rawLen {
+			continue
+		}
+		f.groupedFrameCacheClock++
+		e.used = f.groupedFrameCacheClock
+		f.groupedFrameCacheHits++
+		return e.raw, valStart, valEnd, rawLen, true
+	}
+	f.groupedFrameCacheMisses++
+	return nil, 0, 0, 0, false
+}
+
+func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte) {
+	if k <= 0 || len(raw) == 0 {
+		return
+	}
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.groupedFrameCacheEntries <= 0 {
+		return
+	}
+	if f.groupedFrameCacheMaxRaw > 0 && len(raw) > f.groupedFrameCacheMaxRaw {
+		return
+	}
+
+	f.groupedFrameCacheClock++
+	used := f.groupedFrameCacheClock
+
+	for i := range f.groupedFrameCache {
+		e := &f.groupedFrameCache[i]
+		if e.k > 0 && e.start == start && e.verifyCRC == verifyCRC {
+			e.k = k
+			e.offsets = offsets
+			e.raw = raw
+			e.used = used
+			return
+		}
+	}
+
+	idx := -1
+	if len(f.groupedFrameCache) < f.groupedFrameCacheEntries {
+		f.groupedFrameCache = append(f.groupedFrameCache, groupedFrameCacheEntry{})
+		idx = len(f.groupedFrameCache) - 1
+	} else {
+		oldest := f.groupedFrameCache[0].used
+		idx = 0
+		for i := 1; i < len(f.groupedFrameCache); i++ {
+			if f.groupedFrameCache[i].used < oldest {
+				oldest = f.groupedFrameCache[i].used
+				idx = i
+			}
+		}
+	}
+
+	f.groupedFrameCache[idx] = groupedFrameCacheEntry{
+		start:     start,
+		verifyCRC: verifyCRC,
+		k:         k,
+		offsets:   offsets,
+		raw:       raw,
+		used:      used,
+	}
+}
+
+func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	return f.groupedFrameCacheHits, f.groupedFrameCacheMisses, len(f.groupedFrameCache), f.groupedFrameCacheEntries
+}
+
+func (f *File) setGroupedFrameCacheMaxRawBytes(maxRaw int) {
+	if maxRaw < 0 {
+		maxRaw = 0
+	}
+	f.cacheMu.Lock()
+	defer f.cacheMu.Unlock()
+	if f.groupedFrameCacheMaxRaw == maxRaw {
+		return
+	}
+	f.clearGroupedFrameCacheLocked()
+	f.groupedFrameCacheMaxRaw = maxRaw
+	f.groupedFrameCacheHits = 0
+	f.groupedFrameCacheMisses = 0
+}
+
 func (f *File) Close() error {
 	if f == nil || f.File == nil {
 		return nil
 	}
-	f.closed.Store(true)
 	var scratch []byte
+	if !f.closed.CompareAndSwap(false, true) {
+		return nil
+	}
 	f.cacheMu.Lock()
 	f.cacheK = 0
 	f.cacheFlags = 0
@@ -145,6 +309,7 @@ func (f *File) Close() error {
 	f.setCacheRawLocked(nil, false)
 	scratch = f.decodeScratch
 	f.decodeScratch = nil
+	f.clearGroupedFrameCacheLocked()
 	f.cacheStart.Store(0)
 	f.cacheMu.Unlock()
 	if scratch != nil {
@@ -414,23 +579,60 @@ func (s *Set) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	return f.ReadUnsafeAppend(ptr, !s.disableReadChecksum, dst)
 }
 
+// ReadUnsafeAppendBatch resolves pointers in order, reusing file lookups for
+// contiguous same-file runs to reduce scan-path overhead.
+func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error) {
+	if len(ptrs) == 0 {
+		return dst[:0], nil
+	}
+	if cap(dst) < len(ptrs) {
+		dst = make([][]byte, len(ptrs))
+	} else {
+		dst = dst[:len(ptrs)]
+	}
+	var (
+		fileID uint32
+		f      *File
+	)
+	for i, ptr := range ptrs {
+		if i == 0 || ptr.FileID != fileID {
+			next, ok := s.Files[ptr.FileID]
+			if !ok {
+				return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+			}
+			fileID = ptr.FileID
+			f = next
+		}
+		var err error
+		dst[i], err = f.ReadUnsafeAppend(ptr, !s.disableReadChecksum, dst[i][:0])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
 type Manager struct {
 	dir string
 
 	mu    sync.RWMutex
 	files map[uint32]*File
 
-	disableReadChecksum bool
-	dictLookup          DictLookup
-	templateLookup      TemplateLookup
-	templateDecodeOpts  templ.DecodeOptions
-	templateDefCache    *templateDefCache
+	disableReadChecksum      bool
+	dictLookup               DictLookup
+	templateLookup           TemplateLookup
+	templateDecodeOpts       templ.DecodeOptions
+	templateDefCache         *templateDefCache
+	groupedFrameCacheEntries int
+	groupedFrameCacheMaxRaw  int
 }
 
 func NewManager(dir string) (*Manager, error) {
 	m := &Manager{
-		dir:   dir,
-		files: make(map[uint32]*File),
+		dir:                      dir,
+		files:                    make(map[uint32]*File),
+		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
+		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
 	}
 	if err := m.Refresh(); err != nil {
 		return nil, err
@@ -465,6 +667,31 @@ func (m *Manager) SetTemplateLookup(lookup TemplateLookup, opts templ.DecodeOpti
 		f.templateDefCache = m.templateDefCache
 	}
 }
+
+func (m *Manager) SetGroupedFrameCacheEntries(entries int) {
+	if entries < 0 {
+		entries = 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.groupedFrameCacheEntries = entries
+	for _, f := range m.files {
+		f.setGroupedFrameCacheEntries(entries)
+	}
+}
+
+func (m *Manager) SetGroupedFrameCacheMaxRawBytes(maxRaw int) {
+	if maxRaw < 0 {
+		maxRaw = 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.groupedFrameCacheMaxRaw = maxRaw
+	for _, f := range m.files {
+		f.setGroupedFrameCacheMaxRawBytes(maxRaw)
+	}
+}
+
 func (m *Manager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -500,6 +727,8 @@ func (m *Manager) Refresh() error {
 		if err != nil {
 			return err
 		}
+		f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
+		f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
 		m.files[seg.id] = f
 	}
 	return nil
@@ -573,6 +802,37 @@ func (m *Manager) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error
 	return f.ReadUnsafeAppend(ptr, !m.disableReadChecksum, dst)
 }
 
+func (m *Manager) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error) {
+	if len(ptrs) == 0 {
+		return dst[:0], nil
+	}
+	if cap(dst) < len(ptrs) {
+		dst = make([][]byte, len(ptrs))
+	} else {
+		dst = dst[:len(ptrs)]
+	}
+	var (
+		fileID uint32
+		f      *File
+	)
+	for i, ptr := range ptrs {
+		if i == 0 || ptr.FileID != fileID {
+			next, err := m.fileFor(ptr.FileID)
+			if err != nil {
+				return nil, err
+			}
+			fileID = ptr.FileID
+			f = next
+		}
+		var err error
+		dst[i], err = f.ReadUnsafeAppend(ptr, !m.disableReadChecksum, dst[i][:0])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return dst, nil
+}
+
 func (m *Manager) fileFor(id uint32) (*File, error) {
 	m.mu.RLock()
 	f, ok := m.files[id]
@@ -612,22 +872,72 @@ func (m *Manager) Release(set *Set) error {
 	for _, f := range set.Files {
 		newRef := f.RefCount.Add(-1)
 		if newRef == 0 && f.IsZombie.Load() {
+			shouldRemove := false
 			m.mu.Lock()
 			if f.RefCount.Load() == 0 {
-				if _, exists := m.files[f.ID]; exists {
-					if e := f.Close(); e != nil {
-						err = e
-					}
-					if e := os.Remove(f.Path); e != nil {
-						err = e
-					}
-					delete(m.files, f.ID)
+				if cur, exists := m.files[f.ID]; exists && cur == f {
+					shouldRemove = true
 				}
 			}
 			m.mu.Unlock()
+			if shouldRemove {
+				if e := f.Close(); e != nil {
+					err = e
+				}
+				if e := removeSegmentFileWithRetry(f.Path); e != nil {
+					if isWindowsSharingViolationError(e) {
+						if f.retryDeletePending.CompareAndSwap(false, true) {
+							go m.retryZombieDelete(f)
+						}
+						continue
+					}
+					err = e
+					continue
+				}
+				m.mu.Lock()
+				if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
+					delete(m.files, f.ID)
+				}
+				m.mu.Unlock()
+			}
 		}
 	}
 	return err
+}
+
+func (m *Manager) retryZombieDelete(f *File) {
+	if m == nil || f == nil {
+		return
+	}
+	defer f.retryDeletePending.Store(false)
+
+	backoff := 200 * time.Millisecond
+	for {
+		m.mu.RLock()
+		cur, exists := m.files[f.ID]
+		keepRetrying := exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load()
+		m.mu.RUnlock()
+		if !keepRetrying {
+			return
+		}
+
+		if err := removeSegmentFileOnce(f.Path); err == nil {
+			m.mu.Lock()
+			if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
+				delete(m.files, f.ID)
+			}
+			m.mu.Unlock()
+			return
+		} else if !isWindowsSharingViolationError(err) {
+			log.Printf("valuelog: retry zombie delete failed for %s: %v", f.Path, err)
+			return
+		}
+
+		time.Sleep(backoff)
+		if backoff < 2*time.Second {
+			backoff *= 2
+		}
+	}
 }
 
 func (m *Manager) MarkZombie(id uint32) error {
@@ -697,7 +1007,7 @@ func (m *Manager) RemoveSegment(id uint32) error {
 	m.mu.Unlock()
 
 	_ = f.Close()
-	return os.Remove(f.Path)
+	return removeSegmentFileWithRetry(f.Path)
 }
 
 // RemoveSegmentForce removes a segment without refcount checks.
@@ -713,7 +1023,54 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 	m.mu.Unlock()
 
 	_ = f.Close()
-	return os.Remove(f.Path)
+	return removeSegmentFileWithRetry(f.Path)
+}
+
+var removeSegmentPath = os.Remove
+
+func removeSegmentFileOnce(path string) error {
+	err := removeSegmentPath(path)
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func removeSegmentFileWithRetry(path string) error {
+	const attempts = 40
+	backoff := 25 * time.Millisecond
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		err := removeSegmentFileOnce(path)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		// On non-Windows, or on the final retry attempt, stop retrying.
+		if runtime.GOOS != "windows" || i >= attempts-1 {
+			break
+		}
+		if !isWindowsSharingViolationError(err) {
+			break
+		}
+		time.Sleep(backoff)
+		if backoff < 200*time.Millisecond {
+			backoff *= 2
+		}
+	}
+	return lastErr
+}
+
+func isWindowsSharingViolationError(err error) bool {
+	if runtime.GOOS != "windows" || err == nil {
+		return false
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && pathErr.Err != nil {
+		err = pathErr.Err
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "sharing violation") || strings.Contains(msg, "used by another process")
 }
 
 type segmentInfo struct {

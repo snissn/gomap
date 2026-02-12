@@ -3,8 +3,11 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -96,4 +99,398 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	if _, err := os.Stat(path2); err != nil {
 		t.Fatalf("expected segment2 to remain, err=%v", err)
 	}
+}
+
+func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	key := func(i int) []byte { return []byte(fmt.Sprintf("k%06d", i)) }
+	valueA := func(i int) []byte { return bytes.Repeat([]byte{byte(i % 251)}, 256) }
+	valueB := func(i int) []byte { return bytes.Repeat([]byte{byte((i + 17) % 251)}, 512) }
+
+	ptrsA := appendPointersInNewSegment(t, dir, 0, 1, 10_000, 320, valueA)
+	ptrsB := appendPointersInNewSegment(t, dir, 0, 2, 20_000, 120, valueB)
+
+	b := db.NewBatch().(*Batch)
+	for i := 0; i < 320; i++ {
+		if err := b.SetPointer(key(i), ptrsA[i]); err != nil {
+			t.Fatalf("set initial pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write initial: %v", err)
+	}
+	_ = b.Close()
+
+	b = db.NewBatch().(*Batch)
+	for i := 0; i < 90; i++ {
+		if err := b.Delete(key(i)); err != nil {
+			t.Fatalf("delete %d: %v", i, err)
+		}
+	}
+	for i := 160; i < 280; i++ {
+		if err := b.SetPointer(key(i), ptrsB[i-160]); err != nil {
+			t.Fatalf("set overwrite pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write churn: %v", err)
+	}
+	_ = b.Close()
+
+	seq := db.currentCommitSeq()
+	incRefs, ok := db.valueLogRefTracker.referencedSet(seq)
+	if !ok {
+		t.Fatalf("expected incremental ref set for seq=%d", seq)
+	}
+
+	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if fullSeq != seq {
+		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
+	}
+
+	fullRefs := valueLogRefSetFromCounts(fullCounts)
+	if !reflect.DeepEqual(incRefs, fullRefs) {
+		t.Fatalf("incremental/full-scan mismatch: incremental=%d full=%d", len(incRefs), len(fullRefs))
+	}
+}
+
+func TestValueLogGC_IncrementalCounterRollbackOnFailedCommit(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldValue := bytes.Repeat([]byte("old"), 128)
+	newValue := bytes.Repeat([]byte("new"), 128)
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 1, 30_000, 1, func(int) []byte { return oldValue })[0]
+	newPtr := appendPointersInNewSegment(t, dir, 0, 2, 40_000, 1, func(int) []byte { return newValue })[0]
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), oldPtr); err != nil {
+		t.Fatalf("seed set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	beforeSeq := db.currentCommitSeq()
+	beforeRefs, ok := db.valueLogRefTracker.referencedSet(beforeSeq)
+	if !ok {
+		t.Fatalf("expected incremental ref set before failpoint seq=%d", beforeSeq)
+	}
+
+	db.testFailFinalizeCommit.Store(true)
+	b = db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k"), newPtr); err != nil {
+		t.Fatalf("failpoint set pointer: %v", err)
+	}
+	err = b.Write()
+	_ = b.Close()
+	db.testFailFinalizeCommit.Store(false)
+	if !errors.Is(err, errTestFinalizeCommitFailpoint) {
+		t.Fatalf("expected failpoint error, got %v", err)
+	}
+
+	afterSeq := db.currentCommitSeq()
+	if afterSeq != beforeSeq {
+		t.Fatalf("commit seq changed on failed commit: before=%d after=%d", beforeSeq, afterSeq)
+	}
+	afterRefs, ok := db.valueLogRefTracker.referencedSet(afterSeq)
+	if !ok {
+		t.Fatalf("expected incremental ref set after failpoint seq=%d", afterSeq)
+	}
+	if !reflect.DeepEqual(beforeRefs, afterRefs) {
+		t.Fatalf("ref set changed on failed commit")
+	}
+
+	got, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("get after failed commit: %v", err)
+	}
+	if !bytes.Equal(got, oldValue) {
+		t.Fatalf("value changed on failed commit")
+	}
+}
+
+func TestValueLogGC_IncrementalMode_RebuildOnCorruption(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 50_000, 200, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i % 251)}, 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	for i := 0; i < 200; i++ {
+		key := []byte(fmt.Sprintf("k%05d", i))
+		if err := b.SetPointer(key, ptrs[i]); err != nil {
+			t.Fatalf("seed set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{DryRun: true}); err != nil {
+		t.Fatalf("ValueLogGC dry-run: %v", err)
+	}
+
+	metaPath := db.valueLogRefCountsPath()
+	orig, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	if len(orig) == 0 {
+		t.Fatalf("expected non-empty metadata")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	corrupt := []byte("not-a-valid-metadata-file")
+	if err := os.WriteFile(metaPath, corrupt, 0o644); err != nil {
+		t.Fatalf("write corrupt metadata: %v", err)
+	}
+
+	db, err = Open(Options{
+		Dir: dir,
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	seq := db.currentCommitSeq()
+	if _, ok := db.valueLogRefTracker.referencedSet(seq); !ok {
+		t.Fatalf("expected ref tracker rebuilt for seq=%d", seq)
+	}
+
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{DryRun: true}); err != nil {
+		t.Fatalf("ValueLogGC after rebuild: %v", err)
+	}
+
+	after, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read rebuilt metadata: %v", err)
+	}
+	if bytes.Equal(after, corrupt) {
+		t.Fatalf("expected metadata rewrite after corruption")
+	}
+	if _, err := decodeValueLogRefCounts(after); err != nil {
+		t.Fatalf("rebuilt metadata decode: %v", err)
+	}
+}
+
+func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
+
+	ptrsA := appendPointersInNewSegment(t, dir, 0, 1, 70_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 512)
+	})
+	ptrsB := appendPointersInNewSegment(t, dir, 0, 2, 80_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 512)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrsA[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrsB[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	if err := db.Delete([]byte("k1")); err != nil {
+		t.Fatalf("delete k1: %v", err)
+	}
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+
+	healthPath := valueLogHealthPath(dir)
+	health, err := loadValueLogHealth(healthPath)
+	if err != nil {
+		t.Fatalf("load health after GC: %v", err)
+	}
+	if _, ok := health[ptrsA[0].FileID]; ok {
+		t.Fatalf("expected deleted segment %d removed from health metadata", ptrsA[0].FileID)
+	}
+	h2, ok := health[ptrsB[0].FileID]
+	if !ok {
+		t.Fatalf("expected referenced segment %d in health metadata", ptrsB[0].FileID)
+	}
+	if h2.SegmentBytes <= 0 {
+		t.Fatalf("expected positive segment bytes for segment %d, got %+v", ptrsB[0].FileID, h2)
+	}
+	if h2.LiveBytes < 0 || h2.LiveBytes > h2.SegmentBytes {
+		t.Fatalf("expected bounded live bytes for segment %d, got %+v", ptrsB[0].FileID, h2)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	db = nil
+	stats, err := ValueLogRewriteOffline(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.SegmentsAfter == 0 {
+		t.Fatalf("expected rewritten segments, got %+v", stats)
+	}
+
+	healthAfterRewrite, err := loadValueLogHealth(healthPath)
+	if err != nil {
+		t.Fatalf("load health after rewrite: %v", err)
+	}
+	if len(healthAfterRewrite) == 0 {
+		t.Fatalf("expected health metadata entries after rewrite")
+	}
+	foundRewrite := false
+	for _, h := range healthAfterRewrite {
+		if h.RewriteCount > 0 {
+			foundRewrite = true
+			break
+		}
+	}
+	if !foundRewrite {
+		t.Fatalf("expected rewrite_count > 0 after rewrite, got %+v", healthAfterRewrite)
+	}
+}
+
+func TestValueLogGC_HealthMetadata_PreservesPinnedZombieSegment(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptrsA := appendPointersInNewSegment(t, dir, 0, 1, 81_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 256)
+	})
+	ptrsB := appendPointersInNewSegment(t, dir, 0, 2, 82_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrsA[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrsB[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	pinned := db.valueLogManager.CurrentSetNoRefresh()
+	if pinned == nil {
+		t.Fatalf("expected pinned value-log set")
+	}
+	defer func() { _ = db.valueLogManager.Release(pinned) }()
+
+	zombieFile, ok := pinned.Files[ptrsA[0].FileID]
+	if !ok || zombieFile == nil || zombieFile.Path == "" {
+		t.Fatalf("missing pinned segment for %d", ptrsA[0].FileID)
+	}
+
+	if err := db.Delete([]byte("k1")); err != nil {
+		t.Fatalf("delete k1: %v", err)
+	}
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+
+	if _, err := os.Stat(zombieFile.Path); err != nil {
+		t.Fatalf("expected pinned zombie segment to remain on disk: %v", err)
+	}
+
+	health, err := loadValueLogHealth(valueLogHealthPath(dir))
+	if err != nil {
+		t.Fatalf("load health after gc: %v", err)
+	}
+	h, ok := health[ptrsA[0].FileID]
+	if !ok {
+		t.Fatalf("expected health entry for pinned zombie segment %d", ptrsA[0].FileID)
+	}
+	if h.SegmentBytes <= 0 {
+		t.Fatalf("expected positive segment bytes for pinned zombie segment: %+v", h)
+	}
+	if h.LiveBytes != 0 {
+		t.Fatalf("expected zero live bytes for unreferenced pinned zombie segment: %+v", h)
+	}
+}
+
+func valueLogRefSetFromCounts(counts map[uint32]uint64) map[uint32]struct{} {
+	out := make(map[uint32]struct{}, len(counts))
+	for fileID, n := range counts {
+		if n == 0 {
+			continue
+		}
+		out[fileID] = struct{}{}
+	}
+	return out
+}
+
+func appendPointersInNewSegment(t *testing.T, dir string, lane, seq uint32, ridBase uint64, n int, valueAt func(i int) []byte) []page.ValuePtr {
+	t.Helper()
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("encode file id lane=%d seq=%d: %v", lane, seq, err)
+	}
+	path := filepath.Join(walDir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ptrs := make([]page.ValuePtr, 0, n)
+	for i := 0; i < n; i++ {
+		ptr, err := w.Append(0, nil, ridBase+uint64(i), valueAt(i))
+		if err != nil {
+			t.Fatalf("append rid=%d: %v", ridBase+uint64(i), err)
+		}
+		ptrs = append(ptrs, ptr)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	return ptrs
 }

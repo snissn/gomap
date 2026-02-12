@@ -1,6 +1,10 @@
 package treedb
 
-import treedbdb "github.com/snissn/gomap/TreeDB/db"
+import (
+	"context"
+
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
+)
 
 // ValueLogRewriteStats summarizes value-log rewrite compaction results.
 type ValueLogRewriteStats struct {
@@ -10,6 +14,17 @@ type ValueLogRewriteStats struct {
 	BytesAfter     int64
 	RecordsCopied  int
 }
+
+// ValueLogRewriteOnlineOptions controls online rewrite batching behavior.
+type ValueLogRewriteOnlineOptions = treedbdb.ValueLogRewriteOnlineOptions
+
+// ValueLogRewriteLocalityPolicy controls pointer rewrite ordering.
+type ValueLogRewriteLocalityPolicy = treedbdb.ValueLogRewriteLocalityPolicy
+
+const (
+	ValueLogRewriteLocalityDefault = treedbdb.ValueLogRewriteLocalityDefault
+	ValueLogRewriteLocalityGrouped = treedbdb.ValueLogRewriteLocalityGrouped
+)
 
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and swaps
 // index.db to reference the new log. This is an offline operation that requires
@@ -25,5 +40,33 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if err != nil {
 		return ValueLogRewriteStats{}, err
 	}
+	return ValueLogRewriteStats(stats), nil
+}
+
+// ValueLogRewriteOnline rewrites pointer-backed values in bounded commit
+// batches and atomically swaps keys to rewritten pointers.
+//
+// In cached mode this method checkpoints first to establish a stable backend
+// baseline before running online rewrite against the backend DB.
+func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewriteStats, error) {
+	if err := db.ensureOpen(); err != nil {
+		return ValueLogRewriteStats{}, err
+	}
+	if db.backend == nil {
+		return ValueLogRewriteStats{}, ErrClosed
+	}
+	_, finishMaintenance := db.beginFullScanMaintenance("rewrite")
+	success := false
+	defer func() { finishMaintenance(success) }()
+	if db.cached != nil {
+		if err := db.Checkpoint(); err != nil {
+			return ValueLogRewriteStats{}, err
+		}
+	}
+	stats, err := db.backend.ValueLogRewriteOnline(ctx, treedbdb.ValueLogRewriteOnlineOptions(opts))
+	if err != nil {
+		return ValueLogRewriteStats{}, err
+	}
+	success = true
 	return ValueLogRewriteStats(stats), nil
 }
