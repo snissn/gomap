@@ -1,7 +1,10 @@
 package db
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -49,6 +52,71 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		arenaCap = getManyMaxArenaBytes
 	}
 	arena := make([]byte, 0, arenaCap)
+	appendValue := func(idx int, val []byte) {
+		n := len(val)
+		if n == 0 {
+			out[idx] = []byte{}
+			return
+		}
+		start := len(arena)
+		arena = append(arena, val...)
+		out[idx] = arena[start : start+n : start+n]
+	}
+
+	// Traversal-aware path for dense be8 batches: walk a single iterator over the
+	// sorted request set instead of N independent point lookups.
+	if getManyUseDenseIterator(keys) {
+		order := make([]int, len(keys))
+		for i := range order {
+			order[i] = i
+		}
+		sort.Slice(order, func(i, j int) bool {
+			return bytes.Compare(keys[order[i]], keys[order[j]]) < 0
+		})
+
+		it := snap.tree.Iterator(keys[order[0]], nil)
+		defer it.Close()
+
+		for pos := 0; pos < len(order); {
+			idx := order[pos]
+			key := keys[idx]
+			runEnd := pos + 1
+			for runEnd < len(order) && bytes.Equal(keys[order[runEnd]], key) {
+				runEnd++
+			}
+
+			for it.Valid() && bytes.Compare(it.UnsafeKey(), key) < 0 {
+				it.Next()
+			}
+			if !it.Valid() {
+				if err := it.Error(); err != nil {
+					return nil, err
+				}
+				break
+			}
+
+			if bytes.Equal(it.UnsafeKey(), key) {
+				if !it.IsDeleted() {
+					val := it.UnsafeValue()
+					if err := it.Error(); err != nil {
+						return nil, err
+					}
+					if val != nil {
+						for i := pos; i < runEnd; i++ {
+							appendValue(order[i], val)
+						}
+					}
+				}
+				it.Next()
+				if err := it.Error(); err != nil {
+					return nil, err
+				}
+			}
+			pos = runEnd
+		}
+		return out, nil
+	}
+
 	for i, key := range keys {
 		val, err := snap.GetUnsafe(key)
 		if err == tree.ErrKeyNotFound {
@@ -60,16 +128,36 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		if val == nil {
 			continue
 		}
-		n := len(val)
-		if n == 0 {
-			out[i] = []byte{}
-			continue
-		}
-		start := len(arena)
-		arena = append(arena, val...)
-		out[i] = arena[start : start+n : start+n]
+		appendValue(i, val)
 	}
 	return out, nil
+}
+
+func getManyUseDenseIterator(keys [][]byte) bool {
+	if len(keys) < 256 {
+		return false
+	}
+	var minV uint64
+	var maxV uint64
+	for i, key := range keys {
+		if len(key) != 8 {
+			return false
+		}
+		v := binary.BigEndian.Uint64(key)
+		if i == 0 || v < minV {
+			minV = v
+		}
+		if i == 0 || v > maxV {
+			maxV = v
+		}
+	}
+	span := maxV - minV
+	if span == ^uint64(0) {
+		return false
+	}
+	span++
+	// Heuristic: iterator walk path pays off when query density is high enough.
+	return uint64(len(keys))*8 >= span
 }
 
 // GetUnsafe returns the value for a key.
