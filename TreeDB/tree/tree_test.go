@@ -143,7 +143,10 @@ func TestTreeGet_UsesAppendReaderForPointers(t *testing.T) {
 	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
 	ptr := tracked.Add([]byte("pointer-value"))
 
-	rootData, _ := p.Get(0)
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
 	root := node.NewNode(rootData)
 	root.SetType(page.PageTypeLeaf)
 	root.SetPageID(0)
@@ -219,7 +222,10 @@ func TestTreeGetUnsafe_UsesUnsafeReaderForPointers(t *testing.T) {
 	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
 	ptr := tracked.Add([]byte("pointer-value"))
 
-	rootData, _ := p.Get(0)
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
 	root := node.NewNode(rootData)
 	root.SetType(page.PageTypeLeaf)
 	root.SetPageID(0)

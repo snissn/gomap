@@ -33,6 +33,17 @@ type SlabReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
 
+// Optional fast path for append-style pointer reads that can reuse caller
+// buffers and avoid extra allocations.
+type slabUnsafeAppender interface {
+	ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error)
+}
+
+// Optional fast path for batched append-style pointer reads.
+type slabUnsafeBatchAppender interface {
+	ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error)
+}
+
 type Tree struct {
 	pager        *pager.Pager
 	slabReader   SlabReader
