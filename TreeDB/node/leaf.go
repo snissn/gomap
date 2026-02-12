@@ -1689,24 +1689,26 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 	}
 
 	var stackScratch [128]byte
+	dataLen := len(data)
+	hasTailDir := blockEnd < count
 	restartKeyDirOff := NodeHeaderSize + int(blockStart)*2
 	keyDirNeeded := NodeHeaderSize + int(blockEnd)*2
-	if blockEnd < count {
+	if hasTailDir {
 		keyDirNeeded += 2
 	}
-	if restartKeyDirOff < NodeHeaderSize || keyDirNeeded > len(data) {
+	if restartKeyDirOff < NodeHeaderSize || keyDirNeeded > dataLen {
 		return 0, false, ErrCorruptedNode
 	}
 	prefixDirNeeded := prefixStart + int(blockEnd)*2
-	if prefixStart < NodeHeaderSize || prefixDirNeeded > len(data) {
+	if prefixStart < NodeHeaderSize || prefixDirNeeded > dataLen {
 		return 0, false, ErrCorruptedNode
 	}
 	restartStart := int(getUint16At(data, restartKeyDirOff))
-	restartEnd := len(data)
+	restartEnd := dataLen
 	if blockStart+1 < count {
 		restartEnd = int(getUint16At(data, restartKeyDirOff+2))
 	}
-	if restartStart < keysBlobBase || restartEnd < restartStart || restartEnd > len(data) {
+	if restartStart < keysBlobBase || restartEnd < restartStart || restartEnd > dataLen {
 		return 0, false, ErrCorruptedNode
 	}
 	restartPrefixOff := prefixStart + int(blockStart)*2
@@ -1727,28 +1729,52 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 		nextKeyDirOff := restartKeyDirOff + 4
 		prefixOff := prefixStart + int(blockStart+1)*2
 
-		for idx := blockStart + 1; idx < blockEnd; idx++ {
-			curEnd := len(data)
-			if idx+1 < count {
-				curEnd = int(getUint16At(data, nextKeyDirOff))
+		if hasTailDir {
+			for idx := blockStart + 1; idx < blockEnd; idx++ {
+				curEnd := int(getUint16At(data, nextKeyDirOff))
 				nextKeyDirOff += 2
-			}
-			if curStart < keysBlobBase || curEnd < curStart || curEnd > len(data) {
-				return 0, false, ErrCorruptedNode
-			}
-			prefixLen := int(getUint16At(data, prefixOff))
-			prefixOff += 2
+				if curEnd < curStart || curEnd > dataLen {
+					return 0, false, ErrCorruptedNode
+				}
+				prefixLen := int(getUint16At(data, prefixOff))
+				prefixOff += 2
 
-			suffix := data[curStart:curEnd]
-			nextU, ok := composePrefixVirtualKeyU64(prevU, prefixLen, suffix)
-			if !ok {
-				fastOK = false
-				break
+				suffix := data[curStart:curEnd]
+				nextU, ok := composePrefixVirtualKeyU64(prevU, prefixLen, suffix)
+				if !ok {
+					fastOK = false
+					break
+				}
+				prevU = nextU
+				curStart = curEnd
+				if prevU >= targetU {
+					return idx, prevU == targetU, nil
+				}
 			}
-			prevU = nextU
-			curStart = curEnd
-			if prevU >= targetU {
-				return idx, prevU == targetU, nil
+		} else {
+			for idx := blockStart + 1; idx < blockEnd; idx++ {
+				curEnd := dataLen
+				if idx+1 < count {
+					curEnd = int(getUint16At(data, nextKeyDirOff))
+					nextKeyDirOff += 2
+				}
+				if curEnd < curStart || curEnd > dataLen {
+					return 0, false, ErrCorruptedNode
+				}
+				prefixLen := int(getUint16At(data, prefixOff))
+				prefixOff += 2
+
+				suffix := data[curStart:curEnd]
+				nextU, ok := composePrefixVirtualKeyU64(prevU, prefixLen, suffix)
+				if !ok {
+					fastOK = false
+					break
+				}
+				prevU = nextU
+				curStart = curEnd
+				if prevU >= targetU {
+					return idx, prevU == targetU, nil
+				}
 			}
 		}
 		if fastOK {
@@ -1760,55 +1786,93 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 	curStart := restartEnd
 	nextKeyDirOff := restartKeyDirOff + 4
 	prefixOff := prefixStart + int(blockStart+1)*2
-	for idx := blockStart + 1; idx < blockEnd; idx++ {
-		curEnd := len(data)
-		if idx+1 < count {
-			if nextKeyDirOff+2 > len(data) {
+	if hasTailDir {
+		for idx := blockStart + 1; idx < blockEnd; idx++ {
+			curEnd := int(getUint16At(data, nextKeyDirOff))
+			nextKeyDirOff += 2
+			if curEnd < curStart || curEnd > dataLen {
 				return 0, false, ErrCorruptedNode
 			}
-			curEnd = int(getUint16At(data, nextKeyDirOff))
-			nextKeyDirOff += 2
-		}
-		if curStart < keysBlobBase || curEnd < curStart || curEnd > len(data) {
-			return 0, false, ErrCorruptedNode
-		}
-		if prefixOff+2 > len(data) {
-			return 0, false, ErrCorruptedNode
-		}
-		prefixLen := int(getUint16At(data, prefixOff))
-		prefixOff += 2
-		suffix := data[curStart:curEnd]
-		curStart = curEnd
+			prefixLen := int(getUint16At(data, prefixOff))
+			prefixOff += 2
+			suffix := data[curStart:curEnd]
+			curStart = curEnd
 
-		if prefixLen > len(prevKey) {
-			return 0, false, ErrCorruptedNode
-		}
+			if prefixLen > len(prevKey) {
+				return 0, false, ErrCorruptedNode
+			}
 
-		cmp = compareLeafPrefixVirtualKey(prevKey, prefixLen, suffix, target)
-		if cmp >= 0 {
-			return idx, cmp == 0, nil
-		}
+			cmp = compareLeafPrefixVirtualKey(prevKey, prefixLen, suffix, target)
+			if cmp >= 0 {
+				return idx, cmp == 0, nil
+			}
 
-		if prefixLen == 0 {
-			prevKey = suffix
-			continue
-		}
+			if prefixLen == 0 {
+				prevKey = suffix
+				continue
+			}
 
-		keyLen := prefixLen + len(suffix)
-		var cur []byte
-		if keyLen <= len(stackScratch) {
-			cur = stackScratch[:keyLen]
-		} else {
-			cur = n.ensureKeyScratch(keyLen)
+			keyLen := prefixLen + len(suffix)
+			var cur []byte
+			if keyLen <= len(stackScratch) {
+				cur = stackScratch[:keyLen]
+			} else {
+				cur = n.ensureKeyScratch(keyLen)
+			}
+			// If prevKey and cur share backing storage, the existing prefix bytes are
+			// already in place and we only need to overwrite the suffix below.
+			sameBacking := len(prevKey) > 0 && len(cur) > 0 && &prevKey[0] == &cur[0]
+			if !sameBacking && prefixLen > 0 {
+				copy(cur, prevKey[:prefixLen])
+			}
+			copy(cur[prefixLen:], suffix)
+			prevKey = cur
 		}
-		// If prevKey and cur share backing storage, the existing prefix bytes are
-		// already in place and we only need to overwrite the suffix below.
-		sameBacking := len(prevKey) > 0 && len(cur) > 0 && &prevKey[0] == &cur[0]
-		if !sameBacking && prefixLen > 0 {
-			copy(cur, prevKey[:prefixLen])
+	} else {
+		for idx := blockStart + 1; idx < blockEnd; idx++ {
+			curEnd := dataLen
+			if idx+1 < count {
+				curEnd = int(getUint16At(data, nextKeyDirOff))
+				nextKeyDirOff += 2
+			}
+			if curEnd < curStart || curEnd > dataLen {
+				return 0, false, ErrCorruptedNode
+			}
+			prefixLen := int(getUint16At(data, prefixOff))
+			prefixOff += 2
+			suffix := data[curStart:curEnd]
+			curStart = curEnd
+
+			if prefixLen > len(prevKey) {
+				return 0, false, ErrCorruptedNode
+			}
+
+			cmp = compareLeafPrefixVirtualKey(prevKey, prefixLen, suffix, target)
+			if cmp >= 0 {
+				return idx, cmp == 0, nil
+			}
+
+			if prefixLen == 0 {
+				prevKey = suffix
+				continue
+			}
+
+			keyLen := prefixLen + len(suffix)
+			var cur []byte
+			if keyLen <= len(stackScratch) {
+				cur = stackScratch[:keyLen]
+			} else {
+				cur = n.ensureKeyScratch(keyLen)
+			}
+			// If prevKey and cur share backing storage, the existing prefix bytes are
+			// already in place and we only need to overwrite the suffix below.
+			sameBacking := len(prevKey) > 0 && len(cur) > 0 && &prevKey[0] == &cur[0]
+			if !sameBacking && prefixLen > 0 {
+				copy(cur, prevKey[:prefixLen])
+			}
+			copy(cur[prefixLen:], suffix)
+			prevKey = cur
 		}
-		copy(cur[prefixLen:], suffix)
-		prevKey = cur
 	}
 
 	return blockEnd, false, nil
