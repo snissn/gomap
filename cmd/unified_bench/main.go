@@ -6,6 +6,7 @@ import (
 	crand "crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"hash/fnv"
@@ -2065,6 +2066,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			appendGetter, hasAppendGetter := db.(interface {
 				GetAppend(key, dst []byte) ([]byte, error)
 			})
+			baseSeed := testSeed(cfg.SeedUsed, "random_read_parallel")
 
 			runWorker := func(workerRng *rand.Rand, stop *atomic.Bool) error {
 				getter := interface {
@@ -2074,12 +2076,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				var closeSnapshot func() error
 				if hasSnapshotter {
 					snap, err := snapshotter.AcquireReadSnapshot()
-					if err != nil {
+					if err != nil && !errors.Is(err, kvstore.ErrUnsupported) {
 						return err
 					}
-					getter = snap
-					workerAppendGetter = snap
-					closeSnapshot = snap.Close
+					if err == nil {
+						getter = snap
+						workerAppendGetter = snap
+						closeSnapshot = snap.Close
+					} else if !hasAppendGetter {
+						workerAppendGetter = nil
+					}
 				} else if !hasAppendGetter {
 					workerAppendGetter = nil
 				}
@@ -2119,7 +2125,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			errCh := make(chan error, 1)
 			var wg sync.WaitGroup
 			for w := 0; w < workers; w++ {
-				seedW := cfg.SeedUsed + int64(w)
+				seedW := baseSeed + int64(w)
 				rngW := rand.New(rand.NewSource(seedW))
 				wg.Add(1)
 				go func(rng *rand.Rand) {
