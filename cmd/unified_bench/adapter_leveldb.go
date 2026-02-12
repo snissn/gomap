@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 
 	"github.com/snissn/gomap/kvstore"
@@ -134,8 +135,31 @@ func (l *LevelDBWrapper) Name() string {
 }
 func (l *LevelDBWrapper) Set(k, v []byte) error        { return l.db.Put(k, v, nil) }
 func (l *LevelDBWrapper) Get(k []byte) ([]byte, error) { return l.db.Get(k, nil) }
-func (l *LevelDBWrapper) Delete(k []byte) error        { return l.db.Delete(k, nil) }
-func (l *LevelDBWrapper) Close() error                 { return l.db.Close() }
+func (l *LevelDBWrapper) GetMany(keys [][]byte) ([][]byte, error) {
+	out := make([][]byte, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	snap, err := l.db.GetSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	defer snap.Release()
+	for i, key := range keys {
+		val, err := snap.Get(key, nil)
+		if err == nil {
+			out[i] = val
+			continue
+		}
+		if errors.Is(err, leveldb.ErrNotFound) {
+			continue
+		}
+		return nil, err
+	}
+	return out, nil
+}
+func (l *LevelDBWrapper) Delete(k []byte) error { return l.db.Delete(k, nil) }
+func (l *LevelDBWrapper) Close() error          { return l.db.Close() }
 func (l *LevelDBWrapper) Checkpoint() error {
 	if l == nil || l.db == nil {
 		return nil

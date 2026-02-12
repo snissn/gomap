@@ -30,9 +30,9 @@ func (n *Node) internalBaseDeltaMeta() (internalBaseDeltaMeta, error) {
 		return internalBaseDeltaMeta{}, ErrCorruptedNode
 	}
 
-	lowLen := int(getUint16(n.data[tailStart : tailStart+2]))
-	highLen := int(getUint16(n.data[tailStart+2 : tailStart+4]))
-	prefixLen := int(getUint16(n.data[tailStart+4 : tailStart+6]))
+	lowLen := int(getUint16At(n.data, tailStart))
+	highLen := int(getUint16At(n.data, tailStart+2))
+	prefixLen := int(getUint16At(n.data, tailStart+4))
 	if lowLen < 0 || highLen < 0 || prefixLen < 0 {
 		return internalBaseDeltaMeta{}, ErrCorruptedNode
 	}
@@ -170,7 +170,7 @@ func (n *Node) internalBaseDeltaChildIDAtIndex(meta internalBaseDeltaMeta, idx i
 	if dirOff+2 > len(n.data) {
 		return 0, ErrCorruptedNode
 	}
-	ptr := int(getUint16(n.data[dirOff : dirOff+2]))
+	ptr := int(getUint16At(n.data, dirOff))
 	return n.internalBaseDeltaChildIDAtPtr(meta, ptr, deltaWidth, entryHeader)
 }
 
@@ -181,7 +181,7 @@ func (n *Node) internalBaseDeltaChildIDAtPtr(meta internalBaseDeltaMeta, ptr int
 	deltaStart := ptr + 2
 	var delta uint64
 	if deltaWidth == 2 {
-		delta = uint64(getUint16(n.data[deltaStart : deltaStart+2]))
+		delta = uint64(getUint16At(n.data, deltaStart))
 	} else {
 		delta = uint64(binary.LittleEndian.Uint32(n.data[deltaStart : deltaStart+4]))
 	}
@@ -207,7 +207,7 @@ func (n *Node) GetInternalChildID(index uint16) (uint64, error) {
 		deltaStart := ptr + 2
 		var delta uint64
 		if deltaWidth == 2 {
-			delta = uint64(getUint16(n.data[deltaStart : deltaStart+2]))
+			delta = uint64(getUint16At(n.data, deltaStart))
 		} else {
 			delta = uint64(binary.LittleEndian.Uint32(n.data[deltaStart : deltaStart+4]))
 		}
@@ -493,12 +493,12 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 			lastIdx := -1
 			lastChild := uint64(0)
 			for i := 0; i < int(count); i++ {
-				offset := getUint16(data[NodeHeaderSize+i*2:])
+				offset := getUint16At(data, NodeHeaderSize+i*2)
 				ptr := int(offset)
 				if ptr < NodeHeaderSize || ptr+10 > len(data) {
 					return 0, false, ErrCorruptedNode
 				}
-				keyLen := int(getUint16(data[ptr : ptr+2]))
+				keyLen := int(getUint16At(data, ptr))
 				keyPtr := ptr + 10
 				keyEnd := keyPtr + keyLen
 				if keyEnd > len(data) {
@@ -507,7 +507,7 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 				cmp := compareInternalSuffix(data[keyPtr:keyEnd], key)
 				if cmp <= 0 {
 					lastIdx = i
-					lastChild = binary.LittleEndian.Uint64(data[ptr+2 : ptr+10])
+					lastChild = getUint64LEAt(data, ptr+2)
 					continue
 				}
 				break
@@ -515,22 +515,22 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 			if lastIdx >= 0 {
 				return lastChild, true, nil
 			}
-			ptr := int(getUint16(data[NodeHeaderSize : NodeHeaderSize+2]))
+			ptr := int(getUint16At(data, NodeHeaderSize))
 			if ptr < NodeHeaderSize || ptr+10 > len(data) {
 				return 0, false, ErrCorruptedNode
 			}
-			return binary.LittleEndian.Uint64(data[ptr+2 : ptr+10]), false, nil
+			return getUint64LEAt(data, ptr+2), false, nil
 		}
 
 		i, j := 0, int(count)
 		for i < j {
 			h := int(uint(i+j) >> 1)
-			offset := getUint16(data[NodeHeaderSize+h*2:])
+			offset := getUint16At(data, NodeHeaderSize+h*2)
 			ptr := int(offset)
 			if ptr < NodeHeaderSize || ptr+10 > len(data) {
 				return 0, false, ErrCorruptedNode
 			}
-			keyLen := int(getUint16(data[ptr : ptr+2]))
+			keyLen := int(getUint16At(data, ptr))
 			keyPtr := ptr + 10
 			keyEnd := keyPtr + keyLen
 			if keyEnd > len(data) {
@@ -548,11 +548,11 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 		if i > 0 {
 			chosen = i - 1
 		}
-		ptr := int(getUint16(data[NodeHeaderSize+chosen*2:]))
+		ptr := int(getUint16At(data, NodeHeaderSize+chosen*2))
 		if ptr < NodeHeaderSize || ptr+10 > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		return binary.LittleEndian.Uint64(data[ptr+2 : ptr+10]), i > 0, nil
+		return getUint64LEAt(data, ptr+2), i > 0, nil
 	}
 
 	meta, err := n.internalBaseDeltaMeta()
@@ -592,23 +592,37 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 		keySuffix = key[prefixLen:]
 	}
 
+	keySuffixLen := len(keySuffix)
+	var keySuffixU16 uint16
+	var keySuffixU32 uint32
+	var keySuffixU64 uint64
+	switch keySuffixLen {
+	case 2:
+		keySuffixU16 = binary.BigEndian.Uint16(keySuffix)
+	case 4:
+		keySuffixU32 = binary.BigEndian.Uint32(keySuffix)
+	case 8:
+		keySuffixU64 = binary.BigEndian.Uint64(keySuffix)
+	}
+
 	if count <= smallSearchThreshold {
 		last := -1
 		lastChildID := uint64(0)
 		for i := 0; i < int(count); i++ {
-			offset := getUint16(data[NodeHeaderSize+i*2:])
+			offset := getUint16At(data, NodeHeaderSize+i*2)
 			ptr := int(offset)
 			if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
 				return 0, false, ErrCorruptedNode
 			}
-			suffixLen := int(getUint16(data[ptr : ptr+2]))
+			suffixLen := int(getUint16At(data, ptr))
 			suffixStart := ptr + entryHeader
 			suffixEnd := suffixStart + suffixLen
 			if suffixLen < 0 || suffixEnd > meta.footerStart {
 				return 0, false, ErrCorruptedNode
 			}
+
 			var cmp int
-			if suffixLen == len(keySuffix) {
+			if suffixLen == keySuffixLen {
 				switch suffixLen {
 				case 1:
 					a := data[suffixStart]
@@ -620,26 +634,23 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 					}
 				case 2:
 					a := binary.BigEndian.Uint16(data[suffixStart : suffixStart+2])
-					b := binary.BigEndian.Uint16(keySuffix)
-					if a < b {
+					if a < keySuffixU16 {
 						cmp = -1
-					} else if a > b {
+					} else if a > keySuffixU16 {
 						cmp = 1
 					}
 				case 4:
 					a := binary.BigEndian.Uint32(data[suffixStart : suffixStart+4])
-					b := binary.BigEndian.Uint32(keySuffix)
-					if a < b {
+					if a < keySuffixU32 {
 						cmp = -1
-					} else if a > b {
+					} else if a > keySuffixU32 {
 						cmp = 1
 					}
 				case 8:
-					a := binary.BigEndian.Uint64(data[suffixStart : suffixStart+8])
-					b := binary.BigEndian.Uint64(keySuffix)
-					if a < b {
+					a := getUint64BEAt(data, suffixStart)
+					if a < keySuffixU64 {
 						cmp = -1
-					} else if a > b {
+					} else if a > keySuffixU64 {
 						cmp = 1
 					}
 				default:
@@ -669,12 +680,12 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 	i, j := 0, int(count)
 	for i < j {
 		h := int(uint(i+j) >> 1)
-		offset := getUint16(data[NodeHeaderSize+h*2:])
+		offset := getUint16At(data, NodeHeaderSize+h*2)
 		ptr := int(offset)
 		if ptr < NodeHeaderSize || ptr+entryHeader > meta.footerStart {
 			return 0, false, ErrCorruptedNode
 		}
-		suffixLen := int(getUint16(data[ptr : ptr+2]))
+		suffixLen := int(getUint16At(data, ptr))
 		suffixStart := ptr + entryHeader
 		suffixEnd := suffixStart + suffixLen
 		if suffixLen < 0 || suffixEnd > meta.footerStart {
@@ -682,7 +693,7 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 		}
 
 		var cmp int
-		if suffixLen == len(keySuffix) {
+		if suffixLen == keySuffixLen {
 			switch suffixLen {
 			case 1:
 				a := data[suffixStart]
@@ -694,26 +705,23 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 				}
 			case 2:
 				a := binary.BigEndian.Uint16(data[suffixStart : suffixStart+2])
-				b := binary.BigEndian.Uint16(keySuffix)
-				if a < b {
+				if a < keySuffixU16 {
 					cmp = -1
-				} else if a > b {
+				} else if a > keySuffixU16 {
 					cmp = 1
 				}
 			case 4:
 				a := binary.BigEndian.Uint32(data[suffixStart : suffixStart+4])
-				b := binary.BigEndian.Uint32(keySuffix)
-				if a < b {
+				if a < keySuffixU32 {
 					cmp = -1
-				} else if a > b {
+				} else if a > keySuffixU32 {
 					cmp = 1
 				}
 			case 8:
-				a := binary.BigEndian.Uint64(data[suffixStart : suffixStart+8])
-				b := binary.BigEndian.Uint64(keySuffix)
-				if a < b {
+				a := getUint64BEAt(data, suffixStart)
+				if a < keySuffixU64 {
 					cmp = -1
-				} else if a > b {
+				} else if a > keySuffixU64 {
 					cmp = 1
 				}
 			default:

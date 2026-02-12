@@ -10382,6 +10382,83 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	return true
 }
 
+// canBypassMemtableRead reports whether point-lookups can skip memtable probes
+// and go directly to backend lookups for this key.
+//
+// Safety notes:
+//   - We require an empty immutable queue.
+//   - We require global mutable bytes to be zero.
+//   - We additionally check the target mutable shard length to avoid races where
+//     mutableBytes is transiently zero while an old view still has entries.
+func (db *DB) canBypassMemtableRead(view *memtableView, key []byte) bool {
+	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+		return false
+	}
+	if len(view.mutables) == 0 {
+		return true
+	}
+	idx := db.shardIndex(key)
+	if idx >= len(view.mutables) {
+		return true
+	}
+	mt := view.mutables[idx]
+	if mt == nil {
+		return true
+	}
+	return mt.Len() == 0
+}
+
+// canBypassMemtableReadMany is the multi-key equivalent of
+// canBypassMemtableRead. It only bypasses memtables when every touched mutable
+// shard is observably empty.
+func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool {
+	if len(keys) == 0 {
+		return true
+	}
+	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+		return false
+	}
+	n := len(view.mutables)
+	if n == 0 {
+		return true
+	}
+	// Fast path: common shard counts are small; use a stack bitset to avoid
+	// per-call allocations in read-heavy GetMany paths.
+	if n <= 64 {
+		var checkedBits uint64
+		for _, key := range keys {
+			idx := db.shardIndex(key)
+			if idx >= n {
+				continue
+			}
+			bit := uint64(1) << uint(idx)
+			if checkedBits&bit != 0 {
+				continue
+			}
+			checkedBits |= bit
+			mt := view.mutables[idx]
+			if mt != nil && mt.Len() != 0 {
+				return false
+			}
+		}
+		return true
+	}
+
+	checked := make([]bool, n)
+	for _, key := range keys {
+		idx := db.shardIndex(key)
+		if idx >= n || checked[idx] {
+			continue
+		}
+		checked[idx] = true
+		mt := view.mutables[idx]
+		if mt != nil && mt.Len() != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	view := db.memtables.Load()
 	var (
@@ -10406,6 +10483,10 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 		queue = append([]memtable.Table(nil), db.queue...)
 		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
 		db.mu.RUnlock()
+	}
+
+	if db.canBypassMemtableRead(view, key) {
+		return nil, false, nil
 	}
 
 	// check mutable
@@ -10486,6 +10567,10 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 		db.mu.RUnlock()
 	}
 
+	if db.canBypassMemtableRead(view, key) {
+		return dst, false, nil
+	}
+
 	// check mutable
 	if len(mutables) > 0 {
 		idx := db.shardIndex(key)
@@ -10540,6 +10625,25 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	return dst, false, nil
 }
 
+type backendManyGetter interface {
+	GetMany(keys [][]byte) ([][]byte, error)
+}
+
+func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
+	if mg, ok := db.backend.(backendManyGetter); ok {
+		return mg.GetMany(keys)
+	}
+	out := make([][]byte, len(keys))
+	for i, key := range keys {
+		val, err := db.backend.Get(key)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = val
+	}
+	return out, nil
+}
+
 // GetUnsafe returns a safe copy of the value.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 	return db.Get(key)
@@ -10547,6 +10651,9 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	if db.canBypassMemtableRead(db.memtables.Load(), key) {
+		return db.backend.Get(key)
+	}
 	val, found, err := db.getMemtable(key)
 	if err != nil {
 		return nil, err
@@ -10560,6 +10667,57 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return cpy, nil
 	}
 	return db.backend.Get(key)
+}
+
+// GetMany returns safe copies of values for keys.
+//
+// Missing keys are returned as nil entries with no error.
+func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
+	if len(keys) == 0 {
+		return make([][]byte, 0), nil
+	}
+
+	// Fast path: no mutable/queued state and all touched mutable shards are
+	// observably empty, so we can delegate to backend single-snapshot GetMany.
+	if db.canBypassMemtableReadMany(db.memtables.Load(), keys) {
+		return db.backendGetMany(keys)
+	}
+
+	out := make([][]byte, len(keys))
+	backendIdx := make([]int, 0, len(keys))
+	backendKeys := make([][]byte, 0, len(keys))
+	for i, key := range keys {
+		val, found, err := db.getMemtable(key)
+		if err != nil {
+			return nil, err
+		}
+		if found {
+			if val == nil {
+				continue
+			}
+			cpy := make([]byte, len(val))
+			copy(cpy, val)
+			out[i] = cpy
+			continue
+		}
+		backendIdx = append(backendIdx, i)
+		backendKeys = append(backendKeys, key)
+	}
+	if len(backendKeys) == 0 {
+		return out, nil
+	}
+
+	backendVals, err := db.backendGetMany(backendKeys)
+	if err != nil {
+		return nil, err
+	}
+	if len(backendVals) != len(backendKeys) {
+		return nil, fmt.Errorf("cachingdb: backend GetMany returned %d values for %d keys", len(backendVals), len(backendKeys))
+	}
+	for i, outIdx := range backendIdx {
+		out[outIdx] = backendVals[i]
+	}
+	return out, nil
 }
 
 // GetAppend appends the value for the key to dst and returns the new slice.

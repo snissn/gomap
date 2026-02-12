@@ -55,3 +55,12 @@ func (m *mapValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	}
 	return val, nil
 }
+
+func (m *mapValueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	val, ok := m.values[ptr]
+	if !ok {
+		return nil, fmt.Errorf("value pointer not found")
+	}
+	dst = append(dst[:0], val...)
+	return dst, nil
+}

@@ -541,6 +541,7 @@ type Snapshot struct {
 	db         *DB
 	idx        *indexGen
 	state      *DBState
+	reader     valueReader
 	tree       tree.Tree
 	registryID int64
 }
@@ -583,8 +584,9 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.db = db
 	snap.idx = idx
 	snap.state = state
+	snap.reader.vlogs = state.ValueLogSet
 	if idx != nil {
-		snap.tree.Reset(idx.pager, valueReader{vlogs: state.ValueLogSet}, state.RootPageID)
+		snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
 	}
 	snap.registryID = id
 	return snap
@@ -1393,6 +1395,12 @@ func (db *DB) Prune() {
 // Get returns value from snapshot.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	return s.tree.Get(key)
+}
+
+// GetAppend appends the value for key to dst and returns the grown slice.
+// If key is not found, it returns dst and tree.ErrKeyNotFound.
+func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	return s.tree.GetAppend(key, dst)
 }
 
 // GetUnsafe returns a zero-copy view of the value from the snapshot.

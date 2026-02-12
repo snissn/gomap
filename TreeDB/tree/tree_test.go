@@ -10,6 +10,22 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
+type trackedValueReader struct {
+	*mapValueReader
+	readUnsafeCalls       int
+	readUnsafeAppendCalls int
+}
+
+func (r *trackedValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	r.readUnsafeCalls++
+	return r.mapValueReader.ReadUnsafe(ptr)
+}
+
+func (r *trackedValueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	r.readUnsafeAppendCalls++
+	return r.mapValueReader.ReadUnsafeAppend(ptr, dst)
+}
+
 func TestTreeGet(t *testing.T) {
 	// Setup Pager
 	dir := t.TempDir()
@@ -109,6 +125,138 @@ func TestTreeGet(t *testing.T) {
 		if c.Err == nil && !bytes.Equal(val, c.Val) {
 			t.Errorf("Get(%s): value mismatch", c.Key) // Don't print huge val
 		}
+	}
+}
+
+func TestTreeGet_UsesAppendReaderForPointers(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
+	ptr := tracked.Add([]byte("pointer-value"))
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	root.AddLeafEntry([]byte("k"), nil, node.FlagPointer, ptr)
+	root.UpdateChecksum()
+
+	tr := New(p, tracked, 0)
+	got, err := tr.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if string(got) != "pointer-value" {
+		t.Fatalf("unexpected value: %q", got)
+	}
+	if tracked.readUnsafeAppendCalls != 1 {
+		t.Fatalf("expected ReadUnsafeAppend to be used once, got %d", tracked.readUnsafeAppendCalls)
+	}
+	if tracked.readUnsafeCalls != 0 {
+		t.Fatalf("expected ReadUnsafe to be bypassed, got %d calls", tracked.readUnsafeCalls)
+	}
+
+	// Regression: caller-provided dst commonly has spare capacity.
+	// GetAppend must not panic when probing in-place append reuse.
+	prefixed := make([]byte, 1, 32)
+	prefixed[0] = 'x'
+	gotAppend, err := tr.GetAppend([]byte("k"), prefixed)
+	if err != nil {
+		t.Fatalf("GetAppend failed: %v", err)
+	}
+	if string(gotAppend) != "xpointer-value" {
+		t.Fatalf("unexpected appended value: %q", gotAppend)
+	}
+}
+
+func TestTreeGetAppend_AppendsAndUsesAppendReaderForPointers(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
+	ptr := tracked.Add([]byte("pointer-value"))
+
+	rootData, _ := p.Get(0)
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	root.AddLeafEntry([]byte("k"), nil, node.FlagPointer, ptr)
+	root.UpdateChecksum()
+
+	tr := New(p, tracked, 0)
+	got, err := tr.GetAppend([]byte("k"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAppend failed: %v", err)
+	}
+	if string(got) != "prefix:pointer-value" {
+		t.Fatalf("unexpected value: %q", got)
+	}
+	if tracked.readUnsafeAppendCalls != 1 {
+		t.Fatalf("expected ReadUnsafeAppend to be used once, got %d", tracked.readUnsafeAppendCalls)
+	}
+	if tracked.readUnsafeCalls != 0 {
+		t.Fatalf("expected ReadUnsafe to be bypassed, got %d calls", tracked.readUnsafeCalls)
+	}
+}
+
+func TestTreeGetUnsafe_UsesUnsafeReaderForPointers(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
+	ptr := tracked.Add([]byte("pointer-value"))
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	root.AddLeafEntry([]byte("k"), nil, node.FlagPointer, ptr)
+	root.UpdateChecksum()
+
+	tr := New(p, tracked, 0)
+	got, err := tr.GetUnsafe([]byte("k"))
+	if err != nil {
+		t.Fatalf("GetUnsafe failed: %v", err)
+	}
+	if string(got) != "pointer-value" {
+		t.Fatalf("unexpected value: %q", got)
+	}
+	if tracked.readUnsafeCalls != 1 {
+		t.Fatalf("expected ReadUnsafe to be used once, got %d", tracked.readUnsafeCalls)
+	}
+	if tracked.readUnsafeAppendCalls != 0 {
+		t.Fatalf("expected ReadUnsafeAppend to be bypassed, got %d calls", tracked.readUnsafeAppendCalls)
 	}
 }
 
