@@ -16,8 +16,8 @@ func TestResolveReadWorkers(t *testing.T) {
 		want int
 	}{
 		{name: "explicit one", raw: 1, keys: 17, want: 1},
-		{name: "auto by default", raw: 0, keys: 17, want: min(maxWorkers, 17)},
-		{name: "negative values use auto", raw: -1, keys: 17, want: min(maxWorkers, 17)},
+		{name: "auto by default", raw: 0, keys: 17, want: minInt(maxWorkers, 17)},
+		{name: "negative values use auto", raw: -1, keys: 17, want: minInt(maxWorkers, 17)},
 		{name: "clamp to key count", raw: 32, keys: 9, want: 9},
 		{name: "empty key list", raw: -1, keys: 0, want: 1},
 	}
@@ -166,7 +166,7 @@ func TestGetMany_ParallelAndSerialSemanticsMatch(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
+func minInt(a, b int) int {
 	if a < b {
 		return a
 	}

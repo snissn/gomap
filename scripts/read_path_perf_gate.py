@@ -30,7 +30,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 
 RR_LINE = re.compile(r"^Random Read / TreeDB = ([0-9,]+)$")
@@ -49,7 +49,7 @@ def run(
     cmd: List[str],
     cwd: Path,
     capture: bool = False,
-    env: Dict[str, str] | None = None,
+    env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     try:
         kwargs: Dict[str, object] = {"text": True}
@@ -81,7 +81,7 @@ def ensure_ref(args: argparse.Namespace, ref: str) -> None:
     run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=args.repo, capture=True)
 
 
-def parse_table_last_numeric(prefix: str, line: str) -> int | None:
+def parse_table_last_numeric(prefix: str, line: str) -> Optional[int]:
     if not (line.startswith(prefix) or line.startswith("| " + prefix) or line.startswith("|" + prefix)):
         return None
 
@@ -124,7 +124,7 @@ def parse_table_last_numeric(prefix: str, line: str) -> int | None:
     return value
 
 
-def parse_table_cell_int(raw: str) -> int | None:
+def parse_table_cell_int(raw: str) -> Optional[int]:
     m = re.search(r"([0-9][0-9,]*)\s*$", raw.strip())
     if not m:
         return None
@@ -132,7 +132,7 @@ def parse_table_cell_int(raw: str) -> int | None:
     return value if value > 0 else None
 
 
-def _normalize_db_names(raw_dbs: str | List[str] | None) -> List[str]:
+def _normalize_db_names(raw_dbs: Optional[Union[str, List[str]]]) -> List[str]:
     if raw_dbs is None:
         return ["treedb"]
     if isinstance(raw_dbs, str):
@@ -142,11 +142,11 @@ def _normalize_db_names(raw_dbs: str | List[str] | None) -> List[str]:
     return parts if parts else ["treedb"]
 
 
-def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]:
+def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb") -> Tuple[int, int]:
     rr = None
     rb = None
     tree_db_present = False
-    tree_col_idx: int | None = None
+    tree_col_idx: Optional[int] = None
     normalized_dbs = _normalize_db_names(dbs)
     for db in normalized_dbs:
         if db.lower() == "treedb":
@@ -267,17 +267,6 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
                 if parsed is not None:
                     rb = parsed
 
-            if rr is None and re.fullmatch(r"Random Read", line.strip()) is not None:
-                parsed = parse_table_last_numeric("Random Read", line)
-                if parsed is not None:
-                    rr = parsed
-                    continue
-            if rb is None and re.fullmatch(r"Random Read \(Batch\)", line.strip()) is not None:
-                parsed = parse_table_last_numeric("Random Read (Batch)", line)
-                if parsed is not None:
-                    rb = parsed
-                continue
-
     if rr is None or rb is None:
         raise RuntimeError("failed to parse Random Read metrics from unified-bench output")
     return rr, rb
@@ -329,7 +318,12 @@ def classify_metric(effect_middle3_pct: float, ci_lo: float, ci_hi: float, thres
     return "uncertain"
 
 
-def metric_summary(base_runs: List[RunPoint], cand_runs: List[RunPoint], metric: str, thresh: float = 1.0) -> Dict[str, float | str | List[float]]:
+def metric_summary(
+    base_runs: List[RunPoint],
+    cand_runs: List[RunPoint],
+    metric: str,
+    thresh: float = 1.0,
+) -> Dict[str, Union[float, str, List[float]]]:
     base_vals = [getattr(r, metric) for r in base_runs]
     cand_vals = [getattr(r, metric) for r in cand_runs]
     m3_base = middle3(base_vals)
@@ -460,7 +454,7 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
     return "approve_with_revisions"
 
 
-def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -> Dict[str, int | str]:
+def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -> Dict[str, Union[int, str]]:
     dbs = args.dbs
     cmd = [
         str(bin_path),
@@ -493,7 +487,7 @@ def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -
     }
 
 
-def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Dict[str, str] | None:
+def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Optional[Dict[str, str]]:
     if not args.microbench:
         return None
 
