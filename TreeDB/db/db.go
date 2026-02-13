@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,6 +72,7 @@ type DB struct {
 	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
 	indexAdaptiveLeafEncoding bool
+	indexOuterLeafMode        string
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
 
@@ -110,6 +112,17 @@ const (
 )
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
+
+func normalizeIndexOuterLeafMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", IndexOuterLeafModeV1:
+		return IndexOuterLeafModeV1
+	case IndexOuterLeafModeV2BlockPtr:
+		return IndexOuterLeafModeV2BlockPtr
+	default:
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
+}
 
 // DurabilityMode configures cached-mode durability semantics.
 //
@@ -163,6 +176,14 @@ const (
 	ValueLogBlockLZ4
 )
 
+const (
+	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
+	IndexOuterLeafModeV1 = "v1"
+	// IndexOuterLeafModeV2BlockPtr reserves the fence-key -> block pointer
+	// layout for the experimental outer-leaf format.
+	IndexOuterLeafModeV2BlockPtr = "v2_blockptr"
+)
+
 // ValueLogAutoPolicy controls auto-mode dict vs block selection bias.
 type ValueLogAutoPolicy uint8
 
@@ -196,6 +217,19 @@ type ValueLogOptions struct {
 	//
 	// 0 uses a default.
 	BlockTargetCompressedBytes int
+	// OuterLeafBlockTargetBytes guides outer-leaf block payload sizing for the
+	// experimental index outer-leaf modes.
+	//
+	// 0 uses a default.
+	OuterLeafBlockTargetBytes int
+	// OuterLeafBlockCodec selects the codec used for experimental outer-leaf
+	// block payloads stored in the value log.
+	OuterLeafBlockCodec ValueLogBlockCodec
+	// OuterLeafBlockRestartInterval controls key restart cadence inside
+	// experimental outer-leaf blocks.
+	//
+	// 0 uses a default.
+	OuterLeafBlockRestartInterval int
 	// IncompressibleHoldBytes configures auto-mode suppression duration after
 	// repeated incompressible probes.
 	//
@@ -416,6 +450,10 @@ type Options struct {
 	//
 	// This option only affects newly-written leaf pages.
 	IndexAdaptiveLeafEncoding bool
+	// IndexOuterLeafMode selects the index outer-leaf format:
+	// - "" / "v1": existing per-key leaf entries
+	// - "v2_blockptr": reserved experimental fence-key -> block pointer layout
+	IndexOuterLeafMode string
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -656,6 +694,7 @@ func Open(opts Options) (*DB, error) {
 	if opts.ValueLog.Compression == 0 {
 		opts.ValueLog.Compression = ValueLogCompressionAuto
 	}
+	opts.IndexOuterLeafMode = normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
 
 	if err := validateOptions(opts); err != nil {
 		return nil, err
@@ -706,6 +745,19 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid value-log block codec %d", opts.ValueLog.BlockCodec)
 	}
+	switch opts.ValueLog.OuterLeafBlockCodec {
+	case ValueLogBlockSnappy, ValueLogBlockLZ4:
+	default:
+		return fmt.Errorf("treedb: invalid value-log outer-leaf block codec %d", opts.ValueLog.OuterLeafBlockCodec)
+	}
+	switch normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode) {
+	case IndexOuterLeafModeV1, IndexOuterLeafModeV2BlockPtr:
+	default:
+		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
+	}
+	if normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode) == IndexOuterLeafModeV2BlockPtr {
+		return fmt.Errorf("treedb: index outer leaf mode %q is reserved for experimental work and is not implemented yet", IndexOuterLeafModeV2BlockPtr)
+	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
 	}
@@ -717,6 +769,21 @@ func validateOptions(opts Options) error {
 		if opts.ValueLog.BlockTargetCompressedBytes < minBlockTargetCompressedBytes || opts.ValueLog.BlockTargetCompressedBytes > maxBlockTargetCompressedBytes {
 			return fmt.Errorf("treedb: value-log block target compressed bytes out of range [%d,%d]: %d", minBlockTargetCompressedBytes, maxBlockTargetCompressedBytes, opts.ValueLog.BlockTargetCompressedBytes)
 		}
+	}
+	if opts.ValueLog.OuterLeafBlockTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log outer-leaf block target bytes %d", opts.ValueLog.OuterLeafBlockTargetBytes)
+	}
+	if opts.ValueLog.OuterLeafBlockTargetBytes > 0 {
+		const (
+			minOuterLeafBlockTargetBytes = 256
+			maxOuterLeafBlockTargetBytes = 1 << 20
+		)
+		if opts.ValueLog.OuterLeafBlockTargetBytes < minOuterLeafBlockTargetBytes || opts.ValueLog.OuterLeafBlockTargetBytes > maxOuterLeafBlockTargetBytes {
+			return fmt.Errorf("treedb: value-log outer-leaf block target bytes out of range [%d,%d]: %d", minOuterLeafBlockTargetBytes, maxOuterLeafBlockTargetBytes, opts.ValueLog.OuterLeafBlockTargetBytes)
+		}
+	}
+	if opts.ValueLog.OuterLeafBlockRestartInterval < 0 {
+		return fmt.Errorf("treedb: invalid value-log outer-leaf block restart interval %d", opts.ValueLog.OuterLeafBlockRestartInterval)
 	}
 	if opts.ValueLog.IncompressibleHoldBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log incompressible hold bytes %d", opts.ValueLog.IncompressibleHoldBytes)
@@ -804,6 +871,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexPackedValuePtr:       opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
 		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
+		indexOuterLeafMode:        opts.IndexOuterLeafMode,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
 		dir:                       opts.Dir,

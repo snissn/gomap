@@ -514,6 +514,12 @@ func main() {
 				log.Fatalf("storage_ceiling suite: %v", err)
 			}
 			fmt.Print(out)
+		case "outerleaf_approx", "outerleaf-approx":
+			out, err := runOuterLeafApproxSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("outerleaf_approx suite: %v", err)
+			}
+			fmt.Print(out)
 		case "vlog_dict", "vlog-dict":
 			out, err := runValueLogDictSuite(baseCfg)
 			if err != nil {

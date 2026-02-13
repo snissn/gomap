@@ -300,6 +300,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
+	if db.indexOuterLeafMode != "" {
+		stats["treedb.index.outer_leaf_mode"] = db.indexOuterLeafMode
+	}
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()

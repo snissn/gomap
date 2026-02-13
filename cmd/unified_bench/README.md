@@ -64,6 +64,17 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
 - `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
+- `-treedb-index-outer-leaf-mode` TreeDB: experimental outer-leaf mode selector (`v1|v2_blockptr`; `v2_blockptr` currently reserved/not implemented)
+- `-treedb-outer-leaf-block-target-bytes` TreeDB: approximation/prototype target block size for outer-leaf block modeling
+- `-treedb-outer-leaf-block-codec` TreeDB: approximation/prototype block codec (`snappy|lz4`)
+- `-treedb-outer-leaf-block-restart-interval` TreeDB: approximation/prototype restart interval for outer-leaf block modeling
+- `-outerleaf-approx-value-sizes` outerleaf_approx matrix value sizes (CSV, default `128,1024`)
+- `-outerleaf-approx-block-cache-mb` outerleaf_approx simulated outer-block cache size in MiB (`0` disables cache model)
+- `-outerleaf-approx-fence-fpr` outerleaf_approx simulated fence-index false-positive rate `[0,1]`
+- `-outerleaf-approx-wal-bytes-per-record` outerleaf_approx WAL metadata-byte model per record
+- `-outerleaf-approx-vlog-record-overhead-bytes` outerleaf_approx value-log per-record overhead model
+- `-outerleaf-approx-gate-wa-increase` outerleaf_approx write-amplification increase gate threshold
+- `-outerleaf-approx-report-json` optional JSON report output path for outerleaf_approx
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-settle-before-scans` close+reopen DBs before `full_scan`/`prefix_scan` to measure scan performance on a “settled” (fully flushed) state
@@ -94,6 +105,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
   - `bigkeys_guard` — small TreeDB flush threshold + large keycount, with wall/RSS caps for CI guardrails
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
   - `sload_readheavy` — settled point reads with value-log pointers + forkchoice-style batch commits
+  - `outerleaf_approx` — fidelity-first approximation matrix for fence-key -> outer-block design across `random_write_parallel`, `random_read`, `prefix_scan`, `churn_settle` at value sizes `128B` and `1KB`, with size/lookup/write/WA gates and optional JSON report
   - `maintenance_budget` — sweep TreeDB maintenance K values; reports checkpoint time vs index size, recommends K
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
 
