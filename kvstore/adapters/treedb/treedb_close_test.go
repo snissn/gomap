@@ -46,8 +46,7 @@ func TestAdapterReadBatch_IgnoresMissingAndDuplicates(t *testing.T) {
 		t.Fatalf("set k2: %v", err)
 	}
 
-	adapter := WrapNamed(db, "TreeDB")
-	adapter.SetReadWorkers(8)
+	adapter := WrapNamedWithReadWorkers(db, "TreeDB", 8)
 	err = adapter.ReadBatch([][]byte{
 		[]byte("k1"),
 		[]byte("missing"),
@@ -72,8 +71,7 @@ func TestAdapterReadBatch_ClampsWorkerCount(t *testing.T) {
 		t.Fatalf("set k: %v", err)
 	}
 
-	adapter := WrapNamed(db, "TreeDB")
-	adapter.SetReadWorkers(-1)
+	adapter := WrapNamedWithReadWorkers(db, "TreeDB", -1)
 	// This intentionally inspects internal state because the clamped worker
 	// value is adapter configuration and is not otherwise observable via API.
 	if got := int(adapter.readWorkers.Load()); got != 1 {

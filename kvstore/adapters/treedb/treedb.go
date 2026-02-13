@@ -19,14 +19,20 @@ type DB struct {
 }
 
 func Wrap(db *treedb.DB) *DB {
-	out := &DB{DB: db, NameStr: "TreeDB"}
-	out.SetReadWorkers(1)
-	return out
+	return WrapNamedWithReadWorkers(db, "TreeDB", 1)
 }
 
 func WrapNamed(db *treedb.DB, name string) *DB {
+	return WrapNamedWithReadWorkers(db, name, 1)
+}
+
+func WrapWithReadWorkers(db *treedb.DB, workers int) *DB {
+	return WrapNamedWithReadWorkers(db, "TreeDB", workers)
+}
+
+func WrapNamedWithReadWorkers(db *treedb.DB, name string, workers int) *DB {
 	out := &DB{DB: db, NameStr: name}
-	out.SetReadWorkers(1)
+	out.setReadWorkers(workers)
 	return out
 }
 
@@ -40,7 +46,7 @@ func normalizeReadWorkers(workers int) int {
 	return workers
 }
 
-func (d *DB) SetReadWorkers(workers int) {
+func (d *DB) setReadWorkers(workers int) {
 	if d == nil {
 		return
 	}

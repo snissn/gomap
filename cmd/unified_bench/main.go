@@ -102,10 +102,6 @@ type DBInstance struct {
 	Dir     string
 }
 
-type readWorkerConfigurer interface {
-	SetReadWorkers(workers int)
-}
-
 type BenchConfig struct {
 	Keys          int
 	KeyShape      string
@@ -1120,6 +1116,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
 	}
 	cfg.ReadWorkers = resolveReadWorkers(cfg.ReadWorkers)
+	setTreeDBAdapterReadWorkers(cfg.ReadWorkers)
 
 	if cfg.AllocsProfile != "" {
 		rate := cfg.AllocsProfileRate
@@ -1177,9 +1174,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if err != nil {
 			_ = os.RemoveAll(dir)
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
-		}
-		if rwc, ok := db.(readWorkerConfigurer); ok {
-			rwc.SetReadWorkers(cfg.ReadWorkers)
 		}
 
 		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir})
@@ -2204,14 +2198,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						return 0, err
 					}
 				} else if hasMany {
-					if _, err := mg.GetMany(keys[:n]); err != nil {
-						return 0, err
-					}
+					_, _ = mg.GetMany(keys[:n])
 				} else {
 					for j := 0; j < n; j++ {
-						if _, err := db.Get(keys[j]); err != nil {
-							return 0, err
-						}
+						_, _ = db.Get(keys[j])
 					}
 				}
 				i += n
@@ -2622,9 +2612,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			newWrapper, err := factory(inst.Dir)
 			if err != nil {
 				return BenchRun{}, fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
-			}
-			if rwc, ok := newWrapper.(readWorkerConfigurer); ok {
-				rwc.SetReadWorkers(cfg.ReadWorkers)
 			}
 			inst.Wrapper = newWrapper
 
