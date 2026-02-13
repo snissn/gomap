@@ -58,6 +58,32 @@ func TestBoundedArenaCap(t *testing.T) {
 	}
 }
 
+func TestBoundedGetManyWorkers(t *testing.T) {
+	maxWorkers := runtime.GOMAXPROCS(0) * 8
+	if maxWorkers < 1 {
+		maxWorkers = 1
+	}
+	cases := []struct {
+		name    string
+		workers int
+		keys    int
+		want    int
+	}{
+		{name: "caps huge workers", workers: 1_000_000, keys: 1_000_000, want: maxWorkers},
+		{name: "caps by keys", workers: 32, keys: 5, want: 5},
+		{name: "minimum one", workers: 0, keys: 4, want: 1},
+		{name: "empty keys", workers: 4, keys: 0, want: 1},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := boundedGetManyWorkers(tc.workers, tc.keys); got != tc.want {
+				t.Fatalf("boundedGetManyWorkers(%d,%d)=%d want %d", tc.workers, tc.keys, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGetMany_ParallelAndSerialSemanticsMatch(t *testing.T) {
 	dir := t.TempDir()
 

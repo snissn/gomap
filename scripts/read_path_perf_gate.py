@@ -2,6 +2,10 @@
 """
 Read-path performance gate harness.
 
+This harness is used to evaluate read-path behavior changes (including
+TreeDB GetMany/read-worker tuning) with a reproducible, interleaved
+baseline-vs-candidate workflow.
+
 Method:
 - Build unified-bench binaries for baseline and candidate refs.
 - Run interleaved A/B rounds for valsize in {85,1}.
@@ -48,21 +52,17 @@ def run(
     env: Dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     try:
+        kwargs: Dict[str, object] = {"text": True}
         if capture:
-            kwargs = {
-                "text": True,
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.STDOUT,
-            }
-            if env is not None:
-                kwargs["env"] = env
-            return subprocess.run(
-                cmd,
-                cwd=str(cwd),
-                check=True,
-                **kwargs,
+            kwargs.update(
+                {
+                    "stdout": subprocess.PIPE,
+                    "stderr": subprocess.STDOUT,
+                }
             )
-        return subprocess.run(cmd, cwd=str(cwd), check=True)
+        if env is not None:
+            kwargs["env"] = env
+        return subprocess.run(cmd, cwd=str(cwd), check=True, **kwargs)
     except subprocess.CalledProcessError as exc:
         if exc.stdout:
             print(f"command failed: {' '.join(cmd)}", file=sys.stderr)
@@ -385,8 +385,8 @@ def run_unified_once(
     ]
     t0 = time.time()
     p = run(cmd, cwd=args.repo, capture=True)
-    rr, rb = parse_metrics(p.stdout, args.dbs)
     log_file.write_text(p.stdout)
+    rr, rb = parse_metrics(p.stdout, args.dbs)
     return RunPoint(rr=rr, rb=rb, secs=time.time() - t0, log_path=str(log_file))
 
 

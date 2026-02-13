@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -27,6 +28,28 @@ func boundedArenaCap(itemCount, guessBytes, maxBytes int) int {
 		return maxBytes
 	}
 	return arenaCap
+}
+
+func boundedGetManyWorkers(workers, keyCount int) int {
+	if keyCount <= 0 {
+		return 1
+	}
+	if workers < 1 {
+		workers = 1
+	}
+	// Keep fan-out bounded so a very large ReadWorkers/keyCount does not create
+	// unbounded goroutine pressure.
+	maxWorkers := runtime.GOMAXPROCS(0) * 8
+	if maxWorkers < 1 {
+		maxWorkers = 1
+	}
+	if workers > maxWorkers {
+		workers = maxWorkers
+	}
+	if workers > keyCount {
+		workers = keyCount
+	}
+	return workers
 }
 
 // Get returns the value for a key.
@@ -58,7 +81,7 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		getManyValueGuessBytes = 128
 		getManyMaxArenaBytes   = 1 << 20
 	)
-	workers := db.effectiveReadWorkers(len(keys))
+	workers := boundedGetManyWorkers(db.effectiveReadWorkers(len(keys)), len(keys))
 	if workers <= 1 {
 		arenaCap := boundedArenaCap(len(keys), getManyValueGuessBytes, getManyMaxArenaBytes)
 		arena := make([]byte, 0, arenaCap)
