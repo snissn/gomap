@@ -45,7 +45,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-dataset-val-pattern` dataset value pattern for `dataset_write_*` (`random|zero|repeat|repeat_tail64|half_repeat_half_random`)
 - `-batchsize` batch size (default 8000)
-- `-read-workers` number of goroutines for `random_read_parallel` (default 1)
+- `-read-workers` number of goroutines for `random_read_parallel`, `random_read_parallel_acquire_snapshot`, and `random_read_batch` (`<=0` uses current `GOMAXPROCS` at runtime)
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)

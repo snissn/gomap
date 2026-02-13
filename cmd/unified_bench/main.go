@@ -2628,7 +2628,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
-	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "random_read_parallel", "random_read_batch", "full_scan", "prefix_scan"}
+	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
 		"vacuum_index":                          "VACUUM (Index)",
 		"fragmentation_report_pre":              "Fragmentation Report (Pre-Settle)",
