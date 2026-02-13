@@ -74,6 +74,8 @@ func TestAdapterReadBatch_ClampsWorkerCount(t *testing.T) {
 
 	adapter := WrapNamed(db, "TreeDB")
 	adapter.SetReadWorkers(-1)
+	// This intentionally inspects internal state because the clamped worker
+	// value is adapter configuration and is not otherwise observable via API.
 	if got := int(adapter.readWorkers.Load()); got != 1 {
 		t.Fatalf("expected resolved readWorkers=%d got=%d", 1, got)
 	}

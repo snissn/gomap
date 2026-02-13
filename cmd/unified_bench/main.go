@@ -102,10 +102,6 @@ type DBInstance struct {
 	Dir     string
 }
 
-type readBatchNoResult interface {
-	ReadBatch(keys [][]byte) error
-}
-
 type readWorkerConfigurer interface {
 	SetReadWorkers(workers int)
 }
@@ -2181,7 +2177,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if batchSize <= 0 {
 				batchSize = 1
 			}
-			rb, hasReadBatch := db.(readBatchNoResult)
+			rb, hasReadBatch := db.(kvstore.BatchReader)
 			keys := make([][]byte, batchSize)
 			keyBuf := make([]byte, batchSize*8)
 			for i := 0; i < batchSize; i++ {

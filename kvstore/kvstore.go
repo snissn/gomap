@@ -21,6 +21,12 @@ type MultiGetter interface {
 	GetMany(keys [][]byte) ([][]byte, error)
 }
 
+// BatchReader is an optional capability for batched read execution where
+// callers only need completion/error, not materialized values.
+type BatchReader interface {
+	ReadBatch(keys [][]byte) error
+}
+
 // ReadSnapshot is an optional point-read snapshot used by benchmarks to
 // measure snapshot-amortized read throughput.
 type ReadSnapshot interface {

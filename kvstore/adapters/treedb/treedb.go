@@ -3,6 +3,7 @@ package treedbadapter
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 
@@ -32,6 +33,9 @@ func WrapNamed(db *treedb.DB, name string) *DB {
 func normalizeReadWorkers(workers int) int {
 	if workers < 1 {
 		return 1
+	}
+	if workers > math.MaxInt32 {
+		return math.MaxInt32
 	}
 	return workers
 }
@@ -70,23 +74,27 @@ func (d *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	return vals, err
 }
 
-func (d *DB) ReadBatch(keys [][]byte) error {
-	if d == nil || d.DB == nil {
+func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
+	if d == nil || d.DB == nil || len(keys) == 0 {
 		return nil
 	}
 	workers := int(d.readWorkers.Load())
 	if workers < 1 {
 		workers = 1
 	}
-	if len(keys) <= 1 || workers <= 1 {
+	if len(keys) == 1 || workers <= 1 {
 		snap := d.DB.AcquireSnapshot()
 		if snap == nil {
 			return nil
 		}
-		defer func() { _ = snap.Close() }()
+		defer func() {
+			if closeErr := snap.Close(); retErr == nil && closeErr != nil {
+				retErr = closeErr
+			}
+		}()
 		for _, key := range keys {
 			_, err := snap.GetUnsafe(key)
-			if err == nil || errors.Is(err, treedb.ErrKeyNotFound) {
+			if err == nil || errors.Is(err, treedb.ErrKeyNotFound) || errors.Is(err, treedb.ErrClosed) {
 				continue
 			}
 			return err
@@ -102,7 +110,11 @@ func (d *DB) ReadBatch(keys [][]byte) error {
 	if snap == nil {
 		return nil
 	}
-	defer func() { _ = snap.Close() }()
+	defer func() {
+		if closeErr := snap.Close(); retErr == nil && closeErr != nil {
+			retErr = closeErr
+		}
+	}()
 
 	chunk := (len(keys) + workers - 1) / workers
 	if chunk < 1 {
@@ -127,7 +139,7 @@ func (d *DB) ReadBatch(keys [][]byte) error {
 			defer wg.Done()
 			for i := lo; i < hi; i++ {
 				_, readErr := snap.GetUnsafe(keys[i])
-				if readErr == nil || errors.Is(readErr, treedb.ErrKeyNotFound) {
+				if readErr == nil || errors.Is(readErr, treedb.ErrKeyNotFound) || errors.Is(readErr, treedb.ErrClosed) {
 					continue
 				}
 				errMu.Lock()
