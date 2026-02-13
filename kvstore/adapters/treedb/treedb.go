@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -19,18 +20,14 @@ type DB struct {
 }
 
 func Wrap(db *treedb.DB) *DB {
-	return WrapNamedWithReadWorkers(db, "TreeDB", 1)
+	return wrapNamedWithReadWorkers(db, "TreeDB", runtime.GOMAXPROCS(0))
 }
 
 func WrapNamed(db *treedb.DB, name string) *DB {
-	return WrapNamedWithReadWorkers(db, name, 1)
+	return wrapNamedWithReadWorkers(db, name, runtime.GOMAXPROCS(0))
 }
 
-func WrapWithReadWorkers(db *treedb.DB, workers int) *DB {
-	return WrapNamedWithReadWorkers(db, "TreeDB", workers)
-}
-
-func WrapNamedWithReadWorkers(db *treedb.DB, name string, workers int) *DB {
+func wrapNamedWithReadWorkers(db *treedb.DB, name string, workers int) *DB {
 	out := &DB{DB: db, NameStr: name}
 	out.setReadWorkers(workers)
 	return out
@@ -51,11 +48,6 @@ func (d *DB) setReadWorkers(workers int) {
 		return
 	}
 	d.readWorkers.Store(int32(normalizeReadWorkers(workers)))
-}
-
-// SetReadWorkers configures ReadBatch concurrency for this adapter instance.
-func (d *DB) SetReadWorkers(workers int) {
-	d.setReadWorkers(workers)
 }
 
 func (d *DB) Name() string {

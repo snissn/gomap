@@ -1067,21 +1067,6 @@ type vacuumIndexOnline interface {
 	VacuumIndexOnline(ctx context.Context) error
 }
 
-type readWorkerSetter interface {
-	SetReadWorkers(workers int)
-}
-
-func applyReadWorkersIfSupported(db kvstore.DB, workers int) {
-	if db == nil {
-		return
-	}
-	cfg, ok := db.(readWorkerSetter)
-	if !ok {
-		return
-	}
-	cfg.SetReadWorkers(workers)
-}
-
 type periodicCheckpoint struct {
 	everyOps   int
 	everyBytes int64
@@ -1189,8 +1174,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			_ = os.RemoveAll(dir)
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
 		}
-		applyReadWorkersIfSupported(db, cfg.ReadWorkers)
-
 		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir})
 	}
 	if len(instances) == 0 {
@@ -2628,7 +2611,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if err != nil {
 				return BenchRun{}, fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
 			}
-			applyReadWorkersIfSupported(newWrapper, cfg.ReadWorkers)
 			inst.Wrapper = newWrapper
 
 			// Optional TreeDB maintenance hooks can be added here if needed.
@@ -3728,7 +3710,6 @@ func suiteTreeDBCacheStats(instances []*DBInstance) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("suite: reopen treedb for stats (%s): %w", inst.Name, err)
 		}
-		applyReadWorkersIfSupported(db, resolveReadWorkers(*readWorkers))
 		sp, ok := db.(kvstore.StatsProvider)
 		if ok {
 			stats := sp.Stats()
