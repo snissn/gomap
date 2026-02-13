@@ -33,10 +33,7 @@ func resolveReadWorkers(workers int) int {
 	// Kept local to avoid introducing a dependency from storage adapters back to
 	// benchmark CLI configuration while preserving a stable standalone API.
 	if workers <= 0 {
-		workers = runtime.GOMAXPROCS(0)
-	}
-	if workers < 1 {
-		return 1
+		return runtime.GOMAXPROCS(0)
 	}
 	return workers
 }

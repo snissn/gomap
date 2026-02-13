@@ -258,10 +258,7 @@ func parseBenchKeyShape(s string) (benchKeyShape, error) {
 func resolveReadWorkers(workers int) int {
 	// Keep this local to avoid coupling benchmark CLI parsing with storage adapters.
 	if workers <= 0 {
-		workers = runtime.GOMAXPROCS(0)
-	}
-	if workers < 1 {
-		return 1
+		return runtime.GOMAXPROCS(0)
 	}
 	return workers
 }
