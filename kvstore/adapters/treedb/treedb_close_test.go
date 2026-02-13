@@ -1,7 +1,6 @@
 package treedbadapter
 
 import (
-	"runtime"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -47,7 +46,8 @@ func TestAdapterReadBatch_IgnoresMissingAndDuplicates(t *testing.T) {
 		t.Fatalf("set k2: %v", err)
 	}
 
-	adapter := WrapNamedWithReadWorkers(db, "TreeDB", 8)
+	adapter := WrapNamed(db, "TreeDB")
+	adapter.SetReadWorkers(8)
 	err = adapter.ReadBatch([][]byte{
 		[]byte("k1"),
 		[]byte("missing"),
@@ -72,9 +72,10 @@ func TestAdapterReadBatch_ClampsWorkerCount(t *testing.T) {
 		t.Fatalf("set k: %v", err)
 	}
 
-	adapter := WrapNamedWithReadWorkers(db, "TreeDB", -1)
-	if got := adapter.readWorkers; got != runtime.GOMAXPROCS(0) {
-		t.Fatalf("expected resolved readWorkers=%d got=%d", runtime.GOMAXPROCS(0), got)
+	adapter := WrapNamed(db, "TreeDB")
+	adapter.SetReadWorkers(-1)
+	if got := int(adapter.readWorkers.Load()); got != 1 {
+		t.Fatalf("expected resolved readWorkers=%d got=%d", 1, got)
 	}
 
 	if err := adapter.ReadBatch([][]byte{[]byte("k"), []byte("missing")}); err != nil {

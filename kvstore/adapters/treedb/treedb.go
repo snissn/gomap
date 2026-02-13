@@ -3,8 +3,8 @@ package treedbadapter
 import (
 	"context"
 	"errors"
-	"runtime"
 	"sync"
+	"sync/atomic"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
@@ -14,31 +14,33 @@ import (
 type DB struct {
 	DB          *treedb.DB
 	NameStr     string
-	readWorkers int
+	readWorkers atomic.Int32
 }
 
 func Wrap(db *treedb.DB) *DB {
-	return &DB{DB: db, NameStr: "TreeDB", readWorkers: resolveReadWorkers(1)}
+	out := &DB{DB: db, NameStr: "TreeDB"}
+	out.SetReadWorkers(1)
+	return out
 }
 
 func WrapNamed(db *treedb.DB, name string) *DB {
-	return &DB{DB: db, NameStr: name, readWorkers: resolveReadWorkers(1)}
+	out := &DB{DB: db, NameStr: name}
+	out.SetReadWorkers(1)
+	return out
 }
 
-func WrapNamedWithReadWorkers(db *treedb.DB, name string, readWorkers int) *DB {
-	return &DB{DB: db, NameStr: name, readWorkers: resolveReadWorkers(readWorkers)}
-}
-
-func resolveReadWorkers(workers int) int {
-	// Kept local to avoid introducing a dependency from storage adapters back to
-	// benchmark CLI configuration while preserving a stable standalone API.
-	if workers <= 0 {
-		workers = runtime.GOMAXPROCS(0)
-	}
+func normalizeReadWorkers(workers int) int {
 	if workers < 1 {
 		return 1
 	}
 	return workers
+}
+
+func (d *DB) SetReadWorkers(workers int) {
+	if d == nil {
+		return
+	}
+	d.readWorkers.Store(int32(normalizeReadWorkers(workers)))
 }
 
 func (d *DB) Name() string {
@@ -72,7 +74,10 @@ func (d *DB) ReadBatch(keys [][]byte) error {
 	if d == nil || d.DB == nil {
 		return nil
 	}
-	workers := d.readWorkers
+	workers := int(d.readWorkers.Load())
+	if workers < 1 {
+		workers = 1
+	}
 	if len(keys) <= 1 || workers <= 1 {
 		snap := d.DB.AcquireSnapshot()
 		if snap == nil {

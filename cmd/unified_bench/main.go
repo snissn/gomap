@@ -106,6 +106,10 @@ type readBatchNoResult interface {
 	ReadBatch(keys [][]byte) error
 }
 
+type readWorkerConfigurer interface {
+	SetReadWorkers(workers int)
+}
+
 type BenchConfig struct {
 	Keys          int
 	KeyShape      string
@@ -1120,7 +1124,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
 	}
 	cfg.ReadWorkers = resolveReadWorkers(cfg.ReadWorkers)
-	setTreeDBAdapterReadWorkers(cfg.ReadWorkers)
 
 	if cfg.AllocsProfile != "" {
 		rate := cfg.AllocsProfileRate
@@ -1178,6 +1181,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if err != nil {
 			_ = os.RemoveAll(dir)
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
+		}
+		if rwc, ok := db.(readWorkerConfigurer); ok {
+			rwc.SetReadWorkers(cfg.ReadWorkers)
 		}
 
 		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir})
