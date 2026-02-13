@@ -15,6 +15,7 @@ Method:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -80,8 +81,30 @@ def ensure_ref(args: argparse.Namespace, ref: str) -> None:
         run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=args.repo, capture=True)
         return
     except subprocess.CalledProcessError:
-        print(f"warning: reference '{ref}' not present locally; fetching remotes", file=sys.stderr)
+        print(f"warning: reference '{ref}' not present locally; attempting to fetch it", file=sys.stderr)
 
+    remote: Optional[str] = None
+    if "/" in ref:
+        candidate = ref.split("/", 1)[0]
+        try:
+            run(["git", "remote", "get-url", candidate], cwd=args.repo, capture=True)
+            remote = candidate
+        except subprocess.CalledProcessError:
+            remote = None
+
+    if remote is not None:
+        try:
+            print(f"info: fetching remote '{remote}' (targeted fetch)", file=sys.stderr)
+            run(["git", "fetch", remote, "--prune"], cwd=args.repo)
+            run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=args.repo, capture=True)
+            return
+        except subprocess.CalledProcessError:
+            print(
+                f"warning: targeted fetch from '{remote}' did not resolve '{ref}'; falling back to --all",
+                file=sys.stderr,
+            )
+
+    print("warning: running 'git fetch --all --prune'; this may be expensive", file=sys.stderr)
     run(["git", "fetch", "--all", "--prune"], cwd=args.repo)
     run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=args.repo, capture=True)
 
@@ -167,9 +190,11 @@ def _normalize_db_names(raw_dbs: Optional[Union[str, List[str]]]) -> List[str]:
     return [p.lower() for p in parts]
 
 
-def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb") -> Tuple[int, int]:
+def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb", warn_on_fallback: bool = False) -> Tuple[int, int]:
     rr = None
     rb = None
+    rr_source: Optional[str] = None
+    rb_source: Optional[str] = None
     target_db = "treedb"
     target_db_present = False
     tree_col_idx: Optional[int] = None
@@ -182,10 +207,12 @@ def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb") -> Tuple[int
         m = RR_LINE.match(line)
         if m:
             rr = int(m.group(1).replace(",", ""))
+            rr_source = "regex"
             continue
         m = RB_LINE.match(line)
         if m:
             rb = int(m.group(1).replace(",", ""))
+            rb_source = "regex"
             continue
 
         # Fixed-width markdown tables in unified-bench output use repeated spaces.
@@ -212,6 +239,7 @@ def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb") -> Tuple[int
                 )
                 if parsed is not None:
                     rr = parsed
+                    rr_source = "table_whitespace"
                     continue
 
             if rb is None:
@@ -223,17 +251,20 @@ def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb") -> Tuple[int
                 )
                 if parsed is not None:
                     rb = parsed
+                    rb_source = "table_whitespace"
                     continue
 
             if rr is None and metric == "Random Read":
                 parsed = parse_table_last_numeric("Random Read", line)
                 if parsed is not None:
                     rr = parsed
+                    rr_source = "plain_fallback"
                     continue
             if rb is None and metric == "Random Read (Batch)":
                 parsed = parse_table_last_numeric("Random Read (Batch)", line)
                 if parsed is not None:
                     rb = parsed
+                    rb_source = "plain_fallback"
                     continue
             continue
 
@@ -258,6 +289,7 @@ def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb") -> Tuple[int
                 )
                 if parsed is not None:
                     rr = parsed
+                    rr_source = "table_pipe"
 
             if rb is None:
                 parsed = _parse_metric_from_row(
@@ -268,9 +300,25 @@ def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb") -> Tuple[int
                 )
                 if parsed is not None:
                     rb = parsed
+                    rb_source = "table_pipe"
 
     if rr is None or rb is None:
-        raise RuntimeError("failed to parse Random Read metrics from unified-bench output")
+        preview = text[:200].replace("\n", "\\n")
+        raise RuntimeError(
+            "failed to parse Random Read metrics from unified-bench output "
+            f"(text length={len(text)}, preview={preview!r})"
+        )
+    if rr <= 0 or rb <= 0:
+        preview = text[:200].replace("\n", "\\n")
+        raise RuntimeError(
+            "parsed Random Read metrics must be positive "
+            f"(rr={rr}, rb={rb}, text length={len(text)}, preview={preview!r})"
+        )
+    if warn_on_fallback:
+        if rr_source != "regex":
+            print(f"warning: parsed Random Read via fallback parser source='{rr_source}'", file=sys.stderr)
+        if rb_source != "regex":
+            print(f"warning: parsed Random Read (Batch) via fallback parser source='{rb_source}'", file=sys.stderr)
     return rr, rb
 
 
@@ -285,9 +333,9 @@ def middle3(values: List[int]) -> float:
 
 def bootstrap_ci95_effect_pct(base_vals: List[int], cand_vals: List[int], n_boot: int = 20000, seed: int = 1) -> Tuple[float, float]:
     if len(base_vals) != len(cand_vals):
-        raise ValueError("paired sample count mismatch")
+        raise ValueError(f"paired sample count mismatch (base={len(base_vals)}, cand={len(cand_vals)})")
     if len(base_vals) < 5:
-        raise ValueError("need at least 5 paired samples for bootstrap CI95")
+        raise ValueError(f"need at least 5 paired samples for bootstrap CI95 (got {len(base_vals)})")
 
     rng = random.Random(seed)
     paired = list(zip(base_vals, cand_vals))
@@ -355,6 +403,8 @@ def needs_more_rounds(
     seed: int,
     quick_n_boot: int,
 ) -> bool:
+    # Use a smaller bootstrap budget for intermediate stopping checks; final
+    # reporting re-runs with the full bootstrap budget.
     rr = metric_summary(base_runs, cand_runs, "rr", thresh=thresh, seed=seed, n_boot=quick_n_boot)
     rb = metric_summary(base_runs, cand_runs, "rb", thresh=thresh, seed=seed, n_boot=quick_n_boot)
     return rr["classification"] == "uncertain" or rb["classification"] == "uncertain"
@@ -391,9 +441,7 @@ def run_unified_once(
     t0 = time.time()
     p = run(cmd, cwd=args.repo, capture=True)
     log_file.write_text(p.stdout)
-    rr, rb = parse_metrics(p.stdout, args.dbs)
-    if rr <= 0 or rb <= 0:
-        raise RuntimeError(f"parsed non-positive metrics rr={rr} rb={rb}")
+    rr, rb = parse_metrics(p.stdout, args.dbs, warn_on_fallback=True)
     return RunPoint(rr=rr, rb=rb, secs=time.time() - t0, log_path=str(log_file))
 
 
@@ -433,7 +481,7 @@ def cleanup_worktrees(args: argparse.Namespace, out_dir: Path) -> None:
             try:
                 run(["git", "worktree", "remove", "--force", str(wt)], cwd=args.repo)
             except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
-                print(f"Warning: failed to remove worktree {wt}: {exc}", file=sys.stderr)
+                print(f"Warning: failed to remove worktree {wt}: {exc!r}", file=sys.stderr)
 
 
 def cleanup_stale_gate_worktrees(args: argparse.Namespace, keep_out_dir: Path) -> None:
@@ -449,11 +497,12 @@ def cleanup_stale_gate_worktrees(args: argparse.Namespace, keep_out_dir: Path) -
                 continue
             try:
                 run(["git", "worktree", "remove", "--force", str(wt)], cwd=args.repo)
-            except (subprocess.CalledProcessError, FileNotFoundError, OSError):
-                continue
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
+                print(f"warning: stale worktree cleanup failed for {wt}: {exc!r}", file=sys.stderr)
 
 
 def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
+    # "approve_with_revisions" means inconclusive signal (not a regression).
     any_improve = False
     any_regress = False
     any_uncertain = False
@@ -481,7 +530,7 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
         return "reject"
     if any_uncertain:
         return "approve_with_revisions"
-    return "approve_with_revisions"
+    return "approve"
 
 
 def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -> Dict[str, Union[int, str]]:
@@ -557,14 +606,30 @@ def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Optional[
     try:
         p3 = run(["benchstat", str(base_txt), str(cand_txt)], cwd=args.repo, capture=True)
     except FileNotFoundError:
-        print(
-            "Error: 'benchstat' command not found. Install it with: go install golang.org/x/perf/cmd/benchstat@latest",
-            file=sys.stderr,
+        error_message = (
+            "Error: 'benchstat' command not found. Install it with: "
+            "go install golang.org/x/perf/cmd/benchstat@latest"
         )
-        return None
+        print(error_message, file=sys.stderr)
+        return {
+            "pattern": bench_pattern,
+            "baseline_output": str(base_txt),
+            "candidate_output": str(cand_txt),
+            "benchstat": str(stat_txt),
+            "status": "error",
+            "error_message": error_message,
+        }
     except subprocess.CalledProcessError as exc:
-        print(f"Error: benchstat failed: {exc}", file=sys.stderr)
-        return None
+        error_message = f"Error: benchstat failed: {exc}"
+        print(error_message, file=sys.stderr)
+        return {
+            "pattern": bench_pattern,
+            "baseline_output": str(base_txt),
+            "candidate_output": str(cand_txt),
+            "benchstat": str(stat_txt),
+            "status": "error",
+            "error_message": error_message,
+        }
     stat_txt.write_text(p3.stdout)
 
     return {
@@ -572,7 +637,87 @@ def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Optional[
         "baseline_output": str(base_txt),
         "candidate_output": str(cand_txt),
         "benchstat": str(stat_txt),
+        "status": "ok",
     }
+
+
+def _warn_if_repo_dirty(repo: Path) -> None:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError:
+        return
+
+    if proc.returncode != 0:
+        return
+    if proc.stdout.strip():
+        print(
+            "warning: repository has uncommitted changes; benchmark results may be less reproducible",
+            file=sys.stderr,
+        )
+
+
+def _next_log_file(vdir: Path, side: str, run_index_hint: int) -> Path:
+    run_index = max(1, run_index_hint)
+    while True:
+        path = vdir / f"run_{side}_{run_index:02d}.md"
+        if not path.exists():
+            return path
+        run_index += 1
+
+
+def compose_run_seed(base_seed: int, valsize: int, turn: int, side: str) -> int:
+    side_bit = 0 if side == "base" else 1
+    raw = f"{base_seed}:{valsize}:{turn}:{side_bit}".encode("utf-8")
+    digest = hashlib.blake2b(raw, digest_size=8).digest()
+    seed = int.from_bytes(digest, byteorder="big", signed=False) & ((1 << 63) - 1)
+    return seed if seed > 0 else 1
+
+
+def _rebalance_pairs(base_runs: List[RunPoint], cand_runs: List[RunPoint]) -> None:
+    while len(base_runs) > len(cand_runs):
+        base_runs.pop()
+    while len(cand_runs) > len(base_runs):
+        cand_runs.pop()
+
+
+def _run_side_once(
+    side: str,
+    turn: int,
+    valsize: int,
+    vdir: Path,
+    base_runs: List[RunPoint],
+    cand_runs: List[RunPoint],
+    base_bin: Path,
+    cand_bin: Path,
+    args: argparse.Namespace,
+) -> None:
+    hint = (len(base_runs) + 1) if side == "base" else (len(cand_runs) + 1)
+    log_file = _next_log_file(vdir, side, hint)
+    try:
+        rec = run_unified_once(
+            base_bin if side == "base" else cand_bin,
+            valsize,
+            args.tests,
+            args,
+            log_file,
+            compose_run_seed(args.seed, valsize, turn, side),
+        )
+    except Exception:
+        _rebalance_pairs(base_runs, cand_runs)
+        raise
+
+    if side == "base":
+        base_runs.append(rec)
+        print(f"  r{len(base_runs):02d} base rr={rec.rr} rb={rec.rb} t={rec.secs:.2f}s", flush=True)
+    else:
+        cand_runs.append(rec)
+        print(f"  r{len(cand_runs):02d} cand rr={rec.rr} rb={rec.rb} t={rec.secs:.2f}s", flush=True)
 
 
 def render_summary_md(result: Dict, path: Path) -> None:
@@ -609,12 +754,18 @@ def render_summary_md(result: Dict, path: Path) -> None:
     lines.append(f"| candidate | {c['random_read_treedb']:,} | {c['random_read_batch_treedb']:,} | `{c['log']}` |")
 
     microbench = result.get("microbench")
-    if isinstance(microbench, dict) and "pattern" in microbench and "benchstat" in microbench:
+    if isinstance(microbench, dict) and "pattern" in microbench:
         lines.append("")
         lines.append("## Microbench")
         lines.append("")
         lines.append(f"- bench pattern: `{microbench['pattern']}`")
-        lines.append(f"- benchstat: `{microbench['benchstat']}`")
+        if microbench.get("status") == "ok":
+            lines.append(f"- benchstat: `{microbench['benchstat']}`")
+        else:
+            lines.append(f"- status: **error**")
+            lines.append(f"- error: `{microbench.get('error_message', 'unknown error')}`")
+            lines.append(f"- baseline output: `{microbench['baseline_output']}`")
+            lines.append(f"- candidate output: `{microbench['candidate_output']}`")
 
     path.write_text("\n".join(lines) + "\n")
 
@@ -678,12 +829,17 @@ def parse_args() -> argparse.Namespace:
             raise SystemExit("--microbench patterns must be single-line regexes")
         if len(p) > 256:
             raise SystemExit("--microbench pattern too long (max 256 chars)")
+        try:
+            re.compile(p)
+        except re.error as exc:
+            raise SystemExit(f"--microbench pattern is not a valid regular expression: {p!r}: {exc}") from exc
     return args
 
 
 def main() -> int:
     args = parse_args()
     args.repo = args.repo.resolve()
+    _warn_if_repo_dirty(args.repo)
     ts = time.strftime("%Y%m%d%H%M%S")
     out_dir = args.out_dir.resolve() if args.out_dir else (args.repo / "artifacts" / "read_gate" / f"gate_{ts}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -751,21 +907,17 @@ def main() -> int:
                     turn = start_turn + i
                     order = ("base", "cand") if (turn % 2 == 0) else ("cand", "base")
                     for side in order:
-                        log_file = vdir / f"run_{side}_{(len(base_runs) + 1 if side == 'base' else len(cand_runs) + 1):02d}.md"
-                        rec = run_unified_once(
-                            base_bin if side == "base" else cand_bin,
+                        _run_side_once(
+                            side,
+                            turn,
                             valsize,
-                            args.tests,
+                            vdir,
+                            base_runs,
+                            cand_runs,
+                            base_bin,
+                            cand_bin,
                             args,
-                            log_file,
-                            args.seed + valsize * 1_000_000 + turn * 2 + (0 if side == "base" else 1),
                         )
-                        if side == "base":
-                            base_runs.append(rec)
-                            print(f"  r{len(base_runs):02d} base rr={rec.rr} rb={rec.rb} t={rec.secs:.2f}s", flush=True)
-                        else:
-                            cand_runs.append(rec)
-                            print(f"  r{len(cand_runs):02d} cand rr={rec.rr} rb={rec.rb} t={rec.secs:.2f}s", flush=True)
 
                 if len(base_runs) < 5:
                     continue
