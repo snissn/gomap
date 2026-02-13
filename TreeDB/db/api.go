@@ -133,9 +133,9 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 					out[i] = []byte{}
 					continue
 				}
-				start := len(arena)
+				arenaStart := len(arena)
 				arena = append(arena, val...)
-				out[i] = arena[start : start+n : start+n]
+				out[i] = arena[arenaStart : arenaStart+n : arenaStart+n]
 			}
 		}(start, end)
 	}
