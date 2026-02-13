@@ -85,15 +85,10 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 // Unregister removes a reader.
 func (r *ReaderRegistry) Unregister(id int64) {
 	if id == fastReaderHandle {
-		for {
-			c := r.fastCount.Load()
-			if c <= 0 {
-				return
-			}
-			if r.fastCount.CompareAndSwap(c, c-1) {
-				return
-			}
+		if r.fastCount.Add(-1) < 0 {
+			r.fastCount.Store(0)
 		}
+		return
 	}
 
 	r.mu.Lock()
