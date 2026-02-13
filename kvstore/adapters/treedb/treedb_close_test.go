@@ -2,6 +2,7 @@ package treedbadapter
 
 import (
 	"math"
+	"strconv"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -85,6 +86,10 @@ func TestAdapterReadBatch_ClampsWorkerCount(t *testing.T) {
 }
 
 func TestAdapterSetReadWorkers_ClampsAtInt32Max(t *testing.T) {
+	if strconv.IntSize <= 32 {
+		t.Skip("requires >32-bit int to pass value larger than math.MaxInt32")
+	}
+
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
@@ -93,7 +98,8 @@ func TestAdapterSetReadWorkers_ClampsAtInt32Max(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	adapter := Wrap(db)
-	adapter.SetReadWorkers(math.MaxInt32 + 123)
+	overMax := int64(math.MaxInt32) + 123
+	adapter.SetReadWorkers(int(overMax))
 	if got := adapter.readWorkers.Load(); got != math.MaxInt32 {
 		t.Fatalf("expected clamped readWorkers=%d got=%d", math.MaxInt32, got)
 	}
