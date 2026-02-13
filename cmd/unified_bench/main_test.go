@@ -166,6 +166,14 @@ func TestRunBenchmark_AllIncludesRandomReadParallel(t *testing.T) {
 		if math.IsNaN(got) || got <= 0 {
 			t.Fatalf("expected random_read_parallel > 0 for %s, got %v", dbName, got)
 		}
+
+		gotSnap, ok := run.Results["random_read_parallel_acquire_snapshot"][dbName]
+		if !ok {
+			t.Fatalf("expected random_read_parallel_acquire_snapshot result for %s", dbName)
+		}
+		if math.IsNaN(gotSnap) || gotSnap <= 0 {
+			t.Fatalf("expected random_read_parallel_acquire_snapshot > 0 for %s, got %v", dbName, gotSnap)
+		}
 	}
 }
 
