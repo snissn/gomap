@@ -1,6 +1,7 @@
 package treedbadapter
 
 import (
+	"math"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -80,5 +81,20 @@ func TestAdapterReadBatch_ClampsWorkerCount(t *testing.T) {
 
 	if err := adapter.ReadBatch([][]byte{[]byte("k"), []byte("missing")}); err != nil {
 		t.Fatalf("readbatch: %v", err)
+	}
+}
+
+func TestAdapterSetReadWorkers_ClampsAtInt32Max(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	adapter := Wrap(db)
+	adapter.SetReadWorkers(math.MaxInt32 + 123)
+	if got := adapter.readWorkers.Load(); got != math.MaxInt32 {
+		t.Fatalf("expected clamped readWorkers=%d got=%d", math.MaxInt32, got)
 	}
 }
