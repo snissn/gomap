@@ -74,6 +74,14 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	}
 
 	chunkSize := (len(keys) + workers - 1) / workers
+	activeWorkers := (len(keys) + chunkSize - 1) / chunkSize
+	perWorkerArenaCap := getManyMaxArenaBytes
+	if activeWorkers > 1 {
+		perWorkerArenaCap = getManyMaxArenaBytes / activeWorkers
+	}
+	if perWorkerArenaCap < 0 {
+		perWorkerArenaCap = 0
+	}
 	errCh := make(chan error, 1)
 
 	sendErr := func(err error) {
@@ -100,8 +108,11 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		go func(start, end int) {
 			defer wg.Done()
 			arenaCap := (end - start) * getManyValueGuessBytes
-			if arenaCap > getManyMaxArenaBytes {
-				arenaCap = getManyMaxArenaBytes
+			if arenaCap < 0 {
+				arenaCap = 0
+			}
+			if arenaCap > perWorkerArenaCap {
+				arenaCap = perWorkerArenaCap
 			}
 			arena := make([]byte, 0, arenaCap)
 

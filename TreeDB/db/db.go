@@ -540,7 +540,7 @@ type Options struct {
 
 	// ReadWorkers controls multi-key read parallelism.
 	//
-	// A value of 0 means auto (resolved per-call as GOMAXPROCS()+1, clamped by
+	// A value <= 0 means auto (resolved per-call as GOMAXPROCS()+1, clamped by
 	// key-count). Set to 1 to disable parallelism.
 	ReadWorkers int
 }
