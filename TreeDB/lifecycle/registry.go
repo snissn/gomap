@@ -25,7 +25,7 @@ type ReaderRegistry struct {
 	// the same sequence. Register/Unregister can avoid mutex contention by using
 	// fastReaderHandle in this path.
 	fastSeq   atomic.Uint64
-	fastCount atomic.Int64
+	fastCount atomic.Int32
 }
 
 func NewReaderRegistry() *ReaderRegistry {

@@ -25,7 +25,7 @@ type indexGen struct {
 	registry  *lifecycle.ReaderRegistry
 	graveyard *lifecycle.Graveyard
 
-	refs atomic.Int64
+	refs atomic.Int32
 
 	closeOnce sync.Once
 	closeErr  error
@@ -48,7 +48,7 @@ func (g *indexGen) acquire() {
 	g.refs.Add(1)
 }
 
-func (g *indexGen) release() int64 {
+func (g *indexGen) release() int32 {
 	return g.refs.Add(-1)
 }
 
