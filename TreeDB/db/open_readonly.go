@@ -80,6 +80,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		snapPool:    NewSnapshotPool(),
 		notifyError: opts.NotifyError,
 	}
+	db.valueLogManagerRO.Store(vm)
 	db.idx.Store(gen)
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
@@ -157,6 +158,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		snapPool:    NewSnapshotPool(),
 		notifyError: opts.NotifyError,
 	}
+	db.valueLogManagerRO.Store(vm)
 	db.idx.Store(gen)
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)

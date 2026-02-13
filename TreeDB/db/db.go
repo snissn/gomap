@@ -38,6 +38,7 @@ type DBState struct {
 
 type DB struct {
 	valueLogManager    *valuelog.Manager
+	valueLogManagerRO  atomic.Pointer[valuelog.Manager]
 	valueLogRefTracker *valueLogRefTracker
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
@@ -538,12 +539,13 @@ type Options struct {
 }
 
 type Snapshot struct {
-	db         *DB
-	idx        *indexGen
-	state      *DBState
-	reader     valueReader
-	tree       tree.Tree
-	registryID int64
+	db          *DB
+	idx         *indexGen
+	state       *DBState
+	vlogManager *valuelog.Manager
+	reader      valueReader
+	tree        tree.Tree
+	registryID  int64
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -562,13 +564,16 @@ func (s *Snapshot) State() *DBState {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-
 	idx := db.idx.Load()
 	state := db.state.Load()
-	if state.ValueLogSet != nil {
-		db.valueLogManager.Acquire(state.ValueLogSet)
+	vm := db.valueLogManagerRO.Load()
+	if state != nil && state.ValueLogSet != nil {
+		if vm != nil {
+			vm.Acquire(state.ValueLogSet)
+		}
+		if vm == nil {
+			return nil
+		}
 	}
 
 	// Register Reader
@@ -584,6 +589,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.db = db
 	snap.idx = idx
 	snap.state = state
+	snap.vlogManager = vm
 	snap.reader.vlogs = state.ValueLogSet
 	if idx != nil {
 		snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
@@ -595,8 +601,10 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
 	var err error
-	if s.state != nil && s.state.ValueLogSet != nil {
-		err = errors.Join(err, s.db.valueLogManager.Release(s.state.ValueLogSet))
+	if s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
+		if relErr := s.vlogManager.Release(s.state.ValueLogSet); relErr != nil {
+			err = relErr
+		}
 	}
 	if s.idx != nil {
 		s.idx.registry.Unregister(s.registryID)
@@ -823,6 +831,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
+	db.valueLogManagerRO.Store(vm)
 	db.ghostManager.start()
 	db.idx.Store(gen)
 
@@ -886,6 +895,7 @@ func (db *DB) Close() error {
 	db.mu.Lock()
 	vm := db.valueLogManager
 	db.valueLogManager = nil
+	db.valueLogManagerRO.Store(nil)
 	lock := db.lock
 	db.lock = nil
 	db.mu.Unlock()
