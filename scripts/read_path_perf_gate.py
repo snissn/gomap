@@ -32,6 +32,7 @@ from typing import Dict, List, Optional, Tuple, Union
 
 RR_LINE = re.compile(r"^Random Read / TreeDB = ([0-9,]+)$")
 RB_LINE = re.compile(r"^Random Read \(Batch\) / TreeDB = ([0-9,]+)$")
+cleanup_stale_min_age_seconds = 30 * 60
 
 
 @dataclass
@@ -483,7 +484,18 @@ def cleanup_stale_gate_worktrees(args: argparse.Namespace, keep_out_dir: Path) -
     if not root.exists():
         return
     for wt_root in root.glob("gate_*/worktrees"):
-        if wt_root.parent == keep_out_dir:
+        gate_dir = wt_root.parent
+        if gate_dir == keep_out_dir:
+            continue
+        try:
+            age_seconds = max(0.0, time.time() - gate_dir.stat().st_mtime)
+        except (FileNotFoundError, OSError):
+            continue
+        if age_seconds < cleanup_stale_min_age_seconds:
+            print(
+                f"info: skipping stale cleanup for {gate_dir} (age={age_seconds:.0f}s < {cleanup_stale_min_age_seconds}s)",
+                file=sys.stderr,
+            )
             continue
         for name in ("baseline", "candidate"):
             wt = wt_root / name
@@ -518,12 +530,12 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
 
     if any_regress:
         return "reject"
-    if any_improve and not any_regress:
-        return "approve"
     if maxed_without_upside:
         return "reject"
     if any_uncertain:
         return "approve_with_revisions"
+    if any_improve:
+        return "approve"
     return "approve_with_revisions"
 
 
@@ -766,6 +778,27 @@ def render_summary_md(result: Dict, path: Path) -> None:
     path.write_text("\n".join(lines) + "\n")
 
 
+def validate_re2_compatible(pattern: str) -> None:
+    # Go test -bench uses RE2 syntax. Reject common constructs that Python
+    # accepts but RE2 does not.
+    unsupported = (
+        ("(?<=", "lookbehind"),
+        ("(?<!", "lookbehind"),
+        ("(?=", "lookahead"),
+        ("(?!", "lookahead"),
+        ("(?P=", "backreference"),
+    )
+    for token, label in unsupported:
+        if token in pattern:
+            raise SystemExit(
+                f"--microbench pattern uses {label}, unsupported by Go RE2 engine: {pattern!r}"
+            )
+    if re.search(r"\\[1-9]", pattern):
+        raise SystemExit(
+            f"--microbench pattern uses numeric backreferences, unsupported by Go RE2 engine: {pattern!r}"
+        )
+
+
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Read-path performance gate harness")
     ap.add_argument("--repo", type=Path, default=Path.cwd())
@@ -829,6 +862,7 @@ def parse_args() -> argparse.Namespace:
             re.compile(p)
         except re.error as exc:
             raise SystemExit(f"--microbench pattern is not a valid regular expression: {p!r}: {exc}") from exc
+        validate_re2_compatible(p)
     return args
 
 
