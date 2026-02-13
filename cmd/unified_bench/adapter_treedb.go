@@ -643,14 +643,8 @@ func treeDBResolvedOptionsText(indent string) (string, error) {
 	return rep.formatText(indent), nil
 }
 
-var treeDBAdapterReadWorkers = 1
-
-func setTreeDBAdapterReadWorkers(workers int) {
-	treeDBAdapterReadWorkers = resolveReadWorkers(workers)
-}
-
 func wrapTreeDBAdapter(db *treedb.DB, name string) kvstore.DB {
-	return treedbadapter.WrapNamedWithReadWorkers(db, name, treeDBAdapterReadWorkers)
+	return treedbadapter.WrapNamed(db, name)
 }
 
 func NewTreeDB(dir string) (kvstore.DB, error) {

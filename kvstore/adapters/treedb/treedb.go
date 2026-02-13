@@ -53,6 +53,11 @@ func (d *DB) setReadWorkers(workers int) {
 	d.readWorkers.Store(int32(normalizeReadWorkers(workers)))
 }
 
+// SetReadWorkers configures ReadBatch concurrency for this adapter instance.
+func (d *DB) SetReadWorkers(workers int) {
+	d.setReadWorkers(workers)
+}
+
 func (d *DB) Name() string {
 	if d.NameStr != "" {
 		return d.NameStr
