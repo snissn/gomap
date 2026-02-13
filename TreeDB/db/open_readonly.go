@@ -98,6 +98,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)
+	db.publishSnapshotView(gen, initialState, vm)
 
 	// No WAL replay, no background workers in read-only mode.
 	return db, nil
@@ -175,6 +176,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)
+	db.publishSnapshotView(gen, initialState, vm)
 
 	return db, nil
 }

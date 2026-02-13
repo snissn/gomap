@@ -1,6 +1,7 @@
 package db
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -45,9 +46,15 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.db = nil
 	s.idx = nil
 	s.state = nil
+	s.vlogManager = nil
+	s.vlogPinned = false
 	s.reader.vlogs = nil
-	s.tree.Reset(nil, nil, 0)
 	s.registryID = 0
+	s.closed.Store(false)
+	// treePager/treeRoot are intentionally preserved as a pooled cache key for
+	// the next AcquireSnapshot() on this same object. The reader backing address
+	// is stable per pooled Snapshot object, so Reset can be skipped safely when
+	// pager+root are unchanged.
 	p.pool.Put(s)
 }
 
@@ -107,6 +114,12 @@ func (m *indexGhostManager) scavenge(maxAge time.Duration) {
 
 	for _, g := range m.ghosts {
 		if now.Sub(g.retiredAt) > maxAge {
+			// Keep retired generations alive while any snapshot reader is still
+			// registered on that generation.
+			if g.gen != nil && g.gen.registry != nil && g.gen.registry.MinPinnedSeq() != math.MaxUint64 {
+				keep = append(keep, g)
+				continue
+			}
 			toClose = append(toClose, g.gen)
 		} else {
 			keep = append(keep, g)
