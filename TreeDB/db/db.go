@@ -604,9 +604,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	}
 
 	// Register Reader
-	if idx != nil {
-		idx.acquire()
-	}
 	id := int64(0)
 	if idx != nil {
 		id = idx.registry.Register(state.CommitSeq)
@@ -660,7 +657,9 @@ func (s *Snapshot) Close() error {
 	}
 	if s.idx != nil {
 		s.idx.registry.Unregister(s.registryID)
-		s.db.releaseIndex(s.idx)
+		if s.db != nil {
+			s.db.maybeReleaseRetiredIndex(s.idx)
+		}
 	}
 	if s.db != nil {
 		s.db.snapPool.Put(s)

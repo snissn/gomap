@@ -486,6 +486,11 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 	if count == 0 {
 		return 0, false, ErrCorruptedNode
 	}
+	fixedBE8 := len(key) == 8
+	targetBE8 := uint64(0)
+	if fixedBE8 {
+		targetBE8 = getUint64BEAt(key, 0)
+	}
 
 	if !n.internalBaseDelta() {
 		data := n.data
@@ -504,7 +509,17 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 				if keyEnd > len(data) {
 					return 0, false, ErrCorruptedNode
 				}
-				cmp := compareInternalSuffix(data[keyPtr:keyEnd], key)
+				cmp := 0
+				if fixedBE8 && keyLen == 8 {
+					entryBE8 := getUint64BEAt(data, keyPtr)
+					if entryBE8 < targetBE8 {
+						cmp = -1
+					} else if entryBE8 > targetBE8 {
+						cmp = 1
+					}
+				} else {
+					cmp = compareInternalSuffix(data[keyPtr:keyEnd], key)
+				}
 				if cmp <= 0 {
 					lastIdx = i
 					lastChild = getUint64LEAt(data, ptr+2)
@@ -536,7 +551,17 @@ func (n *Node) SearchInternalChildID(key []byte) (childID uint64, found bool, er
 			if keyEnd > len(data) {
 				return 0, false, ErrCorruptedNode
 			}
-			cmp := compareInternalSuffix(data[keyPtr:keyEnd], key)
+			cmp := 0
+			if fixedBE8 && keyLen == 8 {
+				entryBE8 := getUint64BEAt(data, keyPtr)
+				if entryBE8 < targetBE8 {
+					cmp = -1
+				} else if entryBE8 > targetBE8 {
+					cmp = 1
+				}
+			} else {
+				cmp = compareInternalSuffix(data[keyPtr:keyEnd], key)
+			}
 			if cmp <= 0 {
 				i = h + 1
 			} else {

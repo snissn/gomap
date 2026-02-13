@@ -1,6 +1,7 @@
 package db
 
 import (
+	"math"
 	"sync"
 	"time"
 )
@@ -109,6 +110,12 @@ func (m *indexGhostManager) scavenge(maxAge time.Duration) {
 
 	for _, g := range m.ghosts {
 		if now.Sub(g.retiredAt) > maxAge {
+			// Keep retired generations alive while any snapshot reader is still
+			// registered on that generation.
+			if g.gen != nil && g.gen.registry != nil && g.gen.registry.MinPinnedSeq() != math.MaxUint64 {
+				keep = append(keep, g)
+				continue
+			}
 			toClose = append(toClose, g.gen)
 		} else {
 			keep = append(keep, g)
