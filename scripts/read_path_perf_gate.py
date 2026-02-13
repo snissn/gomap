@@ -49,21 +49,14 @@ def run(
     env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     try:
+        # capture=True mirrors stderr into stdout because callers parse a single
+        # text stream from unified-bench output.
+        kwargs: Dict[str, object] = {"text": True}
         if capture:
-            kwargs = {
-                "text": True,
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.STDOUT,
-            }
-            if env is not None:
-                kwargs["env"] = env
-            return subprocess.run(
-                cmd,
-                cwd=str(cwd),
-                check=True,
-                **kwargs,
-            )
-        kwargs = {"text": True, "stderr": subprocess.PIPE}
+            kwargs["stdout"] = subprocess.PIPE
+            kwargs["stderr"] = subprocess.STDOUT
+        else:
+            kwargs["stderr"] = subprocess.PIPE
         if env is not None:
             kwargs["env"] = env
         return subprocess.run(cmd, cwd=str(cwd), check=True, **kwargs)
@@ -325,7 +318,8 @@ def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb", warn_on_fall
 def middle3(values: List[int]) -> float:
     if len(values) < 5:
         raise ValueError(f"need at least 5 samples for middle-3 (got {len(values)})")
-    # Best-of-5 middle-3 estimator from the full sample set (higher is better).
+    # Best-of-5 middle-3 estimator: take top-5 values, then average their
+    # middle 3 (higher is better).
     best_five = sorted(values, reverse=True)[:5]
     best_five.sort()
     return float(sum(best_five[1:4])) / 3.0
@@ -530,7 +524,7 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
         return "reject"
     if any_uncertain:
         return "approve_with_revisions"
-    return "approve"
+    return "approve_with_revisions"
 
 
 def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -> Dict[str, Union[int, str]]:
@@ -611,6 +605,7 @@ def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Optional[
             "go install golang.org/x/perf/cmd/benchstat@latest"
         )
         print(error_message, file=sys.stderr)
+        stat_txt.write_text(error_message + "\n")
         return {
             "pattern": bench_pattern,
             "baseline_output": str(base_txt),
@@ -622,6 +617,7 @@ def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Optional[
     except subprocess.CalledProcessError as exc:
         error_message = f"Error: benchstat failed: {exc}"
         print(error_message, file=sys.stderr)
+        stat_txt.write_text(error_message + "\n")
         return {
             "pattern": bench_pattern,
             "baseline_output": str(base_txt),
