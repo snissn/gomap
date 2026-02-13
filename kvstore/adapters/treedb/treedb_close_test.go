@@ -85,6 +85,21 @@ func TestAdapterReadBatch_ClampsWorkerCount(t *testing.T) {
 	}
 }
 
+func TestAdapterReadBatch_AfterCloseNoError(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	adapter := Wrap(db)
+	if err := adapter.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	if err := adapter.ReadBatch([][]byte{[]byte("missing"), []byte("missing2")}); err != nil {
+		t.Fatalf("readbatch after close err=%v", err)
+	}
+}
+
 func TestAdapterSetReadWorkers_ClampsAtInt32Max(t *testing.T) {
 	if strconv.IntSize <= 32 {
 		t.Skip("requires >32-bit int to pass value larger than math.MaxInt32")

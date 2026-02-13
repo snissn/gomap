@@ -88,7 +88,9 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 	if len(keys) == 1 || workers <= 1 {
 		snap := d.DB.AcquireSnapshot()
 		if snap == nil {
-			return nil
+			// Snapshot unavailable (e.g. closed DB): fall back to direct point reads
+			// so batch calls don't report success without attempting reads.
+			return d.readBatchFallback(keys)
 		}
 		defer func() {
 			if closeErr := snap.Close(); retErr == nil && closeErr != nil {
@@ -111,7 +113,8 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 	// GetUnsafe calls are issued against one snapshot for improved read-bandwidth.
 	snap := d.DB.AcquireSnapshot()
 	if snap == nil {
-		return nil
+		// Snapshot unavailable (e.g. closed DB): fall back to direct point reads.
+		return d.readBatchFallback(keys)
 	}
 	defer func() {
 		if closeErr := snap.Close(); retErr == nil && closeErr != nil {
@@ -156,6 +159,17 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 	}
 	wg.Wait()
 	return firstErr
+}
+
+func (d *DB) readBatchFallback(keys [][]byte) error {
+	for _, key := range keys {
+		_, err := d.DB.GetUnsafe(key)
+		if err == nil || errors.Is(err, treedb.ErrKeyNotFound) || errors.Is(err, treedb.ErrClosed) {
+			continue
+		}
+		return err
+	}
+	return nil
 }
 
 func (d *DB) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
