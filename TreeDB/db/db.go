@@ -546,6 +546,10 @@ type Snapshot struct {
 	reader      valueReader
 	tree        tree.Tree
 	registryID  int64
+	closed      atomic.Bool
+	treePager   *pager.Pager
+	treeRoot    uint64
+	treeReader  *valueReader
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -592,14 +596,35 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.vlogManager = vm
 	snap.reader.vlogs = state.ValueLogSet
 	if idx != nil {
-		snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
+		sameState := snap.treePager == idx.pager &&
+			snap.treeRoot == state.RootPageID &&
+			snap.treeReader == &snap.reader
+		if !sameState {
+			snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
+			snap.treePager = idx.pager
+			snap.treeRoot = state.RootPageID
+			snap.treeReader = &snap.reader
+		}
+	} else {
+		snap.tree.Reset(nil, nil, 0)
+		snap.treePager = nil
+		snap.treeRoot = 0
+		snap.treeReader = nil
 	}
 	snap.registryID = id
+	snap.closed.Store(false)
 	return snap
 }
 
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
+	if s == nil {
+		return nil
+	}
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+
 	var err error
 	if s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
 		if relErr := s.vlogManager.Release(s.state.ValueLogSet); relErr != nil {
