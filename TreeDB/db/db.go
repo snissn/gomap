@@ -28,6 +28,8 @@ const (
 	MetaPage0ID = 0
 	MetaPage1ID = 1
 	KeepRecent  = 10000
+
+	closeSnapshotDrainTimeout = 10 * time.Second
 )
 
 type DBState struct {
@@ -927,11 +929,18 @@ func (db *DB) Close() error {
 	db.lock = nil
 	db.mu.Unlock()
 
+	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
 	for db.snapshotAcquireRO.Load() > 0 {
+		if time.Now().After(drainDeadline) {
+			break
+		}
 		runtime.Gosched()
 	}
 
 	var errs []error
+	if remaining := db.snapshotAcquireRO.Load(); remaining > 0 {
+		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d read-only snapshots to be released", remaining))
+	}
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
 	}
