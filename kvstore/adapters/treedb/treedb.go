@@ -81,7 +81,7 @@ func (d *DB) ReadBatch(keys [][]byte) error {
 		defer func() { _ = snap.Close() }()
 		for _, key := range keys {
 			_, err := snap.GetUnsafe(key)
-			if err == nil || errors.Is(err, treedb.ErrKeyNotFound) {
+			if err == nil || errors.Is(err, treedb.ErrKeyNotFound) || errors.Is(err, treedb.ErrClosed) {
 				continue
 			}
 			return err
@@ -122,7 +122,7 @@ func (d *DB) ReadBatch(keys [][]byte) error {
 			defer wg.Done()
 			for i := lo; i < hi; i++ {
 				_, readErr := snap.GetUnsafe(keys[i])
-				if readErr == nil || errors.Is(readErr, treedb.ErrKeyNotFound) {
+				if readErr == nil || errors.Is(readErr, treedb.ErrKeyNotFound) || errors.Is(readErr, treedb.ErrClosed) {
 					continue
 				}
 				errMu.Lock()
