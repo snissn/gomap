@@ -45,7 +45,7 @@ var (
 	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
 	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
 	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
-	readWorkers        = flag.Int("read-workers", 1, "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default 1)")
+	readWorkers        = flag.Int("read-workers", runtime.GOMAXPROCS(0), "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default GOMAXPROCS)")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
 	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
@@ -251,6 +251,17 @@ func parseBenchKeyShape(s string) (benchKeyShape, error) {
 	}
 }
 
+func resolveReadWorkers(workers int) int {
+	// Keep this local to avoid coupling benchmark CLI parsing with storage adapters.
+	if workers <= 0 {
+		workers = runtime.GOMAXPROCS(0)
+	}
+	if workers < 1 {
+		return 1
+	}
+	return workers
+}
+
 func (s benchKeyShape) encode(dst []byte, key uint64) {
 	switch s {
 	case benchKeyShapeBE8:
@@ -303,7 +314,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Profile:     (none/custom)\n")
 	}
 	fmt.Fprintf(os.Stderr, "Settings:    keys=%d valsize=%d batchsize=%d val_pattern=%s\n", *numKeys, *valSize, *batchSize, *valPattern)
-	fmt.Fprintf(os.Stderr, "             read_workers=%d\n", *readWorkers)
+	fmt.Fprintf(os.Stderr, "             read_workers=%d\n", resolveReadWorkers(*readWorkers))
 	fmt.Fprintf(os.Stderr, "             key_shape=%s\n", strings.TrimSpace(*keyShapeArg))
 	if *rangeQueries > 0 {
 		fmt.Fprintf(os.Stderr, "             range_queries=%d range_span=%d\n", *rangeQueries, *rangeSpan)
@@ -316,13 +327,14 @@ func main() {
 	logResolvedTreeDBOptions()
 
 	// Populate TreeDB specific config into BenchConfig by reading the flags defined in adapter_treedb.go
+	effectiveReadWorkers := resolveReadWorkers(*readWorkers)
 	baseCfg := BenchConfig{
 		Keys:                             *numKeys,
 		KeyShape:                         *keyShapeArg,
 		ValueSize:                        *valSize,
 		BatchSize:                        *batchSize,
 		WriteWorkers:                     *writeWorkers,
-		ReadWorkers:                      *readWorkers,
+		ReadWorkers:                      effectiveReadWorkers,
 		RangeQueries:                     *rangeQueries,
 		RangeSpan:                        *rangeSpan,
 		ValuePattern:                     *valPattern,
@@ -1103,6 +1115,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if cfg.Keys <= 0 {
 		return BenchRun{}, fmt.Errorf("invalid keys: %d", cfg.Keys)
 	}
+	cfg.ReadWorkers = resolveReadWorkers(cfg.ReadWorkers)
+
 	if cfg.AllocsProfile != "" {
 		rate := cfg.AllocsProfileRate
 		if rate <= 0 {
@@ -1160,7 +1174,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			_ = os.RemoveAll(dir)
 			return BenchRun{}, fmt.Errorf("init %s: %w", name, err)
 		}
-
 		instances = append(instances, &DBInstance{Name: name, Wrapper: db, Dir: dir})
 	}
 	if len(instances) == 0 {
@@ -2253,6 +2266,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if batchSize <= 0 {
 				batchSize = 1
 			}
+			rb, hasReadBatch := db.(kvstore.BatchReader)
 			keys := make([][]byte, batchSize)
 			keyBuf := make([]byte, batchSize*8)
 			for i := 0; i < batchSize; i++ {
@@ -2274,7 +2288,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				for j := 0; j < n; j++ {
 					encodeKey(keys[j], uint64(rng.Intn(cfg.Keys)))
 				}
-				if hasMany {
+				if hasReadBatch {
+					if err := rb.ReadBatch(keys[:n]); err != nil {
+						return 0, err
+					}
+				} else if hasMany {
 					_, _ = mg.GetMany(keys[:n])
 				} else {
 					for j := 0; j < n; j++ {

@@ -21,6 +21,18 @@ type MultiGetter interface {
 	GetMany(keys [][]byte) ([][]byte, error)
 }
 
+// BatchReader is an optional capability for batched read execution where
+// callers only need completion/error, not materialized values.
+//
+// Semantics:
+// - Missing keys are not errors (same model as GetMany nil entries).
+// - Duplicate keys are not errors (implementations may deduplicate).
+// - Empty key slices are a no-op and must return nil.
+// - Errors should represent batch-level failures, not per-key absence.
+type BatchReader interface {
+	ReadBatch(keys [][]byte) error
+}
+
 // ReadSnapshot is an optional point-read snapshot used by benchmarks to
 // measure snapshot-amortized read throughput.
 type ReadSnapshot interface {
