@@ -557,6 +557,7 @@ type Snapshot struct {
 	idx         *indexGen
 	state       *DBState
 	vlogManager *valuelog.Manager
+	vlogPinned  bool
 	reader      valueReader
 	tree        tree.Tree
 	registryID  int64
@@ -592,12 +593,14 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	idx := view.idx
 	state := view.state
 	vm := view.vlogManager
-	if state.ValueLogSet != nil {
+	vlogSet := state.ValueLogSet
+	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+	if vlogNeedsPin {
 		if vm == nil {
 			db.snapshotAcquireRO.Add(-1)
 			return nil
 		}
-		vm.Acquire(state.ValueLogSet)
+		vm.Acquire(vlogSet)
 	}
 
 	// Register Reader
@@ -614,7 +617,8 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.idx = idx
 	snap.state = state
 	snap.vlogManager = vm
-	snap.reader.vlogs = state.ValueLogSet
+	snap.vlogPinned = vlogNeedsPin
+	snap.reader.vlogs = vlogSet
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
 			snap.treeRoot == state.RootPageID &&
@@ -649,7 +653,7 @@ func (s *Snapshot) Close() error {
 	}
 
 	var err error
-	if s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
+	if s.vlogPinned && s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
 		if relErr := s.vlogManager.Release(s.state.ValueLogSet); relErr != nil {
 			err = relErr
 		}

@@ -46,6 +46,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.idx = nil
 	s.state = nil
 	s.vlogManager = nil
+	s.vlogPinned = false
 	s.reader.vlogs = nil
 	s.registryID = 0
 	s.closed.Store(false)
