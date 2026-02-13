@@ -2196,9 +2196,15 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					if err != nil {
 						return err
 					}
-					buf, _ = snap.GetAppend(k[:], buf[:0])
-					if err := snap.Close(); err != nil {
-						return fmt.Errorf("random_read_parallel_acquire_snapshot close: %w", err)
+					nextBuf, getErr := snap.GetAppend(k[:], buf[:0])
+					closeErr := snap.Close()
+					if closeErr != nil {
+						return fmt.Errorf("random_read_parallel_acquire_snapshot close: %w", closeErr)
+					}
+					// Keep parity with random_read/random_read_parallel semantics:
+					// this benchmark does not fail on point-read misses.
+					if getErr == nil {
+						buf = nextBuf
 					}
 				}
 				return nil
