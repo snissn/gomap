@@ -44,6 +44,7 @@ func TestRunBenchmark_RandomReadBatch_Smoke(t *testing.T) {
 		Keys:         2_000,
 		ValueSize:    16,
 		BatchSize:    128,
+		ReadWorkers:  2,
 		RangeQueries: 50,
 		RangeSpan:    20,
 		DBsArg:       "treedb,leveldb",

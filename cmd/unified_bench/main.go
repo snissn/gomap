@@ -2168,12 +2168,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 		"random_read_parallel_acquire_snapshot": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			workers := cfg.ReadWorkers
-			if workers <= 0 {
-				workers = 1
-			}
-			if cfg.Keys <= 0 {
-				return 0, nil
-			}
 
 			snapshotter, hasSnapshotter := db.(kvstore.ReadSnapshotter)
 			appendGetter, hasAppendGetter := db.(interface {
