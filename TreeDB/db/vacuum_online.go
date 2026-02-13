@@ -377,12 +377,14 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		db.idx.Store(newGen)
 		db.meta = nextMeta
 		db.metaPageID = MetaPage0ID
-		db.state.Store(&DBState{
+		newState := &DBState{
 			CommitSeq:        nextMeta.CommitSeq,
 			RootPageID:       nextMeta.UserRootPageID,
 			SystemRootPageID: nextMeta.SystemRootPageID,
 			ValueLogSet:      db.valueLogManager.CurrentSet(),
-		})
+		}
+		db.state.Store(newState)
+		db.publishSnapshotView(newGen, newState, db.valueLogManager)
 		db.mu.Unlock()
 
 		db.writeMu.Unlock()

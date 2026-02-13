@@ -36,9 +36,18 @@ type DBState struct {
 	ValueLogSet      *valuelog.Set
 }
 
+// snapshotView is the coherent publication unit for snapshot acquisition.
+// AcquireSnapshot reads this single pointer so idx/state/vlog manager always
+// come from the same publish event.
+type snapshotView struct {
+	idx         *indexGen
+	state       *DBState
+	vlogManager *valuelog.Manager
+}
+
 type DB struct {
 	valueLogManager    *valuelog.Manager
-	valueLogManagerRO  atomic.Pointer[valuelog.Manager]
+	snapshotViewRO     atomic.Pointer[snapshotView]
 	valueLogRefTracker *valueLogRefTracker
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
@@ -568,16 +577,18 @@ func (s *Snapshot) State() *DBState {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
-	idx := db.idx.Load()
-	state := db.state.Load()
-	vm := db.valueLogManagerRO.Load()
-	if state != nil && state.ValueLogSet != nil {
-		if vm != nil {
-			vm.Acquire(state.ValueLogSet)
-		}
+	view := db.snapshotViewRO.Load()
+	if view == nil || view.idx == nil || view.state == nil {
+		return nil
+	}
+	idx := view.idx
+	state := view.state
+	vm := view.vlogManager
+	if state.ValueLogSet != nil {
 		if vm == nil {
 			return nil
 		}
+		vm.Acquire(state.ValueLogSet)
 	}
 
 	// Register Reader
@@ -856,7 +867,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
-	db.valueLogManagerRO.Store(vm)
 	db.ghostManager.start()
 	db.idx.Store(gen)
 
@@ -894,6 +904,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)
+	db.publishSnapshotView(gen, initialState, vm)
 	if err := db.initValueLogRefTracker(); err != nil {
 		db.Close()
 		return nil, err
@@ -918,9 +929,9 @@ func (db *DB) Close() error {
 	}
 
 	db.mu.Lock()
+	db.clearSnapshotView()
 	vm := db.valueLogManager
 	db.valueLogManager = nil
-	db.valueLogManagerRO.Store(nil)
 	lock := db.lock
 	db.lock = nil
 	db.mu.Unlock()
@@ -1298,6 +1309,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		ValueLogSet:      valueLogSet,
 	}
 	db.state.Store(newState)
+	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
 	db.mu.Unlock()
@@ -1492,6 +1504,28 @@ func (db *DB) State() *DBState {
 	return db.state.Load()
 }
 
+func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager) {
+	if db == nil {
+		return
+	}
+	if idx == nil || state == nil {
+		db.snapshotViewRO.Store(nil)
+		return
+	}
+	db.snapshotViewRO.Store(&snapshotView{
+		idx:         idx,
+		state:       state,
+		vlogManager: vm,
+	})
+}
+
+func (db *DB) clearSnapshotView() {
+	if db == nil {
+		return
+	}
+	db.snapshotViewRO.Store(nil)
+}
+
 // RefreshValueLogSet publishes a new DBState with the current value-log set
 // (excluding zombies) without creating a new commit.
 func (db *DB) RefreshValueLogSet() error {
@@ -1513,6 +1547,7 @@ func (db *DB) RefreshValueLogSet() error {
 		ValueLogSet:      db.valueLogManager.CurrentSet(),
 	}
 	db.state.Store(newState)
+	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
 
 	if oldState.ValueLogSet != nil {
 		return db.valueLogManager.Release(oldState.ValueLogSet)
