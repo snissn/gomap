@@ -11,6 +11,24 @@ import (
 
 // --- Public API ---
 
+func boundedArenaCap(itemCount, guessBytes, maxBytes int) int {
+	if itemCount <= 0 || guessBytes <= 0 || maxBytes <= 0 {
+		return 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	if itemCount > maxInt/guessBytes {
+		return maxBytes
+	}
+	arenaCap := itemCount * guessBytes
+	if arenaCap < 0 {
+		return 0
+	}
+	if arenaCap > maxBytes {
+		return maxBytes
+	}
+	return arenaCap
+}
+
 // Get returns the value for a key.
 //
 // Semantics: Returns a safe copy of the value.
@@ -42,13 +60,7 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	)
 	workers := db.effectiveReadWorkers(len(keys))
 	if workers <= 1 {
-		arenaCap := len(keys) * getManyValueGuessBytes
-		if arenaCap < 0 {
-			arenaCap = 0
-		}
-		if arenaCap > getManyMaxArenaBytes {
-			arenaCap = getManyMaxArenaBytes
-		}
+		arenaCap := boundedArenaCap(len(keys), getManyValueGuessBytes, getManyMaxArenaBytes)
 		arena := make([]byte, 0, arenaCap)
 		for i, key := range keys {
 			val, err := snap.GetUnsafe(key)
@@ -107,13 +119,7 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		wg.Add(1)
 		go func(start, end int) {
 			defer wg.Done()
-			arenaCap := (end - start) * getManyValueGuessBytes
-			if arenaCap < 0 {
-				arenaCap = 0
-			}
-			if arenaCap > perWorkerArenaCap {
-				arenaCap = perWorkerArenaCap
-			}
+			arenaCap := boundedArenaCap(end-start, getManyValueGuessBytes, perWorkerArenaCap)
 			arena := make([]byte, 0, arenaCap)
 
 			for i := start; i < end; i++ {

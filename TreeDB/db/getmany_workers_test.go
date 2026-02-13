@@ -33,6 +33,31 @@ func TestResolveReadWorkers(t *testing.T) {
 	}
 }
 
+func TestBoundedArenaCap(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	cases := []struct {
+		name      string
+		itemCount int
+		guess     int
+		maxBytes  int
+		want      int
+	}{
+		{name: "normal", itemCount: 8, guess: 128, maxBytes: 4096, want: 1024},
+		{name: "clamped", itemCount: 1000, guess: 128, maxBytes: 4096, want: 4096},
+		{name: "overflow saturates to cap", itemCount: maxInt/128 + 1, guess: 128, maxBytes: 4096, want: 4096},
+		{name: "empty count", itemCount: 0, guess: 128, maxBytes: 4096, want: 0},
+		{name: "zero max", itemCount: 8, guess: 128, maxBytes: 0, want: 0},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := boundedArenaCap(tc.itemCount, tc.guess, tc.maxBytes); got != tc.want {
+				t.Fatalf("boundedArenaCap(%d,%d,%d)=%d want %d", tc.itemCount, tc.guess, tc.maxBytes, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestGetMany_ParallelAndSerialSemanticsMatch(t *testing.T) {
 	dir := t.TempDir()
 
