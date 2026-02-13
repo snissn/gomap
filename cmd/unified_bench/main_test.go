@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -10,7 +11,110 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/kvstore"
 )
+
+type errorBatchReaderDB struct {
+	err error
+}
+
+func (d *errorBatchReaderDB) Name() string {
+	return "ErrReadBatch"
+}
+
+func (d *errorBatchReaderDB) Close() error {
+	return nil
+}
+
+func (d *errorBatchReaderDB) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (d *errorBatchReaderDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *errorBatchReaderDB) Delete(key []byte) error {
+	return nil
+}
+
+func (d *errorBatchReaderDB) ReadBatch(keys [][]byte) error {
+	return d.err
+}
+
+type errorGetManyDB struct {
+	err error
+}
+
+func (d *errorGetManyDB) Name() string {
+	return "ErrGetMany"
+}
+
+func (d *errorGetManyDB) Close() error {
+	return nil
+}
+
+func (d *errorGetManyDB) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (d *errorGetManyDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *errorGetManyDB) Delete(key []byte) error {
+	return nil
+}
+
+func (d *errorGetManyDB) GetMany(keys [][]byte) ([][]byte, error) {
+	return nil, d.err
+}
+
+type errorGetDB struct {
+	err error
+}
+
+func (d *errorGetDB) Name() string {
+	return "ErrGet"
+}
+
+func (d *errorGetDB) Close() error {
+	return nil
+}
+
+func (d *errorGetDB) Get(key []byte) ([]byte, error) {
+	return nil, d.err
+}
+
+func (d *errorGetDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *errorGetDB) Delete(key []byte) error {
+	return nil
+}
+
+func runRandomReadBatchErrorCase(t *testing.T, dbName string, factory DBFactory, wantSubstr string) {
+	t.Helper()
+	RegisterDB(dbName, factory)
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         256,
+		ValueSize:    16,
+		BatchSize:    64,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "random_read_batch",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err == nil || !strings.Contains(err.Error(), wantSubstr) {
+		t.Fatalf("expected random_read_batch error containing %q, got %v", wantSubstr, err)
+	}
+}
 
 func TestRunBenchmark_PreloadsForReadAndScanOnly(t *testing.T) {
 	run, err := runBenchmark(BenchConfig{
@@ -62,6 +166,27 @@ func TestRunBenchmark_RandomReadBatch_Smoke(t *testing.T) {
 			t.Fatalf("expected random_read_batch > 0 for %s, got %v", dbName, got)
 		}
 	}
+}
+
+func TestRunBenchmark_RandomReadBatch_PropagatesReadBatchError(t *testing.T) {
+	want := errors.New("readbatch forced failure")
+	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_batch_reader", func(_ string) (kvstore.DB, error) {
+		return &errorBatchReaderDB{err: want}, nil
+	}, want.Error())
+}
+
+func TestRunBenchmark_RandomReadBatch_PropagatesGetManyError(t *testing.T) {
+	want := errors.New("getmany forced failure")
+	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_getmany", func(_ string) (kvstore.DB, error) {
+		return &errorGetManyDB{err: want}, nil
+	}, want.Error())
+}
+
+func TestRunBenchmark_RandomReadBatch_PropagatesGetError(t *testing.T) {
+	want := errors.New("get forced failure")
+	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_get", func(_ string) (kvstore.DB, error) {
+		return &errorGetDB{err: want}, nil
+	}, want.Error())
 }
 
 func TestRunBenchmark_RandomReadParallel_Smoke(t *testing.T) {
