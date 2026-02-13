@@ -233,3 +233,21 @@ func TestReaderRegistry_ConcurrentFastAndSlowReaders(t *testing.T) {
 		}
 	}
 }
+
+func TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle(t *testing.T) {
+	reg := NewReaderRegistry()
+	reg.fastSeq.Store(7)
+	reg.fastCount.Store(math.MaxInt32)
+
+	id := reg.Register(7)
+	if id == fastReaderHandle {
+		t.Fatalf("expected slow-handle fallback at fast-count saturation")
+	}
+	if got := reg.fastCount.Load(); got != math.MaxInt32 {
+		t.Fatalf("fastCount overflowed/changed at saturation: got %d want %d", got, math.MaxInt32)
+	}
+
+	if min := reg.MinPinnedSeq(); min != 7 {
+		t.Fatalf("expected min 7 with saturated fast readers + slow fallback, got %d", min)
+	}
+}

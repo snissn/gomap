@@ -61,8 +61,11 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 		return fastReaderHandle
 	}
 	if r.fastSeq.Load() == seq {
-		r.fastCount.Add(1)
-		return fastReaderHandle
+		if c := r.fastCount.Load(); c < math.MaxInt32 {
+			r.fastCount.Add(1)
+			return fastReaderHandle
+		}
+		// Saturated fast counter: fall back to a slow handle to avoid overflow.
 	}
 
 	var idx int
