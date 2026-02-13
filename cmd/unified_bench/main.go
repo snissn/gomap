@@ -45,7 +45,7 @@ var (
 	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
 	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
 	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
-	readWorkers        = flag.Int("read-workers", 1, "Number of goroutines for random_read_parallel (default 1)")
+	readWorkers        = flag.Int("read-workers", 1, "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default 1)")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
 	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
