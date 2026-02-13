@@ -62,11 +62,16 @@ def run(
                 check=True,
                 **kwargs,
             )
-        return subprocess.run(cmd, cwd=str(cwd), check=True)
+        kwargs = {"text": True, "stderr": subprocess.PIPE}
+        if env is not None:
+            kwargs["env"] = env
+        return subprocess.run(cmd, cwd=str(cwd), check=True, **kwargs)
     except subprocess.CalledProcessError as exc:
+        print(f"command failed: {' '.join(cmd)}", file=sys.stderr)
         if exc.stdout:
-            print(f"command failed: {' '.join(cmd)}", file=sys.stderr)
             print(exc.stdout, file=sys.stderr)
+        if exc.stderr:
+            print(exc.stderr, file=sys.stderr)
         raise
 
 
@@ -98,7 +103,7 @@ def parse_table_last_numeric(prefix: str, line: str) -> int | None:
         return value if value > 0 else None
 
     # Pipe table-style row: parse the last non-empty cell (last cell may be empty due
-    # trailing pipe in markdown table format).
+    # to trailing pipe).
     cells = [part.strip() for part in plain.strip("|").split("|")]
     suffix = ""
     for part in reversed(cells):
@@ -109,8 +114,6 @@ def parse_table_last_numeric(prefix: str, line: str) -> int | None:
     if not suffix:
         return None
 
-    if not cells:
-        return None
     if not cells[0].startswith(prefix):
         return None
 
@@ -130,6 +133,30 @@ def parse_table_cell_int(raw: str) -> int | None:
         return None
     value = int(m.group(1).replace(",", ""))
     return value if value > 0 else None
+
+
+def _parse_metric_from_row(
+    metric_name: str,
+    row: List[str],
+    tree_db_present: bool,
+    tree_col_idx: int | None,
+    normalized_dbs: List[str],
+) -> int | None:
+    if len(row) < 2 or row[0].strip() != metric_name:
+        return None
+
+    if tree_db_present:
+        if tree_col_idx is None:
+            if len(normalized_dbs) > 1:
+                return None
+            idx = len(row) - 1
+        else:
+            idx = tree_col_idx
+        if idx < 0 or idx >= len(row):
+            return None
+        return parse_table_cell_int(row[idx])
+
+    return parse_table_cell_int(row[-1])
 
 
 def _normalize_db_names(raw_dbs: str | List[str] | None) -> List[str]:
@@ -184,32 +211,26 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
                 continue
 
             metric = cols[0].strip()
-            if metric == "Random Read" and rr is None and len(cols) >= 2:
-                if tree_db_present:
-                    if tree_col_idx is None:
-                        if len(normalized_dbs) > 1:
-                            continue
-                        idx = len(cols) - 1
-                    else:
-                        idx = tree_col_idx
-                    parsed = parse_table_cell_int(cols[idx]) if idx < len(cols) else None
-                else:
-                    parsed = parse_table_cell_int(cols[-1])
+            if rr is None:
+                parsed = _parse_metric_from_row(
+                    "Random Read",
+                    cols,
+                    tree_db_present,
+                    tree_col_idx,
+                    normalized_dbs,
+                )
                 if parsed is not None:
                     rr = parsed
                     continue
 
-            if metric == "Random Read (Batch)" and rb is None and len(cols) >= 2:
-                if tree_db_present:
-                    if tree_col_idx is None:
-                        if len(normalized_dbs) > 1:
-                            continue
-                        idx = len(cols) - 1
-                    else:
-                        idx = tree_col_idx
-                    parsed = parse_table_cell_int(cols[idx]) if idx < len(cols) else None
-                else:
-                    parsed = parse_table_cell_int(cols[-1])
+            if rb is None:
+                parsed = _parse_metric_from_row(
+                    "Random Read (Batch)",
+                    cols,
+                    tree_db_present,
+                    tree_col_idx,
+                    normalized_dbs,
+                )
                 if parsed is not None:
                     rb = parsed
                     continue
@@ -233,50 +254,32 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
 
             if row[0].strip().lower() == "test" and len(row) >= 2:
                 lower_cells = [c.lower() for c in row]
-                if "treedb" in lower_cells:
+                if tree_col_idx is None and "treedb" in lower_cells:
                     tree_col_idx = lower_cells.index("treedb")
-                elif len(row) == 2 and row[1].lower() == "treedb":
+                elif tree_col_idx is None and len(row) == 2 and row[1].lower() == "treedb":
                     tree_col_idx = 1
 
-            metric = row[0].strip()
-            if rr is None and metric == "Random Read" and len(row) >= 2:
-                if tree_db_present:
-                    if tree_col_idx is None:
-                        if len(normalized_dbs) > 1:
-                            continue
-                        idx = len(row) - 1
-                    else:
-                        idx = tree_col_idx
-                    parsed = parse_table_cell_int(row[idx])
-                else:
-                    parsed = parse_table_cell_int(row[len(row) - 1])
+            if rr is None:
+                parsed = _parse_metric_from_row(
+                    "Random Read",
+                    row,
+                    tree_db_present,
+                    tree_col_idx,
+                    normalized_dbs,
+                )
                 if parsed is not None:
                     rr = parsed
 
-            if rb is None and metric == "Random Read (Batch)" and len(row) >= 2:
-                if tree_db_present:
-                    if tree_col_idx is None:
-                        if len(normalized_dbs) > 1:
-                            continue
-                        idx = len(row) - 1
-                    else:
-                        idx = tree_col_idx
-                    parsed = parse_table_cell_int(row[idx])
-                else:
-                    parsed = parse_table_cell_int(row[len(row) - 1])
+            if rb is None:
+                parsed = _parse_metric_from_row(
+                    "Random Read (Batch)",
+                    row,
+                    tree_db_present,
+                    tree_col_idx,
+                    normalized_dbs,
+                )
                 if parsed is not None:
                     rb = parsed
-
-            if rr is None and re.fullmatch(r"Random Read", line.strip()) is not None:
-                parsed = parse_table_last_numeric("Random Read", line)
-                if parsed is not None:
-                    rr = parsed
-                    continue
-            if rb is None and re.fullmatch(r"Random Read \(Batch\)", line.strip()) is not None:
-                parsed = parse_table_last_numeric("Random Read (Batch)", line)
-                if parsed is not None:
-                    rb = parsed
-                continue
 
     if rr is None or rb is None:
         raise RuntimeError("failed to parse Random Read metrics from unified-bench output")
@@ -285,7 +288,7 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
 
 def middle3(values: List[int]) -> float:
     if len(values) < 5:
-        raise ValueError("need at least 5 samples for middle-3")
+        raise ValueError(f"need at least 5 samples for middle-3 (got {len(values)})")
     # Best-of-5 middle-3 estimator from the full sample set (higher is better).
     best_five = sorted(values, reverse=True)[:5]
     best_five.sort()
@@ -295,8 +298,8 @@ def middle3(values: List[int]) -> float:
 def bootstrap_ci95_effect_pct(base_vals: List[int], cand_vals: List[int], n_boot: int = 20000, seed: int = 1) -> Tuple[float, float]:
     if len(base_vals) != len(cand_vals):
         raise ValueError("paired sample count mismatch")
-    if not base_vals or len(base_vals) < 5:
-        return (0.0, 0.0)
+    if len(base_vals) < 5:
+        raise ValueError("need at least 5 paired samples for bootstrap CI95")
 
     rng = random.Random(seed)
     paired = list(zip(base_vals, cand_vals))
@@ -329,13 +332,19 @@ def classify_metric(effect_middle3_pct: float, ci_lo: float, ci_hi: float, thres
     return "uncertain"
 
 
-def metric_summary(base_runs: List[RunPoint], cand_runs: List[RunPoint], metric: str, thresh: float = 1.0) -> Dict[str, float | str | List[float]]:
+def metric_summary(
+    base_runs: List[RunPoint],
+    cand_runs: List[RunPoint],
+    metric: str,
+    thresh: float = 1.0,
+    seed: int = 1,
+) -> Dict[str, float | str | List[float]]:
     base_vals = [getattr(r, metric) for r in base_runs]
     cand_vals = [getattr(r, metric) for r in cand_runs]
     m3_base = middle3(base_vals)
     m3_cand = middle3(cand_vals)
     eff = (m3_cand - m3_base) / m3_base * 100.0 if m3_base > 0 else 0.0
-    ci_lo, ci_hi = bootstrap_ci95_effect_pct(base_vals, cand_vals, seed=17)
+    ci_lo, ci_hi = bootstrap_ci95_effect_pct(base_vals, cand_vals, seed=seed)
     cls = classify_metric(eff, ci_lo, ci_hi, thresh=thresh)
     return {
         "base_middle3": m3_base,
@@ -350,9 +359,9 @@ def metric_summary(base_runs: List[RunPoint], cand_runs: List[RunPoint], metric:
     }
 
 
-def needs_more_rounds(base_runs: List[RunPoint], cand_runs: List[RunPoint], thresh: float) -> bool:
-    rr = metric_summary(base_runs, cand_runs, "rr", thresh=thresh)
-    rb = metric_summary(base_runs, cand_runs, "rb", thresh=thresh)
+def needs_more_rounds(base_runs: List[RunPoint], cand_runs: List[RunPoint], thresh: float, seed: int) -> bool:
+    rr = metric_summary(base_runs, cand_runs, "rr", thresh=thresh, seed=seed)
+    rb = metric_summary(base_runs, cand_runs, "rb", thresh=thresh, seed=seed)
     return rr["classification"] == "uncertain" or rb["classification"] == "uncertain"
 
 
@@ -362,6 +371,7 @@ def run_unified_once(
     tests: str,
     args: argparse.Namespace,
     log_file: Path,
+    run_seed: int,
 ) -> RunPoint:
     cmd = [
         str(bin_path),
@@ -378,7 +388,7 @@ def run_unified_once(
         "-test",
         tests,
         "-seed",
-        str(args.seed),
+        str(run_seed),
         "-progress=false",
         "-valsize",
         str(valsize),
@@ -386,6 +396,8 @@ def run_unified_once(
     t0 = time.time()
     p = run(cmd, cwd=args.repo, capture=True)
     rr, rb = parse_metrics(p.stdout, args.dbs)
+    if rr <= 0 or rb <= 0:
+        raise RuntimeError(f"parsed non-positive metrics rr={rr} rb={rb}")
     log_file.write_text(p.stdout)
     return RunPoint(rr=rr, rb=rb, secs=time.time() - t0, log_path=str(log_file))
 
@@ -425,7 +437,7 @@ def cleanup_worktrees(args: argparse.Namespace, out_dir: Path) -> None:
         if wt.exists():
             try:
                 run(["git", "worktree", "remove", "--force", str(wt)], cwd=args.repo)
-            except Exception as exc:
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
                 print(f"Warning: failed to remove worktree {wt}: {exc}", file=sys.stderr)
 
 
@@ -433,7 +445,6 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
     any_improve = False
     any_regress = False
     any_uncertain = False
-    maxed_without_upside = False
 
     for _, vs in per_valsize.items():
         rr_cls = vs["metrics"]["rr"]["classification"]
@@ -446,8 +457,10 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
             any_regress = True
         if rr_cls == "uncertain" or rb_cls == "uncertain":
             any_uncertain = True
-            if n >= max_rounds and not any_improve:
-                maxed_without_upside = True
+
+    maxed_without_upside = (
+        any_uncertain and not any_improve and all(vs["n_per_side"] >= max_rounds for vs in per_valsize.values())
+    )
 
     if any_regress:
         return "reject"
@@ -537,6 +550,9 @@ def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Dict[str,
             file=sys.stderr,
         )
         return None
+    except subprocess.CalledProcessError as exc:
+        print(f"Error: benchstat failed: {exc}", file=sys.stderr)
+        return None
     stat_txt.write_text(p3.stdout)
 
     return {
@@ -621,6 +637,16 @@ def parse_args() -> argparse.Namespace:
         raise SystemExit("--max-rounds must be > 0")
     if args.initial_rounds > args.max_rounds:
         raise SystemExit("--initial-rounds must be <= --max-rounds")
+    if args.keys <= 0:
+        raise SystemExit("--keys must be > 0")
+    if args.sanity_valsize <= 0:
+        raise SystemExit("--sanity-valsize must be > 0")
+    if args.microbench_count <= 0:
+        raise SystemExit("--microbench-count must be > 0")
+    if args.microbench_gomaxprocs <= 0:
+        raise SystemExit("--microbench-gomaxprocs must be > 0")
+    if args.practical_threshold_pct <= 0:
+        raise SystemExit("--practical-threshold-pct must be > 0")
     return args
 
 
@@ -631,7 +657,15 @@ def main() -> int:
     out_dir = args.out_dir.resolve() if args.out_dir else (args.repo / "artifacts" / "read_gate" / f"gate_{ts}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    valsizes = [int(v.strip()) for v in args.valsizes.split(",") if v.strip()]
+    valsizes: List[int] = []
+    for token in [v.strip() for v in args.valsizes.split(",") if v.strip()]:
+        try:
+            value = int(token)
+        except ValueError as exc:
+            raise SystemExit(f"invalid --valsizes entry {token!r}: {exc}") from exc
+        if value <= 0:
+            raise SystemExit(f"--valsizes entries must be > 0 (got {value})")
+        valsizes.append(value)
     if not valsizes:
         raise SystemExit("--valsizes produced empty list")
 
@@ -688,6 +722,7 @@ def main() -> int:
                             args.tests,
                             args,
                             log_file,
+                            args.seed + valsize * 1_000_000 + turn * 2 + (0 if side == "base" else 1),
                         )
                         if side == "base":
                             base_runs.append(rec)
@@ -698,7 +733,7 @@ def main() -> int:
 
                 if len(base_runs) < 5:
                     continue
-                if not needs_more_rounds(base_runs, cand_runs, args.practical_threshold_pct):
+                if not needs_more_rounds(base_runs, cand_runs, args.practical_threshold_pct, args.seed):
                     break
                 if len(base_runs) >= args.max_rounds:
                     break
@@ -711,8 +746,8 @@ def main() -> int:
                     "candidate": [r.__dict__ for r in cand_runs],
                 },
                 "metrics": {
-                    "rr": metric_summary(base_runs, cand_runs, "rr", thresh=args.practical_threshold_pct),
-                    "rb": metric_summary(base_runs, cand_runs, "rb", thresh=args.practical_threshold_pct),
+                    "rr": metric_summary(base_runs, cand_runs, "rr", thresh=args.practical_threshold_pct, seed=args.seed),
+                    "rb": metric_summary(base_runs, cand_runs, "rb", thresh=args.practical_threshold_pct, seed=args.seed),
                 },
             }
             result["valsizes"][str(valsize)] = vs
