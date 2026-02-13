@@ -3607,9 +3607,13 @@ func runReadWorkersSweepSuite(baseCfg BenchConfig) (string, error) {
 			return "", fmt.Errorf("read-workers sweep (%s): %w", formatReadWorkerLabel(workers), runErr)
 		}
 
-		throughput := run.Results["random_read_batch"]["TreeDB"]
-		if math.IsNaN(throughput) {
-			return "", fmt.Errorf("read-workers sweep (%s): random_read_batch result missing for TreeDB", formatReadWorkerLabel(workers))
+		batchResults, ok := run.Results["random_read_batch"]
+		if !ok {
+			return "", fmt.Errorf("read-workers sweep (%s): random_read_batch result set missing", formatReadWorkerLabel(workers))
+		}
+		throughput, err := pickTreeDBResult(batchResults)
+		if err != nil {
+			return "", fmt.Errorf("read-workers sweep (%s): %w", formatReadWorkerLabel(workers), err)
 		}
 		results = append(results, candidateResult{
 			workers:    workers,
@@ -3654,6 +3658,36 @@ func runReadWorkersSweepSuite(baseCfg BenchConfig) (string, error) {
 	}
 
 	return sb.String(), nil
+}
+
+func pickTreeDBResult(results map[string]float64) (float64, error) {
+	if len(results) == 0 {
+		return math.NaN(), fmt.Errorf("random_read_batch result set empty")
+	}
+
+	names := make([]string, 0, len(results))
+	matches := make([]string, 0, len(results))
+	var throughput float64
+	for name, value := range results {
+		names = append(names, name)
+		if strings.HasPrefix(name, "TreeDB") {
+			matches = append(matches, name)
+			throughput = value
+		}
+	}
+	sort.Strings(names)
+	sort.Strings(matches)
+
+	if len(matches) == 0 {
+		return math.NaN(), fmt.Errorf("random_read_batch result missing for TreeDB (available: %s)", strings.Join(names, ", "))
+	}
+	if len(matches) > 1 {
+		return math.NaN(), fmt.Errorf("random_read_batch has multiple TreeDB variants (%s); disable variants for this sweep", strings.Join(matches, ", "))
+	}
+	if math.IsNaN(throughput) {
+		return math.NaN(), fmt.Errorf("random_read_batch result missing for %s", matches[0])
+	}
+	return throughput, nil
 }
 
 func suiteTreeDBCacheStats(instances []*DBInstance) (string, error) {

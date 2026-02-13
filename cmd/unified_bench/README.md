@@ -43,7 +43,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-dataset-val-pattern` dataset value pattern for `dataset_write_*` (`random|zero|repeat|repeat_tail64|half_repeat_half_random`)
 - `-batchsize` batch size (default 8000)
-- `-treedb-read-workers` TreeDB read worker count for batched reads (`0` = auto, currently resolves to `GOMAXPROCS()+1`; clamped by batch size)
+- `-treedb-read-workers` TreeDB read worker count for batched reads (`0` = auto, currently resolves to `GOMAXPROCS()+1`; clamped by key count per call, e.g. in `random_read_batch` by the effective batch key slice length)
 - `-treedb-read-worker-sweep` Comma-separated TreeDB read worker counts for `-suite treedb_read_workers` (empty = `1,2,4,8,16,GOMAXPROCS,GOMAXPROCS+1`; non-positive -> auto)
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)

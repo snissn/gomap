@@ -54,7 +54,7 @@ var (
 	treedbIndexOptimizations              = flag.Bool("treedb-index-optimizations", false, "TreeDB: enable profile-driven index optimization bundle (force value pointers + leaf prefix compression + columnar leaves + packed value pointers + internal base-delta)")
 	treedbLeafPrefixCompression           = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable front-coded leaf key compression (restart points; compact entry header)")
 	treedbValueLogThreshold               = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
-	treedbReadWorkers                     = flag.Int("treedb-read-workers", 0, "TreeDB: number of goroutines for GetMany reads (0=auto; resolved as GOMAXPROCS()+1; clamped by batch size)")
+	treedbReadWorkers                     = flag.Int("treedb-read-workers", 0, "TreeDB: number of goroutines for GetMany reads (0=auto; resolved as GOMAXPROCS()+1; clamped by key count per call)")
 	treedbReadWorkerSweep                 = flag.String("treedb-read-worker-sweep", "", "Comma-separated TreeDB read worker counts for the read-workers sweep suite (empty=default 1,2,4,8,16,GOMAXPROCS,GOMAXPROCS+1; values<=0 become auto)")
 	treedbVlogRawWritevMinAvgBytes        = flag.Int("treedb-vlog-raw-writev-min-avg-bytes", 0, "TreeDB: raw grouped-frame writev min average payload bytes/record (0=adaptive)")
 	treedbVlogRawWritevMinBatchRecs       = flag.Int("treedb-vlog-raw-writev-min-batch-records", 0, "TreeDB: raw grouped-frame writev min records/batch (0=default)")
