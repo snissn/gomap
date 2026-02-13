@@ -38,8 +38,18 @@ func NewReaderRegistry() *ReaderRegistry {
 // Returns a handle to be used for Unregister.
 func (r *ReaderRegistry) Register(seq uint64) int64 {
 	if r.fastSeq.Load() == seq {
-		r.fastCount.Add(1)
-		return fastReaderHandle
+		for {
+			c := r.fastCount.Load()
+			if c <= 0 || r.fastSeq.Load() != seq {
+				break
+			}
+			if c == math.MaxInt32 {
+				break
+			}
+			if r.fastCount.CompareAndSwap(c, c+1) {
+				return fastReaderHandle
+			}
+		}
 	}
 
 	r.mu.Lock()
@@ -73,10 +83,15 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 // Unregister removes a reader.
 func (r *ReaderRegistry) Unregister(id int64) {
 	if id == fastReaderHandle {
-		if r.fastCount.Add(-1) < 0 {
-			r.fastCount.Store(0)
+		for {
+			c := r.fastCount.Load()
+			if c <= 0 {
+				return
+			}
+			if r.fastCount.CompareAndSwap(c, c-1) {
+				return
+			}
 		}
-		return
 	}
 
 	r.mu.Lock()
@@ -107,8 +122,17 @@ func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 	defer r.mu.Unlock()
 
 	fastMin := uint64(math.MaxUint64)
-	if r.fastCount.Load() > 0 {
-		fastMin = r.fastSeq.Load()
+	for {
+		c1 := r.fastCount.Load()
+		if c1 <= 0 {
+			break
+		}
+		s := r.fastSeq.Load()
+		c2 := r.fastCount.Load()
+		if c1 == c2 && c1 > 0 {
+			fastMin = s
+			break
+		}
 	}
 
 	if !r.dirty {

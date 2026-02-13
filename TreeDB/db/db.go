@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,6 +49,7 @@ type snapshotView struct {
 type DB struct {
 	valueLogManager    *valuelog.Manager
 	snapshotViewRO     atomic.Pointer[snapshotView]
+	snapshotAcquireRO  atomic.Int32
 	valueLogRefTracker *valueLogRefTracker
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
@@ -556,9 +558,6 @@ type Snapshot struct {
 	tree        tree.Tree
 	registryID  int64
 	closed      atomic.Bool
-	treePager   *pager.Pager
-	treeRoot    uint64
-	treeReader  *valueReader
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -577,6 +576,9 @@ func (s *Snapshot) State() *DBState {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
+	db.snapshotAcquireRO.Add(1)
+	defer db.snapshotAcquireRO.Add(-1)
+
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
 		return nil
@@ -607,20 +609,9 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.vlogManager = vm
 	snap.reader.vlogs = state.ValueLogSet
 	if idx != nil {
-		sameState := snap.treePager == idx.pager &&
-			snap.treeRoot == state.RootPageID &&
-			snap.treeReader == &snap.reader
-		if !sameState {
-			snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
-			snap.treePager = idx.pager
-			snap.treeRoot = state.RootPageID
-			snap.treeReader = &snap.reader
-		}
+		snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
 	} else {
 		snap.tree.Reset(nil, nil, 0)
-		snap.treePager = nil
-		snap.treeRoot = 0
-		snap.treeReader = nil
 	}
 	snap.registryID = id
 	snap.closed.Store(false)
@@ -935,6 +926,10 @@ func (db *DB) Close() error {
 	lock := db.lock
 	db.lock = nil
 	db.mu.Unlock()
+
+	for db.snapshotAcquireRO.Load() > 0 {
+		runtime.Gosched()
+	}
 
 	var errs []error
 	if err := db.closeAllIndexes(); err != nil {

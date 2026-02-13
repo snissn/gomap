@@ -48,6 +48,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.vlogManager = nil
 	s.reader.vlogs = nil
 	s.registryID = 0
+	s.closed.Store(false)
 	p.pool.Put(s)
 }
 
