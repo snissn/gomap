@@ -441,6 +441,23 @@ def cleanup_worktrees(args: argparse.Namespace, out_dir: Path) -> None:
                 print(f"Warning: failed to remove worktree {wt}: {exc}", file=sys.stderr)
 
 
+def cleanup_stale_gate_worktrees(args: argparse.Namespace, keep_out_dir: Path) -> None:
+    root = args.repo / "artifacts" / "read_gate"
+    if not root.exists():
+        return
+    for wt_root in root.glob("gate_*/worktrees"):
+        if wt_root.parent == keep_out_dir:
+            continue
+        for name in ("baseline", "candidate"):
+            wt = wt_root / name
+            if not wt.exists():
+                continue
+            try:
+                run(["git", "worktree", "remove", "--force", str(wt)], cwd=args.repo)
+            except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+                continue
+
+
 def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
     any_improve = False
     any_regress = False
@@ -474,6 +491,7 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
 
 
 def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -> Dict[str, int | str]:
+    # Broad sanity intentionally records only TreeDB metrics for decision context.
     dbs = args.dbs
     cmd = [
         str(bin_path),
@@ -596,12 +614,13 @@ def render_summary_md(result: Dict, path: Path) -> None:
     lines.append(f"| baseline | {b['random_read_treedb']:,} | {b['random_read_batch_treedb']:,} | `{b['log']}` |")
     lines.append(f"| candidate | {c['random_read_treedb']:,} | {c['random_read_batch_treedb']:,} | `{c['log']}` |")
 
-    if result.get("microbench"):
+    microbench = result.get("microbench")
+    if isinstance(microbench, dict) and "pattern" in microbench and "benchstat" in microbench:
         lines.append("")
         lines.append("## Microbench")
         lines.append("")
-        lines.append(f"- bench pattern: `{result['microbench']['pattern']}`")
-        lines.append(f"- benchstat: `{result['microbench']['benchstat']}`")
+        lines.append(f"- bench pattern: `{microbench['pattern']}`")
+        lines.append(f"- benchstat: `{microbench['benchstat']}`")
 
     path.write_text("\n".join(lines) + "\n")
 
@@ -647,6 +666,14 @@ def parse_args() -> argparse.Namespace:
         raise SystemExit("--microbench-gomaxprocs must be > 0")
     if args.practical_threshold_pct <= 0:
         raise SystemExit("--practical-threshold-pct must be > 0")
+    for pattern in args.microbench:
+        p = pattern.strip()
+        if not p:
+            raise SystemExit("--microbench patterns must be non-empty")
+        if "\n" in p or "\r" in p:
+            raise SystemExit("--microbench patterns must be single-line regexes")
+        if len(p) > 256:
+            raise SystemExit("--microbench pattern too long (max 256 chars)")
     return args
 
 
@@ -656,6 +683,7 @@ def main() -> int:
     ts = time.strftime("%Y%m%d%H%M%S")
     out_dir = args.out_dir.resolve() if args.out_dir else (args.repo / "artifacts" / "read_gate" / f"gate_{ts}")
     out_dir.mkdir(parents=True, exist_ok=True)
+    cleanup_stale_gate_worktrees(args, out_dir)
 
     valsizes: List[int] = []
     for token in [v.strip() for v in args.valsizes.split(",") if v.strip()]:
