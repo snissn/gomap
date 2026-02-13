@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"math"
 	"testing"
 )
 
@@ -59,5 +60,48 @@ func TestLifecycle(t *testing.T) {
 	freed = gy.Extract(min, 20, 5)
 	if len(freed) != 0 {
 		t.Errorf("KeepRecent failed, freed: %v", freed)
+	}
+}
+
+func TestReaderRegistry_FastPathSingleSeq(t *testing.T) {
+	reg := NewReaderRegistry()
+	rid1 := reg.Register(42)
+	rid2 := reg.Register(42)
+
+	if rid1 != rid2 {
+		t.Fatalf("expected shared fast-path handle, got rid1=%d rid2=%d", rid1, rid2)
+	}
+	if min := reg.MinPinnedSeq(); min != 42 {
+		t.Fatalf("expected min 42, got %d", min)
+	}
+
+	reg.Unregister(rid1)
+	if min := reg.MinPinnedSeq(); min != 42 {
+		t.Fatalf("expected min 42 with one fast reader remaining, got %d", min)
+	}
+
+	reg.Unregister(rid2)
+	if min := reg.MinPinnedSeq(); min != math.MaxUint64 {
+		t.Fatalf("expected no pinned readers, got %d", min)
+	}
+}
+
+func TestReaderRegistry_FastAndSlowReadersMin(t *testing.T) {
+	reg := NewReaderRegistry()
+	fastID := reg.Register(10)
+	slowID := reg.Register(9)
+
+	if min := reg.MinPinnedSeq(); min != 9 {
+		t.Fatalf("expected min 9 with slow reader present, got %d", min)
+	}
+
+	reg.Unregister(slowID)
+	if min := reg.MinPinnedSeq(); min != 10 {
+		t.Fatalf("expected min 10 after unregistering slow reader, got %d", min)
+	}
+
+	reg.Unregister(fastID)
+	if min := reg.MinPinnedSeq(); min != math.MaxUint64 {
+		t.Fatalf("expected no pinned readers, got %d", min)
 	}
 }
