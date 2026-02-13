@@ -67,9 +67,14 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 		return fastReaderHandle
 	}
 	if r.fastSeq.Load() == seq {
-		if c := r.fastCount.Load(); c > 0 && c < math.MaxInt32 {
-			r.fastCount.Add(1)
-			return fastReaderHandle
+		for {
+			c := r.fastCount.Load()
+			if c <= 0 || c >= math.MaxInt32 {
+				break
+			}
+			if r.fastCount.CompareAndSwap(c, c+1) {
+				return fastReaderHandle
+			}
 		}
 		// Saturated fast counter: fall back to a slow handle to avoid overflow.
 	}
@@ -92,12 +97,15 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 // Unregister removes a reader.
 func (r *ReaderRegistry) Unregister(id int64) {
 	if id == fastReaderHandle {
-		if n := r.fastCount.Add(-1); n < 0 {
-			// Defensive recovery under contention races: keep the counter bounded
-			// instead of letting it underflow and poison future registrations.
-			r.fastCount.Store(0)
+		for {
+			c := r.fastCount.Load()
+			if c <= 0 {
+				return
+			}
+			if r.fastCount.CompareAndSwap(c, c-1) {
+				return
+			}
 		}
-		return
 	}
 
 	r.mu.Lock()
