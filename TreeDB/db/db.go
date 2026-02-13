@@ -564,7 +564,6 @@ type Snapshot struct {
 	closed      atomic.Bool
 	treePager   *pager.Pager
 	treeRoot    uint64
-	treeReader  *valueReader
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -618,21 +617,18 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.reader.vlogs = vlogSet
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
-			snap.treeRoot == state.RootPageID &&
-			snap.treeReader == &snap.reader
+			snap.treeRoot == state.RootPageID
 		if !sameTree {
 			snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
 			snap.treePager = idx.pager
 			snap.treeRoot = state.RootPageID
-			snap.treeReader = &snap.reader
 		}
 	} else {
-		if snap.treePager != nil || snap.treeRoot != 0 || snap.treeReader != nil {
+		if snap.treePager != nil || snap.treeRoot != 0 {
 			snap.tree.Reset(nil, nil, 0)
+			snap.treePager = nil
+			snap.treeRoot = 0
 		}
-		snap.treePager = nil
-		snap.treeRoot = 0
-		snap.treeReader = nil
 	}
 	snap.registryID = id
 	snap.closed.Store(false)

@@ -51,6 +51,10 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.reader.vlogs = nil
 	s.registryID = 0
 	s.closed.Store(false)
+	// treePager/treeRoot are intentionally preserved as a pooled cache key for
+	// the next AcquireSnapshot() on this same object. The reader backing address
+	// is stable per pooled Snapshot object, so Reset can be skipped safely when
+	// pager+root are unchanged.
 	p.pool.Put(s)
 }
 

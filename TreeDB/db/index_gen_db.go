@@ -73,16 +73,6 @@ func (db *DB) maybeReleaseRetiredIndex(gen *indexGen) {
 	if gen == nil {
 		return
 	}
-	if db.idx.Load() == gen {
-		return
-	}
-	if gen.refs.Load() != 0 {
-		return
-	}
-	if gen.registry != nil && gen.registry.MinPinnedSeq() != math.MaxUint64 {
-		return
-	}
-
 	db.idxMu.Lock()
 	current := db.idx.Load()
 	if current == gen {
