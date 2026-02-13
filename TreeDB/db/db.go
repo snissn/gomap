@@ -561,6 +561,9 @@ type Snapshot struct {
 	tree        tree.Tree
 	registryID  int64
 	closed      atomic.Bool
+	treePager   *pager.Pager
+	treeRoot    uint64
+	treeReader  *valueReader
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -580,10 +583,10 @@ func (s *Snapshot) State() *DBState {
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
 	db.snapshotAcquireRO.Add(1)
-	defer db.snapshotAcquireRO.Add(-1)
 
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
+		db.snapshotAcquireRO.Add(-1)
 		return nil
 	}
 	idx := view.idx
@@ -591,6 +594,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	vm := view.vlogManager
 	if state.ValueLogSet != nil {
 		if vm == nil {
+			db.snapshotAcquireRO.Add(-1)
 			return nil
 		}
 		vm.Acquire(state.ValueLogSet)
@@ -612,12 +616,26 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.vlogManager = vm
 	snap.reader.vlogs = state.ValueLogSet
 	if idx != nil {
-		snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
+		sameTree := snap.treePager == idx.pager &&
+			snap.treeRoot == state.RootPageID &&
+			snap.treeReader == &snap.reader
+		if !sameTree {
+			snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
+			snap.treePager = idx.pager
+			snap.treeRoot = state.RootPageID
+			snap.treeReader = &snap.reader
+		}
 	} else {
-		snap.tree.Reset(nil, nil, 0)
+		if snap.treePager != nil || snap.treeRoot != 0 || snap.treeReader != nil {
+			snap.tree.Reset(nil, nil, 0)
+		}
+		snap.treePager = nil
+		snap.treeRoot = 0
+		snap.treeReader = nil
 	}
 	snap.registryID = id
 	snap.closed.Store(false)
+	db.snapshotAcquireRO.Add(-1)
 	return snap
 }
 
