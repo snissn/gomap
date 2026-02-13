@@ -2204,10 +2204,14 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 						return 0, err
 					}
 				} else if hasMany {
-					_, _ = mg.GetMany(keys[:n])
+					if _, err := mg.GetMany(keys[:n]); err != nil {
+						return 0, err
+					}
 				} else {
 					for j := 0; j < n; j++ {
-						_, _ = db.Get(keys[j])
+						if _, err := db.Get(keys[j]); err != nil {
+							return 0, err
+						}
 					}
 				}
 				i += n
@@ -2618,6 +2622,9 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			newWrapper, err := factory(inst.Dir)
 			if err != nil {
 				return BenchRun{}, fmt.Errorf("settle/reopen %s: %w", inst.Name, err)
+			}
+			if rwc, ok := newWrapper.(readWorkerConfigurer); ok {
+				rwc.SetReadWorkers(cfg.ReadWorkers)
 			}
 			inst.Wrapper = newWrapper
 
