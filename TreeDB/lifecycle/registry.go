@@ -39,9 +39,14 @@ func NewReaderRegistry() *ReaderRegistry {
 func (r *ReaderRegistry) Register(seq uint64) int64 {
 	if r.fastSeq.Load() == seq {
 		c := r.fastCount.Load()
-		if c > 0 && c < math.MaxInt32 && r.fastSeq.Load() == seq {
-			if r.fastCount.CompareAndSwap(c, c+1) {
-				return fastReaderHandle
+		if c > 0 && c < math.MaxInt32 {
+			if r.fastCount.Add(1) > 0 {
+				if r.fastSeq.Load() == seq {
+					return fastReaderHandle
+				}
+				// We raced with a seq switch after a stale fastSeq observation.
+				// Roll back this provisional bump and fall back to locked logic.
+				r.fastCount.Add(-1)
 			}
 		}
 	}
@@ -55,7 +60,7 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 		return fastReaderHandle
 	}
 	if r.fastSeq.Load() == seq {
-		if c := r.fastCount.Load(); c < math.MaxInt32 {
+		if c := r.fastCount.Load(); c > 0 && c < math.MaxInt32 {
 			r.fastCount.Add(1)
 			return fastReaderHandle
 		}
