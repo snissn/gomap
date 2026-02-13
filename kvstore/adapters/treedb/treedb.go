@@ -3,6 +3,10 @@ package treedbadapter
 import (
 	"context"
 	"errors"
+	"math"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
@@ -10,16 +14,40 @@ import (
 
 // DB adapts TreeDB's public API to kvstore interfaces.
 type DB struct {
-	DB      *treedb.DB
-	NameStr string
+	DB          *treedb.DB
+	NameStr     string
+	readWorkers atomic.Int32
 }
 
 func Wrap(db *treedb.DB) *DB {
-	return &DB{DB: db, NameStr: "TreeDB"}
+	return wrapNamedWithReadWorkers(db, "TreeDB", runtime.GOMAXPROCS(0))
 }
 
 func WrapNamed(db *treedb.DB, name string) *DB {
-	return &DB{DB: db, NameStr: name}
+	return wrapNamedWithReadWorkers(db, name, runtime.GOMAXPROCS(0))
+}
+
+func wrapNamedWithReadWorkers(db *treedb.DB, name string, workers int) *DB {
+	out := &DB{DB: db, NameStr: name}
+	out.setReadWorkers(workers)
+	return out
+}
+
+func normalizeReadWorkers(workers int) int {
+	if workers < 1 {
+		return 1
+	}
+	if workers > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	return workers
+}
+
+func (d *DB) setReadWorkers(workers int) {
+	if d == nil {
+		return
+	}
+	d.readWorkers.Store(int32(normalizeReadWorkers(workers)))
 }
 
 func (d *DB) Name() string {
@@ -47,6 +75,101 @@ func (d *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		return make([][]byte, len(keys)), nil
 	}
 	return vals, err
+}
+
+func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
+	if d == nil || d.DB == nil || len(keys) == 0 {
+		return nil
+	}
+	workers := int(d.readWorkers.Load())
+	if workers < 1 {
+		workers = 1
+	}
+	if len(keys) == 1 || workers <= 1 {
+		snap := d.DB.AcquireSnapshot()
+		if snap == nil {
+			// Snapshot unavailable (e.g. closed DB): fall back to direct point reads
+			// so batch calls don't report success without attempting reads.
+			return d.readBatchFallback(keys)
+		}
+		defer func() {
+			if closeErr := snap.Close(); retErr == nil && closeErr != nil {
+				retErr = closeErr
+			}
+		}()
+		for _, key := range keys {
+			_, err := snap.GetUnsafe(key)
+			if err == nil || errors.Is(err, treedb.ErrKeyNotFound) || errors.Is(err, treedb.ErrClosed) {
+				continue
+			}
+			return err
+		}
+		return nil
+	}
+	if workers > len(keys) {
+		workers = len(keys)
+	}
+	// Snapshots are immutable point-in-time readers in TreeDB, so concurrent
+	// GetUnsafe calls are issued against one snapshot for improved read-bandwidth.
+	snap := d.DB.AcquireSnapshot()
+	if snap == nil {
+		// Snapshot unavailable (e.g. closed DB): fall back to direct point reads.
+		return d.readBatchFallback(keys)
+	}
+	defer func() {
+		if closeErr := snap.Close(); retErr == nil && closeErr != nil {
+			retErr = closeErr
+		}
+	}()
+
+	chunk := (len(keys) + workers - 1) / workers
+	if chunk < 1 {
+		chunk = 1
+	}
+	var (
+		wg       sync.WaitGroup
+		errMu    sync.Mutex
+		firstErr error
+	)
+	for w := 0; w < workers; w++ {
+		start := w * chunk
+		if start >= len(keys) {
+			break
+		}
+		end := start + chunk
+		if end > len(keys) {
+			end = len(keys)
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			for i := lo; i < hi; i++ {
+				_, readErr := snap.GetUnsafe(keys[i])
+				if readErr == nil || errors.Is(readErr, treedb.ErrKeyNotFound) || errors.Is(readErr, treedb.ErrClosed) {
+					continue
+				}
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = readErr
+				}
+				errMu.Unlock()
+				return
+			}
+		}(start, end)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+func (d *DB) readBatchFallback(keys [][]byte) error {
+	for _, key := range keys {
+		_, err := d.DB.GetUnsafe(key)
+		if err == nil || errors.Is(err, treedb.ErrKeyNotFound) || errors.Is(err, treedb.ErrClosed) {
+			continue
+		}
+		return err
+	}
+	return nil
 }
 
 func (d *DB) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
