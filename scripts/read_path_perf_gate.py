@@ -26,7 +26,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 
 RR_LINE = re.compile(r"^Random Read / TreeDB = ([0-9,]+)$")
@@ -45,7 +45,7 @@ def run(
     cmd: List[str],
     cwd: Path,
     capture: bool = False,
-    env: Dict[str, str] | None = None,
+    env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess:
     try:
         if capture:
@@ -86,7 +86,7 @@ def ensure_ref(args: argparse.Namespace, ref: str) -> None:
     run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=args.repo, capture=True)
 
 
-def parse_table_last_numeric(prefix: str, line: str) -> int | None:
+def parse_table_last_numeric(prefix: str, line: str) -> Optional[int]:
     if not (line.startswith(prefix) or line.startswith("| " + prefix) or line.startswith("|" + prefix)):
         return None
 
@@ -127,7 +127,7 @@ def parse_table_last_numeric(prefix: str, line: str) -> int | None:
     return value
 
 
-def parse_table_cell_int(raw: str) -> int | None:
+def parse_table_cell_int(raw: str) -> Optional[int]:
     m = re.search(r"([0-9][0-9,]*)\s*$", raw.strip())
     if not m:
         return None
@@ -138,20 +138,16 @@ def parse_table_cell_int(raw: str) -> int | None:
 def _parse_metric_from_row(
     metric_name: str,
     row: List[str],
-    tree_db_present: bool,
-    tree_col_idx: int | None,
-    normalized_dbs: List[str],
-) -> int | None:
+    target_db_present: bool,
+    tree_col_idx: Optional[int],
+) -> Optional[int]:
     if len(row) < 2 or row[0].strip() != metric_name:
         return None
 
-    if tree_db_present:
+    if target_db_present:
         if tree_col_idx is None:
-            if len(normalized_dbs) > 1:
-                return None
-            idx = len(row) - 1
-        else:
-            idx = tree_col_idx
+            return None
+        idx = tree_col_idx
         if idx < 0 or idx >= len(row):
             return None
         return parse_table_cell_int(row[idx])
@@ -159,26 +155,27 @@ def _parse_metric_from_row(
     return parse_table_cell_int(row[-1])
 
 
-def _normalize_db_names(raw_dbs: str | List[str] | None) -> List[str]:
+def _normalize_db_names(raw_dbs: Optional[Union[str, List[str]]]) -> List[str]:
     if raw_dbs is None:
         return ["treedb"]
     if isinstance(raw_dbs, str):
         parts = [d.strip() for d in raw_dbs.split(",") if d.strip()]
     else:
         parts = [d.strip() for d in raw_dbs if d.strip()]
-    return parts if parts else ["treedb"]
+    if not parts:
+        return ["treedb"]
+    return [p.lower() for p in parts]
 
 
-def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]:
+def parse_metrics(text: str, dbs: Union[str, List[str]] = "treedb") -> Tuple[int, int]:
     rr = None
     rb = None
-    tree_db_present = False
-    tree_col_idx: int | None = None
+    target_db = "treedb"
+    target_db_present = False
+    tree_col_idx: Optional[int] = None
     normalized_dbs = _normalize_db_names(dbs)
-    for db in normalized_dbs:
-        if db.lower() == "treedb":
-            tree_db_present = True
-            break
+    if "all" in normalized_dbs or target_db in normalized_dbs:
+        target_db_present = True
 
     for raw in text.splitlines():
         line = raw.strip()
@@ -201,13 +198,8 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
 
             if cols[0].strip().lower() == "test" and len(cols) >= 2:
                 lower_cols = [c.lower() for c in cols]
-                for db in normalized_dbs:
-                    db_lower = db.lower()
-                    if db_lower in lower_cols:
-                        tree_col_idx = lower_cols.index(db_lower)
-                        break
-                if tree_col_idx is None and "treedb" in lower_cols:
-                    tree_col_idx = lower_cols.index("treedb")
+                if target_db in lower_cols:
+                    tree_col_idx = lower_cols.index(target_db)
                 continue
 
             metric = cols[0].strip()
@@ -215,9 +207,8 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
                 parsed = _parse_metric_from_row(
                     "Random Read",
                     cols,
-                    tree_db_present,
+                    target_db_present,
                     tree_col_idx,
-                    normalized_dbs,
                 )
                 if parsed is not None:
                     rr = parsed
@@ -227,9 +218,8 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
                 parsed = _parse_metric_from_row(
                     "Random Read (Batch)",
                     cols,
-                    tree_db_present,
+                    target_db_present,
                     tree_col_idx,
-                    normalized_dbs,
                 )
                 if parsed is not None:
                     rb = parsed
@@ -254,18 +244,17 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
 
             if row[0].strip().lower() == "test" and len(row) >= 2:
                 lower_cells = [c.lower() for c in row]
-                if tree_col_idx is None and "treedb" in lower_cells:
-                    tree_col_idx = lower_cells.index("treedb")
-                elif tree_col_idx is None and len(row) == 2 and row[1].lower() == "treedb":
+                if tree_col_idx is None and target_db in lower_cells:
+                    tree_col_idx = lower_cells.index(target_db)
+                elif tree_col_idx is None and len(row) == 2 and row[1].lower() == target_db:
                     tree_col_idx = 1
 
             if rr is None:
                 parsed = _parse_metric_from_row(
                     "Random Read",
                     row,
-                    tree_db_present,
+                    target_db_present,
                     tree_col_idx,
-                    normalized_dbs,
                 )
                 if parsed is not None:
                     rr = parsed
@@ -274,9 +263,8 @@ def parse_metrics(text: str, dbs: str | List[str] = "treedb") -> Tuple[int, int]
                 parsed = _parse_metric_from_row(
                     "Random Read (Batch)",
                     row,
-                    tree_db_present,
+                    target_db_present,
                     tree_col_idx,
-                    normalized_dbs,
                 )
                 if parsed is not None:
                     rb = parsed
@@ -338,13 +326,14 @@ def metric_summary(
     metric: str,
     thresh: float = 1.0,
     seed: int = 1,
-) -> Dict[str, float | str | List[float]]:
+    n_boot: int = 20000,
+) -> Dict[str, Union[float, str, List[float]]]:
     base_vals = [getattr(r, metric) for r in base_runs]
     cand_vals = [getattr(r, metric) for r in cand_runs]
     m3_base = middle3(base_vals)
     m3_cand = middle3(cand_vals)
     eff = (m3_cand - m3_base) / m3_base * 100.0 if m3_base > 0 else 0.0
-    ci_lo, ci_hi = bootstrap_ci95_effect_pct(base_vals, cand_vals, seed=seed)
+    ci_lo, ci_hi = bootstrap_ci95_effect_pct(base_vals, cand_vals, n_boot=n_boot, seed=seed)
     cls = classify_metric(eff, ci_lo, ci_hi, thresh=thresh)
     return {
         "base_middle3": m3_base,
@@ -359,9 +348,15 @@ def metric_summary(
     }
 
 
-def needs_more_rounds(base_runs: List[RunPoint], cand_runs: List[RunPoint], thresh: float, seed: int) -> bool:
-    rr = metric_summary(base_runs, cand_runs, "rr", thresh=thresh, seed=seed)
-    rb = metric_summary(base_runs, cand_runs, "rb", thresh=thresh, seed=seed)
+def needs_more_rounds(
+    base_runs: List[RunPoint],
+    cand_runs: List[RunPoint],
+    thresh: float,
+    seed: int,
+    quick_n_boot: int,
+) -> bool:
+    rr = metric_summary(base_runs, cand_runs, "rr", thresh=thresh, seed=seed, n_boot=quick_n_boot)
+    rb = metric_summary(base_runs, cand_runs, "rb", thresh=thresh, seed=seed, n_boot=quick_n_boot)
     return rr["classification"] == "uncertain" or rb["classification"] == "uncertain"
 
 
@@ -395,10 +390,10 @@ def run_unified_once(
     ]
     t0 = time.time()
     p = run(cmd, cwd=args.repo, capture=True)
+    log_file.write_text(p.stdout)
     rr, rb = parse_metrics(p.stdout, args.dbs)
     if rr <= 0 or rb <= 0:
         raise RuntimeError(f"parsed non-positive metrics rr={rr} rb={rb}")
-    log_file.write_text(p.stdout)
     return RunPoint(rr=rr, rb=rb, secs=time.time() - t0, log_path=str(log_file))
 
 
@@ -466,7 +461,6 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
     for _, vs in per_valsize.items():
         rr_cls = vs["metrics"]["rr"]["classification"]
         rb_cls = vs["metrics"]["rb"]["classification"]
-        n = vs["n_per_side"]
 
         if rr_cls == "improve" or rb_cls == "improve":
             any_improve = True
@@ -490,9 +484,9 @@ def overall_decision(per_valsize: Dict[str, Dict], max_rounds: int) -> str:
     return "approve_with_revisions"
 
 
-def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -> Dict[str, int | str]:
+def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -> Dict[str, Union[int, str]]:
     # Broad sanity intentionally records only TreeDB metrics for decision context.
-    dbs = args.dbs
+    dbs = args.sanity_dbs
     cmd = [
         str(bin_path),
         "-dbs",
@@ -524,7 +518,7 @@ def run_broad_sanity(bin_path: Path, args: argparse.Namespace, out_file: Path) -
     }
 
 
-def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Dict[str, str] | None:
+def run_microbench_compare(args: argparse.Namespace, out_dir: Path) -> Optional[Dict[str, str]]:
     if not args.microbench:
         return None
 
@@ -636,12 +630,16 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--dbs", default="treedb")
     ap.add_argument("--profile", default="fast")
     ap.add_argument("--tests", default="random_read,random_read_batch")
+    ap.add_argument("--sanity-dbs", default="leveldb,treedb")
     ap.add_argument("--valsizes", default="85,1")
     ap.add_argument("--initial-rounds", type=int, default=5)
     ap.add_argument("--step-rounds", type=int, default=5)
     ap.add_argument("--max-rounds", type=int, default=25)
     ap.add_argument("--practical-threshold-pct", type=float, default=1.0)
     ap.add_argument("--sanity-valsize", type=int, default=85)
+    ap.add_argument("--bootstrap-samples", type=int, default=20000)
+    ap.add_argument("--bootstrap-samples-quick", type=int, default=2000)
+    ap.add_argument("--cleanup-stale-worktrees", action="store_true")
     ap.add_argument("--microbench", action="append", default=[])
     ap.add_argument("--microbench-count", type=int, default=20)
     ap.add_argument("--microbench-gomaxprocs", type=int, default=1)
@@ -666,6 +664,12 @@ def parse_args() -> argparse.Namespace:
         raise SystemExit("--microbench-gomaxprocs must be > 0")
     if args.practical_threshold_pct <= 0:
         raise SystemExit("--practical-threshold-pct must be > 0")
+    if args.bootstrap_samples <= 0:
+        raise SystemExit("--bootstrap-samples must be > 0")
+    if args.bootstrap_samples_quick <= 0:
+        raise SystemExit("--bootstrap-samples-quick must be > 0")
+    if args.bootstrap_samples_quick > args.bootstrap_samples:
+        raise SystemExit("--bootstrap-samples-quick must be <= --bootstrap-samples")
     for pattern in args.microbench:
         p = pattern.strip()
         if not p:
@@ -683,7 +687,8 @@ def main() -> int:
     ts = time.strftime("%Y%m%d%H%M%S")
     out_dir = args.out_dir.resolve() if args.out_dir else (args.repo / "artifacts" / "read_gate" / f"gate_{ts}")
     out_dir.mkdir(parents=True, exist_ok=True)
-    cleanup_stale_gate_worktrees(args, out_dir)
+    if args.cleanup_stale_worktrees:
+        cleanup_stale_gate_worktrees(args, out_dir)
 
     valsizes: List[int] = []
     for token in [v.strip() for v in args.valsizes.split(",") if v.strip()]:
@@ -708,10 +713,13 @@ def main() -> int:
             "tests": args.tests,
             "profile": args.profile,
             "dbs": args.dbs,
+            "sanity_dbs": args.sanity_dbs,
             "initial_rounds": args.initial_rounds,
             "step_rounds": args.step_rounds,
             "max_rounds": args.max_rounds,
             "practical_threshold_pct": args.practical_threshold_pct,
+            "bootstrap_samples": args.bootstrap_samples,
+            "bootstrap_samples_quick": args.bootstrap_samples_quick,
         },
         "valsizes": {},
         "valsize_order": valsizes,
@@ -761,7 +769,13 @@ def main() -> int:
 
                 if len(base_runs) < 5:
                     continue
-                if not needs_more_rounds(base_runs, cand_runs, args.practical_threshold_pct, args.seed):
+                if not needs_more_rounds(
+                    base_runs,
+                    cand_runs,
+                    args.practical_threshold_pct,
+                    args.seed,
+                    args.bootstrap_samples_quick,
+                ):
                     break
                 if len(base_runs) >= args.max_rounds:
                     break
@@ -774,8 +788,22 @@ def main() -> int:
                     "candidate": [r.__dict__ for r in cand_runs],
                 },
                 "metrics": {
-                    "rr": metric_summary(base_runs, cand_runs, "rr", thresh=args.practical_threshold_pct, seed=args.seed),
-                    "rb": metric_summary(base_runs, cand_runs, "rb", thresh=args.practical_threshold_pct, seed=args.seed),
+                    "rr": metric_summary(
+                        base_runs,
+                        cand_runs,
+                        "rr",
+                        thresh=args.practical_threshold_pct,
+                        seed=args.seed,
+                        n_boot=args.bootstrap_samples,
+                    ),
+                    "rb": metric_summary(
+                        base_runs,
+                        cand_runs,
+                        "rb",
+                        thresh=args.practical_threshold_pct,
+                        seed=args.seed,
+                        n_boot=args.bootstrap_samples,
+                    ),
                 },
             }
             result["valsizes"][str(valsize)] = vs
