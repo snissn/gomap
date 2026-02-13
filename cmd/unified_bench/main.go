@@ -3630,10 +3630,10 @@ func runReadWorkersSweepSuite(baseCfg BenchConfig) (string, error) {
 
 	var sb strings.Builder
 	sb.WriteString("# unified_bench suite: treedb_read_workers\n\n")
-	sb.WriteString(fmt.Sprintf("- keys=%s\n", formatInt(cfg.Keys)))
-	sb.WriteString(fmt.Sprintf("- valsize=%d\n", cfg.ValueSize))
-	sb.WriteString(fmt.Sprintf("- batchsize=%d\n", cfg.BatchSize))
-	sb.WriteString(fmt.Sprintf("- candidates=%s\n\n", strings.Join(parseReadWorkerCandidateLabels(candidates), ", ")))
+	sb.WriteString(fmt.Sprintf("- keys: %s\n", formatInt(cfg.Keys)))
+	sb.WriteString(fmt.Sprintf("- valsize: %d\n", cfg.ValueSize))
+	sb.WriteString(fmt.Sprintf("- batchsize: %d\n", cfg.BatchSize))
+	sb.WriteString(fmt.Sprintf("- candidates: %s\n\n", strings.Join(parseReadWorkerCandidateLabels(candidates), ", ")))
 
 	sb.WriteString("| read_workers | random_read_batch (ops/s) | normalized |\n")
 	sb.WriteString("|---:|---:|---:|\n")
