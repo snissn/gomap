@@ -30,6 +30,7 @@ const (
 	KeepRecent  = 10000
 
 	closeSnapshotDrainTimeout = 10 * time.Second
+	closeSnapshotDrainSleep   = 500 * time.Microsecond
 )
 
 type DBState struct {
@@ -935,11 +936,12 @@ func (db *DB) Close() error {
 			break
 		}
 		runtime.Gosched()
+		time.Sleep(closeSnapshotDrainSleep)
 	}
 
 	var errs []error
 	if remaining := db.snapshotAcquireRO.Load(); remaining > 0 {
-		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d read-only snapshots to be released", remaining))
+		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
