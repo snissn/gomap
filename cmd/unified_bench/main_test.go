@@ -97,7 +97,7 @@ func (d *errorGetDB) Delete(key []byte) error {
 
 func runRandomReadBatchErrorCase(t *testing.T, dbName string, factory DBFactory, wantSubstr string) {
 	t.Helper()
-	RegisterDB(dbName, factory)
+	RegisterHiddenDB(dbName, factory)
 
 	_, err := runBenchmark(BenchConfig{
 		Keys:         256,
