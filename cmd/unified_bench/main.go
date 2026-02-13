@@ -3646,7 +3646,7 @@ func runReadWorkersSweepSuite(baseCfg BenchConfig) (string, error) {
 	}
 	sb.WriteString("\n")
 
-	if len(results) > 0 && bestThroughput > 0 {
+	if len(results) > 0 && !math.IsInf(bestThroughput, -1) && bestThroughput > 0 {
 		var bestLabel string
 		for _, r := range results {
 			if r.throughput == bestThroughput {
