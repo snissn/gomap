@@ -179,6 +179,58 @@ func TestDecodeBlockValueForKey_RestartIndexed(t *testing.T) {
 	}
 }
 
+func TestDecodedBlockEntries(t *testing.T) {
+	v2Entries := []Entry{
+		{Key: []byte("acct:0001"), Value: bytes.Repeat([]byte("a"), 32)},
+		{Key: []byte("acct:0002"), Value: bytes.Repeat([]byte("b"), 48)},
+		{Key: []byte("acct:0100"), Value: bytes.Repeat([]byte("c"), 24)},
+	}
+	enc, err := EncodeEntries(nil, v2Entries, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	got, err := blk.Entries(nil)
+	if err != nil {
+		t.Fatalf("Entries(v2): %v", err)
+	}
+	if len(got) != len(v2Entries) {
+		t.Fatalf("Entries(v2) len=%d want=%d", len(got), len(v2Entries))
+	}
+	for i := range v2Entries {
+		if !bytes.Equal(got[i].Key, v2Entries[i].Key) {
+			t.Fatalf("Entries(v2)[%d] key mismatch got=%q want=%q", i, got[i].Key, v2Entries[i].Key)
+		}
+		if !bytes.Equal(got[i].Value, v2Entries[i].Value) {
+			t.Fatalf("Entries(v2)[%d] value mismatch", i)
+		}
+	}
+
+	v1Key := []byte("single:key")
+	v1Val := bytes.Repeat([]byte("z"), 40)
+	enc, err = EncodeSingle(nil, v1Key, v1Val, 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeSingle: %v", err)
+	}
+	blk, err = DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock(v1): %v", err)
+	}
+	got, err = blk.Entries(nil)
+	if err != nil {
+		t.Fatalf("Entries(v1): %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("Entries(v1) len=%d want=1", len(got))
+	}
+	if !bytes.Equal(got[0].Key, v1Key) || !bytes.Equal(got[0].Value, v1Val) {
+		t.Fatalf("Entries(v1) mismatch")
+	}
+}
+
 func BenchmarkDecodedBlockValueForKeyV2(b *testing.B) {
 	entries := make([]Entry, 0, 256)
 	for i := 0; i < 256; i++ {

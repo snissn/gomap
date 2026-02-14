@@ -499,6 +499,10 @@ func (db *DB) outerLeafV2Enabled() bool {
 	return db != nil && outerleaf.ModeEnabled(db.indexOuterLeafMode)
 }
 
+func (db *DB) outerLeafFenceV2Enabled() bool {
+	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV2FencePtr
+}
+
 func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	if !db.outerLeafV2Enabled() {
 		return value, nil
@@ -1881,7 +1885,7 @@ type Options struct {
 	// counts by pushing moderate values into the value log.
 	ValueLogPointerThreshold int
 	// IndexOuterLeafMode selects the outer-leaf payload format.
-	// Supported values: "v1", "v2_blockptr".
+	// Supported values: "v1", "v2_blockptr", "v2_fenceptr".
 	IndexOuterLeafMode string
 	// ValueLogDomainInlineThresholds configures optional per-domain overrides
 	// for inline-vs-pointer placement. Longest-prefix match wins.
@@ -9632,6 +9636,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		backendPendingOps := 0
 		chunkBackend := totalLen > backendEntriesCap
 		emittedChunk := false
+		fenceMode := db.outerLeafFenceV2Enabled()
 
 		type ptrSetterView interface {
 			SetPointerView(key []byte, ptr page.ValuePtr) error
@@ -9698,6 +9703,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		for i := len(heap)/2 - 1; i >= 0; i-- {
 			(&heap).down(i, len(heap))
 		}
+		var (
+			lastFencePtr page.ValuePtr
+			haveFencePtr bool
+		)
 
 		for len(heap) > 0 {
 			top := heap.pop()
@@ -9718,20 +9727,40 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 
 			entry := top.iter.Entry()
-			var err error
-			if entry.Type == batch.OpDelete {
+			var (
+				err     error
+				applied bool
+			)
+			switch {
+			case entry.Type == batch.OpDelete:
 				err = backendBatch.Delete(entry.Key)
-			} else if entry.IsPtr {
-				if psv != nil {
-					err = psv.SetPointerView(entry.Key, entry.ValuePtr)
-				} else if ps != nil {
-					err = ps.SetPointer(entry.Key, entry.ValuePtr)
-				} else {
-					single[0] = batch.Entry{Type: batch.OpPut, Key: entry.Key, ValuePtr: entry.ValuePtr, IsPtr: true}
-					err = backendBatch.SetOps(single[:])
+				applied = true
+				haveFencePtr = false
+			case entry.IsPtr:
+				emitPtr := true
+				if fenceMode {
+					if haveFencePtr && entry.ValuePtr == lastFencePtr {
+						emitPtr = false
+					} else {
+						lastFencePtr = entry.ValuePtr
+						haveFencePtr = true
+					}
 				}
-			} else {
+				if emitPtr {
+					if psv != nil {
+						err = psv.SetPointerView(entry.Key, entry.ValuePtr)
+					} else if ps != nil {
+						err = ps.SetPointer(entry.Key, entry.ValuePtr)
+					} else {
+						single[0] = batch.Entry{Type: batch.OpPut, Key: entry.Key, ValuePtr: entry.ValuePtr, IsPtr: true}
+						err = backendBatch.SetOps(single[:])
+					}
+					applied = true
+				}
+			default:
 				err = backendBatch.Set(entry.Key, entry.Value)
+				applied = true
+				haveFencePtr = false
 			}
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
@@ -9743,16 +9772,18 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				}
 				return false
 			}
-			backendPendingOps++
-			if err := flushBackendChunk(); err != nil {
-				db.reportError(err)
-				_ = backendBatch.Close()
-				for _, runs := range unitRuns {
-					for _, run := range runs {
-						putEntrySlice(run)
+			if applied {
+				backendPendingOps++
+				if err := flushBackendChunk(); err != nil {
+					db.reportError(err)
+					_ = backendBatch.Close()
+					for _, runs := range unitRuns {
+						for _, run := range runs {
+							putEntrySlice(run)
+						}
 					}
+					return false
 				}
-				return false
 			}
 
 			top.iter.Next()
@@ -9942,6 +9973,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		psv, _ := backendBatch.(ptrSetterView)
 		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
+		fenceMode := db.outerLeafFenceV2Enabled()
+		var (
+			lastFencePtr page.ValuePtr
+			haveFencePtr bool
+			prevFenceKey []byte
+		)
 
 		// Best-effort: ensure value-log bytes are flushed before we start committing
 		// pointers into the index when we expect to emit multiple backend commits.
@@ -9985,6 +10022,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			for iter.Valid() {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
+				if fenceMode && len(prevFenceKey) > 0 && bytes.Compare(key, prevFenceKey) <= 0 {
+					// Unit-local iterators are sorted, but unit boundaries can rewind key order.
+					// Fence collapse is only safe on ascending key runs.
+					haveFencePtr = false
+				}
 				if flags&node.FlagTombstone != 0 {
 					if err := backendBatch.Delete(key); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
@@ -9992,6 +10034,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						_ = backendBatch.Close()
 						return false
 					}
+					haveFencePtr = false
 					backendPendingOps++
 					if err := flushBackendChunk(); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
@@ -10000,47 +10043,58 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
-					if psv != nil {
-						if err := psv.SetPointerView(key, ptr); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
+					emitPtr := true
+					if fenceMode {
+						if haveFencePtr && ptr == lastFencePtr {
+							emitPtr = false
+						} else {
+							lastFencePtr = ptr
+							haveFencePtr = true
 						}
-					} else if ps != nil {
-						if err := ps.SetPointer(key, ptr); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
-					} else {
-						type ptrSetterLegacy interface {
-							SetPointer(key []byte, ptr page.ValuePtr) error
-						}
-						if psl, ok := backendBatch.(ptrSetterLegacy); ok {
-							if err := psl.SetPointer(key, ptr); err != nil {
+					}
+					if emitPtr {
+						if psv != nil {
+							if err := psv.SetPointerView(key, ptr); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
+						} else if ps != nil {
+							if err := ps.SetPointer(key, ptr); err != nil {
 								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
 								_ = iter.Close()
 								_ = backendBatch.Close()
 								return false
 							}
 						} else {
-							single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
-							if err := backendBatch.SetOps(single[:]); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
+							type ptrSetterLegacy interface {
+								SetPointer(key []byte, ptr page.ValuePtr) error
+							}
+							if psl, ok := backendBatch.(ptrSetterLegacy); ok {
+								if err := psl.SetPointer(key, ptr); err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+							} else {
+								single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+								if err := backendBatch.SetOps(single[:]); err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
 							}
 						}
-					}
-					backendPendingOps++
-					if err := flushBackendChunk(); err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
+						backendPendingOps++
+						if err := flushBackendChunk(); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
 					}
 				} else {
 					if err := backendBatch.Set(key, val); err != nil {
@@ -10049,6 +10103,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						_ = backendBatch.Close()
 						return false
 					}
+					haveFencePtr = false
 					backendPendingOps++
 					if err := flushBackendChunk(); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
@@ -10056,6 +10111,9 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						_ = backendBatch.Close()
 						return false
 					}
+				}
+				if fenceMode {
+					prevFenceKey = append(prevFenceKey[:0], key...)
 				}
 				iter.Next()
 			}
@@ -10305,6 +10363,12 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			psv, _ := backendBatch.(ptrSetterView)
 			ps, _ := backendBatch.(ptrSetter)
 			var single [1]batch.Entry
+			fenceMode := db.outerLeafFenceV2Enabled()
+			var (
+				lastFencePtr page.ValuePtr
+				haveFencePtr bool
+				prevFenceKey []byte
+			)
 
 			flushBackendChunk := func() error {
 				if !chunkBackend || backendPendingOps < backendEntriesCap {
@@ -10338,6 +10402,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			for iter.Valid() {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
+				if fenceMode && len(prevFenceKey) > 0 && bytes.Compare(key, prevFenceKey) <= 0 {
+					haveFencePtr = false
+				}
 				if flags&node.FlagTombstone != 0 {
 					var err error
 					if dv != nil {
@@ -10351,6 +10418,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 						_ = backendBatch.Close()
 						return false
 					}
+					haveFencePtr = false
 					backendPendingOps++
 					if err := flushBackendChunk(); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
@@ -10360,29 +10428,61 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					}
 				} else {
 					if flags&node.FlagPointer != 0 {
-						if psv != nil {
-							if err := psv.SetPointerView(key, ptr); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
+						emitPtr := true
+						if fenceMode {
+							if haveFencePtr && ptr == lastFencePtr {
+								emitPtr = false
+							} else {
+								lastFencePtr = ptr
+								haveFencePtr = true
 							}
-						} else if ps != nil {
-							if err := ps.SetPointer(key, ptr); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
+						}
+						if emitPtr {
+							if psv != nil {
+								if err := psv.SetPointerView(key, ptr); err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+							} else if ps != nil {
+								if err := ps.SetPointer(key, ptr); err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
+							} else {
+								single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+								if err := backendBatch.SetOps(single[:]); err != nil {
+									db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
+									_ = iter.Close()
+									_ = backendBatch.Close()
+									return false
+								}
 							}
-						} else {
-							single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
-							if err := backendBatch.SetOps(single[:]); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
+							backendPendingOps++
+							if err := flushBackendChunk(); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 								_ = iter.Close()
 								_ = backendBatch.Close()
 								return false
 							}
 						}
+					} else {
+						var err error
+						if sv != nil {
+							err = sv.SetView(key, val)
+						} else {
+							err = backendBatch.Set(key, val)
+						}
+						if err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+						haveFencePtr = false
 						backendPendingOps++
 						if err := flushBackendChunk(); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
@@ -10390,29 +10490,10 @@ func (db *DB) flushOneLocked(sync bool) bool {
 							_ = backendBatch.Close()
 							return false
 						}
-						iter.Next()
-						continue
 					}
-
-					var err error
-					if sv != nil {
-						err = sv.SetView(key, val)
-					} else {
-						err = backendBatch.Set(key, val)
-					}
-					if err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
-					backendPendingOps++
-					if err := flushBackendChunk(); err != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
+				}
+				if fenceMode {
+					prevFenceKey = append(prevFenceKey[:0], key...)
 				}
 				iter.Next()
 			}

@@ -91,6 +91,66 @@ func deleteMutable(db *DB, key []byte) {
 	db.mutableBytes.Add(delta)
 }
 
+func countSnapshotLeafEntries(t *testing.T, snap *db.Snapshot) int {
+	t.Helper()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	state := snap.State()
+	if state == nil {
+		t.Fatalf("snapshot state nil")
+	}
+	p := snap.Pager()
+	if p == nil {
+		t.Fatalf("snapshot pager nil")
+	}
+
+	seen := make(map[uint64]struct{})
+	var walk func(pageID uint64) (int, error)
+	walk = func(pageID uint64) (int, error) {
+		if _, ok := seen[pageID]; ok {
+			return 0, nil
+		}
+		seen[pageID] = struct{}{}
+
+		data, err := p.Get(pageID)
+		if err != nil {
+			return 0, err
+		}
+		n := node.NewNodeView(data)
+		if !n.VerifyChecksum() {
+			return 0, fmt.Errorf("checksum mismatch on page %d", pageID)
+		}
+		switch n.Type() {
+		case page.PageTypeLeaf:
+			return int(n.Count()), nil
+		case page.PageTypeInternal:
+			total := 0
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				childID, err := n.GetInternalChildID(i)
+				if err != nil {
+					return 0, err
+				}
+				sub, err := walk(childID)
+				if err != nil {
+					return 0, err
+				}
+				total += sub
+			}
+			return total, nil
+		default:
+			return 0, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
+		}
+	}
+
+	total, err := walk(state.RootPageID)
+	if err != nil {
+		t.Fatalf("count leaf entries: %v", err)
+	}
+	return total
+}
+
 func (m *MockBackend) Get(key []byte) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -901,6 +961,68 @@ func TestCachingDB_FlushPersistsValueLogPointer(t *testing.T) {
 	if !bytes.Equal(got, val) {
 		t.Fatalf("backend Get mismatch")
 	}
+}
+
+func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                    1 << 20,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 256
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	b := cache.NewBatch()
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if err := b.Set(key, valueFor(i)); err != nil {
+			t.Fatalf("Set(%s): %v", key, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	_ = b.Close()
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	leafEntries := countSnapshotLeafEntries(t, snap)
+	_ = snap.Close()
+	if leafEntries <= 0 {
+		t.Fatalf("expected at least one persisted entry")
+	}
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	}
+
 }
 
 func TestCachingDB_CloseDeferredValueLogDoesNotFail(t *testing.T) {

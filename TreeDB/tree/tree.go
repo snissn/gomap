@@ -33,6 +33,12 @@ type SlabReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
 
+// FenceBlockEntry is one logical key/value entry expanded from a fence-pointer block.
+type FenceBlockEntry struct {
+	Key   []byte
+	Value []byte
+}
+
 // Optional fast path for append-style pointer reads that can reuse caller
 // buffers and avoid extra allocations.
 type slabUnsafeAppender interface {
@@ -55,6 +61,12 @@ type slabUnsafeFenceKeyReader interface {
 	ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error)
 }
 
+// Optional block expansion reads for fence-only outer-leaf mode.
+// ok=false means the reader is not in fence expansion mode for this pointer.
+type slabUnsafeFenceBlockReader interface {
+	ReadUnsafeFenceBlock(ptr page.ValuePtr) (entries []FenceBlockEntry, ok bool, err error)
+}
+
 // Optional key-aware append-style pointer reads.
 type slabUnsafeKeyAppender interface {
 	ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, error)
@@ -71,6 +83,7 @@ type Tree struct {
 	slabAppender    slabUnsafeAppender
 	slabKeyReader   slabUnsafeKeyReader
 	slabFenceReader slabUnsafeFenceKeyReader
+	slabFenceBlocks slabUnsafeFenceBlockReader
 	slabKeyAppender slabUnsafeKeyAppender
 	rootPageID      uint64
 }
@@ -89,6 +102,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	}
 	if fenceReader, ok := sr.(slabUnsafeFenceKeyReader); ok {
 		t.slabFenceReader = fenceReader
+	}
+	if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
+		t.slabFenceBlocks = fenceBlocks
 	}
 	if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
 		t.slabKeyAppender = keyAppender
@@ -114,6 +130,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabFenceReader = fenceReader
 	} else {
 		t.slabFenceReader = nil
+	}
+	if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
+		t.slabFenceBlocks = fenceBlocks
+	} else {
+		t.slabFenceBlocks = nil
 	}
 	if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
 		t.slabKeyAppender = keyAppender
@@ -218,18 +239,21 @@ func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byt
 	if t.slabFenceReader == nil || n == nil || idx == 0 {
 		return nil, false, nil
 	}
-	_, _, ptr, flags, err := n.GetLeafEntryView(idx - 1)
-	if err != nil {
-		return nil, false, err
+	for scan := idx; scan > 0; scan-- {
+		_, _, ptr, flags, err := n.GetLeafEntryView(scan - 1)
+		if err != nil {
+			return nil, false, err
+		}
+		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		val, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
+		if err != nil {
+			return nil, false, err
+		}
+		return val, found, nil
 	}
-	if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
-		return nil, false, nil
-	}
-	val, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
-	if err != nil {
-		return nil, false, err
-	}
-	return val, found, nil
+	return nil, false, nil
 }
 
 func (t *Tree) lookupLeafValueView(key []byte) ([]byte, page.ValuePtr, byte, error) {

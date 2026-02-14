@@ -86,6 +86,29 @@ func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byt
 	return r.decodeValueForKeyFound(ptr, key, raw)
 }
 
+func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockEntry, bool, error) {
+	if strings.TrimSpace(r.outerLeafMode) != outerleaf.ModeV2FencePtr {
+		return nil, false, nil
+	}
+	raw, err := r.readRawUnsafe(ptr)
+	if err != nil {
+		return nil, true, err
+	}
+	block, err := r.outerLeafBlock(ptr, raw)
+	if err != nil {
+		return nil, true, err
+	}
+	decoded, err := block.Entries(nil)
+	if err != nil {
+		return nil, true, err
+	}
+	entries := make([]tree.FenceBlockEntry, len(decoded))
+	for i := range decoded {
+		entries[i] = tree.FenceBlockEntry{Key: decoded[i].Key, Value: decoded[i].Value}
+	}
+	return entries, true, nil
+}
+
 func (r valueReader) readRaw(ptr page.ValuePtr) ([]byte, error) {
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return nil, fmt.Errorf("expected value log pointer, got file %d", ptr.FileID)

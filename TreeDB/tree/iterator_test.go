@@ -538,6 +538,175 @@ func TestIterator_SeekPrunesByFence(t *testing.T) {
 	}
 }
 
+func TestIterator_FencePointerExpansionForwardAndRange(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	it := tr.Iterator(nil, nil)
+	defer it.Close()
+
+	var keys []string
+	var vals []string
+	for ; it.Valid(); it.Next() {
+		keys = append(keys, string(it.Key()))
+		vals = append(vals, string(it.Value()))
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer != 0 {
+			t.Fatalf("expected expanded fence entry to be materialized, got pointer flag for key %q", it.Key())
+		}
+		if ptr != (page.ValuePtr{}) {
+			t.Fatalf("expected expanded fence entry ptr to be empty, got %+v", ptr)
+		}
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	wantKeys := []string{"f010", "f020", "f030", "f100", "f110"}
+	wantVals := []string{"v10", "v20", "v30", "v100", "v110"}
+	if len(keys) != len(wantKeys) {
+		t.Fatalf("keys len=%d want=%d (%v)", len(keys), len(wantKeys), keys)
+	}
+	for i := range wantKeys {
+		if keys[i] != wantKeys[i] || vals[i] != wantVals[i] {
+			t.Fatalf("entry[%d] key=%q val=%q want key=%q val=%q", i, keys[i], vals[i], wantKeys[i], wantVals[i])
+		}
+	}
+
+	rangeIt := tr.Iterator([]byte("f025"), []byte("f105"))
+	defer rangeIt.Close()
+	keys = keys[:0]
+	for ; rangeIt.Valid(); rangeIt.Next() {
+		keys = append(keys, string(rangeIt.Key()))
+	}
+	if err := rangeIt.Error(); err != nil {
+		t.Fatalf("range iterator error: %v", err)
+	}
+	wantRange := []string{"f030", "f100"}
+	if len(keys) != len(wantRange) {
+		t.Fatalf("range keys len=%d want=%d (%v)", len(keys), len(wantRange), keys)
+	}
+	for i := range wantRange {
+		if keys[i] != wantRange[i] {
+			t.Fatalf("range key[%d]=%q want=%q", i, keys[i], wantRange[i])
+		}
+	}
+}
+
+func TestIterator_FencePointerSeekAndReverseBounds(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f050": "v50",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f110": "v110",
+		"f120": "v120",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f110"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	it := tr.Iterator([]byte("f050"), nil)
+	defer it.Close()
+	var keys []string
+	for ; it.Valid(); it.Next() {
+		keys = append(keys, string(it.Key()))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	want := []string{"f050", "f110", "f120"}
+	if len(keys) != len(want) {
+		t.Fatalf("seek keys len=%d want=%d (%v)", len(keys), len(want), keys)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Fatalf("seek key[%d]=%q want=%q", i, keys[i], want[i])
+		}
+	}
+
+	rit := tr.ReverseIterator(nil, []byte("f060"))
+	defer rit.Close()
+	keys = keys[:0]
+	for ; rit.Valid(); rit.Next() {
+		keys = append(keys, string(rit.Key()))
+	}
+	if err := rit.Error(); err != nil {
+		t.Fatalf("reverse iterator error: %v", err)
+	}
+	wantRev := []string{"f050", "f020", "f010"}
+	if len(keys) != len(wantRev) {
+		t.Fatalf("reverse keys len=%d want=%d (%v)", len(keys), len(wantRev), keys)
+	}
+	for i := range wantRev {
+		if keys[i] != wantRev[i] {
+			t.Fatalf("reverse key[%d]=%q want=%q", i, keys[i], wantRev[i])
+		}
+	}
+}
+
 func TestIterator_CombinedColumnarPrefixV2_MultiRestartBlocks(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)

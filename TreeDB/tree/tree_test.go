@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -65,6 +66,26 @@ func (r *fenceLookupReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte)
 		return nil, false, nil
 	}
 	return val, true, nil
+}
+
+func (r *fenceLookupReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]FenceBlockEntry, bool, error) {
+	block, ok := r.blocks[ptr]
+	if !ok {
+		return nil, true, fmt.Errorf("missing block ptr %+v", ptr)
+	}
+	keys := make([]string, 0, len(block))
+	for k := range block {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	entries := make([]FenceBlockEntry, 0, len(keys))
+	for _, k := range keys {
+		entries = append(entries, FenceBlockEntry{
+			Key:   []byte(k),
+			Value: block[k],
+		})
+	}
+	return entries, true, nil
 }
 
 func (r *trackedValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -409,6 +430,85 @@ func TestTreeGet_FencePredecessorLookup(t *testing.T) {
 	}
 	if _, err := tr.Get([]byte("j999")); err != ErrKeyNotFound {
 		t.Fatalf("Get(j999): expected ErrKeyNotFound, got %v", err)
+	}
+
+	if reader.fenceCalls != 3 {
+		t.Fatalf("fence calls = %d, want 3", reader.fenceCalls)
+	}
+}
+
+func TestTreeGet_FencePredecessorLookupSkipsNonPointers(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f050": "v50",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f040"), []byte("inline40"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry(f040): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f045"), nil, node.FlagTombstone, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry(f045): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f110"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	got, err := tr.Get([]byte("f050"))
+	if err != nil {
+		t.Fatalf("Get(f050): %v", err)
+	}
+	if string(got) != "v50" {
+		t.Fatalf("Get(f050) = %q, want %q", got, "v50")
+	}
+
+	has, err := tr.Has([]byte("f050"))
+	if err != nil {
+		t.Fatalf("Has(f050): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(f050) = false, want true")
+	}
+
+	got, err = tr.Get([]byte("f040"))
+	if err != nil {
+		t.Fatalf("Get(f040): %v", err)
+	}
+	if string(got) != "inline40" {
+		t.Fatalf("Get(f040) = %q, want %q", got, "inline40")
+	}
+
+	if _, err := tr.Get([]byte("f060")); err != ErrKeyNotFound {
+		t.Fatalf("Get(f060): expected ErrKeyNotFound, got %v", err)
 	}
 
 	if reader.fenceCalls != 3 {
