@@ -28,6 +28,9 @@ on TreeDB with equivalent observable behavior for required call paths.
   existing range fragments.
 - `IngestAndExcise` shared-meta adaptation when `[]pebble.SharedSSTMeta`
   backings use the compat-local `.pcobj` path encoding.
+- Differential ingest/excise overlap-matrix tests cover disjoint, partial overlap,
+  full overlap, and boundary-touch spans for local SST, local external-file
+  excise+ingest flow, and compat-local shared-meta path ingest.
 - `Checkpoint(destDir, ...)` directory export via TreeDB checkpoint plus recursive
   filesystem copy; non-empty `CheckpointOption`s are rejected with `ErrCheckpointOptionUnsupported`.
 - Operational/introspection APIs are exposed through delegation to the shadow

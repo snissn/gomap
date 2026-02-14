@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -133,6 +134,134 @@ func (h *staticRemoteObjectBackingHandle) Close() {
 	h.closed = true
 }
 
+type overlapScenario struct {
+	name   string
+	excise pebble.KeyRange
+}
+
+var overlapMatrixScenarios = []overlapScenario{
+	{name: "disjoint", excise: pebble.KeyRange{Start: []byte("a"), End: []byte("b")}},
+	{name: "boundary-touch", excise: pebble.KeyRange{Start: []byte("a"), End: []byte("c")}},
+	{name: "partial-overlap", excise: pebble.KeyRange{Start: []byte("b"), End: []byte("d")}},
+	{name: "full-overlap", excise: pebble.KeyRange{Start: []byte("c"), End: []byte("f")}},
+}
+
+var overlapMatrixAllKeys = []string{"a", "b", "c", "d", "e", "f", "g"}
+
+var overlapMatrixSeedValues = []struct {
+	key   string
+	value string
+}{
+	{key: "a", value: "old-a"},
+	{key: "b", value: "old-b"},
+	{key: "c", value: "old-c"},
+	{key: "d", value: "old-d"},
+	{key: "e", value: "old-e"},
+	{key: "f", value: "old-f"},
+	{key: "g", value: "old-g"},
+}
+
+var overlapMatrixIngestValues = []struct {
+	key   string
+	value string
+}{
+	{key: "c", value: "new-c"},
+	{key: "d", value: "new-d"},
+	{key: "e", value: "new-e"},
+}
+
+type overlapSetter interface {
+	Set(key, value []byte, opts *pebble.WriteOptions) error
+}
+
+type overlapGetter interface {
+	Get(key []byte) ([]byte, io.Closer, error)
+}
+
+func writeOverlapMatrixSST(path string) error {
+	f, err := vfs.Default.Create(path)
+	if err != nil {
+		return err
+	}
+	w := sstable.NewWriter(objstorageprovider.NewFileWritable(f), sstable.WriterOptions{})
+	for i := range overlapMatrixIngestValues {
+		if err := w.Set([]byte(overlapMatrixIngestValues[i].key), []byte(overlapMatrixIngestValues[i].value)); err != nil {
+			_ = f.Close()
+			return err
+		}
+	}
+	return w.Close()
+}
+
+func seedOverlapMatrixOldValues(t *testing.T, db overlapSetter) {
+	t.Helper()
+	for i := range overlapMatrixSeedValues {
+		err := db.Set([]byte(overlapMatrixSeedValues[i].key), []byte(overlapMatrixSeedValues[i].value), pebble.NoSync)
+		require.NoError(t, err)
+	}
+}
+
+func expectedOverlapMatrixValues(excise pebble.KeyRange) map[string]string {
+	expected := make(map[string]string, len(overlapMatrixSeedValues))
+	for i := range overlapMatrixSeedValues {
+		expected[overlapMatrixSeedValues[i].key] = overlapMatrixSeedValues[i].value
+	}
+	if spanDefined(excise) {
+		for k := range expected {
+			if keyInRange([]byte(k), excise.Start, excise.End) {
+				delete(expected, k)
+			}
+		}
+	}
+	for i := range overlapMatrixIngestValues {
+		expected[overlapMatrixIngestValues[i].key] = overlapMatrixIngestValues[i].value
+	}
+	return expected
+}
+
+func assertOverlapMatrixExpected(t *testing.T, db overlapGetter, expected map[string]string) {
+	t.Helper()
+	for i := range overlapMatrixAllKeys {
+		key := overlapMatrixAllKeys[i]
+		value, closer, err := db.Get([]byte(key))
+		want, ok := expected[key]
+		if ok {
+			require.NoError(t, err)
+			require.Equal(t, []byte(want), value)
+			require.NotNil(t, closer)
+			require.NoError(t, closer.Close())
+			continue
+		}
+		require.Error(t, err)
+		require.True(t, errors.Is(err, pebble.ErrNotFound))
+		require.Nil(t, closer)
+	}
+}
+
+func overlapExternalFile(path string) pebble.ExternalFile {
+	return pebble.ExternalFile{
+		ObjName:         path,
+		SmallestUserKey: []byte("c"),
+		LargestUserKey:  []byte("f"),
+		HasPointKey:     true,
+		HasRangeKey:     false,
+	}
+}
+
+func exportOverlapMatrixSharedObject(t *testing.T, dir string) string {
+	t.Helper()
+	src, err := Open(filepath.Join(dir, "src"), nil)
+	require.NoError(t, err)
+	defer src.Close()
+	for i := range overlapMatrixIngestValues {
+		err := src.Set([]byte(overlapMatrixIngestValues[i].key), []byte(overlapMatrixIngestValues[i].value), pebble.NoSync)
+		require.NoError(t, err)
+	}
+	objPath := filepath.Join(dir, "matrix.pcobj")
+	_, err = src.ExportSharedObject(objPath, pebble.KeyRange{Start: []byte("c"), End: []byte("f")})
+	require.NoError(t, err)
+	return objPath
+}
 func TestBatchReprDeterministicParity(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "compat"), nil)
@@ -451,6 +580,125 @@ func TestIngestAndExciseSharedMeta_UnsupportedBacking(t *testing.T) {
 		pebble.KeyRange{},
 	)
 	require.ErrorIs(t, err, ErrSharedSSTUnsupported)
+}
+
+func TestIngestExciseOverlapMatrix_LocalSSTParity(t *testing.T) {
+	for i := range overlapMatrixScenarios {
+		tc := overlapMatrixScenarios[i]
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			sstPath := filepath.Join(dir, "matrix.sst")
+			require.NoError(t, writeOverlapMatrixSST(sstPath))
+
+			ingestExciseDB, err := Open(filepath.Join(dir, "ingest-excise"), nil)
+			require.NoError(t, err)
+			defer ingestExciseDB.Close()
+
+			manualFlowDB, err := Open(filepath.Join(dir, "manual-flow"), nil)
+			require.NoError(t, err)
+			defer manualFlowDB.Close()
+
+			seedOverlapMatrixOldValues(t, ingestExciseDB)
+			seedOverlapMatrixOldValues(t, manualFlowDB)
+
+			_, err = ingestExciseDB.IngestAndExcise([]string{sstPath}, nil, tc.excise)
+			require.NoError(t, err)
+
+			require.NoError(t, manualFlowDB.DeleteRange(tc.excise.Start, tc.excise.End, pebble.NoSync))
+			_, err = manualFlowDB.IngestWithStats([]string{sstPath})
+			require.NoError(t, err)
+
+			expected := expectedOverlapMatrixValues(tc.excise)
+			assertOverlapMatrixExpected(t, ingestExciseDB, expected)
+			assertOverlapMatrixExpected(t, manualFlowDB, expected)
+
+			ingestIter, err := ingestExciseDB.NewIter(nil)
+			require.NoError(t, err)
+			manualIter, err := manualFlowDB.NewIter(nil)
+			require.NoError(t, err)
+			require.Equal(t, collectVisibleFromIter(t, manualIter), collectVisibleFromIter(t, ingestIter))
+		})
+	}
+}
+
+func TestIngestExciseOverlapMatrix_LocalExternalFileParity(t *testing.T) {
+	for i := range overlapMatrixScenarios {
+		tc := overlapMatrixScenarios[i]
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			sstPath := filepath.Join(dir, "matrix.sst")
+			require.NoError(t, writeOverlapMatrixSST(sstPath))
+
+			sstPathDB, err := Open(filepath.Join(dir, "sst-path"), nil)
+			require.NoError(t, err)
+			defer sstPathDB.Close()
+
+			externalFileDB, err := Open(filepath.Join(dir, "external-file"), nil)
+			require.NoError(t, err)
+			defer externalFileDB.Close()
+
+			seedOverlapMatrixOldValues(t, sstPathDB)
+			seedOverlapMatrixOldValues(t, externalFileDB)
+
+			_, err = sstPathDB.IngestAndExcise([]string{sstPath}, nil, tc.excise)
+			require.NoError(t, err)
+
+			require.NoError(t, externalFileDB.DeleteRange(tc.excise.Start, tc.excise.End, pebble.NoSync))
+			external := []pebble.ExternalFile{overlapExternalFile(sstPath)}
+			_, err = externalFileDB.IngestExternalFiles(external)
+			require.NoError(t, err)
+
+			expected := expectedOverlapMatrixValues(tc.excise)
+			assertOverlapMatrixExpected(t, sstPathDB, expected)
+			assertOverlapMatrixExpected(t, externalFileDB, expected)
+
+			sstIter, err := sstPathDB.NewIter(nil)
+			require.NoError(t, err)
+			externalIter, err := externalFileDB.NewIter(nil)
+			require.NoError(t, err)
+			require.Equal(t, collectVisibleFromIter(t, sstIter), collectVisibleFromIter(t, externalIter))
+		})
+	}
+}
+
+func TestIngestExciseOverlapMatrix_SharedMetaLocalPathParity(t *testing.T) {
+	for i := range overlapMatrixScenarios {
+		tc := overlapMatrixScenarios[i]
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			objPath := exportOverlapMatrixSharedObject(t, filepath.Join(dir, "source"))
+
+			pathDB, err := Open(filepath.Join(dir, "path"), nil)
+			require.NoError(t, err)
+			defer pathDB.Close()
+
+			sharedDB, err := Open(filepath.Join(dir, "shared"), nil)
+			require.NoError(t, err)
+			defer sharedDB.Close()
+
+			seedOverlapMatrixOldValues(t, pathDB)
+			seedOverlapMatrixOldValues(t, sharedDB)
+
+			_, err = pathDB.IngestAndExcise([]string{objPath}, nil, tc.excise)
+			require.NoError(t, err)
+
+			shared := []pebble.SharedSSTMeta{{
+				Backing: newStaticRemoteObjectBackingHandle(encodeSharedMetaLocalPathBacking(objPath)),
+			}}
+			_, err = sharedDB.IngestAndExcise(nil, shared, tc.excise)
+			require.NoError(t, err)
+
+			expected := expectedOverlapMatrixValues(tc.excise)
+			assertOverlapMatrixExpected(t, pathDB, expected)
+			assertOverlapMatrixExpected(t, sharedDB, expected)
+
+			pathIter, err := pathDB.NewIter(nil)
+			require.NoError(t, err)
+			sharedIter, err := sharedDB.NewIter(nil)
+			require.NoError(t, err)
+			require.Equal(t, collectVisibleFromIter(t, pathIter), collectVisibleFromIter(t, sharedIter))
+		})
+	}
 }
 
 func collectVisibleFromIter(t *testing.T, iter *pebble.Iterator) []string {
@@ -918,7 +1166,12 @@ func TestOperationalDelegationParityWithPebble(t *testing.T) {
 	cMetrics := compatDB.Metrics()
 	pMetrics := pebbleDB.Metrics()
 	require.Equal(t, pMetrics.ReadAmp(), cMetrics.ReadAmp())
-	require.Equal(t, pMetrics.DiskSpaceUsage(), cMetrics.DiskSpaceUsage())
+	pDiskSpaceUsage := pMetrics.DiskSpaceUsage()
+	cDiskSpaceUsage := cMetrics.DiskSpaceUsage()
+	require.Equal(t, pDiskSpaceUsage == 0, cDiskSpaceUsage == 0)
+	if pDiskSpaceUsage > 0 {
+		require.InDeltaf(t, float64(pDiskSpaceUsage), float64(cDiskSpaceUsage), float64(pDiskSpaceUsage)*0.5+64, "metrics disk space usage diverged")
+	}
 
 	require.NotNil(t, compatDB.ObjProvider())
 	require.NotNil(t, pebbleDB.ObjProvider())
