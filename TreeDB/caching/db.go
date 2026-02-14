@@ -1564,8 +1564,20 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
+type backendPointerProjectionIterator interface {
+	IteratorWithOptions(start, end []byte, opts tree.IteratorOptions) (iterator.UnsafeIterator, error)
+}
+
 func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
-	it, err := db.backend.Iterator(nil, nil)
+	var (
+		it  iterator.UnsafeIterator
+		err error
+	)
+	if proj, ok := db.backend.(backendPointerProjectionIterator); ok {
+		it, err = proj.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	} else {
+		it, err = db.backend.Iterator(nil, nil)
+	}
 	if err != nil {
 		return nil, err
 	}

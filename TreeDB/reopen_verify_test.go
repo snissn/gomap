@@ -272,6 +272,44 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
+func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr(t *testing.T) {
+	dir := t.TempDir()
+	keys, values, hash := buildVerifyDataset(2000)
+
+	opts := treedb.Options{
+		Dir:                dir,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold:              1,
+			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes:     4 << 10,
+			OuterLeafBlockRestartInterval: 16,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	writeDataset(t, db, keys, values, false)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	checkGets(t, reopen, keys, values, false)
+	scanAndCheck(t, reopen, values, false, hash)
+}
+
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2_GroupedBlocks(t *testing.T) {
 	dir := t.TempDir()
 	n := 500
@@ -548,11 +586,142 @@ func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV
 	}
 }
 
+func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV2FencePtr(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir:                dir,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold:              1,
+			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes:     1024,
+			OuterLeafBlockRestartInterval: 8,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	values := map[string][]byte{
+		"k1": bytes.Repeat([]byte("a"), 2*1024),
+		"k2": bytes.Repeat([]byte("b"), 2*1024),
+		"k3": bytes.Repeat([]byte("c"), 2*1024),
+		"k4": bytes.Repeat([]byte("d"), 2*1024),
+	}
+	for k, v := range values {
+		if err := db.Set([]byte(k), v); err != nil {
+			_ = db.Close()
+			t.Fatalf("set %s: %v", k, err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint before rewrite: %v", err)
+	}
+	if _, err := db.ValueLogRewriteOnline(context.Background(), treedb.ValueLogRewriteOnlineOptions{
+		BatchSize:     2,
+		SyncEachBatch: true,
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after rewrite: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	for k, want := range values {
+		got, err := reopen.Get([]byte(k))
+		if err != nil {
+			t.Fatalf("reopen get %s: %v", k, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("reopen mismatch key=%s got=%dB want=%dB", k, len(got), len(want))
+		}
+	}
+}
+
 func TestReopenVerify_ValueLogGC_OuterLeafV2_ReopenParity(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.Options{
 		Dir:                dir,
 		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2BlockPtr,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold:              1,
+			OuterLeafBlockCodec:           treedb.ValueLogBlockSnappy,
+			OuterLeafBlockTargetBytes:     512,
+			OuterLeafBlockRestartInterval: 8,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	const total = 240
+	for i := 0; i < total; i++ {
+		key := []byte(fmt.Sprintf("gc-key-%04d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, 256)
+		if err := db.Set(key, val); err != nil {
+			_ = db.Close()
+			t.Fatalf("set %q: %v", string(key), err)
+		}
+	}
+	for i := 0; i < 140; i++ {
+		key := []byte(fmt.Sprintf("gc-key-%04d", i))
+		if err := db.Delete(key); err != nil {
+			_ = db.Close()
+			t.Fatalf("delete %q: %v", string(key), err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint before gc: %v", err)
+	}
+	if _, err := db.ValueLogGC(context.Background(), treedb.ValueLogGCOptions{}); err != nil {
+		_ = db.Close()
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	for i := 0; i < total; i++ {
+		key := []byte(fmt.Sprintf("gc-key-%04d", i))
+		got, err := reopen.Get(key)
+		if i < 140 {
+			if err == nil && got != nil {
+				t.Fatalf("expected deleted key %q to be absent", string(key))
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("reopen get %q: %v", string(key), err)
+		}
+		want := bytes.Repeat([]byte{byte(i % 251)}, 256)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("reopen mismatch key=%q got=%dB want=%dB", string(key), len(got), len(want))
+		}
+	}
+}
+
+func TestReopenVerify_ValueLogGC_OuterLeafV2FencePtr_ReopenParity(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir:                dir,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockSnappy,
@@ -719,13 +888,48 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV2(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
-func TestReopenVerify_OuterLeafV2_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
+func TestReopenVerify_WALOn_WriteSync_OuterLeafV2FencePtr(t *testing.T) {
+	dir := t.TempDir()
+	keys, values, hash := buildVerifyDataset(2000)
+
+	opts := treedb.Options{
+		Dir:                dir,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold:              1,
+			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes:     4 << 10,
+			OuterLeafBlockRestartInterval: 16,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	writeDataset(t, db, keys, values, true)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	checkGets(t, reopen, keys, values, false)
+	scanAndCheck(t, reopen, values, false, hash)
+}
+
+func testReopenVerifyOuterLeafV2SplitMergeDeleteRangeIteratorParity(t *testing.T, mode string) {
 	dir := t.TempDir()
 	const total = 12000
 
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2BlockPtr,
+		IndexOuterLeafMode: mode,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockSnappy,
@@ -935,6 +1139,143 @@ func TestReopenVerify_OuterLeafV2_SplitMergeDeleteRange_IteratorParity(t *testin
 	}
 	if err := rangeIt.Error(); err != nil {
 		t.Fatalf("range iterator error: %v", err)
+	}
+}
+
+func TestReopenVerify_OuterLeafV2_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
+	testReopenVerifyOuterLeafV2SplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV2BlockPtr)
+}
+
+func TestReopenVerify_OuterLeafV2FencePtr_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
+	testReopenVerifyOuterLeafV2SplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV2FencePtr)
+}
+
+func TestReopenVerify_OuterLeafV2FencePtr_CompactIndex_ReopenParity(t *testing.T) {
+	dir := t.TempDir()
+	const total = 4000
+	opts := treedb.Options{
+		Dir:                dir,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold:              1,
+			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes:     512,
+			OuterLeafBlockRestartInterval: 8,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	keyFor := func(i int) []byte {
+		k := make([]byte, 8)
+		binary.BigEndian.PutUint64(k, uint64(i))
+		return k
+	}
+	valueFor := func(i int, seed byte) []byte {
+		v := make([]byte, 384)
+		for j := range v {
+			v[j] = seed + byte((i+j)%251)
+		}
+		return v
+	}
+
+	expected := make(map[string][]byte, total)
+	for i := 0; i < total; i++ {
+		key := keyFor(i)
+		val := valueFor(i, 31)
+		if err := db.Set(key, val); err != nil {
+			_ = db.Close()
+			t.Fatalf("set %d: %v", i, err)
+		}
+		expected[string(key)] = val
+	}
+	for i := 600; i < 2200; i++ {
+		key := keyFor(i)
+		if err := db.Delete(key); err != nil {
+			_ = db.Close()
+			t.Fatalf("delete %d: %v", i, err)
+		}
+		delete(expected, string(key))
+	}
+	for i := 0; i < total; i += 5 {
+		if i >= 600 && i < 2200 {
+			continue
+		}
+		key := keyFor(i)
+		val := valueFor(i, 97)
+		if err := db.Set(key, val); err != nil {
+			_ = db.Close()
+			t.Fatalf("overwrite %d: %v", i, err)
+		}
+		expected[string(key)] = val
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint before compact: %v", err)
+	}
+
+	beforeInfo, err := os.Stat(filepath.Join(dir, "maindb", "index.db"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("stat index before compact: %v", err)
+	}
+	if err := db.CompactIndex(); err != nil {
+		_ = db.Close()
+		t.Fatalf("CompactIndex: %v", err)
+	}
+	afterInfo, err := os.Stat(filepath.Join(dir, "maindb", "index.db"))
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("stat index after compact: %v", err)
+	}
+	if beforeInfo.Size() == 0 || afterInfo.Size() == 0 {
+		_ = db.Close()
+		t.Fatalf("unexpected zero-size index (before=%d after=%d)", beforeInfo.Size(), afterInfo.Size())
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after compact: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	for i := 0; i < total; i++ {
+		key := keyFor(i)
+		got, err := reopen.Get(key)
+		want, ok := expected[string(key)]
+		if !ok {
+			if err == nil && got != nil {
+				t.Fatalf("expected key %d deleted", i)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("reopen get %d: %v", i, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("value mismatch key=%d got=%d want=%d", i, len(got), len(want))
+		}
+	}
+
+	it, err := reopen.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("iterator: %v", err)
+	}
+	defer it.Close()
+	seen := 0
+	for ; it.Valid(); it.Next() {
+		seen++
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if seen != len(expected) {
+		t.Fatalf("iterator count mismatch seen=%d want=%d", seen, len(expected))
 	}
 }
 

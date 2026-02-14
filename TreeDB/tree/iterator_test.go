@@ -628,6 +628,79 @@ func TestIterator_FencePointerExpansionForwardAndRange(t *testing.T) {
 	}
 }
 
+func TestIterator_FencePointerProjectionPreservesRawPointers(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModePointerProjection})
+	defer it.Close()
+
+	var keys []string
+	var ptrs []page.ValuePtr
+	for ; it.Valid(); it.Next() {
+		keys = append(keys, string(it.Key()))
+		val, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 {
+			t.Fatalf("expected pointer flag in projection for key %q", it.Key())
+		}
+		if len(val) != 0 {
+			t.Fatalf("expected projection value to be nil/empty for key %q", it.Key())
+		}
+		ptrs = append(ptrs, ptr)
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+
+	wantKeys := []string{"f010", "f100"}
+	wantPtrs := []page.ValuePtr{ptr0, ptr1}
+	if len(keys) != len(wantKeys) {
+		t.Fatalf("keys len=%d want=%d (%v)", len(keys), len(wantKeys), keys)
+	}
+	for i := range wantKeys {
+		if keys[i] != wantKeys[i] {
+			t.Fatalf("key[%d]=%q want=%q", i, keys[i], wantKeys[i])
+		}
+		if ptrs[i] != wantPtrs[i] {
+			t.Fatalf("ptr[%d]=%+v want=%+v", i, ptrs[i], wantPtrs[i])
+		}
+	}
+}
+
 func TestIterator_FencePointerSeekAndReverseBounds(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)

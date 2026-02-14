@@ -1697,8 +1697,9 @@ func (db *DB) CompactIndex() error {
 		return err
 	}
 
-	// Create Iterator (Full Scan)
-	iter := tr.Iterator(nil, nil)
+	// Scan in pointer-projection mode so pointer-backed layouts (including
+	// fence-pointer outer leaves) preserve raw pointer metadata during rebuild.
+	iter := tr.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	defer iter.Close()
 
 	// Build new tree sequentially

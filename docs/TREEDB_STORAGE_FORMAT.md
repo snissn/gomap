@@ -76,10 +76,10 @@ Notes:
 - Compression is encoded in the value-log record header (frame flags), not in
   `ValuePtr.Length`.
 
-### Outer-leaf value-log payloads (`IndexOuterLeafMode=v2_blockptr`)
+### Outer-leaf value-log payloads (`IndexOuterLeafMode=v2_blockptr|v2_fenceptr`)
 
-When `IndexOuterLeafMode` is `v2_blockptr`, pointer payloads may be wrapped
-using the `TOL2` envelope before being written to the value log:
+When `IndexOuterLeafMode` is `v2_blockptr` or `v2_fenceptr`, pointer payloads
+may be wrapped using the `TOL2` envelope before being written to the value log:
 
 ```text
 bytes[4] Magic = "TOL2"
@@ -95,8 +95,16 @@ bytes    EncodedPayload
 - Version 2 stores multiple sorted `{key,value}` pairs with prefix-compressed
   keys plus a restart-offset table/trailer.
 
-For `v2_blockptr`, point lookups and iterators resolve `{pointer,key}` by
-decoding one payload block and finding the requested key inside that block.
+Mode semantics:
+- `v2_blockptr`: index leaves still store per-user-key pointer entries.
+- `v2_fenceptr`: index leaves store one fence-key pointer per grouped block; user
+  keys are resolved from block payloads.
+
+Point lookups and iterators resolve `{pointer,key}` by decoding one payload
+block and finding the requested key inside that block.
+
+Pre-alpha note: these `v2` outer-leaf layouts are intentionally allowed to
+change. Old experimental DB directories may fail open after format updates.
 
 ### Leaf entry encoding (index leaf pages)
 

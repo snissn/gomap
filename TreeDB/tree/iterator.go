@@ -682,6 +682,12 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 	if top == nil || top.Node.Type() != page.PageTypeLeaf || it.slabFenceBlocks == nil {
 		return false, false, false, nil
 	}
+	if it.mode == IteratorModePointerProjection {
+		// Pointer projection must expose raw leaf pointers. Expanding fence blocks
+		// into inline key/value pairs would hide pointer metadata from callers that
+		// scan pointer reachability (GC/rewrite/retention accounting).
+		return false, false, false, nil
+	}
 	_, ptr, flags, err := top.Node.GetLeafValueView(uint16(top.Index))
 	if err != nil {
 		return false, false, false, err

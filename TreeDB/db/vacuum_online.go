@@ -179,7 +179,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
-	baseIter := baseSnap.tree.Iterator(nil, nil)
+	baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	newRoot, err := bulk.BuildWithOptions(baseIter, newAlloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: db.leafPrefixCompression,
 		LeafColumnar:          db.indexColumnarLeaves,
@@ -288,7 +288,8 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			return errors.New("vacuum: missing db state")
 		}
 
-		sysIter := tree.New(oldGen.pager, valueReader{vlogs: state.ValueLogSet}, state.SystemRootPageID).Iterator(nil, nil)
+		sysIter := tree.New(oldGen.pager, valueReader{vlogs: state.ValueLogSet}, state.SystemRootPageID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,
 			LeafColumnar:          db.indexColumnarLeaves,
