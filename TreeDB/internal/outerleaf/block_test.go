@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 )
 
 func TestEncodeDecodeSingleRoundTrip(t *testing.T) {
@@ -46,6 +48,33 @@ func TestEncodeDecodeSingleRoundTrip(t *testing.T) {
 				t.Fatalf("DecodeValueForKey mismatch")
 			}
 		})
+	}
+}
+
+func TestEncodeSingleCodecHeaderMapping(t *testing.T) {
+	key := []byte("user:codec")
+	value := bytes.Repeat([]byte("v"), 256)
+
+	snappyEnc, err := EncodeSingle(nil, key, value, 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeSingle(snappy): %v", err)
+	}
+	if len(snappyEnc) < blockHeaderSize {
+		t.Fatalf("snappy payload too short: %d", len(snappyEnc))
+	}
+	if got := snappyEnc[5]; got != blockCodecSnappy {
+		t.Fatalf("snappy codec header=%d want=%d", got, blockCodecSnappy)
+	}
+
+	lz4Enc, err := EncodeSingle(nil, key, value, 1, 16)
+	if err != nil {
+		t.Fatalf("EncodeSingle(lz4): %v", err)
+	}
+	if len(lz4Enc) < blockHeaderSize {
+		t.Fatalf("lz4 payload too short: %d", len(lz4Enc))
+	}
+	if got := lz4Enc[5]; got != blockCodecLZ4 {
+		t.Fatalf("lz4 codec header=%d want=%d", got, blockCodecLZ4)
 	}
 }
 
@@ -121,6 +150,18 @@ func TestDecodeNonOuterPayload(t *testing.T) {
 	}
 	if ok || found || v != nil {
 		t.Fatalf("expected non-outer decode")
+	}
+}
+
+func TestDecodePayloadRejectsOversizeRawLen(t *testing.T) {
+	oldMax := limits.MaxRecordSize
+	limits.MaxRecordSize = 16
+	t.Cleanup(func() {
+		limits.MaxRecordSize = oldMax
+	})
+
+	if _, err := decodePayload(blockCodecNone, bytes.Repeat([]byte("x"), 32), 32, nil); err == nil {
+		t.Fatalf("expected oversize decodePayload to fail")
 	}
 }
 

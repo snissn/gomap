@@ -10,6 +10,7 @@ import (
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 )
 
 const (
@@ -90,6 +91,9 @@ func NormalizeRestartInterval(interval int) int {
 }
 
 func normalizeCodec(codec uint8) uint8 {
+	// Input codec uses TreeDB ValueLogBlockCodec values:
+	//   0 = snappy
+	//   1 = lz4
 	switch codec {
 	case 1:
 		return blockCodecLZ4
@@ -122,6 +126,13 @@ func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
 }
 
 func decodePayload(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte, error) {
+	if rawLen < 0 {
+		return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
+	}
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
+		return nil, fmt.Errorf("outerleaf: payload too large %d", rawLen)
+	}
+
 	switch codec {
 	case blockCodecNone:
 		if len(payload) != rawLen {
@@ -135,6 +146,13 @@ func decodePayload(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte,
 		copy(dst, payload)
 		return dst, nil
 	case blockCodecSnappy:
+		decodedLen, err := snappy.DecodedLen(payload)
+		if err != nil {
+			return nil, err
+		}
+		if decodedLen != rawLen {
+			return nil, fmt.Errorf("outerleaf: snappy decoded length mismatch got=%d want=%d", decodedLen, rawLen)
+		}
 		out, err := snappy.Decode(dst[:0], payload)
 		if err != nil {
 			return nil, err
