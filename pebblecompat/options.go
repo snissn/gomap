@@ -18,4 +18,10 @@ type Options struct {
 	// Merger controls merge-value semantics for DB.Merge and batch replay.
 	// If unset, pebble.DefaultMerger is used.
 	Merger *pebble.Merger
+	// SharedMetaResolver optionally resolves unsupported SharedSSTMeta descriptors
+	// into staged local paths (for example .pcobj or .sst).
+	SharedMetaResolver func(meta pebble.SharedSSTMeta) (localPath string, err error)
+	// ExternalFileResolver optionally resolves non-local external descriptors into
+	// staged local paths (for example .pcobj or .sst).
+	ExternalFileResolver func(file pebble.ExternalFile) (localPath string, err error)
 }

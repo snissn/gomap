@@ -690,6 +690,45 @@ func TestIngestExternalFiles_UnsupportedLocator(t *testing.T) {
 	require.ErrorIs(t, err, ErrExternalFileUnsupported)
 }
 
+func TestIngestExternalFiles_ResolverLocatorToSSTPath(t *testing.T) {
+	dir := t.TempDir()
+	sstPath := filepath.Join(dir, "test.sst")
+	require.NoError(t, writeTestSST(sstPath))
+
+	resolverCalls := 0
+	db, err := Open(filepath.Join(dir, "compat"), &Options{
+		ExternalFileResolver: func(file pebble.ExternalFile) (string, error) {
+			resolverCalls++
+			require.Equal(t, "remote-locator", string(file.Locator))
+			return sstPath, nil
+		},
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.IngestExternalFiles([]pebble.ExternalFile{
+		{
+			Locator:         "remote-locator",
+			ObjName:         "opaque-remote-object",
+			SmallestUserKey: []byte("a"),
+			LargestUserKey:  []byte("z"),
+			HasPointKey:     true,
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, resolverCalls)
+
+	v, closer, err := db.Get([]byte("a"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("1"), v)
+	require.NoError(t, closer.Close())
+
+	_, closer, err = db.Get([]byte("b"))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, pebble.ErrNotFound))
+	require.Nil(t, closer)
+}
+
 func TestIngestExternalFiles_PrevalidationBeforeMutation(t *testing.T) {
 	dir := t.TempDir()
 	sstPath := filepath.Join(dir, "test.sst")
@@ -718,6 +757,47 @@ func TestIngestExternalFiles_PrevalidationBeforeMutation(t *testing.T) {
 		},
 	})
 	require.ErrorIs(t, err, ErrExternalFileUnsupported)
+
+	after := collectVisibleMap(t, db)
+	require.Equal(t, before, after)
+}
+
+func TestIngestExternalFiles_ResolverErrorPrevalidationBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	sstPath := filepath.Join(dir, "test.sst")
+	require.NoError(t, writeTestSST(sstPath))
+
+	resolverCalls := 0
+	db, err := Open(filepath.Join(dir, "compat"), &Options{
+		ExternalFileResolver: func(file pebble.ExternalFile) (string, error) {
+			resolverCalls++
+			require.Equal(t, "remote-locator", string(file.Locator))
+			return "", errors.New("resolver failed")
+		},
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.Set([]byte("seed"), []byte("value"), pebble.NoSync))
+	before := collectVisibleMap(t, db)
+
+	_, err = db.IngestExternalFiles([]pebble.ExternalFile{
+		{
+			ObjName:         sstPath,
+			SmallestUserKey: []byte("a"),
+			LargestUserKey:  []byte("z"),
+			HasPointKey:     true,
+		},
+		{
+			Locator:         "remote-locator",
+			ObjName:         "opaque-remote-object",
+			SmallestUserKey: []byte("a"),
+			LargestUserKey:  []byte("z"),
+			HasPointKey:     true,
+		},
+	})
+	require.ErrorIs(t, err, ErrExternalFileUnsupported)
+	require.Equal(t, 1, resolverCalls)
 
 	after := collectVisibleMap(t, db)
 	require.Equal(t, before, after)
@@ -913,6 +993,99 @@ func TestIngestAndExciseSharedMeta_LocalPathBacking(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestIngestAndExciseSharedMeta_ResolverToPcobjPath(t *testing.T) {
+	dir := t.TempDir()
+	src, err := Open(filepath.Join(dir, "src"), nil)
+	require.NoError(t, err)
+	defer src.Close()
+
+	require.NoError(t, src.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, src.Set([]byte("c"), []byte("3"), pebble.NoSync))
+	require.NoError(t, src.RangeKeySet([]byte("a"), []byte("z"), []byte("s1"), []byte("rv1"), pebble.NoSync))
+
+	objPath := filepath.Join(dir, "shared-meta-resolved.pcobj")
+	_, err = src.ExportSharedObject(objPath, pebble.KeyRange{Start: []byte("a"), End: []byte("z")})
+	require.NoError(t, err)
+
+	resolverCalls := 0
+	dst, err := Open(filepath.Join(dir, "dst"), &Options{
+		SharedMetaResolver: func(meta pebble.SharedSSTMeta) (string, error) {
+			resolverCalls++
+			return objPath, nil
+		},
+	})
+	require.NoError(t, err)
+	defer dst.Close()
+
+	require.NoError(t, dst.Set([]byte("a"), []byte("old-a"), pebble.NoSync))
+	require.NoError(t, dst.Set([]byte("b"), []byte("old-b"), pebble.NoSync))
+	require.NoError(t, dst.Set([]byte("c"), []byte("old-c"), pebble.NoSync))
+
+	shared := []pebble.SharedSSTMeta{{
+		Backing: newStaticRemoteObjectBackingHandle([]byte("opaque-backing")),
+	}}
+	_, err = dst.IngestAndExcise(
+		nil,
+		shared,
+		pebble.KeyRange{Start: []byte("a"), End: []byte("z")},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, resolverCalls)
+
+	_, closer, err := dst.Get([]byte("b"))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, pebble.ErrNotFound))
+	require.Nil(t, closer)
+
+	want := collectInternal(t, src.ScanInternal)
+	got := collectInternal(t, dst.ScanInternal)
+	require.Equal(t, want, got)
+}
+
+func TestIngestAndExciseSharedMeta_ResolverToSSTPath(t *testing.T) {
+	dir := t.TempDir()
+	sstPath := filepath.Join(dir, "shared-resolved.sst")
+	require.NoError(t, writePointSST(
+		sstPath,
+		[2]string{"c", "sst-c"},
+		[2]string{"d", "sst-d"},
+		[2]string{"e", "sst-e"},
+	))
+
+	resolverCalls := 0
+	db, err := Open(filepath.Join(dir, "dst"), &Options{
+		SharedMetaResolver: func(meta pebble.SharedSSTMeta) (string, error) {
+			resolverCalls++
+			return sstPath, nil
+		},
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	seedOverlapMatrixOldValues(t, db)
+
+	shared := []pebble.SharedSSTMeta{{
+		Backing: newStaticRemoteObjectBackingHandle([]byte("opaque-backing")),
+	}}
+	_, err = db.IngestAndExcise(
+		nil,
+		shared,
+		pebble.KeyRange{Start: []byte("c"), End: []byte("f")},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1, resolverCalls)
+
+	assertOverlapMatrixExpected(t, db, map[string]string{
+		"a": "old-a",
+		"b": "old-b",
+		"c": "sst-c",
+		"d": "sst-d",
+		"e": "sst-e",
+		"f": "old-f",
+		"g": "old-g",
+	})
+}
+
 func TestIngestAndExciseSharedMeta_UnsupportedBacking(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "compat"), nil)
@@ -927,6 +1100,43 @@ func TestIngestAndExciseSharedMeta_UnsupportedBacking(t *testing.T) {
 		pebble.KeyRange{},
 	)
 	require.ErrorIs(t, err, ErrSharedSSTUnsupported)
+}
+
+func TestIngestAndExciseSharedMeta_ResolverErrorNoPartialMutation(t *testing.T) {
+	dir := t.TempDir()
+	sstPath := filepath.Join(dir, "mixed-unsupported.sst")
+	require.NoError(t, writePointSST(sstPath, [2]string{"c", "sst-c"}))
+
+	resolverCalls := 0
+	db, err := Open(filepath.Join(dir, "compat"), &Options{
+		SharedMetaResolver: func(meta pebble.SharedSSTMeta) (string, error) {
+			resolverCalls++
+			return "", errors.New("resolver failed")
+		},
+	})
+	require.NoError(t, err)
+	defer db.Close()
+
+	seedOverlapMatrixOldValues(t, db)
+
+	beforeIter, err := db.NewIter(nil)
+	require.NoError(t, err)
+	before := collectVisibleFromIter(t, beforeIter)
+
+	_, err = db.IngestAndExcise(
+		[]string{sstPath},
+		[]pebble.SharedSSTMeta{{
+			Backing: newStaticRemoteObjectBackingHandle([]byte("unsupported-backing")),
+		}},
+		pebble.KeyRange{Start: []byte("c"), End: []byte("f")},
+	)
+	require.ErrorIs(t, err, ErrSharedSSTUnsupported)
+	require.Equal(t, 1, resolverCalls)
+
+	afterIter, err := db.NewIter(nil)
+	require.NoError(t, err)
+	after := collectVisibleFromIter(t, afterIter)
+	require.Equal(t, before, after)
 }
 
 func TestIngestAndExciseMixedInputs_UnsupportedSharedBacking(t *testing.T) {

@@ -21,8 +21,13 @@ User keys with the reserved prefix are rejected.
 
 Pre-alpha compatibility layer intended for experimentation and conformance work.
 Shared-object ingest (`[]pebble.SharedSSTMeta`) is partially implemented through
-compat-local `.pcobj` path backings; provider-backed shared ingest is still not
-implemented.
+compat-local `.pcobj` path backings. Resolver hooks can stage opaque/provider
+descriptors to local `.pcobj`/`.sst` files:
+
+- `Options.SharedMetaResolver`
+- `Options.ExternalFileResolver`
+
+Provider-backed direct shared ingest is still not implemented.
 
 ## Shared Objects (`.pcobj`)
 
@@ -39,7 +44,9 @@ Format goals for this sprint:
 
 `IngestWithStats`, `IngestExternalFiles`, and `IngestAndExcise` automatically
 fast-path `.pcobj` files. `IngestAndExcise` can also adapt shared metas when the
-backing uses the compat-local `.pcobj` path encoding.
+backing uses the compat-local `.pcobj` path encoding, and can fall back to
+`Options.SharedMetaResolver` for staged local paths. `IngestExternalFiles`
+can fall back to `Options.ExternalFileResolver` for non-local descriptors.
 
 Excise behavior now preserves non-overlapping fragments of existing range
 records (split-left/split-right) when an excise span intersects them.

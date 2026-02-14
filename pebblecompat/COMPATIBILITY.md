@@ -28,11 +28,14 @@ on TreeDB with equivalent observable behavior for required call paths.
 - Ingest support for:
   - local sstable adaptation,
   - local external-file adaptation (descriptor prevalidation before mutation;
-    non-local `Locator` descriptors rejected with `ErrExternalFileUnsupported`),
+    non-local descriptors can be staged through `Options.ExternalFileResolver`,
+    otherwise return `ErrExternalFileUnsupported`),
   - TreeDB-native shared object format (`.pcobj`) export/import.
 - `IngestAndExcise` supports mixed local SST, `.pcobj`, and compat-local
-  shared-meta path inputs in one call, with excise applied once and object-backed
-  ingest preserving non-overlapping existing range fragments.
+  shared-meta path inputs in one call, with optional fallback staging through
+  `Options.SharedMetaResolver` for opaque shared descriptors.
+  Excise is applied once and object-backed ingest preserves non-overlapping
+  existing range fragments.
 - Differential ingest/excise overlap-matrix tests cover disjoint, partial overlap,
   full overlap, and boundary-touch spans for local SST, local external-file
   excise+ingest flow, and compat-local shared-meta path ingest.
@@ -58,7 +61,8 @@ These are not currently provided and must not be assumed by consumers:
   eagerly resolves merge operands during apply).
 - Full TreeDB-native operational parity (current operational APIs are delegated
   to the shadow Pebble engine).
-- Provider-backed `[]pebble.SharedSSTMeta` ingest path.
+- Provider-backed `[]pebble.SharedSSTMeta` direct ingest path (without caller
+  staging through resolver hooks).
 - Full Pebble checkpoint option parity is not implemented:
   `WithRestrictToSpans` remains unsupported and option-specific semantics beyond
   accepting `WithFlushedWAL` are not implemented.

@@ -10,7 +10,7 @@ Legend:
 
 | Method | Status | Notes | Target Phase |
 |---|---|---|---|
-| `Open` | partial | `pebblecompat.Options` surface (including `InternalPrefix` + `Merger`), not full Pebble options surface. | 0/4 |
+| `Open` | partial | `pebblecompat.Options` surface (including `InternalPrefix`, `Merger`, and optional resolver hooks), not full Pebble options surface. | 0/4 |
 | `Close` | full | TreeDB close semantics. | done |
 | `Get` | full | Returns `ErrNotFound` parity behavior. | done |
 | `Set` | full | Via batch apply. | done |
@@ -32,8 +32,8 @@ Legend:
 | `Checkpoint(destDir, ...)` | partial | TreeDB checkpoint + filesystem copy; `WithFlushedWAL` is accepted (no-op under current architecture), while non-empty `WithRestrictToSpans` remains explicitly rejected with `ErrCheckpointOptionUnsupported`. | 4 |
 | `Ingest` | partial | Supports sstable adaptation + `.pcobj` fast path. | 3 |
 | `IngestWithStats` | partial | Coarse stats parity. | 3 |
-| `IngestExternalFiles` | partial | Local path adaptation only; provider/shared gaps. Descriptors are prevalidated before mutation, and non-local descriptors (`Locator != \"\"`) are explicitly rejected with `ErrExternalFileUnsupported`. Differential tests cover local external file ingest after excise across disjoint/partial/full/boundary-touch spans. | 3 |
-| `IngestAndExcise` | partial | Supports local SST paths, `.pcobj` paths, and compat-local `SharedSSTMeta` backings in one call. Excise is applied once and then all object-backed inputs are ingested before SST inputs deterministically; provider-backed shared ingest remains unsupported. Differential overlap-matrix tests cover disjoint/partial/full/boundary-touch spans for local SST and shared-meta paths. | 3 |
+| `IngestExternalFiles` | partial | Local path adaptation plus optional `ExternalFileResolver` hook for non-local descriptors (e.g. `Locator`-backed) staged to local files. Descriptors are prevalidated before mutation; unresolved/failed resolver paths return `ErrExternalFileUnsupported`. Differential tests cover local external file ingest after excise across disjoint/partial/full/boundary-touch spans. | 3 |
+| `IngestAndExcise` | partial | Supports local SST paths, `.pcobj` paths, compat-local `SharedSSTMeta` backings, and optional `SharedMetaResolver` fallback for opaque/shared descriptors staged to local `.pcobj`/`.sst` files. Excise is applied once and object-backed inputs are ingested before SST inputs deterministically; provider-backed direct ingest remains unsupported without staging. Differential overlap-matrix tests cover disjoint/partial/full/boundary-touch spans for local SST and shared-meta paths. | 3 |
 | `ScanInternal` | partial | Compatibility reconstruction, not native Pebble LSM internals. | 1/3 |
 | `ExportSharedObject` (compat extension) | full | TreeDB-native immutable transfer object. | done |
 | `IngestSharedObject` (compat extension) | full | Buffered/chunked apply path. | done |

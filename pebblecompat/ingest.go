@@ -202,22 +202,44 @@ func (d *DB) IngestWithStats(paths []string) (pebble.IngestOperationStats, error
 
 // IngestExternalFiles ingests external descriptors when ObjName is a local path.
 func (d *DB) IngestExternalFiles(external []pebble.ExternalFile) (pebble.IngestOperationStats, error) {
+	resolved := make([]pebble.ExternalFile, 0, len(external))
 	for i := range external {
 		ef := external[i]
 		if ef.Locator != "" {
-			return pebble.IngestOperationStats{}, ErrExternalFileUnsupported
+			if d.externalFileResolver == nil {
+				return pebble.IngestOperationStats{}, ErrExternalFileUnsupported
+			}
+			path, err := d.externalFileResolver(ef)
+			if err != nil {
+				return pebble.IngestOperationStats{}, fmt.Errorf("%w: %v", ErrExternalFileUnsupported, err)
+			}
+			if path == "" {
+				return pebble.IngestOperationStats{}, ErrExternalFileUnsupported
+			}
+			ef.ObjName = path
+			ef.Locator = ""
+		} else if ef.ObjName == "" {
+			if d.externalFileResolver == nil {
+				return pebble.IngestOperationStats{}, ErrExternalFileUnsupported
+			}
+			path, err := d.externalFileResolver(ef)
+			if err != nil {
+				return pebble.IngestOperationStats{}, fmt.Errorf("%w: %v", ErrExternalFileUnsupported, err)
+			}
+			if path == "" {
+				return pebble.IngestOperationStats{}, ErrExternalFileUnsupported
+			}
+			ef.ObjName = path
 		}
 		if !ef.HasPointKey && !ef.HasRangeKey {
 			return pebble.IngestOperationStats{}, fmt.Errorf("pebblecompat: external file has neither point nor range keys")
 		}
-		if ef.ObjName == "" {
-			return pebble.IngestOperationStats{}, ErrExternalFileUnsupported
-		}
+		resolved = append(resolved, ef)
 	}
 
 	var stats pebble.IngestOperationStats
-	for i := range external {
-		ef := external[i]
+	for i := range resolved {
+		ef := resolved[i]
 		if isExportObjectPath(ef.ObjName) {
 			objStats, err := d.IngestSharedObject(ef.ObjName, pebble.NoSync)
 			if err != nil {
@@ -266,12 +288,10 @@ func decodeSharedMetaLocalPathBacking(backing objstorage.RemoteObjectBacking) (s
 	return string(backing[len(prefix):]), true
 }
 
-func resolveSharedMetaPath(meta pebble.SharedSSTMeta) (string, error) {
+func resolveSharedMetaCompatLocalPath(meta pebble.SharedSSTMeta) (string, error) {
 	if meta.Backing == nil {
 		return "", ErrSharedSSTUnsupported
 	}
-	defer meta.Backing.Close()
-
 	backing, err := meta.Backing.Get()
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrSharedSSTUnsupported, err)
@@ -283,10 +303,31 @@ func resolveSharedMetaPath(meta pebble.SharedSSTMeta) (string, error) {
 	return path, nil
 }
 
-func resolveSharedMetaPaths(shared []pebble.SharedSSTMeta) ([]string, error) {
+func (d *DB) resolveSharedMetaPath(meta pebble.SharedSSTMeta) (string, error) {
+	if meta.Backing != nil {
+		defer meta.Backing.Close()
+	}
+	path, err := resolveSharedMetaCompatLocalPath(meta)
+	if err == nil {
+		return path, nil
+	}
+	if d.sharedMetaResolver == nil {
+		return "", err
+	}
+	path, err = d.sharedMetaResolver(meta)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrSharedSSTUnsupported, err)
+	}
+	if path == "" {
+		return "", ErrSharedSSTUnsupported
+	}
+	return path, nil
+}
+
+func (d *DB) resolveSharedMetaPaths(shared []pebble.SharedSSTMeta) ([]string, error) {
 	paths := make([]string, 0, len(shared))
 	for i := range shared {
-		path, err := resolveSharedMetaPath(shared[i])
+		path, err := d.resolveSharedMetaPath(shared[i])
 		if err != nil {
 			return nil, err
 		}
@@ -326,21 +367,24 @@ func (d *DB) ingestObjectPathsWithExcise(paths []string, exciseSpan pebble.KeyRa
 
 // IngestAndExcise applies a best-effort local ingest + excise flow.
 func (d *DB) IngestAndExcise(paths []string, shared []pebble.SharedSSTMeta, exciseSpan pebble.KeyRange) (pebble.IngestOperationStats, error) {
-	sharedPaths, err := resolveSharedMetaPaths(shared)
+	sharedPaths, err := d.resolveSharedMetaPaths(shared)
 	if err != nil {
 		return pebble.IngestOperationStats{}, err
 	}
 
-	objectPaths := make([]string, 0, len(paths)+len(sharedPaths))
-	sstPaths := make([]string, 0, len(paths))
-	for _, p := range paths {
+	allPaths := make([]string, 0, len(paths)+len(sharedPaths))
+	allPaths = append(allPaths, paths...)
+	allPaths = append(allPaths, sharedPaths...)
+
+	objectPaths := make([]string, 0, len(allPaths))
+	sstPaths := make([]string, 0, len(allPaths))
+	for _, p := range allPaths {
 		if isExportObjectPath(p) {
 			objectPaths = append(objectPaths, p)
 			continue
 		}
 		sstPaths = append(sstPaths, p)
 	}
-	objectPaths = append(objectPaths, sharedPaths...)
 
 	var stats pebble.IngestOperationStats
 	if len(objectPaths) > 0 {

@@ -20,12 +20,14 @@ type DB struct {
 
 	mu sync.Mutex
 
-	internalPrefix []byte
-	seqKey         []byte
-	pointPrefix    []byte
-	rangePrefix    []byte
-	dataDir        string
-	merger         *pebble.Merger
+	internalPrefix       []byte
+	seqKey               []byte
+	pointPrefix          []byte
+	rangePrefix          []byte
+	dataDir              string
+	merger               *pebble.Merger
+	sharedMetaResolver   func(meta pebble.SharedSSTMeta) (localPath string, err error)
+	externalFileResolver func(file pebble.ExternalFile) (localPath string, err error)
 
 	lastSeq uint64
 }
@@ -61,11 +63,13 @@ func Open(dirname string, opts *Options) (*DB, error) {
 		return nil, err
 	}
 	d := &DB{
-		tree:           tdb,
-		internalPrefix: cfg.InternalPrefix,
-		dataDir:        to.Dir,
-		merger:         cfg.Merger,
-		lastSeq:        initialSeqNum,
+		tree:                 tdb,
+		internalPrefix:       cfg.InternalPrefix,
+		dataDir:              to.Dir,
+		merger:               cfg.Merger,
+		sharedMetaResolver:   cfg.SharedMetaResolver,
+		externalFileResolver: cfg.ExternalFileResolver,
+		lastSeq:              initialSeqNum,
 	}
 	d.seqKey = append(append([]byte(nil), d.internalPrefix...), []byte("seq")...)
 	d.pointPrefix = append(append([]byte(nil), d.internalPrefix...), []byte("pt/")...)
