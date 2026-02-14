@@ -14,6 +14,7 @@ import (
 
 const (
 	ModeV2BlockPtr = "v2_blockptr"
+	ModeV2FencePtr = "v2_fenceptr"
 
 	defaultBlockTargetBytes = 4 << 10
 	defaultRestartInterval  = 16
@@ -63,7 +64,12 @@ type DecodedBlock struct {
 }
 
 func ModeEnabled(mode string) bool {
-	return strings.TrimSpace(mode) == ModeV2BlockPtr
+	switch strings.TrimSpace(mode) {
+	case ModeV2BlockPtr, ModeV2FencePtr:
+		return true
+	default:
+		return false
+	}
 }
 
 func NormalizeBlockTargetBytes(target int) int {

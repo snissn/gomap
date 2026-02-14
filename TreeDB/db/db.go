@@ -135,6 +135,8 @@ func normalizeIndexOuterLeafMode(mode string) string {
 		return IndexOuterLeafModeV1
 	case IndexOuterLeafModeV2BlockPtr:
 		return IndexOuterLeafModeV2BlockPtr
+	case IndexOuterLeafModeV2FencePtr:
+		return IndexOuterLeafModeV2FencePtr
 	default:
 		return strings.ToLower(strings.TrimSpace(mode))
 	}
@@ -199,6 +201,10 @@ const (
 	// format. Values are encoded as key+value blocks in the value log and index
 	// leaves continue to store pointers.
 	IndexOuterLeafModeV2BlockPtr = "v2_blockptr"
+	// IndexOuterLeafModeV2FencePtr is the follow-on fence-key-only outer-leaf
+	// mode. Index leaves store fence keys + block pointers and user keys are
+	// resolved from outer blocks.
+	IndexOuterLeafModeV2FencePtr = "v2_fenceptr"
 )
 
 // ValueLogAutoPolicy controls auto-mode dict vs block selection bias.
@@ -474,6 +480,7 @@ type Options struct {
 	// IndexOuterLeafMode selects the index outer-leaf format:
 	// - "" / "v1": existing per-key leaf entries
 	// - "v2_blockptr": pointer payloads encode key+value outer-leaf blocks
+	// - "v2_fenceptr": fence-key-only index entries with outer block payloads
 	IndexOuterLeafMode string
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
@@ -814,7 +821,7 @@ func validateOptions(opts Options) error {
 		return fmt.Errorf("treedb: invalid value-log outer-leaf block codec %d", opts.ValueLog.OuterLeafBlockCodec)
 	}
 	switch normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode) {
-	case IndexOuterLeafModeV1, IndexOuterLeafModeV2BlockPtr:
+	case IndexOuterLeafModeV1, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
 	default:
 		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
 	}

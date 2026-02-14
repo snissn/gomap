@@ -84,7 +84,7 @@ var (
 	treedbIndexColumnarLeaves             = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
-	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v1", "TreeDB: index outer-leaf mode (v1|v2_blockptr)")
+	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v1", "TreeDB: index outer-leaf mode (v1|v2_blockptr|v2_fenceptr)")
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
 	treedbOuterLeafBlockRestart           = flag.Int("treedb-outer-leaf-block-restart-interval", 0, "TreeDB: experimental outer-leaf restart interval (0=default)")
@@ -263,8 +263,10 @@ func parseTreeDBOuterLeafMode(s string) (string, error) {
 		return treedb.IndexOuterLeafModeV1, nil
 	case "v2_blockptr":
 		return treedb.IndexOuterLeafModeV2BlockPtr, nil
+	case "v2_fenceptr":
+		return treedb.IndexOuterLeafModeV2FencePtr, nil
 	default:
-		return "", fmt.Errorf("unsupported -treedb-index-outer-leaf-mode=%q (expected v1|v2_blockptr)", s)
+		return "", fmt.Errorf("unsupported -treedb-index-outer-leaf-mode=%q (expected v1|v2_blockptr|v2_fenceptr)", s)
 	}
 }
 

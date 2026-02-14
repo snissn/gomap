@@ -2890,7 +2890,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if indexOuterLeafMode == "" {
 		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
 	}
-	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr {
+	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr &&
+		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr {
 		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
 	}
 	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(opts.ValueLogOuterLeafBlockTargetBytes)

@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -46,21 +47,43 @@ func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte) ([]byte, error) 
 }
 
 func (r valueReader) decodeValueForKey(ptr page.ValuePtr, key, raw []byte) ([]byte, error) {
-	if !outerleaf.ModeEnabled(r.outerLeafMode) {
-		return raw, nil
-	}
-	block, err := r.outerLeafBlock(ptr, raw)
-	if err != nil {
-		return nil, err
-	}
-	val, found, err := block.ValueForKey(key)
+	decoded, found, err := r.decodeValueForKeyFound(ptr, key, raw)
 	if err != nil {
 		return nil, err
 	}
 	if !found {
 		return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
 	}
-	return val, nil
+	return decoded, nil
+}
+
+func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte) ([]byte, bool, error) {
+	if !outerleaf.ModeEnabled(r.outerLeafMode) {
+		return raw, true, nil
+	}
+	block, err := r.outerLeafBlock(ptr, raw)
+	if err != nil {
+		return nil, false, err
+	}
+	val, found, err := block.ValueForKey(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	return val, true, nil
+}
+
+func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error) {
+	if strings.TrimSpace(r.outerLeafMode) != outerleaf.ModeV2FencePtr {
+		return nil, false, nil
+	}
+	raw, err := r.readRawUnsafe(ptr)
+	if err != nil {
+		return nil, false, err
+	}
+	return r.decodeValueForKeyFound(ptr, key, raw)
 }
 
 func (r valueReader) readRaw(ptr page.ValuePtr) ([]byte, error) {

@@ -55,6 +55,7 @@ const (
 const (
 	IndexOuterLeafModeV1         = db.IndexOuterLeafModeV1
 	IndexOuterLeafModeV2BlockPtr = db.IndexOuterLeafModeV2BlockPtr
+	IndexOuterLeafModeV2FencePtr = db.IndexOuterLeafModeV2FencePtr
 )
 
 // Value-log compression autotune types (re-exported from internal packages so

@@ -6,15 +6,21 @@ import (
 )
 
 func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
-	db, err := Open(Options{
-		Dir:                t.TempDir(),
-		IndexOuterLeafMode: IndexOuterLeafModeV2BlockPtr,
-	})
-	if err != nil {
-		t.Fatalf("open %q: %v", IndexOuterLeafModeV2BlockPtr, err)
+	modes := []string{
+		IndexOuterLeafModeV2BlockPtr,
+		IndexOuterLeafModeV2FencePtr,
 	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close: %v", err)
+	for _, mode := range modes {
+		db, err := Open(Options{
+			Dir:                t.TempDir(),
+			IndexOuterLeafMode: mode,
+		})
+		if err != nil {
+			t.Fatalf("open %q: %v", mode, err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close: %v", err)
+		}
 	}
 }
 
