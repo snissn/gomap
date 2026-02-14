@@ -560,6 +560,7 @@ type Snapshot struct {
 	vlogPinned  bool
 	reader      valueReader
 	tree        tree.Tree
+	regByReader bool
 	registryID  int64
 	closed      atomic.Bool
 	treePager   *pager.Pager
@@ -604,8 +605,14 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 
 	// Register Reader
 	id := int64(0)
+	pinnedByRegistry := false
 	if idx != nil {
-		id = idx.registry.Register(state.CommitSeq)
+		if idx == db.idx.Load() {
+			idx.acquire()
+		} else {
+			id = idx.registry.Register(state.CommitSeq)
+			pinnedByRegistry = true
+		}
 	}
 
 	snap := db.snapPool.Get()
@@ -631,6 +638,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		}
 	}
 	snap.registryID = id
+	snap.regByReader = pinnedByRegistry
 	snap.closed.Store(false)
 	db.snapshotAcquireRO.Add(-1)
 	return snap
@@ -652,9 +660,15 @@ func (s *Snapshot) Close() error {
 		}
 	}
 	if s.idx != nil {
-		s.idx.registry.Unregister(s.registryID)
+		if s.regByReader {
+			s.idx.registry.Unregister(s.registryID)
+		} else {
+			s.idx.release()
+		}
 		if s.db != nil {
-			s.db.maybeReleaseRetiredIndex(s.idx)
+			if s.db.idx.Load() != s.idx {
+				s.db.maybeReleaseRetiredIndex(s.idx)
+			}
 		}
 	}
 	if s.db != nil {

@@ -48,7 +48,10 @@ func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
 		t.Fatalf("expected idx1 unpinned after close, got %d", min)
 	}
 
+	// Flip published snapshot metadata to idx2, then make idx1 the live index so
+	// idx2 reads are stale and must use registry pinning.
 	db.publishSnapshotView(idx2, state2, nil)
+	db.idx.Store(idx1)
 
 	snap2 := db.AcquireSnapshot()
 	if snap2 == nil {
