@@ -26,6 +26,8 @@ on TreeDB with equivalent observable behavior for required call paths.
   - TreeDB-native shared object format (`.pcobj`) export/import.
 - `IngestAndExcise` on `.pcobj`, including split-preservation of non-overlapping
   existing range fragments.
+- `IngestAndExcise` shared-meta adaptation when `[]pebble.SharedSSTMeta`
+  backings use the compat-local `.pcobj` path encoding.
 - `Checkpoint(destDir, ...)` directory export via TreeDB checkpoint plus recursive
   filesystem copy.
 - Operational/introspection APIs are exposed through delegation to the shadow

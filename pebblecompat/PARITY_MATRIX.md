@@ -33,7 +33,7 @@ Legend:
 | `Ingest` | partial | Supports sstable adaptation + `.pcobj` fast path. | 3 |
 | `IngestWithStats` | partial | Coarse stats parity. | 3 |
 | `IngestExternalFiles` | partial | Local path adaptation only; provider/shared gaps. | 3 |
-| `IngestAndExcise` | partial | Shared meta missing; `.pcobj` excise supported incl. fragment split. | 3 |
+| `IngestAndExcise` | partial | Supports `.pcobj` paths plus compat-local `SharedSSTMeta` backings resolved to `.pcobj`; provider-backed shared ingest remains unsupported. | 3 |
 | `ScanInternal` | partial | Compatibility reconstruction, not native Pebble LSM internals. | 1/3 |
 | `ExportSharedObject` (compat extension) | full | TreeDB-native immutable transfer object. | done |
 | `IngestSharedObject` (compat extension) | full | Buffered/chunked apply path. | done |

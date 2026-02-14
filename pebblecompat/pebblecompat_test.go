@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/objstorage"
 	"github.com/cockroachdb/pebble/objstorage/objstorageprovider"
 	pebblerangekey "github.com/cockroachdb/pebble/rangekey"
 	"github.com/cockroachdb/pebble/sstable"
@@ -110,6 +111,26 @@ func writeTestSST(path string) error {
 		return err
 	}
 	return w.Close()
+}
+
+type staticRemoteObjectBackingHandle struct {
+	backing objstorage.RemoteObjectBacking
+	closed  bool
+}
+
+func newStaticRemoteObjectBackingHandle(backing objstorage.RemoteObjectBacking) *staticRemoteObjectBackingHandle {
+	return &staticRemoteObjectBackingHandle{backing: append(objstorage.RemoteObjectBacking(nil), backing...)}
+}
+
+func (h *staticRemoteObjectBackingHandle) Get() (objstorage.RemoteObjectBacking, error) {
+	if h.closed {
+		return nil, errors.New("test remote backing handle closed")
+	}
+	return append(objstorage.RemoteObjectBacking(nil), h.backing...), nil
+}
+
+func (h *staticRemoteObjectBackingHandle) Close() {
+	h.closed = true
 }
 
 func TestBatchReprDeterministicParity(t *testing.T) {
@@ -372,6 +393,64 @@ func TestIngestAndExciseSharedObject_PreservesRangeFragments(t *testing.T) {
 	require.Contains(t, got.rangeKeys, "66|7a|21|736f6c64|766f6c64") // [f,z) old
 	require.Contains(t, got.rangeKeys, "63|66|21|736e6577|766e6577") // [c,f) new
 	require.NotContains(t, got.rangeKeys, "61|7a|21|736f6c64|766f6c64")
+}
+
+func TestIngestAndExciseSharedMeta_LocalPathBacking(t *testing.T) {
+	dir := t.TempDir()
+	src, err := Open(filepath.Join(dir, "src"), nil)
+	require.NoError(t, err)
+	defer src.Close()
+
+	require.NoError(t, src.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, src.Set([]byte("c"), []byte("3"), pebble.NoSync))
+	require.NoError(t, src.RangeKeySet([]byte("a"), []byte("z"), []byte("s1"), []byte("rv1"), pebble.NoSync))
+
+	objPath := filepath.Join(dir, "shared-meta.pcobj")
+	_, err = src.ExportSharedObject(objPath, pebble.KeyRange{Start: []byte("a"), End: []byte("z")})
+	require.NoError(t, err)
+
+	dst, err := Open(filepath.Join(dir, "dst"), nil)
+	require.NoError(t, err)
+	defer dst.Close()
+
+	require.NoError(t, dst.Set([]byte("a"), []byte("old-a"), pebble.NoSync))
+	require.NoError(t, dst.Set([]byte("b"), []byte("old-b"), pebble.NoSync))
+	require.NoError(t, dst.Set([]byte("c"), []byte("old-c"), pebble.NoSync))
+
+	shared := []pebble.SharedSSTMeta{{
+		Backing: newStaticRemoteObjectBackingHandle(encodeSharedMetaLocalPathBacking(objPath)),
+	}}
+	_, err = dst.IngestAndExcise(
+		nil,
+		shared,
+		pebble.KeyRange{Start: []byte("a"), End: []byte("z")},
+	)
+	require.NoError(t, err)
+
+	_, closer, err := dst.Get([]byte("b"))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, pebble.ErrNotFound))
+	require.Nil(t, closer)
+
+	want := collectInternal(t, src.ScanInternal)
+	got := collectInternal(t, dst.ScanInternal)
+	require.Equal(t, want, got)
+}
+
+func TestIngestAndExciseSharedMeta_UnsupportedBacking(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.IngestAndExcise(
+		nil,
+		[]pebble.SharedSSTMeta{{
+			Backing: newStaticRemoteObjectBackingHandle([]byte("unsupported-backing")),
+		}},
+		pebble.KeyRange{},
+	)
+	require.ErrorIs(t, err, ErrSharedSSTUnsupported)
 }
 
 func collectVisibleFromIter(t *testing.T, iter *pebble.Iterator) []string {

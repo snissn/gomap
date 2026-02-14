@@ -6,10 +6,13 @@ import (
 	"os"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/cockroachdb/pebble/objstorage"
 	pebblerangekey "github.com/cockroachdb/pebble/rangekey"
 	"github.com/cockroachdb/pebble/sstable"
 	"github.com/cockroachdb/pebble/vfs"
 )
+
+const sharedMetaLocalPathPrefix = "pebblecompat-local-path:"
 
 func keyInUserBounds(key []byte, bounds *pebble.KeyRange) bool {
 	if bounds == nil {
@@ -244,48 +247,96 @@ func (d *DB) IngestExternalFiles(external []pebble.ExternalFile) (pebble.IngestO
 	return stats, nil
 }
 
+func encodeSharedMetaLocalPathBacking(path string) objstorage.RemoteObjectBacking {
+	return append([]byte(sharedMetaLocalPathPrefix), []byte(path)...)
+}
+
+func decodeSharedMetaLocalPathBacking(backing objstorage.RemoteObjectBacking) (string, bool) {
+	prefix := []byte(sharedMetaLocalPathPrefix)
+	if len(backing) <= len(prefix) || !bytes.HasPrefix(backing, prefix) {
+		return "", false
+	}
+	return string(backing[len(prefix):]), true
+}
+
+func resolveSharedMetaPath(meta pebble.SharedSSTMeta) (string, error) {
+	if meta.Backing == nil {
+		return "", ErrSharedSSTUnsupported
+	}
+	defer meta.Backing.Close()
+
+	backing, err := meta.Backing.Get()
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrSharedSSTUnsupported, err)
+	}
+	path, ok := decodeSharedMetaLocalPathBacking(backing)
+	if !ok || !isExportObjectPath(path) {
+		return "", ErrSharedSSTUnsupported
+	}
+	return path, nil
+}
+
+func resolveSharedMetaPaths(shared []pebble.SharedSSTMeta) ([]string, error) {
+	paths := make([]string, 0, len(shared))
+	for i := range shared {
+		path, err := resolveSharedMetaPath(shared[i])
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
+
+func (d *DB) ingestObjectPathsWithExcise(paths []string, exciseSpan pebble.KeyRange) (pebble.IngestOperationStats, error) {
+	if err := validateSpan(exciseSpan); err != nil {
+		return pebble.IngestOperationStats{}, err
+	}
+	var stats pebble.IngestOperationStats
+	for i := range paths {
+		var excise *pebble.KeyRange
+		if i == 0 && spanDefined(exciseSpan) {
+			spanCopy := pebble.KeyRange{
+				Start: append([]byte(nil), exciseSpan.Start...),
+				End:   append([]byte(nil), exciseSpan.End...),
+			}
+			excise = &spanCopy
+		}
+		objStats, err := d.ingestSharedObjectWithExcise(paths[i], pebble.NoSync, excise)
+		if err != nil {
+			return stats, err
+		}
+		stats.Bytes += objStats.Bytes
+		stats.ApproxIngestedIntoL0Bytes += objStats.ApproxIngestedIntoL0Bytes
+		stats.MemtableOverlappingFiles += objStats.MemtableOverlappingFiles
+	}
+	return stats, nil
+}
+
 // IngestAndExcise applies a best-effort local ingest + excise flow.
 func (d *DB) IngestAndExcise(paths []string, shared []pebble.SharedSSTMeta, exciseSpan pebble.KeyRange) (pebble.IngestOperationStats, error) {
-	if len(shared) > 0 {
-		return pebble.IngestOperationStats{}, ErrSharedSSTUnsupported
-	}
-
-	hasObjects := false
+	hasObjectsInPaths := false
 	hasSST := false
+	objectPaths := make([]string, 0, len(paths)+len(shared))
 	for _, p := range paths {
 		if isExportObjectPath(p) {
-			hasObjects = true
+			hasObjectsInPaths = true
+			objectPaths = append(objectPaths, p)
 		} else {
 			hasSST = true
 		}
 	}
-	if hasObjects && hasSST {
+	if hasSST && (hasObjectsInPaths || len(shared) > 0) {
 		return pebble.IngestOperationStats{}, fmt.Errorf("pebblecompat: mixed .pcobj and sstable ingest is unsupported")
 	}
 
-	if hasObjects {
-		if err := validateSpan(exciseSpan); err != nil {
-			return pebble.IngestOperationStats{}, err
-		}
-		var stats pebble.IngestOperationStats
-		for i := range paths {
-			var excise *pebble.KeyRange
-			if i == 0 && spanDefined(exciseSpan) {
-				spanCopy := pebble.KeyRange{
-					Start: append([]byte(nil), exciseSpan.Start...),
-					End:   append([]byte(nil), exciseSpan.End...),
-				}
-				excise = &spanCopy
-			}
-			objStats, err := d.ingestSharedObjectWithExcise(paths[i], pebble.NoSync, excise)
-			if err != nil {
-				return stats, err
-			}
-			stats.Bytes += objStats.Bytes
-			stats.ApproxIngestedIntoL0Bytes += objStats.ApproxIngestedIntoL0Bytes
-			stats.MemtableOverlappingFiles += objStats.MemtableOverlappingFiles
-		}
-		return stats, nil
+	sharedPaths, err := resolveSharedMetaPaths(shared)
+	if err != nil {
+		return pebble.IngestOperationStats{}, err
+	}
+	objectPaths = append(objectPaths, sharedPaths...)
+	if len(objectPaths) > 0 {
+		return d.ingestObjectPathsWithExcise(objectPaths, exciseSpan)
 	}
 
 	if spanDefined(exciseSpan) {

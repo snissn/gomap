@@ -20,7 +20,9 @@ User keys with the reserved prefix are rejected.
 ## Status
 
 Pre-alpha compatibility layer intended for experimentation and conformance work.
-Shared-object ingest (`[]pebble.SharedSSTMeta`) is not implemented yet.
+Shared-object ingest (`[]pebble.SharedSSTMeta`) is partially implemented through
+compat-local `.pcobj` path backings; provider-backed shared ingest is still not
+implemented.
 
 ## Shared Objects (`.pcobj`)
 
@@ -36,7 +38,8 @@ Format goals for this sprint:
 - chunked TreeDB batch apply (`~8k ops` / `~4 MiB`) during ingest.
 
 `IngestWithStats`, `IngestExternalFiles`, and `IngestAndExcise` automatically
-fast-path `.pcobj` files.
+fast-path `.pcobj` files. `IngestAndExcise` can also adapt shared metas when the
+backing uses the compat-local `.pcobj` path encoding.
 
 Excise behavior now preserves non-overlapping fragments of existing range
 records (split-left/split-right) when an excise span intersects them.
