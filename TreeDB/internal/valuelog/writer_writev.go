@@ -225,6 +225,7 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 	if cap(iovs) < maxIovs {
 		iovs = make([][]byte, 0, maxIovs)
 	}
+	vecs := w.rawWritevVecs[:0]
 	meta := w.rawWritevMeta[:0]
 	if cap(meta) < 4096 {
 		meta = make([]byte, 0, 4096)
@@ -238,6 +239,7 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 			clear(full)
 		}
 		w.rawWritevIovs = iovs[:0]
+		w.rawWritevVecs = vecs[:0]
 		w.rawWritevMeta = meta[:0]
 	}()
 
@@ -247,7 +249,9 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 			queuedBytes = 0
 			return nil
 		}
-		if err := writevAll(fd, iovs); err != nil {
+		var err error
+		vecs, err = writevAll(fd, iovs, vecs)
+		if err != nil {
 			return err
 		}
 		w.size += int64(queuedBytes)

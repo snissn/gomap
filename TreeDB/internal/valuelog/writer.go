@@ -44,6 +44,7 @@ type Writer struct {
 	prefixBuf              []byte
 	rawScratch             []byte
 	rawWritevIovs          [][]byte
+	rawWritevVecs          []writevIovec
 	rawWritevMeta          []byte
 	encScratch             []byte
 	encLimiter             limitedSliceWriter
