@@ -33,7 +33,8 @@ on TreeDB with equivalent observable behavior for required call paths.
   full overlap, and boundary-touch spans for local SST, local external-file
   excise+ingest flow, and compat-local shared-meta path ingest.
 - `Checkpoint(destDir, ...)` directory export via TreeDB checkpoint plus recursive
-  filesystem copy; non-empty `CheckpointOption`s are rejected with `ErrCheckpointOptionUnsupported`.
+  filesystem copy; `WithFlushedWAL` is accepted, while non-empty
+  `WithRestrictToSpans` is rejected with `ErrCheckpointOptionUnsupported`.
 - `Flush()` enforces a durable boundary by checkpointing TreeDB and then issuing a
   blocking flush on the shadow Pebble engine for closer observable parity.
 - Operational/introspection APIs are exposed through delegation to the shadow
@@ -52,8 +53,9 @@ These are not currently provided and must not be assumed by consumers:
 - Full TreeDB-native operational parity (current operational APIs are delegated
   to the shadow Pebble engine).
 - Provider-backed `[]pebble.SharedSSTMeta` ingest path.
-- Full Pebble checkpoint option parity (`WithRestrictToSpans`, `WithFlushedWAL`, option-specific
-  semantics) is not implemented.
+- Full Pebble checkpoint option parity is not implemented:
+  `WithRestrictToSpans` remains unsupported and option-specific semantics beyond
+  accepting `WithFlushedWAL` are not implemented.
 
 ## Required Full-Feature End State
 

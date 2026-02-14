@@ -29,7 +29,7 @@ Legend:
 | `NewBatch` | full | Compatibility batch wrapper. | done |
 | `NewBatchWithSize` | partial | Hint accepted; not full Pebble memory model. | 2 |
 | `Flush` | partial | Flush now performs a TreeDB checkpoint and then a blocking shadow Pebble flush for closer observable parity; internal memtable/L0 semantics still differ. | 4 |
-| `Checkpoint(destDir, ...)` | partial | TreeDB checkpoint + filesystem copy; non-empty checkpoint options are explicitly rejected (`ErrCheckpointOptionUnsupported`) including `WithRestrictToSpans` and `WithFlushedWAL`. | 4 |
+| `Checkpoint(destDir, ...)` | partial | TreeDB checkpoint + filesystem copy; `WithFlushedWAL` is accepted (no-op under current architecture), while non-empty `WithRestrictToSpans` remains explicitly rejected with `ErrCheckpointOptionUnsupported`. | 4 |
 | `Ingest` | partial | Supports sstable adaptation + `.pcobj` fast path. | 3 |
 | `IngestWithStats` | partial | Coarse stats parity. | 3 |
 | `IngestExternalFiles` | partial | Local path adaptation only; provider/shared gaps. Differential tests cover local external file ingest after excise across disjoint/partial/full/boundary-touch spans. | 3 |

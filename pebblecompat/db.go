@@ -581,7 +581,11 @@ func (d *DB) Checkpoint(destDir string, opts ...pebble.CheckpointOption) error {
 	if err := d.ensureOpenLocked(); err != nil {
 		return err
 	}
-	if len(opts) > 0 {
+	decodedOpts, err := decodeCheckpointOptions(opts)
+	if err != nil {
+		return err
+	}
+	if decodedOpts.restrictToSpan {
 		return ErrCheckpointOptionUnsupported
 	}
 	if err := d.tree.Checkpoint(); err != nil {
