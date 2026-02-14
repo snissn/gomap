@@ -49,11 +49,11 @@ Legend:
 | `SSTables` | full | Delegates directly to Pebble shadow sstable metadata API. | 4 |
 | `ScanStatistics` | full | Delegates directly to Pebble shadow scan statistics API. | 4 |
 | `AsyncFlush` | full | Delegates directly to Pebble shadow async flush API. | 4 |
-| `Download` | partial | Delegates to shadow Pebble provider path. | 4 |
+| `Download` | full | Delegates directly to Pebble shadow download API. | 4 |
 | `ObjProvider` | full | Delegates directly to Pebble shadow object provider. | 3/4 |
 | `FormatMajorVersion` | full | Delegates directly to Pebble shadow format version API. | 4 |
 | `RatchetFormatMajorVersion` | full | Delegates directly to Pebble shadow format ratchet API. | 4 |
-| `SetCreatorID` | partial | Delegates to shadow Pebble provider config. | 4 |
+| `SetCreatorID` | full | Delegates directly to Pebble shadow creator-id API. | 4 |
 | `NewEventuallyFileOnlySnapshot` | full | Delegates directly to Pebble shadow EFOS API. | 4 |
 
 ## Batch Method Parity

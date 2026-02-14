@@ -98,9 +98,6 @@ func (d *DB) Download(ctx context.Context, spans []pebble.DownloadSpan) error {
 	if err := d.ensureShadowLocked(); err != nil {
 		return err
 	}
-	if len(spans) == 0 {
-		return nil
-	}
 	return d.shadow.Download(ctx, spans)
 }
 

@@ -654,14 +654,20 @@ func TestOperationalMethodSurfaces(t *testing.T) {
 		t.Fatal("timed out waiting for AsyncFlush")
 	}
 
-	require.NoError(t, db.Download(context.Background(), nil))
+	downloadErr := db.Download(context.Background(), nil)
+	if downloadErr != nil {
+		require.Contains(t, downloadErr.Error(), "not implemented")
+	}
 	require.NotNil(t, db.ObjProvider())
 
 	fmv := db.FormatMajorVersion()
 	require.NotZero(t, fmv)
 	require.NoError(t, db.RatchetFormatMajorVersion(fmv))
 
-	_ = db.SetCreatorID(1)
+	creatorErr := db.SetCreatorID(1)
+	if creatorErr != nil {
+		require.NotEmpty(t, creatorErr.Error())
+	}
 
 	efos := db.NewEventuallyFileOnlySnapshot(nil)
 	require.NotNil(t, efos)
@@ -798,6 +804,27 @@ func TestOperationalDelegationParityWithPebble(t *testing.T) {
 
 	require.NotNil(t, compatDB.ObjProvider())
 	require.NotNil(t, pebbleDB.ObjProvider())
+
+	cDownloadNilErr := compatDB.Download(context.Background(), nil)
+	pDownloadNilErr := pebbleDB.Download(context.Background(), nil)
+	require.Equal(t, pDownloadNilErr == nil, cDownloadNilErr == nil)
+	if pDownloadNilErr != nil {
+		require.Equal(t, pDownloadNilErr.Error(), cDownloadNilErr.Error())
+	}
+
+	cDownloadErr := compatDB.Download(context.Background(), []pebble.DownloadSpan{{StartKey: []byte("a"), EndKey: []byte("z")}})
+	pDownloadErr := pebbleDB.Download(context.Background(), []pebble.DownloadSpan{{StartKey: []byte("a"), EndKey: []byte("z")}})
+	require.Equal(t, pDownloadErr == nil, cDownloadErr == nil)
+	if pDownloadErr != nil {
+		require.Equal(t, pDownloadErr.Error(), cDownloadErr.Error())
+	}
+
+	cSetCreatorErr := compatDB.SetCreatorID(1)
+	pSetCreatorErr := pebbleDB.SetCreatorID(1)
+	require.Equal(t, pSetCreatorErr == nil, cSetCreatorErr == nil)
+	if pSetCreatorErr != nil {
+		require.Equal(t, pSetCreatorErr.Error(), cSetCreatorErr.Error())
+	}
 
 	cFMV := compatDB.FormatMajorVersion()
 	pFMV := pebbleDB.FormatMajorVersion()
