@@ -637,6 +637,28 @@ func (e *Encoder) Reset() {
 	e.restartsScratch = e.restartsScratch[:0]
 }
 
+// Trim drops oversized scratch buffers and resets retained buffers to zero len.
+func (e *Encoder) Trim(maxRawCap, maxEncCap, maxRestartsCap int) {
+	if e == nil {
+		return
+	}
+	if maxRawCap > 0 && cap(e.rawScratch) > maxRawCap {
+		e.rawScratch = nil
+	} else {
+		e.rawScratch = e.rawScratch[:0]
+	}
+	if maxEncCap > 0 && cap(e.encScratch) > maxEncCap {
+		e.encScratch = nil
+	} else {
+		e.encScratch = e.encScratch[:0]
+	}
+	if maxRestartsCap > 0 && cap(e.restartsScratch) > maxRestartsCap {
+		e.restartsScratch = nil
+	} else {
+		e.restartsScratch = e.restartsScratch[:0]
+	}
+}
+
 // EncodeSingle encodes one key/value record using reusable scratch buffers.
 func (e *Encoder) EncodeSingle(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
 	if e == nil {

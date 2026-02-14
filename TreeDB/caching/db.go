@@ -50,6 +50,7 @@ var valueLogKeyPool sync.Pool      // stores [][]byte
 var valueLogPtrPool sync.Pool      // stores []page.ValuePtr
 var outerLeafEntryPool sync.Pool   // stores []outerleaf.Entry
 var outerLeafArenaPool sync.Pool   // stores []byte
+var outerLeafEncoderPool sync.Pool // stores *outerleaf.Encoder
 var valueLogPreparedBodyPool sync.Pool
 var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
@@ -205,6 +206,23 @@ func putOuterLeafArena(buf []byte) {
 		return
 	}
 	outerLeafArenaPool.Put(buf[:0])
+}
+
+func getOuterLeafEncoder() *outerleaf.Encoder {
+	if v := outerLeafEncoderPool.Get(); v != nil {
+		if e, ok := v.(*outerleaf.Encoder); ok && e != nil {
+			return e
+		}
+	}
+	return &outerleaf.Encoder{}
+}
+
+func putOuterLeafEncoder(e *outerleaf.Encoder) {
+	if e == nil {
+		return
+	}
+	e.Trim(maxOuterLeafEncoderRawScratchCap, maxOuterLeafEncoderEncScratchCap, maxOuterLeafEncoderRestartsCap)
+	outerLeafEncoderPool.Put(e)
 }
 
 func getValueLogPtrs(n int) []page.ValuePtr {
@@ -383,6 +401,9 @@ const (
 	adaptiveWarmupBytes              = 16 * 1024 * 1024
 	maxMemtableBytesPerShard         = int64(3 << 30)
 	maxOuterLeafArenaPoolCap         = 16 << 20
+	maxOuterLeafEncoderRawScratchCap = 2 << 20
+	maxOuterLeafEncoderEncScratchCap = 2 << 20
+	maxOuterLeafEncoderRestartsCap   = 1 << 15
 	maxVlogPreparedBodyPoolCap       = 8 << 20
 	maxVlogPreparedFramesPoolCap     = 1 << 14
 	maxVlogDictPrepareResultsPoolCap = 1 << 14
@@ -725,7 +746,8 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 
 	entries := getOuterLeafEntriesCap(entriesCap)
 	defer putOuterLeafEntries(entries)
-	var outerEncoder outerleaf.Encoder
+	outerEncoder := getOuterLeafEncoder()
+	defer putOuterLeafEncoder(outerEncoder)
 	arenaCap := outerLeafEncodedHeaderBytes + len(keys)*8
 	for i := range keys {
 		arenaCap += len(keys[i]) + len(values[i])
@@ -749,7 +771,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 			if bytes.Compare(prevKey, key) >= 0 {
 				// Preserve correctness for non-monotonic batches by cutting blocks.
 				var err error
-				records, groups, arena, err = appendOuterLeafRecordGroup(db, &outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
+				records, groups, arena, err = appendOuterLeafRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -758,7 +780,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 				prevKey = nil
 			} else if estimated+entryEstimate > targetBytes {
 				var err error
-				records, groups, arena, err = appendOuterLeafRecordGroup(db, &outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
+				records, groups, arena, err = appendOuterLeafRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -776,7 +798,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	}
 	if len(entries) > 0 {
 		var err error
-		records, groups, arena, err = appendOuterLeafRecordGroup(db, &outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
+		records, groups, arena, err = appendOuterLeafRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
 		if err != nil {
 			return nil, nil, nil, err
 		}
