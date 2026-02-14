@@ -134,12 +134,12 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *t
 	dir := t.TempDir()
 
 	d, err := Open(Options{
-		Dir:                        dir,
-		KeepRecent:                 1,
-		LeafFillTargetPPM:          850_000,
-		InternalFillTargetPPM:      900_000,
-		MaintenanceOpsPerCoalesce:  -1,
-		IndexOuterLeafMode:         IndexOuterLeafModeV2BlockPtr,
+		Dir:                       dir,
+		KeepRecent:                1,
+		LeafFillTargetPPM:         850_000,
+		InternalFillTargetPPM:     900_000,
+		MaintenanceOpsPerCoalesce: -1,
+		IndexOuterLeafMode:        IndexOuterLeafModeV2BlockPtr,
 		ValueLog: ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           ValueLogBlockLZ4,
