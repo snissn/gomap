@@ -202,15 +202,22 @@ func (d *DB) IngestWithStats(paths []string) (pebble.IngestOperationStats, error
 
 // IngestExternalFiles ingests external descriptors when ObjName is a local path.
 func (d *DB) IngestExternalFiles(external []pebble.ExternalFile) (pebble.IngestOperationStats, error) {
+	for i := range external {
+		ef := external[i]
+		if ef.Locator != "" {
+			return pebble.IngestOperationStats{}, ErrExternalFileUnsupported
+		}
+		if !ef.HasPointKey && !ef.HasRangeKey {
+			return pebble.IngestOperationStats{}, fmt.Errorf("pebblecompat: external file has neither point nor range keys")
+		}
+		if ef.ObjName == "" {
+			return pebble.IngestOperationStats{}, ErrExternalFileUnsupported
+		}
+	}
+
 	var stats pebble.IngestOperationStats
 	for i := range external {
 		ef := external[i]
-		if !ef.HasPointKey && !ef.HasRangeKey {
-			return stats, fmt.Errorf("pebblecompat: external file has neither point nor range keys")
-		}
-		if ef.ObjName == "" {
-			return stats, ErrExternalFileUnsupported
-		}
 		if isExportObjectPath(ef.ObjName) {
 			objStats, err := d.IngestSharedObject(ef.ObjName, pebble.NoSync)
 			if err != nil {

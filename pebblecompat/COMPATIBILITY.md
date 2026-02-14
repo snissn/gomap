@@ -27,7 +27,8 @@ on TreeDB with equivalent observable behavior for required call paths.
   an in-memory Pebble shadow mirror kept in sync with writes.
 - Ingest support for:
   - local sstable adaptation,
-  - local external-file adaptation,
+  - local external-file adaptation (descriptor prevalidation before mutation;
+    non-local `Locator` descriptors rejected with `ErrExternalFileUnsupported`),
   - TreeDB-native shared object format (`.pcobj`) export/import.
 - `IngestAndExcise` supports mixed local SST, `.pcobj`, and compat-local
   shared-meta path inputs in one call, with excise applied once and object-backed

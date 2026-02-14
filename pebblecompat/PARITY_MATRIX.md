@@ -32,7 +32,7 @@ Legend:
 | `Checkpoint(destDir, ...)` | partial | TreeDB checkpoint + filesystem copy; `WithFlushedWAL` is accepted (no-op under current architecture), while non-empty `WithRestrictToSpans` remains explicitly rejected with `ErrCheckpointOptionUnsupported`. | 4 |
 | `Ingest` | partial | Supports sstable adaptation + `.pcobj` fast path. | 3 |
 | `IngestWithStats` | partial | Coarse stats parity. | 3 |
-| `IngestExternalFiles` | partial | Local path adaptation only; provider/shared gaps. Differential tests cover local external file ingest after excise across disjoint/partial/full/boundary-touch spans. | 3 |
+| `IngestExternalFiles` | partial | Local path adaptation only; provider/shared gaps. Descriptors are prevalidated before mutation, and non-local descriptors (`Locator != \"\"`) are explicitly rejected with `ErrExternalFileUnsupported`. Differential tests cover local external file ingest after excise across disjoint/partial/full/boundary-touch spans. | 3 |
 | `IngestAndExcise` | partial | Supports local SST paths, `.pcobj` paths, and compat-local `SharedSSTMeta` backings in one call. Excise is applied once and then all object-backed inputs are ingested before SST inputs deterministically; provider-backed shared ingest remains unsupported. Differential overlap-matrix tests cover disjoint/partial/full/boundary-touch spans for local SST and shared-meta paths. | 3 |
 | `ScanInternal` | partial | Compatibility reconstruction, not native Pebble LSM internals. | 1/3 |
 | `ExportSharedObject` (compat extension) | full | TreeDB-native immutable transfer object. | done |

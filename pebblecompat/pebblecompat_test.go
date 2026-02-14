@@ -669,6 +669,60 @@ func TestIngestExternalFiles_LocalObjName(t *testing.T) {
 	require.Nil(t, closer)
 }
 
+func TestIngestExternalFiles_UnsupportedLocator(t *testing.T) {
+	dir := t.TempDir()
+	sstPath := filepath.Join(dir, "test.sst")
+	require.NoError(t, writeTestSST(sstPath))
+
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	_, err = db.IngestExternalFiles([]pebble.ExternalFile{
+		{
+			Locator:         "remote-locator",
+			ObjName:         sstPath,
+			SmallestUserKey: []byte("a"),
+			LargestUserKey:  []byte("z"),
+			HasPointKey:     true,
+		},
+	})
+	require.ErrorIs(t, err, ErrExternalFileUnsupported)
+}
+
+func TestIngestExternalFiles_PrevalidationBeforeMutation(t *testing.T) {
+	dir := t.TempDir()
+	sstPath := filepath.Join(dir, "test.sst")
+	require.NoError(t, writeTestSST(sstPath))
+
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.Set([]byte("seed"), []byte("value"), pebble.NoSync))
+	before := collectVisibleMap(t, db)
+
+	_, err = db.IngestExternalFiles([]pebble.ExternalFile{
+		{
+			ObjName:         sstPath,
+			SmallestUserKey: []byte("a"),
+			LargestUserKey:  []byte("z"),
+			HasPointKey:     true,
+		},
+		{
+			Locator:         "remote-locator",
+			ObjName:         sstPath,
+			SmallestUserKey: []byte("a"),
+			LargestUserKey:  []byte("z"),
+			HasPointKey:     true,
+		},
+	})
+	require.ErrorIs(t, err, ErrExternalFileUnsupported)
+
+	after := collectVisibleMap(t, db)
+	require.Equal(t, before, after)
+}
+
 func TestScanInternalRangeKeyAndRangeDeleteParity(t *testing.T) {
 	dir := t.TempDir()
 
