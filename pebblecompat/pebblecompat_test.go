@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/objstorage/objstorageprovider"
@@ -605,4 +606,82 @@ func TestBatchCommitStatsSurface(t *testing.T) {
 	require.NoError(t, b.Commit(pebble.NoSync))
 
 	_ = b.CommitStats()
+}
+
+func TestOperationalMethodSurfaces(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, db.Set([]byte("b"), []byte("2"), pebble.NoSync))
+
+	require.NoError(t, db.Compact([]byte("a"), []byte("z"), false))
+	require.NotNil(t, db.Metrics())
+
+	du, err := db.EstimateDiskUsage([]byte("a"), []byte("z"))
+	require.NoError(t, err)
+	require.NotZero(t, du)
+
+	total, remote, external, err := db.EstimateDiskUsageByBackingType([]byte("a"), []byte("z"))
+	require.NoError(t, err)
+	require.Equal(t, du, total)
+	require.Zero(t, remote)
+	require.Zero(t, external)
+
+	_, err = db.SSTables()
+	require.NoError(t, err)
+
+	_, err = db.ScanStatistics(context.Background(), []byte("a"), []byte("z"), pebble.ScanStatisticsOptions{})
+	require.NoError(t, err)
+
+	ch, err := db.AsyncFlush()
+	require.NoError(t, err)
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for AsyncFlush")
+	}
+
+	require.NoError(t, db.Download(context.Background(), nil))
+	require.NotNil(t, db.ObjProvider())
+
+	fmv := db.FormatMajorVersion()
+	require.NotZero(t, fmv)
+	require.NoError(t, db.RatchetFormatMajorVersion(fmv))
+
+	_ = db.SetCreatorID(1)
+
+	efos := db.NewEventuallyFileOnlySnapshot(nil)
+	require.NotNil(t, efos)
+	require.NoError(t, efos.Close())
+}
+
+func TestOperationalMethodsClosed(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	require.NoError(t, db.Close())
+
+	require.ErrorIs(t, db.Compact([]byte("a"), []byte("z"), false), ErrClosed)
+	_, err = db.EstimateDiskUsage([]byte("a"), []byte("z"))
+	require.ErrorIs(t, err, ErrClosed)
+	_, _, _, err = db.EstimateDiskUsageByBackingType([]byte("a"), []byte("z"))
+	require.ErrorIs(t, err, ErrClosed)
+	_, err = db.SSTables()
+	require.ErrorIs(t, err, ErrClosed)
+	_, err = db.ScanStatistics(context.Background(), nil, nil, pebble.ScanStatisticsOptions{})
+	require.ErrorIs(t, err, ErrClosed)
+	flushCh, err := db.AsyncFlush()
+	require.ErrorIs(t, err, ErrClosed)
+	require.Nil(t, flushCh)
+	require.ErrorIs(t, db.Download(context.Background(), nil), ErrClosed)
+	require.ErrorIs(t, db.RatchetFormatMajorVersion(pebble.FormatRangeKeys), ErrClosed)
+	require.ErrorIs(t, db.SetCreatorID(1), ErrClosed)
+
+	require.NotNil(t, db.Metrics())
+	require.Nil(t, db.ObjProvider())
+	require.Equal(t, pebble.FormatMajorVersion(0), db.FormatMajorVersion())
+	require.Nil(t, db.NewEventuallyFileOnlySnapshot(nil))
 }

@@ -28,6 +28,9 @@ on TreeDB with equivalent observable behavior for required call paths.
   existing range fragments.
 - `Checkpoint(destDir, ...)` directory export via TreeDB checkpoint plus recursive
   filesystem copy.
+- Operational/introspection APIs are exposed through delegation to the shadow
+  Pebble engine (`Metrics`, `SSTables`, `EstimateDiskUsage*`, `ScanStatistics`,
+  `Compact`, `AsyncFlush`, `Download`, format/version APIs, provider hooks).
 
 ## Hard Non-Goals (Current State)
 
@@ -38,8 +41,8 @@ These are not currently provided and must not be assumed by consumers:
 - Full internal-sequence iterator parity with Pebble internals (the current
   shadow mirror provides user-visible iterator/snapshot semantics, not full
   internal key/sequence identity).
-- Full operational API parity (`Metrics`, `SSTables`, `EstimateDiskUsage*`,
-  `ScanStatistics`, `Compact`, `AsyncFlush`, etc).
+- Full TreeDB-native operational parity (current operational APIs are delegated
+  to the shadow Pebble engine).
 - Provider-backed `[]pebble.SharedSSTMeta` ingest path.
 - Full Pebble checkpoint option parity (`WithRestrictToSpans`, option-specific
   semantics) is not implemented.

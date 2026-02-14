@@ -42,19 +42,19 @@ Legend:
 | `NewSnapshot` | partial | Exposed via Pebble shadow mirror; sequence identity differs from Pebble internals. | 1 |
 | `NewIndexedBatch` | partial | Indexed read semantics via Pebble shadow mirror. | 1 |
 | `NewIndexedBatchWithSize` | partial | Indexed read semantics via Pebble shadow mirror. | 1 |
-| `Compact` | missing | Operational API gap. | 4 |
-| `Metrics` | missing | Operational API gap. | 4 |
-| `EstimateDiskUsage` | missing | Operational API gap. | 4 |
-| `EstimateDiskUsageByBackingType` | missing | Operational API gap. | 4 |
-| `SSTables` | missing | Operational/API introspection gap. | 4 |
-| `ScanStatistics` | missing | Operational/API introspection gap. | 4 |
-| `AsyncFlush` | missing | Operational API gap. | 4 |
-| `Download` | missing | Shared-object/provider API gap. | 4 |
-| `ObjProvider` | missing | Provider-backed object integration gap. | 3/4 |
-| `FormatMajorVersion` | missing | Pebble format lifecycle API gap. | 4 |
-| `RatchetFormatMajorVersion` | missing | Pebble format lifecycle API gap. | 4 |
-| `SetCreatorID` | missing | Shared object ecosystem API gap. | 4 |
-| `NewEventuallyFileOnlySnapshot` | missing | Advanced snapshot API gap. | 4 |
+| `Compact` | partial | Delegates to shadow Pebble compaction (not TreeDB-native compaction). | 4 |
+| `Metrics` | partial | Delegates to shadow Pebble metrics. | 4 |
+| `EstimateDiskUsage` | partial | Delegates to shadow Pebble estimates. | 4 |
+| `EstimateDiskUsageByBackingType` | partial | Delegates to shadow Pebble estimates. | 4 |
+| `SSTables` | partial | Delegates to shadow Pebble metadata. | 4 |
+| `ScanStatistics` | partial | Delegates to shadow Pebble statistics. | 4 |
+| `AsyncFlush` | partial | Delegates to shadow Pebble async flush. | 4 |
+| `Download` | partial | Delegates to shadow Pebble provider path. | 4 |
+| `ObjProvider` | partial | Exposes shadow Pebble obj provider. | 3/4 |
+| `FormatMajorVersion` | partial | Delegates to shadow Pebble format state. | 4 |
+| `RatchetFormatMajorVersion` | partial | Delegates to shadow Pebble ratchet path. | 4 |
+| `SetCreatorID` | partial | Delegates to shadow Pebble provider config. | 4 |
+| `NewEventuallyFileOnlySnapshot` | partial | Delegates to shadow Pebble EFOS. | 4 |
 
 ## Batch Method Parity
 
