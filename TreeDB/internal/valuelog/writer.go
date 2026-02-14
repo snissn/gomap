@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/compress/zstd"
@@ -46,6 +47,13 @@ type Writer struct {
 	rawWritevIovs          [][]byte
 	rawWritevVecs          []writevIovec
 	rawWritevMeta          []byte
+	rawWritevSyscalls      atomic.Uint64
+	rawWritevBytes         atomic.Uint64
+	rawWritevIovecs        atomic.Uint64
+	rawWritevFlushes       atomic.Uint64
+	rawWriteSyscalls       atomic.Uint64
+	rawWriteBytes          atomic.Uint64
+	rawWriteCalls          atomic.Uint64
 	encScratch             []byte
 	encLimiter             limitedSliceWriter
 	blockScratch           []byte
@@ -85,11 +93,17 @@ func (w *limitedSliceWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func writeAllToFile(f *os.File, buf []byte) error {
+func (w *Writer) writeAllToFile(buf []byte) error {
+	if w == nil || w.f == nil {
+		return errors.New("valuelog: nil file writer")
+	}
+	w.rawWriteCalls.Add(1)
 	written := 0
 	for written < len(buf) {
-		n, err := f.Write(buf[written:])
+		w.rawWriteSyscalls.Add(1)
+		n, err := w.f.Write(buf[written:])
 		if n > 0 {
+			w.rawWriteBytes.Add(uint64(n))
 			written += n
 		}
 		if err != nil {
@@ -114,7 +128,7 @@ func (w *Writer) flushAppendBuf() error {
 		w.appendBuf = w.appendBuf[:0]
 		return err
 	}
-	if err := writeAllToFile(w.f, w.appendBuf); err != nil {
+	if err := w.writeAllToFile(w.appendBuf); err != nil {
 		return err
 	}
 	w.appendBuf = w.appendBuf[:0]
@@ -148,22 +162,67 @@ func (w *Writer) writeBytes(buf []byte) error {
 		if err := w.flushAppendBuf(); err != nil {
 			return err
 		}
-		return writeAllToFile(w.f, buf)
+		return w.writeAllToFile(buf)
 	}
 	if len(w.appendBuf) == 0 && len(buf) >= directThreshold {
-		return writeAllToFile(w.f, buf)
+		return w.writeAllToFile(buf)
 	}
 	if len(w.appendBuf)+len(buf) > max {
 		if err := w.flushAppendBuf(); err != nil {
 			return err
 		}
 		if len(buf) >= directThreshold {
-			return writeAllToFile(w.f, buf)
+			return w.writeAllToFile(buf)
 		}
 	}
 	w.appendBuf = append(w.appendBuf, buf...)
 	if len(w.appendBuf) >= max {
 		return w.flushAppendBuf()
+	}
+	return nil
+}
+
+// writeBytesBuffered appends bytes through appendBuf even for medium/large
+// payloads, avoiding direct-write threshold bypass so callers can coalesce
+// multiple records into fewer large writes.
+func (w *Writer) writeBytesBuffered(buf []byte) error {
+	if w == nil {
+		return errors.New("valuelog: nil writer")
+	}
+	if len(buf) == 0 {
+		return nil
+	}
+	if w.f == nil {
+		_, err := w.bw.Write(buf)
+		return err
+	}
+
+	max := w.appendMax
+	if max <= 0 {
+		max = defaultBufferSize
+	}
+	for len(buf) > 0 {
+		if len(w.appendBuf) >= max {
+			if err := w.flushAppendBuf(); err != nil {
+				return err
+			}
+		}
+		avail := max - len(w.appendBuf)
+		if avail <= 0 {
+			continue
+		}
+		if len(buf) <= avail {
+			w.appendBuf = append(w.appendBuf, buf...)
+			if len(w.appendBuf) >= max {
+				return w.flushAppendBuf()
+			}
+			return nil
+		}
+		w.appendBuf = append(w.appendBuf, buf[:avail]...)
+		buf = buf[avail:]
+		if err := w.flushAppendBuf(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

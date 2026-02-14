@@ -1265,6 +1265,100 @@ func TestCachingDB_FlushFenceModeDeferredBatchWritesRegroup(t *testing.T) {
 	}
 }
 
+func TestCachingDB_FlushFenceModeDeferredBatchWritesImmediateRead(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    4,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 5000
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	b := cache.NewBatch()
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%08d", i))
+		if err := b.Set(key, valueFor(i)); err != nil {
+			t.Fatalf("Set(%s): %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+
+	// Deferred fence mode should keep mutable values inline before flush.
+	for i := range cache.mutableShards {
+		shard := &cache.mutableShards[i]
+		shard.mu.Lock()
+		it := shard.mem.NewIterator(nil, nil)
+		if it.Valid() {
+			_, _, flags := it.UnsafeEntry()
+			if flags&node.FlagPointer != 0 {
+				_ = it.Close()
+				shard.mu.Unlock()
+				t.Fatalf("expected inline mutable entry in deferred fence mode (shard=%d)", i)
+			}
+		}
+		_ = it.Close()
+		shard.mu.Unlock()
+	}
+
+	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
+		key := []byte(fmt.Sprintf("k%08d", i))
+		got, err := cache.Get(key)
+		if err != nil {
+			t.Fatalf("cache Get(%s): %v", key, err)
+		}
+		if !bytes.Equal(got, valueFor(i)) {
+			t.Fatalf("cache value mismatch for %s", key)
+		}
+	}
+
+	it, err := cache.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("Iterator: %v", err)
+	}
+	count := 0
+	for it.Valid() {
+		count++
+		it.Next()
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Iterator close: %v", err)
+	}
+	if count != totalKeys {
+		t.Fatalf("iterator count=%d want=%d", count, totalKeys)
+	}
+}
+
 func TestCachingDB_CloseDeferredValueLogDoesNotFail(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})

@@ -825,14 +825,40 @@ func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, 
 	return dictByID[dictID]
 }
 
-func (db *DB) deferredValueLogEnabled() bool {
+func (db *DB) useFenceV2DeferredFlushPath() bool {
 	if db == nil {
 		return false
 	}
+	return db.disableJournal && db.outerLeafFenceV2Enabled() && db.valueLogEnabled() && db.allowValueLogPointers()
+}
+
+func (db *DB) deferredValueLogEnabled() bool {
 	// Fence-pointer outer-leaf mode benefits from flush-time regrouping when WAL
 	// is disabled: singleton writes can coalesce into larger outer blocks before
 	// value-log append, reducing index pointer fanout.
-	return db.disableJournal && db.outerLeafFenceV2Enabled() && db.valueLogEnabled() && db.allowValueLogPointers()
+	return db.useFenceV2DeferredFlushPath()
+}
+
+func (db *DB) shouldFlushDeferredValueLog(writeMode vlogCompressionWriteMode, records []valuelog.Record) bool {
+	if !db.deferredValueLogEnabled() {
+		return false
+	}
+	// For v2 fence-pointer raw outer-leaf payloads, keep appends buffered across
+	// calls; readers flush on demand via flushValueLogForPtr.
+	if db.outerLeafFenceV2Enabled() && writeMode == vlogWriteOff && allOuterLeafRecordValues(records) {
+		return false
+	}
+	return true
+}
+
+func (db *DB) shouldFlushDeferredValueLogValue(writeMode vlogCompressionWriteMode, value []byte) bool {
+	if !db.deferredValueLogEnabled() {
+		return false
+	}
+	if db.outerLeafFenceV2Enabled() && writeMode == vlogWriteOff && outerleaf.HasMagic(value) {
+		return false
+	}
+	return true
 }
 
 func (db *DB) walUsesValueLog() bool {
@@ -991,6 +1017,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	if !db.allowValueLogPointers() {
 		return ops, nil
 	}
+	fenceMode := db.outerLeafFenceV2Enabled()
 
 	eligible := getValueLogEligible(len(ops))
 	defer putValueLogEligible(eligible)
@@ -1044,7 +1071,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		records[i].RID = startRID + uint64(i)
 	}
 
-	durability := journalDurabilityFlush
+	durability := journalDurabilityNone
 	if sync {
 		durability = journalDurabilitySync
 	}
@@ -1061,6 +1088,16 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		return nil, fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(ptrs), len(records))
 	}
 
+	var eligibleByIdx []bool
+	if fenceMode {
+		eligibleByIdx = make([]bool, len(ops))
+		for _, idx := range eligible {
+			if idx >= 0 && idx < len(eligibleByIdx) {
+				eligibleByIdx[idx] = true
+			}
+		}
+	}
+
 	for i := range groups {
 		ptr := ptrs[i]
 		group := groups[i]
@@ -1070,6 +1107,16 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 			putOuterLeafArena(outerArena)
 			return nil, errors.New("cachingdb: deferred value-log group out of range")
 		}
+		if fenceMode {
+			if group.start < group.end {
+				idx := eligible[group.start]
+				op := &ops[idx]
+				op.ValuePtr = ptr
+				op.IsPtr = true
+				op.Value = nil
+			}
+			continue
+		}
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
 			idx := eligible[srcPos]
 			op := &ops[idx]
@@ -1078,6 +1125,20 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 			op.Value = nil
 		}
 	}
+	if fenceMode && len(eligibleByIdx) > 0 {
+		dst := 0
+		for i := range ops {
+			if eligibleByIdx[i] && !ops[i].IsPtr {
+				// Fence mode keeps one key per grouped block.
+				continue
+			}
+			if dst != i {
+				ops[dst] = ops[i]
+			}
+			dst++
+		}
+		ops = ops[:dst]
+	}
 	putValueLogPtrs(ptrs)
 	putValueLogRecordsNoClear(records)
 	putOuterLeafArena(outerArena)
@@ -1085,6 +1146,9 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	retainPath := db.currentValueLogPath(lane)
 	if retainPath != "" {
 		db.markValueLogRetain(retainPath)
+	}
+	if durability == journalDurabilityNone {
+		db.backendReadVlogDirtySeq.Add(1)
 	}
 	return ops, nil
 }
@@ -1228,6 +1292,9 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	if len(ptrKeys) != len(ptrVals) {
 		return errors.New("cachingdb: internal deferred value-log mismatch")
 	}
+	if fenceMode {
+		db.deferredFenceCandidateKeys.Add(uint64(len(ptrKeys)))
+	}
 	records, groups, outerArena, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
 	if err != nil {
 		return err
@@ -1272,6 +1339,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	}
 	defer putValueLogPtrs(vlogPtrs)
 
+	emittedGroups := uint64(0)
 	for i := range groups {
 		ptr := vlogPtrs[i]
 		group := groups[i]
@@ -1285,6 +1353,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			if group.start >= group.end {
 				continue
 			}
+			emittedGroups++
 			group.end = group.start + 1
 		}
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
@@ -1301,6 +1370,9 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 				return errors.New("cachingdb: backend batch missing SetPointer")
 			}
 		}
+	}
+	if fenceMode && emittedGroups > 0 {
+		db.deferredFenceEmittedGroups.Add(emittedGroups)
 	}
 
 	retainPath := db.currentValueLogPath(lane)
@@ -1451,6 +1523,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if len(ptrKeys) != len(ptrVals) {
 			return errors.New("cachingdb: deferred inline pointer grouping mismatch")
 		}
+		if fenceMode {
+			db.deferredFenceCandidateKeys.Add(uint64(len(ptrKeys)))
+		}
 		records, groups, outerArena, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
 		if err != nil {
 			return err
@@ -1486,6 +1561,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		}
 		defer putValueLogPtrs(vlogPtrs)
 
+		emittedGroups := uint64(0)
 		for i := range groups {
 			ptr := vlogPtrs[i]
 			group := groups[i]
@@ -1496,6 +1572,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				if group.start >= group.end {
 					continue
 				}
+				emittedGroups++
 				group.end = group.start + 1
 			}
 			for srcPos := group.start; srcPos < group.end; srcPos++ {
@@ -1503,6 +1580,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					return err
 				}
 			}
+		}
+		if fenceMode && emittedGroups > 0 {
+			db.deferredFenceEmittedGroups.Add(emittedGroups)
 		}
 		ptrKeys = ptrKeys[:0]
 		ptrVals = ptrVals[:0]
@@ -1763,7 +1843,7 @@ func (db *DB) readValueLog(key []byte, ptr page.ValuePtr) ([]byte, error) {
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return nil, fmt.Errorf("cachingdb: non value-log pointer %#x", ptr.FileID)
 	}
-	if db.memtableValueLogPointers && db.valueLogEnabled() {
+	if db.valueLogEnabled() {
 		if err := db.flushValueLogForPtr(ptr); err != nil {
 			return nil, err
 		}
@@ -1782,7 +1862,7 @@ func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]b
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return nil, fmt.Errorf("cachingdb: non value-log pointer %#x", ptr.FileID)
 	}
-	if db.memtableValueLogPointers && db.valueLogEnabled() {
+	if db.valueLogEnabled() {
 		if err := db.flushValueLogForPtr(ptr); err != nil {
 			return nil, err
 		}
@@ -1848,6 +1928,21 @@ func (db *DB) flushValueLog(laneIDs ...int) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func (db *DB) flushDeferredValueLogForBackendRead() error {
+	if db == nil || !db.deferredValueLogEnabled() || !db.valueLogEnabled() {
+		return nil
+	}
+	dirtySeq := db.backendReadVlogDirtySeq.Load()
+	if dirtySeq == 0 || dirtySeq == db.backendReadVlogFlushedSeq.Load() {
+		return nil
+	}
+	if err := db.flushValueLog(); err != nil {
+		return err
+	}
+	db.backendReadVlogFlushedSeq.Store(dirtySeq)
 	return nil
 }
 
@@ -2631,6 +2726,10 @@ type DB struct {
 	valueLogReader               *valuelog.Manager
 	valueLogMu                   sync.Mutex
 	valueLogRetain               map[string]struct{}
+	backendReadVlogDirtySeq      atomic.Uint64
+	backendReadVlogFlushedSeq    atomic.Uint64
+	deferredFenceCandidateKeys   atomic.Uint64
+	deferredFenceEmittedGroups   atomic.Uint64
 	valueLogWarned               atomic.Bool
 	valueLogHardCapWarned        atomic.Bool
 	valueLogRetainedClosedBytes  atomic.Int64
@@ -5656,6 +5755,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	}
 	caps := l.vlogCaps
 	rawWriterInto := caps.rawInto
+	rawBufferedInto := caps.rawBuf
 	policySetter := caps.keep
 	preparedAppender := caps.prepared
 	startSize = w.Size()
@@ -5706,8 +5806,19 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				if err == nil {
 					framesTotal++
 				}
-			} else if plan.writeMode == vlogWriteOff && rawWriterInto != nil {
-				_, stats, batchErr := rawWriterInto.AppendRawFramesWritevInto(segment, plan.k, ptrs[plan.start:plan.end])
+			} else if plan.writeMode == vlogWriteOff && (rawWriterInto != nil || rawBufferedInto != nil) {
+				useBufferedRaw := rawBufferedInto != nil && db.outerLeafV2Enabled() && allOuterLeafRecordValues(segment)
+				var (
+					stats    valuelog.FrameStats
+					batchErr error
+				)
+				if useBufferedRaw {
+					_, stats, batchErr = rawBufferedInto.AppendRawFramesBufferedInto(segment, plan.k, ptrs[plan.start:plan.end])
+				} else if rawWriterInto != nil {
+					_, stats, batchErr = rawWriterInto.AppendRawFramesWritevInto(segment, plan.k, ptrs[plan.start:plan.end])
+				} else {
+					batchErr = errors.New("cachingdb: raw grouped append writer unavailable")
+				}
 				err = batchErr
 				if err == nil && plan.k > 0 {
 					framesTotal += (len(segment) + plan.k - 1) / plan.k
@@ -5862,6 +5973,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		}
 	}
 
+	deferredFlushed := false
 	if err == nil {
 		switch {
 		case needSync:
@@ -5869,8 +5981,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		case needFlush:
 			err = w.Flush()
 		default:
-			if db.deferredValueLogEnabled() {
+			if db.shouldFlushDeferredValueLog(vlogWriteOff, records) {
 				err = w.Flush()
+				deferredFlushed = err == nil
 			}
 		}
 	}
@@ -5878,7 +5991,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		totalBytes = w.Size() - startSize
 	}
 	if err == nil {
-		if needSync || needFlush || db.deferredValueLogEnabled() {
+		if needSync || needFlush || deferredFlushed {
 			l.vlogDirty.Store(false)
 		} else if totalBytes > 0 {
 			l.vlogDirty.Store(true)
@@ -6573,10 +6686,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto
 	rawWriterInto := caps.rawInto
+	rawBufferedInto := caps.rawBuf
 	preparedAppender := caps.prepared
 	hasStats := statsWriter != nil
 	hasInto := statsWriterInto != nil
 	hasRawInto := rawWriterInto != nil
+	hasRawBufferedInto := rawBufferedInto != nil
 	usePreparedDictFrames := dictID != 0 && len(dict) > 0 && preparedAppender != nil && len(preparedDictFrames) > 0
 	segmentStartSize := w.Size()
 
@@ -6594,7 +6709,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	encodeRawBytes := 0
 	rawBatchUsed := false
 	durableBoundary := false
-	if dictID == 0 && hasRawInto && finalWriteMode != vlogWriteBlock && len(records) > 1 {
+	if dictID == 0 && (hasRawInto || hasRawBufferedInto) && finalWriteMode != vlogWriteBlock && len(records) > 1 {
 		if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 {
 			// Ensure the entire raw batch fits within the packed-offset cap so
 			// AppendRawFramesWritevInto never returns pointers with out-of-range
@@ -6624,9 +6739,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 				statsWriter = caps.stats
 				statsWriterInto = caps.statsInto
 				rawWriterInto = caps.rawInto
+				rawBufferedInto = caps.rawBuf
 				hasStats = statsWriter != nil
 				hasInto = statsWriterInto != nil
 				hasRawInto = rawWriterInto != nil
+				hasRawBufferedInto = rawBufferedInto != nil
 				segmentStartSize = w.Size()
 			}
 		}
@@ -6660,9 +6777,19 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	if err == nil && !rawBatchUsed {
-		if dictID == 0 && hasRawInto && finalWriteMode != vlogWriteBlock && len(records) > 1 {
+		useRawBatch := dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
+		preferBufferedRaw := useRawBatch && autoOuterLeafPayloads && hasRawBufferedInto
+		if useRawBatch && (preferBufferedRaw || hasRawInto) {
 			ptrs = getValueLogPtrs(len(records))
-			_, stats, batchErr := rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
+			var (
+				stats    valuelog.FrameStats
+				batchErr error
+			)
+			if preferBufferedRaw {
+				_, stats, batchErr = rawBufferedInto.AppendRawFramesBufferedInto(records, k, ptrs)
+			} else {
+				_, stats, batchErr = rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
+			}
 			if batchErr != nil {
 				err = batchErr
 				putValueLogPtrs(ptrs)
@@ -6801,7 +6928,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			err = w.Sync()
 			durableBoundary = err == nil
 		default:
-			if db.deferredValueLogEnabled() {
+			if db.shouldFlushDeferredValueLog(finalWriteMode, records) {
 				// In deferred value-log mode, the index will publish pointers to
 				// value-log records during the flush/commit path. Ensure the value-log
 				// bytes are visible to readers even when durability is "none".
@@ -7134,7 +7261,7 @@ func (db *DB) appendValueLogOneWithKey(l *lane, dictID uint64, dict []byte, rid 
 					err = w.Flush()
 					durableBoundary = err == nil
 				default:
-					if db.deferredValueLogEnabled() {
+					if db.shouldFlushDeferredValueLogValue(finalWriteMode, value) {
 						err = w.Flush()
 						durableBoundary = err == nil
 					}
@@ -7322,7 +7449,7 @@ func (db *DB) appendValueLogOneWithKey(l *lane, dictID uint64, dict []byte, rid 
 			err = w.Sync()
 			durableBoundary = err == nil
 		default:
-			if db.deferredValueLogEnabled() {
+			if db.shouldFlushDeferredValueLogValue(finalWriteMode, value) {
 				err = w.Flush()
 				durableBoundary = err == nil
 			}
@@ -11488,6 +11615,9 @@ type backendManyGetter interface {
 }
 
 func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
+	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+		return nil, err
+	}
 	if mg, ok := db.backend.(backendManyGetter); ok {
 		return mg.GetMany(keys)
 	}
@@ -11510,6 +11640,9 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	if db.canBypassMemtableRead(db.memtables.Load(), key) {
+		if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+			return nil, err
+		}
 		return db.backend.Get(key)
 	}
 	val, found, err := db.getMemtable(key)
@@ -11523,6 +11656,9 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		cpy := make([]byte, len(val))
 		copy(cpy, val)
 		return cpy, nil
+	}
+	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+		return nil, err
 	}
 	return db.backend.Get(key)
 }
@@ -11591,6 +11727,9 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	}
 
 	// 2. Backend
+	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+		return dst, err
+	}
 	return db.backend.GetAppend(key, dst)
 }
 
@@ -11681,6 +11820,13 @@ func (db *DB) Stats() map[string]string {
 	var queueDepthMax uint64
 	var queueDepthLast uint64
 	var queueDepthPositiveRunMaxNs uint64
+	var rawWritevSyscalls uint64
+	var rawWritevBytes uint64
+	var rawWritevIovecs uint64
+	var rawWritevFlushes uint64
+	var rawWriteSyscalls uint64
+	var rawWriteBytes uint64
+	var rawWriteCalls uint64
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		walCurrentBytes += l.walLiveBytes.Load()
@@ -11705,6 +11851,23 @@ func (db *DB) Stats() map[string]string {
 		queueDepthLast += depthSnap.Last
 		if depthSnap.PositiveRunMaxNs > queueDepthPositiveRunMaxNs {
 			queueDepthPositiveRunMaxNs = depthSnap.PositiveRunMaxNs
+		}
+		if snapper, ok := any(l.vlog).(interface {
+			RawWritevStats() valuelog.RawWritevStats
+		}); ok {
+			snap := snapper.RawWritevStats()
+			rawWritevSyscalls += snap.Syscalls
+			rawWritevBytes += snap.Bytes
+			rawWritevIovecs += snap.Iovecs
+			rawWritevFlushes += snap.Flushes
+		}
+		if snapper, ok := any(l.vlog).(interface {
+			RawWriteStats() valuelog.RawWriteStats
+		}); ok {
+			snap := snapper.RawWriteStats()
+			rawWriteSyscalls += snap.Syscalls
+			rawWriteBytes += snap.Bytes
+			rawWriteCalls += snap.Calls
 		}
 
 		laneLagP99 := estimateVlogQueueLagPercentile(lagSnap.Buckets, lagSnap.Count, 0.99)
@@ -11795,6 +11958,42 @@ func (db *DB) Stats() map[string]string {
 	vlogSegments, vlogBytes := db.valueLogRetainedStats()
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.cache.vlog_writev.syscalls"] = fmt.Sprintf("%d", rawWritevSyscalls)
+	stats["treedb.cache.vlog_writev.bytes"] = fmt.Sprintf("%d", rawWritevBytes)
+	stats["treedb.cache.vlog_writev.iovecs"] = fmt.Sprintf("%d", rawWritevIovecs)
+	stats["treedb.cache.vlog_writev.flushes"] = fmt.Sprintf("%d", rawWritevFlushes)
+	if rawWritevSyscalls > 0 {
+		stats["treedb.cache.vlog_writev.bytes_per_syscall"] = fmt.Sprintf("%.1f", float64(rawWritevBytes)/float64(rawWritevSyscalls))
+		stats["treedb.cache.vlog_writev.iovecs_per_syscall"] = fmt.Sprintf("%.2f", float64(rawWritevIovecs)/float64(rawWritevSyscalls))
+	}
+	if rawWritevFlushes > 0 {
+		stats["treedb.cache.vlog_writev.bytes_per_flush"] = fmt.Sprintf("%.1f", float64(rawWritevBytes)/float64(rawWritevFlushes))
+		stats["treedb.cache.vlog_writev.syscalls_per_flush"] = fmt.Sprintf("%.2f", float64(rawWritevSyscalls)/float64(rawWritevFlushes))
+	}
+	stats["treedb.cache.vlog_write.syscalls"] = fmt.Sprintf("%d", rawWriteSyscalls)
+	stats["treedb.cache.vlog_write.bytes"] = fmt.Sprintf("%d", rawWriteBytes)
+	stats["treedb.cache.vlog_write.calls"] = fmt.Sprintf("%d", rawWriteCalls)
+	if rawWriteSyscalls > 0 {
+		stats["treedb.cache.vlog_write.bytes_per_syscall"] = fmt.Sprintf("%.1f", float64(rawWriteBytes)/float64(rawWriteSyscalls))
+	}
+	if rawWriteCalls > 0 {
+		stats["treedb.cache.vlog_write.bytes_per_call"] = fmt.Sprintf("%.1f", float64(rawWriteBytes)/float64(rawWriteCalls))
+		stats["treedb.cache.vlog_write.syscalls_per_call"] = fmt.Sprintf("%.2f", float64(rawWriteSyscalls)/float64(rawWriteCalls))
+	}
+	totalVlogSyscalls := rawWritevSyscalls + rawWriteSyscalls
+	totalVlogBytes := rawWritevBytes + rawWriteBytes
+	stats["treedb.cache.vlog_io.syscalls"] = fmt.Sprintf("%d", totalVlogSyscalls)
+	stats["treedb.cache.vlog_io.bytes"] = fmt.Sprintf("%d", totalVlogBytes)
+	if totalVlogSyscalls > 0 {
+		stats["treedb.cache.vlog_io.bytes_per_syscall"] = fmt.Sprintf("%.1f", float64(totalVlogBytes)/float64(totalVlogSyscalls))
+	}
+	fenceCandidates := db.deferredFenceCandidateKeys.Load()
+	fenceGroups := db.deferredFenceEmittedGroups.Load()
+	stats["treedb.cache.v2_fenceptr.deferred_candidates"] = fmt.Sprintf("%d", fenceCandidates)
+	stats["treedb.cache.v2_fenceptr.deferred_groups"] = fmt.Sprintf("%d", fenceGroups)
+	if fenceGroups > 0 {
+		stats["treedb.cache.v2_fenceptr.avg_keys_per_group"] = fmt.Sprintf("%.3f", float64(fenceCandidates)/float64(fenceGroups))
+	}
 	if db.adaptiveBackpressureEnabled() {
 		stats["treedb.cache.backpressure_mode"] = "adaptive"
 	} else {
@@ -12117,6 +12316,9 @@ func (db *DB) Drain() error {
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if err := db.ensureBackendRange(); err != nil {
+		return nil, err
+	}
+	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 
@@ -12848,7 +13050,8 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	}
 	if b.db.outerLeafFenceV2Enabled() {
 		// Fence-pointer mode needs flush-time fence collapse semantics; direct
-		// stream bypass emits per-key pointer ops and defeats that compaction.
+		// stream bypass emits backend pointer ops at commit boundaries and can
+		// regress immediate read/prefix-scan behavior.
 		return false, nil
 	}
 	if b.backend != nil || !b.streamEligible {
@@ -13028,8 +13231,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 	eligibleCount := len(eligibleIdxs)
+	deferredFencePath := b.db.useFenceV2DeferredFlushPath()
 	allowPointers := eligibleCount > 0 && valueLogEnabled && b.db.allowValueLogPointers()
-	if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
+	if allowPointers && deferredFencePath {
+		// v2 fence-pointer WAL-off path: keep values inline in mutable memtables
+		// and materialize grouped value-log pointers once at flush time.
+		allowPointers = false
+	} else if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
 		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
 		allowPointers = false

@@ -14,6 +14,12 @@ const (
 	defaultRawWritevMinBatchRecords = 8
 )
 
+type writevCallStats struct {
+	syscalls uint64
+	bytes    uint64
+	iovecs   uint64
+}
+
 func rawWritevLimits(w *Writer) (maxBytes, maxIovs int) {
 	maxBytes = defaultBufferSize
 	if w != nil && w.appendMax > 0 {
@@ -253,11 +259,18 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 			queuedBytes = 0
 			return nil
 		}
-		var err error
-		vecs, err = writevAll(fd, iovs, vecs)
+		var (
+			err      error
+			callStat writevCallStats
+		)
+		vecs, callStat, err = writevAll(fd, iovs, vecs)
 		if err != nil {
 			return err
 		}
+		w.rawWritevSyscalls.Add(callStat.syscalls)
+		w.rawWritevBytes.Add(callStat.bytes)
+		w.rawWritevIovecs.Add(callStat.iovecs)
+		w.rawWritevFlushes.Add(1)
 		w.size += int64(queuedBytes)
 		iovs = iovs[:0]
 		meta = meta[:0]
@@ -385,6 +398,169 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 
 	if err := flush(); err != nil {
 		return nil, FrameStats{}, err
+	}
+
+	return dst, FrameStats{
+		Records:            len(records),
+		RawPayloadBytes:    rawPayloadBytes,
+		StoredPayloadBytes: rawPayloadBytes,
+		Kept:               false,
+	}, nil
+}
+
+// AppendRawFramesBufferedInto appends raw grouped frames through the writer's
+// append buffer, allowing multiple calls to coalesce into larger write syscalls.
+//
+// dst must be at least len(records) long.
+func (w *Writer) AppendRawFramesBufferedInto(records []Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
+	if w == nil {
+		return nil, FrameStats{}, errors.New("valuelog: nil writer")
+	}
+	if len(records) == 0 {
+		return dst[:0], FrameStats{}, nil
+	}
+	if len(dst) < len(records) {
+		return nil, FrameStats{}, errors.New("valuelog: dst too small")
+	}
+	if k <= 0 || k > MaxFrameK {
+		return nil, FrameStats{}, ErrRecordTooLarge
+	}
+	dst = dst[:len(records)]
+
+	rawPayloadBytes := 0
+	for i := range records {
+		if records[i].RID == 0 {
+			return nil, FrameStats{}, errors.New("valuelog: missing rid")
+		}
+		if len(records[i].Value) > int(^uint32(0)) {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+		rawPayloadBytes += len(records[i].Value)
+		if rawPayloadBytes < 0 || rawPayloadBytes > int(^uint32(0)) {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+	}
+
+	meta := w.rawWritevMeta[:0]
+	if cap(meta) < 4096 {
+		meta = make([]byte, 0, 4096)
+	}
+	defer func() {
+		w.rawWritevMeta = meta[:0]
+	}()
+
+	pos := 0
+	for pos < len(records) {
+		end := pos + k
+		if end > len(records) {
+			end = len(records)
+		}
+		frameRecords := records[pos:end]
+		kFrame := len(frameRecords)
+		if kFrame <= 0 || kFrame > MaxFrameK {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+
+		var offsets [MaxFrameK + 1]uint32
+		offsets[0] = 0
+		framePayloadBytes := 0
+		for i := 0; i < kFrame; i++ {
+			framePayloadBytes += len(frameRecords[i].Value)
+			if framePayloadBytes < 0 || framePayloadBytes > int(^uint32(0)) {
+				return nil, FrameStats{}, ErrRecordTooLarge
+			}
+			offsets[i+1] = uint32(framePayloadBytes)
+		}
+		if limits.MaxRecordSize > 0 && int64(framePayloadBytes) > limits.MaxRecordSize {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+
+		prefixLen := FrameHeaderSize + (kFrame * 8) + ((kFrame + 1) * 4)
+		bodyLen := prefixLen + framePayloadBytes
+		if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+		if bodyLen > int(^uint32(0)) {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+		if recordSizeExceedsMax(uint32(bodyLen)) {
+			return nil, FrameStats{}, ErrRecordTooLarge
+		}
+
+		start := w.size
+		recordLenHint := uint32(headerWithoutCRC) + uint32(bodyLen)
+		if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+			recordLenHint = 0
+		}
+		for i := 0; i < kFrame; i++ {
+			dst[pos+i] = page.ValuePtr{
+				Offset: uint64(start + 4),
+				Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
+				FileID: w.fileID,
+			}
+		}
+
+		metaOff := len(meta)
+		metaNeed := HeaderSize + prefixLen
+		if cap(meta)-metaOff < metaNeed {
+			newCap := cap(meta) * 2
+			if newCap < metaOff+metaNeed {
+				newCap = metaOff + metaNeed
+			}
+			grown := make([]byte, metaOff+metaNeed, newCap)
+			copy(grown, meta[:metaOff])
+			meta = grown
+		} else {
+			meta = meta[:metaOff+metaNeed]
+		}
+		header := meta[metaOff : metaOff+HeaderSize]
+		prefix := meta[metaOff+HeaderSize : metaOff+HeaderSize+prefixLen]
+
+		header[4] = Version
+		header[5] = recordFlagGrouped
+		header[6] = 0
+		header[7] = 0
+		binary.LittleEndian.PutUint64(header[8:16], 0)
+		binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
+
+		prefixOff := 0
+		prefix[prefixOff] = FrameVersion
+		prefix[prefixOff+1] = 0
+		prefix[prefixOff+2] = byte(kFrame)
+		prefix[prefixOff+3] = 0
+		binary.LittleEndian.PutUint64(prefix[prefixOff+4:prefixOff+12], 0)
+		prefixOff += FrameHeaderSize
+		for i := 0; i < kFrame; i++ {
+			binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], frameRecords[i].RID)
+			prefixOff += 8
+		}
+		for i := 0; i < kFrame+1; i++ {
+			binary.LittleEndian.PutUint32(prefix[prefixOff:prefixOff+4], offsets[i])
+			prefixOff += 4
+		}
+
+		sum := uint32(0)
+		sum = crc.Update(sum, header[4:HeaderSize])
+		sum = crc.Update(sum, prefix)
+		for i := 0; i < kFrame; i++ {
+			sum = crc.Update(sum, frameRecords[i].Value)
+		}
+		binary.LittleEndian.PutUint32(header[0:4], sum)
+
+		if err := w.writeBytesBuffered(header); err != nil {
+			return nil, FrameStats{}, err
+		}
+		if err := w.writeBytesBuffered(prefix); err != nil {
+			return nil, FrameStats{}, err
+		}
+		for i := 0; i < kFrame; i++ {
+			if err := w.writeBytesBuffered(frameRecords[i].Value); err != nil {
+				return nil, FrameStats{}, err
+			}
+		}
+		w.size += int64(HeaderSize + bodyLen)
+
+		pos = end
 	}
 
 	return dst, FrameStats{
