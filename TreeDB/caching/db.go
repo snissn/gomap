@@ -24,6 +24,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -494,6 +495,129 @@ func (db *DB) valueLogThresholdForKey(key []byte) int {
 	return backenddb.ResolveInlineThresholdForKey(db.valueLogThreshold, key, db.valueLogDomainThresholds)
 }
 
+func (db *DB) outerLeafV2Enabled() bool {
+	return db != nil && outerleaf.ModeEnabled(db.indexOuterLeafMode)
+}
+
+func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
+	if !db.outerLeafV2Enabled() {
+		return value, nil
+	}
+	return outerleaf.EncodeSingle(nil, key, value, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
+}
+
+func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
+	if !db.outerLeafV2Enabled() {
+		return value, nil
+	}
+	blockValue, ok, found, _, err := outerleaf.DecodeValueForKey(value, key, nil)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return value, nil
+	}
+	if !found {
+		return nil, fmt.Errorf("cachingdb: outer-leaf key lookup miss")
+	}
+	return blockValue, nil
+}
+
+// buildOuterLeafValueRecords encodes key/value pairs into value-log records.
+// The returned groups map each encoded record back to source indexes.
+func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valuelog.Record, [][]int, error) {
+	if len(keys) != len(values) {
+		return nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
+	}
+	if len(keys) == 0 {
+		return nil, nil, nil
+	}
+	records := make([]valuelog.Record, 0, len(keys))
+	groups := make([][]int, 0, len(keys))
+
+	appendSingle := func(i int) error {
+		payload, err := db.encodeOuterLeafValue(keys[i], values[i])
+		if err != nil {
+			return err
+		}
+		records = append(records, valuelog.Record{Value: payload})
+		groups = append(groups, []int{i})
+		return nil
+	}
+
+	if !db.outerLeafV2Enabled() || len(keys) == 1 {
+		for i := range keys {
+			if err := appendSingle(i); err != nil {
+				return nil, nil, err
+			}
+		}
+		return records, groups, nil
+	}
+
+	targetBytes := db.outerLeafBlockTargetBytes
+	if targetBytes <= 0 {
+		targetBytes = outerleaf.NormalizeBlockTargetBytes(0)
+	}
+
+	entries := make([]outerleaf.Entry, 0, 8)
+	entryIdxs := make([]int, 0, 8)
+	estimated := 0
+	var prevKey []byte
+
+	flush := func() error {
+		if len(entries) == 0 {
+			return nil
+		}
+		var (
+			payload []byte
+			err     error
+		)
+		if len(entries) == 1 {
+			payload, err = db.encodeOuterLeafValue(entries[0].Key, entries[0].Value)
+		} else {
+			payload, err = outerleaf.EncodeEntries(nil, entries, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
+		}
+		if err != nil {
+			return err
+		}
+		records = append(records, valuelog.Record{Value: payload})
+		group := make([]int, len(entryIdxs))
+		copy(group, entryIdxs)
+		groups = append(groups, group)
+		entries = entries[:0]
+		entryIdxs = entryIdxs[:0]
+		estimated = 0
+		prevKey = nil
+		return nil
+	}
+
+	for i := range keys {
+		key := keys[i]
+		value := values[i]
+		entryEstimate := len(key) + len(value) + 16
+		if len(entries) > 0 {
+			if bytes.Compare(prevKey, key) >= 0 {
+				// Preserve correctness for non-monotonic batches by cutting blocks.
+				if err := flush(); err != nil {
+					return nil, nil, err
+				}
+			} else if estimated+entryEstimate > targetBytes {
+				if err := flush(); err != nil {
+					return nil, nil, err
+				}
+			}
+		}
+		entries = append(entries, outerleaf.Entry{Key: key, Value: value})
+		entryIdxs = append(entryIdxs, i)
+		estimated += entryEstimate
+		prevKey = key
+	}
+	if err := flush(); err != nil {
+		return nil, nil, err
+	}
+	return records, groups, nil
+}
+
 func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode) vlogCompressionWriteMode {
 	if mode == vlogCompressionAuto && writeMode == vlogWriteDict {
 		return vlogWriteBlock
@@ -704,12 +828,23 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		}
 	}
 
-	records := getValueLogRecords(len(eligible))
-	defer putValueLogRecords(records)
-	startRID := db.nextRID.Add(uint64(len(eligible))) - uint64(len(eligible)) + 1
-	for i, idx := range eligible {
+	keys := make([][]byte, 0, len(eligible))
+	values := make([][]byte, 0, len(eligible))
+	for _, idx := range eligible {
 		op := &ops[idx]
-		records[i] = valuelog.Record{RID: startRID + uint64(i), Value: op.Value}
+		keys = append(keys, op.Key)
+		values = append(values, op.Value)
+	}
+	records, groups, err := db.buildOuterLeafValueRecords(keys, values)
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return ops, nil
+	}
+	startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
+	for i := range records {
+		records[i].RID = startRID + uint64(i)
 	}
 
 	durability := journalDurabilityFlush
@@ -720,16 +855,20 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	if err != nil {
 		return nil, err
 	}
-	if len(ptrs) != len(eligible) {
+	if len(ptrs) != len(records) {
 		putValueLogPtrs(ptrs)
-		return nil, fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(ptrs), len(eligible))
+		return nil, fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(ptrs), len(records))
 	}
 
-	for i, idx := range eligible {
-		op := &ops[idx]
-		op.ValuePtr = ptrs[i]
-		op.IsPtr = true
-		op.Value = nil
+	for i := range groups {
+		ptr := ptrs[i]
+		for _, srcPos := range groups[i] {
+			idx := eligible[srcPos]
+			op := &ops[idx]
+			op.ValuePtr = ptr
+			op.IsPtr = true
+			op.Value = nil
+		}
 	}
 	putValueLogPtrs(ptrs)
 
@@ -771,12 +910,8 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
 
-	var records []valuelog.Record
-	var keys [][]byte
-	defer func() {
-		putValueLogRecords(records)
-		putValueLogKeys(keys)
-	}()
+	var ptrKeys [][]byte
+	var ptrVals [][]byte
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
@@ -815,16 +950,21 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		}
 
 		if allowPointers && (db.forceValueLogPointers || len(val) > db.valueLogThresholdForKey(key)) {
-			if records == nil {
+			if ptrKeys == nil {
 				hint := memLen
+				if hint <= 0 {
+					hint = 16
+				}
 				if hint > db.flushBackendInitEntries {
 					hint = db.flushBackendInitEntries
 				}
-				records = getValueLogRecordsCap(hint)
-				keys = getValueLogKeys(hint)
+				ptrKeys = make([][]byte, 0, hint)
+				ptrVals = make([][]byte, 0, hint)
 			}
-			keys = append(keys, key)
-			records = append(records, valuelog.Record{Value: val})
+			keyCopy := append([]byte(nil), key...)
+			valCopy := append([]byte(nil), val...)
+			ptrKeys = append(ptrKeys, keyCopy)
+			ptrVals = append(ptrVals, valCopy)
 		} else {
 			var err error
 			if sv != nil {
@@ -839,14 +979,21 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		iter.Next()
 	}
 
-	if len(records) == 0 {
+	if len(ptrKeys) == 0 {
 		return nil
 	}
 	if !allowPointers {
 		return nil
 	}
-	if len(records) != len(keys) {
+	if len(ptrKeys) != len(ptrVals) {
 		return errors.New("cachingdb: internal deferred value-log mismatch")
+	}
+	records, groups, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
 	}
 
 	lane, err := db.pickLane(false, laneID)
@@ -875,25 +1022,27 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	if err != nil {
 		return err
 	}
-	if len(vlogPtrs) != len(keys) {
+	if len(vlogPtrs) != len(records) {
 		putValueLogPtrs(vlogPtrs)
-		return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(keys))
+		return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(records))
 	}
 	defer putValueLogPtrs(vlogPtrs)
 
-	for i := range keys {
-		key := keys[i]
+	for i := range groups {
 		ptr := vlogPtrs[i]
-		if psv != nil {
-			if err := psv.SetPointerView(key, ptr); err != nil {
-				return err
+		for _, srcPos := range groups[i] {
+			key := ptrKeys[srcPos]
+			if psv != nil {
+				if err := psv.SetPointerView(key, ptr); err != nil {
+					return err
+				}
+			} else if ps != nil {
+				if err := ps.SetPointer(key, ptr); err != nil {
+					return err
+				}
+			} else {
+				return errors.New("cachingdb: backend batch missing SetPointer")
 			}
-		} else if ps != nil {
-			if err := ps.SetPointer(key, ptr); err != nil {
-				return err
-			}
-		} else {
-			return errors.New("cachingdb: backend batch missing SetPointer")
 		}
 	}
 
@@ -1068,7 +1217,7 @@ func (db *DB) valueLogTemplateEncodeRecords(records []valuelog.Record) ([]valuel
 	return encoded, used
 }
 
-func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
+func (db *DB) readValueLog(key []byte, ptr page.ValuePtr) ([]byte, error) {
 	if db.valueLogReader == nil {
 		return nil, errors.New("cachingdb: value-log reader unavailable")
 	}
@@ -1080,10 +1229,14 @@ func (db *DB) readValueLog(ptr page.ValuePtr) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return db.valueLogReader.Read(ptr)
+	raw, err := db.valueLogReader.Read(ptr)
+	if err != nil {
+		return nil, err
+	}
+	return db.decodeOuterLeafValue(key, raw)
 }
 
-func (db *DB) readValueLogAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	if db.valueLogReader == nil {
 		return nil, errors.New("cachingdb: value-log reader unavailable")
 	}
@@ -1095,7 +1248,23 @@ func (db *DB) readValueLogAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) 
 			return nil, err
 		}
 	}
-	return db.valueLogReader.ReadAppend(ptr, dst)
+	raw, err := db.valueLogReader.ReadAppend(ptr, dst[:0])
+	if err != nil {
+		return nil, err
+	}
+	decoded, err := db.decodeOuterLeafValue(key, raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(decoded) == 0 {
+		return dst, nil
+	}
+	oldLen := len(dst)
+	dst = append(dst, decoded...)
+	if oldLen == 0 {
+		return dst, nil
+	}
+	return dst, nil
 }
 
 func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
@@ -1711,6 +1880,9 @@ type Options struct {
 	// default is smaller to avoid catastrophic update-heavy cliffs at large key
 	// counts by pushing moderate values into the value log.
 	ValueLogPointerThreshold int
+	// IndexOuterLeafMode selects the outer-leaf payload format.
+	// Supported values: "v1", "v2_blockptr".
+	IndexOuterLeafMode string
 	// ValueLogDomainInlineThresholds configures optional per-domain overrides
 	// for inline-vs-pointer placement. Longest-prefix match wins.
 	ValueLogDomainInlineThresholds []backenddb.ValueLogDomainThreshold
@@ -1735,6 +1907,15 @@ type Options struct {
 	// ValueLogBlockTargetCompressedBytes controls block-mode grouped frame K
 	// adaptation target (0=default).
 	ValueLogBlockTargetCompressedBytes int
+	// ValueLogOuterLeafBlockTargetBytes controls v2 outer-leaf payload target
+	// size (0=default).
+	ValueLogOuterLeafBlockTargetBytes int
+	// ValueLogOuterLeafBlockCodec selects v2 outer-leaf payload codec:
+	// 0=snappy, 1=lz4.
+	ValueLogOuterLeafBlockCodec uint8
+	// ValueLogOuterLeafBlockRestartInterval controls restart cadence encoded in
+	// v2 outer-leaf payload metadata (0=default).
+	ValueLogOuterLeafBlockRestartInterval int
 	// ValueLogIncompressibleHoldBytes configures auto-mode incompressible hold
 	// window bytes (0=default).
 	ValueLogIncompressibleHoldBytes int
@@ -1883,6 +2064,10 @@ type DB struct {
 	inlineThreshold              int
 	valueLogThreshold            int
 	valueLogDomainThresholds     []backenddb.ValueLogDomainThreshold
+	indexOuterLeafMode           string
+	outerLeafBlockTargetBytes    int
+	outerLeafBlockCodec          uint8
+	outerLeafBlockRestart        int
 	forceValueLogPointers        bool
 	valueLogRawWritevMinAvgBytes int
 	valueLogRawWritevMinRecords  int
@@ -2701,6 +2886,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogRawWritevMinRecords <= 0 {
 		valueLogRawWritevMinRecords = 8
 	}
+	indexOuterLeafMode := strings.TrimSpace(opts.IndexOuterLeafMode)
+	if indexOuterLeafMode == "" {
+		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
+	}
+	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr {
+		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
+	}
+	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(opts.ValueLogOuterLeafBlockTargetBytes)
+	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
+	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
 	disableJournal := opts.DisableWAL
 	var retained map[string]struct{}
 	for _, seg := range segments {
@@ -2952,6 +3147,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		inlineThreshold:                      inlineThreshold,
 		valueLogThreshold:                    valueLogThreshold,
 		valueLogDomainThresholds:             valueLogDomainThresholds,
+		indexOuterLeafMode:                   indexOuterLeafMode,
+		outerLeafBlockTargetBytes:            outerLeafBlockTarget,
+		outerLeafBlockCodec:                  outerLeafBlockCodec,
+		outerLeafBlockRestart:                outerLeafBlockRestart,
 		forceValueLogPointers:                opts.ForceValueLogPointers,
 		valueLogRawWritevMinAvgBytes:         valueLogRawWritevMinAvgBytes,
 		valueLogRawWritevMinRecords:          valueLogRawWritevMinRecords,
@@ -6181,6 +6380,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 }
 
 func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
+	return db.appendValueLogOneWithKey(l, dictID, dict, rid, nil, value, durability)
+}
+
+func (db *DB) appendValueLogOneWithKey(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
@@ -6192,6 +6395,11 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 		return page.ValuePtr{}, "", errWALClosed
 	default:
 	}
+	encodedValue, encodeErr := db.encodeOuterLeafValue(key, value)
+	if encodeErr != nil {
+		return page.ValuePtr{}, "", encodeErr
+	}
+	value = encodedValue
 	wallStart := time.Time{}
 	if db.needsVlogAutotuneTiming() {
 		wallStart = db.valueLogAutotuneMetrics.now()
@@ -7723,7 +7931,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 
 		rid := db.nextRID.Add(1)
 		var retain string
-		appendPtr, retain, appendErr := db.appendValueLogOne(lane, dictID, nil, rid, value, durability)
+		appendPtr, retain, appendErr := db.appendValueLogOneWithKey(lane, dictID, nil, rid, key, value, durability)
 		if appendErr != nil {
 			db.writeMu.RUnlock()
 			return appendErr
@@ -10499,7 +10707,7 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 					return nil, true, nil
 				}
 				if flags&node.FlagPointer != 0 && db.valueLogReader != nil {
-					readVal, err := db.readValueLog(ptr)
+					readVal, err := db.readValueLog(key, ptr)
 					if err != nil {
 						return nil, true, err
 					}
@@ -10528,7 +10736,7 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 				return nil, true, nil
 			}
 			if flags&node.FlagPointer != 0 && db.valueLogReader != nil {
-				readVal, err := db.readValueLog(ptr)
+				readVal, err := db.readValueLog(key, ptr)
 				if err != nil {
 					return nil, true, err
 				}
@@ -10581,7 +10789,7 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 					return dst, true, tree.ErrKeyNotFound
 				}
 				if flags&node.FlagPointer != 0 && db.valueLogReader != nil {
-					out, err := db.readValueLogAppend(ptr, dst)
+					out, err := db.readValueLogAppend(key, ptr, dst)
 					if err != nil {
 						return dst, true, err
 					}
@@ -10610,7 +10818,7 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 				return dst, true, tree.ErrKeyNotFound
 			}
 			if flags&node.FlagPointer != 0 && db.valueLogReader != nil {
-				out, err := db.readValueLogAppend(ptr, dst)
+				out, err := db.readValueLogAppend(key, ptr, dst)
 				if err != nil {
 					return dst, true, err
 				}
@@ -11332,7 +11540,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		}
 		qIter := queue[i].NewIterator(start, end)
 		if db.memtableValueLogPointers && db.valueLogReader != nil {
-			qIter = newValueLogIterator(qIter, db.readValueLog)
+			qIter = newValueLogIterator(qIter, func(key []byte, ptr page.ValuePtr) ([]byte, error) {
+				return db.readValueLog(key, ptr)
+			})
 		}
 		sources = append(sources, merging.IteratorSource{
 			Iter:     qIter,
@@ -12178,6 +12388,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 	multiLanePointers := allowPointers &&
+		!b.db.outerLeafV2Enabled() &&
 		b.db.disableJournal &&
 		durability == journalDurabilityNone &&
 		len(b.db.lanes) > 1 &&
@@ -12260,6 +12471,11 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 			for _, idx := range eligibleIdxs {
 				op := &b.entries[idx]
+				payload, encErr := b.db.encodeOuterLeafValue(op.Key, op.Value)
+				if encErr != nil {
+					b.db.writeMu.RUnlock()
+					return encErr
+				}
 				rid := b.db.nextRID.Add(1)
 				if rids != nil {
 					rids[idx] = rid
@@ -12269,11 +12485,11 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					laneID = 0
 				}
 				lb := &laneBatches[laneID]
-				if lb.safeNoClear && (len(op.Value) > 64 || cap(op.Value) > 64) {
+				if lb.safeNoClear && (len(payload) > 64 || cap(payload) > 64) {
 					lb.safeNoClear = false
 				}
 				lb.idxs = append(lb.idxs, idx)
-				lb.records = append(lb.records, valuelog.Record{RID: rid, Value: op.Value})
+				lb.records = append(lb.records, valuelog.Record{RID: rid, Value: payload})
 			}
 
 			var wg sync.WaitGroup
@@ -12322,44 +12538,55 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				lb.ptrs = nil
 			}
 		} else {
-			valueRecords := getValueLogRecords(eligibleCount)
-			safeNoClear := true
-			defer func() {
-				if safeNoClear {
-					putValueLogRecordsNoClear(valueRecords)
-					return
-				}
-				putValueLogRecords(valueRecords)
-			}()
-			for i, idx := range eligibleIdxs {
+			keys := make([][]byte, 0, eligibleCount)
+			values := make([][]byte, 0, eligibleCount)
+			for _, idx := range eligibleIdxs {
 				op := &b.entries[idx]
-				rid := b.db.nextRID.Add(1)
+				keys = append(keys, op.Key)
+				values = append(values, op.Value)
+			}
+			valueRecords, groups, buildErr := b.db.buildOuterLeafValueRecords(keys, values)
+			if buildErr != nil {
+				b.db.writeMu.RUnlock()
+				return buildErr
+			}
+			if len(valueRecords) == 0 {
+				b.db.writeMu.RUnlock()
+				return fmt.Errorf("cachingdb: empty value-log record set for %d eligible ops", eligibleCount)
+			}
+			startRID := b.db.nextRID.Add(uint64(len(valueRecords))) - uint64(len(valueRecords)) + 1
+			for i := range valueRecords {
+				rid := startRID + uint64(i)
+				valueRecords[i].RID = rid
 				if rids != nil {
-					rids[idx] = rid
-				}
-				if safeNoClear {
-					if len(op.Value) > 64 || cap(op.Value) > 64 {
-						safeNoClear = false
+					for _, srcPos := range groups[i] {
+						idx := eligibleIdxs[srcPos]
+						rids[idx] = rid
 					}
 				}
-				valueRecords[i] = valuelog.Record{RID: rid, Value: op.Value}
 			}
 			ptrs, err := b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
 			if err != nil {
 				b.db.writeMu.RUnlock()
 				return err
 			}
-			if len(ptrs) == eligibleCount {
-				for i, idx := range eligibleIdxs {
-					op := &b.entries[idx]
-					op.ValuePtr = ptrs[i]
-					op.IsPtr = true
-					if b.db.memtableValueLogPointers {
-						op.Value = nil
+			if len(ptrs) == len(valueRecords) {
+				used := 0
+				for i := range groups {
+					ptr := ptrs[i]
+					for _, srcPos := range groups[i] {
+						idx := eligibleIdxs[srcPos]
+						op := &b.entries[idx]
+						op.ValuePtr = ptr
+						op.IsPtr = true
+						if b.db.memtableValueLogPointers {
+							op.Value = nil
+						}
+						used++
 					}
-					if debugPtr {
-						b.db.debugPtrUsed.Add(1)
-					}
+				}
+				if debugPtr && used > 0 {
+					b.db.debugPtrUsed.Add(int64(used))
 				}
 				retainPath := b.db.currentValueLogPath(lane)
 				if retainPath != "" {

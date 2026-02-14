@@ -76,6 +76,28 @@ Notes:
 - Compression is encoded in the value-log record header (frame flags), not in
   `ValuePtr.Length`.
 
+### Outer-leaf value-log payloads (`IndexOuterLeafMode=v2_blockptr`)
+
+When `IndexOuterLeafMode` is `v2_blockptr`, pointer payloads may be wrapped
+using the `TOL2` envelope before being written to the value log:
+
+```text
+bytes[4] Magic = "TOL2"
+u8       Version          // 1=single KV, 2=multi-KV block
+u8       Codec            // 0=raw, 1=snappy, 2=lz4
+u16      RestartInterval
+u16/u32  Version-specific metadata
+u32      Checksum         // CRC32C(header-with-zero-checksum || encoded-payload)
+bytes    EncodedPayload
+```
+
+- Version 1 stores one `{key,value}` pair.
+- Version 2 stores multiple sorted `{key,value}` pairs with prefix-compressed
+  keys plus a restart-offset table/trailer.
+
+For `v2_blockptr`, point lookups and iterators resolve `{pointer,key}` by
+decoding one payload block and finding the requested key inside that block.
+
 ### Leaf entry encoding (index leaf pages)
 
 TreeDB stores B+Tree pages in `Dir/maindb/index.db` using a fixed 4096-byte

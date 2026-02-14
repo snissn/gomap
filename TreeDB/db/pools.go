@@ -46,6 +46,8 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.idx = nil
 	s.state = nil
 	s.reader.vlogs = nil
+	s.reader.outerLeafMode = ""
+	s.reader.cache = nil
 	s.tree.Reset(nil, nil, 0)
 	s.registryID = 0
 	p.pool.Put(s)

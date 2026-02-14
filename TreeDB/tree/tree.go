@@ -44,11 +44,28 @@ type slabUnsafeBatchAppender interface {
 	ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error)
 }
 
+// Optional key-aware pointer reads for outer-leaf block payloads.
+type slabUnsafeKeyReader interface {
+	ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, error)
+}
+
+// Optional key-aware append-style pointer reads.
+type slabUnsafeKeyAppender interface {
+	ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, error)
+}
+
+// Optional key-aware batched append-style pointer reads.
+type slabUnsafeKeyBatchAppender interface {
+	ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][]byte, dst [][]byte) ([][]byte, error)
+}
+
 type Tree struct {
-	pager        *pager.Pager
-	slabReader   SlabReader
-	slabAppender slabUnsafeAppender
-	rootPageID   uint64
+	pager           *pager.Pager
+	slabReader      SlabReader
+	slabAppender    slabUnsafeAppender
+	slabKeyReader   slabUnsafeKeyReader
+	slabKeyAppender slabUnsafeKeyAppender
+	rootPageID      uint64
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
@@ -59,6 +76,12 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	}
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
+	}
+	if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
+		t.slabKeyReader = keyReader
+	}
+	if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
+		t.slabKeyAppender = keyAppender
 	}
 	return t
 }
@@ -71,6 +94,16 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabAppender = app
 	} else {
 		t.slabAppender = nil
+	}
+	if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
+		t.slabKeyReader = keyReader
+	} else {
+		t.slabKeyReader = nil
+	}
+	if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
+		t.slabKeyAppender = keyAppender
+	} else {
+		t.slabKeyAppender = nil
 	}
 	t.rootPageID = root
 }
@@ -232,6 +265,13 @@ func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 		return nil, ErrKeyNotFound
 	}
 	if flags&node.FlagPointer != 0 {
+		if t.slabKeyReader != nil {
+			out, err := t.slabKeyReader.ReadUnsafeForKey(ptr, key)
+			if err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
 		out, err := t.slabReader.ReadUnsafe(ptr)
 		if err != nil {
 			return nil, err
@@ -252,6 +292,36 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, ErrKeyNotFound
 	}
 	if flags&node.FlagPointer != 0 {
+		if t.slabKeyAppender != nil {
+			oldLen := len(dst)
+			tail, err := t.slabKeyAppender.ReadUnsafeAppendForKey(ptr, key, dst[oldLen:oldLen])
+			if err != nil {
+				return dst, err
+			}
+			if oldLen == 0 {
+				return tail, nil
+			}
+			if len(tail) == 0 {
+				return dst[:oldLen], nil
+			}
+			if cap(dst) > oldLen {
+				base := dst[:cap(dst):cap(dst)]
+				if &tail[0] == &base[oldLen] {
+					return dst[:oldLen+len(tail)], nil
+				}
+			}
+			return append(dst[:oldLen], tail...), nil
+		}
+		if t.slabKeyReader != nil {
+			out, err := t.slabKeyReader.ReadUnsafeForKey(ptr, key)
+			if err != nil {
+				return dst, err
+			}
+			if out == nil {
+				return dst, nil
+			}
+			return append(dst, out...), nil
+		}
 		if t.slabAppender != nil {
 			oldLen := len(dst)
 			tail, err := t.slabAppender.ReadUnsafeAppend(ptr, dst[oldLen:oldLen])

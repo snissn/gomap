@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -254,6 +255,18 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 			val, err := b.db.valueLogManager.Read(ptr)
 			if err != nil {
 				return err
+			}
+			if outerleaf.ModeEnabled(b.db.indexOuterLeafMode) {
+				decoded, ok, found, _, decErr := outerleaf.DecodeValueForKey(val, entry.Key, nil)
+				if decErr != nil {
+					return decErr
+				}
+				if ok {
+					if !found {
+						return fmt.Errorf("outerleaf: key lookup miss in replay")
+					}
+					val = decoded
+				}
 			}
 			entry.Value = val
 		}

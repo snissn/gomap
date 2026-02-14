@@ -307,29 +307,33 @@ func (s *combinedLeafKeyState) rebuildAt(index uint16) (key []byte, flags byte, 
 }
 
 type Iterator struct {
-	tree         *Tree
-	stack        []CursorItem
-	stackBuf     [16]CursorItem
-	leafState    combinedLeafKeyState
-	start        []byte
-	end          []byte
-	valid        bool
-	err          error
-	currKey      []byte
-	currVal      []byte
-	currPtr      page.ValuePtr
-	flags        byte
-	valOK        bool
-	ptrOK        bool
-	ptrScratch   []byte
-	slabAppender slabUnsafeAppender
-	slabBatcher  slabUnsafeBatchAppender
+	tree            *Tree
+	stack           []CursorItem
+	stackBuf        [16]CursorItem
+	leafState       combinedLeafKeyState
+	start           []byte
+	end             []byte
+	valid           bool
+	err             error
+	currKey         []byte
+	currVal         []byte
+	currPtr         page.ValuePtr
+	flags           byte
+	valOK           bool
+	ptrOK           bool
+	ptrScratch      []byte
+	slabAppender    slabUnsafeAppender
+	slabBatcher     slabUnsafeBatchAppender
+	slabKeyReader   slabUnsafeKeyReader
+	slabKeyAppender slabUnsafeKeyAppender
+	slabKeyBatcher  slabUnsafeKeyBatchAppender
 
 	prefetchPageID uint64
 	prefetchStart  int
 	prefetchLen    int
 	prefetchStep   int
 	prefetchPtrs   []page.ValuePtr
+	prefetchKeys   [][]byte
 	prefetchVals   [][]byte
 	prefetchArmed  bool
 	mode           IteratorMode
@@ -366,11 +370,14 @@ func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iter
 		reverse:      false,
 		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
-	if app, ok := t.slabReader.(slabUnsafeAppender); ok {
-		it.slabAppender = app
-	}
+	it.slabAppender = t.slabAppender
 	if batch, ok := t.slabReader.(slabUnsafeBatchAppender); ok {
 		it.slabBatcher = batch
+	}
+	it.slabKeyReader = t.slabKeyReader
+	it.slabKeyAppender = t.slabKeyAppender
+	if keyBatch, ok := t.slabReader.(slabUnsafeKeyBatchAppender); ok {
+		it.slabKeyBatcher = keyBatch
 	}
 	it.resetStack()
 	it.Seek(start)
@@ -398,11 +405,14 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 		reverse:      true,
 		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
 	}
-	if app, ok := t.slabReader.(slabUnsafeAppender); ok {
-		it.slabAppender = app
-	}
+	it.slabAppender = t.slabAppender
 	if batch, ok := t.slabReader.(slabUnsafeBatchAppender); ok {
 		it.slabBatcher = batch
+	}
+	it.slabKeyReader = t.slabKeyReader
+	it.slabKeyAppender = t.slabKeyAppender
+	if keyBatch, ok := t.slabReader.(slabUnsafeKeyBatchAppender); ok {
+		it.slabKeyBatcher = keyBatch
 	}
 	it.resetStack()
 	// Reverse seek: Find >= end, then step back.
@@ -798,6 +808,29 @@ func (it *Iterator) UnsafeValue() []byte {
 		if !it.ensurePointerLoaded() {
 			return nil
 		}
+		if it.slabKeyAppender != nil {
+			val, err := it.slabKeyAppender.ReadUnsafeAppendForKey(it.currPtr, it.currKey, it.ptrScratch[:0])
+			if err != nil {
+				it.err = err
+				it.valid = false
+				return nil
+			}
+			it.ptrScratch = val
+			it.currVal = it.ptrScratch
+			it.valOK = true
+			return it.currVal
+		}
+		if it.slabKeyReader != nil {
+			val, err := it.slabKeyReader.ReadUnsafeForKey(it.currPtr, it.currKey)
+			if err != nil {
+				it.err = err
+				it.valid = false
+				return nil
+			}
+			it.currVal = val
+			it.valOK = true
+			return it.currVal
+		}
 		if it.slabAppender != nil {
 			val, err := it.slabAppender.ReadUnsafeAppend(it.currPtr, it.ptrScratch[:0])
 			if err != nil {
@@ -978,6 +1011,7 @@ func (it *Iterator) resetPointerPrefetch() {
 	it.prefetchLen = 0
 	it.prefetchStep = 0
 	it.prefetchPtrs = it.prefetchPtrs[:0]
+	it.prefetchKeys = it.prefetchKeys[:0]
 	it.prefetchVals = it.prefetchVals[:0]
 }
 
@@ -1028,9 +1062,10 @@ func (it *Iterator) prefetchPointerRun() bool {
 	it.prefetchLen = 0
 	it.prefetchStep = step
 	it.prefetchPtrs = it.prefetchPtrs[:0]
+	it.prefetchKeys = it.prefetchKeys[:0]
 
 	for idx := top.Index; idx >= 0 && idx < count && len(it.prefetchPtrs) < iteratorPointerBatchMax; idx += step {
-		_, ptr, flags, err := top.Node.GetLeafValueView(uint16(idx))
+		key, _, ptr, flags, err := top.Node.GetLeafEntryView(uint16(idx))
 		if err != nil {
 			it.err = err
 			it.valid = false
@@ -1044,6 +1079,9 @@ func (it *Iterator) prefetchPointerRun() bool {
 			break
 		}
 		it.prefetchPtrs = append(it.prefetchPtrs, ptr)
+		// GetLeafEntryView may return a scratch-backed key for prefix-compressed
+		// leaves; copy so batched key-aware pointer reads see stable bytes.
+		it.prefetchKeys = append(it.prefetchKeys, append([]byte(nil), key...))
 	}
 
 	// Keep isolated pointers on the single-read path.
@@ -1063,14 +1101,32 @@ func (it *Iterator) prefetchPointerRun() bool {
 	}
 
 	var err error
-	if it.slabBatcher != nil {
+	if it.slabKeyBatcher != nil {
+		it.prefetchVals, err = it.slabKeyBatcher.ReadUnsafeAppendBatchForKeys(it.prefetchPtrs, it.prefetchKeys, it.prefetchVals)
+	} else if it.slabBatcher != nil {
 		it.prefetchVals, err = it.slabBatcher.ReadUnsafeAppendBatch(it.prefetchPtrs, it.prefetchVals)
+	} else if it.slabKeyAppender != nil {
+		for i := range it.prefetchPtrs {
+			it.prefetchVals[i], err = it.slabKeyAppender.ReadUnsafeAppendForKey(it.prefetchPtrs[i], it.prefetchKeys[i], it.prefetchVals[i][:0])
+			if err != nil {
+				break
+			}
+		}
 	} else if it.slabAppender != nil {
 		for i := range it.prefetchPtrs {
 			it.prefetchVals[i], err = it.slabAppender.ReadUnsafeAppend(it.prefetchPtrs[i], it.prefetchVals[i][:0])
 			if err != nil {
 				break
 			}
+		}
+	} else if it.slabKeyReader != nil {
+		for i := range it.prefetchPtrs {
+			var val []byte
+			val, err = it.slabKeyReader.ReadUnsafeForKey(it.prefetchPtrs[i], it.prefetchKeys[i])
+			if err != nil {
+				break
+			}
+			it.prefetchVals[i] = append(it.prefetchVals[i][:0], val...)
 		}
 	} else {
 		for i := range it.prefetchPtrs {

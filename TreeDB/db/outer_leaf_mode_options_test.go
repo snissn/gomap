@@ -5,16 +5,16 @@ import (
 	"testing"
 )
 
-func TestOpen_IndexOuterLeafModeV2_NotImplemented(t *testing.T) {
-	_, err := Open(Options{
+func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
+	db, err := Open(Options{
 		Dir:                t.TempDir(),
 		IndexOuterLeafMode: IndexOuterLeafModeV2BlockPtr,
 	})
-	if err == nil {
-		t.Fatalf("expected error for %q mode", IndexOuterLeafModeV2BlockPtr)
+	if err != nil {
+		t.Fatalf("open %q: %v", IndexOuterLeafModeV2BlockPtr, err)
 	}
-	if !strings.Contains(err.Error(), "not implemented") {
-		t.Fatalf("unexpected error: %v", err)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
 	}
 }
 

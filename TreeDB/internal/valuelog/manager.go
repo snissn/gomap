@@ -992,6 +992,22 @@ func (m *Manager) TemplateDefCacheStats() (hits, misses uint64, entries, capacit
 	return cache.Stats()
 }
 
+func (m *Manager) GroupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {
+	if m == nil {
+		return 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		h, miss, e, capPerFile := f.groupedFrameCacheStats()
+		hits += h
+		misses += miss
+		entries += e
+		capacity += capPerFile
+	}
+	return hits, misses, entries, capacity
+}
+
 func (m *Manager) RemoveSegment(id uint32) error {
 	m.mu.Lock()
 	f, ok := m.files[id]

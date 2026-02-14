@@ -64,10 +64,10 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
 - `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
-- `-treedb-index-outer-leaf-mode` TreeDB: experimental outer-leaf mode selector (`v1|v2_blockptr`; `v2_blockptr` currently reserved/not implemented)
-- `-treedb-outer-leaf-block-target-bytes` TreeDB: approximation/prototype target block size for outer-leaf block modeling
-- `-treedb-outer-leaf-block-codec` TreeDB: approximation/prototype block codec (`snappy|lz4`)
-- `-treedb-outer-leaf-block-restart-interval` TreeDB: approximation/prototype restart interval for outer-leaf block modeling
+- `-treedb-index-outer-leaf-mode` TreeDB: outer-leaf mode selector (`v1|v2_blockptr`)
+- `-treedb-outer-leaf-block-target-bytes` TreeDB: target block size for v2 outer-leaf block payloads
+- `-treedb-outer-leaf-block-codec` TreeDB: block codec for v2 outer-leaf payloads (`snappy|lz4`)
+- `-treedb-outer-leaf-block-restart-interval` TreeDB: restart interval metadata for v2 outer-leaf payloads
 - `-outerleaf-approx-value-sizes` outerleaf_approx matrix value sizes (CSV, default `128,1024`)
 - `-outerleaf-approx-block-cache-mb` outerleaf_approx simulated outer-block cache size in MiB (`0` disables cache model)
 - `-outerleaf-approx-fence-fpr` outerleaf_approx simulated fence-index false-positive rate `[0,1]`

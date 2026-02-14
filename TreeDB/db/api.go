@@ -309,6 +309,15 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
 
+		gHits, gMisses, gEntries, gCapacity := db.valueLogManager.GroupedFrameCacheStats()
+		stats["treedb.vlog.grouped_frame_cache.hits"] = fmt.Sprintf("%d", gHits)
+		stats["treedb.vlog.grouped_frame_cache.misses"] = fmt.Sprintf("%d", gMisses)
+		stats["treedb.vlog.grouped_frame_cache.entries"] = fmt.Sprintf("%d", gEntries)
+		stats["treedb.vlog.grouped_frame_cache.capacity"] = fmt.Sprintf("%d", gCapacity)
+		if total := gHits + gMisses; total > 0 {
+			stats["treedb.vlog.grouped_frame_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(gHits)/float64(total))
+		}
+
 		hits, misses, entries, capacity := db.valueLogManager.TemplateDefCacheStats()
 		stats["treedb.vlog.template_def_cache.hits"] = fmt.Sprintf("%d", hits)
 		stats["treedb.vlog.template_def_cache.misses"] = fmt.Sprintf("%d", misses)
@@ -316,6 +325,16 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.template_def_cache.capacity"] = fmt.Sprintf("%d", capacity)
 		if total := hits + misses; total > 0 {
 			stats["treedb.vlog.template_def_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
+		}
+		if cache := db.outerLeafBlockCache; cache != nil {
+			hits, misses, entries, capacity := cache.stats()
+			stats["treedb.vlog.outer_leaf_block_cache.hits"] = fmt.Sprintf("%d", hits)
+			stats["treedb.vlog.outer_leaf_block_cache.misses"] = fmt.Sprintf("%d", misses)
+			stats["treedb.vlog.outer_leaf_block_cache.entries"] = fmt.Sprintf("%d", entries)
+			stats["treedb.vlog.outer_leaf_block_cache.capacity"] = fmt.Sprintf("%d", capacity)
+			if total := hits + misses; total > 0 {
+				stats["treedb.vlog.outer_leaf_block_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
+			}
 		}
 	}
 	watermarkLockDelaySharePct, watermarkLatencyP99Ms := db.publishWatermarkStats()

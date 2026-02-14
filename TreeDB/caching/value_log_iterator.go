@@ -10,7 +10,7 @@ import (
 
 type valueLogIterator struct {
 	iter iterator.UnsafeIterator
-	read func(page.ValuePtr) ([]byte, error)
+	read func(key []byte, ptr page.ValuePtr) ([]byte, error)
 
 	cached       bool
 	cachedValue  []byte
@@ -19,7 +19,7 @@ type valueLogIterator struct {
 	err          error
 }
 
-func newValueLogIterator(iter iterator.UnsafeIterator, read func(page.ValuePtr) ([]byte, error)) iterator.UnsafeIterator {
+func newValueLogIterator(iter iterator.UnsafeIterator, read func(key []byte, ptr page.ValuePtr) ([]byte, error)) iterator.UnsafeIterator {
 	if iter == nil || read == nil {
 		return iter
 	}
@@ -135,7 +135,7 @@ func (it *valueLogIterator) loadValue() {
 	}
 	it.cachedHasPtr = true
 	it.cachedPtr = ptr
-	val, err := it.read(ptr)
+	val, err := it.read(it.iter.UnsafeKey(), ptr)
 	if err != nil {
 		it.err = err
 		return

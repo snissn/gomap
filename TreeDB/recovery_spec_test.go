@@ -125,6 +125,7 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
+	outerLeafV2 := os.Getenv("TREEDB_CRASH_OUTERLEAF_V2") == "1"
 
 	durability := treedb.DurabilityDurable
 	if disableWAL {
@@ -137,6 +138,12 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 		Dir:        dir,
 		ChunkSize:  64 * 1024,
 		Durability: durability,
+	}
+	if outerLeafV2 {
+		opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV2BlockPtr
+		opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
+		opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
+		opts.ValueLog.OuterLeafBlockRestartInterval = 16
 	}
 
 	db, err := treedb.Open(opts)
@@ -291,6 +298,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 		name        string
 		env         []string
 		expectLarge bool
+		outerLeafV2 bool
 	}
 
 	tiers := []tier{
@@ -321,6 +329,17 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			},
 			expectLarge: true,
 		},
+		{
+			name: "wal_on_strict_sync_large_value_outerleaf_v2",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+				"TREEDB_CRASH_OUTERLEAF_V2=1",
+			},
+			expectLarge: true,
+			outerLeafV2: true,
+		},
 	}
 
 	for _, tc := range tiers {
@@ -328,7 +347,14 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			dir := t.TempDir()
 			runCrashRecoveryDurabilityWriter(t, dir, tc.env...)
 
-			db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+			opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024}
+			if tc.outerLeafV2 {
+				opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV2BlockPtr
+				opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
+				opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
+				opts.ValueLog.OuterLeafBlockRestartInterval = 16
+			}
+			db, err := treedb.Open(opts)
 			if err != nil {
 				t.Fatalf("open: %v", err)
 			}

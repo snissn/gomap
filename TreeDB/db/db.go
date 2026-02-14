@@ -65,6 +65,7 @@ type DB struct {
 	keepRecent                uint64
 	policy                    WritePolicy
 	valueLogDomainThresholds  []ValueLogDomainThreshold
+	outerLeafBlockCache       *outerLeafBlockCache
 	leafFillTargetPPM         uint32
 	internalFillTargetPPM     uint32
 	leafPrefixCompression     bool
@@ -179,8 +180,9 @@ const (
 const (
 	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
 	IndexOuterLeafModeV1 = "v1"
-	// IndexOuterLeafModeV2BlockPtr reserves the fence-key -> block pointer
-	// layout for the experimental outer-leaf format.
+	// IndexOuterLeafModeV2BlockPtr enables the outer-leaf block-pointer payload
+	// format. Values are encoded as key+value blocks in the value log and index
+	// leaves continue to store pointers.
 	IndexOuterLeafModeV2BlockPtr = "v2_blockptr"
 )
 
@@ -230,6 +232,10 @@ type ValueLogOptions struct {
 	//
 	// 0 uses a default.
 	OuterLeafBlockRestartInterval int
+	// OuterLeafBlockCacheEntries bounds the number of decoded blocks that are
+	// cached for pointer reads when IndexOuterLeafMode=v2_blockptr.
+	// 0 disables the cache.
+	OuterLeafBlockCacheEntries int
 	// IncompressibleHoldBytes configures auto-mode suppression duration after
 	// repeated incompressible probes.
 	//
@@ -452,7 +458,7 @@ type Options struct {
 	IndexAdaptiveLeafEncoding bool
 	// IndexOuterLeafMode selects the index outer-leaf format:
 	// - "" / "v1": existing per-key leaf entries
-	// - "v2_blockptr": reserved experimental fence-key -> block pointer layout
+	// - "v2_blockptr": pointer payloads encode key+value outer-leaf blocks
 	IndexOuterLeafMode string
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
@@ -623,6 +629,8 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.idx = idx
 	snap.state = state
 	snap.reader.vlogs = state.ValueLogSet
+	snap.reader.outerLeafMode = db.indexOuterLeafMode
+	snap.reader.cache = db.outerLeafBlockCache
 	if idx != nil {
 		snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
 	}
@@ -755,9 +763,6 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
 	}
-	if normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode) == IndexOuterLeafModeV2BlockPtr {
-		return fmt.Errorf("treedb: index outer leaf mode %q is reserved for experimental work and is not implemented yet", IndexOuterLeafModeV2BlockPtr)
-	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
 	}
@@ -781,6 +786,9 @@ func validateOptions(opts Options) error {
 		if opts.ValueLog.OuterLeafBlockTargetBytes < minOuterLeafBlockTargetBytes || opts.ValueLog.OuterLeafBlockTargetBytes > maxOuterLeafBlockTargetBytes {
 			return fmt.Errorf("treedb: value-log outer-leaf block target bytes out of range [%d,%d]: %d", minOuterLeafBlockTargetBytes, maxOuterLeafBlockTargetBytes, opts.ValueLog.OuterLeafBlockTargetBytes)
 		}
+	}
+	if opts.ValueLog.OuterLeafBlockCacheEntries < 0 {
+		return fmt.Errorf("treedb: invalid value-log outer-leaf block cache entries %d", opts.ValueLog.OuterLeafBlockCacheEntries)
 	}
 	if opts.ValueLog.OuterLeafBlockRestartInterval < 0 {
 		return fmt.Errorf("treedb: invalid value-log outer-leaf block restart interval %d", opts.ValueLog.OuterLeafBlockRestartInterval)
@@ -864,6 +872,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		adaptive:                  adaptiveCtrl,
 		keepRecent:                opts.KeepRecent,
 		valueLogDomainThresholds:  NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
+		outerLeafBlockCache:       newOuterLeafBlockCache(opts.ValueLog.OuterLeafBlockCacheEntries),
 		leafFillTargetPPM:         opts.LeafFillTargetPPM,
 		internalFillTargetPPM:     opts.InternalFillTargetPPM,
 		leafPrefixCompression:     opts.LeafPrefixCompression,
@@ -1578,7 +1587,7 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(idx.pager, valueReader{vlogs: state.ValueLogSet}, state.RootPageID)
+	tr := tree.New(idx.pager, valueReader{vlogs: state.ValueLogSet, outerLeafMode: db.indexOuterLeafMode}, state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 

@@ -865,3 +865,144 @@ func TestIterator_GroupedPointerBatching_MixedInlineAndPtr(t *testing.T) {
 		t.Fatalf("expected isolated pointer fallback to single read in mixed stream")
 	}
 }
+
+type keyAwareBatchValueReader struct {
+	values      map[page.ValuePtr]map[string][]byte
+	singleCalls int
+	batchCalls  int
+}
+
+func newKeyAwareBatchValueReader() *keyAwareBatchValueReader {
+	return &keyAwareBatchValueReader{
+		values: make(map[page.ValuePtr]map[string][]byte),
+	}
+}
+
+func (r *keyAwareBatchValueReader) add(fileID uint32, offset uint64, key, value string) page.ValuePtr {
+	ptr := page.ValuePtr{
+		FileID: fileID,
+		Offset: offset,
+		Length: uint32(len(value)),
+	}
+	m := r.values[ptr]
+	if m == nil {
+		m = make(map[string][]byte)
+		r.values[ptr] = m
+	}
+	m[key] = []byte(value)
+	return ptr
+}
+
+func (r *keyAwareBatchValueReader) lookup(ptr page.ValuePtr, key []byte) ([]byte, error) {
+	m, ok := r.values[ptr]
+	if !ok {
+		return nil, fmt.Errorf("value pointer not found: %+v", ptr)
+	}
+	v, ok := m[string(key)]
+	if !ok {
+		return nil, fmt.Errorf("key lookup miss for ptr=%+v key=%q", ptr, key)
+	}
+	return v, nil
+}
+
+func (r *keyAwareBatchValueReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	return nil, fmt.Errorf("unexpected keyless read for ptr=%+v", ptr)
+}
+
+func (r *keyAwareBatchValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	return nil, fmt.Errorf("unexpected keyless read for ptr=%+v", ptr)
+}
+
+func (r *keyAwareBatchValueReader) ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, error) {
+	r.singleCalls++
+	return r.lookup(ptr, key)
+}
+
+func (r *keyAwareBatchValueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, error) {
+	r.singleCalls++
+	v, err := r.lookup(ptr, key)
+	if err != nil {
+		return nil, err
+	}
+	return append(dst[:0], v...), nil
+}
+
+func (r *keyAwareBatchValueReader) ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][]byte, dst [][]byte) ([][]byte, error) {
+	r.batchCalls++
+	if len(ptrs) != len(keys) {
+		return nil, fmt.Errorf("ptr/key mismatch %d/%d", len(ptrs), len(keys))
+	}
+	if cap(dst) < len(ptrs) {
+		dst = make([][]byte, len(ptrs))
+	} else {
+		dst = dst[:len(ptrs)]
+	}
+	for i := range ptrs {
+		v, err := r.lookup(ptrs[i], keys[i])
+		if err != nil {
+			return nil, err
+		}
+		dst[i] = append(dst[i][:0], v...)
+	}
+	return dst, nil
+}
+
+func TestIterator_GroupedPointerBatching_KeyAwareCombinedColumnarPrefixV2(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1)
+	data, _ := p.Get(0)
+	b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	b.SetPageID(0)
+
+	reader := newKeyAwareBatchValueReader()
+	want := make([]string, 0, 8)
+	for i := 0; i < 8; i++ {
+		key := fmt.Sprintf("aa%04d", i)
+		val := fmt.Sprintf("pv%04d", i)
+		ptr := reader.add(page.ValueLogFileID(1), uint64(64+i*32), key, val)
+		if err := b.AddLeafEntry([]byte(key), nil, node.FlagPointer, ptr); err != nil {
+			t.Fatalf("AddLeafEntry(%s): %v", key, err)
+		}
+		want = append(want, fmt.Sprintf("%s=%s", key, val))
+	}
+	n := b.Finish()
+	if !n.VerifyChecksum() {
+		t.Fatalf("checksum mismatch")
+	}
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator(nil, nil)
+	defer it.Close()
+
+	var got []string
+	for ; it.Valid(); it.Next() {
+		got = append(got, fmt.Sprintf("%s=%s", it.Key(), it.ValueCopy(nil)))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("result length mismatch: got=%d want=%d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("result mismatch at %d: got=%q want=%q", i, got[i], want[i])
+		}
+	}
+	if reader.batchCalls == 0 {
+		t.Fatalf("expected key-aware batched pointer reads")
+	}
+	if reader.singleCalls != 0 {
+		t.Fatalf("expected no single key-aware pointer reads, got %d", reader.singleCalls)
+	}
+}
