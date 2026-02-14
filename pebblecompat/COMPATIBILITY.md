@@ -15,6 +15,7 @@ on TreeDB with equivalent observable behavior for required call paths.
 `pebblecompat` currently guarantees:
 
 - Deterministic `Batch.Repr()` + `DB.ApplyBatchRepr(...)` replay for supported kinds.
+- Seeded randomized differential, replay-across-reopen, and batch-segmentation invariance coverage for supported point-op `ApplyBatchRepr` streams.
 - `Batch.AddInternalKey` replay support for `Set` and `SetWithDelete` internal kinds.
 - Point-key operations (`Set/Get/Delete/DeleteRange/Merge/SingleDelete/DeleteSized`).
 - Range-key write operations (`RangeKeySet/RangeKeyUnset/RangeKeyDelete`).

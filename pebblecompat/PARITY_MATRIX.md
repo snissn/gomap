@@ -25,7 +25,7 @@ Legend:
 | `LogData` | partial | Sequence-reserving no-op. | 2 |
 | `Apply` | full | Repr-backed deterministic apply path. | done |
 | `ApplyNoSyncWait` | partial | Equivalent to apply in current wrapper. | 2/4 |
-| `ApplyBatchRepr` | full | Deterministic parsing/apply for supported op kinds. | done |
+| `ApplyBatchRepr` | full | Deterministic parsing/apply for supported op kinds; seeded randomized differential/reopen/segmentation replay tests cover supported point-op streams. | done |
 | `NewBatch` | full | Compatibility batch wrapper. | done |
 | `NewBatchWithSize` | partial | Hint accepted; not full Pebble memory model. | 2 |
 | `Flush` | partial | Flush now performs a TreeDB checkpoint and then a blocking shadow Pebble flush for closer observable parity; internal memtable/L0 semantics still differ. | 4 |

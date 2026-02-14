@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sort"
@@ -277,6 +278,105 @@ func exportOverlapMatrixSharedObject(t *testing.T, dir string) string {
 	require.NoError(t, err)
 	return objPath
 }
+
+type iterFactory interface {
+	NewIter(*pebble.IterOptions) (*pebble.Iterator, error)
+}
+
+type replayPointOp struct {
+	key   []byte
+	value []byte
+	del   bool
+}
+
+func collectVisibleMap(t *testing.T, db iterFactory) map[string]string {
+	t.Helper()
+	iter, err := db.NewIter(nil)
+	require.NoError(t, err)
+	defer iter.Close()
+
+	out := make(map[string]string)
+	for valid := iter.First(); valid; valid = iter.Next() {
+		out[string(iter.Key())] = string(iter.Value())
+	}
+	require.NoError(t, iter.Error())
+	return out
+}
+
+func generateSeededPointOps(seed int64, count int, keySpace int) []replayPointOp {
+	rng := rand.New(rand.NewSource(seed))
+	ops := make([]replayPointOp, 0, count)
+	for i := 0; i < count; i++ {
+		key := []byte(fmt.Sprintf("k%02d", rng.Intn(keySpace)))
+		if rng.Intn(100) < 35 {
+			ops = append(ops, replayPointOp{key: key, del: true})
+			continue
+		}
+		value := []byte(fmt.Sprintf("v%03d-%02d", i, rng.Intn(100)))
+		ops = append(ops, replayPointOp{key: key, value: value})
+	}
+	return ops
+}
+
+func appendPointOpToBatch(t *testing.T, b *pebble.Batch, op replayPointOp) {
+	t.Helper()
+	if op.del {
+		require.NoError(t, b.Delete(op.key, nil))
+		return
+	}
+	require.NoError(t, b.Set(op.key, op.value, nil))
+}
+
+func buildReprBatchesFromPointOps(
+	t *testing.T,
+	ops []replayPointOp,
+	seed int64,
+	minBatchOps int,
+	maxBatchOps int,
+) [][]byte {
+	t.Helper()
+	require.GreaterOrEqual(t, minBatchOps, 1)
+	require.GreaterOrEqual(t, maxBatchOps, minBatchOps)
+
+	rng := rand.New(rand.NewSource(seed))
+	reprs := make([][]byte, 0, len(ops))
+	for i := 0; i < len(ops); {
+		n := minBatchOps
+		if maxBatchOps > minBatchOps {
+			n += rng.Intn(maxBatchOps - minBatchOps + 1)
+		}
+		end := i + n
+		if end > len(ops) {
+			end = len(ops)
+		}
+
+		batch := &pebble.Batch{}
+		for j := i; j < end; j++ {
+			appendPointOpToBatch(t, batch, ops[j])
+		}
+		reprs = append(reprs, append([]byte(nil), batch.Repr()...))
+		batch.Close()
+		i = end
+	}
+	return reprs
+}
+
+func applyReprSequenceCompat(t *testing.T, db *DB, reprs [][]byte) {
+	t.Helper()
+	for i := range reprs {
+		require.NoError(t, db.ApplyBatchRepr(reprs[i], pebble.NoSync))
+	}
+}
+
+func applyReprSequencePebble(t *testing.T, db *pebble.DB, reprs [][]byte) {
+	t.Helper()
+	for i := range reprs {
+		b := &pebble.Batch{}
+		require.NoError(t, b.SetRepr(reprs[i]))
+		require.NoError(t, db.Apply(b, pebble.NoSync))
+		b.Close()
+	}
+}
 func TestBatchReprDeterministicParity(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "compat"), nil)
@@ -331,6 +431,92 @@ func TestApplyBatchReprScanInternalParity(t *testing.T) {
 	require.Equal(t, want, got)
 }
 
+func TestApplyBatchReprRandomizedDifferential_Seeded(t *testing.T) {
+	const seed = int64(20260214)
+	ops := generateSeededPointOps(seed, 320, 24)
+	reprs := buildReprBatchesFromPointOps(t, ops, seed+1, 1, 8)
+
+	dir := t.TempDir()
+	compatDB, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer compatDB.Close()
+
+	pebbleDB, err := openPebbleForTests(filepath.Join(dir, "pebble"))
+	require.NoError(t, err)
+	defer pebbleDB.Close()
+
+	for i := range reprs {
+		require.NoError(t, compatDB.ApplyBatchRepr(reprs[i], pebble.NoSync))
+
+		b := &pebble.Batch{}
+		require.NoError(t, b.SetRepr(reprs[i]))
+		require.NoError(t, pebbleDB.Apply(b, pebble.NoSync))
+		b.Close()
+
+		if i > 0 && i%25 == 0 {
+			require.Equal(t, collectVisibleMap(t, pebbleDB), collectVisibleMap(t, compatDB))
+		}
+	}
+
+	require.Equal(t, collectVisibleMap(t, pebbleDB), collectVisibleMap(t, compatDB))
+}
+
+func TestApplyBatchReprReplayAcrossReopen_Seeded(t *testing.T) {
+	const seed = int64(20260215)
+	ops := generateSeededPointOps(seed, 280, 20)
+	reprs := buildReprBatchesFromPointOps(t, ops, seed+1, 1, 6)
+	require.Greater(t, len(reprs), 2)
+
+	dir := t.TempDir()
+
+	controlDB, err := Open(filepath.Join(dir, "compat-control"), nil)
+	require.NoError(t, err)
+	defer controlDB.Close()
+	applyReprSequenceCompat(t, controlDB, reprs)
+	controlState := collectVisibleMap(t, controlDB)
+
+	pebbleDB, err := openPebbleForTests(filepath.Join(dir, "pebble-control"))
+	require.NoError(t, err)
+	defer pebbleDB.Close()
+	applyReprSequencePebble(t, pebbleDB, reprs)
+	pebbleState := collectVisibleMap(t, pebbleDB)
+
+	reopenPath := filepath.Join(dir, "compat-reopen")
+	reopenDB, err := Open(reopenPath, nil)
+	require.NoError(t, err)
+	half := len(reprs) / 2
+	applyReprSequenceCompat(t, reopenDB, reprs[:half])
+	require.NoError(t, reopenDB.Close())
+
+	reopenDB, err = Open(reopenPath, nil)
+	require.NoError(t, err)
+	defer reopenDB.Close()
+	applyReprSequenceCompat(t, reopenDB, reprs[half:])
+	reopenState := collectVisibleMap(t, reopenDB)
+
+	require.Equal(t, controlState, reopenState)
+	require.Equal(t, pebbleState, reopenState)
+}
+
+func TestApplyBatchReprBatchSegmentationInvariant_Seeded(t *testing.T) {
+	const seed = int64(20260216)
+	ops := generateSeededPointOps(seed, 300, 22)
+	fineReprs := buildReprBatchesFromPointOps(t, ops, seed+1, 1, 3)
+	coarseReprs := buildReprBatchesFromPointOps(t, ops, seed+2, 7, 16)
+
+	dir := t.TempDir()
+	fineDB, err := Open(filepath.Join(dir, "compat-fine"), nil)
+	require.NoError(t, err)
+	defer fineDB.Close()
+	coarseDB, err := Open(filepath.Join(dir, "compat-coarse"), nil)
+	require.NoError(t, err)
+	defer coarseDB.Close()
+
+	applyReprSequenceCompat(t, fineDB, fineReprs)
+	applyReprSequenceCompat(t, coarseDB, coarseReprs)
+
+	require.Equal(t, collectVisibleMap(t, fineDB), collectVisibleMap(t, coarseDB))
+}
 func TestIngestWithStatsParity(t *testing.T) {
 	dir := t.TempDir()
 	sstPath := filepath.Join(dir, "test.sst")
