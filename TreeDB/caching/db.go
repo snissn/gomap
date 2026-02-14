@@ -643,7 +643,13 @@ func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, 
 }
 
 func (db *DB) deferredValueLogEnabled() bool {
-	return false
+	if db == nil {
+		return false
+	}
+	// Fence-pointer outer-leaf mode benefits from flush-time regrouping when WAL
+	// is disabled: singleton writes can coalesce into larger outer blocks before
+	// value-log append, reducing index pointer fanout.
+	return db.disableJournal && db.outerLeafFenceV2Enabled() && db.valueLogEnabled() && db.allowValueLogPointers()
 }
 
 func (db *DB) walUsesValueLog() bool {
@@ -883,7 +889,13 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	return ops, nil
 }
 
-func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool, laneID int) error {
+type deferredFenceCollapseState struct {
+	lastPtr page.ValuePtr
+	havePtr bool
+	prevKey []byte
+}
+
+func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool, laneID int, fenceState *deferredFenceCollapseState) error {
 	if db == nil {
 		return nil
 	}
@@ -916,9 +928,18 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 
 	var ptrKeys [][]byte
 	var ptrVals [][]byte
+	fenceMode := db.outerLeafFenceV2Enabled()
+	state := fenceState
+	if state == nil {
+		state = &deferredFenceCollapseState{}
+	}
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
+		if fenceMode && len(state.prevKey) > 0 && bytes.Compare(key, state.prevKey) <= 0 {
+			// Fence collapse is only valid on ascending key runs.
+			state.havePtr = false
+		}
 		if iter.IsDeleted() {
 			var err error
 			if dv != nil {
@@ -929,23 +950,37 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			if err != nil {
 				return err
 			}
+			state.havePtr = false
+			state.prevKey = append(state.prevKey[:0], key...)
 			iter.Next()
 			continue
 		}
 
 		val, ptr, flags := iter.UnsafeEntry()
 		if flags&node.FlagPointer != 0 {
-			if psv != nil {
-				if err := psv.SetPointerView(key, ptr); err != nil {
-					return err
+			emitPtr := true
+			if fenceMode {
+				if state.havePtr && ptr == state.lastPtr {
+					emitPtr = false
+				} else {
+					state.lastPtr = ptr
+					state.havePtr = true
 				}
-			} else if ps != nil {
-				if err := ps.SetPointer(key, ptr); err != nil {
-					return err
-				}
-			} else {
-				return errors.New("cachingdb: backend batch missing SetPointer")
 			}
+			if emitPtr {
+				if psv != nil {
+					if err := psv.SetPointerView(key, ptr); err != nil {
+						return err
+					}
+				} else if ps != nil {
+					if err := ps.SetPointer(key, ptr); err != nil {
+						return err
+					}
+				} else {
+					return errors.New("cachingdb: backend batch missing SetPointer")
+				}
+			}
+			state.prevKey = append(state.prevKey[:0], key...)
 			iter.Next()
 			continue
 		}
@@ -980,6 +1015,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 				return err
 			}
 		}
+		state.prevKey = append(state.prevKey[:0], key...)
 		iter.Next()
 	}
 
@@ -1034,7 +1070,17 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 
 	for i := range groups {
 		ptr := vlogPtrs[i]
-		for _, srcPos := range groups[i] {
+		srcPositions := groups[i]
+		if fenceMode {
+			// Fence-pointer mode stores one key per grouped outer block.
+			// Keeping only the first key preserves sorted fence bounds while
+			// reducing persisted index entries.
+			if len(srcPositions) == 0 {
+				continue
+			}
+			srcPositions = srcPositions[:1]
+		}
+		for _, srcPos := range srcPositions {
 			key := ptrKeys[srcPos]
 			if psv != nil {
 				if err := psv.SetPointerView(key, ptr); err != nil {
@@ -7893,6 +7939,13 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	eligible := db.forceValueLogPointers || len(value) > db.valueLogThresholdForKey(key)
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
+	deferPointers := false
+	if allowPointers && db.deferredValueLogEnabled() {
+		// In deferred mode we keep the mutable entry inline and regroup+append to
+		// value-log at flush time.
+		deferPointers = true
+		allowPointers = false
+	}
 	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
 		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
@@ -7968,7 +8021,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 			}
 		}
 	} else if !db.disableJournal {
-		if debugPtr && eligible {
+		if debugPtr && eligible && !deferPointers {
 			if !valueLogEnabled {
 				db.debugPtrDisabled.Add(1)
 			} else {
@@ -7980,7 +8033,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 			db.writeMu.RUnlock()
 			return err
 		}
-	} else if debugPtr && eligible {
+	} else if debugPtr && eligible && !deferPointers {
 		if !valueLogEnabled {
 			db.debugPtrDisabled.Add(1)
 		} else {
@@ -9957,9 +10010,10 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 
 	// backendBatch := db.backend.NewBatch() // Original line, now replaced
 	if db.deferredValueLogEnabled() {
+		var fenceState deferredFenceCollapseState
 		for _, unit := range units {
 			iter := unit.mem.NewIterator(nil, nil)
-			err := db.flushDeferredValueLogMemtable(iter, backendBatch, unit.memLen, sync, laneID)
+			err := db.flushDeferredValueLogMemtable(iter, backendBatch, unit.memLen, sync, laneID, &fenceState)
 			cerr := iter.Close()
 			if err == nil {
 				err = cerr
@@ -10317,7 +10371,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 		if db.deferredValueLogEnabled() {
 			t0 := time.Now()
-			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID); err != nil {
+			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID, nil); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 				_ = iter.Close()
 				_ = backendBatch.Close()
@@ -12288,6 +12342,11 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 		return false, nil
 	}
 	if !b.db.deferredValueLogEnabled() {
+		return false, nil
+	}
+	if b.db.outerLeafFenceV2Enabled() {
+		// Fence-pointer mode needs flush-time fence collapse semantics; direct
+		// stream bypass emits per-key pointer ops and defeats that compaction.
 		return false, nil
 	}
 	if b.backend != nil || !b.streamEligible {

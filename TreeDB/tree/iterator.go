@@ -327,12 +327,15 @@ type Iterator struct {
 	slabBatcher     slabUnsafeBatchAppender
 	slabKeyReader   slabUnsafeKeyReader
 	slabFenceBlocks slabUnsafeFenceBlockReader
+	slabFenceKeys   slabUnsafeFenceBlockKeyReader
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
 
-	fenceEntries []FenceBlockEntry
-	fenceIndex   int
-	fenceActive  bool
+	fenceEntries    []FenceBlockEntry
+	fenceIndex      int
+	fenceActive     bool
+	fenceValuesLazy bool
+	fenceBlockPtr   page.ValuePtr
 
 	pendingSeekKey        []byte
 	pendingFencePageID    uint64
@@ -388,6 +391,7 @@ func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iter
 	}
 	it.slabKeyReader = t.slabKeyReader
 	it.slabFenceBlocks = t.slabFenceBlocks
+	it.slabFenceKeys = t.slabFenceKeys
 	it.slabKeyAppender = t.slabKeyAppender
 	if keyBatch, ok := t.slabReader.(slabUnsafeKeyBatchAppender); ok {
 		it.slabKeyBatcher = keyBatch
@@ -424,6 +428,7 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 	}
 	it.slabKeyReader = t.slabKeyReader
 	it.slabFenceBlocks = t.slabFenceBlocks
+	it.slabFenceKeys = t.slabFenceKeys
 	it.slabKeyAppender = t.slabKeyAppender
 	if keyBatch, ok := t.slabReader.(slabUnsafeKeyBatchAppender); ok {
 		it.slabKeyBatcher = keyBatch
@@ -606,6 +611,8 @@ func (it *Iterator) resetFenceCursor() {
 	it.fenceEntries = it.fenceEntries[:0]
 	it.fenceIndex = 0
 	it.fenceActive = false
+	it.fenceValuesLazy = false
+	it.fenceBlockPtr = page.ValuePtr{}
 }
 
 func (it *Iterator) clearPendingFenceSeek() {
@@ -623,10 +630,15 @@ func (it *Iterator) setCurrentFenceEntry(entry FenceBlockEntry) {
 	it.ptrOK = true
 	if it.mode == IteratorModeKeysOnly {
 		it.currVal = nil
+		it.valOK = true
+	} else if it.fenceValuesLazy {
+		// Key-only fence expansion path: resolve values lazily on demand.
+		it.currVal = nil
+		it.valOK = false
 	} else {
 		it.currVal = entry.Value
+		it.valOK = true
 	}
-	it.valOK = true
 	it.valid = true
 }
 
@@ -639,8 +651,17 @@ func lowerBoundFenceEntries(entries []FenceBlockEntry, key []byte) int {
 	})
 }
 
+func lowerBoundFenceKeys(keys [][]byte, key []byte) int {
+	if len(key) == 0 {
+		return 0
+	}
+	return sort.Search(len(keys), func(i int) bool {
+		return compareTreeKey(keys[i], key) >= 0
+	})
+}
+
 func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
-	if it.reverse || len(it.pendingSeekKey) == 0 || it.slabFenceBlocks == nil {
+	if it.reverse || len(it.pendingSeekKey) == 0 || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil) {
 		return false, nil
 	}
 	if top == nil || top.Node.Type() != page.PageTypeLeaf || top.Index <= 0 {
@@ -655,31 +676,54 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
 			continue
 		}
-		entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
-		if err != nil {
-			return false, err
+		if it.slabFenceKeys != nil {
+			keys, ok, err := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				pos := lowerBoundFenceKeys(keys, seekKey)
+				if pos < len(keys) {
+					top.Index = scan
+					it.pendingFencePageID = top.PageID
+					it.pendingFenceLeafIndex = scan
+					it.pendingFenceEntryIdx = pos
+					it.pendingFenceReady = true
+					return true, nil
+				}
+				// Nearest predecessor fence did not contain a candidate >= seek key.
+				// Earlier fences are strictly smaller and cannot satisfy this seek.
+				return false, nil
+			}
 		}
-		if !ok {
+		if it.slabFenceBlocks != nil {
+			entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+			if err != nil {
+				return false, err
+			}
+			if !ok {
+				return false, nil
+			}
+			pos := lowerBoundFenceEntries(entries, seekKey)
+			if pos < len(entries) {
+				top.Index = scan
+				it.pendingFencePageID = top.PageID
+				it.pendingFenceLeafIndex = scan
+				it.pendingFenceEntryIdx = pos
+				it.pendingFenceReady = true
+				return true, nil
+			}
+			// Nearest predecessor fence did not contain a candidate >= seek key.
+			// Earlier fences are strictly smaller and cannot satisfy this seek.
 			return false, nil
 		}
-		pos := lowerBoundFenceEntries(entries, seekKey)
-		if pos < len(entries) {
-			top.Index = scan
-			it.pendingFencePageID = top.PageID
-			it.pendingFenceLeafIndex = scan
-			it.pendingFenceEntryIdx = pos
-			it.pendingFenceReady = true
-			return true, nil
-		}
-		// Nearest predecessor fence did not contain a candidate >= seek key.
-		// Earlier fences are strictly smaller and cannot satisfy this seek.
 		return false, nil
 	}
 	return false, nil
 }
 
 func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced bool, exhausted bool, err error) {
-	if top == nil || top.Node.Type() != page.PageTypeLeaf || it.slabFenceBlocks == nil {
+	if top == nil || top.Node.Type() != page.PageTypeLeaf || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil) {
 		return false, false, false, nil
 	}
 	if it.mode == IteratorModePointerProjection {
@@ -696,12 +740,44 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		return false, false, false, nil
 	}
 
-	entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
-	if err != nil {
-		return false, false, false, err
+	var (
+		entries []FenceBlockEntry
+		ok      bool
+	)
+	if it.slabFenceKeys != nil {
+		keys, keyOK, keyErr := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
+		if keyErr != nil {
+			return false, false, false, keyErr
+		}
+		if keyOK {
+			if cap(it.fenceEntries) < len(keys) {
+				it.fenceEntries = make([]FenceBlockEntry, len(keys))
+			} else {
+				it.fenceEntries = it.fenceEntries[:len(keys)]
+			}
+			for i := range keys {
+				it.fenceEntries[i].Key = keys[i]
+				it.fenceEntries[i].Value = nil
+			}
+			entries = it.fenceEntries
+			ok = true
+			it.fenceValuesLazy = it.mode == IteratorModeFull
+			it.fenceBlockPtr = ptr
+		}
 	}
 	if !ok {
-		return false, false, false, nil
+		if it.slabFenceBlocks == nil {
+			return false, false, false, nil
+		}
+		entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+		if err != nil {
+			return false, false, false, err
+		}
+		if !ok {
+			return false, false, false, nil
+		}
+		it.fenceValuesLazy = false
+		it.fenceBlockPtr = ptr
 	}
 	handled = true
 	if len(entries) == 0 {
@@ -717,7 +793,7 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 			pos = lowerBoundFenceEntries(entries, it.end) - 1
 		}
 	} else {
-		lower := it.start
+		var lower []byte
 		if len(it.pendingSeekKey) > 0 {
 			lower = it.pendingSeekKey
 		}
@@ -1036,6 +1112,12 @@ func (it *Iterator) UnsafeValue() []byte {
 	if it.mode == IteratorModeKeysOnly {
 		return nil
 	}
+	if it.fenceActive && it.fenceValuesLazy {
+		if !it.ensureFenceValueLoaded() {
+			return nil
+		}
+		return it.currVal
+	}
 	if it.flags&node.FlagPointer != 0 {
 		if it.mode == IteratorModePointerProjection {
 			if !it.ensurePointerLoaded() {
@@ -1112,6 +1194,12 @@ func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	}
 	if it.mode == IteratorModeKeysOnly {
 		return nil, page.ValuePtr{}, it.flags
+	}
+	if it.fenceActive && it.fenceValuesLazy {
+		if !it.ensureFenceValueLoaded() {
+			return nil, page.ValuePtr{}, it.flags
+		}
+		return it.currVal, page.ValuePtr{}, it.flags
 	}
 	if it.flags&node.FlagPointer != 0 {
 		if !it.ensurePointerLoaded() {
@@ -1251,6 +1339,57 @@ func (it *Iterator) ensureInlineValueLoaded() bool {
 	it.currVal = val
 	it.valOK = true
 	it.ptrOK = true
+	return true
+}
+
+func (it *Iterator) ensureFenceValueLoaded() bool {
+	if it.valOK || !it.fenceActive || !it.fenceValuesLazy {
+		return true
+	}
+	if it.slabFenceBlocks == nil {
+		it.err = fmt.Errorf("iterator fence value load: block reader unavailable")
+		it.valid = false
+		return false
+	}
+	entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(it.fenceBlockPtr)
+	if err != nil {
+		it.err = err
+		it.valid = false
+		return false
+	}
+	if !ok {
+		it.err = fmt.Errorf("iterator fence value load: block unavailable")
+		it.valid = false
+		return false
+	}
+	if len(entries) == 0 {
+		it.err = fmt.Errorf("iterator fence value load: empty block")
+		it.valid = false
+		return false
+	}
+	if it.fenceIndex < 0 || it.fenceIndex >= len(entries) {
+		it.err = fmt.Errorf("iterator fence value load: index out of range %d/%d", it.fenceIndex, len(entries))
+		it.valid = false
+		return false
+	}
+
+	// Keep the expanded block for subsequent entries in this run so we only pay
+	// one full decode when values are actually requested.
+	it.fenceEntries = entries
+	it.fenceValuesLazy = false
+	entry := entries[it.fenceIndex]
+	if compareTreeKey(entry.Key, it.currKey) != 0 {
+		pos := lowerBoundFenceEntries(entries, it.currKey)
+		if pos < 0 || pos >= len(entries) || compareTreeKey(entries[pos].Key, it.currKey) != 0 {
+			it.err = fmt.Errorf("iterator fence value load: key mismatch")
+			it.valid = false
+			return false
+		}
+		it.fenceIndex = pos
+		entry = entries[pos]
+	}
+	it.currVal = entry.Value
+	it.valOK = true
 	return true
 }
 

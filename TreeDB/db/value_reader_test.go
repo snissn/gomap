@@ -138,3 +138,36 @@ func TestValueReaderReadUnsafeFenceForKey_CacheHitSkipsReadUnsafe(t *testing.T) 
 		t.Fatalf("readUnsafeCalls = %d, want 0 (cache hit should bypass raw value-log read)", reader.readUnsafeCalls)
 	}
 }
+
+func TestValueReaderReadUnsafeFenceBlockKeys_CacheHitSkipsReadUnsafe(t *testing.T) {
+	payload, block, ptr := makeTestOuterLeafPayload(t)
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
+	cache := newOuterLeafBlockCache(8)
+	cache.put(newOuterLeafBlockKey(ptr), block)
+
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+
+	keys, ok, err := r.ReadUnsafeFenceBlockKeys(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockKeys: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	want := [][]byte{[]byte("k1"), []byte("k2"), []byte("k3")}
+	if len(keys) != len(want) {
+		t.Fatalf("keys len = %d, want %d", len(keys), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(keys[i], want[i]) {
+			t.Fatalf("key[%d] = %q, want %q", i, keys[i], want[i])
+		}
+	}
+	if reader.readUnsafeCalls != 0 {
+		t.Fatalf("readUnsafeCalls = %d, want 0 (cache hit should bypass raw value-log read)", reader.readUnsafeCalls)
+	}
+}

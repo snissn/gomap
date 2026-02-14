@@ -67,6 +67,12 @@ type slabUnsafeFenceBlockReader interface {
 	ReadUnsafeFenceBlock(ptr page.ValuePtr) (entries []FenceBlockEntry, ok bool, err error)
 }
 
+// Optional key-only block expansion reads for fence-only outer-leaf mode.
+// ok=false means the reader is not in fence expansion mode for this pointer.
+type slabUnsafeFenceBlockKeyReader interface {
+	ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) (keys [][]byte, ok bool, err error)
+}
+
 // Optional key-aware append-style pointer reads.
 type slabUnsafeKeyAppender interface {
 	ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, error)
@@ -84,6 +90,7 @@ type Tree struct {
 	slabKeyReader   slabUnsafeKeyReader
 	slabFenceReader slabUnsafeFenceKeyReader
 	slabFenceBlocks slabUnsafeFenceBlockReader
+	slabFenceKeys   slabUnsafeFenceBlockKeyReader
 	slabKeyAppender slabUnsafeKeyAppender
 	rootPageID      uint64
 }
@@ -105,6 +112,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	}
 	if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
 		t.slabFenceBlocks = fenceBlocks
+	}
+	if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
+		t.slabFenceKeys = fenceKeys
 	}
 	if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
 		t.slabKeyAppender = keyAppender
@@ -135,6 +145,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabFenceBlocks = fenceBlocks
 	} else {
 		t.slabFenceBlocks = nil
+	}
+	if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
+		t.slabFenceKeys = fenceKeys
+	} else {
+		t.slabFenceKeys = nil
 	}
 	if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
 		t.slabKeyAppender = keyAppender

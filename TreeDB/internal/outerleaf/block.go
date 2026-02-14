@@ -749,6 +749,69 @@ func (d *DecodedBlock) Entries(dst []Entry) ([]Entry, error) {
 	}
 }
 
+// Keys decodes all logical keys from a parsed block.
+// Returned key slices reference decoded block storage where possible.
+func (d *DecodedBlock) Keys(dst [][]byte) ([][]byte, error) {
+	if d == nil {
+		return nil, fmt.Errorf("outerleaf: nil block")
+	}
+	if cap(dst) < d.entryCount {
+		dst = make([][]byte, 0, d.entryCount)
+	} else {
+		dst = dst[:0]
+	}
+	switch d.version {
+	case blockVersionV1:
+		if d.firstKey == nil {
+			return nil, fmt.Errorf("outerleaf: missing v1 key")
+		}
+		dst = append(dst, d.firstKey)
+		return dst, nil
+	case blockVersionV2:
+		encoded := d.entries
+		off := 0
+		var prevKey []byte
+		for i := 0; i < d.entryCount; i++ {
+			if off+8 > len(encoded) {
+				return nil, fmt.Errorf("outerleaf: truncated v2 entry header")
+			}
+			shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
+			suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
+			valueLen := int(binary.LittleEndian.Uint32(encoded[off+4 : off+8]))
+			off += 8
+			if shared < 0 || shared > len(prevKey) {
+				return nil, fmt.Errorf("outerleaf: invalid shared prefix")
+			}
+			if suffixLen < 0 || off+suffixLen > len(encoded) {
+				return nil, fmt.Errorf("outerleaf: invalid key suffix length")
+			}
+			suffix := encoded[off : off+suffixLen]
+			off += suffixLen
+			if valueLen < 0 || off+valueLen > len(encoded) {
+				return nil, fmt.Errorf("outerleaf: invalid value length")
+			}
+			off += valueLen
+
+			var key []byte
+			if shared == 0 {
+				key = suffix
+			} else {
+				key = make([]byte, shared+suffixLen)
+				copy(key, prevKey[:shared])
+				copy(key[shared:], suffix)
+			}
+			dst = append(dst, key)
+			prevKey = key
+		}
+		if off != len(encoded) {
+			return nil, fmt.Errorf("outerleaf: trailing v2 entry bytes")
+		}
+		return dst, nil
+	default:
+		return nil, fmt.Errorf("outerleaf: unsupported version %d", d.version)
+	}
+}
+
 // Decode returns the first key/value in an encoded outer-leaf payload.
 func Decode(payload []byte, scratch []byte) (key []byte, value []byte, ok bool, outScratch []byte, err error) {
 	if len(payload) < blockHeaderSize {
