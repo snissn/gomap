@@ -25,6 +25,7 @@ type DB struct {
 	pointPrefix    []byte
 	rangePrefix    []byte
 	dataDir        string
+	merger         *pebble.Merger
 
 	lastSeq uint64
 }
@@ -44,6 +45,12 @@ func Open(dirname string, opts *Options) (*DB, error) {
 	} else {
 		cfg.InternalPrefix = append([]byte(nil), cfg.InternalPrefix...)
 	}
+	if cfg.Merger == nil {
+		cfg.Merger = pebble.DefaultMerger
+	}
+	if cfg.Merger.Merge == nil {
+		return nil, errors.New("pebblecompat: merger missing Merge function")
+	}
 	to := cfg.TreeDB
 	if to.Dir == "" {
 		to.Dir = dirname
@@ -57,6 +64,7 @@ func Open(dirname string, opts *Options) (*DB, error) {
 		tree:           tdb,
 		internalPrefix: cfg.InternalPrefix,
 		dataDir:        to.Dir,
+		merger:         cfg.Merger,
 		lastSeq:        initialSeqNum,
 	}
 	d.seqKey = append(append([]byte(nil), d.internalPrefix...), []byte("seq")...)
@@ -201,7 +209,7 @@ func (d *DB) Set(key, value []byte, opts *pebble.WriteOptions) error {
 	return d.Apply(b, opts)
 }
 
-// Merge merges with Pebble default-merger semantics (concatenation).
+// Merge merges with the configured Pebble merger semantics.
 func (d *DB) Merge(key, value []byte, opts *pebble.WriteOptions) error {
 	b := d.NewBatch()
 	defer b.Close()
@@ -334,28 +342,72 @@ func normalizePointKind(kind pebble.InternalKeyKind) pebble.InternalKeyKind {
 	return kind
 }
 
+func finishValueMergerCompat(
+	valueMerger pebble.ValueMerger, includesBase bool,
+) (value []byte, needDelete bool, err error) {
+	var closer io.Closer
+	if deletable, ok := valueMerger.(pebble.DeletableValueMerger); ok {
+		value, needDelete, closer, err = deletable.DeletableFinish(includesBase)
+	} else {
+		value, closer, err = valueMerger.Finish(includesBase)
+	}
+	if err != nil {
+		if closer != nil {
+			_ = closer.Close()
+		}
+		return nil, false, err
+	}
+	if value != nil {
+		value = append([]byte(nil), value...)
+	}
+	if closer != nil {
+		if closeErr := closer.Close(); closeErr != nil {
+			return nil, false, closeErr
+		}
+	}
+	return value, needDelete, nil
+}
+
 func (d *DB) mergeValueLocked(
 	key, operand []byte,
 	pending map[string]pointWrite,
-) ([]byte, error) {
-	if cur, ok := pending[string(key)]; ok {
-		if isDeleteKind(cur.Kind) {
-			return append([]byte(nil), operand...), nil
-		}
-		merged := append([]byte(nil), cur.Value...)
-		merged = append(merged, operand...)
-		return merged, nil
-	}
-	base, err := d.tree.Get(key)
+) (pointWrite, error) {
+	valueMerger, err := d.merger.Merge(key, operand)
 	if err != nil {
-		return nil, err
+		return pointWrite{}, err
 	}
-	if base == nil {
-		return append([]byte(nil), operand...), nil
+	if valueMerger == nil {
+		return pointWrite{}, errors.New("pebblecompat: merger returned nil ValueMerger")
 	}
-	merged := append([]byte(nil), base...)
-	merged = append(merged, operand...)
-	return merged, nil
+	if cur, ok := pending[string(key)]; ok {
+		if !isDeleteKind(cur.Kind) {
+			if err := valueMerger.MergeOlder(cur.Value); err != nil {
+				return pointWrite{}, err
+			}
+		}
+	} else {
+		base, err := d.tree.Get(key)
+		if err != nil {
+			return pointWrite{}, err
+		}
+		if base != nil {
+			if err := valueMerger.MergeOlder(base); err != nil {
+				return pointWrite{}, err
+			}
+		}
+	}
+
+	merged, needDelete, err := finishValueMergerCompat(valueMerger, true /* includesBase */)
+	if err != nil {
+		return pointWrite{}, err
+	}
+	if needDelete {
+		return pointWrite{Key: key, Kind: pebble.InternalKeyKindDelete}, nil
+	}
+	if merged == nil {
+		merged = []byte{}
+	}
+	return pointWrite{Key: key, Value: merged, Kind: pebble.InternalKeyKindSet}, nil
 }
 
 type pointWrite struct {
@@ -414,7 +466,8 @@ func (d *DB) applyBatchReprLocked(repr []byte, sync bool) error {
 			if err != nil {
 				return err
 			}
-			pending[string(key)] = pointWrite{Key: key, Value: merged, Kind: pebble.InternalKeyKindSet, Seq: nextSeq}
+			merged.Seq = nextSeq
+			pending[string(key)] = merged
 
 		case pebble.InternalKeyKindDelete,
 			pebble.InternalKeyKindSingleDelete,

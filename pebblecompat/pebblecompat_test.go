@@ -1,6 +1,7 @@
 package pebblecompat
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -37,11 +38,16 @@ type internalDump struct {
 }
 
 func openPebbleForTests(path string) (*pebble.DB, error) {
+	return openPebbleForTestsWithMerger(path, nil)
+}
+
+func openPebbleForTestsWithMerger(path string, merger *pebble.Merger) (*pebble.DB, error) {
 	cmp := *pebble.DefaultComparer
 	cmp.Split = func(key []byte) int { return len(key) }
 	return pebble.Open(path, &pebble.Options{
 		FormatMajorVersion: pebble.FormatRangeKeys,
 		Comparer:           &cmp,
+		Merger:             merger,
 	})
 }
 
@@ -53,6 +59,38 @@ func openPebbleInMemForTests() (*pebble.DB, error) {
 		FormatMajorVersion: pebble.FormatRangeKeys,
 		Comparer:           &cmp,
 	})
+}
+
+type orderedPipeValueMerger struct {
+	parts [][]byte
+}
+
+func (m *orderedPipeValueMerger) MergeNewer(value []byte) error {
+	m.parts = append(m.parts, append([]byte(nil), value...))
+	return nil
+}
+
+func (m *orderedPipeValueMerger) MergeOlder(value []byte) error {
+	v := append([]byte(nil), value...)
+	m.parts = append([][]byte{v}, m.parts...)
+	return nil
+}
+
+func (m *orderedPipeValueMerger) Finish(includesBase bool) ([]byte, io.Closer, error) {
+	return bytes.Join(m.parts, []byte("|")), nil, nil
+}
+
+func newOrderedPipeMerger() *pebble.Merger {
+	return &pebble.Merger{
+		Name: "pebblecompat.test.ordered-pipe",
+		Merge: func(key, value []byte) (pebble.ValueMerger, error) {
+			m := &orderedPipeValueMerger{}
+			if err := m.MergeNewer(value); err != nil {
+				return nil, err
+			}
+			return m, nil
+		},
+	}
 }
 
 func collectInternal(t *testing.T, scan scanFn) internalDump {
@@ -517,6 +555,60 @@ func TestApplyBatchReprBatchSegmentationInvariant_Seeded(t *testing.T) {
 
 	require.Equal(t, collectVisibleMap(t, fineDB), collectVisibleMap(t, coarseDB))
 }
+
+func TestMergeCustomMergerParityWithPebble(t *testing.T) {
+	dir := t.TempDir()
+	merger := newOrderedPipeMerger()
+
+	compatDB, err := Open(filepath.Join(dir, "compat"), &Options{Merger: merger})
+	require.NoError(t, err)
+	defer compatDB.Close()
+
+	pebbleDB, err := openPebbleForTestsWithMerger(filepath.Join(dir, "pebble"), merger)
+	require.NoError(t, err)
+	defer pebbleDB.Close()
+
+	require.NoError(t, compatDB.Set([]byte("k1"), []byte("base"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("k1"), []byte("base"), pebble.NoSync))
+	require.NoError(t, compatDB.Merge([]byte("k1"), []byte("m1"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Merge([]byte("k1"), []byte("m1"), pebble.NoSync))
+	require.NoError(t, compatDB.Merge([]byte("k1"), []byte("m2"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Merge([]byte("k1"), []byte("m2"), pebble.NoSync))
+
+	require.NoError(t, compatDB.Merge([]byte("k2"), []byte("x1"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Merge([]byte("k2"), []byte("x1"), pebble.NoSync))
+	require.NoError(t, compatDB.Merge([]byte("k2"), []byte("x2"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Merge([]byte("k2"), []byte("x2"), pebble.NoSync))
+
+	require.NoError(t, compatDB.Set([]byte("k3"), []byte("old"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("k3"), []byte("old"), pebble.NoSync))
+	require.NoError(t, compatDB.Delete([]byte("k3"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Delete([]byte("k3"), pebble.NoSync))
+	require.NoError(t, compatDB.Merge([]byte("k3"), []byte("new"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Merge([]byte("k3"), []byte("new"), pebble.NoSync))
+
+	want := collectVisibleMap(t, pebbleDB)
+	got := collectVisibleMap(t, compatDB)
+	require.Equal(t, want, got)
+	require.Equal(t, map[string]string{
+		"k1": "base|m1|m2",
+		"k2": "x1|x2",
+		"k3": "new",
+	}, got)
+
+	for key, expected := range got {
+		cVal, cCloser, err := compatDB.Get([]byte(key))
+		require.NoError(t, err)
+		require.Equal(t, []byte(expected), cVal)
+		require.NoError(t, cCloser.Close())
+
+		pVal, pCloser, err := pebbleDB.Get([]byte(key))
+		require.NoError(t, err)
+		require.Equal(t, cVal, pVal)
+		require.NoError(t, pCloser.Close())
+	}
+}
+
 func TestIngestWithStatsParity(t *testing.T) {
 	dir := t.TempDir()
 	sstPath := filepath.Join(dir, "test.sst")

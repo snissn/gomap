@@ -18,6 +18,8 @@ on TreeDB with equivalent observable behavior for required call paths.
 - Seeded randomized differential, replay-across-reopen, and batch-segmentation invariance coverage for supported point-op `ApplyBatchRepr` streams.
 - `Batch.AddInternalKey` replay support for `Set` and `SetWithDelete` internal kinds.
 - Point-key operations (`Set/Get/Delete/DeleteRange/Merge/SingleDelete/DeleteSized`).
+- `Merge` evaluates through the configured `Options.Merger` (defaults to
+  `pebble.DefaultMerger`) for both compat replay and shadow Pebble parity.
 - Range-key write operations (`RangeKeySet/RangeKeyUnset/RangeKeyDelete`).
 - `ScanInternal(...)` callback compatibility surface for point/range metadata.
 - Native `*pebble.Iterator`, `*pebble.Snapshot`, and indexed batch read APIs via
@@ -50,6 +52,8 @@ These are not currently provided and must not be assumed by consumers:
 - Full internal-sequence iterator parity with Pebble internals (the current
   shadow mirror provides user-visible iterator/snapshot semantics, not full
   internal key/sequence identity).
+- Full Pebble internal merge-record lifecycle parity (current implementation
+  eagerly resolves merge operands during apply).
 - Full TreeDB-native operational parity (current operational APIs are delegated
   to the shadow Pebble engine).
 - Provider-backed `[]pebble.SharedSSTMeta` ingest path.

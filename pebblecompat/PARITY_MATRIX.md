@@ -10,14 +10,14 @@ Legend:
 
 | Method | Status | Notes | Target Phase |
 |---|---|---|---|
-| `Open` | partial | `pebblecompat.Options`, not full Pebble options surface. | 0/4 |
+| `Open` | partial | `pebblecompat.Options` surface (including `InternalPrefix` + `Merger`), not full Pebble options surface. | 0/4 |
 | `Close` | full | TreeDB close semantics. | done |
 | `Get` | full | Returns `ErrNotFound` parity behavior. | done |
 | `Set` | full | Via batch apply. | done |
 | `Delete` | full | Via batch apply. | done |
 | `DeleteSized` | partial | Tombstone semantics mapped; sizing hints not Pebble-internal. | 2 |
 | `SingleDelete` | partial | Mapped to stored tombstone kind semantics. | 2 |
-| `Merge` | partial | Uses compatibility merge behavior; not full merger configurability. | 2 |
+| `Merge` | partial | Uses configured `Options.Merger` (default `pebble.DefaultMerger`) for TreeDB replay and shadow parity. Still differs from full Pebble internals because merges are eagerly resolved during apply. | 2 |
 | `DeleteRange` | full | Persisted as range-delete log + point effects. | done |
 | `RangeKeySet` | full | Persisted in range-op log. | done |
 | `RangeKeyUnset` | full | Persisted in range-op log. | done |
@@ -62,7 +62,7 @@ Legend:
 |---|---|---|---|
 | `Set` | full | | done |
 | `Delete` | full | | done |
-| `Merge` | full | Recorded and resolved during apply. | done |
+| `Merge` | full | Recorded and resolved during apply with the configured DB merger. | done |
 | `DeleteSized` | partial | Kind preserved; Pebble-internal sizing heuristics differ. | 2 |
 | `SingleDelete` | partial | Kind preserved; compaction semantics differ internally. | 2 |
 | `DeleteRange` | full | | done |

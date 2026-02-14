@@ -9,13 +9,17 @@ import (
 	"github.com/cockroachdb/pebble/vfs"
 )
 
-func newShadowDB() (*pebble.DB, error) {
+func newShadowDB(merger *pebble.Merger) (*pebble.DB, error) {
 	cmp := *pebble.DefaultComparer
 	cmp.Split = func(key []byte) int { return len(key) }
+	if merger == nil {
+		merger = pebble.DefaultMerger
+	}
 	return pebble.Open("shadow", &pebble.Options{
 		FS:                 vfs.NewMem(),
 		Comparer:           &cmp,
 		FormatMajorVersion: pebble.FormatRangeKeys,
+		Merger:             merger,
 	})
 }
 
@@ -30,7 +34,7 @@ func (d *DB) initShadowLocked() error {
 	if err := d.ensureOpenLocked(); err != nil {
 		return err
 	}
-	shadow, err := newShadowDB()
+	shadow, err := newShadowDB(d.merger)
 	if err != nil {
 		return err
 	}
