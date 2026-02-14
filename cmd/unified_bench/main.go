@@ -2260,6 +2260,156 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			totalOps := float64(cfg.Keys) * float64(workers)
 			return totalOps / time.Since(start).Seconds(), nil
 		},
+		"random_read_parallel_acquire_snapshot_with_writers": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
+			readWorkers := cfg.ReadWorkers
+			if readWorkers <= 0 {
+				readWorkers = 1
+			}
+			writerWorkers := *writeWorkers
+			if writerWorkers <= 0 {
+				writerWorkers = 1
+			}
+			if cfg.Keys <= 0 {
+				return 0, nil
+			}
+
+			snapshotter, hasSnapshotter := db.(kvstore.ReadSnapshotter)
+			if !hasSnapshotter {
+				return math.NaN(), nil
+			}
+
+			snapProbe, err := snapshotter.AcquireReadSnapshot()
+			if err != nil {
+				if errors.Is(err, kvstore.ErrUnsupported) {
+					return math.NaN(), nil
+				}
+				return 0, fmt.Errorf("random_read_parallel_acquire_snapshot_with_writers: %w", err)
+			}
+			if snapProbe == nil {
+				return math.NaN(), nil
+			}
+			if err := snapProbe.Close(); err != nil {
+				return 0, fmt.Errorf("random_read_parallel_acquire_snapshot_with_writers probe close: %w", err)
+			}
+
+			var readCount int64
+			var writeCount int64
+			var stop atomic.Bool
+			errCh := make(chan error, readWorkers+writerWorkers)
+			var wg sync.WaitGroup
+
+			runReader := func(workerRng *rand.Rand, stop *atomic.Bool) {
+				defer wg.Done()
+				var k [8]byte
+				buf := make([]byte, 0, cfg.ValueSize)
+				for i := 0; i < cfg.Keys; i++ {
+					if stop != nil && stop.Load() {
+						return
+					}
+					if i&8191 == 0 {
+						if chkErr := guard.Checkpoint(); chkErr != nil {
+							if stop.CompareAndSwap(false, true) {
+								select {
+								case errCh <- chkErr:
+								default:
+								}
+							}
+							return
+						}
+					}
+					encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
+
+					snap, err := snapshotter.AcquireReadSnapshot()
+					if err != nil {
+						if stop.CompareAndSwap(false, true) {
+							select {
+							case errCh <- err:
+							default:
+							}
+						}
+						return
+					}
+					nextBuf, getErr := snap.GetAppend(k[:], buf[:0])
+					if closeErr := snap.Close(); closeErr != nil {
+						if stop.CompareAndSwap(false, true) {
+							select {
+							case errCh <- closeErr:
+							default:
+							}
+						}
+						return
+					}
+					// Keep parity with random_read semantics: misses are expected.
+					if getErr == nil {
+						buf = nextBuf
+					}
+					atomic.AddInt64(&readCount, 1)
+				}
+			}
+
+			runWriter := func(workerRng *rand.Rand) {
+				defer wg.Done()
+				var k [8]byte
+				value := make([]byte, cfg.ValueSize)
+				for i := 0; i < cfg.Keys; i++ {
+					if stop.Load() {
+						return
+					}
+					if i&8191 == 0 {
+						if chkErr := guard.Checkpoint(); chkErr != nil {
+							if stop.CompareAndSwap(false, true) {
+								select {
+								case errCh <- chkErr:
+								default:
+								}
+							}
+							return
+						}
+					}
+					encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
+					if err := db.Set(k[:], value); err != nil {
+						if stop.CompareAndSwap(false, true) {
+							select {
+							case errCh <- err:
+							default:
+							}
+						}
+						return
+					}
+					atomic.AddInt64(&writeCount, 1)
+				}
+			}
+
+			start := time.Now()
+			baseSeed := testSeed(cfg.SeedUsed, "random_read_parallel_acquire_snapshot_with_writers")
+			for w := 0; w < readWorkers; w++ {
+				seedW := baseSeed + int64(w)
+				rngW := rand.New(rand.NewSource(seedW))
+				wg.Add(1)
+				go runReader(rngW, &stop)
+			}
+
+			for w := 0; w < writerWorkers; w++ {
+				seedW := baseSeed + int64(readWorkers+w)
+				rngW := rand.New(rand.NewSource(seedW))
+				wg.Add(1)
+				go runWriter(rngW)
+			}
+
+			wg.Wait()
+
+			select {
+			case runErr := <-errCh:
+				return 0, fmt.Errorf("random_read_parallel_acquire_snapshot_with_writers: %w", runErr)
+			default:
+			}
+
+			totalOps := float64(atomic.LoadInt64(&readCount) + atomic.LoadInt64(&writeCount))
+			if totalOps <= 0 {
+				return 0, nil
+			}
+			return totalOps / time.Since(start).Seconds(), nil
+		},
 		"random_read_batch": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			start := time.Now()
 			batchSize := cfg.BatchSize
@@ -2578,7 +2728,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
-	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"}
+	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_parallel_acquire_snapshot_with_writers", "random_read_batch", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
 		"vacuum_index":                          "VACUUM (Index)",
 		"fragmentation_report_pre":              "Fragmentation Report (Pre-Settle)",
@@ -2591,19 +2741,20 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"random_read":                           "Random Read",
 		"random_read_parallel":                  "Random Read (Parallel)",
 		"random_read_parallel_acquire_snapshot": "Random Read (Parallel, Snapshot Per Key)",
-		"random_read_batch":                     "Random Read (Batch)",
-		"full_scan":                             "Full Scan",
-		"full_scan2":                            "Full Scan (After VACUUM)",
-		"prefix_scan":                           "Prefix Scan",
-		"prefix_scan2":                          "Prefix Scan (After VACUUM)",
-		"batch_write":                           "Batch Write",
-		"batch_random":                          "Batch Random",
-		"batch_delete":                          "Batch Delete",
-		"batch_small_seq":                       "Batch Small Seq",
-		"update_fork_choice":                    "Update ForkChoice (Batch CommitSync)",
-		"dataset_update_fork_choice":            "Update ForkChoice (Dataset Keys)",
-		"random_delete":                         "Random Delete",
-		"dataset_read_random":                   "Random Read (Dataset Keys)",
+		"random_read_parallel_acquire_snapshot_with_writers": "Random Read+Writes (Parallel Snapshot Per Key)",
+		"random_read_batch":          "Random Read (Batch)",
+		"full_scan":                  "Full Scan",
+		"full_scan2":                 "Full Scan (After VACUUM)",
+		"prefix_scan":                "Prefix Scan",
+		"prefix_scan2":               "Prefix Scan (After VACUUM)",
+		"batch_write":                "Batch Write",
+		"batch_random":               "Batch Random",
+		"batch_delete":               "Batch Delete",
+		"batch_small_seq":            "Batch Small Seq",
+		"update_fork_choice":         "Update ForkChoice (Batch CommitSync)",
+		"dataset_update_fork_choice": "Update ForkChoice (Dataset Keys)",
+		"random_delete":              "Random Delete",
+		"dataset_read_random":        "Random Read (Dataset Keys)",
 	}
 
 	finalTestOrder := make([]string, 0)
@@ -2696,7 +2847,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	}
 
 	// Settle before scans?
-	if cfg.SettleBeforeScans && containsAny(finalTestOrder, "full_scan", "prefix_scan", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch") {
+	if cfg.SettleBeforeScans && containsAny(finalTestOrder, "full_scan", "prefix_scan", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_parallel_acquire_snapshot_with_writers", "random_read_batch") {
 		fmt.Fprintf(os.Stderr, "Settling DBs (Close/Open)...\n")
 		for _, inst := range instances {
 			// Close
@@ -2787,7 +2938,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		fn := testFuncs[testName]
 		seed := testSeed(cfg.SeedUsed, testName)
 
-		if cfg.TreeDBCacheStatsBeforeReads && containsAny([]string{testName}, "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "dataset_read_random", "full_scan", "prefix_scan", "full_scan2", "prefix_scan2") {
+		if cfg.TreeDBCacheStatsBeforeReads && containsAny([]string{testName}, "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_parallel_acquire_snapshot_with_writers", "random_read_batch", "dataset_read_random", "full_scan", "prefix_scan", "full_scan2", "prefix_scan2") {
 			for _, inst := range instances {
 				printTreeDBCacheStats(os.Stderr, inst, "pre-"+testName+" treedb.cache")
 			}
