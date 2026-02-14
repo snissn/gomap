@@ -191,8 +191,10 @@ func shouldBypassCompressionProbe(codec uint8, raw []byte, dst []byte) bool {
 		need := snappy.MaxEncodedLen(len(sample))
 		if cap(dst) < need {
 			dst = make([]byte, need)
+		} else {
+			dst = dst[:need]
 		}
-		enc := snappy.Encode(dst[:0], sample)
+		enc := snappy.Encode(dst, sample)
 		return !keepCompressedPayload(len(sample), len(enc))
 	}
 }
@@ -235,7 +237,13 @@ func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
 		// Fall through to snappy on lz4 miss for deterministic behavior.
 		fallthrough
 	default:
-		enc := snappy.Encode(dst[:0], raw)
+		need := snappy.MaxEncodedLen(len(raw))
+		if cap(dst) < need {
+			dst = make([]byte, need)
+		} else {
+			dst = dst[:need]
+		}
+		enc := snappy.Encode(dst, raw)
 		if keepCompressedPayload(len(raw), len(enc)) {
 			return enc, blockCodecSnappy, nil
 		}

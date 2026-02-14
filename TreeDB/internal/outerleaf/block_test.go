@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/golang/snappy"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 )
 
@@ -138,6 +139,32 @@ func TestEncodePayloadCompressibleKeepsCodec(t *testing.T) {
 				t.Fatalf("encoded len=%d raw len=%d", len(encoded), len(raw))
 			}
 		})
+	}
+}
+
+func TestEncodePayloadSnappyReusesDstNoAllocs(t *testing.T) {
+	raw := bytes.Repeat([]byte("outerleaf-compressible-payload|"), 256)
+	dst := make([]byte, 0, snappy.MaxEncodedLen(len(raw)))
+	encoded, gotCodec, err := encodePayload(0, raw, dst[:0])
+	if err != nil {
+		t.Fatalf("encodePayload: %v", err)
+	}
+	if gotCodec != blockCodecSnappy {
+		t.Fatalf("codec=%d want=%d", gotCodec, blockCodecSnappy)
+	}
+	if len(encoded) == 0 {
+		t.Fatalf("expected non-empty encoded payload")
+	}
+	backing := dst[:cap(dst)]
+	if &encoded[0] != &backing[0] {
+		t.Fatalf("snappy encode did not reuse caller dst backing buffer")
+	}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		_, _, _ = encodePayload(0, raw, dst[:0])
+	})
+	if allocs != 0 {
+		t.Fatalf("expected zero allocs per run, got %.2f", allocs)
 	}
 }
 
