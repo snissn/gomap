@@ -29,7 +29,7 @@ on TreeDB with equivalent observable behavior for required call paths.
 - `IngestAndExcise` shared-meta adaptation when `[]pebble.SharedSSTMeta`
   backings use the compat-local `.pcobj` path encoding.
 - `Checkpoint(destDir, ...)` directory export via TreeDB checkpoint plus recursive
-  filesystem copy.
+  filesystem copy; non-empty `CheckpointOption`s are rejected with `ErrCheckpointOptionUnsupported`.
 - Operational/introspection APIs are exposed through delegation to the shadow
   Pebble engine (`Metrics`, `SSTables`, `EstimateDiskUsage*`, `ScanStatistics`,
   `Compact`, `AsyncFlush`, `Download`, format/version APIs, provider hooks).
@@ -46,7 +46,7 @@ These are not currently provided and must not be assumed by consumers:
 - Full TreeDB-native operational parity (current operational APIs are delegated
   to the shadow Pebble engine).
 - Provider-backed `[]pebble.SharedSSTMeta` ingest path.
-- Full Pebble checkpoint option parity (`WithRestrictToSpans`, option-specific
+- Full Pebble checkpoint option parity (`WithRestrictToSpans`, `WithFlushedWAL`, option-specific
   semantics) is not implemented.
 
 ## Required Full-Feature End State

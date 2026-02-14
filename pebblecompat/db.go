@@ -551,11 +551,14 @@ func (d *DB) Flush() error {
 }
 
 // Checkpoint creates a filesystem checkpoint when destDir is provided.
-func (d *DB) Checkpoint(destDir string, _ ...pebble.CheckpointOption) error {
+func (d *DB) Checkpoint(destDir string, opts ...pebble.CheckpointOption) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if err := d.ensureOpenLocked(); err != nil {
 		return err
+	}
+	if len(opts) > 0 {
+		return ErrCheckpointOptionUnsupported
 	}
 	if err := d.tree.Checkpoint(); err != nil {
 		return err

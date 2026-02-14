@@ -678,6 +678,45 @@ func TestCheckpointDestDirExistsError(t *testing.T) {
 	require.Contains(t, err.Error(), "destination already exists")
 }
 
+func TestCheckpointOptionsUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "src")
+
+	db, err := Open(srcPath, nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.Set([]byte("a"), []byte("1"), pebble.NoSync))
+
+	tests := []struct {
+		name string
+		opt  pebble.CheckpointOption
+	}{
+		{
+			name: "restrict-to-spans",
+			opt: pebble.WithRestrictToSpans([]pebble.CheckpointSpan{{
+				Start: []byte("a"),
+				End:   []byte("z"),
+			}}),
+		},
+		{
+			name: "flush-wal",
+			opt:  pebble.WithFlushedWAL(),
+		},
+	}
+
+	for i := range tests {
+		t.Run(tests[i].name, func(t *testing.T) {
+			dest := filepath.Join(dir, tests[i].name)
+			err := db.Checkpoint(dest, tests[i].opt)
+			require.ErrorIs(t, err, ErrCheckpointOptionUnsupported)
+
+			_, statErr := os.Stat(dest)
+			require.Truef(t, os.IsNotExist(statErr), "checkpoint destination must not be created on option rejection: %v", statErr)
+		})
+	}
+}
+
 func TestBatchCommitStatsSurface(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(filepath.Join(dir, "compat"), nil)
