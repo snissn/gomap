@@ -2290,13 +2290,17 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				if hasReadBatch {
 					if err := rb.ReadBatch(keys[:n]); err != nil {
-						return 0, err
+						return 0, fmt.Errorf("random_read_batch: %w", err)
 					}
 				} else if hasMany {
-					_, _ = mg.GetMany(keys[:n])
+					if _, err := mg.GetMany(keys[:n]); err != nil {
+						return 0, fmt.Errorf("random_read_batch: %w", err)
+					}
 				} else {
 					for j := 0; j < n; j++ {
-						_, _ = db.Get(keys[j])
+						if _, err := db.Get(keys[j]); err != nil {
+							return 0, fmt.Errorf("random_read_batch: %w", err)
+						}
 					}
 				}
 				i += n

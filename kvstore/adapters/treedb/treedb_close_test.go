@@ -1,11 +1,13 @@
 package treedbadapter
 
 import (
+	"errors"
 	"math"
 	"strconv"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/kvstore"
 )
 
 func TestAdapterGetAfterCloseDoesNotError(t *testing.T) {
@@ -85,7 +87,7 @@ func TestAdapterReadBatch_ClampsWorkerCount(t *testing.T) {
 	}
 }
 
-func TestAdapterReadBatch_AfterCloseNoError(t *testing.T) {
+func TestAdapterReadBatch_AfterCloseReturnsErrUnsupported(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
@@ -95,8 +97,8 @@ func TestAdapterReadBatch_AfterCloseNoError(t *testing.T) {
 	if err := adapter.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	if err := adapter.ReadBatch([][]byte{[]byte("missing"), []byte("missing2")}); err != nil {
-		t.Fatalf("readbatch after close err=%v", err)
+	if err := adapter.ReadBatch([][]byte{[]byte("missing"), []byte("missing2")}); !errors.Is(err, kvstore.ErrUnsupported) {
+		t.Fatalf("readbatch after close expected ErrUnsupported, got=%v", err)
 	}
 }
 
