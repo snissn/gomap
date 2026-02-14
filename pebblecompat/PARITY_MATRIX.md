@@ -28,7 +28,7 @@ Legend:
 | `ApplyBatchRepr` | full | Deterministic parsing/apply for supported op kinds. | done |
 | `NewBatch` | full | Compatibility batch wrapper. | done |
 | `NewBatchWithSize` | partial | Hint accepted; not full Pebble memory model. | 2 |
-| `Flush` | partial | Checkpoint boundary mapping. | 4 |
+| `Flush` | partial | Flush now performs a TreeDB checkpoint and then a blocking shadow Pebble flush for closer observable parity; internal memtable/L0 semantics still differ. | 4 |
 | `Checkpoint(destDir, ...)` | partial | TreeDB checkpoint + filesystem copy; non-empty checkpoint options are explicitly rejected (`ErrCheckpointOptionUnsupported`) including `WithRestrictToSpans` and `WithFlushedWAL`. | 4 |
 | `Ingest` | partial | Supports sstable adaptation + `.pcobj` fast path. | 3 |
 | `IngestWithStats` | partial | Coarse stats parity. | 3 |

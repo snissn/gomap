@@ -33,6 +33,8 @@ on TreeDB with equivalent observable behavior for required call paths.
   excise+ingest flow, and compat-local shared-meta path ingest.
 - `Checkpoint(destDir, ...)` directory export via TreeDB checkpoint plus recursive
   filesystem copy; non-empty `CheckpointOption`s are rejected with `ErrCheckpointOptionUnsupported`.
+- `Flush()` enforces a durable boundary by checkpointing TreeDB and then issuing a
+  blocking flush on the shadow Pebble engine for closer observable parity.
 - Operational/introspection APIs are exposed through delegation to the shadow
   Pebble engine (`Metrics`, `SSTables`, `EstimateDiskUsage*`, `ScanStatistics`,
   `Compact`, `AsyncFlush`, `Download`, format/version APIs, provider hooks).

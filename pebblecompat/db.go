@@ -544,10 +544,13 @@ func (d *DB) addDeleteRangeExistingKeysLocked(batch treedb.Batch, start, end []b
 func (d *DB) Flush() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.ensureOpenLocked(); err != nil {
+	if err := d.ensureShadowLocked(); err != nil {
 		return err
 	}
-	return d.tree.Checkpoint()
+	if err := d.tree.Checkpoint(); err != nil {
+		return err
+	}
+	return d.shadow.Flush()
 }
 
 // Checkpoint creates a filesystem checkpoint when destDir is provided.
