@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,9 +27,6 @@ const (
 	MetaPage0ID = 0
 	MetaPage1ID = 1
 	KeepRecent  = 10000
-
-	closeSnapshotDrainTimeout = 10 * time.Second
-	closeSnapshotDrainSleep   = 500 * time.Microsecond
 )
 
 type DBState struct {
@@ -52,7 +48,6 @@ type snapshotView struct {
 type DB struct {
 	valueLogManager    *valuelog.Manager
 	snapshotViewRO     atomic.Pointer[snapshotView]
-	snapshotAcquireRO  atomic.Int32
 	valueLogRefTracker *valueLogRefTracker
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
@@ -558,10 +553,9 @@ type Snapshot struct {
 	state       *DBState
 	vlogManager *valuelog.Manager
 	vlogPinned  bool
+	registryID  int64
 	reader      valueReader
 	tree        tree.Tree
-	regByReader bool
-	registryID  int64
 	closed      atomic.Bool
 	treePager   *pager.Pager
 	treeRoot    uint64
@@ -583,11 +577,11 @@ func (s *Snapshot) State() *DBState {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
-	db.snapshotAcquireRO.Add(1)
+	snap := db.snapPool.Get()
 
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
-		db.snapshotAcquireRO.Add(-1)
+		db.snapPool.Put(snap)
 		return nil
 	}
 	idx := view.idx
@@ -597,31 +591,28 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
 	if vlogNeedsPin {
 		if vm == nil {
-			db.snapshotAcquireRO.Add(-1)
+			db.snapPool.Put(snap)
 			return nil
 		}
 		vm.Acquire(vlogSet)
 	}
 
-	// Register Reader
-	id := int64(0)
-	pinnedByRegistry := false
+	var registryID int64
 	if idx != nil {
-		if idx == db.idx.Load() {
-			idx.acquire()
-		} else {
-			id = idx.registry.Register(state.CommitSeq)
-			pinnedByRegistry = true
+		if idx.registry == nil {
+			db.snapPool.Put(snap)
+			return nil
 		}
+		registryID = idx.registry.Register(state.CommitSeq)
 	}
 
-	snap := db.snapPool.Get()
 	snap.db = db
 	snap.idx = idx
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
 	snap.reader.vlogs = vlogSet
+	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
 			snap.treeRoot == state.RootPageID
@@ -637,10 +628,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 			snap.treeRoot = 0
 		}
 	}
-	snap.registryID = id
-	snap.regByReader = pinnedByRegistry
 	snap.closed.Store(false)
-	db.snapshotAcquireRO.Add(-1)
 	return snap
 }
 
@@ -660,10 +648,8 @@ func (s *Snapshot) Close() error {
 		}
 	}
 	if s.idx != nil {
-		if s.regByReader {
+		if s.registryID != 0 {
 			s.idx.registry.Unregister(s.registryID)
-		} else {
-			s.idx.release()
 		}
 		if s.db != nil {
 			if s.db.idx.Load() != s.idx {
@@ -961,19 +947,7 @@ func (db *DB) Close() error {
 	db.lock = nil
 	db.mu.Unlock()
 
-	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
-	for db.snapshotAcquireRO.Load() > 0 {
-		if time.Now().After(drainDeadline) {
-			break
-		}
-		runtime.Gosched()
-		time.Sleep(closeSnapshotDrainSleep)
-	}
-
 	var errs []error
-	if remaining := db.snapshotAcquireRO.Load(); remaining > 0 {
-		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
-	}
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
 	}
