@@ -1009,6 +1009,30 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	stats := cache.Stats()
+	parseStatUint := func(key string) uint64 {
+		t.Helper()
+		v, ok := stats[key]
+		if !ok {
+			t.Fatalf("missing stats key %q", key)
+		}
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s=%q: %v", key, v, err)
+		}
+		return n
+	}
+	enqueuedKeys := parseStatUint("treedb.cache.v2_fenceptr.deferred_enqueued_keys")
+	materializedKeys := parseStatUint("treedb.cache.v2_fenceptr.deferred_materialized_keys")
+	pendingKeys := parseStatUint("treedb.cache.v2_fenceptr.deferred_pending_keys_estimate")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.deferred_enqueued_bytes")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.deferred_materialized_bytes")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_calls")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_flushed_memtables")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_early_triggers")
+	if enqueuedKeys != 0 || materializedKeys != 0 || pendingKeys != 0 {
+		t.Fatalf("expected non-deferred fence path to keep deferred counters at zero, enqueued=%d materialized=%d pending=%d", enqueuedKeys, materializedKeys, pendingKeys)
+	}
 
 	snap := backend.AcquireSnapshot()
 	if snap == nil {
@@ -1087,6 +1111,21 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
+	}
+	stats := cache.Stats()
+	enqueuedKeys, err := strconv.ParseUint(stats["treedb.cache.v2_fenceptr.deferred_enqueued_keys"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse deferred_enqueued_keys: %v", err)
+	}
+	materializedKeys, err := strconv.ParseUint(stats["treedb.cache.v2_fenceptr.deferred_materialized_keys"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse deferred_materialized_keys: %v", err)
+	}
+	if enqueuedKeys == 0 || materializedKeys == 0 {
+		t.Fatalf("expected deferred fence stats to record work, enqueued=%d materialized=%d", enqueuedKeys, materializedKeys)
+	}
+	if materializedKeys > enqueuedKeys {
+		t.Fatalf("materialized keys exceeds enqueued keys: materialized=%d enqueued=%d", materializedKeys, enqueuedKeys)
 	}
 
 	snap := backend.AcquireSnapshot()

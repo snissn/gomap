@@ -839,6 +839,43 @@ func (db *DB) deferredValueLogEnabled() bool {
 	return db.useFenceV2DeferredFlushPath()
 }
 
+func sumKeyValueBytes(keys, values [][]byte) uint64 {
+	if len(keys) == 0 || len(values) == 0 {
+		return 0
+	}
+	n := len(keys)
+	if len(values) < n {
+		n = len(values)
+	}
+	var total uint64
+	for i := 0; i < n; i++ {
+		total += uint64(len(keys[i]) + len(values[i]))
+	}
+	return total
+}
+
+func (db *DB) recordDeferredFenceEnqueued(keys int, bytes uint64) {
+	if db == nil || keys <= 0 {
+		return
+	}
+	db.deferredFenceEnqueuedKeys.Add(uint64(keys))
+	if bytes > 0 {
+		db.deferredFenceEnqueuedBytes.Add(bytes)
+	}
+}
+
+func (db *DB) recordDeferredFenceMaterialized(keys int, bytes uint64) {
+	if db == nil || keys <= 0 {
+		return
+	}
+	// Keep legacy counters for backwards-compatible dashboards.
+	db.deferredFenceCandidateKeys.Add(uint64(keys))
+	db.deferredFenceMaterializedKeys.Add(uint64(keys))
+	if bytes > 0 {
+		db.deferredFenceMaterializedBytes.Add(bytes)
+	}
+}
+
 func (db *DB) shouldFlushDeferredValueLog(writeMode vlogCompressionWriteMode, records []valuelog.Record) bool {
 	if !db.deferredValueLogEnabled() {
 		return false
@@ -1292,9 +1329,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	if len(ptrKeys) != len(ptrVals) {
 		return errors.New("cachingdb: internal deferred value-log mismatch")
 	}
-	if fenceMode {
-		db.deferredFenceCandidateKeys.Add(uint64(len(ptrKeys)))
-	}
+	candidateBytes := sumKeyValueBytes(ptrKeys, ptrVals)
 	records, groups, outerArena, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
 	if err != nil {
 		return err
@@ -1332,6 +1367,9 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	vlogPtrs, err := db.appendValueLog(lane, dictID, nil, records, durability)
 	if err != nil {
 		return err
+	}
+	if fenceMode {
+		db.recordDeferredFenceMaterialized(len(ptrKeys), candidateBytes)
 	}
 	if len(vlogPtrs) != len(records) {
 		putValueLogPtrs(vlogPtrs)
@@ -1525,9 +1563,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			return errors.New("cachingdb: deferred inline pointer grouping mismatch")
 		}
 		totalKeys := len(ptrKeys)
-		if fenceMode {
-			db.deferredFenceCandidateKeys.Add(uint64(totalKeys))
-		}
+		candidateBytes := sumKeyValueBytes(ptrKeys, ptrVals)
 		if err := ensureVlogLane(); err != nil {
 			return err
 		}
@@ -1591,6 +1627,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				}
 			}
 			putValueLogPtrs(vlogPtrs)
+		}
+		if fenceMode {
+			db.recordDeferredFenceMaterialized(totalKeys, candidateBytes)
 		}
 		if fenceMode && emittedGroups > 0 {
 			db.deferredFenceEmittedGroups.Add(emittedGroups)
@@ -2729,34 +2768,38 @@ type DB struct {
 	splitValueLog            bool
 	memtableValueLogPointers bool
 
-	inlineThreshold              int
-	valueLogThreshold            int
-	valueLogDomainThresholds     []backenddb.ValueLogDomainThreshold
-	indexOuterLeafMode           string
-	outerLeafBlockTargetBytes    int
-	outerLeafBlockCodec          uint8
-	outerLeafBlockRestart        int
-	forceValueLogPointers        bool
-	valueLogRawWritevMinAvgBytes int
-	valueLogRawWritevMinRecords  int
-	valueLogCompressionMode      uint8
-	valueLogBlockCodec           valuelog.BlockCodec
-	valueLogBlockTargetBytes     int
-	valueLogIncompressibleHold   uint64
-	valueLogIncompressibleProbe  uint64
-	valueLogAutoPolicy           uint8
-	valueLogReader               *valuelog.Manager
-	valueLogMu                   sync.Mutex
-	valueLogRetain               map[string]struct{}
-	backendReadVlogDirtySeq      atomic.Uint64
-	backendReadVlogFlushedSeq    atomic.Uint64
-	deferredFenceCandidateKeys   atomic.Uint64
-	deferredFenceEmittedGroups   atomic.Uint64
-	valueLogWarned               atomic.Bool
-	valueLogHardCapWarned        atomic.Bool
-	valueLogRetainedClosedBytes  atomic.Int64
-	maxValueLogRetainedBytes     int64
-	maxValueLogRetainedBytesHard int64
+	inlineThreshold                int
+	valueLogThreshold              int
+	valueLogDomainThresholds       []backenddb.ValueLogDomainThreshold
+	indexOuterLeafMode             string
+	outerLeafBlockTargetBytes      int
+	outerLeafBlockCodec            uint8
+	outerLeafBlockRestart          int
+	forceValueLogPointers          bool
+	valueLogRawWritevMinAvgBytes   int
+	valueLogRawWritevMinRecords    int
+	valueLogCompressionMode        uint8
+	valueLogBlockCodec             valuelog.BlockCodec
+	valueLogBlockTargetBytes       int
+	valueLogIncompressibleHold     uint64
+	valueLogIncompressibleProbe    uint64
+	valueLogAutoPolicy             uint8
+	valueLogReader                 *valuelog.Manager
+	valueLogMu                     sync.Mutex
+	valueLogRetain                 map[string]struct{}
+	backendReadVlogDirtySeq        atomic.Uint64
+	backendReadVlogFlushedSeq      atomic.Uint64
+	deferredFenceCandidateKeys     atomic.Uint64
+	deferredFenceEmittedGroups     atomic.Uint64
+	deferredFenceEnqueuedKeys      atomic.Uint64
+	deferredFenceEnqueuedBytes     atomic.Uint64
+	deferredFenceMaterializedKeys  atomic.Uint64
+	deferredFenceMaterializedBytes atomic.Uint64
+	valueLogWarned                 atomic.Bool
+	valueLogHardCapWarned          atomic.Bool
+	valueLogRetainedClosedBytes    atomic.Int64
+	maxValueLogRetainedBytes       int64
+	maxValueLogRetainedBytesHard   int64
 
 	// Level 1 (Disk)
 	backend       BackendDB
@@ -2879,16 +2922,20 @@ type DB struct {
 	bgErr              error
 
 	// Backpressure state
-	queueBacklogBytes        atomic.Int64
-	flushBpsEWMA             float64
-	queueLaneIDMisses        atomic.Int64
-	backendWriteBatchesTotal atomic.Int64
-	domainIngressMu          sync.Mutex
-	domainIngressCh          []chan domainIngressRequest
-	domainIngressEnqueued    atomic.Uint64
-	domainIngressProcessed   atomic.Uint64
-	domainIngressFallback    atomic.Uint64
-	domainIngressDepthMax    atomic.Uint64
+	queueBacklogBytes                   atomic.Int64
+	flushBpsEWMA                        float64
+	queueLaneIDMisses                   atomic.Int64
+	backendWriteBatchesTotal            atomic.Int64
+	deferredFenceAssistCalls            atomic.Uint64
+	deferredFenceAssistFlushedMemtables atomic.Uint64
+	deferredFenceAssistEarlyTriggers    atomic.Uint64
+	deferredFenceAssistTicker           atomic.Uint64
+	domainIngressMu                     sync.Mutex
+	domainIngressCh                     []chan domainIngressRequest
+	domainIngressEnqueued               atomic.Uint64
+	domainIngressProcessed              atomic.Uint64
+	domainIngressFallback               atomic.Uint64
+	domainIngressDepthMax               atomic.Uint64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -3421,6 +3468,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		// length of 4 => ~256MB backlog.
 		opts.MaxQueuedMemtables = defaultMaxQueuedMemtables(opts.FlushThreshold) * shardCount
 	}
+	writerFlushMaxMemtablesUnset := opts.WriterFlushMaxMemtables == 0
 	if opts.WriterFlushMaxMemtables == 0 {
 		opts.WriterFlushMaxMemtables = 1
 	}
@@ -3570,6 +3618,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
 	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
 	disableJournal := opts.DisableWAL
+	if writerFlushMaxMemtablesUnset &&
+		disableJournal &&
+		indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr &&
+		opts.WriterFlushMaxMemtables < v2DeferredAssistSlowdownMinMemtables {
+		opts.WriterFlushMaxMemtables = v2DeferredAssistSlowdownMinMemtables
+	}
 	var retained map[string]struct{}
 	for _, seg := range segments {
 		if !seg.valueLog {
@@ -7859,6 +7913,15 @@ func (db *DB) computeBackendRange() (keyRange, bool, error) {
 const stopResumeFraction = 0.70
 const stopBackpressureStallLimit = 16
 
+const (
+	// Start pushing down v2 deferred fence debt earlier than the generic
+	// slowdown threshold so checkpoint work is less bursty.
+	v2DeferredAssistEarlyTriggerDiv      = 2
+	v2DeferredAssistTickMask             = 31 // once every 32 write assists
+	v2DeferredAssistSlowdownMinMemtables = 2
+	v2DeferredAssistStopMinMemtables     = 4
+)
+
 func (db *DB) adaptiveBackpressureEnabled() bool {
 	return db.slowdownBacklogSeconds > 0 || db.stopBacklogSeconds > 0 || db.maxBacklogBytes > 0
 }
@@ -8228,6 +8291,61 @@ func (db *DB) maybeWaitForStop() {
 	}
 }
 
+func (db *DB) v2DeferredAssistMemtables(backlogBytes, slowdownBytes, stopBytes int64) (int, bool) {
+	if db == nil || !db.deferredValueLogEnabled() {
+		return 0, false
+	}
+	maxMemtables := db.writerFlushMaxMemtables
+	if maxMemtables <= 0 {
+		maxMemtables = 1
+	}
+	if stopBytes > 0 && backlogBytes >= stopBytes {
+		if maxMemtables < v2DeferredAssistStopMinMemtables {
+			maxMemtables = v2DeferredAssistStopMinMemtables
+		}
+		return maxMemtables, true
+	}
+	if slowdownBytes > 0 && backlogBytes >= slowdownBytes {
+		if maxMemtables < v2DeferredAssistSlowdownMinMemtables {
+			maxMemtables = v2DeferredAssistSlowdownMinMemtables
+		}
+		return maxMemtables, true
+	}
+	return 0, false
+}
+
+func (db *DB) v2DeferredEarlyTriggerBytes(slowdownBytes, stopBytes int64) int64 {
+	if db == nil || !db.deferredValueLogEnabled() {
+		return 0
+	}
+	early := int64(0)
+	if slowdownBytes > 0 {
+		early = slowdownBytes / v2DeferredAssistEarlyTriggerDiv
+	} else if stopBytes > 0 {
+		early = stopBytes / v2DeferredAssistEarlyTriggerDiv
+	}
+	if db.flushThreshold > 0 {
+		minEarly := db.flushThreshold / v2DeferredAssistEarlyTriggerDiv
+		if minEarly <= 0 {
+			minEarly = db.flushThreshold
+		}
+		if early == 0 || early < minEarly {
+			early = minEarly
+		}
+	}
+	return early
+}
+
+func (db *DB) recordDeferredAssist(flushed int) {
+	if db == nil {
+		return
+	}
+	db.deferredFenceAssistCalls.Add(1)
+	if flushed > 0 {
+		db.deferredFenceAssistFlushedMemtables.Add(uint64(flushed))
+	}
+}
+
 func (db *DB) maybeAssistFlush() {
 	if db.writerFlushMaxMemtables <= 0 && db.writerFlushMaxDuration <= 0 {
 		return
@@ -8249,12 +8367,27 @@ func (db *DB) maybeAssistFlush() {
 		db.bpMu.Unlock()
 
 		backlog = db.queueBacklogBytes.Load()
+		if maxMemtables, ok := db.v2DeferredAssistMemtables(backlog, slowdownBytes, stopBytes); ok {
+			flushed := db.flushSome(false, maxMemtables, db.writerFlushMaxDuration)
+			db.recordDeferredAssist(flushed)
+			return
+		}
 		if stopBytes > 0 && backlog >= stopBytes {
 			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			return
 		}
 		if slowdownBytes > 0 && backlog > slowdownBytes {
 			db.TriggerFlush()
+			return
+		}
+		if early := db.v2DeferredEarlyTriggerBytes(slowdownBytes, stopBytes); early > 0 && backlog >= early {
+			db.deferredFenceAssistEarlyTriggers.Add(1)
+			db.TriggerFlush()
+			tick := db.deferredFenceAssistTicker.Add(1)
+			if tick&v2DeferredAssistTickMask == 0 {
+				flushed := db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+				db.recordDeferredAssist(flushed)
+			}
 		}
 		return
 	}
@@ -8271,9 +8404,9 @@ func (db *DB) maybeAssistFlush() {
 	}
 }
 
-func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) {
+func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) int {
 	if maxMemtables <= 0 && maxDuration <= 0 {
-		return
+		return 0
 	}
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
@@ -8283,18 +8416,18 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	flushed := 0
 	for {
 		if maxMemtables > 0 && flushed >= maxMemtables {
-			return
+			return flushed
 		}
 		if maxDuration > 0 && time.Since(start) >= maxDuration {
-			return
+			return flushed
 		}
 		laneID, ok := db.pickFlushLane()
 		if !ok {
-			return
+			return flushed
 		}
 		if laneID < len(db.flushLaneMu) {
 			if !db.flushLaneMu[laneID].TryLock() {
-				return
+				return flushed
 			}
 		}
 		okFlush := db.flushLaneOnce(sync, laneID)
@@ -8302,7 +8435,7 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 			db.flushLaneMu[laneID].Unlock()
 		}
 		if !okFlush {
-			return
+			return flushed
 		}
 		flushed++
 	}
@@ -8594,6 +8727,9 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		// value-log at flush time.
 		deferPointers = true
 		allowPointers = false
+		if eligible {
+			db.recordDeferredFenceEnqueued(1, uint64(len(key)+len(value)))
+		}
 	}
 	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
 		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
@@ -12011,8 +12147,29 @@ func (db *DB) Stats() map[string]string {
 	}
 	fenceCandidates := db.deferredFenceCandidateKeys.Load()
 	fenceGroups := db.deferredFenceEmittedGroups.Load()
+	fenceEnqueuedKeys := db.deferredFenceEnqueuedKeys.Load()
+	fenceEnqueuedBytes := db.deferredFenceEnqueuedBytes.Load()
+	fenceMaterializedKeys := db.deferredFenceMaterializedKeys.Load()
+	fenceMaterializedBytes := db.deferredFenceMaterializedBytes.Load()
+	fencePendingKeys := uint64(0)
+	if fenceEnqueuedKeys > fenceMaterializedKeys {
+		fencePendingKeys = fenceEnqueuedKeys - fenceMaterializedKeys
+	}
+	fencePendingBytes := uint64(0)
+	if fenceEnqueuedBytes > fenceMaterializedBytes {
+		fencePendingBytes = fenceEnqueuedBytes - fenceMaterializedBytes
+	}
 	stats["treedb.cache.v2_fenceptr.deferred_candidates"] = fmt.Sprintf("%d", fenceCandidates)
 	stats["treedb.cache.v2_fenceptr.deferred_groups"] = fmt.Sprintf("%d", fenceGroups)
+	stats["treedb.cache.v2_fenceptr.deferred_enqueued_keys"] = fmt.Sprintf("%d", fenceEnqueuedKeys)
+	stats["treedb.cache.v2_fenceptr.deferred_enqueued_bytes"] = fmt.Sprintf("%d", fenceEnqueuedBytes)
+	stats["treedb.cache.v2_fenceptr.deferred_materialized_keys"] = fmt.Sprintf("%d", fenceMaterializedKeys)
+	stats["treedb.cache.v2_fenceptr.deferred_materialized_bytes"] = fmt.Sprintf("%d", fenceMaterializedBytes)
+	stats["treedb.cache.v2_fenceptr.deferred_pending_keys_estimate"] = fmt.Sprintf("%d", fencePendingKeys)
+	stats["treedb.cache.v2_fenceptr.deferred_pending_bytes_estimate"] = fmt.Sprintf("%d", fencePendingBytes)
+	stats["treedb.cache.v2_fenceptr.assist_calls"] = fmt.Sprintf("%d", db.deferredFenceAssistCalls.Load())
+	stats["treedb.cache.v2_fenceptr.assist_flushed_memtables"] = fmt.Sprintf("%d", db.deferredFenceAssistFlushedMemtables.Load())
+	stats["treedb.cache.v2_fenceptr.assist_early_triggers"] = fmt.Sprintf("%d", db.deferredFenceAssistEarlyTriggers.Load())
 	if fenceGroups > 0 {
 		stats["treedb.cache.v2_fenceptr.avg_keys_per_group"] = fmt.Sprintf("%.3f", float64(fenceCandidates)/float64(fenceGroups))
 	}
@@ -12285,12 +12442,23 @@ func (db *DB) CompactionAssist() {
 		db.bpMu.Unlock()
 
 		backlog := db.queueBacklogBytes.Load()
+		if maxMemtables, ok := db.v2DeferredAssistMemtables(backlog, slowdownBytes, stopBytes); ok {
+			flushed := db.flushSome(false, maxMemtables, db.writerFlushMaxDuration)
+			db.recordDeferredAssist(flushed)
+			return
+		}
 		if stopBytes > 0 && backlog >= stopBytes {
 			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			return
 		}
 		if slowdownBytes > 0 && backlog > slowdownBytes {
 			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			return
+		}
+		if early := db.v2DeferredEarlyTriggerBytes(slowdownBytes, stopBytes); early > 0 && backlog >= early {
+			db.deferredFenceAssistEarlyTriggers.Add(1)
+			flushed := db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			db.recordDeferredAssist(flushed)
 			return
 		}
 		return
@@ -13258,6 +13426,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if allowPointers && deferredFencePath {
 		// v2 fence-pointer WAL-off path: keep values inline in mutable memtables
 		// and materialize grouped value-log pointers once at flush time.
+		var deferredBytes uint64
+		for _, idx := range eligibleIdxs {
+			op := &b.entries[idx]
+			deferredBytes += uint64(len(op.Key) + len(op.Value))
+		}
+		b.db.recordDeferredFenceEnqueued(eligibleCount, deferredBytes)
 		allowPointers = false
 	} else if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
 		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
