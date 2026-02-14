@@ -2,6 +2,7 @@ package outerleaf
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 )
 
@@ -120,5 +121,95 @@ func TestDecodeNonOuterPayload(t *testing.T) {
 	}
 	if ok || found || v != nil {
 		t.Fatalf("expected non-outer decode")
+	}
+}
+
+func TestDecodeBlockValueForKey_RestartIndexed(t *testing.T) {
+	entries := make([]Entry, 0, 128)
+	for i := 0; i < 128; i++ {
+		entries = append(entries, Entry{
+			Key:   []byte(fmt.Sprintf("acct:%04d", i)),
+			Value: bytes.Repeat([]byte{byte('a' + (i % 26))}, 96),
+		})
+	}
+	enc, err := EncodeEntries(nil, entries, 0, 8)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	first, err := blk.FirstValue()
+	if err != nil {
+		t.Fatalf("FirstValue: %v", err)
+	}
+	if !bytes.Equal(first, entries[0].Value) {
+		t.Fatalf("FirstValue mismatch")
+	}
+
+	check := func(idx int) {
+		t.Helper()
+		got, found, err := blk.ValueForKey(entries[idx].Key)
+		if err != nil {
+			t.Fatalf("ValueForKey(%q): %v", string(entries[idx].Key), err)
+		}
+		if !found {
+			t.Fatalf("ValueForKey(%q): expected found", string(entries[idx].Key))
+		}
+		if !bytes.Equal(got, entries[idx].Value) {
+			t.Fatalf("ValueForKey(%q): value mismatch", string(entries[idx].Key))
+		}
+	}
+
+	check(0)
+	check(7)
+	check(8)
+	check(63)
+	check(127)
+
+	for _, miss := range [][]byte{[]byte("acct:-001"), []byte("acct:9999")} {
+		got, found, err := blk.ValueForKey(miss)
+		if err != nil {
+			t.Fatalf("ValueForKey miss(%q): %v", string(miss), err)
+		}
+		if found || got != nil {
+			t.Fatalf("ValueForKey miss(%q): found=%v got=%v", string(miss), found, got)
+		}
+	}
+}
+
+func BenchmarkDecodedBlockValueForKeyV2(b *testing.B) {
+	entries := make([]Entry, 0, 256)
+	for i := 0; i < 256; i++ {
+		entries = append(entries, Entry{
+			Key:   []byte(fmt.Sprintf("k:%06d", i)),
+			Value: bytes.Repeat([]byte{byte('a' + (i % 26))}, 128),
+		})
+	}
+	enc, err := EncodeEntries(nil, entries, 0, 16)
+	if err != nil {
+		b.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		b.Fatalf("DecodeBlock: %v", err)
+	}
+	keys := make([][]byte, len(entries))
+	for i := range entries {
+		keys[i] = entries[i].Key
+	}
+	miss := []byte("k:999999")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := keys[i%len(keys)]
+		if i&7 == 0 {
+			key = miss
+		}
+		if _, _, err := blk.ValueForKey(key); err != nil {
+			b.Fatalf("ValueForKey: %v", err)
+		}
 	}
 }

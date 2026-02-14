@@ -51,7 +51,6 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.reader.vlogs = nil
 	s.reader.outerLeafMode = ""
 	s.reader.cache = nil
-	s.tree.Reset(nil, nil, 0)
 	s.registryID = 0
 	s.closed.Store(false)
 	// treePager/treeRoot are intentionally preserved as a pooled cache key for
