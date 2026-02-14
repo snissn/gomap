@@ -120,6 +120,23 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
   - `maintenance_budget` — sweep TreeDB maintenance K values; reports checkpoint time vs index size, recommends K
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
 
+## outerleaf_approx Gate Troubleshooting
+
+- `bytes` gate failing:
+  - check `index_bytes_source` in the report assumptions.
+  - if chunk-rounded `index.db` bytes dominate, compare `treedb.pages.total*page_size` (logical index pages) and/or run post-write `VacuumIndex*` to remove slack before interpreting density deltas.
+  - tune `-treedb-outer-leaf-block-target-bytes` and codec (`snappy|lz4`) to improve payload density.
+- `lookup` gate failing:
+  - inspect `cache_hits`, `cache_misses`, `fallback_searches`, and `fence_false_positives`.
+  - increase `-outerleaf-approx-block-cache-mb` and/or reduce block count (larger outer blocks) to raise hit ratio on random reads.
+  - reduce `-outerleaf-approx-fence-fpr` when evaluating idealized predecessor routing.
+- `write` gate failing:
+  - compare `write_proxy_ops_baseline` vs `write_proxy_ops_outer`.
+  - if outer path regresses, check codec/target choices and block-builder overhead from very small targets.
+- `wa` gate failing:
+  - validate `-outerleaf-approx-wal-bytes-per-record` and `-outerleaf-approx-vlog-record-overhead-bytes` assumptions.
+  - compare `wa_*_total_bytes` to isolate whether WAL model or value payload size drives the increase.
+
 ## Standard Profile Workflow (`benchprof`)
 
 Use `-profile-dir` so all profiles and ops outputs are captured in one place:

@@ -102,9 +102,10 @@ type outerLeafApproxScenarioRun struct {
 	WorkloadOps  float64
 	SecondaryOps float64
 
-	MainIndexBytes uint64
-	MainWALBytes   uint64
-	MainValueBytes uint64
+	MainIndexBytes        uint64
+	MainIndexLogicalBytes uint64
+	MainWALBytes          uint64
+	MainValueBytes        uint64
 
 	Keys   [][]byte
 	Values [][]byte
@@ -242,6 +243,7 @@ type outerLeafApproxReportAssumptions struct {
 	ForcedPointers          bool     `json:"forced_pointers"`
 	ValueSizes              []int    `json:"value_sizes"`
 	Codecs                  []string `json:"codecs"`
+	IndexBytesSource        string   `json:"index_bytes_source"`
 	BlockTargetBytes        int      `json:"block_target_bytes"`
 	BlockCacheBytes         int64    `json:"block_cache_bytes"`
 	FenceFPR                float64  `json:"fence_fpr"`
@@ -507,6 +509,11 @@ func runOuterLeafApproxScenario(baseCfg BenchConfig, workload outerLeafApproxWor
 		return outerLeafApproxScenarioRun{}, nil, err
 	}
 	defer func() { _ = tdb.Close() }()
+	if stats := tdb.Stats(); stats != nil {
+		if pages, ok := parseUint64Stat(stats, "treedb.pages.total"); ok && pages > 0 {
+			out.MainIndexLogicalBytes = pages * uint64(page.PageSize)
+		}
+	}
 
 	out.Keys, out.Values, err = collectTreeDBKeyValues(tdb, maxKeys)
 	if err != nil {
@@ -576,7 +583,13 @@ func evaluateOuterLeafApproxCase(s outerLeafApproxScenarioRun, codec treedb.Valu
 
 	baselineLeafBytesEst := uint64(baselineLeafPages) * page.PageSize
 	fenceLeafBytesEst := uint64(fenceLeafPages) * page.PageSize
-	approxIndexBytes := s.MainIndexBytes
+	baselineIndexBytes := s.MainIndexBytes
+	if s.MainIndexLogicalBytes > 0 {
+		// Disk usage is chunk-rounded and can hide meaningful density wins.
+		// Prefer logical page bytes when available from treedb.pages.total.
+		baselineIndexBytes = s.MainIndexLogicalBytes
+	}
+	approxIndexBytes := baselineIndexBytes
 	if baselineLeafBytesEst > fenceLeafBytesEst {
 		delta := baselineLeafBytesEst - fenceLeafBytesEst
 		if delta > approxIndexBytes {
@@ -590,7 +603,7 @@ func evaluateOuterLeafApproxCase(s outerLeafApproxScenarioRun, codec treedb.Valu
 	baselineVlogBytes := baselineBuild.payloadBytes + baselineVlogMeta
 	outerVlogBytes := outerPayloadBytes + outerVlogMeta
 
-	baselineTotal := s.MainIndexBytes + baselineVlogBytes
+	baselineTotal := baselineIndexBytes + baselineVlogBytes
 	approxTotal := approxIndexBytes + outerVlogBytes
 
 	bytesReduction := ratioDiffFraction(baselineTotal, approxTotal)
@@ -616,7 +629,7 @@ func evaluateOuterLeafApproxCase(s outerLeafApproxScenarioRun, codec treedb.Valu
 		SecondaryOps:       s.SecondaryOps,
 		WallMillis:         s.Wall.Milliseconds(),
 		KeyCount:           len(s.Keys),
-		BaselineIndexBytes: s.MainIndexBytes,
+		BaselineIndexBytes: baselineIndexBytes,
 		ApproxIndexBytes:   approxIndexBytes,
 
 		BaselineVlogPayloadBytes: baselineBuild.payloadBytes,
@@ -724,6 +737,7 @@ func buildOuterLeafApproxReport(cfg outerLeafApproxSuiteConfig, cases []outerLea
 			ForcedPointers:          forcedPointers,
 			ValueSizes:              append([]int(nil), cfg.ValueSizes...),
 			Codecs:                  codecs,
+			IndexBytesSource:        "treedb.pages.total*page_size (fallback: index.db file bytes)",
 			BlockTargetBytes:        cfg.BlockTargetBytes,
 			BlockCacheBytes:         cfg.BlockCacheBytes,
 			FenceFPR:                cfg.FenceFPR,
@@ -750,6 +764,7 @@ func renderOuterLeafApproxMarkdown(report outerLeafApproxReport) string {
 	sb.WriteString(fmt.Sprintf("- forced_value_pointers: %t\n", report.Assumptions.ForcedPointers))
 	sb.WriteString(fmt.Sprintf("- value_sizes: %v\n", report.Assumptions.ValueSizes))
 	sb.WriteString(fmt.Sprintf("- codecs: %s\n", strings.Join(report.Assumptions.Codecs, ",")))
+	sb.WriteString(fmt.Sprintf("- index_bytes_source: %s\n", report.Assumptions.IndexBytesSource))
 	sb.WriteString(fmt.Sprintf("- outer_block_target_bytes: %d\n", report.Assumptions.BlockTargetBytes))
 	sb.WriteString(fmt.Sprintf("- outer_block_cache_bytes: %d\n", report.Assumptions.BlockCacheBytes))
 	sb.WriteString(fmt.Sprintf("- fence_fpr: %.6f\n", report.Assumptions.FenceFPR))
@@ -1416,4 +1431,23 @@ func sanitizeOuterLeafApproxReport(report *outerLeafApproxReport) {
 		c.WAOuterRatio = finiteOrZero(c.WAOuterRatio)
 		c.WAIncreaseFraction = finiteOrZero(c.WAIncreaseFraction)
 	}
+}
+
+func parseUint64Stat(stats map[string]string, key string) (uint64, bool) {
+	if stats == nil {
+		return 0, false
+	}
+	raw, ok := stats[key]
+	if !ok {
+		return 0, false
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
