@@ -4,11 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/freelist"
@@ -17,6 +17,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -32,6 +33,9 @@ const (
 
 	closeSnapshotDrainTimeout = 10 * time.Second
 	closeSnapshotDrainSleep   = 500 * time.Microsecond
+
+	snapshotAcquireShardCount = 256
+	snapshotAcquireShardMask  = snapshotAcquireShardCount - 1
 )
 
 type DBState struct {
@@ -53,7 +57,7 @@ type snapshotView struct {
 type DB struct {
 	valueLogManager    *valuelog.Manager
 	snapshotViewRO     atomic.Pointer[snapshotView]
-	snapshotAcquireRO  atomic.Int32
+	snapshotAcquireRO  [snapshotAcquireShardCount]atomic.Int32
 	valueLogRefTracker *valueLogRefTracker
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
@@ -120,12 +124,15 @@ type DB struct {
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit atomic.Bool
+	closing                atomic.Bool
 }
 
 const (
 	defaultChunkSize                 = 16 * 1024 * 1024
 	defaultMaintenanceOpsPerCoalesce = 400_000
 )
+
+const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
 
@@ -609,12 +616,29 @@ type Snapshot struct {
 	state       *DBState
 	vlogManager *valuelog.Manager
 	vlogPinned  bool
+	registryID  int64
 	reader      valueReader
 	tree        tree.Tree
-	registryID  int64
 	closed      atomic.Bool
 	treePager   *pager.Pager
 	treeRoot    uint64
+	// registryShardHint is used to route reader registrations to a stable fast
+	// registry shard for this snapshot object across operations.
+	registryShardHint int
+}
+
+func registryHintFromSnapshot(s *Snapshot) int {
+	if s == nil {
+		return snapshotShardHintUnset
+	}
+	if s.registryShardHint != snapshotShardHintUnset {
+		return s.registryShardHint
+	}
+	h := uint64(uintptr(unsafe.Pointer(s)))
+	h ^= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ^= h >> 33
+	return int(h & uint64(lifecycle.FastReaderShardMask))
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -633,11 +657,24 @@ func (s *Snapshot) State() *DBState {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
-	db.snapshotAcquireRO.Add(1)
+	if db.closing.Load() {
+		return nil
+	}
+	snap := db.snapPool.Get()
+	if snap.registryShardHint == snapshotShardHintUnset {
+		snap.registryShardHint = registryHintFromSnapshot(snap)
+	}
+	acqShard := snapshotAcquireShard()
+	db.snapshotAcquireRO[acqShard].Add(1)
+	defer db.snapshotAcquireRO[acqShard].Add(-1)
+	if db.closing.Load() {
+		db.snapPool.Put(snap)
+		return nil
+	}
 
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
-		db.snapshotAcquireRO.Add(-1)
+		db.snapPool.Put(snap)
 		return nil
 	}
 	idx := view.idx
@@ -647,19 +684,24 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
 	if vlogNeedsPin {
 		if vm == nil {
-			db.snapshotAcquireRO.Add(-1)
+			db.snapPool.Put(snap)
 			return nil
 		}
 		vm.Acquire(vlogSet)
 	}
 
-	// Register Reader
-	id := int64(0)
+	var registryID int64
 	if idx != nil {
-		id = idx.registry.Register(state.CommitSeq)
+		if idx.registry == nil {
+			if vlogNeedsPin && vm != nil {
+				_ = vm.Release(vlogSet)
+			}
+			db.snapPool.Put(snap)
+			return nil
+		}
+		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
 	}
 
-	snap := db.snapPool.Get()
 	snap.db = db
 	snap.idx = idx
 	snap.state = state
@@ -668,6 +710,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.reader.vlogs = vlogSet
 	snap.reader.outerLeafMode = db.indexOuterLeafMode
 	snap.reader.cache = db.outerLeafBlockCache
+	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
 			snap.treeRoot == state.RootPageID
@@ -683,9 +726,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 			snap.treeRoot = 0
 		}
 	}
-	snap.registryID = id
 	snap.closed.Store(false)
-	db.snapshotAcquireRO.Add(-1)
 	return snap
 }
 
@@ -705,9 +746,13 @@ func (s *Snapshot) Close() error {
 		}
 	}
 	if s.idx != nil {
-		s.idx.registry.Unregister(s.registryID)
+		if s.registryID != 0 {
+			s.idx.registry.Unregister(s.registryID)
+		}
 		if s.db != nil {
-			s.db.maybeReleaseRetiredIndex(s.idx)
+			if s.db.idx.Load() != s.idx {
+				s.db.maybeReleaseRetiredIndex(s.idx)
+			}
 		}
 	}
 	if s.db != nil {
@@ -1017,6 +1062,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 }
 
 func (db *DB) Close() error {
+	db.closing.Store(true)
 	db.stopCommitCombiner()
 	db.pruner.Stop()
 	if db.ghostManager != nil {
@@ -1031,17 +1077,15 @@ func (db *DB) Close() error {
 	db.lock = nil
 	db.mu.Unlock()
 
+	var errs []error
 	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
-	for db.snapshotAcquireRO.Load() > 0 {
+	for db.snapshotAcquireInFlight() > 0 {
 		if time.Now().After(drainDeadline) {
 			break
 		}
-		runtime.Gosched()
 		time.Sleep(closeSnapshotDrainSleep)
 	}
-
-	var errs []error
-	if remaining := db.snapshotAcquireRO.Load(); remaining > 0 {
+	if remaining := db.snapshotAcquireInFlight(); remaining > 0 {
 		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
 	if err := db.closeAllIndexes(); err != nil {
@@ -1081,6 +1125,20 @@ func (db *DB) backgroundError() error {
 	db.bgErrMu.Lock()
 	defer db.bgErrMu.Unlock()
 	return db.bgErr
+}
+
+func (db *DB) snapshotAcquireInFlight() int32 {
+	var total int32
+	for i := range db.snapshotAcquireRO {
+		total += db.snapshotAcquireRO[i].Load()
+	}
+	return total
+}
+
+func snapshotAcquireShard() int {
+	var marker int
+	p := uintptr(unsafe.Pointer(&marker))
+	return int((p ^ (p >> 7) ^ (p >> 13)) & uintptr(snapshotAcquireShardMask))
 }
 
 // recover reads meta pages and restores state.

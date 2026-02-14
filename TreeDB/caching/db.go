@@ -1103,6 +1103,284 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	return nil
 }
 
+func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.Interface, sync bool, laneID int) (int, error) {
+	if db == nil || len(units) == 0 {
+		return 0, nil
+	}
+	if backendBatch == nil {
+		return 0, errors.New("cachingdb: missing backend batch")
+	}
+
+	type (
+		setViewer interface {
+			SetView(key, value []byte) error
+		}
+		deleteViewer interface {
+			DeleteView(key []byte) error
+		}
+		ptrSetter interface {
+			SetPointer(key []byte, ptr page.ValuePtr) error
+		}
+		ptrSetterView interface {
+			SetPointerView(key []byte, ptr page.ValuePtr) error
+		}
+	)
+	sv, _ := backendBatch.(setViewer)
+	dv, _ := backendBatch.(deleteViewer)
+	psv, _ := backendBatch.(ptrSetterView)
+	ps, _ := backendBatch.(ptrSetter)
+
+	chunkCap := db.flushBuildChunkCap
+	if chunkCap <= 0 {
+		chunkCap = 8192
+	}
+	unitRuns := make([][][]batch.Entry, len(units))
+	for i := range units {
+		runs, _, err := buildOpRuns(units[i].mem, chunkCap)
+		if err != nil {
+			for _, built := range unitRuns {
+				for _, run := range built {
+					putEntrySlice(run)
+				}
+			}
+			return 0, err
+		}
+		unitRuns[i] = runs
+	}
+	defer func() {
+		for _, runs := range unitRuns {
+			for _, run := range runs {
+				putEntrySlice(run)
+			}
+		}
+	}()
+
+	heap := make(opMergeHeap, 0, len(unitRuns))
+	for i := range unitRuns {
+		if len(unitRuns[i]) == 0 {
+			continue
+		}
+		it := newOpRunIter(unitRuns[i])
+		if !it.Valid() {
+			continue
+		}
+		priority := len(unitRuns) - 1 - i
+		heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+	}
+	for i := len(heap)/2 - 1; i >= 0; i-- {
+		(&heap).down(i, len(heap))
+	}
+
+	allowPointers := db.allowValueLogPointers()
+	fenceMode := db.outerLeafFenceV2Enabled()
+	var (
+		backendPendingOps int
+		lastFencePtr      page.ValuePtr
+		haveFencePtr      bool
+		ptrKeys           [][]byte
+		ptrVals           [][]byte
+		vlogLane          *lane
+		dictID            uint64
+		dictIDReady       bool
+	)
+
+	ensureVlogLane := func() error {
+		if vlogLane != nil {
+			return nil
+		}
+		l, err := db.pickLane(false, laneID)
+		if err != nil {
+			return err
+		}
+		vlogLane = l
+		if !dictIDReady {
+			if db.dictStore != nil {
+				if id, err := db.currentDictID(context.Background()); err == nil {
+					dictID = id
+				}
+			}
+			dictIDReady = true
+		}
+		return nil
+	}
+
+	emitPointer := func(key []byte, ptr page.ValuePtr) error {
+		emitPtr := true
+		if fenceMode {
+			if haveFencePtr && ptr == lastFencePtr {
+				emitPtr = false
+			} else {
+				lastFencePtr = ptr
+				haveFencePtr = true
+			}
+		}
+		if !emitPtr {
+			return nil
+		}
+		if psv != nil {
+			if err := psv.SetPointerView(key, ptr); err != nil {
+				return err
+			}
+		} else if ps != nil {
+			if err := ps.SetPointer(key, ptr); err != nil {
+				return err
+			}
+		} else {
+			return errors.New("cachingdb: backend batch missing SetPointer")
+		}
+		backendPendingOps++
+		return nil
+	}
+
+	flushInlinePointerGroup := func() error {
+		if len(ptrKeys) == 0 {
+			return nil
+		}
+		if !allowPointers {
+			ptrKeys = ptrKeys[:0]
+			ptrVals = ptrVals[:0]
+			return nil
+		}
+		if len(ptrKeys) != len(ptrVals) {
+			return errors.New("cachingdb: deferred inline pointer grouping mismatch")
+		}
+		records, groups, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
+		if err != nil {
+			return err
+		}
+		if len(records) == 0 {
+			ptrKeys = ptrKeys[:0]
+			ptrVals = ptrVals[:0]
+			return nil
+		}
+		if err := ensureVlogLane(); err != nil {
+			return err
+		}
+
+		startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
+		for i := range records {
+			records[i].RID = startRID + uint64(i)
+		}
+		durability := journalDurabilityFlush
+		if sync {
+			durability = journalDurabilitySync
+		}
+		vlogPtrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
+		if err != nil {
+			return err
+		}
+		if len(vlogPtrs) != len(records) {
+			putValueLogPtrs(vlogPtrs)
+			return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(records))
+		}
+		defer putValueLogPtrs(vlogPtrs)
+
+		for i := range groups {
+			ptr := vlogPtrs[i]
+			srcPositions := groups[i]
+			if fenceMode {
+				if len(srcPositions) == 0 {
+					continue
+				}
+				srcPositions = srcPositions[:1]
+			}
+			for _, srcPos := range srcPositions {
+				if srcPos < 0 || srcPos >= len(ptrKeys) {
+					return errors.New("cachingdb: deferred inline pointer source index out of range")
+				}
+				if err := emitPointer(ptrKeys[srcPos], ptr); err != nil {
+					return err
+				}
+			}
+		}
+		ptrKeys = ptrKeys[:0]
+		ptrVals = ptrVals[:0]
+		return nil
+	}
+
+	for len(heap) > 0 {
+		top := heap.pop()
+		currentKey := top.key
+
+		for len(heap) > 0 {
+			next := heap.peek()
+			if next != nil && bytes.Equal(next.key, currentKey) {
+				shadowed := heap.pop()
+				shadowed.iter.Next()
+				if shadowed.iter.Valid() {
+					shadowed.key = shadowed.iter.Key()
+					heap.push(shadowed)
+				}
+				continue
+			}
+			break
+		}
+
+		entry := top.iter.Entry()
+		switch {
+		case entry.Type == batch.OpDelete:
+			if err := flushInlinePointerGroup(); err != nil {
+				return 0, err
+			}
+			var err error
+			if dv != nil {
+				err = dv.DeleteView(entry.Key)
+			} else {
+				err = backendBatch.Delete(entry.Key)
+			}
+			if err != nil {
+				return 0, err
+			}
+			haveFencePtr = false
+			backendPendingOps++
+		case entry.IsPtr:
+			if err := flushInlinePointerGroup(); err != nil {
+				return 0, err
+			}
+			if err := emitPointer(entry.Key, entry.ValuePtr); err != nil {
+				return 0, err
+			}
+		default:
+			if allowPointers && (db.forceValueLogPointers || len(entry.Value) > db.valueLogThresholdForKey(entry.Key)) {
+				ptrKeys = append(ptrKeys, entry.Key)
+				ptrVals = append(ptrVals, entry.Value)
+			} else {
+				if err := flushInlinePointerGroup(); err != nil {
+					return 0, err
+				}
+				var err error
+				if sv != nil {
+					err = sv.SetView(entry.Key, entry.Value)
+				} else {
+					err = backendBatch.Set(entry.Key, entry.Value)
+				}
+				if err != nil {
+					return 0, err
+				}
+				haveFencePtr = false
+				backendPendingOps++
+			}
+		}
+
+		top.iter.Next()
+		if top.iter.Valid() {
+			top.key = top.iter.Key()
+			heap.push(top)
+		}
+	}
+
+	if err := flushInlinePointerGroup(); err != nil {
+		return 0, err
+	}
+	if vlogLane != nil {
+		retainPath := db.currentValueLogPath(vlogLane)
+		if retainPath != "" {
+			db.markValueLogRetain(retainPath)
+		}
+	}
+	return backendPendingOps, nil
+}
+
 // SetDictStore installs the dictionary store for current-ID freezing.
 func (db *DB) SetDictStore(store DictStore) {
 	if db == nil {
@@ -8818,9 +9096,15 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard.mu.Lock()
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
+		queueLaneID := db.laneForShardIndex(i)
+		if db.deferredValueLogEnabled() {
+			// Deferred fence mode requires global key-order regrouping; queue all shards
+			// on lane 0 so flush can merge and collapse fence pointers consistently.
+			queueLaneID = 0
+		}
 		db.queue = append(db.queue, shard.mem)
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
-		db.queueLaneIDs = append(db.queueLaneIDs, uint16(db.laneForShardIndex(i)))
+		db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
 		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
 		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
 		db.queueBacklogBytes.Add(memBytes)
@@ -8956,9 +9240,15 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		// Freeze and enqueue the old mutable shard.
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
+		queueLaneID := db.laneForShardIndex(i)
+		if db.deferredValueLogEnabled() {
+			// Deferred fence mode requires global key-order regrouping; queue all shards
+			// on lane 0 so flush can merge and collapse fence pointers consistently.
+			queueLaneID = 0
+		}
 		db.queue = append(db.queue, shard.mem)
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
-		db.queueLaneIDs = append(db.queueLaneIDs, uint16(db.laneForShardIndex(i)))
+		db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
 		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
 		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
 		db.queueBacklogBytes.Add(memBytes)
@@ -9537,7 +9827,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	}
 	maxMemtables := 1
 	targetBytes := int64(0)
-	if db.flushBuildConcurrency > 1 {
+	if db.flushBuildConcurrency > 1 || db.deferredValueLogEnabled() {
 		maxMemtables = flushCombineMaxMemtables
 		targetBytes = flushCombineTargetBytes
 		// When FlushThreshold ~= flushCombineTargetBytes (the common default),
@@ -10010,23 +10300,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 
 	// backendBatch := db.backend.NewBatch() // Original line, now replaced
 	if db.deferredValueLogEnabled() {
-		var fenceState deferredFenceCollapseState
-		for _, unit := range units {
-			iter := unit.mem.NewIterator(nil, nil)
-			err := db.flushDeferredValueLogMemtable(iter, backendBatch, unit.memLen, sync, laneID, &fenceState)
-			cerr := iter.Close()
-			if err == nil {
-				err = cerr
-			}
-			if err != nil {
-				db.reportError(err)
-				_ = backendBatch.Close()
-				return false
-			}
+		pendingOps, err := db.flushDeferredValueLogUnits(units, backendBatch, sync, laneID)
+		if err != nil {
+			db.reportError(err)
+			_ = backendBatch.Close()
+			return false
 		}
-		// Defer-vlog flushing writes all operations directly into backendBatch;
-		// ensure we commit it below.
-		backendPendingOps = totalLen
+		backendPendingOps = pendingOps
 	} else {
 		type (
 			ptrSetter interface {
@@ -12552,7 +12832,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		rids []uint64
 	)
 	if (!multiLanePointers && allowPointers) || !b.db.disableJournal {
-		l, err := b.db.pickLane(durability == journalDurabilitySync, -1)
+		preferredLane := -1
+		if b.db.deferredValueLogEnabled() {
+			// Keep deferred fence-mode pointer appends on a single lane so flush-time
+			// fence collapse can operate over one globally merged stream.
+			preferredLane = 0
+		}
+		l, err := b.db.pickLane(durability == journalDurabilitySync, preferredLane)
 		if err != nil {
 			b.db.writeMu.RUnlock()
 			return err

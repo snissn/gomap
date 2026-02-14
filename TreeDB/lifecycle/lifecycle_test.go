@@ -6,6 +6,10 @@ import (
 	"testing"
 )
 
+func isFastHandle(id int64) bool {
+	return id < 0
+}
+
 func TestLifecycle(t *testing.T) {
 	gy := NewGraveyard()
 	reg := NewReaderRegistry()
@@ -69,8 +73,8 @@ func TestReaderRegistry_FastPathSingleSeq(t *testing.T) {
 	rid1 := reg.Register(42)
 	rid2 := reg.Register(42)
 
-	if rid1 != rid2 {
-		t.Fatalf("expected shared fast-path handle, got rid1=%d rid2=%d", rid1, rid2)
+	if !isFastHandle(rid1) || !isFastHandle(rid2) {
+		t.Fatalf("expected fast handles for shared sequence, got rid1=%d rid2=%d", rid1, rid2)
 	}
 	if min := reg.MinPinnedSeq(); min != 42 {
 		t.Fatalf("expected min 42, got %d", min)
@@ -90,6 +94,9 @@ func TestReaderRegistry_FastPathSingleSeq(t *testing.T) {
 func TestReaderRegistry_FastAndSlowReadersMin(t *testing.T) {
 	reg := NewReaderRegistry()
 	fastID := reg.Register(10)
+	if !isFastHandle(fastID) {
+		t.Fatalf("expected fast handle, got slow handle %d", fastID)
+	}
 	slowID := reg.Register(9)
 
 	if min := reg.MinPinnedSeq(); min != 9 {
@@ -129,8 +136,8 @@ func TestReaderRegistry_FastPathConcurrentRegisterUnregister(t *testing.T) {
 		regWG.Wait()
 
 		for i, id := range ids {
-			if id != fastReaderHandle {
-				t.Fatalf("round %d: ids[%d]=%d, expected fastReaderHandle", r, i, id)
+			if !isFastHandle(id) {
+				t.Fatalf("round %d: ids[%d]=%d, expected fast handle", r, i, id)
 			}
 		}
 		if min := reg.MinPinnedSeq(); min != seq {
@@ -165,8 +172,8 @@ func TestReaderRegistry_ConcurrentFastAndSlowReaders(t *testing.T) {
 	reg := NewReaderRegistry()
 	for r := 0; r < rounds; r++ {
 		anchor := reg.Register(fastSeq)
-		if anchor != fastReaderHandle {
-			t.Fatalf("round %d: anchor id=%d, expected fastReaderHandle", r, anchor)
+		if !isFastHandle(anchor) {
+			t.Fatalf("round %d: anchor id=%d, expected fast handle", r, anchor)
 		}
 
 		fastIDs := make([]int64, fastReaders)
@@ -189,13 +196,8 @@ func TestReaderRegistry_ConcurrentFastAndSlowReaders(t *testing.T) {
 		regWG.Wait()
 
 		for i, id := range fastIDs {
-			if id != fastReaderHandle {
-				t.Fatalf("round %d: fastIDs[%d]=%d, expected fastReaderHandle", r, i, id)
-			}
-		}
-		for i, id := range slowIDs {
-			if id <= 0 {
-				t.Fatalf("round %d: slowIDs[%d]=%d, expected positive slow-handle", r, i, id)
+			if !isFastHandle(id) {
+				t.Fatalf("round %d: fastIDs[%d]=%d, expected fast handle", r, i, id)
 			}
 		}
 		if min := reg.MinPinnedSeq(); min != slowSeq {
@@ -236,18 +238,55 @@ func TestReaderRegistry_ConcurrentFastAndSlowReaders(t *testing.T) {
 
 func TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle(t *testing.T) {
 	reg := NewReaderRegistry()
-	reg.fastSeq.Store(7)
-	reg.fastCount.Store(math.MaxInt32)
+	for i := 0; i < len(reg.fastShards); i++ {
+		reg.fastShards[i].seq.Store(7)
+		reg.fastShards[i].count.Store(math.MaxInt32)
+	}
 
 	id := reg.Register(7)
-	if id == fastReaderHandle {
+	if isFastHandle(id) {
 		t.Fatalf("expected slow-handle fallback at fast-count saturation")
 	}
-	if got := reg.fastCount.Load(); got != math.MaxInt32 {
-		t.Fatalf("fastCount overflowed/changed at saturation: got %d want %d", got, math.MaxInt32)
+	for i := 0; i < len(reg.fastShards); i++ {
+		if got := reg.fastShards[i].count.Load(); got != math.MaxInt32 {
+			t.Fatalf("shard %d fastCount overflowed/changed at saturation: got %d want %d", i, got, math.MaxInt32)
+		}
 	}
 
 	if min := reg.MinPinnedSeq(); min != 7 {
 		t.Fatalf("expected min 7 with saturated fast readers + slow fallback, got %d", min)
+	}
+}
+
+func TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow(t *testing.T) {
+	reg := NewReaderRegistry()
+	const shard = 2
+
+	reg.fastShards[shard].seq.Store(55)
+	reg.fastShards[shard].count.Store(math.MaxInt32)
+
+	if id := reg.tryJoinFast(55, shard); id != 0 {
+		t.Fatalf("expected join to fail at saturated count, got id=%d", id)
+	}
+	if got := reg.fastShards[shard].count.Load(); got != math.MaxInt32 {
+		t.Fatalf("expected count unchanged at saturation, got %d", got)
+	}
+}
+
+func TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing(t *testing.T) {
+	reg := NewReaderRegistry()
+	const shard = 3
+
+	reg.fastShards[shard].seq.Store(11)
+	reg.fastShards[shard].count.Store(-1)
+
+	if id := reg.tryClaimFast(22, shard); id != 0 {
+		t.Fatalf("expected claim failure while shard initializes, got id=%d", id)
+	}
+	if got := reg.fastShards[shard].seq.Load(); got != 11 {
+		t.Fatalf("expected seq unchanged while shard initializes, got %d", got)
+	}
+	if got := reg.fastShards[shard].count.Load(); got != -1 {
+		t.Fatalf("expected count to stay initializing sentinel, got %d", got)
 	}
 }
