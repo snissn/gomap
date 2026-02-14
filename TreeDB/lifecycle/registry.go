@@ -21,7 +21,7 @@ const (
 type readerRegistryShard struct {
 	seq   atomic.Uint64
 	count atomic.Int32
-	_     [48]byte
+	_     [52]byte
 }
 
 type ReaderRegistry struct {
@@ -170,10 +170,12 @@ func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 func (r *ReaderRegistry) loadFastMin() uint64 {
 	min := uint64(math.MaxUint64)
 	for i := range r.fastShards {
+		// Read seq before count to bias races toward a conservative (lower)
+		// min rather than a potentially over-optimistic recycled seq value.
+		seq := r.fastShards[i].seq.Load()
 		if r.fastShards[i].count.Load() <= 0 {
 			continue
 		}
-		seq := r.fastShards[i].seq.Load()
 		if seq < min {
 			min = seq
 		}
