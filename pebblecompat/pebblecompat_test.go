@@ -1404,6 +1404,208 @@ func collectVisibleFromIter(t *testing.T, iter *pebble.Iterator) []string {
 	return out
 }
 
+type iteratorAction struct {
+	name  string
+	apply func(iter *pebble.Iterator) bool
+}
+
+type iteratorActionResult struct {
+	valid bool
+	key   string
+	value string
+	err   string
+}
+
+func executeIteratorAction(t *testing.T, iter *pebble.Iterator, action iteratorAction) iteratorActionResult {
+	t.Helper()
+	require.NotNil(t, iter)
+	valid := action.apply(iter)
+	result := iteratorActionResult{valid: valid}
+	if valid {
+		result.key = string(iter.Key())
+		result.value = string(iter.Value())
+	}
+	if err := iter.Error(); err != nil {
+		result.err = err.Error()
+	}
+	return result
+}
+
+func runIteratorActionsParity(
+	t *testing.T,
+	pebbleDB *pebble.DB,
+	compatDB *DB,
+	opts *pebble.IterOptions,
+	actions []iteratorAction,
+) {
+	t.Helper()
+	pebbleIter, err := pebbleDB.NewIter(opts)
+	require.NoError(t, err)
+	defer pebbleIter.Close()
+
+	compatIter, err := compatDB.NewIter(opts)
+	require.NoError(t, err)
+	defer compatIter.Close()
+
+	for i := range actions {
+		pResult := executeIteratorAction(t, pebbleIter, actions[i])
+		cResult := executeIteratorAction(t, compatIter, actions[i])
+		require.Equalf(t, pResult, cResult, "iterator action parity mismatch for %q", actions[i].name)
+	}
+
+	require.NoError(t, pebbleIter.Error())
+	require.NoError(t, compatIter.Error())
+}
+
+func TestIteratorBoundsSeekReverseParityWithPebble(t *testing.T) {
+	dir := t.TempDir()
+
+	compatDB, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer compatDB.Close()
+
+	pebbleDB, err := openPebbleForTests(filepath.Join(dir, "pebble"))
+	require.NoError(t, err)
+	defer pebbleDB.Close()
+
+	seed := []struct {
+		key   string
+		value string
+	}{
+		{key: "a", value: "va"},
+		{key: "b", value: "vb"},
+		{key: "c", value: "vc"},
+		{key: "d", value: "vd"},
+		{key: "e", value: "ve"},
+		{key: "f", value: "vf"},
+	}
+	for i := range seed {
+		require.NoError(t, compatDB.Set([]byte(seed[i].key), []byte(seed[i].value), pebble.NoSync))
+		require.NoError(t, pebbleDB.Set([]byte(seed[i].key), []byte(seed[i].value), pebble.NoSync))
+	}
+
+	t.Run("bounded-forward-first-next", func(t *testing.T) {
+		opts := &pebble.IterOptions{LowerBound: []byte("b"), UpperBound: []byte("e")}
+		actions := []iteratorAction{
+			{name: "First", apply: func(iter *pebble.Iterator) bool { return iter.First() }},
+			{name: "Next-1", apply: func(iter *pebble.Iterator) bool { return iter.Next() }},
+			{name: "Next-2", apply: func(iter *pebble.Iterator) bool { return iter.Next() }},
+			{name: "Next-upper-bound", apply: func(iter *pebble.Iterator) bool { return iter.Next() }},
+		}
+		runIteratorActionsParity(t, pebbleDB, compatDB, opts, actions)
+	})
+
+	t.Run("bounded-reverse-last-prev", func(t *testing.T) {
+		opts := &pebble.IterOptions{LowerBound: []byte("b"), UpperBound: []byte("e")}
+		actions := []iteratorAction{
+			{name: "Last", apply: func(iter *pebble.Iterator) bool { return iter.Last() }},
+			{name: "Prev-1", apply: func(iter *pebble.Iterator) bool { return iter.Prev() }},
+			{name: "Prev-2", apply: func(iter *pebble.Iterator) bool { return iter.Prev() }},
+			{name: "Prev-lower-bound", apply: func(iter *pebble.Iterator) bool { return iter.Prev() }},
+		}
+		runIteratorActionsParity(t, pebbleDB, compatDB, opts, actions)
+	})
+
+	t.Run("bounded-seekge-boundary-touch", func(t *testing.T) {
+		opts := &pebble.IterOptions{LowerBound: []byte("b"), UpperBound: []byte("e")}
+		actions := []iteratorAction{
+			{name: "SeekGE-before-lower", apply: func(iter *pebble.Iterator) bool { return iter.SeekGE([]byte("a")) }},
+			{name: "SeekGE-at-lower", apply: func(iter *pebble.Iterator) bool { return iter.SeekGE([]byte("b")) }},
+			{name: "SeekGE-inside", apply: func(iter *pebble.Iterator) bool { return iter.SeekGE([]byte("d")) }},
+			{name: "SeekGE-at-upper", apply: func(iter *pebble.Iterator) bool { return iter.SeekGE([]byte("e")) }},
+		}
+		runIteratorActionsParity(t, pebbleDB, compatDB, opts, actions)
+	})
+
+	t.Run("bounded-seeklt-boundary-touch", func(t *testing.T) {
+		opts := &pebble.IterOptions{LowerBound: []byte("b"), UpperBound: []byte("e")}
+		actions := []iteratorAction{
+			{name: "SeekLT-at-upper", apply: func(iter *pebble.Iterator) bool { return iter.SeekLT([]byte("e")) }},
+			{name: "SeekLT-inside", apply: func(iter *pebble.Iterator) bool { return iter.SeekLT([]byte("d")) }},
+			{name: "SeekLT-at-lower", apply: func(iter *pebble.Iterator) bool { return iter.SeekLT([]byte("b")) }},
+			{name: "SeekLT-before-lower", apply: func(iter *pebble.Iterator) bool { return iter.SeekLT([]byte("a")) }},
+		}
+		runIteratorActionsParity(t, pebbleDB, compatDB, opts, actions)
+	})
+}
+
+func TestSnapshotTimelineParityWithPebble(t *testing.T) {
+	dir := t.TempDir()
+
+	compatDB, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer compatDB.Close()
+
+	pebbleDB, err := openPebbleForTests(filepath.Join(dir, "pebble"))
+	require.NoError(t, err)
+	defer pebbleDB.Close()
+
+	base := []struct {
+		key   string
+		value string
+	}{
+		{key: "a", value: "0"},
+		{key: "b", value: "0"},
+		{key: "c", value: "0"},
+		{key: "d", value: "0"},
+		{key: "e", value: "0"},
+		{key: "f", value: "0"},
+	}
+	for i := range base {
+		require.NoError(t, compatDB.Set([]byte(base[i].key), []byte(base[i].value), pebble.NoSync))
+		require.NoError(t, pebbleDB.Set([]byte(base[i].key), []byte(base[i].value), pebble.NoSync))
+	}
+
+	pSnapA := pebbleDB.NewSnapshot()
+	require.NotNil(t, pSnapA)
+	defer pSnapA.Close()
+	cSnapA := compatDB.NewSnapshot()
+	require.NotNil(t, cSnapA)
+	defer cSnapA.Close()
+
+	require.NoError(t, compatDB.Set([]byte("b"), []byte("1"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("b"), []byte("1"), pebble.NoSync))
+	require.NoError(t, compatDB.Delete([]byte("c"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Delete([]byte("c"), pebble.NoSync))
+	require.NoError(t, compatDB.DeleteRange([]byte("d"), []byte("f"), pebble.NoSync))
+	require.NoError(t, pebbleDB.DeleteRange([]byte("d"), []byte("f"), pebble.NoSync))
+	require.NoError(t, compatDB.Set([]byte("g"), []byte("1"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("g"), []byte("1"), pebble.NoSync))
+
+	pSnapB := pebbleDB.NewSnapshot()
+	require.NotNil(t, pSnapB)
+	defer pSnapB.Close()
+	cSnapB := compatDB.NewSnapshot()
+	require.NotNil(t, cSnapB)
+	defer cSnapB.Close()
+
+	require.NoError(t, compatDB.Set([]byte("a"), []byte("2"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("a"), []byte("2"), pebble.NoSync))
+	require.NoError(t, compatDB.Delete([]byte("b"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Delete([]byte("b"), pebble.NoSync))
+	require.NoError(t, compatDB.DeleteRange([]byte("a"), []byte("c"), pebble.NoSync))
+	require.NoError(t, pebbleDB.DeleteRange([]byte("a"), []byte("c"), pebble.NoSync))
+	require.NoError(t, compatDB.Set([]byte("c"), []byte("2"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("c"), []byte("2"), pebble.NoSync))
+	require.NoError(t, compatDB.Set([]byte("h"), []byte("2"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("h"), []byte("2"), pebble.NoSync))
+
+	pebbleSnapAState := collectVisibleMap(t, pSnapA)
+	compatSnapAState := collectVisibleMap(t, cSnapA)
+	require.Equal(t, pebbleSnapAState, compatSnapAState)
+
+	pebbleSnapBState := collectVisibleMap(t, pSnapB)
+	compatSnapBState := collectVisibleMap(t, cSnapB)
+	require.Equal(t, pebbleSnapBState, compatSnapBState)
+
+	pebbleLiveState := collectVisibleMap(t, pebbleDB)
+	compatLiveState := collectVisibleMap(t, compatDB)
+	require.Equal(t, pebbleLiveState, compatLiveState)
+
+	require.NotEqual(t, pebbleSnapAState, pebbleSnapBState)
+	require.NotEqual(t, pebbleSnapBState, pebbleLiveState)
+}
+
 func TestNewIterAndSnapshotParity(t *testing.T) {
 	dir := t.TempDir()
 
