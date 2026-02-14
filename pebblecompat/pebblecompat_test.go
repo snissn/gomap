@@ -587,3 +587,22 @@ func TestCheckpointDestDirExistsError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "destination already exists")
 }
+
+func TestBatchCommitStatsSurface(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	b := db.NewBatch()
+	require.NotNil(t, b)
+	defer b.Close()
+
+	zero := b.CommitStats()
+	require.Equal(t, pebble.BatchCommitStats{}, zero)
+
+	require.NoError(t, b.Set([]byte("a"), []byte("1"), nil))
+	require.NoError(t, b.Commit(pebble.NoSync))
+
+	_ = b.CommitStats()
+}

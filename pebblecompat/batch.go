@@ -130,6 +130,14 @@ func (b *Batch) SyncWait() error {
 	return nil
 }
 
+// CommitStats returns Pebble batch commit stats when available.
+func (b *Batch) CommitStats() pebble.BatchCommitStats {
+	if b == nil || b.batch == nil {
+		return pebble.BatchCommitStats{}
+	}
+	return b.batch.CommitStats()
+}
+
 // Repr returns a stable copy of the Pebble batch representation.
 func (b *Batch) Repr() []byte {
 	if b == nil || b.batch == nil {
