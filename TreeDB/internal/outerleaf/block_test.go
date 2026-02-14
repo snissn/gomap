@@ -8,6 +8,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 )
 
+func pseudoRandomBytes(n int) []byte {
+	out := make([]byte, n)
+	var x uint64 = 0x9e3779b97f4a7c15
+	for i := 0; i < n; i++ {
+		x ^= x >> 12
+		x ^= x << 25
+		x ^= x >> 27
+		out[i] = byte((x * 0x2545F4914F6CDD1D) >> 56)
+	}
+	return out
+}
+
 func TestEncodeDecodeSingleRoundTrip(t *testing.T) {
 	codecs := []struct {
 		name  string
@@ -75,6 +87,57 @@ func TestEncodeSingleCodecHeaderMapping(t *testing.T) {
 	}
 	if got := lz4Enc[5]; got != blockCodecLZ4 {
 		t.Fatalf("lz4 codec header=%d want=%d", got, blockCodecLZ4)
+	}
+}
+
+func TestEncodePayloadIncompressibleBypass(t *testing.T) {
+	raw := pseudoRandomBytes(8 << 10)
+	cases := []struct {
+		name  string
+		codec uint8
+	}{
+		{name: "snappy", codec: 0},
+		{name: "lz4", codec: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, gotCodec, err := encodePayload(tc.codec, raw, nil)
+			if err != nil {
+				t.Fatalf("encodePayload: %v", err)
+			}
+			if gotCodec != blockCodecNone {
+				t.Fatalf("codec=%d want=%d", gotCodec, blockCodecNone)
+			}
+			if !bytes.Equal(encoded, raw) {
+				t.Fatalf("expected raw payload bypass")
+			}
+		})
+	}
+}
+
+func TestEncodePayloadCompressibleKeepsCodec(t *testing.T) {
+	raw := bytes.Repeat([]byte("outerleaf-compressible-payload|"), 256)
+	cases := []struct {
+		name       string
+		codec      uint8
+		wantHeader uint8
+	}{
+		{name: "snappy", codec: 0, wantHeader: blockCodecSnappy},
+		{name: "lz4", codec: 1, wantHeader: blockCodecLZ4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, gotCodec, err := encodePayload(tc.codec, raw, nil)
+			if err != nil {
+				t.Fatalf("encodePayload: %v", err)
+			}
+			if gotCodec != tc.wantHeader {
+				t.Fatalf("codec=%d want=%d", gotCodec, tc.wantHeader)
+			}
+			if len(encoded) >= len(raw) {
+				t.Fatalf("encoded len=%d raw len=%d", len(encoded), len(raw))
+			}
+		})
 	}
 }
 

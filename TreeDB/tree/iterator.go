@@ -744,7 +744,8 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		entries []FenceBlockEntry
 		ok      bool
 	)
-	if it.slabFenceKeys != nil {
+	preferKeyOnlyExpansion := it.mode == IteratorModeKeysOnly || it.slabFenceBlocks == nil
+	if preferKeyOnlyExpansion && it.slabFenceKeys != nil {
 		keys, keyOK, keyErr := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
 		if keyErr != nil {
 			return false, false, false, keyErr

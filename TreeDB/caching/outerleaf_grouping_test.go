@@ -44,10 +44,11 @@ func TestBuildOuterLeafValueRecords_V2GroupsAndLookup(t *testing.T) {
 
 	seen := make([]bool, len(keys))
 	for i := range records {
-		if len(groups[i]) == 0 {
+		group := groups[i]
+		if group.start >= group.end {
 			t.Fatalf("empty group at record %d", i)
 		}
-		for _, srcPos := range groups[i] {
+		for srcPos := group.start; srcPos < group.end; srcPos++ {
 			if srcPos < 0 || srcPos >= len(keys) {
 				t.Fatalf("group index out of range: %d", srcPos)
 			}
@@ -94,7 +95,8 @@ func TestBuildOuterLeafValueRecords_V2NonMonotonicFallsBackSafely(t *testing.T) 
 
 	covered := make(map[int]struct{}, len(keys))
 	for i := range groups {
-		for _, srcPos := range groups[i] {
+		group := groups[i]
+		for srcPos := group.start; srcPos < group.end; srcPos++ {
 			covered[srcPos] = struct{}{}
 			val, ok, found, _, decErr := outerleaf.DecodeValueForKey(records[i].Value, keys[srcPos], nil)
 			if decErr != nil {

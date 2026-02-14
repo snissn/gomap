@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math/bits"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
@@ -23,9 +25,28 @@ const (
 	blockCodecNone   = uint8(0)
 	blockCodecSnappy = uint8(1)
 	blockCodecLZ4    = uint8(2)
+
+	// Skip full-block compression when a small sample shows incompressible or
+	// near-incompressible behavior.
+	outerLeafIncompressibleProbeMinBytes = 1024
+	outerLeafIncompressibleProbeBytes    = 1024
+	outerLeafMinSavingsDiv               = 50 // 2%
+	outerLeafMinSavingsBytes             = 8
+	outerLeafHighEntropyUniqueThreshold  = 224
 )
 
 var blockMagic = [4]byte{'T', 'O', 'L', '2'}
+
+const (
+	// Keep pooled scratch buffers bounded to avoid retaining outsized slices.
+	maxPooledOuterLeafBytesCap    = 64 << 10
+	maxPooledOuterLeafRestartsCap = 4096
+)
+
+var (
+	outerLeafBytesPool    sync.Pool
+	outerLeafRestartsPool sync.Pool
+)
 
 const (
 	blockVersionV1 = uint8(1)
@@ -102,11 +123,102 @@ func normalizeCodec(codec uint8) uint8 {
 	}
 }
 
+func minCompressionSavings(rawLen int) int {
+	if rawLen <= 1 {
+		return 1
+	}
+	minSavings := rawLen / outerLeafMinSavingsDiv
+	if minSavings < outerLeafMinSavingsBytes {
+		minSavings = outerLeafMinSavingsBytes
+	}
+	if minSavings >= rawLen {
+		minSavings = rawLen - 1
+	}
+	if minSavings < 1 {
+		minSavings = 1
+	}
+	return minSavings
+}
+
+func keepCompressedPayload(rawLen, encodedLen int) bool {
+	if rawLen <= 0 || encodedLen <= 0 || encodedLen >= rawLen {
+		return false
+	}
+	return rawLen-encodedLen >= minCompressionSavings(rawLen)
+}
+
+func sampleForIncompressibleProbe(raw []byte, sampleBuf *[outerLeafIncompressibleProbeBytes]byte) []byte {
+	if len(raw) <= outerLeafIncompressibleProbeBytes {
+		return raw
+	}
+	// Spread the sample across the full payload so a compressible middle section
+	// is still represented (prefix+suffix-only sampling can miss it).
+	last := len(raw) - 1
+	for i := 0; i < outerLeafIncompressibleProbeBytes; i++ {
+		idx := (i * last) / (outerLeafIncompressibleProbeBytes - 1)
+		sampleBuf[i] = raw[idx]
+	}
+	return sampleBuf[:]
+}
+
+func shouldBypassCompressionProbe(codec uint8, raw []byte, dst []byte) bool {
+	if len(raw) < outerLeafIncompressibleProbeMinBytes {
+		return false
+	}
+	var sampleBuf [outerLeafIncompressibleProbeBytes]byte
+	sample := sampleForIncompressibleProbe(raw, &sampleBuf)
+	// Fast-path clearly high-entropy blocks to raw mode and skip probe/full
+	// codec work.
+	if isLikelyHighEntropy(sample) {
+		return true
+	}
+	switch codec {
+	case blockCodecLZ4:
+		bound := lz4.CompressBlockBound(len(sample))
+		if cap(dst) < bound {
+			dst = make([]byte, bound)
+		}
+		dst = dst[:bound]
+		n, err := lz4.CompressBlock(sample, dst, nil)
+		if err != nil {
+			return false
+		}
+		if n <= 0 {
+			return true
+		}
+		return !keepCompressedPayload(len(sample), n)
+	default:
+		need := snappy.MaxEncodedLen(len(sample))
+		if cap(dst) < need {
+			dst = make([]byte, need)
+		}
+		enc := snappy.Encode(dst[:0], sample)
+		return !keepCompressedPayload(len(sample), len(enc))
+	}
+}
+
+func isLikelyHighEntropy(sample []byte) bool {
+	if len(sample) == 0 {
+		return false
+	}
+	var seen [4]uint64
+	for i := range sample {
+		b := sample[i]
+		seen[b>>6] |= 1 << (b & 63)
+	}
+	unique := bits.OnesCount64(seen[0]) + bits.OnesCount64(seen[1]) + bits.OnesCount64(seen[2]) + bits.OnesCount64(seen[3])
+	return unique >= outerLeafHighEntropyUniqueThreshold
+}
+
 func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
 	if len(raw) == 0 {
 		return nil, blockCodecNone, nil
 	}
-	switch normalizeCodec(codec) {
+	codec = normalizeCodec(codec)
+	if shouldBypassCompressionProbe(codec, raw, dst) {
+		return raw, blockCodecNone, nil
+	}
+	switch codec {
 	case blockCodecLZ4:
 		bound := lz4.CompressBlockBound(len(raw))
 		if cap(dst) < bound {
@@ -115,13 +227,19 @@ func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
 		dst = dst[:bound]
 		n, err := lz4.CompressBlock(raw, dst, nil)
 		if err == nil && n > 0 {
-			return dst[:n], blockCodecLZ4, nil
+			if keepCompressedPayload(len(raw), n) {
+				return dst[:n], blockCodecLZ4, nil
+			}
+			return raw, blockCodecNone, nil
 		}
 		// Fall through to snappy on lz4 miss for deterministic behavior.
 		fallthrough
 	default:
 		enc := snappy.Encode(dst[:0], raw)
-		return enc, blockCodecSnappy, nil
+		if keepCompressedPayload(len(raw), len(enc)) {
+			return enc, blockCodecSnappy, nil
+		}
+		return raw, blockCodecNone, nil
 	}
 }
 
@@ -205,6 +323,54 @@ func appendLE32(dst []byte, v uint32) []byte {
 	return append(dst, buf[:]...)
 }
 
+func getPooledBytes(minCap int) []byte {
+	if minCap <= 0 {
+		minCap = 1
+	}
+	if v := outerLeafBytesPool.Get(); v != nil {
+		if buf, ok := v.([]byte); ok && cap(buf) >= minCap {
+			return buf[:0]
+		}
+	}
+	return make([]byte, 0, minCap)
+}
+
+func putPooledBytes(buf []byte) {
+	if cap(buf) == 0 || cap(buf) > maxPooledOuterLeafBytesCap {
+		return
+	}
+	outerLeafBytesPool.Put(buf[:0])
+}
+
+func getPooledRestarts(minCap int) []uint32 {
+	if minCap <= 0 {
+		minCap = 1
+	}
+	if v := outerLeafRestartsPool.Get(); v != nil {
+		if buf, ok := v.([]uint32); ok && cap(buf) >= minCap {
+			return buf[:0]
+		}
+	}
+	return make([]uint32, 0, minCap)
+}
+
+func putPooledRestarts(buf []uint32) {
+	if cap(buf) == 0 || cap(buf) > maxPooledOuterLeafRestartsCap {
+		return
+	}
+	outerLeafRestartsPool.Put(buf[:0])
+}
+
+func encodedPayloadBound(codec uint8, rawLen int) int {
+	if rawLen <= 0 {
+		return 1
+	}
+	if normalizeCodec(codec) == blockCodecLZ4 {
+		return lz4.CompressBlockBound(rawLen)
+	}
+	return snappy.MaxEncodedLen(rawLen)
+}
+
 func encodeV1Single(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
 	rawLen := len(key) + len(value)
 	if rawLen > int(^uint32(0)) {
@@ -217,11 +383,14 @@ func encodeV1Single(dst, key, value []byte, codec uint8, restartInterval int) ([
 		return nil, fmt.Errorf("outerleaf: value too large %d", len(value))
 	}
 
-	raw := make([]byte, 0, rawLen)
+	raw := getPooledBytes(rawLen)
+	defer putPooledBytes(raw)
 	raw = append(raw, key...)
 	raw = append(raw, value...)
 
-	encodedPayload, encodedCodec, err := encodePayload(codec, raw, nil)
+	encScratch := getPooledBytes(encodedPayloadBound(codec, len(raw)))
+	defer putPooledBytes(encScratch)
+	encodedPayload, encodedCodec, err := encodePayload(codec, raw, encScratch[:0])
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +419,7 @@ func encodeV1Single(dst, key, value []byte, codec uint8, restartInterval int) ([
 	return dst, nil
 }
 
-func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval int) ([]byte, error) {
+func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval int, validateOrder bool) ([]byte, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("outerleaf: empty entries")
 	}
@@ -268,8 +437,11 @@ func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval i
 		estRaw += 8 + len(entries[i].Key) + len(entries[i].Value)
 	}
 	estRaw += 4 * ((len(entries) + restartInterval - 1) / restartInterval)
-	raw := make([]byte, 0, estRaw)
-	restarts := make([]uint32, 0, (len(entries)+restartInterval-1)/restartInterval)
+	restartCap := (len(entries) + restartInterval - 1) / restartInterval
+	raw := getPooledBytes(estRaw)
+	defer putPooledBytes(raw)
+	restarts := getPooledRestarts(restartCap)
+	defer putPooledRestarts(restarts)
 	var prev []byte
 
 	for i := range entries {
@@ -277,7 +449,7 @@ func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval i
 		if len(e.Value) > int(^uint32(0)) {
 			return nil, fmt.Errorf("outerleaf: value too large %d", len(e.Value))
 		}
-		if i > 0 && bytes.Compare(entries[i-1].Key, e.Key) >= 0 {
+		if validateOrder && i > 0 && bytes.Compare(entries[i-1].Key, e.Key) >= 0 {
 			return nil, fmt.Errorf("outerleaf: entries must be strictly increasing")
 		}
 
@@ -298,7 +470,10 @@ func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval i
 		raw = append(raw, e.Key[shared:]...)
 		raw = append(raw, e.Value...)
 
-		prev = append(prev[:0], e.Key...)
+		// Keep a direct reference to the previous key while encoding this block.
+		// entries keys remain immutable for the duration of this function, so we
+		// can avoid per-entry key copying/allocation here.
+		prev = e.Key
 	}
 
 	entriesLen := len(raw)
@@ -314,7 +489,9 @@ func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval i
 		return nil, fmt.Errorf("outerleaf: entries payload too large %d", entriesLen)
 	}
 
-	encodedPayload, encodedCodec, err := encodePayload(codec, raw, nil)
+	encScratch := getPooledBytes(encodedPayloadBound(codec, len(raw)))
+	defer putPooledBytes(encScratch)
+	encodedPayload, encodedCodec, err := encodePayload(codec, raw, encScratch[:0])
 	if err != nil {
 		return nil, err
 	}
@@ -353,7 +530,16 @@ func EncodeEntries(dst []byte, entries []Entry, codec uint8, restartInterval int
 	if len(entries) == 1 {
 		return encodeV1Single(dst, entries[0].Key, entries[0].Value, codec, restartInterval)
 	}
-	return encodeV2Entries(dst, entries, codec, restartInterval)
+	return encodeV2Entries(dst, entries, codec, restartInterval, true)
+}
+
+// EncodeEntriesAssumeSorted encodes an ordered block of key/value records using
+// v2 layout without re-validating strict key ordering.
+func EncodeEntriesAssumeSorted(dst []byte, entries []Entry, codec uint8, restartInterval int) ([]byte, error) {
+	if len(entries) == 1 {
+		return encodeV1Single(dst, entries[0].Key, entries[0].Value, codec, restartInterval)
+	}
+	return encodeV2Entries(dst, entries, codec, restartInterval, false)
 }
 
 func decodeAndVerifyPayload(payload []byte, rawLen int, codec uint8, scratch []byte) ([]byte, error) {
@@ -509,8 +695,14 @@ func lookupV2ValueRange(entries []byte, key []byte, start int, limit int) ([]byt
 	if prevCap < 64 {
 		prevCap = 64
 	}
-	prev := make([]byte, 0, prevCap)
-	curr := make([]byte, 0, prevCap)
+	var prevStack [256]byte
+	var currStack [256]byte
+	prev := prevStack[:0]
+	curr := currStack[:0]
+	if prevCap > len(prevStack) {
+		prev = make([]byte, 0, prevCap)
+		curr = make([]byte, 0, prevCap)
+	}
 	for off < limit {
 		if off+8 > limit {
 			return nil, false, fmt.Errorf("outerleaf: truncated entry")
