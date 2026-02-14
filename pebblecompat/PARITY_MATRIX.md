@@ -83,7 +83,7 @@ Legend:
 | `Close` | full | | done |
 | Indexed read APIs (`Get`, `NewIter` on indexed batch) | partial | Implemented; semantics rely on shadow mirror parity. | 1 |
 | `CommitStats` | partial | Surface exposed; stats do not match Pebble commit-pipeline internals. | 2 |
-| `AddInternalKey` | missing | Not implemented. | 2 |
+| `AddInternalKey` | partial | Delegates to underlying Pebble batch; downstream apply support depends on op-kind coverage. | 2 |
 
 ## Acceptance Criteria for “Full”
 

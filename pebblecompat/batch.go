@@ -2,6 +2,7 @@ package pebblecompat
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"github.com/cockroachdb/pebble"
@@ -136,6 +137,17 @@ func (b *Batch) CommitStats() pebble.BatchCommitStats {
 		return pebble.BatchCommitStats{}
 	}
 	return b.batch.CommitStats()
+}
+
+// AddInternalKey appends an internal-key record to the batch.
+func (b *Batch) AddInternalKey(key *pebble.InternalKey, value []byte, opts *pebble.WriteOptions) error {
+	if err := b.ensureOpen(); err != nil {
+		return err
+	}
+	if key == nil {
+		return errors.New("pebblecompat: nil internal key")
+	}
+	return b.batch.AddInternalKey(key, value, opts)
 }
 
 // Repr returns a stable copy of the Pebble batch representation.

@@ -685,3 +685,29 @@ func TestOperationalMethodsClosed(t *testing.T) {
 	require.Equal(t, pebble.FormatMajorVersion(0), db.FormatMajorVersion())
 	require.Nil(t, db.NewEventuallyFileOnlySnapshot(nil))
 }
+
+func TestBatchAddInternalKeySurface(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	b := db.NewBatch()
+	require.NotNil(t, b)
+	defer b.Close()
+
+	err = b.AddInternalKey(nil, []byte("v"), nil)
+	require.Error(t, err)
+
+	ik := &pebble.InternalKey{
+		UserKey: []byte("k"),
+		Trailer: uint64(pebble.InternalKeyKindSet),
+	}
+	require.NoError(t, b.AddInternalKey(ik, []byte("v"), nil))
+	require.NoError(t, b.Commit(pebble.NoSync))
+
+	v, closer, err := db.Get([]byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("v"), v)
+	require.NoError(t, closer.Close())
+}
