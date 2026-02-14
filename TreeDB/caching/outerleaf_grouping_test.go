@@ -28,10 +28,11 @@ func TestBuildOuterLeafValueRecords_V2GroupsAndLookup(t *testing.T) {
 		outerLeafBlockRestart:     8,
 	}
 
-	records, groups, err := db.buildOuterLeafValueRecords(keys, vals)
+	records, groups, outerArena, err := db.buildOuterLeafValueRecords(keys, vals)
 	if err != nil {
 		t.Fatalf("buildOuterLeafValueRecords: %v", err)
 	}
+	defer putOuterLeafArena(outerArena)
 	if len(records) == 0 {
 		t.Fatalf("expected records")
 	}
@@ -82,10 +83,11 @@ func TestBuildOuterLeafValueRecords_V2NonMonotonicFallsBackSafely(t *testing.T) 
 		outerLeafBlockRestart:     8,
 	}
 
-	records, groups, err := db.buildOuterLeafValueRecords(keys, vals)
+	records, groups, outerArena, err := db.buildOuterLeafValueRecords(keys, vals)
 	if err != nil {
 		t.Fatalf("buildOuterLeafValueRecords: %v", err)
 	}
+	defer putOuterLeafArena(outerArena)
 	if len(records) == 0 {
 		t.Fatalf("expected records")
 	}
@@ -115,10 +117,11 @@ func TestBuildOuterLeafValueRecords_V2NonMonotonicFallsBackSafely(t *testing.T) 
 func TestBuildOuterLeafValueRecords_V1NoGrouping(t *testing.T) {
 	keys, vals := makeOuterLeafTestKV(8, 32)
 	db := &DB{}
-	records, groups, err := db.buildOuterLeafValueRecords(keys, vals)
+	records, groups, outerArena, err := db.buildOuterLeafValueRecords(keys, vals)
 	if err != nil {
 		t.Fatalf("buildOuterLeafValueRecords: %v", err)
 	}
+	defer putOuterLeafArena(outerArena)
 	if len(records) != len(keys) {
 		t.Fatalf("records=%d want=%d", len(records), len(keys))
 	}

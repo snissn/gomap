@@ -49,6 +49,7 @@ var valueLogRecordPool sync.Pool   // stores []valuelog.Record
 var valueLogKeyPool sync.Pool      // stores [][]byte
 var valueLogPtrPool sync.Pool      // stores []page.ValuePtr
 var outerLeafEntryPool sync.Pool   // stores []outerleaf.Entry
+var outerLeafArenaPool sync.Pool   // stores []byte
 var valueLogPreparedBodyPool sync.Pool
 var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
@@ -176,6 +177,34 @@ func putOuterLeafEntries(s []outerleaf.Entry) {
 		entries[i] = outerleaf.Entry{}
 	}
 	outerLeafEntryPool.Put(s[:0])
+}
+
+func getOuterLeafArena(capacity int) []byte {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if v := outerLeafArenaPool.Get(); v != nil {
+		if s, ok := v.([]byte); ok {
+			maxCap := capacity * 2
+			if maxCap < 1<<20 {
+				maxCap = 1 << 20
+			}
+			if cap(s) >= capacity && cap(s) <= maxCap {
+				return s[:0]
+			}
+		}
+	}
+	return make([]byte, 0, capacity)
+}
+
+func putOuterLeafArena(buf []byte) {
+	if buf == nil {
+		return
+	}
+	if cap(buf) > maxOuterLeafArenaPoolCap {
+		return
+	}
+	outerLeafArenaPool.Put(buf[:0])
 }
 
 func getValueLogPtrs(n int) []page.ValuePtr {
@@ -353,6 +382,7 @@ const (
 	adaptiveOverwriteWritePct        = 0.25
 	adaptiveWarmupBytes              = 16 * 1024 * 1024
 	maxMemtableBytesPerShard         = int64(3 << 30)
+	maxOuterLeafArenaPoolCap         = 16 << 20
 	maxVlogPreparedBodyPoolCap       = 8 << 20
 	maxVlogPreparedFramesPoolCap     = 1 << 14
 	maxVlogDictPrepareResultsPoolCap = 1 << 14
@@ -607,12 +637,12 @@ func appendOuterLeafRecordGroup(db *DB, entries []outerleaf.Entry, groupStart in
 // buildOuterLeafValueRecords encodes key/value pairs into value-log records.
 // The returned groups map each encoded record back to a contiguous source range
 // [start,end).
-func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valuelog.Record, []outerLeafRecordGroup, error) {
+func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
 	if len(keys) != len(values) {
-		return nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
+		return nil, nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
 	}
 	if len(keys) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	recordsCap := len(keys)
 	groupsCap := len(keys)
@@ -666,12 +696,12 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 		for i := range keys {
 			payload, err := db.encodeOuterLeafValue(keys[i], values[i])
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			records = append(records, valuelog.Record{Value: payload})
 			groups = append(groups, outerLeafRecordGroup{start: i, end: i + 1})
 		}
-		return records, groups, nil
+		return records, groups, nil, nil
 	}
 
 	targetBytes := db.outerLeafBlockTargetBytes
@@ -685,7 +715,13 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	for i := range keys {
 		arenaCap += len(keys[i]) + len(values[i])
 	}
-	arena := make([]byte, 0, arenaCap)
+	arena := getOuterLeafArena(arenaCap)
+	releaseArena := true
+	defer func() {
+		if releaseArena {
+			putOuterLeafArena(arena)
+		}
+	}()
 	estimated := 0
 	var prevKey []byte
 	groupStart := 0
@@ -700,7 +736,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 				var err error
 				records, groups, arena, err = appendOuterLeafRecordGroup(db, entries, groupStart, records, groups, arena, estimated+32)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				entries = entries[:0]
 				estimated = 0
@@ -709,7 +745,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 				var err error
 				records, groups, arena, err = appendOuterLeafRecordGroup(db, entries, groupStart, records, groups, arena, estimated+32)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				entries = entries[:0]
 				estimated = 0
@@ -727,10 +763,11 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 		var err error
 		records, groups, arena, err = appendOuterLeafRecordGroup(db, entries, groupStart, records, groups, arena, estimated+32)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
-	return records, groups, nil
+	releaseArena = false
+	return records, groups, arena, nil
 }
 
 func fallbackAutoVlogWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode) vlogCompressionWriteMode {
@@ -958,12 +995,13 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		keys = append(keys, op.Key)
 		values = append(values, op.Value)
 	}
-	records, groups, err := db.buildOuterLeafValueRecords(keys, values)
+	records, groups, outerArena, err := db.buildOuterLeafValueRecords(keys, values)
 	if err != nil {
 		return nil, err
 	}
 	if len(records) == 0 {
 		putValueLogRecordsNoClear(records)
+		putOuterLeafArena(outerArena)
 		return ops, nil
 	}
 	startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
@@ -978,11 +1016,13 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	ptrs, err := db.appendValueLog(lane, dictID, nil, records, durability)
 	if err != nil {
 		putValueLogRecordsNoClear(records)
+		putOuterLeafArena(outerArena)
 		return nil, err
 	}
 	if len(ptrs) != len(records) {
 		putValueLogPtrs(ptrs)
 		putValueLogRecordsNoClear(records)
+		putOuterLeafArena(outerArena)
 		return nil, fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(ptrs), len(records))
 	}
 
@@ -992,6 +1032,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		if group.start < 0 || group.end < group.start || group.end > len(eligible) {
 			putValueLogPtrs(ptrs)
 			putValueLogRecordsNoClear(records)
+			putOuterLeafArena(outerArena)
 			return nil, errors.New("cachingdb: deferred value-log group out of range")
 		}
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
@@ -1004,6 +1045,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	}
 	putValueLogPtrs(ptrs)
 	putValueLogRecordsNoClear(records)
+	putOuterLeafArena(outerArena)
 
 	retainPath := db.currentValueLogPath(lane)
 	if retainPath != "" {
@@ -1151,15 +1193,17 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	if len(ptrKeys) != len(ptrVals) {
 		return errors.New("cachingdb: internal deferred value-log mismatch")
 	}
-	records, groups, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
+	records, groups, outerArena, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
 	if err != nil {
 		return err
 	}
 	if len(records) == 0 {
 		putValueLogRecordsNoClear(records)
+		putOuterLeafArena(outerArena)
 		return nil
 	}
 	defer putValueLogRecordsNoClear(records)
+	defer putOuterLeafArena(outerArena)
 
 	lane, err := db.pickLane(false, laneID)
 	if err != nil {
@@ -1372,17 +1416,19 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if len(ptrKeys) != len(ptrVals) {
 			return errors.New("cachingdb: deferred inline pointer grouping mismatch")
 		}
-		records, groups, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
+		records, groups, outerArena, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
 		if err != nil {
 			return err
 		}
 		if len(records) == 0 {
 			putValueLogRecordsNoClear(records)
+			putOuterLeafArena(outerArena)
 			ptrKeys = ptrKeys[:0]
 			ptrVals = ptrVals[:0]
 			return nil
 		}
 		defer putValueLogRecordsNoClear(records)
+		defer putOuterLeafArena(outerArena)
 		if err := ensureVlogLane(); err != nil {
 			return err
 		}
@@ -13116,17 +13162,19 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				keys = append(keys, op.Key)
 				values = append(values, op.Value)
 			}
-			valueRecords, groups, buildErr := b.db.buildOuterLeafValueRecords(keys, values)
+			valueRecords, groups, outerArena, buildErr := b.db.buildOuterLeafValueRecords(keys, values)
 			if buildErr != nil {
 				b.db.writeMu.RUnlock()
 				return buildErr
 			}
 			if len(valueRecords) == 0 {
 				putValueLogRecordsNoClear(valueRecords)
+				putOuterLeafArena(outerArena)
 				b.db.writeMu.RUnlock()
 				return fmt.Errorf("cachingdb: empty value-log record set for %d eligible ops", eligibleCount)
 			}
 			defer putValueLogRecordsNoClear(valueRecords)
+			defer putOuterLeafArena(outerArena)
 			startRID := b.db.nextRID.Add(uint64(len(valueRecords))) - uint64(len(valueRecords)) + 1
 			for i := range valueRecords {
 				rid := startRID + uint64(i)

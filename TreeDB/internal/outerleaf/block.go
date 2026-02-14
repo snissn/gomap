@@ -29,7 +29,7 @@ const (
 	// Skip full-block compression when a small sample shows incompressible or
 	// near-incompressible behavior.
 	outerLeafIncompressibleProbeMinBytes = 1024
-	outerLeafIncompressibleProbeBytes    = 1024
+	outerLeafIncompressibleProbeBytes    = 512
 	outerLeafMinSavingsDiv               = 50 // 2%
 	outerLeafMinSavingsBytes             = 8
 	outerLeafHighEntropyUniqueThreshold  = 224
