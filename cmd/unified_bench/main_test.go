@@ -95,7 +95,7 @@ func (d *errorGetDB) Delete(key []byte) error {
 	return nil
 }
 
-func runRandomReadBatchErrorCase(t *testing.T, dbName string, factory DBFactory, wantSubstr string) {
+func runRandomReadBatchErrorCase(t *testing.T, dbName string, factory DBFactory, want error) {
 	t.Helper()
 	RegisterHiddenDB(dbName, factory)
 
@@ -111,8 +111,14 @@ func runRandomReadBatchErrorCase(t *testing.T, dbName string, factory DBFactory,
 		Progress:     false,
 		SeedUsed:     1,
 	})
-	if err == nil || !strings.Contains(err.Error(), wantSubstr) {
-		t.Fatalf("expected random_read_batch error containing %q, got %v", wantSubstr, err)
+	if err == nil {
+		t.Fatalf("expected random_read_batch error wrapping %v, got nil", want)
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("expected random_read_batch error wrapping %v, got %v", want, err)
+	}
+	if !strings.Contains(err.Error(), "random_read_batch") {
+		t.Fatalf("expected random_read_batch context in error, got %v", err)
 	}
 }
 
@@ -172,21 +178,21 @@ func TestRunBenchmark_RandomReadBatch_PropagatesReadBatchError(t *testing.T) {
 	want := errors.New("readbatch forced failure")
 	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_batch_reader", func(_ string) (kvstore.DB, error) {
 		return &errorBatchReaderDB{err: want}, nil
-	}, want.Error())
+	}, want)
 }
 
 func TestRunBenchmark_RandomReadBatch_PropagatesGetManyError(t *testing.T) {
 	want := errors.New("getmany forced failure")
 	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_getmany", func(_ string) (kvstore.DB, error) {
 		return &errorGetManyDB{err: want}, nil
-	}, want.Error())
+	}, want)
 }
 
 func TestRunBenchmark_RandomReadBatch_PropagatesGetError(t *testing.T) {
 	want := errors.New("get forced failure")
 	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_get", func(_ string) (kvstore.DB, error) {
 		return &errorGetDB{err: want}, nil
-	}, want.Error())
+	}, want)
 }
 
 func TestRunBenchmark_RandomReadParallel_Smoke(t *testing.T) {

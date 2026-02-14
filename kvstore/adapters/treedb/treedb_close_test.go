@@ -87,7 +87,7 @@ func TestAdapterReadBatch_ClampsWorkerCount(t *testing.T) {
 	}
 }
 
-func TestAdapterReadBatch_AfterCloseNoError(t *testing.T) {
+func TestAdapterReadBatch_AfterCloseReturnsErrUnsupported(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
