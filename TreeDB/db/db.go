@@ -32,6 +32,9 @@ const (
 
 	closeSnapshotDrainTimeout = 10 * time.Second
 	closeSnapshotDrainSleep   = 500 * time.Microsecond
+
+	snapshotAcquireShardCount = 256
+	snapshotAcquireShardMask  = snapshotAcquireShardCount - 1
 )
 
 type DBState struct {
@@ -53,7 +56,7 @@ type snapshotView struct {
 type DB struct {
 	valueLogManager    *valuelog.Manager
 	snapshotViewRO     atomic.Pointer[snapshotView]
-	snapshotAcquireRO  atomic.Int32
+	snapshotAcquireRO  [snapshotAcquireShardCount]atomic.Int32
 	valueLogRefTracker *valueLogRefTracker
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
@@ -606,13 +609,17 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if db.closing.Load() {
 		return nil
 	}
-	db.snapshotAcquireRO.Add(1)
-	defer db.snapshotAcquireRO.Add(-1)
+	snap := db.snapPool.Get()
+	if snap.registryShardHint == snapshotShardHintUnset {
+		snap.registryShardHint = registryHintFromSnapshot(snap)
+	}
+	acqShard := snapshotAcquireShard()
+	db.snapshotAcquireRO[acqShard].Add(1)
+	defer db.snapshotAcquireRO[acqShard].Add(-1)
 	if db.closing.Load() {
+		db.snapPool.Put(snap)
 		return nil
 	}
-
-	snap := db.snapPool.Get()
 
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
@@ -630,10 +637,6 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 			return nil
 		}
 		vm.Acquire(vlogSet)
-	}
-
-	if snap != nil && snap.registryShardHint == snapshotShardHintUnset {
-		snap.registryShardHint = registryHintFromSnapshot(snap)
 	}
 
 	var registryID int64
@@ -992,13 +995,13 @@ func (db *DB) Close() error {
 
 	var errs []error
 	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
-	for db.snapshotAcquireRO.Load() > 0 {
+	for db.snapshotAcquireInFlight() > 0 {
 		if time.Now().After(drainDeadline) {
 			break
 		}
 		time.Sleep(closeSnapshotDrainSleep)
 	}
-	if remaining := db.snapshotAcquireRO.Load(); remaining > 0 {
+	if remaining := db.snapshotAcquireInFlight(); remaining > 0 {
 		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
 	if err := db.closeAllIndexes(); err != nil {
@@ -1038,6 +1041,20 @@ func (db *DB) backgroundError() error {
 	db.bgErrMu.Lock()
 	defer db.bgErrMu.Unlock()
 	return db.bgErr
+}
+
+func (db *DB) snapshotAcquireInFlight() int32 {
+	var total int32
+	for i := range db.snapshotAcquireRO {
+		total += db.snapshotAcquireRO[i].Load()
+	}
+	return total
+}
+
+func snapshotAcquireShard() int {
+	var marker int
+	p := uintptr(unsafe.Pointer(&marker))
+	return int((p ^ (p >> 7) ^ (p >> 13)) & uintptr(snapshotAcquireShardMask))
 }
 
 // recover reads meta pages and restores state.

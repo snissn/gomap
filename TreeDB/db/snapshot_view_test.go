@@ -119,7 +119,7 @@ func TestAcquireSnapshot_ReturnsNilWhenDBIsClosing(t *testing.T) {
 	if snap := db.AcquireSnapshot(); snap != nil {
 		t.Fatal("expected nil snapshot while close is in progress")
 	}
-	if got := db.snapshotAcquireRO.Load(); got != 0 {
+	if got := db.snapshotAcquireInFlight(); got != 0 {
 		t.Fatalf("expected no in-flight acquisitions after early return, got %d", got)
 	}
 	if min := idx.registry.MinPinnedSeq(); min != math.MaxUint64 {
