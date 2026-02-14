@@ -79,6 +79,9 @@ func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byt
 	if strings.TrimSpace(r.outerLeafMode) != outerleaf.ModeV2FencePtr {
 		return nil, false, nil
 	}
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		return block.ValueForKey(key)
+	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
 		return nil, false, err
@@ -90,13 +93,17 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 	if strings.TrimSpace(r.outerLeafMode) != outerleaf.ModeV2FencePtr {
 		return nil, false, nil
 	}
-	raw, err := r.readRawUnsafe(ptr)
-	if err != nil {
-		return nil, true, err
-	}
-	block, err := r.outerLeafBlock(ptr, raw)
-	if err != nil {
-		return nil, true, err
+	block := r.cachedOuterLeafBlock(ptr)
+	if block == nil {
+		raw, err := r.readRawUnsafe(ptr)
+		if err != nil {
+			return nil, true, err
+		}
+		decoded, decErr := r.outerLeafBlock(ptr, raw)
+		if decErr != nil {
+			return nil, true, decErr
+		}
+		block = decoded
 	}
 	decoded, err := block.Entries(nil)
 	if err != nil {
@@ -130,6 +137,9 @@ func (r valueReader) readRawUnsafe(ptr page.ValuePtr) ([]byte, error) {
 }
 
 func (r valueReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		return block.FirstValue()
+	}
 	raw, err := r.readRaw(ptr)
 	if err != nil {
 		return nil, err
@@ -138,6 +148,9 @@ func (r valueReader) Read(ptr page.ValuePtr) ([]byte, error) {
 }
 
 func (r valueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		return block.FirstValue()
+	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
 		return nil, err
@@ -146,6 +159,16 @@ func (r valueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 }
 
 func (r valueReader) ReadForKey(ptr page.ValuePtr, key []byte) ([]byte, error) {
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		decoded, found, err := block.ValueForKey(key)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
+		}
+		return decoded, nil
+	}
 	raw, err := r.readRaw(ptr)
 	if err != nil {
 		return nil, err
@@ -154,6 +177,16 @@ func (r valueReader) ReadForKey(ptr page.ValuePtr, key []byte) ([]byte, error) {
 }
 
 func (r valueReader) ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, error) {
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		decoded, found, err := block.ValueForKey(key)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
+		}
+		return decoded, nil
+	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
 		return nil, err
@@ -171,6 +204,19 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 	}
 	if r.vlogs == nil {
 		return nil, fmt.Errorf("value log reader unavailable for file %d", ptr.FileID)
+	}
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		decoded, found, err := block.ValueForKey(key)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
+		}
+		if len(decoded) == 0 {
+			return dst[:0], nil
+		}
+		return append(dst[:0], decoded...), nil
 	}
 	if app, ok := r.vlogs.(unsafeAppendReader); ok {
 		raw, err := app.ReadUnsafeAppend(ptr, dst[:0])
@@ -281,4 +327,11 @@ func (r valueReader) outerLeafBlock(ptr page.ValuePtr, raw []byte) (*outerleaf.D
 	}
 	r.cache.put(key, block)
 	return block, nil
+}
+
+func (r valueReader) cachedOuterLeafBlock(ptr page.ValuePtr) *outerleaf.DecodedBlock {
+	if !outerleaf.ModeEnabled(r.outerLeafMode) || r.cache == nil {
+		return nil
+	}
+	return r.cache.get(newOuterLeafBlockKey(ptr))
 }

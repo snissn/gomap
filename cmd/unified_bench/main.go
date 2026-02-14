@@ -896,6 +896,11 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_dict.frames_attempted",
 		"treedb.cache.vlog_dict.frames_kept",
 		"treedb.cache.vlog_dict.current_k",
+		"treedb.vlog.outer_leaf_block_cache.hits",
+		"treedb.vlog.outer_leaf_block_cache.misses",
+		"treedb.vlog.outer_leaf_block_cache.hit_ratio",
+		"treedb.vlog.outer_leaf_block_cache.entries",
+		"treedb.vlog.outer_leaf_block_cache.capacity",
 	}
 
 	fmt.Fprintf(w, "%s (%s):", prefix, inst.Wrapper.Name())

@@ -78,6 +78,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-outer-leaf-block-target-bytes` TreeDB: target block size for v2 outer-leaf block payloads
 - `-treedb-outer-leaf-block-codec` TreeDB: block codec for v2 outer-leaf payloads (`snappy|lz4`)
 - `-treedb-outer-leaf-block-restart-interval` TreeDB: restart interval metadata for v2 outer-leaf payloads
+- `-treedb-outer-leaf-block-cache-entries` TreeDB: decoded outer-leaf block cache capacity in entries (`0` disables cache)
 - `-outerleaf-approx-value-sizes` outerleaf_approx matrix value sizes (CSV, default `128,1024`)
 - `-outerleaf-approx-block-cache-mb` outerleaf_approx simulated outer-block cache size in MiB (`0` disables cache model)
 - `-outerleaf-approx-fence-fpr` outerleaf_approx simulated fence-index false-positive rate `[0,1]`

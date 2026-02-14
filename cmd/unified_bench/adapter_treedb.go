@@ -88,6 +88,7 @@ var (
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
 	treedbOuterLeafBlockRestart           = flag.Int("treedb-outer-leaf-block-restart-interval", 0, "TreeDB: experimental outer-leaf restart interval (0=default)")
+	treedbOuterLeafBlockCacheEntries      = flag.Int("treedb-outer-leaf-block-cache-entries", 0, "TreeDB: decoded outer-leaf block cache entries (0=disabled)")
 
 	treedbDisableWAL             = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
 	treedbRelaxedSync            = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
@@ -333,6 +334,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	} else {
 		lines = append(lines, fmt.Sprintf("vlog.outer_leaf_block_restart_interval=%d", interval))
 	}
+	lines = append(lines, fmt.Sprintf("vlog.outer_leaf_block_cache_entries=%d", r.opts.ValueLog.OuterLeafBlockCacheEntries))
 	if hold := r.opts.ValueLog.IncompressibleHoldBytes; hold <= 0 {
 		lines = append(lines, "vlog.incompressible_hold_bytes=default (effective=67108864B)")
 	} else {
@@ -556,6 +558,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 			DictProbeIntervalBytes:           *treedbVlogDictProbeIntervalBytes,
 			DictMinPayloadSavingsRatio:       *treedbVlogDictMinSavingsRatio,
 			OuterLeafBlockRestartInterval:    *treedbOuterLeafBlockRestart,
+			OuterLeafBlockCacheEntries:       *treedbOuterLeafBlockCacheEntries,
 		},
 	}
 	if *treedbWriterFlushMaxMs > 0 {

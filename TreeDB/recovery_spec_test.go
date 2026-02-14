@@ -126,6 +126,11 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
 	outerLeafV2 := os.Getenv("TREEDB_CRASH_OUTERLEAF_V2") == "1"
+	outerLeafMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_OUTERLEAF_MODE"))
+	if outerLeafMode == "" && outerLeafV2 {
+		// Backward-compatible helper knob.
+		outerLeafMode = treedb.IndexOuterLeafModeV2BlockPtr
+	}
 
 	durability := treedb.DurabilityDurable
 	if disableWAL {
@@ -139,11 +144,16 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 		ChunkSize:  64 * 1024,
 		Durability: durability,
 	}
-	if outerLeafV2 {
-		opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV2BlockPtr
+	switch outerLeafMode {
+	case "":
+		// default mode
+	case treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
+		opts.IndexOuterLeafMode = outerLeafMode
 		opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
 		opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
 		opts.ValueLog.OuterLeafBlockRestartInterval = 16
+	default:
+		t.Fatalf("unsupported TREEDB_CRASH_OUTERLEAF_MODE=%q", outerLeafMode)
 	}
 
 	db, err := treedb.Open(opts)
@@ -298,7 +308,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 		name        string
 		env         []string
 		expectLarge bool
-		outerLeafV2 bool
+		outerMode   string
 	}
 
 	tiers := []tier{
@@ -335,10 +345,21 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				"TREEDB_CRASH_DISABLE_WAL=0",
 				"TREEDB_CRASH_RELAXED_SYNC=0",
 				"TREEDB_CRASH_LARGE_VALUE=1",
-				"TREEDB_CRASH_OUTERLEAF_V2=1",
+				"TREEDB_CRASH_OUTERLEAF_MODE=v2_blockptr",
 			},
 			expectLarge: true,
-			outerLeafV2: true,
+			outerMode:   treedb.IndexOuterLeafModeV2BlockPtr,
+		},
+		{
+			name: "wal_on_strict_sync_large_value_outerleaf_v2_fenceptr",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+				"TREEDB_CRASH_OUTERLEAF_MODE=v2_fenceptr",
+			},
+			expectLarge: true,
+			outerMode:   treedb.IndexOuterLeafModeV2FencePtr,
 		},
 	}
 
@@ -348,8 +369,8 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			runCrashRecoveryDurabilityWriter(t, dir, tc.env...)
 
 			opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024}
-			if tc.outerLeafV2 {
-				opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV2BlockPtr
+			if tc.outerMode != "" {
+				opts.IndexOuterLeafMode = tc.outerMode
 				opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
 				opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
 				opts.ValueLog.OuterLeafBlockRestartInterval = 16

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -320,6 +321,7 @@ func runOuterLeafApproxSuite(baseCfg BenchConfig) (string, error) {
 
 	workloadSummary, overall := summarizeOuterLeafApproxCases(cases)
 	report := buildOuterLeafApproxReport(cfg, cases, workloadSummary, overall, forcedPointers)
+	sanitizeOuterLeafApproxReport(&report)
 	if err := maybeWriteOuterLeafApproxReportJSON(cfg.ReportJSONPath, report); err != nil {
 		return "", err
 	}
@@ -1383,4 +1385,35 @@ func ratioDecreaseFraction(base, next float64) float64 {
 		return 0
 	}
 	return (base - next) / base
+}
+
+func finiteOrZero(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
+}
+
+func sanitizeOuterLeafApproxReport(report *outerLeafApproxReport) {
+	if report == nil {
+		return
+	}
+	report.Assumptions.FenceFPR = finiteOrZero(report.Assumptions.FenceFPR)
+	report.Gates.BytesReduction = finiteOrZero(report.Gates.BytesReduction)
+	report.Gates.LookupSlowdown = finiteOrZero(report.Gates.LookupSlowdown)
+	report.Gates.WriteRegression = finiteOrZero(report.Gates.WriteRegression)
+	report.Gates.WAIncrease = finiteOrZero(report.Gates.WAIncrease)
+	for i := range report.Cases {
+		c := &report.Cases[i]
+		c.WorkloadOps = finiteOrZero(c.WorkloadOps)
+		c.SecondaryOps = finiteOrZero(c.SecondaryOps)
+		c.BytesReductionFraction = finiteOrZero(c.BytesReductionFraction)
+		c.LookupSlowdownFraction = finiteOrZero(c.LookupSlowdownFraction)
+		c.WriteProxyOpsBaseline = finiteOrZero(c.WriteProxyOpsBaseline)
+		c.WriteProxyOpsOuter = finiteOrZero(c.WriteProxyOpsOuter)
+		c.WriteRegressionFraction = finiteOrZero(c.WriteRegressionFraction)
+		c.WABaselineRatio = finiteOrZero(c.WABaselineRatio)
+		c.WAOuterRatio = finiteOrZero(c.WAOuterRatio)
+		c.WAIncreaseFraction = finiteOrZero(c.WAIncreaseFraction)
+	}
 }
