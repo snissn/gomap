@@ -258,6 +258,21 @@ func TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle(t *test
 	}
 }
 
+func TestReaderRegistry_TryJoinFast_SaturatedCountDoesNotOverflow(t *testing.T) {
+	reg := NewReaderRegistry()
+	const shard = 2
+
+	reg.fastShards[shard].seq.Store(55)
+	reg.fastShards[shard].count.Store(math.MaxInt32)
+
+	if id := reg.tryJoinFast(55, shard); id != 0 {
+		t.Fatalf("expected join to fail at saturated count, got id=%d", id)
+	}
+	if got := reg.fastShards[shard].count.Load(); got != math.MaxInt32 {
+		t.Fatalf("expected count unchanged at saturation, got %d", got)
+	}
+}
+
 func TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing(t *testing.T) {
 	reg := NewReaderRegistry()
 	const shard = 3

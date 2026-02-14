@@ -197,14 +197,20 @@ func (r *ReaderRegistry) tryJoinFast(seq uint64, shard int) int64 {
 		return 0
 	}
 
-	c := r.fastShards[shard].count.Add(1)
-	if c > 0 && c < math.MaxInt32 {
+	for {
+		c := r.fastShards[shard].count.Load()
+		if c <= 0 || c >= math.MaxInt32 {
+			return 0
+		}
+		if !r.fastShards[shard].count.CompareAndSwap(c, c+1) {
+			continue
+		}
 		if r.fastShards[shard].seq.Load() == seq {
 			return makeFastHandle(shard)
 		}
+		r.fastShards[shard].count.Add(-1)
+		return 0
 	}
-	r.fastShards[shard].count.Add(-1)
-	return 0
 }
 
 func (r *ReaderRegistry) tryClaimFast(seq uint64, shard int) int64 {
