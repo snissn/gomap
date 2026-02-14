@@ -85,6 +85,15 @@ type DecodedBlock struct {
 	firstValue  []byte
 }
 
+// Encoder reuses encode scratch buffers across outer-leaf block encodes.
+//
+// It is not safe for concurrent use.
+type Encoder struct {
+	rawScratch      []byte
+	encScratch      []byte
+	restartsScratch []uint32
+}
+
 // HasMagic reports whether payload begins with the outer-leaf block magic
 // header. It is a cheap classifier for outer-leaf encoded values.
 func HasMagic(payload []byte) bool {
@@ -381,6 +390,62 @@ func putPooledRestarts(buf []uint32) {
 	outerLeafRestartsPool.Put(buf[:0])
 }
 
+func borrowBytes(minCap int, scratch *[]byte) ([]byte, bool) {
+	if minCap <= 0 {
+		minCap = 1
+	}
+	if scratch != nil {
+		buf := *scratch
+		if cap(buf) < minCap {
+			buf = make([]byte, 0, minCap)
+		}
+		return buf[:0], false
+	}
+	return getPooledBytes(minCap), true
+}
+
+func releaseBytes(buf []byte, scratch *[]byte, pooled bool) {
+	if scratch != nil {
+		if cap(buf) == 0 {
+			*scratch = nil
+			return
+		}
+		*scratch = buf[:0]
+		return
+	}
+	if pooled {
+		putPooledBytes(buf)
+	}
+}
+
+func borrowRestarts(minCap int, scratch *[]uint32) ([]uint32, bool) {
+	if minCap <= 0 {
+		minCap = 1
+	}
+	if scratch != nil {
+		buf := *scratch
+		if cap(buf) < minCap {
+			buf = make([]uint32, 0, minCap)
+		}
+		return buf[:0], false
+	}
+	return getPooledRestarts(minCap), true
+}
+
+func releaseRestarts(buf []uint32, scratch *[]uint32, pooled bool) {
+	if scratch != nil {
+		if cap(buf) == 0 {
+			*scratch = nil
+			return
+		}
+		*scratch = buf[:0]
+		return
+	}
+	if pooled {
+		putPooledRestarts(buf)
+	}
+}
+
 func encodedPayloadBound(codec uint8, rawLen int) int {
 	if rawLen <= 0 {
 		return 1
@@ -391,7 +456,7 @@ func encodedPayloadBound(codec uint8, rawLen int) int {
 	return snappy.MaxEncodedLen(rawLen)
 }
 
-func encodeV1Single(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
+func encodeV1SingleCore(dst, key, value []byte, codec uint8, restartInterval int, rawScratch, encScratch *[]byte) ([]byte, error) {
 	rawLen := len(key) + len(value)
 	if rawLen > int(^uint32(0)) {
 		return nil, fmt.Errorf("outerleaf: payload too large %d", rawLen)
@@ -403,19 +468,25 @@ func encodeV1Single(dst, key, value []byte, codec uint8, restartInterval int) ([
 		return nil, fmt.Errorf("outerleaf: value too large %d", len(value))
 	}
 
-	raw := getPooledBytes(rawLen)
-	defer putPooledBytes(raw)
+	raw, rawPooled := borrowBytes(rawLen, rawScratch)
+	defer func() {
+		releaseBytes(raw, rawScratch, rawPooled)
+	}()
 	raw = append(raw, key...)
 	raw = append(raw, value...)
 
-	encScratch := getPooledBytes(encodedPayloadBound(codec, len(raw)))
-	defer putPooledBytes(encScratch)
-	encodedPayload, encodedCodec, err := encodePayload(codec, raw, encScratch[:0])
+	enc, encPooled := borrowBytes(encodedPayloadBound(codec, len(raw)), encScratch)
+	defer func() {
+		releaseBytes(enc, encScratch, encPooled)
+	}()
+	encodedPayload, encodedCodec, err := encodePayload(codec, raw, enc[:0])
 	if err != nil {
 		return nil, err
 	}
 	if len(encodedPayload) == 0 {
 		encodedCodec = blockCodecNone
+	} else if encodedCodec != blockCodecNone {
+		enc = encodedPayload[:0]
 	}
 
 	total := blockHeaderSize + len(encodedPayload)
@@ -439,7 +510,11 @@ func encodeV1Single(dst, key, value []byte, codec uint8, restartInterval int) ([
 	return dst, nil
 }
 
-func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval int, validateOrder bool) ([]byte, error) {
+func encodeV1Single(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
+	return encodeV1SingleCore(dst, key, value, codec, restartInterval, nil, nil)
+}
+
+func encodeV2EntriesCore(dst []byte, entries []Entry, codec uint8, restartInterval int, validateOrder bool, rawScratch, encScratch *[]byte, restartsScratch *[]uint32) ([]byte, error) {
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("outerleaf: empty entries")
 	}
@@ -458,10 +533,14 @@ func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval i
 	}
 	estRaw += 4 * ((len(entries) + restartInterval - 1) / restartInterval)
 	restartCap := (len(entries) + restartInterval - 1) / restartInterval
-	raw := getPooledBytes(estRaw)
-	defer putPooledBytes(raw)
-	restarts := getPooledRestarts(restartCap)
-	defer putPooledRestarts(restarts)
+	raw, rawPooled := borrowBytes(estRaw, rawScratch)
+	defer func() {
+		releaseBytes(raw, rawScratch, rawPooled)
+	}()
+	restarts, restartsPooled := borrowRestarts(restartCap, restartsScratch)
+	defer func() {
+		releaseRestarts(restarts, restartsScratch, restartsPooled)
+	}()
 	var prev []byte
 
 	for i := range entries {
@@ -509,14 +588,18 @@ func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval i
 		return nil, fmt.Errorf("outerleaf: entries payload too large %d", entriesLen)
 	}
 
-	encScratch := getPooledBytes(encodedPayloadBound(codec, len(raw)))
-	defer putPooledBytes(encScratch)
-	encodedPayload, encodedCodec, err := encodePayload(codec, raw, encScratch[:0])
+	enc, encPooled := borrowBytes(encodedPayloadBound(codec, len(raw)), encScratch)
+	defer func() {
+		releaseBytes(enc, encScratch, encPooled)
+	}()
+	encodedPayload, encodedCodec, err := encodePayload(codec, raw, enc[:0])
 	if err != nil {
 		return nil, err
 	}
 	if len(encodedPayload) == 0 {
 		encodedCodec = blockCodecNone
+	} else if encodedCodec != blockCodecNone {
+		enc = encodedPayload[:0]
 	}
 
 	total := blockHeaderSize + len(encodedPayload)
@@ -538,6 +621,51 @@ func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval i
 	sum := crc.ChecksumParts(dst[:blockChecksumOff], dst[blockHeaderSize:])
 	binary.LittleEndian.PutUint32(dst[blockChecksumOff:blockChecksumOff+blockChecksumSize], sum)
 	return dst, nil
+}
+
+func encodeV2Entries(dst []byte, entries []Entry, codec uint8, restartInterval int, validateOrder bool) ([]byte, error) {
+	return encodeV2EntriesCore(dst, entries, codec, restartInterval, validateOrder, nil, nil, nil)
+}
+
+// Reset clears reusable encoder slices while keeping allocated capacity.
+func (e *Encoder) Reset() {
+	if e == nil {
+		return
+	}
+	e.rawScratch = e.rawScratch[:0]
+	e.encScratch = e.encScratch[:0]
+	e.restartsScratch = e.restartsScratch[:0]
+}
+
+// EncodeSingle encodes one key/value record using reusable scratch buffers.
+func (e *Encoder) EncodeSingle(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
+	if e == nil {
+		return encodeV1Single(dst, key, value, codec, restartInterval)
+	}
+	return encodeV1SingleCore(dst, key, value, codec, restartInterval, &e.rawScratch, &e.encScratch)
+}
+
+// EncodeEntries encodes ordered key/value records using reusable scratch buffers.
+func (e *Encoder) EncodeEntries(dst []byte, entries []Entry, codec uint8, restartInterval int) ([]byte, error) {
+	if len(entries) == 1 {
+		return e.EncodeSingle(dst, entries[0].Key, entries[0].Value, codec, restartInterval)
+	}
+	if e == nil {
+		return encodeV2Entries(dst, entries, codec, restartInterval, true)
+	}
+	return encodeV2EntriesCore(dst, entries, codec, restartInterval, true, &e.rawScratch, &e.encScratch, &e.restartsScratch)
+}
+
+// EncodeEntriesAssumeSorted encodes ordered key/value records without
+// re-validating strict ordering and reuses scratch buffers across calls.
+func (e *Encoder) EncodeEntriesAssumeSorted(dst []byte, entries []Entry, codec uint8, restartInterval int) ([]byte, error) {
+	if len(entries) == 1 {
+		return e.EncodeSingle(dst, entries[0].Key, entries[0].Value, codec, restartInterval)
+	}
+	if e == nil {
+		return encodeV2Entries(dst, entries, codec, restartInterval, false)
+	}
+	return encodeV2EntriesCore(dst, entries, codec, restartInterval, false, &e.rawScratch, &e.encScratch, &e.restartsScratch)
 }
 
 // EncodeSingle encodes one key/value record in a v1-compatible payload.

@@ -234,6 +234,38 @@ func TestEncodeEntriesRequiresIncreasingKeys(t *testing.T) {
 	}
 }
 
+func TestEncoderReuseMatchesStatelessEncode(t *testing.T) {
+	var enc Encoder
+	batches := [][]Entry{
+		{
+			{Key: []byte("acct:0001"), Value: bytes.Repeat([]byte("a"), 64)},
+			{Key: []byte("acct:0002"), Value: bytes.Repeat([]byte("b"), 96)},
+			{Key: []byte("acct:0003"), Value: bytes.Repeat([]byte("c"), 48)},
+		},
+		{
+			{Key: []byte("acct:0100"), Value: bytes.Repeat([]byte("x"), 32)},
+			{Key: []byte("acct:0101"), Value: bytes.Repeat([]byte("y"), 40)},
+		},
+		{
+			{Key: []byte("single:key"), Value: bytes.Repeat([]byte("z"), 80)},
+		},
+	}
+
+	for i := range batches {
+		want, err := EncodeEntriesAssumeSorted(nil, batches[i], 0, 8)
+		if err != nil {
+			t.Fatalf("EncodeEntriesAssumeSorted[%d]: %v", i, err)
+		}
+		got, err := enc.EncodeEntriesAssumeSorted(nil, batches[i], 0, 8)
+		if err != nil {
+			t.Fatalf("Encoder.EncodeEntriesAssumeSorted[%d]: %v", i, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("encoded payload mismatch for batch %d", i)
+		}
+	}
+}
+
 func TestDecodeNonOuterPayload(t *testing.T) {
 	raw := []byte("plain value payload")
 	gotVal, ok, _, err := DecodeValue(raw, nil)

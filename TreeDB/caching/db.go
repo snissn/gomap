@@ -616,7 +616,7 @@ func ensureOuterLeafArenaCap(buf []byte, need int) []byte {
 	return grown
 }
 
-func appendOuterLeafRecordGroup(db *DB, entries []outerleaf.Entry, groupStart int, records []valuelog.Record, groups []outerLeafRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
+func appendOuterLeafRecordGroup(db *DB, encoder *outerleaf.Encoder, entries []outerleaf.Entry, groupStart int, records []valuelog.Record, groups []outerLeafRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
 	if len(entries) == 0 {
 		return records, groups, arena, nil
 	}
@@ -631,7 +631,9 @@ func appendOuterLeafRecordGroup(db *DB, entries []outerleaf.Entry, groupStart in
 		payload []byte
 		err     error
 	)
-	if len(entries) == 1 {
+	if encoder != nil {
+		payload, err = encoder.EncodeEntriesAssumeSorted(dst, entries, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
+	} else if len(entries) == 1 {
 		payload, err = outerleaf.EncodeSingle(dst, entries[0].Key, entries[0].Value, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
 	} else {
 		payload, err = outerleaf.EncodeEntriesAssumeSorted(dst, entries, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
@@ -723,6 +725,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 
 	entries := getOuterLeafEntriesCap(entriesCap)
 	defer putOuterLeafEntries(entries)
+	var outerEncoder outerleaf.Encoder
 	arenaCap := outerLeafEncodedHeaderBytes + len(keys)*8
 	for i := range keys {
 		arenaCap += len(keys[i]) + len(values[i])
@@ -746,7 +749,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 			if bytes.Compare(prevKey, key) >= 0 {
 				// Preserve correctness for non-monotonic batches by cutting blocks.
 				var err error
-				records, groups, arena, err = appendOuterLeafRecordGroup(db, entries, groupStart, records, groups, arena, estimated+32)
+				records, groups, arena, err = appendOuterLeafRecordGroup(db, &outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -755,7 +758,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 				prevKey = nil
 			} else if estimated+entryEstimate > targetBytes {
 				var err error
-				records, groups, arena, err = appendOuterLeafRecordGroup(db, entries, groupStart, records, groups, arena, estimated+32)
+				records, groups, arena, err = appendOuterLeafRecordGroup(db, &outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -773,7 +776,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	}
 	if len(entries) > 0 {
 		var err error
-		records, groups, arena, err = appendOuterLeafRecordGroup(db, entries, groupStart, records, groups, arena, estimated+32)
+		records, groups, arena, err = appendOuterLeafRecordGroup(db, &outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
 		if err != nil {
 			return nil, nil, nil, err
 		}
