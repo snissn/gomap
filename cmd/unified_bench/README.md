@@ -21,10 +21,19 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `batch_random` — Batch Random
 - `batch_delete` — Batch Delete
 - `delete_rand` — Random Delete
-- `read_rand` — Random Read
+- `random_read` — Random Read
+- `random_read_parallel` — Random Read (Parallel aggregate throughput)
+- `random_read_parallel_acquire_snapshot` — Random Read (Parallel, Snapshot Per Key)
+- `random_read_batch` — Random Read (Batch)
 - `full_scan` — Full Scan (iterate the full keyspace)
 - `prefix_scan` — Prefix Scan (range scans over `[start,end)`)
-  - Aliases: `scan` → `full_scan`, `range_scan` → `prefix_scan`
+  - Aliases: `scan` → `full_scan`, `range_scan` → `prefix_scan`, `read_rand` → `random_read`, `read_rand_parallel` → `random_read_parallel`, `read_rand_batch`/`read_random_batch` → `random_read_batch`
+
+`random_read_batch` uses a consistent error policy across capability paths:
+- `ReadBatch` errors fail the test.
+- `GetMany` errors fail the test.
+- fallback `Get` errors fail the test.
+- Missing keys are not treated as benchmark-fatal by adapter/API contract.
 
 ## Common flags
 
@@ -43,6 +52,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-dataset-val-pattern` dataset value pattern for `dataset_write_*` (`random|zero|repeat|repeat_tail64|half_repeat_half_random`)
 - `-batchsize` batch size (default 8000)
+- `-read-workers` number of goroutines for `random_read_parallel` and `random_read_parallel_acquire_snapshot` (default `GOMAXPROCS`)
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)
@@ -182,4 +192,21 @@ To sweep dict-frame encoder knobs (zstd level × entropy coding), use:
   -treedb-vlog-dict on \\
   -treedb-vlog-dict-frame-encode-level all \\
   -treedb-vlog-dict-frame-entropy both
+```
+
+### Repro: random read parallel sweep
+
+Run `random_read_parallel` with separate worker counts:
+
+```bash
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 1 -progress=false
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 2 -progress=false
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 4 -progress=false
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test random_read_parallel -read-workers 8 -progress=false
+```
+
+`-test all` now includes `random_read_parallel` and `random_read_parallel_acquire_snapshot` in the output table:
+
+```bash
+./bin/unified-bench -dbs treedb,leveldb -profile fast -keys 500000 -test all -read-workers 4 -format markdown -progress=false
 ```

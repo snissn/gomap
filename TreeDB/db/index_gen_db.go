@@ -2,6 +2,7 @@ package db
 
 import (
 	"errors"
+	"math"
 )
 
 func (db *DB) nextIndexID() uint64 {
@@ -47,11 +48,56 @@ func (db *DB) releaseIndex(gen *indexGen) {
 		return
 	}
 	if db.idxAll != nil {
-		delete(db.idxAll, gen.id)
+		// Keep retired generations tracked while snapshot readers remain pinned
+		// so Snapshot.Close can release them once the registry drains.
+		if gen.registry == nil || gen.registry.MinPinnedSeq() == math.MaxUint64 {
+			delete(db.idxAll, gen.id)
+		} else {
+			db.idxMu.Unlock()
+			return
+		}
 	}
 	db.idxMu.Unlock()
 
 	// Ghost instead of immediate close
+	if db.ghostManager != nil {
+		db.ghostManager.add(gen)
+	} else {
+		_ = gen.close()
+	}
+}
+
+// maybeReleaseRetiredIndex releases a retired index generation once all reader
+// pins have drained and no explicit refs remain.
+func (db *DB) maybeReleaseRetiredIndex(gen *indexGen) {
+	if gen == nil {
+		return
+	}
+	db.idxMu.Lock()
+	current := db.idx.Load()
+	if current == gen {
+		db.idxMu.Unlock()
+		return
+	}
+	if gen.refs.Load() != 0 {
+		db.idxMu.Unlock()
+		return
+	}
+	if gen.registry != nil && gen.registry.MinPinnedSeq() != math.MaxUint64 {
+		db.idxMu.Unlock()
+		return
+	}
+	if db.idxAll == nil {
+		db.idxMu.Unlock()
+		return
+	}
+	if _, ok := db.idxAll[gen.id]; !ok {
+		db.idxMu.Unlock()
+		return
+	}
+	delete(db.idxAll, gen.id)
+	db.idxMu.Unlock()
+
 	if db.ghostManager != nil {
 		db.ghostManager.add(gen)
 	} else {

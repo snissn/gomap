@@ -704,6 +704,11 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 	}
 
 	data := n.data
+	fixedBE8 := len(key) == 8
+	targetBE8 := uint64(0)
+	if fixedBE8 {
+		targetBE8 = getUint64BEAt(key, 0)
+	}
 	count := n.Count()
 	if count <= smallSearchThreshold {
 		for idx := 0; idx < int(count); idx++ {
@@ -721,7 +726,18 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 			if keyPtr+int(keyLen) > len(data) {
 				return 0, false, ErrCorruptedNode
 			}
-			cmp := compareLeafKey(data[keyPtr:keyPtr+int(keyLen)], key)
+
+			cmp := 0
+			if fixedBE8 && keyLen == 8 {
+				entryBE8 := getUint64BEAt(data, keyPtr)
+				if entryBE8 < targetBE8 {
+					cmp = -1
+				} else if entryBE8 > targetBE8 {
+					cmp = 1
+				}
+			} else {
+				cmp = compareLeafKey(data[keyPtr:keyPtr+int(keyLen)], key)
+			}
 			if cmp >= 0 {
 				return uint16(idx), cmp == 0, nil
 			}
@@ -752,7 +768,17 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 		}
 
 		// Compare
-		cmp := compareLeafKey(data[keyPtr:keyPtr+int(keyLen)], key)
+		cmp := 0
+		if fixedBE8 && keyLen == 8 {
+			entryBE8 := getUint64BEAt(data, keyPtr)
+			if entryBE8 < targetBE8 {
+				cmp = -1
+			} else if entryBE8 > targetBE8 {
+				cmp = 1
+			}
+		} else {
+			cmp = compareLeafKey(data[keyPtr:keyPtr+int(keyLen)], key)
+		}
 		if cmp < 0 {
 			i = h + 1
 		} else {
@@ -776,8 +802,14 @@ func (n *Node) SearchLeaf(key []byte) (uint16, bool, error) {
 		if keyPtr+int(keyLen) > len(data) {
 			return 0, false, ErrCorruptedNode
 		}
-		if compareLeafKey(data[keyPtr:keyPtr+int(keyLen)], key) == 0 {
-			return uint16(i), true, nil
+		if fixedBE8 && keyLen == 8 {
+			if getUint64BEAt(data, keyPtr) == targetBE8 {
+				return uint16(i), true, nil
+			}
+		} else {
+			if compareLeafKey(data[keyPtr:keyPtr+int(keyLen)], key) == 0 {
+				return uint16(i), true, nil
+			}
 		}
 	}
 

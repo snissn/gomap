@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -10,7 +11,116 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/kvstore"
 )
+
+type errorBatchReaderDB struct {
+	err error
+}
+
+func (d *errorBatchReaderDB) Name() string {
+	return "ErrReadBatch"
+}
+
+func (d *errorBatchReaderDB) Close() error {
+	return nil
+}
+
+func (d *errorBatchReaderDB) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (d *errorBatchReaderDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *errorBatchReaderDB) Delete(key []byte) error {
+	return nil
+}
+
+func (d *errorBatchReaderDB) ReadBatch(keys [][]byte) error {
+	return d.err
+}
+
+type errorGetManyDB struct {
+	err error
+}
+
+func (d *errorGetManyDB) Name() string {
+	return "ErrGetMany"
+}
+
+func (d *errorGetManyDB) Close() error {
+	return nil
+}
+
+func (d *errorGetManyDB) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (d *errorGetManyDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *errorGetManyDB) Delete(key []byte) error {
+	return nil
+}
+
+func (d *errorGetManyDB) GetMany(keys [][]byte) ([][]byte, error) {
+	return nil, d.err
+}
+
+type errorGetDB struct {
+	err error
+}
+
+func (d *errorGetDB) Name() string {
+	return "ErrGet"
+}
+
+func (d *errorGetDB) Close() error {
+	return nil
+}
+
+func (d *errorGetDB) Get(key []byte) ([]byte, error) {
+	return nil, d.err
+}
+
+func (d *errorGetDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *errorGetDB) Delete(key []byte) error {
+	return nil
+}
+
+func runRandomReadBatchErrorCase(t *testing.T, dbName string, factory DBFactory, want error) {
+	t.Helper()
+	RegisterHiddenDB(dbName, factory)
+
+	_, err := runBenchmark(BenchConfig{
+		Keys:         256,
+		ValueSize:    16,
+		BatchSize:    64,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "random_read_batch",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err == nil {
+		t.Fatalf("expected random_read_batch error wrapping %v, got nil", want)
+	}
+	if !errors.Is(err, want) {
+		t.Fatalf("expected random_read_batch error wrapping %v, got %v", want, err)
+	}
+	if !strings.Contains(err.Error(), "random_read_batch") {
+		t.Fatalf("expected random_read_batch context in error, got %v", err)
+	}
+}
 
 func TestRunBenchmark_PreloadsForReadAndScanOnly(t *testing.T) {
 	run, err := runBenchmark(BenchConfig{
@@ -64,6 +174,77 @@ func TestRunBenchmark_RandomReadBatch_Smoke(t *testing.T) {
 	}
 }
 
+func TestRunBenchmark_RandomReadBatch_PropagatesReadBatchError(t *testing.T) {
+	want := errors.New("readbatch forced failure")
+	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_batch_reader", func(_ string) (kvstore.DB, error) {
+		return &errorBatchReaderDB{err: want}, nil
+	}, want)
+}
+
+func TestRunBenchmark_RandomReadBatch_PropagatesGetManyError(t *testing.T) {
+	want := errors.New("getmany forced failure")
+	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_getmany", func(_ string) (kvstore.DB, error) {
+		return &errorGetManyDB{err: want}, nil
+	}, want)
+}
+
+func TestRunBenchmark_RandomReadBatch_PropagatesGetError(t *testing.T) {
+	want := errors.New("get forced failure")
+	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_get", func(_ string) (kvstore.DB, error) {
+		return &errorGetDB{err: want}, nil
+	}, want)
+}
+
+func TestRunBenchmark_RandomReadParallel_Smoke(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    128,
+		ReadWorkers:  4,
+		RangeQueries: 50,
+		RangeSpan:    20,
+		DBsArg:       "treedb,leveldb",
+		TestsArg:     "sequential_write,random_read_parallel",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+
+	for _, dbName := range []string{"TreeDB", "LevelDB"} {
+		got := run.Results["random_read_parallel"][dbName]
+		if math.IsNaN(got) || got <= 0 {
+			t.Fatalf("expected random_read_parallel > 0 for %s, got %v", dbName, got)
+		}
+	}
+}
+
+func TestRunBenchmark_RandomReadParallelAcquireSnapshot_Smoke(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    128,
+		ReadWorkers:  4,
+		RangeQueries: 50,
+		RangeSpan:    20,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write,random_read_parallel_acquire_snapshot",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+
+	got := run.Results["random_read_parallel_acquire_snapshot"]["TreeDB"]
+	if math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected random_read_parallel_acquire_snapshot > 0 for TreeDB, got %v", got)
+	}
+}
+
 func TestNormalizeTests_ReadRandomBatchAliases(t *testing.T) {
 	got := normalizeTests(parseList("read_rand_batch,read_random_batch,random_read_batch"))
 	want := []string{"random_read_batch"}
@@ -73,6 +254,56 @@ func TestNormalizeTests_ReadRandomBatchAliases(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("unexpected normalize result: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestNormalizeTests_ReadRandomParallelAlias(t *testing.T) {
+	got := normalizeTests(parseList("read_rand_parallel,random_read_parallel"))
+	want := []string{"random_read_parallel"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected len: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected normalize result: got=%v want=%v", got, want)
+		}
+	}
+}
+
+func TestRunBenchmark_AllIncludesRandomReadParallel(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    100,
+		ReadWorkers:  2,
+		RangeQueries: 50,
+		RangeSpan:    20,
+		DBsArg:       "treedb,leveldb",
+		TestsArg:     "all",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+
+	for _, dbName := range []string{"TreeDB", "LevelDB"} {
+		got, ok := run.Results["random_read_parallel"][dbName]
+		if !ok {
+			t.Fatalf("expected random_read_parallel result for %s", dbName)
+		}
+		if math.IsNaN(got) || got <= 0 {
+			t.Fatalf("expected random_read_parallel > 0 for %s, got %v", dbName, got)
+		}
+
+		gotSnap, ok := run.Results["random_read_parallel_acquire_snapshot"][dbName]
+		if !ok {
+			t.Fatalf("expected random_read_parallel_acquire_snapshot result for %s", dbName)
+		}
+		if math.IsNaN(gotSnap) || gotSnap <= 0 {
+			t.Fatalf("expected random_read_parallel_acquire_snapshot > 0 for %s, got %v", dbName, gotSnap)
 		}
 	}
 }

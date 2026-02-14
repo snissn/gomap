@@ -683,6 +683,14 @@ func treeDBResolvedOptionsText(indent string) (string, error) {
 	return rep.formatText(indent), nil
 }
 
+func wrapTreeDBAdapter(db *treedb.DB, name string) kvstore.DB {
+	// random_read_batch dispatches to kvstore.BatchReader where available.
+	// TreeDB adapter batch-read worker count is internal adapter policy
+	// (defaulting to current GOMAXPROCS) and is intentionally not wired to
+	// unified-bench -read-workers, which controls parallel read benchmarks.
+	return treedbadapter.WrapNamed(db, name)
+}
+
 func NewTreeDB(dir string) (kvstore.DB, error) {
 	opts, _, err := buildTreeDBOptions(dir)
 	if err != nil {
@@ -694,7 +702,7 @@ func NewTreeDB(dir string) (kvstore.DB, error) {
 		return nil, err
 	}
 	// Adapter/registry name: "treedb". Wrapper name: "TreeDB" (pretty display).
-	return treedbadapter.WrapNamed(db, "TreeDB"), nil
+	return wrapTreeDBAdapter(db, "TreeDB"), nil
 }
 
 func resolvedTreeDBVlogCompressionModeForDictVariants() (uint64, error) {
@@ -741,7 +749,7 @@ func NewTreeDBVlogDictOff(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return treedbadapter.WrapNamed(db, "TreeDB (vlog_dict=off)"), nil
+	return wrapTreeDBAdapter(db, "TreeDB (vlog_dict=off)"), nil
 }
 
 func NewTreeDBVlogOff(dir string) (kvstore.DB, error) {
@@ -756,7 +764,7 @@ func NewTreeDBVlogOff(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return treedbadapter.WrapNamed(db, "TreeDB (vlog=off)"), nil
+	return wrapTreeDBAdapter(db, "TreeDB (vlog=off)"), nil
 }
 
 func NewTreeDBVlogDict(dir string) (kvstore.DB, error) {
@@ -776,7 +784,7 @@ func NewTreeDBVlogBlockSnappy(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return treedbadapter.WrapNamed(db, "TreeDB (vlog=block/snappy)"), nil
+	return wrapTreeDBAdapter(db, "TreeDB (vlog=block/snappy)"), nil
 }
 
 func NewTreeDBVlogBlockLZ4(dir string) (kvstore.DB, error) {
@@ -792,7 +800,7 @@ func NewTreeDBVlogBlockLZ4(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return treedbadapter.WrapNamed(db, "TreeDB (vlog=block/lz4)"), nil
+	return wrapTreeDBAdapter(db, "TreeDB (vlog=block/lz4)"), nil
 }
 
 func NewTreeDBVlogAuto(dir string) (kvstore.DB, error) {
@@ -824,7 +832,7 @@ func NewTreeDBVlogAuto(dir string) (kvstore.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	return treedbadapter.WrapNamed(db, "TreeDB (vlog=auto)"), nil
+	return wrapTreeDBAdapter(db, "TreeDB (vlog=auto)"), nil
 }
 
 func newTreeDBVlogDictOnVariant(dir string, level treedb.ZSTDEncoderLevel, enableEntropy bool, wrapperName string) (kvstore.DB, error) {
@@ -859,7 +867,7 @@ func newTreeDBVlogDictOnVariant(dir string, level treedb.ZSTDEncoderLevel, enabl
 	if err != nil {
 		return nil, err
 	}
-	return treedbadapter.WrapNamed(db, wrapperName), nil
+	return wrapTreeDBAdapter(db, wrapperName), nil
 }
 
 func NewTreeDBVlogDictOn(dir string) (kvstore.DB, error) {

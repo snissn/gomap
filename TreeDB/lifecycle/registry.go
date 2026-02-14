@@ -3,7 +3,10 @@ package lifecycle
 import (
 	"math"
 	"sync"
+	"sync/atomic"
 )
+
+const fastReaderHandle int64 = -1
 
 type ReaderRegistry struct {
 	mu sync.Mutex
@@ -17,6 +20,13 @@ type ReaderRegistry struct {
 	// readers, min is math.MaxUint64.
 	min   uint64
 	dirty bool
+
+	// fastSeq/fastCount model the common steady-state case where readers all pin
+	// the same sequence. Register/Unregister can avoid mutex contention by using
+	// fastReaderHandle in this path.
+	fastSeq     atomic.Uint64
+	fastCount   atomic.Int32
+	fastVersion atomic.Uint64
 }
 
 func NewReaderRegistry() *ReaderRegistry {
@@ -28,8 +38,46 @@ func NewReaderRegistry() *ReaderRegistry {
 // Register adds a reader pinned to the given sequence.
 // Returns a handle to be used for Unregister.
 func (r *ReaderRegistry) Register(seq uint64) int64 {
+	if r.fastSeq.Load() == seq {
+		v := r.fastVersion.Load()
+		c := r.fastCount.Load()
+		if c > 0 && c < math.MaxInt32 {
+			if r.fastVersion.Load() == v && r.fastSeq.Load() == seq {
+				if r.fastCount.Add(1) > 0 {
+					if r.fastVersion.Load() == v && r.fastSeq.Load() == seq {
+						return fastReaderHandle
+					}
+					// Fast path lost the sequence/version race; roll back and
+					// fall back to locked registration.
+					r.fastCount.Add(-1)
+				}
+			}
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if r.fastCount.Load() == 0 {
+		if r.fastSeq.Load() != seq {
+			r.fastVersion.Add(1)
+		}
+		r.fastSeq.Store(seq)
+		r.fastCount.Store(1)
+		return fastReaderHandle
+	}
+	if r.fastSeq.Load() == seq {
+		for {
+			c := r.fastCount.Load()
+			if c <= 0 || c >= math.MaxInt32 {
+				break
+			}
+			if r.fastCount.CompareAndSwap(c, c+1) {
+				return fastReaderHandle
+			}
+		}
+		// Saturated fast counter: fall back to a slow handle to avoid overflow.
+	}
 
 	var idx int
 	if n := len(r.free); n > 0 {
@@ -48,6 +96,18 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 
 // Unregister removes a reader.
 func (r *ReaderRegistry) Unregister(id int64) {
+	if id == fastReaderHandle {
+		for {
+			c := r.fastCount.Load()
+			if c <= 0 {
+				return
+			}
+			if r.fastCount.CompareAndSwap(c, c-1) {
+				return
+			}
+		}
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -75,7 +135,12 @@ func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	fastMin := r.loadFastMin()
+
 	if !r.dirty {
+		if fastMin < r.min {
+			return fastMin
+		}
 		return r.min
 	}
 
@@ -87,5 +152,24 @@ func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 	}
 	r.min = min
 	r.dirty = false
+	if fastMin < min {
+		return fastMin
+	}
 	return min
+}
+
+func (r *ReaderRegistry) loadFastMin() uint64 {
+	for {
+		v1 := r.fastVersion.Load()
+		c1 := r.fastCount.Load()
+		if c1 <= 0 {
+			return math.MaxUint64
+		}
+		seq := r.fastSeq.Load()
+		c2 := r.fastCount.Load()
+		v2 := r.fastVersion.Load()
+		if v1 == v2 && c1 == c2 && c1 > 0 {
+			return seq
+		}
+	}
 }

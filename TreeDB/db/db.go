@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,6 +29,9 @@ const (
 	MetaPage0ID = 0
 	MetaPage1ID = 1
 	KeepRecent  = 10000
+
+	closeSnapshotDrainTimeout = 10 * time.Second
+	closeSnapshotDrainSleep   = 500 * time.Microsecond
 )
 
 type DBState struct {
@@ -37,8 +41,19 @@ type DBState struct {
 	ValueLogSet      *valuelog.Set
 }
 
+// snapshotView is the coherent publication unit for snapshot acquisition.
+// AcquireSnapshot reads this single pointer so idx/state/vlog manager always
+// come from the same publish event.
+type snapshotView struct {
+	idx         *indexGen
+	state       *DBState
+	vlogManager *valuelog.Manager
+}
+
 type DB struct {
 	valueLogManager    *valuelog.Manager
+	snapshotViewRO     atomic.Pointer[snapshotView]
+	snapshotAcquireRO  atomic.Int32
 	valueLogRefTracker *valueLogRefTracker
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
@@ -582,12 +597,17 @@ type Options struct {
 }
 
 type Snapshot struct {
-	db         *DB
-	idx        *indexGen
-	state      *DBState
-	reader     valueReader
-	tree       tree.Tree
-	registryID int64
+	db          *DB
+	idx         *indexGen
+	state       *DBState
+	vlogManager *valuelog.Manager
+	vlogPinned  bool
+	reader      valueReader
+	tree        tree.Tree
+	registryID  int64
+	closed      atomic.Bool
+	treePager   *pager.Pager
+	treeRoot    uint64
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -606,19 +626,27 @@ func (s *Snapshot) State() *DBState {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
+	db.snapshotAcquireRO.Add(1)
 
-	idx := db.idx.Load()
-	state := db.state.Load()
-	if state.ValueLogSet != nil {
-		db.valueLogManager.Acquire(state.ValueLogSet)
+	view := db.snapshotViewRO.Load()
+	if view == nil || view.idx == nil || view.state == nil {
+		db.snapshotAcquireRO.Add(-1)
+		return nil
+	}
+	idx := view.idx
+	state := view.state
+	vm := view.vlogManager
+	vlogSet := state.ValueLogSet
+	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+	if vlogNeedsPin {
+		if vm == nil {
+			db.snapshotAcquireRO.Add(-1)
+			return nil
+		}
+		vm.Acquire(vlogSet)
 	}
 
 	// Register Reader
-	if idx != nil {
-		idx.acquire()
-	}
 	id := int64(0)
 	if idx != nil {
 		id = idx.registry.Register(state.CommitSeq)
@@ -628,25 +656,52 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.db = db
 	snap.idx = idx
 	snap.state = state
-	snap.reader.vlogs = state.ValueLogSet
+	snap.vlogManager = vm
+	snap.vlogPinned = vlogNeedsPin
+	snap.reader.vlogs = vlogSet
 	snap.reader.outerLeafMode = db.indexOuterLeafMode
 	snap.reader.cache = db.outerLeafBlockCache
 	if idx != nil {
-		snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
+		sameTree := snap.treePager == idx.pager &&
+			snap.treeRoot == state.RootPageID
+		if !sameTree {
+			snap.tree.Reset(idx.pager, &snap.reader, state.RootPageID)
+			snap.treePager = idx.pager
+			snap.treeRoot = state.RootPageID
+		}
+	} else {
+		if snap.treePager != nil || snap.treeRoot != 0 {
+			snap.tree.Reset(nil, nil, 0)
+			snap.treePager = nil
+			snap.treeRoot = 0
+		}
 	}
 	snap.registryID = id
+	snap.closed.Store(false)
+	db.snapshotAcquireRO.Add(-1)
 	return snap
 }
 
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
+	if s == nil {
+		return nil
+	}
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+
 	var err error
-	if s.state != nil && s.state.ValueLogSet != nil {
-		err = errors.Join(err, s.db.valueLogManager.Release(s.state.ValueLogSet))
+	if s.vlogPinned && s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
+		if relErr := s.vlogManager.Release(s.state.ValueLogSet); relErr != nil {
+			err = relErr
+		}
 	}
 	if s.idx != nil {
 		s.idx.registry.Unregister(s.registryID)
-		s.db.releaseIndex(s.idx)
+		if s.db != nil {
+			s.db.maybeReleaseRetiredIndex(s.idx)
+		}
 	}
 	if s.db != nil {
 		s.db.snapPool.Put(s)
@@ -937,6 +992,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ValueLogSet:      vm.CurrentSet(),
 	}
 	db.state.Store(initialState)
+	db.publishSnapshotView(gen, initialState, vm)
 	if err := db.initValueLogRefTracker(); err != nil {
 		db.Close()
 		return nil, err
@@ -961,13 +1017,26 @@ func (db *DB) Close() error {
 	}
 
 	db.mu.Lock()
+	db.clearSnapshotView()
 	vm := db.valueLogManager
 	db.valueLogManager = nil
 	lock := db.lock
 	db.lock = nil
 	db.mu.Unlock()
 
+	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
+	for db.snapshotAcquireRO.Load() > 0 {
+		if time.Now().After(drainDeadline) {
+			break
+		}
+		runtime.Gosched()
+		time.Sleep(closeSnapshotDrainSleep)
+	}
+
 	var errs []error
+	if remaining := db.snapshotAcquireRO.Load(); remaining > 0 {
+		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
+	}
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
 	}
@@ -1340,6 +1409,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 		ValueLogSet:      valueLogSet,
 	}
 	db.state.Store(newState)
+	db.publishSnapshotView(idx, newState, db.valueLogManager)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
 	db.mu.Unlock()
@@ -1534,6 +1604,28 @@ func (db *DB) State() *DBState {
 	return db.state.Load()
 }
 
+func (db *DB) publishSnapshotView(idx *indexGen, state *DBState, vm *valuelog.Manager) {
+	if db == nil {
+		return
+	}
+	if idx == nil || state == nil {
+		db.snapshotViewRO.Store(nil)
+		return
+	}
+	db.snapshotViewRO.Store(&snapshotView{
+		idx:         idx,
+		state:       state,
+		vlogManager: vm,
+	})
+}
+
+func (db *DB) clearSnapshotView() {
+	if db == nil {
+		return
+	}
+	db.snapshotViewRO.Store(nil)
+}
+
 // RefreshValueLogSet publishes a new DBState with the current value-log set
 // (excluding zombies) without creating a new commit.
 func (db *DB) RefreshValueLogSet() error {
@@ -1555,6 +1647,7 @@ func (db *DB) RefreshValueLogSet() error {
 		ValueLogSet:      db.valueLogManager.CurrentSet(),
 	}
 	db.state.Store(newState)
+	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
 
 	if oldState.ValueLogSet != nil {
 		return db.valueLogManager.Release(oldState.ValueLogSet)
