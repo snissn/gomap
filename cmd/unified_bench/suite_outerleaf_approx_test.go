@@ -52,8 +52,8 @@ func TestSimulateOuterLeafLookupPattern_Deterministic(t *testing.T) {
 		t.Fatalf("build blocks: %v", err)
 	}
 	queries := generateOuterLeafApproxQueries(keys, 500, 12345)
-	a := simulateOuterLeafLookupPattern(keys, blocks, queries, 2<<20, 0.05, 777)
-	b := simulateOuterLeafLookupPattern(keys, blocks, queries, 2<<20, 0.05, 777)
+	a := simulateOuterLeafLookupPattern(keys, blocks, queries, 2<<20, true, 0.05, 777)
+	b := simulateOuterLeafLookupPattern(keys, blocks, queries, 2<<20, true, 0.05, 777)
 	if a != b {
 		t.Fatalf("expected deterministic pattern stats: a=%+v b=%+v", a, b)
 	}
@@ -107,12 +107,14 @@ func TestRunOuterLeafApproxSuite_OverridesAndJSON_Smoke(t *testing.T) {
 	oldValueSizes := *outerLeafApproxValueSizes
 	oldQueries := *outerLeafApproxQueries
 	oldCacheMB := *outerLeafApproxBlockCacheMB
+	oldLookupSteady := *outerLeafApproxLookupSteadyState
 	oldFenceFPR := *outerLeafApproxFenceFPR
 	oldReportJSON := *outerLeafApproxReportJSON
 	defer func() {
 		*outerLeafApproxValueSizes = oldValueSizes
 		*outerLeafApproxQueries = oldQueries
 		*outerLeafApproxBlockCacheMB = oldCacheMB
+		*outerLeafApproxLookupSteadyState = oldLookupSteady
 		*outerLeafApproxFenceFPR = oldFenceFPR
 		*outerLeafApproxReportJSON = oldReportJSON
 	}()
@@ -120,6 +122,7 @@ func TestRunOuterLeafApproxSuite_OverridesAndJSON_Smoke(t *testing.T) {
 	*outerLeafApproxValueSizes = "64"
 	*outerLeafApproxQueries = 200
 	*outerLeafApproxBlockCacheMB = 1
+	*outerLeafApproxLookupSteadyState = true
 	*outerLeafApproxFenceFPR = 0.02
 	jsonPath := filepath.Join(t.TempDir(), "outerleaf_approx_results.json")
 	*outerLeafApproxReportJSON = jsonPath

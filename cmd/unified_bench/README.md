@@ -80,7 +80,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-treedb-outer-leaf-block-restart-interval` TreeDB: restart interval metadata for v2 outer-leaf payloads
 - `-treedb-outer-leaf-block-cache-entries` TreeDB: decoded outer-leaf block cache capacity in entries (`0` disables cache)
 - `-outerleaf-approx-value-sizes` outerleaf_approx matrix value sizes (CSV, default `128,1024`)
-- `-outerleaf-approx-block-cache-mb` outerleaf_approx simulated outer-block cache size in MiB (`0` disables cache model)
+- `-outerleaf-approx-block-cache-mb` outerleaf_approx simulated outer-block cache size in MiB (default `256`; `0` disables cache model)
+- `-outerleaf-approx-lookup-steady-state` outerleaf_approx lookup p95 mode (`true` prewarms simulated cache before timing; `false` measures cold-start)
 - `-outerleaf-approx-fence-fpr` outerleaf_approx simulated fence-index false-positive rate `[0,1]`
 - `-outerleaf-approx-wal-bytes-per-record` outerleaf_approx WAL metadata-byte model per record
 - `-outerleaf-approx-vlog-record-overhead-bytes` outerleaf_approx value-log per-record overhead model
@@ -127,8 +128,9 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
   - if chunk-rounded `index.db` bytes dominate, compare `treedb.pages.total*page_size` (logical index pages) and/or run post-write `VacuumIndex*` to remove slack before interpreting density deltas.
   - tune `-treedb-outer-leaf-block-target-bytes` and codec (`snappy|lz4`) to improve payload density.
 - `lookup` gate failing:
-  - inspect `cache_hits`, `cache_misses`, `fallback_searches`, and `fence_false_positives`.
+  - inspect `lookup_phase`, `cache_hits`, `cache_misses`, `fallback_searches`, and `fence_false_positives`.
   - increase `-outerleaf-approx-block-cache-mb` and/or reduce block count (larger outer blocks) to raise hit ratio on random reads.
+  - if `lookup_phase=steady_state_prewarmed_cache`, misses usually indicate cache-capacity pressure rather than cold-start effects.
   - reduce `-outerleaf-approx-fence-fpr` when evaluating idealized predecessor routing.
 - `write` gate failing:
   - compare `write_proxy_ops_baseline` vs `write_proxy_ops_outer`.

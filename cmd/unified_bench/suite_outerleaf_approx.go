@@ -28,7 +28,8 @@ var (
 	outerLeafApproxQueries             = flag.Int("outerleaf-approx-queries", 5000, "outerleaf_approx suite: random lookup samples for p95 proxy")
 	outerLeafApproxMaxKeys             = flag.Int("outerleaf-approx-max-keys", 200000, "outerleaf_approx suite: max keys to collect from dataset for approximation")
 	outerLeafApproxValueSizes          = flag.String("outerleaf-approx-value-sizes", "128,1024", "outerleaf_approx suite: comma-separated value sizes for matrix runs")
-	outerLeafApproxBlockCacheMB        = flag.Int("outerleaf-approx-block-cache-mb", 32, "outerleaf_approx suite: simulated outer block-cache size in MiB (0 disables cache)")
+	outerLeafApproxBlockCacheMB        = flag.Int("outerleaf-approx-block-cache-mb", 256, "outerleaf_approx suite: simulated outer block-cache size in MiB (0 disables cache)")
+	outerLeafApproxLookupSteadyState   = flag.Bool("outerleaf-approx-lookup-steady-state", true, "outerleaf_approx suite: measure lookup p95 after prewarming simulated outer-block cache")
 	outerLeafApproxFenceFPR            = flag.Float64("outerleaf-approx-fence-fpr", 0.01, "outerleaf_approx suite: simulated fence-index false-positive rate [0,1]")
 	outerLeafApproxWALBytesPerRecord   = flag.Int("outerleaf-approx-wal-bytes-per-record", 24, "outerleaf_approx suite: modeled WAL metadata bytes per appended record")
 	outerLeafApproxVlogRecordOverhead  = flag.Int("outerleaf-approx-vlog-record-overhead-bytes", outerLeafApproxRecordOverhead, "outerleaf_approx suite: modeled value-log per-record overhead bytes")
@@ -81,6 +82,7 @@ type outerLeafApproxSuiteConfig struct {
 	ValueSizes          []int
 	BlockTargetBytes    int
 	BlockCacheBytes     int64
+	LookupSteadyState   bool
 	FenceFPR            float64
 	WALBytesPerRecord   int
 	VlogRecordOverhead  int
@@ -244,6 +246,7 @@ type outerLeafApproxReportAssumptions struct {
 	ValueSizes              []int    `json:"value_sizes"`
 	Codecs                  []string `json:"codecs"`
 	IndexBytesSource        string   `json:"index_bytes_source"`
+	LookupPhase             string   `json:"lookup_phase"`
 	BlockTargetBytes        int      `json:"block_target_bytes"`
 	BlockCacheBytes         int64    `json:"block_cache_bytes"`
 	FenceFPR                float64  `json:"fence_fpr"`
@@ -346,6 +349,7 @@ func buildOuterLeafApproxSuiteConfig(opts treedb.Options) (outerLeafApproxSuiteC
 		MaxKeys:             *outerLeafApproxMaxKeys,
 		ValueSizes:          valueSizes,
 		BlockCacheBytes:     int64(*outerLeafApproxBlockCacheMB) << 20,
+		LookupSteadyState:   *outerLeafApproxLookupSteadyState,
 		FenceFPR:            *outerLeafApproxFenceFPR,
 		WALBytesPerRecord:   *outerLeafApproxWALBytesPerRecord,
 		VlogRecordOverhead:  *outerLeafApproxVlogRecordOverhead,
@@ -563,7 +567,7 @@ func evaluateOuterLeafApproxCase(s outerLeafApproxScenarioRun, codec treedb.Valu
 	if err != nil {
 		return outerLeafApproxCaseResult{}, err
 	}
-	lookupStats, err := measureOuterLookupP95(s.Keys, blocks, queries, codec, cfg.BlockCacheBytes, cfg.FenceFPR, int64(s.ValueSize)^0x6f757465726c6561)
+	lookupStats, err := measureOuterLookupP95(s.Keys, blocks, queries, codec, cfg.BlockCacheBytes, cfg.LookupSteadyState, cfg.FenceFPR, int64(s.ValueSize)^0x6f757465726c6561)
 	if err != nil {
 		return outerLeafApproxCaseResult{}, err
 	}
@@ -730,6 +734,10 @@ func buildOuterLeafApproxReport(cfg outerLeafApproxSuiteConfig, cases []outerLea
 	for _, c := range cfg.Codecs {
 		codecs = append(codecs, formatTreeDBVlogBlockCodec(c))
 	}
+	lookupPhase := "cold_start"
+	if cfg.LookupSteadyState {
+		lookupPhase = "steady_state_prewarmed_cache"
+	}
 	return outerLeafApproxReport{
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Overall:     passFail(overall),
@@ -738,6 +746,7 @@ func buildOuterLeafApproxReport(cfg outerLeafApproxSuiteConfig, cases []outerLea
 			ValueSizes:              append([]int(nil), cfg.ValueSizes...),
 			Codecs:                  codecs,
 			IndexBytesSource:        "treedb.pages.total*page_size (fallback: index.db file bytes)",
+			LookupPhase:             lookupPhase,
 			BlockTargetBytes:        cfg.BlockTargetBytes,
 			BlockCacheBytes:         cfg.BlockCacheBytes,
 			FenceFPR:                cfg.FenceFPR,
@@ -765,6 +774,7 @@ func renderOuterLeafApproxMarkdown(report outerLeafApproxReport) string {
 	sb.WriteString(fmt.Sprintf("- value_sizes: %v\n", report.Assumptions.ValueSizes))
 	sb.WriteString(fmt.Sprintf("- codecs: %s\n", strings.Join(report.Assumptions.Codecs, ",")))
 	sb.WriteString(fmt.Sprintf("- index_bytes_source: %s\n", report.Assumptions.IndexBytesSource))
+	sb.WriteString(fmt.Sprintf("- lookup_phase: %s\n", report.Assumptions.LookupPhase))
 	sb.WriteString(fmt.Sprintf("- outer_block_target_bytes: %d\n", report.Assumptions.BlockTargetBytes))
 	sb.WriteString(fmt.Sprintf("- outer_block_cache_bytes: %d\n", report.Assumptions.BlockCacheBytes))
 	sb.WriteString(fmt.Sprintf("- fence_fpr: %.6f\n", report.Assumptions.FenceFPR))
@@ -1028,7 +1038,7 @@ func measureBaselineLookupP95(keys [][]byte, payloads []outerLeafApproxValuePayl
 	return percentileDuration(samples, 0.95), nil
 }
 
-func measureOuterLookupP95(keys [][]byte, blocks []outerLeafApproxBlock, queries [][]byte, codec treedb.ValueLogBlockCodec, cacheBytes int64, fenceFPR float64, seed int64) (outerLeafApproxLookupStats, error) {
+func measureOuterLookupP95(keys [][]byte, blocks []outerLeafApproxBlock, queries [][]byte, codec treedb.ValueLogBlockCodec, cacheBytes int64, steadyState bool, fenceFPR float64, seed int64) (outerLeafApproxLookupStats, error) {
 	if len(queries) == 0 {
 		return outerLeafApproxLookupStats{}, nil
 	}
@@ -1041,6 +1051,13 @@ func measureOuterLookupP95(keys [][]byte, blocks []outerLeafApproxBlock, queries
 	hitSamples := make([]time.Duration, 0, len(queries))
 	missSamples := make([]time.Duration, 0, len(queries))
 	scratch := make([]byte, 0, outerLeafApproxDefaultBlockTarget*2)
+	if steadyState && cacheBytes > 0 {
+		for i := range blocks {
+			if _, err := accessOuterLeafBlock(cache, blocks, i, codec, &scratch); err != nil {
+				return outerLeafApproxLookupStats{}, err
+			}
+		}
+	}
 
 	stats := outerLeafApproxLookupStats{}
 	for _, q := range queries {
@@ -1093,11 +1110,20 @@ func measureOuterLookupP95(keys [][]byte, blocks []outerLeafApproxBlock, queries
 	return stats, nil
 }
 
-func simulateOuterLeafLookupPattern(keys [][]byte, blocks []outerLeafApproxBlock, queries [][]byte, cacheBytes int64, fenceFPR float64, seed int64) outerLeafApproxLookupPattern {
+func simulateOuterLeafLookupPattern(keys [][]byte, blocks []outerLeafApproxBlock, queries [][]byte, cacheBytes int64, steadyState bool, fenceFPR float64, seed int64) outerLeafApproxLookupPattern {
 	if len(blocks) == 0 || len(queries) == 0 {
 		return outerLeafApproxLookupPattern{}
 	}
 	cache := newOuterLeafBlockCache(cacheBytes)
+	if steadyState && cacheBytes > 0 {
+		for i := range blocks {
+			sz := int64(blocks[i].rawLen)
+			if sz <= 0 {
+				sz = int64(len(blocks[i].stored))
+			}
+			_ = cache.access(i, sz)
+		}
+	}
 	rng := rand.New(rand.NewSource(seed ^ 0x6f757465726c6561))
 	stats := outerLeafApproxLookupPattern{}
 	for _, q := range queries {
