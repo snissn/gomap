@@ -1461,6 +1461,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		vlogLane          *lane
 		dictID            uint64
 		dictIDReady       bool
+		vlogAppended      bool
 	)
 
 	ensureVlogLane := func() error {
@@ -1523,63 +1524,73 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if len(ptrKeys) != len(ptrVals) {
 			return errors.New("cachingdb: deferred inline pointer grouping mismatch")
 		}
+		totalKeys := len(ptrKeys)
 		if fenceMode {
-			db.deferredFenceCandidateKeys.Add(uint64(len(ptrKeys)))
+			db.deferredFenceCandidateKeys.Add(uint64(totalKeys))
 		}
-		records, groups, outerArena, err := db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
-		if err != nil {
-			return err
-		}
-		if len(records) == 0 {
-			putValueLogRecordsNoClear(records)
-			putOuterLeafArena(outerArena)
-			ptrKeys = ptrKeys[:0]
-			ptrVals = ptrVals[:0]
-			return nil
-		}
-		defer putValueLogRecordsNoClear(records)
-		defer putOuterLeafArena(outerArena)
 		if err := ensureVlogLane(); err != nil {
 			return err
 		}
-
-		startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
-		for i := range records {
-			records[i].RID = startRID + uint64(i)
-		}
-		durability := journalDurabilityFlush
-		if sync {
-			durability = journalDurabilitySync
-		}
-		vlogPtrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
-		if err != nil {
-			return err
-		}
-		if len(vlogPtrs) != len(records) {
-			putValueLogPtrs(vlogPtrs)
-			return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(records))
-		}
-		defer putValueLogPtrs(vlogPtrs)
-
 		emittedGroups := uint64(0)
-		for i := range groups {
-			ptr := vlogPtrs[i]
-			group := groups[i]
-			if group.start < 0 || group.end < group.start || group.end > len(ptrKeys) {
-				return errors.New("cachingdb: deferred inline pointer source group out of range")
+		const maxInlineGroupKeys = 32768
+		for chunkStart := 0; chunkStart < totalKeys; chunkStart += maxInlineGroupKeys {
+			chunkEnd := chunkStart + maxInlineGroupKeys
+			if chunkEnd > totalKeys {
+				chunkEnd = totalKeys
 			}
-			if fenceMode {
-				if group.start >= group.end {
-					continue
+			chunkKeys := ptrKeys[chunkStart:chunkEnd]
+			chunkVals := ptrVals[chunkStart:chunkEnd]
+
+			records, groups, outerArena, err := db.buildOuterLeafValueRecords(chunkKeys, chunkVals)
+			if err != nil {
+				return err
+			}
+			if len(records) == 0 {
+				putValueLogRecordsNoClear(records)
+				putOuterLeafArena(outerArena)
+				continue
+			}
+
+			startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
+			for i := range records {
+				records[i].RID = startRID + uint64(i)
+			}
+			vlogPtrs, err := db.appendValueLog(vlogLane, dictID, nil, records, journalDurabilityNone)
+			putValueLogRecordsNoClear(records)
+			putOuterLeafArena(outerArena)
+			if err != nil {
+				return err
+			}
+			vlogAppended = true
+			if len(vlogPtrs) != len(records) {
+				putValueLogPtrs(vlogPtrs)
+				return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(records))
+			}
+
+			for i := range groups {
+				ptr := vlogPtrs[i]
+				group := groups[i]
+				if group.start < 0 || group.end < group.start || group.end > len(chunkKeys) {
+					putValueLogPtrs(vlogPtrs)
+					return errors.New("cachingdb: deferred inline pointer source group out of range")
 				}
-				emittedGroups++
-				group.end = group.start + 1
-			}
-			for srcPos := group.start; srcPos < group.end; srcPos++ {
-				if err := emitPointer(ptrKeys[srcPos], ptr); err != nil {
-					return err
+				group.start += chunkStart
+				group.end += chunkStart
+				if fenceMode {
+					if group.start >= group.end {
+						continue
+					}
+					emittedGroups++
+					group.end = group.start + 1
+				}
+				for srcPos := group.start; srcPos < group.end; srcPos++ {
+					if err := emitPointer(ptrKeys[srcPos], ptr); err != nil {
+						putValueLogPtrs(vlogPtrs)
+						return err
+					}
 				}
 			}
+			putValueLogPtrs(vlogPtrs)
 		}
 		if fenceMode && emittedGroups > 0 {
 			db.deferredFenceEmittedGroups.Add(emittedGroups)
@@ -1664,6 +1675,17 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		return 0, err
 	}
 	if vlogLane != nil {
+		if vlogAppended {
+			if sync {
+				if err := db.syncValueLogLane(vlogLane); err != nil {
+					return 0, err
+				}
+			} else {
+				if err := db.flushValueLogLane(vlogLane); err != nil {
+					return 0, err
+				}
+			}
+		}
 		retainPath := db.currentValueLogPath(vlogLane)
 		if retainPath != "" {
 			db.markValueLogRetain(retainPath)
