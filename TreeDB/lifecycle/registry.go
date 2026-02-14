@@ -6,7 +6,23 @@ import (
 	"sync/atomic"
 )
 
-const fastReaderHandle int64 = -1
+const (
+	fastReaderShardCount = 16
+	fastReaderShardMask  = fastReaderShardCount - 1
+
+	// FastReaderShardMask is the exported mask for the fast reader registry shard
+	// space. This is exposed to avoid callers duplicating shard-derivation logic.
+	FastReaderShardMask = fastReaderShardMask
+	// FastReaderShardCount is the number of fast registry shards.
+	FastReaderShardCount = fastReaderShardCount
+	registerHintUnset    = -1
+)
+
+type readerRegistryShard struct {
+	seq   atomic.Uint64
+	count atomic.Int32
+	_     [48]byte
+}
 
 type ReaderRegistry struct {
 	mu sync.Mutex
@@ -21,11 +37,10 @@ type ReaderRegistry struct {
 	min   uint64
 	dirty bool
 
-	// fastSeq/fastCount model the common steady-state case where readers all pin
-	// the same sequence. Register/Unregister can avoid mutex contention by using
-	// fastReaderHandle in this path.
-	fastSeq   atomic.Uint64
-	fastCount atomic.Int32
+	// fast shards keep common steady-state registrations lock-free and distributed
+	// across multiple counters.
+	fastShards    [fastReaderShardCount]readerRegistryShard
+	nextFastShard atomic.Uint64
 }
 
 func NewReaderRegistry() *ReaderRegistry {
@@ -37,31 +52,38 @@ func NewReaderRegistry() *ReaderRegistry {
 // Register adds a reader pinned to the given sequence.
 // Returns a handle to be used for Unregister.
 func (r *ReaderRegistry) Register(seq uint64) int64 {
-	if r.fastSeq.Load() == seq {
-		c := r.fastCount.Add(1)
-		if c > 0 && c < math.MaxInt32 {
-			if r.fastSeq.Load() == seq {
-				return fastReaderHandle
-			}
-		}
-		r.fastCount.Add(-1)
+	id, _ := r.RegisterWithHint(seq, registerHintUnset)
+	return id
+}
+
+// RegisterWithHint adds a reader pinned to the given sequence and returns both
+// the handle and the shard index used for the fast path (if available).
+// If hint is unset (registerHintUnset), a fresh shard hint is chosen.
+func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int) {
+	if hint == registerHintUnset {
+		hint = int(r.nextFastShard.Add(1)-1) & fastReaderShardMask
+	} else {
+		hint &= fastReaderShardMask
+	}
+
+	if id := r.tryAcquireFast(seq, hint); id != 0 {
+		return id, hint
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if r.fastCount.Load() == 0 {
-		r.fastSeq.Store(seq)
-		r.fastCount.Store(1)
-		return fastReaderHandle
-	}
-	if r.fastSeq.Load() == seq {
-		c := r.fastCount.Add(1)
-		if c > 0 && c < math.MaxInt32 {
-			return fastReaderHandle
+	for i := 0; i < fastReaderShardCount; i++ {
+		idx := (hint + i) & fastReaderShardMask
+		if id := r.tryJoinFast(seq, idx); id != 0 {
+			return id, idx
 		}
-		r.fastCount.Add(-1)
-		// Saturated fast counter: fall back to a slow handle to avoid overflow.
+	}
+	for i := 0; i < fastReaderShardCount; i++ {
+		idx := (hint + i) & fastReaderShardMask
+		if id := r.tryClaimFast(seq, idx); id != 0 {
+			return id, idx
+		}
 	}
 
 	var idx int
@@ -76,18 +98,22 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 	if seq < r.min {
 		r.min = seq
 	}
-	return int64(idx + 1)
+	return int64(idx + 1), registerHintUnset
 }
 
 // Unregister removes a reader.
 func (r *ReaderRegistry) Unregister(id int64) {
-	if id == fastReaderHandle {
-		c := r.fastCount.Add(-1)
+	if id < 0 {
+		shard := int(-id - 1)
+		if shard < 0 || shard >= fastReaderShardCount {
+			return
+		}
+		c := r.fastShards[shard].count.Add(-1)
 		if c >= 0 {
 			return
 		}
 		// Safety: avoid underflow if an invalid or duplicate id is observed.
-		r.fastCount.Store(0)
+		r.fastShards[shard].count.Store(0)
 		return
 	}
 
@@ -142,9 +168,63 @@ func (r *ReaderRegistry) MinPinnedSeq() uint64 {
 }
 
 func (r *ReaderRegistry) loadFastMin() uint64 {
-	c := r.fastCount.Load()
-	if c <= 0 {
-		return math.MaxUint64
+	min := uint64(math.MaxUint64)
+	for i := range r.fastShards {
+		if r.fastShards[i].count.Load() <= 0 {
+			continue
+		}
+		seq := r.fastShards[i].seq.Load()
+		if seq < min {
+			min = seq
+		}
 	}
-	return r.fastSeq.Load()
+	return min
+}
+
+func makeFastHandle(shard int) int64 {
+	return int64(-1 - shard)
+}
+
+func (r *ReaderRegistry) tryAcquireFast(seq uint64, hint int) int64 {
+	if id := r.tryJoinFast(seq, hint); id != 0 {
+		return id
+	}
+	return r.tryClaimFast(seq, hint)
+}
+
+func (r *ReaderRegistry) tryJoinFast(seq uint64, shard int) int64 {
+	if r.fastShards[shard].seq.Load() != seq {
+		return 0
+	}
+
+	c := r.fastShards[shard].count.Add(1)
+	if c > 0 && c < math.MaxInt32 {
+		if r.fastShards[shard].seq.Load() == seq {
+			return makeFastHandle(shard)
+		}
+	}
+	r.fastShards[shard].count.Add(-1)
+	return 0
+}
+
+func (r *ReaderRegistry) tryClaimFast(seq uint64, shard int) int64 {
+	if r.fastShards[shard].count.Load() > 0 {
+		return 0
+	}
+
+	// Write the candidate sequence before increasing the counter so that any
+	// concurrent min-seq readers never observe a stale higher watermark.
+	r.fastShards[shard].seq.Store(seq)
+	if r.fastShards[shard].count.CompareAndSwap(0, 1) {
+		return makeFastHandle(shard)
+	}
+
+	// If the slot raced to non-zero between the count check and CAS, join the
+	// now-active fast slot if we can still observe the same sequence.
+	c := r.fastShards[shard].count.Add(1)
+	if c > 0 && c < math.MaxInt32 && r.fastShards[shard].seq.Load() == seq {
+		return makeFastHandle(shard)
+	}
+	r.fastShards[shard].count.Add(-1)
+	return 0
 }

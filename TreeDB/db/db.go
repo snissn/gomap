@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/freelist"
@@ -15,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -118,6 +120,8 @@ const (
 	defaultChunkSize                 = 16 * 1024 * 1024
 	defaultMaintenanceOpsPerCoalesce = 400_000
 )
+
+const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
 
@@ -559,6 +563,23 @@ type Snapshot struct {
 	closed      atomic.Bool
 	treePager   *pager.Pager
 	treeRoot    uint64
+	// registryShardHint is used to route reader registrations to a stable fast
+	// registry shard for this snapshot object across operations.
+	registryShardHint int
+}
+
+func registryHintFromSnapshot(s *Snapshot) int {
+	if s == nil {
+		return snapshotShardHintUnset
+	}
+	if s.registryShardHint != snapshotShardHintUnset {
+		return s.registryShardHint
+	}
+	h := uint64(uintptr(unsafe.Pointer(s)))
+	h ^= h >> 33
+	h *= 0xff51afd7ed558ccd
+	h ^= h >> 33
+	return int(h & uint64(lifecycle.FastReaderShardMask))
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -597,13 +618,17 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		vm.Acquire(vlogSet)
 	}
 
+	if snap != nil && snap.registryShardHint == snapshotShardHintUnset {
+		snap.registryShardHint = registryHintFromSnapshot(snap)
+	}
+
 	var registryID int64
 	if idx != nil {
 		if idx.registry == nil {
 			db.snapPool.Put(snap)
 			return nil
 		}
-		registryID = idx.registry.Register(state.CommitSeq)
+		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
 	}
 
 	snap.db = db
