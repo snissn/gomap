@@ -29,7 +29,7 @@ func NewSnapshotPool() *SnapshotPool {
 	return &SnapshotPool{
 		pool: sync.Pool{
 			New: func() interface{} {
-				return &Snapshot{}
+				return &Snapshot{registryShardHint: snapshotShardHintUnset}
 			},
 		},
 	}
@@ -48,13 +48,14 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.state = nil
 	s.vlogManager = nil
 	s.vlogPinned = false
-	s.reader.vlogs = nil
 	s.registryID = 0
+	s.reader.vlogs = nil
 	s.closed.Store(false)
 	// treePager/treeRoot are intentionally preserved as a pooled cache key for
-	// the next AcquireSnapshot() on this same object. The reader backing address
-	// is stable per pooled Snapshot object, so Reset can be skipped safely when
-	// pager+root are unchanged.
+	// the next AcquireSnapshot() on this same object. registryShardHint is also
+	// preserved so the same pooled Snapshot keeps a stable fast registry shard.
+	// The reader backing address is stable per pooled Snapshot object, so Reset
+	// can be skipped safely when pager+root are unchanged.
 	p.pool.Put(s)
 }
 
