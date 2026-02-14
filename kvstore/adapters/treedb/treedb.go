@@ -78,8 +78,11 @@ func (d *DB) GetMany(keys [][]byte) ([][]byte, error) {
 }
 
 func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
-	if d == nil || d.DB == nil || len(keys) == 0 {
+	if len(keys) == 0 {
 		return nil
+	}
+	if d == nil || d.DB == nil {
+		return kvstore.ErrUnsupported
 	}
 	workers := int(d.readWorkers.Load())
 	if workers < 1 {
