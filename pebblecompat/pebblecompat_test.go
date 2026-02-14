@@ -1644,6 +1644,52 @@ func TestBatchAddInternalKeySetWithDeleteReplay(t *testing.T) {
 	require.Contains(t, dump.points, fmt.Sprintf("%x|%d|%x", []byte("k2"), pebble.InternalKeyKindSetWithDelete, []byte{}))
 }
 
+func TestBatchAddInternalKeyNoOpKindsReplay(t *testing.T) {
+	tests := []struct {
+		name string
+		kind pebble.InternalKeyKind
+	}{
+		{name: "kind-13-historical-noop", kind: internalKeyKindNoop},
+		{name: "kind-17-separator", kind: internalKeyKindSeparator},
+	}
+
+	for i := range tests {
+		tc := tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			db, err := Open(filepath.Join(dir, "compat"), nil)
+			require.NoError(t, err)
+			defer db.Close()
+
+			require.NoError(t, db.Set([]byte("seed"), []byte("value"), pebble.NoSync))
+			before := collectVisibleMap(t, db)
+
+			b := db.NewBatch()
+			require.NotNil(t, b)
+			defer b.Close()
+
+			ik := &pebble.InternalKey{
+				UserKey: []byte("noop-key"),
+				Trailer: uint64(tc.kind),
+			}
+			require.NoError(t, b.AddInternalKey(ik, []byte("ignored"), nil))
+			require.NoError(t, b.Commit(pebble.NoSync))
+
+			after := collectVisibleMap(t, db)
+			require.Equal(t, before, after)
+
+			v, closer, err := db.Get([]byte("seed"))
+			require.NoError(t, err)
+			require.Equal(t, []byte("value"), v)
+			require.NoError(t, closer.Close())
+
+			_, closer, err = db.Get([]byte("noop-key"))
+			require.ErrorIs(t, err, pebble.ErrNotFound)
+			require.Nil(t, closer)
+		})
+	}
+}
+
 func waitFlush(t *testing.T, ch <-chan struct{}) {
 	t.Helper()
 	select {

@@ -83,7 +83,7 @@ Legend:
 | `Close` | full | | done |
 | Indexed read APIs (`Get`, `NewIter` on indexed batch) | partial | Implemented; semantics rely on shadow mirror parity. | 1 |
 | `CommitStats` | partial | Surface exposed; stats do not match Pebble commit-pipeline internals. | 2 |
-| `AddInternalKey` | partial | Delegates to underlying Pebble batch; replay covers `Set` and `SetWithDelete` kinds, with other internal kinds still dependent on apply-path coverage. | 2 |
+| `AddInternalKey` | partial | Delegates to underlying Pebble batch; replay covers `Set`, `SetWithDelete`, and no-op internal kinds `13` (historical noop) and `17` (separator), with other internal kinds still dependent on apply-path coverage. | 2 |
 
 ## Acceptance Criteria for “Full”
 

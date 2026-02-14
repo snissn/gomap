@@ -16,7 +16,8 @@ on TreeDB with equivalent observable behavior for required call paths.
 
 - Deterministic `Batch.Repr()` + `DB.ApplyBatchRepr(...)` replay for supported kinds.
 - Seeded randomized differential, replay-across-reopen, and batch-segmentation invariance coverage for supported point-op `ApplyBatchRepr` streams.
-- `Batch.AddInternalKey` replay support for `Set` and `SetWithDelete` internal kinds.
+- `Batch.AddInternalKey` replay support for `Set`, `SetWithDelete`, and no-op
+  internal kinds `13` (historical noop) and `17` (separator).
 - Point-key operations (`Set/Get/Delete/DeleteRange/Merge/SingleDelete/DeleteSized`).
 - `Merge` evaluates through the configured `Options.Merger` (defaults to
   `pebble.DefaultMerger`) for both compat replay and shadow Pebble parity.

@@ -417,6 +417,14 @@ type pointWrite struct {
 	Seq   uint64
 }
 
+const (
+	// Internal key kind values reserved by RocksDB/Pebble as historical no-op and
+	// separator markers. Batch replay should accept and sequence-reserve these
+	// kinds without mutating user-visible state.
+	internalKeyKindNoop      pebble.InternalKeyKind = 13
+	internalKeyKindSeparator pebble.InternalKeyKind = 17
+)
+
 func (d *DB) applyBatchReprLocked(repr []byte, sync bool) error {
 	if len(repr) == 0 {
 		return nil
@@ -512,6 +520,12 @@ func (d *DB) applyBatchReprLocked(repr []byte, sync bool) error {
 
 		case pebble.InternalKeyKindLogData, pebble.InternalKeyKindIngestSST:
 			// No-op data record. Sequence reservation is enough.
+
+		case internalKeyKindNoop, internalKeyKindSeparator:
+			// Historical no-op and separator kinds are accepted for replay parity.
+			// The shadow Pebble Apply path cannot decode these kinds, so force a
+			// shadow rebuild after applying to TreeDB.
+			requiresShadowRebuild = true
 
 		default:
 			return fmt.Errorf("pebblecompat: unsupported batch kind %d", kind)
