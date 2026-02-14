@@ -37,11 +37,11 @@ Legend:
 | `ScanInternal` | partial | Compatibility reconstruction, not native Pebble LSM internals. | 1/3 |
 | `ExportSharedObject` (compat extension) | full | TreeDB-native immutable transfer object. | done |
 | `IngestSharedObject` (compat extension) | full | Buffered/chunked apply path. | done |
-| `NewIter` | missing | No `*pebble.Iterator` parity surface. | 1 |
-| `NewIterWithContext` | missing | Same gap as above. | 1 |
-| `NewSnapshot` | missing | No `*pebble.Snapshot` surface yet. | 1 |
-| `NewIndexedBatch` | missing | Indexed batch read semantics not implemented. | 1 |
-| `NewIndexedBatchWithSize` | missing | Indexed batch read semantics not implemented. | 1 |
+| `NewIter` | partial | Exposed via Pebble shadow mirror; user-visible semantics only. | 1 |
+| `NewIterWithContext` | partial | Exposed via Pebble shadow mirror; user-visible semantics only. | 1 |
+| `NewSnapshot` | partial | Exposed via Pebble shadow mirror; sequence identity differs from Pebble internals. | 1 |
+| `NewIndexedBatch` | partial | Indexed read semantics via Pebble shadow mirror. | 1 |
+| `NewIndexedBatchWithSize` | partial | Indexed read semantics via Pebble shadow mirror. | 1 |
 | `Compact` | missing | Operational API gap. | 4 |
 | `Metrics` | missing | Operational API gap. | 4 |
 | `EstimateDiskUsage` | missing | Operational API gap. | 4 |
@@ -81,7 +81,7 @@ Legend:
 | `Empty` | full | | done |
 | `Reset` | full | | done |
 | `Close` | full | | done |
-| Indexed read APIs (`Get`, `NewIter` on indexed batch) | missing | Not implemented. | 1 |
+| Indexed read APIs (`Get`, `NewIter` on indexed batch) | partial | Implemented; semantics rely on shadow mirror parity. | 1 |
 | `CommitStats` | missing | Not implemented. | 2 |
 | `AddInternalKey` | missing | Not implemented. | 2 |
 

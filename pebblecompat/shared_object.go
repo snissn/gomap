@@ -416,6 +416,9 @@ func (d *DB) exciseSpanLocked(span pebble.KeyRange, sync bool) error {
 	if !spanDefined(span) {
 		return nil
 	}
+	if err := d.mirrorExciseToShadowLocked(span); err != nil {
+		return err
+	}
 	batch := d.tree.NewBatchWithSize(sharedIngestBatchOps)
 	if batch == nil {
 		return ErrClosed
@@ -597,6 +600,9 @@ func (d *DB) ingestSharedObjectLocked(
 			return pebble.IngestOperationStats{}, io.ErrUnexpectedEOF
 		}
 		if err := d.queueSet(state, key, value); err != nil {
+			return pebble.IngestOperationStats{}, err
+		}
+		if err := d.applySharedObjectRecordToShadowLocked(key, value); err != nil {
 			return pebble.IngestOperationStats{}, err
 		}
 	}

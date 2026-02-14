@@ -15,6 +15,8 @@ import (
 // DB exposes a Pebble-like API backed by TreeDB.
 type DB struct {
 	tree *treedb.DB
+	// shadow maintains a Pebble-native mirror for iterator/snapshot/indexed-batch APIs.
+	shadow *pebble.DB
 
 	mu sync.Mutex
 
@@ -71,6 +73,11 @@ func Open(dirname string, opts *Options) (*DB, error) {
 			_ = d.tree.Close()
 			return nil, fmt.Errorf("pebblecompat: invalid stored sequence")
 		}
+	}
+	if err := d.initShadowLocked(); err != nil {
+		_ = d.tree.Close()
+		d.tree = nil
+		return nil, err
 	}
 	return d, nil
 }
@@ -143,11 +150,22 @@ func (d *DB) parseRangeLogKey(key []byte) (seq uint64, order uint32, ok bool) {
 func (d *DB) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d == nil || d.tree == nil {
+	if d == nil {
 		return nil
+	}
+	var shadowErr error
+	if d.shadow != nil {
+		shadowErr = d.shadow.Close()
+		d.shadow = nil
+	}
+	if d.tree == nil {
+		return shadowErr
 	}
 	err := d.tree.Close()
 	d.tree = nil
+	if err == nil {
+		return shadowErr
+	}
 	return err
 }
 
@@ -489,6 +507,9 @@ func (d *DB) applyBatchReprLocked(repr []byte, sync bool) error {
 	}
 	if writeErr != nil {
 		return writeErr
+	}
+	if err := d.applyBatchReprToShadowLocked(repr, sync); err != nil {
+		return err
 	}
 	d.lastSeq = nextSeq
 	return nil

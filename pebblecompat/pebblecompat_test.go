@@ -361,3 +361,186 @@ func TestIngestAndExciseSharedObject_PreservesRangeFragments(t *testing.T) {
 	require.Contains(t, got.rangeKeys, "63|66|21|736e6577|766e6577") // [c,f) new
 	require.NotContains(t, got.rangeKeys, "61|7a|21|736f6c64|766f6c64")
 }
+
+func collectVisibleFromIter(t *testing.T, iter *pebble.Iterator) []string {
+	t.Helper()
+	require.NotNil(t, iter)
+	defer iter.Close()
+
+	out := make([]string, 0, 8)
+	for valid := iter.First(); valid; valid = iter.Next() {
+		out = append(out, fmt.Sprintf("%x=%x", iter.Key(), iter.Value()))
+	}
+	require.NoError(t, iter.Error())
+	return out
+}
+
+func TestNewIterAndSnapshotParity(t *testing.T) {
+	dir := t.TempDir()
+
+	compatDB, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer compatDB.Close()
+
+	pebbleDB, err := openPebbleForTests(filepath.Join(dir, "pebble"))
+	require.NoError(t, err)
+	defer pebbleDB.Close()
+
+	require.NoError(t, compatDB.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, compatDB.Set([]byte("b"), []byte("2"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("b"), []byte("2"), pebble.NoSync))
+	require.NoError(t, compatDB.Delete([]byte("b"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Delete([]byte("b"), pebble.NoSync))
+	require.NoError(t, compatDB.Set([]byte("c"), []byte("3"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("c"), []byte("3"), pebble.NoSync))
+
+	pIter, err := pebbleDB.NewIter(nil)
+	require.NoError(t, err)
+	cIter, err := compatDB.NewIter(nil)
+	require.NoError(t, err)
+	require.Equal(t, collectVisibleFromIter(t, pIter), collectVisibleFromIter(t, cIter))
+
+	pSnap := pebbleDB.NewSnapshot()
+	require.NotNil(t, pSnap)
+	defer pSnap.Close()
+	cSnap := compatDB.NewSnapshot()
+	require.NotNil(t, cSnap)
+	defer cSnap.Close()
+
+	require.NoError(t, compatDB.Set([]byte("d"), []byte("4"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("d"), []byte("4"), pebble.NoSync))
+
+	_, pCloser, err := pSnap.Get([]byte("d"))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, pebble.ErrNotFound))
+	require.Nil(t, pCloser)
+
+	_, cCloser, err := cSnap.Get([]byte("d"))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, pebble.ErrNotFound))
+	require.Nil(t, cCloser)
+
+	pSnapIter, err := pSnap.NewIter(nil)
+	require.NoError(t, err)
+	cSnapIter, err := cSnap.NewIter(nil)
+	require.NoError(t, err)
+	require.Equal(t, collectVisibleFromIter(t, pSnapIter), collectVisibleFromIter(t, cSnapIter))
+}
+
+func TestIndexedBatchReadParity(t *testing.T) {
+	dir := t.TempDir()
+
+	compatDB, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer compatDB.Close()
+
+	pebbleDB, err := openPebbleForTests(filepath.Join(dir, "pebble"))
+	require.NoError(t, err)
+	defer pebbleDB.Close()
+
+	require.NoError(t, compatDB.Set([]byte("base"), []byte("1"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("base"), []byte("1"), pebble.NoSync))
+
+	compatBatch := compatDB.NewIndexedBatch()
+	require.NotNil(t, compatBatch)
+	defer compatBatch.Close()
+	require.True(t, compatBatch.Indexed())
+
+	pebbleBatch := pebbleDB.NewIndexedBatch()
+	require.NotNil(t, pebbleBatch)
+	defer pebbleBatch.Close()
+	require.True(t, pebbleBatch.Indexed())
+
+	require.NoError(t, compatBatch.Set([]byte("base"), []byte("2"), nil))
+	require.NoError(t, pebbleBatch.Set([]byte("base"), []byte("2"), nil))
+	require.NoError(t, compatBatch.Set([]byte("new"), []byte("3"), nil))
+	require.NoError(t, pebbleBatch.Set([]byte("new"), []byte("3"), nil))
+
+	pv, pcloser, err := pebbleBatch.Get([]byte("base"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("2"), pv)
+	require.NoError(t, pcloser.Close())
+
+	cv, ccloser, err := compatBatch.Get([]byte("base"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("2"), cv)
+	require.NoError(t, ccloser.Close())
+
+	pIter, err := pebbleBatch.NewIter(nil)
+	require.NoError(t, err)
+	cIter, err := compatBatch.NewIter(nil)
+	require.NoError(t, err)
+	require.Equal(t, collectVisibleFromIter(t, pIter), collectVisibleFromIter(t, cIter))
+
+	require.NoError(t, compatBatch.Commit(pebble.NoSync))
+	require.NoError(t, pebbleBatch.Commit(pebble.NoSync))
+
+	pDBIter, err := pebbleDB.NewIter(nil)
+	require.NoError(t, err)
+	cDBIter, err := compatDB.NewIter(nil)
+	require.NoError(t, err)
+	require.Equal(t, collectVisibleFromIter(t, pDBIter), collectVisibleFromIter(t, cDBIter))
+}
+
+func TestBatchNonIndexedReadErrors(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	b := db.NewBatch()
+	require.NotNil(t, b)
+	defer b.Close()
+	require.False(t, b.Indexed())
+
+	require.NoError(t, b.Set([]byte("k"), []byte("v"), nil))
+
+	_, closer, err := b.Get([]byte("k"))
+	require.Error(t, err)
+	require.True(t, errors.Is(err, pebble.ErrNotIndexed))
+	require.Nil(t, closer)
+
+	iter, err := b.NewIter(nil)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, pebble.ErrNotIndexed))
+	require.Nil(t, iter)
+}
+
+func TestNewIndexedBatchWithSize(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	b := db.NewIndexedBatchWithSize(4096)
+	require.NotNil(t, b)
+	defer b.Close()
+	require.True(t, b.Indexed())
+
+	require.NoError(t, b.Set([]byte("k"), []byte("v"), nil))
+	val, closer, err := b.Get([]byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, []byte("v"), val)
+	require.NoError(t, closer.Close())
+}
+
+func TestNewIterAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compat")
+
+	db, err := Open(path, nil)
+	require.NoError(t, err)
+	require.NoError(t, db.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, db.Set([]byte("b"), []byte("2"), pebble.NoSync))
+	require.NoError(t, db.Delete([]byte("b"), pebble.NoSync))
+	require.NoError(t, db.Close())
+
+	db, err = Open(path, nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	iter, err := db.NewIter(nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"61=31"}, collectVisibleFromIter(t, iter))
+}

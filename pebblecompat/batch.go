@@ -1,17 +1,23 @@
 package pebblecompat
 
-import "github.com/cockroachdb/pebble"
+import (
+	"context"
+	"io"
+
+	"github.com/cockroachdb/pebble"
+)
 
 // Batch is a Pebble batch wrapper that commits into TreeDB.
 type Batch struct {
-	db     *DB
-	batch  pebble.Batch
-	closed bool
+	db      *DB
+	batch   *pebble.Batch
+	indexed bool
+	closed  bool
 }
 
 // NewBatch returns a new compatibility batch.
 func (d *DB) NewBatch() *Batch {
-	return &Batch{db: d}
+	return &Batch{db: d, batch: &pebble.Batch{}}
 }
 
 // NewBatchWithSize returns a new compatibility batch.
@@ -21,7 +27,7 @@ func (d *DB) NewBatchWithSize(_ int) *Batch {
 }
 
 func (b *Batch) ensureOpen() error {
-	if b == nil || b.closed {
+	if b == nil || b.closed || b.batch == nil {
 		return ErrClosed
 	}
 	return nil
@@ -102,10 +108,10 @@ func (b *Batch) Apply(other *Batch, opts *pebble.WriteOptions) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
-	if other == nil {
+	if other == nil || other.batch == nil {
 		return nil
 	}
-	return b.batch.Apply(&other.batch, opts)
+	return b.batch.Apply(other.batch, opts)
 }
 
 // Commit applies the batch to the underlying DB.
@@ -126,7 +132,7 @@ func (b *Batch) SyncWait() error {
 
 // Repr returns a stable copy of the Pebble batch representation.
 func (b *Batch) Repr() []byte {
-	if b == nil {
+	if b == nil || b.batch == nil {
 		return nil
 	}
 	repr := b.batch.Repr()
@@ -143,35 +149,73 @@ func (b *Batch) SetRepr(repr []byte) error {
 
 // Reader returns a Pebble batch reader over this batch.
 func (b *Batch) Reader() pebble.BatchReader {
-	if b == nil {
+	if b == nil || b.batch == nil {
 		return nil
 	}
 	return b.batch.Reader()
 }
 
-func (b *Batch) Len() int {
+// Indexed returns whether this is an indexed batch.
+func (b *Batch) Indexed() bool {
 	if b == nil {
+		return false
+	}
+	return b.indexed
+}
+
+// Get reads through the batch overlay when the batch is indexed.
+func (b *Batch) Get(key []byte) ([]byte, io.Closer, error) {
+	if err := b.ensureOpen(); err != nil {
+		return nil, nil, err
+	}
+	if !b.indexed {
+		return nil, nil, pebble.ErrNotIndexed
+	}
+	return b.batch.Get(key)
+}
+
+// NewIter returns an iterator over the batch view when indexed.
+func (b *Batch) NewIter(o *pebble.IterOptions) (*pebble.Iterator, error) {
+	if err := b.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if !b.indexed {
+		return nil, pebble.ErrNotIndexed
+	}
+	return b.batch.NewIter(o)
+}
+
+// NewIterWithContext returns an iterator over the batch view when indexed.
+func (b *Batch) NewIterWithContext(ctx context.Context, o *pebble.IterOptions) *pebble.Iterator {
+	if err := b.ensureOpen(); err != nil {
+		return nil
+	}
+	return b.batch.NewIterWithContext(ctx, o)
+}
+
+func (b *Batch) Len() int {
+	if b == nil || b.batch == nil {
 		return 0
 	}
 	return b.batch.Len()
 }
 
 func (b *Batch) Count() uint32 {
-	if b == nil {
+	if b == nil || b.batch == nil {
 		return 0
 	}
 	return b.batch.Count()
 }
 
 func (b *Batch) Empty() bool {
-	if b == nil {
+	if b == nil || b.batch == nil {
 		return true
 	}
 	return b.batch.Empty()
 }
 
 func (b *Batch) Reset() {
-	if b == nil {
+	if b == nil || b.batch == nil {
 		return
 	}
 	b.batch.Reset()
@@ -182,5 +226,8 @@ func (b *Batch) Close() error {
 		return nil
 	}
 	b.closed = true
+	if b.batch == nil {
+		return nil
+	}
 	return b.batch.Close()
 }

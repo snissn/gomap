@@ -18,6 +18,8 @@ on TreeDB with equivalent observable behavior for required call paths.
 - Point-key operations (`Set/Get/Delete/DeleteRange/Merge/SingleDelete/DeleteSized`).
 - Range-key write operations (`RangeKeySet/RangeKeyUnset/RangeKeyDelete`).
 - `ScanInternal(...)` callback compatibility surface for point/range metadata.
+- Native `*pebble.Iterator`, `*pebble.Snapshot`, and indexed batch read APIs via
+  an in-memory Pebble shadow mirror kept in sync with writes.
 - Ingest support for:
   - local sstable adaptation,
   - local external-file adaptation,
@@ -31,8 +33,9 @@ These are not currently provided and must not be assumed by consumers:
 
 - Full package-level drop-in replacement for `github.com/cockroachdb/pebble`
   (type identity mismatch remains).
-- Full iterator/snapshot API parity (`*pebble.Iterator` / `*pebble.Snapshot`
-  surfaces are not exposed).
+- Full internal-sequence iterator parity with Pebble internals (the current
+  shadow mirror provides user-visible iterator/snapshot semantics, not full
+  internal key/sequence identity).
 - Full operational API parity (`Metrics`, `SSTables`, `EstimateDiskUsage*`,
   `ScanStatistics`, `Compact`, `AsyncFlush`, etc).
 - Provider-backed `[]pebble.SharedSSTMeta` ingest path.
