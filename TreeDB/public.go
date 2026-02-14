@@ -28,6 +28,12 @@ type Options = db.Options
 const (
 	defaultChunkSize     = 16 * 1024 * 1024
 	defaultDictChunkSize = 1 * 1024 * 1024
+
+	defaultSlowdownBacklogSeconds          = 1.0
+	defaultStopBacklogSeconds              = 2.0
+	defaultV2FenceSlowdownBacklogSeconds   = 0.5
+	defaultV2FenceStopBacklogSeconds       = 1.0
+	defaultAdaptiveMaxBacklogBytes   int64 = 2 << 30
 )
 
 // Iterator is the public iterator contract returned by TreeDB.
@@ -238,6 +244,36 @@ func maintenanceStatsInto(stats map[string]string, m *maintenanceCoordinator) {
 	}
 }
 
+func normalizeBackpressureDefaults(opts *Options) {
+	if opts == nil {
+		return
+	}
+	if opts.SlowdownBacklogSeconds < 0 {
+		opts.SlowdownBacklogSeconds = 0
+	}
+	if opts.StopBacklogSeconds < 0 {
+		opts.StopBacklogSeconds = 0
+	}
+	if opts.MaxBacklogBytes < 0 {
+		opts.MaxBacklogBytes = 0
+	}
+	if opts.SlowdownBacklogSeconds != 0 || opts.StopBacklogSeconds != 0 || opts.MaxBacklogBytes != 0 {
+		return
+	}
+
+	slowdown := defaultSlowdownBacklogSeconds
+	stop := defaultStopBacklogSeconds
+	if opts.Durability == db.DurabilityWALOffRelaxed &&
+		strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode)) == db.IndexOuterLeafModeV2FencePtr {
+		slowdown = defaultV2FenceSlowdownBacklogSeconds
+		stop = defaultV2FenceStopBacklogSeconds
+	}
+
+	opts.SlowdownBacklogSeconds = slowdown
+	opts.StopBacklogSeconds = stop
+	opts.MaxBacklogBytes = defaultAdaptiveMaxBacklogBytes
+}
+
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
 	// Cached mode writes to the backend in large flush batches, so commit sequence
@@ -401,20 +437,7 @@ func Open(opts Options) (*DB, error) {
 		return &DB{backend: backend, dictdb: dictBackend, templateDB: templateDB, writePath: writePath, notifyError: opts.NotifyError, durabilityMode: computeDurabilityMode(opts), dir: rootDir}, nil
 	}
 
-	if opts.SlowdownBacklogSeconds < 0 {
-		opts.SlowdownBacklogSeconds = 0
-	}
-	if opts.StopBacklogSeconds < 0 {
-		opts.StopBacklogSeconds = 0
-	}
-	if opts.MaxBacklogBytes < 0 {
-		opts.MaxBacklogBytes = 0
-	}
-	if opts.SlowdownBacklogSeconds == 0 && opts.StopBacklogSeconds == 0 && opts.MaxBacklogBytes == 0 {
-		opts.SlowdownBacklogSeconds = 1
-		opts.StopBacklogSeconds = 2
-		opts.MaxBacklogBytes = 2 << 30
-	}
+	normalizeBackpressureDefaults(&opts)
 	if opts.MemtableMode == "" {
 		opts.MemtableMode = "adaptive"
 	}
