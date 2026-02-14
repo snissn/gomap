@@ -106,3 +106,23 @@ func TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil(t *testing.T) {
 		t.Fatalf("expected balanced value-log file pin count, got %d", got)
 	}
 }
+
+func TestAcquireSnapshot_ReturnsNilWhenDBIsClosing(t *testing.T) {
+	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
+	idx.refs.Store(1)
+	state := &DBState{CommitSeq: 7, RootPageID: 1}
+
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.publishSnapshotView(idx, state, nil)
+	db.closing.Store(true)
+
+	if snap := db.AcquireSnapshot(); snap != nil {
+		t.Fatal("expected nil snapshot while close is in progress")
+	}
+	if got := db.snapshotAcquireRO.Load(); got != 0 {
+		t.Fatalf("expected no in-flight acquisitions after early return, got %d", got)
+	}
+	if min := idx.registry.MinPinnedSeq(); min != math.MaxUint64 {
+		t.Fatalf("expected registry to remain unpinned, got %d", min)
+	}
+}

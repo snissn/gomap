@@ -29,6 +29,9 @@ const (
 	MetaPage0ID = 0
 	MetaPage1ID = 1
 	KeepRecent  = 10000
+
+	closeSnapshotDrainTimeout = 10 * time.Second
+	closeSnapshotDrainSleep   = 500 * time.Microsecond
 )
 
 type DBState struct {
@@ -50,6 +53,7 @@ type snapshotView struct {
 type DB struct {
 	valueLogManager    *valuelog.Manager
 	snapshotViewRO     atomic.Pointer[snapshotView]
+	snapshotAcquireRO  atomic.Int32
 	valueLogRefTracker *valueLogRefTracker
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
@@ -114,6 +118,7 @@ type DB struct {
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit atomic.Bool
+	closing                atomic.Bool
 }
 
 const (
@@ -598,6 +603,15 @@ func (s *Snapshot) State() *DBState {
 
 // AcquireSnapshot returns a new snapshot.
 func (db *DB) AcquireSnapshot() *Snapshot {
+	if db.closing.Load() {
+		return nil
+	}
+	db.snapshotAcquireRO.Add(1)
+	defer db.snapshotAcquireRO.Add(-1)
+	if db.closing.Load() {
+		return nil
+	}
+
 	snap := db.snapPool.Get()
 
 	view := db.snapshotViewRO.Load()
@@ -961,6 +975,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 }
 
 func (db *DB) Close() error {
+	db.closing.Store(true)
 	db.stopCommitCombiner()
 	db.pruner.Stop()
 	if db.ghostManager != nil {
@@ -976,6 +991,16 @@ func (db *DB) Close() error {
 	db.mu.Unlock()
 
 	var errs []error
+	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
+	for db.snapshotAcquireRO.Load() > 0 {
+		if time.Now().After(drainDeadline) {
+			break
+		}
+		time.Sleep(closeSnapshotDrainSleep)
+	}
+	if remaining := db.snapshotAcquireRO.Load(); remaining > 0 {
+		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
+	}
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
 	}

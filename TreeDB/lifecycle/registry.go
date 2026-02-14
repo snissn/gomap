@@ -58,9 +58,9 @@ func (r *ReaderRegistry) Register(seq uint64) int64 {
 
 // RegisterWithHint adds a reader pinned to the given sequence and returns both
 // the handle and the shard index used for the fast path (if available).
-// If hint is unset (registerHintUnset), a fresh shard hint is chosen.
+// If hint is negative, a fresh shard hint is chosen.
 func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int) {
-	if hint == registerHintUnset {
+	if hint < 0 {
 		hint = int(r.nextFastShard.Add(1)-1) & fastReaderShardMask
 	} else {
 		hint &= fastReaderShardMask
