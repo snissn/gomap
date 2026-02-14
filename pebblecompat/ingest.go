@@ -288,6 +288,12 @@ func resolveSharedMetaPaths(shared []pebble.SharedSSTMeta) ([]string, error) {
 	return paths, nil
 }
 
+func addIngestStats(dst *pebble.IngestOperationStats, add pebble.IngestOperationStats) {
+	dst.Bytes += add.Bytes
+	dst.ApproxIngestedIntoL0Bytes += add.ApproxIngestedIntoL0Bytes
+	dst.MemtableOverlappingFiles += add.MemtableOverlappingFiles
+}
+
 func (d *DB) ingestObjectPathsWithExcise(paths []string, exciseSpan pebble.KeyRange) (pebble.IngestOperationStats, error) {
 	if err := validateSpan(exciseSpan); err != nil {
 		return pebble.IngestOperationStats{}, err
@@ -306,40 +312,37 @@ func (d *DB) ingestObjectPathsWithExcise(paths []string, exciseSpan pebble.KeyRa
 		if err != nil {
 			return stats, err
 		}
-		stats.Bytes += objStats.Bytes
-		stats.ApproxIngestedIntoL0Bytes += objStats.ApproxIngestedIntoL0Bytes
-		stats.MemtableOverlappingFiles += objStats.MemtableOverlappingFiles
+		addIngestStats(&stats, objStats)
 	}
 	return stats, nil
 }
 
 // IngestAndExcise applies a best-effort local ingest + excise flow.
 func (d *DB) IngestAndExcise(paths []string, shared []pebble.SharedSSTMeta, exciseSpan pebble.KeyRange) (pebble.IngestOperationStats, error) {
-	hasObjectsInPaths := false
-	hasSST := false
-	objectPaths := make([]string, 0, len(paths)+len(shared))
-	for _, p := range paths {
-		if isExportObjectPath(p) {
-			hasObjectsInPaths = true
-			objectPaths = append(objectPaths, p)
-		} else {
-			hasSST = true
-		}
-	}
-	if hasSST && (hasObjectsInPaths || len(shared) > 0) {
-		return pebble.IngestOperationStats{}, fmt.Errorf("pebblecompat: mixed .pcobj and sstable ingest is unsupported")
-	}
-
 	sharedPaths, err := resolveSharedMetaPaths(shared)
 	if err != nil {
 		return pebble.IngestOperationStats{}, err
 	}
-	objectPaths = append(objectPaths, sharedPaths...)
-	if len(objectPaths) > 0 {
-		return d.ingestObjectPathsWithExcise(objectPaths, exciseSpan)
-	}
 
-	if spanDefined(exciseSpan) {
+	objectPaths := make([]string, 0, len(paths)+len(sharedPaths))
+	sstPaths := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if isExportObjectPath(p) {
+			objectPaths = append(objectPaths, p)
+			continue
+		}
+		sstPaths = append(sstPaths, p)
+	}
+	objectPaths = append(objectPaths, sharedPaths...)
+
+	var stats pebble.IngestOperationStats
+	if len(objectPaths) > 0 {
+		objStats, err := d.ingestObjectPathsWithExcise(objectPaths, exciseSpan)
+		if err != nil {
+			return stats, err
+		}
+		addIngestStats(&stats, objStats)
+	} else if spanDefined(exciseSpan) {
 		if bytes.Compare(exciseSpan.Start, exciseSpan.End) >= 0 {
 			return pebble.IngestOperationStats{}, ErrInvalidRange
 		}
@@ -347,5 +350,13 @@ func (d *DB) IngestAndExcise(paths []string, shared []pebble.SharedSSTMeta, exci
 			return pebble.IngestOperationStats{}, err
 		}
 	}
-	return d.IngestWithStats(paths)
+
+	if len(sstPaths) > 0 {
+		sstStats, err := d.IngestWithStats(sstPaths)
+		if err != nil {
+			return stats, err
+		}
+		addIngestStats(&stats, sstStats)
+	}
+	return stats, nil
 }

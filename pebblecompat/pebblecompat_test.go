@@ -193,6 +193,21 @@ func writeOverlapMatrixSST(path string) error {
 	return w.Close()
 }
 
+func writePointSST(path string, entries ...[2]string) error {
+	f, err := vfs.Default.Create(path)
+	if err != nil {
+		return err
+	}
+	w := sstable.NewWriter(objstorageprovider.NewFileWritable(f), sstable.WriterOptions{})
+	for i := range entries {
+		if err := w.Set([]byte(entries[i][0]), []byte(entries[i][1])); err != nil {
+			_ = f.Close()
+			return err
+		}
+	}
+	return w.Close()
+}
+
 func seedOverlapMatrixOldValues(t *testing.T, db overlapSetter) {
 	t.Helper()
 	for i := range overlapMatrixSeedValues {
@@ -580,6 +595,139 @@ func TestIngestAndExciseSharedMeta_UnsupportedBacking(t *testing.T) {
 		pebble.KeyRange{},
 	)
 	require.ErrorIs(t, err, ErrSharedSSTUnsupported)
+}
+
+func TestIngestAndExciseMixedInputs_UnsupportedSharedBacking(t *testing.T) {
+	dir := t.TempDir()
+
+	sstPath := filepath.Join(dir, "mixed-unsupported.sst")
+	require.NoError(t, writePointSST(sstPath, [2]string{"c", "sst-c"}))
+
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	seedOverlapMatrixOldValues(t, db)
+
+	beforeIter, err := db.NewIter(nil)
+	require.NoError(t, err)
+	before := collectVisibleFromIter(t, beforeIter)
+
+	_, err = db.IngestAndExcise(
+		[]string{sstPath},
+		[]pebble.SharedSSTMeta{{
+			Backing: newStaticRemoteObjectBackingHandle([]byte("unsupported-backing")),
+		}},
+		pebble.KeyRange{Start: []byte("c"), End: []byte("f")},
+	)
+	require.ErrorIs(t, err, ErrSharedSSTUnsupported)
+
+	afterIter, err := db.NewIter(nil)
+	require.NoError(t, err)
+	after := collectVisibleFromIter(t, afterIter)
+	require.Equal(t, before, after)
+}
+
+func TestIngestAndExciseMixedPaths_ObjectAndSST_ExciseOnce(t *testing.T) {
+	dir := t.TempDir()
+
+	sstPath := filepath.Join(dir, "mixed.sst")
+	require.NoError(t, writePointSST(
+		sstPath,
+		[2]string{"c", "sst-c"},
+		[2]string{"d", "sst-d"},
+		[2]string{"e", "sst-e"},
+	))
+
+	src, err := Open(filepath.Join(dir, "src"), nil)
+	require.NoError(t, err)
+	defer src.Close()
+
+	require.NoError(t, src.Set([]byte("d"), []byte("obj-d"), pebble.NoSync))
+	require.NoError(t, src.Set([]byte("f"), []byte("obj-f"), pebble.NoSync))
+
+	objPath := filepath.Join(dir, "mixed.pcobj")
+	_, err = src.ExportSharedObject(objPath, pebble.KeyRange{Start: []byte("c"), End: []byte("g")})
+	require.NoError(t, err)
+
+	db, err := Open(filepath.Join(dir, "dst"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	seedOverlapMatrixOldValues(t, db)
+
+	_, err = db.IngestAndExcise(
+		[]string{sstPath, objPath},
+		nil,
+		pebble.KeyRange{Start: []byte("c"), End: []byte("g")},
+	)
+	require.NoError(t, err)
+
+	assertOverlapMatrixExpected(t, db, map[string]string{
+		"a": "old-a",
+		"b": "old-b",
+		"c": "sst-c",
+		"d": "sst-d",
+		"e": "sst-e",
+		"f": "obj-f",
+		"g": "old-g",
+	})
+}
+
+func TestIngestAndExciseMixedPathsAndSharedMeta_LocalPath(t *testing.T) {
+	dir := t.TempDir()
+
+	sstPath := filepath.Join(dir, "mixed-shared.sst")
+	require.NoError(t, writePointSST(
+		sstPath,
+		[2]string{"c", "sst-c"},
+		[2]string{"d", "sst-d"},
+		[2]string{"e", "sst-e"},
+	))
+
+	pathSrc, err := Open(filepath.Join(dir, "path-src"), nil)
+	require.NoError(t, err)
+	defer pathSrc.Close()
+	require.NoError(t, pathSrc.Set([]byte("f"), []byte("path-f"), pebble.NoSync))
+
+	pathObj := filepath.Join(dir, "path.pcobj")
+	_, err = pathSrc.ExportSharedObject(pathObj, pebble.KeyRange{Start: []byte("c"), End: []byte("h")})
+	require.NoError(t, err)
+
+	sharedSrc, err := Open(filepath.Join(dir, "shared-src"), nil)
+	require.NoError(t, err)
+	defer sharedSrc.Close()
+	require.NoError(t, sharedSrc.Set([]byte("g"), []byte("shared-g"), pebble.NoSync))
+
+	sharedObj := filepath.Join(dir, "shared.pcobj")
+	_, err = sharedSrc.ExportSharedObject(sharedObj, pebble.KeyRange{Start: []byte("c"), End: []byte("h")})
+	require.NoError(t, err)
+
+	db, err := Open(filepath.Join(dir, "dst"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	seedOverlapMatrixOldValues(t, db)
+
+	shared := []pebble.SharedSSTMeta{{
+		Backing: newStaticRemoteObjectBackingHandle(encodeSharedMetaLocalPathBacking(sharedObj)),
+	}}
+	_, err = db.IngestAndExcise(
+		[]string{sstPath, pathObj},
+		shared,
+		pebble.KeyRange{Start: []byte("c"), End: []byte("h")},
+	)
+	require.NoError(t, err)
+
+	assertOverlapMatrixExpected(t, db, map[string]string{
+		"a": "old-a",
+		"b": "old-b",
+		"c": "sst-c",
+		"d": "sst-d",
+		"e": "sst-e",
+		"f": "path-f",
+		"g": "shared-g",
+	})
 }
 
 func TestIngestExciseOverlapMatrix_LocalSSTParity(t *testing.T) {
@@ -1159,6 +1307,32 @@ func TestBatchAddInternalKeySurface(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("v"), v)
 	require.NoError(t, closer.Close())
+}
+
+func TestBatchAddInternalKeySetWithDeleteReplay(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	b := db.NewBatch()
+	require.NotNil(t, b)
+	defer b.Close()
+
+	ik := &pebble.InternalKey{
+		UserKey: []byte("k2"),
+		Trailer: uint64(pebble.InternalKeyKindSetWithDelete),
+	}
+	require.NoError(t, b.AddInternalKey(ik, []byte("v2"), nil))
+	require.NoError(t, b.Commit(pebble.NoSync))
+
+	v, closer, err := db.Get([]byte("k2"))
+	require.NoError(t, err)
+	require.Len(t, v, 0)
+	require.NoError(t, closer.Close())
+
+	dump := collectInternal(t, db.ScanInternal)
+	require.Contains(t, dump.points, fmt.Sprintf("%x|%d|%x", []byte("k2"), pebble.InternalKeyKindSetWithDelete, []byte{}))
 }
 
 func waitFlush(t *testing.T, ch <-chan struct{}) {

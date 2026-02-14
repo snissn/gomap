@@ -33,7 +33,7 @@ Legend:
 | `Ingest` | partial | Supports sstable adaptation + `.pcobj` fast path. | 3 |
 | `IngestWithStats` | partial | Coarse stats parity. | 3 |
 | `IngestExternalFiles` | partial | Local path adaptation only; provider/shared gaps. Differential tests cover local external file ingest after excise across disjoint/partial/full/boundary-touch spans. | 3 |
-| `IngestAndExcise` | partial | Supports `.pcobj` paths plus compat-local `SharedSSTMeta` backings resolved to `.pcobj`; provider-backed shared ingest remains unsupported. Differential overlap-matrix tests cover disjoint/partial/full/boundary-touch spans for local SST and shared-meta paths. | 3 |
+| `IngestAndExcise` | partial | Supports local SST paths, `.pcobj` paths, and compat-local `SharedSSTMeta` backings in one call. Excise is applied once and then all object-backed inputs are ingested before SST inputs deterministically; provider-backed shared ingest remains unsupported. Differential overlap-matrix tests cover disjoint/partial/full/boundary-touch spans for local SST and shared-meta paths. | 3 |
 | `ScanInternal` | partial | Compatibility reconstruction, not native Pebble LSM internals. | 1/3 |
 | `ExportSharedObject` (compat extension) | full | TreeDB-native immutable transfer object. | done |
 | `IngestSharedObject` (compat extension) | full | Buffered/chunked apply path. | done |
@@ -83,7 +83,7 @@ Legend:
 | `Close` | full | | done |
 | Indexed read APIs (`Get`, `NewIter` on indexed batch) | partial | Implemented; semantics rely on shadow mirror parity. | 1 |
 | `CommitStats` | partial | Surface exposed; stats do not match Pebble commit-pipeline internals. | 2 |
-| `AddInternalKey` | partial | Delegates to underlying Pebble batch; downstream apply support depends on op-kind coverage. | 2 |
+| `AddInternalKey` | partial | Delegates to underlying Pebble batch; replay covers `Set` and `SetWithDelete` kinds, with other internal kinds still dependent on apply-path coverage. | 2 |
 
 ## Acceptance Criteria for “Full”
 

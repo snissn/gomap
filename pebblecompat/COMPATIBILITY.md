@@ -15,6 +15,7 @@ on TreeDB with equivalent observable behavior for required call paths.
 `pebblecompat` currently guarantees:
 
 - Deterministic `Batch.Repr()` + `DB.ApplyBatchRepr(...)` replay for supported kinds.
+- `Batch.AddInternalKey` replay support for `Set` and `SetWithDelete` internal kinds.
 - Point-key operations (`Set/Get/Delete/DeleteRange/Merge/SingleDelete/DeleteSized`).
 - Range-key write operations (`RangeKeySet/RangeKeyUnset/RangeKeyDelete`).
 - `ScanInternal(...)` callback compatibility surface for point/range metadata.
@@ -24,10 +25,9 @@ on TreeDB with equivalent observable behavior for required call paths.
   - local sstable adaptation,
   - local external-file adaptation,
   - TreeDB-native shared object format (`.pcobj`) export/import.
-- `IngestAndExcise` on `.pcobj`, including split-preservation of non-overlapping
-  existing range fragments.
-- `IngestAndExcise` shared-meta adaptation when `[]pebble.SharedSSTMeta`
-  backings use the compat-local `.pcobj` path encoding.
+- `IngestAndExcise` supports mixed local SST, `.pcobj`, and compat-local
+  shared-meta path inputs in one call, with excise applied once and object-backed
+  ingest preserving non-overlapping existing range fragments.
 - Differential ingest/excise overlap-matrix tests cover disjoint, partial overlap,
   full overlap, and boundary-touch spans for local SST, local external-file
   excise+ingest flow, and compat-local shared-meta path ingest.

@@ -376,14 +376,15 @@ func (d *DB) applyBatchReprLocked(repr []byte, sync bool) error {
 	nextSeq := d.lastSeq
 	seen := uint32(0)
 	order := uint32(0)
+	requiresShadowRebuild := false
 
-	for {
+	for seen < count {
 		kind, key, value, ok, err := reader.Next()
 		if err != nil {
 			return err
 		}
 		if !ok {
-			break
+			return fmt.Errorf("pebblecompat: batch count mismatch header=%d parsed=%d", count, seen)
 		}
 		seen++
 		nextSeq++
@@ -392,11 +393,18 @@ func (d *DB) applyBatchReprLocked(repr []byte, sync bool) error {
 		value = append([]byte(nil), value...)
 
 		switch kind {
-		case pebble.InternalKeyKindSet:
+		case pebble.InternalKeyKindSet,
+			pebble.InternalKeyKindSetWithDelete:
 			if err := d.validateUserKey(key); err != nil {
 				return err
 			}
+			if value == nil {
+				value = []byte{}
+			}
 			pending[string(key)] = pointWrite{Key: key, Value: value, Kind: kind, Seq: nextSeq}
+			if kind == pebble.InternalKeyKindSetWithDelete {
+				requiresShadowRebuild = true
+			}
 
 		case pebble.InternalKeyKindMerge:
 			if err := d.validateUserKey(key); err != nil {
@@ -457,9 +465,6 @@ func (d *DB) applyBatchReprLocked(repr []byte, sync bool) error {
 		}
 	}
 
-	if seen != count {
-		return fmt.Errorf("pebblecompat: batch count mismatch header=%d parsed=%d", count, seen)
-	}
 	if seen == 0 {
 		return nil
 	}
@@ -510,11 +515,27 @@ func (d *DB) applyBatchReprLocked(repr []byte, sync bool) error {
 	if writeErr != nil {
 		return writeErr
 	}
-	if err := d.applyBatchReprToShadowLocked(repr, sync); err != nil {
-		return err
+	if requiresShadowRebuild {
+		if err := d.rebuildShadowFromTreeLocked(); err != nil {
+			return err
+		}
+	} else {
+		if err := d.applyBatchReprToShadowLocked(repr, sync); err != nil {
+			return err
+		}
 	}
 	d.lastSeq = nextSeq
 	return nil
+}
+
+func (d *DB) rebuildShadowFromTreeLocked() error {
+	if d.shadow != nil {
+		if err := d.shadow.Close(); err != nil {
+			return err
+		}
+		d.shadow = nil
+	}
+	return d.initShadowLocked()
 }
 
 func (d *DB) addDeleteRangeExistingKeysLocked(batch treedb.Batch, start, end []byte) error {
