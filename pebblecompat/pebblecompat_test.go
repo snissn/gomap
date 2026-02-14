@@ -42,6 +42,16 @@ func openPebbleForTests(path string) (*pebble.DB, error) {
 	})
 }
 
+func openPebbleInMemForTests() (*pebble.DB, error) {
+	cmp := *pebble.DefaultComparer
+	cmp.Split = func(key []byte) int { return len(key) }
+	return pebble.Open("mem", &pebble.Options{
+		FS:                 vfs.NewMem(),
+		FormatMajorVersion: pebble.FormatRangeKeys,
+		Comparer:           &cmp,
+	})
+}
+
 func collectInternal(t *testing.T, scan scanFn) internalDump {
 	t.Helper()
 	var out internalDump
@@ -710,4 +720,103 @@ func TestBatchAddInternalKeySurface(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []byte("v"), v)
 	require.NoError(t, closer.Close())
+}
+
+func waitFlush(t *testing.T, ch <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for flush channel")
+	}
+}
+
+func TestOperationalDelegationParityWithPebble(t *testing.T) {
+	dir := t.TempDir()
+	compatDB, err := Open(filepath.Join(dir, "compat"), nil)
+	require.NoError(t, err)
+	defer compatDB.Close()
+
+	pebbleDB, err := openPebbleInMemForTests()
+	require.NoError(t, err)
+	defer pebbleDB.Close()
+
+	require.NoError(t, compatDB.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, compatDB.Set([]byte("b"), []byte("2"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Set([]byte("b"), []byte("2"), pebble.NoSync))
+	require.NoError(t, compatDB.Delete([]byte("b"), pebble.NoSync))
+	require.NoError(t, pebbleDB.Delete([]byte("b"), pebble.NoSync))
+	require.NoError(t, compatDB.RangeKeySet([]byte("a"), []byte("z"), []byte("s1"), []byte("rv1"), pebble.NoSync))
+	require.NoError(t, pebbleDB.RangeKeySet([]byte("a"), []byte("z"), []byte("s1"), []byte("rv1"), pebble.NoSync))
+
+	require.NoError(t, compatDB.Compact([]byte("a"), []byte("z"), false))
+	require.NoError(t, pebbleDB.Compact([]byte("a"), []byte("z"), false))
+
+	cDu, err := compatDB.EstimateDiskUsage([]byte("a"), []byte("z"))
+	require.NoError(t, err)
+	pDu, err := pebbleDB.EstimateDiskUsage([]byte("a"), []byte("z"))
+	require.NoError(t, err)
+	require.InDeltaf(t, float64(pDu), float64(cDu), float64(pDu)*0.35+1, "estimate disk usage diverged")
+
+	cTot, cRemote, cExternal, err := compatDB.EstimateDiskUsageByBackingType([]byte("a"), []byte("z"))
+	require.NoError(t, err)
+	pTot, pRemote, pExternal, err := pebbleDB.EstimateDiskUsageByBackingType([]byte("a"), []byte("z"))
+	require.NoError(t, err)
+	require.InDeltaf(t, float64(pTot), float64(cTot), float64(pTot)*0.35+1, "estimate disk usage by backing type diverged")
+	require.Equal(t, pRemote, cRemote)
+	require.Equal(t, pExternal, cExternal)
+
+	cSST, err := compatDB.SSTables()
+	require.NoError(t, err)
+	pSST, err := pebbleDB.SSTables()
+	require.NoError(t, err)
+	require.Equal(t, len(pSST), len(cSST))
+	for i := range pSST {
+		require.Equal(t, len(pSST[i]), len(cSST[i]))
+	}
+
+	cStats, err := compatDB.ScanStatistics(context.Background(), nil, nil, pebble.ScanStatisticsOptions{})
+	require.NoError(t, err)
+	pStats, err := pebbleDB.ScanStatistics(context.Background(), nil, nil, pebble.ScanStatisticsOptions{})
+	require.NoError(t, err)
+	require.Equal(t, pStats.BytesRead, cStats.BytesRead)
+	require.Equal(t, pStats.Accumulated.KindsCount, cStats.Accumulated.KindsCount)
+	require.Equal(t, pStats.Accumulated.LatestKindsCount, cStats.Accumulated.LatestKindsCount)
+
+	cFlush, err := compatDB.AsyncFlush()
+	require.NoError(t, err)
+	pFlush, err := pebbleDB.AsyncFlush()
+	require.NoError(t, err)
+	waitFlush(t, cFlush)
+	waitFlush(t, pFlush)
+
+	cMetrics := compatDB.Metrics()
+	pMetrics := pebbleDB.Metrics()
+	require.Equal(t, pMetrics.ReadAmp(), cMetrics.ReadAmp())
+	require.Equal(t, pMetrics.DiskSpaceUsage(), cMetrics.DiskSpaceUsage())
+
+	require.NotNil(t, compatDB.ObjProvider())
+	require.NotNil(t, pebbleDB.ObjProvider())
+
+	cFMV := compatDB.FormatMajorVersion()
+	pFMV := pebbleDB.FormatMajorVersion()
+	require.Equal(t, pFMV, cFMV)
+	require.NoError(t, compatDB.RatchetFormatMajorVersion(cFMV))
+	require.NoError(t, pebbleDB.RatchetFormatMajorVersion(pFMV))
+
+	cEfos := compatDB.NewEventuallyFileOnlySnapshot(nil)
+	require.NotNil(t, cEfos)
+	defer cEfos.Close()
+	pEfos := pebbleDB.NewEventuallyFileOnlySnapshot(nil)
+	require.NotNil(t, pEfos)
+	defer pEfos.Close()
+
+	cVal, cCloser, err := cEfos.Get([]byte("a"))
+	require.NoError(t, err)
+	require.NoError(t, cCloser.Close())
+	pVal, pCloser, err := pEfos.Get([]byte("a"))
+	require.NoError(t, err)
+	require.NoError(t, pCloser.Close())
+	require.Equal(t, pVal, cVal)
 }

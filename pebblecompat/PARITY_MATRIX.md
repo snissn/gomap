@@ -42,19 +42,19 @@ Legend:
 | `NewSnapshot` | partial | Exposed via Pebble shadow mirror; sequence identity differs from Pebble internals. | 1 |
 | `NewIndexedBatch` | partial | Indexed read semantics via Pebble shadow mirror. | 1 |
 | `NewIndexedBatchWithSize` | partial | Indexed read semantics via Pebble shadow mirror. | 1 |
-| `Compact` | partial | Delegates to shadow Pebble compaction (not TreeDB-native compaction). | 4 |
-| `Metrics` | partial | Delegates to shadow Pebble metrics. | 4 |
-| `EstimateDiskUsage` | partial | Delegates to shadow Pebble estimates. | 4 |
-| `EstimateDiskUsageByBackingType` | partial | Delegates to shadow Pebble estimates. | 4 |
-| `SSTables` | partial | Delegates to shadow Pebble metadata. | 4 |
-| `ScanStatistics` | partial | Delegates to shadow Pebble statistics. | 4 |
-| `AsyncFlush` | partial | Delegates to shadow Pebble async flush. | 4 |
+| `Compact` | full | Delegates directly to Pebble shadow compaction API. | 4 |
+| `Metrics` | full | Delegates directly to Pebble shadow metrics API. | 4 |
+| `EstimateDiskUsage` | full | Delegates directly to Pebble shadow estimate API. | 4 |
+| `EstimateDiskUsageByBackingType` | full | Delegates directly to Pebble shadow estimate API. | 4 |
+| `SSTables` | full | Delegates directly to Pebble shadow sstable metadata API. | 4 |
+| `ScanStatistics` | full | Delegates directly to Pebble shadow scan statistics API. | 4 |
+| `AsyncFlush` | full | Delegates directly to Pebble shadow async flush API. | 4 |
 | `Download` | partial | Delegates to shadow Pebble provider path. | 4 |
-| `ObjProvider` | partial | Exposes shadow Pebble obj provider. | 3/4 |
-| `FormatMajorVersion` | partial | Delegates to shadow Pebble format state. | 4 |
-| `RatchetFormatMajorVersion` | partial | Delegates to shadow Pebble ratchet path. | 4 |
+| `ObjProvider` | full | Delegates directly to Pebble shadow object provider. | 3/4 |
+| `FormatMajorVersion` | full | Delegates directly to Pebble shadow format version API. | 4 |
+| `RatchetFormatMajorVersion` | full | Delegates directly to Pebble shadow format ratchet API. | 4 |
 | `SetCreatorID` | partial | Delegates to shadow Pebble provider config. | 4 |
-| `NewEventuallyFileOnlySnapshot` | partial | Delegates to shadow Pebble EFOS. | 4 |
+| `NewEventuallyFileOnlySnapshot` | full | Delegates directly to Pebble shadow EFOS API. | 4 |
 
 ## Batch Method Parity
 
