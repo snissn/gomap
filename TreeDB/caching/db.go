@@ -583,6 +583,18 @@ func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	return blockValue, nil
 }
 
+func allOuterLeafRecordValues(records []valuelog.Record) bool {
+	if len(records) == 0 {
+		return false
+	}
+	for i := range records {
+		if !outerleaf.HasMagic(records[i].Value) {
+			return false
+		}
+	}
+	return true
+}
+
 type outerLeafRecordGroup struct {
 	start int
 	end   int
@@ -6310,6 +6322,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 
+	// In v2 outer-leaf modes, records are already encoded as compressed
+	// key/value blocks. Re-compressing those payloads in value-log auto mode is
+	// usually redundant work with little write-size benefit.
+	autoOuterLeafPayloads := db.outerLeafV2Enabled() &&
+		!templatePrepass &&
+		dictID == 0 &&
+		allOuterLeafRecordValues(records)
+
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	selectorPayloadBytes := rawPayloadBytes
 	selectorUnitPayloadBytes := rawPayloadBytes
@@ -6317,6 +6337,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes)
+	if autoOuterLeafPayloads && mode == vlogCompressionAuto {
+		writeMode = vlogWriteOff
+	}
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false

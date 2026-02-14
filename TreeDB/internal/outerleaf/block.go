@@ -85,6 +85,18 @@ type DecodedBlock struct {
 	firstValue  []byte
 }
 
+// HasMagic reports whether payload begins with the outer-leaf block magic
+// header. It is a cheap classifier for outer-leaf encoded values.
+func HasMagic(payload []byte) bool {
+	if len(payload) < len(blockMagic) {
+		return false
+	}
+	return payload[0] == blockMagic[0] &&
+		payload[1] == blockMagic[1] &&
+		payload[2] == blockMagic[2] &&
+		payload[3] == blockMagic[3]
+}
+
 func ModeEnabled(mode string) bool {
 	switch strings.TrimSpace(mode) {
 	case ModeV2BlockPtr, ModeV2FencePtr:

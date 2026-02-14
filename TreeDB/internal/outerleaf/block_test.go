@@ -64,6 +64,19 @@ func TestEncodeDecodeSingleRoundTrip(t *testing.T) {
 	}
 }
 
+func TestHasMagic(t *testing.T) {
+	enc, err := EncodeSingle(nil, []byte("k"), []byte("v"), 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeSingle: %v", err)
+	}
+	if !HasMagic(enc) {
+		t.Fatalf("expected HasMagic=true for encoded payload")
+	}
+	if HasMagic([]byte("plain")) {
+		t.Fatalf("expected HasMagic=false for plain payload")
+	}
+}
+
 func TestEncodeSingleCodecHeaderMapping(t *testing.T) {
 	key := []byte("user:codec")
 	value := bytes.Repeat([]byte("v"), 256)
