@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
 )
 
@@ -71,5 +72,37 @@ func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
 	}
 	if min := idx2.registry.MinPinnedSeq(); min != math.MaxUint64 {
 		t.Fatalf("expected idx2 unpinned after close, got %d", min)
+	}
+}
+
+func TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil(t *testing.T) {
+	idx := &indexGen{}
+	idx.refs.Store(1)
+
+	seg := &valuelog.File{}
+	seg.RefCount.Store(1)
+	set := &valuelog.Set{
+		Files: map[uint32]*valuelog.File{
+			1: seg,
+		},
+	}
+	state := &DBState{
+		CommitSeq:   1,
+		RootPageID:  1,
+		ValueLogSet: set,
+	}
+	vm := &valuelog.Manager{}
+
+	db := &DB{snapPool: NewSnapshotPool()}
+	db.publishSnapshotView(idx, state, vm)
+
+	if snap := db.AcquireSnapshot(); snap != nil {
+		t.Fatal("expected nil snapshot when registry is unavailable")
+	}
+	if got := set.RefCount.Load(); got != 0 {
+		t.Fatalf("expected balanced value-log set pin count, got %d", got)
+	}
+	if got := seg.RefCount.Load(); got != 0 {
+		t.Fatalf("expected balanced value-log file pin count, got %d", got)
 	}
 }

@@ -625,6 +625,9 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	var registryID int64
 	if idx != nil {
 		if idx.registry == nil {
+			if vlogNeedsPin && vm != nil {
+				_ = vm.Release(vlogSet)
+			}
 			db.snapPool.Put(snap)
 			return nil
 		}

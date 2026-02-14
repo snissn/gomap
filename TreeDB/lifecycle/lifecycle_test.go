@@ -257,3 +257,21 @@ func TestReaderRegistry_RegisterFastCountSaturationFallsBackToSlowHandle(t *test
 		t.Fatalf("expected min 7 with saturated fast readers + slow fallback, got %d", min)
 	}
 }
+
+func TestReaderRegistry_TryClaimFast_DoesNotOverwriteSeqWhileInitializing(t *testing.T) {
+	reg := NewReaderRegistry()
+	const shard = 3
+
+	reg.fastShards[shard].seq.Store(11)
+	reg.fastShards[shard].count.Store(-1)
+
+	if id := reg.tryClaimFast(22, shard); id != 0 {
+		t.Fatalf("expected claim failure while shard initializes, got id=%d", id)
+	}
+	if got := reg.fastShards[shard].seq.Load(); got != 11 {
+		t.Fatalf("expected seq unchanged while shard initializes, got %d", got)
+	}
+	if got := reg.fastShards[shard].count.Load(); got != -1 {
+		t.Fatalf("expected count to stay initializing sentinel, got %d", got)
+	}
+}

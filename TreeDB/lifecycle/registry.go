@@ -208,23 +208,15 @@ func (r *ReaderRegistry) tryJoinFast(seq uint64, shard int) int64 {
 }
 
 func (r *ReaderRegistry) tryClaimFast(seq uint64, shard int) int64 {
-	if r.fastShards[shard].count.Load() > 0 {
-		return 0
+	// Only the goroutine that wins this CAS is allowed to publish a new seq for
+	// the shard. This prevents claim losers from overwriting an active shard seq.
+	if !r.fastShards[shard].count.CompareAndSwap(0, -1) {
+		return r.tryJoinFast(seq, shard)
 	}
 
-	// Write the candidate sequence before increasing the counter so that any
+	// Publish the candidate sequence before making the counter positive so that
 	// concurrent min-seq readers never observe a stale higher watermark.
 	r.fastShards[shard].seq.Store(seq)
-	if r.fastShards[shard].count.CompareAndSwap(0, 1) {
-		return makeFastHandle(shard)
-	}
-
-	// If the slot raced to non-zero between the count check and CAS, join the
-	// now-active fast slot if we can still observe the same sequence.
-	c := r.fastShards[shard].count.Add(1)
-	if c > 0 && c < math.MaxInt32 && r.fastShards[shard].seq.Load() == seq {
-		return makeFastHandle(shard)
-	}
-	r.fastShards[shard].count.Add(-1)
-	return 0
+	r.fastShards[shard].count.Store(1)
+	return makeFastHandle(shard)
 }
