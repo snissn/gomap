@@ -24,6 +24,7 @@ type DB struct {
 	seqKey         []byte
 	pointPrefix    []byte
 	rangePrefix    []byte
+	dataDir        string
 
 	lastSeq uint64
 }
@@ -55,6 +56,7 @@ func Open(dirname string, opts *Options) (*DB, error) {
 	d := &DB{
 		tree:           tdb,
 		internalPrefix: cfg.InternalPrefix,
+		dataDir:        to.Dir,
 		lastSeq:        initialSeqNum,
 	}
 	d.seqKey = append(append([]byte(nil), d.internalPrefix...), []byte("seq")...)
@@ -548,10 +550,21 @@ func (d *DB) Flush() error {
 	return d.tree.Checkpoint()
 }
 
-// Checkpoint delegates to TreeDB checkpointing.
+// Checkpoint creates a filesystem checkpoint when destDir is provided.
 func (d *DB) Checkpoint(destDir string, _ ...pebble.CheckpointOption) error {
-	if destDir != "" {
-		return errors.New("pebblecompat: Checkpoint(destDir) is not implemented")
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.ensureOpenLocked(); err != nil {
+		return err
 	}
-	return d.Flush()
+	if err := d.tree.Checkpoint(); err != nil {
+		return err
+	}
+	if destDir == "" {
+		return nil
+	}
+	if d.dataDir == "" {
+		return errors.New("pebblecompat: source data dir unavailable")
+	}
+	return copyTreeDBCheckpoint(d.dataDir, destDir)
 }

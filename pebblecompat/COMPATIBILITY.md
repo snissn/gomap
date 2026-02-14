@@ -26,6 +26,8 @@ on TreeDB with equivalent observable behavior for required call paths.
   - TreeDB-native shared object format (`.pcobj`) export/import.
 - `IngestAndExcise` on `.pcobj`, including split-preservation of non-overlapping
   existing range fragments.
+- `Checkpoint(destDir, ...)` directory export via TreeDB checkpoint plus recursive
+  filesystem copy.
 
 ## Hard Non-Goals (Current State)
 
@@ -39,7 +41,8 @@ These are not currently provided and must not be assumed by consumers:
 - Full operational API parity (`Metrics`, `SSTables`, `EstimateDiskUsage*`,
   `ScanStatistics`, `Compact`, `AsyncFlush`, etc).
 - Provider-backed `[]pebble.SharedSSTMeta` ingest path.
-- True `Checkpoint(destDir, ...)` directory checkpoint semantics.
+- Full Pebble checkpoint option parity (`WithRestrictToSpans`, option-specific
+  semantics) is not implemented.
 
 ## Required Full-Feature End State
 

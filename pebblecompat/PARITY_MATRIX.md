@@ -29,7 +29,7 @@ Legend:
 | `NewBatch` | full | Compatibility batch wrapper. | done |
 | `NewBatchWithSize` | partial | Hint accepted; not full Pebble memory model. | 2 |
 | `Flush` | partial | Checkpoint boundary mapping. | 4 |
-| `Checkpoint(destDir, ...)` | missing | No destination checkpoint export semantics yet. | 4 |
+| `Checkpoint(destDir, ...)` | partial | TreeDB checkpoint + filesystem copy; restrict-to-spans and full Pebble option parity not implemented. | 4 |
 | `Ingest` | partial | Supports sstable adaptation + `.pcobj` fast path. | 3 |
 | `IngestWithStats` | partial | Coarse stats parity. | 3 |
 | `IngestExternalFiles` | partial | Local path adaptation only; provider/shared gaps. | 3 |

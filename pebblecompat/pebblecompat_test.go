@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -543,4 +544,46 @@ func TestNewIterAfterReopen(t *testing.T) {
 	iter, err := db.NewIter(nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"61=31"}, collectVisibleFromIter(t, iter))
+}
+
+func TestCheckpointDestDirRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "src")
+	cpPath := filepath.Join(dir, "nested", "checkpoint")
+
+	db, err := Open(srcPath, nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, db.Set([]byte("b"), []byte("2"), pebble.NoSync))
+	require.NoError(t, db.DeleteRange([]byte("b"), []byte("c"), pebble.NoSync))
+	require.NoError(t, db.RangeKeySet([]byte("a"), []byte("z"), []byte("s1"), []byte("rv1"), pebble.NoSync))
+
+	require.NoError(t, db.Checkpoint(cpPath))
+
+	cpDB, err := Open(cpPath, nil)
+	require.NoError(t, err)
+	defer cpDB.Close()
+
+	want := collectInternal(t, db.ScanInternal)
+	got := collectInternal(t, cpDB.ScanInternal)
+	require.Equal(t, want, got)
+}
+
+func TestCheckpointDestDirExistsError(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "src")
+	dest := filepath.Join(dir, "exists")
+
+	db, err := Open(srcPath, nil)
+	require.NoError(t, err)
+	defer db.Close()
+
+	require.NoError(t, db.Set([]byte("a"), []byte("1"), pebble.NoSync))
+	require.NoError(t, os.MkdirAll(dest, 0o755))
+
+	err = db.Checkpoint(dest)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "destination already exists")
 }
