@@ -76,3 +76,37 @@ func TestOpen_ValueLogWALFenceMode_InvalidRejected(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *testing.T) {
+	_, err := Open(Options{
+		Dir:                t.TempDir(),
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+		Durability:         DurabilityWALOnRelaxed,
+		ValueLog: ValueLogOptions{
+			WALFenceMode: ValueLogWALFenceModeRIDJoin,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected WAL-enabled v2_fenceptr rid_join to be rejected")
+	}
+	if !strings.Contains(err.Error(), "WAL-enabled index outer leaf mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOff_ExplicitRIDJoinAllowed(t *testing.T) {
+	dbWALOff, err := Open(Options{
+		Dir:                t.TempDir(),
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+		Durability:         DurabilityWALOffRelaxed,
+		ValueLog: ValueLogOptions{
+			WALFenceMode: ValueLogWALFenceModeRIDJoin,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open WAL-off rid_join: %v", err)
+	}
+	if err := dbWALOff.Close(); err != nil {
+		t.Fatalf("close WAL-off rid_join: %v", err)
+	}
+}

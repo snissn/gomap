@@ -1205,6 +1205,26 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 	}
 }
 
+func TestCachingDB_Open_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	_, err = Open(dir, backend, Options{
+		IndexOuterLeafMode:   db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode: string(db.ValueLogWALFenceModeRIDJoin),
+	})
+	if err == nil {
+		t.Fatalf("expected WAL-enabled v2_fenceptr rid_join to be rejected")
+	}
+	if !strings.Contains(err.Error(), "WAL-enabled index outer leaf mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
 	dir := t.TempDir()
 	backendOpts := db.Options{

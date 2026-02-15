@@ -3647,7 +3647,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr {
 		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
 	}
-	valueLogWALFenceMode := normalizeValueLogWALFenceMode(opts.ValueLogWALFenceMode)
+	rawValueLogWALFenceMode := strings.TrimSpace(opts.ValueLogWALFenceMode)
+	valueLogWALFenceMode := normalizeValueLogWALFenceMode(rawValueLogWALFenceMode)
 	if valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeRIDJoin) &&
 		valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
 		return nil, fmt.Errorf("cachingdb: invalid value-log WAL fence mode %q", opts.ValueLogWALFenceMode)
@@ -3656,6 +3657,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
 	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
 	disableJournal := opts.DisableWAL
+	if indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr && !disableJournal {
+		// WAL-enabled v2_fenceptr only supports explicit simple_inline.
+		if rawValueLogWALFenceMode != "" && valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
+			return nil, fmt.Errorf("cachingdb: unsupported value-log WAL fence mode %q for WAL-enabled index outer leaf mode %q (use %q)", opts.ValueLogWALFenceMode, indexOuterLeafMode, backenddb.ValueLogWALFenceModeSimpleInline)
+		}
+	}
 	if writerFlushMaxMemtablesUnset &&
 		disableJournal &&
 		indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr &&

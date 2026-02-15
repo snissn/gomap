@@ -898,15 +898,25 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid value-log outer-leaf block codec %d", opts.ValueLog.OuterLeafBlockCodec)
 	}
-	switch normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode) {
+	indexOuterLeafMode := normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
+	switch indexOuterLeafMode {
 	case IndexOuterLeafModeV1, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
 	default:
 		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
 	}
-	switch normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode) {
+	walFenceMode := normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode)
+	switch walFenceMode {
 	case ValueLogWALFenceModeRIDJoin, ValueLogWALFenceModeSimpleInline:
 	default:
 		return fmt.Errorf("treedb: invalid value-log WAL fence mode %q", opts.ValueLog.WALFenceMode)
+	}
+	if indexOuterLeafMode == IndexOuterLeafModeV2FencePtr && opts.Durability != DurabilityWALOffRelaxed {
+		// For WAL-enabled v2_fenceptr, only simple_inline is supported. Keep empty
+		// mode as the caller default/auto path; reject explicit incompatible mode.
+		rawFenceMode := strings.TrimSpace(string(opts.ValueLog.WALFenceMode))
+		if rawFenceMode != "" && walFenceMode != ValueLogWALFenceModeSimpleInline {
+			return fmt.Errorf("treedb: unsupported value-log WAL fence mode %q for WAL-enabled index outer leaf mode %q (use %q)", opts.ValueLog.WALFenceMode, indexOuterLeafMode, ValueLogWALFenceModeSimpleInline)
+		}
 	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
