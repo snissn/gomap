@@ -1179,6 +1179,12 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 			}
 			dst++
 		}
+		// Clear the discarded tail to avoid retaining large key/value
+		// references in pooled entry slices.
+		for i := dst; i < len(ops); i++ {
+			var zero batch.Entry
+			ops[i] = zero
+		}
 		ops = ops[:dst]
 	}
 	putValueLogPtrs(ptrs)
@@ -5892,7 +5898,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 					framesTotal++
 				}
 			} else if plan.writeMode == vlogWriteOff && (rawWriterInto != nil || rawBufferedInto != nil) {
-				useBufferedRaw := rawBufferedInto != nil && db.outerLeafV2Enabled() && allOuterLeafRecordValues(segment)
+				useBufferedRaw := rawBufferedInto != nil && db.outerLeafFenceV2Enabled() && allOuterLeafRecordValues(segment)
 				var (
 					stats    valuelog.FrameStats
 					batchErr error
@@ -12019,7 +12025,10 @@ func (db *DB) Stats() map[string]string {
 		if depthSnap.PositiveRunMaxNs > queueDepthPositiveRunMaxNs {
 			queueDepthPositiveRunMaxNs = depthSnap.PositiveRunMaxNs
 		}
-		if snapper, ok := any(l.vlog).(interface {
+		l.vlogMu.Lock()
+		vlogWriter := l.vlog
+		l.vlogMu.Unlock()
+		if snapper, ok := any(vlogWriter).(interface {
 			RawWritevStats() valuelog.RawWritevStats
 		}); ok {
 			snap := snapper.RawWritevStats()
@@ -12028,7 +12037,7 @@ func (db *DB) Stats() map[string]string {
 			rawWritevIovecs += snap.Iovecs
 			rawWritevFlushes += snap.Flushes
 		}
-		if snapper, ok := any(l.vlog).(interface {
+		if snapper, ok := any(vlogWriter).(interface {
 			RawWriteStats() valuelog.RawWriteStats
 		}); ok {
 			snap := snapper.RawWriteStats()
