@@ -260,8 +260,9 @@ type ValueLogOptions struct {
 	//
 	// 0 uses a default.
 	OuterLeafBlockRestartInterval int
-	// OuterLeafBlockCacheEntries bounds the number of decoded blocks that are
-	// cached for pointer reads when IndexOuterLeafMode=v2_blockptr.
+	// OuterLeafBlockCacheEntries bounds the number of decoded blocks cached for
+	// pointer and fence-pointer reads when an index outer-leaf mode is enabled
+	// (for example, IndexOuterLeafMode=v2_blockptr or v2_fenceptr).
 	// 0 disables the cache.
 	OuterLeafBlockCacheEntries int
 	// IncompressibleHoldBytes configures auto-mode suppression duration after

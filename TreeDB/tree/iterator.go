@@ -1457,9 +1457,20 @@ func (it *Iterator) prefetchPointerRun() bool {
 	it.prefetchStep = step
 	it.prefetchPtrs = it.prefetchPtrs[:0]
 	it.prefetchKeys = it.prefetchKeys[:0]
+	needsKeys := it.slabKeyBatcher != nil || it.slabKeyAppender != nil || it.slabKeyReader != nil
 
 	for idx := top.Index; idx >= 0 && idx < count && len(it.prefetchPtrs) < iteratorPointerBatchMax; idx += step {
-		key, _, ptr, flags, err := top.Node.GetLeafEntryView(uint16(idx))
+		var (
+			key   []byte
+			ptr   page.ValuePtr
+			flags byte
+			err   error
+		)
+		if needsKeys {
+			key, _, ptr, flags, err = top.Node.GetLeafEntryView(uint16(idx))
+		} else {
+			_, ptr, flags, err = top.Node.GetLeafValueView(uint16(idx))
+		}
 		if err != nil {
 			it.err = err
 			it.valid = false
@@ -1473,9 +1484,11 @@ func (it *Iterator) prefetchPointerRun() bool {
 			break
 		}
 		it.prefetchPtrs = append(it.prefetchPtrs, ptr)
-		// GetLeafEntryView may return a scratch-backed key for prefix-compressed
-		// leaves; copy so batched key-aware pointer reads see stable bytes.
-		it.prefetchKeys = append(it.prefetchKeys, append([]byte(nil), key...))
+		if needsKeys {
+			// GetLeafEntryView may return a scratch-backed key for prefix-compressed
+			// leaves; copy so batched key-aware pointer reads see stable bytes.
+			it.prefetchKeys = append(it.prefetchKeys, append([]byte(nil), key...))
+		}
 	}
 
 	// Keep isolated pointers on the single-read path.

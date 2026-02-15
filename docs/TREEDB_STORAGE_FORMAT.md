@@ -104,7 +104,7 @@ Point lookups and iterators resolve `{pointer,key}` by decoding one payload
 block and finding the requested key inside that block.
 
 Pre-alpha note: these `v2` outer-leaf layouts are intentionally allowed to
-change. Old experimental DB directories may fail open after format updates.
+change. Old experimental DB directories may fail to open after format updates.
 
 ### Leaf entry encoding (index leaf pages)
 

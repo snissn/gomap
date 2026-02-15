@@ -307,7 +307,7 @@ Read path resolves pointer+key by decoding one block payload and searching
 inside it for the requested key.
 
 Pre-alpha note: `v2` outer-leaf layouts are still evolving. DB directories
-written by older experimental builds may fail open under newer binaries (and
+written by older experimental builds may fail to open under newer binaries (and
 vice versa).
 
 ## 8. Commit-Log Segment Format

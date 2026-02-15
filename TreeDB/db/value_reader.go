@@ -35,6 +35,12 @@ func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte) ([]byte, error) 
 	if !outerleaf.ModeEnabled(r.outerLeafMode) {
 		return raw, nil
 	}
+	if !outerleaf.HasMagic(raw) {
+		if strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr {
+			return nil, fmt.Errorf("value reader: expected outer-leaf payload in fence mode ptr=%+v", ptr)
+		}
+		return raw, nil
+	}
 	block, err := r.outerLeafBlock(ptr, raw)
 	if err != nil {
 		return nil, err
@@ -59,6 +65,12 @@ func (r valueReader) decodeValueForKey(ptr page.ValuePtr, key, raw []byte) ([]by
 
 func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte) ([]byte, bool, error) {
 	if !outerleaf.ModeEnabled(r.outerLeafMode) {
+		return raw, true, nil
+	}
+	if !outerleaf.HasMagic(raw) {
+		if strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr {
+			return nil, false, fmt.Errorf("value reader: expected outer-leaf payload in fence mode ptr=%+v", ptr)
+		}
 		return raw, true, nil
 	}
 	block, err := r.outerLeafBlock(ptr, raw)
