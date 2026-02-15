@@ -261,12 +261,17 @@ for profile in profiles:
 
         passed = True
         reason = ""
-        if profile in gate_profiles and ratio_vs_force is not None:
-            need = thresholds.get(test_name, 0.0)
-            passed = ratio_vs_force >= need
-            if not passed:
-                reason = f"{test_name} ratio vs v1_forceptr {ratio_vs_force:.3f} < {need:.3f}"
+        if profile in gate_profiles:
+            if ratio_vs_force is None:
+                passed = False
+                reason = f"{test_name} missing v1_forceptr median for gate comparison"
                 failures.append({"profile": profile, "test": test_name, "reason": reason})
+            else:
+                need = thresholds.get(test_name, 0.0)
+                passed = ratio_vs_force >= need
+                if not passed:
+                    reason = f"{test_name} ratio vs v1_forceptr {ratio_vs_force:.3f} < {need:.3f}"
+                    failures.append({"profile": profile, "test": test_name, "reason": reason})
 
         compare_rows.append({
             "profile": profile,
