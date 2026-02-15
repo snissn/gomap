@@ -1512,7 +1512,6 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		vlogLane          *lane
 		dictID            uint64
 		dictIDReady       bool
-		vlogAppended      bool
 	)
 
 	ensureVlogLane := func() error {
@@ -1612,7 +1611,6 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			if err != nil {
 				return err
 			}
-			vlogAppended = true
 			if len(vlogPtrs) != len(records) {
 				putValueLogPtrs(vlogPtrs)
 				return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(records))
@@ -1729,17 +1727,8 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		return 0, err
 	}
 	if vlogLane != nil {
-		if vlogAppended {
-			if sync {
-				if err := db.syncValueLogLane(vlogLane); err != nil {
-					return 0, err
-				}
-			} else {
-				if err := db.flushValueLogLane(vlogLane); err != nil {
-					return 0, err
-				}
-			}
-		}
+		// Do not flush/sync the value-log lane here. flushLaneOnce performs one
+		// flush boundary after value-log appends so we avoid redundant syscalls.
 		retainPath := db.currentValueLogPath(vlogLane)
 		if retainPath != "" {
 			db.markValueLogRetain(retainPath)
@@ -8390,7 +8379,7 @@ func (db *DB) maybeAssistFlush() {
 			return
 		}
 		if stopBytes > 0 && backlog >= stopBytes {
-			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			_ = db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			return
 		}
 		if slowdownBytes > 0 && backlog > slowdownBytes {
@@ -12468,11 +12457,11 @@ func (db *DB) CompactionAssist() {
 			return
 		}
 		if stopBytes > 0 && backlog >= stopBytes {
-			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			_ = db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			return
 		}
 		if slowdownBytes > 0 && backlog > slowdownBytes {
-			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			_ = db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			return
 		}
 		if early := db.deferredAssistEarlyTriggerBytes(slowdownBytes, stopBytes); early > 0 && backlog >= early {
@@ -12490,7 +12479,7 @@ func (db *DB) CompactionAssist() {
 		needs := len(db.queue) > db.maxQueuedMemtables
 		db.mu.RUnlock()
 		if needs {
-			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
+			_ = db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 		}
 	}
 }

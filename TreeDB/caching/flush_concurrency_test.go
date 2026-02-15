@@ -386,7 +386,7 @@ func TestCachingDB_FlushSomeAndFlushAllStress(t *testing.T) {
 				return
 			default:
 			}
-			db.flushSome(false, 2, 50*time.Millisecond)
+			_ = db.flushSome(false, 2, 50*time.Millisecond)
 		}
 	}
 
