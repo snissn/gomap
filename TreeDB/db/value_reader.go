@@ -15,10 +15,6 @@ type valueReader struct {
 	cache         *outerLeafBlockCache
 }
 
-func (r valueReader) FenceLookupEnabled() bool {
-	return strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr
-}
-
 type unsafeAppendReader interface {
 	ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error)
 }
