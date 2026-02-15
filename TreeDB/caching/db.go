@@ -6563,6 +6563,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes)
+	if autoOuterLeafPayloads && mode == vlogCompressionAuto {
+		writeMode = vlogWriteOff
+	}
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false
