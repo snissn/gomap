@@ -2,6 +2,10 @@
 
 This document defines startup recovery behavior.
 
+TreeDB is pre-alpha. Recovery behavior across format changes is intentionally
+strict; newer binaries may reject or skip older/newer log layouts rather than
+attempting compatibility shims.
+
 ## 1. Recovery Entry Points
 
 Recovery is executed during `Open` for read-write handles.
@@ -79,10 +83,14 @@ Otherwise:
 - Batch ordering rules:
   - batches with non-zero `Seq` sorted by `Seq` then read order,
   - legacy `Seq=0` batches preserve original read order.
+- legacy `Seq=0` replay is applied first, then sequenced batches are applied in
+  sequence order; ties use read order.
 - Truncated tail in commit log stops replay at partial tail safely.
 - For sequence-numbered batches, commit fences are satisfied only when all RID
   references (including grouped fence-RID payload references) are present in the
   scanned value-log map.
+- grouped payload decode/validation errors are treated as corruption and fail
+  recovery (no partial grouped apply).
 
 ### 4.3 Apply batches to backend
 

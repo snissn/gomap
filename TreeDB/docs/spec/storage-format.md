@@ -358,6 +358,9 @@ Validation rules:
 - `OpDelete`: `RID == 0`, `ValueLen == 0`.
 - `OpSetFenceRIDGroup`: `KeyLen == 0`, `RID == 0`, grouped key/RID pairs are encoded in `Value`.
 
+Writer and reader both reject grouped records with non-empty key headers. This
+is a hard invariant, not a best-effort normalization.
+
 Pre-alpha compatibility note: introducing new opcodes (for example
 `OpSetFenceRIDGroup`) is not backward-compatible with older binaries.
 

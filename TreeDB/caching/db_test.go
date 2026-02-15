@@ -1249,6 +1249,215 @@ func TestCachingDB_BatchWALFenceGroupCanonicalizesFinalState(t *testing.T) {
 	}
 }
 
+func TestCachingDB_UnifiedWriteCounters_SetDeleteBatch(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:      1,
+			ForcePointers:         true,
+			WALFenceGroupEncoding: db.ValueLogWALFenceGroupEncodingSimple,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                1 << 20,
+		JournalLanes:                  1,
+		ForceValueLogPointers:         true,
+		ValueLogPointerThreshold:      1,
+		IndexOuterLeafMode:            db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceGroupEncoding: db.ValueLogWALFenceGroupEncodingSimple,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	val := func(ch byte) []byte { return bytes.Repeat([]byte{ch}, 64) }
+	if err := cache.Set([]byte("a"), val('1')); err != nil {
+		t.Fatalf("Set(a): %v", err)
+	}
+	if err := cache.Delete([]byte("a")); err != nil {
+		t.Fatalf("Delete(a): %v", err)
+	}
+	b := cache.NewBatch()
+	if err := b.Set([]byte("b"), val('2')); err != nil {
+		t.Fatalf("Batch.Set(b): %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("Batch.WriteSync: %v", err)
+	}
+	_ = b.Close()
+
+	stats := cache.Stats()
+	if got := statUint64(t, stats, "treedb.cache.unified_write.set.calls"); got != 1 {
+		t.Fatalf("unified set calls=%d want=1", got)
+	}
+	if got := statUint64(t, stats, "treedb.cache.unified_write.set.ops"); got != 1 {
+		t.Fatalf("unified set ops=%d want=1", got)
+	}
+	if got := statUint64(t, stats, "treedb.cache.unified_write.delete.calls"); got != 1 {
+		t.Fatalf("unified delete calls=%d want=1", got)
+	}
+	if got := statUint64(t, stats, "treedb.cache.unified_write.delete.ops"); got != 1 {
+		t.Fatalf("unified delete ops=%d want=1", got)
+	}
+	if got := statUint64(t, stats, "treedb.cache.unified_write.batch.calls"); got != 1 {
+		t.Fatalf("unified batch calls=%d want=1", got)
+	}
+	if got := statUint64(t, stats, "treedb.cache.unified_write.batch.ops"); got != 1 {
+		t.Fatalf("unified batch ops=%d want=1", got)
+	}
+	if got := statUint64(t, stats, "treedb.cache.wal_fence_group.singleton_fallback"); got < 2 {
+		t.Fatalf("expected singleton fallback >=2 for Set+Batch Set, got %d", got)
+	}
+	if got := statUint64(t, stats, "treedb.cache.wal_fence_group.chunks"); got < 2 {
+		t.Fatalf("expected grouped chunk counter >=2 for Set+Batch Set, got %d", got)
+	}
+	if got, err := cache.Get([]byte("a")); err != nil {
+		t.Fatalf("Get(a): %v", err)
+	} else if got != nil {
+		t.Fatalf("Get(a): expected nil, got %q", string(got))
+	}
+	if got, err := cache.Get([]byte("b")); err != nil {
+		t.Fatalf("Get(b): %v", err)
+	} else if !bytes.Equal(got, val('2')) {
+		t.Fatalf("Get(b): got %q want %q", string(got), string(val('2')))
+	}
+}
+
+func TestCachingDB_SetDeleteBatchEquivalence(t *testing.T) {
+	type op struct {
+		put   bool
+		value byte
+	}
+	scenarios := []struct {
+		name string
+		ops  []op
+		want []byte
+	}{
+		{
+			name: "put_put",
+			ops: []op{
+				{put: true, value: '1'},
+				{put: true, value: '2'},
+			},
+			want: bytes.Repeat([]byte{'2'}, 48),
+		},
+		{
+			name: "put_delete",
+			ops: []op{
+				{put: true, value: '3'},
+				{put: false},
+			},
+			want: nil,
+		},
+		{
+			name: "delete_put",
+			ops: []op{
+				{put: false},
+				{put: true, value: '4'},
+			},
+			want: bytes.Repeat([]byte{'4'}, 48),
+		},
+	}
+
+	openCache := func(t *testing.T, dir string) *DB {
+		t.Helper()
+		backendOpts := db.Options{
+			Dir:                dir,
+			ChunkSize:          64 * 1024,
+			IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+			ValueLog: db.ValueLogOptions{
+				PointerThreshold:      1,
+				ForcePointers:         true,
+				WALFenceGroupEncoding: db.ValueLogWALFenceGroupEncodingSimple,
+			},
+		}
+		backend, err := db.Open(backendOpts)
+		if err != nil {
+			t.Fatalf("backend open: %v", err)
+		}
+		cache, err := Open(dir, backend, Options{
+			FlushThreshold:                1 << 20,
+			JournalLanes:                  1,
+			ForceValueLogPointers:         true,
+			ValueLogPointerThreshold:      1,
+			IndexOuterLeafMode:            db.IndexOuterLeafModeV2FencePtr,
+			ValueLogWALFenceGroupEncoding: db.ValueLogWALFenceGroupEncodingSimple,
+		})
+		if err != nil {
+			_ = backend.Close()
+			t.Fatalf("cache open: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := cache.Close(); err != nil {
+				t.Fatalf("cache close: %v", err)
+			}
+		})
+		return cache
+	}
+
+	valueFor := func(ch byte) []byte { return bytes.Repeat([]byte{ch}, 48) }
+	key := []byte("k")
+	for _, tc := range scenarios {
+		t.Run(tc.name, func(t *testing.T) {
+			setDeleteCache := openCache(t, t.TempDir())
+			for _, op := range tc.ops {
+				var err error
+				if op.put {
+					err = setDeleteCache.Set(key, valueFor(op.value))
+				} else {
+					err = setDeleteCache.Delete(key)
+				}
+				if err != nil {
+					t.Fatalf("set/delete apply: %v", err)
+				}
+			}
+			gotSetDelete, err := setDeleteCache.Get(key)
+			if err != nil {
+				t.Fatalf("set/delete Get: %v", err)
+			}
+
+			batchCache := openCache(t, t.TempDir())
+			b := batchCache.NewBatchWithSize(len(tc.ops))
+			for _, op := range tc.ops {
+				var err error
+				if op.put {
+					err = b.Set(key, valueFor(op.value))
+				} else {
+					err = b.Delete(key)
+				}
+				if err != nil {
+					t.Fatalf("batch apply: %v", err)
+				}
+			}
+			if err := b.WriteSync(); err != nil {
+				t.Fatalf("batch write: %v", err)
+			}
+			_ = b.Close()
+			gotBatch, err := batchCache.Get(key)
+			if err != nil {
+				t.Fatalf("batch Get: %v", err)
+			}
+
+			if !bytes.Equal(gotSetDelete, tc.want) {
+				t.Fatalf("set/delete got %q want %q", string(gotSetDelete), string(tc.want))
+			}
+			if !bytes.Equal(gotBatch, tc.want) {
+				t.Fatalf("batch got %q want %q", string(gotBatch), string(tc.want))
+			}
+		})
+	}
+}
+
 func TestAppendFenceRIDGroupedWALRecords_SingletonFallbackUnderRecordCap(t *testing.T) {
 	oldMax := limits.MaxRecordSize
 	t.Cleanup(func() { limits.MaxRecordSize = oldMax })

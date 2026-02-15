@@ -2,6 +2,10 @@
 
 This document defines write semantics for TreeDB cached mode and backend mode.
 
+TreeDB is pre-alpha. On-disk/log format changes in this document are not
+backward-compatible by default; mixed-version reopen may fail and rebuilding test
+or benchmark DB directories is expected.
+
 ## 1. Durability Modes
 
 `Options.Durability` selects one of three modes.
@@ -45,11 +49,16 @@ new large values stop using pointers until pressure drops.
 
 For each write batch, implementation conceptually performs:
 
-1. Choose lane.
-2. For eligible values, append to value log and build `ValuePtr` references.
-3. If WAL enabled, append commit-log batch (inline, RID, or grouped fence RID form).
-4. Apply entries to mutable memtable.
-5. Acknowledge caller based on sync mode and durability mode.
+1. Route `Set`, `Delete`, and `Batch` through one internal write pipeline.
+2. Canonicalize operations before WAL/value-log work:
+   - last-write-wins by key,
+   - deterministic key ordering,
+   - memtable apply uses the same canonicalized op stream as WAL encoding.
+3. Choose lane.
+4. For eligible values, append to value log and build `ValuePtr` references.
+5. If WAL enabled, append commit-log batch (inline, RID, or grouped fence RID form).
+6. Apply entries to mutable memtable.
+7. Acknowledge caller based on sync mode and durability mode.
 
 Journal and value-log writes are decoupled resources with separate rotation/sync paths.
 
@@ -79,7 +88,20 @@ Rules:
 - record header key is empty (`KeyLen=0`), header RID is zero,
 - chunks are bounded by commitlog record-size limits,
 - singleton chunks must fall back to legacy `OpSetRID` (size deterministic and
-  no grouped framing overhead for one key).
+  no grouped framing overhead for one key),
+- non-batch `Set` traffic must still execute this grouped builder path (singleton
+  fallback is expected for one-key chunks).
+
+For WAL-on `v2_fenceptr`, ordering remains:
+
+1. value-log append,
+2. WAL append,
+3. memtable publish.
+
+Operational counters:
+
+- grouped WAL: `treedb.cache.wal_fence_group.{records,keys,chunks,singleton_fallback}`
+- unified path usage: `treedb.cache.unified_write.{set,delete,batch,ingress}.{calls,ops}`
 
 ## 4. Backend Commit Model
 

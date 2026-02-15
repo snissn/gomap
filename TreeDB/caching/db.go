@@ -2814,6 +2814,14 @@ type DB struct {
 	walFenceGroupKeys              atomic.Uint64
 	walFenceGroupSingletonFallback atomic.Uint64
 	walFenceGroupChunks            atomic.Uint64
+	unifiedWriteSetCalls           atomic.Uint64
+	unifiedWriteSetOps             atomic.Uint64
+	unifiedWriteDeleteCalls        atomic.Uint64
+	unifiedWriteDeleteOps          atomic.Uint64
+	unifiedWriteBatchCalls         atomic.Uint64
+	unifiedWriteBatchOps           atomic.Uint64
+	unifiedWriteIngressCalls       atomic.Uint64
+	unifiedWriteIngressOps         atomic.Uint64
 	valueLogWarned                 atomic.Bool
 	valueLogHardCapWarned          atomic.Bool
 	valueLogRetainedClosedBytes    atomic.Int64
@@ -3335,15 +3343,52 @@ func (db *DB) noteWriteSortedRun(first, last []byte, count int) {
 	if count > 1 {
 		seqAdds += uint64(count - 1)
 	}
+	overwriteAdds := uint64(0)
 	stats.lastKeyMu.Lock()
-	if len(first) > 0 && stats.hasLastKey && bytes.Compare(stats.lastKey, first) < 0 {
-		seqAdds++
+	if len(first) > 0 && stats.hasLastKey {
+		switch bytes.Compare(stats.lastKey, first) {
+		case -1:
+			seqAdds++
+		case 0:
+			overwriteAdds++
+		}
 	}
 	stats.lastKey = append(stats.lastKey[:0], last...)
 	stats.hasLastKey = true
 	stats.lastKeyMu.Unlock()
 	if seqAdds > 0 {
 		stats.seqWrites.Add(seqAdds)
+	}
+	if overwriteAdds > 0 {
+		stats.overwriteWrites.Add(overwriteAdds)
+	}
+}
+
+func (db *DB) noteWritePattern(pattern batchWritePattern) {
+	if !db.memtableAdaptive || !db.memtableAdaptiveObserve.Load() || pattern.count == 0 || len(pattern.last) == 0 {
+		return
+	}
+	stats := &db.memtableStats
+	stats.writes.Add(pattern.count)
+	seqAdds := pattern.seq
+	overwriteAdds := pattern.overwrite
+	stats.lastKeyMu.Lock()
+	if len(pattern.first) > 0 && stats.hasLastKey {
+		switch bytes.Compare(stats.lastKey, pattern.first) {
+		case -1:
+			seqAdds++
+		case 0:
+			overwriteAdds++
+		}
+	}
+	stats.lastKey = append(stats.lastKey[:0], pattern.last...)
+	stats.hasLastKey = true
+	stats.lastKeyMu.Unlock()
+	if seqAdds > 0 {
+		stats.seqWrites.Add(seqAdds)
+	}
+	if overwriteAdds > 0 {
+		stats.overwriteWrites.Add(overwriteAdds)
 	}
 }
 
@@ -4459,6 +4504,25 @@ func batchEntriesByteSize(entries []batch.Entry) int {
 	return total
 }
 
+func (b *Batch) canonicalizeEntriesForUnifiedWrite() {
+	if b == nil {
+		return
+	}
+	if len(b.entries) > 1 {
+		b.entries = canonicalizeBatchEntriesLastWriteWinsSorted(b.entries)
+		b.size = batchEntriesByteSize(b.entries)
+	}
+	if len(b.entries) == 0 {
+		b.firstKey = nil
+		b.lastKey = nil
+		return
+	}
+	b.firstKey = b.entries[0].Key
+	b.lastKey = b.entries[len(b.entries)-1].Key
+	// Canonicalization guarantees deterministic key order for fast sorted applies.
+	b.streamEligible = true
+}
+
 func uvarintLen(v uint64) int {
 	n := 1
 	for v >= 0x80 {
@@ -4559,6 +4623,30 @@ func (db *DB) assignCommitSeq(records []logRecord) {
 	seq := db.nextCommitSeq.Add(1)
 	for i := range records {
 		records[i].Seq = seq
+	}
+}
+
+func (db *DB) recordUnifiedWritePath(source unifiedWriteSource, opCount int) {
+	if db == nil {
+		return
+	}
+	ops := uint64(0)
+	if opCount > 0 {
+		ops = uint64(opCount)
+	}
+	switch source {
+	case unifiedWriteSourceSet:
+		db.unifiedWriteSetCalls.Add(1)
+		db.unifiedWriteSetOps.Add(ops)
+	case unifiedWriteSourceDelete:
+		db.unifiedWriteDeleteCalls.Add(1)
+		db.unifiedWriteDeleteOps.Add(ops)
+	case unifiedWriteSourceIngress:
+		db.unifiedWriteIngressCalls.Add(1)
+		db.unifiedWriteIngressOps.Add(ops)
+	default:
+		db.unifiedWriteBatchCalls.Add(1)
+		db.unifiedWriteBatchOps.Add(ops)
 	}
 }
 
@@ -5040,26 +5128,9 @@ func (db *DB) processDomainIngressBatch(reqs []domainIngressRequest) {
 	if len(reqs) == 0 {
 		return
 	}
-	if len(reqs) == 1 {
-		req := reqs[0]
-		var err error
-		switch req.op {
-		case domainIngressOpSet:
-			err = db.setDirect(req.key, req.value, false)
-		case domainIngressOpDelete:
-			err = db.deleteDirect(req.key, false)
-		default:
-			err = fmt.Errorf("cachingdb: unknown ingress op %d", req.op)
-		}
-		db.domainIngressProcessed.Add(1)
-		if req.done != nil {
-			req.done <- err
-			close(req.done)
-		}
-		return
-	}
 
 	b := db.NewBatchWithSize(len(reqs))
+	b.source = unifiedWriteSourceIngress
 	var err error
 	for i := range reqs {
 		req := reqs[i]
@@ -7208,6 +7279,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		} else if bytesWrittenLive > 0 {
 			l.vlogDirty.Store(true)
 		}
+		if l.vlogPath != "" && l.vlogPath != l.vlogRetainedPath {
+			l.vlogRetainedPath = l.vlogPath
+			noteRotatePath(l.vlogPath)
+		}
 	}
 	if db.testBeforeVlogUnlock != nil {
 		db.testBeforeVlogUnlock(int(l.id))
@@ -8885,178 +8960,32 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	return db.setDirect(key, value, sync)
 }
 
+func (db *DB) writeSingleOp(op batch.OpType, key, value []byte, sync bool, source unifiedWriteSource) error {
+	if db == nil {
+		return nil
+	}
+	b := db.NewBatchWithSize(1)
+	b.source = source
+	var err error
+	switch op {
+	case batch.OpPut:
+		err = b.Set(key, value)
+	case batch.OpDelete:
+		err = b.Delete(key)
+	default:
+		err = fmt.Errorf("cachingdb: unknown single-op type %d", op)
+	}
+	if err == nil {
+		err = b.writeRegular(sync)
+	}
+	if closeErr := b.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	return err
+}
+
 func (db *DB) setDirect(key, value []byte, sync bool) error {
-	db.writeMu.RLock()
-	needRotate := false
-	needSyncBarrier := false
-	var ptr page.ValuePtr
-	var retainPath string
-	usePointer := false
-	debugPtr := db.debugFlushPointers
-
-	shard := db.shardForKey(key)
-
-	durability := journalDurabilityNone
-	if sync {
-		if db.relaxedSync {
-			durability = journalDurabilityFlush
-		} else {
-			durability = journalDurabilitySync
-		}
-	}
-	eligible := db.forceValueLogPointers || len(value) > db.valueLogThresholdForKey(key)
-	valueLogEnabled := db.valueLogEnabled()
-	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
-	deferPointers := false
-	if allowPointers && db.deferredValueLogEnabled() {
-		// In deferred mode we keep the mutable entry inline and regroup+append to
-		// value-log at flush time.
-		deferPointers = true
-		allowPointers = false
-		if eligible {
-			db.recordDeferredFenceEnqueued(1, uint64(len(key)+len(value)))
-		}
-	}
-	if allowPointers && db.disableJournal && !db.memtableValueLogPointers {
-		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
-		// so repeated overwrites can coalesce in the memtable before hitting disk.
-		allowPointers = false
-	}
-	addBytesForLimit := int64(len(key) + len(value))
-	if allowPointers && db.memtableValueLogPointers {
-		// Pointer-in-memtable mode stores only the key plus packed pointer payload.
-		addBytesForLimit = int64(len(key) + page.ValuePtrSize)
-	}
-	if maxMemtableBytesPerShard > 0 {
-		if addBytesForLimit > maxMemtableBytesPerShard {
-			db.writeMu.RUnlock()
-			return ErrMemtableFull
-		}
-		shard.mu.Lock()
-		exceedsLimit := db.shardExceedsLimit(shard, addBytesForLimit)
-		shard.mu.Unlock()
-		if exceedsLimit {
-			db.writeMu.RUnlock()
-			return ErrMemtableFull
-		}
-	}
-	if debugPtr && eligible {
-		db.debugPtrEligible.Add(1)
-	}
-
-	var lane *lane
-	if allowPointers || !db.disableJournal {
-		l, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(db.shardIndex(key)))
-		if err != nil {
-			db.writeMu.RUnlock()
-			return err
-		}
-		lane = l
-		if durability == journalDurabilitySync {
-			defer db.releaseLaneSync(lane)
-		}
-	}
-
-	if allowPointers {
-		dictID := uint64(0)
-		if db.valueLogDictTrain.TrainBytes > 0 {
-			id, err := db.currentDictID(context.Background())
-			if err != nil {
-				db.writeMu.RUnlock()
-				return err
-			}
-			dictID = id
-		} else {
-			dictID = db.dictCurrentCached.Load()
-		}
-
-		rid := db.nextRID.Add(1)
-		var retain string
-		appendPtr, retain, appendErr := db.appendValueLogOneWithKey(lane, dictID, nil, rid, key, value, durability)
-		if appendErr != nil {
-			db.writeMu.RUnlock()
-			return appendErr
-		}
-		ptr = appendPtr
-		usePointer = true
-		if debugPtr {
-			db.debugPtrUsed.Add(1)
-		}
-		retainPath = retain
-
-		if !db.disableJournal {
-			rec := logRecord{Op: logOpSetRID, Key: key, RID: rid}
-			if err := db.appendWALOne(lane, rec, durability); err != nil {
-				db.writeMu.RUnlock()
-				return err
-			}
-		}
-	} else if !db.disableJournal {
-		if debugPtr && eligible && !deferPointers {
-			if !valueLogEnabled {
-				db.debugPtrDisabled.Add(1)
-			} else {
-				db.debugPtrDenied.Add(1)
-			}
-		}
-		rec := logRecord{Op: logOpSetInline, Key: key, Value: value}
-		if err := db.appendWALOne(lane, rec, durability); err != nil {
-			db.writeMu.RUnlock()
-			return err
-		}
-	} else if debugPtr && eligible && !deferPointers {
-		if !valueLogEnabled {
-			db.debugPtrDisabled.Add(1)
-		} else {
-			db.debugPtrDenied.Add(1)
-		}
-	}
-
-	shard.mu.Lock()
-	if usePointer {
-		memVal := []byte(nil)
-		if !db.memtableValueLogPointers {
-			memVal = value
-		}
-		shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
-	} else {
-		shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
-	}
-	shard.rng.add(key)
-	newBytes := shard.mem.Size()
-	delta := newBytes - shard.bytes
-	shard.bytes = newBytes
-	db.mutableBytes.Add(delta)
-	shard.mu.Unlock()
-	db.noteWriteKey(key)
-
-	// 3. Check Threshold
-	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
-		needRotate = true
-	}
-	if sync && db.disableJournal {
-		needSyncBarrier = true
-	}
-	db.writeMu.RUnlock()
-
-	if retainPath != "" {
-		db.markValueLogRetain(retainPath)
-	}
-
-	if needRotate {
-		if err := db.maybeRotateMemtable(true); err != nil {
-			return err
-		}
-	}
-	if needSyncBarrier {
-		if err := db.syncBarrierAfterWrite(true); err != nil {
-			return err
-		}
-	}
-
-	db.noteWrite()
-	db.maybeAssistFlush()
-	return nil
+	return db.writeSingleOp(batch.OpPut, key, value, sync, unifiedWriteSourceSet)
 }
 
 func (db *DB) Delete(key []byte) error {
@@ -9674,76 +9603,7 @@ func (db *DB) delete(key []byte, sync bool) error {
 }
 
 func (db *DB) deleteDirect(key []byte, sync bool) error {
-	db.writeMu.RLock()
-	needRotate := false
-	needSyncBarrier := false
-
-	shard := db.shardForKey(key)
-	shard.mu.Lock()
-	if db.shardExceedsLimit(shard, int64(len(key))) {
-		shard.mu.Unlock()
-		db.writeMu.RUnlock()
-		return ErrMemtableFull
-	}
-	shard.mu.Unlock()
-
-	if !db.disableJournal {
-		durability := journalDurabilityNone
-		if sync {
-			if db.relaxedSync {
-				durability = journalDurabilityFlush
-			} else {
-				durability = journalDurabilitySync
-			}
-		}
-		lane, err := db.pickLane(durability == journalDurabilitySync, db.laneForShardIndex(db.shardIndex(key)))
-		if err != nil {
-			db.writeMu.RUnlock()
-			return err
-		}
-		if durability == journalDurabilitySync {
-			defer db.releaseLaneSync(lane)
-		}
-		rec := logRecord{Op: logOpDelete, Key: key}
-		if err := db.appendWALOne(lane, rec, durability); err != nil {
-			db.writeMu.RUnlock()
-			return err
-		}
-	}
-
-	shard.mu.Lock()
-	shard.mem.Delete(key)
-	shard.rng.add(key)
-	newBytes := shard.mem.Size()
-	delta := newBytes - shard.bytes
-	shard.bytes = newBytes
-	db.mutableBytes.Add(delta)
-	shard.mu.Unlock()
-	db.noteWriteKey(key)
-
-	// 3. Threshold
-	if db.mutableBytes.Load() > db.mutableFlushThreshold() {
-		needRotate = true
-	}
-	if sync && db.disableJournal {
-		needSyncBarrier = true
-	}
-	db.writeMu.RUnlock()
-
-	if needRotate {
-		if err := db.maybeRotateMemtable(true); err != nil {
-			return err
-		}
-	}
-	if needSyncBarrier {
-		if err := db.syncBarrierAfterWrite(true); err != nil {
-			return err
-		}
-	}
-
-	db.noteWrite()
-	db.maybeAssistFlush()
-	return nil
+	return db.writeSingleOp(batch.OpDelete, key, nil, sync, unifiedWriteSourceDelete)
 }
 
 func (db *DB) canReuseWALSegments() bool {
@@ -12277,6 +12137,14 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.domain_ingress.enqueued"] = fmt.Sprintf("%d", db.domainIngressEnqueued.Load())
 	stats["treedb.cache.domain_ingress.processed"] = fmt.Sprintf("%d", db.domainIngressProcessed.Load())
 	stats["treedb.cache.domain_ingress.fallback_direct"] = fmt.Sprintf("%d", db.domainIngressFallback.Load())
+	stats["treedb.cache.unified_write.set.calls"] = fmt.Sprintf("%d", db.unifiedWriteSetCalls.Load())
+	stats["treedb.cache.unified_write.set.ops"] = fmt.Sprintf("%d", db.unifiedWriteSetOps.Load())
+	stats["treedb.cache.unified_write.delete.calls"] = fmt.Sprintf("%d", db.unifiedWriteDeleteCalls.Load())
+	stats["treedb.cache.unified_write.delete.ops"] = fmt.Sprintf("%d", db.unifiedWriteDeleteOps.Load())
+	stats["treedb.cache.unified_write.batch.calls"] = fmt.Sprintf("%d", db.unifiedWriteBatchCalls.Load())
+	stats["treedb.cache.unified_write.batch.ops"] = fmt.Sprintf("%d", db.unifiedWriteBatchOps.Load())
+	stats["treedb.cache.unified_write.ingress.calls"] = fmt.Sprintf("%d", db.unifiedWriteIngressCalls.Load())
+	stats["treedb.cache.unified_write.ingress.ops"] = fmt.Sprintf("%d", db.unifiedWriteIngressOps.Load())
 	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes+walCurrentBytes)
 	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes)
 	stats["treedb.cache.wal_current_bytes_estimate"] = fmt.Sprintf("%d", walCurrentBytes)
@@ -12968,6 +12836,15 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 // NewBatch implementation for CachingDB
 // batchOp removed, using batch.Entry directly
 
+type unifiedWriteSource uint8
+
+const (
+	unifiedWriteSourceBatch unifiedWriteSource = iota
+	unifiedWriteSourceSet
+	unifiedWriteSourceDelete
+	unifiedWriteSourceIngress
+)
+
 type Batch struct {
 	db           *DB
 	entries      []batch.Entry
@@ -12981,23 +12858,54 @@ type Batch struct {
 	shardEntries [][]batch.Entry
 
 	closed         bool
+	source         unifiedWriteSource
 	streamEligible bool
 	streamTried    bool
 	firstKey       []byte
 	lastKey        []byte
 	batchRange     keyRange
+	origPattern    batchWritePattern
 	dictID         uint64
 	dictIDValid    bool
 	dictBytes      []byte
 	dictBytesValid bool
 }
 
+type batchWritePattern struct {
+	count     uint64
+	seq       uint64
+	overwrite uint64
+	first     []byte
+	last      []byte
+}
+
 func (db *DB) NewBatch() *Batch {
-	return &Batch{db: db, entries: make([]batch.Entry, 0, 16), streamEligible: true}
+	return &Batch{db: db, entries: make([]batch.Entry, 0, 16), source: unifiedWriteSourceBatch, streamEligible: true}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	return &Batch{db: db, entries: make([]batch.Entry, 0, size), streamEligible: true}
+	return &Batch{db: db, entries: make([]batch.Entry, 0, size), source: unifiedWriteSourceBatch, streamEligible: true}
+}
+
+func (b *Batch) noteOriginalOrderKey(key []byte) {
+	if len(key) == 0 {
+		return
+	}
+	p := &b.origPattern
+	if p.count == 0 {
+		p.first = key
+		p.last = key
+		p.count = 1
+		return
+	}
+	switch bytes.Compare(p.last, key) {
+	case -1:
+		p.seq++
+	case 0:
+		p.overwrite++
+	}
+	p.last = key
+	p.count++
 }
 
 // Reset clears the batch for reuse without closing it.
@@ -13032,11 +12940,13 @@ func (b *Batch) Reset() {
 	}
 	b.size = 0
 	b.walBuf = b.walBuf[:0]
+	b.source = unifiedWriteSourceBatch
 	b.streamEligible = true
 	b.streamTried = false
 	b.firstKey = nil
 	b.lastKey = nil
 	b.batchRange = keyRange{}
+	b.origPattern = batchWritePattern{}
 	b.dictID = 0
 	b.dictIDValid = false
 	b.dictBytes = nil
@@ -13085,6 +12995,7 @@ func (b *Batch) Set(key, value []byte) error {
 		Key:   keyCopy,
 		Value: valCopy,
 	})
+	b.noteOriginalOrderKey(keyCopy)
 	b.size += len(keyCopy) + len(valCopy)
 
 	b.maybeSwitchToStreaming()
@@ -13129,6 +13040,7 @@ func (b *Batch) SetView(key, value []byte) error {
 		Key:   key,
 		Value: value,
 	})
+	b.noteOriginalOrderKey(key)
 	b.size += len(key) + len(value)
 
 	b.maybeSwitchToStreaming()
@@ -13168,6 +13080,7 @@ func (b *Batch) Delete(key []byte) error {
 		Type: batch.OpDelete,
 		Key:  keyCopy,
 	})
+	b.noteOriginalOrderKey(keyCopy)
 	b.size += len(keyCopy)
 
 	b.maybeSwitchToStreaming()
@@ -13208,6 +13121,7 @@ func (b *Batch) DeleteView(key []byte) error {
 		Type: batch.OpDelete,
 		Key:  key,
 	})
+	b.noteOriginalOrderKey(key)
 	b.size += len(key)
 
 	b.maybeSwitchToStreaming()
@@ -13250,6 +13164,7 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 			}
 		}
 		b.entries = append(b.entries, copied)
+		b.noteOriginalOrderKey(copied.Key)
 		b.size += len(copied.Key) + len(copied.Value)
 	}
 	return nil
@@ -13408,6 +13323,12 @@ func (b *Batch) write(sync bool) error {
 		return err
 	}
 
+	b.canonicalizeEntriesForUnifiedWrite()
+	if len(b.entries) == 0 {
+		b.Reset()
+		return nil
+	}
+
 	if ok, err := b.tryWriteWALOffStreamBypass(sync); err != nil {
 		return err
 	} else if ok {
@@ -13526,35 +13447,6 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.db.writeMu.RLock()
 	needRotate := false
 	needSyncBarrier := false
-
-	canonicalizeForFenceGroupWAL := false
-	if !b.db.disableJournal &&
-		b.db.outerLeafFenceV2Enabled() &&
-		b.db.valueLogEnabled() &&
-		b.db.allowValueLogPointers() {
-		for i := range b.entries {
-			op := &b.entries[i]
-			if op.Type != batch.OpPut {
-				continue
-			}
-			if b.db.forceValueLogPointers || len(op.Value) > b.db.valueLogThresholdForKey(op.Key) {
-				canonicalizeForFenceGroupWAL = true
-				break
-			}
-		}
-	}
-	if canonicalizeForFenceGroupWAL {
-		b.entries = canonicalizeBatchEntriesLastWriteWinsSorted(b.entries)
-		b.size = batchEntriesByteSize(b.entries)
-		if len(b.entries) > 0 {
-			b.firstKey = b.entries[0].Key
-			b.lastKey = b.entries[len(b.entries)-1].Key
-			b.streamEligible = true
-		} else {
-			b.firstKey = nil
-			b.lastKey = nil
-		}
-	}
 
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
@@ -13685,6 +13577,17 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			// Keep deferred fence-mode pointer appends on a single lane so flush-time
 			// fence collapse can operate over one globally merged stream.
 			preferredLane = 0
+		} else if len(shardIdxs) > 0 {
+			candidate := b.db.laneForShardIndex(shardIdxs[0])
+			sameLane := candidate >= 0
+			for i := 1; i < len(shardIdxs) && sameLane; i++ {
+				if b.db.laneForShardIndex(shardIdxs[i]) != candidate {
+					sameLane = false
+				}
+			}
+			if sameLane {
+				preferredLane = candidate
+			}
 		}
 		l, err := b.db.pickLane(durability == journalDurabilitySync, preferredLane)
 		if err != nil {
@@ -14022,7 +13925,6 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			if len(entries) > 1 {
 				shard.rng.add(last)
 			}
-			b.db.noteWriteSortedRun(first, last, len(entries))
 		} else {
 			for _, op := range entries {
 				if op.Type == batch.OpDelete {
@@ -14039,7 +13941,6 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					}
 				}
 				shard.rng.add(op.Key)
-				b.db.noteWriteKey(op.Key)
 			}
 		}
 		newBytes := shard.mem.Size()
@@ -14048,6 +13949,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		b.db.mutableBytes.Add(delta)
 		shard.mu.Unlock()
 	}
+	b.db.noteWritePattern(b.origPattern)
 
 	// 3. Threshold Check
 	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
@@ -14073,6 +13975,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		b.db.noteWrite()
 	}
 	b.db.maybeAssistFlush()
+	b.db.recordUnifiedWritePath(b.source, len(b.entries))
 
 	b.Reset()
 	return nil
@@ -14319,6 +14222,7 @@ func (b *Batch) writeBypass(sync bool) error {
 	if b.size > 0 {
 		b.db.noteWrite()
 	}
+	b.db.recordUnifiedWritePath(b.source, len(b.entries))
 	b.Reset()
 	return nil
 }
