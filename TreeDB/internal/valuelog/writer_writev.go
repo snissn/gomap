@@ -170,6 +170,9 @@ func (w *Writer) shouldUseRawWritev(records []Record, k int, rawPayloadBytes int
 // user-space copying for large value workloads. It always flushes the writev
 // queue before returning, so it does not retain references to the input slices.
 //
+// Prefer this when the caller needs pointers durably visible at function
+// return and cannot rely on future appends to coalesce writes.
+//
 // dst must be at least len(records) long.
 func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
 	if w == nil {
@@ -414,6 +417,9 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 // Compared to AppendRawFramesWritevInto, this path stages frame bytes in the
 // writer append buffer and flushes later, so independent append calls can merge
 // into fewer, larger writes.
+//
+// Prefer this for high-throughput append streams where delayed flush is
+// acceptable and syscall coalescing across calls is desirable.
 //
 // dst must be at least len(records) long.
 func (w *Writer) AppendRawFramesBufferedInto(records []Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {

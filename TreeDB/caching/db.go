@@ -825,18 +825,14 @@ func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, 
 	return dictByID[dictID]
 }
 
-func (db *DB) useFenceV2DeferredFlushPath() bool {
-	if db == nil {
-		return false
-	}
-	return db.disableJournal && db.outerLeafFenceV2Enabled() && db.valueLogEnabled() && db.allowValueLogPointers()
-}
-
 func (db *DB) deferredValueLogEnabled() bool {
 	// Fence-pointer outer-leaf mode benefits from flush-time regrouping when WAL
 	// is disabled: singleton writes can coalesce into larger outer blocks before
 	// value-log append, reducing index pointer fanout.
-	return db.useFenceV2DeferredFlushPath()
+	if db == nil {
+		return false
+	}
+	return db.disableJournal && db.outerLeafFenceV2Enabled() && db.valueLogEnabled() && db.allowValueLogPointers()
 }
 
 // sumKeyValueBytes returns the total bytes across paired key/value entries.
@@ -1111,8 +1107,10 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		records[i].RID = startRID + uint64(i)
 	}
 
-	// For deferred value-log appends, unsynced writes intentionally use none and
-	// synced writes propagate full sync durability.
+	// For deferred value-log appends, unsynced writes intentionally use "none"
+	// value-log flush durability, and synced writes use "sync" value-log flush
+	// durability. Note: these modes control value-log flush behavior here, not
+	// journal/WAL durability.
 	durability := journalDurabilityNone
 	if sync {
 		durability = journalDurabilitySync
@@ -1583,6 +1581,8 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			return err
 		}
 		emittedGroups := uint64(0)
+		// Cap keys per inline group to keep regroup allocations bounded while
+		// still emitting large enough batches to amortize value-log append costs.
 		const maxInlineGroupKeys = 32768
 		for chunkStart := 0; chunkStart < totalKeys; chunkStart += maxInlineGroupKeys {
 			chunkEnd := chunkStart + maxInlineGroupKeys
@@ -7931,7 +7931,10 @@ const stopBackpressureStallLimit = 16
 const (
 	// Start pushing down v2 deferred fence debt earlier than the generic
 	// slowdown threshold so checkpoint work is less bursty.
-	v2DeferredAssistEarlyTriggerDiv      = 2
+	// Dividing by 2 starts assists at 50% of the configured slowdown/stop
+	// thresholds when possible.
+	v2DeferredAssistEarlyTriggerDiv = 2
+	// Run the assist path once every 32 write assists to limit overhead.
 	v2DeferredAssistTickMask             = 31 // once every 32 write assists
 	v2DeferredAssistSlowdownMinMemtables = 2
 	v2DeferredAssistStopMinMemtables     = 4
@@ -8329,7 +8332,7 @@ func (db *DB) deferredAssistTargetMemtables(backlogBytes, slowdownBytes, stopByt
 	return 0, false
 }
 
-func (db *DB) v2DeferredEarlyTriggerBytes(slowdownBytes, stopBytes int64) int64 {
+func (db *DB) deferredAssistEarlyTriggerBytes(slowdownBytes, stopBytes int64) int64 {
 	if db == nil || !db.deferredValueLogEnabled() {
 		return 0
 	}
@@ -8395,7 +8398,7 @@ func (db *DB) maybeAssistFlush() {
 			db.TriggerFlush()
 			return
 		}
-		if early := db.v2DeferredEarlyTriggerBytes(slowdownBytes, stopBytes); early > 0 && backlog >= early {
+		if early := db.deferredAssistEarlyTriggerBytes(slowdownBytes, stopBytes); early > 0 && backlog >= early {
 			db.deferredFenceAssistEarlyTriggers.Add(1)
 			db.TriggerFlush()
 			tick := db.deferredFenceAssistTicker.Add(1)
@@ -12473,7 +12476,7 @@ func (db *DB) CompactionAssist() {
 			db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			return
 		}
-		if early := db.v2DeferredEarlyTriggerBytes(slowdownBytes, stopBytes); early > 0 && backlog >= early {
+		if early := db.deferredAssistEarlyTriggerBytes(slowdownBytes, stopBytes); early > 0 && backlog >= early {
 			db.deferredFenceAssistEarlyTriggers.Add(1)
 			flushed := db.flushSome(false, db.writerFlushMaxMemtables, db.writerFlushMaxDuration)
 			db.recordDeferredAssist(flushed)
@@ -13439,7 +13442,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 	eligibleCount := len(eligibleIdxs)
-	deferredFencePath := b.db.useFenceV2DeferredFlushPath()
+	deferredFencePath := b.db.deferredValueLogEnabled()
 	allowPointers := eligibleCount > 0 && valueLogEnabled && b.db.allowValueLogPointers()
 	if allowPointers && deferredFencePath {
 		// v2 fence-pointer WAL-off path: keep values inline in mutable memtables
