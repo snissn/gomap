@@ -6549,9 +6549,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 
-	// In v2 outer-leaf modes, records are already encoded as compressed
-	// key/value blocks. Re-compressing those payloads in value-log auto mode is
-	// usually redundant work with little write-size benefit.
+	// Track v2 outer-leaf payload batches so raw-mode append paths can use the
+	// buffered frame writer when selected.
 	autoOuterLeafPayloads := db.outerLeafV2Enabled() &&
 		!templatePrepass &&
 		dictID == 0 &&

@@ -83,6 +83,10 @@ type DecodedBlock struct {
 	restartKeys [][]byte
 	firstKey    []byte
 	firstValue  []byte
+
+	keysOnce sync.Once
+	keys     [][]byte
+	keysErr  error
 }
 
 // Encoder reuses encode scratch buffers across outer-leaf block encodes.
@@ -1134,40 +1138,66 @@ func (d *DecodedBlock) Keys(dst [][]byte) ([][]byte, error) {
 	if d == nil {
 		return nil, fmt.Errorf("outerleaf: nil block")
 	}
-	if cap(dst) < d.entryCount {
-		dst = make([][]byte, 0, d.entryCount)
-	} else {
-		dst = dst[:0]
-	}
 	switch d.version {
 	case blockVersionV1:
+		if cap(dst) < d.entryCount {
+			dst = make([][]byte, 0, d.entryCount)
+		} else {
+			dst = dst[:0]
+		}
 		if d.firstKey == nil {
 			return nil, fmt.Errorf("outerleaf: missing v1 key")
 		}
 		dst = append(dst, d.firstKey)
 		return dst, nil
 	case blockVersionV2:
+		keys, err := d.cachedV2Keys()
+		if err != nil {
+			return nil, err
+		}
+		if dst == nil {
+			return keys, nil
+		}
+		if cap(dst) < len(keys) {
+			dst = make([][]byte, len(keys))
+		} else {
+			dst = dst[:len(keys)]
+		}
+		copy(dst, keys)
+		return dst, nil
+	default:
+		return nil, fmt.Errorf("outerleaf: unsupported version %d", d.version)
+	}
+}
+
+func (d *DecodedBlock) cachedV2Keys() ([][]byte, error) {
+	d.keysOnce.Do(func() {
 		encoded := d.entries
+		keys := make([][]byte, 0, d.entryCount)
 		off := 0
 		var prevKey []byte
 		for i := 0; i < d.entryCount; i++ {
 			if off+8 > len(encoded) {
-				return nil, fmt.Errorf("outerleaf: truncated v2 entry header")
+				d.keysErr = fmt.Errorf("outerleaf: truncated v2 entry header")
+				return
 			}
 			shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
 			suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
 			valueLen := int(binary.LittleEndian.Uint32(encoded[off+4 : off+8]))
 			off += 8
 			if shared < 0 || shared > len(prevKey) {
-				return nil, fmt.Errorf("outerleaf: invalid shared prefix")
+				d.keysErr = fmt.Errorf("outerleaf: invalid shared prefix")
+				return
 			}
 			if suffixLen < 0 || off+suffixLen > len(encoded) {
-				return nil, fmt.Errorf("outerleaf: invalid key suffix length")
+				d.keysErr = fmt.Errorf("outerleaf: invalid key suffix length")
+				return
 			}
 			suffix := encoded[off : off+suffixLen]
 			off += suffixLen
 			if valueLen < 0 || off+valueLen > len(encoded) {
-				return nil, fmt.Errorf("outerleaf: invalid value length")
+				d.keysErr = fmt.Errorf("outerleaf: invalid value length")
+				return
 			}
 			off += valueLen
 
@@ -1179,16 +1209,19 @@ func (d *DecodedBlock) Keys(dst [][]byte) ([][]byte, error) {
 				copy(key, prevKey[:shared])
 				copy(key[shared:], suffix)
 			}
-			dst = append(dst, key)
+			keys = append(keys, key)
 			prevKey = key
 		}
 		if off != len(encoded) {
-			return nil, fmt.Errorf("outerleaf: trailing v2 entry bytes")
+			d.keysErr = fmt.Errorf("outerleaf: trailing v2 entry bytes")
+			return
 		}
-		return dst, nil
-	default:
-		return nil, fmt.Errorf("outerleaf: unsupported version %d", d.version)
+		d.keys = keys
+	})
+	if d.keysErr != nil {
+		return nil, d.keysErr
 	}
+	return d.keys, nil
 }
 
 // Decode returns the first key/value in an encoded outer-leaf payload.

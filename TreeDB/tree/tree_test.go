@@ -23,6 +23,12 @@ type fenceLookupReader struct {
 	nextOffset uint64
 	fileID     uint32
 	fenceCalls int
+	blockCalls int
+	keyCalls   int
+}
+
+func (r *fenceLookupReader) FenceLookupEnabled() bool {
+	return true
 }
 
 func newFenceLookupReader() *fenceLookupReader {
@@ -69,6 +75,7 @@ func (r *fenceLookupReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte)
 }
 
 func (r *fenceLookupReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]FenceBlockEntry, bool, error) {
+	r.blockCalls++
 	block, ok := r.blocks[ptr]
 	if !ok {
 		return nil, true, fmt.Errorf("missing block ptr %+v", ptr)
@@ -86,6 +93,24 @@ func (r *fenceLookupReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]FenceBloc
 		})
 	}
 	return entries, true, nil
+}
+
+func (r *fenceLookupReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
+	r.keyCalls++
+	block, ok := r.blocks[ptr]
+	if !ok {
+		return nil, true, fmt.Errorf("missing block ptr %+v", ptr)
+	}
+	keys := make([]string, 0, len(block))
+	for k := range block {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([][]byte, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, []byte(k))
+	}
+	return out, true, nil
 }
 
 func (r *trackedValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
