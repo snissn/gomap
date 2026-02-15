@@ -393,9 +393,7 @@ func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iter
 	it.slabFenceBlocks = t.slabFenceBlocks
 	it.slabFenceKeys = t.slabFenceKeys
 	it.slabKeyAppender = t.slabKeyAppender
-	if keyBatch, ok := t.slabReader.(slabUnsafeKeyBatchAppender); ok {
-		it.slabKeyBatcher = keyBatch
-	}
+	it.slabKeyBatcher = t.slabKeyBatcher
 	it.resetStack()
 	it.Seek(start)
 	if start == nil {
@@ -430,9 +428,7 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 	it.slabFenceBlocks = t.slabFenceBlocks
 	it.slabFenceKeys = t.slabFenceKeys
 	it.slabKeyAppender = t.slabKeyAppender
-	if keyBatch, ok := t.slabReader.(slabUnsafeKeyBatchAppender); ok {
-		it.slabKeyBatcher = keyBatch
-	}
+	it.slabKeyBatcher = t.slabKeyBatcher
 	it.resetStack()
 	// Reverse seek: Find >= end, then step back.
 	if end == nil {

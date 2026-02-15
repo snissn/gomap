@@ -83,6 +83,30 @@ type slabUnsafeKeyBatchAppender interface {
 	ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][]byte, dst [][]byte) ([][]byte, error)
 }
 
+// Optional capability gate for key-aware pointer read interfaces.
+type slabKeyAwareCapability interface {
+	KeyAwareEnabled() bool
+}
+
+// Optional capability gate for fence-pointer lookup/expansion interfaces.
+type slabFenceLookupCapability interface {
+	FenceLookupEnabled() bool
+}
+
+func keyAwarePointerReadsEnabled(sr SlabReader) bool {
+	if gate, ok := sr.(slabKeyAwareCapability); ok {
+		return gate.KeyAwareEnabled()
+	}
+	return true
+}
+
+func fencePointerLookupsEnabled(sr SlabReader) bool {
+	if gate, ok := sr.(slabFenceLookupCapability); ok {
+		return gate.FenceLookupEnabled()
+	}
+	return true
+}
+
 type Tree struct {
 	pager           *pager.Pager
 	slabReader      SlabReader
@@ -92,6 +116,7 @@ type Tree struct {
 	slabFenceBlocks slabUnsafeFenceBlockReader
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
 	slabKeyAppender slabUnsafeKeyAppender
+	slabKeyBatcher  slabUnsafeKeyBatchAppender
 	rootPageID      uint64
 }
 
@@ -101,23 +126,32 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		slabReader: sr,
 		rootPageID: root,
 	}
+	keyAwareEnabled := keyAwarePointerReadsEnabled(sr)
+	fenceEnabled := fencePointerLookupsEnabled(sr)
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
 	}
-	if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
-		t.slabKeyReader = keyReader
+	if keyAwareEnabled {
+		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
+			t.slabKeyReader = keyReader
+		}
+		if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
+			t.slabKeyAppender = keyAppender
+		}
+		if keyBatcher, ok := sr.(slabUnsafeKeyBatchAppender); ok {
+			t.slabKeyBatcher = keyBatcher
+		}
 	}
-	if fenceReader, ok := sr.(slabUnsafeFenceKeyReader); ok {
-		t.slabFenceReader = fenceReader
-	}
-	if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
-		t.slabFenceBlocks = fenceBlocks
-	}
-	if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
-		t.slabFenceKeys = fenceKeys
-	}
-	if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
-		t.slabKeyAppender = keyAppender
+	if fenceEnabled {
+		if fenceReader, ok := sr.(slabUnsafeFenceKeyReader); ok {
+			t.slabFenceReader = fenceReader
+		}
+		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
+			t.slabFenceBlocks = fenceBlocks
+		}
+		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
+			t.slabFenceKeys = fenceKeys
+		}
 	}
 	return t
 }
@@ -126,35 +160,54 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	t.pager = p
 	t.slabReader = sr
+	keyAwareEnabled := keyAwarePointerReadsEnabled(sr)
+	fenceEnabled := fencePointerLookupsEnabled(sr)
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
 	} else {
 		t.slabAppender = nil
 	}
-	if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
-		t.slabKeyReader = keyReader
+	if keyAwareEnabled {
+		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
+			t.slabKeyReader = keyReader
+		} else {
+			t.slabKeyReader = nil
+		}
+		if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
+			t.slabKeyAppender = keyAppender
+		} else {
+			t.slabKeyAppender = nil
+		}
+		if keyBatcher, ok := sr.(slabUnsafeKeyBatchAppender); ok {
+			t.slabKeyBatcher = keyBatcher
+		} else {
+			t.slabKeyBatcher = nil
+		}
 	} else {
 		t.slabKeyReader = nil
+		t.slabKeyAppender = nil
+		t.slabKeyBatcher = nil
 	}
-	if fenceReader, ok := sr.(slabUnsafeFenceKeyReader); ok {
-		t.slabFenceReader = fenceReader
+	if fenceEnabled {
+		if fenceReader, ok := sr.(slabUnsafeFenceKeyReader); ok {
+			t.slabFenceReader = fenceReader
+		} else {
+			t.slabFenceReader = nil
+		}
+		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
+			t.slabFenceBlocks = fenceBlocks
+		} else {
+			t.slabFenceBlocks = nil
+		}
+		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
+			t.slabFenceKeys = fenceKeys
+		} else {
+			t.slabFenceKeys = nil
+		}
 	} else {
 		t.slabFenceReader = nil
-	}
-	if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
-		t.slabFenceBlocks = fenceBlocks
-	} else {
 		t.slabFenceBlocks = nil
-	}
-	if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
-		t.slabFenceKeys = fenceKeys
-	} else {
 		t.slabFenceKeys = nil
-	}
-	if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
-		t.slabKeyAppender = keyAppender
-	} else {
-		t.slabKeyAppender = nil
 	}
 	t.rootPageID = root
 }

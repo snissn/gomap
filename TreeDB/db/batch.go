@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
@@ -260,6 +261,11 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 				decoded, ok, found, _, decErr := outerleaf.DecodeValueForKey(val, entry.Key, nil)
 				if decErr != nil {
 					return decErr
+				}
+				if !ok {
+					if strings.TrimSpace(b.db.indexOuterLeafMode) == outerleaf.ModeV2FencePtr {
+						return fmt.Errorf("outerleaf: expected wrapped payload in fence mode replay")
+					}
 				}
 				if ok {
 					if !found {

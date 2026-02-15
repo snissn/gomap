@@ -31,6 +31,14 @@ func ValueReaderForState(state *DBState) tree.SlabReader {
 	return valueReader{vlogs: state.ValueLogSet}
 }
 
+func (r valueReader) KeyAwareEnabled() bool {
+	return outerleaf.ModeEnabled(r.outerLeafMode)
+}
+
+func (r valueReader) FenceLookupEnabled() bool {
+	return strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr
+}
+
 func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte) ([]byte, error) {
 	if !outerleaf.ModeEnabled(r.outerLeafMode) {
 		return raw, nil
