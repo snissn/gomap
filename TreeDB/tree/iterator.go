@@ -511,6 +511,9 @@ func (it *Iterator) seek(key []byte) {
 	it.resetFenceCursor()
 	it.clearPendingFenceSeek()
 	if !it.reverse && key != nil {
+		// pendingSeekKey is intentionally forward-only. It seeds predecessor
+		// fence-block repositioning in tryRepositionPendingFence; reverse seeks
+		// use seek(end)+stepBackward semantics instead.
 		it.pendingSeekKey = append(it.pendingSeekKey[:0], key...)
 	}
 	it.prefetchArmed = false
