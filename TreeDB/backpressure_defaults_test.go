@@ -63,4 +63,3 @@ func TestNormalizeBackpressureDefaults_ExplicitPreserved(t *testing.T) {
 		t.Fatalf("writer_flush_max_memtables=%d want 7", opts.WriterFlushMaxMemtables)
 	}
 }
-

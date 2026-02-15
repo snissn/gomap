@@ -29,11 +29,11 @@ const (
 	defaultChunkSize     = 16 * 1024 * 1024
 	defaultDictChunkSize = 1 * 1024 * 1024
 
-	defaultSlowdownBacklogSeconds          = 1.0
-	defaultStopBacklogSeconds              = 2.0
-	defaultV2FenceSlowdownBacklogSeconds   = 0.5
-	defaultV2FenceStopBacklogSeconds       = 1.0
-	defaultAdaptiveMaxBacklogBytes   int64 = 2 << 30
+	defaultSlowdownBacklogSeconds              = 1.0
+	defaultStopBacklogSeconds                  = 2.0
+	defaultV2FenceSlowdownBacklogSeconds       = 0.5
+	defaultV2FenceStopBacklogSeconds           = 1.0
+	defaultAdaptiveMaxBacklogBytes       int64 = 2 << 30
 )
 
 // Iterator is the public iterator contract returned by TreeDB.
