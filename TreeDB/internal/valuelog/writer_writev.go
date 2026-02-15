@@ -504,21 +504,14 @@ func (w *Writer) AppendRawFramesBufferedInto(records []Record, k int, dst []page
 			}
 		}
 
-		metaOff := len(meta)
 		metaNeed := HeaderSize + prefixLen
-		if cap(meta)-metaOff < metaNeed {
-			newCap := cap(meta) * 2
-			if newCap < metaOff+metaNeed {
-				newCap = metaOff + metaNeed
-			}
-			grown := make([]byte, metaOff+metaNeed, newCap)
-			copy(grown, meta[:metaOff])
-			meta = grown
+		if cap(meta) < metaNeed {
+			meta = make([]byte, metaNeed)
 		} else {
-			meta = meta[:metaOff+metaNeed]
+			meta = meta[:metaNeed]
 		}
-		header := meta[metaOff : metaOff+HeaderSize]
-		prefix := meta[metaOff+HeaderSize : metaOff+HeaderSize+prefixLen]
+		header := meta[:HeaderSize]
+		prefix := meta[HeaderSize : HeaderSize+prefixLen]
 
 		header[4] = Version
 		header[5] = recordFlagGrouped
