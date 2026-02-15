@@ -16,6 +16,7 @@ type valueLogIterator struct {
 	cachedValue  []byte
 	cachedPtr    page.ValuePtr
 	cachedHasPtr bool
+	keyScratch   []byte
 	err          error
 }
 
@@ -136,9 +137,9 @@ func (it *valueLogIterator) loadValue() {
 	it.cachedHasPtr = true
 	it.cachedPtr = ptr
 	unsafeKey := it.iter.UnsafeKey()
-	stableKey := make([]byte, len(unsafeKey))
-	copy(stableKey, unsafeKey)
-	val, err := it.read(stableKey, ptr)
+	// Keep a stable key view for the read callback without per-entry allocation.
+	it.keyScratch = append(it.keyScratch[:0], unsafeKey...)
+	val, err := it.read(it.keyScratch, ptr)
 	if err != nil {
 		it.err = err
 		return

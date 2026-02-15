@@ -77,7 +77,7 @@ func countValueLogRecords(t *testing.T, rootDir string) int {
 			if _, _, _, err := reader.ReadNext(); err == nil {
 				total++
 				continue
-			} else if err == io.EOF || err == io.ErrUnexpectedEOF {
+			} else if err == io.EOF {
 				break
 			} else {
 				_ = reader.Close()
