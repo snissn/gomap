@@ -486,6 +486,8 @@ func encodeV1SingleCore(dst, key, value []byte, codec uint8, restartInterval int
 	if len(encodedPayload) == 0 {
 		encodedCodec = blockCodecNone
 	} else if encodedCodec != blockCodecNone {
+		// Keep enc pointed at the buffer currently holding encoded payload bytes so
+		// deferred release/trim operates on the active allocation.
 		enc = encodedPayload[:0]
 	}
 
@@ -599,6 +601,8 @@ func encodeV2EntriesCore(dst []byte, entries []Entry, codec uint8, restartInterv
 	if len(encodedPayload) == 0 {
 		encodedCodec = blockCodecNone
 	} else if encodedCodec != blockCodecNone {
+		// Keep enc pointed at the buffer currently holding encoded payload bytes so
+		// deferred release/trim operates on the active allocation.
 		enc = encodedPayload[:0]
 	}
 

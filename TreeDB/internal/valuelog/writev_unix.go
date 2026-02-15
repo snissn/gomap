@@ -19,6 +19,11 @@ const writevMaxIovs = 1024
 
 type writevIovec = unix.Iovec
 
+// writevAll writes all iovecs to fd, retrying on partial writes.
+//
+// Callers must treat iovs as immutable for the duration of this call. The
+// generated unix.Iovec entries point at the backing arrays in iovs until
+// writevAll returns.
 func writevAll(fd int, iovs [][]byte, scratch []writevIovec) ([]writevIovec, error) {
 	if len(iovs) == 0 {
 		return scratch[:0], nil

@@ -654,8 +654,6 @@ func appendOuterLeafRecordGroup(db *DB, encoder *outerleaf.Encoder, entries []ou
 	)
 	if encoder != nil {
 		payload, err = encoder.EncodeEntriesAssumeSorted(dst, entries, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
-	} else if len(entries) == 1 {
-		payload, err = outerleaf.EncodeSingle(dst, entries[0].Key, entries[0].Value, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
 	} else {
 		payload, err = outerleaf.EncodeEntriesAssumeSorted(dst, entries, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
 	}
