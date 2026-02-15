@@ -751,16 +751,16 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 			return false, false, false, keyErr
 		}
 		if keyOK {
-			if cap(it.fenceEntries) < len(keys) {
-				it.fenceEntries = make([]FenceBlockEntry, len(keys))
+			entries = it.fenceEntries
+			if cap(entries) < len(keys) {
+				entries = make([]FenceBlockEntry, len(keys))
 			} else {
-				it.fenceEntries = it.fenceEntries[:len(keys)]
+				entries = entries[:len(keys)]
 			}
 			for i := range keys {
-				it.fenceEntries[i].Key = keys[i]
-				it.fenceEntries[i].Value = nil
+				entries[i].Key = keys[i]
+				entries[i].Value = nil
 			}
-			entries = it.fenceEntries
 			ok = true
 			it.fenceValuesLazy = it.mode == IteratorModeFull
 			it.fenceBlockPtr = ptr
@@ -1381,8 +1381,13 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 	entry := entries[it.fenceIndex]
 	if compareTreeKey(entry.Key, it.currKey) != 0 {
 		pos := lowerBoundFenceEntries(entries, it.currKey)
-		if pos < 0 || pos >= len(entries) || compareTreeKey(entries[pos].Key, it.currKey) != 0 {
-			it.err = fmt.Errorf("iterator fence value load: key mismatch")
+		if pos < 0 || pos >= len(entries) {
+			it.err = fmt.Errorf("iterator fence value load: key not found in fence block")
+			it.valid = false
+			return false
+		}
+		if compareTreeKey(entries[pos].Key, it.currKey) != 0 {
+			it.err = fmt.Errorf("iterator fence value load: fence index out of sync")
 			it.valid = false
 			return false
 		}

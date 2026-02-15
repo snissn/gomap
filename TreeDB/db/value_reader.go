@@ -281,6 +281,11 @@ func (r valueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) (
 			if decErr != nil {
 				return nil, decErr
 			}
+			if i < len(dst) {
+				dst[i] = append(dst[i][:0], decoded...)
+				out[i] = dst[i]
+				continue
+			}
 			out[i] = decoded
 		}
 		return out, nil
@@ -316,6 +321,11 @@ func (r valueReader) ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][
 			decoded, decErr := r.decodeValueForKey(ptrs[i], keys[i], out[i])
 			if decErr != nil {
 				return nil, decErr
+			}
+			if i < len(dst) {
+				dst[i] = append(dst[i][:0], decoded...)
+				out[i] = dst[i]
+				continue
 			}
 			out[i] = decoded
 		}
