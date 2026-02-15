@@ -1379,14 +1379,14 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	if err != nil {
 		return err
 	}
-	if fenceMode {
-		db.recordDeferredFenceMaterialized(len(ptrKeys), candidateBytes)
-	}
 	if len(vlogPtrs) != len(records) {
 		putValueLogPtrs(vlogPtrs)
 		return fmt.Errorf("cachingdb: deferred value-log returned %d ptrs for %d records", len(vlogPtrs), len(records))
 	}
 	defer putValueLogPtrs(vlogPtrs)
+	if fenceMode {
+		db.recordDeferredFenceMaterialized(len(ptrKeys), candidateBytes)
+	}
 
 	emittedGroups := uint64(0)
 	for i := range groups {
