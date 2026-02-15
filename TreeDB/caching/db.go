@@ -853,6 +853,12 @@ func (db *DB) deferredValueLogEnabled() bool {
 	return db.valueLogWALFenceMode == string(backenddb.ValueLogWALFenceModeSimpleInline)
 }
 
+func (db *DB) deferredValueLogNeedsSingleLaneRegroup() bool {
+	// Deferred fence materialization currently requires single-lane regrouping
+	// to preserve stable fence collapse ordering (including WAL-on simple_inline).
+	return db != nil && db.deferredValueLogEnabled()
+}
+
 // sumKeyValueBytes returns the total bytes across paired key/value entries.
 // If keys and values differ in length, only the shared prefix is counted.
 func sumKeyValueBytes(keys, values [][]byte) uint64 {
@@ -9639,7 +9645,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
 		queueLaneID := db.laneForShardIndex(i)
-		if db.deferredValueLogEnabled() {
+		if db.deferredValueLogNeedsSingleLaneRegroup() {
 			// Deferred fence mode requires global key-order regrouping; queue all shards
 			// on lane 0 so flush can merge and collapse fence pointers consistently.
 			queueLaneID = 0
@@ -9783,7 +9789,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
 		queueLaneID := db.laneForShardIndex(i)
-		if db.deferredValueLogEnabled() {
+		if db.deferredValueLogNeedsSingleLaneRegroup() {
 			// Deferred fence mode requires global key-order regrouping; queue all shards
 			// on lane 0 so flush can merge and collapse fence pointers consistently.
 			queueLaneID = 0
@@ -13463,8 +13469,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	deferredFencePath := b.db.deferredValueLogEnabled()
 	allowPointers := eligibleCount > 0 && valueLogEnabled && b.db.allowValueLogPointers()
 	if allowPointers && deferredFencePath {
-		// v2 fence-pointer WAL-off path: keep values inline in mutable memtables
-		// and materialize grouped value-log pointers once at flush time.
+		// Deferred fence path: keep values inline in mutable memtables and
+		// materialize grouped value-log pointers once at flush time.
 		var deferredBytes uint64
 		for _, idx := range eligibleIdxs {
 			op := &b.entries[idx]
@@ -13498,7 +13504,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	)
 	if (!multiLanePointers && allowPointers) || !b.db.disableJournal {
 		preferredLane := -1
-		if b.db.deferredValueLogEnabled() {
+		if b.db.deferredValueLogNeedsSingleLaneRegroup() {
 			// Keep deferred fence-mode pointer appends on a single lane so flush-time
 			// fence collapse can operate over one globally merged stream.
 			preferredLane = 0
