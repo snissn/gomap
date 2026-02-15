@@ -1040,6 +1040,21 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
 		t.Fatalf("WriteSync: %v", err)
 	}
 	_ = b.Close()
+
+	shard := &cache.mutableShards[0]
+	shard.mu.Lock()
+	it := shard.mem.NewIterator(nil, nil)
+	if !it.Valid() {
+		shard.mu.Unlock()
+		t.Fatalf("expected mutable entries before checkpoint")
+	}
+	_, _, flags := it.UnsafeEntry()
+	_ = it.Close()
+	shard.mu.Unlock()
+	if flags&node.FlagPointer == 0 {
+		t.Fatalf("expected WAL-on deferred fence mode to preserve pointer entries before flush")
+	}
+
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
@@ -1064,8 +1079,14 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
 	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_calls")
 	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_flushed_memtables")
 	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_early_triggers")
-	if enqueuedKeys != 0 || materializedKeys != 0 || pendingKeys != 0 {
-		t.Fatalf("expected non-deferred fence path to keep deferred counters at zero, enqueued=%d materialized=%d pending=%d", enqueuedKeys, materializedKeys, pendingKeys)
+	if enqueuedKeys == 0 || materializedKeys == 0 {
+		t.Fatalf("expected WAL-on deferred fence stats to record work, enqueued=%d materialized=%d", enqueuedKeys, materializedKeys)
+	}
+	if materializedKeys > enqueuedKeys {
+		t.Fatalf("materialized keys exceeds enqueued keys: materialized=%d enqueued=%d", materializedKeys, enqueuedKeys)
+	}
+	if pendingKeys != 0 {
+		t.Fatalf("expected deferred pending keys to drain after checkpoint, got %d", pendingKeys)
 	}
 
 	snap := backend.AcquireSnapshot()
@@ -1103,6 +1124,7 @@ func TestCachingDB_BatchWALFenceGroupCanonicalizesFinalState(t *testing.T) {
 	cache, err := Open(dir, backend, Options{
 		FlushThreshold:                1 << 20,
 		JournalLanes:                  1,
+		DomainIngressWorkers:          -1,
 		ForceValueLogPointers:         true,
 		ValueLogPointerThreshold:      1,
 		IndexOuterLeafMode:            db.IndexOuterLeafModeV2FencePtr,
@@ -1269,6 +1291,7 @@ func TestCachingDB_UnifiedWriteCounters_SetDeleteBatch(t *testing.T) {
 	cache, err := Open(dir, backend, Options{
 		FlushThreshold:                1 << 20,
 		JournalLanes:                  1,
+		DomainIngressWorkers:          -1,
 		ForceValueLogPointers:         true,
 		ValueLogPointerThreshold:      1,
 		IndexOuterLeafMode:            db.IndexOuterLeafModeV2FencePtr,
@@ -1330,6 +1353,87 @@ func TestCachingDB_UnifiedWriteCounters_SetDeleteBatch(t *testing.T) {
 		t.Fatalf("Get(b): %v", err)
 	} else if !bytes.Equal(got, val('2')) {
 		t.Fatalf("Get(b): got %q want %q", string(got), string(val('2')))
+	}
+}
+
+func TestCachingDB_IngressCoalescesNonBatchSetWrites(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:      1,
+			ForcePointers:         true,
+			WALFenceGroupEncoding: db.ValueLogWALFenceGroupEncodingSimple,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                1 << 20,
+		JournalLanes:                  1,
+		DomainIngressWorkers:          1,
+		DomainIngressQueueSize:        4096,
+		ForceValueLogPointers:         true,
+		ValueLogPointerThreshold:      1,
+		IndexOuterLeafMode:            db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceGroupEncoding: db.ValueLogWALFenceGroupEncodingSimple,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const (
+		writers      = 8
+		opsPerWriter = 192
+	)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for w := 0; w < writers; w++ {
+		w := w
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := 0; i < opsPerWriter; i++ {
+				key := []byte(fmt.Sprintf("k%02d-%05d", w, i))
+				val := bytes.Repeat([]byte{byte(w + i)}, 64)
+				if err := cache.Set(key, val); err != nil {
+					t.Errorf("Set(%q): %v", key, err)
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	stats := cache.Stats()
+	totalOps := uint64(writers * opsPerWriter)
+	if got := statUint64(t, stats, "treedb.cache.unified_write.ingress.ops"); got != totalOps {
+		t.Fatalf("unified ingress ops=%d want=%d", got, totalOps)
+	}
+	ingressCalls := statUint64(t, stats, "treedb.cache.unified_write.ingress.calls")
+	if ingressCalls == 0 {
+		t.Fatalf("expected ingress calls > 0")
+	}
+	if ingressCalls >= totalOps {
+		t.Fatalf("expected ingress combiner to coalesce calls, ingress_calls=%d ops=%d", ingressCalls, totalOps)
+	}
+	if got := statUint64(t, stats, "treedb.cache.unified_write.set.calls"); got != 0 {
+		t.Fatalf("expected direct set path calls=0 with ingress combiner, got %d", got)
+	}
+	if got := statUint64(t, stats, "treedb.cache.domain_ingress.fallback_direct"); got != 0 {
+		t.Fatalf("expected ingress fallback_direct=0, got %d", got)
+	}
+	if got := statUint64(t, stats, "treedb.cache.wal_fence_group.records"); got == 0 {
+		t.Fatalf("expected grouped WAL records > 0 for coalesced non-batch writes")
 	}
 }
 

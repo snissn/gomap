@@ -833,13 +833,13 @@ func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, 
 }
 
 func (db *DB) deferredValueLogEnabled() bool {
-	// Fence-pointer outer-leaf mode benefits from flush-time regrouping when WAL
-	// is disabled: singleton writes can coalesce into larger outer blocks before
-	// value-log append, reducing index pointer fanout.
+	// Fence-pointer outer-leaf mode benefits from flush-time regrouping:
+	// singleton writes can coalesce into larger outer blocks before final pointer
+	// materialization, reducing persisted index pointer fanout.
 	if db == nil {
 		return false
 	}
-	return db.disableJournal && db.outerLeafFenceV2Enabled() && db.valueLogEnabled() && db.allowValueLogPointers()
+	return db.outerLeafFenceV2Enabled() && db.valueLogEnabled() && db.allowValueLogPointers()
 }
 
 // sumKeyValueBytes returns the total bytes across paired key/value entries.
@@ -1275,6 +1275,41 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 
 		val, ptr, flags := iter.UnsafeEntry()
 		if flags&node.FlagPointer != 0 {
+			candidateVal := val
+			if fenceMode &&
+				allowPointers &&
+				candidateVal == nil &&
+				page.IsValueLogFileID(ptr.FileID) &&
+				db.valueLogReader != nil {
+				decoded, err := db.readValueLog(key, ptr)
+				if err != nil {
+					return err
+				}
+				candidateVal = decoded
+			}
+			if fenceMode &&
+				allowPointers &&
+				candidateVal != nil &&
+				(db.forceValueLogPointers || len(candidateVal) > db.valueLogThresholdForKey(key)) {
+				if ptrKeys == nil {
+					hint := memLen
+					if hint <= 0 {
+						hint = 16
+					}
+					if hint > db.flushBackendInitEntries {
+						hint = db.flushBackendInitEntries
+					}
+					ptrKeys = make([][]byte, 0, hint)
+					ptrVals = make([][]byte, 0, hint)
+				}
+				keyCopy := append([]byte(nil), key...)
+				valCopy := append([]byte(nil), candidateVal...)
+				ptrKeys = append(ptrKeys, keyCopy)
+				ptrVals = append(ptrVals, valCopy)
+				state.prevKey = append(state.prevKey[:0], key...)
+				iter.Next()
+				continue
+			}
 			emitPtr := true
 			if fenceMode {
 				if state.havePtr && ptr == state.lastPtr {
@@ -1695,6 +1730,26 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			haveFencePtr = false
 			backendPendingOps++
 		case entry.IsPtr:
+			candidateVal := entry.Value
+			if fenceMode &&
+				allowPointers &&
+				candidateVal == nil &&
+				page.IsValueLogFileID(entry.ValuePtr.FileID) &&
+				db.valueLogReader != nil {
+				decoded, err := db.readValueLog(entry.Key, entry.ValuePtr)
+				if err != nil {
+					return 0, err
+				}
+				candidateVal = decoded
+			}
+			if fenceMode &&
+				allowPointers &&
+				candidateVal != nil &&
+				(db.forceValueLogPointers || len(candidateVal) > db.valueLogThresholdForKey(entry.Key)) {
+				ptrKeys = append(ptrKeys, entry.Key)
+				ptrVals = append(ptrVals, candidateVal)
+				break
+			}
 			if err := flushInlinePointerGroup(); err != nil {
 				return 0, err
 			}
@@ -3515,17 +3570,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if shardCount < 1 {
 		shardCount = 1
 	}
+	domainIngressExplicitDisable := opts.DomainIngressWorkers < 0
 	domainIngressWorkers := opts.DomainIngressWorkers
 	if domainIngressWorkers < 0 {
 		domainIngressWorkers = 0
 	}
-	if domainIngressWorkers > shardCount {
-		domainIngressWorkers = shardCount
-	}
 	domainIngressQueueSize := opts.DomainIngressQueueSize
-	if domainIngressWorkers > 0 && domainIngressQueueSize <= 0 {
-		domainIngressQueueSize = defaultDomainIngressQueueSize
-	}
 	if opts.MaxQueuedMemtables == 0 {
 		// Keep the default queued backlog roughly stable in bytes when callers
 		// tune FlushThreshold. Historically: 64MB flush threshold with a queue
@@ -3686,6 +3736,20 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, err
 	}
 	disableJournal := opts.DisableWAL
+	if !domainIngressExplicitDisable &&
+		domainIngressWorkers == 0 &&
+		!disableJournal &&
+		indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr {
+		// WAL-on v2_fenceptr uses ingress combiner by default so non-batch
+		// writes participate in the same internal grouped pipeline as Batch.
+		domainIngressWorkers = 1
+	}
+	if domainIngressWorkers > shardCount {
+		domainIngressWorkers = shardCount
+	}
+	if domainIngressWorkers > 0 && domainIngressQueueSize <= 0 {
+		domainIngressQueueSize = defaultDomainIngressQueueSize
+	}
 	if writerFlushMaxMemtablesUnset &&
 		disableJournal &&
 		indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr &&
@@ -5035,6 +5099,9 @@ const vlogQueueMinValueSize = 1 << 10
 // Linger briefly to coalesce micro-batches for small/medium queued writes.
 const vlogWriteLinger = 75 * time.Microsecond
 
+// Linger briefly to coalesce non-batch Set/Delete requests into grouped writes.
+const domainIngressLinger = 75 * time.Microsecond
+
 func defaultJournalLaneCount(procs int) int {
 	if procs <= 2 {
 		return 1
@@ -5101,12 +5168,50 @@ func (db *DB) stopDomainIngressWorkers() {
 func (db *DB) domainIngressLoop(ch <-chan domainIngressRequest) {
 	defer db.wg.Done()
 	batchReqs := make([]domainIngressRequest, 0, domainIngressBatchMax)
+	timer := time.NewTimer(time.Hour)
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	defer timer.Stop()
 	for {
 		req, ok := <-ch
 		if !ok {
 			return
 		}
 		batchReqs = append(batchReqs[:0], req)
+
+		lingerExpired := false
+		if len(batchReqs) < domainIngressBatchMax {
+			timer.Reset(domainIngressLinger)
+			for len(batchReqs) < domainIngressBatchMax && !lingerExpired {
+				select {
+				case req, ok = <-ch:
+					if !ok {
+						if !timer.Stop() {
+							select {
+							case <-timer.C:
+							default:
+							}
+						}
+						db.processDomainIngressBatch(batchReqs)
+						return
+					}
+					batchReqs = append(batchReqs, req)
+				case <-timer.C:
+					lingerExpired = true
+				}
+			}
+			if !lingerExpired && !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		}
+
 	drain:
 		for len(batchReqs) < domainIngressBatchMax {
 			select {
@@ -5132,8 +5237,12 @@ func (db *DB) processDomainIngressBatch(reqs []domainIngressRequest) {
 	b := db.NewBatchWithSize(len(reqs))
 	b.source = unifiedWriteSourceIngress
 	var err error
+	needSync := false
 	for i := range reqs {
 		req := reqs[i]
+		if req.sync {
+			needSync = true
+		}
 		switch req.op {
 		case domainIngressOpSet:
 			err = b.Set(req.key, req.value)
@@ -5147,7 +5256,11 @@ func (db *DB) processDomainIngressBatch(reqs []domainIngressRequest) {
 		}
 	}
 	if err == nil {
-		err = b.Write()
+		if needSync {
+			err = b.WriteSync()
+		} else {
+			err = b.Write()
+		}
 	}
 	if closeErr := b.Close(); err == nil && closeErr != nil {
 		err = closeErr
@@ -5185,11 +5298,6 @@ func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync b
 	if db.domainIngressWorkers <= 0 {
 		return false, nil
 	}
-	// Preserve legacy sync behavior until ingress batching has explicit sync-fence
-	// handling and per-request durable completion accounting.
-	if sync {
-		return false, nil
-	}
 	if db.closing.Load() {
 		return true, errDBClosing
 	}
@@ -5214,10 +5322,9 @@ func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync b
 		db.domainIngressEnqueued.Add(1)
 		db.observeDomainIngressDepth(len(ch))
 		db.domainIngressMu.Unlock()
-	default:
-		db.domainIngressFallback.Add(1)
+	case <-db.closeCh:
 		db.domainIngressMu.Unlock()
-		return false, nil
+		return true, errDBClosing
 	}
 
 	err, ok := <-req.done
@@ -8957,35 +9064,21 @@ func (db *DB) set(key, value []byte, sync bool) error {
 	if handled, err := db.enqueueDomainIngress(domainIngressOpSet, key, value, sync); handled {
 		return err
 	}
-	return db.setDirect(key, value, sync)
-}
-
-func (db *DB) writeSingleOp(op batch.OpType, key, value []byte, sync bool, source unifiedWriteSource) error {
-	if db == nil {
-		return nil
-	}
-	b := db.NewBatchWithSize(1)
-	b.source = source
 	var err error
-	switch op {
-	case batch.OpPut:
-		err = b.Set(key, value)
-	case batch.OpDelete:
-		err = b.Delete(key)
-	default:
-		err = fmt.Errorf("cachingdb: unknown single-op type %d", op)
-	}
+	b := db.NewBatchWithSize(1)
+	b.source = unifiedWriteSourceSet
+	err = b.Set(key, value)
 	if err == nil {
-		err = b.writeRegular(sync)
+		if sync {
+			err = b.WriteSync()
+		} else {
+			err = b.Write()
+		}
 	}
 	if closeErr := b.Close(); err == nil && closeErr != nil {
 		err = closeErr
 	}
 	return err
-}
-
-func (db *DB) setDirect(key, value []byte, sync bool) error {
-	return db.writeSingleOp(batch.OpPut, key, value, sync, unifiedWriteSourceSet)
 }
 
 func (db *DB) Delete(key []byte) error {
@@ -9599,11 +9692,21 @@ func (db *DB) delete(key []byte, sync bool) error {
 	if handled, err := db.enqueueDomainIngress(domainIngressOpDelete, key, nil, sync); handled {
 		return err
 	}
-	return db.deleteDirect(key, sync)
-}
-
-func (db *DB) deleteDirect(key []byte, sync bool) error {
-	return db.writeSingleOp(batch.OpDelete, key, nil, sync, unifiedWriteSourceDelete)
+	var err error
+	b := db.NewBatchWithSize(1)
+	b.source = unifiedWriteSourceDelete
+	err = b.Delete(key)
+	if err == nil {
+		if sync {
+			err = b.WriteSync()
+		} else {
+			err = b.Write()
+		}
+	}
+	if closeErr := b.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
+	return err
 }
 
 func (db *DB) canReuseWALSegments() bool {
@@ -13335,11 +13438,10 @@ func (b *Batch) write(sync bool) error {
 		return nil
 	}
 
-	// Optimization: Bypass for Large Batches
-	// Generalization: Only bypass if the batch is large enough to be comparable
-	// to a memtable flush. Small/Medium random batches cause high write amplification
-	// if written directly to the COW backend.
-	if b.size >= int(b.db.flushThreshold) {
+	// Optimization: bypass only for user Batch writes that are large enough to
+	// be comparable to a memtable flush. Internal Set/Delete/ingress writes must
+	// stay on the unified pipeline for deterministic WAL+memtable behavior.
+	if b.source == unifiedWriteSourceBatch && b.size >= int(b.db.flushThreshold) {
 		return b.writeBypass(sync)
 	}
 	return b.writeRegular(sync)
@@ -13538,15 +13640,20 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	deferredFencePath := b.db.deferredValueLogEnabled()
 	allowPointers := eligibleCount > 0 && valueLogEnabled && b.db.allowValueLogPointers()
 	if allowPointers && deferredFencePath {
-		// v2 fence-pointer WAL-off path: keep values inline in mutable memtables
-		// and materialize grouped value-log pointers once at flush time.
+		// v2 fence-pointer deferred materialization:
+		// - WAL-off: keep values inline in mutable memtables and materialize
+		//   grouped pointers once at flush time.
+		// - WAL-on: keep append->WAL->publish ordering (append pointers now for
+		//   recovery), then regroup/materialize fence pointers at flush.
 		var deferredBytes uint64
 		for _, idx := range eligibleIdxs {
 			op := &b.entries[idx]
 			deferredBytes += uint64(len(op.Key) + len(op.Value))
 		}
 		b.db.recordDeferredFenceEnqueued(eligibleCount, deferredBytes)
-		allowPointers = false
+		if b.db.disableJournal {
+			allowPointers = false
+		}
 	} else if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
 		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
