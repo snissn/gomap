@@ -10,7 +10,9 @@ import (
 	"strconv"
 	"strings"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -256,8 +258,13 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 			return batches[i].seq < batches[j].seq
 		})
 	}
+	inlineAppender, err := newReplayInlineAppender(db, segments, ridMap)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = inlineAppender.close() }()
 	for _, batch := range legacyBatches {
-		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
+		if err := applyCommitBatch(db, batch.records, ridMap, inlineAppender); err != nil {
 			return err
 		}
 	}
@@ -268,9 +275,15 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 			// treat the whole batch as not committed and skip it.
 			continue
 		}
-		if err := applyCommitBatch(db, batch.records, ridMap); err != nil {
+		if err := applyCommitBatch(db, batch.records, ridMap, inlineAppender); err != nil {
 			return err
 		}
+	}
+	if err := inlineAppender.syncIfDirty(); err != nil {
+		return err
+	}
+	if err := inlineAppender.close(); err != nil {
+		return err
 	}
 	for _, path := range commitPaths {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -305,7 +318,92 @@ func commitFenceSatisfied(records []commitlog.Record, ridMap map[uint64]page.Val
 	return true
 }
 
-func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr) error {
+type replayInlineAppender struct {
+	writer  *rewriteWriter
+	nextRID uint64
+	dirty   bool
+}
+
+func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr) (*replayInlineAppender, error) {
+	if db == nil {
+		return nil, fmt.Errorf("missing db")
+	}
+	var maxLane0Seq uint32
+	for _, seg := range segments {
+		if !seg.valueLog || seg.lane != 0 {
+			continue
+		}
+		if seg.seq > uint64(maxLane0Seq) {
+			if seg.seq > uint64(^uint32(0)) {
+				return nil, fmt.Errorf("valuelog: lane 0 sequence overflow %d", seg.seq)
+			}
+			maxLane0Seq = uint32(seg.seq)
+		}
+	}
+	var maxRID uint64
+	for rid := range ridMap {
+		if rid > maxRID {
+			maxRID = rid
+		}
+	}
+	if maxRID == ^uint64(0) {
+		return nil, fmt.Errorf("value-log rid space exhausted")
+	}
+	return &replayInlineAppender{
+		writer:  newRewriteWriter(filepath.Join(db.dir, "wal"), 0, maxLane0Seq, 0),
+		nextRID: maxRID + 1,
+	}, nil
+}
+
+func (a *replayInlineAppender) append(db *DB, key, value []byte) (page.ValuePtr, error) {
+	if a == nil || a.writer == nil {
+		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	if a.nextRID == 0 {
+		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+	}
+	payload := value
+	if strings.TrimSpace(db.indexOuterLeafMode) == IndexOuterLeafModeV2FencePtr {
+		encoded, err := outerleaf.EncodeSingle(nil, key, value, uint8(valuelog.BlockCodecSnappy), outerleaf.NormalizeRestartInterval(0))
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+		payload = encoded
+	}
+	rid := a.nextRID
+	a.nextRID++
+	ptr, err := a.writer.appendValue(rid, payload)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	a.dirty = true
+	return ptr, nil
+}
+
+func (a *replayInlineAppender) syncIfDirty() error {
+	if a == nil || a.writer == nil || !a.dirty {
+		return nil
+	}
+	if err := a.writer.Sync(); err != nil {
+		return err
+	}
+	a.dirty = false
+	return nil
+}
+
+func (a *replayInlineAppender) close() error {
+	if a == nil || a.writer == nil {
+		return nil
+	}
+	if err := a.writer.Close(); err != nil {
+		return err
+	}
+	a.writer = nil
+	a.dirty = false
+	return nil
+}
+
+func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {
 	if len(records) == 0 {
 		return nil
 	}
@@ -324,7 +422,22 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 			}
 		case commitlog.OpSetInline:
 			if err := batch.Set(rec.Key, rec.Value); err != nil {
-				return err
+				if !errors.Is(err, batchpkg.ErrValueTooLarge) {
+					return err
+				}
+				if !hasPtrBatch {
+					return fmt.Errorf("commitlog: pointer batch unavailable")
+				}
+				if inlineAppender == nil {
+					return fmt.Errorf("commitlog: missing replay value-log appender")
+				}
+				ptr, err := inlineAppender.append(db, rec.Key, rec.Value)
+				if err != nil {
+					return err
+				}
+				if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
+					return err
+				}
 			}
 		case commitlog.OpSetRID:
 			ptr, ok := ridMap[rec.RID]
@@ -340,6 +453,9 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 		default:
 			return fmt.Errorf("commitlog: unknown op %d", rec.Op)
 		}
+	}
+	if err := inlineAppender.syncIfDirty(); err != nil {
+		return err
 	}
 
 	if err := batch.WriteSync(); err != nil {
