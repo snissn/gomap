@@ -4,14 +4,19 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -149,6 +154,52 @@ func countSnapshotLeafEntries(t *testing.T, snap *db.Snapshot) int {
 		t.Fatalf("count leaf entries: %v", err)
 	}
 	return total
+}
+
+func countCommitLogOpsInDir(t *testing.T, walDir string) (inlineOps int, ridOps int, deleteOps int) {
+	t.Helper()
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		t.Fatalf("read wal dir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "commit-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		path := filepath.Join(walDir, name)
+		r, err := commitlog.NewReader(path)
+		if err != nil {
+			t.Fatalf("commitlog.NewReader(%s): %v", name, err)
+		}
+		for {
+			records, err := r.ReadBatch()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				_ = r.Close()
+				t.Fatalf("ReadBatch(%s): %v", name, err)
+			}
+			for i := range records {
+				switch records[i].Op {
+				case commitlog.OpSetInline:
+					inlineOps++
+				case commitlog.OpSetRID:
+					ridOps++
+				case commitlog.OpDelete:
+					deleteOps++
+				}
+			}
+		}
+		if err := r.Close(); err != nil {
+			t.Fatalf("close reader %s: %v", name, err)
+		}
+	}
+	return inlineOps, ridOps, deleteOps
 }
 
 func (m *MockBackend) Get(key []byte) ([]byte, error) {
@@ -1150,6 +1201,105 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 		if !bytes.Equal(got, valueFor(i)) {
 			t.Fatalf("backend value mismatch for %s", key)
 		}
+	}
+}
+
+func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode:              string(db.ValueLogWALFenceModeSimpleInline),
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 96
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if err := cache.SetSync(key, valueFor(i)); err != nil {
+			t.Fatalf("SetSync(%s): %v", key, err)
+		}
+	}
+
+	// WAL-on simple_inline should keep mutable entries inline until flush/checkpoint.
+	shard := &cache.mutableShards[0]
+	shard.mu.Lock()
+	iter := shard.mem.NewIterator(nil, nil)
+	if !iter.Valid() {
+		shard.mu.Unlock()
+		t.Fatalf("expected mutable entries before checkpoint")
+	}
+	_, _, flags := iter.UnsafeEntry()
+	_ = iter.Close()
+	shard.mu.Unlock()
+	if flags&node.FlagPointer != 0 {
+		t.Fatalf("expected inline mutable entries prior to deferred materialization")
+	}
+
+	inlineOps, ridOps, _ := countCommitLogOpsInDir(t, cache.dir)
+	if inlineOps != totalKeys {
+		t.Fatalf("expected %d inline WAL set ops, got %d", totalKeys, inlineOps)
+	}
+	if ridOps != 0 {
+		t.Fatalf("expected no RID WAL set ops in simple_inline mode, got %d", ridOps)
+	}
+
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.v2_fenceptr.wal_fence_mode"]; got != "simple_inline" {
+		t.Fatalf("wal_fence_mode stat mismatch: got %q", got)
+	}
+	enqueuedKeys, err := strconv.ParseUint(stats["treedb.cache.v2_fenceptr.deferred_enqueued_keys"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse deferred_enqueued_keys: %v", err)
+	}
+	materializedKeys, err := strconv.ParseUint(stats["treedb.cache.v2_fenceptr.deferred_materialized_keys"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse deferred_materialized_keys: %v", err)
+	}
+	if enqueuedKeys == 0 || materializedKeys == 0 {
+		t.Fatalf("expected deferred fence stats to record work, enqueued=%d materialized=%d", enqueuedKeys, materializedKeys)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	leafEntries := countSnapshotLeafEntries(t, snap)
+	_ = snap.Close()
+	if leafEntries <= 0 {
+		t.Fatalf("expected persisted entries")
+	}
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 }
 

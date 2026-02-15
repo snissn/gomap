@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 type savedTreeDBFlagState struct {
 	indexOptimizations bool
@@ -10,6 +13,7 @@ type savedTreeDBFlagState struct {
 	packedValuePtr     bool
 	internalBaseDelta  bool
 	vlogAutoPolicy     string
+	walFenceMode       string
 	outerLeafCache     int
 	disableWAL         bool
 	relaxedSync        bool
@@ -32,6 +36,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		packedValuePtr:     *treedbIndexPackedValuePtr,
 		internalBaseDelta:  *treedbIndexInternalBaseDelta,
 		vlogAutoPolicy:     *treedbVlogAutoPolicy,
+		walFenceMode:       *treedbWALFenceMode,
 		outerLeafCache:     *treedbOuterLeafBlockCacheEntries,
 		disableWAL:         *treedbDisableWAL,
 		relaxedSync:        *treedbRelaxedSync,
@@ -50,6 +55,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexPackedValuePtr = s.packedValuePtr
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
 	*treedbVlogAutoPolicy = s.vlogAutoPolicy
+	*treedbWALFenceMode = s.walFenceMode
 	*treedbOuterLeafBlockCacheEntries = s.outerLeafCache
 	*treedbDisableWAL = s.disableWAL
 	*treedbRelaxedSync = s.relaxedSync
@@ -67,6 +73,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexPackedValuePtr = false
 	*treedbIndexInternalBaseDelta = false
 	*treedbVlogAutoPolicy = "balanced"
+	*treedbWALFenceMode = "rid_join"
 	*treedbOuterLeafBlockCacheEntries = 0
 	*treedbDisableWAL = false
 	*treedbRelaxedSync = false
@@ -216,5 +223,46 @@ func TestBuildTreeDBOptions_ExplicitCompositeFalseWinsUnlessPerFlagExplicit(t *t
 	}
 	if opts.LeafPrefixCompression || opts.IndexColumnarLeaves || opts.IndexInternalBaseDelta {
 		t.Fatalf("expected explicit composite=false to disable remaining optimization fields")
+	}
+}
+
+func TestBuildTreeDBOptions_WALFenceMode_DefaultAndOverride(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions default: %v", err)
+	}
+	if got := opts.ValueLog.WALFenceMode; got != "rid_join" {
+		t.Fatalf("expected default WAL fence mode rid_join, got %q", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.wal_fence_mode=rid_join") {
+		t.Fatalf("resolved options missing default WAL fence mode: %q", got)
+	}
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbWALFenceMode = "simple_inline"
+	opts, rep, err = buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions simple_inline: %v", err)
+	}
+	if got := opts.ValueLog.WALFenceMode; got != "simple_inline" {
+		t.Fatalf("expected WAL fence mode simple_inline, got %q", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.wal_fence_mode=simple_inline") {
+		t.Fatalf("resolved options missing simple_inline mode: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_WALFenceMode_InvalidRejected(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbWALFenceMode = "bad_mode"
+	if _, _, err := buildTreeDBOptions(""); err == nil {
+		t.Fatalf("expected invalid wal fence mode to fail")
 	}
 }

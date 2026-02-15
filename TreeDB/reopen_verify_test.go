@@ -310,6 +310,45 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
+func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr_SimpleInline(t *testing.T) {
+	dir := t.TempDir()
+	keys, values, hash := buildVerifyDataset(2000)
+
+	opts := treedb.Options{
+		Dir:                dir,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold:              1,
+			WALFenceMode:                  treedb.ValueLogWALFenceModeSimpleInline,
+			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes:     4 << 10,
+			OuterLeafBlockRestartInterval: 16,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	writeDataset(t, db, keys, values, false)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	checkGets(t, reopen, keys, values, false)
+	scanAndCheck(t, reopen, values, false, hash)
+}
+
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2_GroupedBlocks(t *testing.T) {
 	dir := t.TempDir()
 	n := 500

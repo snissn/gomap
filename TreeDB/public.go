@@ -481,6 +481,7 @@ func Open(opts Options) (*DB, error) {
 		DisableReadChecksum:                   disableReadChecksum,
 		ValueLogPointerThreshold:              opts.ValueLog.PointerThreshold,
 		IndexOuterLeafMode:                    opts.IndexOuterLeafMode,
+		ValueLogWALFenceMode:                  string(opts.ValueLog.WALFenceMode),
 		ValueLogDomainInlineThresholds:        opts.ValueLog.DomainInlineThresholds,
 		ValueLogRawWritevMinAvgBytes:          opts.ValueLog.RawWritevMinAvgBytes,
 		ValueLogRawWritevMinBatchRecords:      opts.ValueLog.RawWritevMinBatchRecords,

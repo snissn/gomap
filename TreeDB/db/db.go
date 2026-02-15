@@ -201,6 +201,19 @@ const (
 	ValueLogBlockLZ4
 )
 
+// ValueLogWALFenceMode controls how WAL records are encoded for pointer-eligible
+// writes when the outer-leaf fence-pointer mode is active.
+type ValueLogWALFenceMode string
+
+const (
+	// ValueLogWALFenceModeRIDJoin logs pointer writes as RID references in WAL
+	// (current/default behavior).
+	ValueLogWALFenceModeRIDJoin ValueLogWALFenceMode = "rid_join"
+	// ValueLogWALFenceModeSimpleInline logs pointer-eligible writes as inline WAL
+	// records and defers pointer materialization to flush/checkpoint boundaries.
+	ValueLogWALFenceModeSimpleInline ValueLogWALFenceMode = "simple_inline"
+)
+
 const (
 	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
 	IndexOuterLeafModeV1 = "v1"
@@ -222,6 +235,17 @@ const (
 	ValueLogAutoThroughput
 	ValueLogAutoSize
 )
+
+func normalizeValueLogWALFenceMode(mode ValueLogWALFenceMode) ValueLogWALFenceMode {
+	switch strings.ToLower(strings.TrimSpace(string(mode))) {
+	case "", string(ValueLogWALFenceModeRIDJoin):
+		return ValueLogWALFenceModeRIDJoin
+	case string(ValueLogWALFenceModeSimpleInline):
+		return ValueLogWALFenceModeSimpleInline
+	default:
+		return ValueLogWALFenceMode(strings.ToLower(strings.TrimSpace(string(mode))))
+	}
+}
 
 // ValueLogDomainThreshold overrides inline-vs-pointer placement policy for keys
 // under a domain prefix.
@@ -277,6 +301,14 @@ type ValueLogOptions struct {
 	IncompressibleProbeIntervalBytes int
 	// AutoPolicy controls auto-mode bias (throughput, balanced, size).
 	AutoPolicy ValueLogAutoPolicy
+	// WALFenceMode controls WAL encoding behavior for pointer-eligible writes when
+	// IndexOuterLeafMode=v2_fenceptr.
+	//
+	// Supported values:
+	// - "rid_join" (default): WAL uses RID records joined against value-log RIDs.
+	// - "simple_inline": WAL records inline values and deferred fence materialization
+	//   publishes pointers at flush/checkpoint.
+	WALFenceMode ValueLogWALFenceMode
 
 	// PointerThreshold controls when value-log pointers are used.
 	// Values <= 0 use a default threshold. In cached mode, relaxed durability
@@ -870,6 +902,11 @@ func validateOptions(opts Options) error {
 	case IndexOuterLeafModeV1, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
 	default:
 		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
+	}
+	switch normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode) {
+	case ValueLogWALFenceModeRIDJoin, ValueLogWALFenceModeSimpleInline:
+	default:
+		return fmt.Errorf("treedb: invalid value-log WAL fence mode %q", opts.ValueLog.WALFenceMode)
 	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)

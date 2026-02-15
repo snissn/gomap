@@ -85,6 +85,7 @@ var (
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v1", "TreeDB: index outer-leaf mode (v1|v2_blockptr|v2_fenceptr)")
+	treedbWALFenceMode                    = flag.String("treedb-wal-fence-mode", "rid_join", "TreeDB: WAL fence mode for v2_fenceptr (rid_join|simple_inline)")
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
 	treedbOuterLeafBlockRestart           = flag.Int("treedb-outer-leaf-block-restart-interval", 0, "TreeDB: experimental outer-leaf restart interval (0=default)")
@@ -271,6 +272,17 @@ func parseTreeDBOuterLeafMode(s string) (string, error) {
 	}
 }
 
+func parseTreeDBWALFenceMode(s string) (treedb.ValueLogWALFenceMode, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "rid_join":
+		return treedb.ValueLogWALFenceModeRIDJoin, nil
+	case "simple_inline":
+		return treedb.ValueLogWALFenceModeSimpleInline, nil
+	default:
+		return "", fmt.Errorf("unsupported -treedb-wal-fence-mode=%q (expected rid_join|simple_inline)", s)
+	}
+}
+
 type treeDBOptionsReport struct {
 	opts     treedb.Options
 	notes    []string
@@ -299,6 +311,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("index_packed_valueptr=%t", r.opts.IndexPackedValuePtr))
 	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
 	lines = append(lines, fmt.Sprintf("index_outer_leaf_mode=%s", strings.TrimSpace(r.opts.IndexOuterLeafMode)))
+	lines = append(lines, fmt.Sprintf("vlog.wal_fence_mode=%s", strings.TrimSpace(string(r.opts.ValueLog.WALFenceMode))))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
@@ -585,6 +598,11 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	opts.IndexOuterLeafMode = outerMode
+	walFenceMode, err := parseTreeDBWALFenceMode(*treedbWALFenceMode)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	opts.ValueLog.WALFenceMode = walFenceMode
 	outerCodec, err := parseTreeDBVlogBlockCodec(*treedbOuterLeafBlockCodec)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err

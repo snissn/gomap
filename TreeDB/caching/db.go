@@ -580,6 +580,17 @@ func (db *DB) outerLeafFenceV2Enabled() bool {
 	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV2FencePtr
 }
 
+func normalizeValueLogWALFenceMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", string(backenddb.ValueLogWALFenceModeRIDJoin):
+		return string(backenddb.ValueLogWALFenceModeRIDJoin)
+	case string(backenddb.ValueLogWALFenceModeSimpleInline):
+		return string(backenddb.ValueLogWALFenceModeSimpleInline)
+	default:
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
+}
+
 func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	if !db.outerLeafV2Enabled() {
 		return value, nil
@@ -826,13 +837,20 @@ func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, 
 }
 
 func (db *DB) deferredValueLogEnabled() bool {
-	// Fence-pointer outer-leaf mode benefits from flush-time regrouping when WAL
-	// is disabled: singleton writes can coalesce into larger outer blocks before
-	// value-log append, reducing index pointer fanout.
+	// Fence-pointer outer-leaf mode benefits from flush-time regrouping so
+	// singleton writes can coalesce into larger outer blocks before value-log
+	// append, reducing index pointer fanout. WAL-on may opt into this path via
+	// WALFenceMode=simple_inline.
 	if db == nil {
 		return false
 	}
-	return db.disableJournal && db.outerLeafFenceV2Enabled() && db.valueLogEnabled() && db.allowValueLogPointers()
+	if !db.outerLeafFenceV2Enabled() || !db.valueLogEnabled() || !db.allowValueLogPointers() {
+		return false
+	}
+	if db.disableJournal {
+		return true
+	}
+	return db.valueLogWALFenceMode == string(backenddb.ValueLogWALFenceModeSimpleInline)
 }
 
 // sumKeyValueBytes returns the total bytes across paired key/value entries.
@@ -2594,6 +2612,10 @@ type Options struct {
 	// IndexOuterLeafMode selects the outer-leaf payload format.
 	// Supported values: "v1", "v2_blockptr", "v2_fenceptr".
 	IndexOuterLeafMode string
+	// ValueLogWALFenceMode selects WAL encoding behavior for pointer-eligible
+	// writes under v2 fence-pointer mode.
+	// Supported values: "rid_join" (default), "simple_inline".
+	ValueLogWALFenceMode string
 	// ValueLogDomainInlineThresholds configures optional per-domain overrides
 	// for inline-vs-pointer placement. Longest-prefix match wins.
 	ValueLogDomainInlineThresholds []backenddb.ValueLogDomainThreshold
@@ -2776,6 +2798,7 @@ type DB struct {
 	valueLogThreshold              int
 	valueLogDomainThresholds       []backenddb.ValueLogDomainThreshold
 	indexOuterLeafMode             string
+	valueLogWALFenceMode           string
 	outerLeafBlockTargetBytes      int
 	outerLeafBlockCodec            uint8
 	outerLeafBlockRestart          int
@@ -3618,6 +3641,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr {
 		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
 	}
+	valueLogWALFenceMode := normalizeValueLogWALFenceMode(opts.ValueLogWALFenceMode)
+	if valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeRIDJoin) &&
+		valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
+		return nil, fmt.Errorf("cachingdb: invalid value-log WAL fence mode %q", opts.ValueLogWALFenceMode)
+	}
 	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(opts.ValueLogOuterLeafBlockTargetBytes)
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
 	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
@@ -3879,6 +3907,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogThreshold:                    valueLogThreshold,
 		valueLogDomainThresholds:             valueLogDomainThresholds,
 		indexOuterLeafMode:                   indexOuterLeafMode,
+		valueLogWALFenceMode:                 valueLogWALFenceMode,
 		outerLeafBlockTargetBytes:            outerLeafBlockTarget,
 		outerLeafBlockCodec:                  outerLeafBlockCodec,
 		outerLeafBlockRestart:                outerLeafBlockRestart,
@@ -12168,6 +12197,7 @@ func (db *DB) Stats() map[string]string {
 	if fenceEnqueuedBytes > fenceMaterializedBytes {
 		fencePendingBytes = fenceEnqueuedBytes - fenceMaterializedBytes
 	}
+	stats["treedb.cache.v2_fenceptr.wal_fence_mode"] = db.valueLogWALFenceMode
 	stats["treedb.cache.v2_fenceptr.deferred_candidates"] = fmt.Sprintf("%d", fenceCandidates)
 	stats["treedb.cache.v2_fenceptr.deferred_groups"] = fmt.Sprintf("%d", fenceGroups)
 	stats["treedb.cache.v2_fenceptr.deferred_enqueued_keys"] = fmt.Sprintf("%d", fenceEnqueuedKeys)

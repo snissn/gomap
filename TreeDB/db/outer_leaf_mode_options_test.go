@@ -38,3 +38,41 @@ func TestOpen_ValueLogOuterLeafBlockTargetBytes_NegativeRejected(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestOpen_ValueLogWALFenceMode_DefaultAndSimpleInline(t *testing.T) {
+	dbDefault, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open default: %v", err)
+	}
+	if err := dbDefault.Close(); err != nil {
+		t.Fatalf("close default: %v", err)
+	}
+
+	dbSimpleInline, err := Open(Options{
+		Dir: t.TempDir(),
+		ValueLog: ValueLogOptions{
+			WALFenceMode: ValueLogWALFenceModeSimpleInline,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open simple_inline: %v", err)
+	}
+	if err := dbSimpleInline.Close(); err != nil {
+		t.Fatalf("close simple_inline: %v", err)
+	}
+}
+
+func TestOpen_ValueLogWALFenceMode_InvalidRejected(t *testing.T) {
+	_, err := Open(Options{
+		Dir: t.TempDir(),
+		ValueLog: ValueLogOptions{
+			WALFenceMode: ValueLogWALFenceMode("bogus"),
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "WAL fence mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
