@@ -274,6 +274,42 @@ bytes FramePayload
 - If `FrameFlags` indicates compression, frame payload is decoded first.
 - `DictID` selects dictionary for dict-compressed payloads.
 
+### 7.2 Outer-leaf payload envelope (`IndexOuterLeafMode=v2_blockptr|v2_fenceptr`)
+
+When outer-leaf mode `v2_blockptr` or `v2_fenceptr` is enabled, value-log
+payload bytes may be wrapped in an outer-leaf envelope (`Magic="TOL2"`):
+
+```text
+bytes[4] Magic            // "TOL2"
+u8       Version          // 1=single KV, 2=multi-KV block
+u8       Codec            // 0=raw, 1=snappy, 2=lz4
+u16      RestartInterval
+u16/u32  Version-specific fields
+u32      Checksum         // CRC32C(header-with-zero-checksum || encoded-payload)
+bytes    EncodedPayload
+```
+
+Version 1 stores one `{key,value}` pair (`keyLen`, `valueLen`, `rawLen`).
+
+Version 2 stores multiple sorted `{key,value}` pairs in one block payload:
+- entries use prefix-compressed key deltas (`shared`, `suffixLen`, `valueLen`),
+- a restart-offset table is appended,
+- trailer stores restart-count (`u32`).
+
+Mode semantics:
+- `v2_blockptr`: index leaves remain per-user-key pointer entries; each pointer
+  can reference a grouped outer-leaf block payload.
+- `v2_fenceptr`: index leaves store one fence-key pointer per outer block;
+  user keys are resolved by selecting predecessor fence pointers and searching
+  inside the outer block payload.
+
+Read path resolves pointer+key by decoding one block payload and searching
+inside it for the requested key.
+
+Pre-alpha note: `v2` outer-leaf layouts are still evolving. DB directories
+written by older experimental builds may fail to open under newer binaries (and
+vice versa).
+
 ## 8. Commit-Log Segment Format
 
 Commit-log file is a sequence of segments.

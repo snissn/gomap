@@ -327,7 +327,7 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	commitSeq := snap.state.CommitSeq
 	counts := make(map[uint32]uint64)
 
-	userIter := snap.tree.Iterator(nil, nil)
+	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := collectValueLogRefCounts(ctx, userIter, counts); err != nil {
 		_ = userIter.Close()
 		_ = snap.Close()
@@ -335,7 +335,8 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, valueReader{vlogs: snap.state.ValueLogSet}, snap.state.SystemRootPageID).Iterator(nil, nil)
+	sysIter := tree.New(snap.idx.pager, valueReader{vlogs: snap.state.ValueLogSet}, snap.state.SystemRootPageID).
+		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := collectValueLogRefCounts(ctx, sysIter, counts); err != nil {
 		_ = sysIter.Close()
 		_ = snap.Close()

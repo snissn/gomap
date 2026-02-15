@@ -8,6 +8,8 @@ const writevSupported = false
 
 const writevMaxIovs = 0
 
-func writevAll(fd int, iovs [][]byte) error {
-	return errors.New("valuelog: writev unsupported")
+type writevIovec struct{}
+
+func writevAll(fd int, iovs [][]byte, scratch []writevIovec) ([]writevIovec, writevCallStats, error) {
+	return scratch[:0], writevCallStats{}, errors.New("valuelog: writev unsupported")
 }

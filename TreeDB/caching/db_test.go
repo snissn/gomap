@@ -91,6 +91,66 @@ func deleteMutable(db *DB, key []byte) {
 	db.mutableBytes.Add(delta)
 }
 
+func countSnapshotLeafEntries(t *testing.T, snap *db.Snapshot) int {
+	t.Helper()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	state := snap.State()
+	if state == nil {
+		t.Fatalf("snapshot state nil")
+	}
+	p := snap.Pager()
+	if p == nil {
+		t.Fatalf("snapshot pager nil")
+	}
+
+	seen := make(map[uint64]struct{})
+	var walk func(pageID uint64) (int, error)
+	walk = func(pageID uint64) (int, error) {
+		if _, ok := seen[pageID]; ok {
+			return 0, nil
+		}
+		seen[pageID] = struct{}{}
+
+		data, err := p.Get(pageID)
+		if err != nil {
+			return 0, err
+		}
+		n := node.NewNodeView(data)
+		if !n.VerifyChecksum() {
+			return 0, fmt.Errorf("checksum mismatch on page %d", pageID)
+		}
+		switch n.Type() {
+		case page.PageTypeLeaf:
+			return int(n.Count()), nil
+		case page.PageTypeInternal:
+			total := 0
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				childID, err := n.GetInternalChildID(i)
+				if err != nil {
+					return 0, err
+				}
+				sub, err := walk(childID)
+				if err != nil {
+					return 0, err
+				}
+				total += sub
+			}
+			return total, nil
+		default:
+			return 0, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
+		}
+	}
+
+	total, err := walk(state.RootPageID)
+	if err != nil {
+		t.Fatalf("count leaf entries: %v", err)
+	}
+	return total
+}
+
 func (m *MockBackend) Get(key []byte) ([]byte, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -900,6 +960,442 @@ func TestCachingDB_FlushPersistsValueLogPointer(t *testing.T) {
 	}
 	if !bytes.Equal(got, val) {
 		t.Fatalf("backend Get mismatch")
+	}
+}
+
+func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                    1 << 20,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 256
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	b := cache.NewBatch()
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if err := b.Set(key, valueFor(i)); err != nil {
+			t.Fatalf("Set(%s): %v", key, err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	_ = b.Close()
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	stats := cache.Stats()
+	parseStatUint := func(key string) uint64 {
+		t.Helper()
+		v, ok := stats[key]
+		if !ok {
+			t.Fatalf("missing stats key %q", key)
+		}
+		n, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			t.Fatalf("parse %s=%q: %v", key, v, err)
+		}
+		return n
+	}
+	enqueuedKeys := parseStatUint("treedb.cache.v2_fenceptr.deferred_enqueued_keys")
+	materializedKeys := parseStatUint("treedb.cache.v2_fenceptr.deferred_materialized_keys")
+	pendingKeys := parseStatUint("treedb.cache.v2_fenceptr.deferred_pending_keys_estimate")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.deferred_enqueued_bytes")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.deferred_materialized_bytes")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_calls")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_flushed_memtables")
+	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_early_triggers")
+	if enqueuedKeys != 0 || materializedKeys != 0 || pendingKeys != 0 {
+		t.Fatalf("expected non-deferred fence path to keep deferred counters at zero, enqueued=%d materialized=%d pending=%d", enqueuedKeys, materializedKeys, pendingKeys)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	leafEntries := countSnapshotLeafEntries(t, snap)
+	_ = snap.Close()
+	if leafEntries <= 0 {
+		t.Fatalf("expected at least one persisted entry")
+	}
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	}
+
+}
+
+func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 256
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if err := cache.Set(key, valueFor(i)); err != nil {
+			t.Fatalf("Set(%s): %v", key, err)
+		}
+	}
+
+	// Deferred mode should keep singleton writes inline in the mutable memtable
+	// and regroup them into fence blocks at flush time.
+	shard := &cache.mutableShards[0]
+	shard.mu.Lock()
+	iter := shard.mem.NewIterator(nil, nil)
+	if !iter.Valid() {
+		shard.mu.Unlock()
+		t.Fatalf("expected mutable memtable entries before checkpoint")
+	}
+	_, _, flags := iter.UnsafeEntry()
+	_ = iter.Close()
+	shard.mu.Unlock()
+	if flags&node.FlagPointer != 0 {
+		t.Fatalf("expected deferred singleton writes to remain inline before flush")
+	}
+
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	stats := cache.Stats()
+	enqueuedKeys, err := strconv.ParseUint(stats["treedb.cache.v2_fenceptr.deferred_enqueued_keys"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse deferred_enqueued_keys: %v", err)
+	}
+	materializedKeys, err := strconv.ParseUint(stats["treedb.cache.v2_fenceptr.deferred_materialized_keys"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse deferred_materialized_keys: %v", err)
+	}
+	if enqueuedKeys == 0 || materializedKeys == 0 {
+		t.Fatalf("expected deferred fence stats to record work, enqueued=%d materialized=%d", enqueuedKeys, materializedKeys)
+	}
+	if materializedKeys > enqueuedKeys {
+		t.Fatalf("materialized keys exceeds enqueued keys: materialized=%d enqueued=%d", materializedKeys, enqueuedKeys)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	leafEntries := countSnapshotLeafEntries(t, snap)
+	_ = snap.Close()
+	if leafEntries <= 0 {
+		t.Fatalf("expected at least one persisted entry")
+	}
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected deferred regrouping to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	}
+
+	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		got, err := backend.Get(key)
+		if err != nil {
+			t.Fatalf("backend Get(%s): %v", key, err)
+		}
+		if !bytes.Equal(got, valueFor(i)) {
+			t.Fatalf("backend value mismatch for %s", key)
+		}
+	}
+}
+
+func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroupSharded(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    8,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 240
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if err := cache.Set(key, valueFor(i)); err != nil {
+			t.Fatalf("Set(%s): %v", key, err)
+		}
+	}
+
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	leafEntries := countSnapshotLeafEntries(t, snap)
+	_ = snap.Close()
+	if leafEntries <= 0 {
+		t.Fatalf("expected at least one persisted entry")
+	}
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected deferred regrouping to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	}
+
+	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		got, err := backend.Get(key)
+		if err != nil {
+			t.Fatalf("backend Get(%s): %v", key, err)
+		}
+		if !bytes.Equal(got, valueFor(i)) {
+			t.Fatalf("backend value mismatch for %s", key)
+		}
+	}
+}
+
+func TestCachingDB_FlushFenceModeDeferredBatchWritesRegroup(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    8,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 240
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	b := cache.NewBatch()
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if err := b.Set(key, valueFor(i)); err != nil {
+			t.Fatalf("Set(%s): %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	leafEntries := countSnapshotLeafEntries(t, snap)
+	_ = snap.Close()
+	if leafEntries <= 0 {
+		t.Fatalf("expected at least one persisted entry")
+	}
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected deferred regrouping to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	}
+
+	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		got, err := backend.Get(key)
+		if err != nil {
+			t.Fatalf("backend Get(%s): %v", key, err)
+		}
+		if !bytes.Equal(got, valueFor(i)) {
+			t.Fatalf("backend value mismatch for %s", key)
+		}
+	}
+}
+
+func TestCachingDB_FlushFenceModeDeferredBatchWritesImmediateRead(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    4,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 5000
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	b := cache.NewBatch()
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%08d", i))
+		if err := b.Set(key, valueFor(i)); err != nil {
+			t.Fatalf("Set(%s): %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+
+	// Deferred fence mode should keep mutable values inline before flush.
+	for i := range cache.mutableShards {
+		shard := &cache.mutableShards[i]
+		shard.mu.Lock()
+		it := shard.mem.NewIterator(nil, nil)
+		for it.Valid() {
+			_, _, flags := it.UnsafeEntry()
+			if flags&node.FlagPointer != 0 {
+				_ = it.Close()
+				shard.mu.Unlock()
+				t.Fatalf("expected inline mutable entry in deferred fence mode (shard=%d)", i)
+			}
+			it.Next()
+		}
+		_ = it.Close()
+		shard.mu.Unlock()
+	}
+
+	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
+		key := []byte(fmt.Sprintf("k%08d", i))
+		got, err := cache.Get(key)
+		if err != nil {
+			t.Fatalf("cache Get(%s): %v", key, err)
+		}
+		if !bytes.Equal(got, valueFor(i)) {
+			t.Fatalf("cache value mismatch for %s", key)
+		}
+	}
+
+	it, err := cache.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("Iterator: %v", err)
+	}
+	count := 0
+	for it.Valid() {
+		count++
+		it.Next()
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Iterator close: %v", err)
+	}
+	if count != totalKeys {
+		t.Fatalf("iterator count=%d want=%d", count, totalKeys)
 	}
 }
 

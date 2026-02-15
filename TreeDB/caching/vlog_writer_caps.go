@@ -21,6 +21,10 @@ type rawFrameBatchWriterInto interface {
 	AppendRawFramesWritevInto(records []valuelog.Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
 }
 
+type rawFrameBatchBufferedWriterInto interface {
+	AppendRawFramesBufferedInto(records []valuelog.Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, valuelog.FrameStats, error)
+}
+
 type preparedFrameAppender interface {
 	AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr) ([]page.ValuePtr, error)
 }
@@ -39,6 +43,7 @@ type vlogWriterCaps struct {
 	stats     frameStatsWriter
 	statsInto frameStatsWriterInto
 	rawInto   rawFrameBatchWriterInto
+	rawBuf    rawFrameBatchBufferedWriterInto
 	prepared  preparedFrameAppender
 }
 
@@ -59,6 +64,9 @@ func computeVlogWriterCaps(w valueWriter) vlogWriterCaps {
 	}
 	if v, ok := any(w).(rawFrameBatchWriterInto); ok {
 		caps.rawInto = v
+	}
+	if v, ok := any(w).(rawFrameBatchBufferedWriterInto); ok {
+		caps.rawBuf = v
 	}
 	if v, ok := any(w).(preparedFrameAppender); ok {
 		caps.prepared = v

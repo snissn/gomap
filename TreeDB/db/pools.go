@@ -48,8 +48,10 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.state = nil
 	s.vlogManager = nil
 	s.vlogPinned = false
-	s.registryID = 0
 	s.reader.vlogs = nil
+	s.reader.outerLeafMode = ""
+	s.reader.cache = nil
+	s.registryID = 0
 	s.closed.Store(false)
 	// treePager/treeRoot are intentionally preserved as a pooled cache key for
 	// the next AcquireSnapshot() on this same object. registryShardHint is also

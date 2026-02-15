@@ -10,6 +10,7 @@ type savedTreeDBFlagState struct {
 	packedValuePtr     bool
 	internalBaseDelta  bool
 	vlogAutoPolicy     string
+	outerLeafCache     int
 	disableWAL         bool
 	relaxedSync        bool
 	disableChecksum    bool
@@ -31,6 +32,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		packedValuePtr:     *treedbIndexPackedValuePtr,
 		internalBaseDelta:  *treedbIndexInternalBaseDelta,
 		vlogAutoPolicy:     *treedbVlogAutoPolicy,
+		outerLeafCache:     *treedbOuterLeafBlockCacheEntries,
 		disableWAL:         *treedbDisableWAL,
 		relaxedSync:        *treedbRelaxedSync,
 		disableChecksum:    *treedbDisableReadChecksum,
@@ -48,6 +50,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexPackedValuePtr = s.packedValuePtr
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
 	*treedbVlogAutoPolicy = s.vlogAutoPolicy
+	*treedbOuterLeafBlockCacheEntries = s.outerLeafCache
 	*treedbDisableWAL = s.disableWAL
 	*treedbRelaxedSync = s.relaxedSync
 	*treedbDisableReadChecksum = s.disableChecksum
@@ -64,6 +67,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexPackedValuePtr = false
 	*treedbIndexInternalBaseDelta = false
 	*treedbVlogAutoPolicy = "balanced"
+	*treedbOuterLeafBlockCacheEntries = 0
 	*treedbDisableWAL = false
 	*treedbRelaxedSync = false
 	*treedbDisableReadChecksum = false
@@ -86,6 +90,9 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if got := *treedbVlogAutoPolicy; got != "throughput" {
 		t.Fatalf("expected fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
 	}
+	if got := *treedbOuterLeafBlockCacheEntries; got != 8192 {
+		t.Fatalf("expected fast profile to set treedb-outer-leaf-block-cache-entries=8192, got %d", got)
+	}
 
 	resetTreeDBIndexFlagsForTest()
 	if err := applyProfile("wal_on_fast", map[string]bool{}); err != nil {
@@ -96,6 +103,9 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if got := *treedbVlogAutoPolicy; got != "throughput" {
 		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
+	}
+	if got := *treedbOuterLeafBlockCacheEntries; got != 8192 {
+		t.Fatalf("expected wal_on_fast profile to set treedb-outer-leaf-block-cache-entries=8192, got %d", got)
 	}
 }
 
@@ -117,6 +127,23 @@ func TestApplyProfile_FastKeepsDefaultFlushThreshold(t *testing.T) {
 	}
 	if got, want := *treedbFlushThreshold, int64(64*1024*1024); got != want {
 		t.Fatalf("wal_on_fast profile flush threshold = %d want %d", got, want)
+	}
+}
+
+func TestApplyProfile_FastRespectsExplicitOuterLeafCacheOverride(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbOuterLeafBlockCacheEntries = 256
+	explicitFlags = map[string]bool{
+		"treedb-outer-leaf-block-cache-entries": true,
+	}
+	if err := applyProfile("fast", explicitFlags); err != nil {
+		t.Fatalf("applyProfile fast: %v", err)
+	}
+	if got := *treedbOuterLeafBlockCacheEntries; got != 256 {
+		t.Fatalf("expected explicit outer leaf cache override to remain 256, got %d", got)
 	}
 }
 

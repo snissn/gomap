@@ -54,7 +54,7 @@ var (
 	keysMax            = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg             = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
 	dbsExcludeArg      = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
-	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, forkchoice->update_fork_choice")
+	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, batch_write_ss->batch_write_steady, forkchoice->update_fork_choice")
 	formatArg          = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg           = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
 	outDirArg          = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
@@ -79,15 +79,17 @@ var (
 	maxWall  = flag.Duration("max-wall", 0, "Abort the benchmark run if wall time exceeds this (0=disabled)")
 	maxRSSMB = flag.Int("max-rss-mb", 0, "Abort the benchmark run if RSS exceeds this many MiB (0=disabled; Linux-only)")
 
-	checkpointBetweenTests = flag.Bool("checkpoint-between-tests", false, "Force a best-effort durability checkpoint between each benchmark test (DBs that support Checkpoint())")
-	vacuumBetweenTests     = flag.Bool("vacuum-between-tests", false, "Vacuum supported DBs between each benchmark test (implies -checkpoint-between-tests; TreeDB: VacuumIndexOnline)")
-	checkpointEveryOps     = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
-	checkpointEveryBytes   = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
+	checkpointBetweenTests          = flag.Bool("checkpoint-between-tests", false, "Force a best-effort durability checkpoint between each benchmark test (DBs that support Checkpoint())")
+	vacuumBetweenTests              = flag.Bool("vacuum-between-tests", false, "Vacuum supported DBs between each benchmark test (implies -checkpoint-between-tests; TreeDB: VacuumIndexOnline)")
+	checkpointEveryOps              = flag.Int("checkpoint-every-ops", 0, "Force a best-effort durability checkpoint every N ops during write-heavy tests (0=disabled; DBs that support Checkpoint())")
+	checkpointEveryBytes            = flag.Int64("checkpoint-every-bytes", 0, "Force a best-effort durability checkpoint every N approx bytes during write-heavy tests (0=disabled; DBs that support Checkpoint())")
+	batchWriteSteadyCheckpointBytes = flag.Int64("batch-write-steady-checkpoint-bytes", 64<<20, "batch_write_steady: default periodic checkpoint interval in bytes when checkpoint-every-* flags are unset (0 disables)")
 
 	flushdrainCheckpointMax = flag.Duration("flushdrain-checkpoint-max", 0, "Abort flushdrain suite if checkpoint-before-random_read exceeds this duration (0=disabled)")
 
 	settleBeforeScans           = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
 	treedbCacheStatsBeforeReads = flag.Bool("treedb-cache-stats-before-reads", false, "Print select treedb.cache.* stats before read/scan tests (treedb only)")
+	treedbCacheStatsAfterTests  = flag.Bool("treedb-cache-stats-after-tests", false, "Print select treedb.cache.* stats after each benchmark test (treedb only)")
 )
 
 var explicitFlags = map[string]bool{}
@@ -146,10 +148,11 @@ type BenchConfig struct {
 	MaxWall  time.Duration
 	MaxRSSMB int
 
-	CheckpointBetweenTests bool
-	VacuumBetweenTests     bool
-	CheckpointEveryOps     int
-	CheckpointEveryBytes   int64
+	CheckpointBetweenTests          bool
+	VacuumBetweenTests              bool
+	CheckpointEveryOps              int
+	CheckpointEveryBytes            int64
+	BatchWriteSteadyCheckpointBytes int64
 
 	SettleBeforeScans bool
 
@@ -163,6 +166,7 @@ type BenchConfig struct {
 	TreeDBDisablePiggybackCompaction bool
 
 	TreeDBCacheStatsBeforeReads bool
+	TreeDBCacheStatsAfterTests  bool
 }
 
 type dirDiskUsage struct {
@@ -321,6 +325,21 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "DBs:         %s\n", *dbsArg)
 	fmt.Fprintf(os.Stderr, "Tests:       %s\n", *testArg)
+	selectedTests := normalizeTests(parseList(*testArg))
+	selectedDBs := resolveDBs(*dbsArg, *dbsExcludeArg)
+	runsTreeDB := false
+	for _, name := range selectedDBs {
+		if strings.HasPrefix(strings.ToLower(name), "treedb") {
+			runsTreeDB = true
+			break
+		}
+	}
+	hasAllTests := contains(selectedTests, "all")
+	runsBatchWrite := hasAllTests || contains(selectedTests, "batch_write")
+	runsBatchWriteSteady := hasAllTests || contains(selectedTests, "batch_write_steady")
+	if runsTreeDB && runsBatchWrite && !runsBatchWriteSteady {
+		fmt.Fprintf(os.Stderr, "Note:        TreeDB batch_write reports front-end ingest only; use batch_write_steady for settled backend throughput.\n")
+	}
 	fmt.Fprintf(os.Stderr, "Seed:        %d\n", seedUsed)
 	fmt.Fprintf(os.Stderr, "\n")
 
@@ -362,8 +381,10 @@ func main() {
 		VacuumBetweenTests:               *vacuumBetweenTests,
 		CheckpointEveryOps:               *checkpointEveryOps,
 		CheckpointEveryBytes:             *checkpointEveryBytes,
+		BatchWriteSteadyCheckpointBytes:  *batchWriteSteadyCheckpointBytes,
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
+		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
 		TreeDBIterDebug:                  *treedbIterDebug,
 		TreeDBIterDebugLimit:             *treedbIterDebugLimit,
 		TreeDBDisableWAL:                 *treedbDisableWAL,
@@ -529,6 +550,12 @@ func main() {
 			out, err := runStorageCeilingSuite(baseCfg)
 			if err != nil {
 				log.Fatalf("storage_ceiling suite: %v", err)
+			}
+			fmt.Print(out)
+		case "outerleaf_approx", "outerleaf-approx":
+			out, err := runOuterLeafApproxSuite(baseCfg)
+			if err != nil {
+				log.Fatalf("outerleaf_approx suite: %v", err)
 			}
 			fmt.Print(out)
 		case "vlog_dict", "vlog-dict":
@@ -867,8 +894,10 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.flush_threshold_bytes",
 		"treedb.cache.max_queued_memtables",
 		"treedb.cache.flush_bps_ewma",
+		"treedb.cache.stats.backend_write_batches_total",
 		"treedb.cache.wal_bytes_estimate",
 		"treedb.cache.vlog_retained_bytes_estimate",
+		"treedb.cache.materialization.lag_age_ms",
 		"treedb.cache.vlog_auto.frames.off",
 		"treedb.cache.vlog_auto.frames.dict",
 		"treedb.cache.vlog_auto.frames.block_snappy",
@@ -890,6 +919,36 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_dict.frames_attempted",
 		"treedb.cache.vlog_dict.frames_kept",
 		"treedb.cache.vlog_dict.current_k",
+		"treedb.cache.vlog_writev.syscalls",
+		"treedb.cache.vlog_writev.bytes",
+		"treedb.cache.vlog_writev.iovecs",
+		"treedb.cache.vlog_writev.flushes",
+		"treedb.cache.vlog_writev.bytes_per_syscall",
+		"treedb.cache.vlog_writev.iovecs_per_syscall",
+		"treedb.cache.vlog_writev.bytes_per_flush",
+		"treedb.cache.vlog_writev.syscalls_per_flush",
+		"treedb.cache.vlog_write.syscalls",
+		"treedb.cache.vlog_write.bytes",
+		"treedb.cache.vlog_write.calls",
+		"treedb.cache.vlog_write.bytes_per_syscall",
+		"treedb.cache.vlog_write.bytes_per_call",
+		"treedb.cache.vlog_write.syscalls_per_call",
+		"treedb.cache.vlog_io.syscalls",
+		"treedb.cache.vlog_io.bytes",
+		"treedb.cache.vlog_io.bytes_per_syscall",
+		"treedb.cache.v2_fenceptr.deferred_candidates",
+		"treedb.cache.v2_fenceptr.deferred_groups",
+		"treedb.cache.v2_fenceptr.deferred_pending_keys_estimate",
+		"treedb.cache.v2_fenceptr.deferred_pending_bytes_estimate",
+		"treedb.cache.v2_fenceptr.avg_keys_per_group",
+		"treedb.cache.v2_fenceptr.assist_calls",
+		"treedb.cache.v2_fenceptr.assist_flushed_memtables",
+		"treedb.cache.v2_fenceptr.assist_early_triggers",
+		"treedb.vlog.outer_leaf_block_cache.hits",
+		"treedb.vlog.outer_leaf_block_cache.misses",
+		"treedb.vlog.outer_leaf_block_cache.hit_ratio",
+		"treedb.vlog.outer_leaf_block_cache.entries",
+		"treedb.vlog.outer_leaf_block_cache.capacity",
 	}
 
 	fmt.Fprintf(w, "%s (%s):", prefix, inst.Wrapper.Name())
@@ -1287,6 +1346,170 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	encodeKey := func(dst []byte, key uint64) {
 		keyShape.encode(dst, key)
 	}
+	runBatchWrite := func(db kvstore.DB, steady bool) (float64, error) {
+		batcher, ok := db.(kvstore.Batcher)
+		if !ok {
+			return math.NaN(), nil
+		}
+		testLabel := "batch_write"
+		if steady {
+			testLabel = "batch_write_steady"
+		}
+		values, err := getWriteValuePool()
+		if err != nil {
+			return 0, fmt.Errorf("%s values: %w", testLabel, err)
+		}
+		start := time.Now()
+		pc := newPeriodicCheckpoint(cfg)
+		if steady && pc == nil && cfg.BatchWriteSteadyCheckpointBytes > 0 {
+			pc = &periodicCheckpoint{everyBytes: cfg.BatchWriteSteadyCheckpointBytes}
+		}
+		perOpBytes := int64(8 + cfg.ValueSize)
+		total := cfg.Keys
+		valPos := 0
+		// Keep the precomputed-key optimization bounded so very large runs do
+		// not retain a huge contiguous key buffer for the whole benchmark.
+		const maxPrecomputedKeyBytes = 128 << 20 // 128 MiB
+		precomputeKeys := total > 0 && total <= maxPrecomputedKeyBytes/8
+		var keyBytes []byte
+		if precomputeKeys {
+			keyBytes = make([]byte, total*8)
+			for j := 0; j < total; j++ {
+				encodeKey(keyBytes[j*8:(j+1)*8], uint64(j+cfg.Keys))
+			}
+		}
+		type batcherWithSize interface {
+			NewBatchWithSize(size int) (kvstore.Batch, error)
+		}
+		type batchSetView interface {
+			SetView(key, value []byte) error
+		}
+		type resettableBatch interface {
+			Reset()
+		}
+		var (
+			batch      kvstore.Batch
+			setView    func(key, value []byte) error
+			resetBatch func()
+		)
+		openBatch := func() error {
+			var err error
+			if bs, ok := batcher.(batcherWithSize); ok {
+				batch, err = bs.NewBatchWithSize(cfg.BatchSize)
+			} else {
+				batch, err = batcher.NewBatch()
+			}
+			if err != nil {
+				return err
+			}
+			setView = nil
+			if sv, ok := batch.(batchSetView); ok {
+				setView = sv.SetView
+			}
+			resetBatch = nil
+			if rb, ok := batch.(resettableBatch); ok {
+				resetBatch = rb.Reset
+			}
+			return nil
+		}
+		defer func() {
+			if batch != nil {
+				_ = batch.Close()
+			}
+		}()
+		for i := 0; i < total; i += cfg.BatchSize {
+			if i&8191 == 0 {
+				if err := guard.Checkpoint(); err != nil {
+					return 0, err
+				}
+			}
+			if batch == nil {
+				if err := openBatch(); err != nil {
+					return 0, fmt.Errorf("%s: new batch: %w", testLabel, err)
+				}
+			} else if resetBatch != nil {
+				resetBatch()
+			} else {
+				if err := batch.Close(); err != nil {
+					return 0, fmt.Errorf("%s: close: %w", testLabel, err)
+				}
+				batch = nil
+				if err := openBatch(); err != nil {
+					return 0, fmt.Errorf("%s: new batch: %w", testLabel, err)
+				}
+			}
+
+			end := i + cfg.BatchSize
+			if end > total {
+				end = total
+			}
+			if setView != nil {
+				if precomputeKeys {
+					// batch_write uses immutable values from a prebuilt pool and
+					// precomputed immutable keys.
+					for j := i; j < end; j++ {
+						keyView := keyBytes[j*8 : (j+1)*8]
+						value := values[valPos%len(values)]
+						valPos++
+						if err := setView(keyView, value); err != nil {
+							return 0, fmt.Errorf("%s: set: %w", testLabel, err)
+						}
+					}
+				} else {
+					// Keep the zero-copy SetView path for large key counts by using
+					// one owned key slab per batch (stable beyond Commit()).
+					need := (end - i) * 8
+					keysView := make([]byte, need)
+					for j := i; j < end; j++ {
+						off := (j - i) * 8
+						keyView := keysView[off : off+8]
+						encodeKey(keyView, uint64(j+cfg.Keys))
+						value := values[valPos%len(values)]
+						valPos++
+						if err := setView(keyView, value); err != nil {
+							return 0, fmt.Errorf("%s: set: %w", testLabel, err)
+						}
+					}
+				}
+			} else {
+				for j := i; j < end; j++ {
+					var keyView []byte
+					if precomputeKeys {
+						keyView = keyBytes[j*8 : (j+1)*8]
+					} else {
+						var key [8]byte
+						encodeKey(key[:], uint64(j+cfg.Keys))
+						keyView = key[:]
+					}
+					value := values[valPos%len(values)]
+					valPos++
+					if err := batch.Set(keyView, value); err != nil {
+						return 0, fmt.Errorf("%s: set: %w", testLabel, err)
+					}
+				}
+			}
+			if err := batch.Commit(); err != nil {
+				return 0, fmt.Errorf("%s: commit: %w", testLabel, err)
+			}
+			if resetBatch == nil {
+				if err := batch.Close(); err != nil {
+					return 0, fmt.Errorf("%s: close: %w", testLabel, err)
+				}
+				batch = nil
+			}
+			if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
+				return 0, fmt.Errorf("%s checkpoint: %w", testLabel, err)
+			}
+		}
+		if steady {
+			if cp, ok := db.(checkpointer); ok {
+				if err := cp.Checkpoint(); err != nil {
+					return 0, fmt.Errorf("%s final checkpoint: %w", testLabel, err)
+				}
+			}
+		}
+		return float64(total) / time.Since(start).Seconds(), nil
+	}
 	testFuncs := map[string]TestFunc{
 		"vacuum_index": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
 			td, ok := db.(*treedbadapter.DB)
@@ -1529,137 +1752,10 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			return float64(len(datasetSortedKeys)) / time.Since(start).Seconds(), nil
 		},
 		"batch_write": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
-			batcher, ok := db.(kvstore.Batcher)
-			if !ok {
-				return math.NaN(), nil
-			}
-			values, err := getWriteValuePool()
-			if err != nil {
-				return 0, fmt.Errorf("batch_write values: %w", err)
-			}
-			start := time.Now()
-			pc := newPeriodicCheckpoint(cfg)
-			perOpBytes := int64(8 + cfg.ValueSize)
-			total := cfg.Keys
-			valPos := 0
-			// Keep the precomputed-key optimization bounded so very large runs do
-			// not retain a huge contiguous key buffer for the whole benchmark.
-			const maxPrecomputedKeyBytes = 128 << 20 // 128 MiB
-			precomputeKeys := total > 0 && total <= maxPrecomputedKeyBytes/8
-			var keyBytes []byte
-			if precomputeKeys {
-				keyBytes = make([]byte, total*8)
-				for j := 0; j < total; j++ {
-					encodeKey(keyBytes[j*8:(j+1)*8], uint64(j+cfg.Keys))
-				}
-			}
-			type batcherWithSize interface {
-				NewBatchWithSize(size int) (kvstore.Batch, error)
-			}
-			type batchSetView interface {
-				SetView(key, value []byte) error
-			}
-			type resettableBatch interface {
-				Reset()
-			}
-			var (
-				batch      kvstore.Batch
-				setView    func(key, value []byte) error
-				resetBatch func()
-			)
-			openBatch := func() error {
-				var err error
-				if bs, ok := batcher.(batcherWithSize); ok {
-					batch, err = bs.NewBatchWithSize(cfg.BatchSize)
-				} else {
-					batch, err = batcher.NewBatch()
-				}
-				if err != nil {
-					return err
-				}
-				setView = nil
-				if sv, ok := batch.(batchSetView); ok {
-					setView = sv.SetView
-				}
-				resetBatch = nil
-				if rb, ok := batch.(resettableBatch); ok {
-					resetBatch = rb.Reset
-				}
-				return nil
-			}
-			defer func() {
-				if batch != nil {
-					_ = batch.Close()
-				}
-			}()
-			for i := 0; i < total; i += cfg.BatchSize {
-				if i&8191 == 0 {
-					if err := guard.Checkpoint(); err != nil {
-						return 0, err
-					}
-				}
-				if batch == nil {
-					if err := openBatch(); err != nil {
-						return 0, fmt.Errorf("batch_write: new batch: %w", err)
-					}
-				} else if resetBatch != nil {
-					resetBatch()
-				} else {
-					if err := batch.Close(); err != nil {
-						return 0, fmt.Errorf("batch_write: close: %w", err)
-					}
-					batch = nil
-					if err := openBatch(); err != nil {
-						return 0, fmt.Errorf("batch_write: new batch: %w", err)
-					}
-				}
-
-				end := i + cfg.BatchSize
-				if end > total {
-					end = total
-				}
-				if setView != nil && precomputeKeys {
-					// batch_write uses immutable values from a prebuilt pool and
-					// precomputed immutable keys.
-					for j := i; j < end; j++ {
-						keyView := keyBytes[j*8 : (j+1)*8]
-						value := values[valPos%len(values)]
-						valPos++
-						if err := setView(keyView, value); err != nil {
-							return 0, fmt.Errorf("batch_write: set: %w", err)
-						}
-					}
-				} else {
-					for j := i; j < end; j++ {
-						var keyView []byte
-						if precomputeKeys {
-							keyView = keyBytes[j*8 : (j+1)*8]
-						} else {
-							var key [8]byte
-							encodeKey(key[:], uint64(j+cfg.Keys))
-							keyView = key[:]
-						}
-						value := values[valPos%len(values)]
-						valPos++
-						if err := batch.Set(keyView, value); err != nil {
-							return 0, fmt.Errorf("batch_write: set: %w", err)
-						}
-					}
-				}
-				if err := batch.Commit(); err != nil {
-					return 0, fmt.Errorf("batch_write: commit: %w", err)
-				}
-				if resetBatch == nil {
-					if err := batch.Close(); err != nil {
-						return 0, fmt.Errorf("batch_write: close: %w", err)
-					}
-					batch = nil
-				}
-				if err := pc.Add(db, end-i, int64(end-i)*perOpBytes); err != nil {
-					return 0, fmt.Errorf("batch_write checkpoint: %w", err)
-				}
-			}
-			return float64(total) / time.Since(start).Seconds(), nil
+			return runBatchWrite(db, false)
+		},
+		"batch_write_steady": func(db kvstore.DB, _ *rand.Rand) (float64, error) {
+			return runBatchWrite(db, true)
 		},
 		"batch_random": func(db kvstore.DB, rng *rand.Rand) (float64, error) {
 			batcher, ok := db.(kvstore.Batcher)
@@ -2578,7 +2674,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		},
 	}
 
-	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"}
+	allTestOrder := []string{"sequential_write", "random_write", "dataset_write_random", "dataset_write_sorted", "batch_write", "batch_write_steady", "batch_random", "batch_delete", "batch_small_seq", "random_delete", "random_read", "random_read_parallel", "random_read_parallel_acquire_snapshot", "random_read_batch", "full_scan", "prefix_scan"}
 	displayNames := map[string]string{
 		"vacuum_index":                          "VACUUM (Index)",
 		"fragmentation_report_pre":              "Fragmentation Report (Pre-Settle)",
@@ -2597,6 +2693,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"prefix_scan":                           "Prefix Scan",
 		"prefix_scan2":                          "Prefix Scan (After VACUUM)",
 		"batch_write":                           "Batch Write",
+		"batch_write_steady":                    "Batch Write (Steady)",
 		"batch_random":                          "Batch Random",
 		"batch_delete":                          "Batch Delete",
 		"batch_small_seq":                       "Batch Small Seq",
@@ -2639,7 +2736,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	if containsAny(finalTestOrder, "random_write", "random_write_parallel", "batch_random", "update_fork_choice") {
 		setMaxEncoded(mulUint64Cap(uint64(cfg.Keys), 10))
 	}
-	if containsAny(finalTestOrder, "batch_write", "prefix_scan", "prefix_scan2") {
+	if containsAny(finalTestOrder, "batch_write", "batch_write_steady", "prefix_scan", "prefix_scan2") {
 		setMaxEncoded(mulUint64Cap(uint64(cfg.Keys), 2))
 	}
 	if err := keyShape.validate(maxEncodedKey); err != nil {
@@ -2656,6 +2753,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		"dataset_write_random",
 		"dataset_write_sorted",
 		"batch_write",
+		"batch_write_steady",
 		"batch_random",
 		"batch_small_seq",
 	)
@@ -2691,7 +2789,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		expectedFullScanCount = cfg.Keys
 	}
 
-	if contains(finalTestOrder, "batch_write") && !contains(finalTestOrder, "sequential_write") && !contains(finalTestOrder, "random_write") && !contains(finalTestOrder, "dataset_write_random") && !contains(finalTestOrder, "dataset_write_sorted") {
+	if containsAny(finalTestOrder, "batch_write", "batch_write_steady") && !contains(finalTestOrder, "sequential_write") && !contains(finalTestOrder, "random_write") && !contains(finalTestOrder, "dataset_write_random") && !contains(finalTestOrder, "dataset_write_sorted") {
 		prefixScanBase = cfg.Keys
 	}
 
@@ -2945,6 +3043,11 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 			// Update live table cell
 			_ = liveTbl.UpdateCell(testName, inst.Wrapper.Name(), opsPerSec)
+		}
+		if cfg.TreeDBCacheStatsAfterTests {
+			for _, inst := range instances {
+				printTreeDBCacheStats(os.Stderr, inst, "post-"+testName+" treedb.cache")
+			}
 		}
 	}
 
@@ -4220,6 +4323,8 @@ func normalizeTests(list []string) []string {
 			t = "batch_random"
 		case "batch_write_small_seq":
 			t = "batch_small_seq"
+		case "batch_write_ss":
+			t = "batch_write_steady"
 		}
 		if t == "" {
 			continue

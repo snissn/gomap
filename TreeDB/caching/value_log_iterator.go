@@ -10,16 +10,17 @@ import (
 
 type valueLogIterator struct {
 	iter iterator.UnsafeIterator
-	read func(page.ValuePtr) ([]byte, error)
+	read func(key []byte, ptr page.ValuePtr) ([]byte, error)
 
 	cached       bool
 	cachedValue  []byte
 	cachedPtr    page.ValuePtr
 	cachedHasPtr bool
+	keyScratch   []byte
 	err          error
 }
 
-func newValueLogIterator(iter iterator.UnsafeIterator, read func(page.ValuePtr) ([]byte, error)) iterator.UnsafeIterator {
+func newValueLogIterator(iter iterator.UnsafeIterator, read func(key []byte, ptr page.ValuePtr) ([]byte, error)) iterator.UnsafeIterator {
 	if iter == nil || read == nil {
 		return iter
 	}
@@ -135,7 +136,10 @@ func (it *valueLogIterator) loadValue() {
 	}
 	it.cachedHasPtr = true
 	it.cachedPtr = ptr
-	val, err := it.read(ptr)
+	unsafeKey := it.iter.UnsafeKey()
+	// Keep a stable key view for the read callback without per-entry allocation.
+	it.keyScratch = append(it.keyScratch[:0], unsafeKey...)
+	val, err := it.read(it.keyScratch, ptr)
 	if err != nil {
 		it.err = err
 		return

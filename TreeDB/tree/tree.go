@@ -33,6 +33,12 @@ type SlabReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
 
+// FenceBlockEntry is one logical key/value entry expanded from a fence-pointer block.
+type FenceBlockEntry struct {
+	Key   []byte
+	Value []byte
+}
+
 // Optional fast path for append-style pointer reads that can reuse caller
 // buffers and avoid extra allocations.
 type slabUnsafeAppender interface {
@@ -44,11 +50,76 @@ type slabUnsafeBatchAppender interface {
 	ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error)
 }
 
+// Optional key-aware pointer reads for outer-leaf block payloads.
+type slabUnsafeKeyReader interface {
+	ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, error)
+}
+
+// Optional fence-key lookup reads for fence-only outer-leaf mode.
+// found=false indicates the key does not exist in the referenced block.
+type slabUnsafeFenceKeyReader interface {
+	ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error)
+}
+
+// Optional capability probe for fence-key lookup mode.
+// When false, tree miss paths can skip fence fallback scans entirely.
+type slabFenceLookupMode interface {
+	FenceLookupEnabled() bool
+}
+
+// Optional block expansion reads for fence-only outer-leaf mode.
+// ok=false means the reader is not in fence expansion mode for this pointer.
+type slabUnsafeFenceBlockReader interface {
+	ReadUnsafeFenceBlock(ptr page.ValuePtr) (entries []FenceBlockEntry, ok bool, err error)
+}
+
+// Optional key-only block expansion reads for fence-only outer-leaf mode.
+// ok=false means the reader is not in fence expansion mode for this pointer.
+type slabUnsafeFenceBlockKeyReader interface {
+	ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) (keys [][]byte, ok bool, err error)
+}
+
+// Optional key-aware append-style pointer reads.
+type slabUnsafeKeyAppender interface {
+	ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, error)
+}
+
+// Optional key-aware batched append-style pointer reads.
+type slabUnsafeKeyBatchAppender interface {
+	ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][]byte, dst [][]byte) ([][]byte, error)
+}
+
+// Optional capability gate for key-aware pointer read interfaces.
+type slabKeyAwareCapability interface {
+	KeyAwareEnabled() bool
+}
+
+func keyAwarePointerReadsEnabled(sr SlabReader) bool {
+	if gate, ok := sr.(slabKeyAwareCapability); ok {
+		return gate.KeyAwareEnabled()
+	}
+	return true
+}
+
+func fencePointerLookupsEnabled(sr SlabReader) bool {
+	if gate, ok := sr.(slabFenceLookupMode); ok {
+		return gate.FenceLookupEnabled()
+	}
+	return true
+}
+
 type Tree struct {
-	pager        *pager.Pager
-	slabReader   SlabReader
-	slabAppender slabUnsafeAppender
-	rootPageID   uint64
+	pager           *pager.Pager
+	slabReader      SlabReader
+	slabAppender    slabUnsafeAppender
+	slabKeyReader   slabUnsafeKeyReader
+	slabFenceReader slabUnsafeFenceKeyReader
+	fenceLookupMode bool
+	slabFenceBlocks slabUnsafeFenceBlockReader
+	slabFenceKeys   slabUnsafeFenceBlockKeyReader
+	slabKeyAppender slabUnsafeKeyAppender
+	slabKeyBatcher  slabUnsafeKeyBatchAppender
+	rootPageID      uint64
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
@@ -57,9 +128,34 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		slabReader: sr,
 		rootPageID: root,
 	}
+	keyAwareEnabled := keyAwarePointerReadsEnabled(sr)
+	fenceEnabled := fencePointerLookupsEnabled(sr)
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
 	}
+	if keyAwareEnabled {
+		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
+			t.slabKeyReader = keyReader
+		}
+		if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
+			t.slabKeyAppender = keyAppender
+		}
+		if keyBatcher, ok := sr.(slabUnsafeKeyBatchAppender); ok {
+			t.slabKeyBatcher = keyBatcher
+		}
+	}
+	if fenceEnabled {
+		if fenceReader, ok := sr.(slabUnsafeFenceKeyReader); ok {
+			t.slabFenceReader = fenceReader
+		}
+		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
+			t.slabFenceBlocks = fenceBlocks
+		}
+		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
+			t.slabFenceKeys = fenceKeys
+		}
+	}
+	t.fenceLookupMode = fenceEnabled && t.slabFenceReader != nil
 	return t
 }
 
@@ -67,11 +163,56 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	t.pager = p
 	t.slabReader = sr
+	keyAwareEnabled := keyAwarePointerReadsEnabled(sr)
+	fenceEnabled := fencePointerLookupsEnabled(sr)
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
 	} else {
 		t.slabAppender = nil
 	}
+	if keyAwareEnabled {
+		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
+			t.slabKeyReader = keyReader
+		} else {
+			t.slabKeyReader = nil
+		}
+		if keyAppender, ok := sr.(slabUnsafeKeyAppender); ok {
+			t.slabKeyAppender = keyAppender
+		} else {
+			t.slabKeyAppender = nil
+		}
+		if keyBatcher, ok := sr.(slabUnsafeKeyBatchAppender); ok {
+			t.slabKeyBatcher = keyBatcher
+		} else {
+			t.slabKeyBatcher = nil
+		}
+	} else {
+		t.slabKeyReader = nil
+		t.slabKeyAppender = nil
+		t.slabKeyBatcher = nil
+	}
+	if fenceEnabled {
+		if fenceReader, ok := sr.(slabUnsafeFenceKeyReader); ok {
+			t.slabFenceReader = fenceReader
+		} else {
+			t.slabFenceReader = nil
+		}
+		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
+			t.slabFenceBlocks = fenceBlocks
+		} else {
+			t.slabFenceBlocks = nil
+		}
+		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
+			t.slabFenceKeys = fenceKeys
+		} else {
+			t.slabFenceKeys = nil
+		}
+	} else {
+		t.slabFenceReader = nil
+		t.slabFenceBlocks = nil
+		t.slabFenceKeys = nil
+	}
+	t.fenceLookupMode = fenceEnabled && t.slabFenceReader != nil
 	t.rootPageID = root
 }
 
@@ -134,6 +275,15 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 				return node.LeafEntry{}, err
 			}
 			if !found {
+				if val, ok, err := t.lookupFenceValueView(&n, idx, key); err != nil {
+					return node.LeafEntry{}, err
+				} else if ok {
+					return node.LeafEntry{
+						Key:   append([]byte(nil), key...),
+						Value: val,
+						Flags: 0,
+					}, nil
+				}
 				return node.LeafEntry{}, ErrKeyNotFound
 			}
 
@@ -155,6 +305,29 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 		}
 	}
 	return node.LeafEntry{}, errors.New("tree too deep")
+}
+
+func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byte, bool, error) {
+	if !t.fenceLookupMode || t.slabFenceReader == nil || n == nil || idx == 0 {
+		return nil, false, nil
+	}
+	for scan := idx; scan > 0; scan-- {
+		// Fence lookup only needs pointer+flags. Avoid full leaf-entry decode
+		// (key reconstruction) on every probe in columnar-prefix leaves.
+		_, ptr, flags, err := n.GetLeafValueView(scan - 1)
+		if err != nil {
+			return nil, false, err
+		}
+		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		val, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
+		if err != nil {
+			return nil, false, err
+		}
+		return val, found, nil
+	}
+	return nil, false, nil
 }
 
 func (t *Tree) lookupLeafValueView(key []byte) ([]byte, page.ValuePtr, byte, error) {
@@ -206,6 +379,13 @@ func (t *Tree) lookupLeafValueView(key []byte) ([]byte, page.ValuePtr, byte, err
 				return nil, page.ValuePtr{}, 0, err
 			}
 			if !found {
+				if val, ok, err := t.lookupFenceValueView(&n, idx, key); err != nil {
+					return nil, page.ValuePtr{}, 0, err
+				} else if ok {
+					// Fence-only mode resolves user keys from outer blocks.
+					// Return as inline to avoid a second pointer lookup in callers.
+					return val, page.ValuePtr{}, 0, nil
+				}
 				return nil, page.ValuePtr{}, 0, ErrKeyNotFound
 			}
 
@@ -232,6 +412,13 @@ func (t *Tree) GetUnsafe(key []byte) ([]byte, error) {
 		return nil, ErrKeyNotFound
 	}
 	if flags&node.FlagPointer != 0 {
+		if t.slabKeyReader != nil {
+			out, err := t.slabKeyReader.ReadUnsafeForKey(ptr, key)
+			if err != nil {
+				return nil, err
+			}
+			return out, nil
+		}
 		out, err := t.slabReader.ReadUnsafe(ptr)
 		if err != nil {
 			return nil, err
@@ -252,6 +439,36 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, ErrKeyNotFound
 	}
 	if flags&node.FlagPointer != 0 {
+		if t.slabKeyAppender != nil {
+			oldLen := len(dst)
+			tail, err := t.slabKeyAppender.ReadUnsafeAppendForKey(ptr, key, dst[oldLen:oldLen])
+			if err != nil {
+				return dst, err
+			}
+			if oldLen == 0 {
+				return tail, nil
+			}
+			if len(tail) == 0 {
+				return dst[:oldLen], nil
+			}
+			if cap(dst) > oldLen {
+				base := dst[:cap(dst):cap(dst)]
+				if &tail[0] == &base[oldLen] {
+					return dst[:oldLen+len(tail)], nil
+				}
+			}
+			return append(dst[:oldLen], tail...), nil
+		}
+		if t.slabKeyReader != nil {
+			out, err := t.slabKeyReader.ReadUnsafeForKey(ptr, key)
+			if err != nil {
+				return dst, err
+			}
+			if out == nil {
+				return dst, nil
+			}
+			return append(dst, out...), nil
+		}
 		if t.slabAppender != nil {
 			oldLen := len(dst)
 			tail, err := t.slabAppender.ReadUnsafeAppend(ptr, dst[oldLen:oldLen])
