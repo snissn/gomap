@@ -334,7 +334,10 @@ func main() {
 			break
 		}
 	}
-	if runsTreeDB && contains(selectedTests, "batch_write") && !contains(selectedTests, "batch_write_steady") {
+	hasAllTests := contains(selectedTests, "all")
+	runsBatchWrite := hasAllTests || contains(selectedTests, "batch_write")
+	runsBatchWriteSteady := hasAllTests || contains(selectedTests, "batch_write_steady")
+	if runsTreeDB && runsBatchWrite && !runsBatchWriteSteady {
 		fmt.Fprintf(os.Stderr, "Note:        TreeDB batch_write reports front-end ingest only; use batch_write_steady for settled backend throughput.\n")
 	}
 	fmt.Fprintf(os.Stderr, "Seed:        %d\n", seedUsed)

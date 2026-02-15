@@ -97,8 +97,8 @@ run_one() {
     -range-span "$RANGE_SPAN"
     -treedb-chunk-size "$CHUNK_SIZE"
     -batch-write-steady-checkpoint-bytes "$BATCH_WRITE_STEADY_CHECKPOINT_BYTES"
-    -progress=false
-    -format markdown
+    -progress=true
+    -format text
     -seed "$SEED"
   )
   if [[ "$CHECKPOINT_BETWEEN_TESTS" != "0" ]]; then
@@ -198,14 +198,40 @@ for profile in profiles:
         case_id = case["id"]
         logs = sorted((out / "runs" / profile / case_id).glob("measured_*.md"))
         if not logs:
+            if profile in gate_profiles:
+                for test_name in tests:
+                    failures.append({
+                        "profile": profile,
+                        "case": case_id,
+                        "test": test_name,
+                        "reason": "missing measured logs for case",
+                    })
             continue
         for test_name in tests:
             vals = []
+            missing_metrics = False
             for log in logs:
                 v = parse_metric(log, test_name)
-                if v is not None:
-                    vals.append(v)
+                if v is None:
+                    missing_metrics = True
+                    continue
+                vals.append(v)
             if not vals:
+                if profile in gate_profiles:
+                    failures.append({
+                        "profile": profile,
+                        "case": case_id,
+                        "test": test_name,
+                        "reason": "no metrics parsed for test",
+                    })
+                continue
+            if missing_metrics and profile in gate_profiles:
+                failures.append({
+                    "profile": profile,
+                    "case": case_id,
+                    "test": test_name,
+                    "reason": "some measured logs missing metric for test",
+                })
                 continue
             rows.append({
                 "profile": profile,

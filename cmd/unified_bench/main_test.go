@@ -174,6 +174,31 @@ func TestRunBenchmark_RandomReadBatch_Smoke(t *testing.T) {
 	}
 }
 
+func TestRunBenchmark_BatchWriteSteady_Smoke(t *testing.T) {
+	run, err := runBenchmark(BenchConfig{
+		Keys:         2_000,
+		ValueSize:    16,
+		BatchSize:    128,
+		RangeQueries: 50,
+		RangeSpan:    20,
+		DBsArg:       "treedb",
+		TestsArg:     "batch_write_steady",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	got, ok := run.Results["batch_write_steady"]["TreeDB"]
+	if !ok {
+		t.Fatalf("expected batch_write_steady result for TreeDB")
+	}
+	if math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected batch_write_steady > 0 for TreeDB, got %v", got)
+	}
+}
+
 func TestRunBenchmark_RandomReadBatch_PropagatesReadBatchError(t *testing.T) {
 	want := errors.New("readbatch forced failure")
 	runRandomReadBatchErrorCase(t, "random_read_batch_error_db_batch_reader", func(_ string) (kvstore.DB, error) {

@@ -186,6 +186,9 @@ func shouldBypassCompressionProbe(codec uint8, raw []byte, dst []byte) bool {
 	if len(raw) < outerLeafIncompressibleProbeMinBytes {
 		return false
 	}
+	if normalizeCodec(codec) != blockCodecLZ4 {
+		return false
+	}
 	var sampleBuf [outerLeafIncompressibleProbeBytes]byte
 	sample := sampleForIncompressibleProbe(raw, &sampleBuf)
 	// Fast-path clearly high-entropy blocks to raw mode and skip probe/full
@@ -193,39 +196,19 @@ func shouldBypassCompressionProbe(codec uint8, raw []byte, dst []byte) bool {
 	if isLikelyHighEntropy(sample) {
 		return true
 	}
-	// Snappy is the default outer-leaf codec. For this path, probing by
-	// sample-compressing and then full-compressing the same payload doubles
-	// encode work on compressible blocks (common for repeat_tail64-style data).
-	// Keep entropy-based bypass and rely on the full encode keep-policy for the
-	// final decision.
-	if normalizeCodec(codec) == blockCodecSnappy {
+	bound := lz4.CompressBlockBound(len(sample))
+	if cap(dst) < bound {
+		dst = make([]byte, bound)
+	}
+	dst = dst[:bound]
+	n, err := lz4.CompressBlock(sample, dst, nil)
+	if err != nil {
 		return false
 	}
-	switch codec {
-	case blockCodecLZ4:
-		bound := lz4.CompressBlockBound(len(sample))
-		if cap(dst) < bound {
-			dst = make([]byte, bound)
-		}
-		dst = dst[:bound]
-		n, err := lz4.CompressBlock(sample, dst, nil)
-		if err != nil {
-			return false
-		}
-		if n <= 0 {
-			return true
-		}
-		return !keepCompressedPayload(len(sample), n)
-	default:
-		need := snappy.MaxEncodedLen(len(sample))
-		if cap(dst) < need {
-			dst = make([]byte, need)
-		} else {
-			dst = dst[:need]
-		}
-		enc := snappy.Encode(dst, sample)
-		return !keepCompressedPayload(len(sample), len(enc))
+	if n <= 0 {
+		return true
 	}
+	return !keepCompressedPayload(len(sample), n)
 }
 
 func isLikelyHighEntropy(sample []byte) bool {
