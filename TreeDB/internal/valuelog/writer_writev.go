@@ -411,6 +411,10 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 // AppendRawFramesBufferedInto appends raw grouped frames through the writer's
 // append buffer, allowing multiple calls to coalesce into larger write syscalls.
 //
+// Compared to AppendRawFramesWritevInto, this path stages frame bytes in the
+// writer append buffer and flushes later, so independent append calls can merge
+// into fewer, larger writes.
+//
 // dst must be at least len(records) long.
 func (w *Writer) AppendRawFramesBufferedInto(records []Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
 	if w == nil {

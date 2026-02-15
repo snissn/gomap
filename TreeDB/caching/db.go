@@ -839,16 +839,19 @@ func (db *DB) deferredValueLogEnabled() bool {
 	return db.useFenceV2DeferredFlushPath()
 }
 
+// sumKeyValueBytes returns the total bytes across paired key/value entries.
+// If keys and values differ in length, only the shared prefix is counted.
 func sumKeyValueBytes(keys, values [][]byte) uint64 {
 	if len(keys) == 0 || len(values) == 0 {
 		return 0
 	}
-	n := len(keys)
-	if len(values) < n {
-		n = len(values)
+	if len(keys) > len(values) {
+		keys = keys[:len(values)]
+	} else if len(values) > len(keys) {
+		values = values[:len(keys)]
 	}
 	var total uint64
-	for i := 0; i < n; i++ {
+	for i := 0; i < len(keys); i++ {
 		total += uint64(len(keys[i]) + len(values[i]))
 	}
 	return total
@@ -1108,6 +1111,8 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		records[i].RID = startRID + uint64(i)
 	}
 
+	// For deferred value-log appends, unsynced writes intentionally use none and
+	// synced writes propagate full sync durability.
 	durability := journalDurabilityNone
 	if sync {
 		durability = journalDurabilitySync
@@ -1490,6 +1495,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 	allowPointers := db.allowValueLogPointers()
 	fenceMode := db.outerLeafFenceV2Enabled()
+	durability := journalDurabilityNone
+	if sync {
+		durability = journalDurabilitySync
+	}
 	var (
 		backendPendingOps int
 		lastFencePtr      page.ValuePtr
@@ -1591,7 +1600,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			for i := range records {
 				records[i].RID = startRID + uint64(i)
 			}
-			vlogPtrs, err := db.appendValueLog(vlogLane, dictID, nil, records, journalDurabilityNone)
+			vlogPtrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
 			putValueLogRecordsNoClear(records)
 			putOuterLeafArena(outerArena)
 			if err != nil {
@@ -8291,7 +8300,7 @@ func (db *DB) maybeWaitForStop() {
 	}
 }
 
-func (db *DB) v2DeferredAssistMemtables(backlogBytes, slowdownBytes, stopBytes int64) (int, bool) {
+func (db *DB) deferredAssistTargetMemtables(backlogBytes, slowdownBytes, stopBytes int64) (int, bool) {
 	if db == nil || !db.deferredValueLogEnabled() {
 		return 0, false
 	}
@@ -8367,7 +8376,7 @@ func (db *DB) maybeAssistFlush() {
 		db.bpMu.Unlock()
 
 		backlog = db.queueBacklogBytes.Load()
-		if maxMemtables, ok := db.v2DeferredAssistMemtables(backlog, slowdownBytes, stopBytes); ok {
+		if maxMemtables, ok := db.deferredAssistTargetMemtables(backlog, slowdownBytes, stopBytes); ok {
 			flushed := db.flushSome(false, maxMemtables, db.writerFlushMaxDuration)
 			db.recordDeferredAssist(flushed)
 			return
@@ -12442,7 +12451,7 @@ func (db *DB) CompactionAssist() {
 		db.bpMu.Unlock()
 
 		backlog := db.queueBacklogBytes.Load()
-		if maxMemtables, ok := db.v2DeferredAssistMemtables(backlog, slowdownBytes, stopBytes); ok {
+		if maxMemtables, ok := db.deferredAssistTargetMemtables(backlog, slowdownBytes, stopBytes); ok {
 			flushed := db.flushSome(false, maxMemtables, db.writerFlushMaxDuration)
 			db.recordDeferredAssist(flushed)
 			return

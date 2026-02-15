@@ -94,7 +94,10 @@ func (w *limitedSliceWriter) Write(p []byte) (int, error) {
 }
 
 func (w *Writer) writeAllToFile(buf []byte) error {
-	if w == nil || w.f == nil {
+	if w == nil {
+		return errors.New("valuelog: nil file writer")
+	}
+	if w.f == nil {
 		return errors.New("valuelog: nil file writer")
 	}
 	w.rawWriteCalls.Add(1)
