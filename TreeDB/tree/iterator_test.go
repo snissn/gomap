@@ -17,6 +17,15 @@ type countingValueReader struct {
 	reads int
 }
 
+type fenceLookupReaderKeysUnavailable struct {
+	*fenceLookupReader
+}
+
+func (r *fenceLookupReaderKeysUnavailable) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
+	r.keyCalls++
+	return nil, false, nil
+}
+
 func newCountingValueReader() *countingValueReader {
 	return &countingValueReader{inner: newMapValueReader()}
 }
@@ -625,6 +634,144 @@ func TestIterator_FencePointerExpansionForwardAndRange(t *testing.T) {
 		if keys[i] != wantRange[i] {
 			t.Fatalf("range key[%d]=%q want=%q", i, keys[i], wantRange[i])
 		}
+	}
+}
+
+func TestIterator_FencePointerRangeFullModeUsesKeyExpansionWithLazyValues(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator([]byte("f015"), []byte("f115"))
+	defer it.Close()
+
+	var keys []string
+	var vals []string
+	for ; it.Valid(); it.Next() {
+		keys = append(keys, string(it.Key()))
+		vals = append(vals, string(it.Value()))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+
+	wantKeys := []string{"f020", "f030", "f100", "f110"}
+	wantVals := []string{"v20", "v30", "v100", "v110"}
+	if len(keys) != len(wantKeys) {
+		t.Fatalf("keys len=%d want=%d (%v)", len(keys), len(wantKeys), keys)
+	}
+	for i := range wantKeys {
+		if keys[i] != wantKeys[i] || vals[i] != wantVals[i] {
+			t.Fatalf("entry[%d] key=%q val=%q want key=%q val=%q", i, keys[i], vals[i], wantKeys[i], wantVals[i])
+		}
+	}
+	if reader.keyCalls == 0 {
+		t.Fatalf("expected key-only fence block expansion in bounded full-mode range")
+	}
+	if reader.blockCalls == 0 {
+		t.Fatalf("expected lazy value fallback to read fence block entries")
+	}
+}
+
+func TestIterator_FencePointerRangeFullModeFallsBackWhenKeyExpansionUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	baseReader := newFenceLookupReader()
+	reader := &fenceLookupReaderKeysUnavailable{fenceLookupReader: baseReader}
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator([]byte("f015"), []byte("f115"))
+	defer it.Close()
+
+	var keys []string
+	for ; it.Valid(); it.Next() {
+		keys = append(keys, string(it.Key()))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+
+	want := []string{"f020", "f030", "f100", "f110"}
+	if len(keys) != len(want) {
+		t.Fatalf("keys len=%d want=%d (%v)", len(keys), len(want), keys)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Fatalf("key[%d]=%q want=%q", i, keys[i], want[i])
+		}
+	}
+	if reader.keyCalls == 0 {
+		t.Fatalf("expected key-expansion attempts before fallback")
+	}
+	if reader.blockCalls == 0 {
+		t.Fatalf("expected block expansion fallback when key expansion is unavailable")
 	}
 }
 

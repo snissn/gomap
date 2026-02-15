@@ -384,6 +384,43 @@ func TestDecodedBlockEntries(t *testing.T) {
 			t.Fatalf("Entries(v2)[%d] value mismatch", i)
 		}
 	}
+	keys, err := blk.Keys(nil)
+	if err != nil {
+		t.Fatalf("Keys(v2): %v", err)
+	}
+	if len(keys) != len(v2Entries) {
+		t.Fatalf("Keys(v2) len=%d want=%d", len(keys), len(v2Entries))
+	}
+	for i := range v2Entries {
+		if !bytes.Equal(keys[i], v2Entries[i].Key) {
+			t.Fatalf("Keys(v2)[%d] key mismatch got=%q want=%q", i, keys[i], v2Entries[i].Key)
+		}
+	}
+	// Repeated nil-dst calls should reuse decoded key materialization.
+	keys2, err := blk.Keys(nil)
+	if err != nil {
+		t.Fatalf("Keys(v2) second call: %v", err)
+	}
+	if len(keys2) != len(keys) {
+		t.Fatalf("Keys(v2) second call len=%d want=%d", len(keys2), len(keys))
+	}
+	for i := range keys {
+		if !bytes.Equal(keys2[i], keys[i]) {
+			t.Fatalf("Keys(v2) second call key[%d] mismatch", i)
+		}
+	}
+	keysCopy, err := blk.Keys(make([][]byte, 0, len(v2Entries)))
+	if err != nil {
+		t.Fatalf("Keys(v2) dst call: %v", err)
+	}
+	if len(keysCopy) != len(v2Entries) {
+		t.Fatalf("Keys(v2) dst call len=%d want=%d", len(keysCopy), len(v2Entries))
+	}
+	for i := range v2Entries {
+		if !bytes.Equal(keysCopy[i], v2Entries[i].Key) {
+			t.Fatalf("Keys(v2) dst call key[%d] mismatch got=%q want=%q", i, keysCopy[i], v2Entries[i].Key)
+		}
+	}
 
 	v1Key := []byte("single:key")
 	v1Val := bytes.Repeat([]byte("z"), 40)
@@ -404,6 +441,13 @@ func TestDecodedBlockEntries(t *testing.T) {
 	}
 	if !bytes.Equal(got[0].Key, v1Key) || !bytes.Equal(got[0].Value, v1Val) {
 		t.Fatalf("Entries(v1) mismatch")
+	}
+	keys, err = blk.Keys(nil)
+	if err != nil {
+		t.Fatalf("Keys(v1): %v", err)
+	}
+	if len(keys) != 1 || !bytes.Equal(keys[0], v1Key) {
+		t.Fatalf("Keys(v1) mismatch")
 	}
 }
 
