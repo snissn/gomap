@@ -780,6 +780,70 @@ func TestIterator_FencePointerSeekAndReverseBounds(t *testing.T) {
 	}
 }
 
+func TestIterator_FencePointerReverseSeekBetweenFenceAndLogicalKeys(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f050": "v50",
+		"f060": "v60",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f020"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f020): %v", err)
+	}
+	// Fence key is intentionally greater than any key in ptr1 payload to ensure
+	// reverse seek(end) can land on this physical entry while expanding to a
+	// logical key < end.
+	if err := root.AddLeafEntry([]byte("f080"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f080): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	rit := tr.ReverseIterator(nil, []byte("f070"))
+	defer rit.Close()
+
+	var got []string
+	for ; rit.Valid(); rit.Next() {
+		got = append(got, string(rit.Key()))
+	}
+	if err := rit.Error(); err != nil {
+		t.Fatalf("reverse iterator error: %v", err)
+	}
+
+	want := []string{"f060", "f050", "f020", "f010"}
+	if len(got) != len(want) {
+		t.Fatalf("reverse keys len=%d want=%d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("reverse key[%d]=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestIterator_CombinedColumnarPrefixV2_MultiRestartBlocks(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)

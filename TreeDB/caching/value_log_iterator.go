@@ -135,7 +135,10 @@ func (it *valueLogIterator) loadValue() {
 	}
 	it.cachedHasPtr = true
 	it.cachedPtr = ptr
-	val, err := it.read(it.iter.UnsafeKey(), ptr)
+	unsafeKey := it.iter.UnsafeKey()
+	stableKey := make([]byte, len(unsafeKey))
+	copy(stableKey, unsafeKey)
+	val, err := it.read(stableKey, ptr)
 	if err != nil {
 		it.err = err
 		return

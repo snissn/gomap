@@ -687,9 +687,10 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					it.pendingFenceReady = true
 					return true, nil
 				}
-				// Nearest predecessor fence did not contain a candidate >= seek key.
-				// Earlier fences are strictly smaller and cannot satisfy this seek.
-				return false, nil
+				// Keep scanning earlier fence entries defensively. Normal fence
+				// layout should be ordered/non-overlapping, but callers can still
+				// present mixed layouts during testing.
+				continue
 			}
 		}
 		if it.slabFenceBlocks != nil {
@@ -698,7 +699,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				return false, err
 			}
 			if !ok {
-				return false, nil
+				continue
 			}
 			pos := lowerBoundFenceEntries(entries, seekKey)
 			if pos < len(entries) {
@@ -709,11 +710,11 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				it.pendingFenceReady = true
 				return true, nil
 			}
-			// Nearest predecessor fence did not contain a candidate >= seek key.
-			// Earlier fences are strictly smaller and cannot satisfy this seek.
-			return false, nil
+			// Keep scanning earlier fence entries defensively. Normal fence
+			// layout should be ordered/non-overlapping, but callers can still
+			// present mixed layouts during testing.
+			continue
 		}
-		return false, nil
 	}
 	return false, nil
 }
@@ -778,6 +779,8 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 	}
 	handled = true
 	if len(entries) == 0 {
+		// loadCurrent() will advance the leaf index when handled && !produced,
+		// so empty fence blocks still make forward/reverse progress.
 		return handled, false, false, nil
 	}
 
