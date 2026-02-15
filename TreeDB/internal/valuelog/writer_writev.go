@@ -237,6 +237,10 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 		if maxUsedIovs > 0 {
 			full := iovs[:maxUsedIovs:maxUsedIovs]
 			clear(full)
+			if cap(vecs) >= maxUsedIovs {
+				fullVecs := vecs[:maxUsedIovs:maxUsedIovs]
+				clear(fullVecs)
+			}
 		}
 		w.rawWritevIovs = iovs[:0]
 		w.rawWritevVecs = vecs[:0]
