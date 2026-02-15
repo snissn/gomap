@@ -24,9 +24,10 @@ type writevIovec = unix.Iovec
 // Callers must treat iovs as immutable for the duration of this call. The
 // generated unix.Iovec entries point at the backing arrays in iovs until
 // writevAll returns.
-func writevAll(fd int, iovs [][]byte, scratch []writevIovec) ([]writevIovec, error) {
+func writevAll(fd int, iovs [][]byte, scratch []writevIovec) ([]writevIovec, writevCallStats, error) {
+	var stats writevCallStats
 	if len(iovs) == 0 {
-		return scratch[:0], nil
+		return scratch[:0], stats, nil
 	}
 	if cap(scratch) < len(iovs) {
 		scratch = make([]writevIovec, len(iovs))
@@ -42,16 +43,19 @@ func writevAll(fd int, iovs [][]byte, scratch []writevIovec) ([]writevIovec, err
 		vecs[i].SetLen(0)
 	}
 	for len(vecs) > 0 {
+		stats.syscalls++
+		stats.iovecs += uint64(len(vecs))
 		n, err := rawWritev(fd, vecs)
 		if err != nil {
 			if err == unix.EINTR || err == unix.EAGAIN {
 				continue
 			}
-			return scratch, err
+			return scratch, stats, err
 		}
 		if n <= 0 {
-			return scratch, errors.New("valuelog: short writev")
+			return scratch, stats, errors.New("valuelog: short writev")
 		}
+		stats.bytes += uint64(n)
 		written := n
 		for written > 0 && len(vecs) > 0 {
 			iovLen := int(vecs[0].Len)
@@ -69,7 +73,7 @@ func writevAll(fd int, iovs [][]byte, scratch []writevIovec) ([]writevIovec, err
 			written = 0
 		}
 	}
-	return scratch, nil
+	return scratch, stats, nil
 }
 
 func rawWritev(fd int, iovs []writevIovec) (int, error) {
