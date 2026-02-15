@@ -686,12 +686,14 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
 			continue
 		}
+		keyReaderUsable := false
 		if it.slabFenceKeys != nil {
 			keys, ok, err := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
 			if err != nil {
 				return false, err
 			}
 			if ok {
+				keyReaderUsable = true
 				pos := lowerBoundFenceKeys(keys, seekKey)
 				if pos < len(keys) {
 					top.Index = scan
@@ -707,7 +709,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				continue
 			}
 		}
-		if preferFenceEntries {
+		if it.slabFenceBlocks != nil && (preferFenceEntries || !keyReaderUsable) {
 			entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
 			if err != nil {
 				return false, err
