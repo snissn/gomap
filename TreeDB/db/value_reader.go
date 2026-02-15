@@ -248,6 +248,16 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 	if r.vlogs == nil {
 		return nil, fmt.Errorf("value log reader unavailable for file %d", ptr.FileID)
 	}
+	if !outerleaf.ModeEnabled(r.outerLeafMode) {
+		if app, ok := r.vlogs.(unsafeAppendReader); ok {
+			return app.ReadUnsafeAppend(ptr, dst[:0])
+		}
+		val, err := r.vlogs.ReadUnsafe(ptr)
+		if err != nil {
+			return nil, err
+		}
+		return append(dst[:0], val...), nil
+	}
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
 		decoded, found, err := block.ValueForKey(key)
 		if err != nil {
@@ -290,6 +300,11 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 func (r valueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error) {
 	if len(ptrs) == 0 {
 		return dst[:0], nil
+	}
+	if !outerleaf.ModeEnabled(r.outerLeafMode) {
+		if app, ok := r.vlogs.(unsafeAppendBatchReader); ok {
+			return app.ReadUnsafeAppendBatch(ptrs, dst)
+		}
 	}
 	if app, ok := r.vlogs.(unsafeAppendBatchReader); ok {
 		out, err := app.ReadUnsafeAppendBatch(ptrs, dst)
