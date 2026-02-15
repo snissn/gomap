@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 type savedTreeDBFlagState struct {
@@ -100,6 +102,9 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if got := *treedbOuterLeafBlockCacheEntries; got != 8192 {
 		t.Fatalf("expected fast profile to set treedb-outer-leaf-block-cache-entries=8192, got %d", got)
 	}
+	if !*treedbDisableWAL {
+		t.Fatalf("expected fast profile to disable WAL")
+	}
 
 	resetTreeDBIndexFlagsForTest()
 	if err := applyProfile("wal_on_fast", map[string]bool{}); err != nil {
@@ -113,6 +118,12 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if got := *treedbOuterLeafBlockCacheEntries; got != 8192 {
 		t.Fatalf("expected wal_on_fast profile to set treedb-outer-leaf-block-cache-entries=8192, got %d", got)
+	}
+	if *treedbDisableWAL {
+		t.Fatalf("expected wal_on_fast profile to keep WAL enabled")
+	}
+	if !*treedbRelaxedSync {
+		t.Fatalf("expected wal_on_fast profile to enable relaxed sync")
 	}
 }
 
@@ -253,6 +264,94 @@ func TestBuildTreeDBOptions_WALFenceMode_DefaultAndOverride(t *testing.T) {
 	}
 	if got := rep.formatText(""); !strings.Contains(got, "vlog.wal_fence_mode=simple_inline") {
 		t.Fatalf("resolved options missing simple_inline mode: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_WALFenceMode_V2FencePtrWALOn_AutoSimpleInline(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions v2_fenceptr WAL-on: %v", err)
+	}
+	if got := opts.ValueLog.WALFenceMode; got != "simple_inline" {
+		t.Fatalf("expected WAL-enabled v2_fenceptr to auto-select simple_inline, got %q", got)
+	}
+	formatted := rep.formatText("")
+	if !strings.Contains(formatted, "vlog.wal_fence_mode=simple_inline") {
+		t.Fatalf("resolved options missing auto-selected simple_inline mode: %q", formatted)
+	}
+	if !strings.Contains(formatted, "v2_fenceptr with WAL enabled requires vlog.wal_fence_mode=simple_inline") {
+		t.Fatalf("resolved options missing WAL-on v2_fenceptr auto-select note: %q", formatted)
+	}
+}
+
+func TestBuildTreeDBOptions_WALOnFastV2FencePtr_UsesWALOnAndSimpleInline(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	if err := applyProfile("wal_on_fast", map[string]bool{}); err != nil {
+		t.Fatalf("applyProfile wal_on_fast: %v", err)
+	}
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions wal_on_fast v2_fenceptr: %v", err)
+	}
+	if got := opts.Durability; got != treedb.DurabilityWALOnRelaxed {
+		t.Fatalf("expected wal_on_fast durability to keep WAL enabled (WALOnRelaxed), got %v", got)
+	}
+	if got := opts.ValueLog.WALFenceMode; got != "simple_inline" {
+		t.Fatalf("expected wal_on_fast v2_fenceptr to resolve WAL fence mode simple_inline, got %q", got)
+	}
+	formatted := rep.formatText("")
+	if !strings.Contains(formatted, "durability=wal_on_relaxed") {
+		t.Fatalf("resolved options missing wal_on_relaxed durability: %q", formatted)
+	}
+	if !strings.Contains(formatted, "vlog.wal_fence_mode=simple_inline") {
+		t.Fatalf("resolved options missing simple_inline WAL fence mode: %q", formatted)
+	}
+}
+
+func TestBuildTreeDBOptions_WALFenceMode_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+	*treedbWALFenceMode = "rid_join"
+	explicitFlags = map[string]bool{
+		"treedb-wal-fence-mode": true,
+	}
+	if _, _, err := buildTreeDBOptions(""); err == nil {
+		t.Fatalf("expected explicit rid_join to fail for WAL-enabled v2_fenceptr")
+	}
+}
+
+func TestBuildTreeDBOptions_WALFenceMode_V2FencePtrWALOff_AllowsRIDJoin(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+	*treedbWALFenceMode = "rid_join"
+	*treedbAllowUnsafe = true
+	*treedbDisableWAL = true
+	explicitFlags = map[string]bool{
+		"treedb-wal-fence-mode": true,
+		"treedb-disable-wal":    true,
+		"treedb-allow-unsafe":   true,
+	}
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions WAL-off v2_fenceptr rid_join: %v", err)
+	}
+	if got := opts.ValueLog.WALFenceMode; got != "rid_join" {
+		t.Fatalf("expected WAL-off v2_fenceptr to preserve explicit rid_join, got %q", got)
 	}
 }
 
