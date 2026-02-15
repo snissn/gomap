@@ -1358,13 +1358,14 @@ func TestCachingDB_FlushFenceModeDeferredBatchWritesImmediateRead(t *testing.T) 
 		shard := &cache.mutableShards[i]
 		shard.mu.Lock()
 		it := shard.mem.NewIterator(nil, nil)
-		if it.Valid() {
+		for it.Valid() {
 			_, _, flags := it.UnsafeEntry()
 			if flags&node.FlagPointer != 0 {
 				_ = it.Close()
 				shard.mu.Unlock()
 				t.Fatalf("expected inline mutable entry in deferred fence mode (shard=%d)", i)
 			}
+			it.Next()
 		}
 		_ = it.Close()
 		shard.mu.Unlock()
