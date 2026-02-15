@@ -61,6 +61,12 @@ type slabUnsafeFenceKeyReader interface {
 	ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error)
 }
 
+// Optional capability probe for fence-key lookup mode.
+// When false, tree miss paths can skip fence fallback scans entirely.
+type slabFenceLookupMode interface {
+	FenceLookupEnabled() bool
+}
+
 // Optional block expansion reads for fence-only outer-leaf mode.
 // ok=false means the reader is not in fence expansion mode for this pointer.
 type slabUnsafeFenceBlockReader interface {
@@ -88,11 +94,6 @@ type slabKeyAwareCapability interface {
 	KeyAwareEnabled() bool
 }
 
-// Optional capability gate for fence-pointer lookup/expansion interfaces.
-type slabFenceLookupCapability interface {
-	FenceLookupEnabled() bool
-}
-
 func keyAwarePointerReadsEnabled(sr SlabReader) bool {
 	if gate, ok := sr.(slabKeyAwareCapability); ok {
 		return gate.KeyAwareEnabled()
@@ -101,7 +102,7 @@ func keyAwarePointerReadsEnabled(sr SlabReader) bool {
 }
 
 func fencePointerLookupsEnabled(sr SlabReader) bool {
-	if gate, ok := sr.(slabFenceLookupCapability); ok {
+	if gate, ok := sr.(slabFenceLookupMode); ok {
 		return gate.FenceLookupEnabled()
 	}
 	return true
@@ -113,6 +114,7 @@ type Tree struct {
 	slabAppender    slabUnsafeAppender
 	slabKeyReader   slabUnsafeKeyReader
 	slabFenceReader slabUnsafeFenceKeyReader
+	fenceLookupMode bool
 	slabFenceBlocks slabUnsafeFenceBlockReader
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
 	slabKeyAppender slabUnsafeKeyAppender
@@ -153,6 +155,7 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 			t.slabFenceKeys = fenceKeys
 		}
 	}
+	t.fenceLookupMode = fenceEnabled && t.slabFenceReader != nil
 	return t
 }
 
@@ -209,6 +212,7 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabFenceBlocks = nil
 		t.slabFenceKeys = nil
 	}
+	t.fenceLookupMode = fenceEnabled && t.slabFenceReader != nil
 	t.rootPageID = root
 }
 
@@ -304,11 +308,13 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 }
 
 func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byte, bool, error) {
-	if t.slabFenceReader == nil || n == nil || idx == 0 {
+	if !t.fenceLookupMode || t.slabFenceReader == nil || n == nil || idx == 0 {
 		return nil, false, nil
 	}
 	for scan := idx; scan > 0; scan-- {
-		_, _, ptr, flags, err := n.GetLeafEntryView(scan - 1)
+		// Fence lookup only needs pointer+flags. Avoid full leaf-entry decode
+		// (key reconstruction) on every probe in columnar-prefix leaves.
+		_, ptr, flags, err := n.GetLeafValueView(scan - 1)
 		if err != nil {
 			return nil, false, err
 		}
