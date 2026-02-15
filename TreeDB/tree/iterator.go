@@ -641,6 +641,16 @@ func (it *Iterator) setCurrentFenceEntry(entry FenceBlockEntry) {
 	it.valid = true
 }
 
+func (it *Iterator) shouldPreferFenceKeyOnly() bool {
+	if it.mode == IteratorModeKeysOnly {
+		return true
+	}
+	// For bounded range scans in full mode, prefer key-only fence expansion.
+	// Values remain available via lazy fallback when Value()/UnsafeValue() is
+	// requested, but key-only scans avoid materializing block values they never use.
+	return it.mode == IteratorModeFull && it.start != nil && it.end != nil
+}
+
 func lowerBoundFenceEntries(entries []FenceBlockEntry, key []byte) int {
 	if len(key) == 0 {
 		return 0
@@ -667,6 +677,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 		return false, nil
 	}
 	seekKey := it.pendingSeekKey
+	preferFenceEntries := it.slabFenceBlocks != nil && (it.slabFenceKeys == nil || !it.shouldPreferFenceKeyOnly())
 	for scan := top.Index - 1; scan >= 0; scan-- {
 		_, ptr, flags, err := top.Node.GetLeafValueView(uint16(scan))
 		if err != nil {
@@ -696,7 +707,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				continue
 			}
 		}
-		if it.slabFenceBlocks != nil {
+		if preferFenceEntries {
 			entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
 			if err != nil {
 				return false, err
@@ -744,7 +755,7 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		entries []FenceBlockEntry
 		ok      bool
 	)
-	preferKeyOnlyExpansion := it.mode == IteratorModeKeysOnly || it.slabFenceBlocks == nil
+	preferKeyOnlyExpansion := it.shouldPreferFenceKeyOnly() || it.slabFenceBlocks == nil
 	if preferKeyOnlyExpansion && it.slabFenceKeys != nil {
 		keys, keyOK, keyErr := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
 		if keyErr != nil {
