@@ -27,6 +27,10 @@ type fenceLookupReader struct {
 	keyCalls   int
 }
 
+func (r *fenceLookupReader) FenceLookupEnabled() bool {
+	return true
+}
+
 func newFenceLookupReader() *fenceLookupReader {
 	return &fenceLookupReader{
 		blocks: make(map[page.ValuePtr]map[string][]byte),
