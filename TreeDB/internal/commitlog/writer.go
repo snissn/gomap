@@ -348,6 +348,16 @@ func validateRecord(r *Record) error {
 		if r.RID != 0 {
 			return fmt.Errorf("commitlog: inline record carries RID")
 		}
+	case OpSetFenceRIDGroup:
+		if len(r.Key) != 0 {
+			return fmt.Errorf("commitlog: fence RID group record requires empty key")
+		}
+		if r.RID != 0 {
+			return fmt.Errorf("commitlog: fence RID group record carries RID header")
+		}
+		if err := ValidateFenceRIDGroupPayload(r.Value); err != nil {
+			return fmt.Errorf("commitlog: invalid fence RID group payload: %w", err)
+		}
 	default:
 		return fmt.Errorf("commitlog: unknown op %d", r.Op)
 	}

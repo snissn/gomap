@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strconv"
 	"sync"
@@ -12,7 +13,9 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -149,6 +152,37 @@ func countSnapshotLeafEntries(t *testing.T, snap *db.Snapshot) int {
 		t.Fatalf("count leaf entries: %v", err)
 	}
 	return total
+}
+
+func readCommitLogRecords(t *testing.T, path string) []commitlog.Record {
+	t.Helper()
+	r, err := commitlog.NewReader(path)
+	if err != nil {
+		t.Fatalf("commitlog.NewReader(%s): %v", path, err)
+	}
+	defer func() { _ = r.Close() }()
+
+	var out []commitlog.Record
+	for {
+		batch, err := r.ReadBatch()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("ReadBatch(%s): %v", path, err)
+		}
+		for i := range batch {
+			rec := batch[i]
+			out = append(out, commitlog.Record{
+				Op:    rec.Op,
+				Key:   append([]byte(nil), rec.Key...),
+				Value: append([]byte(nil), rec.Value...),
+				RID:   rec.RID,
+				Seq:   rec.Seq,
+			})
+		}
+	}
+	return out
 }
 
 func (m *MockBackend) Get(key []byte) ([]byte, error) {
@@ -1047,6 +1081,308 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
 		t.Fatalf("expected fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 
+}
+
+func TestCachingDB_BatchWALFenceGroupCanonicalizesFinalState(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:      1,
+			ForcePointers:         true,
+			WALFenceGroupEncoding: db.ValueLogWALFenceGroupEncodingSimple,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                1 << 20,
+		JournalLanes:                  1,
+		ForceValueLogPointers:         true,
+		ValueLogPointerThreshold:      1,
+		IndexOuterLeafMode:            db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceGroupEncoding: db.ValueLogWALFenceGroupEncodingSimple,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	val := func(ch byte) []byte { return bytes.Repeat([]byte{ch}, 256) }
+	b := cache.NewBatch()
+	if err := b.Set([]byte("a"), val('1')); err != nil {
+		t.Fatalf("Set a1: %v", err)
+	}
+	if err := b.Set([]byte("a"), val('2')); err != nil {
+		t.Fatalf("Set a2: %v", err)
+	}
+	if err := b.Set([]byte("b"), val('3')); err != nil {
+		t.Fatalf("Set b1: %v", err)
+	}
+	if err := b.Delete([]byte("b")); err != nil {
+		t.Fatalf("Delete b: %v", err)
+	}
+	if err := b.Set([]byte("b"), val('4')); err != nil {
+		t.Fatalf("Set b2: %v", err)
+	}
+	if err := b.Set([]byte("c"), val('5')); err != nil {
+		t.Fatalf("Set c: %v", err)
+	}
+	if err := b.Delete([]byte("c")); err != nil {
+		t.Fatalf("Delete c: %v", err)
+	}
+	if err := b.Set([]byte("d"), val('6')); err != nil {
+		t.Fatalf("Set d: %v", err)
+	}
+	if err := b.Set([]byte("e"), val('7')); err != nil {
+		t.Fatalf("Set e: %v", err)
+	}
+	if err := b.Delete([]byte("e")); err != nil {
+		t.Fatalf("Delete e: %v", err)
+	}
+	if err := b.Set([]byte("f"), val('8')); err != nil {
+		t.Fatalf("Set f1: %v", err)
+	}
+	if err := b.Set([]byte("f"), val('9')); err != nil {
+		t.Fatalf("Set f2: %v", err)
+	}
+	if err := b.Delete([]byte("f")); err != nil {
+		t.Fatalf("Delete f: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatalf("WriteSync: %v", err)
+	}
+	_ = b.Close()
+
+	checkValue := func(key string, want []byte) {
+		got, err := cache.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("Get(%q) mismatch", key)
+		}
+	}
+	checkNil := func(key string) {
+		got, err := cache.Get([]byte(key))
+		if err != nil {
+			t.Fatalf("Get(%q): %v", key, err)
+		}
+		if got != nil {
+			t.Fatalf("Get(%q): expected nil, got %q", key, string(got))
+		}
+	}
+	checkValue("a", val('2'))
+	checkValue("b", val('4'))
+	checkValue("d", val('6'))
+	checkNil("c")
+	checkNil("e")
+	checkNil("f")
+
+	walPaths := cache.currentWALPaths()
+	if len(walPaths) != 1 {
+		t.Fatalf("expected one WAL path, got %d", len(walPaths))
+	}
+	records := readCommitLogRecords(t, walPaths[0])
+	if len(records) == 0 {
+		t.Fatalf("expected WAL records")
+	}
+
+	ptrKeys := map[string]uint64{}
+	deleteKeys := map[string]uint64{}
+	for i := range records {
+		rec := records[i]
+		switch rec.Op {
+		case commitlog.OpSetFenceRIDGroup:
+			entries, _, err := commitlog.DecodeFenceRIDGroupPayload(rec.Value, nil)
+			if err != nil {
+				t.Fatalf("DecodeFenceRIDGroupPayload: %v", err)
+			}
+			for _, entry := range entries {
+				ptrKeys[string(entry.Key)]++
+			}
+		case commitlog.OpSetRID:
+			ptrKeys[string(rec.Key)]++
+		case commitlog.OpDelete:
+			deleteKeys[string(rec.Key)]++
+		case commitlog.OpSetInline:
+			t.Fatalf("unexpected inline WAL record for forced-pointer fence batch")
+		default:
+			t.Fatalf("unexpected WAL op %d", rec.Op)
+		}
+	}
+
+	expectedPtr := map[string]struct{}{"a": {}, "b": {}, "d": {}}
+	expectedDelete := map[string]struct{}{"c": {}, "e": {}, "f": {}}
+	if len(ptrKeys) != len(expectedPtr) {
+		t.Fatalf("pointer key count=%d want=%d keys=%v", len(ptrKeys), len(expectedPtr), ptrKeys)
+	}
+	if len(deleteKeys) != len(expectedDelete) {
+		t.Fatalf("delete key count=%d want=%d keys=%v", len(deleteKeys), len(expectedDelete), deleteKeys)
+	}
+	for k := range expectedPtr {
+		if ptrKeys[k] != 1 {
+			t.Fatalf("pointer key %q seen=%d want=1", k, ptrKeys[k])
+		}
+	}
+	for k := range expectedDelete {
+		if deleteKeys[k] != 1 {
+			t.Fatalf("delete key %q seen=%d want=1", k, deleteKeys[k])
+		}
+	}
+
+	stats := cache.Stats()
+	if statUint64(t, stats, "treedb.cache.wal_fence_group.records") == 0 {
+		t.Fatalf("expected grouped WAL records > 0")
+	}
+	if statUint64(t, stats, "treedb.cache.wal_fence_group.keys") == 0 {
+		t.Fatalf("expected grouped WAL keys > 0")
+	}
+	if statUint64(t, stats, "treedb.cache.wal_fence_group.chunks") == 0 {
+		t.Fatalf("expected grouped WAL chunks > 0")
+	}
+}
+
+func TestAppendFenceRIDGroupedWALRecords_SingletonFallbackUnderRecordCap(t *testing.T) {
+	oldMax := limits.MaxRecordSize
+	t.Cleanup(func() { limits.MaxRecordSize = oldMax })
+
+	entries := []commitlog.FenceRIDGroupEntry{
+		{Key: []byte("a"), RID: 1},
+		{Key: []byte("b"), RID: 2},
+	}
+	onePayload, err := commitlog.EncodeFenceRIDGroupPayload(entries[:1], commitlog.FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("encode one: %v", err)
+	}
+	twoPayload, err := commitlog.EncodeFenceRIDGroupPayload(entries, commitlog.FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("encode two: %v", err)
+	}
+	if len(twoPayload) <= len(onePayload) {
+		t.Fatalf("unexpected payload sizes one=%d two=%d", len(onePayload), len(twoPayload))
+	}
+	limits.MaxRecordSize = int64(commitLogRecordHeaderBytes + len(onePayload))
+
+	db := &DB{walFenceGroupEncoding: commitlog.FenceRIDGroupEncodingSimple}
+	recs, err := db.appendFenceRIDGroupedWALRecords(nil, entries)
+	if err != nil {
+		t.Fatalf("appendFenceRIDGroupedWALRecords: %v", err)
+	}
+	if len(recs) != len(entries) {
+		t.Fatalf("record count=%d want=%d", len(recs), len(entries))
+	}
+	for i := range recs {
+		if recs[i].Op != logOpSetRID {
+			t.Fatalf("record[%d] op=%d want OpSetRID", i, recs[i].Op)
+		}
+		if !bytes.Equal(recs[i].Key, entries[i].Key) || recs[i].RID != entries[i].RID {
+			t.Fatalf("record[%d]=(%q,%d) want (%q,%d)", i, recs[i].Key, recs[i].RID, entries[i].Key, entries[i].RID)
+		}
+	}
+	if got := db.walFenceGroupSingletonFallback.Load(); got != uint64(len(entries)) {
+		t.Fatalf("singleton fallback=%d want=%d", got, len(entries))
+	}
+	if got := db.walFenceGroupRecords.Load(); got != 0 {
+		t.Fatalf("group records=%d want=0", got)
+	}
+}
+
+func TestAppendFenceRIDGroupedWALRecords_ChunksAndGroupsUnderRecordCap(t *testing.T) {
+	oldMax := limits.MaxRecordSize
+	t.Cleanup(func() { limits.MaxRecordSize = oldMax })
+
+	entries := []commitlog.FenceRIDGroupEntry{
+		{Key: []byte("a"), RID: 1},
+		{Key: []byte("b"), RID: 2},
+		{Key: []byte("c"), RID: 3},
+		{Key: []byte("d"), RID: 4},
+		{Key: []byte("e"), RID: 5},
+	}
+	twoPayload, err := commitlog.EncodeFenceRIDGroupPayload(entries[:2], commitlog.FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("encode two: %v", err)
+	}
+	threePayload, err := commitlog.EncodeFenceRIDGroupPayload(entries[:3], commitlog.FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("encode three: %v", err)
+	}
+	if len(threePayload) <= len(twoPayload) {
+		t.Fatalf("unexpected payload sizes two=%d three=%d", len(twoPayload), len(threePayload))
+	}
+	limits.MaxRecordSize = int64(commitLogRecordHeaderBytes + len(twoPayload))
+
+	db := &DB{walFenceGroupEncoding: commitlog.FenceRIDGroupEncodingSimple}
+	recs, err := db.appendFenceRIDGroupedWALRecords(nil, entries)
+	if err != nil {
+		t.Fatalf("appendFenceRIDGroupedWALRecords: %v", err)
+	}
+	if len(recs) != 3 {
+		t.Fatalf("record count=%d want=3", len(recs))
+	}
+	if recs[0].Op != logOpSetFenceRIDGroup || recs[1].Op != logOpSetFenceRIDGroup || recs[2].Op != logOpSetRID {
+		t.Fatalf("unexpected record ops: %d %d %d", recs[0].Op, recs[1].Op, recs[2].Op)
+	}
+	for i := 0; i < 2; i++ {
+		decoded, _, err := commitlog.DecodeFenceRIDGroupPayload(recs[i].Value, nil)
+		if err != nil {
+			t.Fatalf("decode grouped[%d]: %v", i, err)
+		}
+		if len(decoded) != 2 {
+			t.Fatalf("grouped[%d] len=%d want=2", i, len(decoded))
+		}
+	}
+	if !bytes.Equal(recs[2].Key, entries[4].Key) || recs[2].RID != entries[4].RID {
+		t.Fatalf("tail singleton=(%q,%d) want (%q,%d)", recs[2].Key, recs[2].RID, entries[4].Key, entries[4].RID)
+	}
+	if got := db.walFenceGroupRecords.Load(); got != 2 {
+		t.Fatalf("group records=%d want=2", got)
+	}
+	if got := db.walFenceGroupKeys.Load(); got != 4 {
+		t.Fatalf("group keys=%d want=4", got)
+	}
+	if got := db.walFenceGroupSingletonFallback.Load(); got != 1 {
+		t.Fatalf("singleton fallback=%d want=1", got)
+	}
+	if got := db.walFenceGroupChunks.Load(); got != 3 {
+		t.Fatalf("chunks=%d want=3", got)
+	}
+}
+
+func TestMaxCommitLogValueLen_CappedByCommitLogFormat(t *testing.T) {
+	oldMax := limits.MaxRecordSize
+	t.Cleanup(func() { limits.MaxRecordSize = oldMax })
+
+	intMax := int64(int(^uint(0) >> 1))
+	formatCap := int64(^uint32(0)) - int64(commitLogRecordHeaderBytes)
+	if formatCap < 0 {
+		formatCap = 0
+	}
+	if formatCap > intMax {
+		formatCap = intMax
+	}
+
+	limits.MaxRecordSize = 0
+	if got := int64(maxCommitLogValueLen()); got != formatCap {
+		t.Fatalf("maxCommitLogValueLen (MaxRecordSize=0)=%d want=%d", got, formatCap)
+	}
+
+	limits.MaxRecordSize = int64(commitLogRecordHeaderBytes) + formatCap + 1024
+	if got := int64(maxCommitLogValueLen()); got != formatCap {
+		t.Fatalf("maxCommitLogValueLen (oversized max)=%d want=%d", got, formatCap)
+	}
+
+	const smallValue = int64(1234)
+	limits.MaxRecordSize = int64(commitLogRecordHeaderBytes) + smallValue
+	if got := int64(maxCommitLogValueLen()); got != smallValue {
+		t.Fatalf("maxCommitLogValueLen (small max)=%d want=%d", got, smallValue)
+	}
 }
 
 func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {

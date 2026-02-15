@@ -5,9 +5,10 @@ import "errors"
 const (
 	Version = 1
 
-	OpSetRID    = byte(0)
-	OpSetInline = byte(1)
-	OpDelete    = byte(2)
+	OpSetRID           = byte(0)
+	OpSetInline        = byte(1)
+	OpDelete           = byte(2)
+	OpSetFenceRIDGroup = byte(3)
 
 	segmentHeaderSize = 8
 	batchHeaderSize   = 1 + 4

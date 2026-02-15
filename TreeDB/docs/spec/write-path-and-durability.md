@@ -47,7 +47,7 @@ For each write batch, implementation conceptually performs:
 
 1. Choose lane.
 2. For eligible values, append to value log and build `ValuePtr` references.
-3. If WAL enabled, append commit-log batch (inline or RID form).
+3. If WAL enabled, append commit-log batch (inline, RID, or grouped fence RID form).
 4. Apply entries to mutable memtable.
 5. Acknowledge caller based on sync mode and durability mode.
 
@@ -67,6 +67,19 @@ sequence acts as a durable commit fence:
 
 This prevents replaying partial pointer commits and avoids phantom pointer
 visibility after crash recovery.
+
+### 3.2 WAL-on `v2_fenceptr` grouped commit records
+
+When `IndexOuterLeafMode=v2_fenceptr` and WAL is enabled, batched pointer writes
+may be emitted as grouped `OpSetFenceRIDGroup` records to reduce WAL bytes.
+
+Rules:
+
+- grouped records carry key/RID tuples in `Record.Value`,
+- record header key is empty (`KeyLen=0`), header RID is zero,
+- chunks are bounded by commitlog record-size limits,
+- singleton chunks must fall back to legacy `OpSetRID` (size deterministic and
+  no grouped framing overhead for one key).
 
 ## 4. Backend Commit Model
 

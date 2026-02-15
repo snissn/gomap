@@ -619,6 +619,330 @@ func TestRecovery_PartialFlushFence_NoPhantomPointers(t *testing.T) {
 	}
 }
 
+func TestRecovery_PartialFlushFence_NoPhantomPointers_GroupedRID(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("valuelog.NewWriter: %v", err)
+	}
+	if _, err := vw.Append(0, nil, 1, []byte("v1")); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Append: %v", err)
+	}
+	if err := vw.Sync(); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Sync: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("valuelog.Close: %v", err)
+	}
+
+	payload, err := commitlog.EncodeFenceRIDGroupPayload([]commitlog.FenceRIDGroupEntry{
+		{Key: []byte("k-good"), RID: 1},
+		{Key: []byte("k-missing"), RID: 2},
+	}, commitlog.FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("EncodeFenceRIDGroupPayload: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	cw, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	if err := cw.AppendBatch([]commitlog.Record{
+		{Op: commitlog.OpSetFenceRIDGroup, Value: payload, Seq: 1},
+	}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := cw.Sync(); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	got, err := db.Get([]byte("k-good"))
+	if err != nil {
+		t.Fatalf("get k-good: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected k-good to be absent when grouped fence is unsatisfied, got %q", string(got))
+	}
+	got, err = db.Get([]byte("k-missing"))
+	if err != nil {
+		t.Fatalf("get k-missing: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected k-missing to be absent, got %q", string(got))
+	}
+}
+
+func TestRecovery_MixedLegacySeqZeroAndGroupedRID(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	valuePath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(valuePath, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("valuelog.NewWriter: %v", err)
+	}
+	if _, err := vw.Append(0, nil, 1, []byte("v1")); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Append: %v", err)
+	}
+	if err := vw.Sync(); err != nil {
+		_ = vw.Close()
+		t.Fatalf("valuelog.Sync: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("valuelog.Close: %v", err)
+	}
+
+	groupedPayload, err := commitlog.EncodeFenceRIDGroupPayload([]commitlog.FenceRIDGroupEntry{
+		{Key: []byte("k-rid"), RID: 1},
+	}, commitlog.FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("EncodeFenceRIDGroupPayload: %v", err)
+	}
+
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	cw, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	if err := cw.AppendBatch([]commitlog.Record{
+		{Op: commitlog.OpSetInline, Key: []byte("k-legacy"), Value: []byte("legacy"), Seq: 0},
+	}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch seq0: %v", err)
+	}
+	if err := cw.AppendBatch([]commitlog.Record{
+		{Op: commitlog.OpSetFenceRIDGroup, Value: groupedPayload, Seq: 1},
+	}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch grouped: %v", err)
+	}
+	if err := cw.Sync(); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.Sync: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	legacyVal, err := db.Get([]byte("k-legacy"))
+	if err != nil {
+		t.Fatalf("get k-legacy: %v", err)
+	}
+	if string(legacyVal) != "legacy" {
+		t.Fatalf("get k-legacy: got %q want %q", string(legacyVal), "legacy")
+	}
+	groupVal, err := db.Get([]byte("k-rid"))
+	if err != nil {
+		t.Fatalf("get k-rid: %v", err)
+	}
+	if string(groupVal) != "v1" {
+		t.Fatalf("get k-rid: got %q want %q", string(groupVal), "v1")
+	}
+}
+
+func TestRecovery_MultiLaneOrdering_GroupedRID(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	fileID0, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID lane0: %v", err)
+	}
+	valuePathLane0 := filepath.Join(walDir, "value-l0-000001.log")
+	vw0, err := valuelog.NewWriter(valuePathLane0, page.ValueLogFileID(fileID0))
+	if err != nil {
+		t.Fatalf("valuelog.NewWriter lane0: %v", err)
+	}
+	if _, err := vw0.Append(0, nil, 2, []byte("v2")); err != nil {
+		_ = vw0.Close()
+		t.Fatalf("valuelog.Append lane0: %v", err)
+	}
+	if err := vw0.Sync(); err != nil {
+		_ = vw0.Close()
+		t.Fatalf("valuelog.Sync lane0: %v", err)
+	}
+	if err := vw0.Close(); err != nil {
+		t.Fatalf("valuelog.Close lane0: %v", err)
+	}
+
+	fileID1, err := valuelog.EncodeFileID(1, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID lane1: %v", err)
+	}
+	valuePathLane1 := filepath.Join(walDir, "value-l1-000001.log")
+	vw1, err := valuelog.NewWriter(valuePathLane1, page.ValueLogFileID(fileID1))
+	if err != nil {
+		t.Fatalf("valuelog.NewWriter lane1: %v", err)
+	}
+	if _, err := vw1.Append(0, nil, 1, []byte("v1")); err != nil {
+		_ = vw1.Close()
+		t.Fatalf("valuelog.Append lane1: %v", err)
+	}
+	if err := vw1.Sync(); err != nil {
+		_ = vw1.Close()
+		t.Fatalf("valuelog.Sync lane1: %v", err)
+	}
+	if err := vw1.Close(); err != nil {
+		t.Fatalf("valuelog.Close lane1: %v", err)
+	}
+
+	payloadLane0, err := commitlog.EncodeFenceRIDGroupPayload([]commitlog.FenceRIDGroupEntry{
+		{Key: []byte("k"), RID: 2},
+	}, commitlog.FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("EncodeFenceRIDGroupPayload lane0: %v", err)
+	}
+	payloadLane1, err := commitlog.EncodeFenceRIDGroupPayload([]commitlog.FenceRIDGroupEntry{
+		{Key: []byte("k"), RID: 1},
+	}, commitlog.FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("EncodeFenceRIDGroupPayload lane1: %v", err)
+	}
+
+	commitPathLane0 := filepath.Join(walDir, "commit-l0-000001.log")
+	cw0, err := commitlog.NewWriter(commitPathLane0)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter lane0: %v", err)
+	}
+	if err := cw0.AppendBatch([]commitlog.Record{{Op: commitlog.OpSetFenceRIDGroup, Value: payloadLane0, Seq: 2}}); err != nil {
+		_ = cw0.Close()
+		t.Fatalf("commitlog.AppendBatch lane0: %v", err)
+	}
+	if err := cw0.Sync(); err != nil {
+		_ = cw0.Close()
+		t.Fatalf("commitlog.Sync lane0: %v", err)
+	}
+	if err := cw0.Close(); err != nil {
+		t.Fatalf("commitlog.Close lane0: %v", err)
+	}
+
+	commitPathLane1 := filepath.Join(walDir, "commit-l1-000001.log")
+	cw1, err := commitlog.NewWriter(commitPathLane1)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter lane1: %v", err)
+	}
+	if err := cw1.AppendBatch([]commitlog.Record{{Op: commitlog.OpSetFenceRIDGroup, Value: payloadLane1, Seq: 1}}); err != nil {
+		_ = cw1.Close()
+		t.Fatalf("commitlog.AppendBatch lane1: %v", err)
+	}
+	if err := cw1.Sync(); err != nil {
+		_ = cw1.Close()
+		t.Fatalf("commitlog.Sync lane1: %v", err)
+	}
+	if err := cw1.Close(); err != nil {
+		t.Fatalf("commitlog.Close lane1: %v", err)
+	}
+
+	db, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	val, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if string(val) != "v2" {
+		t.Fatalf("expected replay order to honor Seq; got %q", string(val))
+	}
+}
+
+func TestRecovery_GroupedRIDPayloadCorruptionFails(t *testing.T) {
+	dir := t.TempDir()
+	walDir := filepath.Join(dir, "maindb", "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	payload, err := commitlog.EncodeFenceRIDGroupPayload([]commitlog.FenceRIDGroupEntry{
+		{Key: []byte("k1"), RID: 1},
+		{Key: []byte("k2"), RID: 2},
+	}, commitlog.FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("EncodeFenceRIDGroupPayload: %v", err)
+	}
+	commitPath := filepath.Join(walDir, "commit-l0-000001.log")
+	cw, err := commitlog.NewWriter(commitPath)
+	if err != nil {
+		t.Fatalf("commitlog.NewWriter: %v", err)
+	}
+	if err := cw.AppendBatch([]commitlog.Record{{Op: commitlog.OpSetFenceRIDGroup, Value: payload, Seq: 1}}); err != nil {
+		_ = cw.Close()
+		t.Fatalf("commitlog.AppendBatch: %v", err)
+	}
+	if err := cw.Close(); err != nil {
+		t.Fatalf("commitlog.Close: %v", err)
+	}
+
+	raw, err := os.ReadFile(commitPath)
+	if err != nil {
+		t.Fatalf("os.ReadFile: %v", err)
+	}
+	payloadLen := int(binary.LittleEndian.Uint32(raw[0:4]))
+	if payloadLen <= 0 || len(raw) < 8+payloadLen {
+		t.Fatalf("unexpected commit payload length %d", payloadLen)
+	}
+	segPayload := raw[8 : 8+payloadLen]
+	// Corrupt grouped payload version byte while keeping segment CRC valid.
+	const (
+		batchHeaderBytes  = 1 + 4
+		recordHeaderBytes = 1 + 2 + 4 + 8 + 8
+	)
+	if len(segPayload) < batchHeaderBytes+recordHeaderBytes {
+		t.Fatalf("unexpected segment payload size %d", len(segPayload))
+	}
+	recordHeaderStart := batchHeaderBytes
+	keyLen := int(binary.LittleEndian.Uint16(segPayload[recordHeaderStart+1 : recordHeaderStart+3]))
+	valLen := int(binary.LittleEndian.Uint32(segPayload[recordHeaderStart+3 : recordHeaderStart+7]))
+	recordPayloadOffset := batchHeaderBytes + recordHeaderBytes + keyLen
+	if keyLen < 0 || valLen <= 0 || recordPayloadOffset+valLen > len(segPayload) {
+		t.Fatalf("unexpected segment payload size %d", len(segPayload))
+	}
+	segPayload[recordPayloadOffset] = 0xFF
+	binary.LittleEndian.PutUint32(raw[4:8], crc.Checksum(segPayload))
+	if err := os.WriteFile(commitPath, raw, 0o600); err != nil {
+		t.Fatalf("os.WriteFile: %v", err)
+	}
+
+	if _, err := treedb.Open(treedb.Options{Dir: dir, ChunkSize: 64 * 1024}); err == nil {
+		t.Fatalf("expected open failure on corrupted grouped payload")
+	}
+}
+
 func TestRecovery_MultiLaneOrdering(t *testing.T) {
 	dir := t.TempDir()
 

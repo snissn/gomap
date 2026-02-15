@@ -8,9 +8,10 @@ import (
 )
 
 const (
-	logOpSetRID    = commitlog.OpSetRID
-	logOpSetInline = commitlog.OpSetInline
-	logOpDelete    = commitlog.OpDelete
+	logOpSetRID           = commitlog.OpSetRID
+	logOpSetInline        = commitlog.OpSetInline
+	logOpDelete           = commitlog.OpDelete
+	logOpSetFenceRIDGroup = commitlog.OpSetFenceRIDGroup
 )
 
 type logRecord = commitlog.Record

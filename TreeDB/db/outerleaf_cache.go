@@ -138,10 +138,13 @@ func (c *outerLeafBlockCache) shardFor(key outerLeafBlockKey) *outerLeafBlockCac
 	if len(c.shards) == 1 {
 		return &c.shards[0]
 	}
+	// Mix file/offset/length using fixed 64-bit odd constants in the style of
+	// xxHash/SplitMix so shard selection stays stable and well-distributed.
 	h := uint64(key.fileID)*11400714819323198485 ^
 		key.offset*14029467366897019727 ^
 		uint64(key.length)*1609587929392839161
 	h ^= h >> 33
+	// Final avalanche constant (SplitMix64 finalizer).
 	h *= 0xff51afd7ed558ccd
 	h ^= h >> 33
 	idx := int(h & uint64(len(c.shards)-1))

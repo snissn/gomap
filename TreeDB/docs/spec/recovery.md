@@ -80,6 +80,9 @@ Otherwise:
   - batches with non-zero `Seq` sorted by `Seq` then read order,
   - legacy `Seq=0` batches preserve original read order.
 - Truncated tail in commit log stops replay at partial tail safely.
+- For sequence-numbered batches, commit fences are satisfied only when all RID
+  references (including grouped fence-RID payload references) are present in the
+  scanned value-log map.
 
 ### 4.3 Apply batches to backend
 
@@ -88,6 +91,8 @@ Each commit record maps to backend batch op:
 - `OpDelete` -> `Delete(key)`
 - `OpSetInline` -> `Set(key, value)`
 - `OpSetRID` -> lookup `RID` in map, then `SetPointer(key, ptr)`
+- `OpSetFenceRIDGroup` -> decode grouped `(key, RID)` payload, lookup each RID,
+  then `SetPointer(key, ptr)` for each entry
 
 Each replayed batch is committed with `WriteSync`.
 

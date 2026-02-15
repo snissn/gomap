@@ -149,6 +149,17 @@ func normalizeIndexOuterLeafMode(mode string) string {
 	}
 }
 
+func normalizeWALFenceGroupEncoding(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ValueLogWALFenceGroupEncodingSimple:
+		return ValueLogWALFenceGroupEncodingSimple
+	case ValueLogWALFenceGroupEncodingPrefix:
+		return ValueLogWALFenceGroupEncodingPrefix
+	default:
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
+}
+
 // DurabilityMode configures cached-mode durability semantics.
 //
 // These modes are explicit and intentionally replace the previous boolean
@@ -214,6 +225,15 @@ const (
 	IndexOuterLeafModeV2FencePtr = "v2_fenceptr"
 )
 
+const (
+	// ValueLogWALFenceGroupEncodingSimple stores grouped fence WAL payloads as
+	// repeated key+RID tuples.
+	ValueLogWALFenceGroupEncodingSimple = "simple"
+	// ValueLogWALFenceGroupEncodingPrefix stores grouped fence WAL payloads with
+	// prefix-compressed keys.
+	ValueLogWALFenceGroupEncodingPrefix = "prefix"
+)
+
 // ValueLogAutoPolicy controls auto-mode dict vs block selection bias.
 type ValueLogAutoPolicy uint8
 
@@ -277,6 +297,11 @@ type ValueLogOptions struct {
 	IncompressibleProbeIntervalBytes int
 	// AutoPolicy controls auto-mode bias (throughput, balanced, size).
 	AutoPolicy ValueLogAutoPolicy
+	// WALFenceGroupEncoding selects payload encoding for WAL-on v2_fenceptr
+	// grouped fence records.
+	//
+	// Supported values: "simple" (default), "prefix".
+	WALFenceGroupEncoding string
 
 	// PointerThreshold controls when value-log pointers are used.
 	// Values <= 0 use a default threshold. In cached mode, relaxed durability
@@ -811,6 +836,7 @@ func Open(opts Options) (*DB, error) {
 		opts.ValueLog.Compression = ValueLogCompressionAuto
 	}
 	opts.IndexOuterLeafMode = normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
+	opts.ValueLog.WALFenceGroupEncoding = normalizeWALFenceGroupEncoding(opts.ValueLog.WALFenceGroupEncoding)
 
 	if err := validateOptions(opts); err != nil {
 		return nil, err
@@ -911,6 +937,11 @@ func validateOptions(opts Options) error {
 	case ValueLogAutoThroughput, ValueLogAutoBalanced, ValueLogAutoSize:
 	default:
 		return fmt.Errorf("treedb: invalid value-log auto policy %d", opts.ValueLog.AutoPolicy)
+	}
+	switch normalizeWALFenceGroupEncoding(opts.ValueLog.WALFenceGroupEncoding) {
+	case ValueLogWALFenceGroupEncodingSimple, ValueLogWALFenceGroupEncodingPrefix:
+	default:
+		return fmt.Errorf("treedb: invalid value-log WAL fence group encoding %q", opts.ValueLog.WALFenceGroupEncoding)
 	}
 	seenDomains := make(map[string]struct{}, len(opts.ValueLog.DomainInlineThresholds))
 	for i := range opts.ValueLog.DomainInlineThresholds {

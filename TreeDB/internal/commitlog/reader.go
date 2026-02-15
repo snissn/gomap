@@ -135,6 +135,13 @@ func decodeBatch(payload []byte) ([]Record, error) {
 			if rid != 0 {
 				return nil, ErrCorrupt
 			}
+		case OpSetFenceRIDGroup:
+			if keyLen != 0 || rid != 0 {
+				return nil, ErrCorrupt
+			}
+			if err := ValidateFenceRIDGroupPayload(val); err != nil {
+				return nil, ErrCorrupt
+			}
 		default:
 			return nil, ErrCorrupt
 		}

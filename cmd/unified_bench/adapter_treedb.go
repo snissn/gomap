@@ -85,6 +85,7 @@ var (
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v1", "TreeDB: index outer-leaf mode (v1|v2_blockptr|v2_fenceptr)")
+	treedbWALFenceGroupEncoding           = flag.String("treedb-wal-fence-group-encoding", "simple", "TreeDB: WAL fence RID group encoding for WAL-on v2_fenceptr (simple|prefix)")
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
 	treedbOuterLeafBlockRestart           = flag.Int("treedb-outer-leaf-block-restart-interval", 0, "TreeDB: experimental outer-leaf restart interval (0=default)")
@@ -271,6 +272,17 @@ func parseTreeDBOuterLeafMode(s string) (string, error) {
 	}
 }
 
+func parseTreeDBWALFenceGroupEncoding(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", treedb.ValueLogWALFenceGroupEncodingSimple:
+		return treedb.ValueLogWALFenceGroupEncodingSimple, nil
+	case treedb.ValueLogWALFenceGroupEncodingPrefix:
+		return treedb.ValueLogWALFenceGroupEncodingPrefix, nil
+	default:
+		return "", fmt.Errorf("unsupported -treedb-wal-fence-group-encoding=%q (expected simple|prefix)", s)
+	}
+}
+
 type treeDBOptionsReport struct {
 	opts     treedb.Options
 	notes    []string
@@ -299,6 +311,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("index_packed_valueptr=%t", r.opts.IndexPackedValuePtr))
 	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
 	lines = append(lines, fmt.Sprintf("index_outer_leaf_mode=%s", strings.TrimSpace(r.opts.IndexOuterLeafMode)))
+	lines = append(lines, fmt.Sprintf("vlog.wal_fence_group_encoding=%s", formatTreeDBWALFenceGroupEncoding(r.opts.ValueLog.WALFenceGroupEncoding)))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
 	lines = append(lines, fmt.Sprintf("vlog.force_pointers=%t", r.opts.ValueLog.ForcePointers))
@@ -438,6 +451,17 @@ func formatTreeDBVlogAutoPolicy(policy treedb.ValueLogAutoPolicy) string {
 	}
 }
 
+func formatTreeDBWALFenceGroupEncoding(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", treedb.ValueLogWALFenceGroupEncodingSimple:
+		return treedb.ValueLogWALFenceGroupEncodingSimple
+	case treedb.ValueLogWALFenceGroupEncodingPrefix:
+		return treedb.ValueLogWALFenceGroupEncodingPrefix
+	default:
+		return strings.ToLower(strings.TrimSpace(mode))
+	}
+}
+
 func resolveIndexOptimizationBool(flagName string, flagValue bool, compositeValue bool, compositeExplicit bool) bool {
 	if flagExplicit(flagName) {
 		return flagValue
@@ -557,6 +581,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 			DictIncompressibleHoldBytes:      *treedbVlogDictIncompressibleHoldBytes,
 			DictProbeIntervalBytes:           *treedbVlogDictProbeIntervalBytes,
 			DictMinPayloadSavingsRatio:       *treedbVlogDictMinSavingsRatio,
+			WALFenceGroupEncoding:            treedb.ValueLogWALFenceGroupEncodingSimple,
 			OuterLeafBlockRestartInterval:    *treedbOuterLeafBlockRestart,
 			OuterLeafBlockCacheEntries:       *treedbOuterLeafBlockCacheEntries,
 		},
@@ -585,6 +610,11 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	opts.IndexOuterLeafMode = outerMode
+	walFenceGroupEncoding, err := parseTreeDBWALFenceGroupEncoding(*treedbWALFenceGroupEncoding)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	opts.ValueLog.WALFenceGroupEncoding = walFenceGroupEncoding
 	outerCodec, err := parseTreeDBVlogBlockCodec(*treedbOuterLeafBlockCodec)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err

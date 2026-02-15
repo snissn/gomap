@@ -8,6 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/crc"
+	"github.com/snissn/gomap/TreeDB/internal/limits"
 )
 
 func TestCommitLogWriteReadBatch(t *testing.T) {
@@ -253,4 +256,220 @@ func TestCommitLogTruncatedPayload(t *testing.T) {
 		t.Fatalf("expected unexpected EOF, got %v", err)
 	}
 	_ = reader.Close()
+}
+
+func TestFenceRIDGroupPayloadRoundTrip(t *testing.T) {
+	entries := []FenceRIDGroupEntry{
+		{Key: []byte("k001"), RID: 11},
+		{Key: []byte("k002"), RID: 12},
+		{Key: []byte("k003"), RID: 13},
+	}
+	encodings := []FenceRIDGroupEncoding{
+		FenceRIDGroupEncodingSimple,
+		FenceRIDGroupEncodingPrefix,
+	}
+	for _, enc := range encodings {
+		payload, err := EncodeFenceRIDGroupPayload(entries, enc)
+		if err != nil {
+			t.Fatalf("encode %s: %v", enc.String(), err)
+		}
+		got, gotEnc, err := DecodeFenceRIDGroupPayload(payload, nil)
+		if err != nil {
+			t.Fatalf("decode %s: %v", enc.String(), err)
+		}
+		if gotEnc != enc {
+			t.Fatalf("decode %s encoding mismatch: got=%s", enc.String(), gotEnc.String())
+		}
+		if len(got) != len(entries) {
+			t.Fatalf("decode %s len=%d want=%d", enc.String(), len(got), len(entries))
+		}
+		for i := range entries {
+			if string(got[i].Key) != string(entries[i].Key) || got[i].RID != entries[i].RID {
+				t.Fatalf("decode %s entry[%d]=(%q,%d) want (%q,%d)", enc.String(), i, got[i].Key, got[i].RID, entries[i].Key, entries[i].RID)
+			}
+		}
+	}
+}
+
+func TestFenceRIDGroupPayloadMalformed(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload []byte
+	}{
+		{name: "empty", payload: nil},
+		{name: "bad_version", payload: []byte{0xFF, 0, 1}},
+		{name: "bad_encoding", payload: []byte{1, 99, 1}},
+		{name: "truncated_count", payload: []byte{1, 0, 0x80}},
+		{name: "truncated_key_len", payload: []byte{1, 0, 1, 0x80}},
+		{name: "truncated_key", payload: []byte{1, 0, 1, 3, 'k'}},
+		{name: "missing_rid", payload: []byte{1, 0, 1, 1, 'k'}},
+		{name: "truncated_rid_varint", payload: []byte{1, 0, 1, 1, 'k', 0x80}},
+		{name: "count_exceeds_payload_bound", payload: []byte{1, 0, 100, 1, 'k', 1}},
+		{name: "prefix_bad_shared", payload: []byte{1, 1, 2, 1, 'a', 1, 2, 1, 'b', 2}},
+		{name: "prefix_non_monotonic", payload: []byte{1, 1, 2, 1, 'b', 1, 0, 1, 'a', 2}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, _, err := DecodeFenceRIDGroupPayload(tc.payload, nil); err == nil {
+				t.Fatalf("expected decode error")
+			}
+		})
+	}
+}
+
+func TestCommitLogWriteReadBatchFenceRIDGroup(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	payload, err := EncodeFenceRIDGroupPayload([]FenceRIDGroupEntry{
+		{Key: []byte("k1"), RID: 1},
+		{Key: []byte("k2"), RID: 1},
+		{Key: []byte("k3"), RID: 2},
+	}, FenceRIDGroupEncodingPrefix)
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	records := []Record{
+		{Op: OpSetFenceRIDGroup, Value: payload, Seq: 7},
+	}
+	if err := writer.AppendBatch(records); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+	got, err := reader.ReadBatch()
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(got) != 1 || got[0].Op != OpSetFenceRIDGroup || got[0].Seq != 7 {
+		t.Fatalf("unexpected records: %+v", got)
+	}
+	if len(got[0].Key) != 0 || got[0].RID != 0 {
+		t.Fatalf("grouped record must keep key/rid header empty")
+	}
+	decoded, _, err := DecodeFenceRIDGroupPayload(got[0].Value, nil)
+	if err != nil {
+		t.Fatalf("decode grouped payload: %v", err)
+	}
+	if len(decoded) != 3 {
+		t.Fatalf("grouped payload len=%d", len(decoded))
+	}
+}
+
+func TestCommitLogFenceRIDGroupRejectsNonEmptyKeyWriter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+	writer, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	defer func() { _ = writer.Close() }()
+	payload, err := EncodeFenceRIDGroupPayload([]FenceRIDGroupEntry{
+		{Key: []byte("k"), RID: 1},
+		{Key: []byte("k2"), RID: 2},
+	}, FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	err = writer.AppendBatch([]Record{
+		{Op: OpSetFenceRIDGroup, Key: []byte("bad"), Value: payload, Seq: 1},
+	})
+	if err == nil {
+		t.Fatalf("expected writer validation error")
+	}
+}
+
+func TestCommitLogFenceRIDGroupReaderRejectsNonEmptyKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	payload, err := EncodeFenceRIDGroupPayload([]FenceRIDGroupEntry{
+		{Key: []byte("k"), RID: 1},
+		{Key: []byte("k2"), RID: 2},
+	}, FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("encode payload: %v", err)
+	}
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	if err := w.AppendBatch([]Record{{Op: OpSetFenceRIDGroup, Value: payload, Seq: 1}}); err != nil {
+		_ = w.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(data) < segmentHeaderSize+batchHeaderSize+recordHeaderSize {
+		t.Fatalf("unexpected log size %d", len(data))
+	}
+	off := segmentHeaderSize + batchHeaderSize
+	// Corrupt key length from 0 to 1 and keep CRC consistent.
+	binary.LittleEndian.PutUint16(data[off+1:off+3], 1)
+	payloadLen := int(binary.LittleEndian.Uint32(data[0:4]) & segmentLenMask)
+	raw := data[segmentHeaderSize : segmentHeaderSize+payloadLen]
+	binary.LittleEndian.PutUint32(data[4:8], crcChecksum(raw))
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+
+	r, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	if _, err := r.ReadBatch(); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt, got %v", err)
+	}
+}
+
+func TestCommitLogFenceRIDGroupSizeBoundaries(t *testing.T) {
+	oldMax := limits.MaxRecordSize
+	t.Cleanup(func() { limits.MaxRecordSize = oldMax })
+	okPayload, err := EncodeFenceRIDGroupPayload([]FenceRIDGroupEntry{
+		{Key: []byte("k1"), RID: 1},
+	}, FenceRIDGroupEncodingSimple)
+	if err != nil {
+		t.Fatalf("encode ok payload: %v", err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+	w, err := NewWriter(path)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	limits.MaxRecordSize = int64(recordHeaderSize + len(okPayload))
+	if err := w.AppendBatch([]Record{{Op: OpSetFenceRIDGroup, Value: okPayload, Seq: 1}}); err != nil {
+		_ = w.Close()
+		t.Fatalf("append ok payload: %v", err)
+	}
+	limits.MaxRecordSize = int64(recordHeaderSize + len(okPayload) - 1)
+	err = w.AppendBatch([]Record{{Op: OpSetFenceRIDGroup, Value: okPayload, Seq: 2}})
+	if !errors.Is(err, ErrRecordTooLarge) {
+		_ = w.Close()
+		t.Fatalf("expected ErrRecordTooLarge, got %v", err)
+	}
+	_ = w.Close()
+}
+
+func crcChecksum(payload []byte) uint32 {
+	return crc.Checksum(payload)
 }

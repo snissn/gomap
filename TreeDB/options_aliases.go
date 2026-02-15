@@ -53,6 +53,11 @@ const (
 )
 
 const (
+	ValueLogWALFenceGroupEncodingSimple = db.ValueLogWALFenceGroupEncodingSimple
+	ValueLogWALFenceGroupEncodingPrefix = db.ValueLogWALFenceGroupEncodingPrefix
+)
+
+const (
 	IndexOuterLeafModeV1         = db.IndexOuterLeafModeV1
 	IndexOuterLeafModeV2BlockPtr = db.IndexOuterLeafModeV2BlockPtr
 	IndexOuterLeafModeV2FencePtr = db.IndexOuterLeafModeV2FencePtr

@@ -491,6 +491,7 @@ func Open(opts Options) (*DB, error) {
 		ValueLogOuterLeafBlockTargetBytes:     opts.ValueLog.OuterLeafBlockTargetBytes,
 		ValueLogOuterLeafBlockCodec:           uint8(opts.ValueLog.OuterLeafBlockCodec),
 		ValueLogOuterLeafBlockRestartInterval: opts.ValueLog.OuterLeafBlockRestartInterval,
+		ValueLogWALFenceGroupEncoding:         opts.ValueLog.WALFenceGroupEncoding,
 		ValueLogIncompressibleHoldBytes:       opts.ValueLog.IncompressibleHoldBytes,
 		ValueLogIncompressibleProbeBytes:      opts.ValueLog.IncompressibleProbeIntervalBytes,
 		ValueLogAutoPolicy:                    uint8(opts.ValueLog.AutoPolicy),

@@ -342,7 +342,7 @@ Record[RecordCount]
 Record format:
 
 ```text
-u8  Op               // 0=set RID, 1=set inline, 2=delete
+u8  Op               // 0=set RID, 1=set inline, 2=delete, 3=set fence RID group
 u16 KeyLen
 u32 ValueLen
 u64 RID
@@ -356,6 +356,51 @@ Validation rules:
 - `OpSetRID`: `RID != 0`, `ValueLen == 0`.
 - `OpSetInline`: `RID == 0`.
 - `OpDelete`: `RID == 0`, `ValueLen == 0`.
+- `OpSetFenceRIDGroup`: `KeyLen == 0`, `RID == 0`, grouped key/RID pairs are encoded in `Value`.
+
+Pre-alpha compatibility note: introducing new opcodes (for example
+`OpSetFenceRIDGroup`) is not backward-compatible with older binaries.
+
+### 8.2 `OpSetFenceRIDGroup` payload
+
+Grouped payload header:
+
+```text
+u8  GroupVersion   // currently 1
+u8  Encoding       // 0=simple, 1=prefix
+uvarint Count      // number of key/RID entries (must be > 0)
+```
+
+`simple` entries:
+
+```text
+uvarint KeyLen
+bytes   Key[KeyLen]
+uvarint RID         // must be > 0
+```
+
+`prefix` entries:
+
+```text
+entry[0]:
+  uvarint KeyLen
+  bytes   Key[KeyLen]
+  uvarint RID
+
+entry[i>0]:
+  uvarint SharedPrefixLen
+  uvarint SuffixLen
+  bytes   Suffix[SuffixLen]
+  uvarint RID
+```
+
+Decoder rules:
+
+- rejects malformed/truncated varints,
+- rejects zero `Count`,
+- rejects non-progressing tails / trailing bytes,
+- rejects invalid prefix references (`SharedPrefixLen > len(prevKey)`),
+- rejects zero RID entries.
 
 ## 9. File Naming Conventions
 

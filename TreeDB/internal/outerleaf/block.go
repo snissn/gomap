@@ -1171,6 +1171,8 @@ func (d *DecodedBlock) Keys(dst [][]byte) ([][]byte, error) {
 }
 
 func (d *DecodedBlock) cachedV2Keys() ([][]byte, error) {
+	// sync.Once publishes d.keys/d.keysErr safely: all writes in the Do body
+	// happen-before any caller returns from Do.
 	d.keysOnce.Do(func() {
 		encoded := d.entries
 		keys := make([][]byte, 0, d.entryCount)

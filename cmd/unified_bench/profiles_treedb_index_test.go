@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+)
 
 type savedTreeDBFlagState struct {
 	indexOptimizations bool
@@ -10,6 +14,7 @@ type savedTreeDBFlagState struct {
 	packedValuePtr     bool
 	internalBaseDelta  bool
 	vlogAutoPolicy     string
+	walFenceEncoding   string
 	outerLeafCache     int
 	disableWAL         bool
 	relaxedSync        bool
@@ -32,6 +37,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		packedValuePtr:     *treedbIndexPackedValuePtr,
 		internalBaseDelta:  *treedbIndexInternalBaseDelta,
 		vlogAutoPolicy:     *treedbVlogAutoPolicy,
+		walFenceEncoding:   *treedbWALFenceGroupEncoding,
 		outerLeafCache:     *treedbOuterLeafBlockCacheEntries,
 		disableWAL:         *treedbDisableWAL,
 		relaxedSync:        *treedbRelaxedSync,
@@ -50,6 +56,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexPackedValuePtr = s.packedValuePtr
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
 	*treedbVlogAutoPolicy = s.vlogAutoPolicy
+	*treedbWALFenceGroupEncoding = s.walFenceEncoding
 	*treedbOuterLeafBlockCacheEntries = s.outerLeafCache
 	*treedbDisableWAL = s.disableWAL
 	*treedbRelaxedSync = s.relaxedSync
@@ -67,6 +74,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexPackedValuePtr = false
 	*treedbIndexInternalBaseDelta = false
 	*treedbVlogAutoPolicy = "balanced"
+	*treedbWALFenceGroupEncoding = treedb.ValueLogWALFenceGroupEncodingSimple
 	*treedbOuterLeafBlockCacheEntries = 0
 	*treedbDisableWAL = false
 	*treedbRelaxedSync = false
@@ -216,5 +224,28 @@ func TestBuildTreeDBOptions_ExplicitCompositeFalseWinsUnlessPerFlagExplicit(t *t
 	}
 	if opts.LeafPrefixCompression || opts.IndexColumnarLeaves || opts.IndexInternalBaseDelta {
 		t.Fatalf("expected explicit composite=false to disable remaining optimization fields")
+	}
+}
+
+func TestBuildTreeDBOptions_WALFenceGroupEncoding_DefaultAndOverride(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions default: %v", err)
+	}
+	if got := opts.ValueLog.WALFenceGroupEncoding; got != treedb.ValueLogWALFenceGroupEncodingSimple {
+		t.Fatalf("default WAL fence group encoding=%q want %q", got, treedb.ValueLogWALFenceGroupEncodingSimple)
+	}
+
+	*treedbWALFenceGroupEncoding = treedb.ValueLogWALFenceGroupEncodingPrefix
+	opts, _, err = buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions prefix: %v", err)
+	}
+	if got := opts.ValueLog.WALFenceGroupEncoding; got != treedb.ValueLogWALFenceGroupEncodingPrefix {
+		t.Fatalf("override WAL fence group encoding=%q want %q", got, treedb.ValueLogWALFenceGroupEncodingPrefix)
 	}
 }

@@ -295,11 +295,21 @@ func commitBatchSeq(records []commitlog.Record) (uint64, error) {
 
 func commitFenceSatisfied(records []commitlog.Record, ridMap map[uint64]page.ValuePtr) bool {
 	for _, rec := range records {
-		if rec.Op != commitlog.OpSetRID {
-			continue
-		}
-		if _, ok := ridMap[rec.RID]; !ok {
-			return false
+		switch rec.Op {
+		case commitlog.OpSetRID:
+			if _, ok := ridMap[rec.RID]; !ok {
+				return false
+			}
+		case commitlog.OpSetFenceRIDGroup:
+			entries, _, err := commitlog.DecodeFenceRIDGroupPayload(rec.Value, nil)
+			if err != nil {
+				return false
+			}
+			for i := range entries {
+				if _, ok := ridMap[entries[i].RID]; !ok {
+					return false
+				}
+			}
 		}
 	}
 	return true
@@ -336,6 +346,23 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 			}
 			if err := ptrBatch.SetPointer(rec.Key, ptr); err != nil {
 				return err
+			}
+		case commitlog.OpSetFenceRIDGroup:
+			entries, _, err := commitlog.DecodeFenceRIDGroupPayload(rec.Value, nil)
+			if err != nil {
+				return fmt.Errorf("commitlog: invalid fence RID group payload: %w", err)
+			}
+			if !hasPtrBatch {
+				return fmt.Errorf("commitlog: pointer batch unavailable")
+			}
+			for i := range entries {
+				ptr, ok := ridMap[entries[i].RID]
+				if !ok {
+					return fmt.Errorf("commitlog: missing rid %d", entries[i].RID)
+				}
+				if err := ptrBatch.SetPointer(entries[i].Key, ptr); err != nil {
+					return err
+				}
 			}
 		default:
 			return fmt.Errorf("commitlog: unknown op %d", rec.Op)

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -637,6 +638,12 @@ func ensureOuterLeafArenaCap(buf []byte, need int) []byte {
 	return grown
 }
 
+// appendOuterLeafRecordGroup encodes one contiguous outerleaf entry range into a
+// single value-log record and tracks its [start,end) source mapping.
+//
+// The encoder parameter is optional. Pass a reusable non-nil encoder when
+// encoding many groups in a loop to reduce allocations; pass nil for one-off
+// calls.
 func appendOuterLeafRecordGroup(db *DB, encoder *outerleaf.Encoder, entries []outerleaf.Entry, groupStart int, records []valuelog.Record, groups []outerLeafRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
 	if len(entries) == 0 {
 		return records, groups, arena, nil
@@ -2627,6 +2634,9 @@ type Options struct {
 	// ValueLogOuterLeafBlockRestartInterval controls restart cadence encoded in
 	// v2 outer-leaf payload metadata (0=default).
 	ValueLogOuterLeafBlockRestartInterval int
+	// ValueLogWALFenceGroupEncoding selects grouped fence WAL payload encoding
+	// for WAL-on v2_fenceptr writes: "simple" (default) or "prefix".
+	ValueLogWALFenceGroupEncoding string
 	// ValueLogIncompressibleHoldBytes configures auto-mode incompressible hold
 	// window bytes (0=default).
 	ValueLogIncompressibleHoldBytes int
@@ -2776,6 +2786,7 @@ type DB struct {
 	valueLogThreshold              int
 	valueLogDomainThresholds       []backenddb.ValueLogDomainThreshold
 	indexOuterLeafMode             string
+	walFenceGroupEncoding          commitlog.FenceRIDGroupEncoding
 	outerLeafBlockTargetBytes      int
 	outerLeafBlockCodec            uint8
 	outerLeafBlockRestart          int
@@ -2799,6 +2810,10 @@ type DB struct {
 	deferredFenceEnqueuedBytes     atomic.Uint64
 	deferredFenceMaterializedKeys  atomic.Uint64
 	deferredFenceMaterializedBytes atomic.Uint64
+	walFenceGroupRecords           atomic.Uint64
+	walFenceGroupKeys              atomic.Uint64
+	walFenceGroupSingletonFallback atomic.Uint64
+	walFenceGroupChunks            atomic.Uint64
 	valueLogWarned                 atomic.Bool
 	valueLogHardCapWarned          atomic.Bool
 	valueLogRetainedClosedBytes    atomic.Int64
@@ -3621,6 +3636,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(opts.ValueLogOuterLeafBlockTargetBytes)
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
 	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
+	walFenceGroupEncoding, err := commitlog.ParseFenceRIDGroupEncoding(opts.ValueLogWALFenceGroupEncoding)
+	if err != nil {
+		return nil, err
+	}
 	disableJournal := opts.DisableWAL
 	if writerFlushMaxMemtablesUnset &&
 		disableJournal &&
@@ -3879,6 +3898,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogThreshold:                    valueLogThreshold,
 		valueLogDomainThresholds:             valueLogDomainThresholds,
 		indexOuterLeafMode:                   indexOuterLeafMode,
+		walFenceGroupEncoding:                walFenceGroupEncoding,
 		outerLeafBlockTargetBytes:            outerLeafBlockTarget,
 		outerLeafBlockCodec:                  outerLeafBlockCodec,
 		outerLeafBlockRestart:                outerLeafBlockRestart,
@@ -4370,6 +4390,166 @@ func (db *DB) logBatchSize(records []logRecord) int64 {
 		total += commitLogRecordHeaderBytes + len(r.Key) + len(r.Value)
 	}
 	return int64(total)
+}
+
+func maxCommitLogValueLen() int {
+	// Commitlog ValueLen is encoded as u32; never allow larger values even when
+	// MaxRecordSize is disabled.
+	const maxU32ValueLen = int64(^uint32(0))
+	intMax := int64(int(^uint(0) >> 1))
+	formatCap := maxU32ValueLen - int64(commitLogRecordHeaderBytes)
+	if formatCap <= 0 {
+		return 0
+	}
+	if formatCap > intMax {
+		formatCap = intMax
+	}
+	if limits.MaxRecordSize <= 0 {
+		return int(formatCap)
+	}
+	maxLen := limits.MaxRecordSize - int64(commitLogRecordHeaderBytes)
+	if maxLen <= 0 {
+		return 0
+	}
+	if maxLen > formatCap {
+		maxLen = formatCap
+	}
+	return int(maxLen)
+}
+
+func canonicalizeBatchEntriesLastWriteWinsSorted(entries []batch.Entry) []batch.Entry {
+	if len(entries) <= 1 {
+		return entries
+	}
+	seen := make(map[uint64][]int, len(entries))
+	out := make([]batch.Entry, 0, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- {
+		entry := entries[i]
+		h := xxhash.Sum64(entry.Key)
+		dup := false
+		for _, outIdx := range seen[h] {
+			if bytes.Equal(out[outIdx].Key, entry.Key) {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		out = append(out, entry)
+		seen[h] = append(seen[h], len(out)-1)
+	}
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].Key, out[j].Key) < 0
+	})
+	return out
+}
+
+func batchEntriesByteSize(entries []batch.Entry) int {
+	total := 0
+	for i := range entries {
+		total += len(entries[i].Key)
+		if entries[i].Type == batch.OpPut {
+			total += len(entries[i].Value)
+		}
+	}
+	return total
+}
+
+func uvarintLen(v uint64) int {
+	n := 1
+	for v >= 0x80 {
+		v >>= 7
+		n++
+	}
+	return n
+}
+
+func keyPrefixLen(a, b []byte) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return i
+}
+
+func fenceRIDGroupEntryPayloadSize(entries []commitlog.FenceRIDGroupEntry, start, idx int, encoding commitlog.FenceRIDGroupEncoding) (int, error) {
+	if idx < start || idx >= len(entries) {
+		return 0, fmt.Errorf("cachingdb: fence RID group index out of range")
+	}
+	entry := entries[idx]
+	if len(entry.Key) == 0 {
+		return 0, fmt.Errorf("cachingdb: fence RID group key[%d] empty", idx)
+	}
+	if entry.RID == 0 {
+		return 0, fmt.Errorf("cachingdb: fence RID group key[%d] missing RID", idx)
+	}
+	if encoding != commitlog.FenceRIDGroupEncodingPrefix || idx == start {
+		return uvarintLen(uint64(len(entry.Key))) + len(entry.Key) + uvarintLen(entry.RID), nil
+	}
+	prevKey := entries[idx-1].Key
+	if bytes.Compare(prevKey, entry.Key) >= 0 {
+		return 0, fmt.Errorf("cachingdb: fence RID prefix encoding requires strictly increasing keys")
+	}
+	shared := keyPrefixLen(prevKey, entry.Key)
+	suffixLen := len(entry.Key) - shared
+	return uvarintLen(uint64(shared)) + uvarintLen(uint64(suffixLen)) + suffixLen + uvarintLen(entry.RID), nil
+}
+
+func (db *DB) appendFenceRIDGroupedWALRecords(records []logRecord, entries []commitlog.FenceRIDGroupEntry) ([]logRecord, error) {
+	if len(entries) == 0 {
+		return records, nil
+	}
+	maxValLen := maxCommitLogValueLen()
+	if maxValLen <= 0 {
+		return nil, commitlog.ErrRecordTooLarge
+	}
+	for start := 0; start < len(entries); {
+		end := start
+		bodyLen := 0
+		for end < len(entries) {
+			entrySize, err := fenceRIDGroupEntryPayloadSize(entries, start, end, db.walFenceGroupEncoding)
+			if err != nil {
+				return nil, err
+			}
+			nextCount := end - start + 1
+			nextTotal := 2 + uvarintLen(uint64(nextCount)) + bodyLen + entrySize
+			if nextTotal > maxValLen {
+				break
+			}
+			bodyLen += entrySize
+			end++
+		}
+		if end == start {
+			return nil, commitlog.ErrRecordTooLarge
+		}
+		chunk := entries[start:end]
+		db.walFenceGroupChunks.Add(1)
+		if len(chunk) == 1 {
+			db.walFenceGroupSingletonFallback.Add(1)
+			records = append(records, logRecord{Op: logOpSetRID, Key: chunk[0].Key, RID: chunk[0].RID})
+		} else {
+			payload, err := commitlog.EncodeFenceRIDGroupPayload(chunk, db.walFenceGroupEncoding)
+			if err != nil {
+				return nil, err
+			}
+			if len(payload) > maxValLen {
+				return nil, commitlog.ErrRecordTooLarge
+			}
+			db.walFenceGroupRecords.Add(1)
+			db.walFenceGroupKeys.Add(uint64(len(chunk)))
+			records = append(records, logRecord{Op: logOpSetFenceRIDGroup, Value: payload})
+		}
+		start = end
+	}
+	return records, nil
 }
 
 func (db *DB) assignCommitSeq(records []logRecord) {
@@ -12100,6 +12280,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.wal_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes+walCurrentBytes)
 	stats["treedb.cache.wal_closed_bytes_estimate"] = fmt.Sprintf("%d", walClosedBytes)
 	stats["treedb.cache.wal_current_bytes_estimate"] = fmt.Sprintf("%d", walCurrentBytes)
+	stats["treedb.cache.wal_fence_group.records"] = fmt.Sprintf("%d", db.walFenceGroupRecords.Load())
+	stats["treedb.cache.wal_fence_group.keys"] = fmt.Sprintf("%d", db.walFenceGroupKeys.Load())
+	stats["treedb.cache.wal_fence_group.singleton_fallback"] = fmt.Sprintf("%d", db.walFenceGroupSingletonFallback.Load())
+	stats["treedb.cache.wal_fence_group.chunks"] = fmt.Sprintf("%d", db.walFenceGroupChunks.Load())
 	stats["treedb.cache.vlog_queue.enqueued_total"] = fmt.Sprintf("%d", queueDepthEnqueued)
 	stats["treedb.cache.vlog_queue.depth_samples"] = fmt.Sprintf("%d", queueDepthSamples)
 	stats["treedb.cache.vlog_queue.depth_last_sum"] = fmt.Sprintf("%d", queueDepthLast)
@@ -13343,6 +13527,35 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	needRotate := false
 	needSyncBarrier := false
 
+	canonicalizeForFenceGroupWAL := false
+	if !b.db.disableJournal &&
+		b.db.outerLeafFenceV2Enabled() &&
+		b.db.valueLogEnabled() &&
+		b.db.allowValueLogPointers() {
+		for i := range b.entries {
+			op := &b.entries[i]
+			if op.Type != batch.OpPut {
+				continue
+			}
+			if b.db.forceValueLogPointers || len(op.Value) > b.db.valueLogThresholdForKey(op.Key) {
+				canonicalizeForFenceGroupWAL = true
+				break
+			}
+		}
+	}
+	if canonicalizeForFenceGroupWAL {
+		b.entries = canonicalizeBatchEntriesLastWriteWinsSorted(b.entries)
+		b.size = batchEntriesByteSize(b.entries)
+		if len(b.entries) > 0 {
+			b.firstKey = b.entries[0].Key
+			b.lastKey = b.entries[len(b.entries)-1].Key
+			b.streamEligible = true
+		} else {
+			b.firstKey = nil
+			b.lastKey = nil
+		}
+	}
+
 	// 1. Memtable capacity pre-check
 	shardCount := len(b.db.mutableShards)
 	shardAdds := b.shardAdds
@@ -13695,18 +13908,48 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		if cap(records) < len(b.entries) {
 			records = make([]logRecord, 0, len(b.entries))
 		}
+		groupRIDRecords := b.db.outerLeafFenceV2Enabled() && rids != nil
+		var pendingFenceRID []commitlog.FenceRIDGroupEntry
+		if groupRIDRecords {
+			pendingFenceRID = make([]commitlog.FenceRIDGroupEntry, 0, len(b.entries))
+		}
+		flushPendingFenceRID := func() error {
+			if len(pendingFenceRID) == 0 {
+				return nil
+			}
+			var flushErr error
+			records, flushErr = b.db.appendFenceRIDGroupedWALRecords(records, pendingFenceRID)
+			pendingFenceRID = pendingFenceRID[:0]
+			return flushErr
+		}
 		for i := range b.entries {
 			op := &b.entries[i]
 			switch op.Type {
 			case batch.OpDelete:
+				if err := flushPendingFenceRID(); err != nil {
+					b.db.writeMu.RUnlock()
+					return err
+				}
 				records = append(records, logRecord{Op: logOpDelete, Key: op.Key})
 			case batch.OpPut:
 				if rids != nil && rids[i] != 0 {
-					records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i]})
+					if groupRIDRecords {
+						pendingFenceRID = append(pendingFenceRID, commitlog.FenceRIDGroupEntry{Key: op.Key, RID: rids[i]})
+					} else {
+						records = append(records, logRecord{Op: logOpSetRID, Key: op.Key, RID: rids[i]})
+					}
 				} else {
+					if err := flushPendingFenceRID(); err != nil {
+						b.db.writeMu.RUnlock()
+						return err
+					}
 					records = append(records, logRecord{Op: logOpSetInline, Key: op.Key, Value: op.Value})
 				}
 			}
+		}
+		if err := flushPendingFenceRID(); err != nil {
+			b.db.writeMu.RUnlock()
+			return err
 		}
 		b.walBuf = records
 		if err := b.db.appendWAL(lane, records, durability); err != nil {
