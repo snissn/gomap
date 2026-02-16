@@ -79,6 +79,12 @@ type slabUnsafeFenceBlockKeyReader interface {
 	ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) (keys [][]byte, ok bool, err error)
 }
 
+// Optional fast classifier for whether a pointer is expected to reference a
+// fence-expandable outer-leaf block.
+type slabFencePointerClassifier interface {
+	FencePointerLikelyBlock(ptr page.ValuePtr) bool
+}
+
 // Optional key-aware append-style pointer reads.
 type slabUnsafeKeyAppender interface {
 	ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, error)
@@ -117,6 +123,7 @@ type Tree struct {
 	fenceLookupMode bool
 	slabFenceBlocks slabUnsafeFenceBlockReader
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
+	slabFencePtrCls slabFencePointerClassifier
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
 	rootPageID      uint64
@@ -153,6 +160,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		}
 		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
 			t.slabFenceKeys = fenceKeys
+		}
+		if cls, ok := sr.(slabFencePointerClassifier); ok {
+			t.slabFencePtrCls = cls
 		}
 	}
 	t.fenceLookupMode = fenceEnabled && t.slabFenceReader != nil
@@ -207,10 +217,16 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		} else {
 			t.slabFenceKeys = nil
 		}
+		if cls, ok := sr.(slabFencePointerClassifier); ok {
+			t.slabFencePtrCls = cls
+		} else {
+			t.slabFencePtrCls = nil
+		}
 	} else {
 		t.slabFenceReader = nil
 		t.slabFenceBlocks = nil
 		t.slabFenceKeys = nil
+		t.slabFencePtrCls = nil
 	}
 	t.fenceLookupMode = fenceEnabled && t.slabFenceReader != nil
 	t.rootPageID = root

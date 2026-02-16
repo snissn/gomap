@@ -1960,86 +1960,9 @@ func (d *DecodedBlock) Keys(dst [][]byte) ([][]byte, error) {
 
 func (d *DecodedBlock) cachedStructuredKeys() ([][]byte, error) {
 	d.keysOnce.Do(func() {
-		encoded := d.entries
-		headerLen := 8
-		if d.version == blockVersionV3 {
-			headerLen = 9
-		}
-
-		keys := make([][]byte, d.entryCount)
-		off := 0
-		estKeyLen := 16
-		if len(encoded) >= headerLen {
-			if v := int(binary.LittleEndian.Uint16(encoded[2:4])); v > 0 {
-				if v > 128 {
-					v = 128
-				}
-				estKeyLen = v
-			}
-		}
-		estCap := d.entryCount * estKeyLen
-		if estCap < 64 {
-			estCap = 64
-		}
-		keyArena := make([]byte, 0, estCap)
-		var prevKey []byte
-		for i := 0; i < d.entryCount; i++ {
-			if off+headerLen > len(encoded) {
-				d.keysErr = fmt.Errorf("outerleaf: truncated v%d entry header", d.version)
-				return
-			}
-			shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
-			suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
-			valueLenOff := off + 4
-			if d.version == blockVersionV3 {
-				valueLenOff = off + 5
-			}
-			valueLen := int(binary.LittleEndian.Uint32(encoded[valueLenOff : valueLenOff+4]))
-			off += headerLen
-			if shared < 0 || shared > len(prevKey) {
-				d.keysErr = fmt.Errorf("outerleaf: invalid shared prefix")
-				return
-			}
-			if suffixLen < 0 || off+suffixLen > len(encoded) {
-				d.keysErr = fmt.Errorf("outerleaf: invalid key suffix length")
-				return
-			}
-			suffix := encoded[off : off+suffixLen]
-			off += suffixLen
-			if valueLen < 0 || off+valueLen > len(encoded) {
-				d.keysErr = fmt.Errorf("outerleaf: invalid value length")
-				return
-			}
-			off += valueLen
-
-			keyLen := shared + suffixLen
-			if keyLen < 0 {
-				d.keysErr = fmt.Errorf("outerleaf: invalid key length")
-				return
-			}
-			needCap := len(keyArena) + keyLen
-			if needCap > cap(keyArena) {
-				newCap := cap(keyArena) * 2
-				if newCap < keyLen {
-					newCap = keyLen
-				}
-				// Existing key slices already reference older arena segments; avoid
-				// copying historical bytes when rolling to a fresh segment.
-				keyArena = make([]byte, 0, newCap)
-				needCap = keyLen
-			}
-			arenaOff := len(keyArena)
-			keyArena = keyArena[:needCap]
-			key := keyArena[arenaOff:needCap]
-			if shared > 0 {
-				copy(key[:shared], prevKey[:shared])
-			}
-			copy(key[shared:], suffix)
-			keys[i] = key
-			prevKey = key
-		}
-		if off != len(encoded) {
-			d.keysErr = fmt.Errorf("outerleaf: trailing v%d entry bytes", d.version)
+		keys, err := decodeStructuredKeys(d.version, d.entryCount, d.entries)
+		if err != nil {
+			d.keysErr = err
 			return
 		}
 		d.keys = keys
@@ -2048,6 +1971,152 @@ func (d *DecodedBlock) cachedStructuredKeys() ([][]byte, error) {
 		return nil, d.keysErr
 	}
 	return d.keys, nil
+}
+
+func decodeStructuredKeys(version uint8, entryCount int, encoded []byte) ([][]byte, error) {
+	headerLen := 8
+	if version == blockVersionV3 {
+		headerLen = 9
+	}
+	keys := make([][]byte, entryCount)
+	off := 0
+	estKeyLen := 16
+	if len(encoded) >= headerLen {
+		if v := int(binary.LittleEndian.Uint16(encoded[2:4])); v > 0 {
+			if v > 128 {
+				v = 128
+			}
+			estKeyLen = v
+		}
+	}
+	estCap := entryCount * estKeyLen
+	if estCap < 64 {
+		estCap = 64
+	}
+	keyArena := make([]byte, 0, estCap)
+	var prevKey []byte
+	for i := 0; i < entryCount; i++ {
+		if off+headerLen > len(encoded) {
+			return nil, fmt.Errorf("outerleaf: truncated v%d entry header", version)
+		}
+		shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
+		suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
+		valueLenOff := off + 4
+		if version == blockVersionV3 {
+			valueLenOff = off + 5
+		}
+		valueLen := int(binary.LittleEndian.Uint32(encoded[valueLenOff : valueLenOff+4]))
+		off += headerLen
+		if shared < 0 || shared > len(prevKey) {
+			return nil, fmt.Errorf("outerleaf: invalid shared prefix")
+		}
+		if suffixLen < 0 || off+suffixLen > len(encoded) {
+			return nil, fmt.Errorf("outerleaf: invalid key suffix length")
+		}
+		suffix := encoded[off : off+suffixLen]
+		off += suffixLen
+		if valueLen < 0 || off+valueLen > len(encoded) {
+			return nil, fmt.Errorf("outerleaf: invalid value length")
+		}
+		off += valueLen
+
+		keyLen := shared + suffixLen
+		if keyLen < 0 {
+			return nil, fmt.Errorf("outerleaf: invalid key length")
+		}
+		needCap := len(keyArena) + keyLen
+		if needCap > cap(keyArena) {
+			newCap := cap(keyArena) * 2
+			if newCap < keyLen {
+				newCap = keyLen
+			}
+			// Existing key slices already reference older arena segments; avoid
+			// copying historical bytes when rolling to a fresh segment.
+			keyArena = make([]byte, 0, newCap)
+			needCap = keyLen
+		}
+		arenaOff := len(keyArena)
+		keyArena = keyArena[:needCap]
+		key := keyArena[arenaOff:needCap]
+		if shared > 0 {
+			copy(key[:shared], prevKey[:shared])
+		}
+		copy(key[shared:], suffix)
+		keys[i] = key
+		prevKey = key
+	}
+	if off != len(encoded) {
+		return nil, fmt.Errorf("outerleaf: trailing v%d entry bytes", version)
+	}
+	return keys, nil
+}
+
+// DecodeKeysWithVerify decodes logical keys from an encoded outer-leaf payload.
+func DecodeKeysWithVerify(payload []byte, verifyChecksum bool) ([][]byte, error) {
+	if len(payload) < blockHeaderSize {
+		return nil, fmt.Errorf("outerleaf: truncated header")
+	}
+	if payload[0] != blockMagic[0] || payload[1] != blockMagic[1] || payload[2] != blockMagic[2] || payload[3] != blockMagic[3] {
+		return nil, fmt.Errorf("outerleaf: invalid outer-leaf payload")
+	}
+
+	version := payload[4]
+	codec := payload[5]
+	switch version {
+	case blockVersionV1:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+		expected := keyLen + valueLen
+		if rawLen != expected {
+			return nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
+		}
+		raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
+		if err != nil {
+			return nil, err
+		}
+		if keyLen < 0 || keyLen > len(raw) {
+			return nil, fmt.Errorf("outerleaf: invalid key length %d", keyLen)
+		}
+		key := make([]byte, keyLen)
+		copy(key, raw[:keyLen])
+		return [][]byte{key}, nil
+	case blockVersionV2, blockVersionV3:
+		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
+		entriesLen := int(binary.LittleEndian.Uint32(payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockV2RawLenOff : blockV2RawLenOff+4]))
+		if entryCount <= 0 {
+			return nil, fmt.Errorf("outerleaf: empty v%d block", version)
+		}
+		if rawLen <= 0 {
+			return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
+		}
+		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
+		if codec == blockCodecNone {
+			raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
+			if err != nil {
+				return nil, err
+			}
+			entries, _, _, err := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
+			if err != nil {
+				return nil, err
+			}
+			return decodeStructuredKeys(version, entryCount, entries)
+		}
+		scratch := getPooledBytes(rawLen)
+		defer putPooledBytes(scratch)
+		raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch[:0], true, verifyChecksum)
+		if err != nil {
+			return nil, err
+		}
+		entries, _, _, err := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
+		if err != nil {
+			return nil, err
+		}
+		return decodeStructuredKeys(version, entryCount, entries)
+	default:
+		return nil, fmt.Errorf("outerleaf: unsupported version %d", version)
+	}
 }
 
 // Decode returns the first key/value in an encoded outer-leaf payload.

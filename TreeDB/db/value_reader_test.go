@@ -192,6 +192,50 @@ func TestValueReaderReadUnsafeFenceBlockKeys_CacheHitSkipsReadUnsafe(t *testing.
 	}
 }
 
+func TestValueReaderFenceMode_DirectPointerReadForKey(t *testing.T) {
+	ptr := page.ValuePtr{
+		FileID: page.ValueLogFileID(9),
+		Offset: 64,
+		Length: 5,
+	}
+	raw := []byte("value")
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: raw}}
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+	}
+
+	got, err := r.ReadUnsafeForKey(ptr, []byte("k1"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeForKey: %v", err)
+	}
+	if !bytes.Equal(got, raw) {
+		t.Fatalf("value = %q, want %q", got, raw)
+	}
+
+	foundVal, found, err := r.ReadUnsafeFenceForKey(ptr, []byte("k1"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceForKey: %v", err)
+	}
+	if found {
+		t.Fatalf("found = true, want false")
+	}
+	if foundVal != nil {
+		t.Fatalf("fence value = %q, want nil", foundVal)
+	}
+
+	keys, ok, err := r.ReadUnsafeFenceBlockKeys(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockKeys: %v", err)
+	}
+	if ok {
+		t.Fatalf("ok = true, want false")
+	}
+	if keys != nil {
+		t.Fatalf("keys = %v, want nil", keys)
+	}
+}
+
 func makeTestOuterLeafBlobRefPayload(t *testing.T, key []byte, blobPtr page.ValuePtr) ([]byte, page.ValuePtr) {
 	t.Helper()
 	encoded, err := outerleaf.EncodeSingleBlobRef(nil, key, blobPtr, uint8(ValueLogBlockSnappy), 16)

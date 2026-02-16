@@ -75,14 +75,17 @@ func (r valueReader) FenceLookupEnabled() bool {
 	return r.fenceLookupModeEnabled()
 }
 
+func (r valueReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
+	return page.ValuePtrIsFenceOuter(ptr)
+}
+
 func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte, unsafe bool) ([]byte, error) {
 	if !r.outerLeafModeEnabled() {
 		return raw, nil
 	}
 	if !outerleaf.HasMagic(raw) {
-		if r.fenceLookupModeEnabled() {
-			return nil, fmt.Errorf("value reader: expected outer-leaf payload in fence mode ptr=%+v", ptr)
-		}
+		// Fence mode may still surface direct value-log pointers for singleton
+		// oversized entries.
 		return raw, nil
 	}
 	block, err := r.outerLeafBlock(ptr, raw)
@@ -133,9 +136,8 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 		return raw, true, nil
 	}
 	if !outerleaf.HasMagic(raw) {
-		if r.fenceLookupModeEnabled() {
-			return nil, false, fmt.Errorf("value reader: expected outer-leaf payload in fence mode ptr=%+v", ptr)
-		}
+		// Fence mode may still surface direct value-log pointers for singleton
+		// oversized entries.
 		return raw, true, nil
 	}
 	block, err := r.outerLeafBlock(ptr, raw)
@@ -236,6 +238,9 @@ func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byt
 	if err != nil {
 		return nil, false, err
 	}
+	if !outerleaf.HasMagic(raw) {
+		return nil, false, nil
+	}
 	return r.decodeValueForKeyFound(ptr, key, raw, true)
 }
 
@@ -248,6 +253,9 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 		raw, err := r.readRawUnsafe(ptr)
 		if err != nil {
 			return nil, true, err
+		}
+		if !outerleaf.HasMagic(raw) {
+			return nil, false, nil
 		}
 		decoded, decErr := r.outerLeafBlock(ptr, raw)
 		if decErr != nil {
@@ -283,6 +291,9 @@ func (r valueReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool
 		raw, err := r.readRawUnsafe(ptr)
 		if err != nil {
 			return nil, true, err
+		}
+		if !outerleaf.HasMagic(raw) {
+			return nil, false, nil
 		}
 		decoded, decErr := r.outerLeafBlock(ptr, raw)
 		if decErr != nil {
@@ -426,9 +437,6 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 			return nil, err
 		}
 		if !outerleaf.HasMagic(raw) {
-			if r.fenceLookupModeEnabled() {
-				return nil, fmt.Errorf("value reader: expected outer-leaf payload in fence mode ptr=%+v", ptr)
-			}
 			return raw, nil
 		}
 		block, err := r.outerLeafBlock(ptr, raw)

@@ -1489,19 +1489,15 @@ func TestCachingDB_WALOnFenceModeRIDJoin_HybridOversizedUsesRID(t *testing.T) {
 		t.Fatalf("expected persisted pointer for large key, flags=%#x file_id=%#x", entry.Flags, entry.ValuePtr.FileID)
 	}
 
-	rawOuter, err := cache.valueLogReader.Read(entry.ValuePtr)
+	raw, err := cache.valueLogReader.Read(entry.ValuePtr)
 	if err != nil {
-		t.Fatalf("read outer payload: %v", err)
+		t.Fatalf("read large payload: %v", err)
 	}
-	decoded, ok, found, _, err := outerleaf.DecodeEntryForKey(rawOuter, largeKey, nil)
-	if err != nil {
-		t.Fatalf("DecodeEntryForKey(large): %v", err)
+	if outerleaf.HasMagic(raw) {
+		t.Fatalf("expected direct oversized value payload in rid_join mode")
 	}
-	if !ok || !found {
-		t.Fatalf("DecodeEntryForKey(large) ok=%v found=%v", ok, found)
-	}
-	if decoded.Kind != outerleaf.EntryKindBlobRef {
-		t.Fatalf("expected outer payload blob-ref entry, got kind=%d", decoded.Kind)
+	if !bytes.Equal(raw, largeVal) {
+		t.Fatalf("large payload mismatch")
 	}
 }
 

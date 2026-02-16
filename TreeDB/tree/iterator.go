@@ -328,6 +328,7 @@ type Iterator struct {
 	slabKeyReader   slabUnsafeKeyReader
 	slabFenceBlocks slabUnsafeFenceBlockReader
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
+	slabFencePtrCls slabFencePointerClassifier
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
 
@@ -394,6 +395,7 @@ func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iter
 	it.slabKeyReader = t.slabKeyReader
 	it.slabFenceBlocks = t.slabFenceBlocks
 	it.slabFenceKeys = t.slabFenceKeys
+	it.slabFencePtrCls = t.slabFencePtrCls
 	it.slabKeyAppender = t.slabKeyAppender
 	it.slabKeyBatcher = t.slabKeyBatcher
 	it.resetStack()
@@ -429,6 +431,7 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 	it.slabKeyReader = t.slabKeyReader
 	it.slabFenceBlocks = t.slabFenceBlocks
 	it.slabFenceKeys = t.slabFenceKeys
+	it.slabFencePtrCls = t.slabFencePtrCls
 	it.slabKeyAppender = t.slabKeyAppender
 	it.slabKeyBatcher = t.slabKeyBatcher
 	it.resetStack()
@@ -691,6 +694,13 @@ func lowerBoundFenceKeys(keys [][]byte, key []byte) int {
 	})
 }
 
+func (it *Iterator) pointerLikelyFenceBlock(ptr page.ValuePtr) bool {
+	if it != nil && it.slabFencePtrCls != nil {
+		return it.slabFencePtrCls.FencePointerLikelyBlock(ptr)
+	}
+	return true
+}
+
 func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 	if it.reverse || len(it.pendingSeekKey) == 0 || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil) {
 		return false, nil
@@ -706,6 +716,9 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			return false, err
 		}
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		if !it.pointerLikelyFenceBlock(ptr) {
 			continue
 		}
 		keyReaderUsable := false
@@ -791,6 +804,9 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		return false, false, false, err
 	}
 	if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+		return false, false, false, nil
+	}
+	if !it.pointerLikelyFenceBlock(ptr) {
 		return false, false, false, nil
 	}
 

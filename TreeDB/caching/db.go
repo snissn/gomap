@@ -610,6 +610,7 @@ func normalizeValueLogWALFenceMode(mode string) string {
 }
 
 const defaultOuterLeafBlobThresholdMin = 16 << 10
+const defaultOuterLeafFenceBlockTargetBytes = 4 << 10
 
 func (db *DB) effectiveOuterLeafBlobThresholdBytes() int {
 	if db == nil {
@@ -618,15 +619,7 @@ func (db *DB) effectiveOuterLeafBlobThresholdBytes() int {
 	if db.outerLeafBlobThresholdBytes > 0 {
 		return db.outerLeafBlobThresholdBytes
 	}
-	target := db.outerLeafBlockTargetBytes
-	if target <= 0 {
-		target = outerleaf.NormalizeBlockTargetBytes(0)
-	}
-	derived := 4 * target
-	if derived < defaultOuterLeafBlobThresholdMin {
-		derived = defaultOuterLeafBlobThresholdMin
-	}
-	return derived
+	return defaultOuterLeafBlobThresholdMin
 }
 
 func (db *DB) oversizedOuterLeafValue(value []byte) bool {
@@ -1249,6 +1242,9 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 
 	for i := range groups {
 		ptr := ptrs[i]
+		if fenceMode {
+			ptr = page.ValuePtrMarkFenceOuter(ptr)
+		}
 		group := groups[i]
 		if group.start < 0 || group.end < group.start || group.end > len(eligible) {
 			putValueLogPtrs(ptrs)
@@ -1498,6 +1494,9 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	emittedGroups := uint64(0)
 	for i := range groups {
 		ptr := vlogPtrs[i]
+		if fenceMode {
+			ptr = page.ValuePtrMarkFenceOuter(ptr)
+		}
 		group := groups[i]
 		if group.start < 0 || group.end < group.start || group.end > len(ptrKeys) {
 			return errors.New("cachingdb: deferred value-log group out of range")
@@ -1727,6 +1726,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 			for i := range groups {
 				ptr := vlogPtrs[i]
+				if fenceMode {
+					ptr = page.ValuePtrMarkFenceOuter(ptr)
+				}
 				group := groups[i]
 				if group.start < 0 || group.end < group.start || group.end > len(chunkKeys) {
 					putValueLogPtrs(vlogPtrs)
@@ -2732,7 +2734,7 @@ type Options struct {
 	// adaptation target (0=default).
 	ValueLogBlockTargetCompressedBytes int
 	// ValueLogOuterLeafBlockTargetBytes controls v2 outer-leaf payload target
-	// size (0=default).
+	// size (0=mode-aware default).
 	ValueLogOuterLeafBlockTargetBytes int
 	// ValueLogOuterLeafBlockCodec selects v2 outer-leaf payload codec:
 	// 0=snappy, 1=lz4.
@@ -2741,7 +2743,7 @@ type Options struct {
 	// v2 outer-leaf payload metadata (0=default).
 	ValueLogOuterLeafBlockRestartInterval int
 	// ValueLogOuterLeafBlobThresholdBytes controls when v2 fence-pointer outer
-	// entries use blob references instead of inline bytes (0=default).
+	// entries use blob references instead of inline bytes (0=default threshold).
 	ValueLogOuterLeafBlobThresholdBytes int
 	// ValueLogIncompressibleHoldBytes configures auto-mode incompressible hold
 	// window bytes (0=default).
@@ -3742,7 +3744,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
 		return nil, fmt.Errorf("cachingdb: invalid value-log WAL fence mode %q", opts.ValueLogWALFenceMode)
 	}
-	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(opts.ValueLogOuterLeafBlockTargetBytes)
+	outerLeafBlockTargetOpt := opts.ValueLogOuterLeafBlockTargetBytes
+	if outerLeafBlockTargetOpt <= 0 && indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr {
+		outerLeafBlockTargetOpt = defaultOuterLeafFenceBlockTargetBytes
+	}
+	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(outerLeafBlockTargetOpt)
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
 	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
 	outerLeafBlobThreshold := opts.ValueLogOuterLeafBlobThresholdBytes
@@ -7293,13 +7299,9 @@ func (db *DB) appendValueLogOneRaw(l *lane, dictID uint64, dict []byte, rid uint
 	return db.appendValueLogOneInternal(l, dictID, dict, rid, nil, value, durability, false)
 }
 
-// appendFenceRIDJoinOversizedOne materializes an oversized v2_fenceptr value in
-// two records:
-//  1. blob record (raw user value)
-//  2. outer-leaf v3 single-entry blob-ref record
-//
-// WAL RID publication always references the outer record RID.
-func (db *DB) appendFenceRIDJoinOversizedOne(l *lane, dictID uint64, key, value []byte, durability journalDurability) (outerPtr page.ValuePtr, outerRID uint64, retainPath string, err error) {
+// appendFenceRIDJoinOversizedOne materializes an oversized v2_fenceptr value as
+// a direct value-log record and returns the published pointer RID.
+func (db *DB) appendFenceRIDJoinOversizedOne(l *lane, dictID uint64, key, value []byte, durability journalDurability) (ptr page.ValuePtr, rid uint64, retainPath string, err error) {
 	if db == nil {
 		return page.ValuePtr{}, 0, "", errWALUnavailable
 	}
@@ -7309,72 +7311,12 @@ func (db *DB) appendFenceRIDJoinOversizedOne(l *lane, dictID uint64, key, value 
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, 0, "", errWALUnavailable
 	}
-	startRID := db.nextRID.Add(2) - 1
-	blobRID := startRID
-	outerRID = startRID + 1
-
-	blobPtr, blobRetainPath, appendErr := db.appendValueLogOneRaw(l, dictID, nil, blobRID, value, durability)
-	if appendErr != nil {
-		return page.ValuePtr{}, 0, "", appendErr
+	rid = db.nextRID.Add(1)
+	ptr, retainPath, err = db.appendValueLogOneRaw(l, dictID, nil, rid, value, durability)
+	if err != nil {
+		return page.ValuePtr{}, 0, "", err
 	}
-	if blobRetainPath != "" {
-		db.markValueLogRetain(blobRetainPath)
-	}
-
-	// Blob-ref outer payloads are tiny; avoid per-write output allocations in
-	// the oversized rid_join path.
-	//
-	// Use a fixed-size pointer-backed scratch pool for common short benchmark
-	// keys to avoid []byte interface boxing allocations on every put/get pair;
-	// fall back to pooled arenas for larger keys.
-	outerNeed := len(key) + page.ValuePtrSize + 64
-	var (
-		outerPayload []byte
-		outerPoolBuf []byte
-		outerScratch *[outerLeafBlobRefStackScratchCap]byte
-		encodeErr    error
-	)
-	if outerNeed <= outerLeafBlobRefStackScratchCap {
-		outerScratch = getOuterLeafBlobRefScratch()
-		outerPayload, encodeErr = db.encodeOuterLeafBlobRef(outerScratch[:0], key, blobPtr)
-	} else {
-		outerPoolBuf = getOuterLeafArena(outerNeed)
-		outerPayload, encodeErr = db.encodeOuterLeafBlobRef(outerPoolBuf[:0], key, blobPtr)
-	}
-	if encodeErr != nil {
-		if outerScratch != nil {
-			if cap(outerPayload) > outerLeafBlobRefStackScratchCap {
-				putOuterLeafArena(outerPayload)
-			}
-			putOuterLeafBlobRefScratch(outerScratch)
-		} else if outerPoolBuf != nil {
-			if len(outerPayload) > 0 && cap(outerPayload) > cap(outerPoolBuf) {
-				putOuterLeafArena(outerPoolBuf)
-				putOuterLeafArena(outerPayload)
-			} else {
-				putOuterLeafArena(outerPoolBuf)
-			}
-		}
-		return page.ValuePtr{}, 0, "", encodeErr
-	}
-	outerPtr, outerRetainPath, appendErr := db.appendValueLogOneRaw(l, dictID, nil, outerRID, outerPayload, durability)
-	if outerScratch != nil {
-		if cap(outerPayload) > outerLeafBlobRefStackScratchCap {
-			putOuterLeafArena(outerPayload)
-		}
-		putOuterLeafBlobRefScratch(outerScratch)
-	} else if outerPoolBuf != nil {
-		if len(outerPayload) > 0 && cap(outerPayload) > cap(outerPoolBuf) {
-			putOuterLeafArena(outerPoolBuf)
-			putOuterLeafArena(outerPayload)
-		} else {
-			putOuterLeafArena(outerPoolBuf)
-		}
-	}
-	if appendErr != nil {
-		return page.ValuePtr{}, 0, "", appendErr
-	}
-	return outerPtr, outerRID, outerRetainPath, nil
+	return ptr, rid, retainPath, nil
 }
 
 func (db *DB) appendValueLogOneWithKey(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
@@ -13961,6 +13903,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				used := 0
 				for i := range groups {
 					ptr := ptrs[i]
+					if b.db.outerLeafFenceV2Enabled() {
+						ptr = page.ValuePtrMarkFenceOuter(ptr)
+					}
 					group := groups[i]
 					if group.start < 0 || group.end < group.start || group.end > len(eligibleIdxs) {
 						putValueLogPtrs(ptrs)

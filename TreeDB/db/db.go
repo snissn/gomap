@@ -275,7 +275,7 @@ type ValueLogOptions struct {
 	// OuterLeafBlockTargetBytes guides outer-leaf block payload sizing for the
 	// experimental index outer-leaf modes.
 	//
-	// 0 uses a default.
+	// 0 uses a mode-aware default.
 	OuterLeafBlockTargetBytes int
 	// OuterLeafBlockCodec selects the codec used for experimental outer-leaf
 	// block payloads stored in the value log.
@@ -288,7 +288,7 @@ type ValueLogOptions struct {
 	// OuterLeafBlobThresholdBytes controls when v2 fence-pointer outer-leaf
 	// entries store a blob reference instead of inline value bytes.
 	//
-	// <=0 uses an adaptive default derived from OuterLeafBlockTargetBytes.
+	// <=0 uses the default blob-ref threshold.
 	OuterLeafBlobThresholdBytes int
 	// OuterLeafBlockCacheEntries bounds the number of decoded blocks cached for
 	// pointer and fence-pointer reads when an index outer-leaf mode is enabled
