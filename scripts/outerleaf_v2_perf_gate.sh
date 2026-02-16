@@ -23,6 +23,13 @@ GATE_PROFILES="${GATE_PROFILES:-fast}"
 GATE_MIN_RATIO_BATCH_WRITE="${GATE_MIN_RATIO_BATCH_WRITE:-0.70}"
 GATE_MIN_RATIO_BATCH_WRITE_STEADY="${GATE_MIN_RATIO_BATCH_WRITE_STEADY:-0.70}"
 GATE_MIN_RATIO_PREFIX_SCAN="${GATE_MIN_RATIO_PREFIX_SCAN:-0.35}"
+GATE_MAX_CV_PCT="${GATE_MAX_CV_PCT:-12.0}"
+
+# Determinism/noise knobs.
+RUN_PREFIX="${RUN_PREFIX:-}"
+CPUSET="${CPUSET:-}"
+SLEEP_BETWEEN_CASES_SEC="${SLEEP_BETWEEN_CASES_SEC:-0}"
+SLEEP_BETWEEN_RUNS_SEC="${SLEEP_BETWEEN_RUNS_SEC:-0}"
 
 OUT_ROOT="${OUT_DIR:-$ROOT/artifacts/perf}"
 TS=$(date +%Y%m%d%H%M%S)
@@ -36,6 +43,14 @@ fi
 if (( WARMUP_RUNS < 0 )); then
   echo "WARMUP_RUNS must be >= 0" >&2
   exit 2
+fi
+
+if [[ -n "$CPUSET" ]]; then
+  if ! command -v taskset >/dev/null 2>&1; then
+    echo "CPUSET was provided but taskset is not available on this host" >&2
+    exit 2
+  fi
+  RUN_PREFIX="taskset -c ${CPUSET} ${RUN_PREFIX}"
 fi
 
 make unified-bench >/dev/null
@@ -63,6 +78,12 @@ gate_profiles=$GATE_PROFILES
 gate_min_ratio_batch_write=$GATE_MIN_RATIO_BATCH_WRITE
 gate_min_ratio_batch_write_steady=$GATE_MIN_RATIO_BATCH_WRITE_STEADY
 gate_min_ratio_prefix_scan=$GATE_MIN_RATIO_PREFIX_SCAN
+gate_max_cv_pct=$GATE_MAX_CV_PCT
+run_prefix=$RUN_PREFIX
+cpuset=$CPUSET
+sleep_between_cases_sec=$SLEEP_BETWEEN_CASES_SEC
+sleep_between_runs_sec=$SLEEP_BETWEEN_RUNS_SEC
+gomaxprocs=${GOMAXPROCS:-}
 META
 
 cases=(
@@ -70,6 +91,10 @@ cases=(
   "v1_forceptr|-treedb-index-outer-leaf-mode=v1 -treedb-force-value-pointers=true"
   "v2_fenceptr|-treedb-index-outer-leaf-mode=v2_fenceptr -treedb-force-value-pointers=true"
 )
+reversed_cases=()
+for ((i = ${#cases[@]} - 1; i >= 0; i--)); do
+  reversed_cases+=("${cases[$i]}")
+done
 
 CASES_FILE="$OUT/cases.tsv"
 printf '%s\n' "${cases[@]}" >"$CASES_FILE"
@@ -108,7 +133,43 @@ run_one() {
   # shellcheck disable=SC2206
   local flags=( $variant_flags )
   cmd+=("${flags[@]}")
-  "${cmd[@]}" >"$log" 2>&1
+  if [[ -n "$RUN_PREFIX" ]]; then
+    # shellcheck disable=SC2206
+    local prefix=( $RUN_PREFIX )
+    "${prefix[@]}" "${cmd[@]}" >"$log" 2>&1
+  else
+    "${cmd[@]}" >"$log" 2>&1
+  fi
+}
+
+run_phase() {
+  local profile="$1"
+  local phase="$2"
+  local count="$3"
+
+  local i
+  for ((i = 1; i <= count; i++)); do
+    local -a ordered_cases
+    if (( i % 2 == 1 )); then
+      ordered_cases=("${cases[@]}")
+    else
+      ordered_cases=("${reversed_cases[@]}")
+    fi
+
+    local case_idx=0
+    for spec in "${ordered_cases[@]}"; do
+      case_idx=$((case_idx + 1))
+      IFS='|' read -r case_id variant_flags <<<"$spec"
+      echo "--- profile=$profile case=$case_id phase=$phase run=$i ---" >&2
+      run_one "$profile" "$case_id" "$variant_flags" "$phase" "$i"
+      if [[ "$SLEEP_BETWEEN_CASES_SEC" != "0" && $case_idx -lt ${#ordered_cases[@]} ]]; then
+        sleep "$SLEEP_BETWEEN_CASES_SEC"
+      fi
+    done
+    if [[ "$SLEEP_BETWEEN_RUNS_SEC" != "0" && $i -lt $count ]]; then
+      sleep "$SLEEP_BETWEEN_RUNS_SEC"
+    fi
+  done
 }
 
 IFS=',' read -r -a profile_list <<<"$PROFILES"
@@ -117,20 +178,13 @@ for profile in "${profile_list[@]}"; do
   if [[ -z "$profile" ]]; then
     continue
   fi
-  for spec in "${cases[@]}"; do
-    IFS='|' read -r case_id variant_flags <<<"$spec"
-    echo "--- profile=$profile case=$case_id ---" >&2
-    for ((i = 1; i <= WARMUP_RUNS; i++)); do
-      run_one "$profile" "$case_id" "$variant_flags" warmup "$i"
-    done
-    for ((i = 1; i <= RUNS; i++)); do
-      run_one "$profile" "$case_id" "$variant_flags" measured "$i"
-    done
-  done
+  run_phase "$profile" warmup "$WARMUP_RUNS"
+  run_phase "$profile" measured "$RUNS"
 done
 
 python3 - "$OUT" "$CASES_FILE" <<'PY'
 import json
+import math
 import re
 import statistics
 import sys
@@ -149,6 +203,7 @@ profiles = [p.strip() for p in meta.get("profiles", "").split(",") if p.strip()]
 tests = [t.strip() for t in meta.get("tests", "").split(",") if t.strip()]
 gate_profiles = {p.strip() for p in meta.get("gate_profiles", "").split(",") if p.strip()}
 strict_gate = meta.get("strict_gate", "1") not in {"0", "false", "False"}
+gate_max_cv_pct = float(meta.get("gate_max_cv_pct", "12.0"))
 
 thresholds = {
     "batch_write": float(meta.get("gate_min_ratio_batch_write", "0.70")),
@@ -189,6 +244,14 @@ def parse_metric(path: Path, test_name: str):
 
 def median(vals):
     return float(statistics.median(vals))
+
+def pct_cv(values):
+    if len(values) < 2:
+        return None
+    mean_v = statistics.mean(values)
+    if mean_v == 0:
+        return None
+    return float((statistics.pstdev(values) / mean_v) * 100.0)
 
 rows = []
 failures = []
@@ -233,12 +296,27 @@ for profile in profiles:
                     "reason": "some measured logs missing metric for test",
                 })
                 continue
+            cv_pct = pct_cv(vals)
+            cv_gate_fail = bool(
+                profile in gate_profiles and
+                cv_pct is not None and
+                cv_pct > gate_max_cv_pct
+            )
+            if cv_gate_fail:
+                failures.append({
+                    "profile": profile,
+                    "case": case_id,
+                    "test": test_name,
+                    "reason": f"{test_name} noisy runs for {case_id}: cv {cv_pct:.2f}% > {gate_max_cv_pct:.2f}%",
+                })
             rows.append({
                 "profile": profile,
                 "case": case_id,
                 "test": test_name,
                 "runs": vals,
                 "median": median(vals),
+                "cv_pct": cv_pct,
+                "cv_gate_fail": cv_gate_fail,
             })
 
 lookup = {(r["profile"], r["case"], r["test"]): r for r in rows}
@@ -254,6 +332,10 @@ for profile in profiles:
         med_v2 = v2["median"]
         med_inline = v1_inline["median"] if v1_inline else None
         med_force = v1_force["median"] if v1_force else None
+        cv_force = v1_force["cv_pct"] if v1_force else None
+        cv_v2 = v2["cv_pct"]
+        force_noisy = bool(v1_force and v1_force.get("cv_gate_fail"))
+        v2_noisy = bool(v2.get("cv_gate_fail"))
         ratio_vs_inline = (med_v2 / med_inline) if med_inline and med_inline > 0 else None
         ratio_vs_force = (med_v2 / med_force) if med_force and med_force > 0 else None
         delta_vs_inline = ((med_v2 - med_inline) / med_inline * 100.0) if med_inline and med_inline > 0 else None
@@ -262,7 +344,15 @@ for profile in profiles:
         passed = True
         reason = ""
         if profile in gate_profiles:
-            if ratio_vs_force is None:
+            if force_noisy or v2_noisy:
+                passed = False
+                noisy_bits = []
+                if force_noisy:
+                    noisy_bits.append(f"v1_forceptr cv={cv_force:.2f}%")
+                if v2_noisy:
+                    noisy_bits.append(f"v2_fenceptr cv={cv_v2:.2f}%")
+                reason = f"{test_name} noise gate fail ({', '.join(noisy_bits)}; max={gate_max_cv_pct:.2f}%)"
+            elif ratio_vs_force is None:
                 passed = False
                 reason = f"{test_name} missing v1_forceptr median for gate comparison"
                 failures.append({"profile": profile, "test": test_name, "reason": reason})
@@ -279,6 +369,8 @@ for profile in profiles:
             "v1_inline_median": med_inline,
             "v1_force_median": med_force,
             "v2_median": med_v2,
+            "v1_force_cv_pct": cv_force,
+            "v2_cv_pct": cv_v2,
             "ratio_vs_inline": ratio_vs_inline,
             "ratio_vs_force": ratio_vs_force,
             "delta_vs_inline_pct": delta_vs_inline,
@@ -312,12 +404,22 @@ def fmt_ratio(v):
         return "-"
     return f"{v:.3f}x"
 
+def fmt_cv(v):
+    if v is None or (isinstance(v, float) and math.isnan(v)):
+        return "-"
+    return f"{v:.2f}%"
+
 md = []
 md.append("# outerleaf v2 perf gate")
 md.append("")
 md.append(f"- git: `{meta.get('git_rev', '-')}` (`{meta.get('git_branch', '-')}`)")
 md.append(f"- runs: warmup={meta.get('warmup_runs', '-')} measured={meta.get('runs', '-')}")
 md.append(f"- keys={meta.get('keys', '-')} batchsize={meta.get('batchsize', '-')} seed={meta.get('seed', '-')}")
+if meta.get("gomaxprocs", ""):
+    md.append(f"- GOMAXPROCS: `{meta.get('gomaxprocs', '-')}`")
+if meta.get("run_prefix", ""):
+    md.append(f"- run_prefix: `{meta.get('run_prefix', '-')}`")
+md.append(f"- anti-noise: alternate case order by run, sleep(case)={meta.get('sleep_between_cases_sec', '-')}s, sleep(run)={meta.get('sleep_between_runs_sec', '-')}s, max_cv={meta.get('gate_max_cv_pct', '-')}%")
 md.append(f"- profiles: `{meta.get('profiles', '-')}`")
 md.append(f"- tests: `{meta.get('tests', '-')}`")
 md.append(f"- val-pattern: `{meta.get('val_pattern', '-')}`")
@@ -326,15 +428,15 @@ md.append("")
 for profile in profiles:
     md.append(f"## Profile: {profile}")
     md.append("")
-    md.append("| test | v1 inline | v1 forceptr | v2 fenceptr | v2 vs v1 inline | v2 vs v1 forceptr | gate |")
-    md.append("|---|---:|---:|---:|---:|---:|---|")
+    md.append("| test | v1 inline | v1 forceptr | v2 fenceptr | v1 force cv | v2 cv | v2 vs v1 inline | v2 vs v1 forceptr | gate |")
+    md.append("|---|---:|---:|---:|---:|---:|---:|---:|---|")
     for c in compare_rows:
         if c["profile"] != profile:
             continue
         gate = "PASS" if c["gate_pass"] else "FAIL"
         md.append(
             f"| {display.get(c['test'], c['test'])} | {fmt_num(c['v1_inline_median'])} | {fmt_num(c['v1_force_median'])} | "
-            f"{fmt_num(c['v2_median'])} | {fmt_ratio(c['ratio_vs_inline'])} ({fmt_pct(c['delta_vs_inline_pct'])}) | "
+            f"{fmt_num(c['v2_median'])} | {fmt_cv(c['v1_force_cv_pct'])} | {fmt_cv(c['v2_cv_pct'])} | {fmt_ratio(c['ratio_vs_inline'])} ({fmt_pct(c['delta_vs_inline_pct'])}) | "
             f"{fmt_ratio(c['ratio_vs_force'])} ({fmt_pct(c['delta_vs_force_pct'])}) | {gate} |"
         )
     md.append("")
