@@ -337,7 +337,7 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, "", false, nil), snap.state.SystemRootPageID).
+	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, "", false, nil, nil), snap.state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := collectValueLogRefCounts(ctx, db, sysIter, counts); err != nil {
 		_ = sysIter.Close()

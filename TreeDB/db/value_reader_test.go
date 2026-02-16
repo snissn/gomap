@@ -192,6 +192,176 @@ func TestValueReaderReadUnsafeFenceBlockKeys_CacheHitSkipsReadUnsafe(t *testing.
 	}
 }
 
+func TestValueReaderReadUnsafeFenceBlockKeys_BlobRefWarmsCacheAfterMiss(t *testing.T) {
+	key := []byte("blob-k")
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(42), Offset: 99, Length: 7}
+	outerPayload, outerPtr := makeTestOuterLeafBlobRefPayload(t, key, blobPtr)
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{outerPtr: outerPayload}}
+	cache := newOuterLeafBlockCache(8)
+	keyCache := newOuterLeafKeyCache(8)
+
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+		keyCache:      keyCache,
+	}
+
+	firstKeys, ok, err := r.ReadUnsafeFenceBlockKeys(outerPtr)
+	if err != nil {
+		t.Fatalf("first ReadUnsafeFenceBlockKeys: %v", err)
+	}
+	if !ok {
+		t.Fatalf("first ok = false, want true")
+	}
+	if len(firstKeys) != 1 || !bytes.Equal(firstKeys[0], key) {
+		t.Fatalf("first keys = %q, want %q", firstKeys, key)
+	}
+	if reader.readUnsafeCalls != 1 {
+		t.Fatalf("readUnsafeCalls after first read = %d, want 1", reader.readUnsafeCalls)
+	}
+
+	secondKeys, ok, err := r.ReadUnsafeFenceBlockKeys(outerPtr)
+	if err != nil {
+		t.Fatalf("second ReadUnsafeFenceBlockKeys: %v", err)
+	}
+	if !ok {
+		t.Fatalf("second ok = false, want true")
+	}
+	if len(secondKeys) != 1 || !bytes.Equal(secondKeys[0], key) {
+		t.Fatalf("second keys = %q, want %q", secondKeys, key)
+	}
+	if reader.readUnsafeCalls != 1 {
+		t.Fatalf("readUnsafeCalls after cache warm = %d, want 1", reader.readUnsafeCalls)
+	}
+}
+
+func TestValueReaderReadUnsafeFenceBlockKeysRange_CacheHitSkipsReadUnsafe(t *testing.T) {
+	payload, block, ptr := makeTestOuterLeafPayload(t)
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
+	cache := newOuterLeafBlockCache(8)
+	cache.put(newOuterLeafBlockKey(ptr), block)
+
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+
+	keys, ok, err := r.ReadUnsafeFenceBlockKeysRange(ptr, []byte("k2"), []byte("k3"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockKeysRange: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if len(keys) != 1 || !bytes.Equal(keys[0], []byte("k2")) {
+		t.Fatalf("keys = %q, want [k2]", keys)
+	}
+	if reader.readUnsafeCalls != 0 {
+		t.Fatalf("readUnsafeCalls = %d, want 0", reader.readUnsafeCalls)
+	}
+}
+
+func TestValueReaderReadUnsafeFenceBlockKeysRange_UsesKeyCacheWindow(t *testing.T) {
+	payload, _, ptr := makeTestOuterLeafPayload(t)
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
+	cache := newOuterLeafBlockCache(8)
+	keyCache := newOuterLeafKeyCache(8)
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+		keyCache:      keyCache,
+	}
+
+	all, ok, err := r.ReadUnsafeFenceBlockKeys(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockKeys warm: %v", err)
+	}
+	if !ok || len(all) != 3 {
+		t.Fatalf("warm keys ok=%v len=%d, want ok=true len=3", ok, len(all))
+	}
+	if reader.readUnsafeCalls != 1 {
+		t.Fatalf("readUnsafeCalls after warm = %d, want 1", reader.readUnsafeCalls)
+	}
+
+	keys, ok, err := r.ReadUnsafeFenceBlockKeysRange(ptr, []byte("k2"), nil)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockKeysRange: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	want := [][]byte{[]byte("k2"), []byte("k3")}
+	if len(keys) != len(want) {
+		t.Fatalf("keys len = %d, want %d", len(keys), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(keys[i], want[i]) {
+			t.Fatalf("keys[%d] = %q, want %q", i, keys[i], want[i])
+		}
+	}
+	if reader.readUnsafeCalls != 1 {
+		t.Fatalf("readUnsafeCalls after key-cache window = %d, want 1", reader.readUnsafeCalls)
+	}
+}
+
+func TestValueReaderReadUnsafeFenceBlockSeek_ClassifiesBoundsAndReusesCache(t *testing.T) {
+	payload, _, ptr := makeTestOuterLeafPayload(t)
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
+	cache := newOuterLeafBlockCache(8)
+	keyCache := newOuterLeafKeyCache(8)
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+		keyCache:      keyCache,
+	}
+
+	pos, below, above, keys, ok, err := r.ReadUnsafeFenceBlockSeek(ptr, []byte("k0"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockSeek(k0): %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok=false, want true")
+	}
+	if pos != 0 || !below || above || keys != nil {
+		t.Fatalf("seek(k0) got pos=%d below=%v above=%v keys=%v, want pos=0 below=true above=false keys=nil", pos, below, above, keys)
+	}
+	if reader.readUnsafeCalls != 1 {
+		t.Fatalf("readUnsafeCalls after first seek = %d, want 1", reader.readUnsafeCalls)
+	}
+
+	pos, below, above, keys, ok, err = r.ReadUnsafeFenceBlockSeek(ptr, []byte("k2"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockSeek(k2): %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok=false, want true")
+	}
+	if pos != 1 || below || above || len(keys) != 3 {
+		t.Fatalf("seek(k2) got pos=%d below=%v above=%v len(keys)=%d, want pos=1 below=false above=false len(keys)=3", pos, below, above, len(keys))
+	}
+	if reader.readUnsafeCalls != 2 {
+		t.Fatalf("readUnsafeCalls after in-range materialization = %d, want 2", reader.readUnsafeCalls)
+	}
+
+	pos, below, above, keys, ok, err = r.ReadUnsafeFenceBlockSeek(ptr, []byte("k9"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockSeek(k9): %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok=false, want true")
+	}
+	if pos != 3 || below || !above || keys != nil {
+		t.Fatalf("seek(k9) got pos=%d below=%v above=%v keys=%v, want pos=3 below=false above=true keys=nil", pos, below, above, keys)
+	}
+	if reader.readUnsafeCalls != 2 {
+		t.Fatalf("readUnsafeCalls after cache reuse = %d, want 2", reader.readUnsafeCalls)
+	}
+}
+
 func TestValueReaderFenceMode_DirectPointerReadForKey(t *testing.T) {
 	ptr := page.ValuePtr{
 		FileID: page.ValueLogFileID(9),
@@ -233,6 +403,17 @@ func TestValueReaderFenceMode_DirectPointerReadForKey(t *testing.T) {
 	}
 	if keys != nil {
 		t.Fatalf("keys = %v, want nil", keys)
+	}
+
+	rangeKeys, ok, err := r.ReadUnsafeFenceBlockKeysRange(ptr, []byte("a"), []byte("z"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockKeysRange: %v", err)
+	}
+	if ok {
+		t.Fatalf("range ok = true, want false")
+	}
+	if rangeKeys != nil {
+		t.Fatalf("range keys = %v, want nil", rangeKeys)
 	}
 }
 

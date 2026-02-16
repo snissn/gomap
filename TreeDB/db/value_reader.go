@@ -1,7 +1,9 @@
 package db
 
 import (
+	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
@@ -17,6 +19,7 @@ type valueReader struct {
 	fenceLookupEnabled     bool
 	skipOuterLeafChecksums bool
 	cache                  *outerLeafBlockCache
+	keyCache               *outerLeafKeyCache
 }
 
 type unsafeAppendReader interface {
@@ -32,14 +35,15 @@ func ValueReaderForState(state *DBState) tree.SlabReader {
 	if state == nil {
 		return nil
 	}
-	return newValueReader(state.ValueLogSet, "", false, nil)
+	return newValueReader(state.ValueLogSet, "", false, nil, nil)
 }
 
-func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums bool, cache *outerLeafBlockCache) valueReader {
+func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums bool, cache *outerLeafBlockCache, keyCache *outerLeafKeyCache) valueReader {
 	r := valueReader{
 		vlogs:                  vlogs,
 		skipOuterLeafChecksums: skipOuterLeafChecksums,
 		cache:                  cache,
+		keyCache:               keyCache,
 	}
 	r.setOuterLeafMode(mode)
 	return r
@@ -286,26 +290,154 @@ func (r valueReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool
 	if !r.fenceLookupModeEnabled() {
 		return nil, false, nil
 	}
+	if keys := r.cachedOuterLeafKeys(ptr); keys != nil {
+		return keys, true, nil
+	}
 	block := r.cachedOuterLeafBlock(ptr)
-	if block == nil {
-		raw, err := r.readRawUnsafe(ptr)
+	if block != nil {
+		keys, err := block.Keys(nil)
 		if err != nil {
 			return nil, true, err
 		}
-		if !outerleaf.HasMagic(raw) {
-			return nil, false, nil
-		}
-		decoded, decErr := r.outerLeafBlock(ptr, raw)
-		if decErr != nil {
-			return nil, true, decErr
-		}
-		block = decoded
+		r.cacheOuterLeafKeys(ptr, keys)
+		return keys, true, nil
 	}
-	keys, err := block.Keys(nil)
+	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
 		return nil, true, err
 	}
+	if !outerleaf.HasMagic(raw) {
+		return nil, false, nil
+	}
+	keys, decErr := outerleaf.DecodeKeysWithVerify(raw, !r.skipOuterLeafChecksums)
+	if decErr != nil {
+		return nil, true, decErr
+	}
+	r.cacheOuterLeafKeys(ptr, keys)
 	return keys, true, nil
+}
+
+func (r valueReader) ReadUnsafeFenceBlockKeysRange(ptr page.ValuePtr, lower []byte, upper []byte) ([][]byte, bool, error) {
+	if !r.fenceLookupModeEnabled() {
+		return nil, false, nil
+	}
+	if len(lower) == 0 && len(upper) == 0 {
+		return r.ReadUnsafeFenceBlockKeys(ptr)
+	}
+	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+		return nil, true, nil
+	}
+	if cachedKeys := r.cachedOuterLeafKeys(ptr); cachedKeys != nil {
+		return sliceFenceKeysRange(cachedKeys, lower, upper), true, nil
+	}
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		keys, err := block.KeysRange(nil, lower, upper)
+		if err != nil {
+			return nil, true, err
+		}
+		return keys, true, nil
+	}
+	raw, err := r.readRawUnsafe(ptr)
+	if err != nil {
+		return nil, true, err
+	}
+	if !outerleaf.HasMagic(raw) {
+		return nil, false, nil
+	}
+	keys, decErr := outerleaf.DecodeKeysRangeWithVerify(raw, lower, upper, !r.skipOuterLeafChecksums)
+	if decErr != nil {
+		return nil, true, decErr
+	}
+	return keys, true, nil
+}
+
+func (r valueReader) ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (pos int, below bool, above bool, keys [][]byte, ok bool, err error) {
+	if !r.fenceLookupModeEnabled() {
+		return 0, false, false, nil, false, nil
+	}
+	if cachedKeys := r.cachedOuterLeafKeys(ptr); cachedKeys != nil {
+		lower, isBelow, isAbove := classifyFenceKeys(cachedKeys, key)
+		if isBelow || isAbove {
+			return lower, isBelow, isAbove, nil, true, nil
+		}
+		return lower, false, false, cachedKeys, true, nil
+	}
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		lower, isBelow, isAbove, lowerErr := block.LowerBound(key)
+		if lowerErr != nil {
+			return 0, false, false, nil, true, lowerErr
+		}
+		if isBelow || isAbove {
+			return lower, isBelow, isAbove, nil, true, nil
+		}
+		blockKeys, keyErr := block.Keys(nil)
+		if keyErr != nil {
+			return 0, false, false, nil, true, keyErr
+		}
+		r.cacheOuterLeafKeys(ptr, blockKeys)
+		return lower, false, false, blockKeys, true, nil
+	}
+
+	raw, readErr := r.readRawUnsafe(ptr)
+	if readErr != nil {
+		return 0, false, false, nil, true, readErr
+	}
+	if !outerleaf.HasMagic(raw) {
+		return 0, false, false, nil, false, nil
+	}
+	lower, isBelow, isAbove, blockKeys, decErr := outerleaf.DecodeLowerBoundAndKeysOnMatchWithVerify(raw, key, !r.skipOuterLeafChecksums)
+	if decErr != nil {
+		return 0, false, false, nil, true, decErr
+	}
+	if isBelow || isAbove {
+		return lower, isBelow, isAbove, nil, true, nil
+	}
+	r.cacheOuterLeafKeys(ptr, blockKeys)
+	return lower, false, false, blockKeys, true, nil
+}
+
+func classifyFenceKeys(keys [][]byte, key []byte) (pos int, below bool, above bool) {
+	if len(keys) == 0 {
+		return 0, false, true
+	}
+	if len(key) == 0 {
+		return 0, false, false
+	}
+	pos = sort.Search(len(keys), func(i int) bool {
+		return bytes.Compare(keys[i], key) >= 0
+	})
+	if pos == 0 && bytes.Compare(key, keys[0]) < 0 {
+		return 0, true, false
+	}
+	if pos >= len(keys) {
+		return len(keys), false, true
+	}
+	return pos, false, false
+}
+
+func sliceFenceKeysRange(keys [][]byte, lower []byte, upper []byte) [][]byte {
+	if len(keys) == 0 {
+		return nil
+	}
+	start := 0
+	if len(lower) > 0 {
+		start = sort.Search(len(keys), func(i int) bool {
+			return bytes.Compare(keys[i], lower) >= 0
+		})
+	}
+	if start >= len(keys) {
+		return nil
+	}
+	end := len(keys)
+	if len(upper) > 0 {
+		end = sort.Search(len(keys), func(i int) bool {
+			return bytes.Compare(keys[i], upper) >= 0
+		})
+	}
+	if end <= start {
+		return nil
+	}
+	return keys[start:end]
 }
 
 func (r valueReader) readRaw(ptr page.ValuePtr) ([]byte, error) {
@@ -576,4 +708,18 @@ func (r valueReader) cachedOuterLeafBlock(ptr page.ValuePtr) *outerleaf.DecodedB
 		return nil
 	}
 	return r.cache.get(newOuterLeafBlockKey(ptr))
+}
+
+func (r valueReader) cachedOuterLeafKeys(ptr page.ValuePtr) [][]byte {
+	if !r.fenceLookupModeEnabled() || r.keyCache == nil {
+		return nil
+	}
+	return r.keyCache.get(newOuterLeafBlockKey(ptr))
+}
+
+func (r valueReader) cacheOuterLeafKeys(ptr page.ValuePtr, keys [][]byte) {
+	if !r.fenceLookupModeEnabled() || r.keyCache == nil || len(keys) == 0 {
+		return
+	}
+	r.keyCache.put(newOuterLeafBlockKey(ptr), keys)
 }

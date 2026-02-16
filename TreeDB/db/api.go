@@ -336,6 +336,16 @@ func (db *DB) Stats() map[string]string {
 				stats["treedb.vlog.outer_leaf_block_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 			}
 		}
+		if keyCache := db.outerLeafKeyCache; keyCache != nil {
+			hits, misses, entries, capacity := keyCache.stats()
+			stats["treedb.vlog.outer_leaf_key_cache.hits"] = fmt.Sprintf("%d", hits)
+			stats["treedb.vlog.outer_leaf_key_cache.misses"] = fmt.Sprintf("%d", misses)
+			stats["treedb.vlog.outer_leaf_key_cache.entries"] = fmt.Sprintf("%d", entries)
+			stats["treedb.vlog.outer_leaf_key_cache.capacity"] = fmt.Sprintf("%d", capacity)
+			if total := hits + misses; total > 0 {
+				stats["treedb.vlog.outer_leaf_key_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
+			}
+		}
 	}
 	watermarkLockDelaySharePct, watermarkLatencyP99Ms := db.publishWatermarkStats()
 	stats["treedb.publish.watermark.lock_delay_share_pct"] = fmt.Sprintf("%.3f", watermarkLockDelaySharePct)

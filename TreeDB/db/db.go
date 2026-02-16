@@ -85,6 +85,7 @@ type DB struct {
 	policy                    WritePolicy
 	valueLogDomainThresholds  []ValueLogDomainThreshold
 	outerLeafBlockCache       *outerLeafBlockCache
+	outerLeafKeyCache         *outerLeafKeyCache
 	leafFillTargetPPM         uint32
 	internalFillTargetPPM     uint32
 	leafPrefixCompression     bool
@@ -746,7 +747,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
-	snap.reader = newValueReader(vlogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, db.outerLeafBlockCache)
+	snap.reader = newValueReader(vlogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, db.outerLeafBlockCache, db.outerLeafKeyCache)
 	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
@@ -1036,6 +1037,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		keepRecent:                opts.KeepRecent,
 		valueLogDomainThresholds:  NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		outerLeafBlockCache:       newOuterLeafBlockCache(opts.ValueLog.OuterLeafBlockCacheEntries),
+		outerLeafKeyCache:         newOuterLeafKeyCache(opts.ValueLog.OuterLeafBlockCacheEntries),
 		leafFillTargetPPM:         opts.LeafFillTargetPPM,
 		internalFillTargetPPM:     opts.InternalFillTargetPPM,
 		leafPrefixCompression:     opts.LeafPrefixCompression,
@@ -1802,7 +1804,7 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, nil), state.RootPageID)
+	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, nil, nil), state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 

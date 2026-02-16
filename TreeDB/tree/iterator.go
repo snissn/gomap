@@ -328,6 +328,8 @@ type Iterator struct {
 	slabKeyReader   slabUnsafeKeyReader
 	slabFenceBlocks slabUnsafeFenceBlockReader
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
+	slabFenceRange  slabUnsafeFenceBlockRangeKeyReader
+	slabFenceSeek   slabUnsafeFenceBlockSeekReader
 	slabFencePtrCls slabFencePointerClassifier
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
@@ -395,6 +397,8 @@ func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iter
 	it.slabKeyReader = t.slabKeyReader
 	it.slabFenceBlocks = t.slabFenceBlocks
 	it.slabFenceKeys = t.slabFenceKeys
+	it.slabFenceRange = t.slabFenceRange
+	it.slabFenceSeek = t.slabFenceSeek
 	it.slabFencePtrCls = t.slabFencePtrCls
 	it.slabKeyAppender = t.slabKeyAppender
 	it.slabKeyBatcher = t.slabKeyBatcher
@@ -431,6 +435,8 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 	it.slabKeyReader = t.slabKeyReader
 	it.slabFenceBlocks = t.slabFenceBlocks
 	it.slabFenceKeys = t.slabFenceKeys
+	it.slabFenceRange = t.slabFenceRange
+	it.slabFenceSeek = t.slabFenceSeek
 	it.slabFencePtrCls = t.slabFencePtrCls
 	it.slabKeyAppender = t.slabKeyAppender
 	it.slabKeyBatcher = t.slabKeyBatcher
@@ -722,6 +728,38 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			continue
 		}
 		keyReaderUsable := false
+		if it.slabFenceSeek != nil {
+			pos, below, above, seekKeys, ok, err := it.slabFenceSeek.ReadUnsafeFenceBlockSeek(ptr, seekKey)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				keyReaderUsable = true
+				if above {
+					break
+				}
+				if below {
+					continue
+				}
+				if pos >= 0 && pos < len(seekKeys) {
+					top.Index = scan
+					it.pendingFencePageID = top.PageID
+					it.pendingFenceLeafIndex = scan
+					it.pendingFenceEntryIdx = pos
+					it.pendingFenceReady = true
+					it.pendingFenceKeys = seekKeys
+					// We already selected the predecessor block that contains seekKey.
+					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
+					// the next loadCurrent loop iteration.
+					it.pendingSeekKey = it.pendingSeekKey[:0]
+					return true, nil
+				}
+				if len(seekKeys) == 0 {
+					continue
+				}
+				break
+			}
+		}
 		if it.slabFenceKeys != nil {
 			keys, ok, err := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
 			if err != nil {
@@ -749,6 +787,10 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					it.pendingFenceEntryIdx = pos
 					it.pendingFenceReady = true
 					it.pendingFenceKeys = keys
+					// We already selected the predecessor block that contains seekKey.
+					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
+					// the next loadCurrent loop iteration.
+					it.pendingSeekKey = it.pendingSeekKey[:0]
 					return true, nil
 				}
 				break
@@ -781,6 +823,10 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				it.pendingFenceLeafIndex = scan
 				it.pendingFenceEntryIdx = pos
 				it.pendingFenceReady = true
+				// We already selected the predecessor block that contains seekKey.
+				// Clearing pendingSeekKey avoids a redundant predecessor rescan on
+				// the next loadCurrent loop iteration.
+				it.pendingSeekKey = it.pendingSeekKey[:0]
 				return true, nil
 			}
 			break
@@ -790,7 +836,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 }
 
 func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced bool, exhausted bool, err error) {
-	if top == nil || top.Node.Type() != page.PageTypeLeaf || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil) {
+	if top == nil || top.Node.Type() != page.PageTypeLeaf || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil && it.slabFenceRange == nil) {
 		return false, false, false, nil
 	}
 	if it.mode == IteratorModePointerProjection {
@@ -816,7 +862,7 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		ok      bool
 	)
 	preferKeyOnlyExpansion := it.shouldPreferFenceKeyOnly() || it.slabFenceBlocks == nil
-	if preferKeyOnlyExpansion && it.slabFenceKeys != nil {
+	if preferKeyOnlyExpansion && (it.slabFenceRange != nil || it.slabFenceKeys != nil) {
 		var (
 			readKeys [][]byte
 			keyOK    bool
@@ -828,7 +874,18 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		} else {
 			var readOK bool
 			var keyErr error
-			readKeys, readOK, keyErr = it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
+			if !it.reverse && it.slabFenceRange != nil {
+				lower := it.start
+				if len(it.pendingSeekKey) > 0 {
+					lower = it.pendingSeekKey
+				}
+				readKeys, readOK, keyErr = it.slabFenceRange.ReadUnsafeFenceBlockKeysRange(ptr, lower, it.end)
+				if keyErr == nil && !readOK && it.slabFenceKeys != nil {
+					readKeys, readOK, keyErr = it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
+				}
+			} else if it.slabFenceKeys != nil {
+				readKeys, readOK, keyErr = it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
+			}
 			if keyErr != nil {
 				return false, false, false, keyErr
 			}

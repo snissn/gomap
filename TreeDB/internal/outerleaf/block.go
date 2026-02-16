@@ -1958,6 +1958,88 @@ func (d *DecodedBlock) Keys(dst [][]byte) ([][]byte, error) {
 	}
 }
 
+// KeysRange decodes only keys in [lower, upper) from a parsed block.
+// Returned key slices reference decoded block storage where possible.
+func (d *DecodedBlock) KeysRange(dst [][]byte, lower []byte, upper []byte) ([][]byte, error) {
+	if d == nil {
+		return nil, fmt.Errorf("outerleaf: nil block")
+	}
+	if len(lower) == 0 && len(upper) == 0 {
+		return d.Keys(dst)
+	}
+	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+		if dst == nil {
+			return nil, nil
+		}
+		return dst[:0], nil
+	}
+	switch d.version {
+	case blockVersionV1:
+		if d.firstKey == nil {
+			return nil, fmt.Errorf("outerleaf: missing v1 key")
+		}
+		if !keyWithinRange(d.firstKey, lower, upper) {
+			if dst == nil {
+				return nil, nil
+			}
+			return dst[:0], nil
+		}
+		if cap(dst) < 1 {
+			dst = make([][]byte, 1)
+		} else {
+			dst = dst[:1]
+		}
+		dst[0] = d.firstKey
+		return dst, nil
+	case blockVersionV2, blockVersionV3:
+		keys, err := decodeStructuredKeysBounded(d.version, d.entryCount, d.entries, lower, upper)
+		if err != nil {
+			return nil, err
+		}
+		if dst == nil {
+			return keys, nil
+		}
+		if cap(dst) < len(keys) {
+			dst = make([][]byte, len(keys))
+		} else {
+			dst = dst[:len(keys)]
+		}
+		copy(dst, keys)
+		return dst, nil
+	default:
+		return nil, fmt.Errorf("outerleaf: unsupported version %d", d.version)
+	}
+}
+
+// LowerBound returns the first entry index whose key is >= target and classifies
+// whether target falls below the block range, within it, or above it.
+func (d *DecodedBlock) LowerBound(target []byte) (pos int, below bool, above bool, err error) {
+	if d == nil {
+		return 0, false, false, fmt.Errorf("outerleaf: nil block")
+	}
+	switch d.version {
+	case blockVersionV1:
+		if d.firstKey == nil {
+			return 0, false, false, fmt.Errorf("outerleaf: missing v1 key")
+		}
+		if len(target) == 0 {
+			return 0, false, false, nil
+		}
+		cmp := bytes.Compare(d.firstKey, target)
+		if cmp > 0 {
+			return 0, true, false, nil
+		}
+		if cmp < 0 {
+			return 1, false, true, nil
+		}
+		return 0, false, false, nil
+	case blockVersionV2, blockVersionV3:
+		return lowerBoundStructured(d.version, d.entryCount, d.entries, target)
+	default:
+		return 0, false, false, fmt.Errorf("outerleaf: unsupported version %d", d.version)
+	}
+}
+
 func (d *DecodedBlock) cachedStructuredKeys() ([][]byte, error) {
 	d.keysOnce.Do(func() {
 		keys, err := decodeStructuredKeys(d.version, d.entryCount, d.entries)
@@ -1971,6 +2053,85 @@ func (d *DecodedBlock) cachedStructuredKeys() ([][]byte, error) {
 		return nil, d.keysErr
 	}
 	return d.keys, nil
+}
+
+func lowerBoundStructured(version uint8, entryCount int, encoded []byte, target []byte) (pos int, below bool, above bool, err error) {
+	if entryCount <= 0 {
+		return 0, false, false, fmt.Errorf("outerleaf: empty v%d block", version)
+	}
+	if len(target) == 0 {
+		return 0, false, false, nil
+	}
+	headerLen := 8
+	valueLenOffDelta := 4
+	if version == blockVersionV3 {
+		headerLen = 9
+		valueLenOffDelta = 5
+	}
+
+	off := 0
+	estKeyLen := len(target)
+	if estKeyLen < 64 {
+		estKeyLen = 64
+	}
+	prev := make([]byte, 0, estKeyLen)
+	curr := make([]byte, 0, estKeyLen)
+	for i := 0; i < entryCount; i++ {
+		if off+headerLen > len(encoded) {
+			return 0, false, false, fmt.Errorf("outerleaf: truncated v%d entry header", version)
+		}
+		shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
+		suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
+		valueLen := int(binary.LittleEndian.Uint32(encoded[off+valueLenOffDelta : off+valueLenOffDelta+4]))
+		off += headerLen
+		if shared < 0 || shared > len(prev) {
+			return 0, false, false, fmt.Errorf("outerleaf: invalid shared prefix")
+		}
+		if suffixLen < 0 || off+suffixLen > len(encoded) {
+			return 0, false, false, fmt.Errorf("outerleaf: invalid key suffix length")
+		}
+		suffix := encoded[off : off+suffixLen]
+		off += suffixLen
+		if valueLen < 0 || off+valueLen > len(encoded) {
+			return 0, false, false, fmt.Errorf("outerleaf: invalid value length")
+		}
+
+		keyLen := shared + suffixLen
+		if keyLen < 0 {
+			return 0, false, false, fmt.Errorf("outerleaf: invalid key length")
+		}
+		if cap(curr) < keyLen {
+			newCap := cap(curr) * 2
+			if newCap < keyLen {
+				newCap = keyLen
+			}
+			if newCap < 64 {
+				newCap = 64
+			}
+			curr = make([]byte, keyLen, newCap)
+		} else {
+			curr = curr[:keyLen]
+		}
+		if shared > 0 {
+			copy(curr[:shared], prev[:shared])
+		}
+		copy(curr[shared:], suffix)
+
+		cmp := bytes.Compare(curr, target)
+		if cmp >= 0 {
+			if i == 0 && cmp > 0 {
+				return i, true, false, nil
+			}
+			return i, false, false, nil
+		}
+
+		off += valueLen
+		prev, curr = curr, prev[:0]
+	}
+	if off != len(encoded) {
+		return 0, false, false, fmt.Errorf("outerleaf: trailing v%d entry bytes", version)
+	}
+	return entryCount, false, true, nil
 }
 
 func decodeStructuredKeys(version uint8, entryCount int, encoded []byte) ([][]byte, error) {
@@ -2051,6 +2212,131 @@ func decodeStructuredKeys(version uint8, entryCount int, encoded []byte) ([][]by
 	return keys, nil
 }
 
+func keyWithinRange(key []byte, lower []byte, upper []byte) bool {
+	if len(lower) > 0 && bytes.Compare(key, lower) < 0 {
+		return false
+	}
+	if len(upper) > 0 && bytes.Compare(key, upper) >= 0 {
+		return false
+	}
+	return true
+}
+
+// decodeStructuredKeysBounded reconstructs only keys in [lower, upper) from
+// prefix-compressed v2/v3 entries. Decoding stops once keys reach upper.
+func decodeStructuredKeysBounded(version uint8, entryCount int, encoded []byte, lower []byte, upper []byte) ([][]byte, error) {
+	if entryCount <= 0 {
+		return nil, fmt.Errorf("outerleaf: empty v%d block", version)
+	}
+	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+		return nil, nil
+	}
+	headerLen := 8
+	if version == blockVersionV3 {
+		headerLen = 9
+	}
+	off := 0
+	estKeyLen := 16
+	if len(encoded) >= headerLen {
+		if v := int(binary.LittleEndian.Uint16(encoded[2:4])); v > 0 {
+			if v > 128 {
+				v = 128
+			}
+			estKeyLen = v
+		}
+	}
+	selectedCap := entryCount
+	if len(lower) > 0 || len(upper) > 0 {
+		selectedCap = entryCount / 8
+		if selectedCap < 4 {
+			selectedCap = 4
+		}
+		if selectedCap > entryCount {
+			selectedCap = entryCount
+		}
+	}
+	keys := make([][]byte, 0, selectedCap)
+	estCap := selectedCap * estKeyLen
+	if estCap < 64 {
+		estCap = 64
+	}
+	keyArena := make([]byte, 0, estCap)
+	prev := make([]byte, 0, estKeyLen)
+	curr := make([]byte, 0, estKeyLen)
+	for i := 0; i < entryCount; i++ {
+		if off+headerLen > len(encoded) {
+			return nil, fmt.Errorf("outerleaf: truncated v%d entry header", version)
+		}
+		shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
+		suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
+		valueLenOff := off + 4
+		if version == blockVersionV3 {
+			valueLenOff = off + 5
+		}
+		valueLen := int(binary.LittleEndian.Uint32(encoded[valueLenOff : valueLenOff+4]))
+		off += headerLen
+		if shared < 0 || shared > len(prev) {
+			return nil, fmt.Errorf("outerleaf: invalid shared prefix")
+		}
+		if suffixLen < 0 || off+suffixLen > len(encoded) {
+			return nil, fmt.Errorf("outerleaf: invalid key suffix length")
+		}
+		suffix := encoded[off : off+suffixLen]
+		off += suffixLen
+		if valueLen < 0 || off+valueLen > len(encoded) {
+			return nil, fmt.Errorf("outerleaf: invalid value length")
+		}
+
+		keyLen := shared + suffixLen
+		if keyLen < 0 {
+			return nil, fmt.Errorf("outerleaf: invalid key length")
+		}
+		if cap(curr) < keyLen {
+			newCap := cap(curr) * 2
+			if newCap < keyLen {
+				newCap = keyLen
+			}
+			if newCap < 64 {
+				newCap = 64
+			}
+			curr = make([]byte, keyLen, newCap)
+		} else {
+			curr = curr[:keyLen]
+		}
+		if shared > 0 {
+			copy(curr[:shared], prev[:shared])
+		}
+		copy(curr[shared:], suffix)
+
+		if len(upper) > 0 && bytes.Compare(curr, upper) >= 0 {
+			return keys, nil
+		}
+		if len(lower) == 0 || bytes.Compare(curr, lower) >= 0 {
+			needCap := len(keyArena) + keyLen
+			if needCap > cap(keyArena) {
+				newCap := cap(keyArena) * 2
+				if newCap < keyLen {
+					newCap = keyLen
+				}
+				keyArena = make([]byte, 0, newCap)
+				needCap = keyLen
+			}
+			arenaOff := len(keyArena)
+			keyArena = keyArena[:needCap]
+			key := keyArena[arenaOff:needCap]
+			copy(key, curr)
+			keys = append(keys, key)
+		}
+
+		off += valueLen
+		prev, curr = curr, prev[:0]
+	}
+	if off != len(encoded) {
+		return nil, fmt.Errorf("outerleaf: trailing v%d entry bytes", version)
+	}
+	return keys, nil
+}
+
 // DecodeKeysWithVerify decodes logical keys from an encoded outer-leaf payload.
 func DecodeKeysWithVerify(payload []byte, verifyChecksum bool) ([][]byte, error) {
 	if len(payload) < blockHeaderSize {
@@ -2116,6 +2402,170 @@ func DecodeKeysWithVerify(payload []byte, verifyChecksum bool) ([][]byte, error)
 		return decodeStructuredKeys(version, entryCount, entries)
 	default:
 		return nil, fmt.Errorf("outerleaf: unsupported version %d", version)
+	}
+}
+
+// DecodeKeysRangeWithVerify decodes only keys in [lower, upper) from an
+// encoded outer-leaf payload.
+func DecodeKeysRangeWithVerify(payload []byte, lower []byte, upper []byte, verifyChecksum bool) ([][]byte, error) {
+	if len(lower) == 0 && len(upper) == 0 {
+		return DecodeKeysWithVerify(payload, verifyChecksum)
+	}
+	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+		return nil, nil
+	}
+	if len(payload) < blockHeaderSize {
+		return nil, fmt.Errorf("outerleaf: truncated header")
+	}
+	if payload[0] != blockMagic[0] || payload[1] != blockMagic[1] || payload[2] != blockMagic[2] || payload[3] != blockMagic[3] {
+		return nil, fmt.Errorf("outerleaf: invalid outer-leaf payload")
+	}
+
+	version := payload[4]
+	codec := payload[5]
+	switch version {
+	case blockVersionV1:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+		expected := keyLen + valueLen
+		if rawLen != expected {
+			return nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
+		}
+		raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
+		if err != nil {
+			return nil, err
+		}
+		if keyLen < 0 || keyLen > len(raw) {
+			return nil, fmt.Errorf("outerleaf: invalid key length %d", keyLen)
+		}
+		key := raw[:keyLen]
+		if !keyWithinRange(key, lower, upper) {
+			return nil, nil
+		}
+		keyCopy := make([]byte, len(key))
+		copy(keyCopy, key)
+		return [][]byte{keyCopy}, nil
+	case blockVersionV2, blockVersionV3:
+		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
+		entriesLen := int(binary.LittleEndian.Uint32(payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockV2RawLenOff : blockV2RawLenOff+4]))
+		if entryCount <= 0 {
+			return nil, fmt.Errorf("outerleaf: empty v%d block", version)
+		}
+		if rawLen <= 0 {
+			return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
+		}
+		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
+		if codec == blockCodecNone {
+			raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
+			if err != nil {
+				return nil, err
+			}
+			entries, _, _, err := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
+			if err != nil {
+				return nil, err
+			}
+			return decodeStructuredKeysBounded(version, entryCount, entries, lower, upper)
+		}
+		scratch := getPooledBytes(rawLen)
+		defer putPooledBytes(scratch)
+		raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch[:0], true, verifyChecksum)
+		if err != nil {
+			return nil, err
+		}
+		entries, _, _, err := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
+		if err != nil {
+			return nil, err
+		}
+		return decodeStructuredKeysBounded(version, entryCount, entries, lower, upper)
+	default:
+		return nil, fmt.Errorf("outerleaf: unsupported version %d", version)
+	}
+}
+
+// DecodeLowerBoundAndKeysOnMatchWithVerify decodes lower-bound classification
+// for target and materializes full keys only when target falls within block
+// bounds. For below/above classifications, keys are not allocated.
+func DecodeLowerBoundAndKeysOnMatchWithVerify(payload []byte, target []byte, verifyChecksum bool) (pos int, below bool, above bool, keys [][]byte, err error) {
+	if len(payload) < blockHeaderSize {
+		return 0, false, false, nil, fmt.Errorf("outerleaf: truncated header")
+	}
+	if payload[0] != blockMagic[0] || payload[1] != blockMagic[1] || payload[2] != blockMagic[2] || payload[3] != blockMagic[3] {
+		return 0, false, false, nil, fmt.Errorf("outerleaf: invalid outer-leaf payload")
+	}
+
+	version := payload[4]
+	codec := payload[5]
+	switch version {
+	case blockVersionV1:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+		expected := keyLen + valueLen
+		if rawLen != expected {
+			return 0, false, false, nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
+		}
+		raw, decErr := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
+		if decErr != nil {
+			return 0, false, false, nil, decErr
+		}
+		if keyLen < 0 || keyLen > len(raw) {
+			return 0, false, false, nil, fmt.Errorf("outerleaf: invalid key length %d", keyLen)
+		}
+		key := raw[:keyLen]
+		if len(target) > 0 {
+			cmp := bytes.Compare(key, target)
+			if cmp > 0 {
+				return 0, true, false, nil, nil
+			}
+			if cmp < 0 {
+				return 1, false, true, nil, nil
+			}
+		}
+		keyCopy := append(make([]byte, 0, len(key)), key...)
+		return 0, false, false, [][]byte{keyCopy}, nil
+	case blockVersionV2, blockVersionV3:
+		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
+		entriesLen := int(binary.LittleEndian.Uint32(payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockV2RawLenOff : blockV2RawLenOff+4]))
+		if entryCount <= 0 {
+			return 0, false, false, nil, fmt.Errorf("outerleaf: empty v%d block", version)
+		}
+		if rawLen <= 0 {
+			return 0, false, false, nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
+		}
+		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
+
+		var raw []byte
+		if codec == blockCodecNone {
+			raw, err = decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
+		} else {
+			scratch := getPooledBytes(rawLen)
+			defer putPooledBytes(scratch)
+			raw, err = decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch[:0], true, verifyChecksum)
+		}
+		if err != nil {
+			return 0, false, false, nil, err
+		}
+		entries, _, _, splitErr := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
+		if splitErr != nil {
+			return 0, false, false, nil, splitErr
+		}
+		pos, below, above, err = lowerBoundStructured(version, entryCount, entries, target)
+		if err != nil {
+			return 0, false, false, nil, err
+		}
+		if below || above {
+			return pos, below, above, nil, nil
+		}
+		keys, err = decodeStructuredKeys(version, entryCount, entries)
+		if err != nil {
+			return 0, false, false, nil, err
+		}
+		return pos, false, false, keys, nil
+	default:
+		return 0, false, false, nil, fmt.Errorf("outerleaf: unsupported version %d", version)
 	}
 }
 
