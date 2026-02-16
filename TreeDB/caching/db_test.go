@@ -1062,6 +1062,9 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
 		t.Fatalf("Checkpoint: %v", err)
 	}
 	stats := cache.Stats()
+	if got := stats["treedb.cache.v2_fenceptr.wal_fence_mode"]; got != "simple_inline" {
+		t.Fatalf("wal_fence_mode stat mismatch: got %q", got)
+	}
 	parseStatUint := func(key string) uint64 {
 		t.Helper()
 		v, ok := stats[key]
@@ -1082,8 +1085,14 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
 	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_calls")
 	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_flushed_memtables")
 	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_early_triggers")
-	if enqueuedKeys != 0 || materializedKeys != 0 || pendingKeys != 0 {
-		t.Fatalf("expected non-deferred fence path to keep deferred counters at zero, enqueued=%d materialized=%d pending=%d", enqueuedKeys, materializedKeys, pendingKeys)
+	if enqueuedKeys == 0 || materializedKeys == 0 {
+		t.Fatalf("expected deferred fence stats to record work, enqueued=%d materialized=%d", enqueuedKeys, materializedKeys)
+	}
+	if enqueuedKeys != materializedKeys {
+		t.Fatalf("expected checkpoint to fully materialize deferred fence keys, enqueued=%d materialized=%d", enqueuedKeys, materializedKeys)
+	}
+	if pendingKeys != 0 {
+		t.Fatalf("expected no pending deferred fence keys after checkpoint, pending=%d", pendingKeys)
 	}
 
 	snap := backend.AcquireSnapshot()
