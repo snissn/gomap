@@ -342,6 +342,7 @@ type Iterator struct {
 	pendingFenceLeafIndex int
 	pendingFenceEntryIdx  int
 	pendingFenceReady     bool
+	pendingFenceKeys      [][]byte
 
 	prefetchPageID uint64
 	prefetchStart  int
@@ -620,6 +621,7 @@ func (it *Iterator) clearPendingFenceSeek() {
 	it.pendingFenceLeafIndex = 0
 	it.pendingFenceEntryIdx = 0
 	it.pendingFenceReady = false
+	it.pendingFenceKeys = nil
 }
 
 func (it *Iterator) setCurrentFenceEntry(entry FenceBlockEntry) {
@@ -694,6 +696,18 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			}
 			if ok {
 				keyReaderUsable = true
+				if len(keys) == 0 {
+					continue
+				}
+				// Ordered, non-overlapping fence layouts dominate production data.
+				// If seekKey is beyond this predecessor block's upper bound, earlier
+				// predecessor blocks cannot contain it; stop scanning.
+				if compareTreeKey(seekKey, keys[len(keys)-1]) > 0 {
+					break
+				}
+				if compareTreeKey(seekKey, keys[0]) < 0 {
+					continue
+				}
 				pos := lowerBoundFenceKeys(keys, seekKey)
 				if pos < len(keys) {
 					top.Index = scan
@@ -701,12 +715,10 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					it.pendingFenceLeafIndex = scan
 					it.pendingFenceEntryIdx = pos
 					it.pendingFenceReady = true
+					it.pendingFenceKeys = keys
 					return true, nil
 				}
-				// Keep scanning earlier fence entries defensively. Normal fence
-				// layout should be ordered/non-overlapping, but callers can still
-				// present mixed layouts during testing.
-				continue
+				break
 			}
 		}
 		if it.slabFenceBlocks != nil && (preferFenceEntries || !keyReaderUsable) {
@@ -715,6 +727,18 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				return false, err
 			}
 			if !ok {
+				continue
+			}
+			if len(entries) == 0 {
+				continue
+			}
+			// Ordered, non-overlapping fence layouts dominate production data.
+			// If seekKey is beyond this predecessor block's upper bound, earlier
+			// predecessor blocks cannot contain it; stop scanning.
+			if compareTreeKey(seekKey, entries[len(entries)-1].Key) > 0 {
+				break
+			}
+			if compareTreeKey(seekKey, entries[0].Key) < 0 {
 				continue
 			}
 			pos := lowerBoundFenceEntries(entries, seekKey)
@@ -726,10 +750,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				it.pendingFenceReady = true
 				return true, nil
 			}
-			// Keep scanning earlier fence entries defensively. Normal fence
-			// layout should be ordered/non-overlapping, but callers can still
-			// present mixed layouts during testing.
-			continue
+			break
 		}
 	}
 	return false, nil
@@ -759,9 +780,23 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 	)
 	preferKeyOnlyExpansion := it.shouldPreferFenceKeyOnly() || it.slabFenceBlocks == nil
 	if preferKeyOnlyExpansion && it.slabFenceKeys != nil {
-		keys, keyOK, keyErr := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
-		if keyErr != nil {
-			return false, false, false, keyErr
+		var (
+			keys  [][]byte
+			keyOK bool
+		)
+		if it.pendingFenceReady && top.PageID == it.pendingFencePageID && top.Index == it.pendingFenceLeafIndex && it.pendingFenceKeys != nil {
+			keys = it.pendingFenceKeys
+			keyOK = true
+			it.pendingFenceKeys = nil
+		} else {
+			readKeys, readOK, keyErr := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
+			if keyErr != nil {
+				return false, false, false, keyErr
+			}
+			if readOK {
+				keys = readKeys
+				keyOK = true
+			}
 		}
 		if keyOK {
 			entries = it.fenceEntries

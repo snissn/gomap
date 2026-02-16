@@ -636,7 +636,13 @@ func (db *DB) encodeOuterLeafBlobRef(key []byte, ptr page.ValuePtr) ([]byte, err
 	if !db.outerLeafV2Enabled() {
 		return nil, fmt.Errorf("cachingdb: blob-ref outer-leaf encoding requires v2 mode")
 	}
-	return outerleaf.EncodeSingleBlobRef(nil, key, ptr, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
+	enc := getOuterLeafEncoder()
+	defer putOuterLeafEncoder(enc)
+	var single [1]outerleaf.TypedEntry
+	single[0].Key = key
+	single[0].Kind = outerleaf.EntryKindBlobRef
+	single[0].BlobPtr = ptr
+	return enc.EncodeTypedEntries(nil, single[:], db.outerLeafBlockCodec, db.outerLeafBlockRestart)
 }
 
 func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
