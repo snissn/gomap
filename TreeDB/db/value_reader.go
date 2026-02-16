@@ -83,6 +83,12 @@ func (r valueReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
 	return page.ValuePtrIsFenceOuter(ptr)
 }
 
+func (r valueReader) withoutOuterLeafCaches() valueReader {
+	r.cache = nil
+	r.keyCache = nil
+	return r
+}
+
 func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte, unsafe bool) ([]byte, error) {
 	if !r.outerLeafModeEnabled() {
 		return raw, nil
@@ -571,7 +577,8 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 		if !outerleaf.HasMagic(raw) {
 			return raw, nil
 		}
-		block, err := r.outerLeafBlock(ptr, raw)
+		decoder := r.withoutOuterLeafCaches()
+		block, err := decoder.outerLeafBlock(ptr, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -610,8 +617,9 @@ func (r valueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) (
 		if err != nil {
 			return nil, err
 		}
+		decoder := r.withoutOuterLeafCaches()
 		for i := range out {
-			decoded, decErr := r.decodeValue(ptrs[i], out[i], true)
+			decoded, decErr := decoder.decodeValue(ptrs[i], out[i], true)
 			if decErr != nil {
 				return nil, decErr
 			}
@@ -651,8 +659,9 @@ func (r valueReader) ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][
 		if err != nil {
 			return nil, err
 		}
+		decoder := r.withoutOuterLeafCaches()
 		for i := range out {
-			decoded, decErr := r.decodeValueForKeyUnsafe(ptrs[i], keys[i], out[i])
+			decoded, decErr := decoder.decodeValueForKeyUnsafe(ptrs[i], keys[i], out[i])
 			if decErr != nil {
 				return nil, decErr
 			}

@@ -53,6 +53,28 @@ func (s *stubValueLogAppendReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byt
 	return dst, nil
 }
 
+type stubValueLogAppendBatchReader struct {
+	stubValueLogAppendReader
+	readUnsafeAppendBatchCalls int
+}
+
+func (s *stubValueLogAppendBatchReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error) {
+	s.readUnsafeAppendBatchCalls++
+	if cap(dst) < len(ptrs) {
+		dst = make([][]byte, len(ptrs))
+	} else {
+		dst = dst[:len(ptrs)]
+	}
+	for i := range ptrs {
+		val, err := s.ReadUnsafeAppend(ptrs[i], dst[i][:0])
+		if err != nil {
+			return nil, err
+		}
+		dst[i] = val
+	}
+	return dst, nil
+}
+
 func makeTestOuterLeafPayload(t *testing.T) ([]byte, *outerleaf.DecodedBlock, page.ValuePtr) {
 	t.Helper()
 	encoded, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
@@ -129,6 +151,61 @@ func TestValueReaderReadUnsafeAppendForKey_CacheWarmsAfterMiss(t *testing.T) {
 	}
 	if reader.readUnsafeCalls != 1 {
 		t.Fatalf("readUnsafeCalls after cache warm = %d, want 1", reader.readUnsafeCalls)
+	}
+}
+
+func TestValueReaderReadUnsafeAppendForKey_AppendPathDoesNotCacheOuterLeafBlock(t *testing.T) {
+	payload, _, ptr := makeTestOuterLeafPayload(t)
+	reader := &stubValueLogAppendReader{stubValueLogReader: stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}}
+	cache := newOuterLeafBlockCache(8)
+
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+
+	got, err := r.ReadUnsafeAppendForKey(ptr, []byte("k2"), nil)
+	if err != nil {
+		t.Fatalf("ReadUnsafeAppendForKey: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v2")) {
+		t.Fatalf("value = %q, want %q", got, "v2")
+	}
+	if _, _, entries, _ := cache.stats(); entries != 0 {
+		t.Fatalf("cache entries = %d, want 0 for append decode path", entries)
+	}
+}
+
+func TestValueReaderReadUnsafeAppendBatchForKeys_AppendBatchPathDoesNotCacheOuterLeafBlocks(t *testing.T) {
+	payloadA, _, _ := makeTestOuterLeafPayload(t)
+	payloadB, _, _ := makeTestOuterLeafPayload(t)
+	ptrA := page.ValuePtr{FileID: page.ValueLogFileID(7), Offset: 128, Length: uint32(len(payloadA))}
+	ptrB := page.ValuePtr{FileID: page.ValueLogFileID(7), Offset: 256, Length: uint32(len(payloadB))}
+
+	reader := &stubValueLogAppendBatchReader{stubValueLogAppendReader: stubValueLogAppendReader{stubValueLogReader: stubValueLogReader{payloads: map[page.ValuePtr][]byte{
+		ptrA: payloadA,
+		ptrB: payloadB,
+	}}}}
+	cache := newOuterLeafBlockCache(8)
+
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+
+	ptrs := []page.ValuePtr{ptrA, ptrB}
+	keys := [][]byte{[]byte("k1"), []byte("k1")}
+	out, err := r.ReadUnsafeAppendBatchForKeys(ptrs, keys, nil)
+	if err != nil {
+		t.Fatalf("ReadUnsafeAppendBatchForKeys: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("out len = %d, want 2", len(out))
+	}
+	if _, _, entries, _ := cache.stats(); entries != 0 {
+		t.Fatalf("cache entries = %d, want 0 for append-batch decode path", entries)
 	}
 }
 
