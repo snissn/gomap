@@ -553,7 +553,13 @@ func (r valueReader) outerLeafBlock(ptr page.ValuePtr, raw []byte) (*outerleaf.D
 	if err != nil {
 		return nil, err
 	}
-	r.cache.put(key, block)
+	// Blob-ref-dominant fence blocks (large-value mode) exhibit low temporal
+	// locality and high cache churn in prefix scans; skipping cache admission for
+	// those blocks avoids lock/churn overhead while retaining cache benefits for
+	// inline-heavy blocks.
+	if block.FirstKind() != outerleaf.EntryKindBlobRef {
+		r.cache.put(key, block)
+	}
 	return block, nil
 }
 

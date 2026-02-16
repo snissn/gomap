@@ -1293,6 +1293,32 @@ func decodeV3RestartKeys(entries []byte, restarts []uint32) ([][]byte, error) {
 	return keys, nil
 }
 
+func locateV3Restart(entries []byte, key []byte, restarts []uint32, restartKeys [][]byte) (int, error) {
+	if len(restarts) == 0 {
+		return -1, nil
+	}
+	if len(restartKeys) == len(restarts) {
+		idx := sort.Search(len(restartKeys), func(i int) bool {
+			return bytes.Compare(restartKeys[i], key) > 0
+		}) - 1
+		return idx, nil
+	}
+	lo, hi := 0, len(restarts)
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		rk, err := restartV3Key(entries, int(restarts[mid]))
+		if err != nil {
+			return -1, err
+		}
+		if bytes.Compare(rk, key) > 0 {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	return lo - 1, nil
+}
+
 func lookupV3EntryRange(entries []byte, key []byte, start int, limit int) (LookupResult, bool, error) {
 	if start < 0 || start > len(entries) || limit < start || limit > len(entries) {
 		return LookupResult{}, false, fmt.Errorf("outerleaf: invalid entry range")
@@ -1364,14 +1390,7 @@ func lookupV3Entry(entries []byte, entryCount int, key []byte, restarts []uint32
 	if len(restarts) == 0 {
 		return lookupV3EntryRange(entries, key, 0, len(entries))
 	}
-	if len(restartKeys) == 0 {
-		keys, err := decodeV3RestartKeys(entries, restarts)
-		if err != nil {
-			return LookupResult{}, false, err
-		}
-		restartKeys = keys
-	}
-	restartIdx, err := locateV2Restart(entries, key, restarts, restartKeys)
+	restartIdx, err := locateV3Restart(entries, key, restarts, restartKeys)
 	if err != nil {
 		return LookupResult{}, false, err
 	}
@@ -1566,6 +1585,17 @@ func (d *DecodedBlock) lookupRestarts() ([]uint32, error) {
 	return d.restarts, nil
 }
 
+// FirstKind reports the payload kind of the first logical entry.
+func (d *DecodedBlock) FirstKind() EntryKind {
+	if d == nil {
+		return EntryKindInline
+	}
+	if d.version == blockVersionV3 {
+		return d.firstKind
+	}
+	return EntryKindInline
+}
+
 // FirstValue returns the first value stored in the decoded block.
 func (d *DecodedBlock) FirstValue() ([]byte, error) {
 	if d == nil {
@@ -1710,13 +1740,16 @@ func (d *DecodedBlock) EntryForKey(key []byte) (LookupResult, bool, error) {
 				return LookupResult{Kind: EntryKindInline, Value: d.firstValue}, true, nil
 			}
 		}
-		restartKeys, err := d.lookupRestartKeys()
-		if err != nil {
-			return LookupResult{}, false, err
+		if d.restartKeysErr != nil {
+			return LookupResult{}, false, d.restartKeysErr
 		}
 		restarts, err := d.lookupRestarts()
 		if err != nil {
 			return LookupResult{}, false, err
+		}
+		restartKeys := d.restartKeys
+		if len(restartKeys) != len(restarts) {
+			restartKeys = nil
 		}
 		return lookupV3Entry(d.entries, d.entryCount, key, restarts, restartKeys)
 	default:
@@ -1933,9 +1966,23 @@ func (d *DecodedBlock) cachedStructuredKeys() ([][]byte, error) {
 			headerLen = 9
 		}
 
+		keys := make([][]byte, d.entryCount)
 		off := 0
-		prevKeyLen := 0
-		totalKeyBytes := 0
+		estKeyLen := 16
+		if len(encoded) >= headerLen {
+			if v := int(binary.LittleEndian.Uint16(encoded[2:4])); v > 0 {
+				if v > 128 {
+					v = 128
+				}
+				estKeyLen = v
+			}
+		}
+		estCap := d.entryCount * estKeyLen
+		if estCap < 64 {
+			estCap = 64
+		}
+		keyArena := make([]byte, 0, estCap)
+		var prevKey []byte
 		for i := 0; i < d.entryCount; i++ {
 			if off+headerLen > len(encoded) {
 				d.keysErr = fmt.Errorf("outerleaf: truncated v%d entry header", d.version)
@@ -1949,7 +1996,7 @@ func (d *DecodedBlock) cachedStructuredKeys() ([][]byte, error) {
 			}
 			valueLen := int(binary.LittleEndian.Uint32(encoded[valueLenOff : valueLenOff+4]))
 			off += headerLen
-			if shared < 0 || shared > prevKeyLen {
+			if shared < 0 || shared > len(prevKey) {
 				d.keysErr = fmt.Errorf("outerleaf: invalid shared prefix")
 				return
 			}
@@ -1957,6 +2004,7 @@ func (d *DecodedBlock) cachedStructuredKeys() ([][]byte, error) {
 				d.keysErr = fmt.Errorf("outerleaf: invalid key suffix length")
 				return
 			}
+			suffix := encoded[off : off+suffixLen]
 			off += suffixLen
 			if valueLen < 0 || off+valueLen > len(encoded) {
 				d.keysErr = fmt.Errorf("outerleaf: invalid value length")
@@ -1969,41 +2017,30 @@ func (d *DecodedBlock) cachedStructuredKeys() ([][]byte, error) {
 				d.keysErr = fmt.Errorf("outerleaf: invalid key length")
 				return
 			}
-			totalKeyBytes += keyLen
-			prevKeyLen = keyLen
-		}
-		if off != len(encoded) {
-			d.keysErr = fmt.Errorf("outerleaf: trailing v%d entry bytes", d.version)
-			return
-		}
-
-		keys := make([][]byte, d.entryCount)
-		keyArena := make([]byte, totalKeyBytes)
-		off = 0
-		arenaOff := 0
-		var prevKey []byte
-		for i := 0; i < d.entryCount; i++ {
-			shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
-			suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
-			valueLenOff := off + 4
-			if d.version == blockVersionV3 {
-				valueLenOff = off + 5
+			needCap := len(keyArena) + keyLen
+			if needCap > cap(keyArena) {
+				newCap := cap(keyArena) * 2
+				if newCap < keyLen {
+					newCap = keyLen
+				}
+				// Existing key slices already reference older arena segments; avoid
+				// copying historical bytes when rolling to a fresh segment.
+				keyArena = make([]byte, 0, newCap)
+				needCap = keyLen
 			}
-			valueLen := int(binary.LittleEndian.Uint32(encoded[valueLenOff : valueLenOff+4]))
-			off += headerLen
-			suffix := encoded[off : off+suffixLen]
-			off += suffixLen
-			off += valueLen
-
-			keyLen := shared + suffixLen
-			key := keyArena[arenaOff : arenaOff+keyLen]
-			arenaOff += keyLen
+			arenaOff := len(keyArena)
+			keyArena = keyArena[:needCap]
+			key := keyArena[arenaOff:needCap]
 			if shared > 0 {
 				copy(key[:shared], prevKey[:shared])
 			}
 			copy(key[shared:], suffix)
 			keys[i] = key
 			prevKey = key
+		}
+		if off != len(encoded) {
+			d.keysErr = fmt.Errorf("outerleaf: trailing v%d entry bytes", d.version)
+			return
 		}
 		d.keys = keys
 	})
