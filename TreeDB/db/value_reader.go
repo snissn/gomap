@@ -10,9 +10,10 @@ import (
 )
 
 type valueReader struct {
-	vlogs         tree.SlabReader
-	outerLeafMode string
-	cache         *outerLeafBlockCache
+	vlogs                  tree.SlabReader
+	outerLeafMode          string
+	skipOuterLeafChecksums bool
+	cache                  *outerLeafBlockCache
 }
 
 type unsafeAppendReader interface {
@@ -505,14 +506,15 @@ func (r valueReader) ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][
 }
 
 func (r valueReader) outerLeafBlock(ptr page.ValuePtr, raw []byte) (*outerleaf.DecodedBlock, error) {
+	verifyChecksums := !r.skipOuterLeafChecksums
 	if r.cache == nil {
-		return outerleaf.DecodeBlock(raw, nil)
+		return outerleaf.DecodeBlockWithVerify(raw, nil, verifyChecksums)
 	}
 	key := newOuterLeafBlockKey(ptr)
 	if block := r.cache.get(key); block != nil {
 		return block, nil
 	}
-	block, err := outerleaf.DecodeBlock(raw, nil)
+	block, err := outerleaf.DecodeBlockWithVerify(raw, nil, verifyChecksums)
 	if err != nil {
 		return nil, err
 	}

@@ -93,6 +93,7 @@ type DB struct {
 	indexInternalBaseDelta    bool
 	indexAdaptiveLeafEncoding bool
 	indexOuterLeafMode        string
+	skipOuterLeafChecksums    bool
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
 
@@ -747,6 +748,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.vlogPinned = vlogNeedsPin
 	snap.reader.vlogs = vlogSet
 	snap.reader.outerLeafMode = db.indexOuterLeafMode
+	snap.reader.skipOuterLeafChecksums = db.skipOuterLeafChecksums
 	snap.reader.cache = db.outerLeafBlockCache
 	snap.registryID = registryID
 	if idx != nil {
@@ -1045,6 +1047,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
 		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
 		indexOuterLeafMode:        opts.IndexOuterLeafMode,
+		skipOuterLeafChecksums:    opts.ValueLog.ReadIntegrity == IntegritySkipChecksums,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
 		dir:                       opts.Dir,
@@ -1802,7 +1805,11 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(idx.pager, valueReader{vlogs: state.ValueLogSet, outerLeafMode: db.indexOuterLeafMode}, state.RootPageID)
+	tr := tree.New(idx.pager, valueReader{
+		vlogs:                  state.ValueLogSet,
+		outerLeafMode:          db.indexOuterLeafMode,
+		skipOuterLeafChecksums: db.skipOuterLeafChecksums,
+	}, state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 

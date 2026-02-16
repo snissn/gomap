@@ -50,6 +50,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.vlogPinned = false
 	s.reader.vlogs = nil
 	s.reader.outerLeafMode = ""
+	s.reader.skipOuterLeafChecksums = false
 	s.reader.cache = nil
 	s.registryID = 0
 	s.closed.Store(false)
