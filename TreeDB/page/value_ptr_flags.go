@@ -3,6 +3,16 @@ package page
 const (
 	valuePtrCompressedMask uint32 = 0x80000000
 	valuePtrGroupedMask    uint32 = 0x40000000
+	// valuePtrFenceOuterMask marks non-grouped pointers that reference
+	// outer-leaf fence blocks (v2_fenceptr expansion candidates).
+	//
+	// It intentionally reuses one of the non-grouped sub-index bits so existing
+	// record-length decoding (ValuePtrRecordLength) strips it automatically.
+	valuePtrFenceOuterMask uint32 = 0x20000000
+	// valuePtrFenceOuterGroupedMask marks grouped pointers that reference
+	// outer-leaf fence blocks. This bit sits in the grouped length-hint region;
+	// ValuePtrRecordLength strips it only when present.
+	valuePtrFenceOuterGroupedMask uint32 = 0x00800000
 
 	valuePtrSubIndexMask  uint32 = 0x3c000000
 	valuePtrSubIndexShift        = 26
@@ -26,6 +36,9 @@ func ValuePtrRecordLength(ptr ValuePtr) uint32 {
 	mask := valuePtrCompressedMask | valuePtrGroupedMask | valuePtrSubIndexMask
 	if ValuePtrIsGrouped(ptr) {
 		mask |= valuePtrSubIndexHiMask
+		if ptr.Length&valuePtrFenceOuterGroupedMask != 0 {
+			mask |= valuePtrFenceOuterGroupedMask
+		}
 	}
 	return ptr.Length &^ mask
 }
@@ -56,6 +69,26 @@ func ValuePtrSubIndex(ptr ValuePtr) uint8 {
 		idx |= 0x10
 	}
 	return idx
+}
+
+// ValuePtrIsFenceOuter reports whether ptr references a non-grouped outer-leaf
+// fence block payload.
+func ValuePtrIsFenceOuter(ptr ValuePtr) bool {
+	if ValuePtrIsGrouped(ptr) {
+		return ptr.Length&valuePtrFenceOuterGroupedMask != 0
+	}
+	return ptr.Length&valuePtrFenceOuterMask != 0
+}
+
+// ValuePtrMarkFenceOuter marks a non-grouped pointer as an outer-leaf fence
+// block pointer.
+func ValuePtrMarkFenceOuter(ptr ValuePtr) ValuePtr {
+	if ValuePtrIsGrouped(ptr) {
+		ptr.Length |= valuePtrFenceOuterGroupedMask
+		return ptr
+	}
+	ptr.Length |= valuePtrFenceOuterMask
+	return ptr
 }
 
 // ValuePtrMarkCompressed sets the compression flag on a record length.

@@ -85,6 +85,7 @@ type DB struct {
 	policy                    WritePolicy
 	valueLogDomainThresholds  []ValueLogDomainThreshold
 	outerLeafBlockCache       *outerLeafBlockCache
+	outerLeafKeyCache         *outerLeafKeyCache
 	leafFillTargetPPM         uint32
 	internalFillTargetPPM     uint32
 	leafPrefixCompression     bool
@@ -93,6 +94,9 @@ type DB struct {
 	indexInternalBaseDelta    bool
 	indexAdaptiveLeafEncoding bool
 	indexOuterLeafMode        string
+	outerLeafBlockCodec       ValueLogBlockCodec
+	outerLeafBlockRestart     int
+	skipOuterLeafChecksums    bool
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
 
@@ -274,7 +278,7 @@ type ValueLogOptions struct {
 	// OuterLeafBlockTargetBytes guides outer-leaf block payload sizing for the
 	// experimental index outer-leaf modes.
 	//
-	// 0 uses a default.
+	// 0 uses a mode-aware default.
 	OuterLeafBlockTargetBytes int
 	// OuterLeafBlockCodec selects the codec used for experimental outer-leaf
 	// block payloads stored in the value log.
@@ -287,7 +291,7 @@ type ValueLogOptions struct {
 	// OuterLeafBlobThresholdBytes controls when v2 fence-pointer outer-leaf
 	// entries store a blob reference instead of inline value bytes.
 	//
-	// <=0 uses an adaptive default derived from OuterLeafBlockTargetBytes.
+	// <=0 uses the default blob-ref threshold.
 	OuterLeafBlobThresholdBytes int
 	// OuterLeafBlockCacheEntries bounds the number of decoded blocks cached for
 	// pointer and fence-pointer reads when an index outer-leaf mode is enabled
@@ -745,9 +749,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
-	snap.reader.vlogs = vlogSet
-	snap.reader.outerLeafMode = db.indexOuterLeafMode
-	snap.reader.cache = db.outerLeafBlockCache
+	snap.reader = newValueReader(vlogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, db.outerLeafBlockCache, db.outerLeafKeyCache)
 	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
@@ -1037,6 +1039,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		keepRecent:                opts.KeepRecent,
 		valueLogDomainThresholds:  NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		outerLeafBlockCache:       newOuterLeafBlockCache(opts.ValueLog.OuterLeafBlockCacheEntries),
+		outerLeafKeyCache:         newOuterLeafKeyCache(opts.ValueLog.OuterLeafBlockCacheEntries),
 		leafFillTargetPPM:         opts.LeafFillTargetPPM,
 		internalFillTargetPPM:     opts.InternalFillTargetPPM,
 		leafPrefixCompression:     opts.LeafPrefixCompression,
@@ -1045,6 +1048,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
 		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
 		indexOuterLeafMode:        opts.IndexOuterLeafMode,
+		outerLeafBlockCodec:       opts.ValueLog.OuterLeafBlockCodec,
+		outerLeafBlockRestart:     opts.ValueLog.OuterLeafBlockRestartInterval,
+		skipOuterLeafChecksums:    opts.ValueLog.ReadIntegrity == IntegritySkipChecksums,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
 		dir:                       opts.Dir,
@@ -1802,7 +1808,7 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(idx.pager, valueReader{vlogs: state.ValueLogSet, outerLeafMode: db.indexOuterLeafMode}, state.RootPageID)
+	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, nil, nil), state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 

@@ -58,6 +58,7 @@ type Builder struct {
 	internalBaseArena         []byte
 	internalBaseArenaH        *byteArenaHandle
 	internalBaseTotalKeyBytes int
+	internalBaseSharedPrefix  int
 }
 
 const internalBaseDeltaFooterTailSize = 14 // u16 lowLen + u16 highLen + u16 prefixLen + u64 baseChildID
@@ -1282,6 +1283,7 @@ func (b *Builder) releaseInternalBaseDeltaScratch() {
 	}
 	b.internalBaseEntries = nil
 	b.internalBaseTotalKeyBytes = 0
+	b.internalBaseSharedPrefix = 0
 	if b.internalBaseArenaH != nil {
 		b.internalBaseArenaH.buf = b.internalBaseArena[:0]
 		internalBaseArenaPool.Put(b.internalBaseArenaH)
@@ -1429,7 +1431,14 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 	}
 	prefixLen := 0
 	if nextCount > 1 {
-		prefixLen = sharedPrefixLen(firstKey, key)
+		if existingCount > 1 {
+			prefixLen = b.internalBaseSharedPrefix
+			if p := sharedPrefixLen(firstKey, key); p < prefixLen {
+				prefixLen = p
+			}
+		} else {
+			prefixLen = sharedPrefixLen(firstKey, key)
+		}
 	}
 	if prefixLen > int(^uint16(0)) {
 		return ErrKeyTooLarge
@@ -1467,6 +1476,7 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 	b.internalBaseMaxChild = maxChild
 	b.internalBaseChildID = minChild
 	b.internalBaseDeltaW = deltaWidth
+	b.internalBaseSharedPrefix = prefixLen
 	b.dirEnd = dirEnd
 	b.heapStart = heapStart
 	return nil
@@ -1484,11 +1494,7 @@ func (b *Builder) finishInternalBaseDelta() bool {
 	}
 
 	firstKey := b.internalBaseEntries[0].key
-	lastKey := b.internalBaseEntries[count-1].key
-	prefixLen := 0
-	if count > 1 {
-		prefixLen = sharedPrefixLen(firstKey, lastKey)
-	}
+	prefixLen := sharedPrefixLenAcrossEntries(b.internalBaseEntries)
 	if prefixLen > int(^uint16(0)) {
 		panic("internal base-delta prefix overflow")
 	}
@@ -1508,9 +1514,6 @@ func (b *Builder) finishInternalBaseDelta() bool {
 	totalSuffixBytes := 0
 	for i := range b.internalBaseEntries {
 		k := b.internalBaseEntries[i].key
-		if len(k) < prefixLen {
-			panic("internal base-delta invalid shared prefix")
-		}
 		totalSuffixBytes += len(k) - prefixLen
 	}
 
@@ -1586,6 +1589,23 @@ func sharedPrefixLen(a, b []byte) int {
 		}
 	}
 	return n
+}
+
+func sharedPrefixLenAcrossEntries(entries []internalBaseDeltaEntry) int {
+	if len(entries) <= 1 {
+		return 0
+	}
+	first := entries[0].key
+	prefixLen := len(first)
+	for i := 1; i < len(entries); i++ {
+		if p := sharedPrefixLen(first, entries[i].key); p < prefixLen {
+			prefixLen = p
+			if prefixLen == 0 {
+				return 0
+			}
+		}
+	}
+	return prefixLen
 }
 
 func putUint16At(dst []byte, pos int, v uint16) {

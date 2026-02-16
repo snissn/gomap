@@ -1,7 +1,6 @@
 package db
 
 import (
-	"container/list"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
@@ -25,12 +24,17 @@ func newOuterLeafBlockKey(ptr page.ValuePtr) outerLeafBlockKey {
 type outerLeafBlockCacheEntry struct {
 	key   outerLeafBlockKey
 	block *outerleaf.DecodedBlock
+	prev  int
+	next  int
 }
 
 type outerLeafBlockCacheShard struct {
 	mu       sync.Mutex
-	list     *list.List
-	entries  map[outerLeafBlockKey]*list.Element
+	entries  map[outerLeafBlockKey]int
+	nodes    []outerLeafBlockCacheEntry
+	free     []int
+	head     int
+	tail     int
 	hits     uint64
 	misses   uint64
 	capacity int
@@ -71,9 +75,19 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 		if i < extra {
 			capI++
 		}
+		free := make([]int, capI)
+		nodes := make([]outerLeafBlockCacheEntry, capI)
+		for j := 0; j < capI; j++ {
+			nodes[j].prev = -1
+			nodes[j].next = -1
+			free[j] = capI - 1 - j
+		}
 		shards[i] = outerLeafBlockCacheShard{
-			list:     list.New(),
-			entries:  make(map[outerLeafBlockKey]*list.Element, capI),
+			entries:  make(map[outerLeafBlockKey]int, capI),
+			nodes:    nodes,
+			free:     free,
+			head:     -1,
+			tail:     -1,
 			capacity: capI,
 		}
 	}
@@ -88,35 +102,49 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) *outerleaf.DecodedBlock
 	s := c.shardFor(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	elem, ok := s.entries[key]
+	idx, ok := s.entries[key]
 	if !ok {
 		s.misses++
 		return nil
 	}
 	s.hits++
-	s.list.MoveToFront(elem)
-	return elem.Value.(*outerLeafBlockCacheEntry).block
+	s.moveToFront(idx)
+	return s.nodes[idx].block
 }
 
 func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.DecodedBlock) {
 	s := c.shardFor(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if elem, ok := s.entries[key]; ok {
-		elem.Value.(*outerLeafBlockCacheEntry).block = block
-		s.list.MoveToFront(elem)
+	if idx, ok := s.entries[key]; ok {
+		s.nodes[idx].block = block
+		s.moveToFront(idx)
 		return
 	}
-	entry := &outerLeafBlockCacheEntry{key: key, block: block}
-	elem := s.list.PushFront(entry)
-	s.entries[key] = elem
-	if s.list.Len() > s.capacity {
-		tail := s.list.Back()
-		if tail != nil {
-			s.list.Remove(tail)
-			delete(s.entries, tail.Value.(*outerLeafBlockCacheEntry).key)
-		}
+	if s.capacity <= 0 {
+		return
 	}
+
+	var idx int
+	if n := len(s.free); n > 0 {
+		idx = s.free[n-1]
+		s.free = s.free[:n-1]
+	} else {
+		idx = s.tail
+		if idx < 0 {
+			return
+		}
+		evictedKey := s.nodes[idx].key
+		s.unlink(idx)
+		delete(s.entries, evictedKey)
+	}
+	node := &s.nodes[idx]
+	node.key = key
+	node.block = block
+	node.prev = -1
+	node.next = -1
+	s.linkFront(idx)
+	s.entries[key] = idx
 }
 
 func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
@@ -128,7 +156,7 @@ func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, 
 		s.mu.Lock()
 		totalHits += s.hits
 		totalMisses += s.misses
-		totalEntries += s.list.Len()
+		totalEntries += len(s.entries)
 		s.mu.Unlock()
 	}
 	return totalHits, totalMisses, totalEntries, c.capacity
@@ -146,4 +174,43 @@ func (c *outerLeafBlockCache) shardFor(key outerLeafBlockKey) *outerLeafBlockCac
 	h ^= h >> 33
 	idx := int(h & uint64(len(c.shards)-1))
 	return &c.shards[idx]
+}
+
+func (s *outerLeafBlockCacheShard) moveToFront(idx int) {
+	if idx == s.head {
+		return
+	}
+	s.unlink(idx)
+	s.linkFront(idx)
+}
+
+func (s *outerLeafBlockCacheShard) linkFront(idx int) {
+	node := &s.nodes[idx]
+	node.prev = -1
+	node.next = s.head
+	if s.head >= 0 {
+		s.nodes[s.head].prev = idx
+	}
+	s.head = idx
+	if s.tail < 0 {
+		s.tail = idx
+	}
+}
+
+func (s *outerLeafBlockCacheShard) unlink(idx int) {
+	node := &s.nodes[idx]
+	prev := node.prev
+	next := node.next
+	if prev >= 0 {
+		s.nodes[prev].next = next
+	} else {
+		s.head = next
+	}
+	if next >= 0 {
+		s.nodes[next].prev = prev
+	} else {
+		s.tail = prev
+	}
+	node.prev = -1
+	node.next = -1
 }

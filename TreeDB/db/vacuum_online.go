@@ -288,7 +288,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			return errors.New("vacuum: missing db state")
 		}
 
-		sysIter := tree.New(oldGen.pager, valueReader{vlogs: state.ValueLogSet}, state.SystemRootPageID).
+		sysIter := tree.New(oldGen.pager, newValueReader(state.ValueLogSet, "", false, nil, nil), state.SystemRootPageID).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,

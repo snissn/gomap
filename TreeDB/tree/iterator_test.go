@@ -21,9 +21,38 @@ type fenceLookupReaderKeysUnavailable struct {
 	*fenceLookupReader
 }
 
+type fenceLookupReaderRangeAware struct {
+	*fenceLookupReader
+	rangeCalls int
+	lastLower  []byte
+	lastUpper  []byte
+}
+
 func (r *fenceLookupReaderKeysUnavailable) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
 	r.keyCalls++
 	return nil, false, nil
+}
+
+func (r *fenceLookupReaderRangeAware) ReadUnsafeFenceBlockKeysRange(ptr page.ValuePtr, lower []byte, upper []byte) ([][]byte, bool, error) {
+	r.rangeCalls++
+	r.lastLower = append(r.lastLower[:0], lower...)
+	r.lastUpper = append(r.lastUpper[:0], upper...)
+	keys, ok, err := r.fenceLookupReader.ReadUnsafeFenceBlockKeys(ptr)
+	if err != nil || !ok || len(keys) == 0 {
+		return keys, ok, err
+	}
+	start := 0
+	if len(lower) > 0 {
+		start = lowerBoundFenceKeys(keys, lower)
+	}
+	end := len(keys)
+	if len(upper) > 0 {
+		end = lowerBoundFenceKeys(keys, upper)
+	}
+	if end <= start {
+		return nil, true, nil
+	}
+	return keys[start:end], true, nil
 }
 
 func newCountingValueReader() *countingValueReader {
@@ -707,6 +736,80 @@ func TestIterator_FencePointerRangeFullModeUsesKeyExpansionWithLazyValues(t *tes
 	}
 }
 
+func TestIterator_FencePointerRangeFullModeUsesBoundedKeyExpansion(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	baseReader := newFenceLookupReader()
+	reader := &fenceLookupReaderRangeAware{fenceLookupReader: baseReader}
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator([]byte("f015"), []byte("f115"))
+	defer it.Close()
+
+	var got []string
+	for ; it.Valid(); it.Next() {
+		got = append(got, string(it.Key()))
+		_ = it.Value()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	want := []string{"f020", "f030", "f100", "f110"}
+	if len(got) != len(want) {
+		t.Fatalf("keys len=%d want=%d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("key[%d]=%q want=%q", i, got[i], want[i])
+		}
+	}
+	if reader.rangeCalls == 0 {
+		t.Fatalf("expected bounded fence key expansion")
+	}
+	if !bytes.Equal(reader.lastLower, []byte("f015")) {
+		t.Fatalf("range lower=%q want=%q", reader.lastLower, []byte("f015"))
+	}
+	if !bytes.Equal(reader.lastUpper, []byte("f115")) {
+		t.Fatalf("range upper=%q want=%q", reader.lastUpper, []byte("f115"))
+	}
+	if reader.blockCalls == 0 {
+		t.Fatalf("expected lazy value fallback to read fence block entries")
+	}
+}
+
 func TestIterator_FencePointerRangeFullModeFallsBackWhenKeyExpansionUnavailable(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
@@ -772,6 +875,69 @@ func TestIterator_FencePointerRangeFullModeFallsBackWhenKeyExpansionUnavailable(
 	}
 	if reader.blockCalls == 0 {
 		t.Fatalf("expected block expansion fallback when key expansion is unavailable")
+	}
+}
+
+func TestIterator_FencePointerRangeSeek_ReusesPredecessorKeyExpansion(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator([]byte("f025"), []byte("f040"))
+	defer it.Close()
+
+	var got []string
+	for ; it.Valid(); it.Next() {
+		got = append(got, string(it.Key()))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	want := []string{"f030"}
+	if len(got) != len(want) {
+		t.Fatalf("keys len=%d want=%d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("key[%d]=%q want=%q", i, got[i], want[i])
+		}
+	}
+	if reader.keyCalls != 1 {
+		t.Fatalf("expected predecessor seek to reuse key expansion (keyCalls=1), got %d", reader.keyCalls)
 	}
 }
 
