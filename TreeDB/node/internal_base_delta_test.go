@@ -427,3 +427,49 @@ func TestInternalBaseDelta_StrictShortFirstSeparatorNoEarlyDisable(t *testing.T)
 		t.Fatalf("expected 1 staged base-delta entry, got %d", len(b.internalBaseEntries))
 	}
 }
+
+func TestInternalBaseDelta_FinishNoPanicOnMixedSharedPrefixWidths(t *testing.T) {
+	buf := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
+	b.SetPageID(1)
+
+	entries := []struct {
+		key   []byte
+		child uint64
+	}{
+		{key: []byte("tenant:region:alpha:0001"), child: 101},
+		{key: []byte("t"), child: 102},
+		{key: []byte("tenant:region:alpha:0002"), child: 103},
+	}
+	for i, e := range entries {
+		if err := b.AddInternalChild(e.key, e.child); err != nil {
+			t.Fatalf("AddInternalChild(%d): %v", i, err)
+		}
+	}
+
+	var n *Node
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("Finish panicked: %v", r)
+			}
+		}()
+		n = b.Finish()
+	}()
+
+	if !n.internalBaseDelta() {
+		t.Fatalf("expected internalBaseDelta enabled")
+	}
+	if got, want := n.Count(), uint16(len(entries)); got != want {
+		t.Fatalf("count mismatch: got=%d want=%d", got, want)
+	}
+	for i, e := range entries {
+		k, child, err := n.GetInternalEntryView(uint16(i))
+		if err != nil {
+			t.Fatalf("GetInternalEntryView(%d): %v", i, err)
+		}
+		if !bytes.Equal(k, e.key) || child != e.child {
+			t.Fatalf("entry mismatch idx=%d key=%q want=%q child=%d want=%d", i, k, e.key, child, e.child)
+		}
+	}
+}

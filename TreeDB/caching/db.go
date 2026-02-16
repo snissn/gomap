@@ -615,7 +615,7 @@ const defaultOuterLeafFenceBlockTargetBytes = 4 << 10
 // For fence-pointer v2 reads, short scans are latency-sensitive and pay decode
 // cost immediately. Keep the user-selected codec for large-value blocks, but
 // prefer LZ4 on small-value fence groups when the configured default is snappy.
-const outerLeafFenceAdaptiveLZ4MaxAvgValueBytes = 512
+const outerLeafFenceAdaptiveLZ4MaxAvgValueBytes = 64
 
 func (db *DB) effectiveOuterLeafBlobThresholdBytes() int {
 	if db == nil {
@@ -928,15 +928,13 @@ func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, 
 }
 
 func (db *DB) deferredValueLogEnabled() bool {
-	// Fence-pointer outer-leaf mode benefits from flush-time regrouping so
-	// singleton writes can coalesce into larger outer blocks before value-log
-	// append, reducing index pointer fanout.
-	//
-	// WAL-on v2_fenceptr modes:
-	//   - simple_inline: deferred for all pointer-eligible values
-	//   - rid_join: deferred for non-oversized pointer-eligible values (C1),
-	//     while oversized values (C2) may still take immediate pointer paths.
+	// Fence-pointer outer-leaf mode benefits from flush-time regrouping when WAL
+	// is disabled: singleton writes can coalesce into larger outer blocks before
+	// value-log append, reducing index pointer fanout.
 	if db == nil {
+		return false
+	}
+	if !db.disableJournal {
 		return false
 	}
 	if !db.outerLeafFenceV2Enabled() || !db.valueLogEnabled() || !db.allowValueLogPointers() {
