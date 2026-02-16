@@ -133,7 +133,7 @@ func TestBuildOuterLeafValueRecords_V1NoGrouping(t *testing.T) {
 func TestSelectOuterLeafBlockCodec(t *testing.T) {
 	t.Run("fence small values prefer lz4", func(t *testing.T) {
 		db := &DB{
-			indexOuterLeafMode: backenddb.IndexOuterLeafModeV2FencePtr,
+			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV2FencePtr,
 			outerLeafBlockCodec: uint8(backenddb.ValueLogBlockSnappy),
 		}
 		got := db.selectOuterLeafBlockCodec(256, 2)
@@ -144,7 +144,7 @@ func TestSelectOuterLeafBlockCodec(t *testing.T) {
 
 	t.Run("fence large values keep snappy", func(t *testing.T) {
 		db := &DB{
-			indexOuterLeafMode: backenddb.IndexOuterLeafModeV2FencePtr,
+			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV2FencePtr,
 			outerLeafBlockCodec: uint8(backenddb.ValueLogBlockSnappy),
 		}
 		got := db.selectOuterLeafBlockCodec(8192, 1)
@@ -155,7 +155,7 @@ func TestSelectOuterLeafBlockCodec(t *testing.T) {
 
 	t.Run("non fence mode keeps configured codec", func(t *testing.T) {
 		db := &DB{
-			indexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
+			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV1,
 			outerLeafBlockCodec: uint8(backenddb.ValueLogBlockSnappy),
 		}
 		got := db.selectOuterLeafBlockCodec(128, 1)
@@ -166,7 +166,7 @@ func TestSelectOuterLeafBlockCodec(t *testing.T) {
 
 	t.Run("explicit lz4 is preserved", func(t *testing.T) {
 		db := &DB{
-			indexOuterLeafMode: backenddb.IndexOuterLeafModeV2FencePtr,
+			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV2FencePtr,
 			outerLeafBlockCodec: uint8(backenddb.ValueLogBlockLZ4),
 		}
 		got := db.selectOuterLeafBlockCodec(16384, 1)

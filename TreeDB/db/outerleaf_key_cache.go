@@ -8,12 +8,12 @@ const (
 )
 
 type outerLeafKeyCacheShard struct {
-	mu       sync.Mutex
-	entries  map[outerLeafBlockKey][][]byte
-	hits     uint64
-	misses   uint64
-	capacity int
-	admit    []uint64
+	mu        sync.Mutex
+	entries   map[outerLeafBlockKey][][]byte
+	hits      uint64
+	misses    uint64
+	capacity  int
+	admit     []uint64
 	admitMask uint64
 }
 
