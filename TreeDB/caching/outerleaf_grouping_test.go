@@ -131,14 +131,17 @@ func TestBuildOuterLeafValueRecords_V1NoGrouping(t *testing.T) {
 }
 
 func TestSelectOuterLeafBlockCodec(t *testing.T) {
-	t.Run("fence small values prefer lz4", func(t *testing.T) {
+	t.Run("fence threshold boundary uses lz4 at 64 and snappy at 65", func(t *testing.T) {
 		db := &DB{
 			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV2FencePtr,
 			outerLeafBlockCodec: uint8(backenddb.ValueLogBlockSnappy),
 		}
-		got := db.selectOuterLeafBlockCodec(256, 2)
-		if want := uint8(backenddb.ValueLogBlockLZ4); got != want {
-			t.Fatalf("codec=%d want=%d", got, want)
+
+		if got, want := db.selectOuterLeafBlockCodec(64, 1), uint8(backenddb.ValueLogBlockLZ4); got != want {
+			t.Fatalf("codec at 64 bytes=%d want=%d", got, want)
+		}
+		if got, want := db.selectOuterLeafBlockCodec(65, 1), uint8(backenddb.ValueLogBlockSnappy); got != want {
+			t.Fatalf("codec at 65 bytes=%d want=%d", got, want)
 		}
 	})
 

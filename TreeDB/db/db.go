@@ -94,6 +94,8 @@ type DB struct {
 	indexInternalBaseDelta    bool
 	indexAdaptiveLeafEncoding bool
 	indexOuterLeafMode        string
+	outerLeafBlockCodec       ValueLogBlockCodec
+	outerLeafBlockRestart     int
 	skipOuterLeafChecksums    bool
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
@@ -1046,6 +1048,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
 		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
 		indexOuterLeafMode:        opts.IndexOuterLeafMode,
+		outerLeafBlockCodec:       opts.ValueLog.OuterLeafBlockCodec,
+		outerLeafBlockRestart:     opts.ValueLog.OuterLeafBlockRestartInterval,
 		skipOuterLeafChecksums:    opts.ValueLog.ReadIntegrity == IntegritySkipChecksums,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
