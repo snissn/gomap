@@ -1225,6 +1225,30 @@ func TestCachingDB_Open_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *testing.T) {
 	}
 }
 
+func TestCachingDB_Open_V2FencePtrWALOn_DefaultAutoSimpleInline(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open default fence mode: %v", err)
+	}
+	defer cache.Close()
+
+	if got := cache.valueLogWALFenceMode; got != string(db.ValueLogWALFenceModeSimpleInline) {
+		t.Fatalf("expected WAL-on v2_fenceptr default fence mode to auto-select simple_inline, got %q", got)
+	}
+	if got := cache.Stats()["treedb.cache.v2_fenceptr.wal_fence_mode"]; got != "simple_inline" {
+		t.Fatalf("stats wal_fence_mode mismatch: got %q", got)
+	}
+}
+
 func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
 	dir := t.TempDir()
 	backendOpts := db.Options{

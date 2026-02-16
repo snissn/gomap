@@ -94,6 +94,20 @@ func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *te
 	}
 }
 
+func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOn_DefaultAutoSimpleInline(t *testing.T) {
+	dbWALOn, err := Open(Options{
+		Dir:                t.TempDir(),
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+		Durability:         DurabilityWALOnRelaxed,
+	})
+	if err != nil {
+		t.Fatalf("open WAL-on default fence mode: %v", err)
+	}
+	if err := dbWALOn.Close(); err != nil {
+		t.Fatalf("close WAL-on default fence mode: %v", err)
+	}
+}
+
 func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOff_ExplicitRIDJoinAllowed(t *testing.T) {
 	dbWALOff, err := Open(Options{
 		Dir:                t.TempDir(),

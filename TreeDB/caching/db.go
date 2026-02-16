@@ -3658,8 +3658,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
 	disableJournal := opts.DisableWAL
 	if indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr && !disableJournal {
-		// WAL-enabled v2_fenceptr only supports explicit simple_inline.
-		if rawValueLogWALFenceMode != "" && valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
+		// WAL-enabled v2_fenceptr only supports simple_inline. Keep explicit
+		// incompatible modes as hard errors; otherwise default to simple_inline.
+		if rawValueLogWALFenceMode == "" {
+			valueLogWALFenceMode = string(backenddb.ValueLogWALFenceModeSimpleInline)
+		} else if valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
 			return nil, fmt.Errorf("cachingdb: unsupported value-log WAL fence mode %q for WAL-enabled index outer leaf mode %q (use %q)", opts.ValueLogWALFenceMode, indexOuterLeafMode, backenddb.ValueLogWALFenceModeSimpleInline)
 		}
 	}

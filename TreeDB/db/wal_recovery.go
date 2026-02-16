@@ -349,8 +349,14 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 	if maxRID == ^uint64(0) {
 		return nil, fmt.Errorf("value-log rid space exhausted")
 	}
+	maxSegmentBytes := int64(0)
+	if db.indexPackedValuePtr {
+		// Packed ValuePtr stores offset as u32; keep replay-appended value-log
+		// segments within the same cap used by the write path.
+		maxSegmentBytes = int64(^uint32(0)) - 4
+	}
 	return &replayInlineAppender{
-		writer:  newRewriteWriter(filepath.Join(db.dir, "wal"), 0, maxLane0Seq, 0),
+		writer:  newRewriteWriter(filepath.Join(db.dir, "wal"), 0, maxLane0Seq, maxSegmentBytes),
 		nextRID: maxRID + 1,
 	}, nil
 }

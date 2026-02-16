@@ -843,6 +843,15 @@ func Open(opts Options) (*DB, error) {
 		opts.ValueLog.Compression = ValueLogCompressionAuto
 	}
 	opts.IndexOuterLeafMode = normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
+	if opts.IndexOuterLeafMode == IndexOuterLeafModeV2FencePtr &&
+		opts.Durability != DurabilityWALOffRelaxed &&
+		strings.TrimSpace(string(opts.ValueLog.WALFenceMode)) == "" {
+		// WAL-enabled v2_fenceptr defaults to simple_inline unless an explicit
+		// fence mode is provided.
+		opts.ValueLog.WALFenceMode = ValueLogWALFenceModeSimpleInline
+	} else {
+		opts.ValueLog.WALFenceMode = normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode)
+	}
 
 	if err := validateOptions(opts); err != nil {
 		return nil, err
@@ -911,10 +920,8 @@ func validateOptions(opts Options) error {
 		return fmt.Errorf("treedb: invalid value-log WAL fence mode %q", opts.ValueLog.WALFenceMode)
 	}
 	if indexOuterLeafMode == IndexOuterLeafModeV2FencePtr && opts.Durability != DurabilityWALOffRelaxed {
-		// For WAL-enabled v2_fenceptr, only simple_inline is supported. Keep empty
-		// mode as the caller default/auto path; reject explicit incompatible mode.
-		rawFenceMode := strings.TrimSpace(string(opts.ValueLog.WALFenceMode))
-		if rawFenceMode != "" && walFenceMode != ValueLogWALFenceModeSimpleInline {
+		// For WAL-enabled v2_fenceptr, only simple_inline is supported.
+		if walFenceMode != ValueLogWALFenceModeSimpleInline {
 			return fmt.Errorf("treedb: unsupported value-log WAL fence mode %q for WAL-enabled index outer leaf mode %q (use %q)", opts.ValueLog.WALFenceMode, indexOuterLeafMode, ValueLogWALFenceModeSimpleInline)
 		}
 	}
