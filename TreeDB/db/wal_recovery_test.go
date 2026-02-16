@@ -1,6 +1,15 @@
 package db
 
-import "testing"
+import (
+	"bytes"
+	"encoding/binary"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+)
 
 func TestNewReplayInlineAppender_PackedValuePtrCapsSegmentSize(t *testing.T) {
 	db := &DB{
@@ -38,5 +47,66 @@ func TestNewReplayInlineAppender_UnpackedNoSegmentCap(t *testing.T) {
 	}
 	if got := app.writer.maxSize; got != 0 {
 		t.Fatalf("unexpected replay appender maxSize: got %d want 0", got)
+	}
+}
+
+func TestReplayInlineAppender_UsesConfiguredOuterLeafEncodingForFenceMode(t *testing.T) {
+	db := &DB{
+		dir:                   t.TempDir(),
+		indexOuterLeafMode:    IndexOuterLeafModeV2FencePtr,
+		outerLeafBlockCodec:   ValueLogBlockLZ4,
+		outerLeafBlockRestart: 7,
+	}
+	app, err := newReplayInlineAppender(db, nil, nil)
+	if err != nil {
+		t.Fatalf("newReplayInlineAppender: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(db.dir, "wal"), 0o755); err != nil {
+		t.Fatalf("mkdir wal dir: %v", err)
+	}
+	key := []byte("k")
+	value := bytes.Repeat([]byte("a"), 4096)
+	ptr, err := app.append(db, key, value)
+	if err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if err := app.syncIfDirty(); err != nil {
+		t.Fatalf("syncIfDirty: %v", err)
+	}
+	if err := app.close(); err != nil {
+		t.Fatalf("close appender: %v", err)
+	}
+
+	vm, err := valuelog.NewManager(filepath.Join(db.dir, "wal"))
+	if err != nil {
+		t.Fatalf("open value log manager: %v", err)
+	}
+	defer vm.Close()
+	raw, err := vm.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("read appended payload: %v", err)
+	}
+	if !outerleaf.HasMagic(raw) {
+		t.Fatalf("expected outer-leaf encoded payload")
+	}
+	if len(raw) < 8 {
+		t.Fatalf("outer-leaf payload too short: %d", len(raw))
+	}
+	const outerLeafCodecLZ4 = 2
+	if got := int(raw[5]); got != outerLeafCodecLZ4 {
+		t.Fatalf("outer-leaf codec id = %d, want %d", got, outerLeafCodecLZ4)
+	}
+	if got, want := int(binary.LittleEndian.Uint16(raw[6:8])), outerleaf.NormalizeRestartInterval(db.outerLeafBlockRestart); got != want {
+		t.Fatalf("outer-leaf restart interval = %d, want %d", got, want)
+	}
+	decoded, ok, found, _, err := outerleaf.DecodeValueForKey(raw, key, nil)
+	if err != nil {
+		t.Fatalf("decode appended payload: %v", err)
+	}
+	if !ok || !found {
+		t.Fatalf("decode result ok=%v found=%v", ok, found)
+	}
+	if !bytes.Equal(decoded, value) {
+		t.Fatalf("decoded value mismatch")
 	}
 }

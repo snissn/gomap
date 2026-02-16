@@ -370,7 +370,13 @@ func (a *replayInlineAppender) append(db *DB, key, value []byte) (page.ValuePtr,
 	}
 	payload := value
 	if strings.TrimSpace(db.indexOuterLeafMode) == IndexOuterLeafModeV2FencePtr {
-		encoded, err := outerleaf.EncodeSingle(nil, key, value, uint8(valuelog.BlockCodecSnappy), outerleaf.NormalizeRestartInterval(0))
+		encoded, err := outerleaf.EncodeSingle(
+			nil,
+			key,
+			value,
+			uint8(db.outerLeafBlockCodec),
+			outerleaf.NormalizeRestartInterval(db.outerLeafBlockRestart),
+		)
 		if err != nil {
 			return page.ValuePtr{}, err
 		}
