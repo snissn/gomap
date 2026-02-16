@@ -632,7 +632,7 @@ func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	return outerleaf.EncodeSingle(nil, key, value, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
 }
 
-func (db *DB) encodeOuterLeafBlobRef(key []byte, ptr page.ValuePtr) ([]byte, error) {
+func (db *DB) encodeOuterLeafBlobRef(dst, key []byte, ptr page.ValuePtr) ([]byte, error) {
 	if !db.outerLeafV2Enabled() {
 		return nil, fmt.Errorf("cachingdb: blob-ref outer-leaf encoding requires v2 mode")
 	}
@@ -642,7 +642,7 @@ func (db *DB) encodeOuterLeafBlobRef(key []byte, ptr page.ValuePtr) ([]byte, err
 	single[0].Key = key
 	single[0].Kind = outerleaf.EntryKindBlobRef
 	single[0].BlobPtr = ptr
-	return enc.EncodeTypedEntries(nil, single[:], db.outerLeafBlockCodec, db.outerLeafBlockRestart)
+	return enc.EncodeTypedEntries(dst, single[:], db.outerLeafBlockCodec, db.outerLeafBlockRestart)
 }
 
 func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
@@ -957,10 +957,18 @@ func (db *DB) shouldFlushDeferredValueLog(writeMode vlogCompressionWriteMode, re
 	if !db.deferredValueLogEnabled() {
 		return false
 	}
-	// For v2 fence-pointer raw outer-leaf payloads, keep appends buffered across
+	// For v2 fence-pointer write paths, keep deferred appends buffered across
 	// calls; readers flush on demand via flushValueLogForPtr.
-	if db.outerLeafFenceV2Enabled() && writeMode == vlogWriteOff && allOuterLeafRecordValues(records) {
-		return false
+	if db.outerLeafFenceV2Enabled() {
+		if allOuterLeafRecordValues(records) {
+			return false
+		}
+		// WAL-on rid_join oversized writes (C2) emit a raw blob record followed by
+		// an outer-leaf blob-ref record. Keep the blob append buffered too so the
+		// pair does not force an extra write syscall per Set/Batch item.
+		if db.fenceRIDJoinHybridEnabled() && len(records) == 1 && db.oversizedOuterLeafValue(records[0].Value) {
+			return false
+		}
 	}
 	return true
 }
@@ -969,8 +977,13 @@ func (db *DB) shouldFlushDeferredValueLogValue(writeMode vlogCompressionWriteMod
 	if !db.deferredValueLogEnabled() {
 		return false
 	}
-	if db.outerLeafFenceV2Enabled() && writeMode == vlogWriteOff && outerleaf.HasMagic(value) {
-		return false
+	if db.outerLeafFenceV2Enabled() {
+		if outerleaf.HasMagic(value) {
+			return false
+		}
+		if db.fenceRIDJoinHybridEnabled() && db.oversizedOuterLeafValue(value) {
+			return false
+		}
 	}
 	return true
 }
@@ -7290,15 +7303,21 @@ func (db *DB) appendFenceRIDJoinOversizedOne(l *lane, dictID uint64, key, value 
 	blobPtr := blobPtrs[0]
 	putValueLogPtrs(blobPtrs)
 
-	outerPayload, encodeErr := db.encodeOuterLeafBlobRef(key, blobPtr)
+	// Blob-ref outer payloads are tiny; reusing a pooled arena avoids
+	// per-write output allocations in the oversized rid_join path.
+	outerBuf := getOuterLeafArena(len(key) + page.ValuePtrSize + 64)
+	outerPayload, encodeErr := db.encodeOuterLeafBlobRef(outerBuf[:0], key, blobPtr)
 	if encodeErr != nil {
+		putOuterLeafArena(outerBuf)
 		return page.ValuePtr{}, 0, "", encodeErr
 	}
 	outerRecord := valuelog.Record{RID: outerRID, Value: outerPayload}
 	outerPtrs, appendErr := db.appendValueLog(l, dictID, nil, []valuelog.Record{outerRecord}, durability)
 	if appendErr != nil {
+		putOuterLeafArena(outerPayload)
 		return page.ValuePtr{}, 0, "", appendErr
 	}
+	putOuterLeafArena(outerPayload)
 	if len(outerPtrs) != 1 {
 		putValueLogPtrs(outerPtrs)
 		return page.ValuePtr{}, 0, "", fmt.Errorf("cachingdb: expected 1 outer pointer, got %d", len(outerPtrs))
