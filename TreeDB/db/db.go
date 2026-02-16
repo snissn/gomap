@@ -284,6 +284,11 @@ type ValueLogOptions struct {
 	//
 	// 0 uses a default.
 	OuterLeafBlockRestartInterval int
+	// OuterLeafBlobThresholdBytes controls when v2 fence-pointer outer-leaf
+	// entries store a blob reference instead of inline value bytes.
+	//
+	// <=0 uses an adaptive default derived from OuterLeafBlockTargetBytes.
+	OuterLeafBlobThresholdBytes int
 	// OuterLeafBlockCacheEntries bounds the number of decoded blocks cached for
 	// pointer and fence-pointer reads when an index outer-leaf mode is enabled
 	// (for example, IndexOuterLeafMode=v2_blockptr or v2_fenceptr).
@@ -919,12 +924,6 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid value-log WAL fence mode %q", opts.ValueLog.WALFenceMode)
 	}
-	if indexOuterLeafMode == IndexOuterLeafModeV2FencePtr && opts.Durability != DurabilityWALOffRelaxed {
-		// For WAL-enabled v2_fenceptr, only simple_inline is supported.
-		if walFenceMode != ValueLogWALFenceModeSimpleInline {
-			return fmt.Errorf("treedb: unsupported value-log WAL fence mode %q for WAL-enabled index outer leaf mode %q (use %q)", opts.ValueLog.WALFenceMode, indexOuterLeafMode, ValueLogWALFenceModeSimpleInline)
-		}
-	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
 	}
@@ -954,6 +953,9 @@ func validateOptions(opts Options) error {
 	}
 	if opts.ValueLog.OuterLeafBlockRestartInterval < 0 {
 		return fmt.Errorf("treedb: invalid value-log outer-leaf block restart interval %d", opts.ValueLog.OuterLeafBlockRestartInterval)
+	}
+	if opts.ValueLog.OuterLeafBlobThresholdBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log outer-leaf blob threshold bytes %d", opts.ValueLog.OuterLeafBlobThresholdBytes)
 	}
 	if opts.ValueLog.IncompressibleHoldBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log incompressible hold bytes %d", opts.ValueLog.IncompressibleHoldBytes)

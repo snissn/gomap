@@ -13,6 +13,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -785,6 +786,21 @@ func (it *rewriteIterator) ensure() {
 func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) {
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: expected value log pointer, got file %d", ptr.FileID)
+	}
+	if it.vlogs != nil {
+		if payload, err := it.vlogs.Read(ptr); err == nil && outerleaf.HasMagic(payload) {
+			if block, decErr := outerleaf.DecodeBlock(payload, nil); decErr == nil {
+				if typed, typedErr := block.TypedEntries(nil); typedErr == nil {
+					for i := range typed {
+						if typed[i].Kind == outerleaf.EntryKindBlobRef {
+							// Conservative correctness fallback: keep pointers to nested
+							// blob-ref outer blocks unchanged until nested remap is active.
+							return ptr, nil
+						}
+					}
+				}
+			}
+		}
 	}
 	if it.ptrMap == nil {
 		it.ptrMap = make(map[recordKey]recordLoc)

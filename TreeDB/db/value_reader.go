@@ -39,7 +39,7 @@ func (r valueReader) FenceLookupEnabled() bool {
 	return strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr
 }
 
-func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte) ([]byte, error) {
+func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte, unsafe bool) ([]byte, error) {
 	if !outerleaf.ModeEnabled(r.outerLeafMode) {
 		return raw, nil
 	}
@@ -54,14 +54,24 @@ func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte) ([]byte, error) 
 		return nil, err
 	}
 	val, err := block.FirstValue()
-	if err != nil {
+	if err == nil {
+		return val, nil
+	}
+	if err != nil && err != outerleaf.ErrBlobRefEntry {
 		return nil, err
 	}
-	return val, nil
+	entry, found, lookupErr := block.EntryForKey(nil)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	if !found {
+		return nil, fmt.Errorf("value reader: outer-leaf first-entry lookup miss ptr=%+v", ptr)
+	}
+	return r.resolveLookupResult(entry, unsafe)
 }
 
 func (r valueReader) decodeValueForKey(ptr page.ValuePtr, key, raw []byte) ([]byte, error) {
-	decoded, found, err := r.decodeValueForKeyFound(ptr, key, raw)
+	decoded, found, err := r.decodeValueForKeyFound(ptr, key, raw, false)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +81,18 @@ func (r valueReader) decodeValueForKey(ptr page.ValuePtr, key, raw []byte) ([]by
 	return decoded, nil
 }
 
-func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte) ([]byte, bool, error) {
+func (r valueReader) decodeValueForKeyUnsafe(ptr page.ValuePtr, key, raw []byte) ([]byte, error) {
+	decoded, found, err := r.decodeValueForKeyFound(ptr, key, raw, true)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
+	}
+	return decoded, nil
+}
+
+func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, unsafe bool) ([]byte, bool, error) {
 	if !outerleaf.ModeEnabled(r.outerLeafMode) {
 		return raw, true, nil
 	}
@@ -85,14 +106,35 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte) 
 	if err != nil {
 		return nil, false, err
 	}
-	val, found, err := block.ValueForKey(key)
+	entry, found, err := block.EntryForKey(key)
 	if err != nil {
 		return nil, false, err
 	}
 	if !found {
 		return nil, false, nil
 	}
+	val, err := r.resolveLookupResult(entry, unsafe)
+	if err != nil {
+		return nil, false, err
+	}
 	return val, true, nil
+}
+
+func (r valueReader) resolveLookupResult(entry outerleaf.LookupResult, unsafe bool) ([]byte, error) {
+	switch entry.Kind {
+	case outerleaf.EntryKindInline:
+		return entry.Value, nil
+	case outerleaf.EntryKindBlobRef:
+		if !page.IsValueLogFileID(entry.BlobPtr.FileID) {
+			return nil, fmt.Errorf("value reader: invalid nested blob pointer file %d", entry.BlobPtr.FileID)
+		}
+		if unsafe {
+			return r.readRawUnsafe(entry.BlobPtr)
+		}
+		return r.readRaw(entry.BlobPtr)
+	default:
+		return nil, fmt.Errorf("value reader: unsupported outer-leaf entry kind %d", entry.Kind)
+	}
 }
 
 func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error) {
@@ -100,13 +142,24 @@ func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byt
 		return nil, false, nil
 	}
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
-		return block.ValueForKey(key)
+		entry, found, err := block.EntryForKey(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return nil, false, nil
+		}
+		val, err := r.resolveLookupResult(entry, true)
+		if err != nil {
+			return nil, false, err
+		}
+		return val, true, nil
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
 		return nil, false, err
 	}
-	return r.decodeValueForKeyFound(ptr, key, raw)
+	return r.decodeValueForKeyFound(ptr, key, raw, true)
 }
 
 func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockEntry, bool, error) {
@@ -125,13 +178,21 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 		}
 		block = decoded
 	}
-	decoded, err := block.Entries(nil)
+	decoded, err := block.TypedEntries(nil)
 	if err != nil {
 		return nil, true, err
 	}
 	entries := make([]tree.FenceBlockEntry, len(decoded))
 	for i := range decoded {
-		entries[i] = tree.FenceBlockEntry{Key: decoded[i].Key, Value: decoded[i].Value}
+		val, err := r.resolveLookupResult(outerleaf.LookupResult{
+			Kind:    decoded[i].Kind,
+			Value:   decoded[i].Value,
+			BlobPtr: decoded[i].BlobPtr,
+		}, true)
+		if err != nil {
+			return nil, true, err
+		}
+		entries[i] = tree.FenceBlockEntry{Key: decoded[i].Key, Value: val}
 	}
 	return entries, true, nil
 }
@@ -181,36 +242,50 @@ func (r valueReader) readRawUnsafe(ptr page.ValuePtr) ([]byte, error) {
 
 func (r valueReader) Read(ptr page.ValuePtr) ([]byte, error) {
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
-		return block.FirstValue()
+		entry, found, err := block.EntryForKey(nil)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("value reader: outer-leaf first-entry lookup miss ptr=%+v", ptr)
+		}
+		return r.resolveLookupResult(entry, false)
 	}
 	raw, err := r.readRaw(ptr)
 	if err != nil {
 		return nil, err
 	}
-	return r.decodeValue(ptr, raw)
+	return r.decodeValue(ptr, raw, false)
 }
 
 func (r valueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
-		return block.FirstValue()
+		entry, found, err := block.EntryForKey(nil)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("value reader: outer-leaf first-entry lookup miss ptr=%+v", ptr)
+		}
+		return r.resolveLookupResult(entry, true)
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
 		return nil, err
 	}
-	return r.decodeValue(ptr, raw)
+	return r.decodeValue(ptr, raw, true)
 }
 
 func (r valueReader) ReadForKey(ptr page.ValuePtr, key []byte) ([]byte, error) {
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
-		decoded, found, err := block.ValueForKey(key)
+		entry, found, err := block.EntryForKey(key)
 		if err != nil {
 			return nil, err
 		}
 		if !found {
 			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
 		}
-		return decoded, nil
+		return r.resolveLookupResult(entry, false)
 	}
 	raw, err := r.readRaw(ptr)
 	if err != nil {
@@ -221,20 +296,20 @@ func (r valueReader) ReadForKey(ptr page.ValuePtr, key []byte) ([]byte, error) {
 
 func (r valueReader) ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, error) {
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
-		decoded, found, err := block.ValueForKey(key)
+		entry, found, err := block.EntryForKey(key)
 		if err != nil {
 			return nil, err
 		}
 		if !found {
 			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
 		}
-		return decoded, nil
+		return r.resolveLookupResult(entry, true)
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
 		return nil, err
 	}
-	return r.decodeValueForKey(ptr, key, raw)
+	return r.decodeValueForKeyUnsafe(ptr, key, raw)
 }
 
 func (r valueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
@@ -259,12 +334,16 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 		return append(dst[:0], val...), nil
 	}
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
-		decoded, found, err := block.ValueForKey(key)
+		entry, found, err := block.EntryForKey(key)
 		if err != nil {
 			return nil, err
 		}
 		if !found {
 			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
+		}
+		decoded, err := r.resolveLookupResult(entry, true)
+		if err != nil {
+			return nil, err
 		}
 		if len(decoded) == 0 {
 			return dst[:0], nil
@@ -276,7 +355,7 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 		if err != nil {
 			return nil, err
 		}
-		decoded, err := r.decodeValueForKey(ptr, key, raw)
+		decoded, err := r.decodeValueForKeyUnsafe(ptr, key, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -289,7 +368,7 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 	if err != nil {
 		return nil, err
 	}
-	decoded, err := r.decodeValueForKey(ptr, key, val)
+	decoded, err := r.decodeValueForKeyUnsafe(ptr, key, val)
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +391,7 @@ func (r valueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) (
 			return nil, err
 		}
 		for i := range out {
-			decoded, decErr := r.decodeValue(ptrs[i], out[i])
+			decoded, decErr := r.decodeValue(ptrs[i], out[i], true)
 			if decErr != nil {
 				return nil, decErr
 			}
@@ -353,7 +432,7 @@ func (r valueReader) ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][
 			return nil, err
 		}
 		for i := range out {
-			decoded, decErr := r.decodeValueForKey(ptrs[i], keys[i], out[i])
+			decoded, decErr := r.decodeValueForKeyUnsafe(ptrs[i], keys[i], out[i])
 			if decErr != nil {
 				return nil, decErr
 			}

@@ -16,6 +16,7 @@ type savedTreeDBFlagState struct {
 	internalBaseDelta  bool
 	vlogAutoPolicy     string
 	walFenceMode       string
+	outerLeafBlobBytes int
 	outerLeafCache     int
 	disableWAL         bool
 	relaxedSync        bool
@@ -39,6 +40,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		internalBaseDelta:  *treedbIndexInternalBaseDelta,
 		vlogAutoPolicy:     *treedbVlogAutoPolicy,
 		walFenceMode:       *treedbWALFenceMode,
+		outerLeafBlobBytes: *treedbOuterLeafBlobThresholdBytes,
 		outerLeafCache:     *treedbOuterLeafBlockCacheEntries,
 		disableWAL:         *treedbDisableWAL,
 		relaxedSync:        *treedbRelaxedSync,
@@ -58,6 +60,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
 	*treedbVlogAutoPolicy = s.vlogAutoPolicy
 	*treedbWALFenceMode = s.walFenceMode
+	*treedbOuterLeafBlobThresholdBytes = s.outerLeafBlobBytes
 	*treedbOuterLeafBlockCacheEntries = s.outerLeafCache
 	*treedbDisableWAL = s.disableWAL
 	*treedbRelaxedSync = s.relaxedSync
@@ -76,6 +79,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexInternalBaseDelta = false
 	*treedbVlogAutoPolicy = "balanced"
 	*treedbWALFenceMode = "rid_join"
+	*treedbOuterLeafBlobThresholdBytes = 0
 	*treedbOuterLeafBlockCacheEntries = 0
 	*treedbDisableWAL = false
 	*treedbRelaxedSync = false
@@ -284,7 +288,7 @@ func TestBuildTreeDBOptions_WALFenceMode_V2FencePtrWALOn_AutoSimpleInline(t *tes
 	if !strings.Contains(formatted, "vlog.wal_fence_mode=simple_inline") {
 		t.Fatalf("resolved options missing auto-selected simple_inline mode: %q", formatted)
 	}
-	if !strings.Contains(formatted, "v2_fenceptr with WAL enabled requires vlog.wal_fence_mode=simple_inline") {
+	if !strings.Contains(formatted, "v2_fenceptr with WAL enabled defaults vlog.wal_fence_mode=simple_inline") {
 		t.Fatalf("resolved options missing WAL-on v2_fenceptr auto-select note: %q", formatted)
 	}
 }
@@ -317,7 +321,7 @@ func TestBuildTreeDBOptions_WALOnFastV2FencePtr_UsesWALOnAndSimpleInline(t *test
 	}
 }
 
-func TestBuildTreeDBOptions_WALFenceMode_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *testing.T) {
+func TestBuildTreeDBOptions_WALFenceMode_V2FencePtrWALOn_ExplicitRIDJoinAllowed(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
 
@@ -327,8 +331,16 @@ func TestBuildTreeDBOptions_WALFenceMode_V2FencePtrWALOn_ExplicitRIDJoinRejected
 	explicitFlags = map[string]bool{
 		"treedb-wal-fence-mode": true,
 	}
-	if _, _, err := buildTreeDBOptions(""); err == nil {
-		t.Fatalf("expected explicit rid_join to fail for WAL-enabled v2_fenceptr")
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("expected explicit rid_join to be accepted, got %v", err)
+	}
+	if got := opts.ValueLog.WALFenceMode; got != "rid_join" {
+		t.Fatalf("expected explicit rid_join to be preserved, got %q", got)
+	}
+	formatted := rep.formatText("")
+	if !strings.Contains(formatted, "vlog.wal_fence_mode=rid_join") {
+		t.Fatalf("resolved options missing rid_join WAL fence mode: %q", formatted)
 	}
 }
 
@@ -363,5 +375,26 @@ func TestBuildTreeDBOptions_WALFenceMode_InvalidRejected(t *testing.T) {
 	*treedbWALFenceMode = "bad_mode"
 	if _, _, err := buildTreeDBOptions(""); err == nil {
 		t.Fatalf("expected invalid wal fence mode to fail")
+	}
+}
+
+func TestBuildTreeDBOptions_OuterLeafBlobThresholdFlag(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbOuterLeafBlobThresholdBytes = 32768
+	explicitFlags = map[string]bool{
+		"treedb-vlog-outer-leaf-blob-threshold-bytes": true,
+	}
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if got, want := opts.ValueLog.OuterLeafBlobThresholdBytes, 32768; got != want {
+		t.Fatalf("OuterLeafBlobThresholdBytes=%d want=%d", got, want)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.outer_leaf_blob_threshold_bytes=32768B") {
+		t.Fatalf("resolved options missing blob threshold: %q", got)
 	}
 }

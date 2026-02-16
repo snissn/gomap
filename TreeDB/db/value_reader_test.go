@@ -171,3 +171,77 @@ func TestValueReaderReadUnsafeFenceBlockKeys_CacheHitSkipsReadUnsafe(t *testing.
 		t.Fatalf("readUnsafeCalls = %d, want 0 (cache hit should bypass raw value-log read)", reader.readUnsafeCalls)
 	}
 }
+
+func makeTestOuterLeafBlobRefPayload(t *testing.T, key []byte, blobPtr page.ValuePtr) ([]byte, page.ValuePtr) {
+	t.Helper()
+	encoded, err := outerleaf.EncodeSingleBlobRef(nil, key, blobPtr, uint8(ValueLogBlockSnappy), 16)
+	if err != nil {
+		t.Fatalf("encode blob-ref outer-leaf payload: %v", err)
+	}
+	outerPtr := page.ValuePtr{
+		FileID: page.ValueLogFileID(17),
+		Offset: 4096,
+		Length: uint32(len(encoded)),
+	}
+	return encoded, outerPtr
+}
+
+func TestValueReaderBlobRefResolution_ReadForKey(t *testing.T) {
+	key := []byte("blob-k")
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(23), Offset: 8192, Length: 9}
+	outerPayload, outerPtr := makeTestOuterLeafBlobRefPayload(t, key, blobPtr)
+	want := []byte("blob-data")
+	reader := &stubValueLogReader{
+		payloads: map[page.ValuePtr][]byte{
+			outerPtr: outerPayload,
+			blobPtr:  want,
+		},
+	}
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+	}
+	got, err := r.ReadForKey(outerPtr, key)
+	if err != nil {
+		t.Fatalf("ReadForKey: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value = %q, want %q", got, want)
+	}
+}
+
+func TestValueReaderBlobRefResolution_MissingNestedPointer(t *testing.T) {
+	key := []byte("blob-k")
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(24), Offset: 2048, Length: 7}
+	outerPayload, outerPtr := makeTestOuterLeafBlobRefPayload(t, key, blobPtr)
+	reader := &stubValueLogReader{
+		payloads: map[page.ValuePtr][]byte{
+			outerPtr: outerPayload,
+		},
+	}
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+	}
+	if _, err := r.ReadForKey(outerPtr, key); err == nil {
+		t.Fatalf("expected missing nested blob pointer read to fail")
+	}
+}
+
+func TestValueReaderBlobRefResolution_InvalidNestedPointerFile(t *testing.T) {
+	key := []byte("blob-k")
+	invalidBlobPtr := page.ValuePtr{FileID: 1, Offset: 2048, Length: 7}
+	outerPayload, outerPtr := makeTestOuterLeafBlobRefPayload(t, key, invalidBlobPtr)
+	reader := &stubValueLogReader{
+		payloads: map[page.ValuePtr][]byte{
+			outerPtr: outerPayload,
+		},
+	}
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+	}
+	if _, err := r.ReadForKey(outerPtr, key); err == nil {
+		t.Fatalf("expected invalid nested blob pointer file to fail")
+	}
+}

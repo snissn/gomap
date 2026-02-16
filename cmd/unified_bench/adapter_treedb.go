@@ -85,10 +85,11 @@ var (
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v1", "TreeDB: index outer-leaf mode (v1|v2_blockptr|v2_fenceptr)")
-	treedbWALFenceMode                    = flag.String("treedb-wal-fence-mode", "rid_join", "TreeDB: WAL fence mode for v2_fenceptr (rid_join|simple_inline). With WAL enabled, v2_fenceptr requires simple_inline.")
+	treedbWALFenceMode                    = flag.String("treedb-wal-fence-mode", "rid_join", "TreeDB: WAL fence mode for v2_fenceptr (rid_join|simple_inline). For WAL-on v2_fenceptr, default remains simple_inline unless explicitly set.")
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
 	treedbOuterLeafBlockRestart           = flag.Int("treedb-outer-leaf-block-restart-interval", 0, "TreeDB: experimental outer-leaf restart interval (0=default)")
+	treedbOuterLeafBlobThresholdBytes     = flag.Int("treedb-vlog-outer-leaf-blob-threshold-bytes", 0, "TreeDB: v2 fence-pointer blob threshold bytes (0=default)")
 	treedbOuterLeafBlockCacheEntries      = flag.Int("treedb-outer-leaf-block-cache-entries", 0, "TreeDB: decoded outer-leaf block cache entries (0=disabled)")
 
 	treedbDisableWAL             = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
@@ -341,6 +342,11 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	} else {
 		lines = append(lines, fmt.Sprintf("vlog.outer_leaf_block_target_bytes=%dB", target))
 	}
+	if threshold := r.opts.ValueLog.OuterLeafBlobThresholdBytes; threshold <= 0 {
+		lines = append(lines, "vlog.outer_leaf_blob_threshold_bytes=default")
+	} else {
+		lines = append(lines, fmt.Sprintf("vlog.outer_leaf_blob_threshold_bytes=%dB", threshold))
+	}
 	lines = append(lines, fmt.Sprintf("vlog.outer_leaf_block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.OuterLeafBlockCodec)))
 	if interval := r.opts.ValueLog.OuterLeafBlockRestartInterval; interval <= 0 {
 		lines = append(lines, "vlog.outer_leaf_block_restart_interval=default")
@@ -571,6 +577,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 			DictProbeIntervalBytes:           *treedbVlogDictProbeIntervalBytes,
 			DictMinPayloadSavingsRatio:       *treedbVlogDictMinSavingsRatio,
 			OuterLeafBlockRestartInterval:    *treedbOuterLeafBlockRestart,
+			OuterLeafBlobThresholdBytes:      *treedbOuterLeafBlobThresholdBytes,
 			OuterLeafBlockCacheEntries:       *treedbOuterLeafBlockCacheEntries,
 		},
 	}
@@ -605,12 +612,9 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	walFenceModeExplicit := flagExplicit("treedb-wal-fence-mode")
 	walEnabled := opts.Durability != treedb.DurabilityWALOffRelaxed
 	if opts.IndexOuterLeafMode == treedb.IndexOuterLeafModeV2FencePtr && walEnabled {
-		if walFenceMode != treedb.ValueLogWALFenceModeSimpleInline {
-			if walFenceModeExplicit {
-				return treedb.Options{}, treeDBOptionsReport{}, fmt.Errorf("unsupported -treedb-wal-fence-mode=%q for WAL-enabled -treedb-index-outer-leaf-mode=v2_fenceptr (use simple_inline)", *treedbWALFenceMode)
-			}
+		if !walFenceModeExplicit && walFenceMode != treedb.ValueLogWALFenceModeSimpleInline {
 			walFenceMode = treedb.ValueLogWALFenceModeSimpleInline
-			notes = append(notes, "v2_fenceptr with WAL enabled requires vlog.wal_fence_mode=simple_inline; auto-selecting simple_inline")
+			notes = append(notes, "v2_fenceptr with WAL enabled defaults vlog.wal_fence_mode=simple_inline unless explicitly set")
 		}
 	}
 	opts.ValueLog.WALFenceMode = walFenceMode

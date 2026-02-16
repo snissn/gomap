@@ -1214,7 +1214,28 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 	}
 }
 
-func TestCachingDB_Open_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *testing.T) {
+func TestCachingDB_Open_V2FencePtrWALOn_ExplicitRIDJoinAllowed(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{
+		IndexOuterLeafMode:   db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode: string(db.ValueLogWALFenceModeRIDJoin),
+	})
+	if err != nil {
+		t.Fatalf("expected WAL-enabled v2_fenceptr rid_join to be accepted, got err=%v", err)
+	}
+	defer cache.Close()
+	if got := cache.valueLogWALFenceMode; got != string(db.ValueLogWALFenceModeRIDJoin) {
+		t.Fatalf("expected WAL-on v2_fenceptr to keep explicit rid_join, got %q", got)
+	}
+}
+
+func TestCachingDB_Open_ValueLogOuterLeafBlobThresholdBytes_NegativeRejected(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
@@ -1223,13 +1244,12 @@ func TestCachingDB_Open_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *testing.T) {
 	defer backend.Close()
 
 	_, err = Open(dir, backend, Options{
-		IndexOuterLeafMode:   db.IndexOuterLeafModeV2FencePtr,
-		ValueLogWALFenceMode: string(db.ValueLogWALFenceModeRIDJoin),
+		ValueLogOuterLeafBlobThresholdBytes: -1,
 	})
 	if err == nil {
-		t.Fatalf("expected WAL-enabled v2_fenceptr rid_join to be rejected")
+		t.Fatalf("expected negative blob threshold to be rejected")
 	}
-	if !strings.Contains(err.Error(), "WAL-enabled index outer leaf mode") {
+	if !strings.Contains(err.Error(), "blob threshold") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1354,6 +1374,134 @@ func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
 	}
 	if leafEntries >= totalKeys {
 		t.Fatalf("expected fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	}
+}
+
+func TestCachingDB_WALOnFenceModeRIDJoin_HybridOversizedUsesRID(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                      1 << 30,
+		MemtableShards:                      1,
+		ForceValueLogPointers:               true,
+		ValueLogPointerThreshold:            1,
+		IndexOuterLeafMode:                  db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode:                string(db.ValueLogWALFenceModeRIDJoin),
+		ValueLogOuterLeafBlockCodec:         uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes:   1 << 20,
+		ValueLogOuterLeafBlobThresholdBytes: 256,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	smallKey := []byte("a-small")
+	largeKey := []byte("z-large")
+	smallVal := bytes.Repeat([]byte("s"), 128)  // C1
+	largeVal := bytes.Repeat([]byte("L"), 2048) // C2
+
+	if err := cache.SetSync(smallKey, smallVal); err != nil {
+		t.Fatalf("SetSync(small): %v", err)
+	}
+	if err := cache.SetSync(largeKey, largeVal); err != nil {
+		t.Fatalf("SetSync(large): %v", err)
+	}
+
+	inlineOps, ridOps, _ := countCommitLogOpsInDir(t, cache.dir)
+	if inlineOps < 1 {
+		t.Fatalf("expected at least one inline WAL set op for C1 write, got %d", inlineOps)
+	}
+	if ridOps < 1 {
+		t.Fatalf("expected at least one RID WAL set op for C2 write, got %d", ridOps)
+	}
+
+	shard := &cache.mutableShards[0]
+	shard.mu.Lock()
+	iter := shard.mem.NewIterator(nil, nil)
+	flagsByKey := map[string]byte{}
+	for iter.Valid() {
+		k := string(iter.UnsafeKey())
+		_, _, flags := iter.UnsafeEntry()
+		flagsByKey[k] = flags
+		iter.Next()
+	}
+	_ = iter.Close()
+	shard.mu.Unlock()
+
+	if flagsByKey[string(smallKey)]&node.FlagPointer != 0 {
+		t.Fatalf("expected C1 key to remain inline before checkpoint")
+	}
+	if flagsByKey[string(largeKey)]&node.FlagPointer == 0 {
+		t.Fatalf("expected C2 key to publish pointer before checkpoint")
+	}
+
+	gotSmall, err := cache.Get(smallKey)
+	if err != nil {
+		t.Fatalf("Get(small): %v", err)
+	}
+	if !bytes.Equal(gotSmall, smallVal) {
+		t.Fatalf("small value mismatch")
+	}
+	gotLarge, err := cache.Get(largeKey)
+	if err != nil {
+		t.Fatalf("Get(large): %v", err)
+	}
+	if !bytes.Equal(gotLarge, largeVal) {
+		t.Fatalf("large value mismatch")
+	}
+
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	stats := cache.Stats()
+	if got := stats["treedb.cache.v2_fenceptr.wal_fence_mode"]; got != "rid_join" {
+		t.Fatalf("wal_fence_mode stat mismatch: got %q", got)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	entry, err := snap.GetEntry(largeKey)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("GetEntry(large): %v", err)
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		t.Fatalf("expected persisted pointer for large key, flags=%#x file_id=%#x", entry.Flags, entry.ValuePtr.FileID)
+	}
+
+	rawOuter, err := cache.valueLogReader.Read(entry.ValuePtr)
+	if err != nil {
+		t.Fatalf("read outer payload: %v", err)
+	}
+	decoded, ok, found, _, err := outerleaf.DecodeEntryForKey(rawOuter, largeKey, nil)
+	if err != nil {
+		t.Fatalf("DecodeEntryForKey(large): %v", err)
+	}
+	if !ok || !found {
+		t.Fatalf("DecodeEntryForKey(large) ok=%v found=%v", ok, found)
+	}
+	if decoded.Kind != outerleaf.EntryKindBlobRef {
+		t.Fatalf("expected outer payload blob-ref entry, got kind=%d", decoded.Kind)
 	}
 }
 

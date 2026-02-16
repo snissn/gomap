@@ -77,8 +77,8 @@ func TestOpen_ValueLogWALFenceMode_InvalidRejected(t *testing.T) {
 	}
 }
 
-func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *testing.T) {
-	_, err := Open(Options{
+func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOn_ExplicitRIDJoinAllowed(t *testing.T) {
+	dbRIDJoin, err := Open(Options{
 		Dir:                t.TempDir(),
 		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
 		Durability:         DurabilityWALOnRelaxed,
@@ -86,11 +86,11 @@ func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOn_ExplicitRIDJoinRejected(t *te
 			WALFenceMode: ValueLogWALFenceModeRIDJoin,
 		},
 	})
-	if err == nil {
-		t.Fatalf("expected WAL-enabled v2_fenceptr rid_join to be rejected")
+	if err != nil {
+		t.Fatalf("open WAL-on rid_join: %v", err)
 	}
-	if !strings.Contains(err.Error(), "WAL-enabled index outer leaf mode") {
-		t.Fatalf("unexpected error: %v", err)
+	if err := dbRIDJoin.Close(); err != nil {
+		t.Fatalf("close WAL-on rid_join: %v", err)
 	}
 }
 
@@ -122,5 +122,20 @@ func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOff_ExplicitRIDJoinAllowed(t *te
 	}
 	if err := dbWALOff.Close(); err != nil {
 		t.Fatalf("close WAL-off rid_join: %v", err)
+	}
+}
+
+func TestOpen_ValueLogOuterLeafBlobThresholdBytes_NegativeRejected(t *testing.T) {
+	_, err := Open(Options{
+		Dir: t.TempDir(),
+		ValueLog: ValueLogOptions{
+			OuterLeafBlobThresholdBytes: -1,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "outer-leaf blob threshold bytes") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

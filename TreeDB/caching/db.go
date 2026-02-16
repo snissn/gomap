@@ -591,6 +591,40 @@ func normalizeValueLogWALFenceMode(mode string) string {
 	}
 }
 
+const defaultOuterLeafBlobThresholdMin = 16 << 10
+
+func (db *DB) effectiveOuterLeafBlobThresholdBytes() int {
+	if db == nil {
+		return defaultOuterLeafBlobThresholdMin
+	}
+	if db.outerLeafBlobThresholdBytes > 0 {
+		return db.outerLeafBlobThresholdBytes
+	}
+	target := db.outerLeafBlockTargetBytes
+	if target <= 0 {
+		target = outerleaf.NormalizeBlockTargetBytes(0)
+	}
+	derived := 4 * target
+	if derived < defaultOuterLeafBlobThresholdMin {
+		derived = defaultOuterLeafBlobThresholdMin
+	}
+	return derived
+}
+
+func (db *DB) oversizedOuterLeafValue(value []byte) bool {
+	if db == nil || !db.outerLeafFenceV2Enabled() {
+		return false
+	}
+	return len(value) >= db.effectiveOuterLeafBlobThresholdBytes()
+}
+
+func (db *DB) fenceRIDJoinHybridEnabled() bool {
+	return db != nil &&
+		db.outerLeafFenceV2Enabled() &&
+		!db.disableJournal &&
+		db.valueLogWALFenceMode == string(backenddb.ValueLogWALFenceModeRIDJoin)
+}
+
 func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	if !db.outerLeafV2Enabled() {
 		return value, nil
@@ -598,11 +632,18 @@ func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	return outerleaf.EncodeSingle(nil, key, value, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
 }
 
+func (db *DB) encodeOuterLeafBlobRef(key []byte, ptr page.ValuePtr) ([]byte, error) {
+	if !db.outerLeafV2Enabled() {
+		return nil, fmt.Errorf("cachingdb: blob-ref outer-leaf encoding requires v2 mode")
+	}
+	return outerleaf.EncodeSingleBlobRef(nil, key, ptr, db.outerLeafBlockCodec, db.outerLeafBlockRestart)
+}
+
 func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	if !db.outerLeafV2Enabled() {
 		return value, nil
 	}
-	blockValue, ok, found, _, err := outerleaf.DecodeValueForKey(value, key, nil)
+	entry, ok, found, _, err := outerleaf.DecodeEntryForKey(value, key, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -612,7 +653,13 @@ func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	if !found {
 		return nil, fmt.Errorf("cachingdb: outer-leaf key lookup miss")
 	}
-	return blockValue, nil
+	if entry.Kind == outerleaf.EntryKindBlobRef {
+		if db.valueLogReader == nil {
+			return nil, fmt.Errorf("cachingdb: blob-ref entry requires value-log reader")
+		}
+		return db.valueLogReader.Read(entry.BlobPtr)
+	}
+	return entry.Value, nil
 }
 
 func allOuterLeafRecordValues(records []valuelog.Record) bool {
@@ -839,18 +886,19 @@ func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, 
 func (db *DB) deferredValueLogEnabled() bool {
 	// Fence-pointer outer-leaf mode benefits from flush-time regrouping so
 	// singleton writes can coalesce into larger outer blocks before value-log
-	// append, reducing index pointer fanout. WAL-on may opt into this path via
-	// WALFenceMode=simple_inline.
+	// append, reducing index pointer fanout.
+	//
+	// WAL-on v2_fenceptr modes:
+	//   - simple_inline: deferred for all pointer-eligible values
+	//   - rid_join: deferred for non-oversized pointer-eligible values (C1),
+	//     while oversized values (C2) may still take immediate pointer paths.
 	if db == nil {
 		return false
 	}
 	if !db.outerLeafFenceV2Enabled() || !db.valueLogEnabled() || !db.allowValueLogPointers() {
 		return false
 	}
-	if db.disableJournal {
-		return true
-	}
-	return db.valueLogWALFenceMode == string(backenddb.ValueLogWALFenceModeSimpleInline)
+	return true
 }
 
 func (db *DB) deferredValueLogNeedsSingleLaneRegroup() bool {
@@ -2655,6 +2703,9 @@ type Options struct {
 	// ValueLogOuterLeafBlockRestartInterval controls restart cadence encoded in
 	// v2 outer-leaf payload metadata (0=default).
 	ValueLogOuterLeafBlockRestartInterval int
+	// ValueLogOuterLeafBlobThresholdBytes controls when v2 fence-pointer outer
+	// entries use blob references instead of inline bytes (0=default).
+	ValueLogOuterLeafBlobThresholdBytes int
 	// ValueLogIncompressibleHoldBytes configures auto-mode incompressible hold
 	// window bytes (0=default).
 	ValueLogIncompressibleHoldBytes int
@@ -2808,6 +2859,7 @@ type DB struct {
 	outerLeafBlockTargetBytes      int
 	outerLeafBlockCodec            uint8
 	outerLeafBlockRestart          int
+	outerLeafBlobThresholdBytes    int
 	forceValueLogPointers          bool
 	valueLogRawWritevMinAvgBytes   int
 	valueLogRawWritevMinRecords    int
@@ -3656,14 +3708,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(opts.ValueLogOuterLeafBlockTargetBytes)
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
 	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
+	outerLeafBlobThreshold := opts.ValueLogOuterLeafBlobThresholdBytes
+	if outerLeafBlobThreshold < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log outer leaf blob threshold bytes %d", outerLeafBlobThreshold)
+	}
 	disableJournal := opts.DisableWAL
 	if indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr && !disableJournal {
-		// WAL-enabled v2_fenceptr only supports simple_inline. Keep explicit
-		// incompatible modes as hard errors; otherwise default to simple_inline.
+		// Keep existing default semantics: WAL-on v2_fenceptr defaults to
+		// simple_inline unless caller explicitly chooses a compatible mode.
 		if rawValueLogWALFenceMode == "" {
 			valueLogWALFenceMode = string(backenddb.ValueLogWALFenceModeSimpleInline)
-		} else if valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
-			return nil, fmt.Errorf("cachingdb: unsupported value-log WAL fence mode %q for WAL-enabled index outer leaf mode %q (use %q)", opts.ValueLogWALFenceMode, indexOuterLeafMode, backenddb.ValueLogWALFenceModeSimpleInline)
 		}
 	}
 	if writerFlushMaxMemtablesUnset &&
@@ -3927,6 +3981,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		outerLeafBlockTargetBytes:            outerLeafBlockTarget,
 		outerLeafBlockCodec:                  outerLeafBlockCodec,
 		outerLeafBlockRestart:                outerLeafBlockRestart,
+		outerLeafBlobThresholdBytes:          outerLeafBlobThreshold,
 		forceValueLogPointers:                opts.ForceValueLogPointers,
 		valueLogRawWritevMinAvgBytes:         valueLogRawWritevMinAvgBytes,
 		valueLogRawWritevMinRecords:          valueLogRawWritevMinRecords,
@@ -7197,6 +7252,56 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	return db.appendValueLogOneWithKey(l, dictID, dict, rid, nil, value, durability)
 }
 
+// appendFenceRIDJoinOversizedOne materializes an oversized v2_fenceptr value in
+// two records:
+//  1. blob record (raw user value)
+//  2. outer-leaf v3 single-entry blob-ref record
+//
+// WAL RID publication always references the outer record RID.
+func (db *DB) appendFenceRIDJoinOversizedOne(l *lane, dictID uint64, key, value []byte, durability journalDurability) (outerPtr page.ValuePtr, outerRID uint64, retainPath string, err error) {
+	if db == nil {
+		return page.ValuePtr{}, 0, "", errWALUnavailable
+	}
+	if l == nil {
+		return page.ValuePtr{}, 0, "", errWALUnavailable
+	}
+	if !db.splitValueLogEnabled() {
+		return page.ValuePtr{}, 0, "", errWALUnavailable
+	}
+	startRID := db.nextRID.Add(2) - 1
+	blobRID := startRID
+	outerRID = startRID + 1
+
+	blobRecord := valuelog.Record{RID: blobRID, Value: value}
+	blobPtrs, appendErr := db.appendValueLog(l, dictID, nil, []valuelog.Record{blobRecord}, durability)
+	if appendErr != nil {
+		return page.ValuePtr{}, 0, "", appendErr
+	}
+	if len(blobPtrs) != 1 {
+		putValueLogPtrs(blobPtrs)
+		return page.ValuePtr{}, 0, "", fmt.Errorf("cachingdb: expected 1 blob pointer, got %d", len(blobPtrs))
+	}
+	blobPtr := blobPtrs[0]
+	putValueLogPtrs(blobPtrs)
+
+	outerPayload, encodeErr := db.encodeOuterLeafBlobRef(key, blobPtr)
+	if encodeErr != nil {
+		return page.ValuePtr{}, 0, "", encodeErr
+	}
+	outerRecord := valuelog.Record{RID: outerRID, Value: outerPayload}
+	outerPtrs, appendErr := db.appendValueLog(l, dictID, nil, []valuelog.Record{outerRecord}, durability)
+	if appendErr != nil {
+		return page.ValuePtr{}, 0, "", appendErr
+	}
+	if len(outerPtrs) != 1 {
+		putValueLogPtrs(outerPtrs)
+		return page.ValuePtr{}, 0, "", fmt.Errorf("cachingdb: expected 1 outer pointer, got %d", len(outerPtrs))
+	}
+	outerPtr = outerPtrs[0]
+	putValueLogPtrs(outerPtrs)
+	return outerPtr, outerRID, db.currentValueLogPath(l), nil
+}
+
 func (db *DB) appendValueLogOneWithKey(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
@@ -8772,8 +8877,10 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	eligible := db.forceValueLogPointers || len(value) > db.valueLogThresholdForKey(key)
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
+	hybridRIDJoin := allowPointers && db.fenceRIDJoinHybridEnabled()
+	oversized := hybridRIDJoin && db.oversizedOuterLeafValue(value)
 	deferPointers := false
-	if allowPointers && db.deferredValueLogEnabled() {
+	if allowPointers && db.deferredValueLogEnabled() && !(hybridRIDJoin && oversized) {
 		// In deferred mode we keep the mutable entry inline and regroup+append to
 		// value-log at flush time.
 		deferPointers = true
@@ -8835,22 +8942,35 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 			dictID = db.dictCurrentCached.Load()
 		}
 
-		rid := db.nextRID.Add(1)
-		var retain string
-		appendPtr, retain, appendErr := db.appendValueLogOneWithKey(lane, dictID, nil, rid, key, value, durability)
-		if appendErr != nil {
-			db.writeMu.RUnlock()
-			return appendErr
+		walRID := uint64(0)
+		if hybridRIDJoin && oversized {
+			outerPtr, outerRID, retain, err := db.appendFenceRIDJoinOversizedOne(lane, dictID, key, value, durability)
+			if err != nil {
+				db.writeMu.RUnlock()
+				return err
+			}
+			ptr = outerPtr
+			walRID = outerRID
+			retainPath = retain
+		} else {
+			rid := db.nextRID.Add(1)
+			var retain string
+			appendPtr, retain, appendErr := db.appendValueLogOneWithKey(lane, dictID, nil, rid, key, value, durability)
+			if appendErr != nil {
+				db.writeMu.RUnlock()
+				return appendErr
+			}
+			ptr = appendPtr
+			walRID = rid
+			retainPath = retain
 		}
-		ptr = appendPtr
 		usePointer = true
 		if debugPtr {
 			db.debugPtrUsed.Add(1)
 		}
-		retainPath = retain
 
 		if !db.disableJournal {
-			rec := logRecord{Op: logOpSetRID, Key: key, RID: rid}
+			rec := logRecord{Op: logOpSetRID, Key: key, RID: walRID}
 			if err := db.appendWALOne(lane, rec, durability); err != nil {
 				db.writeMu.RUnlock()
 				return err
@@ -13475,30 +13595,60 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			eligibleIdxs = append(eligibleIdxs, i)
 		}
 	}
-	eligibleCount := len(eligibleIdxs)
+	eligibleCountTotal := len(eligibleIdxs)
 	deferredFencePath := b.db.deferredValueLogEnabled()
-	allowPointers := eligibleCount > 0 && valueLogEnabled && b.db.allowValueLogPointers()
+	allowPointers := eligibleCountTotal > 0 && valueLogEnabled && b.db.allowValueLogPointers()
+	hybridRIDJoin := allowPointers && b.db.fenceRIDJoinHybridEnabled()
 	if allowPointers && deferredFencePath {
-		// Deferred fence path: keep values inline in mutable memtables and
-		// materialize grouped value-log pointers once at flush time.
-		var deferredBytes uint64
-		for _, idx := range eligibleIdxs {
-			op := &b.entries[idx]
-			deferredBytes += uint64(len(op.Key) + len(op.Value))
+		if hybridRIDJoin {
+			// WAL-on v2_fenceptr rid_join hybrid:
+			// - C1 (non-oversized) values stay deferred-inline and materialize at flush.
+			// - C2 (oversized) values take immediate pointer publication with OpSetRID.
+			immediate := eligibleIdxs[:0]
+			deferredCount := 0
+			var deferredBytes uint64
+			for _, idx := range eligibleIdxs {
+				op := &b.entries[idx]
+				if b.db.oversizedOuterLeafValue(op.Value) {
+					immediate = append(immediate, idx)
+					continue
+				}
+				deferredCount++
+				deferredBytes += uint64(len(op.Key) + len(op.Value))
+			}
+			if deferredCount > 0 {
+				b.db.recordDeferredFenceEnqueued(deferredCount, deferredBytes)
+			}
+			eligibleIdxs = immediate
+			b.eligibleIdxs = eligibleIdxs
+			if len(eligibleIdxs) == 0 {
+				allowPointers = false
+			}
+		} else {
+			// Deferred fence path: keep values inline in mutable memtables and
+			// materialize grouped value-log pointers once at flush time.
+			var deferredBytes uint64
+			for _, idx := range eligibleIdxs {
+				op := &b.entries[idx]
+				deferredBytes += uint64(len(op.Key) + len(op.Value))
+			}
+			b.db.recordDeferredFenceEnqueued(eligibleCountTotal, deferredBytes)
+			allowPointers = false
 		}
-		b.db.recordDeferredFenceEnqueued(eligibleCount, deferredBytes)
-		allowPointers = false
 	} else if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
 		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
 		// so repeated overwrites can coalesce in the memtable before hitting disk.
 		allowPointers = false
 	}
-	if debugPtr && eligibleCount > 0 {
-		b.db.debugPtrEligible.Add(int64(eligibleCount))
+	eligibleCount := len(eligibleIdxs)
+	if debugPtr && eligibleCountTotal > 0 {
+		b.db.debugPtrEligible.Add(int64(eligibleCountTotal))
 		if !valueLogEnabled {
-			b.db.debugPtrDisabled.Add(int64(eligibleCount))
+			b.db.debugPtrDisabled.Add(int64(eligibleCountTotal))
 		} else if !allowPointers {
-			b.db.debugPtrDenied.Add(int64(eligibleCount))
+			b.db.debugPtrDenied.Add(int64(eligibleCountTotal))
+		} else if hybridRIDJoin && eligibleCountTotal > eligibleCount {
+			b.db.debugPtrDenied.Add(int64(eligibleCountTotal - eligibleCount))
 		}
 	}
 	multiLanePointers := allowPointers &&
@@ -13538,7 +13688,32 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			b.db.writeMu.RUnlock()
 			return err
 		}
-		if multiLanePointers {
+		if hybridRIDJoin {
+			used := 0
+			for _, idx := range eligibleIdxs {
+				op := &b.entries[idx]
+				outerPtr, outerRID, retainPath, err := b.db.appendFenceRIDJoinOversizedOne(lane, b.dictID, op.Key, op.Value, durability)
+				if err != nil {
+					b.db.writeMu.RUnlock()
+					return err
+				}
+				op.ValuePtr = outerPtr
+				op.IsPtr = true
+				if b.db.memtableValueLogPointers {
+					op.Value = nil
+				}
+				if rids != nil {
+					rids[idx] = outerRID
+				}
+				if retainPath != "" {
+					b.db.markValueLogRetain(retainPath)
+				}
+				used++
+			}
+			if debugPtr && used > 0 {
+				b.db.debugPtrUsed.Add(int64(used))
+			}
+		} else if multiLanePointers {
 			type laneValueLogBatch struct {
 				laneID      int
 				idxs        []int

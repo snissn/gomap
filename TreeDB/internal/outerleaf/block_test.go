@@ -7,6 +7,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func pseudoRandomBytes(n int) []byte {
@@ -448,6 +449,100 @@ func TestDecodedBlockEntries(t *testing.T) {
 	}
 	if len(keys) != 1 || !bytes.Equal(keys[0], v1Key) {
 		t.Fatalf("Keys(v1) mismatch")
+	}
+}
+
+func TestEncodeDecodeTypedEntriesV3InlineRoundTrip(t *testing.T) {
+	entries := []TypedEntry{
+		{Key: []byte("k1"), Kind: EntryKindInline, Value: []byte("value-1")},
+	}
+	enc, err := EncodeTypedEntries(nil, entries, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	typed, err := blk.TypedEntries(nil)
+	if err != nil {
+		t.Fatalf("TypedEntries: %v", err)
+	}
+	if len(typed) != 1 {
+		t.Fatalf("TypedEntries len=%d want=1", len(typed))
+	}
+	if typed[0].Kind != EntryKindInline {
+		t.Fatalf("entry kind=%d want=%d", typed[0].Kind, EntryKindInline)
+	}
+	if !bytes.Equal(typed[0].Key, entries[0].Key) || !bytes.Equal(typed[0].Value, entries[0].Value) {
+		t.Fatalf("typed entry mismatch")
+	}
+}
+
+func TestEncodeDecodeTypedEntriesV3BlobRefRoundTrip(t *testing.T) {
+	ptr := page.ValuePtr{FileID: page.ValueLogFileID(2), Offset: 1234, Length: 56}
+	enc, err := EncodeSingleBlobRef(nil, []byte("blob-k"), ptr, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeSingleBlobRef: %v", err)
+	}
+
+	_, ok, found, _, err := DecodeValueForKey(enc, []byte("blob-k"), nil)
+	if err == nil {
+		t.Fatalf("expected DecodeValueForKey to require typed blob-ref resolution")
+	}
+	if err != ErrBlobRefEntry {
+		t.Fatalf("DecodeValueForKey err=%v want=%v", err, ErrBlobRefEntry)
+	}
+	if !ok || !found {
+		t.Fatalf("DecodeValueForKey ok=%v found=%v", ok, found)
+	}
+
+	entry, ok, found, _, err := DecodeEntryForKey(enc, []byte("blob-k"), nil)
+	if err != nil {
+		t.Fatalf("DecodeEntryForKey: %v", err)
+	}
+	if !ok || !found {
+		t.Fatalf("DecodeEntryForKey ok=%v found=%v", ok, found)
+	}
+	if entry.Kind != EntryKindBlobRef {
+		t.Fatalf("entry kind=%d want=%d", entry.Kind, EntryKindBlobRef)
+	}
+	if entry.BlobPtr != ptr {
+		t.Fatalf("blob ptr mismatch got=%+v want=%+v", entry.BlobPtr, ptr)
+	}
+}
+
+func TestEncodeDecodeTypedEntriesV3MixedLookup(t *testing.T) {
+	ptr := page.ValuePtr{FileID: page.ValueLogFileID(3), Offset: 4321, Length: 88}
+	entries := []TypedEntry{
+		{Key: []byte("k1"), Kind: EntryKindInline, Value: []byte("inline-1")},
+		{Key: []byte("k2"), Kind: EntryKindBlobRef, BlobPtr: ptr},
+		{Key: []byte("k3"), Kind: EntryKindInline, Value: []byte("inline-3")},
+	}
+	enc, err := EncodeTypedEntries(nil, entries, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	got1, found, err := blk.EntryForKey([]byte("k1"))
+	if err != nil || !found {
+		t.Fatalf("EntryForKey(k1) found=%v err=%v", found, err)
+	}
+	if got1.Kind != EntryKindInline || !bytes.Equal(got1.Value, []byte("inline-1")) {
+		t.Fatalf("EntryForKey(k1) mismatch")
+	}
+	got2, found, err := blk.EntryForKey([]byte("k2"))
+	if err != nil || !found {
+		t.Fatalf("EntryForKey(k2) found=%v err=%v", found, err)
+	}
+	if got2.Kind != EntryKindBlobRef || got2.BlobPtr != ptr {
+		t.Fatalf("EntryForKey(k2) mismatch got=%+v", got2)
+	}
+	if _, _, err := blk.ValueForKey([]byte("k2")); err != ErrBlobRefEntry {
+		t.Fatalf("ValueForKey(k2) err=%v want=%v", err, ErrBlobRefEntry)
 	}
 }
 
