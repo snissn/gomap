@@ -33,6 +33,26 @@ func (s *stubValueLogReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	return raw, nil
 }
 
+type stubValueLogAppendReader struct {
+	stubValueLogReader
+	readUnsafeAppendCalls int
+}
+
+func (s *stubValueLogAppendReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
+	s.readUnsafeAppendCalls++
+	raw, ok := s.payloads[ptr]
+	if !ok {
+		return nil, fmt.Errorf("missing payload for ptr %+v", ptr)
+	}
+	if cap(dst) < len(raw) {
+		dst = make([]byte, len(raw))
+	} else {
+		dst = dst[:len(raw)]
+	}
+	copy(dst, raw)
+	return dst, nil
+}
+
 func makeTestOuterLeafPayload(t *testing.T) ([]byte, *outerleaf.DecodedBlock, page.ValuePtr) {
 	t.Helper()
 	encoded, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
@@ -243,5 +263,77 @@ func TestValueReaderBlobRefResolution_InvalidNestedPointerFile(t *testing.T) {
 	}
 	if _, err := r.ReadForKey(outerPtr, key); err == nil {
 		t.Fatalf("expected invalid nested blob pointer file to fail")
+	}
+}
+
+func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_UsesAppendReader(t *testing.T) {
+	key := []byte("blob-k")
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(31), Offset: 16384, Length: 9}
+	outerPayload, outerPtr := makeTestOuterLeafBlobRefPayload(t, key, blobPtr)
+	want := []byte("blob-data")
+	reader := &stubValueLogAppendReader{
+		stubValueLogReader: stubValueLogReader{
+			payloads: map[page.ValuePtr][]byte{
+				outerPtr: outerPayload,
+				blobPtr:  want,
+			},
+		},
+	}
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+	}
+
+	got, err := r.ReadUnsafeAppendForKey(outerPtr, key, nil)
+	if err != nil {
+		t.Fatalf("ReadUnsafeAppendForKey: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value = %q, want %q", got, want)
+	}
+	if reader.readUnsafeAppendCalls != 2 {
+		t.Fatalf("readUnsafeAppendCalls = %d, want 2 (outer + blob)", reader.readUnsafeAppendCalls)
+	}
+	if reader.readUnsafeCalls != 0 {
+		t.Fatalf("readUnsafeCalls = %d, want 0", reader.readUnsafeCalls)
+	}
+}
+
+func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_CacheHitUsesAppendReader(t *testing.T) {
+	key := []byte("blob-k")
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(33), Offset: 32768, Length: 9}
+	outerPayload, outerPtr := makeTestOuterLeafBlobRefPayload(t, key, blobPtr)
+	block, err := outerleaf.DecodeBlock(outerPayload, nil)
+	if err != nil {
+		t.Fatalf("decode outer block: %v", err)
+	}
+	want := []byte("blob-data")
+	reader := &stubValueLogAppendReader{
+		stubValueLogReader: stubValueLogReader{
+			payloads: map[page.ValuePtr][]byte{
+				blobPtr: want,
+			},
+		},
+	}
+	cache := newOuterLeafBlockCache(8)
+	cache.put(newOuterLeafBlockKey(outerPtr), block)
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+
+	got, err := r.ReadUnsafeAppendForKey(outerPtr, key, nil)
+	if err != nil {
+		t.Fatalf("ReadUnsafeAppendForKey: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value = %q, want %q", got, want)
+	}
+	if reader.readUnsafeAppendCalls != 1 {
+		t.Fatalf("readUnsafeAppendCalls = %d, want 1 (blob only)", reader.readUnsafeAppendCalls)
+	}
+	if reader.readUnsafeCalls != 0 {
+		t.Fatalf("readUnsafeCalls = %d, want 0", reader.readUnsafeCalls)
 	}
 }

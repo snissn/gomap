@@ -137,6 +137,47 @@ func (r valueReader) resolveLookupResult(entry outerleaf.LookupResult, unsafe bo
 	}
 }
 
+func (r valueReader) resolveLookupResultAppend(entry outerleaf.LookupResult, dst []byte) ([]byte, error) {
+	switch entry.Kind {
+	case outerleaf.EntryKindInline:
+		if len(entry.Value) == 0 {
+			return dst[:0], nil
+		}
+		var out []byte
+		if cap(dst) >= len(entry.Value) {
+			out = dst[:len(entry.Value)]
+		} else {
+			out = make([]byte, len(entry.Value))
+		}
+		copy(out, entry.Value)
+		return out, nil
+	case outerleaf.EntryKindBlobRef:
+		if !page.IsValueLogFileID(entry.BlobPtr.FileID) {
+			return nil, fmt.Errorf("value reader: invalid nested blob pointer file %d", entry.BlobPtr.FileID)
+		}
+		if app, ok := r.vlogs.(unsafeAppendReader); ok {
+			return app.ReadUnsafeAppend(entry.BlobPtr, dst[:0])
+		}
+		val, err := r.readRawUnsafe(entry.BlobPtr)
+		if err != nil {
+			return nil, err
+		}
+		if len(val) == 0 {
+			return dst[:0], nil
+		}
+		var out []byte
+		if cap(dst) >= len(val) {
+			out = dst[:len(val)]
+		} else {
+			out = make([]byte, len(val))
+		}
+		copy(out, val)
+		return out, nil
+	default:
+		return nil, fmt.Errorf("value reader: unsupported outer-leaf entry kind %d", entry.Kind)
+	}
+}
+
 func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error) {
 	if strings.TrimSpace(r.outerLeafMode) != outerleaf.ModeV2FencePtr {
 		return nil, false, nil
@@ -341,28 +382,31 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 		if !found {
 			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
 		}
-		decoded, err := r.resolveLookupResult(entry, true)
-		if err != nil {
-			return nil, err
-		}
-		if len(decoded) == 0 {
-			return dst[:0], nil
-		}
-		return append(dst[:0], decoded...), nil
+		return r.resolveLookupResultAppend(entry, dst)
 	}
 	if app, ok := r.vlogs.(unsafeAppendReader); ok {
 		raw, err := app.ReadUnsafeAppend(ptr, dst[:0])
 		if err != nil {
 			return nil, err
 		}
-		decoded, err := r.decodeValueForKeyUnsafe(ptr, key, raw)
+		if !outerleaf.HasMagic(raw) {
+			if strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr {
+				return nil, fmt.Errorf("value reader: expected outer-leaf payload in fence mode ptr=%+v", ptr)
+			}
+			return raw, nil
+		}
+		block, err := r.outerLeafBlock(ptr, raw)
 		if err != nil {
 			return nil, err
 		}
-		if len(decoded) == 0 {
-			return dst[:0], nil
+		entry, found, err := block.EntryForKey(key)
+		if err != nil {
+			return nil, err
 		}
-		return append(dst[:0], decoded...), nil
+		if !found {
+			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
+		}
+		return r.resolveLookupResultAppend(entry, dst)
 	}
 	val, err := r.vlogs.ReadUnsafe(ptr)
 	if err != nil {

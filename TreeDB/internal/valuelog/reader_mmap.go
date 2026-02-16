@@ -570,11 +570,39 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		Reserved: frameHeader[3],
 		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
 	}
+	// Hot random-read case: a single-entry grouped frame (k=1) where the
+	// selected value spans the full decoded payload. Decode directly into dst
+	// to avoid a decode-scratch allocation + extra copy.
+	if f.templateLookup == nil && k == 1 && subIndex == 0 && valStart == 0 && valEnd == rawLen {
+		oldLen := len(dst)
+		dst = grow(dst, int(rawLen))
+		out, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, dst[oldLen:oldLen])
+		if err != nil {
+			return nil, err, true
+		}
+		if uint32(len(out)) != rawLen {
+			return nil, ErrCorrupt, true
+		}
+		if len(out) > 0 {
+			base := dst[oldLen : oldLen+len(out)]
+			if &out[0] != &base[0] {
+				copy(base, out)
+			}
+		}
+		f.cacheMu.Lock()
+		f.cacheK = k
+		f.cacheFlags = fFlags
+		f.cacheLen = prefixLen
+		f.cacheOffs = offsets
+		f.setCacheRawLocked(nil, false)
+		f.cacheStart.Store(start)
+		f.cacheMu.Unlock()
+		return dst[:oldLen+int(rawLen)], nil, true
+	}
 	cacheableRaw := false
 	f.cacheMu.Lock()
 	// One-shot reads (dst=nil) are typically point gets. Avoid caching decoded
-	// grouped frames there and decode into pooled scratch to cut allocation
-	// pressure in random-read heavy paths.
+	// grouped frames there to limit memory overhead in random-read-heavy paths.
 	if dst != nil && f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
 		cacheableRaw = true
 	}
