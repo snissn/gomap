@@ -746,10 +746,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
-	snap.reader.vlogs = vlogSet
-	snap.reader.outerLeafMode = db.indexOuterLeafMode
-	snap.reader.skipOuterLeafChecksums = db.skipOuterLeafChecksums
-	snap.reader.cache = db.outerLeafBlockCache
+	snap.reader = newValueReader(vlogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, db.outerLeafBlockCache)
 	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
@@ -1805,11 +1802,7 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(idx.pager, valueReader{
-		vlogs:                  state.ValueLogSet,
-		outerLeafMode:          db.indexOuterLeafMode,
-		skipOuterLeafChecksums: db.skipOuterLeafChecksums,
-	}, state.RootPageID)
+	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, nil), state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 

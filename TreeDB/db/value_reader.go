@@ -12,6 +12,9 @@ import (
 type valueReader struct {
 	vlogs                  tree.SlabReader
 	outerLeafMode          string
+	modeInit               bool
+	outerLeafEnabled       bool
+	fenceLookupEnabled     bool
 	skipOuterLeafChecksums bool
 	cache                  *outerLeafBlockCache
 }
@@ -29,23 +32,55 @@ func ValueReaderForState(state *DBState) tree.SlabReader {
 	if state == nil {
 		return nil
 	}
-	return valueReader{vlogs: state.ValueLogSet}
+	return newValueReader(state.ValueLogSet, "", false, nil)
 }
 
-func (r valueReader) KeyAwareEnabled() bool {
-	return outerleaf.ModeEnabled(r.outerLeafMode)
+func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums bool, cache *outerLeafBlockCache) valueReader {
+	r := valueReader{
+		vlogs:                  vlogs,
+		skipOuterLeafChecksums: skipOuterLeafChecksums,
+		cache:                  cache,
+	}
+	r.setOuterLeafMode(mode)
+	return r
 }
 
-func (r valueReader) FenceLookupEnabled() bool {
+func (r *valueReader) setOuterLeafMode(mode string) {
+	mode = strings.TrimSpace(mode)
+	r.outerLeafMode = mode
+	r.outerLeafEnabled = outerleaf.ModeEnabled(mode)
+	r.fenceLookupEnabled = mode == outerleaf.ModeV2FencePtr
+	r.modeInit = true
+}
+
+func (r valueReader) outerLeafModeEnabled() bool {
+	if r.modeInit {
+		return r.outerLeafEnabled
+	}
+	return outerleaf.ModeEnabled(strings.TrimSpace(r.outerLeafMode))
+}
+
+func (r valueReader) fenceLookupModeEnabled() bool {
+	if r.modeInit {
+		return r.fenceLookupEnabled
+	}
 	return strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr
 }
 
+func (r valueReader) KeyAwareEnabled() bool {
+	return r.outerLeafModeEnabled()
+}
+
+func (r valueReader) FenceLookupEnabled() bool {
+	return r.fenceLookupModeEnabled()
+}
+
 func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte, unsafe bool) ([]byte, error) {
-	if !outerleaf.ModeEnabled(r.outerLeafMode) {
+	if !r.outerLeafModeEnabled() {
 		return raw, nil
 	}
 	if !outerleaf.HasMagic(raw) {
-		if strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr {
+		if r.fenceLookupModeEnabled() {
 			return nil, fmt.Errorf("value reader: expected outer-leaf payload in fence mode ptr=%+v", ptr)
 		}
 		return raw, nil
@@ -94,11 +129,11 @@ func (r valueReader) decodeValueForKeyUnsafe(ptr page.ValuePtr, key, raw []byte)
 }
 
 func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, unsafe bool) ([]byte, bool, error) {
-	if !outerleaf.ModeEnabled(r.outerLeafMode) {
+	if !r.outerLeafModeEnabled() {
 		return raw, true, nil
 	}
 	if !outerleaf.HasMagic(raw) {
-		if strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr {
+		if r.fenceLookupModeEnabled() {
 			return nil, false, fmt.Errorf("value reader: expected outer-leaf payload in fence mode ptr=%+v", ptr)
 		}
 		return raw, true, nil
@@ -180,7 +215,7 @@ func (r valueReader) resolveLookupResultAppend(entry outerleaf.LookupResult, dst
 }
 
 func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error) {
-	if strings.TrimSpace(r.outerLeafMode) != outerleaf.ModeV2FencePtr {
+	if !r.fenceLookupModeEnabled() {
 		return nil, false, nil
 	}
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
@@ -205,7 +240,7 @@ func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byt
 }
 
 func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockEntry, bool, error) {
-	if strings.TrimSpace(r.outerLeafMode) != outerleaf.ModeV2FencePtr {
+	if !r.fenceLookupModeEnabled() {
 		return nil, false, nil
 	}
 	block := r.cachedOuterLeafBlock(ptr)
@@ -240,7 +275,7 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 }
 
 func (r valueReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
-	if strings.TrimSpace(r.outerLeafMode) != outerleaf.ModeV2FencePtr {
+	if !r.fenceLookupModeEnabled() {
 		return nil, false, nil
 	}
 	block := r.cachedOuterLeafBlock(ptr)
@@ -365,7 +400,7 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 	if r.vlogs == nil {
 		return nil, fmt.Errorf("value log reader unavailable for file %d", ptr.FileID)
 	}
-	if !outerleaf.ModeEnabled(r.outerLeafMode) {
+	if !r.outerLeafModeEnabled() {
 		if app, ok := r.vlogs.(unsafeAppendReader); ok {
 			return app.ReadUnsafeAppend(ptr, dst[:0])
 		}
@@ -391,7 +426,7 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 			return nil, err
 		}
 		if !outerleaf.HasMagic(raw) {
-			if strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr {
+			if r.fenceLookupModeEnabled() {
 				return nil, fmt.Errorf("value reader: expected outer-leaf payload in fence mode ptr=%+v", ptr)
 			}
 			return raw, nil
@@ -425,7 +460,7 @@ func (r valueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) (
 	if len(ptrs) == 0 {
 		return dst[:0], nil
 	}
-	if !outerleaf.ModeEnabled(r.outerLeafMode) {
+	if !r.outerLeafModeEnabled() {
 		if app, ok := r.vlogs.(unsafeAppendBatchReader); ok {
 			return app.ReadUnsafeAppendBatch(ptrs, dst)
 		}
@@ -523,7 +558,7 @@ func (r valueReader) outerLeafBlock(ptr page.ValuePtr, raw []byte) (*outerleaf.D
 }
 
 func (r valueReader) cachedOuterLeafBlock(ptr page.ValuePtr) *outerleaf.DecodedBlock {
-	if !outerleaf.ModeEnabled(r.outerLeafMode) || r.cache == nil {
+	if !r.outerLeafModeEnabled() || r.cache == nil {
 		return nil
 	}
 	return r.cache.get(newOuterLeafBlockKey(ptr))

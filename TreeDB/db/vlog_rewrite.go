@@ -494,7 +494,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	ptrMap := make(map[recordKey]recordLoc)
 
 	buildTree := func(root uint64) (uint64, error) {
-		iter := tree.New(d.Pager(), valueReader{vlogs: state.ValueLogSet}, root).
+		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet, "", false, nil), root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		rewriter := &rewriteIterator{
 			inner:  iter,
