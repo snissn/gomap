@@ -50,6 +50,7 @@ var valueLogKeyPool sync.Pool      // stores [][]byte
 var valueLogPtrPool sync.Pool      // stores []page.ValuePtr
 var outerLeafEntryPool sync.Pool   // stores []outerleaf.Entry
 var outerLeafArenaPool sync.Pool   // stores []byte
+var outerLeafBlobRefScratchPool sync.Pool
 var outerLeafEncoderPool sync.Pool // stores *outerleaf.Encoder
 var valueLogPreparedBodyPool sync.Pool
 var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
@@ -206,6 +207,22 @@ func putOuterLeafArena(buf []byte) {
 		return
 	}
 	outerLeafArenaPool.Put(buf[:0])
+}
+
+func getOuterLeafBlobRefScratch() *[outerLeafBlobRefStackScratchCap]byte {
+	if v := outerLeafBlobRefScratchPool.Get(); v != nil {
+		if s, ok := v.(*[outerLeafBlobRefStackScratchCap]byte); ok && s != nil {
+			return s
+		}
+	}
+	return new([outerLeafBlobRefStackScratchCap]byte)
+}
+
+func putOuterLeafBlobRefScratch(buf *[outerLeafBlobRefStackScratchCap]byte) {
+	if buf == nil {
+		return
+	}
+	outerLeafBlobRefScratchPool.Put(buf)
 }
 
 func getOuterLeafEncoder() *outerleaf.Encoder {
@@ -401,6 +418,7 @@ const (
 	adaptiveWarmupBytes              = 16 * 1024 * 1024
 	maxMemtableBytesPerShard         = int64(3 << 30)
 	maxOuterLeafArenaPoolCap         = 16 << 20
+	outerLeafBlobRefStackScratchCap  = 256
 	maxOuterLeafEncoderRawScratchCap = 2 << 20
 	maxOuterLeafEncoderEncScratchCap = 2 << 20
 	maxOuterLeafEncoderRestartsCap   = 1 << 15
@@ -7271,6 +7289,10 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 	return db.appendValueLogOneWithKey(l, dictID, dict, rid, nil, value, durability)
 }
 
+func (db *DB) appendValueLogOneRaw(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, nil, value, durability, false)
+}
+
 // appendFenceRIDJoinOversizedOne materializes an oversized v2_fenceptr value in
 // two records:
 //  1. blob record (raw user value)
@@ -7291,43 +7313,75 @@ func (db *DB) appendFenceRIDJoinOversizedOne(l *lane, dictID uint64, key, value 
 	blobRID := startRID
 	outerRID = startRID + 1
 
-	blobRecord := valuelog.Record{RID: blobRID, Value: value}
-	blobPtrs, appendErr := db.appendValueLog(l, dictID, nil, []valuelog.Record{blobRecord}, durability)
+	blobPtr, blobRetainPath, appendErr := db.appendValueLogOneRaw(l, dictID, nil, blobRID, value, durability)
 	if appendErr != nil {
 		return page.ValuePtr{}, 0, "", appendErr
 	}
-	if len(blobPtrs) != 1 {
-		putValueLogPtrs(blobPtrs)
-		return page.ValuePtr{}, 0, "", fmt.Errorf("cachingdb: expected 1 blob pointer, got %d", len(blobPtrs))
+	if blobRetainPath != "" {
+		db.markValueLogRetain(blobRetainPath)
 	}
-	blobPtr := blobPtrs[0]
-	putValueLogPtrs(blobPtrs)
 
-	// Blob-ref outer payloads are tiny; reusing a pooled arena avoids
-	// per-write output allocations in the oversized rid_join path.
-	outerBuf := getOuterLeafArena(len(key) + page.ValuePtrSize + 64)
-	outerPayload, encodeErr := db.encodeOuterLeafBlobRef(outerBuf[:0], key, blobPtr)
+	// Blob-ref outer payloads are tiny; avoid per-write output allocations in
+	// the oversized rid_join path.
+	//
+	// Use a fixed-size pointer-backed scratch pool for common short benchmark
+	// keys to avoid []byte interface boxing allocations on every put/get pair;
+	// fall back to pooled arenas for larger keys.
+	outerNeed := len(key) + page.ValuePtrSize + 64
+	var (
+		outerPayload []byte
+		outerPoolBuf []byte
+		outerScratch *[outerLeafBlobRefStackScratchCap]byte
+		encodeErr    error
+	)
+	if outerNeed <= outerLeafBlobRefStackScratchCap {
+		outerScratch = getOuterLeafBlobRefScratch()
+		outerPayload, encodeErr = db.encodeOuterLeafBlobRef(outerScratch[:0], key, blobPtr)
+	} else {
+		outerPoolBuf = getOuterLeafArena(outerNeed)
+		outerPayload, encodeErr = db.encodeOuterLeafBlobRef(outerPoolBuf[:0], key, blobPtr)
+	}
 	if encodeErr != nil {
-		putOuterLeafArena(outerBuf)
+		if outerScratch != nil {
+			if cap(outerPayload) > outerLeafBlobRefStackScratchCap {
+				putOuterLeafArena(outerPayload)
+			}
+			putOuterLeafBlobRefScratch(outerScratch)
+		} else if outerPoolBuf != nil {
+			if len(outerPayload) > 0 && cap(outerPayload) > cap(outerPoolBuf) {
+				putOuterLeafArena(outerPoolBuf)
+				putOuterLeafArena(outerPayload)
+			} else {
+				putOuterLeafArena(outerPoolBuf)
+			}
+		}
 		return page.ValuePtr{}, 0, "", encodeErr
 	}
-	outerRecord := valuelog.Record{RID: outerRID, Value: outerPayload}
-	outerPtrs, appendErr := db.appendValueLog(l, dictID, nil, []valuelog.Record{outerRecord}, durability)
+	outerPtr, outerRetainPath, appendErr := db.appendValueLogOneRaw(l, dictID, nil, outerRID, outerPayload, durability)
+	if outerScratch != nil {
+		if cap(outerPayload) > outerLeafBlobRefStackScratchCap {
+			putOuterLeafArena(outerPayload)
+		}
+		putOuterLeafBlobRefScratch(outerScratch)
+	} else if outerPoolBuf != nil {
+		if len(outerPayload) > 0 && cap(outerPayload) > cap(outerPoolBuf) {
+			putOuterLeafArena(outerPoolBuf)
+			putOuterLeafArena(outerPayload)
+		} else {
+			putOuterLeafArena(outerPoolBuf)
+		}
+	}
 	if appendErr != nil {
-		putOuterLeafArena(outerPayload)
 		return page.ValuePtr{}, 0, "", appendErr
 	}
-	putOuterLeafArena(outerPayload)
-	if len(outerPtrs) != 1 {
-		putValueLogPtrs(outerPtrs)
-		return page.ValuePtr{}, 0, "", fmt.Errorf("cachingdb: expected 1 outer pointer, got %d", len(outerPtrs))
-	}
-	outerPtr = outerPtrs[0]
-	putValueLogPtrs(outerPtrs)
-	return outerPtr, outerRID, db.currentValueLogPath(l), nil
+	return outerPtr, outerRID, outerRetainPath, nil
 }
 
 func (db *DB) appendValueLogOneWithKey(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, key, value, durability, true)
+}
+
+func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability, encodeOuterLeaf bool) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
@@ -7339,11 +7393,13 @@ func (db *DB) appendValueLogOneWithKey(l *lane, dictID uint64, dict []byte, rid 
 		return page.ValuePtr{}, "", errWALClosed
 	default:
 	}
-	encodedValue, encodeErr := db.encodeOuterLeafValue(key, value)
-	if encodeErr != nil {
-		return page.ValuePtr{}, "", encodeErr
+	if encodeOuterLeaf {
+		encodedValue, encodeErr := db.encodeOuterLeafValue(key, value)
+		if encodeErr != nil {
+			return page.ValuePtr{}, "", encodeErr
+		}
+		value = encodedValue
 	}
-	value = encodedValue
 	wallStart := time.Time{}
 	if db.needsVlogAutotuneTiming() {
 		wallStart = db.valueLogAutotuneMetrics.now()
