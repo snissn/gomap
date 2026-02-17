@@ -2,6 +2,7 @@ package outerleaf
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"testing"
 
@@ -354,6 +355,132 @@ func TestDecodeBlockValueForKey_RestartIndexed(t *testing.T) {
 			t.Fatalf("ValueForKey miss(%q): found=%v got=%v", string(miss), found, got)
 		}
 	}
+}
+
+func TestLookupRestartRawParity_V2V3(t *testing.T) {
+	v2Entries := make([]Entry, 0, 128)
+	for i := 0; i < 128; i++ {
+		v2Entries = append(v2Entries, Entry{
+			Key:   []byte(fmt.Sprintf("acct:%04d", i)),
+			Value: bytes.Repeat([]byte{byte('a' + (i % 26))}, 96),
+		})
+	}
+	v2Payload, err := EncodeEntries(nil, v2Entries, 0, 8)
+	if err != nil {
+		t.Fatalf("EncodeEntries(v2): %v", err)
+	}
+	v2RawLen := int(binary.LittleEndian.Uint32(v2Payload[blockV2RawLenOff : blockV2RawLenOff+4]))
+	v2Raw, err := decodeAndVerifyPayloadModeWithChecksum(v2Payload, v2RawLen, v2Payload[5], nil, false, true)
+	if err != nil {
+		t.Fatalf("decode v2 payload: %v", err)
+	}
+	v2EntryCount := int(binary.LittleEndian.Uint16(v2Payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
+	v2EntriesLen := int(binary.LittleEndian.Uint32(v2Payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
+	v2RestartInterval := int(binary.LittleEndian.Uint16(v2Payload[6:8]))
+	v2EntriesRaw, v2RestartRaw, v2RestartCount, err := splitV2RawMeta(v2Raw, v2EntriesLen, v2EntryCount, v2RestartInterval)
+	if err != nil {
+		t.Fatalf("splitV2RawMeta(v2): %v", err)
+	}
+	v2Restarts, err := decodeRestartsFromRaw(v2EntriesRaw, v2RestartRaw, v2RestartCount)
+	if err != nil {
+		t.Fatalf("decodeRestartsFromRaw(v2): %v", err)
+	}
+
+	checkV2 := func(key []byte) {
+		t.Helper()
+		oldVal, oldFound, oldErr := lookupV2Value(v2EntriesRaw, v2EntryCount, key, v2Restarts, nil)
+		if oldErr != nil {
+			t.Fatalf("lookupV2Value(%q): %v", key, oldErr)
+		}
+		newVal, newFound, newErr := lookupV2ValueWithRestartRaw(v2EntriesRaw, v2EntryCount, key, v2RestartRaw, v2RestartCount)
+		if newErr != nil {
+			t.Fatalf("lookupV2ValueWithRestartRaw(%q): %v", key, newErr)
+		}
+		if oldFound != newFound {
+			t.Fatalf("found mismatch for %q old=%v new=%v", key, oldFound, newFound)
+		}
+		if !bytes.Equal(oldVal, newVal) {
+			t.Fatalf("value mismatch for %q", key)
+		}
+	}
+	checkV2(v2Entries[0].Key)
+	checkV2(v2Entries[7].Key)
+	checkV2(v2Entries[63].Key)
+	checkV2(v2Entries[127].Key)
+	checkV2([]byte("acct:-001"))
+	checkV2([]byte("acct:9999"))
+
+	v3Entries := make([]TypedEntry, 0, 128)
+	for i := 0; i < 128; i++ {
+		k := []byte(fmt.Sprintf("acct:%04d", i))
+		if i%5 == 0 {
+			v3Entries = append(v3Entries, TypedEntry{
+				Key:     k,
+				Kind:    EntryKindBlobRef,
+				BlobPtr: page.ValuePtr{FileID: page.ValueLogFileID(5), Offset: uint64(i * 32), Length: 9},
+			})
+			continue
+		}
+		v3Entries = append(v3Entries, TypedEntry{
+			Key:   k,
+			Kind:  EntryKindInline,
+			Value: bytes.Repeat([]byte{byte('a' + (i % 26))}, 64),
+		})
+	}
+	v3Payload, err := EncodeTypedEntries(nil, v3Entries, 0, 8)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+	v3RawLen := int(binary.LittleEndian.Uint32(v3Payload[blockV2RawLenOff : blockV2RawLenOff+4]))
+	v3Raw, err := decodeAndVerifyPayloadModeWithChecksum(v3Payload, v3RawLen, v3Payload[5], nil, false, true)
+	if err != nil {
+		t.Fatalf("decode v3 payload: %v", err)
+	}
+	v3EntryCount := int(binary.LittleEndian.Uint16(v3Payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
+	v3EntriesLen := int(binary.LittleEndian.Uint32(v3Payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
+	v3RestartInterval := int(binary.LittleEndian.Uint16(v3Payload[6:8]))
+	v3EntriesRaw, v3RestartRaw, v3RestartCount, err := splitV2RawMeta(v3Raw, v3EntriesLen, v3EntryCount, v3RestartInterval)
+	if err != nil {
+		t.Fatalf("splitV2RawMeta(v3): %v", err)
+	}
+	v3Restarts, err := decodeRestartsFromRaw(v3EntriesRaw, v3RestartRaw, v3RestartCount)
+	if err != nil {
+		t.Fatalf("decodeRestartsFromRaw(v3): %v", err)
+	}
+
+	checkV3 := func(key []byte) {
+		t.Helper()
+		oldEntry, oldFound, oldErr := lookupV3Entry(v3EntriesRaw, v3EntryCount, key, v3Restarts, nil)
+		if oldErr != nil {
+			t.Fatalf("lookupV3Entry(%q): %v", key, oldErr)
+		}
+		newEntry, newFound, newErr := lookupV3EntryWithRestartRaw(v3EntriesRaw, v3EntryCount, key, v3RestartRaw, v3RestartCount)
+		if newErr != nil {
+			t.Fatalf("lookupV3EntryWithRestartRaw(%q): %v", key, newErr)
+		}
+		if oldFound != newFound {
+			t.Fatalf("found mismatch for %q old=%v new=%v", key, oldFound, newFound)
+		}
+		if !oldFound {
+			return
+		}
+		if oldEntry.Kind != newEntry.Kind {
+			t.Fatalf("kind mismatch for %q old=%d new=%d", key, oldEntry.Kind, newEntry.Kind)
+		}
+		if oldEntry.Kind == EntryKindInline {
+			if !bytes.Equal(oldEntry.Value, newEntry.Value) {
+				t.Fatalf("inline value mismatch for %q", key)
+			}
+		} else if oldEntry.BlobPtr != newEntry.BlobPtr {
+			t.Fatalf("blob ptr mismatch for %q old=%+v new=%+v", key, oldEntry.BlobPtr, newEntry.BlobPtr)
+		}
+	}
+	checkV3(v3Entries[0].Key)
+	checkV3(v3Entries[11].Key)
+	checkV3(v3Entries[64].Key)
+	checkV3(v3Entries[127].Key)
+	checkV3([]byte("acct:-001"))
+	checkV3([]byte("acct:9999"))
 }
 
 func TestDecodedBlockLowerBound(t *testing.T) {
