@@ -611,6 +611,7 @@ func normalizeValueLogWALFenceMode(mode string) string {
 
 const defaultOuterLeafBlobThresholdMin = 16 << 10
 const defaultOuterLeafFenceBlockTargetBytes = 4 << 10
+const defaultOuterLeafFenceBlockTargetBytesNoForcePointers = 8 << 10
 
 // For fence-pointer v2 reads, short scans are latency-sensitive and pay decode
 // cost immediately. Keep the user-selected codec for large-value blocks, but
@@ -3771,9 +3772,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
 		return nil, fmt.Errorf("cachingdb: invalid value-log WAL fence mode %q", opts.ValueLogWALFenceMode)
 	}
+	disableJournal := opts.DisableWAL
 	outerLeafBlockTargetOpt := opts.ValueLogOuterLeafBlockTargetBytes
 	if outerLeafBlockTargetOpt <= 0 && indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr {
 		outerLeafBlockTargetOpt = defaultOuterLeafFenceBlockTargetBytes
+		if !opts.ForceValueLogPointers && disableJournal {
+			outerLeafBlockTargetOpt = defaultOuterLeafFenceBlockTargetBytesNoForcePointers
+		}
 	}
 	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(outerLeafBlockTargetOpt)
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
@@ -3782,7 +3787,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if outerLeafBlobThreshold < 0 {
 		return nil, fmt.Errorf("cachingdb: invalid value-log outer leaf blob threshold bytes %d", outerLeafBlobThreshold)
 	}
-	disableJournal := opts.DisableWAL
 	if indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr && !disableJournal {
 		// Keep existing default semantics: WAL-on v2_fenceptr defaults to
 		// simple_inline unless caller explicitly chooses a compatible mode.
