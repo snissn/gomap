@@ -1152,6 +1152,30 @@ func locateV2Restart(entries []byte, key []byte, restarts []uint32, restartKeys 
 	return lo - 1, nil
 }
 
+func locateV2RestartRaw(entries []byte, key []byte, restartRaw []byte, restartCount int) (int, error) {
+	if restartCount <= 0 {
+		return -1, nil
+	}
+	if len(restartRaw) != restartCount*4 {
+		return -1, fmt.Errorf("outerleaf: invalid restart section")
+	}
+	lo, hi := 0, restartCount
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		off := int(binary.LittleEndian.Uint32(restartRaw[mid*4 : (mid+1)*4]))
+		rk, err := restartV2Key(entries, off)
+		if err != nil {
+			return -1, err
+		}
+		if bytes.Compare(rk, key) > 0 {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	return lo - 1, nil
+}
+
 func lookupV2ValueRange(entries []byte, key []byte, start int, limit int) ([]byte, bool, error) {
 	if start < 0 || start > len(entries) || limit < start || limit > len(entries) {
 		return nil, false, fmt.Errorf("outerleaf: invalid entry range")
@@ -1226,6 +1250,38 @@ func lookupV2Value(entries []byte, entryCount int, key []byte, restarts []uint32
 	limit := len(entries)
 	if restartIdx+1 < len(restarts) {
 		limit = int(restarts[restartIdx+1])
+	}
+	return lookupV2ValueRange(entries, key, start, limit)
+}
+
+func lookupV2ValueWithRestartRaw(entries []byte, entryCount int, key []byte, restartRaw []byte, restartCount int) ([]byte, bool, error) {
+	if entryCount <= 0 {
+		return nil, false, nil
+	}
+	if len(key) == 0 {
+		_, first, err := decodeFirstV2(entries)
+		if err != nil {
+			return nil, false, err
+		}
+		return first, true, nil
+	}
+	if restartCount == 0 {
+		return lookupV2ValueRange(entries, key, 0, len(entries))
+	}
+	if len(restartRaw) != restartCount*4 {
+		return nil, false, fmt.Errorf("outerleaf: invalid restart section")
+	}
+	restartIdx, err := locateV2RestartRaw(entries, key, restartRaw, restartCount)
+	if err != nil {
+		return nil, false, err
+	}
+	if restartIdx < 0 {
+		return nil, false, nil
+	}
+	start := int(binary.LittleEndian.Uint32(restartRaw[restartIdx*4 : (restartIdx+1)*4]))
+	limit := len(entries)
+	if restartIdx+1 < restartCount {
+		limit = int(binary.LittleEndian.Uint32(restartRaw[(restartIdx+1)*4 : (restartIdx+2)*4]))
 	}
 	return lookupV2ValueRange(entries, key, start, limit)
 }
@@ -1324,6 +1380,30 @@ func locateV3Restart(entries []byte, key []byte, restarts []uint32, restartKeys 
 	return lo - 1, nil
 }
 
+func locateV3RestartRaw(entries []byte, key []byte, restartRaw []byte, restartCount int) (int, error) {
+	if restartCount <= 0 {
+		return -1, nil
+	}
+	if len(restartRaw) != restartCount*4 {
+		return -1, fmt.Errorf("outerleaf: invalid restart section")
+	}
+	lo, hi := 0, restartCount
+	for lo < hi {
+		mid := lo + (hi-lo)/2
+		off := int(binary.LittleEndian.Uint32(restartRaw[mid*4 : (mid+1)*4]))
+		rk, err := restartV3Key(entries, off)
+		if err != nil {
+			return -1, err
+		}
+		if bytes.Compare(rk, key) > 0 {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	return lo - 1, nil
+}
+
 func lookupV3EntryRange(entries []byte, key []byte, start int, limit int) (LookupResult, bool, error) {
 	if start < 0 || start > len(entries) || limit < start || limit > len(entries) {
 		return LookupResult{}, false, fmt.Errorf("outerleaf: invalid entry range")
@@ -1406,6 +1486,38 @@ func lookupV3Entry(entries []byte, entryCount int, key []byte, restarts []uint32
 	limit := len(entries)
 	if restartIdx+1 < len(restarts) {
 		limit = int(restarts[restartIdx+1])
+	}
+	return lookupV3EntryRange(entries, key, start, limit)
+}
+
+func lookupV3EntryWithRestartRaw(entries []byte, entryCount int, key []byte, restartRaw []byte, restartCount int) (LookupResult, bool, error) {
+	if entryCount <= 0 {
+		return LookupResult{}, false, nil
+	}
+	if len(key) == 0 {
+		_, first, err := decodeFirstV3(entries)
+		if err != nil {
+			return LookupResult{}, false, err
+		}
+		return first, true, nil
+	}
+	if restartCount == 0 {
+		return lookupV3EntryRange(entries, key, 0, len(entries))
+	}
+	if len(restartRaw) != restartCount*4 {
+		return LookupResult{}, false, fmt.Errorf("outerleaf: invalid restart section")
+	}
+	restartIdx, err := locateV3RestartRaw(entries, key, restartRaw, restartCount)
+	if err != nil {
+		return LookupResult{}, false, err
+	}
+	if restartIdx < 0 {
+		return LookupResult{}, false, nil
+	}
+	start := int(binary.LittleEndian.Uint32(restartRaw[restartIdx*4 : (restartIdx+1)*4]))
+	limit := len(entries)
+	if restartIdx+1 < restartCount {
+		limit = int(binary.LittleEndian.Uint32(restartRaw[(restartIdx+1)*4 : (restartIdx+2)*4]))
 	}
 	return lookupV3EntryRange(entries, key, start, limit)
 }
@@ -2818,11 +2930,11 @@ func DecodeEntryForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 			return LookupResult{}, true, false, scratch, err
 		}
 		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartsInterval)
 		if splitErr != nil {
 			return LookupResult{}, true, false, outScratch, splitErr
 		}
-		result, found, err := lookupV3Entry(entries, entryCount, key, restarts, nil)
+		result, found, err := lookupV3EntryWithRestartRaw(entries, entryCount, key, restartRaw, restartCount)
 		if err != nil {
 			return LookupResult{}, true, false, outScratch, err
 		}
@@ -2876,11 +2988,11 @@ func decodeValueForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 			return nil, true, false, scratch, err
 		}
 		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartsInterval)
 		if splitErr != nil {
 			return nil, true, false, outScratch, splitErr
 		}
-		val, found, err := lookupV2Value(entries, entryCount, key, restarts, nil)
+		val, found, err := lookupV2ValueWithRestartRaw(entries, entryCount, key, restartRaw, restartCount)
 		if err != nil {
 			return nil, true, false, outScratch, err
 		}
@@ -2900,11 +3012,11 @@ func decodeValueForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 			return nil, true, false, scratch, err
 		}
 		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartsInterval)
 		if splitErr != nil {
 			return nil, true, false, outScratch, splitErr
 		}
-		entry, found, err := lookupV3Entry(entries, entryCount, key, restarts, nil)
+		entry, found, err := lookupV3EntryWithRestartRaw(entries, entryCount, key, restartRaw, restartCount)
 		if err != nil {
 			return nil, true, false, outScratch, err
 		}
