@@ -19,7 +19,7 @@ make benchprof
 ## Typical flow
 
 1. Run `unified-bench` with profile outputs into one directory.
-2. Run `benchprof` on that directory.
+2. `unified-bench` auto-runs `benchprof` in-process when `-profile-dir` is enabled. You can still run `benchprof` manually if needed.
 
 Example:
 
@@ -69,7 +69,7 @@ Outputs:
 If `unified-bench` profile naming, profile-dir defaults, or benchmark test names
 change, update `benchprof` in the same PR:
 
-- filename parsing in `cmd/benchprof/main.go`
-- parser tests in `cmd/benchprof/main_test.go`
+- filename parsing in `internal/benchprof/main.go`
+- parser tests in `internal/benchprof/main_test.go`
 - `cmd/unified_bench/profile_artifact_dir_test.go` expectations
 - this README and `cmd/unified_bench/README.md`
