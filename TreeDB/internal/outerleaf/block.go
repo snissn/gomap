@@ -54,11 +54,12 @@ var (
 			return &bytesPoolEntry{}
 		},
 	}
-	outerLeafRestartsPool   sync.Pool
-	outerLeafLeaseKeysPool  sync.Pool
-	outerLeafLeaseArenaPool sync.Pool
-	outerLeafKeyLeasePool   sync.Pool
-	outerLeafKeyChunkPool   = sync.Pool{
+	outerLeafRestartsPool     sync.Pool
+	outerLeafLeaseKeysPool    sync.Pool
+	outerLeafLeaseArenaPool   sync.Pool
+	outerLeafKeyLeasePool     sync.Pool
+	outerLeafPayloadLeasePool sync.Pool
+	outerLeafKeyChunkPool     = sync.Pool{
 		New: func() any {
 			return &keyLeaseChunk{}
 		},
@@ -136,6 +137,11 @@ type KeyLease struct {
 	inUse     bool
 }
 
+type payloadLease struct {
+	buf   []byte
+	inUse bool
+}
+
 // Keys returns decoded keys owned by the lease.
 func (l *KeyLease) Keys() [][]byte {
 	if l == nil {
@@ -147,6 +153,10 @@ func (l *KeyLease) Keys() [][]byte {
 // Release returns lease-owned buffers to pools. It is idempotent.
 func (l *KeyLease) Release() {
 	releaseKeyLease(l)
+}
+
+func (l *payloadLease) Release() {
+	releasePayloadLease(l)
 }
 
 // Entry is one key/value record in an outer-leaf block payload.
@@ -362,17 +372,35 @@ func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
 }
 
 func decodePayload(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte, error) {
+	out, _, err := decodePayloadLeaseMode(codec, payload, rawLen, dst, false)
+	return out, err
+}
+
+func decodePayloadLease(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte, *payloadLease, error) {
+	return decodePayloadLeaseMode(codec, payload, rawLen, dst, true)
+}
+
+func decodePayloadLeaseMode(codec uint8, payload []byte, rawLen int, dst []byte, allowLease bool) ([]byte, *payloadLease, error) {
 	if rawLen < 0 {
-		return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
+		return nil, nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
 	}
 	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
-		return nil, fmt.Errorf("outerleaf: payload too large %d", rawLen)
+		return nil, nil, fmt.Errorf("outerleaf: payload too large %d", rawLen)
+	}
+
+	// Only borrow pooled decode scratch when caller did not provide a stable
+	// destination and explicitly opted into lease ownership.
+	usePooledLease := allowLease && dst == nil
+	releaseOnErr := func(lease *payloadLease) {
+		if lease != nil {
+			lease.Release()
+		}
 	}
 
 	switch codec {
 	case blockCodecNone:
 		if len(payload) != rawLen {
-			return nil, fmt.Errorf("outerleaf: raw payload length mismatch got=%d want=%d", len(payload), rawLen)
+			return nil, nil, fmt.Errorf("outerleaf: raw payload length mismatch got=%d want=%d", len(payload), rawLen)
 		}
 		if cap(dst) < rawLen {
 			dst = make([]byte, rawLen)
@@ -380,44 +408,74 @@ func decodePayload(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte,
 			dst = dst[:rawLen]
 		}
 		copy(dst, payload)
-		return dst, nil
+		return dst, nil, nil
 	case blockCodecSnappy:
 		decodedLen, err := snappy.DecodedLen(payload)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if decodedLen != rawLen {
-			return nil, fmt.Errorf("outerleaf: snappy decoded length mismatch got=%d want=%d", decodedLen, rawLen)
+			return nil, nil, fmt.Errorf("outerleaf: snappy decoded length mismatch got=%d want=%d", decodedLen, rawLen)
 		}
-		if cap(dst) < rawLen {
-			dst = make([]byte, rawLen)
-		} else {
+
+		var lease *payloadLease
+		switch {
+		case cap(dst) >= rawLen:
 			dst = dst[:rawLen]
+		case usePooledLease:
+			dst = getPooledBytes(rawLen)
+			dst = dst[:rawLen]
+			lease = acquirePayloadLease(dst)
+		default:
+			dst = make([]byte, rawLen)
 		}
+
 		out, err := snappy.Decode(dst, payload)
 		if err != nil {
-			return nil, err
+			releaseOnErr(lease)
+			return nil, nil, err
 		}
 		if len(out) != rawLen {
-			return nil, fmt.Errorf("outerleaf: snappy decode length mismatch got=%d want=%d", len(out), rawLen)
+			releaseOnErr(lease)
+			return nil, nil, fmt.Errorf("outerleaf: snappy decode length mismatch got=%d want=%d", len(out), rawLen)
 		}
-		return out, nil
+		if lease != nil {
+			if len(out) == 0 || (len(dst) > 0 && &out[0] == &dst[0]) {
+				lease.buf = out[:0]
+			} else {
+				// Defensive only: expected output always aliases dst.
+				lease.Release()
+				lease = nil
+			}
+		}
+		return out, lease, nil
 	case blockCodecLZ4:
-		if cap(dst) < rawLen {
-			dst = make([]byte, rawLen)
-		} else {
+		var lease *payloadLease
+		switch {
+		case cap(dst) >= rawLen:
 			dst = dst[:rawLen]
+		case usePooledLease:
+			dst = getPooledBytes(rawLen)
+			dst = dst[:rawLen]
+			lease = acquirePayloadLease(dst)
+		default:
+			dst = make([]byte, rawLen)
 		}
 		n, err := lz4.UncompressBlock(payload, dst)
 		if err != nil {
-			return nil, err
+			releaseOnErr(lease)
+			return nil, nil, err
 		}
 		if n != rawLen {
-			return nil, fmt.Errorf("outerleaf: lz4 decode length mismatch got=%d want=%d", n, rawLen)
+			releaseOnErr(lease)
+			return nil, nil, fmt.Errorf("outerleaf: lz4 decode length mismatch got=%d want=%d", n, rawLen)
 		}
-		return dst[:n], nil
+		if lease != nil {
+			lease.buf = dst[:0]
+		}
+		return dst[:n], lease, nil
 	default:
-		return nil, fmt.Errorf("outerleaf: unknown codec id %d", codec)
+		return nil, nil, fmt.Errorf("outerleaf: unknown codec id %d", codec)
 	}
 }
 
@@ -647,6 +705,31 @@ func releaseKeyLease(lease *KeyLease) {
 	lease.chunkHead = nil
 	lease.chunkTail = nil
 	outerLeafKeyLeasePool.Put(lease)
+}
+
+func acquirePayloadLease(buf []byte) *payloadLease {
+	var lease *payloadLease
+	if v := outerLeafPayloadLeasePool.Get(); v != nil {
+		if l, ok := v.(*payloadLease); ok {
+			lease = l
+		}
+	}
+	if lease == nil {
+		lease = &payloadLease{}
+	}
+	lease.inUse = true
+	lease.buf = buf[:0]
+	return lease
+}
+
+func releasePayloadLease(lease *payloadLease) {
+	if lease == nil || !lease.inUse {
+		return
+	}
+	lease.inUse = false
+	putPooledBytes(lease.buf)
+	lease.buf = nil
+	outerLeafPayloadLeasePool.Put(lease)
 }
 
 func cloneKeySlices(keys [][]byte) [][]byte {
@@ -1184,31 +1267,46 @@ func decodeAndVerifyPayloadMode(payload []byte, rawLen int, codec uint8, scratch
 }
 
 func decodeAndVerifyPayloadModeWithChecksum(payload []byte, rawLen int, codec uint8, scratch []byte, allowRawView bool, verifyChecksum bool) ([]byte, error) {
+	out, lease, err := decodeAndVerifyPayloadLeaseModeWithChecksum(payload, rawLen, codec, scratch, allowRawView, verifyChecksum, false)
+	if lease != nil {
+		lease.Release()
+	}
+	return out, err
+}
+
+func decodeAndVerifyPayloadLeaseWithChecksum(payload []byte, rawLen int, codec uint8, scratch []byte, allowRawView bool, verifyChecksum bool) ([]byte, *payloadLease, error) {
+	return decodeAndVerifyPayloadLeaseModeWithChecksum(payload, rawLen, codec, scratch, allowRawView, verifyChecksum, true)
+}
+
+func decodeAndVerifyPayloadLeaseModeWithChecksum(payload []byte, rawLen int, codec uint8, scratch []byte, allowRawView bool, verifyChecksum bool, allowLease bool) ([]byte, *payloadLease, error) {
 	if blockHeaderSize > len(payload) {
-		return nil, fmt.Errorf("outerleaf: truncated header")
+		return nil, nil, fmt.Errorf("outerleaf: truncated header")
 	}
 	if verifyChecksum {
 		gotChecksum := binary.LittleEndian.Uint32(payload[blockChecksumOff : blockChecksumOff+blockChecksumSize])
 		wantChecksum := crc.ChecksumParts(payload[:blockChecksumOff], payload[blockHeaderSize:])
 		if gotChecksum != wantChecksum {
-			return nil, fmt.Errorf("outerleaf: checksum mismatch")
+			return nil, nil, fmt.Errorf("outerleaf: checksum mismatch")
 		}
 	}
 	if allowRawView && codec == blockCodecNone {
 		raw := payload[blockHeaderSize:]
 		if len(raw) != rawLen {
-			return nil, fmt.Errorf("outerleaf: raw payload length mismatch got=%d want=%d", len(raw), rawLen)
+			return nil, nil, fmt.Errorf("outerleaf: raw payload length mismatch got=%d want=%d", len(raw), rawLen)
 		}
-		return raw, nil
+		return raw, nil, nil
 	}
-	out, err := decodePayload(codec, payload[blockHeaderSize:], rawLen, scratch)
+	out, lease, err := decodePayloadLeaseMode(codec, payload[blockHeaderSize:], rawLen, scratch, allowLease)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(out) != rawLen {
-		return nil, fmt.Errorf("outerleaf: decoded payload length mismatch")
+		if lease != nil {
+			lease.Release()
+		}
+		return nil, nil, fmt.Errorf("outerleaf: decoded payload length mismatch")
 	}
-	return out, nil
+	return out, lease, nil
 }
 
 func splitV2RawMeta(raw []byte, entriesLen int, entryCount int, restartInterval int) (entries []byte, restartRaw []byte, restartCount int, err error) {
@@ -2633,9 +2731,12 @@ func DecodeKeysWithVerify(payload []byte, verifyChecksum bool) ([][]byte, error)
 		if rawLen != expected {
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
 		}
-		raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
+		raw, payloadLease, err := decodeAndVerifyPayloadLeaseWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
 		if err != nil {
 			return nil, err
+		}
+		if payloadLease != nil {
+			defer payloadLease.Release()
 		}
 		if keyLen < 0 || keyLen > len(raw) {
 			return nil, fmt.Errorf("outerleaf: invalid key length %d", keyLen)
@@ -2654,22 +2755,12 @@ func DecodeKeysWithVerify(payload []byte, verifyChecksum bool) ([][]byte, error)
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
 		}
 		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		if codec == blockCodecNone {
-			raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
-			if err != nil {
-				return nil, err
-			}
-			entries, _, _, err := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
-			if err != nil {
-				return nil, err
-			}
-			return decodeStructuredKeys(version, entryCount, entries)
-		}
-		scratch := getPooledBytes(rawLen)
-		defer putPooledBytes(scratch)
-		raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch[:0], true, verifyChecksum)
+		raw, payloadLease, err := decodeAndVerifyPayloadLeaseWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
 		if err != nil {
 			return nil, err
+		}
+		if payloadLease != nil {
+			defer payloadLease.Release()
 		}
 		entries, _, _, err := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
 		if err != nil {
@@ -2720,9 +2811,12 @@ func DecodeKeysRangeLeaseWithVerify(payload []byte, lower []byte, upper []byte, 
 		if rawLen != expected {
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
 		}
-		raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
+		raw, payloadLease, err := decodeAndVerifyPayloadLeaseWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
 		if err != nil {
 			return nil, err
+		}
+		if payloadLease != nil {
+			defer payloadLease.Release()
 		}
 		if keyLen < 0 || keyLen > len(raw) {
 			return nil, fmt.Errorf("outerleaf: invalid key length %d", keyLen)
@@ -2752,22 +2846,12 @@ func DecodeKeysRangeLeaseWithVerify(payload []byte, lower []byte, upper []byte, 
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
 		}
 		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		if codec == blockCodecNone {
-			raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
-			if err != nil {
-				return nil, err
-			}
-			entries, _, _, err := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
-			if err != nil {
-				return nil, err
-			}
-			return decodeStructuredKeysBoundedLease(version, entryCount, entries, lower, upper)
-		}
-		scratch := getPooledBytes(rawLen)
-		defer putPooledBytes(scratch)
-		raw, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch[:0], true, verifyChecksum)
+		raw, payloadLease, err := decodeAndVerifyPayloadLeaseWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
 		if err != nil {
 			return nil, err
+		}
+		if payloadLease != nil {
+			defer payloadLease.Release()
 		}
 		entries, _, _, err := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
 		if err != nil {
@@ -2817,9 +2901,12 @@ func DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload []byte, target []byte
 		if rawLen != expected {
 			return 0, false, false, nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
 		}
-		raw, decErr := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
+		raw, payloadLease, decErr := decodeAndVerifyPayloadLeaseWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
 		if decErr != nil {
 			return 0, false, false, nil, decErr
+		}
+		if payloadLease != nil {
+			defer payloadLease.Release()
 		}
 		if keyLen < 0 || keyLen > len(raw) {
 			return 0, false, false, nil, fmt.Errorf("outerleaf: invalid key length %d", keyLen)
@@ -2855,17 +2942,12 @@ func DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload []byte, target []byte
 			return 0, false, false, nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
 		}
 		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-
-		var raw []byte
-		if codec == blockCodecNone {
-			raw, err = decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
-		} else {
-			scratch := getPooledBytes(rawLen)
-			defer putPooledBytes(scratch)
-			raw, err = decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch[:0], true, verifyChecksum)
-		}
+		raw, payloadLease, err := decodeAndVerifyPayloadLeaseWithChecksum(payload, rawLen, codec, nil, true, verifyChecksum)
 		if err != nil {
 			return 0, false, false, nil, err
+		}
+		if payloadLease != nil {
+			defer payloadLease.Release()
 		}
 		entries, _, _, splitErr := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
 		if splitErr != nil {

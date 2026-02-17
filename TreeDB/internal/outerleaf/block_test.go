@@ -2,10 +2,12 @@ package outerleaf
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"testing"
 
 	"github.com/golang/snappy"
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -20,6 +22,37 @@ func pseudoRandomBytes(n int) []byte {
 		out[i] = byte((x * 0x2545F4914F6CDD1D) >> 56)
 	}
 	return out
+}
+
+func makeCodecNonePayloadForTest(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	payload := make([]byte, blockHeaderSize+len(raw))
+	copy(payload[:len(blockMagic)], blockMagic[:])
+	payload[4] = blockVersionV1
+	payload[5] = blockCodecNone
+	binary.LittleEndian.PutUint16(payload[blockV1KeyLenOff:blockV1KeyLenOff+2], 0)
+	binary.LittleEndian.PutUint32(payload[blockV1ValueLenOff:blockV1ValueLenOff+4], uint32(len(raw)))
+	binary.LittleEndian.PutUint32(payload[blockV1RawLenOff:blockV1RawLenOff+4], uint32(len(raw)))
+	copy(payload[blockHeaderSize:], raw)
+	checksum := crc.ChecksumParts(payload[:blockChecksumOff], payload[blockHeaderSize:])
+	binary.LittleEndian.PutUint32(payload[blockChecksumOff:blockChecksumOff+blockChecksumSize], checksum)
+	return payload
+}
+
+func drainOuterLeafBytesPoolForTest() {
+	for {
+		v := outerLeafBytesPool.Get()
+		if v == nil {
+			return
+		}
+		entry, ok := v.(*bytesPoolEntry)
+		if !ok || entry == nil {
+			continue
+		}
+		entry.buf = nil
+		entry.next = nil
+		outerLeafBytesEntryPool.Put(entry)
+	}
 }
 
 func TestEncodeDecodeSingleRoundTrip(t *testing.T) {
@@ -215,6 +248,132 @@ func TestDecodePayloadSnappyPreallocatedDstNoAllocs(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("expected zero allocs per run, got %.2f", allocs)
+	}
+}
+
+func TestPayloadLeaseReleaseIdempotence(t *testing.T) {
+	raw := bytes.Repeat([]byte("outerleaf-payload-lease|"), 256)
+	encoded := snappy.Encode(nil, raw)
+
+	decoded, lease, err := decodePayloadLease(blockCodecSnappy, encoded, len(raw), nil)
+	if err != nil {
+		t.Fatalf("decodePayloadLease: %v", err)
+	}
+	if lease == nil {
+		t.Fatalf("lease=nil want non-nil")
+	}
+	if !bytes.Equal(decoded, raw) {
+		t.Fatalf("decoded payload mismatch")
+	}
+	lease.Release()
+	lease.Release()
+}
+
+func TestDecodeAndVerifyPayloadLeaseAllowRawViewNoCopy(t *testing.T) {
+	raw := bytes.Repeat([]byte("outerleaf-raw-view"), 128)
+	payload := makeCodecNonePayloadForTest(t, raw)
+
+	decoded, lease, err := decodeAndVerifyPayloadLeaseWithChecksum(payload, len(raw), blockCodecNone, nil, true, true)
+	if err != nil {
+		t.Fatalf("decodeAndVerifyPayloadLeaseWithChecksum: %v", err)
+	}
+	if lease != nil {
+		t.Fatalf("lease=%v want nil", lease)
+	}
+	want := payload[blockHeaderSize:]
+	if !bytes.Equal(decoded, want) {
+		t.Fatalf("decoded payload mismatch")
+	}
+	if len(decoded) > 0 && &decoded[0] != &want[0] {
+		t.Fatalf("allowRawView codec none should return payload view without copy")
+	}
+}
+
+func TestDecodePayloadLeaseSnappyPreallocatedDstNoAllocs(t *testing.T) {
+	raw := bytes.Repeat([]byte("outerleaf-decode-payload-lease|"), 256)
+	encoded := snappy.Encode(nil, raw)
+	dst := make([]byte, len(raw))
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		decoded, lease, err := decodePayloadLease(blockCodecSnappy, encoded, len(raw), dst[:len(raw)])
+		if err != nil {
+			t.Fatalf("decodePayloadLease: %v", err)
+		}
+		if lease != nil {
+			t.Fatalf("lease=%v want nil", lease)
+		}
+		if len(decoded) != len(raw) {
+			t.Fatalf("decoded len=%d want=%d", len(decoded), len(raw))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("expected zero allocs per run, got %.2f", allocs)
+	}
+}
+
+func TestDecodePayloadLeaseErrorReleasesBorrowedBuffer(t *testing.T) {
+	drainOuterLeafBytesPoolForTest()
+	t.Cleanup(drainOuterLeafBytesPoolForTest)
+
+	rawLen := 128
+	invalid := []byte{0x01, 0x02, 0x03}
+
+	if _, lease, err := decodePayloadLease(blockCodecLZ4, invalid, rawLen, nil); err == nil {
+		t.Fatalf("expected decode error")
+	} else if lease != nil {
+		t.Fatalf("lease=%v want nil", lease)
+	}
+
+	first := getPooledBytes(rawLen)
+	if cap(first) < rawLen {
+		t.Fatalf("cap(first)=%d want >=%d", cap(first), rawLen)
+	}
+	firstProbe := first[:1]
+	firstAddr := &firstProbe[0]
+	putPooledBytes(first[:0])
+
+	if _, lease, err := decodePayloadLease(blockCodecLZ4, invalid, rawLen, nil); err == nil {
+		t.Fatalf("expected decode error on second run")
+	} else if lease != nil {
+		t.Fatalf("lease=%v want nil on second run", lease)
+	}
+
+	second := getPooledBytes(rawLen)
+	if cap(second) < rawLen {
+		t.Fatalf("cap(second)=%d want >=%d", cap(second), rawLen)
+	}
+	secondProbe := second[:1]
+	if &secondProbe[0] != firstAddr {
+		t.Fatalf("borrowed decode buffer was not returned to pool on error path")
+	}
+	putPooledBytes(second[:0])
+}
+
+func TestDecodeAndVerifyPayloadModeWithChecksumCompatibility(t *testing.T) {
+	raw := bytes.Repeat([]byte("outerleaf-wrapper-compat"), 128)
+	payload := makeCodecNonePayloadForTest(t, raw)
+
+	copied, err := decodeAndVerifyPayloadModeWithChecksum(payload, len(raw), blockCodecNone, nil, false, true)
+	if err != nil {
+		t.Fatalf("decodeAndVerifyPayloadModeWithChecksum copy path: %v", err)
+	}
+	if !bytes.Equal(copied, raw) {
+		t.Fatalf("copy path payload mismatch")
+	}
+	want := payload[blockHeaderSize:]
+	if len(copied) > 0 && &copied[0] == &want[0] {
+		t.Fatalf("allowRawView=false should preserve copy semantics")
+	}
+
+	view, err := decodeAndVerifyPayloadModeWithChecksum(payload, len(raw), blockCodecNone, nil, true, true)
+	if err != nil {
+		t.Fatalf("decodeAndVerifyPayloadModeWithChecksum view path: %v", err)
+	}
+	if !bytes.Equal(view, raw) {
+		t.Fatalf("view path payload mismatch")
+	}
+	if len(view) > 0 && &view[0] != &want[0] {
+		t.Fatalf("allowRawView=true should preserve raw-view semantics")
 	}
 }
 
