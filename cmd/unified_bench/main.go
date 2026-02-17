@@ -30,6 +30,7 @@ import (
 	"unicode"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/internal/benchprof"
 	"github.com/snissn/gomap/kvstore"
 	treedbadapter "github.com/snissn/gomap/kvstore/adapters/treedb"
 )
@@ -596,8 +597,11 @@ func main() {
 			if err != nil {
 				log.Fatalf("benchmark: %v", err)
 			}
-			maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
+			hasArtifacts := maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
 			fmt.Print(renderMarkdownSingle(run))
+			if hasArtifacts {
+				runBenchprof(*profileDir)
+			}
 			return
 		}
 
@@ -605,7 +609,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("benchmark: %v", err)
 		}
-		maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
+		hasArtifacts := maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
 		printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
 		if len(run.CheckpointDurations) > 0 {
 			fmt.Println()
@@ -636,6 +640,9 @@ func main() {
 				}
 			}
 		}
+		if hasArtifacts {
+			runBenchprof(*profileDir)
+		}
 		return
 	}
 
@@ -645,7 +652,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("benchmark sweep: %v", err)
 	}
-	maybeWriteBenchprofArtifacts(*profileDir, runs)
+	hasArtifacts := maybeWriteBenchprofArtifacts(*profileDir, runs)
 
 	switch format {
 	case "table":
@@ -687,6 +694,9 @@ func main() {
 		fmt.Print(renderMarkdownSweep(runs))
 	default:
 		log.Fatalf("unknown -format: %q", format)
+	}
+	if hasArtifacts {
+		runBenchprof(*profileDir)
 	}
 }
 
@@ -824,13 +834,21 @@ func applyProfileArtifactDir(dir string, isSet map[string]bool) error {
 	return nil
 }
 
-func maybeWriteBenchprofArtifacts(dir string, runs []BenchRun) {
+func maybeWriteBenchprofArtifacts(dir string, runs []BenchRun) bool {
 	dir = strings.TrimSpace(dir)
 	if dir == "" || len(runs) == 0 {
-		return
+		return false
 	}
 	if err := writeBenchprofArtifacts(dir, runs); err != nil {
 		log.Printf("benchprof artifacts: %v", err)
+		return false
+	}
+	return true
+}
+
+func runBenchprof(dir string) {
+	if err := benchprof.RunFromProfilesDir(dir); err != nil {
+		log.Printf("benchprof: %v", err)
 	}
 }
 
