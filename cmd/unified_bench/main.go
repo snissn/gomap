@@ -596,8 +596,11 @@ func main() {
 			if err != nil {
 				log.Fatalf("benchmark: %v", err)
 			}
-			maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
+			hasArtifacts := maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
 			fmt.Print(renderMarkdownSingle(run))
+			if hasArtifacts {
+				runBenchprof(*profileDir)
+			}
 			return
 		}
 
@@ -605,7 +608,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("benchmark: %v", err)
 		}
-		maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
+		hasArtifacts := maybeWriteBenchprofArtifacts(*profileDir, []BenchRun{run})
 		printResultsTable(run.Instances, run.TestOrder, run.DisplayNames, run.Results)
 		if len(run.CheckpointDurations) > 0 {
 			fmt.Println()
@@ -636,6 +639,9 @@ func main() {
 				}
 			}
 		}
+		if hasArtifacts {
+			runBenchprof(*profileDir)
+		}
 		return
 	}
 
@@ -645,7 +651,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("benchmark sweep: %v", err)
 	}
-	maybeWriteBenchprofArtifacts(*profileDir, runs)
+	hasArtifacts := maybeWriteBenchprofArtifacts(*profileDir, runs)
 
 	switch format {
 	case "table":
@@ -687,6 +693,9 @@ func main() {
 		fmt.Print(renderMarkdownSweep(runs))
 	default:
 		log.Fatalf("unknown -format: %q", format)
+	}
+	if hasArtifacts {
+		runBenchprof(*profileDir)
 	}
 }
 
@@ -824,14 +833,64 @@ func applyProfileArtifactDir(dir string, isSet map[string]bool) error {
 	return nil
 }
 
-func maybeWriteBenchprofArtifacts(dir string, runs []BenchRun) {
+func maybeWriteBenchprofArtifacts(dir string, runs []BenchRun) bool {
 	dir = strings.TrimSpace(dir)
 	if dir == "" || len(runs) == 0 {
-		return
+		return false
 	}
 	if err := writeBenchprofArtifacts(dir, runs); err != nil {
 		log.Printf("benchprof artifacts: %v", err)
+		return false
 	}
+	return true
+}
+
+func runBenchprof(dir string) {
+	path, err := locateBenchprofBinary()
+	if err != nil {
+		log.Printf("benchprof: %v", err)
+		return
+	}
+	cmd := exec.Command(path, "-profiles-dir", dir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Printf("benchprof: %v", err)
+	}
+}
+
+func locateBenchprofBinary() (string, error) {
+	candidates := []string{
+		filepath.Join(".", "bin", "benchprof"),
+	}
+	if runtime.GOOS == "windows" {
+		candidates = append(candidates, filepath.Join(".", "bin", "benchprof.exe"))
+	}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "benchprof"))
+		if runtime.GOOS == "windows" {
+			candidates = append(candidates, filepath.Join(filepath.Dir(exe), "benchprof.exe"))
+		}
+	}
+	candidates = append(candidates, "benchprof")
+	if runtime.GOOS == "windows" {
+		candidates = append(candidates, "benchprof.exe")
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		candidate = filepath.Clean(candidate)
+		if _, dup := seen[candidate]; dup {
+			continue
+		}
+		seen[candidate] = struct{}{}
+
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path, nil
+		}
+	}
+
+	return "", errors.New("benchprof binary not found; build it at ./bin/benchprof and ensure it is executable")
 }
 
 func writeBenchprofArtifacts(dir string, runs []BenchRun) error {

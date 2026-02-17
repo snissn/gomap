@@ -19,7 +19,7 @@ make benchprof
 ## Typical flow
 
 1. Run `unified-bench` with profile outputs into one directory.
-2. Run `benchprof` on that directory.
+2. `unified-bench` auto-runs `benchprof` at the end when `./bin/benchprof` is available. If it is unavailable, run it manually.
 
 Example:
 
@@ -35,6 +35,8 @@ mkdir -p /tmp/scan-profiles
   -test full_scan,prefix_scan \
   -profile-dir /tmp/scan-profiles \
   -progress=false
+
+# If needed (for ad-hoc runs), this is the equivalent manual invocation:
 
 ./bin/benchprof \
   -profiles-dir /tmp/scan-profiles

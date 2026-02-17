@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -66,4 +68,70 @@ func TestIntegration_NoHangLargeKeys(t *testing.T) {
 	}
 
 	t.Logf("Benchmark completed successfully.\nStdout:\n%s\nStderr:\n%s", stdout.String(), stderr.String())
+}
+
+func TestIntegration_ProfileDir_AutoRunsBenchprof(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	// Build the unified-bench executable first to test the CLI path.
+	buildCmd := exec.Command("go", "build", "-o", "../../bin/unified-bench", ".")
+	buildCmd.Dir = "."
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("failed to build unified-bench: %v", err)
+	}
+
+	profileDir := t.TempDir()
+	fakeBinDir := t.TempDir()
+	fakeBenchprof := filepath.Join(fakeBinDir, "benchprof")
+	markerPath := filepath.Join(profileDir, ".benchprof_invoked")
+
+	shim := "#!/usr/bin/env sh\n"
+	shim += "touch \"$GOMAP_BENCHPROF_MARKER\"\n"
+	shim += "exit 0\n"
+	if err := os.WriteFile(fakeBenchprof, []byte(shim), 0o755); err != nil {
+		t.Fatalf("write fake benchprof: %v", err)
+	}
+
+	cmd := exec.Command(
+		"../../bin/unified-bench",
+		"-test", "sequential_write",
+		"-dbs", "treedb",
+		"-keys", "128",
+		"-format", "table",
+		"-profile-dir", profileDir,
+		"-progress=false",
+	)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	pathEnv := fakeBinDir + string(os.PathListSeparator) + os.Getenv("PATH")
+	cmd.Env = append(
+		os.Environ(),
+		"PATH="+pathEnv,
+		"GOMAP_BENCHPROF_MARKER="+markerPath,
+	)
+
+	timeout := 120 * time.Second
+	timer := time.AfterFunc(timeout, func() {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		t.Errorf("benchmark process timed out after %v", timeout)
+	})
+	defer timer.Stop()
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("benchmark failed: %v\nStdout:\n%s\nStderr:\n%s", err, stdout.String(), stderr.String())
+	}
+
+	if _, err := os.Stat(filepath.Join(profileDir, "benchprof_results.json")); err != nil {
+		t.Fatalf("expected benchprof_results.json: %v", err)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Fatalf("expected auto-run benchprof marker: %v\nStdout:\n%s\nStderr:\n%s", err, stdout.String(), stderr.String())
+	}
 }
