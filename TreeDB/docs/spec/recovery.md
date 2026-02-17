@@ -89,6 +89,13 @@ Each commit record maps to backend batch op:
 - `OpSetInline` -> `Set(key, value)`
 - `OpSetRID` -> lookup `RID` in map, then `SetPointer(key, ptr)`
 
+WAL fence mode implications:
+
+- `rid_join`: pointer-eligible writes replay through `OpSetRID` and therefore
+  depend on the RID map/fence rules above.
+- `simple_inline`: pointer-eligible writes replay through `OpSetInline`; RID
+  join is not required for those records.
+
 Each replayed batch is committed with `WriteSync`.
 
 ### 4.4 Cleanup
@@ -126,6 +133,6 @@ After successful open:
 ## 7. Recovery Invariants
 
 1. Replay order for equal keys must honor commit sequence ordering semantics.
-2. RID join must be exact; no synthetic value reconstruction is permitted.
+2. RID join (when present) must be exact; no synthetic value reconstruction is permitted.
 3. Commit-log cleanup occurs only after successful replay.
 4. Value-log segments are not deleted as part of normal replay cleanup.

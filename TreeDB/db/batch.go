@@ -258,7 +258,7 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 				return err
 			}
 			if outerleaf.ModeEnabled(b.db.indexOuterLeafMode) {
-				decoded, ok, found, _, decErr := outerleaf.DecodeValueForKey(val, entry.Key, nil)
+				decoded, ok, found, _, decErr := outerleaf.DecodeEntryForKey(val, entry.Key, nil)
 				if decErr != nil {
 					return decErr
 				}
@@ -271,7 +271,14 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 					if !found {
 						return fmt.Errorf("outerleaf: key lookup miss in replay")
 					}
-					val = decoded
+					if decoded.Kind == outerleaf.EntryKindBlobRef {
+						val, err = b.db.valueLogManager.Read(decoded.BlobPtr)
+						if err != nil {
+							return err
+						}
+					} else {
+						val = decoded.Value
+					}
 				}
 			}
 			entry.Value = val

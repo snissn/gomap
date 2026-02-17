@@ -85,6 +85,7 @@ type DB struct {
 	policy                    WritePolicy
 	valueLogDomainThresholds  []ValueLogDomainThreshold
 	outerLeafBlockCache       *outerLeafBlockCache
+	outerLeafKeyCache         *outerLeafKeyCache
 	leafFillTargetPPM         uint32
 	internalFillTargetPPM     uint32
 	leafPrefixCompression     bool
@@ -93,6 +94,9 @@ type DB struct {
 	indexInternalBaseDelta    bool
 	indexAdaptiveLeafEncoding bool
 	indexOuterLeafMode        string
+	outerLeafBlockCodec       ValueLogBlockCodec
+	outerLeafBlockRestart     int
+	skipOuterLeafChecksums    bool
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
 
@@ -201,6 +205,19 @@ const (
 	ValueLogBlockLZ4
 )
 
+// ValueLogWALFenceMode controls how WAL records are encoded for pointer-eligible
+// writes when the outer-leaf fence-pointer mode is active.
+type ValueLogWALFenceMode string
+
+const (
+	// ValueLogWALFenceModeRIDJoin logs pointer writes as RID references in WAL
+	// (current/default behavior).
+	ValueLogWALFenceModeRIDJoin ValueLogWALFenceMode = "rid_join"
+	// ValueLogWALFenceModeSimpleInline logs pointer-eligible writes as inline WAL
+	// records and defers pointer materialization to flush/checkpoint boundaries.
+	ValueLogWALFenceModeSimpleInline ValueLogWALFenceMode = "simple_inline"
+)
+
 const (
 	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
 	IndexOuterLeafModeV1 = "v1"
@@ -222,6 +239,17 @@ const (
 	ValueLogAutoThroughput
 	ValueLogAutoSize
 )
+
+func normalizeValueLogWALFenceMode(mode ValueLogWALFenceMode) ValueLogWALFenceMode {
+	switch strings.ToLower(strings.TrimSpace(string(mode))) {
+	case "", string(ValueLogWALFenceModeRIDJoin):
+		return ValueLogWALFenceModeRIDJoin
+	case string(ValueLogWALFenceModeSimpleInline):
+		return ValueLogWALFenceModeSimpleInline
+	default:
+		return ValueLogWALFenceMode(strings.ToLower(strings.TrimSpace(string(mode))))
+	}
+}
 
 // ValueLogDomainThreshold overrides inline-vs-pointer placement policy for keys
 // under a domain prefix.
@@ -250,7 +278,7 @@ type ValueLogOptions struct {
 	// OuterLeafBlockTargetBytes guides outer-leaf block payload sizing for the
 	// experimental index outer-leaf modes.
 	//
-	// 0 uses a default.
+	// 0 uses a mode-aware default.
 	OuterLeafBlockTargetBytes int
 	// OuterLeafBlockCodec selects the codec used for experimental outer-leaf
 	// block payloads stored in the value log.
@@ -260,6 +288,11 @@ type ValueLogOptions struct {
 	//
 	// 0 uses a default.
 	OuterLeafBlockRestartInterval int
+	// OuterLeafBlobThresholdBytes controls when v2 fence-pointer outer-leaf
+	// entries store a blob reference instead of inline value bytes.
+	//
+	// <=0 uses the default blob-ref threshold.
+	OuterLeafBlobThresholdBytes int
 	// OuterLeafBlockCacheEntries bounds the number of decoded blocks cached for
 	// pointer and fence-pointer reads when an index outer-leaf mode is enabled
 	// (for example, IndexOuterLeafMode=v2_blockptr or v2_fenceptr).
@@ -277,6 +310,14 @@ type ValueLogOptions struct {
 	IncompressibleProbeIntervalBytes int
 	// AutoPolicy controls auto-mode bias (throughput, balanced, size).
 	AutoPolicy ValueLogAutoPolicy
+	// WALFenceMode controls WAL encoding behavior for pointer-eligible writes when
+	// IndexOuterLeafMode=v2_fenceptr.
+	//
+	// Supported values:
+	// - "rid_join" (default): WAL uses RID records joined against value-log RIDs.
+	// - "simple_inline": WAL records inline values and deferred fence materialization
+	//   publishes pointers at flush/checkpoint.
+	WALFenceMode ValueLogWALFenceMode
 
 	// PointerThreshold controls when value-log pointers are used.
 	// Values <= 0 use a default threshold. In cached mode, relaxed durability
@@ -708,9 +749,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
-	snap.reader.vlogs = vlogSet
-	snap.reader.outerLeafMode = db.indexOuterLeafMode
-	snap.reader.cache = db.outerLeafBlockCache
+	snap.reader = newValueReader(vlogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, db.outerLeafBlockCache, db.outerLeafKeyCache)
 	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
@@ -811,6 +850,15 @@ func Open(opts Options) (*DB, error) {
 		opts.ValueLog.Compression = ValueLogCompressionAuto
 	}
 	opts.IndexOuterLeafMode = normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
+	if opts.IndexOuterLeafMode == IndexOuterLeafModeV2FencePtr &&
+		opts.Durability != DurabilityWALOffRelaxed &&
+		strings.TrimSpace(string(opts.ValueLog.WALFenceMode)) == "" {
+		// WAL-enabled v2_fenceptr defaults to simple_inline unless an explicit
+		// fence mode is provided.
+		opts.ValueLog.WALFenceMode = ValueLogWALFenceModeSimpleInline
+	} else {
+		opts.ValueLog.WALFenceMode = normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode)
+	}
 
 	if err := validateOptions(opts); err != nil {
 		return nil, err
@@ -866,10 +914,17 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid value-log outer-leaf block codec %d", opts.ValueLog.OuterLeafBlockCodec)
 	}
-	switch normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode) {
+	indexOuterLeafMode := normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
+	switch indexOuterLeafMode {
 	case IndexOuterLeafModeV1, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
 	default:
 		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
+	}
+	walFenceMode := normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode)
+	switch walFenceMode {
+	case ValueLogWALFenceModeRIDJoin, ValueLogWALFenceModeSimpleInline:
+	default:
+		return fmt.Errorf("treedb: invalid value-log WAL fence mode %q", opts.ValueLog.WALFenceMode)
 	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
@@ -900,6 +955,9 @@ func validateOptions(opts Options) error {
 	}
 	if opts.ValueLog.OuterLeafBlockRestartInterval < 0 {
 		return fmt.Errorf("treedb: invalid value-log outer-leaf block restart interval %d", opts.ValueLog.OuterLeafBlockRestartInterval)
+	}
+	if opts.ValueLog.OuterLeafBlobThresholdBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log outer-leaf blob threshold bytes %d", opts.ValueLog.OuterLeafBlobThresholdBytes)
 	}
 	if opts.ValueLog.IncompressibleHoldBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log incompressible hold bytes %d", opts.ValueLog.IncompressibleHoldBytes)
@@ -981,6 +1039,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		keepRecent:                opts.KeepRecent,
 		valueLogDomainThresholds:  NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		outerLeafBlockCache:       newOuterLeafBlockCache(opts.ValueLog.OuterLeafBlockCacheEntries),
+		outerLeafKeyCache:         newOuterLeafKeyCache(opts.ValueLog.OuterLeafBlockCacheEntries),
 		leafFillTargetPPM:         opts.LeafFillTargetPPM,
 		internalFillTargetPPM:     opts.InternalFillTargetPPM,
 		leafPrefixCompression:     opts.LeafPrefixCompression,
@@ -989,6 +1048,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
 		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
 		indexOuterLeafMode:        opts.IndexOuterLeafMode,
+		outerLeafBlockCodec:       opts.ValueLog.OuterLeafBlockCodec,
+		outerLeafBlockRestart:     opts.ValueLog.OuterLeafBlockRestartInterval,
+		skipOuterLeafChecksums:    opts.ValueLog.ReadIntegrity == IntegritySkipChecksums,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
 		dir:                       opts.Dir,
@@ -1746,7 +1808,7 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(idx.pager, valueReader{vlogs: state.ValueLogSet, outerLeafMode: db.indexOuterLeafMode}, state.RootPageID)
+	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, nil, nil), state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
 

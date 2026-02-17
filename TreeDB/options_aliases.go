@@ -52,6 +52,13 @@ const (
 	ValueLogAutoSize       = db.ValueLogAutoSize
 )
 
+type ValueLogWALFenceMode = db.ValueLogWALFenceMode
+
+const (
+	ValueLogWALFenceModeRIDJoin      = db.ValueLogWALFenceModeRIDJoin
+	ValueLogWALFenceModeSimpleInline = db.ValueLogWALFenceModeSimpleInline
+)
+
 const (
 	IndexOuterLeafModeV1         = db.IndexOuterLeafModeV1
 	IndexOuterLeafModeV2BlockPtr = db.IndexOuterLeafModeV2BlockPtr

@@ -328,10 +328,14 @@ type Iterator struct {
 	slabKeyReader   slabUnsafeKeyReader
 	slabFenceBlocks slabUnsafeFenceBlockReader
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
+	slabFenceRange  slabUnsafeFenceBlockRangeKeyReader
+	slabFenceSeek   slabUnsafeFenceBlockSeekReader
+	slabFencePtrCls slabFencePointerClassifier
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
 
 	fenceEntries    []FenceBlockEntry
+	fenceKeys       [][]byte
 	fenceIndex      int
 	fenceActive     bool
 	fenceValuesLazy bool
@@ -342,6 +346,7 @@ type Iterator struct {
 	pendingFenceLeafIndex int
 	pendingFenceEntryIdx  int
 	pendingFenceReady     bool
+	pendingFenceKeys      [][]byte
 
 	prefetchPageID uint64
 	prefetchStart  int
@@ -392,6 +397,9 @@ func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iter
 	it.slabKeyReader = t.slabKeyReader
 	it.slabFenceBlocks = t.slabFenceBlocks
 	it.slabFenceKeys = t.slabFenceKeys
+	it.slabFenceRange = t.slabFenceRange
+	it.slabFenceSeek = t.slabFenceSeek
+	it.slabFencePtrCls = t.slabFencePtrCls
 	it.slabKeyAppender = t.slabKeyAppender
 	it.slabKeyBatcher = t.slabKeyBatcher
 	it.resetStack()
@@ -427,6 +435,9 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 	it.slabKeyReader = t.slabKeyReader
 	it.slabFenceBlocks = t.slabFenceBlocks
 	it.slabFenceKeys = t.slabFenceKeys
+	it.slabFenceRange = t.slabFenceRange
+	it.slabFenceSeek = t.slabFenceSeek
+	it.slabFencePtrCls = t.slabFencePtrCls
 	it.slabKeyAppender = t.slabKeyAppender
 	it.slabKeyBatcher = t.slabKeyBatcher
 	it.resetStack()
@@ -608,6 +619,7 @@ func (it *Iterator) resetStack() {
 
 func (it *Iterator) resetFenceCursor() {
 	it.fenceEntries = it.fenceEntries[:0]
+	it.fenceKeys = it.fenceKeys[:0]
 	it.fenceIndex = 0
 	it.fenceActive = false
 	it.fenceValuesLazy = false
@@ -620,6 +632,7 @@ func (it *Iterator) clearPendingFenceSeek() {
 	it.pendingFenceLeafIndex = 0
 	it.pendingFenceEntryIdx = 0
 	it.pendingFenceReady = false
+	it.pendingFenceKeys = nil
 }
 
 func (it *Iterator) setCurrentFenceEntry(entry FenceBlockEntry) {
@@ -636,6 +649,24 @@ func (it *Iterator) setCurrentFenceEntry(entry FenceBlockEntry) {
 		it.valOK = false
 	} else {
 		it.currVal = entry.Value
+		it.valOK = true
+	}
+	it.valid = true
+}
+
+func (it *Iterator) setCurrentFenceKey(key []byte) {
+	it.currKey = key
+	it.flags = 0
+	it.currPtr = page.ValuePtr{}
+	it.ptrOK = true
+	if it.mode == IteratorModeKeysOnly {
+		it.currVal = nil
+		it.valOK = true
+	} else if it.fenceValuesLazy {
+		it.currVal = nil
+		it.valOK = false
+	} else {
+		it.currVal = nil
 		it.valOK = true
 	}
 	it.valid = true
@@ -669,6 +700,13 @@ func lowerBoundFenceKeys(keys [][]byte, key []byte) int {
 	})
 }
 
+func (it *Iterator) pointerLikelyFenceBlock(ptr page.ValuePtr) bool {
+	if it != nil && it.slabFencePtrCls != nil {
+		return it.slabFencePtrCls.FencePointerLikelyBlock(ptr)
+	}
+	return true
+}
+
 func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 	if it.reverse || len(it.pendingSeekKey) == 0 || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil) {
 		return false, nil
@@ -686,7 +724,42 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
 			continue
 		}
+		if !it.pointerLikelyFenceBlock(ptr) {
+			continue
+		}
 		keyReaderUsable := false
+		if it.slabFenceSeek != nil {
+			pos, below, above, seekKeys, ok, err := it.slabFenceSeek.ReadUnsafeFenceBlockSeek(ptr, seekKey)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				keyReaderUsable = true
+				if above {
+					break
+				}
+				if below {
+					continue
+				}
+				if pos >= 0 && pos < len(seekKeys) {
+					top.Index = scan
+					it.pendingFencePageID = top.PageID
+					it.pendingFenceLeafIndex = scan
+					it.pendingFenceEntryIdx = pos
+					it.pendingFenceReady = true
+					it.pendingFenceKeys = seekKeys
+					// We already selected the predecessor block that contains seekKey.
+					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
+					// the next loadCurrent loop iteration.
+					it.pendingSeekKey = it.pendingSeekKey[:0]
+					return true, nil
+				}
+				if len(seekKeys) == 0 {
+					continue
+				}
+				break
+			}
+		}
 		if it.slabFenceKeys != nil {
 			keys, ok, err := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
 			if err != nil {
@@ -694,6 +767,18 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			}
 			if ok {
 				keyReaderUsable = true
+				if len(keys) == 0 {
+					continue
+				}
+				// Ordered, non-overlapping fence layouts dominate production data.
+				// If seekKey is beyond this predecessor block's upper bound, earlier
+				// predecessor blocks cannot contain it; stop scanning.
+				if compareTreeKey(seekKey, keys[len(keys)-1]) > 0 {
+					break
+				}
+				if compareTreeKey(seekKey, keys[0]) < 0 {
+					continue
+				}
 				pos := lowerBoundFenceKeys(keys, seekKey)
 				if pos < len(keys) {
 					top.Index = scan
@@ -701,12 +786,14 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					it.pendingFenceLeafIndex = scan
 					it.pendingFenceEntryIdx = pos
 					it.pendingFenceReady = true
+					it.pendingFenceKeys = keys
+					// We already selected the predecessor block that contains seekKey.
+					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
+					// the next loadCurrent loop iteration.
+					it.pendingSeekKey = it.pendingSeekKey[:0]
 					return true, nil
 				}
-				// Keep scanning earlier fence entries defensively. Normal fence
-				// layout should be ordered/non-overlapping, but callers can still
-				// present mixed layouts during testing.
-				continue
+				break
 			}
 		}
 		if it.slabFenceBlocks != nil && (preferFenceEntries || !keyReaderUsable) {
@@ -717,6 +804,18 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			if !ok {
 				continue
 			}
+			if len(entries) == 0 {
+				continue
+			}
+			// Ordered, non-overlapping fence layouts dominate production data.
+			// If seekKey is beyond this predecessor block's upper bound, earlier
+			// predecessor blocks cannot contain it; stop scanning.
+			if compareTreeKey(seekKey, entries[len(entries)-1].Key) > 0 {
+				break
+			}
+			if compareTreeKey(seekKey, entries[0].Key) < 0 {
+				continue
+			}
 			pos := lowerBoundFenceEntries(entries, seekKey)
 			if pos < len(entries) {
 				top.Index = scan
@@ -724,19 +823,20 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				it.pendingFenceLeafIndex = scan
 				it.pendingFenceEntryIdx = pos
 				it.pendingFenceReady = true
+				// We already selected the predecessor block that contains seekKey.
+				// Clearing pendingSeekKey avoids a redundant predecessor rescan on
+				// the next loadCurrent loop iteration.
+				it.pendingSeekKey = it.pendingSeekKey[:0]
 				return true, nil
 			}
-			// Keep scanning earlier fence entries defensively. Normal fence
-			// layout should be ordered/non-overlapping, but callers can still
-			// present mixed layouts during testing.
-			continue
+			break
 		}
 	}
 	return false, nil
 }
 
 func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced bool, exhausted bool, err error) {
-	if top == nil || top.Node.Type() != page.PageTypeLeaf || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil) {
+	if top == nil || top.Node.Type() != page.PageTypeLeaf || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil && it.slabFenceRange == nil) {
 		return false, false, false, nil
 	}
 	if it.mode == IteratorModePointerProjection {
@@ -752,28 +852,49 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 	if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
 		return false, false, false, nil
 	}
+	if !it.pointerLikelyFenceBlock(ptr) {
+		return false, false, false, nil
+	}
 
 	var (
 		entries []FenceBlockEntry
+		keys    [][]byte
 		ok      bool
 	)
 	preferKeyOnlyExpansion := it.shouldPreferFenceKeyOnly() || it.slabFenceBlocks == nil
-	if preferKeyOnlyExpansion && it.slabFenceKeys != nil {
-		keys, keyOK, keyErr := it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
-		if keyErr != nil {
-			return false, false, false, keyErr
+	if preferKeyOnlyExpansion && (it.slabFenceRange != nil || it.slabFenceKeys != nil) {
+		var (
+			readKeys [][]byte
+			keyOK    bool
+		)
+		if it.pendingFenceReady && top.PageID == it.pendingFencePageID && top.Index == it.pendingFenceLeafIndex && it.pendingFenceKeys != nil {
+			readKeys = it.pendingFenceKeys
+			keyOK = true
+			it.pendingFenceKeys = nil
+		} else {
+			var readOK bool
+			var keyErr error
+			if !it.reverse && it.slabFenceRange != nil {
+				lower := it.start
+				if len(it.pendingSeekKey) > 0 {
+					lower = it.pendingSeekKey
+				}
+				readKeys, readOK, keyErr = it.slabFenceRange.ReadUnsafeFenceBlockKeysRange(ptr, lower, it.end)
+				if keyErr == nil && !readOK && it.slabFenceKeys != nil {
+					readKeys, readOK, keyErr = it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
+				}
+			} else if it.slabFenceKeys != nil {
+				readKeys, readOK, keyErr = it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
+			}
+			if keyErr != nil {
+				return false, false, false, keyErr
+			}
+			if readOK {
+				keyOK = true
+			}
 		}
 		if keyOK {
-			entries = it.fenceEntries
-			if cap(entries) < len(keys) {
-				entries = make([]FenceBlockEntry, len(keys))
-			} else {
-				entries = entries[:len(keys)]
-			}
-			for i := range keys {
-				entries[i].Key = keys[i]
-				entries[i].Value = nil
-			}
+			keys = readKeys
 			ok = true
 			it.fenceValuesLazy = it.mode == IteratorModeFull
 			it.fenceBlockPtr = ptr
@@ -792,9 +913,14 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		}
 		it.fenceValuesLazy = false
 		it.fenceBlockPtr = ptr
+		keys = nil
 	}
 	handled = true
-	if len(entries) == 0 {
+	blockLen := len(entries)
+	if len(keys) > 0 {
+		blockLen = len(keys)
+	}
+	if blockLen == 0 {
 		// loadCurrent() will advance the leaf index when handled && !produced,
 		// so empty fence blocks still make forward/reverse progress.
 		return handled, false, false, nil
@@ -804,9 +930,13 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 	if it.pendingFenceReady && top.PageID == it.pendingFencePageID && top.Index == it.pendingFenceLeafIndex {
 		pos = it.pendingFenceEntryIdx
 	} else if it.reverse {
-		pos = len(entries) - 1
+		pos = blockLen - 1
 		if it.end != nil {
-			pos = lowerBoundFenceEntries(entries, it.end) - 1
+			if len(keys) > 0 {
+				pos = lowerBoundFenceKeys(keys, it.end) - 1
+			} else {
+				pos = lowerBoundFenceEntries(entries, it.end) - 1
+			}
 		}
 	} else {
 		var lower []byte
@@ -814,25 +944,40 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 			lower = it.pendingSeekKey
 		}
 		if lower != nil {
-			pos = lowerBoundFenceEntries(entries, lower)
+			if len(keys) > 0 {
+				pos = lowerBoundFenceKeys(keys, lower)
+			} else {
+				pos = lowerBoundFenceEntries(entries, lower)
+			}
 		}
 	}
-	if pos < 0 || pos >= len(entries) {
+	if pos < 0 || pos >= blockLen {
 		return handled, false, false, nil
 	}
 
+	var posKey []byte
+	if len(keys) > 0 {
+		posKey = keys[pos]
+	} else {
+		posKey = entries[pos].Key
+	}
 	if !it.reverse {
-		if it.end != nil && compareTreeKey(entries[pos].Key, it.end) >= 0 {
+		if it.end != nil && compareTreeKey(posKey, it.end) >= 0 {
 			return handled, false, true, nil
 		}
-	} else if it.start != nil && compareTreeKey(entries[pos].Key, it.start) < 0 {
+	} else if it.start != nil && compareTreeKey(posKey, it.start) < 0 {
 		return handled, false, true, nil
 	}
 
 	it.fenceEntries = entries
+	it.fenceKeys = keys
 	it.fenceIndex = pos
 	it.fenceActive = true
-	it.setCurrentFenceEntry(entries[pos])
+	if len(keys) > 0 {
+		it.setCurrentFenceKey(keys[pos])
+	} else {
+		it.setCurrentFenceEntry(entries[pos])
+	}
 	return handled, true, false, nil
 }
 
@@ -1069,31 +1214,58 @@ func (it *Iterator) Next() {
 	if !it.valid {
 		panic("iterator invalid")
 	}
-	if it.fenceActive && len(it.fenceEntries) > 0 {
-		next := it.fenceIndex + 1
-		if it.reverse {
-			next = it.fenceIndex - 1
-		}
-		if next >= 0 && next < len(it.fenceEntries) {
-			entry := it.fenceEntries[next]
-			if !it.reverse {
-				if it.end != nil && compareTreeKey(entry.Key, it.end) >= 0 {
-					it.resetFenceCursor()
-					it.valid = false
-					return
-				}
-			} else {
-				if it.start != nil && compareTreeKey(entry.Key, it.start) < 0 {
-					it.resetFenceCursor()
-					it.valid = false
-					return
-				}
+	if it.fenceActive {
+		if len(it.fenceKeys) > 0 {
+			next := it.fenceIndex + 1
+			if it.reverse {
+				next = it.fenceIndex - 1
 			}
-			it.fenceIndex = next
-			it.setCurrentFenceEntry(entry)
-			return
+			if next >= 0 && next < len(it.fenceKeys) {
+				key := it.fenceKeys[next]
+				if !it.reverse {
+					if it.end != nil && compareTreeKey(key, it.end) >= 0 {
+						it.resetFenceCursor()
+						it.valid = false
+						return
+					}
+				} else {
+					if it.start != nil && compareTreeKey(key, it.start) < 0 {
+						it.resetFenceCursor()
+						it.valid = false
+						return
+					}
+				}
+				it.fenceIndex = next
+				it.setCurrentFenceKey(key)
+				return
+			}
+			it.resetFenceCursor()
+		} else if len(it.fenceEntries) > 0 {
+			next := it.fenceIndex + 1
+			if it.reverse {
+				next = it.fenceIndex - 1
+			}
+			if next >= 0 && next < len(it.fenceEntries) {
+				entry := it.fenceEntries[next]
+				if !it.reverse {
+					if it.end != nil && compareTreeKey(entry.Key, it.end) >= 0 {
+						it.resetFenceCursor()
+						it.valid = false
+						return
+					}
+				} else {
+					if it.start != nil && compareTreeKey(entry.Key, it.start) < 0 {
+						it.resetFenceCursor()
+						it.valid = false
+						return
+					}
+				}
+				it.fenceIndex = next
+				it.setCurrentFenceEntry(entry)
+				return
+			}
+			it.resetFenceCursor()
 		}
-		it.resetFenceCursor()
 	}
 	if len(it.stack) > 0 {
 		it.prefetchArmed = true
@@ -1392,6 +1564,7 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 	// Keep the expanded block for subsequent entries in this run so we only pay
 	// one full decode when values are actually requested.
 	it.fenceEntries = entries
+	it.fenceKeys = nil
 	it.fenceValuesLazy = false
 	entry := entries[it.fenceIndex]
 	if compareTreeKey(entry.Key, it.currKey) != 0 {

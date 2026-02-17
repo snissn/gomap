@@ -4,15 +4,21 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -149,6 +155,52 @@ func countSnapshotLeafEntries(t *testing.T, snap *db.Snapshot) int {
 		t.Fatalf("count leaf entries: %v", err)
 	}
 	return total
+}
+
+func countCommitLogOpsInDir(t *testing.T, walDir string) (inlineOps int, ridOps int, deleteOps int) {
+	t.Helper()
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		t.Fatalf("read wal dir: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "commit-") || !strings.HasSuffix(name, ".log") {
+			continue
+		}
+		path := filepath.Join(walDir, name)
+		r, err := commitlog.NewReader(path)
+		if err != nil {
+			t.Fatalf("commitlog.NewReader(%s): %v", name, err)
+		}
+		for {
+			records, err := r.ReadBatch()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					break
+				}
+				_ = r.Close()
+				t.Fatalf("ReadBatch(%s): %v", name, err)
+			}
+			for i := range records {
+				switch records[i].Op {
+				case commitlog.OpSetInline:
+					inlineOps++
+				case commitlog.OpSetRID:
+					ridOps++
+				case commitlog.OpDelete:
+					deleteOps++
+				}
+			}
+		}
+		if err := r.Close(); err != nil {
+			t.Fatalf("close reader %s: %v", name, err)
+		}
+	}
+	return inlineOps, ridOps, deleteOps
 }
 
 func (m *MockBackend) Get(key []byte) ([]byte, error) {
@@ -963,7 +1015,7 @@ func TestCachingDB_FlushPersistsValueLogPointer(t *testing.T) {
 	}
 }
 
-func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
+func TestCachingDB_FlushFenceModeCollapsesPointerEntries_WALOffDeferred(t *testing.T) {
 	dir := t.TempDir()
 	backendOpts := db.Options{
 		Dir:                dir,
@@ -981,6 +1033,8 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
 	}
 
 	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
 		FlushThreshold:                    1 << 20,
 		ValueLogPointerThreshold:          1,
 		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
@@ -1030,8 +1084,14 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries(t *testing.T) {
 	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_calls")
 	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_flushed_memtables")
 	_ = parseStatUint("treedb.cache.v2_fenceptr.assist_early_triggers")
-	if enqueuedKeys != 0 || materializedKeys != 0 || pendingKeys != 0 {
-		t.Fatalf("expected non-deferred fence path to keep deferred counters at zero, enqueued=%d materialized=%d pending=%d", enqueuedKeys, materializedKeys, pendingKeys)
+	if enqueuedKeys == 0 || materializedKeys == 0 {
+		t.Fatalf("expected deferred fence stats to record work, enqueued=%d materialized=%d", enqueuedKeys, materializedKeys)
+	}
+	if enqueuedKeys != materializedKeys {
+		t.Fatalf("expected checkpoint to fully materialize deferred fence keys, enqueued=%d materialized=%d", enqueuedKeys, materializedKeys)
+	}
+	if pendingKeys != 0 {
+		t.Fatalf("expected no pending deferred fence keys after checkpoint, pending=%d", pendingKeys)
 	}
 
 	snap := backend.AcquireSnapshot()
@@ -1150,6 +1210,544 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 		if !bytes.Equal(got, valueFor(i)) {
 			t.Fatalf("backend value mismatch for %s", key)
 		}
+	}
+}
+
+func TestCachingDB_Open_V2FencePtrWALOn_ExplicitRIDJoinAllowed(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{
+		IndexOuterLeafMode:   db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode: string(db.ValueLogWALFenceModeRIDJoin),
+	})
+	if err != nil {
+		t.Fatalf("expected WAL-enabled v2_fenceptr rid_join to be accepted, got err=%v", err)
+	}
+	defer cache.Close()
+	if got := cache.valueLogWALFenceMode; got != string(db.ValueLogWALFenceModeRIDJoin) {
+		t.Fatalf("expected WAL-on v2_fenceptr to keep explicit rid_join, got %q", got)
+	}
+}
+
+func TestCachingDB_Open_ValueLogOuterLeafBlobThresholdBytes_NegativeRejected(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	_, err = Open(dir, backend, Options{
+		ValueLogOuterLeafBlobThresholdBytes: -1,
+	})
+	if err == nil {
+		t.Fatalf("expected negative blob threshold to be rejected")
+	}
+	if !strings.Contains(err.Error(), "blob threshold") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCachingDB_Open_V2FencePtrWALOn_DefaultAutoSimpleInline(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open default fence mode: %v", err)
+	}
+	defer cache.Close()
+
+	if got := cache.valueLogWALFenceMode; got != string(db.ValueLogWALFenceModeSimpleInline) {
+		t.Fatalf("expected WAL-on v2_fenceptr default fence mode to auto-select simple_inline, got %q", got)
+	}
+	if got := cache.Stats()["treedb.cache.v2_fenceptr.wal_fence_mode"]; got != "simple_inline" {
+		t.Fatalf("stats wal_fence_mode mismatch: got %q", got)
+	}
+}
+
+func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode:              string(db.ValueLogWALFenceModeSimpleInline),
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 96
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if err := cache.SetSync(key, valueFor(i)); err != nil {
+			t.Fatalf("SetSync(%s): %v", key, err)
+		}
+	}
+
+	// WAL-on simple_inline should keep mutable entries inline until flush/checkpoint.
+	shard := &cache.mutableShards[0]
+	shard.mu.Lock()
+	iter := shard.mem.NewIterator(nil, nil)
+	if !iter.Valid() {
+		shard.mu.Unlock()
+		t.Fatalf("expected mutable entries before checkpoint")
+	}
+	_, _, flags := iter.UnsafeEntry()
+	_ = iter.Close()
+	shard.mu.Unlock()
+	if flags&node.FlagPointer != 0 {
+		t.Fatalf("expected inline mutable entries prior to deferred materialization")
+	}
+
+	inlineOps, ridOps, _ := countCommitLogOpsInDir(t, cache.dir)
+	if inlineOps != totalKeys {
+		t.Fatalf("expected %d inline WAL set ops, got %d", totalKeys, inlineOps)
+	}
+	if ridOps != 0 {
+		t.Fatalf("expected no RID WAL set ops in simple_inline mode, got %d", ridOps)
+	}
+
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	stats := cache.Stats()
+	if got := stats["treedb.cache.v2_fenceptr.wal_fence_mode"]; got != "simple_inline" {
+		t.Fatalf("wal_fence_mode stat mismatch: got %q", got)
+	}
+	enqueuedKeys, err := strconv.ParseUint(stats["treedb.cache.v2_fenceptr.deferred_enqueued_keys"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse deferred_enqueued_keys: %v", err)
+	}
+	materializedKeys, err := strconv.ParseUint(stats["treedb.cache.v2_fenceptr.deferred_materialized_keys"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse deferred_materialized_keys: %v", err)
+	}
+	if enqueuedKeys == 0 || materializedKeys == 0 {
+		t.Fatalf("expected deferred fence stats to record work, enqueued=%d materialized=%d", enqueuedKeys, materializedKeys)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	leafEntries := countSnapshotLeafEntries(t, snap)
+	_ = snap.Close()
+	if leafEntries <= 0 {
+		t.Fatalf("expected persisted entries")
+	}
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	}
+}
+
+func TestCachingDB_WALOnFenceModeRIDJoin_HybridOversizedUsesRID(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                      1 << 30,
+		MemtableShards:                      1,
+		ForceValueLogPointers:               true,
+		ValueLogPointerThreshold:            1,
+		IndexOuterLeafMode:                  db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode:                string(db.ValueLogWALFenceModeRIDJoin),
+		ValueLogOuterLeafBlockCodec:         uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes:   1 << 20,
+		ValueLogOuterLeafBlobThresholdBytes: 256,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	smallKey := []byte("a-small")
+	largeKey := []byte("z-large")
+	smallVal := bytes.Repeat([]byte("s"), 128)  // C1
+	largeVal := bytes.Repeat([]byte("L"), 2048) // C2
+
+	if err := cache.SetSync(smallKey, smallVal); err != nil {
+		t.Fatalf("SetSync(small): %v", err)
+	}
+	if err := cache.SetSync(largeKey, largeVal); err != nil {
+		t.Fatalf("SetSync(large): %v", err)
+	}
+
+	inlineOps, ridOps, _ := countCommitLogOpsInDir(t, cache.dir)
+	if inlineOps < 1 {
+		t.Fatalf("expected at least one inline WAL set op for C1 write, got %d", inlineOps)
+	}
+	if ridOps < 1 {
+		t.Fatalf("expected at least one RID WAL set op for C2 write, got %d", ridOps)
+	}
+
+	shard := &cache.mutableShards[0]
+	shard.mu.Lock()
+	iter := shard.mem.NewIterator(nil, nil)
+	flagsByKey := map[string]byte{}
+	for iter.Valid() {
+		k := string(iter.UnsafeKey())
+		_, _, flags := iter.UnsafeEntry()
+		flagsByKey[k] = flags
+		iter.Next()
+	}
+	_ = iter.Close()
+	shard.mu.Unlock()
+
+	if flagsByKey[string(smallKey)]&node.FlagPointer != 0 {
+		t.Fatalf("expected C1 key to remain inline before checkpoint")
+	}
+	if flagsByKey[string(largeKey)]&node.FlagPointer == 0 {
+		t.Fatalf("expected C2 key to publish pointer before checkpoint")
+	}
+
+	gotSmall, err := cache.Get(smallKey)
+	if err != nil {
+		t.Fatalf("Get(small): %v", err)
+	}
+	if !bytes.Equal(gotSmall, smallVal) {
+		t.Fatalf("small value mismatch")
+	}
+	gotLarge, err := cache.Get(largeKey)
+	if err != nil {
+		t.Fatalf("Get(large): %v", err)
+	}
+	if !bytes.Equal(gotLarge, largeVal) {
+		t.Fatalf("large value mismatch")
+	}
+
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	stats := cache.Stats()
+	if got := stats["treedb.cache.v2_fenceptr.wal_fence_mode"]; got != "rid_join" {
+		t.Fatalf("wal_fence_mode stat mismatch: got %q", got)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	entry, err := snap.GetEntry(largeKey)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("GetEntry(large): %v", err)
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		t.Fatalf("expected persisted pointer for large key, flags=%#x file_id=%#x", entry.Flags, entry.ValuePtr.FileID)
+	}
+
+	raw, err := cache.valueLogReader.Read(entry.ValuePtr)
+	if err != nil {
+		t.Fatalf("read large payload: %v", err)
+	}
+	if outerleaf.HasMagic(raw) {
+		t.Fatalf("expected direct oversized value payload in rid_join mode")
+	}
+	if !bytes.Equal(raw, largeVal) {
+		t.Fatalf("large payload mismatch")
+	}
+}
+
+func TestCachingDB_WALOnFenceModeSimpleInline_UsesOuterLeafV2Payload(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode:              string(db.ValueLogWALFenceModeSimpleInline),
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	if !cache.outerLeafFenceV2Enabled() {
+		t.Fatalf("expected v2_fenceptr mode to be active")
+	}
+
+	const totalKeys = 128
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
+	for i := 0; i < totalKeys; i++ {
+		key := []byte(fmt.Sprintf("k%04d", i))
+		if err := cache.SetSync(key, valueFor(i)); err != nil {
+			t.Fatalf("SetSync(%s): %v", key, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	fenceKey := []byte("k0000")
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	entry, err := snap.GetEntry(fenceKey)
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("GetEntry(%s): %v", fenceKey, err)
+	}
+	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+		t.Fatalf("expected persisted fence pointer for %s, flags=%#x file_id=%#x", fenceKey, entry.Flags, entry.ValuePtr.FileID)
+	}
+
+	raw, err := cache.valueLogReader.Read(entry.ValuePtr)
+	if err != nil {
+		t.Fatalf("value-log read: %v", err)
+	}
+	if !outerleaf.HasMagic(raw) {
+		t.Fatalf("expected v2 outer-leaf wrapped payload in value-log for WAL-on simple_inline path")
+	}
+
+	decoded, err := cache.decodeOuterLeafValue(fenceKey, raw)
+	if err != nil {
+		t.Fatalf("decodeOuterLeafValue: %v", err)
+	}
+	if want := valueFor(0); !bytes.Equal(decoded, want) {
+		t.Fatalf("decoded fence value mismatch: got=%dB want=%dB", len(decoded), len(want))
+	}
+}
+
+func TestCachingDB_WALOnFenceModeSimpleInline_RotateForcesLaneZero(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    8,
+		JournalLanes:                      4,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode:              string(db.ValueLogWALFenceModeSimpleInline),
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	cache.mu.Lock()
+	if err := cache.rotateMutableShardsLocked(-1, false); err != nil {
+		cache.mu.Unlock()
+		t.Fatalf("rotateMutableShardsLocked: %v", err)
+	}
+	laneIDs := append([]uint16(nil), cache.queueLaneIDs...)
+	shardIDs := append([]uint16(nil), cache.queueShardIDs...)
+	cache.mu.Unlock()
+
+	if len(laneIDs) == 0 || len(shardIDs) == 0 {
+		t.Fatalf("expected queued shards after rotate, lanes=%d shards=%d", len(laneIDs), len(shardIDs))
+	}
+	if len(laneIDs) != len(shardIDs) {
+		t.Fatalf("queue metadata mismatch: laneIDs=%d shardIDs=%d", len(laneIDs), len(shardIDs))
+	}
+
+	for i := range laneIDs {
+		if laneIDs[i] != 0 {
+			t.Fatalf("expected WAL-on simple_inline deferred regroup to force lane 0, idx=%d shard=%d lane=%d", i, shardIDs[i], laneIDs[i])
+		}
+	}
+}
+
+func TestCachingDB_WALOffDeferredFenceMode_RotateForcesLaneZero(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    8,
+		JournalLanes:                      4,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	cache.mu.Lock()
+	if err := cache.rotateMutableShardsLocked(-1, false); err != nil {
+		cache.mu.Unlock()
+		t.Fatalf("rotateMutableShardsLocked: %v", err)
+	}
+	laneIDs := append([]uint16(nil), cache.queueLaneIDs...)
+	cache.mu.Unlock()
+
+	if len(laneIDs) == 0 {
+		t.Fatalf("expected queued shards after rotate")
+	}
+	for i, laneID := range laneIDs {
+		if laneID != 0 {
+			t.Fatalf("expected WAL-off deferred regroup to force lane 0, idx=%d lane=%d", i, laneID)
+		}
+	}
+}
+
+func TestCachingDB_WALOnFenceModeSimpleInline_BatchWritePinsLaneZero(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    8,
+		JournalLanes:                      4,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogWALFenceMode:              string(db.ValueLogWALFenceModeSimpleInline),
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	if len(cache.lanes) < 2 {
+		t.Fatalf("expected at least 2 lanes, got %d", len(cache.lanes))
+	}
+	cache.nextLane = 0
+
+	b := cache.NewBatch()
+	for i := 0; i < 16; i++ {
+		key := []byte(fmt.Sprintf("laneprobe-%02d", i))
+		val := bytes.Repeat([]byte{byte(i)}, 256)
+		if err := b.Set(key, val); err != nil {
+			t.Fatalf("Set(%d): %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+
+	if got := cache.nextLane; got != 0 {
+		t.Fatalf("expected deferred regrouping to keep preferred lane 0 for WAL-on simple_inline, nextLane=%d", got)
 	}
 }
 

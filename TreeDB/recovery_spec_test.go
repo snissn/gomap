@@ -127,6 +127,7 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
 	outerLeafV2 := os.Getenv("TREEDB_CRASH_OUTERLEAF_V2") == "1"
 	outerLeafMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_OUTERLEAF_MODE"))
+	walFenceMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_WAL_FENCE_MODE"))
 	if outerLeafMode == "" && outerLeafV2 {
 		// Backward-compatible helper knob.
 		outerLeafMode = treedb.IndexOuterLeafModeV2BlockPtr
@@ -154,6 +155,14 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 		opts.ValueLog.OuterLeafBlockRestartInterval = 16
 	default:
 		t.Fatalf("unsupported TREEDB_CRASH_OUTERLEAF_MODE=%q", outerLeafMode)
+	}
+	switch walFenceMode {
+	case "":
+		// default mode
+	case string(treedb.ValueLogWALFenceModeRIDJoin), string(treedb.ValueLogWALFenceModeSimpleInline):
+		opts.ValueLog.WALFenceMode = treedb.ValueLogWALFenceMode(walFenceMode)
+	default:
+		t.Fatalf("unsupported TREEDB_CRASH_WAL_FENCE_MODE=%q", walFenceMode)
 	}
 
 	db, err := treedb.Open(opts)
@@ -305,10 +314,11 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 
 func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 	type tier struct {
-		name        string
-		env         []string
-		expectLarge bool
-		outerMode   string
+		name         string
+		env          []string
+		expectLarge  bool
+		outerMode    string
+		walFenceMode treedb.ValueLogWALFenceMode
 	}
 
 	tiers := []tier{
@@ -361,6 +371,19 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			expectLarge: true,
 			outerMode:   treedb.IndexOuterLeafModeV2FencePtr,
 		},
+		{
+			name: "wal_on_strict_sync_large_value_outerleaf_v2_fenceptr_simple_inline",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+				"TREEDB_CRASH_OUTERLEAF_MODE=v2_fenceptr",
+				"TREEDB_CRASH_WAL_FENCE_MODE=simple_inline",
+			},
+			expectLarge:  true,
+			outerMode:    treedb.IndexOuterLeafModeV2FencePtr,
+			walFenceMode: treedb.ValueLogWALFenceModeSimpleInline,
+		},
 	}
 
 	for _, tc := range tiers {
@@ -374,6 +397,9 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
 				opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
 				opts.ValueLog.OuterLeafBlockRestartInterval = 16
+			}
+			if tc.walFenceMode != "" {
+				opts.ValueLog.WALFenceMode = tc.walFenceMode
 			}
 			db, err := treedb.Open(opts)
 			if err != nil {

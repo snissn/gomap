@@ -79,6 +79,28 @@ type slabUnsafeFenceBlockKeyReader interface {
 	ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) (keys [][]byte, ok bool, err error)
 }
 
+// Optional bounded key-only fence expansion reads.
+// Implementations may decode only keys in [lower, upper) to avoid
+// materializing full fence key vectors for short bounded scans.
+// ok=false means the reader is not in fence expansion mode for this pointer.
+type slabUnsafeFenceBlockRangeKeyReader interface {
+	ReadUnsafeFenceBlockKeysRange(ptr page.ValuePtr, lower []byte, upper []byte) (keys [][]byte, ok bool, err error)
+}
+
+// Optional seek-oriented fence reader. Implementations can avoid full key
+// materialization for out-of-range predecessor probes by returning only
+// lower-bound classification, and provide keys only when the probe key falls
+// within the block.
+type slabUnsafeFenceBlockSeekReader interface {
+	ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (pos int, below bool, above bool, keys [][]byte, ok bool, err error)
+}
+
+// Optional fast classifier for whether a pointer is expected to reference a
+// fence-expandable outer-leaf block.
+type slabFencePointerClassifier interface {
+	FencePointerLikelyBlock(ptr page.ValuePtr) bool
+}
+
 // Optional key-aware append-style pointer reads.
 type slabUnsafeKeyAppender interface {
 	ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, error)
@@ -117,6 +139,9 @@ type Tree struct {
 	fenceLookupMode bool
 	slabFenceBlocks slabUnsafeFenceBlockReader
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
+	slabFenceRange  slabUnsafeFenceBlockRangeKeyReader
+	slabFenceSeek   slabUnsafeFenceBlockSeekReader
+	slabFencePtrCls slabFencePointerClassifier
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
 	rootPageID      uint64
@@ -153,6 +178,15 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		}
 		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
 			t.slabFenceKeys = fenceKeys
+		}
+		if fenceRange, ok := sr.(slabUnsafeFenceBlockRangeKeyReader); ok {
+			t.slabFenceRange = fenceRange
+		}
+		if fenceSeek, ok := sr.(slabUnsafeFenceBlockSeekReader); ok {
+			t.slabFenceSeek = fenceSeek
+		}
+		if cls, ok := sr.(slabFencePointerClassifier); ok {
+			t.slabFencePtrCls = cls
 		}
 	}
 	t.fenceLookupMode = fenceEnabled && t.slabFenceReader != nil
@@ -207,10 +241,28 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		} else {
 			t.slabFenceKeys = nil
 		}
+		if fenceRange, ok := sr.(slabUnsafeFenceBlockRangeKeyReader); ok {
+			t.slabFenceRange = fenceRange
+		} else {
+			t.slabFenceRange = nil
+		}
+		if fenceSeek, ok := sr.(slabUnsafeFenceBlockSeekReader); ok {
+			t.slabFenceSeek = fenceSeek
+		} else {
+			t.slabFenceSeek = nil
+		}
+		if cls, ok := sr.(slabFencePointerClassifier); ok {
+			t.slabFencePtrCls = cls
+		} else {
+			t.slabFencePtrCls = nil
+		}
 	} else {
 		t.slabFenceReader = nil
 		t.slabFenceBlocks = nil
 		t.slabFenceKeys = nil
+		t.slabFenceRange = nil
+		t.slabFenceSeek = nil
+		t.slabFencePtrCls = nil
 	}
 	t.fenceLookupMode = fenceEnabled && t.slabFenceReader != nil
 	t.rootPageID = root
