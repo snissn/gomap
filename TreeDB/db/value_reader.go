@@ -412,20 +412,12 @@ func (r valueReader) ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []tree
 		if !outerleaf.HasMagic(raw) {
 			return nil, nil, false, nil
 		}
-		if r.cache != nil {
-			decoded, decErr := r.outerLeafBlock(ptr, raw)
-			if decErr != nil {
-				return nil, nil, true, decErr
-			}
-			block = decoded
-		} else {
-			decoded, decErr := outerleaf.DecodeBlockLeaseWithVerify(raw, !r.skipOuterLeafChecksums)
-			if decErr != nil {
-				return nil, nil, true, decErr
-			}
-			block = decoded
-			lease = decoded
+		decoded, decErr := outerleaf.DecodeBlockLeaseWithVerify(raw, !r.skipOuterLeafChecksums)
+		if decErr != nil {
+			return nil, nil, true, decErr
 		}
+		block = decoded
+		lease = decoded
 	}
 	if cap(dst) < block.EntryCount() {
 		dst = make([]tree.FenceBlockEntry, 0, block.EntryCount())
