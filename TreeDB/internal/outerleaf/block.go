@@ -177,6 +177,7 @@ type DecodedBlock struct {
 	keysOnce        sync.Once
 	keys            [][]byte
 	keysErr         error
+	visitLease      *KeyLease
 	restartsOnce    sync.Once
 	restartsErr     error
 	restartKeysOnce sync.Once
@@ -2037,6 +2038,10 @@ func (d *DecodedBlock) Release() {
 		putPooledBytes(d.raw)
 		d.pooledRaw = false
 	}
+	if d.visitLease != nil {
+		releaseKeyLease(d.visitLease)
+		d.visitLease = nil
+	}
 	d.leaseOwned = false
 	d.raw = nil
 	d.entries = nil
@@ -2244,6 +2249,10 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 		off := 0
 		var prevKey []byte
 		var keyArena []byte
+		usePooledArena := d.leaseOwned && d.visitLease == nil
+		if usePooledArena {
+			d.visitLease = acquireKeyLease(1)
+		}
 		for i := 0; i < d.entryCount; i++ {
 			if off+8 > len(encoded) {
 				return fmt.Errorf("outerleaf: truncated v2 entry header")
@@ -2281,7 +2290,12 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 					if newCap < 64 {
 						newCap = 64
 					}
-					keyArena = make([]byte, 0, newCap)
+					if usePooledArena {
+						keyArena = getPooledLeaseArena(newCap)
+						d.visitLease.addChunk(keyArena)
+					} else {
+						keyArena = make([]byte, 0, newCap)
+					}
 					need = keyLen
 				}
 				arenaOff := len(keyArena)
@@ -2304,6 +2318,10 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 		off := 0
 		var prevKey []byte
 		var keyArena []byte
+		usePooledArena := d.leaseOwned && d.visitLease == nil
+		if usePooledArena {
+			d.visitLease = acquireKeyLease(1)
+		}
 		for i := 0; i < d.entryCount; i++ {
 			if off+9 > len(encoded) {
 				return fmt.Errorf("outerleaf: truncated v3 entry header")
@@ -2341,7 +2359,12 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 					if newCap < 64 {
 						newCap = 64
 					}
-					keyArena = make([]byte, 0, newCap)
+					if usePooledArena {
+						keyArena = getPooledLeaseArena(newCap)
+						d.visitLease.addChunk(keyArena)
+					} else {
+						keyArena = make([]byte, 0, newCap)
+					}
 					need = keyLen
 				}
 				arenaOff := len(keyArena)
