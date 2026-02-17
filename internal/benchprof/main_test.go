@@ -1,4 +1,4 @@
-package main
+package benchprof
 
 import (
 	"encoding/json"
