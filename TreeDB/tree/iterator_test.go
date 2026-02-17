@@ -28,6 +28,56 @@ type fenceLookupReaderRangeAware struct {
 	lastUpper  []byte
 }
 
+type countingFenceKeysLease struct {
+	keys         [][]byte
+	released     *int
+	releasedOnce bool
+}
+
+func (l *countingFenceKeysLease) Keys() [][]byte { return l.keys }
+
+func (l *countingFenceKeysLease) Release() {
+	if l == nil || l.releasedOnce {
+		return
+	}
+	l.releasedOnce = true
+	*l.released = *l.released + 1
+}
+
+type fenceLookupReaderRangeLeaseAware struct {
+	*fenceLookupReader
+	rangeCalls int
+	lastLower  []byte
+	lastUpper  []byte
+	created    int
+	released   int
+}
+
+type sharedFenceKeysLease struct {
+	keys [][]byte
+}
+
+func (l *sharedFenceKeysLease) Keys() [][]byte {
+	if l == nil {
+		return nil
+	}
+	return l.keys
+}
+
+func (l *sharedFenceKeysLease) Release() {}
+
+type fenceLookupReaderRangeLeaseSharedKeys struct {
+	*fenceLookupReader
+	rangeCalls int
+	sharedKeys map[page.ValuePtr][][]byte
+}
+
+type fenceLookupReaderSeekLeaseSharedKeys struct {
+	*fenceLookupReader
+	seekCalls  int
+	sharedKeys map[page.ValuePtr][][]byte
+}
+
 func (r *fenceLookupReaderKeysUnavailable) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
 	r.keyCalls++
 	return nil, false, nil
@@ -53,6 +103,123 @@ func (r *fenceLookupReaderRangeAware) ReadUnsafeFenceBlockKeysRange(ptr page.Val
 		return nil, true, nil
 	}
 	return keys[start:end], true, nil
+}
+
+func (r *fenceLookupReaderRangeLeaseAware) ReadUnsafeFenceBlockKeysRangeLease(ptr page.ValuePtr, lower []byte, upper []byte) (FenceKeysLease, bool, error) {
+	r.rangeCalls++
+	r.lastLower = append(r.lastLower[:0], lower...)
+	r.lastUpper = append(r.lastUpper[:0], upper...)
+	keys, ok, err := r.fenceLookupReader.ReadUnsafeFenceBlockKeys(ptr)
+	if err != nil || !ok || len(keys) == 0 {
+		return nil, ok, err
+	}
+	start := 0
+	if len(lower) > 0 {
+		start = lowerBoundFenceKeys(keys, lower)
+	}
+	end := len(keys)
+	if len(upper) > 0 {
+		end = lowerBoundFenceKeys(keys, upper)
+	}
+	if end <= start {
+		return nil, true, nil
+	}
+	r.created++
+	return &countingFenceKeysLease{
+		keys:     keys[start:end],
+		released: &r.released,
+	}, true, nil
+}
+
+func newFenceLookupReaderRangeLeaseSharedKeys() *fenceLookupReaderRangeLeaseSharedKeys {
+	return &fenceLookupReaderRangeLeaseSharedKeys{
+		fenceLookupReader: newFenceLookupReader(),
+		sharedKeys:        make(map[page.ValuePtr][][]byte),
+	}
+}
+
+func newFenceLookupReaderSeekLeaseSharedKeys() *fenceLookupReaderSeekLeaseSharedKeys {
+	return &fenceLookupReaderSeekLeaseSharedKeys{
+		fenceLookupReader: newFenceLookupReader(),
+		sharedKeys:        make(map[page.ValuePtr][][]byte),
+	}
+}
+
+func (r *fenceLookupReaderRangeLeaseSharedKeys) addSharedBlock(entries map[string]string) page.ValuePtr {
+	ptr := r.fenceLookupReader.addBlock(entries)
+	keys, ok, err := r.fenceLookupReader.ReadUnsafeFenceBlockKeys(ptr)
+	if err != nil || !ok {
+		panic("test setup failed: unable to build shared key vector")
+	}
+	r.sharedKeys[ptr] = keys
+	return ptr
+}
+
+func (r *fenceLookupReaderSeekLeaseSharedKeys) addSharedBlock(entries map[string]string) page.ValuePtr {
+	ptr := r.fenceLookupReader.addBlock(entries)
+	keys, ok, err := r.fenceLookupReader.ReadUnsafeFenceBlockKeys(ptr)
+	if err != nil || !ok {
+		panic("test setup failed: unable to build shared key vector")
+	}
+	r.sharedKeys[ptr] = keys
+	return ptr
+}
+
+func (r *fenceLookupReaderRangeLeaseSharedKeys) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
+	keys, ok := r.sharedKeys[ptr]
+	if !ok {
+		return nil, true, fmt.Errorf("missing block ptr %+v", ptr)
+	}
+	r.keyCalls++
+	return keys, true, nil
+}
+
+func (r *fenceLookupReaderSeekLeaseSharedKeys) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
+	keys, ok := r.sharedKeys[ptr]
+	if !ok {
+		return nil, true, fmt.Errorf("missing block ptr %+v", ptr)
+	}
+	r.keyCalls++
+	return keys, true, nil
+}
+
+func (r *fenceLookupReaderRangeLeaseSharedKeys) ReadUnsafeFenceBlockKeysRangeLease(ptr page.ValuePtr, lower []byte, upper []byte) (FenceKeysLease, bool, error) {
+	r.rangeCalls++
+	keys, ok, err := r.ReadUnsafeFenceBlockKeys(ptr)
+	if err != nil || !ok || len(keys) == 0 {
+		return nil, ok, err
+	}
+	start := 0
+	if len(lower) > 0 {
+		start = lowerBoundFenceKeys(keys, lower)
+	}
+	end := len(keys)
+	if len(upper) > 0 {
+		end = lowerBoundFenceKeys(keys, upper)
+	}
+	if end <= start {
+		return nil, true, nil
+	}
+	return &sharedFenceKeysLease{keys: keys[start:end]}, true, nil
+}
+
+func (r *fenceLookupReaderSeekLeaseSharedKeys) ReadUnsafeFenceBlockSeekLease(ptr page.ValuePtr, key []byte) (pos int, below bool, above bool, lease FenceKeysLease, ok bool, err error) {
+	r.seekCalls++
+	keys, ok, err := r.ReadUnsafeFenceBlockKeys(ptr)
+	if err != nil || !ok || len(keys) == 0 {
+		return 0, false, true, nil, ok, err
+	}
+	if len(key) == 0 {
+		return 0, false, false, &sharedFenceKeysLease{keys: keys}, true, nil
+	}
+	pos = lowerBoundFenceKeys(keys, key)
+	if pos == 0 && compareTreeKey(key, keys[0]) < 0 {
+		return 0, true, false, nil, true, nil
+	}
+	if pos >= len(keys) {
+		return len(keys), false, true, nil, true, nil
+	}
+	return pos, false, false, &sharedFenceKeysLease{keys: keys}, true, nil
 }
 
 func newCountingValueReader() *countingValueReader {
@@ -850,6 +1017,261 @@ func TestIterator_FencePointerRangeFullModeUsesBoundedKeyExpansion(t *testing.T)
 	}
 	if reader.blockCalls == 0 {
 		t.Fatalf("expected lazy value fallback to read fence block entries")
+	}
+}
+
+func TestIterator_FencePointerRangeFullModeLeaseExpansionReleasesKeys(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	baseReader := newFenceLookupReader()
+	reader := &fenceLookupReaderRangeLeaseAware{fenceLookupReader: baseReader}
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator([]byte("f015"), []byte("f115"))
+	for ; it.Valid(); it.Next() {
+		_ = it.Key()
+		_ = it.Value()
+	}
+	if err := it.Error(); err != nil {
+		_ = it.Close()
+		t.Fatalf("iterator error: %v", err)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+
+	if reader.rangeCalls == 0 {
+		t.Fatalf("expected lease-aware bounded fence key expansion")
+	}
+	if reader.created == 0 {
+		t.Fatalf("expected at least one lease allocation")
+	}
+	if reader.released != reader.created {
+		t.Fatalf("lease release mismatch: released=%d created=%d", reader.released, reader.created)
+	}
+}
+
+func TestIterator_CloseDoesNotCorruptSharedFenceKeyVectors(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReaderRangeLeaseSharedKeys()
+	ptr0 := reader.addSharedBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addSharedBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator([]byte("f015"), []byte("f115"))
+	for ; it.Valid(); it.Next() {
+		_ = it.Key()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+
+	shared := reader.sharedKeys[ptr0]
+	if len(shared) != 3 {
+		t.Fatalf("shared keys len=%d want=3", len(shared))
+	}
+	if !bytes.Equal(shared[0], []byte("f010")) || !bytes.Equal(shared[1], []byte("f020")) || !bytes.Equal(shared[2], []byte("f030")) {
+		t.Fatalf("shared keys corrupted after iterator close: %q", shared)
+	}
+}
+
+func TestIterator_CloseAfterPendingFenceSeekDoesNotCorruptSharedFenceKeyVectors(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReaderRangeLeaseSharedKeys()
+	ptr0 := reader.addSharedBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addSharedBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator([]byte("f025"), []byte("f040"))
+	var got []string
+	for ; it.Valid(); it.Next() {
+		got = append(got, string(it.Key()))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(got) != 1 || got[0] != "f030" {
+		t.Fatalf("keys=%v want=[f030]", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+
+	if reader.keyCalls == 0 {
+		t.Fatalf("expected predecessor fence key probe via shared key vectors")
+	}
+	shared := reader.sharedKeys[ptr0]
+	if len(shared) != 3 {
+		t.Fatalf("shared keys len=%d want=3", len(shared))
+	}
+	if !bytes.Equal(shared[0], []byte("f010")) || !bytes.Equal(shared[1], []byte("f020")) || !bytes.Equal(shared[2], []byte("f030")) {
+		t.Fatalf("shared keys corrupted after pending-seek iterator close: %q", shared)
+	}
+}
+
+func TestIterator_CloseAfterPendingFenceSeekLeaseDoesNotCorruptSharedFenceKeyVectors(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReaderSeekLeaseSharedKeys()
+	ptr0 := reader.addSharedBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addSharedBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator([]byte("f025"), []byte("f040"))
+	var got []string
+	for ; it.Valid(); it.Next() {
+		got = append(got, string(it.Key()))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(got) != 1 || got[0] != "f030" {
+		t.Fatalf("keys=%v want=[f030]", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+
+	if reader.seekCalls == 0 {
+		t.Fatalf("expected predecessor seek-lease probe via shared key vectors")
+	}
+	shared := reader.sharedKeys[ptr0]
+	if len(shared) != 3 {
+		t.Fatalf("shared keys len=%d want=3", len(shared))
+	}
+	if !bytes.Equal(shared[0], []byte("f010")) || !bytes.Equal(shared[1], []byte("f020")) || !bytes.Equal(shared[2], []byte("f030")) {
+		t.Fatalf("shared keys corrupted after pending-seek-lease iterator close: %q", shared)
 	}
 }
 

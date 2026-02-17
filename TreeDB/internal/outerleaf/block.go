@@ -41,13 +41,28 @@ var blockMagic = [4]byte{'T', 'O', 'L', '2'}
 
 const (
 	// Keep pooled scratch buffers bounded to avoid retaining outsized slices.
-	maxPooledOuterLeafBytesCap    = 64 << 10
-	maxPooledOuterLeafRestartsCap = 4096
+	maxPooledOuterLeafBytesCap      = 64 << 10
+	maxPooledOuterLeafRestartsCap   = 4096
+	maxPooledOuterLeafLeaseKeysCap  = 4096
+	maxPooledOuterLeafLeaseArenaCap = 1 << 20
 )
 
 var (
-	outerLeafBytesPool    sync.Pool
-	outerLeafRestartsPool sync.Pool
+	outerLeafBytesPool      sync.Pool
+	outerLeafBytesEntryPool = sync.Pool{
+		New: func() any {
+			return &bytesPoolEntry{}
+		},
+	}
+	outerLeafRestartsPool   sync.Pool
+	outerLeafLeaseKeysPool  sync.Pool
+	outerLeafLeaseArenaPool sync.Pool
+	outerLeafKeyLeasePool   sync.Pool
+	outerLeafKeyChunkPool   = sync.Pool{
+		New: func() any {
+			return &keyLeaseChunk{}
+		},
+	}
 )
 
 const (
@@ -100,6 +115,38 @@ type LookupResult struct {
 	Kind    EntryKind
 	Value   []byte
 	BlobPtr page.ValuePtr
+}
+
+type keyLeaseChunk struct {
+	buf  []byte
+	next *keyLeaseChunk
+}
+
+type bytesPoolEntry struct {
+	buf  []byte
+	next *bytesPoolEntry
+}
+
+// KeyLease provides explicit ownership for decoded key vectors.
+// Callers must call Release when finished.
+type KeyLease struct {
+	keys      [][]byte
+	chunkHead *keyLeaseChunk
+	chunkTail *keyLeaseChunk
+	inUse     bool
+}
+
+// Keys returns decoded keys owned by the lease.
+func (l *KeyLease) Keys() [][]byte {
+	if l == nil {
+		return nil
+	}
+	return l.keys
+}
+
+// Release returns lease-owned buffers to pools. It is idempotent.
+func (l *KeyLease) Release() {
+	releaseKeyLease(l)
 }
 
 // Entry is one key/value record in an outer-leaf block payload.
@@ -426,10 +473,37 @@ func getPooledBytes(minCap int) []byte {
 	if minCap <= 0 {
 		minCap = 1
 	}
-	if v := outerLeafBytesPool.Get(); v != nil {
-		if buf, ok := v.([]byte); ok && cap(buf) >= minCap {
+	var held *bytesPoolEntry
+	for {
+		v := outerLeafBytesPool.Get()
+		if v == nil {
+			break
+		}
+		entry, ok := v.(*bytesPoolEntry)
+		if !ok || entry == nil {
+			continue
+		}
+		if cap(entry.buf) >= minCap {
+			buf := entry.buf
+			entry.buf = nil
+			entry.next = nil
+			for held != nil {
+				next := held.next
+				held.next = nil
+				outerLeafBytesPool.Put(held)
+				held = next
+			}
+			outerLeafBytesEntryPool.Put(entry)
 			return buf[:0]
 		}
+		entry.next = held
+		held = entry
+	}
+	for held != nil {
+		next := held.next
+		held.next = nil
+		outerLeafBytesPool.Put(held)
+		held = next
 	}
 	return make([]byte, 0, minCap)
 }
@@ -438,7 +512,10 @@ func putPooledBytes(buf []byte) {
 	if cap(buf) == 0 || cap(buf) > maxPooledOuterLeafBytesCap {
 		return
 	}
-	outerLeafBytesPool.Put(buf[:0])
+	entry := outerLeafBytesEntryPool.Get().(*bytesPoolEntry)
+	entry.buf = buf[:0]
+	entry.next = nil
+	outerLeafBytesPool.Put(entry)
 }
 
 func getPooledRestarts(minCap int) []uint32 {
@@ -458,6 +535,135 @@ func putPooledRestarts(buf []uint32) {
 		return
 	}
 	outerLeafRestartsPool.Put(buf[:0])
+}
+
+func getPooledLeaseKeys(minCap int) [][]byte {
+	if minCap <= 0 {
+		minCap = 1
+	}
+	if v := outerLeafLeaseKeysPool.Get(); v != nil {
+		if keys, ok := v.([][]byte); ok {
+			if cap(keys) >= minCap {
+				return keys[:0]
+			}
+			putPooledLeaseKeys(keys)
+		}
+	}
+	return make([][]byte, 0, minCap)
+}
+
+func putPooledLeaseKeys(keys [][]byte) {
+	if cap(keys) == 0 || cap(keys) > maxPooledOuterLeafLeaseKeysCap {
+		return
+	}
+	full := keys[:cap(keys)]
+	clear(full)
+	outerLeafLeaseKeysPool.Put(full[:0])
+}
+
+func getPooledLeaseArena(minCap int) []byte {
+	if minCap <= 0 {
+		minCap = 1
+	}
+	if v := outerLeafLeaseArenaPool.Get(); v != nil {
+		if arena, ok := v.([]byte); ok {
+			if cap(arena) >= minCap {
+				return arena[:0]
+			}
+			putPooledLeaseArena(arena)
+		}
+	}
+	return make([]byte, 0, minCap)
+}
+
+func putPooledLeaseArena(arena []byte) {
+	if cap(arena) == 0 || cap(arena) > maxPooledOuterLeafLeaseArenaCap {
+		return
+	}
+	outerLeafLeaseArenaPool.Put(arena[:0])
+}
+
+func acquireKeyLease(minKeys int) *KeyLease {
+	if minKeys <= 0 {
+		minKeys = 1
+	}
+	var lease *KeyLease
+	if v := outerLeafKeyLeasePool.Get(); v != nil {
+		if l, ok := v.(*KeyLease); ok {
+			lease = l
+		}
+	}
+	if lease == nil {
+		lease = &KeyLease{}
+	}
+	lease.inUse = true
+	lease.keys = getPooledLeaseKeys(minKeys)
+	lease.chunkHead = nil
+	lease.chunkTail = nil
+	return lease
+}
+
+func (l *KeyLease) addChunk(arena []byte) {
+	if l == nil {
+		return
+	}
+	var node *keyLeaseChunk
+	if v := outerLeafKeyChunkPool.Get(); v != nil {
+		if n, ok := v.(*keyLeaseChunk); ok {
+			node = n
+		}
+	}
+	if node == nil {
+		node = &keyLeaseChunk{}
+	}
+	node.buf = arena[:0]
+	node.next = nil
+	if l.chunkTail == nil {
+		l.chunkHead = node
+		l.chunkTail = node
+		return
+	}
+	l.chunkTail.next = node
+	l.chunkTail = node
+}
+
+func releaseKeyLease(lease *KeyLease) {
+	if lease == nil || !lease.inUse {
+		return
+	}
+	lease.inUse = false
+	putPooledLeaseKeys(lease.keys)
+	lease.keys = nil
+
+	node := lease.chunkHead
+	for node != nil {
+		next := node.next
+		putPooledLeaseArena(node.buf)
+		node.buf = nil
+		node.next = nil
+		outerLeafKeyChunkPool.Put(node)
+		node = next
+	}
+	lease.chunkHead = nil
+	lease.chunkTail = nil
+	outerLeafKeyLeasePool.Put(lease)
+}
+
+func cloneKeySlices(keys [][]byte) [][]byte {
+	if len(keys) == 0 {
+		return nil
+	}
+	cloned := make([][]byte, len(keys))
+	for i := range keys {
+		if len(keys[i]) == 0 {
+			cloned[i] = []byte{}
+			continue
+		}
+		k := make([]byte, len(keys[i]))
+		copy(k, keys[i])
+		cloned[i] = k
+	}
+	return cloned
 }
 
 func borrowBytes(minCap int, scratch *[]byte) ([]byte, bool) {
@@ -486,6 +692,24 @@ func releaseBytes(buf []byte, scratch *[]byte, pooled bool) {
 	if pooled {
 		putPooledBytes(buf)
 	}
+}
+
+func growPooledBytes(buf []byte, minCap int) []byte {
+	if minCap <= cap(buf) {
+		return buf[:minCap]
+	}
+	newCap := cap(buf) * 2
+	if newCap < minCap {
+		newCap = minCap
+	}
+	if newCap < 64 {
+		newCap = 64
+	}
+	next := getPooledBytes(newCap)
+	next = next[:minCap]
+	copy(next, buf)
+	putPooledBytes(buf)
+	return next
 }
 
 func borrowRestarts(minCap int, scratch *[]uint32) ([]uint32, bool) {
@@ -2227,31 +2451,49 @@ func keyWithinRange(key []byte, lower []byte, upper []byte) bool {
 	return true
 }
 
-// decodeStructuredKeysBounded reconstructs only keys in [lower, upper) from
-// prefix-compressed v2/v3 entries. Decoding stops once keys reach upper.
+// decodeStructuredKeysBounded reconstructs keys in [lower, upper) with reduced allocation pressure.
 func decodeStructuredKeysBounded(version uint8, entryCount int, encoded []byte, lower []byte, upper []byte) ([][]byte, error) {
+	lease, err := decodeStructuredKeysBoundedLease(version, entryCount, encoded, lower, upper)
+	if err != nil {
+		return nil, err
+	}
+	if lease == nil {
+		return nil, nil
+	}
+	keys := cloneKeySlices(lease.keys)
+	lease.Release()
+	return keys, nil
+}
+
+func decodeStructuredKeysBoundedLease(version uint8, entryCount int, encoded []byte, lower []byte, upper []byte) (*KeyLease, error) {
 	if entryCount <= 0 {
 		return nil, fmt.Errorf("outerleaf: empty v%d block", version)
 	}
 	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
 		return nil, nil
 	}
+
 	headerLen := 8
+	valueLenOffset := 4
 	if version == blockVersionV3 {
 		headerLen = 9
+		valueLenOffset = 5
 	}
+
 	off := 0
 	estKeyLen := 16
-	if len(encoded) >= headerLen {
-		if v := int(binary.LittleEndian.Uint16(encoded[2:4])); v > 0 {
+	if len(encoded) >= 4 {
+		if v := int(uint16(encoded[2]) | uint16(encoded[3])<<8); v > 0 {
 			if v > 128 {
 				v = 128
 			}
 			estKeyLen = v
 		}
 	}
+
 	selectedCap := entryCount
-	if len(lower) > 0 || len(upper) > 0 {
+	hasBounds := len(lower) > 0 || len(upper) > 0
+	if hasBounds {
 		selectedCap = entryCount / 8
 		if selectedCap < 4 {
 			selectedCap = 4
@@ -2260,86 +2502,115 @@ func decodeStructuredKeysBounded(version uint8, entryCount int, encoded []byte, 
 			selectedCap = entryCount
 		}
 	}
-	keys := make([][]byte, 0, selectedCap)
+	lease := acquireKeyLease(selectedCap)
+	released := false
+	defer func() {
+		if !released {
+			releaseKeyLease(lease)
+		}
+	}()
+
 	estCap := selectedCap * estKeyLen
-	if estCap < 64 {
-		estCap = 64
+	if estCap < estKeyLen {
+		estCap = estKeyLen
 	}
-	keyArena := make([]byte, 0, estCap)
-	prev := make([]byte, 0, estKeyLen)
-	curr := make([]byte, 0, estKeyLen)
+
+	prev, prevPooled := borrowBytes(estKeyLen, nil)
+	defer func() {
+		releaseBytes(prev, nil, prevPooled)
+	}()
+
+	var keyArena []byte
+
 	for i := 0; i < entryCount; i++ {
 		if off+headerLen > len(encoded) {
 			return nil, fmt.Errorf("outerleaf: truncated v%d entry header", version)
 		}
-		shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
-		suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
-		valueLenOff := off + 4
-		if version == blockVersionV3 {
-			valueLenOff = off + 5
-		}
-		valueLen := int(binary.LittleEndian.Uint32(encoded[valueLenOff : valueLenOff+4]))
+
+		// Hot decode loop: inline little-endian loads avoid binary.LittleEndian
+		// call overhead in prefix-scan profiles.
+		shared := int(uint16(encoded[off]) | uint16(encoded[off+1])<<8)
+		suffixLen := int(uint16(encoded[off+2]) | uint16(encoded[off+3])<<8)
+		vlOff := off + valueLenOffset
+		valueLen := int(uint32(encoded[vlOff]) | uint32(encoded[vlOff+1])<<8 | uint32(encoded[vlOff+2])<<16 | uint32(encoded[vlOff+3])<<24)
+
 		off += headerLen
+
 		if shared < 0 || shared > len(prev) {
 			return nil, fmt.Errorf("outerleaf: invalid shared prefix")
 		}
 		if suffixLen < 0 || off+suffixLen > len(encoded) {
 			return nil, fmt.Errorf("outerleaf: invalid key suffix length")
 		}
-		suffix := encoded[off : off+suffixLen]
-		off += suffixLen
-		if valueLen < 0 || off+valueLen > len(encoded) {
-			return nil, fmt.Errorf("outerleaf: invalid value length")
-		}
 
 		keyLen := shared + suffixLen
 		if keyLen < 0 {
 			return nil, fmt.Errorf("outerleaf: invalid key length")
 		}
-		if cap(curr) < keyLen {
-			newCap := cap(curr) * 2
-			if newCap < keyLen {
-				newCap = keyLen
-			}
-			if newCap < 64 {
-				newCap = 64
-			}
-			curr = make([]byte, keyLen, newCap)
+		if cap(prev) < keyLen {
+			prev = growPooledBytes(prev, keyLen)
 		} else {
-			curr = curr[:keyLen]
+			prev = prev[:keyLen]
 		}
-		if shared > 0 {
-			copy(curr[:shared], prev[:shared])
-		}
-		copy(curr[shared:], suffix)
+		copy(prev[shared:], encoded[off:off+suffixLen])
 
-		if len(upper) > 0 && bytes.Compare(curr, upper) >= 0 {
-			return keys, nil
+		off += suffixLen
+		if valueLen < 0 || off+valueLen > len(encoded) {
+			return nil, fmt.Errorf("outerleaf: invalid value length")
 		}
-		if len(lower) == 0 || bytes.Compare(curr, lower) >= 0 {
-			needCap := len(keyArena) + keyLen
-			if needCap > cap(keyArena) {
-				newCap := cap(keyArena) * 2
-				if newCap < keyLen {
-					newCap = keyLen
-				}
-				keyArena = make([]byte, 0, newCap)
-				needCap = keyLen
-			}
-			arenaOff := len(keyArena)
-			keyArena = keyArena[:needCap]
-			key := keyArena[arenaOff:needCap]
-			copy(key, curr)
-			keys = append(keys, key)
-		}
-
 		off += valueLen
-		prev, curr = curr, prev[:0]
+
+		if hasBounds {
+			if len(upper) > 0 && bytes.Compare(prev, upper) >= 0 {
+				if len(lease.keys) == 0 {
+					released = true
+					releaseKeyLease(lease)
+					return nil, nil
+				}
+				released = true
+				return lease, nil
+			}
+			if len(lower) > 0 && bytes.Compare(prev, lower) < 0 {
+				continue
+			}
+		}
+
+		if keyLen == 0 {
+			lease.keys = append(lease.keys, []byte{})
+			continue
+		}
+
+		needCap := len(keyArena) + keyLen
+		if needCap > cap(keyArena) {
+			newCap := cap(keyArena) * 2
+			if newCap < needCap {
+				newCap = needCap
+			}
+			if keyArena == nil && newCap < estCap {
+				newCap = estCap
+			}
+			keyArena = getPooledLeaseArena(newCap)
+			lease.addChunk(keyArena)
+			needCap = keyLen
+		}
+
+		arenaOff := len(keyArena)
+		keyArena = keyArena[:needCap]
+		key := keyArena[arenaOff:needCap]
+		copy(key, prev)
+		lease.keys = append(lease.keys, key)
 	}
+
 	if off != len(encoded) {
 		return nil, fmt.Errorf("outerleaf: trailing v%d entry bytes", version)
 	}
-	return keys, nil
+	if len(lease.keys) == 0 {
+		released = true
+		releaseKeyLease(lease)
+		return nil, nil
+	}
+	released = true
+	return lease, nil
 }
 
 // DecodeKeysWithVerify decodes logical keys from an encoded outer-leaf payload.
@@ -2413,9 +2684,21 @@ func DecodeKeysWithVerify(payload []byte, verifyChecksum bool) ([][]byte, error)
 // DecodeKeysRangeWithVerify decodes only keys in [lower, upper) from an
 // encoded outer-leaf payload.
 func DecodeKeysRangeWithVerify(payload []byte, lower []byte, upper []byte, verifyChecksum bool) ([][]byte, error) {
-	if len(lower) == 0 && len(upper) == 0 {
-		return DecodeKeysWithVerify(payload, verifyChecksum)
+	lease, err := DecodeKeysRangeLeaseWithVerify(payload, lower, upper, verifyChecksum)
+	if err != nil {
+		return nil, err
 	}
+	if lease == nil {
+		return nil, nil
+	}
+	keys := cloneKeySlices(lease.keys)
+	lease.Release()
+	return keys, nil
+}
+
+// DecodeKeysRangeLeaseWithVerify decodes keys in [lower, upper) and returns a
+// lease that must be released by the caller.
+func DecodeKeysRangeLeaseWithVerify(payload []byte, lower []byte, upper []byte, verifyChecksum bool) (*KeyLease, error) {
 	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
 		return nil, nil
 	}
@@ -2448,9 +2731,16 @@ func DecodeKeysRangeWithVerify(payload []byte, lower []byte, upper []byte, verif
 		if !keyWithinRange(key, lower, upper) {
 			return nil, nil
 		}
-		keyCopy := make([]byte, len(key))
-		copy(keyCopy, key)
-		return [][]byte{keyCopy}, nil
+		lease := acquireKeyLease(1)
+		if len(key) == 0 {
+			lease.keys = append(lease.keys, []byte{})
+			return lease, nil
+		}
+		arena := getPooledLeaseArena(len(key))
+		arena = append(arena, key...)
+		lease.addChunk(arena)
+		lease.keys = append(lease.keys, arena[:len(key)])
+		return lease, nil
 	case blockVersionV2, blockVersionV3:
 		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
 		entriesLen := int(binary.LittleEndian.Uint32(payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
@@ -2471,7 +2761,7 @@ func DecodeKeysRangeWithVerify(payload []byte, lower []byte, upper []byte, verif
 			if err != nil {
 				return nil, err
 			}
-			return decodeStructuredKeysBounded(version, entryCount, entries, lower, upper)
+			return decodeStructuredKeysBoundedLease(version, entryCount, entries, lower, upper)
 		}
 		scratch := getPooledBytes(rawLen)
 		defer putPooledBytes(scratch)
@@ -2483,7 +2773,7 @@ func DecodeKeysRangeWithVerify(payload []byte, lower []byte, upper []byte, verif
 		if err != nil {
 			return nil, err
 		}
-		return decodeStructuredKeysBounded(version, entryCount, entries, lower, upper)
+		return decodeStructuredKeysBoundedLease(version, entryCount, entries, lower, upper)
 	default:
 		return nil, fmt.Errorf("outerleaf: unsupported version %d", version)
 	}
@@ -2493,6 +2783,22 @@ func DecodeKeysRangeWithVerify(payload []byte, lower []byte, upper []byte, verif
 // for target and materializes full keys only when target falls within block
 // bounds. For below/above classifications, keys are not allocated.
 func DecodeLowerBoundAndKeysOnMatchWithVerify(payload []byte, target []byte, verifyChecksum bool) (pos int, below bool, above bool, keys [][]byte, err error) {
+	pos, below, above, lease, err := DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload, target, verifyChecksum)
+	if err != nil {
+		return 0, false, false, nil, err
+	}
+	if lease == nil {
+		return pos, below, above, nil, nil
+	}
+	keys = cloneKeySlices(lease.keys)
+	lease.Release()
+	return pos, below, above, keys, nil
+}
+
+// DecodeLowerBoundAndKeysOnMatchLeaseWithVerify decodes lower-bound
+// classification for target and returns keys via a lease only when target falls
+// within block bounds.
+func DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload []byte, target []byte, verifyChecksum bool) (pos int, below bool, above bool, lease *KeyLease, err error) {
 	if len(payload) < blockHeaderSize {
 		return 0, false, false, nil, fmt.Errorf("outerleaf: truncated header")
 	}
@@ -2528,8 +2834,16 @@ func DecodeLowerBoundAndKeysOnMatchWithVerify(payload []byte, target []byte, ver
 				return 1, false, true, nil, nil
 			}
 		}
-		keyCopy := append(make([]byte, 0, len(key)), key...)
-		return 0, false, false, [][]byte{keyCopy}, nil
+		lease := acquireKeyLease(1)
+		if len(key) == 0 {
+			lease.keys = append(lease.keys, []byte{})
+			return 0, false, false, lease, nil
+		}
+		arena := getPooledLeaseArena(len(key))
+		arena = append(arena, key...)
+		lease.addChunk(arena)
+		lease.keys = append(lease.keys, arena[:len(key)])
+		return 0, false, false, lease, nil
 	case blockVersionV2, blockVersionV3:
 		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
 		entriesLen := int(binary.LittleEndian.Uint32(payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
@@ -2564,11 +2878,11 @@ func DecodeLowerBoundAndKeysOnMatchWithVerify(payload []byte, target []byte, ver
 		if below || above {
 			return pos, below, above, nil, nil
 		}
-		keys, err = decodeStructuredKeys(version, entryCount, entries)
+		lease, err = decodeStructuredKeysBoundedLease(version, entryCount, entries, nil, nil)
 		if err != nil {
 			return 0, false, false, nil, err
 		}
-		return pos, false, false, keys, nil
+		return pos, false, false, lease, nil
 	default:
 		return 0, false, false, nil, fmt.Errorf("outerleaf: unsupported version %d", version)
 	}

@@ -368,13 +368,16 @@ type Iterator struct {
 	slabFenceBlocks slabUnsafeFenceBlockReader
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
 	slabFenceRange  slabUnsafeFenceBlockRangeKeyReader
+	slabFenceRangeL slabUnsafeFenceBlockRangeKeyLeaseReader
 	slabFenceSeek   slabUnsafeFenceBlockSeekReader
+	slabFenceSeekL  slabUnsafeFenceBlockSeekLeaseReader
 	slabFencePtrCls slabFencePointerClassifier
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
 
 	fenceEntries    []FenceBlockEntry
 	fenceKeys       [][]byte
+	fenceKeyLease   FenceKeysLease
 	fenceIndex      int
 	fenceActive     bool
 	fenceValuesLazy bool
@@ -386,6 +389,7 @@ type Iterator struct {
 	pendingFenceEntryIdx  int
 	pendingFenceReady     bool
 	pendingFenceKeys      [][]byte
+	pendingFenceKeyLease  FenceKeysLease
 
 	prefetchPageID uint64
 	prefetchStart  int
@@ -477,7 +481,9 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse boo
 		slabFenceBlocks: t.slabFenceBlocks,
 		slabFenceKeys:   t.slabFenceKeys,
 		slabFenceRange:  t.slabFenceRange,
+		slabFenceRangeL: t.slabFenceRangeL,
 		slabFenceSeek:   t.slabFenceSeek,
+		slabFenceSeekL:  t.slabFenceSeekL,
 		slabFencePtrCls: t.slabFencePtrCls,
 		slabKeyAppender: t.slabKeyAppender,
 		slabKeyBatcher:  t.slabKeyBatcher,
@@ -689,7 +695,24 @@ func (it *Iterator) resetStack() {
 	it.stack = it.stackBuf[:0]
 }
 
+func (it *Iterator) releaseFenceKeyLease() {
+	if it == nil || it.fenceKeyLease == nil {
+		return
+	}
+	it.fenceKeyLease.Release()
+	it.fenceKeyLease = nil
+}
+
+func (it *Iterator) releasePendingFenceKeyLease() {
+	if it == nil || it.pendingFenceKeyLease == nil {
+		return
+	}
+	it.pendingFenceKeyLease.Release()
+	it.pendingFenceKeyLease = nil
+}
+
 func (it *Iterator) resetFenceCursor() {
+	it.releaseFenceKeyLease()
 	it.fenceEntries = it.fenceEntries[:0]
 	it.fenceKeys = it.fenceKeys[:0]
 	it.fenceIndex = 0
@@ -699,6 +722,7 @@ func (it *Iterator) resetFenceCursor() {
 }
 
 func (it *Iterator) clearPendingFenceSeek() {
+	it.releasePendingFenceKeyLease()
 	it.pendingSeekKey = it.pendingSeekKey[:0]
 	it.pendingFencePageID = 0
 	it.pendingFenceLeafIndex = 0
@@ -772,6 +796,21 @@ func lowerBoundFenceKeys(keys [][]byte, key []byte) int {
 	})
 }
 
+// copyFenceKeyRefs clones only the outer [][]byte vector so iterator-owned
+// buffers never alias externally managed key-vector backing arrays.
+func copyFenceKeyRefs(dst [][]byte, src [][]byte) [][]byte {
+	if len(src) == 0 {
+		return dst[:0]
+	}
+	if cap(dst) < len(src) {
+		dst = make([][]byte, len(src))
+	} else {
+		dst = dst[:len(src)]
+	}
+	copy(dst, src)
+	return dst
+}
+
 func (it *Iterator) pointerLikelyFenceBlock(ptr page.ValuePtr) bool {
 	if it != nil && it.slabFencePtrCls != nil {
 		return it.slabFencePtrCls.FencePointerLikelyBlock(ptr)
@@ -780,7 +819,7 @@ func (it *Iterator) pointerLikelyFenceBlock(ptr page.ValuePtr) bool {
 }
 
 func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
-	if it.reverse || len(it.pendingSeekKey) == 0 || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil) {
+	if it.reverse || len(it.pendingSeekKey) == 0 || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil && it.slabFenceSeek == nil && it.slabFenceSeekL == nil) {
 		return false, nil
 	}
 	if top == nil || top.Node.Type() != page.PageTypeLeaf || top.Index <= 0 {
@@ -800,6 +839,59 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			continue
 		}
 		keyReaderUsable := false
+		if it.slabFenceSeekL != nil {
+			pos, below, above, seekLease, ok, err := it.slabFenceSeekL.ReadUnsafeFenceBlockSeekLease(ptr, seekKey)
+			if err != nil {
+				if seekLease != nil {
+					seekLease.Release()
+				}
+				return false, err
+			}
+			if ok {
+				keyReaderUsable = true
+				var seekKeys [][]byte
+				if seekLease != nil {
+					seekKeys = seekLease.Keys()
+				}
+				if above {
+					if seekLease != nil {
+						seekLease.Release()
+					}
+					break
+				}
+				if below {
+					if seekLease != nil {
+						seekLease.Release()
+					}
+					continue
+				}
+				if len(seekKeys) == 0 {
+					if seekLease != nil {
+						seekLease.Release()
+					}
+					continue
+				}
+				if pos >= 0 && pos < len(seekKeys) {
+					top.Index = scan
+					it.pendingFencePageID = top.PageID
+					it.pendingFenceLeafIndex = scan
+					it.pendingFenceEntryIdx = pos
+					it.pendingFenceReady = true
+					it.releasePendingFenceKeyLease()
+					it.pendingFenceKeys = copyFenceKeyRefs(it.pendingFenceKeys, seekKeys)
+					it.pendingFenceKeyLease = seekLease
+					// We already selected the predecessor block that contains seekKey.
+					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
+					// the next loadCurrent loop iteration.
+					it.pendingSeekKey = it.pendingSeekKey[:0]
+					return true, nil
+				}
+				if seekLease != nil {
+					seekLease.Release()
+				}
+				break
+			}
+		}
 		if it.slabFenceSeek != nil {
 			pos, below, above, seekKeys, ok, err := it.slabFenceSeek.ReadUnsafeFenceBlockSeek(ptr, seekKey)
 			if err != nil {
@@ -819,7 +911,8 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					it.pendingFenceLeafIndex = scan
 					it.pendingFenceEntryIdx = pos
 					it.pendingFenceReady = true
-					it.pendingFenceKeys = seekKeys
+					it.releasePendingFenceKeyLease()
+					it.pendingFenceKeys = copyFenceKeyRefs(it.pendingFenceKeys, seekKeys)
 					// We already selected the predecessor block that contains seekKey.
 					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
 					// the next loadCurrent loop iteration.
@@ -858,7 +951,8 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					it.pendingFenceLeafIndex = scan
 					it.pendingFenceEntryIdx = pos
 					it.pendingFenceReady = true
-					it.pendingFenceKeys = keys
+					it.releasePendingFenceKeyLease()
+					it.pendingFenceKeys = copyFenceKeyRefs(it.pendingFenceKeys, keys)
 					// We already selected the predecessor block that contains seekKey.
 					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
 					// the next loadCurrent loop iteration.
@@ -895,6 +989,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				it.pendingFenceLeafIndex = scan
 				it.pendingFenceEntryIdx = pos
 				it.pendingFenceReady = true
+				it.releasePendingFenceKeyLease()
 				// We already selected the predecessor block that contains seekKey.
 				// Clearing pendingSeekKey avoids a redundant predecessor rescan on
 				// the next loadCurrent loop iteration.
@@ -908,7 +1003,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 }
 
 func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced bool, exhausted bool, err error) {
-	if top == nil || top.Node.Type() != page.PageTypeLeaf || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil && it.slabFenceRange == nil) {
+	if top == nil || top.Node.Type() != page.PageTypeLeaf || (it.slabFenceBlocks == nil && it.slabFenceKeys == nil && it.slabFenceRange == nil && it.slabFenceRangeL == nil) {
 		return false, false, false, nil
 	}
 	if it.mode == IteratorModePointerProjection {
@@ -929,29 +1024,41 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 	}
 
 	var (
-		entries []FenceBlockEntry
-		keys    [][]byte
-		ok      bool
+		entries  []FenceBlockEntry
+		keys     [][]byte
+		keyLease FenceKeysLease
+		ok       bool
 	)
 	preferKeyOnlyExpansion := it.shouldPreferFenceKeyOnly() || it.slabFenceBlocks == nil
-	if preferKeyOnlyExpansion && (it.slabFenceRange != nil || it.slabFenceKeys != nil) {
+	if preferKeyOnlyExpansion && (it.slabFenceRange != nil || it.slabFenceRangeL != nil || it.slabFenceKeys != nil) {
 		var (
-			readKeys [][]byte
-			keyOK    bool
+			readKeys  [][]byte
+			readLease FenceKeysLease
+			keyOK     bool
 		)
 		if it.pendingFenceReady && top.PageID == it.pendingFencePageID && top.Index == it.pendingFenceLeafIndex && it.pendingFenceKeys != nil {
 			readKeys = it.pendingFenceKeys
+			readLease = it.pendingFenceKeyLease
 			keyOK = true
-			it.pendingFenceKeys = nil
+			it.pendingFenceKeys = it.pendingFenceKeys[:0]
+			it.pendingFenceKeyLease = nil
 		} else {
 			var readOK bool
 			var keyErr error
-			if !it.reverse && it.slabFenceRange != nil {
+			if !it.reverse {
 				lower := it.start
 				if len(it.pendingSeekKey) > 0 {
 					lower = it.pendingSeekKey
 				}
-				readKeys, readOK, keyErr = it.slabFenceRange.ReadUnsafeFenceBlockKeysRange(ptr, lower, it.end)
+				if it.slabFenceRangeL != nil {
+					readLease, readOK, keyErr = it.slabFenceRangeL.ReadUnsafeFenceBlockKeysRangeLease(ptr, lower, it.end)
+					if readOK && readLease != nil {
+						readKeys = readLease.Keys()
+					}
+				}
+				if keyErr == nil && !readOK && it.slabFenceRange != nil {
+					readKeys, readOK, keyErr = it.slabFenceRange.ReadUnsafeFenceBlockKeysRange(ptr, lower, it.end)
+				}
 				if keyErr == nil && !readOK && it.slabFenceKeys != nil {
 					readKeys, readOK, keyErr = it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
 				}
@@ -959,20 +1066,31 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 				readKeys, readOK, keyErr = it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
 			}
 			if keyErr != nil {
+				if readLease != nil {
+					readLease.Release()
+				}
 				return false, false, false, keyErr
 			}
 			if readOK {
 				keyOK = true
+			} else if readLease != nil {
+				readLease.Release()
+				readLease = nil
 			}
 		}
 		if keyOK {
 			keys = readKeys
+			keyLease = readLease
 			ok = true
 			it.fenceValuesLazy = it.mode == IteratorModeFull
 			it.fenceBlockPtr = ptr
 		}
 	}
 	if !ok {
+		if keyLease != nil {
+			keyLease.Release()
+			keyLease = nil
+		}
 		if it.slabFenceBlocks == nil {
 			return false, false, false, nil
 		}
@@ -993,6 +1111,9 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		blockLen = len(keys)
 	}
 	if blockLen == 0 {
+		if keyLease != nil {
+			keyLease.Release()
+		}
 		// loadCurrent() will advance the leaf index when handled && !produced,
 		// so empty fence blocks still make forward/reverse progress.
 		return handled, false, false, nil
@@ -1024,6 +1145,9 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		}
 	}
 	if pos < 0 || pos >= blockLen {
+		if keyLease != nil {
+			keyLease.Release()
+		}
 		return handled, false, false, nil
 	}
 
@@ -1035,18 +1159,25 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 	}
 	if !it.reverse {
 		if it.end != nil && compareTreeKey(posKey, it.end) >= 0 {
+			if keyLease != nil {
+				keyLease.Release()
+			}
 			return handled, false, true, nil
 		}
 	} else if it.start != nil && compareTreeKey(posKey, it.start) < 0 {
+		if keyLease != nil {
+			keyLease.Release()
+		}
 		return handled, false, true, nil
 	}
 
 	it.fenceEntries = entries
-	it.fenceKeys = keys
+	it.fenceKeys = copyFenceKeyRefs(it.fenceKeys, keys)
+	it.fenceKeyLease = keyLease
 	it.fenceIndex = pos
 	it.fenceActive = true
-	if len(keys) > 0 {
-		it.setCurrentFenceKey(keys[pos])
+	if len(it.fenceKeys) > 0 {
+		it.setCurrentFenceKey(it.fenceKeys[pos])
 	} else {
 		it.setCurrentFenceEntry(entries[pos])
 	}
@@ -1502,6 +1633,8 @@ func (it *Iterator) Close() error {
 	if it == nil || it.tree == nil {
 		return nil
 	}
+	it.releaseFenceKeyLease()
+	it.releasePendingFenceKeyLease()
 	buf := it.trimReusableBuffers()
 	*it = Iterator{}
 	it.installReusableBuffers(buf)
@@ -1644,11 +1777,13 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 	if compareTreeKey(entry.Key, it.currKey) != 0 {
 		pos := lowerBoundFenceEntries(entries, it.currKey)
 		if pos < 0 || pos >= len(entries) {
+			it.releaseFenceKeyLease()
 			it.err = fmt.Errorf("iterator fence value load: key not found in fence block")
 			it.valid = false
 			return false
 		}
 		if compareTreeKey(entries[pos].Key, it.currKey) != 0 {
+			it.releaseFenceKeyLease()
 			it.err = fmt.Errorf("iterator fence value load: fence index out of sync")
 			it.valid = false
 			return false
@@ -1656,6 +1791,8 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 		it.fenceIndex = pos
 		entry = entries[pos]
 	}
+	it.currKey = entry.Key
+	it.releaseFenceKeyLease()
 	it.currVal = entry.Value
 	it.valOK = true
 	return true

@@ -340,6 +340,38 @@ func TestValueReaderReadUnsafeFenceBlockKeysRange_CacheHitSkipsReadUnsafe(t *tes
 	}
 }
 
+func TestValueReaderReadUnsafeFenceBlockKeysRangeLease_CacheHitSkipsReadUnsafe(t *testing.T) {
+	payload, block, ptr := makeTestOuterLeafPayload(t)
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
+	cache := newOuterLeafBlockCache(8)
+	cache.put(newOuterLeafBlockKey(ptr), block)
+
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+
+	lease, ok, err := r.ReadUnsafeFenceBlockKeysRangeLease(ptr, []byte("k2"), []byte("k3"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockKeysRangeLease: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok = false, want true")
+	}
+	if lease == nil {
+		t.Fatalf("lease = nil, want non-nil")
+	}
+	keys := lease.Keys()
+	if len(keys) != 1 || !bytes.Equal(keys[0], []byte("k2")) {
+		t.Fatalf("keys = %q, want [k2]", keys)
+	}
+	lease.Release()
+	if reader.readUnsafeCalls != 0 {
+		t.Fatalf("readUnsafeCalls = %d, want 0", reader.readUnsafeCalls)
+	}
+}
+
 func TestValueReaderReadUnsafeFenceBlockKeysRange_UsesKeyCacheWindow(t *testing.T) {
 	payload, _, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
@@ -436,6 +468,53 @@ func TestValueReaderReadUnsafeFenceBlockSeek_ClassifiesBoundsAndReusesCache(t *t
 	}
 	if reader.readUnsafeCalls != 2 {
 		t.Fatalf("readUnsafeCalls after cache reuse = %d, want 2", reader.readUnsafeCalls)
+	}
+}
+
+func TestValueReaderReadUnsafeFenceBlockSeekLease_CachesClonedKeys(t *testing.T) {
+	payload, _, ptr := makeTestOuterLeafPayload(t)
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
+	cache := newOuterLeafBlockCache(8)
+	keyCache := newOuterLeafKeyCache(8)
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+		keyCache:      keyCache,
+	}
+
+	pos, below, above, lease, ok, err := r.ReadUnsafeFenceBlockSeekLease(ptr, []byte("k2"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockSeekLease(k2): %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok=false, want true")
+	}
+	if pos != 1 || below || above || lease == nil {
+		t.Fatalf("seek lease got pos=%d below=%v above=%v lease=%v, want pos=1 below=false above=false lease!=nil", pos, below, above, lease)
+	}
+	keys := lease.Keys()
+	if len(keys) != 3 {
+		t.Fatalf("lease keys len=%d want=3", len(keys))
+	}
+	keys[0][0] = 'x'
+	lease.Release()
+
+	pos, below, above, cachedKeys, ok, err := r.ReadUnsafeFenceBlockSeek(ptr, []byte("k2"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlockSeek(k2): %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok=false, want true")
+	}
+	if pos != 1 || below || above || len(cachedKeys) != 3 {
+		t.Fatalf("seek cache got pos=%d below=%v above=%v len=%d", pos, below, above, len(cachedKeys))
+	}
+	if !bytes.Equal(cachedKeys[0], []byte("k1")) {
+		t.Fatalf("cached key[0]=%q want=%q", cachedKeys[0], []byte("k1"))
+	}
+	if reader.readUnsafeCalls != 1 {
+		t.Fatalf("readUnsafeCalls=%d want=1", reader.readUnsafeCalls)
 	}
 }
 
