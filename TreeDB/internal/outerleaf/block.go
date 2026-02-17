@@ -601,7 +601,15 @@ func (l *KeyLease) addChunk(arena []byte) {
 	if l == nil {
 		return
 	}
-	node := outerLeafKeyChunkPool.Get().(*keyLeaseChunk)
+	var node *keyLeaseChunk
+	if v := outerLeafKeyChunkPool.Get(); v != nil {
+		if n, ok := v.(*keyLeaseChunk); ok {
+			node = n
+		}
+	}
+	if node == nil {
+		node = &keyLeaseChunk{}
+	}
 	node.buf = arena[:0]
 	node.next = nil
 	if l.chunkTail == nil {
@@ -2513,9 +2521,10 @@ func decodeStructuredKeysBoundedLease(version uint8, entryCount int, encoded []b
 			return nil, fmt.Errorf("outerleaf: truncated v%d entry header", version)
 		}
 
+		// Hot decode loop: inline little-endian loads avoid binary.LittleEndian
+		// call overhead in prefix-scan profiles.
 		shared := int(uint16(encoded[off]) | uint16(encoded[off+1])<<8)
 		suffixLen := int(uint16(encoded[off+2]) | uint16(encoded[off+3])<<8)
-
 		vlOff := off + valueLenOffset
 		valueLen := int(uint32(encoded[vlOff]) | uint32(encoded[vlOff+1])<<8 | uint32(encoded[vlOff+2])<<16 | uint32(encoded[vlOff+3])<<24)
 

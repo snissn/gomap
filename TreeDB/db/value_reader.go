@@ -44,7 +44,7 @@ func acquireStaticFenceKeysLease(keys [][]byte) *staticFenceKeysLease {
 }
 
 func (l *staticFenceKeysLease) Keys() [][]byte {
-	if l == nil {
+	if l == nil || !l.inUse {
 		return nil
 	}
 	return l.keys

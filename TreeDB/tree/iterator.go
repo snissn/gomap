@@ -865,6 +865,12 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					}
 					continue
 				}
+				if len(seekKeys) == 0 {
+					if seekLease != nil {
+						seekLease.Release()
+					}
+					continue
+				}
 				if pos >= 0 && pos < len(seekKeys) {
 					top.Index = scan
 					it.pendingFencePageID = top.PageID
@@ -882,9 +888,6 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				}
 				if seekLease != nil {
 					seekLease.Release()
-				}
-				if len(seekKeys) == 0 {
-					continue
 				}
 				break
 			}
