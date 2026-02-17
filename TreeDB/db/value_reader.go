@@ -350,6 +350,14 @@ func (r valueReader) ReadUnsafeFenceBlockKeysRange(ptr page.ValuePtr, lower []by
 	if !outerleaf.HasMagic(raw) {
 		return nil, false, nil
 	}
+	if r.keyCache != nil {
+		allKeys, decErr := outerleaf.DecodeKeysWithVerify(raw, !r.skipOuterLeafChecksums)
+		if decErr != nil {
+			return nil, true, decErr
+		}
+		r.cacheOuterLeafKeys(ptr, allKeys)
+		return sliceFenceKeysRange(allKeys, lower, upper), true, nil
+	}
 	keys, decErr := outerleaf.DecodeKeysRangeWithVerify(raw, lower, upper, !r.skipOuterLeafChecksums)
 	if decErr != nil {
 		return nil, true, decErr
@@ -390,6 +398,18 @@ func (r valueReader) ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (po
 	}
 	if !outerleaf.HasMagic(raw) {
 		return 0, false, false, nil, false, nil
+	}
+	if r.keyCache != nil {
+		allKeys, decErr := outerleaf.DecodeKeysWithVerify(raw, !r.skipOuterLeafChecksums)
+		if decErr != nil {
+			return 0, false, false, nil, true, decErr
+		}
+		r.cacheOuterLeafKeys(ptr, allKeys)
+		lower, isBelow, isAbove := classifyFenceKeys(allKeys, key)
+		if isBelow || isAbove {
+			return lower, isBelow, isAbove, nil, true, nil
+		}
+		return lower, false, false, allKeys, true, nil
 	}
 	lower, isBelow, isAbove, blockKeys, decErr := outerleaf.DecodeLowerBoundAndKeysOnMatchWithVerify(raw, key, !r.skipOuterLeafChecksums)
 	if decErr != nil {

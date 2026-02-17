@@ -134,6 +134,7 @@ type Tree struct {
 	pager           *pager.Pager
 	slabReader      SlabReader
 	slabAppender    slabUnsafeAppender
+	slabBatcher     slabUnsafeBatchAppender
 	slabKeyReader   slabUnsafeKeyReader
 	slabFenceReader slabUnsafeFenceKeyReader
 	fenceLookupMode bool
@@ -157,6 +158,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	fenceEnabled := fencePointerLookupsEnabled(sr)
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
+	}
+	if batcher, ok := sr.(slabUnsafeBatchAppender); ok {
+		t.slabBatcher = batcher
 	}
 	if keyAwareEnabled {
 		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
@@ -203,6 +207,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabAppender = app
 	} else {
 		t.slabAppender = nil
+	}
+	if batcher, ok := sr.(slabUnsafeBatchAppender); ok {
+		t.slabBatcher = batcher
+	} else {
+		t.slabBatcher = nil
 	}
 	if keyAwareEnabled {
 		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
