@@ -388,7 +388,11 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 	if !r.fenceLookupModeEnabled() {
 		return nil, false, nil
 	}
+	fromCache := false
 	block := r.cachedOuterLeafBlock(ptr)
+	if block != nil {
+		fromCache = true
+	}
 	if block == nil {
 		raw, err := r.readRawUnsafe(ptr)
 		if err != nil {
@@ -403,21 +407,50 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 		}
 		block = decoded
 	}
-	decoded, err := block.TypedEntries(nil)
+
+	// Blocks skipped from cache admission (blob-ref first entry) or decoded with
+	// caching disabled can release their decode lease after materializing stable
+	// output bytes for the caller.
+	detach := !fromCache && (r.cache == nil || block.FirstKind() == outerleaf.EntryKindBlobRef)
+	if detach {
+		defer block.Release()
+	}
+
+	typed, err := block.TypedEntries(nil)
 	if err != nil {
 		return nil, true, err
 	}
-	entries := make([]tree.FenceBlockEntry, len(decoded))
-	for i := range decoded {
-		val, err := r.resolveLookupResult(outerleaf.LookupResult{
-			Kind:    decoded[i].Kind,
-			Value:   decoded[i].Value,
-			BlobPtr: decoded[i].BlobPtr,
-		}, true)
+	entries := make([]tree.FenceBlockEntry, len(typed))
+	for i := range typed {
+		entry := outerleaf.LookupResult{
+			Kind:    typed[i].Kind,
+			Value:   typed[i].Value,
+			BlobPtr: typed[i].BlobPtr,
+		}
+		val, err := r.resolveLookupResult(entry, true)
 		if err != nil {
 			return nil, true, err
 		}
-		entries[i] = tree.FenceBlockEntry{Key: decoded[i].Key, Value: val}
+		key := typed[i].Key
+		if detach {
+			if len(key) > 0 {
+				keyCopy := make([]byte, len(key))
+				copy(keyCopy, key)
+				key = keyCopy
+			} else if key != nil {
+				key = []byte{}
+			}
+			if entry.Kind == outerleaf.EntryKindInline {
+				if len(val) > 0 {
+					valCopy := make([]byte, len(val))
+					copy(valCopy, val)
+					val = valCopy
+				} else if val != nil {
+					val = []byte{}
+				}
+			}
+		}
+		entries[i] = tree.FenceBlockEntry{Key: key, Value: val}
 	}
 	return entries, true, nil
 }

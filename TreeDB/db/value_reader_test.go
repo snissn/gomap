@@ -718,3 +718,58 @@ func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_CacheHitUsesAppendR
 		t.Fatalf("readUnsafeCalls = %d, want 0", reader.readUnsafeCalls)
 	}
 }
+
+func TestValueReaderReadUnsafeFenceBlock_BlobRefFirstDetachesInlineValues(t *testing.T) {
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(44), Offset: 4096, Length: 8}
+	inlineVal := bytes.Repeat([]byte("inline-v"), 16)
+	outerPayload, err := outerleaf.EncodeTypedEntries(nil, []outerleaf.TypedEntry{
+		{Key: []byte("k1"), Kind: outerleaf.EntryKindBlobRef, BlobPtr: blobPtr},
+		{Key: []byte("k2"), Kind: outerleaf.EntryKindInline, Value: inlineVal},
+	}, uint8(ValueLogBlockSnappy), 8)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries: %v", err)
+	}
+	outerPtr := page.ValuePtr{FileID: page.ValueLogFileID(45), Offset: 1024, Length: uint32(len(outerPayload))}
+	reader := &stubValueLogReader{
+		payloads: map[page.ValuePtr][]byte{
+			outerPtr: outerPayload,
+			blobPtr:  []byte("blob-val"),
+		},
+	}
+	cache := newOuterLeafBlockCache(8)
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+
+	first, ok, err := r.ReadUnsafeFenceBlock(outerPtr)
+	if err != nil {
+		t.Fatalf("first ReadUnsafeFenceBlock: %v", err)
+	}
+	if !ok {
+		t.Fatalf("first ReadUnsafeFenceBlock ok=false")
+	}
+	second, ok, err := r.ReadUnsafeFenceBlock(outerPtr)
+	if err != nil {
+		t.Fatalf("second ReadUnsafeFenceBlock: %v", err)
+	}
+	if !ok {
+		t.Fatalf("second ReadUnsafeFenceBlock ok=false")
+	}
+	if len(first) != 2 || len(second) != 2 {
+		t.Fatalf("unexpected fence entry lens first=%d second=%d", len(first), len(second))
+	}
+	if !bytes.Equal(first[0].Value, []byte("blob-val")) || !bytes.Equal(second[0].Value, []byte("blob-val")) {
+		t.Fatalf("blob-ref values mismatch")
+	}
+	if !bytes.Equal(first[1].Value, inlineVal) {
+		t.Fatalf("first inline value mismatch")
+	}
+	if !bytes.Equal(second[1].Value, inlineVal) {
+		t.Fatalf("second inline value mismatch")
+	}
+	if _, _, entries, _ := cache.stats(); entries != 0 {
+		t.Fatalf("cache entries = %d, want 0 for blob-ref-first block", entries)
+	}
+}

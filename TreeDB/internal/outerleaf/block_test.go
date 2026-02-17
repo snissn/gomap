@@ -377,6 +377,31 @@ func TestDecodeAndVerifyPayloadModeWithChecksumCompatibility(t *testing.T) {
 	}
 }
 
+func TestDecodeBlockCompressedPayloadLeaseReleaseIdempotence(t *testing.T) {
+	enc, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k1"), Value: bytes.Repeat([]byte("v"), 512)},
+		{Key: []byte("k2"), Value: bytes.Repeat([]byte("v"), 512)},
+	}, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	if len(enc) < blockHeaderSize || enc[5] == blockCodecNone {
+		t.Fatalf("expected compressed payload for lease coverage, codec=%d", enc[5])
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	if blk.rawLease == nil {
+		t.Fatalf("rawLease=nil want non-nil for compressed decode without caller scratch")
+	}
+	blk.Release()
+	blk.Release()
+	if blk.rawLease != nil {
+		t.Fatalf("rawLease should be cleared after Release")
+	}
+}
+
 func TestEncodeDecodeEntriesLookup(t *testing.T) {
 	codecs := []struct {
 		name  string

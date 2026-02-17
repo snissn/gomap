@@ -170,6 +170,7 @@ type DecodedBlock struct {
 	version      uint8
 	entryCount   int
 	raw          []byte
+	rawLease     *payloadLease
 	entries      []byte
 	restartRaw   []byte
 	restartCount int
@@ -187,6 +188,21 @@ type DecodedBlock struct {
 	restartsErr     error
 	restartKeysOnce sync.Once
 	restartKeysErr  error
+	releaseOnce     sync.Once
+}
+
+// Release returns internal lease-owned buffers (if any) to pools.
+// It is safe to call multiple times.
+func (d *DecodedBlock) Release() {
+	if d == nil {
+		return
+	}
+	d.releaseOnce.Do(func() {
+		if d.rawLease != nil {
+			d.rawLease.Release()
+			d.rawLease = nil
+		}
+	})
 }
 
 // Encoder reuses encode scratch buffers across outer-leaf block encodes.
@@ -1765,7 +1781,7 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 		if rawLen < 0 || keyLen < 0 || valueLen < 0 {
 			return nil, fmt.Errorf("outerleaf: invalid lengths")
 		}
-		outScratch, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, true, verifyChecksum)
+		outScratch, rawLease, err := decodeAndVerifyPayloadLeaseWithChecksum(payload, rawLen, codec, scratch, true, verifyChecksum)
 		if err != nil {
 			return nil, err
 		}
@@ -1773,6 +1789,7 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 			version:    version,
 			entryCount: 1,
 			raw:        outScratch,
+			rawLease:   rawLease,
 			entries:    outScratch,
 			firstKey:   outScratch[:keyLen],
 			firstKind:  EntryKindInline,
@@ -1788,23 +1805,30 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 		if rawLen <= 0 {
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
 		}
-		outScratch, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, true, verifyChecksum)
+		outScratch, rawLease, err := decodeAndVerifyPayloadLeaseWithChecksum(payload, rawLen, codec, scratch, true, verifyChecksum)
 		if err != nil {
 			return nil, err
 		}
 		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
 		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartInterval)
 		if splitErr != nil {
+			if rawLease != nil {
+				rawLease.Release()
+			}
 			return nil, splitErr
 		}
 		firstKey, firstValue, err := decodeFirstV2(entries)
 		if err != nil {
+			if rawLease != nil {
+				rawLease.Release()
+			}
 			return nil, err
 		}
 		return &DecodedBlock{
 			version:      version,
 			entryCount:   entryCount,
 			raw:          outScratch,
+			rawLease:     rawLease,
 			entries:      entries,
 			restartRaw:   restartRaw,
 			restartCount: restartCount,
@@ -1822,23 +1846,30 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 		if rawLen <= 0 {
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
 		}
-		outScratch, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, true, verifyChecksum)
+		outScratch, rawLease, err := decodeAndVerifyPayloadLeaseWithChecksum(payload, rawLen, codec, scratch, true, verifyChecksum)
 		if err != nil {
 			return nil, err
 		}
 		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
 		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartInterval)
 		if splitErr != nil {
+			if rawLease != nil {
+				rawLease.Release()
+			}
 			return nil, splitErr
 		}
 		firstKey, first, err := decodeFirstV3(entries)
 		if err != nil {
+			if rawLease != nil {
+				rawLease.Release()
+			}
 			return nil, err
 		}
 		return &DecodedBlock{
 			version:      version,
 			entryCount:   entryCount,
 			raw:          outScratch,
+			rawLease:     rawLease,
 			entries:      entries,
 			restartRaw:   restartRaw,
 			restartCount: restartCount,

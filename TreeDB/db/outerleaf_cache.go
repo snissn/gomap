@@ -117,8 +117,12 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if idx, ok := s.entries[key]; ok {
+		prevBlock := s.nodes[idx].block
 		s.nodes[idx].block = block
 		s.moveToFront(idx)
+		if prevBlock != nil && prevBlock != block {
+			prevBlock.Release()
+		}
 		return
 	}
 	if s.capacity <= 0 {
@@ -135,8 +139,12 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 			return
 		}
 		evictedKey := s.nodes[idx].key
+		evictedBlock := s.nodes[idx].block
 		s.unlink(idx)
 		delete(s.entries, evictedKey)
+		if evictedBlock != nil {
+			evictedBlock.Release()
+		}
 	}
 	node := &s.nodes[idx]
 	node.key = key
