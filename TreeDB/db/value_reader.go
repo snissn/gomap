@@ -24,7 +24,23 @@ type valueReader struct {
 }
 
 type staticFenceKeysLease struct {
-	keys [][]byte
+	// keys may alias shared cache-backed slices; callers must treat them as
+	// immutable views.
+	keys  [][]byte
+	inUse bool
+}
+
+var staticFenceKeysLeasePool = sync.Pool{
+	New: func() any {
+		return &staticFenceKeysLease{}
+	},
+}
+
+func acquireStaticFenceKeysLease(keys [][]byte) *staticFenceKeysLease {
+	lease := staticFenceKeysLeasePool.Get().(*staticFenceKeysLease)
+	lease.keys = keys
+	lease.inUse = true
+	return lease
 }
 
 func (l *staticFenceKeysLease) Keys() [][]byte {
@@ -34,7 +50,14 @@ func (l *staticFenceKeysLease) Keys() [][]byte {
 	return l.keys
 }
 
-func (l *staticFenceKeysLease) Release() {}
+func (l *staticFenceKeysLease) Release() {
+	if l == nil || !l.inUse {
+		return
+	}
+	l.keys = nil
+	l.inUse = false
+	staticFenceKeysLeasePool.Put(l)
+}
 
 const outerLeafLookupScratchMaxRetain = 1 << 20
 
@@ -438,14 +461,14 @@ func (r valueReader) ReadUnsafeFenceBlockKeysRangeLease(ptr page.ValuePtr, lower
 		return nil, true, nil
 	}
 	if cachedKeys := r.cachedOuterLeafKeys(ptr); cachedKeys != nil {
-		return &staticFenceKeysLease{keys: sliceFenceKeysRange(cachedKeys, lower, upper)}, true, nil
+		return acquireStaticFenceKeysLease(sliceFenceKeysRange(cachedKeys, lower, upper)), true, nil
 	}
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
 		keys, err := block.KeysRange(nil, lower, upper)
 		if err != nil {
 			return nil, true, err
 		}
-		return &staticFenceKeysLease{keys: keys}, true, nil
+		return acquireStaticFenceKeysLease(keys), true, nil
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
@@ -552,7 +575,7 @@ func (r valueReader) ReadUnsafeFenceBlockSeekLease(ptr page.ValuePtr, key []byte
 		if isBelow || isAbove {
 			return lower, isBelow, isAbove, nil, true, nil
 		}
-		return lower, false, false, &staticFenceKeysLease{keys: cachedKeys}, true, nil
+		return lower, false, false, acquireStaticFenceKeysLease(cachedKeys), true, nil
 	}
 	if block := r.cachedOuterLeafBlock(ptr); block != nil {
 		lower, isBelow, isAbove, lowerErr := block.LowerBound(key)
@@ -567,7 +590,7 @@ func (r valueReader) ReadUnsafeFenceBlockSeekLease(ptr page.ValuePtr, key []byte
 			return 0, false, false, nil, true, keyErr
 		}
 		r.cacheOuterLeafKeys(ptr, blockKeys)
-		return lower, false, false, &staticFenceKeysLease{keys: blockKeys}, true, nil
+		return lower, false, false, acquireStaticFenceKeysLease(blockKeys), true, nil
 	}
 
 	raw, readErr := r.readRawUnsafe(ptr)

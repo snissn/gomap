@@ -35,10 +35,6 @@ const (
 	outerLeafMinSavingsDiv               = 50 // 2%
 	outerLeafMinSavingsBytes             = 8
 	outerLeafHighEntropyUniqueThreshold  = 224
-
-	// minArenaBlockSize ensures we allocate backing memory in efficient
-	// page-sized chunks (4KB) rather than tiny fragments.
-	minArenaBlockSize = 4096
 )
 
 var blockMagic = [4]byte{'T', 'O', 'L', '2'}

@@ -1752,7 +1752,6 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 
 	// Keep the expanded block for subsequent entries in this run so we only pay
 	// one full decode when values are actually requested.
-	it.releaseFenceKeyLease()
 	it.fenceEntries = entries
 	it.fenceKeys = nil
 	it.fenceValuesLazy = false
@@ -1760,11 +1759,13 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 	if compareTreeKey(entry.Key, it.currKey) != 0 {
 		pos := lowerBoundFenceEntries(entries, it.currKey)
 		if pos < 0 || pos >= len(entries) {
+			it.releaseFenceKeyLease()
 			it.err = fmt.Errorf("iterator fence value load: key not found in fence block")
 			it.valid = false
 			return false
 		}
 		if compareTreeKey(entries[pos].Key, it.currKey) != 0 {
+			it.releaseFenceKeyLease()
 			it.err = fmt.Errorf("iterator fence value load: fence index out of sync")
 			it.valid = false
 			return false
@@ -1772,6 +1773,8 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 		it.fenceIndex = pos
 		entry = entries[pos]
 	}
+	it.currKey = entry.Key
+	it.releaseFenceKeyLease()
 	it.currVal = entry.Value
 	it.valOK = true
 	return true

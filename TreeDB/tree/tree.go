@@ -87,8 +87,9 @@ type slabUnsafeFenceBlockRangeKeyReader interface {
 	ReadUnsafeFenceBlockKeysRange(ptr page.ValuePtr, lower []byte, upper []byte) (keys [][]byte, ok bool, err error)
 }
 
-// FenceKeysLease provides explicit ownership for decoded fence key vectors.
-// Callers must Release when done.
+// FenceKeysLease provides lifecycle ownership for fence key vectors.
+// Keys returned by Keys must be treated as immutable views; implementations
+// may alias shared cache state. Callers must Release when done.
 type FenceKeysLease interface {
 	Keys() [][]byte
 	Release()
