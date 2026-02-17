@@ -542,8 +542,11 @@ func getPooledLeaseKeys(minCap int) [][]byte {
 		minCap = 1
 	}
 	if v := outerLeafLeaseKeysPool.Get(); v != nil {
-		if keys, ok := v.([][]byte); ok && cap(keys) >= minCap {
-			return keys[:0]
+		if keys, ok := v.([][]byte); ok {
+			if cap(keys) >= minCap {
+				return keys[:0]
+			}
+			putPooledLeaseKeys(keys)
 		}
 	}
 	return make([][]byte, 0, minCap)
@@ -563,8 +566,11 @@ func getPooledLeaseArena(minCap int) []byte {
 		minCap = 1
 	}
 	if v := outerLeafLeaseArenaPool.Get(); v != nil {
-		if arena, ok := v.([]byte); ok && cap(arena) >= minCap {
-			return arena[:0]
+		if arena, ok := v.([]byte); ok {
+			if cap(arena) >= minCap {
+				return arena[:0]
+			}
+			putPooledLeaseArena(arena)
 		}
 	}
 	return make([]byte, 0, minCap)

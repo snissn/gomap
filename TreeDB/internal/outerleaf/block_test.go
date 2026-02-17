@@ -3,6 +3,7 @@ package outerleaf
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/golang/snappy"
@@ -649,6 +650,62 @@ func TestDecodeLowerBoundAndKeysOnMatchLeaseWithVerify(t *testing.T) {
 	}
 	if pos != 0 || !below || above || lease != nil {
 		t.Fatalf("below got pos=%d below=%v above=%v lease=%v", pos, below, above, lease)
+	}
+}
+
+func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
+	prev := outerLeafLeaseKeysPool
+	outerLeafLeaseKeysPool = sync.Pool{}
+	defer func() {
+		outerLeafLeaseKeysPool = prev
+	}()
+
+	undersized := make([][]byte, 0, 2)
+	outerLeafLeaseKeysPool.Put(undersized)
+
+	got := getPooledLeaseKeys(4)
+	if cap(got) < 4 {
+		t.Fatalf("cap(got)=%d want >=4", cap(got))
+	}
+
+	v := outerLeafLeaseKeysPool.Get()
+	if v == nil {
+		t.Fatalf("undersized slice was not returned to pool")
+	}
+	keys, ok := v.([][]byte)
+	if !ok {
+		t.Fatalf("pool type=%T want [][]byte", v)
+	}
+	if cap(keys) != cap(undersized) {
+		t.Fatalf("cap(keys)=%d want=%d", cap(keys), cap(undersized))
+	}
+}
+
+func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
+	prev := outerLeafLeaseArenaPool
+	outerLeafLeaseArenaPool = sync.Pool{}
+	defer func() {
+		outerLeafLeaseArenaPool = prev
+	}()
+
+	undersized := make([]byte, 0, 8)
+	outerLeafLeaseArenaPool.Put(undersized)
+
+	got := getPooledLeaseArena(16)
+	if cap(got) < 16 {
+		t.Fatalf("cap(got)=%d want >=16", cap(got))
+	}
+
+	v := outerLeafLeaseArenaPool.Get()
+	if v == nil {
+		t.Fatalf("undersized arena was not returned to pool")
+	}
+	arena, ok := v.([]byte)
+	if !ok {
+		t.Fatalf("pool type=%T want []byte", v)
+	}
+	if cap(arena) != cap(undersized) {
+		t.Fatalf("cap(arena)=%d want=%d", cap(arena), cap(undersized))
 	}
 }
 
