@@ -395,6 +395,10 @@ func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byt
 }
 
 func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockEntry, bool, error) {
+	return r.ReadUnsafeFenceBlockInto(ptr, nil)
+}
+
+func (r valueReader) ReadUnsafeFenceBlockInto(ptr page.ValuePtr, dst []tree.FenceBlockEntry) ([]tree.FenceBlockEntry, bool, error) {
 	if !r.fenceLookupModeEnabled() {
 		return nil, false, nil
 	}
@@ -413,7 +417,11 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 		}
 		block = decoded
 	}
-	entries := make([]tree.FenceBlockEntry, 0, block.EntryCount())
+	if cap(dst) < block.EntryCount() {
+		dst = make([]tree.FenceBlockEntry, 0, block.EntryCount())
+	} else {
+		dst = dst[:0]
+	}
 	err := block.VisitTypedEntries(func(key []byte, kind outerleaf.EntryKind, value []byte, blobPtr page.ValuePtr) error {
 		val, err := r.resolveLookupResult(outerleaf.LookupResult{
 			Kind:    kind,
@@ -423,13 +431,13 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 		if err != nil {
 			return err
 		}
-		entries = append(entries, tree.FenceBlockEntry{Key: key, Value: val})
+		dst = append(dst, tree.FenceBlockEntry{Key: key, Value: val})
 		return nil
 	})
 	if err != nil {
 		return nil, true, err
 	}
-	return entries, true, nil
+	return dst, true, nil
 }
 
 func (r valueReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {

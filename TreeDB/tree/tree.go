@@ -73,6 +73,13 @@ type slabUnsafeFenceBlockReader interface {
 	ReadUnsafeFenceBlock(ptr page.ValuePtr) (entries []FenceBlockEntry, ok bool, err error)
 }
 
+// Optional block expansion reads for fence-only outer-leaf mode that reuse a
+// caller-provided destination slice to avoid per-call allocations.
+// ok=false means the reader is not in fence expansion mode for this pointer.
+type slabUnsafeFenceBlockIntoReader interface {
+	ReadUnsafeFenceBlockInto(ptr page.ValuePtr, dst []FenceBlockEntry) (entries []FenceBlockEntry, ok bool, err error)
+}
+
 // Optional key-only block expansion reads for fence-only outer-leaf mode.
 // ok=false means the reader is not in fence expansion mode for this pointer.
 type slabUnsafeFenceBlockKeyReader interface {
@@ -151,23 +158,24 @@ func fencePointerLookupsEnabled(sr SlabReader) bool {
 }
 
 type Tree struct {
-	pager           *pager.Pager
-	slabReader      SlabReader
-	slabAppender    slabUnsafeAppender
-	slabBatcher     slabUnsafeBatchAppender
-	slabKeyReader   slabUnsafeKeyReader
-	slabFenceReader slabUnsafeFenceKeyReader
-	fenceLookupMode bool
-	slabFenceBlocks slabUnsafeFenceBlockReader
-	slabFenceKeys   slabUnsafeFenceBlockKeyReader
-	slabFenceRange  slabUnsafeFenceBlockRangeKeyReader
-	slabFenceRangeL slabUnsafeFenceBlockRangeKeyLeaseReader
-	slabFenceSeek   slabUnsafeFenceBlockSeekReader
-	slabFenceSeekL  slabUnsafeFenceBlockSeekLeaseReader
-	slabFencePtrCls slabFencePointerClassifier
-	slabKeyAppender slabUnsafeKeyAppender
-	slabKeyBatcher  slabUnsafeKeyBatchAppender
-	rootPageID      uint64
+	pager            *pager.Pager
+	slabReader       SlabReader
+	slabAppender     slabUnsafeAppender
+	slabBatcher      slabUnsafeBatchAppender
+	slabKeyReader    slabUnsafeKeyReader
+	slabFenceReader  slabUnsafeFenceKeyReader
+	fenceLookupMode  bool
+	slabFenceBlocks  slabUnsafeFenceBlockReader
+	slabFenceBlocksI slabUnsafeFenceBlockIntoReader
+	slabFenceKeys    slabUnsafeFenceBlockKeyReader
+	slabFenceRange   slabUnsafeFenceBlockRangeKeyReader
+	slabFenceRangeL  slabUnsafeFenceBlockRangeKeyLeaseReader
+	slabFenceSeek    slabUnsafeFenceBlockSeekReader
+	slabFenceSeekL   slabUnsafeFenceBlockSeekLeaseReader
+	slabFencePtrCls  slabFencePointerClassifier
+	slabKeyAppender  slabUnsafeKeyAppender
+	slabKeyBatcher   slabUnsafeKeyBatchAppender
+	rootPageID       uint64
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
@@ -201,6 +209,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		}
 		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
 			t.slabFenceBlocks = fenceBlocks
+		}
+		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockIntoReader); ok {
+			t.slabFenceBlocksI = fenceBlocks
 		}
 		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
 			t.slabFenceKeys = fenceKeys
@@ -273,6 +284,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		} else {
 			t.slabFenceBlocks = nil
 		}
+		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockIntoReader); ok {
+			t.slabFenceBlocksI = fenceBlocks
+		} else {
+			t.slabFenceBlocksI = nil
+		}
 		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
 			t.slabFenceKeys = fenceKeys
 		} else {
@@ -306,6 +322,7 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	} else {
 		t.slabFenceReader = nil
 		t.slabFenceBlocks = nil
+		t.slabFenceBlocksI = nil
 		t.slabFenceKeys = nil
 		t.slabFenceRange = nil
 		t.slabFenceRangeL = nil

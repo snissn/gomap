@@ -347,33 +347,34 @@ func (s *combinedLeafKeyState) rebuildAt(index uint16) (key []byte, flags byte, 
 }
 
 type Iterator struct {
-	tree            *Tree
-	stack           []CursorItem
-	stackBuf        [16]CursorItem
-	leafState       combinedLeafKeyState
-	start           []byte
-	end             []byte
-	valid           bool
-	err             error
-	currKey         []byte
-	currVal         []byte
-	currPtr         page.ValuePtr
-	flags           byte
-	valOK           bool
-	ptrOK           bool
-	ptrScratch      []byte
-	slabAppender    slabUnsafeAppender
-	slabBatcher     slabUnsafeBatchAppender
-	slabKeyReader   slabUnsafeKeyReader
-	slabFenceBlocks slabUnsafeFenceBlockReader
-	slabFenceKeys   slabUnsafeFenceBlockKeyReader
-	slabFenceRange  slabUnsafeFenceBlockRangeKeyReader
-	slabFenceRangeL slabUnsafeFenceBlockRangeKeyLeaseReader
-	slabFenceSeek   slabUnsafeFenceBlockSeekReader
-	slabFenceSeekL  slabUnsafeFenceBlockSeekLeaseReader
-	slabFencePtrCls slabFencePointerClassifier
-	slabKeyAppender slabUnsafeKeyAppender
-	slabKeyBatcher  slabUnsafeKeyBatchAppender
+	tree             *Tree
+	stack            []CursorItem
+	stackBuf         [16]CursorItem
+	leafState        combinedLeafKeyState
+	start            []byte
+	end              []byte
+	valid            bool
+	err              error
+	currKey          []byte
+	currVal          []byte
+	currPtr          page.ValuePtr
+	flags            byte
+	valOK            bool
+	ptrOK            bool
+	ptrScratch       []byte
+	slabAppender     slabUnsafeAppender
+	slabBatcher      slabUnsafeBatchAppender
+	slabKeyReader    slabUnsafeKeyReader
+	slabFenceBlocks  slabUnsafeFenceBlockReader
+	slabFenceBlocksI slabUnsafeFenceBlockIntoReader
+	slabFenceKeys    slabUnsafeFenceBlockKeyReader
+	slabFenceRange   slabUnsafeFenceBlockRangeKeyReader
+	slabFenceRangeL  slabUnsafeFenceBlockRangeKeyLeaseReader
+	slabFenceSeek    slabUnsafeFenceBlockSeekReader
+	slabFenceSeekL   slabUnsafeFenceBlockSeekLeaseReader
+	slabFencePtrCls  slabFencePointerClassifier
+	slabKeyAppender  slabUnsafeKeyAppender
+	slabKeyBatcher   slabUnsafeKeyBatchAppender
 
 	fenceEntries    []FenceBlockEntry
 	fenceKeys       [][]byte
@@ -469,24 +470,25 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse boo
 	it := iteratorPool.Get().(*Iterator)
 	buf := it.captureReusableBuffers()
 	*it = Iterator{
-		tree:            t,
-		start:           start,
-		end:             end,
-		mode:            mode,
-		reverse:         reverse,
-		verifyAlways:    t.pager != nil && t.pager.VerifyOnRead(),
-		slabAppender:    t.slabAppender,
-		slabBatcher:     t.slabBatcher,
-		slabKeyReader:   t.slabKeyReader,
-		slabFenceBlocks: t.slabFenceBlocks,
-		slabFenceKeys:   t.slabFenceKeys,
-		slabFenceRange:  t.slabFenceRange,
-		slabFenceRangeL: t.slabFenceRangeL,
-		slabFenceSeek:   t.slabFenceSeek,
-		slabFenceSeekL:  t.slabFenceSeekL,
-		slabFencePtrCls: t.slabFencePtrCls,
-		slabKeyAppender: t.slabKeyAppender,
-		slabKeyBatcher:  t.slabKeyBatcher,
+		tree:             t,
+		start:            start,
+		end:              end,
+		mode:             mode,
+		reverse:          reverse,
+		verifyAlways:     t.pager != nil && t.pager.VerifyOnRead(),
+		slabAppender:     t.slabAppender,
+		slabBatcher:      t.slabBatcher,
+		slabKeyReader:    t.slabKeyReader,
+		slabFenceBlocks:  t.slabFenceBlocks,
+		slabFenceBlocksI: t.slabFenceBlocksI,
+		slabFenceKeys:    t.slabFenceKeys,
+		slabFenceRange:   t.slabFenceRange,
+		slabFenceRangeL:  t.slabFenceRangeL,
+		slabFenceSeek:    t.slabFenceSeek,
+		slabFenceSeekL:   t.slabFenceSeekL,
+		slabFencePtrCls:  t.slabFencePtrCls,
+		slabKeyAppender:  t.slabKeyAppender,
+		slabKeyBatcher:   t.slabKeyBatcher,
 	}
 	it.installReusableBuffers(buf)
 	return it
@@ -963,7 +965,12 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			}
 		}
 		if it.slabFenceBlocks != nil && (preferFenceEntries || !keyReaderUsable) {
-			entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+			var entries []FenceBlockEntry
+			if it.slabFenceBlocksI != nil {
+				entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(ptr, it.fenceEntries[:0])
+			} else {
+				entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+			}
 			if err != nil {
 				return false, err
 			}
@@ -985,6 +992,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			pos := lowerBoundFenceEntries(entries, seekKey)
 			if pos < len(entries) {
 				top.Index = scan
+				it.fenceEntries = entries
 				it.pendingFencePageID = top.PageID
 				it.pendingFenceLeafIndex = scan
 				it.pendingFenceEntryIdx = pos
@@ -1094,7 +1102,11 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		if it.slabFenceBlocks == nil {
 			return false, false, false, nil
 		}
-		entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+		if it.slabFenceBlocksI != nil {
+			entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(ptr, it.fenceEntries[:0])
+		} else {
+			entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+		}
 		if err != nil {
 			return false, false, false, err
 		}
@@ -1746,7 +1758,16 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 		it.valid = false
 		return false
 	}
-	entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(it.fenceBlockPtr)
+	var (
+		entries []FenceBlockEntry
+		ok      bool
+		err     error
+	)
+	if it.slabFenceBlocksI != nil {
+		entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(it.fenceBlockPtr, it.fenceEntries[:0])
+	} else {
+		entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(it.fenceBlockPtr)
+	}
 	if err != nil {
 		it.err = err
 		it.valid = false
