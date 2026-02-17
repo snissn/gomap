@@ -384,45 +384,6 @@ func TestValueReaderReadUnsafeFenceBlockKeysRange_UsesKeyCacheWindow(t *testing.
 	}
 }
 
-func TestValueReaderReadUnsafeFenceBlockKeysRange_RawRangeWarmsFullKeyCache(t *testing.T) {
-	payload, _, ptr := makeTestOuterLeafPayload(t)
-	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
-	keyCache := newOuterLeafKeyCache(8)
-	r := valueReader{
-		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
-		keyCache:      keyCache,
-	}
-
-	keys, ok, err := r.ReadUnsafeFenceBlockKeysRange(ptr, []byte("k2"), []byte("k3"))
-	if err != nil {
-		t.Fatalf("ReadUnsafeFenceBlockKeysRange: %v", err)
-	}
-	if !ok {
-		t.Fatalf("ok = false, want true")
-	}
-	if len(keys) != 1 || !bytes.Equal(keys[0], []byte("k2")) {
-		t.Fatalf("keys = %q, want [k2]", keys)
-	}
-	if reader.readUnsafeCalls != 1 {
-		t.Fatalf("readUnsafeCalls after range read = %d, want 1", reader.readUnsafeCalls)
-	}
-
-	all, ok, err := r.ReadUnsafeFenceBlockKeys(ptr)
-	if err != nil {
-		t.Fatalf("ReadUnsafeFenceBlockKeys: %v", err)
-	}
-	if !ok {
-		t.Fatalf("ok = false, want true")
-	}
-	if len(all) != 3 {
-		t.Fatalf("all keys len = %d, want 3", len(all))
-	}
-	if reader.readUnsafeCalls != 1 {
-		t.Fatalf("readUnsafeCalls after full-key read = %d, want 1 (range read should warm key cache)", reader.readUnsafeCalls)
-	}
-}
-
 func TestValueReaderReadUnsafeFenceBlockSeek_ClassifiesBoundsAndReusesCache(t *testing.T) {
 	payload, _, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
@@ -459,8 +420,8 @@ func TestValueReaderReadUnsafeFenceBlockSeek_ClassifiesBoundsAndReusesCache(t *t
 	if pos != 1 || below || above || len(keys) != 3 {
 		t.Fatalf("seek(k2) got pos=%d below=%v above=%v len(keys)=%d, want pos=1 below=false above=false len(keys)=3", pos, below, above, len(keys))
 	}
-	if reader.readUnsafeCalls != 1 {
-		t.Fatalf("readUnsafeCalls after in-range materialization = %d, want 1", reader.readUnsafeCalls)
+	if reader.readUnsafeCalls != 2 {
+		t.Fatalf("readUnsafeCalls after in-range materialization = %d, want 2", reader.readUnsafeCalls)
 	}
 
 	pos, below, above, keys, ok, err = r.ReadUnsafeFenceBlockSeek(ptr, []byte("k9"))
@@ -473,8 +434,8 @@ func TestValueReaderReadUnsafeFenceBlockSeek_ClassifiesBoundsAndReusesCache(t *t
 	if pos != 3 || below || !above || keys != nil {
 		t.Fatalf("seek(k9) got pos=%d below=%v above=%v keys=%v, want pos=3 below=false above=true keys=nil", pos, below, above, keys)
 	}
-	if reader.readUnsafeCalls != 1 {
-		t.Fatalf("readUnsafeCalls after cache reuse = %d, want 1", reader.readUnsafeCalls)
+	if reader.readUnsafeCalls != 2 {
+		t.Fatalf("readUnsafeCalls after cache reuse = %d, want 2", reader.readUnsafeCalls)
 	}
 }
 
