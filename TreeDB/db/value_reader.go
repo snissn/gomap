@@ -155,6 +155,16 @@ func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte, unsafe bool) ([]
 		// oversized entries.
 		return raw, nil
 	}
+	if r.cache == nil {
+		val, found, err := r.decodeOuterLeafValueForKeyNoCache(raw, nil, unsafe)
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return nil, fmt.Errorf("value reader: outer-leaf first-entry lookup miss ptr=%+v", ptr)
+		}
+		return val, nil
+	}
 	block, err := r.outerLeafBlock(ptr, raw)
 	if err != nil {
 		return nil, err

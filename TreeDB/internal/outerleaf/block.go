@@ -169,6 +169,10 @@ type DecodedBlock struct {
 	firstKind    EntryKind
 	firstValue   []byte
 	firstBlob    page.ValuePtr
+	leaseOwned   bool
+	pooledRaw    bool
+	pooledRest   bool
+	pooledRKeys  bool
 
 	keysOnce        sync.Once
 	keys            [][]byte
@@ -361,64 +365,102 @@ func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
 	}
 }
 
-func decodePayload(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte, error) {
+func decodePayloadInto(codec uint8, payload []byte, rawLen int, dst []byte, preferPool bool) ([]byte, bool, error) {
 	if rawLen < 0 {
-		return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
+		return nil, false, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
 	}
 	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
-		return nil, fmt.Errorf("outerleaf: payload too large %d", rawLen)
+		return nil, false, fmt.Errorf("outerleaf: payload too large %d", rawLen)
 	}
 
 	switch codec {
 	case blockCodecNone:
 		if len(payload) != rawLen {
-			return nil, fmt.Errorf("outerleaf: raw payload length mismatch got=%d want=%d", len(payload), rawLen)
+			return nil, false, fmt.Errorf("outerleaf: raw payload length mismatch got=%d want=%d", len(payload), rawLen)
 		}
+		pooled := false
 		if cap(dst) < rawLen {
-			dst = make([]byte, rawLen)
+			if preferPool && dst == nil {
+				dst = getPooledBytes(rawLen)
+				pooled = true
+			} else {
+				dst = make([]byte, rawLen)
+			}
+			dst = dst[:rawLen]
 		} else {
 			dst = dst[:rawLen]
 		}
 		copy(dst, payload)
-		return dst, nil
+		return dst, pooled, nil
 	case blockCodecSnappy:
 		decodedLen, err := snappy.DecodedLen(payload)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if decodedLen != rawLen {
-			return nil, fmt.Errorf("outerleaf: snappy decoded length mismatch got=%d want=%d", decodedLen, rawLen)
+			return nil, false, fmt.Errorf("outerleaf: snappy decoded length mismatch got=%d want=%d", decodedLen, rawLen)
 		}
+		pooled := false
 		if cap(dst) < rawLen {
-			dst = make([]byte, rawLen)
+			if preferPool && dst == nil {
+				dst = getPooledBytes(rawLen)
+				pooled = true
+			} else {
+				dst = make([]byte, rawLen)
+			}
+			dst = dst[:rawLen]
 		} else {
 			dst = dst[:rawLen]
 		}
 		out, err := snappy.Decode(dst, payload)
 		if err != nil {
-			return nil, err
+			if pooled {
+				putPooledBytes(dst)
+			}
+			return nil, false, err
 		}
 		if len(out) != rawLen {
-			return nil, fmt.Errorf("outerleaf: snappy decode length mismatch got=%d want=%d", len(out), rawLen)
+			if pooled {
+				putPooledBytes(dst)
+			}
+			return nil, false, fmt.Errorf("outerleaf: snappy decode length mismatch got=%d want=%d", len(out), rawLen)
 		}
-		return out, nil
+		return out, pooled, nil
 	case blockCodecLZ4:
+		pooled := false
 		if cap(dst) < rawLen {
-			dst = make([]byte, rawLen)
+			if preferPool && dst == nil {
+				dst = getPooledBytes(rawLen)
+				pooled = true
+			} else {
+				dst = make([]byte, rawLen)
+			}
+			dst = dst[:rawLen]
 		} else {
 			dst = dst[:rawLen]
 		}
 		n, err := lz4.UncompressBlock(payload, dst)
 		if err != nil {
-			return nil, err
+			if pooled {
+				putPooledBytes(dst)
+			}
+			return nil, false, err
 		}
 		if n != rawLen {
-			return nil, fmt.Errorf("outerleaf: lz4 decode length mismatch got=%d want=%d", n, rawLen)
+			if pooled {
+				putPooledBytes(dst)
+			}
+			return nil, false, fmt.Errorf("outerleaf: lz4 decode length mismatch got=%d want=%d", n, rawLen)
 		}
-		return dst[:n], nil
+		return dst[:n], pooled, nil
 	default:
-		return nil, fmt.Errorf("outerleaf: unknown codec id %d", codec)
+		return nil, false, fmt.Errorf("outerleaf: unknown codec id %d", codec)
 	}
+}
+
+func decodePayload(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte, error) {
+	out, _, err := decodePayloadInto(codec, payload, rawLen, dst, false)
+	return out, err
 }
 
 func commonPrefixLen(a, b []byte) int {
@@ -1184,31 +1226,39 @@ func decodeAndVerifyPayloadMode(payload []byte, rawLen int, codec uint8, scratch
 }
 
 func decodeAndVerifyPayloadModeWithChecksum(payload []byte, rawLen int, codec uint8, scratch []byte, allowRawView bool, verifyChecksum bool) ([]byte, error) {
+	out, _, err := decodeAndVerifyPayloadModeWithChecksumOwned(payload, rawLen, codec, scratch, allowRawView, verifyChecksum, false)
+	return out, err
+}
+
+func decodeAndVerifyPayloadModeWithChecksumOwned(payload []byte, rawLen int, codec uint8, scratch []byte, allowRawView bool, verifyChecksum bool, preferPool bool) ([]byte, bool, error) {
 	if blockHeaderSize > len(payload) {
-		return nil, fmt.Errorf("outerleaf: truncated header")
+		return nil, false, fmt.Errorf("outerleaf: truncated header")
 	}
 	if verifyChecksum {
 		gotChecksum := binary.LittleEndian.Uint32(payload[blockChecksumOff : blockChecksumOff+blockChecksumSize])
 		wantChecksum := crc.ChecksumParts(payload[:blockChecksumOff], payload[blockHeaderSize:])
 		if gotChecksum != wantChecksum {
-			return nil, fmt.Errorf("outerleaf: checksum mismatch")
+			return nil, false, fmt.Errorf("outerleaf: checksum mismatch")
 		}
 	}
 	if allowRawView && codec == blockCodecNone {
 		raw := payload[blockHeaderSize:]
 		if len(raw) != rawLen {
-			return nil, fmt.Errorf("outerleaf: raw payload length mismatch got=%d want=%d", len(raw), rawLen)
+			return nil, false, fmt.Errorf("outerleaf: raw payload length mismatch got=%d want=%d", len(raw), rawLen)
 		}
-		return raw, nil
+		return raw, false, nil
 	}
-	out, err := decodePayload(codec, payload[blockHeaderSize:], rawLen, scratch)
+	out, pooled, err := decodePayloadInto(codec, payload[blockHeaderSize:], rawLen, scratch, preferPool && scratch == nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(out) != rawLen {
-		return nil, fmt.Errorf("outerleaf: decoded payload length mismatch")
+		if pooled {
+			putPooledBytes(out)
+		}
+		return nil, false, fmt.Errorf("outerleaf: decoded payload length mismatch")
 	}
-	return out, nil
+	return out, pooled, nil
 }
 
 func splitV2RawMeta(raw []byte, entriesLen int, entryCount int, restartInterval int) (entries []byte, restartRaw []byte, restartCount int, err error) {
@@ -1258,14 +1308,19 @@ func splitV2RawMeta(raw []byte, entriesLen int, entryCount int, restartInterval 
 	return raw[:entriesLen], raw[restartOff : restartOff+restartBytes], restartCount, nil
 }
 
-func decodeRestartsFromRaw(entries []byte, restartRaw []byte, restartCount int) ([]uint32, error) {
+func decodeRestartsFromRawInto(entries []byte, restartRaw []byte, restartCount int, dst []uint32) ([]uint32, error) {
 	if restartCount == 0 {
 		return nil, nil
 	}
 	if len(restartRaw) != restartCount*4 {
 		return nil, fmt.Errorf("outerleaf: invalid restart section")
 	}
-	restarts := make([]uint32, restartCount)
+	if cap(dst) < restartCount {
+		dst = make([]uint32, restartCount)
+	} else {
+		dst = dst[:restartCount]
+	}
+	restarts := dst
 	prev := uint32(0)
 	for i := 0; i < restartCount; i++ {
 		off := binary.LittleEndian.Uint32(restartRaw[i*4 : (i+1)*4])
@@ -1284,16 +1339,21 @@ func decodeRestartsFromRaw(entries []byte, restartRaw []byte, restartCount int) 
 	return restarts, nil
 }
 
-func splitV2Raw(raw []byte, entriesLen int, entryCount int, restartInterval int) (entries []byte, restarts []uint32, err error) {
-	entries, restartRaw, restartCount, err := splitV2RawMeta(raw, entriesLen, entryCount, restartInterval)
-	if err != nil {
-		return nil, nil, err
+func decodeRestartsFromRaw(entries []byte, restartRaw []byte, restartCount int) ([]uint32, error) {
+	return decodeRestartsFromRawInto(entries, restartRaw, restartCount, nil)
+}
+
+func decodeRestartsFromRawPooled(entries []byte, restartRaw []byte, restartCount int) ([]uint32, bool, error) {
+	if restartCount == 0 {
+		return nil, false, nil
 	}
-	restarts, err = decodeRestartsFromRaw(entries, restartRaw, restartCount)
+	buf := getPooledRestarts(restartCount)
+	restarts, err := decodeRestartsFromRawInto(entries, restartRaw, restartCount, buf)
 	if err != nil {
-		return nil, nil, err
+		putPooledRestarts(buf)
+		return nil, false, err
 	}
-	return entries, restarts, nil
+	return restarts, true, nil
 }
 
 func decodeFirstV2(entries []byte) (key, value []byte, err error) {
@@ -1332,11 +1392,16 @@ func restartV2Key(entries []byte, off int) ([]byte, error) {
 	return entries[start : start+suffixLen], nil
 }
 
-func decodeV2RestartKeys(entries []byte, restarts []uint32) ([][]byte, error) {
+func decodeV2RestartKeysInto(entries []byte, restarts []uint32, dst [][]byte) ([][]byte, error) {
 	if len(restarts) == 0 {
 		return nil, nil
 	}
-	keys := make([][]byte, len(restarts))
+	if cap(dst) < len(restarts) {
+		dst = make([][]byte, len(restarts))
+	} else {
+		dst = dst[:len(restarts)]
+	}
+	keys := dst
 	for i := range restarts {
 		k, err := restartV2Key(entries, int(restarts[i]))
 		if err != nil {
@@ -1348,6 +1413,23 @@ func decodeV2RestartKeys(entries []byte, restarts []uint32) ([][]byte, error) {
 		keys[i] = k
 	}
 	return keys, nil
+}
+
+func decodeV2RestartKeys(entries []byte, restarts []uint32) ([][]byte, error) {
+	return decodeV2RestartKeysInto(entries, restarts, nil)
+}
+
+func decodeV2RestartKeysPooled(entries []byte, restarts []uint32) ([][]byte, bool, error) {
+	if len(restarts) == 0 {
+		return nil, false, nil
+	}
+	buf := getPooledLeaseKeys(len(restarts))
+	keys, err := decodeV2RestartKeysInto(entries, restarts, buf)
+	if err != nil {
+		putPooledLeaseKeys(buf)
+		return nil, false, err
+	}
+	return keys, true, nil
 }
 
 func locateV2Restart(entries []byte, key []byte, restarts []uint32, restartKeys [][]byte) (int, error) {
@@ -1454,6 +1536,21 @@ func lookupV2Value(entries []byte, entryCount int, key []byte, restarts []uint32
 	return lookupV2ValueRange(entries, key, start, limit)
 }
 
+func lookupV2ValueFromRestartRaw(entries []byte, entryCount int, key []byte, restartRaw []byte, restartCount int) ([]byte, bool, error) {
+	restarts, pooled, err := decodeRestartsFromRawPooled(entries, restartRaw, restartCount)
+	if err != nil {
+		return nil, false, err
+	}
+	val, found, lookupErr := lookupV2Value(entries, entryCount, key, restarts, nil)
+	if pooled {
+		putPooledRestarts(restarts)
+	}
+	if lookupErr != nil {
+		return nil, false, lookupErr
+	}
+	return val, found, nil
+}
+
 func decodeFirstV3(entries []byte) (key []byte, out LookupResult, err error) {
 	if len(entries) < 9 {
 		return nil, LookupResult{}, fmt.Errorf("outerleaf: truncated first entry")
@@ -1504,11 +1601,16 @@ func restartV3Key(entries []byte, off int) ([]byte, error) {
 	return entries[start : start+suffixLen], nil
 }
 
-func decodeV3RestartKeys(entries []byte, restarts []uint32) ([][]byte, error) {
+func decodeV3RestartKeysInto(entries []byte, restarts []uint32, dst [][]byte) ([][]byte, error) {
 	if len(restarts) == 0 {
 		return nil, nil
 	}
-	keys := make([][]byte, len(restarts))
+	if cap(dst) < len(restarts) {
+		dst = make([][]byte, len(restarts))
+	} else {
+		dst = dst[:len(restarts)]
+	}
+	keys := dst
 	for i := range restarts {
 		k, err := restartV3Key(entries, int(restarts[i]))
 		if err != nil {
@@ -1520,6 +1622,23 @@ func decodeV3RestartKeys(entries []byte, restarts []uint32) ([][]byte, error) {
 		keys[i] = k
 	}
 	return keys, nil
+}
+
+func decodeV3RestartKeys(entries []byte, restarts []uint32) ([][]byte, error) {
+	return decodeV3RestartKeysInto(entries, restarts, nil)
+}
+
+func decodeV3RestartKeysPooled(entries []byte, restarts []uint32) ([][]byte, bool, error) {
+	if len(restarts) == 0 {
+		return nil, false, nil
+	}
+	buf := getPooledLeaseKeys(len(restarts))
+	keys, err := decodeV3RestartKeysInto(entries, restarts, buf)
+	if err != nil {
+		putPooledLeaseKeys(buf)
+		return nil, false, err
+	}
+	return keys, true, nil
 }
 
 func locateV3Restart(entries []byte, key []byte, restarts []uint32, restartKeys [][]byte) (int, error) {
@@ -1634,6 +1753,21 @@ func lookupV3Entry(entries []byte, entryCount int, key []byte, restarts []uint32
 	return lookupV3EntryRange(entries, key, start, limit)
 }
 
+func lookupV3EntryFromRestartRaw(entries []byte, entryCount int, key []byte, restartRaw []byte, restartCount int) (LookupResult, bool, error) {
+	restarts, pooled, err := decodeRestartsFromRawPooled(entries, restartRaw, restartCount)
+	if err != nil {
+		return LookupResult{}, false, err
+	}
+	out, found, lookupErr := lookupV3Entry(entries, entryCount, key, restarts, nil)
+	if pooled {
+		putPooledRestarts(restarts)
+	}
+	if lookupErr != nil {
+		return LookupResult{}, false, lookupErr
+	}
+	return out, found, nil
+}
+
 // DecodeBlock parses an outer-leaf payload and keeps the decoded data alive.
 func DecodeBlock(payload []byte, scratch []byte) (*DecodedBlock, error) {
 	return decodeBlock(payload, scratch, true)
@@ -1645,7 +1779,28 @@ func DecodeBlockWithVerify(payload []byte, scratch []byte, verifyChecksum bool) 
 	return decodeBlock(payload, scratch, verifyChecksum)
 }
 
+// DecodeBlockLease parses an outer-leaf payload using lease-owned decode
+// buffers. Callers must call Release on the returned block.
+func DecodeBlockLease(payload []byte) (*DecodedBlock, error) {
+	return decodeBlockLease(payload, true)
+}
+
+// DecodeBlockLeaseWithVerify parses an outer-leaf payload using lease-owned
+// decode buffers and optional checksum verification. Callers must call Release
+// on the returned block.
+func DecodeBlockLeaseWithVerify(payload []byte, verifyChecksum bool) (*DecodedBlock, error) {
+	return decodeBlockLease(payload, verifyChecksum)
+}
+
 func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedBlock, error) {
+	return decodeBlockMode(payload, scratch, verifyChecksum, false)
+}
+
+func decodeBlockLease(payload []byte, verifyChecksum bool) (*DecodedBlock, error) {
+	return decodeBlockMode(payload, nil, verifyChecksum, true)
+}
+
+func decodeBlockMode(payload []byte, scratch []byte, verifyChecksum bool, leaseOwned bool) (*DecodedBlock, error) {
 	if len(payload) < blockHeaderSize {
 		return nil, fmt.Errorf("outerleaf: truncated header")
 	}
@@ -1667,7 +1822,7 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 		if rawLen < 0 || keyLen < 0 || valueLen < 0 {
 			return nil, fmt.Errorf("outerleaf: invalid lengths")
 		}
-		outScratch, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, true, verifyChecksum)
+		outScratch, pooledRaw, err := decodeAndVerifyPayloadModeWithChecksumOwned(payload, rawLen, codec, scratch, true, verifyChecksum, leaseOwned)
 		if err != nil {
 			return nil, err
 		}
@@ -1679,6 +1834,8 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 			firstKey:   outScratch[:keyLen],
 			firstKind:  EntryKindInline,
 			firstValue: outScratch[keyLen : keyLen+valueLen],
+			leaseOwned: leaseOwned,
+			pooledRaw:  pooledRaw,
 		}, nil
 	case blockVersionV2:
 		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
@@ -1690,17 +1847,23 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 		if rawLen <= 0 {
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
 		}
-		outScratch, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, true, verifyChecksum)
+		outScratch, pooledRaw, err := decodeAndVerifyPayloadModeWithChecksumOwned(payload, rawLen, codec, scratch, true, verifyChecksum, leaseOwned)
 		if err != nil {
 			return nil, err
 		}
 		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
 		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartInterval)
 		if splitErr != nil {
+			if pooledRaw {
+				putPooledBytes(outScratch)
+			}
 			return nil, splitErr
 		}
 		firstKey, firstValue, err := decodeFirstV2(entries)
 		if err != nil {
+			if pooledRaw {
+				putPooledBytes(outScratch)
+			}
 			return nil, err
 		}
 		return &DecodedBlock{
@@ -1713,6 +1876,8 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 			firstKey:     firstKey,
 			firstKind:    EntryKindInline,
 			firstValue:   firstValue,
+			leaseOwned:   leaseOwned,
+			pooledRaw:    pooledRaw,
 		}, nil
 	case blockVersionV3:
 		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
@@ -1724,17 +1889,23 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 		if rawLen <= 0 {
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d", rawLen)
 		}
-		outScratch, err := decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, true, verifyChecksum)
+		outScratch, pooledRaw, err := decodeAndVerifyPayloadModeWithChecksumOwned(payload, rawLen, codec, scratch, true, verifyChecksum, leaseOwned)
 		if err != nil {
 			return nil, err
 		}
 		restartInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
 		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartInterval)
 		if splitErr != nil {
+			if pooledRaw {
+				putPooledBytes(outScratch)
+			}
 			return nil, splitErr
 		}
 		firstKey, first, err := decodeFirstV3(entries)
 		if err != nil {
+			if pooledRaw {
+				putPooledBytes(outScratch)
+			}
 			return nil, err
 		}
 		return &DecodedBlock{
@@ -1748,6 +1919,8 @@ func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedB
 			firstKind:    first.Kind,
 			firstValue:   first.Value,
 			firstBlob:    first.BlobPtr,
+			leaseOwned:   leaseOwned,
+			pooledRaw:    pooledRaw,
 		}, nil
 	default:
 		return nil, fmt.Errorf("outerleaf: unsupported version %d", version)
@@ -1774,9 +1947,21 @@ func (d *DecodedBlock) lookupRestartKeys() ([][]byte, error) {
 			err  error
 		)
 		if d.version == blockVersionV2 {
-			keys, err = decodeV2RestartKeys(d.entries, restarts)
+			if d.leaseOwned {
+				var pooled bool
+				keys, pooled, err = decodeV2RestartKeysPooled(d.entries, restarts)
+				d.pooledRKeys = pooled
+			} else {
+				keys, err = decodeV2RestartKeys(d.entries, restarts)
+			}
 		} else {
-			keys, err = decodeV3RestartKeys(d.entries, restarts)
+			if d.leaseOwned {
+				var pooled bool
+				keys, pooled, err = decodeV3RestartKeysPooled(d.entries, restarts)
+				d.pooledRKeys = pooled
+			} else {
+				keys, err = decodeV3RestartKeys(d.entries, restarts)
+			}
 		}
 		if err != nil {
 			d.restartKeysErr = err
@@ -1801,7 +1986,17 @@ func (d *DecodedBlock) lookupRestarts() ([]uint32, error) {
 		if d.restartCount == 0 {
 			return
 		}
-		restarts, err := decodeRestartsFromRaw(d.entries, d.restartRaw, d.restartCount)
+		var (
+			restarts []uint32
+			pooled   bool
+			err      error
+		)
+		if d.leaseOwned {
+			restarts, pooled, err = decodeRestartsFromRawPooled(d.entries, d.restartRaw, d.restartCount)
+			d.pooledRest = pooled
+		} else {
+			restarts, err = decodeRestartsFromRaw(d.entries, d.restartRaw, d.restartCount)
+		}
 		if err != nil {
 			d.restartsErr = err
 			return
@@ -1812,6 +2007,39 @@ func (d *DecodedBlock) lookupRestarts() ([]uint32, error) {
 		return nil, d.restartsErr
 	}
 	return d.restarts, nil
+}
+
+// Release returns lease-owned decode buffers back to outerleaf pools.
+// It is safe to call Release multiple times.
+func (d *DecodedBlock) Release() {
+	if d == nil {
+		return
+	}
+	if !d.leaseOwned && !d.pooledRaw && !d.pooledRest && !d.pooledRKeys {
+		return
+	}
+	if d.pooledRKeys {
+		putPooledLeaseKeys(d.restartKeys)
+		d.pooledRKeys = false
+	}
+	if d.pooledRest {
+		putPooledRestarts(d.restarts)
+		d.pooledRest = false
+	}
+	if d.pooledRaw {
+		putPooledBytes(d.raw)
+		d.pooledRaw = false
+	}
+	d.leaseOwned = false
+	d.raw = nil
+	d.entries = nil
+	d.restartRaw = nil
+	d.restarts = nil
+	d.restartKeys = nil
+	d.firstKey = nil
+	d.firstValue = nil
+	d.firstBlob = page.ValuePtr{}
+	d.keys = nil
 }
 
 // FirstKind reports the payload kind of the first logical entry.
@@ -2932,7 +3160,7 @@ func Decode(payload []byte, scratch []byte) (key []byte, value []byte, ok bool, 
 		if err != nil {
 			return nil, nil, true, scratch, err
 		}
-		entries, _, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, int(binary.LittleEndian.Uint16(payload[6:8])))
+		entries, _, _, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, int(binary.LittleEndian.Uint16(payload[6:8])))
 		if splitErr != nil {
 			return nil, nil, true, outScratch, splitErr
 		}
@@ -2955,7 +3183,7 @@ func Decode(payload []byte, scratch []byte) (key []byte, value []byte, ok bool, 
 		if err != nil {
 			return nil, nil, true, scratch, err
 		}
-		entries, _, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, int(binary.LittleEndian.Uint16(payload[6:8])))
+		entries, _, _, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, int(binary.LittleEndian.Uint16(payload[6:8])))
 		if splitErr != nil {
 			return nil, nil, true, outScratch, splitErr
 		}
@@ -3024,11 +3252,11 @@ func DecodeValueForKey(payload []byte, key []byte, scratch []byte) (value []byte
 			return nil, true, false, scratch, err
 		}
 		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartsInterval)
 		if splitErr != nil {
 			return nil, true, false, outScratch, splitErr
 		}
-		val, found, err := lookupV2Value(entries, entryCount, key, restarts, nil)
+		val, found, err := lookupV2ValueFromRestartRaw(entries, entryCount, key, restartRaw, restartCount)
 		if err != nil {
 			return nil, true, false, outScratch, err
 		}
@@ -3048,11 +3276,11 @@ func DecodeValueForKey(payload []byte, key []byte, scratch []byte) (value []byte
 			return nil, true, false, scratch, err
 		}
 		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartsInterval)
 		if splitErr != nil {
 			return nil, true, false, outScratch, splitErr
 		}
-		entry, found, err := lookupV3Entry(entries, entryCount, key, restarts, nil)
+		entry, found, err := lookupV3EntryFromRestartRaw(entries, entryCount, key, restartRaw, restartCount)
 		if err != nil {
 			return nil, true, false, outScratch, err
 		}
@@ -3132,11 +3360,11 @@ func DecodeEntryForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 			return LookupResult{}, true, false, scratch, err
 		}
 		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartsInterval)
 		if splitErr != nil {
 			return LookupResult{}, true, false, outScratch, splitErr
 		}
-		result, found, err := lookupV3Entry(entries, entryCount, key, restarts, nil)
+		result, found, err := lookupV3EntryFromRestartRaw(entries, entryCount, key, restartRaw, restartCount)
 		if err != nil {
 			return LookupResult{}, true, false, outScratch, err
 		}
@@ -3190,11 +3418,11 @@ func decodeValueForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 			return nil, true, false, scratch, err
 		}
 		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartsInterval)
 		if splitErr != nil {
 			return nil, true, false, outScratch, splitErr
 		}
-		val, found, err := lookupV2Value(entries, entryCount, key, restarts, nil)
+		val, found, err := lookupV2ValueFromRestartRaw(entries, entryCount, key, restartRaw, restartCount)
 		if err != nil {
 			return nil, true, false, outScratch, err
 		}
@@ -3214,11 +3442,11 @@ func decodeValueForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 			return nil, true, false, scratch, err
 		}
 		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
-		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		entries, restartRaw, restartCount, splitErr := splitV2RawMeta(outScratch, entriesLen, entryCount, restartsInterval)
 		if splitErr != nil {
 			return nil, true, false, outScratch, splitErr
 		}
-		entry, found, err := lookupV3Entry(entries, entryCount, key, restarts, nil)
+		entry, found, err := lookupV3EntryFromRestartRaw(entries, entryCount, key, restartRaw, restartCount)
 		if err != nil {
 			return nil, true, false, outScratch, err
 		}

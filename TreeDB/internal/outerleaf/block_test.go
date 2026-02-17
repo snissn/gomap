@@ -218,6 +218,102 @@ func TestDecodePayloadSnappyPreallocatedDstNoAllocs(t *testing.T) {
 	}
 }
 
+func TestDecodeBlockLeaseRelease(t *testing.T) {
+	entries := []Entry{
+		{Key: []byte("acct:0001"), Value: bytes.Repeat([]byte("a"), 512)},
+		{Key: []byte("acct:0002"), Value: bytes.Repeat([]byte("b"), 512)},
+		{Key: []byte("acct:0003"), Value: bytes.Repeat([]byte("c"), 512)},
+	}
+	enc, err := EncodeEntries(nil, entries, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	if enc[5] == blockCodecNone {
+		t.Fatalf("expected compressed payload for lease test")
+	}
+	blk, err := DecodeBlockLease(enc)
+	if err != nil {
+		t.Fatalf("DecodeBlockLease: %v", err)
+	}
+	if _, err := blk.FirstValue(); err != nil {
+		t.Fatalf("FirstValue: %v", err)
+	}
+	if _, err := blk.lookupRestarts(); err != nil {
+		t.Fatalf("lookupRestarts: %v", err)
+	}
+	if _, err := blk.lookupRestartKeys(); err != nil {
+		t.Fatalf("lookupRestartKeys: %v", err)
+	}
+	blk.Release()
+	blk.Release()
+}
+
+func TestDecodeRestartsFromRawIntoReusesDst(t *testing.T) {
+	enc, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k10"), Value: []byte("v10")},
+		{Key: []byte("k20"), Value: []byte("v20")},
+		{Key: []byte("k30"), Value: []byte("v30")},
+		{Key: []byte("k40"), Value: []byte("v40")},
+	}, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	if blk.restartCount <= 0 {
+		t.Fatalf("restartCount=%d want >0", blk.restartCount)
+	}
+
+	dst := make([]uint32, blk.restartCount)
+	restarts, err := decodeRestartsFromRawInto(blk.entries, blk.restartRaw, blk.restartCount, dst[:0])
+	if err != nil {
+		t.Fatalf("decodeRestartsFromRawInto: %v", err)
+	}
+	if len(restarts) != blk.restartCount {
+		t.Fatalf("len(restarts)=%d want=%d", len(restarts), blk.restartCount)
+	}
+	if &restarts[0] != &dst[0] {
+		t.Fatalf("decodeRestartsFromRawInto did not reuse caller dst")
+	}
+}
+
+func TestDecodeV2RestartKeysIntoReusesDst(t *testing.T) {
+	enc, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k10"), Value: []byte("v10")},
+		{Key: []byte("k20"), Value: []byte("v20")},
+		{Key: []byte("k30"), Value: []byte("v30")},
+		{Key: []byte("k40"), Value: []byte("v40")},
+	}, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	restarts, err := decodeRestartsFromRaw(blk.entries, blk.restartRaw, blk.restartCount)
+	if err != nil {
+		t.Fatalf("decodeRestartsFromRaw: %v", err)
+	}
+	if len(restarts) == 0 {
+		t.Fatalf("expected non-empty restart table")
+	}
+
+	dst := make([][]byte, len(restarts))
+	keys, err := decodeV2RestartKeysInto(blk.entries, restarts, dst[:0])
+	if err != nil {
+		t.Fatalf("decodeV2RestartKeysInto: %v", err)
+	}
+	if len(keys) != len(restarts) {
+		t.Fatalf("len(keys)=%d want=%d", len(keys), len(restarts))
+	}
+	if &keys[0] != &dst[0] {
+		t.Fatalf("decodeV2RestartKeysInto did not reuse caller dst")
+	}
+}
+
 func TestEncodeDecodeEntriesLookup(t *testing.T) {
 	codecs := []struct {
 		name  string

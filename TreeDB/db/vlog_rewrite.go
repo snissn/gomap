@@ -789,8 +789,10 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 	}
 	if it.vlogs != nil {
 		if payload, err := it.vlogs.Read(ptr); err == nil && outerleaf.HasMagic(payload) {
-			if block, decErr := outerleaf.DecodeBlock(payload, nil); decErr == nil {
-				if typed, typedErr := block.TypedEntries(nil); typedErr == nil {
+			if block, decErr := outerleaf.DecodeBlockLease(payload); decErr == nil {
+				typed, typedErr := block.TypedEntries(nil)
+				block.Release()
+				if typedErr == nil {
 					for i := range typed {
 						if typed[i].Kind == outerleaf.EntryKindBlobRef {
 							// Conservative correctness fallback: keep pointers to nested

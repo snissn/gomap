@@ -392,10 +392,11 @@ func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64
 	if !outerleaf.HasMagic(payload) {
 		return nil, nil
 	}
-	block, err := outerleaf.DecodeBlock(payload, nil)
+	block, err := outerleaf.DecodeBlockLease(payload)
 	if err != nil {
 		return nil, err
 	}
+	defer block.Release()
 	typed, err := block.TypedEntries(nil)
 	if err != nil {
 		return nil, err
