@@ -3,7 +3,6 @@ package outerleaf
 import (
 	"bytes"
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/golang/snappy"
@@ -654,11 +653,12 @@ func TestDecodeLowerBoundAndKeysOnMatchLeaseWithVerify(t *testing.T) {
 }
 
 func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
-	prev := outerLeafLeaseKeysPool
-	outerLeafLeaseKeysPool = sync.Pool{}
-	defer func() {
-		outerLeafLeaseKeysPool = prev
-	}()
+	for outerLeafLeaseKeysPool.Get() != nil {
+	}
+	t.Cleanup(func() {
+		for outerLeafLeaseKeysPool.Get() != nil {
+		}
+	})
 
 	undersized := make([][]byte, 0, 2)
 	outerLeafLeaseKeysPool.Put(undersized)
@@ -668,25 +668,32 @@ func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
 		t.Fatalf("cap(got)=%d want >=4", cap(got))
 	}
 
-	v := outerLeafLeaseKeysPool.Get()
-	if v == nil {
+	found := false
+	for {
+		v := outerLeafLeaseKeysPool.Get()
+		if v == nil {
+			break
+		}
+		keys, ok := v.([][]byte)
+		if !ok {
+			t.Fatalf("pool type=%T want [][]byte", v)
+		}
+		if cap(keys) == cap(undersized) {
+			found = true
+		}
+	}
+	if !found {
 		t.Fatalf("undersized slice was not returned to pool")
-	}
-	keys, ok := v.([][]byte)
-	if !ok {
-		t.Fatalf("pool type=%T want [][]byte", v)
-	}
-	if cap(keys) != cap(undersized) {
-		t.Fatalf("cap(keys)=%d want=%d", cap(keys), cap(undersized))
 	}
 }
 
 func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
-	prev := outerLeafLeaseArenaPool
-	outerLeafLeaseArenaPool = sync.Pool{}
-	defer func() {
-		outerLeafLeaseArenaPool = prev
-	}()
+	for outerLeafLeaseArenaPool.Get() != nil {
+	}
+	t.Cleanup(func() {
+		for outerLeafLeaseArenaPool.Get() != nil {
+		}
+	})
 
 	undersized := make([]byte, 0, 8)
 	outerLeafLeaseArenaPool.Put(undersized)
@@ -696,16 +703,22 @@ func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
 		t.Fatalf("cap(got)=%d want >=16", cap(got))
 	}
 
-	v := outerLeafLeaseArenaPool.Get()
-	if v == nil {
+	found := false
+	for {
+		v := outerLeafLeaseArenaPool.Get()
+		if v == nil {
+			break
+		}
+		arena, ok := v.([]byte)
+		if !ok {
+			t.Fatalf("pool type=%T want []byte", v)
+		}
+		if cap(arena) == cap(undersized) {
+			found = true
+		}
+	}
+	if !found {
 		t.Fatalf("undersized arena was not returned to pool")
-	}
-	arena, ok := v.([]byte)
-	if !ok {
-		t.Fatalf("pool type=%T want []byte", v)
-	}
-	if cap(arena) != cap(undersized) {
-		t.Fatalf("cap(arena)=%d want=%d", cap(arena), cap(undersized))
 	}
 }
 
