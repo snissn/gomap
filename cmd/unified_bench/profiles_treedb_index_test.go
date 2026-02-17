@@ -103,8 +103,8 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if got := *treedbVlogAutoPolicy; got != "throughput" {
 		t.Fatalf("expected fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
 	}
-	if got := *treedbOuterLeafBlockCacheEntries; got != 65536 {
-		t.Fatalf("expected fast profile to set treedb-outer-leaf-block-cache-entries=65536, got %d", got)
+	if got := *treedbOuterLeafBlockCacheEntries; got != 8192 {
+		t.Fatalf("expected fast profile to set treedb-outer-leaf-block-cache-entries=8192, got %d", got)
 	}
 	if !*treedbDisableWAL {
 		t.Fatalf("expected fast profile to disable WAL")
@@ -120,8 +120,8 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if got := *treedbVlogAutoPolicy; got != "throughput" {
 		t.Fatalf("expected wal_on_fast profile to set treedb-vlog-auto-policy=throughput, got %q", got)
 	}
-	if got := *treedbOuterLeafBlockCacheEntries; got != 65536 {
-		t.Fatalf("expected wal_on_fast profile to set treedb-outer-leaf-block-cache-entries=65536, got %d", got)
+	if got := *treedbOuterLeafBlockCacheEntries; got != 8192 {
+		t.Fatalf("expected wal_on_fast profile to set treedb-outer-leaf-block-cache-entries=8192, got %d", got)
 	}
 	if *treedbDisableWAL {
 		t.Fatalf("expected wal_on_fast profile to keep WAL enabled")

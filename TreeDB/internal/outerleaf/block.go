@@ -6,14 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
-	"os"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
-	"github.com/snissn/compress/s2"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -50,12 +48,6 @@ const (
 var (
 	outerLeafBytesPool    sync.Pool
 	outerLeafRestartsPool sync.Pool
-
-	outerLeafSnappyOnce          sync.Once
-	outerLeafSnappyMaxEncodedLen = snappy.MaxEncodedLen
-	outerLeafSnappyEncode        = snappy.Encode
-	outerLeafSnappyDecodedLen    = snappy.DecodedLen
-	outerLeafSnappyDecode        = snappy.Decode
 )
 
 const (
@@ -199,18 +191,6 @@ func normalizeCodec(codec uint8) uint8 {
 	}
 }
 
-func ensureOuterLeafSnappyBackend() {
-	outerLeafSnappyOnce.Do(func() {
-		switch strings.ToLower(strings.TrimSpace(os.Getenv("TREEDB_OUTERLEAF_SNAPPY_BACKEND"))) {
-		case "s2":
-			outerLeafSnappyMaxEncodedLen = s2.MaxEncodedLen
-			outerLeafSnappyEncode = s2.Encode
-			outerLeafSnappyDecodedLen = s2.DecodedLen
-			outerLeafSnappyDecode = s2.Decode
-		}
-	})
-}
-
 func minCompressionSavings(rawLen int) int {
 	if rawLen <= 1 {
 		return 1
@@ -320,14 +300,13 @@ func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
 		// Fall through to snappy on lz4 miss for deterministic behavior.
 		fallthrough
 	default:
-		ensureOuterLeafSnappyBackend()
-		need := outerLeafSnappyMaxEncodedLen(len(raw))
+		need := snappy.MaxEncodedLen(len(raw))
 		if cap(dst) < need {
 			dst = make([]byte, need)
 		} else {
 			dst = dst[:need]
 		}
-		enc := outerLeafSnappyEncode(dst, raw)
+		enc := snappy.Encode(dst, raw)
 		if keepCompressedPayload(len(raw), len(enc)) {
 			return enc, blockCodecSnappy, nil
 		}
@@ -356,15 +335,19 @@ func decodePayload(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte,
 		copy(dst, payload)
 		return dst, nil
 	case blockCodecSnappy:
-		ensureOuterLeafSnappyBackend()
-		decodedLen, err := outerLeafSnappyDecodedLen(payload)
+		decodedLen, err := snappy.DecodedLen(payload)
 		if err != nil {
 			return nil, err
 		}
 		if decodedLen != rawLen {
 			return nil, fmt.Errorf("outerleaf: snappy decoded length mismatch got=%d want=%d", decodedLen, rawLen)
 		}
-		out, err := outerLeafSnappyDecode(dst[:0], payload)
+		if cap(dst) < rawLen {
+			dst = make([]byte, 0, rawLen)
+		} else {
+			dst = dst[:0]
+		}
+		out, err := snappy.Decode(dst, payload)
 		if err != nil {
 			return nil, err
 		}
@@ -540,8 +523,7 @@ func encodedPayloadBound(codec uint8, rawLen int) int {
 	if normalizeCodec(codec) == blockCodecLZ4 {
 		return lz4.CompressBlockBound(rawLen)
 	}
-	ensureOuterLeafSnappyBackend()
-	return outerLeafSnappyMaxEncodedLen(rawLen)
+	return snappy.MaxEncodedLen(rawLen)
 }
 
 func encodeV1SingleCore(dst, key, value []byte, codec uint8, restartInterval int, rawScratch, encScratch *[]byte) ([]byte, error) {
