@@ -796,6 +796,21 @@ func lowerBoundFenceKeys(keys [][]byte, key []byte) int {
 	})
 }
 
+// copyFenceKeyRefs clones only the outer [][]byte vector so iterator-owned
+// buffers never alias externally managed key-vector backing arrays.
+func copyFenceKeyRefs(dst [][]byte, src [][]byte) [][]byte {
+	if len(src) == 0 {
+		return dst[:0]
+	}
+	if cap(dst) < len(src) {
+		dst = make([][]byte, len(src))
+	} else {
+		dst = dst[:len(src)]
+	}
+	copy(dst, src)
+	return dst
+}
+
 func (it *Iterator) pointerLikelyFenceBlock(ptr page.ValuePtr) bool {
 	if it != nil && it.slabFencePtrCls != nil {
 		return it.slabFencePtrCls.FencePointerLikelyBlock(ptr)
@@ -857,7 +872,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					it.pendingFenceEntryIdx = pos
 					it.pendingFenceReady = true
 					it.releasePendingFenceKeyLease()
-					it.pendingFenceKeys = seekKeys
+					it.pendingFenceKeys = copyFenceKeyRefs(it.pendingFenceKeys, seekKeys)
 					it.pendingFenceKeyLease = seekLease
 					// We already selected the predecessor block that contains seekKey.
 					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
@@ -894,7 +909,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					it.pendingFenceEntryIdx = pos
 					it.pendingFenceReady = true
 					it.releasePendingFenceKeyLease()
-					it.pendingFenceKeys = seekKeys
+					it.pendingFenceKeys = copyFenceKeyRefs(it.pendingFenceKeys, seekKeys)
 					// We already selected the predecessor block that contains seekKey.
 					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
 					// the next loadCurrent loop iteration.
@@ -934,7 +949,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 					it.pendingFenceEntryIdx = pos
 					it.pendingFenceReady = true
 					it.releasePendingFenceKeyLease()
-					it.pendingFenceKeys = keys
+					it.pendingFenceKeys = copyFenceKeyRefs(it.pendingFenceKeys, keys)
 					// We already selected the predecessor block that contains seekKey.
 					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
 					// the next loadCurrent loop iteration.
@@ -1022,7 +1037,7 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 			readKeys = it.pendingFenceKeys
 			readLease = it.pendingFenceKeyLease
 			keyOK = true
-			it.pendingFenceKeys = nil
+			it.pendingFenceKeys = it.pendingFenceKeys[:0]
 			it.pendingFenceKeyLease = nil
 		} else {
 			var readOK bool
@@ -1154,12 +1169,12 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 	}
 
 	it.fenceEntries = entries
-	it.fenceKeys = keys
+	it.fenceKeys = copyFenceKeyRefs(it.fenceKeys, keys)
 	it.fenceKeyLease = keyLease
 	it.fenceIndex = pos
 	it.fenceActive = true
-	if len(keys) > 0 {
-		it.setCurrentFenceKey(keys[pos])
+	if len(it.fenceKeys) > 0 {
+		it.setCurrentFenceKey(it.fenceKeys[pos])
 	} else {
 		it.setCurrentFenceEntry(entries[pos])
 	}
