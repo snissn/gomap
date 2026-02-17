@@ -199,6 +199,25 @@ func TestDecodePayloadSnappyPreallocatedDstRoundTrip(t *testing.T) {
 	}
 }
 
+func TestDecodePayloadSnappyPreallocatedDstNoAllocs(t *testing.T) {
+	raw := bytes.Repeat([]byte("outerleaf-decode-payload|"), 256)
+	encoded := snappy.Encode(nil, raw)
+	dst := make([]byte, len(raw))
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		decoded, err := decodePayload(blockCodecSnappy, encoded, len(raw), dst[:len(raw)])
+		if err != nil {
+			t.Fatalf("decodePayload: %v", err)
+		}
+		if len(decoded) != len(raw) {
+			t.Fatalf("decoded len=%d want=%d", len(decoded), len(raw))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("expected zero allocs per run, got %.2f", allocs)
+	}
+}
+
 func TestEncodeDecodeEntriesLookup(t *testing.T) {
 	codecs := []struct {
 		name  string

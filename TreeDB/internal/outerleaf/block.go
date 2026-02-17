@@ -343,9 +343,9 @@ func decodePayload(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte,
 			return nil, fmt.Errorf("outerleaf: snappy decoded length mismatch got=%d want=%d", decodedLen, rawLen)
 		}
 		if cap(dst) < rawLen {
-			dst = make([]byte, 0, rawLen)
+			dst = make([]byte, rawLen)
 		} else {
-			dst = dst[:0]
+			dst = dst[:rawLen]
 		}
 		out, err := snappy.Decode(dst, payload)
 		if err != nil {
