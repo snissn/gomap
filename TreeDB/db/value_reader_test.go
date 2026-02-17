@@ -313,6 +313,41 @@ func TestValueReaderReadUnsafeFenceBlockKeys_BlobRefWarmsCacheAfterMiss(t *testi
 	}
 }
 
+func TestValueReaderReadUnsafeFenceBlock_UsesVisitTypedEntries(t *testing.T) {
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(42), Offset: 99, Length: 7}
+	blobVal := []byte("blobval")
+	outerPayload, outerPtr := makeTestOuterLeafBlobRefPayload(t, []byte("acct:0001"), blobPtr)
+
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{
+		outerPtr: outerPayload,
+		blobPtr:  blobVal,
+	}}
+	cache := newOuterLeafBlockCache(8)
+
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+
+	entries, ok, err := r.ReadUnsafeFenceBlock(outerPtr)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceBlock: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ok=false want true")
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries len=%d want 1", len(entries))
+	}
+	if !bytes.Equal(entries[0].Key, []byte("acct:0001")) {
+		t.Fatalf("key=%q want %q", entries[0].Key, "acct:0001")
+	}
+	if !bytes.Equal(entries[0].Value, blobVal) {
+		t.Fatalf("value=%q want %q", entries[0].Value, blobVal)
+	}
+}
+
 func TestValueReaderReadUnsafeFenceBlockKeysRange_CacheHitSkipsReadUnsafe(t *testing.T) {
 	payload, block, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}

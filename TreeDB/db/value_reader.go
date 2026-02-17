@@ -413,21 +413,21 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 		}
 		block = decoded
 	}
-	decoded, err := block.TypedEntries(nil)
-	if err != nil {
-		return nil, true, err
-	}
-	entries := make([]tree.FenceBlockEntry, len(decoded))
-	for i := range decoded {
+	entries := make([]tree.FenceBlockEntry, 0, block.EntryCount())
+	err := block.VisitTypedEntries(func(key []byte, kind outerleaf.EntryKind, value []byte, blobPtr page.ValuePtr) error {
 		val, err := r.resolveLookupResult(outerleaf.LookupResult{
-			Kind:    decoded[i].Kind,
-			Value:   decoded[i].Value,
-			BlobPtr: decoded[i].BlobPtr,
+			Kind:    kind,
+			Value:   value,
+			BlobPtr: blobPtr,
 		}, true)
 		if err != nil {
-			return nil, true, err
+			return err
 		}
-		entries[i] = tree.FenceBlockEntry{Key: decoded[i].Key, Value: val}
+		entries = append(entries, tree.FenceBlockEntry{Key: key, Value: val})
+		return nil
+	})
+	if err != nil {
+		return nil, true, err
 	}
 	return entries, true, nil
 }

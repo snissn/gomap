@@ -183,6 +183,13 @@ type DecodedBlock struct {
 	restartKeysErr  error
 }
 
+func (d *DecodedBlock) EntryCount() int {
+	if d == nil {
+		return 0
+	}
+	return d.entryCount
+}
+
 // Encoder reuses encode scratch buffers across outer-leaf block encodes.
 //
 // It is not safe for concurrent use.
@@ -2214,6 +2221,163 @@ func (d *DecodedBlock) EntryForKey(key []byte) (LookupResult, bool, error) {
 	}
 }
 
+// VisitTypedEntries iterates over decoded logical entries and calls fn for each.
+// Keys and inline values alias decoded block storage; blob refs are surfaced via ptr.
+//
+// This avoids allocating a full []TypedEntry slice for callers that only need
+// to stream through entries.
+func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, value []byte, ptr page.ValuePtr) error) error {
+	if d == nil {
+		return fmt.Errorf("outerleaf: nil block")
+	}
+	if fn == nil {
+		return nil
+	}
+	switch d.version {
+	case blockVersionV1:
+		if d.firstKey == nil || d.firstValue == nil {
+			return fmt.Errorf("outerleaf: missing v1 entry")
+		}
+		return fn(d.firstKey, EntryKindInline, d.firstValue, page.ValuePtr{})
+	case blockVersionV2:
+		encoded := d.entries
+		off := 0
+		var prevKey []byte
+		var keyArena []byte
+		for i := 0; i < d.entryCount; i++ {
+			if off+8 > len(encoded) {
+				return fmt.Errorf("outerleaf: truncated v2 entry header")
+			}
+			shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
+			suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
+			valueLen := int(binary.LittleEndian.Uint32(encoded[off+4 : off+8]))
+			off += 8
+			if shared < 0 || shared > len(prevKey) {
+				return fmt.Errorf("outerleaf: invalid shared prefix")
+			}
+			if suffixLen < 0 || off+suffixLen > len(encoded) {
+				return fmt.Errorf("outerleaf: invalid key suffix length")
+			}
+			suffix := encoded[off : off+suffixLen]
+			off += suffixLen
+
+			if valueLen < 0 || off+valueLen > len(encoded) {
+				return fmt.Errorf("outerleaf: invalid value length")
+			}
+			value := encoded[off : off+valueLen]
+			off += valueLen
+
+			var key []byte
+			if shared == 0 {
+				key = suffix
+			} else {
+				keyLen := shared + suffixLen
+				need := len(keyArena) + keyLen
+				if need > cap(keyArena) {
+					newCap := cap(keyArena) * 2
+					if newCap < keyLen {
+						newCap = keyLen
+					}
+					if newCap < 64 {
+						newCap = 64
+					}
+					keyArena = make([]byte, 0, newCap)
+					need = keyLen
+				}
+				arenaOff := len(keyArena)
+				keyArena = keyArena[:need]
+				key = keyArena[arenaOff:need]
+				copy(key[:shared], prevKey[:shared])
+				copy(key[shared:], suffix)
+			}
+			if err := fn(key, EntryKindInline, value, page.ValuePtr{}); err != nil {
+				return err
+			}
+			prevKey = key
+		}
+		if off != len(encoded) {
+			return fmt.Errorf("outerleaf: trailing v2 entry bytes")
+		}
+		return nil
+	case blockVersionV3:
+		encoded := d.entries
+		off := 0
+		var prevKey []byte
+		var keyArena []byte
+		for i := 0; i < d.entryCount; i++ {
+			if off+9 > len(encoded) {
+				return fmt.Errorf("outerleaf: truncated v3 entry header")
+			}
+			shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
+			suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
+			kind := EntryKind(encoded[off+4])
+			payloadLen := int(binary.LittleEndian.Uint32(encoded[off+5 : off+9]))
+			off += 9
+			if shared < 0 || shared > len(prevKey) {
+				return fmt.Errorf("outerleaf: invalid shared prefix")
+			}
+			if suffixLen < 0 || off+suffixLen > len(encoded) {
+				return fmt.Errorf("outerleaf: invalid key suffix length")
+			}
+			suffix := encoded[off : off+suffixLen]
+			off += suffixLen
+			if payloadLen < 0 || off+payloadLen > len(encoded) {
+				return fmt.Errorf("outerleaf: invalid value length")
+			}
+			payload := encoded[off : off+payloadLen]
+			off += payloadLen
+
+			var key []byte
+			if shared == 0 {
+				key = suffix
+			} else {
+				keyLen := shared + suffixLen
+				need := len(keyArena) + keyLen
+				if need > cap(keyArena) {
+					newCap := cap(keyArena) * 2
+					if newCap < keyLen {
+						newCap = keyLen
+					}
+					if newCap < 64 {
+						newCap = 64
+					}
+					keyArena = make([]byte, 0, newCap)
+					need = keyLen
+				}
+				arenaOff := len(keyArena)
+				keyArena = keyArena[:need]
+				key = keyArena[arenaOff:need]
+				copy(key[:shared], prevKey[:shared])
+				copy(key[shared:], suffix)
+			}
+
+			switch kind {
+			case EntryKindInline:
+				if err := fn(key, kind, payload, page.ValuePtr{}); err != nil {
+					return err
+				}
+			case EntryKindBlobRef:
+				ptr, err := decodeValuePtr16(payload)
+				if err != nil {
+					return err
+				}
+				if err := fn(key, kind, nil, ptr); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("outerleaf: unknown entry kind %d", kind)
+			}
+			prevKey = key
+		}
+		if off != len(encoded) {
+			return fmt.Errorf("outerleaf: trailing v3 entry bytes")
+		}
+		return nil
+	default:
+		return fmt.Errorf("outerleaf: unsupported version %d", d.version)
+	}
+}
+
 // Entries decodes all logical key/value records from a parsed block.
 // Returned keys/values reference decoded block storage where possible.
 func (d *DecodedBlock) Entries(dst []Entry) ([]Entry, error) {
@@ -2225,70 +2389,17 @@ func (d *DecodedBlock) Entries(dst []Entry) ([]Entry, error) {
 	} else {
 		dst = dst[:0]
 	}
-	switch d.version {
-	case blockVersionV1:
-		if d.firstKey == nil || d.firstValue == nil {
-			return nil, fmt.Errorf("outerleaf: missing v1 entry")
+	err := d.VisitTypedEntries(func(key []byte, kind EntryKind, value []byte, ptr page.ValuePtr) error {
+		if kind == EntryKindBlobRef {
+			return ErrBlobRefEntry
 		}
-		dst = append(dst, Entry{Key: d.firstKey, Value: d.firstValue})
-		return dst, nil
-	case blockVersionV2:
-		encoded := d.entries
-		off := 0
-		var prevKey []byte
-		for i := 0; i < d.entryCount; i++ {
-			if off+8 > len(encoded) {
-				return nil, fmt.Errorf("outerleaf: truncated v2 entry header")
-			}
-			shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
-			suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
-			valueLen := int(binary.LittleEndian.Uint32(encoded[off+4 : off+8]))
-			off += 8
-			if shared < 0 || shared > len(prevKey) {
-				return nil, fmt.Errorf("outerleaf: invalid shared prefix")
-			}
-			if suffixLen < 0 || off+suffixLen > len(encoded) {
-				return nil, fmt.Errorf("outerleaf: invalid key suffix length")
-			}
-			suffix := encoded[off : off+suffixLen]
-			off += suffixLen
-
-			if valueLen < 0 || off+valueLen > len(encoded) {
-				return nil, fmt.Errorf("outerleaf: invalid value length")
-			}
-			value := encoded[off : off+valueLen]
-			off += valueLen
-
-			var key []byte
-			if shared == 0 {
-				key = suffix
-			} else {
-				key = make([]byte, shared+suffixLen)
-				copy(key, prevKey[:shared])
-				copy(key[shared:], suffix)
-			}
-			dst = append(dst, Entry{Key: key, Value: value})
-			prevKey = key
-		}
-		if off != len(encoded) {
-			return nil, fmt.Errorf("outerleaf: trailing v2 entry bytes")
-		}
-		return dst, nil
-	case blockVersionV3:
-		typed, err := d.TypedEntries(nil)
-		if err != nil {
-			return nil, err
-		}
-		for i := range typed {
-			if typed[i].Kind == EntryKindBlobRef {
-				return nil, ErrBlobRefEntry
-			}
-			dst = append(dst, Entry{Key: typed[i].Key, Value: typed[i].Value})
-		}
-		return dst, nil
-	default:
-		return nil, fmt.Errorf("outerleaf: unsupported version %d", d.version)
+		dst = append(dst, Entry{Key: key, Value: value})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	return dst, nil
 }
 
 // TypedEntries decodes all logical records from a parsed block with kind info.
@@ -2301,80 +2412,19 @@ func (d *DecodedBlock) TypedEntries(dst []TypedEntry) ([]TypedEntry, error) {
 	} else {
 		dst = dst[:0]
 	}
-	switch d.version {
-	case blockVersionV1:
-		if d.firstKey == nil || d.firstValue == nil {
-			return nil, fmt.Errorf("outerleaf: missing v1 entry")
-		}
-		dst = append(dst, TypedEntry{Key: d.firstKey, Kind: EntryKindInline, Value: d.firstValue})
-		return dst, nil
-	case blockVersionV2:
-		plain, err := d.Entries(nil)
-		if err != nil {
-			return nil, err
-		}
-		for i := range plain {
-			dst = append(dst, TypedEntry{Key: plain[i].Key, Kind: EntryKindInline, Value: plain[i].Value})
-		}
-		return dst, nil
-	case blockVersionV3:
-		encoded := d.entries
-		off := 0
-		var prevKey []byte
-		for i := 0; i < d.entryCount; i++ {
-			if off+9 > len(encoded) {
-				return nil, fmt.Errorf("outerleaf: truncated v3 entry header")
-			}
-			shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
-			suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
-			kind := EntryKind(encoded[off+4])
-			payloadLen := int(binary.LittleEndian.Uint32(encoded[off+5 : off+9]))
-			off += 9
-			if shared < 0 || shared > len(prevKey) {
-				return nil, fmt.Errorf("outerleaf: invalid shared prefix")
-			}
-			if suffixLen < 0 || off+suffixLen > len(encoded) {
-				return nil, fmt.Errorf("outerleaf: invalid key suffix length")
-			}
-			suffix := encoded[off : off+suffixLen]
-			off += suffixLen
-			if payloadLen < 0 || off+payloadLen > len(encoded) {
-				return nil, fmt.Errorf("outerleaf: invalid value length")
-			}
-			payload := encoded[off : off+payloadLen]
-			off += payloadLen
-
-			var key []byte
-			if shared == 0 {
-				key = suffix
-			} else {
-				key = make([]byte, shared+suffixLen)
-				copy(key, prevKey[:shared])
-				copy(key[shared:], suffix)
-			}
-			entry := TypedEntry{Key: key, Kind: kind}
-			switch kind {
-			case EntryKindInline:
-				entry.Value = payload
-			case EntryKindBlobRef:
-				ptr, err := decodeValuePtr16(payload)
-				if err != nil {
-					return nil, err
-				}
-				entry.BlobPtr = ptr
-			default:
-				return nil, fmt.Errorf("outerleaf: unknown entry kind %d", kind)
-			}
-			dst = append(dst, entry)
-			prevKey = key
-		}
-		if off != len(encoded) {
-			return nil, fmt.Errorf("outerleaf: trailing v3 entry bytes")
-		}
-		return dst, nil
-	default:
-		return nil, fmt.Errorf("outerleaf: unsupported version %d", d.version)
+	err := d.VisitTypedEntries(func(key []byte, kind EntryKind, value []byte, ptr page.ValuePtr) error {
+		dst = append(dst, TypedEntry{
+			Key:     key,
+			Kind:    kind,
+			Value:   value,
+			BlobPtr: ptr,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	return dst, nil
 }
 
 // Keys decodes all logical keys from a parsed block.
