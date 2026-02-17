@@ -73,6 +73,30 @@ func (r *countingValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	return r.inner.ReadUnsafe(ptr)
 }
 
+func TestIteratorShouldReturnToPoolCapacityGuards(t *testing.T) {
+	it := &Iterator{}
+	if !it.shouldReturnToPool() {
+		t.Fatalf("empty iterator should be eligible for pooling")
+	}
+
+	it.ptrScratch = make([]byte, 0, iteratorPoolMaxScratchBytes+1)
+	if it.shouldReturnToPool() {
+		t.Fatalf("iterator with oversized ptr scratch should not be pooled")
+	}
+
+	it.ptrScratch = nil
+	it.prefetchPtrs = make([]page.ValuePtr, 0, iteratorPoolMaxPrefetchCap+1)
+	if it.shouldReturnToPool() {
+		t.Fatalf("iterator with oversized prefetch ptrs should not be pooled")
+	}
+
+	it.prefetchPtrs = nil
+	it.stack = make([]CursorItem, 0, iteratorPoolMaxStackCap+1)
+	if it.shouldReturnToPool() {
+		t.Fatalf("iterator with oversized stack should not be pooled")
+	}
+}
+
 func TestIterator(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)

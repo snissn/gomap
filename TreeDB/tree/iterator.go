@@ -22,6 +22,17 @@ var iteratorPool = sync.Pool{
 	},
 }
 
+const (
+	// Drop unusually large iterator scratch/state buffers instead of returning
+	// them to the pool. This keeps long-tail scans from inflating steady-state
+	// pool footprint.
+	iteratorPoolMaxStackCap      = 256
+	iteratorPoolMaxFenceEntryCap = 2048
+	iteratorPoolMaxFenceKeyCap   = 2048
+	iteratorPoolMaxPrefetchCap   = 256
+	iteratorPoolMaxScratchBytes  = 1 << 20 // 1 MiB
+)
+
 // IteratorMode controls value materialization behavior while scanning.
 type IteratorMode uint8
 
@@ -1423,9 +1434,43 @@ func (it *Iterator) Close() error {
 	if it == nil || it.tree == nil {
 		return nil
 	}
+	reuse := it.shouldReturnToPool()
 	*it = Iterator{}
-	iteratorPool.Put(it)
+	if reuse {
+		iteratorPool.Put(it)
+	}
 	return nil
+}
+
+func (it *Iterator) shouldReturnToPool() bool {
+	if cap(it.stack) > iteratorPoolMaxStackCap {
+		return false
+	}
+	if cap(it.fenceEntries) > iteratorPoolMaxFenceEntryCap {
+		return false
+	}
+	if cap(it.fenceKeys) > iteratorPoolMaxFenceKeyCap {
+		return false
+	}
+	if cap(it.pendingFenceKeys) > iteratorPoolMaxFenceKeyCap {
+		return false
+	}
+	if cap(it.prefetchPtrs) > iteratorPoolMaxPrefetchCap {
+		return false
+	}
+	if cap(it.prefetchKeys) > iteratorPoolMaxPrefetchCap {
+		return false
+	}
+	if cap(it.prefetchVals) > iteratorPoolMaxPrefetchCap {
+		return false
+	}
+	if cap(it.ptrScratch) > iteratorPoolMaxScratchBytes {
+		return false
+	}
+	if cap(it.leafState.keyScratch) > iteratorPoolMaxScratchBytes {
+		return false
+	}
+	return true
 }
 
 func (it *Iterator) Seek(key []byte) {
