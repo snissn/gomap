@@ -35,6 +35,10 @@ const (
 	outerLeafMinSavingsDiv               = 50 // 2%
 	outerLeafMinSavingsBytes             = 8
 	outerLeafHighEntropyUniqueThreshold  = 224
+
+	// minArenaBlockSize ensures we allocate backing memory in efficient
+	// page-sized chunks (4KB) rather than tiny fragments.
+	minArenaBlockSize = 4096
 )
 
 var blockMagic = [4]byte{'T', 'O', 'L', '2'}
@@ -2227,8 +2231,7 @@ func keyWithinRange(key []byte, lower []byte, upper []byte) bool {
 	return true
 }
 
-// decodeStructuredKeysBounded reconstructs only keys in [lower, upper) from
-// prefix-compressed v2/v3 entries. Decoding stops once keys reach upper.
+// decodeStructuredKeysBounded reconstructs keys in [lower, upper) with reduced allocation pressure.
 func decodeStructuredKeysBounded(version uint8, entryCount int, encoded []byte, lower []byte, upper []byte) ([][]byte, error) {
 	if entryCount <= 0 {
 		return nil, fmt.Errorf("outerleaf: empty v%d block", version)
@@ -2236,106 +2239,161 @@ func decodeStructuredKeysBounded(version uint8, entryCount int, encoded []byte, 
 	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
 		return nil, nil
 	}
+
 	headerLen := 8
+	valueLenOffset := 4
 	if version == blockVersionV3 {
 		headerLen = 9
+		valueLenOffset = 5
 	}
+
+	// 1. Optimized Header Parsing
+	// Decode the first entry's length estimate without creating a slice.
 	off := 0
 	estKeyLen := 16
-	if len(encoded) >= headerLen {
-		if v := int(binary.LittleEndian.Uint16(encoded[2:4])); v > 0 {
+	if len(encoded) >= 4 { // Check minimal length for the estimator
+		// Inline LittleEndian.Uint16 to avoid slice overhead
+		if v := int(uint16(encoded[2]) | uint16(encoded[3])<<8); v > 0 {
 			if v > 128 {
 				v = 128
 			}
 			estKeyLen = v
 		}
 	}
+
+	// 2. Smarter Capacity Heuristics
+	// If no bounds are set, we know exactly how many keys we need.
+	// If bounds are set, start with a reasonable fraction but enforce a minimum.
 	selectedCap := entryCount
-	if len(lower) > 0 || len(upper) > 0 {
+	hasBounds := len(lower) > 0 || len(upper) > 0
+	if hasBounds {
 		selectedCap = entryCount / 8
-		if selectedCap < 4 {
-			selectedCap = 4
+		if selectedCap < 16 { // Increased minimum from 4
+			selectedCap = 16
 		}
 		if selectedCap > entryCount {
 			selectedCap = entryCount
 		}
 	}
+
 	keys := make([][]byte, 0, selectedCap)
+
+	// 3. Batched Arena Allocation
+	// Instead of growing small chunks (64b -> 128b...), we start with a
+	// page-aligned block (4KB). This drastically reduces the number of
+	// backing arrays created.
 	estCap := selectedCap * estKeyLen
-	if estCap < 64 {
-		estCap = 64
+	if estCap < minArenaBlockSize {
+		estCap = minArenaBlockSize
 	}
 	keyArena := make([]byte, 0, estCap)
+
+	// Reusable buffers for delta decoding
 	prev := make([]byte, 0, estKeyLen)
 	curr := make([]byte, 0, estKeyLen)
+
 	for i := 0; i < entryCount; i++ {
+		// 4. Inline Field Decoding
+		// Direct index access avoids the overhead of creating `encoded[off:off+2]` slices.
 		if off+headerLen > len(encoded) {
 			return nil, fmt.Errorf("outerleaf: truncated v%d entry header", version)
 		}
-		shared := int(binary.LittleEndian.Uint16(encoded[off : off+2]))
-		suffixLen := int(binary.LittleEndian.Uint16(encoded[off+2 : off+4]))
-		valueLenOff := off + 4
-		if version == blockVersionV3 {
-			valueLenOff = off + 5
-		}
-		valueLen := int(binary.LittleEndian.Uint32(encoded[valueLenOff : valueLenOff+4]))
+
+		shared := int(uint16(encoded[off]) | uint16(encoded[off+1])<<8)
+		suffixLen := int(uint16(encoded[off+2]) | uint16(encoded[off+3])<<8)
+
+		// Decode Value Length (Uint32)
+		vlOff := off + valueLenOffset
+		valueLen := int(uint32(encoded[vlOff]) | uint32(encoded[vlOff+1])<<8 | uint32(encoded[vlOff+2])<<16 | uint32(encoded[vlOff+3])<<24)
+
 		off += headerLen
+
+		// Sanity checks
 		if shared < 0 || shared > len(prev) {
 			return nil, fmt.Errorf("outerleaf: invalid shared prefix")
 		}
 		if suffixLen < 0 || off+suffixLen > len(encoded) {
 			return nil, fmt.Errorf("outerleaf: invalid key suffix length")
 		}
-		suffix := encoded[off : off+suffixLen]
-		off += suffixLen
-		if valueLen < 0 || off+valueLen > len(encoded) {
-			return nil, fmt.Errorf("outerleaf: invalid value length")
-		}
 
+		// 5. Delta Reconstruction
+		// We perform the suffix copy manually or via slice.
+		// Note: We cannot write directly to keyArena yet because we don't know
+		// if the key is within bounds.
 		keyLen := shared + suffixLen
 		if keyLen < 0 {
 			return nil, fmt.Errorf("outerleaf: invalid key length")
 		}
+
+		// Grow 'curr' buffer if needed.
+		// We only re-allocate if the key actually exceeds our current scratch space.
 		if cap(curr) < keyLen {
 			newCap := cap(curr) * 2
 			if newCap < keyLen {
 				newCap = keyLen
 			}
-			if newCap < 64 {
+			if newCap < 64 { // Sanity minimum
 				newCap = 64
 			}
 			curr = make([]byte, keyLen, newCap)
 		} else {
 			curr = curr[:keyLen]
 		}
+
 		if shared > 0 {
 			copy(curr[:shared], prev[:shared])
 		}
-		copy(curr[shared:], suffix)
+		copy(curr[shared:], encoded[off:off+suffixLen])
 
-		if len(upper) > 0 && bytes.Compare(curr, upper) >= 0 {
-			return keys, nil
+		off += suffixLen
+		if valueLen < 0 || off+valueLen > len(encoded) {
+			return nil, fmt.Errorf("outerleaf: invalid value length")
 		}
-		if len(lower) == 0 || bytes.Compare(curr, lower) >= 0 {
-			needCap := len(keyArena) + keyLen
-			if needCap > cap(keyArena) {
-				newCap := cap(keyArena) * 2
-				if newCap < keyLen {
-					newCap = keyLen
-				}
-				keyArena = make([]byte, 0, newCap)
-				needCap = keyLen
-			}
-			arenaOff := len(keyArena)
-			keyArena = keyArena[:needCap]
-			key := keyArena[arenaOff:needCap]
-			copy(key, curr)
-			keys = append(keys, key)
-		}
-
 		off += valueLen
-		prev, curr = curr, prev[:0]
+
+		// 6. Bounds Filtering
+		if hasBounds {
+			// Fast exit check
+			if len(upper) > 0 && bytes.Compare(curr, upper) >= 0 {
+				return keys, nil
+			}
+			if len(lower) > 0 && bytes.Compare(curr, lower) < 0 {
+				// Skip this key, but maintain `prev` state for next delta
+				prev, curr = curr, prev
+				continue
+			}
+		}
+
+		// 7. Arena Management (The Fix)
+		// We need to copy `curr` into `keyArena`.
+		needCap := len(keyArena) + keyLen
+		if needCap > cap(keyArena) {
+			// Grow strategy: Double, but respect minimum block size to avoid fragmentation
+			newCap := cap(keyArena) * 2
+			if newCap < needCap {
+				newCap = needCap
+			}
+			// If we are growing, we ensure the new block is substantial
+			if newCap < minArenaBlockSize {
+				newCap = minArenaBlockSize
+			}
+
+			// Allocate new chunk. Old chunk remains referenced by `keys` slices.
+			// This is the correct "Linked Chunk" pattern for [][]byte.
+			keyArena = make([]byte, 0, newCap)
+			needCap = keyLen // Reset offset for the new chunk
+		}
+
+		arenaOff := len(keyArena)
+		keyArena = keyArena[:needCap]
+		key := keyArena[arenaOff:needCap]
+		copy(key, curr)
+		keys = append(keys, key)
+
+		// Swap buffers for next iteration
+		prev, curr = curr, prev
 	}
+
 	if off != len(encoded) {
 		return nil, fmt.Errorf("outerleaf: trailing v%d entry bytes", version)
 	}
