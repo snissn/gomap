@@ -11,6 +11,8 @@ BATCHSIZE="${BATCHSIZE:-8000}"
 SEED="${SEED:-1}"
 PROFILES="${PROFILES:-fast,wal_on_fast,durable}"
 TESTS="${TESTS:-batch_write,batch_write_steady,prefix_scan}"
+READ_TESTS="${READ_TESTS:-random_read,random_read_parallel,random_read_parallel_acquire_snapshot}"
+INCLUDE_READ_TESTS="${INCLUDE_READ_TESTS:-0}"
 VAL_PATTERN="${VAL_PATTERN:-repeat_tail64}"
 RANGE_QUERIES="${RANGE_QUERIES:-200}"
 RANGE_SPAN="${RANGE_SPAN:-100}"
@@ -23,6 +25,9 @@ GATE_PROFILES="${GATE_PROFILES:-fast}"
 GATE_MIN_RATIO_BATCH_WRITE="${GATE_MIN_RATIO_BATCH_WRITE:-0.70}"
 GATE_MIN_RATIO_BATCH_WRITE_STEADY="${GATE_MIN_RATIO_BATCH_WRITE_STEADY:-0.70}"
 GATE_MIN_RATIO_PREFIX_SCAN="${GATE_MIN_RATIO_PREFIX_SCAN:-0.35}"
+GATE_MIN_RATIO_RANDOM_READ="${GATE_MIN_RATIO_RANDOM_READ:-0.80}"
+GATE_MIN_RATIO_RANDOM_READ_PARALLEL="${GATE_MIN_RATIO_RANDOM_READ_PARALLEL:-0.75}"
+GATE_MIN_RATIO_RANDOM_READ_PARALLEL_ACQUIRE_SNAPSHOT="${GATE_MIN_RATIO_RANDOM_READ_PARALLEL_ACQUIRE_SNAPSHOT:-0.70}"
 GATE_MAX_CV_PCT="${GATE_MAX_CV_PCT:-12.0}"
 
 # Determinism/noise knobs.
@@ -43,6 +48,26 @@ fi
 if (( WARMUP_RUNS < 0 )); then
   echo "WARMUP_RUNS must be >= 0" >&2
   exit 2
+fi
+
+if [[ "$INCLUDE_READ_TESTS" != "0" ]]; then
+  merged_tests="${TESTS},${READ_TESTS}"
+  IFS=',' read -r -a _tests <<<"$merged_tests"
+  seen_tests=""
+  deduped=()
+  for t in "${_tests[@]}"; do
+    if [[ -z "$t" ]]; then
+      continue
+    fi
+    if [[ ",$seen_tests," == *",${t},"* ]]; then
+      continue
+    fi
+    seen_tests="${seen_tests:+${seen_tests},}${t}"
+    deduped+=("$t")
+  done
+  IFS=','
+  TESTS="${deduped[*]}"
+  unset IFS
 fi
 
 if [[ -n "$CPUSET" ]]; then
@@ -78,7 +103,12 @@ gate_profiles=$GATE_PROFILES
 gate_min_ratio_batch_write=$GATE_MIN_RATIO_BATCH_WRITE
 gate_min_ratio_batch_write_steady=$GATE_MIN_RATIO_BATCH_WRITE_STEADY
 gate_min_ratio_prefix_scan=$GATE_MIN_RATIO_PREFIX_SCAN
+gate_min_ratio_random_read=$GATE_MIN_RATIO_RANDOM_READ
+gate_min_ratio_random_read_parallel=$GATE_MIN_RATIO_RANDOM_READ_PARALLEL
+gate_min_ratio_random_read_parallel_acquire_snapshot=$GATE_MIN_RATIO_RANDOM_READ_PARALLEL_ACQUIRE_SNAPSHOT
 gate_max_cv_pct=$GATE_MAX_CV_PCT
+include_read_tests=$INCLUDE_READ_TESTS
+read_tests=$READ_TESTS
 run_prefix=$RUN_PREFIX
 cpuset=$CPUSET
 sleep_between_cases_sec=$SLEEP_BETWEEN_CASES_SEC
@@ -209,6 +239,9 @@ thresholds = {
     "batch_write": float(meta.get("gate_min_ratio_batch_write", "0.70")),
     "batch_write_steady": float(meta.get("gate_min_ratio_batch_write_steady", "0.70")),
     "prefix_scan": float(meta.get("gate_min_ratio_prefix_scan", "0.35")),
+    "random_read": float(meta.get("gate_min_ratio_random_read", "0.80")),
+    "random_read_parallel": float(meta.get("gate_min_ratio_random_read_parallel", "0.75")),
+    "random_read_parallel_acquire_snapshot": float(meta.get("gate_min_ratio_random_read_parallel_acquire_snapshot", "0.70")),
 }
 
 cases = []
@@ -223,6 +256,9 @@ display = {
     "batch_write": "Batch Write",
     "batch_write_steady": "Batch Write (Steady)",
     "prefix_scan": "Prefix Scan",
+    "random_read": "Random Read",
+    "random_read_parallel": "Random Read (Parallel)",
+    "random_read_parallel_acquire_snapshot": "Random Read (Parallel, Snapshot Per Key)",
 }
 
 pattern_cache = {}

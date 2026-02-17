@@ -579,12 +579,27 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 		if !outerleaf.HasMagic(raw) {
 			return raw, nil
 		}
+		entry, ok, found, _, decErr := outerleaf.DecodeEntryForKey(raw, key, nil)
+		if decErr != nil {
+			return nil, decErr
+		}
+		// Directly decode targeted entries first to avoid constructing a decoded
+		// outer-leaf block on the common append fast-path when full block caching
+		// would not provide additional benefit.
+		if ok {
+			if !found {
+				return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
+			}
+			if r.cache == nil || entry.Kind == outerleaf.EntryKindBlobRef {
+				return r.resolveLookupResultAppend(entry, dst)
+			}
+		}
 		raw = r.stableOuterLeafPayload(raw)
-		block, err := r.outerLeafBlock(ptr, raw)
+		block, err := r.outerLeafBlockFromRaw(ptr, raw)
 		if err != nil {
 			return nil, err
 		}
-		entry, found, err := block.EntryForKey(key)
+		entry, found, err = block.EntryForKey(key)
 		if err != nil {
 			return nil, err
 		}
@@ -702,16 +717,24 @@ func (r valueReader) outerLeafBlock(ptr page.ValuePtr, raw []byte) (*outerleaf.D
 	if block := r.cache.get(key); block != nil {
 		return block, nil
 	}
+	return r.outerLeafBlockFromRaw(ptr, raw)
+}
+
+func (r valueReader) outerLeafBlockFromRaw(ptr page.ValuePtr, raw []byte) (*outerleaf.DecodedBlock, error) {
+	verifyChecksums := !r.skipOuterLeafChecksums
 	block, err := outerleaf.DecodeBlockWithVerify(raw, nil, verifyChecksums)
 	if err != nil {
 		return nil, err
+	}
+	if r.cache == nil {
+		return block, nil
 	}
 	// Blob-ref-dominant fence blocks (large-value mode) exhibit low temporal
 	// locality and high cache churn in prefix scans; skipping cache admission for
 	// those blocks avoids lock/churn overhead while retaining cache benefits for
 	// inline-heavy blocks.
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
-		r.cache.put(key, block)
+		r.cache.put(newOuterLeafBlockKey(ptr), block)
 	}
 	return block, nil
 }

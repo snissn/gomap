@@ -560,6 +560,154 @@ func TestValueReaderReadUnsafeFenceBlockKeys_OuterLeafKeyCacheChurn(t *testing.T
 	}
 }
 
+func TestValueReaderReadUnsafeAppendForKey_ReadAmortizationAfterWarmup(t *testing.T) {
+	payload, ptr := makeTestOuterLeafPayloadWithCodec(t, uint8(ValueLogBlockSnappy), 64, "v1", "v2", "v3")
+	reader := &stubValueLogAppendReader{
+		stubValueLogReader: stubValueLogReader{
+			payloads: map[page.ValuePtr][]byte{ptr: payload},
+		},
+	}
+	cache := newOuterLeafBlockCache(4)
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+	key := []byte("k2")
+	dst := make([]byte, 0, 16)
+
+	first, err := r.ReadUnsafeAppendForKey(ptr, key, dst)
+	if err != nil {
+		t.Fatalf("ReadUnsafeAppendForKey(first): %v", err)
+	}
+	if !bytes.Equal(first, []byte("v2")) {
+		t.Fatalf("first value = %q, want %q", first, "v2")
+	}
+	if reader.readUnsafeAppendCalls != 1 {
+		t.Fatalf("readUnsafeAppendCalls after first read = %d, want 1", reader.readUnsafeAppendCalls)
+	}
+
+	for i := 0; i < 64; i++ {
+		got, err := r.ReadUnsafeAppendForKey(ptr, key, dst[:0])
+		if err != nil {
+			t.Fatalf("ReadUnsafeAppendForKey(repeat=%d): %v", i, err)
+		}
+		if !bytes.Equal(got, []byte("v2")) {
+			t.Fatalf("repeat value at i=%d = %q, want %q", i, got, "v2")
+		}
+	}
+
+	if reader.readUnsafeAppendCalls != 1 {
+		t.Fatalf("readUnsafeAppendCalls after repeated reads = %d, want 1", reader.readUnsafeAppendCalls)
+	}
+
+	hits, misses, entries, capacity := cache.stats()
+	if entries != 1 {
+		t.Fatalf("cache entries = %d, want 1", entries)
+	}
+	if capacity < 1 {
+		t.Fatalf("cache capacity = %d, want >= 1", capacity)
+	}
+	if hits < 63 {
+		t.Fatalf("cache hits = %d, want >= %d", hits, 63)
+	}
+	if misses != 1 {
+		t.Fatalf("cache misses = %d, want 1", misses)
+	}
+}
+
+func TestValueReaderReadUnsafeAppendForKey_BlockCacheMixWithChurn(t *testing.T) {
+	const hotReads = 4
+	const churnKeys = 12
+
+	readerPayloads := make(map[page.ValuePtr][]byte, hotReads+churnKeys)
+	hotPtr := page.ValuePtr{}
+	var hotKey []byte
+	hotPayload, ptr := makeTestOuterLeafSinglePayload(t, uint8(ValueLogBlockSnappy), 128, "hot-k", "hot-v")
+	readerPayloads[ptr] = hotPayload
+	hotPtr = ptr
+	hotKey = []byte("hot-k")
+
+	churnPtrs := make([]page.ValuePtr, churnKeys)
+	for i := 0; i < churnKeys; i++ {
+		payload, cptr := makeTestOuterLeafSinglePayload(
+			t,
+			uint8(ValueLogBlockSnappy),
+			uint64(256+i*64),
+			fmt.Sprintf("churn-%02d", i),
+			fmt.Sprintf("v-%02d", i),
+		)
+		readerPayloads[cptr] = payload
+		churnPtrs[i] = cptr
+	}
+
+	reader := &stubValueLogAppendReader{
+		stubValueLogReader: stubValueLogReader{
+			payloads: readerPayloads,
+		},
+	}
+	// Include churn workload while keeping a bounded cache.
+	cache := newOuterLeafBlockCache(16)
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		cache:         cache,
+	}
+	dst := make([]byte, 0, 16)
+
+	for i := 0; i < hotReads; i++ {
+		got, err := r.ReadUnsafeAppendForKey(hotPtr, hotKey, dst[:0])
+		if err != nil {
+			t.Fatalf("ReadUnsafeAppendForKey(hot=%d): %v", i, err)
+		}
+		if !bytes.Equal(got, []byte("hot-v")) {
+			t.Fatalf("hot read at i=%d = %q, want %q", i, got, "hot-v")
+		}
+	}
+
+	afterHotCalls := reader.readUnsafeAppendCalls
+	if afterHotCalls != 1 {
+		t.Fatalf("readUnsafeAppendCalls after hot warmup = %d, want 1", afterHotCalls)
+	}
+
+	for i := 0; i < churnKeys; i++ {
+		key := []byte(fmt.Sprintf("churn-%02d", i))
+		got, err := r.ReadUnsafeAppendForKey(churnPtrs[i], key, dst[:0])
+		if err != nil {
+			t.Fatalf("ReadUnsafeAppendForKey(churn=%d): %v", i, err)
+		}
+		want := fmt.Sprintf("v-%02d", i)
+		if !bytes.Equal(got, []byte(want)) {
+			t.Fatalf("churn read=%d = %q, want %q", i, got, want)
+		}
+	}
+
+	for i := 0; i < hotReads; i++ {
+		got, err := r.ReadUnsafeAppendForKey(hotPtr, hotKey, dst[:0])
+		if err != nil {
+			t.Fatalf("ReadUnsafeAppendForKey(post-churn hot=%d): %v", i, err)
+		}
+		if !bytes.Equal(got, []byte("hot-v")) {
+			t.Fatalf("post-churn hot read at i=%d = %q, want %q", i, got, "hot-v")
+		}
+	}
+
+	if reader.readUnsafeAppendCalls < (1 + churnKeys) {
+		t.Fatalf("readUnsafeAppendCalls = %d, want >= %d", reader.readUnsafeAppendCalls, 1+churnKeys)
+	}
+
+	hits, misses, entries, capacity := cache.stats()
+	if misses < uint64(1+churnKeys) {
+		t.Fatalf("cache misses = %d, want >= %d", misses, 1+churnKeys)
+	}
+	if hits < uint64(hotReads-1) {
+		t.Fatalf("cache hits = %d, want >= %d", hits, hotReads-1)
+	}
+	if entries > capacity {
+		t.Fatalf("cache entries = %d, want <= %d", entries, capacity)
+	}
+}
+
 func TestValueReaderReadUnsafeFenceBlockSeek_ClassifiesBoundsAndReusesCache(t *testing.T) {
 	payload, _, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
