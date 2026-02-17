@@ -2,6 +2,7 @@ package db
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -41,8 +42,10 @@ type outerLeafBlockCacheShard struct {
 }
 
 type outerLeafBlockCache struct {
-	shards   []outerLeafBlockCacheShard
-	capacity int
+	shards       []outerLeafBlockCacheShard
+	capacity     int
+	everAdmitted atomic.Bool
+	coldMisses   atomic.Uint64
 }
 
 func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
@@ -99,6 +102,12 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 }
 
 func (c *outerLeafBlockCache) get(key outerLeafBlockKey) *outerleaf.DecodedBlock {
+	// Blob-ref-dominant workloads may never admit blocks; avoid shard lock
+	// traffic for those cold-miss-only phases.
+	if !c.everAdmitted.Load() {
+		c.coldMisses.Add(1)
+		return nil
+	}
 	s := c.shardFor(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -145,12 +154,13 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 	node.next = -1
 	s.linkFront(idx)
 	s.entries[key] = idx
+	c.everAdmitted.Store(true)
 }
 
 func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
 	var totalEntries int
 	var totalHits uint64
-	var totalMisses uint64
+	totalMisses := c.coldMisses.Load()
 	for i := range c.shards {
 		s := &c.shards[i]
 		s.mu.Lock()
