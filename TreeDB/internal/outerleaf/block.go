@@ -123,7 +123,8 @@ type keyLeaseChunk struct {
 }
 
 type bytesPoolEntry struct {
-	buf []byte
+	buf  []byte
+	next *bytesPoolEntry
 }
 
 // KeyLease provides explicit ownership for decoded key vectors.
@@ -472,6 +473,7 @@ func getPooledBytes(minCap int) []byte {
 	if minCap <= 0 {
 		minCap = 1
 	}
+	var held *bytesPoolEntry
 	for {
 		v := outerLeafBytesPool.Get()
 		if v == nil {
@@ -481,12 +483,27 @@ func getPooledBytes(minCap int) []byte {
 		if !ok || entry == nil {
 			continue
 		}
-		buf := entry.buf
-		entry.buf = nil
-		outerLeafBytesEntryPool.Put(entry)
-		if cap(buf) >= minCap {
+		if cap(entry.buf) >= minCap {
+			buf := entry.buf
+			entry.buf = nil
+			entry.next = nil
+			for held != nil {
+				next := held.next
+				held.next = nil
+				outerLeafBytesPool.Put(held)
+				held = next
+			}
+			outerLeafBytesEntryPool.Put(entry)
 			return buf[:0]
 		}
+		entry.next = held
+		held = entry
+	}
+	for held != nil {
+		next := held.next
+		held.next = nil
+		outerLeafBytesPool.Put(held)
+		held = next
 	}
 	return make([]byte, 0, minCap)
 }
@@ -497,6 +514,7 @@ func putPooledBytes(buf []byte) {
 	}
 	entry := outerLeafBytesEntryPool.Get().(*bytesPoolEntry)
 	entry.buf = buf[:0]
+	entry.next = nil
 	outerLeafBytesPool.Put(entry)
 }
 
