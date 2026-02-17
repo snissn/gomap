@@ -2430,8 +2430,10 @@ func decodeStructuredKeysBounded(version uint8, entryCount int, encoded []byte, 
 		estCap = 64
 	}
 	keyArena := make([]byte, 0, estCap)
-	prev := make([]byte, 0, estKeyLen)
-	curr := make([]byte, 0, estKeyLen)
+	var prevStack [128]byte
+	var currStack [128]byte
+	prev := prevStack[:0]
+	curr := currStack[:0]
 	for i := 0; i < entryCount; i++ {
 		if off+headerLen > len(encoded) {
 			return nil, fmt.Errorf("outerleaf: truncated v%d entry header", version)

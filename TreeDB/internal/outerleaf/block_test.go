@@ -989,3 +989,39 @@ func BenchmarkDecodedBlockValueForKeyV2(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkDecodeStructuredKeysBoundedV2Range(b *testing.B) {
+	entries := make([]Entry, 0, 256)
+	for i := 0; i < 256; i++ {
+		entries = append(entries, Entry{
+			Key:   []byte(fmt.Sprintf("k:%06d", i)),
+			Value: bytes.Repeat([]byte{byte('a' + (i % 26))}, 96),
+		})
+	}
+	enc, err := EncodeEntries(nil, entries, 0, 16)
+	if err != nil {
+		b.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		b.Fatalf("DecodeBlock: %v", err)
+	}
+
+	lower := []byte("k:000120")
+	upper := []byte("k:000180")
+	if got, err := decodeStructuredKeysBounded(blk.version, blk.entryCount, blk.entries, lower, upper); err != nil || len(got) == 0 {
+		b.Fatalf("decodeStructuredKeysBounded warmup len=%d err=%v", len(got), err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		keys, err := decodeStructuredKeysBounded(blk.version, blk.entryCount, blk.entries, lower, upper)
+		if err != nil {
+			b.Fatalf("decodeStructuredKeysBounded: %v", err)
+		}
+		if len(keys) == 0 {
+			b.Fatalf("decodeStructuredKeysBounded returned no keys")
+		}
+	}
+}
