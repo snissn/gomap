@@ -330,6 +330,7 @@ type Iterator struct {
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
 	slabFenceRange  slabUnsafeFenceBlockRangeKeyReader
 	slabFenceSeek   slabUnsafeFenceBlockSeekReader
+	slabFenceSeekR  slabUnsafeFenceBlockSeekRangeReader
 	slabFencePtrCls slabFencePointerClassifier
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
@@ -399,6 +400,7 @@ func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iter
 	it.slabFenceKeys = t.slabFenceKeys
 	it.slabFenceRange = t.slabFenceRange
 	it.slabFenceSeek = t.slabFenceSeek
+	it.slabFenceSeekR = t.slabFenceSeekR
 	it.slabFencePtrCls = t.slabFencePtrCls
 	it.slabKeyAppender = t.slabKeyAppender
 	it.slabKeyBatcher = t.slabKeyBatcher
@@ -437,6 +439,7 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 	it.slabFenceKeys = t.slabFenceKeys
 	it.slabFenceRange = t.slabFenceRange
 	it.slabFenceSeek = t.slabFenceSeek
+	it.slabFenceSeekR = t.slabFenceSeekR
 	it.slabFencePtrCls = t.slabFencePtrCls
 	it.slabKeyAppender = t.slabKeyAppender
 	it.slabKeyBatcher = t.slabKeyBatcher
@@ -716,6 +719,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 	}
 	seekKey := it.pendingSeekKey
 	preferFenceEntries := it.slabFenceBlocks != nil && (it.slabFenceKeys == nil || !it.shouldPreferFenceKeyOnly())
+	preferKeyOnlyExpansion := !preferFenceEntries
 	for scan := top.Index - 1; scan >= 0; scan-- {
 		_, ptr, flags, err := top.Node.GetLeafValueView(uint16(scan))
 		if err != nil {
@@ -728,6 +732,38 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			continue
 		}
 		keyReaderUsable := false
+		if preferKeyOnlyExpansion && it.end != nil && it.slabFenceSeekR != nil {
+			pos, below, above, seekKeys, ok, err := it.slabFenceSeekR.ReadUnsafeFenceBlockSeekRange(ptr, seekKey, it.end)
+			if err != nil {
+				return false, err
+			}
+			if ok {
+				keyReaderUsable = true
+				if above {
+					break
+				}
+				if below {
+					continue
+				}
+				if pos >= 0 && pos < len(seekKeys) {
+					top.Index = scan
+					it.pendingFencePageID = top.PageID
+					it.pendingFenceLeafIndex = scan
+					it.pendingFenceEntryIdx = pos
+					it.pendingFenceReady = true
+					it.pendingFenceKeys = seekKeys
+					// We already selected the predecessor block that contains seekKey.
+					// Clearing pendingSeekKey avoids a redundant predecessor rescan on
+					// the next loadCurrent loop iteration.
+					it.pendingSeekKey = it.pendingSeekKey[:0]
+					return true, nil
+				}
+				if len(seekKeys) == 0 {
+					continue
+				}
+				break
+			}
+		}
 		if it.slabFenceSeek != nil {
 			pos, below, above, seekKeys, ok, err := it.slabFenceSeek.ReadUnsafeFenceBlockSeek(ptr, seekKey)
 			if err != nil {

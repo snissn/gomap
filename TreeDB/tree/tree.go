@@ -95,6 +95,13 @@ type slabUnsafeFenceBlockSeekReader interface {
 	ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (pos int, below bool, above bool, keys [][]byte, ok bool, err error)
 }
 
+// Optional bounded seek-oriented fence reader. Implementations may classify a
+// predecessor seek probe and materialize only keys in [key, upper), which is
+// useful for bounded forward range scans.
+type slabUnsafeFenceBlockSeekRangeReader interface {
+	ReadUnsafeFenceBlockSeekRange(ptr page.ValuePtr, key []byte, upper []byte) (pos int, below bool, above bool, keys [][]byte, ok bool, err error)
+}
+
 // Optional fast classifier for whether a pointer is expected to reference a
 // fence-expandable outer-leaf block.
 type slabFencePointerClassifier interface {
@@ -141,6 +148,7 @@ type Tree struct {
 	slabFenceKeys   slabUnsafeFenceBlockKeyReader
 	slabFenceRange  slabUnsafeFenceBlockRangeKeyReader
 	slabFenceSeek   slabUnsafeFenceBlockSeekReader
+	slabFenceSeekR  slabUnsafeFenceBlockSeekRangeReader
 	slabFencePtrCls slabFencePointerClassifier
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
@@ -184,6 +192,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		}
 		if fenceSeek, ok := sr.(slabUnsafeFenceBlockSeekReader); ok {
 			t.slabFenceSeek = fenceSeek
+		}
+		if fenceSeekRange, ok := sr.(slabUnsafeFenceBlockSeekRangeReader); ok {
+			t.slabFenceSeekR = fenceSeekRange
 		}
 		if cls, ok := sr.(slabFencePointerClassifier); ok {
 			t.slabFencePtrCls = cls
@@ -251,6 +262,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		} else {
 			t.slabFenceSeek = nil
 		}
+		if fenceSeekRange, ok := sr.(slabUnsafeFenceBlockSeekRangeReader); ok {
+			t.slabFenceSeekR = fenceSeekRange
+		} else {
+			t.slabFenceSeekR = nil
+		}
 		if cls, ok := sr.(slabFencePointerClassifier); ok {
 			t.slabFencePtrCls = cls
 		} else {
@@ -262,6 +278,7 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabFenceKeys = nil
 		t.slabFenceRange = nil
 		t.slabFenceSeek = nil
+		t.slabFenceSeekR = nil
 		t.slabFencePtrCls = nil
 	}
 	t.fenceLookupMode = fenceEnabled && t.slabFenceReader != nil

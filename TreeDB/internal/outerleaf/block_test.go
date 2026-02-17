@@ -78,6 +78,190 @@ func TestHasMagic(t *testing.T) {
 	}
 }
 
+func TestDecodeSingleInlineBlock(t *testing.T) {
+	raw, err := EncodeSingle(nil, []byte("k"), []byte("v"), 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeSingle: %v", err)
+	}
+	entry, ok, found, _, err := DecodeEntryForKey(raw, []byte("k"), nil)
+	if err != nil {
+		t.Fatalf("DecodeEntryForKey: %v", err)
+	}
+	if !ok || !found {
+		t.Fatalf("lookup for k: ok=%v found=%v", ok, found)
+	}
+	if entry.Kind != EntryKindInline {
+		t.Fatalf("entry kind=%d want=%d", entry.Kind, EntryKindInline)
+	}
+
+	block := DecodeSingleInlineBlock(raw, []byte("k"), entry)
+	if block == nil {
+		t.Fatalf("DecodeSingleInlineBlock: expected non-nil")
+	}
+	got, ok, err := block.EntryForKey([]byte("k"))
+	if err != nil {
+		t.Fatalf("EntryForKey: %v", err)
+	}
+	if !ok || !bytes.Equal(got.Value, []byte("v")) {
+		t.Fatalf("EntryForKey: value=%q want=%q", got.Value, []byte("v"))
+	}
+}
+
+func TestDecodeSingleInlineBlockCopiesInputs(t *testing.T) {
+	key := []byte("k")
+	value := []byte("v")
+	raw, err := EncodeSingle(nil, key, value, 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeSingle: %v", err)
+	}
+	entry, ok, found, _, err := DecodeEntryForKey(raw, key, nil)
+	if err != nil {
+		t.Fatalf("DecodeEntryForKey: %v", err)
+	}
+	if !ok || !found {
+		t.Fatalf("lookup for k: ok=%v found=%v", ok, found)
+	}
+
+	block := DecodeSingleInlineBlock(raw, key, entry)
+	if block == nil {
+		t.Fatalf("DecodeSingleInlineBlock: expected non-nil")
+	}
+
+	key[0] = 'z'
+	entry.Value[0] = 'x'
+
+	got, ok, err := block.EntryForKey([]byte("k"))
+	if err != nil {
+		t.Fatalf("EntryForKey: %v", err)
+	}
+	if !ok || !bytes.Equal(got.Value, []byte("v")) {
+		t.Fatalf("EntryForKey after input mutation: value=%q want=%q", got.Value, []byte("v"))
+	}
+}
+
+func TestDecodeSingleInlineBlockRejectsNonCacheableEntry(t *testing.T) {
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(3), Offset: 7, Length: 9}
+	raw, err := EncodeSingleBlobRef(nil, []byte("k"), blobPtr, 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeSingleBlobRef: %v", err)
+	}
+	entry, ok, found, _, err := DecodeEntryForKey(raw, []byte("k"), nil)
+	if err != nil {
+		t.Fatalf("DecodeEntryForKey: %v", err)
+	}
+	if !ok || !found {
+		t.Fatalf("blobref lookup for k: ok=%v found=%v", ok, found)
+	}
+	if DecodeSingleInlineBlock(raw, []byte("k"), entry) != nil {
+		t.Fatalf("expected nil block for blobref entry")
+	}
+
+	raw2, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k1"), Value: []byte("v1")},
+		{Key: []byte("k2"), Value: []byte("v2")},
+	}, 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	entry2, ok, found, _, err := DecodeEntryForKey(raw2, []byte("k1"), nil)
+	if err != nil {
+		t.Fatalf("DecodeEntryForKey: %v", err)
+	}
+	if !ok || !found {
+		t.Fatalf("lookup for k1: ok=%v found=%v", ok, found)
+	}
+	if DecodeSingleInlineBlock(raw2, []byte("k1"), entry2) != nil {
+		t.Fatalf("expected nil block for multi-entry payload")
+	}
+}
+
+func TestDecodeLowerBoundAndKeysRangeOnMatchWithVerify(t *testing.T) {
+	raw, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k1"), Value: []byte("v1")},
+		{Key: []byte("k2"), Value: []byte("v2")},
+		{Key: []byte("k3"), Value: []byte("v3")},
+	}, 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+
+	pos, below, above, keys, err := DecodeLowerBoundAndKeysRangeOnMatchWithVerify(raw, []byte("k0"), []byte("k3"), true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysRangeOnMatchWithVerify(k0): %v", err)
+	}
+	if pos != 0 || !below || above || keys != nil {
+		t.Fatalf("k0: got pos=%d below=%v above=%v keys=%v, want pos=0 below=true above=false keys=nil", pos, below, above, keys)
+	}
+
+	pos, below, above, keys, err = DecodeLowerBoundAndKeysRangeOnMatchWithVerify(raw, []byte("k2"), []byte("k3"), true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysRangeOnMatchWithVerify(k2,k3): %v", err)
+	}
+	if pos != 0 || below || above {
+		t.Fatalf("k2,k3: got pos=%d below=%v above=%v, want pos=0 below=false above=false", pos, below, above)
+	}
+	if len(keys) != 1 || !bytes.Equal(keys[0], []byte("k2")) {
+		t.Fatalf("k2,k3: keys=%q want=[k2]", keys)
+	}
+
+	pos, below, above, keys, err = DecodeLowerBoundAndKeysRangeOnMatchWithVerify(raw, []byte("k2"), nil, true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysRangeOnMatchWithVerify(k2,nil): %v", err)
+	}
+	if pos != 0 || below || above {
+		t.Fatalf("k2,nil: got pos=%d below=%v above=%v, want pos=0 below=false above=false", pos, below, above)
+	}
+	if len(keys) != 2 || !bytes.Equal(keys[0], []byte("k2")) || !bytes.Equal(keys[1], []byte("k3")) {
+		t.Fatalf("k2,nil: keys=%q want=[k2 k3]", keys)
+	}
+
+	pos, below, above, keys, err = DecodeLowerBoundAndKeysRangeOnMatchWithVerify(raw, []byte("k9"), nil, true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysRangeOnMatchWithVerify(k9): %v", err)
+	}
+	if pos != 3 || below || !above || keys != nil {
+		t.Fatalf("k9: got pos=%d below=%v above=%v keys=%v, want pos=3 below=false above=true keys=nil", pos, below, above, keys)
+	}
+}
+
+func TestLowerBoundStructuredWithRestarts_MatchesLinear(t *testing.T) {
+	entries := make([]Entry, 0, 128)
+	for i := 0; i < 128; i++ {
+		k := fmt.Sprintf("k%03d", i*2)
+		entries = append(entries, Entry{Key: []byte(k), Value: []byte("v")})
+	}
+	raw, err := EncodeEntries(nil, entries, 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	block, err := DecodeBlockWithVerify(raw, nil, true)
+	if err != nil {
+		t.Fatalf("DecodeBlockWithVerify: %v", err)
+	}
+
+	targets := [][]byte{
+		[]byte("k000"),
+		[]byte("k001"),
+		[]byte("k010"),
+		[]byte("k111"),
+		[]byte("k254"),
+		[]byte("k999"),
+	}
+	for _, target := range targets {
+		wantPos, wantBelow, wantAbove, wantErr := lowerBoundStructured(block.version, block.entryCount, block.entries, target)
+		gotPos, gotBelow, gotAbove, gotErr := lowerBoundStructuredWithRestarts(block.version, block.entryCount, block.entries, block.restartRaw, block.restartCount, 16, target)
+		if (wantErr == nil) != (gotErr == nil) {
+			t.Fatalf("target=%q err mismatch linear=%v restart=%v", target, wantErr, gotErr)
+		}
+		if wantErr != nil {
+			continue
+		}
+		if gotPos != wantPos || gotBelow != wantBelow || gotAbove != wantAbove {
+			t.Fatalf("target=%q got pos=%d below=%v above=%v want pos=%d below=%v above=%v", target, gotPos, gotBelow, gotAbove, wantPos, wantBelow, wantAbove)
+		}
+	}
+}
+
 func TestEncodeSingleCodecHeaderMapping(t *testing.T) {
 	key := []byte("user:codec")
 	value := bytes.Repeat([]byte("v"), 256)

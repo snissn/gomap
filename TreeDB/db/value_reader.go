@@ -152,6 +152,38 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 		// oversized entries.
 		return raw, true, nil
 	}
+	if len(key) > 0 {
+		entry, ok, found, _, decErr := outerleaf.DecodeEntryForKey(raw, key, nil)
+		if decErr != nil {
+			return nil, false, decErr
+		}
+		if !ok {
+			return nil, false, nil
+		}
+		if !found {
+			return nil, false, nil
+		}
+		if r.cache != nil && entry.Kind == outerleaf.EntryKindInline {
+			if block := outerleaf.DecodeSingleInlineBlock(raw, key, entry); block != nil {
+				r.cache.put(newOuterLeafBlockKey(ptr), block)
+				val, err := r.resolveLookupResult(entry, unsafe)
+				if err != nil {
+					return nil, false, err
+				}
+				return val, true, nil
+			}
+			// Preserve cache admission for non-single blocks in non-append paths so
+			// follow-up lookups reuse decoded metadata.
+			if _, err := r.outerLeafBlock(ptr, raw); err != nil {
+				return nil, false, err
+			}
+		}
+		val, err := r.resolveLookupResult(entry, unsafe)
+		if err != nil {
+			return nil, false, err
+		}
+		return val, true, nil
+	}
 	block, err := r.outerLeafBlock(ptr, raw)
 	if err != nil {
 		return nil, false, err
@@ -404,6 +436,62 @@ func (r valueReader) ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (po
 	return lower, false, false, blockKeys, true, nil
 }
 
+func (r valueReader) ReadUnsafeFenceBlockSeekRange(ptr page.ValuePtr, key []byte, upper []byte) (pos int, below bool, above bool, keys [][]byte, ok bool, err error) {
+	if !r.fenceLookupModeEnabled() {
+		return 0, false, false, nil, false, nil
+	}
+	if len(key) > 0 && len(upper) > 0 && bytes.Compare(key, upper) >= 0 {
+		return 0, false, false, nil, true, nil
+	}
+	if cachedKeys := r.cachedOuterLeafKeys(ptr); cachedKeys != nil {
+		lower, isBelow, isAbove := classifyFenceKeys(cachedKeys, key)
+		if isBelow || isAbove {
+			return lower, isBelow, isAbove, nil, true, nil
+		}
+		ranged := sliceFenceKeysRange(cachedKeys, key, upper)
+		if len(ranged) == 0 {
+			return 0, false, false, nil, true, nil
+		}
+		return 0, false, false, ranged, true, nil
+	}
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		lower, isBelow, isAbove, lowerErr := block.LowerBound(key)
+		if lowerErr != nil {
+			return 0, false, false, nil, true, lowerErr
+		}
+		if isBelow || isAbove {
+			return lower, isBelow, isAbove, nil, true, nil
+		}
+		blockKeys, keyErr := block.KeysRange(nil, key, upper)
+		if keyErr != nil {
+			return 0, false, false, nil, true, keyErr
+		}
+		if len(blockKeys) == 0 {
+			return 0, false, false, nil, true, nil
+		}
+		return 0, false, false, blockKeys, true, nil
+	}
+
+	raw, readErr := r.readRawUnsafe(ptr)
+	if readErr != nil {
+		return 0, false, false, nil, true, readErr
+	}
+	if !outerleaf.HasMagic(raw) {
+		return 0, false, false, nil, false, nil
+	}
+	lower, isBelow, isAbove, blockKeys, decErr := outerleaf.DecodeLowerBoundAndKeysRangeOnMatchWithVerify(raw, key, upper, !r.skipOuterLeafChecksums)
+	if decErr != nil {
+		return 0, false, false, nil, true, decErr
+	}
+	if isBelow || isAbove {
+		return lower, isBelow, isAbove, nil, true, nil
+	}
+	if len(blockKeys) == 0 {
+		return 0, false, false, nil, true, nil
+	}
+	return 0, false, false, blockKeys, true, nil
+}
+
 func classifyFenceKeys(keys [][]byte, key []byte) (pos int, below bool, above bool) {
 	if len(keys) == 0 {
 		return 0, false, true
@@ -592,6 +680,12 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 			}
 			if r.cache == nil || entry.Kind == outerleaf.EntryKindBlobRef {
 				return r.resolveLookupResultAppend(entry, dst)
+			}
+			if key != nil {
+				if block := outerleaf.DecodeSingleInlineBlock(raw, key, entry); block != nil {
+					r.cache.put(newOuterLeafBlockKey(ptr), block)
+					return r.resolveLookupResultAppend(entry, dst)
+				}
 			}
 		}
 		raw = r.stableOuterLeafPayload(raw)
