@@ -965,7 +965,11 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			}
 		}
 		if it.slabFenceBlocks != nil && (preferFenceEntries || !keyReaderUsable) {
-			var entries []FenceBlockEntry
+			var (
+				entries []FenceBlockEntry
+				ok      bool
+				err     error
+			)
 			if it.slabFenceBlocksI != nil {
 				entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(ptr, it.fenceEntries[:0])
 			} else {
