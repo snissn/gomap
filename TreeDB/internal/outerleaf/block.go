@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/compress/s2"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -48,6 +50,12 @@ const (
 var (
 	outerLeafBytesPool    sync.Pool
 	outerLeafRestartsPool sync.Pool
+
+	outerLeafSnappyOnce          sync.Once
+	outerLeafSnappyMaxEncodedLen = snappy.MaxEncodedLen
+	outerLeafSnappyEncode        = snappy.Encode
+	outerLeafSnappyDecodedLen    = snappy.DecodedLen
+	outerLeafSnappyDecode        = snappy.Decode
 )
 
 const (
@@ -191,6 +199,18 @@ func normalizeCodec(codec uint8) uint8 {
 	}
 }
 
+func ensureOuterLeafSnappyBackend() {
+	outerLeafSnappyOnce.Do(func() {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv("TREEDB_OUTERLEAF_SNAPPY_BACKEND"))) {
+		case "s2":
+			outerLeafSnappyMaxEncodedLen = s2.MaxEncodedLen
+			outerLeafSnappyEncode = s2.Encode
+			outerLeafSnappyDecodedLen = s2.DecodedLen
+			outerLeafSnappyDecode = s2.Decode
+		}
+	})
+}
+
 func minCompressionSavings(rawLen int) int {
 	if rawLen <= 1 {
 		return 1
@@ -300,13 +320,14 @@ func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
 		// Fall through to snappy on lz4 miss for deterministic behavior.
 		fallthrough
 	default:
-		need := snappy.MaxEncodedLen(len(raw))
+		ensureOuterLeafSnappyBackend()
+		need := outerLeafSnappyMaxEncodedLen(len(raw))
 		if cap(dst) < need {
 			dst = make([]byte, need)
 		} else {
 			dst = dst[:need]
 		}
-		enc := snappy.Encode(dst, raw)
+		enc := outerLeafSnappyEncode(dst, raw)
 		if keepCompressedPayload(len(raw), len(enc)) {
 			return enc, blockCodecSnappy, nil
 		}
@@ -335,14 +356,15 @@ func decodePayload(codec uint8, payload []byte, rawLen int, dst []byte) ([]byte,
 		copy(dst, payload)
 		return dst, nil
 	case blockCodecSnappy:
-		decodedLen, err := snappy.DecodedLen(payload)
+		ensureOuterLeafSnappyBackend()
+		decodedLen, err := outerLeafSnappyDecodedLen(payload)
 		if err != nil {
 			return nil, err
 		}
 		if decodedLen != rawLen {
 			return nil, fmt.Errorf("outerleaf: snappy decoded length mismatch got=%d want=%d", decodedLen, rawLen)
 		}
-		out, err := snappy.Decode(dst[:0], payload)
+		out, err := outerLeafSnappyDecode(dst[:0], payload)
 		if err != nil {
 			return nil, err
 		}
@@ -518,7 +540,8 @@ func encodedPayloadBound(codec uint8, rawLen int) int {
 	if normalizeCodec(codec) == blockCodecLZ4 {
 		return lz4.CompressBlockBound(rawLen)
 	}
-	return snappy.MaxEncodedLen(rawLen)
+	ensureOuterLeafSnappyBackend()
+	return outerLeafSnappyMaxEncodedLen(rawLen)
 }
 
 func encodeV1SingleCore(dst, key, value []byte, codec uint8, restartInterval int, rawScratch, encScratch *[]byte) ([]byte, error) {
@@ -2755,6 +2778,15 @@ func DecodeValueForKey(payload []byte, key []byte, scratch []byte) (value []byte
 // ok reports whether payload is an outer-leaf payload.
 // found reports whether key exists in that payload.
 func DecodeEntryForKey(payload []byte, key []byte, scratch []byte) (entry LookupResult, ok bool, found bool, outScratch []byte, err error) {
+	return DecodeEntryForKeyWithVerify(payload, key, scratch, true)
+}
+
+// DecodeEntryForKeyWithVerify resolves key inside an encoded outer-leaf payload
+// and optionally verifies the block checksum.
+//
+// ok reports whether payload is an outer-leaf payload.
+// found reports whether key exists in that payload.
+func DecodeEntryForKeyWithVerify(payload []byte, key []byte, scratch []byte, verifyChecksum bool) (entry LookupResult, ok bool, found bool, outScratch []byte, err error) {
 	if len(payload) < blockHeaderSize {
 		return LookupResult{}, false, false, scratch, nil
 	}
@@ -2773,7 +2805,7 @@ func DecodeEntryForKey(payload []byte, key []byte, scratch []byte) (entry Lookup
 		if rawLen != expected {
 			return LookupResult{}, true, false, scratch, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
 		}
-		outScratch, err = decodeAndVerifyPayload(payload, rawLen, codec, scratch)
+		outScratch, err = decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, false, verifyChecksum)
 		if err != nil {
 			return LookupResult{}, true, false, scratch, err
 		}
@@ -2784,7 +2816,7 @@ func DecodeEntryForKey(payload []byte, key []byte, scratch []byte) (entry Lookup
 		}
 		return LookupResult{}, true, false, outScratch, nil
 	case blockVersionV2:
-		val, ok, found, outScratch, err := DecodeValueForKey(payload, key, scratch)
+		val, ok, found, outScratch, err := decodeValueForKeyWithVerify(payload, key, scratch, verifyChecksum)
 		if err != nil {
 			return LookupResult{}, ok, found, outScratch, err
 		}
@@ -2799,7 +2831,7 @@ func DecodeEntryForKey(payload []byte, key []byte, scratch []byte) (entry Lookup
 		if entryCount <= 0 {
 			return LookupResult{}, true, false, scratch, fmt.Errorf("outerleaf: empty v3 block")
 		}
-		outScratch, err = decodeAndVerifyPayload(payload, rawLen, codec, scratch)
+		outScratch, err = decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, false, verifyChecksum)
 		if err != nil {
 			return LookupResult{}, true, false, scratch, err
 		}
@@ -2818,5 +2850,90 @@ func DecodeEntryForKey(payload []byte, key []byte, scratch []byte) (entry Lookup
 		return result, true, true, outScratch, nil
 	default:
 		return LookupResult{}, true, false, scratch, fmt.Errorf("outerleaf: unsupported version %d", version)
+	}
+}
+
+func decodeValueForKeyWithVerify(payload []byte, key []byte, scratch []byte, verifyChecksum bool) (value []byte, ok bool, found bool, outScratch []byte, err error) {
+	if len(payload) < blockHeaderSize {
+		return nil, false, false, scratch, nil
+	}
+	if payload[0] != blockMagic[0] || payload[1] != blockMagic[1] || payload[2] != blockMagic[2] || payload[3] != blockMagic[3] {
+		return nil, false, false, scratch, nil
+	}
+
+	version := payload[4]
+	codec := payload[5]
+	switch version {
+	case blockVersionV1:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+		expected := keyLen + valueLen
+		if rawLen != expected {
+			return nil, true, false, scratch, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
+		}
+		outScratch, err = decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, false, verifyChecksum)
+		if err != nil {
+			return nil, true, false, scratch, err
+		}
+		blockKey := outScratch[:keyLen]
+		blockValue := outScratch[keyLen : keyLen+valueLen]
+		if len(key) == 0 || bytes.Equal(blockKey, key) {
+			return blockValue, true, true, outScratch, nil
+		}
+		return nil, true, false, outScratch, nil
+	case blockVersionV2:
+		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
+		entriesLen := int(binary.LittleEndian.Uint32(payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockV2RawLenOff : blockV2RawLenOff+4]))
+		if entryCount <= 0 {
+			return nil, true, false, scratch, fmt.Errorf("outerleaf: empty v2 block")
+		}
+		outScratch, err = decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, false, verifyChecksum)
+		if err != nil {
+			return nil, true, false, scratch, err
+		}
+		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
+		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		if splitErr != nil {
+			return nil, true, false, outScratch, splitErr
+		}
+		val, found, err := lookupV2Value(entries, entryCount, key, restarts, nil)
+		if err != nil {
+			return nil, true, false, outScratch, err
+		}
+		if !found {
+			return nil, true, false, outScratch, nil
+		}
+		return val, true, true, outScratch, nil
+	case blockVersionV3:
+		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
+		entriesLen := int(binary.LittleEndian.Uint32(payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockV2RawLenOff : blockV2RawLenOff+4]))
+		if entryCount <= 0 {
+			return nil, true, false, scratch, fmt.Errorf("outerleaf: empty v3 block")
+		}
+		outScratch, err = decodeAndVerifyPayloadModeWithChecksum(payload, rawLen, codec, scratch, false, verifyChecksum)
+		if err != nil {
+			return nil, true, false, scratch, err
+		}
+		restartsInterval := int(binary.LittleEndian.Uint16(payload[6:8]))
+		entries, restarts, splitErr := splitV2Raw(outScratch, entriesLen, entryCount, restartsInterval)
+		if splitErr != nil {
+			return nil, true, false, outScratch, splitErr
+		}
+		entry, found, err := lookupV3Entry(entries, entryCount, key, restarts, nil)
+		if err != nil {
+			return nil, true, false, outScratch, err
+		}
+		if !found {
+			return nil, true, false, outScratch, nil
+		}
+		if entry.Kind == EntryKindBlobRef {
+			return nil, true, true, outScratch, ErrBlobRefEntry
+		}
+		return entry.Value, true, true, outScratch, nil
+	default:
+		return nil, true, false, scratch, fmt.Errorf("outerleaf: unsupported version %d", version)
 	}
 }

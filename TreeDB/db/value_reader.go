@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -20,6 +21,26 @@ type valueReader struct {
 	skipOuterLeafChecksums bool
 	cache                  *outerLeafBlockCache
 	keyCache               *outerLeafKeyCache
+}
+
+const outerLeafLookupScratchMaxRetain = 1 << 20
+
+var outerLeafLookupScratchPool sync.Pool
+
+func outerLeafLookupScratchGet() []byte {
+	if v := outerLeafLookupScratchPool.Get(); v != nil {
+		if b, ok := v.([]byte); ok {
+			return b[:0]
+		}
+	}
+	return nil
+}
+
+func outerLeafLookupScratchPut(b []byte) {
+	if cap(b) == 0 || cap(b) > outerLeafLookupScratchMaxRetain {
+		return
+	}
+	outerLeafLookupScratchPool.Put(b[:0])
 }
 
 type unsafeAppendReader interface {
@@ -150,6 +171,9 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 		// oversized entries.
 		return raw, true, nil
 	}
+	if r.cache == nil {
+		return r.decodeOuterLeafValueForKeyNoCache(raw, key, unsafe)
+	}
 	block, err := r.outerLeafBlock(ptr, raw)
 	if err != nil {
 		return nil, false, err
@@ -165,6 +189,43 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 	if err != nil {
 		return nil, false, err
 	}
+	return val, true, nil
+}
+
+func (r valueReader) decodeOuterLeafValueForKeyNoCache(raw, key []byte, unsafe bool) ([]byte, bool, error) {
+	verifyChecksums := !r.skipOuterLeafChecksums
+	scratch := outerLeafLookupScratchGet()
+	entry, ok, found, outScratch, err := outerleaf.DecodeEntryForKeyWithVerify(raw, key, scratch, verifyChecksums)
+	recycle := outScratch
+	if cap(recycle) == 0 {
+		recycle = scratch
+	}
+	if err != nil {
+		outerLeafLookupScratchPut(recycle)
+		return nil, false, err
+	}
+	if !ok {
+		outerLeafLookupScratchPut(recycle)
+		return raw, true, nil
+	}
+	if !found {
+		outerLeafLookupScratchPut(recycle)
+		return nil, false, nil
+	}
+	val, err := r.resolveLookupResult(entry, unsafe)
+	if err != nil {
+		outerLeafLookupScratchPut(recycle)
+		return nil, false, err
+	}
+	if entry.Kind == outerleaf.EntryKindInline {
+		if unsafe {
+			// Unsafe callers may retain the returned slice; keep decoded storage
+			// alive instead of recycling it back into the shared scratch pool.
+			return val, true, nil
+		}
+		val = append([]byte(nil), val...)
+	}
+	outerLeafLookupScratchPut(recycle)
 	return val, true, nil
 }
 
@@ -224,6 +285,39 @@ func (r valueReader) resolveLookupResultAppend(entry outerleaf.LookupResult, dst
 	default:
 		return nil, fmt.Errorf("value reader: unsupported outer-leaf entry kind %d", entry.Kind)
 	}
+}
+
+func (r valueReader) decodeOuterLeafAppendForKeyNoCache(raw, key, dst []byte) ([]byte, bool, error) {
+	if !outerleaf.HasMagic(raw) {
+		return raw, true, nil
+	}
+
+	verifyChecksums := !r.skipOuterLeafChecksums
+	scratch := outerLeafLookupScratchGet()
+	entry, ok, found, outScratch, err := outerleaf.DecodeEntryForKeyWithVerify(raw, key, scratch, verifyChecksums)
+	recycle := outScratch
+	if cap(recycle) == 0 {
+		recycle = scratch
+	}
+	if err != nil {
+		outerLeafLookupScratchPut(recycle)
+		return nil, false, err
+	}
+	if !ok {
+		outerLeafLookupScratchPut(recycle)
+		return raw, true, nil
+	}
+	if !found {
+		outerLeafLookupScratchPut(recycle)
+		return nil, false, nil
+	}
+	out, err := r.resolveLookupResultAppend(entry, dst)
+	if err != nil {
+		outerLeafLookupScratchPut(recycle)
+		return nil, false, err
+	}
+	outerLeafLookupScratchPut(recycle)
+	return out, true, nil
 }
 
 func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error) {
@@ -594,22 +688,14 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 		if err != nil {
 			return nil, err
 		}
-		if !outerleaf.HasMagic(raw) {
-			return raw, nil
-		}
-		decoder := r.withoutOuterLeafCaches()
-		block, err := decoder.outerLeafBlock(ptr, raw)
-		if err != nil {
-			return nil, err
-		}
-		entry, found, err := block.EntryForKey(key)
+		out, found, err := r.decodeOuterLeafAppendForKeyNoCache(raw, key, dst)
 		if err != nil {
 			return nil, err
 		}
 		if !found {
 			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
 		}
-		return r.resolveLookupResultAppend(entry, dst)
+		return out, nil
 	}
 	val, err := r.vlogs.ReadUnsafe(ptr)
 	if err != nil {
@@ -639,12 +725,19 @@ func (r valueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) (
 		}
 		decoder := r.withoutOuterLeafCaches()
 		for i := range out {
-			decoded, decErr := decoder.decodeValue(ptrs[i], out[i], true)
+			target := []byte(nil)
+			if i < len(dst) {
+				target = dst[i][:0]
+			}
+			decoded, found, decErr := decoder.decodeOuterLeafAppendForKeyNoCache(out[i], nil, target)
 			if decErr != nil {
 				return nil, decErr
 			}
+			if !found {
+				return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v", ptrs[i])
+			}
 			if i < len(dst) {
-				dst[i] = append(dst[i][:0], decoded...)
+				dst[i] = decoded
 				out[i] = dst[i]
 				continue
 			}
@@ -681,12 +774,19 @@ func (r valueReader) ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][
 		}
 		decoder := r.withoutOuterLeafCaches()
 		for i := range out {
-			decoded, decErr := decoder.decodeValueForKeyUnsafe(ptrs[i], keys[i], out[i])
+			target := []byte(nil)
+			if i < len(dst) {
+				target = dst[i][:0]
+			}
+			decoded, found, decErr := decoder.decodeOuterLeafAppendForKeyNoCache(out[i], keys[i], target)
 			if decErr != nil {
 				return nil, decErr
 			}
+			if !found {
+				return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptrs[i], keys[i])
+			}
 			if i < len(dst) {
-				dst[i] = append(dst[i][:0], decoded...)
+				dst[i] = decoded
 				out[i] = dst[i]
 				continue
 			}
