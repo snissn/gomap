@@ -398,6 +398,61 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 	return r.ReadUnsafeFenceBlockInto(ptr, nil)
 }
 
+func (r valueReader) ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []tree.FenceBlockEntry) ([]tree.FenceBlockEntry, tree.FenceBlockLease, bool, error) {
+	if !r.fenceLookupModeEnabled() {
+		return nil, nil, false, nil
+	}
+	block := r.cachedOuterLeafBlock(ptr)
+	var lease tree.FenceBlockLease
+	if block == nil {
+		raw, err := r.readRawUnsafe(ptr)
+		if err != nil {
+			return nil, nil, true, err
+		}
+		if !outerleaf.HasMagic(raw) {
+			return nil, nil, false, nil
+		}
+		if r.cache != nil {
+			decoded, decErr := r.outerLeafBlock(ptr, raw)
+			if decErr != nil {
+				return nil, nil, true, decErr
+			}
+			block = decoded
+		} else {
+			decoded, decErr := outerleaf.DecodeBlockLeaseWithVerify(raw, !r.skipOuterLeafChecksums)
+			if decErr != nil {
+				return nil, nil, true, decErr
+			}
+			block = decoded
+			lease = decoded
+		}
+	}
+	if cap(dst) < block.EntryCount() {
+		dst = make([]tree.FenceBlockEntry, 0, block.EntryCount())
+	} else {
+		dst = dst[:0]
+	}
+	err := block.VisitTypedEntries(func(key []byte, kind outerleaf.EntryKind, value []byte, blobPtr page.ValuePtr) error {
+		val, err := r.resolveLookupResult(outerleaf.LookupResult{
+			Kind:    kind,
+			Value:   value,
+			BlobPtr: blobPtr,
+		}, true)
+		if err != nil {
+			return err
+		}
+		dst = append(dst, tree.FenceBlockEntry{Key: key, Value: val})
+		return nil
+	})
+	if err != nil {
+		if lease != nil {
+			lease.Release()
+		}
+		return nil, nil, true, err
+	}
+	return dst, lease, true, nil
+}
+
 func (r valueReader) ReadUnsafeFenceBlockInto(ptr page.ValuePtr, dst []tree.FenceBlockEntry) ([]tree.FenceBlockEntry, bool, error) {
 	if !r.fenceLookupModeEnabled() {
 		return nil, false, nil

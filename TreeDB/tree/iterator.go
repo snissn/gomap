@@ -367,6 +367,7 @@ type Iterator struct {
 	slabKeyReader    slabUnsafeKeyReader
 	slabFenceBlocks  slabUnsafeFenceBlockReader
 	slabFenceBlocksI slabUnsafeFenceBlockIntoReader
+	slabFenceBlocksL slabUnsafeFenceBlockLeaseIntoReader
 	slabFenceKeys    slabUnsafeFenceBlockKeyReader
 	slabFenceRange   slabUnsafeFenceBlockRangeKeyReader
 	slabFenceRangeL  slabUnsafeFenceBlockRangeKeyLeaseReader
@@ -379,6 +380,7 @@ type Iterator struct {
 	fenceEntries    []FenceBlockEntry
 	fenceKeys       [][]byte
 	fenceKeyLease   FenceKeysLease
+	fenceBlockLease FenceBlockLease
 	fenceIndex      int
 	fenceActive     bool
 	fenceValuesLazy bool
@@ -481,6 +483,7 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse boo
 		slabKeyReader:    t.slabKeyReader,
 		slabFenceBlocks:  t.slabFenceBlocks,
 		slabFenceBlocksI: t.slabFenceBlocksI,
+		slabFenceBlocksL: t.slabFenceBlocksL,
 		slabFenceKeys:    t.slabFenceKeys,
 		slabFenceRange:   t.slabFenceRange,
 		slabFenceRangeL:  t.slabFenceRangeL,
@@ -705,6 +708,14 @@ func (it *Iterator) releaseFenceKeyLease() {
 	it.fenceKeyLease = nil
 }
 
+func (it *Iterator) releaseFenceBlockLease() {
+	if it == nil || it.fenceBlockLease == nil {
+		return
+	}
+	it.fenceBlockLease.Release()
+	it.fenceBlockLease = nil
+}
+
 func (it *Iterator) releasePendingFenceKeyLease() {
 	if it == nil || it.pendingFenceKeyLease == nil {
 		return
@@ -715,6 +726,7 @@ func (it *Iterator) releasePendingFenceKeyLease() {
 
 func (it *Iterator) resetFenceCursor() {
 	it.releaseFenceKeyLease()
+	it.releaseFenceBlockLease()
 	it.fenceEntries = it.fenceEntries[:0]
 	it.fenceKeys = it.fenceKeys[:0]
 	it.fenceIndex = 0
@@ -967,36 +979,53 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 		if it.slabFenceBlocks != nil && (preferFenceEntries || !keyReaderUsable) {
 			var (
 				entries []FenceBlockEntry
+				lease   FenceBlockLease
 				ok      bool
 				err     error
 			)
-			if it.slabFenceBlocksI != nil {
+			if it.slabFenceBlocksL != nil {
+				entries, lease, ok, err = it.slabFenceBlocksL.ReadUnsafeFenceBlockLeaseInto(ptr, it.fenceEntries[:0])
+			} else if it.slabFenceBlocksI != nil {
 				entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(ptr, it.fenceEntries[:0])
 			} else {
 				entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
 			}
 			if err != nil {
+				if lease != nil {
+					lease.Release()
+				}
 				return false, err
 			}
 			if !ok {
+				if lease != nil {
+					lease.Release()
+				}
 				continue
 			}
 			if len(entries) == 0 {
+				if lease != nil {
+					lease.Release()
+				}
 				continue
 			}
 			// Ordered, non-overlapping fence layouts dominate production data.
 			// If seekKey is beyond this predecessor block's upper bound, earlier
 			// predecessor blocks cannot contain it; stop scanning.
 			if compareTreeKey(seekKey, entries[len(entries)-1].Key) > 0 {
+				if lease != nil {
+					lease.Release()
+				}
 				break
 			}
 			if compareTreeKey(seekKey, entries[0].Key) < 0 {
+				if lease != nil {
+					lease.Release()
+				}
 				continue
 			}
 			pos := lowerBoundFenceEntries(entries, seekKey)
 			if pos < len(entries) {
 				top.Index = scan
-				it.fenceEntries = entries
 				it.pendingFencePageID = top.PageID
 				it.pendingFenceLeafIndex = scan
 				it.pendingFenceEntryIdx = pos
@@ -1006,7 +1035,13 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				// Clearing pendingSeekKey avoids a redundant predecessor rescan on
 				// the next loadCurrent loop iteration.
 				it.pendingSeekKey = it.pendingSeekKey[:0]
+				if lease != nil {
+					lease.Release()
+				}
 				return true, nil
+			}
+			if lease != nil {
+				lease.Release()
 			}
 			break
 		}
@@ -1106,20 +1141,33 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		if it.slabFenceBlocks == nil {
 			return false, false, false, nil
 		}
-		if it.slabFenceBlocksI != nil {
+		var blockLease FenceBlockLease
+		if it.slabFenceBlocksL != nil {
+			entries, blockLease, ok, err = it.slabFenceBlocksL.ReadUnsafeFenceBlockLeaseInto(ptr, it.fenceEntries[:0])
+		} else if it.slabFenceBlocksI != nil {
 			entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(ptr, it.fenceEntries[:0])
 		} else {
 			entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
 		}
 		if err != nil {
+			if blockLease != nil {
+				blockLease.Release()
+			}
 			return false, false, false, err
 		}
 		if !ok {
+			if blockLease != nil {
+				blockLease.Release()
+			}
 			return false, false, false, nil
 		}
+		it.releaseFenceBlockLease()
+		it.fenceBlockLease = blockLease
 		it.fenceValuesLazy = false
 		it.fenceBlockPtr = ptr
 		keys = nil
+	} else {
+		it.releaseFenceBlockLease()
 	}
 	handled = true
 	blockLen := len(entries)
@@ -1650,6 +1698,7 @@ func (it *Iterator) Close() error {
 		return nil
 	}
 	it.releaseFenceKeyLease()
+	it.releaseFenceBlockLease()
 	it.releasePendingFenceKeyLease()
 	buf := it.trimReusableBuffers()
 	*it = Iterator{}
@@ -1764,30 +1813,45 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 	}
 	var (
 		entries []FenceBlockEntry
+		lease   FenceBlockLease
 		ok      bool
 		err     error
 	)
-	if it.slabFenceBlocksI != nil {
+	if it.slabFenceBlocksL != nil {
+		entries, lease, ok, err = it.slabFenceBlocksL.ReadUnsafeFenceBlockLeaseInto(it.fenceBlockPtr, it.fenceEntries[:0])
+	} else if it.slabFenceBlocksI != nil {
 		entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(it.fenceBlockPtr, it.fenceEntries[:0])
 	} else {
 		entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(it.fenceBlockPtr)
 	}
 	if err != nil {
+		if lease != nil {
+			lease.Release()
+		}
 		it.err = err
 		it.valid = false
 		return false
 	}
 	if !ok {
+		if lease != nil {
+			lease.Release()
+		}
 		it.err = fmt.Errorf("iterator fence value load: block unavailable")
 		it.valid = false
 		return false
 	}
 	if len(entries) == 0 {
+		if lease != nil {
+			lease.Release()
+		}
 		it.err = fmt.Errorf("iterator fence value load: empty block")
 		it.valid = false
 		return false
 	}
 	if it.fenceIndex < 0 || it.fenceIndex >= len(entries) {
+		if lease != nil {
+			lease.Release()
+		}
 		it.err = fmt.Errorf("iterator fence value load: index out of range %d/%d", it.fenceIndex, len(entries))
 		it.valid = false
 		return false
@@ -1795,6 +1859,8 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 
 	// Keep the expanded block for subsequent entries in this run so we only pay
 	// one full decode when values are actually requested.
+	it.releaseFenceBlockLease()
+	it.fenceBlockLease = lease
 	it.fenceEntries = entries
 	it.fenceKeys = nil
 	it.fenceValuesLazy = false
@@ -1803,12 +1869,14 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 		pos := lowerBoundFenceEntries(entries, it.currKey)
 		if pos < 0 || pos >= len(entries) {
 			it.releaseFenceKeyLease()
+			it.releaseFenceBlockLease()
 			it.err = fmt.Errorf("iterator fence value load: key not found in fence block")
 			it.valid = false
 			return false
 		}
 		if compareTreeKey(entries[pos].Key, it.currKey) != 0 {
 			it.releaseFenceKeyLease()
+			it.releaseFenceBlockLease()
 			it.err = fmt.Errorf("iterator fence value load: fence index out of sync")
 			it.valid = false
 			return false

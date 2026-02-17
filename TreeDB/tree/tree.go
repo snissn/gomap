@@ -80,6 +80,19 @@ type slabUnsafeFenceBlockIntoReader interface {
 	ReadUnsafeFenceBlockInto(ptr page.ValuePtr, dst []FenceBlockEntry) (entries []FenceBlockEntry, ok bool, err error)
 }
 
+// FenceBlockLease provides lifecycle ownership for expanded fence block
+// storage. Implementations may back entries with pooled buffers.
+type FenceBlockLease interface {
+	Release()
+}
+
+// Optional block expansion reads for fence-only outer-leaf mode that also
+// return a lease for entry storage lifetime.
+// ok=false means the reader is not in fence expansion mode for this pointer.
+type slabUnsafeFenceBlockLeaseIntoReader interface {
+	ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []FenceBlockEntry) (entries []FenceBlockEntry, lease FenceBlockLease, ok bool, err error)
+}
+
 // Optional key-only block expansion reads for fence-only outer-leaf mode.
 // ok=false means the reader is not in fence expansion mode for this pointer.
 type slabUnsafeFenceBlockKeyReader interface {
@@ -167,6 +180,7 @@ type Tree struct {
 	fenceLookupMode  bool
 	slabFenceBlocks  slabUnsafeFenceBlockReader
 	slabFenceBlocksI slabUnsafeFenceBlockIntoReader
+	slabFenceBlocksL slabUnsafeFenceBlockLeaseIntoReader
 	slabFenceKeys    slabUnsafeFenceBlockKeyReader
 	slabFenceRange   slabUnsafeFenceBlockRangeKeyReader
 	slabFenceRangeL  slabUnsafeFenceBlockRangeKeyLeaseReader
@@ -212,6 +226,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		}
 		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockIntoReader); ok {
 			t.slabFenceBlocksI = fenceBlocks
+		}
+		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockLeaseIntoReader); ok {
+			t.slabFenceBlocksL = fenceBlocks
 		}
 		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
 			t.slabFenceKeys = fenceKeys
@@ -289,6 +306,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		} else {
 			t.slabFenceBlocksI = nil
 		}
+		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockLeaseIntoReader); ok {
+			t.slabFenceBlocksL = fenceBlocks
+		} else {
+			t.slabFenceBlocksL = nil
+		}
 		if fenceKeys, ok := sr.(slabUnsafeFenceBlockKeyReader); ok {
 			t.slabFenceKeys = fenceKeys
 		} else {
@@ -323,6 +345,7 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabFenceReader = nil
 		t.slabFenceBlocks = nil
 		t.slabFenceBlocksI = nil
+		t.slabFenceBlocksL = nil
 		t.slabFenceKeys = nil
 		t.slabFenceRange = nil
 		t.slabFenceRangeL = nil

@@ -176,6 +176,7 @@ type DecodedBlock struct {
 
 	keysOnce        sync.Once
 	keys            [][]byte
+	keysLease       *KeyLease
 	keysErr         error
 	restartsOnce    sync.Once
 	restartsErr     error
@@ -2037,6 +2038,10 @@ func (d *DecodedBlock) Release() {
 		putPooledBytes(d.raw)
 		d.pooledRaw = false
 	}
+	if d.keysLease != nil {
+		releaseKeyLease(d.keysLease)
+		d.keysLease = nil
+	}
 	d.leaseOwned = false
 	d.raw = nil
 	d.entries = nil
@@ -2244,6 +2249,17 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 		off := 0
 		var prevKey []byte
 		var keyArena []byte
+		keys := d.keys
+		if d.leaseOwned {
+			var err error
+			keys, err = d.cachedStructuredKeys()
+			if err != nil {
+				return err
+			}
+			if len(keys) != d.entryCount {
+				return fmt.Errorf("outerleaf: invalid key cache length %d want %d", len(keys), d.entryCount)
+			}
+		}
 		for i := 0; i < d.entryCount; i++ {
 			if off+8 > len(encoded) {
 				return fmt.Errorf("outerleaf: truncated v2 entry header")
@@ -2268,7 +2284,9 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 			off += valueLen
 
 			var key []byte
-			if shared == 0 {
+			if keys != nil {
+				key = keys[i]
+			} else if shared == 0 {
 				key = suffix
 			} else {
 				keyLen := shared + suffixLen
@@ -2304,6 +2322,17 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 		off := 0
 		var prevKey []byte
 		var keyArena []byte
+		keys := d.keys
+		if d.leaseOwned {
+			var err error
+			keys, err = d.cachedStructuredKeys()
+			if err != nil {
+				return err
+			}
+			if len(keys) != d.entryCount {
+				return fmt.Errorf("outerleaf: invalid key cache length %d want %d", len(keys), d.entryCount)
+			}
+		}
 		for i := 0; i < d.entryCount; i++ {
 			if off+9 > len(encoded) {
 				return fmt.Errorf("outerleaf: truncated v3 entry header")
@@ -2328,7 +2357,9 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 			off += payloadLen
 
 			var key []byte
-			if shared == 0 {
+			if keys != nil {
+				key = keys[i]
+			} else if shared == 0 {
 				key = suffix
 			} else {
 				keyLen := shared + suffixLen
@@ -2549,6 +2580,20 @@ func (d *DecodedBlock) LowerBound(target []byte) (pos int, below bool, above boo
 
 func (d *DecodedBlock) cachedStructuredKeys() ([][]byte, error) {
 	d.keysOnce.Do(func() {
+		if d.leaseOwned {
+			lease, err := decodeStructuredKeysBoundedLease(d.version, d.entryCount, d.entries, nil, nil)
+			if err != nil {
+				d.keysErr = err
+				return
+			}
+			if lease == nil {
+				d.keys = nil
+				return
+			}
+			d.keysLease = lease
+			d.keys = lease.Keys()
+			return
+		}
 		keys, err := decodeStructuredKeys(d.version, d.entryCount, d.entries)
 		if err != nil {
 			d.keysErr = err
