@@ -317,7 +317,7 @@ func (s *combinedLeafKeyState) rebuildAt(index uint16) (key []byte, flags byte, 
 type Iterator struct {
 	tree            *Tree
 	stack           []CursorItem
-	stackBuf        [4]CursorItem
+	stackBuf        [16]CursorItem
 	leafState       combinedLeafKeyState
 	start           []byte
 	end             []byte
