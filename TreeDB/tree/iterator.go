@@ -3,6 +3,7 @@ package tree
 import (
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -13,6 +14,12 @@ type CursorItem struct {
 	PageID uint64
 	Node   node.Node
 	Index  int
+}
+
+var iteratorPool = sync.Pool{
+	New: func() any {
+		return &Iterator{}
+	},
 }
 
 // IteratorMode controls value materialization behavior while scanning.
@@ -310,7 +317,7 @@ func (s *combinedLeafKeyState) rebuildAt(index uint16) (key []byte, flags byte, 
 type Iterator struct {
 	tree            *Tree
 	stack           []CursorItem
-	stackBuf        [16]CursorItem
+	stackBuf        [4]CursorItem
 	leafState       combinedLeafKeyState
 	start           []byte
 	end             []byte
@@ -377,34 +384,39 @@ func normalizeIteratorMode(mode IteratorMode) IteratorMode {
 	}
 }
 
+func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse bool) *Iterator {
+	it := iteratorPool.Get().(*Iterator)
+	*it = Iterator{
+		tree:            t,
+		start:           start,
+		end:             end,
+		mode:            mode,
+		reverse:         reverse,
+		verifyAlways:    t.pager != nil && t.pager.VerifyOnRead(),
+		slabAppender:    t.slabAppender,
+		slabBatcher:     t.slabBatcher,
+		slabKeyReader:   t.slabKeyReader,
+		slabFenceBlocks: t.slabFenceBlocks,
+		slabFenceKeys:   t.slabFenceKeys,
+		slabFenceRange:  t.slabFenceRange,
+		slabFenceSeek:   t.slabFenceSeek,
+		slabFenceSeekR:  t.slabFenceSeekR,
+		slabFencePtrCls: t.slabFencePtrCls,
+		slabKeyAppender: t.slabKeyAppender,
+		slabKeyBatcher:  t.slabKeyBatcher,
+	}
+	it.resetStack()
+	return it
+}
+
 // IteratorWithOptions returns a forward iterator over [start, end) using the
 // provided value materialization mode.
 func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
+	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return &Iterator{tree: t, valid: false, err: nil} // Invalid immediately
+		return t.acquireIterator(nil, nil, mode, false) // Invalid immediately
 	}
-	it := &Iterator{
-		tree:         t,
-		start:        start,
-		end:          end,
-		mode:         normalizeIteratorMode(opts.Mode),
-		reverse:      false,
-		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
-	}
-	it.slabAppender = t.slabAppender
-	if batch, ok := t.slabReader.(slabUnsafeBatchAppender); ok {
-		it.slabBatcher = batch
-	}
-	it.slabKeyReader = t.slabKeyReader
-	it.slabFenceBlocks = t.slabFenceBlocks
-	it.slabFenceKeys = t.slabFenceKeys
-	it.slabFenceRange = t.slabFenceRange
-	it.slabFenceSeek = t.slabFenceSeek
-	it.slabFenceSeekR = t.slabFenceSeekR
-	it.slabFencePtrCls = t.slabFencePtrCls
-	it.slabKeyAppender = t.slabKeyAppender
-	it.slabKeyBatcher = t.slabKeyBatcher
-	it.resetStack()
+	it := t.acquireIterator(start, end, mode, false)
 	it.Seek(start)
 	if start == nil {
 		it.prefetchArmed = true
@@ -419,31 +431,11 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 // ReverseIteratorWithOptions returns a reverse iterator over [start, end)
 // using the provided value materialization mode.
 func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
+	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return &Iterator{tree: t, valid: false, err: nil}
+		return t.acquireIterator(nil, nil, mode, true)
 	}
-	it := &Iterator{
-		tree:         t,
-		start:        start,
-		end:          end,
-		mode:         normalizeIteratorMode(opts.Mode),
-		reverse:      true,
-		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
-	}
-	it.slabAppender = t.slabAppender
-	if batch, ok := t.slabReader.(slabUnsafeBatchAppender); ok {
-		it.slabBatcher = batch
-	}
-	it.slabKeyReader = t.slabKeyReader
-	it.slabFenceBlocks = t.slabFenceBlocks
-	it.slabFenceKeys = t.slabFenceKeys
-	it.slabFenceRange = t.slabFenceRange
-	it.slabFenceSeek = t.slabFenceSeek
-	it.slabFenceSeekR = t.slabFenceSeekR
-	it.slabFencePtrCls = t.slabFencePtrCls
-	it.slabKeyAppender = t.slabKeyAppender
-	it.slabKeyBatcher = t.slabKeyBatcher
-	it.resetStack()
+	it := t.acquireIterator(start, end, mode, true)
 	// Reverse seek: Find >= end, then step back.
 	if end == nil {
 		it.seekRightMost()
@@ -1463,11 +1455,11 @@ func (it *Iterator) ValueCopy(dst []byte) []byte {
 }
 
 func (it *Iterator) Close() error {
-	it.stack = nil
-	it.resetPointerPrefetch()
-	it.resetFenceCursor()
-	it.clearPendingFenceSeek()
-	it.ptrScratch = nil
+	if it == nil || it.tree == nil {
+		return nil
+	}
+	*it = Iterator{}
+	iteratorPool.Put(it)
 	return nil
 }
 
