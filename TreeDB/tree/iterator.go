@@ -3,6 +3,7 @@ package tree
 import (
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -13,6 +14,44 @@ type CursorItem struct {
 	PageID uint64
 	Node   node.Node
 	Index  int
+}
+
+var iteratorPool = sync.Pool{
+	New: func() any {
+		return &Iterator{}
+	},
+}
+
+const (
+	// Drop unusually large iterator scratch/state buffers instead of returning
+	// them to the pool. This keeps long-tail scans from inflating steady-state
+	// pool footprint.
+	iteratorPoolMaxStackCap      = 128
+	iteratorPoolMaxFenceEntryCap = 512
+	iteratorPoolMaxFenceKeyCap   = 512
+	iteratorPoolMaxPrefetchCap   = 32
+	iteratorPoolMaxScratchBytes  = 256 << 10 // 256 KiB
+)
+
+type iteratorReusableBuffers struct {
+	stack            []CursorItem
+	fenceEntries     []FenceBlockEntry
+	fenceKeys        [][]byte
+	pendingFenceKeys [][]byte
+	prefetchPtrs     []page.ValuePtr
+	prefetchKeys     [][]byte
+	prefetchVals     [][]byte
+	ptrScratch       []byte
+	keyScratch       []byte
+}
+
+func retainSliceCap[T any](s []T, maxCap int) []T {
+	if cap(s) == 0 || cap(s) > maxCap {
+		return nil
+	}
+	full := s[:cap(s)]
+	clear(full)
+	return full[:0]
 }
 
 // IteratorMode controls value materialization behavior while scanning.
@@ -376,33 +415,85 @@ func normalizeIteratorMode(mode IteratorMode) IteratorMode {
 	}
 }
 
+func (it *Iterator) captureReusableBuffers() iteratorReusableBuffers {
+	return iteratorReusableBuffers{
+		stack:            it.stack,
+		fenceEntries:     it.fenceEntries,
+		fenceKeys:        it.fenceKeys,
+		pendingFenceKeys: it.pendingFenceKeys,
+		prefetchPtrs:     it.prefetchPtrs,
+		prefetchKeys:     it.prefetchKeys,
+		prefetchVals:     it.prefetchVals,
+		ptrScratch:       it.ptrScratch,
+		keyScratch:       it.leafState.keyScratch,
+	}
+}
+
+func (it *Iterator) trimReusableBuffers() iteratorReusableBuffers {
+	buf := iteratorReusableBuffers{}
+	if cap(it.stack) > len(it.stackBuf) {
+		buf.stack = retainSliceCap(it.stack, iteratorPoolMaxStackCap)
+	}
+	buf.fenceEntries = retainSliceCap(it.fenceEntries, iteratorPoolMaxFenceEntryCap)
+	buf.fenceKeys = retainSliceCap(it.fenceKeys, iteratorPoolMaxFenceKeyCap)
+	buf.pendingFenceKeys = retainSliceCap(it.pendingFenceKeys, iteratorPoolMaxFenceKeyCap)
+	buf.prefetchPtrs = retainSliceCap(it.prefetchPtrs, iteratorPoolMaxPrefetchCap)
+	buf.prefetchKeys = retainSliceCap(it.prefetchKeys, iteratorPoolMaxPrefetchCap)
+	buf.prefetchVals = retainSliceCap(it.prefetchVals, iteratorPoolMaxPrefetchCap)
+	buf.ptrScratch = retainSliceCap(it.ptrScratch, iteratorPoolMaxScratchBytes)
+	buf.keyScratch = retainSliceCap(it.leafState.keyScratch, iteratorPoolMaxScratchBytes)
+	return buf
+}
+
+func (it *Iterator) installReusableBuffers(buf iteratorReusableBuffers) {
+	if cap(buf.stack) > 0 {
+		it.stack = buf.stack[:0]
+	} else {
+		it.resetStack()
+	}
+	it.fenceEntries = buf.fenceEntries[:0]
+	it.fenceKeys = buf.fenceKeys[:0]
+	it.pendingFenceKeys = buf.pendingFenceKeys[:0]
+	it.prefetchPtrs = buf.prefetchPtrs[:0]
+	it.prefetchKeys = buf.prefetchKeys[:0]
+	it.prefetchVals = buf.prefetchVals[:0]
+	it.ptrScratch = buf.ptrScratch[:0]
+	it.leafState.keyScratch = buf.keyScratch[:0]
+}
+
+func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse bool) *Iterator {
+	it := iteratorPool.Get().(*Iterator)
+	buf := it.captureReusableBuffers()
+	*it = Iterator{
+		tree:            t,
+		start:           start,
+		end:             end,
+		mode:            mode,
+		reverse:         reverse,
+		verifyAlways:    t.pager != nil && t.pager.VerifyOnRead(),
+		slabAppender:    t.slabAppender,
+		slabBatcher:     t.slabBatcher,
+		slabKeyReader:   t.slabKeyReader,
+		slabFenceBlocks: t.slabFenceBlocks,
+		slabFenceKeys:   t.slabFenceKeys,
+		slabFenceRange:  t.slabFenceRange,
+		slabFenceSeek:   t.slabFenceSeek,
+		slabFencePtrCls: t.slabFencePtrCls,
+		slabKeyAppender: t.slabKeyAppender,
+		slabKeyBatcher:  t.slabKeyBatcher,
+	}
+	it.installReusableBuffers(buf)
+	return it
+}
+
 // IteratorWithOptions returns a forward iterator over [start, end) using the
 // provided value materialization mode.
 func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
+	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return &Iterator{tree: t, valid: false, err: nil} // Invalid immediately
+		return t.acquireIterator(nil, nil, mode, false) // Invalid immediately
 	}
-	it := &Iterator{
-		tree:         t,
-		start:        start,
-		end:          end,
-		mode:         normalizeIteratorMode(opts.Mode),
-		reverse:      false,
-		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
-	}
-	it.slabAppender = t.slabAppender
-	if batch, ok := t.slabReader.(slabUnsafeBatchAppender); ok {
-		it.slabBatcher = batch
-	}
-	it.slabKeyReader = t.slabKeyReader
-	it.slabFenceBlocks = t.slabFenceBlocks
-	it.slabFenceKeys = t.slabFenceKeys
-	it.slabFenceRange = t.slabFenceRange
-	it.slabFenceSeek = t.slabFenceSeek
-	it.slabFencePtrCls = t.slabFencePtrCls
-	it.slabKeyAppender = t.slabKeyAppender
-	it.slabKeyBatcher = t.slabKeyBatcher
-	it.resetStack()
+	it := t.acquireIterator(start, end, mode, false)
 	it.Seek(start)
 	if start == nil {
 		it.prefetchArmed = true
@@ -417,30 +508,11 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 // ReverseIteratorWithOptions returns a reverse iterator over [start, end)
 // using the provided value materialization mode.
 func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
+	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return &Iterator{tree: t, valid: false, err: nil}
+		return t.acquireIterator(nil, nil, mode, true)
 	}
-	it := &Iterator{
-		tree:         t,
-		start:        start,
-		end:          end,
-		mode:         normalizeIteratorMode(opts.Mode),
-		reverse:      true,
-		verifyAlways: t.pager != nil && t.pager.VerifyOnRead(),
-	}
-	it.slabAppender = t.slabAppender
-	if batch, ok := t.slabReader.(slabUnsafeBatchAppender); ok {
-		it.slabBatcher = batch
-	}
-	it.slabKeyReader = t.slabKeyReader
-	it.slabFenceBlocks = t.slabFenceBlocks
-	it.slabFenceKeys = t.slabFenceKeys
-	it.slabFenceRange = t.slabFenceRange
-	it.slabFenceSeek = t.slabFenceSeek
-	it.slabFencePtrCls = t.slabFencePtrCls
-	it.slabKeyAppender = t.slabKeyAppender
-	it.slabKeyBatcher = t.slabKeyBatcher
-	it.resetStack()
+	it := t.acquireIterator(start, end, mode, true)
 	// Reverse seek: Find >= end, then step back.
 	if end == nil {
 		it.seekRightMost()
@@ -1427,11 +1499,13 @@ func (it *Iterator) ValueCopy(dst []byte) []byte {
 }
 
 func (it *Iterator) Close() error {
-	it.stack = nil
-	it.resetPointerPrefetch()
-	it.resetFenceCursor()
-	it.clearPendingFenceSeek()
-	it.ptrScratch = nil
+	if it == nil || it.tree == nil {
+		return nil
+	}
+	buf := it.trimReusableBuffers()
+	*it = Iterator{}
+	it.installReusableBuffers(buf)
+	iteratorPool.Put(it)
 	return nil
 }
 

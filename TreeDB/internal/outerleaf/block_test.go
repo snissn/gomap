@@ -182,6 +182,42 @@ func TestEncodePayloadSnappyReusesDstNoAllocs(t *testing.T) {
 	}
 }
 
+func TestDecodePayloadSnappyPreallocatedDstRoundTrip(t *testing.T) {
+	raw := bytes.Repeat([]byte("outerleaf-decode-payload|"), 256)
+	encoded := snappy.Encode(nil, raw)
+	dst := make([]byte, 0, len(raw))
+
+	decoded, err := decodePayload(blockCodecSnappy, encoded, len(raw), dst[:0])
+	if err != nil {
+		t.Fatalf("decodePayload: %v", err)
+	}
+	if !bytes.Equal(decoded, raw) {
+		t.Fatalf("decoded payload mismatch")
+	}
+	if cap(decoded) < len(raw) {
+		t.Fatalf("decoded cap=%d want at least %d", cap(decoded), len(raw))
+	}
+}
+
+func TestDecodePayloadSnappyPreallocatedDstNoAllocs(t *testing.T) {
+	raw := bytes.Repeat([]byte("outerleaf-decode-payload|"), 256)
+	encoded := snappy.Encode(nil, raw)
+	dst := make([]byte, len(raw))
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		decoded, err := decodePayload(blockCodecSnappy, encoded, len(raw), dst[:len(raw)])
+		if err != nil {
+			t.Fatalf("decodePayload: %v", err)
+		}
+		if len(decoded) != len(raw) {
+			t.Fatalf("decoded len=%d want=%d", len(decoded), len(raw))
+		}
+	})
+	if allocs != 0 {
+		t.Fatalf("expected zero allocs per run, got %.2f", allocs)
+	}
+}
+
 func TestEncodeDecodeEntriesLookup(t *testing.T) {
 	codecs := []struct {
 		name  string

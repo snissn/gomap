@@ -14437,6 +14437,20 @@ func (it *singleSourceIterator) Next() {
 	it.advance()
 }
 
+func (it *singleSourceIterator) UnsafeKey() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.iter.UnsafeKey()
+}
+
+func (it *singleSourceIterator) UnsafeValue() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.iter.UnsafeValue()
+}
+
 func (it *singleSourceIterator) Valid() bool               { return it.valid }
 func (it *singleSourceIterator) Key() []byte               { return it.iter.Key() }
 func (it *singleSourceIterator) Value() []byte             { return it.iter.Value() }
