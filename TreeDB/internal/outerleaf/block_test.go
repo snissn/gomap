@@ -579,6 +579,79 @@ func TestDecodeKeysRangeWithVerify(t *testing.T) {
 	}
 }
 
+func TestDecodeKeysRangeLeaseWithVerify(t *testing.T) {
+	payload, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k10"), Value: []byte("v10")},
+		{Key: []byte("k20"), Value: []byte("v20")},
+		{Key: []byte("k30"), Value: []byte("v30")},
+		{Key: []byte("k40"), Value: []byte("v40")},
+	}, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeEntries(v2): %v", err)
+	}
+
+	lease, err := DecodeKeysRangeLeaseWithVerify(payload, []byte("k15"), []byte("k35"), true)
+	if err != nil {
+		t.Fatalf("DecodeKeysRangeLeaseWithVerify: %v", err)
+	}
+	if lease == nil {
+		t.Fatalf("lease=nil want non-nil")
+	}
+	keys := lease.Keys()
+	want := [][]byte{[]byte("k20"), []byte("k30")}
+	if len(keys) != len(want) {
+		t.Fatalf("keys len=%d want=%d", len(keys), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(keys[i], want[i]) {
+			t.Fatalf("keys[%d]=%q want=%q", i, keys[i], want[i])
+		}
+	}
+	lease.Release()
+	lease.Release()
+}
+
+func TestDecodeLowerBoundAndKeysOnMatchLeaseWithVerify(t *testing.T) {
+	payload, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k10"), Value: []byte("v10")},
+		{Key: []byte("k20"), Value: []byte("v20")},
+		{Key: []byte("k30"), Value: []byte("v30")},
+	}, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeEntries(v2): %v", err)
+	}
+
+	pos, below, above, lease, err := DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload, []byte("k20"), true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysOnMatchLeaseWithVerify: %v", err)
+	}
+	if pos != 1 || below || above {
+		t.Fatalf("got pos=%d below=%v above=%v", pos, below, above)
+	}
+	if lease == nil {
+		t.Fatalf("lease=nil want non-nil")
+	}
+	keys := lease.Keys()
+	want := [][]byte{[]byte("k10"), []byte("k20"), []byte("k30")}
+	if len(keys) != len(want) {
+		t.Fatalf("keys len=%d want=%d", len(keys), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(keys[i], want[i]) {
+			t.Fatalf("keys[%d]=%q want=%q", i, keys[i], want[i])
+		}
+	}
+	lease.Release()
+
+	pos, below, above, lease, err = DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload, []byte("k09"), true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysOnMatchLeaseWithVerify below: %v", err)
+	}
+	if pos != 0 || !below || above || lease != nil {
+		t.Fatalf("below got pos=%d below=%v above=%v lease=%v", pos, below, above, lease)
+	}
+}
+
 func TestDecodedBlockKeysRange(t *testing.T) {
 	enc, err := EncodeEntries(nil, []Entry{
 		{Key: []byte("k10"), Value: []byte("v10")},

@@ -23,6 +23,19 @@ type valueReader struct {
 	keyCache               *outerLeafKeyCache
 }
 
+type staticFenceKeysLease struct {
+	keys [][]byte
+}
+
+func (l *staticFenceKeysLease) Keys() [][]byte {
+	if l == nil {
+		return nil
+	}
+	return l.keys
+}
+
+func (l *staticFenceKeysLease) Release() {}
+
 const outerLeafLookupScratchMaxRetain = 1 << 20
 
 var outerLeafLookupScratchPool sync.Pool
@@ -417,6 +430,40 @@ func (r valueReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool
 	return keys, true, nil
 }
 
+func (r valueReader) ReadUnsafeFenceBlockKeysRangeLease(ptr page.ValuePtr, lower []byte, upper []byte) (tree.FenceKeysLease, bool, error) {
+	if !r.fenceLookupModeEnabled() {
+		return nil, false, nil
+	}
+	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+		return nil, true, nil
+	}
+	if cachedKeys := r.cachedOuterLeafKeys(ptr); cachedKeys != nil {
+		return &staticFenceKeysLease{keys: sliceFenceKeysRange(cachedKeys, lower, upper)}, true, nil
+	}
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		keys, err := block.KeysRange(nil, lower, upper)
+		if err != nil {
+			return nil, true, err
+		}
+		return &staticFenceKeysLease{keys: keys}, true, nil
+	}
+	raw, err := r.readRawUnsafe(ptr)
+	if err != nil {
+		return nil, true, err
+	}
+	if !outerleaf.HasMagic(raw) {
+		return nil, false, nil
+	}
+	lease, decErr := outerleaf.DecodeKeysRangeLeaseWithVerify(raw, lower, upper, !r.skipOuterLeafChecksums)
+	if decErr != nil {
+		return nil, true, decErr
+	}
+	if lease == nil {
+		return nil, true, nil
+	}
+	return lease, true, nil
+}
+
 func (r valueReader) ReadUnsafeFenceBlockKeysRange(ptr page.ValuePtr, lower []byte, upper []byte) ([][]byte, bool, error) {
 	if !r.fenceLookupModeEnabled() {
 		return nil, false, nil
@@ -496,6 +543,56 @@ func (r valueReader) ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (po
 	return lower, false, false, blockKeys, true, nil
 }
 
+func (r valueReader) ReadUnsafeFenceBlockSeekLease(ptr page.ValuePtr, key []byte) (pos int, below bool, above bool, lease tree.FenceKeysLease, ok bool, err error) {
+	if !r.fenceLookupModeEnabled() {
+		return 0, false, false, nil, false, nil
+	}
+	if cachedKeys := r.cachedOuterLeafKeys(ptr); cachedKeys != nil {
+		lower, isBelow, isAbove := classifyFenceKeys(cachedKeys, key)
+		if isBelow || isAbove {
+			return lower, isBelow, isAbove, nil, true, nil
+		}
+		return lower, false, false, &staticFenceKeysLease{keys: cachedKeys}, true, nil
+	}
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		lower, isBelow, isAbove, lowerErr := block.LowerBound(key)
+		if lowerErr != nil {
+			return 0, false, false, nil, true, lowerErr
+		}
+		if isBelow || isAbove {
+			return lower, isBelow, isAbove, nil, true, nil
+		}
+		blockKeys, keyErr := block.Keys(nil)
+		if keyErr != nil {
+			return 0, false, false, nil, true, keyErr
+		}
+		r.cacheOuterLeafKeys(ptr, blockKeys)
+		return lower, false, false, &staticFenceKeysLease{keys: blockKeys}, true, nil
+	}
+
+	raw, readErr := r.readRawUnsafe(ptr)
+	if readErr != nil {
+		return 0, false, false, nil, true, readErr
+	}
+	if !outerleaf.HasMagic(raw) {
+		return 0, false, false, nil, false, nil
+	}
+	lower, isBelow, isAbove, keyLease, decErr := outerleaf.DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(raw, key, !r.skipOuterLeafChecksums)
+	if decErr != nil {
+		return 0, false, false, nil, true, decErr
+	}
+	if isBelow || isAbove {
+		if keyLease != nil {
+			keyLease.Release()
+		}
+		return lower, isBelow, isAbove, nil, true, nil
+	}
+	if keyLease != nil {
+		r.cacheOuterLeafKeys(ptr, cloneFenceKeys(keyLease.Keys()))
+	}
+	return lower, false, false, keyLease, true, nil
+}
+
 func classifyFenceKeys(keys [][]byte, key []byte) (pos int, below bool, above bool) {
 	if len(keys) == 0 {
 		return 0, false, true
@@ -538,6 +635,23 @@ func sliceFenceKeysRange(keys [][]byte, lower []byte, upper []byte) [][]byte {
 		return nil
 	}
 	return keys[start:end]
+}
+
+func cloneFenceKeys(keys [][]byte) [][]byte {
+	if len(keys) == 0 {
+		return nil
+	}
+	cloned := make([][]byte, len(keys))
+	for i := range keys {
+		if len(keys[i]) == 0 {
+			cloned[i] = []byte{}
+			continue
+		}
+		k := make([]byte, len(keys[i]))
+		copy(k, keys[i])
+		cloned[i] = k
+	}
+	return cloned
 }
 
 func (r valueReader) readRaw(ptr page.ValuePtr) ([]byte, error) {
