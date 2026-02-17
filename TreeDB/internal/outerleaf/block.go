@@ -53,6 +53,11 @@ const (
 
 var (
 	outerLeafBytesPool      sync.Pool
+	outerLeafBytesEntryPool = sync.Pool{
+		New: func() any {
+			return &bytesPoolEntry{}
+		},
+	}
 	outerLeafRestartsPool   sync.Pool
 	outerLeafLeaseKeysPool  sync.Pool
 	outerLeafLeaseArenaPool sync.Pool
@@ -119,6 +124,10 @@ type LookupResult struct {
 type keyLeaseChunk struct {
 	buf  []byte
 	next *keyLeaseChunk
+}
+
+type bytesPoolEntry struct {
+	buf []byte
 }
 
 // KeyLease provides explicit ownership for decoded key vectors.
@@ -467,8 +476,19 @@ func getPooledBytes(minCap int) []byte {
 	if minCap <= 0 {
 		minCap = 1
 	}
-	if v := outerLeafBytesPool.Get(); v != nil {
-		if buf, ok := v.([]byte); ok && cap(buf) >= minCap {
+	for {
+		v := outerLeafBytesPool.Get()
+		if v == nil {
+			break
+		}
+		entry, ok := v.(*bytesPoolEntry)
+		if !ok || entry == nil {
+			continue
+		}
+		buf := entry.buf
+		entry.buf = nil
+		outerLeafBytesEntryPool.Put(entry)
+		if cap(buf) >= minCap {
 			return buf[:0]
 		}
 	}
@@ -479,7 +499,9 @@ func putPooledBytes(buf []byte) {
 	if cap(buf) == 0 || cap(buf) > maxPooledOuterLeafBytesCap {
 		return
 	}
-	outerLeafBytesPool.Put(buf[:0])
+	entry := outerLeafBytesEntryPool.Get().(*bytesPoolEntry)
+	entry.buf = buf[:0]
+	outerLeafBytesPool.Put(entry)
 }
 
 func getPooledRestarts(minCap int) []uint32 {
