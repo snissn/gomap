@@ -73,27 +73,46 @@ func (r *countingValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	return r.inner.ReadUnsafe(ptr)
 }
 
-func TestIteratorShouldReturnToPoolCapacityGuards(t *testing.T) {
+func TestIteratorTrimReusableBuffers(t *testing.T) {
 	it := &Iterator{}
-	if !it.shouldReturnToPool() {
-		t.Fatalf("empty iterator should be eligible for pooling")
+	it.ptrScratch = make([]byte, 0, 128)
+	it.prefetchPtrs = make([]page.ValuePtr, 0, 8)
+	it.stack = make([]CursorItem, 0, 64)
+	buf := it.trimReusableBuffers()
+	if cap(buf.ptrScratch) != 128 {
+		t.Fatalf("ptr scratch cap=%d want=128", cap(buf.ptrScratch))
+	}
+	if cap(buf.prefetchPtrs) != 8 {
+		t.Fatalf("prefetch ptr cap=%d want=8", cap(buf.prefetchPtrs))
+	}
+	if cap(buf.stack) != 64 {
+		t.Fatalf("stack cap=%d want=64", cap(buf.stack))
 	}
 
+	it = &Iterator{}
 	it.ptrScratch = make([]byte, 0, iteratorPoolMaxScratchBytes+1)
-	if it.shouldReturnToPool() {
-		t.Fatalf("iterator with oversized ptr scratch should not be pooled")
-	}
-
-	it.ptrScratch = nil
 	it.prefetchPtrs = make([]page.ValuePtr, 0, iteratorPoolMaxPrefetchCap+1)
-	if it.shouldReturnToPool() {
-		t.Fatalf("iterator with oversized prefetch ptrs should not be pooled")
-	}
-
-	it.prefetchPtrs = nil
 	it.stack = make([]CursorItem, 0, iteratorPoolMaxStackCap+1)
-	if it.shouldReturnToPool() {
-		t.Fatalf("iterator with oversized stack should not be pooled")
+	buf = it.trimReusableBuffers()
+	if cap(buf.ptrScratch) != 0 {
+		t.Fatalf("oversized ptr scratch should be dropped (cap=%d)", cap(buf.ptrScratch))
+	}
+	if cap(buf.prefetchPtrs) != 0 {
+		t.Fatalf("oversized prefetch ptrs should be dropped (cap=%d)", cap(buf.prefetchPtrs))
+	}
+	if cap(buf.stack) != 0 {
+		t.Fatalf("oversized stack should be dropped (cap=%d)", cap(buf.stack))
+	}
+}
+
+func TestIteratorInstallReusableBuffersFallbacksToStackBuf(t *testing.T) {
+	it := &Iterator{}
+	it.installReusableBuffers(iteratorReusableBuffers{})
+	if cap(it.stack) != len(it.stackBuf) {
+		t.Fatalf("stack cap=%d want inline=%d", cap(it.stack), len(it.stackBuf))
+	}
+	if len(it.stack) != 0 {
+		t.Fatalf("stack len=%d want 0", len(it.stack))
 	}
 }
 

@@ -26,12 +26,33 @@ const (
 	// Drop unusually large iterator scratch/state buffers instead of returning
 	// them to the pool. This keeps long-tail scans from inflating steady-state
 	// pool footprint.
-	iteratorPoolMaxStackCap      = 256
-	iteratorPoolMaxFenceEntryCap = 2048
-	iteratorPoolMaxFenceKeyCap   = 2048
-	iteratorPoolMaxPrefetchCap   = 256
-	iteratorPoolMaxScratchBytes  = 1 << 20 // 1 MiB
+	iteratorPoolMaxStackCap      = 128
+	iteratorPoolMaxFenceEntryCap = 512
+	iteratorPoolMaxFenceKeyCap   = 512
+	iteratorPoolMaxPrefetchCap   = 32
+	iteratorPoolMaxScratchBytes  = 256 << 10 // 256 KiB
 )
+
+type iteratorReusableBuffers struct {
+	stack            []CursorItem
+	fenceEntries     []FenceBlockEntry
+	fenceKeys        [][]byte
+	pendingFenceKeys [][]byte
+	prefetchPtrs     []page.ValuePtr
+	prefetchKeys     [][]byte
+	prefetchVals     [][]byte
+	ptrScratch       []byte
+	keyScratch       []byte
+}
+
+func retainSliceCap[T any](s []T, maxCap int) []T {
+	if cap(s) == 0 || cap(s) > maxCap {
+		return nil
+	}
+	full := s[:cap(s)]
+	clear(full)
+	return full[:0]
+}
 
 // IteratorMode controls value materialization behavior while scanning.
 type IteratorMode uint8
@@ -394,8 +415,55 @@ func normalizeIteratorMode(mode IteratorMode) IteratorMode {
 	}
 }
 
+func (it *Iterator) captureReusableBuffers() iteratorReusableBuffers {
+	return iteratorReusableBuffers{
+		stack:            it.stack,
+		fenceEntries:     it.fenceEntries,
+		fenceKeys:        it.fenceKeys,
+		pendingFenceKeys: it.pendingFenceKeys,
+		prefetchPtrs:     it.prefetchPtrs,
+		prefetchKeys:     it.prefetchKeys,
+		prefetchVals:     it.prefetchVals,
+		ptrScratch:       it.ptrScratch,
+		keyScratch:       it.leafState.keyScratch,
+	}
+}
+
+func (it *Iterator) trimReusableBuffers() iteratorReusableBuffers {
+	buf := iteratorReusableBuffers{}
+	if cap(it.stack) > len(it.stackBuf) {
+		buf.stack = retainSliceCap(it.stack, iteratorPoolMaxStackCap)
+	}
+	buf.fenceEntries = retainSliceCap(it.fenceEntries, iteratorPoolMaxFenceEntryCap)
+	buf.fenceKeys = retainSliceCap(it.fenceKeys, iteratorPoolMaxFenceKeyCap)
+	buf.pendingFenceKeys = retainSliceCap(it.pendingFenceKeys, iteratorPoolMaxFenceKeyCap)
+	buf.prefetchPtrs = retainSliceCap(it.prefetchPtrs, iteratorPoolMaxPrefetchCap)
+	buf.prefetchKeys = retainSliceCap(it.prefetchKeys, iteratorPoolMaxPrefetchCap)
+	buf.prefetchVals = retainSliceCap(it.prefetchVals, iteratorPoolMaxPrefetchCap)
+	buf.ptrScratch = retainSliceCap(it.ptrScratch, iteratorPoolMaxScratchBytes)
+	buf.keyScratch = retainSliceCap(it.leafState.keyScratch, iteratorPoolMaxScratchBytes)
+	return buf
+}
+
+func (it *Iterator) installReusableBuffers(buf iteratorReusableBuffers) {
+	if cap(buf.stack) > 0 {
+		it.stack = buf.stack[:0]
+	} else {
+		it.resetStack()
+	}
+	it.fenceEntries = buf.fenceEntries[:0]
+	it.fenceKeys = buf.fenceKeys[:0]
+	it.pendingFenceKeys = buf.pendingFenceKeys[:0]
+	it.prefetchPtrs = buf.prefetchPtrs[:0]
+	it.prefetchKeys = buf.prefetchKeys[:0]
+	it.prefetchVals = buf.prefetchVals[:0]
+	it.ptrScratch = buf.ptrScratch[:0]
+	it.leafState.keyScratch = buf.keyScratch[:0]
+}
+
 func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse bool) *Iterator {
 	it := iteratorPool.Get().(*Iterator)
+	buf := it.captureReusableBuffers()
 	*it = Iterator{
 		tree:            t,
 		start:           start,
@@ -414,7 +482,7 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse boo
 		slabKeyAppender: t.slabKeyAppender,
 		slabKeyBatcher:  t.slabKeyBatcher,
 	}
-	it.resetStack()
+	it.installReusableBuffers(buf)
 	return it
 }
 
@@ -1434,43 +1502,11 @@ func (it *Iterator) Close() error {
 	if it == nil || it.tree == nil {
 		return nil
 	}
-	reuse := it.shouldReturnToPool()
+	buf := it.trimReusableBuffers()
 	*it = Iterator{}
-	if reuse {
-		iteratorPool.Put(it)
-	}
+	it.installReusableBuffers(buf)
+	iteratorPool.Put(it)
 	return nil
-}
-
-func (it *Iterator) shouldReturnToPool() bool {
-	if cap(it.stack) > iteratorPoolMaxStackCap {
-		return false
-	}
-	if cap(it.fenceEntries) > iteratorPoolMaxFenceEntryCap {
-		return false
-	}
-	if cap(it.fenceKeys) > iteratorPoolMaxFenceKeyCap {
-		return false
-	}
-	if cap(it.pendingFenceKeys) > iteratorPoolMaxFenceKeyCap {
-		return false
-	}
-	if cap(it.prefetchPtrs) > iteratorPoolMaxPrefetchCap {
-		return false
-	}
-	if cap(it.prefetchKeys) > iteratorPoolMaxPrefetchCap {
-		return false
-	}
-	if cap(it.prefetchVals) > iteratorPoolMaxPrefetchCap {
-		return false
-	}
-	if cap(it.ptrScratch) > iteratorPoolMaxScratchBytes {
-		return false
-	}
-	if cap(it.leafState.keyScratch) > iteratorPoolMaxScratchBytes {
-		return false
-	}
-	return true
 }
 
 func (it *Iterator) Seek(key []byte) {
