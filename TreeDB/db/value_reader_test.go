@@ -102,6 +102,22 @@ func makeTestOuterLeafPayloadWithCodec(t *testing.T, codec uint8, offset uint64,
 	return encoded, ptr
 }
 
+func makeTestOuterLeafSinglePayload(t *testing.T, codec uint8, offset uint64, key string, value string) ([]byte, page.ValuePtr) {
+	t.Helper()
+	encoded, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
+		{Key: []byte(key), Value: []byte(value)},
+	}, codec, 16)
+	if err != nil {
+		t.Fatalf("encode outer-leaf payload: %v", err)
+	}
+	ptr := page.ValuePtr{
+		FileID: page.ValueLogFileID(7),
+		Offset: offset,
+		Length: uint32(len(encoded)),
+	}
+	return encoded, ptr
+}
+
 func makeTestOuterLeafPayload(t *testing.T) ([]byte, *outerleaf.DecodedBlock, page.ValuePtr) {
 	t.Helper()
 	encoded, ptr := makeTestOuterLeafPayloadWithCodec(t, uint8(ValueLogBlockSnappy), 128, "v1", "v2", "v3")
@@ -451,6 +467,96 @@ func TestValueReaderReadUnsafeFenceBlockKeysRange_UsesKeyCacheWindow(t *testing.
 	}
 	if reader.readUnsafeCalls != 1 {
 		t.Fatalf("readUnsafeCalls after key-cache window = %d, want 1", reader.readUnsafeCalls)
+	}
+}
+
+func TestValueReaderReadUnsafeFenceBlockKeys_OuterLeafKeyCacheChurn(t *testing.T) {
+	keyCache := newOuterLeafKeyCache(1)
+	if keyCache == nil {
+		t.Fatalf("expected non-nil key cache")
+	}
+
+	const hotCount = 3
+	const churnPerCycle = 6
+	const cycles = 12
+	const totalChurnEntries = churnPerCycle * cycles
+
+	payloads := make(map[page.ValuePtr][]byte, hotCount+totalChurnEntries)
+	hotPointers := make([]page.ValuePtr, hotCount)
+	churnPointers := make([]page.ValuePtr, totalChurnEntries)
+	expectedByPointer := make(map[page.ValuePtr][]byte, hotCount+totalChurnEntries)
+
+	for i := 0; i < hotCount; i++ {
+		offset := uint64(128 + i*64)
+		key := fmt.Sprintf("hot-%02d", i)
+		value := fmt.Sprintf("v-hot-%02d", i)
+		payload, ptr := makeTestOuterLeafSinglePayload(t, uint8(ValueLogBlockSnappy), offset, key, value)
+		payloads[ptr] = payload
+		hotPointers[i] = ptr
+		expectedByPointer[ptr] = []byte(key)
+	}
+	for i := 0; i < totalChurnEntries; i++ {
+		offset := uint64(1024 + i*64)
+		key := fmt.Sprintf("churn-%04d", i)
+		value := fmt.Sprintf("v-churn-%04d", i)
+		payload, ptr := makeTestOuterLeafSinglePayload(t, uint8(ValueLogBlockSnappy), offset, key, value)
+		payloads[ptr] = payload
+		churnPointers[i] = ptr
+		expectedByPointer[ptr] = []byte(key)
+	}
+
+	reader := &stubValueLogReader{
+		payloads: payloads,
+	}
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+		keyCache:      keyCache,
+	}
+
+	readKeys := func(ptr page.ValuePtr) {
+		keys, ok, err := r.ReadUnsafeFenceBlockKeys(ptr)
+		if err != nil {
+			t.Fatalf("ReadUnsafeFenceBlockKeys(%+v): %v", ptr, err)
+		}
+		if !ok {
+			t.Fatalf("ReadUnsafeFenceBlockKeys(%+v): ok=false", ptr)
+		}
+		expect, found := expectedByPointer[ptr]
+		if !found {
+			t.Fatalf("missing expectation for %+v", ptr)
+		}
+		if len(keys) != 1 || !bytes.Equal(keys[0], expect) {
+			t.Fatalf("ReadUnsafeFenceBlockKeys(%+v): %q want %q", ptr, keys, expect)
+		}
+	}
+
+	for cycle := 0; cycle < cycles; cycle++ {
+		for i := 0; i < churnPerCycle; i++ {
+			readKeys(churnPointers[cycle*churnPerCycle+i])
+		}
+		for _, ptr := range hotPointers {
+			readKeys(ptr)
+		}
+		for _, ptr := range hotPointers {
+			readKeys(ptr)
+		}
+	}
+
+	_, misses, entries, capacity := keyCache.stats()
+	if entries > capacity {
+		t.Fatalf("key cache entries = %d, want <= %d", entries, capacity)
+	}
+	if misses == 0 {
+		t.Fatalf("key cache misses = 0, expected churned cache misses with capacity %d", capacity)
+	}
+	if reader.readUnsafeCalls != int(misses) {
+		t.Fatalf("readUnsafeCalls = %d, want %d", reader.readUnsafeCalls, misses)
+	}
+	hits, _, _, _ := keyCache.stats()
+	minExpectedHits := uint64(hotCount * cycles)
+	if hits < minExpectedHits {
+		t.Fatalf("key cache hits = %d, want >= %d", hits, minExpectedHits)
 	}
 }
 
