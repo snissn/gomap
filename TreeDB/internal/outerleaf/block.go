@@ -1849,6 +1849,23 @@ func DecodeBlockLeaseWithScratchAndVerify(payload []byte, scratch []byte, dst *D
 	return block, nextScratch, nil
 }
 
+// ReclaimTransferredScratchForRelease hands caller-owned scratch (returned by
+// DecodeBlockLeaseWithScratchAndVerify) back to the block so Release can return
+// it to the outerleaf bytes pool.
+//
+// It returns nil when ownership was reclaimed; otherwise it returns scratch
+// unchanged.
+func (d *DecodedBlock) ReclaimTransferredScratchForRelease(scratch []byte) []byte {
+	if d == nil || len(d.raw) == 0 || cap(scratch) == 0 {
+		return scratch
+	}
+	if &d.raw[0] != &scratch[:1][0] {
+		return scratch
+	}
+	d.pooledRaw = true
+	return nil
+}
+
 func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedBlock, error) {
 	return decodeBlockMode(payload, scratch, verifyChecksum, false, nil)
 }

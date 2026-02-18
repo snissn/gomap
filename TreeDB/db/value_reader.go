@@ -420,6 +420,7 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 	}
 	releaseAfterLookup := true
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
+		nextScratch = block.ReclaimTransferredScratchForRelease(nextScratch)
 		r.cache.put(cacheKey, block)
 		releaseAfterLookup = false
 	}
@@ -470,10 +471,8 @@ func (r valueReader) decodeValueForKeyFoundWithLeaseCtx(cacheKey outerLeafBlockK
 		return nil, false, nil
 	}
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
-		// Cached blocks retain decoded raw backing; do not reuse the same
-		// scratch in this context or subsequent decodes can overwrite cached
-		// block bytes.
-		ctx.scratch = nil
+		nextScratch = block.ReclaimTransferredScratchForRelease(nextScratch)
+		ctx.scratch = nextScratch
 		ctx.block = outerLeafFenceDecodedBlockGet()
 		r.cache.put(cacheKey, block)
 		entry, found, err := block.EntryForKey(key)

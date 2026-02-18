@@ -236,6 +236,35 @@ func TestValueReaderReadUnsafeFenceForKey_CacheHitSkipsReadUnsafe(t *testing.T) 
 	}
 }
 
+func TestOuterLeafBlockCachePut_EvictReleasesLeaseBlock(t *testing.T) {
+	payloadA, _, ptrA := makeTestOuterLeafPayload(t)
+	payloadB, _, _ := makeTestOuterLeafPayload(t)
+	ptrB := page.ValuePtr{
+		FileID: ptrA.FileID,
+		Offset: ptrA.Offset + 4096,
+		Length: ptrA.Length,
+	}
+	blockA, err := outerleaf.DecodeBlockLease(payloadA)
+	if err != nil {
+		t.Fatalf("DecodeBlockLease(A): %v", err)
+	}
+	blockB, err := outerleaf.DecodeBlockLease(payloadB)
+	if err != nil {
+		t.Fatalf("DecodeBlockLease(B): %v", err)
+	}
+	if len(blockA.RawBytes()) == 0 {
+		t.Fatalf("blockA raw empty before cache insert")
+	}
+
+	cache := newOuterLeafBlockCache(1)
+	cache.put(newOuterLeafBlockKey(ptrA), blockA)
+	cache.put(newOuterLeafBlockKey(ptrB), blockB)
+
+	if blockA.RawBytes() != nil {
+		t.Fatalf("expected evicted blockA raw to be released")
+	}
+}
+
 func TestValueReaderReadUnsafeFenceForKey_NoCacheInline(t *testing.T) {
 	payload, _, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
