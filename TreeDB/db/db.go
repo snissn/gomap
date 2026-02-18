@@ -132,7 +132,7 @@ type DB struct {
 }
 
 const (
-	defaultChunkSize                 = 16 * 1024 * 1024
+	defaultChunkSize                 = 256 * 1024
 	defaultMaintenanceOpsPerCoalesce = 400_000
 )
 
@@ -426,19 +426,19 @@ type Options struct {
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported.
 	ReadOnly  bool
-	ChunkSize int64 // Default 16MiB
+	ChunkSize int64 // Default 256KiB
 	// DictDBChunkSize controls the mmap chunk size used for the `dictdb/` side
 	// store when TreeDB is opened via the public `treedb.Open` wrapper.
 	//
 	// It is intentionally independent of ChunkSize so benchmarks and callers can
 	// tune the main index pager without inflating dictdb disk usage.
 	//
-	// Values <= 0 use a default of 1MiB.
+	// Values <= 0 use a default of 64KiB.
 	DictDBChunkSize int64
 	// TemplateDBChunkSize controls the mmap chunk size used for the `templatedb/`
 	// side store when template compression is enabled.
 	//
-	// Values <= 0 use a default of 1MiB.
+	// Values <= 0 use a default of 64KiB.
 	TemplateDBChunkSize int64
 	KeepRecent          uint64 // Default 10000
 	// PagerSyncConcurrency controls how many goroutines may msync dirty chunks

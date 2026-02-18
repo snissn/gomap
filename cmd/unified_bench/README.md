@@ -57,6 +57,7 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)
 - `-leveldb-block-size` LevelDB: table block size in bytes (default 4096)
+- `-treedb-chunk-size` TreeDB: pager chunk size in bytes (default `262144`)
 - `-treedb-flush-threshold` TreeDB (cached) flush threshold in bytes (default 64MB)
 - `-treedb-max-queued-memtables` TreeDB (cached) max queued immutable memtables before applying backpressure flush (`0`=default, `<0`=disable)
 - `-treedb-slowdown-backlog-seconds` TreeDB (cached) start backpressure when queued backlog exceeds this many seconds of flush work
