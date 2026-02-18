@@ -10,6 +10,14 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
+// readViaMmapViewPrefixCacheEnabled controls whether unsafe mmap-view reads
+// consult/publish the shared per-file grouped prefix cache.
+//
+// Random parallel key-lookups in fence mode tend to have low temporal locality
+// and high fan-in to the same file cache mutex; disabling this avoids
+// lock-contention amplification on the unsafe view path.
+const readViaMmapViewPrefixCacheEnabled = false
+
 // MaxDeadMappings caps the number of old mmaps retained to avoid exhausting
 // vm.max_map_count. Set <= 0 to disable the cap.
 //
@@ -195,7 +203,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			}
 			return val, nil, true
 		}
-	} else if f.cacheStart.Load() == start {
+	} else if readViaMmapViewPrefixCacheEnabled && f.cacheStart.Load() == start {
 		f.cacheMu.Lock()
 		hit := f.cacheStart.Load() == start &&
 			f.cacheK > 0 &&
@@ -274,17 +282,19 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 
 		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw)
 
-		// Publish cache for subsequent reads from this grouped record.
-		f.cacheMu.Lock()
-		f.cacheK = k
-		f.cacheFlags = fFlags
-		f.cacheLen = prefixLen
-		f.cacheOffs = offsets
-		// readViaMmapView can return a view into cached raw bytes, so this cache
-		// must never own pooled decode scratch memory.
-		f.setCacheRawLocked(raw, false)
-		f.cacheStart.Store(start)
-		f.cacheMu.Unlock()
+		if readViaMmapViewPrefixCacheEnabled {
+			// Publish cache for subsequent reads from this grouped record.
+			f.cacheMu.Lock()
+			f.cacheK = k
+			f.cacheFlags = fFlags
+			f.cacheLen = prefixLen
+			f.cacheOffs = offsets
+			// readViaMmapView can return a view into cached raw bytes, so this cache
+			// must never own pooled decode scratch memory.
+			f.setCacheRawLocked(raw, false)
+			f.cacheStart.Store(start)
+			f.cacheMu.Unlock()
+		}
 
 		val, err := decodeTemplatePayload(raw[valStart:valEnd])
 		if err != nil {
@@ -293,15 +303,17 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		return val, nil, true
 	}
 
-	// Publish prefix cache for subsequent uncompressed grouped reads.
-	f.cacheMu.Lock()
-	f.cacheK = k
-	f.cacheFlags = fFlags
-	f.cacheLen = prefixLen
-	f.cacheOffs = offsets
-	f.setCacheRawLocked(nil, false)
-	f.cacheStart.Store(start)
-	f.cacheMu.Unlock()
+	if readViaMmapViewPrefixCacheEnabled {
+		// Publish prefix cache for subsequent uncompressed grouped reads.
+		f.cacheMu.Lock()
+		f.cacheK = k
+		f.cacheFlags = fFlags
+		f.cacheLen = prefixLen
+		f.cacheOffs = offsets
+		f.setCacheRawLocked(nil, false)
+		f.cacheStart.Store(start)
+		f.cacheMu.Unlock()
+	}
 
 	srcStart := prefixLen + int(valStart)
 	srcEnd := prefixLen + int(valEnd)
