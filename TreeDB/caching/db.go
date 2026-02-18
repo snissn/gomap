@@ -316,11 +316,15 @@ func putValueLogKeys(s [][]byte) {
 	if s == nil {
 		return
 	}
-	clear(s)
 	// Avoid retaining huge slices in the pool.
 	if cap(s) > 1<<20 {
 		return
 	}
+	keys := s
+	if cap(keys) > len(keys) {
+		keys = keys[:cap(keys)]
+	}
+	clear(keys)
 	valueLogKeyPool.Put(s[:0])
 }
 
@@ -1638,12 +1642,25 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		backendPendingOps int
 		lastFencePtr      page.ValuePtr
 		haveFencePtr      bool
-		ptrKeys           [][]byte
-		ptrVals           [][]byte
 		vlogLane          *lane
 		dictID            uint64
 		dictIDReady       bool
 	)
+	expectedPtrCap := 0
+	for i := range units {
+		if units[i].memLen > 0 {
+			expectedPtrCap += units[i].memLen
+		}
+	}
+	if expectedPtrCap < chunkCap {
+		expectedPtrCap = chunkCap
+	}
+	ptrKeys := getValueLogKeys(expectedPtrCap)
+	ptrVals := getValueLogKeys(expectedPtrCap)
+	defer func() {
+		putValueLogKeys(ptrKeys)
+		putValueLogKeys(ptrVals)
+	}()
 
 	ensureVlogLane := func() error {
 		if vlogLane != nil {

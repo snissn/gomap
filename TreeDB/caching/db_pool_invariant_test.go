@@ -47,3 +47,19 @@ func TestPutValueLogRecordsNoClearClearsFullCapacity(t *testing.T) {
 		}
 	}
 }
+
+func TestPutValueLogKeysClearsFullCapacity(t *testing.T) {
+	keys := make([][]byte, 1, 4)
+	all := keys[:cap(keys)]
+	for i := range all {
+		all[i] = []byte{byte(i + 1)}
+	}
+
+	putValueLogKeys(keys[:0])
+
+	for i := range all {
+		if all[i] != nil {
+			t.Fatalf("expected pooled key cleared at index %d", i)
+		}
+	}
+}

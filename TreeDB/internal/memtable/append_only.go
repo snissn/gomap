@@ -49,6 +49,7 @@ type AppendOnly struct {
 	latestDirty bool
 	hasLast     bool
 	lastIdx     int
+	frozen      bool
 }
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
@@ -183,6 +184,9 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) {
 	if key == nil {
 		return
+	}
+	if m.frozen {
+		m.frozen = false
 	}
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries), flags)
@@ -405,7 +409,11 @@ func (m *AppendOnly) Len() int {
 	return m.count
 }
 
-func (m *AppendOnly) Freeze() {}
+func (m *AppendOnly) Freeze() {
+	m.mu.Lock()
+	m.frozen = true
+	m.mu.Unlock()
+}
 
 func (m *AppendOnly) Reset() {
 	m.mu.Lock()
@@ -422,6 +430,7 @@ func (m *AppendOnly) Reset() {
 	m.latestDirty = false
 	m.hasLast = false
 	m.lastIdx = -1
+	m.frozen = false
 }
 
 func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
@@ -484,13 +493,36 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		}
 		return it
 	}
+	if m.frozen && !m.latestDirty && m.snapCount == m.count {
+		snapshotPtrs := m.snapshot
+		m.mu.RUnlock()
+		it := &appendOnlyIterator{
+			ptrEntries: snapshotPtrs,
+			end:        end,
+		}
+		if start != nil {
+			it.Seek(start)
+		}
+		return it
+	}
 	m.mu.RUnlock()
 
 	// Unordered iterators need a sorted latest-key view. Build/update shared
-	// caches under an exclusive lock, then copy the snapshot so iteration does
-	// not hold the write lock for its lifetime.
+	// caches under an exclusive lock. Frozen tables can iterate pointer views
+	// directly; mutable tables still copy to avoid holding the write lock.
 	m.mu.Lock()
 	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
+	if m.frozen {
+		m.mu.Unlock()
+		it := &appendOnlyIterator{
+			ptrEntries: snapshotPtrs,
+			end:        end,
+		}
+		if start != nil {
+			it.Seek(start)
+		}
+		return it
+	}
 	entries := make([]appendOnlyEntry, len(snapshotPtrs))
 	for i := range snapshotPtrs {
 		if snapshotPtrs[i] != nil {
@@ -510,17 +542,47 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 type appendOnlyIterator struct {
-	entries []appendOnlyEntry
-	idx     int
-	end     []byte
-	mu      *sync.RWMutex
+	entries    []appendOnlyEntry
+	ptrEntries []*appendOnlyEntry
+	idx        int
+	end        []byte
+	mu         *sync.RWMutex
+}
+
+func (it *appendOnlyIterator) len() int {
+	if it.ptrEntries != nil {
+		return len(it.ptrEntries)
+	}
+	return len(it.entries)
+}
+
+func (it *appendOnlyIterator) entryAt(i int) *appendOnlyEntry {
+	if i < 0 {
+		return nil
+	}
+	if it.ptrEntries != nil {
+		if i >= len(it.ptrEntries) {
+			return nil
+		}
+		return it.ptrEntries[i]
+	}
+	if i >= len(it.entries) {
+		return nil
+	}
+	return &it.entries[i]
 }
 
 func (it *appendOnlyIterator) validIndex() bool {
 	if it.idx < 0 || it.idx >= len(it.entries) {
+		if it.ptrEntries == nil || it.idx < 0 || it.idx >= len(it.ptrEntries) {
+			return false
+		}
+	}
+	ent := it.entryAt(it.idx)
+	if ent == nil {
 		return false
 	}
-	if it.end != nil && bytes.Compare(appendOnlyEntryKey(&it.entries[it.idx]), it.end) >= 0 {
+	if it.end != nil && bytes.Compare(appendOnlyEntryKey(ent), it.end) >= 0 {
 		return false
 	}
 	return true
@@ -531,14 +593,18 @@ func (it *appendOnlyIterator) Valid() bool {
 }
 
 func (it *appendOnlyIterator) Next() {
-	if it.idx < len(it.entries) {
+	if it.idx < it.len() {
 		it.idx++
 	}
 }
 
 func (it *appendOnlyIterator) Seek(key []byte) {
-	it.idx = sort.Search(len(it.entries), func(i int) bool {
-		return bytes.Compare(appendOnlyEntryKey(&it.entries[i]), key) >= 0
+	it.idx = sort.Search(it.len(), func(i int) bool {
+		ent := it.entryAt(i)
+		if ent == nil {
+			return true
+		}
+		return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
 	})
 }
 
@@ -546,15 +612,19 @@ func (it *appendOnlyIterator) UnsafeKey() []byte {
 	if !it.validIndex() {
 		return nil
 	}
-	return appendOnlyEntryKey(&it.entries[it.idx])
+	ent := it.entryAt(it.idx)
+	if ent == nil {
+		return nil
+	}
+	return appendOnlyEntryKey(ent)
 }
 
 func (it *appendOnlyIterator) UnsafeValue() []byte {
 	if !it.validIndex() {
 		return nil
 	}
-	ent := it.entries[it.idx]
-	if ent.flags&node.FlagTombstone != 0 {
+	ent := it.entryAt(it.idx)
+	if ent == nil || ent.flags&node.FlagTombstone != 0 {
 		return nil
 	}
 	return ent.value
@@ -564,7 +634,10 @@ func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if !it.validIndex() {
 		return nil, page.ValuePtr{}, 0
 	}
-	ent := it.entries[it.idx]
+	ent := it.entryAt(it.idx)
+	if ent == nil {
+		return nil, page.ValuePtr{}, 0
+	}
 	return ent.value, ent.ptr, ent.flags
 }
 
@@ -572,7 +645,8 @@ func (it *appendOnlyIterator) IsDeleted() bool {
 	if !it.validIndex() {
 		return false
 	}
-	return it.entries[it.idx].flags&node.FlagTombstone != 0
+	ent := it.entryAt(it.idx)
+	return ent != nil && ent.flags&node.FlagTombstone != 0
 }
 
 func (it *appendOnlyIterator) Key() []byte {

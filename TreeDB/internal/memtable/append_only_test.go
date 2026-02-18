@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"bytes"
 	"encoding/binary"
 	"testing"
 	"time"
@@ -164,5 +165,84 @@ func TestAppendOnlyIteratorUnorderedDoesNotBlockWriter(t *testing.T) {
 	case <-done:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("writer blocked while unordered iterator was open")
+	}
+}
+
+func TestAppendOnlyFrozenIteratorUsesPointerSnapshot(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k2"), []byte("v2"))
+	m.Set([]byte("k1"), []byte("v1")) // force unordered path
+	m.Set([]byte("k1"), []byte("v1b"))
+	m.Freeze()
+
+	raw := m.NewIterator(nil, nil)
+	it, ok := raw.(*appendOnlyIterator)
+	if !ok {
+		t.Fatalf("expected appendOnlyIterator, got %T", raw)
+	}
+	defer func() { _ = it.Close() }()
+
+	if len(it.ptrEntries) == 0 {
+		t.Fatalf("expected frozen iterator to use pointer snapshot entries")
+	}
+	if len(it.entries) != 0 {
+		t.Fatalf("expected no copied entry slice for frozen iterator")
+	}
+	if !it.Valid() || string(it.Key()) != "k1" {
+		t.Fatalf("first key = %q, want k1", string(it.Key()))
+	}
+	if got := string(it.Value()); got != "v1b" {
+		t.Fatalf("first value = %q, want v1b", got)
+	}
+	it.Next()
+	if !it.Valid() || string(it.Key()) != "k2" {
+		t.Fatalf("second key = %q, want k2", string(it.Key()))
+	}
+}
+
+func TestAppendOnlyFrozenIteratorKeyStableAfterClose(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k2"), []byte("v2"))
+	m.Set([]byte("k1"), []byte("v1")) // force unordered path
+	m.Freeze()
+
+	raw := m.NewIterator(nil, nil)
+	it, ok := raw.(*appendOnlyIterator)
+	if !ok {
+		t.Fatalf("expected appendOnlyIterator, got %T", raw)
+	}
+	k := it.UnsafeKey()
+	if len(k) == 0 {
+		t.Fatalf("expected non-empty key")
+	}
+	kCopy := append([]byte(nil), k...)
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+	if !bytes.Equal(k, kCopy) {
+		t.Fatalf("expected key bytes to remain stable after close: got=%x want=%x", k, kCopy)
+	}
+}
+
+func TestAppendOnlyMutationAfterFreezeFallsBackToCopyPath(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k2"), []byte("v2"))
+	m.Set([]byte("k1"), []byte("v1")) // force unordered path
+	m.Freeze()
+
+	// Any post-freeze mutation should disable the frozen iterator fast path.
+	m.Set([]byte("k3"), []byte("v3"))
+
+	raw := m.NewIterator(nil, nil)
+	it, ok := raw.(*appendOnlyIterator)
+	if !ok {
+		t.Fatalf("expected appendOnlyIterator, got %T", raw)
+	}
+	defer func() { _ = it.Close() }()
+	if len(it.ptrEntries) != 0 {
+		t.Fatalf("expected mutable unordered iterator to use copied entries")
+	}
+	if len(it.entries) == 0 {
+		t.Fatalf("expected copied entries for mutable unordered iterator")
 	}
 }
