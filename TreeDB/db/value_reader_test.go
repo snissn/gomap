@@ -124,6 +124,7 @@ func TestOuterLeafFenceDecodeScratchPoolCapBounded(t *testing.T) {
 
 func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
 	ctx1 := set.acquire()
 	if ctx1 == nil {
 		t.Fatalf("first acquire returned nil")
@@ -134,11 +135,39 @@ func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	}
 	set.release(ctx1)
 	set.release(ctx2)
+	if got := len(set.pool); got != 1 {
+		t.Fatalf("pool size after two releases=%d want 1", got)
+	}
 	ctx3 := set.acquire()
 	if ctx3 == nil {
 		t.Fatalf("acquire after release returned nil")
 	}
 	set.release(ctx3)
+}
+
+func TestOuterLeafFenceDecodeLeaseSetReleaseOverflowRecyclesContext(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
+	ctx1 := set.acquire()
+	ctx2 := set.acquire()
+	if ctx1 == nil || ctx2 == nil {
+		t.Fatalf("acquire returned nil ctx1=%v ctx2=%v", ctx1, ctx2)
+	}
+	ctx1.scratch = make([]byte, 32)
+	ctx2.scratch = make([]byte, 16)
+
+	set.release(ctx1)
+	if ctx1.scratch == nil {
+		t.Fatalf("retained release cleared scratch; want pooled reuse state")
+	}
+
+	set.release(ctx2)
+	if ctx2.scratch != nil {
+		t.Fatalf("overflow release kept scratch; want recycled context")
+	}
+	if got := len(set.pool); got != 1 {
+		t.Fatalf("pool size after overflow release=%d want 1", got)
+	}
 }
 
 func TestOuterLeafFenceDecodeLeaseSetCloseDrainsReturnedContexts(t *testing.T) {
@@ -270,6 +299,29 @@ func TestValueReaderReleaseDecodeContext_CleansReturnedLeaseContexts(t *testing.
 	}
 	if ctx2.scratch != nil || ctx2.block != nil {
 		t.Fatalf("ctx2 not cleaned on reader release: scratch=%d block=%v", len(ctx2.scratch), ctx2.block != nil)
+	}
+}
+
+func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing.T) {
+	payload, _, _ := makeTestOuterLeafPayload(t)
+	payload = append([]byte(nil), payload...)
+	payload = payload[:len(payload)-1]
+	if !outerleaf.HasMagic(payload) {
+		t.Fatalf("payload missing outer-leaf magic after truncation")
+	}
+
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
+	var r valueReader
+	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	r.fenceDecodeLeases = set
+
+	_, _, err := r.decodeValueForKeyFound(page.ValuePtr{}, []byte("k1"), payload, true)
+	if err == nil {
+		t.Fatalf("decodeValueForKeyFound err=nil want decode failure")
+	}
+	if got := len(set.pool); got != 1 {
+		t.Fatalf("pool size after decode error=%d want 1 (lease released)", got)
 	}
 }
 
