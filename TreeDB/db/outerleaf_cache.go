@@ -2,6 +2,7 @@ package db
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -29,14 +30,14 @@ type outerLeafBlockCacheEntry struct {
 }
 
 type outerLeafBlockCacheShard struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	entries  map[outerLeafBlockKey]int
 	nodes    []outerLeafBlockCacheEntry
 	free     []int
 	head     int
 	tail     int
-	hits     uint64
-	misses   uint64
+	hits     atomic.Uint64
+	misses   atomic.Uint64
 	capacity int
 }
 
@@ -100,17 +101,27 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 
 func (c *outerLeafBlockCache) get(key outerLeafBlockKey) *outerleaf.DecodedBlock {
 	s := c.shardFor(key)
-	s.mu.Lock()
+	s.mu.RLock()
 	idx, ok := s.entries[key]
 	if !ok {
-		s.misses++
-		s.mu.Unlock()
+		s.mu.RUnlock()
+		s.misses.Add(1)
 		return nil
 	}
-	s.hits++
-	s.moveToFront(idx)
 	block := s.nodes[idx].block
-	s.mu.Unlock()
+	needPromote := idx != s.head
+	s.mu.RUnlock()
+	s.hits.Add(1)
+
+	// Best-effort recency maintenance: avoid blocking readers on shard write
+	// lock when contended. This preserves functional behavior and keeps LRU
+	// ordering close under concurrency.
+	if needPromote && s.mu.TryLock() {
+		if idx2, ok2 := s.entries[key]; ok2 && idx2 != s.head {
+			s.moveToFront(idx2)
+		}
+		s.mu.Unlock()
+	}
 	return block
 }
 
@@ -177,11 +188,11 @@ func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, 
 	var totalMisses uint64
 	for i := range c.shards {
 		s := &c.shards[i]
-		s.mu.Lock()
-		totalHits += s.hits
-		totalMisses += s.misses
+		s.mu.RLock()
 		totalEntries += len(s.entries)
-		s.mu.Unlock()
+		s.mu.RUnlock()
+		totalHits += s.hits.Load()
+		totalMisses += s.misses.Load()
 	}
 	return totalHits, totalMisses, totalEntries, c.capacity
 }

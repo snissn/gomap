@@ -612,11 +612,6 @@ func normalizeValueLogWALFenceMode(mode string) string {
 const defaultOuterLeafBlobThresholdMin = 16 << 10
 const defaultOuterLeafFenceBlockTargetBytes = 4 << 10
 
-// For fence-pointer v2 reads, short scans are latency-sensitive and pay decode
-// cost immediately. Keep the user-selected codec for large-value blocks, but
-// prefer LZ4 on small-value fence groups when the configured default is snappy.
-const outerLeafFenceAdaptiveLZ4MaxAvgValueBytes = 64
-
 func (db *DB) effectiveOuterLeafBlobThresholdBytes() int {
 	if db == nil {
 		return defaultOuterLeafBlobThresholdMin
@@ -642,18 +637,7 @@ func (db *DB) fenceRIDJoinHybridEnabled() bool {
 }
 
 func (db *DB) selectOuterLeafBlockCodec(totalValueBytes, entryCount int) uint8 {
-	codec := db.outerLeafBlockCodec
-	if codec != uint8(backenddb.ValueLogBlockSnappy) {
-		return codec
-	}
-	if !db.outerLeafFenceV2Enabled() || entryCount <= 0 || totalValueBytes < 0 {
-		return codec
-	}
-	avgValueBytes := totalValueBytes / entryCount
-	if avgValueBytes <= outerLeafFenceAdaptiveLZ4MaxAvgValueBytes {
-		return uint8(backenddb.ValueLogBlockLZ4)
-	}
-	return codec
+	return db.outerLeafBlockCodec
 }
 
 func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
