@@ -748,7 +748,97 @@ func TestDecodeLowerBoundAndKeysOnMatchLeaseWithVerify(t *testing.T) {
 	}
 }
 
-func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
+func TestDecodeKeysRangeLeaseWithVerify_V3AndUpperBoundEarlyExit(t *testing.T) {
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(11), Offset: 77, Length: 9}
+	payload, err := EncodeTypedEntries(nil, []TypedEntry{
+		{Key: []byte("k10"), Kind: EntryKindInline, Value: []byte("v10")},
+		{Key: []byte("k20"), Kind: EntryKindBlobRef, BlobPtr: blobPtr},
+		{Key: []byte("k30"), Kind: EntryKindInline, Value: []byte("v30")},
+	}, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+
+	lease, err := DecodeKeysRangeLeaseWithVerify(payload, []byte("k15"), []byte("k35"), true)
+	if err != nil {
+		t.Fatalf("DecodeKeysRangeLeaseWithVerify(v3): %v", err)
+	}
+	if lease == nil {
+		t.Fatalf("lease=nil want non-nil")
+	}
+	keys := lease.Keys()
+	want := [][]byte{[]byte("k20"), []byte("k30")}
+	if len(keys) != len(want) {
+		t.Fatalf("keys len=%d want=%d", len(keys), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(keys[i], want[i]) {
+			t.Fatalf("keys[%d]=%q want=%q", i, keys[i], want[i])
+		}
+	}
+	lease.Release()
+
+	lease, err = DecodeKeysRangeLeaseWithVerify(payload, nil, []byte("k05"), true)
+	if err != nil {
+		t.Fatalf("DecodeKeysRangeLeaseWithVerify(v3 upper-before-first): %v", err)
+	}
+	if lease != nil {
+		t.Fatalf("lease=%v want nil for empty bounded range", lease)
+	}
+}
+
+func TestDecodeLowerBoundAndKeysOnMatchLeaseWithVerify_V3(t *testing.T) {
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(12), Offset: 88, Length: 9}
+	payload, err := EncodeTypedEntries(nil, []TypedEntry{
+		{Key: []byte("k10"), Kind: EntryKindInline, Value: []byte("v10")},
+		{Key: []byte("k20"), Kind: EntryKindBlobRef, BlobPtr: blobPtr},
+		{Key: []byte("k30"), Kind: EntryKindInline, Value: []byte("v30")},
+	}, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+
+	pos, below, above, lease, err := DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload, []byte("k20"), true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(v3): %v", err)
+	}
+	if pos != 1 || below || above {
+		t.Fatalf("got pos=%d below=%v above=%v", pos, below, above)
+	}
+	if lease == nil {
+		t.Fatalf("lease=nil want non-nil")
+	}
+	keys := lease.Keys()
+	if len(keys) != 3 {
+		t.Fatalf("keys len=%d want=3", len(keys))
+	}
+	lease.Release()
+
+	pos, below, above, lease, err = DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload, []byte("k99"), true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(v3 above): %v", err)
+	}
+	if pos != 3 || below || !above || lease != nil {
+		t.Fatalf("above got pos=%d below=%v above=%v lease=%v", pos, below, above, lease)
+	}
+}
+
+func TestOuterLeafPoolCapsBounded(t *testing.T) {
+	if maxPooledOuterLeafBytesCap > (1 << 20) {
+		t.Fatalf("maxPooledOuterLeafBytesCap=%d want <=1MiB", maxPooledOuterLeafBytesCap)
+	}
+	if maxPooledOuterLeafRestartsCap > 4096 {
+		t.Fatalf("maxPooledOuterLeafRestartsCap=%d want <=4096", maxPooledOuterLeafRestartsCap)
+	}
+	if maxPooledOuterLeafLeaseKeysCap > 4096 {
+		t.Fatalf("maxPooledOuterLeafLeaseKeysCap=%d want <=4096", maxPooledOuterLeafLeaseKeysCap)
+	}
+	if maxPooledOuterLeafLeaseArenaCap > (1 << 20) {
+		t.Fatalf("maxPooledOuterLeafLeaseArenaCap=%d want <=1MiB", maxPooledOuterLeafLeaseArenaCap)
+	}
+}
+
+func TestGetPooledLeaseKeys_SkipsUndersizedBuffer(t *testing.T) {
 	for outerLeafLeaseKeysPool.Get() != nil {
 	}
 	t.Cleanup(func() {
@@ -763,27 +853,9 @@ func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
 	if cap(got) < 4 {
 		t.Fatalf("cap(got)=%d want >=4", cap(got))
 	}
-
-	found := false
-	for {
-		v := outerLeafLeaseKeysPool.Get()
-		if v == nil {
-			break
-		}
-		keys, ok := v.([][]byte)
-		if !ok {
-			t.Fatalf("pool type=%T want [][]byte", v)
-		}
-		if cap(keys) == cap(undersized) {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("undersized slice was not returned to pool")
-	}
 }
 
-func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
+func TestGetPooledLeaseArena_SkipsUndersizedArena(t *testing.T) {
 	for outerLeafLeaseArenaPool.Get() != nil {
 	}
 	t.Cleanup(func() {
@@ -797,24 +869,6 @@ func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
 	got := getPooledLeaseArena(16)
 	if cap(got) < 16 {
 		t.Fatalf("cap(got)=%d want >=16", cap(got))
-	}
-
-	found := false
-	for {
-		v := outerLeafLeaseArenaPool.Get()
-		if v == nil {
-			break
-		}
-		arena, ok := v.([]byte)
-		if !ok {
-			t.Fatalf("pool type=%T want []byte", v)
-		}
-		if cap(arena) == cap(undersized) {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("undersized arena was not returned to pool")
 	}
 }
 

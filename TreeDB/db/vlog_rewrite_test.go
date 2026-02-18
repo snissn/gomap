@@ -8,7 +8,9 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -299,6 +301,142 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 		if seg.valueLog && seg.seq > maxValueSeqBefore {
 			t.Fatalf("unexpected new value-log segment created for no-op rewrite: %+v", seg)
 		}
+	}
+}
+
+func TestValueLogRewriteOffline_BlobRefOuterLeafPointerPreserved(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileIDBlob, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode blob file id: %v", err)
+	}
+	blobPath := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(blobPath, fileIDBlob)
+	if err != nil {
+		t.Fatalf("new blob valuelog writer: %v", err)
+	}
+
+	blobValue := bytes.Repeat([]byte("nested-blob|"), 64)
+	blobPtr, err := vw.Append(0, nil, 5000, blobValue)
+	if err != nil {
+		_ = vw.Close()
+		t.Fatalf("append blob payload: %v", err)
+	}
+
+	key := []byte("k-blob-ref")
+	outerPayload, err := outerleaf.EncodeSingleBlobRef(nil, key, blobPtr, uint8(ValueLogBlockSnappy), 16)
+	if err != nil {
+		_ = vw.Close()
+		t.Fatalf("EncodeSingleBlobRef: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("close blob valuelog writer: %v", err)
+	}
+
+	fileIDOuter, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("encode outer file id: %v", err)
+	}
+	outerPath := filepath.Join(walDir, "value-l0-000002.log")
+	vw, err = valuelog.NewWriter(outerPath, fileIDOuter)
+	if err != nil {
+		t.Fatalf("new outer valuelog writer: %v", err)
+	}
+	outerPtr, err := vw.Append(0, nil, 5001, outerPayload)
+	if err != nil {
+		_ = vw.Close()
+		t.Fatalf("append outer payload: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("close outer valuelog writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer(key, outerPtr); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db before rewrite: %v", err)
+	}
+	db = nil
+
+	if _, err := ValueLogRewriteOffline(Options{Dir: dir}); err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+
+	reopen, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	proj, err := reopen.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModePointerProjection})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions projection: %v", err)
+	}
+	defer proj.Close()
+
+	found := false
+	for ; proj.Valid(); proj.Next() {
+		if !bytes.Equal(proj.Key(), key) {
+			continue
+		}
+		_, gotPtr, flags := proj.UnsafeEntry()
+		if flags&node.FlagPointer == 0 {
+			t.Fatalf("expected pointer flag for %q", key)
+		}
+		if gotPtr != outerPtr {
+			t.Fatalf("outer pointer rewritten unexpectedly: got=%+v want=%+v", gotPtr, outerPtr)
+		}
+		found = true
+		break
+	}
+	if err := proj.Error(); err != nil {
+		t.Fatalf("projection iterator error: %v", err)
+	}
+	if !found {
+		t.Fatalf("projection iterator did not observe key %q", key)
+	}
+
+	got, err := reopen.Get(key)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", key, err)
+	}
+	if !bytes.Equal(got, blobValue) {
+		t.Fatalf("Get(%q) mismatch: got len=%d want len=%d", key, len(got), len(blobValue))
+	}
+
+	if _, err := os.Stat(blobPath); err != nil {
+		t.Fatalf("expected nested blob segment to remain after rewrite: %v", err)
+	}
+	if _, err := os.Stat(outerPath); err != nil {
+		t.Fatalf("expected outer block segment to remain after rewrite: %v", err)
 	}
 }
 
