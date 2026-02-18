@@ -1860,7 +1860,10 @@ func DecodeBlockLeaseWithVerify(payload []byte, verifyChecksum bool) (*DecodedBl
 // Any slices returned by the decoded block may alias lease-owned storage and
 // become invalid after Release.
 func DecodeBlockLeaseWithScratchAndVerify(payload []byte, scratch []byte, dst *DecodedBlock, verifyChecksum bool) (*DecodedBlock, []byte, error) {
-	nextScratch := scratch[:0]
+	var nextScratch []byte
+	if scratch != nil {
+		nextScratch = scratch[:0]
+	}
 	block, err := decodeBlockMode(payload, scratch, verifyChecksum, true, dst)
 	if err != nil {
 		return nil, nextScratch, err
@@ -1892,7 +1895,11 @@ func (d *DecodedBlock) ReclaimTransferredScratchForRelease(scratch []byte) []byt
 	if d == nil || len(d.raw) == 0 || cap(scratch) == 0 {
 		return scratch
 	}
-	if &d.raw[0] != &scratch[:1][0] {
+	scratchView := scratch
+	if len(scratchView) == 0 {
+		scratchView = scratch[:cap(scratch)]
+	}
+	if &d.raw[0] != &scratchView[0] {
 		return scratch
 	}
 	d.pooledRaw = true
