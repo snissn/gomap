@@ -46,6 +46,11 @@ type outerLeafBlockCache struct {
 	capacity int
 }
 
+// On heavily contended read paths, full LRU promotion on every cache hit
+// creates avoidable write-lock churn. Promote a sampled subset of hits to keep
+// recency reasonably fresh while reducing lock pressure.
+const outerLeafBlockCachePromoteSampleMask uint64 = 0x0f // 1/16
+
 func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 	if capacity <= 0 {
 		return nil
@@ -111,12 +116,12 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) *outerleaf.DecodedBlock
 	block := s.nodes[idx].block
 	needPromote := idx != s.head
 	s.mu.RUnlock()
-	s.hits.Add(1)
+	hits := s.hits.Add(1)
 
 	// Best-effort recency maintenance: avoid blocking readers on shard write
 	// lock when contended. This preserves functional behavior and keeps LRU
 	// ordering close under concurrency.
-	if needPromote && s.mu.TryLock() {
+	if needPromote && (hits&outerLeafBlockCachePromoteSampleMask) == 0 && s.mu.TryLock() {
 		if idx2, ok2 := s.entries[key]; ok2 && idx2 != s.head {
 			s.moveToFront(idx2)
 		}
