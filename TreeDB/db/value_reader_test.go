@@ -141,6 +141,47 @@ func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	set.release(ctx3)
 }
 
+func TestOuterLeafFenceDecodeLeaseSetCloseDrainsReturnedContexts(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	ctx1 := set.acquire()
+	ctx2 := set.acquire()
+	if ctx1 == nil || ctx2 == nil {
+		t.Fatalf("acquire returned nil context(s): ctx1=%v ctx2=%v", ctx1, ctx2)
+	}
+	ctx1.scratch = make([]byte, 16)
+	ctx2.scratch = make([]byte, 32)
+	set.release(ctx1)
+	set.release(ctx2)
+
+	set.close()
+
+	if ctx1.scratch != nil || ctx1.block != nil {
+		t.Fatalf("ctx1 not cleaned on close: scratch=%d block=%v", len(ctx1.scratch), ctx1.block != nil)
+	}
+	if ctx2.scratch != nil || ctx2.block != nil {
+		t.Fatalf("ctx2 not cleaned on close: scratch=%d block=%v", len(ctx2.scratch), ctx2.block != nil)
+	}
+	if got := set.acquire(); got != nil {
+		t.Fatalf("acquire after close=%v want nil", got)
+	}
+}
+
+func TestOuterLeafFenceDecodeLeaseSetReleaseAfterCloseCleansContext(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	ctx := set.acquire()
+	if ctx == nil {
+		t.Fatalf("acquire returned nil")
+	}
+	ctx.scratch = make([]byte, 64)
+
+	set.close()
+	set.release(ctx)
+
+	if ctx.scratch != nil || ctx.block != nil {
+		t.Fatalf("context not cleaned on release-after-close: scratch=%d block=%v", len(ctx.scratch), ctx.block != nil)
+	}
+}
+
 func TestNewValueReader_FenceDecodeLeasesReaderLocal(t *testing.T) {
 	r1 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
 	r2 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
@@ -155,6 +196,53 @@ func TestNewValueReader_FenceDecodeLeasesReaderLocal(t *testing.T) {
 	}
 	if r1.fenceDecodeLeases == r2.fenceDecodeLeases {
 		t.Fatalf("fenceDecodeLeases unexpectedly shared between readers")
+	}
+}
+
+func TestValueReaderReleaseDecodeContext_DoesNotAffectOtherReader(t *testing.T) {
+	r1 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	r2 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	defer (&r2).releaseDecodeContext()
+
+	(&r1).releaseDecodeContext()
+	if r1.fenceDecodeLeases != nil {
+		t.Fatalf("r1.fenceDecodeLeases=%v want nil after release", r1.fenceDecodeLeases)
+	}
+	if r2.fenceDecodeLeases == nil {
+		t.Fatalf("r2.fenceDecodeLeases=nil want still initialized")
+	}
+	ctx := r2.fenceDecodeLeases.acquire()
+	if ctx == nil {
+		t.Fatalf("r2 acquire after r1 release returned nil")
+	}
+	r2.fenceDecodeLeases.release(ctx)
+}
+
+func TestValueReaderReleaseDecodeContext_CleansReturnedLeaseContexts(t *testing.T) {
+	r := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	if r.fenceDecodeLeases == nil {
+		t.Fatalf("fenceDecodeLeases=nil want initialized")
+	}
+	ctx1 := r.fenceDecodeLeases.acquire()
+	ctx2 := r.fenceDecodeLeases.acquire()
+	if ctx1 == nil || ctx2 == nil {
+		t.Fatalf("acquire returned nil context(s): ctx1=%v ctx2=%v", ctx1, ctx2)
+	}
+	ctx1.scratch = make([]byte, 16)
+	ctx2.scratch = make([]byte, 32)
+	r.fenceDecodeLeases.release(ctx1)
+	r.fenceDecodeLeases.release(ctx2)
+
+	(&r).releaseDecodeContext()
+
+	if r.fenceDecodeLeases != nil {
+		t.Fatalf("fenceDecodeLeases=%v want nil after release", r.fenceDecodeLeases)
+	}
+	if ctx1.scratch != nil || ctx1.block != nil {
+		t.Fatalf("ctx1 not cleaned on reader release: scratch=%d block=%v", len(ctx1.scratch), ctx1.block != nil)
+	}
+	if ctx2.scratch != nil || ctx2.block != nil {
+		t.Fatalf("ctx2 not cleaned on reader release: scratch=%d block=%v", len(ctx2.scratch), ctx2.block != nil)
 	}
 }
 
