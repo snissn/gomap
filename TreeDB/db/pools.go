@@ -48,6 +48,7 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	s.state = nil
 	s.vlogManager = nil
 	s.vlogPinned = false
+	s.reader.releaseDecodeContext()
 	s.reader = valueReader{}
 	s.registryID = 0
 	s.closed.Store(false)

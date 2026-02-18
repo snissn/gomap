@@ -270,6 +270,71 @@ func TestValueReaderReadUnsafeFenceForKey_NoCacheInline(t *testing.T) {
 	}
 }
 
+func TestValueReaderReadUnsafeFenceForKey_LeaseCtxCacheBlocksRemainStable(t *testing.T) {
+	makePayload := func(prefix byte, offset uint64) (page.ValuePtr, []byte, []byte, []byte) {
+		key1 := []byte{prefix, '1'}
+		key2 := []byte{prefix, '2'}
+		key3 := []byte{prefix, '3'}
+		val1 := bytes.Repeat([]byte{prefix}, 1024)
+		val2 := bytes.Repeat([]byte{prefix + 1}, 1024)
+		val3 := bytes.Repeat([]byte{prefix + 2}, 1024)
+		encoded, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
+			{Key: key1, Value: val1},
+			{Key: key2, Value: val2},
+			{Key: key3, Value: val3},
+		}, uint8(ValueLogBlockSnappy), 16)
+		if err != nil {
+			t.Fatalf("encode outer-leaf payload: %v", err)
+		}
+		ptr := page.ValuePtr{
+			FileID: page.ValueLogFileID(11),
+			Offset: offset,
+			Length: uint32(len(encoded)),
+		}
+		return ptr, encoded, key2, val2
+	}
+
+	ptrA, payloadA, keyA, wantA := makePayload('a', 4096)
+	ptrB, payloadB, keyB, wantB := makePayload('b', 8192)
+
+	reader := &stubValueLogReader{
+		payloads: map[page.ValuePtr][]byte{
+			ptrA: payloadA,
+			ptrB: payloadB,
+		},
+	}
+	cache := newOuterLeafBlockCache(8)
+	r := newValueReader(reader, outerleaf.ModeV2FencePtr, false, cache, nil)
+	defer (&r).releaseDecodeContext()
+
+	gotA1, found, err := r.ReadUnsafeFenceForKey(ptrA, keyA)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceForKey(A first): %v", err)
+	}
+	if !found || !bytes.Equal(gotA1, wantA) {
+		t.Fatalf("A first read found=%v val=%q want=%q", found, gotA1, wantA)
+	}
+
+	gotB, found, err := r.ReadUnsafeFenceForKey(ptrB, keyB)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceForKey(B): %v", err)
+	}
+	if !found || !bytes.Equal(gotB, wantB) {
+		t.Fatalf("B read found=%v val=%q want=%q", found, gotB, wantB)
+	}
+
+	gotA2, found, err := r.ReadUnsafeFenceForKey(ptrA, keyA)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceForKey(A cache): %v", err)
+	}
+	if !found || !bytes.Equal(gotA2, wantA) {
+		t.Fatalf("A cache read found=%v val=%q want=%q", found, gotA2, wantA)
+	}
+	if reader.readUnsafeCalls != 2 {
+		t.Fatalf("readUnsafeCalls=%d want=2 (A miss + B miss, then A cache hit)", reader.readUnsafeCalls)
+	}
+}
+
 func TestValueReaderReadUnsafeFenceBlockKeys_CacheHitSkipsReadUnsafe(t *testing.T) {
 	payload, block, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}

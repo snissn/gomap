@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ type valueReader struct {
 	skipOuterLeafChecksums bool
 	cache                  *outerLeafBlockCache
 	keyCache               *outerLeafKeyCache
+	fenceDecodeLeases      *outerLeafFenceDecodeLeaseSet
 }
 
 type staticFenceKeysLease struct {
@@ -61,10 +63,107 @@ func (l *staticFenceKeysLease) Release() {
 
 const outerLeafLookupScratchMaxRetain = 1 << 20
 const outerLeafFenceDecodeScratchMaxRetain = 64 << 20
+const outerLeafFenceDecodeLeaseSetMinSize = 8
+const outerLeafFenceDecodeLeaseSetMaxSize = 64
 
 var outerLeafLookupScratchPool sync.Pool
 var outerLeafFenceDecodeScratchPool sync.Pool
 var outerLeafFenceDecodedBlockPool sync.Pool
+var outerLeafFenceDecodeContextPool = sync.Pool{
+	New: func() any {
+		return &outerLeafFenceDecodeContext{}
+	},
+}
+
+type outerLeafFenceDecodeContext struct {
+	scratch []byte
+	block   *outerleaf.DecodedBlock
+}
+
+type outerLeafFenceDecodeLeaseSet struct {
+	slots chan *outerLeafFenceDecodeContext
+}
+
+func newOuterLeafFenceDecodeLeaseSet(size int) *outerLeafFenceDecodeLeaseSet {
+	if size <= 0 {
+		size = outerLeafFenceDecodeLeaseSetPreferredSize()
+	}
+	set := &outerLeafFenceDecodeLeaseSet{
+		slots: make(chan *outerLeafFenceDecodeContext, size),
+	}
+	for i := 0; i < size; i++ {
+		set.slots <- acquireOuterLeafFenceDecodeContext()
+	}
+	return set
+}
+
+func outerLeafFenceDecodeLeaseSetPreferredSize() int {
+	n := runtime.GOMAXPROCS(0)
+	if n < outerLeafFenceDecodeLeaseSetMinSize {
+		return outerLeafFenceDecodeLeaseSetMinSize
+	}
+	if n > outerLeafFenceDecodeLeaseSetMaxSize {
+		return outerLeafFenceDecodeLeaseSetMaxSize
+	}
+	return n
+}
+
+func (s *outerLeafFenceDecodeLeaseSet) acquire() *outerLeafFenceDecodeContext {
+	if s == nil {
+		return nil
+	}
+	select {
+	case ctx := <-s.slots:
+		return ctx
+	default:
+		return nil
+	}
+}
+
+func (s *outerLeafFenceDecodeLeaseSet) release(ctx *outerLeafFenceDecodeContext) {
+	if s == nil || ctx == nil {
+		return
+	}
+	select {
+	case s.slots <- ctx:
+	default:
+		releaseOuterLeafFenceDecodeContext(ctx)
+	}
+}
+
+func (s *outerLeafFenceDecodeLeaseSet) close() {
+	if s == nil {
+		return
+	}
+	for {
+		select {
+		case ctx := <-s.slots:
+			releaseOuterLeafFenceDecodeContext(ctx)
+		default:
+			return
+		}
+	}
+}
+
+func acquireOuterLeafFenceDecodeContext() *outerLeafFenceDecodeContext {
+	return outerLeafFenceDecodeContextPool.Get().(*outerLeafFenceDecodeContext)
+}
+
+func releaseOuterLeafFenceDecodeContext(ctx *outerLeafFenceDecodeContext) {
+	if ctx == nil {
+		return
+	}
+	scratch := ctx.scratch
+	block := ctx.block
+	ctx.scratch = nil
+	ctx.block = nil
+	if block != nil {
+		block.Release()
+		outerLeafFenceDecodedBlockPut(block)
+	}
+	outerLeafFenceDecodeScratchPut(scratch)
+	outerLeafFenceDecodeContextPool.Put(ctx)
+}
 
 func outerLeafLookupScratchGet() []byte {
 	if v := outerLeafLookupScratchPool.Get(); v != nil {
@@ -157,8 +256,19 @@ func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums b
 		cache:                  cache,
 		keyCache:               keyCache,
 	}
+	if cache != nil {
+		r.fenceDecodeLeases = newOuterLeafFenceDecodeLeaseSet(0)
+	}
 	r.setOuterLeafMode(mode)
 	return r
+}
+
+func (r *valueReader) releaseDecodeContext() {
+	if r == nil || r.fenceDecodeLeases == nil {
+		return
+	}
+	r.fenceDecodeLeases.close()
+	r.fenceDecodeLeases = nil
 }
 
 func (r *valueReader) setOuterLeafMode(mode string) {
@@ -290,6 +400,13 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 		}
 		return val, true, nil
 	}
+	if leases := r.fenceDecodeLeases; leases != nil {
+		if ctx := leases.acquire(); ctx != nil {
+			val, found, err := r.decodeValueForKeyFoundWithLeaseCtx(cacheKey, key, raw, unsafe, ctx)
+			leases.release(ctx)
+			return val, found, err
+		}
+	}
 	verifyChecksums := !r.skipOuterLeafChecksums
 	scratch := outerLeafFenceDecodeScratchGet()
 	decodedBlock := outerLeafFenceDecodedBlockGet()
@@ -325,6 +442,60 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 	} else {
 		entry, found, err = block.EntryForKey(key)
 	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	val, err := r.resolveLookupResult(entry, unsafe)
+	if err != nil {
+		return nil, false, err
+	}
+	return val, true, nil
+}
+
+func (r valueReader) decodeValueForKeyFoundWithLeaseCtx(cacheKey outerLeafBlockKey, key, raw []byte, unsafe bool, ctx *outerLeafFenceDecodeContext) ([]byte, bool, error) {
+	verifyChecksums := !r.skipOuterLeafChecksums
+	scratch := ctx.scratch
+	decodedBlock := ctx.block
+	if decodedBlock == nil {
+		decodedBlock = outerLeafFenceDecodedBlockGet()
+		ctx.block = decodedBlock
+	}
+	block, nextScratch, err := outerleaf.DecodeBlockLeaseWithScratchAndVerify(raw, scratch, decodedBlock, verifyChecksums)
+	if err != nil {
+		ctx.scratch = nextScratch
+		return nil, false, err
+	}
+	if block == nil {
+		ctx.scratch = nextScratch
+		return nil, false, nil
+	}
+	if block.FirstKind() != outerleaf.EntryKindBlobRef {
+		// Cached blocks retain decoded raw backing; do not reuse the same
+		// scratch in this context or subsequent decodes can overwrite cached
+		// block bytes.
+		ctx.scratch = nil
+		ctx.block = outerLeafFenceDecodedBlockGet()
+		r.cache.put(cacheKey, block)
+		entry, found, err := block.EntryForKey(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return nil, false, nil
+		}
+		val, err := r.resolveLookupResult(entry, unsafe)
+		if err != nil {
+			return nil, false, err
+		}
+		return val, true, nil
+	}
+	entry, found, err := block.EntryForKeyNoRestartKeys(key)
+	block.Release()
+	ctx.block = block
+	ctx.scratch = nextScratch
 	if err != nil {
 		return nil, false, err
 	}

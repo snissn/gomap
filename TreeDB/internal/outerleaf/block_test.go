@@ -248,6 +248,77 @@ func TestDecodeBlockLeaseRelease(t *testing.T) {
 	blk.Release()
 }
 
+func TestDecodeBlockLeaseWithScratchAndVerify_TransfersPooledRawToCallerScratch(t *testing.T) {
+	entries := []Entry{
+		{Key: []byte("acct:0001"), Value: bytes.Repeat([]byte("a"), 1024)},
+		{Key: []byte("acct:0002"), Value: bytes.Repeat([]byte("b"), 1024)},
+		{Key: []byte("acct:0003"), Value: bytes.Repeat([]byte("c"), 1024)},
+	}
+	enc, err := EncodeEntries(nil, entries, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	if len(enc) < blockHeaderSize || enc[5] == blockCodecNone {
+		t.Fatalf("expected compressed payload for scratch ownership transfer test")
+	}
+
+	dst := &DecodedBlock{}
+	blk, nextScratch, err := DecodeBlockLeaseWithScratchAndVerify(enc, nil, dst, true)
+	if err != nil {
+		t.Fatalf("DecodeBlockLeaseWithScratchAndVerify(first): %v", err)
+	}
+	if blk == nil {
+		t.Fatalf("decoded block=nil")
+	}
+	if blk != dst {
+		t.Fatalf("decoded block pointer mismatch")
+	}
+	if cap(nextScratch) == 0 {
+		t.Fatalf("nextScratch cap=0 want >0")
+	}
+	if blk.pooledRaw {
+		t.Fatalf("blk.pooledRaw=true want false after ownership transfer to caller scratch")
+	}
+	if len(blk.raw) == 0 {
+		t.Fatalf("blk.raw len=0 want >0")
+	}
+	if &blk.raw[0] != &nextScratch[:1:1][0] {
+		t.Fatalf("nextScratch does not alias decoded raw backing")
+	}
+	if _, found, err := blk.EntryForKey([]byte("acct:0002")); err != nil {
+		t.Fatalf("EntryForKey(first): %v", err)
+	} else if !found {
+		t.Fatalf("EntryForKey(first) found=false want true")
+	}
+	blk.Release()
+
+	blk2, nextScratch2, err := DecodeBlockLeaseWithScratchAndVerify(enc, nextScratch, dst, true)
+	if err != nil {
+		t.Fatalf("DecodeBlockLeaseWithScratchAndVerify(second): %v", err)
+	}
+	if blk2 == nil {
+		t.Fatalf("decoded block=nil on second decode")
+	}
+	if blk2.pooledRaw {
+		t.Fatalf("blk2.pooledRaw=true want false")
+	}
+	if len(blk2.raw) == 0 {
+		t.Fatalf("blk2.raw len=0 want >0")
+	}
+	if cap(nextScratch2) == 0 {
+		t.Fatalf("nextScratch2 cap=0 want >0")
+	}
+	if &blk2.raw[0] != &nextScratch2[:1:1][0] {
+		t.Fatalf("nextScratch2 does not alias decoded raw backing")
+	}
+	if _, found, err := blk2.EntryForKey([]byte("acct:0003")); err != nil {
+		t.Fatalf("EntryForKey(second): %v", err)
+	} else if !found {
+		t.Fatalf("EntryForKey(second) found=false want true")
+	}
+	blk2.Release()
+}
+
 func TestDecodeRestartsFromRawIntoReusesDst(t *testing.T) {
 	enc, err := EncodeEntries(nil, []Entry{
 		{Key: []byte("k10"), Value: []byte("v10")},

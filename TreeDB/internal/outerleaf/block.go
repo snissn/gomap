@@ -48,13 +48,14 @@ const (
 	maxPooledOuterLeafLeaseArenaCap = 1 << 20
 )
 
+const (
+	outerLeafBytesPoolMinShift   = 6
+	outerLeafBytesPoolMaxShift   = 26
+	outerLeafBytesPoolClassCount = outerLeafBytesPoolMaxShift - outerLeafBytesPoolMinShift + 1
+)
+
 var (
-	outerLeafBytesPool      sync.Pool
-	outerLeafBytesEntryPool = sync.Pool{
-		New: func() any {
-			return &bytesPoolEntry{}
-		},
-	}
+	outerLeafBytesClassPools [outerLeafBytesPoolClassCount]sync.Pool
 	outerLeafRestartsPool   sync.Pool
 	outerLeafLeaseKeysPool  sync.Pool
 	outerLeafLeaseArenaPool sync.Pool
@@ -121,11 +122,6 @@ type LookupResult struct {
 type keyLeaseChunk struct {
 	buf  []byte
 	next *keyLeaseChunk
-}
-
-type bytesPoolEntry struct {
-	buf  []byte
-	next *bytesPoolEntry
 }
 
 // KeyLease provides explicit ownership for decoded key vectors.
@@ -528,53 +524,69 @@ func decodeValuePtr16(payload []byte) (page.ValuePtr, error) {
 	}, nil
 }
 
-func getPooledBytes(minCap int) []byte {
+func nextPow2Int(n int) int {
+	if n <= 1 {
+		return 1
+	}
+	return 1 << bits.Len(uint(n-1))
+}
+
+func pooledBytesClassForGet(minCap int) (idx int, classCap int) {
 	if minCap <= 0 {
 		minCap = 1
 	}
-	var held *bytesPoolEntry
-	for {
-		v := outerLeafBytesPool.Get()
-		if v == nil {
-			break
-		}
-		entry, ok := v.(*bytesPoolEntry)
-		if !ok || entry == nil {
-			continue
-		}
-		if cap(entry.buf) >= minCap {
-			buf := entry.buf
-			entry.buf = nil
-			entry.next = nil
-			for held != nil {
-				next := held.next
-				held.next = nil
-				outerLeafBytesPool.Put(held)
-				held = next
-			}
-			outerLeafBytesEntryPool.Put(entry)
+	if minCap > maxPooledOuterLeafBytesCap {
+		return -1, minCap
+	}
+	classCap = nextPow2Int(minCap)
+	minClassCap := 1 << outerLeafBytesPoolMinShift
+	if classCap < minClassCap {
+		classCap = minClassCap
+	}
+	if classCap > maxPooledOuterLeafBytesCap {
+		return -1, minCap
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	return shift - outerLeafBytesPoolMinShift, classCap
+}
+
+func pooledBytesClassForPut(capacity int) int {
+	if capacity == 0 || capacity > maxPooledOuterLeafBytesCap {
+		return -1
+	}
+	minClassCap := 1 << outerLeafBytesPoolMinShift
+	if capacity < minClassCap {
+		return -1
+	}
+	shift := bits.Len(uint(capacity)) - 1
+	if shift < outerLeafBytesPoolMinShift {
+		shift = outerLeafBytesPoolMinShift
+	}
+	if shift > outerLeafBytesPoolMaxShift {
+		shift = outerLeafBytesPoolMaxShift
+	}
+	return shift - outerLeafBytesPoolMinShift
+}
+
+func getPooledBytes(minCap int) []byte {
+	idx, classCap := pooledBytesClassForGet(minCap)
+	if idx < 0 {
+		return make([]byte, 0, minCap)
+	}
+	if v := outerLeafBytesClassPools[idx].Get(); v != nil {
+		if buf, ok := v.([]byte); ok && cap(buf) >= minCap {
 			return buf[:0]
 		}
-		entry.next = held
-		held = entry
 	}
-	for held != nil {
-		next := held.next
-		held.next = nil
-		outerLeafBytesPool.Put(held)
-		held = next
-	}
-	return make([]byte, 0, minCap)
+	return make([]byte, 0, classCap)
 }
 
 func putPooledBytes(buf []byte) {
-	if cap(buf) == 0 || cap(buf) > maxPooledOuterLeafBytesCap {
+	idx := pooledBytesClassForPut(cap(buf))
+	if idx < 0 {
 		return
 	}
-	entry := outerLeafBytesEntryPool.Get().(*bytesPoolEntry)
-	entry.buf = buf[:0]
-	entry.next = nil
-	outerLeafBytesPool.Put(entry)
+	outerLeafBytesClassPools[idx].Put(buf[:0])
 }
 
 func getPooledRestarts(minCap int) []uint32 {
@@ -1837,6 +1849,11 @@ func DecodeBlockLeaseWithScratchAndVerify(payload []byte, scratch []byte, dst *D
 	// become reusable decode scratch.
 	if len(payload) >= 6 && payload[5] != blockCodecNone && block.raw != nil {
 		nextScratch = block.raw[:0]
+		// Transfer ownership of pooled raw bytes to caller-managed scratch reuse.
+		// block.Release must not recycle the same backing twice.
+		if block.pooledRaw {
+			block.pooledRaw = false
+		}
 	}
 	return block, nextScratch, nil
 }
