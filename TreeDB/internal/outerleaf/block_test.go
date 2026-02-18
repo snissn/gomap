@@ -726,6 +726,137 @@ func TestDecodeLowerBoundAndKeysOnMatchWithVerify(t *testing.T) {
 	}
 }
 
+func TestDecodedBlockLowerBound_NoAllocsForSmallKeys(t *testing.T) {
+	entries := []Entry{
+		{Key: []byte("k10"), Value: []byte("v10")},
+		{Key: []byte("k20"), Value: []byte("v20")},
+		{Key: []byte("k30"), Value: []byte("v30")},
+	}
+
+	run := func(name string, payload []byte) {
+		t.Helper()
+		blk, err := DecodeBlock(payload, nil)
+		if err != nil {
+			t.Fatalf("%s DecodeBlock: %v", name, err)
+		}
+		allocs := testing.AllocsPerRun(1000, func() {
+			pos, below, above, err := blk.LowerBound([]byte("k20"))
+			if err != nil {
+				t.Fatalf("%s LowerBound: %v", name, err)
+			}
+			if pos != 1 || below || above {
+				t.Fatalf("%s LowerBound got (pos=%d below=%v above=%v)", name, pos, below, above)
+			}
+		})
+		if allocs != 0 {
+			t.Fatalf("%s expected zero allocs per run, got %.2f", name, allocs)
+		}
+	}
+
+	v2Payload, err := EncodeEntries(nil, entries, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeEntries(v2): %v", err)
+	}
+	run("v2", v2Payload)
+
+	typed := make([]TypedEntry, len(entries))
+	for i := range entries {
+		typed[i] = TypedEntry{
+			Key:   entries[i].Key,
+			Kind:  EntryKindInline,
+			Value: entries[i].Value,
+		}
+	}
+	v3Payload, err := EncodeTypedEntries(nil, typed, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+	run("v3", v3Payload)
+}
+
+func TestDecodedBlockLowerBound_LongKeysUseHeapFallback(t *testing.T) {
+	makeLongKey := func(last byte) []byte {
+		key := make([]byte, 0, 71)
+		key = append(key, bytes.Repeat([]byte("a"), 70)...)
+		key = append(key, last)
+		return key
+	}
+
+	entries := []Entry{
+		{Key: makeLongKey('1'), Value: []byte("v1")},
+		{Key: makeLongKey('2'), Value: []byte("v2")},
+		{Key: makeLongKey('3'), Value: []byte("v3")},
+	}
+	targetBelow := makeLongKey('0')
+	targetMatch := makeLongKey('2')
+	targetAbove := makeLongKey('9')
+
+	run := func(name string, payload []byte) {
+		t.Helper()
+		blk, err := DecodeBlock(payload, nil)
+		if err != nil {
+			t.Fatalf("%s DecodeBlock: %v", name, err)
+		}
+
+		pos, below, above, err := blk.LowerBound(targetBelow)
+		if err != nil {
+			t.Fatalf("%s LowerBound(below): %v", name, err)
+		}
+		if pos != 0 || !below || above {
+			t.Fatalf("%s LowerBound(below) got (pos=%d below=%v above=%v)", name, pos, below, above)
+		}
+
+		pos, below, above, err = blk.LowerBound(targetMatch)
+		if err != nil {
+			t.Fatalf("%s LowerBound(match): %v", name, err)
+		}
+		if pos != 1 || below || above {
+			t.Fatalf("%s LowerBound(match) got (pos=%d below=%v above=%v)", name, pos, below, above)
+		}
+
+		pos, below, above, err = blk.LowerBound(targetAbove)
+		if err != nil {
+			t.Fatalf("%s LowerBound(above): %v", name, err)
+		}
+		if pos != len(entries) || below || !above {
+			t.Fatalf("%s LowerBound(above) got (pos=%d below=%v above=%v)", name, pos, below, above)
+		}
+
+		allocs := testing.AllocsPerRun(1000, func() {
+			pos, below, above, err := blk.LowerBound(targetMatch)
+			if err != nil {
+				t.Fatalf("%s LowerBound(match allocs): %v", name, err)
+			}
+			if pos != 1 || below || above {
+				t.Fatalf("%s LowerBound(match allocs) got (pos=%d below=%v above=%v)", name, pos, below, above)
+			}
+		})
+		if allocs == 0 {
+			t.Fatalf("%s expected heap fallback allocations for long keys, got %.2f", name, allocs)
+		}
+	}
+
+	v2Payload, err := EncodeEntries(nil, entries, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeEntries(v2): %v", err)
+	}
+	run("v2", v2Payload)
+
+	typed := make([]TypedEntry, len(entries))
+	for i := range entries {
+		typed[i] = TypedEntry{
+			Key:   entries[i].Key,
+			Kind:  EntryKindInline,
+			Value: entries[i].Value,
+		}
+	}
+	v3Payload, err := EncodeTypedEntries(nil, typed, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+	run("v3", v3Payload)
+}
+
 func TestDecodeKeysRangeWithVerify(t *testing.T) {
 	v2Payload, err := EncodeEntries(nil, []Entry{
 		{Key: []byte("k10"), Value: []byte("v10")},
@@ -959,7 +1090,7 @@ func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
 	})
 
 	undersized := make([][]byte, 0, 2)
-	outerLeafLeaseKeysPool.Put(undersized)
+	putPooledLeaseKeys(undersized)
 
 	got := getPooledLeaseKeys(4)
 	if cap(got) < 4 {
@@ -976,11 +1107,83 @@ func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
 	})
 
 	undersized := make([]byte, 0, 8)
-	outerLeafLeaseArenaPool.Put(undersized)
+	putPooledLeaseArena(undersized)
 
 	got := getPooledLeaseArena(16)
 	if cap(got) < 16 {
 		t.Fatalf("cap(got)=%d want >=16", cap(got))
+	}
+}
+
+func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
+	for outerLeafLeaseKeysPool.Get() != nil {
+	}
+	t.Cleanup(func() {
+		for outerLeafLeaseKeysPool.Get() != nil {
+		}
+	})
+
+	warm := make([][]byte, 2, 32)
+	warm[0] = []byte("left")
+	warm[1] = []byte("right")
+	putPooledLeaseKeys(warm)
+
+	got := getPooledLeaseKeys(1)
+	if cap(got) < cap(warm) {
+		t.Fatalf("cap(got)=%d want >=%d", cap(got), cap(warm))
+	}
+	if len(got) != 0 {
+		t.Fatalf("len(got)=%d want=0", len(got))
+	}
+	got = got[:2]
+	if got[0] != nil || got[1] != nil {
+		t.Fatalf("expected cleared pooled entries, got=%v", got)
+	}
+
+	got[0] = []byte("mutated")
+	putPooledLeaseKeys(got[:0])
+
+	got = getPooledLeaseKeys(1)
+	if cap(got) < cap(warm) {
+		t.Fatalf("cap(got)=%d want >=%d on warm reuse", cap(got), cap(warm))
+	}
+	if len(got) != 0 {
+		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
+	}
+	got = got[:1]
+	if got[0] != nil {
+		t.Fatalf("expected cleared pooled entry on reuse, got=%v", got[0])
+	}
+}
+
+func TestGetPooledLeaseArena_WarmReuse(t *testing.T) {
+	for outerLeafLeaseArenaPool.Get() != nil {
+	}
+	t.Cleanup(func() {
+		for outerLeafLeaseArenaPool.Get() != nil {
+		}
+	})
+
+	warm := make([]byte, 64)
+	putPooledLeaseArena(warm)
+
+	got := getPooledLeaseArena(1)
+	if cap(got) < cap(warm) {
+		t.Fatalf("cap(got)=%d want >=%d", cap(got), cap(warm))
+	}
+	if len(got) != 0 {
+		t.Fatalf("len(got)=%d want=0", len(got))
+	}
+
+	got = append(got, 'x')
+	putPooledLeaseArena(got)
+
+	got = getPooledLeaseArena(1)
+	if cap(got) < cap(warm) {
+		t.Fatalf("cap(got)=%d want >=%d on warm reuse", cap(got), cap(warm))
+	}
+	if len(got) != 0 {
+		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
 	}
 }
 
