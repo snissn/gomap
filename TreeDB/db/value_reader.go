@@ -163,11 +163,17 @@ func (s *outerLeafFenceDecodeLeaseSet) acquire() *outerLeafFenceDecodeContext {
 	if s == nil || s.closed.Load() {
 		return nil
 	}
+	initCtx := func(ctx *outerLeafFenceDecodeContext) *outerLeafFenceDecodeContext {
+		if ctx != nil && cap(ctx.scratch) == 0 {
+			ctx.scratch = outerLeafFenceDecodeScratchGet()
+		}
+		return ctx
+	}
 	select {
 	case ctx := <-s.pool:
-		return ctx
+		return initCtx(ctx)
 	default:
-		return &outerLeafFenceDecodeContext{}
+		return initCtx(&outerLeafFenceDecodeContext{})
 	}
 }
 
