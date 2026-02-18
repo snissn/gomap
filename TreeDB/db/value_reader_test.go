@@ -1023,6 +1023,48 @@ func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_UsesAppendReader(t 
 	}
 }
 
+func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_RetainsOuterBufferCapacity(t *testing.T) {
+	key := []byte("blob-k")
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(32), Offset: 24576, Length: 9}
+	outerPayload, outerPtr := makeTestOuterLeafBlobRefPayload(t, key, blobPtr)
+	want := []byte("blob-data")
+	reader := &stubValueLogAppendReader{
+		stubValueLogReader: stubValueLogReader{
+			payloads: map[page.ValuePtr][]byte{
+				outerPtr: outerPayload,
+				blobPtr:  want,
+			},
+		},
+	}
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+	}
+
+	dst := make([]byte, 0, 1)
+	got, err := r.ReadUnsafeAppendForKey(outerPtr, key, dst)
+	if err != nil {
+		t.Fatalf("ReadUnsafeAppendForKey first: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("first value = %q, want %q", got, want)
+	}
+	if cap(got) < len(outerPayload) {
+		t.Fatalf("first cap = %d, want >= outer payload size %d", cap(got), len(outerPayload))
+	}
+
+	got2, err := r.ReadUnsafeAppendForKey(outerPtr, key, got[:0])
+	if err != nil {
+		t.Fatalf("ReadUnsafeAppendForKey second: %v", err)
+	}
+	if !bytes.Equal(got2, want) {
+		t.Fatalf("second value = %q, want %q", got2, want)
+	}
+	if cap(got2) < len(outerPayload) {
+		t.Fatalf("second cap = %d, want >= outer payload size %d", cap(got2), len(outerPayload))
+	}
+}
+
 func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_CacheHitUsesAppendReader(t *testing.T) {
 	key := []byte("blob-k")
 	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(33), Offset: 32768, Length: 9}
