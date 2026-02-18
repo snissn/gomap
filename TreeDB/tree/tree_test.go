@@ -23,6 +23,7 @@ type fenceLookupReader struct {
 	nextOffset uint64
 	fileID     uint32
 	fenceCalls int
+	fenceAppendCalls int
 	blockCalls int
 	keyCalls   int
 }
@@ -72,6 +73,19 @@ func (r *fenceLookupReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte)
 		return nil, false, nil
 	}
 	return val, true, nil
+}
+
+func (r *fenceLookupReader) ReadUnsafeFenceAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, bool, error) {
+	r.fenceAppendCalls++
+	block, ok := r.blocks[ptr]
+	if !ok {
+		return nil, false, fmt.Errorf("missing block ptr %+v", ptr)
+	}
+	val, ok := block[string(key)]
+	if !ok {
+		return dst, false, nil
+	}
+	return append(dst, val...), true, nil
 }
 
 func (r *fenceLookupReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]FenceBlockEntry, bool, error) {
@@ -538,5 +552,53 @@ func TestTreeGet_FencePredecessorLookupSkipsNonPointers(t *testing.T) {
 
 	if reader.fenceCalls != 3 {
 		t.Fatalf("fence calls = %d, want 3", reader.fenceCalls)
+	}
+}
+
+func TestTreeGetAppend_FencePredecessorLookupUsesAppender(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"k010": "v10",
+		"k020": "v20",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	got, err := tr.GetAppend([]byte("k020"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAppend(k020): %v", err)
+	}
+	if string(got) != "prefix:v20" {
+		t.Fatalf("GetAppend(k020) = %q, want %q", got, "prefix:v20")
+	}
+	if reader.fenceAppendCalls != 1 {
+		t.Fatalf("fence append calls = %d, want 1", reader.fenceAppendCalls)
+	}
+	if reader.fenceCalls != 0 {
+		t.Fatalf("fence calls = %d, want 0", reader.fenceCalls)
 	}
 }

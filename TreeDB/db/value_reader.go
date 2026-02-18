@@ -542,6 +542,146 @@ func (r valueReader) decodeValueForKeyFoundWithLeaseCtx(cacheKey outerLeafBlockK
 	return val, true, nil
 }
 
+func (r valueReader) decodeValueForKeyFoundAppend(ptr page.ValuePtr, key, raw, dst []byte) ([]byte, bool, error) {
+	if !r.outerLeafModeEnabled() {
+		return append(dst[:0], raw...), true, nil
+	}
+	if !outerleaf.HasMagic(raw) {
+		return append(dst[:0], raw...), true, nil
+	}
+	if r.cache == nil {
+		if leases := r.fenceDecodeLeases; leases != nil {
+			if ctx := leases.acquire(); ctx != nil {
+				val, found, err := r.decodeOuterLeafAppendForKeyNoCacheWithLeaseCtx(raw, key, dst, ctx)
+				leases.release(ctx)
+				return val, found, err
+			}
+		}
+		return r.decodeOuterLeafAppendForKeyNoCache(raw, key, dst)
+	}
+	cacheKey := newOuterLeafBlockKey(ptr)
+	if block := r.cache.get(cacheKey); block != nil {
+		entry, found, err := block.EntryForKey(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return nil, false, nil
+		}
+		out, err := r.resolveLookupResultAppend(entry, dst)
+		if err != nil {
+			return nil, false, err
+		}
+		return out, true, nil
+	}
+	if leases := r.fenceDecodeLeases; leases != nil {
+		if ctx := leases.acquire(); ctx != nil {
+			val, found, err := r.decodeValueForKeyFoundAppendWithLeaseCtx(cacheKey, key, raw, dst, ctx)
+			leases.release(ctx)
+			return val, found, err
+		}
+	}
+	verifyChecksums := !r.skipOuterLeafChecksums
+	scratch := outerLeafFenceDecodeScratchGet()
+	decodedBlock := outerLeafFenceDecodedBlockGet()
+	block, nextScratch, err := outerleaf.DecodeBlockLeaseWithScratchAndVerify(raw, scratch, decodedBlock, verifyChecksums)
+	if err != nil {
+		outerLeafFenceDecodedBlockPut(decodedBlock)
+		outerLeafFenceDecodeScratchPut(nextScratch)
+		return nil, false, err
+	}
+	if block == nil {
+		outerLeafFenceDecodedBlockPut(decodedBlock)
+		outerLeafFenceDecodeScratchPut(nextScratch)
+		return nil, false, nil
+	}
+	releaseAfterLookup := true
+	if block.FirstKind() != outerleaf.EntryKindBlobRef {
+		nextScratch = block.ReclaimTransferredScratchForRelease(nextScratch)
+		r.cache.put(cacheKey, block)
+		releaseAfterLookup = false
+	}
+	if releaseAfterLookup {
+		defer func() {
+			block.Release()
+			outerLeafFenceDecodedBlockPut(decodedBlock)
+			outerLeafFenceDecodeScratchPut(nextScratch)
+		}()
+	}
+	var (
+		entry outerleaf.LookupResult
+		found bool
+	)
+	if releaseAfterLookup {
+		entry, found, err = block.EntryForKeyNoRestartKeys(key)
+	} else {
+		entry, found, err = block.EntryForKey(key)
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	out, err := r.resolveLookupResultAppend(entry, dst)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+func (r valueReader) decodeValueForKeyFoundAppendWithLeaseCtx(cacheKey outerLeafBlockKey, key, raw, dst []byte, ctx *outerLeafFenceDecodeContext) ([]byte, bool, error) {
+	verifyChecksums := !r.skipOuterLeafChecksums
+	scratch := ctx.scratch
+	decodedBlock := ctx.block
+	if decodedBlock == nil {
+		decodedBlock = outerLeafFenceDecodedBlockGet()
+		ctx.block = decodedBlock
+	}
+	block, nextScratch, err := outerleaf.DecodeBlockLeaseWithScratchAndVerify(raw, scratch, decodedBlock, verifyChecksums)
+	if err != nil {
+		ctx.scratch = nextScratch
+		return nil, false, err
+	}
+	if block == nil {
+		ctx.scratch = nextScratch
+		return nil, false, nil
+	}
+	if block.FirstKind() != outerleaf.EntryKindBlobRef {
+		nextScratch = block.ReclaimTransferredScratchForRelease(nextScratch)
+		ctx.scratch = nextScratch
+		ctx.block = outerLeafFenceDecodedBlockGet()
+		r.cache.put(cacheKey, block)
+		entry, found, err := block.EntryForKey(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return nil, false, nil
+		}
+		out, err := r.resolveLookupResultAppend(entry, dst)
+		if err != nil {
+			return nil, false, err
+		}
+		return out, true, nil
+	}
+	entry, found, err := block.EntryForKeyNoRestartKeys(key)
+	block.Release()
+	ctx.block = block
+	ctx.scratch = nextScratch
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	out, err := r.resolveLookupResultAppend(entry, dst)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
 func (r valueReader) decodeOuterLeafValueForKeyNoCacheWithLeaseCtx(raw, key []byte, unsafe bool, ctx *outerLeafFenceDecodeContext) ([]byte, bool, error) {
 	verifyChecksums := !r.skipOuterLeafChecksums
 	scratch := ctx.scratch
@@ -568,6 +708,31 @@ func (r valueReader) decodeOuterLeafValueForKeyNoCacheWithLeaseCtx(raw, key []by
 		val = append([]byte(nil), val...)
 	}
 	return val, true, nil
+}
+
+func (r valueReader) decodeOuterLeafAppendForKeyNoCacheWithLeaseCtx(raw, key, dst []byte, ctx *outerLeafFenceDecodeContext) ([]byte, bool, error) {
+	verifyChecksums := !r.skipOuterLeafChecksums
+	scratch := ctx.scratch
+	entry, ok, found, outScratch, err := outerleaf.DecodeEntryForKeyWithVerify(raw, key, scratch, verifyChecksums)
+	nextScratch := outScratch
+	if cap(nextScratch) == 0 {
+		nextScratch = scratch
+	}
+	ctx.scratch = nextScratch
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return raw, true, nil
+	}
+	if !found {
+		return nil, false, nil
+	}
+	out, err := r.resolveLookupResultAppend(entry, dst)
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
 }
 
 func (r valueReader) decodeOuterLeafValueForKeyNoCache(raw, key []byte, unsafe bool) ([]byte, bool, error) {
@@ -739,6 +904,34 @@ func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byt
 		return nil, false, nil
 	}
 	return r.decodeValueForKeyFound(ptr, key, raw, true)
+}
+
+func (r valueReader) ReadUnsafeFenceAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, bool, error) {
+	if !r.fenceLookupModeEnabled() {
+		return dst, false, nil
+	}
+	if block := r.cachedOuterLeafBlock(ptr); block != nil {
+		entry, found, err := block.EntryForKey(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return dst, false, nil
+		}
+		out, err := r.resolveLookupResultAppend(entry, dst)
+		if err != nil {
+			return nil, false, err
+		}
+		return out, true, nil
+	}
+	raw, err := r.readRawUnsafe(ptr)
+	if err != nil {
+		return nil, false, err
+	}
+	if !outerleaf.HasMagic(raw) {
+		return dst, false, nil
+	}
+	return r.decodeValueForKeyFoundAppend(ptr, key, raw, dst)
 }
 
 func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockEntry, bool, error) {
