@@ -256,9 +256,6 @@ func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums b
 		cache:                  cache,
 		keyCache:               keyCache,
 	}
-	if cache != nil {
-		r.fenceDecodeLeases = newOuterLeafFenceDecodeLeaseSet(0)
-	}
 	r.setOuterLeafMode(mode)
 	return r
 }
