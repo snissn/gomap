@@ -122,21 +122,23 @@ func TestOuterLeafFenceDecodeScratchPoolCapBounded(t *testing.T) {
 	}
 }
 
-func TestOuterLeafFenceDecodeLeaseSetAcquireBounded(t *testing.T) {
+func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	set := newOuterLeafFenceDecodeLeaseSet(1)
-	ctx := set.acquire()
-	if ctx == nil {
+	ctx1 := set.acquire()
+	if ctx1 == nil {
 		t.Fatalf("first acquire returned nil")
 	}
-	if got := set.acquire(); got != nil {
-		t.Fatalf("second acquire=%v want nil when lease set is saturated", got)
+	ctx2 := set.acquire()
+	if ctx2 == nil {
+		t.Fatalf("second acquire returned nil")
 	}
-	set.release(ctx)
-	ctx = set.acquire()
-	if ctx == nil {
+	set.release(ctx1)
+	set.release(ctx2)
+	ctx3 := set.acquire()
+	if ctx3 == nil {
 		t.Fatalf("acquire after release returned nil")
 	}
-	set.release(ctx)
+	set.release(ctx3)
 }
 
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
