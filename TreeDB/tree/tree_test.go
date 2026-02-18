@@ -92,8 +92,17 @@ type fenceLookupTailAppenderReader struct {
 	*fenceLookupReader
 }
 
+type fenceLookupSeekReader struct {
+	*fenceLookupReader
+	seekCalls int
+}
+
 func newFenceLookupTailAppenderReader() *fenceLookupTailAppenderReader {
 	return &fenceLookupTailAppenderReader{fenceLookupReader: newFenceLookupReader()}
+}
+
+func newFenceLookupSeekReader() *fenceLookupSeekReader {
+	return &fenceLookupSeekReader{fenceLookupReader: newFenceLookupReader()}
 }
 
 func (r *fenceLookupTailAppenderReader) ReadUnsafeFenceAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, bool, error) {
@@ -148,6 +157,36 @@ func (r *fenceLookupReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byt
 		out = append(out, []byte(k))
 	}
 	return out, true, nil
+}
+
+func (r *fenceLookupSeekReader) ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (pos int, below bool, above bool, keys [][]byte, ok bool, err error) {
+	r.seekCalls++
+	block, ok := r.blocks[ptr]
+	if !ok {
+		return 0, false, false, nil, true, fmt.Errorf("missing block ptr %+v", ptr)
+	}
+	sorted := make([]string, 0, len(block))
+	for k := range block {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+	if len(sorted) == 0 {
+		return 0, false, true, nil, true, nil
+	}
+	keys = make([][]byte, len(sorted))
+	for i := range sorted {
+		keys[i] = []byte(sorted[i])
+	}
+	pos = sort.Search(len(keys), func(i int) bool {
+		return bytes.Compare(keys[i], key) >= 0
+	})
+	if pos == 0 && bytes.Compare(key, keys[0]) < 0 {
+		return 0, true, false, nil, true, nil
+	}
+	if pos >= len(keys) {
+		return len(keys), false, true, nil, true, nil
+	}
+	return pos, false, false, keys, true, nil
 }
 
 func (r *trackedValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -581,6 +620,73 @@ func TestTreeGet_FencePredecessorLookupSkipsNonPointers(t *testing.T) {
 	}
 	if reader.fenceAppendCalls != 2 {
 		t.Fatalf("fence append calls = %d, want 2", reader.fenceAppendCalls)
+	}
+}
+
+func TestTreeHas_FencePredecessorLookupUsesSeekWhenAvailable(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupSeekReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"k010": "v10",
+		"k020": "v20",
+		"k050": "v50",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"k110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k110"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(k110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	has, err := tr.Has([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Has(k020): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(k020) = false, want true")
+	}
+
+	has, err = tr.Has([]byte("k030"))
+	if err != nil {
+		t.Fatalf("Has(k030): %v", err)
+	}
+	if has {
+		t.Fatalf("Has(k030) = true, want false")
+	}
+
+	if reader.seekCalls == 0 {
+		t.Fatalf("seek calls = %d, want > 0", reader.seekCalls)
+	}
+	if reader.fenceCalls != 0 {
+		t.Fatalf("fence calls = %d, want 0", reader.fenceCalls)
+	}
+	if reader.fenceAppendCalls != 0 {
+		t.Fatalf("fence append calls = %d, want 0", reader.fenceAppendCalls)
 	}
 }
 
