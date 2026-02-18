@@ -7,6 +7,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+const outerLeafBlockCachePromotionSampleMask uint64 = 7 // promote ~1/8 cache hits
+
 type outerLeafBlockKey struct {
 	fileID uint32
 	offset uint64
@@ -108,7 +110,9 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) *outerleaf.DecodedBlock
 		return nil
 	}
 	s.hits++
-	s.moveToFront(idx)
+	if (s.hits & outerLeafBlockCachePromotionSampleMask) == 0 {
+		s.moveToFront(idx)
+	}
 	return s.nodes[idx].block
 }
 
