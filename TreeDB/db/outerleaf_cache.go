@@ -2,6 +2,7 @@ package db
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -22,21 +23,76 @@ func newOuterLeafBlockKey(ptr page.ValuePtr) outerLeafBlockKey {
 }
 
 type outerLeafBlockCacheEntry struct {
-	key   outerLeafBlockKey
+	key  outerLeafBlockKey
+	ref  *outerLeafBlockRef
+	prev int
+	next int
+}
+
+type outerLeafBlockRef struct {
 	block *outerleaf.DecodedBlock
-	prev  int
-	next  int
+	refs  atomic.Int32
+}
+
+func newOuterLeafBlockRef(block *outerleaf.DecodedBlock) *outerLeafBlockRef {
+	if block == nil {
+		return nil
+	}
+	ref := &outerLeafBlockRef{block: block}
+	ref.refs.Store(1) // cache ownership
+	return ref
+}
+
+func (r *outerLeafBlockRef) retain() bool {
+	if r == nil {
+		return false
+	}
+	for {
+		n := r.refs.Load()
+		if n <= 0 {
+			return false
+		}
+		if r.refs.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
+func (r *outerLeafBlockRef) release() {
+	if r == nil {
+		return
+	}
+	if r.refs.Add(-1) != 0 {
+		return
+	}
+	if r.block != nil {
+		r.block.Release()
+		outerLeafFenceDecodedBlockPut(r.block)
+		r.block = nil
+	}
+}
+
+type outerLeafBlockCacheLease struct {
+	ref *outerLeafBlockRef
+}
+
+func (l *outerLeafBlockCacheLease) Release() {
+	if l == nil || l.ref == nil {
+		return
+	}
+	l.ref.release()
+	l.ref = nil
 }
 
 type outerLeafBlockCacheShard struct {
-	mu       sync.Mutex
+	mu       sync.RWMutex
 	entries  map[outerLeafBlockKey]int
 	nodes    []outerLeafBlockCacheEntry
 	free     []int
 	head     int
 	tail     int
-	hits     uint64
-	misses   uint64
+	hits     atomic.Uint64
+	misses   atomic.Uint64
 	capacity int
 }
 
@@ -45,19 +101,28 @@ type outerLeafBlockCache struct {
 	capacity int
 }
 
+// On heavily contended read paths, full LRU promotion on every cache hit
+// creates avoidable write-lock churn. Promote a sampled subset of hits to keep
+// recency reasonably fresh while reducing lock pressure.
+const outerLeafBlockCachePromoteSampleMask uint64 = 0x0f // 1/16
+
+// Keep shard fanout bounded while aiming for modest per-shard queueing under
+// mixed read/write contention.
+const outerLeafBlockCacheTargetEntriesPerShard = 64
+const outerLeafBlockCacheMaxShards = 64
+
 func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 	if capacity <= 0 {
 		return nil
 	}
 
-	// Keep per-shard capacity reasonably sized (target ~64 entries/shard)
-	// while bounding lock fanout.
+	// Keep per-shard capacity reasonably sized while bounding lock fanout.
 	shardCount := 1
-	targetShards := capacity / 64
+	targetShards := capacity / outerLeafBlockCacheTargetEntriesPerShard
 	if targetShards < 1 {
 		targetShards = 1
 	}
-	for shardCount < targetShards && shardCount < 64 {
+	for shardCount < targetShards && shardCount < outerLeafBlockCacheMaxShards {
 		shardCount <<= 1
 	}
 	if shardCount > capacity {
@@ -98,43 +163,69 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 	}
 }
 
-func (c *outerLeafBlockCache) get(key outerLeafBlockKey) *outerleaf.DecodedBlock {
+func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBlock, outerLeafBlockCacheLease) {
+	var lease outerLeafBlockCacheLease
 	s := c.shardFor(key)
-	s.mu.Lock()
+	s.mu.RLock()
 	idx, ok := s.entries[key]
 	if !ok {
-		s.misses++
-		s.mu.Unlock()
-		return nil
+		s.mu.RUnlock()
+		s.misses.Add(1)
+		return nil, lease
 	}
-	s.hits++
-	s.moveToFront(idx)
-	block := s.nodes[idx].block
-	s.mu.Unlock()
-	return block
+	ref := s.nodes[idx].ref
+	if ref == nil || !ref.retain() {
+		s.mu.RUnlock()
+		s.misses.Add(1)
+		return nil, lease
+	}
+	block := ref.block
+	needPromote := idx != s.head
+	s.mu.RUnlock()
+	if block == nil {
+		ref.release()
+		s.misses.Add(1)
+		return nil, lease
+	}
+	hits := s.hits.Add(1)
+
+	// Best-effort recency maintenance: avoid blocking readers on shard write
+	// lock when contended. This preserves functional behavior and keeps LRU
+	// ordering close under concurrency.
+	if needPromote && (hits&outerLeafBlockCachePromoteSampleMask) == 0 && s.mu.TryLock() {
+		if idx2, ok2 := s.entries[key]; ok2 && idx2 != s.head {
+			s.moveToFront(idx2)
+		}
+		s.mu.Unlock()
+	}
+	lease.ref = ref
+	return block, lease
 }
 
 func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.DecodedBlock) {
 	s := c.shardFor(key)
 	s.mu.Lock()
-	var releaseOld *outerleaf.DecodedBlock
-	var releaseEvicted *outerleaf.DecodedBlock
+	var releaseOld *outerLeafBlockRef
+	var releaseEvicted *outerLeafBlockRef
 	if idx, ok := s.entries[key]; ok {
-		releaseOld = s.nodes[idx].block
-		s.nodes[idx].block = block
+		releaseOld = s.nodes[idx].ref
+		if releaseOld != nil && releaseOld.block == block {
+			s.nodes[idx].ref = releaseOld
+			releaseOld = nil
+		} else {
+			s.nodes[idx].ref = newOuterLeafBlockRef(block)
+		}
 		s.moveToFront(idx)
 		s.mu.Unlock()
-		if releaseOld != nil && releaseOld != block {
-			releaseOld.Release()
-			outerLeafFenceDecodedBlockPut(releaseOld)
+		if releaseOld != nil {
+			releaseOld.release()
 		}
 		return
 	}
 	if s.capacity <= 0 {
 		s.mu.Unlock()
-		if block != nil {
-			block.Release()
-			outerLeafFenceDecodedBlockPut(block)
+		if ref := newOuterLeafBlockRef(block); ref != nil {
+			ref.release()
 		}
 		return
 	}
@@ -146,28 +237,32 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 	} else {
 		idx = s.tail
 		if idx < 0 {
-			if block != nil {
-				block.Release()
-				outerLeafFenceDecodedBlockPut(block)
+			s.mu.Unlock()
+			if ref := newOuterLeafBlockRef(block); ref != nil {
+				ref.release()
 			}
 			return
 		}
 		evictedKey := s.nodes[idx].key
-		releaseEvicted = s.nodes[idx].block
+		releaseEvicted = s.nodes[idx].ref
 		s.unlink(idx)
 		delete(s.entries, evictedKey)
 	}
 	node := &s.nodes[idx]
 	node.key = key
-	node.block = block
+	if releaseEvicted != nil && releaseEvicted.block == block {
+		node.ref = releaseEvicted
+		releaseEvicted = nil
+	} else {
+		node.ref = newOuterLeafBlockRef(block)
+	}
 	node.prev = -1
 	node.next = -1
 	s.linkFront(idx)
 	s.entries[key] = idx
 	s.mu.Unlock()
-	if releaseEvicted != nil && releaseEvicted != block {
-		releaseEvicted.Release()
-		outerLeafFenceDecodedBlockPut(releaseEvicted)
+	if releaseEvicted != nil {
+		releaseEvicted.release()
 	}
 }
 
@@ -177,11 +272,11 @@ func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, 
 	var totalMisses uint64
 	for i := range c.shards {
 		s := &c.shards[i]
-		s.mu.Lock()
-		totalHits += s.hits
-		totalMisses += s.misses
+		s.mu.RLock()
 		totalEntries += len(s.entries)
-		s.mu.Unlock()
+		s.mu.RUnlock()
+		totalHits += s.hits.Load()
+		totalMisses += s.misses.Load()
 	}
 	return totalHits, totalMisses, totalEntries, c.capacity
 }

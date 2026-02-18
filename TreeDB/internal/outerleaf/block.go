@@ -42,6 +42,8 @@ var blockMagic = [4]byte{'T', 'O', 'L', '2'}
 
 const (
 	// Keep pooled scratch buffers bounded to avoid retaining outsized slices.
+	// These classed pools trade additional retained memory for fewer decode
+	// allocations on hot read paths.
 	maxPooledOuterLeafBytesCap      = 512 << 10
 	maxPooledOuterLeafRestartsCap   = 4096
 	maxPooledOuterLeafLeaseKeysCap  = 4096
@@ -132,8 +134,7 @@ type keyLeaseChunk struct {
 }
 
 type bytesPoolEntry struct {
-	buf  []byte
-	next *bytesPoolEntry
+	buf []byte
 }
 
 type restartsPoolEntry struct {
@@ -581,7 +582,6 @@ func getPooledBytes(minCap int) []byte {
 		if entry, ok := v.(*bytesPoolEntry); ok && entry != nil {
 			buf := entry.buf
 			entry.buf = nil
-			entry.next = nil
 			outerLeafBytesEntryPool.Put(entry)
 			if cap(buf) >= minCap {
 				return buf[:0]
@@ -603,7 +603,6 @@ func putPooledBytes(buf []byte) {
 	pool := &outerLeafBytesPools[shift-outerLeafBytesMinClassShift]
 	entry := outerLeafBytesEntryPool.Get().(*bytesPoolEntry)
 	entry.buf = buf[:0]
-	entry.next = nil
 	pool.Put(entry)
 }
 
