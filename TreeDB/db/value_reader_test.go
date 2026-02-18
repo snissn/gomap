@@ -97,6 +97,30 @@ func makeTestOuterLeafPayload(t *testing.T) ([]byte, *outerleaf.DecodedBlock, pa
 	return encoded, block, ptr
 }
 
+func TestOuterLeafFenceDecodeScratchPoolCapBounded(t *testing.T) {
+	const maxExpected = 8 << 20
+	if outerLeafFenceDecodeScratchMaxRetain > maxExpected {
+		t.Fatalf("outerLeafFenceDecodeScratchMaxRetain=%d exceeds bound=%d", outerLeafFenceDecodeScratchMaxRetain, maxExpected)
+	}
+}
+
+func TestOuterLeafFenceDecodeLeaseSetAcquireBounded(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	ctx := set.acquire()
+	if ctx == nil {
+		t.Fatalf("first acquire returned nil")
+	}
+	if got := set.acquire(); got != nil {
+		t.Fatalf("second acquire=%v want nil when lease set is saturated", got)
+	}
+	set.release(ctx)
+	ctx = set.acquire()
+	if ctx == nil {
+		t.Fatalf("acquire after release returned nil")
+	}
+	set.release(ctx)
+}
+
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
 	payload, block, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
@@ -361,6 +385,68 @@ func TestValueReaderReadUnsafeFenceForKey_LeaseCtxCacheBlocksRemainStable(t *tes
 	}
 	if reader.readUnsafeCalls != 2 {
 		t.Fatalf("readUnsafeCalls=%d want=2 (A miss + B miss, then A cache hit)", reader.readUnsafeCalls)
+	}
+}
+
+func TestValueReaderReadUnsafeFenceForKey_NoCacheLeaseCtxInlineValuesRemainStable(t *testing.T) {
+	makePayload := func(prefix byte, offset uint64) (page.ValuePtr, []byte, []byte, []byte) {
+		key1 := []byte{prefix, '1'}
+		key2 := []byte{prefix, '2'}
+		key3 := []byte{prefix, '3'}
+		val1 := bytes.Repeat([]byte{prefix}, 1024)
+		val2 := bytes.Repeat([]byte{prefix + 1}, 1024)
+		val3 := bytes.Repeat([]byte{prefix + 2}, 1024)
+		encoded, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
+			{Key: key1, Value: val1},
+			{Key: key2, Value: val2},
+			{Key: key3, Value: val3},
+		}, uint8(ValueLogBlockSnappy), 16)
+		if err != nil {
+			t.Fatalf("encode outer-leaf payload: %v", err)
+		}
+		ptr := page.ValuePtr{
+			FileID: page.ValueLogFileID(11),
+			Offset: offset,
+			Length: uint32(len(encoded)),
+		}
+		return ptr, encoded, key2, val2
+	}
+
+	ptrA, payloadA, keyA, wantA := makePayload('a', 4096)
+	ptrB, payloadB, keyB, wantB := makePayload('b', 8192)
+	reader := &stubValueLogReader{
+		payloads: map[page.ValuePtr][]byte{
+			ptrA: payloadA,
+			ptrB: payloadB,
+		},
+	}
+	r := newValueReader(reader, outerleaf.ModeV2FencePtr, false, nil, nil)
+	defer (&r).releaseDecodeContext()
+	if r.fenceDecodeLeases == nil {
+		t.Fatalf("fenceDecodeLeases=nil want initialized for no-cache fence mode")
+	}
+
+	gotA1, found, err := r.ReadUnsafeFenceForKey(ptrA, keyA)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceForKey(A first): %v", err)
+	}
+	if !found || !bytes.Equal(gotA1, wantA) {
+		t.Fatalf("A first read found=%v val-len=%d want-len=%d", found, len(gotA1), len(wantA))
+	}
+
+	gotB, found, err := r.ReadUnsafeFenceForKey(ptrB, keyB)
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceForKey(B): %v", err)
+	}
+	if !found || !bytes.Equal(gotB, wantB) {
+		t.Fatalf("B read found=%v val-len=%d want-len=%d", found, len(gotB), len(wantB))
+	}
+
+	if !bytes.Equal(gotA1, wantA) {
+		t.Fatalf("A first value mutated after B read")
+	}
+	if reader.readUnsafeCalls != 2 {
+		t.Fatalf("readUnsafeCalls=%d want=2 (A miss + B miss)", reader.readUnsafeCalls)
 	}
 }
 
