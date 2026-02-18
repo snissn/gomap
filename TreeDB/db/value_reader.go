@@ -301,6 +301,7 @@ func (l *fenceBlockDecodeLease) Release() {
 	}
 	l.released = true
 	if l.block != nil {
+		l.scratch = l.block.ReclaimTransferredScratchForRelease(l.scratch)
 		l.block.Release()
 		outerLeafFenceDecodedBlockPut(l.block)
 		l.block = nil

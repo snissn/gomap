@@ -797,27 +797,33 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 		if payload, err := it.vlogs.Read(ptr); err == nil && outerleaf.HasMagic(payload) {
 			if block, decErr := outerleaf.DecodeBlockLease(payload); decErr == nil {
 				hasBlobRef := false
+				var nestedBlobRefFileIDs map[uint32]struct{}
 				visitErr := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, nestedPtr page.ValuePtr) error {
 					if kind == outerleaf.EntryKindBlobRef {
 						hasBlobRef = true
 						if it.retainedOldValueIDs != nil && page.IsValueLogFileID(nestedPtr.FileID) {
-							it.retainedOldValueIDs[nestedPtr.FileID] = struct{}{}
+							if nestedBlobRefFileIDs == nil {
+								nestedBlobRefFileIDs = make(map[uint32]struct{})
+							}
+							nestedBlobRefFileIDs[nestedPtr.FileID] = struct{}{}
 						}
 					}
 					return nil
 				})
 				block.Release()
-				if hasBlobRef {
-					// Conservative correctness fallback: keep pointers to nested
-					// blob-ref outer blocks unchanged until nested remap is active.
-					if it.retainedOldValueIDs != nil {
-						it.retainedOldValueIDs[ptr.FileID] = struct{}{}
-					}
-					return ptr, nil
-				}
 				if visitErr != nil {
 					// Preserve prior behavior on decode/visit errors by treating payload
 					// as non-outerleaf content and falling back to raw record rewrite.
+				} else if hasBlobRef {
+					// Conservative correctness fallback: keep pointers to nested
+					// blob-ref outer blocks unchanged until nested remap is active.
+					if it.retainedOldValueIDs != nil {
+						for fileID := range nestedBlobRefFileIDs {
+							it.retainedOldValueIDs[fileID] = struct{}{}
+						}
+						it.retainedOldValueIDs[ptr.FileID] = struct{}{}
+					}
+					return ptr, nil
 				}
 			}
 		}
