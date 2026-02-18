@@ -1618,6 +1618,18 @@ func lookupV2Value(entries []byte, entryCount int, key []byte, restarts []uint32
 }
 
 func lookupV2ValueFromRestartRaw(entries []byte, entryCount int, key []byte, restartRaw []byte, restartCount int) ([]byte, bool, error) {
+	if restartCount <= 0 {
+		return lookupV2Value(entries, entryCount, key, nil, nil)
+	}
+	const restartStackCap = 64
+	if restartCount <= restartStackCap {
+		var restartStack [restartStackCap]uint32
+		restarts, err := decodeRestartsFromRawInto(entries, restartRaw, restartCount, restartStack[:0])
+		if err != nil {
+			return nil, false, err
+		}
+		return lookupV2Value(entries, entryCount, key, restarts, nil)
+	}
 	restarts, pooled, err := decodeRestartsFromRawPooled(entries, restartRaw, restartCount)
 	if err != nil {
 		return nil, false, err
@@ -1835,6 +1847,18 @@ func lookupV3Entry(entries []byte, entryCount int, key []byte, restarts []uint32
 }
 
 func lookupV3EntryFromRestartRaw(entries []byte, entryCount int, key []byte, restartRaw []byte, restartCount int) (LookupResult, bool, error) {
+	if restartCount <= 0 {
+		return lookupV3Entry(entries, entryCount, key, nil, nil)
+	}
+	const restartStackCap = 64
+	if restartCount <= restartStackCap {
+		var restartStack [restartStackCap]uint32
+		restarts, err := decodeRestartsFromRawInto(entries, restartRaw, restartCount, restartStack[:0])
+		if err != nil {
+			return LookupResult{}, false, err
+		}
+		return lookupV3Entry(entries, entryCount, key, restarts, nil)
+	}
 	restarts, pooled, err := decodeRestartsFromRawPooled(entries, restartRaw, restartCount)
 	if err != nil {
 		return LookupResult{}, false, err
