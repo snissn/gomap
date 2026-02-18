@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -139,9 +138,7 @@ type outerLeafFenceDecodeContext struct {
 }
 
 type outerLeafFenceDecodeLeaseSet struct {
-	pool      sync.Pool
-	maxActive int32
-	active    atomic.Int32
+	pool sync.Pool
 }
 
 func outerLeafFenceDecodeSharedLeaseSet() *outerLeafFenceDecodeLeaseSet {
@@ -157,7 +154,7 @@ func newOuterLeafFenceDecodeLeaseSet(size int) *outerLeafFenceDecodeLeaseSet {
 	if size <= 0 {
 		size = outerLeafFenceDecodeLeaseSetPreferredSize()
 	}
-	set := &outerLeafFenceDecodeLeaseSet{maxActive: int32(size)}
+	set := &outerLeafFenceDecodeLeaseSet{}
 	set.pool.New = func() any {
 		return acquireOuterLeafFenceDecodeContext()
 	}
@@ -182,15 +179,6 @@ func (s *outerLeafFenceDecodeLeaseSet) acquire() *outerLeafFenceDecodeContext {
 	if s == nil {
 		return nil
 	}
-	for {
-		cur := s.active.Load()
-		if cur >= s.maxActive {
-			return nil
-		}
-		if s.active.CompareAndSwap(cur, cur+1) {
-			break
-		}
-	}
 	if v := s.pool.Get(); v != nil {
 		if ctx, ok := v.(*outerLeafFenceDecodeContext); ok && ctx != nil {
 			return ctx
@@ -204,7 +192,6 @@ func (s *outerLeafFenceDecodeLeaseSet) release(ctx *outerLeafFenceDecodeContext)
 		return
 	}
 	s.pool.Put(ctx)
-	s.active.Add(-1)
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) close() {
