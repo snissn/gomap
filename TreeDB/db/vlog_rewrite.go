@@ -492,15 +492,17 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 
 	alloc := &pagerAllocator{p: newPager}
 	ptrMap := make(map[recordKey]recordLoc)
+	retainedOldValueIDs := make(map[uint32]struct{})
 
 	buildTree := func(root uint64) (uint64, error) {
 		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet, "", false, nil, nil), root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		rewriter := &rewriteIterator{
-			inner:  iter,
-			ptrMap: ptrMap,
-			vlogs:  state.ValueLogSet,
-			writer: writer,
+			inner:               iter,
+			ptrMap:              ptrMap,
+			vlogs:               state.ValueLogSet,
+			writer:              writer,
+			retainedOldValueIDs: retainedOldValueIDs,
 		}
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: opts.LeafPrefixCompression,
@@ -593,7 +595,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		}
 	}
 
-	if err := removeOldValueLogSegments(walDir, segments); err != nil {
+	if err := removeOldValueLogSegments(walDir, segments, retainedOldValueIDs); err != nil {
 		return stats, err
 	}
 	if err := updateValueLogHealthAfterRewrite(opts.Dir, oldValueIDs); err != nil {
@@ -726,11 +728,15 @@ type rewriteIterator struct {
 	ptrMap map[recordKey]recordLoc
 	vlogs  *valuelog.Set
 	writer *rewriteWriter
-	err    error
-	cached bool
-	val    []byte
-	ptr    page.ValuePtr
-	flags  byte
+	// Old value-log file IDs that must remain because at least one pointer was
+	// intentionally left unchanged (for example nested blob-ref outerleaf
+	// payloads).
+	retainedOldValueIDs map[uint32]struct{}
+	err                 error
+	cached              bool
+	val                 []byte
+	ptr                 page.ValuePtr
+	flags               byte
 }
 
 type iteratorWithEntry interface {
@@ -789,15 +795,35 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 	}
 	if it.vlogs != nil {
 		if payload, err := it.vlogs.Read(ptr); err == nil && outerleaf.HasMagic(payload) {
-			if block, decErr := outerleaf.DecodeBlock(payload, nil); decErr == nil {
-				if typed, typedErr := block.TypedEntries(nil); typedErr == nil {
-					for i := range typed {
-						if typed[i].Kind == outerleaf.EntryKindBlobRef {
-							// Conservative correctness fallback: keep pointers to nested
-							// blob-ref outer blocks unchanged until nested remap is active.
-							return ptr, nil
+			if block, decErr := outerleaf.DecodeBlockLease(payload); decErr == nil {
+				hasBlobRef := false
+				var nestedBlobRefFileIDs map[uint32]struct{}
+				visitErr := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, nestedPtr page.ValuePtr) error {
+					if kind == outerleaf.EntryKindBlobRef {
+						hasBlobRef = true
+						if it.retainedOldValueIDs != nil && page.IsValueLogFileID(nestedPtr.FileID) {
+							if nestedBlobRefFileIDs == nil {
+								nestedBlobRefFileIDs = make(map[uint32]struct{})
+							}
+							nestedBlobRefFileIDs[nestedPtr.FileID] = struct{}{}
 						}
 					}
+					return nil
+				})
+				block.Release()
+				if visitErr != nil {
+					// Preserve prior behavior on decode/visit errors by treating payload
+					// as non-outerleaf content and falling back to raw record rewrite.
+				} else if hasBlobRef {
+					// Conservative correctness fallback: keep pointers to nested
+					// blob-ref outer blocks unchanged until nested remap is active.
+					if it.retainedOldValueIDs != nil {
+						for fileID := range nestedBlobRefFileIDs {
+							it.retainedOldValueIDs[fileID] = struct{}{}
+						}
+						it.retainedOldValueIDs[ptr.FileID] = struct{}{}
+					}
+					return ptr, nil
 				}
 			}
 		}
@@ -972,9 +998,12 @@ func valueLogSegmentStats(dir string) (count int, bytes int64, err error) {
 	return count, bytes, nil
 }
 
-func removeOldValueLogSegments(walDir string, segments []logSegment) error {
+func removeOldValueLogSegments(walDir string, segments []logSegment, retainedOldValueIDs map[uint32]struct{}) error {
 	for _, seg := range segments {
 		if !seg.valueLog {
+			continue
+		}
+		if _, keep := retainedOldValueIDs[seg.fileID]; keep {
 			continue
 		}
 		_ = os.Remove(seg.path)

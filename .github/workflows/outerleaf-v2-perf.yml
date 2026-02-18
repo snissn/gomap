@@ -37,7 +37,7 @@ jobs:
 
       - name: Run outerleaf v2 perf gate (fast profile)
         env:
-          RUNS: 3
+          RUNS: 5
           WARMUP_RUNS: 1
           KEYS: 500000
           PROFILES: fast

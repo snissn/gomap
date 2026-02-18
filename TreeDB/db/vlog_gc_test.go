@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -98,6 +99,96 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 	if _, err := os.Stat(path2); err != nil {
 		t.Fatalf("expected segment2 to remain, err=%v", err)
+	}
+}
+
+func TestValueLogGC_FenceMode_NestedBlobRefSegmentLiveness(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	blobPath := filepath.Join(walDir, "value-l0-000001.log")
+	blobFileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("blob file id: %v", err)
+	}
+	blobWriter, err := valuelog.NewWriter(blobPath, blobFileID)
+	if err != nil {
+		t.Fatalf("blob writer: %v", err)
+	}
+	blobPtr, err := blobWriter.Append(0, nil, 10_000, bytes.Repeat([]byte("blob|"), 128))
+	if err != nil {
+		_ = blobWriter.Close()
+		t.Fatalf("append blob: %v", err)
+	}
+	if err := blobWriter.Close(); err != nil {
+		t.Fatalf("close blob writer: %v", err)
+	}
+
+	key := []byte("k-nested")
+	outerPayload, err := outerleaf.EncodeSingleBlobRef(nil, key, blobPtr, uint8(ValueLogBlockSnappy), 16)
+	if err != nil {
+		t.Fatalf("EncodeSingleBlobRef: %v", err)
+	}
+	outerPath := filepath.Join(walDir, "value-l0-000002.log")
+	outerFileID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("outer file id: %v", err)
+	}
+	outerWriter, err := valuelog.NewWriter(outerPath, outerFileID)
+	if err != nil {
+		t.Fatalf("outer writer: %v", err)
+	}
+	outerPtr, err := outerWriter.Append(0, nil, 10_001, outerPayload)
+	if err != nil {
+		_ = outerWriter.Close()
+		t.Fatalf("append outer: %v", err)
+	}
+	if err := outerWriter.Close(); err != nil {
+		t.Fatalf("close outer writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer(key, outerPtr); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write pointer batch: %v", err)
+	}
+	_ = b.Close()
+
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC while referenced: %v", err)
+	}
+	if _, err := os.Stat(blobPath); err != nil {
+		t.Fatalf("expected nested blob segment to remain while referenced: %v", err)
+	}
+
+	if err := db.Delete(key); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC after delete: %v", err)
+	}
+	if _, err := os.Stat(blobPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected nested blob segment to be collected after delete, err=%v", err)
 	}
 }
 

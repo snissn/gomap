@@ -256,14 +256,20 @@ func TestValueLogManager_MmapReadUnsafeCompressedGroupedCache(t *testing.T) {
 
 	f.cacheMu.Lock()
 	defer f.cacheMu.Unlock()
-	if f.cacheFlags&FrameFlagCompressed == 0 {
-		t.Fatalf("expected compressed frame cache flags, got=%d", f.cacheFlags)
-	}
-	if f.cacheK != len(records) {
-		t.Fatalf("cacheK=%d want=%d", f.cacheK, len(records))
-	}
-	if len(f.cacheRaw) == 0 {
-		t.Fatalf("expected cached decoded raw payload for compressed frame")
+	if readViaMmapViewPrefixCacheEnabled {
+		if f.cacheFlags&FrameFlagCompressed == 0 {
+			t.Fatalf("expected compressed frame cache flags, got=%d", f.cacheFlags)
+		}
+		if f.cacheK != len(records) {
+			t.Fatalf("cacheK=%d want=%d", f.cacheK, len(records))
+		}
+		if len(f.cacheRaw) == 0 {
+			t.Fatalf("expected cached decoded raw payload for compressed frame")
+		}
+	} else {
+		if f.cacheFlags != 0 || f.cacheK != 0 || len(f.cacheRaw) != 0 {
+			t.Fatalf("expected mmap view prefix cache disabled, flags=%d cacheK=%d raw=%d", f.cacheFlags, f.cacheK, len(f.cacheRaw))
+		}
 	}
 }
 

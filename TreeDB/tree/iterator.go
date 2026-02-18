@@ -347,37 +347,40 @@ func (s *combinedLeafKeyState) rebuildAt(index uint16) (key []byte, flags byte, 
 }
 
 type Iterator struct {
-	tree            *Tree
-	stack           []CursorItem
-	stackBuf        [16]CursorItem
-	leafState       combinedLeafKeyState
-	start           []byte
-	end             []byte
-	valid           bool
-	err             error
-	currKey         []byte
-	currVal         []byte
-	currPtr         page.ValuePtr
-	flags           byte
-	valOK           bool
-	ptrOK           bool
-	ptrScratch      []byte
-	slabAppender    slabUnsafeAppender
-	slabBatcher     slabUnsafeBatchAppender
-	slabKeyReader   slabUnsafeKeyReader
-	slabFenceBlocks slabUnsafeFenceBlockReader
-	slabFenceKeys   slabUnsafeFenceBlockKeyReader
-	slabFenceRange  slabUnsafeFenceBlockRangeKeyReader
-	slabFenceRangeL slabUnsafeFenceBlockRangeKeyLeaseReader
-	slabFenceSeek   slabUnsafeFenceBlockSeekReader
-	slabFenceSeekL  slabUnsafeFenceBlockSeekLeaseReader
-	slabFencePtrCls slabFencePointerClassifier
-	slabKeyAppender slabUnsafeKeyAppender
-	slabKeyBatcher  slabUnsafeKeyBatchAppender
+	tree             *Tree
+	stack            []CursorItem
+	stackBuf         [16]CursorItem
+	leafState        combinedLeafKeyState
+	start            []byte
+	end              []byte
+	valid            bool
+	err              error
+	currKey          []byte
+	currVal          []byte
+	currPtr          page.ValuePtr
+	flags            byte
+	valOK            bool
+	ptrOK            bool
+	ptrScratch       []byte
+	slabAppender     slabUnsafeAppender
+	slabBatcher      slabUnsafeBatchAppender
+	slabKeyReader    slabUnsafeKeyReader
+	slabFenceBlocks  slabUnsafeFenceBlockReader
+	slabFenceBlocksI slabUnsafeFenceBlockIntoReader
+	slabFenceBlocksL slabUnsafeFenceBlockLeaseIntoReader
+	slabFenceKeys    slabUnsafeFenceBlockKeyReader
+	slabFenceRange   slabUnsafeFenceBlockRangeKeyReader
+	slabFenceRangeL  slabUnsafeFenceBlockRangeKeyLeaseReader
+	slabFenceSeek    slabUnsafeFenceBlockSeekReader
+	slabFenceSeekL   slabUnsafeFenceBlockSeekLeaseReader
+	slabFencePtrCls  slabFencePointerClassifier
+	slabKeyAppender  slabUnsafeKeyAppender
+	slabKeyBatcher   slabUnsafeKeyBatchAppender
 
 	fenceEntries    []FenceBlockEntry
 	fenceKeys       [][]byte
 	fenceKeyLease   FenceKeysLease
+	fenceBlockLease FenceBlockLease
 	fenceIndex      int
 	fenceActive     bool
 	fenceValuesLazy bool
@@ -469,24 +472,26 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse boo
 	it := iteratorPool.Get().(*Iterator)
 	buf := it.captureReusableBuffers()
 	*it = Iterator{
-		tree:            t,
-		start:           start,
-		end:             end,
-		mode:            mode,
-		reverse:         reverse,
-		verifyAlways:    t.pager != nil && t.pager.VerifyOnRead(),
-		slabAppender:    t.slabAppender,
-		slabBatcher:     t.slabBatcher,
-		slabKeyReader:   t.slabKeyReader,
-		slabFenceBlocks: t.slabFenceBlocks,
-		slabFenceKeys:   t.slabFenceKeys,
-		slabFenceRange:  t.slabFenceRange,
-		slabFenceRangeL: t.slabFenceRangeL,
-		slabFenceSeek:   t.slabFenceSeek,
-		slabFenceSeekL:  t.slabFenceSeekL,
-		slabFencePtrCls: t.slabFencePtrCls,
-		slabKeyAppender: t.slabKeyAppender,
-		slabKeyBatcher:  t.slabKeyBatcher,
+		tree:             t,
+		start:            start,
+		end:              end,
+		mode:             mode,
+		reverse:          reverse,
+		verifyAlways:     t.pager != nil && t.pager.VerifyOnRead(),
+		slabAppender:     t.slabAppender,
+		slabBatcher:      t.slabBatcher,
+		slabKeyReader:    t.slabKeyReader,
+		slabFenceBlocks:  t.slabFenceBlocks,
+		slabFenceBlocksI: t.slabFenceBlocksI,
+		slabFenceBlocksL: t.slabFenceBlocksL,
+		slabFenceKeys:    t.slabFenceKeys,
+		slabFenceRange:   t.slabFenceRange,
+		slabFenceRangeL:  t.slabFenceRangeL,
+		slabFenceSeek:    t.slabFenceSeek,
+		slabFenceSeekL:   t.slabFenceSeekL,
+		slabFencePtrCls:  t.slabFencePtrCls,
+		slabKeyAppender:  t.slabKeyAppender,
+		slabKeyBatcher:   t.slabKeyBatcher,
 	}
 	it.installReusableBuffers(buf)
 	return it
@@ -703,6 +708,14 @@ func (it *Iterator) releaseFenceKeyLease() {
 	it.fenceKeyLease = nil
 }
 
+func (it *Iterator) releaseFenceBlockLease() {
+	if it == nil || it.fenceBlockLease == nil {
+		return
+	}
+	it.fenceBlockLease.Release()
+	it.fenceBlockLease = nil
+}
+
 func (it *Iterator) releasePendingFenceKeyLease() {
 	if it == nil || it.pendingFenceKeyLease == nil {
 		return
@@ -713,6 +726,7 @@ func (it *Iterator) releasePendingFenceKeyLease() {
 
 func (it *Iterator) resetFenceCursor() {
 	it.releaseFenceKeyLease()
+	it.releaseFenceBlockLease()
 	it.fenceEntries = it.fenceEntries[:0]
 	it.fenceKeys = it.fenceKeys[:0]
 	it.fenceIndex = 0
@@ -963,23 +977,50 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 			}
 		}
 		if it.slabFenceBlocks != nil && (preferFenceEntries || !keyReaderUsable) {
-			entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+			var (
+				entries []FenceBlockEntry
+				lease   FenceBlockLease
+				ok      bool
+				err     error
+			)
+			if it.slabFenceBlocksL != nil {
+				entries, lease, ok, err = it.slabFenceBlocksL.ReadUnsafeFenceBlockLeaseInto(ptr, it.fenceEntries[:0])
+			} else if it.slabFenceBlocksI != nil {
+				entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(ptr, it.fenceEntries[:0])
+			} else {
+				entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+			}
 			if err != nil {
+				if lease != nil {
+					lease.Release()
+				}
 				return false, err
 			}
 			if !ok {
+				if lease != nil {
+					lease.Release()
+				}
 				continue
 			}
 			if len(entries) == 0 {
+				if lease != nil {
+					lease.Release()
+				}
 				continue
 			}
 			// Ordered, non-overlapping fence layouts dominate production data.
 			// If seekKey is beyond this predecessor block's upper bound, earlier
 			// predecessor blocks cannot contain it; stop scanning.
 			if compareTreeKey(seekKey, entries[len(entries)-1].Key) > 0 {
+				if lease != nil {
+					lease.Release()
+				}
 				break
 			}
 			if compareTreeKey(seekKey, entries[0].Key) < 0 {
+				if lease != nil {
+					lease.Release()
+				}
 				continue
 			}
 			pos := lowerBoundFenceEntries(entries, seekKey)
@@ -994,7 +1035,13 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				// Clearing pendingSeekKey avoids a redundant predecessor rescan on
 				// the next loadCurrent loop iteration.
 				it.pendingSeekKey = it.pendingSeekKey[:0]
+				if lease != nil {
+					lease.Release()
+				}
 				return true, nil
+			}
+			if lease != nil {
+				lease.Release()
 			}
 			break
 		}
@@ -1094,16 +1141,33 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		if it.slabFenceBlocks == nil {
 			return false, false, false, nil
 		}
-		entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+		var blockLease FenceBlockLease
+		if it.slabFenceBlocksL != nil {
+			entries, blockLease, ok, err = it.slabFenceBlocksL.ReadUnsafeFenceBlockLeaseInto(ptr, it.fenceEntries[:0])
+		} else if it.slabFenceBlocksI != nil {
+			entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(ptr, it.fenceEntries[:0])
+		} else {
+			entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(ptr)
+		}
 		if err != nil {
+			if blockLease != nil {
+				blockLease.Release()
+			}
 			return false, false, false, err
 		}
 		if !ok {
+			if blockLease != nil {
+				blockLease.Release()
+			}
 			return false, false, false, nil
 		}
+		it.releaseFenceBlockLease()
+		it.fenceBlockLease = blockLease
 		it.fenceValuesLazy = false
 		it.fenceBlockPtr = ptr
 		keys = nil
+	} else {
+		it.releaseFenceBlockLease()
 	}
 	handled = true
 	blockLen := len(entries)
@@ -1634,6 +1698,7 @@ func (it *Iterator) Close() error {
 		return nil
 	}
 	it.releaseFenceKeyLease()
+	it.releaseFenceBlockLease()
 	it.releasePendingFenceKeyLease()
 	buf := it.trimReusableBuffers()
 	*it = Iterator{}
@@ -1746,23 +1811,47 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 		it.valid = false
 		return false
 	}
-	entries, ok, err := it.slabFenceBlocks.ReadUnsafeFenceBlock(it.fenceBlockPtr)
+	var (
+		entries []FenceBlockEntry
+		lease   FenceBlockLease
+		ok      bool
+		err     error
+	)
+	if it.slabFenceBlocksL != nil {
+		entries, lease, ok, err = it.slabFenceBlocksL.ReadUnsafeFenceBlockLeaseInto(it.fenceBlockPtr, it.fenceEntries[:0])
+	} else if it.slabFenceBlocksI != nil {
+		entries, ok, err = it.slabFenceBlocksI.ReadUnsafeFenceBlockInto(it.fenceBlockPtr, it.fenceEntries[:0])
+	} else {
+		entries, ok, err = it.slabFenceBlocks.ReadUnsafeFenceBlock(it.fenceBlockPtr)
+	}
 	if err != nil {
+		if lease != nil {
+			lease.Release()
+		}
 		it.err = err
 		it.valid = false
 		return false
 	}
 	if !ok {
+		if lease != nil {
+			lease.Release()
+		}
 		it.err = fmt.Errorf("iterator fence value load: block unavailable")
 		it.valid = false
 		return false
 	}
 	if len(entries) == 0 {
+		if lease != nil {
+			lease.Release()
+		}
 		it.err = fmt.Errorf("iterator fence value load: empty block")
 		it.valid = false
 		return false
 	}
 	if it.fenceIndex < 0 || it.fenceIndex >= len(entries) {
+		if lease != nil {
+			lease.Release()
+		}
 		it.err = fmt.Errorf("iterator fence value load: index out of range %d/%d", it.fenceIndex, len(entries))
 		it.valid = false
 		return false
@@ -1770,6 +1859,8 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 
 	// Keep the expanded block for subsequent entries in this run so we only pay
 	// one full decode when values are actually requested.
+	it.releaseFenceBlockLease()
+	it.fenceBlockLease = lease
 	it.fenceEntries = entries
 	it.fenceKeys = nil
 	it.fenceValuesLazy = false
@@ -1778,12 +1869,14 @@ func (it *Iterator) ensureFenceValueLoaded() bool {
 		pos := lowerBoundFenceEntries(entries, it.currKey)
 		if pos < 0 || pos >= len(entries) {
 			it.releaseFenceKeyLease()
+			it.releaseFenceBlockLease()
 			it.err = fmt.Errorf("iterator fence value load: key not found in fence block")
 			it.valid = false
 			return false
 		}
 		if compareTreeKey(entries[pos].Key, it.currKey) != 0 {
 			it.releaseFenceKeyLease()
+			it.releaseFenceBlockLease()
 			it.err = fmt.Errorf("iterator fence value load: fence index out of sync")
 			it.valid = false
 			return false

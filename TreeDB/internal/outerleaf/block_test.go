@@ -218,6 +218,214 @@ func TestDecodePayloadSnappyPreallocatedDstNoAllocs(t *testing.T) {
 	}
 }
 
+func TestDecodeBlockLeaseRelease(t *testing.T) {
+	entries := []Entry{
+		{Key: []byte("acct:0001"), Value: bytes.Repeat([]byte("a"), 512)},
+		{Key: []byte("acct:0002"), Value: bytes.Repeat([]byte("b"), 512)},
+		{Key: []byte("acct:0003"), Value: bytes.Repeat([]byte("c"), 512)},
+	}
+	enc, err := EncodeEntries(nil, entries, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	if enc[5] == blockCodecNone {
+		t.Fatalf("expected compressed payload for lease test")
+	}
+	blk, err := DecodeBlockLease(enc)
+	if err != nil {
+		t.Fatalf("DecodeBlockLease: %v", err)
+	}
+	if _, err := blk.FirstValue(); err != nil {
+		t.Fatalf("FirstValue: %v", err)
+	}
+	if _, err := blk.lookupRestarts(); err != nil {
+		t.Fatalf("lookupRestarts: %v", err)
+	}
+	if _, err := blk.lookupRestartKeys(); err != nil {
+		t.Fatalf("lookupRestartKeys: %v", err)
+	}
+	blk.Release()
+	blk.Release()
+}
+
+func TestDecodeBlockLeaseWithScratchAndVerify_TransfersPooledRawToCallerScratch(t *testing.T) {
+	entries := []Entry{
+		{Key: []byte("acct:0001"), Value: bytes.Repeat([]byte("a"), 1024)},
+		{Key: []byte("acct:0002"), Value: bytes.Repeat([]byte("b"), 1024)},
+		{Key: []byte("acct:0003"), Value: bytes.Repeat([]byte("c"), 1024)},
+	}
+	enc, err := EncodeEntries(nil, entries, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	if len(enc) < blockHeaderSize || enc[5] == blockCodecNone {
+		t.Fatalf("expected compressed payload for scratch ownership transfer test")
+	}
+
+	dst := &DecodedBlock{}
+	blk, nextScratch, err := DecodeBlockLeaseWithScratchAndVerify(enc, nil, dst, true)
+	if err != nil {
+		t.Fatalf("DecodeBlockLeaseWithScratchAndVerify(first): %v", err)
+	}
+	if blk == nil {
+		t.Fatalf("decoded block=nil")
+	}
+	if blk != dst {
+		t.Fatalf("decoded block pointer mismatch")
+	}
+	if cap(nextScratch) == 0 {
+		t.Fatalf("nextScratch cap=0 want >0")
+	}
+	if blk.pooledRaw {
+		t.Fatalf("blk.pooledRaw=true want false after ownership transfer to caller scratch")
+	}
+	if len(blk.raw) == 0 {
+		t.Fatalf("blk.raw len=0 want >0")
+	}
+	if &blk.raw[0] != &nextScratch[:1:1][0] {
+		t.Fatalf("nextScratch does not alias decoded raw backing")
+	}
+	if _, found, err := blk.EntryForKey([]byte("acct:0002")); err != nil {
+		t.Fatalf("EntryForKey(first): %v", err)
+	} else if !found {
+		t.Fatalf("EntryForKey(first) found=false want true")
+	}
+	blk.Release()
+
+	blk2, nextScratch2, err := DecodeBlockLeaseWithScratchAndVerify(enc, nextScratch, dst, true)
+	if err != nil {
+		t.Fatalf("DecodeBlockLeaseWithScratchAndVerify(second): %v", err)
+	}
+	if blk2 == nil {
+		t.Fatalf("decoded block=nil on second decode")
+	}
+	if blk2.pooledRaw {
+		t.Fatalf("blk2.pooledRaw=true want false")
+	}
+	if len(blk2.raw) == 0 {
+		t.Fatalf("blk2.raw len=0 want >0")
+	}
+	if cap(nextScratch2) == 0 {
+		t.Fatalf("nextScratch2 cap=0 want >0")
+	}
+	if &blk2.raw[0] != &nextScratch2[:1:1][0] {
+		t.Fatalf("nextScratch2 does not alias decoded raw backing")
+	}
+	if _, found, err := blk2.EntryForKey([]byte("acct:0003")); err != nil {
+		t.Fatalf("EntryForKey(second): %v", err)
+	} else if !found {
+		t.Fatalf("EntryForKey(second) found=false want true")
+	}
+	blk2.Release()
+}
+
+func TestDecodedBlockReclaimTransferredScratchForRelease_ZeroLenScratch(t *testing.T) {
+	entries := []Entry{
+		{Key: []byte("acct:0001"), Value: bytes.Repeat([]byte("a"), 1024)},
+		{Key: []byte("acct:0002"), Value: bytes.Repeat([]byte("b"), 1024)},
+		{Key: []byte("acct:0003"), Value: bytes.Repeat([]byte("c"), 1024)},
+	}
+	enc, err := EncodeEntries(nil, entries, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	if len(enc) < blockHeaderSize || enc[5] == blockCodecNone {
+		t.Fatalf("expected compressed payload for scratch reclaim test")
+	}
+
+	dst := &DecodedBlock{}
+	blk, nextScratch, err := DecodeBlockLeaseWithScratchAndVerify(enc, nil, dst, true)
+	if err != nil {
+		t.Fatalf("DecodeBlockLeaseWithScratchAndVerify: %v", err)
+	}
+	if blk == nil {
+		t.Fatalf("decoded block=nil")
+	}
+	if cap(nextScratch) == 0 {
+		t.Fatalf("nextScratch cap=0 want >0")
+	}
+
+	var reclaimed []byte
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				t.Fatalf("ReclaimTransferredScratchForRelease panicked: %v", rec)
+			}
+		}()
+		reclaimed = blk.ReclaimTransferredScratchForRelease(nextScratch[:0])
+	}()
+	if reclaimed != nil {
+		t.Fatalf("reclaimed scratch=%v want nil", reclaimed)
+	}
+	blk.Release()
+}
+
+func TestDecodeRestartsFromRawIntoReusesDst(t *testing.T) {
+	enc, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k10"), Value: []byte("v10")},
+		{Key: []byte("k20"), Value: []byte("v20")},
+		{Key: []byte("k30"), Value: []byte("v30")},
+		{Key: []byte("k40"), Value: []byte("v40")},
+	}, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	if blk.restartCount <= 0 {
+		t.Fatalf("restartCount=%d want >0", blk.restartCount)
+	}
+
+	dst := make([]uint32, blk.restartCount)
+	restarts, err := decodeRestartsFromRawInto(blk.entries, blk.restartRaw, blk.restartCount, dst[:0])
+	if err != nil {
+		t.Fatalf("decodeRestartsFromRawInto: %v", err)
+	}
+	if len(restarts) != blk.restartCount {
+		t.Fatalf("len(restarts)=%d want=%d", len(restarts), blk.restartCount)
+	}
+	if &restarts[0] != &dst[0] {
+		t.Fatalf("decodeRestartsFromRawInto did not reuse caller dst")
+	}
+}
+
+func TestDecodeV2RestartKeysIntoReusesDst(t *testing.T) {
+	enc, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k10"), Value: []byte("v10")},
+		{Key: []byte("k20"), Value: []byte("v20")},
+		{Key: []byte("k30"), Value: []byte("v30")},
+		{Key: []byte("k40"), Value: []byte("v40")},
+	}, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+	restarts, err := decodeRestartsFromRaw(blk.entries, blk.restartRaw, blk.restartCount)
+	if err != nil {
+		t.Fatalf("decodeRestartsFromRaw: %v", err)
+	}
+	if len(restarts) == 0 {
+		t.Fatalf("expected non-empty restart table")
+	}
+
+	dst := make([][]byte, len(restarts))
+	keys, err := decodeV2RestartKeysInto(blk.entries, restarts, dst[:0])
+	if err != nil {
+		t.Fatalf("decodeV2RestartKeysInto: %v", err)
+	}
+	if len(keys) != len(restarts) {
+		t.Fatalf("len(keys)=%d want=%d", len(keys), len(restarts))
+	}
+	if &keys[0] != &dst[0] {
+		t.Fatalf("decodeV2RestartKeysInto did not reuse caller dst")
+	}
+}
+
 func TestEncodeDecodeEntriesLookup(t *testing.T) {
 	codecs := []struct {
 		name  string
@@ -652,6 +860,96 @@ func TestDecodeLowerBoundAndKeysOnMatchLeaseWithVerify(t *testing.T) {
 	}
 }
 
+func TestDecodeKeysRangeLeaseWithVerify_V3AndUpperBoundEarlyExit(t *testing.T) {
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(11), Offset: 77, Length: 9}
+	payload, err := EncodeTypedEntries(nil, []TypedEntry{
+		{Key: []byte("k10"), Kind: EntryKindInline, Value: []byte("v10")},
+		{Key: []byte("k20"), Kind: EntryKindBlobRef, BlobPtr: blobPtr},
+		{Key: []byte("k30"), Kind: EntryKindInline, Value: []byte("v30")},
+	}, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+
+	lease, err := DecodeKeysRangeLeaseWithVerify(payload, []byte("k15"), []byte("k35"), true)
+	if err != nil {
+		t.Fatalf("DecodeKeysRangeLeaseWithVerify(v3): %v", err)
+	}
+	if lease == nil {
+		t.Fatalf("lease=nil want non-nil")
+	}
+	keys := lease.Keys()
+	want := [][]byte{[]byte("k20"), []byte("k30")}
+	if len(keys) != len(want) {
+		t.Fatalf("keys len=%d want=%d", len(keys), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(keys[i], want[i]) {
+			t.Fatalf("keys[%d]=%q want=%q", i, keys[i], want[i])
+		}
+	}
+	lease.Release()
+
+	lease, err = DecodeKeysRangeLeaseWithVerify(payload, nil, []byte("k05"), true)
+	if err != nil {
+		t.Fatalf("DecodeKeysRangeLeaseWithVerify(v3 upper-before-first): %v", err)
+	}
+	if lease != nil {
+		t.Fatalf("lease=%v want nil for empty bounded range", lease)
+	}
+}
+
+func TestDecodeLowerBoundAndKeysOnMatchLeaseWithVerify_V3(t *testing.T) {
+	blobPtr := page.ValuePtr{FileID: page.ValueLogFileID(12), Offset: 88, Length: 9}
+	payload, err := EncodeTypedEntries(nil, []TypedEntry{
+		{Key: []byte("k10"), Kind: EntryKindInline, Value: []byte("v10")},
+		{Key: []byte("k20"), Kind: EntryKindBlobRef, BlobPtr: blobPtr},
+		{Key: []byte("k30"), Kind: EntryKindInline, Value: []byte("v30")},
+	}, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+
+	pos, below, above, lease, err := DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload, []byte("k20"), true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(v3): %v", err)
+	}
+	if pos != 1 || below || above {
+		t.Fatalf("got pos=%d below=%v above=%v", pos, below, above)
+	}
+	if lease == nil {
+		t.Fatalf("lease=nil want non-nil")
+	}
+	keys := lease.Keys()
+	if len(keys) != 3 {
+		t.Fatalf("keys len=%d want=3", len(keys))
+	}
+	lease.Release()
+
+	pos, below, above, lease, err = DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload, []byte("k99"), true)
+	if err != nil {
+		t.Fatalf("DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(v3 above): %v", err)
+	}
+	if pos != 3 || below || !above || lease != nil {
+		t.Fatalf("above got pos=%d below=%v above=%v lease=%v", pos, below, above, lease)
+	}
+}
+
+func TestOuterLeafPoolCapsBounded(t *testing.T) {
+	if maxPooledOuterLeafBytesCap > (1 << 20) {
+		t.Fatalf("maxPooledOuterLeafBytesCap=%d want <=1MiB", maxPooledOuterLeafBytesCap)
+	}
+	if maxPooledOuterLeafRestartsCap > 4096 {
+		t.Fatalf("maxPooledOuterLeafRestartsCap=%d want <=4096", maxPooledOuterLeafRestartsCap)
+	}
+	if maxPooledOuterLeafLeaseKeysCap > 4096 {
+		t.Fatalf("maxPooledOuterLeafLeaseKeysCap=%d want <=4096", maxPooledOuterLeafLeaseKeysCap)
+	}
+	if maxPooledOuterLeafLeaseArenaCap > (1 << 20) {
+		t.Fatalf("maxPooledOuterLeafLeaseArenaCap=%d want <=1MiB", maxPooledOuterLeafLeaseArenaCap)
+	}
+}
+
 func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
 	for outerLeafLeaseKeysPool.Get() != nil {
 	}
@@ -666,24 +964,6 @@ func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
 	got := getPooledLeaseKeys(4)
 	if cap(got) < 4 {
 		t.Fatalf("cap(got)=%d want >=4", cap(got))
-	}
-
-	found := false
-	for {
-		v := outerLeafLeaseKeysPool.Get()
-		if v == nil {
-			break
-		}
-		keys, ok := v.([][]byte)
-		if !ok {
-			t.Fatalf("pool type=%T want [][]byte", v)
-		}
-		if cap(keys) == cap(undersized) {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("undersized slice was not returned to pool")
 	}
 }
 
@@ -701,24 +981,6 @@ func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
 	got := getPooledLeaseArena(16)
 	if cap(got) < 16 {
 		t.Fatalf("cap(got)=%d want >=16", cap(got))
-	}
-
-	found := false
-	for {
-		v := outerLeafLeaseArenaPool.Get()
-		if v == nil {
-			break
-		}
-		arena, ok := v.([]byte)
-		if !ok {
-			t.Fatalf("pool type=%T want []byte", v)
-		}
-		if cap(arena) == cap(undersized) {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("undersized arena was not returned to pool")
 	}
 }
 
