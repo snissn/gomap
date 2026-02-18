@@ -104,6 +104,16 @@ const (
 	blockV2EntryCountOff = 8
 	blockV2EntriesLenOff = 10
 	blockV2RawLenOff     = 14
+
+	restartDecodeStackCap = 64
+)
+
+type restartDecodeMode uint8
+
+const (
+	restartDecodeModeNone restartDecodeMode = iota
+	restartDecodeModeStack
+	restartDecodeModePooled
 )
 
 const (
@@ -1437,6 +1447,19 @@ func decodeRestartsFromRawPooled(entries []byte, restartRaw []byte, restartCount
 	return restarts, true, nil
 }
 
+func restartDecodeModeForCount(restartCount int) (restartDecodeMode, error) {
+	switch {
+	case restartCount < 0:
+		return restartDecodeModeNone, fmt.Errorf("outerleaf: invalid restart count %d", restartCount)
+	case restartCount == 0:
+		return restartDecodeModeNone, nil
+	case restartCount <= restartDecodeStackCap:
+		return restartDecodeModeStack, nil
+	default:
+		return restartDecodeModePooled, nil
+	}
+}
+
 func decodeFirstV2(entries []byte) (key, value []byte, err error) {
 	if len(entries) < 8 {
 		return nil, nil, fmt.Errorf("outerleaf: truncated first entry")
@@ -1618,12 +1641,15 @@ func lookupV2Value(entries []byte, entryCount int, key []byte, restarts []uint32
 }
 
 func lookupV2ValueFromRestartRaw(entries []byte, entryCount int, key []byte, restartRaw []byte, restartCount int) ([]byte, bool, error) {
-	if restartCount <= 0 {
+	decodeMode, err := restartDecodeModeForCount(restartCount)
+	if err != nil {
+		return nil, false, err
+	}
+	if decodeMode == restartDecodeModeNone {
 		return lookupV2Value(entries, entryCount, key, nil, nil)
 	}
-	const restartStackCap = 64
-	if restartCount <= restartStackCap {
-		var restartStack [restartStackCap]uint32
+	if decodeMode == restartDecodeModeStack {
+		var restartStack [restartDecodeStackCap]uint32
 		restarts, err := decodeRestartsFromRawInto(entries, restartRaw, restartCount, restartStack[:0])
 		if err != nil {
 			return nil, false, err
@@ -1847,12 +1873,15 @@ func lookupV3Entry(entries []byte, entryCount int, key []byte, restarts []uint32
 }
 
 func lookupV3EntryFromRestartRaw(entries []byte, entryCount int, key []byte, restartRaw []byte, restartCount int) (LookupResult, bool, error) {
-	if restartCount <= 0 {
+	decodeMode, err := restartDecodeModeForCount(restartCount)
+	if err != nil {
+		return LookupResult{}, false, err
+	}
+	if decodeMode == restartDecodeModeNone {
 		return lookupV3Entry(entries, entryCount, key, nil, nil)
 	}
-	const restartStackCap = 64
-	if restartCount <= restartStackCap {
-		var restartStack [restartStackCap]uint32
+	if decodeMode == restartDecodeModeStack {
+		var restartStack [restartDecodeStackCap]uint32
 		restarts, err := decodeRestartsFromRawInto(entries, restartRaw, restartCount, restartStack[:0])
 		if err != nil {
 			return LookupResult{}, false, err

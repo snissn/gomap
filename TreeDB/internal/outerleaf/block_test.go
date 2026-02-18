@@ -426,6 +426,174 @@ func TestDecodeV2RestartKeysIntoReusesDst(t *testing.T) {
 	}
 }
 
+func TestRestartDecodeModeForCountBoundaries(t *testing.T) {
+	tests := []struct {
+		name    string
+		count   int
+		want    restartDecodeMode
+		wantErr string
+	}{
+		{name: "negative", count: -1, want: restartDecodeModeNone, wantErr: "outerleaf: invalid restart count -1"},
+		{name: "zero", count: 0, want: restartDecodeModeNone},
+		{name: "stack_cap", count: restartDecodeStackCap, want: restartDecodeModeStack},
+		{name: "pooled", count: restartDecodeStackCap + 1, want: restartDecodeModePooled},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := restartDecodeModeForCount(tc.count)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("restartDecodeModeForCount(%d) err=nil want=%q", tc.count, tc.wantErr)
+				}
+				if err.Error() != tc.wantErr {
+					t.Fatalf("restartDecodeModeForCount(%d) err=%q want=%q", tc.count, err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("restartDecodeModeForCount(%d): %v", tc.count, err)
+			}
+			if got != tc.want {
+				t.Fatalf("restartDecodeModeForCount(%d)=%v want=%v", tc.count, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLookupV2ValueFromRestartRaw_BoundaryMatchesDecodedRestarts(t *testing.T) {
+	for _, count := range []int{restartDecodeStackCap, restartDecodeStackCap + 1} {
+		t.Run(fmt.Sprintf("restart_count_%d", count), func(t *testing.T) {
+			entries := make([]Entry, count)
+			for i := 0; i < count; i++ {
+				entries[i] = Entry{
+					Key:   []byte(fmt.Sprintf("k%04d", i)),
+					Value: []byte(fmt.Sprintf("v%04d", i)),
+				}
+			}
+			enc, err := EncodeEntries(nil, entries, 0, 1)
+			if err != nil {
+				t.Fatalf("EncodeEntries: %v", err)
+			}
+			blk, err := DecodeBlock(enc, nil)
+			if err != nil {
+				t.Fatalf("DecodeBlock: %v", err)
+			}
+			if blk.restartCount != count {
+				t.Fatalf("restartCount=%d want=%d", blk.restartCount, count)
+			}
+
+			key := []byte(fmt.Sprintf("k%04d", count-1))
+			restarts, err := decodeRestartsFromRaw(blk.entries, blk.restartRaw, blk.restartCount)
+			if err != nil {
+				t.Fatalf("decodeRestartsFromRaw: %v", err)
+			}
+			want, wantFound, err := lookupV2Value(blk.entries, blk.entryCount, key, restarts, nil)
+			if err != nil {
+				t.Fatalf("lookupV2Value: %v", err)
+			}
+			got, gotFound, err := lookupV2ValueFromRestartRaw(blk.entries, blk.entryCount, key, blk.restartRaw, blk.restartCount)
+			if err != nil {
+				t.Fatalf("lookupV2ValueFromRestartRaw: %v", err)
+			}
+			if gotFound != wantFound {
+				t.Fatalf("found=%v want=%v", gotFound, wantFound)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("value=%q want=%q", got, want)
+			}
+		})
+	}
+}
+
+func TestLookupV3EntryFromRestartRaw_BoundaryMatchesDecodedRestarts(t *testing.T) {
+	for _, count := range []int{restartDecodeStackCap, restartDecodeStackCap + 1} {
+		t.Run(fmt.Sprintf("restart_count_%d", count), func(t *testing.T) {
+			entries := make([]TypedEntry, count)
+			for i := 0; i < count; i++ {
+				entries[i] = TypedEntry{
+					Key:   []byte(fmt.Sprintf("k%04d", i)),
+					Kind:  EntryKindInline,
+					Value: []byte(fmt.Sprintf("v%04d", i)),
+				}
+			}
+			enc, err := EncodeTypedEntries(nil, entries, 0, 1)
+			if err != nil {
+				t.Fatalf("EncodeTypedEntries: %v", err)
+			}
+			blk, err := DecodeBlock(enc, nil)
+			if err != nil {
+				t.Fatalf("DecodeBlock: %v", err)
+			}
+			if blk.restartCount != count {
+				t.Fatalf("restartCount=%d want=%d", blk.restartCount, count)
+			}
+
+			key := []byte(fmt.Sprintf("k%04d", count-1))
+			restarts, err := decodeRestartsFromRaw(blk.entries, blk.restartRaw, blk.restartCount)
+			if err != nil {
+				t.Fatalf("decodeRestartsFromRaw: %v", err)
+			}
+			want, wantFound, err := lookupV3Entry(blk.entries, blk.entryCount, key, restarts, nil)
+			if err != nil {
+				t.Fatalf("lookupV3Entry: %v", err)
+			}
+			got, gotFound, err := lookupV3EntryFromRestartRaw(blk.entries, blk.entryCount, key, blk.restartRaw, blk.restartCount)
+			if err != nil {
+				t.Fatalf("lookupV3EntryFromRestartRaw: %v", err)
+			}
+			if gotFound != wantFound {
+				t.Fatalf("found=%v want=%v", gotFound, wantFound)
+			}
+			if got.Kind != want.Kind {
+				t.Fatalf("kind=%v want=%v", got.Kind, want.Kind)
+			}
+			if !bytes.Equal(got.Value, want.Value) {
+				t.Fatalf("value=%q want=%q", got.Value, want.Value)
+			}
+			if got.BlobPtr != want.BlobPtr {
+				t.Fatalf("blobPtr=%+v want=%+v", got.BlobPtr, want.BlobPtr)
+			}
+		})
+	}
+}
+
+func TestLookupFromRestartRaw_RejectsNegativeRestartCount(t *testing.T) {
+	v2Enc, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k1"), Value: []byte("v1")},
+		{Key: []byte("k2"), Value: []byte("v2")},
+	}, 0, 1)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	v2Block, err := DecodeBlock(v2Enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock(v2): %v", err)
+	}
+	if _, _, err := lookupV2ValueFromRestartRaw(v2Block.entries, v2Block.entryCount, []byte("k1"), v2Block.restartRaw, -1); err == nil {
+		t.Fatalf("lookupV2ValueFromRestartRaw err=nil want invalid restart count")
+	} else if got := err.Error(); got != "outerleaf: invalid restart count -1" {
+		t.Fatalf("lookupV2ValueFromRestartRaw err=%q want=%q", got, "outerleaf: invalid restart count -1")
+	}
+
+	v3Enc, err := EncodeTypedEntries(nil, []TypedEntry{
+		{Key: []byte("k1"), Kind: EntryKindInline, Value: []byte("v1")},
+		{Key: []byte("k2"), Kind: EntryKindInline, Value: []byte("v2")},
+	}, 0, 1)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries: %v", err)
+	}
+	v3Block, err := DecodeBlock(v3Enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock(v3): %v", err)
+	}
+	if _, _, err := lookupV3EntryFromRestartRaw(v3Block.entries, v3Block.entryCount, []byte("k1"), v3Block.restartRaw, -1); err == nil {
+		t.Fatalf("lookupV3EntryFromRestartRaw err=nil want invalid restart count")
+	} else if got := err.Error(); got != "outerleaf: invalid restart count -1" {
+		t.Fatalf("lookupV3EntryFromRestartRaw err=%q want=%q", got, "outerleaf: invalid restart count -1")
+	}
+}
+
 func TestEncodeDecodeEntriesLookup(t *testing.T) {
 	codecs := []struct {
 		name  string
