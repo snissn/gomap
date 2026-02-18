@@ -102,11 +102,7 @@ func TestAdapterReadBatch_AfterCloseReturnsErrUnsupported(t *testing.T) {
 	}
 }
 
-func TestAdapterSetReadWorkers_ClampsAtInt32Max(t *testing.T) {
-	if strconv.IntSize <= 32 {
-		t.Skip("requires >32-bit int to pass value larger than math.MaxInt32")
-	}
-
+func TestAdapterSetReadWorkers_ClampsAndNormalizes(t *testing.T) {
 	dir := t.TempDir()
 	db, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
@@ -115,8 +111,17 @@ func TestAdapterSetReadWorkers_ClampsAtInt32Max(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	adapter := Wrap(db)
+	adapter.SetReadWorkers(0)
+	if got := adapter.readWorkers.Load(); got != 1 {
+		t.Fatalf("expected normalized readWorkers=%d got=%d", 1, got)
+	}
+
+	if strconv.IntSize <= 32 {
+		return
+	}
+
 	overMax := int64(math.MaxInt32) + 123
-	adapter.setReadWorkers(int(overMax))
+	adapter.SetReadWorkers(int(overMax))
 	if got := adapter.readWorkers.Load(); got != math.MaxInt32 {
 		t.Fatalf("expected clamped readWorkers=%d got=%d", math.MaxInt32, got)
 	}

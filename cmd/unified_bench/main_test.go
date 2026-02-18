@@ -100,6 +100,37 @@ func (d *errorGetDB) Delete(key []byte) error {
 	return nil
 }
 
+type preferGetManyDB struct {
+	getCalls     int
+	getManyCalls int
+}
+
+func (d *preferGetManyDB) Name() string {
+	return "PreferGetMany"
+}
+
+func (d *preferGetManyDB) Close() error {
+	return nil
+}
+
+func (d *preferGetManyDB) Get(key []byte) ([]byte, error) {
+	d.getCalls++
+	return nil, errors.New("get should not be called when GetMany is available")
+}
+
+func (d *preferGetManyDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *preferGetManyDB) Delete(key []byte) error {
+	return nil
+}
+
+func (d *preferGetManyDB) GetMany(keys [][]byte) ([][]byte, error) {
+	d.getManyCalls++
+	return make([][]byte, len(keys)), nil
+}
+
 func runRandomReadBatchErrorCase(t *testing.T, dbName string, factory DBFactory, want error) {
 	t.Helper()
 	RegisterHiddenDB(dbName, factory)
@@ -232,6 +263,44 @@ func TestRunBenchmark_RandomReadBatch_DoesNotCallReadBatch(t *testing.T) {
 	}
 	if db.readBatchCalls != 0 {
 		t.Fatalf("expected ReadBatch to be unused, got %d calls", db.readBatchCalls)
+	}
+	got := run.Results["random_read_batch"][db.Name()]
+	if math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected random_read_batch > 0 for %s, got %v", db.Name(), got)
+	}
+}
+
+func TestRunBenchmark_RandomReadBatch_PrefersGetManyOverGet(t *testing.T) {
+	var db *preferGetManyDB
+	const dbName = "random_read_batch_prefer_getmany"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = &preferGetManyDB{}
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:         257,
+		ValueSize:    16,
+		BatchSize:    64,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "random_read_batch",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected test DB instance")
+	}
+	if db.getCalls != 0 {
+		t.Fatalf("expected Get to be unused when GetMany is implemented, got %d calls", db.getCalls)
+	}
+	if db.getManyCalls == 0 {
+		t.Fatalf("expected GetMany to be called at least once")
 	}
 	got := run.Results["random_read_batch"][db.Name()]
 	if math.IsNaN(got) || got <= 0 {

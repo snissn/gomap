@@ -722,9 +722,9 @@ func treeDBResolvedOptionsText(indent string) (string, error) {
 }
 
 func wrapTreeDBAdapter(db *treedb.DB, name string) kvstore.DB {
-	// Keep adapter batch-read parallelism aligned with unified-bench
-	// random_read_parallel/-read-workers so concurrency comparisons are not
-	// skewed by hidden worker-count differences.
+	// Keep adapter ReadBatch worker policy aligned with -read-workers so any
+	// BatchReader consumers use the same explicit concurrency budget as the
+	// parallel read benchmarks. random_read_batch itself uses GetMany/Get.
 	out := treedbadapter.WrapNamed(db, name)
 	out.SetReadWorkers(resolveReadWorkers(*readWorkers))
 	return out
