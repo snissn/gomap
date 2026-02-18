@@ -2458,7 +2458,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			if batchSize <= 0 {
 				batchSize = 1
 			}
-			rb, hasReadBatch := db.(kvstore.BatchReader)
 			keys := make([][]byte, batchSize)
 			keyBuf := make([]byte, batchSize*8)
 			for i := 0; i < batchSize; i++ {
@@ -2480,11 +2479,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				for j := 0; j < n; j++ {
 					encodeKey(keys[j], uint64(rng.Intn(cfg.Keys)))
 				}
-				if hasReadBatch {
-					if err := rb.ReadBatch(keys[:n]); err != nil {
-						return 0, fmt.Errorf("random_read_batch: %w", err)
-					}
-				} else if hasMany {
+				if hasMany {
 					if _, err := mg.GetMany(keys[:n]); err != nil {
 						return 0, fmt.Errorf("random_read_batch: %w", err)
 					}
