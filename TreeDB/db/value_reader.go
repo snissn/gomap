@@ -143,9 +143,8 @@ func newOuterLeafFenceDecodeLeaseSet(size int) *outerLeafFenceDecodeLeaseSet {
 	set := &outerLeafFenceDecodeLeaseSet{
 		pool: make(chan *outerLeafFenceDecodeContext, size),
 	}
-	for i := 0; i < size; i++ {
-		set.pool <- &outerLeafFenceDecodeContext{}
-	}
+	// Intentionally avoid eager prewarm. Snapshot-per-key workloads create many
+	// short-lived readers; lazy fill on first release avoids per-reader setup tax.
 	return set
 }
 
