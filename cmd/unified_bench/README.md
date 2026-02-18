@@ -29,10 +29,10 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `prefix_scan` — Prefix Scan (range scans over `[start,end)`)
   - Aliases: `scan` → `full_scan`, `range_scan` → `prefix_scan`, `read_rand` → `random_read`, `read_rand_parallel` → `random_read_parallel`, `read_rand_batch`/`read_random_batch` → `random_read_batch`
 
-`random_read_batch` uses a consistent error policy across capability paths:
-- `ReadBatch` errors fail the test.
-- `GetMany` errors fail the test.
-- fallback `Get` errors fail the test.
+`random_read_batch` always exercises value-read paths:
+- Uses `GetMany` when available.
+- Falls back to per-key `Get` otherwise.
+- Any `GetMany`/`Get` error fails the test.
 - Missing keys are not treated as benchmark-fatal by adapter/API contract.
 
 ## Common flags

@@ -50,6 +50,11 @@ func (d *DB) setReadWorkers(workers int) {
 	d.readWorkers.Store(int32(normalizeReadWorkers(workers)))
 }
 
+// SetReadWorkers configures the adapter's internal batch-read worker count.
+func (d *DB) SetReadWorkers(workers int) {
+	d.setReadWorkers(workers)
+}
+
 func (d *DB) Name() string {
 	if d.NameStr != "" {
 		return d.NameStr
@@ -99,8 +104,8 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 			}
 		}()
 		for _, key := range keys {
-			_, err := snap.GetUnsafe(key)
-			if err == nil || errors.Is(err, treedb.ErrKeyNotFound) || errors.Is(err, treedb.ErrClosed) {
+			_, err := snap.Has(key)
+			if err == nil || errors.Is(err, treedb.ErrClosed) {
 				continue
 			}
 			return err
@@ -111,7 +116,7 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 		workers = len(keys)
 	}
 	// Snapshots are immutable point-in-time readers in TreeDB, so concurrent
-	// GetUnsafe calls are issued against one snapshot for improved read-bandwidth.
+	// Has calls are issued against one snapshot for improved read-bandwidth.
 	snap := d.DB.AcquireSnapshot()
 	if snap == nil {
 		return kvstore.ErrUnsupported
@@ -144,8 +149,8 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 		go func(lo, hi int) {
 			defer wg.Done()
 			for i := lo; i < hi; i++ {
-				_, readErr := snap.GetUnsafe(keys[i])
-				if readErr == nil || errors.Is(readErr, treedb.ErrKeyNotFound) || errors.Is(readErr, treedb.ErrClosed) {
+				_, readErr := snap.Has(keys[i])
+				if readErr == nil || errors.Is(readErr, treedb.ErrClosed) {
 					continue
 				}
 				errMu.Lock()

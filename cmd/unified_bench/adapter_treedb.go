@@ -722,11 +722,12 @@ func treeDBResolvedOptionsText(indent string) (string, error) {
 }
 
 func wrapTreeDBAdapter(db *treedb.DB, name string) kvstore.DB {
-	// random_read_batch dispatches to kvstore.BatchReader where available.
-	// TreeDB adapter batch-read worker count is internal adapter policy
-	// (defaulting to current GOMAXPROCS) and is intentionally not wired to
-	// unified-bench -read-workers, which controls parallel read benchmarks.
-	return treedbadapter.WrapNamed(db, name)
+	// Keep adapter batch-read parallelism aligned with unified-bench
+	// random_read_parallel/-read-workers so concurrency comparisons are not
+	// skewed by hidden worker-count differences.
+	out := treedbadapter.WrapNamed(db, name)
+	out.SetReadWorkers(resolveReadWorkers(*readWorkers))
+	return out
 }
 
 func NewTreeDB(dir string) (kvstore.DB, error) {
