@@ -67,12 +67,28 @@ const outerLeafFenceDecodeLeaseSetMinSize = 8
 const outerLeafFenceDecodeLeaseSetMaxSize = 64
 
 var outerLeafLookupScratchPool sync.Pool
+var outerLeafLookupScratchEntryPool = sync.Pool{
+	New: func() any {
+		return &outerLeafScratchEntry{}
+	},
+}
 var outerLeafFenceDecodeScratchPool sync.Pool
+var outerLeafFenceDecodeScratchEntryPool = sync.Pool{
+	New: func() any {
+		return &outerLeafScratchEntry{}
+	},
+}
 var outerLeafFenceDecodedBlockPool sync.Pool
+var outerLeafFenceDecodeSharedLeases *outerLeafFenceDecodeLeaseSet
+var outerLeafFenceDecodeSharedLeasesOnce sync.Once
 var outerLeafFenceDecodeContextPool = sync.Pool{
 	New: func() any {
 		return &outerLeafFenceDecodeContext{}
 	},
+}
+
+type outerLeafScratchEntry struct {
+	buf []byte
 }
 
 type outerLeafFenceDecodeContext struct {
@@ -81,18 +97,31 @@ type outerLeafFenceDecodeContext struct {
 }
 
 type outerLeafFenceDecodeLeaseSet struct {
-	slots chan *outerLeafFenceDecodeContext
+	pool sync.Pool
+}
+
+func outerLeafFenceDecodeSharedLeaseSet() *outerLeafFenceDecodeLeaseSet {
+	if outerLeafFenceDecodeSharedLeases != nil {
+		return outerLeafFenceDecodeSharedLeases
+	}
+	outerLeafFenceDecodeSharedLeasesOnce.Do(initOuterLeafFenceDecodeSharedLeases)
+	return outerLeafFenceDecodeSharedLeases
+}
+
+func initOuterLeafFenceDecodeSharedLeases() {
+	outerLeafFenceDecodeSharedLeases = newOuterLeafFenceDecodeLeaseSet(0)
 }
 
 func newOuterLeafFenceDecodeLeaseSet(size int) *outerLeafFenceDecodeLeaseSet {
 	if size <= 0 {
 		size = outerLeafFenceDecodeLeaseSetPreferredSize()
 	}
-	set := &outerLeafFenceDecodeLeaseSet{
-		slots: make(chan *outerLeafFenceDecodeContext, size),
+	set := &outerLeafFenceDecodeLeaseSet{}
+	set.pool.New = func() any {
+		return acquireOuterLeafFenceDecodeContext()
 	}
 	for i := 0; i < size; i++ {
-		set.slots <- acquireOuterLeafFenceDecodeContext()
+		set.pool.Put(acquireOuterLeafFenceDecodeContext())
 	}
 	return set
 }
@@ -112,37 +141,23 @@ func (s *outerLeafFenceDecodeLeaseSet) acquire() *outerLeafFenceDecodeContext {
 	if s == nil {
 		return nil
 	}
-	select {
-	case ctx := <-s.slots:
-		return ctx
-	default:
-		return nil
+	if v := s.pool.Get(); v != nil {
+		if ctx, ok := v.(*outerLeafFenceDecodeContext); ok && ctx != nil {
+			return ctx
+		}
 	}
+	return acquireOuterLeafFenceDecodeContext()
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) release(ctx *outerLeafFenceDecodeContext) {
 	if s == nil || ctx == nil {
 		return
 	}
-	select {
-	case s.slots <- ctx:
-	default:
-		releaseOuterLeafFenceDecodeContext(ctx)
-	}
+	s.pool.Put(ctx)
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) close() {
-	if s == nil {
-		return
-	}
-	for {
-		select {
-		case ctx := <-s.slots:
-			releaseOuterLeafFenceDecodeContext(ctx)
-		default:
-			return
-		}
-	}
+	_ = s
 }
 
 func acquireOuterLeafFenceDecodeContext() *outerLeafFenceDecodeContext {
@@ -167,7 +182,10 @@ func releaseOuterLeafFenceDecodeContext(ctx *outerLeafFenceDecodeContext) {
 
 func outerLeafLookupScratchGet() []byte {
 	if v := outerLeafLookupScratchPool.Get(); v != nil {
-		if b, ok := v.([]byte); ok {
+		if entry, ok := v.(*outerLeafScratchEntry); ok && entry != nil {
+			b := entry.buf
+			entry.buf = nil
+			outerLeafLookupScratchEntryPool.Put(entry)
 			return b[:0]
 		}
 	}
@@ -178,12 +196,17 @@ func outerLeafLookupScratchPut(b []byte) {
 	if cap(b) == 0 || cap(b) > outerLeafLookupScratchMaxRetain {
 		return
 	}
-	outerLeafLookupScratchPool.Put(b[:0])
+	entry := outerLeafLookupScratchEntryPool.Get().(*outerLeafScratchEntry)
+	entry.buf = b[:0]
+	outerLeafLookupScratchPool.Put(entry)
 }
 
 func outerLeafFenceDecodeScratchGet() []byte {
 	if v := outerLeafFenceDecodeScratchPool.Get(); v != nil {
-		if b, ok := v.([]byte); ok {
+		if entry, ok := v.(*outerLeafScratchEntry); ok && entry != nil {
+			b := entry.buf
+			entry.buf = nil
+			outerLeafFenceDecodeScratchEntryPool.Put(entry)
 			return b[:0]
 		}
 	}
@@ -194,7 +217,9 @@ func outerLeafFenceDecodeScratchPut(b []byte) {
 	if cap(b) == 0 || cap(b) > outerLeafFenceDecodeScratchMaxRetain {
 		return
 	}
-	outerLeafFenceDecodeScratchPool.Put(b[:0])
+	entry := outerLeafFenceDecodeScratchEntryPool.Get().(*outerLeafScratchEntry)
+	entry.buf = b[:0]
+	outerLeafFenceDecodeScratchPool.Put(entry)
 }
 
 func outerLeafFenceDecodedBlockGet() *outerleaf.DecodedBlock {
@@ -257,6 +282,9 @@ func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums b
 		keyCache:               keyCache,
 	}
 	r.setOuterLeafMode(mode)
+	if r.fenceLookupEnabled && r.cache != nil {
+		r.fenceDecodeLeases = outerLeafFenceDecodeSharedLeaseSet()
+	}
 	return r
 }
 
@@ -264,7 +292,9 @@ func (r *valueReader) releaseDecodeContext() {
 	if r == nil || r.fenceDecodeLeases == nil {
 		return
 	}
-	r.fenceDecodeLeases.close()
+	if r.fenceDecodeLeases != outerLeafFenceDecodeSharedLeases {
+		r.fenceDecodeLeases.close()
+	}
 	r.fenceDecodeLeases = nil
 }
 
