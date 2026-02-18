@@ -60,8 +60,11 @@ func (l *staticFenceKeysLease) Release() {
 }
 
 const outerLeafLookupScratchMaxRetain = 1 << 20
+const outerLeafFenceDecodeScratchMaxRetain = 64 << 20
 
 var outerLeafLookupScratchPool sync.Pool
+var outerLeafFenceDecodeScratchPool sync.Pool
+var outerLeafFenceDecodedBlockPool sync.Pool
 
 func outerLeafLookupScratchGet() []byte {
 	if v := outerLeafLookupScratchPool.Get(); v != nil {
@@ -77,6 +80,58 @@ func outerLeafLookupScratchPut(b []byte) {
 		return
 	}
 	outerLeafLookupScratchPool.Put(b[:0])
+}
+
+func outerLeafFenceDecodeScratchGet() []byte {
+	if v := outerLeafFenceDecodeScratchPool.Get(); v != nil {
+		if b, ok := v.([]byte); ok {
+			return b[:0]
+		}
+	}
+	return nil
+}
+
+func outerLeafFenceDecodeScratchPut(b []byte) {
+	if cap(b) == 0 || cap(b) > outerLeafFenceDecodeScratchMaxRetain {
+		return
+	}
+	outerLeafFenceDecodeScratchPool.Put(b[:0])
+}
+
+func outerLeafFenceDecodedBlockGet() *outerleaf.DecodedBlock {
+	if v := outerLeafFenceDecodedBlockPool.Get(); v != nil {
+		if b, ok := v.(*outerleaf.DecodedBlock); ok && b != nil {
+			return b
+		}
+	}
+	return &outerleaf.DecodedBlock{}
+}
+
+func outerLeafFenceDecodedBlockPut(b *outerleaf.DecodedBlock) {
+	if b == nil {
+		return
+	}
+	outerLeafFenceDecodedBlockPool.Put(b)
+}
+
+type fenceBlockDecodeLease struct {
+	block    *outerleaf.DecodedBlock
+	scratch  []byte
+	released bool
+}
+
+func (l *fenceBlockDecodeLease) Release() {
+	if l == nil || l.released {
+		return
+	}
+	l.released = true
+	if l.block != nil {
+		l.block.Release()
+		outerLeafFenceDecodedBlockPut(l.block)
+		l.block = nil
+	}
+	outerLeafFenceDecodeScratchPut(l.scratch)
+	l.scratch = nil
 }
 
 type unsafeAppendReader interface {
@@ -412,12 +467,19 @@ func (r valueReader) ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []tree
 		if !outerleaf.HasMagic(raw) {
 			return nil, nil, false, nil
 		}
-		decoded, decErr := outerleaf.DecodeBlockLeaseWithVerify(raw, !r.skipOuterLeafChecksums)
+		scratch := outerLeafFenceDecodeScratchGet()
+		decodedBlock := outerLeafFenceDecodedBlockGet()
+		decoded, nextScratch, decErr := outerleaf.DecodeBlockLeaseWithScratchAndVerify(raw, scratch, decodedBlock, !r.skipOuterLeafChecksums)
 		if decErr != nil {
+			outerLeafFenceDecodedBlockPut(decodedBlock)
+			outerLeafFenceDecodeScratchPut(nextScratch)
 			return nil, nil, true, decErr
 		}
 		block = decoded
-		lease = decoded
+		lease = &fenceBlockDecodeLease{
+			block:   decoded,
+			scratch: nextScratch,
+		}
 	}
 	if cap(dst) < block.EntryCount() {
 		dst = make([]tree.FenceBlockEntry, 0, block.EntryCount())

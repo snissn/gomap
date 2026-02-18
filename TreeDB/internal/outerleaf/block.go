@@ -41,7 +41,7 @@ var blockMagic = [4]byte{'T', 'O', 'L', '2'}
 
 const (
 	// Keep pooled scratch buffers bounded to avoid retaining outsized slices.
-	maxPooledOuterLeafBytesCap      = 1 << 20
+	maxPooledOuterLeafBytesCap      = 64 << 20
 	maxPooledOuterLeafRestartsCap   = 4096
 	maxPooledOuterLeafLeaseKeysCap  = 1 << 16
 	maxPooledOuterLeafLeaseArenaCap = 8 << 20
@@ -189,6 +189,14 @@ func (d *DecodedBlock) EntryCount() int {
 		return 0
 	}
 	return d.entryCount
+}
+
+// RawBytes returns the decoded raw payload backing this block.
+func (d *DecodedBlock) RawBytes() []byte {
+	if d == nil {
+		return nil
+	}
+	return d.raw
 }
 
 // Encoder reuses encode scratch buffers across outer-leaf block encodes.
@@ -1800,15 +1808,46 @@ func DecodeBlockLeaseWithVerify(payload []byte, verifyChecksum bool) (*DecodedBl
 	return decodeBlockLease(payload, verifyChecksum)
 }
 
+// DecodeBlockLeaseWithScratchAndVerify parses an outer-leaf payload using
+// caller-provided scratch and lease-owned decode buffers.
+//
+// It returns the decoded block and a caller-owned scratch slice to reuse on the
+// next decode attempt.
+func DecodeBlockLeaseWithScratchAndVerify(payload []byte, scratch []byte, dst *DecodedBlock, verifyChecksum bool) (*DecodedBlock, []byte, error) {
+	nextScratch := scratch[:0]
+	block, err := decodeBlockMode(payload, scratch, verifyChecksum, true, dst)
+	if err != nil {
+		return nil, nextScratch, err
+	}
+	if block == nil {
+		return nil, nextScratch, nil
+	}
+	// Compressed blocks decode into scratch/new backing; reuse that backing on
+	// subsequent decodes. Raw codec (none) may alias payload bytes and should not
+	// become reusable decode scratch.
+	if len(payload) >= 6 && payload[5] != blockCodecNone && block.raw != nil {
+		nextScratch = block.raw[:0]
+	}
+	return block, nextScratch, nil
+}
+
 func decodeBlock(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedBlock, error) {
-	return decodeBlockMode(payload, scratch, verifyChecksum, false)
+	return decodeBlockMode(payload, scratch, verifyChecksum, false, nil)
 }
 
 func decodeBlockLease(payload []byte, verifyChecksum bool) (*DecodedBlock, error) {
-	return decodeBlockMode(payload, nil, verifyChecksum, true)
+	return decodeBlockMode(payload, nil, verifyChecksum, true, nil)
 }
 
-func decodeBlockMode(payload []byte, scratch []byte, verifyChecksum bool, leaseOwned bool) (*DecodedBlock, error) {
+func prepareDecodedBlock(dst *DecodedBlock) *DecodedBlock {
+	if dst == nil {
+		return &DecodedBlock{}
+	}
+	*dst = DecodedBlock{}
+	return dst
+}
+
+func decodeBlockMode(payload []byte, scratch []byte, verifyChecksum bool, leaseOwned bool, dst *DecodedBlock) (*DecodedBlock, error) {
 	if len(payload) < blockHeaderSize {
 		return nil, fmt.Errorf("outerleaf: truncated header")
 	}
@@ -1834,17 +1873,17 @@ func decodeBlockMode(payload []byte, scratch []byte, verifyChecksum bool, leaseO
 		if err != nil {
 			return nil, err
 		}
-		return &DecodedBlock{
-			version:    version,
-			entryCount: 1,
-			raw:        outScratch,
-			entries:    outScratch,
-			firstKey:   outScratch[:keyLen],
-			firstKind:  EntryKindInline,
-			firstValue: outScratch[keyLen : keyLen+valueLen],
-			leaseOwned: leaseOwned,
-			pooledRaw:  pooledRaw,
-		}, nil
+		block := prepareDecodedBlock(dst)
+		block.version = version
+		block.entryCount = 1
+		block.raw = outScratch
+		block.entries = outScratch
+		block.firstKey = outScratch[:keyLen]
+		block.firstKind = EntryKindInline
+		block.firstValue = outScratch[keyLen : keyLen+valueLen]
+		block.leaseOwned = leaseOwned
+		block.pooledRaw = pooledRaw
+		return block, nil
 	case blockVersionV2:
 		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
 		entriesLen := int(binary.LittleEndian.Uint32(payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
@@ -1874,19 +1913,19 @@ func decodeBlockMode(payload []byte, scratch []byte, verifyChecksum bool, leaseO
 			}
 			return nil, err
 		}
-		return &DecodedBlock{
-			version:      version,
-			entryCount:   entryCount,
-			raw:          outScratch,
-			entries:      entries,
-			restartRaw:   restartRaw,
-			restartCount: restartCount,
-			firstKey:     firstKey,
-			firstKind:    EntryKindInline,
-			firstValue:   firstValue,
-			leaseOwned:   leaseOwned,
-			pooledRaw:    pooledRaw,
-		}, nil
+		block := prepareDecodedBlock(dst)
+		block.version = version
+		block.entryCount = entryCount
+		block.raw = outScratch
+		block.entries = entries
+		block.restartRaw = restartRaw
+		block.restartCount = restartCount
+		block.firstKey = firstKey
+		block.firstKind = EntryKindInline
+		block.firstValue = firstValue
+		block.leaseOwned = leaseOwned
+		block.pooledRaw = pooledRaw
+		return block, nil
 	case blockVersionV3:
 		entryCount := int(binary.LittleEndian.Uint16(payload[blockV2EntryCountOff : blockV2EntryCountOff+2]))
 		entriesLen := int(binary.LittleEndian.Uint32(payload[blockV2EntriesLenOff : blockV2EntriesLenOff+4]))
@@ -1916,20 +1955,20 @@ func decodeBlockMode(payload []byte, scratch []byte, verifyChecksum bool, leaseO
 			}
 			return nil, err
 		}
-		return &DecodedBlock{
-			version:      version,
-			entryCount:   entryCount,
-			raw:          outScratch,
-			entries:      entries,
-			restartRaw:   restartRaw,
-			restartCount: restartCount,
-			firstKey:     firstKey,
-			firstKind:    first.Kind,
-			firstValue:   first.Value,
-			firstBlob:    first.BlobPtr,
-			leaseOwned:   leaseOwned,
-			pooledRaw:    pooledRaw,
-		}, nil
+		block := prepareDecodedBlock(dst)
+		block.version = version
+		block.entryCount = entryCount
+		block.raw = outScratch
+		block.entries = entries
+		block.restartRaw = restartRaw
+		block.restartCount = restartCount
+		block.firstKey = firstKey
+		block.firstKind = first.Kind
+		block.firstValue = first.Value
+		block.firstBlob = first.BlobPtr
+		block.leaseOwned = leaseOwned
+		block.pooledRaw = pooledRaw
+		return block, nil
 	default:
 		return nil, fmt.Errorf("outerleaf: unsupported version %d", version)
 	}
