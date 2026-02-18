@@ -132,13 +132,68 @@ func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	if ctx2 == nil {
 		t.Fatalf("second acquire returned nil")
 	}
+	if got := set.active.Load(); got != 2 {
+		t.Fatalf("active after two acquires=%d want 2", got)
+	}
 	set.release(ctx1)
 	set.release(ctx2)
+	if got := set.active.Load(); got != 0 {
+		t.Fatalf("active after releases=%d want 0", got)
+	}
 	ctx3 := set.acquire()
 	if ctx3 == nil {
 		t.Fatalf("acquire after release returned nil")
 	}
 	set.release(ctx3)
+}
+
+func TestOuterLeafFenceDecodeLeaseSetReleaseOverflowRecyclesContext(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	ctx1 := set.acquire()
+	ctx2 := set.acquire()
+	if ctx1 == nil || ctx2 == nil {
+		t.Fatalf("acquire returned nil ctx1=%v ctx2=%v", ctx1, ctx2)
+	}
+	ctx1.scratch = make([]byte, 32)
+	ctx2.scratch = make([]byte, 16)
+
+	set.release(ctx1)
+	if ctx1.scratch != nil {
+		t.Fatalf("overflow release kept scratch; want recycled context")
+	}
+	if got := set.active.Load(); got != 1 {
+		t.Fatalf("active after first release=%d want 1", got)
+	}
+
+	set.release(ctx2)
+	if ctx2.scratch == nil {
+		t.Fatalf("retained release cleared scratch; want pooled reuse state")
+	}
+	if got := set.active.Load(); got != 0 {
+		t.Fatalf("active after second release=%d want 0", got)
+	}
+}
+
+func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing.T) {
+	payload, _, _ := makeTestOuterLeafPayload(t)
+	payload = append([]byte(nil), payload...)
+	payload = payload[:len(payload)-1]
+	if !outerleaf.HasMagic(payload) {
+		t.Fatalf("payload missing outer-leaf magic after truncation")
+	}
+
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	var r valueReader
+	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	r.fenceDecodeLeases = set
+
+	_, _, err := r.decodeValueForKeyFound(page.ValuePtr{}, []byte("k1"), payload, true)
+	if err == nil {
+		t.Fatalf("decodeValueForKeyFound err=nil want decode failure")
+	}
+	if got := set.active.Load(); got != 0 {
+		t.Fatalf("active after decode error=%d want 0", got)
+	}
 }
 
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
