@@ -139,3 +139,36 @@ func TestResolvedTreeDBVlogTrainDefaults(t *testing.T) {
 		t.Fatalf("expected dict bytes preserved with disabled train, got %d", dict)
 	}
 }
+
+func TestBuildTreeDBOptions_DefaultChunkSize(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbVlogCompression = "default"
+
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ChunkSize != defaultTreeDBChunkSizeBytes {
+		t.Fatalf("unexpected default chunk size: got=%d want=%d", opts.ChunkSize, defaultTreeDBChunkSizeBytes)
+	}
+}
+
+func TestBuildTreeDBOptions_ChunkSizeFlagOverride(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbChunkSize = 2 << 20
+	*treedbVlogCompression = "default"
+
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ChunkSize != (2 << 20) {
+		t.Fatalf("unexpected chunk size: got=%d want=%d", opts.ChunkSize, 2<<20)
+	}
+}

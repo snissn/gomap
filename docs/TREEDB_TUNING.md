@@ -5,7 +5,7 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 
 ## TL;DR Defaults
 
-- `ChunkSize`: defaults to 64 MiB in `treedb.Open` (mmap chunk size for `index.db`)
+- `ChunkSize`: defaults to 256 KiB in `treedb.Open` (mmap chunk size for `index.db`)
 - `FlushThreshold`: defaults to 64 MiB in cached mode (memtable/journal rotation threshold)
 - `KeepRecent`: defaults to `1` in `treedb.Open` (aggressive page reuse)
 - Inline values: values up to 256 bytes are stored inline; larger values go to the value log.
@@ -34,8 +34,8 @@ Larger chunks:
 - but can increase address-space usage.
 
 Side stores:
-- `Options.DictDBChunkSize` controls the chunk size for `dictdb/` (default 1MiB).
-- `Options.TemplateDBChunkSize` controls the chunk size for `templatedb/` (default 1MiB).
+- `Options.DictDBChunkSize` controls the chunk size for `dictdb/` (default 64KiB).
+- `Options.TemplateDBChunkSize` controls the chunk size for `templatedb/` (default 64KiB).
 
 These are intentionally independent of `Options.ChunkSize` so you can tune the
 main index pager without inflating side-store disk usage.

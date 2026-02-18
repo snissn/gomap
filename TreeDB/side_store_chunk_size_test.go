@@ -95,3 +95,103 @@ func TestSideStoreChunkSize_CustomDictDBChunkSize(t *testing.T) {
 		t.Fatalf("unexpected dictdb index.db size: got=%d want=%d", got, 2<<20)
 	}
 }
+
+func TestSideStoreChunkSize_CustomDictDoesNotInflateTemplateDefault(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:             dir,
+		ChunkSize:       64 << 20,
+		DictDBChunkSize: 2 << 20,
+		ValueLog: ValueLogOptions{
+			TemplateMode: template.TemplatePrepass,
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if db.dictdb == nil {
+		t.Fatalf("expected dictdb to be open")
+	}
+	if err := db.dictdb.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("dictdb SetSync: %v", err)
+	}
+	dictPath := filepath.Join(db.dictdb.Dir(), "index.db")
+	dictInfo, err := os.Stat(dictPath)
+	if err != nil {
+		t.Fatalf("stat dictdb index.db: %v", err)
+	}
+	if got := dictInfo.Size(); got != (2 << 20) {
+		t.Fatalf("unexpected dictdb index.db size: got=%d want=%d", got, 2<<20)
+	}
+
+	if db.templateDB == nil {
+		t.Fatalf("expected templatedb to be open")
+	}
+	if err := db.templateDB.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("templatedb SetSync: %v", err)
+	}
+	if db.templateDB.backend == nil {
+		t.Fatalf("expected templatedb backend to be open")
+	}
+	templatePath := filepath.Join(db.templateDB.backend.Dir(), "index.db")
+	templateInfo, err := os.Stat(templatePath)
+	if err != nil {
+		t.Fatalf("stat templatedb index.db: %v", err)
+	}
+	if got := templateInfo.Size(); got != defaultDictChunkSize {
+		t.Fatalf("unexpected templatedb index.db size: got=%d want=%d", got, defaultDictChunkSize)
+	}
+}
+
+func TestSideStoreChunkSize_CustomTemplateDBChunkSize(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		Dir:                 dir,
+		ChunkSize:           64 << 20,
+		TemplateDBChunkSize: 3 << 20,
+		ValueLog: ValueLogOptions{
+			TemplateMode: template.TemplatePrepass,
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	if db.dictdb == nil {
+		t.Fatalf("expected dictdb to be open")
+	}
+	if err := db.dictdb.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("dictdb SetSync: %v", err)
+	}
+	dictPath := filepath.Join(db.dictdb.Dir(), "index.db")
+	dictInfo, err := os.Stat(dictPath)
+	if err != nil {
+		t.Fatalf("stat dictdb index.db: %v", err)
+	}
+	if got := dictInfo.Size(); got != defaultDictChunkSize {
+		t.Fatalf("unexpected dictdb index.db size: got=%d want=%d", got, defaultDictChunkSize)
+	}
+
+	if db.templateDB == nil {
+		t.Fatalf("expected templatedb to be open")
+	}
+	if err := db.templateDB.SetSync([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("templatedb SetSync: %v", err)
+	}
+	if db.templateDB.backend == nil {
+		t.Fatalf("expected templatedb backend to be open")
+	}
+	templatePath := filepath.Join(db.templateDB.backend.Dir(), "index.db")
+	templateInfo, err := os.Stat(templatePath)
+	if err != nil {
+		t.Fatalf("stat templatedb index.db: %v", err)
+	}
+	if got := templateInfo.Size(); got != (3 << 20) {
+		t.Fatalf("unexpected templatedb index.db size: got=%d want=%d", got, 3<<20)
+	}
+}
