@@ -58,7 +58,7 @@ var (
 			return &bytesPoolEntry{}
 		},
 	}
-	outerLeafRestartsPool sync.Pool
+	outerLeafRestartsPool      sync.Pool
 	outerLeafRestartsEntryPool = sync.Pool{
 		New: func() any {
 			return &restartsPoolEntry{}
