@@ -844,3 +844,132 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 		t.Fatalf("unexpected full_scan value: %v", got)
 	}
 }
+
+func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
+	origRunPprofDeltaCommandFn := runPprofDeltaCommandFn
+	runPprofDeltaCommandFn = func(basePath, afterPath string) ([]byte, string, error) {
+		return nil, "", nil
+	}
+	defer func() {
+		runPprofDeltaCommandFn = origRunPprofDeltaCommandFn
+	}()
+
+	outPath := filepath.Join(t.TempDir(), "block_random_read_treedb.pprof")
+	if err := os.WriteFile(outPath, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("seed stale output: %v", err)
+	}
+
+	wrote, err := writeRuntimeProfileDeltaProfile("base.pprof", "after.pprof", outPath)
+	if err != nil {
+		t.Fatalf("writeRuntimeProfileDeltaProfile: %v", err)
+	}
+	if wrote {
+		t.Fatalf("expected empty delta to skip write")
+	}
+	if _, err := os.Stat(outPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected no delta file, got stat err=%v", err)
+	}
+}
+
+func TestRunBenchmark_ContentionAfterSnapshotsBeforeAllocsPostProcessing(t *testing.T) {
+	origStopCPUProfileFn := stopCPUProfileFn
+	origWriteAllocsSnapshotTempFn := writeAllocsSnapshotTempFn
+	origWriteAllocsDeltaProfileFn := writeAllocsDeltaProfileFn
+	origWriteRuntimeProfileSnapshotTempFn := writeRuntimeProfileSnapshotTempFn
+	origWriteRuntimeProfileDeltaProfileFn := writeRuntimeProfileDeltaProfileFn
+	defer func() {
+		stopCPUProfileFn = origStopCPUProfileFn
+		writeAllocsSnapshotTempFn = origWriteAllocsSnapshotTempFn
+		writeAllocsDeltaProfileFn = origWriteAllocsDeltaProfileFn
+		writeRuntimeProfileSnapshotTempFn = origWriteRuntimeProfileSnapshotTempFn
+		writeRuntimeProfileDeltaProfileFn = origWriteRuntimeProfileDeltaProfileFn
+	}()
+
+	var events []string
+	profileTmpDir := t.TempDir()
+	newProfilePath := func(prefix string) (string, error) {
+		f, err := os.CreateTemp(profileTmpDir, prefix+"_*.pprof")
+		if err != nil {
+			return "", err
+		}
+		path := f.Name()
+		if err := f.Close(); err != nil {
+			_ = os.Remove(path)
+			return "", err
+		}
+		return path, nil
+	}
+
+	stopCPUProfileFn = func() {
+		events = append(events, "cpu_stop")
+		origStopCPUProfileFn()
+	}
+	writeAllocsSnapshotTempFn = func(prefix string) (string, error) {
+		events = append(events, prefix)
+		return newProfilePath(prefix)
+	}
+	writeRuntimeProfileSnapshotTempFn = func(prefix, profileName string) (string, error) {
+		events = append(events, prefix)
+		return newProfilePath(prefix)
+	}
+	writeAllocsDeltaProfileFn = func(basePath, afterPath, outPath string) error {
+		events = append(events, "alloc_delta")
+		return nil
+	}
+	writeRuntimeProfileDeltaProfileFn = func(basePath, afterPath, outPath string) (bool, error) {
+		events = append(events, filepath.Base(outPath))
+		return true, nil
+	}
+
+	outDir := t.TempDir()
+	_, err := runBenchmark(BenchConfig{
+		Keys:         64,
+		ValueSize:    16,
+		BatchSize:    16,
+		RangeQueries: 4,
+		RangeSpan:    4,
+		DBsArg:       "treedb",
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+
+		CPUProfile:    filepath.Join(outDir, "cpu"),
+		AllocsProfile: filepath.Join(outDir, "allocs"),
+		BlockProfile:  filepath.Join(outDir, "block.pprof"),
+		MutexProfile:  filepath.Join(outDir, "mutex.pprof"),
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+
+	indexOf := func(target string) int {
+		for i, evt := range events {
+			if evt == target {
+				return i
+			}
+		}
+		return -1
+	}
+
+	cpuStopIdx := indexOf("cpu_stop")
+	blockAfterIdx := indexOf("unified_bench_block_after")
+	mutexAfterIdx := indexOf("unified_bench_mutex_after")
+	allocAfterIdx := indexOf("unified_bench_allocs_after")
+
+	if cpuStopIdx < 0 || blockAfterIdx < 0 || mutexAfterIdx < 0 || allocAfterIdx < 0 {
+		t.Fatalf("missing expected profiling events: %v", events)
+	}
+	if cpuStopIdx > blockAfterIdx {
+		t.Fatalf("expected cpu_stop before block_after, events=%v", events)
+	}
+	if cpuStopIdx > mutexAfterIdx {
+		t.Fatalf("expected cpu_stop before mutex_after, events=%v", events)
+	}
+	if blockAfterIdx > allocAfterIdx {
+		t.Fatalf("expected block_after before allocs_after, events=%v", events)
+	}
+	if mutexAfterIdx > allocAfterIdx {
+		t.Fatalf("expected mutex_after before allocs_after, events=%v", events)
+	}
+}
