@@ -275,11 +275,56 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 	if r.cache == nil {
 		return r.decodeOuterLeafValueForKeyNoCache(raw, key, unsafe)
 	}
-	block, err := r.outerLeafBlock(ptr, raw)
+	cacheKey := newOuterLeafBlockKey(ptr)
+	if block := r.cache.get(cacheKey); block != nil {
+		entry, found, err := block.EntryForKey(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return nil, false, nil
+		}
+		val, err := r.resolveLookupResult(entry, unsafe)
+		if err != nil {
+			return nil, false, err
+		}
+		return val, true, nil
+	}
+	verifyChecksums := !r.skipOuterLeafChecksums
+	scratch := outerLeafFenceDecodeScratchGet()
+	decodedBlock := outerLeafFenceDecodedBlockGet()
+	block, nextScratch, err := outerleaf.DecodeBlockLeaseWithScratchAndVerify(raw, scratch, decodedBlock, verifyChecksums)
 	if err != nil {
+		outerLeafFenceDecodedBlockPut(decodedBlock)
+		outerLeafFenceDecodeScratchPut(nextScratch)
 		return nil, false, err
 	}
-	entry, found, err := block.EntryForKey(key)
+	if block == nil {
+		outerLeafFenceDecodedBlockPut(decodedBlock)
+		outerLeafFenceDecodeScratchPut(nextScratch)
+		return nil, false, nil
+	}
+	releaseAfterLookup := true
+	if block.FirstKind() != outerleaf.EntryKindBlobRef {
+		r.cache.put(cacheKey, block)
+		releaseAfterLookup = false
+	}
+	if releaseAfterLookup {
+		defer func() {
+			block.Release()
+			outerLeafFenceDecodedBlockPut(decodedBlock)
+			outerLeafFenceDecodeScratchPut(nextScratch)
+		}()
+	}
+	var (
+		entry outerleaf.LookupResult
+		found bool
+	)
+	if releaseAfterLookup {
+		entry, found, err = block.EntryForKeyNoRestartKeys(key)
+	} else {
+		entry, found, err = block.EntryForKey(key)
+	}
 	if err != nil {
 		return nil, false, err
 	}

@@ -23,6 +23,7 @@ const (
 
 	defaultBlockTargetBytes = 4 << 10
 	defaultRestartInterval  = 16
+	linearScanMaxEntries    = 32
 
 	blockCodecNone   = uint8(0)
 	blockCodecSnappy = uint8(1)
@@ -2182,23 +2183,26 @@ func (d *DecodedBlock) ValueForKey(key []byte) ([]byte, bool, error) {
 			if d.firstValue != nil {
 				return d.firstValue, true, nil
 			}
-			restartKeys, err := d.lookupRestartKeys()
-			if err != nil {
-				return nil, false, err
-			}
 			restarts, err := d.lookupRestarts()
 			if err != nil {
 				return nil, false, err
 			}
+			restartKeys := d.restartKeys
+			if len(restartKeys) != len(restarts) {
+				restartKeys = nil
+			}
 			return lookupV2Value(d.entries, d.entryCount, nil, restarts, restartKeys)
 		}
-		restartKeys, err := d.lookupRestartKeys()
-		if err != nil {
-			return nil, false, err
+		if d.entryCount <= linearScanMaxEntries {
+			return lookupV2ValueRange(d.entries, key, 0, len(d.entries))
 		}
 		restarts, err := d.lookupRestarts()
 		if err != nil {
 			return nil, false, err
+		}
+		restartKeys := d.restartKeys
+		if len(restartKeys) != len(restarts) {
+			restartKeys = nil
 		}
 		val, found, err := lookupV2Value(d.entries, d.entryCount, key, restarts, restartKeys)
 		return val, found, err
@@ -2216,6 +2220,66 @@ func (d *DecodedBlock) ValueForKey(key []byte) ([]byte, bool, error) {
 		return entry.Value, true, nil
 	default:
 		return nil, false, fmt.Errorf("outerleaf: unsupported version %d", d.version)
+	}
+}
+
+// EntryForKeyNoRestartKeys resolves key inside a decoded block without
+// materializing restart key slices.
+func (d *DecodedBlock) EntryForKeyNoRestartKeys(key []byte) (LookupResult, bool, error) {
+	if d == nil {
+		return LookupResult{}, false, fmt.Errorf("outerleaf: nil block")
+	}
+	switch d.version {
+	case blockVersionV1:
+		if len(key) == 0 || bytes.Equal(d.firstKey, key) {
+			return LookupResult{Kind: EntryKindInline, Value: d.firstValue}, true, nil
+		}
+		return LookupResult{}, false, nil
+	case blockVersionV2:
+		if len(key) == 0 {
+			if d.firstValue == nil {
+				return LookupResult{}, false, fmt.Errorf("outerleaf: empty block")
+			}
+			return LookupResult{Kind: EntryKindInline, Value: d.firstValue}, true, nil
+		}
+		if d.entryCount <= linearScanMaxEntries {
+			val, found, err := lookupV2ValueRange(d.entries, key, 0, len(d.entries))
+			if err != nil {
+				return LookupResult{}, false, err
+			}
+			if !found {
+				return LookupResult{}, false, nil
+			}
+			return LookupResult{Kind: EntryKindInline, Value: val}, true, nil
+		}
+		restarts, err := d.lookupRestarts()
+		if err != nil {
+			return LookupResult{}, false, err
+		}
+		val, found, err := lookupV2Value(d.entries, d.entryCount, key, restarts, nil)
+		if err != nil {
+			return LookupResult{}, false, err
+		}
+		if !found {
+			return LookupResult{}, false, nil
+		}
+		return LookupResult{Kind: EntryKindInline, Value: val}, true, nil
+	case blockVersionV3:
+		if len(key) == 0 {
+			if d.firstKind == EntryKindBlobRef {
+				return LookupResult{Kind: EntryKindBlobRef, BlobPtr: d.firstBlob}, true, nil
+			}
+			if d.firstValue != nil {
+				return LookupResult{Kind: EntryKindInline, Value: d.firstValue}, true, nil
+			}
+		}
+		restarts, err := d.lookupRestarts()
+		if err != nil {
+			return LookupResult{}, false, err
+		}
+		return lookupV3Entry(d.entries, d.entryCount, key, restarts, nil)
+	default:
+		return LookupResult{}, false, fmt.Errorf("outerleaf: unsupported version %d", d.version)
 	}
 }
 
