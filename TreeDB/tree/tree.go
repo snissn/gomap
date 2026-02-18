@@ -561,9 +561,16 @@ func (t *Tree) lookupFenceHasKey(n *node.Node, idx uint16, key []byte) (found bo
 		if t.slabFenceSeekL != nil {
 			pos, below, above, lease, ok, err := t.slabFenceSeekL.ReadUnsafeFenceBlockSeekLease(ptr, key)
 			if err != nil {
+				if lease != nil {
+					lease.Release()
+				}
 				return false, false, err
 			}
-			if ok {
+			if !ok {
+				if lease != nil {
+					lease.Release()
+				}
+			} else {
 				if below || above || lease == nil {
 					if lease != nil {
 						lease.Release()
