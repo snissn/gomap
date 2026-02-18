@@ -101,7 +101,8 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-checkpoint-cpuprofile-tests` restrict checkpoint CPU profiling to a CSV list of tests
 - `-profile-dir` write all profile outputs into one directory (auto-sets defaults for `-cpuprofile`, `-allocsprofile`, `-checkpoint-cpuprofile`, `-blockprofile`, `-mutexprofile`, `-trace`; explicit flags still win). Also emits `benchprof_results.json` and `benchprof_results.md`, then automatically runs `benchprof` in-process.
 - `-treedb-cache-stats-before-reads` print select `treedb.cache.*` stats before read/scan tests (treedb only)
-- `-blockprofile`, `-mutexprofile`, `-trace` write profiling artifacts to files
+- `-blockprofile`, `-mutexprofile` write global profiling artifacts to files and also emit per-test contention delta profiles in the same directory (`block_<test>_<db>.pprof`, `mutex_<test>_<db>.pprof`) when the computed delta is non-empty
+- `-trace` write runtime execution trace to file
 - `-max-wall` abort the run if wall time exceeds this duration (guardrail; `0` = disabled)
 - `-max-rss-mb` abort the run if RSS exceeds this many MiB (guardrail; `0` = disabled; Linux-only)
 - `-checkpoint-between-tests` force a best-effort durability checkpoint between tests (DBs that support `Checkpoint()`)
@@ -162,6 +163,8 @@ This writes:
 - `benchprof_results.json` / `benchprof_results.md`
 - `cpu_<test>_<db>.pprof`
 - `allocs_<test>_<db>.pprof`
+- `block_<test>_<db>.pprof` (when non-empty delta)
+- `mutex_<test>_<db>.pprof` (when non-empty delta)
 - `checkpoint_cpu_checkpoint_<test>_<db>.pprof`
 - `block.pprof`, `mutex.pprof`, `trace.out`
 - `insights.md`, `insights.json`, `insights.html` (from `benchprof`)
