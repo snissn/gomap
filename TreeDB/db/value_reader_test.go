@@ -141,6 +141,23 @@ func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	set.release(ctx3)
 }
 
+func TestNewValueReader_FenceDecodeLeasesReaderLocal(t *testing.T) {
+	r1 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	r2 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	defer (&r1).releaseDecodeContext()
+	defer (&r2).releaseDecodeContext()
+
+	if r1.fenceDecodeLeases == nil {
+		t.Fatalf("r1.fenceDecodeLeases=nil want initialized")
+	}
+	if r2.fenceDecodeLeases == nil {
+		t.Fatalf("r2.fenceDecodeLeases=nil want initialized")
+	}
+	if r1.fenceDecodeLeases == r2.fenceDecodeLeases {
+		t.Fatalf("fenceDecodeLeases unexpectedly shared between readers")
+	}
+}
+
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
 	payload, block, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}

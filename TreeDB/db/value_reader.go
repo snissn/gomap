@@ -120,13 +120,6 @@ var outerLeafFenceDecodeScratchEntryPool = sync.Pool{
 	},
 }
 var outerLeafFenceDecodedBlockPool sync.Pool
-var outerLeafFenceDecodeSharedLeases *outerLeafFenceDecodeLeaseSet
-var outerLeafFenceDecodeSharedLeasesOnce sync.Once
-var outerLeafFenceDecodeContextPool = sync.Pool{
-	New: func() any {
-		return &outerLeafFenceDecodeContext{}
-	},
-}
 
 type outerLeafScratchEntry struct {
 	buf []byte
@@ -138,28 +131,20 @@ type outerLeafFenceDecodeContext struct {
 }
 
 type outerLeafFenceDecodeLeaseSet struct {
-	pool sync.Pool
-}
-
-func outerLeafFenceDecodeSharedLeaseSet() *outerLeafFenceDecodeLeaseSet {
-	outerLeafFenceDecodeSharedLeasesOnce.Do(initOuterLeafFenceDecodeSharedLeases)
-	return outerLeafFenceDecodeSharedLeases
-}
-
-func initOuterLeafFenceDecodeSharedLeases() {
-	outerLeafFenceDecodeSharedLeases = newOuterLeafFenceDecodeLeaseSet(0)
+	pool    sync.Pool
+	prewarm int
 }
 
 func newOuterLeafFenceDecodeLeaseSet(size int) *outerLeafFenceDecodeLeaseSet {
 	if size <= 0 {
 		size = outerLeafFenceDecodeLeaseSetPreferredSize()
 	}
-	set := &outerLeafFenceDecodeLeaseSet{}
+	set := &outerLeafFenceDecodeLeaseSet{prewarm: size}
 	set.pool.New = func() any {
-		return acquireOuterLeafFenceDecodeContext()
+		return &outerLeafFenceDecodeContext{}
 	}
 	for i := 0; i < size; i++ {
-		set.pool.Put(acquireOuterLeafFenceDecodeContext())
+		set.pool.Put(set.pool.New())
 	}
 	return set
 }
@@ -184,7 +169,7 @@ func (s *outerLeafFenceDecodeLeaseSet) acquire() *outerLeafFenceDecodeContext {
 			return ctx
 		}
 	}
-	return acquireOuterLeafFenceDecodeContext()
+	return &outerLeafFenceDecodeContext{}
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) release(ctx *outerLeafFenceDecodeContext) {
@@ -195,11 +180,20 @@ func (s *outerLeafFenceDecodeLeaseSet) release(ctx *outerLeafFenceDecodeContext)
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) close() {
-	_ = s
-}
-
-func acquireOuterLeafFenceDecodeContext() *outerLeafFenceDecodeContext {
-	return outerLeafFenceDecodeContextPool.Get().(*outerLeafFenceDecodeContext)
+	if s == nil {
+		return
+	}
+	// Drain prewarmed contexts and release retained scratch/decoded-block state.
+	// Any additional contexts remain collectible when the lease set is dropped.
+	s.pool.New = nil
+	for i := 0; i < s.prewarm; i++ {
+		if v := s.pool.Get(); v != nil {
+			if ctx, ok := v.(*outerLeafFenceDecodeContext); ok && ctx != nil {
+				releaseOuterLeafFenceDecodeContext(ctx)
+			}
+		}
+	}
+	s.prewarm = 0
 }
 
 func releaseOuterLeafFenceDecodeContext(ctx *outerLeafFenceDecodeContext) {
@@ -215,7 +209,6 @@ func releaseOuterLeafFenceDecodeContext(ctx *outerLeafFenceDecodeContext) {
 		outerLeafFenceDecodedBlockPut(block)
 	}
 	outerLeafFenceDecodeScratchPut(scratch)
-	outerLeafFenceDecodeContextPool.Put(ctx)
 }
 
 func outerLeafLookupScratchGet() []byte {
@@ -322,7 +315,7 @@ func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums b
 	}
 	r.setOuterLeafMode(mode)
 	if r.fenceLookupEnabled {
-		r.fenceDecodeLeases = outerLeafFenceDecodeSharedLeaseSet()
+		r.fenceDecodeLeases = newOuterLeafFenceDecodeLeaseSet(0)
 	}
 	return r
 }
@@ -331,9 +324,7 @@ func (r *valueReader) releaseDecodeContext() {
 	if r == nil || r.fenceDecodeLeases == nil {
 		return
 	}
-	if r.fenceDecodeLeases != outerLeafFenceDecodeSharedLeases {
-		r.fenceDecodeLeases.close()
-	}
+	r.fenceDecodeLeases.close()
 	r.fenceDecodeLeases = nil
 }
 
