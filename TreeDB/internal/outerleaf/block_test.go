@@ -319,6 +319,47 @@ func TestDecodeBlockLeaseWithScratchAndVerify_TransfersPooledRawToCallerScratch(
 	blk2.Release()
 }
 
+func TestDecodedBlockReclaimTransferredScratchForRelease_ZeroLenScratch(t *testing.T) {
+	entries := []Entry{
+		{Key: []byte("acct:0001"), Value: bytes.Repeat([]byte("a"), 1024)},
+		{Key: []byte("acct:0002"), Value: bytes.Repeat([]byte("b"), 1024)},
+		{Key: []byte("acct:0003"), Value: bytes.Repeat([]byte("c"), 1024)},
+	}
+	enc, err := EncodeEntries(nil, entries, 0, 2)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	if len(enc) < blockHeaderSize || enc[5] == blockCodecNone {
+		t.Fatalf("expected compressed payload for scratch reclaim test")
+	}
+
+	dst := &DecodedBlock{}
+	blk, nextScratch, err := DecodeBlockLeaseWithScratchAndVerify(enc, nil, dst, true)
+	if err != nil {
+		t.Fatalf("DecodeBlockLeaseWithScratchAndVerify: %v", err)
+	}
+	if blk == nil {
+		t.Fatalf("decoded block=nil")
+	}
+	if cap(nextScratch) == 0 {
+		t.Fatalf("nextScratch cap=0 want >0")
+	}
+
+	var reclaimed []byte
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				t.Fatalf("ReclaimTransferredScratchForRelease panicked: %v", rec)
+			}
+		}()
+		reclaimed = blk.ReclaimTransferredScratchForRelease(nextScratch[:0])
+	}()
+	if reclaimed != nil {
+		t.Fatalf("reclaimed scratch=%v want nil", reclaimed)
+	}
+	blk.Release()
+}
+
 func TestDecodeRestartsFromRawIntoReusesDst(t *testing.T) {
 	enc, err := EncodeEntries(nil, []Entry{
 		{Key: []byte("k10"), Value: []byte("v10")},
@@ -909,7 +950,7 @@ func TestOuterLeafPoolCapsBounded(t *testing.T) {
 	}
 }
 
-func TestGetPooledLeaseKeys_SkipsUndersizedBuffer(t *testing.T) {
+func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
 	for outerLeafLeaseKeysPool.Get() != nil {
 	}
 	t.Cleanup(func() {
@@ -926,7 +967,7 @@ func TestGetPooledLeaseKeys_SkipsUndersizedBuffer(t *testing.T) {
 	}
 }
 
-func TestGetPooledLeaseArena_SkipsUndersizedArena(t *testing.T) {
+func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
 	for outerLeafLeaseArenaPool.Get() != nil {
 	}
 	t.Cleanup(func() {

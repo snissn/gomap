@@ -677,7 +677,7 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 			if len(tail) == 0 {
 				return dst[:oldLen], nil
 			}
-			if cap(dst) > oldLen {
+			if len(tail) > 0 && cap(dst) > oldLen {
 				base := dst[:cap(dst):cap(dst)]
 				if &tail[0] == &base[oldLen] {
 					return dst[:oldLen+len(tail)], nil
@@ -707,7 +707,7 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 			if len(tail) == 0 {
 				return dst[:oldLen], nil
 			}
-			if cap(dst) > oldLen {
+			if len(tail) > 0 && cap(dst) > oldLen {
 				base := dst[:cap(dst):cap(dst)]
 				if &tail[0] == &base[oldLen] {
 					return dst[:oldLen+len(tail)], nil

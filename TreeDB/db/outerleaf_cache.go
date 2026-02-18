@@ -66,9 +66,11 @@ func (r *outerLeafBlockRef) release() {
 		return
 	}
 	if r.block != nil {
-		r.block.Release()
-		outerLeafFenceDecodedBlockPut(r.block)
+		block := r.block
 		r.block = nil
+		block.Release()
+		*block = outerleaf.DecodedBlock{}
+		outerLeafFenceDecodedBlockPut(block)
 	}
 }
 
