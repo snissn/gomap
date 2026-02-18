@@ -66,10 +66,20 @@ var (
 			return &restartsPoolEntry{}
 		},
 	}
-	outerLeafLeaseKeysPool  sync.Pool
-	outerLeafLeaseArenaPool sync.Pool
-	outerLeafKeyLeasePool   sync.Pool
-	outerLeafKeyChunkPool   = sync.Pool{
+	outerLeafLeaseKeysPool      sync.Pool
+	outerLeafLeaseArenaPool     sync.Pool
+	outerLeafLeaseKeysEntryPool = sync.Pool{
+		New: func() any {
+			return &leaseKeysPoolEntry{}
+		},
+	}
+	outerLeafLeaseArenaEntryPool = sync.Pool{
+		New: func() any {
+			return &leaseArenaPoolEntry{}
+		},
+	}
+	outerLeafKeyLeasePool sync.Pool
+	outerLeafKeyChunkPool = sync.Pool{
 		New: func() any {
 			return &keyLeaseChunk{}
 		},
@@ -139,6 +149,14 @@ type bytesPoolEntry struct {
 
 type restartsPoolEntry struct {
 	buf []uint32
+}
+
+type leaseKeysPoolEntry struct {
+	buf [][]byte
+}
+
+type leaseArenaPoolEntry struct {
+	buf []byte
 }
 
 // KeyLease provides explicit ownership for decoded key vectors.
@@ -637,7 +655,10 @@ func getPooledLeaseKeys(minCap int) [][]byte {
 		minCap = 1
 	}
 	if v := outerLeafLeaseKeysPool.Get(); v != nil {
-		if keys, ok := v.([][]byte); ok {
+		if entry, ok := v.(*leaseKeysPoolEntry); ok && entry != nil {
+			keys := entry.buf
+			entry.buf = nil
+			outerLeafLeaseKeysEntryPool.Put(entry)
 			if cap(keys) >= minCap {
 				return keys[:0]
 			}
@@ -653,7 +674,9 @@ func putPooledLeaseKeys(keys [][]byte) {
 	}
 	full := keys[:cap(keys)]
 	clear(full)
-	outerLeafLeaseKeysPool.Put(full[:0])
+	entry := outerLeafLeaseKeysEntryPool.Get().(*leaseKeysPoolEntry)
+	entry.buf = full[:0]
+	outerLeafLeaseKeysPool.Put(entry)
 }
 
 func getPooledLeaseArena(minCap int) []byte {
@@ -661,7 +684,10 @@ func getPooledLeaseArena(minCap int) []byte {
 		minCap = 1
 	}
 	if v := outerLeafLeaseArenaPool.Get(); v != nil {
-		if arena, ok := v.([]byte); ok {
+		if entry, ok := v.(*leaseArenaPoolEntry); ok && entry != nil {
+			arena := entry.buf
+			entry.buf = nil
+			outerLeafLeaseArenaEntryPool.Put(entry)
 			if cap(arena) >= minCap {
 				return arena[:0]
 			}
@@ -675,7 +701,9 @@ func putPooledLeaseArena(arena []byte) {
 	if cap(arena) == 0 || cap(arena) > maxPooledOuterLeafLeaseArenaCap {
 		return
 	}
-	outerLeafLeaseArenaPool.Put(arena[:0])
+	entry := outerLeafLeaseArenaEntryPool.Get().(*leaseArenaPoolEntry)
+	entry.buf = arena[:0]
+	outerLeafLeaseArenaPool.Put(entry)
 }
 
 func acquireKeyLease(minKeys int) *KeyLease {
@@ -2778,12 +2806,11 @@ func lowerBoundStructured(version uint8, entryCount int, encoded []byte, target 
 	}
 
 	off := 0
-	estKeyLen := len(target)
-	if estKeyLen < 64 {
-		estKeyLen = 64
-	}
-	prev := make([]byte, 0, estKeyLen)
-	curr := make([]byte, 0, estKeyLen)
+	const lowerBoundStackKeyCap = 64
+	var prevStack [lowerBoundStackKeyCap]byte
+	var currStack [lowerBoundStackKeyCap]byte
+	prev := prevStack[:0]
+	curr := currStack[:0]
 	for i := 0; i < entryCount; i++ {
 		if off+headerLen > len(encoded) {
 			return 0, false, false, fmt.Errorf("outerleaf: truncated v%d entry header", version)
@@ -2813,8 +2840,8 @@ func lowerBoundStructured(version uint8, entryCount int, encoded []byte, target 
 			if newCap < keyLen {
 				newCap = keyLen
 			}
-			if newCap < 64 {
-				newCap = 64
+			if newCap < lowerBoundStackKeyCap {
+				newCap = lowerBoundStackKeyCap
 			}
 			curr = make([]byte, keyLen, newCap)
 		} else {

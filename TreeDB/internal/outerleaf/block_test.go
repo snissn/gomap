@@ -726,6 +726,54 @@ func TestDecodeLowerBoundAndKeysOnMatchWithVerify(t *testing.T) {
 	}
 }
 
+func TestDecodedBlockLowerBound_NoAllocsForSmallKeys(t *testing.T) {
+	entries := []Entry{
+		{Key: []byte("k10"), Value: []byte("v10")},
+		{Key: []byte("k20"), Value: []byte("v20")},
+		{Key: []byte("k30"), Value: []byte("v30")},
+	}
+
+	run := func(name string, payload []byte) {
+		t.Helper()
+		blk, err := DecodeBlock(payload, nil)
+		if err != nil {
+			t.Fatalf("%s DecodeBlock: %v", name, err)
+		}
+		allocs := testing.AllocsPerRun(1000, func() {
+			pos, below, above, err := blk.LowerBound([]byte("k20"))
+			if err != nil {
+				t.Fatalf("%s LowerBound: %v", name, err)
+			}
+			if pos != 1 || below || above {
+				t.Fatalf("%s LowerBound got (pos=%d below=%v above=%v)", name, pos, below, above)
+			}
+		})
+		if allocs != 0 {
+			t.Fatalf("%s expected zero allocs per run, got %.2f", name, allocs)
+		}
+	}
+
+	v2Payload, err := EncodeEntries(nil, entries, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeEntries(v2): %v", err)
+	}
+	run("v2", v2Payload)
+
+	typed := make([]TypedEntry, len(entries))
+	for i := range entries {
+		typed[i] = TypedEntry{
+			Key:   entries[i].Key,
+			Kind:  EntryKindInline,
+			Value: entries[i].Value,
+		}
+	}
+	v3Payload, err := EncodeTypedEntries(nil, typed, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries(v3): %v", err)
+	}
+	run("v3", v3Payload)
+}
+
 func TestDecodeKeysRangeWithVerify(t *testing.T) {
 	v2Payload, err := EncodeEntries(nil, []Entry{
 		{Key: []byte("k10"), Value: []byte("v10")},
@@ -959,7 +1007,7 @@ func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
 	})
 
 	undersized := make([][]byte, 0, 2)
-	outerLeafLeaseKeysPool.Put(undersized)
+	putPooledLeaseKeys(undersized)
 
 	got := getPooledLeaseKeys(4)
 	if cap(got) < 4 {
@@ -976,7 +1024,7 @@ func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
 	})
 
 	undersized := make([]byte, 0, 8)
-	outerLeafLeaseArenaPool.Put(undersized)
+	putPooledLeaseArena(undersized)
 
 	got := getPooledLeaseArena(16)
 	if cap(got) < 16 {
