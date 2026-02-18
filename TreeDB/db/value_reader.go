@@ -282,7 +282,7 @@ func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums b
 		keyCache:               keyCache,
 	}
 	r.setOuterLeafMode(mode)
-	if r.fenceLookupEnabled && r.cache != nil {
+	if r.fenceLookupEnabled {
 		r.fenceDecodeLeases = outerLeafFenceDecodeSharedLeaseSet()
 	}
 	return r
@@ -410,6 +410,13 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 		return raw, true, nil
 	}
 	if r.cache == nil {
+		if leases := r.fenceDecodeLeases; leases != nil {
+			if ctx := leases.acquire(); ctx != nil {
+				val, found, err := r.decodeOuterLeafValueForKeyNoCacheWithLeaseCtx(raw, key, unsafe, ctx)
+				leases.release(ctx)
+				return val, found, err
+			}
+		}
 		return r.decodeOuterLeafValueForKeyNoCache(raw, key, unsafe)
 	}
 	cacheKey := newOuterLeafBlockKey(ptr)
@@ -531,6 +538,34 @@ func (r valueReader) decodeValueForKeyFoundWithLeaseCtx(cacheKey outerLeafBlockK
 	val, err := r.resolveLookupResult(entry, unsafe)
 	if err != nil {
 		return nil, false, err
+	}
+	return val, true, nil
+}
+
+func (r valueReader) decodeOuterLeafValueForKeyNoCacheWithLeaseCtx(raw, key []byte, unsafe bool, ctx *outerLeafFenceDecodeContext) ([]byte, bool, error) {
+	verifyChecksums := !r.skipOuterLeafChecksums
+	scratch := ctx.scratch
+	entry, ok, found, outScratch, err := outerleaf.DecodeEntryForKeyWithVerify(raw, key, scratch, verifyChecksums)
+	nextScratch := outScratch
+	if cap(nextScratch) == 0 {
+		nextScratch = scratch
+	}
+	ctx.scratch = nextScratch
+	if err != nil {
+		return nil, false, err
+	}
+	if !ok {
+		return raw, true, nil
+	}
+	if !found {
+		return nil, false, nil
+	}
+	val, err := r.resolveLookupResult(entry, unsafe)
+	if err != nil {
+		return nil, false, err
+	}
+	if entry.Kind == outerleaf.EntryKindInline {
+		val = append([]byte(nil), val...)
 	}
 	return val, true, nil
 }
