@@ -176,26 +176,26 @@ func fencePointerLookupsEnabled(sr SlabReader) bool {
 }
 
 type Tree struct {
-	pager            *pager.Pager
-	slabReader       SlabReader
-	slabAppender     slabUnsafeAppender
-	slabBatcher      slabUnsafeBatchAppender
-	slabKeyReader    slabUnsafeKeyReader
-	slabFenceReader  slabUnsafeFenceKeyReader
+	pager             *pager.Pager
+	slabReader        SlabReader
+	slabAppender      slabUnsafeAppender
+	slabBatcher       slabUnsafeBatchAppender
+	slabKeyReader     slabUnsafeKeyReader
+	slabFenceReader   slabUnsafeFenceKeyReader
 	slabFenceAppender slabUnsafeFenceKeyAppender
-	fenceLookupMode  bool
-	slabFenceBlocks  slabUnsafeFenceBlockReader
-	slabFenceBlocksI slabUnsafeFenceBlockIntoReader
-	slabFenceBlocksL slabUnsafeFenceBlockLeaseIntoReader
-	slabFenceKeys    slabUnsafeFenceBlockKeyReader
-	slabFenceRange   slabUnsafeFenceBlockRangeKeyReader
-	slabFenceRangeL  slabUnsafeFenceBlockRangeKeyLeaseReader
-	slabFenceSeek    slabUnsafeFenceBlockSeekReader
-	slabFenceSeekL   slabUnsafeFenceBlockSeekLeaseReader
-	slabFencePtrCls  slabFencePointerClassifier
-	slabKeyAppender  slabUnsafeKeyAppender
-	slabKeyBatcher   slabUnsafeKeyBatchAppender
-	rootPageID       uint64
+	fenceLookupMode   bool
+	slabFenceBlocks   slabUnsafeFenceBlockReader
+	slabFenceBlocksI  slabUnsafeFenceBlockIntoReader
+	slabFenceBlocksL  slabUnsafeFenceBlockLeaseIntoReader
+	slabFenceKeys     slabUnsafeFenceBlockKeyReader
+	slabFenceRange    slabUnsafeFenceBlockRangeKeyReader
+	slabFenceRangeL   slabUnsafeFenceBlockRangeKeyLeaseReader
+	slabFenceSeek     slabUnsafeFenceBlockSeekReader
+	slabFenceSeekL    slabUnsafeFenceBlockSeekLeaseReader
+	slabFencePtrCls   slabFencePointerClassifier
+	slabKeyAppender   slabUnsafeKeyAppender
+	slabKeyBatcher    slabUnsafeKeyBatchAppender
+	rootPageID        uint64
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {

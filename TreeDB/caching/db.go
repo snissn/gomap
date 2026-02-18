@@ -611,6 +611,7 @@ func normalizeValueLogWALFenceMode(mode string) string {
 
 const defaultOuterLeafBlobThresholdMin = 16 << 10
 const defaultOuterLeafFenceBlockTargetBytes = 4 << 10
+const outerLeafFenceAdaptiveLZ4MaxAvgValueBytes = 64
 
 func (db *DB) effectiveOuterLeafBlobThresholdBytes() int {
 	if db == nil {
@@ -637,7 +638,18 @@ func (db *DB) fenceRIDJoinHybridEnabled() bool {
 }
 
 func (db *DB) selectOuterLeafBlockCodec(totalValueBytes, entryCount int) uint8 {
-	return db.outerLeafBlockCodec
+	if db == nil {
+		return uint8(backenddb.ValueLogBlockSnappy)
+	}
+	codec := db.outerLeafBlockCodec
+	if codec != uint8(backenddb.ValueLogBlockSnappy) || !db.outerLeafFenceV2Enabled() || entryCount <= 0 {
+		return codec
+	}
+	avgValueBytes := totalValueBytes / entryCount
+	if avgValueBytes <= outerLeafFenceAdaptiveLZ4MaxAvgValueBytes {
+		return uint8(backenddb.ValueLogBlockLZ4)
+	}
+	return codec
 }
 
 func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {

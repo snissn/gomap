@@ -19,13 +19,13 @@ type trackedValueReader struct {
 }
 
 type fenceLookupReader struct {
-	blocks     map[page.ValuePtr]map[string][]byte
-	nextOffset uint64
-	fileID     uint32
-	fenceCalls int
+	blocks           map[page.ValuePtr]map[string][]byte
+	nextOffset       uint64
+	fileID           uint32
+	fenceCalls       int
 	fenceAppendCalls int
-	blockCalls int
-	keyCalls   int
+	blockCalls       int
+	keyCalls         int
 }
 
 func (r *fenceLookupReader) FenceLookupEnabled() bool {
@@ -471,8 +471,11 @@ func TestTreeGet_FencePredecessorLookup(t *testing.T) {
 		t.Fatalf("Get(j999): expected ErrKeyNotFound, got %v", err)
 	}
 
-	if reader.fenceCalls != 3 {
-		t.Fatalf("fence calls = %d, want 3", reader.fenceCalls)
+	if reader.fenceCalls != 1 {
+		t.Fatalf("fence calls = %d, want 1", reader.fenceCalls)
+	}
+	if reader.fenceAppendCalls != 2 {
+		t.Fatalf("fence append calls = %d, want 2", reader.fenceAppendCalls)
 	}
 }
 
@@ -550,8 +553,11 @@ func TestTreeGet_FencePredecessorLookupSkipsNonPointers(t *testing.T) {
 		t.Fatalf("Get(f060): expected ErrKeyNotFound, got %v", err)
 	}
 
-	if reader.fenceCalls != 3 {
-		t.Fatalf("fence calls = %d, want 3", reader.fenceCalls)
+	if reader.fenceCalls != 1 {
+		t.Fatalf("fence calls = %d, want 1", reader.fenceCalls)
+	}
+	if reader.fenceAppendCalls != 2 {
+		t.Fatalf("fence append calls = %d, want 2", reader.fenceAppendCalls)
 	}
 }
 
