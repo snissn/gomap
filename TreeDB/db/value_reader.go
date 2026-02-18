@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -131,20 +132,19 @@ type outerLeafFenceDecodeContext struct {
 }
 
 type outerLeafFenceDecodeLeaseSet struct {
-	pool    sync.Pool
-	prewarm int
+	pool   chan *outerLeafFenceDecodeContext
+	closed atomic.Bool
 }
 
 func newOuterLeafFenceDecodeLeaseSet(size int) *outerLeafFenceDecodeLeaseSet {
 	if size <= 0 {
 		size = outerLeafFenceDecodeLeaseSetPreferredSize()
 	}
-	set := &outerLeafFenceDecodeLeaseSet{prewarm: size}
-	set.pool.New = func() any {
-		return &outerLeafFenceDecodeContext{}
+	set := &outerLeafFenceDecodeLeaseSet{
+		pool: make(chan *outerLeafFenceDecodeContext, size),
 	}
 	for i := 0; i < size; i++ {
-		set.pool.Put(set.pool.New())
+		set.pool <- &outerLeafFenceDecodeContext{}
 	}
 	return set
 }
@@ -161,39 +161,45 @@ func outerLeafFenceDecodeLeaseSetPreferredSize() int {
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) acquire() *outerLeafFenceDecodeContext {
-	if s == nil {
+	if s == nil || s.closed.Load() {
 		return nil
 	}
-	if v := s.pool.Get(); v != nil {
-		if ctx, ok := v.(*outerLeafFenceDecodeContext); ok && ctx != nil {
-			return ctx
-		}
+	select {
+	case ctx := <-s.pool:
+		return ctx
+	default:
+		return &outerLeafFenceDecodeContext{}
 	}
-	return &outerLeafFenceDecodeContext{}
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) release(ctx *outerLeafFenceDecodeContext) {
 	if s == nil || ctx == nil {
 		return
 	}
-	s.pool.Put(ctx)
+	if s.closed.Load() {
+		releaseOuterLeafFenceDecodeContext(ctx)
+		return
+	}
+	select {
+	case s.pool <- ctx:
+	default:
+		// Keep retention bounded to per-reader prewarm capacity.
+		releaseOuterLeafFenceDecodeContext(ctx)
+	}
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) close() {
-	if s == nil {
+	if s == nil || !s.closed.CompareAndSwap(false, true) {
 		return
 	}
-	// Drain prewarmed contexts and release retained scratch/decoded-block state.
-	// Any additional contexts remain collectible when the lease set is dropped.
-	s.pool.New = nil
-	for i := 0; i < s.prewarm; i++ {
-		if v := s.pool.Get(); v != nil {
-			if ctx, ok := v.(*outerLeafFenceDecodeContext); ok && ctx != nil {
-				releaseOuterLeafFenceDecodeContext(ctx)
-			}
+	for {
+		select {
+		case ctx := <-s.pool:
+			releaseOuterLeafFenceDecodeContext(ctx)
+		default:
+			return
 		}
 	}
-	s.prewarm = 0
 }
 
 func releaseOuterLeafFenceDecodeContext(ctx *outerLeafFenceDecodeContext) {
