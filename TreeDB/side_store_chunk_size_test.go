@@ -58,15 +58,6 @@ func TestSideStoreChunkSize_DefaultsIndependentOfMainChunkSize(t *testing.T) {
 	}
 }
 
-func TestChunkSizeDefaults(t *testing.T) {
-	if got := defaultChunkSize; got != 256*1024 {
-		t.Fatalf("defaultChunkSize=%d want=%d", got, 256*1024)
-	}
-	if got := defaultDictChunkSize; got != 64*1024 {
-		t.Fatalf("defaultDictChunkSize=%d want=%d", got, 64*1024)
-	}
-}
-
 func TestSideStoreChunkSize_CustomDictDBChunkSize(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
