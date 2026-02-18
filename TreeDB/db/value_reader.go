@@ -134,6 +134,7 @@ type outerLeafFenceDecodeContext struct {
 }
 
 type outerLeafFenceDecodeLeaseSet struct {
+	mu     sync.Mutex
 	pool   chan *outerLeafFenceDecodeContext
 	closed atomic.Bool
 }
@@ -186,27 +187,46 @@ func (s *outerLeafFenceDecodeLeaseSet) release(ctx *outerLeafFenceDecodeContext)
 	if s == nil || ctx == nil {
 		return
 	}
+	s.mu.Lock()
 	if s.closed.Load() {
+		s.mu.Unlock()
 		releaseOuterLeafFenceDecodeContext(ctx)
 		return
 	}
+	retained := false
 	select {
 	case s.pool <- ctx:
+		retained = true
 	default:
-		// Keep retention bounded to per-reader prewarm capacity.
-		releaseOuterLeafFenceDecodeContext(ctx)
 	}
+	s.mu.Unlock()
+	if retained {
+		return
+	}
+	// Keep retention bounded to per-reader prewarm capacity.
+	releaseOuterLeafFenceDecodeContext(ctx)
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) close() {
-	if s == nil || !s.closed.CompareAndSwap(false, true) {
+	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
+		return
+	}
+	s.closed.Store(true)
+	var drained []*outerLeafFenceDecodeContext
 	for {
 		select {
 		case ctx := <-s.pool:
-			releaseOuterLeafFenceDecodeContext(ctx)
+			drained = append(drained, ctx)
 		default:
+			s.mu.Unlock()
+			for _, ctx := range drained {
+				releaseOuterLeafFenceDecodeContext(ctx)
+			}
 			return
 		}
 	}

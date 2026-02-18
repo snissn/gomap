@@ -182,6 +182,33 @@ func TestOuterLeafFenceDecodeLeaseSetReleaseAfterCloseCleansContext(t *testing.T
 	}
 }
 
+func TestOuterLeafFenceDecodeLeaseSetCloseConcurrentReleaseDoesNotRetainContext(t *testing.T) {
+	const iters = 1024
+	for i := 0; i < iters; i++ {
+		set := newOuterLeafFenceDecodeLeaseSet(1)
+		ctx := set.acquire()
+		if ctx == nil {
+			t.Fatalf("iter=%d acquire returned nil", i)
+		}
+		ctx.scratch = make([]byte, 8)
+
+		done := make(chan struct{})
+		go func() {
+			set.release(ctx)
+			close(done)
+		}()
+		set.close()
+		<-done
+
+		if got := len(set.pool); got != 0 {
+			t.Fatalf("iter=%d pool retained %d context(s) after close", i, got)
+		}
+		if ctx.scratch != nil || ctx.block != nil {
+			t.Fatalf("iter=%d context not cleaned: scratch=%d block=%v", i, len(ctx.scratch), ctx.block != nil)
+		}
+	}
+}
+
 func TestNewValueReader_FenceDecodeLeasesReaderLocal(t *testing.T) {
 	r1 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
 	r2 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
