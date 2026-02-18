@@ -1367,7 +1367,9 @@ func (r valueReader) ReadUnsafeFenceBlockSeekLease(ptr page.ValuePtr, key []byte
 			cacheLease.Release()
 			return 0, false, false, nil, true, keyErr
 		}
-		r.cacheOuterLeafKeys(ptr, cloneFenceKeys(blockKeys))
+		if r.keyCache != nil {
+			r.cacheOuterLeafKeys(ptr, cloneFenceKeys(blockKeys))
+		}
 		return lower, false, false, acquireCacheFenceKeysLease(blockKeys, cacheLease), true, nil
 	}
 
@@ -1388,7 +1390,7 @@ func (r valueReader) ReadUnsafeFenceBlockSeekLease(ptr page.ValuePtr, key []byte
 		}
 		return lower, isBelow, isAbove, nil, true, nil
 	}
-	if keyLease != nil {
+	if keyLease != nil && r.keyCache != nil {
 		r.cacheOuterLeafKeys(ptr, cloneFenceKeys(keyLease.Keys()))
 	}
 	return lower, false, false, keyLease, true, nil
@@ -1604,7 +1606,11 @@ func (r valueReader) ReadUnsafeAppendForKey(ptr page.ValuePtr, key []byte, dst [
 		if err != nil {
 			return nil, err
 		}
-		out, found, err := r.decodeOuterLeafAppendForKeyNoCache(raw, key, dst)
+		// Preserve any capacity growth from the raw outer-leaf read. In fenceptr
+		// mode the outer block can be materially larger than the decoded value; if
+		// we decode into the original (smaller) dst we lose that growth and churn
+		// allocations on subsequent reads.
+		out, found, err := r.decodeOuterLeafAppendForKeyNoCache(raw, key, raw[:0])
 		if err != nil {
 			return nil, err
 		}
@@ -1641,10 +1647,10 @@ func (r valueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) (
 		}
 		decoder := r.withoutOuterLeafCaches()
 		for i := range out {
-			target := []byte(nil)
-			if i < len(dst) {
-				target = dst[i][:0]
-			}
+			// Preserve any capacity growth from the raw append read. If the append
+			// reader had to allocate a larger backing buffer for this element, decode
+			// into that grown slice instead of an older caller-provided dst entry.
+			target := out[i][:0]
 			decoded, found, decErr := decoder.decodeOuterLeafAppendForKeyNoCache(out[i], nil, target)
 			if decErr != nil {
 				return nil, decErr
@@ -1690,10 +1696,10 @@ func (r valueReader) ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][
 		}
 		decoder := r.withoutOuterLeafCaches()
 		for i := range out {
-			target := []byte(nil)
-			if i < len(dst) {
-				target = dst[i][:0]
-			}
+			// Preserve any capacity growth from the raw append read. If the append
+			// reader had to allocate a larger backing buffer for this element, decode
+			// into that grown slice instead of an older caller-provided dst entry.
+			target := out[i][:0]
 			decoded, found, decErr := decoder.decodeOuterLeafAppendForKeyNoCache(out[i], keys[i], target)
 			if decErr != nil {
 				return nil, decErr
