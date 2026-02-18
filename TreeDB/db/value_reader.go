@@ -121,6 +121,8 @@ var outerLeafFenceDecodeScratchEntryPool = sync.Pool{
 	},
 }
 var outerLeafFenceDecodedBlockPool sync.Pool
+var outerLeafFenceDecodeLeaseSetPreferredSizeOnce sync.Once
+var outerLeafFenceDecodeLeaseSetPreferredSizeCached int
 
 type outerLeafScratchEntry struct {
 	buf []byte
@@ -149,14 +151,17 @@ func newOuterLeafFenceDecodeLeaseSet(size int) *outerLeafFenceDecodeLeaseSet {
 }
 
 func outerLeafFenceDecodeLeaseSetPreferredSize() int {
-	n := runtime.GOMAXPROCS(0)
-	if n < outerLeafFenceDecodeLeaseSetMinSize {
-		return outerLeafFenceDecodeLeaseSetMinSize
-	}
-	if n > outerLeafFenceDecodeLeaseSetMaxSize {
-		return outerLeafFenceDecodeLeaseSetMaxSize
-	}
-	return n
+	outerLeafFenceDecodeLeaseSetPreferredSizeOnce.Do(func() {
+		n := runtime.GOMAXPROCS(0)
+		if n < outerLeafFenceDecodeLeaseSetMinSize {
+			n = outerLeafFenceDecodeLeaseSetMinSize
+		}
+		if n > outerLeafFenceDecodeLeaseSetMaxSize {
+			n = outerLeafFenceDecodeLeaseSetMaxSize
+		}
+		outerLeafFenceDecodeLeaseSetPreferredSizeCached = n
+	})
+	return outerLeafFenceDecodeLeaseSetPreferredSizeCached
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) acquire() *outerLeafFenceDecodeContext {
