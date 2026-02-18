@@ -33,9 +33,21 @@ type staticFenceKeysLease struct {
 	inUse bool
 }
 
+type cacheFenceKeysLease struct {
+	keys       [][]byte
+	cacheLease outerLeafBlockCacheLease
+	inUse      bool
+}
+
 var staticFenceKeysLeasePool = sync.Pool{
 	New: func() any {
 		return &staticFenceKeysLease{}
+	},
+}
+
+var cacheFenceKeysLeasePool = sync.Pool{
+	New: func() any {
+		return &cacheFenceKeysLease{}
 	},
 }
 
@@ -60,6 +72,32 @@ func (l *staticFenceKeysLease) Release() {
 	l.keys = nil
 	l.inUse = false
 	staticFenceKeysLeasePool.Put(l)
+}
+
+func acquireCacheFenceKeysLease(keys [][]byte, cacheLease outerLeafBlockCacheLease) *cacheFenceKeysLease {
+	lease := cacheFenceKeysLeasePool.Get().(*cacheFenceKeysLease)
+	lease.keys = keys
+	lease.cacheLease = cacheLease
+	lease.inUse = true
+	return lease
+}
+
+func (l *cacheFenceKeysLease) Keys() [][]byte {
+	if l == nil || !l.inUse {
+		return nil
+	}
+	return l.keys
+}
+
+func (l *cacheFenceKeysLease) Release() {
+	if l == nil || !l.inUse {
+		return
+	}
+	l.cacheLease.Release()
+	l.keys = nil
+	l.cacheLease = outerLeafBlockCacheLease{}
+	l.inUse = false
+	cacheFenceKeysLeasePool.Put(l)
 }
 
 const outerLeafLookupScratchMaxRetain = 1 << 20
@@ -107,9 +145,6 @@ type outerLeafFenceDecodeLeaseSet struct {
 }
 
 func outerLeafFenceDecodeSharedLeaseSet() *outerLeafFenceDecodeLeaseSet {
-	if outerLeafFenceDecodeSharedLeases != nil {
-		return outerLeafFenceDecodeSharedLeases
-	}
 	outerLeafFenceDecodeSharedLeasesOnce.Do(initOuterLeafFenceDecodeSharedLeases)
 	return outerLeafFenceDecodeSharedLeases
 }
@@ -380,8 +415,12 @@ func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte, unsafe bool) ([]
 	if cacheLease.ref != nil {
 		defer cacheLease.Release()
 	}
+	firstKind := block.FirstKind()
 	val, err := block.FirstValue()
 	if err == nil {
+		if cacheLease.ref != nil {
+			val = cloneInlineValueIfNeeded(firstKind, val)
+		}
 		return val, nil
 	}
 	if err != nil && err != outerleaf.ErrBlobRefEntry {
@@ -394,7 +433,14 @@ func (r valueReader) decodeValue(ptr page.ValuePtr, raw []byte, unsafe bool) ([]
 	if !found {
 		return nil, fmt.Errorf("value reader: outer-leaf first-entry lookup miss ptr=%+v", ptr)
 	}
-	return r.resolveLookupResult(entry, unsafe)
+	val, err = r.resolveLookupResult(entry, unsafe)
+	if err != nil {
+		return nil, err
+	}
+	if cacheLease.ref != nil {
+		val = cloneInlineValueIfNeeded(entry.Kind, val)
+	}
+	return val, nil
 }
 
 func (r valueReader) decodeValueForKey(ptr page.ValuePtr, key, raw []byte) ([]byte, error) {
@@ -452,6 +498,7 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 		if err != nil {
 			return nil, false, err
 		}
+		val = cloneInlineValueIfNeeded(entry.Kind, val)
 		return val, true, nil
 	}
 	if leases := r.fenceDecodeLeases; leases != nil {
@@ -475,34 +522,45 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 		outerLeafFenceDecodeScratchPut(nextScratch)
 		return nil, false, nil
 	}
-	releaseAfterLookup := true
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
 		nextScratch = block.ReclaimTransferredScratchForRelease(nextScratch)
-		r.cache.put(cacheKey, block)
-		if nextScratch != nil {
-			outerLeafFenceDecodeScratchPut(nextScratch)
-			nextScratch = nil
-		}
-		releaseAfterLookup = false
-	}
-	if releaseAfterLookup {
-		defer func() {
+		entry, found, lookupErr := block.EntryForKey(key)
+		if lookupErr != nil {
 			block.Release()
 			outerLeafFenceDecodedBlockPut(decodedBlock)
 			outerLeafFenceDecodeScratchPut(nextScratch)
-		}()
+			return nil, false, lookupErr
+		}
+		var (
+			val        []byte
+			resolveErr error
+		)
+		if found {
+			val, resolveErr = r.resolveLookupResult(entry, unsafe)
+			if resolveErr == nil {
+				val = cloneInlineValueIfNeeded(entry.Kind, val)
+			}
+		}
+		r.cache.put(cacheKey, block)
+		if nextScratch != nil {
+			outerLeafFenceDecodeScratchPut(nextScratch)
+		}
+		if resolveErr != nil {
+			return nil, false, resolveErr
+		}
+		if !found {
+			return nil, false, nil
+		}
+		return val, true, nil
 	}
-	var (
-		entry outerleaf.LookupResult
-		found bool
-	)
-	if releaseAfterLookup {
-		entry, found, err = block.EntryForKeyNoRestartKeys(key)
-	} else {
-		entry, found, err = block.EntryForKey(key)
-	}
-	if err != nil {
-		return nil, false, err
+	defer func() {
+		block.Release()
+		outerLeafFenceDecodedBlockPut(decodedBlock)
+		outerLeafFenceDecodeScratchPut(nextScratch)
+	}()
+	entry, found, lookupErr := block.EntryForKeyNoRestartKeys(key)
+	if lookupErr != nil {
+		return nil, false, lookupErr
 	}
 	if !found {
 		return nil, false, nil
@@ -511,6 +569,7 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 	if err != nil {
 		return nil, false, err
 	}
+	val = cloneInlineValueIfNeeded(entry.Kind, val)
 	return val, true, nil
 }
 
@@ -533,19 +592,31 @@ func (r valueReader) decodeValueForKeyFoundWithLeaseCtx(cacheKey outerLeafBlockK
 	}
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
 		nextScratch = block.ReclaimTransferredScratchForRelease(nextScratch)
+		entry, found, lookupErr := block.EntryForKey(key)
+		if lookupErr != nil {
+			block.Release()
+			ctx.block = block
+			ctx.scratch = nextScratch
+			return nil, false, lookupErr
+		}
+		var (
+			val        []byte
+			resolveErr error
+		)
+		if found {
+			val, resolveErr = r.resolveLookupResult(entry, unsafe)
+			if resolveErr == nil {
+				val = cloneInlineValueIfNeeded(entry.Kind, val)
+			}
+		}
 		ctx.scratch = nextScratch
 		ctx.block = outerLeafFenceDecodedBlockGet()
 		r.cache.put(cacheKey, block)
-		entry, found, err := block.EntryForKey(key)
-		if err != nil {
-			return nil, false, err
+		if resolveErr != nil {
+			return nil, false, resolveErr
 		}
 		if !found {
 			return nil, false, nil
-		}
-		val, err := r.resolveLookupResult(entry, unsafe)
-		if err != nil {
-			return nil, false, err
 		}
 		return val, true, nil
 	}
@@ -562,6 +633,9 @@ func (r valueReader) decodeValueForKeyFoundWithLeaseCtx(cacheKey outerLeafBlockK
 	val, err := r.resolveLookupResult(entry, unsafe)
 	if err != nil {
 		return nil, false, err
+	}
+	if entry.Kind == outerleaf.EntryKindInline {
+		val = cloneInlineValueIfNeeded(entry.Kind, val)
 	}
 	return val, true, nil
 }
@@ -620,34 +694,42 @@ func (r valueReader) decodeValueForKeyFoundAppend(ptr page.ValuePtr, key, raw, d
 		outerLeafFenceDecodeScratchPut(nextScratch)
 		return nil, false, nil
 	}
-	releaseAfterLookup := true
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
 		nextScratch = block.ReclaimTransferredScratchForRelease(nextScratch)
-		r.cache.put(cacheKey, block)
-		if nextScratch != nil {
-			outerLeafFenceDecodeScratchPut(nextScratch)
-			nextScratch = nil
-		}
-		releaseAfterLookup = false
-	}
-	if releaseAfterLookup {
-		defer func() {
+		entry, found, lookupErr := block.EntryForKey(key)
+		if lookupErr != nil {
 			block.Release()
 			outerLeafFenceDecodedBlockPut(decodedBlock)
 			outerLeafFenceDecodeScratchPut(nextScratch)
-		}()
+			return nil, false, lookupErr
+		}
+		var (
+			out        []byte
+			resolveErr error
+		)
+		if found {
+			out, resolveErr = r.resolveLookupResultAppend(entry, dst)
+		}
+		r.cache.put(cacheKey, block)
+		if nextScratch != nil {
+			outerLeafFenceDecodeScratchPut(nextScratch)
+		}
+		if resolveErr != nil {
+			return nil, false, resolveErr
+		}
+		if !found {
+			return nil, false, nil
+		}
+		return out, true, nil
 	}
-	var (
-		entry outerleaf.LookupResult
-		found bool
-	)
-	if releaseAfterLookup {
-		entry, found, err = block.EntryForKeyNoRestartKeys(key)
-	} else {
-		entry, found, err = block.EntryForKey(key)
-	}
-	if err != nil {
-		return nil, false, err
+	defer func() {
+		block.Release()
+		outerLeafFenceDecodedBlockPut(decodedBlock)
+		outerLeafFenceDecodeScratchPut(nextScratch)
+	}()
+	entry, found, lookupErr := block.EntryForKeyNoRestartKeys(key)
+	if lookupErr != nil {
+		return nil, false, lookupErr
 	}
 	if !found {
 		return nil, false, nil
@@ -678,19 +760,28 @@ func (r valueReader) decodeValueForKeyFoundAppendWithLeaseCtx(cacheKey outerLeaf
 	}
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
 		nextScratch = block.ReclaimTransferredScratchForRelease(nextScratch)
+		entry, found, lookupErr := block.EntryForKey(key)
+		if lookupErr != nil {
+			block.Release()
+			ctx.block = block
+			ctx.scratch = nextScratch
+			return nil, false, lookupErr
+		}
+		var (
+			out        []byte
+			resolveErr error
+		)
+		if found {
+			out, resolveErr = r.resolveLookupResultAppend(entry, dst)
+		}
 		ctx.scratch = nextScratch
 		ctx.block = outerLeafFenceDecodedBlockGet()
 		r.cache.put(cacheKey, block)
-		entry, found, err := block.EntryForKey(key)
-		if err != nil {
-			return nil, false, err
+		if resolveErr != nil {
+			return nil, false, resolveErr
 		}
 		if !found {
 			return nil, false, nil
-		}
-		out, err := r.resolveLookupResultAppend(entry, dst)
-		if err != nil {
-			return nil, false, err
 		}
 		return out, true, nil
 	}
@@ -833,6 +924,22 @@ func (r valueReader) resolveLookupResult(entry outerleaf.LookupResult, unsafe bo
 	}
 }
 
+func cloneInlineValueIfNeeded(kind outerleaf.EntryKind, val []byte) []byte {
+	if kind != outerleaf.EntryKindInline {
+		return val
+	}
+	return cloneBytes(val)
+}
+
+func cloneBytes(val []byte) []byte {
+	if val == nil {
+		return nil
+	}
+	out := make([]byte, len(val))
+	copy(out, val)
+	return out
+}
+
 func (r valueReader) resolveLookupResultAppend(entry outerleaf.LookupResult, dst []byte) ([]byte, error) {
 	switch entry.Kind {
 	case outerleaf.EntryKindInline:
@@ -924,6 +1031,7 @@ func (r valueReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte) ([]byt
 		if err != nil {
 			return nil, false, err
 		}
+		val = cloneInlineValueIfNeeded(entry.Kind, val)
 		return val, true, nil
 	}
 	raw, err := r.readRawUnsafe(ptr)
@@ -974,9 +1082,6 @@ func (r valueReader) ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []tree
 		return nil, nil, false, nil
 	}
 	block, cacheLease := r.cachedOuterLeafBlock(ptr)
-	if cacheLease.ref != nil {
-		defer cacheLease.Release()
-	}
 	var lease tree.FenceBlockLease
 	if block == nil {
 		raw, err := r.readRawUnsafe(ptr)
@@ -999,6 +1104,8 @@ func (r valueReader) ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []tree
 			block:   decoded,
 			scratch: nextScratch,
 		}
+	} else if cacheLease.ref != nil {
+		lease = &cacheLease
 	}
 	if cap(dst) < block.EntryCount() {
 		dst = make([]tree.FenceBlockEntry, 0, block.EntryCount())
@@ -1065,7 +1172,10 @@ func (r valueReader) ReadUnsafeFenceBlockInto(ptr page.ValuePtr, dst []tree.Fenc
 		if err != nil {
 			return err
 		}
-		dst = append(dst, tree.FenceBlockEntry{Key: key, Value: val})
+		dst = append(dst, tree.FenceBlockEntry{
+			Key:   cloneBytes(key),
+			Value: cloneInlineValueIfNeeded(kind, val),
+		})
 		return nil
 	})
 	if err != nil {
@@ -1090,8 +1200,9 @@ func (r valueReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool
 		if err != nil {
 			return nil, true, err
 		}
-		r.cacheOuterLeafKeys(ptr, keys)
-		return keys, true, nil
+		cloned := cloneFenceKeys(keys)
+		r.cacheOuterLeafKeys(ptr, cloned)
+		return cloned, true, nil
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
@@ -1119,12 +1230,16 @@ func (r valueReader) ReadUnsafeFenceBlockKeysRangeLease(ptr page.ValuePtr, lower
 		return acquireStaticFenceKeysLease(sliceFenceKeysRange(cachedKeys, lower, upper)), true, nil
 	}
 	if block, cacheLease := r.cachedOuterLeafBlock(ptr); block != nil {
-		defer cacheLease.Release()
 		keys, err := block.KeysRange(nil, lower, upper)
 		if err != nil {
+			cacheLease.Release()
 			return nil, true, err
 		}
-		return acquireStaticFenceKeysLease(keys), true, nil
+		if len(keys) == 0 {
+			cacheLease.Release()
+			return nil, true, nil
+		}
+		return acquireCacheFenceKeysLease(keys, cacheLease), true, nil
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
@@ -1162,7 +1277,7 @@ func (r valueReader) ReadUnsafeFenceBlockKeysRange(ptr page.ValuePtr, lower []by
 		if err != nil {
 			return nil, true, err
 		}
-		return keys, true, nil
+		return cloneFenceKeys(keys), true, nil
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
@@ -1202,8 +1317,9 @@ func (r valueReader) ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (po
 		if keyErr != nil {
 			return 0, false, false, nil, true, keyErr
 		}
-		r.cacheOuterLeafKeys(ptr, blockKeys)
-		return lower, false, false, blockKeys, true, nil
+		cloned := cloneFenceKeys(blockKeys)
+		r.cacheOuterLeafKeys(ptr, cloned)
+		return lower, false, false, cloned, true, nil
 	}
 
 	raw, readErr := r.readRawUnsafe(ptr)
@@ -1236,20 +1352,22 @@ func (r valueReader) ReadUnsafeFenceBlockSeekLease(ptr page.ValuePtr, key []byte
 		return lower, false, false, acquireStaticFenceKeysLease(cachedKeys), true, nil
 	}
 	if block, cacheLease := r.cachedOuterLeafBlock(ptr); block != nil {
-		defer cacheLease.Release()
 		lower, isBelow, isAbove, lowerErr := block.LowerBound(key)
 		if lowerErr != nil {
+			cacheLease.Release()
 			return 0, false, false, nil, true, lowerErr
 		}
 		if isBelow || isAbove {
+			cacheLease.Release()
 			return lower, isBelow, isAbove, nil, true, nil
 		}
 		blockKeys, keyErr := block.Keys(nil)
 		if keyErr != nil {
+			cacheLease.Release()
 			return 0, false, false, nil, true, keyErr
 		}
-		r.cacheOuterLeafKeys(ptr, blockKeys)
-		return lower, false, false, acquireStaticFenceKeysLease(blockKeys), true, nil
+		r.cacheOuterLeafKeys(ptr, cloneFenceKeys(blockKeys))
+		return lower, false, false, acquireCacheFenceKeysLease(blockKeys, cacheLease), true, nil
 	}
 
 	raw, readErr := r.readRawUnsafe(ptr)
@@ -1366,7 +1484,11 @@ func (r valueReader) Read(ptr page.ValuePtr) ([]byte, error) {
 		if !found {
 			return nil, fmt.Errorf("value reader: outer-leaf first-entry lookup miss ptr=%+v", ptr)
 		}
-		return r.resolveLookupResult(entry, false)
+		val, err := r.resolveLookupResult(entry, false)
+		if err != nil {
+			return nil, err
+		}
+		return cloneInlineValueIfNeeded(entry.Kind, val), nil
 	}
 	raw, err := r.readRaw(ptr)
 	if err != nil {
@@ -1385,7 +1507,11 @@ func (r valueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		if !found {
 			return nil, fmt.Errorf("value reader: outer-leaf first-entry lookup miss ptr=%+v", ptr)
 		}
-		return r.resolveLookupResult(entry, true)
+		val, err := r.resolveLookupResult(entry, true)
+		if err != nil {
+			return nil, err
+		}
+		return cloneInlineValueIfNeeded(entry.Kind, val), nil
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
@@ -1404,7 +1530,11 @@ func (r valueReader) ReadForKey(ptr page.ValuePtr, key []byte) ([]byte, error) {
 		if !found {
 			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
 		}
-		return r.resolveLookupResult(entry, false)
+		val, err := r.resolveLookupResult(entry, false)
+		if err != nil {
+			return nil, err
+		}
+		return cloneInlineValueIfNeeded(entry.Kind, val), nil
 	}
 	raw, err := r.readRaw(ptr)
 	if err != nil {
@@ -1423,7 +1553,11 @@ func (r valueReader) ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, er
 		if !found {
 			return nil, fmt.Errorf("value reader: outer-leaf key lookup miss ptr=%+v key=%x", ptr, key)
 		}
-		return r.resolveLookupResult(entry, true)
+		val, err := r.resolveLookupResult(entry, true)
+		if err != nil {
+			return nil, err
+		}
+		return cloneInlineValueIfNeeded(entry.Kind, val), nil
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
@@ -1611,6 +1745,16 @@ func (r valueReader) outerLeafBlock(ptr page.ValuePtr, raw []byte) (*outerleaf.D
 	// inline-heavy blocks.
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
 		r.cache.put(key, block)
+		if cached, cachedLease := r.cache.get(key); cached != nil {
+			return cached, cachedLease, nil
+		}
+		// Under heavy concurrent churn, immediate eviction can drop the just-admitted
+		// block before we acquire a lease. Decode an uncached view so callers never
+		// observe storage that may already have been released.
+		block, err = outerleaf.DecodeBlockWithVerify(raw, nil, verifyChecksums)
+		if err != nil {
+			return nil, lease, err
+		}
 	}
 	return block, lease, nil
 }
