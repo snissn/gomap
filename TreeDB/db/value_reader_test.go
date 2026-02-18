@@ -97,6 +97,30 @@ func makeTestOuterLeafPayload(t *testing.T) ([]byte, *outerleaf.DecodedBlock, pa
 	return encoded, block, ptr
 }
 
+func TestOuterLeafFenceDecodeScratchPoolCapBounded(t *testing.T) {
+	const maxExpected = 8 << 20
+	if outerLeafFenceDecodeScratchMaxRetain > maxExpected {
+		t.Fatalf("outerLeafFenceDecodeScratchMaxRetain=%d exceeds bound=%d", outerLeafFenceDecodeScratchMaxRetain, maxExpected)
+	}
+}
+
+func TestOuterLeafFenceDecodeLeaseSetAcquireBounded(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	ctx := set.acquire()
+	if ctx == nil {
+		t.Fatalf("first acquire returned nil")
+	}
+	if got := set.acquire(); got != nil {
+		t.Fatalf("second acquire=%v want nil when lease set is saturated", got)
+	}
+	set.release(ctx)
+	ctx = set.acquire()
+	if ctx == nil {
+		t.Fatalf("acquire after release returned nil")
+	}
+	set.release(ctx)
+}
+
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
 	payload, block, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}

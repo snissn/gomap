@@ -509,11 +509,27 @@ func (t *Tree) lookupFenceValueViewAppend(n *node.Node, idx uint16, key []byte, 
 			continue
 		}
 		if t.slabFenceAppender != nil {
-			val, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, dst)
+			oldLen := len(dst)
+			tail, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, dst[oldLen:oldLen])
 			if err != nil {
 				return nil, false, err
 			}
-			return val, found, nil
+			if !found {
+				return nil, false, nil
+			}
+			if oldLen == 0 {
+				return tail, true, nil
+			}
+			if len(tail) == 0 {
+				return dst[:oldLen], true, nil
+			}
+			if cap(dst) > oldLen {
+				base := dst[:cap(dst):cap(dst)]
+				if &tail[0] == &base[oldLen] {
+					return dst[:oldLen+len(tail)], true, nil
+				}
+			}
+			return append(dst[:oldLen], tail...), true, nil
 		}
 		if t.slabFenceReader != nil {
 			val, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
