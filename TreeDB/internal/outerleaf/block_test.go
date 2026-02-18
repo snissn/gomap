@@ -1128,9 +1128,11 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 	warm[1] = []byte("right")
 	putPooledLeaseKeys(warm)
 
-	got := getPooledLeaseKeys(1)
-	if cap(got) < cap(warm) {
-		t.Fatalf("cap(got)=%d want >=%d", cap(got), cap(warm))
+	// sync.Pool is allowed to drop entries at any time, so this test only asserts
+	// correctness properties (shape + cleared contents), not guaranteed reuse.
+	got := getPooledLeaseKeys(2)
+	if cap(got) < 2 {
+		t.Fatalf("cap(got)=%d want >=2", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0", len(got))
@@ -1144,8 +1146,8 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 	putPooledLeaseKeys(got[:0])
 
 	got = getPooledLeaseKeys(1)
-	if cap(got) < cap(warm) {
-		t.Fatalf("cap(got)=%d want >=%d on warm reuse", cap(got), cap(warm))
+	if cap(got) < 1 {
+		t.Fatalf("cap(got)=%d want >=1 on warm reuse", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
@@ -1168,8 +1170,8 @@ func TestGetPooledLeaseArena_WarmReuse(t *testing.T) {
 	putPooledLeaseArena(warm)
 
 	got := getPooledLeaseArena(1)
-	if cap(got) < cap(warm) {
-		t.Fatalf("cap(got)=%d want >=%d", cap(got), cap(warm))
+	if cap(got) < 1 {
+		t.Fatalf("cap(got)=%d want >=1", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0", len(got))
@@ -1179,8 +1181,8 @@ func TestGetPooledLeaseArena_WarmReuse(t *testing.T) {
 	putPooledLeaseArena(got)
 
 	got = getPooledLeaseArena(1)
-	if cap(got) < cap(warm) {
-		t.Fatalf("cap(got)=%d want >=%d on warm reuse", cap(got), cap(warm))
+	if cap(got) < 1 {
+		t.Fatalf("cap(got)=%d want >=1 on warm reuse", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
