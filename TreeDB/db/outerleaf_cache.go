@@ -7,8 +7,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-const outerLeafBlockCachePromotionSampleMask uint64 = 7 // promote ~1/8 cache hits
-
 type outerLeafBlockKey struct {
 	fileID uint32
 	offset uint64
@@ -52,10 +50,10 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 		return nil
 	}
 
-	// Keep per-shard capacity reasonably sized (target ~256 entries/shard)
+	// Keep per-shard capacity reasonably sized (target ~64 entries/shard)
 	// while bounding lock fanout.
 	shardCount := 1
-	targetShards := capacity / 256
+	targetShards := capacity / 64
 	if targetShards < 1 {
 		targetShards = 1
 	}
@@ -103,34 +101,37 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 func (c *outerLeafBlockCache) get(key outerLeafBlockKey) *outerleaf.DecodedBlock {
 	s := c.shardFor(key)
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	idx, ok := s.entries[key]
 	if !ok {
 		s.misses++
+		s.mu.Unlock()
 		return nil
 	}
 	s.hits++
-	if (s.hits & outerLeafBlockCachePromotionSampleMask) == 0 {
-		s.moveToFront(idx)
-	}
-	return s.nodes[idx].block
+	s.moveToFront(idx)
+	block := s.nodes[idx].block
+	s.mu.Unlock()
+	return block
 }
 
 func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.DecodedBlock) {
 	s := c.shardFor(key)
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	var releaseOld *outerleaf.DecodedBlock
+	var releaseEvicted *outerleaf.DecodedBlock
 	if idx, ok := s.entries[key]; ok {
-		old := s.nodes[idx].block
-		if old != nil && old != block {
-			old.Release()
-			outerLeafFenceDecodedBlockPut(old)
-		}
+		releaseOld = s.nodes[idx].block
 		s.nodes[idx].block = block
 		s.moveToFront(idx)
+		s.mu.Unlock()
+		if releaseOld != nil && releaseOld != block {
+			releaseOld.Release()
+			outerLeafFenceDecodedBlockPut(releaseOld)
+		}
 		return
 	}
 	if s.capacity <= 0 {
+		s.mu.Unlock()
 		if block != nil {
 			block.Release()
 			outerLeafFenceDecodedBlockPut(block)
@@ -152,13 +153,9 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 			return
 		}
 		evictedKey := s.nodes[idx].key
-		evictedBlock := s.nodes[idx].block
+		releaseEvicted = s.nodes[idx].block
 		s.unlink(idx)
 		delete(s.entries, evictedKey)
-		if evictedBlock != nil && evictedBlock != block {
-			evictedBlock.Release()
-			outerLeafFenceDecodedBlockPut(evictedBlock)
-		}
 	}
 	node := &s.nodes[idx]
 	node.key = key
@@ -167,6 +164,11 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 	node.next = -1
 	s.linkFront(idx)
 	s.entries[key] = idx
+	s.mu.Unlock()
+	if releaseEvicted != nil && releaseEvicted != block {
+		releaseEvicted.Release()
+		outerLeafFenceDecodedBlockPut(releaseEvicted)
+	}
 }
 
 func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
