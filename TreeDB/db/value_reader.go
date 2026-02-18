@@ -340,8 +340,28 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 
 func (r valueReader) decodeOuterLeafValueForKeyNoCache(raw, key []byte, unsafe bool) ([]byte, bool, error) {
 	verifyChecksums := !r.skipOuterLeafChecksums
-	scratch := outerLeafLookupScratchGet()
+	var scratch []byte
+	if !unsafe {
+		scratch = outerLeafLookupScratchGet()
+	}
 	entry, ok, found, outScratch, err := outerleaf.DecodeEntryForKeyWithVerify(raw, key, scratch, verifyChecksums)
+	if unsafe {
+		if err != nil {
+			return nil, false, err
+		}
+		if !ok {
+			return raw, true, nil
+		}
+		if !found {
+			return nil, false, nil
+		}
+		val, err := r.resolveLookupResult(entry, true)
+		if err != nil {
+			return nil, false, err
+		}
+		return val, true, nil
+	}
+
 	recycle := outScratch
 	if cap(recycle) == 0 {
 		recycle = scratch
@@ -364,11 +384,6 @@ func (r valueReader) decodeOuterLeafValueForKeyNoCache(raw, key []byte, unsafe b
 		return nil, false, err
 	}
 	if entry.Kind == outerleaf.EntryKindInline {
-		if unsafe {
-			// Unsafe callers may retain the returned slice; keep decoded storage
-			// alive instead of recycling it back into the shared scratch pool.
-			return val, true, nil
-		}
 		val = append([]byte(nil), val...)
 	}
 	outerLeafLookupScratchPut(recycle)

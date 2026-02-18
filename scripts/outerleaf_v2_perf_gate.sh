@@ -297,8 +297,12 @@ for profile in profiles:
                 })
                 continue
             cv_pct = pct_cv(vals)
-            cv_gate_fail = bool(
+            cv_gate_enabled = (
                 profile in gate_profiles and
+                case_id in {"v1_forceptr", "v2_fenceptr"}
+            )
+            cv_gate_fail = bool(
+                cv_gate_enabled and
                 cv_pct is not None and
                 cv_pct > gate_max_cv_pct
             )

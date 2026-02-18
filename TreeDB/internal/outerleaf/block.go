@@ -42,10 +42,10 @@ var blockMagic = [4]byte{'T', 'O', 'L', '2'}
 
 const (
 	// Keep pooled scratch buffers bounded to avoid retaining outsized slices.
-	maxPooledOuterLeafBytesCap      = 64 << 20
+	maxPooledOuterLeafBytesCap      = 64 << 10
 	maxPooledOuterLeafRestartsCap   = 4096
-	maxPooledOuterLeafLeaseKeysCap  = 1 << 16
-	maxPooledOuterLeafLeaseArenaCap = 8 << 20
+	maxPooledOuterLeafLeaseKeysCap  = 4096
+	maxPooledOuterLeafLeaseArenaCap = 1 << 20
 )
 
 var (
@@ -1798,6 +1798,9 @@ func DecodeBlockWithVerify(payload []byte, scratch []byte, verifyChecksum bool) 
 
 // DecodeBlockLease parses an outer-leaf payload using lease-owned decode
 // buffers. Callers must call Release on the returned block.
+//
+// Any slices returned by the decoded block may alias lease-owned storage and
+// become invalid after Release.
 func DecodeBlockLease(payload []byte) (*DecodedBlock, error) {
 	return decodeBlockLease(payload, true)
 }
@@ -1805,6 +1808,9 @@ func DecodeBlockLease(payload []byte) (*DecodedBlock, error) {
 // DecodeBlockLeaseWithVerify parses an outer-leaf payload using lease-owned
 // decode buffers and optional checksum verification. Callers must call Release
 // on the returned block.
+//
+// Any slices returned by the decoded block may alias lease-owned storage and
+// become invalid after Release.
 func DecodeBlockLeaseWithVerify(payload []byte, verifyChecksum bool) (*DecodedBlock, error) {
 	return decodeBlockLease(payload, verifyChecksum)
 }
@@ -1814,6 +1820,9 @@ func DecodeBlockLeaseWithVerify(payload []byte, verifyChecksum bool) (*DecodedBl
 //
 // It returns the decoded block and a caller-owned scratch slice to reuse on the
 // next decode attempt.
+//
+// Any slices returned by the decoded block may alias lease-owned storage and
+// become invalid after Release.
 func DecodeBlockLeaseWithScratchAndVerify(payload []byte, scratch []byte, dst *DecodedBlock, verifyChecksum bool) (*DecodedBlock, []byte, error) {
 	nextScratch := scratch[:0]
 	block, err := decodeBlockMode(payload, scratch, verifyChecksum, true, dst)
@@ -2058,6 +2067,7 @@ func (d *DecodedBlock) lookupRestarts() ([]uint32, error) {
 }
 
 // Release returns lease-owned decode buffers back to outerleaf pools.
+// Any slices previously returned by this block become invalid after Release.
 // It is safe to call Release multiple times.
 func (d *DecodedBlock) Release() {
 	if d == nil {

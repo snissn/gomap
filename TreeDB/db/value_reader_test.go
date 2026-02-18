@@ -236,6 +236,40 @@ func TestValueReaderReadUnsafeFenceForKey_CacheHitSkipsReadUnsafe(t *testing.T) 
 	}
 }
 
+func TestValueReaderReadUnsafeFenceForKey_NoCacheInline(t *testing.T) {
+	payload, _, ptr := makeTestOuterLeafPayload(t)
+	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
+	r := valueReader{
+		vlogs:         reader,
+		outerLeafMode: outerleaf.ModeV2FencePtr,
+	}
+
+	got, found, err := r.ReadUnsafeFenceForKey(ptr, []byte("k2"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeFenceForKey: %v", err)
+	}
+	if !found {
+		t.Fatalf("found=false want true")
+	}
+	if !bytes.Equal(got, []byte("v2")) {
+		t.Fatalf("value=%q want=%q", got, "v2")
+	}
+	if reader.readUnsafeCalls != 1 {
+		t.Fatalf("readUnsafeCalls=%d want=1", reader.readUnsafeCalls)
+	}
+
+	got, err = r.ReadUnsafeForKey(ptr, []byte("k3"))
+	if err != nil {
+		t.Fatalf("ReadUnsafeForKey: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v3")) {
+		t.Fatalf("value=%q want=%q", got, "v3")
+	}
+	if reader.readUnsafeCalls != 2 {
+		t.Fatalf("readUnsafeCalls=%d want=2", reader.readUnsafeCalls)
+	}
+}
+
 func TestValueReaderReadUnsafeFenceBlockKeys_CacheHitSkipsReadUnsafe(t *testing.T) {
 	payload, block, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}

@@ -44,6 +44,26 @@ func (l *countingFenceKeysLease) Release() {
 	*l.released = *l.released + 1
 }
 
+type countingFenceBlockLease struct {
+	released     *int
+	releasedOnce bool
+}
+
+func (l *countingFenceBlockLease) Release() {
+	if l == nil || l.releasedOnce {
+		return
+	}
+	l.releasedOnce = true
+	*l.released = *l.released + 1
+}
+
+type fenceLookupReaderBlockLeaseIntoAware struct {
+	*fenceLookupReader
+	intoCalls int
+	created   int
+	released  int
+}
+
 type fenceLookupReaderRangeLeaseAware struct {
 	*fenceLookupReader
 	rangeCalls int
@@ -129,6 +149,22 @@ func (r *fenceLookupReaderRangeLeaseAware) ReadUnsafeFenceBlockKeysRangeLease(pt
 		keys:     keys[start:end],
 		released: &r.released,
 	}, true, nil
+}
+
+func (r *fenceLookupReaderBlockLeaseIntoAware) ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []FenceBlockEntry) ([]FenceBlockEntry, FenceBlockLease, bool, error) {
+	r.intoCalls++
+	entries, ok, err := r.fenceLookupReader.ReadUnsafeFenceBlock(ptr)
+	if err != nil || !ok {
+		return nil, nil, ok, err
+	}
+	if cap(dst) < len(entries) {
+		dst = make([]FenceBlockEntry, len(entries))
+	} else {
+		dst = dst[:len(entries)]
+	}
+	copy(dst, entries)
+	r.created++
+	return dst, &countingFenceBlockLease{released: &r.released}, true, nil
 }
 
 func newFenceLookupReaderRangeLeaseSharedKeys() *fenceLookupReaderRangeLeaseSharedKeys {
@@ -1081,6 +1117,70 @@ func TestIterator_FencePointerRangeFullModeLeaseExpansionReleasesKeys(t *testing
 	}
 	if reader.released != reader.created {
 		t.Fatalf("lease release mismatch: released=%d created=%d", reader.released, reader.created)
+	}
+}
+
+func TestIterator_FencePointerRangeFullModeBlockLeaseIntoReleasesBlocks(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	baseReader := newFenceLookupReader()
+	reader := &fenceLookupReaderBlockLeaseIntoAware{fenceLookupReader: baseReader}
+	ptr0 := reader.addBlock(map[string]string{
+		"f010": "v10",
+		"f020": "v20",
+		"f030": "v30",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"f100": "v100",
+		"f110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("f010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(f010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	it := tr.Iterator([]byte("f015"), []byte("f115"))
+	for ; it.Valid(); it.Next() {
+		_ = it.Key()
+		_ = it.Value()
+	}
+	if err := it.Error(); err != nil {
+		_ = it.Close()
+		t.Fatalf("iterator error: %v", err)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+
+	if reader.intoCalls == 0 {
+		t.Fatalf("expected lease-into fence block expansion")
+	}
+	if reader.created == 0 {
+		t.Fatalf("expected at least one fence block lease")
+	}
+	if reader.released != reader.created {
+		t.Fatalf("block lease release mismatch: released=%d created=%d", reader.released, reader.created)
 	}
 }
 
