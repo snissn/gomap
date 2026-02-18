@@ -786,6 +786,48 @@ func writeAllocsSnapshotTemp(prefix string) (string, error) {
 }
 
 func writeAllocsDeltaProfile(basePath, afterPath, outPath string) error {
+	return writePprofDeltaProfile(basePath, afterPath, outPath)
+}
+
+func writeRuntimeProfileSnapshot(path, profileName string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	prof := pprof.Lookup(profileName)
+	if prof == nil {
+		return fmt.Errorf("%s profile unavailable", profileName)
+	}
+	if err := prof.WriteTo(f, 0); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeRuntimeProfileSnapshotTemp(prefix, profileName string) (string, error) {
+	f, err := os.CreateTemp("", prefix+"_*.pprof")
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := writeRuntimeProfileSnapshot(path, profileName); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func writeRuntimeProfileDeltaProfile(basePath, afterPath, outPath string) error {
+	return writePprofDeltaProfile(basePath, afterPath, outPath)
+}
+
+func writePprofDeltaProfile(basePath, afterPath, outPath string) error {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd := exec.Command("go", "tool", "pprof", "-proto", "-base", basePath, afterPath)
@@ -801,6 +843,15 @@ func writeAllocsDeltaProfile(basePath, afterPath, outPath string) error {
 		return err
 	}
 	return nil
+}
+
+func contentionProfilePath(globalPath, kind, testName, dbName string) string {
+	baseDir := filepath.Dir(strings.TrimSpace(globalPath))
+	return filepath.Join(baseDir, fmt.Sprintf("%s_%s_%s.pprof",
+		sanitizeProfileSegment(kind),
+		sanitizeProfileSegment(testName),
+		sanitizeProfileSegment(dbName),
+	))
 }
 
 func sanitizeProfileSegment(s string) string {
@@ -3026,6 +3077,31 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					return BenchRun{}, fmt.Errorf("allocsprofile baseline %s/%s: %w", testName, inst.Name, err)
 				}
 			}
+			blockBasePath := ""
+			if cfg.BlockProfile != "" {
+				blockBasePath, err = writeRuntimeProfileSnapshotTemp("unified_bench_block_base", "block")
+				if err != nil {
+					if cpuFile != nil {
+						pprof.StopCPUProfile()
+						_ = cpuFile.Close()
+					}
+					_ = os.Remove(allocBasePath)
+					return BenchRun{}, fmt.Errorf("blockprofile baseline %s/%s: %w", testName, inst.Name, err)
+				}
+			}
+			mutexBasePath := ""
+			if cfg.MutexProfile != "" {
+				mutexBasePath, err = writeRuntimeProfileSnapshotTemp("unified_bench_mutex_base", "mutex")
+				if err != nil {
+					if cpuFile != nil {
+						pprof.StopCPUProfile()
+						_ = cpuFile.Close()
+					}
+					_ = os.Remove(allocBasePath)
+					_ = os.Remove(blockBasePath)
+					return BenchRun{}, fmt.Errorf("mutexprofile baseline %s/%s: %w", testName, inst.Name, err)
+				}
+			}
 
 			opsPerSec, runErr := fn(inst.Wrapper, rng)
 
@@ -3041,6 +3117,8 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					allocAfterPath, snapErr := writeAllocsSnapshotTemp("unified_bench_allocs_after")
 					if snapErr != nil {
 						_ = os.Remove(allocBasePath)
+						_ = os.Remove(blockBasePath)
+						_ = os.Remove(mutexBasePath)
 						return BenchRun{}, fmt.Errorf("allocsprofile snapshot %s/%s: %w", testName, inst.Name, snapErr)
 					}
 					allocPath := cfg.AllocsProfile + "_" + testName + "_" + inst.Name + ".pprof"
@@ -3048,7 +3126,47 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					_ = os.Remove(allocBasePath)
 					_ = os.Remove(allocAfterPath)
 					if deltaErr != nil {
+						_ = os.Remove(blockBasePath)
+						_ = os.Remove(mutexBasePath)
 						return BenchRun{}, fmt.Errorf("allocsprofile %s/%s (%s): %w", testName, inst.Name, allocPath, deltaErr)
+					}
+				}
+			}
+			if blockBasePath != "" {
+				if runErr != nil {
+					_ = os.Remove(blockBasePath)
+				} else {
+					blockAfterPath, snapErr := writeRuntimeProfileSnapshotTemp("unified_bench_block_after", "block")
+					if snapErr != nil {
+						_ = os.Remove(blockBasePath)
+						_ = os.Remove(mutexBasePath)
+						return BenchRun{}, fmt.Errorf("blockprofile snapshot %s/%s: %w", testName, inst.Name, snapErr)
+					}
+					blockPath := contentionProfilePath(cfg.BlockProfile, "block", testName, inst.Name)
+					deltaErr := writeRuntimeProfileDeltaProfile(blockBasePath, blockAfterPath, blockPath)
+					_ = os.Remove(blockBasePath)
+					_ = os.Remove(blockAfterPath)
+					if deltaErr != nil {
+						_ = os.Remove(mutexBasePath)
+						return BenchRun{}, fmt.Errorf("blockprofile %s/%s (%s): %w", testName, inst.Name, blockPath, deltaErr)
+					}
+				}
+			}
+			if mutexBasePath != "" {
+				if runErr != nil {
+					_ = os.Remove(mutexBasePath)
+				} else {
+					mutexAfterPath, snapErr := writeRuntimeProfileSnapshotTemp("unified_bench_mutex_after", "mutex")
+					if snapErr != nil {
+						_ = os.Remove(mutexBasePath)
+						return BenchRun{}, fmt.Errorf("mutexprofile snapshot %s/%s: %w", testName, inst.Name, snapErr)
+					}
+					mutexPath := contentionProfilePath(cfg.MutexProfile, "mutex", testName, inst.Name)
+					deltaErr := writeRuntimeProfileDeltaProfile(mutexBasePath, mutexAfterPath, mutexPath)
+					_ = os.Remove(mutexBasePath)
+					_ = os.Remove(mutexAfterPath)
+					if deltaErr != nil {
+						return BenchRun{}, fmt.Errorf("mutexprofile %s/%s (%s): %w", testName, inst.Name, mutexPath, deltaErr)
 					}
 				}
 			}

@@ -55,9 +55,10 @@ Outputs:
   - `benchprof_results.md` (fallback; auto-written by `unified-bench -profile-dir`)
   - `cpu_<test>_<db>.pprof` (all test sections)
   - `allocs_<test>_<db>.pprof` (allocation delta profiles by section; auto-written by `unified-bench -profile-dir`)
+  - `block_<test>_<db>.pprof` (per-test block contention delta profiles)
+  - `mutex_<test>_<db>.pprof` (per-test mutex contention delta profiles)
   - `checkpoint_cpu_checkpoint_<test>_<db>.pprof` (checkpoint CPU sections)
-  - `block.pprof`
-  - `mutex.pprof`
+  - `block.pprof` / `mutex.pprof` (global run-level fallback/supplement)
   - `trace.out` (detected, but not deeply analyzed yet)
 - Optional flags:
   - `-bin` if you want explicit symbolization target (otherwise profile-only mode is used)

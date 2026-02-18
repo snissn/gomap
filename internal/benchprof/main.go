@@ -37,13 +37,15 @@ type report struct {
 	Binary      string `json:"binary"`
 	OpsSource   string `json:"ops_source,omitempty"`
 
-	OpsRows      []opsRow         `json:"ops_rows,omitempty"`
-	CPUProfiles  []pprofSummary   `json:"cpu_profiles,omitempty"`
-	AllocSpace   []pprofSummary   `json:"alloc_space_profiles,omitempty"`
-	AllocObjects []pprofSummary   `json:"alloc_object_profiles,omitempty"`
-	Comparisons  []scanComparison `json:"comparisons,omitempty"`
-	BlockProfile *pprofSummary    `json:"block_profile,omitempty"`
-	MutexProfile *pprofSummary    `json:"mutex_profile,omitempty"`
+	OpsRows       []opsRow         `json:"ops_rows,omitempty"`
+	CPUProfiles   []pprofSummary   `json:"cpu_profiles,omitempty"`
+	AllocSpace    []pprofSummary   `json:"alloc_space_profiles,omitempty"`
+	AllocObjects  []pprofSummary   `json:"alloc_object_profiles,omitempty"`
+	BlockProfiles []pprofSummary   `json:"block_profiles,omitempty"`
+	MutexProfiles []pprofSummary   `json:"mutex_profiles,omitempty"`
+	Comparisons   []scanComparison `json:"comparisons,omitempty"`
+	BlockProfile  *pprofSummary    `json:"block_profile,omitempty"`
+	MutexProfile  *pprofSummary    `json:"mutex_profile,omitempty"`
 
 	Insights []string `json:"insights,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
@@ -59,7 +61,7 @@ type opsRow struct {
 }
 
 type pprofSummary struct {
-	Kind       string       `json:"kind"` // cpu|block|mutex
+	Kind       string       `json:"kind"` // cpu|checkpoint_cpu|alloc_space|alloc_objects|block|mutex
 	Test       string       `json:"test,omitempty"`
 	DBTag      string       `json:"db_tag,omitempty"`
 	Path       string       `json:"path"`
@@ -109,11 +111,13 @@ type cpuProfileFile struct {
 }
 
 type profileFiles struct {
-	cpuProfiles []cpuProfileFile
-	allocs      []cpuProfileFile
-	blockPath   string
-	mutexPath   string
-	tracePath   string
+	cpuProfiles   []cpuProfileFile
+	allocs        []cpuProfileFile
+	blockProfiles []cpuProfileFile
+	mutexProfiles []cpuProfileFile
+	blockPath     string
+	mutexPath     string
+	tracePath     string
 }
 
 type benchprofResultsFile struct {
@@ -268,6 +272,8 @@ func buildReport(cfg config) (report, error) {
 
 	rep.CPUProfiles, rep.Warnings = appendCPUProfiles(rep.CPUProfiles, rep.Warnings, cfg, files)
 	rep.AllocSpace, rep.AllocObjects, rep.Warnings = appendAllocsProfiles(rep.AllocSpace, rep.AllocObjects, rep.Warnings, cfg, files)
+	rep.BlockProfiles, rep.Warnings = appendContentionProfiles("block", rep.BlockProfiles, rep.Warnings, cfg, files.blockProfiles)
+	rep.MutexProfiles, rep.Warnings = appendContentionProfiles("mutex", rep.MutexProfiles, rep.Warnings, cfg, files.mutexProfiles)
 	for _, prof := range rep.CPUProfiles {
 		label := profileName(prof)
 		if d := parseProfileDuration(prof.Total); d == 0 {
@@ -348,6 +354,31 @@ func appendAllocsProfiles(spaceDst, objectsDst []pprofSummary, warnings []string
 	return spaceDst, objectsDst, warnings
 }
 
+func appendContentionProfiles(kind string, dst []pprofSummary, warnings []string, cfg config, profiles []cpuProfileFile) ([]pprofSummary, []string) {
+	items := append([]cpuProfileFile(nil), profiles...)
+	sort.Slice(items, func(i, j int) bool {
+		a := items[i]
+		b := items[j]
+		if a.Test != b.Test {
+			return a.Test < b.Test
+		}
+		if a.DBTag != b.DBTag {
+			return a.DBTag < b.DBTag
+		}
+		return a.Path < b.Path
+	})
+
+	for _, prof := range items {
+		s, err := analyzePprofPath(kind, prof.Test, prof.DBTag, prof.Path, "", cfg)
+		if err != nil {
+			warnings = append(warnings, err.Error())
+			continue
+		}
+		dst = append(dst, s)
+	}
+	return dst, warnings
+}
+
 func analyzeOptionalProfile(kind, path string, cfg config, warnings []string) (*pprofSummary, []string) {
 	if path == "" {
 		return nil, warnings
@@ -392,6 +423,12 @@ func discoverProfileFiles(dir string, knownTests map[string]struct{}) (profileFi
 			} else if alloc, ok := parseAllocsProfileFilename(name, knownTests); ok {
 				alloc.Path = path
 				out.allocs = append(out.allocs, alloc)
+			} else if block, ok := parseContentionProfileFilename(name, "block", knownTests); ok {
+				block.Path = path
+				out.blockProfiles = append(out.blockProfiles, block)
+			} else if mutex, ok := parseContentionProfileFilename(name, "mutex", knownTests); ok {
+				mutex.Path = path
+				out.mutexProfiles = append(out.mutexProfiles, mutex)
 			}
 		}
 		return nil
@@ -451,6 +488,27 @@ func parseAllocsProfileFilename(name string, knownTests map[string]struct{}) (cp
 	}
 	return cpuProfileFile{
 		Kind:  "allocs",
+		Test:  testName,
+		DBTag: dbTag,
+	}, true
+}
+
+func parseContentionProfileFilename(name, kind string, knownTests map[string]struct{}) (cpuProfileFile, bool) {
+	if !strings.HasSuffix(name, ".pprof") {
+		return cpuProfileFile{}, false
+	}
+	stem := strings.TrimSuffix(name, ".pprof")
+	prefix := strings.TrimSpace(kind) + "_"
+	if !strings.HasPrefix(stem, prefix) {
+		return cpuProfileFile{}, false
+	}
+	tail := strings.TrimPrefix(stem, prefix)
+	testName, dbTag := splitProfileTail(tail, knownTests)
+	if testName == "" {
+		return cpuProfileFile{}, false
+	}
+	return cpuProfileFile{
+		Kind:  kind,
 		Test:  testName,
 		DBTag: dbTag,
 	}, true
@@ -950,10 +1008,12 @@ var (
 )
 
 func buildInvestigations(rep report) ([]investigationTarget, []string) {
-	profiles := make([]pprofSummary, 0, len(rep.CPUProfiles)+len(rep.AllocSpace)+len(rep.AllocObjects))
+	profiles := make([]pprofSummary, 0, len(rep.CPUProfiles)+len(rep.AllocSpace)+len(rep.AllocObjects)+len(rep.BlockProfiles)+len(rep.MutexProfiles))
 	profiles = append(profiles, rep.CPUProfiles...)
 	profiles = append(profiles, rep.AllocSpace...)
 	profiles = append(profiles, rep.AllocObjects...)
+	profiles = append(profiles, rep.BlockProfiles...)
+	profiles = append(profiles, rep.MutexProfiles...)
 	if len(profiles) == 0 {
 		return nil, nil
 	}
@@ -1405,13 +1465,38 @@ func buildInsights(rep report, inferredInsights []string) []string {
 		}
 	}
 
+	perTestContention := make([]pprofSummary, 0, len(rep.BlockProfiles)+len(rep.MutexProfiles))
+	perTestContention = append(perTestContention, rep.BlockProfiles...)
+	perTestContention = append(perTestContention, rep.MutexProfiles...)
+	sort.Slice(perTestContention, func(i, j int) bool {
+		a := perTestContention[i]
+		b := perTestContention[j]
+		if a.Kind != b.Kind {
+			return a.Kind < b.Kind
+		}
+		if a.Test != b.Test {
+			return a.Test < b.Test
+		}
+		if a.DBTag != b.DBTag {
+			return a.DBTag < b.DBTag
+		}
+		return a.Path < b.Path
+	})
+	for _, prof := range perTestContention {
+		if len(prof.TopEntries) == 0 {
+			continue
+		}
+		top := prof.TopEntries[0]
+		insights = append(insights, fmt.Sprintf("%s: contention hotspot %q (%.2f%% flat).", profileName(prof), top.Function, top.FlatPct))
+	}
+
 	if rep.BlockProfile != nil && len(rep.BlockProfile.TopEntries) > 0 {
 		top := rep.BlockProfile.TopEntries[0]
-		insights = append(insights, fmt.Sprintf("Block contention hotspot: %q (%.2f%% flat).", top.Function, top.FlatPct))
+		insights = append(insights, fmt.Sprintf("Global block contention hotspot: %q (%.2f%% flat).", top.Function, top.FlatPct))
 	}
 	if rep.MutexProfile != nil && len(rep.MutexProfile.TopEntries) > 0 {
 		top := rep.MutexProfile.TopEntries[0]
-		insights = append(insights, fmt.Sprintf("Mutex contention hotspot: %q (%.2f%% flat).", top.Function, top.FlatPct))
+		insights = append(insights, fmt.Sprintf("Global mutex contention hotspot: %q (%.2f%% flat).", top.Function, top.FlatPct))
 	}
 
 	for _, in := range inferredInsights {
@@ -1557,8 +1642,33 @@ func renderMarkdown(rep report) string {
 		}
 	}
 
+	if len(rep.BlockProfiles) > 0 || len(rep.MutexProfiles) > 0 {
+		sb.WriteString("## Contention Profiles (Per Test)\n\n")
+		contentionProfiles := make([]pprofSummary, 0, len(rep.BlockProfiles)+len(rep.MutexProfiles))
+		contentionProfiles = append(contentionProfiles, rep.BlockProfiles...)
+		contentionProfiles = append(contentionProfiles, rep.MutexProfiles...)
+		sort.Slice(contentionProfiles, func(i, j int) bool {
+			a := contentionProfiles[i]
+			b := contentionProfiles[j]
+			if a.Test != b.Test {
+				return a.Test < b.Test
+			}
+			if a.DBTag != b.DBTag {
+				return a.DBTag < b.DBTag
+			}
+			if a.Kind != b.Kind {
+				return a.Kind < b.Kind
+			}
+			return a.Path < b.Path
+		})
+		for _, prof := range contentionProfiles {
+			title := fmt.Sprintf("%s (%s/%s)", prof.Test, prof.DBTag, prof.Kind)
+			writeOneProfileMarkdown(&sb, title, prof)
+		}
+	}
+
 	if rep.BlockProfile != nil || rep.MutexProfile != nil {
-		sb.WriteString("## Contention Profiles\n\n")
+		sb.WriteString("## Contention Profiles (Global)\n\n")
 		if rep.BlockProfile != nil {
 			writeOneProfileMarkdown(&sb, "block", *rep.BlockProfile)
 		}

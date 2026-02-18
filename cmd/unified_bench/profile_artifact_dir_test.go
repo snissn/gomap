@@ -120,3 +120,12 @@ func TestApplyProfileArtifactDir_RespectsExplicitFlags(t *testing.T) {
 		t.Fatalf("trace = %q, want %q", got, want)
 	}
 }
+
+func TestContentionProfilePath(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "run")
+	got := contentionProfilePath(filepath.Join(dir, "block.pprof"), "block", "random_read_batch", "TreeDB (vlog=off)")
+	want := filepath.Join(dir, "block_random_read_batch_treedb__vlog_off_.pprof")
+	if got != want {
+		t.Fatalf("contentionProfilePath = %q, want %q", got, want)
+	}
+}

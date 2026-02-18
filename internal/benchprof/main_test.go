@@ -73,6 +73,8 @@ func TestDiscoverProfileFiles(t *testing.T) {
 	mustWriteFile("nested/cpu_random_delete_treedb_vlog_off.pprof")
 	mustWriteFile("checkpoint_cpu_checkpoint_full_scan_treedb_vlog_off.pprof")
 	mustWriteFile("allocs_random_read_treedb_vlog_off.pprof")
+	mustWriteFile("block_random_delete_treedb_vlog_off.pprof")
+	mustWriteFile("mutex_random_delete_treedb_vlog_off.pprof")
 	mustWriteFile("block.pprof")
 	mustWriteFile("mutex.pprof")
 	mustWriteFile("trace.out")
@@ -90,6 +92,18 @@ func TestDiscoverProfileFiles(t *testing.T) {
 	}
 	if len(files.allocs) != 1 {
 		t.Fatalf("expected 1 alloc profile, got %d", len(files.allocs))
+	}
+	if len(files.blockProfiles) != 1 {
+		t.Fatalf("expected 1 per-test block profile, got %d", len(files.blockProfiles))
+	}
+	if len(files.mutexProfiles) != 1 {
+		t.Fatalf("expected 1 per-test mutex profile, got %d", len(files.mutexProfiles))
+	}
+	if got := files.blockProfiles[0].Test + "/" + files.blockProfiles[0].DBTag; got != "random_delete/treedb_vlog_off" {
+		t.Fatalf("unexpected per-test block profile key: %q", got)
+	}
+	if got := files.mutexProfiles[0].Test + "/" + files.mutexProfiles[0].DBTag; got != "random_delete/treedb_vlog_off" {
+		t.Fatalf("unexpected per-test mutex profile key: %q", got)
 	}
 	found := map[string]bool{
 		"full_scan/treedb_vlog_off":            false,
@@ -143,6 +157,60 @@ func TestParseAllocsProfileFilename(t *testing.T) {
 	}
 	if got.DBTag != "treedb_vlog_off" {
 		t.Fatalf("unexpected db tag: %q", got.DBTag)
+	}
+}
+
+func TestParseContentionProfileFilename(t *testing.T) {
+	tests := map[string]struct{}{
+		"random_read_batch": {},
+	}
+	block, ok := parseContentionProfileFilename("block_random_read_batch_treedb.pprof", "block", tests)
+	if !ok {
+		t.Fatalf("expected block contention filename to parse")
+	}
+	if block.Test != "random_read_batch" || block.DBTag != "treedb" || block.Kind != "block" {
+		t.Fatalf("unexpected block parse: %+v", block)
+	}
+
+	mutex, ok := parseContentionProfileFilename("mutex_random_read_batch_treedb_vlog_off.pprof", "mutex", tests)
+	if !ok {
+		t.Fatalf("expected mutex contention filename to parse")
+	}
+	if mutex.Test != "random_read_batch" || mutex.DBTag != "treedb_vlog_off" || mutex.Kind != "mutex" {
+		t.Fatalf("unexpected mutex parse: %+v", mutex)
+	}
+}
+
+func TestBuildInsights_PerTestContentionProfiles(t *testing.T) {
+	rep := report{
+		BlockProfiles: []pprofSummary{
+			{
+				Kind:  "block",
+				Test:  "random_read_batch",
+				DBTag: "treedb",
+				TopEntries: []pprofEntry{
+					{Function: "runtime.pthread_cond_wait", FlatPct: 52.7},
+				},
+			},
+		},
+		MutexProfiles: []pprofSummary{
+			{
+				Kind:  "mutex",
+				Test:  "random_read_batch",
+				DBTag: "treedb",
+				TopEntries: []pprofEntry{
+					{Function: "sync.(*RWMutex).RLock", FlatPct: 34.2},
+				},
+			},
+		},
+	}
+	insights := buildInsights(rep, nil)
+	text := strings.Join(insights, "\n")
+	if !strings.Contains(text, "block/random_read_batch/treedb: contention hotspot") {
+		t.Fatalf("missing block contention insight: %v", insights)
+	}
+	if !strings.Contains(text, "mutex/random_read_batch/treedb: contention hotspot") {
+		t.Fatalf("missing mutex contention insight: %v", insights)
 	}
 }
 
