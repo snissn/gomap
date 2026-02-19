@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -115,8 +116,53 @@ func TestAppendOnlyFrozenUnorderedIteratorUsesPointerSnapshot(t *testing.T) {
 	if it.entryPtrs == nil || len(it.entryPtrs) != 2 {
 		t.Fatalf("unexpected pointer snapshot len=%d", len(it.entryPtrs))
 	}
+	if !it.leaseHeld || it.leaseOwner != m {
+		t.Fatalf("frozen unordered iterator should hold memtable lease until close")
+	}
 	if err := it.Close(); err != nil {
 		t.Fatalf("Close(): %v", err)
+	}
+}
+
+func TestAppendOnlyFrozenUnorderedIteratorBlocksResetUntilClose(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k2"), []byte("v2"))
+	m.Set([]byte("k1"), []byte("v1")) // force unordered iterator path
+	m.Freeze()
+
+	rawIt := m.NewIterator(nil, nil)
+	it, ok := rawIt.(*appendOnlyIterator)
+	if !ok {
+		t.Fatalf("unexpected iterator type %T", rawIt)
+	}
+	if !it.leaseHeld || it.leaseOwner != m {
+		t.Fatalf("expected frozen iterator to hold a memtable lease")
+	}
+
+	resetDone := make(chan struct{})
+	go func() {
+		m.Reset()
+		close(resetDone)
+	}()
+
+	select {
+	case <-resetDone:
+		_ = it.Close()
+		t.Fatalf("Reset completed while frozen iterator was still open")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close() second: %v", err)
+	}
+
+	select {
+	case <-resetDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Reset did not proceed after iterator close")
 	}
 }
 

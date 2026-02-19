@@ -13385,6 +13385,11 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if !backendRangeKnown || overlapsQuery(start, end, backendRange) {
 		diskIter, err := db.backend.Iterator(start, end)
 		if err != nil {
+			for i := range sources {
+				if sources[i].Iter != nil {
+					_ = sources[i].Iter.Close()
+				}
+			}
 			return nil, err
 		}
 
