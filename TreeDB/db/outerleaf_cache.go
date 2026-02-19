@@ -260,22 +260,27 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	if c == nil || block == nil {
 		return lease, false
 	}
-	s := c.shardFor(key)
+	s, keyHash := c.shardForAndHash(key)
 	if s.capacity <= 0 {
 		return lease, false
 	}
-	if ref := s.tryRetain(key); ref != nil {
-		if ref.block != block {
-			recycleOuterLeafDecodedBlock(block)
-		}
-		if !wantLease {
-			ref.release()
+	if !wantLease {
+		if hit, same := s.hasCachedRef(key, block); hit {
+			if !same {
+				recycleOuterLeafDecodedBlock(block)
+			}
 			return lease, true
 		}
-		lease.ref = ref
-		return lease, true
+	} else {
+		if ref := s.tryRetain(key); ref != nil {
+			if ref.block != block {
+				recycleOuterLeafDecodedBlock(block)
+			}
+			lease.ref = ref
+			return lease, true
+		}
 	}
-	if !s.shouldAdmit(key) {
+	if !s.shouldAdmitHash(keyHash) {
 		return lease, false
 	}
 	if wantLease {
@@ -291,26 +296,22 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	}
 
 	s.mu.Lock()
-	var releaseOld *outerLeafBlockRef
 	var releaseEvicted *outerLeafBlockRef
 	if idx, ok := s.entries[key]; ok {
-		releaseOld = s.nodes[idx].ref
-		if releaseOld != nil && releaseOld.block == block {
-			s.nodes[idx].ref = releaseOld
-			releaseOld = nil
-		} else {
-			s.nodes[idx].ref = newOuterLeafBlockRef(block)
+		ref := s.nodes[idx].ref
+		if ref == nil {
+			ref = newOuterLeafBlockRef(block)
+			s.nodes[idx].ref = ref
+		} else if ref.block != block {
+			recycleOuterLeafDecodedBlock(block)
 		}
 		s.moveToFront(idx)
 		if wantLease {
-			if ref := s.nodes[idx].ref; ref != nil && ref.retain() {
+			if ref != nil && ref.retain() {
 				lease.ref = ref
 			}
 		}
 		s.mu.Unlock()
-		if releaseOld != nil {
-			releaseOld.release()
-		}
 		if !wantLease {
 			return lease, true
 		}
@@ -364,6 +365,27 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	return lease, lease.ref != nil
 }
 
+func (s *outerLeafBlockCacheShard) hasCachedRef(key outerLeafBlockKey, block *outerleaf.DecodedBlock) (hit bool, same bool) {
+	if s == nil {
+		return false, false
+	}
+	s.mu.RLock()
+	idx, ok := s.entries[key]
+	if !ok {
+		s.mu.RUnlock()
+		return false, false
+	}
+	ref := s.nodes[idx].ref
+	if ref == nil || ref.refs.Load() <= 0 || ref.block == nil {
+		s.mu.RUnlock()
+		return false, false
+	}
+	hit = true
+	same = ref.block == block
+	s.mu.RUnlock()
+	return hit, same
+}
+
 func (s *outerLeafBlockCacheShard) tryRetain(key outerLeafBlockKey) *outerLeafBlockRef {
 	if s == nil {
 		return nil
@@ -400,15 +422,24 @@ func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, 
 }
 
 func (c *outerLeafBlockCache) shardFor(key outerLeafBlockKey) *outerLeafBlockCacheShard {
-	if len(c.shards) == 1 {
-		return &c.shards[0]
-	}
+	s, _ := c.shardForAndHash(key)
+	return s
+}
+
+func (c *outerLeafBlockCache) shardForAndHash(key outerLeafBlockKey) (*outerLeafBlockCacheShard, uint64) {
 	h := outerLeafBlockKeyHash(key)
+	if len(c.shards) == 1 {
+		return &c.shards[0], h
+	}
 	idx := int(h & uint64(len(c.shards)-1))
-	return &c.shards[idx]
+	return &c.shards[idx], h
 }
 
 func (s *outerLeafBlockCacheShard) shouldAdmit(key outerLeafBlockKey) bool {
+	return s.shouldAdmitHash(outerLeafBlockKeyHash(key))
+}
+
+func (s *outerLeafBlockCacheShard) shouldAdmitHash(h uint64) bool {
 	if s == nil || s.capacity <= 0 {
 		return false
 	}
@@ -419,7 +450,6 @@ func (s *outerLeafBlockCacheShard) shouldAdmit(key outerLeafBlockKey) bool {
 	if len(s.admit) == 0 || s.admitMask == 0 {
 		return true
 	}
-	h := outerLeafBlockKeyHash(key)
 	idxA, idxB := outerLeafBlockCacheAdmitIndexes(h, s.admitMask)
 	wordA := int(idxA >> 6)
 	bitA := uint64(1) << (idxA & 63)
@@ -439,15 +469,8 @@ func outerLeafBlockCacheAdmitSeenAndSet(word *atomic.Uint64, bit uint64) bool {
 	if word == nil || bit == 0 {
 		return false
 	}
-	for {
-		old := word.Load()
-		if old&bit != 0 {
-			return true
-		}
-		if word.CompareAndSwap(old, old|bit) {
-			return false
-		}
-	}
+	old := word.Or(bit)
+	return old&bit != 0
 }
 
 func outerLeafBlockCacheAdmitIndexes(h, mask uint64) (uint64, uint64) {

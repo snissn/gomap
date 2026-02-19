@@ -317,6 +317,55 @@ func TestOuterLeafBlockCachePut_FirstTouchRejectRecyclesBlock(t *testing.T) {
 	}
 }
 
+func TestOuterLeafBlockCachePut_DuplicateKeyRecyclesIncomingBlock(t *testing.T) {
+	cache := newOuterLeafBlockCache(8)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	key := makeOuterLeafCacheTestKey(42)
+
+	first := makeOuterLeafCacheTestLeaseBlock(t, 5001)
+	if len(first.RawBytes()) == 0 {
+		t.Fatalf("first block raw bytes empty before put")
+	}
+	cache.put(key, first)
+
+	got, readLease := cache.get(key)
+	if got == nil {
+		readLease.Release()
+		t.Fatalf("cache get miss after first put")
+	}
+	if got != first {
+		readLease.Release()
+		t.Fatalf("cache get returned unexpected block pointer")
+	}
+	readLease.Release()
+
+	second := makeOuterLeafCacheTestLeaseBlock(t, 5002)
+	if len(second.RawBytes()) == 0 {
+		t.Fatalf("second block raw bytes empty before duplicate put")
+	}
+	cache.put(key, second)
+
+	if second.RawBytes() != nil {
+		t.Fatalf("duplicate incoming block not recycled")
+	}
+	if first.RawBytes() == nil {
+		t.Fatalf("existing cached block was unexpectedly recycled")
+	}
+
+	got, readLease = cache.get(key)
+	if got == nil {
+		readLease.Release()
+		t.Fatalf("cache get miss after duplicate put")
+	}
+	if got != first {
+		readLease.Release()
+		t.Fatalf("cache get returned unexpected block after duplicate put")
+	}
+	readLease.Release()
+}
+
 func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrentReadPressure(t *testing.T) {
 	cache := newOuterLeafBlockCache(130)
 	if cache == nil {
