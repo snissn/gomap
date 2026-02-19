@@ -3,6 +3,8 @@ package db
 import (
 	"bytes"
 	"fmt"
+	"runtime"
+	"runtime/debug"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
@@ -123,34 +125,49 @@ func TestOuterLeafFenceDecodeScratchPoolCapBounded(t *testing.T) {
 }
 
 func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
-	set := newOuterLeafFenceDecodeLeaseSet(1)
-	newCalls := 0
-	set.pool.New = func() any {
-		newCalls++
-		return acquireOuterLeafFenceDecodeContext()
+	prevProcs := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
+	prevGCPercent := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(prevGCPercent) })
+
+	makeCountingSet := func() (*outerLeafFenceDecodeLeaseSet, *int) {
+		calls := 0
+		set := &outerLeafFenceDecodeLeaseSet{}
+		set.pool.New = func() any {
+			calls++
+			return acquireOuterLeafFenceDecodeContext()
+		}
+		set.pool.Put(acquireOuterLeafFenceDecodeContext())
+		return set, &calls
 	}
-	ctx1 := set.acquire()
-	if ctx1 == nil {
-		t.Fatalf("first acquire returned nil")
+
+	const iters = 32
+	setReleased, callsReleasedPtr := makeCountingSet()
+	for i := 0; i < iters; i++ {
+		ctx := setReleased.acquire()
+		if ctx == nil {
+			t.Fatalf("iter=%d released-path acquire returned nil", i)
+		}
+		setReleased.release(ctx)
 	}
-	ctx2 := set.acquire()
-	if ctx2 == nil {
-		t.Fatalf("second acquire returned nil")
+
+	setLeaked, callsLeakedPtr := makeCountingSet()
+	for i := 0; i < iters; i++ {
+		ctx := setLeaked.acquire()
+		if ctx == nil {
+			t.Fatalf("iter=%d leaked-path acquire returned nil", i)
+		}
+		// Intentionally omit release(ctx) to model no pooling.
 	}
-	callsAfterAcquire := newCalls
-	set.release(ctx1)
-	set.release(ctx2)
-	ctx3 := set.acquire()
-	if ctx3 == nil {
-		t.Fatalf("acquire after release returned nil")
+
+	callsReleased := *callsReleasedPtr
+	callsLeaked := *callsLeakedPtr
+	if callsReleased >= callsLeaked {
+		t.Fatalf("expected release path to allocate fewer contexts than leaked path: released=%d leaked=%d", callsReleased, callsLeaked)
 	}
-	if newCalls != callsAfterAcquire {
-		t.Fatalf("acquire after release allocated new context: calls before=%d after=%d", callsAfterAcquire, newCalls)
+	if callsLeaked-callsReleased < iters/4 {
+		t.Fatalf("allocation delta too small to prove pool reuse: released=%d leaked=%d", callsReleased, callsLeaked)
 	}
-	if ctx3 != ctx1 && ctx3 != ctx2 {
-		t.Fatalf("acquire after release did not reuse returned context: ctx1=%p ctx2=%p ctx3=%p", ctx1, ctx2, ctx3)
-	}
-	set.release(ctx3)
 }
 
 func TestOuterLeafFenceDecodeLeaseSetReleaseAllowsOversubscription(t *testing.T) {
@@ -180,28 +197,60 @@ func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing
 		t.Fatalf("payload missing outer-leaf magic after truncation")
 	}
 
-	set := newOuterLeafFenceDecodeLeaseSet(1)
-	newCalls := 0
-	set.pool.New = func() any {
-		newCalls++
-		return acquireOuterLeafFenceDecodeContext()
-	}
-	var r valueReader
-	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
-	r.fenceDecodeLeases = set
+	prevProcs := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
+	prevGCPercent := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(prevGCPercent) })
 
-	_, _, err := r.decodeValueForKeyFound(page.ValuePtr{}, []byte("k1"), payload, true)
-	if err == nil {
-		t.Fatalf("decodeValueForKeyFound err=nil want decode failure")
+	makeCountingSet := func() (*outerLeafFenceDecodeLeaseSet, *int) {
+		calls := 0
+		set := &outerLeafFenceDecodeLeaseSet{}
+		set.pool.New = func() any {
+			calls++
+			return acquireOuterLeafFenceDecodeContext()
+		}
+		set.pool.Put(acquireOuterLeafFenceDecodeContext())
+		return set, &calls
 	}
-	ctx := set.acquire()
-	if ctx == nil {
-		t.Fatalf("acquire returned nil after decode error")
+
+	const iters = 32
+	// Real path: acquire + decode + release through decodeValueForKeyFound.
+	setReleased, callsReleasedPtr := makeCountingSet()
+	var rReleased valueReader
+	rReleased.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	rReleased.fenceDecodeLeases = setReleased
+	for i := 0; i < iters; i++ {
+		_, _, err := rReleased.decodeValueForKeyFound(page.ValuePtr{}, []byte("k1"), payload, true)
+		if err == nil {
+			t.Fatalf("iter=%d decodeValueForKeyFound err=nil want decode failure", i)
+		}
 	}
-	if newCalls != 0 {
-		t.Fatalf("decode error path did not return lease context to pool; newCalls=%d", newCalls)
+
+	// Control path: same decode work without returning contexts to the lease set.
+	setLeaked, callsLeakedPtr := makeCountingSet()
+	var rLeaked valueReader
+	rLeaked.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	rLeaked.fenceDecodeLeases = setLeaked
+	for i := 0; i < iters; i++ {
+		ctx := setLeaked.acquire()
+		if ctx == nil {
+			t.Fatalf("iter=%d leaked-path acquire returned nil", i)
+		}
+		_, _, err := rLeaked.decodeOuterLeafValueForKeyNoCacheWithLeaseCtx(payload, []byte("k1"), true, ctx)
+		if err == nil {
+			t.Fatalf("iter=%d leaked-path decode err=nil want decode failure", i)
+		}
+		// Intentionally omit release(ctx) to model a leak baseline.
 	}
-	set.release(ctx)
+
+	callsReleased := *callsReleasedPtr
+	callsLeaked := *callsLeakedPtr
+	if callsReleased >= callsLeaked {
+		t.Fatalf("expected release path to allocate fewer contexts than leaked path: released=%d leaked=%d", callsReleased, callsLeaked)
+	}
+	if callsLeaked-callsReleased < iters/4 {
+		t.Fatalf("allocation delta too small to prove release behavior: released=%d leaked=%d", callsReleased, callsLeaked)
+	}
 }
 
 func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *testing.T) {
@@ -212,28 +261,60 @@ func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *t
 		t.Fatalf("payload missing outer-leaf magic after truncation")
 	}
 
-	set := newOuterLeafFenceDecodeLeaseSet(1)
-	newCalls := 0
-	set.pool.New = func() any {
-		newCalls++
-		return acquireOuterLeafFenceDecodeContext()
-	}
-	var r valueReader
-	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
-	r.fenceDecodeLeases = set
+	prevProcs := runtime.GOMAXPROCS(1)
+	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
+	prevGCPercent := debug.SetGCPercent(-1)
+	t.Cleanup(func() { debug.SetGCPercent(prevGCPercent) })
 
-	_, _, err := r.decodeValueForKeyFoundAppend(page.ValuePtr{}, []byte("k1"), payload, nil)
-	if err == nil {
-		t.Fatalf("decodeValueForKeyFoundAppend err=nil want decode failure")
+	makeCountingSet := func() (*outerLeafFenceDecodeLeaseSet, *int) {
+		calls := 0
+		set := &outerLeafFenceDecodeLeaseSet{}
+		set.pool.New = func() any {
+			calls++
+			return acquireOuterLeafFenceDecodeContext()
+		}
+		set.pool.Put(acquireOuterLeafFenceDecodeContext())
+		return set, &calls
 	}
-	ctx := set.acquire()
-	if ctx == nil {
-		t.Fatalf("acquire returned nil after append decode error")
+
+	const iters = 32
+	// Real path: acquire + decode + release through decodeValueForKeyFoundAppend.
+	setReleased, callsReleasedPtr := makeCountingSet()
+	var rReleased valueReader
+	rReleased.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	rReleased.fenceDecodeLeases = setReleased
+	for i := 0; i < iters; i++ {
+		_, _, err := rReleased.decodeValueForKeyFoundAppend(page.ValuePtr{}, []byte("k1"), payload, nil)
+		if err == nil {
+			t.Fatalf("iter=%d decodeValueForKeyFoundAppend err=nil want decode failure", i)
+		}
 	}
-	if newCalls != 0 {
-		t.Fatalf("append decode error path did not return lease context to pool; newCalls=%d", newCalls)
+
+	// Control path: same append decode work without returning contexts.
+	setLeaked, callsLeakedPtr := makeCountingSet()
+	var rLeaked valueReader
+	rLeaked.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	rLeaked.fenceDecodeLeases = setLeaked
+	for i := 0; i < iters; i++ {
+		ctx := setLeaked.acquire()
+		if ctx == nil {
+			t.Fatalf("iter=%d leaked-path acquire returned nil", i)
+		}
+		_, _, err := rLeaked.decodeOuterLeafAppendForKeyNoCacheWithLeaseCtx(payload, []byte("k1"), nil, ctx)
+		if err == nil {
+			t.Fatalf("iter=%d leaked-path append decode err=nil want decode failure", i)
+		}
+		// Intentionally omit release(ctx) to model a leak baseline.
 	}
-	set.release(ctx)
+
+	callsReleased := *callsReleasedPtr
+	callsLeaked := *callsLeakedPtr
+	if callsReleased >= callsLeaked {
+		t.Fatalf("expected append release path to allocate fewer contexts than leaked path: released=%d leaked=%d", callsReleased, callsLeaked)
+	}
+	if callsLeaked-callsReleased < iters/4 {
+		t.Fatalf("append allocation delta too small to prove release behavior: released=%d leaked=%d", callsReleased, callsLeaked)
+	}
 }
 
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
