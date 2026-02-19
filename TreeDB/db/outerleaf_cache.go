@@ -245,14 +245,17 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBloc
 }
 
 func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.DecodedBlock) {
-	lease, admitted := c.putWithLease(key, block)
+	_, admitted := c.putInternal(key, block, false)
 	if !admitted {
 		recycleOuterLeafDecodedBlock(block)
 	}
-	lease.Release()
 }
 
 func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerleaf.DecodedBlock) (outerLeafBlockCacheLease, bool) {
+	return c.putInternal(key, block, true)
+}
+
+func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerleaf.DecodedBlock, wantLease bool) (outerLeafBlockCacheLease, bool) {
 	var lease outerLeafBlockCacheLease
 	if c == nil || block == nil {
 		return lease, false
@@ -265,21 +268,26 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 		if ref.block != block {
 			recycleOuterLeafDecodedBlock(block)
 		}
-		lease.ref = ref
-		return lease, true
-	}
-	admit := s.shouldAdmit(key)
-	// Recheck after admission; another goroutine may have inserted while we were
-	// outside the shard lock.
-	if ref := s.tryRetain(key); ref != nil {
-		if ref.block != block {
-			recycleOuterLeafDecodedBlock(block)
+		if !wantLease {
+			ref.release()
+			return lease, true
 		}
 		lease.ref = ref
 		return lease, true
 	}
-	if !admit {
+	if !s.shouldAdmit(key) {
 		return lease, false
+	}
+	if wantLease {
+		// Recheck after admission; another goroutine may have inserted while we
+		// were outside the shard lock.
+		if ref := s.tryRetain(key); ref != nil {
+			if ref.block != block {
+				recycleOuterLeafDecodedBlock(block)
+			}
+			lease.ref = ref
+			return lease, true
+		}
 	}
 
 	s.mu.Lock()
@@ -294,12 +302,17 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 			s.nodes[idx].ref = newOuterLeafBlockRef(block)
 		}
 		s.moveToFront(idx)
-		if ref := s.nodes[idx].ref; ref != nil && ref.retain() {
-			lease.ref = ref
+		if wantLease {
+			if ref := s.nodes[idx].ref; ref != nil && ref.retain() {
+				lease.ref = ref
+			}
 		}
 		s.mu.Unlock()
 		if releaseOld != nil {
 			releaseOld.release()
+		}
+		if !wantLease {
+			return lease, true
 		}
 		return lease, lease.ref != nil
 	}
@@ -336,12 +349,17 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 	if inserted {
 		s.entryCount.Add(1)
 	}
-	if ref := node.ref; ref != nil && ref.retain() {
-		lease.ref = ref
+	if wantLease {
+		if ref := node.ref; ref != nil && ref.retain() {
+			lease.ref = ref
+		}
 	}
 	s.mu.Unlock()
 	if releaseEvicted != nil {
 		releaseEvicted.release()
+	}
+	if !wantLease {
+		return lease, true
 	}
 	return lease, lease.ref != nil
 }
