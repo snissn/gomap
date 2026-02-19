@@ -1310,6 +1310,14 @@ func (r valueReader) ReadUnsafeFenceBlockKeysRangeLease(ptr page.ValuePtr, lower
 		return acquireStaticFenceKeysLease(sliceFenceKeysRange(cachedKeys, lower, upper)), true, nil
 	}
 	if block, cacheLease := r.cachedOuterLeafBlock(ptr); block != nil {
+		if len(lower) == 0 && len(upper) == 0 {
+			keys, err := block.Keys(nil)
+			if err != nil {
+				cacheLease.Release()
+				return nil, true, err
+			}
+			return acquireCacheFenceKeysLease(keys, cacheLease), true, nil
+		}
 		keyLease, err := block.KeysRangeLease(lower, upper)
 		if err != nil {
 			cacheLease.Release()
@@ -1830,13 +1838,18 @@ func (r valueReader) outerLeafBlock(ptr page.ValuePtr, raw []byte) (*outerleaf.D
 	// those blocks avoids lock/churn overhead while retaining cache benefits for
 	// inline-heavy blocks.
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
-		if putLease, admitted := r.cache.putWithLease(key, block); admitted && putLease.ref != nil {
-			if cached := putLease.ref.block; cached != nil {
-				return cached, putLease, nil
+		putLease, admitted := r.cache.putWithLease(key, block)
+		if admitted {
+			if putLease.ref != nil {
+				if cached := putLease.ref.block; cached != nil {
+					return cached, putLease, nil
+				}
 			}
 			putLease.Release()
 		}
 	}
+	// Admission miss intentionally returns the caller-owned decode result instead
+	// of recycling it; callers consume this block directly on the miss path.
 	return block, lease, nil
 }
 
