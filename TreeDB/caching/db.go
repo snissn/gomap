@@ -187,7 +187,7 @@ func getOuterLeafArena(capacity int) []byte {
 	}
 	if v := outerLeafArenaPool.Get(); v != nil {
 		if s, ok := v.([]byte); ok {
-			maxCap := capacity * 2
+			maxCap := capacity * 4
 			if maxCap < 1<<20 {
 				maxCap = 1 << 20
 			}
@@ -1366,6 +1366,10 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 
 	var ptrKeys [][]byte
 	var ptrVals [][]byte
+	defer func() {
+		putValueLogKeys(ptrKeys)
+		putValueLogKeys(ptrVals)
+	}()
 	fenceMode := db.outerLeafFenceV2Enabled()
 	state := fenceState
 	if state == nil {
@@ -1435,8 +1439,8 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 				if hint > db.flushBackendInitEntries {
 					hint = db.flushBackendInitEntries
 				}
-				ptrKeys = make([][]byte, 0, hint)
-				ptrVals = make([][]byte, 0, hint)
+				ptrKeys = getValueLogKeys(hint)
+				ptrVals = getValueLogKeys(hint)
 			}
 			keyCopy := append([]byte(nil), key...)
 			valCopy := append([]byte(nil), val...)
@@ -1591,28 +1595,26 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	if chunkCap <= 0 {
 		chunkCap = 8192
 	}
-	unitRuns := make([][][]batch.Entry, len(units))
+	unitRuns := getUnitRuns(len(units))
+	defer func() {
+		for i := range unitRuns {
+			for _, run := range unitRuns[i] {
+				putEntrySlice(run)
+			}
+			putEntryRuns(unitRuns[i])
+		}
+		putUnitRuns(unitRuns)
+	}()
 	for i := range units {
 		runs, _, err := buildOpRuns(units[i].mem, chunkCap)
 		if err != nil {
-			for _, built := range unitRuns {
-				for _, run := range built {
-					putEntrySlice(run)
-				}
-			}
 			return 0, err
 		}
 		unitRuns[i] = runs
 	}
-	defer func() {
-		for _, runs := range unitRuns {
-			for _, run := range runs {
-				putEntrySlice(run)
-			}
-		}
-	}()
 
-	heap := make(opMergeHeap, 0, len(unitRuns))
+	heap := getOpMergeHeap(len(unitRuns))
+	defer func() { putOpMergeHeap(heap) }()
 	for i := range unitRuns {
 		if len(unitRuns[i]) == 0 {
 			continue
@@ -1634,12 +1636,16 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	if sync {
 		durability = journalDurabilitySync
 	}
+	ptrKeys := getValueLogKeys(chunkCap)
+	ptrVals := getValueLogKeys(chunkCap)
+	defer func() {
+		putValueLogKeys(ptrKeys)
+		putValueLogKeys(ptrVals)
+	}()
 	var (
 		backendPendingOps int
 		lastFencePtr      page.ValuePtr
 		haveFencePtr      bool
-		ptrKeys           [][]byte
-		ptrVals           [][]byte
 		vlogLane          *lane
 		dictID            uint64
 		dictIDReady       bool
@@ -4646,9 +4652,17 @@ func (db *DB) publishVlogDictPrepareResult(task vlogDictPrepareTask, res vlogDic
 	}
 }
 
-const maxEntryPoolCap = 1 << 16
+const (
+	maxEntryPoolCap     = 1 << 16
+	maxEntryRunsPoolCap = 1 << 14
+	maxUnitRunsPoolCap  = 1 << 8
+	maxOpMergeHeapCap   = 1 << 8
+)
 
 var entrySlicePool sync.Pool
+var entryRunsPool sync.Pool
+var unitRunsPool sync.Pool
+var opMergeHeapPool sync.Pool
 
 func getEntrySlice(capacity int) []batch.Entry {
 	if capacity < 0 {
@@ -4662,6 +4676,8 @@ func getEntrySlice(capacity int) []batch.Entry {
 		if cap(s) >= capacity {
 			return s[:0]
 		}
+		// Keep smaller pooled slices available for callers with lower capacities.
+		entrySlicePool.Put(s[:0])
 	}
 	return make([]batch.Entry, 0, capacity)
 }
@@ -4674,6 +4690,76 @@ func putEntrySlice(entries []batch.Entry) {
 		entries[i] = batch.Entry{}
 	}
 	entrySlicePool.Put(entries[:0])
+}
+
+func getEntryRuns(capacity int) [][]batch.Entry {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxEntryRunsPoolCap {
+		return make([][]batch.Entry, 0, capacity)
+	}
+	if v := entryRunsPool.Get(); v != nil {
+		if runs, ok := v.([][]batch.Entry); ok && cap(runs) >= capacity {
+			return runs[:0]
+		}
+	}
+	return make([][]batch.Entry, 0, capacity)
+}
+
+func putEntryRuns(runs [][]batch.Entry) {
+	if runs == nil || cap(runs) > maxEntryRunsPoolCap {
+		return
+	}
+	clear(runs)
+	entryRunsPool.Put(runs[:0])
+}
+
+func getUnitRuns(length int) [][][]batch.Entry {
+	if length < 0 {
+		length = 0
+	}
+	if length > maxUnitRunsPoolCap {
+		return make([][][]batch.Entry, length)
+	}
+	if v := unitRunsPool.Get(); v != nil {
+		if runs, ok := v.([][][]batch.Entry); ok && cap(runs) >= length {
+			return runs[:length]
+		}
+	}
+	return make([][][]batch.Entry, length)
+}
+
+func putUnitRuns(runs [][][]batch.Entry) {
+	if runs == nil || cap(runs) > maxUnitRunsPoolCap {
+		return
+	}
+	clear(runs)
+	unitRunsPool.Put(runs[:0])
+}
+
+func getOpMergeHeap(capacity int) opMergeHeap {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxOpMergeHeapCap {
+		return make(opMergeHeap, 0, capacity)
+	}
+	if v := opMergeHeapPool.Get(); v != nil {
+		if h, ok := v.(opMergeHeap); ok && cap(h) >= capacity {
+			return h[:0]
+		}
+	}
+	return make(opMergeHeap, 0, capacity)
+}
+
+func putOpMergeHeap(h opMergeHeap) {
+	if h == nil || cap(h) > maxOpMergeHeapCap {
+		return
+	}
+	full := h[:cap(h)]
+	clear(full)
+	opMergeHeapPool.Put(full[:0])
 }
 
 func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
@@ -4854,7 +4940,8 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 		chunkCap = 8192
 	}
 	iter := mem.NewIterator(nil, nil)
-	var runs [][]batch.Entry
+	runsCap := mem.Len()/chunkCap + 1
+	runs := getEntryRuns(runsCap)
 	deleteOps := 0
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
@@ -4896,6 +4983,7 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 		for _, run := range runs {
 			putEntrySlice(run)
 		}
+		putEntryRuns(runs)
 		return nil, 0, err
 	}
 	if len(ops) > 0 {
@@ -10661,7 +10749,16 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			close(results)
 		}()
 
-		unitRuns := make([][][]batch.Entry, len(units))
+		unitRuns := getUnitRuns(len(units))
+		defer func() {
+			for i := range unitRuns {
+				for _, run := range unitRuns[i] {
+					putEntrySlice(run)
+				}
+				putEntryRuns(unitRuns[i])
+			}
+			putUnitRuns(unitRuns)
+		}()
 		unitDeleteOps := make([]int, len(units))
 		failed := false
 		for res := range results {
@@ -10673,23 +10770,20 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				for _, run := range res.runs {
 					putEntrySlice(run)
 				}
+				putEntryRuns(res.runs)
 				continue
 			}
 			if failed {
 				for _, run := range res.runs {
 					putEntrySlice(run)
 				}
+				putEntryRuns(res.runs)
 				continue
 			}
 			unitRuns[res.idx] = res.runs
 			unitDeleteOps[res.idx] = res.deleteOps
 		}
 		if failed {
-			for _, runs := range unitRuns {
-				for _, run := range runs {
-					putEntrySlice(run)
-				}
-			}
 			return false
 		}
 
@@ -10733,11 +10827,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			if err := db.flushValueLog(laneID); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
 				_ = backendBatch.Close()
-				for _, runs := range unitRuns {
-					for _, run := range runs {
-						putEntrySlice(run)
-					}
-				}
 				return false
 			}
 			vlogFlushed = true
@@ -10767,8 +10856,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			return nil
 		}
 
-		var heap opMergeHeap
-		heap = heap[:0]
+		heap := getOpMergeHeap(len(unitRuns))
+		defer func() { putOpMergeHeap(heap) }()
 		for i := range unitRuns {
 			if len(unitRuns[i]) == 0 {
 				continue
@@ -10844,11 +10933,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 				_ = backendBatch.Close()
-				for _, runs := range unitRuns {
-					for _, run := range runs {
-						putEntrySlice(run)
-					}
-				}
 				return false
 			}
 			if applied {
@@ -10856,11 +10940,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				if err := flushBackendChunk(); err != nil {
 					db.reportError(err)
 					_ = backendBatch.Close()
-					for _, runs := range unitRuns {
-						for _, run := range runs {
-							putEntrySlice(run)
-						}
-					}
 					return false
 				}
 			}
@@ -10877,11 +10956,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				if err := db.flushValueLog(laneID); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
 					_ = backendBatch.Close()
-					for _, runs := range unitRuns {
-						for _, run := range runs {
-							putEntrySlice(run)
-						}
-					}
 					return false
 				}
 				vlogFlushed = true
@@ -10890,11 +10964,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				if err := db.syncValueLog(laneID); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
 					_ = backendBatch.Close()
-					for _, runs := range unitRuns {
-						for _, run := range runs {
-							putEntrySlice(run)
-						}
-					}
 					return false
 				}
 			}
@@ -10920,18 +10989,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 		if err != nil {
 			db.reportError(err)
-			for _, runs := range unitRuns {
-				for _, run := range runs {
-					putEntrySlice(run)
-				}
-			}
 			return false
-		}
-
-		for _, runs := range unitRuns {
-			for _, run := range runs {
-				putEntrySlice(run)
-			}
 		}
 
 		db.mu.Lock()
