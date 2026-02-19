@@ -1409,6 +1409,49 @@ func TestDecodedBlockKeysRange(t *testing.T) {
 	}
 }
 
+func TestDecodedBlockKeysRangeLease(t *testing.T) {
+	enc, err := EncodeEntries(nil, []Entry{
+		{Key: []byte("k10"), Value: []byte("v10")},
+		{Key: []byte("k20"), Value: []byte("v20")},
+		{Key: []byte("k30"), Value: []byte("v30")},
+		{Key: []byte("k40"), Value: []byte("v40")},
+	}, 0, 4)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+
+	lease, err := blk.KeysRangeLease([]byte("k15"), []byte("k35"))
+	if err != nil {
+		t.Fatalf("KeysRangeLease bounded: %v", err)
+	}
+	if lease == nil {
+		t.Fatalf("KeysRangeLease bounded lease=nil want non-nil")
+	}
+	keys := lease.Keys()
+	want := [][]byte{[]byte("k20"), []byte("k30")}
+	if len(keys) != len(want) {
+		t.Fatalf("KeysRangeLease bounded len=%d want=%d", len(keys), len(want))
+	}
+	for i := range want {
+		if !bytes.Equal(keys[i], want[i]) {
+			t.Fatalf("KeysRangeLease bounded[%d]=%q want=%q", i, keys[i], want[i])
+		}
+	}
+	lease.Release()
+
+	lease, err = blk.KeysRangeLease([]byte("k99"), nil)
+	if err != nil {
+		t.Fatalf("KeysRangeLease empty: %v", err)
+	}
+	if lease != nil {
+		t.Fatalf("KeysRangeLease empty lease=%v want=nil", lease)
+	}
+}
+
 func TestDecodedBlockEntries(t *testing.T) {
 	v2Entries := []Entry{
 		{Key: []byte("acct:0001"), Value: bytes.Repeat([]byte("a"), 32)},
