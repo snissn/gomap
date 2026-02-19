@@ -3,6 +3,7 @@ package memtable
 import (
 	"bytes"
 	"encoding/binary"
+	"math/bits"
 	"sort"
 	"sync"
 	"unsafe"
@@ -26,12 +27,17 @@ const (
 	appendOnlyIteratorPoolMaxCap     = 1 << 20
 	appendOnlyIteratorPtrPoolMaxCap  = 1 << 20
 	appendOnlyReusableKeyMaxCap      = 1 << 10
-	appendOnlyReusableValueMaxCap    = 1 << 16
+	appendOnlyValueArenaMinShift     = 12
+	appendOnlyValueArenaMaxShift     = 20
+	appendOnlyValueArenaClassCount   = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
+	appendOnlyValueArenaDefaultChunk = 32 << 10
+	appendOnlyValueArenaPoolMaxCap   = 1 << appendOnlyValueArenaMaxShift
 )
 
 var appendOnlyEntryPool sync.Pool
 var appendOnlyIteratorPool sync.Pool
 var appendOnlyIteratorPtrPool sync.Pool
+var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
 
 type appendOnlyEntry struct {
 	key        []byte
@@ -43,17 +49,24 @@ type appendOnlyEntry struct {
 	valueOwned bool
 }
 
+type appendOnlyValueArena struct {
+	chunks [][]byte
+	cur    []byte
+	curPos int
+}
+
 type AppendOnly struct {
 	mu sync.RWMutex
 
-	entries   []appendOnlyEntry
-	latest    map[string]int
-	latest64  map[uint64]int
-	snapshot  []*appendOnlyEntry
-	indexBuf  []int
-	count     int
-	snapCount int
-	sizeBytes int64
+	entries    []appendOnlyEntry
+	latest     map[string]int
+	latest64   map[uint64]int
+	snapshot   []*appendOnlyEntry
+	indexBuf   []int
+	valueArena appendOnlyValueArena
+	count      int
+	snapCount  int
+	sizeBytes  int64
 
 	ordered     bool
 	latestDirty bool
@@ -196,6 +209,94 @@ func cloneOrReuseBytes(dst, src []byte, maxCap int) []byte {
 	return out
 }
 
+func appendOnlyValueArenaClassForLen(length int) (idx int, classCap int, ok bool) {
+	if length <= 0 || length > appendOnlyValueArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	classCap = 1 << uint(bits.Len(uint(length-1)))
+	minCap := 1 << appendOnlyValueArenaMinShift
+	if classCap < minCap {
+		classCap = minCap
+	}
+	if classCap > appendOnlyValueArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - appendOnlyValueArenaMinShift
+	if idx < 0 || idx >= appendOnlyValueArenaClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func appendOnlyValueArenaClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << appendOnlyValueArenaMinShift
+	if capacity < minCap || capacity > appendOnlyValueArenaPoolMaxCap {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - appendOnlyValueArenaMinShift
+	if idx < 0 || idx >= appendOnlyValueArenaClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func getAppendOnlyValueArenaChunk(capacity int) []byte {
+	if capacity <= 0 {
+		capacity = appendOnlyValueArenaDefaultChunk
+	}
+	if capacity < appendOnlyValueArenaDefaultChunk {
+		capacity = appendOnlyValueArenaDefaultChunk
+	}
+	if idx, classCap, ok := appendOnlyValueArenaClassForLen(capacity); ok {
+		if v := appendOnlyValueArenaPools[idx].Get(); v != nil {
+			if b, ok := v.([]byte); ok && cap(b) >= classCap {
+				return b[:0]
+			}
+		}
+		return make([]byte, 0, classCap)
+	}
+	return make([]byte, 0, capacity)
+}
+
+func putAppendOnlyValueArenaChunk(chunk []byte) {
+	if chunk == nil {
+		return
+	}
+	if idx, ok := appendOnlyValueArenaClassForCap(cap(chunk)); ok {
+		appendOnlyValueArenaPools[idx].Put(chunk[:0])
+	}
+}
+
+func (a *appendOnlyValueArena) alloc(length int) []byte {
+	if length <= 0 {
+		return nil
+	}
+	if a.cur == nil || cap(a.cur)-a.curPos < length {
+		chunk := getAppendOnlyValueArenaChunk(length)
+		a.chunks = append(a.chunks, chunk)
+		a.cur = chunk[:cap(chunk)]
+		a.curPos = 0
+	}
+	out := a.cur[a.curPos : a.curPos+length : a.curPos+length]
+	a.curPos += length
+	return out
+}
+
+func (a *appendOnlyValueArena) reset() {
+	for i := range a.chunks {
+		putAppendOnlyValueArenaChunk(a.chunks[i])
+		a.chunks[i] = nil
+	}
+	a.chunks = a.chunks[:0]
+	a.cur = nil
+	a.curPos = 0
+}
+
 func appendOnlyNextCapacity(current int, flags byte) int {
 	if current < appendOnlyMinInitialEntries {
 		return appendOnlyMinInitialEntries
@@ -300,22 +401,25 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent.ptr = ptr
 	ent.flags = flags
 	ent.keyInline = false
+	ent.valueOwned = false
 	if steal {
 		ent.key = key
 		ent.value = value
-		ent.valueOwned = false
 	} else {
 		if len(key) == appendOnlyInlineKeyLen {
 			copy(ent.inlineKey[:], key)
 			ent.keyInline = true
+			ent.key = nil
 		} else {
 			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
 		}
-		if !ent.valueOwned {
+		if len(value) > 0 {
+			ent.value = m.valueArena.alloc(len(value))
+			copy(ent.value, value)
+			ent.valueOwned = true
+		} else {
 			ent.value = nil
 		}
-		ent.value = cloneOrReuseBytes(ent.value, value, appendOnlyReusableValueMaxCap)
-		ent.valueOwned = ent.value != nil
 	}
 	if flags&node.FlagTombstone != 0 {
 		ent.value = nil
@@ -530,7 +634,6 @@ func (m *AppendOnly) Reset() {
 	defer m.mu.Unlock()
 	for i := 0; i < m.count; i++ {
 		ent := &m.entries[i]
-		ownedValue := ent.valueOwned
 		ent.ptr = page.ValuePtr{}
 		ent.flags = 0
 		ent.keyInline = false
@@ -540,16 +643,9 @@ func (m *AppendOnly) Reset() {
 		} else if ent.key != nil {
 			ent.key = ent.key[:0]
 		}
-		if cap(ent.value) > appendOnlyReusableValueMaxCap {
-			ent.value = nil
-		} else if ent.value != nil {
-			if ownedValue {
-				ent.value = ent.value[:0]
-			} else {
-				ent.value = nil
-			}
-		}
+		ent.value = nil
 	}
+	m.valueArena.reset()
 	clear(m.latest)
 	clear(m.latest64)
 	m.clearSnapshotLocked()
