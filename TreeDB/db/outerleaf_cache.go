@@ -258,24 +258,27 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 		return lease, false
 	}
 	s := c.shardFor(key)
-	// Fast-path existing keys without taking shard write lock.
-	s.mu.RLock()
-	if idx, ok := s.entries[key]; ok {
-		if ref := s.nodes[idx].ref; ref != nil && ref.retain() {
-			s.mu.RUnlock()
-			if ref.block != block {
-				recycleOuterLeafDecodedBlock(block)
-			}
-			lease.ref = ref
-			return lease, true
-		}
-	}
-	s.mu.RUnlock()
 	if s.capacity <= 0 {
 		return lease, false
 	}
+	if ref := s.tryRetain(key); ref != nil {
+		if ref.block != block {
+			recycleOuterLeafDecodedBlock(block)
+		}
+		lease.ref = ref
+		return lease, true
+	}
 	if !s.shouldAdmit(key) {
 		return lease, false
+	}
+	// Recheck after admission; another goroutine may have inserted while we were
+	// outside the shard lock.
+	if ref := s.tryRetain(key); ref != nil {
+		if ref.block != block {
+			recycleOuterLeafDecodedBlock(block)
+		}
+		lease.ref = ref
+		return lease, true
 	}
 
 	s.mu.Lock()
@@ -340,6 +343,26 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 		releaseEvicted.release()
 	}
 	return lease, lease.ref != nil
+}
+
+func (s *outerLeafBlockCacheShard) tryRetain(key outerLeafBlockKey) *outerLeafBlockRef {
+	if s == nil {
+		return nil
+	}
+	// Fast-path existing keys without taking shard write lock.
+	s.mu.RLock()
+	idx, ok := s.entries[key]
+	if !ok {
+		s.mu.RUnlock()
+		return nil
+	}
+	ref := s.nodes[idx].ref
+	if ref == nil || !ref.retain() {
+		s.mu.RUnlock()
+		return nil
+	}
+	s.mu.RUnlock()
+	return ref
 }
 
 func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
