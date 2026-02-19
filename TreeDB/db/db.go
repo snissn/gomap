@@ -1808,9 +1808,11 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	tr := tree.New(idx.pager, newValueReader(state.ValueLogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, nil, nil), state.RootPageID)
+	reader := newValueReader(state.ValueLogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, nil, nil)
+	tr := tree.New(idx.pager, reader, state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
+	defer (&reader).releaseDecodeContext()
 
 	// Collect pages in the old tree so they can be retired after the swap.
 	retired, err := tr.CollectPageIDs()
