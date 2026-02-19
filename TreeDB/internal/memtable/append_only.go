@@ -24,18 +24,21 @@ const (
 	appendOnlyPointerGrowCutoff      = 1 << 15
 	appendOnlyEntryPoolMaxCap        = 1 << 20
 	appendOnlyIteratorPoolMaxCap     = 1 << 20
+	appendOnlyReusableKeyMaxCap      = 1 << 10
+	appendOnlyReusableValueMaxCap    = 1 << 16
 )
 
 var appendOnlyEntryPool sync.Pool
 var appendOnlyIteratorPool sync.Pool
 
 type appendOnlyEntry struct {
-	key       []byte
-	value     []byte
-	ptr       page.ValuePtr
-	inlineKey [appendOnlyInlineKeyLen]byte
-	flags     byte
-	keyInline bool
+	key        []byte
+	value      []byte
+	ptr        page.ValuePtr
+	inlineKey  [appendOnlyInlineKeyLen]byte
+	flags      byte
+	keyInline  bool
+	valueOwned bool
 }
 
 type AppendOnly struct {
@@ -148,6 +151,23 @@ func cloneBytes(src []byte) []byte {
 	return dst
 }
 
+func cloneOrReuseBytes(dst, src []byte, maxCap int) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	if maxCap <= 0 {
+		maxCap = len(src)
+	}
+	if cap(dst) >= len(src) && cap(dst) <= maxCap {
+		out := dst[:len(src)]
+		copy(out, src)
+		return out
+	}
+	out := make([]byte, len(src))
+	copy(out, src)
+	return out
+}
+
 func appendOnlyNextCapacity(current int, flags byte) int {
 	if current < appendOnlyMinInitialEntries {
 		return appendOnlyMinInitialEntries
@@ -249,25 +269,29 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	idx := m.count
 	m.count++
 	ent := &m.entries[idx]
-	ent.key = nil
-	ent.value = nil
 	ent.ptr = ptr
 	ent.flags = flags
 	ent.keyInline = false
 	if steal {
 		ent.key = key
 		ent.value = value
+		ent.valueOwned = false
 	} else {
 		if len(key) == appendOnlyInlineKeyLen {
 			copy(ent.inlineKey[:], key)
 			ent.keyInline = true
 		} else {
-			ent.key = cloneBytes(key)
+			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
 		}
-		ent.value = cloneBytes(value)
+		if !ent.valueOwned {
+			ent.value = nil
+		}
+		ent.value = cloneOrReuseBytes(ent.value, value, appendOnlyReusableValueMaxCap)
+		ent.valueOwned = ent.value != nil
 	}
 	if flags&node.FlagTombstone != 0 {
 		ent.value = nil
+		ent.valueOwned = false
 		ent.ptr = page.ValuePtr{}
 	}
 	k := appendOnlyEntryKey(ent)
@@ -469,7 +493,26 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := 0; i < m.count; i++ {
-		m.entries[i] = appendOnlyEntry{}
+		ent := &m.entries[i]
+		ownedValue := ent.valueOwned
+		ent.ptr = page.ValuePtr{}
+		ent.flags = 0
+		ent.keyInline = false
+		ent.valueOwned = false
+		if cap(ent.key) > appendOnlyReusableKeyMaxCap {
+			ent.key = nil
+		} else if ent.key != nil {
+			ent.key = ent.key[:0]
+		}
+		if cap(ent.value) > appendOnlyReusableValueMaxCap {
+			ent.value = nil
+		} else if ent.value != nil {
+			if ownedValue {
+				ent.value = ent.value[:0]
+			} else {
+				ent.value = nil
+			}
+		}
 	}
 	clear(m.latest)
 	clear(m.latest64)
