@@ -47,6 +47,9 @@ jobs:
           GATE_MIN_RATIO_BATCH_WRITE_STEADY: 0.70
           # Temporary floor while v2 prefix_scan optimization work tracks in #490.
           GATE_MIN_RATIO_PREFIX_SCAN: 0.05
+          # Anti-noise pacing to reduce transient CV spikes on shared CI hosts.
+          SLEEP_BETWEEN_CASES_SEC: 1
+          SLEEP_BETWEEN_RUNS_SEC: 1
         run: |
           ./scripts/outerleaf_v2_perf_gate.sh
 
