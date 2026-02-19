@@ -14818,9 +14818,12 @@ func (b *Batch) writeBypass(sync bool) error {
 		queueRanges   []keyRange
 		overlaps      bool
 	)
+	view := b.db.retainMemtableView()
+	if view != nil {
+		defer b.db.releaseMemtableView(view)
+	}
 
 	b.db.mu.RLock()
-	view := b.db.memtables.Load()
 	overlaps = rangesOverlap(batchRange, mutableRange)
 	if view != nil {
 		mutables = view.mutables
