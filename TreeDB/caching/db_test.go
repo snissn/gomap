@@ -246,7 +246,9 @@ func (m *MockBackend) Has(key []byte) (bool, error) {
 func (m *MockBackend) Set(key, val []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.data[string(key)] = val
+	valCopy := make([]byte, len(val))
+	copy(valCopy, val)
+	m.data[string(key)] = valCopy
 }
 
 func (m *MockBackend) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
@@ -362,7 +364,9 @@ func (b *MockBatch) SetOps(ops []batch.Entry) error {
 		if op.Type == batch.OpDelete {
 			delete(b.mb.data, string(op.Key))
 		} else {
-			b.mb.data[string(op.Key)] = op.Value
+			valCopy := make([]byte, len(op.Value))
+			copy(valCopy, op.Value)
+			b.mb.data[string(op.Key)] = valCopy
 		}
 	}
 	return nil

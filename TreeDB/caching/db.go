@@ -2771,6 +2771,13 @@ func (db *DB) newBackendBatchWithSize(size int) batch.Interface {
 	if size < 0 {
 		size = 0
 	}
+	maxSize := flushBackendBatchInitEntries
+	if db != nil && db.flushBackendInitEntries > 0 {
+		maxSize = db.flushBackendInitEntries
+	}
+	if maxSize > 0 && size > maxSize {
+		size = maxSize
+	}
 	if sizer, ok := db.backend.(batchSizer); ok {
 		return sizer.NewBatchWithSize(size)
 	}
@@ -3407,7 +3414,15 @@ func (db *DB) retainMemtableView() *memtableView {
 		for {
 			n := view.refs.Load()
 			if n == 0 {
-				break
+				// Self-heal tests/edge cases that publish a view without the
+				// baseline published reference.
+				if db.memtables.Load() != view {
+					break
+				}
+				if !view.refs.CompareAndSwap(0, 1) {
+					continue
+				}
+				n = 1
 			}
 			if view.refs.CompareAndSwap(n, n+1) {
 				return view
