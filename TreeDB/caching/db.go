@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -44,12 +45,14 @@ var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
 
-var valueLogEligiblePool sync.Pool // stores []int
-var valueLogRecordPool sync.Pool   // stores []valuelog.Record
-var valueLogKeyPool sync.Pool      // stores [][]byte
-var valueLogPtrPool sync.Pool      // stores []page.ValuePtr
-var outerLeafEntryPool sync.Pool   // stores []outerleaf.Entry
-var outerLeafArenaPool sync.Pool   // stores []byte
+var valueLogEligiblePool sync.Pool                          // stores []int
+var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
+var valueLogKeyPool sync.Pool                               // stores [][]byte
+var valueLogPtrPool sync.Pool                               // stores []page.ValuePtr
+var outerLeafEntryPool sync.Pool                            // stores []outerleaf.Entry
+var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
+var outerLeafArenaLeaseMu sync.Mutex
+var outerLeafArenaLeases [outerLeafArenaClassCount][][]byte
 var outerLeafBlobRefScratchPool sync.Pool
 var outerLeafEncoderPool sync.Pool // stores *outerleaf.Encoder
 var valueLogPreparedBodyPool sync.Pool
@@ -61,6 +64,10 @@ var valueLogKeyLeases [][][]byte
 const (
 	maxValueLogKeyLeaseCount = 64
 	maxValueLogKeyLeaseCap   = 1 << 20
+	outerLeafArenaMinShift   = 12
+	outerLeafArenaMaxShift   = 24
+	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
+	maxOuterLeafArenaLeases  = 64
 )
 
 type vlogPreparedFrameBody struct {
@@ -188,22 +195,102 @@ func putOuterLeafEntries(s []outerleaf.Entry) {
 	outerLeafEntryPool.Put(s[:0])
 }
 
+func outerLeafArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxOuterLeafArenaPoolCap {
+		return 0, 0, false
+	}
+	minCap := 1 << outerLeafArenaMinShift
+	if capacity <= minCap {
+		return 0, minCap, true
+	}
+	classCap = 1 << uint(bits.Len(uint(capacity-1)))
+	if classCap < minCap {
+		classCap = minCap
+	}
+	if classCap > maxOuterLeafArenaPoolCap {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - outerLeafArenaMinShift
+	if idx < 0 || idx >= outerLeafArenaClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func outerLeafArenaClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << outerLeafArenaMinShift
+	if capacity < minCap || capacity > maxOuterLeafArenaPoolCap {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - outerLeafArenaMinShift
+	if idx < 0 || idx >= outerLeafArenaClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func outerLeafArenaMaxReuseCap(capacity int) int {
+	if capacity <= 0 {
+		return 1 << outerLeafArenaMinShift
+	}
+	maxCap := capacity * 8
+	if maxCap < 1<<20 {
+		maxCap = 1 << 20
+	}
+	if maxCap > maxOuterLeafArenaPoolCap {
+		maxCap = maxOuterLeafArenaPoolCap
+	}
+	return maxCap
+}
+
 func getOuterLeafArena(capacity int) []byte {
 	if capacity < 0 {
 		capacity = 0
 	}
-	if v := outerLeafArenaPool.Get(); v != nil {
-		if s, ok := v.([]byte); ok {
-			maxCap := capacity * 4
-			if maxCap < 1<<20 {
-				maxCap = 1 << 20
+	idx, classCap, ok := outerLeafArenaClassForLen(capacity)
+	if !ok {
+		return make([]byte, 0, capacity)
+	}
+	maxReuseCap := outerLeafArenaMaxReuseCap(capacity)
+	maxIdx, _, maxOK := outerLeafArenaClassForLen(maxReuseCap)
+	if !maxOK {
+		maxIdx = idx
+	}
+
+	outerLeafArenaLeaseMu.Lock()
+	for bucket := idx; bucket <= maxIdx; bucket++ {
+		leases := outerLeafArenaLeases[bucket]
+		if n := len(leases); n > 0 {
+			buf := leases[n-1]
+			outerLeafArenaLeases[bucket][n-1] = nil
+			outerLeafArenaLeases[bucket] = leases[:n-1]
+			outerLeafArenaLeaseMu.Unlock()
+			if cap(buf) >= capacity {
+				return buf[:0]
 			}
-			if cap(s) >= capacity && cap(s) <= maxCap {
+			if capIdx, ok := outerLeafArenaClassForCap(cap(buf)); ok {
+				outerLeafArenaPools[capIdx].Put(buf[:0])
+			}
+			return make([]byte, 0, classCap)
+		}
+	}
+	outerLeafArenaLeaseMu.Unlock()
+	for bucket := idx; bucket <= maxIdx; bucket++ {
+		if v := outerLeafArenaPools[bucket].Get(); v != nil {
+			if s, ok := v.([]byte); ok && cap(s) >= capacity && cap(s) <= maxReuseCap {
 				return s[:0]
 			}
 		}
 	}
-	return make([]byte, 0, capacity)
+	return make([]byte, 0, classCap)
 }
 
 func putOuterLeafArena(buf []byte) {
@@ -213,7 +300,19 @@ func putOuterLeafArena(buf []byte) {
 	if cap(buf) > maxOuterLeafArenaPoolCap {
 		return
 	}
-	outerLeafArenaPool.Put(buf[:0])
+	idx, ok := outerLeafArenaClassForCap(cap(buf))
+	if !ok {
+		return
+	}
+	buf = buf[:0]
+	outerLeafArenaLeaseMu.Lock()
+	if len(outerLeafArenaLeases[idx]) < maxOuterLeafArenaLeases {
+		outerLeafArenaLeases[idx] = append(outerLeafArenaLeases[idx], buf)
+		outerLeafArenaLeaseMu.Unlock()
+		return
+	}
+	outerLeafArenaLeaseMu.Unlock()
+	outerLeafArenaPools[idx].Put(buf)
 }
 
 func getOuterLeafBlobRefScratch() *[outerLeafBlobRefStackScratchCap]byte {
@@ -1361,6 +1460,18 @@ type deferredFenceCollapseState struct {
 	prevKey []byte
 }
 
+func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
+	if backendBatch == nil || n <= 0 {
+		return
+	}
+	type reserveHint interface {
+		Reserve(int)
+	}
+	if r, ok := backendBatch.(reserveHint); ok {
+		r.Reserve(n)
+	}
+}
+
 func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool, laneID int, fenceState *deferredFenceCollapseState) error {
 	if db == nil {
 		return nil
@@ -1391,6 +1502,11 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	dv, _ := backendBatch.(deleteViewer)
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
+	reserveHint := memLen
+	if db != nil && db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
+		reserveHint = db.flushBackendMaxEntries
+	}
+	reserveBackendBatchOps(backendBatch, reserveHint)
 
 	var ptrKeys [][]byte
 	var ptrVals [][]byte
@@ -1666,6 +1782,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		durability = journalDurabilitySync
 	}
 	ptrCap := estimateUnitRunEntries(unitRuns, chunkCap)
+	reserveHint := ptrCap
+	if db != nil && db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
+		reserveHint = db.flushBackendMaxEntries
+	}
+	reserveBackendBatchOps(backendBatch, reserveHint)
 	if ptrCap > maxDeferredInlineGroupKeys {
 		ptrCap = maxDeferredInlineGroupKeys
 	}
@@ -4818,69 +4939,143 @@ func (db *DB) publishVlogDictPrepareResult(task vlogDictPrepareTask, res vlogDic
 }
 
 const (
-	maxEntryPoolCap     = 1 << 20
-	maxEntryRunsPoolCap = 1 << 14
-	maxUnitRunsPoolCap  = 1 << 8
-	maxOpMergeHeapCap   = 1 << 8
-	maxEntrySliceLeases = 64
+	maxEntryPoolCap              = 1 << 20
+	maxEntryRunsPoolCap          = 1 << 14
+	maxUnitRunsPoolCap           = 1 << 8
+	maxOpMergeHeapCap            = 1 << 8
+	entrySliceLeaseMinShift      = 4
+	entrySliceLeaseMaxShift      = 20
+	entrySliceLeaseClassCount    = entrySliceLeaseMaxShift - entrySliceLeaseMinShift + 1
+	maxEntrySliceLeasesPerBucket = 128
 )
 
-var entrySlicePool sync.Pool
+var entrySlicePools [entrySliceLeaseClassCount]sync.Pool
 var entryRunsPool sync.Pool
 var unitRunsPool sync.Pool
 var opMergeHeapPool sync.Pool
 var entrySliceLeaseMu sync.Mutex
-var entrySliceLeases [][]batch.Entry
+var entrySliceLeases [entrySliceLeaseClassCount][][]batch.Entry
+
+func entrySliceLeaseClassForLen(capacity int) (idx int, classCap int, ok bool) {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxEntryPoolCap {
+		return 0, 0, false
+	}
+	minCap := 1 << entrySliceLeaseMinShift
+	if capacity <= minCap {
+		return 0, minCap, true
+	}
+	classCap = 1 << uint(bits.Len(uint(capacity-1)))
+	if classCap < minCap {
+		classCap = minCap
+	}
+	if classCap > maxEntryPoolCap {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - entrySliceLeaseMinShift
+	if idx < 0 || idx >= entrySliceLeaseClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func entrySliceLeaseClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << entrySliceLeaseMinShift
+	if capacity < minCap || capacity > maxEntryPoolCap {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - entrySliceLeaseMinShift
+	if idx < 0 || idx >= entrySliceLeaseClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func entrySliceMaxReuseCap(capacity int) int {
+	if capacity <= 0 {
+		return 1 << entrySliceLeaseMinShift
+	}
+	maxCap := capacity * 8
+	if maxCap < 1<<12 {
+		maxCap = 1 << 12
+	}
+	if maxCap > maxEntryPoolCap {
+		maxCap = maxEntryPoolCap
+	}
+	return maxCap
+}
 
 func getEntrySlice(capacity int) []batch.Entry {
 	if capacity < 0 {
 		capacity = 0
 	}
-	entrySliceLeaseMu.Lock()
-	for i := len(entrySliceLeases) - 1; i >= 0; i-- {
-		s := entrySliceLeases[i]
-		if cap(s) < capacity {
-			continue
-		}
-		last := len(entrySliceLeases) - 1
-		entrySliceLeases[i] = entrySliceLeases[last]
-		entrySliceLeases[last] = nil
-		entrySliceLeases = entrySliceLeases[:last]
-		entrySliceLeaseMu.Unlock()
-		return s[:0]
-	}
-	entrySliceLeaseMu.Unlock()
-	if capacity > maxEntryPoolCap {
+	idx, classCap, ok := entrySliceLeaseClassForLen(capacity)
+	if !ok {
 		return make([]batch.Entry, 0, capacity)
 	}
-	if v := entrySlicePool.Get(); v != nil {
-		s := v.([]batch.Entry)
-		if cap(s) >= capacity {
-			return s[:0]
-		}
-		// Keep smaller pooled slices available for callers with lower capacities.
-		entrySlicePool.Put(s[:0])
+	maxReuseCap := entrySliceMaxReuseCap(capacity)
+	maxIdx, _, maxOK := entrySliceLeaseClassForLen(maxReuseCap)
+	if !maxOK {
+		maxIdx = idx
 	}
-	return make([]batch.Entry, 0, capacity)
+	entrySliceLeaseMu.Lock()
+	for bucket := idx; bucket <= maxIdx; bucket++ {
+		leases := entrySliceLeases[bucket]
+		if n := len(leases); n > 0 {
+			s := leases[n-1]
+			entrySliceLeases[bucket][n-1] = nil
+			entrySliceLeases[bucket] = leases[:n-1]
+			entrySliceLeaseMu.Unlock()
+			if cap(s) >= capacity {
+				return s[:0]
+			}
+			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
+				entrySlicePools[capIdx].Put(s[:0])
+			}
+			return make([]batch.Entry, 0, classCap)
+		}
+	}
+	entrySliceLeaseMu.Unlock()
+	for bucket := idx; bucket <= maxIdx; bucket++ {
+		if v := entrySlicePools[bucket].Get(); v != nil {
+			s := v.([]batch.Entry)
+			if cap(s) >= capacity && cap(s) <= maxReuseCap {
+				return s[:0]
+			}
+		}
+	}
+	return make([]batch.Entry, 0, classCap)
 }
 
 func putEntrySlice(entries []batch.Entry) {
 	if entries == nil {
 		return
 	}
+	if cap(entries) > maxEntryPoolCap {
+		return
+	}
 	full := entries[:cap(entries)]
 	clear(full)
+	idx, ok := entrySliceLeaseClassForCap(cap(entries))
+	if !ok {
+		return
+	}
+	entries = entries[:0]
 	entrySliceLeaseMu.Lock()
-	if cap(entries) <= maxEntryPoolCap && len(entrySliceLeases) < maxEntrySliceLeases {
-		entrySliceLeases = append(entrySliceLeases, entries[:0])
+	if len(entrySliceLeases[idx]) < maxEntrySliceLeasesPerBucket {
+		entrySliceLeases[idx] = append(entrySliceLeases[idx], entries)
 		entrySliceLeaseMu.Unlock()
 		return
 	}
 	entrySliceLeaseMu.Unlock()
-	if cap(entries) > maxEntryPoolCap {
-		return
-	}
-	entrySlicePool.Put(entries[:0])
+	entrySlicePools[idx].Put(entries)
 }
 
 func getEntryRuns(capacity int) [][]batch.Entry {
@@ -11019,6 +11214,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			sizeHint = backendEntriesCap
 		}
 		backendBatch := db.newBackendBatchWithSize(sizeHint)
+		reserveChunkOps := totalLen
+		if reserveChunkOps > backendEntriesCap {
+			reserveChunkOps = backendEntriesCap
+		}
+		reserveBackendBatchOps(backendBatch, reserveChunkOps)
 		flushStart := time.Now()
 		vlogFlushed := false
 		backendPendingOps := 0
@@ -11065,6 +11265,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				return err
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
+			reserveBackendBatchOps(backendBatch, reserveChunkOps)
 			psv, _ = backendBatch.(ptrSetterView)
 			ps, _ = backendBatch.(ptrSetter)
 			backendPendingOps = 0
@@ -11287,6 +11488,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		sizeHint = backendEntriesCap
 	}
 	backendBatch := db.newBackendBatchWithSize(sizeHint)
+	reserveChunkOps := totalLen
+	if reserveChunkOps > backendEntriesCap {
+		reserveChunkOps = backendEntriesCap
+	}
+	reserveBackendBatchOps(backendBatch, reserveChunkOps)
 	flushStart := time.Now()
 	vlogFlushed := false
 	backendPendingOps := 0
@@ -11354,6 +11560,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				return err
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
+			reserveBackendBatchOps(backendBatch, reserveChunkOps)
 			psv, _ = backendBatch.(ptrSetterView)
 			ps, _ = backendBatch.(ptrSetter)
 			backendPendingOps = 0
@@ -11642,6 +11849,11 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			sizeHint = backendEntriesCap
 		}
 		backendBatch := db.newBackendBatchWithSize(sizeHint)
+		reserveChunkOps := memLen
+		if reserveChunkOps > backendEntriesCap {
+			reserveChunkOps = backendEntriesCap
+		}
+		reserveBackendBatchOps(backendBatch, reserveChunkOps)
 		vlogFlushed := false
 		backendPendingOps := 0
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
@@ -11734,6 +11946,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				backendBatch = nil
 
 				backendBatch = db.newBackendBatchWithSize(sizeHint)
+				reserveBackendBatchOps(backendBatch, reserveChunkOps)
 				sv, _ = backendBatch.(setViewer)
 				dv, _ = backendBatch.(deleteViewer)
 				psv, _ = backendBatch.(ptrSetterView)

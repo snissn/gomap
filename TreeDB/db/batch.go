@@ -77,6 +77,14 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	return b.batch.SetOps(ops)
 }
 
+// Reserve forwards best-effort preallocation hints to the internal batch.
+func (b *Batch) Reserve(n int) {
+	if b == nil || b.batch == nil || n <= 0 {
+		return
+	}
+	b.batch.Reserve(n)
+}
+
 func (b *Batch) Write() error {
 	return b.write(false)
 }

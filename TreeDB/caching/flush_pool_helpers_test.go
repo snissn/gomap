@@ -11,7 +11,9 @@ import (
 )
 
 type pointerBatch struct {
-	entries []batch.Entry
+	entries      []batch.Entry
+	reserveCalls int
+	lastReserve  int
 }
 
 func (b *pointerBatch) Set(key, value []byte) error {
@@ -62,6 +64,11 @@ func (b *pointerBatch) Replay(fn func(batch.Entry) error) error {
 }
 
 func (b *pointerBatch) GetByteSize() (int, error) { return len(b.entries), nil }
+
+func (b *pointerBatch) Reserve(n int) {
+	b.reserveCalls++
+	b.lastReserve = n
+}
 
 func TestPutEntryRunsClearsReferences(t *testing.T) {
 	runs := make([][]batch.Entry, 2)
@@ -174,6 +181,12 @@ func TestFlushDeferredValueLogUnitsPointerOnly(t *testing.T) {
 	if pendingOps != len(entries) {
 		t.Fatalf("pendingOps=%d want=%d", pendingOps, len(entries))
 	}
+	if backendBatch.reserveCalls == 0 {
+		t.Fatalf("expected reserve hint before deferred flush loop")
+	}
+	if backendBatch.lastReserve < len(entries) {
+		t.Fatalf("reserve hint=%d want >= %d", backendBatch.lastReserve, len(entries))
+	}
 
 	if len(backendBatch.entries) != len(entries) {
 		t.Fatalf("backend batch entries=%d want=%d", len(backendBatch.entries), len(entries))
@@ -182,6 +195,32 @@ func TestFlushDeferredValueLogUnitsPointerOnly(t *testing.T) {
 		if !e.IsPtr {
 			t.Fatalf("entry %d expected pointer op", i)
 		}
+	}
+}
+
+func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
+	mt := memtable.NewAppendOnlyWithCapacity(0)
+	mt.Set([]byte("a"), []byte("va"))
+	mt.Set([]byte("b"), []byte("vb"))
+	mt.Freeze()
+
+	iter := mt.NewIterator(nil, nil)
+	backendBatch := &pointerBatch{}
+	db := &DB{valueLogThreshold: page.DefaultInlineThreshold}
+	const reserveHint = 7
+
+	if err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, false, 0, nil); err != nil {
+		_ = iter.Close()
+		t.Fatalf("flushDeferredValueLogMemtable: %v", err)
+	}
+	if err := iter.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+	if backendBatch.reserveCalls == 0 {
+		t.Fatalf("expected reserve hint before deferred memtable flush loop")
+	}
+	if backendBatch.lastReserve != reserveHint {
+		t.Fatalf("reserve hint=%d want=%d", backendBatch.lastReserve, reserveHint)
 	}
 }
 
@@ -231,26 +270,103 @@ func TestValueLogKeyLeaseRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEntrySliceLeaseRoundTrip(t *testing.T) {
+func resetOuterLeafArenaLeasesForTest(t *testing.T) {
+	t.Helper()
+	outerLeafArenaLeaseMu.Lock()
+	saved := outerLeafArenaLeases
+	outerLeafArenaLeases = [outerLeafArenaClassCount][][]byte{}
+	outerLeafArenaLeaseMu.Unlock()
+	t.Cleanup(func() {
+		outerLeafArenaLeaseMu.Lock()
+		outerLeafArenaLeases = saved
+		outerLeafArenaLeaseMu.Unlock()
+	})
+}
+
+func TestOuterLeafArenaLeaseRoundTripWithOversizeReuse(t *testing.T) {
+	resetOuterLeafArenaLeasesForTest(t)
+
+	arena := getOuterLeafArena(256 << 10)
+	if cap(arena) < 256<<10 {
+		t.Fatalf("arena cap=%d want >= %d", cap(arena), 256<<10)
+	}
+	arena = arena[:1]
+	arena[0] = 1
+	first := &arena[0]
+	capFirst := cap(arena)
+	putOuterLeafArena(arena[:0])
+
+	// Request a smaller size; policy should allow bounded oversize reuse.
+	got := getOuterLeafArena(192 << 10)
+	if cap(got) < 192<<10 {
+		t.Fatalf("reused arena cap=%d want >= %d", cap(got), 192<<10)
+	}
+	got = got[:1]
+	if &got[0] != first {
+		t.Fatalf("expected leased outer-leaf arena reuse")
+	}
+	if cap(got) != capFirst {
+		t.Fatalf("reused cap=%d want=%d", cap(got), capFirst)
+	}
+}
+
+func TestOuterLeafArenaReuseBoundCapsOversizedArena(t *testing.T) {
+	resetOuterLeafArenaLeasesForTest(t)
+
+	big := make([]byte, 0, 8<<20)
+	putOuterLeafArena(big)
+	bigIdx, ok := outerLeafArenaClassForCap(cap(big))
+	if !ok {
+		t.Fatalf("expected class for cap=%d", cap(big))
+	}
+	outerLeafArenaLeaseMu.Lock()
+	before := len(outerLeafArenaLeases[bigIdx])
+	outerLeafArenaLeaseMu.Unlock()
+	if before == 0 {
+		t.Fatalf("expected big arena to be leased")
+	}
+
+	got := getOuterLeafArena(32 << 10)
+	if cap(got) > 1<<20 {
+		t.Fatalf("small request reused oversized arena cap=%d (>1MiB bound)", cap(got))
+	}
+	outerLeafArenaLeaseMu.Lock()
+	after := len(outerLeafArenaLeases[bigIdx])
+	outerLeafArenaLeaseMu.Unlock()
+	if after != before {
+		t.Fatalf("expected oversized lease bucket unchanged: before=%d after=%d", before, after)
+	}
+}
+
+func resetEntrySliceLeasesForTest(t *testing.T) {
+	t.Helper()
 	entrySliceLeaseMu.Lock()
 	saved := entrySliceLeases
-	entrySliceLeases = nil
+	entrySliceLeases = [entrySliceLeaseClassCount][][]batch.Entry{}
 	entrySliceLeaseMu.Unlock()
 	t.Cleanup(func() {
 		entrySliceLeaseMu.Lock()
 		entrySliceLeases = saved
 		entrySliceLeaseMu.Unlock()
 	})
+}
+
+func TestEntrySliceLeaseRoundTrip(t *testing.T) {
+	resetEntrySliceLeasesForTest(t)
 
 	entries := make([]batch.Entry, 1, 256)
 	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
 	first := &entries[0]
+	leaseIdx, ok := entrySliceLeaseClassForCap(cap(entries))
+	if !ok {
+		t.Fatalf("expected lease class for cap=%d", cap(entries))
+	}
 	putEntrySlice(entries)
 
 	entrySliceLeaseMu.Lock()
-	if len(entrySliceLeases) != 1 {
+	if len(entrySliceLeases[leaseIdx]) != 1 {
 		entrySliceLeaseMu.Unlock()
-		t.Fatalf("expected one leased entry slice, got %d", len(entrySliceLeases))
+		t.Fatalf("expected one leased entry slice in bucket %d, got %d", leaseIdx, len(entrySliceLeases[leaseIdx]))
 	}
 	entrySliceLeaseMu.Unlock()
 
@@ -258,6 +374,50 @@ func TestEntrySliceLeaseRoundTrip(t *testing.T) {
 	got = append(got, batch.Entry{})
 	if &got[0] != first {
 		t.Fatalf("expected leased entry-slice reuse")
+	}
+}
+
+func TestEntrySliceLeaseRoundTripWithOversizeReuse(t *testing.T) {
+	resetEntrySliceLeasesForTest(t)
+
+	entries := make([]batch.Entry, 1, 512)
+	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
+	first := &entries[0]
+	putEntrySlice(entries)
+
+	got := getEntrySlice(320)
+	got = append(got, batch.Entry{})
+	if &got[0] != first {
+		t.Fatalf("expected bounded oversize lease reuse")
+	}
+}
+
+func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
+	resetEntrySliceLeasesForTest(t)
+
+	big := make([]batch.Entry, 0, 1<<18)
+	putEntrySlice(big)
+	bigIdx, ok := entrySliceLeaseClassForCap(cap(big))
+	if !ok {
+		t.Fatalf("expected lease class for cap=%d", cap(big))
+	}
+	entrySliceLeaseMu.Lock()
+	before := len(entrySliceLeases[bigIdx])
+	entrySliceLeaseMu.Unlock()
+	if before == 0 {
+		t.Fatalf("expected oversized entry-slice lease to be retained")
+	}
+
+	got := getEntrySlice(32)
+	if cap(got) > 1<<12 {
+		t.Fatalf("small request reused oversized lease cap=%d (>4Ki entries bound)", cap(got))
+	}
+
+	entrySliceLeaseMu.Lock()
+	after := len(entrySliceLeases[bigIdx])
+	entrySliceLeaseMu.Unlock()
+	if after != before {
+		t.Fatalf("expected oversized lease bucket unchanged: before=%d after=%d", before, after)
 	}
 }
 
