@@ -13265,8 +13265,37 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	backendRangeKnown := db.backendRangeKnown
 	backendRange := db.backendRange
+	queueLenLocked := len(db.queue)
 
 	db.mu.Unlock()
+
+	// Backend-only fast path: with an empty immutable queue after rotation there
+	// are no in-memory iterator sources to merge. Avoid memtable view retain/release
+	// and construct a backend iterator directly.
+	if queueLenLocked == 0 {
+		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
+			if iteratorDebugEnabled.Load() {
+				return &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
+			}
+			return it
+		}
+		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
+			out := merging.Iterator(&emptyIterator{start: start, end: end})
+			return decorate(out, 0), nil
+		}
+		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
+			diskIter, err := db.backend.Iterator(nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			return decorate(diskIter, 1), nil
+		}
+		diskIter, err := db.backend.Iterator(start, end)
+		if err != nil {
+			return nil, err
+		}
+		return decorate(diskIter, 1), nil
+	}
 
 	view := db.retainMemtableView()
 	releaseView := true
