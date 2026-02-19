@@ -2,7 +2,9 @@ package pager
 
 import "fmt"
 
-const minAsyncPregrowChunkSize = 1 << 20 // 1MiB
+// Keep async pre-grow enabled for the default TreeDB main chunk size (256KiB)
+// while still avoiding excessive churn for very small side-store chunks.
+const minAsyncPregrowChunkSize = 256 << 10 // 256KiB
 
 func (p *Pager) startGrower() {
 	p.growStop = make(chan struct{})
