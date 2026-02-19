@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -44,17 +45,30 @@ var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
 
-var valueLogEligiblePool sync.Pool // stores []int
-var valueLogRecordPool sync.Pool   // stores []valuelog.Record
-var valueLogKeyPool sync.Pool      // stores [][]byte
-var valueLogPtrPool sync.Pool      // stores []page.ValuePtr
-var outerLeafEntryPool sync.Pool   // stores []outerleaf.Entry
-var outerLeafArenaPool sync.Pool   // stores []byte
+var valueLogEligiblePool sync.Pool                          // stores []int
+var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
+var valueLogKeyPool sync.Pool                               // stores [][]byte
+var valueLogPtrPool sync.Pool                               // stores []page.ValuePtr
+var outerLeafEntryPool sync.Pool                            // stores []outerleaf.Entry
+var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
+var outerLeafArenaLeaseMu sync.Mutex
+var outerLeafArenaLeases [outerLeafArenaClassCount][][]byte
 var outerLeafBlobRefScratchPool sync.Pool
 var outerLeafEncoderPool sync.Pool // stores *outerleaf.Encoder
 var valueLogPreparedBodyPool sync.Pool
 var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
+var valueLogKeyLeaseMu sync.Mutex
+var valueLogKeyLeases [][][]byte
+
+const (
+	maxValueLogKeyLeaseCount = 64
+	maxValueLogKeyLeaseCap   = 1 << 20
+	outerLeafArenaMinShift   = 12
+	outerLeafArenaMaxShift   = 24
+	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
+	maxOuterLeafArenaLeases  = 64
+)
 
 type vlogPreparedFrameBody struct {
 	buf []byte
@@ -181,22 +195,106 @@ func putOuterLeafEntries(s []outerleaf.Entry) {
 	outerLeafEntryPool.Put(s[:0])
 }
 
+func outerLeafArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxOuterLeafArenaPoolCap {
+		return 0, 0, false
+	}
+	minCap := 1 << outerLeafArenaMinShift
+	if capacity <= minCap {
+		return 0, minCap, true
+	}
+	classCap = 1 << uint(bits.Len(uint(capacity-1)))
+	if classCap < minCap {
+		classCap = minCap
+	}
+	if classCap > maxOuterLeafArenaPoolCap {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - outerLeafArenaMinShift
+	if idx < 0 || idx >= outerLeafArenaClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func outerLeafArenaClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << outerLeafArenaMinShift
+	if capacity < minCap || capacity > maxOuterLeafArenaPoolCap {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - outerLeafArenaMinShift
+	if idx < 0 || idx >= outerLeafArenaClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func outerLeafArenaMaxReuseCap(capacity int) int {
+	if capacity <= 0 {
+		return 1 << outerLeafArenaMinShift
+	}
+	// Clamp before multiplication to avoid potential integer overflow.
+	if capacity > maxOuterLeafArenaPoolCap/8 {
+		return maxOuterLeafArenaPoolCap
+	}
+	maxCap := capacity * 8
+	if maxCap < 1<<20 {
+		maxCap = 1 << 20
+	}
+	if maxCap > maxOuterLeafArenaPoolCap {
+		maxCap = maxOuterLeafArenaPoolCap
+	}
+	return maxCap
+}
+
 func getOuterLeafArena(capacity int) []byte {
 	if capacity < 0 {
 		capacity = 0
 	}
-	if v := outerLeafArenaPool.Get(); v != nil {
-		if s, ok := v.([]byte); ok {
-			maxCap := capacity * 2
-			if maxCap < 1<<20 {
-				maxCap = 1 << 20
+	idx, classCap, ok := outerLeafArenaClassForLen(capacity)
+	if !ok {
+		return make([]byte, 0, capacity)
+	}
+	maxReuseCap := outerLeafArenaMaxReuseCap(capacity)
+	maxIdx, _, maxOK := outerLeafArenaClassForLen(maxReuseCap)
+	if !maxOK {
+		maxIdx = idx
+	}
+
+	outerLeafArenaLeaseMu.Lock()
+	for bucket := idx; bucket <= maxIdx; bucket++ {
+		leases := outerLeafArenaLeases[bucket]
+		if n := len(leases); n > 0 {
+			buf := leases[n-1]
+			outerLeafArenaLeases[bucket][n-1] = nil
+			outerLeafArenaLeases[bucket] = leases[:n-1]
+			outerLeafArenaLeaseMu.Unlock()
+			if cap(buf) >= capacity {
+				return buf[:0]
 			}
-			if cap(s) >= capacity && cap(s) <= maxCap {
+			if capIdx, ok := outerLeafArenaClassForCap(cap(buf)); ok {
+				outerLeafArenaPools[capIdx].Put(buf[:0])
+			}
+			return make([]byte, 0, classCap)
+		}
+	}
+	outerLeafArenaLeaseMu.Unlock()
+	for bucket := idx; bucket <= maxIdx; bucket++ {
+		if v := outerLeafArenaPools[bucket].Get(); v != nil {
+			if s, ok := v.([]byte); ok && cap(s) >= capacity && cap(s) <= maxReuseCap {
 				return s[:0]
 			}
 		}
 	}
-	return make([]byte, 0, capacity)
+	return make([]byte, 0, classCap)
 }
 
 func putOuterLeafArena(buf []byte) {
@@ -206,7 +304,19 @@ func putOuterLeafArena(buf []byte) {
 	if cap(buf) > maxOuterLeafArenaPoolCap {
 		return
 	}
-	outerLeafArenaPool.Put(buf[:0])
+	idx, ok := outerLeafArenaClassForCap(cap(buf))
+	if !ok {
+		return
+	}
+	buf = buf[:0]
+	outerLeafArenaLeaseMu.Lock()
+	if len(outerLeafArenaLeases[idx]) < maxOuterLeafArenaLeases {
+		outerLeafArenaLeases[idx] = append(outerLeafArenaLeases[idx], buf)
+		outerLeafArenaLeaseMu.Unlock()
+		return
+	}
+	outerLeafArenaLeaseMu.Unlock()
+	outerLeafArenaPools[idx].Put(buf)
 }
 
 func getOuterLeafBlobRefScratch() *[outerLeafBlobRefStackScratchCap]byte {
@@ -302,6 +412,20 @@ func getValueLogKeys(capacity int) [][]byte {
 	if capacity < 0 {
 		capacity = 0
 	}
+	valueLogKeyLeaseMu.Lock()
+	for i := len(valueLogKeyLeases) - 1; i >= 0; i-- {
+		s := valueLogKeyLeases[i]
+		if cap(s) < capacity {
+			continue
+		}
+		last := len(valueLogKeyLeases) - 1
+		valueLogKeyLeases[i] = valueLogKeyLeases[last]
+		valueLogKeyLeases[last] = nil
+		valueLogKeyLeases = valueLogKeyLeases[:last]
+		valueLogKeyLeaseMu.Unlock()
+		return s[:0]
+	}
+	valueLogKeyLeaseMu.Unlock()
 	if v := valueLogKeyPool.Get(); v != nil {
 		if s, ok := v.([][]byte); ok {
 			if cap(s) >= capacity {
@@ -318,9 +442,16 @@ func putValueLogKeys(s [][]byte) {
 	}
 	clear(s)
 	// Avoid retaining huge slices in the pool.
-	if cap(s) > 1<<20 {
+	if cap(s) > maxValueLogKeyLeaseCap {
 		return
 	}
+	valueLogKeyLeaseMu.Lock()
+	if len(valueLogKeyLeases) < maxValueLogKeyLeaseCount {
+		valueLogKeyLeases = append(valueLogKeyLeases, s[:0])
+		valueLogKeyLeaseMu.Unlock()
+		return
+	}
+	valueLogKeyLeaseMu.Unlock()
 	valueLogKeyPool.Put(s[:0])
 }
 
@@ -1333,6 +1464,18 @@ type deferredFenceCollapseState struct {
 	prevKey []byte
 }
 
+func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
+	if backendBatch == nil || n <= 0 {
+		return
+	}
+	type reserveHint interface {
+		Reserve(int)
+	}
+	if r, ok := backendBatch.(reserveHint); ok {
+		r.Reserve(n)
+	}
+}
+
 func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool, laneID int, fenceState *deferredFenceCollapseState) error {
 	if db == nil {
 		return nil
@@ -1363,9 +1506,18 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	dv, _ := backendBatch.(deleteViewer)
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
+	reserveHint := memLen
+	if db != nil && db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
+		reserveHint = db.flushBackendMaxEntries
+	}
+	reserveBackendBatchOps(backendBatch, reserveHint)
 
 	var ptrKeys [][]byte
 	var ptrVals [][]byte
+	defer func() {
+		putValueLogKeys(ptrKeys)
+		putValueLogKeys(ptrVals)
+	}()
 	fenceMode := db.outerLeafFenceV2Enabled()
 	state := fenceState
 	if state == nil {
@@ -1435,8 +1587,8 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 				if hint > db.flushBackendInitEntries {
 					hint = db.flushBackendInitEntries
 				}
-				ptrKeys = make([][]byte, 0, hint)
-				ptrVals = make([][]byte, 0, hint)
+				ptrKeys = getValueLogKeys(hint)
+				ptrVals = getValueLogKeys(hint)
 			}
 			keyCopy := append([]byte(nil), key...)
 			valCopy := append([]byte(nil), val...)
@@ -1591,28 +1743,27 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	if chunkCap <= 0 {
 		chunkCap = 8192
 	}
-	unitRuns := make([][][]batch.Entry, len(units))
+	const maxDeferredInlineGroupKeys = 32768
+	unitRuns := getUnitRuns(len(units))
+	defer func() {
+		for i := range unitRuns {
+			for _, run := range unitRuns[i] {
+				putEntrySlice(run)
+			}
+			putEntryRuns(unitRuns[i])
+		}
+		putUnitRuns(unitRuns)
+	}()
 	for i := range units {
 		runs, _, err := buildOpRuns(units[i].mem, chunkCap)
 		if err != nil {
-			for _, built := range unitRuns {
-				for _, run := range built {
-					putEntrySlice(run)
-				}
-			}
 			return 0, err
 		}
 		unitRuns[i] = runs
 	}
-	defer func() {
-		for _, runs := range unitRuns {
-			for _, run := range runs {
-				putEntrySlice(run)
-			}
-		}
-	}()
 
-	heap := make(opMergeHeap, 0, len(unitRuns))
+	heap := getOpMergeHeap(len(unitRuns))
+	defer func() { putOpMergeHeap(heap) }()
 	for i := range unitRuns {
 		if len(unitRuns[i]) == 0 {
 			continue
@@ -1634,12 +1785,25 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	if sync {
 		durability = journalDurabilitySync
 	}
+	ptrCap := estimateUnitRunEntries(unitRuns, chunkCap)
+	reserveHint := ptrCap
+	if db != nil && db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
+		reserveHint = db.flushBackendMaxEntries
+	}
+	reserveBackendBatchOps(backendBatch, reserveHint)
+	if ptrCap > maxDeferredInlineGroupKeys {
+		ptrCap = maxDeferredInlineGroupKeys
+	}
+	ptrKeys := getValueLogKeys(ptrCap)
+	ptrVals := getValueLogKeys(ptrCap)
+	defer func() {
+		putValueLogKeys(ptrKeys)
+		putValueLogKeys(ptrVals)
+	}()
 	var (
 		backendPendingOps int
 		lastFencePtr      page.ValuePtr
 		haveFencePtr      bool
-		ptrKeys           [][]byte
-		ptrVals           [][]byte
 		vlogLane          *lane
 		dictID            uint64
 		dictIDReady       bool
@@ -1713,9 +1877,8 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		emittedGroups := uint64(0)
 		// Cap keys per inline group to keep regroup allocations bounded while
 		// still emitting large enough batches to amortize value-log append costs.
-		const maxInlineGroupKeys = 32768
-		for chunkStart := 0; chunkStart < totalKeys; chunkStart += maxInlineGroupKeys {
-			chunkEnd := chunkStart + maxInlineGroupKeys
+		for chunkStart := 0; chunkStart < totalKeys; chunkStart += maxDeferredInlineGroupKeys {
+			chunkEnd := chunkStart + maxDeferredInlineGroupKeys
 			if chunkEnd > totalKeys {
 				chunkEnd = totalKeys
 			}
@@ -1830,6 +1993,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			}
 		default:
 			if allowPointers && (db.forceValueLogPointers || len(entry.Value) > db.valueLogThresholdForKey(entry.Key)) {
+				if len(ptrKeys) >= maxDeferredInlineGroupKeys {
+					if err := flushInlinePointerGroup(); err != nil {
+						return 0, err
+					}
+				}
 				ptrKeys = append(ptrKeys, entry.Key)
 				ptrVals = append(ptrVals, entry.Value)
 			} else {
@@ -2607,6 +2775,13 @@ func (db *DB) newBackendBatchWithSize(size int) batch.Interface {
 	if size < 0 {
 		size = 0
 	}
+	maxSize := flushBackendBatchInitEntries
+	if db != nil && db.flushBackendInitEntries > 0 {
+		maxSize = db.flushBackendInitEntries
+	}
+	if maxSize > 0 && size > maxSize {
+		size = maxSize
+	}
 	if sizer, ok := db.backend.(batchSizer); ok {
 		return sizer.NewBatchWithSize(size)
 	}
@@ -2887,15 +3062,19 @@ type DB struct {
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
-	memtables          atomic.Pointer[memtableView]
-	hashSortedIndexer  *memtable.HashSortedIndexer
-	queueRanges        []keyRange
-	queueWALPaths      [][]string
-	queueValueLogPaths [][]string
-	backendRange       keyRange
-	backendRangeKnown  bool
-	backendRangeInit   sync.Once
-	backendRangeErr    error
+	memtables            atomic.Pointer[memtableView]
+	hashSortedIndexer    *memtable.HashSortedIndexer
+	appendOnlyMemPool    sync.Pool
+	appendOnlyMemLeaseMu sync.Mutex
+	appendOnlyMemLeases  []*memtable.AppendOnly
+	pendingRetiredMems   []memtable.Table
+	queueRanges          []keyRange
+	queueWALPaths        [][]string
+	queueValueLogPaths   [][]string
+	backendRange         keyRange
+	backendRangeKnown    bool
+	backendRangeInit     sync.Once
+	backendRangeErr      error
 
 	// Durability
 	lanes         []lane
@@ -3221,6 +3400,123 @@ type memtableView struct {
 	queue         []memtable.Table
 	queueShardIDs []uint16
 	queueRanges   []keyRange
+	refs          atomic.Int64
+	retiredMems   []memtable.Table
+}
+
+const maxAppendOnlyMemLeases = 256
+
+func (db *DB) retainMemtableView() *memtableView {
+	if db == nil {
+		return nil
+	}
+	for {
+		view := db.memtables.Load()
+		if view == nil {
+			return nil
+		}
+		// Fast path: published views keep a baseline ref, so this is usually one
+		// atomic add and return.
+		if n := view.refs.Add(1); n > 1 {
+			return view
+		}
+		// We observed a zero-ref view. Undo and retry unless this is still the
+		// published view, in which case self-heal by restoring baseline+caller refs.
+		view.refs.Add(-1)
+		if db.memtables.Load() != view {
+			continue
+		}
+		if view.refs.CompareAndSwap(0, 2) {
+			return view
+		}
+	}
+}
+
+func (db *DB) releaseMemtableView(view *memtableView) {
+	if db == nil || view == nil {
+		return
+	}
+	if view.refs.Add(-1) != 0 {
+		return
+	}
+	db.recycleMemtables(view.retiredMems)
+	view.retiredMems = nil
+}
+
+func (db *DB) queueRetiredMemtableLocked(mem memtable.Table) {
+	if db == nil || mem == nil {
+		return
+	}
+	db.pendingRetiredMems = append(db.pendingRetiredMems, mem)
+}
+
+func (db *DB) queueRetiredMemtablesLocked(mems []memtable.Table) {
+	if db == nil || len(mems) == 0 {
+		return
+	}
+	for _, mem := range mems {
+		db.queueRetiredMemtableLocked(mem)
+	}
+}
+
+func (db *DB) popAppendOnlyMemLease() *memtable.AppendOnly {
+	if db == nil {
+		return nil
+	}
+	db.appendOnlyMemLeaseMu.Lock()
+	defer db.appendOnlyMemLeaseMu.Unlock()
+	n := len(db.appendOnlyMemLeases)
+	if n == 0 {
+		return nil
+	}
+	mt := db.appendOnlyMemLeases[n-1]
+	db.appendOnlyMemLeases[n-1] = nil
+	db.appendOnlyMemLeases = db.appendOnlyMemLeases[:n-1]
+	return mt
+}
+
+func (db *DB) putAppendOnlyMemLease(mt *memtable.AppendOnly) bool {
+	if db == nil || mt == nil {
+		return false
+	}
+	db.appendOnlyMemLeaseMu.Lock()
+	defer db.appendOnlyMemLeaseMu.Unlock()
+	if len(db.appendOnlyMemLeases) >= maxAppendOnlyMemLeases {
+		return false
+	}
+	db.appendOnlyMemLeases = append(db.appendOnlyMemLeases, mt)
+	return true
+}
+
+func (db *DB) recycleMemtables(mems []memtable.Table) {
+	if db == nil || len(mems) == 0 {
+		return
+	}
+	for _, mt := range mems {
+		switch typed := mt.(type) {
+		case *memtable.AppendOnly:
+			typed.Reset()
+			if !db.putAppendOnlyMemLease(typed) {
+				db.appendOnlyMemPool.Put(typed)
+			}
+		}
+	}
+}
+
+func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {
+	if db != nil && mode == memtable.ModeAppendOnly {
+		if mt := db.popAppendOnlyMemLease(); mt != nil {
+			mt.Reset()
+			return mt, nil
+		}
+		if v := db.appendOnlyMemPool.Get(); v != nil {
+			if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
+				mt.Reset()
+				return mt, nil
+			}
+		}
+	}
+	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
 }
 
 // publishMemtablesLocked publishes a new memtable snapshot.
@@ -3249,7 +3545,18 @@ func (db *DB) publishMemtablesLocked() {
 		copy(qr, db.queueRanges)
 		view.queueRanges = qr
 	}
-	db.memtables.Store(view)
+	view.refs.Store(1)
+	retired := db.pendingRetiredMems
+	db.pendingRetiredMems = nil
+	old := db.memtables.Swap(view)
+	if old != nil {
+		if len(retired) > 0 {
+			old.retiredMems = append(old.retiredMems, retired...)
+		}
+		db.releaseMemtableView(old)
+		return
+	}
+	db.recycleMemtables(retired)
 }
 
 // ensureQueueLaneIDsLocked keeps queueLaneIDs aligned with queue length.
@@ -3396,7 +3703,8 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 			}
 		}
 		if !reused {
-			mt, err := memtable.NewWithCapacityModeAndIndexer(0, nextMode, db.hashSortedIndexer)
+			db.queueRetiredMemtableLocked(shard.mem)
+			mt, err := db.newMutableMemtableWithCapacityMode(0, nextMode)
 			if err != nil {
 				shard.mu.Unlock()
 				return err
@@ -4646,34 +4954,241 @@ func (db *DB) publishVlogDictPrepareResult(task vlogDictPrepareTask, res vlogDic
 	}
 }
 
-const maxEntryPoolCap = 1 << 16
+const (
+	maxEntryPoolCap              = 1 << 20
+	maxEntryRunsPoolCap          = 1 << 14
+	maxUnitRunsPoolCap           = 1 << 8
+	maxOpMergeHeapCap            = 1 << 8
+	entrySliceLeaseMinShift      = 4
+	entrySliceLeaseMaxShift      = 20
+	entrySliceLeaseClassCount    = entrySliceLeaseMaxShift - entrySliceLeaseMinShift + 1
+	maxEntrySliceLeasesPerBucket = 128
+)
 
-var entrySlicePool sync.Pool
+var entrySlicePools [entrySliceLeaseClassCount]sync.Pool
+var entryRunsPool sync.Pool
+var unitRunsPool sync.Pool
+var opMergeHeapPool sync.Pool
+var entrySliceLeaseMu sync.Mutex
+var entrySliceLeases [entrySliceLeaseClassCount][][]batch.Entry
+
+func entrySliceLeaseClassForLen(capacity int) (idx int, classCap int, ok bool) {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxEntryPoolCap {
+		return 0, 0, false
+	}
+	minCap := 1 << entrySliceLeaseMinShift
+	if capacity <= minCap {
+		return 0, minCap, true
+	}
+	classCap = 1 << uint(bits.Len(uint(capacity-1)))
+	if classCap < minCap {
+		classCap = minCap
+	}
+	if classCap > maxEntryPoolCap {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - entrySliceLeaseMinShift
+	if idx < 0 || idx >= entrySliceLeaseClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func entrySliceLeaseClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << entrySliceLeaseMinShift
+	if capacity < minCap || capacity > maxEntryPoolCap {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - entrySliceLeaseMinShift
+	if idx < 0 || idx >= entrySliceLeaseClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func entrySliceMaxReuseCap(capacity int) int {
+	if capacity <= 0 {
+		return 1 << entrySliceLeaseMinShift
+	}
+	// Clamp before multiplication to avoid potential integer overflow.
+	if capacity > maxEntryPoolCap/8 {
+		return maxEntryPoolCap
+	}
+	maxCap := capacity * 8
+	if maxCap < 1<<12 {
+		maxCap = 1 << 12
+	}
+	if maxCap > maxEntryPoolCap {
+		maxCap = maxEntryPoolCap
+	}
+	return maxCap
+}
 
 func getEntrySlice(capacity int) []batch.Entry {
 	if capacity < 0 {
 		capacity = 0
 	}
-	if capacity > maxEntryPoolCap {
+	idx, classCap, ok := entrySliceLeaseClassForLen(capacity)
+	if !ok {
 		return make([]batch.Entry, 0, capacity)
 	}
-	if v := entrySlicePool.Get(); v != nil {
-		s := v.([]batch.Entry)
-		if cap(s) >= capacity {
-			return s[:0]
+	maxReuseCap := entrySliceMaxReuseCap(capacity)
+	maxIdx, _, maxOK := entrySliceLeaseClassForLen(maxReuseCap)
+	if !maxOK {
+		maxIdx = idx
+	}
+	entrySliceLeaseMu.Lock()
+	for bucket := idx; bucket <= maxIdx; bucket++ {
+		leases := entrySliceLeases[bucket]
+		if n := len(leases); n > 0 {
+			s := leases[n-1]
+			entrySliceLeases[bucket][n-1] = nil
+			entrySliceLeases[bucket] = leases[:n-1]
+			entrySliceLeaseMu.Unlock()
+			if cap(s) >= capacity {
+				return s[:0]
+			}
+			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
+				entrySlicePools[capIdx].Put(s[:0])
+			}
+			return make([]batch.Entry, 0, classCap)
 		}
 	}
-	return make([]batch.Entry, 0, capacity)
+	entrySliceLeaseMu.Unlock()
+	for bucket := idx; bucket <= maxIdx; bucket++ {
+		if v := entrySlicePools[bucket].Get(); v != nil {
+			s, ok := v.([]batch.Entry)
+			if !ok {
+				continue
+			}
+			if cap(s) >= capacity && cap(s) <= maxReuseCap {
+				return s[:0]
+			}
+		}
+	}
+	return make([]batch.Entry, 0, classCap)
 }
 
 func putEntrySlice(entries []batch.Entry) {
+	if entries == nil {
+		return
+	}
 	if cap(entries) > maxEntryPoolCap {
 		return
 	}
-	for i := range entries {
-		entries[i] = batch.Entry{}
+	full := entries[:cap(entries)]
+	clear(full)
+	idx, ok := entrySliceLeaseClassForCap(cap(entries))
+	if !ok {
+		return
 	}
-	entrySlicePool.Put(entries[:0])
+	entries = entries[:0]
+	entrySliceLeaseMu.Lock()
+	if len(entrySliceLeases[idx]) < maxEntrySliceLeasesPerBucket {
+		entrySliceLeases[idx] = append(entrySliceLeases[idx], entries)
+		entrySliceLeaseMu.Unlock()
+		return
+	}
+	entrySliceLeaseMu.Unlock()
+	entrySlicePools[idx].Put(entries)
+}
+
+func getEntryRuns(capacity int) [][]batch.Entry {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxEntryRunsPoolCap {
+		return make([][]batch.Entry, 0, capacity)
+	}
+	if v := entryRunsPool.Get(); v != nil {
+		if runs, ok := v.([][]batch.Entry); ok && cap(runs) >= capacity {
+			return runs[:0]
+		}
+	}
+	return make([][]batch.Entry, 0, capacity)
+}
+
+func putEntryRuns(runs [][]batch.Entry) {
+	if runs == nil || cap(runs) > maxEntryRunsPoolCap {
+		return
+	}
+	clear(runs)
+	entryRunsPool.Put(runs[:0])
+}
+
+func getUnitRuns(length int) [][][]batch.Entry {
+	if length < 0 {
+		length = 0
+	}
+	if length > maxUnitRunsPoolCap {
+		return make([][][]batch.Entry, length)
+	}
+	if v := unitRunsPool.Get(); v != nil {
+		if runs, ok := v.([][][]batch.Entry); ok && cap(runs) >= length {
+			return runs[:length]
+		}
+	}
+	return make([][][]batch.Entry, length)
+}
+
+func putUnitRuns(runs [][][]batch.Entry) {
+	if runs == nil || cap(runs) > maxUnitRunsPoolCap {
+		return
+	}
+	clear(runs)
+	unitRunsPool.Put(runs[:0])
+}
+
+func getOpMergeHeap(capacity int) opMergeHeap {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > maxOpMergeHeapCap {
+		return make(opMergeHeap, 0, capacity)
+	}
+	if v := opMergeHeapPool.Get(); v != nil {
+		if h, ok := v.(opMergeHeap); ok && cap(h) >= capacity {
+			return h[:0]
+		}
+	}
+	return make(opMergeHeap, 0, capacity)
+}
+
+func putOpMergeHeap(h opMergeHeap) {
+	if h == nil || cap(h) > maxOpMergeHeapCap {
+		return
+	}
+	full := h[:cap(h)]
+	clear(full)
+	opMergeHeapPool.Put(full[:0])
+}
+
+func estimateUnitRunEntries(unitRuns [][][]batch.Entry, floor int) int {
+	if floor < 0 {
+		floor = 0
+	}
+	total := floor
+	maxInt := int(^uint(0) >> 1)
+	for i := range unitRuns {
+		for _, run := range unitRuns[i] {
+			if len(run) <= 0 {
+				continue
+			}
+			if total > maxInt-len(run) {
+				return maxInt
+			}
+			total += len(run)
+		}
+	}
+	return total
 }
 
 func collectOpsInto(mem memtable.Table, dst []batch.Entry) (int, error) {
@@ -4854,7 +5369,8 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 		chunkCap = 8192
 	}
 	iter := mem.NewIterator(nil, nil)
-	var runs [][]batch.Entry
+	runsCap := mem.Len()/chunkCap + 1
+	runs := getEntryRuns(runsCap)
 	deleteOps := 0
 	ops := getEntrySlice(chunkCap)
 	ops = ops[:0]
@@ -4896,6 +5412,7 @@ func buildOpRuns(mem memtable.Table, chunkCap int) ([][]batch.Entry, int, error)
 		for _, run := range runs {
 			putEntrySlice(run)
 		}
+		putEntryRuns(runs)
 		return nil, 0, err
 	}
 	if len(ops) > 0 {
@@ -9343,6 +9860,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				db.updateAdaptiveObservationLocked()
 			}
 
+			db.queueRetiredMemtablesLocked(db.queue)
 			db.queue = nil
 			db.queueShardIDs = nil
 			db.queueLaneIDs = nil
@@ -9404,6 +9922,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 				db.updateAdaptiveObservationLocked()
 			}
 
+			db.queueRetiredMemtablesLocked(db.queue)
 			db.queue = nil
 			db.queueShardIDs = nil
 			db.queueLaneIDs = nil
@@ -9488,6 +10007,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 					r = db.queueRanges[i]
 				}
 				if queryCoversRange(start, end, r) {
+					db.queueRetiredMemtableLocked(mem)
 					db.queueBacklogBytes.Add(-mem.Size())
 					continue
 				}
@@ -9836,7 +10356,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
 		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
 
-		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
+		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.memtableMode)
 		if err != nil {
 			shard.mu.Unlock()
 			return err
@@ -9980,7 +10500,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		db.queueWALPaths = append(db.queueWALPaths, walPaths)
 		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
 
-		mt, err := memtable.NewWithCapacityModeAndIndexer(newCapacity, db.memtableMode, db.hashSortedIndexer)
+		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.memtableMode)
 		if err != nil {
 			return err
 		}
@@ -10479,6 +10999,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 			db.backendRange.add(unit.memRange.min)
 			db.backendRange.add(unit.memRange.max)
 		}
+		db.queueRetiredMemtableLocked(unit.mem)
 	}
 
 	dstQueue := db.queue[:0]
@@ -10661,7 +11182,16 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			close(results)
 		}()
 
-		unitRuns := make([][][]batch.Entry, len(units))
+		unitRuns := getUnitRuns(len(units))
+		defer func() {
+			for i := range unitRuns {
+				for _, run := range unitRuns[i] {
+					putEntrySlice(run)
+				}
+				putEntryRuns(unitRuns[i])
+			}
+			putUnitRuns(unitRuns)
+		}()
 		unitDeleteOps := make([]int, len(units))
 		failed := false
 		for res := range results {
@@ -10673,23 +11203,20 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				for _, run := range res.runs {
 					putEntrySlice(run)
 				}
+				putEntryRuns(res.runs)
 				continue
 			}
 			if failed {
 				for _, run := range res.runs {
 					putEntrySlice(run)
 				}
+				putEntryRuns(res.runs)
 				continue
 			}
 			unitRuns[res.idx] = res.runs
 			unitDeleteOps[res.idx] = res.deleteOps
 		}
 		if failed {
-			for _, runs := range unitRuns {
-				for _, run := range runs {
-					putEntrySlice(run)
-				}
-			}
 			return false
 		}
 
@@ -10702,14 +11229,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 		backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
 
-		sizeHint := totalLen
-		if sizeHint > db.flushBackendInitEntries {
-			sizeHint = db.flushBackendInitEntries
+		reserveChunkOps := totalLen
+		if reserveChunkOps > backendEntriesCap {
+			reserveChunkOps = backendEntriesCap
 		}
-		if sizeHint > backendEntriesCap {
-			sizeHint = backendEntriesCap
-		}
+		sizeHint := reserveChunkOps
 		backendBatch := db.newBackendBatchWithSize(sizeHint)
+		reserveBackendBatchOps(backendBatch, reserveChunkOps)
 		flushStart := time.Now()
 		vlogFlushed := false
 		backendPendingOps := 0
@@ -10733,11 +11259,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			if err := db.flushValueLog(laneID); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
 				_ = backendBatch.Close()
-				for _, runs := range unitRuns {
-					for _, run := range runs {
-						putEntrySlice(run)
-					}
-				}
 				return false
 			}
 			vlogFlushed = true
@@ -10761,14 +11282,15 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				return err
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
+			reserveBackendBatchOps(backendBatch, reserveChunkOps)
 			psv, _ = backendBatch.(ptrSetterView)
 			ps, _ = backendBatch.(ptrSetter)
 			backendPendingOps = 0
 			return nil
 		}
 
-		var heap opMergeHeap
-		heap = heap[:0]
+		heap := getOpMergeHeap(len(unitRuns))
+		defer func() { putOpMergeHeap(heap) }()
 		for i := range unitRuns {
 			if len(unitRuns[i]) == 0 {
 				continue
@@ -10844,11 +11366,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			if err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
 				_ = backendBatch.Close()
-				for _, runs := range unitRuns {
-					for _, run := range runs {
-						putEntrySlice(run)
-					}
-				}
 				return false
 			}
 			if applied {
@@ -10856,11 +11373,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				if err := flushBackendChunk(); err != nil {
 					db.reportError(err)
 					_ = backendBatch.Close()
-					for _, runs := range unitRuns {
-						for _, run := range runs {
-							putEntrySlice(run)
-						}
-					}
 					return false
 				}
 			}
@@ -10877,11 +11389,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				if err := db.flushValueLog(laneID); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog): %w", err))
 					_ = backendBatch.Close()
-					for _, runs := range unitRuns {
-						for _, run := range runs {
-							putEntrySlice(run)
-						}
-					}
 					return false
 				}
 				vlogFlushed = true
@@ -10890,11 +11397,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				if err := db.syncValueLog(laneID); err != nil {
 					db.reportError(fmt.Errorf("cachingdb: flush failed (vlog sync): %w", err))
 					_ = backendBatch.Close()
-					for _, runs := range unitRuns {
-						for _, run := range runs {
-							putEntrySlice(run)
-						}
-					}
 					return false
 				}
 			}
@@ -10920,18 +11422,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 		if err != nil {
 			db.reportError(err)
-			for _, runs := range unitRuns {
-				for _, run := range runs {
-					putEntrySlice(run)
-				}
-			}
 			return false
-		}
-
-		for _, runs := range unitRuns {
-			for _, run := range runs {
-				putEntrySlice(run)
-			}
 		}
 
 		db.mu.Lock()
@@ -11006,14 +11497,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		return true
 	}
 
-	sizeHint := totalLen
-	if sizeHint > db.flushBackendInitEntries {
-		sizeHint = db.flushBackendInitEntries
+	reserveChunkOps := totalLen
+	if reserveChunkOps > backendEntriesCap {
+		reserveChunkOps = backendEntriesCap
 	}
-	if sizeHint > backendEntriesCap {
-		sizeHint = backendEntriesCap
-	}
+	sizeHint := reserveChunkOps
 	backendBatch := db.newBackendBatchWithSize(sizeHint)
+	reserveBackendBatchOps(backendBatch, reserveChunkOps)
 	flushStart := time.Now()
 	vlogFlushed := false
 	backendPendingOps := 0
@@ -11081,6 +11571,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				return err
 			}
 			backendBatch = db.newBackendBatchWithSize(sizeHint)
+			reserveBackendBatchOps(backendBatch, reserveChunkOps)
 			psv, _ = backendBatch.(ptrSetterView)
 			ps, _ = backendBatch.(ptrSetter)
 			backendPendingOps = 0
@@ -11361,14 +11852,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 		// Flush 'mem' to backend
 		backendEntriesCap := db.flushBackendEntriesCap(memLen, sync)
-		sizeHint := memLen
-		if sizeHint > db.flushBackendInitEntries {
-			sizeHint = db.flushBackendInitEntries
+		reserveChunkOps := memLen
+		if reserveChunkOps > backendEntriesCap {
+			reserveChunkOps = backendEntriesCap
 		}
-		if sizeHint > backendEntriesCap {
-			sizeHint = backendEntriesCap
-		}
+		sizeHint := reserveChunkOps
 		backendBatch := db.newBackendBatchWithSize(sizeHint)
+		reserveBackendBatchOps(backendBatch, reserveChunkOps)
 		vlogFlushed := false
 		backendPendingOps := 0
 		iter := mem.NewIterator(nil, nil) // Returns iterator.UnsafeIterator
@@ -11461,6 +11951,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				backendBatch = nil
 
 				backendBatch = db.newBackendBatchWithSize(sizeHint)
+				reserveBackendBatchOps(backendBatch, reserveChunkOps)
 				sv, _ = backendBatch.(setViewer)
 				dv, _ = backendBatch.(deleteViewer)
 				psv, _ = backendBatch.(ptrSetterView)
@@ -11650,6 +12141,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		db.backendRange.add(memRange.max)
 	}
 	if len(db.queue) > 0 {
+		db.queueRetiredMemtableLocked(db.queue[0])
 		db.queue = db.queue[1:]
 	}
 	if len(db.queueShardIDs) > 0 {
@@ -11820,7 +12312,10 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 }
 
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
-	view := db.memtables.Load()
+	view := db.retainMemtableView()
+	if view != nil {
+		defer db.releaseMemtableView(view)
+	}
 	var (
 		mutables      []memtable.Table
 		queue         []memtable.Table
@@ -11904,7 +12399,10 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 }
 
 func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
-	view := db.memtables.Load()
+	view := db.retainMemtableView()
+	if view != nil {
+		defer db.releaseMemtableView(view)
+	}
 	var (
 		mutables      []memtable.Table
 		queue         []memtable.Table
@@ -12014,7 +12512,12 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	if db.canBypassMemtableRead(db.memtables.Load(), key) {
+	view := db.retainMemtableView()
+	bypass := db.canBypassMemtableRead(view, key)
+	if view != nil {
+		db.releaseMemtableView(view)
+	}
+	if bypass {
 		if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 			return nil, err
 		}
@@ -12048,7 +12551,12 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 
 	// Fast path: no mutable/queued state and all touched mutable shards are
 	// observably empty, so we can delegate to backend single-snapshot GetMany.
-	if db.canBypassMemtableReadMany(db.memtables.Load(), keys) {
+	view := db.retainMemtableView()
+	bypass := db.canBypassMemtableReadMany(view, keys)
+	if view != nil {
+		db.releaseMemtableView(view)
+	}
+	if bypass {
 		return db.backendGetMany(keys)
 	}
 
@@ -12109,7 +12617,10 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
-	view := db.memtables.Load()
+	view := db.retainMemtableView()
+	if view != nil {
+		defer db.releaseMemtableView(view)
+	}
 	var (
 		mutables      []memtable.Table
 		queue         []memtable.Table
@@ -12754,10 +13265,45 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	backendRangeKnown := db.backendRangeKnown
 	backendRange := db.backendRange
+	queueLenLocked := len(db.queue)
 
 	db.mu.Unlock()
 
-	view := db.memtables.Load()
+	// Backend-only fast path: with an empty immutable queue after rotation there
+	// are no in-memory iterator sources to merge. Avoid memtable view retain/release
+	// and construct a backend iterator directly.
+	if queueLenLocked == 0 {
+		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
+			if iteratorDebugEnabled.Load() {
+				return &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
+			}
+			return it
+		}
+		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
+			out := merging.Iterator(&emptyIterator{start: start, end: end})
+			return decorate(out, 0), nil
+		}
+		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
+			diskIter, err := db.backend.Iterator(nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			return decorate(diskIter, 1), nil
+		}
+		diskIter, err := db.backend.Iterator(start, end)
+		if err != nil {
+			return nil, err
+		}
+		return decorate(diskIter, 1), nil
+	}
+
+	view := db.retainMemtableView()
+	releaseView := true
+	defer func() {
+		if releaseView && view != nil {
+			db.releaseMemtableView(view)
+		}
+	}()
 	var queue []memtable.Table
 	var queueRanges []keyRange
 	if view != nil {
@@ -12772,6 +13318,29 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		db.mu.RUnlock()
 	}
 	queueLen := len(queue)
+	hasMemSource := false
+	decorateIterator := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
+		if iteratorDebugEnabled.Load() {
+			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
+		}
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return &leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
+			}
+		}
+		if view != nil {
+			db.releaseMemtableView(view)
+			view = nil
+			releaseView = false
+		}
+		return it
+	}
 
 	// Fast path for full scans: if the in-memory key ranges are disjoint from the
 	// backend key range, we can concatenate iterators instead of merging.
@@ -12783,11 +13352,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			if err != nil {
 				return nil, err
 			}
-
-			if iteratorDebugEnabled.Load() {
-				return &debugIterator{Iterator: diskIter, queueLen: queueLen, sourcesUsed: 1}, nil
-			}
-			return diskIter, nil
+			return decorateIterator(diskIter, 1), nil
 		}
 	}
 
@@ -12811,6 +13376,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			Iter:     qIter,
 			Priority: prio,
 		})
+		hasMemSource = true
 		prio++
 	}
 
@@ -12830,25 +13396,16 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	if len(sources) == 0 {
 		out := merging.Iterator(&emptyIterator{start: start, end: end})
-		if iteratorDebugEnabled.Load() {
-			out = &debugIterator{Iterator: out, queueLen: queueLen, sourcesUsed: 0}
-		}
-		return out, nil
+		return decorateIterator(out, 0), nil
 	}
 
 	if len(sources) == 1 {
 		out := newSingleSourceIterator(sources[0].Iter, start, end)
-		if iteratorDebugEnabled.Load() {
-			out = &debugIterator{Iterator: out, queueLen: queueLen, sourcesUsed: 1}
-		}
-		return out, nil
+		return decorateIterator(out, 1), nil
 	}
 
 	out := merging.NewMergingIterator(sources, start, end)
-	if iteratorDebugEnabled.Load() {
-		out = &debugIterator{Iterator: out, queueLen: queueLen, sourcesUsed: len(sources)}
-	}
-	return out, nil
+	return decorateIterator(out, len(sources)), nil
 }
 
 type debugIterator struct {
@@ -12859,6 +13416,23 @@ type debugIterator struct {
 
 func (it *debugIterator) DebugStats() (queueLen int, sourcesUsed int) {
 	return it.queueLen, it.sourcesUsed
+}
+
+type leasedMergingIterator struct {
+	merging.Iterator
+	closeOnce sync.Once
+	closeErr  error
+	release   func()
+}
+
+func (it *leasedMergingIterator) Close() error {
+	it.closeOnce.Do(func() {
+		it.closeErr = it.Iterator.Close()
+		if it.release != nil {
+			it.release()
+		}
+	})
+	return it.closeErr
 }
 
 type concatUnsafeIterator struct {
@@ -14244,9 +14818,12 @@ func (b *Batch) writeBypass(sync bool) error {
 		queueRanges   []keyRange
 		overlaps      bool
 	)
+	view := b.db.retainMemtableView()
+	if view != nil {
+		defer b.db.releaseMemtableView(view)
+	}
 
 	b.db.mu.RLock()
-	view := b.db.memtables.Load()
 	overlaps = rangesOverlap(batchRange, mutableRange)
 	if view != nil {
 		mutables = view.mutables

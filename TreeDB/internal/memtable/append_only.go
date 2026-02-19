@@ -3,6 +3,7 @@ package memtable
 import (
 	"bytes"
 	"encoding/binary"
+	"math/bits"
 	"sort"
 	"sync"
 	"unsafe"
@@ -22,36 +23,137 @@ const (
 	appendOnlyMaxInitialEntries      = 1 << 20
 	appendOnlyInlineKeyLen           = 8
 	appendOnlyPointerGrowCutoff      = 1 << 15
+	appendOnlyEntryPoolMaxCap        = 1 << 20
+	appendOnlyIteratorPoolMaxCap     = 1 << 20
+	appendOnlyIteratorPtrPoolMaxCap  = 1 << 20
+	appendOnlyReusableKeyMaxCap      = 1 << 10
+	appendOnlyValueArenaMinShift     = 12
+	appendOnlyValueArenaMaxShift     = 20
+	appendOnlyValueArenaClassCount   = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
+	appendOnlyValueArenaDefaultChunk = 32 << 10
+	appendOnlyValueArenaPoolMaxCap   = 1 << appendOnlyValueArenaMaxShift
+	appendOnlyValueArenaRetainMaxCap = 4 << 20
+	appendOnlyValueArenaRetainChunks = 128
 )
 
+var appendOnlyEntryPool sync.Pool
+var appendOnlyIteratorPool sync.Pool
+var appendOnlyIteratorPtrPool sync.Pool
+var appendOnlyValueArenaPools [appendOnlyValueArenaClassCount]sync.Pool
+
 type appendOnlyEntry struct {
-	key       []byte
-	value     []byte
-	ptr       page.ValuePtr
-	inlineKey [appendOnlyInlineKeyLen]byte
-	flags     byte
-	keyInline bool
+	key        []byte
+	value      []byte
+	ptr        page.ValuePtr
+	inlineKey  [appendOnlyInlineKeyLen]byte
+	flags      byte
+	keyInline  bool
+	valueOwned bool
+}
+
+type appendOnlyValueArena struct {
+	chunks    [][]byte
+	retained  [][]byte
+	retainedB int
+	cur       []byte
+	curPos    int
 }
 
 type AppendOnly struct {
 	mu sync.RWMutex
 
-	entries   []appendOnlyEntry
-	latest    map[string]int
-	latest64  map[uint64]int
-	snapshot  []*appendOnlyEntry
-	indexBuf  []int
-	count     int
-	snapCount int
-	sizeBytes int64
+	entries    []appendOnlyEntry
+	latest     map[string]int
+	latest64   map[uint64]int
+	snapshot   []*appendOnlyEntry
+	indexBuf   []int
+	valueArena appendOnlyValueArena
+	count      int
+	snapCount  int
+	sizeBytes  int64
 
 	ordered     bool
 	latestDirty bool
+	frozen      bool
 	hasLast     bool
 	lastIdx     int
 }
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
+
+func getAppendOnlyEntries(length int) []appendOnlyEntry {
+	if length < 0 {
+		length = 0
+	}
+	if length > appendOnlyEntryPoolMaxCap {
+		return make([]appendOnlyEntry, length)
+	}
+	if v := appendOnlyEntryPool.Get(); v != nil {
+		if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
+			return entries[:length]
+		}
+	}
+	return make([]appendOnlyEntry, length)
+}
+
+func putAppendOnlyEntries(entries []appendOnlyEntry) {
+	if entries == nil || cap(entries) == 0 || cap(entries) > appendOnlyEntryPoolMaxCap {
+		return
+	}
+	full := entries[:cap(entries)]
+	clear(full)
+	appendOnlyEntryPool.Put(full[:0])
+}
+
+func getAppendOnlyIteratorEntries(length int) []appendOnlyEntry {
+	if length < 0 {
+		length = 0
+	}
+	if length > appendOnlyIteratorPoolMaxCap {
+		return make([]appendOnlyEntry, length)
+	}
+	if v := appendOnlyIteratorPool.Get(); v != nil {
+		if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
+			out := entries[:length]
+			clear(out)
+			return out
+		}
+	}
+	return make([]appendOnlyEntry, length)
+}
+
+func putAppendOnlyIteratorEntries(entries []appendOnlyEntry) {
+	if entries == nil || cap(entries) == 0 || cap(entries) > appendOnlyIteratorPoolMaxCap {
+		return
+	}
+	clear(entries)
+	appendOnlyIteratorPool.Put(entries[:0])
+}
+
+func getAppendOnlyIteratorPtrs(length int) []*appendOnlyEntry {
+	if length < 0 {
+		length = 0
+	}
+	if length > appendOnlyIteratorPtrPoolMaxCap {
+		return make([]*appendOnlyEntry, length)
+	}
+	if v := appendOnlyIteratorPtrPool.Get(); v != nil {
+		if entries, ok := v.([]*appendOnlyEntry); ok && cap(entries) >= length {
+			out := entries[:length]
+			clear(out)
+			return out
+		}
+	}
+	return make([]*appendOnlyEntry, length)
+}
+
+func putAppendOnlyIteratorPtrs(entries []*appendOnlyEntry) {
+	if entries == nil || cap(entries) == 0 || cap(entries) > appendOnlyIteratorPtrPoolMaxCap {
+		return
+	}
+	clear(entries)
+	appendOnlyIteratorPtrPool.Put(entries[:0])
+}
 
 func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 	if capacity <= 0 {
@@ -65,7 +167,7 @@ func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 		n = appendOnlyMaxInitialEntries
 	}
 	return &AppendOnly{
-		entries:   make([]appendOnlyEntry, n),
+		entries:   getAppendOnlyEntries(n),
 		count:     0,
 		ordered:   true,
 		hasLast:   false,
@@ -92,6 +194,154 @@ func cloneBytes(src []byte) []byte {
 	dst := make([]byte, len(src))
 	copy(dst, src)
 	return dst
+}
+
+func cloneOrReuseBytes(dst, src []byte, maxCap int) []byte {
+	if len(src) == 0 {
+		return nil
+	}
+	if maxCap <= 0 {
+		maxCap = len(src)
+	}
+	if cap(dst) >= len(src) && cap(dst) <= maxCap {
+		out := dst[:len(src)]
+		copy(out, src)
+		return out
+	}
+	out := make([]byte, len(src))
+	copy(out, src)
+	return out
+}
+
+func appendOnlyValueArenaClassForLen(length int) (idx int, classCap int, ok bool) {
+	if length <= 0 || length > appendOnlyValueArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	classCap = 1 << uint(bits.Len(uint(length-1)))
+	minCap := 1 << appendOnlyValueArenaMinShift
+	if classCap < minCap {
+		classCap = minCap
+	}
+	if classCap > appendOnlyValueArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - appendOnlyValueArenaMinShift
+	if idx < 0 || idx >= appendOnlyValueArenaClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func appendOnlyValueArenaClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << appendOnlyValueArenaMinShift
+	if capacity < minCap || capacity > appendOnlyValueArenaPoolMaxCap {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - appendOnlyValueArenaMinShift
+	if idx < 0 || idx >= appendOnlyValueArenaClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func getAppendOnlyValueArenaChunk(capacity int) []byte {
+	if capacity <= 0 {
+		capacity = appendOnlyValueArenaDefaultChunk
+	}
+	if capacity < appendOnlyValueArenaDefaultChunk {
+		capacity = appendOnlyValueArenaDefaultChunk
+	}
+	if idx, classCap, ok := appendOnlyValueArenaClassForLen(capacity); ok {
+		if v := appendOnlyValueArenaPools[idx].Get(); v != nil {
+			if b, ok := v.([]byte); ok && cap(b) >= classCap {
+				return b[:0]
+			}
+		}
+		return make([]byte, 0, classCap)
+	}
+	return make([]byte, 0, capacity)
+}
+
+func putAppendOnlyValueArenaChunk(chunk []byte) {
+	if chunk == nil {
+		return
+	}
+	if idx, ok := appendOnlyValueArenaClassForCap(cap(chunk)); ok {
+		appendOnlyValueArenaPools[idx].Put(chunk[:0])
+	}
+}
+
+func (a *appendOnlyValueArena) popRetained(minLen int) []byte {
+	if len(a.retained) == 0 {
+		return nil
+	}
+	for i := len(a.retained) - 1; i >= 0; i-- {
+		chunk := a.retained[i]
+		if cap(chunk) < minLen {
+			continue
+		}
+		last := len(a.retained) - 1
+		a.retained[i] = a.retained[last]
+		a.retained[last] = nil
+		a.retained = a.retained[:last]
+		a.retainedB -= cap(chunk)
+		if a.retainedB < 0 {
+			a.retainedB = 0
+		}
+		return chunk[:0]
+	}
+	return nil
+}
+
+func (a *appendOnlyValueArena) retainChunk(chunk []byte) bool {
+	if chunk == nil || cap(chunk) == 0 {
+		return false
+	}
+	if len(a.retained) >= appendOnlyValueArenaRetainChunks {
+		return false
+	}
+	next := a.retainedB + cap(chunk)
+	if next > appendOnlyValueArenaRetainMaxCap {
+		return false
+	}
+	a.retained = append(a.retained, chunk[:0])
+	a.retainedB = next
+	return true
+}
+
+func (a *appendOnlyValueArena) alloc(length int) []byte {
+	if length <= 0 {
+		return nil
+	}
+	if a.cur == nil || cap(a.cur)-a.curPos < length {
+		chunk := a.popRetained(length)
+		if chunk == nil {
+			chunk = getAppendOnlyValueArenaChunk(length)
+		}
+		a.chunks = append(a.chunks, chunk)
+		a.cur = chunk[:cap(chunk)]
+		a.curPos = 0
+	}
+	out := a.cur[a.curPos : a.curPos+length : a.curPos+length]
+	a.curPos += length
+	return out
+}
+
+func (a *appendOnlyValueArena) reset() {
+	for i := range a.chunks {
+		if !a.retainChunk(a.chunks[i]) {
+			putAppendOnlyValueArenaChunk(a.chunks[i])
+		}
+		a.chunks[i] = nil
+	}
+	a.chunks = a.chunks[:0]
+	a.cur = nil
+	a.curPos = 0
 }
 
 func appendOnlyNextCapacity(current int, flags byte) int {
@@ -186,9 +436,11 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	}
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries), flags)
-		grown := make([]appendOnlyEntry, nextCap)
+		prev := m.entries
+		grown := getAppendOnlyEntries(nextCap)
 		copy(grown, m.entries[:m.count])
 		m.entries = grown
+		putAppendOnlyEntries(prev)
 	}
 	idx := m.count
 	m.count++
@@ -196,6 +448,7 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	ent.ptr = ptr
 	ent.flags = flags
 	ent.keyInline = false
+	ent.valueOwned = false
 	if steal {
 		ent.key = key
 		ent.value = value
@@ -203,13 +456,21 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		if len(key) == appendOnlyInlineKeyLen {
 			copy(ent.inlineKey[:], key)
 			ent.keyInline = true
+			ent.key = nil
 		} else {
-			ent.key = cloneBytes(key)
+			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
 		}
-		ent.value = cloneBytes(value)
+		if len(value) > 0 {
+			ent.value = m.valueArena.alloc(len(value))
+			copy(ent.value, value)
+			ent.valueOwned = true
+		} else {
+			ent.value = nil
+		}
 	}
 	if flags&node.FlagTombstone != 0 {
 		ent.value = nil
+		ent.valueOwned = false
 		ent.ptr = page.ValuePtr{}
 	}
 	k := appendOnlyEntryKey(ent)
@@ -405,14 +666,33 @@ func (m *AppendOnly) Len() int {
 	return m.count
 }
 
-func (m *AppendOnly) Freeze() {}
+func (m *AppendOnly) Freeze() {
+	m.mu.Lock()
+	if m.frozen {
+		m.mu.Unlock()
+		return
+	}
+	m.frozen = true
+	m.mu.Unlock()
+}
 
 func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := 0; i < m.count; i++ {
-		m.entries[i] = appendOnlyEntry{}
+		ent := &m.entries[i]
+		ent.ptr = page.ValuePtr{}
+		ent.flags = 0
+		ent.keyInline = false
+		ent.valueOwned = false
+		if cap(ent.key) > appendOnlyReusableKeyMaxCap {
+			ent.key = nil
+		} else if ent.key != nil {
+			ent.key = ent.key[:0]
+		}
+		ent.value = nil
 	}
+	m.valueArena.reset()
 	clear(m.latest)
 	clear(m.latest64)
 	m.clearSnapshotLocked()
@@ -420,6 +700,7 @@ func (m *AppendOnly) Reset() {
 	m.sizeBytes = 0
 	m.ordered = true
 	m.latestDirty = false
+	m.frozen = false
 	m.hasLast = false
 	m.lastIdx = -1
 }
@@ -487,11 +768,26 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RUnlock()
 
 	// Unordered iterators need a sorted latest-key view. Build/update shared
-	// caches under an exclusive lock, then copy the snapshot so iteration does
-	// not hold the write lock for its lifetime.
+	// caches under an exclusive lock.
 	m.mu.Lock()
 	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
-	entries := make([]appendOnlyEntry, len(snapshotPtrs))
+	if m.frozen {
+		ptrs := getAppendOnlyIteratorPtrs(len(snapshotPtrs))
+		copy(ptrs, snapshotPtrs)
+		m.mu.Unlock()
+		it := &appendOnlyIterator{
+			entryPtrs:       ptrs,
+			end:             end,
+			pooledEntryPtrs: true,
+		}
+		if start != nil {
+			it.Seek(start)
+		}
+		return it
+	}
+	// Mutable unordered memtables must copy entries so readers can iterate
+	// without holding write locks while writers append concurrently.
+	entries := getAppendOnlyIteratorEntries(len(snapshotPtrs))
 	for i := range snapshotPtrs {
 		if snapshotPtrs[i] != nil {
 			entries[i] = *snapshotPtrs[i]
@@ -500,8 +796,9 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.Unlock()
 
 	it := &appendOnlyIterator{
-		entries: entries,
-		end:     end,
+		entries:       entries,
+		end:           end,
+		pooledEntries: true,
 	}
 	if start != nil {
 		it.Seek(start)
@@ -510,17 +807,47 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 type appendOnlyIterator struct {
-	entries []appendOnlyEntry
-	idx     int
-	end     []byte
-	mu      *sync.RWMutex
+	entries         []appendOnlyEntry
+	entryPtrs       []*appendOnlyEntry
+	idx             int
+	end             []byte
+	mu              *sync.RWMutex
+	pooledEntries   bool
+	pooledEntryPtrs bool
+}
+
+func (it *appendOnlyIterator) len() int {
+	if it.entryPtrs != nil {
+		return len(it.entryPtrs)
+	}
+	return len(it.entries)
+}
+
+func (it *appendOnlyIterator) entryAt(idx int) *appendOnlyEntry {
+	if idx < 0 {
+		return nil
+	}
+	if it.entryPtrs != nil {
+		if idx >= len(it.entryPtrs) {
+			return nil
+		}
+		return it.entryPtrs[idx]
+	}
+	if idx >= len(it.entries) {
+		return nil
+	}
+	return &it.entries[idx]
 }
 
 func (it *appendOnlyIterator) validIndex() bool {
-	if it.idx < 0 || it.idx >= len(it.entries) {
+	if it.idx < 0 || it.idx >= it.len() {
 		return false
 	}
-	if it.end != nil && bytes.Compare(appendOnlyEntryKey(&it.entries[it.idx]), it.end) >= 0 {
+	ent := it.entryAt(it.idx)
+	if ent == nil {
+		return false
+	}
+	if it.end != nil && bytes.Compare(appendOnlyEntryKey(ent), it.end) >= 0 {
 		return false
 	}
 	return true
@@ -531,29 +858,34 @@ func (it *appendOnlyIterator) Valid() bool {
 }
 
 func (it *appendOnlyIterator) Next() {
-	if it.idx < len(it.entries) {
+	if it.idx < it.len() {
 		it.idx++
 	}
 }
 
 func (it *appendOnlyIterator) Seek(key []byte) {
-	it.idx = sort.Search(len(it.entries), func(i int) bool {
-		return bytes.Compare(appendOnlyEntryKey(&it.entries[i]), key) >= 0
+	it.idx = sort.Search(it.len(), func(i int) bool {
+		ent := it.entryAt(i)
+		if ent == nil {
+			return true
+		}
+		return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
 	})
 }
 
 func (it *appendOnlyIterator) UnsafeKey() []byte {
-	if !it.validIndex() {
+	ent := it.entryAt(it.idx)
+	if ent == nil || !it.validIndex() {
 		return nil
 	}
-	return appendOnlyEntryKey(&it.entries[it.idx])
+	return appendOnlyEntryKey(ent)
 }
 
 func (it *appendOnlyIterator) UnsafeValue() []byte {
-	if !it.validIndex() {
+	ent := it.entryAt(it.idx)
+	if ent == nil || !it.validIndex() {
 		return nil
 	}
-	ent := it.entries[it.idx]
 	if ent.flags&node.FlagTombstone != 0 {
 		return nil
 	}
@@ -561,18 +893,19 @@ func (it *appendOnlyIterator) UnsafeValue() []byte {
 }
 
 func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
-	if !it.validIndex() {
+	ent := it.entryAt(it.idx)
+	if ent == nil || !it.validIndex() {
 		return nil, page.ValuePtr{}, 0
 	}
-	ent := it.entries[it.idx]
 	return ent.value, ent.ptr, ent.flags
 }
 
 func (it *appendOnlyIterator) IsDeleted() bool {
-	if !it.validIndex() {
+	ent := it.entryAt(it.idx)
+	if ent == nil || !it.validIndex() {
 		return false
 	}
-	return it.entries[it.idx].flags&node.FlagTombstone != 0
+	return ent.flags&node.FlagTombstone != 0
 }
 
 func (it *appendOnlyIterator) Key() []byte {
@@ -606,6 +939,16 @@ func (it *appendOnlyIterator) Close() error {
 		it.mu.RUnlock()
 		it.mu = nil
 	}
+	if it.pooledEntries {
+		putAppendOnlyIteratorEntries(it.entries)
+		it.pooledEntries = false
+	}
+	if it.pooledEntryPtrs {
+		putAppendOnlyIteratorPtrs(it.entryPtrs)
+		it.pooledEntryPtrs = false
+	}
+	it.entries = nil
+	it.entryPtrs = nil
 	return nil
 }
 

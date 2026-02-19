@@ -8,6 +8,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -344,6 +345,94 @@ func TestDB_BatchWriteBypassAllocsIndependentOfQueueLen(t *testing.T) {
 	if allocsQueued > allocsEmpty+0.5 {
 		t.Fatalf("expected writeBypass allocations to be independent of queued memtables; empty=%.2f allocs/op queued=%.2f allocs/op", allocsEmpty, allocsQueued)
 	}
+}
+
+func TestDB_BatchWriteBypassRetainsMemtableViewLease(t *testing.T) {
+	backend := &noAllocBackend{}
+	db, err := Open(t.TempDir(), backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist", MemtableShards: 1})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("k")
+	val := []byte("v")
+	getStarted := make(chan struct{})
+	getRelease := make(chan struct{})
+
+	db.mu.Lock()
+	if len(db.mutableShards) != 1 {
+		db.mu.Unlock()
+		t.Fatalf("expected one mutable shard; got %d", len(db.mutableShards))
+	}
+	base := db.mutableShards[0].mem
+	db.mutableShards[0].mem = &blockingGetMemtable{
+		Table:   base,
+		started: getStarted,
+		release: getRelease,
+	}
+	db.mutableShards[0].rng = keyRange{}
+	db.mutableShards[0].rng.add(key)
+	db.publishMemtablesLocked()
+	view := db.memtables.Load()
+	db.mu.Unlock()
+
+	if view == nil {
+		t.Fatal("expected published memtable view")
+	}
+	if got := view.refs.Load(); got != 1 {
+		t.Fatalf("expected baseline refcount 1; got %d", got)
+	}
+
+	b := db.NewBatchWithSize(1)
+	if err := b.Set(key, val); err != nil {
+		t.Fatalf("batch set: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- b.writeBypass(false)
+	}()
+
+	select {
+	case <-getStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("writeBypass did not reach memtable Get")
+	}
+
+	if got := view.refs.Load(); got < 2 {
+		t.Fatalf("expected writeBypass to retain memtable view while reading; refs=%d", got)
+	}
+
+	close(getRelease)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("writeBypass: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("writeBypass blocked after releasing memtable Get")
+	}
+
+	if got := view.refs.Load(); got != 1 {
+		t.Fatalf("expected writeBypass to release memtable view lease; refs=%d", got)
+	}
+}
+
+type blockingGetMemtable struct {
+	memtable.Table
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (m *blockingGetMemtable) Get(key []byte) ([]byte, bool, bool) {
+	select {
+	case <-m.started:
+	default:
+		close(m.started)
+	}
+	<-m.release
+	return m.Table.Get(key)
 }
 
 type noAllocBackend struct {
