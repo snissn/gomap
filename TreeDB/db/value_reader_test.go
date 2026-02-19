@@ -3,8 +3,6 @@ package db
 import (
 	"bytes"
 	"fmt"
-	"runtime"
-	"runtime/debug"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
@@ -125,68 +123,183 @@ func TestOuterLeafFenceDecodeScratchPoolCapBounded(t *testing.T) {
 }
 
 func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
-	prevProcs := runtime.GOMAXPROCS(1)
-	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
-	prevGCPercent := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(prevGCPercent) })
-
-	makeCountingSet := func() (*outerLeafFenceDecodeLeaseSet, *int) {
-		calls := 0
-		set := &outerLeafFenceDecodeLeaseSet{}
-		set.pool.New = func() any {
-			calls++
-			return acquireOuterLeafFenceDecodeContext()
-		}
-		set.pool.Put(acquireOuterLeafFenceDecodeContext())
-		return set, &calls
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
+	ctx1 := set.acquire()
+	if ctx1 == nil {
+		t.Fatalf("first acquire returned nil")
 	}
-
-	const iters = 32
-	setReleased, callsReleasedPtr := makeCountingSet()
-	for i := 0; i < iters; i++ {
-		ctx := setReleased.acquire()
-		if ctx == nil {
-			t.Fatalf("iter=%d released-path acquire returned nil", i)
-		}
-		setReleased.release(ctx)
+	ctx2 := set.acquire()
+	if ctx2 == nil {
+		t.Fatalf("second acquire returned nil")
 	}
-
-	setLeaked, callsLeakedPtr := makeCountingSet()
-	for i := 0; i < iters; i++ {
-		ctx := setLeaked.acquire()
-		if ctx == nil {
-			t.Fatalf("iter=%d leaked-path acquire returned nil", i)
-		}
-		// Intentionally omit release(ctx) to model no pooling.
+	set.release(ctx1)
+	set.release(ctx2)
+	if got := len(set.pool); got != 1 {
+		t.Fatalf("pool size after two releases=%d want 1", got)
 	}
-
-	callsReleased := *callsReleasedPtr
-	callsLeaked := *callsLeakedPtr
-	if callsReleased >= callsLeaked {
-		t.Fatalf("expected release path to allocate fewer contexts than leaked path: released=%d leaked=%d", callsReleased, callsLeaked)
+	ctx3 := set.acquire()
+	if ctx3 == nil {
+		t.Fatalf("acquire after release returned nil")
 	}
-	if callsLeaked-callsReleased < iters/4 {
-		t.Fatalf("allocation delta too small to prove pool reuse: released=%d leaked=%d", callsReleased, callsLeaked)
-	}
+	set.release(ctx3)
 }
 
-func TestOuterLeafFenceDecodeLeaseSetReleaseAllowsOversubscription(t *testing.T) {
+func TestOuterLeafFenceDecodeLeaseSetReleaseOverflowRecyclesContext(t *testing.T) {
 	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
 	ctx1 := set.acquire()
 	ctx2 := set.acquire()
 	if ctx1 == nil || ctx2 == nil {
 		t.Fatalf("acquire returned nil ctx1=%v ctx2=%v", ctx1, ctx2)
 	}
+	ctx1.scratch = make([]byte, 32)
+	ctx2.scratch = make([]byte, 16)
 
 	set.release(ctx1)
-	set.release(ctx2)
-	ctx3 := set.acquire()
-	ctx4 := set.acquire()
-	if ctx3 == nil || ctx4 == nil {
-		t.Fatalf("acquire after oversubscription release returned nil ctx3=%v ctx4=%v", ctx3, ctx4)
+	if ctx1.scratch == nil {
+		t.Fatalf("retained release cleared scratch; want pooled reuse state")
 	}
-	set.release(ctx3)
-	set.release(ctx4)
+
+	set.release(ctx2)
+	if ctx2.scratch != nil {
+		t.Fatalf("overflow release kept scratch; want recycled context")
+	}
+	if got := len(set.pool); got != 1 {
+		t.Fatalf("pool size after overflow release=%d want 1", got)
+	}
+}
+
+func TestOuterLeafFenceDecodeLeaseSetCloseDrainsReturnedContexts(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	ctx1 := set.acquire()
+	ctx2 := set.acquire()
+	if ctx1 == nil || ctx2 == nil {
+		t.Fatalf("acquire returned nil context(s): ctx1=%v ctx2=%v", ctx1, ctx2)
+	}
+	ctx1.scratch = make([]byte, 16)
+	ctx2.scratch = make([]byte, 32)
+	set.release(ctx1)
+	set.release(ctx2)
+
+	set.close()
+
+	if ctx1.scratch != nil || ctx1.block != nil {
+		t.Fatalf("ctx1 not cleaned on close: scratch=%d block=%v", len(ctx1.scratch), ctx1.block != nil)
+	}
+	if ctx2.scratch != nil || ctx2.block != nil {
+		t.Fatalf("ctx2 not cleaned on close: scratch=%d block=%v", len(ctx2.scratch), ctx2.block != nil)
+	}
+	if got := set.acquire(); got != nil {
+		t.Fatalf("acquire after close=%v want nil", got)
+	}
+}
+
+func TestOuterLeafFenceDecodeLeaseSetReleaseAfterCloseCleansContext(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	ctx := set.acquire()
+	if ctx == nil {
+		t.Fatalf("acquire returned nil")
+	}
+	ctx.scratch = make([]byte, 64)
+
+	set.close()
+	set.release(ctx)
+
+	if ctx.scratch != nil || ctx.block != nil {
+		t.Fatalf("context not cleaned on release-after-close: scratch=%d block=%v", len(ctx.scratch), ctx.block != nil)
+	}
+}
+
+func TestOuterLeafFenceDecodeLeaseSetCloseConcurrentReleaseDoesNotRetainContext(t *testing.T) {
+	const iters = 1024
+	for i := 0; i < iters; i++ {
+		set := newOuterLeafFenceDecodeLeaseSet(1)
+		ctx := set.acquire()
+		if ctx == nil {
+			t.Fatalf("iter=%d acquire returned nil", i)
+		}
+		ctx.scratch = make([]byte, 8)
+
+		done := make(chan struct{})
+		go func() {
+			set.release(ctx)
+			close(done)
+		}()
+		set.close()
+		<-done
+
+		if got := len(set.pool); got != 0 {
+			t.Fatalf("iter=%d pool retained %d context(s) after close", i, got)
+		}
+		if ctx.scratch != nil || ctx.block != nil {
+			t.Fatalf("iter=%d context not cleaned: scratch=%d block=%v", i, len(ctx.scratch), ctx.block != nil)
+		}
+	}
+}
+
+func TestNewValueReader_FenceDecodeLeasesReaderLocal(t *testing.T) {
+	r1 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	r2 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	defer (&r1).releaseDecodeContext()
+	defer (&r2).releaseDecodeContext()
+
+	if r1.fenceDecodeLeases == nil {
+		t.Fatalf("r1.fenceDecodeLeases=nil want initialized")
+	}
+	if r2.fenceDecodeLeases == nil {
+		t.Fatalf("r2.fenceDecodeLeases=nil want initialized")
+	}
+	if r1.fenceDecodeLeases == r2.fenceDecodeLeases {
+		t.Fatalf("fenceDecodeLeases unexpectedly shared between readers")
+	}
+}
+
+func TestValueReaderReleaseDecodeContext_DoesNotAffectOtherReader(t *testing.T) {
+	r1 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	r2 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	defer (&r2).releaseDecodeContext()
+
+	(&r1).releaseDecodeContext()
+	if r1.fenceDecodeLeases != nil {
+		t.Fatalf("r1.fenceDecodeLeases=%v want nil after release", r1.fenceDecodeLeases)
+	}
+	if r2.fenceDecodeLeases == nil {
+		t.Fatalf("r2.fenceDecodeLeases=nil want still initialized")
+	}
+	ctx := r2.fenceDecodeLeases.acquire()
+	if ctx == nil {
+		t.Fatalf("r2 acquire after r1 release returned nil")
+	}
+	r2.fenceDecodeLeases.release(ctx)
+}
+
+func TestValueReaderReleaseDecodeContext_CleansReturnedLeaseContexts(t *testing.T) {
+	r := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	if r.fenceDecodeLeases == nil {
+		t.Fatalf("fenceDecodeLeases=nil want initialized")
+	}
+	ctx1 := r.fenceDecodeLeases.acquire()
+	ctx2 := r.fenceDecodeLeases.acquire()
+	if ctx1 == nil || ctx2 == nil {
+		t.Fatalf("acquire returned nil context(s): ctx1=%v ctx2=%v", ctx1, ctx2)
+	}
+	ctx1.scratch = make([]byte, 16)
+	ctx2.scratch = make([]byte, 32)
+	r.fenceDecodeLeases.release(ctx1)
+	r.fenceDecodeLeases.release(ctx2)
+
+	(&r).releaseDecodeContext()
+
+	if r.fenceDecodeLeases != nil {
+		t.Fatalf("fenceDecodeLeases=%v want nil after release", r.fenceDecodeLeases)
+	}
+	if ctx1.scratch != nil || ctx1.block != nil {
+		t.Fatalf("ctx1 not cleaned on reader release: scratch=%d block=%v", len(ctx1.scratch), ctx1.block != nil)
+	}
+	if ctx2.scratch != nil || ctx2.block != nil {
+		t.Fatalf("ctx2 not cleaned on reader release: scratch=%d block=%v", len(ctx2.scratch), ctx2.block != nil)
+	}
 }
 
 func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing.T) {
@@ -197,59 +310,18 @@ func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing
 		t.Fatalf("payload missing outer-leaf magic after truncation")
 	}
 
-	prevProcs := runtime.GOMAXPROCS(1)
-	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
-	prevGCPercent := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(prevGCPercent) })
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
+	var r valueReader
+	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	r.fenceDecodeLeases = set
 
-	makeCountingSet := func() (*outerLeafFenceDecodeLeaseSet, *int) {
-		calls := 0
-		set := &outerLeafFenceDecodeLeaseSet{}
-		set.pool.New = func() any {
-			calls++
-			return acquireOuterLeafFenceDecodeContext()
-		}
-		set.pool.Put(acquireOuterLeafFenceDecodeContext())
-		return set, &calls
+	_, _, err := r.decodeValueForKeyFound(page.ValuePtr{}, []byte("k1"), payload, true)
+	if err == nil {
+		t.Fatalf("decodeValueForKeyFound err=nil want decode failure")
 	}
-
-	const iters = 32
-	// Real path: acquire + decode + release through decodeValueForKeyFound.
-	setReleased, callsReleasedPtr := makeCountingSet()
-	var rReleased valueReader
-	rReleased.setOuterLeafMode(outerleaf.ModeV2FencePtr)
-	rReleased.fenceDecodeLeases = setReleased
-	for i := 0; i < iters; i++ {
-		_, _, err := rReleased.decodeValueForKeyFound(page.ValuePtr{}, []byte("k1"), payload, true)
-		if err == nil {
-			t.Fatalf("iter=%d decodeValueForKeyFound err=nil want decode failure", i)
-		}
-	}
-
-	// Control path: same decode work without returning contexts to the lease set.
-	setLeaked, callsLeakedPtr := makeCountingSet()
-	var rLeaked valueReader
-	rLeaked.setOuterLeafMode(outerleaf.ModeV2FencePtr)
-	rLeaked.fenceDecodeLeases = setLeaked
-	for i := 0; i < iters; i++ {
-		ctx := setLeaked.acquire()
-		if ctx == nil {
-			t.Fatalf("iter=%d leaked-path acquire returned nil", i)
-		}
-		_, _, err := rLeaked.decodeOuterLeafValueForKeyNoCacheWithLeaseCtx(payload, []byte("k1"), true, ctx)
-		if err == nil {
-			t.Fatalf("iter=%d leaked-path decode err=nil want decode failure", i)
-		}
-		// Intentionally omit release(ctx) to model a leak baseline.
-	}
-
-	callsReleased := *callsReleasedPtr
-	callsLeaked := *callsLeakedPtr
-	if callsReleased >= callsLeaked {
-		t.Fatalf("expected release path to allocate fewer contexts than leaked path: released=%d leaked=%d", callsReleased, callsLeaked)
-	}
-	if callsLeaked-callsReleased < iters/4 {
-		t.Fatalf("allocation delta too small to prove release behavior: released=%d leaked=%d", callsReleased, callsLeaked)
+	if got := len(set.pool); got != 1 {
+		t.Fatalf("pool size after decode error=%d want 1 (lease released)", got)
 	}
 }
 
@@ -261,60 +333,43 @@ func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *t
 		t.Fatalf("payload missing outer-leaf magic after truncation")
 	}
 
-	prevProcs := runtime.GOMAXPROCS(1)
-	t.Cleanup(func() { runtime.GOMAXPROCS(prevProcs) })
-	prevGCPercent := debug.SetGCPercent(-1)
-	t.Cleanup(func() { debug.SetGCPercent(prevGCPercent) })
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
+	var r valueReader
+	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	r.fenceDecodeLeases = set
 
-	makeCountingSet := func() (*outerLeafFenceDecodeLeaseSet, *int) {
-		calls := 0
-		set := &outerLeafFenceDecodeLeaseSet{}
-		set.pool.New = func() any {
-			calls++
-			return acquireOuterLeafFenceDecodeContext()
-		}
-		set.pool.Put(acquireOuterLeafFenceDecodeContext())
-		return set, &calls
+	_, _, err := r.decodeValueForKeyFoundAppend(page.ValuePtr{}, []byte("k1"), payload, nil)
+	if err == nil {
+		t.Fatalf("decodeValueForKeyFoundAppend err=nil want decode failure")
 	}
+	if got := len(set.pool); got != 1 {
+		t.Fatalf("pool size after append decode error=%d want 1 (lease released)", got)
+	}
+}
 
-	const iters = 32
-	// Real path: acquire + decode + release through decodeValueForKeyFoundAppend.
-	setReleased, callsReleasedPtr := makeCountingSet()
-	var rReleased valueReader
-	rReleased.setOuterLeafMode(outerleaf.ModeV2FencePtr)
-	rReleased.fenceDecodeLeases = setReleased
-	for i := 0; i < iters; i++ {
-		_, _, err := rReleased.decodeValueForKeyFoundAppend(page.ValuePtr{}, []byte("k1"), payload, nil)
-		if err == nil {
-			t.Fatalf("iter=%d decodeValueForKeyFoundAppend err=nil want decode failure", i)
-		}
+func TestOuterLeafFenceDecodeLeaseSetReleaseRetainedContextDropsOversizedScratch(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
+	ctx := set.acquire()
+	if ctx == nil {
+		t.Fatalf("acquire returned nil")
 	}
+	ctx.scratch = make([]byte, 0, outerLeafFenceDecodeScratchMaxRetain+1)
 
-	// Control path: same append decode work without returning contexts.
-	setLeaked, callsLeakedPtr := makeCountingSet()
-	var rLeaked valueReader
-	rLeaked.setOuterLeafMode(outerleaf.ModeV2FencePtr)
-	rLeaked.fenceDecodeLeases = setLeaked
-	for i := 0; i < iters; i++ {
-		ctx := setLeaked.acquire()
-		if ctx == nil {
-			t.Fatalf("iter=%d leaked-path acquire returned nil", i)
-		}
-		_, _, err := rLeaked.decodeOuterLeafAppendForKeyNoCacheWithLeaseCtx(payload, []byte("k1"), nil, ctx)
-		if err == nil {
-			t.Fatalf("iter=%d leaked-path append decode err=nil want decode failure", i)
-		}
-		// Intentionally omit release(ctx) to model a leak baseline.
-	}
+	set.release(ctx)
 
-	callsReleased := *callsReleasedPtr
-	callsLeaked := *callsLeakedPtr
-	if callsReleased >= callsLeaked {
-		t.Fatalf("expected append release path to allocate fewer contexts than leaked path: released=%d leaked=%d", callsReleased, callsLeaked)
+	if ctx.scratch != nil {
+		t.Fatalf("retained context kept oversized scratch cap=%d", cap(ctx.scratch))
 	}
-	if callsLeaked-callsReleased < iters/4 {
-		t.Fatalf("append allocation delta too small to prove release behavior: released=%d leaked=%d", callsReleased, callsLeaked)
+	reacquired := set.acquire()
+	if reacquired == nil {
+		t.Fatalf("reacquire returned nil")
 	}
+	if cap(reacquired.scratch) > outerLeafFenceDecodeScratchMaxRetain {
+		t.Fatalf("reacquired scratch cap=%d exceeds max retain=%d", cap(reacquired.scratch), outerLeafFenceDecodeScratchMaxRetain)
+	}
+	set.release(reacquired)
 }
 
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {

@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -120,13 +121,8 @@ var outerLeafFenceDecodeScratchEntryPool = sync.Pool{
 	},
 }
 var outerLeafFenceDecodedBlockPool sync.Pool
-var outerLeafFenceDecodeSharedLeases *outerLeafFenceDecodeLeaseSet
-var outerLeafFenceDecodeSharedLeasesOnce sync.Once
-var outerLeafFenceDecodeContextPool = sync.Pool{
-	New: func() any {
-		return &outerLeafFenceDecodeContext{}
-	},
-}
+var outerLeafFenceDecodeLeaseSetPreferredSizeOnce sync.Once
+var outerLeafFenceDecodeLeaseSetPreferredSizeCached int
 
 type outerLeafScratchEntry struct {
 	buf []byte
@@ -138,68 +134,107 @@ type outerLeafFenceDecodeContext struct {
 }
 
 type outerLeafFenceDecodeLeaseSet struct {
-	pool sync.Pool
-}
-
-func outerLeafFenceDecodeSharedLeaseSet() *outerLeafFenceDecodeLeaseSet {
-	outerLeafFenceDecodeSharedLeasesOnce.Do(initOuterLeafFenceDecodeSharedLeases)
-	return outerLeafFenceDecodeSharedLeases
-}
-
-func initOuterLeafFenceDecodeSharedLeases() {
-	outerLeafFenceDecodeSharedLeases = newOuterLeafFenceDecodeLeaseSet(0)
+	mu     sync.Mutex
+	pool   chan *outerLeafFenceDecodeContext
+	closed atomic.Bool
 }
 
 func newOuterLeafFenceDecodeLeaseSet(size int) *outerLeafFenceDecodeLeaseSet {
 	if size <= 0 {
 		size = outerLeafFenceDecodeLeaseSetPreferredSize()
 	}
-	set := &outerLeafFenceDecodeLeaseSet{}
-	set.pool.New = func() any {
-		return acquireOuterLeafFenceDecodeContext()
+	set := &outerLeafFenceDecodeLeaseSet{
+		pool: make(chan *outerLeafFenceDecodeContext, size),
 	}
-	for i := 0; i < size; i++ {
-		set.pool.Put(acquireOuterLeafFenceDecodeContext())
-	}
+	// Intentionally avoid eager prewarm. Snapshot-per-key workloads create many
+	// short-lived readers; lazy fill on first release avoids per-reader setup tax.
 	return set
 }
 
 func outerLeafFenceDecodeLeaseSetPreferredSize() int {
-	n := runtime.GOMAXPROCS(0)
-	if n < outerLeafFenceDecodeLeaseSetMinSize {
-		return outerLeafFenceDecodeLeaseSetMinSize
-	}
-	if n > outerLeafFenceDecodeLeaseSetMaxSize {
-		return outerLeafFenceDecodeLeaseSetMaxSize
-	}
-	return n
+	outerLeafFenceDecodeLeaseSetPreferredSizeOnce.Do(func() {
+		n := runtime.GOMAXPROCS(0)
+		if n < outerLeafFenceDecodeLeaseSetMinSize {
+			n = outerLeafFenceDecodeLeaseSetMinSize
+		}
+		if n > outerLeafFenceDecodeLeaseSetMaxSize {
+			n = outerLeafFenceDecodeLeaseSetMaxSize
+		}
+		outerLeafFenceDecodeLeaseSetPreferredSizeCached = n
+	})
+	return outerLeafFenceDecodeLeaseSetPreferredSizeCached
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) acquire() *outerLeafFenceDecodeContext {
-	if s == nil {
+	if s == nil || s.closed.Load() {
 		return nil
 	}
-	if v := s.pool.Get(); v != nil {
-		if ctx, ok := v.(*outerLeafFenceDecodeContext); ok && ctx != nil {
-			return ctx
+	initCtx := func(ctx *outerLeafFenceDecodeContext) *outerLeafFenceDecodeContext {
+		if ctx != nil && cap(ctx.scratch) == 0 {
+			ctx.scratch = outerLeafFenceDecodeScratchGet()
 		}
+		return ctx
 	}
-	return acquireOuterLeafFenceDecodeContext()
+	select {
+	case ctx := <-s.pool:
+		return initCtx(ctx)
+	default:
+		return initCtx(&outerLeafFenceDecodeContext{})
+	}
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) release(ctx *outerLeafFenceDecodeContext) {
 	if s == nil || ctx == nil {
 		return
 	}
-	s.pool.Put(ctx)
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
+		releaseOuterLeafFenceDecodeContext(ctx)
+		return
+	}
+	// Apply retention bounds before enqueue so acquire() never observes a context
+	// while its scratch field is being mutated.
+	if cap(ctx.scratch) > outerLeafFenceDecodeScratchMaxRetain {
+		ctx.scratch = nil
+	}
+	retained := false
+	select {
+	case s.pool <- ctx:
+		retained = true
+	default:
+	}
+	s.mu.Unlock()
+	if retained {
+		return
+	}
+	// Keep retention bounded to per-reader prewarm capacity.
+	releaseOuterLeafFenceDecodeContext(ctx)
 }
 
 func (s *outerLeafFenceDecodeLeaseSet) close() {
-	_ = s
-}
-
-func acquireOuterLeafFenceDecodeContext() *outerLeafFenceDecodeContext {
-	return outerLeafFenceDecodeContextPool.Get().(*outerLeafFenceDecodeContext)
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	if s.closed.Load() {
+		s.mu.Unlock()
+		return
+	}
+	s.closed.Store(true)
+	var drained []*outerLeafFenceDecodeContext
+	for {
+		select {
+		case ctx := <-s.pool:
+			drained = append(drained, ctx)
+		default:
+			s.mu.Unlock()
+			for _, ctx := range drained {
+				releaseOuterLeafFenceDecodeContext(ctx)
+			}
+			return
+		}
+	}
 }
 
 func releaseOuterLeafFenceDecodeContext(ctx *outerLeafFenceDecodeContext) {
@@ -215,7 +250,6 @@ func releaseOuterLeafFenceDecodeContext(ctx *outerLeafFenceDecodeContext) {
 		outerLeafFenceDecodedBlockPut(block)
 	}
 	outerLeafFenceDecodeScratchPut(scratch)
-	outerLeafFenceDecodeContextPool.Put(ctx)
 }
 
 func outerLeafLookupScratchGet() []byte {
@@ -322,7 +356,7 @@ func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums b
 	}
 	r.setOuterLeafMode(mode)
 	if r.fenceLookupEnabled {
-		r.fenceDecodeLeases = outerLeafFenceDecodeSharedLeaseSet()
+		r.fenceDecodeLeases = newOuterLeafFenceDecodeLeaseSet(0)
 	}
 	return r
 }
@@ -331,9 +365,7 @@ func (r *valueReader) releaseDecodeContext() {
 	if r == nil || r.fenceDecodeLeases == nil {
 		return
 	}
-	if r.fenceDecodeLeases != outerLeafFenceDecodeSharedLeases {
-		r.fenceDecodeLeases.close()
-	}
+	r.fenceDecodeLeases.close()
 	r.fenceDecodeLeases = nil
 }
 
