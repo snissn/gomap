@@ -39,6 +39,12 @@ type cacheFenceKeysLease struct {
 	inUse      bool
 }
 
+type cacheRangeFenceKeysLease struct {
+	keyLease   *outerleaf.KeyLease
+	cacheLease outerLeafBlockCacheLease
+	inUse      bool
+}
+
 var staticFenceKeysLeasePool = sync.Pool{
 	New: func() any {
 		return &staticFenceKeysLease{}
@@ -48,6 +54,12 @@ var staticFenceKeysLeasePool = sync.Pool{
 var cacheFenceKeysLeasePool = sync.Pool{
 	New: func() any {
 		return &cacheFenceKeysLease{}
+	},
+}
+
+var cacheRangeFenceKeysLeasePool = sync.Pool{
+	New: func() any {
+		return &cacheRangeFenceKeysLease{}
 	},
 }
 
@@ -98,6 +110,35 @@ func (l *cacheFenceKeysLease) Release() {
 	l.cacheLease = outerLeafBlockCacheLease{}
 	l.inUse = false
 	cacheFenceKeysLeasePool.Put(l)
+}
+
+func acquireCacheRangeFenceKeysLease(keyLease *outerleaf.KeyLease, cacheLease outerLeafBlockCacheLease) *cacheRangeFenceKeysLease {
+	lease := cacheRangeFenceKeysLeasePool.Get().(*cacheRangeFenceKeysLease)
+	lease.keyLease = keyLease
+	lease.cacheLease = cacheLease
+	lease.inUse = true
+	return lease
+}
+
+func (l *cacheRangeFenceKeysLease) Keys() [][]byte {
+	if l == nil || !l.inUse || l.keyLease == nil {
+		return nil
+	}
+	return l.keyLease.Keys()
+}
+
+func (l *cacheRangeFenceKeysLease) Release() {
+	if l == nil || !l.inUse {
+		return
+	}
+	if l.keyLease != nil {
+		l.keyLease.Release()
+		l.keyLease = nil
+	}
+	l.cacheLease.Release()
+	l.cacheLease = outerLeafBlockCacheLease{}
+	l.inUse = false
+	cacheRangeFenceKeysLeasePool.Put(l)
 }
 
 const outerLeafLookupScratchMaxRetain = 1 << 20
@@ -1250,16 +1291,16 @@ func (r valueReader) ReadUnsafeFenceBlockKeysRangeLease(ptr page.ValuePtr, lower
 		return acquireStaticFenceKeysLease(sliceFenceKeysRange(cachedKeys, lower, upper)), true, nil
 	}
 	if block, cacheLease := r.cachedOuterLeafBlock(ptr); block != nil {
-		keys, err := block.KeysRange(nil, lower, upper)
+		keyLease, err := block.KeysRangeLease(lower, upper)
 		if err != nil {
 			cacheLease.Release()
 			return nil, true, err
 		}
-		if len(keys) == 0 {
+		if keyLease == nil {
 			cacheLease.Release()
 			return nil, true, nil
 		}
-		return acquireCacheFenceKeysLease(keys, cacheLease), true, nil
+		return acquireCacheRangeFenceKeysLease(keyLease, cacheLease), true, nil
 	}
 	raw, err := r.readRawUnsafe(ptr)
 	if err != nil {
@@ -1770,16 +1811,11 @@ func (r valueReader) outerLeafBlock(ptr page.ValuePtr, raw []byte) (*outerleaf.D
 	// those blocks avoids lock/churn overhead while retaining cache benefits for
 	// inline-heavy blocks.
 	if block.FirstKind() != outerleaf.EntryKindBlobRef {
-		r.cache.put(key, block)
-		if cached, cachedLease := r.cache.get(key); cached != nil {
-			return cached, cachedLease, nil
-		}
-		// Under heavy concurrent churn, immediate eviction can drop the just-admitted
-		// block before we acquire a lease. Decode an uncached view so callers never
-		// observe storage that may already have been released.
-		block, err = outerleaf.DecodeBlockWithVerify(raw, nil, verifyChecksums)
-		if err != nil {
-			return nil, lease, err
+		if putLease, admitted := r.cache.putWithLease(key, block); admitted && putLease.ref != nil {
+			if cached := putLease.ref.block; cached != nil {
+				return cached, putLease, nil
+			}
+			putLease.Release()
 		}
 	}
 	return block, lease, nil

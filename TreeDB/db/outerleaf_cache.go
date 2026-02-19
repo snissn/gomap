@@ -96,6 +96,9 @@ type outerLeafBlockCacheShard struct {
 	hits     atomic.Uint64
 	misses   atomic.Uint64
 	capacity int
+	admit    []uint64
+	// admitMask is len(admitBits)-1 for power-of-two indexing into admit.
+	admitMask uint64
 }
 
 type outerLeafBlockCache struct {
@@ -112,6 +115,8 @@ const outerLeafBlockCachePromoteSampleMask uint64 = 0x0f // 1/16
 // mixed read/write contention.
 const outerLeafBlockCacheTargetEntriesPerShard = 64
 const outerLeafBlockCacheMaxShards = 64
+const outerLeafBlockCacheAdmitBitsPerEntry = 16
+const outerLeafBlockCacheAdmitMinBits = 256
 
 func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 	if capacity <= 0 {
@@ -142,6 +147,17 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 		if i < extra {
 			capI++
 		}
+		admitBits := 0
+		if capI > 0 {
+			targetBits := capI * outerLeafBlockCacheAdmitBitsPerEntry
+			if targetBits < outerLeafBlockCacheAdmitMinBits {
+				targetBits = outerLeafBlockCacheAdmitMinBits
+			}
+			admitBits = 1
+			for admitBits < targetBits {
+				admitBits <<= 1
+			}
+		}
 		free := make([]int, capI)
 		nodes := make([]outerLeafBlockCacheEntry, capI)
 		for j := 0; j < capI; j++ {
@@ -150,12 +166,14 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 			free[j] = capI - 1 - j
 		}
 		shards[i] = outerLeafBlockCacheShard{
-			entries:  make(map[outerLeafBlockKey]int, capI),
-			nodes:    nodes,
-			free:     free,
-			head:     -1,
-			tail:     -1,
-			capacity: capI,
+			entries:   make(map[outerLeafBlockKey]int, capI),
+			nodes:     nodes,
+			free:      free,
+			head:      -1,
+			tail:      -1,
+			capacity:  capI,
+			admit:     make([]uint64, admitBits/64),
+			admitMask: uint64(admitBits - 1),
 		}
 	}
 
@@ -205,6 +223,15 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBloc
 }
 
 func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.DecodedBlock) {
+	lease, _ := c.putWithLease(key, block)
+	lease.Release()
+}
+
+func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerleaf.DecodedBlock) (outerLeafBlockCacheLease, bool) {
+	var lease outerLeafBlockCacheLease
+	if c == nil || block == nil {
+		return lease, false
+	}
 	s := c.shardFor(key)
 	s.mu.Lock()
 	var releaseOld *outerLeafBlockRef
@@ -218,18 +245,22 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 			s.nodes[idx].ref = newOuterLeafBlockRef(block)
 		}
 		s.moveToFront(idx)
+		if ref := s.nodes[idx].ref; ref != nil && ref.retain() {
+			lease.ref = ref
+		}
 		s.mu.Unlock()
 		if releaseOld != nil {
 			releaseOld.release()
 		}
-		return
+		return lease, lease.ref != nil
 	}
 	if s.capacity <= 0 {
 		s.mu.Unlock()
-		if ref := newOuterLeafBlockRef(block); ref != nil {
-			ref.release()
-		}
-		return
+		return lease, false
+	}
+	if !s.shouldAdmit(key) {
+		s.mu.Unlock()
+		return lease, false
 	}
 
 	var idx int
@@ -240,10 +271,7 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 		idx = s.tail
 		if idx < 0 {
 			s.mu.Unlock()
-			if ref := newOuterLeafBlockRef(block); ref != nil {
-				ref.release()
-			}
-			return
+			return lease, false
 		}
 		evictedKey := s.nodes[idx].key
 		releaseEvicted = s.nodes[idx].ref
@@ -262,10 +290,14 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 	node.next = -1
 	s.linkFront(idx)
 	s.entries[key] = idx
+	if ref := node.ref; ref != nil && ref.retain() {
+		lease.ref = ref
+	}
 	s.mu.Unlock()
 	if releaseEvicted != nil {
 		releaseEvicted.release()
 	}
+	return lease, lease.ref != nil
 }
 
 func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
@@ -287,14 +319,27 @@ func (c *outerLeafBlockCache) shardFor(key outerLeafBlockKey) *outerLeafBlockCac
 	if len(c.shards) == 1 {
 		return &c.shards[0]
 	}
-	h := uint64(key.fileID)*11400714819323198485 ^
-		key.offset*14029467366897019727 ^
-		uint64(key.length)*1609587929392839161
-	h ^= h >> 33
-	h *= 0xff51afd7ed558ccd
-	h ^= h >> 33
+	h := outerLeafBlockKeyHash(key)
 	idx := int(h & uint64(len(c.shards)-1))
 	return &c.shards[idx]
+}
+
+func (s *outerLeafBlockCacheShard) shouldAdmit(key outerLeafBlockKey) bool {
+	if s == nil || s.capacity <= 0 {
+		return false
+	}
+	if s.capacity <= 64 || len(s.entries) < s.capacity/4 {
+		return true
+	}
+	if len(s.admit) == 0 || s.admitMask == 0 {
+		return true
+	}
+	idx := outerLeafBlockKeyHash(key) & s.admitMask
+	word := idx >> 6
+	bit := uint64(1) << (idx & 63)
+	seen := s.admit[word]&bit != 0
+	s.admit[word] |= bit
+	return seen
 }
 
 func (s *outerLeafBlockCacheShard) moveToFront(idx int) {

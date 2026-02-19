@@ -2800,6 +2800,33 @@ func (d *DecodedBlock) KeysRange(dst [][]byte, lower []byte, upper []byte) ([][]
 	}
 }
 
+// KeysRangeLease decodes keys in [lower, upper) and returns them via a lease.
+// Callers must release the lease when finished.
+func (d *DecodedBlock) KeysRangeLease(lower []byte, upper []byte) (*KeyLease, error) {
+	if d == nil {
+		return nil, fmt.Errorf("outerleaf: nil block")
+	}
+	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
+		return nil, nil
+	}
+	switch d.version {
+	case blockVersionV1:
+		if d.firstKey == nil {
+			return nil, fmt.Errorf("outerleaf: missing v1 key")
+		}
+		if !keyWithinRange(d.firstKey, lower, upper) {
+			return nil, nil
+		}
+		lease := acquireKeyLease(1)
+		lease.keys = append(lease.keys, d.firstKey)
+		return lease, nil
+	case blockVersionV2, blockVersionV3:
+		return decodeStructuredKeysBoundedLease(d.version, d.entryCount, d.entries, lower, upper)
+	default:
+		return nil, fmt.Errorf("outerleaf: unsupported version %d", d.version)
+	}
+}
+
 // LowerBound returns the first entry index whose key is >= target and classifies
 // whether target falls below the block range, within it, or above it.
 func (d *DecodedBlock) LowerBound(target []byte) (pos int, below bool, above bool, err error) {
