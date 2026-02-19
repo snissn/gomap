@@ -22,7 +22,12 @@ const (
 	appendOnlyMaxInitialEntries      = 1 << 20
 	appendOnlyInlineKeyLen           = 8
 	appendOnlyPointerGrowCutoff      = 1 << 15
+	appendOnlyEntryPoolMaxCap        = 1 << 20
+	appendOnlyIteratorPoolMaxCap     = 1 << 20
 )
+
+var appendOnlyEntryPool sync.Pool
+var appendOnlyIteratorPool sync.Pool
 
 type appendOnlyEntry struct {
 	key       []byte
@@ -53,6 +58,55 @@ type AppendOnly struct {
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
 
+func getAppendOnlyEntries(length int) []appendOnlyEntry {
+	if length < 0 {
+		length = 0
+	}
+	if length > appendOnlyEntryPoolMaxCap {
+		return make([]appendOnlyEntry, length)
+	}
+	if v := appendOnlyEntryPool.Get(); v != nil {
+		if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
+			return entries[:length]
+		}
+	}
+	return make([]appendOnlyEntry, length)
+}
+
+func putAppendOnlyEntries(entries []appendOnlyEntry) {
+	if entries == nil || cap(entries) == 0 || cap(entries) > appendOnlyEntryPoolMaxCap {
+		return
+	}
+	full := entries[:cap(entries)]
+	clear(full)
+	appendOnlyEntryPool.Put(full[:0])
+}
+
+func getAppendOnlyIteratorEntries(length int) []appendOnlyEntry {
+	if length < 0 {
+		length = 0
+	}
+	if length > appendOnlyIteratorPoolMaxCap {
+		return make([]appendOnlyEntry, length)
+	}
+	if v := appendOnlyIteratorPool.Get(); v != nil {
+		if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
+			out := entries[:length]
+			clear(out)
+			return out
+		}
+	}
+	return make([]appendOnlyEntry, length)
+}
+
+func putAppendOnlyIteratorEntries(entries []appendOnlyEntry) {
+	if entries == nil || cap(entries) == 0 || cap(entries) > appendOnlyIteratorPoolMaxCap {
+		return
+	}
+	clear(entries)
+	appendOnlyIteratorPool.Put(entries[:0])
+}
+
 func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 	if capacity <= 0 {
 		capacity = defaultMemtableCapacity
@@ -65,7 +119,7 @@ func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 		n = appendOnlyMaxInitialEntries
 	}
 	return &AppendOnly{
-		entries:   make([]appendOnlyEntry, n),
+		entries:   getAppendOnlyEntries(n),
 		count:     0,
 		ordered:   true,
 		hasLast:   false,
@@ -186,13 +240,17 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 	}
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries), flags)
-		grown := make([]appendOnlyEntry, nextCap)
+		prev := m.entries
+		grown := getAppendOnlyEntries(nextCap)
 		copy(grown, m.entries[:m.count])
 		m.entries = grown
+		putAppendOnlyEntries(prev)
 	}
 	idx := m.count
 	m.count++
 	ent := &m.entries[idx]
+	ent.key = nil
+	ent.value = nil
 	ent.ptr = ptr
 	ent.flags = flags
 	ent.keyInline = false
@@ -491,7 +549,7 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	// not hold the write lock for its lifetime.
 	m.mu.Lock()
 	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
-	entries := make([]appendOnlyEntry, len(snapshotPtrs))
+	entries := getAppendOnlyIteratorEntries(len(snapshotPtrs))
 	for i := range snapshotPtrs {
 		if snapshotPtrs[i] != nil {
 			entries[i] = *snapshotPtrs[i]
@@ -500,8 +558,9 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.Unlock()
 
 	it := &appendOnlyIterator{
-		entries: entries,
-		end:     end,
+		entries:       entries,
+		end:           end,
+		pooledEntries: true,
 	}
 	if start != nil {
 		it.Seek(start)
@@ -510,10 +569,11 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 type appendOnlyIterator struct {
-	entries []appendOnlyEntry
-	idx     int
-	end     []byte
-	mu      *sync.RWMutex
+	entries       []appendOnlyEntry
+	idx           int
+	end           []byte
+	mu            *sync.RWMutex
+	pooledEntries bool
 }
 
 func (it *appendOnlyIterator) validIndex() bool {
@@ -606,6 +666,11 @@ func (it *appendOnlyIterator) Close() error {
 		it.mu.RUnlock()
 		it.mu = nil
 	}
+	if it.pooledEntries {
+		putAppendOnlyIteratorEntries(it.entries)
+		it.pooledEntries = false
+	}
+	it.entries = nil
 	return nil
 }
 

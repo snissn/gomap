@@ -67,6 +67,7 @@ func BenchmarkBuildOpRuns_ModeCompare(b *testing.B) {
 				for _, run := range runs {
 					putEntrySlice(run)
 				}
+				putEntryRuns(runs)
 
 				b.ReportAllocs()
 				b.ResetTimer()
@@ -78,6 +79,7 @@ func BenchmarkBuildOpRuns_ModeCompare(b *testing.B) {
 					for _, run := range runs {
 						putEntrySlice(run)
 					}
+					putEntryRuns(runs)
 				}
 			})
 		}
