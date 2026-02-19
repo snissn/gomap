@@ -1296,7 +1296,7 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 	warm[1] = []byte("right")
 	putPooledLeaseKeys(warm)
 	if warm[0] != nil || warm[1] != nil {
-		t.Fatalf("expected putPooledLeaseKeys to clear source buffer, got=%v", warm[:2])
+		t.Fatalf("expected put to clear caller buffer, got=%v", warm[:2])
 	}
 
 	got := getPooledLeaseKeys(1)
@@ -1306,20 +1306,26 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0", len(got))
 	}
-	if cap(got) >= 1 {
-		got = got[:1]
-		if got[0] != nil {
-			t.Fatalf("expected cleared pooled entry, got=%v", got[0])
+	// sync.Pool may drop warm entries between Put/Get; only assert warm reuse
+	// when a warmed-capacity buffer is actually returned.
+	if cap(got) >= cap(warm) {
+		got = got[:2]
+		if got[0] != nil || got[1] != nil {
+			t.Fatalf("expected cleared pooled entries, got=%v", got)
 		}
 		got = got[:0]
 	}
 
-	got = append(got, []byte("mutated"))
+	got = got[:1]
+	got[0] = []byte("mutated")
 	putPooledLeaseKeys(got[:0])
+	if got[0] != nil {
+		t.Fatalf("expected put to clear mutated entry")
+	}
 
 	got = getPooledLeaseKeys(1)
 	if cap(got) < 1 {
-		t.Fatalf("cap(got)=%d want >=1 on warm reuse", cap(got))
+		t.Fatalf("cap(got)=%d want >=1 on reuse", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
