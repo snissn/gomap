@@ -14,6 +14,7 @@ type savedTreeDBFlagState struct {
 	columnarLeaves     bool
 	packedValuePtr     bool
 	internalBaseDelta  bool
+	chunkSize          int64
 	vlogAutoPolicy     string
 	walFenceMode       string
 	outerLeafBlobBytes int
@@ -38,6 +39,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		columnarLeaves:     *treedbIndexColumnarLeaves,
 		packedValuePtr:     *treedbIndexPackedValuePtr,
 		internalBaseDelta:  *treedbIndexInternalBaseDelta,
+		chunkSize:          *treedbChunkSize,
 		vlogAutoPolicy:     *treedbVlogAutoPolicy,
 		walFenceMode:       *treedbWALFenceMode,
 		outerLeafBlobBytes: *treedbOuterLeafBlobThresholdBytes,
@@ -58,6 +60,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexColumnarLeaves = s.columnarLeaves
 	*treedbIndexPackedValuePtr = s.packedValuePtr
 	*treedbIndexInternalBaseDelta = s.internalBaseDelta
+	*treedbChunkSize = s.chunkSize
 	*treedbVlogAutoPolicy = s.vlogAutoPolicy
 	*treedbWALFenceMode = s.walFenceMode
 	*treedbOuterLeafBlobThresholdBytes = s.outerLeafBlobBytes
@@ -77,6 +80,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexColumnarLeaves = false
 	*treedbIndexPackedValuePtr = false
 	*treedbIndexInternalBaseDelta = false
+	*treedbChunkSize = defaultTreeDBChunkSizeBytes
 	*treedbVlogAutoPolicy = "balanced"
 	*treedbWALFenceMode = "rid_join"
 	*treedbOuterLeafBlobThresholdBytes = 0

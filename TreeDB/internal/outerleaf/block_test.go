@@ -1299,6 +1299,8 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 		t.Fatalf("expected put to clear caller buffer, got=%v", warm[:2])
 	}
 
+	// sync.Pool is allowed to drop entries at any time, so this test only asserts
+	// correctness properties (shape + cleared contents), not guaranteed reuse.
 	got := getPooledLeaseKeys(1)
 	if cap(got) < 1 {
 		t.Fatalf("cap(got)=%d want >=1", cap(got))
@@ -1325,7 +1327,7 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 
 	got = getPooledLeaseKeys(1)
 	if cap(got) < 1 {
-		t.Fatalf("cap(got)=%d want >=1 on reuse", cap(got))
+		t.Fatalf("cap(got)=%d want >=1 on warm reuse", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))

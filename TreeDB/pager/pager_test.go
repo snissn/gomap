@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -198,4 +199,42 @@ func TestPagerTruncate(t *testing.T) {
 		t.Errorf("Expected file size %d, got %d", expectedSize, info.Size())
 	}
 
+}
+
+func TestPagerAsyncPreGrow_DefaultChunkEnabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "index_pregrow.db")
+
+	chunkSize := int64(256 << 10) // TreeDB default main chunk size
+	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
+		chunkSize = ((chunkSize + gran - 1) / gran) * gran
+	}
+
+	p, err := Open(path, chunkSize)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer p.Close()
+
+	pagesPerChunk := int(chunkSize / int64(page.PageSize))
+	if pagesPerChunk < 2 {
+		t.Fatalf("unexpected pagesPerChunk=%d for chunkSize=%d", pagesPerChunk, chunkSize)
+	}
+
+	// Fill almost an entire chunk. This should trigger async pre-grow and map
+	// one additional chunk in the background.
+	if _, err := p.Alloc(pagesPerChunk - 1); err != nil {
+		t.Fatalf("Alloc failed: %v", err)
+	}
+
+	wantCapacity := int64(2) * chunkSize
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if got := p.currentCapacityBytes(); got >= wantCapacity {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("async pre-grow did not reach capacity=%d within timeout; got=%d", wantCapacity, p.currentCapacityBytes())
 }

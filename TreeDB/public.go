@@ -26,8 +26,8 @@ import (
 type Options = db.Options
 
 const (
-	defaultChunkSize     = 16 * 1024 * 1024
-	defaultDictChunkSize = 1 * 1024 * 1024
+	defaultChunkSize     = 256 * 1024
+	defaultDictChunkSize = 64 * 1024
 
 	defaultSlowdownBacklogSeconds              = 1.0
 	defaultStopBacklogSeconds                  = 2.0
