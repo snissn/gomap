@@ -114,12 +114,27 @@ func TestPutOpMergeHeapClearsReferences(t *testing.T) {
 }
 
 func TestBuildOpRunsChunking(t *testing.T) {
+	const chunkCap = 2
+	_, classCap, ok := entrySliceLeaseClassForLen(chunkCap)
+	if !ok {
+		t.Fatalf("entrySliceLeaseClassForLen(%d) failed", chunkCap)
+	}
+	entrySliceLeaseMu.Lock()
+	for i := range entrySliceLeases {
+		entrySliceLeases[i] = nil
+	}
+	entrySliceLeaseMu.Unlock()
+	for i := 0; i < 4; i++ {
+		putEntrySlice(make([]batch.Entry, 0, classCap))
+	}
+
 	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
 	if err != nil {
 		t.Fatalf("NewWithCapacityMode: %v", err)
 	}
 	var key [8]byte
-	for i := 0; i < 5; i++ {
+	entryCount := classCap*2 + 3
+	for i := 0; i < entryCount; i++ {
 		binary.BigEndian.PutUint64(key[:], uint64(i))
 		mt.Set(key[:], []byte{byte(i + 1)})
 	}
@@ -127,7 +142,7 @@ func TestBuildOpRunsChunking(t *testing.T) {
 	mt.Delete(key[:])
 	mt.Freeze()
 
-	runs, deleteOps, err := buildOpRuns(mt, 2)
+	runs, deleteOps, err := buildOpRuns(mt, chunkCap)
 	if err != nil {
 		t.Fatalf("buildOpRuns: %v", err)
 	}
@@ -144,10 +159,18 @@ func TestBuildOpRunsChunking(t *testing.T) {
 	if len(runs) == 0 {
 		t.Fatalf("expected at least one run")
 	}
+	totalOps := 0
 	for i, run := range runs {
-		if len(run) == 0 || len(run) > 2 {
+		totalOps += len(run)
+		if len(run) == 0 || len(run) > classCap {
 			t.Fatalf("run %d has unexpected size %d", i, len(run))
 		}
+	}
+	if totalOps != entryCount {
+		t.Fatalf("total ops=%d want=%d", totalOps, entryCount)
+	}
+	if len(runs) < 3 {
+		t.Fatalf("expected multiple runs, got=%d", len(runs))
 	}
 }
 

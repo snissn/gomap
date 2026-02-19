@@ -146,6 +146,115 @@ func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
 	_ = valBufPtr
 }
 
+func TestAppendOnlySetCopiesIntoArenaForNonSteal(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("long-key-arena")
+	src := []byte("value-arena-copy")
+	m.Set(key, src)
+
+	if m.count != 1 {
+		t.Fatalf("count=%d want=1", m.count)
+	}
+	ent := &m.entries[0]
+	if !ent.valueOwned {
+		t.Fatalf("expected non-steal set to mark valueOwned")
+	}
+	if len(ent.value) != len(src) {
+		t.Fatalf("entry value len=%d want=%d", len(ent.value), len(src))
+	}
+	if &ent.value[0] == &src[0] {
+		t.Fatalf("entry value unexpectedly aliases caller buffer")
+	}
+	src[0] = 'X'
+
+	got, tombstone, ok := m.Get(key)
+	if !ok || tombstone {
+		t.Fatalf("Get(%q) = ok=%v tombstone=%v; want ok=true tombstone=false", key, ok, tombstone)
+	}
+	if string(got) != "value-arena-copy" {
+		t.Fatalf("stored value changed via source mutation: got=%q", got)
+	}
+}
+
+func TestAppendOnlyResetClearsValueArenaState(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("k")
+	val := make([]byte, 2048)
+	for i := 0; i < 8; i++ {
+		key[0] = byte('a' + i)
+		val[0] = byte(i)
+		m.Set(key, val)
+	}
+	if len(m.valueArena.chunks) == 0 {
+		t.Fatalf("expected value arena chunks to be populated")
+	}
+
+	m.Reset()
+	if len(m.valueArena.chunks) != 0 {
+		t.Fatalf("expected value arena chunks to be released on reset; got=%d", len(m.valueArena.chunks))
+	}
+	if m.valueArena.cur != nil {
+		t.Fatalf("expected value arena current chunk to be cleared")
+	}
+	if m.valueArena.curPos != 0 {
+		t.Fatalf("expected value arena position reset; got=%d", m.valueArena.curPos)
+	}
+}
+
+func TestAppendOnlyUnorderedAppendDefersLatestRebuild(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("b"), []byte("v1"))
+	m.Set([]byte("a"), []byte("v2")) // force unordered path
+	if m.ordered {
+		t.Fatalf("expected unordered memtable")
+	}
+	if !m.latestDirty {
+		t.Fatalf("expected latest index to be dirty after order break")
+	}
+
+	it := m.NewIterator(nil, nil)
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+	if m.latestDirty {
+		t.Fatalf("expected iterator snapshot build to refresh latest index")
+	}
+	if m.snapCount == 0 {
+		t.Fatalf("expected sorted latest snapshot to be cached")
+	}
+
+	m.Set([]byte("b"), []byte("v3"))
+	if !m.latestDirty {
+		t.Fatalf("expected unordered append to mark latest index dirty")
+	}
+	if m.snapCount != 0 {
+		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)
+	}
+
+	got, tombstone, found := m.Get([]byte("b"))
+	if !found || tombstone {
+		t.Fatalf("Get(b) = found=%v tombstone=%v; want found=true tombstone=false", found, tombstone)
+	}
+	if string(got) != "v3" {
+		t.Fatalf("Get(b)=%q want=v3", got)
+	}
+
+	it = m.NewIterator(nil, nil)
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close after append: %v", err)
+	}
+	if m.latestDirty {
+		t.Fatalf("expected latest index rebuild on second iterator snapshot")
+	}
+	idx, ok := m.latest[appendOnlyKeyString([]byte("b"))]
+	if !ok {
+		t.Fatalf("missing latest index entry for key b")
+	}
+	if idx != 2 {
+		t.Fatalf("latest index for key b=%d want=2", idx)
+	}
+}
+
 func TestAppendOnlyResetDoesNotPoolStolenValueSlices(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	external := []byte("external-immutable")

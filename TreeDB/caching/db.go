@@ -11206,18 +11206,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 		backendEntriesCap = db.flushBackendEntriesCapForOps(totalLen, deleteOps, sync)
 
-		sizeHint := totalLen
-		if sizeHint > db.flushBackendInitEntries {
-			sizeHint = db.flushBackendInitEntries
-		}
-		if sizeHint > backendEntriesCap {
-			sizeHint = backendEntriesCap
-		}
-		backendBatch := db.newBackendBatchWithSize(sizeHint)
 		reserveChunkOps := totalLen
 		if reserveChunkOps > backendEntriesCap {
 			reserveChunkOps = backendEntriesCap
 		}
+		sizeHint := reserveChunkOps
+		backendBatch := db.newBackendBatchWithSize(sizeHint)
 		reserveBackendBatchOps(backendBatch, reserveChunkOps)
 		flushStart := time.Now()
 		vlogFlushed := false
@@ -11480,18 +11474,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		return true
 	}
 
-	sizeHint := totalLen
-	if sizeHint > db.flushBackendInitEntries {
-		sizeHint = db.flushBackendInitEntries
-	}
-	if sizeHint > backendEntriesCap {
-		sizeHint = backendEntriesCap
-	}
-	backendBatch := db.newBackendBatchWithSize(sizeHint)
 	reserveChunkOps := totalLen
 	if reserveChunkOps > backendEntriesCap {
 		reserveChunkOps = backendEntriesCap
 	}
+	sizeHint := reserveChunkOps
+	backendBatch := db.newBackendBatchWithSize(sizeHint)
 	reserveBackendBatchOps(backendBatch, reserveChunkOps)
 	flushStart := time.Now()
 	vlogFlushed := false
@@ -11841,18 +11829,12 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 		// Flush 'mem' to backend
 		backendEntriesCap := db.flushBackendEntriesCap(memLen, sync)
-		sizeHint := memLen
-		if sizeHint > db.flushBackendInitEntries {
-			sizeHint = db.flushBackendInitEntries
-		}
-		if sizeHint > backendEntriesCap {
-			sizeHint = backendEntriesCap
-		}
-		backendBatch := db.newBackendBatchWithSize(sizeHint)
 		reserveChunkOps := memLen
 		if reserveChunkOps > backendEntriesCap {
 			reserveChunkOps = backendEntriesCap
 		}
+		sizeHint := reserveChunkOps
+		backendBatch := db.newBackendBatchWithSize(sizeHint)
 		reserveBackendBatchOps(backendBatch, reserveChunkOps)
 		vlogFlushed := false
 		backendPendingOps := 0
