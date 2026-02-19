@@ -184,3 +184,136 @@ func TestFlushDeferredValueLogUnitsPointerOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestEstimateUnitRunEntries(t *testing.T) {
+	unitRuns := [][][]batch.Entry{
+		{
+			{{Type: batch.OpPut, Key: []byte("a"), Value: []byte("1")}},
+			{{Type: batch.OpPut, Key: []byte("b"), Value: []byte("2")}, {Type: batch.OpDelete, Key: []byte("c")}},
+		},
+		{
+			{{Type: batch.OpPut, Key: []byte("d"), Value: []byte("3")}},
+		},
+	}
+	got := estimateUnitRunEntries(unitRuns, 2)
+	if got != 6 {
+		t.Fatalf("estimateUnitRunEntries=%d want=6", got)
+	}
+}
+
+func TestValueLogKeyLeaseRoundTrip(t *testing.T) {
+	valueLogKeyLeaseMu.Lock()
+	saved := valueLogKeyLeases
+	valueLogKeyLeases = nil
+	valueLogKeyLeaseMu.Unlock()
+	t.Cleanup(func() {
+		valueLogKeyLeaseMu.Lock()
+		valueLogKeyLeases = saved
+		valueLogKeyLeaseMu.Unlock()
+	})
+
+	keys := make([][]byte, 1, 128)
+	keys[0] = []byte("k0")
+	first := &keys[0]
+	putValueLogKeys(keys)
+
+	valueLogKeyLeaseMu.Lock()
+	if len(valueLogKeyLeases) != 1 {
+		valueLogKeyLeaseMu.Unlock()
+		t.Fatalf("expected one leased key slice, got %d", len(valueLogKeyLeases))
+	}
+	valueLogKeyLeaseMu.Unlock()
+
+	got := getValueLogKeys(1)
+	got = append(got, nil)
+	if &got[0] != first {
+		t.Fatalf("expected leased key-slice reuse")
+	}
+}
+
+func TestEntrySliceLeaseRoundTrip(t *testing.T) {
+	entrySliceLeaseMu.Lock()
+	saved := entrySliceLeases
+	entrySliceLeases = nil
+	entrySliceLeaseMu.Unlock()
+	t.Cleanup(func() {
+		entrySliceLeaseMu.Lock()
+		entrySliceLeases = saved
+		entrySliceLeaseMu.Unlock()
+	})
+
+	entries := make([]batch.Entry, 1, 256)
+	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
+	first := &entries[0]
+	putEntrySlice(entries)
+
+	entrySliceLeaseMu.Lock()
+	if len(entrySliceLeases) != 1 {
+		entrySliceLeaseMu.Unlock()
+		t.Fatalf("expected one leased entry slice, got %d", len(entrySliceLeases))
+	}
+	entrySliceLeaseMu.Unlock()
+
+	got := getEntrySlice(1)
+	got = append(got, batch.Entry{})
+	if &got[0] != first {
+		t.Fatalf("expected leased entry-slice reuse")
+	}
+}
+
+func TestAppendOnlyMemtableLeaseReuse(t *testing.T) {
+	db := &DB{}
+	mt := memtable.NewAppendOnlyWithCapacity(4096)
+
+	db.recycleMemtables([]memtable.Table{mt})
+
+	got, err := db.newMutableMemtableWithCapacityMode(0, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("newMutableMemtableWithCapacityMode: %v", err)
+	}
+	gotAppendOnly, ok := got.(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("expected append-only memtable, got %T", got)
+	}
+	if gotAppendOnly != mt {
+		t.Fatalf("expected leased append-only memtable reuse")
+	}
+}
+
+type stubMergingIterator struct {
+	closeCalls int
+}
+
+func (it *stubMergingIterator) Next()                       {}
+func (it *stubMergingIterator) Valid() bool                 { return false }
+func (it *stubMergingIterator) Key() []byte                 { return nil }
+func (it *stubMergingIterator) Value() []byte               { return nil }
+func (it *stubMergingIterator) KeyCopy(dst []byte) []byte   { return dst[:0] }
+func (it *stubMergingIterator) ValueCopy(dst []byte) []byte { return dst[:0] }
+func (it *stubMergingIterator) Error() error                { return nil }
+func (it *stubMergingIterator) Domain() (start, end []byte) { return nil, nil }
+func (it *stubMergingIterator) Close() error                { it.closeCalls++; return nil }
+
+func TestLeasedMergingIteratorCloseReleasesOnce(t *testing.T) {
+	base := &stubMergingIterator{}
+	released := 0
+	it := &leasedMergingIterator{
+		Iterator: base,
+		release: func() {
+			released++
+		},
+	}
+
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close() first: %v", err)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close() second: %v", err)
+	}
+	if base.closeCalls != 1 {
+		t.Fatalf("base close calls=%d want=1", base.closeCalls)
+	}
+	if released != 1 {
+		t.Fatalf("release calls=%d want=1", released)
+	}
+}

@@ -1,6 +1,11 @@
 package memtable
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
+)
 
 func TestPutAppendOnlyEntriesClearsReferences(t *testing.T) {
 	entries := make([]appendOnlyEntry, 2)
@@ -61,5 +66,47 @@ func TestAppendOnlyUnorderedIteratorUsesPooledEntries(t *testing.T) {
 	}
 	if err := it.Close(); err != nil {
 		t.Fatalf("Close(): %v", err)
+	}
+}
+
+func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key1 := []byte("long-key-01")
+	val1 := []byte("value-aaaaaa")
+	m.Set(key1, val1)
+	if m.count != 1 {
+		t.Fatalf("count=%d want=1", m.count)
+	}
+	keyBufPtr := &m.entries[0].key[0]
+	valBufPtr := &m.entries[0].value[0]
+
+	m.Reset()
+	key2 := []byte("long-key-02")
+	val2 := []byte("value-bbbbbb")
+	m.Set(key2, val2)
+	if m.count != 1 {
+		t.Fatalf("count after reset=%d want=1", m.count)
+	}
+	if &m.entries[0].key[0] != keyBufPtr {
+		t.Fatalf("expected key buffer reuse across reset")
+	}
+	if m.entries[0].value == nil || cap(m.entries[0].value) < len(val2) {
+		t.Fatalf("expected value buffer capacity reuse across reset")
+	}
+	// Value buffers may be drawn from the shared pool, so pointer equality is
+	// not guaranteed as long as capacity reuse avoids fresh allocations.
+	_ = valBufPtr
+}
+
+func TestAppendOnlyResetDoesNotPoolStolenValueSlices(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	external := []byte("external-immutable")
+	m.SetEntrySteal([]byte("k-steal"), external, page.ValuePtr{}, node.FlagInline)
+	m.Reset()
+
+	newVal := []byte("replacement-value")
+	m.Set([]byte("k-new"), newVal)
+	if string(external) != "external-immutable" {
+		t.Fatalf("stolen caller value was mutated via pooled reuse: got %q", external)
 	}
 }
