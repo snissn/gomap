@@ -1,9 +1,7 @@
 package db
 
 import (
-	"reflect"
 	"testing"
-	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -13,12 +11,7 @@ func testBatchEntriesCap(inner *batch.Batch) int {
 	if inner == nil {
 		return 0
 	}
-	v := reflect.ValueOf(inner).Elem().FieldByName("entries")
-	if !v.IsValid() {
-		return 0
-	}
-	entries := *(*[]batch.Entry)(unsafe.Pointer(v.UnsafeAddr()))
-	return cap(entries)
+	return inner.EntriesCap()
 }
 
 func TestBatchReserveForwardsToInternalBatch(t *testing.T) {
