@@ -325,6 +325,43 @@ func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing
 	}
 }
 
+func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *testing.T) {
+	payload, _, _ := makeTestOuterLeafPayload(t)
+	payload = append([]byte(nil), payload...)
+	payload = payload[:len(payload)-1]
+	if !outerleaf.HasMagic(payload) {
+		t.Fatalf("payload missing outer-leaf magic after truncation")
+	}
+
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	var r valueReader
+	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	r.fenceDecodeLeases = set
+
+	_, _, err := r.decodeValueForKeyFoundAppend(page.ValuePtr{}, []byte("k1"), payload, nil)
+	if err == nil {
+		t.Fatalf("decodeValueForKeyFoundAppend err=nil want decode failure")
+	}
+	if got := set.active.Load(); got != 0 {
+		t.Fatalf("active after append decode error=%d want 0", got)
+	}
+}
+
+func TestOuterLeafFenceDecodeLeaseSetReleaseUnderflowResetsActive(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	ctx := acquireOuterLeafFenceDecodeContext()
+	ctx.scratch = make([]byte, 64)
+
+	set.release(ctx)
+
+	if got := set.active.Load(); got != 0 {
+		t.Fatalf("active after underflow release=%d want 0", got)
+	}
+	if ctx.scratch != nil {
+		t.Fatalf("underflow release kept scratch; want recycled context")
+	}
+}
+
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
 	payload, block, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
