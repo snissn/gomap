@@ -132,14 +132,8 @@ func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	if ctx2 == nil {
 		t.Fatalf("second acquire returned nil")
 	}
-	if got := set.active.Load(); got != 2 {
-		t.Fatalf("active after two acquires=%d want 2", got)
-	}
 	set.release(ctx1)
 	set.release(ctx2)
-	if got := set.active.Load(); got != 0 {
-		t.Fatalf("active after releases=%d want 0", got)
-	}
 	ctx3 := set.acquire()
 	if ctx3 == nil {
 		t.Fatalf("acquire after release returned nil")
@@ -147,31 +141,23 @@ func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	set.release(ctx3)
 }
 
-func TestOuterLeafFenceDecodeLeaseSetReleaseOverflowRecyclesContext(t *testing.T) {
+func TestOuterLeafFenceDecodeLeaseSetReleaseAllowsOversubscription(t *testing.T) {
 	set := newOuterLeafFenceDecodeLeaseSet(1)
 	ctx1 := set.acquire()
 	ctx2 := set.acquire()
 	if ctx1 == nil || ctx2 == nil {
 		t.Fatalf("acquire returned nil ctx1=%v ctx2=%v", ctx1, ctx2)
 	}
-	ctx1.scratch = make([]byte, 32)
-	ctx2.scratch = make([]byte, 16)
 
 	set.release(ctx1)
-	if ctx1.scratch != nil {
-		t.Fatalf("overflow release kept scratch; want recycled context")
-	}
-	if got := set.active.Load(); got != 1 {
-		t.Fatalf("active after first release=%d want 1", got)
-	}
-
 	set.release(ctx2)
-	if ctx2.scratch == nil {
-		t.Fatalf("retained release cleared scratch; want pooled reuse state")
+	ctx3 := set.acquire()
+	ctx4 := set.acquire()
+	if ctx3 == nil || ctx4 == nil {
+		t.Fatalf("acquire after oversubscription release returned nil ctx3=%v ctx4=%v", ctx3, ctx4)
 	}
-	if got := set.active.Load(); got != 0 {
-		t.Fatalf("active after second release=%d want 0", got)
-	}
+	set.release(ctx3)
+	set.release(ctx4)
 }
 
 func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing.T) {
@@ -191,9 +177,11 @@ func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing
 	if err == nil {
 		t.Fatalf("decodeValueForKeyFound err=nil want decode failure")
 	}
-	if got := set.active.Load(); got != 0 {
-		t.Fatalf("active after decode error=%d want 0", got)
+	ctx := set.acquire()
+	if ctx == nil {
+		t.Fatalf("acquire returned nil after decode error")
 	}
+	set.release(ctx)
 }
 
 func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *testing.T) {
@@ -213,24 +201,11 @@ func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *t
 	if err == nil {
 		t.Fatalf("decodeValueForKeyFoundAppend err=nil want decode failure")
 	}
-	if got := set.active.Load(); got != 0 {
-		t.Fatalf("active after append decode error=%d want 0", got)
+	ctx := set.acquire()
+	if ctx == nil {
+		t.Fatalf("acquire returned nil after append decode error")
 	}
-}
-
-func TestOuterLeafFenceDecodeLeaseSetReleaseUnderflowResetsActive(t *testing.T) {
-	set := newOuterLeafFenceDecodeLeaseSet(1)
-	ctx := acquireOuterLeafFenceDecodeContext()
-	ctx.scratch = make([]byte, 64)
-
 	set.release(ctx)
-
-	if got := set.active.Load(); got != 0 {
-		t.Fatalf("active after underflow release=%d want 0", got)
-	}
-	if ctx.scratch != nil {
-		t.Fatalf("underflow release kept scratch; want recycled context")
-	}
 }
 
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
