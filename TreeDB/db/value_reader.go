@@ -196,6 +196,12 @@ func (s *outerLeafFenceDecodeLeaseSet) release(ctx *outerLeafFenceDecodeContext)
 	retained := false
 	select {
 	case s.pool <- ctx:
+		// Retained lease contexts must obey the same scratch cap as the global
+		// fence decode scratch pool; otherwise one oversized scratch can be pinned
+		// per reader-local slot.
+		if cap(ctx.scratch) > outerLeafFenceDecodeScratchMaxRetain {
+			ctx.scratch = nil
+		}
 		retained = true
 	default:
 	}

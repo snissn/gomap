@@ -334,6 +334,7 @@ func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *t
 	}
 
 	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
 	var r valueReader
 	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
 	r.fenceDecodeLeases = set
@@ -342,24 +343,33 @@ func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *t
 	if err == nil {
 		t.Fatalf("decodeValueForKeyFoundAppend err=nil want decode failure")
 	}
-	if got := set.active.Load(); got != 0 {
-		t.Fatalf("active after append decode error=%d want 0", got)
+	if got := len(set.pool); got != 1 {
+		t.Fatalf("pool size after append decode error=%d want 1 (lease released)", got)
 	}
 }
 
-func TestOuterLeafFenceDecodeLeaseSetReleaseUnderflowResetsActive(t *testing.T) {
+func TestOuterLeafFenceDecodeLeaseSetReleaseRetainedContextDropsOversizedScratch(t *testing.T) {
 	set := newOuterLeafFenceDecodeLeaseSet(1)
-	ctx := acquireOuterLeafFenceDecodeContext()
-	ctx.scratch = make([]byte, 64)
+	defer set.close()
+	ctx := set.acquire()
+	if ctx == nil {
+		t.Fatalf("acquire returned nil")
+	}
+	ctx.scratch = make([]byte, 0, outerLeafFenceDecodeScratchMaxRetain+1)
 
 	set.release(ctx)
 
-	if got := set.active.Load(); got != 0 {
-		t.Fatalf("active after underflow release=%d want 0", got)
-	}
 	if ctx.scratch != nil {
-		t.Fatalf("underflow release kept scratch; want recycled context")
+		t.Fatalf("retained context kept oversized scratch cap=%d", cap(ctx.scratch))
 	}
+	reacquired := set.acquire()
+	if reacquired == nil {
+		t.Fatalf("reacquire returned nil")
+	}
+	if cap(reacquired.scratch) > outerLeafFenceDecodeScratchMaxRetain {
+		t.Fatalf("reacquired scratch cap=%d exceeds max retain=%d", cap(reacquired.scratch), outerLeafFenceDecodeScratchMaxRetain)
+	}
+	set.release(reacquired)
 }
 
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
