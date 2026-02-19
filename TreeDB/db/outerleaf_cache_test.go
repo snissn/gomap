@@ -102,7 +102,7 @@ func findOuterLeafCacheUnseenAdmitKey(t *testing.T, c *outerLeafBlockCache, shar
 		idx := outerLeafBlockKeyHash(key) & shard.admitMask
 		word := idx >> 6
 		bit := uint64(1) << (idx & 63)
-		if shard.admit[word]&bit == 0 {
+		if shard.admit[word].Load()&bit == 0 {
 			return key
 		}
 	}
@@ -133,7 +133,7 @@ func findOuterLeafCachePrimaryCollisionSecondUnseenKey(t *testing.T, c *outerLea
 		}
 		word := idxB >> 6
 		bit := uint64(1) << (idxB & 63)
-		if shard.admit[word]&bit == 0 {
+		if shard.admit[word].Load()&bit == 0 {
 			return key
 		}
 	}

@@ -116,7 +116,9 @@ type outerLeafBlockCacheShard struct {
 	hits     atomic.Uint64
 	misses   atomic.Uint64
 	capacity int
-	admit    []uint64
+	// entryCount mirrors len(entries) for lock-free admission decisions.
+	entryCount atomic.Int32
+	admit      []atomic.Uint64
 	// admitMask is len(admitBits)-1 for power-of-two indexing into admit.
 	admitMask uint64
 }
@@ -192,7 +194,7 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 			head:      -1,
 			tail:      -1,
 			capacity:  capI,
-			admit:     make([]uint64, admitBits/64),
+			admit:     make([]atomic.Uint64, admitBits/64),
 			admitMask: uint64(admitBits - 1),
 		}
 	}
@@ -256,6 +258,26 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 		return lease, false
 	}
 	s := c.shardFor(key)
+	// Fast-path existing keys without taking shard write lock.
+	s.mu.RLock()
+	if idx, ok := s.entries[key]; ok {
+		if ref := s.nodes[idx].ref; ref != nil && ref.retain() {
+			s.mu.RUnlock()
+			if ref.block != block {
+				recycleOuterLeafDecodedBlock(block)
+			}
+			lease.ref = ref
+			return lease, true
+		}
+	}
+	s.mu.RUnlock()
+	if s.capacity <= 0 {
+		return lease, false
+	}
+	if !s.shouldAdmit(key) {
+		return lease, false
+	}
+
 	s.mu.Lock()
 	var releaseOld *outerLeafBlockRef
 	var releaseEvicted *outerLeafBlockRef
@@ -277,19 +299,13 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 		}
 		return lease, lease.ref != nil
 	}
-	if s.capacity <= 0 {
-		s.mu.Unlock()
-		return lease, false
-	}
-	if !s.shouldAdmit(key) {
-		s.mu.Unlock()
-		return lease, false
-	}
 
 	var idx int
+	inserted := false
 	if n := len(s.free); n > 0 {
 		idx = s.free[n-1]
 		s.free = s.free[:n-1]
+		inserted = true
 	} else {
 		idx = s.tail
 		if idx < 0 {
@@ -313,6 +329,9 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 	node.next = -1
 	s.linkFront(idx)
 	s.entries[key] = idx
+	if inserted {
+		s.entryCount.Add(1)
+	}
 	if ref := node.ref; ref != nil && ref.retain() {
 		lease.ref = ref
 	}
@@ -351,7 +370,7 @@ func (s *outerLeafBlockCacheShard) shouldAdmit(key outerLeafBlockKey) bool {
 	if s == nil || s.capacity <= 0 {
 		return false
 	}
-	entries := len(s.entries)
+	entries := int(s.entryCount.Load())
 	if s.capacity <= 64 || entries < s.capacity/4 {
 		return true
 	}
@@ -360,20 +379,33 @@ func (s *outerLeafBlockCacheShard) shouldAdmit(key outerLeafBlockKey) bool {
 	}
 	h := outerLeafBlockKeyHash(key)
 	idxA, idxB := outerLeafBlockCacheAdmitIndexes(h, s.admitMask)
-	wordA := idxA >> 6
+	wordA := int(idxA >> 6)
 	bitA := uint64(1) << (idxA & 63)
-	wordB := idxB >> 6
+	wordB := int(idxB >> 6)
 	bitB := uint64(1) << (idxB & 63)
-	seenA := s.admit[wordA]&bitA != 0
-	seenB := s.admit[wordB]&bitB != 0
-	s.admit[wordA] |= bitA
-	s.admit[wordB] |= bitB
+	seenA := outerLeafBlockCacheAdmitSeenAndSet(&s.admit[wordA], bitA)
+	seenB := outerLeafBlockCacheAdmitSeenAndSet(&s.admit[wordB], bitB)
 	// Keep warm-up behavior close to prior tuning while reducing collision-driven
 	// first-touch admits once shards are at least half occupied.
 	if entries < s.capacity/2 {
 		return seenA
 	}
 	return seenA && seenB
+}
+
+func outerLeafBlockCacheAdmitSeenAndSet(word *atomic.Uint64, bit uint64) bool {
+	if word == nil || bit == 0 {
+		return false
+	}
+	for {
+		old := word.Load()
+		if old&bit != 0 {
+			return true
+		}
+		if word.CompareAndSwap(old, old|bit) {
+			return false
+		}
+	}
 }
 
 func outerLeafBlockCacheAdmitIndexes(h, mask uint64) (uint64, uint64) {
