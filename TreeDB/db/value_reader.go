@@ -389,17 +389,36 @@ func ValueReaderForState(state *DBState) tree.SlabReader {
 }
 
 func newValueReader(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums bool, cache *outerLeafBlockCache, keyCache *outerLeafKeyCache) valueReader {
-	r := valueReader{
-		vlogs:                  vlogs,
-		skipOuterLeafChecksums: skipOuterLeafChecksums,
-		cache:                  cache,
-		keyCache:               keyCache,
+	var r valueReader
+	r.reconfigure(vlogs, mode, skipOuterLeafChecksums, cache, keyCache)
+	return r
+}
+
+func (r *valueReader) reconfigure(vlogs tree.SlabReader, mode string, skipOuterLeafChecksums bool, cache *outerLeafBlockCache, keyCache *outerLeafKeyCache) {
+	if r == nil {
+		return
 	}
+	r.vlogs = vlogs
+	r.skipOuterLeafChecksums = skipOuterLeafChecksums
+	r.cache = cache
+	r.keyCache = keyCache
 	r.setOuterLeafMode(mode)
 	if r.fenceLookupEnabled {
-		r.fenceDecodeLeases = newOuterLeafFenceDecodeLeaseSet(0)
+		if r.fenceDecodeLeases == nil {
+			r.fenceDecodeLeases = newOuterLeafFenceDecodeLeaseSet(0)
+		}
+		return
 	}
-	return r
+	r.releaseDecodeContext()
+}
+
+func (r *valueReader) clearForPoolReuse() {
+	if r == nil {
+		return
+	}
+	r.vlogs = nil
+	r.cache = nil
+	r.keyCache = nil
 }
 
 func (r *valueReader) releaseDecodeContext() {

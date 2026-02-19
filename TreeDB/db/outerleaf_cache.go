@@ -34,11 +34,22 @@ type outerLeafBlockRef struct {
 	refs  atomic.Int32
 }
 
+var outerLeafBlockRefPool sync.Pool
+
 func newOuterLeafBlockRef(block *outerleaf.DecodedBlock) *outerLeafBlockRef {
 	if block == nil {
 		return nil
 	}
-	ref := &outerLeafBlockRef{block: block}
+	var ref *outerLeafBlockRef
+	if v := outerLeafBlockRefPool.Get(); v != nil {
+		if pooled, ok := v.(*outerLeafBlockRef); ok {
+			ref = pooled
+		}
+	}
+	if ref == nil {
+		ref = &outerLeafBlockRef{}
+	}
+	ref.block = block
 	ref.refs.Store(1) // cache ownership
 	return ref
 }
@@ -72,6 +83,8 @@ func (r *outerLeafBlockRef) release() {
 		*block = outerleaf.DecodedBlock{}
 		outerLeafFenceDecodedBlockPut(block)
 	}
+	r.refs.Store(0)
+	outerLeafBlockRefPool.Put(r)
 }
 
 type outerLeafBlockCacheLease struct {
