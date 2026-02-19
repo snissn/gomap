@@ -203,6 +203,14 @@ func (b *Batch) Reserve(n int) {
 	}
 }
 
+// EntriesCap returns the current capacity of the internal entry buffer.
+func (b *Batch) EntriesCap() int {
+	if b == nil {
+		return 0
+	}
+	return cap(b.entries)
+}
+
 // SetView is an internal-performance helper that records a Put without copying
 // key/value bytes. Callers must treat key/value as immutable until the batch is
 // committed (Write/WriteSync) or closed.

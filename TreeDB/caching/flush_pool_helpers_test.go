@@ -444,6 +444,39 @@ func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
 	}
 }
 
+func TestGetEntrySliceIgnoresUnexpectedPoolType(t *testing.T) {
+	capacity := 64
+	idx, _, ok := entrySliceLeaseClassForLen(capacity)
+	if !ok {
+		t.Fatalf("entrySliceLeaseClassForLen(%d) failed", capacity)
+	}
+	entrySlicePools[idx].Put("invalid-entry-slice")
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("getEntrySlice panicked on unexpected pool type: %v", r)
+		}
+	}()
+	got := getEntrySlice(capacity)
+	if cap(got) < capacity {
+		t.Fatalf("entry slice cap=%d want >= %d", cap(got), capacity)
+	}
+}
+
+func TestOuterLeafArenaMaxReuseCapClampOverflow(t *testing.T) {
+	huge := int(^uint(0) >> 1)
+	if got := outerLeafArenaMaxReuseCap(huge); got != maxOuterLeafArenaPoolCap {
+		t.Fatalf("outerLeafArenaMaxReuseCap(huge)=%d want=%d", got, maxOuterLeafArenaPoolCap)
+	}
+}
+
+func TestEntrySliceMaxReuseCapClampOverflow(t *testing.T) {
+	huge := int(^uint(0) >> 1)
+	if got := entrySliceMaxReuseCap(huge); got != maxEntryPoolCap {
+		t.Fatalf("entrySliceMaxReuseCap(huge)=%d want=%d", got, maxEntryPoolCap)
+	}
+}
+
 func TestAppendOnlyMemtableLeaseReuse(t *testing.T) {
 	db := &DB{}
 	mt := memtable.NewAppendOnlyWithCapacity(4096)

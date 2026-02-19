@@ -241,6 +241,10 @@ func outerLeafArenaMaxReuseCap(capacity int) int {
 	if capacity <= 0 {
 		return 1 << outerLeafArenaMinShift
 	}
+	// Clamp before multiplication to avoid potential integer overflow.
+	if capacity > maxOuterLeafArenaPoolCap/8 {
+		return maxOuterLeafArenaPoolCap
+	}
 	maxCap := capacity * 8
 	if maxCap < 1<<20 {
 		maxCap = 1 << 20
@@ -5017,6 +5021,10 @@ func entrySliceMaxReuseCap(capacity int) int {
 	if capacity <= 0 {
 		return 1 << entrySliceLeaseMinShift
 	}
+	// Clamp before multiplication to avoid potential integer overflow.
+	if capacity > maxEntryPoolCap/8 {
+		return maxEntryPoolCap
+	}
 	maxCap := capacity * 8
 	if maxCap < 1<<12 {
 		maxCap = 1 << 12
@@ -5060,7 +5068,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 	entrySliceLeaseMu.Unlock()
 	for bucket := idx; bucket <= maxIdx; bucket++ {
 		if v := entrySlicePools[bucket].Get(); v != nil {
-			s := v.([]batch.Entry)
+			s, ok := v.([]batch.Entry)
+			if !ok {
+				continue
+			}
 			if cap(s) >= capacity && cap(s) <= maxReuseCap {
 				return s[:0]
 			}
