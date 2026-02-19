@@ -1127,32 +1127,46 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 	warm[0] = []byte("left")
 	warm[1] = []byte("right")
 	putPooledLeaseKeys(warm)
+	if warm[0] != nil || warm[1] != nil {
+		t.Fatalf("expected put to clear caller buffer, got=%v", warm[:2])
+	}
 
 	got := getPooledLeaseKeys(1)
-	if cap(got) < cap(warm) {
-		t.Fatalf("cap(got)=%d want >=%d", cap(got), cap(warm))
+	if cap(got) < 1 {
+		t.Fatalf("cap(got)=%d want >=1", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0", len(got))
 	}
-	got = got[:2]
-	if got[0] != nil || got[1] != nil {
-		t.Fatalf("expected cleared pooled entries, got=%v", got)
+	// sync.Pool may drop warm entries between Put/Get; only assert warm reuse
+	// when a warmed-capacity buffer is actually returned.
+	if cap(got) >= cap(warm) {
+		got = got[:2]
+		if got[0] != nil || got[1] != nil {
+			t.Fatalf("expected cleared pooled entries, got=%v", got)
+		}
+		got = got[:0]
 	}
 
+	got = got[:1]
 	got[0] = []byte("mutated")
 	putPooledLeaseKeys(got[:0])
+	if got[0] != nil {
+		t.Fatalf("expected put to clear mutated entry")
+	}
 
 	got = getPooledLeaseKeys(1)
-	if cap(got) < cap(warm) {
-		t.Fatalf("cap(got)=%d want >=%d on warm reuse", cap(got), cap(warm))
+	if cap(got) < 1 {
+		t.Fatalf("cap(got)=%d want >=1 on reuse", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
 	}
-	got = got[:1]
-	if got[0] != nil {
-		t.Fatalf("expected cleared pooled entry on reuse, got=%v", got[0])
+	if cap(got) >= 1 {
+		got = got[:1]
+		if got[0] != nil {
+			t.Fatalf("expected cleared pooled entry on reuse, got=%v", got[0])
+		}
 	}
 }
 
@@ -1168,8 +1182,8 @@ func TestGetPooledLeaseArena_WarmReuse(t *testing.T) {
 	putPooledLeaseArena(warm)
 
 	got := getPooledLeaseArena(1)
-	if cap(got) < cap(warm) {
-		t.Fatalf("cap(got)=%d want >=%d", cap(got), cap(warm))
+	if cap(got) < 1 {
+		t.Fatalf("cap(got)=%d want >=1", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0", len(got))
@@ -1179,8 +1193,8 @@ func TestGetPooledLeaseArena_WarmReuse(t *testing.T) {
 	putPooledLeaseArena(got)
 
 	got = getPooledLeaseArena(1)
-	if cap(got) < cap(warm) {
-		t.Fatalf("cap(got)=%d want >=%d on warm reuse", cap(got), cap(warm))
+	if cap(got) < 1 {
+		t.Fatalf("cap(got)=%d want >=1 on warm reuse", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
