@@ -77,6 +77,10 @@ type AppendOnly struct {
 	frozen      bool
 	hasLast     bool
 	lastIdx     int
+
+	iteratorLeaseMu   sync.Mutex
+	iteratorLeaseCond *sync.Cond
+	iteratorLeases    int
 }
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
@@ -676,9 +680,41 @@ func (m *AppendOnly) Freeze() {
 	m.mu.Unlock()
 }
 
+func (m *AppendOnly) acquireIteratorLeaseLocked() {
+	m.iteratorLeaseMu.Lock()
+	if m.iteratorLeaseCond == nil {
+		m.iteratorLeaseCond = sync.NewCond(&m.iteratorLeaseMu)
+	}
+	m.iteratorLeases++
+	m.iteratorLeaseMu.Unlock()
+}
+
+func (m *AppendOnly) releaseIteratorLease() {
+	m.iteratorLeaseMu.Lock()
+	if m.iteratorLeases > 0 {
+		m.iteratorLeases--
+		if m.iteratorLeases == 0 && m.iteratorLeaseCond != nil {
+			m.iteratorLeaseCond.Broadcast()
+		}
+	}
+	m.iteratorLeaseMu.Unlock()
+}
+
+func (m *AppendOnly) waitIteratorLeasesLocked() {
+	m.iteratorLeaseMu.Lock()
+	for m.iteratorLeases > 0 {
+		if m.iteratorLeaseCond == nil {
+			m.iteratorLeaseCond = sync.NewCond(&m.iteratorLeaseMu)
+		}
+		m.iteratorLeaseCond.Wait()
+	}
+	m.iteratorLeaseMu.Unlock()
+}
+
 func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
 	for i := 0; i < m.count; i++ {
 		ent := &m.entries[i]
 		ent.ptr = page.ValuePtr{}
@@ -774,11 +810,14 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	if m.frozen {
 		ptrs := getAppendOnlyIteratorPtrs(len(snapshotPtrs))
 		copy(ptrs, snapshotPtrs)
+		m.acquireIteratorLeaseLocked()
 		m.mu.Unlock()
 		it := &appendOnlyIterator{
 			entryPtrs:       ptrs,
 			end:             end,
 			pooledEntryPtrs: true,
+			leaseOwner:      m,
+			leaseHeld:       true,
 		}
 		if start != nil {
 			it.Seek(start)
@@ -814,6 +853,8 @@ type appendOnlyIterator struct {
 	mu              *sync.RWMutex
 	pooledEntries   bool
 	pooledEntryPtrs bool
+	leaseOwner      *AppendOnly
+	leaseHeld       bool
 }
 
 func (it *appendOnlyIterator) len() int {
@@ -947,6 +988,11 @@ func (it *appendOnlyIterator) Close() error {
 		putAppendOnlyIteratorPtrs(it.entryPtrs)
 		it.pooledEntryPtrs = false
 	}
+	if it.leaseHeld && it.leaseOwner != nil {
+		it.leaseOwner.releaseIteratorLease()
+		it.leaseHeld = false
+	}
+	it.leaseOwner = nil
 	it.entries = nil
 	it.entryPtrs = nil
 	return nil
