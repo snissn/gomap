@@ -22,6 +22,21 @@ func makeOuterLeafCacheTestBlock(t *testing.T, n int) *outerleaf.DecodedBlock {
 	return block
 }
 
+func makeOuterLeafCacheTestLeaseBlock(t *testing.T, n int) *outerleaf.DecodedBlock {
+	t.Helper()
+	encoded, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
+		{Key: []byte(fmt.Sprintf("k%08d", n)), Value: []byte("v")},
+	}, uint8(ValueLogBlockSnappy), 16)
+	if err != nil {
+		t.Fatalf("EncodeEntries: %v", err)
+	}
+	block, err := outerleaf.DecodeBlockLease(encoded)
+	if err != nil {
+		t.Fatalf("DecodeBlockLease: %v", err)
+	}
+	return block
+}
+
 func makeOuterLeafCacheTestKey(n int) outerLeafBlockKey {
 	return outerLeafBlockKey{
 		fileID: 1,
@@ -144,4 +159,36 @@ func TestOuterLeafBlockCachePutWithLeaseSecondTouchAdmission(t *testing.T) {
 		t.Fatalf("second touch cache get miss, want hit")
 	}
 	readLease.Release()
+}
+
+func TestOuterLeafBlockCachePut_FirstTouchRejectRecyclesBlock(t *testing.T) {
+	cache := newOuterLeafBlockCache(8192)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	if len(cache.shards) == 0 {
+		t.Fatalf("cache has no shards")
+	}
+	shard := &cache.shards[0]
+	if shard.capacity <= 64 {
+		t.Fatalf("shard capacity=%d want >64 to exercise admission filter", shard.capacity)
+	}
+	fillOuterLeafCacheShardToThreshold(t, cache, shard)
+	key := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, 2_000_000)
+
+	block := makeOuterLeafCacheTestLeaseBlock(t, 3_000_001)
+	if len(block.RawBytes()) == 0 {
+		t.Fatalf("block raw bytes empty before put")
+	}
+	cache.put(key, block)
+
+	// First touch should be rejected by admission; put must recycle the block
+	// it was handed instead of leaking it to GC churn.
+	if block.RawBytes() != nil {
+		t.Fatalf("block raw bytes retained after rejected put")
+	}
+	if got, lease := cache.get(key); got != nil {
+		lease.Release()
+		t.Fatalf("rejected first touch unexpectedly present in cache")
+	}
 }

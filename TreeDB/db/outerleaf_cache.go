@@ -79,12 +79,19 @@ func (r *outerLeafBlockRef) release() {
 	if r.block != nil {
 		block := r.block
 		r.block = nil
-		block.Release()
-		*block = outerleaf.DecodedBlock{}
-		outerLeafFenceDecodedBlockPut(block)
+		recycleOuterLeafDecodedBlock(block)
 	}
 	r.refs.Store(0)
 	outerLeafBlockRefPool.Put(r)
+}
+
+func recycleOuterLeafDecodedBlock(block *outerleaf.DecodedBlock) {
+	if block == nil {
+		return
+	}
+	block.Release()
+	*block = outerleaf.DecodedBlock{}
+	outerLeafFenceDecodedBlockPut(block)
 }
 
 type outerLeafBlockCacheLease struct {
@@ -236,7 +243,10 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBloc
 }
 
 func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.DecodedBlock) {
-	lease, _ := c.putWithLease(key, block)
+	lease, admitted := c.putWithLease(key, block)
+	if !admitted {
+		recycleOuterLeafDecodedBlock(block)
+	}
 	lease.Release()
 }
 
