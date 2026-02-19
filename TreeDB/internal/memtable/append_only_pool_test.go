@@ -51,6 +51,31 @@ func TestAppendOnlyIteratorCloseClearsPooledEntries(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyIteratorCloseClearsPooledPointerEntries(t *testing.T) {
+	entries := []*appendOnlyEntry{
+		{key: []byte("k0"), value: []byte("v0")},
+		{key: []byte("k1"), value: []byte("v1")},
+	}
+	it := &appendOnlyIterator{
+		entryPtrs:       entries,
+		pooledEntryPtrs: true,
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+	for i := range entries {
+		if entries[i] != nil {
+			t.Fatalf("entry ptr %d not cleared on close", i)
+		}
+	}
+	if it.entryPtrs != nil {
+		t.Fatalf("iterator pointer entries not cleared on close")
+	}
+	if it.pooledEntryPtrs {
+		t.Fatalf("pooledEntryPtrs flag not cleared on close")
+	}
+}
+
 func TestAppendOnlyUnorderedIteratorUsesPooledEntries(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("k2"), []byte("v2"))
@@ -63,6 +88,31 @@ func TestAppendOnlyUnorderedIteratorUsesPooledEntries(t *testing.T) {
 	}
 	if !it.pooledEntries {
 		t.Fatalf("unordered iterator should use pooled entry copy buffer")
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("Close(): %v", err)
+	}
+}
+
+func TestAppendOnlyFrozenUnorderedIteratorUsesPointerSnapshot(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k2"), []byte("v2"))
+	m.Set([]byte("k1"), []byte("v1")) // force unordered iterator path
+	m.Freeze()
+
+	rawIt := m.NewIterator(nil, nil)
+	it, ok := rawIt.(*appendOnlyIterator)
+	if !ok {
+		t.Fatalf("unexpected iterator type %T", rawIt)
+	}
+	if it.pooledEntries {
+		t.Fatalf("frozen unordered iterator should avoid entry-copy pool")
+	}
+	if !it.pooledEntryPtrs {
+		t.Fatalf("frozen unordered iterator should use pooled pointer snapshot")
+	}
+	if it.entryPtrs == nil || len(it.entryPtrs) != 2 {
+		t.Fatalf("unexpected pointer snapshot len=%d", len(it.entryPtrs))
 	}
 	if err := it.Close(); err != nil {
 		t.Fatalf("Close(): %v", err)
@@ -93,8 +143,6 @@ func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
 	if m.entries[0].value == nil || cap(m.entries[0].value) < len(val2) {
 		t.Fatalf("expected value buffer capacity reuse across reset")
 	}
-	// Value buffers may be drawn from the shared pool, so pointer equality is
-	// not guaranteed as long as capacity reuse avoids fresh allocations.
 	_ = valBufPtr
 }
 
@@ -108,5 +156,32 @@ func TestAppendOnlyResetDoesNotPoolStolenValueSlices(t *testing.T) {
 	m.Set([]byte("k-new"), newVal)
 	if string(external) != "external-immutable" {
 		t.Fatalf("stolen caller value was mutated via pooled reuse: got %q", external)
+	}
+}
+
+func TestAppendOnlyResetKeepsSnapshotBuffersWarm(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	// Force unordered mode and a non-empty latest snapshot/index buffer.
+	for i := 9; i >= 0; i-- {
+		m.Set([]byte{byte('a' + i)}, []byte("v"))
+	}
+	m.Freeze()
+	it := m.NewIterator(nil, nil)
+	if err := it.Close(); err != nil {
+		t.Fatalf("iterator close: %v", err)
+	}
+
+	if cap(m.snapshot) == 0 {
+		t.Fatalf("expected snapshot capacity to be initialized")
+	}
+	snapshotCap := cap(m.snapshot)
+	indexCap := cap(m.indexBuf)
+
+	m.Reset()
+	if cap(m.snapshot) < snapshotCap {
+		t.Fatalf("snapshot cap shrank after reset: got=%d want>=%d", cap(m.snapshot), snapshotCap)
+	}
+	if cap(m.indexBuf) < indexCap {
+		t.Fatalf("index cap shrank after reset: got=%d want>=%d", cap(m.indexBuf), indexCap)
 	}
 }

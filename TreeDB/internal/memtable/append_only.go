@@ -24,12 +24,14 @@ const (
 	appendOnlyPointerGrowCutoff      = 1 << 15
 	appendOnlyEntryPoolMaxCap        = 1 << 20
 	appendOnlyIteratorPoolMaxCap     = 1 << 20
+	appendOnlyIteratorPtrPoolMaxCap  = 1 << 20
 	appendOnlyReusableKeyMaxCap      = 1 << 10
 	appendOnlyReusableValueMaxCap    = 1 << 16
 )
 
 var appendOnlyEntryPool sync.Pool
 var appendOnlyIteratorPool sync.Pool
+var appendOnlyIteratorPtrPool sync.Pool
 
 type appendOnlyEntry struct {
 	key        []byte
@@ -55,6 +57,7 @@ type AppendOnly struct {
 
 	ordered     bool
 	latestDirty bool
+	frozen      bool
 	hasLast     bool
 	lastIdx     int
 }
@@ -108,6 +111,31 @@ func putAppendOnlyIteratorEntries(entries []appendOnlyEntry) {
 	}
 	clear(entries)
 	appendOnlyIteratorPool.Put(entries[:0])
+}
+
+func getAppendOnlyIteratorPtrs(length int) []*appendOnlyEntry {
+	if length < 0 {
+		length = 0
+	}
+	if length > appendOnlyIteratorPtrPoolMaxCap {
+		return make([]*appendOnlyEntry, length)
+	}
+	if v := appendOnlyIteratorPtrPool.Get(); v != nil {
+		if entries, ok := v.([]*appendOnlyEntry); ok && cap(entries) >= length {
+			out := entries[:length]
+			clear(out)
+			return out
+		}
+	}
+	return make([]*appendOnlyEntry, length)
+}
+
+func putAppendOnlyIteratorPtrs(entries []*appendOnlyEntry) {
+	if entries == nil || cap(entries) == 0 || cap(entries) > appendOnlyIteratorPtrPoolMaxCap {
+		return
+	}
+	clear(entries)
+	appendOnlyIteratorPtrPool.Put(entries[:0])
 }
 
 func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
@@ -487,7 +515,15 @@ func (m *AppendOnly) Len() int {
 	return m.count
 }
 
-func (m *AppendOnly) Freeze() {}
+func (m *AppendOnly) Freeze() {
+	m.mu.Lock()
+	if m.frozen {
+		m.mu.Unlock()
+		return
+	}
+	m.frozen = true
+	m.mu.Unlock()
+}
 
 func (m *AppendOnly) Reset() {
 	m.mu.Lock()
@@ -521,6 +557,7 @@ func (m *AppendOnly) Reset() {
 	m.sizeBytes = 0
 	m.ordered = true
 	m.latestDirty = false
+	m.frozen = false
 	m.hasLast = false
 	m.lastIdx = -1
 }
@@ -588,10 +625,25 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.RUnlock()
 
 	// Unordered iterators need a sorted latest-key view. Build/update shared
-	// caches under an exclusive lock, then copy the snapshot so iteration does
-	// not hold the write lock for its lifetime.
+	// caches under an exclusive lock.
 	m.mu.Lock()
 	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
+	if m.frozen {
+		ptrs := getAppendOnlyIteratorPtrs(len(snapshotPtrs))
+		copy(ptrs, snapshotPtrs)
+		m.mu.Unlock()
+		it := &appendOnlyIterator{
+			entryPtrs:       ptrs,
+			end:             end,
+			pooledEntryPtrs: true,
+		}
+		if start != nil {
+			it.Seek(start)
+		}
+		return it
+	}
+	// Mutable unordered memtables must copy entries so readers can iterate
+	// without holding write locks while writers append concurrently.
 	entries := getAppendOnlyIteratorEntries(len(snapshotPtrs))
 	for i := range snapshotPtrs {
 		if snapshotPtrs[i] != nil {
@@ -612,18 +664,47 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 }
 
 type appendOnlyIterator struct {
-	entries       []appendOnlyEntry
-	idx           int
-	end           []byte
-	mu            *sync.RWMutex
-	pooledEntries bool
+	entries         []appendOnlyEntry
+	entryPtrs       []*appendOnlyEntry
+	idx             int
+	end             []byte
+	mu              *sync.RWMutex
+	pooledEntries   bool
+	pooledEntryPtrs bool
+}
+
+func (it *appendOnlyIterator) len() int {
+	if it.entryPtrs != nil {
+		return len(it.entryPtrs)
+	}
+	return len(it.entries)
+}
+
+func (it *appendOnlyIterator) entryAt(idx int) *appendOnlyEntry {
+	if idx < 0 {
+		return nil
+	}
+	if it.entryPtrs != nil {
+		if idx >= len(it.entryPtrs) {
+			return nil
+		}
+		return it.entryPtrs[idx]
+	}
+	if idx >= len(it.entries) {
+		return nil
+	}
+	return &it.entries[idx]
 }
 
 func (it *appendOnlyIterator) validIndex() bool {
-	if it.idx < 0 || it.idx >= len(it.entries) {
+	if it.idx < 0 || it.idx >= it.len() {
 		return false
 	}
-	if it.end != nil && bytes.Compare(appendOnlyEntryKey(&it.entries[it.idx]), it.end) >= 0 {
+	ent := it.entryAt(it.idx)
+	if ent == nil {
+		return false
+	}
+	if it.end != nil && bytes.Compare(appendOnlyEntryKey(ent), it.end) >= 0 {
 		return false
 	}
 	return true
@@ -634,29 +715,34 @@ func (it *appendOnlyIterator) Valid() bool {
 }
 
 func (it *appendOnlyIterator) Next() {
-	if it.idx < len(it.entries) {
+	if it.idx < it.len() {
 		it.idx++
 	}
 }
 
 func (it *appendOnlyIterator) Seek(key []byte) {
-	it.idx = sort.Search(len(it.entries), func(i int) bool {
-		return bytes.Compare(appendOnlyEntryKey(&it.entries[i]), key) >= 0
+	it.idx = sort.Search(it.len(), func(i int) bool {
+		ent := it.entryAt(i)
+		if ent == nil {
+			return true
+		}
+		return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
 	})
 }
 
 func (it *appendOnlyIterator) UnsafeKey() []byte {
-	if !it.validIndex() {
+	ent := it.entryAt(it.idx)
+	if ent == nil || !it.validIndex() {
 		return nil
 	}
-	return appendOnlyEntryKey(&it.entries[it.idx])
+	return appendOnlyEntryKey(ent)
 }
 
 func (it *appendOnlyIterator) UnsafeValue() []byte {
-	if !it.validIndex() {
+	ent := it.entryAt(it.idx)
+	if ent == nil || !it.validIndex() {
 		return nil
 	}
-	ent := it.entries[it.idx]
 	if ent.flags&node.FlagTombstone != 0 {
 		return nil
 	}
@@ -664,18 +750,19 @@ func (it *appendOnlyIterator) UnsafeValue() []byte {
 }
 
 func (it *appendOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
-	if !it.validIndex() {
+	ent := it.entryAt(it.idx)
+	if ent == nil || !it.validIndex() {
 		return nil, page.ValuePtr{}, 0
 	}
-	ent := it.entries[it.idx]
 	return ent.value, ent.ptr, ent.flags
 }
 
 func (it *appendOnlyIterator) IsDeleted() bool {
-	if !it.validIndex() {
+	ent := it.entryAt(it.idx)
+	if ent == nil || !it.validIndex() {
 		return false
 	}
-	return it.entries[it.idx].flags&node.FlagTombstone != 0
+	return ent.flags&node.FlagTombstone != 0
 }
 
 func (it *appendOnlyIterator) Key() []byte {
@@ -713,7 +800,12 @@ func (it *appendOnlyIterator) Close() error {
 		putAppendOnlyIteratorEntries(it.entries)
 		it.pooledEntries = false
 	}
+	if it.pooledEntryPtrs {
+		putAppendOnlyIteratorPtrs(it.entryPtrs)
+		it.pooledEntryPtrs = false
+	}
 	it.entries = nil
+	it.entryPtrs = nil
 	return nil
 }
 
