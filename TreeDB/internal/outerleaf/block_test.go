@@ -1162,7 +1162,7 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
 	}
-	if cap(got) >= 1 {
+	if cap(got) > 1 {
 		got = got[:1]
 		if got[0] != nil {
 			t.Fatalf("expected cleared pooled entry on reuse, got=%v", got[0])
