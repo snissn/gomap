@@ -32,6 +32,8 @@ const (
 	appendOnlyValueArenaClassCount   = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
 	appendOnlyValueArenaDefaultChunk = 32 << 10
 	appendOnlyValueArenaPoolMaxCap   = 1 << appendOnlyValueArenaMaxShift
+	appendOnlyValueArenaRetainMaxCap = 4 << 20
+	appendOnlyValueArenaRetainChunks = 128
 )
 
 var appendOnlyEntryPool sync.Pool
@@ -50,9 +52,11 @@ type appendOnlyEntry struct {
 }
 
 type appendOnlyValueArena struct {
-	chunks [][]byte
-	cur    []byte
-	curPos int
+	chunks    [][]byte
+	retained  [][]byte
+	retainedB int
+	cur       []byte
+	curPos    int
 }
 
 type AppendOnly struct {
@@ -272,12 +276,53 @@ func putAppendOnlyValueArenaChunk(chunk []byte) {
 	}
 }
 
+func (a *appendOnlyValueArena) popRetained(minLen int) []byte {
+	if len(a.retained) == 0 {
+		return nil
+	}
+	for i := len(a.retained) - 1; i >= 0; i-- {
+		chunk := a.retained[i]
+		if cap(chunk) < minLen {
+			continue
+		}
+		last := len(a.retained) - 1
+		a.retained[i] = a.retained[last]
+		a.retained[last] = nil
+		a.retained = a.retained[:last]
+		a.retainedB -= cap(chunk)
+		if a.retainedB < 0 {
+			a.retainedB = 0
+		}
+		return chunk[:0]
+	}
+	return nil
+}
+
+func (a *appendOnlyValueArena) retainChunk(chunk []byte) bool {
+	if chunk == nil || cap(chunk) == 0 {
+		return false
+	}
+	if len(a.retained) >= appendOnlyValueArenaRetainChunks {
+		return false
+	}
+	next := a.retainedB + cap(chunk)
+	if next > appendOnlyValueArenaRetainMaxCap {
+		return false
+	}
+	a.retained = append(a.retained, chunk[:0])
+	a.retainedB = next
+	return true
+}
+
 func (a *appendOnlyValueArena) alloc(length int) []byte {
 	if length <= 0 {
 		return nil
 	}
 	if a.cur == nil || cap(a.cur)-a.curPos < length {
-		chunk := getAppendOnlyValueArenaChunk(length)
+		chunk := a.popRetained(length)
+		if chunk == nil {
+			chunk = getAppendOnlyValueArenaChunk(length)
+		}
 		a.chunks = append(a.chunks, chunk)
 		a.cur = chunk[:cap(chunk)]
 		a.curPos = 0
@@ -289,7 +334,9 @@ func (a *appendOnlyValueArena) alloc(length int) []byte {
 
 func (a *appendOnlyValueArena) reset() {
 	for i := range a.chunks {
-		putAppendOnlyValueArenaChunk(a.chunks[i])
+		if !a.retainChunk(a.chunks[i]) {
+			putAppendOnlyValueArenaChunk(a.chunks[i])
+		}
 		a.chunks[i] = nil
 	}
 	a.chunks = a.chunks[:0]

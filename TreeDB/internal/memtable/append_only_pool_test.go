@@ -2,6 +2,7 @@ package memtable
 
 import (
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -198,6 +199,60 @@ func TestAppendOnlyResetClearsValueArenaState(t *testing.T) {
 	}
 	if m.valueArena.curPos != 0 {
 		t.Fatalf("expected value arena position reset; got=%d", m.valueArena.curPos)
+	}
+}
+
+func TestAppendOnlyResetRetainsArenaChunksForReuse(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("k")
+	val := make([]byte, 2048)
+	for i := 0; i < 64; i++ {
+		key[0] = byte('a' + byte(i%26))
+		val[0] = byte(i)
+		m.Set(key, val)
+	}
+	if len(m.valueArena.chunks) == 0 {
+		t.Fatalf("expected populated arena chunks before reset")
+	}
+	seen := make(map[uintptr]struct{}, len(m.valueArena.chunks))
+	for _, chunk := range m.valueArena.chunks {
+		full := chunk[:cap(chunk)]
+		seen[uintptr(unsafe.Pointer(&full[0]))] = struct{}{}
+	}
+
+	m.Reset()
+	if len(m.valueArena.retained) == 0 {
+		t.Fatalf("expected retained arena chunks after reset")
+	}
+	if m.valueArena.retainedB <= 0 {
+		t.Fatalf("expected retained arena bytes > 0")
+	}
+
+	m.Set([]byte("z"), make([]byte, 1024))
+	if m.count != 1 || len(m.entries[0].value) == 0 {
+		t.Fatalf("expected first post-reset set to allocate value from arena")
+	}
+	ptr := uintptr(unsafe.Pointer(&m.entries[0].value[0]))
+	if _, ok := seen[ptr]; !ok {
+		t.Fatalf("post-reset value buffer did not reuse retained arena chunk")
+	}
+}
+
+func TestAppendOnlyResetRetainedArenaBounded(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("k")
+	val := make([]byte, 2048)
+	for i := 0; i < 5000; i++ {
+		key[0] = byte('a' + byte(i%26))
+		val[0] = byte(i)
+		m.Set(key, val)
+	}
+	m.Reset()
+	if len(m.valueArena.retained) > appendOnlyValueArenaRetainChunks {
+		t.Fatalf("retained chunk count=%d exceeds bound=%d", len(m.valueArena.retained), appendOnlyValueArenaRetainChunks)
+	}
+	if m.valueArena.retainedB > appendOnlyValueArenaRetainMaxCap {
+		t.Fatalf("retained bytes=%d exceed bound=%d", m.valueArena.retainedB, appendOnlyValueArenaRetainMaxCap)
 	}
 }
 
