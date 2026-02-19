@@ -351,18 +351,40 @@ func (s *outerLeafBlockCacheShard) shouldAdmit(key outerLeafBlockKey) bool {
 	if s == nil || s.capacity <= 0 {
 		return false
 	}
-	if s.capacity <= 64 || len(s.entries) < s.capacity/4 {
+	entries := len(s.entries)
+	if s.capacity <= 64 || entries < s.capacity/4 {
 		return true
 	}
 	if len(s.admit) == 0 || s.admitMask == 0 {
 		return true
 	}
-	idx := outerLeafBlockKeyHash(key) & s.admitMask
-	word := idx >> 6
-	bit := uint64(1) << (idx & 63)
-	seen := s.admit[word]&bit != 0
-	s.admit[word] |= bit
-	return seen
+	h := outerLeafBlockKeyHash(key)
+	idxA, idxB := outerLeafBlockCacheAdmitIndexes(h, s.admitMask)
+	wordA := idxA >> 6
+	bitA := uint64(1) << (idxA & 63)
+	wordB := idxB >> 6
+	bitB := uint64(1) << (idxB & 63)
+	seenA := s.admit[wordA]&bitA != 0
+	seenB := s.admit[wordB]&bitB != 0
+	s.admit[wordA] |= bitA
+	s.admit[wordB] |= bitB
+	// Keep warm-up behavior close to prior tuning while reducing collision-driven
+	// first-touch admits once shards are at least half occupied.
+	if entries < s.capacity/2 {
+		return seenA
+	}
+	return seenA && seenB
+}
+
+func outerLeafBlockCacheAdmitIndexes(h, mask uint64) (uint64, uint64) {
+	// Two derived bit positions preserve second-touch admission while sharply
+	// lowering false positives from hash collisions under large random key sets.
+	idxA := h & mask
+	h ^= h >> 33
+	h *= 0xc4ceb9fe1a85ec53
+	h ^= h >> 29
+	idxB := h & mask
+	return idxA, idxB
 }
 
 func (s *outerLeafBlockCacheShard) moveToFront(idx int) {

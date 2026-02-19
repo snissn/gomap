@@ -51,8 +51,7 @@ func fillOuterLeafCacheShardToThreshold(t *testing.T, c *outerLeafBlockCache, sh
 	if target < 1 {
 		target = 1
 	}
-	inserted := 0
-	for i := 1; inserted < target && i < 1_000_000; i++ {
+	for i := 1; len(shard.entries) < target && i < 1_000_000; i++ {
 		key := makeOuterLeafCacheTestKey(i)
 		if c.shardFor(key) != shard {
 			continue
@@ -61,10 +60,29 @@ func fillOuterLeafCacheShardToThreshold(t *testing.T, c *outerLeafBlockCache, sh
 			continue
 		}
 		c.put(key, makeOuterLeafCacheTestBlock(t, i))
-		inserted++
 	}
-	if inserted < target {
-		t.Fatalf("inserted=%d want at least %d for threshold fill", inserted, target)
+	if len(shard.entries) < target {
+		t.Fatalf("entries=%d want at least %d for threshold fill", len(shard.entries), target)
+	}
+}
+
+func fillOuterLeafCacheShardToEntries(t *testing.T, c *outerLeafBlockCache, shard *outerLeafBlockCacheShard, target int) {
+	t.Helper()
+	if target < 1 {
+		target = 1
+	}
+	for i := 1; len(shard.entries) < target && i < 2_000_000; i++ {
+		key := makeOuterLeafCacheTestKey(i)
+		if c.shardFor(key) != shard {
+			continue
+		}
+		if _, exists := shard.entries[key]; exists {
+			continue
+		}
+		c.put(key, makeOuterLeafCacheTestBlock(t, i))
+	}
+	if len(shard.entries) < target {
+		t.Fatalf("entries=%d want at least %d for target fill", len(shard.entries), target)
 	}
 }
 
@@ -89,6 +107,37 @@ func findOuterLeafCacheUnseenAdmitKey(t *testing.T, c *outerLeafBlockCache, shar
 		}
 	}
 	t.Fatalf("unable to find unseen admission bit candidate")
+	return outerLeafBlockKey{}
+}
+
+func findOuterLeafCachePrimaryCollisionSecondUnseenKey(t *testing.T, c *outerLeafBlockCache, shard *outerLeafBlockCacheShard, base outerLeafBlockKey, start int) outerLeafBlockKey {
+	t.Helper()
+	if len(shard.admit) == 0 || shard.admitMask == 0 {
+		t.Fatalf("shard admission filter not configured")
+	}
+	baseA, baseB := outerLeafBlockCacheAdmitIndexes(outerLeafBlockKeyHash(base), shard.admitMask)
+	for i := start; i < start+2_000_000; i++ {
+		key := makeOuterLeafCacheTestKey(i)
+		if c.shardFor(key) != shard {
+			continue
+		}
+		if key == base {
+			continue
+		}
+		if _, exists := shard.entries[key]; exists {
+			continue
+		}
+		idxA, idxB := outerLeafBlockCacheAdmitIndexes(outerLeafBlockKeyHash(key), shard.admitMask)
+		if idxA != baseA || idxB == baseB {
+			continue
+		}
+		word := idxB >> 6
+		bit := uint64(1) << (idxB & 63)
+		if shard.admit[word]&bit == 0 {
+			return key
+		}
+	}
+	t.Fatalf("unable to find primary-collision key with unseen secondary bit")
 	return outerLeafBlockKey{}
 }
 
@@ -159,6 +208,56 @@ func TestOuterLeafBlockCachePutWithLeaseSecondTouchAdmission(t *testing.T) {
 		t.Fatalf("second touch cache get miss, want hit")
 	}
 	readLease.Release()
+}
+
+func TestOuterLeafBlockCachePutWithLeasePrimaryCollisionStillNeedsSecondTouch(t *testing.T) {
+	cache := newOuterLeafBlockCache(8192)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	if len(cache.shards) == 0 {
+		t.Fatalf("cache has no shards")
+	}
+	shard := &cache.shards[0]
+	if shard.capacity <= 64 {
+		t.Fatalf("shard capacity=%d want >64 to exercise admission filter", shard.capacity)
+	}
+	fillOuterLeafCacheShardToEntries(t, cache, shard, shard.capacity/2)
+	baseKey := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, 4_000_000)
+
+	baseBlock := makeOuterLeafCacheTestBlock(t, 4_100_001)
+	lease, admitted := cache.putWithLease(baseKey, baseBlock)
+	if admitted {
+		lease.Release()
+		t.Fatalf("base first touch admitted=true want=false")
+	}
+	if lease.ref != nil {
+		lease.Release()
+		t.Fatalf("base first touch lease.ref non-nil want nil")
+	}
+
+	collideKey := findOuterLeafCachePrimaryCollisionSecondUnseenKey(t, cache, shard, baseKey, 4_200_000)
+	first := makeOuterLeafCacheTestBlock(t, 4_300_001)
+	lease, admitted = cache.putWithLease(collideKey, first)
+	if admitted {
+		lease.Release()
+		t.Fatalf("colliding first touch admitted=true want=false")
+	}
+	if lease.ref != nil {
+		lease.Release()
+		t.Fatalf("colliding first touch lease.ref non-nil want nil")
+	}
+	if got, readLease := cache.get(collideKey); got != nil {
+		readLease.Release()
+		t.Fatalf("colliding first touch unexpectedly present in cache")
+	}
+
+	second := makeOuterLeafCacheTestBlock(t, 4_300_002)
+	lease, admitted = cache.putWithLease(collideKey, second)
+	if !admitted || lease.ref == nil {
+		t.Fatalf("colliding second touch admitted=%v lease.ref=nil=%v want admitted with lease", admitted, lease.ref == nil)
+	}
+	lease.Release()
 }
 
 func TestOuterLeafBlockCachePut_FirstTouchRejectRecyclesBlock(t *testing.T) {
