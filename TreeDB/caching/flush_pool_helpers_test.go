@@ -221,6 +221,78 @@ func TestFlushDeferredValueLogUnitsPointerOnly(t *testing.T) {
 	}
 }
 
+func TestFlushDeferredValueLogUnitsInlinePointerChunkingNoDropsOrDuplicates(t *testing.T) {
+	const (
+		maxDeferredInlineGroupKeysForTest = 32768
+		totalKeys                         = maxDeferredInlineGroupKeysForTest + 513
+	)
+
+	mt := memtable.NewAppendOnlyWithCapacity(0)
+	value := []byte("v")
+	for i := 0; i < totalKeys; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		mt.Set(key[:], value)
+	}
+	mt.Freeze()
+
+	db, err := Open(t.TempDir(), NewMockBackend(), Options{
+		FlushThreshold:           1 << 30,
+		ForceValueLogPointers:    true,
+		ValueLogPointerThreshold: 1,
+		FlushBuildChunkCap:       1024,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	})
+
+	backendBatch := &pointerBatch{}
+	pendingOps, err := db.flushDeferredValueLogUnits([]flushUnit{{mem: mt}}, backendBatch, false, 0)
+	if err != nil {
+		t.Fatalf("flushDeferredValueLogUnits: %v", err)
+	}
+	if pendingOps != totalKeys {
+		t.Fatalf("pendingOps=%d want=%d", pendingOps, totalKeys)
+	}
+	if len(backendBatch.entries) != totalKeys {
+		t.Fatalf("backend batch entries=%d want=%d", len(backendBatch.entries), totalKeys)
+	}
+	if backendBatch.reserveCalls == 0 {
+		t.Fatalf("expected reserve hint before deferred flush loop")
+	}
+
+	seen := make(map[uint64]struct{}, totalKeys)
+	for i, e := range backendBatch.entries {
+		if e.Type != batch.OpPut || !e.IsPtr {
+			t.Fatalf("entry %d expected pointer put op, got type=%v isPtr=%v", i, e.Type, e.IsPtr)
+		}
+		if len(e.Key) != 8 {
+			t.Fatalf("entry %d key len=%d want=8", i, len(e.Key))
+		}
+		id := binary.BigEndian.Uint64(e.Key)
+		if id >= uint64(totalKeys) {
+			t.Fatalf("entry %d key id=%d out of expected range [0,%d)", i, id, totalKeys)
+		}
+		if _, dup := seen[id]; dup {
+			t.Fatalf("duplicate pointer op for key id=%d", id)
+		}
+		seen[id] = struct{}{}
+	}
+	if len(seen) != totalKeys {
+		t.Fatalf("seen pointer keys=%d want=%d", len(seen), totalKeys)
+	}
+	for i := 0; i < totalKeys; i++ {
+		if _, ok := seen[uint64(i)]; !ok {
+			t.Fatalf("missing pointer op for key id=%d", i)
+		}
+	}
+}
+
 func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
 	mt := memtable.NewAppendOnlyWithCapacity(0)
 	mt.Set([]byte("a"), []byte("va"))
