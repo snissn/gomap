@@ -2,7 +2,9 @@ package db
 
 import (
 	"fmt"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 )
@@ -139,6 +141,29 @@ func findOuterLeafCachePrimaryCollisionSecondUnseenKey(t *testing.T, c *outerLea
 	}
 	t.Fatalf("unable to find primary-collision key with unseen secondary bit")
 	return outerLeafBlockKey{}
+}
+
+func collectOuterLeafCacheShardKeys(t *testing.T, shard *outerLeafBlockCacheShard, limit int) []outerLeafBlockKey {
+	t.Helper()
+	if shard == nil {
+		t.Fatalf("shard=nil")
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	shard.mu.RLock()
+	defer shard.mu.RUnlock()
+	keys := make([]outerLeafBlockKey, 0, limit)
+	for key := range shard.entries {
+		keys = append(keys, key)
+		if len(keys) >= limit {
+			break
+		}
+	}
+	if len(keys) == 0 {
+		t.Fatalf("shard has no keys to sample")
+	}
+	return keys
 }
 
 func TestOuterLeafBlockCachePutWithLeaseSmallCacheAdmitsFirstTouch(t *testing.T) {
@@ -289,5 +314,105 @@ func TestOuterLeafBlockCachePut_FirstTouchRejectRecyclesBlock(t *testing.T) {
 	if got, lease := cache.get(key); got != nil {
 		lease.Release()
 		t.Fatalf("rejected first touch unexpectedly present in cache")
+	}
+}
+
+func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrentReadPressure(t *testing.T) {
+	cache := newOuterLeafBlockCache(130)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	if len(cache.shards) == 0 {
+		t.Fatalf("cache has no shards")
+	}
+	shard := &cache.shards[0]
+	if shard.capacity <= 64 {
+		t.Fatalf("shard capacity=%d want >64 to exercise admission filter", shard.capacity)
+	}
+	fillOuterLeafCacheShardToEntries(t, cache, shard, shard.capacity)
+	hotKeys := collectOuterLeafCacheShardKeys(t, shard, 16)
+
+	var (
+		wg       sync.WaitGroup
+		stop     = make(chan struct{})
+		stopOnce sync.Once
+	)
+	stopReaders := func() {
+		stopOnce.Do(func() {
+			close(stop)
+			wg.Wait()
+		})
+	}
+	t.Cleanup(stopReaders)
+
+	const readerGoroutines = 8
+	for g := 0; g < readerGoroutines; g++ {
+		wg.Add(1)
+		go func(seed int) {
+			defer wg.Done()
+			for i := seed; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				key := hotKeys[i%len(hotKeys)]
+				_, lease := cache.get(key)
+				lease.Release()
+			}
+		}(g)
+	}
+
+	type putResult struct {
+		lease    outerLeafBlockCacheLease
+		admitted bool
+	}
+
+	const probeKeys = 6
+	for i := 0; i < probeKeys; i++ {
+		base := 9_000_000 + i*1000
+		key := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, base)
+
+		first := makeOuterLeafCacheTestBlock(t, base+1)
+		lease, admitted := cache.putWithLease(key, first)
+		if admitted {
+			lease.Release()
+			t.Fatalf("probe=%d first touch admitted=true want=false", i)
+		}
+		if lease.ref != nil {
+			lease.Release()
+			t.Fatalf("probe=%d first touch lease.ref non-nil want nil", i)
+		}
+
+		keyForSecond := key
+		second := makeOuterLeafCacheTestBlock(t, base+2)
+		resCh := make(chan putResult, 1)
+		go func() {
+			lease, admitted := cache.putWithLease(keyForSecond, second)
+			resCh <- putResult{lease: lease, admitted: admitted}
+		}()
+
+		select {
+		case res := <-resCh:
+			if !res.admitted {
+				res.lease.Release()
+				t.Fatalf("probe=%d second touch admitted=false want=true", i)
+			}
+			if res.lease.ref == nil {
+				res.lease.Release()
+				t.Fatalf("probe=%d second touch lease.ref=nil want non-nil", i)
+			}
+			res.lease.Release()
+		case <-time.After(2 * time.Second):
+			stopReaders()
+			t.Fatalf("probe=%d second touch timed out under concurrent read pressure", i)
+		}
+
+		got, readLease := cache.get(keyForSecond)
+		if got == nil {
+			readLease.Release()
+			t.Fatalf("probe=%d admitted key missing from cache", i)
+		}
+		readLease.Release()
 	}
 }

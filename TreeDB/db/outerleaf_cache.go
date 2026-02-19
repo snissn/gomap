@@ -268,9 +268,7 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 		lease.ref = ref
 		return lease, true
 	}
-	if !s.shouldAdmit(key) {
-		return lease, false
-	}
+	admit := s.shouldAdmit(key)
 	// Recheck after admission; another goroutine may have inserted while we were
 	// outside the shard lock.
 	if ref := s.tryRetain(key); ref != nil {
@@ -279,6 +277,9 @@ func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerle
 		}
 		lease.ref = ref
 		return lease, true
+	}
+	if !admit {
+		return lease, false
 	}
 
 	s.mu.Lock()
