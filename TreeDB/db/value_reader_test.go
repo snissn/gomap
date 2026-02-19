@@ -124,6 +124,11 @@ func TestOuterLeafFenceDecodeScratchPoolCapBounded(t *testing.T) {
 
 func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	set := newOuterLeafFenceDecodeLeaseSet(1)
+	newCalls := 0
+	set.pool.New = func() any {
+		newCalls++
+		return acquireOuterLeafFenceDecodeContext()
+	}
 	ctx1 := set.acquire()
 	if ctx1 == nil {
 		t.Fatalf("first acquire returned nil")
@@ -132,11 +137,18 @@ func TestOuterLeafFenceDecodeLeaseSetAcquireUsesPool(t *testing.T) {
 	if ctx2 == nil {
 		t.Fatalf("second acquire returned nil")
 	}
+	callsAfterAcquire := newCalls
 	set.release(ctx1)
 	set.release(ctx2)
 	ctx3 := set.acquire()
 	if ctx3 == nil {
 		t.Fatalf("acquire after release returned nil")
+	}
+	if newCalls != callsAfterAcquire {
+		t.Fatalf("acquire after release allocated new context: calls before=%d after=%d", callsAfterAcquire, newCalls)
+	}
+	if ctx3 != ctx1 && ctx3 != ctx2 {
+		t.Fatalf("acquire after release did not reuse returned context: ctx1=%p ctx2=%p ctx3=%p", ctx1, ctx2, ctx3)
 	}
 	set.release(ctx3)
 }
@@ -169,6 +181,11 @@ func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing
 	}
 
 	set := newOuterLeafFenceDecodeLeaseSet(1)
+	newCalls := 0
+	set.pool.New = func() any {
+		newCalls++
+		return acquireOuterLeafFenceDecodeContext()
+	}
 	var r valueReader
 	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
 	r.fenceDecodeLeases = set
@@ -180,6 +197,9 @@ func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing
 	ctx := set.acquire()
 	if ctx == nil {
 		t.Fatalf("acquire returned nil after decode error")
+	}
+	if newCalls != 0 {
+		t.Fatalf("decode error path did not return lease context to pool; newCalls=%d", newCalls)
 	}
 	set.release(ctx)
 }
@@ -193,6 +213,11 @@ func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *t
 	}
 
 	set := newOuterLeafFenceDecodeLeaseSet(1)
+	newCalls := 0
+	set.pool.New = func() any {
+		newCalls++
+		return acquireOuterLeafFenceDecodeContext()
+	}
 	var r valueReader
 	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
 	r.fenceDecodeLeases = set
@@ -204,6 +229,9 @@ func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *t
 	ctx := set.acquire()
 	if ctx == nil {
 		t.Fatalf("acquire returned nil after append decode error")
+	}
+	if newCalls != 0 {
+		t.Fatalf("append decode error path did not return lease context to pool; newCalls=%d", newCalls)
 	}
 	set.release(ctx)
 }
