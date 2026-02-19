@@ -1291,52 +1291,50 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 		}
 	})
 
-	warm := make([][]byte, 2, 32)
-	warm[0] = []byte("left")
-	warm[1] = []byte("right")
-	putPooledLeaseKeys(warm)
-	if warm[0] != nil || warm[1] != nil {
-		t.Fatalf("expected put to clear caller buffer, got=%v", warm[:2])
+	const warmCap = 32
+	got := make([][]byte, 0, 1)
+	reused := false
+	for i := 0; i < 64; i++ {
+		warm := make([][]byte, 2, warmCap)
+		warm[0] = []byte("left")
+		warm[1] = []byte("right")
+		putPooledLeaseKeys(warm)
+		got = getPooledLeaseKeys(1)
+		if cap(got) >= warmCap {
+			reused = true
+			break
+		}
 	}
-
-	// sync.Pool is allowed to drop entries at any time, so this test only asserts
-	// correctness properties (shape + cleared contents), not guaranteed reuse.
-	got := getPooledLeaseKeys(1)
-	if cap(got) < 1 {
-		t.Fatalf("cap(got)=%d want >=1", cap(got))
+	if !reused {
+		t.Skipf("sync.Pool did not return warmed keys buffer under current scheduler/race instrumentation (cap=%d)", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0", len(got))
 	}
-	// sync.Pool may drop warm entries between Put/Get; only assert warm reuse
-	// when a warmed-capacity buffer is actually returned.
-	if cap(got) >= cap(warm) {
-		got = got[:2]
-		if got[0] != nil || got[1] != nil {
-			t.Fatalf("expected cleared pooled entries, got=%v", got)
-		}
-		got = got[:0]
+	got = got[:2]
+	if got[0] != nil || got[1] != nil {
+		t.Fatalf("expected cleared pooled entries, got=%v", got)
 	}
 
-	got = got[:1]
 	got[0] = []byte("mutated")
 	putPooledLeaseKeys(got[:0])
-	if got[0] != nil {
-		t.Fatalf("expected put to clear mutated entry")
+	reused = false
+	for i := 0; i < 64; i++ {
+		got = getPooledLeaseKeys(1)
+		if cap(got) >= warmCap {
+			reused = true
+			break
+		}
 	}
-
-	got = getPooledLeaseKeys(1)
-	if cap(got) < 1 {
-		t.Fatalf("cap(got)=%d want >=1 on warm reuse", cap(got))
+	if !reused {
+		t.Skipf("sync.Pool did not return warmed keys buffer on second reuse attempt (cap=%d)", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
 	}
-	if cap(got) > 1 {
-		got = got[:1]
-		if got[0] != nil {
-			t.Fatalf("expected cleared pooled entry on reuse, got=%v", got[0])
-		}
+	got = got[:1]
+	if got[0] != nil {
+		t.Fatalf("expected cleared pooled entry on reuse, got=%v", got[0])
 	}
 }
 
@@ -1348,12 +1346,20 @@ func TestGetPooledLeaseArena_WarmReuse(t *testing.T) {
 		}
 	})
 
-	warm := make([]byte, 64)
-	putPooledLeaseArena(warm)
-
-	got := getPooledLeaseArena(1)
-	if cap(got) < 1 {
-		t.Fatalf("cap(got)=%d want >=1", cap(got))
+	const warmCap = 64
+	got := make([]byte, 0, 1)
+	reused := false
+	for i := 0; i < 64; i++ {
+		warm := make([]byte, warmCap)
+		putPooledLeaseArena(warm)
+		got = getPooledLeaseArena(1)
+		if cap(got) >= warmCap {
+			reused = true
+			break
+		}
+	}
+	if !reused {
+		t.Skipf("sync.Pool did not return warmed arena under current scheduler/race instrumentation (cap=%d)", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0", len(got))
@@ -1362,9 +1368,16 @@ func TestGetPooledLeaseArena_WarmReuse(t *testing.T) {
 	got = append(got, 'x')
 	putPooledLeaseArena(got)
 
-	got = getPooledLeaseArena(1)
-	if cap(got) < 1 {
-		t.Fatalf("cap(got)=%d want >=1 on warm reuse", cap(got))
+	reused = false
+	for i := 0; i < 64; i++ {
+		got = getPooledLeaseArena(1)
+		if cap(got) >= warmCap {
+			reused = true
+			break
+		}
+	}
+	if !reused {
+		t.Skipf("sync.Pool did not return warmed arena on second reuse attempt (cap=%d)", cap(got))
 	}
 	if len(got) != 0 {
 		t.Fatalf("len(got)=%d want=0 on warm reuse", len(got))
