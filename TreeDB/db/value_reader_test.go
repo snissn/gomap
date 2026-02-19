@@ -325,6 +325,53 @@ func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing
 	}
 }
 
+func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *testing.T) {
+	payload, _, _ := makeTestOuterLeafPayload(t)
+	payload = append([]byte(nil), payload...)
+	payload = payload[:len(payload)-1]
+	if !outerleaf.HasMagic(payload) {
+		t.Fatalf("payload missing outer-leaf magic after truncation")
+	}
+
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
+	var r valueReader
+	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	r.fenceDecodeLeases = set
+
+	_, _, err := r.decodeValueForKeyFoundAppend(page.ValuePtr{}, []byte("k1"), payload, nil)
+	if err == nil {
+		t.Fatalf("decodeValueForKeyFoundAppend err=nil want decode failure")
+	}
+	if got := len(set.pool); got != 1 {
+		t.Fatalf("pool size after append decode error=%d want 1 (lease released)", got)
+	}
+}
+
+func TestOuterLeafFenceDecodeLeaseSetReleaseRetainedContextDropsOversizedScratch(t *testing.T) {
+	set := newOuterLeafFenceDecodeLeaseSet(1)
+	defer set.close()
+	ctx := set.acquire()
+	if ctx == nil {
+		t.Fatalf("acquire returned nil")
+	}
+	ctx.scratch = make([]byte, 0, outerLeafFenceDecodeScratchMaxRetain+1)
+
+	set.release(ctx)
+
+	if ctx.scratch != nil {
+		t.Fatalf("retained context kept oversized scratch cap=%d", cap(ctx.scratch))
+	}
+	reacquired := set.acquire()
+	if reacquired == nil {
+		t.Fatalf("reacquire returned nil")
+	}
+	if cap(reacquired.scratch) > outerLeafFenceDecodeScratchMaxRetain {
+		t.Fatalf("reacquired scratch cap=%d exceeds max retain=%d", cap(reacquired.scratch), outerLeafFenceDecodeScratchMaxRetain)
+	}
+	set.release(reacquired)
+}
+
 func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T) {
 	payload, block, ptr := makeTestOuterLeafPayload(t)
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
