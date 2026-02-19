@@ -3415,22 +3415,19 @@ func (db *DB) retainMemtableView() *memtableView {
 		if view == nil {
 			return nil
 		}
-		for {
-			n := view.refs.Load()
-			if n == 0 {
-				// Self-heal tests/edge cases that publish a view without the
-				// baseline published reference.
-				if db.memtables.Load() != view {
-					break
-				}
-				if !view.refs.CompareAndSwap(0, 1) {
-					continue
-				}
-				n = 1
-			}
-			if view.refs.CompareAndSwap(n, n+1) {
-				return view
-			}
+		// Fast path: published views keep a baseline ref, so this is usually one
+		// atomic add and return.
+		if n := view.refs.Add(1); n > 1 {
+			return view
+		}
+		// We observed a zero-ref view. Undo and retry unless this is still the
+		// published view, in which case self-heal by restoring baseline+caller refs.
+		view.refs.Add(-1)
+		if db.memtables.Load() != view {
+			continue
+		}
+		if view.refs.CompareAndSwap(0, 2) {
+			return view
 		}
 	}
 }
