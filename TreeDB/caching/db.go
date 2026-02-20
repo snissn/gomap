@@ -13968,10 +13968,16 @@ func (db *DB) getBatchEntries(minCap int) []batch.Entry {
 				if cap(entries) >= minCap {
 					return entries[:0]
 				}
+				if c := cap(entries); c > 0 && c <= batchEntriesPoolMaxRetain {
+					db.batchEntriesPool.Put(getBatchEntrySliceRef(entries[:0]))
+				}
 			case []batch.Entry:
 				// Backward-compatible fallback for any legacy pooled shape.
 				if cap(v) >= minCap {
 					return v[:0]
+				}
+				if c := cap(v); c > 0 && c <= batchEntriesPoolMaxRetain {
+					db.batchEntriesPool.Put(getBatchEntrySliceRef(v[:0]))
 				}
 			}
 		}
@@ -14033,9 +14039,13 @@ func (db *DB) getBatchIntSlice(minCap int) []int {
 	}
 	if db != nil {
 		if pooled := db.batchIntPool.Get(); pooled != nil {
-			idxs := pooled.([]int)
-			if cap(idxs) >= minCap {
-				return idxs[:0]
+			if idxs, ok := pooled.([]int); ok {
+				if cap(idxs) >= minCap {
+					return idxs[:0]
+				}
+				if c := cap(idxs); c > 0 && c <= batchIntSlicePoolMaxRetain {
+					db.batchIntPool.Put(idxs[:0])
+				}
 			}
 		}
 	}
@@ -14086,6 +14096,9 @@ func (b *Batch) Reset() {
 		b.shardIdxSets = b.shardIdxSets[:0]
 	}
 	b.recycleCopyArenaChunks()
+	if b.db != nil {
+		b.copyArenaCap = b.db.batchCopyArenaInitCap(0)
+	}
 	b.size = 0
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
