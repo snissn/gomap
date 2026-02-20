@@ -3060,6 +3060,8 @@ type DB struct {
 	queueEnqueueNS   []int64
 	nextQueueID      atomic.Uint64
 	batchEntryHint   atomic.Int32
+	batchEntriesPool sync.Pool
+	batchIntPool     sync.Pool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -13608,14 +13610,14 @@ func (db *DB) NewBatch() *Batch {
 	if db != nil {
 		capHint = db.batchEntriesCapHint(capHint)
 	}
-	return &Batch{db: db, entries: make([]batch.Entry, 0, capHint), streamEligible: true}
+	return &Batch{db: db, entries: db.getBatchEntries(capHint), streamEligible: true}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
 	if size < 0 {
 		size = 0
 	}
-	return &Batch{db: db, entries: make([]batch.Entry, 0, size), streamEligible: true}
+	return &Batch{db: db, entries: db.getBatchEntries(size), streamEligible: true}
 }
 
 func (db *DB) batchEntriesCapHint(minCap int) int {
@@ -13666,6 +13668,58 @@ func (db *DB) observeBatchEntries(n int) {
 			return
 		}
 	}
+}
+
+func (db *DB) getBatchEntries(minCap int) []batch.Entry {
+	if minCap < 0 {
+		minCap = 0
+	}
+	if db != nil {
+		if pooled := db.batchEntriesPool.Get(); pooled != nil {
+			entries := pooled.([]batch.Entry)
+			if cap(entries) >= minCap {
+				return entries[:0]
+			}
+		}
+	}
+	return make([]batch.Entry, 0, minCap)
+}
+
+func (db *DB) putBatchEntries(entries []batch.Entry) {
+	if db == nil || cap(entries) == 0 {
+		return
+	}
+	if cap(entries) > batchEntriesPoolMaxRetain {
+		return
+	}
+	full := entries[:cap(entries)]
+	clear(full)
+	db.batchEntriesPool.Put(full[:0])
+}
+
+func (db *DB) getBatchIntSlice(minCap int) []int {
+	if minCap < 0 {
+		minCap = 0
+	}
+	if db != nil {
+		if pooled := db.batchIntPool.Get(); pooled != nil {
+			idxs := pooled.([]int)
+			if cap(idxs) >= minCap {
+				return idxs[:0]
+			}
+		}
+	}
+	return make([]int, 0, minCap)
+}
+
+func (db *DB) putBatchIntSlice(idxs []int) {
+	if db == nil || cap(idxs) == 0 {
+		return
+	}
+	if cap(idxs) > batchIntSlicePoolMaxRetain {
+		return
+	}
+	db.batchIntPool.Put(idxs[:0])
 }
 
 // Reset clears the batch for reuse without closing it.
@@ -14014,6 +14068,8 @@ const (
 	multiLaneValueLogMinRecords = 1024
 	batchCopyArenaMinChunk      = 4 << 10
 	batchCopyArenaMaxRetain     = 1 << 20
+	batchEntriesPoolMaxRetain   = 16 << 10
+	batchIntSlicePoolMaxRetain  = 16 << 10
 )
 
 func (b *Batch) maybeSwitchToStreaming() {
@@ -14304,7 +14360,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 	shardIdxs := b.shardIdxs
 	if cap(shardIdxs) < len(b.entries) {
-		shardIdxs = make([]int, len(b.entries))
+		shardIdxs = b.db.getBatchIntSlice(len(b.entries))
+		shardIdxs = shardIdxs[:len(b.entries)]
 	} else {
 		shardIdxs = shardIdxs[:len(b.entries)]
 	}
@@ -14745,7 +14802,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			idxs := shardIdxSets[i]
 			if cap(idxs) < count {
-				idxs = make([]int, 0, count)
+				idxs = b.db.getBatchIntSlice(count)
 			} else {
 				idxs = idxs[:0]
 			}
@@ -15167,13 +15224,34 @@ func (b *Batch) Close() error {
 		return nil
 	}
 	b.closed = true
-	b.entries = nil
 	if b.backend != nil {
 		_ = b.backend.Close()
 		b.backend = nil
 	}
+	if b.db != nil && b.entries != nil {
+		b.db.putBatchEntries(b.entries)
+	}
+	if b.db != nil && b.shardIdxs != nil {
+		b.db.putBatchIntSlice(b.shardIdxs)
+	}
+	if b.db != nil && b.shardIdxSets != nil && cap(b.shardIdxSets) > 0 {
+		full := b.shardIdxSets[:cap(b.shardIdxSets)]
+		for i := range full {
+			if full[i] != nil {
+				b.db.putBatchIntSlice(full[i])
+				full[i] = nil
+			}
+		}
+	}
+	b.entries = nil
+	b.copyArena = nil
 	b.walBuf = nil
+	b.shardIdxs = nil
 	b.eligibleIdxs = nil
+	b.shardAdds = nil
+	b.shardCnts = nil
+	b.shardEntries = nil
+	b.shardIdxSets = nil
 	b.firstKey = nil
 	b.lastKey = nil
 	return nil
