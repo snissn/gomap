@@ -1045,6 +1045,10 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.vlog.outer_leaf_block_cache.hit_ratio",
 		"treedb.vlog.outer_leaf_block_cache.entries",
 		"treedb.vlog.outer_leaf_block_cache.capacity",
+		"treedb.vlog.outer_leaf_block_cache.put_attempts",
+		"treedb.vlog.outer_leaf_block_cache.put_admitted",
+		"treedb.vlog.outer_leaf_block_cache.put_duplicate_drops",
+		"treedb.vlog.outer_leaf_block_cache.put_lock_contention",
 	}
 
 	fmt.Fprintf(w, "%s (%s):", prefix, inst.Wrapper.Name())

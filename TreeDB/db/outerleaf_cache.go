@@ -275,6 +275,114 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 	}
 }
 
+// putAfterMissNoLease is a miss-aware insert path for decode callers that
+// already observed a cache miss and do not require a lease. It intentionally
+// avoids a pre-lock read probe and can drop admission under contention once the
+// shard is warm to reduce write-lock amplification on parallel read misses.
+func (c *outerLeafBlockCache) putAfterMissNoLease(key outerLeafBlockKey, block *outerleaf.DecodedBlock) {
+	if !c.putAfterMissNoLeaseInternal(key, block) {
+		recycleOuterLeafDecodedBlock(block)
+	}
+}
+
+func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey, block *outerleaf.DecodedBlock) bool {
+	if c == nil || block == nil {
+		return false
+	}
+	c.putAttempts.Add(1)
+	s, keyHash := c.shardForAndHash(key)
+	if s.capacity <= 0 {
+		return false
+	}
+	if !s.shouldAdmitHash(keyHash) {
+		return false
+	}
+
+	stagedRef := getOuterLeafBlockRefSlot()
+	warmOrFull := int(s.entryCount.Load()) >= s.capacity/2
+	if !s.mu.TryLock() {
+		c.putLockContention.Add(1)
+		if warmOrFull {
+			putOuterLeafBlockRefSlot(stagedRef)
+			return false
+		}
+		s.mu.Lock()
+	}
+
+	var releaseEvicted *outerLeafBlockRef
+	var duplicateDropBlock *outerleaf.DecodedBlock
+	if idx, ok := s.entries[key]; ok {
+		ref := s.nodes[idx].ref
+		if ref == nil {
+			ref = initOuterLeafBlockRefSlot(stagedRef, block)
+			stagedRef = nil
+			s.nodes[idx].ref = ref
+		} else if ref.block != block {
+			duplicateDropBlock = block
+			c.putDuplicateDrops.Add(1)
+		}
+		// Keep duplicate/no-lease updates lock-minimal; read hits already perform
+		// sampled recency maintenance.
+		s.mu.Unlock()
+		if stagedRef != nil {
+			putOuterLeafBlockRefSlot(stagedRef)
+		}
+		if duplicateDropBlock != nil {
+			recycleOuterLeafDecodedBlock(duplicateDropBlock)
+		}
+		c.putAdmitted.Add(1)
+		return true
+	}
+
+	var idx int
+	inserted := false
+	if n := len(s.free); n > 0 {
+		idx = s.free[n-1]
+		s.free = s.free[:n-1]
+		inserted = true
+	} else {
+		idx = s.tail
+		if idx < 0 {
+			s.mu.Unlock()
+			if stagedRef != nil {
+				putOuterLeafBlockRefSlot(stagedRef)
+			}
+			return false
+		}
+		evictedKey := s.nodes[idx].key
+		releaseEvicted = s.nodes[idx].ref
+		s.unlink(idx)
+		delete(s.entries, evictedKey)
+	}
+
+	node := &s.nodes[idx]
+	node.key = key
+	if releaseEvicted != nil && releaseEvicted.block == block {
+		node.ref = releaseEvicted
+		releaseEvicted = nil
+	} else {
+		node.ref = initOuterLeafBlockRefSlot(stagedRef, block)
+		stagedRef = nil
+	}
+	node.prev = -1
+	node.next = -1
+	s.linkFront(idx)
+	s.entries[key] = idx
+	if inserted {
+		s.entryCount.Add(1)
+	}
+	s.mu.Unlock()
+
+	if stagedRef != nil {
+		putOuterLeafBlockRefSlot(stagedRef)
+	}
+	if releaseEvicted != nil {
+		releaseEvicted.release()
+	}
+	c.putAdmitted.Add(1)
+	return true
+}
+
 func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerleaf.DecodedBlock) (outerLeafBlockCacheLease, bool) {
 	return c.putInternal(key, block, true)
 }
@@ -343,7 +451,9 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 			duplicateDropBlock = block
 			c.putDuplicateDrops.Add(1)
 		}
-		s.moveToFront(idx)
+		if wantLease {
+			s.moveToFront(idx)
+		}
 		if wantLease {
 			if ref != nil && ref.retain() {
 				lease.ref = ref

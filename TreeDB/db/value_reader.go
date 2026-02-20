@@ -664,7 +664,7 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 				val = cloneInlineValueIfNeeded(entry.Kind, val)
 			}
 		}
-		r.cache.put(cacheKey, block)
+		r.cache.putAfterMissNoLease(cacheKey, block)
 		if nextScratch != nil {
 			outerLeafFenceDecodeScratchPut(nextScratch)
 		}
@@ -734,7 +734,7 @@ func (r valueReader) decodeValueForKeyFoundWithLeaseCtx(cacheKey outerLeafBlockK
 		}
 		ctx.scratch = nextScratch
 		ctx.block = outerLeafFenceDecodedBlockGet()
-		r.cache.put(cacheKey, block)
+		r.cache.putAfterMissNoLease(cacheKey, block)
 		if resolveErr != nil {
 			return nil, false, resolveErr
 		}
@@ -833,7 +833,7 @@ func (r valueReader) decodeValueForKeyFoundAppend(ptr page.ValuePtr, key, raw, d
 		if found {
 			out, resolveErr = r.resolveLookupResultAppend(entry, dst)
 		}
-		r.cache.put(cacheKey, block)
+		r.cache.putAfterMissNoLease(cacheKey, block)
 		if nextScratch != nil {
 			outerLeafFenceDecodeScratchPut(nextScratch)
 		}
@@ -899,7 +899,7 @@ func (r valueReader) decodeValueForKeyFoundAppendWithLeaseCtx(cacheKey outerLeaf
 		}
 		ctx.scratch = nextScratch
 		ctx.block = outerLeafFenceDecodedBlockGet()
-		r.cache.put(cacheKey, block)
+		r.cache.putAfterMissNoLease(cacheKey, block)
 		if resolveErr != nil {
 			return nil, false, resolveErr
 		}

@@ -366,6 +366,105 @@ func TestOuterLeafBlockCachePut_DuplicateKeyRecyclesIncomingBlock(t *testing.T) 
 	readLease.Release()
 }
 
+func TestOuterLeafBlockCachePutAfterMissNoLease_DuplicateDoesNotPromote(t *testing.T) {
+	cache := newOuterLeafBlockCache(8)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	if len(cache.shards) != 1 {
+		t.Fatalf("shard count=%d want=1", len(cache.shards))
+	}
+	shard := &cache.shards[0]
+	keyA := makeOuterLeafCacheTestKey(7001)
+	keyB := makeOuterLeafCacheTestKey(7002)
+
+	blockA := makeOuterLeafCacheTestLeaseBlock(t, 7001)
+	blockB := makeOuterLeafCacheTestLeaseBlock(t, 7002)
+	cache.put(keyA, blockA)
+	cache.put(keyB, blockB)
+
+	shard.mu.RLock()
+	if shard.head < 0 || shard.tail < 0 {
+		shard.mu.RUnlock()
+		t.Fatalf("invalid list state head=%d tail=%d", shard.head, shard.tail)
+	}
+	if got := shard.nodes[shard.head].key; got != keyB {
+		shard.mu.RUnlock()
+		t.Fatalf("head key=%+v want=%+v", got, keyB)
+	}
+	if got := shard.nodes[shard.tail].key; got != keyA {
+		shard.mu.RUnlock()
+		t.Fatalf("tail key=%+v want=%+v", got, keyA)
+	}
+	shard.mu.RUnlock()
+
+	dup := makeOuterLeafCacheTestLeaseBlock(t, 7003)
+	cache.putAfterMissNoLease(keyA, dup)
+
+	if dup.RawBytes() != nil {
+		t.Fatalf("duplicate incoming block was not recycled")
+	}
+	if blockA.RawBytes() == nil {
+		t.Fatalf("existing cached block unexpectedly recycled")
+	}
+
+	shard.mu.RLock()
+	if got := shard.nodes[shard.head].key; got != keyB {
+		shard.mu.RUnlock()
+		t.Fatalf("head key moved by duplicate no-lease put: got=%+v want=%+v", got, keyB)
+	}
+	if got := shard.nodes[shard.tail].key; got != keyA {
+		shard.mu.RUnlock()
+		t.Fatalf("tail key moved by duplicate no-lease put: got=%+v want=%+v", got, keyA)
+	}
+	shard.mu.RUnlock()
+}
+
+func TestOuterLeafBlockCachePutAfterMissNoLease_WarmShardDropsUnderContention(t *testing.T) {
+	cache := newOuterLeafBlockCache(130)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	if len(cache.shards) == 0 {
+		t.Fatalf("cache has no shards")
+	}
+	shard := &cache.shards[0]
+	if shard.capacity <= 64 {
+		t.Fatalf("shard capacity=%d want >64 to exercise warm/full admission behavior", shard.capacity)
+	}
+	fillOuterLeafCacheShardToEntries(t, cache, shard, shard.capacity/2)
+	key := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, 8_000_000)
+	_ = shard.shouldAdmit(key) // prime seen bits so second-touch admission passes
+
+	_, _, _, lockContentionBefore := cache.putStats()
+	block := makeOuterLeafCacheTestLeaseBlock(t, 8_100_000)
+	shard.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.putAfterMissNoLease(key, block)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		shard.mu.Unlock()
+		t.Fatalf("putAfterMissNoLease blocked on warm shard contention")
+	}
+	shard.mu.Unlock()
+
+	if block.RawBytes() != nil {
+		t.Fatalf("contention-dropped block was not recycled")
+	}
+	if got, lease := cache.get(key); got != nil {
+		lease.Release()
+		t.Fatalf("contention-dropped key unexpectedly present in cache")
+	}
+	_, _, _, lockContentionAfter := cache.putStats()
+	if lockContentionAfter <= lockContentionBefore {
+		t.Fatalf("lock contention counter did not increase: before=%d after=%d", lockContentionBefore, lockContentionAfter)
+	}
+}
+
 func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrentReadPressure(t *testing.T) {
 	cache := newOuterLeafBlockCache(130)
 	if cache == nil {
