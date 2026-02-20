@@ -152,6 +152,9 @@ type outerLeafBlockCacheShard struct {
 	admitDecaying atomic.Uint32
 	// admitFloor tracks recent victim frequency (EWMA) for admission thresholding.
 	admitFloor atomic.Uint32
+	// SIEVE state: per-entry reference bits and a best-effort scan hand.
+	sieveRef  []atomic.Uint32
+	sieveHand int
 	// SLRU state: probation and protected segment lists.
 	slruProbHead  int
 	slruProbTail  int
@@ -176,6 +179,8 @@ type outerLeafBlockCachePolicy uint8
 
 const (
 	outerLeafBlockCachePolicyLRU outerLeafBlockCachePolicy = iota
+	outerLeafBlockCachePolicyLRULight
+	outerLeafBlockCachePolicySIEVE
 	outerLeafBlockCachePolicySLRU
 )
 
@@ -188,6 +193,7 @@ var outerLeafBlockCachePolicyCached outerLeafBlockCachePolicy
 // creates avoidable write-lock churn. Promote a sampled subset of hits to keep
 // recency reasonably fresh while reducing lock pressure.
 const outerLeafBlockCachePromoteSampleMask uint64 = 0x0f              // 1/16
+const outerLeafBlockCachePromoteSampleMaskLight uint64 = 0x3f         // 1/64
 const outerLeafBlockCacheSLRUProbationPromoteSampleMask uint64 = 0x03 // 1/4
 
 // Keep shard fanout bounded while aiming for modest per-shard queueing under
@@ -282,11 +288,15 @@ func newOuterLeafBlockCacheWithPolicy(capacity int, policy outerLeafBlockCachePo
 			admit:           make([]atomic.Uint64, admitWords),
 			admitMask:       admitMask,
 			admitDecayEvery: admitDecayEvery,
+			sieveHand:       -1,
 			slruProbHead:    -1,
 			slruProbTail:    -1,
 			slruProtHead:    -1,
 			slruProtTail:    -1,
 			slruProtCap:     0,
+		}
+		if policy == outerLeafBlockCachePolicySIEVE {
+			shards[i].sieveRef = make([]atomic.Uint32, capI)
 		}
 		if policy == outerLeafBlockCachePolicySLRU {
 			protCap := (capI * outerLeafBlockCacheSLRUProtectedFractionNum) / outerLeafBlockCacheSLRUProtectedFractionDen
@@ -314,6 +324,10 @@ func newOuterLeafBlockCacheWithPolicy(capacity int, policy outerLeafBlockCachePo
 func outerLeafBlockCacheDefaultPolicy() outerLeafBlockCachePolicy {
 	outerLeafBlockCachePolicyOnce.Do(func() {
 		switch strings.ToLower(strings.TrimSpace(os.Getenv(outerLeafBlockCachePolicyEnv))) {
+		case "lru_light", "lru-light", "lrulight":
+			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicyLRULight
+		case "sieve":
+			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicySIEVE
 		case "slru", "2q":
 			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicySLRU
 		case "clock":
@@ -330,10 +344,31 @@ func (c *outerLeafBlockCache) policyName() string {
 	if c == nil {
 		return "disabled"
 	}
+	if c.policy == outerLeafBlockCachePolicyLRULight {
+		return "lru_light"
+	}
+	if c.policy == outerLeafBlockCachePolicySIEVE {
+		return "sieve"
+	}
 	if c.policy == outerLeafBlockCachePolicySLRU {
 		return "slru"
 	}
 	return "lru"
+}
+
+func (c *outerLeafBlockCache) isSLRU() bool {
+	return c != nil && c.policy == outerLeafBlockCachePolicySLRU
+}
+
+func (c *outerLeafBlockCache) isSIEVE() bool {
+	return c != nil && c.policy == outerLeafBlockCachePolicySIEVE
+}
+
+func (c *outerLeafBlockCache) lruPromoteMask() uint64 {
+	if c != nil && c.policy == outerLeafBlockCachePolicyLRULight {
+		return outerLeafBlockCachePromoteSampleMaskLight
+	}
+	return outerLeafBlockCachePromoteSampleMask
 }
 
 func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBlock, outerLeafBlockCacheLease) {
@@ -352,9 +387,13 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBloc
 		s.misses.Add(1)
 		return nil, lease
 	}
+	if c.isSIEVE() {
+		s.sieveMark(idx)
+	}
 	block := ref.block
 	segment := s.nodes[idx].segment
 	needPromoteLRU := c.policy == outerLeafBlockCachePolicyLRU && idx != s.head
+	needPromoteLRULight := c.policy == outerLeafBlockCachePolicyLRULight && idx != s.head
 	s.mu.RUnlock()
 	if block == nil {
 		ref.release()
@@ -362,7 +401,7 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBloc
 		return nil, lease
 	}
 	hits := s.hits.Add(1)
-	if c.policy == outerLeafBlockCachePolicySLRU {
+	if c.isSLRU() {
 		// Probation hits should promote into protected, but sample promotions so
 		// the read path does not attempt a write lock on every hit.
 		shouldPromoteProbation := segment == outerLeafBlockCacheSegmentProbation && (hits&outerLeafBlockCacheSLRUProbationPromoteSampleMask) == 0
@@ -379,7 +418,7 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBloc
 			}
 			s.mu.Unlock()
 		}
-	} else if needPromoteLRU && (hits&outerLeafBlockCachePromoteSampleMask) == 0 && s.mu.TryLock() {
+	} else if (needPromoteLRU || needPromoteLRULight) && (hits&c.lruPromoteMask()) == 0 && s.mu.TryLock() {
 		// Best-effort recency maintenance: avoid blocking readers on shard write
 		// lock when contended. This keeps LRU ordering close under concurrency.
 		if idx2, ok2 := s.entries[key]; ok2 && idx2 != s.head {
@@ -446,6 +485,9 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 			duplicateDropBlock = block
 			c.putDuplicateDrops.Add(1)
 		}
+		if c.isSIEVE() {
+			s.sieveMark(idx)
+		}
 		// Keep duplicate/no-lease updates lock-minimal; read hits already perform
 		// sampled recency maintenance.
 		s.mu.Unlock()
@@ -466,8 +508,10 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 		s.free = s.free[:n-1]
 		inserted = true
 	} else {
-		if c.policy == outerLeafBlockCachePolicySLRU {
+		if c.isSLRU() {
 			idx = s.slruPickVictim()
+		} else if c.isSIEVE() {
+			idx = s.sievePickVictim()
 		} else {
 			idx = s.tail
 		}
@@ -482,8 +526,10 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 		evictedHash = outerLeafBlockKeyHash(evictedKey)
 		evicted = true
 		releaseEvicted = s.nodes[idx].ref
-		if c.policy == outerLeafBlockCachePolicySLRU {
+		if c.isSLRU() {
 			s.slruRemove(idx)
+		} else if c.isSIEVE() {
+			s.sieveRemove(idx)
 		} else {
 			s.unlink(idx)
 		}
@@ -501,8 +547,11 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 	}
 	node.prev = -1
 	node.next = -1
-	if c.policy == outerLeafBlockCachePolicySLRU {
+	if c.isSLRU() {
 		s.slruInsertProbation(idx)
+	} else if c.isSIEVE() {
+		s.linkFront(idx)
+		s.sieveInsert(idx)
 	} else {
 		s.linkFront(idx)
 	}
@@ -541,6 +590,9 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	}
 	if !wantLease {
 		if hit, same := s.hasCachedRef(key, block); hit {
+			if c.isSIEVE() {
+				s.markSIEVEByKey(key)
+			}
 			if !same {
 				recycleOuterLeafDecodedBlock(block)
 				c.putDuplicateDrops.Add(1)
@@ -550,6 +602,9 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		}
 	} else {
 		if ref := s.tryRetain(key); ref != nil {
+			if c.isSIEVE() {
+				s.markSIEVEByKey(key)
+			}
 			if ref.block != block {
 				recycleOuterLeafDecodedBlock(block)
 				c.putDuplicateDrops.Add(1)
@@ -566,6 +621,9 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		// Recheck after admission; another goroutine may have inserted while we
 		// were outside the shard lock.
 		if ref := s.tryRetain(key); ref != nil {
+			if c.isSIEVE() {
+				s.markSIEVEByKey(key)
+			}
 			if ref.block != block {
 				recycleOuterLeafDecodedBlock(block)
 				c.putDuplicateDrops.Add(1)
@@ -596,11 +654,15 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 			c.putDuplicateDrops.Add(1)
 		}
 		if wantLease {
-			if c.policy == outerLeafBlockCachePolicySLRU {
+			if c.isSLRU() {
 				s.slruTouch(idx)
+			} else if c.isSIEVE() {
+				s.sieveMark(idx)
 			} else {
 				s.moveToFront(idx)
 			}
+		} else if c.isSIEVE() {
+			s.sieveMark(idx)
 		}
 		if wantLease {
 			if ref != nil && ref.retain() {
@@ -631,8 +693,10 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		s.free = s.free[:n-1]
 		inserted = true
 	} else {
-		if c.policy == outerLeafBlockCachePolicySLRU {
+		if c.isSLRU() {
 			idx = s.slruPickVictim()
+		} else if c.isSIEVE() {
+			idx = s.sievePickVictim()
 		} else {
 			idx = s.tail
 		}
@@ -647,8 +711,10 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		evictedHash = outerLeafBlockKeyHash(evictedKey)
 		evicted = true
 		releaseEvicted = s.nodes[idx].ref
-		if c.policy == outerLeafBlockCachePolicySLRU {
+		if c.isSLRU() {
 			s.slruRemove(idx)
+		} else if c.isSIEVE() {
+			s.sieveRemove(idx)
 		} else {
 			s.unlink(idx)
 		}
@@ -665,8 +731,11 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	}
 	node.prev = -1
 	node.next = -1
-	if c.policy == outerLeafBlockCachePolicySLRU {
+	if c.isSLRU() {
 		s.slruInsertProbation(idx)
+	} else if c.isSIEVE() {
+		s.linkFront(idx)
+		s.sieveInsert(idx)
 	} else {
 		s.linkFront(idx)
 	}
@@ -738,6 +807,18 @@ func (s *outerLeafBlockCacheShard) tryRetain(key outerLeafBlockKey) *outerLeafBl
 	}
 	s.mu.RUnlock()
 	return ref
+}
+
+func (s *outerLeafBlockCacheShard) markSIEVEByKey(key outerLeafBlockKey) {
+	if s == nil || len(s.sieveRef) == 0 {
+		return
+	}
+	s.mu.RLock()
+	idx, ok := s.entries[key]
+	if ok {
+		s.sieveMark(idx)
+	}
+	s.mu.RUnlock()
 }
 
 func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
@@ -945,6 +1026,96 @@ func outerLeafBlockCacheAdmitIndexes(h, mask uint64) (uint64, uint64) {
 	h ^= h >> 29
 	idxB := h & mask
 	return idxA, idxB
+}
+
+func (s *outerLeafBlockCacheShard) sieveMark(idx int) {
+	if s == nil || idx < 0 || idx >= len(s.sieveRef) {
+		return
+	}
+	s.sieveRef[idx].Store(1)
+}
+
+func (s *outerLeafBlockCacheShard) sieveInsert(idx int) {
+	if s == nil || idx < 0 || idx >= len(s.sieveRef) {
+		return
+	}
+	// SIEVE keeps new entries as probationary; they need one observed hit to be
+	// granted a second chance.
+	s.sieveRef[idx].Store(0)
+	if s.sieveHand < 0 {
+		s.sieveHand = s.tail
+	}
+}
+
+func (s *outerLeafBlockCacheShard) sieveRemove(idx int) {
+	if s == nil || idx < 0 || idx >= len(s.nodes) {
+		return
+	}
+	prev := s.nodes[idx].prev
+	if s.sieveHand == idx {
+		if prev >= 0 {
+			s.sieveHand = prev
+		} else {
+			s.sieveHand = s.tail
+		}
+	}
+	if idx >= 0 && idx < len(s.sieveRef) {
+		s.sieveRef[idx].Store(0)
+	}
+	s.unlink(idx)
+	if s.head < 0 || s.tail < 0 {
+		s.sieveHand = -1
+	}
+}
+
+func (s *outerLeafBlockCacheShard) sievePickVictim() int {
+	if s == nil {
+		return -1
+	}
+	if s.tail < 0 {
+		return -1
+	}
+	if s.sieveHand < 0 {
+		s.sieveHand = s.tail
+	}
+	n := len(s.nodes)
+	if n == 0 {
+		return -1
+	}
+	for scanned := 0; scanned < n*2; scanned++ {
+		idx := s.sieveHand
+		if idx < 0 {
+			idx = s.tail
+		}
+		if idx < 0 {
+			return -1
+		}
+		node := &s.nodes[idx]
+		prev := node.prev
+		if node.ref == nil {
+			if prev >= 0 {
+				s.sieveHand = prev
+			} else {
+				s.sieveHand = s.tail
+			}
+			continue
+		}
+		if idx >= 0 && idx < len(s.sieveRef) && s.sieveRef[idx].Swap(0) != 0 {
+			if prev >= 0 {
+				s.sieveHand = prev
+			} else {
+				s.sieveHand = s.tail
+			}
+			continue
+		}
+		if prev >= 0 {
+			s.sieveHand = prev
+		} else {
+			s.sieveHand = s.tail
+		}
+		return idx
+	}
+	return s.tail
 }
 
 func (s *outerLeafBlockCacheShard) slruPickVictim() int {

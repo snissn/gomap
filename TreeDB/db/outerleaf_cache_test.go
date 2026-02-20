@@ -568,6 +568,71 @@ func TestOuterLeafBlockCacheSLRUPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *
 	}
 }
 
+func TestOuterLeafBlockCacheSIEVEPolicy_SecondChanceProtectsHitEntry(t *testing.T) {
+	cache := newOuterLeafBlockCacheWithPolicy(2, outerLeafBlockCachePolicySIEVE)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	keyA := makeOuterLeafCacheTestKey(9201)
+	keyB := makeOuterLeafCacheTestKey(9202)
+	keyC := makeOuterLeafCacheTestKey(9203)
+
+	cache.put(keyA, makeOuterLeafCacheTestLeaseBlock(t, 9201))
+	cache.put(keyB, makeOuterLeafCacheTestLeaseBlock(t, 9202))
+
+	// Hit keyA once so SIEVE grants it a second chance during eviction scan.
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA hit before replacement")
+	} else {
+		lease.Release()
+	}
+
+	cache.put(keyC, makeOuterLeafCacheTestLeaseBlock(t, 9203))
+
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA retained after second-chance")
+	} else {
+		lease.Release()
+	}
+	if got, lease := cache.get(keyB); got != nil {
+		lease.Release()
+		t.Fatalf("expected keyB eviction from sieve tail scan")
+	}
+	if got, lease := cache.get(keyC); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyC present after insertion")
+	} else {
+		lease.Release()
+	}
+}
+
+func TestOuterLeafBlockCacheSIEVEPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *testing.T) {
+	cache := newOuterLeafBlockCacheWithPolicy(8, outerLeafBlockCachePolicySIEVE)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	key := makeOuterLeafCacheTestKey(9301)
+
+	first := makeOuterLeafCacheTestLeaseBlock(t, 9301)
+	lease, admitted := cache.putWithLease(key, first)
+	if !admitted || lease.ref == nil {
+		t.Fatalf("first putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
+	}
+	lease.Release()
+
+	second := makeOuterLeafCacheTestLeaseBlock(t, 9302)
+	lease, admitted = cache.putWithLease(key, second)
+	if !admitted || lease.ref == nil {
+		t.Fatalf("duplicate putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
+	}
+	lease.Release()
+	if second.RawBytes() != nil {
+		t.Fatalf("duplicate incoming block not recycled under sieve policy")
+	}
+}
+
 func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrentReadPressure(t *testing.T) {
 	cache := newOuterLeafBlockCache(130)
 	if cache == nil {
