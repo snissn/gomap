@@ -48,9 +48,9 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - `-keycounts` comma-separated key counts to sweep over (overrides `-keys`)
 - `-keyscale` generate keycounts by scale: `log10` or `doubling` (uses `-keys-min` / `-keys-max`)
 - `-valsize` value size in bytes (default 128)
-- `-val-pattern` value pattern for non-dataset write tests (`zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|random`)
+- `-val-pattern` value pattern for write tests (including `dataset_write_*`) (`zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random`)
+  - Note: dataset-write generation now uses the same normalized behavior as other write tests (legacy pattern names are accepted as aliases, but generation is unified under `makeValuePool`).
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
-- `-dataset-val-pattern` dataset value pattern for `dataset_write_*` (`random|zero|repeat|repeat_tail64|half_repeat_half_random`)
 - `-batchsize` batch size (default 8000)
 - `-read-workers` number of goroutines for `random_read_parallel` and `random_read_parallel_acquire_snapshot` (default `GOMAXPROCS`)
 - `-range-queries` number of prefix/range queries (default 200)
