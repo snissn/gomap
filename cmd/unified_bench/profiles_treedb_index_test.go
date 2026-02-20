@@ -9,6 +9,7 @@ import (
 
 type savedTreeDBFlagState struct {
 	indexOptimizations bool
+	indexOuterLeafMode string
 	forcePointers      bool
 	leafPrefix         bool
 	columnarLeaves     bool
@@ -34,6 +35,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 	}
 	return savedTreeDBFlagState{
 		indexOptimizations: *treedbIndexOptimizations,
+		indexOuterLeafMode: *treedbIndexOuterLeafMode,
 		forcePointers:      *treedbForceValuePointers,
 		leafPrefix:         *treedbLeafPrefixCompression,
 		columnarLeaves:     *treedbIndexColumnarLeaves,
@@ -55,6 +57,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 
 func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexOptimizations = s.indexOptimizations
+	*treedbIndexOuterLeafMode = s.indexOuterLeafMode
 	*treedbForceValuePointers = s.forcePointers
 	*treedbLeafPrefixCompression = s.leafPrefix
 	*treedbIndexColumnarLeaves = s.columnarLeaves
@@ -75,6 +78,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 
 func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexOptimizations = false
+	*treedbIndexOuterLeafMode = "v1"
 	*treedbForceValuePointers = false
 	*treedbLeafPrefixCompression = false
 	*treedbIndexColumnarLeaves = false
@@ -132,6 +136,29 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if !*treedbRelaxedSync {
 		t.Fatalf("expected wal_on_fast profile to enable relaxed sync")
+	}
+}
+
+func TestApplyProfile_FastAndWALOnFast_V2FencePtrOuterLeafCacheDefault(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+	if err := applyProfile("fast", map[string]bool{}); err != nil {
+		t.Fatalf("applyProfile fast: %v", err)
+	}
+	if got := *treedbOuterLeafBlockCacheEntries; got != 16384 {
+		t.Fatalf("expected fast profile v2_fenceptr default cache entries=16384, got %d", got)
+	}
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+	if err := applyProfile("wal_on_fast", map[string]bool{}); err != nil {
+		t.Fatalf("applyProfile wal_on_fast: %v", err)
+	}
+	if got := *treedbOuterLeafBlockCacheEntries; got != 16384 {
+		t.Fatalf("expected wal_on_fast profile v2_fenceptr default cache entries=16384, got %d", got)
 	}
 }
 

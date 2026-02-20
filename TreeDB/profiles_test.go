@@ -72,6 +72,35 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	}
 }
 
+func TestApplyProfile_FastAndWALOnFast_V2FencePtrOuterLeafCacheDefault(t *testing.T) {
+	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			opts := Options{IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr}
+			ApplyProfile(&opts, profile)
+			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 16384 {
+				t.Fatalf("expected v2_fenceptr profile default OuterLeafBlockCacheEntries=16384, got %d", got)
+			}
+		})
+	}
+}
+
+func TestApplyProfile_V2FencePtrPreservesExplicitOuterLeafCacheEntries(t *testing.T) {
+	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			opts := Options{
+				IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+				ValueLog: ValueLogOptions{
+					OuterLeafBlockCacheEntries: 4096,
+				},
+			}
+			ApplyProfile(&opts, profile)
+			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 4096 {
+				t.Fatalf("expected explicit OuterLeafBlockCacheEntries to be preserved, got %d", got)
+			}
+		})
+	}
+}
+
 func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileBench)
