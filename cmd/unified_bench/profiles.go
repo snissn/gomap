@@ -6,6 +6,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 var (
@@ -36,7 +38,7 @@ func init() {
 		// Fence-pointer outer-leaf reads are decode-heavy without a decoded-block
 		// cache; keep a moderate default in throughput profiles.
 		outerLeafCacheDefault := defaultOuterLeafBlockCacheEntries
-		if strings.EqualFold(strings.TrimSpace(*treedbIndexOuterLeafMode), "v2_fenceptr") {
+		if strings.EqualFold(strings.TrimSpace(*treedbIndexOuterLeafMode), treedb.IndexOuterLeafModeV2FencePtr) {
 			outerLeafCacheDefault = defaultOuterLeafBlockCacheEntriesV2FencePtr
 		}
 		setIntIfUnset("treedb-outer-leaf-block-cache-entries", outerLeafCacheDefault, isSet, treedbOuterLeafBlockCacheEntries)
@@ -71,7 +73,7 @@ func init() {
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
 		// Match fast profile defaults for decode-heavy fence-pointer reads.
 		outerLeafCacheDefault := defaultOuterLeafBlockCacheEntries
-		if strings.EqualFold(strings.TrimSpace(*treedbIndexOuterLeafMode), "v2_fenceptr") {
+		if strings.EqualFold(strings.TrimSpace(*treedbIndexOuterLeafMode), treedb.IndexOuterLeafModeV2FencePtr) {
 			outerLeafCacheDefault = defaultOuterLeafBlockCacheEntriesV2FencePtr
 		}
 		setIntIfUnset("treedb-outer-leaf-block-cache-entries", outerLeafCacheDefault, isSet, treedbOuterLeafBlockCacheEntries)

@@ -84,6 +84,8 @@ const (
 	ProfileBench Profile = "bench"
 )
 
+const defaultV2FencePtrOuterLeafBlockCacheEntries = 16384
+
 // OptionsFor returns a copy of Options pre-filled for the given Profile.
 //
 // The returned Options still follow TreeDB's normal defaulting rules for fields
@@ -143,7 +145,7 @@ func applyV2FencePtrOuterLeafBlockCacheDefault(opts *Options) {
 		return
 	}
 	if strings.EqualFold(strings.TrimSpace(opts.IndexOuterLeafMode), IndexOuterLeafModeV2FencePtr) {
-		opts.ValueLog.OuterLeafBlockCacheEntries = 16384
+		opts.ValueLog.OuterLeafBlockCacheEntries = defaultV2FencePtrOuterLeafBlockCacheEntries
 	}
 }
 

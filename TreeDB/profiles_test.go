@@ -101,6 +101,29 @@ func TestApplyProfile_V2FencePtrPreservesExplicitOuterLeafCacheEntries(t *testin
 	}
 }
 
+func TestApplyProfile_NonV2FencePtrLeavesOuterLeafCacheEntriesUnset(t *testing.T) {
+	modes := []struct {
+		name string
+		mode string
+	}{
+		{name: "empty", mode: ""},
+		{name: "v1", mode: IndexOuterLeafModeV1},
+		{name: "v2_blockptr", mode: IndexOuterLeafModeV2BlockPtr},
+	}
+
+	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+		for _, tc := range modes {
+			t.Run(string(profile)+"_"+tc.name, func(t *testing.T) {
+				opts := Options{IndexOuterLeafMode: tc.mode}
+				ApplyProfile(&opts, profile)
+				if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 0 {
+					t.Fatalf("expected non-v2_fenceptr mode %q to keep OuterLeafBlockCacheEntries=0, got %d", tc.mode, got)
+				}
+			})
+		}
+	}
+}
+
 func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileBench)
