@@ -3048,20 +3048,21 @@ type DB struct {
 	checkpointing  atomic.Bool
 
 	// Level 0 (Memory)
-	mutableShards    []memShard
-	mutableShardMask uint64
-	mutableBytes     atomic.Int64
-	mutableThreshold atomic.Int64
-	rotatePending    atomic.Bool
-	queue            []memtable.Table
-	queueShardIDs    []uint16
-	queueLaneIDs     []uint16
-	queueIDs         []uint64
-	queueEnqueueNS   []int64
-	nextQueueID      atomic.Uint64
-	batchEntryHint   atomic.Int32
-	batchEntriesPool sync.Pool
-	batchIntPool     sync.Pool
+	mutableShards         []memShard
+	mutableShardMask      uint64
+	mutableBytes          atomic.Int64
+	mutableThreshold      atomic.Int64
+	rotatePending         atomic.Bool
+	queue                 []memtable.Table
+	queueShardIDs         []uint16
+	queueLaneIDs          []uint16
+	queueIDs              []uint64
+	queueEnqueueNS        []int64
+	nextQueueID           atomic.Uint64
+	batchEntryHint        atomic.Int32
+	batchEntriesPool      sync.Pool
+	batchShardEntriesPool sync.Pool
+	batchIntPool          sync.Pool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -13697,6 +13698,33 @@ func (db *DB) putBatchEntries(entries []batch.Entry) {
 	db.batchEntriesPool.Put(full[:0])
 }
 
+func (db *DB) getBatchShardEntries(minCap int) []batch.Entry {
+	if minCap < 0 {
+		minCap = 0
+	}
+	if db != nil {
+		if pooled := db.batchShardEntriesPool.Get(); pooled != nil {
+			entries := pooled.([]batch.Entry)
+			if cap(entries) >= minCap {
+				return entries[:0]
+			}
+		}
+	}
+	return make([]batch.Entry, 0, minCap)
+}
+
+func (db *DB) putBatchShardEntries(entries []batch.Entry) {
+	if db == nil || cap(entries) == 0 {
+		return
+	}
+	if cap(entries) > batchEntriesPoolMaxRetain {
+		return
+	}
+	full := entries[:cap(entries)]
+	clear(full)
+	db.batchShardEntriesPool.Put(full[:0])
+}
+
 func (db *DB) getBatchIntSlice(minCap int) []int {
 	if minCap < 0 {
 		minCap = 0
@@ -13804,6 +13832,19 @@ func (b *Batch) arenaCopy(n int) []byte {
 		chunkCap := cap(b.copyArena) * 2
 		if chunkCap < batchCopyArenaMinChunk {
 			chunkCap = batchCopyArenaMinChunk
+		}
+		if cap(b.copyArena) == 0 && n > 0 {
+			// For batched workloads, first-copy size is usually representative.
+			// Use reserved entry capacity to avoid repeated arena growth for both
+			// put and delete heavy paths.
+			if cap(b.entries) <= batchCopyArenaInitMax/n {
+				estimated := cap(b.entries) * n
+				if estimated > chunkCap {
+					chunkCap = estimated
+				}
+			} else if batchCopyArenaInitMax > chunkCap {
+				chunkCap = batchCopyArenaInitMax
+			}
 		}
 		if chunkCap < n {
 			chunkCap = n
@@ -14067,6 +14108,7 @@ const (
 	// enough to amortize per-lane setup and goroutine overhead.
 	multiLaneValueLogMinRecords = 1024
 	batchCopyArenaMinChunk      = 4 << 10
+	batchCopyArenaInitMax       = 2 << 20
 	batchCopyArenaMaxRetain     = 1 << 20
 	batchEntriesPoolMaxRetain   = 16 << 10
 	batchIntSlicePoolMaxRetain  = 16 << 10
@@ -14863,7 +14905,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			if count > 0 {
 				entries := shardEntries[i]
 				if cap(entries) < count {
-					entries = make([]batch.Entry, 0, count)
+					entries = b.db.getBatchShardEntries(count)
 				} else {
 					entries = entries[:0]
 				}
@@ -15239,6 +15281,15 @@ func (b *Batch) Close() error {
 		for i := range full {
 			if full[i] != nil {
 				b.db.putBatchIntSlice(full[i])
+				full[i] = nil
+			}
+		}
+	}
+	if b.db != nil && b.shardEntries != nil && cap(b.shardEntries) > 0 {
+		full := b.shardEntries[:cap(b.shardEntries)]
+		for i := range full {
+			if full[i] != nil {
+				b.db.putBatchShardEntries(full[i])
 				full[i] = nil
 			}
 		}
