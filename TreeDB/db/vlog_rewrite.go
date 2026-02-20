@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -159,42 +161,97 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	}
 
 	snap := db.AcquireSnapshot()
-	if snap == nil || snap.state == nil {
+	if snap == nil || snap.state == nil || snap.idx == nil {
 		if snap != nil {
 			_ = snap.Close()
 		}
 		return nil, fmt.Errorf("missing snapshot state")
 	}
-	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	seen := make(map[recordKey]struct{})
-	for ; it.Valid(); it.Next() {
+
+	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID); err != nil {
+		_ = userIter.Close()
+		_ = snap.Close()
+		return nil, err
+	}
+	_ = userIter.Close()
+
+	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, "", false, nil, nil), snap.state.SystemRootPageID).
+		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID); err != nil {
+		_ = sysIter.Close()
+		_ = snap.Close()
+		return nil, err
+	}
+	_ = sysIter.Close()
+
+	if err := snap.Close(); err != nil {
+		return nil, err
+	}
+	return liveByID, nil
+}
+
+func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64) error {
+	for it.Valid() {
 		if err := ctx.Err(); err != nil {
-			_ = it.Close()
-			_ = snap.Close()
-			return nil, err
+			return err
 		}
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(ptr.FileID) {
+			it.Next()
 			continue
 		}
-		key := recordKey{
-			fileID: ptr.FileID,
-			offset: ptr.Offset,
-			length: page.ValuePtrRecordLength(ptr),
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
 		liveByID[ptr.FileID] += int64(page.ValuePtrRecordLength(ptr))
+		nested, err := db.outerLeafNestedBlobRefLiveBytes(ptr)
+		if err != nil {
+			return err
+		}
+		for fileID, n := range nested {
+			if n == 0 {
+				continue
+			}
+			liveByID[fileID] += n
+		}
+		it.Next()
 	}
-	iterErr := it.Error()
-	_ = it.Close()
-	_ = snap.Close()
-	if iterErr != nil {
-		return nil, iterErr
+	return it.Error()
+}
+
+func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int64, error) {
+	if db == nil || db.valueLogManager == nil {
+		return nil, nil
 	}
-	return liveByID, nil
+	if strings.TrimSpace(db.indexOuterLeafMode) != IndexOuterLeafModeV2FencePtr {
+		return nil, nil
+	}
+	payload, err := db.valueLogManager.Read(ptr)
+	if err != nil {
+		return nil, err
+	}
+	if !outerleaf.HasMagic(payload) {
+		return nil, nil
+	}
+	block, err := outerleaf.DecodeBlockLease(payload)
+	if err != nil {
+		return nil, err
+	}
+	defer block.Release()
+	typed, err := block.TypedEntries(nil)
+	if err != nil {
+		return nil, err
+	}
+	refs := make(map[uint32]int64, 4)
+	for i := range typed {
+		if typed[i].Kind != outerleaf.EntryKindBlobRef {
+			continue
+		}
+		blobPtr := typed[i].BlobPtr
+		if !page.IsValueLogFileID(blobPtr.FileID) {
+			return nil, fmt.Errorf("treedb: invalid nested blob pointer file %d", blobPtr.FileID)
+		}
+		refs[blobPtr.FileID] += int64(page.ValuePtrRecordLength(blobPtr))
+	}
+	return refs, nil
 }
 
 type rewriteSourceSegment struct {
@@ -343,11 +400,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	_ = db.valueLogManager.Release(set)
 	if restrictSource && len(sourceIDs) == 0 {
-		afterSegs, afterBytes, err := valueLogSegmentStats(db.dir)
-		if err == nil {
-			stats.SegmentsAfter = afterSegs
-			stats.BytesAfter = afterBytes
-		}
+		// No source segments selected: this rewrite pass is a no-op.
+		stats.SegmentsAfter = stats.SegmentsBefore
+		stats.BytesAfter = stats.BytesBefore
 		return stats, nil
 	}
 
