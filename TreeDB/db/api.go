@@ -49,25 +49,22 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		arenaCap = getManyMaxArenaBytes
 	}
 	arena := make([]byte, 0, arenaCap)
+	emptyValue := []byte{}
 	for i, key := range keys {
-		val, err := snap.GetUnsafe(key)
+		start := len(arena)
+		nextArena, err := snap.GetAppend(key, arena)
 		if err == tree.ErrKeyNotFound {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		if val == nil {
+		arena = nextArena
+		if len(arena) == start {
+			out[i] = emptyValue
 			continue
 		}
-		n := len(val)
-		if n == 0 {
-			out[i] = []byte{}
-			continue
-		}
-		start := len(arena)
-		arena = append(arena, val...)
-		out[i] = arena[start : start+n : start+n]
+		out[i] = arena[start:len(arena):len(arena)]
 	}
 	return out, nil
 }
