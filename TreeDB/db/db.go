@@ -142,7 +142,9 @@ var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoi
 
 func normalizeIndexOuterLeafMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "", IndexOuterLeafModeV1:
+	case "":
+		return IndexOuterLeafModeV2FencePtr
+	case IndexOuterLeafModeV1:
 		return IndexOuterLeafModeV1
 	case IndexOuterLeafModeV2BlockPtr:
 		return IndexOuterLeafModeV2BlockPtr
@@ -527,7 +529,8 @@ type Options struct {
 	// This option only affects newly-written leaf pages.
 	IndexAdaptiveLeafEncoding bool
 	// IndexOuterLeafMode selects the index outer-leaf format:
-	// - "" / "v1": existing per-key leaf entries
+	// - "": defaults to "v2_fenceptr"
+	// - "v1": existing per-key leaf entries
 	// - "v2_blockptr": pointer payloads encode key+value outer-leaf blocks
 	// - "v2_fenceptr": fence-key-only index entries with outer block payloads
 	IndexOuterLeafMode string

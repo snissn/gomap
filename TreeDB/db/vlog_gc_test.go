@@ -18,7 +18,10 @@ import (
 func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{Dir: dir})
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -195,7 +198,10 @@ func TestValueLogGC_FenceMode_NestedBlobRefSegmentLiveness(t *testing.T) {
 func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{Dir: dir})
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -258,7 +264,10 @@ func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 func TestValueLogGC_IncrementalCounterRollbackOnFailedCommit(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{Dir: dir})
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

@@ -106,7 +106,6 @@ func TestApplyProfile_NonV2FencePtrLeavesOuterLeafCacheEntriesUnset(t *testing.T
 		name string
 		mode string
 	}{
-		{name: "empty", mode: ""},
 		{name: "v1", mode: IndexOuterLeafModeV1},
 		{name: "v2_blockptr", mode: IndexOuterLeafModeV2BlockPtr},
 	}
@@ -121,6 +120,18 @@ func TestApplyProfile_NonV2FencePtrLeavesOuterLeafCacheEntriesUnset(t *testing.T
 				}
 			})
 		}
+	}
+}
+
+func TestApplyProfile_EmptyOuterLeafModeUsesV2FencePtrCacheDefault(t *testing.T) {
+	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
+		t.Run(string(profile), func(t *testing.T) {
+			var opts Options
+			ApplyProfile(&opts, profile)
+			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 16384 {
+				t.Fatalf("expected empty mode to use v2_fenceptr default OuterLeafBlockCacheEntries=16384, got %d", got)
+			}
+		})
 	}
 }
 

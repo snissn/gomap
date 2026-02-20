@@ -1,11 +1,44 @@
 package main
 
 import (
+	"flag"
 	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 )
+
+func TestTreeDBIndexOuterLeafModeFlag_DefaultIsV2FencePtr(t *testing.T) {
+	f := flag.Lookup("treedb-index-outer-leaf-mode")
+	if f == nil {
+		t.Fatalf("missing treedb-index-outer-leaf-mode flag")
+	}
+	if got := f.DefValue; got != "v2_fenceptr" {
+		t.Fatalf("flag default=%q want %q", got, "v2_fenceptr")
+	}
+}
+
+func TestBuildTreeDBOptions_DefaultOuterLeafModeUsesV2FencePtr(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions default outer leaf mode: %v", err)
+	}
+	if got := opts.IndexOuterLeafMode; got != treedb.IndexOuterLeafModeV2FencePtr {
+		t.Fatalf("IndexOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV2FencePtr)
+	}
+	if got := opts.ValueLog.WALFenceMode; got != "simple_inline" {
+		t.Fatalf("expected WAL-enabled v2_fenceptr default fence mode simple_inline, got %q", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "index_outer_leaf_mode=v2_fenceptr") {
+		t.Fatalf("resolved options missing default v2_fenceptr outer-leaf mode: %q", got)
+	}
+}
 
 type savedTreeDBFlagState struct {
 	indexOptimizations bool

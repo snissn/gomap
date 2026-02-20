@@ -263,8 +263,12 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 	slowdown := defaultSlowdownBacklogSeconds
 	stop := defaultStopBacklogSeconds
+	indexOuterLeafMode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
+	if indexOuterLeafMode == "" {
+		indexOuterLeafMode = db.IndexOuterLeafModeV2FencePtr
+	}
 	if opts.Durability == db.DurabilityWALOffRelaxed &&
-		strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode)) == db.IndexOuterLeafModeV2FencePtr {
+		indexOuterLeafMode == db.IndexOuterLeafModeV2FencePtr {
 		slowdown = defaultV2FenceSlowdownBacklogSeconds
 		stop = defaultV2FenceStopBacklogSeconds
 	}
@@ -276,6 +280,10 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
+	if strings.TrimSpace(opts.IndexOuterLeafMode) == "" {
+		opts.IndexOuterLeafMode = db.IndexOuterLeafModeV2FencePtr
+	}
+
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
 	// can therefore delay page reuse for a very long time (and cause index.db to

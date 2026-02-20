@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func mustStatInt64(t *testing.T, stats map[string]string, key string) int64 {
@@ -36,6 +38,7 @@ func TestBackpressureStatsQueueMetrics(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:          1024,
 		MemtableShards:          1,
+		IndexOuterLeafMode:      backenddb.IndexOuterLeafModeV1,
 		MaxBacklogBytes:         2048,
 		SlowdownBacklogSeconds:  1,
 		StopBacklogSeconds:      2,
@@ -84,6 +87,7 @@ func TestStopBackpressureFlushesAndReturns(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:          1024,
 		MemtableShards:          1,
+		IndexOuterLeafMode:      backenddb.IndexOuterLeafModeV1,
 		MaxBacklogBytes:         4096,
 		SlowdownBacklogSeconds:  0,
 		StopBacklogSeconds:      0,
@@ -145,10 +149,11 @@ func TestFlushRemovesEmptyUnits(t *testing.T) {
 	backend := NewMockBackend()
 
 	db, err := Open(dir, backend, Options{
-		FlushThreshold: 1024,
-		MemtableShards: 1,
-		DisableWAL:     true,
-		AllowUnsafe:    true,
+		FlushThreshold:     1024,
+		MemtableShards:     1,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
+		DisableWAL:         true,
+		AllowUnsafe:        true,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -185,6 +190,7 @@ func TestBackpressureModeStatsLegacyVsAdaptive(t *testing.T) {
 	legacy, err := Open(dir, backend, Options{
 		FlushThreshold:     1024,
 		MemtableShards:     1,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		MaxQueuedMemtables: 2,
 	})
 	if err != nil {
@@ -200,6 +206,7 @@ func TestBackpressureModeStatsLegacyVsAdaptive(t *testing.T) {
 	adaptive, err := Open(dir, backend, Options{
 		FlushThreshold:         1024,
 		MemtableShards:         1,
+		IndexOuterLeafMode:     backenddb.IndexOuterLeafModeV1,
 		MaxBacklogBytes:        2048,
 		SlowdownBacklogSeconds: 1,
 		StopBacklogSeconds:     2,
@@ -222,6 +229,7 @@ func TestWaitForStopWithConcurrentFlushTrigger(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:          1024,
 		MemtableShards:          1,
+		IndexOuterLeafMode:      backenddb.IndexOuterLeafModeV1,
 		MaxBacklogBytes:         4096,
 		SlowdownBacklogSeconds:  0,
 		StopBacklogSeconds:      0,
@@ -291,6 +299,7 @@ func TestCheckpointFlushStats(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:         1024,
 		MemtableShards:         1,
+		IndexOuterLeafMode:     backenddb.IndexOuterLeafModeV1,
 		MaxBacklogBytes:        2048,
 		SlowdownBacklogSeconds: 1,
 		StopBacklogSeconds:     2,
@@ -336,6 +345,7 @@ func TestAdaptiveBackpressureSelfHealsStaleBacklogStats(t *testing.T) {
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:         1024,
 		MemtableShards:         1,
+		IndexOuterLeafMode:     backenddb.IndexOuterLeafModeV1,
 		MaxBacklogBytes:        2048,
 		SlowdownBacklogSeconds: 1,
 		StopBacklogSeconds:     2,

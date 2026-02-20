@@ -24,6 +24,17 @@ func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
 	}
 }
 
+func TestOpen_IndexOuterLeafMode_DefaultEmptyUsesV2FencePtr(t *testing.T) {
+	db, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open default: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if got := db.indexOuterLeafMode; got != IndexOuterLeafModeV2FencePtr {
+		t.Fatalf("default index outer leaf mode = %q, want %q", got, IndexOuterLeafModeV2FencePtr)
+	}
+}
+
 func TestOpen_ValueLogOuterLeafBlockTargetBytes_NegativeRejected(t *testing.T) {
 	_, err := Open(Options{
 		Dir: t.TempDir(),

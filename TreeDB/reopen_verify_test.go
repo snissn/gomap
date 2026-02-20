@@ -1591,7 +1591,8 @@ func TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages(t *testing.T) {
 func TestValuePlacement_PerDomainThreshold_ReopenDurability(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.Options{
-		Dir: dir,
+		Dir:                dir,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 256,
 			DomainInlineThresholds: []treedb.ValueLogDomainThreshold{
