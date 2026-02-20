@@ -3059,6 +3059,7 @@ type DB struct {
 	queueIDs         []uint64
 	queueEnqueueNS   []int64
 	nextQueueID      atomic.Uint64
+	batchEntryHint   atomic.Int32
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -13587,6 +13588,8 @@ type Batch struct {
 	shardAdds    []int64
 	shardCnts    []int
 	shardEntries [][]batch.Entry
+	shardIdxSets [][]int
+	maxEntries   int
 
 	closed         bool
 	streamEligible bool
@@ -13601,11 +13604,68 @@ type Batch struct {
 }
 
 func (db *DB) NewBatch() *Batch {
-	return &Batch{db: db, entries: make([]batch.Entry, 0, 16), streamEligible: true}
+	capHint := batchDefaultEntriesCap
+	if db != nil {
+		capHint = db.batchEntriesCapHint(capHint)
+	}
+	return &Batch{db: db, entries: make([]batch.Entry, 0, capHint), streamEligible: true}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
+	if size < 0 {
+		size = 0
+	}
 	return &Batch{db: db, entries: make([]batch.Entry, 0, size), streamEligible: true}
+}
+
+func (db *DB) batchEntriesCapHint(minCap int) int {
+	if minCap < batchDefaultEntriesCap {
+		minCap = batchDefaultEntriesCap
+	}
+	if db == nil {
+		return minCap
+	}
+	hint := int(db.batchEntryHint.Load())
+	if hint > minCap {
+		minCap = hint
+	}
+	if minCap > batchHintEntriesMax {
+		minCap = batchHintEntriesMax
+	}
+	return minCap
+}
+
+func (db *DB) observeBatchEntries(n int) {
+	if db == nil || n <= 0 {
+		return
+	}
+	if n < batchDefaultEntriesCap {
+		n = batchDefaultEntriesCap
+	}
+	if n > batchHintEntriesMax {
+		n = batchHintEntriesMax
+	}
+	for {
+		old := int(db.batchEntryHint.Load())
+		next := n
+		if old > 0 {
+			// EWMA keeps the hint adaptive: rises quickly for larger batches and
+			// decays after sustained smaller batches.
+			next = (old*7 + n + 3) / 8
+		}
+		if next < batchDefaultEntriesCap {
+			next = batchDefaultEntriesCap
+		}
+		if next > batchHintEntriesMax {
+			next = batchHintEntriesMax
+		}
+		if next == old {
+			return
+		}
+		if db.batchEntryHint.CompareAndSwap(int32(old), int32(next)) {
+			return
+		}
+	}
 }
 
 // Reset clears the batch for reuse without closing it.
@@ -13638,6 +13698,9 @@ func (b *Batch) Reset() {
 	if b.shardEntries != nil {
 		b.shardEntries = b.shardEntries[:0]
 	}
+	if b.shardIdxSets != nil {
+		b.shardIdxSets = b.shardIdxSets[:0]
+	}
 	if cap(b.copyArena) > batchCopyArenaMaxRetain {
 		b.copyArena = nil
 	} else if b.copyArena != nil {
@@ -13654,6 +13717,29 @@ func (b *Batch) Reset() {
 	b.dictIDValid = false
 	b.dictBytes = nil
 	b.dictBytesValid = false
+	b.maxEntries = 0
+}
+
+func (b *Batch) noteEntryAppend() {
+	if b == nil {
+		return
+	}
+	if n := len(b.entries); n > b.maxEntries {
+		b.maxEntries = n
+	}
+}
+
+func (b *Batch) updateBatchEntryHint() {
+	if b == nil || b.db == nil {
+		return
+	}
+	n := b.maxEntries
+	if n <= 0 {
+		n = len(b.entries)
+	}
+	if n > 0 {
+		b.db.observeBatchEntries(n)
+	}
 }
 
 func (b *Batch) arenaCopy(n int) []byte {
@@ -13739,6 +13825,7 @@ func (b *Batch) Set(key, value []byte) error {
 		Key:   keyCopy,
 		Value: valCopy,
 	})
+	b.noteEntryAppend()
 	b.size += len(keyCopy) + len(valCopy)
 
 	b.maybeSwitchToStreaming()
@@ -13783,6 +13870,7 @@ func (b *Batch) SetView(key, value []byte) error {
 		Key:   key,
 		Value: value,
 	})
+	b.noteEntryAppend()
 	b.size += len(key) + len(value)
 
 	b.maybeSwitchToStreaming()
@@ -13822,6 +13910,7 @@ func (b *Batch) Delete(key []byte) error {
 		Type: batch.OpDelete,
 		Key:  keyCopy,
 	})
+	b.noteEntryAppend()
 	b.size += len(keyCopy)
 
 	b.maybeSwitchToStreaming()
@@ -13862,6 +13951,7 @@ func (b *Batch) DeleteView(key []byte) error {
 		Type: batch.OpDelete,
 		Key:  key,
 	})
+	b.noteEntryAppend()
 	b.size += len(key)
 
 	b.maybeSwitchToStreaming()
@@ -13906,12 +13996,17 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 			}
 		}
 		b.entries = append(b.entries, copied)
+		b.noteEntryAppend()
 		b.size += len(copied.Key) + len(copied.Value)
 	}
 	return nil
 }
 
 const (
+	batchDefaultEntriesCap = 16
+	// Keep the adaptive NewBatch reserve bounded so one huge batch cannot
+	// permanently over-provision typical batch allocations.
+	batchHintEntriesMax    = 8192
 	streamSwitchMinEntries = 4096
 	streamSwitchMinBytes   = 1 << 20 // 1MiB
 	// Only fan out value-log appends across multiple lanes when a batch is large
@@ -14062,6 +14157,7 @@ func (b *Batch) write(sync bool) error {
 		if err == nil && b.size > 0 {
 			b.db.noteWrite()
 		}
+		b.updateBatchEntryHint()
 		b.Reset()
 		return err
 	}
@@ -14176,6 +14272,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if b.size > 0 {
 		b.db.noteWrite()
 	}
+	b.updateBatchEntryHint()
 	b.Reset()
 	return true, nil
 }
@@ -14212,8 +14309,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		shardIdxs = shardIdxs[:len(b.entries)]
 	}
 	b.shardIdxs = shardIdxs
+	allDeletes := true
 	for i := range b.entries {
 		op := &b.entries[i]
+		if op.Type != batch.OpDelete {
+			allDeletes = false
+		}
 		idx := b.db.shardIndex(op.Key)
 		shardIdxs[i] = idx
 		shardCounts[idx]++
@@ -14255,90 +14356,102 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	debugPtr := b.db.debugFlushPointers
 	valueLogEnabled := b.db.valueLogEnabled()
 
-	eligibleIdxs := b.eligibleIdxs
-	if cap(eligibleIdxs) < len(b.entries) {
-		eligibleIdxs = make([]int, 0, len(b.entries))
-	} else {
-		eligibleIdxs = eligibleIdxs[:0]
-	}
-	b.eligibleIdxs = eligibleIdxs
-	if valueLogEnabled || debugPtr {
-		for i := range b.entries {
-			op := &b.entries[i]
-			if op.Type != batch.OpPut || (!b.db.forceValueLogPointers && len(op.Value) <= b.db.valueLogThresholdForKey(op.Key)) {
-				continue
-			}
-			eligibleIdxs = append(eligibleIdxs, i)
+	var (
+		eligibleIdxs       []int
+		eligibleCountTotal int
+		allowPointers      bool
+		hybridRIDJoin      bool
+		eligibleCount      int
+		multiLanePointers  bool
+	)
+	if !allDeletes {
+		eligibleIdxs = b.eligibleIdxs
+		if cap(eligibleIdxs) < len(b.entries) {
+			eligibleIdxs = make([]int, 0, len(b.entries))
+		} else {
+			eligibleIdxs = eligibleIdxs[:0]
 		}
-	}
-	eligibleCountTotal := len(eligibleIdxs)
-	deferredFencePath := b.db.deferredValueLogEnabled()
-	allowPointers := eligibleCountTotal > 0 && valueLogEnabled && b.db.allowValueLogPointers()
-	hybridRIDJoin := allowPointers && b.db.fenceRIDJoinHybridEnabled()
-	if allowPointers && deferredFencePath {
-		if hybridRIDJoin {
-			// WAL-on v2_fenceptr rid_join hybrid:
-			// - C1 (non-oversized) values stay deferred-inline and materialize at flush.
-			// - C2 (oversized) values take immediate pointer publication with OpSetRID.
-			immediate := eligibleIdxs[:0]
-			deferredCount := 0
-			var deferredBytes uint64
-			for _, idx := range eligibleIdxs {
-				op := &b.entries[idx]
-				if b.db.oversizedOuterLeafValue(op.Value) {
-					immediate = append(immediate, idx)
+		b.eligibleIdxs = eligibleIdxs
+		if valueLogEnabled || debugPtr {
+			for i := range b.entries {
+				op := &b.entries[i]
+				if op.Type != batch.OpPut || (!b.db.forceValueLogPointers && len(op.Value) <= b.db.valueLogThresholdForKey(op.Key)) {
 					continue
 				}
-				deferredCount++
-				deferredBytes += uint64(len(op.Key) + len(op.Value))
+				eligibleIdxs = append(eligibleIdxs, i)
 			}
-			if deferredCount > 0 {
-				b.db.recordDeferredFenceEnqueued(deferredCount, deferredBytes)
-			}
-			eligibleIdxs = immediate
-			b.eligibleIdxs = eligibleIdxs
-			if len(eligibleIdxs) == 0 {
+		}
+		eligibleCountTotal = len(eligibleIdxs)
+		deferredFencePath := b.db.deferredValueLogEnabled()
+		allowPointers = eligibleCountTotal > 0 && valueLogEnabled && b.db.allowValueLogPointers()
+		hybridRIDJoin = allowPointers && b.db.fenceRIDJoinHybridEnabled()
+		if allowPointers && deferredFencePath {
+			if hybridRIDJoin {
+				// WAL-on v2_fenceptr rid_join hybrid:
+				// - C1 (non-oversized) values stay deferred-inline and materialize at flush.
+				// - C2 (oversized) values take immediate pointer publication with OpSetRID.
+				immediate := eligibleIdxs[:0]
+				deferredCount := 0
+				var deferredBytes uint64
+				for _, idx := range eligibleIdxs {
+					op := &b.entries[idx]
+					if b.db.oversizedOuterLeafValue(op.Value) {
+						immediate = append(immediate, idx)
+						continue
+					}
+					deferredCount++
+					deferredBytes += uint64(len(op.Key) + len(op.Value))
+				}
+				if deferredCount > 0 {
+					b.db.recordDeferredFenceEnqueued(deferredCount, deferredBytes)
+				}
+				eligibleIdxs = immediate
+				b.eligibleIdxs = eligibleIdxs
+				if len(eligibleIdxs) == 0 {
+					allowPointers = false
+				}
+			} else {
+				// Deferred fence path: keep values inline in mutable memtables and
+				// materialize grouped value-log pointers once at flush time.
+				var deferredBytes uint64
+				for _, idx := range eligibleIdxs {
+					op := &b.entries[idx]
+					deferredBytes += uint64(len(op.Key) + len(op.Value))
+				}
+				b.db.recordDeferredFenceEnqueued(eligibleCountTotal, deferredBytes)
 				allowPointers = false
 			}
-		} else {
-			// Deferred fence path: keep values inline in mutable memtables and
-			// materialize grouped value-log pointers once at flush time.
-			var deferredBytes uint64
-			for _, idx := range eligibleIdxs {
-				op := &b.entries[idx]
-				deferredBytes += uint64(len(op.Key) + len(op.Value))
-			}
-			b.db.recordDeferredFenceEnqueued(eligibleCountTotal, deferredBytes)
+		} else if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
+			// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
+			// so repeated overwrites can coalesce in the memtable before hitting disk.
 			allowPointers = false
 		}
-	} else if allowPointers && b.db.disableJournal && !b.db.memtableValueLogPointers {
-		// WAL-off: when the journal is disabled, defer value-log appends to the flush boundary
-		// so repeated overwrites can coalesce in the memtable before hitting disk.
-		allowPointers = false
-	}
-	eligibleCount := len(eligibleIdxs)
-	if debugPtr && eligibleCountTotal > 0 {
-		b.db.debugPtrEligible.Add(int64(eligibleCountTotal))
-		if !valueLogEnabled {
-			b.db.debugPtrDisabled.Add(int64(eligibleCountTotal))
-		} else if !allowPointers {
-			b.db.debugPtrDenied.Add(int64(eligibleCountTotal))
-		} else if hybridRIDJoin && eligibleCountTotal > eligibleCount {
-			b.db.debugPtrDenied.Add(int64(eligibleCountTotal - eligibleCount))
+		eligibleCount = len(eligibleIdxs)
+		if debugPtr && eligibleCountTotal > 0 {
+			b.db.debugPtrEligible.Add(int64(eligibleCountTotal))
+			if !valueLogEnabled {
+				b.db.debugPtrDisabled.Add(int64(eligibleCountTotal))
+			} else if !allowPointers {
+				b.db.debugPtrDenied.Add(int64(eligibleCountTotal))
+			} else if hybridRIDJoin && eligibleCountTotal > eligibleCount {
+				b.db.debugPtrDenied.Add(int64(eligibleCountTotal - eligibleCount))
+			}
 		}
+		multiLanePointers = allowPointers &&
+			!b.db.outerLeafV2Enabled() &&
+			b.db.disableJournal &&
+			durability == journalDurabilityNone &&
+			len(b.db.lanes) > 1 &&
+			eligibleCount >= multiLaneValueLogMinRecords
 	}
-	multiLanePointers := allowPointers &&
-		!b.db.outerLeafV2Enabled() &&
-		b.db.disableJournal &&
-		durability == journalDurabilityNone &&
-		len(b.db.lanes) > 1 &&
-		eligibleCount >= multiLaneValueLogMinRecords
 
 	var (
 		lane *lane
 		rids []uint64
 	)
-	if (!multiLanePointers && allowPointers) || !b.db.disableJournal {
+	needLaneForPointers := !allDeletes && !multiLanePointers && allowPointers
+	needLaneForJournal := !b.db.disableJournal
+	if needLaneForPointers || needLaneForJournal {
 		preferredLane := -1
 		if b.db.deferredValueLogNeedsSingleLaneRegroup() {
 			// Keep deferred fence-mode pointer appends on a single lane so flush-time
@@ -14359,7 +14472,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 
-	if allowPointers && eligibleCount > 0 {
+	if !allDeletes && allowPointers && eligibleCount > 0 {
 		if err := b.freezeDictID(context.Background()); err != nil {
 			b.db.writeMu.RUnlock()
 			return err
@@ -14615,47 +14728,134 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 
-	shardEntries := b.shardEntries
-	if cap(shardEntries) < shardCount {
-		shardEntries = make([][]batch.Entry, shardCount)
-	} else {
-		shardEntries = shardEntries[:shardCount]
-		for i := range shardEntries {
-			shardEntries[i] = shardEntries[i][:0]
-		}
-	}
-	b.shardEntries = shardEntries
-	for i, count := range shardCounts {
-		if count > 0 {
-			entries := shardEntries[i]
-			if cap(entries) < count {
-				entries = make([]batch.Entry, 0, count)
-			} else {
-				entries = entries[:0]
+	if allDeletes {
+		shardIdxSets := b.shardIdxSets
+		if cap(shardIdxSets) < shardCount {
+			shardIdxSets = make([][]int, shardCount)
+		} else {
+			shardIdxSets = shardIdxSets[:shardCount]
+			for i := range shardIdxSets {
+				shardIdxSets[i] = shardIdxSets[i][:0]
 			}
-			shardEntries[i] = entries
 		}
-	}
-	for i, op := range b.entries {
-		idx := shardIdxs[i]
-		shardEntries[idx] = append(shardEntries[idx], op)
-	}
-
-	// 3. Memtable Update
-
-	for i := range shardEntries {
-		entries := shardEntries[i]
-		if len(entries) == 0 {
-			continue
+		b.shardIdxSets = shardIdxSets
+		for i, count := range shardCounts {
+			if count <= 0 {
+				continue
+			}
+			idxs := shardIdxSets[i]
+			if cap(idxs) < count {
+				idxs = make([]int, 0, count)
+			} else {
+				idxs = idxs[:0]
+			}
+			shardIdxSets[i] = idxs
 		}
-		shard := &b.db.mutableShards[i]
-		shard.mu.Lock()
-		useStream := b.streamEligible
-		if useStream {
-			if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
-				applier.ApplyStealSortedBatchTrusted(entries, nil)
-			} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
-				applier.ApplyStealSortedBatch(entries, nil)
+		for i := range b.entries {
+			idx := shardIdxs[i]
+			shardIdxSets[idx] = append(shardIdxSets[idx], i)
+		}
+
+		// 3. Memtable Update (delete-only fast path)
+		for i := range shardIdxSets {
+			idxs := shardIdxSets[i]
+			if len(idxs) == 0 {
+				continue
+			}
+			shard := &b.db.mutableShards[i]
+			shard.mu.Lock()
+			if b.streamEligible {
+				first := b.entries[idxs[0]].Key
+				last := first
+				for _, entryIdx := range idxs {
+					key := b.entries[entryIdx].Key
+					last = key
+					shard.mem.DeleteSteal(key)
+				}
+				shard.rng.add(first)
+				if len(idxs) > 1 {
+					shard.rng.add(last)
+				}
+				b.db.noteWriteSortedRun(first, last, len(idxs))
+			} else {
+				for _, entryIdx := range idxs {
+					key := b.entries[entryIdx].Key
+					shard.mem.DeleteSteal(key)
+					shard.rng.add(key)
+					b.db.noteWriteKey(key)
+				}
+			}
+			newBytes := shard.mem.Size()
+			delta := newBytes - shard.bytes
+			shard.bytes = newBytes
+			b.db.mutableBytes.Add(delta)
+			shard.mu.Unlock()
+		}
+	} else {
+		shardEntries := b.shardEntries
+		if cap(shardEntries) < shardCount {
+			shardEntries = make([][]batch.Entry, shardCount)
+		} else {
+			shardEntries = shardEntries[:shardCount]
+			for i := range shardEntries {
+				shardEntries[i] = shardEntries[i][:0]
+			}
+		}
+		b.shardEntries = shardEntries
+		for i, count := range shardCounts {
+			if count > 0 {
+				entries := shardEntries[i]
+				if cap(entries) < count {
+					entries = make([]batch.Entry, 0, count)
+				} else {
+					entries = entries[:0]
+				}
+				shardEntries[i] = entries
+			}
+		}
+		for i, op := range b.entries {
+			idx := shardIdxs[i]
+			shardEntries[idx] = append(shardEntries[idx], op)
+		}
+
+		// 3. Memtable Update
+		for i := range shardEntries {
+			entries := shardEntries[i]
+			if len(entries) == 0 {
+				continue
+			}
+			shard := &b.db.mutableShards[i]
+			shard.mu.Lock()
+			useStream := b.streamEligible
+			if useStream {
+				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
+					applier.ApplyStealSortedBatchTrusted(entries, nil)
+				} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
+					applier.ApplyStealSortedBatch(entries, nil)
+				} else {
+					for _, op := range entries {
+						if op.Type == batch.OpDelete {
+							shard.mem.DeleteSteal(op.Key)
+						} else {
+							if op.IsPtr {
+								memVal := []byte(nil)
+								if !b.db.memtableValueLogPointers {
+									memVal = op.Value
+								}
+								shard.mem.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+							} else {
+								shard.mem.SetSteal(op.Key, op.Value)
+							}
+						}
+					}
+				}
+				first := entries[0].Key
+				last := entries[len(entries)-1].Key
+				shard.rng.add(first)
+				if len(entries) > 1 {
+					shard.rng.add(last)
+				}
+				b.db.noteWriteSortedRun(first, last, len(entries))
 			} else {
 				for _, op := range entries {
 					if op.Type == batch.OpDelete {
@@ -14671,39 +14871,16 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 							shard.mem.SetSteal(op.Key, op.Value)
 						}
 					}
+					shard.rng.add(op.Key)
+					b.db.noteWriteKey(op.Key)
 				}
 			}
-			first := entries[0].Key
-			last := entries[len(entries)-1].Key
-			shard.rng.add(first)
-			if len(entries) > 1 {
-				shard.rng.add(last)
-			}
-			b.db.noteWriteSortedRun(first, last, len(entries))
-		} else {
-			for _, op := range entries {
-				if op.Type == batch.OpDelete {
-					shard.mem.DeleteSteal(op.Key)
-				} else {
-					if op.IsPtr {
-						memVal := []byte(nil)
-						if !b.db.memtableValueLogPointers {
-							memVal = op.Value
-						}
-						shard.mem.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
-					} else {
-						shard.mem.SetSteal(op.Key, op.Value)
-					}
-				}
-				shard.rng.add(op.Key)
-				b.db.noteWriteKey(op.Key)
-			}
+			newBytes := shard.mem.Size()
+			delta := newBytes - shard.bytes
+			shard.bytes = newBytes
+			b.db.mutableBytes.Add(delta)
+			shard.mu.Unlock()
 		}
-		newBytes := shard.mem.Size()
-		delta := newBytes - shard.bytes
-		shard.bytes = newBytes
-		b.db.mutableBytes.Add(delta)
-		shard.mu.Unlock()
 	}
 
 	// 3. Threshold Check
@@ -14731,6 +14908,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 	b.db.maybeAssistFlush()
 
+	b.updateBatchEntryHint()
 	b.Reset()
 	return nil
 }
@@ -14979,6 +15157,7 @@ func (b *Batch) writeBypass(sync bool) error {
 	if b.size > 0 {
 		b.db.noteWrite()
 	}
+	b.updateBatchEntryHint()
 	b.Reset()
 	return nil
 }
