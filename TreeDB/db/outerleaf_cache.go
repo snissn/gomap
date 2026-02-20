@@ -589,10 +589,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		return lease, false
 	}
 	if !wantLease {
-		if hit, same := s.hasCachedRef(key, block); hit {
-			if c.isSIEVE() {
-				s.markSIEVEByKey(key)
-			}
+		if hit, same := s.hasCachedRefMaybeMark(key, block, c.isSIEVE()); hit {
 			if !same {
 				recycleOuterLeafDecodedBlock(block)
 				c.putDuplicateDrops.Add(1)
@@ -601,10 +598,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 			return lease, true
 		}
 	} else {
-		if ref := s.tryRetain(key); ref != nil {
-			if c.isSIEVE() {
-				s.markSIEVEByKey(key)
-			}
+		if ref := s.tryRetainMaybeMark(key, c.isSIEVE()); ref != nil {
 			if ref.block != block {
 				recycleOuterLeafDecodedBlock(block)
 				c.putDuplicateDrops.Add(1)
@@ -620,10 +614,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	if wantLease {
 		// Recheck after admission; another goroutine may have inserted while we
 		// were outside the shard lock.
-		if ref := s.tryRetain(key); ref != nil {
-			if c.isSIEVE() {
-				s.markSIEVEByKey(key)
-			}
+		if ref := s.tryRetainMaybeMark(key, c.isSIEVE()); ref != nil {
 			if ref.block != block {
 				recycleOuterLeafDecodedBlock(block)
 				c.putDuplicateDrops.Add(1)
@@ -769,6 +760,10 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 }
 
 func (s *outerLeafBlockCacheShard) hasCachedRef(key outerLeafBlockKey, block *outerleaf.DecodedBlock) (hit bool, same bool) {
+	return s.hasCachedRefMaybeMark(key, block, false)
+}
+
+func (s *outerLeafBlockCacheShard) hasCachedRefMaybeMark(key outerLeafBlockKey, block *outerleaf.DecodedBlock, markSIEVE bool) (hit bool, same bool) {
 	if s == nil {
 		return false, false
 	}
@@ -785,11 +780,18 @@ func (s *outerLeafBlockCacheShard) hasCachedRef(key outerLeafBlockKey, block *ou
 	}
 	hit = true
 	same = ref.block == block
+	if markSIEVE {
+		s.sieveMark(idx)
+	}
 	s.mu.RUnlock()
 	return hit, same
 }
 
 func (s *outerLeafBlockCacheShard) tryRetain(key outerLeafBlockKey) *outerLeafBlockRef {
+	return s.tryRetainMaybeMark(key, false)
+}
+
+func (s *outerLeafBlockCacheShard) tryRetainMaybeMark(key outerLeafBlockKey, markSIEVE bool) *outerLeafBlockRef {
 	if s == nil {
 		return nil
 	}
@@ -805,20 +807,11 @@ func (s *outerLeafBlockCacheShard) tryRetain(key outerLeafBlockKey) *outerLeafBl
 		s.mu.RUnlock()
 		return nil
 	}
-	s.mu.RUnlock()
-	return ref
-}
-
-func (s *outerLeafBlockCacheShard) markSIEVEByKey(key outerLeafBlockKey) {
-	if s == nil || len(s.sieveRef) == 0 {
-		return
-	}
-	s.mu.RLock()
-	idx, ok := s.entries[key]
-	if ok {
+	if markSIEVE {
 		s.sieveMark(idx)
 	}
 	s.mu.RUnlock()
+	return ref
 }
 
 func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
@@ -1032,7 +1025,10 @@ func (s *outerLeafBlockCacheShard) sieveMark(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.sieveRef) {
 		return
 	}
-	s.sieveRef[idx].Store(1)
+	bit := &s.sieveRef[idx]
+	if bit.Load() == 0 {
+		bit.CompareAndSwap(0, 1)
+	}
 }
 
 func (s *outerLeafBlockCacheShard) sieveInsert(idx int) {
