@@ -50,6 +50,8 @@ var valueLogRecordPool sync.Pool                            // stores []valuelog
 var valueLogKeyPool sync.Pool                               // stores [][]byte
 var valueLogPtrPool sync.Pool                               // stores []page.ValuePtr
 var outerLeafEntryPool sync.Pool                            // stores []outerleaf.Entry
+var batchArenaPools [batchArenaClassCount]sync.Pool         // stores []byte
+var batchArenaLeasePool sync.Pool                           // stores *batchArenaLease
 var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
 var outerLeafArenaLeaseMu sync.Mutex
 var outerLeafArenaLeases [outerLeafArenaClassCount][][]byte
@@ -64,6 +66,9 @@ var valueLogKeyLeases [][][]byte
 const (
 	maxValueLogKeyLeaseCount = 64
 	maxValueLogKeyLeaseCap   = 1 << 20
+	batchArenaMinShift       = 12
+	batchArenaMaxShift       = 22
+	batchArenaClassCount     = batchArenaMaxShift - batchArenaMinShift + 1
 	outerLeafArenaMinShift   = 12
 	outerLeafArenaMaxShift   = 24
 	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
@@ -253,6 +258,89 @@ func outerLeafArenaMaxReuseCap(capacity int) int {
 		maxCap = maxOuterLeafArenaPoolCap
 	}
 	return maxCap
+}
+
+func batchArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
+	if capacity < 0 {
+		capacity = 0
+	}
+	if capacity > batchCopyArenaMaxRetain {
+		return 0, 0, false
+	}
+	minCap := 1 << batchArenaMinShift
+	if capacity <= minCap {
+		return 0, minCap, true
+	}
+	classCap = 1 << uint(bits.Len(uint(capacity-1)))
+	if classCap < minCap {
+		classCap = minCap
+	}
+	if classCap > batchCopyArenaMaxRetain {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - batchArenaMinShift
+	if idx < 0 || idx >= batchArenaClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func batchArenaClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << batchArenaMinShift
+	if capacity < minCap || capacity > batchCopyArenaMaxRetain {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - batchArenaMinShift
+	if idx < 0 || idx >= batchArenaClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func getBatchArena(capacity int) []byte {
+	if capacity < 0 {
+		capacity = 0
+	}
+	idx, classCap, ok := batchArenaClassForLen(capacity)
+	if !ok {
+		return make([]byte, 0, capacity)
+	}
+	if v := batchArenaPools[idx].Get(); v != nil {
+		if buf, ok := v.([]byte); ok {
+			if cap(buf) == classCap {
+				return buf[:0]
+			}
+		}
+	}
+	return make([]byte, 0, classCap)
+}
+
+func putBatchArena(buf []byte) {
+	if buf == nil {
+		return
+	}
+	if cap(buf) > batchCopyArenaMaxRetain {
+		return
+	}
+	idx, ok := batchArenaClassForCap(cap(buf))
+	if !ok {
+		return
+	}
+	batchArenaPools[idx].Put(buf[:0])
+}
+
+func putBatchArenas(chunks [][]byte) {
+	for i := range chunks {
+		if chunks[i] != nil {
+			putBatchArena(chunks[i])
+			chunks[i] = nil
+		}
+	}
 }
 
 func getOuterLeafArena(capacity int) []byte {
@@ -3033,6 +3121,11 @@ type DictStore interface {
 	GetDictBytes(ctx context.Context, dictID uint64) ([]byte, error)
 }
 
+type batchArenaLease struct {
+	refs   int
+	chunks [][]byte
+}
+
 type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
@@ -3061,6 +3154,8 @@ type DB struct {
 	nextQueueID           atomic.Uint64
 	batchEntryHint        atomic.Int32
 	batchCopyBytesHint    atomic.Int32
+	batchArenaLeaseMu     sync.Mutex
+	batchArenaLeasesByMem map[memtable.Table][]*batchArenaLease
 	batchEntriesPool      sync.Pool
 	batchShardEntriesPool sync.Pool
 	batchIntPool          sync.Pool
@@ -3448,10 +3543,94 @@ func (db *DB) releaseMemtableView(view *memtableView) {
 	view.retiredMems = nil
 }
 
+func memtableNeedsBatchArenaRetention(mt memtable.Table) bool {
+	// Skiplist-backed memtables copy key/value bytes into their own arena, so
+	// batch-owned buffers can be recycled immediately after write.
+	_, skiplist := mt.(*memtable.Memtable)
+	return !skiplist
+}
+
+func getBatchArenaLease(refs int, chunks [][]byte) *batchArenaLease {
+	lease, _ := batchArenaLeasePool.Get().(*batchArenaLease)
+	if lease == nil {
+		lease = &batchArenaLease{}
+	}
+	lease.refs = refs
+	lease.chunks = chunks
+	return lease
+}
+
+func putBatchArenaLease(lease *batchArenaLease) {
+	if lease == nil {
+		return
+	}
+	lease.refs = 0
+	lease.chunks = nil
+	batchArenaLeasePool.Put(lease)
+}
+
+func (db *DB) retainBatchArenaChunksForMemtables(chunks [][]byte, mems []memtable.Table) {
+	if len(chunks) == 0 {
+		return
+	}
+	if db == nil || len(mems) == 0 {
+		putBatchArenas(chunks)
+		return
+	}
+	filtered := mems[:0]
+	for _, mt := range mems {
+		if mt == nil || !memtableNeedsBatchArenaRetention(mt) {
+			continue
+		}
+		filtered = append(filtered, mt)
+	}
+	if len(filtered) == 0 {
+		putBatchArenas(chunks)
+		return
+	}
+	lease := getBatchArenaLease(len(filtered), chunks)
+	db.batchArenaLeaseMu.Lock()
+	if db.batchArenaLeasesByMem == nil {
+		db.batchArenaLeasesByMem = make(map[memtable.Table][]*batchArenaLease, len(filtered))
+	}
+	for _, mt := range filtered {
+		db.batchArenaLeasesByMem[mt] = append(db.batchArenaLeasesByMem[mt], lease)
+	}
+	db.batchArenaLeaseMu.Unlock()
+}
+
+func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
+	if db == nil || mt == nil {
+		return
+	}
+	var release [][]byte
+	db.batchArenaLeaseMu.Lock()
+	leases := db.batchArenaLeasesByMem[mt]
+	if len(leases) > 0 {
+		delete(db.batchArenaLeasesByMem, mt)
+		for _, lease := range leases {
+			if lease == nil || lease.refs <= 0 {
+				continue
+			}
+			lease.refs--
+			if lease.refs == 0 && len(lease.chunks) > 0 {
+				release = append(release, lease.chunks...)
+				lease.chunks = nil
+				putBatchArenaLease(lease)
+			}
+		}
+	}
+	db.batchArenaLeaseMu.Unlock()
+	if len(release) > 0 {
+		putBatchArenas(release)
+	}
+}
+
 func (db *DB) queueRetiredMemtableLocked(mem memtable.Table) {
 	if db == nil || mem == nil {
 		return
 	}
+	db.releaseBatchArenaLeasesForMemtable(mem)
 	db.pendingRetiredMems = append(db.pendingRetiredMems, mem)
 }
 
@@ -13581,21 +13760,22 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 // batchOp removed, using batch.Entry directly
 
 type Batch struct {
-	db           *DB
-	entries      []batch.Entry
-	backend      batch.Interface
-	size         int
-	copyArena    []byte
-	copyArenaCap int
-	copyBytes    int
-	walBuf       []logRecord
-	shardIdxs    []int
-	eligibleIdxs []int
-	shardAdds    []int64
-	shardCnts    []int
-	shardEntries [][]batch.Entry
-	shardIdxSets [][]int
-	maxEntries   int
+	db              *DB
+	entries         []batch.Entry
+	backend         batch.Interface
+	size            int
+	copyArena       []byte
+	copyArenaChunks [][]byte
+	copyArenaCap    int
+	copyBytes       int
+	walBuf          []logRecord
+	shardIdxs       []int
+	eligibleIdxs    []int
+	shardAdds       []int64
+	shardCnts       []int
+	shardEntries    [][]batch.Entry
+	shardIdxSets    [][]int
+	maxEntries      int
 
 	closed         bool
 	streamEligible bool
@@ -13850,13 +14030,8 @@ func (b *Batch) Reset() {
 	if b.shardIdxSets != nil {
 		b.shardIdxSets = b.shardIdxSets[:0]
 	}
-	if cap(b.copyArena) > batchCopyArenaMaxRetain {
-		b.copyArena = nil
-	} else if b.copyArena != nil {
-		b.copyArena = b.copyArena[:0]
-	}
+	b.recycleCopyArenaChunks()
 	b.size = 0
-	b.copyBytes = 0
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
@@ -13892,6 +14067,28 @@ func (b *Batch) updateBatchEntryHint() {
 	}
 }
 
+func (b *Batch) drainCopyArenaChunks() [][]byte {
+	if b == nil {
+		return nil
+	}
+	chunks := b.copyArenaChunks
+	b.copyArenaChunks = nil
+	b.copyArena = nil
+	b.copyBytes = 0
+	return chunks
+}
+
+func (b *Batch) recycleCopyArenaChunks() {
+	if b == nil {
+		return
+	}
+	chunks := b.drainCopyArenaChunks()
+	if len(chunks) == 0 {
+		return
+	}
+	putBatchArenas(chunks)
+}
+
 func (b *Batch) updateBatchCopyHint() {
 	if b == nil || b.db == nil {
 		return
@@ -13922,7 +14119,9 @@ func (b *Batch) arenaCopy(n int) []byte {
 		}
 		// Switch to a fresh chunk when exhausted so existing entry slices keep
 		// their backing arrays without per-op allocations.
-		b.copyArena = make([]byte, 0, chunkCap)
+		chunk := getBatchArena(chunkCap)
+		b.copyArena = chunk[:0]
+		b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
 	}
 	start := len(b.copyArena)
 	b.copyArena = b.copyArena[:start+n]
@@ -14180,10 +14379,10 @@ const (
 	// enough to amortize per-lane setup and goroutine overhead.
 	multiLaneValueLogMinRecords = 1024
 	batchCopyArenaMinChunk      = 4 << 10
-	batchCopyArenaUnsizedInit   = 16 << 10
+	batchCopyArenaUnsizedInit   = 8 << 10
 	batchCopyArenaBytesPerEntry = 192
 	batchCopyArenaInitMax       = 2 << 20
-	batchCopyArenaMaxRetain     = 1 << 20
+	batchCopyArenaMaxRetain     = 4 << 20
 	batchEntriesPoolMaxRetain   = 16 << 10
 	batchIntSlicePoolMaxRetain  = 16 << 10
 )
@@ -14515,6 +14714,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			add += int64(len(op.Value))
 		}
 		shardAdds[idx] += add
+	}
+	touchedMems := make([]memtable.Table, 0, shardCount)
+	for i, count := range shardCounts {
+		if count > 0 {
+			touchedMems = append(touchedMems, b.db.mutableShards[i].mem)
+		}
 	}
 	for i, add := range shardAdds {
 		if add == 0 {
@@ -15082,6 +15287,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if syncWrite && b.db.disableJournal {
 		needSyncBarrier = true
 	}
+	b.updateBatchEntryHint()
+	b.updateBatchCopyHint()
+	b.db.retainBatchArenaChunksForMemtables(b.drainCopyArenaChunks(), touchedMems)
 	b.db.writeMu.RUnlock()
 
 	if needRotate {
@@ -15099,9 +15307,6 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		b.db.noteWrite()
 	}
 	b.db.maybeAssistFlush()
-
-	b.updateBatchEntryHint()
-	b.updateBatchCopyHint()
 	b.Reset()
 	return nil
 }
@@ -15389,8 +15594,8 @@ func (b *Batch) Close() error {
 			}
 		}
 	}
+	b.recycleCopyArenaChunks()
 	b.entries = nil
-	b.copyArena = nil
 	b.walBuf = nil
 	b.shardIdxs = nil
 	b.eligibleIdxs = nil

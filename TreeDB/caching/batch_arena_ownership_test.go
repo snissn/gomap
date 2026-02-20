@@ -1,0 +1,99 @@
+package caching
+
+import (
+	"bytes"
+	"testing"
+)
+
+func TestBatchReset_DoesNotCorruptPriorStealWrites(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	firstKey := []byte("k1")
+	firstVal := bytes.Repeat([]byte{0x11}, 64)
+	secondKey := []byte("k2")
+	secondVal := bytes.Repeat([]byte{0x22}, 64)
+
+	b := db.NewBatchWithSize(1)
+	if err := b.Set(firstKey, firstVal); err != nil {
+		t.Fatalf("set first: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write first: %v", err)
+	}
+
+	// Reuse the same batch object; this historically reused copyArena storage
+	// still referenced by append-only memtables via SetSteal/DeleteSteal.
+	b.Reset()
+	if err := b.Set(secondKey, secondVal); err != nil {
+		t.Fatalf("set second: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write second: %v", err)
+	}
+	defer b.Close()
+
+	got, err := db.Get(firstKey)
+	if err != nil {
+		t.Fatalf("get first: %v", err)
+	}
+	if !bytes.Equal(got, firstVal) {
+		t.Fatalf("first value corrupted: got=%x want=%x", got, firstVal)
+	}
+}
+
+func TestBatchArenaLeases_ReleasedAfterCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	b := db.NewBatchWithSize(128)
+	value := bytes.Repeat([]byte{0xAB}, 128)
+	for i := 0; i < 128; i++ {
+		key := []byte{byte(i), byte(i >> 1), byte(i >> 2), byte(i >> 3), byte(i >> 4), byte(i >> 5), byte(i >> 6), byte(i >> 7)}
+		if err := b.Set(key, value); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	db.batchArenaLeaseMu.Lock()
+	leasedBefore := len(db.batchArenaLeasesByMem)
+	db.batchArenaLeaseMu.Unlock()
+	if leasedBefore == 0 {
+		t.Fatalf("expected active batch arena leases after write")
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.batchArenaLeaseMu.Lock()
+	leasedAfter := len(db.batchArenaLeasesByMem)
+	db.batchArenaLeaseMu.Unlock()
+	if leasedAfter != 0 {
+		t.Fatalf("expected leases to be released after checkpoint, got=%d", leasedAfter)
+	}
+}
