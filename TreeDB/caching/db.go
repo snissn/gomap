@@ -3013,6 +3013,7 @@ type Options struct {
 	ValueLogPointerThreshold int
 	// IndexOuterLeafMode selects the outer-leaf payload format.
 	// Supported values: "v1", "v2_blockptr", "v2_fenceptr".
+	// Empty defaults to "v2_fenceptr".
 	IndexOuterLeafMode string
 	// ValueLogWALFenceMode selects WAL encoding behavior for pointer-eligible
 	// writes under v2 fence-pointer mode.
@@ -4276,7 +4277,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	indexOuterLeafMode := strings.TrimSpace(opts.IndexOuterLeafMode)
 	if indexOuterLeafMode == "" {
-		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
+		indexOuterLeafMode = backenddb.IndexOuterLeafModeV2FencePtr
 	}
 	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr &&
 		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr {

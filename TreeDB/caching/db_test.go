@@ -1281,6 +1281,25 @@ func TestCachingDB_Open_V2FencePtrWALOn_DefaultAutoSimpleInline(t *testing.T) {
 	}
 }
 
+func TestCachingDB_Open_EmptyOuterLeafModeDefaultsToV2FencePtr(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open with empty outer-leaf mode: %v", err)
+	}
+	defer cache.Close()
+
+	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV2FencePtr {
+		t.Fatalf("cache indexOuterLeafMode = %q, want %q", got, db.IndexOuterLeafModeV2FencePtr)
+	}
+}
+
 func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
 	dir := t.TempDir()
 	backendOpts := db.Options{
