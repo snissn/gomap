@@ -45,6 +45,11 @@ type cacheRangeFenceKeysLease struct {
 	inUse      bool
 }
 
+type cacheFenceBlockLease struct {
+	cacheLease outerLeafBlockCacheLease
+	inUse      bool
+}
+
 var staticFenceKeysLeasePool = sync.Pool{
 	New: func() any {
 		return &staticFenceKeysLease{}
@@ -60,6 +65,18 @@ var cacheFenceKeysLeasePool = sync.Pool{
 var cacheRangeFenceKeysLeasePool = sync.Pool{
 	New: func() any {
 		return &cacheRangeFenceKeysLease{}
+	},
+}
+
+var cacheFenceBlockLeasePool = sync.Pool{
+	New: func() any {
+		return &cacheFenceBlockLease{}
+	},
+}
+
+var fenceBlockDecodeLeasePool = sync.Pool{
+	New: func() any {
+		return &fenceBlockDecodeLease{}
 	},
 }
 
@@ -139,6 +156,23 @@ func (l *cacheRangeFenceKeysLease) Release() {
 	l.cacheLease = outerLeafBlockCacheLease{}
 	l.inUse = false
 	cacheRangeFenceKeysLeasePool.Put(l)
+}
+
+func acquireCacheFenceBlockLease(cacheLease outerLeafBlockCacheLease) *cacheFenceBlockLease {
+	lease := cacheFenceBlockLeasePool.Get().(*cacheFenceBlockLease)
+	lease.cacheLease = cacheLease
+	lease.inUse = true
+	return lease
+}
+
+func (l *cacheFenceBlockLease) Release() {
+	if l == nil || !l.inUse {
+		return
+	}
+	l.cacheLease.Release()
+	l.cacheLease = outerLeafBlockCacheLease{}
+	l.inUse = false
+	cacheFenceBlockLeasePool.Put(l)
 }
 
 const outerLeafLookupScratchMaxRetain = 1 << 20
@@ -357,6 +391,14 @@ type fenceBlockDecodeLease struct {
 	released bool
 }
 
+func acquireFenceBlockDecodeLease(block *outerleaf.DecodedBlock, scratch []byte) *fenceBlockDecodeLease {
+	lease := fenceBlockDecodeLeasePool.Get().(*fenceBlockDecodeLease)
+	lease.block = block
+	lease.scratch = scratch
+	lease.released = false
+	return lease
+}
+
 func (l *fenceBlockDecodeLease) Release() {
 	if l == nil || l.released {
 		return
@@ -370,6 +412,7 @@ func (l *fenceBlockDecodeLease) Release() {
 	}
 	outerLeafFenceDecodeScratchPut(l.scratch)
 	l.scratch = nil
+	fenceBlockDecodeLeasePool.Put(l)
 }
 
 type unsafeAppendReader interface {
@@ -1180,12 +1223,9 @@ func (r valueReader) ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []tree
 			return nil, nil, true, decErr
 		}
 		block = decoded
-		lease = &fenceBlockDecodeLease{
-			block:   decoded,
-			scratch: nextScratch,
-		}
+		lease = acquireFenceBlockDecodeLease(decoded, nextScratch)
 	} else if cacheLease.ref != nil {
-		lease = &cacheLease
+		lease = acquireCacheFenceBlockLease(cacheLease)
 	}
 	if cap(dst) < block.EntryCount() {
 		dst = make([]tree.FenceBlockEntry, 0, block.EntryCount())

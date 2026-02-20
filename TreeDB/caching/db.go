@@ -13580,6 +13580,7 @@ type Batch struct {
 	entries      []batch.Entry
 	backend      batch.Interface
 	size         int
+	copyArena    []byte
 	walBuf       []logRecord
 	shardIdxs    []int
 	eligibleIdxs []int
@@ -13637,6 +13638,11 @@ func (b *Batch) Reset() {
 	if b.shardEntries != nil {
 		b.shardEntries = b.shardEntries[:0]
 	}
+	if cap(b.copyArena) > batchCopyArenaMaxRetain {
+		b.copyArena = nil
+	} else if b.copyArena != nil {
+		b.copyArena = b.copyArena[:0]
+	}
 	b.size = 0
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
@@ -13650,6 +13656,48 @@ func (b *Batch) Reset() {
 	b.dictBytesValid = false
 }
 
+func (b *Batch) arenaCopy(n int) []byte {
+	if n == 0 {
+		return nil
+	}
+	if cap(b.copyArena)-len(b.copyArena) < n {
+		chunkCap := cap(b.copyArena) * 2
+		if chunkCap < batchCopyArenaMinChunk {
+			chunkCap = batchCopyArenaMinChunk
+		}
+		if chunkCap < n {
+			chunkCap = n
+		}
+		// Switch to a fresh chunk when exhausted so existing entry slices keep
+		// their backing arrays without per-op allocations.
+		b.copyArena = make([]byte, 0, chunkCap)
+	}
+	start := len(b.copyArena)
+	b.copyArena = b.copyArena[:start+n]
+	return b.copyArena[start : start+n : start+n]
+}
+
+func (b *Batch) cloneKey(key []byte) []byte {
+	dst := b.arenaCopy(len(key))
+	copy(dst, key)
+	return dst
+}
+
+func (b *Batch) cloneValue(value []byte) []byte {
+	dst := b.arenaCopy(len(value))
+	copy(dst, value)
+	return dst
+}
+
+func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
+	buf := b.arenaCopy(len(key) + len(value))
+	keyCopy := buf[:len(key):len(key)]
+	copy(keyCopy, key)
+	valCopy := buf[len(key):]
+	copy(valCopy, value)
+	return keyCopy, valCopy
+}
+
 func (b *Batch) Set(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -13661,8 +13709,7 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 
-	keyCopy := append([]byte(nil), key...)
-	valCopy := append([]byte(nil), value...)
+	keyCopy, valCopy := b.cloneKeyValue(key, value)
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
@@ -13750,7 +13797,7 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	keyCopy := append([]byte(nil), key...)
+	keyCopy := b.cloneKey(key)
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy)
@@ -13829,9 +13876,9 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 		copied := make([]batch.Entry, len(ops))
 		for i, op := range ops {
 			copiedOp := op
-			copiedOp.Key = append([]byte(nil), op.Key...)
+			copiedOp.Key = b.cloneKey(op.Key)
 			if op.Value != nil {
-				copiedOp.Value = append([]byte(nil), op.Value...)
+				copiedOp.Value = b.cloneValue(op.Value)
 			}
 			copied[i] = copiedOp
 			b.size += len(copiedOp.Key) + len(copiedOp.Value)
@@ -13841,9 +13888,11 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	}
 	for _, op := range ops {
 		copied := op
-		copied.Key = append([]byte(nil), op.Key...)
 		if op.Value != nil {
-			copied.Value = append([]byte(nil), op.Value...)
+			copied.Key, copied.Value = b.cloneKeyValue(op.Key, op.Value)
+		} else {
+			copied.Key = b.cloneKey(op.Key)
+			copied.Value = nil
 		}
 		if b.streamEligible {
 			if b.firstKey == nil {
@@ -13868,6 +13917,8 @@ const (
 	// Only fan out value-log appends across multiple lanes when a batch is large
 	// enough to amortize per-lane setup and goroutine overhead.
 	multiLaneValueLogMinRecords = 1024
+	batchCopyArenaMinChunk      = 4 << 10
+	batchCopyArenaMaxRetain     = 1 << 20
 )
 
 func (b *Batch) maybeSwitchToStreaming() {
