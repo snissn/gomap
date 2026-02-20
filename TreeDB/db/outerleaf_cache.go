@@ -137,9 +137,18 @@ type outerLeafBlockCacheShard struct {
 	capacity int
 	// entryCount mirrors len(entries) for lock-free admission decisions.
 	entryCount atomic.Int32
-	admit      []atomic.Uint64
-	// admitMask is len(admitBits)-1 for power-of-two indexing into admit.
+	// admit is a TinyLFU-style frequency sketch: packed 4-bit counters.
+	admit []atomic.Uint64
+	// admitMask is counterCount-1 for power-of-two indexing into admit.
 	admitMask uint64
+	// admitSamples tracks touches since last decay.
+	admitSamples atomic.Uint32
+	// admitDecayEvery controls decay cadence in sketch touch operations.
+	admitDecayEvery uint32
+	// admitDecaying serializes sketch decay.
+	admitDecaying atomic.Uint32
+	// admitFloor tracks recent victim frequency (EWMA) for admission thresholding.
+	admitFloor atomic.Uint32
 }
 
 type outerLeafBlockCache struct {
@@ -161,8 +170,17 @@ const outerLeafBlockCachePromoteSampleMask uint64 = 0x0f // 1/16
 // mixed read/write contention.
 const outerLeafBlockCacheTargetEntriesPerShard = 64
 const outerLeafBlockCacheMaxShards = 64
-const outerLeafBlockCacheAdmitBitsPerEntry = 16
-const outerLeafBlockCacheAdmitMinBits = 256
+const outerLeafBlockCacheAdmitCountersPerEntry = 16
+const outerLeafBlockCacheAdmitMinCounters = 256
+const outerLeafBlockCacheAdmitCountersPerWord = 16
+const outerLeafBlockCacheAdmitCounterMask uint64 = 0x0f
+const outerLeafBlockCacheAdmitDecayNibbleHalfMask uint64 = 0x7777777777777777
+const outerLeafBlockCacheAdmitCounterMax uint8 = 15
+const outerLeafBlockCacheAdmitDecayMultiplier = 8
+const outerLeafBlockCacheAdmitDecayMinSamples = 256
+const outerLeafBlockCacheAdmitThresholdMin uint8 = 2
+const outerLeafBlockCacheAdmitThresholdMax uint8 = 4
+const outerLeafBlockCacheAdmitVictimEWMAWeight = 7 // 7/8 old + 1/8 new
 
 func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 	if capacity <= 0 {
@@ -193,16 +211,27 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 		if i < extra {
 			capI++
 		}
-		admitBits := 0
+		admitCounters := 0
+		admitDecayEvery := uint32(0)
 		if capI > 0 {
-			targetBits := capI * outerLeafBlockCacheAdmitBitsPerEntry
-			if targetBits < outerLeafBlockCacheAdmitMinBits {
-				targetBits = outerLeafBlockCacheAdmitMinBits
+			targetCounters := capI * outerLeafBlockCacheAdmitCountersPerEntry
+			if targetCounters < outerLeafBlockCacheAdmitMinCounters {
+				targetCounters = outerLeafBlockCacheAdmitMinCounters
 			}
-			admitBits = 1
-			for admitBits < targetBits {
-				admitBits <<= 1
+			admitCounters = 1
+			for admitCounters < targetCounters {
+				admitCounters <<= 1
 			}
+			admitDecayEvery = uint32(admitCounters * outerLeafBlockCacheAdmitDecayMultiplier)
+			if admitDecayEvery < outerLeafBlockCacheAdmitDecayMinSamples {
+				admitDecayEvery = outerLeafBlockCacheAdmitDecayMinSamples
+			}
+		}
+		admitWords := 0
+		admitMask := uint64(0)
+		if admitCounters > 0 {
+			admitWords = (admitCounters + outerLeafBlockCacheAdmitCountersPerWord - 1) / outerLeafBlockCacheAdmitCountersPerWord
+			admitMask = uint64(admitCounters - 1)
 		}
 		free := make([]int, capI)
 		nodes := make([]outerLeafBlockCacheEntry, capI)
@@ -212,14 +241,15 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 			free[j] = capI - 1 - j
 		}
 		shards[i] = outerLeafBlockCacheShard{
-			entries:   make(map[outerLeafBlockKey]int, capI),
-			nodes:     nodes,
-			free:      free,
-			head:      -1,
-			tail:      -1,
-			capacity:  capI,
-			admit:     make([]atomic.Uint64, admitBits/64),
-			admitMask: uint64(admitBits - 1),
+			entries:         make(map[outerLeafBlockKey]int, capI),
+			nodes:           nodes,
+			free:            free,
+			head:            -1,
+			tail:            -1,
+			capacity:        capI,
+			admit:           make([]atomic.Uint64, admitWords),
+			admitMask:       admitMask,
+			admitDecayEvery: admitDecayEvery,
 		}
 	}
 
@@ -311,6 +341,8 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 
 	var releaseEvicted *outerLeafBlockRef
 	var duplicateDropBlock *outerleaf.DecodedBlock
+	var evictedHash uint64
+	evicted := false
 	if idx, ok := s.entries[key]; ok {
 		ref := s.nodes[idx].ref
 		if ref == nil {
@@ -350,6 +382,8 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 			return false
 		}
 		evictedKey := s.nodes[idx].key
+		evictedHash = outerLeafBlockKeyHash(evictedKey)
+		evicted = true
 		releaseEvicted = s.nodes[idx].ref
 		s.unlink(idx)
 		delete(s.entries, evictedKey)
@@ -378,6 +412,9 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 	}
 	if releaseEvicted != nil {
 		releaseEvicted.release()
+	}
+	if evicted {
+		s.admitObserveVictimHash(evictedHash)
 	}
 	c.putAdmitted.Add(1)
 	return true
@@ -441,6 +478,8 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	}
 	var releaseEvicted *outerLeafBlockRef
 	var duplicateDropBlock *outerleaf.DecodedBlock
+	var evictedHash uint64
+	evicted := false
 	if idx, ok := s.entries[key]; ok {
 		ref := s.nodes[idx].ref
 		if ref == nil {
@@ -492,6 +531,8 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 			return lease, false
 		}
 		evictedKey := s.nodes[idx].key
+		evictedHash = outerLeafBlockKeyHash(evictedKey)
+		evicted = true
 		releaseEvicted = s.nodes[idx].ref
 		s.unlink(idx)
 		delete(s.entries, evictedKey)
@@ -523,6 +564,9 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	}
 	if releaseEvicted != nil {
 		releaseEvicted.release()
+	}
+	if evicted {
+		s.admitObserveVictimHash(evictedHash)
 	}
 	if !wantLease {
 		c.putAdmitted.Add(1)
@@ -626,27 +670,149 @@ func (s *outerLeafBlockCacheShard) shouldAdmitHash(h uint64) bool {
 	if len(s.admit) == 0 || s.admitMask == 0 {
 		return true
 	}
-	idxA, idxB := outerLeafBlockCacheAdmitIndexes(h, s.admitMask)
-	wordA := int(idxA >> 6)
-	bitA := uint64(1) << (idxA & 63)
-	wordB := int(idxB >> 6)
-	bitB := uint64(1) << (idxB & 63)
-	seenA := outerLeafBlockCacheAdmitSeenAndSet(&s.admit[wordA], bitA)
-	seenB := outerLeafBlockCacheAdmitSeenAndSet(&s.admit[wordB], bitB)
-	// Keep warm-up behavior close to prior tuning while reducing collision-driven
-	// first-touch admits once shards are at least half occupied.
-	if entries < s.capacity/2 {
-		return seenA
+	freq := s.admitTouchHash(h)
+	threshold := outerLeafBlockCacheAdmitThresholdMin
+	if entries >= s.capacity/2 {
+		floor := uint8(s.admitFloor.Load())
+		if floor > threshold {
+			threshold = floor
+		}
+		if threshold > outerLeafBlockCacheAdmitThresholdMax {
+			threshold = outerLeafBlockCacheAdmitThresholdMax
+		}
 	}
-	return seenA && seenB
+	return freq >= threshold
 }
 
-func outerLeafBlockCacheAdmitSeenAndSet(word *atomic.Uint64, bit uint64) bool {
-	if word == nil || bit == 0 {
-		return false
+func (s *outerLeafBlockCacheShard) admitTouchHash(h uint64) uint8 {
+	if s == nil || len(s.admit) == 0 || s.admitMask == 0 {
+		return 0
 	}
-	old := word.Or(bit)
-	return old&bit != 0
+	idxA, idxB := outerLeafBlockCacheAdmitIndexes(h, s.admitMask)
+	if idxA == idxB {
+		est := s.admitIncrementCounter(idxA)
+		s.admitMaybeDecay()
+		return est
+	}
+	a := s.admitIncrementCounter(idxA)
+	b := s.admitIncrementCounter(idxB)
+	s.admitMaybeDecay()
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func (s *outerLeafBlockCacheShard) admitEstimateHash(h uint64) uint8 {
+	if s == nil || len(s.admit) == 0 || s.admitMask == 0 {
+		return 0
+	}
+	idxA, idxB := outerLeafBlockCacheAdmitIndexes(h, s.admitMask)
+	a := s.admitCounterAtIndex(idxA)
+	if idxA == idxB {
+		return a
+	}
+	b := s.admitCounterAtIndex(idxB)
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func (s *outerLeafBlockCacheShard) admitObserveVictimHash(h uint64) {
+	if s == nil || len(s.admit) == 0 || s.admitMask == 0 {
+		return
+	}
+	freq := s.admitEstimateHash(h)
+	if freq == 0 {
+		return
+	}
+	if freq > outerLeafBlockCacheAdmitThresholdMax {
+		freq = outerLeafBlockCacheAdmitThresholdMax
+	}
+	for {
+		old := s.admitFloor.Load()
+		var next uint32
+		if old == 0 {
+			next = uint32(freq)
+		} else {
+			next = (old*outerLeafBlockCacheAdmitVictimEWMAWeight + uint32(freq)) / (outerLeafBlockCacheAdmitVictimEWMAWeight + 1)
+		}
+		if next > uint32(outerLeafBlockCacheAdmitCounterMax) {
+			next = uint32(outerLeafBlockCacheAdmitCounterMax)
+		}
+		if s.admitFloor.CompareAndSwap(old, next) {
+			return
+		}
+	}
+}
+
+func (s *outerLeafBlockCacheShard) admitMaybeDecay() {
+	if s == nil || s.admitDecayEvery == 0 || len(s.admit) == 0 {
+		return
+	}
+	if s.admitSamples.Add(1) < s.admitDecayEvery {
+		return
+	}
+	if !s.admitDecaying.CompareAndSwap(0, 1) {
+		return
+	}
+	defer s.admitDecaying.Store(0)
+	if s.admitSamples.Load() < s.admitDecayEvery {
+		return
+	}
+	for i := range s.admit {
+		word := &s.admit[i]
+		for {
+			old := word.Load()
+			next := (old >> 1) & outerLeafBlockCacheAdmitDecayNibbleHalfMask
+			if word.CompareAndSwap(old, next) {
+				break
+			}
+		}
+	}
+	s.admitSamples.Store(0)
+	for {
+		oldFloor := s.admitFloor.Load()
+		if s.admitFloor.CompareAndSwap(oldFloor, oldFloor>>1) {
+			break
+		}
+	}
+}
+
+func (s *outerLeafBlockCacheShard) admitCounterAtIndex(idx uint64) uint8 {
+	wordIdx, shift := outerLeafBlockCacheAdmitWordShift(idx)
+	if wordIdx < 0 || wordIdx >= len(s.admit) {
+		return 0
+	}
+	word := s.admit[wordIdx].Load()
+	return uint8((word >> shift) & outerLeafBlockCacheAdmitCounterMask)
+}
+
+func (s *outerLeafBlockCacheShard) admitIncrementCounter(idx uint64) uint8 {
+	wordIdx, shift := outerLeafBlockCacheAdmitWordShift(idx)
+	if wordIdx < 0 || wordIdx >= len(s.admit) {
+		return 0
+	}
+	word := &s.admit[wordIdx]
+	mask := outerLeafBlockCacheAdmitCounterMask << shift
+	step := uint64(1) << shift
+	for {
+		old := word.Load()
+		cur := (old & mask) >> shift
+		if cur >= outerLeafBlockCacheAdmitCounterMask {
+			return outerLeafBlockCacheAdmitCounterMax
+		}
+		if word.CompareAndSwap(old, old+step) {
+			return uint8(cur + 1)
+		}
+	}
+}
+
+func outerLeafBlockCacheAdmitWordShift(idx uint64) (int, uint) {
+	word := int(idx >> 4)
+	shift := uint((idx & 0x0f) << 2)
+	return word, shift
 }
 
 func outerLeafBlockCacheAdmitIndexes(h, mask uint64) (uint64, uint64) {

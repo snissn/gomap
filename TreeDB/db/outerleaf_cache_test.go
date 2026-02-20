@@ -101,14 +101,11 @@ func findOuterLeafCacheUnseenAdmitKey(t *testing.T, c *outerLeafBlockCache, shar
 		if _, exists := shard.entries[key]; exists {
 			continue
 		}
-		idx := outerLeafBlockKeyHash(key) & shard.admitMask
-		word := idx >> 6
-		bit := uint64(1) << (idx & 63)
-		if shard.admit[word].Load()&bit == 0 {
+		if shard.admitEstimateHash(outerLeafBlockKeyHash(key)) == 0 {
 			return key
 		}
 	}
-	t.Fatalf("unable to find unseen admission bit candidate")
+	t.Fatalf("unable to find unseen admission counter candidate")
 	return outerLeafBlockKey{}
 }
 
@@ -133,13 +130,11 @@ func findOuterLeafCachePrimaryCollisionSecondUnseenKey(t *testing.T, c *outerLea
 		if idxA != baseA || idxB == baseB {
 			continue
 		}
-		word := idxB >> 6
-		bit := uint64(1) << (idxB & 63)
-		if shard.admit[word].Load()&bit == 0 {
+		if shard.admitCounterAtIndex(idxB) == 0 {
 			return key
 		}
 	}
-	t.Fatalf("unable to find primary-collision key with unseen secondary bit")
+	t.Fatalf("unable to find primary-collision key with unseen secondary counter")
 	return outerLeafBlockKey{}
 }
 
