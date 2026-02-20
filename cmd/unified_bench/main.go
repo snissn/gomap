@@ -41,9 +41,8 @@ var (
 	numKeys            = flag.Int("keys", 100000, "Number of keys")
 	keyShapeArg        = flag.String("key-shape", "be8", "Key generation shape for non-dataset 8-byte workloads (be8|be8_prefix4)")
 	valSize            = flag.Int("valsize", 128, "Value size in bytes")
-	valPattern         = flag.String("val-pattern", "zero", "Value pattern for non-dataset write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random)")
+	valPattern         = flag.String("val-pattern", "zero", "Value pattern for write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random)")
 	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
-	datasetValPat      = flag.String("dataset-val-pattern", "random", "Dataset value pattern (random|zero|repeat|repeat_tail64|half_repeat_half_random)")
 	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
 	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
 	readWorkers        = flag.Int("read-workers", runtime.GOMAXPROCS(0), "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default GOMAXPROCS)")
@@ -122,10 +121,9 @@ type BenchConfig struct {
 	TestsArg      string
 	Profile       string
 
-	KeepDir             bool
-	Progress            bool
-	SeedUsed            int64
-	DatasetValuePattern string
+	KeepDir  bool
+	Progress bool
+	SeedUsed int64
 
 	CPUProfile string
 	// CPUProfileTests, when non-empty, restricts per-test cpu profiling to the
@@ -366,7 +364,6 @@ func main() {
 		KeepDir:                          *keepDir,
 		Progress:                         *progress,
 		SeedUsed:                         seedUsed,
-		DatasetValuePattern:              *datasetValPat,
 		CPUProfile:                       *cpuProfile,
 		AllocsProfile:                    *allocsProfile,
 		AllocsProfileRate:                *allocsProfileRate,
@@ -1360,50 +1357,18 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		datasetErr        error
 	)
 	makeWriteDataset := func(count, ksize, vsize int, order bool) ([][]byte, [][]byte, error) {
-		pattern := strings.ToLower(strings.TrimSpace(cfg.DatasetValuePattern))
+		mode, err := normalizeWriteValuePattern(cfg.ValuePattern)
+		if err != nil {
+			return nil, nil, err
+		}
 		keys := make([][]byte, count)
-		vals := make([][]byte, count)
+		vals := makeValuePool(cfg.SeedUsed, mode, vsize, count)
 		for i := 0; i < count; i++ {
 			k := make([]byte, ksize)
 			if _, err := io.ReadFull(crand.Reader, k); err != nil {
 				return nil, nil, fmt.Errorf("dataset key %d: %w", i, err)
 			}
-			v := make([]byte, vsize)
-			switch pattern {
-			case "", "random", "rand":
-				if _, err := io.ReadFull(crand.Reader, v); err != nil {
-					return nil, nil, fmt.Errorf("dataset val %d: %w", i, err)
-				}
-			case "zero", "zeros":
-				// leave zeroed
-			case "repeat":
-				for j := range v {
-					v[j] = 0x61
-				}
-			case "repeat_tail64":
-				for j := range v {
-					v[j] = 0x61
-				}
-				if len(v) > 64 {
-					if _, err := io.ReadFull(crand.Reader, v[len(v)-64:]); err != nil {
-						return nil, nil, fmt.Errorf("dataset val %d tail: %w", i, err)
-					}
-				}
-			case "half_repeat_half_random":
-				for j := range v {
-					v[j] = 0x61
-				}
-				if len(v) > 0 {
-					half := len(v) / 2
-					if _, err := io.ReadFull(crand.Reader, v[half:]); err != nil {
-						return nil, nil, fmt.Errorf("dataset val %d random: %w", i, err)
-					}
-				}
-			default:
-				return nil, nil, fmt.Errorf("dataset value pattern: %q", cfg.DatasetValuePattern)
-			}
 			keys[i] = k
-			vals[i] = v
 		}
 		if order {
 			sort.Slice(keys, func(i, j int) bool {
@@ -3566,9 +3531,6 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString(fmt.Sprintf("- val-pattern: %s\n", strings.TrimSpace(run.Config.ValuePattern)))
 		sb.WriteString(fmt.Sprintf("- val-pool-size: %d\n", run.Config.ValuePoolSize))
 	}
-	if strings.TrimSpace(run.Config.DatasetValuePattern) != "" {
-		sb.WriteString(fmt.Sprintf("- dataset-val-pattern: %s\n", strings.TrimSpace(run.Config.DatasetValuePattern)))
-	}
 	if strings.TrimSpace(run.Config.Profile) != "" {
 		sb.WriteString(fmt.Sprintf("- profile: %s\n", strings.TrimSpace(run.Config.Profile)))
 	}
@@ -3667,9 +3629,6 @@ func renderMarkdownSweep(runs []BenchRun) string {
 	if strings.TrimSpace(runs[0].Config.ValuePattern) != "" {
 		sb.WriteString(fmt.Sprintf("- val-pattern: %s\n", strings.TrimSpace(runs[0].Config.ValuePattern)))
 		sb.WriteString(fmt.Sprintf("- val-pool-size: %d\n", runs[0].Config.ValuePoolSize))
-	}
-	if strings.TrimSpace(runs[0].Config.DatasetValuePattern) != "" {
-		sb.WriteString(fmt.Sprintf("- dataset-val-pattern: %s\n", strings.TrimSpace(runs[0].Config.DatasetValuePattern)))
 	}
 	if strings.TrimSpace(runs[0].Config.Profile) != "" {
 		sb.WriteString(fmt.Sprintf("- profile: %s\n", strings.TrimSpace(runs[0].Config.Profile)))
