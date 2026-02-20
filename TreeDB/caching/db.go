@@ -13603,6 +13603,7 @@ type Batch struct {
 	dictIDValid    bool
 	dictBytes      []byte
 	dictBytesValid bool
+	deleteOnly     bool
 }
 
 func (db *DB) NewBatch() *Batch {
@@ -13610,14 +13611,14 @@ func (db *DB) NewBatch() *Batch {
 	if db != nil {
 		capHint = db.batchEntriesCapHint(capHint)
 	}
-	return &Batch{db: db, entries: db.getBatchEntries(capHint), streamEligible: true}
+	return &Batch{db: db, entries: db.getBatchEntries(capHint), streamEligible: true, deleteOnly: true}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
 	if size < 0 {
 		size = 0
 	}
-	return &Batch{db: db, entries: db.getBatchEntries(size), streamEligible: true}
+	return &Batch{db: db, entries: db.getBatchEntries(size), streamEligible: true, deleteOnly: true}
 }
 
 func (db *DB) batchEntriesCapHint(minCap int) int {
@@ -13772,6 +13773,7 @@ func (b *Batch) Reset() {
 	b.dictBytes = nil
 	b.dictBytesValid = false
 	b.maxEntries = 0
+	b.deleteOnly = true
 }
 
 func (b *Batch) noteEntryAppend() {
@@ -13804,6 +13806,20 @@ func (b *Batch) arenaCopy(n int) []byte {
 		chunkCap := cap(b.copyArena) * 2
 		if chunkCap < batchCopyArenaMinChunk {
 			chunkCap = batchCopyArenaMinChunk
+		}
+		if cap(b.copyArena) == 0 && b.deleteOnly {
+			// Delete-heavy batches usually copy similarly sized keys; seed the
+			// first chunk from reserved entry capacity to avoid geometric growth.
+			estimated := batchCopyArenaMaxRetain
+			if n > 0 && cap(b.entries) <= batchCopyArenaMaxRetain/n {
+				estimated = cap(b.entries) * n
+			}
+			if estimated > batchCopyArenaMaxRetain {
+				estimated = batchCopyArenaMaxRetain
+			}
+			if estimated > chunkCap {
+				chunkCap = estimated
+			}
 		}
 		if chunkCap < n {
 			chunkCap = n
@@ -13848,6 +13864,7 @@ func (b *Batch) Set(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	b.deleteOnly = false
 
 	keyCopy, valCopy := b.cloneKeyValue(key, value)
 	if b.backend != nil {
@@ -13898,6 +13915,7 @@ func (b *Batch) SetView(key, value []byte) error {
 	if value == nil {
 		return ErrValueNil
 	}
+	b.deleteOnly = false
 
 	if b.backend != nil {
 		b.batchRange.add(key)
@@ -14015,6 +14033,12 @@ func (b *Batch) DeleteView(key []byte) error {
 func (b *Batch) SetOps(ops []batch.Entry) error {
 	if b.closed {
 		return ErrBatchClosed
+	}
+	for i := range ops {
+		if ops[i].Type != batch.OpDelete {
+			b.deleteOnly = false
+			break
+		}
 	}
 	if b.backend != nil {
 		copied := make([]batch.Entry, len(ops))
