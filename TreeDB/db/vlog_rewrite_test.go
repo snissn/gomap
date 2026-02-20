@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
@@ -584,4 +585,209 @@ func rewriteLocalityTransitionCost(candidates []rewriteCandidate) int {
 		}
 	}
 	return cost
+}
+
+func TestValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 200_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 200_010, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs1[0].FileID},
+		BatchSize:     8,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one rewritten record, got %d", stats.RecordsCopied)
+	}
+
+	ptrK1, flagsK1 := readProjectedPointerByKey(t, db, []byte("k1"))
+	ptrK2, flagsK2 := readProjectedPointerByKey(t, db, []byte("k2"))
+	if flagsK1&node.FlagPointer == 0 || flagsK2&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer flags for rewritten keys: k1=%#x k2=%#x", flagsK1, flagsK2)
+	}
+	if ptrK1.FileID == ptrs1[0].FileID {
+		t.Fatalf("expected k1 pointer to move off source segment %d", ptrs1[0].FileID)
+	}
+	if ptrK2.FileID != ptrs2[0].FileID {
+		t.Fatalf("expected k2 pointer to remain on non-selected segment %d, got %d", ptrs2[0].FileID, ptrK2.FileID)
+	}
+}
+
+func TestValueLogRewriteOnline_SparseSelection_RewritesHighStaleSegment(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	// Segment 1: two records (one referenced, one stale).
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 210_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("x"), 256)
+	})
+	// Segment 2: one referenced record.
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 210_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("y"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:            8,
+		MaxSourceSegments:    1,
+		MaxSourceBytes:       4 << 20,
+		MinSegmentStaleRatio: 0.30,
+		MinSegmentStaleBytes: 1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one rewritten record from sparse segment, got %d", stats.RecordsCopied)
+	}
+
+	ptrK1, _ := readProjectedPointerByKey(t, db, []byte("k1"))
+	ptrK2, _ := readProjectedPointerByKey(t, db, []byte("k2"))
+	if ptrK1.FileID == ptrs1[0].FileID {
+		t.Fatalf("expected k1 pointer to move off stale source segment %d", ptrs1[0].FileID)
+	}
+	if ptrK2.FileID != ptrs2[0].FileID {
+		t.Fatalf("expected k2 pointer to remain on segment %d, got %d", ptrs2[0].FileID, ptrK2.FileID)
+	}
+}
+
+func TestValueLogRewriteOnline_SparseSelection_NoSelectedSources_IsNoOp(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	// One fully-live segment: no stale bytes means sparse source selection should
+	// select nothing and return a deterministic no-op stats result.
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 220_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("z"), 256)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:            8,
+		MaxSourceSegments:    1,
+		MinSegmentStaleRatio: 0.5,
+		MinSegmentStaleBytes: 1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 0 {
+		t.Fatalf("expected no-op rewrite with zero copied records, got %d", stats.RecordsCopied)
+	}
+	if stats.SegmentsAfter != stats.SegmentsBefore {
+		t.Fatalf("expected no-op segment count stats, before=%d after=%d", stats.SegmentsBefore, stats.SegmentsAfter)
+	}
+	if stats.BytesAfter != stats.BytesBefore {
+		t.Fatalf("expected no-op byte stats, before=%d after=%d", stats.BytesBefore, stats.BytesAfter)
+	}
+}
+
+func readProjectedPointerByKey(t *testing.T, db *DB, key []byte) (page.ValuePtr, byte) {
+	t.Helper()
+	it, err := db.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions: %v", err)
+	}
+	defer it.Close()
+	for ; it.Valid(); it.Next() {
+		if !bytes.Equal(it.UnsafeKey(), key) {
+			continue
+		}
+		_, ptr, flags := it.UnsafeEntry()
+		return ptr, flags
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("projection iterator error: %v", err)
+	}
+	t.Fatalf("missing key %q in projection iterator", key)
+	return page.ValuePtr{}, 0
+}
+
+func TestSelectRewriteSourceSegments_OversizeCandidates_SelectsOne(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "v1.log")
+	path2 := filepath.Join(dir, "v2.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte{1}, 100), 0o644); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte{2}, 100), 0o644); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	active := map[uint32]struct{}{}
+	liveByID := map[uint32]int64{
+		1: 90, // stale 10
+		2: 80, // stale 20 (preferred)
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceBytes:       32,
+		MaxSourceSegments:    2,
+		MinSegmentStaleBytes: 1,
+	}, files, active, liveByID)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected one selected segment when all candidates exceed byte budget, got %d", len(selected))
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected segment 2 selected by stale priority, got=%v", selected)
+	}
 }

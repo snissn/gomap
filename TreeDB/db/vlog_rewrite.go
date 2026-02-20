@@ -10,8 +10,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -44,6 +46,21 @@ type ValueLogRewriteOnlineOptions struct {
 	// LocalityPolicy controls ordering of rewritten pointer candidates within
 	// each batch.
 	LocalityPolicy ValueLogRewriteLocalityPolicy
+	// SourceFileIDs restricts rewrite to pointers currently referencing these
+	// value-log segment IDs. Missing IDs are ignored.
+	SourceFileIDs []uint32
+	// MaxSourceSegments bounds the number of source segments selected by sparse
+	// segment selection. Applies only when SourceFileIDs is empty.
+	MaxSourceSegments int
+	// MaxSourceBytes bounds estimated live bytes selected by sparse segment
+	// selection. Applies only when SourceFileIDs is empty.
+	MaxSourceBytes int64
+	// MinSegmentStaleRatio requires stale_bytes/segment_size to be at least this
+	// value (0..1) when sparse segment selection is used.
+	MinSegmentStaleRatio float64
+	// MinSegmentStaleBytes requires estimated stale bytes to be at least this
+	// threshold when sparse segment selection is used.
+	MinSegmentStaleBytes int64
 }
 
 type rewriteSwap struct {
@@ -108,6 +125,231 @@ func orderRewriteCandidates(candidates []rewriteCandidate, policy ValueLogRewrit
 	})
 }
 
+func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
+	if len(opts.SourceFileIDs) > 0 {
+		return true
+	}
+	if opts.MaxSourceSegments > 0 {
+		return true
+	}
+	if opts.MaxSourceBytes > 0 {
+		return true
+	}
+	if opts.MinSegmentStaleRatio > 0 {
+		return true
+	}
+	if opts.MinSegmentStaleBytes > 0 {
+		return true
+	}
+	return false
+}
+
+func normalizeStaleRatio(v float64) float64 {
+	if v <= 0 {
+		return 0
+	}
+	if v >= 1 {
+		return 1
+	}
+	return v
+}
+
+func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint32]int64, error) {
+	liveByID := make(map[uint32]int64)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.state == nil || snap.idx == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return nil, fmt.Errorf("missing snapshot state")
+	}
+
+	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID); err != nil {
+		_ = userIter.Close()
+		_ = snap.Close()
+		return nil, err
+	}
+	_ = userIter.Close()
+
+	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, "", false, nil, nil), snap.state.SystemRootPageID).
+		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID); err != nil {
+		_ = sysIter.Close()
+		_ = snap.Close()
+		return nil, err
+	}
+	_ = sysIter.Close()
+
+	if err := snap.Close(); err != nil {
+		return nil, err
+	}
+	return liveByID, nil
+}
+
+func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64) error {
+	for it.Valid() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(ptr.FileID) {
+			it.Next()
+			continue
+		}
+		liveByID[ptr.FileID] += int64(page.ValuePtrRecordLength(ptr))
+		nested, err := db.outerLeafNestedBlobRefLiveBytes(ptr)
+		if err != nil {
+			return err
+		}
+		for fileID, n := range nested {
+			if n == 0 {
+				continue
+			}
+			liveByID[fileID] += n
+		}
+		it.Next()
+	}
+	return it.Error()
+}
+
+func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int64, error) {
+	if db == nil || db.valueLogManager == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(db.indexOuterLeafMode) != IndexOuterLeafModeV2FencePtr {
+		return nil, nil
+	}
+	payload, err := db.valueLogManager.Read(ptr)
+	if err != nil {
+		return nil, err
+	}
+	if !outerleaf.HasMagic(payload) {
+		return nil, nil
+	}
+	block, err := outerleaf.DecodeBlockLease(payload)
+	if err != nil {
+		return nil, err
+	}
+	defer block.Release()
+	typed, err := block.TypedEntries(nil)
+	if err != nil {
+		return nil, err
+	}
+	refs := make(map[uint32]int64, 4)
+	for i := range typed {
+		if typed[i].Kind != outerleaf.EntryKindBlobRef {
+			continue
+		}
+		blobPtr := typed[i].BlobPtr
+		if !page.IsValueLogFileID(blobPtr.FileID) {
+			return nil, fmt.Errorf("treedb: invalid nested blob pointer file %d", blobPtr.FileID)
+		}
+		refs[blobPtr.FileID] += int64(page.ValuePtrRecordLength(blobPtr))
+	}
+	return refs, nil
+}
+
+type rewriteSourceSegment struct {
+	fileID     uint32
+	liveBytes  int64
+	staleBytes int64
+	staleRatio float64
+}
+
+func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) map[uint32]struct{} {
+	if len(opts.SourceFileIDs) > 0 {
+		selected := make(map[uint32]struct{}, len(opts.SourceFileIDs))
+		for _, id := range opts.SourceFileIDs {
+			if _, ok := files[id]; !ok {
+				continue
+			}
+			selected[id] = struct{}{}
+		}
+		return selected
+	}
+
+	minStaleRatio := normalizeStaleRatio(opts.MinSegmentStaleRatio)
+	minStaleBytes := opts.MinSegmentStaleBytes
+	maxSourceSegments := opts.MaxSourceSegments
+	maxSourceBytes := opts.MaxSourceBytes
+
+	candidates := make([]rewriteSourceSegment, 0, len(files))
+	for id, f := range files {
+		if _, ok := active[id]; ok {
+			continue
+		}
+		size := fileSize(f)
+		if size <= 0 {
+			continue
+		}
+		liveBytes := liveByID[id]
+		if liveBytes < 0 {
+			liveBytes = 0
+		}
+		if liveBytes > size {
+			liveBytes = size
+		}
+		staleBytes := size - liveBytes
+		if staleBytes <= 0 {
+			continue
+		}
+		staleRatio := float64(staleBytes) / float64(size)
+		if minStaleRatio > 0 && staleRatio < minStaleRatio {
+			continue
+		}
+		if minStaleBytes > 0 && staleBytes < minStaleBytes {
+			continue
+		}
+		candidates = append(candidates, rewriteSourceSegment{
+			fileID:     id,
+			liveBytes:  liveBytes,
+			staleBytes: staleBytes,
+			staleRatio: staleRatio,
+		})
+	}
+
+	if len(candidates) == 0 {
+		return map[uint32]struct{}{}
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.staleRatio != b.staleRatio {
+			return a.staleRatio > b.staleRatio
+		}
+		if a.staleBytes != b.staleBytes {
+			return a.staleBytes > b.staleBytes
+		}
+		if a.liveBytes != b.liveBytes {
+			return a.liveBytes < b.liveBytes
+		}
+		return a.fileID < b.fileID
+	})
+
+	selected := make(map[uint32]struct{}, len(candidates))
+	var selectedBytes int64
+	for _, candidate := range candidates {
+		if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
+			break
+		}
+		if maxSourceBytes > 0 {
+			next := selectedBytes + candidate.liveBytes
+			if next > maxSourceBytes && len(selected) > 0 {
+				continue
+			}
+		}
+		selected[candidate.fileID] = struct{}{}
+		selectedBytes += candidate.liveBytes
+	}
+	return selected
+}
+
 // ValueLogRewriteOnline rewrites pointer-backed values in bounded commit
 // batches, then atomically swaps keys to rewritten pointers.
 func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewriteStats, error) {
@@ -138,7 +380,31 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		stats.SegmentsBefore++
 		stats.BytesBefore += fileSize(set.Files[id])
 	}
+	var (
+		sourceIDs      map[uint32]struct{}
+		restrictSource bool
+		err            error
+	)
+	if hasRewriteSourceSelection(opts) {
+		active := currentValueLogIDs(set)
+		var liveByID map[uint32]int64
+		if len(opts.SourceFileIDs) == 0 {
+			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
+			if err != nil {
+				_ = db.valueLogManager.Release(set)
+				return stats, err
+			}
+		}
+		sourceIDs = selectRewriteSourceSegments(opts, set.Files, active, liveByID)
+		restrictSource = true
+	}
 	_ = db.valueLogManager.Release(set)
+	if restrictSource && len(sourceIDs) == 0 {
+		// No source segments selected: this rewrite pass is a no-op.
+		stats.SegmentsAfter = stats.SegmentsBefore
+		stats.BytesAfter = stats.BytesBefore
+		return stats, nil
+	}
 
 	segments, err := listWALSegments(db.dir)
 	if err != nil {
@@ -224,6 +490,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		_, oldPtr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
 			continue
+		}
+		if restrictSource {
+			if _, ok := sourceIDs[oldPtr.FileID]; !ok {
+				continue
+			}
 		}
 		key := append([]byte(nil), it.UnsafeKey()...)
 		candidates = append(candidates, rewriteCandidate{
