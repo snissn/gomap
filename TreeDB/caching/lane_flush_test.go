@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestLaneAwareFlush(t *testing.T) {
@@ -14,6 +16,7 @@ func TestLaneAwareFlush(t *testing.T) {
 	opts := Options{
 		JournalLanes:             4,
 		MemtableShards:           4,
+		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1,
 		ValueLogPointerThreshold: 1, // Always use vlog pointers
 		AllowUnsafe:              true,
 	}
@@ -101,6 +104,7 @@ func TestLaneAwareFlushAll(t *testing.T) {
 	opts := Options{
 		JournalLanes:             4,
 		MemtableShards:           4,
+		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1,
 		ValueLogPointerThreshold: 1,
 		AllowUnsafe:              true,
 	}

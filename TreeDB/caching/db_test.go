@@ -480,7 +480,11 @@ func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
-	db, err := Open(dir, backend, Options{FlushThreshold: 1 << 60, FlushBuildConcurrency: 1})
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:        1 << 60,
+		FlushBuildConcurrency: 1,
+		IndexOuterLeafMode:    db.IndexOuterLeafModeV1,
+	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -2065,6 +2069,7 @@ func TestCachingDB_ValueLogHardCapDisablesPointers(t *testing.T) {
 		FlushThreshold:               1 << 30,
 		ValueLogPointerThreshold:     1,
 		MaxValueLogRetainedBytesHard: 1,
+		IndexOuterLeafMode:           db.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		_ = backend.Close()

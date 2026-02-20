@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -241,6 +242,7 @@ func TestFlushDeferredValueLogUnitsInlinePointerChunkingNoDropsOrDuplicates(t *t
 		ForceValueLogPointers:    true,
 		ValueLogPointerThreshold: 1,
 		FlushBuildChunkCap:       1024,
+		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
