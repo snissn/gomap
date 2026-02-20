@@ -15,6 +15,41 @@ type kv struct {
 	val []byte
 }
 
+func TestResolveOuterLeafMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		in       string
+		required bool
+		want     string
+		wantErr  bool
+	}{
+		{name: "required_empty", in: "", required: true, wantErr: true},
+		{name: "optional_empty", in: "", required: false, want: ""},
+		{name: "v1", in: "v1", required: true, want: treedb.IndexOuterLeafModeV1},
+		{name: "v2_blockptr_trim_case", in: " V2_BLOCKPTR ", required: true, want: treedb.IndexOuterLeafModeV2BlockPtr},
+		{name: "v2_fenceptr", in: "v2_fenceptr", required: true, want: treedb.IndexOuterLeafModeV2FencePtr},
+		{name: "invalid", in: "v3", required: true, wantErr: true},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveOuterLeafMode(tc.in, tc.required)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for input %q", tc.in)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error for input %q: %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Fatalf("mode=%q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestJSONLRoundTripEncodings(t *testing.T) {
 	asciiEntries := []kv{
 		{key: []byte("alpha"), val: []byte("one")},
