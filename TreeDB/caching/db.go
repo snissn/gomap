@@ -3060,6 +3060,7 @@ type DB struct {
 	queueEnqueueNS        []int64
 	nextQueueID           atomic.Uint64
 	batchEntryHint        atomic.Int32
+	batchCopyBytesHint    atomic.Int32
 	batchEntriesPool      sync.Pool
 	batchShardEntriesPool sync.Pool
 	batchIntPool          sync.Pool
@@ -13585,6 +13586,8 @@ type Batch struct {
 	backend      batch.Interface
 	size         int
 	copyArena    []byte
+	copyArenaCap int
+	copyBytes    int
 	walBuf       []logRecord
 	shardIdxs    []int
 	eligibleIdxs []int
@@ -13611,14 +13614,24 @@ func (db *DB) NewBatch() *Batch {
 	if db != nil {
 		capHint = db.batchEntriesCapHint(capHint)
 	}
-	return &Batch{db: db, entries: db.getBatchEntries(capHint), streamEligible: true}
+	return &Batch{
+		db:             db,
+		entries:        db.getBatchEntries(capHint),
+		copyArenaCap:   db.batchCopyArenaInitCap(0),
+		streamEligible: true,
+	}
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
 	if size < 0 {
 		size = 0
 	}
-	return &Batch{db: db, entries: db.getBatchEntries(size), streamEligible: true}
+	return &Batch{
+		db:             db,
+		entries:        db.getBatchEntries(size),
+		copyArenaCap:   db.batchCopyArenaInitCap(size),
+		streamEligible: true,
+	}
 }
 
 func (db *DB) batchEntriesCapHint(minCap int) int {
@@ -13666,6 +13679,60 @@ func (db *DB) observeBatchEntries(n int) {
 			return
 		}
 		if db.batchEntryHint.CompareAndSwap(int32(old), int32(next)) {
+			return
+		}
+	}
+}
+
+func (db *DB) batchCopyArenaInitCap(sizeHint int) int {
+	base := batchCopyArenaInitCapForEntries(sizeHint)
+	if db == nil {
+		return base
+	}
+	if hint := int(db.batchCopyBytesHint.Load()); hint > base {
+		base = hint
+	}
+	if base < batchCopyArenaMinChunk {
+		base = batchCopyArenaMinChunk
+	}
+	if base > batchCopyArenaInitMax {
+		base = batchCopyArenaInitMax
+	}
+	return base
+}
+
+func (db *DB) observeBatchCopyBytes(n int) {
+	if db == nil || n <= 0 {
+		return
+	}
+	if n < batchCopyArenaMinChunk {
+		n = batchCopyArenaMinChunk
+	}
+	if n > batchCopyArenaInitMax {
+		n = batchCopyArenaInitMax
+	}
+	for {
+		old := int(db.batchCopyBytesHint.Load())
+		next := n
+		if old > 0 {
+			if n > old {
+				// Increase quickly so large batches avoid repeated growth.
+				next = (old*3 + n + 1) / 4
+			} else {
+				// Decay quickly so high-water marks do not poison small batches.
+				next = (old + n + 1) / 2
+			}
+		}
+		if next < batchCopyArenaMinChunk {
+			next = batchCopyArenaMinChunk
+		}
+		if next > batchCopyArenaInitMax {
+			next = batchCopyArenaInitMax
+		}
+		if next == old {
+			return
+		}
+		if db.batchCopyBytesHint.CompareAndSwap(int32(old), int32(next)) {
 			return
 		}
 	}
@@ -13789,6 +13856,7 @@ func (b *Batch) Reset() {
 		b.copyArena = b.copyArena[:0]
 	}
 	b.size = 0
+	b.copyBytes = 0
 	b.walBuf = b.walBuf[:0]
 	b.streamEligible = true
 	b.streamTried = false
@@ -13824,6 +13892,15 @@ func (b *Batch) updateBatchEntryHint() {
 	}
 }
 
+func (b *Batch) updateBatchCopyHint() {
+	if b == nil || b.db == nil {
+		return
+	}
+	if n := b.copyBytes; n > 0 {
+		b.db.observeBatchCopyBytes(n)
+	}
+}
+
 func (b *Batch) arenaCopy(n int) []byte {
 	if n == 0 {
 		return nil
@@ -13833,17 +13910,11 @@ func (b *Batch) arenaCopy(n int) []byte {
 		if chunkCap < batchCopyArenaMinChunk {
 			chunkCap = batchCopyArenaMinChunk
 		}
-		if cap(b.copyArena) == 0 && n > 0 {
-			// For batched workloads, first-copy size is usually representative.
-			// Use reserved entry capacity to avoid repeated arena growth for both
-			// put and delete heavy paths.
-			if cap(b.entries) <= batchCopyArenaInitMax/n {
-				estimated := cap(b.entries) * n
-				if estimated > chunkCap {
-					chunkCap = estimated
-				}
-			} else if batchCopyArenaInitMax > chunkCap {
-				chunkCap = batchCopyArenaInitMax
+		if cap(b.copyArena) == 0 {
+			// Keep unsized batches conservative. Entry-slice capacity can come from
+			// pooled high-water marks and is not a reliable signal for copy payload.
+			if b.copyArenaCap > chunkCap {
+				chunkCap = b.copyArenaCap
 			}
 		}
 		if chunkCap < n {
@@ -13855,6 +13926,7 @@ func (b *Batch) arenaCopy(n int) []byte {
 	}
 	start := len(b.copyArena)
 	b.copyArena = b.copyArena[:start+n]
+	b.copyBytes += n
 	return b.copyArena[start : start+n : start+n]
 }
 
@@ -14108,11 +14180,30 @@ const (
 	// enough to amortize per-lane setup and goroutine overhead.
 	multiLaneValueLogMinRecords = 1024
 	batchCopyArenaMinChunk      = 4 << 10
+	batchCopyArenaUnsizedInit   = 16 << 10
+	batchCopyArenaBytesPerEntry = 192
 	batchCopyArenaInitMax       = 2 << 20
 	batchCopyArenaMaxRetain     = 1 << 20
 	batchEntriesPoolMaxRetain   = 16 << 10
 	batchIntSlicePoolMaxRetain  = 16 << 10
 )
+
+func batchCopyArenaInitCapForEntries(entries int) int {
+	if entries <= 0 {
+		return batchCopyArenaUnsizedInit
+	}
+	if entries > batchCopyArenaInitMax/batchCopyArenaBytesPerEntry {
+		return batchCopyArenaInitMax
+	}
+	capHint := entries * batchCopyArenaBytesPerEntry
+	if capHint < batchCopyArenaMinChunk {
+		return batchCopyArenaMinChunk
+	}
+	if capHint > batchCopyArenaInitMax {
+		return batchCopyArenaInitMax
+	}
+	return capHint
+}
 
 func (b *Batch) maybeSwitchToStreaming() {
 	if b.streamTried || !b.streamEligible || b.backend != nil {
@@ -14256,6 +14347,7 @@ func (b *Batch) write(sync bool) error {
 			b.db.noteWrite()
 		}
 		b.updateBatchEntryHint()
+		b.updateBatchCopyHint()
 		b.Reset()
 		return err
 	}
@@ -14371,6 +14463,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 		b.db.noteWrite()
 	}
 	b.updateBatchEntryHint()
+	b.updateBatchCopyHint()
 	b.Reset()
 	return true, nil
 }
@@ -15008,6 +15101,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.db.maybeAssistFlush()
 
 	b.updateBatchEntryHint()
+	b.updateBatchCopyHint()
 	b.Reset()
 	return nil
 }
@@ -15257,6 +15351,7 @@ func (b *Batch) writeBypass(sync bool) error {
 		b.db.noteWrite()
 	}
 	b.updateBatchEntryHint()
+	b.updateBatchCopyHint()
 	b.Reset()
 	return nil
 }
