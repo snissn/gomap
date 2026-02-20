@@ -52,6 +52,7 @@ var valueLogPtrPool sync.Pool                               // stores []page.Val
 var outerLeafEntryPool sync.Pool                            // stores []outerleaf.Entry
 var batchArenaPools [batchArenaClassCount]sync.Pool         // stores []byte
 var batchArenaLeasePool sync.Pool                           // stores *batchArenaLease
+var batchEntrySliceRefPool sync.Pool                        // stores *batchEntrySliceRef
 var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
 var outerLeafArenaLeaseMu sync.Mutex
 var outerLeafArenaLeases [outerLeafArenaClassCount][][]byte
@@ -77,6 +78,28 @@ const (
 
 type vlogPreparedFrameBody struct {
 	buf []byte
+}
+
+type batchEntrySliceRef struct {
+	entries []batch.Entry
+}
+
+func getBatchEntrySliceRef(entries []batch.Entry) *batchEntrySliceRef {
+	if v := batchEntrySliceRefPool.Get(); v != nil {
+		if ref, ok := v.(*batchEntrySliceRef); ok {
+			ref.entries = entries
+			return ref
+		}
+	}
+	return &batchEntrySliceRef{entries: entries}
+}
+
+func putBatchEntrySliceRef(ref *batchEntrySliceRef) {
+	if ref == nil {
+		return
+	}
+	ref.entries = nil
+	batchEntrySliceRefPool.Put(ref)
 }
 
 func getValueLogEligible(capacity int) []int {
@@ -13924,9 +13947,18 @@ func (db *DB) getBatchEntries(minCap int) []batch.Entry {
 	}
 	if db != nil {
 		if pooled := db.batchEntriesPool.Get(); pooled != nil {
-			entries := pooled.([]batch.Entry)
-			if cap(entries) >= minCap {
-				return entries[:0]
+			switch v := pooled.(type) {
+			case *batchEntrySliceRef:
+				entries := v.entries
+				putBatchEntrySliceRef(v)
+				if cap(entries) >= minCap {
+					return entries[:0]
+				}
+			case []batch.Entry:
+				// Backward-compatible fallback for any legacy pooled shape.
+				if cap(v) >= minCap {
+					return v[:0]
+				}
 			}
 		}
 	}
@@ -13942,7 +13974,7 @@ func (db *DB) putBatchEntries(entries []batch.Entry) {
 	}
 	full := entries[:cap(entries)]
 	clear(full)
-	db.batchEntriesPool.Put(full[:0])
+	db.batchEntriesPool.Put(getBatchEntrySliceRef(full[:0]))
 }
 
 func (db *DB) getBatchShardEntries(minCap int) []batch.Entry {
@@ -13951,9 +13983,18 @@ func (db *DB) getBatchShardEntries(minCap int) []batch.Entry {
 	}
 	if db != nil {
 		if pooled := db.batchShardEntriesPool.Get(); pooled != nil {
-			entries := pooled.([]batch.Entry)
-			if cap(entries) >= minCap {
-				return entries[:0]
+			switch v := pooled.(type) {
+			case *batchEntrySliceRef:
+				entries := v.entries
+				putBatchEntrySliceRef(v)
+				if cap(entries) >= minCap {
+					return entries[:0]
+				}
+			case []batch.Entry:
+				// Backward-compatible fallback for any legacy pooled shape.
+				if cap(v) >= minCap {
+					return v[:0]
+				}
 			}
 		}
 	}
@@ -13969,7 +14010,7 @@ func (db *DB) putBatchShardEntries(entries []batch.Entry) {
 	}
 	full := entries[:cap(entries)]
 	clear(full)
-	db.batchShardEntriesPool.Put(full[:0])
+	db.batchShardEntriesPool.Put(getBatchEntrySliceRef(full[:0]))
 }
 
 func (db *DB) getBatchIntSlice(minCap int) []int {
