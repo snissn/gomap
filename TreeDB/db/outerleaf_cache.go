@@ -36,10 +36,7 @@ type outerLeafBlockRef struct {
 
 var outerLeafBlockRefPool sync.Pool
 
-func newOuterLeafBlockRef(block *outerleaf.DecodedBlock) *outerLeafBlockRef {
-	if block == nil {
-		return nil
-	}
+func getOuterLeafBlockRefSlot() *outerLeafBlockRef {
 	var ref *outerLeafBlockRef
 	if v := outerLeafBlockRefPool.Get(); v != nil {
 		if pooled, ok := v.(*outerLeafBlockRef); ok {
@@ -49,9 +46,32 @@ func newOuterLeafBlockRef(block *outerleaf.DecodedBlock) *outerLeafBlockRef {
 	if ref == nil {
 		ref = &outerLeafBlockRef{}
 	}
+	return ref
+}
+
+func initOuterLeafBlockRefSlot(ref *outerLeafBlockRef, block *outerleaf.DecodedBlock) *outerLeafBlockRef {
+	if block == nil {
+		return nil
+	}
+	if ref == nil {
+		ref = getOuterLeafBlockRefSlot()
+	}
 	ref.block = block
 	ref.refs.Store(1) // cache ownership
 	return ref
+}
+
+func newOuterLeafBlockRef(block *outerleaf.DecodedBlock) *outerLeafBlockRef {
+	return initOuterLeafBlockRefSlot(nil, block)
+}
+
+func putOuterLeafBlockRefSlot(ref *outerLeafBlockRef) {
+	if ref == nil {
+		return
+	}
+	ref.block = nil
+	ref.refs.Store(0)
+	outerLeafBlockRefPool.Put(ref)
 }
 
 func (r *outerLeafBlockRef) retain() bool {
@@ -81,8 +101,7 @@ func (r *outerLeafBlockRef) release() {
 		r.block = nil
 		recycleOuterLeafDecodedBlock(block)
 	}
-	r.refs.Store(0)
-	outerLeafBlockRefPool.Put(r)
+	putOuterLeafBlockRefSlot(r)
 }
 
 func recycleOuterLeafDecodedBlock(block *outerleaf.DecodedBlock) {
@@ -126,6 +145,11 @@ type outerLeafBlockCacheShard struct {
 type outerLeafBlockCache struct {
 	shards   []outerLeafBlockCacheShard
 	capacity int
+	// Temporary counters for validating put-path contention/allocation work.
+	putAttempts       atomic.Uint64
+	putAdmitted       atomic.Uint64
+	putDuplicateDrops atomic.Uint64
+	putLockContention atomic.Uint64
 }
 
 // On heavily contended read paths, full LRU promotion on every cache hit
@@ -260,6 +284,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	if c == nil || block == nil {
 		return lease, false
 	}
+	c.putAttempts.Add(1)
 	s, keyHash := c.shardForAndHash(key)
 	if s.capacity <= 0 {
 		return lease, false
@@ -268,15 +293,19 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		if hit, same := s.hasCachedRef(key, block); hit {
 			if !same {
 				recycleOuterLeafDecodedBlock(block)
+				c.putDuplicateDrops.Add(1)
 			}
+			c.putAdmitted.Add(1)
 			return lease, true
 		}
 	} else {
 		if ref := s.tryRetain(key); ref != nil {
 			if ref.block != block {
 				recycleOuterLeafDecodedBlock(block)
+				c.putDuplicateDrops.Add(1)
 			}
 			lease.ref = ref
+			c.putAdmitted.Add(1)
 			return lease, true
 		}
 	}
@@ -289,21 +318,30 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		if ref := s.tryRetain(key); ref != nil {
 			if ref.block != block {
 				recycleOuterLeafDecodedBlock(block)
+				c.putDuplicateDrops.Add(1)
 			}
 			lease.ref = ref
+			c.putAdmitted.Add(1)
 			return lease, true
 		}
 	}
 
-	s.mu.Lock()
+	stagedRef := getOuterLeafBlockRefSlot()
+	if !s.mu.TryLock() {
+		c.putLockContention.Add(1)
+		s.mu.Lock()
+	}
 	var releaseEvicted *outerLeafBlockRef
+	var duplicateDropBlock *outerleaf.DecodedBlock
 	if idx, ok := s.entries[key]; ok {
 		ref := s.nodes[idx].ref
 		if ref == nil {
-			ref = newOuterLeafBlockRef(block)
+			ref = initOuterLeafBlockRefSlot(stagedRef, block)
+			stagedRef = nil
 			s.nodes[idx].ref = ref
 		} else if ref.block != block {
-			recycleOuterLeafDecodedBlock(block)
+			duplicateDropBlock = block
+			c.putDuplicateDrops.Add(1)
 		}
 		s.moveToFront(idx)
 		if wantLease {
@@ -312,8 +350,18 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 			}
 		}
 		s.mu.Unlock()
+		if stagedRef != nil {
+			putOuterLeafBlockRefSlot(stagedRef)
+		}
+		if duplicateDropBlock != nil {
+			recycleOuterLeafDecodedBlock(duplicateDropBlock)
+		}
 		if !wantLease {
+			c.putAdmitted.Add(1)
 			return lease, true
+		}
+		if lease.ref != nil {
+			c.putAdmitted.Add(1)
 		}
 		return lease, lease.ref != nil
 	}
@@ -328,6 +376,9 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		idx = s.tail
 		if idx < 0 {
 			s.mu.Unlock()
+			if stagedRef != nil {
+				putOuterLeafBlockRefSlot(stagedRef)
+			}
 			return lease, false
 		}
 		evictedKey := s.nodes[idx].key
@@ -341,7 +392,8 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		node.ref = releaseEvicted
 		releaseEvicted = nil
 	} else {
-		node.ref = newOuterLeafBlockRef(block)
+		node.ref = initOuterLeafBlockRefSlot(stagedRef, block)
+		stagedRef = nil
 	}
 	node.prev = -1
 	node.next = -1
@@ -356,11 +408,18 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		}
 	}
 	s.mu.Unlock()
+	if stagedRef != nil {
+		putOuterLeafBlockRefSlot(stagedRef)
+	}
 	if releaseEvicted != nil {
 		releaseEvicted.release()
 	}
 	if !wantLease {
+		c.putAdmitted.Add(1)
 		return lease, true
+	}
+	if lease.ref != nil {
+		c.putAdmitted.Add(1)
 	}
 	return lease, lease.ref != nil
 }
@@ -419,6 +478,13 @@ func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, 
 		totalMisses += s.misses.Load()
 	}
 	return totalHits, totalMisses, totalEntries, c.capacity
+}
+
+func (c *outerLeafBlockCache) putStats() (attempts uint64, admitted uint64, duplicateDrops uint64, lockContention uint64) {
+	if c == nil {
+		return 0, 0, 0, 0
+	}
+	return c.putAttempts.Load(), c.putAdmitted.Load(), c.putDuplicateDrops.Load(), c.putLockContention.Load()
 }
 
 func (c *outerLeafBlockCache) shardFor(key outerLeafBlockKey) *outerLeafBlockCacheShard {
