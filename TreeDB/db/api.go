@@ -329,9 +329,15 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.vlog.outer_leaf_block_cache.misses"] = fmt.Sprintf("%d", misses)
 			stats["treedb.vlog.outer_leaf_block_cache.entries"] = fmt.Sprintf("%d", entries)
 			stats["treedb.vlog.outer_leaf_block_cache.capacity"] = fmt.Sprintf("%d", capacity)
+			stats["treedb.vlog.outer_leaf_block_cache.policy"] = cache.policyName()
 			if total := hits + misses; total > 0 {
 				stats["treedb.vlog.outer_leaf_block_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 			}
+			putAttempts, putAdmitted, putDuplicateDrops, putLockContention := cache.putStats()
+			stats["treedb.vlog.outer_leaf_block_cache.put_attempts"] = fmt.Sprintf("%d", putAttempts)
+			stats["treedb.vlog.outer_leaf_block_cache.put_admitted"] = fmt.Sprintf("%d", putAdmitted)
+			stats["treedb.vlog.outer_leaf_block_cache.put_duplicate_drops"] = fmt.Sprintf("%d", putDuplicateDrops)
+			stats["treedb.vlog.outer_leaf_block_cache.put_lock_contention"] = fmt.Sprintf("%d", putLockContention)
 		}
 		if keyCache := db.outerLeafKeyCache; keyCache != nil {
 			hits, misses, entries, capacity := keyCache.stats()

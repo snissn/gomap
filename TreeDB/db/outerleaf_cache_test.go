@@ -101,14 +101,11 @@ func findOuterLeafCacheUnseenAdmitKey(t *testing.T, c *outerLeafBlockCache, shar
 		if _, exists := shard.entries[key]; exists {
 			continue
 		}
-		idx := outerLeafBlockKeyHash(key) & shard.admitMask
-		word := idx >> 6
-		bit := uint64(1) << (idx & 63)
-		if shard.admit[word].Load()&bit == 0 {
+		if shard.admitEstimateHash(outerLeafBlockKeyHash(key)) == 0 {
 			return key
 		}
 	}
-	t.Fatalf("unable to find unseen admission bit candidate")
+	t.Fatalf("unable to find unseen admission counter candidate")
 	return outerLeafBlockKey{}
 }
 
@@ -133,13 +130,11 @@ func findOuterLeafCachePrimaryCollisionSecondUnseenKey(t *testing.T, c *outerLea
 		if idxA != baseA || idxB == baseB {
 			continue
 		}
-		word := idxB >> 6
-		bit := uint64(1) << (idxB & 63)
-		if shard.admit[word].Load()&bit == 0 {
+		if shard.admitCounterAtIndex(idxB) == 0 {
 			return key
 		}
 	}
-	t.Fatalf("unable to find primary-collision key with unseen secondary bit")
+	t.Fatalf("unable to find primary-collision key with unseen secondary counter")
 	return outerLeafBlockKey{}
 }
 
@@ -364,6 +359,278 @@ func TestOuterLeafBlockCachePut_DuplicateKeyRecyclesIncomingBlock(t *testing.T) 
 		t.Fatalf("cache get returned unexpected block after duplicate put")
 	}
 	readLease.Release()
+}
+
+func TestOuterLeafBlockCachePutAfterMissNoLease_DuplicateDoesNotPromote(t *testing.T) {
+	cache := newOuterLeafBlockCache(8)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	if len(cache.shards) != 1 {
+		t.Fatalf("shard count=%d want=1", len(cache.shards))
+	}
+	shard := &cache.shards[0]
+	keyA := makeOuterLeafCacheTestKey(7001)
+	keyB := makeOuterLeafCacheTestKey(7002)
+
+	blockA := makeOuterLeafCacheTestLeaseBlock(t, 7001)
+	blockB := makeOuterLeafCacheTestLeaseBlock(t, 7002)
+	cache.put(keyA, blockA)
+	cache.put(keyB, blockB)
+
+	shard.mu.RLock()
+	if shard.head < 0 || shard.tail < 0 {
+		shard.mu.RUnlock()
+		t.Fatalf("invalid list state head=%d tail=%d", shard.head, shard.tail)
+	}
+	if got := shard.nodes[shard.head].key; got != keyB {
+		shard.mu.RUnlock()
+		t.Fatalf("head key=%+v want=%+v", got, keyB)
+	}
+	if got := shard.nodes[shard.tail].key; got != keyA {
+		shard.mu.RUnlock()
+		t.Fatalf("tail key=%+v want=%+v", got, keyA)
+	}
+	shard.mu.RUnlock()
+
+	dup := makeOuterLeafCacheTestLeaseBlock(t, 7003)
+	cache.putAfterMissNoLease(keyA, dup)
+
+	if dup.RawBytes() != nil {
+		t.Fatalf("duplicate incoming block was not recycled")
+	}
+	if blockA.RawBytes() == nil {
+		t.Fatalf("existing cached block unexpectedly recycled")
+	}
+
+	shard.mu.RLock()
+	if got := shard.nodes[shard.head].key; got != keyB {
+		shard.mu.RUnlock()
+		t.Fatalf("head key moved by duplicate no-lease put: got=%+v want=%+v", got, keyB)
+	}
+	if got := shard.nodes[shard.tail].key; got != keyA {
+		shard.mu.RUnlock()
+		t.Fatalf("tail key moved by duplicate no-lease put: got=%+v want=%+v", got, keyA)
+	}
+	shard.mu.RUnlock()
+}
+
+func TestOuterLeafBlockCachePutAfterMissNoLease_WarmShardDropsUnderContention(t *testing.T) {
+	cache := newOuterLeafBlockCache(130)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	if len(cache.shards) == 0 {
+		t.Fatalf("cache has no shards")
+	}
+	shard := &cache.shards[0]
+	if shard.capacity <= 64 {
+		t.Fatalf("shard capacity=%d want >64 to exercise warm/full admission behavior", shard.capacity)
+	}
+	fillOuterLeafCacheShardToEntries(t, cache, shard, shard.capacity/2)
+	key := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, 8_000_000)
+	_ = shard.shouldAdmit(key) // prime seen bits so second-touch admission passes
+
+	_, _, _, lockContentionBefore := cache.putStats()
+	block := makeOuterLeafCacheTestLeaseBlock(t, 8_100_000)
+	shard.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		cache.putAfterMissNoLease(key, block)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		shard.mu.Unlock()
+		t.Fatalf("putAfterMissNoLease blocked on warm shard contention")
+	}
+	shard.mu.Unlock()
+
+	if block.RawBytes() != nil {
+		t.Fatalf("contention-dropped block was not recycled")
+	}
+	if got, lease := cache.get(key); got != nil {
+		lease.Release()
+		t.Fatalf("contention-dropped key unexpectedly present in cache")
+	}
+	_, _, _, lockContentionAfter := cache.putStats()
+	if lockContentionAfter <= lockContentionBefore {
+		t.Fatalf("lock contention counter did not increase: before=%d after=%d", lockContentionBefore, lockContentionAfter)
+	}
+}
+
+func TestOuterLeafBlockCacheSLRUPolicy_ProtectsPromotedEntry(t *testing.T) {
+	cache := newOuterLeafBlockCacheWithPolicy(2, outerLeafBlockCachePolicySLRU)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	if len(cache.shards) != 1 {
+		t.Fatalf("shard count=%d want=1", len(cache.shards))
+	}
+	shard := &cache.shards[0]
+	keyA := makeOuterLeafCacheTestKey(9001)
+	keyB := makeOuterLeafCacheTestKey(9002)
+	keyC := makeOuterLeafCacheTestKey(9003)
+
+	first := makeOuterLeafCacheTestLeaseBlock(t, 9001)
+	cache.put(keyA, first)
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA hit after first put")
+	} else {
+		lease.Release()
+	}
+
+	second := makeOuterLeafCacheTestLeaseBlock(t, 9002)
+	cache.put(keyB, second)
+
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA hit for promotion")
+	} else {
+		lease.Release()
+	}
+	for i := 0; i < 32; i++ {
+		shard.mu.RLock()
+		idxA, okA := shard.entries[keyA]
+		segment := outerLeafBlockCacheSegmentProbation
+		if okA {
+			segment = shard.nodes[idxA].segment
+		}
+		shard.mu.RUnlock()
+		if okA && segment == outerLeafBlockCacheSegmentProtected {
+			break
+		}
+		if got, lease := cache.get(keyA); got == nil {
+			lease.Release()
+			t.Fatalf("expected keyA hit during promotion retries")
+		} else {
+			lease.Release()
+		}
+	}
+
+	shard.mu.RLock()
+	idxA, okA := shard.entries[keyA]
+	if !okA {
+		shard.mu.RUnlock()
+		t.Fatalf("missing keyA after promotion")
+	}
+	if got := shard.nodes[idxA].segment; got != outerLeafBlockCacheSegmentProtected {
+		shard.mu.RUnlock()
+		t.Fatalf("keyA segment=%d want protected", got)
+	}
+	shard.mu.RUnlock()
+
+	third := makeOuterLeafCacheTestLeaseBlock(t, 9003)
+	cache.put(keyC, third)
+
+	if got, lease := cache.get(keyB); got != nil {
+		lease.Release()
+		t.Fatalf("expected keyB eviction from probation")
+	}
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA retained in protected segment")
+	} else {
+		lease.Release()
+	}
+	if got, lease := cache.get(keyC); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyC hit after replacement")
+	} else {
+		lease.Release()
+	}
+}
+
+func TestOuterLeafBlockCacheSLRUPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *testing.T) {
+	cache := newOuterLeafBlockCacheWithPolicy(8, outerLeafBlockCachePolicySLRU)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	key := makeOuterLeafCacheTestKey(9101)
+
+	first := makeOuterLeafCacheTestLeaseBlock(t, 9101)
+	lease, admitted := cache.putWithLease(key, first)
+	if !admitted || lease.ref == nil {
+		t.Fatalf("first putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
+	}
+	lease.Release()
+
+	second := makeOuterLeafCacheTestLeaseBlock(t, 9102)
+	lease, admitted = cache.putWithLease(key, second)
+	if !admitted || lease.ref == nil {
+		t.Fatalf("duplicate putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
+	}
+	lease.Release()
+	if second.RawBytes() != nil {
+		t.Fatalf("duplicate incoming block not recycled under slru policy")
+	}
+}
+
+func TestOuterLeafBlockCacheSIEVEPolicy_SecondChanceProtectsHitEntry(t *testing.T) {
+	cache := newOuterLeafBlockCacheWithPolicy(2, outerLeafBlockCachePolicySIEVE)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	keyA := makeOuterLeafCacheTestKey(9201)
+	keyB := makeOuterLeafCacheTestKey(9202)
+	keyC := makeOuterLeafCacheTestKey(9203)
+
+	cache.put(keyA, makeOuterLeafCacheTestLeaseBlock(t, 9201))
+	cache.put(keyB, makeOuterLeafCacheTestLeaseBlock(t, 9202))
+
+	// Hit keyA once so SIEVE grants it a second chance during eviction scan.
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA hit before replacement")
+	} else {
+		lease.Release()
+	}
+
+	cache.put(keyC, makeOuterLeafCacheTestLeaseBlock(t, 9203))
+
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA retained after second-chance")
+	} else {
+		lease.Release()
+	}
+	if got, lease := cache.get(keyB); got != nil {
+		lease.Release()
+		t.Fatalf("expected keyB eviction from sieve tail scan")
+	}
+	if got, lease := cache.get(keyC); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyC present after insertion")
+	} else {
+		lease.Release()
+	}
+}
+
+func TestOuterLeafBlockCacheSIEVEPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *testing.T) {
+	cache := newOuterLeafBlockCacheWithPolicy(8, outerLeafBlockCachePolicySIEVE)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	key := makeOuterLeafCacheTestKey(9301)
+
+	first := makeOuterLeafCacheTestLeaseBlock(t, 9301)
+	lease, admitted := cache.putWithLease(key, first)
+	if !admitted || lease.ref == nil {
+		t.Fatalf("first putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
+	}
+	lease.Release()
+
+	second := makeOuterLeafCacheTestLeaseBlock(t, 9302)
+	lease, admitted = cache.putWithLease(key, second)
+	if !admitted || lease.ref == nil {
+		t.Fatalf("duplicate putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
+	}
+	lease.Release()
+	if second.RawBytes() != nil {
+		t.Fatalf("duplicate incoming block not recycled under sieve policy")
+	}
 }
 
 func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrentReadPressure(t *testing.T) {

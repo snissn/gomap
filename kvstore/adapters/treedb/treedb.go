@@ -247,11 +247,11 @@ func (d *DB) NewBatch() (kvstore.Batch, error) {
 		return nil, kvstore.ErrUnsupported
 	}
 	wrapped := &batch{b: b}
-	if sv, ok := b.(interface{ SetView(key, value []byte) error }); ok {
-		wrapped.setView = sv.SetView
+	if sv, ok := b.(batchSetViewer); ok {
+		wrapped.setView = sv
 	}
-	if dv, ok := b.(interface{ DeleteView(key []byte) error }); ok {
-		wrapped.deleteView = dv.DeleteView
+	if dv, ok := b.(batchDeleteViewer); ok {
+		wrapped.deleteView = dv
 	}
 	return wrapped, nil
 }
@@ -262,19 +262,27 @@ func (d *DB) NewBatchWithSize(size int) (kvstore.Batch, error) {
 		return nil, kvstore.ErrUnsupported
 	}
 	wrapped := &batch{b: b}
-	if sv, ok := b.(interface{ SetView(key, value []byte) error }); ok {
-		wrapped.setView = sv.SetView
+	if sv, ok := b.(batchSetViewer); ok {
+		wrapped.setView = sv
 	}
-	if dv, ok := b.(interface{ DeleteView(key []byte) error }); ok {
-		wrapped.deleteView = dv.DeleteView
+	if dv, ok := b.(batchDeleteViewer); ok {
+		wrapped.deleteView = dv
 	}
 	return wrapped, nil
 }
 
+type batchSetViewer interface {
+	SetView(key, value []byte) error
+}
+
+type batchDeleteViewer interface {
+	DeleteView(key []byte) error
+}
+
 type batch struct {
 	b          treedb.Batch
-	setView    func(key, value []byte) error
-	deleteView func(key []byte) error
+	setView    batchSetViewer
+	deleteView batchDeleteViewer
 }
 
 func (b *batch) Set(key, value []byte) error {
@@ -290,7 +298,7 @@ func (b *batch) Delete(key []byte) error {
 // Commit/CommitSync/Close.
 func (b *batch) SetView(key, value []byte) error {
 	if b.setView != nil {
-		return b.setView(key, value)
+		return b.setView.SetView(key, value)
 	}
 	return b.b.Set(key, value)
 }
@@ -299,7 +307,7 @@ func (b *batch) SetView(key, value []byte) error {
 // underlying TreeDB batch.
 func (b *batch) DeleteView(key []byte) error {
 	if b.deleteView != nil {
-		return b.deleteView(key)
+		return b.deleteView.DeleteView(key)
 	}
 	return b.b.Delete(key)
 }

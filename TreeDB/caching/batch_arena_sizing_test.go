@@ -101,3 +101,33 @@ func TestBatchCopyArenaHint_UsesTotalCopiedBytes(t *testing.T) {
 		t.Fatalf("expected init hint to reflect total copied bytes, got=%d", got)
 	}
 }
+
+func TestBatchReset_RefreshesCopyArenaCapFromDecayedHint(t *testing.T) {
+	var db DB
+
+	// Simulate a historical high-water mark.
+	db.observeBatchCopyBytes(1 << 20)
+	staleCap := db.batchCopyArenaInitCap(0)
+	if staleCap < (512 << 10) {
+		t.Fatalf("expected stale cap to reflect high-water mark, got=%d", staleCap)
+	}
+
+	// Simulate sustained small batches causing hint decay.
+	for i := 0; i < 8; i++ {
+		db.observeBatchCopyBytes(16 << 10)
+	}
+	decayedCap := db.batchCopyArenaInitCap(0)
+	if decayedCap >= staleCap {
+		t.Fatalf("expected decayed cap < stale cap, stale=%d decayed=%d", staleCap, decayedCap)
+	}
+
+	b := &Batch{
+		db:           &db,
+		copyArenaCap: staleCap,
+	}
+	b.Reset()
+
+	if got := b.copyArenaCap; got != decayedCap {
+		t.Fatalf("reset copyArenaCap=%d want=%d", got, decayedCap)
+	}
+}
