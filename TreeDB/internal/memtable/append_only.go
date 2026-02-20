@@ -18,22 +18,22 @@ const (
 	// Size accounting uses key+value/pointer payload bytes, not the in-memory
 	// appendOnlyEntry struct footprint. A lower estimate reduces growth/copy
 	// churn for pointer-heavy write paths.
-	appendOnlyEstimatedBytesPerEntry = 24
-	appendOnlyMinInitialEntries      = 128
-	appendOnlyMaxInitialEntries      = 1 << 20
-	appendOnlyInlineKeyLen           = 8
-	appendOnlyPointerGrowCutoff      = 1 << 15
-	appendOnlyEntryPoolMaxCap        = 1 << 20
-	appendOnlyIteratorPoolMaxCap     = 1 << 20
-	appendOnlyIteratorPtrPoolMaxCap  = 1 << 20
-	appendOnlyReusableKeyMaxCap      = 1 << 10
-	appendOnlyValueArenaMinShift     = 12
-	appendOnlyValueArenaMaxShift     = 20
-	appendOnlyValueArenaClassCount   = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
-	appendOnlyValueArenaDefaultChunk = 32 << 10
-	appendOnlyValueArenaPoolMaxCap   = 1 << appendOnlyValueArenaMaxShift
-	appendOnlyValueArenaRetainMaxCap = 4 << 20
-	appendOnlyValueArenaRetainChunks = 128
+	appendOnlyEstimatedBytesPerEntryPointer = 24
+	appendOnlyMinInitialEntries             = 128
+	appendOnlyMaxInitialEntries             = 1 << 20
+	appendOnlyInlineKeyLen                  = 8
+	appendOnlyPointerGrowCutoff             = 1 << 15
+	appendOnlyEntryPoolMaxCap               = 1 << 20
+	appendOnlyIteratorPoolMaxCap            = 1 << 20
+	appendOnlyIteratorPtrPoolMaxCap         = 1 << 20
+	appendOnlyReusableKeyMaxCap             = 1 << 10
+	appendOnlyValueArenaMinShift            = 12
+	appendOnlyValueArenaMaxShift            = 20
+	appendOnlyValueArenaClassCount          = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
+	appendOnlyValueArenaDefaultChunk        = 32 << 10
+	appendOnlyValueArenaPoolMaxCap          = 1 << appendOnlyValueArenaMaxShift
+	appendOnlyValueArenaRetainMaxCap        = 4 << 20
+	appendOnlyValueArenaRetainChunks        = 128
 )
 
 var appendOnlyEntryPool sync.Pool
@@ -159,17 +159,29 @@ func putAppendOnlyIteratorPtrs(entries []*appendOnlyEntry) {
 	appendOnlyIteratorPtrPool.Put(entries[:0])
 }
 
-func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
+func appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry int) int {
 	if capacity <= 0 {
 		capacity = defaultMemtableCapacity
 	}
-	n := capacity / appendOnlyEstimatedBytesPerEntry
+	if estimatedBytesPerEntry <= 0 {
+		estimatedBytesPerEntry = appendOnlyEstimatedBytesPerEntryPointer
+	}
+	n := capacity / estimatedBytesPerEntry
 	if n < appendOnlyMinInitialEntries {
 		n = appendOnlyMinInitialEntries
 	}
 	if n > appendOnlyMaxInitialEntries {
 		n = appendOnlyMaxInitialEntries
 	}
+	return n
+}
+
+func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
+	return NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, appendOnlyEstimatedBytesPerEntryPointer)
+}
+
+func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEntry int) *AppendOnly {
+	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
 	return &AppendOnly{
 		entries:   getAppendOnlyEntries(n),
 		count:     0,

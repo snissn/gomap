@@ -3528,6 +3528,7 @@ type memtableView struct {
 }
 
 const maxAppendOnlyMemLeases = 256
+const appendOnlyEstimatedBytesPerEntryDeferredFence = 96
 
 func (db *DB) retainMemtableView() *memtableView {
 	if db == nil {
@@ -3722,6 +3723,11 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 				return mt, nil
 			}
 		}
+		estimate := 0
+		if db.deferredValueLogEnabled() {
+			estimate = appendOnlyEstimatedBytesPerEntryDeferredFence
+		}
+		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
 	}
 	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
 }
@@ -4326,7 +4332,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	warmupCap := shardCapacity(memtableCapacity(warmupThreshold), shardCount)
 	indexer := memtable.NewHashSortedIndexer()
 	mutableShards := make([]memShard, shardCount)
+	appendOnlyEstimate := 0
+	if mode == memtable.ModeAppendOnly && indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr {
+		appendOnlyEstimate = appendOnlyEstimatedBytesPerEntryDeferredFence
+	}
 	for i := range mutableShards {
+		if mode == memtable.ModeAppendOnly {
+			mutableShards[i] = memShard{mem: memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(warmupCap, appendOnlyEstimate)}
+			continue
+		}
 		mt, err := memtable.NewWithCapacityModeAndIndexer(warmupCap, mode, indexer)
 		if err != nil {
 			return nil, err

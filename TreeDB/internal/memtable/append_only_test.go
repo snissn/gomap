@@ -34,6 +34,32 @@ func TestAppendOnlyNextCapacityGrowthPolicy(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyInitialEntriesForCapacity(t *testing.T) {
+	t.Run("pointer-estimate", func(t *testing.T) {
+		capacity := defaultMemtableCapacity
+		got := appendOnlyInitialEntriesForCapacity(capacity, appendOnlyEstimatedBytesPerEntryPointer)
+		want := capacity / appendOnlyEstimatedBytesPerEntryPointer
+		if got != want {
+			t.Fatalf("pointer estimate entries=%d want=%d", got, want)
+		}
+	})
+
+	t.Run("custom-estimate", func(t *testing.T) {
+		capacity := 96 * 200
+		got := appendOnlyInitialEntriesForCapacity(capacity, 96)
+		if got != 200 {
+			t.Fatalf("custom estimate entries=%d want=%d", got, 200)
+		}
+	})
+
+	t.Run("minimum-clamp", func(t *testing.T) {
+		got := appendOnlyInitialEntriesForCapacity(1, 1<<20)
+		if got != appendOnlyMinInitialEntries {
+			t.Fatalf("min clamp entries=%d want=%d", got, appendOnlyMinInitialEntries)
+		}
+	})
+}
+
 func TestAppendOnlyCRUD(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 
