@@ -1040,6 +1040,7 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.v2_fenceptr.assist_calls",
 		"treedb.cache.v2_fenceptr.assist_flushed_memtables",
 		"treedb.cache.v2_fenceptr.assist_early_triggers",
+		"treedb.vlog.outer_leaf_block_cache.policy",
 		"treedb.vlog.outer_leaf_block_cache.hits",
 		"treedb.vlog.outer_leaf_block_cache.misses",
 		"treedb.vlog.outer_leaf_block_cache.hit_ratio",

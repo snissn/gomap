@@ -1,6 +1,8 @@
 package db
 
 import (
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -23,10 +25,11 @@ func newOuterLeafBlockKey(ptr page.ValuePtr) outerLeafBlockKey {
 }
 
 type outerLeafBlockCacheEntry struct {
-	key  outerLeafBlockKey
-	ref  *outerLeafBlockRef
-	prev int
-	next int
+	key     outerLeafBlockKey
+	ref     *outerLeafBlockRef
+	prev    int
+	next    int
+	segment uint8
 }
 
 type outerLeafBlockRef struct {
@@ -149,11 +152,19 @@ type outerLeafBlockCacheShard struct {
 	admitDecaying atomic.Uint32
 	// admitFloor tracks recent victim frequency (EWMA) for admission thresholding.
 	admitFloor atomic.Uint32
+	// SLRU state: probation and protected segment lists.
+	slruProbHead  int
+	slruProbTail  int
+	slruProtHead  int
+	slruProtTail  int
+	slruProtCount int
+	slruProtCap   int
 }
 
 type outerLeafBlockCache struct {
 	shards   []outerLeafBlockCacheShard
 	capacity int
+	policy   outerLeafBlockCachePolicy
 	// Temporary counters for validating put-path contention/allocation work.
 	putAttempts       atomic.Uint64
 	putAdmitted       atomic.Uint64
@@ -161,10 +172,23 @@ type outerLeafBlockCache struct {
 	putLockContention atomic.Uint64
 }
 
+type outerLeafBlockCachePolicy uint8
+
+const (
+	outerLeafBlockCachePolicyLRU outerLeafBlockCachePolicy = iota
+	outerLeafBlockCachePolicySLRU
+)
+
+const outerLeafBlockCachePolicyEnv = "TREEDB_OUTER_LEAF_BLOCK_CACHE_POLICY"
+
+var outerLeafBlockCachePolicyOnce sync.Once
+var outerLeafBlockCachePolicyCached outerLeafBlockCachePolicy
+
 // On heavily contended read paths, full LRU promotion on every cache hit
 // creates avoidable write-lock churn. Promote a sampled subset of hits to keep
 // recency reasonably fresh while reducing lock pressure.
-const outerLeafBlockCachePromoteSampleMask uint64 = 0x0f // 1/16
+const outerLeafBlockCachePromoteSampleMask uint64 = 0x0f              // 1/16
+const outerLeafBlockCacheSLRUProbationPromoteSampleMask uint64 = 0x03 // 1/4
 
 // Keep shard fanout bounded while aiming for modest per-shard queueing under
 // mixed read/write contention.
@@ -181,8 +205,16 @@ const outerLeafBlockCacheAdmitDecayMinSamples = 256
 const outerLeafBlockCacheAdmitThresholdMin uint8 = 2
 const outerLeafBlockCacheAdmitThresholdMax uint8 = 4
 const outerLeafBlockCacheAdmitVictimEWMAWeight = 7 // 7/8 old + 1/8 new
+const outerLeafBlockCacheSLRUProtectedFractionNum = 1
+const outerLeafBlockCacheSLRUProtectedFractionDen = 2
+const outerLeafBlockCacheSegmentProbation uint8 = 0
+const outerLeafBlockCacheSegmentProtected uint8 = 1
 
 func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
+	return newOuterLeafBlockCacheWithPolicy(capacity, outerLeafBlockCacheDefaultPolicy())
+}
+
+func newOuterLeafBlockCacheWithPolicy(capacity int, policy outerLeafBlockCachePolicy) *outerLeafBlockCache {
 	if capacity <= 0 {
 		return nil
 	}
@@ -250,13 +282,58 @@ func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
 			admit:           make([]atomic.Uint64, admitWords),
 			admitMask:       admitMask,
 			admitDecayEvery: admitDecayEvery,
+			slruProbHead:    -1,
+			slruProbTail:    -1,
+			slruProtHead:    -1,
+			slruProtTail:    -1,
+			slruProtCap:     0,
+		}
+		if policy == outerLeafBlockCachePolicySLRU {
+			protCap := (capI * outerLeafBlockCacheSLRUProtectedFractionNum) / outerLeafBlockCacheSLRUProtectedFractionDen
+			if capI <= 1 {
+				protCap = capI
+			} else {
+				if protCap < 1 {
+					protCap = 1
+				}
+				if protCap >= capI {
+					protCap = capI - 1
+				}
+			}
+			shards[i].slruProtCap = protCap
 		}
 	}
 
 	return &outerLeafBlockCache{
 		shards:   shards,
 		capacity: capacity,
+		policy:   policy,
 	}
+}
+
+func outerLeafBlockCacheDefaultPolicy() outerLeafBlockCachePolicy {
+	outerLeafBlockCachePolicyOnce.Do(func() {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(outerLeafBlockCachePolicyEnv))) {
+		case "slru", "2q":
+			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicySLRU
+		case "clock":
+			// Backward-compatible alias from the prior experiment.
+			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicySLRU
+		default:
+			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicyLRU
+		}
+	})
+	return outerLeafBlockCachePolicyCached
+}
+
+func (c *outerLeafBlockCache) policyName() string {
+	if c == nil {
+		return "disabled"
+	}
+	if c.policy == outerLeafBlockCachePolicySLRU {
+		return "slru"
+	}
+	return "lru"
 }
 
 func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBlock, outerLeafBlockCacheLease) {
@@ -276,7 +353,8 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBloc
 		return nil, lease
 	}
 	block := ref.block
-	needPromote := idx != s.head
+	segment := s.nodes[idx].segment
+	needPromoteLRU := c.policy == outerLeafBlockCachePolicyLRU && idx != s.head
 	s.mu.RUnlock()
 	if block == nil {
 		ref.release()
@@ -284,11 +362,26 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBloc
 		return nil, lease
 	}
 	hits := s.hits.Add(1)
-
-	// Best-effort recency maintenance: avoid blocking readers on shard write
-	// lock when contended. This preserves functional behavior and keeps LRU
-	// ordering close under concurrency.
-	if needPromote && (hits&outerLeafBlockCachePromoteSampleMask) == 0 && s.mu.TryLock() {
+	if c.policy == outerLeafBlockCachePolicySLRU {
+		// Probation hits should promote into protected, but sample promotions so
+		// the read path does not attempt a write lock on every hit.
+		shouldPromoteProbation := segment == outerLeafBlockCacheSegmentProbation && (hits&outerLeafBlockCacheSLRUProbationPromoteSampleMask) == 0
+		shouldRefreshProtected := segment == outerLeafBlockCacheSegmentProtected && (hits&outerLeafBlockCachePromoteSampleMask) == 0
+		if (shouldPromoteProbation || shouldRefreshProtected) && s.mu.TryLock() {
+			if idx2, ok2 := s.entries[key]; ok2 {
+				if s.nodes[idx2].segment == outerLeafBlockCacheSegmentProbation {
+					if shouldPromoteProbation {
+						s.slruPromoteToProtected(idx2)
+					}
+				} else if shouldRefreshProtected {
+					s.slruMoveToFront(idx2)
+				}
+			}
+			s.mu.Unlock()
+		}
+	} else if needPromoteLRU && (hits&outerLeafBlockCachePromoteSampleMask) == 0 && s.mu.TryLock() {
+		// Best-effort recency maintenance: avoid blocking readers on shard write
+		// lock when contended. This keeps LRU ordering close under concurrency.
 		if idx2, ok2 := s.entries[key]; ok2 && idx2 != s.head {
 			s.moveToFront(idx2)
 		}
@@ -373,7 +466,11 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 		s.free = s.free[:n-1]
 		inserted = true
 	} else {
-		idx = s.tail
+		if c.policy == outerLeafBlockCachePolicySLRU {
+			idx = s.slruPickVictim()
+		} else {
+			idx = s.tail
+		}
 		if idx < 0 {
 			s.mu.Unlock()
 			if stagedRef != nil {
@@ -385,7 +482,11 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 		evictedHash = outerLeafBlockKeyHash(evictedKey)
 		evicted = true
 		releaseEvicted = s.nodes[idx].ref
-		s.unlink(idx)
+		if c.policy == outerLeafBlockCachePolicySLRU {
+			s.slruRemove(idx)
+		} else {
+			s.unlink(idx)
+		}
 		delete(s.entries, evictedKey)
 	}
 
@@ -400,7 +501,11 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 	}
 	node.prev = -1
 	node.next = -1
-	s.linkFront(idx)
+	if c.policy == outerLeafBlockCachePolicySLRU {
+		s.slruInsertProbation(idx)
+	} else {
+		s.linkFront(idx)
+	}
 	s.entries[key] = idx
 	if inserted {
 		s.entryCount.Add(1)
@@ -491,7 +596,11 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 			c.putDuplicateDrops.Add(1)
 		}
 		if wantLease {
-			s.moveToFront(idx)
+			if c.policy == outerLeafBlockCachePolicySLRU {
+				s.slruTouch(idx)
+			} else {
+				s.moveToFront(idx)
+			}
 		}
 		if wantLease {
 			if ref != nil && ref.retain() {
@@ -522,7 +631,11 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		s.free = s.free[:n-1]
 		inserted = true
 	} else {
-		idx = s.tail
+		if c.policy == outerLeafBlockCachePolicySLRU {
+			idx = s.slruPickVictim()
+		} else {
+			idx = s.tail
+		}
 		if idx < 0 {
 			s.mu.Unlock()
 			if stagedRef != nil {
@@ -534,7 +647,11 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		evictedHash = outerLeafBlockKeyHash(evictedKey)
 		evicted = true
 		releaseEvicted = s.nodes[idx].ref
-		s.unlink(idx)
+		if c.policy == outerLeafBlockCachePolicySLRU {
+			s.slruRemove(idx)
+		} else {
+			s.unlink(idx)
+		}
 		delete(s.entries, evictedKey)
 	}
 	node := &s.nodes[idx]
@@ -548,7 +665,11 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	}
 	node.prev = -1
 	node.next = -1
-	s.linkFront(idx)
+	if c.policy == outerLeafBlockCachePolicySLRU {
+		s.slruInsertProbation(idx)
+	} else {
+		s.linkFront(idx)
+	}
 	s.entries[key] = idx
 	if inserted {
 		s.entryCount.Add(1)
@@ -824,6 +945,148 @@ func outerLeafBlockCacheAdmitIndexes(h, mask uint64) (uint64, uint64) {
 	h ^= h >> 29
 	idxB := h & mask
 	return idxA, idxB
+}
+
+func (s *outerLeafBlockCacheShard) slruPickVictim() int {
+	if s == nil {
+		return -1
+	}
+	if s.slruProbTail >= 0 {
+		return s.slruProbTail
+	}
+	return s.slruProtTail
+}
+
+func (s *outerLeafBlockCacheShard) slruInsertProbation(idx int) {
+	if s == nil || idx < 0 || idx >= len(s.nodes) {
+		return
+	}
+	s.nodes[idx].segment = outerLeafBlockCacheSegmentProbation
+	s.slruLinkFront(idx, outerLeafBlockCacheSegmentProbation)
+}
+
+func (s *outerLeafBlockCacheShard) slruTouch(idx int) {
+	if s == nil || idx < 0 || idx >= len(s.nodes) {
+		return
+	}
+	if s.nodes[idx].segment == outerLeafBlockCacheSegmentProtected {
+		s.slruMoveToFront(idx)
+		return
+	}
+	s.slruPromoteToProtected(idx)
+}
+
+func (s *outerLeafBlockCacheShard) slruPromoteToProtected(idx int) {
+	if s == nil || idx < 0 || idx >= len(s.nodes) {
+		return
+	}
+	if s.nodes[idx].segment == outerLeafBlockCacheSegmentProtected {
+		s.slruMoveToFront(idx)
+		return
+	}
+	s.slruUnlink(idx)
+	s.nodes[idx].segment = outerLeafBlockCacheSegmentProtected
+	s.slruLinkFront(idx, outerLeafBlockCacheSegmentProtected)
+	s.slruProtCount++
+	if s.slruProtCount <= s.slruProtCap {
+		return
+	}
+	demote := s.slruProtTail
+	if demote < 0 {
+		return
+	}
+	s.slruUnlink(demote)
+	if s.slruProtCount > 0 {
+		s.slruProtCount--
+	}
+	s.nodes[demote].segment = outerLeafBlockCacheSegmentProbation
+	s.slruLinkFront(demote, outerLeafBlockCacheSegmentProbation)
+}
+
+func (s *outerLeafBlockCacheShard) slruMoveToFront(idx int) {
+	if s == nil || idx < 0 || idx >= len(s.nodes) {
+		return
+	}
+	node := &s.nodes[idx]
+	if node.segment == outerLeafBlockCacheSegmentProtected {
+		if idx == s.slruProtHead {
+			return
+		}
+	} else {
+		if idx == s.slruProbHead {
+			return
+		}
+	}
+	segment := node.segment
+	s.slruUnlink(idx)
+	s.slruLinkFront(idx, segment)
+}
+
+func (s *outerLeafBlockCacheShard) slruRemove(idx int) {
+	if s == nil || idx < 0 || idx >= len(s.nodes) {
+		return
+	}
+	segment := s.nodes[idx].segment
+	s.slruUnlink(idx)
+	if segment == outerLeafBlockCacheSegmentProtected && s.slruProtCount > 0 {
+		s.slruProtCount--
+	}
+}
+
+func (s *outerLeafBlockCacheShard) slruLinkFront(idx int, segment uint8) {
+	node := &s.nodes[idx]
+	node.segment = segment
+	node.prev = -1
+	if segment == outerLeafBlockCacheSegmentProtected {
+		node.next = s.slruProtHead
+		if s.slruProtHead >= 0 {
+			s.nodes[s.slruProtHead].prev = idx
+		}
+		s.slruProtHead = idx
+		if s.slruProtTail < 0 {
+			s.slruProtTail = idx
+		}
+		return
+	}
+	node.next = s.slruProbHead
+	if s.slruProbHead >= 0 {
+		s.nodes[s.slruProbHead].prev = idx
+	}
+	s.slruProbHead = idx
+	if s.slruProbTail < 0 {
+		s.slruProbTail = idx
+	}
+}
+
+func (s *outerLeafBlockCacheShard) slruUnlink(idx int) {
+	node := &s.nodes[idx]
+	prev := node.prev
+	next := node.next
+	if node.segment == outerLeafBlockCacheSegmentProtected {
+		if prev >= 0 {
+			s.nodes[prev].next = next
+		} else {
+			s.slruProtHead = next
+		}
+		if next >= 0 {
+			s.nodes[next].prev = prev
+		} else {
+			s.slruProtTail = prev
+		}
+	} else {
+		if prev >= 0 {
+			s.nodes[prev].next = next
+		} else {
+			s.slruProbHead = next
+		}
+		if next >= 0 {
+			s.nodes[next].prev = prev
+		} else {
+			s.slruProbTail = prev
+		}
+	}
+	node.prev = -1
+	node.next = -1
 }
 
 func (s *outerLeafBlockCacheShard) moveToFront(idx int) {

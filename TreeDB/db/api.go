@@ -329,6 +329,7 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.vlog.outer_leaf_block_cache.misses"] = fmt.Sprintf("%d", misses)
 			stats["treedb.vlog.outer_leaf_block_cache.entries"] = fmt.Sprintf("%d", entries)
 			stats["treedb.vlog.outer_leaf_block_cache.capacity"] = fmt.Sprintf("%d", capacity)
+			stats["treedb.vlog.outer_leaf_block_cache.policy"] = cache.policyName()
 			if total := hits + misses; total > 0 {
 				stats["treedb.vlog.outer_leaf_block_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 			}

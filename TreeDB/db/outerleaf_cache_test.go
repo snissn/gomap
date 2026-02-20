@@ -460,6 +460,114 @@ func TestOuterLeafBlockCachePutAfterMissNoLease_WarmShardDropsUnderContention(t 
 	}
 }
 
+func TestOuterLeafBlockCacheSLRUPolicy_ProtectsPromotedEntry(t *testing.T) {
+	cache := newOuterLeafBlockCacheWithPolicy(2, outerLeafBlockCachePolicySLRU)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	if len(cache.shards) != 1 {
+		t.Fatalf("shard count=%d want=1", len(cache.shards))
+	}
+	shard := &cache.shards[0]
+	keyA := makeOuterLeafCacheTestKey(9001)
+	keyB := makeOuterLeafCacheTestKey(9002)
+	keyC := makeOuterLeafCacheTestKey(9003)
+
+	first := makeOuterLeafCacheTestLeaseBlock(t, 9001)
+	cache.put(keyA, first)
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA hit after first put")
+	} else {
+		lease.Release()
+	}
+
+	second := makeOuterLeafCacheTestLeaseBlock(t, 9002)
+	cache.put(keyB, second)
+
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA hit for promotion")
+	} else {
+		lease.Release()
+	}
+	for i := 0; i < 32; i++ {
+		shard.mu.RLock()
+		idxA, okA := shard.entries[keyA]
+		segment := outerLeafBlockCacheSegmentProbation
+		if okA {
+			segment = shard.nodes[idxA].segment
+		}
+		shard.mu.RUnlock()
+		if okA && segment == outerLeafBlockCacheSegmentProtected {
+			break
+		}
+		if got, lease := cache.get(keyA); got == nil {
+			lease.Release()
+			t.Fatalf("expected keyA hit during promotion retries")
+		} else {
+			lease.Release()
+		}
+	}
+
+	shard.mu.RLock()
+	idxA, okA := shard.entries[keyA]
+	if !okA {
+		shard.mu.RUnlock()
+		t.Fatalf("missing keyA after promotion")
+	}
+	if got := shard.nodes[idxA].segment; got != outerLeafBlockCacheSegmentProtected {
+		shard.mu.RUnlock()
+		t.Fatalf("keyA segment=%d want protected", got)
+	}
+	shard.mu.RUnlock()
+
+	third := makeOuterLeafCacheTestLeaseBlock(t, 9003)
+	cache.put(keyC, third)
+
+	if got, lease := cache.get(keyB); got != nil {
+		lease.Release()
+		t.Fatalf("expected keyB eviction from probation")
+	}
+	if got, lease := cache.get(keyA); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyA retained in protected segment")
+	} else {
+		lease.Release()
+	}
+	if got, lease := cache.get(keyC); got == nil {
+		lease.Release()
+		t.Fatalf("expected keyC hit after replacement")
+	} else {
+		lease.Release()
+	}
+}
+
+func TestOuterLeafBlockCacheSLRUPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *testing.T) {
+	cache := newOuterLeafBlockCacheWithPolicy(8, outerLeafBlockCachePolicySLRU)
+	if cache == nil {
+		t.Fatalf("cache=nil")
+	}
+	key := makeOuterLeafCacheTestKey(9101)
+
+	first := makeOuterLeafCacheTestLeaseBlock(t, 9101)
+	lease, admitted := cache.putWithLease(key, first)
+	if !admitted || lease.ref == nil {
+		t.Fatalf("first putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
+	}
+	lease.Release()
+
+	second := makeOuterLeafCacheTestLeaseBlock(t, 9102)
+	lease, admitted = cache.putWithLease(key, second)
+	if !admitted || lease.ref == nil {
+		t.Fatalf("duplicate putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
+	}
+	lease.Release()
+	if second.RawBytes() != nil {
+		t.Fatalf("duplicate incoming block not recycled under slru policy")
+	}
+}
+
 func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrentReadPressure(t *testing.T) {
 	cache := newOuterLeafBlockCache(130)
 	if cache == nil {
