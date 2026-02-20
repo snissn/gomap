@@ -144,7 +144,11 @@ func applyV2FencePtrOuterLeafBlockCacheDefault(opts *Options) {
 	if opts == nil || opts.ValueLog.OuterLeafBlockCacheEntries != 0 {
 		return
 	}
-	if strings.EqualFold(strings.TrimSpace(opts.IndexOuterLeafMode), IndexOuterLeafModeV2FencePtr) {
+	mode := strings.TrimSpace(opts.IndexOuterLeafMode)
+	if mode == "" {
+		mode = IndexOuterLeafModeV2FencePtr
+	}
+	if strings.EqualFold(mode, IndexOuterLeafModeV2FencePtr) {
 		opts.ValueLog.OuterLeafBlockCacheEntries = defaultV2FencePtrOuterLeafBlockCacheEntries
 	}
 }
