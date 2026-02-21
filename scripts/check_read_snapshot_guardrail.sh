@@ -29,5 +29,8 @@ trap 'rm -f "$tmp1" "$tmp2"' EXIT
 
 if ! run_once "$tmp1"; then
 	echo "[guardrail] first attempt failed; retrying once..." >&2
-	run_once "$tmp2"
+	if run_once "$tmp2"; then
+		echo "[guardrail] ERROR: flaky guardrail run (first attempt failed, second passed)." >&2
+		exit 4
+	fi
 fi

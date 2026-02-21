@@ -17,8 +17,9 @@ Targeted regression guardrail for append-only writes plus read-heavy snapshot ac
 ```
 
 The script validates that `TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail`
-actually ran (to avoid `go test` false-greens when `-run` matches nothing) and
-retries once on failure to reduce transient CI runner noise.
+actually ran (to avoid `go test` false-greens when `-run` matches nothing).
+It retries once for diagnostics and still fails the job if only the retry
+passes, so flaky regressions are surfaced instead of silently passing.
 
 Direct invocation:
 

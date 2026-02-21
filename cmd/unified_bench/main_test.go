@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,6 +104,61 @@ func (d *errorGetDB) Delete(key []byte) error {
 type preferGetManyDB struct {
 	getCalls     int
 	getManyCalls int
+}
+
+type countingReadSnapshotDB struct {
+	getCalls               atomic.Int64
+	setCalls               atomic.Int64
+	acquireSnapshotCalls   atomic.Int64
+	snapshotGetCalls       atomic.Int64
+	snapshotGetAppendCalls atomic.Int64
+	snapshotCloseCalls     atomic.Int64
+}
+
+type countingReadSnapshot struct {
+	parent *countingReadSnapshotDB
+}
+
+func (d *countingReadSnapshotDB) Name() string {
+	return "SnapshotCounter"
+}
+
+func (d *countingReadSnapshotDB) Close() error {
+	return nil
+}
+
+func (d *countingReadSnapshotDB) Get(key []byte) ([]byte, error) {
+	d.getCalls.Add(1)
+	return nil, nil
+}
+
+func (d *countingReadSnapshotDB) Set(key, value []byte) error {
+	d.setCalls.Add(1)
+	return nil
+}
+
+func (d *countingReadSnapshotDB) Delete(key []byte) error {
+	return nil
+}
+
+func (d *countingReadSnapshotDB) AcquireReadSnapshot() (kvstore.ReadSnapshot, error) {
+	d.acquireSnapshotCalls.Add(1)
+	return &countingReadSnapshot{parent: d}, nil
+}
+
+func (s *countingReadSnapshot) Get(key []byte) ([]byte, error) {
+	s.parent.snapshotGetCalls.Add(1)
+	return nil, nil
+}
+
+func (s *countingReadSnapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	s.parent.snapshotGetAppendCalls.Add(1)
+	return dst, nil
+}
+
+func (s *countingReadSnapshot) Close() error {
+	s.parent.snapshotCloseCalls.Add(1)
+	return nil
 }
 
 func (d *preferGetManyDB) Name() string {
@@ -369,6 +425,52 @@ func TestRunBenchmark_RandomReadParallelAcquireSnapshot_Smoke(t *testing.T) {
 	got := run.Results["random_read_parallel_acquire_snapshot"]["TreeDB"]
 	if math.IsNaN(got) || got <= 0 {
 		t.Fatalf("expected random_read_parallel_acquire_snapshot > 0 for TreeDB, got %v", got)
+	}
+}
+
+func TestRunBenchmark_RandomReadParallelAcquireSnapshot_UsesSnapshots(t *testing.T) {
+	var db *countingReadSnapshotDB
+	const dbName = "random_read_parallel_snapshot_counter"
+	RegisterHiddenDB(dbName, func(_ string) (kvstore.DB, error) {
+		db = &countingReadSnapshotDB{}
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:         512,
+		ValueSize:    16,
+		BatchSize:    64,
+		ReadWorkers:  4,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "sequential_write,random_read_parallel_acquire_snapshot",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected test DB instance")
+	}
+	if got := db.acquireSnapshotCalls.Load(); got == 0 {
+		t.Fatalf("expected AcquireReadSnapshot to be called, got=%d", got)
+	}
+	if got := db.snapshotGetAppendCalls.Load(); got == 0 {
+		t.Fatalf("expected snapshot GetAppend to be called, got=%d", got)
+	}
+	if gotGet := db.getCalls.Load(); gotGet != 0 {
+		t.Fatalf("expected DB Get to be unused in snapshot benchmark path, got=%d calls", gotGet)
+	}
+	if gotClose, gotAcquire := db.snapshotCloseCalls.Load(), db.acquireSnapshotCalls.Load(); gotClose != gotAcquire {
+		t.Fatalf("expected snapshot closes (%d) to match acquires (%d)", gotClose, gotAcquire)
+	}
+
+	got := run.Results["random_read_parallel_acquire_snapshot"][db.Name()]
+	if math.IsNaN(got) || got <= 0 {
+		t.Fatalf("expected random_read_parallel_acquire_snapshot > 0 for %s, got %v", db.Name(), got)
 	}
 }
 
