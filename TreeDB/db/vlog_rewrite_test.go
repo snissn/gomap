@@ -135,6 +135,111 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOffline_LegacyGroupedFenceMarkerHint(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	path := filepath.Join(walDir, "value-l0-000001.log")
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("fileid: %v", err)
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("writer: %v", err)
+	}
+	ptrs, err := w.AppendFrame(0, nil, []valuelog.Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
+	if err != nil {
+		_ = w.Close()
+		t.Fatalf("append grouped frame: %v", err)
+	}
+	if len(ptrs) != 2 || !page.ValuePtrIsGrouped(ptrs[0]) || !page.ValuePtrIsGrouped(ptrs[1]) {
+		_ = w.Close()
+		t.Fatalf("expected grouped pointers from frame append")
+	}
+	for i := 0; i < 4; i++ {
+		if _, err := w.Append(0, nil, 10+uint64(i), bytes.Repeat([]byte{byte('x' + i)}, 256)); err != nil {
+			_ = w.Close()
+			t.Fatalf("append stale record %d: %v", i, err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	const legacyGroupedFenceMarkerBit = 0x00800000 // historical fence-marker bit in grouped length encoding
+	legacyPtr := ptrs[0]
+	legacyPtr.Length |= legacyGroupedFenceMarkerBit
+
+	b := db.NewBatch()
+	ptrBatch, ok := b.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch")
+	}
+	if err := ptrBatch.SetPointer([]byte("k1"), legacyPtr); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := ptrBatch.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	stats, err := ValueLogRewriteOffline(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected rewrite to copy records, got stats=%+v", stats)
+	}
+
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+
+	v1, err := reopen.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get k1: %v", err)
+	}
+	if !bytes.Equal(v1, []byte("alpha")) {
+		t.Fatalf("k1 mismatch after rewrite: got=%q", v1)
+	}
+	v2, err := reopen.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("get k2: %v", err)
+	}
+	if !bytes.Equal(v2, []byte("beta")) {
+		t.Fatalf("k2 mismatch after rewrite: got=%q", v2)
+	}
+}
+
 func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 

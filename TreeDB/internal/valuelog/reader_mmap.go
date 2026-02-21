@@ -121,11 +121,9 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	if recordSizeExceedsMax(valueLen) {
 		return nil, ErrRecordTooLarge, true
 	}
-	if recordLen := page.ValuePtrRecordLength(ptr); recordLen != 0 {
-		expectedLen := uint32(headerWithoutCRC) + valueLen
-		if recordLen != expectedLen {
-			return nil, ErrCorrupt, true
-		}
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	if !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+		return nil, ErrCorrupt, true
 	}
 
 	end := start + HeaderSize + int64(valueLen)
@@ -353,11 +351,9 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	if recordSizeExceedsMax(valueLen) {
 		return nil, ErrRecordTooLarge, true
 	}
-	if recordLen := page.ValuePtrRecordLength(ptr); recordLen != 0 {
-		expectedLen := uint32(headerWithoutCRC) + valueLen
-		if recordLen != expectedLen {
-			return nil, ErrCorrupt, true
-		}
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	if !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+		return nil, ErrCorrupt, true
 	}
 
 	end := start + HeaderSize + int64(valueLen)

@@ -337,11 +337,9 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 		return nil, ErrRecordTooLarge
 	}
 
-	if recordLen := page.ValuePtrRecordLength(ptr); recordLen != 0 {
-		expectedLen := uint32(headerWithoutCRC) + valueLen
-		if recordLen != expectedLen {
-			return nil, ErrCorrupt
-		}
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	if !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+		return nil, ErrCorrupt
 	}
 
 	// Fast path: for grouped, uncompressed frames with checksums disabled, read
@@ -469,11 +467,9 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 	if int(valueLen) != len(payload) {
 		return nil, ErrCorrupt
 	}
-	if recordLen := page.ValuePtrRecordLength(ptr); recordLen != 0 {
-		expectedLen := uint32(headerWithoutCRC) + valueLen
-		if recordLen != expectedLen {
-			return nil, ErrCorrupt
-		}
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	if !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+		return nil, ErrCorrupt
 	}
 	if verifyCRC {
 		sum := crc.ChecksumParts(header[4:], payload)

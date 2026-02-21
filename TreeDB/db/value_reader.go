@@ -503,6 +503,12 @@ func (r valueReader) FenceLookupEnabled() bool {
 }
 
 func (r valueReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
+	// Grouped pointers in v2 fence mode can carry outer-leaf fence payloads
+	// without an explicit fence marker bit; grouped fence marker was legacy and
+	// collided with large grouped record-length hints.
+	if page.ValuePtrIsGrouped(ptr) {
+		return true
+	}
 	return page.ValuePtrIsFenceOuter(ptr)
 }
 

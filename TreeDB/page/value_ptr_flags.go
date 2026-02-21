@@ -9,9 +9,11 @@ const (
 	// It intentionally reuses one of the non-grouped sub-index bits so existing
 	// record-length decoding (ValuePtrRecordLength) strips it automatically.
 	valuePtrFenceOuterMask uint32 = 0x20000000
-	// valuePtrFenceOuterGroupedMask marks grouped pointers that reference
-	// outer-leaf fence blocks. This bit sits in the grouped length-hint region;
-	// ValuePtrRecordLength strips it only when present.
+	// valuePtrFenceOuterGroupedMask is a legacy grouped fence marker bit.
+	//
+	// It sits in the grouped length-hint region and therefore collides with
+	// legitimate grouped length hints above 0x007fffff. New writes no longer set
+	// this bit; it is only recognized for backward-compatible hint matching.
 	valuePtrFenceOuterGroupedMask uint32 = 0x00800000
 
 	valuePtrSubIndexMask  uint32 = 0x3c000000
@@ -24,23 +26,43 @@ const (
 )
 
 // ValuePtrGroupedMaxRecordLen is the maximum record length (excluding CRC) that
-// can be encoded in a grouped ValuePtr length hint.
+// can be encoded in a grouped ValuePtr length hint for new writes.
 //
 // Grouped pointers embed a sub-index in the Length field, leaving 24 bits for a
-// best-effort record length hint. Larger records must set the hint to 0 and
-// rely on the value-log record header's ValueLen instead.
-const ValuePtrGroupedMaxRecordLen uint32 = 0x00ffffff
+// best-effort record length hint. Bit 23 is reserved for legacy grouped fence
+// marker compatibility, so new hints are capped at 23 bits. Larger records must
+// set the hint to 0 and rely on the value-log record header's ValueLen instead.
+const ValuePtrGroupedMaxRecordLen uint32 = 0x007fffff
 
 // ValuePtrRecordLength returns the record length with internal flags stripped.
 func ValuePtrRecordLength(ptr ValuePtr) uint32 {
 	mask := valuePtrCompressedMask | valuePtrGroupedMask | valuePtrSubIndexMask
 	if ValuePtrIsGrouped(ptr) {
 		mask |= valuePtrSubIndexHiMask
-		if ptr.Length&valuePtrFenceOuterGroupedMask != 0 {
-			mask |= valuePtrFenceOuterGroupedMask
-		}
 	}
 	return ptr.Length &^ mask
+}
+
+// ValuePtrRecordLengthHintMatches reports whether the encoded record-length hint
+// matches expected.
+//
+// A zero hint means "omitted hint" and always matches.
+//
+// For grouped pointers carrying the legacy grouped fence marker bit, this helper
+// accepts both the raw decoded hint and the marker-cleared variant so older
+// pointers can still validate against on-disk headers.
+func ValuePtrRecordLengthHintMatches(ptr ValuePtr, expected uint32) bool {
+	recordLen := ValuePtrRecordLength(ptr)
+	if recordLen == 0 || recordLen == expected {
+		return true
+	}
+	if ValuePtrIsGrouped(ptr) && ptr.Length&valuePtrFenceOuterGroupedMask != 0 {
+		legacyCleared := recordLen &^ valuePtrFenceOuterGroupedMask
+		if legacyCleared == 0 || legacyCleared == expected {
+			return true
+		}
+	}
+	return false
 }
 
 // ValuePtrIsCompressed reports whether the pointer references a compressed value.
@@ -71,10 +93,13 @@ func ValuePtrSubIndex(ptr ValuePtr) uint8 {
 	return idx
 }
 
-// ValuePtrIsFenceOuter reports whether ptr references a non-grouped outer-leaf
-// fence block payload.
+// ValuePtrIsFenceOuter reports whether ptr references an outer-leaf fence block
+// payload.
+//
+// Grouped pointers may return true only for legacy grouped fence markers.
 func ValuePtrIsFenceOuter(ptr ValuePtr) bool {
 	if ValuePtrIsGrouped(ptr) {
+		// Legacy grouped fence marker bit (new grouped writes do not set this).
 		return ptr.Length&valuePtrFenceOuterGroupedMask != 0
 	}
 	return ptr.Length&valuePtrFenceOuterMask != 0
@@ -82,9 +107,13 @@ func ValuePtrIsFenceOuter(ptr ValuePtr) bool {
 
 // ValuePtrMarkFenceOuter marks a non-grouped pointer as an outer-leaf fence
 // block pointer.
+//
+// Grouped pointers are returned unchanged: grouped fence markers are legacy-only
+// and new grouped writes do not encode a dedicated fence bit.
 func ValuePtrMarkFenceOuter(ptr ValuePtr) ValuePtr {
 	if ValuePtrIsGrouped(ptr) {
-		ptr.Length |= valuePtrFenceOuterGroupedMask
+		// Grouped pointers no longer embed a fence marker bit because it collides
+		// with large grouped length hints.
 		return ptr
 	}
 	ptr.Length |= valuePtrFenceOuterMask
