@@ -1696,6 +1696,26 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	return s.tree.GetEntry(key)
 }
 
+// GetEntryExact returns only exact persisted leaf entries for key.
+//
+// Unlike GetEntry, this method does not perform fence-pointer fallback on
+// misses.
+func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
+	return s.tree.GetEntryExact(key)
+}
+
+// LookupFencePointerSource returns the predecessor fence pointer record that
+// currently resolves key when key has no exact leaf entry.
+func (s *Snapshot) LookupFencePointerSource(key []byte) (page.ValuePtr, bool, error) {
+	return s.tree.LookupFencePointerSource(key)
+}
+
+// LookupFencePointerOrigin returns the predecessor key and pointer record that
+// currently resolve key when key has no exact leaf entry.
+func (s *Snapshot) LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool, error) {
+	return s.tree.LookupFencePointerOrigin(key)
+}
+
 // Getters
 func (db *DB) Pager() *pager.Pager {
 	idx := db.idx.Load()

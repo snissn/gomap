@@ -1190,9 +1190,26 @@ func (db *DB) deferredValueLogNeedsSingleLaneRegroup() bool {
 }
 
 func (db *DB) allowFencePointerCollapse() bool {
-	// Disabled for correctness: collapsing to user-key fence anchors can orphan
-	// sibling keys when a later write/delete overwrites that anchor key.
+	// Collapse is correctness-coupled with anchor promotion and is only allowed in
+	// deferred fence mode where flush regrouping is single-lane.
+	return db != nil && db.deferredValueLogEnabled() && db.supportsFenceAnchorPromotion()
+}
+
+func (db *DB) allowMutableFencePointerCollapse() bool {
+	// Mutable-path deferred pointer rewrite is intentionally left uncollapsed.
+	// In-place collapse before flush-time anchor promotion can orphan siblings.
 	return false
+}
+
+func (db *DB) supportsFenceAnchorPromotion() bool {
+	if db == nil || db.valueLogReader == nil || db.backend == nil {
+		return false
+	}
+	type snapshotProvider interface {
+		AcquireSnapshot() *backenddb.Snapshot
+	}
+	_, ok := db.backend.(snapshotProvider)
+	return ok
 }
 
 // sumKeyValueBytes returns the total bytes across paired key/value entries.
@@ -1427,7 +1444,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		return ops, nil
 	}
 	fenceMode := db.outerLeafFenceV2Enabled()
-	collapseFence := fenceMode && db.allowFencePointerCollapse()
+	collapseFence := fenceMode && db.allowMutableFencePointerCollapse()
 
 	eligible := getValueLogEligible(len(ops))
 	defer putValueLogEligible(eligible)
@@ -1515,7 +1532,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	for i := range groups {
 		ptr := ptrs[i]
 		if collapseFence {
-			ptr = page.ValuePtrMarkFenceOuter(ptr)
+			ptr = page.ValuePtrMarkFenceOuterCollapsed(ptr)
 		}
 		group := groups[i]
 		if group.start < 0 || group.end < group.start || group.end > len(eligible) {
@@ -1582,6 +1599,458 @@ type deferredFenceCollapseState struct {
 	prevKey []byte
 }
 
+type fencePendingMutationKind uint8
+
+const (
+	fencePendingMutationNone fencePendingMutationKind = iota
+	fencePendingMutationDelete
+	fencePendingMutationSetInline
+	fencePendingMutationSetPointer
+)
+
+type fencePendingMutation struct {
+	kind fencePendingMutationKind
+	ptr  page.ValuePtr
+}
+
+func valuePtrSameRecord(a, b page.ValuePtr) bool {
+	a = page.ValuePtrClearFenceOuter(a)
+	b = page.ValuePtrClearFenceOuter(b)
+	if a.FileID != b.FileID || a.Offset != b.Offset {
+		return false
+	}
+	if page.ValuePtrIsGrouped(a) != page.ValuePtrIsGrouped(b) {
+		return false
+	}
+	if page.ValuePtrRecordLength(a) != page.ValuePtrRecordLength(b) {
+		return false
+	}
+	if page.ValuePtrIsGrouped(a) {
+		return page.ValuePtrSubIndex(a) == page.ValuePtrSubIndex(b)
+	}
+	return true
+}
+
+func (m fencePendingMutation) replacesFenceAnchor(oldPtr page.ValuePtr) bool {
+	switch m.kind {
+	case fencePendingMutationDelete, fencePendingMutationSetInline:
+		return true
+	case fencePendingMutationSetPointer:
+		// Treat pointer rewrites as anchor replacements conservatively.
+		// Value-log segments can be recycled, so (file,offset,length,subindex)
+		// equality is not a stable cross-checkpoint identity.
+		return true
+	default:
+		return false
+	}
+}
+
+func (m fencePendingMutation) keepsFencePointer(oldPtr page.ValuePtr) bool {
+	return false
+}
+
+func fencePendingMutationFromMemEntry(ptr page.ValuePtr, flags byte, found bool) (fencePendingMutation, bool) {
+	if !found {
+		return fencePendingMutation{}, false
+	}
+	if flags&node.FlagTombstone != 0 {
+		return fencePendingMutation{kind: fencePendingMutationDelete}, true
+	}
+	if flags&node.FlagPointer != 0 {
+		return fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: ptr}, true
+	}
+	return fencePendingMutation{kind: fencePendingMutationSetInline}, true
+}
+
+type fenceMutationLookupFn func(key []byte) (fencePendingMutation, bool)
+
+func fenceMutationLookupForMem(mem memtable.Table) fenceMutationLookupFn {
+	if mem == nil {
+		return nil
+	}
+	return func(key []byte) (fencePendingMutation, bool) {
+		_, ptr, flags, found := mem.GetEntry(key)
+		return fencePendingMutationFromMemEntry(ptr, flags, found)
+	}
+}
+
+func fenceMutationLookupForUnits(units []flushUnit) fenceMutationLookupFn {
+	if len(units) == 0 {
+		return nil
+	}
+	if len(units) == 1 {
+		mem := units[0].mem
+		if mem == nil {
+			return nil
+		}
+		return func(key []byte) (fencePendingMutation, bool) {
+			_, ptr, flags, found := mem.GetEntry(key)
+			return fencePendingMutationFromMemEntry(ptr, flags, found)
+		}
+	}
+	return func(key []byte) (fencePendingMutation, bool) {
+		for i := len(units) - 1; i >= 0; i-- {
+			if units[i].mem == nil {
+				continue
+			}
+			_, ptr, flags, found := units[i].mem.GetEntry(key)
+			if !found {
+				continue
+			}
+			return fencePendingMutationFromMemEntry(ptr, flags, true)
+		}
+		return fencePendingMutation{}, false
+	}
+}
+
+type fenceAnchorPromoter struct {
+	db *DB
+
+	lookup fenceMutationLookupFn
+
+	snapshot      *backenddb.Snapshot
+	snapshotReady bool
+
+	keysByPtr map[page.ValuePtr][][]byte
+	promoted  map[string]page.ValuePtr
+
+	rangeLoaded  bool
+	rangeKnown   bool
+	backendRange keyRange
+
+	backendEmptyChecked bool
+	backendEmpty        bool
+}
+
+func newFenceAnchorPromoter(db *DB, lookup fenceMutationLookupFn) *fenceAnchorPromoter {
+	if db == nil {
+		return nil
+	}
+	return &fenceAnchorPromoter{
+		db:     db,
+		lookup: lookup,
+	}
+}
+
+func (p *fenceAnchorPromoter) close() {
+	if p == nil || p.snapshot == nil {
+		return
+	}
+	_ = p.snapshot.Close()
+	p.snapshot = nil
+}
+
+func (p *fenceAnchorPromoter) snapshotView() *backenddb.Snapshot {
+	if p == nil || p.db == nil {
+		return nil
+	}
+	if p.snapshotReady {
+		return p.snapshot
+	}
+	p.snapshotReady = true
+	type snapshotProvider interface {
+		AcquireSnapshot() *backenddb.Snapshot
+	}
+	provider, ok := p.db.backend.(snapshotProvider)
+	if !ok {
+		return nil
+	}
+	p.snapshot = provider.AcquireSnapshot()
+	return p.snapshot
+}
+
+func (p *fenceAnchorPromoter) decodeFenceKeys(ptr page.ValuePtr) ([][]byte, error) {
+	if p == nil || p.db == nil {
+		return nil, nil
+	}
+	if p.keysByPtr != nil {
+		if keys, ok := p.keysByPtr[ptr]; ok {
+			return keys, nil
+		}
+	}
+	if p.db.valueLogReader == nil {
+		return nil, errors.New("cachingdb: missing value-log reader for fence-anchor promotion")
+	}
+	raw, err := p.db.valueLogReader.Read(ptr)
+	if err != nil {
+		return nil, err
+	}
+	if !outerleaf.HasMagic(raw) {
+		return nil, nil
+	}
+	keys, err := outerleaf.DecodeKeysWithVerify(raw, true)
+	if err != nil {
+		return nil, err
+	}
+	if p.keysByPtr == nil {
+		p.keysByPtr = make(map[page.ValuePtr][][]byte)
+	}
+	p.keysByPtr[ptr] = keys
+	return keys, nil
+}
+
+func (p *fenceAnchorPromoter) findPromotion(ptr page.ValuePtr, anchorKey []byte) ([]byte, bool, error) {
+	keys, err := p.decodeFenceKeys(ptr)
+	if err != nil {
+		return nil, false, err
+	}
+	if len(keys) == 0 {
+		return nil, false, nil
+	}
+	anchorIdx := -1
+	for i := range keys {
+		key := keys[i]
+		if bytes.Equal(key, anchorKey) {
+			anchorIdx = i
+			break
+		}
+	}
+	if anchorIdx < 0 {
+		return nil, false, nil
+	}
+	snap := p.snapshotView()
+	for i := anchorIdx + 1; i < len(keys); i++ {
+		key := keys[i]
+		if p.lookup != nil {
+			if pending, ok := p.lookup(key); ok {
+				if pending.keepsFencePointer(ptr) {
+					return nil, false, nil
+				}
+				continue
+			}
+		}
+		// Never clobber exact persisted entries. Tree reads prefer exact leaf
+		// entries over fence fallback, so promotion must skip keys that already
+		// have an exact entry (unless it already keeps the same pointer record).
+		if snap != nil {
+			exact, err := snap.GetEntryExact(key)
+			if err == nil {
+				if exact.Flags&node.FlagPointer != 0 && valuePtrSameRecord(exact.ValuePtr, ptr) {
+					return nil, false, nil
+				}
+				continue
+			}
+			if !errors.Is(err, tree.ErrKeyNotFound) {
+				return nil, false, err
+			}
+
+			// Candidate promotion keys must currently resolve from the same fence
+			// pointer record; otherwise promotion could clobber newer fallback
+			// coverage from another anchor.
+			resolvedPtr, found, err := snap.LookupFencePointerSource(key)
+			if err != nil {
+				return nil, false, err
+			}
+			if !found || !valuePtrSameRecord(resolvedPtr, ptr) {
+				continue
+			}
+		}
+		return append([]byte(nil), key...), true, nil
+	}
+	return nil, false, nil
+}
+
+func (p *fenceAnchorPromoter) emitUniquePointer(key []byte, ptr page.ValuePtr, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
+	if p == nil || len(key) == 0 || emitPointer == nil {
+		return nil
+	}
+	if p.promoted == nil {
+		p.promoted = make(map[string]page.ValuePtr)
+	}
+	keyStr := string(key)
+	if existing, ok := p.promoted[keyStr]; ok && existing == ptr {
+		return nil
+	}
+	if err := emitPointer(key, ptr); err != nil {
+		return err
+	}
+	p.promoted[keyStr] = ptr
+	return nil
+}
+
+func (p *fenceAnchorPromoter) keyResolvesFromSource(snap *backenddb.Snapshot, key []byte, sourcePtr page.ValuePtr) (exact bool, marked bool, resolved bool, err error) {
+	if snap == nil || len(key) == 0 {
+		return false, false, false, nil
+	}
+	entry, err := snap.GetEntryExact(key)
+	if err == nil {
+		if entry.Flags&node.FlagPointer == 0 || !valuePtrSameRecord(entry.ValuePtr, sourcePtr) {
+			return true, false, false, nil
+		}
+		return true, page.ValuePtrIsFenceOuter(entry.ValuePtr), true, nil
+	}
+	if !errors.Is(err, tree.ErrKeyNotFound) {
+		return false, false, false, err
+	}
+	resolvedPtr, found, err := snap.LookupFencePointerSource(key)
+	if err != nil {
+		return false, false, false, err
+	}
+	if !found || !valuePtrSameRecord(resolvedPtr, sourcePtr) {
+		return false, false, false, nil
+	}
+	return false, false, true, nil
+}
+
+func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte, snap *backenddb.Snapshot, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
+	if p == nil || snap == nil || len(deleteKey) == 0 || emitPointer == nil {
+		return nil
+	}
+	sourceKey, sourcePtr, found, err := snap.LookupFencePointerOrigin(deleteKey)
+	if err != nil || !found || len(sourceKey) == 0 {
+		return err
+	}
+	keys, err := p.decodeFenceKeys(sourcePtr)
+	if err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	exactPtr := page.ValuePtrClearFenceOuter(sourcePtr)
+	fencePtr := page.ValuePtrMarkFenceOuterCollapsed(exactPtr)
+	emittedSuffixAnchor := false
+	for i := range keys {
+		k := keys[i]
+		if len(k) == 0 {
+			continue
+		}
+		if p.lookup != nil {
+			if _, ok := p.lookup(k); ok {
+				continue
+			}
+		}
+		if bytes.Equal(k, deleteKey) {
+			continue
+		}
+		cmpDelete := bytes.Compare(k, deleteKey)
+		if cmpDelete > 0 && emittedSuffixAnchor {
+			continue
+		}
+		cmpSource := bytes.Compare(k, sourceKey)
+		exact, marked, resolved, err := p.keyResolvesFromSource(snap, k, sourcePtr)
+		if err != nil {
+			return err
+		}
+		if cmpSource < 0 {
+			// Keys before the predecessor source key should only be rewritten when
+			// they are already exact fence-marked aliases of the same source.
+			if !exact || !resolved || !marked {
+				continue
+			}
+			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
+				return err
+			}
+			continue
+		}
+		if !resolved {
+			continue
+		}
+		if cmpDelete < 0 {
+			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
+				return err
+			}
+			continue
+		}
+		if cmpDelete > 0 {
+			if err := p.emitUniquePointer(k, fencePtr, emitPointer); err != nil {
+				return err
+			}
+			emittedSuffixAnchor = true
+		}
+	}
+	return nil
+}
+
+func (p *fenceAnchorPromoter) maybePromoteAnchor(key []byte, pending fencePendingMutation, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
+	if p == nil || p.db == nil || len(key) == 0 || emitPointer == nil {
+		return nil
+	}
+	if pending.kind == fencePendingMutationNone {
+		return nil
+	}
+	if !p.keyCouldExistInBackend(key) {
+		return nil
+	}
+	snap := p.snapshotView()
+	if snap == nil {
+		return nil
+	}
+	entry, err := snap.GetEntryExact(key)
+	if err != nil {
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			if pending.kind == fencePendingMutationDelete {
+				return p.maybeRematerializeDeleteFallback(key, snap, emitPointer)
+			}
+			return nil
+		}
+		return err
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		return nil
+	}
+	if !pending.replacesFenceAnchor(entry.ValuePtr) {
+		return nil
+	}
+	promoteKey, shouldEmit, err := p.findPromotion(entry.ValuePtr, key)
+	if err != nil {
+		return err
+	}
+	if !shouldEmit || len(promoteKey) == 0 {
+		return nil
+	}
+	return p.emitUniquePointer(promoteKey, entry.ValuePtr, emitPointer)
+}
+
+func (p *fenceAnchorPromoter) loadBackendRange() {
+	if p == nil || p.rangeLoaded || p.db == nil {
+		return
+	}
+	p.rangeLoaded = true
+	_ = p.db.ensureBackendRange()
+	p.db.mu.RLock()
+	p.rangeKnown = p.db.backendRangeKnown
+	p.backendRange = p.db.backendRange
+	p.db.mu.RUnlock()
+}
+
+func (p *fenceAnchorPromoter) keyCouldExistInBackend(key []byte) bool {
+	if p == nil || len(key) == 0 {
+		return false
+	}
+	p.loadBackendRange()
+	if !p.rangeKnown {
+		return true
+	}
+	if !p.backendRange.valid {
+		return !p.backendDefinitelyEmpty()
+	}
+	return bytes.Compare(key, p.backendRange.min) >= 0 && bytes.Compare(key, p.backendRange.max) <= 0
+}
+
+func (p *fenceAnchorPromoter) backendDefinitelyEmpty() bool {
+	if p == nil {
+		return false
+	}
+	if p.backendEmptyChecked {
+		return p.backendEmpty
+	}
+	p.backendEmptyChecked = true
+	if p.db == nil || p.db.backend == nil {
+		p.backendEmpty = false
+		return false
+	}
+	iter, err := p.db.backend.Iterator(nil, nil)
+	if err != nil || iter == nil {
+		p.backendEmpty = false
+		return false
+	}
+	empty := !iter.Valid()
+	_ = iter.Close()
+	p.backendEmpty = empty
+	return empty
+}
+
 func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	if backendBatch == nil || n <= 0 {
 		return
@@ -1594,7 +2063,7 @@ func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	}
 }
 
-func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool, laneID int, fenceState *deferredFenceCollapseState) error {
+func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool, laneID int, mutationLookup fenceMutationLookupFn, fenceState *deferredFenceCollapseState) error {
 	if db == nil {
 		return nil
 	}
@@ -1642,6 +2111,20 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	if state == nil {
 		state = &deferredFenceCollapseState{}
 	}
+	var promoter *fenceAnchorPromoter
+	if collapseFence {
+		promoter = newFenceAnchorPromoter(db, mutationLookup)
+		defer promoter.close()
+	}
+	emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
+		if psv != nil {
+			return psv.SetPointerView(key, ptr)
+		}
+		if ps != nil {
+			return ps.SetPointer(key, ptr)
+		}
+		return errors.New("cachingdb: backend batch missing SetPointer")
+	}
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
@@ -1650,6 +2133,11 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			state.havePtr = false
 		}
 		if iter.IsDeleted() {
+			if promoter != nil {
+				if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationDelete}, emitPromotionPointer); err != nil {
+					return err
+				}
+			}
 			var err error
 			if dv != nil {
 				err = dv.DeleteView(key)
@@ -1667,9 +2155,14 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 
 		val, ptr, flags := iter.UnsafeEntry()
 		if flags&node.FlagPointer != 0 {
+			if promoter != nil {
+				if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: ptr}, emitPromotionPointer); err != nil {
+					return err
+				}
+			}
 			emitPtr := true
 			if collapseFence {
-				if state.havePtr && ptr == state.lastPtr {
+				if state.havePtr && valuePtrSameRecord(ptr, state.lastPtr) {
 					emitPtr = false
 				} else {
 					state.lastPtr = ptr
@@ -1695,6 +2188,11 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		}
 		if val == nil && db.memtableValueLogPointers {
 			return errors.New("cachingdb: flush missing value-log ptr for key")
+		}
+		if promoter != nil {
+			if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetInline}, emitPromotionPointer); err != nil {
+				return err
+			}
 		}
 
 		if allowPointers && (db.forceValueLogPointers || len(val) > db.valueLogThresholdForKey(key)) {
@@ -1787,32 +2285,52 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 
 	emittedGroups := uint64(0)
 	for i := range groups {
-		ptr := vlogPtrs[i]
+		basePtr := vlogPtrs[i]
+		ptr := basePtr
+		exactPtr := page.ValuePtrClearFenceOuter(basePtr)
 		if collapseFence {
-			ptr = page.ValuePtrMarkFenceOuter(ptr)
+			ptr = page.ValuePtrMarkFenceOuterCollapsed(basePtr)
 		}
 		group := groups[i]
+		emitWholeGroup := false
 		if group.start < 0 || group.end < group.start || group.end > len(ptrKeys) {
 			return errors.New("cachingdb: deferred value-log group out of range")
 		}
 		if collapseFence {
 			// Fence-pointer mode stores one key per grouped outer block.
-			// Keeping only the first key preserves sorted fence bounds while
-			// reducing persisted index entries.
+			// Keep one anchor key per block for append-only ranges. If any key in
+			// the source group could overlap existing backend keys, emit the full
+			// group so stale exact entries are always overwritten.
 			if group.start >= group.end {
 				continue
 			}
 			emittedGroups++
-			group.end = group.start + 1
+			if promoter != nil {
+				for srcPos := group.start; srcPos < group.end; srcPos++ {
+					if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
+						emitWholeGroup = true
+						break
+					}
+				}
+			}
+			if !emitWholeGroup {
+				group.end = group.start + 1
+			}
 		}
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
 			key := ptrKeys[srcPos]
+			outPtr := ptr
+			if collapseFence && emitWholeGroup && srcPos > group.start {
+				// Non-anchor siblings are emitted as exact pointers so fence
+				// fallback only triggers from the chosen anchor.
+				outPtr = exactPtr
+			}
 			if psv != nil {
-				if err := psv.SetPointerView(key, ptr); err != nil {
+				if err := psv.SetPointerView(key, outPtr); err != nil {
 					return err
 				}
 			} else if ps != nil {
-				if err := ps.SetPointer(key, ptr); err != nil {
+				if err := ps.SetPointer(key, outPtr); err != nil {
 					return err
 				}
 			} else {
@@ -1928,6 +2446,27 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		dictID            uint64
 		dictIDReady       bool
 	)
+	var promoter *fenceAnchorPromoter
+	if collapseFence {
+		promoter = newFenceAnchorPromoter(db, fenceMutationLookupForUnits(units))
+		defer promoter.close()
+	}
+
+	emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
+		if psv != nil {
+			if err := psv.SetPointerView(key, ptr); err != nil {
+				return err
+			}
+		} else if ps != nil {
+			if err := ps.SetPointer(key, ptr); err != nil {
+				return err
+			}
+		} else {
+			return errors.New("cachingdb: backend batch missing SetPointer")
+		}
+		backendPendingOps++
+		return nil
+	}
 
 	ensureVlogLane := func() error {
 		if vlogLane != nil {
@@ -1952,7 +2491,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	emitPointer := func(key []byte, ptr page.ValuePtr) error {
 		emitPtr := true
 		if collapseFence {
-			if haveFencePtr && ptr == lastFencePtr {
+			if haveFencePtr && valuePtrSameRecord(ptr, lastFencePtr) {
 				emitPtr = false
 			} else {
 				lastFencePtr = ptr
@@ -1972,6 +2511,25 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			}
 		} else {
 			return errors.New("cachingdb: backend batch missing SetPointer")
+		}
+		backendPendingOps++
+		return nil
+	}
+	emitPointerForce := func(key []byte, ptr page.ValuePtr) error {
+		if psv != nil {
+			if err := psv.SetPointerView(key, ptr); err != nil {
+				return err
+			}
+		} else if ps != nil {
+			if err := ps.SetPointer(key, ptr); err != nil {
+				return err
+			}
+		} else {
+			return errors.New("cachingdb: backend batch missing SetPointer")
+		}
+		if collapseFence {
+			lastFencePtr = ptr
+			haveFencePtr = true
 		}
 		backendPendingOps++
 		return nil
@@ -2031,11 +2589,14 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			}
 
 			for i := range groups {
-				ptr := vlogPtrs[i]
+				basePtr := vlogPtrs[i]
+				ptr := basePtr
+				exactPtr := page.ValuePtrClearFenceOuter(basePtr)
 				if collapseFence {
-					ptr = page.ValuePtrMarkFenceOuter(ptr)
+					ptr = page.ValuePtrMarkFenceOuterCollapsed(basePtr)
 				}
 				group := groups[i]
+				emitWholeGroup := false
 				if group.start < 0 || group.end < group.start || group.end > len(chunkKeys) {
 					putValueLogPtrs(vlogPtrs)
 					return errors.New("cachingdb: deferred inline pointer source group out of range")
@@ -2047,10 +2608,32 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 						continue
 					}
 					emittedGroups++
-					group.end = group.start + 1
+					if promoter != nil {
+						for srcPos := group.start; srcPos < group.end; srcPos++ {
+							if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
+								emitWholeGroup = true
+								break
+							}
+						}
+					}
+					if !emitWholeGroup {
+						group.end = group.start + 1
+					}
 				}
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
-					if err := emitPointer(ptrKeys[srcPos], ptr); err != nil {
+					key := ptrKeys[srcPos]
+					outPtr := ptr
+					if collapseFence && emitWholeGroup && srcPos > group.start {
+						// Keep only the anchor fence-marked; siblings remain exact.
+						outPtr = exactPtr
+					}
+					var err error
+					if collapseFence && emitWholeGroup && srcPos > group.start {
+						err = emitPointerForce(key, outPtr)
+					} else {
+						err = emitPointer(key, outPtr)
+					}
+					if err != nil {
 						putValueLogPtrs(vlogPtrs)
 						return err
 					}
@@ -2093,6 +2676,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			if err := flushInlinePointerGroup(); err != nil {
 				return 0, err
 			}
+			if promoter != nil {
+				if err := promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationDelete}, emitPromotionPointer); err != nil {
+					return 0, err
+				}
+			}
 			var err error
 			if dv != nil {
 				err = dv.DeleteView(entry.Key)
@@ -2108,10 +2696,20 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			if err := flushInlinePointerGroup(); err != nil {
 				return 0, err
 			}
+			if promoter != nil {
+				if err := promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: entry.ValuePtr}, emitPromotionPointer); err != nil {
+					return 0, err
+				}
+			}
 			if err := emitPointer(entry.Key, entry.ValuePtr); err != nil {
 				return 0, err
 			}
 		default:
+			if promoter != nil {
+				if err := promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationSetInline}, emitPromotionPointer); err != nil {
+					return 0, err
+				}
+			}
 			if allowPointers && (db.forceValueLogPointers || len(entry.Value) > db.valueLogThresholdForKey(entry.Key)) {
 				if len(ptrKeys) >= maxDeferredInlineGroupKeys {
 					if err := flushInlinePointerGroup(); err != nil {
@@ -11577,6 +12175,27 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			lastFencePtr page.ValuePtr
 			haveFencePtr bool
 		)
+		var promoter *fenceAnchorPromoter
+		if collapseFence {
+			promoter = newFenceAnchorPromoter(db, fenceMutationLookupForUnits(units))
+			defer promoter.close()
+		}
+		emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
+			var err error
+			if psv != nil {
+				err = psv.SetPointerView(key, ptr)
+			} else if ps != nil {
+				err = ps.SetPointer(key, ptr)
+			} else {
+				single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+				err = backendBatch.SetOps(single[:])
+			}
+			if err != nil {
+				return err
+			}
+			backendPendingOps++
+			return flushBackendChunk()
+		}
 
 		for len(heap) > 0 {
 			top := heap.pop()
@@ -11603,13 +12222,23 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			)
 			switch {
 			case entry.Type == batch.OpDelete:
+				if promoter != nil {
+					if err = promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationDelete}, emitPromotionPointer); err != nil {
+						break
+					}
+				}
 				err = backendBatch.Delete(entry.Key)
 				applied = true
 				haveFencePtr = false
 			case entry.IsPtr:
+				if promoter != nil {
+					if err = promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: entry.ValuePtr}, emitPromotionPointer); err != nil {
+						break
+					}
+				}
 				emitPtr := true
 				if collapseFence {
-					if haveFencePtr && entry.ValuePtr == lastFencePtr {
+					if haveFencePtr && valuePtrSameRecord(entry.ValuePtr, lastFencePtr) {
 						emitPtr = false
 					} else {
 						lastFencePtr = entry.ValuePtr
@@ -11628,6 +12257,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 					applied = true
 				}
 			default:
+				if promoter != nil {
+					if err = promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationSetInline}, emitPromotionPointer); err != nil {
+						break
+					}
+				}
 				err = backendBatch.Set(entry.Key, entry.Value)
 				applied = true
 				haveFencePtr = false
@@ -11803,11 +12437,17 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
 		fenceMode := db.outerLeafFenceV2Enabled()
+		collapseFence := fenceMode && db.allowFencePointerCollapse()
 		var (
 			lastFencePtr page.ValuePtr
 			haveFencePtr bool
 			prevFenceKey []byte
 		)
+		var promoter *fenceAnchorPromoter
+		if collapseFence {
+			promoter = newFenceAnchorPromoter(db, fenceMutationLookupForUnits(units))
+			defer promoter.close()
+		}
 
 		// Best-effort: ensure value-log bytes are flushed before we start committing
 		// pointers into the index when we expect to emit multiple backend commits.
@@ -11846,18 +12486,49 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			backendPendingOps = 0
 			return nil
 		}
+		emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
+			var err error
+			if psv != nil {
+				err = psv.SetPointerView(key, ptr)
+			} else if ps != nil {
+				err = ps.SetPointer(key, ptr)
+			} else {
+				type ptrSetterLegacy interface {
+					SetPointer(key []byte, ptr page.ValuePtr) error
+				}
+				if psl, ok := backendBatch.(ptrSetterLegacy); ok {
+					err = psl.SetPointer(key, ptr)
+				} else {
+					single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+					err = backendBatch.SetOps(single[:])
+				}
+			}
+			if err != nil {
+				return err
+			}
+			backendPendingOps++
+			return flushBackendChunk()
+		}
 
 		for _, unit := range units {
 			iter := unit.mem.NewIterator(nil, nil)
 			for iter.Valid() {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
-				if fenceMode && len(prevFenceKey) > 0 && bytes.Compare(key, prevFenceKey) <= 0 {
+				if collapseFence && len(prevFenceKey) > 0 && bytes.Compare(key, prevFenceKey) <= 0 {
 					// Unit-local iterators are sorted, but unit boundaries can rewind key order.
 					// Fence collapse is only safe on ascending key runs.
 					haveFencePtr = false
 				}
 				if flags&node.FlagTombstone != 0 {
+					if promoter != nil {
+						if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationDelete}, emitPromotionPointer); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (promote): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+					}
 					if err := backendBatch.Delete(key); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (delete): %w", err))
 						_ = iter.Close()
@@ -11873,9 +12544,17 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
+					if promoter != nil {
+						if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: ptr}, emitPromotionPointer); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (promote): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+					}
 					emitPtr := true
-					if fenceMode {
-						if haveFencePtr && ptr == lastFencePtr {
+					if collapseFence {
+						if haveFencePtr && valuePtrSameRecord(ptr, lastFencePtr) {
 							emitPtr = false
 						} else {
 							lastFencePtr = ptr
@@ -11927,6 +12606,14 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						}
 					}
 				} else {
+					if promoter != nil {
+						if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetInline}, emitPromotionPointer); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (promote): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+					}
 					if err := backendBatch.Set(key, val); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
 						_ = iter.Close()
@@ -11942,7 +12629,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				}
-				if fenceMode {
+				if collapseFence {
 					prevFenceKey = append(prevFenceKey[:0], key...)
 				}
 				iter.Next()
@@ -12134,7 +12821,11 @@ func (db *DB) flushOneLocked(sync bool) bool {
 
 		if db.deferredValueLogEnabled() {
 			t0 := time.Now()
-			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID, nil); err != nil {
+			var mutationLookup fenceMutationLookupFn
+			if db.outerLeafFenceV2Enabled() && db.allowFencePointerCollapse() {
+				mutationLookup = fenceMutationLookupForMem(mem)
+			}
+			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID, mutationLookup, nil); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 				_ = iter.Close()
 				_ = backendBatch.Close()
@@ -12199,6 +12890,11 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				haveFencePtr bool
 				prevFenceKey []byte
 			)
+			var promoter *fenceAnchorPromoter
+			if collapseFence {
+				promoter = newFenceAnchorPromoter(db, fenceMutationLookupForMem(mem))
+				defer promoter.close()
+			}
 
 			flushBackendChunk := func() error {
 				if !chunkBackend || backendPendingOps < backendEntriesCap {
@@ -12218,8 +12914,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				if err != nil {
 					return err
 				}
-				backendBatch = nil
-
 				backendBatch = db.newBackendBatchWithSize(sizeHint)
 				reserveBackendBatchOps(backendBatch, reserveChunkOps)
 				sv, _ = backendBatch.(setViewer)
@@ -12229,6 +12923,22 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				backendPendingOps = 0
 				return nil
 			}
+			emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
+				var err error
+				if psv != nil {
+					err = psv.SetPointerView(key, ptr)
+				} else if ps != nil {
+					err = ps.SetPointer(key, ptr)
+				} else {
+					single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+					err = backendBatch.SetOps(single[:])
+				}
+				if err != nil {
+					return err
+				}
+				backendPendingOps++
+				return flushBackendChunk()
+			}
 
 			for iter.Valid() {
 				key := iter.UnsafeKey()
@@ -12237,6 +12947,14 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					haveFencePtr = false
 				}
 				if flags&node.FlagTombstone != 0 {
+					if promoter != nil {
+						if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationDelete}, emitPromotionPointer); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (promote): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+					}
 					var err error
 					if dv != nil {
 						err = dv.DeleteView(key)
@@ -12257,63 +12975,48 @@ func (db *DB) flushOneLocked(sync bool) bool {
 						_ = backendBatch.Close()
 						return false
 					}
-				} else {
-					if flags&node.FlagPointer != 0 {
-						emitPtr := true
-						if collapseFence {
-							if haveFencePtr && ptr == lastFencePtr {
-								emitPtr = false
-							} else {
-								lastFencePtr = ptr
-								haveFencePtr = true
-							}
+				} else if flags&node.FlagPointer != 0 {
+					if promoter != nil {
+						if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: ptr}, emitPromotionPointer); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (promote): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
 						}
-						if emitPtr {
-							if psv != nil {
-								if err := psv.SetPointerView(key, ptr); err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
-								}
-							} else if ps != nil {
-								if err := ps.SetPointer(key, ptr); err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
-								}
-							} else {
-								single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
-								if err := backendBatch.SetOps(single[:]); err != nil {
-									db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-									_ = iter.Close()
-									_ = backendBatch.Close()
-									return false
-								}
+					}
+					emitPtr := true
+					if collapseFence {
+						if haveFencePtr && valuePtrSameRecord(ptr, lastFencePtr) {
+							emitPtr = false
+						} else {
+							lastFencePtr = ptr
+							haveFencePtr = true
+						}
+					}
+					if emitPtr {
+						if psv != nil {
+							if err := psv.SetPointerView(key, ptr); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
 							}
-							backendPendingOps++
-							if err := flushBackendChunk(); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+						} else if ps != nil {
+							if err := ps.SetPointer(key, ptr); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
+								_ = iter.Close()
+								_ = backendBatch.Close()
+								return false
+							}
+						} else {
+							single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+							if err := backendBatch.SetOps(single[:]); err != nil {
+								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
 								_ = iter.Close()
 								_ = backendBatch.Close()
 								return false
 							}
 						}
-					} else {
-						var err error
-						if sv != nil {
-							err = sv.SetView(key, val)
-						} else {
-							err = backendBatch.Set(key, val)
-						}
-						if err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
-						haveFencePtr = false
 						backendPendingOps++
 						if err := flushBackendChunk(); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
@@ -12322,8 +13025,37 @@ func (db *DB) flushOneLocked(sync bool) bool {
 							return false
 						}
 					}
+				} else {
+					if promoter != nil {
+						if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetInline}, emitPromotionPointer); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (promote): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+					}
+					var err error
+					if sv != nil {
+						err = sv.SetView(key, val)
+					} else {
+						err = backendBatch.Set(key, val)
+					}
+					if err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed (set): %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
+					haveFencePtr = false
+					backendPendingOps++
+					if err := flushBackendChunk(); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed: %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
+					}
 				}
-				if fenceMode {
+				if collapseFence {
 					prevFenceKey = append(prevFenceKey[:0], key...)
 				}
 				iter.Next()
