@@ -2,11 +2,71 @@ package db
 
 import (
 	"fmt"
+	"runtime"
+	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+const (
+	getManyValueGuessBytes          = 128
+	getManyMaxArenaBytes            = 1 << 20
+	getManyParallelMinKeys          = 128
+	getManyParallelMinKeysPerWorker = 32
+	getManyParallelMaxWorkers       = 8
+)
+
+var getManyEmptyValue = []byte{}
+
+func getManyArenaCap(keyCount int) int {
+	if keyCount <= 0 {
+		return 0
+	}
+	arenaCap := keyCount * getManyValueGuessBytes
+	if arenaCap < 0 {
+		arenaCap = 0
+	}
+	if arenaCap > getManyMaxArenaBytes {
+		arenaCap = getManyMaxArenaBytes
+	}
+	return arenaCap
+}
+
+func getManyWorkerCount(keyCount int) int {
+	if keyCount <= 0 {
+		return 1
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > getManyParallelMaxWorkers {
+		workers = getManyParallelMaxWorkers
+	}
+	if workers > keyCount {
+		workers = keyCount
+	}
+	return workers
+}
+
+func getManyCanParallelize(keyCount, workers int) bool {
+	if keyCount < getManyParallelMinKeys {
+		return false
+	}
+	if workers <= 1 {
+		return false
+	}
+	return keyCount/workers >= getManyParallelMinKeysPerWorker
+}
+
+func getManyChunkBounds(worker, workers, keyCount int) (int, int) {
+	start := (worker * keyCount) / workers
+	end := ((worker + 1) * keyCount) / workers
+	return start, end
+}
 
 // --- Public API ---
 
@@ -35,21 +95,23 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
 
+	workers := getManyWorkerCount(len(keys))
+	if getManyCanParallelize(len(keys), workers) {
+		if err := db.getManyParallel(snap, keys, out, workers); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+	if err := db.getManySequential(snap, keys, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (db *DB) getManySequential(snap *Snapshot, keys [][]byte, out [][]byte) error {
 	// Copy all found values into a single arena to avoid one allocation per key.
 	// Each returned slice is capacity-capped to preserve safe-copy semantics.
-	const (
-		getManyValueGuessBytes = 128
-		getManyMaxArenaBytes   = 1 << 20
-	)
-	arenaCap := len(keys) * getManyValueGuessBytes
-	if arenaCap < 0 {
-		arenaCap = 0
-	}
-	if arenaCap > getManyMaxArenaBytes {
-		arenaCap = getManyMaxArenaBytes
-	}
-	arena := make([]byte, 0, arenaCap)
-	emptyValue := []byte{}
+	arena := make([]byte, 0, getManyArenaCap(len(keys)))
 	for i, key := range keys {
 		start := len(arena)
 		nextArena, err := snap.GetAppend(key, arena)
@@ -57,16 +119,64 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		arena = nextArena
 		if len(arena) == start {
-			out[i] = emptyValue
+			out[i] = getManyEmptyValue
 			continue
 		}
 		out[i] = arena[start:len(arena):len(arena)]
 	}
-	return out, nil
+	return nil
+}
+
+func (db *DB) getManyParallel(snap *Snapshot, keys [][]byte, out [][]byte, workers int) error {
+	var (
+		wg       sync.WaitGroup
+		stop     atomic.Bool
+		firstErr error
+		errMu    sync.Mutex
+	)
+	for worker := 0; worker < workers; worker++ {
+		start, end := getManyChunkBounds(worker, workers, len(keys))
+		if start >= end {
+			continue
+		}
+		workerArenaCap := getManyArenaCap(end - start)
+		wg.Add(1)
+		go func(start, end, arenaCap int) {
+			defer wg.Done()
+			arena := make([]byte, 0, arenaCap)
+			for i := start; i < end; i++ {
+				if stop.Load() {
+					return
+				}
+				arenaStart := len(arena)
+				nextArena, err := snap.GetAppend(keys[i], arena)
+				if err == tree.ErrKeyNotFound {
+					continue
+				}
+				if err != nil {
+					errMu.Lock()
+					if firstErr == nil {
+						firstErr = err
+						stop.Store(true)
+					}
+					errMu.Unlock()
+					return
+				}
+				arena = nextArena
+				if len(arena) == arenaStart {
+					out[i] = getManyEmptyValue
+					continue
+				}
+				out[i] = arena[arenaStart:len(arena):len(arena)]
+			}
+		}(start, end, workerArenaCap)
+	}
+	wg.Wait()
+	return firstErr
 }
 
 // GetUnsafe returns the value for a key.
