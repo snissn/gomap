@@ -13785,11 +13785,18 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	db.mu.Lock()
 	db.noteIterator(start, end)
 	if db.mutableBytes.Load() > 0 {
-		_ = db.rotateMemtableLockedWithCapacity(true, minMemtablePrealloc) // Flush to backend
+		if err := db.rotateMemtableLockedWithCapacity(true, minMemtablePrealloc); err != nil {
+			db.mu.Unlock()
+			db.writeMu.Unlock()
+			return nil, err
+		}
 	}
 	db.mu.Unlock()
 	db.writeMu.Unlock()
 	db.flushAll(false)
+	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+		return nil, err
+	}
 
 	return db.backend.ReverseIterator(start, end)
 }
