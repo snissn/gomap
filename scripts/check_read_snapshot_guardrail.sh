@@ -33,4 +33,6 @@ if ! run_once "$tmp1"; then
 		echo "[guardrail] ERROR: flaky guardrail run (first attempt failed, second passed)." >&2
 		exit 4
 	fi
+	echo "[guardrail] ERROR: guardrail failed on both attempts." >&2
+	exit 5
 fi

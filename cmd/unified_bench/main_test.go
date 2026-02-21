@@ -436,7 +436,7 @@ func TestRunBenchmark_RandomReadParallelAcquireSnapshot_UsesSnapshots(t *testing
 		return db, nil
 	})
 
-	run, err := runBenchmark(BenchConfig{
+	cfg := BenchConfig{
 		Keys:         512,
 		ValueSize:    16,
 		BatchSize:    64,
@@ -448,15 +448,21 @@ func TestRunBenchmark_RandomReadParallelAcquireSnapshot_UsesSnapshots(t *testing
 		KeepDir:      false,
 		Progress:     false,
 		SeedUsed:     1,
-	})
+	}
+	run, err := runBenchmark(cfg)
 	if err != nil {
 		t.Fatalf("runBenchmark: %v", err)
 	}
 	if db == nil {
 		t.Fatalf("expected test DB instance")
 	}
-	if got := db.acquireSnapshotCalls.Load(); got == 0 {
-		t.Fatalf("expected AcquireReadSnapshot to be called, got=%d", got)
+	workers := cfg.ReadWorkers
+	if workers <= 0 {
+		workers = 1
+	}
+	expectedAcquires := int64(1 + cfg.Keys*workers) // one probe + one per read op
+	if got := db.acquireSnapshotCalls.Load(); got != expectedAcquires {
+		t.Fatalf("expected AcquireReadSnapshot calls=%d, got=%d", expectedAcquires, got)
 	}
 	if got := db.snapshotGetAppendCalls.Load(); got == 0 {
 		t.Fatalf("expected snapshot GetAppend to be called, got=%d", got)
@@ -464,8 +470,8 @@ func TestRunBenchmark_RandomReadParallelAcquireSnapshot_UsesSnapshots(t *testing
 	if gotGet := db.getCalls.Load(); gotGet != 0 {
 		t.Fatalf("expected DB Get to be unused in snapshot benchmark path, got=%d calls", gotGet)
 	}
-	if gotClose, gotAcquire := db.snapshotCloseCalls.Load(), db.acquireSnapshotCalls.Load(); gotClose != gotAcquire {
-		t.Fatalf("expected snapshot closes (%d) to match acquires (%d)", gotClose, gotAcquire)
+	if gotClose := db.snapshotCloseCalls.Load(); gotClose != expectedAcquires {
+		t.Fatalf("expected snapshot closes=%d, got=%d", expectedAcquires, gotClose)
 	}
 
 	got := run.Results["random_read_parallel_acquire_snapshot"][db.Name()]
