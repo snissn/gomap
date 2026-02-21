@@ -201,7 +201,11 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 			it.Next()
 			continue
 		}
-		liveByID[ptr.FileID] += int64(page.ValuePtrRecordLength(ptr))
+		recordLen, err := db.valueLogRecordLengthForRewrite(ptr)
+		if err != nil {
+			return err
+		}
+		liveByID[ptr.FileID] += int64(recordLen)
 		nested, err := db.outerLeafNestedBlobRefLiveBytes(ptr)
 		if err != nil {
 			return err
@@ -249,9 +253,58 @@ func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int
 		if !page.IsValueLogFileID(blobPtr.FileID) {
 			return nil, fmt.Errorf("treedb: invalid nested blob pointer file %d", blobPtr.FileID)
 		}
-		refs[blobPtr.FileID] += int64(page.ValuePtrRecordLength(blobPtr))
+		recordLen, err := db.valueLogRecordLengthForRewrite(blobPtr)
+		if err != nil {
+			return nil, err
+		}
+		refs[blobPtr.FileID] += int64(recordLen)
 	}
 	return refs, nil
+}
+
+func valueLogRecordLengthNeedsHeader(ptr page.ValuePtr, hint uint32) bool {
+	if hint == 0 {
+		return true
+	}
+	// Grouped legacy fence markers reuse bit 23 inside the length-hint field.
+	// Use on-disk headers for exact sizing in this ambiguous case.
+	return page.ValuePtrIsGrouped(ptr) && page.ValuePtrIsFenceOuter(ptr)
+}
+
+func readValueLogRecordLengthFromHeader(r io.ReaderAt, start int64) (uint32, error) {
+	var header [valuelog.HeaderSize]byte
+	if _, err := r.ReadAt(header[:], start); err != nil {
+		return 0, err
+	}
+	if header[4] != valuelog.Version {
+		return 0, valuelog.ErrCorrupt
+	}
+	valueLen := uint32(header[16]) | uint32(header[17])<<8 | uint32(header[18])<<16 | uint32(header[19])<<24
+	return uint32(valuelog.HeaderSize-4) + valueLen, nil
+}
+
+func (db *DB) valueLogRecordLengthForRewrite(ptr page.ValuePtr) (uint32, error) {
+	hint := page.ValuePtrRecordLength(ptr)
+	if !valueLogRecordLengthNeedsHeader(ptr, hint) {
+		return hint, nil
+	}
+	if ptr.Offset < 4 {
+		return 0, fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+	}
+	if db == nil || db.valueLogManager == nil {
+		return 0, fmt.Errorf("vlog-rewrite: value-log manager unavailable")
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil {
+		return 0, fmt.Errorf("vlog-rewrite: value-log set unavailable")
+	}
+	defer func() { _ = db.valueLogManager.Release(set) }()
+	f := set.Files[ptr.FileID]
+	if f == nil || f.File == nil {
+		return 0, fmt.Errorf("vlog-rewrite: missing segment %d", ptr.FileID)
+	}
+	start := int64(ptr.Offset - 4)
+	return readValueLogRecordLengthFromHeader(f.File, start)
 }
 
 type rewriteSourceSegment struct {
@@ -1030,7 +1083,6 @@ type iteratorWithEntry interface {
 type recordKey struct {
 	fileID uint32
 	offset uint64
-	length uint32
 }
 
 type recordLoc struct {
@@ -1105,7 +1157,6 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 	key := recordKey{
 		fileID: ptr.FileID,
 		offset: ptr.Offset,
-		length: page.ValuePtrRecordLength(ptr),
 	}
 	if cached, ok := it.ptrMap[key]; ok {
 		return page.ValuePtr{Offset: cached.offset, FileID: cached.fileID, Length: ptr.Length}, nil
@@ -1204,16 +1255,12 @@ func readRawRecord(r io.ReaderAt, ptr page.ValuePtr) ([]byte, error) {
 	}
 	start := int64(ptr.Offset - 4)
 	recordLen := page.ValuePtrRecordLength(ptr)
-	if recordLen == 0 {
-		var header [valuelog.HeaderSize]byte
-		if _, err := r.ReadAt(header[:], start); err != nil {
+	if valueLogRecordLengthNeedsHeader(ptr, recordLen) {
+		var err error
+		recordLen, err = readValueLogRecordLengthFromHeader(r, start)
+		if err != nil {
 			return nil, err
 		}
-		if header[4] != valuelog.Version {
-			return nil, valuelog.ErrCorrupt
-		}
-		valueLen := uint32(header[16]) | uint32(header[17])<<8 | uint32(header[18])<<16 | uint32(header[19])<<24
-		recordLen = uint32(valuelog.HeaderSize-4) + valueLen
 	}
 	size := int64(recordLen) + 4
 	if size < int64(valuelog.HeaderSize) {

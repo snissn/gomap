@@ -861,15 +861,12 @@ func (w *Writer) AppendRawRecord(raw []byte, length uint32) (page.ValuePtr, erro
 	if w == nil {
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
 	}
-	if len(raw) == 0 {
+	if len(raw) < 4 {
 		return page.ValuePtr{}, errors.New("valuelog: empty record")
 	}
-	recordLen := page.ValuePtrRecordLength(page.ValuePtr{Length: length})
-	if recordLen != 0 {
-		expected := int64(recordLen) + 4
-		if int64(len(raw)) != expected {
-			return page.ValuePtr{}, errors.New("valuelog: raw record size mismatch")
-		}
+	expected := uint32(len(raw) - 4)
+	if !page.ValuePtrRecordLengthHintMatches(page.ValuePtr{Length: length}, expected) {
+		return page.ValuePtr{}, errors.New("valuelog: raw record size mismatch")
 	}
 	start := w.size
 	if err := w.writeBytes(raw); err != nil {
