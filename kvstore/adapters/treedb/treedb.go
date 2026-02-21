@@ -19,6 +19,15 @@ type DB struct {
 	readWorkers atomic.Int32
 }
 
+const (
+	readBatchGetManyMinKeys      = 32
+	readBatchDupHeavyMinKeyCount = 8
+)
+
+var readBatchGetManyFn = func(db *treedb.DB, keys [][]byte) ([][]byte, error) {
+	return db.GetMany(keys)
+}
+
 func Wrap(db *treedb.DB) *DB {
 	return wrapNamedWithReadWorkers(db, "TreeDB", runtime.GOMAXPROCS(0))
 }
@@ -41,6 +50,33 @@ func normalizeReadWorkers(workers int) int {
 		return math.MaxInt32
 	}
 	return workers
+}
+
+func dedupeReadBatchKeys(keys [][]byte) [][]byte {
+	if len(keys) < 2 {
+		return keys
+	}
+	seen := make(map[string]struct{}, len(keys))
+	unique := make([][]byte, 0, len(keys))
+	for _, key := range keys {
+		keyID := string(key)
+		if _, ok := seen[keyID]; ok {
+			continue
+		}
+		seen[keyID] = struct{}{}
+		unique = append(unique, key)
+	}
+	return unique
+}
+
+func shouldReadBatchUseGetMany(totalKeys, uniqueKeys, workers int) bool {
+	if workers <= 1 || uniqueKeys <= 1 {
+		return false
+	}
+	if uniqueKeys >= readBatchGetManyMinKeys {
+		return true
+	}
+	return totalKeys >= readBatchDupHeavyMinKeyCount && uniqueKeys*2 <= totalKeys
 }
 
 func (d *DB) setReadWorkers(workers int) {
@@ -93,7 +129,24 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 	if workers < 1 {
 		workers = 1
 	}
-	if len(keys) == 1 || workers <= 1 {
+	batchKeys := dedupeReadBatchKeys(keys)
+	if shouldReadBatchUseGetMany(len(keys), len(batchKeys), workers) {
+		// Keep historical post-close behavior for ReadBatch: if no snapshot can
+		// be acquired up front, report unsupported instead of ErrClosed.
+		probe := d.DB.AcquireSnapshot()
+		if probe == nil {
+			return kvstore.ErrUnsupported
+		}
+		if closeErr := probe.Close(); closeErr != nil {
+			return closeErr
+		}
+		_, err := readBatchGetManyFn(d.DB, batchKeys)
+		if err == nil || errors.Is(err, treedb.ErrClosed) {
+			return nil
+		}
+		return err
+	}
+	if len(batchKeys) == 1 || workers <= 1 {
 		snap := d.DB.AcquireSnapshot()
 		if snap == nil {
 			return kvstore.ErrUnsupported
@@ -103,7 +156,7 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 				retErr = closeErr
 			}
 		}()
-		for _, key := range keys {
+		for _, key := range batchKeys {
 			_, err := snap.Has(key)
 			if err == nil || errors.Is(err, treedb.ErrClosed) {
 				continue
@@ -112,8 +165,8 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 		}
 		return nil
 	}
-	if workers > len(keys) {
-		workers = len(keys)
+	if workers > len(batchKeys) {
+		workers = len(batchKeys)
 	}
 	// Snapshots are immutable point-in-time readers in TreeDB, so concurrent
 	// Has calls are issued against one snapshot for improved read-bandwidth.
@@ -127,7 +180,7 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 		}
 	}()
 
-	chunk := (len(keys) + workers - 1) / workers
+	chunk := (len(batchKeys) + workers - 1) / workers
 	if chunk < 1 {
 		chunk = 1
 	}
@@ -138,18 +191,18 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 	)
 	for w := 0; w < workers; w++ {
 		start := w * chunk
-		if start >= len(keys) {
+		if start >= len(batchKeys) {
 			break
 		}
 		end := start + chunk
-		if end > len(keys) {
-			end = len(keys)
+		if end > len(batchKeys) {
+			end = len(batchKeys)
 		}
 		wg.Add(1)
 		go func(lo, hi int) {
 			defer wg.Done()
 			for i := lo; i < hi; i++ {
-				_, readErr := snap.Has(keys[i])
+				_, readErr := snap.Has(batchKeys[i])
 				if readErr == nil || errors.Is(readErr, treedb.ErrClosed) {
 					continue
 				}
