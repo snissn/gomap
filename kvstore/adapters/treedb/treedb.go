@@ -136,8 +136,9 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 	if workers < 1 {
 		workers = 1
 	}
+	batchKeys := keys
 	if workers > 1 && len(keys) >= readBatchDupHeavyMinKeyCount {
-		batchKeys := dedupeReadBatchKeys(keys)
+		batchKeys = dedupeReadBatchKeys(keys)
 		if shouldReadBatchUseGetMany(d.DB, len(keys), len(batchKeys), workers) {
 			// Keep historical post-close behavior for ReadBatch: if no snapshot can
 			// be acquired up front, report unsupported instead of ErrClosed.
@@ -161,7 +162,6 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 			return err
 		}
 	}
-	batchKeys := keys
 	if len(batchKeys) == 1 || workers <= 1 {
 		snap := d.DB.AcquireSnapshot()
 		if snap == nil {
