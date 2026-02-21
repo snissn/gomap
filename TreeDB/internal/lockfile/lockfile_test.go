@@ -2,6 +2,7 @@ package lockfile
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,9 +45,12 @@ func TestAcquireWritesPIDMarker(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 
-	b, err := os.ReadFile(lockPath)
+	if _, err := l.f.Seek(0, 0); err != nil {
+		t.Fatalf("Seek: %v", err)
+	}
+	b, err := io.ReadAll(l.f)
 	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
+		t.Fatalf("ReadAll(lock fd): %v", err)
 	}
 	if !strings.HasPrefix(string(b), "pid=") {
 		t.Fatalf("lock file content %q, want prefix pid=", string(b))
