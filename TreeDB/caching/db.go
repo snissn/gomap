@@ -3562,7 +3562,6 @@ type memtableView struct {
 	refs                     atomic.Int64
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
-	deferredTracked          atomic.Bool
 }
 
 const maxAppendOnlyMemLeases = 256
@@ -3607,22 +3606,29 @@ func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64)
 	since := time.Now().UnixNano()
 
 	tel.deferredMu.Lock()
+	defer tel.deferredMu.Unlock()
 	if tel.deferred == nil {
 		tel.deferred = make(map[*memtableView]memtableViewDeferredInfo)
 	}
 	if _, exists := tel.deferred[view]; exists {
-		tel.deferredMu.Unlock()
+		return
+	}
+	// Avoid recording deferred telemetry after final release. This prevents
+	// stale entries if a concurrent releaser already dropped refs to zero.
+	if view.refs.Load() == 0 {
 		return
 	}
 	tel.deferred[view] = memtableViewDeferredInfo{
 		memtables:     memtables,
 		sinceUnixNano: since,
 	}
-	oldest := tel.oldestDeferredUnixNano.Load()
-	if oldest == 0 || since < oldest {
-		oldest = since
+	oldest := int64(0)
+	for _, deferred := range tel.deferred {
+		if oldest == 0 || deferred.sinceUnixNano < oldest {
+			oldest = deferred.sinceUnixNano
+		}
 	}
-	tel.deferredMu.Unlock()
+	tel.oldestDeferredUnixNano.Store(oldest)
 
 	tel.deferredViewsTotal.Add(1)
 	deferredViewsCurrent := tel.deferredViewsCurrent.Add(1)
@@ -3630,7 +3636,6 @@ func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64)
 	tel.deferredMemtablesTotal.Add(uint64(memtables))
 	deferredMemtablesCurrent := tel.deferredMemtablesCurrent.Add(memtables)
 	updateInt64Max(&tel.deferredMemtablesMax, deferredMemtablesCurrent)
-	tel.oldestDeferredUnixNano.Store(oldest)
 }
 
 func (db *DB) noteMemtableViewDeferredExit(view *memtableView) {
@@ -3644,6 +3649,7 @@ func (db *DB) noteMemtableViewDeferredExit(view *memtableView) {
 	)
 	oldest := int64(0)
 	tel.deferredMu.Lock()
+	defer tel.deferredMu.Unlock()
 	if tel.deferred != nil {
 		info, found = tel.deferred[view]
 		if found {
@@ -3655,7 +3661,6 @@ func (db *DB) noteMemtableViewDeferredExit(view *memtableView) {
 			}
 		}
 	}
-	tel.deferredMu.Unlock()
 	tel.oldestDeferredUnixNano.Store(oldest)
 	if !found {
 		return
@@ -3708,7 +3713,7 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 		db.noteMemtableViewRelease()
 	}
 	if refs := view.refs.Add(-1); refs != 0 {
-		if refs > 0 && view.deferredRetiredMemtables.Load() > 0 && view.deferredTracked.CompareAndSwap(false, true) {
+		if refs > 0 && view.deferredRetiredMemtables.Load() > 0 {
 			db.noteMemtableViewDeferredEnter(view, view.deferredRetiredMemtables.Load())
 		}
 		return
