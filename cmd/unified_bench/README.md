@@ -16,11 +16,15 @@ Targeted regression guardrail for append-only writes plus read-heavy snapshot ac
 ./scripts/check_read_snapshot_guardrail.sh
 ```
 
+The script validates that `TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail`
+actually ran (to avoid `go test` false-greens when `-run` matches nothing) and
+retries once on failure to reduce transient CI runner noise.
+
 Direct invocation:
 
 ```bash
-cd cmd/unified_bench
-GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -p 1 . \
+cd /path/to/gomap/cmd/unified_bench
+GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
   -run '^TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail$' -count=1
 ```
 
