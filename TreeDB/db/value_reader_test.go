@@ -115,6 +115,34 @@ func TestValueReaderOuterLeafBlock_CacheMissReturnsLease(t *testing.T) {
 	lease.Release()
 }
 
+func TestValueReader_FencePointerLikelyBlock_RequiresExplicitFenceMarker(t *testing.T) {
+	r := valueReader{}
+	base := page.ValuePtr{
+		FileID: page.ValueLogFileID(7),
+		Offset: 123,
+		Length: 4096,
+	}
+	if r.FencePointerLikelyBlock(base) {
+		t.Fatalf("expected plain pointer to not be treated as fence block")
+	}
+
+	grouped := base
+	grouped.Length = page.ValuePtrMarkGrouped(base.Length, 3)
+	if r.FencePointerLikelyBlock(grouped) {
+		t.Fatalf("expected grouped pointer without fence marker to not be treated as fence block")
+	}
+
+	fence := page.ValuePtrMarkFenceOuter(base)
+	if !r.FencePointerLikelyBlock(fence) {
+		t.Fatalf("expected fence-marked pointer to be treated as fence block")
+	}
+
+	groupedFence := page.ValuePtrMarkFenceOuter(grouped)
+	if r.FencePointerLikelyBlock(groupedFence) {
+		t.Fatalf("expected grouped pointer to ignore fence mark helper and remain non-fence")
+	}
+}
+
 func TestOuterLeafFenceDecodeScratchPoolCapBounded(t *testing.T) {
 	const maxExpected = 8 << 20
 	if outerLeafFenceDecodeScratchMaxRetain > maxExpected {

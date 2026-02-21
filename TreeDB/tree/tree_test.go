@@ -689,6 +689,99 @@ func TestTreeGet_FencePredecessorLookupContinuesAfterPointerMiss(t *testing.T) {
 	}
 }
 
+func TestTreeGet_FencePredecessorLookupContinuesAfterMultiplePointerMisses(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"k020": "v20",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"k015": "v15",
+	})
+	ptr2 := reader.addBlock(map[string]string{
+		"k017": "v17",
+	})
+	ptr3 := reader.addBlock(map[string]string{
+		"k110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k015"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(k015): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k017"), nil, node.FlagPointer, ptr2); err != nil {
+		t.Fatalf("AddLeafEntry(k017): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k110"), nil, node.FlagPointer, ptr3); err != nil {
+		t.Fatalf("AddLeafEntry(k110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	fenceCallsBefore := reader.fenceCalls
+	fenceAppendBefore := reader.fenceAppendCalls
+	got, err := tr.Get([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Get(k020): %v", err)
+	}
+	if string(got) != "v20" {
+		t.Fatalf("Get(k020) = %q, want %q", got, "v20")
+	}
+	getLookups := (reader.fenceCalls - fenceCallsBefore) + (reader.fenceAppendCalls - fenceAppendBefore)
+	if getLookups < 3 {
+		t.Fatalf("Get(k020) lookup probes=%d, want at least 3 (multiple misses + one hit)", getLookups)
+	}
+
+	fenceCallsBefore = reader.fenceCalls
+	fenceAppendBefore = reader.fenceAppendCalls
+	gotAppend, err := tr.GetAppend([]byte("k020"), []byte("x-"))
+	if err != nil {
+		t.Fatalf("GetAppend(k020): %v", err)
+	}
+	if string(gotAppend) != "x-v20" {
+		t.Fatalf("GetAppend(k020) = %q, want %q", gotAppend, "x-v20")
+	}
+	getAppendLookups := (reader.fenceCalls - fenceCallsBefore) + (reader.fenceAppendCalls - fenceAppendBefore)
+	if getAppendLookups < 3 {
+		t.Fatalf("GetAppend(k020) lookup probes=%d, want at least 3 (multiple misses + one hit)", getAppendLookups)
+	}
+
+	fenceCallsBefore = reader.fenceCalls
+	fenceAppendBefore = reader.fenceAppendCalls
+	has, err := tr.Has([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Has(k020): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(k020) = false, want true")
+	}
+	hasLookups := (reader.fenceCalls - fenceCallsBefore) + (reader.fenceAppendCalls - fenceAppendBefore)
+	if hasLookups < 3 {
+		t.Fatalf("Has(k020) lookup probes=%d, want at least 3 (multiple misses + one hit)", hasLookups)
+	}
+}
+
 func TestTreeGet_FencePredecessorLookupSkipsNonPointers(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")
