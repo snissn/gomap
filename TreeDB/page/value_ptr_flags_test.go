@@ -22,12 +22,21 @@ func TestValuePtrRecordLengthHintMatches_GroupedLegacyFenceMarkerCompat(t *testi
 
 	// Legacy grouped fence markers reused bit23 and collided with grouped hints.
 	legacy := ptr
-	legacy.Length |= 0x00800000
+	legacy.Length |= valuePtrFenceOuterGroupedMask
 	if !ValuePtrRecordLengthHintMatches(legacy, expected) {
 		t.Fatalf("expected legacy grouped fence marker compatibility match")
 	}
 	if ValuePtrRecordLengthHintMatches(legacy, expected+1) {
 		t.Fatalf("unexpected match for wrong expected length")
+	}
+}
+
+func TestValuePtrRecordLengthHintMatches_GroupedLegacyMarkerOnlyAsOmitted(t *testing.T) {
+	ptr := ValuePtr{Length: ValuePtrMarkGrouped(0, 1)}
+	legacy := ptr
+	legacy.Length |= valuePtrFenceOuterGroupedMask
+	if !ValuePtrRecordLengthHintMatches(legacy, 12345) {
+		t.Fatalf("expected marker-only grouped hint to be treated as omitted")
 	}
 }
 

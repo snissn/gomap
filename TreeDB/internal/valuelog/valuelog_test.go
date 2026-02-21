@@ -1263,8 +1263,9 @@ func TestReadAtGroupedLegacyFenceMarkerHintMatch(t *testing.T) {
 	}
 
 	// Simulate a legacy grouped fence-marker bit on a non-fence grouped pointer.
+	const legacyGroupedFenceMarkerBit = 0x00800000 // historical fence-marker bit in grouped length encoding
 	legacy := ptr
-	legacy.Length |= 0x00800000
+	legacy.Length |= legacyGroupedFenceMarkerBit
 
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close: %v", err)

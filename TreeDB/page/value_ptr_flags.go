@@ -57,7 +57,8 @@ func ValuePtrRecordLengthHintMatches(ptr ValuePtr, expected uint32) bool {
 		return true
 	}
 	if ValuePtrIsGrouped(ptr) && ptr.Length&valuePtrFenceOuterGroupedMask != 0 {
-		if recordLen&^valuePtrFenceOuterGroupedMask == expected {
+		legacyCleared := recordLen &^ valuePtrFenceOuterGroupedMask
+		if legacyCleared == 0 || legacyCleared == expected {
 			return true
 		}
 	}
@@ -92,8 +93,10 @@ func ValuePtrSubIndex(ptr ValuePtr) uint8 {
 	return idx
 }
 
-// ValuePtrIsFenceOuter reports whether ptr references a non-grouped outer-leaf
-// fence block payload.
+// ValuePtrIsFenceOuter reports whether ptr references an outer-leaf fence block
+// payload.
+//
+// Grouped pointers may return true only for legacy grouped fence markers.
 func ValuePtrIsFenceOuter(ptr ValuePtr) bool {
 	if ValuePtrIsGrouped(ptr) {
 		// Legacy grouped fence marker bit (new grouped writes do not set this).
