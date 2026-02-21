@@ -56,6 +56,26 @@ func formatBound(v *int) string {
 	return fmt.Sprintf("%d", *v)
 }
 
+func nonNegativeBoundPtr(v int) *int {
+	if v < 0 {
+		return nil
+	}
+	vv := v
+	return &vv
+}
+
+func collectBackendReverseForDebug(t *testing.T, db *DB, startPtr, endPtr *int, phase string, probe int) []int {
+	t.Helper()
+	if db.backend == nil {
+		return nil
+	}
+	bit, err := db.backend.ReverseIterator(keyFromPtr(startPtr), keyFromPtr(endPtr))
+	if err != nil {
+		t.Fatalf("%s random reverse probe=%d start=%s end=%s backend reverse err=%v", phase, probe, formatBound(startPtr), formatBound(endPtr), err)
+	}
+	return issue579CollectInts(t, bit)
+}
+
 func verifyIteratorRangeMatrix(t *testing.T, db *DB, live []int, phase string) {
 	t.Helper()
 
@@ -103,15 +123,15 @@ func liveKeysFromSet(live map[int]struct{}) []int {
 func verifyRandomRangeProbes(t *testing.T, db *DB, live []int, r *rand.Rand, phase string, probes int) {
 	t.Helper()
 	for i := 0; i < probes; i++ {
-		var startPtr *int
-		var endPtr *int
 		s := r.Intn(75) - 5
 		e := r.Intn(75) - 5
+		var startPtr *int
+		var endPtr *int
 		if r.Intn(4) != 0 {
-			startPtr = &s
+			startPtr = nonNegativeBoundPtr(s)
 		}
 		if r.Intn(4) != 0 {
-			endPtr = &e
+			endPtr = nonNegativeBoundPtr(e)
 		}
 		want := expectedRangeInts(live, startPtr, endPtr)
 
@@ -128,26 +148,15 @@ func verifyRandomRangeProbes(t *testing.T, db *DB, live []int, r *rand.Rand, pha
 		}
 		gotReverse := issue579CollectInts(t, rit)
 		wantReverse := reverseInts(want)
+		backendReverse := []int(nil)
 		if len(gotReverse) != len(wantReverse) {
-			backendReverse := []int(nil)
-			if db.backend != nil {
-				bit, berr := db.backend.ReverseIterator(keyFromPtr(startPtr), keyFromPtr(endPtr))
-				if berr != nil {
-					t.Fatalf("%s random reverse probe=%d start=%s end=%s backend reverse err=%v", phase, i, formatBound(startPtr), formatBound(endPtr), berr)
-				}
-				backendReverse = issue579CollectInts(t, bit)
-			}
+			backendReverse = collectBackendReverseForDebug(t, db, startPtr, endPtr, phase, i)
 			t.Fatalf("%s random reverse probe=%d start=%s end=%s len mismatch got=%v want=%v backend=%v", phase, i, formatBound(startPtr), formatBound(endPtr), gotReverse, wantReverse, backendReverse)
 		}
 		for idx := range wantReverse {
 			if gotReverse[idx] != wantReverse[idx] {
-				backendReverse := []int(nil)
-				if db.backend != nil {
-					bit, berr := db.backend.ReverseIterator(keyFromPtr(startPtr), keyFromPtr(endPtr))
-					if berr != nil {
-						t.Fatalf("%s random reverse probe=%d start=%s end=%s backend reverse err=%v", phase, i, formatBound(startPtr), formatBound(endPtr), berr)
-					}
-					backendReverse = issue579CollectInts(t, bit)
+				if backendReverse == nil {
+					backendReverse = collectBackendReverseForDebug(t, db, startPtr, endPtr, phase, i)
 				}
 				t.Fatalf("%s random reverse probe=%d start=%s end=%s mismatch at %d got=%v want=%v backend=%v", phase, i, formatBound(startPtr), formatBound(endPtr), idx, gotReverse, wantReverse, backendReverse)
 			}
