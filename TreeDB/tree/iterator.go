@@ -1292,19 +1292,12 @@ func (it *Iterator) loadCurrent() {
 			return
 		}
 
-		// Check Range Limits
-		if !it.reverse {
-			if it.end != nil && compareTreeKey(keyView, it.end) >= 0 {
-				it.valid = false
-				it.clearPendingFenceSeek()
-				return
-			}
-		} else {
-			if it.start != nil && compareTreeKey(keyView, it.start) < 0 {
-				it.valid = false
-				it.clearPendingFenceSeek()
-				return
-			}
+		// Forward scans can stop as soon as the physical leaf key reaches the
+		// upper bound because all following keys are >= this key.
+		if !it.reverse && it.end != nil && compareTreeKey(keyView, it.end) >= 0 {
+			it.valid = false
+			it.clearPendingFenceSeek()
+			return
 		}
 
 		// Skip tombstones; they are persisted in the index but hidden from iteration.
@@ -1342,6 +1335,15 @@ func (it *Iterator) loadCurrent() {
 				}
 				continue
 			}
+		}
+
+		// Reverse scans must apply the lower bound after optional fence-block
+		// expansion. The physical pointer key can sit below start while expanded
+		// logical keys are still within [start,end).
+		if it.reverse && it.start != nil && compareTreeKey(keyView, it.start) < 0 {
+			it.valid = false
+			it.clearPendingFenceSeek()
+			return
 		}
 
 		it.currKey = keyView
