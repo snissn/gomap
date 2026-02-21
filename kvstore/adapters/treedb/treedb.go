@@ -21,10 +21,8 @@ type DB struct {
 }
 
 const (
-	readBatchGetManyMinKeys         = 32
-	readBatchDupHeavyMinKeyCount    = 8
-	readBatchGetManyParallelMinKeys = 128
-	readBatchGetManyMaxWorkers      = 8
+	readBatchGetManyMinKeys      = 32
+	readBatchDupHeavyMinKeyCount = 8
 )
 
 func Wrap(db *treedb.DB) *DB {
@@ -74,37 +72,18 @@ func dedupeReadBatchKeys(keys [][]byte) [][]byte {
 	return unique
 }
 
-func shouldReadBatchUseGetMany(totalKeys, uniqueKeys, workers int) bool {
-	if workers <= 1 || uniqueKeys <= 1 {
+func shouldReadBatchUseGetMany(db *treedb.DB, totalKeys, uniqueKeys, workers int) bool {
+	if db == nil || workers <= 1 || uniqueKeys <= 1 {
 		return false
 	}
-	// TreeDB.GetMany parallelizes with its own worker policy for >=128 keys.
-	// Keep adapter SetReadWorkers limits authoritative by only using GetMany
-	// when TreeDB's computed worker cap does not exceed the adapter budget.
-	if uniqueKeys >= readBatchGetManyParallelMinKeys && readBatchGetManyWorkerCap(uniqueKeys) > workers {
+	plannedWorkers, willParallelize := db.GetManyParallelPlan(uniqueKeys)
+	if willParallelize && plannedWorkers > workers {
 		return false
 	}
 	if uniqueKeys >= readBatchGetManyMinKeys {
 		return true
 	}
 	return totalKeys >= readBatchDupHeavyMinKeyCount && uniqueKeys*2 <= totalKeys
-}
-
-func readBatchGetManyWorkerCap(keyCount int) int {
-	if keyCount <= 0 {
-		return 1
-	}
-	workers := runtime.GOMAXPROCS(0)
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > readBatchGetManyMaxWorkers {
-		workers = readBatchGetManyMaxWorkers
-	}
-	if workers > keyCount {
-		workers = keyCount
-	}
-	return workers
 }
 
 func (d *DB) setReadWorkers(workers int) {
@@ -158,7 +137,7 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 		workers = 1
 	}
 	batchKeys := dedupeReadBatchKeys(keys)
-	if shouldReadBatchUseGetMany(len(keys), len(batchKeys), workers) {
+	if shouldReadBatchUseGetMany(d.DB, len(keys), len(batchKeys), workers) {
 		// Keep historical post-close behavior for ReadBatch: if no snapshot can
 		// be acquired up front, report unsupported instead of ErrClosed.
 		probe := d.DB.AcquireSnapshot()

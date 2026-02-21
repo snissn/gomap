@@ -68,6 +68,13 @@ func getManyChunkBounds(worker, workers, keyCount int) (int, int) {
 	return start, end
 }
 
+// GetManyParallelPlan reports how this backend would schedule GetMany for the
+// provided key count.
+func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
+	workers = getManyWorkerCount(keyCount)
+	return workers, getManyCanParallelize(keyCount, workers)
+}
+
 // --- Public API ---
 
 // Get returns the value for a key.
