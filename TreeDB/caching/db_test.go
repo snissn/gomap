@@ -1111,8 +1111,8 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries_WALOffDeferred(t *testi
 	if leafEntries <= 0 {
 		t.Fatalf("expected at least one persisted entry")
 	}
-	if leafEntries >= totalKeys {
-		t.Fatalf("expected fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries != totalKeys {
+		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 
 }
@@ -1205,8 +1205,8 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 	if leafEntries <= 0 {
 		t.Fatalf("expected at least one persisted entry")
 	}
-	if leafEntries >= totalKeys {
-		t.Fatalf("expected deferred regrouping to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries != totalKeys {
+		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 
 	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
@@ -1398,8 +1398,8 @@ func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
 	if leafEntries <= 0 {
 		t.Fatalf("expected persisted entries")
 	}
-	if leafEntries >= totalKeys {
-		t.Fatalf("expected fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries != totalKeys {
+		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 }
 
@@ -1835,8 +1835,8 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroupSharded(t *testin
 	if leafEntries <= 0 {
 		t.Fatalf("expected at least one persisted entry")
 	}
-	if leafEntries >= totalKeys {
-		t.Fatalf("expected deferred regrouping to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries != totalKeys {
+		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 
 	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
@@ -1913,8 +1913,8 @@ func TestCachingDB_FlushFenceModeDeferredBatchWritesRegroup(t *testing.T) {
 	if leafEntries <= 0 {
 		t.Fatalf("expected at least one persisted entry")
 	}
-	if leafEntries >= totalKeys {
-		t.Fatalf("expected deferred regrouping to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries != totalKeys {
+		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 
 	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {

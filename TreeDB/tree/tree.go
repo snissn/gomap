@@ -482,14 +482,20 @@ func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byt
 			if err != nil {
 				return nil, false, err
 			}
-			return val, found, nil
+			if found {
+				return val, true, nil
+			}
+			continue
 		}
 		if t.slabFenceAppender != nil {
 			val, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, nil)
 			if err != nil {
 				return nil, false, err
 			}
-			return val, found, nil
+			if found {
+				return val, true, nil
+			}
+			continue
 		}
 		return nil, false, nil
 	}
@@ -515,7 +521,7 @@ func (t *Tree) lookupFenceValueViewAppend(n *node.Node, idx uint16, key []byte, 
 				return nil, false, err
 			}
 			if !found {
-				return nil, false, nil
+				continue
 			}
 			if oldLen == 0 {
 				return tail, true, nil
@@ -537,7 +543,7 @@ func (t *Tree) lookupFenceValueViewAppend(n *node.Node, idx uint16, key []byte, 
 				return nil, false, err
 			}
 			if !found {
-				return nil, false, nil
+				continue
 			}
 			return append(dst, val...), true, nil
 		}
@@ -575,12 +581,15 @@ func (t *Tree) lookupFenceHasKey(n *node.Node, idx uint16, key []byte) (found bo
 					if lease != nil {
 						lease.Release()
 					}
-					return false, true, nil
+					continue
 				}
 				keys := lease.Keys()
 				found = fenceSeekContainsKey(keys, pos, key)
 				lease.Release()
-				return found, true, nil
+				if found {
+					return true, true, nil
+				}
+				continue
 			}
 		}
 		if t.slabFenceSeek != nil {
@@ -590,9 +599,12 @@ func (t *Tree) lookupFenceHasKey(n *node.Node, idx uint16, key []byte) (found bo
 			}
 			if ok {
 				if below || above {
-					return false, true, nil
+					continue
 				}
-				return fenceSeekContainsKey(keys, pos, key), true, nil
+				if fenceSeekContainsKey(keys, pos, key) {
+					return true, true, nil
+				}
+				continue
 			}
 		}
 		if t.slabFenceReader != nil {
@@ -600,14 +612,20 @@ func (t *Tree) lookupFenceHasKey(n *node.Node, idx uint16, key []byte) (found bo
 			if err != nil {
 				return false, false, err
 			}
-			return found, true, nil
+			if found {
+				return true, true, nil
+			}
+			continue
 		}
 		if t.slabFenceAppender != nil {
 			_, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, nil)
 			if err != nil {
 				return false, false, err
 			}
-			return found, true, nil
+			if found {
+				return true, true, nil
+			}
+			continue
 		}
 		return false, false, nil
 	}
