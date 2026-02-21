@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"runtime"
 	"strconv"
 	"testing"
 
@@ -129,12 +130,13 @@ func TestAdapterReadBatch_DuplicateHeavy_UsesGetManyPath(t *testing.T) {
 		t.Fatalf("set hot3: %v", err)
 	}
 
-	origGetMany := readBatchGetManyFn
-	t.Cleanup(func() { readBatchGetManyFn = origGetMany })
+	adapter := wrapNamedWithReadWorkers(db, "TreeDB", 8)
+	origGetMany := adapter.readBatchGetMany
+	t.Cleanup(func() { adapter.readBatchGetMany = origGetMany })
 
 	calls := 0
 	var captured [][]byte
-	readBatchGetManyFn = func(innerDB *treedb.DB, keys [][]byte) ([][]byte, error) {
+	adapter.readBatchGetMany = func(innerDB *treedb.DB, keys [][]byte) ([][]byte, error) {
 		calls++
 		captured = make([][]byte, len(keys))
 		for i := range keys {
@@ -143,7 +145,6 @@ func TestAdapterReadBatch_DuplicateHeavy_UsesGetManyPath(t *testing.T) {
 		return origGetMany(innerDB, keys)
 	}
 
-	adapter := wrapNamedWithReadWorkers(db, "TreeDB", 8)
 	keys := [][]byte{
 		[]byte("hot1"),
 		[]byte("hot1"),
@@ -243,6 +244,51 @@ func TestAdapterReadBatch_AfterCloseGetManyEligibleReturnsErrUnsupported(t *test
 	}
 	if err := adapter.ReadBatch(keys); !errors.Is(err, kvstore.ErrUnsupported) {
 		t.Fatalf("readbatch duplicate-heavy after close expected ErrUnsupported, got=%v", err)
+	}
+}
+
+func TestAdapterReadBatch_GetManyPathRespectsReadWorkersBudget(t *testing.T) {
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	prevGOMAXPROCS := runtime.GOMAXPROCS(16)
+	defer runtime.GOMAXPROCS(prevGOMAXPROCS)
+
+	keys := make([][]byte, 0, 256)
+	for i := 0; i < 256; i++ {
+		keys = append(keys, []byte("key-"+strconv.Itoa(i)))
+	}
+
+	limited := wrapNamedWithReadWorkers(db, "TreeDB", 2)
+	limitedCalls := 0
+	origLimited := limited.readBatchGetMany
+	limited.readBatchGetMany = func(innerDB *treedb.DB, in [][]byte) ([][]byte, error) {
+		limitedCalls++
+		return origLimited(innerDB, in)
+	}
+	if err := limited.ReadBatch(keys); err != nil {
+		t.Fatalf("limited readbatch: %v", err)
+	}
+	if limitedCalls != 0 {
+		t.Fatalf("expected GetMany path skip for limited workers, calls=%d", limitedCalls)
+	}
+
+	wide := wrapNamedWithReadWorkers(db, "TreeDB", 16)
+	wideCalls := 0
+	origWide := wide.readBatchGetMany
+	wide.readBatchGetMany = func(innerDB *treedb.DB, in [][]byte) ([][]byte, error) {
+		wideCalls++
+		return origWide(innerDB, in)
+	}
+	if err := wide.ReadBatch(keys); err != nil {
+		t.Fatalf("wide readbatch: %v", err)
+	}
+	if wideCalls != 1 {
+		t.Fatalf("expected GetMany path call count=1 for wide workers, got=%d", wideCalls)
 	}
 }
 

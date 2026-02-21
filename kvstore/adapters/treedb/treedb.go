@@ -14,19 +14,18 @@ import (
 
 // DB adapts TreeDB's public API to kvstore interfaces.
 type DB struct {
-	DB          *treedb.DB
-	NameStr     string
-	readWorkers atomic.Int32
+	DB               *treedb.DB
+	NameStr          string
+	readWorkers      atomic.Int32
+	readBatchGetMany func(db *treedb.DB, keys [][]byte) ([][]byte, error)
 }
 
 const (
-	readBatchGetManyMinKeys      = 32
-	readBatchDupHeavyMinKeyCount = 8
+	readBatchGetManyMinKeys         = 32
+	readBatchDupHeavyMinKeyCount    = 8
+	readBatchGetManyParallelMinKeys = 128
+	readBatchGetManyMaxWorkers      = 8
 )
-
-var readBatchGetManyFn = func(db *treedb.DB, keys [][]byte) ([][]byte, error) {
-	return db.GetMany(keys)
-}
 
 func Wrap(db *treedb.DB) *DB {
 	return wrapNamedWithReadWorkers(db, "TreeDB", runtime.GOMAXPROCS(0))
@@ -37,7 +36,13 @@ func WrapNamed(db *treedb.DB, name string) *DB {
 }
 
 func wrapNamedWithReadWorkers(db *treedb.DB, name string, workers int) *DB {
-	out := &DB{DB: db, NameStr: name}
+	out := &DB{
+		DB:      db,
+		NameStr: name,
+		readBatchGetMany: func(innerDB *treedb.DB, keys [][]byte) ([][]byte, error) {
+			return innerDB.GetMany(keys)
+		},
+	}
 	out.setReadWorkers(workers)
 	return out
 }
@@ -73,10 +78,33 @@ func shouldReadBatchUseGetMany(totalKeys, uniqueKeys, workers int) bool {
 	if workers <= 1 || uniqueKeys <= 1 {
 		return false
 	}
+	// TreeDB.GetMany parallelizes with its own worker policy for >=128 keys.
+	// Keep adapter SetReadWorkers limits authoritative by only using GetMany
+	// when TreeDB's computed worker cap does not exceed the adapter budget.
+	if uniqueKeys >= readBatchGetManyParallelMinKeys && readBatchGetManyWorkerCap(uniqueKeys) > workers {
+		return false
+	}
 	if uniqueKeys >= readBatchGetManyMinKeys {
 		return true
 	}
 	return totalKeys >= readBatchDupHeavyMinKeyCount && uniqueKeys*2 <= totalKeys
+}
+
+func readBatchGetManyWorkerCap(keyCount int) int {
+	if keyCount <= 0 {
+		return 1
+	}
+	workers := runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > readBatchGetManyMaxWorkers {
+		workers = readBatchGetManyMaxWorkers
+	}
+	if workers > keyCount {
+		workers = keyCount
+	}
+	return workers
 }
 
 func (d *DB) setReadWorkers(workers int) {
@@ -140,7 +168,13 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 		if closeErr := probe.Close(); closeErr != nil {
 			return closeErr
 		}
-		_, err := readBatchGetManyFn(d.DB, batchKeys)
+		getManyFn := d.readBatchGetMany
+		if getManyFn == nil {
+			getManyFn = func(innerDB *treedb.DB, keys [][]byte) ([][]byte, error) {
+				return innerDB.GetMany(keys)
+			}
+		}
+		_, err := getManyFn(d.DB, batchKeys)
 		if err == nil || errors.Is(err, treedb.ErrClosed) {
 			return nil
 		}
