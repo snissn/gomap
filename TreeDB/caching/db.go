@@ -8630,6 +8630,34 @@ func (db *DB) appendWALInlineOne(l *lane, record logRecord, flush bool) error {
 	return nil
 }
 
+func (db *DB) flushWALLane(l *lane) error {
+	if db.disableJournal {
+		return nil
+	}
+	if l == nil {
+		return errWALUnavailable
+	}
+
+	l.walMu.Lock()
+	w := l.wal
+	if w == nil {
+		l.walMu.Unlock()
+		return errWALUnavailable
+	}
+	err := w.Flush()
+	l.walMu.Unlock()
+
+	if err != nil {
+		db.walAckMu.Lock()
+		if db.walErr == nil {
+			db.walErr = err
+		}
+		db.walAckMu.Unlock()
+		return err
+	}
+	return nil
+}
+
 func (db *DB) appendWALDirect(l *lane, records []logRecord, sync bool) error {
 	if l == nil {
 		return errWALUnavailable
@@ -9962,6 +9990,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		if err != nil {
 			return err
 		}
+		deletedAny := false
 		for it.Valid() {
 			key := it.Key()
 			if err := preRotate(key); err != nil {
@@ -9973,10 +10002,18 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			if err := applyDelete(key); err != nil {
 				return poisonApply(err)
 			}
+			deletedAny = true
 			it.Next()
 		}
 		if err := it.Error(); err != nil {
 			return err
+		}
+		if deletedAny {
+			// DeleteRange can emit many non-sync WAL records; flush once so process
+			// crashes do not lose buffered tombstones before a later sync op.
+			if err := db.flushWALLane(lane); err != nil {
+				return err
+			}
 		}
 
 		db.noteWrite()
