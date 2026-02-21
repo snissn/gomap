@@ -136,29 +136,32 @@ func (d *DB) ReadBatch(keys [][]byte) (retErr error) {
 	if workers < 1 {
 		workers = 1
 	}
-	batchKeys := dedupeReadBatchKeys(keys)
-	if shouldReadBatchUseGetMany(d.DB, len(keys), len(batchKeys), workers) {
-		// Keep historical post-close behavior for ReadBatch: if no snapshot can
-		// be acquired up front, report unsupported instead of ErrClosed.
-		probe := d.DB.AcquireSnapshot()
-		if probe == nil {
-			return kvstore.ErrUnsupported
-		}
-		if closeErr := probe.Close(); closeErr != nil {
-			return closeErr
-		}
-		getManyFn := d.readBatchGetMany
-		if getManyFn == nil {
-			getManyFn = func(innerDB *treedb.DB, keys [][]byte) ([][]byte, error) {
-				return innerDB.GetMany(keys)
+	if workers > 1 && len(keys) >= readBatchDupHeavyMinKeyCount {
+		batchKeys := dedupeReadBatchKeys(keys)
+		if shouldReadBatchUseGetMany(d.DB, len(keys), len(batchKeys), workers) {
+			// Keep historical post-close behavior for ReadBatch: if no snapshot can
+			// be acquired up front, report unsupported instead of ErrClosed.
+			probe := d.DB.AcquireSnapshot()
+			if probe == nil {
+				return kvstore.ErrUnsupported
 			}
+			if closeErr := probe.Close(); closeErr != nil {
+				return closeErr
+			}
+			getManyFn := d.readBatchGetMany
+			if getManyFn == nil {
+				getManyFn = func(innerDB *treedb.DB, keys [][]byte) ([][]byte, error) {
+					return innerDB.GetMany(keys)
+				}
+			}
+			_, err := getManyFn(d.DB, batchKeys)
+			if err == nil || errors.Is(err, treedb.ErrClosed) {
+				return nil
+			}
+			return err
 		}
-		_, err := getManyFn(d.DB, batchKeys)
-		if err == nil || errors.Is(err, treedb.ErrClosed) {
-			return nil
-		}
-		return err
 	}
+	batchKeys := keys
 	if len(batchKeys) == 1 || workers <= 1 {
 		snap := d.DB.AcquireSnapshot()
 		if snap == nil {

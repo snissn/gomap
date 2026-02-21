@@ -802,6 +802,9 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 // key count. It can be used by adapters to enforce external worker budgets
 // without duplicating TreeDB scheduler constants.
 func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
+	if db == nil {
+		return 1, false
+	}
 	if keyCount <= 0 {
 		return 1, false
 	}
