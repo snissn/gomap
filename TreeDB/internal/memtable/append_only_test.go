@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestAppendOnlyNextCapacityGrowthPolicy(t *testing.T) {
@@ -170,6 +171,174 @@ func TestAppendOnlyGetOnly8ByteKeysNoPanic(t *testing.T) {
 	if _, _, _, ok := m.GetEntry([]byte("another-miss")); ok {
 		t.Fatalf("expected GetEntry miss")
 	}
+}
+
+func TestAppendOnlyOrderedGetAndGetEntryFastPath(t *testing.T) {
+	keyKinds := []struct {
+		name    string
+		makeKey func(uint64) []byte
+	}{
+		{
+			name: "non-8-byte",
+			makeKey: func(v uint64) []byte {
+				return []byte{byte('a' + v)}
+			},
+		},
+		{
+			name: "8-byte",
+			makeKey: func(v uint64) []byte {
+				k := make([]byte, 8)
+				binary.BigEndian.PutUint64(k, v)
+				return k
+			},
+		},
+	}
+	states := []struct {
+		name   string
+		frozen bool
+	}{
+		{name: "mutable", frozen: false},
+		{name: "frozen", frozen: true},
+	}
+
+	for _, kk := range keyKinds {
+		kk := kk
+		for _, state := range states {
+			state := state
+			t.Run(kk.name+"/"+state.name, func(t *testing.T) {
+				m := NewAppendOnlyWithCapacity(0)
+
+				hitKey := kk.makeKey(1)
+				tombstoneKey := kk.makeKey(2)
+				emptyKey := kk.makeKey(3)
+				pointerKey := kk.makeKey(4)
+				missKey := kk.makeKey(5)
+
+				m.Set(hitKey, []byte("value-hit"))
+				m.Delete(tombstoneKey)
+				m.Set(emptyKey, []byte{})
+				ptrWant := page.ValuePtr{Offset: 123, Length: 456, FileID: 7}
+				m.SetEntry(pointerKey, nil, ptrWant, node.FlagPointer)
+
+				if !m.ordered {
+					t.Fatalf("expected memtable to stay ordered for fast path")
+				}
+				if state.frozen {
+					m.Freeze()
+				}
+
+				if got, del, ok := m.Get(hitKey); !ok || del || string(got) != "value-hit" {
+					t.Fatalf("Get(hit) = (%q,%v,%v), want (value-hit,false,true)", string(got), del, ok)
+				}
+				if got, del, ok := m.Get(tombstoneKey); !ok || !del || got != nil {
+					t.Fatalf("Get(tombstone) = (%v,%v,%v), want (nil,true,true)", got, del, ok)
+				}
+				if got, del, ok := m.Get(emptyKey); !ok || del || got != nil {
+					t.Fatalf("Get(empty) = (%v,%v,%v), want (nil,false,true)", got, del, ok)
+				}
+				if got, del, ok := m.Get(pointerKey); !ok || del || got != nil {
+					t.Fatalf("Get(pointer) = (%v,%v,%v), want (nil,false,true)", got, del, ok)
+				}
+				if got, del, ok := m.Get(missKey); ok || del || got != nil {
+					t.Fatalf("Get(miss) = (%v,%v,%v), want (nil,false,false)", got, del, ok)
+				}
+
+				if got, ptr, flags, ok := m.GetEntry(hitKey); !ok || string(got) != "value-hit" || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
+					t.Fatalf("GetEntry(hit) = (%q,%+v,%d,%v), want (value-hit,zero,%d,true)", string(got), ptr, flags, ok, node.FlagInline)
+				}
+				if got, ptr, flags, ok := m.GetEntry(tombstoneKey); !ok || got != nil || ptr != (page.ValuePtr{}) || flags != node.FlagTombstone {
+					t.Fatalf("GetEntry(tombstone) = (%v,%+v,%d,%v), want (nil,zero,%d,true)", got, ptr, flags, ok, node.FlagTombstone)
+				}
+				if got, ptr, flags, ok := m.GetEntry(emptyKey); !ok || got != nil || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
+					t.Fatalf("GetEntry(empty) = (%v,%+v,%d,%v), want (nil,zero,%d,true)", got, ptr, flags, ok, node.FlagInline)
+				}
+				if got, ptr, flags, ok := m.GetEntry(pointerKey); !ok || got != nil || ptr != ptrWant || flags != node.FlagPointer {
+					t.Fatalf("GetEntry(pointer) = (%v,%+v,%d,%v), want (nil,%+v,%d,true)", got, ptr, flags, ok, ptrWant, node.FlagPointer)
+				}
+				if got, ptr, flags, ok := m.GetEntry(missKey); ok || got != nil || ptr != (page.ValuePtr{}) || flags != 0 {
+					t.Fatalf("GetEntry(miss) = (%v,%+v,%d,%v), want (nil,zero,0,false)", got, ptr, flags, ok)
+				}
+			})
+		}
+	}
+}
+
+var appendOnlyGetBenchSink []byte
+var appendOnlyGetBenchSinkBool bool
+
+func benchmarkAppendOnlyOrderedGetMemtable(b *testing.B, count int) *AppendOnly {
+	b.Helper()
+	m := NewAppendOnlyWithCapacity(0)
+	for i := 0; i < count; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		m.Set(key[:], []byte("v"))
+	}
+	if !m.ordered {
+		b.Fatalf("expected ordered memtable for benchmark")
+	}
+	return m
+}
+
+func benchmarkAppendOnlyGetOrderedVsReverseScan(b *testing.B, count int) {
+	ordered := benchmarkAppendOnlyOrderedGetMemtable(b, count)
+	reverse := benchmarkAppendOnlyOrderedGetMemtable(b, count)
+	reverse.mu.Lock()
+	reverse.ordered = false
+	reverse.latestDirty = true
+	clear(reverse.latest)
+	clear(reverse.latest64)
+	reverse.mu.Unlock()
+
+	var first [8]byte
+	binary.BigEndian.PutUint64(first[:], 0)
+	var miss [8]byte
+	binary.BigEndian.PutUint64(miss[:], uint64(count+1))
+
+	b.Run("ordered_hit_first", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			v, del, ok := ordered.Get(first[:])
+			appendOnlyGetBenchSink = v
+			appendOnlyGetBenchSinkBool = del || ok
+		}
+	})
+	b.Run("reverse_scan_pattern_hit_first", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			v, del, ok := reverse.Get(first[:])
+			appendOnlyGetBenchSink = v
+			appendOnlyGetBenchSinkBool = del || ok
+		}
+	})
+	b.Run("ordered_miss", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			v, del, ok := ordered.Get(miss[:])
+			appendOnlyGetBenchSink = v
+			appendOnlyGetBenchSinkBool = del || ok
+		}
+	})
+	b.Run("reverse_scan_pattern_miss", func(b *testing.B) {
+		b.ReportAllocs()
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			v, del, ok := reverse.Get(miss[:])
+			appendOnlyGetBenchSink = v
+			appendOnlyGetBenchSinkBool = del || ok
+		}
+	})
+}
+
+func BenchmarkAppendOnlyGetOrderedVsReverseScan_10K(b *testing.B) {
+	benchmarkAppendOnlyGetOrderedVsReverseScan(b, 10_000)
+}
+
+func BenchmarkAppendOnlyGetOrderedVsReverseScan_100K(b *testing.B) {
+	benchmarkAppendOnlyGetOrderedVsReverseScan(b, 100_000)
 }
 
 func TestAppendOnlyIteratorUnorderedDoesNotBlockWriter(t *testing.T) {
