@@ -423,6 +423,15 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 			outerMode:    treedb.IndexOuterLeafModeV2FencePtr,
 			walFenceMode: treedb.ValueLogWALFenceModeSimpleInline,
 		},
+		{
+			name: "wal_on_relaxed_v2_blockptr",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=1",
+				"TREEDB_CRASH_OUTERLEAF_MODE=v2_blockptr",
+			},
+			outerMode: treedb.IndexOuterLeafModeV2BlockPtr,
+		},
 	}
 
 	for _, tc := range tiers {

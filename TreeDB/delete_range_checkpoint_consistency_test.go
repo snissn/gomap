@@ -39,7 +39,7 @@ func collectIteratorInts(t *testing.T, it Iterator) []int {
 }
 
 func TestDeleteRange_CheckpointConsistency_ProfileFenceMatrix(t *testing.T) {
-	profiles := []Profile{ProfileFast, ProfileWALOnFast}
+	profiles := []Profile{ProfileDurable, ProfileFast, ProfileWALOnFast}
 	for _, profile := range profiles {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := OptionsFor(profile, t.TempDir())
