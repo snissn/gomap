@@ -10,11 +10,22 @@ import (
 
 // --- Public API ---
 
+func (db *DB) acquireSnapshotOrErr() (*Snapshot, error) {
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return nil, ErrClosed
+	}
+	return snap, nil
+}
+
 // Get returns the value for a key.
 //
 // Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
-	snap := db.AcquireSnapshot()
+	snap, err := db.acquireSnapshotOrErr()
+	if err != nil {
+		return nil, err
+	}
 	defer snap.Close()
 	val, err := snap.Get(key)
 	if err == tree.ErrKeyNotFound {
@@ -32,7 +43,10 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	if len(keys) == 0 {
 		return out, nil
 	}
-	snap := db.AcquireSnapshot()
+	snap, err := db.acquireSnapshotOrErr()
+	if err != nil {
+		return nil, err
+	}
 	defer snap.Close()
 
 	// Copy all found values into a single arena to avoid one allocation per key.
@@ -88,7 +102,10 @@ func (db *DB) Dir() string {
 // GetAppend appends the value for the key to dst and returns the new slice.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
-	snap := db.AcquireSnapshot()
+	snap, err := db.acquireSnapshotOrErr()
+	if err != nil {
+		return dst, err
+	}
 	defer snap.Close()
 	val, err := snap.GetAppend(key, dst)
 	if err == tree.ErrKeyNotFound {
@@ -102,7 +119,10 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 
 // Has checks if a key exists.
 func (db *DB) Has(key []byte) (bool, error) {
-	snap := db.AcquireSnapshot()
+	snap, err := db.acquireSnapshotOrErr()
+	if err != nil {
+		return false, err
+	}
 	defer snap.Close()
 	return snap.Has(key)
 }
@@ -257,7 +277,10 @@ func (db *DB) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
 // IteratorWithOptions returns an iterator with explicit value materialization
 // controls.
 func (db *DB) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
-	snap := db.AcquireSnapshot()
+	snap, err := db.acquireSnapshotOrErr()
+	if err != nil {
+		return nil, err
+	}
 	it := snap.tree.IteratorWithOptions(start, end, opts)
 	return &DBIterator{snap: snap, iter: it}, nil
 }
@@ -270,7 +293,10 @@ func (db *DB) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error
 // ReverseIteratorWithOptions returns a reverse iterator with explicit value
 // materialization controls.
 func (db *DB) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
-	snap := db.AcquireSnapshot()
+	snap, err := db.acquireSnapshotOrErr()
+	if err != nil {
+		return nil, err
+	}
 	it := snap.tree.ReverseIteratorWithOptions(start, end, opts)
 	return &DBIterator{snap: snap, iter: it}, nil
 }

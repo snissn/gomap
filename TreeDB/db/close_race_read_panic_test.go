@@ -1,6 +1,9 @@
 package db
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // Regression test for close/read races: when snapshot acquisition is blocked
 // by closing state, read APIs must fail gracefully instead of panicking.
@@ -18,12 +21,12 @@ func TestReadAPIsWhileClosing_DoNotPanic(t *testing.T) {
 	key := []byte("k")
 	tests := []struct {
 		name string
-		fn   func()
+		fn   func() error
 	}{
-		{name: "Get", fn: func() { _, _ = d.Get(key) }},
-		{name: "GetAppend", fn: func() { _, _ = d.GetAppend(key, nil) }},
-		{name: "Has", fn: func() { _, _ = d.Has(key) }},
-		{name: "GetMany", fn: func() { _, _ = d.GetMany([][]byte{key}) }},
+		{name: "Get", fn: func() error { _, err := d.Get(key); return err }},
+		{name: "GetAppend", fn: func() error { _, err := d.GetAppend(key, nil); return err }},
+		{name: "Has", fn: func() error { _, err := d.Has(key); return err }},
+		{name: "GetMany", fn: func() error { _, err := d.GetMany([][]byte{key}); return err }},
 	}
 
 	for _, tc := range tests {
@@ -33,7 +36,10 @@ func TestReadAPIsWhileClosing_DoNotPanic(t *testing.T) {
 					t.Fatalf("%s panicked while db is closing: %v", tc.name, r)
 				}
 			}()
-			tc.fn()
+			err := tc.fn()
+			if !errors.Is(err, ErrClosed) {
+				t.Fatalf("%s err=%v want %v", tc.name, err, ErrClosed)
+			}
 		})
 	}
 }

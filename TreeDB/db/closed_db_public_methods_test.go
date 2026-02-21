@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -37,7 +38,9 @@ func runClosedDBMethod(t *testing.T, method string, fn func(*DB)) {
 
 func TestClosedDB_AcquireSnapshot(t *testing.T) {
 	runClosedDBMethod(t, "AcquireSnapshot", func(d *DB) {
-		_ = d.AcquireSnapshot()
+		if snap := d.AcquireSnapshot(); snap != nil {
+			t.Fatalf("AcquireSnapshot()=%v want nil on closed DB", snap)
+		}
 	})
 }
 
@@ -152,19 +155,28 @@ func TestClosedDB_FragmentationReport(t *testing.T) {
 
 func TestClosedDB_Get(t *testing.T) {
 	runClosedDBMethod(t, "Get", func(d *DB) {
-		_, _ = d.Get([]byte("k"))
+		_, err := d.Get([]byte("k"))
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Get err=%v want %v", err, ErrClosed)
+		}
 	})
 }
 
 func TestClosedDB_GetMany(t *testing.T) {
 	runClosedDBMethod(t, "GetMany", func(d *DB) {
-		_, _ = d.GetMany([][]byte{[]byte("k")})
+		_, err := d.GetMany([][]byte{[]byte("k")})
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("GetMany err=%v want %v", err, ErrClosed)
+		}
 	})
 }
 
 func TestClosedDB_GetUnsafe(t *testing.T) {
 	runClosedDBMethod(t, "GetUnsafe", func(d *DB) {
-		_, _ = d.GetUnsafe([]byte("k"))
+		_, err := d.GetUnsafe([]byte("k"))
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("GetUnsafe err=%v want %v", err, ErrClosed)
+		}
 	})
 }
 
@@ -176,13 +188,19 @@ func TestClosedDB_Dir(t *testing.T) {
 
 func TestClosedDB_GetAppend(t *testing.T) {
 	runClosedDBMethod(t, "GetAppend", func(d *DB) {
-		_, _ = d.GetAppend([]byte("k"), nil)
+		_, err := d.GetAppend([]byte("k"), nil)
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("GetAppend err=%v want %v", err, ErrClosed)
+		}
 	})
 }
 
 func TestClosedDB_Has(t *testing.T) {
 	runClosedDBMethod(t, "Has", func(d *DB) {
-		_, _ = d.Has([]byte("k"))
+		_, err := d.Has([]byte("k"))
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Has err=%v want %v", err, ErrClosed)
+		}
 	})
 }
 
@@ -212,36 +230,48 @@ func TestClosedDB_DeleteSync(t *testing.T) {
 
 func TestClosedDB_Iterator(t *testing.T) {
 	runClosedDBMethod(t, "Iterator", func(d *DB) {
-		it, _ := d.Iterator(nil, nil)
+		it, err := d.Iterator(nil, nil)
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("Iterator err=%v want %v", err, ErrClosed)
+		}
 		if it != nil {
-			_ = it.Close()
+			t.Fatalf("Iterator() returned iterator on closed DB")
 		}
 	})
 }
 
 func TestClosedDB_IteratorWithOptions(t *testing.T) {
 	runClosedDBMethod(t, "IteratorWithOptions", func(d *DB) {
-		it, _ := d.IteratorWithOptions(nil, nil, IteratorOptions{})
+		it, err := d.IteratorWithOptions(nil, nil, IteratorOptions{})
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("IteratorWithOptions err=%v want %v", err, ErrClosed)
+		}
 		if it != nil {
-			_ = it.Close()
+			t.Fatalf("IteratorWithOptions() returned iterator on closed DB")
 		}
 	})
 }
 
 func TestClosedDB_ReverseIterator(t *testing.T) {
 	runClosedDBMethod(t, "ReverseIterator", func(d *DB) {
-		it, _ := d.ReverseIterator(nil, nil)
+		it, err := d.ReverseIterator(nil, nil)
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("ReverseIterator err=%v want %v", err, ErrClosed)
+		}
 		if it != nil {
-			_ = it.Close()
+			t.Fatalf("ReverseIterator() returned iterator on closed DB")
 		}
 	})
 }
 
 func TestClosedDB_ReverseIteratorWithOptions(t *testing.T) {
 	runClosedDBMethod(t, "ReverseIteratorWithOptions", func(d *DB) {
-		it, _ := d.ReverseIteratorWithOptions(nil, nil, IteratorOptions{})
+		it, err := d.ReverseIteratorWithOptions(nil, nil, IteratorOptions{})
+		if !errors.Is(err, ErrClosed) {
+			t.Fatalf("ReverseIteratorWithOptions err=%v want %v", err, ErrClosed)
+		}
 		if it != nil {
-			_ = it.Close()
+			t.Fatalf("ReverseIteratorWithOptions() returned iterator on closed DB")
 		}
 	})
 }
