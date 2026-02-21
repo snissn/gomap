@@ -147,6 +147,14 @@ func TestTreemapCLI_SafetyGuards(t *testing.T) {
 	if !strings.Contains(scanRes.stderr, "scan requires -allow-values") {
 		t.Fatalf("scan guard stderr mismatch: %q", scanRes.stderr)
 	}
+
+	scanJSONLRes := runTreemapCLI(t, "scan-jsonl", dir)
+	if scanJSONLRes.exitCode != 1 {
+		t.Fatalf("scan-jsonl guard exit code: got %d, want %d (stderr=%q)", scanJSONLRes.exitCode, 1, scanJSONLRes.stderr)
+	}
+	if !strings.Contains(scanJSONLRes.stderr, "scan-jsonl requires -allow-values") {
+		t.Fatalf("scan-jsonl guard stderr mismatch: %q", scanJSONLRes.stderr)
+	}
 }
 
 func TestTreemapCLI_CheckpointRWSuccess(t *testing.T) {
