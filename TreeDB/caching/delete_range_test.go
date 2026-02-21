@@ -212,3 +212,81 @@ func TestCachingDB_DeleteRange_WALSkipsFlushWhenNoDeletes(t *testing.T) {
 		t.Fatalf("expected no WAL Flush when range has no keys, got %d", stub.flushCalls)
 	}
 }
+
+func TestCachingDB_DeleteRange_WALFlushesOnlySelectedLane(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		FlushThreshold: 1 << 30,
+		JournalLanes:   4,
+		MemtableShards: 4,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	for i := 0; i < 64; i++ {
+		key := []byte{byte('a' + (i % 26)), byte('0' + byte(i%10)), byte('x'), byte('0' + byte((i/10)%10))}
+		if err := db.Set(key, []byte("v")); err != nil {
+			t.Fatalf("Set(%q): %v", key, err)
+		}
+	}
+
+	stubs := make([]*countingLogWriter, len(db.lanes))
+	db.mu.Lock()
+	origWALs := make([]commitWriter, len(db.lanes))
+	for i := range db.lanes {
+		stub := &countingLogWriter{}
+		stubs[i] = stub
+		l := &db.lanes[i]
+		l.walMu.Lock()
+		origWALs[i] = l.wal
+		l.wal = stub
+		l.walMu.Unlock()
+	}
+	db.mu.Unlock()
+	defer func() {
+		db.mu.Lock()
+		for i := range db.lanes {
+			l := &db.lanes[i]
+			l.walMu.Lock()
+			l.wal = origWALs[i]
+			l.walMu.Unlock()
+		}
+		db.mu.Unlock()
+	}()
+
+	if err := db.DeleteRange([]byte("a"), []byte("z")); err != nil {
+		t.Fatalf("DeleteRange: %v", err)
+	}
+
+	totalAppends := 0
+	totalFlushes := 0
+	totalSyncs := 0
+	activeLaneCount := 0
+	for i, stub := range stubs {
+		totalAppends += stub.appendCalls
+		totalFlushes += stub.flushCalls
+		totalSyncs += stub.syncCalls
+		if stub.appendCalls > 0 || stub.flushCalls > 0 || stub.syncCalls > 0 {
+			activeLaneCount++
+		}
+		if stub.flushCalls > 1 {
+			t.Fatalf("lane %d flush calls=%d want <= 1", i, stub.flushCalls)
+		}
+	}
+	if totalAppends == 0 {
+		t.Fatalf("expected WAL appends for range deletes")
+	}
+	if totalFlushes != 1 {
+		t.Fatalf("expected exactly one lane flush per DeleteRange call, got total flushes=%d", totalFlushes)
+	}
+	if activeLaneCount != 1 {
+		t.Fatalf("expected DeleteRange to use exactly one WAL lane, active lanes=%d", activeLaneCount)
+	}
+	if totalSyncs != 0 {
+		t.Fatalf("expected no WAL sync calls for non-sync DeleteRange, got %d", totalSyncs)
+	}
+}
