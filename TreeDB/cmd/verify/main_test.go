@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,24 +36,6 @@ func runVerify(t *testing.T, args ...string) (string, error) {
 	return string(out), err
 }
 
-func captureVerifyStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stdout = w
-	defer func() { os.Stdout = old }()
-	fn()
-	_ = w.Close()
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, r); err != nil {
-		t.Fatalf("io.Copy: %v", err)
-	}
-	return buf.String()
-}
-
 func TestVerifyMissingDirFails(t *testing.T) {
 	out, err := runVerify(t)
 	if err == nil {
@@ -71,17 +51,10 @@ func TestVerifyOnFreshDirSucceeds(t *testing.T) {
 	if err := os.MkdirAll(dbDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	oldDir, oldReport, oldVacuum := *dir, *report, *vacuumIndex
-	t.Cleanup(func() {
-		*dir = oldDir
-		*report = oldReport
-		*vacuumIndex = oldVacuum
-	})
-	*dir = dbDir
-	*report = false
-	*vacuumIndex = false
-
-	out := captureVerifyStdout(t, func() { main() })
+	out, err := runVerify(t, "-dir", dbDir, "-report=false", "-vacuum-index=false")
+	if err != nil {
+		t.Fatalf("verify helper failed: %v output=%q", err, out)
+	}
 	if !strings.Contains(out, "Verification successful. Items:") {
 		t.Fatalf("expected success output, got %q", out)
 	}

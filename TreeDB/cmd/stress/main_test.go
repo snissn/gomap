@@ -1,31 +1,39 @@
 package main
 
 import (
-	"bytes"
-	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
-func captureStressStdout(t *testing.T, fn func()) string {
+const stressHelperEnv = "GO_WANT_STRESS_HELPER"
+
+func TestStressMainHelper(t *testing.T) {
+	if os.Getenv(stressHelperEnv) != "1" {
+		return
+	}
+	args := os.Args
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			os.Args = append([]string{"stress"}, args[i+1:]...)
+			main()
+			return
+		}
+	}
+	os.Args = []string{"stress"}
+	main()
+}
+
+func runStress(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("os.Pipe: %v", err)
-	}
-	os.Stdout = w
-	defer func() { os.Stdout = old }()
-	fn()
-	_ = w.Close()
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, r); err != nil {
-		t.Fatalf("io.Copy: %v", err)
-	}
-	return buf.String()
+	cmdArgs := []string{"-test.run=TestStressMainHelper", "--"}
+	cmdArgs = append(cmdArgs, args...)
+	cmd := exec.Command(os.Args[0], cmdArgs...)
+	cmd.Env = append(os.Environ(), stressHelperEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func TestStressZeroDurationSmoke(t *testing.T) {
@@ -34,33 +42,18 @@ func TestStressZeroDurationSmoke(t *testing.T) {
 		t.Fatalf("MkdirAll: %v", err)
 	}
 
-	oldDir, oldDuration := *dir, *duration
-	oldWorkers, oldKeys, oldOps := *workers, *keyRange, *opsCount
-	oldValSize, oldKeepRecent := *valSize, *keepRecent
-	oldCPU, oldMem := *cpuprofile, *memprofile
-	t.Cleanup(func() {
-		*dir = oldDir
-		*duration = oldDuration
-		*workers = oldWorkers
-		*keyRange = oldKeys
-		*opsCount = oldOps
-		*valSize = oldValSize
-		*keepRecent = oldKeepRecent
-		*cpuprofile = oldCPU
-		*memprofile = oldMem
-	})
-
-	*dir = dbDir
-	*duration = 0 * time.Second
-	*workers = 1
-	*keyRange = 1
-	*opsCount = 0
-	*valSize = 16
-	*keepRecent = 1
-	*cpuprofile = ""
-	*memprofile = ""
-
-	out := captureStressStdout(t, func() { main() })
+	out, err := runStress(t,
+		"-dir", dbDir,
+		"-duration", "0s",
+		"-workers", "1",
+		"-keys", "1",
+		"-ops", "0",
+		"-valsize", "16",
+		"-keeprecent", "1",
+	)
+	if err != nil {
+		t.Fatalf("stress helper failed: %v output=%q", err, out)
+	}
 	if !strings.Contains(out, "--- Results ---") {
 		t.Fatalf("expected results output, got %q", out)
 	}
