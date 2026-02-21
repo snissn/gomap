@@ -1189,6 +1189,12 @@ func (db *DB) deferredValueLogNeedsSingleLaneRegroup() bool {
 	return db != nil && db.deferredValueLogEnabled()
 }
 
+func (db *DB) allowFencePointerCollapse() bool {
+	// Disabled for correctness: collapsing to user-key fence anchors can orphan
+	// sibling keys when a later write/delete overwrites that anchor key.
+	return false
+}
+
 // sumKeyValueBytes returns the total bytes across paired key/value entries.
 // If keys and values differ in length, only the shared prefix is counted.
 func sumKeyValueBytes(keys, values [][]byte) uint64 {
@@ -1421,6 +1427,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 		return ops, nil
 	}
 	fenceMode := db.outerLeafFenceV2Enabled()
+	collapseFence := fenceMode && db.allowFencePointerCollapse()
 
 	eligible := getValueLogEligible(len(ops))
 	defer putValueLogEligible(eligible)
@@ -1496,7 +1503,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	}
 
 	var eligibleByIdx []bool
-	if fenceMode {
+	if collapseFence {
 		eligibleByIdx = make([]bool, len(ops))
 		for _, idx := range eligible {
 			if idx >= 0 && idx < len(eligibleByIdx) {
@@ -1507,7 +1514,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 
 	for i := range groups {
 		ptr := ptrs[i]
-		if fenceMode {
+		if collapseFence {
 			ptr = page.ValuePtrMarkFenceOuter(ptr)
 		}
 		group := groups[i]
@@ -1517,7 +1524,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 			putOuterLeafArena(outerArena)
 			return nil, errors.New("cachingdb: deferred value-log group out of range")
 		}
-		if fenceMode {
+		if collapseFence {
 			if group.start < group.end {
 				idx := eligible[group.start]
 				op := &ops[idx]
@@ -1535,7 +1542,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 			op.Value = nil
 		}
 	}
-	if fenceMode && len(eligibleByIdx) > 0 {
+	if collapseFence && len(eligibleByIdx) > 0 {
 		dst := 0
 		for i := range ops {
 			if eligibleByIdx[i] && !ops[i].IsPtr {
@@ -1630,6 +1637,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		putValueLogKeys(ptrVals)
 	}()
 	fenceMode := db.outerLeafFenceV2Enabled()
+	collapseFence := fenceMode && db.allowFencePointerCollapse()
 	state := fenceState
 	if state == nil {
 		state = &deferredFenceCollapseState{}
@@ -1637,7 +1645,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 
 	for iter.Valid() {
 		key := iter.UnsafeKey()
-		if fenceMode && len(state.prevKey) > 0 && bytes.Compare(key, state.prevKey) <= 0 {
+		if collapseFence && len(state.prevKey) > 0 && bytes.Compare(key, state.prevKey) <= 0 {
 			// Fence collapse is only valid on ascending key runs.
 			state.havePtr = false
 		}
@@ -1660,7 +1668,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		val, ptr, flags := iter.UnsafeEntry()
 		if flags&node.FlagPointer != 0 {
 			emitPtr := true
-			if fenceMode {
+			if collapseFence {
 				if state.havePtr && ptr == state.lastPtr {
 					emitPtr = false
 				} else {
@@ -1780,14 +1788,14 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	emittedGroups := uint64(0)
 	for i := range groups {
 		ptr := vlogPtrs[i]
-		if fenceMode {
+		if collapseFence {
 			ptr = page.ValuePtrMarkFenceOuter(ptr)
 		}
 		group := groups[i]
 		if group.start < 0 || group.end < group.start || group.end > len(ptrKeys) {
 			return errors.New("cachingdb: deferred value-log group out of range")
 		}
-		if fenceMode {
+		if collapseFence {
 			// Fence-pointer mode stores one key per grouped outer block.
 			// Keeping only the first key preserves sorted fence bounds while
 			// reducing persisted index entries.
@@ -1812,7 +1820,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			}
 		}
 	}
-	if fenceMode && emittedGroups > 0 {
+	if collapseFence && emittedGroups > 0 {
 		db.deferredFenceEmittedGroups.Add(emittedGroups)
 	}
 
@@ -1892,6 +1900,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 	allowPointers := db.allowValueLogPointers()
 	fenceMode := db.outerLeafFenceV2Enabled()
+	collapseFence := fenceMode && db.allowFencePointerCollapse()
 	durability := journalDurabilityNone
 	if sync {
 		durability = journalDurabilitySync
@@ -1942,7 +1951,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 	emitPointer := func(key []byte, ptr page.ValuePtr) error {
 		emitPtr := true
-		if fenceMode {
+		if collapseFence {
 			if haveFencePtr && ptr == lastFencePtr {
 				emitPtr = false
 			} else {
@@ -2023,7 +2032,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 			for i := range groups {
 				ptr := vlogPtrs[i]
-				if fenceMode {
+				if collapseFence {
 					ptr = page.ValuePtrMarkFenceOuter(ptr)
 				}
 				group := groups[i]
@@ -2033,7 +2042,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				}
 				group.start += chunkStart
 				group.end += chunkStart
-				if fenceMode {
+				if collapseFence {
 					if group.start >= group.end {
 						continue
 					}
@@ -2052,7 +2061,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if fenceMode {
 			db.recordDeferredFenceMaterialized(totalKeys, candidateBytes)
 		}
-		if fenceMode && emittedGroups > 0 {
+		if collapseFence && emittedGroups > 0 {
 			db.deferredFenceEmittedGroups.Add(emittedGroups)
 		}
 		ptrKeys = ptrKeys[:0]
@@ -11501,6 +11510,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		chunkBackend := totalLen > backendEntriesCap
 		emittedChunk := false
 		fenceMode := db.outerLeafFenceV2Enabled()
+		collapseFence := fenceMode && db.allowFencePointerCollapse()
 
 		type ptrSetterView interface {
 			SetPointerView(key []byte, ptr page.ValuePtr) error
@@ -11598,7 +11608,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				haveFencePtr = false
 			case entry.IsPtr:
 				emitPtr := true
-				if fenceMode {
+				if collapseFence {
 					if haveFencePtr && entry.ValuePtr == lastFencePtr {
 						emitPtr = false
 					} else {
@@ -12183,6 +12193,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			ps, _ := backendBatch.(ptrSetter)
 			var single [1]batch.Entry
 			fenceMode := db.outerLeafFenceV2Enabled()
+			collapseFence := fenceMode && db.allowFencePointerCollapse()
 			var (
 				lastFencePtr page.ValuePtr
 				haveFencePtr bool
@@ -12222,7 +12233,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			for iter.Valid() {
 				key := iter.UnsafeKey()
 				val, ptr, flags := iter.UnsafeEntry()
-				if fenceMode && len(prevFenceKey) > 0 && bytes.Compare(key, prevFenceKey) <= 0 {
+				if collapseFence && len(prevFenceKey) > 0 && bytes.Compare(key, prevFenceKey) <= 0 {
 					haveFencePtr = false
 				}
 				if flags&node.FlagTombstone != 0 {
@@ -12249,7 +12260,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				} else {
 					if flags&node.FlagPointer != 0 {
 						emitPtr := true
-						if fenceMode {
+						if collapseFence {
 							if haveFencePtr && ptr == lastFencePtr {
 								emitPtr = false
 							} else {
