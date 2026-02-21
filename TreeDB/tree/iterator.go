@@ -1259,6 +1259,14 @@ func (it *Iterator) loadCurrent() {
 
 		top := &it.stack[len(it.stack)-1]
 
+		if moved, err := it.tryRepositionPendingFence(top); err != nil {
+			it.err = err
+			it.valid = false
+			return
+		} else if moved {
+			continue
+		}
+
 		// Check Bounds
 		if top.Index < 0 {
 			it.clearPendingFenceSeek()
@@ -1270,14 +1278,7 @@ func (it *Iterator) loadCurrent() {
 			it.stepForward()
 			return
 		}
-
-		if moved, err := it.tryRepositionPendingFence(top); err != nil {
-			it.err = err
-			it.valid = false
-			return
-		} else if moved {
-			continue
-		} else if len(it.pendingSeekKey) > 0 {
+		if len(it.pendingSeekKey) > 0 {
 			// One-shot seek lower-bound handling: once we've confirmed there is
 			// no hidden predecessor fence candidate for this leaf position,
 			// continue with regular key materialization.
