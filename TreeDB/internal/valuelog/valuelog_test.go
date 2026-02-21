@@ -1286,6 +1286,70 @@ func TestReadAtGroupedLegacyFenceMarkerHintMatch(t *testing.T) {
 	}
 }
 
+func TestAppendRawRecord_LegacyGroupedFenceMarkerHintMatch(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "value-src-000001.log")
+
+	srcWriter, err := NewWriter(srcPath, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new src writer: %v", err)
+	}
+	srcPtrs, err := srcWriter.AppendFrame(0, nil, []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
+	if err != nil {
+		_ = srcWriter.Close()
+		t.Fatalf("append src frame: %v", err)
+	}
+	if len(srcPtrs) != 2 {
+		_ = srcWriter.Close()
+		t.Fatalf("expected 2 src pointers, got %d", len(srcPtrs))
+	}
+	if !page.ValuePtrIsGrouped(srcPtrs[0]) {
+		_ = srcWriter.Close()
+		t.Fatalf("expected grouped src pointer")
+	}
+	if err := srcWriter.Close(); err != nil {
+		t.Fatalf("close src writer: %v", err)
+	}
+
+	raw, err := os.ReadFile(srcPath)
+	if err != nil {
+		t.Fatalf("read raw src record: %v", err)
+	}
+	const legacyGroupedFenceMarkerBit = 0x00800000 // historical fence-marker bit in grouped length encoding
+	legacyLen := srcPtrs[0].Length | legacyGroupedFenceMarkerBit
+
+	dstPath := filepath.Join(dir, "value-dst-000001.log")
+	dstWriter, err := NewWriter(dstPath, page.ValueLogFileID(2))
+	if err != nil {
+		t.Fatalf("new dst writer: %v", err)
+	}
+	dstPtr, err := dstWriter.AppendRawRecord(raw, legacyLen)
+	if err != nil {
+		_ = dstWriter.Close()
+		t.Fatalf("append raw record with legacy grouped marker: %v", err)
+	}
+	if err := dstWriter.Close(); err != nil {
+		t.Fatalf("close dst writer: %v", err)
+	}
+
+	f, err := os.Open(dstPath)
+	if err != nil {
+		t.Fatalf("open dst file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	got, err := ReadAtWithDict(f, dstPtr, true, nil, nil, nil, templ.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("read appended legacy grouped pointer: %v", err)
+	}
+	if !bytes.Equal(got, []byte("alpha")) {
+		t.Fatalf("value mismatch after append raw with legacy grouped marker")
+	}
+}
+
 func TestValueLogCorruptCRC(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
