@@ -110,11 +110,13 @@ func TestReverseIterator_PropagatesDeferredValueLogFlushError(t *testing.T) {
 	l.vlog = nil
 	l.vlogDirty.Store(true)
 	l.vlogMu.Unlock()
+	if oldWriter != nil {
+		// Release the file handle now that this test intentionally detaches the lane
+		// writer; otherwise TempDir cleanup can fail on Windows.
+		_ = oldWriter.Close()
+	}
 	t.Cleanup(func() {
 		l.vlogMu.Lock()
-		if l.vlog == nil {
-			l.vlog = oldWriter
-		}
 		l.vlogDirty.Store(false)
 		l.vlogMu.Unlock()
 	})
