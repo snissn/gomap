@@ -2,6 +2,7 @@ package merging
 
 import (
 	"bytes"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -9,9 +10,12 @@ import (
 )
 
 type mockUnsafeIter struct {
-	data      []entry
-	idx       int
-	seekedKey []byte
+	data       []entry
+	idx        int
+	seekedKey  []byte
+	err        error
+	closeErr   error
+	closeCalls int
 }
 
 type entry struct {
@@ -34,8 +38,8 @@ func (m *mockUnsafeIter) KeyCopy(dst []byte) []byte {
 func (m *mockUnsafeIter) ValueCopy(dst []byte) []byte {
 	return append(dst[:0], m.UnsafeValue()...)
 }
-func (m *mockUnsafeIter) Error() error    { return nil }
-func (m *mockUnsafeIter) Close() error    { return nil }
+func (m *mockUnsafeIter) Error() error    { return m.err }
+func (m *mockUnsafeIter) Close() error    { m.closeCalls++; return m.closeErr }
 func (m *mockUnsafeIter) IsDeleted() bool { return m.data[m.idx].del }
 func (m *mockUnsafeIter) Seek(key []byte) {
 	m.seekedKey = key
@@ -120,5 +124,74 @@ func TestTwoWayMerger(t *testing.T) {
 
 	if !reflect.DeepEqual(results2, expected2) {
 		t.Errorf("Merge results mismatch (domain).\nGot: %v\nWant:%v", results2, expected2)
+	}
+}
+
+func TestMergingIteratorNWay_DedupTombstoneAndBounds(t *testing.T) {
+	src0 := &mockUnsafeIter{data: []entry{
+		{"A", "", true}, // tombstone should hide A from older sources
+		{"C", "c-new", false},
+	}}
+	src1 := &mockUnsafeIter{data: []entry{
+		{"A", "a-old", false},
+		{"B", "b-mid", false},
+		{"D", "d-mid", false},
+	}}
+	src2 := &mockUnsafeIter{data: []entry{
+		{"B", "b-old", false},
+		{"E", "e-old", false},
+	}}
+
+	it := NewMergingIterator([]IteratorSource{
+		{Iter: src0, Priority: 0},
+		{Iter: src1, Priority: 1},
+		{Iter: src2, Priority: 2},
+	}, []byte("B"), []byte("E"))
+
+	got := make([][2]string, 0)
+	for it.Valid() {
+		key := string(it.KeyCopy(nil))
+		val := string(it.ValueCopy(nil))
+		got = append(got, [2]string{key, val})
+		it.Next()
+	}
+
+	want := [][2]string{
+		{"B", "b-mid"},
+		{"C", "c-new"},
+		{"D", "d-mid"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("merged output mismatch\n got=%v\nwant=%v", got, want)
+	}
+
+	start, end := it.Domain()
+	if !bytes.Equal(start, []byte("B")) || !bytes.Equal(end, []byte("E")) {
+		t.Fatalf("Domain()=%q,%q want %q,%q", start, end, []byte("B"), []byte("E"))
+	}
+}
+
+func TestMergingIteratorCloseReturnsFirstError(t *testing.T) {
+	err1 := errors.New("close-1")
+	err2 := errors.New("close-2")
+	src0 := &mockUnsafeIter{data: []entry{{"A", "a", false}}, closeErr: err1}
+	src1 := &mockUnsafeIter{data: []entry{{"B", "b", false}}, closeErr: err2}
+	src2 := &mockUnsafeIter{data: []entry{{"C", "c", false}}}
+
+	it := NewMergingIterator([]IteratorSource{
+		{Iter: src0, Priority: 0},
+		{Iter: src1, Priority: 1},
+		{Iter: src2, Priority: 2},
+	}, nil, nil)
+	if !it.Valid() {
+		t.Fatalf("iterator should be valid initially")
+	}
+
+	err := it.Close()
+	if !errors.Is(err, err1) {
+		t.Fatalf("Close() err=%v, want first close error %v", err, err1)
+	}
+	if src0.closeCalls == 0 || src1.closeCalls == 0 || src2.closeCalls == 0 {
+		t.Fatalf("expected all sources to be closed: calls=%d,%d,%d", src0.closeCalls, src1.closeCalls, src2.closeCalls)
 	}
 }

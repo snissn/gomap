@@ -124,16 +124,16 @@ func (c *Config) CompressValuePooled(value []byte) ([]byte, bool, func(), error)
 	needed := HeaderSize + len(compressed)
 	if cap(*pbuf) < needed {
 		out := make([]byte, needed)
-		binary.LittleEndian.PutUint32(out[:HeaderSize], uint32(len(value)))
 		copy(out[HeaderSize:], compressed)
+		binary.LittleEndian.PutUint32(out[:HeaderSize], uint32(len(value)))
 		*pbuf = compressed
 		c.BufferPool.Put(pbuf)
 		return out, true, nil, nil
 	}
 
 	out := (*pbuf)[:needed]
-	binary.LittleEndian.PutUint32(out[:HeaderSize], uint32(len(value)))
 	copy(out[HeaderSize:], compressed)
+	binary.LittleEndian.PutUint32(out[:HeaderSize], uint32(len(value)))
 
 	release := func() {
 		*pbuf = out
