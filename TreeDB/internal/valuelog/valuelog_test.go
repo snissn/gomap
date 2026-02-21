@@ -1178,6 +1178,55 @@ func TestReadAtLargeValueLengthHintOmitted(t *testing.T) {
 	}
 }
 
+func TestReadAtGroupedLengthHintBit23RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+
+	const fixedOverhead = uint32(headerWithoutCRC + FrameHeaderSize + 8 + 8)
+	const targetRecordLen = uint32(0x00800080) // grouped hint bit23 set, still <= 24-bit max
+	if targetRecordLen <= fixedOverhead {
+		_ = writer.Close()
+		t.Fatalf("invalid target record length: %d", targetRecordLen)
+	}
+	value := bytes.Repeat([]byte("z"), int(targetRecordLen-fixedOverhead))
+
+	ptr, err := writer.Append(0, nil, 1, value)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if !page.ValuePtrIsGrouped(ptr) {
+		_ = writer.Close()
+		t.Fatalf("expected grouped pointer")
+	}
+	if got, want := page.ValuePtrRecordLength(ptr), targetRecordLen; got != want {
+		_ = writer.Close()
+		t.Fatalf("decoded record length mismatch got=%d want=%d", got, want)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open file: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	got, err := ReadAtWithDict(f, ptr, true, nil, nil, nil, templ.DecodeOptions{})
+	if err != nil {
+		t.Fatalf("read at: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("read value bytes mismatch")
+	}
+}
+
 func TestValueLogCorruptCRC(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
