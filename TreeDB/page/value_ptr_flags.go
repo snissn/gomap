@@ -104,6 +104,9 @@ func ValuePtrIsFenceOuter(ptr ValuePtr) bool {
 
 // ValuePtrMarkFenceOuter marks a non-grouped pointer as an outer-leaf fence
 // block pointer.
+//
+// Grouped pointers are returned unchanged: grouped fence markers are legacy-only
+// and new grouped writes do not encode a dedicated fence bit.
 func ValuePtrMarkFenceOuter(ptr ValuePtr) ValuePtr {
 	if ValuePtrIsGrouped(ptr) {
 		// Grouped pointers no longer embed a fence marker bit because it collides

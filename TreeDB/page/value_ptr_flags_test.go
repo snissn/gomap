@@ -49,4 +49,3 @@ func TestValuePtrMarkFenceOuter_NonGrouped(t *testing.T) {
 		t.Fatalf("non-grouped record length mismatch: got=%d want=%d", got, want)
 	}
 }
-
