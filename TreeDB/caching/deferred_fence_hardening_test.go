@@ -38,11 +38,11 @@ func TestCachingDB_DeferredFence_WALOff_FlushThenCheckpointPreservesLatest(t *te
 		ChunkSize:          64 * 1024,
 		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
 		ValueLog: db.ValueLogOptions{
-			PointerThreshold:            1,
-			OuterLeafBlockCodec:         db.ValueLogBlockLZ4,
-			OuterLeafBlockTargetBytes:   1 << 20,
+			PointerThreshold:              1,
+			OuterLeafBlockCodec:           db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes:     1 << 20,
 			OuterLeafBlockRestartInterval: 16,
-			OuterLeafBlobThresholdBytes: 256,
+			OuterLeafBlobThresholdBytes:   256,
 		},
 	}
 	backend, err := db.Open(backendOpts)
@@ -51,14 +51,14 @@ func TestCachingDB_DeferredFence_WALOff_FlushThenCheckpointPreservesLatest(t *te
 	}
 
 	cache, err := Open(dir, backend, Options{
-		AllowUnsafe:                       true,
-		DisableWAL:                        true,
-		FlushThreshold:                    1 << 30,
-		MemtableShards:                    1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
-		ValueLogPointerThreshold:          1,
-		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
-		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+		AllowUnsafe:                         true,
+		DisableWAL:                          true,
+		FlushThreshold:                      1 << 30,
+		MemtableShards:                      1,
+		IndexOuterLeafMode:                  db.IndexOuterLeafModeV2FencePtr,
+		ValueLogPointerThreshold:            1,
+		ValueLogOuterLeafBlockCodec:         uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes:   1 << 20,
 		ValueLogOuterLeafBlobThresholdBytes: 256,
 	})
 	if err != nil {
