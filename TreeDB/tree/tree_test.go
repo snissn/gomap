@@ -170,6 +170,13 @@ type fenceLookupSeekLeaseReader struct {
 	returnLeaseWithNoOK bool
 }
 
+type fenceLookupAppenderOnlyReader struct {
+	blocks           map[page.ValuePtr]map[string][]byte
+	nextOffset       uint64
+	fileID           uint32
+	fenceAppendCalls int
+}
+
 func newFenceLookupTailAppenderReader() *fenceLookupTailAppenderReader {
 	return &fenceLookupTailAppenderReader{fenceLookupReader: newFenceLookupReader()}
 }
@@ -188,6 +195,53 @@ func newFenceLookupSeekClassifierReader() *fenceLookupSeekClassifierReader {
 
 func newFenceLookupSeekLeaseReader() *fenceLookupSeekLeaseReader {
 	return &fenceLookupSeekLeaseReader{fenceLookupReader: newFenceLookupReader()}
+}
+
+func newFenceLookupAppenderOnlyReader() *fenceLookupAppenderOnlyReader {
+	return &fenceLookupAppenderOnlyReader{
+		blocks: make(map[page.ValuePtr]map[string][]byte),
+		fileID: page.ValueLogFileID(1),
+	}
+}
+
+func (r *fenceLookupAppenderOnlyReader) FenceLookupEnabled() bool {
+	return true
+}
+
+func (r *fenceLookupAppenderOnlyReader) addBlock(entries map[string]string) page.ValuePtr {
+	ptr := page.ValuePtr{
+		FileID: r.fileID,
+		Offset: r.nextOffset,
+		Length: 1,
+	}
+	block := make(map[string][]byte, len(entries))
+	for k, v := range entries {
+		block[k] = []byte(v)
+	}
+	r.blocks[ptr] = block
+	r.nextOffset++
+	return ptr
+}
+
+func (r *fenceLookupAppenderOnlyReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	return nil, fmt.Errorf("unexpected Read for ptr %+v", ptr)
+}
+
+func (r *fenceLookupAppenderOnlyReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	return nil, fmt.Errorf("unexpected ReadUnsafe for ptr %+v", ptr)
+}
+
+func (r *fenceLookupAppenderOnlyReader) ReadUnsafeFenceAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, bool, error) {
+	r.fenceAppendCalls++
+	block, ok := r.blocks[ptr]
+	if !ok {
+		return nil, false, fmt.Errorf("missing block ptr %+v", ptr)
+	}
+	val, ok := block[string(key)]
+	if !ok {
+		return dst, false, nil
+	}
+	return append(dst, val...), true, nil
 }
 
 func (r *fenceLookupTailAppenderReader) ReadUnsafeFenceAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, bool, error) {
@@ -1735,5 +1789,374 @@ func TestTreeGetAndHas_FencePredecessorLookupGlobal(t *testing.T) {
 	}
 	if !has {
 		t.Fatalf("Has(k120) = false, want true")
+	}
+}
+
+func TestTreeGetEntry_FencePredecessorLookupGlobalParity(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(3); err != nil {
+		t.Fatalf("Alloc pages: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"k120": "v120",
+	})
+
+	leaf1Data, err := p.Get(1)
+	if err != nil {
+		t.Fatalf("Get leaf1 page: %v", err)
+	}
+	leaf1 := node.NewNode(leaf1Data)
+	leaf1.SetType(page.PageTypeLeaf)
+	leaf1.SetPageID(1)
+	if err := leaf1.AddLeafEntry([]byte("k050"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("leaf1 AddLeafEntry(k050): %v", err)
+	}
+	leaf1.UpdateChecksum()
+
+	leaf2Data, err := p.Get(2)
+	if err != nil {
+		t.Fatalf("Get leaf2 page: %v", err)
+	}
+	leaf2 := node.NewNode(leaf2Data)
+	leaf2.SetType(page.PageTypeLeaf)
+	leaf2.SetPageID(2)
+	if err := leaf2.AddLeafEntry([]byte("k150"), []byte("v150"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("leaf2 AddLeafEntry(k150): %v", err)
+	}
+	leaf2.UpdateChecksum()
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeInternal)
+	root.SetPageID(0)
+	if err := root.AddInternalChild([]byte("k000"), 1); err != nil {
+		t.Fatalf("root AddInternalChild(k000): %v", err)
+	}
+	if err := root.AddInternalChild([]byte("k100"), 2); err != nil {
+		t.Fatalf("root AddInternalChild(k100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	entry, err := tr.GetEntry([]byte("k120"))
+	if err != nil {
+		t.Fatalf("GetEntry(k120): %v", err)
+	}
+	if string(entry.Value) != "v120" {
+		t.Fatalf("GetEntry(k120) value = %q, want %q", entry.Value, "v120")
+	}
+	if entry.Flags&node.FlagPointer != 0 {
+		t.Fatalf("GetEntry(k120) should be fence-resolved inline value, flags=%08b", entry.Flags)
+	}
+
+	if _, err := tr.GetEntryExact([]byte("k120")); err != ErrKeyNotFound {
+		t.Fatalf("GetEntryExact(k120): expected ErrKeyNotFound, got %v", err)
+	}
+}
+
+func TestTreeGetEntry_FencePredecessorLookupGlobalAppenderOnly(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(3); err != nil {
+		t.Fatalf("Alloc pages: %v", err)
+	}
+
+	reader := newFenceLookupAppenderOnlyReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"k120": "v120",
+	})
+
+	leaf1Data, err := p.Get(1)
+	if err != nil {
+		t.Fatalf("Get leaf1 page: %v", err)
+	}
+	leaf1 := node.NewNode(leaf1Data)
+	leaf1.SetType(page.PageTypeLeaf)
+	leaf1.SetPageID(1)
+	if err := leaf1.AddLeafEntry([]byte("k050"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("leaf1 AddLeafEntry(k050): %v", err)
+	}
+	leaf1.UpdateChecksum()
+
+	leaf2Data, err := p.Get(2)
+	if err != nil {
+		t.Fatalf("Get leaf2 page: %v", err)
+	}
+	leaf2 := node.NewNode(leaf2Data)
+	leaf2.SetType(page.PageTypeLeaf)
+	leaf2.SetPageID(2)
+	if err := leaf2.AddLeafEntry([]byte("k150"), []byte("v150"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("leaf2 AddLeafEntry(k150): %v", err)
+	}
+	leaf2.UpdateChecksum()
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeInternal)
+	root.SetPageID(0)
+	if err := root.AddInternalChild([]byte("k000"), 1); err != nil {
+		t.Fatalf("root AddInternalChild(k000): %v", err)
+	}
+	if err := root.AddInternalChild([]byte("k100"), 2); err != nil {
+		t.Fatalf("root AddInternalChild(k100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	entry, err := tr.GetEntry([]byte("k120"))
+	if err != nil {
+		t.Fatalf("GetEntry(k120): %v", err)
+	}
+	if string(entry.Value) != "v120" {
+		t.Fatalf("GetEntry(k120) value = %q, want %q", entry.Value, "v120")
+	}
+	if reader.fenceAppendCalls != 1 {
+		t.Fatalf("fence append calls = %d, want 1", reader.fenceAppendCalls)
+	}
+}
+
+func TestTreeGetEntry_FencePredecessorLookupGlobalClassifierSkip(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(3); err != nil {
+		t.Fatalf("Alloc pages: %v", err)
+	}
+
+	reader := newFenceLookupClassifierReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"k120": "v120",
+	})
+	reader.likely[ptr0] = false
+
+	leaf1Data, err := p.Get(1)
+	if err != nil {
+		t.Fatalf("Get leaf1 page: %v", err)
+	}
+	leaf1 := node.NewNode(leaf1Data)
+	leaf1.SetType(page.PageTypeLeaf)
+	leaf1.SetPageID(1)
+	if err := leaf1.AddLeafEntry([]byte("k050"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("leaf1 AddLeafEntry(k050): %v", err)
+	}
+	leaf1.UpdateChecksum()
+
+	leaf2Data, err := p.Get(2)
+	if err != nil {
+		t.Fatalf("Get leaf2 page: %v", err)
+	}
+	leaf2 := node.NewNode(leaf2Data)
+	leaf2.SetType(page.PageTypeLeaf)
+	leaf2.SetPageID(2)
+	if err := leaf2.AddLeafEntry([]byte("k150"), []byte("v150"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("leaf2 AddLeafEntry(k150): %v", err)
+	}
+	leaf2.UpdateChecksum()
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeInternal)
+	root.SetPageID(0)
+	if err := root.AddInternalChild([]byte("k000"), 1); err != nil {
+		t.Fatalf("root AddInternalChild(k000): %v", err)
+	}
+	if err := root.AddInternalChild([]byte("k100"), 2); err != nil {
+		t.Fatalf("root AddInternalChild(k100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	beforeTotalCalls := reader.fenceCalls + reader.fenceAppendCalls
+	if _, err := tr.GetEntry([]byte("k120")); err != ErrKeyNotFound {
+		t.Fatalf("GetEntry(k120): expected ErrKeyNotFound, got %v", err)
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 0 {
+		t.Fatalf("GetEntry(k120) issued %d fence lookups despite predecessor classified non-fence", gotCalls)
+	}
+}
+
+func TestTreeGetEntry_FencePredecessorLookupGlobalExplicitFenceMarkerOverridesClassifier(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(3); err != nil {
+		t.Fatalf("Alloc pages: %v", err)
+	}
+
+	reader := newFenceLookupClassifierReader()
+	ptrRaw := reader.addBlock(map[string]string{
+		"k120": "v120",
+	})
+	ptrMarked := page.ValuePtrMarkFenceOuter(ptrRaw)
+	if ptrMarked == ptrRaw {
+		t.Fatalf("expected non-grouped pointer to be fence-marked")
+	}
+	reader.blocks[ptrMarked] = reader.blocks[ptrRaw]
+	delete(reader.blocks, ptrRaw)
+	reader.likely[ptrMarked] = false // explicit fence marker must still probe
+
+	leaf1Data, err := p.Get(1)
+	if err != nil {
+		t.Fatalf("Get leaf1 page: %v", err)
+	}
+	leaf1 := node.NewNode(leaf1Data)
+	leaf1.SetType(page.PageTypeLeaf)
+	leaf1.SetPageID(1)
+	if err := leaf1.AddLeafEntry([]byte("k050"), nil, node.FlagPointer, ptrMarked); err != nil {
+		t.Fatalf("leaf1 AddLeafEntry(k050): %v", err)
+	}
+	leaf1.UpdateChecksum()
+
+	leaf2Data, err := p.Get(2)
+	if err != nil {
+		t.Fatalf("Get leaf2 page: %v", err)
+	}
+	leaf2 := node.NewNode(leaf2Data)
+	leaf2.SetType(page.PageTypeLeaf)
+	leaf2.SetPageID(2)
+	if err := leaf2.AddLeafEntry([]byte("k150"), []byte("v150"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("leaf2 AddLeafEntry(k150): %v", err)
+	}
+	leaf2.UpdateChecksum()
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeInternal)
+	root.SetPageID(0)
+	if err := root.AddInternalChild([]byte("k000"), 1); err != nil {
+		t.Fatalf("root AddInternalChild(k000): %v", err)
+	}
+	if err := root.AddInternalChild([]byte("k100"), 2); err != nil {
+		t.Fatalf("root AddInternalChild(k100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	beforeTotalCalls := reader.fenceCalls + reader.fenceAppendCalls
+	entry, err := tr.GetEntry([]byte("k120"))
+	if err != nil {
+		t.Fatalf("GetEntry(k120): %v", err)
+	}
+	if string(entry.Value) != "v120" {
+		t.Fatalf("GetEntry(k120) value = %q, want %q", entry.Value, "v120")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("GetEntry(k120) fence lookups = %d, want 1 (explicit marker must override classifier)", gotCalls)
+	}
+}
+
+func TestTreeGetEntry_FencePredecessorLookupGlobalRespectsScanLimit(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(3); err != nil {
+		t.Fatalf("Alloc pages: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	oldestPtr := reader.addBlock(map[string]string{
+		"k120": "v120",
+	})
+
+	leaf1Data, err := p.Get(1)
+	if err != nil {
+		t.Fatalf("Get leaf1 page: %v", err)
+	}
+	leaf1 := node.NewNode(leaf1Data)
+	leaf1.SetType(page.PageTypeLeaf)
+	leaf1.SetPageID(1)
+	if err := leaf1.AddLeafEntry([]byte("k000"), nil, node.FlagPointer, oldestPtr); err != nil {
+		t.Fatalf("leaf1 AddLeafEntry(k000): %v", err)
+	}
+	for i := 1; i < fenceGlobalFallbackScanLimit+8; i++ {
+		ptr := reader.addBlock(map[string]string{
+			fmt.Sprintf("x%03d", i): "vx",
+		})
+		if err := leaf1.AddLeafEntry([]byte(fmt.Sprintf("k%03d", i)), nil, node.FlagPointer, ptr); err != nil {
+			t.Fatalf("leaf1 AddLeafEntry(k%03d): %v", i, err)
+		}
+	}
+	leaf1.UpdateChecksum()
+
+	leaf2Data, err := p.Get(2)
+	if err != nil {
+		t.Fatalf("Get leaf2 page: %v", err)
+	}
+	leaf2 := node.NewNode(leaf2Data)
+	leaf2.SetType(page.PageTypeLeaf)
+	leaf2.SetPageID(2)
+	if err := leaf2.AddLeafEntry([]byte("k150"), []byte("v150"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("leaf2 AddLeafEntry(k150): %v", err)
+	}
+	leaf2.UpdateChecksum()
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeInternal)
+	root.SetPageID(0)
+	if err := root.AddInternalChild([]byte("k000"), 1); err != nil {
+		t.Fatalf("root AddInternalChild(k000): %v", err)
+	}
+	if err := root.AddInternalChild([]byte("k100"), 2); err != nil {
+		t.Fatalf("root AddInternalChild(k100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	if _, err := tr.GetEntry([]byte("k120")); err != ErrKeyNotFound {
+		t.Fatalf("GetEntry(k120): expected ErrKeyNotFound at scan limit, got %v", err)
+	}
+	if reader.fenceCalls != fenceGlobalFallbackScanLimit {
+		t.Fatalf("fence calls = %d, want %d (scan limit)", reader.fenceCalls, fenceGlobalFallbackScanLimit)
 	}
 }

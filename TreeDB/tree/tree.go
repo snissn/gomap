@@ -395,7 +395,13 @@ func (t *Tree) SetRoot(root uint64) {
 	t.rootPageID = root
 }
 
-// GetEntry returns the raw leaf entry (useful for compaction/CAS).
+// GetEntry returns the logical entry for key.
+//
+// On exact leaf hits, this returns the persisted leaf entry. On leaf misses
+// that resolve via fence-pointer fallback, it returns a synthesized inline
+// entry for key/value. Call GetEntryExact when callers require only exact
+// persisted leaf entries.
+//
 // CAUTION: Returned entry Key/Value might point directly to mmap memory.
 // Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
@@ -450,6 +456,15 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 			}
 			if !found {
 				if val, ok, err := t.lookupFenceValueView(&n, idx, key); err != nil {
+					return node.LeafEntry{}, err
+				} else if ok {
+					return node.LeafEntry{
+						Key:   append([]byte(nil), key...),
+						Value: val,
+						Flags: 0,
+					}, nil
+				}
+				if val, ok, err := t.lookupFenceValueViewGlobal(key); err != nil {
 					return node.LeafEntry{}, err
 				} else if ok {
 					return node.LeafEntry{
