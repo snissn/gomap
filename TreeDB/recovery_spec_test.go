@@ -69,6 +69,26 @@ func runCrashRecoveryDeleteRangeWriter(t *testing.T, dir string) {
 	}
 }
 
+func runCrashRecoveryDeleteRangeNoTrailingSyncWriter(t *testing.T, dir string, extraEnv ...string) {
+	t.Helper()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	cmd := exec.Command(exe, "-test.run=^TestHelperTreeDBCrashRecoveryDeleteRangeNoTrailingSyncWriter$", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"TREEDB_CRASH_HELPER=1",
+		"TREEDB_CRASH_DIR="+dir,
+	)
+	cmd.Env = append(cmd.Env, extraEnv...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("crash writer helper failed: %v\n%s", err, string(out))
+	}
+}
+
 func runCrashRecoveryDurabilityWriter(t *testing.T, dir string, extraEnv ...string) {
 	t.Helper()
 
@@ -209,6 +229,69 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeWriter(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestHelperTreeDBCrashRecoveryDeleteRangeNoTrailingSyncWriter(t *testing.T) {
+	if os.Getenv("TREEDB_CRASH_HELPER") != "1" {
+		t.Skip("helper")
+	}
+
+	dir := os.Getenv("TREEDB_CRASH_DIR")
+	if dir == "" {
+		t.Fatalf("missing TREEDB_CRASH_DIR")
+	}
+
+	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
+	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
+	outerLeafMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_OUTERLEAF_MODE"))
+	walFenceMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_WAL_FENCE_MODE"))
+
+	durability := treedb.DurabilityDurable
+	if disableWAL {
+		durability = treedb.DurabilityWALOffRelaxed
+	} else if relaxedSync {
+		durability = treedb.DurabilityWALOnRelaxed
+	}
+
+	opts := treedb.Options{
+		Dir:        dir,
+		ChunkSize:  64 * 1024,
+		Durability: durability,
+	}
+	switch outerLeafMode {
+	case "":
+		// default mode
+	case treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
+		opts.IndexOuterLeafMode = outerLeafMode
+		opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
+		opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
+		opts.ValueLog.OuterLeafBlockRestartInterval = 16
+	default:
+		t.Fatalf("unsupported TREEDB_CRASH_OUTERLEAF_MODE=%q", outerLeafMode)
+	}
+	switch walFenceMode {
+	case "":
+		// default mode
+	case string(treedb.ValueLogWALFenceModeRIDJoin), string(treedb.ValueLogWALFenceModeSimpleInline):
+		opts.ValueLog.WALFenceMode = treedb.ValueLogWALFenceMode(walFenceMode)
+	default:
+		t.Fatalf("unsupported TREEDB_CRASH_WAL_FENCE_MODE=%q", walFenceMode)
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	_ = db.SetSync([]byte("a"), []byte("1"))
+	_ = db.SetSync([]byte("b"), []byte("2"))
+	_ = db.SetSync([]byte("c"), []byte("3"))
+	_ = db.SetSync([]byte("z"), []byte("9"))
+
+	// Simulate a crash immediately after DeleteRange without an additional Sync
+	// operation. PR #591 flushes this lane so replay can recover tombstones.
+	_ = db.DeleteRange([]byte("b"), []byte("d"))
+	os.Exit(0)
+}
+
 func TestCrashRecovery_WALReplayIsCoherent(t *testing.T) {
 	dir := t.TempDir()
 	runCrashRecoveryWriter(t, dir)
@@ -309,6 +392,103 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 	}
 	if string(val) != "9" {
 		t.Fatalf("get z: got %q, want %q", string(val), "9")
+	}
+}
+
+func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *testing.T) {
+	tiers := []struct {
+		name         string
+		env          []string
+		outerMode    string
+		walFenceMode treedb.ValueLogWALFenceMode
+	}{
+		{
+			name: "durable_default",
+		},
+		{
+			name: "wal_on_relaxed",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=1",
+			},
+		},
+		{
+			name: "wal_on_relaxed_v2_fenceptr_simple_inline",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=1",
+				"TREEDB_CRASH_OUTERLEAF_MODE=v2_fenceptr",
+				"TREEDB_CRASH_WAL_FENCE_MODE=simple_inline",
+			},
+			outerMode:    treedb.IndexOuterLeafModeV2FencePtr,
+			walFenceMode: treedb.ValueLogWALFenceModeSimpleInline,
+		},
+		{
+			name: "wal_on_relaxed_v2_blockptr",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=1",
+				"TREEDB_CRASH_OUTERLEAF_MODE=v2_blockptr",
+			},
+			outerMode: treedb.IndexOuterLeafModeV2BlockPtr,
+		},
+	}
+
+	for _, tc := range tiers {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			runCrashRecoveryDeleteRangeNoTrailingSyncWriter(t, dir, tc.env...)
+
+			opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024}
+			if tc.outerMode != "" {
+				opts.IndexOuterLeafMode = tc.outerMode
+				opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
+				opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
+				opts.ValueLog.OuterLeafBlockRestartInterval = 16
+			}
+			if tc.walFenceMode != "" {
+				opts.ValueLog.WALFenceMode = tc.walFenceMode
+			}
+
+			db, err := treedb.Open(opts)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer db.Close()
+
+			val, err := db.Get([]byte("a"))
+			if err != nil {
+				t.Fatalf("get a: %v", err)
+			}
+			if string(val) != "1" {
+				t.Fatalf("get a: got %q, want %q", string(val), "1")
+			}
+
+			val, err = db.Get([]byte("b"))
+			if err != nil {
+				t.Fatalf("get b: %v", err)
+			}
+			if val != nil {
+				t.Fatalf("expected deleted key b to be absent, got %q", string(val))
+			}
+
+			val, err = db.Get([]byte("c"))
+			if err != nil {
+				t.Fatalf("get c: %v", err)
+			}
+			if val != nil {
+				t.Fatalf("expected deleted key c to be absent, got %q", string(val))
+			}
+
+			val, err = db.Get([]byte("z"))
+			if err != nil {
+				t.Fatalf("get z: %v", err)
+			}
+			if string(val) != "9" {
+				t.Fatalf("get z: got %q, want %q", string(val), "9")
+			}
+
+		})
 	}
 }
 
