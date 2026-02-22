@@ -98,6 +98,10 @@ type fenceLookupReaderSeekLeaseSharedKeys struct {
 	sharedKeys map[page.ValuePtr][][]byte
 }
 
+type iteratorFenceClassifier struct {
+	likely map[page.ValuePtr]bool
+}
+
 func (r *fenceLookupReaderKeysUnavailable) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
 	r.keyCalls++
 	return nil, false, nil
@@ -256,6 +260,57 @@ func (r *fenceLookupReaderSeekLeaseSharedKeys) ReadUnsafeFenceBlockSeekLease(ptr
 		return len(keys), false, true, nil, true, nil
 	}
 	return pos, false, false, &sharedFenceKeysLease{keys: keys}, true, nil
+}
+
+func (c iteratorFenceClassifier) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
+	if c.likely == nil {
+		return true
+	}
+	likely, ok := c.likely[ptr]
+	if !ok {
+		return true
+	}
+	return likely
+}
+
+func TestIteratorPointerLikelyFenceBlock_ExplicitFenceMarkerOverridesClassifier(t *testing.T) {
+	base := page.ValuePtr{
+		FileID: page.ValueLogFileID(3),
+		Offset: 99,
+		Length: 4096,
+	}
+	marked := page.ValuePtrMarkFenceOuter(base)
+	if marked == base {
+		t.Fatalf("expected non-grouped pointer to be fence-marked")
+	}
+	it := &Iterator{
+		slabFencePtrCls: iteratorFenceClassifier{
+			likely: map[page.ValuePtr]bool{
+				marked: false,
+			},
+		},
+	}
+	if !it.pointerLikelyFenceBlock(marked) {
+		t.Fatalf("explicit fence-marked pointer was incorrectly skipped by classifier")
+	}
+}
+
+func TestIteratorPointerLikelyFenceBlock_ClassifierAppliedToUnmarkedPointer(t *testing.T) {
+	unmarked := page.ValuePtr{
+		FileID: page.ValueLogFileID(4),
+		Offset: 11,
+		Length: 2048,
+	}
+	it := &Iterator{
+		slabFencePtrCls: iteratorFenceClassifier{
+			likely: map[page.ValuePtr]bool{
+				unmarked: false,
+			},
+		},
+	}
+	if it.pointerLikelyFenceBlock(unmarked) {
+		t.Fatalf("unmarked pointer unexpectedly treated as fence-likely")
+	}
 }
 
 func newCountingValueReader() *countingValueReader {

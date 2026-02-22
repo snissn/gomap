@@ -826,6 +826,10 @@ func copyFenceKeyRefs(dst [][]byte, src [][]byte) [][]byte {
 }
 
 func (it *Iterator) pointerLikelyFenceBlock(ptr page.ValuePtr) bool {
+	// Explicit fence markers are authoritative and must never be skipped.
+	if page.ValuePtrIsFenceOuter(ptr) {
+		return true
+	}
 	if it != nil && it.slabFencePtrCls != nil {
 		return it.slabFencePtrCls.FencePointerLikelyBlock(ptr)
 	}
