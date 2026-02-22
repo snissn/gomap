@@ -840,6 +840,18 @@ func (db *DB) outerLeafFenceV2Enabled() bool {
 	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV2FencePtr
 }
 
+func (db *DB) outerLeafAnchorModeEnabled() bool {
+	if db == nil {
+		return false
+	}
+	switch strings.TrimSpace(db.indexOuterLeafMode) {
+	case backenddb.IndexOuterLeafModeV2FencePtr, backenddb.IndexOuterLeafModeV1LeafLog:
+		return true
+	default:
+		return false
+	}
+}
+
 func normalizeValueLogWALFenceMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "", string(backenddb.ValueLogWALFenceModeRIDJoin):
@@ -1166,18 +1178,18 @@ func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, 
 }
 
 func (db *DB) deferredValueLogEnabled() bool {
-	// Fence-pointer outer-leaf mode benefits from flush-time regrouping so
+	// Routing-anchor outer-leaf modes benefit from flush-time regrouping so
 	// singleton writes can coalesce into larger outer blocks before value-log
 	// append, reducing index pointer fanout.
 	//
-	// WAL-on v2_fenceptr modes:
+	// WAL-on v2_fenceptr mode:
 	//   - simple_inline: deferred for all pointer-eligible values
 	//   - rid_join: deferred for non-oversized pointer-eligible values (C1),
 	//     while oversized values (C2) may still take immediate pointer paths.
 	if db == nil {
 		return false
 	}
-	if !db.outerLeafFenceV2Enabled() || !db.valueLogEnabled() || !db.allowValueLogPointers() {
+	if !db.outerLeafAnchorModeEnabled() || !db.valueLogEnabled() || !db.allowValueLogPointers() {
 		return false
 	}
 	return true
@@ -1443,7 +1455,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	if !db.allowValueLogPointers() {
 		return ops, nil
 	}
-	fenceMode := db.outerLeafFenceV2Enabled()
+	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowMutableFencePointerCollapse()
 
 	eligible := getValueLogEligible(len(ops))
@@ -2105,7 +2117,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		putValueLogKeys(ptrKeys)
 		putValueLogKeys(ptrVals)
 	}()
-	fenceMode := db.outerLeafFenceV2Enabled()
+	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
 	state := fenceState
 	if state == nil {
@@ -2417,7 +2429,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	}
 
 	allowPointers := db.allowValueLogPointers()
-	fenceMode := db.outerLeafFenceV2Enabled()
+	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
 	durability := journalDurabilityNone
 	if sync {
@@ -12261,7 +12273,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		backendPendingOps := 0
 		chunkBackend := totalLen > backendEntriesCap
 		emittedChunk := false
-		fenceMode := db.outerLeafFenceV2Enabled()
+		fenceMode := db.outerLeafAnchorModeEnabled()
 		collapseFence := fenceMode && db.allowFencePointerCollapse()
 
 		type ptrSetterView interface {
@@ -12590,7 +12602,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		psv, _ := backendBatch.(ptrSetterView)
 		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
-		fenceMode := db.outerLeafFenceV2Enabled()
+		fenceMode := db.outerLeafAnchorModeEnabled()
 		collapseFence := fenceMode && db.allowFencePointerCollapse()
 		var (
 			lastFencePtr page.ValuePtr
@@ -12976,7 +12988,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		if db.deferredValueLogEnabled() {
 			t0 := time.Now()
 			var mutationLookup fenceMutationLookupFn
-			if db.outerLeafFenceV2Enabled() && db.allowFencePointerCollapse() {
+			if db.outerLeafAnchorModeEnabled() && db.allowFencePointerCollapse() {
 				mutationLookup = fenceMutationLookupForMem(mem)
 			}
 			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID, mutationLookup, nil); err != nil {
@@ -13037,7 +13049,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			psv, _ := backendBatch.(ptrSetterView)
 			ps, _ := backendBatch.(ptrSetter)
 			var single [1]batch.Entry
-			fenceMode := db.outerLeafFenceV2Enabled()
+			fenceMode := db.outerLeafAnchorModeEnabled()
 			collapseFence := fenceMode && db.allowFencePointerCollapse()
 			var (
 				lastFencePtr page.ValuePtr
@@ -15638,8 +15650,8 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if !b.db.deferredValueLogEnabled() {
 		return false, nil
 	}
-	if b.db.outerLeafFenceV2Enabled() {
-		// Fence-pointer mode needs flush-time fence collapse semantics; direct
+	if b.db.outerLeafAnchorModeEnabled() {
+		// Anchor modes need flush-time fence collapse semantics; direct
 		// stream bypass emits backend pointer ops at commit boundaries and can
 		// regress immediate read/prefix-scan behavior.
 		return false, nil
