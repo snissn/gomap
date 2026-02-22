@@ -3619,7 +3619,7 @@ type Options struct {
 	// counts by pushing moderate values into the value log.
 	ValueLogPointerThreshold int
 	// IndexOuterLeafMode selects the outer-leaf payload format.
-	// Supported values: "v1", "v2_blockptr", "v2_fenceptr".
+	// Supported values: "v1", "v1_leaflog", "v2_blockptr", "v2_fenceptr".
 	// Empty defaults to "v2_fenceptr".
 	IndexOuterLeafMode string
 	// ValueLogWALFenceMode selects WAL encoding behavior for pointer-eligible
@@ -5034,7 +5034,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		indexOuterLeafMode = backenddb.IndexOuterLeafModeV2FencePtr
 	}
 	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr &&
-		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr {
+		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr &&
+		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLog {
 		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
 	}
 	rawValueLogWALFenceMode := strings.TrimSpace(opts.ValueLogWALFenceMode)
@@ -5042,6 +5043,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeRIDJoin) &&
 		valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
 		return nil, fmt.Errorf("cachingdb: invalid value-log WAL fence mode %q", opts.ValueLogWALFenceMode)
+	}
+	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr &&
+		valueLogWALFenceMode == string(backenddb.ValueLogWALFenceModeSimpleInline) {
+		return nil, fmt.Errorf("cachingdb: value-log WAL fence mode %q requires index outer leaf mode %q", opts.ValueLogWALFenceMode, backenddb.IndexOuterLeafModeV2FencePtr)
 	}
 	outerLeafBlockTargetOpt := opts.ValueLogOuterLeafBlockTargetBytes
 	if outerLeafBlockTargetOpt <= 0 && indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr {

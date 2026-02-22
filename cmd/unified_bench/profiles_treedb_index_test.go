@@ -40,6 +40,25 @@ func TestBuildTreeDBOptions_DefaultOuterLeafModeUsesV2FencePtr(t *testing.T) {
 	}
 }
 
+func TestBuildTreeDBOptions_V1LeafLogModeAccepted(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v1_leaflog"
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions v1_leaflog: %v", err)
+	}
+	if got := opts.IndexOuterLeafMode; got != treedb.IndexOuterLeafModeV1LeafLog {
+		t.Fatalf("IndexOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV1LeafLog)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "index_outer_leaf_mode=v1_leaflog") {
+		t.Fatalf("resolved options missing v1_leaflog outer-leaf mode: %q", got)
+	}
+}
+
 type savedTreeDBFlagState struct {
 	indexOptimizations bool
 	indexOuterLeafMode string
@@ -322,6 +341,7 @@ func TestBuildTreeDBOptions_WALFenceMode_DefaultAndOverride(t *testing.T) {
 	}
 
 	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
 	*treedbWALFenceMode = "simple_inline"
 	opts, rep, err = buildTreeDBOptions("")
 	if err != nil {
@@ -439,6 +459,21 @@ func TestBuildTreeDBOptions_WALFenceMode_InvalidRejected(t *testing.T) {
 	*treedbWALFenceMode = "bad_mode"
 	if _, _, err := buildTreeDBOptions(""); err == nil {
 		t.Fatalf("expected invalid wal fence mode to fail")
+	}
+}
+
+func TestBuildTreeDBOptions_WALFenceMode_V1LeafLog_RejectsSimpleInline(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v1_leaflog"
+	*treedbWALFenceMode = "simple_inline"
+	explicitFlags = map[string]bool{
+		"treedb-wal-fence-mode": true,
+	}
+	if _, _, err := buildTreeDBOptions(""); err == nil {
+		t.Fatalf("expected simple_inline with v1_leaflog to fail")
 	}
 }
 

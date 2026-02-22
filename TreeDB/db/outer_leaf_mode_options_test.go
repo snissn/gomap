@@ -7,6 +7,7 @@ import (
 
 func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
 	modes := []string{
+		IndexOuterLeafModeV1LeafLog,
 		IndexOuterLeafModeV2BlockPtr,
 		IndexOuterLeafModeV2FencePtr,
 	}
@@ -133,6 +134,22 @@ func TestOpen_ValueLogWALFenceMode_V2FencePtrWALOff_ExplicitRIDJoinAllowed(t *te
 	}
 	if err := dbWALOff.Close(); err != nil {
 		t.Fatalf("close WAL-off rid_join: %v", err)
+	}
+}
+
+func TestOpen_ValueLogWALFenceMode_V1LeafLog_RejectsSimpleInline(t *testing.T) {
+	_, err := Open(Options{
+		Dir:                t.TempDir(),
+		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLog,
+		ValueLog: ValueLogOptions{
+			WALFenceMode: ValueLogWALFenceModeSimpleInline,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "requires index outer leaf mode") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
