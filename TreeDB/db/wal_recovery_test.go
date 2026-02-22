@@ -11,6 +11,17 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
+func outerLeafCodecHeaderID(codec ValueLogBlockCodec) int {
+	switch codec {
+	case ValueLogBlockSnappy:
+		return 1
+	case ValueLogBlockLZ4:
+		return 2
+	default:
+		return 0
+	}
+}
+
 func TestNewReplayInlineAppender_PackedValuePtrCapsSegmentSize(t *testing.T) {
 	db := &DB{
 		dir:                 t.TempDir(),
@@ -50,12 +61,13 @@ func TestNewReplayInlineAppender_UnpackedNoSegmentCap(t *testing.T) {
 	}
 }
 
-func TestReplayInlineAppender_UsesConfiguredOuterLeafEncodingForFenceMode(t *testing.T) {
+func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, mode string, codec ValueLogBlockCodec, restart int) {
+	t.Helper()
 	db := &DB{
 		dir:                   t.TempDir(),
-		indexOuterLeafMode:    IndexOuterLeafModeV2FencePtr,
-		outerLeafBlockCodec:   ValueLogBlockLZ4,
-		outerLeafBlockRestart: 7,
+		indexOuterLeafMode:    mode,
+		outerLeafBlockCodec:   codec,
+		outerLeafBlockRestart: restart,
 	}
 	app, err := newReplayInlineAppender(db, nil, nil)
 	if err != nil {
@@ -92,9 +104,12 @@ func TestReplayInlineAppender_UsesConfiguredOuterLeafEncodingForFenceMode(t *tes
 	if len(raw) < 8 {
 		t.Fatalf("outer-leaf payload too short: %d", len(raw))
 	}
-	const outerLeafCodecLZ4 = 2
-	if got := int(raw[5]); got != outerLeafCodecLZ4 {
-		t.Fatalf("outer-leaf codec id = %d, want %d", got, outerLeafCodecLZ4)
+	wantCodec := outerLeafCodecHeaderID(codec)
+	if wantCodec == 0 {
+		t.Fatalf("unsupported test codec %d", codec)
+	}
+	if got := int(raw[5]); got != wantCodec {
+		t.Fatalf("outer-leaf codec id = %d, want %d", got, wantCodec)
 	}
 	if got, want := int(binary.LittleEndian.Uint16(raw[6:8])), outerleaf.NormalizeRestartInterval(db.outerLeafBlockRestart); got != want {
 		t.Fatalf("outer-leaf restart interval = %d, want %d", got, want)
@@ -108,5 +123,37 @@ func TestReplayInlineAppender_UsesConfiguredOuterLeafEncodingForFenceMode(t *tes
 	}
 	if !bytes.Equal(decoded, value) {
 		t.Fatalf("decoded value mismatch")
+	}
+}
+
+func TestReplayInlineAppender_UsesConfiguredOuterLeafEncodingForFenceMode(t *testing.T) {
+	assertReplayInlineAppenderOuterLeafEncoding(t, IndexOuterLeafModeV2FencePtr, ValueLogBlockLZ4, 7)
+}
+
+func TestReplayInlineAppender_UsesOuterLeafEncodingForV1LeafLogAndBlockPtrModes(t *testing.T) {
+	tests := []struct {
+		name    string
+		mode    string
+		codec   ValueLogBlockCodec
+		restart int
+	}{
+		{
+			name:    "v1_leaflog",
+			mode:    IndexOuterLeafModeV1LeafLog,
+			codec:   ValueLogBlockSnappy,
+			restart: 11,
+		},
+		{
+			name:    "v2_blockptr",
+			mode:    IndexOuterLeafModeV2BlockPtr,
+			codec:   ValueLogBlockLZ4,
+			restart: 5,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			assertReplayInlineAppenderOuterLeafEncoding(t, tt.mode, tt.codec, tt.restart)
+		})
 	}
 }
