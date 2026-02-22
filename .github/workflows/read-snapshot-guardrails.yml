@@ -1,0 +1,27 @@
+name: "read-snapshot: guardrails"
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  append_only_snapshot_guardrail:
+    name: append-only snapshot guardrail (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run read-snapshot append-only guardrail
+        run: ./scripts/check_read_snapshot_guardrail.sh

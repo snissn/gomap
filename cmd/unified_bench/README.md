@@ -8,6 +8,27 @@ Side-by-side benchmarks for `HashDB`, `BTreeOnHashDB`, `TreeDB` (cached), Badger
 - Run: `./bin/unified-bench`
 - Or: `go run ./cmd/unified_bench`
 
+## Guardrail Check (Read Snapshot + Append-Only)
+
+Targeted regression guardrail for append-only writes plus read-heavy snapshot acquisition:
+
+```bash
+./scripts/check_read_snapshot_guardrail.sh
+```
+
+The script validates that `TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail`
+actually ran (to avoid `go test` false-greens when `-run` matches nothing).
+It retries once for diagnostics and still fails the job if only the retry
+passes, so flaky regressions are surfaced instead of silently passing.
+
+Direct invocation:
+
+```bash
+cd /path/to/gomap/cmd/unified_bench
+GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
+  -run '^TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail$' -count=1
+```
+
 ## Reproducibility
 
 - Randomized tests use a per-test PRNG derived from `-seed` so every DB sees the same random key/query sequence.
