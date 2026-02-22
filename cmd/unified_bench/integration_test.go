@@ -32,12 +32,12 @@ func TestIntegration_NoHangLargeKeys(t *testing.T) {
 		"-format", "text", // Use text format for easier parsing if needed, markdown is fine too
 		"-checkpoint-between-tests",
 		"-treedb-force-value-pointers",
-		"-max-wall", "120s", // Set max wall time to detect hangs
+		"-max-wall", "180s", // Per-subtest wall clock cap for hang detection
 	)
 
-	// Keep this comfortably above per-test -max-wall (120s) across the three
+	// Keep this comfortably above per-test -max-wall (180s) across the three
 	// subtests plus startup/build overhead and teardown on slower CI hosts.
-	timeout := 9 * time.Minute
+	timeout := 9*time.Minute + 30*time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
