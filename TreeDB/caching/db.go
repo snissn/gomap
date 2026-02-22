@@ -3159,6 +3159,31 @@ type batchArenaLease struct {
 	chunks [][]byte
 }
 
+type memtableViewDeferredInfo struct {
+	memtables     int64
+	sinceUnixNano int64
+}
+
+type memtableViewLifecycleTelemetry struct {
+	retainTotal  atomic.Uint64
+	releaseTotal atomic.Uint64
+
+	leasesInFlight    atomic.Int64
+	leasesInFlightMax atomic.Int64
+
+	deferredViewsCurrent     atomic.Int64
+	deferredViewsMax         atomic.Int64
+	deferredViewsTotal       atomic.Uint64
+	deferredMemtablesCurrent atomic.Int64
+	deferredMemtablesMax     atomic.Int64
+	deferredMemtablesTotal   atomic.Uint64
+
+	deferredMu sync.Mutex
+	deferred   map[*memtableView]memtableViewDeferredInfo
+
+	oldestDeferredUnixNano atomic.Int64
+}
+
 type DB struct {
 	mu      sync.RWMutex
 	flushMu sync.Mutex
@@ -3195,19 +3220,20 @@ type DB struct {
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
-	memtables            atomic.Pointer[memtableView]
-	hashSortedIndexer    *memtable.HashSortedIndexer
-	appendOnlyMemPool    sync.Pool
-	appendOnlyMemLeaseMu sync.Mutex
-	appendOnlyMemLeases  []*memtable.AppendOnly
-	pendingRetiredMems   []memtable.Table
-	queueRanges          []keyRange
-	queueWALPaths        [][]string
-	queueValueLogPaths   [][]string
-	backendRange         keyRange
-	backendRangeKnown    bool
-	backendRangeInit     sync.Once
-	backendRangeErr      error
+	memtables             atomic.Pointer[memtableView]
+	hashSortedIndexer     *memtable.HashSortedIndexer
+	appendOnlyMemPool     sync.Pool
+	appendOnlyMemLeaseMu  sync.Mutex
+	appendOnlyMemLeases   []*memtable.AppendOnly
+	pendingRetiredMems    []memtable.Table
+	memtableViewTelemetry memtableViewLifecycleTelemetry
+	queueRanges           []keyRange
+	queueWALPaths         [][]string
+	queueValueLogPaths    [][]string
+	backendRange          keyRange
+	backendRangeKnown     bool
+	backendRangeInit      sync.Once
+	backendRangeErr       error
 
 	// Durability
 	lanes         []lane
@@ -3529,16 +3555,119 @@ type memShard struct {
 // memtableView is an immutable snapshot of the in-memory layers.
 // It is published via atomic.Pointer and treated as read-only by readers.
 type memtableView struct {
-	mutables      []memtable.Table
-	queue         []memtable.Table
-	queueShardIDs []uint16
-	queueRanges   []keyRange
-	refs          atomic.Int64
-	retiredMems   []memtable.Table
+	mutables                 []memtable.Table
+	queue                    []memtable.Table
+	queueShardIDs            []uint16
+	queueRanges              []keyRange
+	refs                     atomic.Int64
+	retiredMems              []memtable.Table
+	deferredRetiredMemtables atomic.Int64
 }
 
 const maxAppendOnlyMemLeases = 256
 const appendOnlyEstimatedBytesPerEntryDeferredFence = 96
+
+func updateInt64Max(dst *atomic.Int64, value int64) {
+	for {
+		cur := dst.Load()
+		if value <= cur {
+			return
+		}
+		if dst.CompareAndSwap(cur, value) {
+			return
+		}
+	}
+}
+
+func (db *DB) noteMemtableViewRetain() {
+	if db == nil {
+		return
+	}
+	tel := &db.memtableViewTelemetry
+	tel.retainTotal.Add(1)
+	inFlight := tel.leasesInFlight.Add(1)
+	updateInt64Max(&tel.leasesInFlightMax, inFlight)
+}
+
+func (db *DB) noteMemtableViewRelease() {
+	if db == nil {
+		return
+	}
+	tel := &db.memtableViewTelemetry
+	tel.releaseTotal.Add(1)
+	tel.leasesInFlight.Add(-1)
+}
+
+func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64) {
+	if db == nil || view == nil || memtables <= 0 {
+		return
+	}
+	tel := &db.memtableViewTelemetry
+	since := time.Now().UnixNano()
+
+	tel.deferredMu.Lock()
+	defer tel.deferredMu.Unlock()
+	if tel.deferred == nil {
+		tel.deferred = make(map[*memtableView]memtableViewDeferredInfo)
+	}
+	if _, exists := tel.deferred[view]; exists {
+		return
+	}
+	// Avoid recording deferred telemetry after final release. This prevents
+	// stale entries if a concurrent releaser already dropped refs to zero.
+	if view.refs.Load() == 0 {
+		return
+	}
+	tel.deferred[view] = memtableViewDeferredInfo{
+		memtables:     memtables,
+		sinceUnixNano: since,
+	}
+	oldest := int64(0)
+	for _, deferred := range tel.deferred {
+		if oldest == 0 || deferred.sinceUnixNano < oldest {
+			oldest = deferred.sinceUnixNano
+		}
+	}
+	tel.oldestDeferredUnixNano.Store(oldest)
+
+	tel.deferredViewsTotal.Add(1)
+	deferredViewsCurrent := tel.deferredViewsCurrent.Add(1)
+	updateInt64Max(&tel.deferredViewsMax, deferredViewsCurrent)
+	tel.deferredMemtablesTotal.Add(uint64(memtables))
+	deferredMemtablesCurrent := tel.deferredMemtablesCurrent.Add(memtables)
+	updateInt64Max(&tel.deferredMemtablesMax, deferredMemtablesCurrent)
+}
+
+func (db *DB) noteMemtableViewDeferredExit(view *memtableView) {
+	if db == nil || view == nil {
+		return
+	}
+	tel := &db.memtableViewTelemetry
+	var (
+		info  memtableViewDeferredInfo
+		found bool
+	)
+	oldest := int64(0)
+	tel.deferredMu.Lock()
+	defer tel.deferredMu.Unlock()
+	if tel.deferred != nil {
+		info, found = tel.deferred[view]
+		if found {
+			delete(tel.deferred, view)
+		}
+		for _, deferred := range tel.deferred {
+			if oldest == 0 || deferred.sinceUnixNano < oldest {
+				oldest = deferred.sinceUnixNano
+			}
+		}
+	}
+	tel.oldestDeferredUnixNano.Store(oldest)
+	if !found {
+		return
+	}
+	tel.deferredViewsCurrent.Add(-1)
+	tel.deferredMemtablesCurrent.Add(-info.memtables)
+}
 
 func (db *DB) retainMemtableView() *memtableView {
 	if db == nil {
@@ -3552,6 +3681,7 @@ func (db *DB) retainMemtableView() *memtableView {
 		// Fast path: published views keep a baseline ref, so this is usually one
 		// atomic add and return.
 		if n := view.refs.Add(1); n > 1 {
+			db.noteMemtableViewRetain()
 			return view
 		}
 		// We observed a zero-ref view. Undo and retry unless this is still the
@@ -3561,18 +3691,34 @@ func (db *DB) retainMemtableView() *memtableView {
 			continue
 		}
 		if view.refs.CompareAndSwap(0, 2) {
+			db.noteMemtableViewRetain()
 			return view
 		}
 	}
 }
 
 func (db *DB) releaseMemtableView(view *memtableView) {
+	db.releaseMemtableViewRef(view, true)
+}
+
+func (db *DB) releasePublishedMemtableView(view *memtableView) {
+	db.releaseMemtableViewRef(view, false)
+}
+
+func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 	if db == nil || view == nil {
 		return
 	}
-	if view.refs.Add(-1) != 0 {
+	if leaseRelease {
+		db.noteMemtableViewRelease()
+	}
+	if refs := view.refs.Add(-1); refs != 0 {
+		if refs > 0 && view.deferredRetiredMemtables.Load() > 0 {
+			db.noteMemtableViewDeferredEnter(view, view.deferredRetiredMemtables.Load())
+		}
 		return
 	}
+	db.noteMemtableViewDeferredExit(view)
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
 }
@@ -3775,8 +3921,9 @@ func (db *DB) publishMemtablesLocked() {
 	if old != nil {
 		if len(retired) > 0 {
 			old.retiredMems = append(old.retiredMems, retired...)
+			old.deferredRetiredMemtables.Store(int64(len(old.retiredMems)))
 		}
-		db.releaseMemtableView(old)
+		db.releasePublishedMemtableView(old)
 		return
 	}
 	db.recycleMemtables(retired)
@@ -13085,6 +13232,23 @@ func (db *DB) Stats() map[string]string {
 	memOverwriteWrites := db.memtableStats.overwriteWrites.Load()
 	memIters := db.memtableStats.iterators.Load()
 	memRangeIters := db.memtableStats.rangeIters.Load()
+	memViewRetainTotal := db.memtableViewTelemetry.retainTotal.Load()
+	memViewReleaseTotal := db.memtableViewTelemetry.releaseTotal.Load()
+	memViewLeasesInFlight := db.memtableViewTelemetry.leasesInFlight.Load()
+	memViewLeasesInFlightMax := db.memtableViewTelemetry.leasesInFlightMax.Load()
+	memViewDeferredViewsCurrent := db.memtableViewTelemetry.deferredViewsCurrent.Load()
+	memViewDeferredViewsMax := db.memtableViewTelemetry.deferredViewsMax.Load()
+	memViewDeferredViewsTotal := db.memtableViewTelemetry.deferredViewsTotal.Load()
+	memViewDeferredMemtablesCurrent := db.memtableViewTelemetry.deferredMemtablesCurrent.Load()
+	memViewDeferredMemtablesMax := db.memtableViewTelemetry.deferredMemtablesMax.Load()
+	memViewDeferredMemtablesTotal := db.memtableViewTelemetry.deferredMemtablesTotal.Load()
+	memViewOldestDeferredUnixNano := db.memtableViewTelemetry.oldestDeferredUnixNano.Load()
+	memViewOldestDeferredAgeMS := 0.0
+	if memViewOldestDeferredUnixNano > 0 {
+		if ageNS := time.Now().UnixNano() - memViewOldestDeferredUnixNano; ageNS > 0 {
+			memViewOldestDeferredAgeMS = float64(ageNS) / float64(time.Millisecond)
+		}
+	}
 	stats["treedb.cache.memtable_stats.writes"] = fmt.Sprintf("%d", memWrites)
 	stats["treedb.cache.memtable_stats.seq_writes"] = fmt.Sprintf("%d", memSeqWrites)
 	stats["treedb.cache.memtable_stats.overwrite_writes"] = fmt.Sprintf("%d", memOverwriteWrites)
@@ -13097,6 +13261,17 @@ func (db *DB) Stats() map[string]string {
 	if memIters > 0 {
 		stats["treedb.cache.memtable_stats.range_iter_pct"] = fmt.Sprintf("%.4f", float64(memRangeIters)/float64(memIters))
 	}
+	stats["treedb.cache.memtable_view.retain_total"] = fmt.Sprintf("%d", memViewRetainTotal)
+	stats["treedb.cache.memtable_view.release_total"] = fmt.Sprintf("%d", memViewReleaseTotal)
+	stats["treedb.cache.memtable_view.leases_inflight"] = fmt.Sprintf("%d", memViewLeasesInFlight)
+	stats["treedb.cache.memtable_view.leases_inflight_max"] = fmt.Sprintf("%d", memViewLeasesInFlightMax)
+	stats["treedb.cache.memtable_view.deferred_views_current"] = fmt.Sprintf("%d", memViewDeferredViewsCurrent)
+	stats["treedb.cache.memtable_view.deferred_views_max"] = fmt.Sprintf("%d", memViewDeferredViewsMax)
+	stats["treedb.cache.memtable_view.deferred_views_total"] = fmt.Sprintf("%d", memViewDeferredViewsTotal)
+	stats["treedb.cache.memtable_view.deferred_memtables_current"] = fmt.Sprintf("%d", memViewDeferredMemtablesCurrent)
+	stats["treedb.cache.memtable_view.deferred_memtables_max"] = fmt.Sprintf("%d", memViewDeferredMemtablesMax)
+	stats["treedb.cache.memtable_view.deferred_memtables_total"] = fmt.Sprintf("%d", memViewDeferredMemtablesTotal)
+	stats["treedb.cache.memtable_view.deferred_oldest_age_ms"] = fmt.Sprintf("%.3f", memViewOldestDeferredAgeMS)
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	db.domainIngressMu.Lock()
