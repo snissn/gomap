@@ -72,6 +72,12 @@ type slabFenceLookupMode interface {
 	FenceLookupEnabled() bool
 }
 
+// Optional observer for bounded predecessor probe activity in fence-pointer
+// lookup paths (Get/GetAppend/Has miss handling).
+type slabFenceLookupProbeObserver interface {
+	ObserveFenceLookupProbe(probeAttempts, entryScans, pointerCandidates, readerCalls, probeHits uint64)
+}
+
 // Optional block expansion reads for fence-only outer-leaf mode.
 // ok=false means the reader is not in fence expansion mode for this pointer.
 type slabUnsafeFenceBlockReader interface {
@@ -184,6 +190,7 @@ type Tree struct {
 	slabFenceReader   slabUnsafeFenceKeyReader
 	slabFenceAppender slabUnsafeFenceKeyAppender
 	fenceLookupMode   bool
+	slabFenceProbeObs slabFenceLookupProbeObserver
 	slabFenceBlocks   slabUnsafeFenceBlockReader
 	slabFenceBlocksI  slabUnsafeFenceBlockIntoReader
 	slabFenceBlocksL  slabUnsafeFenceBlockLeaseIntoReader
@@ -229,6 +236,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		}
 		if fenceAppender, ok := sr.(slabUnsafeFenceKeyAppender); ok {
 			t.slabFenceAppender = fenceAppender
+		}
+		if obs, ok := sr.(slabFenceLookupProbeObserver); ok {
+			t.slabFenceProbeObs = obs
 		}
 		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
 			t.slabFenceBlocks = fenceBlocks
@@ -310,6 +320,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		} else {
 			t.slabFenceAppender = nil
 		}
+		if obs, ok := sr.(slabFenceLookupProbeObserver); ok {
+			t.slabFenceProbeObs = obs
+		} else {
+			t.slabFenceProbeObs = nil
+		}
 		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
 			t.slabFenceBlocks = fenceBlocks
 		} else {
@@ -358,6 +373,7 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	} else {
 		t.slabFenceReader = nil
 		t.slabFenceAppender = nil
+		t.slabFenceProbeObs = nil
 		t.slabFenceBlocks = nil
 		t.slabFenceBlocksI = nil
 		t.slabFenceBlocksL = nil
@@ -370,6 +386,17 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	}
 	t.fenceLookupMode = fenceEnabled && (t.slabFenceReader != nil || t.slabFenceAppender != nil)
 	t.rootPageID = root
+}
+
+func (t *Tree) observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls uint64, hit bool) {
+	if t == nil || t.slabFenceProbeObs == nil {
+		return
+	}
+	probeHits := uint64(0)
+	if hit {
+		probeHits = 1
+	}
+	t.slabFenceProbeObs.ObserveFenceLookupProbe(1, entryScans, pointerCandidates, readerCalls, probeHits)
 }
 
 // SetRoot updates the root page ID.
@@ -467,38 +494,52 @@ func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byt
 	if !t.fenceLookupMode || n == nil || idx == 0 {
 		return nil, false, nil
 	}
+	var entryScans uint64
+	var pointerCandidates uint64
+	var readerCalls uint64
 	for scan := idx; scan > 0; scan-- {
+		entryScans++
 		// Fence lookup only needs pointer+flags. Avoid full leaf-entry decode
 		// (key reconstruction) on every probe in columnar-prefix leaves.
 		_, ptr, flags, err := n.GetLeafValueView(scan - 1)
 		if err != nil {
+			t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 			return nil, false, err
 		}
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
 			continue
 		}
+		pointerCandidates++
 		if t.slabFenceReader != nil {
+			readerCalls++
 			val, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
 			if err != nil {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 				return nil, false, err
 			}
 			if found {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 				return val, true, nil
 			}
 			continue
 		}
 		if t.slabFenceAppender != nil {
+			readerCalls++
 			val, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, nil)
 			if err != nil {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 				return nil, false, err
 			}
 			if found {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 				return val, true, nil
 			}
 			continue
 		}
+		t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 		return nil, false, nil
 	}
+	t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 	return nil, false, nil
 }
 
@@ -506,49 +547,66 @@ func (t *Tree) lookupFenceValueViewAppend(n *node.Node, idx uint16, key []byte, 
 	if !t.fenceLookupMode || n == nil || idx == 0 {
 		return nil, false, nil
 	}
+	var entryScans uint64
+	var pointerCandidates uint64
+	var readerCalls uint64
 	for scan := idx; scan > 0; scan-- {
+		entryScans++
 		_, ptr, flags, err := n.GetLeafValueView(scan - 1)
 		if err != nil {
+			t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 			return nil, false, err
 		}
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
 			continue
 		}
+		pointerCandidates++
 		if t.slabFenceAppender != nil {
+			readerCalls++
 			oldLen := len(dst)
 			tail, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, dst[oldLen:oldLen])
 			if err != nil {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 				return nil, false, err
 			}
 			if !found {
 				continue
 			}
 			if oldLen == 0 {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 				return tail, true, nil
 			}
 			if len(tail) == 0 {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 				return dst[:oldLen], true, nil
 			}
 			if cap(dst) > oldLen {
 				base := dst[:cap(dst):cap(dst)]
 				if &tail[0] == &base[oldLen] {
+					t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 					return dst[:oldLen+len(tail)], true, nil
 				}
 			}
+			t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 			return append(dst[:oldLen], tail...), true, nil
 		}
 		if t.slabFenceReader != nil {
+			readerCalls++
 			val, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
 			if err != nil {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 				return nil, false, err
 			}
 			if !found {
 				continue
 			}
+			t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 			return append(dst, val...), true, nil
 		}
+		t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 		return nil, false, nil
 	}
+	t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 	return nil, false, nil
 }
 
@@ -556,20 +614,28 @@ func (t *Tree) lookupFenceHasKey(n *node.Node, idx uint16, key []byte) (found bo
 	if !t.fenceLookupMode || n == nil || idx == 0 {
 		return false, false, nil
 	}
+	var entryScans uint64
+	var pointerCandidates uint64
+	var readerCalls uint64
 	for scan := idx; scan > 0; scan-- {
+		entryScans++
 		_, ptr, flags, err := n.GetLeafValueView(scan - 1)
 		if err != nil {
+			t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 			return false, false, err
 		}
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
 			continue
 		}
+		pointerCandidates++
 		if t.slabFenceSeekL != nil {
+			readerCalls++
 			pos, below, above, lease, ok, err := t.slabFenceSeekL.ReadUnsafeFenceBlockSeekLease(ptr, key)
 			if err != nil {
 				if lease != nil {
 					lease.Release()
 				}
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 				return false, false, err
 			}
 			if !ok {
@@ -587,14 +653,17 @@ func (t *Tree) lookupFenceHasKey(n *node.Node, idx uint16, key []byte) (found bo
 				found = fenceSeekContainsKey(keys, pos, key)
 				lease.Release()
 				if found {
+					t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 					return true, true, nil
 				}
 				continue
 			}
 		}
 		if t.slabFenceSeek != nil {
+			readerCalls++
 			pos, below, above, keys, ok, err := t.slabFenceSeek.ReadUnsafeFenceBlockSeek(ptr, key)
 			if err != nil {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 				return false, false, err
 			}
 			if ok {
@@ -602,33 +671,42 @@ func (t *Tree) lookupFenceHasKey(n *node.Node, idx uint16, key []byte) (found bo
 					continue
 				}
 				if fenceSeekContainsKey(keys, pos, key) {
+					t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 					return true, true, nil
 				}
 				continue
 			}
 		}
 		if t.slabFenceReader != nil {
+			readerCalls++
 			_, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
 			if err != nil {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 				return false, false, err
 			}
 			if found {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 				return true, true, nil
 			}
 			continue
 		}
 		if t.slabFenceAppender != nil {
+			readerCalls++
 			_, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, nil)
 			if err != nil {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 				return false, false, err
 			}
 			if found {
+				t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, true)
 				return true, true, nil
 			}
 			continue
 		}
+		t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 		return false, false, nil
 	}
+	t.observeFenceLookupProbe(entryScans, pointerCandidates, readerCalls, false)
 	return false, false, nil
 }
 

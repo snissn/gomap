@@ -24,6 +24,7 @@ type valueReader struct {
 	cache                  *outerLeafBlockCache
 	keyCache               *outerLeafKeyCache
 	fenceDecodeLeases      *outerLeafFenceDecodeLeaseSet
+	fenceLookupProbeShard  *fenceLookupProbeShard
 }
 
 type staticFenceKeysLease struct {
@@ -462,6 +463,7 @@ func (r *valueReader) clearForPoolReuse() {
 	r.vlogs = nil
 	r.cache = nil
 	r.keyCache = nil
+	r.fenceLookupProbeShard = nil
 }
 
 func (r *valueReader) releaseDecodeContext() {
@@ -500,6 +502,35 @@ func (r valueReader) KeyAwareEnabled() bool {
 
 func (r valueReader) FenceLookupEnabled() bool {
 	return r.fenceLookupModeEnabled()
+}
+
+func (r *valueReader) setFenceLookupProbeShard(shard *fenceLookupProbeShard) {
+	if r == nil {
+		return
+	}
+	r.fenceLookupProbeShard = shard
+}
+
+func (r *valueReader) ObserveFenceLookupProbe(probeAttempts, entryScans, pointerCandidates, readerCalls, probeHits uint64) {
+	if r == nil || r.fenceLookupProbeShard == nil {
+		return
+	}
+	shard := r.fenceLookupProbeShard
+	if probeAttempts > 0 {
+		shard.attempts.Add(probeAttempts)
+	}
+	if entryScans > 0 {
+		shard.entryScans.Add(entryScans)
+	}
+	if pointerCandidates > 0 {
+		shard.pointerCandidates.Add(pointerCandidates)
+	}
+	if readerCalls > 0 {
+		shard.readerCalls.Add(readerCalls)
+	}
+	if probeHits > 0 {
+		shard.hits.Add(probeHits)
+	}
 }
 
 func (r valueReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {

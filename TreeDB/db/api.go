@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -349,6 +350,9 @@ func (db *DB) Stats() map[string]string {
 				stats["treedb.vlog.outer_leaf_key_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 			}
 		}
+	}
+	if strings.TrimSpace(db.indexOuterLeafMode) == IndexOuterLeafModeV2FencePtr {
+		db.fenceLookupProbeStatsInto(stats)
 	}
 	watermarkLockDelaySharePct, watermarkLatencyP99Ms := db.publishWatermarkStats()
 	stats["treedb.publish.watermark.lock_delay_share_pct"] = fmt.Sprintf("%.3f", watermarkLockDelaySharePct)
