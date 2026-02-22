@@ -141,7 +141,8 @@ type slabUnsafeFenceBlockSeekLeaseReader interface {
 }
 
 // Optional fast classifier for whether a pointer is expected to reference a
-// fence-expandable outer-leaf block.
+// fence-expandable outer-leaf block. Returning false must be definitive:
+// callers may skip fence probes entirely on that result.
 type slabFencePointerClassifier interface {
 	FencePointerLikelyBlock(ptr page.ValuePtr) bool
 }
@@ -377,6 +378,18 @@ func (t *Tree) SetRoot(root uint64) {
 	t.rootPageID = root
 }
 
+func (t *Tree) fenceProbeLikelyBlock(ptr page.ValuePtr) bool {
+	// Explicit fence markers are authoritative and must never be skipped.
+	if page.ValuePtrIsFenceOuter(ptr) {
+		return true
+	}
+	if t != nil && t.slabFencePtrCls != nil {
+		return t.slabFencePtrCls.FencePointerLikelyBlock(ptr)
+	}
+	// Readers that do not provide a classifier keep legacy permissive behavior.
+	return true
+}
+
 // GetEntry returns the raw leaf entry (useful for compaction/CAS).
 // CAUTION: Returned entry Key/Value might point directly to mmap memory.
 // Do not modify or hold reference for long.
@@ -477,6 +490,9 @@ func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byt
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
 			continue
 		}
+		if !t.fenceProbeLikelyBlock(ptr) {
+			continue
+		}
 		if t.slabFenceReader != nil {
 			val, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
 			if err != nil {
@@ -512,6 +528,9 @@ func (t *Tree) lookupFenceValueViewAppend(n *node.Node, idx uint16, key []byte, 
 			return nil, false, err
 		}
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		if !t.fenceProbeLikelyBlock(ptr) {
 			continue
 		}
 		if t.slabFenceAppender != nil {
@@ -562,6 +581,9 @@ func (t *Tree) lookupFenceHasKey(n *node.Node, idx uint16, key []byte) (found bo
 			return false, false, err
 		}
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		if !t.fenceProbeLikelyBlock(ptr) {
 			continue
 		}
 		if t.slabFenceSeekL != nil {
