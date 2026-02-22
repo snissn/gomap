@@ -27,10 +27,31 @@ type fenceLookupReader struct {
 	fenceAppendCalls int
 	blockCalls       int
 	keyCalls         int
+	probeAttempts    uint64
+	probeEntryScans  uint64
+	probeCandidates  uint64
+	probeReaderCalls uint64
+	probeHits        uint64
 }
 
 func (r *fenceLookupReader) FenceLookupEnabled() bool {
 	return true
+}
+
+func (r *fenceLookupReader) ObserveFenceLookupProbe(probeAttempts, entryScans, pointerCandidates, readerCalls, probeHits uint64) {
+	r.probeAttempts += probeAttempts
+	r.probeEntryScans += entryScans
+	r.probeCandidates += pointerCandidates
+	r.probeReaderCalls += readerCalls
+	r.probeHits += probeHits
+}
+
+func (r *fenceLookupReader) resetProbeObserver() {
+	r.probeAttempts = 0
+	r.probeEntryScans = 0
+	r.probeCandidates = 0
+	r.probeReaderCalls = 0
+	r.probeHits = 0
 }
 
 func newFenceLookupReader() *fenceLookupReader {
@@ -782,6 +803,104 @@ func TestTreeGet_FencePredecessorLookupContinuesAfterMultiplePointerMisses(t *te
 	}
 }
 
+func TestTreeGet_FenceProbeObserverCapturesBoundedScanMetrics(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	ptr0 := reader.addBlock(map[string]string{
+		"k020": "v20",
+	})
+	ptr1 := reader.addBlock(map[string]string{
+		"k015": "v15",
+	})
+	ptr2 := reader.addBlock(map[string]string{
+		"k017": "v17",
+	})
+	ptr3 := reader.addBlock(map[string]string{
+		"k110": "v110",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptr0); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k015"), nil, node.FlagPointer, ptr1); err != nil {
+		t.Fatalf("AddLeafEntry(k015): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k017"), nil, node.FlagPointer, ptr2); err != nil {
+		t.Fatalf("AddLeafEntry(k017): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k110"), nil, node.FlagPointer, ptr3); err != nil {
+		t.Fatalf("AddLeafEntry(k110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	reader.resetProbeObserver()
+	if _, err := tr.Get([]byte("k020")); err != nil {
+		t.Fatalf("Get(k020): %v", err)
+	}
+	if reader.probeAttempts != 1 || reader.probeEntryScans != 3 || reader.probeCandidates != 3 || reader.probeReaderCalls != 3 || reader.probeHits != 1 {
+		t.Fatalf(
+			"Get probe metrics attempts=%d scans=%d candidates=%d calls=%d hits=%d; want 1/3/3/3/1",
+			reader.probeAttempts,
+			reader.probeEntryScans,
+			reader.probeCandidates,
+			reader.probeReaderCalls,
+			reader.probeHits,
+		)
+	}
+
+	reader.resetProbeObserver()
+	if _, err := tr.GetAppend([]byte("k020"), []byte("x-")); err != nil {
+		t.Fatalf("GetAppend(k020): %v", err)
+	}
+	if reader.probeAttempts != 1 || reader.probeEntryScans != 3 || reader.probeCandidates != 3 || reader.probeReaderCalls != 3 || reader.probeHits != 1 {
+		t.Fatalf(
+			"GetAppend probe metrics attempts=%d scans=%d candidates=%d calls=%d hits=%d; want 1/3/3/3/1",
+			reader.probeAttempts,
+			reader.probeEntryScans,
+			reader.probeCandidates,
+			reader.probeReaderCalls,
+			reader.probeHits,
+		)
+	}
+
+	reader.resetProbeObserver()
+	if has, err := tr.Has([]byte("k020")); err != nil {
+		t.Fatalf("Has(k020): %v", err)
+	} else if !has {
+		t.Fatalf("Has(k020) = false, want true")
+	}
+	if reader.probeAttempts != 1 || reader.probeEntryScans != 3 || reader.probeCandidates != 3 || reader.probeReaderCalls != 3 || reader.probeHits != 1 {
+		t.Fatalf(
+			"Has probe metrics attempts=%d scans=%d candidates=%d calls=%d hits=%d; want 1/3/3/3/1",
+			reader.probeAttempts,
+			reader.probeEntryScans,
+			reader.probeCandidates,
+			reader.probeReaderCalls,
+			reader.probeHits,
+		)
+	}
+}
+
 func TestTreeGet_FencePredecessorLookupSkipsNonPointers(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")
@@ -931,6 +1050,70 @@ func TestTreeHas_FencePredecessorLookupUsesSeekWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestTreeHas_FencePredecessorLookupSeek_ContinuesAfterBelowClassification(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupSeekReader()
+	ptrOlder := reader.addBlock(map[string]string{
+		"k120": "v120",
+	})
+	// Immediate predecessor classifies key below block range; lookup must
+	// continue scanning older predecessors to avoid false negatives.
+	ptrImmediate := reader.addBlock(map[string]string{
+		"k200": "v200",
+	})
+	ptrUpper := reader.addBlock(map[string]string{
+		"k130": "v130",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptrOlder); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k115"), nil, node.FlagPointer, ptrImmediate); err != nil {
+		t.Fatalf("AddLeafEntry(k115): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k130"), nil, node.FlagPointer, ptrUpper); err != nil {
+		t.Fatalf("AddLeafEntry(k130): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	has, err := tr.Has([]byte("k120"))
+	if err != nil {
+		t.Fatalf("Has(k120): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(k120) = false, want true")
+	}
+	if reader.seekCalls != 2 {
+		t.Fatalf("seek calls = %d, want 2 (below classification + older predecessor hit)", reader.seekCalls)
+	}
+	if reader.fenceCalls != 0 {
+		t.Fatalf("fence calls = %d, want 0", reader.fenceCalls)
+	}
+	if reader.fenceAppendCalls != 0 {
+		t.Fatalf("fence append calls = %d, want 0", reader.fenceAppendCalls)
+	}
+}
+
 func TestTreeHas_FencePredecessorLookupSeekLeaseReleasesOnError(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")
@@ -1043,6 +1226,74 @@ func TestTreeHas_FencePredecessorLookupSeekLeaseReleasesForHitAndMiss(t *testing
 	}
 	if reader.releasedLeases != 2 {
 		t.Fatalf("released leases = %d, want 2", reader.releasedLeases)
+	}
+	if reader.fenceCalls != 0 {
+		t.Fatalf("fence calls = %d, want 0", reader.fenceCalls)
+	}
+	if reader.fenceAppendCalls != 0 {
+		t.Fatalf("fence append calls = %d, want 0", reader.fenceAppendCalls)
+	}
+}
+
+func TestTreeHas_FencePredecessorLookupSeekLease_ContinuesAfterBelowClassification(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupSeekLeaseReader()
+	ptrOlder := reader.addBlock(map[string]string{
+		"k120": "v120",
+	})
+	ptrImmediate := reader.addBlock(map[string]string{
+		"k200": "v200",
+	})
+	ptrUpper := reader.addBlock(map[string]string{
+		"k130": "v130",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptrOlder); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k115"), nil, node.FlagPointer, ptrImmediate); err != nil {
+		t.Fatalf("AddLeafEntry(k115): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k130"), nil, node.FlagPointer, ptrUpper); err != nil {
+		t.Fatalf("AddLeafEntry(k130): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	has, err := tr.Has([]byte("k120"))
+	if err != nil {
+		t.Fatalf("Has(k120): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(k120) = false, want true")
+	}
+	if reader.seekLeaseCalls != 2 {
+		t.Fatalf("seek lease calls = %d, want 2 (below classification + older predecessor hit)", reader.seekLeaseCalls)
+	}
+	if reader.createdLeases != 1 {
+		t.Fatalf("created leases = %d, want 1", reader.createdLeases)
+	}
+	if reader.releasedLeases != 1 {
+		t.Fatalf("released leases = %d, want 1", reader.releasedLeases)
 	}
 	if reader.fenceCalls != 0 {
 		t.Fatalf("fence calls = %d, want 0", reader.fenceCalls)

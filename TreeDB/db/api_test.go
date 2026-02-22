@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -192,6 +193,88 @@ func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
 	stats := db.Stats()
 	if _, ok := stats["treedb.publish.watermark.lag_drift_bytes_per_sec"]; !ok {
 		t.Fatalf("missing treedb.publish.watermark.lag_drift_bytes_per_sec")
+	}
+}
+
+func TestStatsIncludesV2FenceLookupProbeMetrics(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	vA := []byte("a")
+	vB := []byte("b")
+	if err := db.Set([]byte("k010"), vA); err != nil {
+		t.Fatalf("Set(k010): %v", err)
+	}
+	if err := db.Set([]byte("k110"), vB); err != nil {
+		t.Fatalf("Set(k110): %v", err)
+	}
+
+	if _, err := db.Has([]byte("k020")); err != nil {
+		t.Fatalf("Has(k020): %v", err)
+	}
+	if _, err := db.Get([]byte("k020")); err != nil {
+		t.Fatalf("Get(k020): %v", err)
+	}
+
+	stats := db.Stats()
+	requiredUint := []string{
+		"treedb.v2_fenceptr.lookup.probe_attempts",
+		"treedb.v2_fenceptr.lookup.probe_hits",
+		"treedb.v2_fenceptr.lookup.probe_misses",
+		"treedb.v2_fenceptr.lookup.probe_entry_scans",
+		"treedb.v2_fenceptr.lookup.probe_pointer_candidates",
+		"treedb.v2_fenceptr.lookup.probe_reader_calls",
+	}
+	parsed := make(map[string]uint64, len(requiredUint))
+	for _, key := range requiredUint {
+		v, ok := stats[key]
+		if !ok {
+			t.Fatalf("missing %s", key)
+		}
+		u, err := strconv.ParseUint(v, 10, 64)
+		if err != nil {
+			t.Fatalf("ParseUint(%s=%q): %v", key, v, err)
+		}
+		parsed[key] = u
+	}
+
+	requiredFloat := []string{
+		"treedb.v2_fenceptr.lookup.probe_hit_frac",
+		"treedb.v2_fenceptr.lookup.avg_entry_scans_per_probe",
+		"treedb.v2_fenceptr.lookup.avg_pointer_candidates_per_probe",
+		"treedb.v2_fenceptr.lookup.avg_reader_calls_per_probe",
+	}
+	for _, key := range requiredFloat {
+		v, ok := stats[key]
+		if !ok {
+			t.Fatalf("missing %s", key)
+		}
+		if _, err := strconv.ParseFloat(v, 64); err != nil {
+			t.Fatalf("ParseFloat(%s=%q): %v", key, v, err)
+		}
+	}
+
+	attempts := parsed["treedb.v2_fenceptr.lookup.probe_attempts"]
+	hits := parsed["treedb.v2_fenceptr.lookup.probe_hits"]
+	misses := parsed["treedb.v2_fenceptr.lookup.probe_misses"]
+	if attempts < hits {
+		t.Fatalf("attempts=%d < hits=%d", attempts, hits)
+	}
+	if attempts != hits+misses {
+		t.Fatalf("attempts=%d hits=%d misses=%d invariant attempts==hits+misses violated", attempts, hits, misses)
+	}
+	if parsed["treedb.v2_fenceptr.lookup.probe_reader_calls"] < hits {
+		t.Fatalf("reader_calls=%d < hits=%d", parsed["treedb.v2_fenceptr.lookup.probe_reader_calls"], hits)
 	}
 }
 

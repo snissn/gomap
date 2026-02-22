@@ -86,6 +86,7 @@ type DB struct {
 	valueLogDomainThresholds  []ValueLogDomainThreshold
 	outerLeafBlockCache       *outerLeafBlockCache
 	outerLeafKeyCache         *outerLeafKeyCache
+	fenceLookupProbeShards    [lifecycle.FastReaderShardCount]fenceLookupProbeShard
 	leafFillTargetPPM         uint32
 	internalFillTargetPPM     uint32
 	leafPrefixCompression     bool
@@ -753,6 +754,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
 	snap.reader.reconfigure(vlogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, db.outerLeafBlockCache, db.outerLeafKeyCache)
+	snap.reader.setFenceLookupProbeShard(db.fenceLookupProbeShard(snap.registryShardHint))
 	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
