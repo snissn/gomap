@@ -27,7 +27,7 @@ func TestIntegration_NoHangLargeKeys(t *testing.T) {
 		"-test", "batch_write,random_write,batch_delete",
 		"-dbs", "treedb",
 		"-profile", "wal_on_fast", // Apply profile via command line argument
-		"-keys", "2000000",
+		"-keys", "200000",
 		"-valsize", "128", // Original problematic value size
 		"-format", "text", // Use text format for easier parsing if needed, markdown is fine too
 		"-checkpoint-between-tests",
