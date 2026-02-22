@@ -2,6 +2,8 @@ package db
 
 import (
 	"bytes"
+	"fmt"
+	"runtime"
 	"testing"
 )
 
@@ -107,5 +109,107 @@ func TestGetMany_ValueSlicesAreCapacityCapped(t *testing.T) {
 	}
 	if !bytes.Equal(second, []byte("WXYZ")) {
 		t.Fatalf("db k2 changed: got=%q want=%q", second, []byte("WXYZ"))
+	}
+}
+
+func TestGetMany_ParallelPath_OrderMissingEmptyAndDefensiveCopy(t *testing.T) {
+	prevProcs := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(prevProcs)
+
+	const (
+		storedKeys = 256
+		batchKeys  = 512
+	)
+	workers := getManyWorkerCount(batchKeys)
+	if !getManyCanParallelize(batchKeys, workers) {
+		t.Skipf("parallel GetMany not enabled for this runtime (workers=%d)", workers)
+	}
+
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	for i := 0; i < storedKeys; i++ {
+		key := []byte(fmt.Sprintf("k%03d", i))
+		value := []byte(fmt.Sprintf("v%03d", i))
+		if err := d.Set(key, value); err != nil {
+			t.Fatalf("Set(%q): %v", key, err)
+		}
+	}
+	if err := d.Set([]byte("dup"), []byte("dup-value")); err != nil {
+		t.Fatalf("Set(dup): %v", err)
+	}
+	if err := d.Set([]byte("empty"), []byte{}); err != nil {
+		t.Fatalf("Set(empty): %v", err)
+	}
+
+	keys := make([][]byte, batchKeys)
+	want := make([][]byte, batchKeys)
+	dupIdx := make([]int, 0, 8)
+	for i := 0; i < batchKeys; i++ {
+		switch {
+		case i%97 == 0:
+			keys[i] = []byte("dup")
+			want[i] = []byte("dup-value")
+			dupIdx = append(dupIdx, i)
+		case i%89 == 0:
+			keys[i] = []byte("empty")
+			want[i] = []byte{}
+		case i%53 == 0:
+			keys[i] = []byte(fmt.Sprintf("missing-%03d", i))
+			want[i] = nil
+		default:
+			idx := i % storedKeys
+			keys[i] = []byte(fmt.Sprintf("k%03d", idx))
+			want[i] = []byte(fmt.Sprintf("v%03d", idx))
+		}
+	}
+
+	got, err := d.GetMany(keys)
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != len(keys) {
+		t.Fatalf("len(GetMany)=%d want %d", len(got), len(keys))
+	}
+	for i := range keys {
+		if want[i] == nil {
+			if got[i] != nil {
+				t.Fatalf("got[%d]=%q want nil for missing key", i, got[i])
+			}
+			continue
+		}
+		if len(want[i]) == 0 {
+			if got[i] == nil || len(got[i]) != 0 {
+				t.Fatalf("got[%d]=%q want empty (non-nil) value", i, got[i])
+			}
+			continue
+		}
+		if !bytes.Equal(got[i], want[i]) {
+			t.Fatalf("got[%d]=%q want %q", i, got[i], want[i])
+		}
+	}
+
+	if len(dupIdx) < 2 {
+		t.Fatalf("expected at least 2 duplicate entries, got %d", len(dupIdx))
+	}
+	firstDup := dupIdx[0]
+	secondDup := dupIdx[1]
+	if firstDup == secondDup || got[firstDup] == nil || got[secondDup] == nil {
+		t.Fatalf("invalid duplicate slots: first=%d second=%d", firstDup, secondDup)
+	}
+	got[firstDup][0] = 'X'
+	if !bytes.Equal(got[secondDup], []byte("dup-value")) {
+		t.Fatalf("duplicate value aliased after mutation: got[%d]=%q", secondDup, got[secondDup])
+	}
+	latest, err := d.Get([]byte("dup"))
+	if err != nil {
+		t.Fatalf("Get(dup): %v", err)
+	}
+	if !bytes.Equal(latest, []byte("dup-value")) {
+		t.Fatalf("db value changed after caller mutation: got=%q want %q", latest, []byte("dup-value"))
 	}
 }
