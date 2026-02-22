@@ -39,6 +39,12 @@ type fenceLookupSeekClassifierReader struct {
 	likely map[page.ValuePtr]bool
 }
 
+var errFenceLookupMissingBlock = errors.New("fence lookup missing block")
+
+func fenceLookupMissingBlockErr(ptr page.ValuePtr) error {
+	return fmt.Errorf("%w: ptr %+v", errFenceLookupMissingBlock, ptr)
+}
+
 func (r *fenceLookupReader) FenceLookupEnabled() bool {
 	return true
 }
@@ -113,7 +119,7 @@ func (r *fenceLookupReader) ReadUnsafeFenceForKey(ptr page.ValuePtr, key []byte)
 	r.fenceCalls++
 	block, ok := r.blocks[ptr]
 	if !ok {
-		return nil, false, fmt.Errorf("missing block ptr %+v", ptr)
+		return nil, false, fenceLookupMissingBlockErr(ptr)
 	}
 	val, ok := block[string(key)]
 	if !ok {
@@ -126,7 +132,7 @@ func (r *fenceLookupReader) ReadUnsafeFenceAppendForKey(ptr page.ValuePtr, key [
 	r.fenceAppendCalls++
 	block, ok := r.blocks[ptr]
 	if !ok {
-		return nil, false, fmt.Errorf("missing block ptr %+v", ptr)
+		return nil, false, fenceLookupMissingBlockErr(ptr)
 	}
 	val, ok := block[string(key)]
 	if !ok {
@@ -235,7 +241,7 @@ func (r *fenceLookupAppenderOnlyReader) ReadUnsafeFenceAppendForKey(ptr page.Val
 	r.fenceAppendCalls++
 	block, ok := r.blocks[ptr]
 	if !ok {
-		return nil, false, fmt.Errorf("missing block ptr %+v", ptr)
+		return nil, false, fenceLookupMissingBlockErr(ptr)
 	}
 	val, ok := block[string(key)]
 	if !ok {
@@ -248,7 +254,7 @@ func (r *fenceLookupTailAppenderReader) ReadUnsafeFenceAppendForKey(ptr page.Val
 	r.fenceAppendCalls++
 	block, ok := r.blocks[ptr]
 	if !ok {
-		return nil, false, fmt.Errorf("missing block ptr %+v", ptr)
+		return nil, false, fenceLookupMissingBlockErr(ptr)
 	}
 	val, ok := block[string(key)]
 	if !ok {
@@ -1932,6 +1938,153 @@ func TestTreeGetEntry_FencePredecessorLookupGlobalAppenderOnly(t *testing.T) {
 	}
 	if string(entry.Value) != "v120" {
 		t.Fatalf("GetEntry(k120) value = %q, want %q", entry.Value, "v120")
+	}
+	if reader.fenceAppendCalls != 1 {
+		t.Fatalf("fence append calls = %d, want 1", reader.fenceAppendCalls)
+	}
+}
+
+func TestTreeGetEntry_FencePredecessorLookupGlobalErrorPropagates(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(3); err != nil {
+		t.Fatalf("Alloc pages: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	missingPtr := page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 999, Length: 1}
+
+	leaf1Data, err := p.Get(1)
+	if err != nil {
+		t.Fatalf("Get leaf1 page: %v", err)
+	}
+	leaf1 := node.NewNode(leaf1Data)
+	leaf1.SetType(page.PageTypeLeaf)
+	leaf1.SetPageID(1)
+	if err := leaf1.AddLeafEntry([]byte("k050"), nil, node.FlagPointer, missingPtr); err != nil {
+		t.Fatalf("leaf1 AddLeafEntry(k050): %v", err)
+	}
+	leaf1.UpdateChecksum()
+
+	leaf2Data, err := p.Get(2)
+	if err != nil {
+		t.Fatalf("Get leaf2 page: %v", err)
+	}
+	leaf2 := node.NewNode(leaf2Data)
+	leaf2.SetType(page.PageTypeLeaf)
+	leaf2.SetPageID(2)
+	if err := leaf2.AddLeafEntry([]byte("k150"), []byte("v150"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("leaf2 AddLeafEntry(k150): %v", err)
+	}
+	leaf2.UpdateChecksum()
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeInternal)
+	root.SetPageID(0)
+	if err := root.AddInternalChild([]byte("k000"), 1); err != nil {
+		t.Fatalf("root AddInternalChild(k000): %v", err)
+	}
+	if err := root.AddInternalChild([]byte("k100"), 2); err != nil {
+		t.Fatalf("root AddInternalChild(k100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	_, err = tr.GetEntry([]byte("k120"))
+	if err == nil {
+		t.Fatalf("GetEntry(k120): expected non-nil error")
+	}
+	if errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("GetEntry(k120): expected source error, got ErrKeyNotFound")
+	}
+	if !errors.Is(err, errFenceLookupMissingBlock) {
+		t.Fatalf("GetEntry(k120): expected errFenceLookupMissingBlock, got %v", err)
+	}
+	if reader.fenceCalls != 1 {
+		t.Fatalf("fence calls = %d, want 1", reader.fenceCalls)
+	}
+	if reader.fenceAppendCalls != 0 {
+		t.Fatalf("fence append calls = %d, want 0", reader.fenceAppendCalls)
+	}
+}
+
+func TestTreeGetEntry_FencePredecessorLookupGlobalAppenderOnlyErrorPropagates(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(3); err != nil {
+		t.Fatalf("Alloc pages: %v", err)
+	}
+
+	reader := newFenceLookupAppenderOnlyReader()
+	missingPtr := page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 999, Length: 1}
+
+	leaf1Data, err := p.Get(1)
+	if err != nil {
+		t.Fatalf("Get leaf1 page: %v", err)
+	}
+	leaf1 := node.NewNode(leaf1Data)
+	leaf1.SetType(page.PageTypeLeaf)
+	leaf1.SetPageID(1)
+	if err := leaf1.AddLeafEntry([]byte("k050"), nil, node.FlagPointer, missingPtr); err != nil {
+		t.Fatalf("leaf1 AddLeafEntry(k050): %v", err)
+	}
+	leaf1.UpdateChecksum()
+
+	leaf2Data, err := p.Get(2)
+	if err != nil {
+		t.Fatalf("Get leaf2 page: %v", err)
+	}
+	leaf2 := node.NewNode(leaf2Data)
+	leaf2.SetType(page.PageTypeLeaf)
+	leaf2.SetPageID(2)
+	if err := leaf2.AddLeafEntry([]byte("k150"), []byte("v150"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("leaf2 AddLeafEntry(k150): %v", err)
+	}
+	leaf2.UpdateChecksum()
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeInternal)
+	root.SetPageID(0)
+	if err := root.AddInternalChild([]byte("k000"), 1); err != nil {
+		t.Fatalf("root AddInternalChild(k000): %v", err)
+	}
+	if err := root.AddInternalChild([]byte("k100"), 2); err != nil {
+		t.Fatalf("root AddInternalChild(k100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	_, err = tr.GetEntry([]byte("k120"))
+	if err == nil {
+		t.Fatalf("GetEntry(k120): expected non-nil error")
+	}
+	if errors.Is(err, ErrKeyNotFound) {
+		t.Fatalf("GetEntry(k120): expected source error, got ErrKeyNotFound")
+	}
+	if !errors.Is(err, errFenceLookupMissingBlock) {
+		t.Fatalf("GetEntry(k120): expected errFenceLookupMissingBlock, got %v", err)
 	}
 	if reader.fenceAppendCalls != 1 {
 		t.Fatalf("fence append calls = %d, want 1", reader.fenceAppendCalls)
