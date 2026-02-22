@@ -3,7 +3,9 @@ package treedb_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -1255,7 +1257,7 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV2FencePtr(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
-func testReopenVerifyOuterLeafV2SplitMergeDeleteRangeIteratorParity(t *testing.T, mode string) {
+func testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t *testing.T, mode string) {
 	dir := t.TempDir()
 	const total = 12000
 
@@ -1304,15 +1306,15 @@ func testReopenVerifyOuterLeafV2SplitMergeDeleteRangeIteratorParity(t *testing.T
 	}
 
 	// Force heavy structural churn:
-	// - remove a large middle range (merge/collapse pressure),
+	// - remove a large middle range via DeleteRange (split/merge/collapse pressure),
 	// - overwrite a patterned subset outside the deleted range,
 	// - delete sparse boundary keys.
+	if err := db.DeleteRange(keyFor(2000), keyFor(8000)); err != nil {
+		_ = db.Close()
+		t.Fatalf("delete range: %v", err)
+	}
 	for i := 2000; i < 8000; i++ {
 		key := keyFor(i)
-		if err := db.Delete(key); err != nil {
-			_ = db.Close()
-			t.Fatalf("delete range key %d: %v", i, err)
-		}
 		delete(expected, string(key))
 	}
 	for i := 0; i < total; i++ {
@@ -1475,11 +1477,201 @@ func testReopenVerifyOuterLeafV2SplitMergeDeleteRangeIteratorParity(t *testing.T
 }
 
 func TestReopenVerify_OuterLeafV2_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
-	testReopenVerifyOuterLeafV2SplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV2BlockPtr)
+	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV2BlockPtr)
+}
+
+func TestReopenVerify_OuterLeafV1LeafLog_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
+	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV1LeafLog)
 }
 
 func TestReopenVerify_OuterLeafV2FencePtr_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
-	testReopenVerifyOuterLeafV2SplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV2FencePtr)
+	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV2FencePtr)
+}
+
+func TestReopenVerify_OuterLeafV1LeafLog_SplitMergeDeleteRange_ParityWithV1(t *testing.T) {
+	type apiParityFingerprint struct {
+		forwardDigest string
+		forwardCount  int
+		reverseDigest string
+		reverseCount  int
+		rangeDigest   string
+		rangeCount    int
+		pointDigest   string
+	}
+
+	run := func(mode string) apiParityFingerprint {
+		dir := t.TempDir()
+		const total = 12000
+		opts := treedb.Options{
+			Dir:                dir,
+			IndexOuterLeafMode: mode,
+			ValueLog: treedb.ValueLogOptions{
+				PointerThreshold:              1,
+				OuterLeafBlockCodec:           treedb.ValueLogBlockSnappy,
+				OuterLeafBlockTargetBytes:     512,
+				OuterLeafBlockRestartInterval: 8,
+			},
+		}
+
+		db, err := treedb.Open(opts)
+		if err != nil {
+			t.Fatalf("open %s: %v", mode, err)
+		}
+
+		makeValue := func(i int, seed byte) []byte {
+			v := make([]byte, 256)
+			for j := range v {
+				v[j] = seed + byte((i+j)%251)
+			}
+			return v
+		}
+		keyFor := func(i int) []byte {
+			k := make([]byte, 8)
+			binary.BigEndian.PutUint64(k, uint64(i))
+			return k
+		}
+
+		for i := 0; i < total; i++ {
+			if err := db.Set(keyFor(i), makeValue(i, 11)); err != nil {
+				_ = db.Close()
+				t.Fatalf("set %s %d: %v", mode, i, err)
+			}
+		}
+		if err := db.Checkpoint(); err != nil {
+			_ = db.Close()
+			t.Fatalf("checkpoint initial %s: %v", mode, err)
+		}
+		if err := db.DeleteRange(keyFor(2000), keyFor(8000)); err != nil {
+			_ = db.Close()
+			t.Fatalf("delete range %s: %v", mode, err)
+		}
+		for i := 0; i < total; i++ {
+			if i >= 2000 && i < 8000 {
+				continue
+			}
+			key := keyFor(i)
+			if i%7 == 0 {
+				if err := db.Set(key, makeValue(i, 77)); err != nil {
+					_ = db.Close()
+					t.Fatalf("overwrite %s %d: %v", mode, i, err)
+				}
+			}
+			if i%113 == 0 {
+				if err := db.Delete(key); err != nil {
+					_ = db.Close()
+					t.Fatalf("sparse delete %s %d: %v", mode, i, err)
+				}
+			}
+		}
+		if err := db.Checkpoint(); err != nil {
+			_ = db.Close()
+			t.Fatalf("checkpoint churn %s: %v", mode, err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("close %s: %v", mode, err)
+		}
+
+		reopen, err := treedb.Open(opts)
+		if err != nil {
+			t.Fatalf("reopen %s: %v", mode, err)
+		}
+		defer reopen.Close()
+
+		out := apiParityFingerprint{}
+
+		it, err := reopen.Iterator(nil, nil)
+		if err != nil {
+			t.Fatalf("iterator %s: %v", mode, err)
+		}
+		defer it.Close()
+		forwardSum := sha256.New()
+		for it.Valid() {
+			_, _ = forwardSum.Write(it.Key())
+			_, _ = forwardSum.Write(it.Value())
+			out.forwardCount++
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			t.Fatalf("iterator error %s: %v", mode, err)
+		}
+		out.forwardDigest = hex.EncodeToString(forwardSum.Sum(nil))
+
+		rit, err := reopen.ReverseIterator(nil, nil)
+		if err != nil {
+			t.Fatalf("reverse iterator %s: %v", mode, err)
+		}
+		defer rit.Close()
+		reverseSum := sha256.New()
+		for rit.Valid() {
+			_, _ = reverseSum.Write(rit.Key())
+			_, _ = reverseSum.Write(rit.Value())
+			out.reverseCount++
+			rit.Next()
+		}
+		if err := rit.Error(); err != nil {
+			t.Fatalf("reverse iterator error %s: %v", mode, err)
+		}
+		out.reverseDigest = hex.EncodeToString(reverseSum.Sum(nil))
+
+		rangeIt, err := reopen.Iterator(keyFor(1500), keyFor(2500))
+		if err != nil {
+			t.Fatalf("range iterator %s: %v", mode, err)
+		}
+		defer rangeIt.Close()
+		rangeSum := sha256.New()
+		for rangeIt.Valid() {
+			_, _ = rangeSum.Write(rangeIt.Key())
+			_, _ = rangeSum.Write(rangeIt.Value())
+			out.rangeCount++
+			rangeIt.Next()
+		}
+		if err := rangeIt.Error(); err != nil {
+			t.Fatalf("range iterator error %s: %v", mode, err)
+		}
+		out.rangeDigest = hex.EncodeToString(rangeSum.Sum(nil))
+
+		pointSum := sha256.New()
+		for i := 0; i < total; i++ {
+			key := keyFor(i)
+			_, _ = pointSum.Write(key)
+			got, err := reopen.Get(key)
+			if err != nil {
+				t.Fatalf("get %s %d: %v", mode, i, err)
+			}
+			if got == nil {
+				_, _ = pointSum.Write([]byte{0})
+				continue
+			}
+			_, _ = pointSum.Write([]byte{1})
+			_, _ = pointSum.Write(got)
+		}
+		out.pointDigest = hex.EncodeToString(pointSum.Sum(nil))
+		return out
+	}
+
+	v1 := run(treedb.IndexOuterLeafModeV1)
+	v1LeafLog := run(treedb.IndexOuterLeafModeV1LeafLog)
+	if v1.forwardCount != v1LeafLog.forwardCount {
+		t.Fatalf("forward count mismatch v1=%d v1_leaflog=%d", v1.forwardCount, v1LeafLog.forwardCount)
+	}
+	if v1.forwardDigest != v1LeafLog.forwardDigest {
+		t.Fatalf("forward digest mismatch v1=%s v1_leaflog=%s", v1.forwardDigest, v1LeafLog.forwardDigest)
+	}
+	if v1.reverseCount != v1LeafLog.reverseCount {
+		t.Fatalf("reverse count mismatch v1=%d v1_leaflog=%d", v1.reverseCount, v1LeafLog.reverseCount)
+	}
+	if v1.reverseDigest != v1LeafLog.reverseDigest {
+		t.Fatalf("reverse digest mismatch v1=%s v1_leaflog=%s", v1.reverseDigest, v1LeafLog.reverseDigest)
+	}
+	if v1.rangeCount != v1LeafLog.rangeCount {
+		t.Fatalf("range count mismatch v1=%d v1_leaflog=%d", v1.rangeCount, v1LeafLog.rangeCount)
+	}
+	if v1.rangeDigest != v1LeafLog.rangeDigest {
+		t.Fatalf("range digest mismatch v1=%s v1_leaflog=%s", v1.rangeDigest, v1LeafLog.rangeDigest)
+	}
+	if v1.pointDigest != v1LeafLog.pointDigest {
+		t.Fatalf("point digest mismatch v1=%s v1_leaflog=%s", v1.pointDigest, v1LeafLog.pointDigest)
+	}
 }
 
 func TestReopenVerify_OuterLeafV2FencePtr_CompactIndex_ReopenParity(t *testing.T) {

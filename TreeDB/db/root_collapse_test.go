@@ -69,7 +69,6 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains(t *testing.T) {
 		}
 		_ = b.Close()
 	}
-
 	rep, err := d.FragmentationReport()
 	if err != nil {
 		t.Fatalf("FragmentationReport: %v", err)
@@ -130,7 +129,7 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains(t *testing.T) {
 	}
 }
 
-func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *testing.T) {
+func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode string, expectStrictCollapse bool) {
 	dir := t.TempDir()
 
 	d, err := Open(Options{
@@ -139,7 +138,7 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *t
 		LeafFillTargetPPM:         850_000,
 		InternalFillTargetPPM:     900_000,
 		MaintenanceOpsPerCoalesce: -1,
-		IndexOuterLeafMode:        IndexOuterLeafModeV2BlockPtr,
+		IndexOuterLeafMode:        mode,
 		ValueLog: ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           ValueLogBlockLZ4,
@@ -152,7 +151,7 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *t
 	}
 	defer d.Close()
 
-	// Force pointer-backed values so this test exercises v2 outer-leaf decode
+	// Force pointer-backed values so this test exercises pointer-mode outer-leaf decode
 	// while stressing split/merge maintenance under delete-heavy churn.
 	val := bytes.Repeat([]byte("y"), 256)
 	const total = 5000
@@ -195,8 +194,11 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *t
 		t.Fatalf("parse leaf before delete: %v", err)
 	}
 
+	keep := 50
+	if expectStrictCollapse {
+		keep = 8
+	}
 	{
-		const keep = 50
 		b := d.NewBatch().(*Batch)
 		for i := keep; i < total; i++ {
 			var k [8]byte
@@ -236,17 +238,26 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *t
 		t.Fatalf("parse internal: %v", err)
 	}
 
-	if beforeLeaf <= leaf {
-		t.Fatalf("expected leaf pages to shrink after heavy deletes, before=%d after=%d", beforeLeaf, leaf)
-	}
-	if leaf > 16 {
-		t.Fatalf("expected post-delete leaf pages to stay small, got %d", leaf)
-	}
-	if internal > 1 {
-		t.Fatalf("expected shallow tree after heavy deletes, got internal pages=%d", internal)
+	if expectStrictCollapse {
+		if leaf != 1 {
+			t.Fatalf("expected strict root-collapse to a single leaf, got leaf pages=%d", leaf)
+		}
+		if internal != 0 {
+			t.Fatalf("expected strict root-collapse to leaf root, got internal pages=%d", internal)
+		}
+	} else {
+		if beforeLeaf <= leaf {
+			t.Fatalf("expected leaf pages to shrink after heavy deletes, before=%d after=%d", beforeLeaf, leaf)
+		}
+		if leaf > 16 {
+			t.Fatalf("expected post-delete leaf pages to stay small, got %d", leaf)
+		}
+		if internal > 1 {
+			t.Fatalf("expected shallow tree after heavy deletes, got internal pages=%d", internal)
+		}
 	}
 
-	for i := 0; i < 50; i++ {
+	for i := 0; i < keep; i++ {
 		var k [8]byte
 		k[0] = byte(i >> 24)
 		k[1] = byte(i >> 16)
@@ -263,7 +274,7 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *t
 			t.Fatalf("value mismatch for key %d", i)
 		}
 	}
-	for i := 50; i < total; i++ {
+	for i := keep; i < total; i++ {
 		var k [8]byte
 		k[0] = byte(i >> 24)
 		k[1] = byte(i >> 16)
@@ -277,4 +288,12 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *t
 			t.Fatalf("expected key %d to be deleted", i)
 		}
 	}
+}
+
+func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *testing.T) {
+	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV2BlockPtr, false)
+}
+
+func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV1LeafLogPointers(t *testing.T) {
+	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV1LeafLog, true)
 }
