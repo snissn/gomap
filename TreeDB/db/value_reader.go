@@ -489,9 +489,16 @@ func (r valueReader) outerLeafModeEnabled() bool {
 
 func (r valueReader) fenceLookupModeEnabled() bool {
 	if r.modeInit {
+		if r.outerLeafMode == outerleaf.ModeV1LeafLog {
+			return false
+		}
 		return r.fenceLookupEnabled
 	}
-	return strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV2FencePtr
+	mode := strings.TrimSpace(r.outerLeafMode)
+	if mode == outerleaf.ModeV1LeafLog {
+		return false
+	}
+	return mode == outerleaf.ModeV2FencePtr
 }
 
 func (r valueReader) KeyAwareEnabled() bool {
@@ -503,6 +510,13 @@ func (r valueReader) FenceLookupEnabled() bool {
 }
 
 func (r valueReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
+	if r.modeInit {
+		if r.outerLeafMode == outerleaf.ModeV1LeafLog {
+			return false
+		}
+	} else if strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV1LeafLog {
+		return false
+	}
 	// Fence expansion should only trigger for explicitly fence-marked pointers.
 	// Grouped pointers are also used by non-fence per-key payloads.
 	return page.ValuePtrIsFenceOuter(ptr)

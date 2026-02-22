@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -269,6 +270,111 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2(t *testing.T) {
 	defer reopen.Close()
 
 	checkGets(t, reopen, keys, values, false)
+	scanAndCheck(t, reopen, values, false, hash)
+}
+
+func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_ReadPath_HitMiss_ReopenParity(t *testing.T) {
+	dir := t.TempDir()
+	keys, values, hash := buildVerifyDataset(2000)
+
+	opts := treedb.Options{
+		Dir:                dir,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1LeafLog,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold:              1,
+			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes:     4 << 10,
+			OuterLeafBlockRestartInterval: 16,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	writeDataset(t, db, keys, values, false)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	hitKey := keys[len(keys)/3]
+	missingKey := make([]byte, 8)
+	binary.BigEndian.PutUint64(missingKey, uint64(len(keys))+111)
+
+	got, err := db.Get(hitKey)
+	if err != nil {
+		t.Fatalf("get hit before reopen: %v", err)
+	}
+	if want := values[string(hitKey)]; !bytes.Equal(got, want) {
+		t.Fatalf("get hit before reopen mismatch")
+	}
+	if got, err := db.Get(missingKey); err != nil || got != nil {
+		t.Fatalf("get miss before reopen got=%v err=%v, want nil,nil", got, err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot before reopen: nil")
+	}
+	entry, err := snap.GetEntry(hitKey)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("snapshot GetEntry hit before reopen: %v", err)
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		_ = snap.Close()
+		t.Fatalf("expected pointer-backed entry in v1_leaflog mode, flags=%08b", entry.Flags)
+	}
+	if _, err := snap.GetEntry(missingKey); !errors.Is(err, treedb.ErrKeyNotFound) {
+		_ = snap.Close()
+		t.Fatalf("snapshot GetEntry miss before reopen err=%v, want ErrKeyNotFound", err)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("snapshot close before reopen: %v", err)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err = reopen.Get(hitKey)
+	if err != nil {
+		t.Fatalf("get hit after reopen: %v", err)
+	}
+	if want := values[string(hitKey)]; !bytes.Equal(got, want) {
+		t.Fatalf("get hit after reopen mismatch")
+	}
+	if got, err := reopen.Get(missingKey); err != nil || got != nil {
+		t.Fatalf("get miss after reopen got=%v err=%v, want nil,nil", got, err)
+	}
+
+	snap = reopen.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot after reopen: nil")
+	}
+	entry, err = snap.GetEntry(hitKey)
+	if err != nil {
+		_ = snap.Close()
+		t.Fatalf("snapshot GetEntry hit after reopen: %v", err)
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		_ = snap.Close()
+		t.Fatalf("expected pointer-backed entry after reopen in v1_leaflog mode, flags=%08b", entry.Flags)
+	}
+	if _, err := snap.GetEntry(missingKey); !errors.Is(err, treedb.ErrKeyNotFound) {
+		_ = snap.Close()
+		t.Fatalf("snapshot GetEntry miss after reopen err=%v, want ErrKeyNotFound", err)
+	}
+	if err := snap.Close(); err != nil {
+		t.Fatalf("snapshot close after reopen: %v", err)
+	}
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
