@@ -292,8 +292,7 @@ func normalizePublicOuterLeafMode(mode string) string {
 	case db.IndexOuterLeafModeV1LeafLog:
 		return db.IndexOuterLeafModeV1LeafLog
 	case db.IndexOuterLeafModeV1LeafLogLegacy:
-		// Compatibility alias keeps current v1_leaflog behavior unchanged.
-		return db.IndexOuterLeafModeV1LeafLog
+		return db.IndexOuterLeafModeV1LeafLogLegacy
 	case db.IndexOuterLeafModeV2BlockPtr:
 		return db.IndexOuterLeafModeV2BlockPtr
 	case db.IndexOuterLeafModeV2FencePtr:

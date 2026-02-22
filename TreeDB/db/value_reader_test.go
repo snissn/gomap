@@ -143,15 +143,56 @@ func TestValueReader_FencePointerLikelyBlock_RequiresExplicitFenceMarker(t *test
 	}
 }
 
-func TestValueReader_FenceLookupDisabledForV1LeafLog(t *testing.T) {
+func TestValueReader_FenceLookupScopedForV1LeafLog(t *testing.T) {
 	r := newValueReader(nil, outerleaf.ModeV1LeafLog, false, nil, nil)
 	defer (&r).releaseDecodeContext()
 
 	if !r.KeyAwareEnabled() {
 		t.Fatalf("v1_leaflog should keep key-aware outer-leaf reads enabled")
 	}
+	if !r.FenceLookupEnabled() {
+		t.Fatalf("v1_leaflog should enable fence lookup mode")
+	}
+	if r.FenceLookupGlobalEnabled() {
+		t.Fatalf("v1_leaflog must disable global fallback lookups")
+	}
+	if !r.FenceLookupSingleCandidateEnabled() {
+		t.Fatalf("v1_leaflog must probe only one predecessor candidate")
+	}
+
+	base := page.ValuePtr{
+		FileID: page.ValueLogFileID(7),
+		Offset: 123,
+		Length: 4096,
+	}
+	fence := page.ValuePtrMarkFenceOuter(base)
+	if !r.FencePointerLikelyBlock(fence) {
+		t.Fatalf("v1_leaflog should classify explicit fence pointers as fence blocks")
+	}
+
+	grouped := base
+	grouped.Length = page.ValuePtrMarkGrouped(base.Length, 3)
+	groupedFence := page.ValuePtrMarkFenceOuter(grouped)
+	if r.FencePointerLikelyBlock(groupedFence) {
+		t.Fatalf("v1_leaflog must not classify grouped pointers as fence blocks")
+	}
+}
+
+func TestValueReader_FenceLookupDisabledForV1LeafLogLegacy(t *testing.T) {
+	r := newValueReader(nil, outerleaf.ModeV1LeafLogLegacy, false, nil, nil)
+	defer (&r).releaseDecodeContext()
+
+	if !r.KeyAwareEnabled() {
+		t.Fatalf("v1_leaflog_legacy should keep key-aware outer-leaf reads enabled")
+	}
 	if r.FenceLookupEnabled() {
-		t.Fatalf("v1_leaflog must not enable fence lookup mode")
+		t.Fatalf("v1_leaflog_legacy must keep fence lookup mode disabled")
+	}
+	if r.FenceLookupGlobalEnabled() {
+		t.Fatalf("v1_leaflog_legacy must keep global fence fallback disabled")
+	}
+	if r.FenceLookupSingleCandidateEnabled() {
+		t.Fatalf("v1_leaflog_legacy should not advertise single-candidate fence probing")
 	}
 
 	base := page.ValuePtr{
@@ -161,14 +202,7 @@ func TestValueReader_FenceLookupDisabledForV1LeafLog(t *testing.T) {
 	}
 	fence := page.ValuePtrMarkFenceOuter(base)
 	if r.FencePointerLikelyBlock(fence) {
-		t.Fatalf("v1_leaflog must not classify pointers as fence blocks")
-	}
-
-	grouped := base
-	grouped.Length = page.ValuePtrMarkGrouped(base.Length, 3)
-	groupedFence := page.ValuePtrMarkFenceOuter(grouped)
-	if r.FencePointerLikelyBlock(groupedFence) {
-		t.Fatalf("v1_leaflog must not classify grouped pointers as fence blocks")
+		t.Fatalf("v1_leaflog_legacy must not classify pointers as fence blocks")
 	}
 }
 

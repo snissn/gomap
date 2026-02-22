@@ -26,7 +26,7 @@ func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
 	}
 }
 
-func TestOpen_IndexOuterLeafMode_V1LeafLogLegacyNormalizesToV1LeafLog(t *testing.T) {
+func TestOpen_IndexOuterLeafMode_V1LeafLogLegacyPreserved(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                t.TempDir(),
 		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLogLegacy,
@@ -35,8 +35,8 @@ func TestOpen_IndexOuterLeafMode_V1LeafLogLegacyNormalizesToV1LeafLog(t *testing
 		t.Fatalf("open %q: %v", IndexOuterLeafModeV1LeafLogLegacy, err)
 	}
 	defer func() { _ = db.Close() }()
-	if got := db.indexOuterLeafMode; got != IndexOuterLeafModeV1LeafLog {
-		t.Fatalf("index outer leaf mode = %q, want %q", got, IndexOuterLeafModeV1LeafLog)
+	if got := db.indexOuterLeafMode; got != IndexOuterLeafModeV1LeafLogLegacy {
+		t.Fatalf("index outer leaf mode = %q, want %q", got, IndexOuterLeafModeV1LeafLogLegacy)
 	}
 }
 

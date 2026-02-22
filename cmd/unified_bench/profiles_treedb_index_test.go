@@ -70,11 +70,11 @@ func TestBuildTreeDBOptions_V1LeafLogLegacyModeAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions v1_leaflog_legacy: %v", err)
 	}
-	if got := opts.IndexOuterLeafMode; got != treedb.IndexOuterLeafModeV1LeafLog {
-		t.Fatalf("IndexOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV1LeafLog)
+	if got := opts.IndexOuterLeafMode; got != treedb.IndexOuterLeafModeV1LeafLogLegacy {
+		t.Fatalf("IndexOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV1LeafLogLegacy)
 	}
-	if got := rep.formatText(""); !strings.Contains(got, "index_outer_leaf_mode=v1_leaflog") {
-		t.Fatalf("resolved options missing normalized v1_leaflog outer-leaf mode: %q", got)
+	if got := rep.formatText(""); !strings.Contains(got, "index_outer_leaf_mode=v1_leaflog_legacy") {
+		t.Fatalf("resolved options missing v1_leaflog_legacy outer-leaf mode: %q", got)
 	}
 }
 
@@ -83,8 +83,8 @@ func TestParseTreeDBOuterLeafMode_V1LeafLogLegacyAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseTreeDBOuterLeafMode: %v", err)
 	}
-	if got != treedb.IndexOuterLeafModeV1LeafLog {
-		t.Fatalf("parseTreeDBOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV1LeafLog)
+	if got != treedb.IndexOuterLeafModeV1LeafLogLegacy {
+		t.Fatalf("parseTreeDBOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV1LeafLogLegacy)
 	}
 }
 
