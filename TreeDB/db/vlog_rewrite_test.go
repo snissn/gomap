@@ -3,11 +3,13 @@ package db
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -350,6 +352,419 @@ func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("value mismatch for %q", key)
 		}
+	}
+}
+
+func TestValueLogRewriteOnline_PreservesFenceOuterMarkerAndIteratorParity(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir:                 dir,
+		IndexOuterLeafMode:  IndexOuterLeafModeV2FencePtr,
+		IndexPackedValuePtr: false,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(walDir, "value-l0-000001.log")
+	vw, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new valuelog writer: %v", err)
+	}
+	payload, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
+		{Key: []byte("f010"), Value: []byte("v10")},
+		{Key: []byte("f020"), Value: []byte("v20")},
+		{Key: []byte("f030"), Value: []byte("v30")},
+	}, uint8(ValueLogBlockSnappy), 8)
+	if err != nil {
+		_ = vw.Close()
+		t.Fatalf("encode outerleaf payload: %v", err)
+	}
+	buildRawRecord := func(rid uint64, value []byte) ([]byte, uint32) {
+		raw := make([]byte, valuelog.HeaderSize+len(value))
+		raw[4] = valuelog.Version
+		raw[5] = 0 // non-grouped record
+		raw[6] = 0
+		raw[7] = 0
+		binary.LittleEndian.PutUint64(raw[8:16], rid)
+		binary.LittleEndian.PutUint32(raw[16:20], uint32(len(value)))
+		copy(raw[valuelog.HeaderSize:], value)
+		sum := crc.ChecksumParts(raw[4:valuelog.HeaderSize], raw[valuelog.HeaderSize:])
+		binary.LittleEndian.PutUint32(raw[0:4], sum)
+		length := uint32(valuelog.HeaderSize-4) + uint32(len(value))
+		return raw, length
+	}
+	raw, rawLen := buildRawRecord(1, payload)
+	rawLen = page.ValuePtrMarkFenceOuter(page.ValuePtr{Length: rawLen}).Length
+	ptr, err := vw.AppendRawRecord(raw, rawLen)
+	if err != nil {
+		_ = vw.Close()
+		t.Fatalf("append outerleaf payload: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	ptrUpperPayload, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
+		{Key: []byte("f100"), Value: []byte("v100")},
+		{Key: []byte("f110"), Value: []byte("v110")},
+	}, uint8(ValueLogBlockSnappy), 8)
+	if err != nil {
+		t.Fatalf("encode upper outerleaf payload: %v", err)
+	}
+	fileIDUpper, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("encode upper file id: %v", err)
+	}
+	vwUpper, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000002.log"), fileIDUpper)
+	if err != nil {
+		t.Fatalf("new upper valuelog writer: %v", err)
+	}
+	rawUpper, rawUpperLen := buildRawRecord(2, ptrUpperPayload)
+	rawUpperLen = page.ValuePtrMarkFenceOuter(page.ValuePtr{Length: rawUpperLen}).Length
+	ptrUpper, err := vwUpper.AppendRawRecord(rawUpper, rawUpperLen)
+	if err != nil {
+		_ = vwUpper.Close()
+		t.Fatalf("append upper outerleaf payload: %v", err)
+	}
+	if err := vwUpper.Close(); err != nil {
+		t.Fatalf("close upper writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("f010"), ptr); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetPointer(f010): %v", err)
+	}
+	if err := b.SetPointer([]byte("f100"), ptrUpper); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetPointer(f100): %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+
+	collectKeys := func(start, end []byte) ([]string, error) {
+		it, err := db.Iterator(start, end)
+		if err != nil {
+			return nil, err
+		}
+		defer it.Close()
+		keys := make([]string, 0, 4)
+		for ; it.Valid(); it.Next() {
+			keys = append(keys, string(it.Key()))
+		}
+		if err := it.Error(); err != nil {
+			return nil, err
+		}
+		return keys, nil
+	}
+
+	fencePtrForKey := func(target []byte) (page.ValuePtr, byte, bool, error) {
+		it, err := db.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModePointerProjection})
+		if err != nil {
+			return page.ValuePtr{}, 0, false, err
+		}
+		defer it.Close()
+		for ; it.Valid(); it.Next() {
+			if !bytes.Equal(it.UnsafeKey(), target) {
+				continue
+			}
+			_, p, flags := it.UnsafeEntry()
+			return p, flags, true, nil
+		}
+		if err := it.Error(); err != nil {
+			return page.ValuePtr{}, 0, false, err
+		}
+		return page.ValuePtr{}, 0, false, nil
+	}
+
+	val, err := db.Get([]byte("f020"))
+	if err != nil {
+		t.Fatalf("pre-rewrite Get(f020): %v", err)
+	}
+	if !bytes.Equal(val, []byte("v20")) {
+		t.Fatalf("pre-rewrite Get(f020)=%q want=%q", val, []byte("v20"))
+	}
+	ptrBefore, flagsBefore, ok, err := fencePtrForKey([]byte("f010"))
+	if err != nil {
+		t.Fatalf("projection before rewrite: %v", err)
+	}
+	if !ok {
+		t.Fatalf("projection did not include f010 before rewrite")
+	}
+	if flagsBefore&node.FlagPointer == 0 {
+		t.Fatalf("f010 flags before rewrite missing pointer bit: %08b", flagsBefore)
+	}
+	if !page.ValuePtrIsFenceOuter(ptrBefore) {
+		t.Fatalf("f010 pointer before rewrite missing fence marker: %+v", ptrBefore)
+	}
+	keysBefore, err := collectKeys([]byte("f015"), []byte("f115"))
+	if err != nil {
+		t.Fatalf("collect keys before rewrite: %v", err)
+	}
+	if !reflect.DeepEqual(keysBefore, []string{"f020", "f030", "f100", "f110"}) {
+		t.Fatalf("keys before rewrite=%v want=[f020 f030 f100 f110]", keysBefore)
+	}
+
+	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     1,
+		SyncEachBatch: true,
+	}); err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+
+	val, err = db.Get([]byte("f020"))
+	if err != nil {
+		t.Fatalf("post-rewrite Get(f020): %v", err)
+	}
+	if !bytes.Equal(val, []byte("v20")) {
+		t.Fatalf("post-rewrite Get(f020)=%q want=%q", val, []byte("v20"))
+	}
+	val, err = db.Get([]byte("f110"))
+	if err != nil {
+		t.Fatalf("post-rewrite Get(f110): %v", err)
+	}
+	if !bytes.Equal(val, []byte("v110")) {
+		t.Fatalf("post-rewrite Get(f110)=%q want=%q", val, []byte("v110"))
+	}
+	keysAfter, err := collectKeys([]byte("f015"), []byte("f115"))
+	if err != nil {
+		t.Fatalf("collect keys after rewrite: %v", err)
+	}
+	if !reflect.DeepEqual(keysAfter, []string{"f020", "f030", "f100", "f110"}) {
+		t.Fatalf("keys after rewrite=%v want=[f020 f030 f100 f110]", keysAfter)
+	}
+
+	ptrAfter, flagsAfter, ok, err := fencePtrForKey([]byte("f010"))
+	if err != nil {
+		t.Fatalf("projection after rewrite: %v", err)
+	}
+	if !ok {
+		t.Fatalf("projection did not include f010 after rewrite")
+	}
+	if flagsAfter&node.FlagPointer == 0 {
+		t.Fatalf("f010 flags after rewrite missing pointer bit: %08b", flagsAfter)
+	}
+	if !page.ValuePtrIsFenceOuter(ptrAfter) {
+		t.Fatalf("f010 pointer after rewrite missing fence marker: before=%+v after=%+v", ptrBefore, ptrAfter)
+	}
+	if page.ValuePtrRecordLength(ptrAfter) != page.ValuePtrRecordLength(ptrBefore) {
+		t.Fatalf("f010 pointer record length hint changed across rewrite: before=%d after=%d", page.ValuePtrRecordLength(ptrBefore), page.ValuePtrRecordLength(ptrAfter))
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after rewrite: %v", err)
+	}
+	db = nil
+
+	db, err = Open(Options{
+		Dir:                 dir,
+		IndexOuterLeafMode:  IndexOuterLeafModeV2FencePtr,
+		IndexPackedValuePtr: false,
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+
+	val, err = db.Get([]byte("f020"))
+	if err != nil {
+		t.Fatalf("reopen Get(f020): %v", err)
+	}
+	if !bytes.Equal(val, []byte("v20")) {
+		t.Fatalf("reopen Get(f020)=%q want=%q", val, []byte("v20"))
+	}
+	keysAfterReopen, err := collectKeys([]byte("f015"), []byte("f115"))
+	if err != nil {
+		t.Fatalf("collect keys after reopen: %v", err)
+	}
+	if !reflect.DeepEqual(keysAfterReopen, []string{"f020", "f030", "f100", "f110"}) {
+		t.Fatalf("keys after reopen=%v want=[f020 f030 f100 f110]", keysAfterReopen)
+	}
+	ptrAfterReopen, flagsAfterReopen, ok, err := fencePtrForKey([]byte("f010"))
+	if err != nil {
+		t.Fatalf("projection after reopen: %v", err)
+	}
+	if !ok {
+		t.Fatalf("projection did not include f010 after reopen")
+	}
+	if flagsAfterReopen&node.FlagPointer == 0 {
+		t.Fatalf("f010 flags after reopen missing pointer bit: %08b", flagsAfterReopen)
+	}
+	if !page.ValuePtrIsFenceOuter(ptrAfterReopen) {
+		t.Fatalf("f010 pointer after reopen missing fence marker: %+v", ptrAfterReopen)
+	}
+}
+
+func TestValueLogRewriteOnline_LegacyGroupedFenceMarkerHint_DoesNotUpgradeToFencePointer(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("fileid: %v", err)
+	}
+	w, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("writer: %v", err)
+	}
+	ptrs, err := w.AppendFrame(0, nil, []valuelog.Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
+	if err != nil {
+		_ = w.Close()
+		t.Fatalf("append grouped frame: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+	if len(ptrs) != 2 {
+		t.Fatalf("expected 2 grouped pointers, got %d", len(ptrs))
+	}
+
+	const legacyGroupedFenceMarkerBit = 0x00800000
+	legacyPtr := ptrs[0]
+	legacyPtr.Length |= legacyGroupedFenceMarkerBit
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), legacyPtr); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	ptrForKey := func(target []byte) (page.ValuePtr, byte, bool, error) {
+		it, err := db.IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModePointerProjection})
+		if err != nil {
+			return page.ValuePtr{}, 0, false, err
+		}
+		defer it.Close()
+		for ; it.Valid(); it.Next() {
+			if !bytes.Equal(it.UnsafeKey(), target) {
+				continue
+			}
+			_, p, flags := it.UnsafeEntry()
+			return p, flags, true, nil
+		}
+		if err := it.Error(); err != nil {
+			return page.ValuePtr{}, 0, false, err
+		}
+		return page.ValuePtr{}, 0, false, nil
+	}
+
+	ptrBefore, flagsBefore, ok, err := ptrForKey([]byte("k1"))
+	if err != nil {
+		t.Fatalf("projection before rewrite: %v", err)
+	}
+	if !ok {
+		t.Fatalf("k1 missing before rewrite")
+	}
+	if flagsBefore&node.FlagPointer == 0 {
+		t.Fatalf("k1 before rewrite missing pointer flag: %08b", flagsBefore)
+	}
+	if !page.ValuePtrIsGrouped(ptrBefore) {
+		t.Fatalf("expected grouped pointer before rewrite: %+v", ptrBefore)
+	}
+	if !page.ValuePtrIsFenceOuter(ptrBefore) {
+		t.Fatalf("expected legacy grouped marker to be visible before rewrite: %+v", ptrBefore)
+	}
+
+	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     1,
+		SyncEachBatch: true,
+	}); err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+
+	ptrAfter, flagsAfter, ok, err := ptrForKey([]byte("k1"))
+	if err != nil {
+		t.Fatalf("projection after rewrite: %v", err)
+	}
+	if !ok {
+		t.Fatalf("k1 missing after rewrite")
+	}
+	if flagsAfter&node.FlagPointer == 0 {
+		t.Fatalf("k1 after rewrite missing pointer flag: %08b", flagsAfter)
+	}
+	if !page.ValuePtrIsGrouped(ptrAfter) {
+		t.Fatalf("expected grouped pointer after rewrite: %+v", ptrAfter)
+	}
+	if page.ValuePtrIsFenceOuter(ptrAfter) {
+		t.Fatalf("legacy grouped marker should not be upgraded into explicit fence pointer: %+v", ptrAfter)
+	}
+
+	v1, err := db.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get k1 after rewrite: %v", err)
+	}
+	if !bytes.Equal(v1, []byte("alpha")) {
+		t.Fatalf("k1 mismatch after rewrite: got=%q", v1)
+	}
+	v2, err := db.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("get k2 after rewrite: %v", err)
+	}
+	if !bytes.Equal(v2, []byte("beta")) {
+		t.Fatalf("k2 mismatch after rewrite: got=%q", v2)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close after rewrite: %v", err)
+	}
+	db = nil
+
+	db, err = Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	v1, err = db.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get k1 after reopen: %v", err)
+	}
+	if !bytes.Equal(v1, []byte("alpha")) {
+		t.Fatalf("k1 mismatch after reopen: got=%q", v1)
+	}
+	v2, err = db.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("get k2 after reopen: %v", err)
+	}
+	if !bytes.Equal(v2, []byte("beta")) {
+		t.Fatalf("k2 mismatch after reopen: got=%q", v2)
 	}
 }
 
