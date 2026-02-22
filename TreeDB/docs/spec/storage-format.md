@@ -274,14 +274,14 @@ bytes FramePayload
 - If `FrameFlags` indicates compression, frame payload is decoded first.
 - `DictID` selects dictionary for dict-compressed payloads.
 
-### 7.2 Outer-leaf payload envelope (`IndexOuterLeafMode=v2_blockptr|v2_fenceptr`)
+### 7.2 Outer-leaf payload envelope (`IndexOuterLeafMode=v1_leaflog|v2_blockptr|v2_fenceptr`)
 
-When outer-leaf mode `v2_blockptr` or `v2_fenceptr` is enabled, value-log
-payload bytes may be wrapped in an outer-leaf envelope (`Magic="TOL2"`):
+When outer-leaf mode `v1_leaflog`, `v2_blockptr`, or `v2_fenceptr` is enabled,
+value-log payload bytes may be wrapped in an outer-leaf envelope (`Magic="TOL2"`):
 
 ```text
 bytes[4] Magic            // "TOL2"
-u8       Version          // 1=single KV, 2=multi-KV block
+u8       Version          // 1=single KV, 2=multi-KV block, 3=typed-entry block
 u8       Codec            // 0=raw, 1=snappy, 2=lz4
 u16      RestartInterval
 u16/u32  Version-specific fields
@@ -296,15 +296,24 @@ Version 2 stores multiple sorted `{key,value}` pairs in one block payload:
 - a restart-offset table is appended,
 - trailer stores restart-count (`u32`).
 
+Version 3 stores one or more typed entries (inline value or nested blob
+reference) with restart metadata and the same envelope checksum rules.
+
 Mode semantics:
+- `v1_leaflog`: index keeps one logical entry per user key (v1 exact-key
+  lookup semantics) while pointer payload bytes use outer-leaf envelope
+  encoding. Lookups do not use fence-key predecessor probing.
 - `v2_blockptr`: index leaves remain per-user-key pointer entries; each pointer
   can reference a grouped outer-leaf block payload.
 - `v2_fenceptr`: index leaves store one fence-key pointer per outer block;
   user keys are resolved by selecting predecessor fence pointers and searching
-  inside the outer block payload.
+  inside the outer block payload. In WAL-on `rid_join`, oversized values can
+  publish immediate exact-key pointers before flush-time fence collapse.
 
-Read path resolves pointer+key by decoding one block payload and searching
-inside it for the requested key.
+When a pointer references an outer-leaf envelope, read path resolves
+pointer+key by decoding one block payload and searching inside it for the
+requested key. Immediate direct pointers (for example WAL-on `v2_fenceptr`
+`rid_join` oversized path before flush collapse) bypass outer-leaf block decode.
 
 Pre-alpha note: `v2` outer-leaf layouts are still evolving. DB directories
 written by older experimental builds may fail to open under newer binaries (and
