@@ -90,7 +90,12 @@ func TestAppendOnlyIteratorSnapshot_PinsOldViewAcrossFlush_CurrentBehavior(t *te
 	if err != nil {
 		t.Fatalf("iterator: %v", err)
 	}
-	defer func() { _ = it.Close() }()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = it.Close()
+		}
+	}()
 
 	viewBeforeFlush := db.memtables.Load()
 	if viewBeforeFlush == nil || len(viewBeforeFlush.queue) != 1 {
@@ -152,6 +157,7 @@ func TestAppendOnlyIteratorSnapshot_PinsOldViewAcrossFlush_CurrentBehavior(t *te
 	if err := it.Close(); err != nil {
 		t.Fatalf("iterator close: %v", err)
 	}
+	closed = true
 	if refs := viewBeforeFlush.refs.Load(); refs != 0 {
 		t.Fatalf("old view refs after iterator close=%d want=0", refs)
 	}
