@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	ModeV1LeafLog  = "v1_leaflog"
 	ModeV2BlockPtr = "v2_blockptr"
 	ModeV2FencePtr = "v2_fenceptr"
 
@@ -264,7 +265,7 @@ func HasMagic(payload []byte) bool {
 
 func ModeEnabled(mode string) bool {
 	switch strings.TrimSpace(mode) {
-	case ModeV2BlockPtr, ModeV2FencePtr:
+	case ModeV1LeafLog, ModeV2BlockPtr, ModeV2FencePtr:
 		return true
 	default:
 		return false

@@ -1258,6 +1258,26 @@ func TestCachingDB_Open_V2FencePtrWALOn_ExplicitRIDJoinAllowed(t *testing.T) {
 	}
 }
 
+func TestCachingDB_Open_NonFenceMode_RejectsSimpleInlineWALFenceMode(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	_, err = Open(dir, backend, Options{
+		IndexOuterLeafMode:   db.IndexOuterLeafModeV1LeafLog,
+		ValueLogWALFenceMode: string(db.ValueLogWALFenceModeSimpleInline),
+	})
+	if err == nil {
+		t.Fatalf("expected simple_inline guardrail error in non-fence mode")
+	}
+	if !strings.Contains(err.Error(), "requires index outer leaf mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCachingDB_Open_ValueLogOuterLeafBlobThresholdBytes_NegativeRejected(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})

@@ -146,6 +146,8 @@ func normalizeIndexOuterLeafMode(mode string) string {
 		return IndexOuterLeafModeV2FencePtr
 	case IndexOuterLeafModeV1:
 		return IndexOuterLeafModeV1
+	case IndexOuterLeafModeV1LeafLog:
+		return IndexOuterLeafModeV1LeafLog
 	case IndexOuterLeafModeV2BlockPtr:
 		return IndexOuterLeafModeV2BlockPtr
 	case IndexOuterLeafModeV2FencePtr:
@@ -223,6 +225,9 @@ const (
 const (
 	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
 	IndexOuterLeafModeV1 = "v1"
+	// IndexOuterLeafModeV1LeafLog keeps v1 exact-key semantics while storing
+	// leaf payload blocks in the value log (no fence fallback semantics).
+	IndexOuterLeafModeV1LeafLog = "v1_leaflog"
 	// IndexOuterLeafModeV2BlockPtr enables the outer-leaf block-pointer payload
 	// format. Values are encoded as key+value blocks in the value log and index
 	// leaves continue to store pointers.
@@ -531,6 +536,8 @@ type Options struct {
 	// IndexOuterLeafMode selects the index outer-leaf format:
 	// - "": defaults to "v2_fenceptr"
 	// - "v1": existing per-key leaf entries
+	// - "v1_leaflog": v1 exact-key semantics with outer-leaf payload blocks
+	//   stored in the value log (no fence-pointer fallback)
 	// - "v2_blockptr": pointer payloads encode key+value outer-leaf blocks
 	// - "v2_fenceptr": fence-key-only index entries with outer block payloads
 	IndexOuterLeafMode string
@@ -919,7 +926,7 @@ func validateOptions(opts Options) error {
 	}
 	indexOuterLeafMode := normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
 	switch indexOuterLeafMode {
-	case IndexOuterLeafModeV1, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
+	case IndexOuterLeafModeV1, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
 	default:
 		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
 	}
@@ -928,6 +935,9 @@ func validateOptions(opts Options) error {
 	case ValueLogWALFenceModeRIDJoin, ValueLogWALFenceModeSimpleInline:
 	default:
 		return fmt.Errorf("treedb: invalid value-log WAL fence mode %q", opts.ValueLog.WALFenceMode)
+	}
+	if indexOuterLeafMode != IndexOuterLeafModeV2FencePtr && walFenceMode == ValueLogWALFenceModeSimpleInline {
+		return fmt.Errorf("treedb: value-log WAL fence mode %q requires index outer leaf mode %q", opts.ValueLog.WALFenceMode, IndexOuterLeafModeV2FencePtr)
 	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
