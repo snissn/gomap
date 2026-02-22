@@ -168,7 +168,7 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	switch outerLeafMode {
 	case "":
 		// default mode
-	case treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
+	case treedb.IndexOuterLeafModeV1LeafLog, treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
 		opts.IndexOuterLeafMode = outerLeafMode
 		opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
 		opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
@@ -259,7 +259,7 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeNoTrailingSyncWriter(t *testing.T) 
 	switch outerLeafMode {
 	case "":
 		// default mode
-	case treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
+	case treedb.IndexOuterLeafModeV1LeafLog, treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
 		opts.IndexOuterLeafMode = outerLeafMode
 		opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
 		opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
@@ -432,6 +432,15 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 			},
 			outerMode: treedb.IndexOuterLeafModeV2BlockPtr,
 		},
+		{
+			name: "wal_on_relaxed_v1_leaflog",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=1",
+				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog",
+			},
+			outerMode: treedb.IndexOuterLeafModeV1LeafLog,
+		},
 	}
 
 	for _, tc := range tiers {
@@ -539,6 +548,17 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			},
 			expectLarge: true,
 			outerMode:   treedb.IndexOuterLeafModeV2BlockPtr,
+		},
+		{
+			name: "wal_on_strict_sync_large_value_outerleaf_v1_leaflog",
+			env: []string{
+				"TREEDB_CRASH_DISABLE_WAL=0",
+				"TREEDB_CRASH_RELAXED_SYNC=0",
+				"TREEDB_CRASH_LARGE_VALUE=1",
+				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog",
+			},
+			expectLarge: true,
+			outerMode:   treedb.IndexOuterLeafModeV1LeafLog,
 		},
 		{
 			name: "wal_on_strict_sync_large_value_outerleaf_v2_fenceptr",

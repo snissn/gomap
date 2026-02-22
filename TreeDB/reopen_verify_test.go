@@ -831,12 +831,17 @@ func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity(t *testing
 		_ = db.Close()
 		t.Fatalf("checkpoint before rewrite: %v", err)
 	}
-	if _, err := db.ValueLogRewriteOnline(context.Background(), treedb.ValueLogRewriteOnlineOptions{
+	stats, err := db.ValueLogRewriteOnline(context.Background(), treedb.ValueLogRewriteOnlineOptions{
 		BatchSize:     2,
 		SyncEachBatch: true,
-	}); err != nil {
+	})
+	if err != nil {
 		_ = db.Close()
 		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		_ = db.Close()
+		t.Fatalf("expected rewrite to copy records, stats=%+v", stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close after rewrite: %v", err)
@@ -860,71 +865,24 @@ func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity(t *testing
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV2(t *testing.T) {
-	dir := t.TempDir()
-	opts := treedb.Options{
-		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2BlockPtr,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold:              1,
-			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
-			OuterLeafBlockTargetBytes:     1024,
-			OuterLeafBlockRestartInterval: 8,
-		},
-	}
-	db, err := treedb.Open(opts)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-
-	values := map[string][]byte{
-		"k1": bytes.Repeat([]byte("a"), 2*1024),
-		"k2": bytes.Repeat([]byte("b"), 2*1024),
-		"k3": bytes.Repeat([]byte("c"), 2*1024),
-		"k4": bytes.Repeat([]byte("d"), 2*1024),
-	}
-	for k, v := range values {
-		if err := db.Set([]byte(k), v); err != nil {
-			_ = db.Close()
-			t.Fatalf("set %s: %v", k, err)
-		}
-	}
-	if err := db.Checkpoint(); err != nil {
-		_ = db.Close()
-		t.Fatalf("checkpoint before rewrite: %v", err)
-	}
-	if _, err := db.ValueLogRewriteOnline(context.Background(), treedb.ValueLogRewriteOnlineOptions{
-		BatchSize:     2,
-		SyncEachBatch: true,
-	}); err != nil {
-		_ = db.Close()
-		t.Fatalf("ValueLogRewriteOnline: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close after rewrite: %v", err)
-	}
-
-	reopen, err := treedb.Open(opts)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer reopen.Close()
-
-	for k, want := range values {
-		got, err := reopen.Get([]byte(k))
-		if err != nil {
-			t.Fatalf("reopen get %s: %v", k, err)
-		}
-		if !bytes.Equal(got, want) {
-			t.Fatalf("reopen mismatch key=%s got=%dB want=%dB", k, len(got), len(want))
-		}
-	}
+	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2BlockPtr)
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV2FencePtr(t *testing.T) {
+	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2FencePtr)
+}
+
+func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV1LeafLog(t *testing.T) {
+	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLog)
+}
+
+func runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t *testing.T, mode string) {
+	t.Helper()
+
 	dir := t.TempDir()
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: mode,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
@@ -953,12 +911,17 @@ func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV
 		_ = db.Close()
 		t.Fatalf("checkpoint before rewrite: %v", err)
 	}
-	if _, err := db.ValueLogRewriteOnline(context.Background(), treedb.ValueLogRewriteOnlineOptions{
+	stats, err := db.ValueLogRewriteOnline(context.Background(), treedb.ValueLogRewriteOnlineOptions{
 		BatchSize:     2,
 		SyncEachBatch: true,
-	}); err != nil {
+	})
+	if err != nil {
 		_ = db.Close()
 		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		_ = db.Close()
+		t.Fatalf("expected rewrite to copy records, stats=%+v", stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close after rewrite: %v", err)
@@ -982,80 +945,24 @@ func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV2_ReopenParity(t *testing.T) {
-	dir := t.TempDir()
-	opts := treedb.Options{
-		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2BlockPtr,
-		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold:              1,
-			OuterLeafBlockCodec:           treedb.ValueLogBlockSnappy,
-			OuterLeafBlockTargetBytes:     512,
-			OuterLeafBlockRestartInterval: 8,
-		},
-	}
-	db, err := treedb.Open(opts)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-
-	const total = 240
-	for i := 0; i < total; i++ {
-		key := []byte(fmt.Sprintf("gc-key-%04d", i))
-		val := bytes.Repeat([]byte{byte(i % 251)}, 256)
-		if err := db.Set(key, val); err != nil {
-			_ = db.Close()
-			t.Fatalf("set %q: %v", string(key), err)
-		}
-	}
-	for i := 0; i < 140; i++ {
-		key := []byte(fmt.Sprintf("gc-key-%04d", i))
-		if err := db.Delete(key); err != nil {
-			_ = db.Close()
-			t.Fatalf("delete %q: %v", string(key), err)
-		}
-	}
-	if err := db.Checkpoint(); err != nil {
-		_ = db.Close()
-		t.Fatalf("checkpoint before gc: %v", err)
-	}
-	if _, err := db.ValueLogGC(context.Background(), treedb.ValueLogGCOptions{}); err != nil {
-		_ = db.Close()
-		t.Fatalf("ValueLogGC: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	reopen, err := treedb.Open(opts)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer reopen.Close()
-
-	for i := 0; i < total; i++ {
-		key := []byte(fmt.Sprintf("gc-key-%04d", i))
-		got, err := reopen.Get(key)
-		if i < 140 {
-			if err == nil && got != nil {
-				t.Fatalf("expected deleted key %q to be absent", string(key))
-			}
-			continue
-		}
-		if err != nil {
-			t.Fatalf("reopen get %q: %v", string(key), err)
-		}
-		want := bytes.Repeat([]byte{byte(i % 251)}, 256)
-		if !bytes.Equal(got, want) {
-			t.Fatalf("reopen mismatch key=%q got=%dB want=%dB", string(key), len(got), len(want))
-		}
-	}
+	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2BlockPtr)
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV2FencePtr_ReopenParity(t *testing.T) {
+	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2FencePtr)
+}
+
+func TestReopenVerify_ValueLogGC_OuterLeafV1LeafLog_ReopenParity(t *testing.T) {
+	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLog)
+}
+
+func runValueLogGCReopenParityOuterLeaf(t *testing.T, mode string) {
+	t.Helper()
+
 	dir := t.TempDir()
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: mode,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockSnappy,
@@ -1088,9 +995,14 @@ func TestReopenVerify_ValueLogGC_OuterLeafV2FencePtr_ReopenParity(t *testing.T) 
 		_ = db.Close()
 		t.Fatalf("checkpoint before gc: %v", err)
 	}
-	if _, err := db.ValueLogGC(context.Background(), treedb.ValueLogGCOptions{}); err != nil {
+	stats, err := db.ValueLogGC(context.Background(), treedb.ValueLogGCOptions{})
+	if err != nil {
 		_ = db.Close()
 		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted == 0 || stats.SegmentsEligible == 0 {
+		_ = db.Close()
+		t.Fatalf("expected GC to delete eligible segments, stats=%+v", stats)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
