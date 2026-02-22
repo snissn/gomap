@@ -143,6 +143,35 @@ func TestValueReader_FencePointerLikelyBlock_RequiresExplicitFenceMarker(t *test
 	}
 }
 
+func TestValueReader_FenceLookupDisabledForV1LeafLog(t *testing.T) {
+	r := newValueReader(nil, outerleaf.ModeV1LeafLog, false, nil, nil)
+	defer (&r).releaseDecodeContext()
+
+	if !r.KeyAwareEnabled() {
+		t.Fatalf("v1_leaflog should keep key-aware outer-leaf reads enabled")
+	}
+	if r.FenceLookupEnabled() {
+		t.Fatalf("v1_leaflog must not enable fence lookup mode")
+	}
+
+	base := page.ValuePtr{
+		FileID: page.ValueLogFileID(7),
+		Offset: 123,
+		Length: 4096,
+	}
+	fence := page.ValuePtrMarkFenceOuter(base)
+	if r.FencePointerLikelyBlock(fence) {
+		t.Fatalf("v1_leaflog must not classify pointers as fence blocks")
+	}
+
+	grouped := base
+	grouped.Length = page.ValuePtrMarkGrouped(base.Length, 3)
+	groupedFence := page.ValuePtrMarkFenceOuter(grouped)
+	if r.FencePointerLikelyBlock(groupedFence) {
+		t.Fatalf("v1_leaflog must not classify grouped pointers as fence blocks")
+	}
+}
+
 func TestOuterLeafFenceDecodeScratchPoolCapBounded(t *testing.T) {
 	const maxExpected = 8 << 20
 	if outerLeafFenceDecodeScratchMaxRetain > maxExpected {
