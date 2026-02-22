@@ -1711,7 +1711,7 @@ type fenceAnchorPromoter struct {
 	snapshot      *backenddb.Snapshot
 	snapshotReady bool
 
-	keysByPtr map[page.ValuePtr][][]byte
+	keysByPtr map[page.ValuePtr]*decodedFenceKeys
 	promoted  map[string]page.ValuePtr
 
 	rangeLoaded  bool
@@ -1720,6 +1720,12 @@ type fenceAnchorPromoter struct {
 
 	backendEmptyChecked bool
 	backendEmpty        bool
+}
+
+type decodedFenceKeys struct {
+	keys         [][]byte
+	pendingKnown []uint8
+	pending      []fencePendingMutation
 }
 
 func newFenceAnchorPromoter(db *DB, lookup fenceMutationLookupFn) *fenceAnchorPromoter {
@@ -1759,13 +1765,13 @@ func (p *fenceAnchorPromoter) snapshotView() *backenddb.Snapshot {
 	return p.snapshot
 }
 
-func (p *fenceAnchorPromoter) decodeFenceKeys(ptr page.ValuePtr) ([][]byte, error) {
+func (p *fenceAnchorPromoter) decodeFenceKeys(ptr page.ValuePtr) (*decodedFenceKeys, error) {
 	if p == nil || p.db == nil {
 		return nil, nil
 	}
 	if p.keysByPtr != nil {
-		if keys, ok := p.keysByPtr[ptr]; ok {
-			return keys, nil
+		if decoded, ok := p.keysByPtr[ptr]; ok {
+			return decoded, nil
 		}
 	}
 	if p.db.valueLogReader == nil {
@@ -1782,27 +1788,44 @@ func (p *fenceAnchorPromoter) decodeFenceKeys(ptr page.ValuePtr) ([][]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	if p.keysByPtr == nil {
-		p.keysByPtr = make(map[page.ValuePtr][][]byte)
+	decoded := &decodedFenceKeys{keys: keys}
+	if p.lookup != nil && len(keys) > 0 {
+		decoded.pendingKnown = make([]uint8, len(keys))
+		decoded.pending = make([]fencePendingMutation, len(keys))
 	}
-	p.keysByPtr[ptr] = keys
-	return keys, nil
+	if p.keysByPtr == nil {
+		p.keysByPtr = make(map[page.ValuePtr]*decodedFenceKeys)
+	}
+	p.keysByPtr[ptr] = decoded
+	return decoded, nil
 }
 
 func (p *fenceAnchorPromoter) findPromotion(ptr page.ValuePtr, anchorKey []byte) ([]byte, bool, error) {
-	keys, err := p.decodeFenceKeys(ptr)
+	decoded, err := p.decodeFenceKeys(ptr)
 	if err != nil {
 		return nil, false, err
 	}
+	if decoded == nil {
+		return nil, false, nil
+	}
+	keys := decoded.keys
 	if len(keys) == 0 {
 		return nil, false, nil
 	}
 	anchorIdx := -1
-	for i := range keys {
-		key := keys[i]
-		if bytes.Equal(key, anchorKey) {
-			anchorIdx = i
-			break
+	{
+		lo := 0
+		hi := len(keys)
+		for lo < hi {
+			mid := int(uint(lo+hi) >> 1)
+			if bytes.Compare(keys[mid], anchorKey) < 0 {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		if lo < len(keys) && bytes.Equal(keys[lo], anchorKey) {
+			anchorIdx = lo
 		}
 	}
 	if anchorIdx < 0 {
@@ -1811,13 +1834,11 @@ func (p *fenceAnchorPromoter) findPromotion(ptr page.ValuePtr, anchorKey []byte)
 	snap := p.snapshotView()
 	for i := anchorIdx + 1; i < len(keys); i++ {
 		key := keys[i]
-		if p.lookup != nil {
-			if pending, ok := p.lookup(key); ok {
-				if pending.keepsFencePointer(ptr) {
-					return nil, false, nil
-				}
-				continue
+		if pending, ok := p.lookupPendingMutation(decoded, i); ok {
+			if pending.keepsFencePointer(ptr) {
+				return nil, false, nil
 			}
+			continue
 		}
 		// Never clobber exact persisted entries. Tree reads prefer exact leaf
 		// entries over fence fallback, so promotion must skip keys that already
@@ -1848,6 +1869,34 @@ func (p *fenceAnchorPromoter) findPromotion(ptr page.ValuePtr, anchorKey []byte)
 		return append([]byte(nil), key...), true, nil
 	}
 	return nil, false, nil
+}
+
+func (p *fenceAnchorPromoter) lookupPendingMutation(decoded *decodedFenceKeys, idx int) (fencePendingMutation, bool) {
+	if p == nil || p.lookup == nil || decoded == nil || idx < 0 || idx >= len(decoded.keys) {
+		return fencePendingMutation{}, false
+	}
+	if idx < len(decoded.pendingKnown) {
+		switch decoded.pendingKnown[idx] {
+		case 1:
+			return fencePendingMutation{}, false
+		case 2:
+			if idx < len(decoded.pending) {
+				return decoded.pending[idx], true
+			}
+		}
+	}
+	pending, ok := p.lookup(decoded.keys[idx])
+	if idx < len(decoded.pendingKnown) {
+		if ok {
+			decoded.pendingKnown[idx] = 2
+			if idx < len(decoded.pending) {
+				decoded.pending[idx] = pending
+			}
+		} else {
+			decoded.pendingKnown[idx] = 1
+		}
+	}
+	return pending, ok
 }
 
 func (p *fenceAnchorPromoter) emitUniquePointer(key []byte, ptr page.ValuePtr, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
@@ -1900,10 +1949,14 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 	if err != nil || !found || len(sourceKey) == 0 {
 		return err
 	}
-	keys, err := p.decodeFenceKeys(sourcePtr)
+	decoded, err := p.decodeFenceKeys(sourcePtr)
 	if err != nil {
 		return err
 	}
+	if decoded == nil {
+		return nil
+	}
+	keys := decoded.keys
 	if len(keys) == 0 {
 		return nil
 	}
@@ -1915,10 +1968,8 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 		if len(k) == 0 {
 			continue
 		}
-		if p.lookup != nil {
-			if _, ok := p.lookup(k); ok {
-				continue
-			}
+		if _, ok := p.lookupPendingMutation(decoded, i); ok {
+			continue
 		}
 		if bytes.Equal(k, deleteKey) {
 			continue
