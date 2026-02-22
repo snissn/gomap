@@ -313,29 +313,6 @@ func TestIteratorPointerLikelyFenceBlock_ClassifierAppliedToUnmarkedPointer(t *t
 	}
 }
 
-func TestIteratorPointerLikelyFenceBlock_GroupedOverridesClassifier(t *testing.T) {
-	base := page.ValuePtr{
-		FileID: page.ValueLogFileID(5),
-		Offset: 13,
-		Length: 1024,
-	}
-	grouped := base
-	grouped.Length = page.ValuePtrMarkGrouped(base.Length, 2)
-	if !page.ValuePtrIsGrouped(grouped) {
-		t.Fatalf("expected grouped pointer")
-	}
-	it := &Iterator{
-		slabFencePtrCls: iteratorFenceClassifier{
-			likely: map[page.ValuePtr]bool{
-				grouped: false,
-			},
-		},
-	}
-	if !it.pointerLikelyFenceBlock(grouped) {
-		t.Fatalf("grouped pointer was incorrectly skipped by classifier")
-	}
-}
-
 func newCountingValueReader() *countingValueReader {
 	return &countingValueReader{inner: newMapValueReader()}
 }

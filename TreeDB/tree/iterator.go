@@ -830,11 +830,6 @@ func (it *Iterator) pointerLikelyFenceBlock(ptr page.ValuePtr) bool {
 	if page.ValuePtrIsFenceOuter(ptr) {
 		return true
 	}
-	// Grouped pointers can still carry fence blocks in v2_fenceptr mode even
-	// when they do not expose an explicit fence marker.
-	if page.ValuePtrIsGrouped(ptr) {
-		return true
-	}
 	if it != nil && it.slabFencePtrCls != nil {
 		return it.slabFencePtrCls.FencePointerLikelyBlock(ptr)
 	}
