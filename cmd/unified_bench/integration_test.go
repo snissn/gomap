@@ -35,8 +35,9 @@ func TestIntegration_NoHangLargeKeys(t *testing.T) {
 		"-max-wall", "120s", // Set max wall time to detect hangs
 	)
 
-	// Set a generous timeout for this test
-	timeout := 150 * time.Second // Overall test timeout, slightly longer than -max-wall
+	// Keep this comfortably above per-test -max-wall (120s) across the three
+	// subtests plus startup/build overhead and teardown on slower CI hosts.
+	timeout := 9 * time.Minute
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

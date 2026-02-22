@@ -13,6 +13,11 @@ import (
 
 var ErrKeyNotFound = errors.New("key not found")
 
+// Global fence fallback scans can become quadratic under large missing-key
+// sweeps. Limit probe depth so miss-heavy workloads stay bounded while still
+// covering nearby cross-leaf anchors.
+const fenceGlobalFallbackScanLimit = 32
+
 func compareTreeKey(a, b []byte) int {
 	if len(a) == 8 && len(b) == 8 {
 		av := binary.BigEndian.Uint64(a)
@@ -824,7 +829,12 @@ func (t *Tree) lookupFencePointerSourceGlobal(key []byte) ([]byte, page.ValuePtr
 	}
 	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
 	defer func() { _ = it.Close() }()
+	scanned := 0
 	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
 		k, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && flags&node.FlagTombstone == 0 {
 			if t.fencePointerLikelyBlock(ptr) {
@@ -863,7 +873,12 @@ func (t *Tree) lookupFencePointerSourceGlobalPtr(key []byte) (page.ValuePtr, boo
 	}
 	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
 	defer func() { _ = it.Close() }()
+	scanned := 0
 	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && flags&node.FlagTombstone == 0 {
 			if !t.fencePointerLikelyBlock(ptr) {
@@ -904,7 +919,12 @@ func (t *Tree) lookupFenceValueViewGlobal(key []byte) ([]byte, bool, error) {
 	}
 	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
 	defer func() { _ = it.Close() }()
+	scanned := 0
 	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && flags&node.FlagTombstone == 0 {
 			if !t.fencePointerLikelyBlock(ptr) {
@@ -945,7 +965,12 @@ func (t *Tree) lookupFenceValueViewAppendGlobal(key []byte, dst []byte) ([]byte,
 	}
 	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
 	defer func() { _ = it.Close() }()
+	scanned := 0
 	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && flags&node.FlagTombstone == 0 {
 			if !t.fencePointerLikelyBlock(ptr) {
