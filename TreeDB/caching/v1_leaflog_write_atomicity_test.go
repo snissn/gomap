@@ -49,8 +49,14 @@ func installFailingWALWriter(t *testing.T, cache *DB, err error) {
 	}
 	ln := &cache.lanes[0]
 	ln.walMu.Lock()
+	oldWriter := ln.wal
 	ln.wal = &failingCommitWriter{err: err}
 	ln.walMu.Unlock()
+	if oldWriter != nil {
+		// Release original WAL file handle immediately after swap so TempDir
+		// cleanup is reliable on Windows.
+		_ = oldWriter.Close()
+	}
 }
 
 func assertKeyNotVisibleAnywhere(t *testing.T, cache *DB, backend *MockBackend, key []byte) {
