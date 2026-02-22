@@ -148,6 +148,9 @@ func normalizeIndexOuterLeafMode(mode string) string {
 		return IndexOuterLeafModeV1
 	case IndexOuterLeafModeV1LeafLog:
 		return IndexOuterLeafModeV1LeafLog
+	case IndexOuterLeafModeV1LeafLogLegacy:
+		// Compatibility alias: keep legacy per-key semantics for now.
+		return IndexOuterLeafModeV1LeafLog
 	case IndexOuterLeafModeV2BlockPtr:
 		return IndexOuterLeafModeV2BlockPtr
 	case IndexOuterLeafModeV2FencePtr:
@@ -225,9 +228,17 @@ const (
 const (
 	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
 	IndexOuterLeafModeV1 = "v1"
-	// IndexOuterLeafModeV1LeafLog keeps v1 exact-key semantics while storing
-	// leaf payload blocks in the value log (no fence fallback semantics).
+	// IndexOuterLeafModeV1LeafLog is reserved for the routing-only outer-leaf
+	// contract:
+	// - index stores routing/internal nodes plus one anchor per outer block
+	// - key/value leaf payloads live in value-log outer blocks
+	//
+	// During migration this constant still maps to legacy per-key behavior.
 	IndexOuterLeafModeV1LeafLog = "v1_leaflog"
+	// IndexOuterLeafModeV1LeafLogLegacy preserves legacy per-key v1_leaflog
+	// semantics for bisect and controlled rollout. It normalizes to
+	// IndexOuterLeafModeV1LeafLog at open time today.
+	IndexOuterLeafModeV1LeafLogLegacy = "v1_leaflog_legacy"
 	// IndexOuterLeafModeV2BlockPtr enables the outer-leaf block-pointer payload
 	// format. Values are encoded as key+value blocks in the value log and index
 	// leaves continue to store pointers.
@@ -536,8 +547,10 @@ type Options struct {
 	// IndexOuterLeafMode selects the index outer-leaf format:
 	// - "": defaults to "v2_fenceptr"
 	// - "v1": existing per-key leaf entries
-	// - "v1_leaflog": v1 exact-key semantics with outer-leaf payload blocks
-	//   stored in the value log (no fence-pointer fallback)
+	// - "v1_leaflog": reserved routing+anchor outer-leaf contract (currently
+	//   normalizes to legacy per-key semantics during migration)
+	// - "v1_leaflog_legacy": explicit compatibility alias for legacy per-key
+	//   v1_leaflog behavior (normalizes to "v1_leaflog")
 	// - "v2_blockptr": pointer payloads encode key+value outer-leaf blocks
 	// - "v2_fenceptr": fence-key-only index entries with outer block payloads
 	IndexOuterLeafMode string

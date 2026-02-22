@@ -443,6 +443,12 @@ func (db *DB) Stats() map[string]string {
 	if db.indexOuterLeafMode != "" {
 		stats["treedb.index.outer_leaf_mode"] = db.indexOuterLeafMode
 	}
+	// Phase-1 anchor observability scaffolding for the planned routing-only
+	// v1_leaflog path. These remain zero until the path is activated.
+	stats["treedb.v1_leaflog.anchor_lookups"] = "0"
+	stats["treedb.v1_leaflog.anchor_block_decodes"] = "0"
+	stats["treedb.v1_leaflog.anchor_misses"] = "0"
+	stats["treedb.v1_leaflog.anchor_max_probes"] = "0"
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
