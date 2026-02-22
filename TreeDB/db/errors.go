@@ -11,4 +11,6 @@ var (
 	ErrLocked = lockfile.ErrLocked
 	// ErrReadOnly indicates a write was attempted on a read-only DB handle.
 	ErrReadOnly = errors.New("treedb: read-only")
+	// ErrClosed indicates the DB handle is closed or closing for reads.
+	ErrClosed = errors.New("treedb: db is closed")
 )

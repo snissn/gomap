@@ -1,8 +1,6 @@
 package treedb
 
 import (
-	"errors"
-
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -15,7 +13,7 @@ var (
 	ErrMemtableFull = caching.ErrMemtableFull
 
 	// ErrClosed indicates the DB handle has been closed.
-	ErrClosed = errors.New("treedb: db is closed")
+	ErrClosed = db.ErrClosed
 
 	// ErrKeyNotFound indicates the key does not exist.
 	ErrKeyNotFound = tree.ErrKeyNotFound

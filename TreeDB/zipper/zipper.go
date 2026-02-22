@@ -868,13 +868,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		}
 		if err == node.ErrNodeFull {
 			// SPLIT!
-			// Capture the left boundary key before target may be returned to the
-			// builder pool (and potentially reused/reset).
 			allocHint := target.PageID()
-			var leftMax []byte
-			if lm := target.LeafPrevKey(); len(lm) > 0 {
-				leftMax = cloneKeyIntoArena(lm, &splitKeyArena)
-			}
 
 			// 1. Finish current target (writes header/checksum)
 			if target != builder {
@@ -908,12 +902,10 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			splitBuilder.SetPageID(sid)
 
 			// Record split
-			var splitKey []byte
-			if len(leftMax) > 0 {
-				splitKey = shortestSeparatorIntoArena(leftMax, key, &splitKeyArena)
-			} else {
-				splitKey = cloneKeyIntoArena(key, &splitKeyArena)
-			}
+			// Use the full first key of the right node as the parent separator.
+			// Shortened separators are unsafe for sparse/fence layouts where leaf
+			// entries are not a complete key set.
+			splitKey := cloneKeyIntoArena(key, &splitKeyArena)
 			// Split keys escape this call via the returned []Split, so clone out of
 			// the local arena before appending.
 			splitKey = append([]byte(nil), splitKey...)
