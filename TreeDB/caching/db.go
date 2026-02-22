@@ -2194,6 +2194,47 @@ func (p *fenceAnchorPromoter) maybePromoteAnchor(key []byte, pending fencePendin
 	return p.emitUniquePointer(promoteKey, entry.ValuePtr, emitPointer)
 }
 
+func (p *fenceAnchorPromoter) groupNeedsFullEmission(keys [][]byte, start, end int) (bool, error) {
+	if p == nil || start >= end || end > len(keys) {
+		return false, nil
+	}
+	p.loadBackendRange()
+	if p.rangeKnown {
+		if !p.backendRange.valid {
+			return false, nil
+		}
+		first := keys[start]
+		last := keys[end-1]
+		if len(first) == 0 || len(last) == 0 {
+			return true, nil
+		}
+		if bytes.Compare(last, p.backendRange.min) < 0 || bytes.Compare(first, p.backendRange.max) > 0 {
+			return false, nil
+		}
+	}
+
+	snap := p.snapshotView()
+	if snap == nil {
+		// If we cannot inspect exact entries, stay conservative.
+		return true, nil
+	}
+	for i := start; i < end; i++ {
+		key := keys[i]
+		if len(key) == 0 {
+			continue
+		}
+		_, err := snap.GetEntryExact(key)
+		if err == nil {
+			return true, nil
+		}
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			continue
+		}
+		return false, err
+	}
+	return false, nil
+}
+
 func (p *fenceAnchorPromoter) loadBackendRange() {
 	if p == nil || p.rangeLoaded || p.db == nil {
 		return
@@ -2498,11 +2539,9 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			}
 			emittedGroups++
 			if promoter != nil {
-				for srcPos := group.start; srcPos < group.end; srcPos++ {
-					if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
-						emitWholeGroup = true
-						break
-					}
+				emitWholeGroup, err = promoter.groupNeedsFullEmission(ptrKeys, group.start, group.end)
+				if err != nil {
+					return err
 				}
 			}
 			if !emitWholeGroup {
@@ -2801,11 +2840,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					}
 					emittedGroups++
 					if promoter != nil {
-						for srcPos := group.start; srcPos < group.end; srcPos++ {
-							if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
-								emitWholeGroup = true
-								break
-							}
+						emitWholeGroup, err = promoter.groupNeedsFullEmission(ptrKeys, group.start, group.end)
+						if err != nil {
+							putValueLogPtrs(vlogPtrs)
+							return err
 						}
 					}
 					if !emitWholeGroup {

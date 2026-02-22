@@ -2401,6 +2401,87 @@ func TestCachingDB_FlushFenceModeCollapsedGroupOverwritesExistingExactSibling(t 
 	}
 }
 
+func TestCachingDB_FlushFenceModeCollapsedGroupSkipsExactEmissionWithoutExactOverlap(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	// Seed only range bounds; no exact overlap with the test group keys.
+	for _, k := range [][]byte{[]byte("k0000"), []byte("k9999")} {
+		if err := cache.Set(k, bytes.Repeat([]byte("seed"), 64)); err != nil {
+			t.Fatalf("Set(seed %q): %v", k, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(seed range): %v", err)
+	}
+
+	keyFor := func(i int) []byte { return []byte(fmt.Sprintf("k5000-%03d", i)) }
+	valFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i + 3)}, 256) }
+	const groupKeys = 32
+	for i := 0; i < groupKeys; i++ {
+		if err := cache.Set(keyFor(i), valFor(i)); err != nil {
+			t.Fatalf("Set(group %d): %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(group): %v", err)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	defer snap.Close()
+
+	// First key is expected anchor; second key should stay fallback-only when
+	// there is no exact overlap.
+	if _, err := snap.GetEntryExact(keyFor(0)); err != nil {
+		t.Fatalf("GetEntryExact(anchor): %v", err)
+	}
+	if _, err := snap.GetEntryExact(keyFor(1)); err == nil {
+		t.Fatalf("expected non-anchor key to remain fallback-only without exact overlap")
+	}
+
+	got, err := backend.Get(keyFor(1))
+	if err != nil {
+		t.Fatalf("backend Get(non-anchor): %v", err)
+	}
+	if !bytes.Equal(got, valFor(1)) {
+		t.Fatalf("fallback value mismatch for non-anchor key")
+	}
+}
+
 func TestCachingDB_FlushFenceModeAnchorPromotionSkipsKeysResolvedByNewerFence(t *testing.T) {
 	dir := t.TempDir()
 	backendOpts := db.Options{
