@@ -37,14 +37,14 @@ func encodeOuterLeafBlockForTest(t *testing.T, start, count int, value []byte) [
 func TestGroupedFencePointGetAcrossSplitUsesFullSeparator(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{
-		Dir:                     dir,
-		Durability:              DurabilityWALOffRelaxed,
-		LeafPrefixCompression:   true,
-		IndexColumnarLeaves:     true,
-		IndexPackedValuePtr:     true,
-		IndexInternalBaseDelta:  true,
-		IndexOuterLeafMode:      IndexOuterLeafModeV2FencePtr,
-		PreferAppendAlloc:       true,
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		IndexInternalBaseDelta:     true,
+		IndexOuterLeafMode:         IndexOuterLeafModeV2FencePtr,
+		PreferAppendAlloc:          true,
 		DisablePiggybackCompaction: true,
 		ValueLog: ValueLogOptions{
 			ReadIntegrity:              IntegritySkipChecksums,
