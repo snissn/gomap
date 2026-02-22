@@ -1919,9 +1919,19 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 	if len(keys) == 0 {
 		return nil
 	}
+	deleteIdx := -1
+	for i := range keys {
+		if bytes.Equal(keys[i], deleteKey) {
+			deleteIdx = i
+			break
+		}
+	}
+	// Deleting a key that is not present in the resolved fence block is a
+	// logical no-op. Avoid rematerialization churn for miss-heavy delete paths.
+	if deleteIdx < 0 {
+		return nil
+	}
 	exactPtr := page.ValuePtrClearFenceOuter(sourcePtr)
-	fencePtr := page.ValuePtrMarkFenceOuterCollapsed(exactPtr)
-	emittedSuffixAnchor := false
 	for i := range keys {
 		k := keys[i]
 		if len(k) == 0 {
@@ -1935,40 +1945,21 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 		if bytes.Equal(k, deleteKey) {
 			continue
 		}
-		cmpDelete := bytes.Compare(k, deleteKey)
-		if cmpDelete > 0 && emittedSuffixAnchor {
-			continue
-		}
-		cmpSource := bytes.Compare(k, sourceKey)
 		exact, marked, resolved, err := p.keyResolvesFromSource(snap, k, sourcePtr)
 		if err != nil {
 			return err
 		}
-		if cmpSource < 0 {
-			// Keys before the predecessor source key should only be rewritten when
-			// they are already exact fence-marked aliases of the same source.
-			if !exact || !resolved || !marked {
-				continue
-			}
-			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
-				return err
-			}
-			continue
-		}
 		if !resolved {
 			continue
 		}
-		if cmpDelete < 0 {
-			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
-				return err
-			}
+		// After deleting a fallback-only key, rewrite surviving keys that still
+		// resolve from this source to exact pointers. This removes overlapping
+		// fallback expansion and preserves one-row-per-logical-key iteration.
+		if exact && !marked {
 			continue
 		}
-		if cmpDelete > 0 {
-			if err := p.emitUniquePointer(k, fencePtr, emitPointer); err != nil {
-				return err
-			}
-			emittedSuffixAnchor = true
+		if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2332,9 +2323,10 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
 			key := ptrKeys[srcPos]
 			outPtr := ptr
-			if collapseFence && emitWholeGroup && srcPos > group.start {
-				// Non-anchor siblings are emitted as exact pointers so fence
-				// fallback only triggers from the chosen anchor.
+			if collapseFence && emitWholeGroup {
+				// Overlap rewrites emit exact pointers for every key in the group.
+				// This prevents iterator-visible duplicate logical keys from
+				// fence expansion + exact siblings during in-place rewrites.
 				outPtr = exactPtr
 			}
 			if psv != nil {
@@ -2635,12 +2627,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
 					key := ptrKeys[srcPos]
 					outPtr := ptr
-					if collapseFence && emitWholeGroup && srcPos > group.start {
-						// Keep only the anchor fence-marked; siblings remain exact.
+					if collapseFence && emitWholeGroup {
+						// Overlap rewrites emit exact pointers for every key in the
+						// group to avoid duplicate logical rows during fence expansion.
 						outPtr = exactPtr
 					}
 					var err error
-					if collapseFence && emitWholeGroup && srcPos > group.start {
+					if collapseFence && emitWholeGroup {
 						err = emitPointerForce(key, outPtr)
 					} else {
 						err = emitPointer(key, outPtr)
