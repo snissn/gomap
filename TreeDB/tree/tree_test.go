@@ -943,6 +943,92 @@ func TestTreeGet_FencePredecessorLookupExplicitFenceMarkerOverridesClassifier(t 
 	}
 }
 
+func TestTreeGet_FencePredecessorLookupGroupedPointerOverridesClassifier(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupClassifierReader()
+	ptrRaw := reader.addBlock(map[string]string{
+		"k010": "v10",
+		"k020": "v20",
+	})
+	ptrGrouped := ptrRaw
+	ptrGrouped.Length = page.ValuePtrMarkGrouped(ptrRaw.Length, 3)
+	if !page.ValuePtrIsGrouped(ptrGrouped) {
+		t.Fatalf("expected grouped pointer")
+	}
+	reader.blocks[ptrGrouped] = reader.blocks[ptrRaw]
+	delete(reader.blocks, ptrRaw)
+	reader.likely[ptrGrouped] = false // grouped fence candidate must still probe
+
+	ptrUpper := reader.addBlock(map[string]string{
+		"k110": "v110",
+	})
+	reader.likely[ptrUpper] = true
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptrGrouped); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k110"), nil, node.FlagPointer, ptrUpper); err != nil {
+		t.Fatalf("AddLeafEntry(k110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	beforeTotalCalls := reader.fenceCalls + reader.fenceAppendCalls
+	got, err := tr.Get([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Get(k020): %v", err)
+	}
+	if string(got) != "v20" {
+		t.Fatalf("Get(k020) = %q, want %q", got, "v20")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("Get(k020) fence lookups = %d, want 1 (grouped pointer must probe)", gotCalls)
+	}
+
+	beforeTotalCalls = reader.fenceCalls + reader.fenceAppendCalls
+	gotAppend, err := tr.GetAppend([]byte("k020"), []byte("prefix-"))
+	if err != nil {
+		t.Fatalf("GetAppend(k020): %v", err)
+	}
+	if string(gotAppend) != "prefix-v20" {
+		t.Fatalf("GetAppend(k020) = %q, want %q", gotAppend, "prefix-v20")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("GetAppend(k020) fence lookups = %d, want 1 (grouped pointer must probe)", gotCalls)
+	}
+
+	beforeTotalCalls = reader.fenceCalls + reader.fenceAppendCalls
+	has, err := tr.Has([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Has(k020): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(k020) = false, want true")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("Has(k020) fence lookups = %d, want 1 (grouped pointer must probe)", gotCalls)
+	}
+}
+
 func TestTreeGet_FencePredecessorLookupContinuesAfterMultiplePointerMisses(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")

@@ -146,8 +146,9 @@ type slabUnsafeFenceBlockSeekLeaseReader interface {
 }
 
 // Optional fast classifier for whether a pointer is expected to reference a
-// fence-expandable outer-leaf block. Returning false must be definitive:
-// callers may skip fence probes entirely on that result.
+// fence-expandable outer-leaf block. Returning false is definitive for
+// non-grouped pointers; grouped pointers may still be probed because grouped
+// records do not carry a dedicated non-colliding fence marker bit.
 type slabFencePointerClassifier interface {
 	FencePointerLikelyBlock(ptr page.ValuePtr) bool
 }
@@ -184,6 +185,11 @@ func fencePointerLookupsEnabled(sr SlabReader) bool {
 func (t *Tree) fencePointerLikelyBlock(ptr page.ValuePtr) bool {
 	// Explicit fence markers are authoritative and must never be skipped.
 	if page.ValuePtrIsFenceOuter(ptr) {
+		return true
+	}
+	// Grouped pointers can still carry fence blocks in v2_fenceptr mode even
+	// when they do not expose an explicit fence marker.
+	if page.ValuePtrIsGrouped(ptr) {
 		return true
 	}
 	if t != nil && t.slabFencePtrCls != nil {
