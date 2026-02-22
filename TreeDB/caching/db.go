@@ -1700,6 +1700,71 @@ func fenceMutationLookupForUnits(units []flushUnit) fenceMutationLookupFn {
 			return fencePendingMutationFromMemEntry(ptr, flags, found)
 		}
 	}
+	const fenceMutationLookupIndexMinEntries = 4096
+	totalLen := 0
+	for i := range units {
+		if units[i].memLen > 0 {
+			totalLen += units[i].memLen
+		}
+	}
+	if totalLen >= fenceMutationLookupIndexMinEntries {
+		type indexedMutation struct {
+			key []byte
+			mut fencePendingMutation
+		}
+		index := make(map[uint64][]indexedMutation, totalLen)
+		built := true
+		for i := range units {
+			mem := units[i].mem
+			if mem == nil || units[i].memLen == 0 {
+				continue
+			}
+			it := mem.NewIterator(nil, nil)
+			for it.Valid() {
+				key := it.UnsafeKey()
+				_, ptr, flags := it.UnsafeEntry()
+				mut, ok := fencePendingMutationFromMemEntry(ptr, flags, true)
+				if ok {
+					h := xxhash.Sum64(key)
+					bucket := index[h]
+					updated := false
+					for j := range bucket {
+						if bytes.Equal(bucket[j].key, key) {
+							bucket[j].mut = mut
+							updated = true
+							break
+						}
+					}
+					if !updated {
+						keyCopy := append([]byte(nil), key...)
+						bucket = append(bucket, indexedMutation{key: keyCopy, mut: mut})
+					}
+					index[h] = bucket
+				}
+				it.Next()
+			}
+			if err := it.Error(); err != nil {
+				built = false
+			}
+			if err := it.Close(); err != nil {
+				built = false
+			}
+			if !built {
+				break
+			}
+		}
+		if built {
+			return func(key []byte) (fencePendingMutation, bool) {
+				bucket := index[xxhash.Sum64(key)]
+				for i := range bucket {
+					if bytes.Equal(bucket[i].key, key) {
+						return bucket[i].mut, true
+					}
+				}
+				return fencePendingMutation{}, false
+			}
+		}
+	}
 	return func(key []byte) (fencePendingMutation, bool) {
 		for i := len(units) - 1; i >= 0; i-- {
 			if units[i].mem == nil {
@@ -1732,6 +1797,8 @@ type fenceAnchorPromoter struct {
 
 	backendEmptyChecked bool
 	backendEmpty        bool
+
+	deleteRematerializedBySource map[page.ValuePtr]struct{}
 }
 
 func newFenceAnchorPromoter(db *DB, lookup fenceMutationLookupFn) *fenceAnchorPromoter {
@@ -1912,6 +1979,12 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 	if err != nil || !found || len(sourceKey) == 0 {
 		return err
 	}
+	sourcePtr = page.ValuePtrClearFenceOuter(sourcePtr)
+	if p.deleteRematerializedBySource != nil {
+		if _, ok := p.deleteRematerializedBySource[sourcePtr]; ok {
+			return nil
+		}
+	}
 	keys, err := p.decodeFenceKeys(sourcePtr)
 	if err != nil {
 		return err
@@ -1962,6 +2035,10 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 			return err
 		}
 	}
+	if p.deleteRematerializedBySource == nil {
+		p.deleteRematerializedBySource = make(map[page.ValuePtr]struct{}, 8)
+	}
+	p.deleteRematerializedBySource[sourcePtr] = struct{}{}
 	return nil
 }
 
