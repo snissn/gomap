@@ -280,9 +280,14 @@ func preserveFenceMarkerOnRewrite(ptr page.ValuePtr, raw []byte) bool {
 	if !page.ValuePtrIsGrouped(ptr) {
 		return true
 	}
+	if !outerleaf.HasMagic(raw) {
+		return false
+	}
 	// Grouped pointers may carry a legacy bit-23 marker collision. Preserve the
-	// fence marker only when the payload is an actual outer-leaf fence block.
-	return outerleaf.HasMagic(raw)
+	// fence marker only when the payload structurally decodes as an outer-leaf
+	// block (magic prefix alone is not sufficient).
+	_, err := outerleaf.DecodeBlockWithVerify(raw, nil, false)
+	return err == nil
 }
 
 func readValueLogRecordLengthFromHeader(r io.ReaderAt, start int64) (uint32, error) {

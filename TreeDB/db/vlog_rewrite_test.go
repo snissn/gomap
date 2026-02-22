@@ -245,7 +245,10 @@ func TestValueLogRewriteOffline_LegacyGroupedFenceMarkerHint(t *testing.T) {
 func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{Dir: dir})
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -307,7 +310,10 @@ func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{Dir: dir})
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -614,7 +620,10 @@ func TestValueLogRewriteOnline_PreservesFenceOuterMarkerAndIteratorParity(t *tes
 func TestValueLogRewriteOnline_LegacyGroupedFenceMarkerHint_DoesNotUpgradeToFencePointer(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{Dir: dir})
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -637,8 +646,9 @@ func TestValueLogRewriteOnline_LegacyGroupedFenceMarkerHint_DoesNotUpgradeToFenc
 	if err != nil {
 		t.Fatalf("writer: %v", err)
 	}
+	fakeOuterLeafPrefixValue := []byte("TOL2-not-a-valid-outerleaf-block")
 	ptrs, err := w.AppendFrame(0, nil, []valuelog.Record{
-		{RID: 1, Value: []byte("alpha")},
+		{RID: 1, Value: fakeOuterLeafPrefixValue},
 		{RID: 2, Value: []byte("beta")},
 	})
 	if err != nil {
@@ -706,7 +716,7 @@ func TestValueLogRewriteOnline_LegacyGroupedFenceMarkerHint_DoesNotUpgradeToFenc
 
 	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		BatchSize:     1,
-		SyncEachBatch: true,
+		SyncEachBatch: false,
 	}); err != nil {
 		t.Fatalf("ValueLogRewriteOnline: %v", err)
 	}
@@ -732,7 +742,7 @@ func TestValueLogRewriteOnline_LegacyGroupedFenceMarkerHint_DoesNotUpgradeToFenc
 	if err != nil {
 		t.Fatalf("get k1 after rewrite: %v", err)
 	}
-	if !bytes.Equal(v1, []byte("alpha")) {
+	if !bytes.Equal(v1, fakeOuterLeafPrefixValue) {
 		t.Fatalf("k1 mismatch after rewrite: got=%q", v1)
 	}
 	v2, err := db.Get([]byte("k2"))
@@ -748,7 +758,10 @@ func TestValueLogRewriteOnline_LegacyGroupedFenceMarkerHint_DoesNotUpgradeToFenc
 	}
 	db = nil
 
-	db, err = Open(Options{Dir: dir})
+	db, err = Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
@@ -756,7 +769,7 @@ func TestValueLogRewriteOnline_LegacyGroupedFenceMarkerHint_DoesNotUpgradeToFenc
 	if err != nil {
 		t.Fatalf("get k1 after reopen: %v", err)
 	}
-	if !bytes.Equal(v1, []byte("alpha")) {
+	if !bytes.Equal(v1, fakeOuterLeafPrefixValue) {
 		t.Fatalf("k1 mismatch after reopen: got=%q", v1)
 	}
 	v2, err = db.Get([]byte("k2"))
