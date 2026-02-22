@@ -1632,6 +1632,9 @@ func valuePtrSameRecord(a, b page.ValuePtr) bool {
 }
 
 func (m fencePendingMutation) replacesFenceAnchor(oldPtr page.ValuePtr) bool {
+	if !page.ValuePtrIsFenceOuter(oldPtr) {
+		return false
+	}
 	switch m.kind {
 	case fencePendingMutationDelete, fencePendingMutationSetInline:
 		return true
@@ -1646,7 +1649,13 @@ func (m fencePendingMutation) replacesFenceAnchor(oldPtr page.ValuePtr) bool {
 }
 
 func (m fencePendingMutation) keepsFencePointer(oldPtr page.ValuePtr) bool {
-	return false
+	if m.kind != fencePendingMutationSetPointer {
+		return false
+	}
+	if !page.ValuePtrIsFenceOuter(oldPtr) {
+		return false
+	}
+	return valuePtrSameRecord(m.ptr, oldPtr)
 }
 
 func fencePendingMutationFromMemEntry(ptr page.ValuePtr, flags byte, found bool) (fencePendingMutation, bool) {
@@ -1678,17 +1687,7 @@ func fenceMutationLookupForUnits(units []flushUnit) fenceMutationLookupFn {
 	if len(units) == 0 {
 		return nil
 	}
-	if len(units) == 1 {
-		mem := units[0].mem
-		if mem == nil {
-			return nil
-		}
-		return func(key []byte) (fencePendingMutation, bool) {
-			_, ptr, flags, found := mem.GetEntry(key)
-			return fencePendingMutationFromMemEntry(ptr, flags, found)
-		}
-	}
-	return func(key []byte) (fencePendingMutation, bool) {
+	fallbackLookup := func(key []byte) (fencePendingMutation, bool) {
 		for i := len(units) - 1; i >= 0; i-- {
 			if units[i].mem == nil {
 				continue
@@ -1700,6 +1699,62 @@ func fenceMutationLookupForUnits(units []flushUnit) fenceMutationLookupFn {
 			return fencePendingMutationFromMemEntry(ptr, flags, true)
 		}
 		return fencePendingMutation{}, false
+	}
+
+	totalEntries := 0
+	for i := range units {
+		if units[i].mem == nil {
+			continue
+		}
+		totalEntries += units[i].mem.Len()
+	}
+	if totalEntries <= 0 {
+		return fallbackLookup
+	}
+	pendingByKey := make(map[string]fencePendingMutation, totalEntries)
+	for i := len(units) - 1; i >= 0; i-- {
+		mem := units[i].mem
+		if mem == nil {
+			continue
+		}
+		iter := mem.NewIterator(nil, nil)
+		stableUnsafe := false
+		if stable, ok := mem.(memtable.StableUnsafeIteratorTable); ok {
+			stableUnsafe = stable.StableUnsafeIteratorSlices()
+		}
+		for iter.Valid() {
+			key := iter.UnsafeKey()
+			if len(key) == 0 {
+				iter.Next()
+				continue
+			}
+			var keyStr string
+			if stableUnsafe {
+				keyStr = bytesToStringNoCopy(key)
+			} else {
+				keyStr = string(key)
+			}
+			if _, exists := pendingByKey[keyStr]; exists {
+				iter.Next()
+				continue
+			}
+			_, ptr, flags := iter.UnsafeEntry()
+			pending, _ := fencePendingMutationFromMemEntry(ptr, flags, true)
+			pendingByKey[keyStr] = pending
+			iter.Next()
+		}
+		iterErr := iter.Error()
+		closeErr := iter.Close()
+		if iterErr != nil || closeErr != nil {
+			return fallbackLookup
+		}
+	}
+	return func(key []byte) (fencePendingMutation, bool) {
+		if len(key) == 0 {
+			return fencePendingMutation{}, false
+		}
+		pending, ok := pendingByKey[bytesToStringNoCopy(key)]
+		return pending, ok
 	}
 }
 

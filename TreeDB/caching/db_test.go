@@ -2497,6 +2497,45 @@ func TestCachingDB_FlushFenceModeAnchorPromotionSkipsKeysResolvedByNewerFence(t 
 	}
 }
 
+func TestFencePendingMutationReplacesFenceAnchorRequiresFenceMarker(t *testing.T) {
+	base := page.ValuePtr{FileID: 7, Offset: 128, Length: 64}
+	fence := page.ValuePtrMarkFenceOuterCollapsed(base)
+
+	mutations := []fencePendingMutation{
+		{kind: fencePendingMutationDelete},
+		{kind: fencePendingMutationSetInline},
+		{kind: fencePendingMutationSetPointer, ptr: base},
+	}
+	for i := range mutations {
+		m := mutations[i]
+		if !m.replacesFenceAnchor(fence) {
+			t.Fatalf("mutation %d should replace fence-marked anchor", i)
+		}
+		if m.replacesFenceAnchor(base) {
+			t.Fatalf("mutation %d should not replace non-fence pointer", i)
+		}
+	}
+}
+
+func TestFencePendingMutationKeepsFencePointerOnlyForSameRecord(t *testing.T) {
+	base := page.ValuePtr{FileID: 9, Offset: 256, Length: page.ValuePtrMarkGrouped(80, 3)}
+	fence := page.ValuePtrMarkFenceOuterCollapsed(base)
+	otherRecord := page.ValuePtr{FileID: 9, Offset: 512, Length: page.ValuePtrMarkGrouped(80, 3)}
+
+	if !(fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: base}).keepsFencePointer(fence) {
+		t.Fatalf("set-pointer to same record should keep fence pointer")
+	}
+	if (fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: otherRecord}).keepsFencePointer(fence) {
+		t.Fatalf("set-pointer to different record should not keep fence pointer")
+	}
+	if (fencePendingMutation{kind: fencePendingMutationSetInline}).keepsFencePointer(fence) {
+		t.Fatalf("inline mutation should not keep fence pointer")
+	}
+	if (fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: base}).keepsFencePointer(base) {
+		t.Fatalf("non-fence old pointer should not keep fence pointer")
+	}
+}
+
 func TestCachingDB_CloseDeferredValueLogDoesNotFail(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
