@@ -1775,6 +1775,8 @@ type fenceAnchorPromoter struct {
 
 	backendEmptyChecked bool
 	backendEmpty        bool
+
+	deleteFallbackDone map[page.ValuePtr]struct{}
 }
 
 type decodedFenceKeys struct {
@@ -1996,6 +1998,48 @@ func (p *fenceAnchorPromoter) keyResolvesFromSource(snap *backenddb.Snapshot, ke
 	return false, false, true, nil
 }
 
+func (p *fenceAnchorPromoter) appendFenceRewriteBlock(entries []outerleaf.TypedEntry) (page.ValuePtr, error) {
+	if p == nil || p.db == nil {
+		return page.ValuePtr{}, errors.New("cachingdb: missing fence promoter db")
+	}
+	if len(entries) == 0 {
+		return page.ValuePtr{}, errors.New("cachingdb: empty fence rewrite block")
+	}
+	enc := getOuterLeafEncoder()
+	defer putOuterLeafEncoder(enc)
+
+	totalValueBytes := 0
+	for i := range entries {
+		if entries[i].Kind == outerleaf.EntryKindInline {
+			totalValueBytes += len(entries[i].Value)
+		}
+	}
+	codec := p.db.selectOuterLeafBlockCodec(totalValueBytes, len(entries))
+	payload, err := enc.EncodeTypedEntries(nil, entries, codec, p.db.outerLeafBlockRestart)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+
+	lane, err := p.db.pickLane(false, -1)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+
+	dictID := uint64(0)
+	if p.db.dictStore != nil {
+		if id, dictErr := p.db.currentDictID(context.Background()); dictErr == nil {
+			dictID = id
+		}
+	}
+
+	rid := p.db.nextRID.Add(1)
+	ptr, _, err := p.db.appendValueLogOneRaw(lane, dictID, nil, rid, payload, journalDurabilityFlush)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	return ptr, nil
+}
+
 func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte, snap *backenddb.Snapshot, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
 	if p == nil || snap == nil || len(deleteKey) == 0 || emitPointer == nil {
 		return nil
@@ -2004,67 +2048,109 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 	if err != nil || !found || len(sourceKey) == 0 {
 		return err
 	}
-	decoded, err := p.decodeFenceKeys(sourcePtr)
+
+	canonicalSourcePtr := page.ValuePtrClearFenceOuter(sourcePtr)
+	if p.deleteFallbackDone != nil {
+		if _, ok := p.deleteFallbackDone[canonicalSourcePtr]; ok {
+			return nil
+		}
+	}
+
+	if p.db.valueLogReader == nil {
+		return errors.New("cachingdb: missing value-log reader for fence delete fallback rewrite")
+	}
+	raw, err := p.db.valueLogReader.Read(sourcePtr)
 	if err != nil {
 		return err
 	}
-	if decoded == nil {
+	if !outerleaf.HasMagic(raw) {
 		return nil
 	}
-	keys := decoded.keys
-	if len(keys) == 0 {
+	block, err := outerleaf.DecodeBlockWithVerify(raw, nil, true)
+	if err != nil {
+		return err
+	}
+	typed, err := block.TypedEntries(nil)
+	if err != nil {
+		return err
+	}
+	if len(typed) == 0 {
 		return nil
 	}
-	exactPtr := page.ValuePtrClearFenceOuter(sourcePtr)
-	fencePtr := page.ValuePtrMarkFenceOuterCollapsed(exactPtr)
-	emittedSuffixAnchor := false
-	for i := range keys {
-		k := keys[i]
+
+	prefix := make([]outerleaf.TypedEntry, 0, len(typed))
+	suffix := make([]outerleaf.TypedEntry, 0, len(typed))
+	deletePresent := false
+	for i := range typed {
+		k := typed[i].Key
 		if len(k) == 0 {
 			continue
 		}
-		if _, ok := p.lookupPendingMutation(decoded, i); ok {
-			continue
-		}
 		if bytes.Equal(k, deleteKey) {
+			deletePresent = true
 			continue
 		}
-		cmpDelete := bytes.Compare(k, deleteKey)
-		if cmpDelete > 0 && emittedSuffixAnchor {
+		if bytes.Compare(k, sourceKey) < 0 {
 			continue
 		}
-		cmpSource := bytes.Compare(k, sourceKey)
-		exact, marked, resolved, err := p.keyResolvesFromSource(snap, k, sourcePtr)
-		if err != nil {
-			return err
-		}
-		if cmpSource < 0 {
-			// Keys before the predecessor source key should only be rewritten when
-			// they are already exact fence-marked aliases of the same source.
-			if !exact || !resolved || !marked {
+		if p.lookup != nil {
+			if _, ok := p.lookup(k); ok {
 				continue
 			}
-			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
-				return err
-			}
-			continue
+		}
+		_, _, resolved, resolveErr := p.keyResolvesFromSource(snap, k, sourcePtr)
+		if resolveErr != nil {
+			return resolveErr
 		}
 		if !resolved {
 			continue
 		}
-		if cmpDelete < 0 {
-			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
-				return err
-			}
+		if bytes.Compare(k, deleteKey) < 0 {
+			prefix = append(prefix, typed[i])
 			continue
 		}
-		if cmpDelete > 0 {
-			if err := p.emitUniquePointer(k, fencePtr, emitPointer); err != nil {
-				return err
-			}
-			emittedSuffixAnchor = true
+		suffix = append(suffix, typed[i])
+	}
+	if !deletePresent {
+		return nil
+	}
+
+	if len(prefix) == 1 && bytes.Equal(prefix[0].Key, sourceKey) {
+		if err := p.emitUniquePointer(sourceKey, canonicalSourcePtr, emitPointer); err != nil {
+			return err
+		}
+	} else if len(prefix) > 0 {
+		rewritePtr, err := p.appendFenceRewriteBlock(prefix)
+		if err != nil {
+			return err
+		}
+		outPtr := page.ValuePtrClearFenceOuter(rewritePtr)
+		if len(prefix) > 1 {
+			outPtr = page.ValuePtrMarkFenceOuterCollapsed(rewritePtr)
+		}
+		if err := p.emitUniquePointer(prefix[0].Key, outPtr, emitPointer); err != nil {
+			return err
 		}
 	}
+
+	if len(suffix) > 0 {
+		rewritePtr, err := p.appendFenceRewriteBlock(suffix)
+		if err != nil {
+			return err
+		}
+		outPtr := page.ValuePtrClearFenceOuter(rewritePtr)
+		if len(suffix) > 1 {
+			outPtr = page.ValuePtrMarkFenceOuterCollapsed(rewritePtr)
+		}
+		if err := p.emitUniquePointer(suffix[0].Key, outPtr, emitPointer); err != nil {
+			return err
+		}
+	}
+
+	if p.deleteFallbackDone == nil {
+		p.deleteFallbackDone = make(map[page.ValuePtr]struct{})
+	}
+	p.deleteFallbackDone[canonicalSourcePtr] = struct{}{}
 	return nil
 }
 

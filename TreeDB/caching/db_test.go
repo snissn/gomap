@@ -2226,6 +2226,10 @@ func TestCachingDB_FlushFenceModeDeleteFallbackOnlyKeyDurable(t *testing.T) {
 	if snap == nil {
 		t.Fatalf("snapshot nil")
 	}
+	leafEntriesBeforeDelete := countSnapshotLeafEntries(t, snap)
+	if leafEntriesBeforeDelete <= 0 {
+		t.Fatalf("expected persisted entries before delete")
+	}
 	_, err = snap.GetEntryExact(keyFor(1))
 	_ = snap.Close()
 	if err == nil {
@@ -2244,6 +2248,16 @@ func TestCachingDB_FlushFenceModeDeleteFallbackOnlyKeyDurable(t *testing.T) {
 	}
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint(delete key1): %v", err)
+	}
+
+	snap = backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil after delete")
+	}
+	leafEntriesAfterDelete := countSnapshotLeafEntries(t, snap)
+	_ = snap.Close()
+	if leafEntriesAfterDelete > leafEntriesBeforeDelete+8 {
+		t.Fatalf("expected sparse fence rewrite after delete, before=%d after=%d", leafEntriesBeforeDelete, leafEntriesAfterDelete)
 	}
 
 	for _, i := range []int{0, 2, totalKeys - 1} {
