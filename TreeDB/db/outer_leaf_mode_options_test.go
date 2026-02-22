@@ -8,6 +8,7 @@ import (
 func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
 	modes := []string{
 		IndexOuterLeafModeV1LeafLog,
+		IndexOuterLeafModeV1LeafLogLegacy,
 		IndexOuterLeafModeV2BlockPtr,
 		IndexOuterLeafModeV2FencePtr,
 	}
@@ -22,6 +23,20 @@ func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatalf("close: %v", err)
 		}
+	}
+}
+
+func TestOpen_IndexOuterLeafMode_V1LeafLogLegacyNormalizesToV1LeafLog(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                t.TempDir(),
+		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLogLegacy,
+	})
+	if err != nil {
+		t.Fatalf("open %q: %v", IndexOuterLeafModeV1LeafLogLegacy, err)
+	}
+	defer func() { _ = db.Close() }()
+	if got := db.indexOuterLeafMode; got != IndexOuterLeafModeV1LeafLog {
+		t.Fatalf("index outer leaf mode = %q, want %q", got, IndexOuterLeafModeV1LeafLog)
 	}
 }
 

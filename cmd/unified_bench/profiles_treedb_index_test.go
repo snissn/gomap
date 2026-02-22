@@ -59,6 +59,45 @@ func TestBuildTreeDBOptions_V1LeafLogModeAccepted(t *testing.T) {
 	}
 }
 
+func TestBuildTreeDBOptions_V1LeafLogLegacyModeAccepted(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v1_leaflog_legacy"
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions v1_leaflog_legacy: %v", err)
+	}
+	if got := opts.IndexOuterLeafMode; got != treedb.IndexOuterLeafModeV1LeafLog {
+		t.Fatalf("IndexOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV1LeafLog)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "index_outer_leaf_mode=v1_leaflog") {
+		t.Fatalf("resolved options missing normalized v1_leaflog outer-leaf mode: %q", got)
+	}
+}
+
+func TestParseTreeDBOuterLeafMode_V1LeafLogLegacyAccepted(t *testing.T) {
+	got, err := parseTreeDBOuterLeafMode("v1_leaflog_legacy")
+	if err != nil {
+		t.Fatalf("parseTreeDBOuterLeafMode: %v", err)
+	}
+	if got != treedb.IndexOuterLeafModeV1LeafLog {
+		t.Fatalf("parseTreeDBOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV1LeafLog)
+	}
+}
+
+func TestParseTreeDBOuterLeafMode_InvalidErrorMentionsLegacyAlias(t *testing.T) {
+	_, err := parseTreeDBOuterLeafMode("unknown_mode")
+	if err == nil {
+		t.Fatalf("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "v1_leaflog_legacy") {
+		t.Fatalf("expected error to mention v1_leaflog_legacy, got %v", err)
+	}
+}
+
 type savedTreeDBFlagState struct {
 	indexOptimizations bool
 	indexOuterLeafMode string
@@ -474,6 +513,21 @@ func TestBuildTreeDBOptions_WALFenceMode_V1LeafLog_RejectsSimpleInline(t *testin
 	}
 	if _, _, err := buildTreeDBOptions(""); err == nil {
 		t.Fatalf("expected simple_inline with v1_leaflog to fail")
+	}
+}
+
+func TestBuildTreeDBOptions_WALFenceMode_V1LeafLogLegacy_RejectsSimpleInline(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v1_leaflog_legacy"
+	*treedbWALFenceMode = "simple_inline"
+	explicitFlags = map[string]bool{
+		"treedb-wal-fence-mode": true,
+	}
+	if _, _, err := buildTreeDBOptions(""); err == nil {
+		t.Fatalf("expected simple_inline with v1_leaflog_legacy to fail")
 	}
 }
 

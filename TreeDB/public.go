@@ -268,10 +268,7 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 	slowdown := defaultSlowdownBacklogSeconds
 	stop := defaultStopBacklogSeconds
-	indexOuterLeafMode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
-	if indexOuterLeafMode == "" {
-		indexOuterLeafMode = db.IndexOuterLeafModeV2FencePtr
-	}
+	indexOuterLeafMode := normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
 	if opts.Durability == db.DurabilityWALOffRelaxed &&
 		indexOuterLeafMode == db.IndexOuterLeafModeV2FencePtr {
 		slowdown = defaultV2FenceSlowdownBacklogSeconds
@@ -283,11 +280,34 @@ func normalizeBackpressureDefaults(opts *Options) {
 	opts.MaxBacklogBytes = defaultAdaptiveMaxBacklogBytes
 }
 
+func normalizePublicOuterLeafMode(mode string) string {
+	trimmed := strings.TrimSpace(mode)
+	if trimmed == "" {
+		return db.IndexOuterLeafModeV2FencePtr
+	}
+	normalized := strings.ToLower(trimmed)
+	switch normalized {
+	case db.IndexOuterLeafModeV1:
+		return db.IndexOuterLeafModeV1
+	case db.IndexOuterLeafModeV1LeafLog:
+		return db.IndexOuterLeafModeV1LeafLog
+	case db.IndexOuterLeafModeV1LeafLogLegacy:
+		// Compatibility alias keeps current v1_leaflog behavior unchanged.
+		return db.IndexOuterLeafModeV1LeafLog
+	case db.IndexOuterLeafModeV2BlockPtr:
+		return db.IndexOuterLeafModeV2BlockPtr
+	case db.IndexOuterLeafModeV2FencePtr:
+		return db.IndexOuterLeafModeV2FencePtr
+	default:
+		// Keep non-alias values unchanged to avoid broad behavior drift in
+		// cached-mode parsing/validation paths.
+		return trimmed
+	}
+}
+
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
-	if strings.TrimSpace(opts.IndexOuterLeafMode) == "" {
-		opts.IndexOuterLeafMode = db.IndexOuterLeafModeV2FencePtr
-	}
+	opts.IndexOuterLeafMode = normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
 
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value

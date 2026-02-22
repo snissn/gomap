@@ -3619,7 +3619,9 @@ type Options struct {
 	// counts by pushing moderate values into the value log.
 	ValueLogPointerThreshold int
 	// IndexOuterLeafMode selects the outer-leaf payload format.
-	// Supported values: "v1", "v1_leaflog", "v2_blockptr", "v2_fenceptr".
+	// Supported values: "v1", "v1_leaflog", "v1_leaflog_legacy",
+	// "v2_blockptr", "v2_fenceptr".
+	// "v1_leaflog_legacy" currently normalizes to "v1_leaflog".
 	// Empty defaults to "v2_fenceptr".
 	IndexOuterLeafMode string
 	// ValueLogWALFenceMode selects WAL encoding behavior for pointer-eligible
@@ -5029,9 +5031,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogRawWritevMinRecords <= 0 {
 		valueLogRawWritevMinRecords = 8
 	}
-	indexOuterLeafMode := strings.TrimSpace(opts.IndexOuterLeafMode)
+	indexOuterLeafMode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
 	if indexOuterLeafMode == "" {
 		indexOuterLeafMode = backenddb.IndexOuterLeafModeV2FencePtr
+	}
+	if indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogLegacy {
+		// Compatibility alias: keep current v1_leaflog semantics.
+		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1LeafLog
 	}
 	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr &&
 		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr &&

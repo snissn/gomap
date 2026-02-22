@@ -1278,6 +1278,47 @@ func TestCachingDB_Open_NonFenceMode_RejectsSimpleInlineWALFenceMode(t *testing.
 	}
 }
 
+func TestCachingDB_Open_V1LeafLogLegacy_NormalizesToV1LeafLog(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1LeafLogLegacy,
+	})
+	if err != nil {
+		t.Fatalf("open v1_leaflog_legacy: %v", err)
+	}
+	defer cache.Close()
+	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1LeafLog {
+		t.Fatalf("indexOuterLeafMode=%q want %q", got, db.IndexOuterLeafModeV1LeafLog)
+	}
+}
+
+func TestCachingDB_Open_V2FencePtrMixedCase_AllowsSimpleInline(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{
+		IndexOuterLeafMode:   "V2_FENCEPTR",
+		ValueLogWALFenceMode: string(db.ValueLogWALFenceModeSimpleInline),
+	})
+	if err != nil {
+		t.Fatalf("open mixed-case v2_fenceptr simple_inline: %v", err)
+	}
+	defer cache.Close()
+	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV2FencePtr {
+		t.Fatalf("indexOuterLeafMode=%q want %q", got, db.IndexOuterLeafModeV2FencePtr)
+	}
+}
+
 func TestCachingDB_Open_ValueLogOuterLeafBlobThresholdBytes_NegativeRejected(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
