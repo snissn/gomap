@@ -118,8 +118,10 @@ func TestCachingDB_DeferredFence_WALOff_FlushThenCheckpointPreservesLatest(t *te
 	}
 	leafEntries := countSnapshotLeafEntries(t, snap)
 	_ = snap.Close()
-	if leafEntries != len(live) {
-		t.Fatalf("leaf entry count=%d want live=%d", leafEntries, len(live))
+	// v2_fenceptr stores fence anchors in index leaves; one leaf entry does not
+	// necessarily map 1:1 with one logical live key.
+	if leafEntries == 0 || leafEntries > len(live) {
+		t.Fatalf("leaf entry count=%d out of bounds for live=%d", leafEntries, len(live))
 	}
 
 	for key, want := range live {
@@ -271,8 +273,10 @@ func TestCachingDB_DeferredFence_WALOn_FenceModeFlushCheckpointMatrix(t *testing
 			}
 			leafEntries := countSnapshotLeafEntries(t, snap)
 			_ = snap.Close()
-			if leafEntries != len(live) {
-				t.Fatalf("leaf entry count=%d want live=%d", leafEntries, len(live))
+			// v2_fenceptr stores fence anchors in index leaves; one leaf entry does
+			// not necessarily map 1:1 with one logical live key.
+			if leafEntries == 0 || leafEntries > len(live) {
+				t.Fatalf("leaf entry count=%d out of bounds for live=%d", leafEntries, len(live))
 			}
 
 			if err := cache.Close(); err != nil {
