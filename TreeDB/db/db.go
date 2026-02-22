@@ -1691,7 +1691,11 @@ func (s *Snapshot) Has(key []byte) (bool, error) {
 	return s.tree.Has(key)
 }
 
-// GetEntry returns the raw entry from snapshot.
+// GetEntry returns the logical entry from snapshot.
+//
+// On exact leaf hits, this returns the persisted leaf entry. On misses that
+// resolve via fence-pointer fallback, it returns a synthesized inline entry.
+// Use GetEntryExact when callers require exact persisted entries only.
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	return s.tree.GetEntry(key)
 }
