@@ -2226,6 +2226,10 @@ func TestCachingDB_FlushFenceModeDeleteFallbackOnlyKeyDurable(t *testing.T) {
 	if snap == nil {
 		t.Fatalf("snapshot nil")
 	}
+	leafEntriesBeforeDelete := countSnapshotLeafEntries(t, snap)
+	if leafEntriesBeforeDelete <= 0 {
+		t.Fatalf("expected persisted entries before delete")
+	}
 	_, err = snap.GetEntryExact(keyFor(1))
 	_ = snap.Close()
 	if err == nil {
@@ -2244,6 +2248,16 @@ func TestCachingDB_FlushFenceModeDeleteFallbackOnlyKeyDurable(t *testing.T) {
 	}
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint(delete key1): %v", err)
+	}
+
+	snap = backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil after delete")
+	}
+	leafEntriesAfterDelete := countSnapshotLeafEntries(t, snap)
+	_ = snap.Close()
+	if leafEntriesAfterDelete > leafEntriesBeforeDelete+8 {
+		t.Fatalf("expected sparse fence rewrite after delete, before=%d after=%d", leafEntriesBeforeDelete, leafEntriesAfterDelete)
 	}
 
 	for _, i := range []int{0, 2, totalKeys - 1} {
@@ -2387,6 +2401,87 @@ func TestCachingDB_FlushFenceModeCollapsedGroupOverwritesExistingExactSibling(t 
 	}
 }
 
+func TestCachingDB_FlushFenceModeCollapsedGroupSkipsExactEmissionWithoutExactOverlap(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	// Seed only range bounds; no exact overlap with the test group keys.
+	for _, k := range [][]byte{[]byte("k0000"), []byte("k9999")} {
+		if err := cache.Set(k, bytes.Repeat([]byte("seed"), 64)); err != nil {
+			t.Fatalf("Set(seed %q): %v", k, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(seed range): %v", err)
+	}
+
+	keyFor := func(i int) []byte { return []byte(fmt.Sprintf("k5000-%03d", i)) }
+	valFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i + 3)}, 256) }
+	const groupKeys = 32
+	for i := 0; i < groupKeys; i++ {
+		if err := cache.Set(keyFor(i), valFor(i)); err != nil {
+			t.Fatalf("Set(group %d): %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(group): %v", err)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	defer snap.Close()
+
+	// First key is expected anchor; second key should stay fallback-only when
+	// there is no exact overlap.
+	if _, err := snap.GetEntryExact(keyFor(0)); err != nil {
+		t.Fatalf("GetEntryExact(anchor): %v", err)
+	}
+	if _, err := snap.GetEntryExact(keyFor(1)); err == nil {
+		t.Fatalf("expected non-anchor key to remain fallback-only without exact overlap")
+	}
+
+	got, err := backend.Get(keyFor(1))
+	if err != nil {
+		t.Fatalf("backend Get(non-anchor): %v", err)
+	}
+	if !bytes.Equal(got, valFor(1)) {
+		t.Fatalf("fallback value mismatch for non-anchor key")
+	}
+}
+
 func TestCachingDB_FlushFenceModeAnchorPromotionSkipsKeysResolvedByNewerFence(t *testing.T) {
 	dir := t.TempDir()
 	backendOpts := db.Options{
@@ -2494,6 +2589,45 @@ func TestCachingDB_FlushFenceModeAnchorPromotionSkipsKeysResolvedByNewerFence(t 
 	}
 	if !bytes.Equal(gotE, value("e")) {
 		t.Fatalf("expected old E sibling to remain reachable")
+	}
+}
+
+func TestFencePendingMutationReplacesFenceAnchorRequiresFenceMarker(t *testing.T) {
+	base := page.ValuePtr{FileID: 7, Offset: 128, Length: 64}
+	fence := page.ValuePtrMarkFenceOuterCollapsed(base)
+
+	mutations := []fencePendingMutation{
+		{kind: fencePendingMutationDelete},
+		{kind: fencePendingMutationSetInline},
+		{kind: fencePendingMutationSetPointer, ptr: base},
+	}
+	for i := range mutations {
+		m := mutations[i]
+		if !m.replacesFenceAnchor(fence) {
+			t.Fatalf("mutation %d should replace fence-marked anchor", i)
+		}
+		if m.replacesFenceAnchor(base) {
+			t.Fatalf("mutation %d should not replace non-fence pointer", i)
+		}
+	}
+}
+
+func TestFencePendingMutationKeepsFencePointerOnlyForSameRecord(t *testing.T) {
+	base := page.ValuePtr{FileID: 9, Offset: 256, Length: page.ValuePtrMarkGrouped(80, 3)}
+	fence := page.ValuePtrMarkFenceOuterCollapsed(base)
+	otherRecord := page.ValuePtr{FileID: 9, Offset: 512, Length: page.ValuePtrMarkGrouped(80, 3)}
+
+	if !(fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: base}).keepsFencePointer(fence) {
+		t.Fatalf("set-pointer to same record should keep fence pointer")
+	}
+	if (fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: otherRecord}).keepsFencePointer(fence) {
+		t.Fatalf("set-pointer to different record should not keep fence pointer")
+	}
+	if (fencePendingMutation{kind: fencePendingMutationSetInline}).keepsFencePointer(fence) {
+		t.Fatalf("inline mutation should not keep fence pointer")
+	}
+	if (fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: base}).keepsFencePointer(base) {
+		t.Fatalf("non-fence old pointer should not keep fence pointer")
 	}
 }
 

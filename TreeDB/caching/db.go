@@ -1632,6 +1632,9 @@ func valuePtrSameRecord(a, b page.ValuePtr) bool {
 }
 
 func (m fencePendingMutation) replacesFenceAnchor(oldPtr page.ValuePtr) bool {
+	if !page.ValuePtrIsFenceOuter(oldPtr) {
+		return false
+	}
 	switch m.kind {
 	case fencePendingMutationDelete, fencePendingMutationSetInline:
 		return true
@@ -1646,7 +1649,13 @@ func (m fencePendingMutation) replacesFenceAnchor(oldPtr page.ValuePtr) bool {
 }
 
 func (m fencePendingMutation) keepsFencePointer(oldPtr page.ValuePtr) bool {
-	return false
+	if m.kind != fencePendingMutationSetPointer {
+		return false
+	}
+	if !page.ValuePtrIsFenceOuter(oldPtr) {
+		return false
+	}
+	return valuePtrSameRecord(m.ptr, oldPtr)
 }
 
 func fencePendingMutationFromMemEntry(ptr page.ValuePtr, flags byte, found bool) (fencePendingMutation, bool) {
@@ -1678,17 +1687,7 @@ func fenceMutationLookupForUnits(units []flushUnit) fenceMutationLookupFn {
 	if len(units) == 0 {
 		return nil
 	}
-	if len(units) == 1 {
-		mem := units[0].mem
-		if mem == nil {
-			return nil
-		}
-		return func(key []byte) (fencePendingMutation, bool) {
-			_, ptr, flags, found := mem.GetEntry(key)
-			return fencePendingMutationFromMemEntry(ptr, flags, found)
-		}
-	}
-	return func(key []byte) (fencePendingMutation, bool) {
+	fallbackLookup := func(key []byte) (fencePendingMutation, bool) {
 		for i := len(units) - 1; i >= 0; i-- {
 			if units[i].mem == nil {
 				continue
@@ -1701,6 +1700,62 @@ func fenceMutationLookupForUnits(units []flushUnit) fenceMutationLookupFn {
 		}
 		return fencePendingMutation{}, false
 	}
+
+	totalEntries := 0
+	for i := range units {
+		if units[i].mem == nil {
+			continue
+		}
+		totalEntries += units[i].mem.Len()
+	}
+	if totalEntries <= 0 {
+		return fallbackLookup
+	}
+	pendingByKey := make(map[string]fencePendingMutation, totalEntries)
+	for i := len(units) - 1; i >= 0; i-- {
+		mem := units[i].mem
+		if mem == nil {
+			continue
+		}
+		iter := mem.NewIterator(nil, nil)
+		stableUnsafe := false
+		if stable, ok := mem.(memtable.StableUnsafeIteratorTable); ok {
+			stableUnsafe = stable.StableUnsafeIteratorSlices()
+		}
+		for iter.Valid() {
+			key := iter.UnsafeKey()
+			if len(key) == 0 {
+				iter.Next()
+				continue
+			}
+			var keyStr string
+			if stableUnsafe {
+				keyStr = bytesToStringNoCopy(key)
+			} else {
+				keyStr = string(key)
+			}
+			if _, exists := pendingByKey[keyStr]; exists {
+				iter.Next()
+				continue
+			}
+			_, ptr, flags := iter.UnsafeEntry()
+			pending, _ := fencePendingMutationFromMemEntry(ptr, flags, true)
+			pendingByKey[keyStr] = pending
+			iter.Next()
+		}
+		iterErr := iter.Error()
+		closeErr := iter.Close()
+		if iterErr != nil || closeErr != nil {
+			return fallbackLookup
+		}
+	}
+	return func(key []byte) (fencePendingMutation, bool) {
+		if len(key) == 0 {
+			return fencePendingMutation{}, false
+		}
+		pending, ok := pendingByKey[bytesToStringNoCopy(key)]
+		return pending, ok
+	}
 }
 
 type fenceAnchorPromoter struct {
@@ -1711,7 +1766,7 @@ type fenceAnchorPromoter struct {
 	snapshot      *backenddb.Snapshot
 	snapshotReady bool
 
-	keysByPtr map[page.ValuePtr][][]byte
+	keysByPtr map[page.ValuePtr]*decodedFenceKeys
 	promoted  map[string]page.ValuePtr
 
 	rangeLoaded  bool
@@ -1720,6 +1775,14 @@ type fenceAnchorPromoter struct {
 
 	backendEmptyChecked bool
 	backendEmpty        bool
+
+	deleteFallbackDone map[page.ValuePtr]struct{}
+}
+
+type decodedFenceKeys struct {
+	keys         [][]byte
+	pendingKnown []uint8
+	pending      []fencePendingMutation
 }
 
 func newFenceAnchorPromoter(db *DB, lookup fenceMutationLookupFn) *fenceAnchorPromoter {
@@ -1759,13 +1822,13 @@ func (p *fenceAnchorPromoter) snapshotView() *backenddb.Snapshot {
 	return p.snapshot
 }
 
-func (p *fenceAnchorPromoter) decodeFenceKeys(ptr page.ValuePtr) ([][]byte, error) {
+func (p *fenceAnchorPromoter) decodeFenceKeys(ptr page.ValuePtr) (*decodedFenceKeys, error) {
 	if p == nil || p.db == nil {
 		return nil, nil
 	}
 	if p.keysByPtr != nil {
-		if keys, ok := p.keysByPtr[ptr]; ok {
-			return keys, nil
+		if decoded, ok := p.keysByPtr[ptr]; ok {
+			return decoded, nil
 		}
 	}
 	if p.db.valueLogReader == nil {
@@ -1782,27 +1845,44 @@ func (p *fenceAnchorPromoter) decodeFenceKeys(ptr page.ValuePtr) ([][]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	if p.keysByPtr == nil {
-		p.keysByPtr = make(map[page.ValuePtr][][]byte)
+	decoded := &decodedFenceKeys{keys: keys}
+	if p.lookup != nil && len(keys) > 0 {
+		decoded.pendingKnown = make([]uint8, len(keys))
+		decoded.pending = make([]fencePendingMutation, len(keys))
 	}
-	p.keysByPtr[ptr] = keys
-	return keys, nil
+	if p.keysByPtr == nil {
+		p.keysByPtr = make(map[page.ValuePtr]*decodedFenceKeys)
+	}
+	p.keysByPtr[ptr] = decoded
+	return decoded, nil
 }
 
 func (p *fenceAnchorPromoter) findPromotion(ptr page.ValuePtr, anchorKey []byte) ([]byte, bool, error) {
-	keys, err := p.decodeFenceKeys(ptr)
+	decoded, err := p.decodeFenceKeys(ptr)
 	if err != nil {
 		return nil, false, err
 	}
+	if decoded == nil {
+		return nil, false, nil
+	}
+	keys := decoded.keys
 	if len(keys) == 0 {
 		return nil, false, nil
 	}
 	anchorIdx := -1
-	for i := range keys {
-		key := keys[i]
-		if bytes.Equal(key, anchorKey) {
-			anchorIdx = i
-			break
+	{
+		lo := 0
+		hi := len(keys)
+		for lo < hi {
+			mid := int(uint(lo+hi) >> 1)
+			if bytes.Compare(keys[mid], anchorKey) < 0 {
+				lo = mid + 1
+			} else {
+				hi = mid
+			}
+		}
+		if lo < len(keys) && bytes.Equal(keys[lo], anchorKey) {
+			anchorIdx = lo
 		}
 	}
 	if anchorIdx < 0 {
@@ -1811,13 +1891,11 @@ func (p *fenceAnchorPromoter) findPromotion(ptr page.ValuePtr, anchorKey []byte)
 	snap := p.snapshotView()
 	for i := anchorIdx + 1; i < len(keys); i++ {
 		key := keys[i]
-		if p.lookup != nil {
-			if pending, ok := p.lookup(key); ok {
-				if pending.keepsFencePointer(ptr) {
-					return nil, false, nil
-				}
-				continue
+		if pending, ok := p.lookupPendingMutation(decoded, i); ok {
+			if pending.keepsFencePointer(ptr) {
+				return nil, false, nil
 			}
+			continue
 		}
 		// Never clobber exact persisted entries. Tree reads prefer exact leaf
 		// entries over fence fallback, so promotion must skip keys that already
@@ -1848,6 +1926,34 @@ func (p *fenceAnchorPromoter) findPromotion(ptr page.ValuePtr, anchorKey []byte)
 		return append([]byte(nil), key...), true, nil
 	}
 	return nil, false, nil
+}
+
+func (p *fenceAnchorPromoter) lookupPendingMutation(decoded *decodedFenceKeys, idx int) (fencePendingMutation, bool) {
+	if p == nil || p.lookup == nil || decoded == nil || idx < 0 || idx >= len(decoded.keys) {
+		return fencePendingMutation{}, false
+	}
+	if idx < len(decoded.pendingKnown) {
+		switch decoded.pendingKnown[idx] {
+		case 1:
+			return fencePendingMutation{}, false
+		case 2:
+			if idx < len(decoded.pending) {
+				return decoded.pending[idx], true
+			}
+		}
+	}
+	pending, ok := p.lookup(decoded.keys[idx])
+	if idx < len(decoded.pendingKnown) {
+		if ok {
+			decoded.pendingKnown[idx] = 2
+			if idx < len(decoded.pending) {
+				decoded.pending[idx] = pending
+			}
+		} else {
+			decoded.pendingKnown[idx] = 1
+		}
+	}
+	return pending, ok
 }
 
 func (p *fenceAnchorPromoter) emitUniquePointer(key []byte, ptr page.ValuePtr, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
@@ -1892,6 +1998,48 @@ func (p *fenceAnchorPromoter) keyResolvesFromSource(snap *backenddb.Snapshot, ke
 	return false, false, true, nil
 }
 
+func (p *fenceAnchorPromoter) appendFenceRewriteBlock(entries []outerleaf.TypedEntry) (page.ValuePtr, error) {
+	if p == nil || p.db == nil {
+		return page.ValuePtr{}, errors.New("cachingdb: missing fence promoter db")
+	}
+	if len(entries) == 0 {
+		return page.ValuePtr{}, errors.New("cachingdb: empty fence rewrite block")
+	}
+	enc := getOuterLeafEncoder()
+	defer putOuterLeafEncoder(enc)
+
+	totalValueBytes := 0
+	for i := range entries {
+		if entries[i].Kind == outerleaf.EntryKindInline {
+			totalValueBytes += len(entries[i].Value)
+		}
+	}
+	codec := p.db.selectOuterLeafBlockCodec(totalValueBytes, len(entries))
+	payload, err := enc.EncodeTypedEntries(nil, entries, codec, p.db.outerLeafBlockRestart)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+
+	lane, err := p.db.pickLane(false, -1)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+
+	dictID := uint64(0)
+	if p.db.dictStore != nil {
+		if id, dictErr := p.db.currentDictID(context.Background()); dictErr == nil {
+			dictID = id
+		}
+	}
+
+	rid := p.db.nextRID.Add(1)
+	ptr, _, err := p.db.appendValueLogOneRaw(lane, dictID, nil, rid, payload, journalDurabilityFlush)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	return ptr, nil
+}
+
 func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte, snap *backenddb.Snapshot, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
 	if p == nil || snap == nil || len(deleteKey) == 0 || emitPointer == nil {
 		return nil
@@ -1900,19 +2048,49 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 	if err != nil || !found || len(sourceKey) == 0 {
 		return err
 	}
-	keys, err := p.decodeFenceKeys(sourcePtr)
+
+	canonicalSourcePtr := page.ValuePtrClearFenceOuter(sourcePtr)
+	if p.deleteFallbackDone != nil {
+		if _, ok := p.deleteFallbackDone[canonicalSourcePtr]; ok {
+			return nil
+		}
+	}
+
+	if p.db.valueLogReader == nil {
+		return errors.New("cachingdb: missing value-log reader for fence delete fallback rewrite")
+	}
+	raw, err := p.db.valueLogReader.Read(sourcePtr)
 	if err != nil {
 		return err
 	}
-	if len(keys) == 0 {
+	if !outerleaf.HasMagic(raw) {
 		return nil
 	}
-	exactPtr := page.ValuePtrClearFenceOuter(sourcePtr)
-	fencePtr := page.ValuePtrMarkFenceOuterCollapsed(exactPtr)
-	emittedSuffixAnchor := false
-	for i := range keys {
-		k := keys[i]
+	block, err := outerleaf.DecodeBlockWithVerify(raw, nil, true)
+	if err != nil {
+		return err
+	}
+	typed, err := block.TypedEntries(nil)
+	if err != nil {
+		return err
+	}
+	if len(typed) == 0 {
+		return nil
+	}
+
+	prefix := make([]outerleaf.TypedEntry, 0, len(typed))
+	suffix := make([]outerleaf.TypedEntry, 0, len(typed))
+	deletePresent := false
+	for i := range typed {
+		k := typed[i].Key
 		if len(k) == 0 {
+			continue
+		}
+		if bytes.Equal(k, deleteKey) {
+			deletePresent = true
+			continue
+		}
+		if bytes.Compare(k, sourceKey) < 0 {
 			continue
 		}
 		if p.lookup != nil {
@@ -1920,45 +2098,59 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 				continue
 			}
 		}
-		if bytes.Equal(k, deleteKey) {
-			continue
-		}
-		cmpDelete := bytes.Compare(k, deleteKey)
-		if cmpDelete > 0 && emittedSuffixAnchor {
-			continue
-		}
-		cmpSource := bytes.Compare(k, sourceKey)
-		exact, marked, resolved, err := p.keyResolvesFromSource(snap, k, sourcePtr)
-		if err != nil {
-			return err
-		}
-		if cmpSource < 0 {
-			// Keys before the predecessor source key should only be rewritten when
-			// they are already exact fence-marked aliases of the same source.
-			if !exact || !resolved || !marked {
-				continue
-			}
-			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
-				return err
-			}
-			continue
+		_, _, resolved, resolveErr := p.keyResolvesFromSource(snap, k, sourcePtr)
+		if resolveErr != nil {
+			return resolveErr
 		}
 		if !resolved {
 			continue
 		}
-		if cmpDelete < 0 {
-			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
-				return err
-			}
+		if bytes.Compare(k, deleteKey) < 0 {
+			prefix = append(prefix, typed[i])
 			continue
 		}
-		if cmpDelete > 0 {
-			if err := p.emitUniquePointer(k, fencePtr, emitPointer); err != nil {
-				return err
-			}
-			emittedSuffixAnchor = true
+		suffix = append(suffix, typed[i])
+	}
+	if !deletePresent {
+		return nil
+	}
+
+	if len(prefix) == 1 && bytes.Equal(prefix[0].Key, sourceKey) {
+		if err := p.emitUniquePointer(sourceKey, canonicalSourcePtr, emitPointer); err != nil {
+			return err
+		}
+	} else if len(prefix) > 0 {
+		rewritePtr, err := p.appendFenceRewriteBlock(prefix)
+		if err != nil {
+			return err
+		}
+		outPtr := page.ValuePtrClearFenceOuter(rewritePtr)
+		if len(prefix) > 1 {
+			outPtr = page.ValuePtrMarkFenceOuterCollapsed(rewritePtr)
+		}
+		if err := p.emitUniquePointer(prefix[0].Key, outPtr, emitPointer); err != nil {
+			return err
 		}
 	}
+
+	if len(suffix) > 0 {
+		rewritePtr, err := p.appendFenceRewriteBlock(suffix)
+		if err != nil {
+			return err
+		}
+		outPtr := page.ValuePtrClearFenceOuter(rewritePtr)
+		if len(suffix) > 1 {
+			outPtr = page.ValuePtrMarkFenceOuterCollapsed(rewritePtr)
+		}
+		if err := p.emitUniquePointer(suffix[0].Key, outPtr, emitPointer); err != nil {
+			return err
+		}
+	}
+
+	if p.deleteFallbackDone == nil {
+		p.deleteFallbackDone = make(map[page.ValuePtr]struct{})
+	}
+	p.deleteFallbackDone[canonicalSourcePtr] = struct{}{}
 	return nil
 }
 
@@ -2000,6 +2192,47 @@ func (p *fenceAnchorPromoter) maybePromoteAnchor(key []byte, pending fencePendin
 		return nil
 	}
 	return p.emitUniquePointer(promoteKey, entry.ValuePtr, emitPointer)
+}
+
+func (p *fenceAnchorPromoter) groupNeedsFullEmission(keys [][]byte, start, end int) (bool, error) {
+	if p == nil || start >= end || end > len(keys) {
+		return false, nil
+	}
+	p.loadBackendRange()
+	if p.rangeKnown {
+		if !p.backendRange.valid {
+			return false, nil
+		}
+		first := keys[start]
+		last := keys[end-1]
+		if len(first) == 0 || len(last) == 0 {
+			return true, nil
+		}
+		if bytes.Compare(last, p.backendRange.min) < 0 || bytes.Compare(first, p.backendRange.max) > 0 {
+			return false, nil
+		}
+	}
+
+	snap := p.snapshotView()
+	if snap == nil {
+		// If we cannot inspect exact entries, stay conservative.
+		return true, nil
+	}
+	for i := start; i < end; i++ {
+		key := keys[i]
+		if len(key) == 0 {
+			continue
+		}
+		_, err := snap.GetEntryExact(key)
+		if err == nil {
+			return true, nil
+		}
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			continue
+		}
+		return false, err
+	}
+	return false, nil
 }
 
 func (p *fenceAnchorPromoter) loadBackendRange() {
@@ -2306,11 +2539,9 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			}
 			emittedGroups++
 			if promoter != nil {
-				for srcPos := group.start; srcPos < group.end; srcPos++ {
-					if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
-						emitWholeGroup = true
-						break
-					}
+				emitWholeGroup, err = promoter.groupNeedsFullEmission(ptrKeys, group.start, group.end)
+				if err != nil {
+					return err
 				}
 			}
 			if !emitWholeGroup {
@@ -2609,11 +2840,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					}
 					emittedGroups++
 					if promoter != nil {
-						for srcPos := group.start; srcPos < group.end; srcPos++ {
-							if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
-								emitWholeGroup = true
-								break
-							}
+						emitWholeGroup, err = promoter.groupNeedsFullEmission(ptrKeys, group.start, group.end)
+						if err != nil {
+							putValueLogPtrs(vlogPtrs)
+							return err
 						}
 					}
 					if !emitWholeGroup {
