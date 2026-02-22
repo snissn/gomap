@@ -378,6 +378,193 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_ReadPath_HitMiss_Reope
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
+type overwriteDeleteReopenResult struct {
+	mainValue    []byte
+	stableValue  []byte
+	deletedValue []byte
+	mainFlags    byte
+}
+
+func runOverwriteDeleteReopenScenario(t *testing.T, mode string, syncPerWrite bool) overwriteDeleteReopenResult {
+	t.Helper()
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir:                dir,
+		IndexOuterLeafMode: mode,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold:              1,
+			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes:     4 << 10,
+			OuterLeafBlockRestartInterval: 16,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	setValue := func(key, value []byte) error {
+		if syncPerWrite {
+			return db.SetSync(key, value)
+		}
+		return db.Set(key, value)
+	}
+	deleteKey := func(key []byte) error {
+		if syncPerWrite {
+			return db.DeleteSync(key)
+		}
+		return db.Delete(key)
+	}
+
+	keyMain := []byte("k-main")
+	keyDelete := []byte("k-delete")
+	keyStable := []byte("k-stable")
+	mainV1 := bytes.Repeat([]byte("m"), 4096)
+	mainV2 := bytes.Repeat([]byte("n"), 4096)
+	deleteV1 := bytes.Repeat([]byte("d"), 4096)
+	stableV := bytes.Repeat([]byte("s"), 4096)
+
+	if err := setValue(keyMain, mainV1); err != nil {
+		_ = db.Close()
+		t.Fatalf("set keyMain v1: %v", err)
+	}
+	if err := setValue(keyDelete, deleteV1); err != nil {
+		_ = db.Close()
+		t.Fatalf("set keyDelete v1: %v", err)
+	}
+	if err := setValue(keyStable, stableV); err != nil {
+		_ = db.Close()
+		t.Fatalf("set keyStable: %v", err)
+	}
+
+	if err := setValue(keyMain, mainV2); err != nil {
+		_ = db.Close()
+		t.Fatalf("overwrite keyMain: %v", err)
+	}
+	if err := deleteKey(keyDelete); err != nil {
+		_ = db.Close()
+		t.Fatalf("delete keyDelete: %v", err)
+	}
+
+	if got, err := db.Get(keyMain); err != nil || !bytes.Equal(got, mainV2) {
+		_ = db.Close()
+		t.Fatalf("post-overwrite keyMain mismatch err=%v", err)
+	}
+	if got, err := db.Get(keyDelete); err != nil || got != nil {
+		_ = db.Close()
+		t.Fatalf("post-delete keyDelete got=%v err=%v, want nil,nil", got, err)
+	}
+
+	if !syncPerWrite {
+		if err := db.Checkpoint(); err != nil {
+			_ = db.Close()
+			t.Fatalf("checkpoint: %v", err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	gotMain, err := reopen.Get(keyMain)
+	if err != nil {
+		t.Fatalf("reopen Get(keyMain): %v", err)
+	}
+	gotDelete, err := reopen.Get(keyDelete)
+	if err != nil {
+		t.Fatalf("reopen Get(keyDelete): %v", err)
+	}
+	gotStable, err := reopen.Get(keyStable)
+	if err != nil {
+		t.Fatalf("reopen Get(keyStable): %v", err)
+	}
+	if !bytes.Equal(gotMain, mainV2) {
+		t.Fatalf("reopen keyMain mismatch: got=%d want=%d", len(gotMain), len(mainV2))
+	}
+	if gotDelete != nil {
+		t.Fatalf("reopen keyDelete expected nil, got len=%d", len(gotDelete))
+	}
+	if !bytes.Equal(gotStable, stableV) {
+		t.Fatalf("reopen keyStable mismatch: got=%d want=%d", len(gotStable), len(stableV))
+	}
+
+	snapAfter := reopen.AcquireSnapshot()
+	if snapAfter == nil {
+		t.Fatalf("snapshot after reopen: nil")
+	}
+	entry, err := snapAfter.GetEntry(keyMain)
+	if err != nil {
+		_ = snapAfter.Close()
+		t.Fatalf("snapshot GetEntry(keyMain): %v", err)
+	}
+	if entry.Flags&node.FlagPointer == 0 {
+		_ = snapAfter.Close()
+		t.Fatalf("expected pointer-backed keyMain after reopen, flags=%08b", entry.Flags)
+	}
+	if _, err := snapAfter.GetEntry(keyDelete); !errors.Is(err, treedb.ErrKeyNotFound) {
+		_ = snapAfter.Close()
+		t.Fatalf("snapshot GetEntry(keyDelete) err=%v, want ErrKeyNotFound", err)
+	}
+	if err := snapAfter.Close(); err != nil {
+		t.Fatalf("snapshot close after reopen: %v", err)
+	}
+
+	return overwriteDeleteReopenResult{
+		mainValue:    gotMain,
+		stableValue:  gotStable,
+		deletedValue: gotDelete,
+		mainFlags:    entry.Flags,
+	}
+}
+
+func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_ReopenParity(t *testing.T) {
+	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, false)
+	if got.mainFlags&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer-backed keyMain in v1_leaflog checkpoint flow, flags=%08b", got.mainFlags)
+	}
+}
+
+func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLog_OverwriteDelete_ReopenParity(t *testing.T) {
+	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, true)
+	if got.mainFlags&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer-backed keyMain in v1_leaflog writesync flow, flags=%08b", got.mainFlags)
+	}
+}
+
+func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_ParityWithV1(t *testing.T) {
+	v1 := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, false)
+	v1LeafLog := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, false)
+	if !bytes.Equal(v1.mainValue, v1LeafLog.mainValue) {
+		t.Fatalf("main key parity mismatch: v1=%dB v1_leaflog=%dB", len(v1.mainValue), len(v1LeafLog.mainValue))
+	}
+	if !bytes.Equal(v1.stableValue, v1LeafLog.stableValue) {
+		t.Fatalf("stable key parity mismatch: v1=%dB v1_leaflog=%dB", len(v1.stableValue), len(v1LeafLog.stableValue))
+	}
+	if v1.deletedValue != nil || v1LeafLog.deletedValue != nil {
+		t.Fatalf("deleted key parity mismatch: v1=%v v1_leaflog=%v", v1.deletedValue, v1LeafLog.deletedValue)
+	}
+}
+
+func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLog_OverwriteDelete_ParityWithV1(t *testing.T) {
+	v1 := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, true)
+	v1LeafLog := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, true)
+	if !bytes.Equal(v1.mainValue, v1LeafLog.mainValue) {
+		t.Fatalf("main key parity mismatch (writesync): v1=%dB v1_leaflog=%dB", len(v1.mainValue), len(v1LeafLog.mainValue))
+	}
+	if !bytes.Equal(v1.stableValue, v1LeafLog.stableValue) {
+		t.Fatalf("stable key parity mismatch (writesync): v1=%dB v1_leaflog=%dB", len(v1.stableValue), len(v1LeafLog.stableValue))
+	}
+	if v1.deletedValue != nil || v1LeafLog.deletedValue != nil {
+		t.Fatalf("deleted key parity mismatch (writesync): v1=%v v1_leaflog=%v", v1.deletedValue, v1LeafLog.deletedValue)
+	}
+}
+
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
