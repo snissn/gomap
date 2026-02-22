@@ -601,9 +601,36 @@ func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []
 	m.mu.Unlock()
 }
 
+func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
+	if !m.ordered || m.count == 0 {
+		return nil
+	}
+	active := m.entries[:m.count]
+	idx := sort.Search(len(active), func(i int) bool {
+		return bytes.Compare(appendOnlyEntryKey(&active[i]), key) >= 0
+	})
+	if idx >= len(active) {
+		return nil
+	}
+	ent := &active[idx]
+	if !bytes.Equal(appendOnlyEntryKey(ent), key) {
+		return nil
+	}
+	return ent
+}
+
 func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if ent := m.orderedLookupEntryLocked(key); ent != nil {
+		if ent.flags&node.FlagTombstone != 0 {
+			return nil, true, true
+		}
+		return ent.value, false, true
+	}
+	if m.ordered {
+		return nil, false, false
+	}
 	if !m.ordered && !m.latestDirty {
 		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
@@ -643,6 +670,12 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if ent := m.orderedLookupEntryLocked(key); ent != nil {
+		return ent.value, ent.ptr, ent.flags, true
+	}
+	if m.ordered {
+		return nil, page.ValuePtr{}, 0, false
+	}
 	if !m.ordered && !m.latestDirty {
 		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
