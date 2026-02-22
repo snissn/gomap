@@ -120,6 +120,34 @@ func ValuePtrMarkFenceOuter(ptr ValuePtr) ValuePtr {
 	return ptr
 }
 
+// ValuePtrMarkFenceOuterCollapsed marks a pointer as an outer-leaf fence block
+// anchor for collapsed fence storage.
+//
+// For grouped pointers this sets the legacy grouped fence marker bit so readers
+// and iterators can classify the pointer as fence-carrying. This helper is only
+// safe when the pointer is emitted as a dedicated fence anchor key (not per-key
+// grouped pointers).
+func ValuePtrMarkFenceOuterCollapsed(ptr ValuePtr) ValuePtr {
+	if ValuePtrIsGrouped(ptr) {
+		ptr.Length |= valuePtrFenceOuterGroupedMask
+		return ptr
+	}
+	return ValuePtrMarkFenceOuter(ptr)
+}
+
+// ValuePtrClearFenceOuter clears outer-leaf fence marker bits.
+//
+// This preserves grouped/non-grouped identity and pointer sub-index data while
+// normalizing pointers for exact (non-fence fallback) storage.
+func ValuePtrClearFenceOuter(ptr ValuePtr) ValuePtr {
+	if ValuePtrIsGrouped(ptr) {
+		ptr.Length &^= valuePtrFenceOuterGroupedMask
+		return ptr
+	}
+	ptr.Length &^= valuePtrFenceOuterMask
+	return ptr
+}
+
 // ValuePtrMarkCompressed sets the compression flag on a record length.
 func ValuePtrMarkCompressed(length uint32) uint32 {
 	return length | valuePtrCompressedMask

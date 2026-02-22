@@ -13,6 +13,11 @@ import (
 
 var ErrKeyNotFound = errors.New("key not found")
 
+// Global fence fallback scans can become quadratic under large missing-key
+// sweeps. Limit probe depth so miss-heavy workloads stay bounded while still
+// covering nearby cross-leaf anchors.
+const fenceGlobalFallbackScanLimit = 32
+
 func compareTreeKey(a, b []byte) int {
 	if len(a) == 8 && len(b) == 8 {
 		av := binary.BigEndian.Uint64(a)
@@ -171,6 +176,13 @@ func keyAwarePointerReadsEnabled(sr SlabReader) bool {
 func fencePointerLookupsEnabled(sr SlabReader) bool {
 	if gate, ok := sr.(slabFenceLookupMode); ok {
 		return gate.FenceLookupEnabled()
+	}
+	return true
+}
+
+func (t *Tree) fencePointerLikelyBlock(ptr page.ValuePtr) bool {
+	if t != nil && t.slabFencePtrCls != nil {
+		return t.slabFencePtrCls.FencePointerLikelyBlock(ptr)
 	}
 	return true
 }
@@ -463,6 +475,224 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 	return node.LeafEntry{}, errors.New("tree too deep")
 }
 
+// GetEntryExact returns only exact persisted leaf entries for key.
+//
+// Unlike GetEntry, this method does not perform fence-pointer fallback on leaf
+// misses. Callers that need to distinguish exact entries from logical
+// fence-resolved keys should use this API.
+func (t *Tree) GetEntryExact(key []byte) (node.LeafEntry, error) {
+	currID := t.rootPageID
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
+	}
+
+	for depth := 0; depth < 50; depth++ {
+		data, err := t.pager.Get(currID)
+		if err != nil {
+			return node.LeafEntry{}, err
+		}
+
+		n := node.NewNodeView(data)
+		if verifyAlways || !t.pager.IsVerified(currID) {
+			if !n.VerifyChecksum() {
+				return node.LeafEntry{}, fmt.Errorf("checksum mismatch on page %d", currID)
+			}
+			if !verifyAlways {
+				t.pager.MarkVerified(currID)
+			}
+		}
+
+		switch n.Type() {
+		case page.PageTypeInternal:
+			if depth == 0 {
+				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+					return node.LeafEntry{}, err
+				} else if ok {
+					if len(low) > 0 && compareTreeKey(key, low) < 0 {
+						return node.LeafEntry{}, ErrKeyNotFound
+					}
+					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
+						return node.LeafEntry{}, ErrKeyNotFound
+					}
+				}
+			}
+			childID, _, err := n.SearchInternalChildID(key)
+			if err != nil {
+				return node.LeafEntry{}, err
+			}
+			currID = childID
+
+		case page.PageTypeLeaf:
+			idx, found, err := n.SearchLeaf(key)
+			if err != nil {
+				return node.LeafEntry{}, err
+			}
+			if !found {
+				return node.LeafEntry{}, ErrKeyNotFound
+			}
+
+			k, v, ptr, flags, err := n.GetLeafEntryView(idx)
+			if err != nil {
+				return node.LeafEntry{}, err
+			}
+
+			return node.LeafEntry{
+				Key:      k,
+				Value:    v,
+				ValuePtr: ptr,
+				Flags:    flags,
+			}, nil
+
+		default:
+			return node.LeafEntry{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+		}
+	}
+	return node.LeafEntry{}, errors.New("tree too deep")
+}
+
+// LookupFencePointerSource returns the predecessor fence pointer record that
+// currently resolves key when key has no exact leaf entry.
+//
+// The boolean return is true only when a fence pointer source is found.
+func (t *Tree) LookupFencePointerSource(key []byte) (page.ValuePtr, bool, error) {
+	currID := t.rootPageID
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
+	}
+
+	for depth := 0; depth < 50; depth++ {
+		data, err := t.pager.Get(currID)
+		if err != nil {
+			return page.ValuePtr{}, false, err
+		}
+
+		n := node.NewNodeView(data)
+		if verifyAlways || !t.pager.IsVerified(currID) {
+			if !n.VerifyChecksum() {
+				return page.ValuePtr{}, false, fmt.Errorf("checksum mismatch on page %d", currID)
+			}
+			if !verifyAlways {
+				t.pager.MarkVerified(currID)
+			}
+		}
+
+		switch n.Type() {
+		case page.PageTypeInternal:
+			if depth == 0 {
+				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+					return page.ValuePtr{}, false, err
+				} else if ok {
+					if len(low) > 0 && compareTreeKey(key, low) < 0 {
+						return page.ValuePtr{}, false, nil
+					}
+					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
+						return page.ValuePtr{}, false, nil
+					}
+				}
+			}
+			childID, _, err := n.SearchInternalChildID(key)
+			if err != nil {
+				return page.ValuePtr{}, false, err
+			}
+			currID = childID
+
+		case page.PageTypeLeaf:
+			idx, found, err := n.SearchLeaf(key)
+			if err != nil {
+				return page.ValuePtr{}, false, err
+			}
+			if found {
+				return page.ValuePtr{}, false, nil
+			}
+			ptr, ok, err := t.lookupFencePointerSourcePtr(&n, idx, key)
+			if err != nil {
+				return page.ValuePtr{}, false, err
+			}
+			if ok {
+				return ptr, true, nil
+			}
+			return t.lookupFencePointerSourceGlobalPtr(key)
+
+		default:
+			return page.ValuePtr{}, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+		}
+	}
+	return page.ValuePtr{}, false, errors.New("tree too deep")
+}
+
+// LookupFencePointerOrigin returns the predecessor key and pointer record that
+// currently resolve key when key has no exact leaf entry.
+//
+// The boolean return is true only when a fence pointer source is found.
+func (t *Tree) LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool, error) {
+	currID := t.rootPageID
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
+	}
+
+	for depth := 0; depth < 50; depth++ {
+		data, err := t.pager.Get(currID)
+		if err != nil {
+			return nil, page.ValuePtr{}, false, err
+		}
+
+		n := node.NewNodeView(data)
+		if verifyAlways || !t.pager.IsVerified(currID) {
+			if !n.VerifyChecksum() {
+				return nil, page.ValuePtr{}, false, fmt.Errorf("checksum mismatch on page %d", currID)
+			}
+			if !verifyAlways {
+				t.pager.MarkVerified(currID)
+			}
+		}
+
+		switch n.Type() {
+		case page.PageTypeInternal:
+			if depth == 0 {
+				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+					return nil, page.ValuePtr{}, false, err
+				} else if ok {
+					if len(low) > 0 && compareTreeKey(key, low) < 0 {
+						return nil, page.ValuePtr{}, false, nil
+					}
+					if len(high) > 0 && compareTreeKey(key, high) >= 0 {
+						return nil, page.ValuePtr{}, false, nil
+					}
+				}
+			}
+			childID, _, err := n.SearchInternalChildID(key)
+			if err != nil {
+				return nil, page.ValuePtr{}, false, err
+			}
+			currID = childID
+
+		case page.PageTypeLeaf:
+			idx, found, err := n.SearchLeaf(key)
+			if err != nil {
+				return nil, page.ValuePtr{}, false, err
+			}
+			if found {
+				return nil, page.ValuePtr{}, false, nil
+			}
+			srcKey, ptr, ok, err := t.lookupFencePointerSource(&n, idx, key)
+			if err != nil {
+				return nil, page.ValuePtr{}, false, err
+			}
+			if ok {
+				return srcKey, ptr, true, nil
+			}
+			return t.lookupFencePointerSourceGlobal(key)
+
+		default:
+			return nil, page.ValuePtr{}, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+		}
+	}
+	return nil, page.ValuePtr{}, false, errors.New("tree too deep")
+}
+
 func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byte, bool, error) {
 	if !t.fenceLookupMode || n == nil || idx == 0 {
 		return nil, false, nil
@@ -475,6 +705,9 @@ func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byt
 			return nil, false, err
 		}
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		if !t.fencePointerLikelyBlock(ptr) {
 			continue
 		}
 		if t.slabFenceReader != nil {
@@ -502,6 +735,292 @@ func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byt
 	return nil, false, nil
 }
 
+func (t *Tree) lookupFencePointerSource(n *node.Node, idx uint16, key []byte) ([]byte, page.ValuePtr, bool, error) {
+	if !t.fenceLookupMode || n == nil || idx == 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	for scan := idx; scan > 0; scan-- {
+		_, ptr, flags, err := n.GetLeafValueView(scan - 1)
+		if err != nil {
+			return nil, page.ValuePtr{}, false, err
+		}
+		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		if !t.fencePointerLikelyBlock(ptr) {
+			continue
+		}
+		if t.slabFenceReader != nil {
+			_, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
+			if err != nil {
+				return nil, page.ValuePtr{}, false, err
+			}
+			if found {
+				srcKey, _, _, _, err := n.GetLeafEntryView(scan - 1)
+				if err != nil {
+					return nil, page.ValuePtr{}, false, err
+				}
+				return append([]byte(nil), srcKey...), ptr, true, nil
+			}
+			continue
+		}
+		if t.slabFenceAppender != nil {
+			_, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, nil)
+			if err != nil {
+				return nil, page.ValuePtr{}, false, err
+			}
+			if found {
+				srcKey, _, _, _, err := n.GetLeafEntryView(scan - 1)
+				if err != nil {
+					return nil, page.ValuePtr{}, false, err
+				}
+				return append([]byte(nil), srcKey...), ptr, true, nil
+			}
+			continue
+		}
+		return nil, page.ValuePtr{}, false, nil
+	}
+	return nil, page.ValuePtr{}, false, nil
+}
+
+func (t *Tree) lookupFencePointerSourcePtr(n *node.Node, idx uint16, key []byte) (page.ValuePtr, bool, error) {
+	if !t.fenceLookupMode || n == nil || idx == 0 {
+		return page.ValuePtr{}, false, nil
+	}
+	for scan := idx; scan > 0; scan-- {
+		_, ptr, flags, err := n.GetLeafValueView(scan - 1)
+		if err != nil {
+			return page.ValuePtr{}, false, err
+		}
+		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		if !t.fencePointerLikelyBlock(ptr) {
+			continue
+		}
+		if t.slabFenceReader != nil {
+			_, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
+			if err != nil {
+				return page.ValuePtr{}, false, err
+			}
+			if found {
+				return ptr, true, nil
+			}
+			continue
+		}
+		if t.slabFenceAppender != nil {
+			_, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, nil)
+			if err != nil {
+				return page.ValuePtr{}, false, err
+			}
+			if found {
+				return ptr, true, nil
+			}
+			continue
+		}
+		return page.ValuePtr{}, false, nil
+	}
+	return page.ValuePtr{}, false, nil
+}
+
+func (t *Tree) lookupFencePointerSourceGlobal(key []byte) ([]byte, page.ValuePtr, bool, error) {
+	if !t.fenceLookupMode {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
+	defer func() { _ = it.Close() }()
+	scanned := 0
+	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
+		k, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer != 0 && flags&node.FlagTombstone == 0 {
+			if t.fencePointerLikelyBlock(ptr) {
+				if t.slabFenceReader != nil {
+					_, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
+					if err != nil {
+						return nil, page.ValuePtr{}, false, err
+					}
+					if found {
+						return append([]byte(nil), k...), ptr, true, nil
+					}
+				} else if t.slabFenceAppender != nil {
+					_, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, nil)
+					if err != nil {
+						return nil, page.ValuePtr{}, false, err
+					}
+					if found {
+						return append([]byte(nil), k...), ptr, true, nil
+					}
+				} else {
+					return nil, page.ValuePtr{}, false, nil
+				}
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	return nil, page.ValuePtr{}, false, nil
+}
+
+func (t *Tree) lookupFencePointerSourceGlobalPtr(key []byte) (page.ValuePtr, bool, error) {
+	if !t.fenceLookupMode {
+		return page.ValuePtr{}, false, nil
+	}
+	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
+	defer func() { _ = it.Close() }()
+	scanned := 0
+	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer != 0 && flags&node.FlagTombstone == 0 {
+			if !t.fencePointerLikelyBlock(ptr) {
+				it.Next()
+				continue
+			}
+			if t.slabFenceReader != nil {
+				_, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
+				if err != nil {
+					return page.ValuePtr{}, false, err
+				}
+				if found {
+					return ptr, true, nil
+				}
+			} else if t.slabFenceAppender != nil {
+				_, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, nil)
+				if err != nil {
+					return page.ValuePtr{}, false, err
+				}
+				if found {
+					return ptr, true, nil
+				}
+			} else {
+				return page.ValuePtr{}, false, nil
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return page.ValuePtr{}, false, err
+	}
+	return page.ValuePtr{}, false, nil
+}
+
+func (t *Tree) lookupFenceValueViewGlobal(key []byte) ([]byte, bool, error) {
+	if !t.fenceLookupMode {
+		return nil, false, nil
+	}
+	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
+	defer func() { _ = it.Close() }()
+	scanned := 0
+	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer != 0 && flags&node.FlagTombstone == 0 {
+			if !t.fencePointerLikelyBlock(ptr) {
+				it.Next()
+				continue
+			}
+			if t.slabFenceReader != nil {
+				val, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
+				if err != nil {
+					return nil, false, err
+				}
+				if found {
+					return val, true, nil
+				}
+			} else if t.slabFenceAppender != nil {
+				val, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, nil)
+				if err != nil {
+					return nil, false, err
+				}
+				if found {
+					return val, true, nil
+				}
+			} else {
+				return nil, false, nil
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, false, err
+	}
+	return nil, false, nil
+}
+
+func (t *Tree) lookupFenceValueViewAppendGlobal(key []byte, dst []byte) ([]byte, bool, error) {
+	if !t.fenceLookupMode {
+		return dst, false, nil
+	}
+	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
+	defer func() { _ = it.Close() }()
+	scanned := 0
+	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer != 0 && flags&node.FlagTombstone == 0 {
+			if !t.fencePointerLikelyBlock(ptr) {
+				it.Next()
+				continue
+			}
+			if t.slabFenceAppender != nil {
+				oldLen := len(dst)
+				tail, found, err := t.slabFenceAppender.ReadUnsafeFenceAppendForKey(ptr, key, dst[oldLen:oldLen])
+				if err != nil {
+					return dst, false, err
+				}
+				if !found {
+					it.Next()
+					continue
+				}
+				if oldLen == 0 {
+					return tail, true, nil
+				}
+				if len(tail) == 0 {
+					return dst[:oldLen], true, nil
+				}
+				if cap(dst) > oldLen {
+					base := dst[:cap(dst):cap(dst)]
+					if &tail[0] == &base[oldLen] {
+						return dst[:oldLen+len(tail)], true, nil
+					}
+				}
+				return append(dst[:oldLen], tail...), true, nil
+			}
+			if t.slabFenceReader != nil {
+				val, found, err := t.slabFenceReader.ReadUnsafeFenceForKey(ptr, key)
+				if err != nil {
+					return dst, false, err
+				}
+				if found {
+					return append(dst, val...), true, nil
+				}
+			} else {
+				return dst, false, nil
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return dst, false, err
+	}
+	return dst, false, nil
+}
+
 func (t *Tree) lookupFenceValueViewAppend(n *node.Node, idx uint16, key []byte, dst []byte) ([]byte, bool, error) {
 	if !t.fenceLookupMode || n == nil || idx == 0 {
 		return nil, false, nil
@@ -512,6 +1031,9 @@ func (t *Tree) lookupFenceValueViewAppend(n *node.Node, idx uint16, key []byte, 
 			return nil, false, err
 		}
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		if !t.fencePointerLikelyBlock(ptr) {
 			continue
 		}
 		if t.slabFenceAppender != nil {
@@ -562,6 +1084,9 @@ func (t *Tree) lookupFenceHasKey(n *node.Node, idx uint16, key []byte) (found bo
 			return false, false, err
 		}
 		if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+			continue
+		}
+		if !t.fencePointerLikelyBlock(ptr) {
 			continue
 		}
 		if t.slabFenceSeekL != nil {
@@ -695,11 +1220,20 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						// Value already appended to dst by fence append path.
 						return val, page.ValuePtr{}, 0, true, nil
 					}
+					if val, ok, err := t.lookupFenceValueViewAppendGlobal(key, dst); err != nil {
+						return nil, page.ValuePtr{}, 0, false, err
+					} else if ok {
+						return val, page.ValuePtr{}, 0, true, nil
+					}
 				} else if val, ok, err := t.lookupFenceValueView(&n, idx, key); err != nil {
 					return nil, page.ValuePtr{}, 0, false, err
 				} else if ok {
 					// Fence-only mode resolves user keys from outer blocks.
 					// Return as inline to avoid a second pointer lookup in callers.
+					return val, page.ValuePtr{}, 0, false, nil
+				} else if val, ok, err := t.lookupFenceValueViewGlobal(key); err != nil {
+					return nil, page.ValuePtr{}, 0, false, err
+				} else if ok {
 					return val, page.ValuePtr{}, 0, false, nil
 				}
 				return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
@@ -885,6 +1419,11 @@ func (t *Tree) Has(key []byte) (bool, error) {
 				return false, err
 			} else if ok {
 				return fenceFound, nil
+			}
+			if _, ok, err := t.lookupFencePointerSourceGlobalPtr(key); err != nil {
+				return false, err
+			} else if ok {
+				return true, nil
 			}
 			return false, nil
 		default:

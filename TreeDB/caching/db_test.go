@@ -1111,8 +1111,8 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries_WALOffDeferred(t *testi
 	if leafEntries <= 0 {
 		t.Fatalf("expected at least one persisted entry")
 	}
-	if leafEntries != totalKeys {
-		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected deferred fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 
 }
@@ -1205,8 +1205,8 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 	if leafEntries <= 0 {
 		t.Fatalf("expected at least one persisted entry")
 	}
-	if leafEntries != totalKeys {
-		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected deferred fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 
 	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
@@ -1218,6 +1218,22 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 		if !bytes.Equal(got, valueFor(i)) {
 			t.Fatalf("backend value mismatch for %s", key)
 		}
+	}
+
+	it, err := backend.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("backend Iterator: %v", err)
+	}
+	count := 0
+	for it.Valid() {
+		count++
+		it.Next()
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("backend Iterator close: %v", err)
+	}
+	if count != totalKeys {
+		t.Fatalf("backend iterator count=%d want=%d", count, totalKeys)
 	}
 }
 
@@ -1398,8 +1414,8 @@ func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
 	if leafEntries <= 0 {
 		t.Fatalf("expected persisted entries")
 	}
-	if leafEntries != totalKeys {
-		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected deferred fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 }
 
@@ -1835,8 +1851,8 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroupSharded(t *testin
 	if leafEntries <= 0 {
 		t.Fatalf("expected at least one persisted entry")
 	}
-	if leafEntries != totalKeys {
-		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected deferred fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 
 	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
@@ -1913,8 +1929,8 @@ func TestCachingDB_FlushFenceModeDeferredBatchWritesRegroup(t *testing.T) {
 	if leafEntries <= 0 {
 		t.Fatalf("expected at least one persisted entry")
 	}
-	if leafEntries != totalKeys {
-		t.Fatalf("expected one persisted entry per key in deferred fence mode, got %d (keys=%d)", leafEntries, totalKeys)
+	if leafEntries >= totalKeys {
+		t.Fatalf("expected deferred fence collapse to reduce persisted entries, got %d (keys=%d)", leafEntries, totalKeys)
 	}
 
 	for _, i := range []int{0, totalKeys / 2, totalKeys - 1} {
@@ -2021,6 +2037,463 @@ func TestCachingDB_FlushFenceModeDeferredBatchWritesImmediateRead(t *testing.T) 
 	}
 	if count != totalKeys {
 		t.Fatalf("iterator count=%d want=%d", count, totalKeys)
+	}
+}
+
+func TestCachingDB_FlushFenceModeAnchorPromotionPreservesSiblingsAcrossCheckpoints(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	const totalKeys = 64
+	keyFor := func(i int) []byte { return []byte(fmt.Sprintf("k%04d", i)) }
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i + 1)}, 256) }
+	for i := 0; i < totalKeys; i++ {
+		if err := cache.Set(keyFor(i), valueFor(i)); err != nil {
+			t.Fatalf("Set(%d): %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(initial): %v", err)
+	}
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	anchorEntry, err := snap.GetEntry(keyFor(0))
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("GetEntry(anchor): %v", err)
+	}
+	if anchorEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected initial anchor pointer, flags=%#x ptr=%+v", anchorEntry.Flags, anchorEntry.ValuePtr)
+	}
+	if cache.valueLogReader == nil {
+		t.Fatalf("missing value-log reader")
+	}
+	raw, err := cache.valueLogReader.Read(anchorEntry.ValuePtr)
+	if err != nil {
+		t.Fatalf("read anchor ptr: %v", err)
+	}
+	keys, err := outerleaf.DecodeKeysWithVerify(raw, true)
+	if err != nil {
+		t.Fatalf("decode anchor keys: %v", err)
+	}
+	if len(keys) <= 1 {
+		t.Fatalf("expected anchor pointer to cover grouped keys, got %d", len(keys))
+	}
+
+	if err := cache.Delete(keyFor(0)); err != nil {
+		t.Fatalf("Delete(anchor): %v", err)
+	}
+	if err := cache.Delete(keyFor(1)); err != nil {
+		t.Fatalf("Delete(next): %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(delete-anchor): %v", err)
+	}
+
+	for _, i := range []int{0, 1} {
+		got, err := backend.Get(keyFor(i))
+		if err != nil {
+			t.Fatalf("backend Get(%d): %v", i, err)
+		}
+		if got != nil {
+			t.Fatalf("expected key %d to be deleted", i)
+		}
+	}
+	for _, i := range []int{2, totalKeys / 2, totalKeys - 1} {
+		got, err := backend.Get(keyFor(i))
+		if err != nil {
+			t.Fatalf("backend Get(%d): %v", i, err)
+		}
+		if !bytes.Equal(got, valueFor(i)) {
+			t.Fatalf("backend value mismatch after anchor delete for key %d", i)
+		}
+	}
+
+	newAnchorValue := bytes.Repeat([]byte("z"), 320)
+	if err := cache.Set(keyFor(2), newAnchorValue); err != nil {
+		t.Fatalf("Set(replace-promoted-anchor): %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(replace-promoted-anchor): %v", err)
+	}
+
+	got, err := backend.Get(keyFor(2))
+	if err != nil {
+		t.Fatalf("backend Get(new-anchor): %v", err)
+	}
+	if !bytes.Equal(got, newAnchorValue) {
+		t.Fatalf("new anchor value mismatch")
+	}
+	for _, i := range []int{3, totalKeys / 2, totalKeys - 1} {
+		got, err := backend.Get(keyFor(i))
+		if err != nil {
+			t.Fatalf("backend Get(%d): %v", i, err)
+		}
+		if !bytes.Equal(got, valueFor(i)) {
+			t.Fatalf("backend value mismatch after anchor overwrite for key %d", i)
+		}
+	}
+}
+
+func TestCachingDB_FlushFenceModeDeleteFallbackOnlyKeyDurable(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	cacheClosed := false
+	t.Cleanup(func() {
+		if !cacheClosed {
+			_ = cache.Close()
+		}
+	})
+
+	keyFor := func(i int) []byte { return []byte(fmt.Sprintf("k%04d", i)) }
+	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i + 1)}, 256) }
+	const totalKeys = 64
+	for i := 0; i < totalKeys; i++ {
+		if err := cache.Set(keyFor(i), valueFor(i)); err != nil {
+			t.Fatalf("Set(%d): %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(initial): %v", err)
+	}
+
+	// In collapsed fence mode, non-anchor siblings should resolve by fallback,
+	// not exact index entries.
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	_, err = snap.GetEntryExact(keyFor(1))
+	_ = snap.Close()
+	if err == nil {
+		t.Fatalf("expected key1 to be fallback-only (no exact entry)")
+	}
+	got, err := backend.Get(keyFor(1))
+	if err != nil {
+		t.Fatalf("backend Get(key1 before delete): %v", err)
+	}
+	if !bytes.Equal(got, valueFor(1)) {
+		t.Fatalf("expected key1 to resolve by fence fallback before delete")
+	}
+
+	if err := cache.Delete(keyFor(1)); err != nil {
+		t.Fatalf("Delete(key1): %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(delete key1): %v", err)
+	}
+
+	for _, i := range []int{0, 2, totalKeys - 1} {
+		got, err := backend.Get(keyFor(i))
+		if err != nil {
+			t.Fatalf("backend Get(key%d after delete): %v", i, err)
+		}
+		if !bytes.Equal(got, valueFor(i)) {
+			t.Fatalf("backend value mismatch for key%d after delete", i)
+		}
+	}
+	got, err = backend.Get(keyFor(1))
+	if err != nil {
+		t.Fatalf("backend Get(key1 after delete): %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected key1 deleted after checkpoint")
+	}
+
+	if err := cache.Close(); err != nil {
+		t.Fatalf("cache close: %v", err)
+	}
+	cacheClosed = true
+
+	reopened, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("reopen backend: %v", err)
+	}
+	defer reopened.Close()
+
+	for _, i := range []int{0, 2, totalKeys - 1} {
+		got, err := reopened.Get(keyFor(i))
+		if err != nil {
+			t.Fatalf("reopened Get(key%d): %v", i, err)
+		}
+		if !bytes.Equal(got, valueFor(i)) {
+			t.Fatalf("reopened value mismatch for key%d", i)
+		}
+	}
+	got, err = reopened.Get(keyFor(1))
+	if err != nil {
+		t.Fatalf("reopened Get(key1): %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected key1 deleted after reopen")
+	}
+}
+
+func TestCachingDB_FlushFenceModeCollapsedGroupOverwritesExistingExactSibling(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	keyFor := func(i int) []byte { return []byte(fmt.Sprintf("k%04d", i)) }
+	oldValue := bytes.Repeat([]byte("o"), 256)
+	if err := cache.Set(keyFor(1), oldValue); err != nil {
+		t.Fatalf("Set(seed sibling): %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(seed sibling): %v", err)
+	}
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("seed snapshot nil")
+	}
+	seedEntry, err := snap.GetEntryExact(keyFor(1))
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("GetEntryExact(seed sibling): %v", err)
+	}
+	if seedEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected seeded sibling exact pointer, flags=%#x", seedEntry.Flags)
+	}
+
+	newValueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i + 11)}, 256) }
+	b := cache.NewBatch()
+	for i := 0; i < 16; i++ {
+		if err := b.Set(keyFor(i), newValueFor(i)); err != nil {
+			_ = b.Close()
+			t.Fatalf("Set(%d): %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	_ = b.Close()
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(overwrite group): %v", err)
+	}
+
+	snap = backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("overwrite snapshot nil")
+	}
+	overwriteEntry, err := snap.GetEntryExact(keyFor(1))
+	_ = snap.Close()
+	if err != nil {
+		t.Fatalf("GetEntryExact(overwrite sibling): %v", err)
+	}
+	if overwriteEntry.Flags&node.FlagPointer == 0 {
+		t.Fatalf("expected overwritten sibling exact pointer, flags=%#x", overwriteEntry.Flags)
+	}
+
+	got, err := backend.Get(keyFor(1))
+	if err != nil {
+		t.Fatalf("backend Get(sibling): %v", err)
+	}
+	if !bytes.Equal(got, newValueFor(1)) {
+		t.Fatalf("expected sibling to be overwritten by collapsed group")
+	}
+}
+
+func TestCachingDB_FlushFenceModeAnchorPromotionSkipsKeysResolvedByNewerFence(t *testing.T) {
+	dir := t.TempDir()
+	backendOpts := db.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		ValueLog: db.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	}
+	backend, err := db.Open(backendOpts)
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	keyA := []byte("k0010")
+	keyB := []byte("k0020")
+	keyC := []byte("k0030")
+	keyD := []byte("k0040")
+	keyE := []byte("k0050")
+	value := func(tag string) []byte { return bytes.Repeat([]byte(tag), 128) }
+
+	// Older collapsed fence coverage: A,C,E.
+	for _, kv := range []struct {
+		k []byte
+		v []byte
+	}{
+		{keyA, value("a")},
+		{keyC, value("cold")},
+		{keyE, value("e")},
+	} {
+		if err := cache.Set(kv.k, kv.v); err != nil {
+			t.Fatalf("Set(old %q): %v", kv.k, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(old group): %v", err)
+	}
+
+	// Newer collapsed fence coverage: B,C,D.
+	newC := value("cnew")
+	for _, kv := range []struct {
+		k []byte
+		v []byte
+	}{
+		{keyB, value("b")},
+		{keyC, newC},
+		{keyD, value("d")},
+	} {
+		if err := cache.Set(kv.k, kv.v); err != nil {
+			t.Fatalf("Set(new %q): %v", kv.k, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(new group): %v", err)
+	}
+
+	gotC, err := backend.Get(keyC)
+	if err != nil {
+		t.Fatalf("backend Get(C before delete): %v", err)
+	}
+	if !bytes.Equal(gotC, newC) {
+		t.Fatalf("expected newer C value before delete")
+	}
+
+	// Deleting old anchor A must not promote old ptr to C and clobber newer B anchor coverage.
+	if err := cache.Delete(keyA); err != nil {
+		t.Fatalf("Delete(old anchor A): %v", err)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(delete A): %v", err)
+	}
+
+	gotC, err = backend.Get(keyC)
+	if err != nil {
+		t.Fatalf("backend Get(C after delete): %v", err)
+	}
+	if !bytes.Equal(gotC, newC) {
+		t.Fatalf("expected newer C value to survive old-anchor delete")
+	}
+
+	gotE, err := backend.Get(keyE)
+	if err != nil {
+		t.Fatalf("backend Get(E after delete): %v", err)
+	}
+	if !bytes.Equal(gotE, value("e")) {
+		t.Fatalf("expected old E sibling to remain reachable")
 	}
 }
 
