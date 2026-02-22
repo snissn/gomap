@@ -24,6 +24,8 @@ import (
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
+const outerLeafModeMaintenanceHelp = "Index outer-leaf mode for maintenance safety (required): v1|v2_blockptr|v2_fenceptr"
+
 const usageText = `Usage:
   treemap <command> <db-dir> [command options]
 
@@ -113,7 +115,7 @@ func runInfo(dir string, args []string) {
 	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *rw)
+	db := openTreeDB(dir, *rw, "")
 	defer closeTreeDB(db)
 
 	printStats(db.Stats())
@@ -387,7 +389,7 @@ func runStats(dir string, args []string) {
 	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *rw)
+	db := openTreeDB(dir, *rw, "")
 	defer closeTreeDB(db)
 	printStats(db.Stats())
 }
@@ -397,7 +399,7 @@ func runFrag(dir string, args []string) {
 	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *rw)
+	db := openTreeDB(dir, *rw, "")
 	defer closeTreeDB(db)
 	rep, err := db.FragmentationReport()
 	if err != nil {
@@ -415,7 +417,7 @@ func runVerify(dir string, args []string) {
 	report := fs.Bool("report", false, "Print stats and fragmentation report")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, *rw)
+	db := openTreeDB(dir, *rw, "")
 	defer closeTreeDB(db)
 
 	if *report {
@@ -451,13 +453,18 @@ func runVerify(dir string, args []string) {
 func runCompact(dir string, args []string) {
 	fs := flag.NewFlagSet("compact", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	outerLeafMode := fs.String("index-outer-leaf-mode", "", outerLeafModeMaintenanceHelp)
 	_ = fs.Parse(args)
 
 	if !*rw {
 		fatalf("compact requires -rw")
 	}
+	mode, err := resolveOuterLeafMode(*outerLeafMode, true)
+	if err != nil {
+		fatalf("compact: %v", err)
+	}
 
-	db := openTreeDB(dir, true)
+	db := openTreeDB(dir, true, mode)
 	defer closeTreeDB(db)
 
 	if err := db.CompactIndex(); err != nil {
@@ -469,13 +476,18 @@ func runCompact(dir string, args []string) {
 func runVacuum(dir string, args []string) {
 	fs := flag.NewFlagSet("vacuum", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	outerLeafMode := fs.String("index-outer-leaf-mode", "", outerLeafModeMaintenanceHelp)
 	_ = fs.Parse(args)
 
 	if !*rw {
 		fatalf("vacuum requires -rw")
 	}
+	mode, err := resolveOuterLeafMode(*outerLeafMode, true)
+	if err != nil {
+		fatalf("vacuum: %v", err)
+	}
 
-	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir}); err != nil {
+	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir, IndexOuterLeafMode: mode}); err != nil {
 		fatalf("VacuumIndexOffline error: %v", err)
 	}
 	fmt.Println("Index vacuum complete.")
@@ -485,13 +497,18 @@ func runVlogGC(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-gc", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
 	dryRun := fs.Bool("dry-run", false, "Report deletions without removing segments")
+	outerLeafMode := fs.String("index-outer-leaf-mode", "", outerLeafModeMaintenanceHelp)
 	_ = fs.Parse(args)
 
 	if !*rw {
 		fatalf("vlog-gc requires -rw")
 	}
+	outerMode, err := resolveOuterLeafMode(*outerLeafMode, true)
+	if err != nil {
+		fatalf("vlog-gc: %v", err)
+	}
 
-	db := openTreeDB(dir, true)
+	db := openTreeDB(dir, true, outerMode)
 	defer closeTreeDB(db)
 
 	stats, err := db.ValueLogGC(context.Background(), treedb.ValueLogGCOptions{DryRun: *dryRun})
@@ -521,13 +538,18 @@ func runVlogGC(dir string, args []string) {
 func runVlogRewrite(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-rewrite", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	outerLeafMode := fs.String("index-outer-leaf-mode", "", outerLeafModeMaintenanceHelp)
 	_ = fs.Parse(args)
 
 	if !*rw {
 		fatalf("vlog-rewrite requires -rw")
 	}
+	mode, err := resolveOuterLeafMode(*outerLeafMode, true)
+	if err != nil {
+		fatalf("vlog-rewrite: %v", err)
+	}
 
-	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: dir})
+	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: dir, IndexOuterLeafMode: mode})
 	if err != nil {
 		fatalf("ValueLogRewriteOffline error: %v", err)
 	}
@@ -557,7 +579,7 @@ func runGet(dir string, args []string) {
 		fatalf("invalid key: %v", err)
 	}
 
-	db := openTreeDB(dir, *rw)
+	db := openTreeDB(dir, *rw, "")
 	defer closeTreeDB(db)
 
 	val, err := db.Get(key)
@@ -591,7 +613,7 @@ func runKeys(dir string, args []string) {
 
 	startKey, endKey := parseRange(*start, *end, *prefix, *hexInput)
 
-	db := openTreeDB(dir, *rw)
+	db := openTreeDB(dir, *rw, "")
 	defer closeTreeDB(db)
 
 	it, err := openIterator(db, startKey, endKey, *reverse)
@@ -636,7 +658,7 @@ func runScan(dir string, args []string) {
 		fatalf("scan requires -allow-values to print values; use keys to dump keys only")
 	}
 
-	db := openTreeDB(dir, *rw)
+	db := openTreeDB(dir, *rw, "")
 	defer closeTreeDB(db)
 
 	it, err := openIterator(db, startKey, endKey, *reverse)
@@ -691,7 +713,7 @@ func runScanJSONL(dir string, args []string) {
 		fatalf("scan-jsonl requires -allow-values to print values; use keys to dump keys only")
 	}
 
-	db := openTreeDB(dir, *rw)
+	db := openTreeDB(dir, *rw, "")
 	defer closeTreeDB(db)
 
 	it, err := openIterator(db, startKey, endKey, *reverse)
@@ -711,7 +733,7 @@ func runImportJSONL(dir string, args []string) {
 	batchSize := fs.Int("batch", 1024, "Batch size for writes (0 or 1 disables batching)")
 	_ = fs.Parse(args)
 
-	db := openTreeDB(dir, true)
+	db := openTreeDB(dir, true, "")
 	defer closeTreeDB(db)
 
 	var reader io.Reader
@@ -930,10 +952,29 @@ func registerSignalCloser(fn func()) {
 	})
 }
 
-func openTreeDB(dir string, rw bool) *treedb.DB {
+func resolveOuterLeafMode(mode string, required bool) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(mode))
+	if normalized == "" {
+		if required {
+			return "", fmt.Errorf("missing -index-outer-leaf-mode (%s)", outerLeafModeMaintenanceHelp)
+		}
+		return "", nil
+	}
+	switch normalized {
+	case treedb.IndexOuterLeafModeV1, treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
+		return normalized, nil
+	default:
+		return "", fmt.Errorf("invalid -index-outer-leaf-mode %q (%s)", mode, outerLeafModeMaintenanceHelp)
+	}
+}
+
+func openTreeDB(dir string, rw bool, indexOuterLeafMode string) *treedb.DB {
 	opts := treedb.Options{Dir: dir}
 	if !rw {
 		opts.ReadOnly = true
+	}
+	if indexOuterLeafMode != "" {
+		opts.IndexOuterLeafMode = indexOuterLeafMode
 	}
 	db, err := treedb.Open(opts)
 	if err != nil {
