@@ -112,6 +112,19 @@ through `wal/` even when WAL is off.
 
 Details: `docs/TREEDB_WRITE_PATHS.md`.
 
+## Outer-Leaf Modes
+
+TreeDB supports four index outer-leaf modes:
+
+- `v1`: baseline exact-key index semantics.
+- `v1_leaflog`: exact-key semantics with outer-leaf payload envelope encoding in the value log.
+- `v2_blockptr`: exact-key index entries that can point to grouped outer-leaf payload blocks.
+- `v2_fenceptr`: fence-key routing mode (smallest index footprint, predecessor-probe lookup model).
+
+If unset (`""`), `IndexOuterLeafMode` defaults to `v2_fenceptr`.
+
+Canonical mode semantics and invariants: `TreeDB/docs/spec/outer-leaf-modes.md`.
+
 ## Durability & Safety Notes
 
 - Safe defaults keep WAL, fsync, and read checksums enabled; relax safety knobs via `Options.Durability` and `Options.ValueLog.ReadIntegrity`.
