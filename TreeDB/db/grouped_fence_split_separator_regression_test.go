@@ -102,7 +102,10 @@ func TestGroupedFencePointGetAcrossSplitUsesFullSeparator(t *testing.T) {
 			t.Fatalf("AppendFrame: %v", err)
 		}
 		for i := range ptrs {
-			anchors = append(anchors, anchorPtr{key: keys[i], ptr: ptrs[i]})
+			anchors = append(anchors, anchorPtr{
+				key: keys[i],
+				ptr: page.ValuePtrMarkFenceOuterCollapsed(ptrs[i]),
+			})
 		}
 	}
 	if err := w.Close(); err != nil {

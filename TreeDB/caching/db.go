@@ -16124,7 +16124,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				for i := range groups {
 					ptr := ptrs[i]
 					if b.db.outerLeafFenceV2Enabled() {
-						ptr = page.ValuePtrMarkFenceOuter(ptr)
+						ptr = page.ValuePtrMarkFenceOuterCollapsed(ptr)
 					}
 					group := groups[i]
 					if group.start < 0 || group.end < group.start || group.end > len(eligibleIdxs) {

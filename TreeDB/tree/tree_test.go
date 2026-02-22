@@ -29,14 +29,60 @@ type fenceLookupReader struct {
 	keyCalls         int
 }
 
+type fenceLookupClassifierReader struct {
+	*fenceLookupReader
+	likely map[page.ValuePtr]bool
+}
+
+type fenceLookupSeekClassifierReader struct {
+	*fenceLookupSeekReader
+	likely map[page.ValuePtr]bool
+}
+
 func (r *fenceLookupReader) FenceLookupEnabled() bool {
 	return true
+}
+
+func (r *fenceLookupClassifierReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
+	if r == nil {
+		return true
+	}
+	if r.likely == nil {
+		return true
+	}
+	likely, ok := r.likely[ptr]
+	if !ok {
+		return true
+	}
+	return likely
+}
+
+func (r *fenceLookupSeekClassifierReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
+	if r == nil {
+		return true
+	}
+	if r.likely == nil {
+		return true
+	}
+	likely, ok := r.likely[ptr]
+	if !ok {
+		return true
+	}
+	return likely
 }
 
 func newFenceLookupReader() *fenceLookupReader {
 	return &fenceLookupReader{
 		blocks: make(map[page.ValuePtr]map[string][]byte),
 		fileID: page.ValueLogFileID(1),
+	}
+}
+
+func newFenceLookupClassifierReader() *fenceLookupClassifierReader {
+	base := newFenceLookupReader()
+	return &fenceLookupClassifierReader{
+		fenceLookupReader: base,
+		likely:            make(map[page.ValuePtr]bool),
 	}
 }
 
@@ -130,6 +176,14 @@ func newFenceLookupTailAppenderReader() *fenceLookupTailAppenderReader {
 
 func newFenceLookupSeekReader() *fenceLookupSeekReader {
 	return &fenceLookupSeekReader{fenceLookupReader: newFenceLookupReader()}
+}
+
+func newFenceLookupSeekClassifierReader() *fenceLookupSeekClassifierReader {
+	base := newFenceLookupSeekReader()
+	return &fenceLookupSeekClassifierReader{
+		fenceLookupSeekReader: base,
+		likely:                make(map[page.ValuePtr]bool),
+	}
 }
 
 func newFenceLookupSeekLeaseReader() *fenceLookupSeekLeaseReader {
@@ -689,6 +743,206 @@ func TestTreeGet_FencePredecessorLookupContinuesAfterPointerMiss(t *testing.T) {
 	}
 }
 
+func TestTreeGet_FencePredecessorLookupSkipsPointersClassifiedNonFence(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupClassifierReader()
+	ptrOld := reader.addBlock(map[string]string{
+		"k010": "v10",
+		"k020": "v20",
+	})
+	ptrSkip := reader.addBlock(map[string]string{
+		"k015": "v15",
+	})
+	ptrUpper := reader.addBlock(map[string]string{
+		"k110": "v110",
+	})
+	reader.likely[ptrOld] = true
+	reader.likely[ptrSkip] = false
+	reader.likely[ptrUpper] = true
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptrOld); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k015"), nil, node.FlagPointer, ptrSkip); err != nil {
+		t.Fatalf("AddLeafEntry(k015): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k110"), nil, node.FlagPointer, ptrUpper); err != nil {
+		t.Fatalf("AddLeafEntry(k110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	beforeTotalCalls := reader.fenceCalls + reader.fenceAppendCalls
+	got, err := tr.Get([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Get(k020): %v", err)
+	}
+	if string(got) != "v20" {
+		t.Fatalf("Get(k020) = %q, want %q", got, "v20")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("Get(k020) fence lookups = %d, want 1 (classified non-fence predecessor skipped)", gotCalls)
+	}
+
+	beforeTotalCalls = reader.fenceCalls + reader.fenceAppendCalls
+	gotAppend, err := tr.GetAppend([]byte("k020"), []byte("prefix-"))
+	if err != nil {
+		t.Fatalf("GetAppend(k020): %v", err)
+	}
+	if string(gotAppend) != "prefix-v20" {
+		t.Fatalf("GetAppend(k020) = %q, want %q", gotAppend, "prefix-v20")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("GetAppend(k020) fence lookups = %d, want 1 (classified non-fence predecessor skipped)", gotCalls)
+	}
+
+	beforeTotalCalls = reader.fenceCalls + reader.fenceAppendCalls
+	has, err := tr.Has([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Has(k020): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(k020) = false, want true")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("Has(k020) fence lookups = %d, want 1 (classified non-fence predecessor skipped)", gotCalls)
+	}
+
+	reader.likely[ptrOld] = false
+	reader.likely[ptrUpper] = false
+	beforeTotalCalls = reader.fenceCalls + reader.fenceAppendCalls
+	if _, err := tr.Get([]byte("k999")); err != ErrKeyNotFound {
+		t.Fatalf("Get(k999): expected ErrKeyNotFound, got %v", err)
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 0 {
+		t.Fatalf("Get(k999) issued %d fence lookups despite all predecessors classified non-fence", gotCalls)
+	}
+
+	beforeTotalCalls = reader.fenceCalls + reader.fenceAppendCalls
+	if _, err := tr.GetAppend([]byte("k999"), []byte("prefix-")); err != ErrKeyNotFound {
+		t.Fatalf("GetAppend(k999): expected ErrKeyNotFound, got %v", err)
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 0 {
+		t.Fatalf("GetAppend(k999) issued %d fence lookups despite all predecessors classified non-fence", gotCalls)
+	}
+
+	beforeTotalCalls = reader.fenceCalls + reader.fenceAppendCalls
+	has, err = tr.Has([]byte("k999"))
+	if err != nil {
+		t.Fatalf("Has(k999): %v", err)
+	}
+	if has {
+		t.Fatalf("Has(k999) = true, want false")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 0 {
+		t.Fatalf("Has(k999) issued %d fence lookups despite all predecessors classified non-fence", gotCalls)
+	}
+}
+
+func TestTreeGet_FencePredecessorLookupExplicitFenceMarkerOverridesClassifier(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupClassifierReader()
+	ptrRaw := reader.addBlock(map[string]string{
+		"k010": "v10",
+		"k020": "v20",
+	})
+	ptrMarked := page.ValuePtrMarkFenceOuter(ptrRaw)
+	if ptrMarked == ptrRaw {
+		t.Fatalf("expected non-grouped pointer to be fence-marked")
+	}
+	reader.blocks[ptrMarked] = reader.blocks[ptrRaw]
+	delete(reader.blocks, ptrRaw)
+	reader.likely[ptrMarked] = false // explicit fence marker must still probe
+
+	ptrUpper := reader.addBlock(map[string]string{
+		"k110": "v110",
+	})
+	reader.likely[ptrUpper] = true
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptrMarked); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k110"), nil, node.FlagPointer, ptrUpper); err != nil {
+		t.Fatalf("AddLeafEntry(k110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	beforeTotalCalls := reader.fenceCalls + reader.fenceAppendCalls
+	got, err := tr.Get([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Get(k020): %v", err)
+	}
+	if string(got) != "v20" {
+		t.Fatalf("Get(k020) = %q, want %q", got, "v20")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("Get(k020) fence lookups = %d, want 1 (explicit fence marker must probe)", gotCalls)
+	}
+
+	beforeTotalCalls = reader.fenceCalls + reader.fenceAppendCalls
+	gotAppend, err := tr.GetAppend([]byte("k020"), []byte("prefix-"))
+	if err != nil {
+		t.Fatalf("GetAppend(k020): %v", err)
+	}
+	if string(gotAppend) != "prefix-v20" {
+		t.Fatalf("GetAppend(k020) = %q, want %q", gotAppend, "prefix-v20")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("GetAppend(k020) fence lookups = %d, want 1 (explicit fence marker must probe)", gotCalls)
+	}
+
+	beforeTotalCalls = reader.fenceCalls + reader.fenceAppendCalls
+	has, err := tr.Has([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Has(k020): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(k020) = false, want true")
+	}
+	if gotCalls := (reader.fenceCalls + reader.fenceAppendCalls) - beforeTotalCalls; gotCalls != 1 {
+		t.Fatalf("Has(k020) fence lookups = %d, want 1 (explicit fence marker must probe)", gotCalls)
+	}
+}
+
 func TestTreeGet_FencePredecessorLookupContinuesAfterMultiplePointerMisses(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")
@@ -928,6 +1182,142 @@ func TestTreeHas_FencePredecessorLookupUsesSeekWhenAvailable(t *testing.T) {
 	}
 	if reader.fenceAppendCalls != 0 {
 		t.Fatalf("fence append calls = %d, want 0", reader.fenceAppendCalls)
+	}
+}
+
+func TestTreeHas_FencePredecessorLookupSeekSkipsPointersClassifiedNonFence(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupSeekClassifierReader()
+	ptrOld := reader.addBlock(map[string]string{
+		"k010": "v10",
+		"k020": "v20",
+	})
+	ptrSkip := reader.addBlock(map[string]string{
+		"k015": "v15",
+	})
+	ptrUpper := reader.addBlock(map[string]string{
+		"k110": "v110",
+	})
+	reader.likely[ptrOld] = true
+	reader.likely[ptrSkip] = false
+	reader.likely[ptrUpper] = true
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptrOld); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k015"), nil, node.FlagPointer, ptrSkip); err != nil {
+		t.Fatalf("AddLeafEntry(k015): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k110"), nil, node.FlagPointer, ptrUpper); err != nil {
+		t.Fatalf("AddLeafEntry(k110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	beforeSeekCalls := reader.seekCalls
+	has, err := tr.Has([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Has(k020): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(k020) = false, want true")
+	}
+	if gotCalls := reader.seekCalls - beforeSeekCalls; gotCalls != 1 {
+		t.Fatalf("Has(k020) seek calls = %d, want 1 (classified non-fence predecessor skipped)", gotCalls)
+	}
+
+	reader.likely[ptrOld] = false
+	reader.likely[ptrUpper] = false
+	beforeSeekCalls = reader.seekCalls
+	has, err = tr.Has([]byte("k999"))
+	if err != nil {
+		t.Fatalf("Has(k999): %v", err)
+	}
+	if has {
+		t.Fatalf("Has(k999) = true, want false")
+	}
+	if gotCalls := reader.seekCalls - beforeSeekCalls; gotCalls != 0 {
+		t.Fatalf("Has(k999) seek calls = %d, want 0 when all predecessors classified non-fence", gotCalls)
+	}
+}
+
+func TestTreeHas_FencePredecessorLookupSeekExplicitFenceMarkerOverridesClassifier(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupSeekClassifierReader()
+	ptrRaw := reader.addBlock(map[string]string{
+		"k010": "v10",
+		"k020": "v20",
+	})
+	ptrMarked := page.ValuePtrMarkFenceOuter(ptrRaw)
+	if ptrMarked == ptrRaw {
+		t.Fatalf("expected non-grouped pointer to be fence-marked")
+	}
+	reader.blocks[ptrMarked] = reader.blocks[ptrRaw]
+	delete(reader.blocks, ptrRaw)
+	reader.likely[ptrMarked] = false // explicit fence marker must still probe
+
+	ptrUpper := reader.addBlock(map[string]string{
+		"k110": "v110",
+	})
+	reader.likely[ptrUpper] = true
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptrMarked); err != nil {
+		t.Fatalf("AddLeafEntry(k010): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("k110"), nil, node.FlagPointer, ptrUpper); err != nil {
+		t.Fatalf("AddLeafEntry(k110): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	beforeSeekCalls := reader.seekCalls
+	has, err := tr.Has([]byte("k020"))
+	if err != nil {
+		t.Fatalf("Has(k020): %v", err)
+	}
+	if !has {
+		t.Fatalf("Has(k020) = false, want true")
+	}
+	if gotCalls := reader.seekCalls - beforeSeekCalls; gotCalls != 1 {
+		t.Fatalf("Has(k020) seek calls = %d, want 1 (explicit fence marker must probe)", gotCalls)
 	}
 }
 
