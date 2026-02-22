@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -62,6 +63,10 @@ type Batch interface {
 	Close() error
 	Replay(func(batch.Entry) error) error
 	GetByteSize() (int, error)
+}
+
+type getManyPlanner interface {
+	GetManyParallelPlan(keyCount int) (workers int, parallel bool)
 }
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
@@ -791,6 +796,36 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 		return db.cached.GetMany(keys)
 	}
 	return db.backend.GetMany(keys)
+}
+
+// GetManyParallelPlan reports how TreeDB would schedule GetMany for the given
+// key count. It can be used by adapters to enforce external worker budgets
+// without duplicating TreeDB scheduler constants.
+func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
+	if db == nil {
+		return 1, false
+	}
+	if keyCount <= 0 {
+		return 1, false
+	}
+	if db.cached != nil {
+		if planner, ok := any(db.cached).(getManyPlanner); ok {
+			return planner.GetManyParallelPlan(keyCount)
+		}
+	}
+	if db.backend != nil {
+		if planner, ok := any(db.backend).(getManyPlanner); ok {
+			return planner.GetManyParallelPlan(keyCount)
+		}
+	}
+	workers = runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > keyCount {
+		workers = keyCount
+	}
+	return workers, workers > 1
 }
 
 // GetUnsafe returns the value for a key.

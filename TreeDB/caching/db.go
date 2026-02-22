@@ -12757,6 +12757,32 @@ type backendManyGetter interface {
 	GetMany(keys [][]byte) ([][]byte, error)
 }
 
+type backendManyPlanner interface {
+	GetManyParallelPlan(keyCount int) (workers int, parallel bool)
+}
+
+// GetManyParallelPlan reports a safe upper-bound scheduling plan for GetMany.
+//
+// When cache hit-rates are high, backend calls may involve fewer keys than the
+// provided key count. This method intentionally reports based on the input
+// upper-bound to stay conservative for concurrency budgeting at callers.
+func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
+	if keyCount <= 0 {
+		return 1, false
+	}
+	if planner, ok := db.backend.(backendManyPlanner); ok {
+		return planner.GetManyParallelPlan(keyCount)
+	}
+	workers = runtime.GOMAXPROCS(0)
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > keyCount {
+		workers = keyCount
+	}
+	return workers, workers > 1
+}
+
 func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
 	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 		return nil, err
