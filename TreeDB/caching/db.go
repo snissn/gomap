@@ -2002,6 +2002,14 @@ func (p *fenceAnchorPromoter) lookupFenceSourceForMutation(key []byte) ([]byte, 
 		sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, page.ValuePtrClearFenceOuter(sourcePtr))
 		return sourceKey, sourcePtr, true, nil
 	}
+	// If key already has an exact persisted entry, overlap rewrite should not
+	// treat predecessor anchors as authoritative source coverage for it.
+	// Let exact-key publishing handle this mutation.
+	if _, err := snap.GetEntryExact(key); err == nil {
+		return nil, page.ValuePtr{}, false, nil
+	} else if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
+		return nil, page.ValuePtr{}, false, err
+	}
 	sourceKey, sourcePtr, found, err = p.lookupPredecessorFenceAnchor(key)
 	if err != nil || !found || len(sourceKey) == 0 {
 		return sourceKey, sourcePtr, found, err
