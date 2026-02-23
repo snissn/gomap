@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -104,6 +106,28 @@ func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.
 	checkGet(keyFor(totalKeys-1), valueFor(totalKeys-1))
 	checkGet([]byte("k0015x"), inserted)
 	checkGet([]byte("k9999"), appended)
+
+	it, err := backend.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions(pointer_projection): %v", err)
+	}
+	defer it.Close()
+	for it.Valid() {
+		k := it.UnsafeKey()
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer != 0 {
+			if !page.ValuePtrIsFenceOuter(ptr) {
+				t.Fatalf("expected fence-anchor pointer only in v1_leaflog overlap rewrite, key=%q ptr=%+v", k, ptr)
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("pointer-projection iterator error: %v", err)
+	}
 
 	snap = backend.AcquireSnapshot()
 	if snap == nil {
