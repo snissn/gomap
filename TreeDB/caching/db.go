@@ -3279,12 +3279,12 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 						srcPos := unresolved[i]
 						key := ptrKeys[srcPos]
 						if psv != nil {
-							if err := psv.SetPointerView(key, exactPtr); err != nil {
+							if err := psv.SetPointerView(key, ptr); err != nil {
 								putValueLogEligible(unresolved)
 								return err
 							}
 						} else if ps != nil {
-							if err := ps.SetPointer(key, exactPtr); err != nil {
+							if err := ps.SetPointer(key, ptr); err != nil {
 								putValueLogEligible(unresolved)
 								return err
 							}
@@ -3646,7 +3646,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 						if queuedCount > 0 || len(unresolved) > 0 {
 							for i := range unresolved {
 								srcPos := unresolved[i]
-								if err := emitPointerForce(ptrKeys[srcPos], exactPtr); err != nil {
+								if err := emitPointerForce(ptrKeys[srcPos], ptr); err != nil {
 									putValueLogEligible(unresolved)
 									putValueLogPtrs(vlogPtrs)
 									return err
