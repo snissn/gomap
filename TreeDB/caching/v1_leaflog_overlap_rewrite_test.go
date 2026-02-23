@@ -144,4 +144,7 @@ func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.
 	if err := snap.Close(); err != nil {
 		t.Fatalf("snapshot close after overlap rewrite: %v", err)
 	}
+	if err := cache.validateV1LeafLogDirectoryInvariants(); err != nil {
+		t.Fatalf("v1_leaflog invariant validation: %v", err)
+	}
 }

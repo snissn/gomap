@@ -651,6 +651,12 @@ func putVlogDictPrepareResults(ch chan vlogDictPrepareResult) {
 const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
 	envDebugFlushTiming   = "TREEDB_DEBUG_FLUSH_TIMING"
+	// When enabled, checkpoint verifies strict v1_leaflog directory invariants:
+	// fence-anchor pointers only, monotonic anchors, and non-overlapping decoded ranges.
+	envDebugV1LeafLogInvariants = "TREEDB_DEBUG_V1_LEAFLOG_INVARIANTS"
+	// When enabled together with TREEDB_DEBUG_V1_LEAFLOG_INVARIANTS, invariant
+	// violations panic instead of returning an error.
+	envDebugV1LeafLogInvariantsPanic = "TREEDB_DEBUG_V1_LEAFLOG_INVARIANTS_PANIC"
 
 	minMemtablePrealloc              = 64 * 1024
 	maxMemtablePrealloc              = 256 << 20
@@ -695,6 +701,112 @@ func envBool(name string) bool {
 		return n != 0
 	}
 	return false
+}
+
+func (db *DB) maybeValidateV1LeafLogInvariants() error {
+	if db == nil || !db.debugV1LeafLogInvariants {
+		return nil
+	}
+	if strings.TrimSpace(db.indexOuterLeafMode) != backenddb.IndexOuterLeafModeV1LeafLog {
+		return nil
+	}
+	err := db.validateV1LeafLogDirectoryInvariants()
+	if err != nil && db.debugV1LeafLogInvariantsPanic {
+		panic(err)
+	}
+	return err
+}
+
+func (db *DB) validateV1LeafLogDirectoryInvariants() error {
+	if db == nil {
+		return nil
+	}
+	if strings.TrimSpace(db.indexOuterLeafMode) != backenddb.IndexOuterLeafModeV1LeafLog {
+		return nil
+	}
+	if db.valueLogReader == nil {
+		return errors.New("cachingdb: missing value-log reader for v1_leaflog invariant validation")
+	}
+	type pointerProjectionIter interface {
+		IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
+	}
+	provider, ok := db.backend.(pointerProjectionIter)
+	if !ok {
+		return nil
+	}
+	it, err := provider.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	if err != nil {
+		return err
+	}
+	if it == nil {
+		return nil
+	}
+	defer func() { _ = it.Close() }()
+
+	type anchorRange struct {
+		anchor []byte
+		min    []byte
+		max    []byte
+	}
+	rangeByPtr := make(map[page.ValuePtr]anchorRange, 256)
+	var prev *anchorRange
+	for it.Valid() {
+		k := it.UnsafeKey()
+		_, ptr, flags := it.UnsafeEntry()
+		it.Next()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			continue
+		}
+		if !page.ValuePtrIsFenceOuter(ptr) {
+			return fmt.Errorf("cachingdb: v1_leaflog invariant violation: non-fence pointer key=%q ptr=%+v", k, ptr)
+		}
+		basePtr := page.ValuePtrClearFenceOuter(ptr)
+		rng, decoded := rangeByPtr[basePtr]
+		if !decoded {
+			raw, err := db.valueLogReader.Read(basePtr)
+			if err != nil {
+				return fmt.Errorf("cachingdb: v1_leaflog invariant read failed key=%q ptr=%+v: %w", k, ptr, err)
+			}
+			if !outerleaf.HasMagic(raw) {
+				return fmt.Errorf("cachingdb: v1_leaflog invariant violation: pointer does not reference outer-leaf payload key=%q ptr=%+v", k, ptr)
+			}
+			keys, err := outerleaf.DecodeKeysWithVerify(raw, true)
+			if err != nil {
+				return fmt.Errorf("cachingdb: v1_leaflog invariant decode failed key=%q ptr=%+v: %w", k, ptr, err)
+			}
+			if len(keys) == 0 {
+				return fmt.Errorf("cachingdb: v1_leaflog invariant violation: empty outer-leaf payload key=%q ptr=%+v", k, ptr)
+			}
+			for i := 1; i < len(keys); i++ {
+				if bytes.Compare(keys[i-1], keys[i]) >= 0 {
+					return fmt.Errorf("cachingdb: v1_leaflog invariant violation: non-monotonic payload keys ptr=%+v", ptr)
+				}
+			}
+			rng = anchorRange{
+				anchor: append([]byte(nil), keys[0]...),
+				min:    append([]byte(nil), keys[0]...),
+				max:    append([]byte(nil), keys[len(keys)-1]...),
+			}
+			rangeByPtr[basePtr] = rng
+		}
+		if bytes.Compare(k, rng.min) < 0 || bytes.Compare(k, rng.max) > 0 {
+			return fmt.Errorf("cachingdb: v1_leaflog invariant violation: anchor key outside decoded range key=%q range=[%q,%q] ptr=%+v", k, rng.min, rng.max, ptr)
+		}
+		if prev != nil {
+			if bytes.Compare(prev.anchor, k) >= 0 {
+				return fmt.Errorf("cachingdb: v1_leaflog invariant violation: non-increasing anchor order prev=%q curr=%q", prev.anchor, k)
+			}
+		}
+		next := rng
+		prev = &next
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (db *DB) syncDirBestEffort(dir string) {
@@ -4933,18 +5045,20 @@ type DB struct {
 	valueLogMaxSegmentBytes   int64
 	journalCompression        bool
 
-	disableJournal     bool
-	relaxedSync        bool
-	notifyError        func(error)
-	debugFlushPointers bool
-	debugFlushTiming   bool
-	debugPtrEligible   atomic.Int64
-	debugPtrUsed       atomic.Int64
-	debugPtrNoPtr      atomic.Int64
-	debugPtrDenied     atomic.Int64
-	debugPtrDisabled   atomic.Int64
-	bgErrMu            sync.Mutex
-	bgErr              error
+	disableJournal                bool
+	relaxedSync                   bool
+	notifyError                   func(error)
+	debugFlushPointers            bool
+	debugFlushTiming              bool
+	debugV1LeafLogInvariants      bool
+	debugV1LeafLogInvariantsPanic bool
+	debugPtrEligible              atomic.Int64
+	debugPtrUsed                  atomic.Int64
+	debugPtrNoPtr                 atomic.Int64
+	debugPtrDenied                atomic.Int64
+	debugPtrDisabled              atomic.Int64
+	bgErrMu                       sync.Mutex
+	bgErr                         error
 
 	// Backpressure state
 	queueBacklogBytes                   atomic.Int64
@@ -6058,6 +6172,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogReader := reader
 	debugFlushPointers := envBool(envDebugFlushPointers)
 	debugFlushTiming := envBool(envDebugFlushTiming)
+	debugV1LeafLogInvariants := envBool(envDebugV1LeafLogInvariants)
+	debugV1LeafLogInvariantsPanic := envBool(envDebugV1LeafLogInvariantsPanic)
 
 	valueLogCompressionMode := normalizeVlogCompressionMode(opts.ValueLogCompression)
 	if valueLogCompressionMode == vlogCompressionDefault {
@@ -6294,6 +6410,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogRetain:                       retained,
 		debugFlushPointers:                   debugFlushPointers,
 		debugFlushTiming:                     debugFlushTiming,
+		debugV1LeafLogInvariants:             debugV1LeafLogInvariants,
+		debugV1LeafLogInvariantsPanic:        debugV1LeafLogInvariantsPanic,
 		maxValueLogRetainedBytes:             opts.MaxValueLogRetainedBytes,
 		maxValueLogRetainedBytesHard:         opts.MaxValueLogRetainedBytesHard,
 		valueLogDictTrain:                    valueLogDictTrain,
@@ -10854,6 +10972,10 @@ func (db *DB) Checkpoint() error {
 	}
 	db.checkValueLogRetention()
 	db.pruneRetainedValueLogs()
+
+	if err := db.maybeValidateV1LeafLogInvariants(); err != nil {
+		return err
+	}
 
 	return nil
 }
