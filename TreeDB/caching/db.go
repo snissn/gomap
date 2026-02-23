@@ -3275,8 +3275,9 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 					unresolved = append(unresolved, srcPos)
 				}
 				if queuedCount > 0 || len(unresolved) > 0 {
-					for i := range unresolved {
-						srcPos := unresolved[i]
+					if len(unresolved) > 0 {
+						// v1_leaflog directory contract: emit a single anchor per new block.
+						srcPos := unresolved[0]
 						key := ptrKeys[srcPos]
 						if psv != nil {
 							if err := psv.SetPointerView(key, ptr); err != nil {
@@ -3644,8 +3645,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							unresolved = append(unresolved, srcPos)
 						}
 						if queuedCount > 0 || len(unresolved) > 0 {
-							for i := range unresolved {
-								srcPos := unresolved[i]
+							if len(unresolved) > 0 {
+								// v1_leaflog directory contract: emit a single anchor per new block.
+								srcPos := unresolved[0]
 								if err := emitPointerForce(ptrKeys[srcPos], ptr); err != nil {
 									putValueLogEligible(unresolved)
 									putValueLogPtrs(vlogPtrs)
