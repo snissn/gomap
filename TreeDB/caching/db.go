@@ -1686,6 +1686,34 @@ func fenceMutationLookupForMem(mem memtable.Table) fenceMutationLookupFn {
 	}
 }
 
+func memHasNonDeleteMutations(mem memtable.Table) bool {
+	if mem == nil {
+		return false
+	}
+	it := mem.NewIterator(nil, nil)
+	if it == nil {
+		return false
+	}
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		_, _, flags := it.UnsafeEntry()
+		if flags&node.FlagTombstone == 0 {
+			return true
+		}
+		it.Next()
+	}
+	return false
+}
+
+func unitsHaveNonDeleteMutations(units []flushUnit) bool {
+	for i := range units {
+		if memHasNonDeleteMutations(units[i].mem) {
+			return true
+		}
+	}
+	return false
+}
+
 func fenceMutationLookupForUnits(units []flushUnit) fenceMutationLookupFn {
 	if len(units) == 0 {
 		return nil
@@ -1784,6 +1812,10 @@ type fenceAnchorPromoter struct {
 	db *DB
 
 	lookup fenceMutationLookupFn
+	// Delete-fallback source-block rewrite is only safe for delete-only flushes.
+	// Mixed set+delete batches can introduce overlap ranges that require full
+	// mutation-aware block rebuild; gate rewrite path until that lands.
+	hasNonDeleteMutations bool
 
 	snapshot      *backenddb.Snapshot
 	snapshotReady bool
@@ -1801,13 +1833,14 @@ type fenceAnchorPromoter struct {
 	deleteRematerializedBySource map[page.ValuePtr]struct{}
 }
 
-func newFenceAnchorPromoter(db *DB, lookup fenceMutationLookupFn) *fenceAnchorPromoter {
+func newFenceAnchorPromoter(db *DB, lookup fenceMutationLookupFn, hasNonDeleteMutations bool) *fenceAnchorPromoter {
 	if db == nil {
 		return nil
 	}
 	return &fenceAnchorPromoter{
-		db:     db,
-		lookup: lookup,
+		db:                    db,
+		lookup:                lookup,
+		hasNonDeleteMutations: hasNonDeleteMutations,
 	}
 }
 
@@ -1969,6 +2002,131 @@ func (p *fenceAnchorPromoter) keyResolvesFromSource(snap *backenddb.Snapshot, ke
 		return false, false, false, nil
 	}
 	return false, false, true, nil
+}
+
+func (p *fenceAnchorPromoter) rewriteDeleteFallbackSourceBlock(sourceKey, deleteKey []byte, sourcePtr page.ValuePtr) ([]byte, page.ValuePtr, bool, error) {
+	if p == nil || p.db == nil || len(sourceKey) == 0 || len(deleteKey) == 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	if p.db.valueLogReader == nil {
+		return nil, page.ValuePtr{}, false, errors.New("cachingdb: missing value-log reader for delete fallback rewrite")
+	}
+	raw, err := p.db.valueLogReader.Read(sourcePtr)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if !outerleaf.HasMagic(raw) {
+		// Direct/non-outer payload: keep legacy rematerialization path.
+		return nil, page.ValuePtr{}, false, nil
+	}
+	decoded, err := outerleaf.DecodeBlockLeaseWithVerify(raw, true)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if decoded == nil {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	defer decoded.Release()
+
+	typed, err := decoded.TypedEntries(nil)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if len(typed) == 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
+
+	kept := make([]outerleaf.TypedEntry, 0, len(typed))
+	removed := false
+	totalInlineBytes := 0
+	sourceKept := false
+	for i := range typed {
+		ent := typed[i]
+		if bytes.Equal(ent.Key, deleteKey) {
+			removed = true
+			continue
+		}
+		if p.lookup != nil {
+			if mut, ok := p.lookup(ent.Key); ok && mut.kind != fencePendingMutationNone {
+				// Pending writes/deletes in the current flush batch own this key.
+				// Exclude it from the rewritten fallback block to avoid emitting
+				// stale overlap rows that can violate iterator parity.
+				removed = true
+				continue
+			}
+		}
+		keyCopy := append([]byte(nil), ent.Key...)
+		next := outerleaf.TypedEntry{
+			Key:     keyCopy,
+			Kind:    ent.Kind,
+			BlobPtr: ent.BlobPtr,
+		}
+		if bytes.Equal(ent.Key, sourceKey) {
+			sourceKept = true
+		}
+		if ent.Kind == outerleaf.EntryKindInline && len(ent.Value) > 0 {
+			next.Value = append([]byte(nil), ent.Value...)
+			totalInlineBytes += len(ent.Value)
+		}
+		kept = append(kept, next)
+	}
+	if !removed {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	if len(kept) == 0 {
+		// Entire block removed; caller should rely on pending delete op.
+		return nil, page.ValuePtr{}, true, nil
+	}
+
+	emitKey := sourceKey
+	if !sourceKept || bytes.Equal(deleteKey, sourceKey) {
+		emitKey = kept[0].Key
+	}
+	if len(emitKey) == 0 {
+		return nil, page.ValuePtr{}, false, errors.New("cachingdb: delete fallback rewrite produced empty anchor key")
+	}
+
+	enc := getOuterLeafEncoder()
+	codec := p.db.selectOuterLeafBlockCodec(totalInlineBytes, len(kept))
+	payload, err := enc.EncodeTypedEntriesAssumeSorted(nil, kept, codec, p.db.outerLeafBlockRestart)
+	putOuterLeafEncoder(enc)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+
+	preferredLane := -1
+	if p.db.deferredValueLogNeedsSingleLaneRegroup() {
+		preferredLane = 0
+	}
+	lane, err := p.db.pickLane(false, preferredLane)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	dictID := uint64(0)
+	if p.db.dictStore != nil {
+		if id, err := p.db.currentDictID(context.Background()); err == nil {
+			dictID = id
+		}
+	}
+	rid := p.db.nextRID.Add(1)
+	var recs [1]valuelog.Record
+	recs[0] = valuelog.Record{RID: rid, Value: payload}
+	ptrs, err := p.db.appendValueLog(lane, dictID, nil, recs[:], journalDurabilityFlush)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if len(ptrs) != 1 {
+		putValueLogPtrs(ptrs)
+		return nil, page.ValuePtr{}, false, fmt.Errorf("cachingdb: delete fallback rewrite returned %d pointers", len(ptrs))
+	}
+	basePtr := ptrs[0]
+	putValueLogPtrs(ptrs)
+
+	retainPath := p.db.currentValueLogPath(lane)
+	if retainPath != "" {
+		p.db.markValueLogRetain(retainPath)
+	}
+	return append([]byte(nil), emitKey...), page.ValuePtrMarkFenceOuterCollapsed(basePtr), true, nil
 }
 
 type fenceProjectionIteratorProvider interface {
@@ -2154,6 +2312,24 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 	if deleteIdx < 0 {
 		return nil
 	}
+	if strings.TrimSpace(p.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLog && !p.hasNonDeleteMutations {
+		emitKey, rewrittenPtr, rewritten, err := p.rewriteDeleteFallbackSourceBlock(sourceKey, deleteKey, sourcePtr)
+		if err != nil {
+			return err
+		}
+		if rewritten {
+			if len(emitKey) > 0 {
+				if err := p.emitUniquePointer(emitKey, rewrittenPtr, emitPointer); err != nil {
+					return err
+				}
+			}
+			if p.deleteRematerializedBySource == nil {
+				p.deleteRematerializedBySource = make(map[page.ValuePtr]struct{}, 8)
+			}
+			p.deleteRematerializedBySource[sourcePtr] = struct{}{}
+			return nil
+		}
+	}
 	if handled, err := p.rematerializeDeleteFallbackSingleCandidate(sourceKey, deleteKey, sourcePtr, keys, emitPointer); err != nil {
 		return err
 	} else if handled {
@@ -2302,7 +2478,7 @@ func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	}
 }
 
-func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool, laneID int, mutationLookup fenceMutationLookupFn, fenceState *deferredFenceCollapseState) error {
+func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backendBatch batch.Interface, memLen int, sync bool, laneID int, mutationLookup fenceMutationLookupFn, hasNonDeleteMutations bool, fenceState *deferredFenceCollapseState) error {
 	if db == nil {
 		return nil
 	}
@@ -2352,7 +2528,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 	}
 	var promoter *fenceAnchorPromoter
 	if collapseFence {
-		promoter = newFenceAnchorPromoter(db, mutationLookup)
+		promoter = newFenceAnchorPromoter(db, mutationLookup, hasNonDeleteMutations)
 		defer promoter.close()
 	}
 	emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
@@ -2688,7 +2864,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	)
 	var promoter *fenceAnchorPromoter
 	if collapseFence {
-		promoter = newFenceAnchorPromoter(db, fenceMutationLookupForUnits(units))
+		hasNonDeleteMutations := false
+		if strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLog {
+			hasNonDeleteMutations = unitsHaveNonDeleteMutations(units)
+		}
+		promoter = newFenceAnchorPromoter(db, fenceMutationLookupForUnits(units), hasNonDeleteMutations)
 		defer promoter.close()
 	}
 
@@ -12572,7 +12752,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		)
 		var promoter *fenceAnchorPromoter
 		if collapseFence {
-			promoter = newFenceAnchorPromoter(db, fenceMutationLookupForUnits(units))
+			hasNonDeleteMutations := false
+			if strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLog {
+				hasNonDeleteMutations = unitsHaveNonDeleteMutations(units)
+			}
+			promoter = newFenceAnchorPromoter(db, fenceMutationLookupForUnits(units), hasNonDeleteMutations)
 			defer promoter.close()
 		}
 		emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
@@ -12840,7 +13024,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		)
 		var promoter *fenceAnchorPromoter
 		if collapseFence {
-			promoter = newFenceAnchorPromoter(db, fenceMutationLookupForUnits(units))
+			hasNonDeleteMutations := false
+			if strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLog {
+				hasNonDeleteMutations = unitsHaveNonDeleteMutations(units)
+			}
+			promoter = newFenceAnchorPromoter(db, fenceMutationLookupForUnits(units), hasNonDeleteMutations)
 			defer promoter.close()
 		}
 
@@ -13220,7 +13408,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			if db.outerLeafAnchorModeEnabled() && db.allowFencePointerCollapse() {
 				mutationLookup = fenceMutationLookupForMem(mem)
 			}
-			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID, mutationLookup, nil); err != nil {
+			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID, mutationLookup, memHasNonDeleteMutations(mem), nil); err != nil {
 				db.reportError(fmt.Errorf("cachingdb: flush failed (defer vlog): %w", err))
 				_ = iter.Close()
 				_ = backendBatch.Close()
@@ -13287,7 +13475,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			)
 			var promoter *fenceAnchorPromoter
 			if collapseFence {
-				promoter = newFenceAnchorPromoter(db, fenceMutationLookupForMem(mem))
+				promoter = newFenceAnchorPromoter(db, fenceMutationLookupForMem(mem), memHasNonDeleteMutations(mem))
 				defer promoter.close()
 			}
 
