@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1799,6 +1800,27 @@ type fenceAnchorPromoter struct {
 	backendEmpty        bool
 
 	deleteRematerializedBySource map[page.ValuePtr]struct{}
+
+	overlapRewriteBySource map[page.ValuePtr]*fenceSourceRewritePlan
+	overlapRewriteOrder    []page.ValuePtr
+	rewrittenSourceAlias   map[page.ValuePtr]fenceSourceRewriteAlias
+}
+
+type fenceSourcePendingSet struct {
+	key   []byte
+	value []byte
+}
+
+type fenceSourceRewritePlan struct {
+	sourceKey []byte
+	sourcePtr page.ValuePtr
+	sets      []fenceSourcePendingSet
+	setIndex  map[string]int
+}
+
+type fenceSourceRewriteAlias struct {
+	sourceKey []byte
+	sourcePtr page.ValuePtr
 }
 
 func newFenceAnchorPromoter(db *DB, lookup fenceMutationLookupFn) *fenceAnchorPromoter {
@@ -1836,6 +1858,382 @@ func (p *fenceAnchorPromoter) snapshotView() *backenddb.Snapshot {
 	}
 	p.snapshot = provider.AcquireSnapshot()
 	return p.snapshot
+}
+
+func (p *fenceAnchorPromoter) v1LeafLogMode() bool {
+	if p == nil || p.db == nil {
+		return false
+	}
+	return strings.TrimSpace(p.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLog
+}
+
+func (plan *fenceSourceRewritePlan) setValue(key, value []byte) {
+	if plan == nil || len(key) == 0 {
+		return
+	}
+	if plan.setIndex == nil {
+		plan.setIndex = make(map[string]int, 8)
+	}
+	keyStr := string(key)
+	valCopy := append([]byte(nil), value...)
+	if idx, ok := plan.setIndex[keyStr]; ok {
+		plan.sets[idx].value = valCopy
+		return
+	}
+	keyCopy := append([]byte(nil), key...)
+	plan.setIndex[keyStr] = len(plan.sets)
+	plan.sets = append(plan.sets, fenceSourcePendingSet{
+		key:   keyCopy,
+		value: valCopy,
+	})
+}
+
+func (plan *fenceSourceRewritePlan) lookupValue(key []byte) ([]byte, bool) {
+	if plan == nil || len(key) == 0 || len(plan.sets) == 0 {
+		return nil, false
+	}
+	idx, ok := plan.setIndex[string(key)]
+	if !ok || idx < 0 || idx >= len(plan.sets) {
+		return nil, false
+	}
+	return plan.sets[idx].value, true
+}
+
+func (p *fenceAnchorPromoter) clearOverlapRewritePlans() {
+	if p == nil {
+		return
+	}
+	p.overlapRewriteBySource = nil
+	p.overlapRewriteOrder = p.overlapRewriteOrder[:0]
+}
+
+func (p *fenceAnchorPromoter) remapRewrittenSource(sourceKey []byte, sourcePtr page.ValuePtr) ([]byte, page.ValuePtr) {
+	if p == nil || len(sourceKey) == 0 {
+		return sourceKey, sourcePtr
+	}
+	for hop := 0; hop < 8; hop++ {
+		if p.rewrittenSourceAlias == nil {
+			break
+		}
+		alias, ok := p.rewrittenSourceAlias[sourcePtr]
+		if !ok || len(alias.sourceKey) == 0 {
+			break
+		}
+		sourceKey = alias.sourceKey
+		sourcePtr = alias.sourcePtr
+	}
+	return sourceKey, sourcePtr
+}
+
+func (p *fenceAnchorPromoter) recordRewrittenSourceAlias(oldSourcePtr page.ValuePtr, newSourceKey []byte, newSourcePtr page.ValuePtr) {
+	if p == nil || len(newSourceKey) == 0 {
+		return
+	}
+	if p.rewrittenSourceAlias == nil {
+		p.rewrittenSourceAlias = make(map[page.ValuePtr]fenceSourceRewriteAlias, 8)
+	}
+	p.rewrittenSourceAlias[oldSourcePtr] = fenceSourceRewriteAlias{
+		sourceKey: append([]byte(nil), newSourceKey...),
+		sourcePtr: page.ValuePtrClearFenceOuter(newSourcePtr),
+	}
+}
+
+func (p *fenceAnchorPromoter) lookupPredecessorFenceAnchor(key []byte) ([]byte, page.ValuePtr, bool, error) {
+	if p == nil || p.db == nil || len(key) == 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	type reverseIteratorProvider interface {
+		ReverseIteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
+	}
+	provider, ok := p.db.backend.(reverseIteratorProvider)
+	if !ok {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	it, err := provider.ReverseIteratorWithOptions(nil, key, backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if it == nil {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	defer func() { _ = it.Close() }()
+
+	const maxScan = 4096
+	scanned := 0
+	for it.Valid() {
+		if scanned >= maxScan {
+			break
+		}
+		scanned++
+		k := it.UnsafeKey()
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			it.Next()
+			continue
+		}
+		if !page.ValuePtrIsFenceOuter(ptr) {
+			it.Next()
+			continue
+		}
+		return append([]byte(nil), k...), page.ValuePtrClearFenceOuter(ptr), true, nil
+	}
+	if err := it.Error(); err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	return nil, page.ValuePtr{}, false, nil
+}
+
+func (p *fenceAnchorPromoter) lookupFenceSourceForMutation(key []byte) ([]byte, page.ValuePtr, bool, error) {
+	if p == nil || len(key) == 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	snap := p.snapshotView()
+	if snap == nil {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	sourceKey, sourcePtr, found, err := snap.LookupFencePointerOrigin(key)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if found && len(sourceKey) > 0 {
+		sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, page.ValuePtrClearFenceOuter(sourcePtr))
+		return sourceKey, sourcePtr, true, nil
+	}
+	sourceKey, sourcePtr, found, err = p.lookupPredecessorFenceAnchor(key)
+	if err != nil || !found || len(sourceKey) == 0 {
+		return sourceKey, sourcePtr, found, err
+	}
+	sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, sourcePtr)
+	return sourceKey, sourcePtr, true, nil
+}
+
+func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (bool, error) {
+	if p == nil || !p.v1LeafLogMode() || len(key) == 0 {
+		return false, nil
+	}
+	sourceKey, sourcePtr, found, err := p.lookupFenceSourceForMutation(key)
+	if err != nil {
+		return false, err
+	}
+	if !found || len(sourceKey) == 0 {
+		return false, nil
+	}
+	if p.overlapRewriteBySource == nil {
+		p.overlapRewriteBySource = make(map[page.ValuePtr]*fenceSourceRewritePlan, 8)
+	}
+	plan, ok := p.overlapRewriteBySource[sourcePtr]
+	if !ok {
+		plan = &fenceSourceRewritePlan{
+			sourceKey: append([]byte(nil), sourceKey...),
+			sourcePtr: sourcePtr,
+			setIndex:  make(map[string]int, 8),
+		}
+		p.overlapRewriteBySource[sourcePtr] = plan
+		p.overlapRewriteOrder = append(p.overlapRewriteOrder, sourcePtr)
+	}
+	plan.setValue(key, value)
+	return true, nil
+}
+
+func (p *fenceAnchorPromoter) appendEncodedOuterLeafBlock(payload []byte) (page.ValuePtr, error) {
+	if p == nil || p.db == nil {
+		return page.ValuePtr{}, errors.New("cachingdb: missing fence-anchor promoter db")
+	}
+	preferredLane := -1
+	if p.db.deferredValueLogNeedsSingleLaneRegroup() {
+		preferredLane = 0
+	}
+	lane, err := p.db.pickLane(false, preferredLane)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	dictID := uint64(0)
+	if p.db.dictStore != nil {
+		if id, err := p.db.currentDictID(context.Background()); err == nil {
+			dictID = id
+		}
+	}
+	rid := p.db.nextRID.Add(1)
+	var recs [1]valuelog.Record
+	recs[0] = valuelog.Record{RID: rid, Value: payload}
+	ptrs, err := p.db.appendValueLog(lane, dictID, nil, recs[:], journalDurabilityFlush)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	if len(ptrs) != 1 {
+		putValueLogPtrs(ptrs)
+		return page.ValuePtr{}, fmt.Errorf("cachingdb: overlap rewrite returned %d pointers", len(ptrs))
+	}
+	ptr := ptrs[0]
+	putValueLogPtrs(ptrs)
+	retainPath := p.db.currentValueLogPath(lane)
+	if retainPath != "" {
+		p.db.markValueLogRetain(retainPath)
+	}
+	return ptr, nil
+}
+
+func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan) ([]byte, page.ValuePtr, bool, error) {
+	if p == nil || p.db == nil || plan == nil || len(plan.sourceKey) == 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	if p.db.valueLogReader == nil {
+		return nil, page.ValuePtr{}, false, errors.New("cachingdb: missing value-log reader for overlap rewrite")
+	}
+	raw, err := p.db.valueLogReader.Read(plan.sourcePtr)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if !outerleaf.HasMagic(raw) {
+		return nil, page.ValuePtr{}, false, fmt.Errorf("cachingdb: overlap rewrite source not outer-leaf payload key=%q ptr=%+v", plan.sourceKey, plan.sourcePtr)
+	}
+	decoded, err := outerleaf.DecodeBlockLeaseWithVerify(raw, true)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if decoded == nil {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	defer decoded.Release()
+
+	typed, err := decoded.TypedEntries(nil)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if len(typed) == 0 && len(plan.sets) == 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
+
+	out := make([]outerleaf.TypedEntry, 0, len(typed)+len(plan.sets))
+	seen := make(map[string]struct{}, len(typed)+len(plan.sets))
+	totalInlineBytes := 0
+	for i := range typed {
+		ent := typed[i]
+		keyStr := string(ent.Key)
+		seen[keyStr] = struct{}{}
+		if p.lookup != nil {
+			if mut, ok := p.lookup(ent.Key); ok {
+				switch mut.kind {
+				case fencePendingMutationDelete:
+					continue
+				case fencePendingMutationSetInline, fencePendingMutationSetPointer:
+					if val, ok := plan.lookupValue(ent.Key); ok {
+						keyCopy := append([]byte(nil), ent.Key...)
+						valCopy := append([]byte(nil), val...)
+						out = append(out, outerleaf.TypedEntry{
+							Key:   keyCopy,
+							Kind:  outerleaf.EntryKindInline,
+							Value: valCopy,
+						})
+						totalInlineBytes += len(valCopy)
+						continue
+					}
+				}
+			}
+		}
+
+		keyCopy := append([]byte(nil), ent.Key...)
+		next := outerleaf.TypedEntry{
+			Key:     keyCopy,
+			Kind:    ent.Kind,
+			BlobPtr: ent.BlobPtr,
+		}
+		if ent.Kind == outerleaf.EntryKindInline && len(ent.Value) > 0 {
+			next.Value = append([]byte(nil), ent.Value...)
+			totalInlineBytes += len(next.Value)
+		}
+		out = append(out, next)
+	}
+
+	for i := range plan.sets {
+		set := plan.sets[i]
+		if _, ok := seen[string(set.key)]; ok {
+			continue
+		}
+		keyCopy := append([]byte(nil), set.key...)
+		valCopy := append([]byte(nil), set.value...)
+		out = append(out, outerleaf.TypedEntry{
+			Key:   keyCopy,
+			Kind:  outerleaf.EntryKindInline,
+			Value: valCopy,
+		})
+		totalInlineBytes += len(valCopy)
+	}
+
+	if len(out) == 0 {
+		return nil, page.ValuePtr{}, true, nil
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].Key, out[j].Key) < 0
+	})
+
+	enc := getOuterLeafEncoder()
+	codec := p.db.selectOuterLeafBlockCodec(totalInlineBytes, len(out))
+	payload, err := enc.EncodeTypedEntriesAssumeSorted(nil, out, codec, p.db.outerLeafBlockRestart)
+	putOuterLeafEncoder(enc)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	basePtr, err := p.appendEncodedOuterLeafBlock(payload)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	return append([]byte(nil), out[0].Key...), page.ValuePtrMarkFenceOuterCollapsed(basePtr), false, nil
+}
+
+func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer func(key []byte, ptr page.ValuePtr) error, emitDelete func(key []byte) error) error {
+	if p == nil || !p.v1LeafLogMode() {
+		return nil
+	}
+	if len(p.overlapRewriteOrder) == 0 {
+		return nil
+	}
+	if emitPointer == nil || emitDelete == nil {
+		return errors.New("cachingdb: overlap rewrite emit callbacks are required")
+	}
+
+	order := p.overlapRewriteOrder
+	sort.Slice(order, func(i, j int) bool {
+		left := p.overlapRewriteBySource[order[i]]
+		right := p.overlapRewriteBySource[order[j]]
+		if left == nil || right == nil {
+			return i < j
+		}
+		return bytes.Compare(left.sourceKey, right.sourceKey) < 0
+	})
+	for _, sourcePtr := range order {
+		plan := p.overlapRewriteBySource[sourcePtr]
+		if plan == nil {
+			continue
+		}
+		anchorKey, rewrittenPtr, removedAll, err := p.rewriteSourceFromPlan(plan)
+		if err != nil {
+			return err
+		}
+		if removedAll {
+			if err := emitDelete(plan.sourceKey); err != nil {
+				return err
+			}
+			continue
+		}
+		if len(anchorKey) == 0 {
+			continue
+		}
+		if err := p.emitUniquePointer(anchorKey, rewrittenPtr, emitPointer); err != nil {
+			return err
+		}
+		p.recordRewrittenSourceAlias(plan.sourcePtr, anchorKey, rewrittenPtr)
+		if !bytes.Equal(anchorKey, plan.sourceKey) {
+			if err := emitDelete(plan.sourceKey); err != nil {
+				return err
+			}
+		}
+	}
+	p.clearOverlapRewritePlans()
+	return nil
 }
 
 func (p *fenceAnchorPromoter) decodeFenceKeys(ptr page.ValuePtr) ([][]byte, error) {
@@ -2292,7 +2690,12 @@ func (p *fenceAnchorPromoter) maybeRematerializeFallbackMutation(mutationKey []b
 			}
 		}
 		if hasNonDeleteMutation {
-			goto legacyFallback
+			// Mixed delete+set overlap is rewritten by the queued v1_leaflog
+			// source-block COW path during deferred pointer group publish.
+			// Avoid legacy per-key exact rematerialization here: it can create
+			// exact siblings ahead of a fence anchor and break single-predecessor
+			// fallback for unaffected keys.
+			return nil
 		}
 		emitKey, rewrittenPtr, rewritten, err := p.rewriteFallbackSourceBlock(sourceKey, mutationKey, sourcePtr)
 		if err != nil {
@@ -2319,7 +2722,6 @@ func (p *fenceAnchorPromoter) maybeRematerializeFallbackMutation(mutationKey []b
 			return fmt.Errorf("cachingdb: v1_leaflog requires fallback block rewrite for key %q", mutationKey)
 		}
 	}
-legacyFallback:
 	if handled, err := p.rematerializeFallbackSingleCandidate(sourceKey, mutationKey, sourcePtr, keys, emitPointer); err != nil {
 		return err
 	} else if handled {
@@ -2694,6 +3096,22 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		db.recordDeferredFenceMaterialized(len(ptrKeys), candidateBytes)
 	}
 
+	emitQueuedPointer := func(key []byte, ptr page.ValuePtr) error {
+		if psv != nil {
+			return psv.SetPointerView(key, ptr)
+		}
+		if ps != nil {
+			return ps.SetPointer(key, ptr)
+		}
+		return errors.New("cachingdb: backend batch missing SetPointer")
+	}
+	emitQueuedDelete := func(key []byte) error {
+		if dv != nil {
+			return dv.DeleteView(key)
+		}
+		return backendBatch.Delete(key)
+	}
+
 	emittedGroups := uint64(0)
 	for i := range groups {
 		basePtr := vlogPtrs[i]
@@ -2708,21 +3126,60 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			return errors.New("cachingdb: deferred value-log group out of range")
 		}
 		if collapseFence {
-			// Fence-pointer mode stores one key per grouped outer block.
-			// Keep one anchor key per block for append-only ranges. If any key in
-			// the source group could overlap existing backend keys, emit the full
-			// group so stale exact entries are always overwritten.
 			if group.start >= group.end {
 				continue
 			}
 			emittedGroups++
+			overlap := false
 			if promoter != nil {
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
 					if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
-						emitWholeGroup = true
+						overlap = true
 						break
 					}
 				}
+			}
+			if overlap && promoter != nil && promoter.v1LeafLogMode() {
+				unresolved := getValueLogEligible(group.end - group.start)
+				queuedCount := 0
+				for srcPos := group.start; srcPos < group.end; srcPos++ {
+					queued, err := promoter.queueV1LeafLogOverlapRewrite(ptrKeys[srcPos], ptrVals[srcPos])
+					if err != nil {
+						putValueLogEligible(unresolved)
+						return err
+					}
+					if queued {
+						queuedCount++
+						continue
+					}
+					unresolved = append(unresolved, srcPos)
+				}
+				if queuedCount > 0 {
+					for i := range unresolved {
+						srcPos := unresolved[i]
+						key := ptrKeys[srcPos]
+						if psv != nil {
+							if err := psv.SetPointerView(key, exactPtr); err != nil {
+								putValueLogEligible(unresolved)
+								return err
+							}
+						} else if ps != nil {
+							if err := ps.SetPointer(key, exactPtr); err != nil {
+								putValueLogEligible(unresolved)
+								return err
+							}
+						} else {
+							putValueLogEligible(unresolved)
+							return errors.New("cachingdb: backend batch missing SetPointer")
+						}
+					}
+					putValueLogEligible(unresolved)
+					continue
+				}
+				putValueLogEligible(unresolved)
+				emitWholeGroup = true
+			} else if overlap {
+				emitWholeGroup = true
 			}
 			if !emitWholeGroup {
 				group.end = group.start + 1
@@ -2748,6 +3205,11 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 			} else {
 				return errors.New("cachingdb: backend batch missing SetPointer")
 			}
+		}
+	}
+	if collapseFence && promoter != nil && promoter.v1LeafLogMode() {
+		if err := promoter.flushQueuedV1LeafLogOverlapRewrites(emitQueuedPointer, emitQueuedDelete); err != nil {
+			return err
 		}
 	}
 	if collapseFence && emittedGroups > 0 {
@@ -3033,13 +3495,47 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 						continue
 					}
 					emittedGroups++
+					overlap := false
 					if promoter != nil {
 						for srcPos := group.start; srcPos < group.end; srcPos++ {
 							if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
-								emitWholeGroup = true
+								overlap = true
 								break
 							}
 						}
+					}
+					if overlap && promoter != nil && promoter.v1LeafLogMode() {
+						unresolved := getValueLogEligible(group.end - group.start)
+						queuedCount := 0
+						for srcPos := group.start; srcPos < group.end; srcPos++ {
+							queued, err := promoter.queueV1LeafLogOverlapRewrite(ptrKeys[srcPos], ptrVals[srcPos])
+							if err != nil {
+								putValueLogEligible(unresolved)
+								putValueLogPtrs(vlogPtrs)
+								return err
+							}
+							if queued {
+								queuedCount++
+								continue
+							}
+							unresolved = append(unresolved, srcPos)
+						}
+						if queuedCount > 0 {
+							for i := range unresolved {
+								srcPos := unresolved[i]
+								if err := emitPointerForce(ptrKeys[srcPos], exactPtr); err != nil {
+									putValueLogEligible(unresolved)
+									putValueLogPtrs(vlogPtrs)
+									return err
+								}
+							}
+							putValueLogEligible(unresolved)
+							continue
+						}
+						putValueLogEligible(unresolved)
+						emitWholeGroup = true
+					} else if overlap {
+						emitWholeGroup = true
 					}
 					if !emitWholeGroup {
 						group.end = group.start + 1
@@ -3066,6 +3562,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				}
 			}
 			putValueLogPtrs(vlogPtrs)
+		}
+		if collapseFence && promoter != nil && promoter.v1LeafLogMode() {
+			if err := promoter.flushQueuedV1LeafLogOverlapRewrites(emitPromotionPointer, emitPromotionDelete); err != nil {
+				return err
+			}
 		}
 		if fenceMode {
 			db.recordDeferredFenceMaterialized(totalKeys, candidateBytes)
