@@ -140,6 +140,8 @@ const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
 
+// normalizeIndexOuterLeafMode canonicalizes known mode names without remapping
+// distinct modes (for example, v1_leaflog vs v1_leaflog_legacy).
 func normalizeIndexOuterLeafMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "":
@@ -227,12 +229,13 @@ const (
 const (
 	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
 	IndexOuterLeafModeV1 = "v1"
-	// IndexOuterLeafModeV1LeafLog enables the routing-only outer-leaf contract:
-	// - index stores routing/internal nodes plus one anchor per outer block
-	// - key/value leaf payloads live in value-log outer blocks
+	// IndexOuterLeafModeV1LeafLog enables the routing-style leaf-anchor contract:
+	// - internal nodes route to leaf anchors (one anchor per outer-leaf payload block)
+	// - value-log payloads store key/value entries in outer-leaf envelopes
+	// - API semantics stay aligned with v1; further algorithm hardening is tracked in #610
 	IndexOuterLeafModeV1LeafLog = "v1_leaflog"
-	// IndexOuterLeafModeV1LeafLogLegacy preserves legacy per-key v1_leaflog
-	// semantics for bisect and controlled rollout.
+	// IndexOuterLeafModeV1LeafLogLegacy preserves legacy exact-key v1_leaflog
+	// semantics (one leaf entry per user key) for compatibility/bisect.
 	IndexOuterLeafModeV1LeafLogLegacy = "v1_leaflog_legacy"
 	// IndexOuterLeafModeV2BlockPtr enables the outer-leaf block-pointer payload
 	// format. Values are encoded as key+value blocks in the value log and index
@@ -542,11 +545,13 @@ type Options struct {
 	// IndexOuterLeafMode selects the index outer-leaf format:
 	// - "": defaults to "v2_fenceptr"
 	// - "v1": existing per-key leaf entries
-	// - "v1_leaflog": routing+anchor outer-leaf contract
-	// - "v1_leaflog_legacy": explicit compatibility alias for legacy per-key
-	//   v1_leaflog behavior
+	// - "v1_leaflog": routing-style leaf-anchor contract (current Step 2 behavior)
+	// - "v1_leaflog_legacy": legacy exact-key compatibility mode
 	// - "v2_blockptr": pointer payloads encode key+value outer-leaf blocks
 	// - "v2_fenceptr": fence-key-only index entries with outer block payloads
+	//
+	// v1_leaflog and v1_leaflog_legacy are distinct mode strings and are not
+	// auto-aliased during normalization.
 	IndexOuterLeafMode string
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
