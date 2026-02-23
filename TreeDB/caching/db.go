@@ -1971,6 +1971,156 @@ func (p *fenceAnchorPromoter) keyResolvesFromSource(snap *backenddb.Snapshot, ke
 	return false, false, true, nil
 }
 
+type fenceProjectionIteratorProvider interface {
+	IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
+}
+
+// rematerializeDeleteFallbackSingleCandidate is a bounded fast path for
+// v1_leaflog's single-predecessor fence lookup semantics. It avoids per-key
+// LookupFencePointerSource calls by walking a bounded pointer-projection range.
+func (p *fenceAnchorPromoter) rematerializeDeleteFallbackSingleCandidate(sourceKey, deleteKey []byte, sourcePtr page.ValuePtr, keys [][]byte, emitPointer func(key []byte, ptr page.ValuePtr) error) (handled bool, err error) {
+	if p == nil || p.db == nil || len(keys) == 0 || emitPointer == nil {
+		return false, nil
+	}
+	if strings.TrimSpace(p.db.indexOuterLeafMode) != backenddb.IndexOuterLeafModeV1LeafLog {
+		return false, nil
+	}
+	provider, ok := p.db.backend.(fenceProjectionIteratorProvider)
+	if !ok {
+		return false, nil
+	}
+	sourceIdx := -1
+	for i := range keys {
+		if bytes.Equal(keys[i], sourceKey) {
+			sourceIdx = i
+			break
+		}
+	}
+	// Fast path is intentionally conservative: only run when sourceKey is the
+	// leading key in the decoded block.
+	if sourceIdx != 0 {
+		return false, nil
+	}
+	handled = true
+	opts := backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	}
+	lastKey := keys[len(keys)-1]
+	if len(lastKey) == 0 {
+		return false, nil
+	}
+	// Bound iterator work to keys <= lastKey.
+	end := make([]byte, 0, len(lastKey)+1)
+	end = append(end, lastKey...)
+	end = append(end, 0)
+
+	it, err := provider.IteratorWithOptions(keys[0], end, opts)
+	if err != nil {
+		return handled, err
+	}
+	if it == nil {
+		return false, nil
+	}
+	defer func() {
+		if closeErr := it.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+
+	var (
+		haveCurr  bool
+		currKey   []byte
+		currPtr   page.ValuePtr
+		currFlags byte
+	)
+	loadCurr := func() error {
+		if !it.Valid() {
+			haveCurr = false
+			currKey = nil
+			currPtr = page.ValuePtr{}
+			currFlags = 0
+			return nil
+		}
+		currKey = it.UnsafeKey()
+		_, currPtr, currFlags = it.UnsafeEntry()
+		if err := it.Error(); err != nil {
+			return err
+		}
+		haveCurr = true
+		return nil
+	}
+	if err := loadCurr(); err != nil {
+		return handled, err
+	}
+
+	exactPtr := page.ValuePtrClearFenceOuter(sourcePtr)
+	var (
+		havePrev  bool
+		prevPtr   page.ValuePtr
+		prevFlags byte
+	)
+	for i := range keys {
+		k := keys[i]
+		if len(k) == 0 {
+			continue
+		}
+		if p.lookup != nil {
+			if _, ok := p.lookup(k); ok {
+				continue
+			}
+		}
+		if bytes.Equal(k, deleteKey) {
+			continue
+		}
+		for haveCurr && bytes.Compare(currKey, k) < 0 {
+			prevPtr = currPtr
+			prevFlags = currFlags
+			havePrev = true
+			it.Next()
+			if err := loadCurr(); err != nil {
+				return handled, err
+			}
+		}
+		exact := false
+		marked := false
+		resolved := false
+		if haveCurr && bytes.Equal(currKey, k) {
+			exact = true
+			if currFlags&node.FlagPointer != 0 && valuePtrSameRecord(currPtr, sourcePtr) {
+				resolved = true
+				marked = page.ValuePtrIsFenceOuter(currPtr)
+			}
+			prevPtr = currPtr
+			prevFlags = currFlags
+			havePrev = true
+			it.Next()
+			if err := loadCurr(); err != nil {
+				return handled, err
+			}
+		} else if havePrev &&
+			prevFlags&node.FlagPointer != 0 &&
+			prevFlags&node.FlagTombstone == 0 &&
+			page.ValuePtrIsFenceOuter(prevPtr) &&
+			valuePtrSameRecord(prevPtr, sourcePtr) {
+			resolved = true
+		}
+		if !resolved {
+			continue
+		}
+		if exact && !marked {
+			continue
+		}
+		if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
+			return handled, err
+		}
+	}
+	if err := it.Error(); err != nil {
+		return handled, err
+	}
+	return handled, nil
+}
+
 func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte, snap *backenddb.Snapshot, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
 	if p == nil || snap == nil || len(deleteKey) == 0 || emitPointer == nil {
 		return nil
@@ -2002,6 +2152,15 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 	// Deleting a key that is not present in the resolved fence block is a
 	// logical no-op. Avoid rematerialization churn for miss-heavy delete paths.
 	if deleteIdx < 0 {
+		return nil
+	}
+	if handled, err := p.rematerializeDeleteFallbackSingleCandidate(sourceKey, deleteKey, sourcePtr, keys, emitPointer); err != nil {
+		return err
+	} else if handled {
+		if p.deleteRematerializedBySource == nil {
+			p.deleteRematerializedBySource = make(map[page.ValuePtr]struct{}, 8)
+		}
+		p.deleteRematerializedBySource[sourcePtr] = struct{}{}
 		return nil
 	}
 	exactPtr := page.ValuePtrClearFenceOuter(sourcePtr)

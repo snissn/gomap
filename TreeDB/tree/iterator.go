@@ -70,6 +70,9 @@ const (
 // IteratorOptions configures scan-time value materialization behavior.
 type IteratorOptions struct {
 	Mode IteratorMode
+	// IncludeTombstones keeps tombstone rows visible to iteration callers.
+	// Default false preserves user-facing behavior (tombstones hidden).
+	IncludeTombstones bool
 }
 
 const (
@@ -394,17 +397,18 @@ type Iterator struct {
 	pendingFenceKeys      [][]byte
 	pendingFenceKeyLease  FenceKeysLease
 
-	prefetchPageID uint64
-	prefetchStart  int
-	prefetchLen    int
-	prefetchStep   int
-	prefetchPtrs   []page.ValuePtr
-	prefetchKeys   [][]byte
-	prefetchVals   [][]byte
-	prefetchArmed  bool
-	mode           IteratorMode
-	reverse        bool
-	verifyAlways   bool
+	prefetchPageID    uint64
+	prefetchStart     int
+	prefetchLen       int
+	prefetchStep      int
+	prefetchPtrs      []page.ValuePtr
+	prefetchKeys      [][]byte
+	prefetchVals      [][]byte
+	prefetchArmed     bool
+	mode              IteratorMode
+	includeTombstones bool
+	reverse           bool
+	verifyAlways      bool
 }
 
 const iteratorPointerBatchMax = 2
@@ -468,30 +472,31 @@ func (it *Iterator) installReusableBuffers(buf iteratorReusableBuffers) {
 	it.leafState.keyScratch = buf.keyScratch[:0]
 }
 
-func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse bool) *Iterator {
+func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, includeTombstones bool, reverse bool) *Iterator {
 	it := iteratorPool.Get().(*Iterator)
 	buf := it.captureReusableBuffers()
 	*it = Iterator{
-		tree:             t,
-		start:            start,
-		end:              end,
-		mode:             mode,
-		reverse:          reverse,
-		verifyAlways:     t.pager != nil && t.pager.VerifyOnRead(),
-		slabAppender:     t.slabAppender,
-		slabBatcher:      t.slabBatcher,
-		slabKeyReader:    t.slabKeyReader,
-		slabFenceBlocks:  t.slabFenceBlocks,
-		slabFenceBlocksI: t.slabFenceBlocksI,
-		slabFenceBlocksL: t.slabFenceBlocksL,
-		slabFenceKeys:    t.slabFenceKeys,
-		slabFenceRange:   t.slabFenceRange,
-		slabFenceRangeL:  t.slabFenceRangeL,
-		slabFenceSeek:    t.slabFenceSeek,
-		slabFenceSeekL:   t.slabFenceSeekL,
-		slabFencePtrCls:  t.slabFencePtrCls,
-		slabKeyAppender:  t.slabKeyAppender,
-		slabKeyBatcher:   t.slabKeyBatcher,
+		tree:              t,
+		start:             start,
+		end:               end,
+		mode:              mode,
+		includeTombstones: includeTombstones,
+		reverse:           reverse,
+		verifyAlways:      t.pager != nil && t.pager.VerifyOnRead(),
+		slabAppender:      t.slabAppender,
+		slabBatcher:       t.slabBatcher,
+		slabKeyReader:     t.slabKeyReader,
+		slabFenceBlocks:   t.slabFenceBlocks,
+		slabFenceBlocksI:  t.slabFenceBlocksI,
+		slabFenceBlocksL:  t.slabFenceBlocksL,
+		slabFenceKeys:     t.slabFenceKeys,
+		slabFenceRange:    t.slabFenceRange,
+		slabFenceRangeL:   t.slabFenceRangeL,
+		slabFenceSeek:     t.slabFenceSeek,
+		slabFenceSeekL:    t.slabFenceSeekL,
+		slabFencePtrCls:   t.slabFencePtrCls,
+		slabKeyAppender:   t.slabKeyAppender,
+		slabKeyBatcher:    t.slabKeyBatcher,
 	}
 	it.installReusableBuffers(buf)
 	return it
@@ -502,9 +507,9 @@ func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, reverse boo
 func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return t.acquireIterator(nil, nil, mode, false) // Invalid immediately
+		return t.acquireIterator(nil, nil, mode, opts.IncludeTombstones, false) // Invalid immediately
 	}
-	it := t.acquireIterator(start, end, mode, false)
+	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, false)
 	it.Seek(start)
 	if start == nil {
 		it.prefetchArmed = true
@@ -521,9 +526,9 @@ func (t *Tree) ReverseIterator(start, end []byte) iterator.UnsafeIterator {
 func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOptions) iterator.UnsafeIterator {
 	mode := normalizeIteratorMode(opts.Mode)
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
-		return t.acquireIterator(nil, nil, mode, true)
+		return t.acquireIterator(nil, nil, mode, opts.IncludeTombstones, true)
 	}
-	it := t.acquireIterator(start, end, mode, true)
+	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
 	// Reverse seek: Find >= end, then step back.
 	if end == nil {
 		it.seekRightMost()
@@ -1304,8 +1309,9 @@ func (it *Iterator) loadCurrent() {
 			return
 		}
 
-		// Skip tombstones; they are persisted in the index but hidden from iteration.
-		if flags&node.FlagTombstone != 0 {
+		// By default tombstones are hidden from iteration. Internal maintenance
+		// paths can opt in to keep them visible via IncludeTombstones.
+		if !it.includeTombstones && flags&node.FlagTombstone != 0 {
 			if it.reverse {
 				top.Index--
 			} else {

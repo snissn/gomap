@@ -562,6 +562,104 @@ func TestIterator_SkipsTombstones(t *testing.T) {
 	}
 }
 
+func TestIterator_IncludeTombstones(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1) // 0
+
+	d0, _ := p.Get(0)
+	n0 := node.NewNode(d0)
+	n0.SetPageID(0)
+	n0.SetType(page.PageTypeLeaf)
+	n0.AddLeafEntry([]byte("A"), []byte("valA"), node.FlagInline, page.ValuePtr{})
+	n0.AddLeafEntry([]byte("B"), nil, node.FlagTombstone, page.ValuePtr{})
+	n0.AddLeafEntry([]byte("C"), []byte("valC"), node.FlagInline, page.ValuePtr{})
+	n0.UpdateChecksum()
+
+	tr := New(p, panicValueReader{}, 0)
+	it := tr.IteratorWithOptions(nil, nil, IteratorOptions{
+		Mode:              IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	defer it.Close()
+
+	type row struct {
+		key   string
+		flags byte
+	}
+	rows := make([]row, 0, 3)
+	for ; it.Valid(); it.Next() {
+		_, _, flags := it.UnsafeEntry()
+		rows = append(rows, row{key: string(it.Key()), flags: flags})
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+	if rows[0].key != "A" || rows[1].key != "B" || rows[2].key != "C" {
+		t.Fatalf("expected [A B C], got [%s %s %s]", rows[0].key, rows[1].key, rows[2].key)
+	}
+	if rows[1].flags&node.FlagTombstone == 0 {
+		t.Fatalf("expected B to be tombstoned, flags=%08b", rows[1].flags)
+	}
+}
+
+func TestReverseIterator_IncludeTombstones(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1) // 0
+
+	d0, _ := p.Get(0)
+	n0 := node.NewNode(d0)
+	n0.SetPageID(0)
+	n0.SetType(page.PageTypeLeaf)
+	n0.AddLeafEntry([]byte("A"), []byte("valA"), node.FlagInline, page.ValuePtr{})
+	n0.AddLeafEntry([]byte("B"), nil, node.FlagTombstone, page.ValuePtr{})
+	n0.AddLeafEntry([]byte("C"), []byte("valC"), node.FlagInline, page.ValuePtr{})
+	n0.UpdateChecksum()
+
+	tr := New(p, panicValueReader{}, 0)
+	it := tr.ReverseIteratorWithOptions(nil, nil, IteratorOptions{
+		Mode:              IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	defer it.Close()
+
+	type row struct {
+		key   string
+		flags byte
+	}
+	rows := make([]row, 0, 3)
+	for ; it.Valid(); it.Next() {
+		_, _, flags := it.UnsafeEntry()
+		rows = append(rows, row{key: string(it.Key()), flags: flags})
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 rows, got %d", len(rows))
+	}
+	if rows[0].key != "C" || rows[1].key != "B" || rows[2].key != "A" {
+		t.Fatalf("expected [C B A], got [%s %s %s]", rows[0].key, rows[1].key, rows[2].key)
+	}
+	if rows[1].flags&node.FlagTombstone == 0 {
+		t.Fatalf("expected B to be tombstoned, flags=%08b", rows[1].flags)
+	}
+}
+
 func TestIterator_PointerKeysOnly_DoesNotReadValues(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
