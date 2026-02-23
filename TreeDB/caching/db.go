@@ -3162,7 +3162,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 					}
 					unresolved = append(unresolved, srcPos)
 				}
-				if queuedCount > 0 {
+				if queuedCount > 0 || len(unresolved) > 0 {
 					for i := range unresolved {
 						srcPos := unresolved[i]
 						key := ptrKeys[srcPos]
@@ -3185,7 +3185,10 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 					continue
 				}
 				putValueLogEligible(unresolved)
-				emitWholeGroup = true
+				if !emitWholeGroup {
+					group.end = group.start + 1
+				}
+				continue
 			} else if overlap {
 				emitWholeGroup = true
 			}
@@ -3528,7 +3531,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 							unresolved = append(unresolved, srcPos)
 						}
-						if queuedCount > 0 {
+						if queuedCount > 0 || len(unresolved) > 0 {
 							for i := range unresolved {
 								srcPos := unresolved[i]
 								if err := emitPointerForce(ptrKeys[srcPos], exactPtr); err != nil {
@@ -3541,7 +3544,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							continue
 						}
 						putValueLogEligible(unresolved)
-						emitWholeGroup = true
+						if !emitWholeGroup {
+							group.end = group.start + 1
+						}
+						continue
 					} else if overlap {
 						emitWholeGroup = true
 					}
