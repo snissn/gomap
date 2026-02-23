@@ -840,6 +840,18 @@ func (db *DB) outerLeafFenceV2Enabled() bool {
 	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV2FencePtr
 }
 
+func (db *DB) outerLeafAnchorModeEnabled() bool {
+	if db == nil {
+		return false
+	}
+	switch strings.TrimSpace(db.indexOuterLeafMode) {
+	case backenddb.IndexOuterLeafModeV2FencePtr, backenddb.IndexOuterLeafModeV1LeafLog:
+		return true
+	default:
+		return false
+	}
+}
+
 func normalizeValueLogWALFenceMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "", string(backenddb.ValueLogWALFenceModeRIDJoin):
@@ -1166,18 +1178,18 @@ func lookupVlogDictBytes(dictID uint64, singleDictID uint64, singleDict []byte, 
 }
 
 func (db *DB) deferredValueLogEnabled() bool {
-	// Fence-pointer outer-leaf mode benefits from flush-time regrouping so
+	// Routing-anchor outer-leaf modes benefit from flush-time regrouping so
 	// singleton writes can coalesce into larger outer blocks before value-log
 	// append, reducing index pointer fanout.
 	//
-	// WAL-on v2_fenceptr modes:
+	// WAL-on v2_fenceptr mode:
 	//   - simple_inline: deferred for all pointer-eligible values
 	//   - rid_join: deferred for non-oversized pointer-eligible values (C1),
 	//     while oversized values (C2) may still take immediate pointer paths.
 	if db == nil {
 		return false
 	}
-	if !db.outerLeafFenceV2Enabled() || !db.valueLogEnabled() || !db.allowValueLogPointers() {
+	if !db.outerLeafAnchorModeEnabled() || !db.valueLogEnabled() || !db.allowValueLogPointers() {
 		return false
 	}
 	return true
@@ -1443,7 +1455,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	if !db.allowValueLogPointers() {
 		return ops, nil
 	}
-	fenceMode := db.outerLeafFenceV2Enabled()
+	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowMutableFencePointerCollapse()
 
 	eligible := getValueLogEligible(len(ops))
@@ -1688,6 +1700,71 @@ func fenceMutationLookupForUnits(units []flushUnit) fenceMutationLookupFn {
 			return fencePendingMutationFromMemEntry(ptr, flags, found)
 		}
 	}
+	const fenceMutationLookupIndexMinEntries = 4096
+	totalLen := 0
+	for i := range units {
+		if units[i].memLen > 0 {
+			totalLen += units[i].memLen
+		}
+	}
+	if totalLen >= fenceMutationLookupIndexMinEntries {
+		type indexedMutation struct {
+			key []byte
+			mut fencePendingMutation
+		}
+		index := make(map[uint64][]indexedMutation, totalLen)
+		built := true
+		for i := range units {
+			mem := units[i].mem
+			if mem == nil || units[i].memLen == 0 {
+				continue
+			}
+			it := mem.NewIterator(nil, nil)
+			for it.Valid() {
+				key := it.UnsafeKey()
+				_, ptr, flags := it.UnsafeEntry()
+				mut, ok := fencePendingMutationFromMemEntry(ptr, flags, true)
+				if ok {
+					h := xxhash.Sum64(key)
+					bucket := index[h]
+					updated := false
+					for j := range bucket {
+						if bytes.Equal(bucket[j].key, key) {
+							bucket[j].mut = mut
+							updated = true
+							break
+						}
+					}
+					if !updated {
+						keyCopy := append([]byte(nil), key...)
+						bucket = append(bucket, indexedMutation{key: keyCopy, mut: mut})
+					}
+					index[h] = bucket
+				}
+				it.Next()
+			}
+			if err := it.Error(); err != nil {
+				built = false
+			}
+			if err := it.Close(); err != nil {
+				built = false
+			}
+			if !built {
+				break
+			}
+		}
+		if built {
+			return func(key []byte) (fencePendingMutation, bool) {
+				bucket := index[xxhash.Sum64(key)]
+				for i := range bucket {
+					if bytes.Equal(bucket[i].key, key) {
+						return bucket[i].mut, true
+					}
+				}
+				return fencePendingMutation{}, false
+			}
+		}
+	}
 	return func(key []byte) (fencePendingMutation, bool) {
 		for i := len(units) - 1; i >= 0; i-- {
 			if units[i].mem == nil {
@@ -1720,6 +1797,8 @@ type fenceAnchorPromoter struct {
 
 	backendEmptyChecked bool
 	backendEmpty        bool
+
+	deleteRematerializedBySource map[page.ValuePtr]struct{}
 }
 
 func newFenceAnchorPromoter(db *DB, lookup fenceMutationLookupFn) *fenceAnchorPromoter {
@@ -1892,24 +1971,95 @@ func (p *fenceAnchorPromoter) keyResolvesFromSource(snap *backenddb.Snapshot, ke
 	return false, false, true, nil
 }
 
-func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte, snap *backenddb.Snapshot, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
-	if p == nil || snap == nil || len(deleteKey) == 0 || emitPointer == nil {
-		return nil
+type fenceProjectionIteratorProvider interface {
+	IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
+}
+
+// rematerializeDeleteFallbackSingleCandidate is a bounded fast path for
+// v1_leaflog's single-predecessor fence lookup semantics. It avoids per-key
+// LookupFencePointerSource calls by walking a bounded pointer-projection range.
+func (p *fenceAnchorPromoter) rematerializeDeleteFallbackSingleCandidate(sourceKey, deleteKey []byte, sourcePtr page.ValuePtr, keys [][]byte, emitPointer func(key []byte, ptr page.ValuePtr) error) (handled bool, err error) {
+	if p == nil || p.db == nil || len(keys) == 0 || emitPointer == nil {
+		return false, nil
 	}
-	sourceKey, sourcePtr, found, err := snap.LookupFencePointerOrigin(deleteKey)
-	if err != nil || !found || len(sourceKey) == 0 {
-		return err
+	if strings.TrimSpace(p.db.indexOuterLeafMode) != backenddb.IndexOuterLeafModeV1LeafLog {
+		return false, nil
 	}
-	keys, err := p.decodeFenceKeys(sourcePtr)
+	provider, ok := p.db.backend.(fenceProjectionIteratorProvider)
+	if !ok {
+		return false, nil
+	}
+	sourceIdx := -1
+	for i := range keys {
+		if bytes.Equal(keys[i], sourceKey) {
+			sourceIdx = i
+			break
+		}
+	}
+	// Fast path is intentionally conservative: only run when sourceKey is the
+	// leading key in the decoded block.
+	if sourceIdx != 0 {
+		return false, nil
+	}
+	handled = true
+	opts := backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	}
+	lastKey := keys[len(keys)-1]
+	if len(lastKey) == 0 {
+		return false, nil
+	}
+	// Bound iterator work to keys <= lastKey.
+	end := make([]byte, 0, len(lastKey)+1)
+	end = append(end, lastKey...)
+	end = append(end, 0)
+
+	it, err := provider.IteratorWithOptions(keys[0], end, opts)
 	if err != nil {
-		return err
+		return handled, err
 	}
-	if len(keys) == 0 {
+	if it == nil {
+		return false, nil
+	}
+	defer func() {
+		if closeErr := it.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}()
+
+	var (
+		haveCurr  bool
+		currKey   []byte
+		currPtr   page.ValuePtr
+		currFlags byte
+	)
+	loadCurr := func() error {
+		if !it.Valid() {
+			haveCurr = false
+			currKey = nil
+			currPtr = page.ValuePtr{}
+			currFlags = 0
+			return nil
+		}
+		currKey = it.UnsafeKey()
+		_, currPtr, currFlags = it.UnsafeEntry()
+		if err := it.Error(); err != nil {
+			return err
+		}
+		haveCurr = true
 		return nil
 	}
+	if err := loadCurr(); err != nil {
+		return handled, err
+	}
+
 	exactPtr := page.ValuePtrClearFenceOuter(sourcePtr)
-	fencePtr := page.ValuePtrMarkFenceOuterCollapsed(exactPtr)
-	emittedSuffixAnchor := false
+	var (
+		havePrev  bool
+		prevPtr   page.ValuePtr
+		prevFlags byte
+	)
 	for i := range keys {
 		k := keys[i]
 		if len(k) == 0 {
@@ -1923,42 +2073,131 @@ func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte,
 		if bytes.Equal(k, deleteKey) {
 			continue
 		}
-		cmpDelete := bytes.Compare(k, deleteKey)
-		if cmpDelete > 0 && emittedSuffixAnchor {
-			continue
-		}
-		cmpSource := bytes.Compare(k, sourceKey)
-		exact, marked, resolved, err := p.keyResolvesFromSource(snap, k, sourcePtr)
-		if err != nil {
-			return err
-		}
-		if cmpSource < 0 {
-			// Keys before the predecessor source key should only be rewritten when
-			// they are already exact fence-marked aliases of the same source.
-			if !exact || !resolved || !marked {
-				continue
+		for haveCurr && bytes.Compare(currKey, k) < 0 {
+			prevPtr = currPtr
+			prevFlags = currFlags
+			havePrev = true
+			it.Next()
+			if err := loadCurr(); err != nil {
+				return handled, err
 			}
-			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
-				return err
+		}
+		exact := false
+		marked := false
+		resolved := false
+		if haveCurr && bytes.Equal(currKey, k) {
+			exact = true
+			if currFlags&node.FlagPointer != 0 && valuePtrSameRecord(currPtr, sourcePtr) {
+				resolved = true
+				marked = page.ValuePtrIsFenceOuter(currPtr)
 			}
-			continue
+			prevPtr = currPtr
+			prevFlags = currFlags
+			havePrev = true
+			it.Next()
+			if err := loadCurr(); err != nil {
+				return handled, err
+			}
+		} else if havePrev &&
+			prevFlags&node.FlagPointer != 0 &&
+			prevFlags&node.FlagTombstone == 0 &&
+			page.ValuePtrIsFenceOuter(prevPtr) &&
+			valuePtrSameRecord(prevPtr, sourcePtr) {
+			resolved = true
 		}
 		if !resolved {
 			continue
 		}
-		if cmpDelete < 0 {
-			if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
-				return err
-			}
+		if exact && !marked {
 			continue
 		}
-		if cmpDelete > 0 {
-			if err := p.emitUniquePointer(k, fencePtr, emitPointer); err != nil {
-				return err
-			}
-			emittedSuffixAnchor = true
+		if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
+			return handled, err
 		}
 	}
+	if err := it.Error(); err != nil {
+		return handled, err
+	}
+	return handled, nil
+}
+
+func (p *fenceAnchorPromoter) maybeRematerializeDeleteFallback(deleteKey []byte, snap *backenddb.Snapshot, emitPointer func(key []byte, ptr page.ValuePtr) error) error {
+	if p == nil || snap == nil || len(deleteKey) == 0 || emitPointer == nil {
+		return nil
+	}
+	sourceKey, sourcePtr, found, err := snap.LookupFencePointerOrigin(deleteKey)
+	if err != nil || !found || len(sourceKey) == 0 {
+		return err
+	}
+	sourcePtr = page.ValuePtrClearFenceOuter(sourcePtr)
+	if p.deleteRematerializedBySource != nil {
+		if _, ok := p.deleteRematerializedBySource[sourcePtr]; ok {
+			return nil
+		}
+	}
+	keys, err := p.decodeFenceKeys(sourcePtr)
+	if err != nil {
+		return err
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	deleteIdx := -1
+	for i := range keys {
+		if bytes.Equal(keys[i], deleteKey) {
+			deleteIdx = i
+			break
+		}
+	}
+	// Deleting a key that is not present in the resolved fence block is a
+	// logical no-op. Avoid rematerialization churn for miss-heavy delete paths.
+	if deleteIdx < 0 {
+		return nil
+	}
+	if handled, err := p.rematerializeDeleteFallbackSingleCandidate(sourceKey, deleteKey, sourcePtr, keys, emitPointer); err != nil {
+		return err
+	} else if handled {
+		if p.deleteRematerializedBySource == nil {
+			p.deleteRematerializedBySource = make(map[page.ValuePtr]struct{}, 8)
+		}
+		p.deleteRematerializedBySource[sourcePtr] = struct{}{}
+		return nil
+	}
+	exactPtr := page.ValuePtrClearFenceOuter(sourcePtr)
+	for i := range keys {
+		k := keys[i]
+		if len(k) == 0 {
+			continue
+		}
+		if p.lookup != nil {
+			if _, ok := p.lookup(k); ok {
+				continue
+			}
+		}
+		if bytes.Equal(k, deleteKey) {
+			continue
+		}
+		exact, marked, resolved, err := p.keyResolvesFromSource(snap, k, sourcePtr)
+		if err != nil {
+			return err
+		}
+		if !resolved {
+			continue
+		}
+		// After deleting a fallback-only key, rewrite surviving keys that still
+		// resolve from this source to exact pointers. This removes overlapping
+		// fallback expansion and preserves one-row-per-logical-key iteration.
+		if exact && !marked {
+			continue
+		}
+		if err := p.emitUniquePointer(k, exactPtr, emitPointer); err != nil {
+			return err
+		}
+	}
+	if p.deleteRematerializedBySource == nil {
+		p.deleteRematerializedBySource = make(map[page.ValuePtr]struct{}, 8)
+	}
+	p.deleteRematerializedBySource[sourcePtr] = struct{}{}
 	return nil
 }
 
@@ -2105,7 +2344,7 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		putValueLogKeys(ptrKeys)
 		putValueLogKeys(ptrVals)
 	}()
-	fenceMode := db.outerLeafFenceV2Enabled()
+	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
 	state := fenceState
 	if state == nil {
@@ -2320,9 +2559,10 @@ func (db *DB) flushDeferredValueLogMemtable(iter iterator.UnsafeIterator, backen
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
 			key := ptrKeys[srcPos]
 			outPtr := ptr
-			if collapseFence && emitWholeGroup && srcPos > group.start {
-				// Non-anchor siblings are emitted as exact pointers so fence
-				// fallback only triggers from the chosen anchor.
+			if collapseFence && emitWholeGroup {
+				// Overlap rewrites emit exact pointers for every key in the group.
+				// This prevents iterator-visible duplicate logical keys from
+				// fence expansion + exact siblings during in-place rewrites.
 				outPtr = exactPtr
 			}
 			if psv != nil {
@@ -2417,7 +2657,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	}
 
 	allowPointers := db.allowValueLogPointers()
-	fenceMode := db.outerLeafFenceV2Enabled()
+	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
 	durability := journalDurabilityNone
 	if sync {
@@ -2623,12 +2863,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
 					key := ptrKeys[srcPos]
 					outPtr := ptr
-					if collapseFence && emitWholeGroup && srcPos > group.start {
-						// Keep only the anchor fence-marked; siblings remain exact.
+					if collapseFence && emitWholeGroup {
+						// Overlap rewrites emit exact pointers for every key in the
+						// group to avoid duplicate logical rows during fence expansion.
 						outPtr = exactPtr
 					}
 					var err error
-					if collapseFence && emitWholeGroup && srcPos > group.start {
+					if collapseFence && emitWholeGroup {
 						err = emitPointerForce(key, outPtr)
 					} else {
 						err = emitPointer(key, outPtr)
@@ -12261,7 +12502,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		backendPendingOps := 0
 		chunkBackend := totalLen > backendEntriesCap
 		emittedChunk := false
-		fenceMode := db.outerLeafFenceV2Enabled()
+		fenceMode := db.outerLeafAnchorModeEnabled()
 		collapseFence := fenceMode && db.allowFencePointerCollapse()
 
 		type ptrSetterView interface {
@@ -12590,7 +12831,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		psv, _ := backendBatch.(ptrSetterView)
 		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
-		fenceMode := db.outerLeafFenceV2Enabled()
+		fenceMode := db.outerLeafAnchorModeEnabled()
 		collapseFence := fenceMode && db.allowFencePointerCollapse()
 		var (
 			lastFencePtr page.ValuePtr
@@ -12976,7 +13217,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		if db.deferredValueLogEnabled() {
 			t0 := time.Now()
 			var mutationLookup fenceMutationLookupFn
-			if db.outerLeafFenceV2Enabled() && db.allowFencePointerCollapse() {
+			if db.outerLeafAnchorModeEnabled() && db.allowFencePointerCollapse() {
 				mutationLookup = fenceMutationLookupForMem(mem)
 			}
 			if err := db.flushDeferredValueLogMemtable(iter, backendBatch, memLen, sync, laneID, mutationLookup, nil); err != nil {
@@ -13037,7 +13278,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			psv, _ := backendBatch.(ptrSetterView)
 			ps, _ := backendBatch.(ptrSetter)
 			var single [1]batch.Entry
-			fenceMode := db.outerLeafFenceV2Enabled()
+			fenceMode := db.outerLeafAnchorModeEnabled()
 			collapseFence := fenceMode && db.allowFencePointerCollapse()
 			var (
 				lastFencePtr page.ValuePtr
@@ -15638,8 +15879,8 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if !b.db.deferredValueLogEnabled() {
 		return false, nil
 	}
-	if b.db.outerLeafFenceV2Enabled() {
-		// Fence-pointer mode needs flush-time fence collapse semantics; direct
+	if b.db.outerLeafAnchorModeEnabled() {
+		// Anchor modes need flush-time fence collapse semantics; direct
 		// stream bypass emits backend pointer ops at commit boundaries and can
 		// regress immediate read/prefix-scan behavior.
 		return false, nil

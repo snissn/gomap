@@ -1298,6 +1298,77 @@ func TestCachingDB_Open_V1LeafLogLegacy_Preserved(t *testing.T) {
 	}
 }
 
+func TestCachingDB_Flush_V1LeafLog_CollapsesMoreThanLegacy(t *testing.T) {
+	run := func(t *testing.T, mode string) int {
+		t.Helper()
+		dir := t.TempDir()
+		backend, err := db.Open(db.Options{
+			Dir:                dir,
+			ChunkSize:          64 * 1024,
+			IndexOuterLeafMode: mode,
+			ValueLog: db.ValueLogOptions{
+				PointerThreshold:          1,
+				ForcePointers:             true,
+				OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
+				OuterLeafBlockTargetBytes: 1 << 20,
+			},
+		})
+		if err != nil {
+			t.Fatalf("backend open (%s): %v", mode, err)
+		}
+		defer backend.Close()
+
+		cache, err := Open(dir, backend, Options{
+			FlushThreshold:                    1 << 30,
+			MemtableShards:                    1,
+			JournalLanes:                      1,
+			IndexOuterLeafMode:                mode,
+			ForceValueLogPointers:             true,
+			ValueLogPointerThreshold:          1,
+			ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
+			ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+		})
+		if err != nil {
+			t.Fatalf("cache open (%s): %v", mode, err)
+		}
+		defer cache.Close()
+
+		const totalKeys = 1024
+		b := cache.NewBatchWithSize(totalKeys)
+		for i := 0; i < totalKeys; i++ {
+			key := []byte(fmt.Sprintf("k%04d", i))
+			val := bytes.Repeat([]byte{byte(i % 251)}, 512)
+			if err := b.Set(key, val); err != nil {
+				t.Fatalf("batch Set(%s, mode=%s): %v", key, mode, err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("batch WriteSync(%s): %v", mode, err)
+		}
+		_ = b.Close()
+		if err := cache.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint(%s): %v", mode, err)
+		}
+
+		snap := backend.AcquireSnapshot()
+		if snap == nil {
+			t.Fatalf("snapshot nil (%s)", mode)
+		}
+		entries := countSnapshotLeafEntries(t, snap)
+		_ = snap.Close()
+		if entries <= 0 {
+			t.Fatalf("leaf entries <= 0 for mode=%s", mode)
+		}
+		return entries
+	}
+
+	v1Entries := run(t, db.IndexOuterLeafModeV1LeafLog)
+	legacyEntries := run(t, db.IndexOuterLeafModeV1LeafLogLegacy)
+	if v1Entries >= legacyEntries {
+		t.Fatalf("expected v1_leaflog to collapse more than legacy, v1=%d legacy=%d", v1Entries, legacyEntries)
+	}
+}
+
 func TestCachingDB_Open_V2FencePtrMixedCase_AllowsSimpleInline(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
