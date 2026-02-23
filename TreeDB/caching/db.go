@@ -2907,7 +2907,8 @@ func (p *fenceAnchorPromoter) maybePromoteAnchor(key []byte, pending fencePendin
 	if err != nil {
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			if pending.kind == fencePendingMutationDelete {
-				return p.maybeRematerializeFallbackMutation(key, snap, emitPointer, emitDelete, true)
+				allowExactFallback := strings.TrimSpace(p.db.indexOuterLeafMode) != backenddb.IndexOuterLeafModeV1LeafLog
+				return p.maybeRematerializeFallbackMutation(key, snap, emitPointer, emitDelete, allowExactFallback)
 			}
 			return nil
 		}
