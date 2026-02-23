@@ -274,10 +274,11 @@ bytes FramePayload
 - If `FrameFlags` indicates compression, frame payload is decoded first.
 - `DictID` selects dictionary for dict-compressed payloads.
 
-### 7.2 Outer-leaf payload envelope (`IndexOuterLeafMode=v1_leaflog|v2_blockptr|v2_fenceptr`)
+### 7.2 Outer-leaf payload envelope (`IndexOuterLeafMode=v1_leaflog|v1_leaflog_legacy|v2_blockptr|v2_fenceptr`)
 
-When outer-leaf mode `v1_leaflog`, `v2_blockptr`, or `v2_fenceptr` is enabled,
-value-log payload bytes may be wrapped in an outer-leaf envelope (`Magic="TOL2"`):
+When outer-leaf mode `v1_leaflog`, `v1_leaflog_legacy`, `v2_blockptr`, or
+`v2_fenceptr` is enabled, value-log payload bytes may be wrapped in an
+outer-leaf envelope (`Magic="TOL2"`):
 
 ```text
 bytes[4] Magic            // "TOL2"
@@ -300,9 +301,12 @@ Version 3 stores one or more typed entries (inline value or nested blob
 reference) with restart metadata and the same envelope checksum rules.
 
 Mode semantics:
-- `v1_leaflog`: index keeps one logical entry per user key (v1 exact-key
-  lookup semantics) while pointer payload bytes use outer-leaf envelope
-  encoding. Lookups do not use fence-key predecessor probing.
+- `v1_leaflog`: index uses routing-style leaf anchors (one leaf anchor per
+  outer-leaf block payload). Point lookup probes the predecessor anchor
+  candidate and resolves the requested key inside the payload block.
+- `v1_leaflog_legacy`: index keeps exact-key leaf entries per user key while
+  pointer payload bytes use outer-leaf envelope encoding. Lookups do not use
+  fence-key predecessor probing.
 - `v2_blockptr`: index leaves remain per-user-key pointer entries; each pointer
   can reference a grouped outer-leaf block payload.
 - `v2_fenceptr`: index leaves store one fence-key pointer per outer block;
@@ -314,6 +318,10 @@ When a pointer references an outer-leaf envelope, read path resolves
 pointer+key by decoding one block payload and searching inside it for the
 requested key. Immediate direct pointers (for example WAL-on `v2_fenceptr`
 `rid_join` oversized path before flush collapse) bypass outer-leaf block decode.
+
+Contract note: this section describes current format and mode behavior. Further
+routing-path algorithm changes are tracked in #610 and are outside this
+Step 2 alignment change.
 
 Pre-alpha note: `v2` outer-leaf layouts are still evolving. DB directories
 written by older experimental builds may fail to open under newer binaries (and

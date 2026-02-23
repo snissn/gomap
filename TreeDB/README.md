@@ -114,14 +114,19 @@ Details: `docs/TREEDB_WRITE_PATHS.md`.
 
 ## Outer-Leaf Modes
 
-TreeDB supports four index outer-leaf modes:
+TreeDB supports five index outer-leaf modes:
 
 - `v1`: baseline exact-key index semantics.
-- `v1_leaflog`: exact-key semantics with outer-leaf payload envelope encoding in the value log.
+- `v1_leaflog`: routing-style mode using leaf anchors in the index and outer-leaf payload envelopes (`TOL2`) in the value log.
+- `v1_leaflog_legacy`: legacy compatibility mode that keeps exact-key leaf entries with outer-leaf payload envelopes.
 - `v2_blockptr`: exact-key index entries that can point to grouped outer-leaf payload blocks.
 - `v2_fenceptr`: fence-key routing mode (smallest index footprint, predecessor-probe lookup model).
 
 If unset (`""`), `IndexOuterLeafMode` defaults to `v2_fenceptr`.
+
+Current Step 2 guarantees:
+- `v1_leaflog` and `v1_leaflog_legacy` remain distinct selectable mode strings (no auto-aliasing).
+- Existing read/write behavior is unchanged in this step; algorithm rewrite/hardening work is tracked in #610.
 
 Canonical mode semantics and invariants: `TreeDB/docs/spec/outer-leaf-modes.md`.
 

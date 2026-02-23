@@ -5,6 +5,34 @@ import (
 	"testing"
 )
 
+func TestNormalizeIndexOuterLeafMode_LeafLogModesRemainDistinct(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "leaflog",
+			in:   " V1_LEAFLOG ",
+			want: IndexOuterLeafModeV1LeafLog,
+		},
+		{
+			name: "leaflog legacy",
+			in:   " V1_LEAFLOG_LEGACY ",
+			want: IndexOuterLeafModeV1LeafLogLegacy,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeIndexOuterLeafMode(tc.in); got != tc.want {
+				t.Fatalf("normalizeIndexOuterLeafMode(%q)=%q want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
 	modes := []string{
 		IndexOuterLeafModeV1LeafLog,
@@ -23,6 +51,42 @@ func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatalf("close: %v", err)
 		}
+	}
+}
+
+func TestOpen_IndexOuterLeafMode_MixedCaseLeafLogModesCanonicalized(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want string
+	}{
+		{
+			name: "v1_leaflog",
+			mode: " V1_LEAFLOG ",
+			want: IndexOuterLeafModeV1LeafLog,
+		},
+		{
+			name: "v1_leaflog_legacy",
+			mode: " V1_LEAFLOG_LEGACY ",
+			want: IndexOuterLeafModeV1LeafLogLegacy,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			db, err := Open(Options{
+				Dir:                t.TempDir(),
+				IndexOuterLeafMode: tc.mode,
+			})
+			if err != nil {
+				t.Fatalf("open %q: %v", tc.mode, err)
+			}
+			defer func() { _ = db.Close() }()
+			if got := db.indexOuterLeafMode; got != tc.want {
+				t.Fatalf("index outer leaf mode = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -156,6 +220,22 @@ func TestOpen_ValueLogWALFenceMode_V1LeafLog_RejectsSimpleInline(t *testing.T) {
 	_, err := Open(Options{
 		Dir:                t.TempDir(),
 		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLog,
+		ValueLog: ValueLogOptions{
+			WALFenceMode: ValueLogWALFenceModeSimpleInline,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "requires index outer leaf mode") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOpen_ValueLogWALFenceMode_V1LeafLogLegacy_RejectsSimpleInline(t *testing.T) {
+	_, err := Open(Options{
+		Dir:                t.TempDir(),
+		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLogLegacy,
 		ValueLog: ValueLogOptions{
 			WALFenceMode: ValueLogWALFenceModeSimpleInline,
 		},
