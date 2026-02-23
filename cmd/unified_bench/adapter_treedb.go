@@ -271,8 +271,7 @@ func parseTreeDBOuterLeafMode(s string) (string, error) {
 	case "v1_leaflog":
 		return treedb.IndexOuterLeafModeV1LeafLog, nil
 	case "v1_leaflog_legacy":
-		// Compatibility alias for current v1_leaflog semantics.
-		return treedb.IndexOuterLeafModeV1LeafLog, nil
+		return treedb.IndexOuterLeafModeV1LeafLogLegacy, nil
 	case "v2_blockptr":
 		return treedb.IndexOuterLeafModeV2BlockPtr, nil
 	case "v2_fenceptr":

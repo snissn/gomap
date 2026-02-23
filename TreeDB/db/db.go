@@ -149,8 +149,7 @@ func normalizeIndexOuterLeafMode(mode string) string {
 	case IndexOuterLeafModeV1LeafLog:
 		return IndexOuterLeafModeV1LeafLog
 	case IndexOuterLeafModeV1LeafLogLegacy:
-		// Compatibility alias: keep legacy per-key semantics for now.
-		return IndexOuterLeafModeV1LeafLog
+		return IndexOuterLeafModeV1LeafLogLegacy
 	case IndexOuterLeafModeV2BlockPtr:
 		return IndexOuterLeafModeV2BlockPtr
 	case IndexOuterLeafModeV2FencePtr:
@@ -228,16 +227,12 @@ const (
 const (
 	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
 	IndexOuterLeafModeV1 = "v1"
-	// IndexOuterLeafModeV1LeafLog is reserved for the routing-only outer-leaf
-	// contract:
+	// IndexOuterLeafModeV1LeafLog enables the routing-only outer-leaf contract:
 	// - index stores routing/internal nodes plus one anchor per outer block
 	// - key/value leaf payloads live in value-log outer blocks
-	//
-	// During migration this constant still maps to legacy per-key behavior.
 	IndexOuterLeafModeV1LeafLog = "v1_leaflog"
 	// IndexOuterLeafModeV1LeafLogLegacy preserves legacy per-key v1_leaflog
-	// semantics for bisect and controlled rollout. It normalizes to
-	// IndexOuterLeafModeV1LeafLog at open time today.
+	// semantics for bisect and controlled rollout.
 	IndexOuterLeafModeV1LeafLogLegacy = "v1_leaflog_legacy"
 	// IndexOuterLeafModeV2BlockPtr enables the outer-leaf block-pointer payload
 	// format. Values are encoded as key+value blocks in the value log and index
@@ -547,10 +542,9 @@ type Options struct {
 	// IndexOuterLeafMode selects the index outer-leaf format:
 	// - "": defaults to "v2_fenceptr"
 	// - "v1": existing per-key leaf entries
-	// - "v1_leaflog": reserved routing+anchor outer-leaf contract (currently
-	//   normalizes to legacy per-key semantics during migration)
+	// - "v1_leaflog": routing+anchor outer-leaf contract
 	// - "v1_leaflog_legacy": explicit compatibility alias for legacy per-key
-	//   v1_leaflog behavior (normalizes to "v1_leaflog")
+	//   v1_leaflog behavior
 	// - "v2_blockptr": pointer payloads encode key+value outer-leaf blocks
 	// - "v2_fenceptr": fence-key-only index entries with outer block payloads
 	IndexOuterLeafMode string
@@ -939,7 +933,7 @@ func validateOptions(opts Options) error {
 	}
 	indexOuterLeafMode := normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
 	switch indexOuterLeafMode {
-	case IndexOuterLeafModeV1, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
+	case IndexOuterLeafModeV1, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogLegacy, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
 	default:
 		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
 	}

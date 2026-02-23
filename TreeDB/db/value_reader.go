@@ -20,6 +20,8 @@ type valueReader struct {
 	modeInit               bool
 	outerLeafEnabled       bool
 	fenceLookupEnabled     bool
+	fenceGlobalEnabled     bool
+	fenceSingleCandidate   bool
 	skipOuterLeafChecksums bool
 	cache                  *outerLeafBlockCache
 	keyCache               *outerLeafKeyCache
@@ -473,10 +475,20 @@ func (r *valueReader) releaseDecodeContext() {
 }
 
 func (r *valueReader) setOuterLeafMode(mode string) {
-	mode = strings.TrimSpace(mode)
+	mode = strings.ToLower(strings.TrimSpace(mode))
 	r.outerLeafMode = mode
 	r.outerLeafEnabled = outerleaf.ModeEnabled(mode)
-	r.fenceLookupEnabled = mode == outerleaf.ModeV2FencePtr
+	r.fenceLookupEnabled = false
+	r.fenceGlobalEnabled = false
+	r.fenceSingleCandidate = false
+	switch mode {
+	case outerleaf.ModeV1LeafLog:
+		r.fenceLookupEnabled = true
+		r.fenceSingleCandidate = true
+	case outerleaf.ModeV2FencePtr:
+		r.fenceLookupEnabled = true
+		r.fenceGlobalEnabled = true
+	}
 	r.modeInit = true
 }
 
@@ -489,16 +501,14 @@ func (r valueReader) outerLeafModeEnabled() bool {
 
 func (r valueReader) fenceLookupModeEnabled() bool {
 	if r.modeInit {
-		if r.outerLeafMode == outerleaf.ModeV1LeafLog {
-			return false
-		}
 		return r.fenceLookupEnabled
 	}
-	mode := strings.TrimSpace(r.outerLeafMode)
-	if mode == outerleaf.ModeV1LeafLog {
+	switch strings.ToLower(strings.TrimSpace(r.outerLeafMode)) {
+	case outerleaf.ModeV1LeafLog, outerleaf.ModeV2FencePtr:
+		return true
+	default:
 		return false
 	}
-	return mode == outerleaf.ModeV2FencePtr
 }
 
 func (r valueReader) KeyAwareEnabled() bool {
@@ -509,12 +519,26 @@ func (r valueReader) FenceLookupEnabled() bool {
 	return r.fenceLookupModeEnabled()
 }
 
+func (r valueReader) FenceLookupGlobalEnabled() bool {
+	if r.modeInit {
+		return r.fenceGlobalEnabled
+	}
+	return strings.ToLower(strings.TrimSpace(r.outerLeafMode)) == outerleaf.ModeV2FencePtr
+}
+
+func (r valueReader) FenceLookupSingleCandidateEnabled() bool {
+	if r.modeInit {
+		return r.fenceSingleCandidate
+	}
+	return strings.ToLower(strings.TrimSpace(r.outerLeafMode)) == outerleaf.ModeV1LeafLog
+}
+
 func (r valueReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
 	if r.modeInit {
-		if r.outerLeafMode == outerleaf.ModeV1LeafLog {
+		if r.outerLeafMode == outerleaf.ModeV1LeafLogLegacy {
 			return false
 		}
-	} else if strings.TrimSpace(r.outerLeafMode) == outerleaf.ModeV1LeafLog {
+	} else if strings.ToLower(strings.TrimSpace(r.outerLeafMode)) == outerleaf.ModeV1LeafLogLegacy {
 		return false
 	}
 	// Fence expansion should only trigger for explicitly fence-marked pointers.

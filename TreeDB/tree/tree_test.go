@@ -23,6 +23,8 @@ type fenceLookupReader struct {
 	blocks           map[page.ValuePtr]map[string][]byte
 	nextOffset       uint64
 	fileID           uint32
+	globalEnabled    bool
+	singleCandidate  bool
 	fenceCalls       int
 	fenceAppendCalls int
 	blockCalls       int
@@ -47,6 +49,20 @@ func fenceLookupMissingBlockErr(ptr page.ValuePtr) error {
 
 func (r *fenceLookupReader) FenceLookupEnabled() bool {
 	return true
+}
+
+func (r *fenceLookupReader) FenceLookupGlobalEnabled() bool {
+	if r == nil {
+		return true
+	}
+	return r.globalEnabled
+}
+
+func (r *fenceLookupReader) FenceLookupSingleCandidateEnabled() bool {
+	if r == nil {
+		return false
+	}
+	return r.singleCandidate
 }
 
 func (r *fenceLookupClassifierReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
@@ -78,9 +94,15 @@ func (r *fenceLookupSeekClassifierReader) FencePointerLikelyBlock(ptr page.Value
 }
 
 func newFenceLookupReader() *fenceLookupReader {
+	return newFenceLookupReaderWithScope(true, false)
+}
+
+func newFenceLookupReaderWithScope(globalEnabled bool, singleCandidate bool) *fenceLookupReader {
 	return &fenceLookupReader{
-		blocks: make(map[page.ValuePtr]map[string][]byte),
-		fileID: page.ValueLogFileID(1),
+		blocks:          make(map[page.ValuePtr]map[string][]byte),
+		fileID:          page.ValueLogFileID(1),
+		globalEnabled:   globalEnabled,
+		singleCandidate: singleCandidate,
 	}
 }
 
@@ -2312,4 +2334,161 @@ func TestTreeGetEntry_FencePredecessorLookupGlobalRespectsScanLimit(t *testing.T
 	if reader.fenceCalls != fenceGlobalFallbackScanLimit {
 		t.Fatalf("fence calls = %d, want %d (scan limit)", reader.fenceCalls, fenceGlobalFallbackScanLimit)
 	}
+}
+
+func TestTreeGetEntry_FencePredecessorLookupGlobalDisabled(t *testing.T) {
+	dir := t.TempDir()
+	idxPath := filepath.Join(dir, "index.db")
+	p, err := pager.Open(idxPath, 65536)
+	if err != nil {
+		t.Fatalf("Pager open failed: %v", err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(3); err != nil {
+		t.Fatalf("Alloc pages: %v", err)
+	}
+
+	reader := newFenceLookupReaderWithScope(false, false)
+	ptr := reader.addBlock(map[string]string{
+		"k120": "v120",
+	})
+
+	leaf1Data, err := p.Get(1)
+	if err != nil {
+		t.Fatalf("Get leaf1 page: %v", err)
+	}
+	leaf1 := node.NewNode(leaf1Data)
+	leaf1.SetType(page.PageTypeLeaf)
+	leaf1.SetPageID(1)
+	if err := leaf1.AddLeafEntry([]byte("k000"), nil, node.FlagPointer, ptr); err != nil {
+		t.Fatalf("leaf1 AddLeafEntry(k000): %v", err)
+	}
+	leaf1.UpdateChecksum()
+
+	leaf2Data, err := p.Get(2)
+	if err != nil {
+		t.Fatalf("Get leaf2 page: %v", err)
+	}
+	leaf2 := node.NewNode(leaf2Data)
+	leaf2.SetType(page.PageTypeLeaf)
+	leaf2.SetPageID(2)
+	if err := leaf2.AddLeafEntry([]byte("k150"), []byte("v150"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("leaf2 AddLeafEntry(k150): %v", err)
+	}
+	leaf2.UpdateChecksum()
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeInternal)
+	root.SetPageID(0)
+	if err := root.AddInternalChild([]byte("k000"), 1); err != nil {
+		t.Fatalf("root AddInternalChild(k000): %v", err)
+	}
+	if err := root.AddInternalChild([]byte("k100"), 2); err != nil {
+		t.Fatalf("root AddInternalChild(k100): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+
+	if _, err := tr.GetEntry([]byte("k120")); err != ErrKeyNotFound {
+		t.Fatalf("GetEntry(k120): expected ErrKeyNotFound with global fallback disabled, got %v", err)
+	}
+	if _, err := tr.Get([]byte("k120")); err != ErrKeyNotFound {
+		t.Fatalf("Get(k120): expected ErrKeyNotFound with global fallback disabled, got %v", err)
+	}
+	if _, err := tr.GetAppend([]byte("k120"), nil); err != ErrKeyNotFound {
+		t.Fatalf("GetAppend(k120): expected ErrKeyNotFound with global fallback disabled, got %v", err)
+	}
+	if has, err := tr.Has([]byte("k120")); err != nil {
+		t.Fatalf("Has(k120): %v", err)
+	} else if has {
+		t.Fatalf("Has(k120) = true, want false with global fallback disabled")
+	}
+	if srcKey, ptr, ok, err := tr.LookupFencePointerOrigin([]byte("k120")); err != nil {
+		t.Fatalf("LookupFencePointerOrigin(k120): %v", err)
+	} else if ok {
+		t.Fatalf("LookupFencePointerOrigin(k120) returned key=%q ptr=%+v want no source", srcKey, ptr)
+	}
+	if ptr, ok, err := tr.LookupFencePointerSource([]byte("k120")); err != nil {
+		t.Fatalf("LookupFencePointerSource(k120): %v", err)
+	} else if ok {
+		t.Fatalf("LookupFencePointerSource(k120) returned ptr=%+v want no source", ptr)
+	}
+	if reader.fenceCalls != 0 {
+		t.Fatalf("fence calls = %d, want 0 with global fallback disabled", reader.fenceCalls)
+	}
+}
+
+func TestTreeGetEntry_FencePredecessorLookupSingleCandidateBounded(t *testing.T) {
+	build := func(t *testing.T, reader *fenceLookupReader) *Tree {
+		t.Helper()
+		dir := t.TempDir()
+		idxPath := filepath.Join(dir, "index.db")
+		p, err := pager.Open(idxPath, 65536)
+		if err != nil {
+			t.Fatalf("Pager open failed: %v", err)
+		}
+		t.Cleanup(func() { _ = p.Close() })
+
+		if _, err := p.Alloc(1); err != nil {
+			t.Fatalf("Alloc pages: %v", err)
+		}
+
+		ptrFar := reader.addBlock(map[string]string{
+			"k025": "v025",
+		})
+		ptrNear := reader.addBlock(map[string]string{
+			"k020": "v020",
+		})
+
+		leafData, err := p.Get(0)
+		if err != nil {
+			t.Fatalf("Get leaf page: %v", err)
+		}
+		leaf := node.NewNode(leafData)
+		leaf.SetType(page.PageTypeLeaf)
+		leaf.SetPageID(0)
+		if err := leaf.AddLeafEntry([]byte("k010"), nil, node.FlagPointer, ptrFar); err != nil {
+			t.Fatalf("AddLeafEntry(k010): %v", err)
+		}
+		if err := leaf.AddLeafEntry([]byte("k020"), nil, node.FlagPointer, ptrNear); err != nil {
+			t.Fatalf("AddLeafEntry(k020): %v", err)
+		}
+		if err := leaf.AddLeafEntry([]byte("k030"), []byte("v030"), node.FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(k030): %v", err)
+		}
+		leaf.UpdateChecksum()
+		return New(p, reader, 0)
+	}
+
+	t.Run("single-candidate-miss", func(t *testing.T) {
+		reader := newFenceLookupReaderWithScope(false, true)
+		tr := build(t, reader)
+		if _, err := tr.GetEntry([]byte("k025")); err != ErrKeyNotFound {
+			t.Fatalf("GetEntry(k025): expected ErrKeyNotFound in single-candidate mode, got %v", err)
+		}
+		if reader.fenceCalls != 1 {
+			t.Fatalf("fence calls = %d, want 1 in single-candidate mode", reader.fenceCalls)
+		}
+	})
+
+	t.Run("unbounded-predecessor-hit", func(t *testing.T) {
+		reader := newFenceLookupReaderWithScope(false, false)
+		tr := build(t, reader)
+		entry, err := tr.GetEntry([]byte("k025"))
+		if err != nil {
+			t.Fatalf("GetEntry(k025): %v", err)
+		}
+		if string(entry.Value) != "v025" {
+			t.Fatalf("GetEntry(k025) value = %q, want %q", entry.Value, "v025")
+		}
+		if reader.fenceCalls != 2 {
+			t.Fatalf("fence calls = %d, want 2 with unbounded predecessor scan", reader.fenceCalls)
+		}
+	})
 }

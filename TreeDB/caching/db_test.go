@@ -1278,7 +1278,7 @@ func TestCachingDB_Open_NonFenceMode_RejectsSimpleInlineWALFenceMode(t *testing.
 	}
 }
 
-func TestCachingDB_Open_V1LeafLogLegacy_NormalizesToV1LeafLog(t *testing.T) {
+func TestCachingDB_Open_V1LeafLogLegacy_Preserved(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
@@ -1293,8 +1293,8 @@ func TestCachingDB_Open_V1LeafLogLegacy_NormalizesToV1LeafLog(t *testing.T) {
 		t.Fatalf("open v1_leaflog_legacy: %v", err)
 	}
 	defer cache.Close()
-	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1LeafLog {
-		t.Fatalf("indexOuterLeafMode=%q want %q", got, db.IndexOuterLeafModeV1LeafLog)
+	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1LeafLogLegacy {
+		t.Fatalf("indexOuterLeafMode=%q want %q", got, db.IndexOuterLeafModeV1LeafLogLegacy)
 	}
 }
 
