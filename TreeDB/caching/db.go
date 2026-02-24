@@ -2297,6 +2297,14 @@ func (p *fenceAnchorPromoter) pointerActsAsAnchor(ptr page.ValuePtr) bool {
 }
 
 func (plan *fenceSourceRewritePlan) setValue(key, value []byte) {
+	plan.setValueWithOwnership(key, value, false)
+}
+
+func (plan *fenceSourceRewritePlan) setValueOwned(key, value []byte) {
+	plan.setValueWithOwnership(key, value, true)
+}
+
+func (plan *fenceSourceRewritePlan) setValueWithOwnership(key, value []byte, owned bool) {
 	if plan == nil || len(key) == 0 {
 		return
 	}
@@ -2310,16 +2318,25 @@ func (plan *fenceSourceRewritePlan) setValue(key, value []byte) {
 				continue
 			}
 			if bytes.Equal(plan.sets[idx].key, key) {
-				plan.sets[idx].value = value
+				if owned {
+					plan.sets[idx].value = value
+				} else {
+					plan.sets[idx].value = append([]byte(nil), value...)
+				}
 				return
 			}
 		}
 	}
-	keyCopy := append([]byte(nil), key...)
+	keyCopy := key
+	valCopy := value
+	if !owned {
+		keyCopy = append([]byte(nil), key...)
+		valCopy = append([]byte(nil), value...)
+	}
 	plan.setIndex[keyHash] = append(plan.setIndex[keyHash], len(plan.sets))
 	plan.sets = append(plan.sets, fenceSourcePendingSet{
 		key:   keyCopy,
-		value: value,
+		value: valCopy,
 	})
 }
 
@@ -2648,6 +2665,9 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 		}
 		plan.sourceKeyCount = len(keys)
 		plan.sourceKeys = keys
+		if len(plan.setIndex) == 0 && plan.sourceKeyCount > 8 {
+			plan.setIndex = make(map[uint64][]int, plan.sourceKeyCount)
+		}
 	}
 	// Queue overlap rewrites when key is in-source OR falls inside the source
 	// key range (in-range inserts). Keys outside the source range must fall back
@@ -2655,7 +2675,9 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 	if !plan.containsKey(key) && !plan.withinSourceRange(key) {
 		return false, sourcePtr, true, nil
 	}
-	plan.setValue(key, value)
+	// queueV1LeafLogOverlapRewrite is only called from deferred pointer slices
+	// that already own/copy key+value bytes.
+	plan.setValueOwned(key, value)
 	p.lastOverlapPlan = plan
 	p.lastOverlapSourcePtr = sourcePtr
 	return true, sourcePtr, true, nil
@@ -3128,47 +3150,45 @@ func (p *fenceAnchorPromoter) rewriteFallbackSourceBlock(sourceKey, mutationKey 
 	}
 	defer decoded.Release()
 
-	typed, err := decoded.TypedEntries(nil)
-	if err != nil {
-		return nil, page.ValuePtr{}, false, err
-	}
-	if len(typed) == 0 {
+	if decoded.EntryCount() == 0 {
 		return nil, page.ValuePtr{}, false, nil
 	}
 
-	kept := make([]outerleaf.TypedEntry, 0, len(typed))
+	kept := make([]outerleaf.TypedEntry, 0, decoded.EntryCount())
 	removed := false
 	totalInlineBytes := 0
 	sourceKept := false
-	for i := range typed {
-		ent := typed[i]
-		if bytes.Equal(ent.Key, mutationKey) {
+	if err := decoded.VisitTypedEntries(func(key []byte, kind outerleaf.EntryKind, value []byte, ptr page.ValuePtr) error {
+		if bytes.Equal(key, mutationKey) {
 			removed = true
-			continue
+			return nil
 		}
 		if p.lookup != nil {
-			if mut, ok := p.lookup(ent.Key); ok && mut.kind != fencePendingMutationNone {
+			if mut, ok := p.lookup(key); ok && mut.kind != fencePendingMutationNone {
 				// Pending writes/deletes in the current flush batch own this key.
 				// Exclude it from the rewritten fallback block to avoid emitting
 				// stale overlap rows that can violate iterator parity.
 				removed = true
-				continue
+				return nil
 			}
 		}
-		keyCopy := append([]byte(nil), ent.Key...)
+		keyCopy := append([]byte(nil), key...)
 		next := outerleaf.TypedEntry{
 			Key:     keyCopy,
-			Kind:    ent.Kind,
-			BlobPtr: ent.BlobPtr,
+			Kind:    kind,
+			BlobPtr: ptr,
 		}
-		if bytes.Equal(ent.Key, sourceKey) {
+		if bytes.Equal(key, sourceKey) {
 			sourceKept = true
 		}
-		if ent.Kind == outerleaf.EntryKindInline && len(ent.Value) > 0 {
-			next.Value = append([]byte(nil), ent.Value...)
-			totalInlineBytes += len(ent.Value)
+		if kind == outerleaf.EntryKindInline && len(value) > 0 {
+			next.Value = append([]byte(nil), value...)
+			totalInlineBytes += len(value)
 		}
 		kept = append(kept, next)
+		return nil
+	}); err != nil {
+		return nil, page.ValuePtr{}, false, err
 	}
 	if !removed {
 		return nil, page.ValuePtr{}, false, nil
@@ -5275,21 +5295,20 @@ func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live 
 	}
 	defer block.Release()
 
-	typed, err := block.TypedEntries(nil)
-	if err != nil {
+	if err := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, blobPtr page.ValuePtr) error {
+		if kind != outerleaf.EntryKindBlobRef {
+			return nil
+		}
+		if blobPtr.FileID == 0 {
+			return nil
+		}
+		if !page.IsValueLogFileID(blobPtr.FileID) {
+			return fmt.Errorf("cachingdb: invalid nested blob pointer file %d", blobPtr.FileID)
+		}
+		live[blobPtr.FileID] = struct{}{}
 		return nil
-	}
-	for i := range typed {
-		if typed[i].Kind != outerleaf.EntryKindBlobRef {
-			continue
-		}
-		if typed[i].BlobPtr.FileID == 0 {
-			continue
-		}
-		if !page.IsValueLogFileID(typed[i].BlobPtr.FileID) {
-			return fmt.Errorf("cachingdb: invalid nested blob pointer file %d", typed[i].BlobPtr.FileID)
-		}
-		live[typed[i].BlobPtr.FileID] = struct{}{}
+	}); err != nil {
+		return nil
 	}
 	return nil
 }
