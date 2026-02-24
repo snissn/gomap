@@ -1413,12 +1413,49 @@ func TestSelectRewriteSourceSegments_OversizeCandidates_SelectsOne(t *testing.T)
 		MaxSourceBytes:       32,
 		MaxSourceSegments:    2,
 		MinSegmentStaleBytes: 1,
-	}, files, active, liveByID)
+	}, files, active, liveByID, nil)
 
 	if len(selected) != 1 {
 		t.Fatalf("expected one selected segment when all candidates exceed byte budget, got %d", len(selected))
 	}
 	if _, ok := selected[2]; !ok {
 		t.Fatalf("expected segment 2 selected by stale priority, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_PrefersLowerRewriteCountOnTie(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "v1.log")
+	path2 := filepath.Join(dir, "v2.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte{1}, 100), 0o644); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte{2}, 100), 0o644); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	active := map[uint32]struct{}{}
+	liveByID := map[uint32]int64{
+		1: 90, // stale 10
+		2: 90, // stale 10
+	}
+	health := map[uint32]valueLogSegmentHealth{
+		1: {RewriteCount: 5},
+		2: {RewriteCount: 1},
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments: 1,
+	}, files, active, liveByID, health)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected one selected segment, got %d", len(selected))
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected lower rewrite-count segment selected, got=%v", selected)
 	}
 }

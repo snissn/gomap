@@ -330,13 +330,14 @@ func (db *DB) valueLogRecordLengthForRewrite(ptr page.ValuePtr) (uint32, error) 
 }
 
 type rewriteSourceSegment struct {
-	fileID     uint32
-	liveBytes  int64
-	staleBytes int64
-	staleRatio float64
+	fileID       uint32
+	liveBytes    int64
+	staleBytes   int64
+	staleRatio   float64
+	rewriteCount uint64
 }
 
-func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) map[uint32]struct{} {
+func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64, health map[uint32]valueLogSegmentHealth) map[uint32]struct{} {
 	if len(opts.SourceFileIDs) > 0 {
 		selected := make(map[uint32]struct{}, len(opts.SourceFileIDs))
 		for _, id := range opts.SourceFileIDs {
@@ -381,10 +382,11 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 			continue
 		}
 		candidates = append(candidates, rewriteSourceSegment{
-			fileID:     id,
-			liveBytes:  liveBytes,
-			staleBytes: staleBytes,
-			staleRatio: staleRatio,
+			fileID:       id,
+			liveBytes:    liveBytes,
+			staleBytes:   staleBytes,
+			staleRatio:   staleRatio,
+			rewriteCount: health[id].RewriteCount,
 		})
 	}
 
@@ -397,6 +399,9 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 		b := candidates[j]
 		if a.staleRatio != b.staleRatio {
 			return a.staleRatio > b.staleRatio
+		}
+		if a.rewriteCount != b.rewriteCount {
+			return a.rewriteCount < b.rewriteCount
 		}
 		if a.staleBytes != b.staleBytes {
 			return a.staleBytes > b.staleBytes
@@ -463,14 +468,19 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if hasRewriteSourceSelection(opts) {
 		active := currentValueLogIDs(set)
 		var liveByID map[uint32]int64
+		var healthByID map[uint32]valueLogSegmentHealth
 		if len(opts.SourceFileIDs) == 0 {
 			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 			if err != nil {
 				_ = db.valueLogManager.Release(set)
 				return stats, err
 			}
+			healthByID, err = loadValueLogHealth(valueLogHealthPath(db.dir))
+			if err != nil {
+				healthByID = nil
+			}
 		}
-		sourceIDs = selectRewriteSourceSegments(opts, set.Files, active, liveByID)
+		sourceIDs = selectRewriteSourceSegments(opts, set.Files, active, liveByID, healthByID)
 		restrictSource = true
 	}
 	_ = db.valueLogManager.Release(set)
