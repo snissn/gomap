@@ -2429,11 +2429,20 @@ func (p *fenceAnchorPromoter) lookupFenceSourceForMutation(key []byte) ([]byte, 
 		sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, page.ValuePtrClearFenceOuter(sourcePtr))
 		return sourceKey, sourcePtr, true, nil
 	}
-	// If key already has an exact persisted entry, overlap rewrite should not
-	// treat predecessor anchors as authoritative source coverage for it.
-	// Let exact-key publishing handle this mutation.
-	if _, err := snap.GetEntryExact(key); err == nil {
-		return nil, page.ValuePtr{}, false, nil
+	// In strict route mode, exact persisted pointer rows are themselves anchor
+	// directory entries. Use the exact pointer row as rewrite source so updates
+	// replace the anchored payload block instead of leaving stale exact rows.
+	if exact, err := snap.GetEntryExact(key); err == nil {
+		if !p.v1LeafLogRouteMode() {
+			return nil, page.ValuePtr{}, false, nil
+		}
+		if exact.Flags&node.FlagPointer == 0 {
+			return nil, page.ValuePtr{}, false, nil
+		}
+		sourceKey := append([]byte(nil), key...)
+		sourcePtr := page.ValuePtrClearFenceOuter(exact.ValuePtr)
+		sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, sourcePtr)
+		return sourceKey, sourcePtr, true, nil
 	} else if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
 		return nil, page.ValuePtr{}, false, err
 	}
