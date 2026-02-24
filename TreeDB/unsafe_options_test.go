@@ -92,6 +92,43 @@ func TestOptions_InvalidValueLogIncompressibleProbeBytes(t *testing.T) {
 	}
 }
 
+func TestOptions_InvalidValueLogSegmentTargetBytes(t *testing.T) {
+	dir := t.TempDir()
+	_, err := treedb.Open(treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			SegmentTargetBytes: -1,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid value-log segment target bytes")
+	}
+}
+
+func TestOptions_InvalidValueLogRewriteSegmentTargetBytes(t *testing.T) {
+	dir := t.TempDir()
+	_, err := treedb.Open(treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			RewriteSegmentTargetBytes: -1,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid value-log rewrite segment target bytes")
+	}
+}
+
+func TestOptions_InvalidBackgroundRewriteScoreTrigger(t *testing.T) {
+	dir := t.TempDir()
+	_, err := treedb.Open(treedb.Options{
+		Dir:                                   dir,
+		BackgroundValueLogRewriteScoreTrigger: -0.1,
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid background rewrite score trigger")
+	}
+}
+
 func TestOptions_InvalidValueLogAutoPolicy(t *testing.T) {
 	dir := t.TempDir()
 	_, err := treedb.Open(treedb.Options{

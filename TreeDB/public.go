@@ -77,6 +77,7 @@ type DB struct {
 	templateDB     *DB
 	writePath      writePathInfo
 	bgVac          bgIndexVacuumWorker
+	bgVlogMaint    bgValueLogMaintenanceWorker
 	notifyError    func(error)
 	bgErrMu        sync.Mutex
 	bgErr          error
@@ -480,9 +481,16 @@ func Open(opts Options) (*DB, error) {
 	relaxedSync := opts.Durability != db.DurabilityDurable
 	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
-	valueLogMaxSegmentBytes := int64(0)
+	valueLogMaxSegmentBytes := opts.ValueLog.SegmentTargetBytes
 	if opts.IndexPackedValuePtr {
-		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
+		// Packed on-disk ValuePtr stores u32 offsets; never exceed representable
+		// range even when caller sets a larger segment target.
+		maxPacked := int64(^uint32(0)) - 4
+		if valueLogMaxSegmentBytes <= 0 {
+			valueLogMaxSegmentBytes = maxPacked
+		} else if valueLogMaxSegmentBytes > maxPacked {
+			valueLogMaxSegmentBytes = maxPacked
+		}
 	}
 
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
@@ -609,6 +617,75 @@ func Open(opts Options) (*DB, error) {
 			spanRatioPPM = defaultBackgroundIndexVacuumSpanRatioPPM
 		}
 		out.bgVac.Start(out, vacuumInterval, spanRatioPPM)
+	}
+
+	vlogGCInterval := opts.BackgroundValueLogGCInterval
+	if vlogGCInterval == 0 {
+		vlogGCInterval = defaultBackgroundValueLogGCInterval
+	}
+	if vlogGCInterval < 0 {
+		vlogGCInterval = 0
+	}
+	vlogRewriteInterval := opts.BackgroundValueLogRewriteInterval
+	if vlogRewriteInterval == 0 {
+		vlogRewriteInterval = defaultBackgroundValueLogRewriteInterval
+	}
+	if vlogRewriteInterval < 0 {
+		vlogRewriteInterval = 0
+	}
+	vlogRewriteCooldown := opts.BackgroundValueLogRewriteCooldown
+	if vlogRewriteCooldown == 0 {
+		vlogRewriteCooldown = defaultBackgroundValueLogRewriteCooldown
+	}
+	if vlogRewriteCooldown < 0 {
+		vlogRewriteCooldown = 0
+	}
+	vlogRewriteMinTotalBytes := opts.BackgroundValueLogRewriteMinTotalBytes
+	if vlogRewriteMinTotalBytes == 0 {
+		vlogRewriteMinTotalBytes = defaultBackgroundValueLogRewriteMinTotalB
+	}
+	vlogRewriteMinStaleRatio := opts.BackgroundValueLogRewriteMinStaleRatio
+	if vlogRewriteMinStaleRatio == 0 {
+		vlogRewriteMinStaleRatio = defaultBackgroundValueLogRewriteMinStaleRat
+	}
+	vlogRewriteMaxSourceSegments := opts.BackgroundValueLogRewriteMaxSourceSegments
+	if vlogRewriteMaxSourceSegments == 0 {
+		vlogRewriteMaxSourceSegments = defaultBackgroundValueLogRewriteMaxSegs
+	}
+	vlogRewriteMaxSourceBytes := opts.BackgroundValueLogRewriteMaxSourceBytes
+	if vlogRewriteMaxSourceBytes == 0 {
+		vlogRewriteMaxSourceBytes = defaultBackgroundValueLogRewriteMaxBytes
+	}
+	vlogRewriteScoreTargetTotalBytes := opts.BackgroundValueLogRewriteScoreTargetTotalBytes
+	if vlogRewriteScoreTargetTotalBytes == 0 {
+		vlogRewriteScoreTargetTotalBytes = defaultBackgroundValueLogRewriteScoreTotalB
+	}
+	vlogRewriteScoreTargetStaleBytes := opts.BackgroundValueLogRewriteScoreTargetStaleBytes
+	if vlogRewriteScoreTargetStaleBytes == 0 {
+		vlogRewriteScoreTargetStaleBytes = defaultBackgroundValueLogRewriteScoreStaleB
+	}
+	vlogRewriteScoreTrigger := opts.BackgroundValueLogRewriteScoreTrigger
+	if vlogRewriteScoreTrigger == 0 {
+		vlogRewriteScoreTrigger = defaultBackgroundValueLogRewriteScoreTrig
+	}
+	vlogRewriteSegmentTargetBytes := opts.ValueLog.RewriteSegmentTargetBytes
+	if vlogRewriteSegmentTargetBytes == 0 {
+		vlogRewriteSegmentTargetBytes = valueLogMaxSegmentBytes
+	}
+	if cached != nil && (vlogGCInterval > 0 || vlogRewriteInterval > 0) {
+		out.bgVlogMaint.Start(out, bgValueLogMaintenanceConfig{
+			gcInterval:         vlogGCInterval,
+			rewriteInterval:    vlogRewriteInterval,
+			rewriteCooldown:    vlogRewriteCooldown,
+			rewriteMinTotalB:   vlogRewriteMinTotalBytes,
+			rewriteMinStaleR:   vlogRewriteMinStaleRatio,
+			rewriteMaxSegs:     vlogRewriteMaxSourceSegments,
+			rewriteMaxBytes:    vlogRewriteMaxSourceBytes,
+			rewriteScoreTotalB: vlogRewriteScoreTargetTotalBytes,
+			rewriteScoreStaleB: vlogRewriteScoreTargetStaleBytes,
+			rewriteScoreTrig:   vlogRewriteScoreTrigger,
+			rewriteSegTargetB:  vlogRewriteSegmentTargetBytes,
+		})
 	}
 
 	return out, nil
@@ -741,6 +818,7 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
+	db.bgVlogMaint.Stop()
 	db.bgVac.Stop()
 	var err error
 	if db.cached != nil || db.backend != nil {
@@ -1029,6 +1107,7 @@ func (db *DB) Stats() map[string]string {
 		writePathStatsInto(stats, db.writePath)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
+		bgValueLogMaintenanceStatsInto(stats, &db.bgVlogMaint)
 		maintenanceStatsInto(stats, &db.maintenance)
 		return stats
 	}
@@ -1039,6 +1118,7 @@ func (db *DB) Stats() map[string]string {
 	writePathStatsInto(stats, db.writePath)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
+	bgValueLogMaintenanceStatsInto(stats, &db.bgVlogMaint)
 	maintenanceStatsInto(stats, &db.maintenance)
 	return stats
 }

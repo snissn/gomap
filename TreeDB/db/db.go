@@ -289,6 +289,15 @@ type ValueLogDomainThreshold struct {
 
 // ValueLogOptions configures value-log pointer behavior and optional compression/dict tuning.
 type ValueLogOptions struct {
+	// SegmentTargetBytes caps active value-log segment size for cached-mode
+	// writes.
+	//
+	// 0 uses a default. Values <0 are invalid.
+	SegmentTargetBytes int64
+	// RewriteSegmentTargetBytes caps output segment size for value-log rewrite.
+	//
+	// 0 uses a default. Values <0 are invalid.
+	RewriteSegmentTargetBytes int64
 	// Compression selects value-log compression behavior.
 	Compression ValueLogCompressionMode
 	// BlockCodec selects the block codec for block compression.
@@ -675,6 +684,41 @@ type Options struct {
 	// BackgroundIndexVacuumSpanRatioPPM sets the span ratio threshold that
 	// triggers a vacuum pass (0 uses a default).
 	BackgroundIndexVacuumSpanRatioPPM uint32
+	// BackgroundValueLogGCInterval enables periodic value-log GC passes.
+	// `0` uses a default; `<0` disables.
+	BackgroundValueLogGCInterval time.Duration
+	// BackgroundValueLogRewriteInterval enables periodic value-log rewrite checks.
+	// `0` uses a default; `<0` disables.
+	BackgroundValueLogRewriteInterval time.Duration
+	// BackgroundValueLogRewriteCooldown bounds rewrite frequency.
+	// `0` uses a default; `<0` disables cooldown.
+	BackgroundValueLogRewriteCooldown time.Duration
+	// BackgroundValueLogRewriteMinTotalBytes is the minimum total value-log bytes
+	// before background rewrite is considered. `0` uses a default; `<0` disables
+	// the size gate.
+	BackgroundValueLogRewriteMinTotalBytes int64
+	// BackgroundValueLogRewriteMinStaleRatio requires eligible/total bytes from a
+	// dry-run GC probe to be at least this ratio before rewrite is considered.
+	// `0` uses a default; negative disables the ratio gate.
+	BackgroundValueLogRewriteMinStaleRatio float64
+	// BackgroundValueLogRewriteMaxSourceSegments bounds rewrite source segments.
+	// `0` uses a default; negative disables the segment-count bound.
+	BackgroundValueLogRewriteMaxSourceSegments int
+	// BackgroundValueLogRewriteMaxSourceBytes bounds rewrite source bytes.
+	// `0` uses a default; negative disables the byte bound.
+	BackgroundValueLogRewriteMaxSourceBytes int64
+	// BackgroundValueLogRewriteScoreTargetTotalBytes controls the total-bytes
+	// component of rewrite scoring (total/target).
+	// `0` uses a default; negative disables this component.
+	BackgroundValueLogRewriteScoreTargetTotalBytes int64
+	// BackgroundValueLogRewriteScoreTargetStaleBytes controls the stale-bytes
+	// component of rewrite scoring (stale/target).
+	// `0` uses a default; negative disables this component.
+	BackgroundValueLogRewriteScoreTargetStaleBytes int64
+	// BackgroundValueLogRewriteScoreTrigger is the minimum rewrite score required
+	// to launch a rewrite pass.
+	// `0` uses a default; negative disables score gating.
+	BackgroundValueLogRewriteScoreTrigger float64
 	// MaxWALBytes triggers an immediate checkpoint in cached mode when the sum of
 	// WAL segment sizes exceeds this many bytes (0 uses a default; <0 disables the
 	// size trigger). This is an operational safety cap; it does not make each
@@ -962,6 +1006,12 @@ func validateOptions(opts Options) error {
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
 	}
+	if opts.ValueLog.SegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log segment target bytes %d", opts.ValueLog.SegmentTargetBytes)
+	}
+	if opts.ValueLog.RewriteSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log rewrite segment target bytes %d", opts.ValueLog.RewriteSegmentTargetBytes)
+	}
 	if opts.ValueLog.BlockTargetCompressedBytes > 0 {
 		const (
 			minBlockTargetCompressedBytes = 256
@@ -997,6 +1047,9 @@ func validateOptions(opts Options) error {
 	}
 	if opts.ValueLog.IncompressibleProbeIntervalBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log incompressible probe interval bytes %d", opts.ValueLog.IncompressibleProbeIntervalBytes)
+	}
+	if opts.BackgroundValueLogRewriteScoreTrigger < 0 {
+		return fmt.Errorf("treedb: invalid background value-log rewrite score trigger %.6f", opts.BackgroundValueLogRewriteScoreTrigger)
 	}
 	switch opts.ValueLog.AutoPolicy {
 	case ValueLogAutoThroughput, ValueLogAutoBalanced, ValueLogAutoSize:
