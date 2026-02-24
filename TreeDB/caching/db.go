@@ -772,9 +772,6 @@ func (db *DB) validateV1LeafLogDirectoryInvariants() error {
 				return fmt.Errorf("cachingdb: v1_leaflog invariant violation: route mode anchor should be plain pointer key=%q ptr=%+v", k, ptr)
 			}
 		} else {
-			if !page.ValuePtrIsFenceOuter(ptr) {
-				return fmt.Errorf("cachingdb: v1_leaflog invariant violation: non-fence pointer key=%q ptr=%+v", k, ptr)
-			}
 			basePtr = page.ValuePtrClearFenceOuter(ptr)
 		}
 		rng, decoded := rangeByPtr[basePtr]
@@ -804,7 +801,7 @@ func (db *DB) validateV1LeafLogDirectoryInvariants() error {
 				max:    append([]byte(nil), keys[len(keys)-1]...),
 			}
 			rangeByPtr[basePtr] = rng
-		} else {
+		} else if routeMode {
 			return fmt.Errorf("cachingdb: v1_leaflog invariant violation: duplicate block pointer rows key=%q ptr=%+v first_anchor=%q", k, ptr, rng.anchor)
 		}
 		if bytes.Compare(k, rng.min) < 0 || bytes.Compare(k, rng.max) > 0 {
@@ -3954,7 +3951,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 						}
 					} else {
 						for _, srcPos := range unresolved {
-							if err := emitKey(ptrKeys[srcPos], ptr); err != nil {
+							if err := emitKey(ptrKeys[srcPos], exactPtr); err != nil {
 								putValueLogEligible(unresolved)
 								return 0, err
 							}
@@ -4393,7 +4390,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							} else {
 								for _, srcPos := range unresolved {
 									key := ptrKeys[srcPos]
-									if err := emitPointerForce(key, ptr); err != nil {
+									if err := emitPointerForce(key, exactPtr); err != nil {
 										putValueLogEligible(unresolved)
 										putValueLogPtrs(ptrs)
 										return err

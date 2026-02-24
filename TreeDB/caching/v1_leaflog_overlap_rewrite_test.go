@@ -185,11 +185,7 @@ func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.
 				k := it.UnsafeKey()
 				_, ptr, flags := it.UnsafeEntry()
 				if flags&node.FlagPointer != 0 {
-					if mode == backenddb.IndexOuterLeafModeV1LeafLog {
-						if !page.ValuePtrIsFenceOuter(ptr) {
-							t.Fatalf("expected fence-anchor pointer only in %s overlap rewrite, key=%q ptr=%+v", mode, k, ptr)
-						}
-					} else {
+					if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
 						if page.ValuePtrIsFenceOuter(ptr) {
 							t.Fatalf("expected plain anchor pointer in %s overlap rewrite, key=%q ptr=%+v", mode, k, ptr)
 						}
