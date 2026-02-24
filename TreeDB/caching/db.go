@@ -5887,6 +5887,7 @@ type DB struct {
 	batchEntriesPool      sync.Pool
 	batchShardEntriesPool sync.Pool
 	batchIntPool          sync.Pool
+	batchLogRecordPool    sync.Pool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -17658,6 +17659,37 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 	db.batchIntPool.Put(idxs[:0])
 }
 
+func (db *DB) getBatchLogRecords(minCap int) []logRecord {
+	if minCap < 0 {
+		minCap = 0
+	}
+	if db != nil {
+		if pooled := db.batchLogRecordPool.Get(); pooled != nil {
+			if records, ok := pooled.([]logRecord); ok {
+				if cap(records) >= minCap {
+					return records[:0]
+				}
+				if c := cap(records); c > 0 && c <= batchLogRecordPoolMaxRetain {
+					db.batchLogRecordPool.Put(records[:0])
+				}
+			}
+		}
+	}
+	return make([]logRecord, 0, minCap)
+}
+
+func (db *DB) putBatchLogRecords(records []logRecord) {
+	if db == nil || cap(records) == 0 {
+		return
+	}
+	if cap(records) > batchLogRecordPoolMaxRetain {
+		return
+	}
+	full := records[:cap(records)]
+	clear(full)
+	db.batchLogRecordPool.Put(full[:0])
+}
+
 // Reset clears the batch for reuse without closing it.
 //
 // This intentionally keeps internal buffers to avoid per-batch allocations in
@@ -18044,11 +18076,14 @@ const (
 	multiLaneValueLogMinRecords = 1024
 	batchCopyArenaMinChunk      = 4 << 10
 	batchCopyArenaUnsizedInit   = 8 << 10
-	batchCopyArenaBytesPerEntry = 192
+	// Conservative per-entry copy reservation used for initial arena sizing.
+	// Keep this near common key+value payloads to avoid systematic over-allocation.
+	batchCopyArenaBytesPerEntry = 160
 	batchCopyArenaInitMax       = 2 << 20
 	batchCopyArenaMaxRetain     = 4 << 20
 	batchEntriesPoolMaxRetain   = 16 << 10
 	batchIntSlicePoolMaxRetain  = 16 << 10
+	batchLogRecordPoolMaxRetain = 16 << 10
 )
 
 func batchCopyArenaInitCapForEntries(entries int) int {
@@ -18792,7 +18827,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if !b.db.disableJournal {
 		records := b.walBuf[:0]
 		if cap(records) < len(b.entries) {
-			records = make([]logRecord, 0, len(b.entries))
+			if cap(b.walBuf) > 0 {
+				b.db.putBatchLogRecords(b.walBuf)
+			}
+			records = b.db.getBatchLogRecords(len(b.entries))
 		}
 		for i := range b.entries {
 			op := &b.entries[i]
@@ -19285,6 +19323,9 @@ func (b *Batch) Close() error {
 	}
 	b.recycleCopyArenaChunks()
 	b.entries = nil
+	if b.db != nil && b.walBuf != nil {
+		b.db.putBatchLogRecords(b.walBuf)
+	}
 	b.walBuf = nil
 	b.shardIdxs = nil
 	b.eligibleIdxs = nil
