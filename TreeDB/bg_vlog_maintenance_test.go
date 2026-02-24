@@ -45,7 +45,7 @@ func TestComputeVlogRewriteScore(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			score := computeVlogRewriteScore(tc.totalBytes, tc.staleBytes, tc.targetTotal, tc.targetStale)
+			score := computeVlogRewriteScore(tc.totalBytes, tc.staleBytes, 0, tc.targetTotal, tc.targetStale, 0)
 			if score < tc.expectMinVal || score > tc.expectMaxVal {
 				t.Fatalf("score=%f outside expected range [%f,%f]", score, tc.expectMinVal, tc.expectMaxVal)
 			}

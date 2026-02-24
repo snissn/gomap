@@ -19,6 +19,7 @@ const (
 	defaultBackgroundValueLogRewriteMaxBytes    = int64(64 << 20)  // 64 MiB
 	defaultBackgroundValueLogRewriteScoreTotalB = int64(128 << 20) // 128 MiB
 	defaultBackgroundValueLogRewriteScoreStaleB = int64(16 << 20)  // 16 MiB
+	defaultBackgroundValueLogRewriteScoreChurnB = int64(32 << 20)  // 32 MiB
 	defaultBackgroundValueLogRewriteScoreTrig   = 1.0
 )
 
@@ -33,6 +34,7 @@ type bgValueLogMaintenanceConfig struct {
 	rewriteSegTargetB  int64
 	rewriteScoreTotalB int64
 	rewriteScoreStaleB int64
+	rewriteScoreChurnB int64
 	rewriteScoreTrig   float64
 }
 
@@ -56,6 +58,7 @@ type bgValueLogMaintenanceWorker struct {
 	lastErr          atomic.Value // string
 	lastGCBytesT     atomic.Int64
 	lastGCBytesE     atomic.Int64
+	lastChurnBytes   atomic.Int64
 	lastRewriteScore atomic.Uint64 // math.Float64bits
 }
 
@@ -146,6 +149,7 @@ func (w *bgValueLogMaintenanceWorker) runOnce(db *DB, runGC bool, maybeRewrite b
 
 	var gcStats ValueLogGCStats
 	var gcDone bool
+	prevEligible := w.lastGCBytesE.Load()
 	if runGC || maybeRewrite {
 		stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{Mode: ValueLogGCModeOnline})
 		if err != nil {
@@ -191,7 +195,12 @@ func (w *bgValueLogMaintenanceWorker) runOnce(db *DB, runGC bool, maybeRewrite b
 			w.lastErr.Store("")
 			return
 		}
-		score := computeVlogRewriteScore(total, eligible, w.cfg.rewriteScoreTotalB, w.cfg.rewriteScoreStaleB)
+		churnBytes := eligible - prevEligible
+		if churnBytes < 0 {
+			churnBytes = -churnBytes
+		}
+		w.lastChurnBytes.Store(churnBytes)
+		score := computeVlogRewriteScore(total, eligible, churnBytes, w.cfg.rewriteScoreTotalB, w.cfg.rewriteScoreStaleB, w.cfg.rewriteScoreChurnB)
 		w.lastRewriteScore.Store(math.Float64bits(score))
 		if w.cfg.rewriteScoreTrig > 0 && score < w.cfg.rewriteScoreTrig {
 			w.lastErr.Store("")
@@ -230,8 +239,10 @@ func bgValueLogMaintenanceStatsInto(out map[string]string, w *bgValueLogMaintena
 	out["treedb.bg_vlog_maintenance.rewrite_segment_target_bytes"] = fmt.Sprintf("%d", w.cfg.rewriteSegTargetB)
 	out["treedb.bg_vlog_maintenance.rewrite_score_target_total_bytes"] = fmt.Sprintf("%d", w.cfg.rewriteScoreTotalB)
 	out["treedb.bg_vlog_maintenance.rewrite_score_target_stale_bytes"] = fmt.Sprintf("%d", w.cfg.rewriteScoreStaleB)
+	out["treedb.bg_vlog_maintenance.rewrite_score_target_churn_bytes"] = fmt.Sprintf("%d", w.cfg.rewriteScoreChurnB)
 	out["treedb.bg_vlog_maintenance.rewrite_score_trigger"] = fmt.Sprintf("%.3f", w.cfg.rewriteScoreTrig)
 	out["treedb.bg_vlog_maintenance.last_rewrite_score"] = fmt.Sprintf("%.6f", math.Float64frombits(w.lastRewriteScore.Load()))
+	out["treedb.bg_vlog_maintenance.last_churn_bytes"] = fmt.Sprintf("%d", w.lastChurnBytes.Load())
 	out["treedb.bg_vlog_maintenance.runs"] = fmt.Sprintf("%d", w.runs.Load())
 	out["treedb.bg_vlog_maintenance.gc_runs"] = fmt.Sprintf("%d", w.gcRuns.Load())
 	out["treedb.bg_vlog_maintenance.rewrite_runs"] = fmt.Sprintf("%d", w.rewriteRuns.Load())
@@ -247,7 +258,7 @@ func bgValueLogMaintenanceStatsInto(out map[string]string, w *bgValueLogMaintena
 	}
 }
 
-func computeVlogRewriteScore(totalBytes, staleBytes, targetTotalBytes, targetStaleBytes int64) float64 {
+func computeVlogRewriteScore(totalBytes, staleBytes, churnBytes, targetTotalBytes, targetStaleBytes, targetChurnBytes int64) float64 {
 	if totalBytes <= 0 {
 		return 0
 	}
@@ -259,8 +270,16 @@ func computeVlogRewriteScore(totalBytes, staleBytes, targetTotalBytes, targetSta
 	if targetStaleBytes > 0 {
 		scoreStale = float64(staleBytes) / float64(targetStaleBytes)
 	}
-	if scoreTotal > scoreStale {
-		return scoreTotal
+	var scoreChurn float64
+	if targetChurnBytes > 0 {
+		scoreChurn = float64(churnBytes) / float64(targetChurnBytes)
 	}
-	return scoreStale
+	score := scoreTotal
+	if scoreStale > score {
+		score = scoreStale
+	}
+	if scoreChurn > score {
+		score = scoreChurn
+	}
+	return score
 }

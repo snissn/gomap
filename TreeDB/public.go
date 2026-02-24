@@ -664,6 +664,10 @@ func Open(opts Options) (*DB, error) {
 	if vlogRewriteScoreTargetStaleBytes == 0 {
 		vlogRewriteScoreTargetStaleBytes = defaultBackgroundValueLogRewriteScoreStaleB
 	}
+	vlogRewriteScoreTargetChurnBytes := opts.BackgroundValueLogRewriteScoreTargetChurnBytes
+	if vlogRewriteScoreTargetChurnBytes == 0 {
+		vlogRewriteScoreTargetChurnBytes = defaultBackgroundValueLogRewriteScoreChurnB
+	}
 	vlogRewriteScoreTrigger := opts.BackgroundValueLogRewriteScoreTrigger
 	if vlogRewriteScoreTrigger == 0 {
 		vlogRewriteScoreTrigger = defaultBackgroundValueLogRewriteScoreTrig
@@ -683,6 +687,7 @@ func Open(opts Options) (*DB, error) {
 			rewriteMaxBytes:    vlogRewriteMaxSourceBytes,
 			rewriteScoreTotalB: vlogRewriteScoreTargetTotalBytes,
 			rewriteScoreStaleB: vlogRewriteScoreTargetStaleBytes,
+			rewriteScoreChurnB: vlogRewriteScoreTargetChurnBytes,
 			rewriteScoreTrig:   vlogRewriteScoreTrigger,
 			rewriteSegTargetB:  vlogRewriteSegmentTargetBytes,
 		})

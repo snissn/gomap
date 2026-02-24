@@ -715,6 +715,10 @@ type Options struct {
 	// component of rewrite scoring (stale/target).
 	// `0` uses a default; negative disables this component.
 	BackgroundValueLogRewriteScoreTargetStaleBytes int64
+	// BackgroundValueLogRewriteScoreTargetChurnBytes controls the churn-bytes
+	// component of rewrite scoring (abs(delta_stale)/target).
+	// `0` uses a default; negative disables this component.
+	BackgroundValueLogRewriteScoreTargetChurnBytes int64
 	// BackgroundValueLogRewriteScoreTrigger is the minimum rewrite score required
 	// to launch a rewrite pass.
 	// `0` uses a default; negative disables score gating.
