@@ -54,6 +54,7 @@ func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.
 				t.Fatalf("cache open: %v", err)
 			}
 			defer cache.Close()
+			t.Logf("deferred=%v valueLogReader=%v supportsPromo=%v", cache.deferredValueLogEnabled(), cache.valueLogReader != nil, cache.supportsFenceAnchorPromotion())
 
 			keyFor := func(i int) []byte { return []byte(fmt.Sprintf("k%04d", i)) }
 			valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i + 1)}, 256) }
@@ -66,6 +67,38 @@ func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.
 			}
 			if err := cache.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint(initial): %v", err)
+			}
+			if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+				itInit, err := backend.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+					Mode:              backenddb.IteratorModePointerProjection,
+					IncludeTombstones: true,
+				})
+				if err != nil {
+					t.Fatalf("initial iterator route: %v", err)
+				}
+				initRows := 0
+				initInline := 0
+				initTotal := 0
+				for itInit.Valid() {
+					_, _, flags := itInit.UnsafeEntry()
+					initTotal++
+					if flags&node.FlagPointer != 0 {
+						initRows++
+					} else if flags&node.FlagTombstone == 0 {
+						initInline++
+					}
+					if flags&node.FlagTombstone == 0 && flags&node.FlagPointer != 0 {
+						initRows++
+					}
+					itInit.Next()
+				}
+				if err := itInit.Error(); err != nil {
+					t.Fatalf("initial iterator route error: %v", err)
+				}
+				if err := itInit.Close(); err != nil {
+					t.Fatalf("initial iterator route close: %v", err)
+				}
+				t.Logf("route iterator counts after initial checkpoint total=%d pointer=%d inline=%d tomb=%d", initTotal, initRows, initInline, initTotal-initRows-initInline)
 			}
 
 			snap := backend.AcquireSnapshot()
@@ -95,6 +128,32 @@ func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.
 			}
 			if err := cache.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint(overlap rewrite): %v", err)
+			}
+			if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+				itRows, err := backend.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+					Mode:              backenddb.IteratorModePointerProjection,
+					IncludeTombstones: true,
+				})
+				if err != nil {
+					t.Fatalf("iterator post-overwrite route: %v", err)
+				}
+				rows := 0
+				for itRows.Valid() {
+					k := itRows.UnsafeKey()
+					_, ptr, flags := itRows.UnsafeEntry()
+					rows++
+					if flags&node.FlagPointer != 0 && flags&node.FlagTombstone == 0 {
+						t.Logf("route anchor key=%q ptr=%+v", k, ptr)
+					}
+					itRows.Next()
+				}
+				t.Logf("route row count after overlap rewrite=%d", rows)
+				if err := itRows.Error(); err != nil {
+					t.Fatalf("iterator post-overwrite route error: %v", err)
+				}
+				if err := itRows.Close(); err != nil {
+					t.Fatalf("iterator post-overwrite route close: %v", err)
+				}
 			}
 
 			checkGet := func(key, want []byte) {
@@ -431,6 +490,126 @@ func TestCachingDB_V1LeafLogRoute_AnchorFanoutIsOnePerBlock(t *testing.T) {
 	for ptr, c := range ptrUsage {
 		if c > 1 {
 			t.Fatalf("pointer reused for %d anchors: key=%+v", c, ptr)
+		}
+	}
+	if err := cache.validateV1LeafLogDirectoryInvariants(); err != nil {
+		t.Fatalf("v1_leaflog invariant validation: %v", err)
+	}
+}
+
+func TestCachingDB_V1LeafLogRoute_AnchorFanoutStaysOnePerBlockUnderMixedSetDeleteOverlap(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLog: backenddb.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       backenddb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		JournalLanes:                      1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	keyFor := func(i int) []byte { return []byte(fmt.Sprintf("k%04d", i)) }
+	valueFor := func(seed int) []byte { return bytes.Repeat([]byte{byte(seed + 1)}, 320) }
+
+	const totalKeys = 512
+	for i := 0; i < totalKeys; i++ {
+		if err := cache.Set(keyFor(i), valueFor(i)); err != nil {
+			t.Fatalf("seed Set(%d): %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
+	}
+
+	// Mixed set+delete overlap across the same prefix to exercise overlap rewrite
+	// queueing without allowing per-key exact fallback persistence.
+	for i := 0; i < totalKeys/2; i++ {
+		if i%3 == 0 {
+			if err := cache.Delete(keyFor(i)); err != nil {
+				t.Fatalf("delete(%d): %v", i, err)
+			}
+			continue
+		}
+		if err := cache.Set(keyFor(i), valueFor(10000+i)); err != nil {
+			t.Fatalf("overwrite(%d): %v", i, err)
+		}
+	}
+	for i := 0; i < 32; i++ {
+		k := []byte(fmt.Sprintf("k%04d-extra-%02d", i*4, i))
+		if err := cache.Set(k, valueFor(20000+i)); err != nil {
+			t.Fatalf("insert(%d): %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("mixed overlap checkpoint: %v", err)
+	}
+
+	it, err := backend.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions(pointer_projection): %v", err)
+	}
+	defer it.Close()
+
+	type ptrKey struct {
+		fileID uint64
+		offset uint64
+		length uint32
+	}
+	ptrUsage := make(map[ptrKey]int)
+
+	for it.Valid() {
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			it.Next()
+			continue
+		}
+		if page.ValuePtrIsFenceOuter(ptr) {
+			t.Fatalf("route mode emitted fence-marked pointer %+v", ptr)
+		}
+		pk := ptrKey{
+			fileID: uint64(ptr.FileID),
+			offset: ptr.Offset,
+			length: uint32(ptr.Length),
+		}
+		ptrUsage[pk]++
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if len(ptrUsage) == 0 {
+		t.Fatalf("expected pointer-backed anchor rows")
+	}
+	for ptr, c := range ptrUsage {
+		if c > 1 {
+			t.Fatalf("duplicate pointer-backed anchor rows detected ptr=%+v count=%d", ptr, c)
 		}
 	}
 	if err := cache.validateV1LeafLogDirectoryInvariants(); err != nil {
