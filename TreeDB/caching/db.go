@@ -2189,20 +2189,19 @@ type fenceAnchorPromoter struct {
 	routeCursorNext     []byte
 	routeCursorNextPtr  page.ValuePtr
 	routeCursorHaveNext bool
-	routeCursorLastKey  []byte
-	routeCursorHaveLast bool
 }
 
 type fenceSourcePendingSet struct {
 	key   []byte
 	value []byte
+	hash  uint64
 }
 
 type fenceSourceRewritePlan struct {
 	sourceKey []byte
 	sourcePtr page.ValuePtr
 	sets      []fenceSourcePendingSet
-	setIndex  map[uint64][]int
+	setIndex  map[uint64]int
 	// sourceKeys caches decoded source payload keys for membership checks.
 	sourceKeys [][]byte
 	// sourceKeyCount tracks the decoded key cardinality from sourcePtr so we can
@@ -2238,7 +2237,6 @@ func (p *fenceAnchorPromoter) close() {
 	p.routeCursorReady = false
 	p.routeCursorHaveCur = false
 	p.routeCursorHaveNext = false
-	p.routeCursorHaveLast = false
 }
 
 func (p *fenceAnchorPromoter) snapshotView() *backenddb.Snapshot {
@@ -2309,21 +2307,34 @@ func (plan *fenceSourceRewritePlan) setValueWithOwnership(key, value []byte, own
 		return
 	}
 	if plan.setIndex == nil {
-		plan.setIndex = make(map[uint64][]int, 8)
+		plan.setIndex = make(map[uint64]int, 8)
 	}
 	keyHash := fenceRewriteKeyHash(key)
-	if idxs, ok := plan.setIndex[keyHash]; ok {
-		for _, idx := range idxs {
-			if idx < 0 || idx >= len(plan.sets) {
-				continue
-			}
-			if bytes.Equal(plan.sets[idx].key, key) {
+	if idx, ok := plan.setIndex[keyHash]; ok {
+		realIdx := idx - 1
+		if realIdx >= 0 && realIdx < len(plan.sets) {
+			if bytes.Equal(plan.sets[realIdx].key, key) {
 				if owned {
-					plan.sets[idx].value = value
+					plan.sets[realIdx].value = value
 				} else {
-					plan.sets[idx].value = append([]byte(nil), value...)
+					plan.sets[realIdx].value = append([]byte(nil), value...)
 				}
 				return
+			}
+			// Hash collision path: scan only records with the same cached hash.
+			for i := len(plan.sets) - 1; i >= 0; i-- {
+				if plan.sets[i].hash != keyHash {
+					continue
+				}
+				if bytes.Equal(plan.sets[i].key, key) {
+					if owned {
+						plan.sets[i].value = value
+					} else {
+						plan.sets[i].value = append([]byte(nil), value...)
+					}
+					plan.setIndex[keyHash] = i + 1
+					return
+				}
 			}
 		}
 	}
@@ -2333,10 +2344,11 @@ func (plan *fenceSourceRewritePlan) setValueWithOwnership(key, value []byte, own
 		keyCopy = append([]byte(nil), key...)
 		valCopy = append([]byte(nil), value...)
 	}
-	plan.setIndex[keyHash] = append(plan.setIndex[keyHash], len(plan.sets))
+	plan.setIndex[keyHash] = len(plan.sets) + 1
 	plan.sets = append(plan.sets, fenceSourcePendingSet{
 		key:   keyCopy,
 		value: valCopy,
+		hash:  keyHash,
 	})
 }
 
@@ -2344,16 +2356,23 @@ func (plan *fenceSourceRewritePlan) lookupValue(key []byte) ([]byte, bool) {
 	if plan == nil || len(key) == 0 || len(plan.sets) == 0 {
 		return nil, false
 	}
-	idxs, ok := plan.setIndex[fenceRewriteKeyHash(key)]
-	if !ok || len(idxs) == 0 {
+	keyHash := fenceRewriteKeyHash(key)
+	idx, ok := plan.setIndex[keyHash]
+	if !ok || idx <= 0 {
 		return nil, false
 	}
-	for _, idx := range idxs {
-		if idx < 0 || idx >= len(plan.sets) {
+	realIdx := idx - 1
+	if realIdx >= 0 && realIdx < len(plan.sets) && bytes.Equal(plan.sets[realIdx].key, key) {
+		return plan.sets[realIdx].value, true
+	}
+	// Hash collision path.
+	for i := len(plan.sets) - 1; i >= 0; i-- {
+		if plan.sets[i].hash != keyHash {
 			continue
 		}
-		if bytes.Equal(plan.sets[idx].key, key) {
-			return plan.sets[idx].value, true
+		if bytes.Equal(plan.sets[i].key, key) {
+			plan.setIndex[keyHash] = i + 1
+			return plan.sets[i].value, true
 		}
 	}
 	return nil, false
@@ -2447,10 +2466,6 @@ func (p *fenceAnchorPromoter) lookupRouteSourceMonotonic(key []byte) ([]byte, pa
 	if p == nil || !p.v1LeafLogRouteMode() || len(key) == 0 {
 		return nil, page.ValuePtr{}, false, nil
 	}
-	if p.routeCursorHaveLast && bytes.Compare(key, p.routeCursorLastKey) < 0 {
-		// Non-monotonic keys: fallback to standard lookup path.
-		return nil, page.ValuePtr{}, false, nil
-	}
 	if !p.routeCursorReady {
 		type iteratorProvider interface {
 			IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
@@ -2480,12 +2495,12 @@ func (p *fenceAnchorPromoter) lookupRouteSourceMonotonic(key []byte) ([]byte, pa
 			return nil, page.ValuePtr{}, false, err
 		}
 	}
-	p.routeCursorLastKey = append(p.routeCursorLastKey[:0], key...)
-	p.routeCursorHaveLast = true
 	if !p.routeCursorHaveCur {
 		return nil, page.ValuePtr{}, false, nil
 	}
-	return append([]byte(nil), p.routeCursorCurrent...), p.routeCursorPtr, true, nil
+	// Returned key aliases promoter-owned cursor storage and is only valid until
+	// the next lookupRouteSourceMonotonic call.
+	return p.routeCursorCurrent, p.routeCursorPtr, true, nil
 }
 
 func (p *fenceAnchorPromoter) overlapRewriteSourceFullyCovered(sourcePtr page.ValuePtr) bool {
@@ -2626,7 +2641,7 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 	// Fast path for sorted/clustered workloads: consecutive keys often belong to
 	// the same source payload block. Reuse the last decoded plan directly.
 	if p.lastOverlapPlan != nil && p.lastOverlapPlan.containsKey(key) {
-		p.lastOverlapPlan.setValue(key, value)
+		p.lastOverlapPlan.setValueOwned(key, value)
 		return true, p.lastOverlapSourcePtr, true, nil
 	}
 	sourceKey, sourcePtr, found, err := p.lookupRouteSourceMonotonic(key)
@@ -2651,7 +2666,7 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 		plan = &fenceSourceRewritePlan{
 			sourceKey: append([]byte(nil), sourceKey...),
 			sourcePtr: sourcePtr,
-			setIndex:  make(map[uint64][]int, 8),
+			setIndex:  make(map[uint64]int, 8),
 			// Decode lazily on first enqueue; keep -1 as unknown sentinel.
 			sourceKeyCount: -1,
 		}
@@ -2666,7 +2681,7 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 		plan.sourceKeyCount = len(keys)
 		plan.sourceKeys = keys
 		if len(plan.setIndex) == 0 && plan.sourceKeyCount > 8 {
-			plan.setIndex = make(map[uint64][]int, plan.sourceKeyCount)
+			plan.setIndex = make(map[uint64]int, plan.sourceKeyCount)
 		}
 	}
 	// Queue overlap rewrites when key is in-source OR falls inside the source
@@ -2736,8 +2751,8 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		out := make([]outerleaf.TypedEntry, 0, len(plan.sets))
 		for i := range plan.sets {
 			set := plan.sets[i]
-			keyCopy := append([]byte(nil), set.key...)
-			valCopy := append([]byte(nil), set.value...)
+			keyCopy := set.key
+			valCopy := set.value
 			kind := outerleaf.EntryKindInline
 			if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
 				kind = outerleaf.EntryKindBlobRef
@@ -2794,8 +2809,8 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		// This keeps set-only rewrites correct even when global mutation lookup
 		// is intentionally deferred/lazy for hot-path performance.
 		if val, ok := plan.lookupValue(key); ok {
-			keyCopy := append([]byte(nil), key...)
-			valCopy := append([]byte(nil), val...)
+			keyCopy := key
+			valCopy := val
 			emitKind := outerleaf.EntryKindInline
 			if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
 				emitKind = outerleaf.EntryKindBlobRef
@@ -2811,14 +2826,13 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 				}
 			}
 		}
-		keyCopy := append([]byte(nil), key...)
 		next := outerleaf.TypedEntry{
-			Key:     keyCopy,
+			Key:     key,
 			Kind:    kind,
 			BlobPtr: ptr,
 		}
 		if kind == outerleaf.EntryKindInline && len(value) > 0 {
-			next.Value = append([]byte(nil), value...)
+			next.Value = value
 		}
 		out = append(out, next)
 		return nil
@@ -2837,8 +2851,8 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		if len(set.key) == 0 {
 			continue
 		}
-		keyCopy := append([]byte(nil), set.key...)
-		valCopy := append([]byte(nil), set.value...)
+		keyCopy := set.key
+		valCopy := set.value
 		kind := outerleaf.EntryKindInline
 		if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
 			kind = outerleaf.EntryKindBlobRef
@@ -3699,6 +3713,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	dv, _ := backendBatch.(deleteViewer)
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
+	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
 	reserveHint := memLen
 	if reserveHint > 0 {
 		maxInt := int(^uint(0) >> 1)
@@ -3707,6 +3722,11 @@ func (db *DB) flushDeferredValueLogMemtable(
 		} else {
 			reserveHint *= 2
 		}
+	}
+	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint > db.flushBackendInitEntries {
+		// Route mode can over-estimate backend batch op counts on steady overwrite
+		// workloads; cap reserve to the init size to avoid repeated large reserves.
+		reserveHint = db.flushBackendInitEntries
 	}
 	reserveBackendBatchOps(backendBatch, reserveHint)
 
@@ -3718,7 +3738,6 @@ func (db *DB) flushDeferredValueLogMemtable(
 	}()
 	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
 	state := fenceState
 	if state == nil {
 		state = &deferredFenceCollapseState{}
@@ -4047,9 +4066,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 					}
 				}
 			}
-				if overlap && promoter != nil && promoter.v1LeafLogMode() {
-					confirmedOverlap := false
-					emitKey := func(key []byte, emitPtr page.ValuePtr) error {
+			if overlap && promoter != nil && promoter.v1LeafLogMode() {
+				confirmedOverlap := false
+				emitKey := func(key []byte, emitPtr page.ValuePtr) error {
 					if psv != nil {
 						if err := psv.SetPointerView(key, emitPtr); err != nil {
 							return err
@@ -4079,9 +4098,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 					}
 					unresolved = append(unresolved, srcPos)
 				}
-					if queuedCount > 0 {
-						confirmedOverlap = true
-						if routeAnchorMode {
+				if queuedCount > 0 {
+					confirmedOverlap = true
+					if routeAnchorMode {
 						if len(unresolved) > 0 {
 							// Route mode keeps overlap handling in rewrite anchors
 							// only; emit one canonical anchor row at payload min.
@@ -4111,21 +4130,21 @@ func (db *DB) flushDeferredValueLogMemtable(
 					}
 					putValueLogEligible(unresolved)
 					continue
-					}
-					if len(unresolved) > 0 && !routeAnchorMode {
-						emitWholeGroup = true
-					} else {
-						putValueLogEligible(unresolved)
-						continue
-					}
+				}
+				if len(unresolved) > 0 && !routeAnchorMode {
+					emitWholeGroup = true
+				} else {
 					putValueLogEligible(unresolved)
-					if !emitWholeGroup {
-						if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
-							for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-										putValueLogEligible(unresolved)
-										return 0, err
+					continue
+				}
+				putValueLogEligible(unresolved)
+				if !emitWholeGroup {
+					if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
+						for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
+							if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+								if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+									putValueLogEligible(unresolved)
+									return 0, err
 								}
 							}
 						}
@@ -4286,6 +4305,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		} else {
 			reserveHint *= 2
 		}
+	}
+	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint > db.flushBackendInitEntries {
+		reserveHint = db.flushBackendInitEntries
 	}
 	reserveBackendBatchOps(backendBatch, reserveHint)
 	if ptrCap > maxDeferredInlineGroupKeys {
@@ -4554,10 +4576,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 						}
 					}
-				if overlap && promoter != nil && promoter.v1LeafLogMode() {
-					confirmedOverlap := false
-					unresolved := getValueLogEligible(group.end - group.start)
-					queuedCount := 0
+					if overlap && promoter != nil && promoter.v1LeafLogMode() {
+						confirmedOverlap := false
+						unresolved := getValueLogEligible(group.end - group.start)
+						queuedCount := 0
 						for srcPos := group.start; srcPos < group.end; srcPos++ {
 							queued, _, _, err := promoter.queueV1LeafLogOverlapRewrite(ptrKeys[srcPos], ptrVals[srcPos])
 							if err != nil {
@@ -4571,9 +4593,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 							unresolved = append(unresolved, srcPos)
 						}
-					if queuedCount > 0 {
-						confirmedOverlap = true
-						if routeAnchorMode {
+						if queuedCount > 0 {
+							confirmedOverlap = true
+							if routeAnchorMode {
 								if len(unresolved) > 0 {
 									// Route mode keeps overlap handling in rewrite
 									// anchors only; emit one canonical anchor row
@@ -4607,19 +4629,19 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 							putValueLogEligible(unresolved)
 							continue
-					}
-					if len(unresolved) > 0 && !routeAnchorMode {
-						emitWholeGroup = true
-					} else {
+						}
+						if len(unresolved) > 0 && !routeAnchorMode {
+							emitWholeGroup = true
+						} else {
+							putValueLogEligible(unresolved)
+							continue
+						}
 						putValueLogEligible(unresolved)
-						continue
-					}
-					putValueLogEligible(unresolved)
-					if !emitWholeGroup {
-						if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
-							for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+						if !emitWholeGroup {
+							if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
+								for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
+									if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+										if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
 											putValueLogPtrs(ptrs)
 											return err
 										}
@@ -5229,12 +5251,19 @@ func (db *DB) markValueLogRetain(path string) {
 	if path == "" {
 		return
 	}
+	added := false
 	db.valueLogMu.Lock()
 	if db.valueLogRetain == nil {
 		db.valueLogRetain = make(map[string]struct{})
 	}
+	if _, ok := db.valueLogRetain[path]; !ok {
+		added = true
+	}
 	db.valueLogRetain[path] = struct{}{}
 	db.valueLogMu.Unlock()
+	if added {
+		db.valueLogRetainDirty.Store(true)
+	}
 }
 
 func (db *DB) forgetValueLogRetain(path string) {
@@ -5571,6 +5600,25 @@ func (db *DB) pruneRetainedValueLogs() {
 	if removed {
 		db.syncDirBestEffort(db.dir)
 	}
+}
+
+const retainedValueLogPruneMinInterval = 5 * time.Second
+
+func (db *DB) maybePruneRetainedValueLogs() {
+	if db == nil || !db.valueLogEnabled() {
+		return
+	}
+	if !db.valueLogRetainDirty.Load() {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := db.valueLogRetainLastPruneUnixNano.Load()
+	if last > 0 && now-last < int64(retainedValueLogPruneMinInterval) {
+		return
+	}
+	db.pruneRetainedValueLogs()
+	db.valueLogRetainLastPruneUnixNano.Store(now)
+	db.valueLogRetainDirty.Store(false)
 }
 
 func hashKey(key []byte) uint64 {
@@ -5972,40 +6020,42 @@ type DB struct {
 	splitValueLog            bool
 	memtableValueLogPointers bool
 
-	inlineThreshold                int
-	valueLogThreshold              int
-	valueLogDomainThresholds       []backenddb.ValueLogDomainThreshold
-	indexOuterLeafMode             string
-	valueLogWALFenceMode           string
-	outerLeafBlockTargetBytes      int
-	outerLeafBlockCodec            uint8
-	outerLeafBlockRestart          int
-	outerLeafBlobThresholdBytes    int
-	forceValueLogPointers          bool
-	valueLogRawWritevMinAvgBytes   int
-	valueLogRawWritevMinRecords    int
-	valueLogCompressionMode        uint8
-	valueLogBlockCodec             valuelog.BlockCodec
-	valueLogBlockTargetBytes       int
-	valueLogIncompressibleHold     uint64
-	valueLogIncompressibleProbe    uint64
-	valueLogAutoPolicy             uint8
-	valueLogReader                 *valuelog.Manager
-	valueLogMu                     sync.Mutex
-	valueLogRetain                 map[string]struct{}
-	backendReadVlogDirtySeq        atomic.Uint64
-	backendReadVlogFlushedSeq      atomic.Uint64
-	deferredFenceCandidateKeys     atomic.Uint64
-	deferredFenceEmittedGroups     atomic.Uint64
-	deferredFenceEnqueuedKeys      atomic.Uint64
-	deferredFenceEnqueuedBytes     atomic.Uint64
-	deferredFenceMaterializedKeys  atomic.Uint64
-	deferredFenceMaterializedBytes atomic.Uint64
-	valueLogWarned                 atomic.Bool
-	valueLogHardCapWarned          atomic.Bool
-	valueLogRetainedClosedBytes    atomic.Int64
-	maxValueLogRetainedBytes       int64
-	maxValueLogRetainedBytesHard   int64
+	inlineThreshold                 int
+	valueLogThreshold               int
+	valueLogDomainThresholds        []backenddb.ValueLogDomainThreshold
+	indexOuterLeafMode              string
+	valueLogWALFenceMode            string
+	outerLeafBlockTargetBytes       int
+	outerLeafBlockCodec             uint8
+	outerLeafBlockRestart           int
+	outerLeafBlobThresholdBytes     int
+	forceValueLogPointers           bool
+	valueLogRawWritevMinAvgBytes    int
+	valueLogRawWritevMinRecords     int
+	valueLogCompressionMode         uint8
+	valueLogBlockCodec              valuelog.BlockCodec
+	valueLogBlockTargetBytes        int
+	valueLogIncompressibleHold      uint64
+	valueLogIncompressibleProbe     uint64
+	valueLogAutoPolicy              uint8
+	valueLogReader                  *valuelog.Manager
+	valueLogMu                      sync.Mutex
+	valueLogRetain                  map[string]struct{}
+	backendReadVlogDirtySeq         atomic.Uint64
+	backendReadVlogFlushedSeq       atomic.Uint64
+	deferredFenceCandidateKeys      atomic.Uint64
+	deferredFenceEmittedGroups      atomic.Uint64
+	deferredFenceEnqueuedKeys       atomic.Uint64
+	deferredFenceEnqueuedBytes      atomic.Uint64
+	deferredFenceMaterializedKeys   atomic.Uint64
+	deferredFenceMaterializedBytes  atomic.Uint64
+	valueLogWarned                  atomic.Bool
+	valueLogHardCapWarned           atomic.Bool
+	valueLogRetainedClosedBytes     atomic.Int64
+	valueLogRetainDirty             atomic.Bool
+	valueLogRetainLastPruneUnixNano atomic.Int64
+	maxValueLogRetainedBytes        int64
+	maxValueLogRetainedBytesHard    int64
 
 	// Level 1 (Disk)
 	backend       BackendDB
@@ -7225,7 +7275,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if mode == memtable.ModeAppendOnly &&
 		(indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr ||
 			indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLog ||
-			indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute) {
+			indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute ||
+			indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogLegacy) {
 		appendOnlyEstimate = appendOnlyEstimatedBytesPerEntryDeferredFence
 	}
 	for i := range mutableShards {
@@ -7523,6 +7574,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		autoCheckpointWriteCh: make(chan struct{}, 1),
 		lanes:                 lanes,
 		flushLaneMu:           make([]sync.Mutex, len(lanes)),
+	}
+	if len(retained) > 0 {
+		db.valueLogRetainDirty.Store(true)
 	}
 	if db.indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
 		// Route mode must regroup key/value mutations into directory-backed
@@ -12147,7 +12201,7 @@ func (db *DB) Checkpoint() error {
 		db.syncDirBestEffort(db.dir)
 	}
 	db.checkValueLogRetention()
-	db.pruneRetainedValueLogs()
+	db.maybePruneRetainedValueLogs()
 
 	if err := db.maybeValidateV1LeafLogInvariants(); err != nil {
 		return err
