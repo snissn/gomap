@@ -1,6 +1,9 @@
 package treedb
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestComputeVlogRewriteScore(t *testing.T) {
 	t.Parallel()
@@ -50,5 +53,34 @@ func TestComputeVlogRewriteScore(t *testing.T) {
 				t.Fatalf("score=%f outside expected range [%f,%f]", score, tc.expectMinVal, tc.expectMaxVal)
 			}
 		})
+	}
+}
+
+func TestShouldBypassRewriteCooldown(t *testing.T) {
+	t.Parallel()
+	if shouldBypassRewriteCooldown(1.49, 1.5) {
+		t.Fatalf("expected no bypass below threshold")
+	}
+	if !shouldBypassRewriteCooldown(1.5, 1.5) {
+		t.Fatalf("expected bypass at threshold")
+	}
+	if shouldBypassRewriteCooldown(2.0, 0) {
+		t.Fatalf("expected no bypass when threshold disabled")
+	}
+}
+
+func TestEffectiveRewriteMaxSourceBytes(t *testing.T) {
+	t.Parallel()
+	got := effectiveRewriteMaxSourceBytes(64<<20, 8<<20, 5*time.Second)
+	if want := int64(40 << 20); got != want {
+		t.Fatalf("budget-capped max source bytes = %d, want %d", got, want)
+	}
+	got = effectiveRewriteMaxSourceBytes(16<<20, 8<<20, 5*time.Second)
+	if want := int64(16 << 20); got != want {
+		t.Fatalf("base max should win when tighter: got %d want %d", got, want)
+	}
+	got = effectiveRewriteMaxSourceBytes(0, 8<<20, 5*time.Second)
+	if want := int64(40 << 20); got != want {
+		t.Fatalf("budget should define max when base disabled: got %d want %d", got, want)
 	}
 }

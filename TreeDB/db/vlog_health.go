@@ -163,7 +163,7 @@ func updateValueLogHealthAfterGC(dbDir string, set *valuelog.Set, referenced map
 	return saveValueLogHealth(path, health)
 }
 
-func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struct{}) error {
+func updateValueLogHealthAfterRewrite(dbDir string, previousValueIDs map[uint32]struct{}, rewrittenSourceIDs map[uint32]struct{}) error {
 	path := valueLogHealthPath(dbDir)
 	health, err := loadValueLogHealth(path)
 	if err != nil {
@@ -171,9 +171,19 @@ func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struc
 	}
 	now := time.Now()
 	nextRewriteCount := uint64(1)
-	for id := range oldValueIDs {
-		if h, ok := health[id]; ok && h.RewriteCount >= nextRewriteCount {
-			nextRewriteCount = h.RewriteCount + 1
+	for id := range rewrittenSourceIDs {
+		if h, ok := health[id]; ok {
+			// Explicit hot->warm->cold promotion (saturating at cold).
+			switch {
+			case h.RewriteCount == 0:
+				if nextRewriteCount < 1 {
+					nextRewriteCount = 1
+				}
+			default:
+				if nextRewriteCount < 2 {
+					nextRewriteCount = 2
+				}
+			}
 		}
 	}
 
@@ -188,7 +198,8 @@ func updateValueLogHealthAfterRewrite(dbDir string, oldValueIDs map[uint32]struc
 		}
 		id := seg.fileID
 		h := health[id]
-		if _, wasOld := oldValueIDs[id]; !wasOld {
+		_, wasPrevious := previousValueIDs[id]
+		if !wasPrevious {
 			if h.RewriteCount < nextRewriteCount {
 				h.RewriteCount = nextRewriteCount
 			}

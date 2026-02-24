@@ -298,6 +298,21 @@ type ValueLogOptions struct {
 	//
 	// 0 uses a default. Values <0 are invalid.
 	RewriteSegmentTargetBytes int64
+	// RewriteHotSegmentTargetBytes caps output segment size when rewrite is
+	// compacting hot-generation sources.
+	//
+	// 0 uses RewriteSegmentTargetBytes/default. Values <0 are invalid.
+	RewriteHotSegmentTargetBytes int64
+	// RewriteWarmSegmentTargetBytes caps output segment size when rewrite is
+	// compacting warm-generation sources.
+	//
+	// 0 uses RewriteSegmentTargetBytes/default. Values <0 are invalid.
+	RewriteWarmSegmentTargetBytes int64
+	// RewriteColdSegmentTargetBytes caps output segment size when rewrite is
+	// compacting cold-generation sources.
+	//
+	// 0 uses RewriteSegmentTargetBytes/default. Values <0 are invalid.
+	RewriteColdSegmentTargetBytes int64
 	// Compression selects value-log compression behavior.
 	Compression ValueLogCompressionMode
 	// BlockCodec selects the block codec for block compression.
@@ -723,6 +738,15 @@ type Options struct {
 	// to launch a rewrite pass.
 	// `0` uses a default; negative disables score gating.
 	BackgroundValueLogRewriteScoreTrigger float64
+	// BackgroundValueLogRewriteScoreCooldownBypass bypasses rewrite cooldown
+	// when the computed rewrite score is at/above this value.
+	// `0` uses a default; negative is invalid.
+	BackgroundValueLogRewriteScoreCooldownBypass float64
+	// BackgroundValueLogRewriteBudgetBytesPerSec bounds background rewrite IO
+	// intake. When >0, per-pass MaxSourceBytes is capped by this budget over
+	// one rewrite interval.
+	// `0` disables this budget.
+	BackgroundValueLogRewriteBudgetBytesPerSec int64
 	// MaxWALBytes triggers an immediate checkpoint in cached mode when the sum of
 	// WAL segment sizes exceeds this many bytes (0 uses a default; <0 disables the
 	// size trigger). This is an operational safety cap; it does not make each
@@ -1016,6 +1040,15 @@ func validateOptions(opts Options) error {
 	if opts.ValueLog.RewriteSegmentTargetBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log rewrite segment target bytes %d", opts.ValueLog.RewriteSegmentTargetBytes)
 	}
+	if opts.ValueLog.RewriteHotSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log rewrite hot segment target bytes %d", opts.ValueLog.RewriteHotSegmentTargetBytes)
+	}
+	if opts.ValueLog.RewriteWarmSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log rewrite warm segment target bytes %d", opts.ValueLog.RewriteWarmSegmentTargetBytes)
+	}
+	if opts.ValueLog.RewriteColdSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log rewrite cold segment target bytes %d", opts.ValueLog.RewriteColdSegmentTargetBytes)
+	}
 	if opts.ValueLog.BlockTargetCompressedBytes > 0 {
 		const (
 			minBlockTargetCompressedBytes = 256
@@ -1054,6 +1087,12 @@ func validateOptions(opts Options) error {
 	}
 	if opts.BackgroundValueLogRewriteScoreTrigger < 0 {
 		return fmt.Errorf("treedb: invalid background value-log rewrite score trigger %.6f", opts.BackgroundValueLogRewriteScoreTrigger)
+	}
+	if opts.BackgroundValueLogRewriteScoreCooldownBypass < 0 {
+		return fmt.Errorf("treedb: invalid background value-log rewrite cooldown bypass score %.6f", opts.BackgroundValueLogRewriteScoreCooldownBypass)
+	}
+	if opts.BackgroundValueLogRewriteBudgetBytesPerSec < 0 {
+		return fmt.Errorf("treedb: invalid background value-log rewrite budget bytes/sec %d", opts.BackgroundValueLogRewriteBudgetBytesPerSec)
 	}
 	switch opts.ValueLog.AutoPolicy {
 	case ValueLogAutoThroughput, ValueLogAutoBalanced, ValueLogAutoSize:

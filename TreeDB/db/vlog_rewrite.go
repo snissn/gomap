@@ -45,6 +45,15 @@ type ValueLogRewriteOnlineOptions struct {
 	// MaxSegmentBytes bounds new value-log segment size during rewrite.
 	// <=0 uses a default.
 	MaxSegmentBytes int64
+	// HotSegmentBytes overrides MaxSegmentBytes when selected source segments are
+	// predominantly hot-generation.
+	HotSegmentBytes int64
+	// WarmSegmentBytes overrides MaxSegmentBytes when selected source segments are
+	// predominantly warm-generation.
+	WarmSegmentBytes int64
+	// ColdSegmentBytes overrides MaxSegmentBytes when selected source segments are
+	// predominantly cold-generation.
+	ColdSegmentBytes int64
 	// LocalityPolicy controls ordering of rewritten pointer candidates within
 	// each batch.
 	LocalityPolicy ValueLogRewriteLocalityPolicy
@@ -334,7 +343,50 @@ type rewriteSourceSegment struct {
 	liveBytes    int64
 	staleBytes   int64
 	staleRatio   float64
+	efficiency   float64
 	rewriteCount uint64
+}
+
+func generationRankForRewriteCount(rewriteCount uint64) int {
+	// 0=hot, 1=warm, 2=cold
+	if rewriteCount == 0 {
+		return 0
+	}
+	if rewriteCount == 1 {
+		return 1
+	}
+	return 2
+}
+
+func chooseRewriteSegmentTarget(opts ValueLogRewriteOnlineOptions, sourceIDs map[uint32]struct{}, health map[uint32]valueLogSegmentHealth) int64 {
+	maxBytes := opts.MaxSegmentBytes
+	if maxBytes <= 0 {
+		maxBytes = defaultValueLogRewriteSegmentBytes
+	}
+	if len(sourceIDs) == 0 || len(health) == 0 {
+		return maxBytes
+	}
+	var hot, warm, cold int
+	for id := range sourceIDs {
+		switch generationRankForRewriteCount(health[id].RewriteCount) {
+		case 0:
+			hot++
+		case 1:
+			warm++
+		default:
+			cold++
+		}
+	}
+	if hot >= warm && hot >= cold && opts.HotSegmentBytes > 0 {
+		return opts.HotSegmentBytes
+	}
+	if warm >= hot && warm >= cold && opts.WarmSegmentBytes > 0 {
+		return opts.WarmSegmentBytes
+	}
+	if cold >= hot && cold >= warm && opts.ColdSegmentBytes > 0 {
+		return opts.ColdSegmentBytes
+	}
+	return maxBytes
 }
 
 func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64, health map[uint32]valueLogSegmentHealth) map[uint32]struct{} {
@@ -375,6 +427,10 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 			continue
 		}
 		staleRatio := float64(staleBytes) / float64(size)
+		efficiency := float64(staleBytes)
+		if liveBytes > 0 {
+			efficiency = float64(staleBytes) / float64(liveBytes)
+		}
 		if minStaleRatio > 0 && staleRatio < minStaleRatio {
 			continue
 		}
@@ -386,6 +442,7 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 			liveBytes:    liveBytes,
 			staleBytes:   staleBytes,
 			staleRatio:   staleRatio,
+			efficiency:   efficiency,
 			rewriteCount: health[id].RewriteCount,
 		})
 	}
@@ -397,11 +454,14 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 	sort.SliceStable(candidates, func(i, j int) bool {
 		a := candidates[i]
 		b := candidates[j]
-		if a.staleRatio != b.staleRatio {
-			return a.staleRatio > b.staleRatio
+		if a.efficiency != b.efficiency {
+			return a.efficiency > b.efficiency
 		}
 		if a.rewriteCount != b.rewriteCount {
 			return a.rewriteCount < b.rewriteCount
+		}
+		if a.staleRatio != b.staleRatio {
+			return a.staleRatio > b.staleRatio
 		}
 		if a.staleBytes != b.staleBytes {
 			return a.staleBytes > b.staleBytes
@@ -460,15 +520,18 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		stats.SegmentsBefore++
 		stats.BytesBefore += fileSize(set.Files[id])
 	}
+	sourceIDs := make(map[uint32]struct{}, len(set.Files))
+	for id := range set.Files {
+		sourceIDs[id] = struct{}{}
+	}
 	var (
-		sourceIDs      map[uint32]struct{}
 		restrictSource bool
 		err            error
+		healthByID     map[uint32]valueLogSegmentHealth
 	)
 	if hasRewriteSourceSelection(opts) {
 		active := currentValueLogIDs(set)
 		var liveByID map[uint32]int64
-		var healthByID map[uint32]valueLogSegmentHealth
 		if len(opts.SourceFileIDs) == 0 {
 			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 			if err != nil {
@@ -483,6 +546,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		sourceIDs = selectRewriteSourceSegments(opts, set.Files, active, liveByID, healthByID)
 		restrictSource = true
 	}
+	maxBytes := chooseRewriteSegmentTarget(opts, sourceIDs, healthByID)
 	_ = db.valueLogManager.Release(set)
 	if restrictSource && len(sourceIDs) == 0 {
 		// No source segments selected: this rewrite pass is a no-op.
@@ -500,10 +564,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, err
 	}
 	lane, startSeq := chooseRewriteLane(segments)
-	maxBytes := opts.MaxSegmentBytes
-	if maxBytes <= 0 {
-		maxBytes = defaultValueLogRewriteSegmentBytes
-	}
 	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), lane, startSeq, maxBytes)
 	defer func() { _ = writer.Close() }()
 
@@ -654,7 +714,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err := db.RefreshValueLogSet(); err != nil {
 		return stats, err
 	}
-	if err := updateValueLogHealthAfterRewrite(db.dir, oldValueIDs); err != nil {
+	if err := updateValueLogHealthAfterRewrite(db.dir, oldValueIDs, sourceIDs); err != nil {
 		return stats, err
 	}
 
@@ -959,7 +1019,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if err := removeOldValueLogSegments(walDir, segments, retainedOldValueIDs); err != nil {
 		return stats, err
 	}
-	if err := updateValueLogHealthAfterRewrite(opts.Dir, oldValueIDs); err != nil {
+	if err := updateValueLogHealthAfterRewrite(opts.Dir, oldValueIDs, oldValueIDs); err != nil {
 		if opts.NotifyError != nil {
 			opts.NotifyError(fmt.Errorf("value-log health update after rewrite: %w", err))
 		}

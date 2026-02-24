@@ -672,9 +672,26 @@ func Open(opts Options) (*DB, error) {
 	if vlogRewriteScoreTrigger == 0 {
 		vlogRewriteScoreTrigger = defaultBackgroundValueLogRewriteScoreTrig
 	}
+	vlogRewriteScoreBypass := opts.BackgroundValueLogRewriteScoreCooldownBypass
+	if vlogRewriteScoreBypass == 0 {
+		vlogRewriteScoreBypass = defaultBackgroundValueLogRewriteScoreBypass
+	}
+	vlogRewriteBudgetBps := opts.BackgroundValueLogRewriteBudgetBytesPerSec
 	vlogRewriteSegmentTargetBytes := opts.ValueLog.RewriteSegmentTargetBytes
 	if vlogRewriteSegmentTargetBytes == 0 {
 		vlogRewriteSegmentTargetBytes = valueLogMaxSegmentBytes
+	}
+	vlogRewriteHotTargetBytes := opts.ValueLog.RewriteHotSegmentTargetBytes
+	if vlogRewriteHotTargetBytes == 0 {
+		vlogRewriteHotTargetBytes = vlogRewriteSegmentTargetBytes
+	}
+	vlogRewriteWarmTargetBytes := opts.ValueLog.RewriteWarmSegmentTargetBytes
+	if vlogRewriteWarmTargetBytes == 0 {
+		vlogRewriteWarmTargetBytes = vlogRewriteSegmentTargetBytes
+	}
+	vlogRewriteColdTargetBytes := opts.ValueLog.RewriteColdSegmentTargetBytes
+	if vlogRewriteColdTargetBytes == 0 {
+		vlogRewriteColdTargetBytes = defaultBackgroundValueLogColdSegmentTargetB
 	}
 	if cached != nil && (vlogGCInterval > 0 || vlogRewriteInterval > 0) {
 		out.bgVlogMaint.Start(out, bgValueLogMaintenanceConfig{
@@ -689,7 +706,12 @@ func Open(opts Options) (*DB, error) {
 			rewriteScoreStaleB: vlogRewriteScoreTargetStaleBytes,
 			rewriteScoreChurnB: vlogRewriteScoreTargetChurnBytes,
 			rewriteScoreTrig:   vlogRewriteScoreTrigger,
+			rewriteScoreBypass: vlogRewriteScoreBypass,
+			rewriteBudgetBps:   vlogRewriteBudgetBps,
 			rewriteSegTargetB:  vlogRewriteSegmentTargetBytes,
+			rewriteHotTargetB:  vlogRewriteHotTargetBytes,
+			rewriteWarmTargetB: vlogRewriteWarmTargetBytes,
+			rewriteColdTargetB: vlogRewriteColdTargetBytes,
 		})
 	}
 

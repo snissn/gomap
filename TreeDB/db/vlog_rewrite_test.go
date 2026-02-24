@@ -1459,3 +1459,49 @@ func TestSelectRewriteSourceSegments_PrefersLowerRewriteCountOnTie(t *testing.T)
 		t.Fatalf("expected lower rewrite-count segment selected, got=%v", selected)
 	}
 }
+
+func TestSelectRewriteSourceSegments_PrefersHigherReclaimEfficiency(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "v1.log")
+	path2 := filepath.Join(dir, "v2.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte{1}, 100), 0o644); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte{2}, 100), 0o644); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	liveByID := map[uint32]int64{
+		1: 10, // stale=90, efficiency=9.0
+		2: 80, // stale=20, efficiency=0.25
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments: 1,
+	}, files, map[uint32]struct{}{}, liveByID, nil)
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected segment 1 selected by reclaim efficiency, got=%v", selected)
+	}
+}
+
+func TestChooseRewriteSegmentTarget_ByGenerationMajority(t *testing.T) {
+	source := map[uint32]struct{}{1: {}, 2: {}, 3: {}}
+	health := map[uint32]valueLogSegmentHealth{
+		1: {RewriteCount: 0}, // hot
+		2: {RewriteCount: 0}, // hot
+		3: {RewriteCount: 2}, // cold
+	}
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSegmentBytes:  32 << 20,
+		HotSegmentBytes:  16 << 20,
+		WarmSegmentBytes: 64 << 20,
+		ColdSegmentBytes: 256 << 20,
+	}
+	got := chooseRewriteSegmentTarget(opts, source, health)
+	if want := int64(16 << 20); got != want {
+		t.Fatalf("hot-majority target=%d want=%d", got, want)
+	}
+}

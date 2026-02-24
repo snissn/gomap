@@ -21,6 +21,8 @@ const (
 	defaultBackgroundValueLogRewriteScoreStaleB = int64(16 << 20)  // 16 MiB
 	defaultBackgroundValueLogRewriteScoreChurnB = int64(32 << 20)  // 32 MiB
 	defaultBackgroundValueLogRewriteScoreTrig   = 1.0
+	defaultBackgroundValueLogRewriteScoreBypass = 1.5
+	defaultBackgroundValueLogColdSegmentTargetB = int64(256 << 20) // 256 MiB
 )
 
 type bgValueLogMaintenanceConfig struct {
@@ -36,6 +38,11 @@ type bgValueLogMaintenanceConfig struct {
 	rewriteScoreStaleB int64
 	rewriteScoreChurnB int64
 	rewriteScoreTrig   float64
+	rewriteScoreBypass float64
+	rewriteBudgetBps   int64
+	rewriteHotTargetB  int64
+	rewriteWarmTargetB int64
+	rewriteColdTargetB int64
 }
 
 type bgValueLogMaintenanceWorker struct {
@@ -166,15 +173,6 @@ func (w *bgValueLogMaintenanceWorker) runOnce(db *DB, runGC bool, maybeRewrite b
 	}
 
 	if maybeRewrite && w.cfg.rewriteInterval > 0 {
-		lastRewriteUnix := w.lastRewrite.Load()
-		if w.cfg.rewriteCooldown > 0 && lastRewriteUnix > 0 {
-			last := time.Unix(lastRewriteUnix, 0)
-			if now.Sub(last) < w.cfg.rewriteCooldown {
-				w.lastErr.Store("")
-				return
-			}
-		}
-
 		if !gcDone {
 			w.lastErr.Store("")
 			return
@@ -206,11 +204,25 @@ func (w *bgValueLogMaintenanceWorker) runOnce(db *DB, runGC bool, maybeRewrite b
 			w.lastErr.Store("")
 			return
 		}
+		lastRewriteUnix := w.lastRewrite.Load()
+		bypassCooldown := shouldBypassRewriteCooldown(score, w.cfg.rewriteScoreBypass)
+		if !bypassCooldown && w.cfg.rewriteCooldown > 0 && lastRewriteUnix > 0 {
+			last := time.Unix(lastRewriteUnix, 0)
+			if now.Sub(last) < w.cfg.rewriteCooldown {
+				w.lastErr.Store("")
+				return
+			}
+		}
+
+		maxSourceBytes := effectiveRewriteMaxSourceBytes(w.cfg.rewriteMaxBytes, w.cfg.rewriteBudgetBps, w.cfg.rewriteInterval)
 
 		opts := ValueLogRewriteOnlineOptions{
 			MaxSourceSegments: w.cfg.rewriteMaxSegs,
-			MaxSourceBytes:    w.cfg.rewriteMaxBytes,
+			MaxSourceBytes:    maxSourceBytes,
 			MaxSegmentBytes:   w.cfg.rewriteSegTargetB,
+			HotSegmentBytes:   w.cfg.rewriteHotTargetB,
+			WarmSegmentBytes:  w.cfg.rewriteWarmTargetB,
+			ColdSegmentBytes:  w.cfg.rewriteColdTargetB,
 			LocalityPolicy:    ValueLogRewriteLocalityGrouped,
 		}
 		if _, err := db.ValueLogRewriteOnline(context.Background(), opts); err != nil {
@@ -241,6 +253,11 @@ func bgValueLogMaintenanceStatsInto(out map[string]string, w *bgValueLogMaintena
 	out["treedb.bg_vlog_maintenance.rewrite_score_target_stale_bytes"] = fmt.Sprintf("%d", w.cfg.rewriteScoreStaleB)
 	out["treedb.bg_vlog_maintenance.rewrite_score_target_churn_bytes"] = fmt.Sprintf("%d", w.cfg.rewriteScoreChurnB)
 	out["treedb.bg_vlog_maintenance.rewrite_score_trigger"] = fmt.Sprintf("%.3f", w.cfg.rewriteScoreTrig)
+	out["treedb.bg_vlog_maintenance.rewrite_score_cooldown_bypass"] = fmt.Sprintf("%.3f", w.cfg.rewriteScoreBypass)
+	out["treedb.bg_vlog_maintenance.rewrite_budget_bytes_per_sec"] = fmt.Sprintf("%d", w.cfg.rewriteBudgetBps)
+	out["treedb.bg_vlog_maintenance.rewrite_hot_segment_target_bytes"] = fmt.Sprintf("%d", w.cfg.rewriteHotTargetB)
+	out["treedb.bg_vlog_maintenance.rewrite_warm_segment_target_bytes"] = fmt.Sprintf("%d", w.cfg.rewriteWarmTargetB)
+	out["treedb.bg_vlog_maintenance.rewrite_cold_segment_target_bytes"] = fmt.Sprintf("%d", w.cfg.rewriteColdTargetB)
 	out["treedb.bg_vlog_maintenance.last_rewrite_score"] = fmt.Sprintf("%.6f", math.Float64frombits(w.lastRewriteScore.Load()))
 	out["treedb.bg_vlog_maintenance.last_churn_bytes"] = fmt.Sprintf("%d", w.lastChurnBytes.Load())
 	out["treedb.bg_vlog_maintenance.runs"] = fmt.Sprintf("%d", w.runs.Load())
@@ -282,4 +299,27 @@ func computeVlogRewriteScore(totalBytes, staleBytes, churnBytes, targetTotalByte
 		score = scoreChurn
 	}
 	return score
+}
+
+func shouldBypassRewriteCooldown(score, bypassThreshold float64) bool {
+	return bypassThreshold > 0 && score >= bypassThreshold
+}
+
+func effectiveRewriteMaxSourceBytes(baseMaxBytes, budgetBytesPerSec int64, interval time.Duration) int64 {
+	maxSourceBytes := baseMaxBytes
+	if budgetBytesPerSec <= 0 || interval <= 0 {
+		return maxSourceBytes
+	}
+	intervalNanos := interval.Nanoseconds()
+	if intervalNanos <= 0 {
+		return maxSourceBytes
+	}
+	budget := (budgetBytesPerSec * intervalNanos) / int64(time.Second)
+	if budget <= 0 {
+		budget = budgetBytesPerSec
+	}
+	if maxSourceBytes <= 0 || budget < maxSourceBytes {
+		return budget
+	}
+	return maxSourceBytes
 }
