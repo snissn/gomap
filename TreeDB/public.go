@@ -1113,6 +1113,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.durability_mode"] = db.durabilityMode
 		bgIndexVacuumStatsInto(stats, &db.bgVac)
 		bgValueLogMaintenanceStatsInto(stats, &db.bgVlogMaint)
+		addVlogGenerationStats(stats, db.dir)
 		maintenanceStatsInto(stats, &db.maintenance)
 		return stats
 	}
@@ -1124,6 +1125,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.durability_mode"] = db.durabilityMode
 	bgIndexVacuumStatsInto(stats, &db.bgVac)
 	bgValueLogMaintenanceStatsInto(stats, &db.bgVlogMaint)
+	addVlogGenerationStats(stats, db.dir)
 	maintenanceStatsInto(stats, &db.maintenance)
 	return stats
 }
