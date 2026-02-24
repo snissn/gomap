@@ -61,6 +61,15 @@ var (
 	treedbVlogCompression                 = flag.String("treedb-vlog-compression", "default", "TreeDB: value-log compression mode (default=auto; values: off|block|dict|auto)")
 	treedbVlogBlockCodec                  = flag.String("treedb-vlog-block-codec", "snappy", "TreeDB: value-log block codec (snappy|lz4)")
 	treedbVlogAutoPolicy                  = flag.String("treedb-vlog-auto-policy", "balanced", "TreeDB: value-log auto policy (balanced|throughput|size)")
+	treedbVlogGenerationPolicy            = flag.String("treedb-vlog-generation-policy", "off", "TreeDB: value-log generation policy (off|hot_warm_cold)")
+	treedbVlogGenerationHotSegmentBytes   = flag.Int64("treedb-vlog-generation-hot-segment-bytes", 0, "TreeDB: generational hot segment target bytes (0=default)")
+	treedbVlogGenerationWarmSegmentBytes  = flag.Int64("treedb-vlog-generation-warm-segment-bytes", 0, "TreeDB: generational warm segment target bytes (0=default)")
+	treedbVlogGenerationColdSegmentBytes  = flag.Int64("treedb-vlog-generation-cold-segment-bytes", 0, "TreeDB: generational cold segment target bytes (0=default)")
+	treedbVlogRewriteBudgetBytesPerSec    = flag.Int64("treedb-vlog-rewrite-budget-bytes-per-sec", 0, "TreeDB: generational rewrite byte budget (0=disabled)")
+	treedbVlogRewriteBudgetRecordsPerSec  = flag.Int("treedb-vlog-rewrite-budget-records-per-sec", 0, "TreeDB: generational rewrite record budget (0=disabled)")
+	treedbVlogRewriteTriggerStaleRatioPPM = flag.Uint("treedb-vlog-rewrite-trigger-stale-ratio-ppm", 0, "TreeDB: generational rewrite stale/live trigger in ppm (0=disabled)")
+	treedbVlogRewriteTriggerTotalBytes    = flag.Int64("treedb-vlog-rewrite-trigger-total-bytes", 0, "TreeDB: generational rewrite total retained bytes trigger (0=disabled)")
+	treedbVlogRewriteTriggerChurnPerSec   = flag.Int64("treedb-vlog-rewrite-trigger-churn-per-sec", 0, "TreeDB: generational rewrite churn trigger in bytes/sec (0=disabled)")
 	treedbVlogBlockTargetBytes            = flag.Int("treedb-vlog-block-target-bytes", 0, "TreeDB: value-log block target compressed bytes (0=default)")
 	treedbVlogIncompressibleHoldBytes     = flag.Int("treedb-vlog-incompressible-hold-bytes", 0, "TreeDB: auto-mode incompressible hold bytes (0=default)")
 	treedbVlogIncompressibleProbeBytes    = flag.Int("treedb-vlog-incompressible-probe-bytes", 0, "TreeDB: auto-mode incompressible probe interval bytes (0=default)")
@@ -262,6 +271,17 @@ func parseTreeDBVlogAutoPolicy(s string) (treedb.ValueLogAutoPolicy, error) {
 	}
 }
 
+func parseTreeDBVlogGenerationPolicy(s string) (treedb.ValueLogGenerationPolicy, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "off", "default":
+		return treedb.ValueLogGenerationOff, nil
+	case "hot_warm_cold", "hotwarmcold", "generational":
+		return treedb.ValueLogGenerationHotWarmCold, nil
+	default:
+		return treedb.ValueLogGenerationOff, fmt.Errorf("unsupported -treedb-vlog-generation-policy=%q (expected off|hot_warm_cold)", s)
+	}
+}
+
 func parseTreeDBOuterLeafMode(s string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "":
@@ -342,6 +362,15 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("vlog.compression=%s", formatTreeDBVlogCompression(r.opts.ValueLog.Compression)))
 	lines = append(lines, fmt.Sprintf("vlog.block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.BlockCodec)))
 	lines = append(lines, fmt.Sprintf("vlog.auto_policy=%s", formatTreeDBVlogAutoPolicy(r.opts.ValueLog.AutoPolicy)))
+	lines = append(lines, fmt.Sprintf("vlog.generation_policy=%d", r.opts.ValueLog.Generational.Policy))
+	lines = append(lines, fmt.Sprintf("vlog.generation_hot_segment_bytes=%d", r.opts.ValueLog.Generational.HotSegmentTargetBytes))
+	lines = append(lines, fmt.Sprintf("vlog.generation_warm_segment_bytes=%d", r.opts.ValueLog.Generational.WarmSegmentTargetBytes))
+	lines = append(lines, fmt.Sprintf("vlog.generation_cold_segment_bytes=%d", r.opts.ValueLog.Generational.ColdSegmentTargetBytes))
+	lines = append(lines, fmt.Sprintf("vlog.rewrite_budget_bytes_per_sec=%d", r.opts.ValueLog.Generational.RewriteBudgetBytesPerSec))
+	lines = append(lines, fmt.Sprintf("vlog.rewrite_budget_records_per_sec=%d", r.opts.ValueLog.Generational.RewriteBudgetRecordsPerSec))
+	lines = append(lines, fmt.Sprintf("vlog.rewrite_trigger_stale_ratio_ppm=%d", r.opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM))
+	lines = append(lines, fmt.Sprintf("vlog.rewrite_trigger_total_bytes=%d", r.opts.ValueLog.Generational.RewriteTriggerTotalBytes))
+	lines = append(lines, fmt.Sprintf("vlog.rewrite_trigger_churn_per_sec=%d", r.opts.ValueLog.Generational.RewriteTriggerChurnPerSec))
 	if target := r.opts.ValueLog.BlockTargetCompressedBytes; target <= 0 {
 		lines = append(lines, "vlog.block_target_bytes=default (effective=4096B)")
 	} else {
@@ -610,6 +639,19 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	opts.ValueLog.AutoPolicy = autoPolicy
+	genPolicy, err := parseTreeDBVlogGenerationPolicy(*treedbVlogGenerationPolicy)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	opts.ValueLog.Generational.Policy = genPolicy
+	opts.ValueLog.Generational.HotSegmentTargetBytes = *treedbVlogGenerationHotSegmentBytes
+	opts.ValueLog.Generational.WarmSegmentTargetBytes = *treedbVlogGenerationWarmSegmentBytes
+	opts.ValueLog.Generational.ColdSegmentTargetBytes = *treedbVlogGenerationColdSegmentBytes
+	opts.ValueLog.Generational.RewriteBudgetBytesPerSec = *treedbVlogRewriteBudgetBytesPerSec
+	opts.ValueLog.Generational.RewriteBudgetRecordsPerSec = *treedbVlogRewriteBudgetRecordsPerSec
+	opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM = clampUint32(uint64(*treedbVlogRewriteTriggerStaleRatioPPM))
+	opts.ValueLog.Generational.RewriteTriggerTotalBytes = *treedbVlogRewriteTriggerTotalBytes
+	opts.ValueLog.Generational.RewriteTriggerChurnPerSec = *treedbVlogRewriteTriggerChurnPerSec
 	outerMode, err := parseTreeDBOuterLeafMode(*treedbIndexOuterLeafMode)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err

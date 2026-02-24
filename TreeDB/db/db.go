@@ -262,6 +262,48 @@ const (
 	ValueLogAutoSize
 )
 
+// ValueLogGenerationPolicy controls generation-aware value-log placement.
+// PR1 scaffolding: behavior remains legacy append-only until allocator/rewrite
+// phases land; this policy is currently configuration + observability only.
+type ValueLogGenerationPolicy uint8
+
+const (
+	// ValueLogGenerationOff keeps legacy single-generation behavior.
+	ValueLogGenerationOff ValueLogGenerationPolicy = iota
+	// ValueLogGenerationHotWarmCold enables hot/warm/cold generation policy.
+	ValueLogGenerationHotWarmCold
+)
+
+// ValueLogGenerationConfig configures generational value-log behavior.
+type ValueLogGenerationConfig struct {
+	// Policy selects generation behavior. Off preserves current behavior.
+	Policy ValueLogGenerationPolicy
+	// HotSegmentTargetBytes configures target segment size for hot generation.
+	// 0 uses implementation default.
+	HotSegmentTargetBytes int64
+	// WarmSegmentTargetBytes configures target segment size for warm generation.
+	// 0 uses implementation default.
+	WarmSegmentTargetBytes int64
+	// ColdSegmentTargetBytes configures target segment size for cold generation.
+	// 0 uses implementation default.
+	ColdSegmentTargetBytes int64
+	// RewriteBudgetBytesPerSec bounds background incremental rewrite bandwidth.
+	// 0 disables byte-budget trigger.
+	RewriteBudgetBytesPerSec int64
+	// RewriteBudgetRecordsPerSec bounds background incremental rewrite records/s.
+	// 0 disables record-budget trigger.
+	RewriteBudgetRecordsPerSec int
+	// RewriteTriggerStaleRatioPPM triggers rewrite when stale/live ratio exceeds
+	// threshold (parts-per-million, 0 disables).
+	RewriteTriggerStaleRatioPPM uint32
+	// RewriteTriggerTotalBytes triggers rewrite when total retained bytes exceeds
+	// threshold (0 disables).
+	RewriteTriggerTotalBytes int64
+	// RewriteTriggerChurnPerSec triggers rewrite when churn rate exceeds
+	// threshold (0 disables).
+	RewriteTriggerChurnPerSec int64
+}
+
 func normalizeValueLogWALFenceMode(mode ValueLogWALFenceMode) ValueLogWALFenceMode {
 	switch strings.ToLower(strings.TrimSpace(string(mode))) {
 	case "", string(ValueLogWALFenceModeRIDJoin):
@@ -346,6 +388,10 @@ type ValueLogOptions struct {
 	// settings may choose a smaller default to avoid large-scale update cliffs by
 	// pushing moderate values into the value log.
 	PointerThreshold int
+	// Generational configures generation-aware value-log placement and rewrite
+	// scheduling. PR1 wires config and stats only; behavior remains legacy until
+	// follow-on phases land.
+	Generational ValueLogGenerationConfig
 	// ForcePointers stores all values out-of-line in the value log (no inline values).
 	ForcePointers bool
 	// DomainInlineThresholds provides optional per-domain overrides for
@@ -1002,6 +1048,32 @@ func validateOptions(opts Options) error {
 	case ValueLogAutoThroughput, ValueLogAutoBalanced, ValueLogAutoSize:
 	default:
 		return fmt.Errorf("treedb: invalid value-log auto policy %d", opts.ValueLog.AutoPolicy)
+	}
+	switch opts.ValueLog.Generational.Policy {
+	case ValueLogGenerationOff, ValueLogGenerationHotWarmCold:
+	default:
+		return fmt.Errorf("treedb: invalid value-log generation policy %d", opts.ValueLog.Generational.Policy)
+	}
+	if opts.ValueLog.Generational.HotSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational hot segment target bytes %d", opts.ValueLog.Generational.HotSegmentTargetBytes)
+	}
+	if opts.ValueLog.Generational.WarmSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational warm segment target bytes %d", opts.ValueLog.Generational.WarmSegmentTargetBytes)
+	}
+	if opts.ValueLog.Generational.ColdSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational cold segment target bytes %d", opts.ValueLog.Generational.ColdSegmentTargetBytes)
+	}
+	if opts.ValueLog.Generational.RewriteBudgetBytesPerSec < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational rewrite budget bytes/sec %d", opts.ValueLog.Generational.RewriteBudgetBytesPerSec)
+	}
+	if opts.ValueLog.Generational.RewriteBudgetRecordsPerSec < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational rewrite budget records/sec %d", opts.ValueLog.Generational.RewriteBudgetRecordsPerSec)
+	}
+	if opts.ValueLog.Generational.RewriteTriggerTotalBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational rewrite trigger total bytes %d", opts.ValueLog.Generational.RewriteTriggerTotalBytes)
+	}
+	if opts.ValueLog.Generational.RewriteTriggerChurnPerSec < 0 {
+		return fmt.Errorf("treedb: invalid value-log generational rewrite trigger churn/sec %d", opts.ValueLog.Generational.RewriteTriggerChurnPerSec)
 	}
 	seenDomains := make(map[string]struct{}, len(opts.ValueLog.DomainInlineThresholds))
 	for i := range opts.ValueLog.DomainInlineThresholds {

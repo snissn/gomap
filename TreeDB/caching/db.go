@@ -5630,6 +5630,25 @@ type Options struct {
 	// (e.g. packed on-disk ValuePtr) that require value-log offsets stay within a
 	// smaller representable range.
 	ValueLogMaxSegmentBytes int64
+	// ValueLogGenerationPolicy selects generational mode:
+	// 0=off, 1=hot_warm_cold.
+	ValueLogGenerationPolicy uint8
+	// ValueLogGenerationHotSegmentTargetBytes configures hot segment target size.
+	ValueLogGenerationHotSegmentTargetBytes int64
+	// ValueLogGenerationWarmSegmentTargetBytes configures warm segment target size.
+	ValueLogGenerationWarmSegmentTargetBytes int64
+	// ValueLogGenerationColdSegmentTargetBytes configures cold segment target size.
+	ValueLogGenerationColdSegmentTargetBytes int64
+	// ValueLogRewriteBudgetBytesPerSec configures incremental rewrite byte budget.
+	ValueLogRewriteBudgetBytesPerSec int64
+	// ValueLogRewriteBudgetRecordsPerSec configures incremental rewrite record budget.
+	ValueLogRewriteBudgetRecordsPerSec int
+	// ValueLogRewriteTriggerStaleRatioPPM triggers rewrite by stale/live ratio.
+	ValueLogRewriteTriggerStaleRatioPPM uint32
+	// ValueLogRewriteTriggerTotalBytes triggers rewrite by retained bytes.
+	ValueLogRewriteTriggerTotalBytes int64
+	// ValueLogRewriteTriggerChurnPerSec triggers rewrite by churn rate.
+	ValueLogRewriteTriggerChurnPerSec int64
 	// ForceValueLogPointers stores all values out-of-line in the value log.
 	ForceValueLogPointers bool
 	// DisableReadChecksum skips CRC verification on value-log reads.
@@ -5819,6 +5838,15 @@ type DB struct {
 	valueLogIncompressibleHold     uint64
 	valueLogIncompressibleProbe    uint64
 	valueLogAutoPolicy             uint8
+	valueLogGenerationPolicy       uint8
+	valueLogGenerationHotTarget    int64
+	valueLogGenerationWarmTarget   int64
+	valueLogGenerationColdTarget   int64
+	valueLogRewriteBudgetBytes     int64
+	valueLogRewriteBudgetRecords   int
+	valueLogRewriteTriggerRatioPPM uint32
+	valueLogRewriteTriggerBytes    int64
+	valueLogRewriteTriggerChurn    int64
 	valueLogReader                 *valuelog.Manager
 	valueLogMu                     sync.Mutex
 	valueLogRetain                 map[string]struct{}
@@ -5957,6 +5985,12 @@ type DB struct {
 	debugPtrDisabled                   atomic.Int64
 	routeLeaflogFallbackDirectAttempts atomic.Uint64
 	routeLeaflogFallbackDirectRewrites atomic.Uint64
+	vlogGenerationRemapSuccesses       atomic.Uint64
+	vlogGenerationRemapFailures        atomic.Uint64
+	vlogGenerationRewriteBytesIn       atomic.Uint64
+	vlogGenerationRewriteBytesOut      atomic.Uint64
+	vlogGenerationGCSegmentsDeleted    atomic.Uint64
+	vlogGenerationGCBytesDeleted       atomic.Uint64
 	bgErrMu                            sync.Mutex
 	bgErr                              error
 
@@ -6977,6 +7011,39 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogMaxSegmentBytes < 0 {
 		valueLogMaxSegmentBytes = 0
 	}
+	valueLogGenerationPolicy := opts.ValueLogGenerationPolicy
+	if valueLogGenerationPolicy > 1 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generation policy %d", valueLogGenerationPolicy)
+	}
+	valueLogGenerationHotTarget := opts.ValueLogGenerationHotSegmentTargetBytes
+	valueLogGenerationWarmTarget := opts.ValueLogGenerationWarmSegmentTargetBytes
+	valueLogGenerationColdTarget := opts.ValueLogGenerationColdSegmentTargetBytes
+	valueLogRewriteBudgetBytes := opts.ValueLogRewriteBudgetBytesPerSec
+	valueLogRewriteBudgetRecords := opts.ValueLogRewriteBudgetRecordsPerSec
+	valueLogRewriteTriggerRatioPPM := opts.ValueLogRewriteTriggerStaleRatioPPM
+	valueLogRewriteTriggerBytes := opts.ValueLogRewriteTriggerTotalBytes
+	valueLogRewriteTriggerChurn := opts.ValueLogRewriteTriggerChurnPerSec
+	if valueLogGenerationHotTarget < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational hot segment target bytes %d", valueLogGenerationHotTarget)
+	}
+	if valueLogGenerationWarmTarget < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational warm segment target bytes %d", valueLogGenerationWarmTarget)
+	}
+	if valueLogGenerationColdTarget < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational cold segment target bytes %d", valueLogGenerationColdTarget)
+	}
+	if valueLogRewriteBudgetBytes < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite budget bytes/sec %d", valueLogRewriteBudgetBytes)
+	}
+	if valueLogRewriteBudgetRecords < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite budget records/sec %d", valueLogRewriteBudgetRecords)
+	}
+	if valueLogRewriteTriggerBytes < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite trigger total bytes %d", valueLogRewriteTriggerBytes)
+	}
+	if valueLogRewriteTriggerChurn < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite trigger churn/sec %d", valueLogRewriteTriggerChurn)
+	}
 	valueLogRawWritevMinAvgBytes := opts.ValueLogRawWritevMinAvgBytes
 	if valueLogRawWritevMinAvgBytes < 0 {
 		valueLogRawWritevMinAvgBytes = 0
@@ -7306,6 +7373,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogIncompressibleHold:           uint64(valueLogIncompressibleHold),
 		valueLogIncompressibleProbe:          uint64(valueLogIncompressibleProbe),
 		valueLogAutoPolicy:                   uint8(valueLogAutoPolicy),
+		valueLogGenerationPolicy:             valueLogGenerationPolicy,
+		valueLogGenerationHotTarget:          valueLogGenerationHotTarget,
+		valueLogGenerationWarmTarget:         valueLogGenerationWarmTarget,
+		valueLogGenerationColdTarget:         valueLogGenerationColdTarget,
+		valueLogRewriteBudgetBytes:           valueLogRewriteBudgetBytes,
+		valueLogRewriteBudgetRecords:         valueLogRewriteBudgetRecords,
+		valueLogRewriteTriggerRatioPPM:       valueLogRewriteTriggerRatioPPM,
+		valueLogRewriteTriggerBytes:          valueLogRewriteTriggerBytes,
+		valueLogRewriteTriggerChurn:          valueLogRewriteTriggerChurn,
 		memtableValueLogPointers:             true,
 		valueLogReader:                       valueLogReader,
 		valueLogRetain:                       retained,
@@ -16091,6 +16167,41 @@ func (db *DB) Stats() map[string]string {
 	vlogSegments, vlogBytes := db.valueLogRetainedStats()
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
+	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy != 0)
+	stats["treedb.cache.vlog_generation.scheduler_state"] = "idle"
+	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
+	stats["treedb.cache.vlog_generation.warm.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationWarmTarget)
+	stats["treedb.cache.vlog_generation.cold.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationColdTarget)
+	stats["treedb.cache.vlog_generation.rewrite_budget.bytes_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteBudgetBytes)
+	stats["treedb.cache.vlog_generation.rewrite_budget.records_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteBudgetRecords)
+	stats["treedb.cache.vlog_generation.rewrite_trigger.stale_ratio_ppm"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerRatioPPM)
+	stats["treedb.cache.vlog_generation.rewrite_trigger.total_bytes"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerBytes)
+	stats["treedb.cache.vlog_generation.rewrite_trigger.churn_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerChurn)
+	// PR1 scaffolding: legacy allocator still owns placement; report retained
+	// totals under hot generation until generation-aware allocator lands.
+	stats["treedb.cache.vlog_generation.bytes.live.total"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.cache.vlog_generation.bytes.live.hot"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.cache.vlog_generation.bytes.live.warm"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.live.cold"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.stale.total"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.stale.hot"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.stale.warm"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.stale.cold"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.total.total"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.cache.vlog_generation.bytes.total.hot"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.cache.vlog_generation.bytes.total.warm"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.total.cold"] = "0"
+	stats["treedb.cache.vlog_generation.segments.total"] = fmt.Sprintf("%d", vlogSegments)
+	stats["treedb.cache.vlog_generation.segments.hot"] = fmt.Sprintf("%d", vlogSegments)
+	stats["treedb.cache.vlog_generation.segments.warm"] = "0"
+	stats["treedb.cache.vlog_generation.segments.cold"] = "0"
+	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
+	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
+	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.remap.successes"] = fmt.Sprintf("%d", db.vlogGenerationRemapSuccesses.Load())
+	stats["treedb.cache.vlog_generation.remap.failures"] = fmt.Sprintf("%d", db.vlogGenerationRemapFailures.Load())
 	stats["treedb.cache.vlog_writev.syscalls"] = fmt.Sprintf("%d", rawWritevSyscalls)
 	stats["treedb.cache.vlog_writev.bytes"] = fmt.Sprintf("%d", rawWritevBytes)
 	stats["treedb.cache.vlog_writev.iovecs"] = fmt.Sprintf("%d", rawWritevIovecs)

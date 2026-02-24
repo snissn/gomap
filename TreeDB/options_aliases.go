@@ -52,6 +52,14 @@ const (
 	ValueLogAutoSize       = db.ValueLogAutoSize
 )
 
+type ValueLogGenerationPolicy = db.ValueLogGenerationPolicy
+type ValueLogGenerationConfig = db.ValueLogGenerationConfig
+
+const (
+	ValueLogGenerationOff         = db.ValueLogGenerationOff
+	ValueLogGenerationHotWarmCold = db.ValueLogGenerationHotWarmCold
+)
+
 type ValueLogWALFenceMode = db.ValueLogWALFenceMode
 
 const (
