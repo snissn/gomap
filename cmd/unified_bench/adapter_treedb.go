@@ -98,6 +98,7 @@ var (
 	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v2_fenceptr", "TreeDB: index outer-leaf mode (v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
 	treedbWALFenceMode                    = flag.String("treedb-wal-fence-mode", "rid_join", "TreeDB: WAL fence mode for v2_fenceptr (rid_join|simple_inline). For WAL-on v2_fenceptr, default remains simple_inline unless explicitly set.")
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
+	treedbV1LeafLogRoutePayloadProfile    = flag.String("treedb-v1-leaflog-route-payload-profile", "default", "TreeDB: v1_leaflog_route payload profile (default|size16k). Ignored when -treedb-outer-leaf-block-target-bytes is set")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
 	treedbOuterLeafBlockRestart           = flag.Int("treedb-outer-leaf-block-restart-interval", 0, "TreeDB: experimental outer-leaf restart interval (0=default)")
 	treedbOuterLeafBlobThresholdBytes     = flag.Int("treedb-vlog-outer-leaf-blob-threshold-bytes", 0, "TreeDB: v2 fence-pointer blob threshold bytes (0=default)")
@@ -322,6 +323,17 @@ func parseTreeDBWALFenceMode(s string) (treedb.ValueLogWALFenceMode, error) {
 		return treedb.ValueLogWALFenceModeSimpleInline, nil
 	default:
 		return "", fmt.Errorf("unsupported -treedb-wal-fence-mode=%q (expected rid_join|simple_inline)", s)
+	}
+}
+
+func parseTreeDBV1LeafLogRoutePayloadProfile(s string) (int, string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "default", "balanced":
+		return 8 << 10, "default", nil
+	case "size16k", "16k", "size":
+		return 16 << 10, "size16k", nil
+	default:
+		return 0, "", fmt.Errorf("unsupported -treedb-v1-leaflog-route-payload-profile=%q (expected default|size16k)", s)
 	}
 }
 
@@ -668,6 +680,14 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	opts.IndexOuterLeafMode = outerMode
+	routePayloadTargetBytes, routePayloadProfileName, err := parseTreeDBV1LeafLogRoutePayloadProfile(*treedbV1LeafLogRoutePayloadProfile)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	if opts.IndexOuterLeafMode == treedb.IndexOuterLeafModeV1LeafLogRoute && !flagExplicit("treedb-outer-leaf-block-target-bytes") {
+		opts.ValueLog.OuterLeafBlockTargetBytes = routePayloadTargetBytes
+		notes = append(notes, fmt.Sprintf("v1_leaflog_route payload profile=%s sets vlog.outer_leaf_block_target_bytes=%dB", routePayloadProfileName, routePayloadTargetBytes))
+	}
 	walFenceMode, err := parseTreeDBWALFenceMode(*treedbWALFenceMode)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err

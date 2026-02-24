@@ -7220,6 +7220,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if outerLeafBlockTargetOpt <= 0 && indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr {
 		outerLeafBlockTargetOpt = defaultOuterLeafFenceBlockTargetBytes
 	}
+	if outerLeafBlockTargetOpt <= 0 && indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+		// Route mode payload blocks benefit from larger grouping for compression
+		// density while keeping decode cost bounded in the hot read path.
+		outerLeafBlockTargetOpt = 8 << 10
+	}
 	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(outerLeafBlockTargetOpt)
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
 	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)

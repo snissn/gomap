@@ -95,6 +95,29 @@ func TestBuildTreeDBOptions_V1LeafLogRouteModeAccepted(t *testing.T) {
 	if got := rep.formatText(""); !strings.Contains(got, "index_outer_leaf_mode=v1_leaflog_route") {
 		t.Fatalf("resolved options missing v1_leaflog_route outer-leaf mode: %q", got)
 	}
+	if got := opts.ValueLog.OuterLeafBlockTargetBytes; got != 8<<10 {
+		t.Fatalf("OuterLeafBlockTargetBytes=%d want %d", got, 8<<10)
+	}
+}
+
+func TestBuildTreeDBOptions_V1LeafLogRouteSizeProfile16K(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v1_leaflog_route"
+	*treedbV1LeafLogRoutePayloadProfile = "size16k"
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions v1_leaflog_route size16k: %v", err)
+	}
+	if got := opts.ValueLog.OuterLeafBlockTargetBytes; got != 16<<10 {
+		t.Fatalf("OuterLeafBlockTargetBytes=%d want %d", got, 16<<10)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "payload profile=size16k") {
+		t.Fatalf("resolved options missing size profile note: %q", got)
+	}
 }
 
 func TestParseTreeDBOuterLeafMode_V1LeafLogLegacyAccepted(t *testing.T) {
@@ -198,6 +221,7 @@ type savedTreeDBFlagState struct {
 	vlogRewriteBudgetRPS int
 	walFenceMode         string
 	outerLeafBlobBytes   int
+	routePayloadProfile  string
 	outerLeafCache       int
 	disableWAL           bool
 	relaxedSync          bool
@@ -230,6 +254,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		vlogRewriteBudgetRPS: *treedbVlogRewriteBudgetRecordsPerSec,
 		walFenceMode:         *treedbWALFenceMode,
 		outerLeafBlobBytes:   *treedbOuterLeafBlobThresholdBytes,
+		routePayloadProfile:  *treedbV1LeafLogRoutePayloadProfile,
 		outerLeafCache:       *treedbOuterLeafBlockCacheEntries,
 		disableWAL:           *treedbDisableWAL,
 		relaxedSync:          *treedbRelaxedSync,
@@ -258,6 +283,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbVlogRewriteBudgetRecordsPerSec = s.vlogRewriteBudgetRPS
 	*treedbWALFenceMode = s.walFenceMode
 	*treedbOuterLeafBlobThresholdBytes = s.outerLeafBlobBytes
+	*treedbV1LeafLogRoutePayloadProfile = s.routePayloadProfile
 	*treedbOuterLeafBlockCacheEntries = s.outerLeafCache
 	*treedbDisableWAL = s.disableWAL
 	*treedbRelaxedSync = s.relaxedSync
@@ -285,6 +311,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbVlogRewriteBudgetRecordsPerSec = 0
 	*treedbWALFenceMode = "rid_join"
 	*treedbOuterLeafBlobThresholdBytes = 0
+	*treedbV1LeafLogRoutePayloadProfile = "default"
 	*treedbOuterLeafBlockCacheEntries = 0
 	*treedbDisableWAL = false
 	*treedbRelaxedSync = false
