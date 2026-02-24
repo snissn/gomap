@@ -2202,7 +2202,7 @@ type fenceSourceRewritePlan struct {
 	sourceKey []byte
 	sourcePtr page.ValuePtr
 	sets      []fenceSourcePendingSet
-	setIndex  map[string]int
+	setIndex  map[uint64][]int
 	// sourceKeys caches decoded source payload keys for membership checks.
 	sourceKeys [][]byte
 	// sourceKeyCount tracks the decoded key cardinality from sourcePtr so we can
@@ -2301,19 +2301,25 @@ func (plan *fenceSourceRewritePlan) setValue(key, value []byte) {
 		return
 	}
 	if plan.setIndex == nil {
-		plan.setIndex = make(map[string]int, 8)
+		plan.setIndex = make(map[uint64][]int, 8)
 	}
-	keyStr := string(key)
-	valCopy := append([]byte(nil), value...)
-	if idx, ok := plan.setIndex[keyStr]; ok {
-		plan.sets[idx].value = valCopy
-		return
+	keyHash := fenceRewriteKeyHash(key)
+	if idxs, ok := plan.setIndex[keyHash]; ok {
+		for _, idx := range idxs {
+			if idx < 0 || idx >= len(plan.sets) {
+				continue
+			}
+			if bytes.Equal(plan.sets[idx].key, key) {
+				plan.sets[idx].value = value
+				return
+			}
+		}
 	}
 	keyCopy := append([]byte(nil), key...)
-	plan.setIndex[keyStr] = len(plan.sets)
+	plan.setIndex[keyHash] = append(plan.setIndex[keyHash], len(plan.sets))
 	plan.sets = append(plan.sets, fenceSourcePendingSet{
 		key:   keyCopy,
-		value: valCopy,
+		value: value,
 	})
 }
 
@@ -2321,11 +2327,33 @@ func (plan *fenceSourceRewritePlan) lookupValue(key []byte) ([]byte, bool) {
 	if plan == nil || len(key) == 0 || len(plan.sets) == 0 {
 		return nil, false
 	}
-	idx, ok := plan.setIndex[string(key)]
-	if !ok || idx < 0 || idx >= len(plan.sets) {
+	idxs, ok := plan.setIndex[fenceRewriteKeyHash(key)]
+	if !ok || len(idxs) == 0 {
 		return nil, false
 	}
-	return plan.sets[idx].value, true
+	for _, idx := range idxs {
+		if idx < 0 || idx >= len(plan.sets) {
+			continue
+		}
+		if bytes.Equal(plan.sets[idx].key, key) {
+			return plan.sets[idx].value, true
+		}
+	}
+	return nil, false
+}
+
+func fenceRewriteKeyHash(key []byte) uint64 {
+	// FNV-1a 64-bit. We still verify with bytes.Equal on collisions.
+	const (
+		offset64 = 14695981039346656037
+		prime64  = 1099511628211
+	)
+	h := uint64(offset64)
+	for _, b := range key {
+		h ^= uint64(b)
+		h *= prime64
+	}
+	return h
 }
 
 func (plan *fenceSourceRewritePlan) sourceFullyCovered() bool {
@@ -2606,7 +2634,7 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 		plan = &fenceSourceRewritePlan{
 			sourceKey: append([]byte(nil), sourceKey...),
 			sourcePtr: sourcePtr,
-			setIndex:  make(map[string]int, 8),
+			setIndex:  make(map[uint64][]int, 8),
 			// Decode lazily on first enqueue; keep -1 as unknown sentinel.
 			sourceKeyCount: -1,
 		}
@@ -2739,14 +2767,7 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		outCap += plan.sourceKeyCount
 	}
 	out := make([]outerleaf.TypedEntry, 0, outCap)
-	var seen map[string]struct{}
-	if len(plan.sets) > 0 {
-		seen = make(map[string]struct{}, outCap)
-	}
 	if err := decoded.VisitTypedEntries(func(key []byte, kind outerleaf.EntryKind, value []byte, ptr page.ValuePtr) error {
-		if seen != nil {
-			seen[string(key)] = struct{}{}
-		}
 		// Apply queued set mutations directly from the overlap rewrite plan.
 		// This keeps set-only rewrites correct even when global mutation lookup
 		// is intentionally deferred/lazy for hot-path performance.
@@ -2788,10 +2809,8 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 
 	for i := range plan.sets {
 		set := plan.sets[i]
-		if seen != nil {
-			if _, ok := seen[string(set.key)]; ok {
-				continue
-			}
+		if plan.containsKey(set.key) {
+			continue
 		}
 		if len(set.key) == 0 {
 			continue
