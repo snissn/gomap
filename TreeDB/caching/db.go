@@ -3700,8 +3700,13 @@ func (db *DB) flushDeferredValueLogMemtable(
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
 	reserveHint := memLen
-	if db != nil && db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
-		reserveHint = db.flushBackendMaxEntries
+	if reserveHint > 0 {
+		maxInt := int(^uint(0) >> 1)
+		if reserveHint > maxInt/2 {
+			reserveHint = maxInt
+		} else {
+			reserveHint *= 2
+		}
 	}
 	reserveBackendBatchOps(backendBatch, reserveHint)
 
@@ -3757,6 +3762,30 @@ func (db *DB) flushDeferredValueLogMemtable(
 		}
 		emittedOps++
 		return nil
+	}
+	var routeDeleteSeen map[uint64][][]byte
+	shouldEmitRouteDelete := func(key []byte) bool {
+		if promoter == nil || !routeAnchorMode {
+			return true
+		}
+		h := xxhash.Sum64(key)
+		if routeDeleteSeen != nil {
+			if bucket := routeDeleteSeen[h]; len(bucket) > 0 {
+				for i := range bucket {
+					if bytes.Equal(bucket[i], key) {
+						return false
+					}
+				}
+			}
+		}
+		if !promoter.shouldEmitRouteDelete(key) {
+			return false
+		}
+		if routeDeleteSeen == nil {
+			routeDeleteSeen = make(map[uint64][][]byte, 64)
+		}
+		routeDeleteSeen[h] = append(routeDeleteSeen[h], key)
+		return true
 	}
 	vlogLane := (*lane)(nil)
 	var (
@@ -4018,8 +4047,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 					}
 				}
 			}
-			if overlap && promoter != nil && promoter.v1LeafLogMode() {
-				emitKey := func(key []byte, emitPtr page.ValuePtr) error {
+				if overlap && promoter != nil && promoter.v1LeafLogMode() {
+					confirmedOverlap := false
+					emitKey := func(key []byte, emitPtr page.ValuePtr) error {
 					if psv != nil {
 						if err := psv.SetPointerView(key, emitPtr); err != nil {
 							return err
@@ -4049,8 +4079,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 					}
 					unresolved = append(unresolved, srcPos)
 				}
-				if queuedCount > 0 {
-					if routeAnchorMode {
+					if queuedCount > 0 {
+						confirmedOverlap = true
+						if routeAnchorMode {
 						if len(unresolved) > 0 {
 							// Route mode keeps overlap handling in rewrite anchors
 							// only; emit one canonical anchor row at payload min.
@@ -4062,7 +4093,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 								return 0, err
 							}
 							for _, srcPos := range unresolved[1:] {
-								if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
+								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
 									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
 										putValueLogEligible(unresolved)
 										return 0, err
@@ -4080,21 +4111,21 @@ func (db *DB) flushDeferredValueLogMemtable(
 					}
 					putValueLogEligible(unresolved)
 					continue
-				}
-				if len(unresolved) > 0 {
-					emitWholeGroup = true
-				} else {
+					}
+					if len(unresolved) > 0 && !routeAnchorMode {
+						emitWholeGroup = true
+					} else {
+						putValueLogEligible(unresolved)
+						continue
+					}
 					putValueLogEligible(unresolved)
-					continue
-				}
-				putValueLogEligible(unresolved)
-				if !emitWholeGroup {
-					if routeAnchorMode && group.end-group.start > 1 {
-						for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-							if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
-								if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-									putValueLogEligible(unresolved)
-									return 0, err
+					if !emitWholeGroup {
+						if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
+							for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
+								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+										putValueLogEligible(unresolved)
+										return 0, err
 								}
 							}
 						}
@@ -4115,7 +4146,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 				// In route mode (strict directory contract), emit only one
 				// anchor per new outer-leaf block; do not emit exact per-key siblings.
 				if srcPos != group.start {
-					if promoter.shouldEmitRouteDelete(key) {
+					if shouldEmitRouteDelete(key) {
 						if err := emitPromotionDelete(key); err != nil {
 							return 0, err
 						}
@@ -4210,8 +4241,17 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			_ = it.Close()
 			continue
 		}
+		stableUnsafe := false
+		if stable, ok := units[i].mem.(memtable.StableUnsafeIteratorTable); ok {
+			stableUnsafe = stable.StableUnsafeIteratorSlices()
+		}
 		priority := len(units) - 1 - i
-		heap = append(heap, opUnsafeMergeItem{iter: it, priority: priority, key: it.UnsafeKey()})
+		heap = append(heap, opUnsafeMergeItem{
+			iter:     it,
+			priority: priority,
+			key:      it.UnsafeKey(),
+			stable:   stableUnsafe,
+		})
 	}
 	for i := len(heap)/2 - 1; i >= 0; i-- {
 		(&heap).down(i, len(heap))
@@ -4240,8 +4280,12 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		ptrCap += n
 	}
 	reserveHint := ptrCap
-	if db != nil && db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
-		reserveHint = db.flushBackendMaxEntries
+	if reserveHint > 0 {
+		if reserveHint > maxInt/2 {
+			reserveHint = maxInt
+		} else {
+			reserveHint *= 2
+		}
 	}
 	reserveBackendBatchOps(backendBatch, reserveHint)
 	if ptrCap > maxDeferredInlineGroupKeys {
@@ -4303,6 +4347,30 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		}
 		backendPendingOps++
 		return nil
+	}
+	var routeDeleteSeen map[uint64][][]byte
+	shouldEmitRouteDelete := func(key []byte) bool {
+		if promoter == nil || !routeAnchorMode {
+			return true
+		}
+		h := xxhash.Sum64(key)
+		if routeDeleteSeen != nil {
+			if bucket := routeDeleteSeen[h]; len(bucket) > 0 {
+				for i := range bucket {
+					if bytes.Equal(bucket[i], key) {
+						return false
+					}
+				}
+			}
+		}
+		if !promoter.shouldEmitRouteDelete(key) {
+			return false
+		}
+		if routeDeleteSeen == nil {
+			routeDeleteSeen = make(map[uint64][][]byte, 64)
+		}
+		routeDeleteSeen[h] = append(routeDeleteSeen[h], key)
+		return true
 	}
 
 	ensureVlogLane := func() error {
@@ -4486,9 +4554,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 						}
 					}
-					if overlap && promoter != nil && promoter.v1LeafLogMode() {
-						unresolved := getValueLogEligible(group.end - group.start)
-						queuedCount := 0
+				if overlap && promoter != nil && promoter.v1LeafLogMode() {
+					confirmedOverlap := false
+					unresolved := getValueLogEligible(group.end - group.start)
+					queuedCount := 0
 						for srcPos := group.start; srcPos < group.end; srcPos++ {
 							queued, _, _, err := promoter.queueV1LeafLogOverlapRewrite(ptrKeys[srcPos], ptrVals[srcPos])
 							if err != nil {
@@ -4502,8 +4571,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 							unresolved = append(unresolved, srcPos)
 						}
-						if queuedCount > 0 {
-							if routeAnchorMode {
+					if queuedCount > 0 {
+						confirmedOverlap = true
+						if routeAnchorMode {
 								if len(unresolved) > 0 {
 									// Route mode keeps overlap handling in rewrite
 									// anchors only; emit one canonical anchor row
@@ -4516,7 +4586,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 										return err
 									}
 									for _, srcPos := range unresolved[1:] {
-										if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
+										if shouldEmitRouteDelete(ptrKeys[srcPos]) {
 											if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
 												putValueLogEligible(unresolved)
 												putValueLogPtrs(ptrs)
@@ -4537,19 +4607,19 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 							putValueLogEligible(unresolved)
 							continue
-						}
-						if len(unresolved) > 0 {
-							emitWholeGroup = true
-						} else {
-							putValueLogEligible(unresolved)
-							continue
-						}
+					}
+					if len(unresolved) > 0 && !routeAnchorMode {
+						emitWholeGroup = true
+					} else {
 						putValueLogEligible(unresolved)
-						if !emitWholeGroup {
-							if routeAnchorMode && group.end-group.start > 1 {
-								for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-									if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
-										if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+						continue
+					}
+					putValueLogEligible(unresolved)
+					if !emitWholeGroup {
+						if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
+							for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
+								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
 											putValueLogPtrs(ptrs)
 											return err
 										}
@@ -4568,7 +4638,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					if !emitWholeGroup {
 						if routeAnchorMode && group.end-group.start > 1 {
 							for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-								if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
+								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
 									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
 										putValueLogPtrs(ptrs)
 										return err
@@ -4585,7 +4655,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 						// In route mode (strict directory contract), emit only one
 						// anchor per new outer-leaf block; do not emit exact per-key siblings.
 						if srcPos != group.start {
-							if promoter.shouldEmitRouteDelete(key) {
+							if shouldEmitRouteDelete(key) {
 								if err := emitPromotionDelete(key); err != nil {
 									putValueLogPtrs(ptrs)
 									return err
@@ -4702,12 +4772,17 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							return 0, err
 						}
 					}
-					// top.iter reuses backing buffers across Next(); take stable copies
-					// before deferring grouped value-log emission.
-					keyCopy := append([]byte(nil), key...)
-					valCopy := append([]byte(nil), val...)
-					ptrKeys = append(ptrKeys, keyCopy)
-					ptrVals = append(ptrVals, valCopy)
+					if top.stable {
+						ptrKeys = append(ptrKeys, key)
+						ptrVals = append(ptrVals, val)
+					} else {
+						// Unstable iterators reuse backing buffers across Next();
+						// take stable copies before deferred grouped emission.
+						keyCopy := append([]byte(nil), key...)
+						valCopy := append([]byte(nil), val...)
+						ptrKeys = append(ptrKeys, keyCopy)
+						ptrVals = append(ptrVals, valCopy)
+					}
 				} else {
 					if err := flushInlinePointerGroup(); err != nil {
 						return 0, err
@@ -7147,7 +7222,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	indexer := memtable.NewHashSortedIndexer()
 	mutableShards := make([]memShard, shardCount)
 	appendOnlyEstimate := 0
-	if mode == memtable.ModeAppendOnly && indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr {
+	if mode == memtable.ModeAppendOnly &&
+		(indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr ||
+			indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLog ||
+			indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute) {
 		appendOnlyEstimate = appendOnlyEstimatedBytesPerEntryDeferredFence
 	}
 	for i := range mutableShards {
@@ -8414,6 +8492,7 @@ type opUnsafeMergeItem struct {
 	iter     iterator.UnsafeIterator
 	priority int
 	key      []byte
+	stable   bool
 }
 
 type opUnsafeMergeHeap []opUnsafeMergeItem

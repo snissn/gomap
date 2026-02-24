@@ -1055,6 +1055,45 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 }
 
+func TestRenderMarkdownSingle_IncludesValueLogRewriteEndSection(t *testing.T) {
+	run := BenchRun{
+		Config: BenchConfig{
+			Keys:     123,
+			Profile:  "fast",
+			DBsArg:   "treedb",
+			TestsArg: "sequential_write",
+		},
+		TestOrder: []string{"sequential_write"},
+		DisplayNames: map[string]string{
+			"sequential_write": "Sequential Write",
+		},
+		Results: map[string]map[string]float64{
+			"sequential_write": {"TreeDB": 1000},
+		},
+		ValueLogRewriteEnd: map[string]valueLogRewriteEndStats{
+			"TreeDB": {
+				Duration:       1500 * time.Millisecond,
+				SegmentsBefore: 12,
+				SegmentsAfter:  4,
+				BytesBefore:    128 << 20,
+				BytesAfter:     64 << 20,
+				RecordsCopied:  9876,
+			},
+		},
+	}
+
+	md := renderMarkdownSingle(run)
+	if !strings.Contains(md, "## Value-Log Rewrite (End of Run)") {
+		t.Fatalf("expected value-log rewrite section in markdown:\n%s", md)
+	}
+	if !strings.Contains(md, "RecordsCopied") {
+		t.Fatalf("expected rewrite table header in markdown:\n%s", md)
+	}
+	if !strings.Contains(md, "TreeDB") {
+		t.Fatalf("expected TreeDB row in rewrite section:\n%s", md)
+	}
+}
+
 func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
 	origRunPprofDeltaCommandFn := runPprofDeltaCommandFn
 	runPprofDeltaCommandFn = func(basePath, afterPath string) ([]byte, string, error) {

@@ -38,35 +38,36 @@ import (
 // --- Benchmark Runner ---
 
 var (
-	numKeys            = flag.Int("keys", 100000, "Number of keys")
-	keyShapeArg        = flag.String("key-shape", "be8", "Key generation shape for non-dataset 8-byte workloads (be8|be8_prefix4)")
-	valSize            = flag.Int("valsize", 128, "Value size in bytes")
-	valPattern         = flag.String("val-pattern", "zero", "Value pattern for write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random)")
-	valPoolSize        = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
-	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
-	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
-	readWorkers        = flag.Int("read-workers", runtime.GOMAXPROCS(0), "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default GOMAXPROCS)")
-	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
-	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
-	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
-	keyScaleArg        = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
-	keysMin            = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
-	keysMax            = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
-	dbsArg             = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
-	dbsExcludeArg      = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
-	testArg            = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, batch_write_ss->batch_write_steady, forkchoice->update_fork_choice")
-	formatArg          = flag.String("format", "table", "Output format: table or markdown")
-	suiteArg           = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
-	outDirArg          = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
-	keepDir            = flag.Bool("keep", false, "Keep data directories after run")
-	progress           = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
-	seed               = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
-	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
-	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
-	profileDir         = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
-	allocsProfile      = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
-	allocsProfileTests = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
-	allocsProfileRate  = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
+	numKeys              = flag.Int("keys", 100000, "Number of keys")
+	keyShapeArg          = flag.String("key-shape", "be8", "Key generation shape for non-dataset 8-byte workloads (be8|be8_prefix4)")
+	valSize              = flag.Int("valsize", 128, "Value size in bytes")
+	valPattern           = flag.String("val-pattern", "zero", "Value pattern for write tests (zero|repeat|repeat_tail64|ultra_compressible_repeat|highly_compressible_notail|half_repeat_half_random|medium_compressible_sparse|celestia_height_prefix_fill|random)")
+	valPoolSize          = flag.Int("val-pool-size", 0, "Number of distinct values to cycle through for -val-pattern (0=auto)")
+	batchSize            = flag.Int("batchsize", 8000, "Size of batches")
+	writeWorkers         = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
+	readWorkers          = flag.Int("read-workers", runtime.GOMAXPROCS(0), "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default GOMAXPROCS)")
+	rangeQueries         = flag.Int("range-queries", 200, "number of range queries")
+	rangeSpan            = flag.Int("range-span", 100, "number of keys per range")
+	keyCountsArg         = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
+	keyScaleArg          = flag.String("keyscale", "", "Generate keycounts by scale: log10 or doubling (uses -keys-min/-keys-max)")
+	keysMin              = flag.Int("keys-min", 1000, "Minimum key count for -keyscale")
+	keysMax              = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
+	dbsArg               = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
+	dbsExcludeArg        = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
+	testArg              = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, batch_write_ss->batch_write_steady, forkchoice->update_fork_choice")
+	formatArg            = flag.String("format", "table", "Output format: table or markdown")
+	suiteArg             = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
+	outDirArg            = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
+	keepDir              = flag.Bool("keep", false, "Keep data directories after run")
+	treedbVlogRewriteEnd = flag.Bool("treedb-vlog-rewrite-end", false, "TreeDB: run one full ValueLogRewriteOnline pass at end of run")
+	progress             = flag.Bool("progress", true, "Live-update the results table on stderr (cell-by-cell) while running; final table prints once to stdout")
+	seed                 = flag.Int64("seed", 1, "PRNG seed for randomized tests (0 = time-based)")
+	cpuProfile           = flag.String("cpuprofile", "", "write cpu profile to file")
+	cpuProfileTestsArg   = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
+	profileDir           = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
+	allocsProfile        = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
+	allocsProfileTests   = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
+	allocsProfileRate    = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
 
 	blockProfile              = flag.String("blockprofile", "", "write goroutine blocking profile (pprof) to file")
 	blockRate                 = flag.Int("blockprofilerate", 1, "runtime.SetBlockProfileRate sampling rate (1 = sample all)")
@@ -166,6 +167,7 @@ type BenchConfig struct {
 
 	TreeDBCacheStatsBeforeReads bool
 	TreeDBCacheStatsAfterTests  bool
+	TreeDBVlogRewriteEnd        bool
 }
 
 type dirDiskUsage struct {
@@ -183,8 +185,21 @@ type BenchRun struct {
 	VacuumDurations     map[string]map[string]time.Duration
 	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
 	TreeDBDiskUsage     map[string]treeDBDiskUsage
+	ValueLogRewriteEnd  map[string]valueLogRewriteEndStats
 	TreeDBStats         map[string]map[string]string
 	DiskUsage           map[string]dirDiskUsage
+}
+
+type valueLogRewriteEndStats struct {
+	Duration       time.Duration
+	SegmentsBefore int
+	SegmentsAfter  int
+	BytesBefore    int64
+	BytesAfter     int64
+	RecordsCopied  int
+	VacuumDuration time.Duration
+	IndexBefore    uint64
+	IndexAfter     uint64
 }
 
 type benchprofExport struct {
@@ -383,6 +398,7 @@ func main() {
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
+		TreeDBVlogRewriteEnd:             *treedbVlogRewriteEnd,
 		TreeDBIterDebug:                  *treedbIterDebug,
 		TreeDBIterDebugLimit:             *treedbIterDebugLimit,
 		TreeDBDisableWAL:                 *treedbDisableWAL,
@@ -620,11 +636,20 @@ func main() {
 				printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
 			}
 		}
+		if len(run.ValueLogRewriteEnd) > 0 {
+			fmt.Println()
+			fmt.Println("Value-Log Rewrite (End of Run)")
+			printValueLogRewriteEndTable(run.Instances, run.ValueLogRewriteEnd)
+		}
 		if len(run.TreeDBDiskUsage) > 0 || len(run.DiskUsage) > 0 {
 			fmt.Println()
 			fmt.Println("Disk Usage (End of Run)")
 			if len(run.TreeDBDiskUsage) > 0 {
-				fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+				var dirByName map[string]string
+				if run.Config.KeepDir {
+					dirByName = instanceDirsByWrapperName(run.Instances)
+				}
+				fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage, dirByName))
 			}
 			if other := renderNonTreeDBDiskUsageString(run.DiskUsage, run.TreeDBDiskUsage); strings.TrimSpace(other) != "" {
 				fmt.Println()
@@ -669,11 +694,20 @@ func main() {
 					printVacuumIndexBytesTable(run.Instances, run.TestOrder, run.DisplayNames, run.VacuumIndexBytes)
 				}
 			}
+			if len(run.ValueLogRewriteEnd) > 0 {
+				fmt.Println()
+				fmt.Println("Value-Log Rewrite (End of Run)")
+				printValueLogRewriteEndTable(run.Instances, run.ValueLogRewriteEnd)
+			}
 			if len(run.TreeDBDiskUsage) > 0 || len(run.DiskUsage) > 0 {
 				fmt.Println()
 				fmt.Println("Disk Usage (End of Run)")
 				if len(run.TreeDBDiskUsage) > 0 {
-					fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+					var dirByName map[string]string
+					if run.Config.KeepDir {
+						dirByName = instanceDirsByWrapperName(run.Instances)
+					}
+					fmt.Print(renderTreeDBDiskUsageString(run.TreeDBDiskUsage, dirByName))
 				}
 				if other := renderNonTreeDBDiskUsageString(run.DiskUsage, run.TreeDBDiskUsage); strings.TrimSpace(other) != "" {
 					fmt.Println()
@@ -1037,6 +1071,8 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.v2_fenceptr.assist_calls",
 		"treedb.cache.v2_fenceptr.assist_flushed_memtables",
 		"treedb.cache.v2_fenceptr.assist_early_triggers",
+		"treedb.cache.v1_leaflog_route.fallback_direct_attempts",
+		"treedb.cache.v1_leaflog_route.fallback_direct_rewrites",
 		"treedb.vlog.outer_leaf_block_cache.policy",
 		"treedb.vlog.outer_leaf_block_cache.hits",
 		"treedb.vlog.outer_leaf_block_cache.misses",
@@ -1047,6 +1083,16 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.vlog.outer_leaf_block_cache.put_admitted",
 		"treedb.vlog.outer_leaf_block_cache.put_duplicate_drops",
 		"treedb.vlog.outer_leaf_block_cache.put_lock_contention",
+		"treedb.bg_vlog_maintenance.enabled",
+		"treedb.bg_vlog_maintenance.gc_interval_ms",
+		"treedb.bg_vlog_maintenance.rewrite_interval_ms",
+		"treedb.bg_vlog_maintenance.rewrite_cooldown_ms",
+		"treedb.bg_vlog_maintenance.runs",
+		"treedb.bg_vlog_maintenance.gc_runs",
+		"treedb.bg_vlog_maintenance.rewrite_runs",
+		"treedb.bg_vlog_maintenance.last_gc_bytes_total",
+		"treedb.bg_vlog_maintenance.last_gc_bytes_eligible",
+		"treedb.bg_vlog_maintenance.last_error",
 	}
 
 	fmt.Fprintf(w, "%s (%s):", prefix, inst.Wrapper.Name())
@@ -3209,9 +3255,37 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	// Shutdown
 	treedbDisk := make(map[string]treeDBDiskUsage)
+	vlogRewriteEnd := make(map[string]valueLogRewriteEndStats)
 	treedbStats := make(map[string]map[string]string)
 	diskUsage := make(map[string]dirDiskUsage)
 	for _, inst := range instances {
+		if cfg.TreeDBVlogRewriteEnd && isTreeDBInstance(inst) {
+			if td, ok := inst.Wrapper.(*treedbadapter.DB); ok && td != nil && td.DB != nil {
+				start := time.Now()
+				stats, err := td.DB.ValueLogRewriteOnline(context.Background(), treedbdb.ValueLogRewriteOnlineOptions{})
+				if err != nil {
+					return BenchRun{}, fmt.Errorf("value-log rewrite end %s: %w", inst.Name, err)
+				}
+				rewriteDuration := time.Since(start)
+				indexBefore := treeDBMainIndexBytes(inst.Dir)
+				vacuumStart := time.Now()
+				if err := td.DB.VacuumIndexOnline(context.Background()); err != nil {
+					return BenchRun{}, fmt.Errorf("value-log rewrite end vacuum %s: %w", inst.Name, err)
+				}
+				indexAfter := treeDBMainIndexBytes(inst.Dir)
+				vlogRewriteEnd[inst.Wrapper.Name()] = valueLogRewriteEndStats{
+					Duration:       rewriteDuration,
+					SegmentsBefore: stats.SegmentsBefore,
+					SegmentsAfter:  stats.SegmentsAfter,
+					BytesBefore:    stats.BytesBefore,
+					BytesAfter:     stats.BytesAfter,
+					RecordsCopied:  stats.RecordsCopied,
+					VacuumDuration: time.Since(vacuumStart),
+					IndexBefore:    indexBefore,
+					IndexAfter:     indexAfter,
+				}
+			}
+		}
 		if sp, ok := inst.Wrapper.(kvstore.StatsProvider); ok {
 			snap := sp.Stats()
 			if len(snap) > 0 {
@@ -3250,6 +3324,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		VacuumDurations:     vacuumDurations,
 		VacuumIndexBytes:    vacuumIndexBytes,
 		TreeDBDiskUsage:     treedbDisk,
+		ValueLogRewriteEnd:  vlogRewriteEnd,
 		TreeDBStats:         treedbStats,
 		DiskUsage:           diskUsage,
 	}, nil
@@ -3405,7 +3480,25 @@ func computeTreeDBDiskUsage(rootDir string) (treeDBDiskUsage, error) {
 	return out, nil
 }
 
-func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
+func treeDBMainIndexBytes(rootDir string) uint64 {
+	paths := []string{
+		filepath.Join(rootDir, "maindb", "index.db"),
+		filepath.Join(rootDir, "index.db"),
+	}
+	for _, p := range paths {
+		st, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if sz := st.Size(); sz > 0 {
+			return uint64(sz)
+		}
+		return 0
+	}
+	return 0
+}
+
+func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage, dirByName map[string]string) string {
 	if len(usage) == 0 {
 		return ""
 	}
@@ -3461,8 +3554,32 @@ func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
 			sb.WriteString(walLine("  dictdb/wal: ", u.DictWAL))
 			sb.WriteByte('\n')
 		}
+		if dirByName != nil {
+			if dir := strings.TrimSpace(dirByName[name]); dir != "" {
+				sb.WriteString(fmt.Sprintf("  data_dir: %s\n", dir))
+			}
+		}
 	}
 	return sb.String()
+}
+
+func instanceDirsByWrapperName(instances []*DBInstance) map[string]string {
+	if len(instances) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(instances))
+	for _, inst := range instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		if dir := strings.TrimSpace(inst.Dir); dir != "" {
+			out[inst.Wrapper.Name()] = dir
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func renderDirDiskUsageString(usage map[string]dirDiskUsage) string {
@@ -3585,12 +3702,23 @@ func renderMarkdownSingle(run BenchRun) string {
 			sb.WriteString("```\n")
 		}
 	}
+	if len(run.ValueLogRewriteEnd) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("## Value-Log Rewrite (End of Run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(renderValueLogRewriteEndTableString(run.Instances, run.ValueLogRewriteEnd))
+		sb.WriteString("\n```\n")
+	}
 	if len(run.TreeDBDiskUsage) > 0 || len(run.DiskUsage) > 0 {
 		sb.WriteString("\n")
 		sb.WriteString("## Disk Usage (End of Run)\n\n")
 		sb.WriteString("```text\n")
 		if len(run.TreeDBDiskUsage) > 0 {
-			sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+			var dirByName map[string]string
+			if run.Config.KeepDir {
+				dirByName = instanceDirsByWrapperName(run.Instances)
+			}
+			sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage, dirByName))
 			if other := renderNonTreeDBDiskUsageString(run.DiskUsage, run.TreeDBDiskUsage); strings.TrimSpace(other) != "" {
 				sb.WriteByte('\n')
 				sb.WriteString("Other DBs:\n")
@@ -3680,7 +3808,11 @@ func renderMarkdownSweep(runs []BenchRun) string {
 			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
 			sb.WriteString("```text\n")
 			if len(run.TreeDBDiskUsage) > 0 {
-				sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage))
+				var dirByName map[string]string
+				if run.Config.KeepDir {
+					dirByName = instanceDirsByWrapperName(run.Instances)
+				}
+				sb.WriteString(renderTreeDBDiskUsageString(run.TreeDBDiskUsage, dirByName))
 				if other := renderNonTreeDBDiskUsageString(run.DiskUsage, run.TreeDBDiskUsage); strings.TrimSpace(other) != "" {
 					sb.WriteByte('\n')
 					sb.WriteString("Other DBs:\n")
@@ -3697,6 +3829,26 @@ func renderMarkdownSweep(runs []BenchRun) string {
 				sb.WriteString(renderDirDiskUsageString(run.DiskUsage))
 			}
 			sb.WriteString("```\n\n")
+		}
+	}
+
+	anyRewrite := false
+	for _, run := range runs {
+		if len(run.ValueLogRewriteEnd) > 0 {
+			anyRewrite = true
+			break
+		}
+	}
+	if anyRewrite {
+		sb.WriteString("## Value-Log Rewrite (End of Run)\n\n")
+		for _, run := range runs {
+			if len(run.ValueLogRewriteEnd) == 0 {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(renderValueLogRewriteEndTableString(run.Instances, run.ValueLogRewriteEnd))
+			sb.WriteString("\n```\n\n")
 		}
 	}
 
@@ -4206,6 +4358,72 @@ func printResultsTable(instances []*DBInstance, finalTestOrder []string, display
 		}
 		fmt.Println(dataRow)
 	}
+}
+
+func renderValueLogRewriteEndTableString(instances []*DBInstance, stats map[string]valueLogRewriteEndStats) string {
+	if len(stats) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(stats))
+	seen := make(map[string]struct{}, len(stats))
+	for _, inst := range instances {
+		if inst == nil || inst.Wrapper == nil {
+			continue
+		}
+		name := inst.Wrapper.Name()
+		if _, ok := stats[name]; !ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	for name := range stats {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	toBytes := func(v int64) uint64 {
+		if v < 0 {
+			return 0
+		}
+		return uint64(v)
+	}
+
+	header := fmt.Sprintf("%18s  %10s  %16s  %24s  %14s  %10s  %22s", "DB", "Duration", "Segments", "Bytes", "RecordsCopied", "Vacuum", "IndexBytes")
+	sep := strings.Repeat("-", len(header))
+
+	var sb strings.Builder
+	sb.WriteString(header)
+	sb.WriteByte('\n')
+	sb.WriteString(sep)
+	sb.WriteByte('\n')
+	for _, name := range names {
+		s := stats[name]
+		seg := fmt.Sprintf("%d -> %d", s.SegmentsBefore, s.SegmentsAfter)
+		bytes := fmt.Sprintf("%s -> %s", formatBytes(toBytes(s.BytesBefore)), formatBytes(toBytes(s.BytesAfter)))
+		indexBytes := "-"
+		if s.IndexBefore > 0 || s.IndexAfter > 0 {
+			indexBytes = fmt.Sprintf("%s -> %s", formatBytes(s.IndexBefore), formatBytes(s.IndexAfter))
+		}
+		sb.WriteString(fmt.Sprintf("%18s  %10s  %16s  %24s  %14d  %10s  %22s", name, formatDuration(s.Duration), seg, bytes, s.RecordsCopied, formatDuration(s.VacuumDuration), indexBytes))
+		sb.WriteByte('\n')
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func printValueLogRewriteEndTable(instances []*DBInstance, stats map[string]valueLogRewriteEndStats) {
+	table := renderValueLogRewriteEndTableString(instances, stats)
+	if strings.TrimSpace(table) == "" {
+		return
+	}
+	fmt.Println(table)
 }
 
 func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) string {
