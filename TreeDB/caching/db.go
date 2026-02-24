@@ -5560,6 +5560,14 @@ type BackendDB interface {
 	Stats() map[string]string
 }
 
+type backendValueLogRewriter interface {
+	ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error)
+}
+
+type backendValueLogGCer interface {
+	ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
+}
+
 type Options struct {
 	FlushThreshold int64
 
@@ -6083,6 +6091,12 @@ type DB struct {
 	vlogGenerationRewriteBytesOut      atomic.Uint64
 	vlogGenerationGCSegmentsDeleted    atomic.Uint64
 	vlogGenerationGCBytesDeleted       atomic.Uint64
+	vlogGenerationChurnBytes           atomic.Uint64
+	vlogGenerationSchedulerState       atomic.Uint32
+	vlogGenerationLastReason           atomic.Uint32
+	vlogGenerationLastChurnBps         atomic.Int64
+	vlogGenerationLastChurnSampleBytes atomic.Uint64
+	vlogGenerationLastChurnSampleNS    atomic.Int64
 	bgErrMu                            sync.Mutex
 	bgErr                              error
 
@@ -6145,6 +6159,26 @@ type DB struct {
 	testOnVlogSync       func(laneID int)
 	testBeforeVlogUnlock func(laneID int)
 }
+
+const (
+	vlogGenerationSchedulerDisabled uint32 = iota
+	vlogGenerationSchedulerIdle
+	vlogGenerationSchedulerRunning
+	vlogGenerationSchedulerError
+)
+
+const (
+	vlogGenerationReasonNone uint32 = iota
+	vlogGenerationReasonTotalBytes
+	vlogGenerationReasonStaleRatio
+	vlogGenerationReasonChurn
+	vlogGenerationReasonPeriodicGC
+)
+
+const (
+	vlogGenerationLoopInterval = 1 * time.Second
+	vlogGenerationGCEvery      = 5
+)
 
 func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
 	capEntries := db.flushBackendMaxEntries
@@ -7535,6 +7569,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.memtableValueLogPointers = false
 	}
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -7640,6 +7675,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Start background flusher
 	db.wg.Add(1)
 	go db.flushLoop()
+	db.startVlogGenerationLoop()
 
 	return db, nil
 }
@@ -7891,6 +7927,38 @@ func autoCheckpointReasonString(v uint32) string {
 		return "size"
 	case autoCheckpointModeForce:
 		return "force"
+	default:
+		return "unknown"
+	}
+}
+
+func vlogGenerationSchedulerStateString(v uint32) string {
+	switch v {
+	case vlogGenerationSchedulerDisabled:
+		return "disabled"
+	case vlogGenerationSchedulerIdle:
+		return "idle"
+	case vlogGenerationSchedulerRunning:
+		return "running"
+	case vlogGenerationSchedulerError:
+		return "error"
+	default:
+		return "unknown"
+	}
+}
+
+func vlogGenerationReasonString(v uint32) string {
+	switch v {
+	case vlogGenerationReasonNone:
+		return "none"
+	case vlogGenerationReasonTotalBytes:
+		return "total_bytes"
+	case vlogGenerationReasonStaleRatio:
+		return "stale_ratio"
+	case vlogGenerationReasonChurn:
+		return "churn"
+	case vlogGenerationReasonPeriodicGC:
+		return "periodic_gc"
 	default:
 		return "unknown"
 	}
@@ -10926,6 +10994,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	if bytesWrittenLive > 0 {
 		l.vlogLiveBytes.Add(bytesWrittenLive)
+		db.vlogGenerationChurnBytes.Add(uint64(bytesWrittenLive))
 	}
 	if usePreparedDictFrames && prepEncodeWallNs > 0 && rawFrameBytes > 0 && encodeRawBytes == 0 {
 		// Prepared frames are encoded before taking vlogMu; account prep wall-time
@@ -11739,6 +11808,192 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	db.autoCheckpointLastWALReclaimableBefore.Store(beforeReclaimable)
 	db.autoCheckpointLastWALReclaimableAfter.Store(afterReclaimable)
 	db.autoCheckpointLastWALTrimmed.Store(trimmed)
+}
+
+func (db *DB) startVlogGenerationLoop() {
+	if db == nil {
+		return
+	}
+	if db.valueLogGenerationPolicy == 0 {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if _, ok := db.backend.(backendValueLogRewriter); !ok {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	// GC integration is optional in this phase; rewrite is required.
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	db.wg.Add(1)
+	go db.vlogGenerationLoop()
+}
+
+func (db *DB) vlogGenerationLoop() {
+	defer db.wg.Done()
+	ticker := time.NewTicker(vlogGenerationLoopInterval)
+	defer ticker.Stop()
+	ticks := 0
+	for {
+		select {
+		case <-db.closeCh:
+			return
+		case <-ticker.C:
+			ticks++
+			db.maybeRunVlogGenerationMaintenance(ticks%vlogGenerationGCEvery == 0)
+		}
+	}
+}
+
+func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
+	if db == nil || db.valueLogGenerationPolicy == 0 {
+		return
+	}
+	if db.checkpointing.Load() {
+		return
+	}
+	db.mu.RLock()
+	queueLen := len(db.queue)
+	db.mu.RUnlock()
+	if queueLen != 0 {
+		return
+	}
+
+	retained := db.valueLogRetainedStatsDetailed()
+	totalBytes := retained.BytesTotal
+	if totalBytes < 0 {
+		totalBytes = 0
+	}
+	reclaimable := db.reclaimableWALBytes()
+	if reclaimable < 0 {
+		reclaimable = 0
+	}
+	staleRatioPPM := uint32(0)
+	if totalBytes > 0 {
+		staleRatioPPM = uint32((reclaimable * 1_000_000) / totalBytes)
+	}
+	churnBps := db.vlogGenerationEstimateChurnBps()
+
+	shouldRewrite, reason := db.shouldRunVlogGenerationRewrite(totalBytes, staleRatioPPM, churnBps)
+	rewriter, hasRewriter := db.backend.(backendValueLogRewriter)
+	if shouldRewrite && hasRewriter {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+		db.vlogGenerationLastReason.Store(reason)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
+			BatchSize:         db.valueLogRewriteBatchSize(),
+			SyncEachBatch:     false,
+			MaxSegmentBytes:   db.valueLogGenerationWarmTarget,
+			MaxSourceSegments: 1,
+			MaxSourceBytes:    db.valueLogRewriteBudgetBytes,
+			MinSegmentStaleRatio: func() float64 {
+				if db.valueLogRewriteTriggerRatioPPM <= 0 {
+					return 0
+				}
+				return float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
+			}(),
+		}
+		stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
+		cancel()
+		if err != nil {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+			db.vlogGenerationRemapFailures.Add(1)
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: generational rewrite: %w", err))
+			}
+		} else {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+			if stats.BytesBefore > 0 {
+				db.vlogGenerationRewriteBytesIn.Add(uint64(stats.BytesBefore))
+			}
+			if stats.BytesAfter > 0 {
+				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
+			}
+			if stats.RecordsCopied > 0 {
+				db.vlogGenerationRemapSuccesses.Add(uint64(stats.RecordsCopied))
+			}
+		}
+	}
+
+	if !runGC {
+		return
+	}
+	gcer, ok := db.backend.(backendValueLogGCer)
+	if !ok {
+		return
+	}
+	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	gcStats, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})
+	cancel()
+	if err != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: generational gc: %w", err))
+		}
+		return
+	}
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	if gcStats.SegmentsDeleted > 0 {
+		db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
+	}
+	if gcStats.BytesDeleted > 0 {
+		db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
+	}
+}
+
+func (db *DB) vlogGenerationEstimateChurnBps() int64 {
+	if db == nil {
+		return 0
+	}
+	now := time.Now().UnixNano()
+	cur := db.vlogGenerationChurnBytes.Load()
+	prevBytes := db.vlogGenerationLastChurnSampleBytes.Swap(cur)
+	prevNs := db.vlogGenerationLastChurnSampleNS.Swap(now)
+	if prevNs <= 0 || now <= prevNs || cur < prevBytes {
+		db.vlogGenerationLastChurnBps.Store(0)
+		return 0
+	}
+	deltaBytes := cur - prevBytes
+	deltaNs := now - prevNs
+	if deltaNs <= 0 {
+		db.vlogGenerationLastChurnBps.Store(0)
+		return 0
+	}
+	churn := int64((float64(deltaBytes) * float64(time.Second)) / float64(deltaNs))
+	if churn < 0 {
+		churn = 0
+	}
+	db.vlogGenerationLastChurnBps.Store(churn)
+	return churn
+}
+
+func (db *DB) shouldRunVlogGenerationRewrite(totalBytes int64, staleRatioPPM uint32, churnBps int64) (bool, uint32) {
+	if db == nil {
+		return false, vlogGenerationReasonNone
+	}
+	if db.valueLogRewriteTriggerBytes > 0 && totalBytes >= db.valueLogRewriteTriggerBytes {
+		return true, vlogGenerationReasonTotalBytes
+	}
+	if db.valueLogRewriteTriggerRatioPPM > 0 && staleRatioPPM >= db.valueLogRewriteTriggerRatioPPM {
+		return true, vlogGenerationReasonStaleRatio
+	}
+	if db.valueLogRewriteTriggerChurn > 0 && churnBps >= db.valueLogRewriteTriggerChurn {
+		return true, vlogGenerationReasonChurn
+	}
+	return false, vlogGenerationReasonNone
+}
+
+func (db *DB) valueLogRewriteBatchSize() int {
+	if db == nil {
+		return 256
+	}
+	if db.valueLogRewriteBudgetRecords > 0 {
+		if db.valueLogRewriteBudgetRecords < 1 {
+			return 1
+		}
+		return db.valueLogRewriteBudgetRecords
+	}
+	return 256
 }
 
 func (db *DB) ensureBackendRange() error {
@@ -16272,11 +16527,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
 	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy != 0)
-	if db.valueLogGenerationPolicy != 0 {
-		stats["treedb.cache.vlog_generation.scheduler_state"] = "idle"
-	} else {
-		stats["treedb.cache.vlog_generation.scheduler_state"] = "disabled"
-	}
+	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
+	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
+	stats["treedb.cache.vlog_generation.churn_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationChurnBytes.Load())
+	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", db.vlogGenerationLastChurnBps.Load())
 	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
 	stats["treedb.cache.vlog_generation.warm.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationWarmTarget)
 	stats["treedb.cache.vlog_generation.cold.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationColdTarget)
