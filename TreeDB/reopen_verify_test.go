@@ -532,10 +532,24 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_Reopen
 	}
 }
 
+func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLogRoute_OverwriteDelete_ReopenParity(t *testing.T) {
+	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLogRoute, false)
+	if got.mainFlags&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer-backed keyMain in v1_leaflog_route checkpoint flow, flags=%08b", got.mainFlags)
+	}
+}
+
 func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLog_OverwriteDelete_ReopenParity(t *testing.T) {
 	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, true)
 	if got.mainFlags&node.FlagPointer == 0 {
 		t.Fatalf("expected pointer-backed keyMain in v1_leaflog writesync flow, flags=%08b", got.mainFlags)
+	}
+}
+
+func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLogRoute_OverwriteDelete_ReopenParity(t *testing.T) {
+	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLogRoute, true)
+	if got.mainFlags&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer-backed keyMain in v1_leaflog_route writesync flow, flags=%08b", got.mainFlags)
 	}
 }
 

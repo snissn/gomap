@@ -144,6 +144,12 @@ func TestReplayInlineAppender_UsesOuterLeafEncodingForV1LeafLogAndBlockPtrModes(
 			restart: 11,
 		},
 		{
+			name:    "v1_leaflog_route",
+			mode:    IndexOuterLeafModeV1LeafLogRoute,
+			codec:   ValueLogBlockSnappy,
+			restart: 9,
+		},
+		{
 			name:    "v2_blockptr",
 			mode:    IndexOuterLeafModeV2BlockPtr,
 			codec:   ValueLogBlockLZ4,
