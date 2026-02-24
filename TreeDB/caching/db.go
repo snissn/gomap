@@ -10153,6 +10153,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	)
 
 	rawPayloadBytes := 0
+	routeOuterLeafMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
 	}
@@ -10492,7 +10493,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	if err == nil && !rawBatchUsed {
-		useRawBatch := dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
+		// Route mode is correctness-critical and must never publish invalid
+		// pointers. Keep it on the mature per-frame append path.
+		useRawBatch := !routeOuterLeafMode && dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
 		preferBufferedRaw := useRawBatch && autoOuterLeafPayloads && hasRawBufferedInto
 		if useRawBatch && (preferBufferedRaw || hasRawInto) {
 			ptrs = getValueLogPtrs(len(records))
@@ -10677,6 +10680,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if err != nil {
 		putValueLogPtrs(ptrs)
 		return nil, err
+	}
+	for i := range ptrs {
+		if !page.IsValueLogFileID(ptrs[i].FileID) {
+			putValueLogPtrs(ptrs)
+			return nil, fmt.Errorf("cachingdb: appendValueLog produced invalid pointer idx=%d ptr=%+v", i, ptrs[i])
+		}
 	}
 	if framesTotal > 0 {
 		db.valueLogDictFrames.total.Add(uint64(framesTotal))

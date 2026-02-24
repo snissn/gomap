@@ -3,6 +3,7 @@ package batch
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -300,6 +301,9 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 	if len(key) == 0 {
 		return ErrKeyEmpty
 	}
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
+	}
 
 	// Copy key
 	k := make([]byte, len(key))
@@ -330,6 +334,9 @@ func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
 	}
 	if len(key) == 0 {
 		return ErrKeyEmpty
+	}
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
 	}
 	b.entries = append(b.entries, Entry{
 		Type:     OpPut,
@@ -403,6 +410,9 @@ func (b *Batch) SetOps(ops []Entry) error {
 	// Just append them. Deduplication happens at Ops() time.
 	for _, op := range ops {
 		if op.IsPtr {
+			if !page.IsValueLogFileID(op.ValuePtr.FileID) {
+				return fmt.Errorf("invalid value-log pointer in SetOps: file %d", op.ValuePtr.FileID)
+			}
 			b.noteTouchedValueLog(op.ValuePtr)
 		}
 		b.noteKeyOrder(op.Key)

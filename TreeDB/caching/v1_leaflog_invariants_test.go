@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"testing"
@@ -11,6 +12,137 @@ import (
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func TestCachingDB_V1LeafLogRoute_NoInvalidPointersAfterMixedBatches(t *testing.T) {
+	const (
+		keyCount   = 100000
+		batchSize  = 8000
+		valueSize  = 100
+		chunkSize  = 64 * 1024
+		flushBytes = 64 * 1024 * 1024
+	)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                dir,
+		ChunkSize:          chunkSize,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLog: backenddb.ValueLogOptions{
+			ForcePointers: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:           true,
+		DisableWAL:            true,
+		FlushThreshold:        flushBytes,
+		MemtableShards:        1,
+		JournalLanes:          1,
+		ForceValueLogPointers: true,
+		IndexOuterLeafMode:    backenddb.IndexOuterLeafModeV1LeafLogRoute,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	makeKey := func(i int) []byte {
+		k := make([]byte, 8)
+		binary.BigEndian.PutUint64(k, uint64(i))
+		return k
+	}
+	makeValue := func(seed byte) []byte {
+		v := make([]byte, valueSize)
+		for i := range v {
+			v[i] = seed
+		}
+		return v
+	}
+
+	writeBatch := func(start, end int, deleteOnly bool) {
+		b := cache.NewBatch()
+		defer b.Close()
+		for i := start; i < end; i++ {
+			key := makeKey(i)
+			if deleteOnly {
+				if err := b.Delete(key); err != nil {
+					t.Fatalf("batch delete %d: %v", i, err)
+				}
+				continue
+			}
+			if err := b.Set(key, makeValue(byte(i))); err != nil {
+				t.Fatalf("batch set %d: %v", i, err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("batch write [%d,%d): %v", start, end, err)
+		}
+	}
+
+	for start := 0; start < keyCount; start += batchSize {
+		end := start + batchSize
+		if end > keyCount {
+			end = keyCount
+		}
+		writeBatch(start, end, false)
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after write: %v", err)
+	}
+	for start := 0; start < keyCount; start += batchSize {
+		end := start + batchSize
+		if end > keyCount {
+			end = keyCount
+		}
+		b := cache.NewBatch()
+		for i := start; i < end; i++ {
+			key := makeKey(i)
+			switch {
+			case i%7 == 0:
+				if err := b.Delete(key); err != nil {
+					t.Fatalf("mixed delete %d: %v", i, err)
+				}
+			case i%5 == 0:
+				if err := b.Set(key, makeValue(byte(i+3))); err != nil {
+					t.Fatalf("mixed overwrite %d: %v", i, err)
+				}
+			}
+		}
+		if err := b.Write(); err != nil {
+			b.Close()
+			t.Fatalf("mixed batch write [%d,%d): %v", start, end, err)
+		}
+		b.Close()
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint after mixed workload: %v", err)
+	}
+
+	it, err := backend.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	if err != nil {
+		t.Fatalf("pointer projection iterator: %v", err)
+	}
+	defer it.Close()
+
+	for it.Valid() {
+		key := append([]byte(nil), it.UnsafeKey()...)
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagTombstone == 0 && flags&node.FlagPointer != 0 && !page.IsValueLogFileID(ptr.FileID) {
+			t.Fatalf("invalid route pointer key=%x flags=%#x ptr=%+v", key, flags, ptr)
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("pointer iterator error: %v", err)
+	}
+}
 
 func TestV1LeafLogInvariantValidation_NonPanicErrorPath(t *testing.T) {
 	for _, mode := range []string{
