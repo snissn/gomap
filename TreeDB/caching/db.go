@@ -6089,8 +6089,10 @@ type DB struct {
 	vlogGenerationRemapFailures        atomic.Uint64
 	vlogGenerationRewriteBytesIn       atomic.Uint64
 	vlogGenerationRewriteBytesOut      atomic.Uint64
+	vlogGenerationRewriteRuns          atomic.Uint64
 	vlogGenerationGCSegmentsDeleted    atomic.Uint64
 	vlogGenerationGCBytesDeleted       atomic.Uint64
+	vlogGenerationGCRuns               atomic.Uint64
 	vlogGenerationChurnBytes           atomic.Uint64
 	vlogGenerationSchedulerState       atomic.Uint32
 	vlogGenerationLastReason           atomic.Uint32
@@ -6178,6 +6180,7 @@ const (
 const (
 	vlogGenerationLoopInterval = 1 * time.Second
 	vlogGenerationGCEvery      = 5
+	vlogGenerationGCMinBytes   = int64(1 << 20)
 )
 
 func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
@@ -11902,6 +11905,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			}
 		} else {
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+			db.vlogGenerationRewriteRuns.Add(1)
 			if stats.BytesBefore > 0 {
 				db.vlogGenerationRewriteBytesIn.Add(uint64(stats.BytesBefore))
 			}
@@ -11914,7 +11918,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		}
 	}
 
-	if !runGC {
+	if !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps) {
 		return
 	}
 	gcer, ok := db.backend.(backendValueLogGCer)
@@ -11933,12 +11937,29 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		return
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	db.vlogGenerationGCRuns.Add(1)
 	if gcStats.SegmentsDeleted > 0 {
 		db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
 	}
 	if gcStats.BytesDeleted > 0 {
 		db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
 	}
+}
+
+func (db *DB) shouldRunVlogGenerationGC(retained valueLogRetainedGenerationStats, reclaimable int64, churnBps int64) bool {
+	if db == nil || db.valueLogGenerationPolicy == 0 {
+		return false
+	}
+	if reclaimable >= vlogGenerationGCMinBytes {
+		return true
+	}
+	if retained.SegmentsHot >= 2 && retained.SegmentsTotal >= 3 {
+		return true
+	}
+	if db.valueLogRewriteTriggerChurn > 0 && churnBps >= db.valueLogRewriteTriggerChurn/2 {
+		return true
+	}
+	return false
 }
 
 func (db *DB) vlogGenerationEstimateChurnBps() int64 {
@@ -16559,8 +16580,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.segments.cold"] = fmt.Sprintf("%d", retained.SegmentsCold)
 	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
+	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
 	stats["treedb.cache.vlog_generation.remap.successes"] = fmt.Sprintf("%d", db.vlogGenerationRemapSuccesses.Load())
 	stats["treedb.cache.vlog_generation.remap.failures"] = fmt.Sprintf("%d", db.vlogGenerationRemapFailures.Load())
 	stats["treedb.cache.vlog_writev.syscalls"] = fmt.Sprintf("%d", rawWritevSyscalls)
