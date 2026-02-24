@@ -612,3 +612,123 @@ func TestCachingDB_V1LeafLogRoute_AnchorFanoutStaysOnePerBlockUnderMixedSetDelet
 		t.Fatalf("v1_leaflog invariant validation: %v", err)
 	}
 }
+
+func TestCachingDB_V1LeafLogRoute_OverlapRewritePreservesBlobRefThreshold(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLog: backenddb.ValueLogOptions{
+			PointerThreshold:          127,
+			ForcePointers:             false,
+			OuterLeafBlockCodec:       backenddb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		JournalLanes:                      1,
+		ForceValueLogPointers:             false,
+		ValueLogPointerThreshold:          127,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	keyFor := func(i int) []byte { return []byte(fmt.Sprintf("k%04d", i)) }
+	valueFor := func(seed int) []byte { return bytes.Repeat([]byte{byte(seed + 1)}, 256) }
+
+	const totalKeys = 96
+	for i := 0; i < totalKeys; i++ {
+		if err := cache.Set(keyFor(i), valueFor(i)); err != nil {
+			t.Fatalf("Set(%d): %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(initial): %v", err)
+	}
+
+	for round := 0; round < 4; round++ {
+		for i := 0; i < totalKeys; i++ {
+			if err := cache.Set(keyFor(i), valueFor(1000+(round*totalKeys)+i)); err != nil {
+				t.Fatalf("Set(round=%d, key=%q): %v", round, keyFor(i), err)
+			}
+		}
+		if err := cache.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint(round=%d): %v", round, err)
+		}
+	}
+
+	if cache.valueLogReader == nil {
+		t.Fatalf("missing value-log reader")
+	}
+	it, err := backend.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions(pointer_projection): %v", err)
+	}
+	defer it.Close()
+
+	checkedBlocks := 0
+	for it.Valid() {
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			it.Next()
+			continue
+		}
+		raw, err := cache.valueLogReader.Read(ptr)
+		if err != nil {
+			t.Fatalf("read payload ptr=%+v: %v", ptr, err)
+		}
+		if !outerleaf.HasMagic(raw) {
+			it.Next()
+			continue
+		}
+		block, err := outerleaf.DecodeBlockLeaseWithVerify(raw, true)
+		if err != nil {
+			t.Fatalf("decode block ptr=%+v: %v", ptr, err)
+		}
+		if block == nil {
+			t.Fatalf("nil block ptr=%+v", ptr)
+		}
+		err = block.VisitTypedEntries(func(k []byte, kind outerleaf.EntryKind, value []byte, blobPtr page.ValuePtr) error {
+			if kind != outerleaf.EntryKindBlobRef {
+				return fmt.Errorf("entry kind=%d key=%q want=blobref", kind, k)
+			}
+			if len(value) != 0 {
+				return fmt.Errorf("blobref entry has inline value bytes key=%q len=%d", k, len(value))
+			}
+			if blobPtr == (page.ValuePtr{}) {
+				return fmt.Errorf("blobref entry missing blob pointer key=%q", k)
+			}
+			return nil
+		})
+		block.Release()
+		if err != nil {
+			t.Fatalf("visit typed entries ptr=%+v: %v", ptr, err)
+		}
+		checkedBlocks++
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if checkedBlocks == 0 {
+		t.Fatalf("expected pointer-backed route blocks")
+	}
+}

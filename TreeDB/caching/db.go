@@ -2633,7 +2633,49 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 	return true, sourcePtr, true, nil
 }
 
-func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan) ([]byte, []byte, bool, error) {
+func (p *fenceAnchorPromoter) materializeRewriteBlobRefs(entries []outerleaf.TypedEntry, lane *lane, dictID uint64) error {
+	if p == nil || p.db == nil || len(entries) == 0 {
+		return nil
+	}
+	pending := make([]int, 0, len(entries))
+	records := getValueLogRecordsCap(len(entries))
+	defer putValueLogRecordsNoClear(records)
+	for i := range entries {
+		if entries[i].Kind != outerleaf.EntryKindBlobRef {
+			continue
+		}
+		if entries[i].BlobPtr != (page.ValuePtr{}) || len(entries[i].Value) == 0 {
+			continue
+		}
+		pending = append(pending, i)
+		records = append(records, valuelog.Record{Value: entries[i].Value})
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	if lane == nil {
+		return errors.New("cachingdb: missing lane for overlap rewrite blob refs")
+	}
+	startRID := p.db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
+	for i := range records {
+		records[i].RID = startRID + uint64(i)
+	}
+	ptrs, err := p.db.appendValueLog(lane, dictID, nil, records, journalDurabilityFlush)
+	if err != nil {
+		return err
+	}
+	defer putValueLogPtrs(ptrs)
+	if len(ptrs) != len(pending) {
+		return fmt.Errorf("cachingdb: overlap rewrite blob-ref pointer mismatch expected=%d got=%d", len(pending), len(ptrs))
+	}
+	for i, pos := range pending {
+		entries[pos].BlobPtr = ptrs[i]
+		entries[pos].Value = nil
+	}
+	return nil
+}
+
+func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan, lane *lane, dictID uint64) ([]byte, []byte, bool, error) {
 	if p == nil || p.db == nil || plan == nil || len(plan.sourceKey) == 0 {
 		return nil, nil, false, nil
 	}
@@ -2642,21 +2684,28 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 			return nil, nil, true, nil
 		}
 		out := make([]outerleaf.TypedEntry, 0, len(plan.sets))
-		totalInlineBytes := 0
 		for i := range plan.sets {
 			set := plan.sets[i]
 			keyCopy := append([]byte(nil), set.key...)
 			valCopy := append([]byte(nil), set.value...)
-			out = append(out, outerleaf.TypedEntry{
-				Key:   keyCopy,
-				Kind:  outerleaf.EntryKindInline,
-				Value: valCopy,
-			})
-			totalInlineBytes += len(valCopy)
+			kind := outerleaf.EntryKindInline
+			if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
+				kind = outerleaf.EntryKindBlobRef
+			}
+			out = append(out, outerleaf.TypedEntry{Key: keyCopy, Kind: kind, Value: valCopy})
 		}
 		sort.Slice(out, func(i, j int) bool {
 			return bytes.Compare(out[i].Key, out[j].Key) < 0
 		})
+		if err := p.materializeRewriteBlobRefs(out, lane, dictID); err != nil {
+			return nil, nil, false, err
+		}
+		totalInlineBytes := 0
+		for i := range out {
+			if out[i].Kind == outerleaf.EntryKindInline {
+				totalInlineBytes += len(out[i].Value)
+			}
+		}
 		enc := getOuterLeafEncoder()
 		codec := p.db.selectOuterLeafBlockCodec(totalInlineBytes, len(out))
 		payload, err := enc.EncodeTypedEntriesAssumeSorted(nil, out, codec, p.db.outerLeafBlockRestart)
@@ -2695,7 +2744,6 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 
 	out := make([]outerleaf.TypedEntry, 0, len(typed)+len(plan.sets))
 	seen := make(map[string]struct{}, len(typed)+len(plan.sets))
-	totalInlineBytes := 0
 	for i := range typed {
 		ent := typed[i]
 		keyStr := string(ent.Key)
@@ -2706,12 +2754,11 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		if val, ok := plan.lookupValue(ent.Key); ok {
 			keyCopy := append([]byte(nil), ent.Key...)
 			valCopy := append([]byte(nil), val...)
-			out = append(out, outerleaf.TypedEntry{
-				Key:   keyCopy,
-				Kind:  outerleaf.EntryKindInline,
-				Value: valCopy,
-			})
-			totalInlineBytes += len(valCopy)
+			kind := outerleaf.EntryKindInline
+			if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
+				kind = outerleaf.EntryKindBlobRef
+			}
+			out = append(out, outerleaf.TypedEntry{Key: keyCopy, Kind: kind, Value: valCopy})
 			continue
 		}
 		if p.lookup != nil {
@@ -2731,7 +2778,6 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		}
 		if ent.Kind == outerleaf.EntryKindInline && len(ent.Value) > 0 {
 			next.Value = append([]byte(nil), ent.Value...)
-			totalInlineBytes += len(next.Value)
 		}
 		out = append(out, next)
 	}
@@ -2743,12 +2789,11 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		}
 		keyCopy := append([]byte(nil), set.key...)
 		valCopy := append([]byte(nil), set.value...)
-		out = append(out, outerleaf.TypedEntry{
-			Key:   keyCopy,
-			Kind:  outerleaf.EntryKindInline,
-			Value: valCopy,
-		})
-		totalInlineBytes += len(valCopy)
+		kind := outerleaf.EntryKindInline
+		if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
+			kind = outerleaf.EntryKindBlobRef
+		}
+		out = append(out, outerleaf.TypedEntry{Key: keyCopy, Kind: kind, Value: valCopy})
 	}
 
 	if len(out) == 0 {
@@ -2757,6 +2802,15 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 	sort.Slice(out, func(i, j int) bool {
 		return bytes.Compare(out[i].Key, out[j].Key) < 0
 	})
+	if err := p.materializeRewriteBlobRefs(out, lane, dictID); err != nil {
+		return nil, nil, false, err
+	}
+	totalInlineBytes := 0
+	for i := range out {
+		if out[i].Kind == outerleaf.EntryKindInline {
+			totalInlineBytes += len(out[i].Value)
+		}
+	}
 
 	enc := getOuterLeafEncoder()
 	codec := p.db.selectOuterLeafBlockCodec(totalInlineBytes, len(out))
@@ -2795,13 +2849,27 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 	}
 	pending := make([]overlapRewritePending, 0, len(order))
 	records := make([]valuelog.Record, 0, len(order))
+	preferredLane := -1
+	if p.db.deferredValueLogNeedsSingleLaneRegroup() {
+		preferredLane = 0
+	}
+	lane, err := p.db.pickLane(false, preferredLane)
+	if err != nil {
+		return err
+	}
+	dictID := uint64(0)
+	if p.db.dictStore != nil {
+		if id, err := p.db.currentDictID(context.Background()); err == nil {
+			dictID = id
+		}
+	}
 
 	for _, sourcePtr := range order {
 		plan := p.overlapRewriteBySource[sourcePtr]
 		if plan == nil {
 			continue
 		}
-		anchorKey, payload, removedAll, err := p.rewriteSourceFromPlan(plan)
+		anchorKey, payload, removedAll, err := p.rewriteSourceFromPlan(plan, lane, dictID)
 		if err != nil {
 			return err
 		}
@@ -2819,20 +2887,6 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 	}
 
 	if len(records) > 0 {
-		preferredLane := -1
-		if p.db.deferredValueLogNeedsSingleLaneRegroup() {
-			preferredLane = 0
-		}
-		lane, err := p.db.pickLane(false, preferredLane)
-		if err != nil {
-			return err
-		}
-		dictID := uint64(0)
-		if p.db.dictStore != nil {
-			if id, err := p.db.currentDictID(context.Background()); err == nil {
-				dictID = id
-			}
-		}
 		startRID := p.db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
 		for i := range records {
 			records[i].RID = startRID + uint64(i)
@@ -11997,6 +12051,16 @@ func (db *DB) recordDeferredAssist(flushed int) {
 }
 
 func (db *DB) maybeAssistFlush() {
+	// WAL-off strict route mode is highly sensitive to writer-assist churn:
+	// repeated bounded assist attempts can trigger extreme deferred rewrite
+	// amplification without making forward queue progress. Let normal
+	// background/checkpoint flush boundaries drain the queue instead.
+	if db != nil &&
+		db.disableJournal &&
+		strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+		return
+	}
+
 	if db.writerFlushMaxMemtables <= 0 && db.writerFlushMaxDuration <= 0 {
 		return
 	}
