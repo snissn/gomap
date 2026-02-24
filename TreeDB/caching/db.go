@@ -4190,36 +4190,28 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		chunkCap = 8192
 	}
 	const maxDeferredInlineGroupKeys = 32768
-	unitRuns := getUnitRuns(len(units))
+	heap := make(opUnsafeMergeHeap, 0, len(units))
+	var currentIter iterator.UnsafeIterator
 	defer func() {
-		for i := range unitRuns {
-			for _, run := range unitRuns[i] {
-				putEntrySlice(run)
-			}
-			putEntryRuns(unitRuns[i])
+		if currentIter != nil {
+			_ = currentIter.Close()
 		}
-		putUnitRuns(unitRuns)
+		for len(heap) > 0 {
+			item := heap.pop()
+			_ = item.iter.Close()
+		}
 	}()
 	for i := range units {
-		runs, _, err := buildOpRuns(units[i].mem, chunkCap)
-		if err != nil {
-			return 0, err
-		}
-		unitRuns[i] = runs
-	}
-
-	heap := getOpMergeHeap(len(unitRuns))
-	defer func() { putOpMergeHeap(heap) }()
-	for i := range unitRuns {
-		if len(unitRuns[i]) == 0 {
+		if units[i].mem == nil {
 			continue
 		}
-		it := newOpRunIter(unitRuns[i])
+		it := units[i].mem.NewIterator(nil, nil)
 		if !it.Valid() {
+			_ = it.Close()
 			continue
 		}
-		priority := len(unitRuns) - 1 - i
-		heap = append(heap, opMergeItem{iter: it, priority: priority, key: it.Key()})
+		priority := len(units) - 1 - i
+		heap = append(heap, opUnsafeMergeItem{iter: it, priority: priority, key: it.UnsafeKey()})
 	}
 	for i := len(heap)/2 - 1; i >= 0; i-- {
 		(&heap).down(i, len(heap))
@@ -4229,11 +4221,24 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
 	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+
 	durability := journalDurabilityNone
 	if sync {
 		durability = journalDurabilitySync
 	}
-	ptrCap := estimateUnitRunEntries(unitRuns, chunkCap)
+	ptrCap := chunkCap
+	maxInt := int(^uint(0) >> 1)
+	for i := range units {
+		n := units[i].memLen
+		if n <= 0 {
+			continue
+		}
+		if ptrCap > maxInt-n {
+			ptrCap = maxInt
+			break
+		}
+		ptrCap += n
+	}
 	reserveHint := ptrCap
 	if db != nil && db.flushBackendMaxEntries > 0 && reserveHint > db.flushBackendMaxEntries {
 		reserveHint = db.flushBackendMaxEntries
@@ -4628,6 +4633,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 	for len(heap) > 0 {
 		top := heap.pop()
+		currentIter = top.iter
 		currentKey := top.key
 
 		for len(heap) > 0 {
@@ -4636,17 +4642,18 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				shadowed := heap.pop()
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
-					shadowed.key = shadowed.iter.Key()
+					shadowed.key = shadowed.iter.UnsafeKey()
 					heap.push(shadowed)
+				} else {
+					_ = shadowed.iter.Close()
 				}
 				continue
 			}
 			break
 		}
 
-		entry := top.iter.Entry()
-		switch {
-		case entry.Type == batch.OpDelete:
+		key := top.iter.UnsafeKey()
+		if top.iter.IsDeleted() {
 			if err := flushInlinePointerGroup(); err != nil {
 				return 0, err
 			}
@@ -4654,73 +4661,80 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				promoter.lookup = fenceMutationLookupForUnits(units)
 			}
 			if promoter != nil {
-				if err := promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationDelete}, emitPromotionPointer, emitPromotionDelete); err != nil {
+				if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationDelete}, emitPromotionPointer, emitPromotionDelete); err != nil {
 					return 0, err
 				}
 			}
 			var err error
 			if dv != nil {
-				err = dv.DeleteView(entry.Key)
+				err = dv.DeleteView(key)
 			} else {
-				err = backendBatch.Delete(entry.Key)
+				err = backendBatch.Delete(key)
 			}
 			if err != nil {
 				return 0, err
 			}
 			haveFencePtr = false
 			backendPendingOps++
-		case entry.IsPtr:
-			if err := flushInlinePointerGroup(); err != nil {
-				return 0, err
-			}
-			if promoter != nil {
-				if err := promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: entry.ValuePtr}, emitPromotionPointer, emitPromotionDelete); err != nil {
-					return 0, err
-				}
-			}
-			if err := emitPointer(entry.Key, entry.ValuePtr); err != nil {
-				return 0, err
-			}
-		default:
-			if promoter != nil {
-				if err := promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationSetInline}, emitPromotionPointer, emitPromotionDelete); err != nil {
-					return 0, err
-				}
-			}
-			if allowPointers && db.shouldWriteViaValueLogForKeyValue(entry.Key, entry.Value) {
-				if len(ptrKeys) >= maxDeferredInlineGroupKeys {
-					if err := flushInlinePointerGroup(); err != nil {
-						return 0, err
-					}
-				}
-				// top.iter reuses backing buffers across Next(); take stable copies
-				// before deferring grouped value-log emission.
-				keyCopy := append([]byte(nil), entry.Key...)
-				valCopy := append([]byte(nil), entry.Value...)
-				ptrKeys = append(ptrKeys, keyCopy)
-				ptrVals = append(ptrVals, valCopy)
-			} else {
+		} else {
+			val, ptr, flags := top.iter.UnsafeEntry()
+			if flags&node.FlagPointer != 0 {
 				if err := flushInlinePointerGroup(); err != nil {
 					return 0, err
 				}
-				var err error
-				if sv != nil {
-					err = sv.SetView(entry.Key, entry.Value)
-				} else {
-					err = backendBatch.Set(entry.Key, entry.Value)
+				if promoter != nil {
+					if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: ptr}, emitPromotionPointer, emitPromotionDelete); err != nil {
+						return 0, err
+					}
 				}
-				if err != nil {
+				if err := emitPointer(key, ptr); err != nil {
 					return 0, err
 				}
-				haveFencePtr = false
-				backendPendingOps++
+			} else {
+				if promoter != nil {
+					if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetInline}, emitPromotionPointer, emitPromotionDelete); err != nil {
+						return 0, err
+					}
+				}
+				if allowPointers && db.shouldWriteViaValueLogForKeyValue(key, val) {
+					if len(ptrKeys) >= maxDeferredInlineGroupKeys {
+						if err := flushInlinePointerGroup(); err != nil {
+							return 0, err
+						}
+					}
+					// top.iter reuses backing buffers across Next(); take stable copies
+					// before deferring grouped value-log emission.
+					keyCopy := append([]byte(nil), key...)
+					valCopy := append([]byte(nil), val...)
+					ptrKeys = append(ptrKeys, keyCopy)
+					ptrVals = append(ptrVals, valCopy)
+				} else {
+					if err := flushInlinePointerGroup(); err != nil {
+						return 0, err
+					}
+					var err error
+					if sv != nil {
+						err = sv.SetView(key, val)
+					} else {
+						err = backendBatch.Set(key, val)
+					}
+					if err != nil {
+						return 0, err
+					}
+					haveFencePtr = false
+					backendPendingOps++
+				}
 			}
 		}
 
 		top.iter.Next()
 		if top.iter.Valid() {
-			top.key = top.iter.Key()
+			top.key = top.iter.UnsafeKey()
 			heap.push(top)
+			currentIter = nil
+		} else {
+			_ = top.iter.Close()
+			currentIter = nil
 		}
 	}
 
@@ -8377,6 +8391,84 @@ func (h *opMergeHeap) up(j int) {
 }
 
 func (h *opMergeHeap) down(i0, n int) bool {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 {
+			break
+		}
+		j := j1
+		if j2 := j1 + 1; j2 < n && h.Less(j2, j1) {
+			j = j2
+		}
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		i = j
+	}
+	return i > i0
+}
+
+type opUnsafeMergeItem struct {
+	iter     iterator.UnsafeIterator
+	priority int
+	key      []byte
+}
+
+type opUnsafeMergeHeap []opUnsafeMergeItem
+
+func (h opUnsafeMergeHeap) Len() int { return len(h) }
+
+func (h opUnsafeMergeHeap) Less(i, j int) bool {
+	cmp := bytes.Compare(h[i].key, h[j].key)
+	if cmp != 0 {
+		return cmp < 0
+	}
+	return h[i].priority < h[j].priority
+}
+
+func (h opUnsafeMergeHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *opUnsafeMergeHeap) push(x opUnsafeMergeItem) {
+	*h = append(*h, x)
+	h.up(len(*h) - 1)
+}
+
+func (h *opUnsafeMergeHeap) pop() opUnsafeMergeItem {
+	old := *h
+	n := len(old)
+	if n == 0 {
+		return opUnsafeMergeItem{}
+	}
+	old.Swap(0, n-1)
+	h.down(0, n-1)
+	x := old[n-1]
+	*h = old[:n-1]
+	return x
+}
+
+func (h opUnsafeMergeHeap) peek() *opUnsafeMergeItem {
+	if len(h) == 0 {
+		return nil
+	}
+	return &h[0]
+}
+
+func (h *opUnsafeMergeHeap) up(j int) {
+	for {
+		i := (j - 1) / 2
+		if i == j || !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		j = i
+	}
+}
+
+func (h *opUnsafeMergeHeap) down(i0, n int) bool {
 	i := i0
 	for {
 		j1 := 2*i + 1
@@ -17764,8 +17856,9 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	if !b.db.deferredValueLogEnabled() {
 		return false, nil
 	}
-	if b.db.outerLeafAnchorModeEnabled() {
-		// Anchor modes need flush-time fence collapse semantics; direct
+	mode := strings.TrimSpace(b.db.indexOuterLeafMode)
+	if b.db.outerLeafAnchorModeEnabled() && mode != backenddb.IndexOuterLeafModeV1LeafLogRoute {
+		// Non-route anchor modes need flush-time fence collapse semantics; direct
 		// stream bypass emits backend pointer ops at commit boundaries and can
 		// regress immediate read/prefix-scan behavior.
 		return false, nil
@@ -17786,6 +17879,8 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	b.db.mu.RLock()
 	queueRanges := append([]keyRange(nil), b.db.queueRanges...)
 	queueLen := len(b.db.queue)
+	backendRangeKnown := b.db.backendRangeKnown
+	backendRange := b.db.backendRange
 	b.db.mu.RUnlock()
 	if queueLen > 0 && len(queueRanges) == 0 {
 		// Cannot reason about overlap without queue range tracking.
@@ -17807,6 +17902,13 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	}
 	if maxKey != nil && bytes.Compare(b.firstKey, maxKey) <= 0 {
 		return false, nil
+	}
+	// Route-mode bypass is only safe for strict append-only batches beyond the
+	// persisted backend max key as well.
+	if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute && backendRangeKnown && backendRange.valid {
+		if bytes.Compare(b.firstKey, backendRange.max) <= 0 {
+			return false, nil
+		}
 	}
 
 	// WAL-off streaming bypass: append large values to the value log and commit
