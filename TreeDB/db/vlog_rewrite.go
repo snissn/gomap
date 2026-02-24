@@ -579,6 +579,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	candidates := make([]rewriteCandidate, 0, batchSize)
 	ridExhausted := false
 	var canceledErr error
+	rewrittenByPtr := make(map[page.ValuePtr]page.ValuePtr, batchSize*2)
 
 	flushBatch := func() error {
 		if len(candidates) == 0 {
@@ -587,6 +588,14 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		orderRewriteCandidates(candidates, localityPolicy)
 		swaps = swaps[:0]
 		for _, candidate := range candidates {
+			if cachedPtr, ok := rewrittenByPtr[candidate.oldPtr]; ok {
+				swaps = append(swaps, rewriteSwap{
+					key:    candidate.key,
+					oldPtr: candidate.oldPtr,
+					newPtr: cachedPtr,
+				})
+				continue
+			}
 			if ridExhausted {
 				return fmt.Errorf("value-log rid space exhausted")
 			}
@@ -603,6 +612,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			if err != nil {
 				return err
 			}
+			rewrittenByPtr[candidate.oldPtr] = newPtr
 			nextRID++
 			if nextRID == 0 {
 				ridExhausted = true
