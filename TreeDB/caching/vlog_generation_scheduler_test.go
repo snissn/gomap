@@ -49,3 +49,33 @@ func TestShouldRunVlogGenerationRewrite_NoTrigger(t *testing.T) {
 		t.Fatalf("reason=%d want=%d", reason, vlogGenerationReasonNone)
 	}
 }
+
+func TestShouldRunVlogGenerationGC_ReclaimableBytes(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: 1}
+	run := db.shouldRunVlogGenerationGC(valueLogRetainedGenerationStats{}, vlogGenerationGCMinBytes, 0)
+	if !run {
+		t.Fatalf("expected gc to trigger on reclaimable bytes")
+	}
+}
+
+func TestShouldRunVlogGenerationGC_HotSegmentPressure(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: 1}
+	run := db.shouldRunVlogGenerationGC(valueLogRetainedGenerationStats{
+		SegmentsTotal: 4,
+		SegmentsHot:   2,
+	}, 0, 0)
+	if !run {
+		t.Fatalf("expected gc to trigger on hot segment pressure")
+	}
+}
+
+func TestShouldRunVlogGenerationGC_ChurnDriven(t *testing.T) {
+	db := &DB{
+		valueLogGenerationPolicy:    1,
+		valueLogRewriteTriggerChurn: 1 << 20,
+	}
+	run := db.shouldRunVlogGenerationGC(valueLogRetainedGenerationStats{}, 0, 1<<19)
+	if !run {
+		t.Fatalf("expected gc to trigger on churn threshold")
+	}
+}
