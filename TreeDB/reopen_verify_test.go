@@ -890,6 +890,10 @@ func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV
 	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLog)
 }
 
+func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV1LeafLogRoute(t *testing.T) {
+	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLogRoute)
+}
+
 func runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t *testing.T, mode string) {
 	t.Helper()
 
@@ -968,6 +972,10 @@ func TestReopenVerify_ValueLogGC_OuterLeafV2FencePtr_ReopenParity(t *testing.T) 
 
 func TestReopenVerify_ValueLogGC_OuterLeafV1LeafLog_ReopenParity(t *testing.T) {
 	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLog)
+}
+
+func TestReopenVerify_ValueLogGC_OuterLeafV1LeafLogRoute_ReopenParity(t *testing.T) {
+	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLogRoute)
 }
 
 func runValueLogGCReopenParityOuterLeaf(t *testing.T, mode string) {

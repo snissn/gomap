@@ -227,7 +227,10 @@ func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int
 	if db == nil || db.valueLogManager == nil {
 		return nil, nil
 	}
-	if strings.TrimSpace(db.indexOuterLeafMode) != IndexOuterLeafModeV2FencePtr {
+	switch strings.TrimSpace(db.indexOuterLeafMode) {
+	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
+		// modes with outer-leaf blocks that can carry nested blob refs.
+	default:
 		return nil, nil
 	}
 	payload, err := db.valueLogManager.Read(ptr)

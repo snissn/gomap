@@ -382,7 +382,10 @@ func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64
 	if db == nil || db.valueLogManager == nil {
 		return nil, nil
 	}
-	if strings.TrimSpace(db.indexOuterLeafMode) != IndexOuterLeafModeV2FencePtr {
+	switch strings.TrimSpace(db.indexOuterLeafMode) {
+	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
+		// modes with outer-leaf blocks that can include nested blob refs.
+	default:
 		return nil, nil
 	}
 	payload, err := db.valueLogManager.Read(ptr)
@@ -418,7 +421,8 @@ func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint6
 	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
 		return nil, nil
 	}
-	if strings.TrimSpace(db.indexOuterLeafMode) == IndexOuterLeafModeV2FencePtr {
+	switch strings.TrimSpace(db.indexOuterLeafMode) {
+	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
 		// Conservative correctness fallback for nested blob refs in v3 fence blocks:
 		// incremental per-key deltas can miss nested reference fanout changes.
 		// Returning nil invalidates the tracker and forces a safe full rescan.
