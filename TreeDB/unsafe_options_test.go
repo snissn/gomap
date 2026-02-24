@@ -118,6 +118,45 @@ func TestOptions_InvalidValueLogRewriteSegmentTargetBytes(t *testing.T) {
 	}
 }
 
+func TestOptions_InvalidValueLogRewriteHotSegmentTargetBytes(t *testing.T) {
+	dir := t.TempDir()
+	_, err := treedb.Open(treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			RewriteHotSegmentTargetBytes: -1,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid value-log rewrite hot segment target bytes")
+	}
+}
+
+func TestOptions_InvalidValueLogRewriteWarmSegmentTargetBytes(t *testing.T) {
+	dir := t.TempDir()
+	_, err := treedb.Open(treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			RewriteWarmSegmentTargetBytes: -1,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid value-log rewrite warm segment target bytes")
+	}
+}
+
+func TestOptions_InvalidValueLogRewriteColdSegmentTargetBytes(t *testing.T) {
+	dir := t.TempDir()
+	_, err := treedb.Open(treedb.Options{
+		Dir: dir,
+		ValueLog: treedb.ValueLogOptions{
+			RewriteColdSegmentTargetBytes: -1,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid value-log rewrite cold segment target bytes")
+	}
+}
+
 func TestOptions_InvalidBackgroundRewriteScoreTrigger(t *testing.T) {
 	dir := t.TempDir()
 	_, err := treedb.Open(treedb.Options{
@@ -126,6 +165,28 @@ func TestOptions_InvalidBackgroundRewriteScoreTrigger(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected error for invalid background rewrite score trigger")
+	}
+}
+
+func TestOptions_InvalidBackgroundRewriteScoreCooldownBypass(t *testing.T) {
+	dir := t.TempDir()
+	_, err := treedb.Open(treedb.Options{
+		Dir: dir,
+		BackgroundValueLogRewriteScoreCooldownBypass: -0.1,
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid background rewrite cooldown bypass score")
+	}
+}
+
+func TestOptions_InvalidBackgroundRewriteBudgetBytesPerSec(t *testing.T) {
+	dir := t.TempDir()
+	_, err := treedb.Open(treedb.Options{
+		Dir: dir,
+		BackgroundValueLogRewriteBudgetBytesPerSec: -1,
+	})
+	if err == nil {
+		t.Fatalf("expected error for invalid background rewrite budget bytes/sec")
 	}
 }
 

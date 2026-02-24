@@ -2,6 +2,42 @@
 
 Status: Draft implementation roadmap for generational segmented value-log management.
 
+## Current Implementation Snapshot
+
+Implemented now:
+
+- Score-gated background rewrite trigger:
+  - `score=max(total/target_total, stale/target_stale, churn/target_churn)`.
+- Soft cooldown:
+  - cooldown can be bypassed when score crosses high-pressure threshold.
+- Budgeted rewrite intake:
+  - optional bytes/sec budget caps rewrite source bytes per interval.
+- Generation-aware rewrite sizing:
+  - explicit hot/warm/cold rewrite output segment targets.
+- Candidate ranking improvements:
+  - reclaim-efficiency bias plus hot-first preference.
+- Generation-aware GC preference:
+  - dead hot segments are prioritized first.
+
+Key options now available:
+
+- `BackgroundValueLogRewriteScoreTargetTotalBytes`
+- `BackgroundValueLogRewriteScoreTargetStaleBytes`
+- `BackgroundValueLogRewriteScoreTargetChurnBytes`
+- `BackgroundValueLogRewriteScoreTrigger`
+- `BackgroundValueLogRewriteScoreCooldownBypass`
+- `BackgroundValueLogRewriteBudgetBytesPerSec`
+- `ValueLog.RewriteSegmentTargetBytes`
+- `ValueLog.RewriteHotSegmentTargetBytes`
+- `ValueLog.RewriteWarmSegmentTargetBytes`
+- `ValueLog.RewriteColdSegmentTargetBytes`
+
+Current defaults:
+
+- rewrite score trigger: `1.0`
+- rewrite cooldown bypass score: `1.5`
+- cold rewrite target: `256 MiB`
+
 ## 1. Contract And Success Criteria
 
 ### Generations

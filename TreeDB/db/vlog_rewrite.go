@@ -97,6 +97,12 @@ const (
 
 const defaultValueLogRewriteBatchSize = 256
 
+// Test-only hooks used by crash-window rewrite tests.
+var (
+	rewriteHookAfterCopyBeforePublish  func() error
+	rewriteHookAfterPublishBeforeClean func() error
+)
+
 func normalizeValueLogRewriteBatchSize(n int) int {
 	if n <= 0 {
 		return defaultValueLogRewriteBatchSize
@@ -617,6 +623,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				return err
 			}
 		}
+		if rewriteHookAfterCopyBeforePublish != nil {
+			if err := rewriteHookAfterCopyBeforePublish(); err != nil {
+				return err
+			}
+		}
 		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
 			return err
 		}
@@ -683,6 +694,11 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	if len(newValueIDs) > 0 {
 		if err := db.valueLogManager.Refresh(); err != nil {
+			return stats, err
+		}
+	}
+	if rewriteHookAfterPublishBeforeClean != nil {
+		if err := rewriteHookAfterPublishBeforeClean(); err != nil {
 			return stats, err
 		}
 	}

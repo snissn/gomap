@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -358,6 +359,118 @@ func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("value mismatch for %q", key)
 		}
+	}
+}
+
+func TestValueLogRewriteOnline_CrashWindow_AfterCopyBeforePublish(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 120_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(0x40 + i)}, 300)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	rewriteHookAfterCopyBeforePublish = func() error { return errors.New("inject-after-copy-before-publish") }
+	defer func() { rewriteHookAfterCopyBeforePublish = nil }()
+	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     1,
+		SyncEachBatch: true,
+	}); err == nil {
+		t.Fatalf("expected injected rewrite error")
+	}
+
+	// No pointer publish should have happened; data must remain readable.
+	got, err := db.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get k1 after injected failure: %v", err)
+	}
+	if want := bytes.Repeat([]byte{0x40}, 300); !bytes.Equal(got, want) {
+		t.Fatalf("k1 mismatch after injected failure")
+	}
+	got, err = db.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("get k2 after injected failure: %v", err)
+	}
+	if want := bytes.Repeat([]byte{0x41}, 300); !bytes.Equal(got, want) {
+		t.Fatalf("k2 mismatch after injected failure")
+	}
+}
+
+func TestValueLogRewriteOnline_CrashWindow_AfterPublishBeforeCleanup(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 130_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(0x50 + i)}, 300)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	rewriteHookAfterPublishBeforeClean = func() error { return errors.New("inject-after-publish-before-cleanup") }
+	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     1,
+		SyncEachBatch: true,
+	}); err == nil {
+		t.Fatalf("expected injected rewrite error")
+	}
+	rewriteHookAfterPublishBeforeClean = nil
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, IndexOuterLeafMode: IndexOuterLeafModeV1})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+
+	got, err := reopen.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("reopen get k1: %v", err)
+	}
+	if want := bytes.Repeat([]byte{0x50}, 300); !bytes.Equal(got, want) {
+		t.Fatalf("k1 mismatch after injected post-publish failure")
+	}
+	got, err = reopen.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("reopen get k2: %v", err)
+	}
+	if want := bytes.Repeat([]byte{0x51}, 300); !bytes.Equal(got, want) {
+		t.Fatalf("k2 mismatch after injected post-publish failure")
 	}
 }
 
