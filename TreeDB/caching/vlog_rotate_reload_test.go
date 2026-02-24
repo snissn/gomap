@@ -51,7 +51,7 @@ func (w *rotateSwapValueWriter) AppendRawFramesWritevInto(records []valuelog.Rec
 		dst[i] = page.ValuePtr{
 			Offset: uint64(w.size),
 			Length: uint32(len(records[i].Value)),
-			FileID: 1,
+			FileID: page.ValueLogFileID(1),
 		}
 		w.size += int64(len(records[i].Value))
 	}
