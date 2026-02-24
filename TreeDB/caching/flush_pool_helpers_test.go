@@ -318,8 +318,17 @@ func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
 	if backendBatch.reserveCalls == 0 {
 		t.Fatalf("expected reserve hint before deferred memtable flush loop")
 	}
-	if backendBatch.lastReserve != reserveHint {
-		t.Fatalf("reserve hint=%d want=%d", backendBatch.lastReserve, reserveHint)
+	wantReserve := reserveHint
+	if wantReserve > 0 {
+		maxInt := int(^uint(0) >> 1)
+		if wantReserve > maxInt/2 {
+			wantReserve = maxInt
+		} else {
+			wantReserve *= 2
+		}
+	}
+	if backendBatch.lastReserve != wantReserve {
+		t.Fatalf("reserve hint=%d want=%d", backendBatch.lastReserve, wantReserve)
 	}
 }
 

@@ -4047,9 +4047,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 					}
 				}
 			}
-				if overlap && promoter != nil && promoter.v1LeafLogMode() {
-					confirmedOverlap := false
-					emitKey := func(key []byte, emitPtr page.ValuePtr) error {
+			if overlap && promoter != nil && promoter.v1LeafLogMode() {
+				confirmedOverlap := false
+				emitKey := func(key []byte, emitPtr page.ValuePtr) error {
 					if psv != nil {
 						if err := psv.SetPointerView(key, emitPtr); err != nil {
 							return err
@@ -4079,9 +4079,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 					}
 					unresolved = append(unresolved, srcPos)
 				}
-					if queuedCount > 0 {
-						confirmedOverlap = true
-						if routeAnchorMode {
+				if queuedCount > 0 {
+					confirmedOverlap = true
+					if routeAnchorMode {
 						if len(unresolved) > 0 {
 							// Route mode keeps overlap handling in rewrite anchors
 							// only; emit one canonical anchor row at payload min.
@@ -4111,21 +4111,21 @@ func (db *DB) flushDeferredValueLogMemtable(
 					}
 					putValueLogEligible(unresolved)
 					continue
-					}
-					if len(unresolved) > 0 && !routeAnchorMode {
-						emitWholeGroup = true
-					} else {
-						putValueLogEligible(unresolved)
-						continue
-					}
+				}
+				if len(unresolved) > 0 && !routeAnchorMode {
+					emitWholeGroup = true
+				} else {
 					putValueLogEligible(unresolved)
-					if !emitWholeGroup {
-						if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
-							for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-										putValueLogEligible(unresolved)
-										return 0, err
+					continue
+				}
+				putValueLogEligible(unresolved)
+				if !emitWholeGroup {
+					if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
+						for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
+							if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+								if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+									putValueLogEligible(unresolved)
+									return 0, err
 								}
 							}
 						}
@@ -4554,10 +4554,10 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 						}
 					}
-				if overlap && promoter != nil && promoter.v1LeafLogMode() {
-					confirmedOverlap := false
-					unresolved := getValueLogEligible(group.end - group.start)
-					queuedCount := 0
+					if overlap && promoter != nil && promoter.v1LeafLogMode() {
+						confirmedOverlap := false
+						unresolved := getValueLogEligible(group.end - group.start)
+						queuedCount := 0
 						for srcPos := group.start; srcPos < group.end; srcPos++ {
 							queued, _, _, err := promoter.queueV1LeafLogOverlapRewrite(ptrKeys[srcPos], ptrVals[srcPos])
 							if err != nil {
@@ -4571,9 +4571,9 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 							unresolved = append(unresolved, srcPos)
 						}
-					if queuedCount > 0 {
-						confirmedOverlap = true
-						if routeAnchorMode {
+						if queuedCount > 0 {
+							confirmedOverlap = true
+							if routeAnchorMode {
 								if len(unresolved) > 0 {
 									// Route mode keeps overlap handling in rewrite
 									// anchors only; emit one canonical anchor row
@@ -4607,19 +4607,19 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							}
 							putValueLogEligible(unresolved)
 							continue
-					}
-					if len(unresolved) > 0 && !routeAnchorMode {
-						emitWholeGroup = true
-					} else {
+						}
+						if len(unresolved) > 0 && !routeAnchorMode {
+							emitWholeGroup = true
+						} else {
+							putValueLogEligible(unresolved)
+							continue
+						}
 						putValueLogEligible(unresolved)
-						continue
-					}
-					putValueLogEligible(unresolved)
-					if !emitWholeGroup {
-						if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
-							for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+						if !emitWholeGroup {
+							if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
+								for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
+									if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+										if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
 											putValueLogPtrs(ptrs)
 											return err
 										}
