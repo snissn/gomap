@@ -86,7 +86,7 @@ var (
 	treedbIndexColumnarLeaves             = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
-	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v2_fenceptr", "TreeDB: index outer-leaf mode (v1|v1_leaflog|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
+	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v2_fenceptr", "TreeDB: index outer-leaf mode (v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
 	treedbWALFenceMode                    = flag.String("treedb-wal-fence-mode", "rid_join", "TreeDB: WAL fence mode for v2_fenceptr (rid_join|simple_inline). For WAL-on v2_fenceptr, default remains simple_inline unless explicitly set.")
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
@@ -270,6 +270,8 @@ func parseTreeDBOuterLeafMode(s string) (string, error) {
 		return treedb.IndexOuterLeafModeV1, nil
 	case "v1_leaflog":
 		return treedb.IndexOuterLeafModeV1LeafLog, nil
+	case "v1_leaflog_route":
+		return treedb.IndexOuterLeafModeV1LeafLogRoute, nil
 	case "v1_leaflog_legacy":
 		return treedb.IndexOuterLeafModeV1LeafLogLegacy, nil
 	case "v2_blockptr":
@@ -277,7 +279,7 @@ func parseTreeDBOuterLeafMode(s string) (string, error) {
 	case "v2_fenceptr":
 		return treedb.IndexOuterLeafModeV2FencePtr, nil
 	default:
-		return "", fmt.Errorf("unsupported -treedb-index-outer-leaf-mode=%q (expected v1|v1_leaflog|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)", s)
+		return "", fmt.Errorf("unsupported -treedb-index-outer-leaf-mode=%q (expected v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)", s)
 	}
 }
 

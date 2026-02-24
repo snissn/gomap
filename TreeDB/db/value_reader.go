@@ -482,7 +482,7 @@ func (r *valueReader) setOuterLeafMode(mode string) {
 	r.fenceGlobalEnabled = false
 	r.fenceSingleCandidate = false
 	switch mode {
-	case outerleaf.ModeV1LeafLog:
+	case outerleaf.ModeV1LeafLog, outerleaf.ModeV1LeafLogRoute:
 		r.fenceLookupEnabled = true
 		r.fenceSingleCandidate = true
 	case outerleaf.ModeV2FencePtr:
@@ -504,7 +504,7 @@ func (r valueReader) fenceLookupModeEnabled() bool {
 		return r.fenceLookupEnabled
 	}
 	switch strings.ToLower(strings.TrimSpace(r.outerLeafMode)) {
-	case outerleaf.ModeV1LeafLog, outerleaf.ModeV2FencePtr:
+	case outerleaf.ModeV1LeafLog, outerleaf.ModeV1LeafLogRoute, outerleaf.ModeV2FencePtr:
 		return true
 	default:
 		return false
@@ -530,10 +530,25 @@ func (r valueReader) FenceLookupSingleCandidateEnabled() bool {
 	if r.modeInit {
 		return r.fenceSingleCandidate
 	}
-	return strings.ToLower(strings.TrimSpace(r.outerLeafMode)) == outerleaf.ModeV1LeafLog
+	switch strings.ToLower(strings.TrimSpace(r.outerLeafMode)) {
+	case outerleaf.ModeV1LeafLog, outerleaf.ModeV1LeafLogRoute:
+		return true
+	default:
+		return false
+	}
 }
 
 func (r valueReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
+	if r.modeInit {
+		if r.outerLeafMode == outerleaf.ModeV1LeafLogRoute {
+			// Route mode uses plain anchor pointers (no fence marker bit).
+			return true
+		}
+	}
+	if strings.ToLower(strings.TrimSpace(r.outerLeafMode)) == outerleaf.ModeV1LeafLogRoute {
+		// Route mode uses plain anchor pointers (no fence marker bit).
+		return true
+	}
 	if r.modeInit {
 		if r.outerLeafMode == outerleaf.ModeV1LeafLogLegacy {
 			return false

@@ -21,7 +21,7 @@ func (*failingCommitWriter) Flush() error                           { return nil
 func (*failingCommitWriter) Sync() error                            { return nil }
 func (*failingCommitWriter) Close() error                           { return nil }
 
-func openV1LeafLogAtomicityCache(t *testing.T) (*DB, *MockBackend) {
+func openLeafLogAtomicityCache(t *testing.T, mode string) (*DB, *MockBackend) {
 	t.Helper()
 	dir := t.TempDir()
 	backend := NewMockBackend()
@@ -31,7 +31,7 @@ func openV1LeafLogAtomicityCache(t *testing.T) (*DB, *MockBackend) {
 		JournalLanes:             1,
 		ForceValueLogPointers:    true,
 		ValueLogPointerThreshold: 1,
-		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1LeafLog,
+		IndexOuterLeafMode:       mode,
 	})
 	if err != nil {
 		t.Fatalf("Open cache: %v", err)
@@ -85,81 +85,124 @@ func assertKeyNotVisibleAnywhere(t *testing.T, cache *DB, backend *MockBackend, 
 }
 
 func TestCachingDB_V1LeafLog_SetAtomicOnWALError(t *testing.T) {
-	cache, backend := openV1LeafLogAtomicityCache(t)
-	defer cache.Close()
+	for _, mode := range []string{
+		backenddb.IndexOuterLeafModeV1LeafLog,
+	} {
+		t.Run(mode, func(t *testing.T) {
+			cache, backend := openLeafLogAtomicityCache(t, mode)
+			defer cache.Close()
 
-	injectedErr := errors.New("injected wal append failure")
-	installFailingWALWriter(t, cache, injectedErr)
+			injectedErr := errors.New("injected wal append failure")
+			installFailingWALWriter(t, cache, injectedErr)
 
-	key := []byte("atomic-set-key")
-	value := bytes.Repeat([]byte("v"), 1024) // pointer-backed under threshold=1
-	if err := cache.Set(key, value); !errors.Is(err, injectedErr) {
-		t.Fatalf("Set error=%v, want %v", err, injectedErr)
+			key := []byte("atomic-set-key")
+			value := bytes.Repeat([]byte("v"), 1024) // pointer-backed under threshold=1
+			if err := cache.Set(key, value); !errors.Is(err, injectedErr) {
+				t.Fatalf("Set error=%v, want %v", err, injectedErr)
+			}
+			assertKeyNotVisibleAnywhere(t, cache, backend, key)
+		})
 	}
-	assertKeyNotVisibleAnywhere(t, cache, backend, key)
 }
 
 func TestCachingDB_V1LeafLog_SetSyncAtomicOnWALError(t *testing.T) {
-	cache, backend := openV1LeafLogAtomicityCache(t)
-	defer cache.Close()
+	for _, mode := range []string{
+		backenddb.IndexOuterLeafModeV1LeafLog,
+	} {
+		t.Run(mode, func(t *testing.T) {
+			cache, backend := openLeafLogAtomicityCache(t, mode)
+			defer cache.Close()
 
-	injectedErr := errors.New("injected wal append failure")
-	installFailingWALWriter(t, cache, injectedErr)
+			injectedErr := errors.New("injected wal append failure")
+			installFailingWALWriter(t, cache, injectedErr)
 
-	key := []byte("atomic-setsync-key")
-	value := bytes.Repeat([]byte("v"), 1024) // pointer-backed under threshold=1
-	if err := cache.SetSync(key, value); !errors.Is(err, injectedErr) {
-		t.Fatalf("SetSync error=%v, want %v", err, injectedErr)
+			key := []byte("atomic-setsync-key")
+			value := bytes.Repeat([]byte("v"), 1024) // pointer-backed under threshold=1
+			if err := cache.SetSync(key, value); !errors.Is(err, injectedErr) {
+				t.Fatalf("SetSync error=%v, want %v", err, injectedErr)
+			}
+			assertKeyNotVisibleAnywhere(t, cache, backend, key)
+		})
 	}
-	assertKeyNotVisibleAnywhere(t, cache, backend, key)
 }
 
 func TestCachingDB_V1LeafLog_BatchWriteAtomicOnWALError(t *testing.T) {
-	cache, backend := openV1LeafLogAtomicityCache(t)
-	defer cache.Close()
+	for _, mode := range []string{
+		backenddb.IndexOuterLeafModeV1LeafLog,
+	} {
+		t.Run(mode, func(t *testing.T) {
+			cache, backend := openLeafLogAtomicityCache(t, mode)
+			defer cache.Close()
 
-	injectedErr := errors.New("injected wal append failure")
-	installFailingWALWriter(t, cache, injectedErr)
+			injectedErr := errors.New("injected wal append failure")
+			installFailingWALWriter(t, cache, injectedErr)
 
-	b := cache.NewBatchWithSize(2)
-	defer b.Close()
-	keyA := []byte("atomic-batch-a")
-	keyB := []byte("atomic-batch-b")
-	if err := b.Set(keyA, bytes.Repeat([]byte("a"), 1024)); err != nil {
-		t.Fatalf("batch Set(a): %v", err)
-	}
-	if err := b.Set(keyB, bytes.Repeat([]byte("b"), 1024)); err != nil {
-		t.Fatalf("batch Set(b): %v", err)
-	}
-	if err := b.Write(); !errors.Is(err, injectedErr) {
-		t.Fatalf("batch Write error=%v, want %v", err, injectedErr)
-	}
+			b := cache.NewBatchWithSize(2)
+			defer b.Close()
+			keyA := []byte("atomic-batch-a")
+			keyB := []byte("atomic-batch-b")
+			if err := b.Set(keyA, bytes.Repeat([]byte("a"), 1024)); err != nil {
+				t.Fatalf("batch Set(a): %v", err)
+			}
+			if err := b.Set(keyB, bytes.Repeat([]byte("b"), 1024)); err != nil {
+				t.Fatalf("batch Set(b): %v", err)
+			}
+			if err := b.Write(); !errors.Is(err, injectedErr) {
+				t.Fatalf("batch Write error=%v, want %v", err, injectedErr)
+			}
 
-	assertKeyNotVisibleAnywhere(t, cache, backend, keyA)
-	assertKeyNotVisibleAnywhere(t, cache, backend, keyB)
+			assertKeyNotVisibleAnywhere(t, cache, backend, keyA)
+			assertKeyNotVisibleAnywhere(t, cache, backend, keyB)
+		})
+	}
 }
 
 func TestCachingDB_V1LeafLog_BatchWriteSyncAtomicOnWALError(t *testing.T) {
-	cache, backend := openV1LeafLogAtomicityCache(t)
-	defer cache.Close()
+	for _, mode := range []string{
+		backenddb.IndexOuterLeafModeV1LeafLog,
+	} {
+		t.Run(mode, func(t *testing.T) {
+			cache, backend := openLeafLogAtomicityCache(t, mode)
+			defer cache.Close()
 
-	injectedErr := errors.New("injected wal append failure")
-	installFailingWALWriter(t, cache, injectedErr)
+			injectedErr := errors.New("injected wal append failure")
+			installFailingWALWriter(t, cache, injectedErr)
 
-	b := cache.NewBatchWithSize(2)
-	defer b.Close()
-	keyA := []byte("atomic-batchsync-a")
-	keyB := []byte("atomic-batchsync-b")
-	if err := b.Set(keyA, bytes.Repeat([]byte("a"), 1024)); err != nil {
-		t.Fatalf("batch Set(a): %v", err)
-	}
-	if err := b.Set(keyB, bytes.Repeat([]byte("b"), 1024)); err != nil {
-		t.Fatalf("batch Set(b): %v", err)
-	}
-	if err := b.WriteSync(); !errors.Is(err, injectedErr) {
-		t.Fatalf("batch WriteSync error=%v, want %v", err, injectedErr)
-	}
+			b := cache.NewBatchWithSize(2)
+			defer b.Close()
+			keyA := []byte("atomic-batchsync-a")
+			keyB := []byte("atomic-batchsync-b")
+			if err := b.Set(keyA, bytes.Repeat([]byte("a"), 1024)); err != nil {
+				t.Fatalf("batch Set(a): %v", err)
+			}
+			if err := b.Set(keyB, bytes.Repeat([]byte("b"), 1024)); err != nil {
+				t.Fatalf("batch Set(b): %v", err)
+			}
+			if err := b.WriteSync(); !errors.Is(err, injectedErr) {
+				t.Fatalf("batch WriteSync error=%v, want %v", err, injectedErr)
+			}
 
-	assertKeyNotVisibleAnywhere(t, cache, backend, keyA)
-	assertKeyNotVisibleAnywhere(t, cache, backend, keyB)
+			assertKeyNotVisibleAnywhere(t, cache, backend, keyA)
+			assertKeyNotVisibleAnywhere(t, cache, backend, keyB)
+		})
+	}
+}
+
+func TestCachingDB_V1LeafLogRoute_RequiresSnapshotCapableBackend(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:           1 << 30,
+		MemtableShards:           1,
+		JournalLanes:             1,
+		ForceValueLogPointers:    true,
+		ValueLogPointerThreshold: 1,
+		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1LeafLogRoute,
+	})
+	if err == nil {
+		if cache != nil {
+			_ = cache.Close()
+		}
+		t.Fatalf("expected open error for v1_leaflog_route with non-snapshot backend")
+	}
 }

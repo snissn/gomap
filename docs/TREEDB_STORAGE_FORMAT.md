@@ -106,6 +106,27 @@ block and finding the requested key inside that block.
 Pre-alpha note: these `v2` outer-leaf layouts are intentionally allowed to
 change. Old experimental DB directories may fail to open after format updates.
 
+### Routing-only outer-leaf payloads (`IndexOuterLeafMode=v1_leaflog_route`)
+
+`v1_leaflog_route` is the routing-only mode:
+
+- `index.db` stores routing/index pages and directory anchors, not key-sorted outer
+  leaf pages.
+- The index points to one outer-leaf payload block per anchor.
+- Each outer-leaf block is written as one coherent blob in the value log and is
+  compressed by default (snappy path).
+- Each block entry may store either:
+  - full inline small values, or
+  - a nested value pointer for larger values.
+- Reads follow an exact one-probe routing contract: locate the covering anchor,
+  decode that blob, and resolve the key by binary search inside the decoded
+  block.
+- Writes publish blob anchors atomically so an anchor is never visible before the
+  referenced blob is durable.
+
+For the exact semantics, invariants, and acceptance criteria of this mode, see:
+`docs/TREEDB_V1_LEAFLOG_ROUTE_SPEC.md`
+
 ### Leaf entry encoding (index leaf pages)
 
 TreeDB stores B+Tree pages in `Dir/maindb/index.db` using a fixed 4096-byte

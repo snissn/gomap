@@ -1299,9 +1299,9 @@ func testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t *testing.T, 
 			}
 			continue
 		}
-		if !bytes.Equal(got, want) {
-			t.Fatalf("get mismatch key=%d got=%d want=%d", i, len(got), len(want))
-		}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("get mismatch key=%d got=%d want=%d", i, len(got), len(want))
+			}
 	}
 
 	it, err := reopen.Iterator(nil, nil)
@@ -1416,6 +1416,10 @@ func TestReopenVerify_OuterLeafV2_SplitMergeDeleteRange_IteratorParity(t *testin
 
 func TestReopenVerify_OuterLeafV1LeafLog_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
 	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV1LeafLog)
+}
+
+func TestReopenVerify_OuterLeafV1LeafLogRoute_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
+	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV1LeafLogRoute)
 }
 
 func TestReopenVerify_OuterLeafV2FencePtr_SplitMergeDeleteRange_IteratorParity(t *testing.T) {

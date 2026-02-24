@@ -21,6 +21,11 @@ func TestNormalizeIndexOuterLeafMode_LeafLogModesRemainDistinct(t *testing.T) {
 			in:   " V1_LEAFLOG_LEGACY ",
 			want: IndexOuterLeafModeV1LeafLogLegacy,
 		},
+		{
+			name: "leaflog route",
+			in:   " V1_LEAFLOG_ROUTE ",
+			want: IndexOuterLeafModeV1LeafLogRoute,
+		},
 	}
 
 	for _, tc := range tests {
@@ -37,6 +42,7 @@ func TestOpen_IndexOuterLeafModeV2_Enabled(t *testing.T) {
 	modes := []string{
 		IndexOuterLeafModeV1LeafLog,
 		IndexOuterLeafModeV1LeafLogLegacy,
+		IndexOuterLeafModeV1LeafLogRoute,
 		IndexOuterLeafModeV2BlockPtr,
 		IndexOuterLeafModeV2FencePtr,
 	}
@@ -69,6 +75,11 @@ func TestOpen_IndexOuterLeafMode_MixedCaseLeafLogModesCanonicalized(t *testing.T
 			name: "v1_leaflog_legacy",
 			mode: " V1_LEAFLOG_LEGACY ",
 			want: IndexOuterLeafModeV1LeafLogLegacy,
+		},
+		{
+			name: "v1_leaflog_route",
+			mode: " V1_LEAFLOG_ROUTE ",
+			want: IndexOuterLeafModeV1LeafLogRoute,
 		},
 	}
 
