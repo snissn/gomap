@@ -17,12 +17,13 @@ func TestAppendOnlyNextCapacityGrowthPolicy(t *testing.T) {
 		want    int
 	}{
 		{name: "below-min", current: appendOnlyMinInitialEntries - 1, flags: 0, want: appendOnlyMinInitialEntries},
-		{name: "non-pointer-doubles", current: appendOnlyMinInitialEntries, flags: 0, want: appendOnlyMinInitialEntries * 2},
+		{name: "non-pointer-below-cutoff-triples", current: appendOnlyMinInitialEntries, flags: 0, want: appendOnlyMinInitialEntries * 3},
 		{name: "pointer-below-cutoff-quadruples", current: appendOnlyMinInitialEntries, flags: node.FlagPointer, want: appendOnlyMinInitialEntries * 4},
 		{name: "pointer-just-below-cutoff-quadruples", current: appendOnlyPointerGrowCutoff - 1, flags: node.FlagPointer, want: (appendOnlyPointerGrowCutoff - 1) * 4},
 		{name: "pointer-at-cutoff-doubles", current: appendOnlyPointerGrowCutoff, flags: node.FlagPointer, want: appendOnlyPointerGrowCutoff * 2},
 		{name: "pointer-above-cutoff-doubles", current: appendOnlyPointerGrowCutoff + 1, flags: node.FlagPointer, want: (appendOnlyPointerGrowCutoff + 1) * 2},
-		{name: "non-pointer-below-cutoff-doubles", current: appendOnlyPointerGrowCutoff - 1, flags: 0, want: (appendOnlyPointerGrowCutoff - 1) * 2},
+		{name: "non-pointer-below-cutoff-triples", current: appendOnlyPointerGrowCutoff - 1, flags: 0, want: (appendOnlyPointerGrowCutoff - 1) * 3},
+		{name: "non-pointer-at-cutoff-doubles", current: appendOnlyPointerGrowCutoff, flags: 0, want: appendOnlyPointerGrowCutoff * 2},
 	}
 
 	for _, tc := range tests {
