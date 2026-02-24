@@ -979,6 +979,10 @@ func (db *DB) outerLeafFenceV2Enabled() bool {
 	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV2FencePtr
 }
 
+func (db *DB) outerLeafRouteModeEnabled() bool {
+	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+}
+
 func (db *DB) outerLeafAnchorModeEnabled() bool {
 	if db == nil {
 		return false
@@ -989,6 +993,23 @@ func (db *DB) outerLeafAnchorModeEnabled() bool {
 	default:
 		return false
 	}
+}
+
+func (db *DB) normalizeRouteAnchorPointer(ptr page.ValuePtr, context string) (page.ValuePtr, error) {
+	if db == nil || !db.outerLeafRouteModeEnabled() {
+		return ptr, nil
+	}
+	if page.ValuePtrIsFenceOuter(ptr) {
+		return ptr, fmt.Errorf("cachingdb: v1_leaflog_route forbids fence-marked anchor pointer (%s): ptr=%+v", context, ptr)
+	}
+	ptr = page.ValuePtrClearFenceOuter(ptr)
+	if ptr == (page.ValuePtr{}) {
+		return ptr, fmt.Errorf("cachingdb: v1_leaflog_route emitted zero anchor pointer (%s)", context)
+	}
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return ptr, fmt.Errorf("cachingdb: v1_leaflog_route requires value-log anchor pointer (%s): ptr=%+v", context, ptr)
+	}
+	return ptr, nil
 }
 
 func normalizeValueLogWALFenceMode(mode string) string {
@@ -1928,6 +1949,13 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 				ptr = page.ValuePtrMarkFenceOuterCollapsed(ptr)
 			}
 		}
+		if routeAnchorMode {
+			var routeErr error
+			ptr, routeErr = db.normalizeRouteAnchorPointer(ptr, "deferred value-log pointer materialization")
+			if routeErr != nil {
+				return nil, routeErr
+			}
+		}
 		group := groups[i]
 		if group.start < 0 || group.end < group.start || group.end > len(eligible) {
 			return nil, errors.New("cachingdb: deferred value-log group out of range")
@@ -2189,6 +2217,8 @@ type fenceAnchorPromoter struct {
 	routeCursorNext     []byte
 	routeCursorNextPtr  page.ValuePtr
 	routeCursorHaveNext bool
+
+	rewriteEntries []outerleaf.TypedEntry
 }
 
 type fenceSourcePendingSet struct {
@@ -2237,6 +2267,7 @@ func (p *fenceAnchorPromoter) close() {
 	p.routeCursorReady = false
 	p.routeCursorHaveCur = false
 	p.routeCursorHaveNext = false
+	p.rewriteEntries = nil
 }
 
 func (p *fenceAnchorPromoter) snapshotView() *backenddb.Snapshot {
@@ -2294,6 +2325,26 @@ func (p *fenceAnchorPromoter) pointerActsAsAnchor(ptr page.ValuePtr) bool {
 	return page.ValuePtrIsFenceOuter(ptr)
 }
 
+func (p *fenceAnchorPromoter) getRewriteEntries(capHint int) []outerleaf.TypedEntry {
+	if capHint < 0 {
+		capHint = 0
+	}
+	if p == nil {
+		return make([]outerleaf.TypedEntry, 0, capHint)
+	}
+	if cap(p.rewriteEntries) < capHint {
+		p.rewriteEntries = make([]outerleaf.TypedEntry, 0, capHint)
+	}
+	return p.rewriteEntries[:0]
+}
+
+func (p *fenceAnchorPromoter) putRewriteEntries(entries []outerleaf.TypedEntry) {
+	if p == nil {
+		return
+	}
+	p.rewriteEntries = entries[:0]
+}
+
 func (plan *fenceSourceRewritePlan) setValue(key, value []byte) {
 	plan.setValueWithOwnership(key, value, false)
 }
@@ -2307,7 +2358,19 @@ func (plan *fenceSourceRewritePlan) setValueWithOwnership(key, value []byte, own
 		return
 	}
 	if plan.setIndex == nil {
-		plan.setIndex = make(map[uint64]int, 8)
+		capHint := 8
+		if plan.sourceKeyCount > capHint {
+			capHint = plan.sourceKeyCount
+		}
+		plan.setIndex = make(map[uint64]int, capHint)
+	}
+	if plan.sourceKeyCount > 0 && len(plan.sets) == 0 && cap(plan.sets) < plan.sourceKeyCount {
+		capHint := plan.sourceKeyCount
+		// Keep preallocation bounded for very large source blocks.
+		if capHint > 4096 {
+			capHint = 4096
+		}
+		plan.sets = make([]fenceSourcePendingSet, 0, capHint)
 	}
 	keyHash := fenceRewriteKeyHash(key)
 	if idx, ok := plan.setIndex[keyHash]; ok {
@@ -2447,11 +2510,22 @@ func (p *fenceAnchorPromoter) routeCursorLoadNext() error {
 		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
 			continue
 		}
+		if p.v1LeafLogRouteMode() {
+			var routeErr error
+			ptr, routeErr = p.db.normalizeRouteAnchorPointer(ptr, "route cursor scan")
+			if routeErr != nil {
+				return routeErr
+			}
+		}
 		if !p.pointerActsAsAnchor(ptr) {
 			continue
 		}
 		p.routeCursorNext = append(p.routeCursorNext[:0], k...)
-		p.routeCursorNextPtr = page.ValuePtrClearFenceOuter(ptr)
+		if p.v1LeafLogRouteMode() {
+			p.routeCursorNextPtr = ptr
+		} else {
+			p.routeCursorNextPtr = page.ValuePtrClearFenceOuter(ptr)
+		}
 		p.routeCursorHaveNext = true
 		return nil
 	}
@@ -2581,9 +2655,19 @@ func (p *fenceAnchorPromoter) lookupPredecessorFenceAnchor(key []byte) ([]byte, 
 			it.Next()
 			continue
 		}
+		if p.v1LeafLogRouteMode() {
+			var routeErr error
+			ptr, routeErr = p.db.normalizeRouteAnchorPointer(ptr, "route predecessor scan")
+			if routeErr != nil {
+				return nil, page.ValuePtr{}, false, routeErr
+			}
+		}
 		if !p.pointerActsAsAnchor(ptr) {
 			it.Next()
 			continue
+		}
+		if p.v1LeafLogRouteMode() {
+			return append([]byte(nil), k...), ptr, true, nil
 		}
 		return append([]byte(nil), k...), page.ValuePtrClearFenceOuter(ptr), true, nil
 	}
@@ -2620,7 +2704,10 @@ func (p *fenceAnchorPromoter) lookupFenceSourceForMutation(key []byte) ([]byte, 
 			return nil, page.ValuePtr{}, false, nil
 		}
 		sourceKey := append([]byte(nil), key...)
-		sourcePtr := page.ValuePtrClearFenceOuter(exact.ValuePtr)
+		sourcePtr, routeErr := p.db.normalizeRouteAnchorPointer(exact.ValuePtr, "route exact source lookup")
+		if routeErr != nil {
+			return nil, page.ValuePtr{}, false, routeErr
+		}
 		sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, sourcePtr)
 		return sourceKey, sourcePtr, true, nil
 	} else if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
@@ -2748,7 +2835,8 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		if len(plan.sets) == 0 {
 			return nil, nil, true, nil
 		}
-		out := make([]outerleaf.TypedEntry, 0, len(plan.sets))
+		out := p.getRewriteEntries(len(plan.sets))
+		defer func() { p.putRewriteEntries(out) }()
 		for i := range plan.sets {
 			set := plan.sets[i]
 			keyCopy := set.key
@@ -2803,7 +2891,8 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 	if plan.sourceKeyCount > 0 {
 		outCap += plan.sourceKeyCount
 	}
-	out := make([]outerleaf.TypedEntry, 0, outCap)
+	out := p.getRewriteEntries(outCap)
+	defer func() { p.putRewriteEntries(out) }()
 	if err := decoded.VisitTypedEntries(func(key []byte, kind outerleaf.EntryKind, value []byte, ptr page.ValuePtr) error {
 		// Apply queued set mutations directly from the overlap rewrite plan.
 		// This keeps set-only rewrites correct even when global mutation lookup
@@ -3723,9 +3812,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 			reserveHint *= 2
 		}
 	}
-	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint > db.flushBackendInitEntries {
-		// Route mode can over-estimate backend batch op counts on steady overwrite
-		// workloads; cap reserve to the init size to avoid repeated large reserves.
+	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
+		// Route-mode overlap rewrites can fan out many backend ops; keep reserve
+		// at least at init sizing to avoid repeated entry-slice growth churn.
 		reserveHint = db.flushBackendInitEntries
 	}
 	reserveBackendBatchOps(backendBatch, reserveHint)
@@ -4006,6 +4095,13 @@ func (db *DB) flushDeferredValueLogMemtable(
 	}
 
 	emitQueuedPointer := func(key []byte, ptr page.ValuePtr) error {
+		if routeAnchorMode {
+			var routeErr error
+			ptr, routeErr = db.normalizeRouteAnchorPointer(ptr, "deferred overlap rewrite publish")
+			if routeErr != nil {
+				return routeErr
+			}
+		}
 		if psv != nil {
 			if err := psv.SetPointerView(key, ptr); err != nil {
 				return err
@@ -4306,7 +4402,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			reserveHint *= 2
 		}
 	}
-	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint > db.flushBackendInitEntries {
+	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		reserveHint = db.flushBackendInitEntries
 	}
 	reserveBackendBatchOps(backendBatch, reserveHint)
@@ -4428,6 +4524,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if !emitPtr {
 			return nil
 		}
+		if routeAnchorMode {
+			var routeErr error
+			ptr, routeErr = db.normalizeRouteAnchorPointer(ptr, "flush deferred pointer publish")
+			if routeErr != nil {
+				return routeErr
+			}
+		}
 		if psv != nil {
 			if err := psv.SetPointerView(key, ptr); err != nil {
 				return err
@@ -4443,6 +4546,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		return nil
 	}
 	emitPointerForce := func(key []byte, ptr page.ValuePtr) error {
+		if routeAnchorMode {
+			var routeErr error
+			ptr, routeErr = db.normalizeRouteAnchorPointer(ptr, "flush deferred forced pointer publish")
+			if routeErr != nil {
+				return routeErr
+			}
+		}
 		if psv != nil {
 			if err := psv.SetPointerView(key, ptr); err != nil {
 				return err
@@ -14578,6 +14688,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		emittedChunk := false
 		fenceMode := db.outerLeafAnchorModeEnabled()
 		collapseFence := fenceMode && db.allowFencePointerCollapse()
+		routeAnchorMode := db.outerLeafRouteModeEnabled()
 
 		type ptrSetterView interface {
 			SetPointerView(key []byte, ptr page.ValuePtr) error
@@ -14650,6 +14761,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			defer promoter.close()
 		}
 		emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
+			if routeAnchorMode {
+				var routeErr error
+				ptr, routeErr = db.normalizeRouteAnchorPointer(ptr, "queued-unit promotion pointer")
+				if routeErr != nil {
+					return routeErr
+				}
+			}
 			var err error
 			if psv != nil {
 				err = psv.SetPointerView(key, ptr)
@@ -14707,27 +14825,34 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				applied = true
 				haveFencePtr = false
 			case entry.IsPtr:
+				ptr := entry.ValuePtr
+				if routeAnchorMode {
+					ptr, err = db.normalizeRouteAnchorPointer(ptr, "queued-unit flush pointer")
+					if err != nil {
+						break
+					}
+				}
 				if promoter != nil {
-					if err = promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: entry.ValuePtr}, emitPromotionPointer, emitPromotionDelete); err != nil {
+					if err = promoter.maybePromoteAnchor(entry.Key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: ptr}, emitPromotionPointer, emitPromotionDelete); err != nil {
 						break
 					}
 				}
 				emitPtr := true
 				if collapseFence {
-					if haveFencePtr && valuePtrSameRecord(entry.ValuePtr, lastFencePtr) {
+					if haveFencePtr && valuePtrSameRecord(ptr, lastFencePtr) {
 						emitPtr = false
 					} else {
-						lastFencePtr = entry.ValuePtr
+						lastFencePtr = ptr
 						haveFencePtr = true
 					}
 				}
 				if emitPtr {
 					if psv != nil {
-						err = psv.SetPointerView(entry.Key, entry.ValuePtr)
+						err = psv.SetPointerView(entry.Key, ptr)
 					} else if ps != nil {
-						err = ps.SetPointer(entry.Key, entry.ValuePtr)
+						err = ps.SetPointer(entry.Key, ptr)
 					} else {
-						single[0] = batch.Entry{Type: batch.OpPut, Key: entry.Key, ValuePtr: entry.ValuePtr, IsPtr: true}
+						single[0] = batch.Entry{Type: batch.OpPut, Key: entry.Key, ValuePtr: ptr, IsPtr: true}
 						err = backendBatch.SetOps(single[:])
 					}
 					applied = true
@@ -14914,6 +15039,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		var single [1]batch.Entry
 		fenceMode := db.outerLeafAnchorModeEnabled()
 		collapseFence := fenceMode && db.allowFencePointerCollapse()
+		routeAnchorMode := db.outerLeafRouteModeEnabled()
 		var (
 			lastFencePtr page.ValuePtr
 			haveFencePtr bool
@@ -14963,6 +15089,13 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			return nil
 		}
 		emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
+			if routeAnchorMode {
+				var routeErr error
+				ptr, routeErr = db.normalizeRouteAnchorPointer(ptr, "flush-unit promotion pointer")
+				if routeErr != nil {
+					return routeErr
+				}
+			}
 			var err error
 			if psv != nil {
 				err = psv.SetPointerView(key, ptr)
@@ -15027,6 +15160,16 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
+					if routeAnchorMode {
+						routePtr, routeErr := db.normalizeRouteAnchorPointer(ptr, "flush-unit mem pointer")
+						if routeErr != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (route ptr): %w", routeErr))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+						ptr = routePtr
+					}
 					if promoter != nil {
 						if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: ptr}, emitPromotionPointer, emitPromotionDelete); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (promote): %w", err))
@@ -15375,6 +15518,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 			var single [1]batch.Entry
 			fenceMode := db.outerLeafAnchorModeEnabled()
 			collapseFence := fenceMode && db.allowFencePointerCollapse()
+			routeAnchorMode := db.outerLeafRouteModeEnabled()
 			var (
 				lastFencePtr page.ValuePtr
 				haveFencePtr bool
@@ -15414,6 +15558,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				return nil
 			}
 			emitPromotionPointer := func(key []byte, ptr page.ValuePtr) error {
+				if routeAnchorMode {
+					var routeErr error
+					ptr, routeErr = db.normalizeRouteAnchorPointer(ptr, "queued-unit promotion pointer")
+					if routeErr != nil {
+						return routeErr
+					}
+				}
 				var err error
 				if psv != nil {
 					err = psv.SetPointerView(key, ptr)
@@ -15479,6 +15630,16 @@ func (db *DB) flushOneLocked(sync bool) bool {
 						return false
 					}
 				} else if flags&node.FlagPointer != 0 {
+					if routeAnchorMode {
+						routePtr, routeErr := db.normalizeRouteAnchorPointer(ptr, "flush-memtable pointer")
+						if routeErr != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (route ptr): %w", routeErr))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
+						}
+						ptr = routePtr
+					}
 					if promoter != nil {
 						if err := promoter.maybePromoteAnchor(key, fencePendingMutation{kind: fencePendingMutationSetPointer, ptr: ptr}, emitPromotionPointer, emitPromotionDelete); err != nil {
 							db.reportError(fmt.Errorf("cachingdb: flush failed (promote): %w", err))
@@ -18523,6 +18684,14 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				ptr := ptrs[i]
 				if b.db.outerLeafFenceV2Enabled() {
 					ptr = page.ValuePtrMarkFenceOuterCollapsed(ptr)
+				}
+				if routeMode {
+					var routeErr error
+					ptr, routeErr = b.db.normalizeRouteAnchorPointer(ptr, "batch pointer publish")
+					if routeErr != nil {
+						b.db.writeMu.RUnlock()
+						return routeErr
+					}
 				}
 				group := groups[i]
 				if group.start < 0 || group.end < group.start || group.end > len(eligibleIdxs) {
