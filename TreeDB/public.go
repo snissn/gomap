@@ -293,6 +293,8 @@ func normalizePublicOuterLeafMode(mode string) string {
 		return db.IndexOuterLeafModeV1LeafLog
 	case db.IndexOuterLeafModeV1LeafLogLegacy:
 		return db.IndexOuterLeafModeV1LeafLogLegacy
+	case db.IndexOuterLeafModeV1LeafLogRoute:
+		return db.IndexOuterLeafModeV1LeafLogRoute
 	case db.IndexOuterLeafModeV2BlockPtr:
 		return db.IndexOuterLeafModeV2BlockPtr
 	case db.IndexOuterLeafModeV2FencePtr:
