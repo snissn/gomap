@@ -282,6 +282,17 @@ func parseTreeDBVlogGenerationPolicy(s string) (treedb.ValueLogGenerationPolicy,
 	}
 }
 
+func formatTreeDBVlogGenerationPolicy(p treedb.ValueLogGenerationPolicy) string {
+	switch p {
+	case treedb.ValueLogGenerationOff:
+		return "off"
+	case treedb.ValueLogGenerationHotWarmCold:
+		return "hot_warm_cold"
+	default:
+		return fmt.Sprintf("unknown(%d)", p)
+	}
+}
+
 func parseTreeDBOuterLeafMode(s string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "":
@@ -362,7 +373,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("vlog.compression=%s", formatTreeDBVlogCompression(r.opts.ValueLog.Compression)))
 	lines = append(lines, fmt.Sprintf("vlog.block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.BlockCodec)))
 	lines = append(lines, fmt.Sprintf("vlog.auto_policy=%s", formatTreeDBVlogAutoPolicy(r.opts.ValueLog.AutoPolicy)))
-	lines = append(lines, fmt.Sprintf("vlog.generation_policy=%d", r.opts.ValueLog.Generational.Policy))
+	lines = append(lines, fmt.Sprintf("vlog.generation_policy=%s", formatTreeDBVlogGenerationPolicy(r.opts.ValueLog.Generational.Policy)))
 	lines = append(lines, fmt.Sprintf("vlog.generation_hot_segment_bytes=%d", r.opts.ValueLog.Generational.HotSegmentTargetBytes))
 	lines = append(lines, fmt.Sprintf("vlog.generation_warm_segment_bytes=%d", r.opts.ValueLog.Generational.WarmSegmentTargetBytes))
 	lines = append(lines, fmt.Sprintf("vlog.generation_cold_segment_bytes=%d", r.opts.ValueLog.Generational.ColdSegmentTargetBytes))

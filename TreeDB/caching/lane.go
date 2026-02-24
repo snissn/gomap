@@ -10,6 +10,9 @@ import (
 
 type lane struct {
 	id int
+	// vlogGenerationClass tags lane role for generational placement.
+	// 0=hot, 1=warm, 2=cold.
+	vlogGenerationClass uint8
 
 	wal            commitWriter
 	walPath        string
@@ -71,6 +74,12 @@ type lane struct {
 
 	syncing atomic.Bool
 }
+
+const (
+	vlogGenerationClassHot uint8 = iota
+	vlogGenerationClassWarm
+	vlogGenerationClassCold
+)
 
 func commitLogName(laneID, seq int) string {
 	return fmt.Sprintf("commit-l%d-%06d.log", laneID, seq)
