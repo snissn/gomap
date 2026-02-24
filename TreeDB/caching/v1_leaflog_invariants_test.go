@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -408,5 +409,67 @@ func TestCachingDB_V1LeafLogRoute_NoFenceMarkedAnchorsAfterMixedCRUDReopen(t *te
 	}
 	if !bytes.Equal(got, []byte("append-0000")) {
 		t.Fatalf("append key mismatch after reopen: got=%q want=%q", got, []byte("append-0000"))
+	}
+}
+
+func TestCachingDB_V1LeafLogRoute_InvariantFailsOnPersistedInlineRow(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLog: backenddb.ValueLogOptions{
+			PointerThreshold:          1,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		JournalLanes:                      1,
+		ForceValueLogPointers:             false,
+		ValueLogPointerThreshold:          1 << 20,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	for i := 0; i < 64; i++ {
+		k := []byte(fmt.Sprintf("k%04d", i))
+		v := []byte(fmt.Sprintf("v%04d", i))
+		if err := cache.Set(k, v); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	// Inject an illegal persisted inline row in route mode.
+	b := backend.NewBatch()
+	if err := b.Set([]byte("zz-inline-corrupt"), []byte("bad")); err != nil {
+		t.Fatalf("inject inline row set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("inject inline row write: %v", err)
+	}
+	_ = b.Close()
+
+	err = cache.validateV1LeafLogDirectoryInvariants()
+	if err == nil {
+		t.Fatalf("expected invariant failure for persisted inline row")
+	}
+	if !strings.Contains(err.Error(), "persisted non-pointer row") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -760,6 +760,9 @@ func (db *DB) validateV1LeafLogDirectoryInvariants() error {
 		k := it.UnsafeKey()
 		_, ptr, flags := it.UnsafeEntry()
 		it.Next()
+		if routeMode && flags&node.FlagTombstone == 0 && flags&node.FlagPointer == 0 {
+			return fmt.Errorf("cachingdb: v1_leaflog invariant violation: route mode persisted non-pointer row key=%q flags=%#x", k, flags)
+		}
 		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
 			continue
 		}
@@ -3726,8 +3729,12 @@ func (db *DB) flushDeferredValueLogMemtable(
 					if routeAnchorMode {
 						if len(unresolved) > 0 {
 							// Route mode keeps overlap handling in rewrite anchors
-							// only; emit at most one anchor row for unresolved keys.
-							if err := emitKey(ptrKeys[unresolved[0]], ptr); err != nil {
+							// only; emit one canonical anchor row at payload min.
+							anchorPos := group.start
+							if anchorPos < 0 || anchorPos >= len(ptrKeys) {
+								anchorPos = unresolved[0]
+							}
+							if err := emitKey(ptrKeys[anchorPos], ptr); err != nil {
 								putValueLogEligible(unresolved)
 								return 0, err
 							}
@@ -4137,8 +4144,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							if routeAnchorMode {
 								if len(unresolved) > 0 {
 									// Route mode keeps overlap handling in rewrite
-									// anchors only; emit at most one local anchor.
-									if err := emitPointer(ptrKeys[unresolved[0]], ptr); err != nil {
+									// anchors only; emit one canonical anchor row
+									// at payload min.
+									anchorPos := group.start
+									if anchorPos < 0 || anchorPos >= len(ptrKeys) {
+										anchorPos = unresolved[0]
+									}
+									if err := emitPointer(ptrKeys[anchorPos], ptr); err != nil {
 										putValueLogEligible(unresolved)
 										putValueLogPtrs(ptrs)
 										return err
