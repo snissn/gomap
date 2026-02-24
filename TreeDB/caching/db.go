@@ -3609,6 +3609,23 @@ func (p *fenceAnchorPromoter) keyCouldExistInBackend(key []byte) bool {
 	return bytes.Compare(key, p.backendRange.min) >= 0 && bytes.Compare(key, p.backendRange.max) <= 0
 }
 
+func (p *fenceAnchorPromoter) shouldEmitRouteDelete(key []byte) bool {
+	if p == nil {
+		return true
+	}
+	if !p.keyCouldExistInBackend(key) {
+		return false
+	}
+	if p.db == nil || p.db.backend == nil {
+		return true
+	}
+	has, err := p.db.backend.Has(key)
+	if err != nil {
+		return true
+	}
+	return has
+}
+
 func (p *fenceAnchorPromoter) backendDefinitelyEmpty() bool {
 	if p == nil {
 		return false
@@ -4045,9 +4062,11 @@ func (db *DB) flushDeferredValueLogMemtable(
 								return 0, err
 							}
 							for _, srcPos := range unresolved[1:] {
-								if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-									putValueLogEligible(unresolved)
-									return 0, err
+								if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
+									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+										putValueLogEligible(unresolved)
+										return 0, err
+									}
 								}
 							}
 						}
@@ -4072,8 +4091,11 @@ func (db *DB) flushDeferredValueLogMemtable(
 				if !emitWholeGroup {
 					if routeAnchorMode && group.end-group.start > 1 {
 						for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-							if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-								return 0, err
+							if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
+								if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+									putValueLogEligible(unresolved)
+									return 0, err
+								}
 							}
 						}
 					}
@@ -4093,8 +4115,10 @@ func (db *DB) flushDeferredValueLogMemtable(
 				// In route mode (strict directory contract), emit only one
 				// anchor per new outer-leaf block; do not emit exact per-key siblings.
 				if srcPos != group.start {
-					if err := emitPromotionDelete(key); err != nil {
-						return 0, err
+					if promoter.shouldEmitRouteDelete(key) {
+						if err := emitPromotionDelete(key); err != nil {
+							return 0, err
+						}
 					}
 					continue
 				}
@@ -4487,10 +4511,12 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 										return err
 									}
 									for _, srcPos := range unresolved[1:] {
-										if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-											putValueLogEligible(unresolved)
-											putValueLogPtrs(ptrs)
-											return err
+										if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
+											if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+												putValueLogEligible(unresolved)
+												putValueLogPtrs(ptrs)
+												return err
+											}
 										}
 									}
 								}
@@ -4517,9 +4543,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 						if !emitWholeGroup {
 							if routeAnchorMode && group.end-group.start > 1 {
 								for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-										putValueLogPtrs(ptrs)
-										return err
+									if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
+										if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+											putValueLogPtrs(ptrs)
+											return err
+										}
 									}
 								}
 							}
@@ -4535,9 +4563,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					if !emitWholeGroup {
 						if routeAnchorMode && group.end-group.start > 1 {
 							for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-								if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-									putValueLogPtrs(ptrs)
-									return err
+								if promoter.shouldEmitRouteDelete(ptrKeys[srcPos]) {
+									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+										putValueLogPtrs(ptrs)
+										return err
+									}
 								}
 							}
 						}
@@ -4550,9 +4580,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 						// In route mode (strict directory contract), emit only one
 						// anchor per new outer-leaf block; do not emit exact per-key siblings.
 						if srcPos != group.start {
-							if err := emitPromotionDelete(key); err != nil {
-								putValueLogPtrs(ptrs)
-								return err
+							if promoter.shouldEmitRouteDelete(key) {
+								if err := emitPromotionDelete(key); err != nil {
+									putValueLogPtrs(ptrs)
+									return err
+								}
 							}
 							continue
 						}
