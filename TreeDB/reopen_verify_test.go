@@ -1299,9 +1299,9 @@ func testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t *testing.T, 
 			}
 			continue
 		}
-			if !bytes.Equal(got, want) {
-				t.Fatalf("get mismatch key=%d got=%d want=%d", i, len(got), len(want))
-			}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("get mismatch key=%d got=%d want=%d", i, len(got), len(want))
+		}
 	}
 
 	it, err := reopen.Iterator(nil, nil)
