@@ -2734,57 +2734,66 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 	}
 	defer decoded.Release()
 
-	typed, err := decoded.TypedEntries(nil)
-	if err != nil {
-		return nil, nil, false, err
+	outCap := len(plan.sets)
+	if plan.sourceKeyCount > 0 {
+		outCap += plan.sourceKeyCount
 	}
-	if len(typed) == 0 && len(plan.sets) == 0 {
-		return nil, nil, false, nil
+	out := make([]outerleaf.TypedEntry, 0, outCap)
+	var seen map[string]struct{}
+	if len(plan.sets) > 0 {
+		seen = make(map[string]struct{}, outCap)
 	}
-
-	out := make([]outerleaf.TypedEntry, 0, len(typed)+len(plan.sets))
-	seen := make(map[string]struct{}, len(typed)+len(plan.sets))
-	for i := range typed {
-		ent := typed[i]
-		keyStr := string(ent.Key)
-		seen[keyStr] = struct{}{}
+	if err := decoded.VisitTypedEntries(func(key []byte, kind outerleaf.EntryKind, value []byte, ptr page.ValuePtr) error {
+		if seen != nil {
+			seen[string(key)] = struct{}{}
+		}
 		// Apply queued set mutations directly from the overlap rewrite plan.
 		// This keeps set-only rewrites correct even when global mutation lookup
 		// is intentionally deferred/lazy for hot-path performance.
-		if val, ok := plan.lookupValue(ent.Key); ok {
-			keyCopy := append([]byte(nil), ent.Key...)
+		if val, ok := plan.lookupValue(key); ok {
+			keyCopy := append([]byte(nil), key...)
 			valCopy := append([]byte(nil), val...)
-			kind := outerleaf.EntryKindInline
+			emitKind := outerleaf.EntryKindInline
 			if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
-				kind = outerleaf.EntryKindBlobRef
+				emitKind = outerleaf.EntryKindBlobRef
 			}
-			out = append(out, outerleaf.TypedEntry{Key: keyCopy, Kind: kind, Value: valCopy})
-			continue
+			out = append(out, outerleaf.TypedEntry{Key: keyCopy, Kind: emitKind, Value: valCopy})
+			return nil
 		}
 		if p.lookup != nil {
-			if mut, ok := p.lookup(ent.Key); ok {
+			if mut, ok := p.lookup(key); ok {
 				switch mut.kind {
 				case fencePendingMutationDelete:
-					continue
+					return nil
 				}
 			}
 		}
-
-		keyCopy := append([]byte(nil), ent.Key...)
+		keyCopy := append([]byte(nil), key...)
 		next := outerleaf.TypedEntry{
 			Key:     keyCopy,
-			Kind:    ent.Kind,
-			BlobPtr: ent.BlobPtr,
+			Kind:    kind,
+			BlobPtr: ptr,
 		}
-		if ent.Kind == outerleaf.EntryKindInline && len(ent.Value) > 0 {
-			next.Value = append([]byte(nil), ent.Value...)
+		if kind == outerleaf.EntryKindInline && len(value) > 0 {
+			next.Value = append([]byte(nil), value...)
 		}
 		out = append(out, next)
+		return nil
+	}); err != nil {
+		return nil, nil, false, err
+	}
+	if len(out) == 0 && len(plan.sets) == 0 {
+		return nil, nil, false, nil
 	}
 
 	for i := range plan.sets {
 		set := plan.sets[i]
-		if _, ok := seen[string(set.key)]; ok {
+		if seen != nil {
+			if _, ok := seen[string(set.key)]; ok {
+				continue
+			}
+		}
+		if len(set.key) == 0 {
 			continue
 		}
 		keyCopy := append([]byte(nil), set.key...)
@@ -4373,6 +4382,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			if len(ptrs) != len(groups) {
 				return errors.New("cachingdb: deferred inline pointer group/pointer count mismatch")
 			}
+			for i := range ptrs {
+				if !page.IsValueLogFileID(ptrs[i].FileID) {
+					return fmt.Errorf("cachingdb: deferred inline pointer invalid before publish idx=%d chunk=[%d,%d) ptr=%+v", i, chunkStart, chunkEnd, ptrs[i])
+				}
+			}
 			for i := range groups {
 				basePtr := ptrs[i]
 				ptr := basePtr
@@ -4452,14 +4466,12 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 								}
 							}
 							putValueLogEligible(unresolved)
-							putValueLogPtrs(ptrs)
 							continue
 						}
 						if len(unresolved) > 0 {
 							emitWholeGroup = true
 						} else {
 							putValueLogEligible(unresolved)
-							putValueLogPtrs(ptrs)
 							continue
 						}
 						putValueLogEligible(unresolved)
@@ -11814,6 +11826,9 @@ func (db *DB) Checkpoint() error {
 
 	// Flush all queued memtables with backend sync.
 	db.flushAllLocked(true)
+	if bgErr := db.backgroundError(); bgErr != nil {
+		return bgErr
+	}
 
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
@@ -12573,6 +12588,11 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 
 	shard.mu.Lock()
 	if usePointer {
+		if !page.IsValueLogFileID(ptr.FileID) {
+			shard.mu.Unlock()
+			db.writeMu.RUnlock()
+			return fmt.Errorf("cachingdb: set produced invalid value-log pointer key=%q ptr=%+v", key, ptr)
+		}
 		memVal := []byte(nil)
 		if !db.memtableValueLogPointers {
 			memVal = value
@@ -18360,6 +18380,11 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 							shard.mem.DeleteSteal(op.Key)
 						} else {
 							if op.IsPtr {
+								if !page.IsValueLogFileID(op.ValuePtr.FileID) {
+									shard.mu.Unlock()
+									b.db.writeMu.RUnlock()
+									return fmt.Errorf("cachingdb: batch produced invalid value-log pointer key=%q ptr=%+v", op.Key, op.ValuePtr)
+								}
 								memVal := []byte(nil)
 								if !b.db.memtableValueLogPointers {
 									memVal = op.Value
@@ -18384,6 +18409,11 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						shard.mem.DeleteSteal(op.Key)
 					} else {
 						if op.IsPtr {
+							if !page.IsValueLogFileID(op.ValuePtr.FileID) {
+								shard.mu.Unlock()
+								b.db.writeMu.RUnlock()
+								return fmt.Errorf("cachingdb: batch produced invalid value-log pointer key=%q ptr=%+v", op.Key, op.ValuePtr)
+							}
 							memVal := []byte(nil)
 							if !b.db.memtableValueLogPointers {
 								memVal = op.Value
