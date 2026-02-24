@@ -1054,6 +1054,8 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_generation.gc.deleted_segments",
 		"treedb.cache.vlog_generation.gc.deleted_bytes",
 		"treedb.cache.vlog_generation.gc.runs",
+		"treedb.cache.vlog_generation.vacuum.runs",
+		"treedb.cache.vlog_generation.vacuum.failures",
 		"treedb.cache.vlog_generation.remap.successes",
 		"treedb.cache.vlog_generation.remap.failures",
 		"treedb.cache.v2_fenceptr.deferred_candidates",

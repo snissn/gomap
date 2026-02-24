@@ -5568,6 +5568,10 @@ type backendValueLogGCer interface {
 	ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
 }
 
+type backendIndexVacuumer interface {
+	VacuumIndexOnline(ctx context.Context) error
+}
+
 type Options struct {
 	FlushThreshold int64
 
@@ -6093,6 +6097,9 @@ type DB struct {
 	vlogGenerationGCSegmentsDeleted    atomic.Uint64
 	vlogGenerationGCBytesDeleted       atomic.Uint64
 	vlogGenerationGCRuns               atomic.Uint64
+	vlogGenerationVacuumRuns           atomic.Uint64
+	vlogGenerationVacuumFailures       atomic.Uint64
+	vlogGenerationLastVacuumUnixNano   atomic.Int64
 	vlogGenerationChurnBytes           atomic.Uint64
 	vlogGenerationSchedulerState       atomic.Uint32
 	vlogGenerationLastReason           atomic.Uint32
@@ -6175,12 +6182,16 @@ const (
 	vlogGenerationReasonStaleRatio
 	vlogGenerationReasonChurn
 	vlogGenerationReasonPeriodicGC
+	vlogGenerationReasonPostRewriteVacuum
 )
 
 const (
 	vlogGenerationLoopInterval = 1 * time.Second
 	vlogGenerationGCEvery      = 5
 	vlogGenerationGCMinBytes   = int64(1 << 20)
+	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
+	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
+	vlogGenerationVacuumMinInterval         = 5 * time.Minute
 )
 
 func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
@@ -7962,6 +7973,8 @@ func vlogGenerationReasonString(v uint32) string {
 		return "churn"
 	case vlogGenerationReasonPeriodicGC:
 		return "periodic_gc"
+	case vlogGenerationReasonPostRewriteVacuum:
+		return "post_rewrite_vacuum"
 	default:
 		return "unknown"
 	}
@@ -11915,6 +11928,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			if stats.RecordsCopied > 0 {
 				db.vlogGenerationRemapSuccesses.Add(uint64(stats.RecordsCopied))
 			}
+			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
 		}
 	}
 
@@ -11944,6 +11958,53 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if gcStats.BytesDeleted > 0 {
 		db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
 	}
+}
+
+func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
+	if db == nil || db.valueLogGenerationPolicy == 0 {
+		return
+	}
+	vacuumer, ok := db.backend.(backendIndexVacuumer)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	if !db.shouldRunVlogGenerationIndexVacuum(rewriteBytesIn, now) {
+		return
+	}
+	db.vlogGenerationLastReason.Store(vlogGenerationReasonPostRewriteVacuum)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	err := vacuumer.VacuumIndexOnline(ctx)
+	cancel()
+	if err != nil {
+		db.vlogGenerationVacuumFailures.Add(1)
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: generational index vacuum: %w", err))
+		}
+		return
+	}
+	db.vlogGenerationVacuumRuns.Add(1)
+	db.vlogGenerationLastVacuumUnixNano.Store(now.UnixNano())
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+}
+
+func (db *DB) shouldRunVlogGenerationIndexVacuum(rewriteBytesIn int64, now time.Time) bool {
+	if db == nil || db.valueLogGenerationPolicy == 0 {
+		return false
+	}
+	if rewriteBytesIn < vlogGenerationVacuumTriggerRewriteBytes {
+		return false
+	}
+	last := db.vlogGenerationLastVacuumUnixNano.Load()
+	if last > 0 {
+		lastAt := time.Unix(0, last)
+		if now.Sub(lastAt) < vlogGenerationVacuumMinInterval {
+			return false
+		}
+	}
+	return true
 }
 
 func (db *DB) shouldRunVlogGenerationGC(retained valueLogRetainedGenerationStats, reclaimable int64, churnBps int64) bool {
@@ -16584,6 +16645,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
+	stats["treedb.cache.vlog_generation.vacuum.runs"] = fmt.Sprintf("%d", db.vlogGenerationVacuumRuns.Load())
+	stats["treedb.cache.vlog_generation.vacuum.failures"] = fmt.Sprintf("%d", db.vlogGenerationVacuumFailures.Load())
+	stats["treedb.cache.vlog_generation.vacuum.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastVacuumUnixNano.Load())
 	stats["treedb.cache.vlog_generation.remap.successes"] = fmt.Sprintf("%d", db.vlogGenerationRemapSuccesses.Load())
 	stats["treedb.cache.vlog_generation.remap.failures"] = fmt.Sprintf("%d", db.vlogGenerationRemapFailures.Load())
 	stats["treedb.cache.vlog_writev.syscalls"] = fmt.Sprintf("%d", rawWritevSyscalls)

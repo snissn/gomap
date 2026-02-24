@@ -1,6 +1,9 @@
 package caching
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestShouldRunVlogGenerationRewrite_TotalBytes(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerBytes: 100}
@@ -77,5 +80,23 @@ func TestShouldRunVlogGenerationGC_ChurnDriven(t *testing.T) {
 	run := db.shouldRunVlogGenerationGC(valueLogRetainedGenerationStats{}, 0, 1<<19)
 	if !run {
 		t.Fatalf("expected gc to trigger on churn threshold")
+	}
+}
+
+func TestShouldRunVlogGenerationIndexVacuum_Threshold(t *testing.T) {
+	db := &DB{valueLogGenerationPolicy: 1}
+	ok := db.shouldRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes, time.Now())
+	if !ok {
+		t.Fatalf("expected index vacuum at rewrite threshold")
+	}
+}
+
+func TestShouldRunVlogGenerationIndexVacuum_Cooldown(t *testing.T) {
+	now := time.Now()
+	db := &DB{valueLogGenerationPolicy: 1}
+	db.vlogGenerationLastVacuumUnixNano.Store(now.Add(-vlogGenerationVacuumMinInterval / 2).UnixNano())
+	ok := db.shouldRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes, now)
+	if ok {
+		t.Fatalf("expected index vacuum to be blocked by cooldown")
 	}
 }
