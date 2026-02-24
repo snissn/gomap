@@ -3175,6 +3175,11 @@ func (p *fenceAnchorPromoter) maybeRematerializeFallbackMutation(mutationKey []b
 			p.deleteRematerializedBySource[sourcePtr] = struct{}{}
 			return nil
 		}
+		if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+			// Route mode must never persist per-key exact fallback rows.
+			// When block rewrite cannot proceed, fail instead of rematerializing.
+			return fmt.Errorf("cachingdb: v1_leaflog_route requires fallback block rewrite for key %q", mutationKey)
+		}
 		if !allowExactFallback {
 			return fmt.Errorf("cachingdb: v1_leaflog requires fallback block rewrite for key %q", mutationKey)
 		}
