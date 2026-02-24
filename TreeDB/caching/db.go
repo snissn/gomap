@@ -6201,7 +6201,7 @@ type memtableView struct {
 }
 
 const maxAppendOnlyMemLeases = 256
-const appendOnlyEstimatedBytesPerEntryDeferredFence = 96
+const appendOnlyEstimatedBytesPerEntryDeferredFence = 128
 
 func updateInt64Max(dst *atomic.Int64, value int64) {
 	for {
