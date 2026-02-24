@@ -152,6 +152,8 @@ func normalizeIndexOuterLeafMode(mode string) string {
 		return IndexOuterLeafModeV1LeafLog
 	case IndexOuterLeafModeV1LeafLogLegacy:
 		return IndexOuterLeafModeV1LeafLogLegacy
+	case IndexOuterLeafModeV1LeafLogRoute:
+		return IndexOuterLeafModeV1LeafLogRoute
 	case IndexOuterLeafModeV2BlockPtr:
 		return IndexOuterLeafModeV2BlockPtr
 	case IndexOuterLeafModeV2FencePtr:
@@ -237,6 +239,10 @@ const (
 	// IndexOuterLeafModeV1LeafLogLegacy preserves legacy exact-key v1_leaflog
 	// semantics (one leaf entry per user key) for compatibility/bisect.
 	IndexOuterLeafModeV1LeafLogLegacy = "v1_leaflog_legacy"
+	// IndexOuterLeafModeV1LeafLogRoute is an explicit mode surface for the
+	// non-fence routing-only design (routing rows in index + leaf blocks in vlog).
+	// It stores plain (non-fence-marked) directory anchors in the index.
+	IndexOuterLeafModeV1LeafLogRoute = "v1_leaflog_route"
 	// IndexOuterLeafModeV2BlockPtr enables the outer-leaf block-pointer payload
 	// format. Values are encoded as key+value blocks in the value log and index
 	// leaves continue to store pointers.
@@ -547,6 +553,8 @@ type Options struct {
 	// - "v1": existing per-key leaf entries
 	// - "v1_leaflog": routing-style leaf-anchor contract (current Step 2 behavior)
 	// - "v1_leaflog_legacy": legacy exact-key compatibility mode
+	// - "v1_leaflog_route": explicit non-fence routing-only mode name
+	//   (plain anchor pointers; intended for routing-only index layouts)
 	// - "v2_blockptr": pointer payloads encode key+value outer-leaf blocks
 	// - "v2_fenceptr": fence-key-only index entries with outer block payloads
 	//
@@ -938,7 +946,7 @@ func validateOptions(opts Options) error {
 	}
 	indexOuterLeafMode := normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
 	switch indexOuterLeafMode {
-	case IndexOuterLeafModeV1, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogLegacy, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
+	case IndexOuterLeafModeV1, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogLegacy, IndexOuterLeafModeV1LeafLogRoute, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
 	default:
 		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
 	}

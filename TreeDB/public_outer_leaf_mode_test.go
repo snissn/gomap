@@ -30,6 +30,10 @@ func TestNormalizePublicOuterLeafMode_CanonicalizesLeafLogModeCasing(t *testing.
 			in:   " V1_LEAFLOG_LEGACY ",
 			want: IndexOuterLeafModeV1LeafLogLegacy,
 		},
+		{
+			in:   " V1_LEAFLOG_ROUTE ",
+			want: IndexOuterLeafModeV1LeafLogRoute,
+		},
 	}
 	for _, tc := range tests {
 		if got := normalizePublicOuterLeafMode(tc.in); got != tc.want {
@@ -67,6 +71,22 @@ func TestOpen_V1LeafLogMixedCase_StatsModeCanonicalized(t *testing.T) {
 	stats := db.Stats()
 	if got := stats["treedb.index.outer_leaf_mode"]; got != IndexOuterLeafModeV1LeafLog {
 		t.Fatalf("treedb.index.outer_leaf_mode=%q want %q", got, IndexOuterLeafModeV1LeafLog)
+	}
+}
+
+func TestOpen_V1LeafLogRouteMixedCase_StatsModeCanonicalized(t *testing.T) {
+	db, err := Open(Options{
+		Dir:                t.TempDir(),
+		IndexOuterLeafMode: " V1_LEAFLOG_ROUTE ",
+	})
+	if err != nil {
+		t.Fatalf("open mixed-case v1_leaflog_route: %v", err)
+	}
+	defer db.Close()
+
+	stats := db.Stats()
+	if got := stats["treedb.index.outer_leaf_mode"]; got != IndexOuterLeafModeV1LeafLogRoute {
+		t.Fatalf("treedb.index.outer_leaf_mode=%q want %q", got, IndexOuterLeafModeV1LeafLogRoute)
 	}
 }
 

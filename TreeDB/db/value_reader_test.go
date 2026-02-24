@@ -178,6 +178,46 @@ func TestValueReader_FenceLookupScopedForV1LeafLog(t *testing.T) {
 	}
 }
 
+func TestValueReader_FenceLookupScopedForV1LeafLogRoute(t *testing.T) {
+	r := newValueReader(nil, outerleaf.ModeV1LeafLogRoute, false, nil, nil)
+	defer (&r).releaseDecodeContext()
+
+	if !r.KeyAwareEnabled() {
+		t.Fatalf("v1_leaflog_route should keep key-aware outer-leaf reads enabled")
+	}
+	if !r.FenceLookupEnabled() {
+		t.Fatalf("v1_leaflog_route should enable fence lookup mode")
+	}
+	if r.FenceLookupGlobalEnabled() {
+		t.Fatalf("v1_leaflog_route must disable global fallback lookups")
+	}
+	if !r.FenceLookupSingleCandidateEnabled() {
+		t.Fatalf("v1_leaflog_route must probe only one predecessor candidate")
+	}
+
+	base := page.ValuePtr{
+		FileID: page.ValueLogFileID(7),
+		Offset: 123,
+		Length: 4096,
+	}
+	if !r.FencePointerLikelyBlock(base) {
+		t.Fatalf("v1_leaflog_route should classify plain pointers as anchor candidates")
+	}
+
+	grouped := base
+	grouped.Length = page.ValuePtrMarkGrouped(base.Length, 3)
+	if !r.FencePointerLikelyBlock(grouped) {
+		t.Fatalf("v1_leaflog_route should classify grouped pointers as anchor candidates")
+	}
+
+	// Route mode should remain tolerant of legacy/accidental fence-marked
+	// pointers on read classification, while route writers emit plain anchors.
+	fence := page.ValuePtrMarkFenceOuter(base)
+	if !r.FencePointerLikelyBlock(fence) {
+		t.Fatalf("v1_leaflog_route should classify explicitly fenced pointers as anchor candidates")
+	}
+}
+
 func TestValueReader_FenceLookupDisabledForV1LeafLogLegacy(t *testing.T) {
 	r := newValueReader(nil, outerleaf.ModeV1LeafLogLegacy, false, nil, nil)
 	defer (&r).releaseDecodeContext()

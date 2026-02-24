@@ -63,7 +63,11 @@ func TestWALOffCompressionActivatesDictBeforeSteady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runKVBench failed: %v", err)
 	}
-	if time.Since(start) > 30*time.Second {
+	maxElapsed := 30 * time.Second
+	if raceEnabled {
+		maxElapsed = 3 * time.Minute
+	}
+	if time.Since(start) > maxElapsed {
 		t.Fatalf("bench took too long; dict activation should not time out pre-steady (elapsed=%s)", time.Since(start))
 	}
 

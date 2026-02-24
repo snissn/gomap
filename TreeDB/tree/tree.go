@@ -500,14 +500,16 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 						Flags: 0,
 					}, nil
 				}
-				if val, ok, err := t.lookupFenceValueViewGlobal(key); err != nil {
-					return node.LeafEntry{}, err
-				} else if ok {
-					return node.LeafEntry{
-						Key:   append([]byte(nil), key...),
-						Value: val,
-						Flags: 0,
-					}, nil
+				if t.fenceLookupGlobal {
+					if val, ok, err := t.lookupFenceValueViewGlobal(key); err != nil {
+						return node.LeafEntry{}, err
+					} else if ok {
+						return node.LeafEntry{
+							Key:   append([]byte(nil), key...),
+							Value: val,
+							Flags: 0,
+						}, nil
+					}
 				}
 				return node.LeafEntry{}, ErrKeyNotFound
 			}
@@ -670,7 +672,10 @@ func (t *Tree) LookupFencePointerSource(key []byte) (page.ValuePtr, bool, error)
 			if ok {
 				return ptr, true, nil
 			}
-			return t.lookupFencePointerSourceGlobalPtr(key)
+			if t.fenceLookupGlobal {
+				return t.lookupFencePointerSourceGlobalPtr(key)
+			}
+			return page.ValuePtr{}, false, nil
 
 		default:
 			return page.ValuePtr{}, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
@@ -741,7 +746,10 @@ func (t *Tree) LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool
 			if ok {
 				return srcKey, ptr, true, nil
 			}
-			return t.lookupFencePointerSourceGlobal(key)
+			if t.fenceLookupGlobal {
+				return t.lookupFencePointerSourceGlobal(key)
+			}
+			return nil, page.ValuePtr{}, false, nil
 
 		default:
 			return nil, page.ValuePtr{}, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
@@ -1514,10 +1522,12 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						// Value already appended to dst by fence append path.
 						return val, page.ValuePtr{}, 0, true, nil
 					}
-					if val, ok, err := t.lookupFenceValueViewAppendGlobal(key, dst); err != nil {
-						return nil, page.ValuePtr{}, 0, false, err
-					} else if ok {
-						return val, page.ValuePtr{}, 0, true, nil
+					if t.fenceLookupGlobal {
+						if val, ok, err := t.lookupFenceValueViewAppendGlobal(key, dst); err != nil {
+							return nil, page.ValuePtr{}, 0, false, err
+						} else if ok {
+							return val, page.ValuePtr{}, 0, true, nil
+						}
 					}
 				} else if val, ok, err := t.lookupFenceValueView(&n, idx, key); err != nil {
 					return nil, page.ValuePtr{}, 0, false, err
@@ -1525,10 +1535,12 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					// Fence-only mode resolves user keys from outer blocks.
 					// Return as inline to avoid a second pointer lookup in callers.
 					return val, page.ValuePtr{}, 0, false, nil
-				} else if val, ok, err := t.lookupFenceValueViewGlobal(key); err != nil {
-					return nil, page.ValuePtr{}, 0, false, err
-				} else if ok {
-					return val, page.ValuePtr{}, 0, false, nil
+				} else if t.fenceLookupGlobal {
+					if val, ok, err := t.lookupFenceValueViewGlobal(key); err != nil {
+						return nil, page.ValuePtr{}, 0, false, err
+					} else if ok {
+						return val, page.ValuePtr{}, 0, false, nil
+					}
 				}
 				return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
 			}

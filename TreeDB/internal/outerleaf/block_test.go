@@ -22,6 +22,25 @@ func pseudoRandomBytes(n int) []byte {
 	return out
 }
 
+func TestModeEnabled(t *testing.T) {
+	cases := []struct {
+		mode string
+		want bool
+	}{
+		{mode: ModeV1LeafLog, want: true},
+		{mode: ModeV1LeafLogLegacy, want: true},
+		{mode: ModeV1LeafLogRoute, want: true},
+		{mode: ModeV2BlockPtr, want: true},
+		{mode: ModeV2FencePtr, want: true},
+		{mode: "unknown", want: false},
+	}
+	for _, tc := range cases {
+		if got := ModeEnabled(tc.mode); got != tc.want {
+			t.Fatalf("ModeEnabled(%q)=%v want %v", tc.mode, got, tc.want)
+		}
+	}
+}
+
 func TestEncodeDecodeSingleRoundTrip(t *testing.T) {
 	codecs := []struct {
 		name  string

@@ -306,9 +306,11 @@ func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
 	db := &DB{valueLogThreshold: page.DefaultInlineThreshold}
 	const reserveHint = 7
 
-	if err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, false, 0, nil, nil); err != nil {
+	if emitted, err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, false, 0, nil, nil); err != nil {
 		_ = iter.Close()
 		t.Fatalf("flushDeferredValueLogMemtable: %v", err)
+	} else if emitted != 2 {
+		t.Fatalf("flushDeferredValueLogMemtable emitted=%d want=2", emitted)
 	}
 	if err := iter.Close(); err != nil {
 		t.Fatalf("iterator close: %v", err)
