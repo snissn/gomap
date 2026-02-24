@@ -2355,6 +2355,15 @@ func (plan *fenceSourceRewritePlan) containsKey(key []byte) bool {
 	return lo < len(plan.sourceKeys) && bytes.Equal(plan.sourceKeys[lo], key)
 }
 
+func (plan *fenceSourceRewritePlan) withinSourceRange(key []byte) bool {
+	if plan == nil || len(key) == 0 || len(plan.sourceKeys) == 0 {
+		return false
+	}
+	first := plan.sourceKeys[0]
+	last := plan.sourceKeys[len(plan.sourceKeys)-1]
+	return bytes.Compare(key, first) >= 0 && bytes.Compare(key, last) <= 0
+}
+
 func (p *fenceAnchorPromoter) clearOverlapRewritePlans() {
 	if p == nil {
 		return
@@ -2615,10 +2624,10 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 		plan.sourceKeyCount = len(keys)
 		plan.sourceKeys = keys
 	}
-	// Queue overlap rewrites only when the selected source block actually
-	// contains this key. Otherwise, fall back to direct unresolved publishing so
-	// we never rewrite an unrelated block and leave stale values reachable.
-	if !plan.containsKey(key) {
+	// Queue overlap rewrites when key is in-source OR falls inside the source
+	// key range (in-range inserts). Keys outside the source range must fall back
+	// to direct unresolved publishing to avoid rewriting unrelated blocks.
+	if !plan.containsKey(key) && !plan.withinSourceRange(key) {
 		return false, sourcePtr, true, nil
 	}
 	plan.setValue(key, value)
@@ -3945,7 +3954,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 						}
 					} else {
 						for _, srcPos := range unresolved {
-							if err := emitKey(ptrKeys[srcPos], exactPtr); err != nil {
+							if err := emitKey(ptrKeys[srcPos], ptr); err != nil {
 								putValueLogEligible(unresolved)
 								return 0, err
 							}
@@ -4384,7 +4393,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							} else {
 								for _, srcPos := range unresolved {
 									key := ptrKeys[srcPos]
-									if err := emitPointerForce(key, exactPtr); err != nil {
+									if err := emitPointerForce(key, ptr); err != nil {
 										putValueLogEligible(unresolved)
 										putValueLogPtrs(ptrs)
 										return err
