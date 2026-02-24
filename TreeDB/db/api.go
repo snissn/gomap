@@ -449,6 +449,21 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.v1_leaflog.anchor_block_decodes"] = "0"
 	stats["treedb.v1_leaflog.anchor_misses"] = "0"
 	stats["treedb.v1_leaflog.anchor_max_probes"] = "0"
+	// PR1 generational scaffolding (backend/read-only path). Cached mode exports
+	// richer live counters; backend path reports stable defaults.
+	stats["treedb.vlog_generation.enabled"] = "false"
+	stats["treedb.vlog_generation.policy"] = "0"
+	stats["treedb.vlog_generation.scheduler_state"] = "disabled"
+	stats["treedb.vlog_generation.bytes.live.total"] = "0"
+	stats["treedb.vlog_generation.bytes.stale.total"] = "0"
+	stats["treedb.vlog_generation.bytes.total.total"] = "0"
+	stats["treedb.vlog_generation.segments.total"] = "0"
+	stats["treedb.vlog_generation.rewrite.bytes_in"] = "0"
+	stats["treedb.vlog_generation.rewrite.bytes_out"] = "0"
+	stats["treedb.vlog_generation.gc.deleted_segments"] = "0"
+	stats["treedb.vlog_generation.gc.deleted_bytes"] = "0"
+	stats["treedb.vlog_generation.remap.successes"] = "0"
+	stats["treedb.vlog_generation.remap.failures"] = "0"
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()

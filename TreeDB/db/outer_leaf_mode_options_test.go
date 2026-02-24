@@ -273,3 +273,56 @@ func TestOpen_ValueLogOuterLeafBlobThresholdBytes_NegativeRejected(t *testing.T)
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestOpen_ValueLogGenerationalPolicy_InvalidRejected(t *testing.T) {
+	_, err := Open(Options{
+		Dir: t.TempDir(),
+		ValueLog: ValueLogOptions{
+			Generational: ValueLogGenerationConfig{
+				Policy: ValueLogGenerationPolicy(99),
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "generation policy") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOpen_ValueLogGenerational_NegativeHotTargetRejected(t *testing.T) {
+	_, err := Open(Options{
+		Dir: t.TempDir(),
+		ValueLog: ValueLogOptions{
+			Generational: ValueLogGenerationConfig{
+				Policy:                ValueLogGenerationHotWarmCold,
+				HotSegmentTargetBytes: -1,
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "hot segment target bytes") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestOpen_ValueLogGenerational_NegativeRewriteBudgetRejected(t *testing.T) {
+	_, err := Open(Options{
+		Dir: t.TempDir(),
+		ValueLog: ValueLogOptions{
+			Generational: ValueLogGenerationConfig{
+				Policy:                   ValueLogGenerationHotWarmCold,
+				RewriteBudgetBytesPerSec: -1,
+			},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "rewrite budget bytes/sec") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

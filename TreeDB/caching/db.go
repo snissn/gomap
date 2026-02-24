@@ -2633,7 +2633,49 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 	return true, sourcePtr, true, nil
 }
 
-func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan) ([]byte, []byte, bool, error) {
+func (p *fenceAnchorPromoter) materializeRewriteBlobRefs(entries []outerleaf.TypedEntry, lane *lane, dictID uint64) error {
+	if p == nil || p.db == nil || len(entries) == 0 {
+		return nil
+	}
+	pending := make([]int, 0, len(entries))
+	records := getValueLogRecordsCap(len(entries))
+	defer putValueLogRecordsNoClear(records)
+	for i := range entries {
+		if entries[i].Kind != outerleaf.EntryKindBlobRef {
+			continue
+		}
+		if entries[i].BlobPtr != (page.ValuePtr{}) || len(entries[i].Value) == 0 {
+			continue
+		}
+		pending = append(pending, i)
+		records = append(records, valuelog.Record{Value: entries[i].Value})
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	if lane == nil {
+		return errors.New("cachingdb: missing lane for overlap rewrite blob refs")
+	}
+	startRID := p.db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
+	for i := range records {
+		records[i].RID = startRID + uint64(i)
+	}
+	ptrs, err := p.db.appendValueLog(lane, dictID, nil, records, journalDurabilityFlush)
+	if err != nil {
+		return err
+	}
+	defer putValueLogPtrs(ptrs)
+	if len(ptrs) != len(pending) {
+		return fmt.Errorf("cachingdb: overlap rewrite blob-ref pointer mismatch expected=%d got=%d", len(pending), len(ptrs))
+	}
+	for i, pos := range pending {
+		entries[pos].BlobPtr = ptrs[i]
+		entries[pos].Value = nil
+	}
+	return nil
+}
+
+func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan, lane *lane, dictID uint64) ([]byte, []byte, bool, error) {
 	if p == nil || p.db == nil || plan == nil || len(plan.sourceKey) == 0 {
 		return nil, nil, false, nil
 	}
@@ -2642,21 +2684,28 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 			return nil, nil, true, nil
 		}
 		out := make([]outerleaf.TypedEntry, 0, len(plan.sets))
-		totalInlineBytes := 0
 		for i := range plan.sets {
 			set := plan.sets[i]
 			keyCopy := append([]byte(nil), set.key...)
 			valCopy := append([]byte(nil), set.value...)
-			out = append(out, outerleaf.TypedEntry{
-				Key:   keyCopy,
-				Kind:  outerleaf.EntryKindInline,
-				Value: valCopy,
-			})
-			totalInlineBytes += len(valCopy)
+			kind := outerleaf.EntryKindInline
+			if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
+				kind = outerleaf.EntryKindBlobRef
+			}
+			out = append(out, outerleaf.TypedEntry{Key: keyCopy, Kind: kind, Value: valCopy})
 		}
 		sort.Slice(out, func(i, j int) bool {
 			return bytes.Compare(out[i].Key, out[j].Key) < 0
 		})
+		if err := p.materializeRewriteBlobRefs(out, lane, dictID); err != nil {
+			return nil, nil, false, err
+		}
+		totalInlineBytes := 0
+		for i := range out {
+			if out[i].Kind == outerleaf.EntryKindInline {
+				totalInlineBytes += len(out[i].Value)
+			}
+		}
 		enc := getOuterLeafEncoder()
 		codec := p.db.selectOuterLeafBlockCodec(totalInlineBytes, len(out))
 		payload, err := enc.EncodeTypedEntriesAssumeSorted(nil, out, codec, p.db.outerLeafBlockRestart)
@@ -2695,7 +2744,6 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 
 	out := make([]outerleaf.TypedEntry, 0, len(typed)+len(plan.sets))
 	seen := make(map[string]struct{}, len(typed)+len(plan.sets))
-	totalInlineBytes := 0
 	for i := range typed {
 		ent := typed[i]
 		keyStr := string(ent.Key)
@@ -2706,12 +2754,11 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		if val, ok := plan.lookupValue(ent.Key); ok {
 			keyCopy := append([]byte(nil), ent.Key...)
 			valCopy := append([]byte(nil), val...)
-			out = append(out, outerleaf.TypedEntry{
-				Key:   keyCopy,
-				Kind:  outerleaf.EntryKindInline,
-				Value: valCopy,
-			})
-			totalInlineBytes += len(valCopy)
+			kind := outerleaf.EntryKindInline
+			if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
+				kind = outerleaf.EntryKindBlobRef
+			}
+			out = append(out, outerleaf.TypedEntry{Key: keyCopy, Kind: kind, Value: valCopy})
 			continue
 		}
 		if p.lookup != nil {
@@ -2731,7 +2778,6 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		}
 		if ent.Kind == outerleaf.EntryKindInline && len(ent.Value) > 0 {
 			next.Value = append([]byte(nil), ent.Value...)
-			totalInlineBytes += len(next.Value)
 		}
 		out = append(out, next)
 	}
@@ -2743,12 +2789,11 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		}
 		keyCopy := append([]byte(nil), set.key...)
 		valCopy := append([]byte(nil), set.value...)
-		out = append(out, outerleaf.TypedEntry{
-			Key:   keyCopy,
-			Kind:  outerleaf.EntryKindInline,
-			Value: valCopy,
-		})
-		totalInlineBytes += len(valCopy)
+		kind := outerleaf.EntryKindInline
+		if len(valCopy) > p.db.valueLogThresholdForKey(keyCopy) {
+			kind = outerleaf.EntryKindBlobRef
+		}
+		out = append(out, outerleaf.TypedEntry{Key: keyCopy, Kind: kind, Value: valCopy})
 	}
 
 	if len(out) == 0 {
@@ -2757,6 +2802,15 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 	sort.Slice(out, func(i, j int) bool {
 		return bytes.Compare(out[i].Key, out[j].Key) < 0
 	})
+	if err := p.materializeRewriteBlobRefs(out, lane, dictID); err != nil {
+		return nil, nil, false, err
+	}
+	totalInlineBytes := 0
+	for i := range out {
+		if out[i].Kind == outerleaf.EntryKindInline {
+			totalInlineBytes += len(out[i].Value)
+		}
+	}
 
 	enc := getOuterLeafEncoder()
 	codec := p.db.selectOuterLeafBlockCodec(totalInlineBytes, len(out))
@@ -2795,13 +2849,27 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 	}
 	pending := make([]overlapRewritePending, 0, len(order))
 	records := make([]valuelog.Record, 0, len(order))
+	preferredLane := -1
+	if p.db.deferredValueLogNeedsSingleLaneRegroup() {
+		preferredLane = 0
+	}
+	lane, err := p.db.pickLane(false, preferredLane)
+	if err != nil {
+		return err
+	}
+	dictID := uint64(0)
+	if p.db.dictStore != nil {
+		if id, err := p.db.currentDictID(context.Background()); err == nil {
+			dictID = id
+		}
+	}
 
 	for _, sourcePtr := range order {
 		plan := p.overlapRewriteBySource[sourcePtr]
 		if plan == nil {
 			continue
 		}
-		anchorKey, payload, removedAll, err := p.rewriteSourceFromPlan(plan)
+		anchorKey, payload, removedAll, err := p.rewriteSourceFromPlan(plan, lane, dictID)
 		if err != nil {
 			return err
 		}
@@ -2819,20 +2887,6 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 	}
 
 	if len(records) > 0 {
-		preferredLane := -1
-		if p.db.deferredValueLogNeedsSingleLaneRegroup() {
-			preferredLane = 0
-		}
-		lane, err := p.db.pickLane(false, preferredLane)
-		if err != nil {
-			return err
-		}
-		dictID := uint64(0)
-		if p.db.dictStore != nil {
-			if id, err := p.db.currentDictID(context.Background()); err == nil {
-				dictID = id
-			}
-		}
 		startRID := p.db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
 		for i := range records {
 			records[i].RID = startRID + uint64(i)
@@ -5051,10 +5105,27 @@ func (db *DB) valueLogRetained(path string) bool {
 }
 
 func (db *DB) valueLogRetainedStats() (segments int, bytes int64) {
+	stats := db.valueLogRetainedStatsDetailed()
+	return stats.SegmentsTotal, stats.BytesTotal
+}
+
+type valueLogRetainedGenerationStats struct {
+	SegmentsTotal int
+	SegmentsHot   int
+	SegmentsWarm  int
+	SegmentsCold  int
+	BytesTotal    int64
+	BytesHot      int64
+	BytesWarm     int64
+	BytesCold     int64
+}
+
+func (db *DB) valueLogRetainedStatsDetailed() valueLogRetainedGenerationStats {
+	var out valueLogRetainedGenerationStats
 	db.valueLogMu.Lock()
 	if len(db.valueLogRetain) == 0 {
 		db.valueLogMu.Unlock()
-		return 0, 0
+		return out
 	}
 	paths := make([]string, 0, len(db.valueLogRetain))
 	for path := range db.valueLogRetain {
@@ -5064,15 +5135,18 @@ func (db *DB) valueLogRetainedStats() (segments int, bytes int64) {
 
 	pathSizes := make(map[string]int64)
 	currentSizes := make(map[string]int64)
+	pathClasses := make(map[string]uint8)
 	if db.splitValueLogEnabled() {
 		for i := range db.lanes {
 			l := &db.lanes[i]
 			l.vlogMu.Lock()
 			for path, size := range l.vlogClosedSizes {
 				pathSizes[path] = size
+				pathClasses[path] = l.vlogGenerationClass
 			}
 			if l.vlogPath != "" {
 				currentSizes[l.vlogPath] = l.vlogLiveBytes.Load()
+				pathClasses[l.vlogPath] = l.vlogGenerationClass
 			}
 			l.vlogMu.Unlock()
 		}
@@ -5091,16 +5165,33 @@ func (db *DB) valueLogRetainedStats() (segments int, bytes int64) {
 	}
 
 	for _, path := range paths {
-		segments++
-		if size, ok := currentSizes[path]; ok {
-			bytes += size
-			continue
+		out.SegmentsTotal++
+		class := pathClasses[path]
+		switch class {
+		case vlogGenerationClassWarm:
+			out.SegmentsWarm++
+		case vlogGenerationClassCold:
+			out.SegmentsCold++
+		default:
+			out.SegmentsHot++
 		}
-		if size, ok := pathSizes[path]; ok {
-			bytes += size
+		size := int64(0)
+		if v, ok := currentSizes[path]; ok {
+			size = v
+		} else if v, ok := pathSizes[path]; ok {
+			size = v
+		}
+		out.BytesTotal += size
+		switch class {
+		case vlogGenerationClassWarm:
+			out.BytesWarm += size
+		case vlogGenerationClassCold:
+			out.BytesCold += size
+		default:
+			out.BytesHot += size
 		}
 	}
-	return segments, bytes
+	return out
 }
 
 func (db *DB) valueLogRetainedPaths() []string {
@@ -5370,7 +5461,59 @@ func (db *DB) laneForShardIndex(shardID int) int {
 	if shardID < 0 {
 		shardID = 0
 	}
+	if db.valueLogGenerationPolicy == 1 && len(db.valueLogHotLanes) > 0 {
+		return db.valueLogHotLanes[shardID%len(db.valueLogHotLanes)]
+	}
 	return shardID % len(db.lanes)
+}
+
+func (db *DB) rebuildGenerationLaneSets() {
+	if db == nil {
+		return
+	}
+	db.valueLogHotLanes = db.valueLogHotLanes[:0]
+	db.valueLogWarmLanes = db.valueLogWarmLanes[:0]
+	db.valueLogColdLanes = db.valueLogColdLanes[:0]
+	for i := range db.lanes {
+		switch db.lanes[i].vlogGenerationClass {
+		case vlogGenerationClassWarm:
+			db.valueLogWarmLanes = append(db.valueLogWarmLanes, i)
+		case vlogGenerationClassCold:
+			db.valueLogColdLanes = append(db.valueLogColdLanes, i)
+		default:
+			db.valueLogHotLanes = append(db.valueLogHotLanes, i)
+		}
+	}
+	if len(db.valueLogHotLanes) == 0 && len(db.lanes) > 0 {
+		db.valueLogHotLanes = append(db.valueLogHotLanes, 0)
+	}
+}
+
+func (db *DB) valueLogMaxSegmentBytesForLane(l *lane) int64 {
+	if db == nil {
+		return 0
+	}
+	// Legacy cap still applies when generation class targets are unset.
+	base := db.valueLogMaxSegmentBytes
+	if db.valueLogGenerationPolicy != 1 || l == nil {
+		return base
+	}
+	target := int64(0)
+	switch l.vlogGenerationClass {
+	case vlogGenerationClassWarm:
+		target = db.valueLogGenerationWarmTarget
+	case vlogGenerationClassCold:
+		target = db.valueLogGenerationColdTarget
+	default:
+		target = db.valueLogGenerationHotTarget
+	}
+	if target <= 0 {
+		return base
+	}
+	if base > 0 && base < target {
+		return base
+	}
+	return target
 }
 
 func (db *DB) shardExceedsLimit(shard *memShard, addBytes int64) bool {
@@ -5415,6 +5558,18 @@ type BackendDB interface {
 	Close() error
 	Print() error
 	Stats() map[string]string
+}
+
+type backendValueLogRewriter interface {
+	ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error)
+}
+
+type backendValueLogGCer interface {
+	ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
+}
+
+type backendIndexVacuumer interface {
+	VacuumIndexOnline(ctx context.Context) error
 }
 
 type Options struct {
@@ -5576,6 +5731,25 @@ type Options struct {
 	// (e.g. packed on-disk ValuePtr) that require value-log offsets stay within a
 	// smaller representable range.
 	ValueLogMaxSegmentBytes int64
+	// ValueLogGenerationPolicy selects generational mode:
+	// 0=off, 1=hot_warm_cold.
+	ValueLogGenerationPolicy uint8
+	// ValueLogGenerationHotSegmentTargetBytes configures hot segment target size.
+	ValueLogGenerationHotSegmentTargetBytes int64
+	// ValueLogGenerationWarmSegmentTargetBytes configures warm segment target size.
+	ValueLogGenerationWarmSegmentTargetBytes int64
+	// ValueLogGenerationColdSegmentTargetBytes configures cold segment target size.
+	ValueLogGenerationColdSegmentTargetBytes int64
+	// ValueLogRewriteBudgetBytesPerSec configures incremental rewrite byte budget.
+	ValueLogRewriteBudgetBytesPerSec int64
+	// ValueLogRewriteBudgetRecordsPerSec configures incremental rewrite record budget.
+	ValueLogRewriteBudgetRecordsPerSec int
+	// ValueLogRewriteTriggerStaleRatioPPM triggers rewrite by stale/live ratio.
+	ValueLogRewriteTriggerStaleRatioPPM uint32
+	// ValueLogRewriteTriggerTotalBytes triggers rewrite by retained bytes.
+	ValueLogRewriteTriggerTotalBytes int64
+	// ValueLogRewriteTriggerChurnPerSec triggers rewrite by churn rate.
+	ValueLogRewriteTriggerChurnPerSec int64
 	// ForceValueLogPointers stores all values out-of-line in the value log.
 	ForceValueLogPointers bool
 	// DisableReadChecksum skips CRC verification on value-log reads.
@@ -5765,7 +5939,19 @@ type DB struct {
 	valueLogIncompressibleHold     uint64
 	valueLogIncompressibleProbe    uint64
 	valueLogAutoPolicy             uint8
+	valueLogGenerationPolicy       uint8
+	valueLogGenerationHotTarget    int64
+	valueLogGenerationWarmTarget   int64
+	valueLogGenerationColdTarget   int64
+	valueLogRewriteBudgetBytes     int64
+	valueLogRewriteBudgetRecords   int
+	valueLogRewriteTriggerRatioPPM uint32
+	valueLogRewriteTriggerBytes    int64
+	valueLogRewriteTriggerChurn    int64
 	valueLogReader                 *valuelog.Manager
+	valueLogHotLanes               []int
+	valueLogWarmLanes              []int
+	valueLogColdLanes              []int
 	valueLogMu                     sync.Mutex
 	valueLogRetain                 map[string]struct{}
 	backendReadVlogDirtySeq        atomic.Uint64
@@ -5903,6 +6089,23 @@ type DB struct {
 	debugPtrDisabled                   atomic.Int64
 	routeLeaflogFallbackDirectAttempts atomic.Uint64
 	routeLeaflogFallbackDirectRewrites atomic.Uint64
+	vlogGenerationRemapSuccesses       atomic.Uint64
+	vlogGenerationRemapFailures        atomic.Uint64
+	vlogGenerationRewriteBytesIn       atomic.Uint64
+	vlogGenerationRewriteBytesOut      atomic.Uint64
+	vlogGenerationRewriteRuns          atomic.Uint64
+	vlogGenerationGCSegmentsDeleted    atomic.Uint64
+	vlogGenerationGCBytesDeleted       atomic.Uint64
+	vlogGenerationGCRuns               atomic.Uint64
+	vlogGenerationVacuumRuns           atomic.Uint64
+	vlogGenerationVacuumFailures       atomic.Uint64
+	vlogGenerationLastVacuumUnixNano   atomic.Int64
+	vlogGenerationChurnBytes           atomic.Uint64
+	vlogGenerationSchedulerState       atomic.Uint32
+	vlogGenerationLastReason           atomic.Uint32
+	vlogGenerationLastChurnBps         atomic.Int64
+	vlogGenerationLastChurnSampleBytes atomic.Uint64
+	vlogGenerationLastChurnSampleNS    atomic.Int64
 	bgErrMu                            sync.Mutex
 	bgErr                              error
 
@@ -5965,6 +6168,31 @@ type DB struct {
 	testOnVlogSync       func(laneID int)
 	testBeforeVlogUnlock func(laneID int)
 }
+
+const (
+	vlogGenerationSchedulerDisabled uint32 = iota
+	vlogGenerationSchedulerIdle
+	vlogGenerationSchedulerRunning
+	vlogGenerationSchedulerError
+)
+
+const (
+	vlogGenerationReasonNone uint32 = iota
+	vlogGenerationReasonTotalBytes
+	vlogGenerationReasonStaleRatio
+	vlogGenerationReasonChurn
+	vlogGenerationReasonPeriodicGC
+	vlogGenerationReasonPostRewriteVacuum
+)
+
+const (
+	vlogGenerationLoopInterval = 1 * time.Second
+	vlogGenerationGCEvery      = 5
+	vlogGenerationGCMinBytes   = int64(1 << 20)
+	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
+	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
+	vlogGenerationVacuumMinInterval         = 5 * time.Minute
+)
 
 func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
 	capEntries := db.flushBackendMaxEntries
@@ -6894,6 +7122,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if laneCount <= 0 {
 		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
 	}
+	if opts.ValueLogGenerationPolicy == 1 && laneCount < 3 {
+		laneCount = 3
+	}
 	// Temporarily remove the logic that increases laneCount based on maxLaneID
 	if maxLaneID+1 > laneCount {
 		laneCount = maxLaneID + 1
@@ -6922,6 +7153,39 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogMaxSegmentBytes := opts.ValueLogMaxSegmentBytes
 	if valueLogMaxSegmentBytes < 0 {
 		valueLogMaxSegmentBytes = 0
+	}
+	valueLogGenerationPolicy := opts.ValueLogGenerationPolicy
+	if valueLogGenerationPolicy > 1 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generation policy %d", valueLogGenerationPolicy)
+	}
+	valueLogGenerationHotTarget := opts.ValueLogGenerationHotSegmentTargetBytes
+	valueLogGenerationWarmTarget := opts.ValueLogGenerationWarmSegmentTargetBytes
+	valueLogGenerationColdTarget := opts.ValueLogGenerationColdSegmentTargetBytes
+	valueLogRewriteBudgetBytes := opts.ValueLogRewriteBudgetBytesPerSec
+	valueLogRewriteBudgetRecords := opts.ValueLogRewriteBudgetRecordsPerSec
+	valueLogRewriteTriggerRatioPPM := opts.ValueLogRewriteTriggerStaleRatioPPM
+	valueLogRewriteTriggerBytes := opts.ValueLogRewriteTriggerTotalBytes
+	valueLogRewriteTriggerChurn := opts.ValueLogRewriteTriggerChurnPerSec
+	if valueLogGenerationHotTarget < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational hot segment target bytes %d", valueLogGenerationHotTarget)
+	}
+	if valueLogGenerationWarmTarget < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational warm segment target bytes %d", valueLogGenerationWarmTarget)
+	}
+	if valueLogGenerationColdTarget < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational cold segment target bytes %d", valueLogGenerationColdTarget)
+	}
+	if valueLogRewriteBudgetBytes < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite budget bytes/sec %d", valueLogRewriteBudgetBytes)
+	}
+	if valueLogRewriteBudgetRecords < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite budget records/sec %d", valueLogRewriteBudgetRecords)
+	}
+	if valueLogRewriteTriggerBytes < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite trigger total bytes %d", valueLogRewriteTriggerBytes)
+	}
+	if valueLogRewriteTriggerChurn < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite trigger churn/sec %d", valueLogRewriteTriggerChurn)
 	}
 	valueLogRawWritevMinAvgBytes := opts.ValueLogRawWritevMinAvgBytes
 	if valueLogRawWritevMinAvgBytes < 0 {
@@ -6955,6 +7219,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	outerLeafBlockTargetOpt := opts.ValueLogOuterLeafBlockTargetBytes
 	if outerLeafBlockTargetOpt <= 0 && indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr {
 		outerLeafBlockTargetOpt = defaultOuterLeafFenceBlockTargetBytes
+	}
+	if outerLeafBlockTargetOpt <= 0 && indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+		// Route mode payload blocks benefit from larger grouping for compression
+		// density while keeping decode cost bounded in the hot read path.
+		outerLeafBlockTargetOpt = 8 << 10
 	}
 	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(outerLeafBlockTargetOpt)
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
@@ -7190,12 +7459,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes[i].id = i
 		lanes[i].walSeq = maxWALSeq[i]
 		lanes[i].vlogSeq = maxVlogSeq[i]
+		lanes[i].vlogGenerationClass = vlogGenerationClassHot
 		lanes[i].vlogCompressionSelector = newVlogCompressionSelectorWithSeed(
 			valueLogAutoPolicy,
 			uint64(valueLogIncompressibleHold),
 			uint64(valueLogIncompressibleProbe),
 			selectorSeedCodec,
 		)
+	}
+	if valueLogGenerationPolicy == 1 && len(lanes) >= 3 {
+		// Reserve one lane for warm and one for cold; remaining lanes serve hot.
+		lanes[1].vlogGenerationClass = vlogGenerationClassWarm
+		lanes[2].vlogGenerationClass = vlogGenerationClassCold
 	}
 	db := &DB{
 		dir:                                  walDir,
@@ -7252,6 +7527,15 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogIncompressibleHold:           uint64(valueLogIncompressibleHold),
 		valueLogIncompressibleProbe:          uint64(valueLogIncompressibleProbe),
 		valueLogAutoPolicy:                   uint8(valueLogAutoPolicy),
+		valueLogGenerationPolicy:             valueLogGenerationPolicy,
+		valueLogGenerationHotTarget:          valueLogGenerationHotTarget,
+		valueLogGenerationWarmTarget:         valueLogGenerationWarmTarget,
+		valueLogGenerationColdTarget:         valueLogGenerationColdTarget,
+		valueLogRewriteBudgetBytes:           valueLogRewriteBudgetBytes,
+		valueLogRewriteBudgetRecords:         valueLogRewriteBudgetRecords,
+		valueLogRewriteTriggerRatioPPM:       valueLogRewriteTriggerRatioPPM,
+		valueLogRewriteTriggerBytes:          valueLogRewriteTriggerBytes,
+		valueLogRewriteTriggerChurn:          valueLogRewriteTriggerChurn,
 		memtableValueLogPointers:             true,
 		valueLogReader:                       valueLogReader,
 		valueLogRetain:                       retained,
@@ -7296,6 +7580,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes:                 lanes,
 		flushLaneMu:           make([]sync.Mutex, len(lanes)),
 	}
+	db.rebuildGenerationLaneSets()
 	if db.indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
 		// Route mode must regroup key/value mutations into directory-backed
 		// outer-leaf blocks at flush time. Per-key pointer memtable rows can
@@ -7303,6 +7588,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.memtableValueLogPointers = false
 	}
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -7408,6 +7694,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Start background flusher
 	db.wg.Add(1)
 	go db.flushLoop()
+	db.startVlogGenerationLoop()
 
 	return db, nil
 }
@@ -7659,6 +7946,40 @@ func autoCheckpointReasonString(v uint32) string {
 		return "size"
 	case autoCheckpointModeForce:
 		return "force"
+	default:
+		return "unknown"
+	}
+}
+
+func vlogGenerationSchedulerStateString(v uint32) string {
+	switch v {
+	case vlogGenerationSchedulerDisabled:
+		return "disabled"
+	case vlogGenerationSchedulerIdle:
+		return "idle"
+	case vlogGenerationSchedulerRunning:
+		return "running"
+	case vlogGenerationSchedulerError:
+		return "error"
+	default:
+		return "unknown"
+	}
+}
+
+func vlogGenerationReasonString(v uint32) string {
+	switch v {
+	case vlogGenerationReasonNone:
+		return "none"
+	case vlogGenerationReasonTotalBytes:
+		return "total_bytes"
+	case vlogGenerationReasonStaleRatio:
+		return "stale_ratio"
+	case vlogGenerationReasonChurn:
+		return "churn"
+	case vlogGenerationReasonPeriodicGC:
+		return "periodic_gc"
+	case vlogGenerationReasonPostRewriteVacuum:
+		return "post_rewrite_vacuum"
 	default:
 		return "unknown"
 	}
@@ -9368,7 +9689,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 		}
 		return
 	}
-	if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 {
+	if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 {
 		// Pre-rotate to ensure this batch never produces pointers with offsets
 		// outside the packed-offset cap.
 		est := int64(rawPayloadBytes) + int64(len(records))*64
@@ -10099,6 +10420,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	)
 
 	rawPayloadBytes := 0
+	routeOuterLeafMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
 	}
@@ -10371,7 +10693,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	rawBatchUsed := false
 	durableBoundary := false
 	if dictID == 0 && (hasRawInto || hasRawBufferedInto) && finalWriteMode != vlogWriteBlock && len(records) > 1 {
-		if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 {
+		if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 {
 			// Ensure the entire raw batch fits within the packed-offset cap so
 			// AppendRawFramesWritevInto never returns pointers with out-of-range
 			// offsets.
@@ -10438,7 +10760,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	if err == nil && !rawBatchUsed {
-		useRawBatch := dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
+		// Route mode is correctness-critical and must never publish invalid
+		// pointers. Keep it on the mature per-frame append path.
+		useRawBatch := !routeOuterLeafMode && dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
 		preferBufferedRaw := useRawBatch && autoOuterLeafPayloads && hasRawBufferedInto
 		if useRawBatch && (preferBufferedRaw || hasRawInto) {
 			ptrs = getValueLogPtrs(len(records))
@@ -10491,7 +10815,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			}
 
 			if err == nil {
-				if maxBytes := db.valueLogMaxSegmentBytes; maxBytes > 0 && w.Size() > maxBytes {
+				if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 && w.Size() > maxBytes {
 					if delta := w.Size() - segmentStartSize; delta > 0 {
 						bytesWrittenTotal += delta
 					}
@@ -10624,6 +10948,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		putValueLogPtrs(ptrs)
 		return nil, err
 	}
+	for i := range ptrs {
+		if !page.IsValueLogFileID(ptrs[i].FileID) {
+			putValueLogPtrs(ptrs)
+			return nil, fmt.Errorf("cachingdb: appendValueLog produced invalid pointer idx=%d ptr=%+v", i, ptrs[i])
+		}
+	}
 	if framesTotal > 0 {
 		db.valueLogDictFrames.total.Add(uint64(framesTotal))
 		if framesAttempted > 0 {
@@ -10685,6 +11015,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	if bytesWrittenLive > 0 {
 		l.vlogLiveBytes.Add(bytesWrittenLive)
+		db.vlogGenerationChurnBytes.Add(uint64(bytesWrittenLive))
 	}
 	if usePreparedDictFrames && prepEncodeWallNs > 0 && rawFrameBytes > 0 && encodeRawBytes == 0 {
 		// Prepared frames are encoded before taking vlogMu; account prep wall-time
@@ -11500,6 +11831,258 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 	db.autoCheckpointLastWALTrimmed.Store(trimmed)
 }
 
+func (db *DB) startVlogGenerationLoop() {
+	if db == nil {
+		return
+	}
+	if db.valueLogGenerationPolicy == 0 {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	if _, ok := db.backend.(backendValueLogRewriter); !ok {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
+	// GC integration is optional in this phase; rewrite is required.
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	db.wg.Add(1)
+	go db.vlogGenerationLoop()
+}
+
+func (db *DB) vlogGenerationLoop() {
+	defer db.wg.Done()
+	ticker := time.NewTicker(vlogGenerationLoopInterval)
+	defer ticker.Stop()
+	ticks := 0
+	for {
+		select {
+		case <-db.closeCh:
+			return
+		case <-ticker.C:
+			ticks++
+			db.maybeRunVlogGenerationMaintenance(ticks%vlogGenerationGCEvery == 0)
+		}
+	}
+}
+
+func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
+	if db == nil || db.valueLogGenerationPolicy == 0 {
+		return
+	}
+	if db.checkpointing.Load() {
+		return
+	}
+	db.mu.RLock()
+	queueLen := len(db.queue)
+	db.mu.RUnlock()
+	if queueLen != 0 {
+		return
+	}
+
+	retained := db.valueLogRetainedStatsDetailed()
+	totalBytes := retained.BytesTotal
+	if totalBytes < 0 {
+		totalBytes = 0
+	}
+	reclaimable := db.reclaimableWALBytes()
+	if reclaimable < 0 {
+		reclaimable = 0
+	}
+	staleRatioPPM := uint32(0)
+	if totalBytes > 0 {
+		staleRatioPPM = uint32((reclaimable * 1_000_000) / totalBytes)
+	}
+	churnBps := db.vlogGenerationEstimateChurnBps()
+
+	shouldRewrite, reason := db.shouldRunVlogGenerationRewrite(totalBytes, staleRatioPPM, churnBps)
+	rewriter, hasRewriter := db.backend.(backendValueLogRewriter)
+	if shouldRewrite && hasRewriter {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+		db.vlogGenerationLastReason.Store(reason)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
+			BatchSize:         db.valueLogRewriteBatchSize(),
+			SyncEachBatch:     false,
+			MaxSegmentBytes:   db.valueLogGenerationWarmTarget,
+			MaxSourceSegments: 1,
+			MaxSourceBytes:    db.valueLogRewriteBudgetBytes,
+			MinSegmentStaleRatio: func() float64 {
+				if db.valueLogRewriteTriggerRatioPPM <= 0 {
+					return 0
+				}
+				return float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
+			}(),
+		}
+		stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
+		cancel()
+		if err != nil {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+			db.vlogGenerationRemapFailures.Add(1)
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: generational rewrite: %w", err))
+			}
+		} else {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+			db.vlogGenerationRewriteRuns.Add(1)
+			if stats.BytesBefore > 0 {
+				db.vlogGenerationRewriteBytesIn.Add(uint64(stats.BytesBefore))
+			}
+			if stats.BytesAfter > 0 {
+				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
+			}
+			if stats.RecordsCopied > 0 {
+				db.vlogGenerationRemapSuccesses.Add(uint64(stats.RecordsCopied))
+			}
+			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
+		}
+	}
+
+	if !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps) {
+		return
+	}
+	gcer, ok := db.backend.(backendValueLogGCer)
+	if !ok {
+		return
+	}
+	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	gcStats, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})
+	cancel()
+	if err != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: generational gc: %w", err))
+		}
+		return
+	}
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	db.vlogGenerationGCRuns.Add(1)
+	if gcStats.SegmentsDeleted > 0 {
+		db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
+	}
+	if gcStats.BytesDeleted > 0 {
+		db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
+	}
+}
+
+func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
+	if db == nil || db.valueLogGenerationPolicy == 0 {
+		return
+	}
+	vacuumer, ok := db.backend.(backendIndexVacuumer)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	if !db.shouldRunVlogGenerationIndexVacuum(rewriteBytesIn, now) {
+		return
+	}
+	db.vlogGenerationLastReason.Store(vlogGenerationReasonPostRewriteVacuum)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	err := vacuumer.VacuumIndexOnline(ctx)
+	cancel()
+	if err != nil {
+		db.vlogGenerationVacuumFailures.Add(1)
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: generational index vacuum: %w", err))
+		}
+		return
+	}
+	db.vlogGenerationVacuumRuns.Add(1)
+	db.vlogGenerationLastVacuumUnixNano.Store(now.UnixNano())
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+}
+
+func (db *DB) shouldRunVlogGenerationIndexVacuum(rewriteBytesIn int64, now time.Time) bool {
+	if db == nil || db.valueLogGenerationPolicy == 0 {
+		return false
+	}
+	if rewriteBytesIn < vlogGenerationVacuumTriggerRewriteBytes {
+		return false
+	}
+	last := db.vlogGenerationLastVacuumUnixNano.Load()
+	if last > 0 {
+		lastAt := time.Unix(0, last)
+		if now.Sub(lastAt) < vlogGenerationVacuumMinInterval {
+			return false
+		}
+	}
+	return true
+}
+
+func (db *DB) shouldRunVlogGenerationGC(retained valueLogRetainedGenerationStats, reclaimable int64, churnBps int64) bool {
+	if db == nil || db.valueLogGenerationPolicy == 0 {
+		return false
+	}
+	if reclaimable >= vlogGenerationGCMinBytes {
+		return true
+	}
+	if retained.SegmentsHot >= 2 && retained.SegmentsTotal >= 3 {
+		return true
+	}
+	if db.valueLogRewriteTriggerChurn > 0 && churnBps >= db.valueLogRewriteTriggerChurn/2 {
+		return true
+	}
+	return false
+}
+
+func (db *DB) vlogGenerationEstimateChurnBps() int64 {
+	if db == nil {
+		return 0
+	}
+	now := time.Now().UnixNano()
+	cur := db.vlogGenerationChurnBytes.Load()
+	prevBytes := db.vlogGenerationLastChurnSampleBytes.Swap(cur)
+	prevNs := db.vlogGenerationLastChurnSampleNS.Swap(now)
+	if prevNs <= 0 || now <= prevNs || cur < prevBytes {
+		db.vlogGenerationLastChurnBps.Store(0)
+		return 0
+	}
+	deltaBytes := cur - prevBytes
+	deltaNs := now - prevNs
+	if deltaNs <= 0 {
+		db.vlogGenerationLastChurnBps.Store(0)
+		return 0
+	}
+	churn := int64((float64(deltaBytes) * float64(time.Second)) / float64(deltaNs))
+	if churn < 0 {
+		churn = 0
+	}
+	db.vlogGenerationLastChurnBps.Store(churn)
+	return churn
+}
+
+func (db *DB) shouldRunVlogGenerationRewrite(totalBytes int64, staleRatioPPM uint32, churnBps int64) (bool, uint32) {
+	if db == nil {
+		return false, vlogGenerationReasonNone
+	}
+	if db.valueLogRewriteTriggerBytes > 0 && totalBytes >= db.valueLogRewriteTriggerBytes {
+		return true, vlogGenerationReasonTotalBytes
+	}
+	if db.valueLogRewriteTriggerRatioPPM > 0 && staleRatioPPM >= db.valueLogRewriteTriggerRatioPPM {
+		return true, vlogGenerationReasonStaleRatio
+	}
+	if db.valueLogRewriteTriggerChurn > 0 && churnBps >= db.valueLogRewriteTriggerChurn {
+		return true, vlogGenerationReasonChurn
+	}
+	return false, vlogGenerationReasonNone
+}
+
+func (db *DB) valueLogRewriteBatchSize() int {
+	if db == nil {
+		return 256
+	}
+	if db.valueLogRewriteBudgetRecords > 0 {
+		if db.valueLogRewriteBudgetRecords < 1 {
+			return 1
+		}
+		return db.valueLogRewriteBudgetRecords
+	}
+	return 256
+}
+
 func (db *DB) ensureBackendRange() error {
 	if db == nil {
 		return nil
@@ -11997,6 +12580,16 @@ func (db *DB) recordDeferredAssist(flushed int) {
 }
 
 func (db *DB) maybeAssistFlush() {
+	// WAL-off strict route mode is highly sensitive to writer-assist churn:
+	// repeated bounded assist attempts can trigger extreme deferred rewrite
+	// amplification without making forward queue progress. Let normal
+	// background/checkpoint flush boundaries drain the queue instead.
+	if db != nil &&
+		db.disableJournal &&
+		strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+		return
+	}
+
 	if db.writerFlushMaxMemtables <= 0 && db.writerFlushMaxDuration <= 0 {
 		return
 	}
@@ -13649,7 +14242,7 @@ func (db *DB) rotateValueLogForMaxSegmentMuHeld(l *lane, w valueWriter) error {
 	if db == nil || l == nil || w == nil {
 		return nil
 	}
-	maxBytes := db.valueLogMaxSegmentBytes
+	maxBytes := db.valueLogMaxSegmentBytesForLane(l)
 	if maxBytes <= 0 {
 		return nil
 	}
@@ -16015,9 +16608,53 @@ func (db *DB) Stats() map[string]string {
 		key := fmt.Sprintf("treedb.cache.vlog_queue.lag_bucket.le_us.%d", upperUS)
 		stats[key] = fmt.Sprintf("%d", queueLagBuckets[bucket])
 	}
-	vlogSegments, vlogBytes := db.valueLogRetainedStats()
+	retained := db.valueLogRetainedStatsDetailed()
+	vlogSegments, vlogBytes := retained.SegmentsTotal, retained.BytesTotal
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
+	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy != 0)
+	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
+	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
+	stats["treedb.cache.vlog_generation.churn_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationChurnBytes.Load())
+	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", db.vlogGenerationLastChurnBps.Load())
+	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
+	stats["treedb.cache.vlog_generation.warm.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationWarmTarget)
+	stats["treedb.cache.vlog_generation.cold.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationColdTarget)
+	stats["treedb.cache.vlog_generation.rewrite_budget.bytes_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteBudgetBytes)
+	stats["treedb.cache.vlog_generation.rewrite_budget.records_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteBudgetRecords)
+	stats["treedb.cache.vlog_generation.rewrite_trigger.stale_ratio_ppm"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerRatioPPM)
+	stats["treedb.cache.vlog_generation.rewrite_trigger.total_bytes"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerBytes)
+	stats["treedb.cache.vlog_generation.rewrite_trigger.churn_per_sec"] = fmt.Sprintf("%d", db.valueLogRewriteTriggerChurn)
+	// PR1 scaffolding: legacy allocator still owns placement; report retained
+	// totals under hot generation until generation-aware allocator lands.
+	stats["treedb.cache.vlog_generation.bytes.live.total"] = fmt.Sprintf("%d", retained.BytesTotal)
+	stats["treedb.cache.vlog_generation.bytes.live.hot"] = fmt.Sprintf("%d", retained.BytesHot)
+	stats["treedb.cache.vlog_generation.bytes.live.warm"] = fmt.Sprintf("%d", retained.BytesWarm)
+	stats["treedb.cache.vlog_generation.bytes.live.cold"] = fmt.Sprintf("%d", retained.BytesCold)
+	stats["treedb.cache.vlog_generation.bytes.stale.total"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.stale.hot"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.stale.warm"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.stale.cold"] = "0"
+	stats["treedb.cache.vlog_generation.bytes.total.total"] = fmt.Sprintf("%d", retained.BytesTotal)
+	stats["treedb.cache.vlog_generation.bytes.total.hot"] = fmt.Sprintf("%d", retained.BytesHot)
+	stats["treedb.cache.vlog_generation.bytes.total.warm"] = fmt.Sprintf("%d", retained.BytesWarm)
+	stats["treedb.cache.vlog_generation.bytes.total.cold"] = fmt.Sprintf("%d", retained.BytesCold)
+	stats["treedb.cache.vlog_generation.segments.total"] = fmt.Sprintf("%d", retained.SegmentsTotal)
+	stats["treedb.cache.vlog_generation.segments.hot"] = fmt.Sprintf("%d", retained.SegmentsHot)
+	stats["treedb.cache.vlog_generation.segments.warm"] = fmt.Sprintf("%d", retained.SegmentsWarm)
+	stats["treedb.cache.vlog_generation.segments.cold"] = fmt.Sprintf("%d", retained.SegmentsCold)
+	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
+	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
+	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
+	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
+	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
+	stats["treedb.cache.vlog_generation.vacuum.runs"] = fmt.Sprintf("%d", db.vlogGenerationVacuumRuns.Load())
+	stats["treedb.cache.vlog_generation.vacuum.failures"] = fmt.Sprintf("%d", db.vlogGenerationVacuumFailures.Load())
+	stats["treedb.cache.vlog_generation.vacuum.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastVacuumUnixNano.Load())
+	stats["treedb.cache.vlog_generation.remap.successes"] = fmt.Sprintf("%d", db.vlogGenerationRemapSuccesses.Load())
+	stats["treedb.cache.vlog_generation.remap.failures"] = fmt.Sprintf("%d", db.vlogGenerationRemapFailures.Load())
 	stats["treedb.cache.vlog_writev.syscalls"] = fmt.Sprintf("%d", rawWritevSyscalls)
 	stats["treedb.cache.vlog_writev.bytes"] = fmt.Sprintf("%d", rawWritevBytes)
 	stats["treedb.cache.vlog_writev.iovecs"] = fmt.Sprintf("%d", rawWritevIovecs)

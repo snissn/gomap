@@ -28,7 +28,7 @@ func (w *vlogDirtyOrderWriter) Append(dictID uint64, dict []byte, rid uint64, va
 	return page.ValuePtr{
 		Offset: uint64(start + 4),
 		Length: page.ValuePtrMarkGrouped(16, 0),
-		FileID: 1,
+		FileID: page.ValueLogFileID(1),
 	}, nil
 }
 
@@ -46,7 +46,7 @@ func (w *vlogDirtyOrderWriter) AppendFrame(dictID uint64, dict []byte, records [
 		out[i] = page.ValuePtr{
 			Offset: uint64(start + 4),
 			Length: page.ValuePtrMarkGrouped(16, uint8(i)),
-			FileID: 1,
+			FileID: page.ValueLogFileID(1),
 		}
 	}
 	return out, nil
