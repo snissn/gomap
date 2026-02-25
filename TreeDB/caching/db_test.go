@@ -2792,3 +2792,50 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 		t.Fatalf("expected retained segments to be pruned after checkpoint, got %d", segments)
 	}
 }
+
+func TestCachingDB_MaybePruneRetainedValueLogs_RearmsWhileRetainedRemain(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir, ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	cache, err := Open(dir, backend, Options{
+		FlushThreshold:           1,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	var retainPath string
+	if cache.splitValueLogEnabled() {
+		paths := cache.currentValueLogPaths()
+		if len(paths) == 0 {
+			t.Fatalf("expected current value-log path")
+		}
+		retainPath = paths[0]
+	} else {
+		paths := cache.currentWALPaths()
+		if len(paths) == 0 {
+			t.Fatalf("expected current wal path")
+		}
+		retainPath = paths[0]
+	}
+
+	cache.markValueLogRetain(retainPath)
+	if !cache.valueLogRetained(retainPath) {
+		t.Fatalf("expected retained path %q", retainPath)
+	}
+	cache.valueLogRetainLastPruneUnixNano.Store(0)
+	cache.maybePruneRetainedValueLogs()
+
+	if !cache.valueLogRetained(retainPath) {
+		t.Fatalf("expected in-use retained path to remain")
+	}
+	if !cache.valueLogRetainDirty.Load() {
+		t.Fatalf("expected retained prune to remain armed while retained paths exist")
+	}
+}

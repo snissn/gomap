@@ -5731,7 +5731,10 @@ func (db *DB) maybePruneRetainedValueLogs() {
 	}
 	db.pruneRetainedValueLogs()
 	db.valueLogRetainLastPruneUnixNano.Store(now)
-	db.valueLogRetainDirty.Store(false)
+	// Keep prune attempts armed while retained paths remain. Some paths can be
+	// temporarily non-removable (e.g. still in use) and become reclaimable later
+	// without any new retain additions.
+	db.valueLogRetainDirty.Store(len(db.valueLogRetainedPaths()) > 0)
 }
 
 func hashKey(key []byte) uint64 {
