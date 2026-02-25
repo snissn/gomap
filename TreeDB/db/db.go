@@ -736,7 +736,7 @@ type Options struct {
 	BackgroundValueLogRewriteScoreTargetChurnBytes int64
 	// BackgroundValueLogRewriteScoreTrigger is the minimum rewrite score required
 	// to launch a rewrite pass.
-	// `0` uses a default; negative disables score gating.
+	// `0` uses a default; negative is invalid.
 	BackgroundValueLogRewriteScoreTrigger float64
 	// BackgroundValueLogRewriteScoreCooldownBypass bypasses rewrite cooldown
 	// when the computed rewrite score is at/above this value.

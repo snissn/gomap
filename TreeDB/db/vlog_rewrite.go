@@ -450,13 +450,17 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 		if minStaleBytes > 0 && staleBytes < minStaleBytes {
 			continue
 		}
+		rewriteCount := uint64(0)
+		if h, ok := health[id]; ok {
+			rewriteCount = h.RewriteCount
+		}
 		candidates = append(candidates, rewriteSourceSegment{
 			fileID:       id,
 			liveBytes:    liveBytes,
 			staleBytes:   staleBytes,
 			staleRatio:   staleRatio,
 			efficiency:   efficiency,
-			rewriteCount: health[id].RewriteCount,
+			rewriteCount: rewriteCount,
 		})
 	}
 

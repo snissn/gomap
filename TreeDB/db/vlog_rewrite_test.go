@@ -1573,6 +1573,36 @@ func TestSelectRewriteSourceSegments_PrefersLowerRewriteCountOnTie(t *testing.T)
 	}
 }
 
+func TestSelectRewriteSourceSegments_MissingHealthKeyDefaultsRewriteCount(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "v1.log")
+	path2 := filepath.Join(dir, "v2.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte{1}, 100), 0o644); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte{2}, 100), 0o644); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	liveByID := map[uint32]int64{
+		1: 90, // stale 10
+		2: 90, // stale 10
+	}
+	health := map[uint32]valueLogSegmentHealth{
+		1: {RewriteCount: 7},
+		// 2 intentionally absent -> rewriteCount defaults to zero
+	}
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments: 1,
+	}, files, map[uint32]struct{}{}, liveByID, health)
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected segment 2 selected with missing-health default, got=%v", selected)
+	}
+}
+
 func TestSelectRewriteSourceSegments_PrefersHigherReclaimEfficiency(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "v1.log")
