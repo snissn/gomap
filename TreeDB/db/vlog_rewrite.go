@@ -374,7 +374,11 @@ func chooseRewriteSegmentTarget(opts ValueLogRewriteOnlineOptions, sourceIDs map
 	}
 	var hot, warm, cold int
 	for id := range sourceIDs {
-		switch generationRankForRewriteCount(health[id].RewriteCount) {
+		h, ok := health[id]
+		if !ok {
+			continue
+		}
+		switch generationRankForRewriteCount(h.RewriteCount) {
 		case 0:
 			hot++
 		case 1:
@@ -383,13 +387,16 @@ func chooseRewriteSegmentTarget(opts ValueLogRewriteOnlineOptions, sourceIDs map
 			cold++
 		}
 	}
-	if hot >= warm && hot >= cold && opts.HotSegmentBytes > 0 {
+	// Use generation-specific segment targets only when one generation is the
+	// strict majority among selected source segments. On ties, fall back to the
+	// global target to avoid accidental hot/warm/cold bias.
+	if hot > warm && hot > cold && opts.HotSegmentBytes > 0 {
 		return opts.HotSegmentBytes
 	}
-	if warm >= hot && warm >= cold && opts.WarmSegmentBytes > 0 {
+	if warm > hot && warm > cold && opts.WarmSegmentBytes > 0 {
 		return opts.WarmSegmentBytes
 	}
-	if cold >= hot && cold >= warm && opts.ColdSegmentBytes > 0 {
+	if cold > hot && cold > warm && opts.ColdSegmentBytes > 0 {
 		return opts.ColdSegmentBytes
 	}
 	return maxBytes
