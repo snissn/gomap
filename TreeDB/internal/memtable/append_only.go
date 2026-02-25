@@ -26,7 +26,6 @@ const (
 	appendOnlyEntryPoolMaxCap               = 1 << 20
 	appendOnlyIteratorPoolMaxCap            = 1 << 20
 	appendOnlyIteratorPtrPoolMaxCap         = 1 << 20
-	appendOnlyReusableKeyMaxCap             = 1 << 10
 	appendOnlyValueArenaMinShift            = 12
 	appendOnlyValueArenaMaxShift            = 20
 	appendOnlyValueArenaClassCount          = appendOnlyValueArenaMaxShift - appendOnlyValueArenaMinShift + 1
@@ -67,6 +66,7 @@ type AppendOnly struct {
 	latest64   map[uint64]int
 	snapshot   []*appendOnlyEntry
 	indexBuf   []int
+	keyArena   appendOnlyValueArena
 	valueArena appendOnlyValueArena
 	count      int
 	snapCount  int
@@ -210,23 +210,6 @@ func cloneBytes(src []byte) []byte {
 	dst := make([]byte, len(src))
 	copy(dst, src)
 	return dst
-}
-
-func cloneOrReuseBytes(dst, src []byte, maxCap int) []byte {
-	if len(src) == 0 {
-		return nil
-	}
-	if maxCap <= 0 {
-		maxCap = len(src)
-	}
-	if cap(dst) >= len(src) && cap(dst) <= maxCap {
-		out := dst[:len(src)]
-		copy(out, src)
-		return out
-	}
-	out := make([]byte, len(src))
-	copy(out, src)
-	return out
 }
 
 func appendOnlyValueArenaClassForLen(length int) (idx int, classCap int, ok bool) {
@@ -480,7 +463,8 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 			ent.keyInline = true
 			ent.key = nil
 		} else {
-			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
+			ent.key = m.keyArena.alloc(len(key))
+			copy(ent.key, key)
 		}
 		if len(value) > 0 {
 			ent.value = m.valueArena.alloc(len(value))
@@ -551,12 +535,16 @@ func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 	if key == nil {
 		return nil
 	}
+	if cb == nil {
+		m.mu.Lock()
+		m.appendEntryLocked(key, value, page.ValuePtr{}, node.FlagInline, false)
+		m.mu.Unlock()
+		return nil
+	}
 	k := cloneBytes(key)
 	v := cloneBytes(value)
-	if cb != nil {
-		if err := cb(k, v); err != nil {
-			return err
-		}
+	if err := cb(k, v); err != nil {
+		return err
 	}
 	m.mu.Lock()
 	m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true)
@@ -568,11 +556,15 @@ func (m *AppendOnly) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 	if key == nil {
 		return nil
 	}
+	if cb == nil {
+		m.mu.Lock()
+		m.appendEntryLocked(key, nil, page.ValuePtr{}, node.FlagTombstone, false)
+		m.mu.Unlock()
+		return nil
+	}
 	k := cloneBytes(key)
-	if cb != nil {
-		if err := cb(k, nil); err != nil {
-			return err
-		}
+	if err := cb(k, nil); err != nil {
+		return err
 	}
 	m.mu.Lock()
 	m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true)
@@ -772,13 +764,10 @@ func (m *AppendOnly) Reset() {
 		ent.flags = 0
 		ent.keyInline = false
 		ent.valueOwned = false
-		if cap(ent.key) > appendOnlyReusableKeyMaxCap {
-			ent.key = nil
-		} else if ent.key != nil {
-			ent.key = ent.key[:0]
-		}
+		ent.key = nil
 		ent.value = nil
 	}
+	m.keyArena.reset()
 	m.valueArena.reset()
 	clear(m.latest)
 	clear(m.latest64)
