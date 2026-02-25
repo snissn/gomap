@@ -65,11 +65,17 @@ func (b *Batch) DeleteView(key []byte) error {
 
 // SetPointer records a pointer without copying the value bytes.
 func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return fmt.Errorf("db batch setpointer invalid ptr key=%x ptr=%+v", key, ptr)
+	}
 	return b.batch.SetPointer(key, ptr)
 }
 
 // SetPointerView records a pointer without copying the key bytes.
 func (b *Batch) SetPointerView(key []byte, ptr page.ValuePtr) error {
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return fmt.Errorf("db batch setpointerview invalid ptr key=%x ptr=%+v", key, ptr)
+	}
 	return b.batch.SetPointerView(key, ptr)
 }
 

@@ -37,6 +37,7 @@ Commands:
   compact         Compact/rebuild the index.db in-place (requires -rw)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   vlog-gc         Delete unreferenced value-log segments (requires -rw)
+  vlog-gc-vacuum  Run vlog-gc then vacuum index.db (requires -rw)
   vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
   get             Get a single key
   keys            List keys in a range/prefix
@@ -90,6 +91,8 @@ func main() {
 		runVacuum(dir, args)
 	case "vlog-gc":
 		runVlogGC(dir, args)
+	case "vlog-gc-vacuum":
+		runVlogGCVacuum(dir, args)
 	case "vlog-rewrite":
 		runVlogRewrite(dir, args)
 	case "get":
@@ -532,6 +535,62 @@ func runVlogGC(dir string, args []string) {
 	)
 }
 
+func runVlogGCVacuum(dir string, args []string) {
+	fs := flag.NewFlagSet("vlog-gc-vacuum", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	dryRun := fs.Bool("dry-run", false, "Report GC deletions without removing segments (vacuum is skipped)")
+	indexOuterLeafMode := fs.String("index-outer-leaf-mode", "", "Index outer-leaf mode override (v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
+	_ = fs.Parse(args)
+	mode := parseIndexOuterLeafMode(*indexOuterLeafMode)
+
+	if !*rw {
+		fatalf("vlog-gc-vacuum requires -rw")
+	}
+
+	backendDir := resolveMainDBDir(dir)
+	backend, err := treedbdb.Open(treedbdb.Options{Dir: backendDir, ReadOnly: false, IndexOuterLeafMode: mode})
+	if err != nil {
+		fatalf("Failed to open DB: %v", err)
+	}
+	stats, err := backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: *dryRun})
+	_ = backend.Close()
+	if err != nil {
+		fatalf("ValueLogGC error: %v", err)
+	}
+
+	statusMode := "applied"
+	if *dryRun {
+		statusMode = "dry-run"
+	}
+	fmt.Printf("vlog-gc (%s): segments total=%d referenced=%d active=%d eligible=%d deleted=%d bytes_total=%d bytes_referenced=%d bytes_active=%d bytes_eligible=%d bytes_deleted=%d\n",
+		statusMode,
+		stats.SegmentsTotal,
+		stats.SegmentsReferenced,
+		stats.SegmentsActive,
+		stats.SegmentsEligible,
+		stats.SegmentsDeleted,
+		stats.BytesTotal,
+		stats.BytesReferenced,
+		stats.BytesActive,
+		stats.BytesEligible,
+		stats.BytesDeleted,
+	)
+
+	if *dryRun {
+		fmt.Println("vacuum: skipped (dry-run)")
+		return
+	}
+
+	rootDir := resolveTreeDBRootDir(dir)
+	before := mainIndexBytesForRoot(rootDir)
+	start := time.Now()
+	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: rootDir, IndexOuterLeafMode: mode}); err != nil {
+		fatalf("VacuumIndexOffline error: %v", err)
+	}
+	after := mainIndexBytesForRoot(rootDir)
+	fmt.Printf("vacuum: duration=%s index_bytes=%d->%d\n", time.Since(start).Truncate(time.Millisecond), before, after)
+}
+
 func resolveMainDBDir(dir string) string {
 	root := resolveTreeDBRootDir(dir)
 	mainDir := filepath.Join(root, "maindb")
@@ -542,6 +601,18 @@ func resolveMainDBDir(dir string) string {
 		return root
 	}
 	return dir
+}
+
+func mainIndexBytesForRoot(root string) int64 {
+	mainIndex := filepath.Join(root, "maindb", "index.db")
+	if st, err := os.Stat(mainIndex); err == nil {
+		return st.Size()
+	}
+	index := filepath.Join(root, "index.db")
+	if st, err := os.Stat(index); err == nil {
+		return st.Size()
+	}
+	return 0
 }
 
 func runVlogRewrite(dir string, args []string) {

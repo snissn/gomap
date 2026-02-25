@@ -241,6 +241,28 @@ func TestRunBenchmark_PreloadsForReadAndScanOnly(t *testing.T) {
 	}
 }
 
+func TestTreeDBMainIndexBytes_FallsBackWhenPrimaryZeroSized(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "maindb")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	// Primary candidate exists but is empty.
+	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o644); err != nil {
+		t.Fatalf("write primary index: %v", err)
+	}
+	// Fallback candidate has real bytes.
+	fallback := filepath.Join(root, "index.db")
+	want := []byte("non-empty")
+	if err := os.WriteFile(fallback, want, 0o644); err != nil {
+		t.Fatalf("write fallback index: %v", err)
+	}
+	got := treeDBMainIndexBytes(root)
+	if got != uint64(len(want)) {
+		t.Fatalf("treeDBMainIndexBytes=%d want=%d", got, len(want))
+	}
+}
+
 func TestRunBenchmark_RandomReadBatch_Smoke(t *testing.T) {
 	run, err := runBenchmark(BenchConfig{
 		Keys:         2_000,
@@ -1052,6 +1074,45 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if got := parsed.Runs[0].Results["full_scan"]["TreeDB"]; got != 1000 {
 		t.Fatalf("unexpected full_scan value: %v", got)
+	}
+}
+
+func TestRenderMarkdownSingle_IncludesValueLogRewriteEndSection(t *testing.T) {
+	run := BenchRun{
+		Config: BenchConfig{
+			Keys:     123,
+			Profile:  "fast",
+			DBsArg:   "treedb",
+			TestsArg: "sequential_write",
+		},
+		TestOrder: []string{"sequential_write"},
+		DisplayNames: map[string]string{
+			"sequential_write": "Sequential Write",
+		},
+		Results: map[string]map[string]float64{
+			"sequential_write": {"TreeDB": 1000},
+		},
+		ValueLogRewriteEnd: map[string]valueLogRewriteEndStats{
+			"TreeDB": {
+				Duration:       1500 * time.Millisecond,
+				SegmentsBefore: 12,
+				SegmentsAfter:  4,
+				BytesBefore:    128 << 20,
+				BytesAfter:     64 << 20,
+				RecordsCopied:  9876,
+			},
+		},
+	}
+
+	md := renderMarkdownSingle(run)
+	if !strings.Contains(md, "## Value-Log Rewrite (End of Run)") {
+		t.Fatalf("expected value-log rewrite section in markdown:\n%s", md)
+	}
+	if !strings.Contains(md, "RecordsCopied") {
+		t.Fatalf("expected rewrite table header in markdown:\n%s", md)
+	}
+	if !strings.Contains(md, "TreeDB") {
+		t.Fatalf("expected TreeDB row in rewrite section:\n%s", md)
 	}
 }
 

@@ -148,6 +148,12 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	if opts.MaxWALBytes >= 0 {
 		t.Fatalf("expected MaxWALBytes < 0 for bench profile, got %d", opts.MaxWALBytes)
 	}
+	if opts.BackgroundValueLogGCInterval >= 0 {
+		t.Fatalf("expected BackgroundValueLogGCInterval < 0 for bench profile, got %v", opts.BackgroundValueLogGCInterval)
+	}
+	if opts.BackgroundValueLogRewriteInterval >= 0 {
+		t.Fatalf("expected BackgroundValueLogRewriteInterval < 0 for bench profile, got %v", opts.BackgroundValueLogRewriteInterval)
+	}
 	if !opts.DisableBackgroundPrune {
 		t.Fatalf("expected DisableBackgroundPrune=true for bench profile")
 	}
