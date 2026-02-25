@@ -18,7 +18,7 @@ func TestTreeDBIndexOuterLeafModeFlag_DefaultIsV1LeafLogRoute(t *testing.T) {
 	}
 }
 
-func TestBuildTreeDBOptions_DefaultOuterLeafModeUsesV1LeafLogRoute(t *testing.T) {
+func TestBuildTreeDBOptions_ExplicitV1LeafLogRouteFlagAccepted(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
 
@@ -27,7 +27,7 @@ func TestBuildTreeDBOptions_DefaultOuterLeafModeUsesV1LeafLogRoute(t *testing.T)
 
 	opts, rep, err := buildTreeDBOptions("")
 	if err != nil {
-		t.Fatalf("buildTreeDBOptions default outer leaf mode: %v", err)
+		t.Fatalf("buildTreeDBOptions v1_leaflog_route: %v", err)
 	}
 	if got := opts.IndexOuterLeafMode; got != treedb.IndexOuterLeafModeV1LeafLogRoute {
 		t.Fatalf("IndexOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV1LeafLogRoute)
