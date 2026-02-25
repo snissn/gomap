@@ -26,6 +26,9 @@ type valueReader struct {
 	cache                  *outerLeafBlockCache
 	keyCache               *outerLeafKeyCache
 	fenceDecodeLeases      *outerLeafFenceDecodeLeaseSet
+	// Optional dedicated decode context owned by a single reader instance.
+	// When set, read paths bypass lease-set acquire/release churn.
+	fenceDecodeCtx *outerLeafFenceDecodeContext
 }
 
 type staticFenceKeysLease struct {
@@ -443,6 +446,7 @@ func (r *valueReader) reconfigure(vlogs tree.SlabReader, mode string, skipOuterL
 	if r == nil {
 		return
 	}
+	r.releaseDedicatedFenceDecodeContext()
 	r.vlogs = vlogs
 	r.skipOuterLeafChecksums = skipOuterLeafChecksums
 	r.cache = cache
@@ -461,17 +465,58 @@ func (r *valueReader) clearForPoolReuse() {
 	if r == nil {
 		return
 	}
+	r.releaseDedicatedFenceDecodeContext()
 	r.vlogs = nil
 	r.cache = nil
 	r.keyCache = nil
 }
 
 func (r *valueReader) releaseDecodeContext() {
-	if r == nil || r.fenceDecodeLeases == nil {
+	if r == nil {
+		return
+	}
+	r.releaseDedicatedFenceDecodeContext()
+	if r.fenceDecodeLeases == nil {
 		return
 	}
 	r.fenceDecodeLeases.close()
 	r.fenceDecodeLeases = nil
+}
+
+func (r *valueReader) withDedicatedFenceDecodeContext() {
+	if r == nil || r.fenceDecodeCtx != nil || r.fenceDecodeLeases == nil {
+		return
+	}
+	r.fenceDecodeCtx = r.fenceDecodeLeases.acquire()
+}
+
+func (r *valueReader) releaseDedicatedFenceDecodeContext() {
+	if r == nil || r.fenceDecodeCtx == nil {
+		return
+	}
+	if r.fenceDecodeLeases != nil {
+		r.fenceDecodeLeases.release(r.fenceDecodeCtx)
+	}
+	r.fenceDecodeCtx = nil
+}
+
+func (r valueReader) acquireFenceDecodeContext() *outerLeafFenceDecodeContext {
+	if r.fenceDecodeCtx != nil {
+		return r.fenceDecodeCtx
+	}
+	if r.fenceDecodeLeases != nil {
+		return r.fenceDecodeLeases.acquire()
+	}
+	return nil
+}
+
+func (r valueReader) releaseAcquiredFenceDecodeContext(ctx *outerLeafFenceDecodeContext) {
+	if ctx == nil || r.fenceDecodeCtx != nil {
+		return
+	}
+	if r.fenceDecodeLeases != nil {
+		r.fenceDecodeLeases.release(ctx)
+	}
 }
 
 func (r *valueReader) setOuterLeafMode(mode string) {
@@ -653,12 +698,10 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 		return raw, true, nil
 	}
 	if r.cache == nil {
-		if leases := r.fenceDecodeLeases; leases != nil {
-			if ctx := leases.acquire(); ctx != nil {
-				val, found, err := r.decodeOuterLeafValueForKeyNoCacheWithLeaseCtx(raw, key, unsafe, ctx)
-				leases.release(ctx)
-				return val, found, err
-			}
+		if ctx := r.acquireFenceDecodeContext(); ctx != nil {
+			val, found, err := r.decodeOuterLeafValueForKeyNoCacheWithLeaseCtx(raw, key, unsafe, ctx)
+			r.releaseAcquiredFenceDecodeContext(ctx)
+			return val, found, err
 		}
 		return r.decodeOuterLeafValueForKeyNoCache(raw, key, unsafe)
 	}
@@ -679,12 +722,10 @@ func (r valueReader) decodeValueForKeyFound(ptr page.ValuePtr, key, raw []byte, 
 		val = cloneInlineValueIfNeeded(entry.Kind, val)
 		return val, true, nil
 	}
-	if leases := r.fenceDecodeLeases; leases != nil {
-		if ctx := leases.acquire(); ctx != nil {
-			val, found, err := r.decodeValueForKeyFoundWithLeaseCtx(cacheKey, key, raw, unsafe, ctx)
-			leases.release(ctx)
-			return val, found, err
-		}
+	if ctx := r.acquireFenceDecodeContext(); ctx != nil {
+		val, found, err := r.decodeValueForKeyFoundWithLeaseCtx(cacheKey, key, raw, unsafe, ctx)
+		r.releaseAcquiredFenceDecodeContext(ctx)
+		return val, found, err
 	}
 	verifyChecksums := !r.skipOuterLeafChecksums
 	scratch := outerLeafFenceDecodeScratchGet()
@@ -826,12 +867,10 @@ func (r valueReader) decodeValueForKeyFoundAppend(ptr page.ValuePtr, key, raw, d
 		return append(dst[:0], raw...), true, nil
 	}
 	if r.cache == nil {
-		if leases := r.fenceDecodeLeases; leases != nil {
-			if ctx := leases.acquire(); ctx != nil {
-				val, found, err := r.decodeOuterLeafAppendForKeyNoCacheWithLeaseCtx(raw, key, dst, ctx)
-				leases.release(ctx)
-				return val, found, err
-			}
+		if ctx := r.acquireFenceDecodeContext(); ctx != nil {
+			val, found, err := r.decodeOuterLeafAppendForKeyNoCacheWithLeaseCtx(raw, key, dst, ctx)
+			r.releaseAcquiredFenceDecodeContext(ctx)
+			return val, found, err
 		}
 		return r.decodeOuterLeafAppendForKeyNoCache(raw, key, dst)
 	}
@@ -851,12 +890,10 @@ func (r valueReader) decodeValueForKeyFoundAppend(ptr page.ValuePtr, key, raw, d
 		}
 		return out, true, nil
 	}
-	if leases := r.fenceDecodeLeases; leases != nil {
-		if ctx := leases.acquire(); ctx != nil {
-			val, found, err := r.decodeValueForKeyFoundAppendWithLeaseCtx(cacheKey, key, raw, dst, ctx)
-			leases.release(ctx)
-			return val, found, err
-		}
+	if ctx := r.acquireFenceDecodeContext(); ctx != nil {
+		val, found, err := r.decodeValueForKeyFoundAppendWithLeaseCtx(cacheKey, key, raw, dst, ctx)
+		r.releaseAcquiredFenceDecodeContext(ctx)
+		return val, found, err
 	}
 	verifyChecksums := !r.skipOuterLeafChecksums
 	scratch := outerLeafFenceDecodeScratchGet()

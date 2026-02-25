@@ -1,8 +1,11 @@
 package db
 
 import (
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -12,11 +15,15 @@ import (
 )
 
 const (
-	getManyValueGuessBytes          = 128
-	getManyMaxArenaBytes            = 1 << 20
+	getManyValueGuessBytes = 128
+	// 8 MiB cap keeps per-worker reserve bounded while reducing repeated arena
+	// growth/copy churn for large GetMany batches.
+	getManyMaxArenaBytes            = 8 << 20
+	getManyWorkerMaxArenaBytes      = 2 << 20
 	getManyParallelMinKeys          = 128
 	getManyParallelMinKeysPerWorker = 32
 	getManyParallelMaxWorkers       = 8
+	getManyLocalitySortMinKeys      = 128
 )
 
 var getManyEmptyValue = []byte{}
@@ -31,6 +38,14 @@ func getManyArenaCap(keyCount int) int {
 	}
 	if arenaCap > getManyMaxArenaBytes {
 		arenaCap = getManyMaxArenaBytes
+	}
+	return arenaCap
+}
+
+func getManyWorkerArenaCap(keyCount int) int {
+	arenaCap := getManyArenaCap(keyCount)
+	if arenaCap > getManyWorkerMaxArenaBytes {
+		arenaCap = getManyWorkerMaxArenaBytes
 	}
 	return arenaCap
 }
@@ -66,6 +81,25 @@ func getManyChunkBounds(worker, workers, keyCount int) (int, int) {
 	start := (worker * keyCount) / workers
 	end := ((worker + 1) * keyCount) / workers
 	return start, end
+}
+
+func getManyKeyLess(a, b []byte) bool {
+	if len(a) == 8 && len(b) == 8 {
+		return binary.BigEndian.Uint64(a) < binary.BigEndian.Uint64(b)
+	}
+	return bytes.Compare(a, b) < 0
+}
+
+func getManySortIndicesByKeyRange(keys [][]byte, start, end int) []int {
+	n := end - start
+	order := make([]int, n)
+	for i := 0; i < n; i++ {
+		order[i] = start + i
+	}
+	sort.Slice(order, func(i, j int) bool {
+		return getManyKeyLess(keys[order[i]], keys[order[j]])
+	})
+	return order
 }
 
 // GetManyParallelPlan reports how this backend would schedule GetMany for the
@@ -130,12 +164,44 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 }
 
 func (db *DB) getManySequential(snap *Snapshot, keys [][]byte, out [][]byte) error {
+	reader := snap.reader
+	(&reader).withDedicatedFenceDecodeContext()
+	defer (&reader).releaseDedicatedFenceDecodeContext()
+	tr := tree.New(snap.treePager, &reader, snap.treeRoot)
+
 	// Copy all found values into a single arena to avoid one allocation per key.
 	// Each returned slice is capacity-capped to preserve safe-copy semantics.
 	arena := make([]byte, 0, getManyArenaCap(len(keys)))
+	if len(keys) >= getManyLocalitySortMinKeys {
+		order := make([]int, len(keys))
+		for i := range keys {
+			order[i] = i
+		}
+		sort.Slice(order, func(i, j int) bool {
+			return getManyKeyLess(keys[order[i]], keys[order[j]])
+		})
+		for _, i := range order {
+			key := keys[i]
+			start := len(arena)
+			nextArena, err := tr.GetAppend(key, arena)
+			if err == tree.ErrKeyNotFound {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			arena = nextArena
+			if len(arena) == start {
+				out[i] = getManyEmptyValue
+				continue
+			}
+			out[i] = arena[start:len(arena):len(arena)]
+		}
+		return nil
+	}
 	for i, key := range keys {
 		start := len(arena)
-		nextArena, err := snap.GetAppend(key, arena)
+		nextArena, err := tr.GetAppend(key, arena)
 		if err == tree.ErrKeyNotFound {
 			continue
 		}
@@ -164,19 +230,23 @@ func (db *DB) getManyParallel(snap *Snapshot, keys [][]byte, out [][]byte, worke
 		if start >= end {
 			continue
 		}
-		workerArenaCap := getManyArenaCap(end - start)
+		workerArenaCap := getManyWorkerArenaCap(end - start)
 		wg.Add(1)
 		go func(start, end, arenaCap int) {
 			defer wg.Done()
+			workerReader := snap.reader
+			(&workerReader).withDedicatedFenceDecodeContext()
+			defer (&workerReader).releaseDedicatedFenceDecodeContext()
+			workerTree := tree.New(snap.treePager, &workerReader, snap.treeRoot)
 			arena := make([]byte, 0, arenaCap)
-			for i := start; i < end; i++ {
+			processIndex := func(i int) {
 				if stop.Load() {
 					return
 				}
 				arenaStart := len(arena)
-				nextArena, err := snap.GetAppend(keys[i], arena)
+				nextArena, err := workerTree.GetAppend(keys[i], arena)
 				if err == tree.ErrKeyNotFound {
-					continue
+					return
 				}
 				if err != nil {
 					errMu.Lock()
@@ -190,9 +260,25 @@ func (db *DB) getManyParallel(snap *Snapshot, keys [][]byte, out [][]byte, worke
 				arena = nextArena
 				if len(arena) == arenaStart {
 					out[i] = getManyEmptyValue
-					continue
+					return
 				}
 				out[i] = arena[arenaStart:len(arena):len(arena)]
+			}
+			if end-start >= getManyLocalitySortMinKeys {
+				order := getManySortIndicesByKeyRange(keys, start, end)
+				for _, i := range order {
+					processIndex(i)
+					if stop.Load() {
+						return
+					}
+				}
+				return
+			}
+			for i := start; i < end; i++ {
+				processIndex(i)
+				if stop.Load() {
+					return
+				}
 			}
 		}(start, end, workerArenaCap)
 	}

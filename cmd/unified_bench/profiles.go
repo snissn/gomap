@@ -15,9 +15,18 @@ var (
 )
 
 const (
-	defaultOuterLeafBlockCacheEntries           = 8192
-	defaultOuterLeafBlockCacheEntriesV2FencePtr = 16384
+	defaultOuterLeafBlockCacheEntries          = 8192
+	defaultOuterLeafBlockCacheEntriesReadHeavy = 16384
 )
+
+func fastProfileOuterLeafCacheDefault(mode string) int {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case treedb.IndexOuterLeafModeV2FencePtr, treedb.IndexOuterLeafModeV1LeafLogRoute:
+		return defaultOuterLeafBlockCacheEntriesReadHeavy
+	default:
+		return defaultOuterLeafBlockCacheEntries
+	}
+}
 
 type Profile struct {
 	Description string
@@ -37,10 +46,7 @@ func init() {
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
 		// Fence-pointer outer-leaf reads are decode-heavy without a decoded-block
 		// cache; keep a moderate default in throughput profiles.
-		outerLeafCacheDefault := defaultOuterLeafBlockCacheEntries
-		if strings.EqualFold(strings.TrimSpace(*treedbIndexOuterLeafMode), treedb.IndexOuterLeafModeV2FencePtr) {
-			outerLeafCacheDefault = defaultOuterLeafBlockCacheEntriesV2FencePtr
-		}
+		outerLeafCacheDefault := fastProfileOuterLeafCacheDefault(*treedbIndexOuterLeafMode)
 		setIntIfUnset("treedb-outer-leaf-block-cache-entries", outerLeafCacheDefault, isSet, treedbOuterLeafBlockCacheEntries)
 
 		// Badger
@@ -72,10 +78,7 @@ func init() {
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
 		// Match fast profile defaults for decode-heavy fence-pointer reads.
-		outerLeafCacheDefault := defaultOuterLeafBlockCacheEntries
-		if strings.EqualFold(strings.TrimSpace(*treedbIndexOuterLeafMode), treedb.IndexOuterLeafModeV2FencePtr) {
-			outerLeafCacheDefault = defaultOuterLeafBlockCacheEntriesV2FencePtr
-		}
+		outerLeafCacheDefault := fastProfileOuterLeafCacheDefault(*treedbIndexOuterLeafMode)
 		setIntIfUnset("treedb-outer-leaf-block-cache-entries", outerLeafCacheDefault, isSet, treedbOuterLeafBlockCacheEntries)
 
 		// Other DBs: match "fast" behavior (nosync).

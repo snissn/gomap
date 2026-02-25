@@ -213,3 +213,13 @@ func TestGetMany_ParallelPath_OrderMissingEmptyAndDefensiveCopy(t *testing.T) {
 		t.Fatalf("db value changed after caller mutation: got=%q want %q", latest, []byte("dup-value"))
 	}
 }
+
+func TestGetManyWorkerArenaCap_IsBounded(t *testing.T) {
+	if got := getManyWorkerArenaCap(1); got != getManyValueGuessBytes {
+		t.Fatalf("getManyWorkerArenaCap(1)=%d want=%d", got, getManyValueGuessBytes)
+	}
+	largeKeys := (getManyMaxArenaBytes / getManyValueGuessBytes) * 2
+	if got := getManyWorkerArenaCap(largeKeys); got != getManyWorkerMaxArenaBytes {
+		t.Fatalf("getManyWorkerArenaCap(large)=%d want=%d", got, getManyWorkerMaxArenaBytes)
+	}
+}

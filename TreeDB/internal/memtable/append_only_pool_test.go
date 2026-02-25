@@ -196,6 +196,7 @@ func TestAppendOnlyResetReusesEntryBuffers(t *testing.T) {
 func TestAppendOnlySetCopiesIntoArenaForNonSteal(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	key := []byte("long-key-arena")
+	queryKey := append([]byte(nil), key...)
 	src := []byte("value-arena-copy")
 	m.Set(key, src)
 
@@ -209,17 +210,45 @@ func TestAppendOnlySetCopiesIntoArenaForNonSteal(t *testing.T) {
 	if len(ent.value) != len(src) {
 		t.Fatalf("entry value len=%d want=%d", len(ent.value), len(src))
 	}
+	if &ent.key[0] == &key[0] {
+		t.Fatalf("entry key unexpectedly aliases caller buffer")
+	}
 	if &ent.value[0] == &src[0] {
 		t.Fatalf("entry value unexpectedly aliases caller buffer")
 	}
+	key[0] = 'X'
 	src[0] = 'X'
 
-	got, tombstone, ok := m.Get(key)
+	got, tombstone, ok := m.Get(queryKey)
 	if !ok || tombstone {
-		t.Fatalf("Get(%q) = ok=%v tombstone=%v; want ok=true tombstone=false", key, ok, tombstone)
+		t.Fatalf("Get(%q) = ok=%v tombstone=%v; want ok=true tombstone=false", queryKey, ok, tombstone)
 	}
 	if string(got) != "value-arena-copy" {
 		t.Fatalf("stored value changed via source mutation: got=%q", got)
+	}
+}
+
+func TestAppendOnlyResetClearsKeyArenaState(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := make([]byte, 32)
+	val := []byte("v")
+	for i := 0; i < 64; i++ {
+		key[0] = byte(i)
+		m.Set(key, val)
+	}
+	if len(m.keyArena.chunks) == 0 {
+		t.Fatalf("expected key arena chunks to be populated")
+	}
+
+	m.Reset()
+	if len(m.keyArena.chunks) != 0 {
+		t.Fatalf("expected key arena chunks to be released on reset; got=%d", len(m.keyArena.chunks))
+	}
+	if m.keyArena.cur != nil {
+		t.Fatalf("expected key arena current chunk to be cleared")
+	}
+	if m.keyArena.curPos != 0 {
+		t.Fatalf("expected key arena position reset; got=%d", m.keyArena.curPos)
 	}
 }
 
@@ -393,5 +422,39 @@ func TestAppendOnlyResetKeepsSnapshotBuffersWarm(t *testing.T) {
 	}
 	if cap(m.indexBuf) < indexCap {
 		t.Fatalf("index cap shrank after reset: got=%d want>=%d", cap(m.indexBuf), indexCap)
+	}
+}
+
+func TestAppendOnlyPutWithCallbackNilCopiesCallerBuffers(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("callback-key")
+	queryKey := append([]byte(nil), key...)
+	val := []byte("callback-val")
+	if err := m.PutWithCallback(key, val, nil); err != nil {
+		t.Fatalf("PutWithCallback(nil): %v", err)
+	}
+	key[0] = 'X'
+	val[0] = 'X'
+	got, tombstone, ok := m.Get(queryKey)
+	if !ok || tombstone {
+		t.Fatalf("Get(%q) = ok=%v tombstone=%v; want ok=true tombstone=false", queryKey, ok, tombstone)
+	}
+	if string(got) != "callback-val" {
+		t.Fatalf("stored value changed via source mutation: got=%q", got)
+	}
+}
+
+func TestAppendOnlyDeleteWithCallbackNilCopiesKey(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	key := []byte("delete-callback-key")
+	queryKey := append([]byte(nil), key...)
+	m.Set(queryKey, []byte("v"))
+	if err := m.DeleteWithCallback(key, nil); err != nil {
+		t.Fatalf("DeleteWithCallback(nil): %v", err)
+	}
+	key[0] = 'X'
+	got, tombstone, ok := m.Get(queryKey)
+	if !ok || !tombstone || got != nil {
+		t.Fatalf("Get(%q) after delete = value=%q tombstone=%v ok=%v; want nil,true,true", queryKey, got, tombstone, ok)
 	}
 }

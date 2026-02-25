@@ -1798,10 +1798,14 @@ func lookupV3EntryRange(entries []byte, key []byte, start int, limit int) (Looku
 	if prevCap < 64 {
 		prevCap = 64
 	}
-	prev := getPooledBytes(prevCap)
-	curr := getPooledBytes(prevCap)
-	defer putPooledBytes(prev)
-	defer putPooledBytes(curr)
+	var prevStack [256]byte
+	var currStack [256]byte
+	prev := prevStack[:0]
+	curr := currStack[:0]
+	if prevCap > len(prevStack) {
+		prev = make([]byte, 0, prevCap)
+		curr = make([]byte, 0, prevCap)
+	}
 	for off < limit {
 		if off+9 > limit {
 			return LookupResult{}, false, fmt.Errorf("outerleaf: truncated entry")

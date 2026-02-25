@@ -605,3 +605,98 @@ func TestCachingDB_V1LeafLogRoute_InvariantFailsOnPersistedInlineRow(t *testing.
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestCachingDB_V1LeafLogRoute_FailsOnFenceMarkedLegacyAnchors(t *testing.T) {
+	dir := t.TempDir()
+	legacyBackend, err := backenddb.Open(backenddb.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLog,
+		ValueLog: backenddb.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("legacy backend open: %v", err)
+	}
+	legacyCache, err := Open(dir, legacyBackend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		JournalLanes:                      1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLog,
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		_ = legacyBackend.Close()
+		t.Fatalf("legacy cache open: %v", err)
+	}
+	for i := 0; i < 256; i++ {
+		k := []byte(fmt.Sprintf("k%04d", i))
+		v := bytes.Repeat([]byte{byte(i)}, 96)
+		if setErr := legacyCache.Set(k, v); setErr != nil {
+			_ = legacyCache.Close()
+			_ = legacyBackend.Close()
+			t.Fatalf("legacy set %d: %v", i, setErr)
+		}
+	}
+	if err := legacyCache.Checkpoint(); err != nil {
+		_ = legacyCache.Close()
+		_ = legacyBackend.Close()
+		t.Fatalf("legacy checkpoint: %v", err)
+	}
+	if err := legacyCache.Close(); err != nil {
+		_ = legacyBackend.Close()
+		t.Fatalf("legacy cache close: %v", err)
+	}
+	if err := legacyBackend.Close(); err != nil {
+		t.Fatalf("legacy backend close: %v", err)
+	}
+
+	routeBackend, err := backenddb.Open(backenddb.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLog: backenddb.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("route backend open: %v", err)
+	}
+	defer routeBackend.Close()
+
+	routeCache, err := Open(dir, routeBackend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		JournalLanes:                      1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("route cache open: %v", err)
+	}
+	defer routeCache.Close()
+
+	if err := routeCache.Set([]byte("k0128"), []byte("route-overwrite")); err != nil {
+		t.Fatalf("route set: %v", err)
+	}
+	err = routeCache.Checkpoint()
+	if err == nil {
+		t.Fatalf("expected route-mode checkpoint to fail on fence-marked legacy anchors")
+	}
+	if !strings.Contains(err.Error(), "forbids fence-marked anchor pointer") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
