@@ -19,6 +19,7 @@ const (
 	// 8 MiB cap keeps per-worker reserve bounded while reducing repeated arena
 	// growth/copy churn for large GetMany batches.
 	getManyMaxArenaBytes            = 8 << 20
+	getManyWorkerMaxArenaBytes      = 2 << 20
 	getManyParallelMinKeys          = 128
 	getManyParallelMinKeysPerWorker = 32
 	getManyParallelMaxWorkers       = 8
@@ -37,6 +38,14 @@ func getManyArenaCap(keyCount int) int {
 	}
 	if arenaCap > getManyMaxArenaBytes {
 		arenaCap = getManyMaxArenaBytes
+	}
+	return arenaCap
+}
+
+func getManyWorkerArenaCap(keyCount int) int {
+	arenaCap := getManyArenaCap(keyCount)
+	if arenaCap > getManyWorkerMaxArenaBytes {
+		arenaCap = getManyWorkerMaxArenaBytes
 	}
 	return arenaCap
 }
@@ -221,7 +230,7 @@ func (db *DB) getManyParallel(snap *Snapshot, keys [][]byte, out [][]byte, worke
 		if start >= end {
 			continue
 		}
-		workerArenaCap := getManyArenaCap(end - start)
+		workerArenaCap := getManyWorkerArenaCap(end - start)
 		wg.Add(1)
 		go func(start, end, arenaCap int) {
 			defer wg.Done()

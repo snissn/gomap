@@ -199,8 +199,8 @@ func putValueLogRecordsCheckpointAware(db *DB, s []valuelog.Record) {
 	if s == nil {
 		return
 	}
-	// During checkpoint debt-drain, dropping record slices avoids large
-	// clear-and-pool costs on oversized deferred batches.
+	// During checkpoint debt-drain, drop deferred record slices outright to
+	// avoid additional clear-and-pool work in the flush hot path.
 	if db != nil && db.checkpointing.Load() {
 		db.deferredFenceCheckpointPoolSkips.Add(1)
 		return
