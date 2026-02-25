@@ -1433,7 +1433,7 @@ func TestCachingDB_Open_V2FencePtrWALOn_DefaultAutoSimpleInline(t *testing.T) {
 	}
 }
 
-func TestCachingDB_Open_EmptyOuterLeafModeDefaultsToV2FencePtr(t *testing.T) {
+func TestCachingDB_Open_EmptyOuterLeafModeDefaultsToV1LeafLogRoute(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
@@ -1447,8 +1447,38 @@ func TestCachingDB_Open_EmptyOuterLeafModeDefaultsToV2FencePtr(t *testing.T) {
 	}
 	defer cache.Close()
 
-	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV2FencePtr {
-		t.Fatalf("cache indexOuterLeafMode = %q, want %q", got, db.IndexOuterLeafModeV2FencePtr)
+	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1LeafLogRoute {
+		t.Fatalf("cache indexOuterLeafMode = %q, want %q", got, db.IndexOuterLeafModeV1LeafLogRoute)
+	}
+}
+
+func TestCachingDB_Open_EmptyOuterLeafModeFallsBackToV1WhenBackendLacksRoutePrimitives(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	cache, err := Open(dir, backend, Options{})
+	if err != nil {
+		t.Fatalf("cache open with empty outer-leaf mode: %v", err)
+	}
+	defer cache.Close()
+
+	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1 {
+		t.Fatalf("cache indexOuterLeafMode = %q, want %q", got, db.IndexOuterLeafModeV1)
+	}
+}
+
+func TestCachingDB_Open_ExplicitRouteModeRequiresRouteCapableBackend(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	_, err := Open(dir, backend, Options{
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1LeafLogRoute,
+	})
+	if err == nil {
+		t.Fatalf("expected explicit route mode to be rejected for mock backend")
+	}
+	if !strings.Contains(err.Error(), "requires backend SetPointer support") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

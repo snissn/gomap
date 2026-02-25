@@ -3,11 +3,14 @@
 This document defines behavioral expectations for `IndexOuterLeafMode` on the
 public TreeDB options surface (`treedb.Open`, `OptionsFor`, `ApplyProfile`).
 
-If `IndexOuterLeafMode` is unset (`""`) on the public surface, TreeDB defaults
+If `IndexOuterLeafMode` is unset (`""`), TreeDB defaults
 to `v1_leaflog_route`.
 
-Note: lower-level internal opens (`TreeDB/db`, `TreeDB/caching`) may apply
-different defaults (currently `v2_fenceptr`) as part of staged rollout paths.
+Implementation note for lower-level opens:
+- `TreeDB/db.Open`: empty mode normalizes to `v1_leaflog_route`.
+- `TreeDB/caching.Open`: empty mode normalizes to `v1_leaflog_route` for
+  route-capable backends; generic backends without route primitives fall back
+  to `v1` (never `v2_fenceptr`).
 
 ## Mode Semantics (Step 2)
 
