@@ -1618,3 +1618,37 @@ func TestChooseRewriteSegmentTarget_ByGenerationMajority(t *testing.T) {
 		t.Fatalf("hot-majority target=%d want=%d", got, want)
 	}
 }
+
+func TestChooseRewriteSegmentTarget_TieFallsBackToMax(t *testing.T) {
+	source := map[uint32]struct{}{1: {}, 2: {}, 3: {}}
+	health := map[uint32]valueLogSegmentHealth{
+		1: {RewriteCount: 0}, // hot
+		2: {RewriteCount: 1}, // warm
+		3: {RewriteCount: 2}, // cold
+	}
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSegmentBytes:  32 << 20,
+		HotSegmentBytes:  16 << 20,
+		WarmSegmentBytes: 64 << 20,
+		ColdSegmentBytes: 256 << 20,
+	}
+	got := chooseRewriteSegmentTarget(opts, source, health)
+	if want := int64(32 << 20); got != want {
+		t.Fatalf("tie target=%d want=%d", got, want)
+	}
+}
+
+func TestChooseRewriteSegmentTarget_MissingHealthFallsBackToMax(t *testing.T) {
+	source := map[uint32]struct{}{7: {}, 8: {}}
+	health := map[uint32]valueLogSegmentHealth{}
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSegmentBytes:  32 << 20,
+		HotSegmentBytes:  16 << 20,
+		WarmSegmentBytes: 64 << 20,
+		ColdSegmentBytes: 256 << 20,
+	}
+	got := chooseRewriteSegmentTarget(opts, source, health)
+	if want := int64(32 << 20); got != want {
+		t.Fatalf("missing-health target=%d want=%d", got, want)
+	}
+}

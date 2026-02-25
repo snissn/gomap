@@ -321,7 +321,7 @@ func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
 	wantReserve := reserveHint
 	if wantReserve > 0 {
 		maxInt := int(^uint(0) >> 1)
-		if wantReserve > maxInt/2 {
+		if wantReserve >= maxInt/2 {
 			wantReserve = maxInt
 		} else {
 			wantReserve *= 2
@@ -329,6 +329,31 @@ func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
 	}
 	if backendBatch.lastReserve != wantReserve {
 		t.Fatalf("reserve hint=%d want=%d", backendBatch.lastReserve, wantReserve)
+	}
+}
+
+func TestScaledReserveHint(t *testing.T) {
+	maxInt := int(^uint(0) >> 1)
+	tests := []struct {
+		name    string
+		in      int
+		capHint int
+		want    int
+	}{
+		{name: "zero", in: 0, capHint: 0, want: 0},
+		{name: "double", in: 7, capHint: 0, want: 14},
+		{name: "cap before double", in: 100, capHint: 8, want: 16},
+		{name: "overflow edge at half", in: maxInt / 2, capHint: 0, want: maxInt},
+		{name: "overflow above half", in: maxInt, capHint: 0, want: maxInt},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := scaledReserveHint(tc.in, tc.capHint)
+			if got != tc.want {
+				t.Fatalf("scaledReserveHint(%d,%d)=%d want=%d", tc.in, tc.capHint, got, tc.want)
+			}
+		})
 	}
 }
 
