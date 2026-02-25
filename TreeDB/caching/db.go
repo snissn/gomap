@@ -195,6 +195,19 @@ func putValueLogRecordsNoClear(s []valuelog.Record) {
 	valueLogRecordPool.Put(s[:0])
 }
 
+func putValueLogRecordsCheckpointAware(db *DB, s []valuelog.Record) {
+	if s == nil {
+		return
+	}
+	// During checkpoint debt-drain, dropping record slices avoids large
+	// clear-and-pool costs on oversized deferred batches.
+	if db != nil && db.checkpointing.Load() {
+		db.deferredFenceCheckpointPoolSkips.Add(1)
+		return
+	}
+	putValueLogRecordsNoClear(s)
+}
+
 func getOuterLeafEntriesCap(capacity int) []outerleaf.Entry {
 	if capacity < 0 {
 		capacity = 0
@@ -1274,7 +1287,7 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 	}
 
 	records := getValueLogRecordsCap(recordsCap)
-	defer putValueLogRecordsNoClear(records)
+	defer putValueLogRecordsCheckpointAware(db, records)
 	groups := make([]outerLeafRecordGroup, 0, groupsCap)
 
 	entries := make([]outerleaf.TypedEntry, 0, entriesCap)
@@ -1299,7 +1312,7 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 			return nil
 		}
 		nestedRecords := getValueLogRecordsCap(len(nestedIdxs))
-		defer putValueLogRecordsNoClear(nestedRecords)
+		defer putValueLogRecordsCheckpointAware(db, nestedRecords)
 		if len(nestedIdxs) > 0 {
 			startRID := db.nextRID.Add(uint64(len(nestedIdxs))) - uint64(len(nestedIdxs)) + 1
 			for _, nestedPos := range nestedIdxs {
@@ -6300,6 +6313,7 @@ type DB struct {
 	deferredFenceAssistFlushedMemtables atomic.Uint64
 	deferredFenceAssistEarlyTriggers    atomic.Uint64
 	deferredFenceAssistTicker           atomic.Uint64
+	deferredFenceCheckpointPoolSkips    atomic.Uint64
 	domainIngressMu                     sync.Mutex
 	domainIngressCh                     []chan domainIngressRequest
 	domainIngressEnqueued               atomic.Uint64
@@ -12149,24 +12163,24 @@ func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time)
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
-	// Note: Any code path that takes both flushMu and checkpointMu must acquire
-	// flushMu first to avoid deadlocks.
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock() // Ensure it's released
-
+	// Mark checkpointing before waiting for flushMu so in-flight flush paths
+	// can observe checkpoint mode while this call is pending.
 	db.checkpointMu.Lock()
 	for db.checkpointing.Load() {
 		db.checkpointCond.Wait()
 	}
-	db.checkpointing.Store(true) // Set flag only after acquiring flushMu
+	db.checkpointing.Store(true)
 	db.checkpointMu.Unlock()
 
-	defer func() { // This defer runs when db.Checkpoint() returns
+	defer func() {
 		db.checkpointMu.Lock()
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
 	}()
+
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock() // Ensure it's released
 
 	db.writeMu.Lock()
 	cutoverStart := time.Now()
@@ -16623,6 +16637,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.deferred_vlog.assist_calls"] = fmt.Sprintf("%d", db.deferredFenceAssistCalls.Load())
 	stats["treedb.cache.deferred_vlog.assist_flushed_memtables"] = fmt.Sprintf("%d", db.deferredFenceAssistFlushedMemtables.Load())
 	stats["treedb.cache.deferred_vlog.assist_early_triggers"] = fmt.Sprintf("%d", db.deferredFenceAssistEarlyTriggers.Load())
+	stats["treedb.cache.deferred_vlog.checkpoint_pool_skips"] = fmt.Sprintf("%d", db.deferredFenceCheckpointPoolSkips.Load())
 	stats["treedb.cache.v2_fenceptr.wal_fence_mode"] = db.valueLogWALFenceMode
 	stats["treedb.cache.v2_fenceptr.deferred_candidates"] = fmt.Sprintf("%d", fenceCandidates)
 	stats["treedb.cache.v2_fenceptr.deferred_groups"] = fmt.Sprintf("%d", fenceGroups)
@@ -16635,11 +16650,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.v2_fenceptr.assist_calls"] = fmt.Sprintf("%d", db.deferredFenceAssistCalls.Load())
 	stats["treedb.cache.v2_fenceptr.assist_flushed_memtables"] = fmt.Sprintf("%d", db.deferredFenceAssistFlushedMemtables.Load())
 	stats["treedb.cache.v2_fenceptr.assist_early_triggers"] = fmt.Sprintf("%d", db.deferredFenceAssistEarlyTriggers.Load())
+	stats["treedb.cache.v2_fenceptr.checkpoint_pool_skips"] = fmt.Sprintf("%d", db.deferredFenceCheckpointPoolSkips.Load())
 	stats["treedb.cache.v1_leaflog_route.deferred_pending_keys_estimate"] = fmt.Sprintf("%d", fencePendingKeys)
 	stats["treedb.cache.v1_leaflog_route.deferred_pending_bytes_estimate"] = fmt.Sprintf("%d", fencePendingBytes)
 	stats["treedb.cache.v1_leaflog_route.assist_calls"] = fmt.Sprintf("%d", db.deferredFenceAssistCalls.Load())
 	stats["treedb.cache.v1_leaflog_route.assist_flushed_memtables"] = fmt.Sprintf("%d", db.deferredFenceAssistFlushedMemtables.Load())
 	stats["treedb.cache.v1_leaflog_route.assist_early_triggers"] = fmt.Sprintf("%d", db.deferredFenceAssistEarlyTriggers.Load())
+	stats["treedb.cache.v1_leaflog_route.checkpoint_pool_skips"] = fmt.Sprintf("%d", db.deferredFenceCheckpointPoolSkips.Load())
 	stats["treedb.cache.v1_leaflog_route.fallback_direct_attempts"] = fmt.Sprintf("%d", db.routeLeaflogFallbackDirectAttempts.Load())
 	stats["treedb.cache.v1_leaflog_route.fallback_direct_rewrites"] = fmt.Sprintf("%d", db.routeLeaflogFallbackDirectRewrites.Load())
 	if fenceGroups > 0 {
