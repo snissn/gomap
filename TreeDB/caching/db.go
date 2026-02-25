@@ -1842,7 +1842,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	}
 	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowMutableFencePointerCollapse()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := db.outerLeafRouteModeEnabled()
 
 	eligible := getValueLogEligible(len(ops))
 	defer putValueLogEligible(eligible)
@@ -1895,7 +1895,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	var groups []outerLeafRecordGroup
 	var records []valuelog.Record
 	var outerArena []byte
-	routeMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeMode := db.outerLeafRouteModeEnabled()
 	if routeMode {
 		ptrs, groups, err = db.writeRouteOuterLeafValueRecords(lane, dictID, keys, values, durability)
 		if err != nil {
@@ -3817,7 +3817,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	dv, _ := backendBatch.(deleteViewer)
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := db.outerLeafRouteModeEnabled()
 	reserveHint := scaledReserveHint(memLen, db.flushBackendInitEntries)
 	if routeAnchorMode && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		// Route-mode overlap rewrites can fan out many backend ops; keep reserve
@@ -4383,7 +4383,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	allowPointers := db.allowValueLogPointers()
 	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := db.outerLeafRouteModeEnabled()
 
 	durability := journalDurabilityNone
 	if sync {
@@ -10575,7 +10575,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	)
 
 	rawPayloadBytes := 0
-	routeOuterLeafMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeOuterLeafMode := db.outerLeafRouteModeEnabled()
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
 	}
@@ -12491,7 +12491,7 @@ func (db *DB) maybeAssistFlush() {
 	// background/checkpoint flush boundaries drain the queue instead.
 	if db != nil &&
 		db.disableJournal &&
-		strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+		db.outerLeafRouteModeEnabled() {
 		return
 	}
 
@@ -12869,7 +12869,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	eligible := db.shouldWriteViaValueLogForKeyValue(key, value)
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := db.outerLeafRouteModeEnabled()
 	hybridRIDJoin := allowPointers && db.fenceRIDJoinHybridEnabled()
 	oversized := hybridRIDJoin && db.oversizedOuterLeafValue(value)
 	deferPointers := false
