@@ -7329,6 +7329,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// higher default threshold keeps medium values inline inside route payloads
 	// and avoids second-hop pointer indirection.
 	const (
+		defaultDurableValueLogThreshold = page.DefaultInlineThreshold
 		defaultRelaxedValueLogThreshold = 127
 		defaultRouteValueLogThreshold   = 512
 	)
@@ -7338,7 +7339,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		case backenddb.IndexOuterLeafModeV1LeafLogRoute:
 			valueLogThreshold = defaultRouteValueLogThreshold
 		default:
-			valueLogThreshold = inlineThreshold
+			valueLogThreshold = defaultDurableValueLogThreshold
 			if opts.DisableWAL || opts.RelaxedSync {
 				valueLogThreshold = defaultRelaxedValueLogThreshold
 			}

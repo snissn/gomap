@@ -84,6 +84,25 @@ func TestBuildTreeDBOptions_DefaultPointerThreshold_V2FencePtrRelaxed(t *testing
 	}
 }
 
+func TestBuildTreeDBOptions_DefaultPointerThreshold_V2FencePtrDurable(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions durable v2 threshold: %v", err)
+	}
+	if got := opts.ValueLog.PointerThreshold; got != 0 {
+		t.Fatalf("expected unset pointer threshold in options, got %d", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.pointer_threshold=default (effective=256B)") {
+		t.Fatalf("resolved options missing durable v2 effective pointer threshold 256B: %q", got)
+	}
+}
+
 func TestBuildTreeDBOptions_V1LeafLogModeAccepted(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)

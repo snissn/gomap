@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,8 +23,9 @@ func TestBatchWriteSteadyCheckpointBytesFlag_DefaultIs64MiB(t *testing.T) {
 	if f == nil {
 		t.Fatalf("missing batch-write-steady-checkpoint-bytes flag")
 	}
-	if got := f.DefValue; got != "67108864" {
-		t.Fatalf("flag default=%q want %q", got, "67108864")
+	want := strconv.FormatInt(64<<20, 10)
+	if got := f.DefValue; got != want {
+		t.Fatalf("flag default=%q want %q", got, want)
 	}
 }
 
