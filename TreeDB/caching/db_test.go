@@ -1472,6 +1472,12 @@ func TestCachingDB_Open_DefaultPointerThresholdByModeAndDurability(t *testing.T)
 			want:       127,
 		},
 		{
+			name:    "v2_fenceptr_relaxed_wal_on",
+			mode:    db.IndexOuterLeafModeV2FencePtr,
+			relaxed: true,
+			want:    127,
+		},
+		{
 			name: "v1_leaflog_route_durable",
 			mode: db.IndexOuterLeafModeV1LeafLogRoute,
 			want: 512,
@@ -1481,6 +1487,12 @@ func TestCachingDB_Open_DefaultPointerThresholdByModeAndDurability(t *testing.T)
 			mode:       db.IndexOuterLeafModeV1LeafLogRoute,
 			disableWAL: true,
 			want:       512,
+		},
+		{
+			name:    "v1_leaflog_route_relaxed_wal_on",
+			mode:    db.IndexOuterLeafModeV1LeafLogRoute,
+			relaxed: true,
+			want:    512,
 		},
 	}
 
