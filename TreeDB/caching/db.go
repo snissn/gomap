@@ -7326,7 +7326,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	//
 	// v1_leaflog_route stores outer-leaf payloads in the value log already; a
 	// higher default threshold keeps medium values inline inside route payloads
-	// and avoids avoidable second-hop pointer indirection.
+	// and avoids second-hop pointer indirection.
 	const (
 		defaultRelaxedValueLogThreshold = 127
 		defaultRouteValueLogThreshold   = 512
