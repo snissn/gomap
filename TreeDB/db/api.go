@@ -130,12 +130,17 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 }
 
 func (db *DB) getManySequential(snap *Snapshot, keys [][]byte, out [][]byte) error {
+	reader := snap.reader
+	(&reader).withDedicatedFenceDecodeContext()
+	defer (&reader).releaseDedicatedFenceDecodeContext()
+	tr := tree.New(snap.treePager, &reader, snap.treeRoot)
+
 	// Copy all found values into a single arena to avoid one allocation per key.
 	// Each returned slice is capacity-capped to preserve safe-copy semantics.
 	arena := make([]byte, 0, getManyArenaCap(len(keys)))
 	for i, key := range keys {
 		start := len(arena)
-		nextArena, err := snap.GetAppend(key, arena)
+		nextArena, err := tr.GetAppend(key, arena)
 		if err == tree.ErrKeyNotFound {
 			continue
 		}
@@ -168,13 +173,17 @@ func (db *DB) getManyParallel(snap *Snapshot, keys [][]byte, out [][]byte, worke
 		wg.Add(1)
 		go func(start, end, arenaCap int) {
 			defer wg.Done()
+			workerReader := snap.reader
+			(&workerReader).withDedicatedFenceDecodeContext()
+			defer (&workerReader).releaseDedicatedFenceDecodeContext()
+			workerTree := tree.New(snap.treePager, &workerReader, snap.treeRoot)
 			arena := make([]byte, 0, arenaCap)
 			for i := start; i < end; i++ {
 				if stop.Load() {
 					return
 				}
 				arenaStart := len(arena)
-				nextArena, err := snap.GetAppend(keys[i], arena)
+				nextArena, err := workerTree.GetAppend(keys[i], arena)
 				if err == tree.ErrKeyNotFound {
 					continue
 				}
