@@ -8,35 +8,35 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 )
 
-func TestTreeDBIndexOuterLeafModeFlag_DefaultIsV2FencePtr(t *testing.T) {
+func TestTreeDBIndexOuterLeafModeFlag_DefaultIsV1LeafLogRoute(t *testing.T) {
 	f := flag.Lookup("treedb-index-outer-leaf-mode")
 	if f == nil {
 		t.Fatalf("missing treedb-index-outer-leaf-mode flag")
 	}
-	if got := f.DefValue; got != "v2_fenceptr" {
-		t.Fatalf("flag default=%q want %q", got, "v2_fenceptr")
+	if got := f.DefValue; got != "v1_leaflog_route" {
+		t.Fatalf("flag default=%q want %q", got, "v1_leaflog_route")
 	}
 }
 
-func TestBuildTreeDBOptions_DefaultOuterLeafModeUsesV2FencePtr(t *testing.T) {
+func TestBuildTreeDBOptions_DefaultOuterLeafModeUsesV1LeafLogRoute(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
 
 	resetTreeDBIndexFlagsForTest()
-	*treedbIndexOuterLeafMode = "v2_fenceptr"
+	*treedbIndexOuterLeafMode = "v1_leaflog_route"
 
 	opts, rep, err := buildTreeDBOptions("")
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions default outer leaf mode: %v", err)
 	}
-	if got := opts.IndexOuterLeafMode; got != treedb.IndexOuterLeafModeV2FencePtr {
-		t.Fatalf("IndexOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV2FencePtr)
+	if got := opts.IndexOuterLeafMode; got != treedb.IndexOuterLeafModeV1LeafLogRoute {
+		t.Fatalf("IndexOuterLeafMode=%q want %q", got, treedb.IndexOuterLeafModeV1LeafLogRoute)
 	}
-	if got := opts.ValueLog.WALFenceMode; got != "simple_inline" {
-		t.Fatalf("expected WAL-enabled v2_fenceptr default fence mode simple_inline, got %q", got)
+	if got := opts.ValueLog.WALFenceMode; got != "rid_join" {
+		t.Fatalf("expected default WAL fence mode rid_join for v1_leaflog_route, got %q", got)
 	}
-	if got := rep.formatText(""); !strings.Contains(got, "index_outer_leaf_mode=v2_fenceptr") {
-		t.Fatalf("resolved options missing default v2_fenceptr outer-leaf mode: %q", got)
+	if got := rep.formatText(""); !strings.Contains(got, "index_outer_leaf_mode=v1_leaflog_route") {
+		t.Fatalf("resolved options missing default v1_leaflog_route outer-leaf mode: %q", got)
 	}
 }
 

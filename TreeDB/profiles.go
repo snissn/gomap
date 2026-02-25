@@ -84,7 +84,7 @@ const (
 	ProfileBench Profile = "bench"
 )
 
-const defaultV2FencePtrOuterLeafBlockCacheEntries = 16384
+const defaultRoutingOuterLeafBlockCacheEntries = 16384
 
 // OptionsFor returns a copy of Options pre-filled for the given Profile.
 //
@@ -140,16 +140,16 @@ func applyIndexOptimizationsProfile(opts *Options) {
 	opts.IndexInternalBaseDelta = true
 }
 
-func applyV2FencePtrOuterLeafBlockCacheDefault(opts *Options) {
+func applyRoutingOuterLeafBlockCacheDefault(opts *Options) {
 	if opts == nil || opts.ValueLog.OuterLeafBlockCacheEntries != 0 {
 		return
 	}
 	mode := strings.TrimSpace(opts.IndexOuterLeafMode)
 	if mode == "" {
-		mode = IndexOuterLeafModeV2FencePtr
+		mode = IndexOuterLeafModeV1LeafLogRoute
 	}
-	if strings.EqualFold(mode, IndexOuterLeafModeV2FencePtr) {
-		opts.ValueLog.OuterLeafBlockCacheEntries = defaultV2FencePtrOuterLeafBlockCacheEntries
+	if strings.EqualFold(mode, IndexOuterLeafModeV2FencePtr) || strings.EqualFold(mode, IndexOuterLeafModeV1LeafLogRoute) {
+		opts.ValueLog.OuterLeafBlockCacheEntries = defaultRoutingOuterLeafBlockCacheEntries
 	}
 }
 
@@ -169,7 +169,7 @@ func applyFastProfile(opts *Options) {
 		opts.PreferAppendAlloc = true
 	}
 	applyIndexOptimizationsProfile(opts)
-	applyV2FencePtrOuterLeafBlockCacheDefault(opts)
+	applyRoutingOuterLeafBlockCacheDefault(opts)
 }
 
 func applyWALOnFastProfile(opts *Options) {
@@ -185,7 +185,7 @@ func applyWALOnFastProfile(opts *Options) {
 	// Prefer appending new pages for throughput under churn.
 	opts.PreferAppendAlloc = true
 	applyIndexOptimizationsProfile(opts)
-	applyV2FencePtrOuterLeafBlockCacheDefault(opts)
+	applyRoutingOuterLeafBlockCacheDefault(opts)
 }
 
 func applyBenchProfile(opts *Options) {

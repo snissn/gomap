@@ -122,7 +122,7 @@ TreeDB supports five index outer-leaf modes:
 - `v2_blockptr`: exact-key index entries that can point to grouped outer-leaf payload blocks.
 - `v2_fenceptr`: fence-key routing mode (smallest index footprint, predecessor-probe lookup model).
 
-If unset (`""`), `IndexOuterLeafMode` defaults to `v2_fenceptr`.
+If unset (`""`), `IndexOuterLeafMode` defaults to `v1_leaflog_route`.
 
 Current Step 2 guarantees:
 - `v1_leaflog` and `v1_leaflog_legacy` remain distinct selectable mode strings (no auto-aliasing).

@@ -284,7 +284,7 @@ func normalizeBackpressureDefaults(opts *Options) {
 func normalizePublicOuterLeafMode(mode string) string {
 	trimmed := strings.TrimSpace(mode)
 	if trimmed == "" {
-		return db.IndexOuterLeafModeV2FencePtr
+		return db.IndexOuterLeafModeV1LeafLogRoute
 	}
 	normalized := strings.ToLower(trimmed)
 	switch normalized {

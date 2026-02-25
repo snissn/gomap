@@ -96,7 +96,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
 - `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
-- `-treedb-index-outer-leaf-mode` TreeDB: outer-leaf mode selector (`v1|v2_blockptr|v2_fenceptr`, default `v2_fenceptr`)
+- `-treedb-index-outer-leaf-mode` TreeDB: outer-leaf mode selector (`v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr`, default `v1_leaflog_route`)
 - `-treedb-outer-leaf-block-target-bytes` TreeDB: target block size for v2 outer-leaf block payloads
 - `-treedb-outer-leaf-block-codec` TreeDB: block codec for v2 outer-leaf payloads (`snappy|lz4`)
 - `-treedb-outer-leaf-block-restart-interval` TreeDB: restart interval metadata for v2 outer-leaf payloads

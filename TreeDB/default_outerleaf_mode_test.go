@@ -2,7 +2,7 @@ package treedb
 
 import "testing"
 
-func TestOpen_DefaultIndexOuterLeafModeUsesV2FencePtr(t *testing.T) {
+func TestOpen_DefaultIndexOuterLeafModeUsesV1LeafLogRoute(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -10,7 +10,7 @@ func TestOpen_DefaultIndexOuterLeafModeUsesV2FencePtr(t *testing.T) {
 	defer db.Close()
 
 	stats := db.Stats()
-	if got := stats["treedb.cache.v2_fenceptr.wal_fence_mode"]; got != "simple_inline" {
-		t.Fatalf("expected default TreeDB open to use v2_fenceptr WAL-on defaults (simple_inline), got %q", got)
+	if got := stats["treedb.index.outer_leaf_mode"]; got != IndexOuterLeafModeV1LeafLogRoute {
+		t.Fatalf("expected default TreeDB open to use v1_leaflog_route, got %q", got)
 	}
 }

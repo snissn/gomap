@@ -2,7 +2,7 @@
 
 This document defines behavioral expectations for `IndexOuterLeafMode`.
 
-If `IndexOuterLeafMode` is unset (`""`), TreeDB defaults to `v2_fenceptr`.
+If `IndexOuterLeafMode` is unset (`""`), TreeDB defaults to `v1_leaflog_route`.
 
 ## Mode Semantics (Step 2)
 

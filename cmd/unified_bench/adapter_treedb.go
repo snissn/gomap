@@ -86,7 +86,7 @@ var (
 	treedbIndexColumnarLeaves             = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
-	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v2_fenceptr", "TreeDB: index outer-leaf mode (v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
+	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v1_leaflog_route", "TreeDB: index outer-leaf mode (v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
 	treedbWALFenceMode                    = flag.String("treedb-wal-fence-mode", "rid_join", "TreeDB: WAL fence mode for v2_fenceptr (rid_join|simple_inline). For WAL-on v2_fenceptr, default remains simple_inline unless explicitly set.")
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
@@ -265,7 +265,7 @@ func parseTreeDBVlogAutoPolicy(s string) (treedb.ValueLogAutoPolicy, error) {
 func parseTreeDBOuterLeafMode(s string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "":
-		return treedb.IndexOuterLeafModeV2FencePtr, nil
+		return treedb.IndexOuterLeafModeV1LeafLogRoute, nil
 	case "v1":
 		return treedb.IndexOuterLeafModeV1, nil
 	case "v1_leaflog":
@@ -543,7 +543,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		IndexColumnarLeaves:    columnarLeavesEffective,
 		IndexPackedValuePtr:    packedValuePtrEffective,
 		IndexInternalBaseDelta: internalBaseDeltaEffective,
-		IndexOuterLeafMode:     treedb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:     treedb.IndexOuterLeafModeV1LeafLogRoute,
 
 		MemtableMode:               *treedbMemtableMode,
 		DomainIngressWorkers:       *treedbDomainIngressWorkers,

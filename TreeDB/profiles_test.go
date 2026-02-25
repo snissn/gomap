@@ -123,13 +123,13 @@ func TestApplyProfile_NonV2FencePtrLeavesOuterLeafCacheEntriesUnset(t *testing.T
 	}
 }
 
-func TestApplyProfile_EmptyOuterLeafModeUsesV2FencePtrCacheDefault(t *testing.T) {
+func TestApplyProfile_EmptyOuterLeafModeUsesV1LeafLogRouteCacheDefault(t *testing.T) {
 	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
 		t.Run(string(profile), func(t *testing.T) {
 			var opts Options
 			ApplyProfile(&opts, profile)
 			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 16384 {
-				t.Fatalf("expected empty mode to use v2_fenceptr default OuterLeafBlockCacheEntries=16384, got %d", got)
+				t.Fatalf("expected empty mode to use v1_leaflog_route default OuterLeafBlockCacheEntries=16384, got %d", got)
 			}
 		})
 	}
