@@ -259,7 +259,7 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 }
 
-func TestApplyProfile_FastAndWALOnFast_V2FencePtrOuterLeafCacheDefault(t *testing.T) {
+func TestApplyProfile_FastAndWALOnFast_ReadHeavyOuterLeafCacheDefault(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
 
@@ -279,6 +279,24 @@ func TestApplyProfile_FastAndWALOnFast_V2FencePtrOuterLeafCacheDefault(t *testin
 	}
 	if got := *treedbOuterLeafBlockCacheEntries; got != 16384 {
 		t.Fatalf("expected wal_on_fast profile v2_fenceptr default cache entries=16384, got %d", got)
+	}
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v1_leaflog_route"
+	if err := applyProfile("fast", map[string]bool{}); err != nil {
+		t.Fatalf("applyProfile fast: %v", err)
+	}
+	if got := *treedbOuterLeafBlockCacheEntries; got != 16384 {
+		t.Fatalf("expected fast profile v1_leaflog_route default cache entries=16384, got %d", got)
+	}
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v1_leaflog_route"
+	if err := applyProfile("wal_on_fast", map[string]bool{}); err != nil {
+		t.Fatalf("applyProfile wal_on_fast: %v", err)
+	}
+	if got := *treedbOuterLeafBlockCacheEntries; got != 16384 {
+		t.Fatalf("expected wal_on_fast profile v1_leaflog_route default cache entries=16384, got %d", got)
 	}
 }
 
