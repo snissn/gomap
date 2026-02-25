@@ -3621,7 +3621,10 @@ func (p *fenceAnchorPromoter) shouldEmitRouteDelete(key []byte) bool {
 	}
 	has, err := p.db.backend.Has(key)
 	if err != nil {
-		return true
+		p.db.reportError(fmt.Errorf("cachingdb: route-delete Has(%q) failed: %w", key, err))
+		// Fail closed for safety: do not emit deletes when backend existence
+		// checks are uncertain.
+		return false
 	}
 	return has
 }
