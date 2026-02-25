@@ -79,6 +79,7 @@ func TestProfileFast_CheckpointMaintainsLatestValues(t *testing.T) {
 	for _, profile := range profiles {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := OptionsFor(profile, t.TempDir())
+			opts.IndexOuterLeafMode = IndexOuterLeafModeV2FencePtr
 			db, err := Open(opts)
 			if err != nil {
 				t.Fatalf("open: %v", err)

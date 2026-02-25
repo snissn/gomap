@@ -145,7 +145,7 @@ var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoi
 func normalizeIndexOuterLeafMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "":
-		return IndexOuterLeafModeV2FencePtr
+		return IndexOuterLeafModeV1LeafLogRoute
 	case IndexOuterLeafModeV1:
 		return IndexOuterLeafModeV1
 	case IndexOuterLeafModeV1LeafLog:
@@ -573,7 +573,7 @@ type Options struct {
 	// This option only affects newly-written leaf pages.
 	IndexAdaptiveLeafEncoding bool
 	// IndexOuterLeafMode selects the index outer-leaf format:
-	// - "": defaults to "v2_fenceptr"
+	// - "": defaults to "v1_leaflog_route"
 	// - "v1": existing per-key leaf entries
 	// - "v1_leaflog": routing-style leaf-anchor contract (current Step 2 behavior)
 	// - "v1_leaflog_legacy": legacy exact-key compatibility mode

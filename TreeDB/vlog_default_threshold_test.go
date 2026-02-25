@@ -12,9 +12,10 @@ import (
 func TestDefaultValueLogPointerThreshold_RelaxedDurability_UsesPointersFor128B(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
-		Dir:            dir,
-		FlushThreshold: 1,
-		Durability:     db.DurabilityWALOffRelaxed,
+		Dir:                dir,
+		FlushThreshold:     1,
+		Durability:         db.DurabilityWALOffRelaxed,
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
 		// ValueLog.PointerThreshold left at 0 (default).
 	}
 
@@ -62,9 +63,10 @@ func TestDefaultValueLogPointerThreshold_RelaxedDurability_UsesPointersFor128B(t
 func TestDefaultValueLogPointerThreshold_Durable_Keeps128BInline(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
-		Dir:            dir,
-		FlushThreshold: 1,
-		Durability:     db.DurabilityDurable,
+		Dir:                dir,
+		FlushThreshold:     1,
+		Durability:         db.DurabilityDurable,
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
 		// ValueLog.PointerThreshold left at 0 (default).
 	}
 
