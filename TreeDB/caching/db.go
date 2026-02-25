@@ -2777,8 +2777,8 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 	if !plan.containsKey(key) && !plan.withinSourceRange(key) {
 		return false, sourcePtr, true, nil
 	}
-	// queueV1LeafLogOverlapRewrite is only called from deferred pointer slices
-	// that already own/copy key+value bytes.
+	// queueV1LeafLogOverlapRewrite is called from deferred pointer slices where
+	// key/value bytes are stable for the plan lifetime.
 	plan.setValueOwned(key, value)
 	p.lastOverlapPlan = plan
 	p.lastOverlapSourcePtr = sourcePtr
@@ -3725,9 +3725,9 @@ func (p *fenceAnchorPromoter) shouldEmitRouteDelete(key []byte) bool {
 	has, err := p.db.backend.Has(key)
 	if err != nil {
 		p.db.reportError(fmt.Errorf("cachingdb: route-delete Has(%q) failed: %w", key, err))
-		// Fail closed for safety: do not emit deletes when backend existence
-		// checks are uncertain.
-		return false
+		// Route deletes are idempotent; on Has uncertainty, emit deletes so stale
+		// exact-key entries do not survive failed existence probes.
+		return true
 	}
 	return has
 }
@@ -3765,6 +3765,20 @@ func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	if r, ok := backendBatch.(reserveHint); ok {
 		r.Reserve(n)
 	}
+}
+
+func scaledReserveHint(n, capHint int) int {
+	if n <= 0 {
+		return 0
+	}
+	if capHint > 0 && n > capHint {
+		n = capHint
+	}
+	maxInt := int(^uint(0) >> 1)
+	if n >= maxInt/2 {
+		return maxInt
+	}
+	return n * 2
 }
 
 func (db *DB) flushDeferredValueLogMemtable(
@@ -3806,15 +3820,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
 	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
-	reserveHint := memLen
-	if reserveHint > 0 {
-		maxInt := int(^uint(0) >> 1)
-		if reserveHint > maxInt/2 {
-			reserveHint = maxInt
-		} else {
-			reserveHint *= 2
-		}
-	}
+	reserveHint := scaledReserveHint(memLen, db.flushBackendInitEntries)
 	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		// Route-mode overlap rewrites can fan out many backend ops; keep reserve
 		// at least at init sizing to avoid repeated entry-slice growth churn.
@@ -3895,7 +3901,8 @@ func (db *DB) flushDeferredValueLogMemtable(
 		if routeDeleteSeen == nil {
 			routeDeleteSeen = make(map[uint64][][]byte, 64)
 		}
-		routeDeleteSeen[h] = append(routeDeleteSeen[h], key)
+		keyCopy := append([]byte(nil), key...)
+		routeDeleteSeen[h] = append(routeDeleteSeen[h], keyCopy)
 		return true
 	}
 	vlogLane := (*lane)(nil)
@@ -4397,14 +4404,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		}
 		ptrCap += n
 	}
-	reserveHint := ptrCap
-	if reserveHint > 0 {
-		if reserveHint > maxInt/2 {
-			reserveHint = maxInt
-		} else {
-			reserveHint *= 2
-		}
-	}
+	reserveHint := scaledReserveHint(ptrCap, db.flushBackendInitEntries)
 	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		reserveHint = db.flushBackendInitEntries
 	}
@@ -4490,7 +4490,8 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if routeDeleteSeen == nil {
 			routeDeleteSeen = make(map[uint64][][]byte, 64)
 		}
-		routeDeleteSeen[h] = append(routeDeleteSeen[h], key)
+		keyCopy := append([]byte(nil), key...)
+		routeDeleteSeen[h] = append(routeDeleteSeen[h], keyCopy)
 		return true
 	}
 
