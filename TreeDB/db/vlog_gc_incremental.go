@@ -14,6 +14,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/largevalue"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -392,6 +393,21 @@ func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64
 	if err != nil {
 		return nil, err
 	}
+	manifest, isManifest, err := largevalue.DecodeManifest(payload)
+	if err != nil {
+		return nil, err
+	}
+	if isManifest {
+		refs := make(map[uint32]uint64, len(manifest.Chunks))
+		for i := range manifest.Chunks {
+			chunkPtr := manifest.Chunks[i]
+			if !page.IsValueLogFileID(chunkPtr.FileID) {
+				return nil, fmt.Errorf("treedb: invalid large-value chunk pointer file %d", chunkPtr.FileID)
+			}
+			refs[chunkPtr.FileID]++
+		}
+		return refs, nil
+	}
 	if !outerleaf.HasMagic(payload) {
 		return nil, nil
 	}
@@ -409,12 +425,40 @@ func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64
 		if typed[i].Kind != outerleaf.EntryKindBlobRef {
 			continue
 		}
-		if !page.IsValueLogFileID(typed[i].BlobPtr.FileID) {
-			return nil, fmt.Errorf("treedb: invalid nested blob pointer file %d", typed[i].BlobPtr.FileID)
+		if err := db.addNestedBlobRefCounts(typed[i].BlobPtr, refs); err != nil {
+			return nil, err
 		}
-		refs[typed[i].BlobPtr.FileID]++
 	}
 	return refs, nil
+}
+
+func (db *DB) addNestedBlobRefCounts(blobPtr page.ValuePtr, refs map[uint32]uint64) error {
+	if !page.IsValueLogFileID(blobPtr.FileID) {
+		return fmt.Errorf("treedb: invalid nested blob pointer file %d", blobPtr.FileID)
+	}
+	refs[blobPtr.FileID]++
+	if db == nil || db.valueLogManager == nil {
+		return nil
+	}
+	payload, err := db.valueLogManager.Read(blobPtr)
+	if err != nil {
+		return err
+	}
+	manifest, isManifest, err := largevalue.DecodeManifest(payload)
+	if err != nil {
+		return err
+	}
+	if !isManifest {
+		return nil
+	}
+	for i := range manifest.Chunks {
+		chunkPtr := manifest.Chunks[i]
+		if !page.IsValueLogFileID(chunkPtr.FileID) {
+			return fmt.Errorf("treedb: invalid large-value chunk pointer file %d", chunkPtr.FileID)
+		}
+		refs[chunkPtr.FileID]++
+	}
+	return nil
 }
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry) (*valueLogRefDelta, error) {
