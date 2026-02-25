@@ -1652,3 +1652,25 @@ func TestChooseRewriteSegmentTarget_MissingHealthFallsBackToMax(t *testing.T) {
 		t.Fatalf("missing-health target=%d want=%d", got, want)
 	}
 }
+
+func TestValueLogRewriteDedupeCacheLimit_Bounded(t *testing.T) {
+	tests := []struct {
+		name      string
+		batchSize int
+		want      int
+	}{
+		{name: "default", batchSize: 0, want: 4096},
+		{name: "tiny", batchSize: 1, want: 4096},
+		{name: "edge min", batchSize: 512, want: 4096},
+		{name: "mid", batchSize: 2048, want: 16384},
+		{name: "large capped", batchSize: 100000, want: 65536},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := valueLogRewriteDedupeCacheLimit(tc.batchSize); got != tc.want {
+				t.Fatalf("valueLogRewriteDedupeCacheLimit(%d)=%d want=%d", tc.batchSize, got, tc.want)
+			}
+		})
+	}
+}

@@ -2395,7 +2395,6 @@ func (plan *fenceSourceRewritePlan) setValueWithOwnership(key, value []byte, own
 					} else {
 						plan.sets[i].value = append([]byte(nil), value...)
 					}
-					plan.setIndex[keyHash] = i + 1
 					return
 				}
 			}
@@ -2434,7 +2433,6 @@ func (plan *fenceSourceRewritePlan) lookupValue(key []byte) ([]byte, bool) {
 			continue
 		}
 		if bytes.Equal(plan.sets[i].key, key) {
-			plan.setIndex[keyHash] = i + 1
 			return plan.sets[i].value, true
 		}
 	}
