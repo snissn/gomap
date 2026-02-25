@@ -543,7 +543,6 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		IndexColumnarLeaves:    columnarLeavesEffective,
 		IndexPackedValuePtr:    packedValuePtrEffective,
 		IndexInternalBaseDelta: internalBaseDeltaEffective,
-		IndexOuterLeafMode:     treedb.IndexOuterLeafModeV1LeafLogRoute,
 
 		MemtableMode:               *treedbMemtableMode,
 		DomainIngressWorkers:       *treedbDomainIngressWorkers,
