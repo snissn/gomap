@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
@@ -67,10 +68,16 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		protectedPaths[path] = struct{}{}
 	}
 	type candidate struct {
+		id   uint32
 		path string
 		size int64
+		gen  int
 	}
-	candidates := make(map[uint32]candidate)
+	candidates := make([]candidate, 0, len(set.Files))
+	health, err := loadValueLogHealth(valueLogHealthPath(db.dir))
+	if err != nil {
+		health = nil
+	}
 
 	for id, f := range set.Files {
 		if err := ctx.Err(); err != nil {
@@ -102,10 +109,11 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if opts.DryRun {
 			continue
 		}
-		if err := db.valueLogManager.MarkZombie(id); err != nil {
-			return stats, err
+		gen := 2
+		if h, ok := health[id]; ok {
+			gen = generationRankForRewriteCount(h.RewriteCount)
 		}
-		candidates[id] = candidate{path: f.Path, size: size}
+		candidates = append(candidates, candidate{id: id, path: f.Path, size: size, gen: gen})
 	}
 
 	if opts.DryRun {
@@ -120,10 +128,25 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		_ = db.valueLogManager.Release(set)
 	}
 
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.gen != b.gen {
+			return a.gen < b.gen // dead hot first, then warm, then cold
+		}
+		if a.size != b.size {
+			return a.size < b.size
+		}
+		return a.id < b.id
+	})
+	for _, info := range candidates {
+		if err := db.valueLogManager.MarkZombie(info.id); err != nil {
+			return stats, err
+		}
+	}
 	if err := db.RefreshValueLogSet(); err != nil {
 		return stats, err
 	}
-
 	for _, info := range candidates {
 		if info.path == "" {
 			continue

@@ -332,7 +332,34 @@ TreeDB’s value log is persistent storage. Disk space is reclaimed via:
 - **GC**: `db.ValueLogGC(...)` deletes fully-unreferenced value-log segments (after a checkpoint in cached mode).
 - **Rewrite**: `treedb.ValueLogRewriteOffline(treedb.Options{Dir: ...})` rewrites live pointers into fresh segments and swaps `Dir/maindb/index.db` to reference the new log (offline; requires a clean commitlog).
 
+TreeDB also supports background online maintenance in cached mode:
+
+- `Options.BackgroundValueLogGCInterval`
+- `Options.BackgroundValueLogRewriteInterval`
+- `Options.BackgroundValueLogRewriteCooldown`
+- `Options.BackgroundValueLogRewriteScoreTargetTotalBytes`
+- `Options.BackgroundValueLogRewriteScoreTargetStaleBytes`
+- `Options.BackgroundValueLogRewriteScoreTargetChurnBytes`
+- `Options.BackgroundValueLogRewriteScoreTrigger`
+- `Options.BackgroundValueLogRewriteScoreCooldownBypass`
+- `Options.BackgroundValueLogRewriteBudgetBytesPerSec`
+
+Background rewrite uses score gating:
+
+- `score = max(total/target_total, stale/target_stale, churn/target_churn)`
+- Rewrite runs when `score >= trigger`
+- Cooldown is soft and can be bypassed at high score (`...ScoreCooldownBypass`)
+
+Generation-aware rewrite targets:
+
+- `Options.ValueLog.RewriteHotSegmentTargetBytes`
+- `Options.ValueLog.RewriteWarmSegmentTargetBytes`
+- `Options.ValueLog.RewriteColdSegmentTargetBytes`
+
+Default cold target is 256 MiB.
+
 Details: `docs/TREEDB_STORAGE_FORMAT.md`.
+Operator runbook: `docs/TREEDB_VALUELOG_MAINTENANCE_RUNBOOK.md`.
 
 ## Benchmark-Driven Tuning
 

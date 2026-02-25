@@ -331,6 +331,30 @@ type ValueLogDomainThreshold struct {
 
 // ValueLogOptions configures value-log pointer behavior and optional compression/dict tuning.
 type ValueLogOptions struct {
+	// SegmentTargetBytes caps active value-log segment size for cached-mode
+	// writes.
+	//
+	// 0 uses a default. Values <0 are invalid.
+	SegmentTargetBytes int64
+	// RewriteSegmentTargetBytes caps output segment size for value-log rewrite.
+	//
+	// 0 uses a default. Values <0 are invalid.
+	RewriteSegmentTargetBytes int64
+	// RewriteHotSegmentTargetBytes caps output segment size when rewrite is
+	// compacting hot-generation sources.
+	//
+	// 0 uses RewriteSegmentTargetBytes/default. Values <0 are invalid.
+	RewriteHotSegmentTargetBytes int64
+	// RewriteWarmSegmentTargetBytes caps output segment size when rewrite is
+	// compacting warm-generation sources.
+	//
+	// 0 uses RewriteSegmentTargetBytes/default. Values <0 are invalid.
+	RewriteWarmSegmentTargetBytes int64
+	// RewriteColdSegmentTargetBytes caps output segment size when rewrite is
+	// compacting cold-generation sources.
+	//
+	// 0 uses RewriteSegmentTargetBytes/default. Values <0 are invalid.
+	RewriteColdSegmentTargetBytes int64
 	// Compression selects value-log compression behavior.
 	Compression ValueLogCompressionMode
 	// BlockCodec selects the block codec for block compression.
@@ -721,6 +745,54 @@ type Options struct {
 	// BackgroundIndexVacuumSpanRatioPPM sets the span ratio threshold that
 	// triggers a vacuum pass (0 uses a default).
 	BackgroundIndexVacuumSpanRatioPPM uint32
+	// BackgroundValueLogGCInterval enables periodic value-log GC passes.
+	// `0` uses a default; `<0` disables.
+	BackgroundValueLogGCInterval time.Duration
+	// BackgroundValueLogRewriteInterval enables periodic value-log rewrite checks.
+	// `0` uses a default; `<0` disables.
+	BackgroundValueLogRewriteInterval time.Duration
+	// BackgroundValueLogRewriteCooldown bounds rewrite frequency.
+	// `0` uses a default; `<0` disables cooldown.
+	BackgroundValueLogRewriteCooldown time.Duration
+	// BackgroundValueLogRewriteMinTotalBytes is the minimum total value-log bytes
+	// before background rewrite is considered. `0` uses a default; `<0` disables
+	// the size gate.
+	BackgroundValueLogRewriteMinTotalBytes int64
+	// BackgroundValueLogRewriteMinStaleRatio requires eligible/total bytes from a
+	// dry-run GC probe to be at least this ratio before rewrite is considered.
+	// `0` uses a default; negative disables the ratio gate.
+	BackgroundValueLogRewriteMinStaleRatio float64
+	// BackgroundValueLogRewriteMaxSourceSegments bounds rewrite source segments.
+	// `0` uses a default; negative disables the segment-count bound.
+	BackgroundValueLogRewriteMaxSourceSegments int
+	// BackgroundValueLogRewriteMaxSourceBytes bounds rewrite source bytes.
+	// `0` uses a default; negative disables the byte bound.
+	BackgroundValueLogRewriteMaxSourceBytes int64
+	// BackgroundValueLogRewriteScoreTargetTotalBytes controls the total-bytes
+	// component of rewrite scoring (total/target).
+	// `0` uses a default; negative disables this component.
+	BackgroundValueLogRewriteScoreTargetTotalBytes int64
+	// BackgroundValueLogRewriteScoreTargetStaleBytes controls the stale-bytes
+	// component of rewrite scoring (stale/target).
+	// `0` uses a default; negative disables this component.
+	BackgroundValueLogRewriteScoreTargetStaleBytes int64
+	// BackgroundValueLogRewriteScoreTargetChurnBytes controls the churn-bytes
+	// component of rewrite scoring (abs(delta_stale)/target).
+	// `0` uses a default; negative disables this component.
+	BackgroundValueLogRewriteScoreTargetChurnBytes int64
+	// BackgroundValueLogRewriteScoreTrigger is the minimum rewrite score required
+	// to launch a rewrite pass.
+	// `0` uses a default; negative is invalid.
+	BackgroundValueLogRewriteScoreTrigger float64
+	// BackgroundValueLogRewriteScoreCooldownBypass bypasses rewrite cooldown
+	// when the computed rewrite score is at/above this value.
+	// `0` uses a default; negative is invalid.
+	BackgroundValueLogRewriteScoreCooldownBypass float64
+	// BackgroundValueLogRewriteBudgetBytesPerSec bounds background rewrite IO
+	// intake. When >0, per-pass MaxSourceBytes is capped by this budget over
+	// one rewrite interval.
+	// `0` disables this budget.
+	BackgroundValueLogRewriteBudgetBytesPerSec int64
 	// MaxWALBytes triggers an immediate checkpoint in cached mode when the sum of
 	// WAL segment sizes exceeds this many bytes (0 uses a default; <0 disables the
 	// size trigger). This is an operational safety cap; it does not make each
@@ -1008,6 +1080,21 @@ func validateOptions(opts Options) error {
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
 	}
+	if opts.ValueLog.SegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log segment target bytes %d", opts.ValueLog.SegmentTargetBytes)
+	}
+	if opts.ValueLog.RewriteSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log rewrite segment target bytes %d", opts.ValueLog.RewriteSegmentTargetBytes)
+	}
+	if opts.ValueLog.RewriteHotSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log rewrite hot segment target bytes %d", opts.ValueLog.RewriteHotSegmentTargetBytes)
+	}
+	if opts.ValueLog.RewriteWarmSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log rewrite warm segment target bytes %d", opts.ValueLog.RewriteWarmSegmentTargetBytes)
+	}
+	if opts.ValueLog.RewriteColdSegmentTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log rewrite cold segment target bytes %d", opts.ValueLog.RewriteColdSegmentTargetBytes)
+	}
 	if opts.ValueLog.BlockTargetCompressedBytes > 0 {
 		const (
 			minBlockTargetCompressedBytes = 256
@@ -1043,6 +1130,15 @@ func validateOptions(opts Options) error {
 	}
 	if opts.ValueLog.IncompressibleProbeIntervalBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log incompressible probe interval bytes %d", opts.ValueLog.IncompressibleProbeIntervalBytes)
+	}
+	if opts.BackgroundValueLogRewriteScoreTrigger < 0 {
+		return fmt.Errorf("treedb: invalid background value-log rewrite score trigger %.6f", opts.BackgroundValueLogRewriteScoreTrigger)
+	}
+	if opts.BackgroundValueLogRewriteScoreCooldownBypass < 0 {
+		return fmt.Errorf("treedb: invalid background value-log rewrite cooldown bypass score %.6f", opts.BackgroundValueLogRewriteScoreCooldownBypass)
+	}
+	if opts.BackgroundValueLogRewriteBudgetBytesPerSec < 0 {
+		return fmt.Errorf("treedb: invalid background value-log rewrite budget bytes/sec %d", opts.BackgroundValueLogRewriteBudgetBytesPerSec)
 	}
 	switch opts.ValueLog.AutoPolicy {
 	case ValueLogAutoThroughput, ValueLogAutoBalanced, ValueLogAutoSize:

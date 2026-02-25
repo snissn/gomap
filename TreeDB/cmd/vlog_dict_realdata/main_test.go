@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"math"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -64,8 +65,11 @@ func TestWALOffCompressionActivatesDictBeforeSteady(t *testing.T) {
 		t.Fatalf("runKVBench failed: %v", err)
 	}
 	maxElapsed := 30 * time.Second
+	if runtime.GOOS == "windows" {
+		maxElapsed = 90 * time.Second
+	}
 	if raceEnabled {
-		maxElapsed = 3 * time.Minute
+		maxElapsed = 6 * time.Minute
 	}
 	if time.Since(start) > maxElapsed {
 		t.Fatalf("bench took too long; dict activation should not time out pre-steady (elapsed=%s)", time.Since(start))

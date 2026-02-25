@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -358,6 +359,118 @@ func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Fatalf("value mismatch for %q", key)
 		}
+	}
+}
+
+func TestValueLogRewriteOnline_CrashWindow_AfterCopyBeforePublish(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 120_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(0x40 + i)}, 300)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	rewriteHookAfterCopyBeforePublish = func() error { return errors.New("inject-after-copy-before-publish") }
+	defer func() { rewriteHookAfterCopyBeforePublish = nil }()
+	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     1,
+		SyncEachBatch: true,
+	}); err == nil {
+		t.Fatalf("expected injected rewrite error")
+	}
+
+	// No pointer publish should have happened; data must remain readable.
+	got, err := db.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get k1 after injected failure: %v", err)
+	}
+	if want := bytes.Repeat([]byte{0x40}, 300); !bytes.Equal(got, want) {
+		t.Fatalf("k1 mismatch after injected failure")
+	}
+	got, err = db.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("get k2 after injected failure: %v", err)
+	}
+	if want := bytes.Repeat([]byte{0x41}, 300); !bytes.Equal(got, want) {
+		t.Fatalf("k2 mismatch after injected failure")
+	}
+}
+
+func TestValueLogRewriteOnline_CrashWindow_AfterPublishBeforeCleanup(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 130_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(0x50 + i)}, 300)
+	})
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	rewriteHookAfterPublishBeforeClean = func() error { return errors.New("inject-after-publish-before-cleanup") }
+	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     1,
+		SyncEachBatch: true,
+	}); err == nil {
+		t.Fatalf("expected injected rewrite error")
+	}
+	rewriteHookAfterPublishBeforeClean = nil
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir, IndexOuterLeafMode: IndexOuterLeafModeV1})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopen.Close() }()
+
+	got, err := reopen.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("reopen get k1: %v", err)
+	}
+	if want := bytes.Repeat([]byte{0x50}, 300); !bytes.Equal(got, want) {
+		t.Fatalf("k1 mismatch after injected post-publish failure")
+	}
+	got, err = reopen.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("reopen get k2: %v", err)
+	}
+	if want := bytes.Repeat([]byte{0x51}, 300); !bytes.Equal(got, want) {
+		t.Fatalf("k2 mismatch after injected post-publish failure")
 	}
 }
 
@@ -1413,12 +1526,159 @@ func TestSelectRewriteSourceSegments_OversizeCandidates_SelectsOne(t *testing.T)
 		MaxSourceBytes:       32,
 		MaxSourceSegments:    2,
 		MinSegmentStaleBytes: 1,
-	}, files, active, liveByID)
+	}, files, active, liveByID, nil)
 
 	if len(selected) != 1 {
 		t.Fatalf("expected one selected segment when all candidates exceed byte budget, got %d", len(selected))
 	}
 	if _, ok := selected[2]; !ok {
 		t.Fatalf("expected segment 2 selected by stale priority, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_PrefersLowerRewriteCountOnTie(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "v1.log")
+	path2 := filepath.Join(dir, "v2.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte{1}, 100), 0o644); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte{2}, 100), 0o644); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	active := map[uint32]struct{}{}
+	liveByID := map[uint32]int64{
+		1: 90, // stale 10
+		2: 90, // stale 10
+	}
+	health := map[uint32]valueLogSegmentHealth{
+		1: {RewriteCount: 5},
+		2: {RewriteCount: 1},
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments: 1,
+	}, files, active, liveByID, health)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected one selected segment, got %d", len(selected))
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected lower rewrite-count segment selected, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_MissingHealthKeyDefaultsRewriteCount(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "v1.log")
+	path2 := filepath.Join(dir, "v2.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte{1}, 100), 0o644); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte{2}, 100), 0o644); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	liveByID := map[uint32]int64{
+		1: 90, // stale 10
+		2: 90, // stale 10
+	}
+	health := map[uint32]valueLogSegmentHealth{
+		1: {RewriteCount: 7},
+		// 2 intentionally absent -> rewriteCount defaults to zero
+	}
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments: 1,
+	}, files, map[uint32]struct{}{}, liveByID, health)
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected segment 2 selected with missing-health default, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_PrefersHigherReclaimEfficiency(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "v1.log")
+	path2 := filepath.Join(dir, "v2.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte{1}, 100), 0o644); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte{2}, 100), 0o644); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	liveByID := map[uint32]int64{
+		1: 10, // stale=90, efficiency=9.0
+		2: 80, // stale=20, efficiency=0.25
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments: 1,
+	}, files, map[uint32]struct{}{}, liveByID, nil)
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected segment 1 selected by reclaim efficiency, got=%v", selected)
+	}
+}
+
+func TestChooseRewriteSegmentTarget_ByGenerationMajority(t *testing.T) {
+	source := map[uint32]struct{}{1: {}, 2: {}, 3: {}}
+	health := map[uint32]valueLogSegmentHealth{
+		1: {RewriteCount: 0}, // hot
+		2: {RewriteCount: 0}, // hot
+		3: {RewriteCount: 2}, // cold
+	}
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSegmentBytes:  32 << 20,
+		HotSegmentBytes:  16 << 20,
+		WarmSegmentBytes: 64 << 20,
+		ColdSegmentBytes: 256 << 20,
+	}
+	got := chooseRewriteSegmentTarget(opts, source, health)
+	if want := int64(16 << 20); got != want {
+		t.Fatalf("hot-majority target=%d want=%d", got, want)
+	}
+}
+
+func TestChooseRewriteSegmentTarget_TieFallsBackToMax(t *testing.T) {
+	source := map[uint32]struct{}{1: {}, 2: {}, 3: {}}
+	health := map[uint32]valueLogSegmentHealth{
+		1: {RewriteCount: 0}, // hot
+		2: {RewriteCount: 1}, // warm
+		3: {RewriteCount: 2}, // cold
+	}
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSegmentBytes:  32 << 20,
+		HotSegmentBytes:  16 << 20,
+		WarmSegmentBytes: 64 << 20,
+		ColdSegmentBytes: 256 << 20,
+	}
+	got := chooseRewriteSegmentTarget(opts, source, health)
+	if want := int64(32 << 20); got != want {
+		t.Fatalf("tie target=%d want=%d", got, want)
+	}
+}
+
+func TestChooseRewriteSegmentTarget_MissingHealthFallsBackToMax(t *testing.T) {
+	source := map[uint32]struct{}{7: {}, 8: {}}
+	health := map[uint32]valueLogSegmentHealth{}
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSegmentBytes:  32 << 20,
+		HotSegmentBytes:  16 << 20,
+		WarmSegmentBytes: 64 << 20,
+		ColdSegmentBytes: 256 << 20,
+	}
+	got := chooseRewriteSegmentTarget(opts, source, health)
+	if want := int64(32 << 20); got != want {
+		t.Fatalf("missing-health target=%d want=%d", got, want)
 	}
 }
