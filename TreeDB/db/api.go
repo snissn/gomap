@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	getManyValueGuessBytes          = 128
+	getManyValueGuessBytes = 128
 	// 8 MiB cap keeps per-worker reserve bounded while reducing repeated arena
 	// growth/copy churn for large GetMany batches.
 	getManyMaxArenaBytes            = 8 << 20
