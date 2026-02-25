@@ -1,8 +1,13 @@
 # Outer-Leaf Modes
 
-This document defines behavioral expectations for `IndexOuterLeafMode`.
+This document defines behavioral expectations for `IndexOuterLeafMode` on the
+public TreeDB options surface (`treedb.Open`, `OptionsFor`, `ApplyProfile`).
 
-If `IndexOuterLeafMode` is unset (`""`), TreeDB defaults to `v1_leaflog_route`.
+If `IndexOuterLeafMode` is unset (`""`) on the public surface, TreeDB defaults
+to `v1_leaflog_route`.
+
+Note: lower-level internal opens (`TreeDB/db`, `TreeDB/caching`) may apply
+different defaults (currently `v2_fenceptr`) as part of staged rollout paths.
 
 ## Mode Semantics (Step 2)
 

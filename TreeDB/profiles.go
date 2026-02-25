@@ -1,7 +1,5 @@
 package treedb
 
-import "strings"
-
 // Profiles are intentionally defined in the public package so downstream users
 // can pick a coherent option bundle without duplicating the mapping from
 // “intent” (durable vs fast vs bench) to low-level knobs.
@@ -144,11 +142,8 @@ func applyRoutingOuterLeafBlockCacheDefault(opts *Options) {
 	if opts == nil || opts.ValueLog.OuterLeafBlockCacheEntries != 0 {
 		return
 	}
-	mode := strings.TrimSpace(opts.IndexOuterLeafMode)
-	if mode == "" {
-		mode = IndexOuterLeafModeV1LeafLogRoute
-	}
-	if strings.EqualFold(mode, IndexOuterLeafModeV2FencePtr) || strings.EqualFold(mode, IndexOuterLeafModeV1LeafLogRoute) {
+	mode := normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
+	if mode == IndexOuterLeafModeV2FencePtr || mode == IndexOuterLeafModeV1LeafLogRoute {
 		opts.ValueLog.OuterLeafBlockCacheEntries = defaultRoutingOuterLeafBlockCacheEntries
 	}
 }
