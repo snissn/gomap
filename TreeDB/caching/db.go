@@ -7304,17 +7304,37 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			inlineThreshold = v
 		}
 	}
+	indexOuterLeafMode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
+	if indexOuterLeafMode == "" {
+		indexOuterLeafMode = backenddb.IndexOuterLeafModeV2FencePtr
+	}
+	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr &&
+		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr &&
+		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLog &&
+		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLogRoute &&
+		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLogLegacy {
+		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
+	}
 	// In relaxed durability modes, storing moderate values out-of-line avoids a
 	// catastrophic random_write cliff at large key counts (perf gate II / #229).
 	//
-	// We pick a default threshold that still keeps small values inline, but
-	// pushes the unified-bench default 128B values into the value log.
-	const defaultRelaxedValueLogThreshold = 127
+	// v1_leaflog_route stores outer-leaf payloads in the value log already; a
+	// higher default threshold keeps medium values inline inside route payloads
+	// and avoids avoidable second-hop pointer indirection.
+	const (
+		defaultRelaxedValueLogThreshold = 127
+		defaultRouteValueLogThreshold   = 512
+	)
 	valueLogThreshold := opts.ValueLogPointerThreshold
 	if valueLogThreshold <= 0 {
-		valueLogThreshold = page.DefaultInlineThreshold
-		if opts.DisableWAL || opts.RelaxedSync {
-			valueLogThreshold = defaultRelaxedValueLogThreshold
+		switch indexOuterLeafMode {
+		case backenddb.IndexOuterLeafModeV1LeafLogRoute:
+			valueLogThreshold = defaultRouteValueLogThreshold
+		default:
+			valueLogThreshold = inlineThreshold
+			if opts.DisableWAL || opts.RelaxedSync {
+				valueLogThreshold = defaultRelaxedValueLogThreshold
+			}
 		}
 	}
 	valueLogDomainThresholds := backenddb.NormalizeValueLogDomainThresholds(opts.ValueLogDomainInlineThresholds)
@@ -7329,17 +7349,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogRawWritevMinRecords := opts.ValueLogRawWritevMinBatchRecords
 	if valueLogRawWritevMinRecords <= 0 {
 		valueLogRawWritevMinRecords = 8
-	}
-	indexOuterLeafMode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
-	if indexOuterLeafMode == "" {
-		indexOuterLeafMode = backenddb.IndexOuterLeafModeV2FencePtr
-	}
-	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr &&
-		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr &&
-		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLog &&
-		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLogRoute &&
-		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLogLegacy {
-		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
 	}
 	rawValueLogWALFenceMode := strings.TrimSpace(opts.ValueLogWALFenceMode)
 	valueLogWALFenceMode := normalizeValueLogWALFenceMode(rawValueLogWALFenceMode)

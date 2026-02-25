@@ -1452,6 +1452,69 @@ func TestCachingDB_Open_EmptyOuterLeafModeDefaultsToV2FencePtr(t *testing.T) {
 	}
 }
 
+func TestCachingDB_Open_DefaultPointerThresholdByModeAndDurability(t *testing.T) {
+	tests := []struct {
+		name       string
+		mode       string
+		disableWAL bool
+		relaxed    bool
+		want       int
+	}{
+		{
+			name: "v2_fenceptr_durable",
+			mode: db.IndexOuterLeafModeV2FencePtr,
+			want: page.DefaultInlineThreshold,
+		},
+		{
+			name:       "v2_fenceptr_relaxed_wal_off",
+			mode:       db.IndexOuterLeafModeV2FencePtr,
+			disableWAL: true,
+			want:       127,
+		},
+		{
+			name: "v1_leaflog_route_durable",
+			mode: db.IndexOuterLeafModeV1LeafLogRoute,
+			want: 512,
+		},
+		{
+			name:       "v1_leaflog_route_relaxed_wal_off",
+			mode:       db.IndexOuterLeafModeV1LeafLogRoute,
+			disableWAL: true,
+			want:       512,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			backend, err := db.Open(db.Options{
+				Dir:                dir,
+				IndexOuterLeafMode: tc.mode,
+			})
+			if err != nil {
+				t.Fatalf("backend open: %v", err)
+			}
+
+			cache, err := Open(dir, backend, Options{
+				IndexOuterLeafMode: tc.mode,
+				DisableWAL:         tc.disableWAL,
+				RelaxedSync:        tc.relaxed,
+				AllowUnsafe:        tc.disableWAL || tc.relaxed,
+			})
+			if err != nil {
+				_ = backend.Close()
+				t.Fatalf("cache open: %v", err)
+			}
+			defer cache.Close()
+
+			if got := cache.valueLogThreshold; got != tc.want {
+				t.Fatalf("valueLogThreshold=%d want=%d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
 	dir := t.TempDir()
 	backendOpts := db.Options{

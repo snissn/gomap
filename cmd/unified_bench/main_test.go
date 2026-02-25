@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
 	"math"
 	"os"
 	"path/filepath"
@@ -15,6 +16,16 @@ import (
 
 	"github.com/snissn/gomap/kvstore"
 )
+
+func TestBatchWriteSteadyCheckpointBytesFlag_DefaultIs64MiB(t *testing.T) {
+	f := flag.Lookup("batch-write-steady-checkpoint-bytes")
+	if f == nil {
+		t.Fatalf("missing batch-write-steady-checkpoint-bytes flag")
+	}
+	if got := f.DefValue; got != "67108864" {
+		t.Fatalf("flag default=%q want %q", got, "67108864")
+	}
+}
 
 type errorBatchReaderDB struct {
 	readBatchCalls int

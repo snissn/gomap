@@ -300,6 +300,17 @@ type treeDBOptionsReport struct {
 	warnings []string
 }
 
+func defaultTreeDBPointerThreshold(opts treedb.Options) int {
+	mode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
+	if mode == treedb.IndexOuterLeafModeV1LeafLogRoute {
+		return 512
+	}
+	if opts.Durability != treedb.DurabilityDurable {
+		return 127
+	}
+	return page.DefaultInlineThreshold
+}
+
 func (r treeDBOptionsReport) hasReport() bool {
 	if len(r.notes) > 0 || len(r.warnings) > 0 {
 		return true
@@ -329,12 +340,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 
 	threshold := r.opts.ValueLog.PointerThreshold
 	if threshold <= 0 {
-		effective := page.DefaultInlineThreshold
-		if r.opts.Durability != treedb.DurabilityDurable {
-			// TreeDB cached mode uses a smaller default in relaxed durability modes.
-			// Keep this in sync with the cached-mode default (TreeDB/caching/db.go).
-			effective = 127
-		}
+		effective := defaultTreeDBPointerThreshold(r.opts)
 		lines = append(lines, fmt.Sprintf("vlog.pointer_threshold=default (effective=%dB)", effective))
 	} else {
 		lines = append(lines, fmt.Sprintf("vlog.pointer_threshold=%dB", threshold))

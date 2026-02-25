@@ -31,8 +31,9 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 
 - Baseline inline threshold: 256 bytes (`page.DefaultInlineThreshold`).
 - Cached-mode pointer threshold defaults:
-  - durable: 256,
-  - relaxed durability (`WALOnRelaxed` or `WALOffRelaxed`): 127.
+  - `v1_leaflog_route`: 512 (durable and relaxed),
+  - other modes + durable: 256,
+  - other modes + relaxed durability (`WALOnRelaxed` or `WALOffRelaxed`): 127.
 - `ValueLog.PointerThreshold > 0` overrides default.
 - `ValueLog.ForcePointers=true` stores all values out-of-line.
 
