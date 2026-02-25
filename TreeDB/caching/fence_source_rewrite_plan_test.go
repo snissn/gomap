@@ -3,6 +3,8 @@ package caching
 import (
 	"bytes"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 )
 
 func TestFenceSourceRewritePlanSetValueWithOwnership_CollisionKeepsSetIndexAnchor(t *testing.T) {
@@ -57,5 +59,41 @@ func TestFenceSourceRewritePlanLookupValue_CollisionKeepsSetIndexAnchor(t *testi
 	}
 	if got := plan.setIndex[hash]; got != 2 {
 		t.Fatalf("setIndex moved to %d; want 2 (most recent slot)", got)
+	}
+}
+
+func TestFenceAnchorPromoterPutRewriteEntries_ClearsRetainedReferences(t *testing.T) {
+	p := &fenceAnchorPromoter{}
+	entries := make([]outerleaf.TypedEntry, 0, 8)
+	entries = append(entries,
+		outerleaf.TypedEntry{Key: []byte("k1"), Kind: outerleaf.EntryKindInline, Value: []byte("v1")},
+		outerleaf.TypedEntry{Key: []byte("k2"), Kind: outerleaf.EntryKindInline, Value: []byte("v2")},
+	)
+
+	p.putRewriteEntries(entries)
+
+	if p.rewriteEntries == nil {
+		t.Fatalf("rewriteEntries dropped unexpectedly")
+	}
+	if len(p.rewriteEntries) != 0 || cap(p.rewriteEntries) != cap(entries) {
+		t.Fatalf("rewriteEntries shape mismatch: len=%d cap=%d want len=0 cap=%d", len(p.rewriteEntries), cap(p.rewriteEntries), cap(entries))
+	}
+	full := p.rewriteEntries[:cap(p.rewriteEntries)]
+	for i := range full {
+		if full[i].Key != nil || full[i].Value != nil {
+			t.Fatalf("entry %d retained key/value references", i)
+		}
+	}
+}
+
+func TestFenceAnchorPromoterPutRewriteEntries_DropsOversizedBuffer(t *testing.T) {
+	p := &fenceAnchorPromoter{}
+	entries := make([]outerleaf.TypedEntry, 0, maxFenceRewriteEntriesRetain+1)
+	entries = append(entries, outerleaf.TypedEntry{Key: []byte("k"), Kind: outerleaf.EntryKindInline, Value: []byte("v")})
+
+	p.putRewriteEntries(entries)
+
+	if p.rewriteEntries != nil {
+		t.Fatalf("expected oversized rewriteEntries buffer to be dropped, got len=%d cap=%d", len(p.rewriteEntries), cap(p.rewriteEntries))
 	}
 }

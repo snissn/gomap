@@ -684,6 +684,7 @@ const (
 	maxOuterLeafEncoderRawScratchCap = 2 << 20
 	maxOuterLeafEncoderEncScratchCap = 2 << 20
 	maxOuterLeafEncoderRestartsCap   = 1 << 15
+	maxFenceRewriteEntriesRetain     = 1 << 14
 	maxVlogPreparedBodyPoolCap       = 8 << 20
 	maxVlogPreparedFramesPoolCap     = 1 << 14
 	maxVlogDictPrepareResultsPoolCap = 1 << 14
@@ -2355,7 +2356,16 @@ func (p *fenceAnchorPromoter) putRewriteEntries(entries []outerleaf.TypedEntry) 
 	if p == nil {
 		return
 	}
-	p.rewriteEntries = entries[:0]
+	if cap(entries) > maxFenceRewriteEntriesRetain {
+		p.rewriteEntries = nil
+		return
+	}
+	full := entries
+	if cap(full) > len(full) {
+		full = full[:cap(full)]
+	}
+	clear(full)
+	p.rewriteEntries = full[:0]
 }
 
 func (plan *fenceSourceRewritePlan) setValue(key, value []byte) {
