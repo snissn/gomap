@@ -3664,6 +3664,34 @@ func reserveBackendBatchOps(backendBatch batch.Interface, n int) {
 	}
 }
 
+func makeShouldEmitRouteDelete(promoter *fenceAnchorPromoter, routeAnchorMode bool) func([]byte) bool {
+	var routeDeleteSeen map[uint64][][]byte
+	return func(key []byte) bool {
+		if promoter == nil || !routeAnchorMode {
+			return true
+		}
+		h := xxhash.Sum64(key)
+		if routeDeleteSeen != nil {
+			if bucket := routeDeleteSeen[h]; len(bucket) > 0 {
+				for i := range bucket {
+					if bytes.Equal(bucket[i], key) {
+						return false
+					}
+				}
+			}
+		}
+		if !promoter.shouldEmitRouteDelete(key) {
+			return false
+		}
+		if routeDeleteSeen == nil {
+			routeDeleteSeen = make(map[uint64][][]byte, 64)
+		}
+		keyCopy := append([]byte(nil), key...)
+		routeDeleteSeen[h] = append(routeDeleteSeen[h], keyCopy)
+		return true
+	}
+}
+
 func scaledReserveHint(n, capHint int) int {
 	if n <= 0 {
 		return 0
@@ -3772,31 +3800,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 		emittedOps++
 		return nil
 	}
-	var routeDeleteSeen map[uint64][][]byte
-	shouldEmitRouteDelete := func(key []byte) bool {
-		if promoter == nil || !routeAnchorMode {
-			return true
-		}
-		h := xxhash.Sum64(key)
-		if routeDeleteSeen != nil {
-			if bucket := routeDeleteSeen[h]; len(bucket) > 0 {
-				for i := range bucket {
-					if bytes.Equal(bucket[i], key) {
-						return false
-					}
-				}
-			}
-		}
-		if !promoter.shouldEmitRouteDelete(key) {
-			return false
-		}
-		if routeDeleteSeen == nil {
-			routeDeleteSeen = make(map[uint64][][]byte, 64)
-		}
-		keyCopy := append([]byte(nil), key...)
-		routeDeleteSeen[h] = append(routeDeleteSeen[h], keyCopy)
-		return true
-	}
+	shouldEmitRouteDelete := makeShouldEmitRouteDelete(promoter, routeAnchorMode)
 	vlogLane := (*lane)(nil)
 	var (
 		dictID      uint64
@@ -4256,12 +4260,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			stableUnsafe = stable.StableUnsafeIteratorSlices()
 		}
 		priority := len(units) - 1 - i
-		heap = append(heap, opUnsafeMergeItem{
+		item := opUnsafeMergeItem{
 			iter:     it,
 			priority: priority,
-			key:      it.UnsafeKey(),
 			stable:   stableUnsafe,
-		})
+		}
+		refreshOpUnsafeMergeItemKey(&item)
+		heap = append(heap, item)
 	}
 	for i := len(heap)/2 - 1; i >= 0; i-- {
 		(&heap).down(i, len(heap))
@@ -4351,31 +4356,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		backendPendingOps++
 		return nil
 	}
-	var routeDeleteSeen map[uint64][][]byte
-	shouldEmitRouteDelete := func(key []byte) bool {
-		if promoter == nil || !routeAnchorMode {
-			return true
-		}
-		h := xxhash.Sum64(key)
-		if routeDeleteSeen != nil {
-			if bucket := routeDeleteSeen[h]; len(bucket) > 0 {
-				for i := range bucket {
-					if bytes.Equal(bucket[i], key) {
-						return false
-					}
-				}
-			}
-		}
-		if !promoter.shouldEmitRouteDelete(key) {
-			return false
-		}
-		if routeDeleteSeen == nil {
-			routeDeleteSeen = make(map[uint64][][]byte, 64)
-		}
-		keyCopy := append([]byte(nil), key...)
-		routeDeleteSeen[h] = append(routeDeleteSeen[h], keyCopy)
-		return true
-	}
+	shouldEmitRouteDelete := makeShouldEmitRouteDelete(promoter, routeAnchorMode)
 
 	ensureVlogLane := func() error {
 		if vlogLane != nil {
@@ -4716,7 +4697,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				shadowed := heap.pop()
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
-					shadowed.key = shadowed.iter.UnsafeKey()
+					refreshOpUnsafeMergeItemKey(&shadowed)
 					heap.push(shadowed)
 				} else {
 					_ = shadowed.iter.Close()
@@ -4808,7 +4789,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 		top.iter.Next()
 		if top.iter.Valid() {
-			top.key = top.iter.UnsafeKey()
+			refreshOpUnsafeMergeItemKey(&top)
 			heap.push(top)
 			currentIter = nil
 		} else {
@@ -8496,7 +8477,21 @@ type opUnsafeMergeItem struct {
 	iter     iterator.UnsafeIterator
 	priority int
 	key      []byte
+	keyBuf   []byte
 	stable   bool
+}
+
+func refreshOpUnsafeMergeItemKey(item *opUnsafeMergeItem) {
+	if item == nil || item.iter == nil {
+		return
+	}
+	key := item.iter.UnsafeKey()
+	if item.stable {
+		item.key = key
+		return
+	}
+	item.keyBuf = append(item.keyBuf[:0], key...)
+	item.key = item.keyBuf
 }
 
 type opUnsafeMergeHeap []opUnsafeMergeItem

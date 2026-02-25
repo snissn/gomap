@@ -1820,6 +1820,9 @@ func lookupV3EntryRange(entries []byte, key []byte, start int, limit int) (Looku
 		needCap := shared + suffixLen
 		if cap(curr) < needCap {
 			curr = growPooledBytes(curr[:0], needCap)
+			// growPooledBytes returns a resized slice; this lookup path builds keys
+			// via append and requires zero-length start.
+			curr = curr[:0]
 		} else {
 			curr = curr[:0]
 		}
