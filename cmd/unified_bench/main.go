@@ -3493,7 +3493,8 @@ func treeDBMainIndexBytes(rootDir string) uint64 {
 		if sz := st.Size(); sz > 0 {
 			return uint64(sz)
 		}
-		return 0
+		// If this candidate exists but is zero-sized, keep checking fallbacks.
+		continue
 	}
 	return 0
 }

@@ -241,6 +241,28 @@ func TestRunBenchmark_PreloadsForReadAndScanOnly(t *testing.T) {
 	}
 }
 
+func TestTreeDBMainIndexBytes_FallsBackWhenPrimaryZeroSized(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "maindb")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	// Primary candidate exists but is empty.
+	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), nil, 0o644); err != nil {
+		t.Fatalf("write primary index: %v", err)
+	}
+	// Fallback candidate has real bytes.
+	fallback := filepath.Join(root, "index.db")
+	want := []byte("non-empty")
+	if err := os.WriteFile(fallback, want, 0o644); err != nil {
+		t.Fatalf("write fallback index: %v", err)
+	}
+	got := treeDBMainIndexBytes(root)
+	if got != uint64(len(want)) {
+		t.Fatalf("treeDBMainIndexBytes=%d want=%d", got, len(want))
+	}
+}
+
 func TestRunBenchmark_RandomReadBatch_Smoke(t *testing.T) {
 	run, err := runBenchmark(BenchConfig{
 		Keys:         2_000,
