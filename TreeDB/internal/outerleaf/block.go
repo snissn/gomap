@@ -1821,7 +1821,15 @@ func lookupV3EntryRange(entries []byte, key []byte, start int, limit int) (Looku
 		if off+suffixLen+payloadLen > limit {
 			return LookupResult{}, false, fmt.Errorf("outerleaf: truncated entry payload")
 		}
-		curr = curr[:0]
+		needCap := shared + suffixLen
+		if cap(curr) < needCap {
+			curr = growPooledBytes(curr[:0], needCap)
+			// growPooledBytes returns a resized slice; this lookup path builds keys
+			// via append and requires zero-length start.
+			curr = curr[:0]
+		} else {
+			curr = curr[:0]
+		}
 		curr = append(curr, prev[:shared]...)
 		curr = append(curr, entries[off:off+suffixLen]...)
 		off += suffixLen
