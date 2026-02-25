@@ -12479,17 +12479,20 @@ func (db *DB) recordDeferredAssist(flushed int) {
 	}
 }
 
+func (db *DB) routeLeafLogWriterAssistEnabled() bool {
+	if db == nil {
+		return false
+	}
+	return db.disableJournal && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+}
+
 func (db *DB) maybeAssistFlush() {
-	// WAL-off strict route mode is highly sensitive to writer-assist churn:
-	// repeated bounded assist attempts can trigger extreme deferred rewrite
-	// amplification without making forward queue progress. Let normal
-	// background/checkpoint flush boundaries drain the queue instead.
-	if db != nil &&
-		db.disableJournal &&
-		strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+	routeAssist := db.routeLeafLogWriterAssistEnabled()
+	if routeAssist {
+		// Route mode keeps writer path async; synchronous assist here can cause
+		// severe write-path stalls. Debt shaping is handled by background loops.
 		return
 	}
-
 	if db.writerFlushMaxMemtables <= 0 && db.writerFlushMaxDuration <= 0 {
 		return
 	}
@@ -16610,6 +16613,16 @@ func (db *DB) Stats() map[string]string {
 	if fenceEnqueuedBytes > fenceMaterializedBytes {
 		fencePendingBytes = fenceEnqueuedBytes - fenceMaterializedBytes
 	}
+	// Mode-agnostic deferred value-log debt/assist counters.
+	stats["treedb.cache.deferred_vlog.enqueued_keys"] = fmt.Sprintf("%d", fenceEnqueuedKeys)
+	stats["treedb.cache.deferred_vlog.enqueued_bytes"] = fmt.Sprintf("%d", fenceEnqueuedBytes)
+	stats["treedb.cache.deferred_vlog.materialized_keys"] = fmt.Sprintf("%d", fenceMaterializedKeys)
+	stats["treedb.cache.deferred_vlog.materialized_bytes"] = fmt.Sprintf("%d", fenceMaterializedBytes)
+	stats["treedb.cache.deferred_vlog.pending_keys_estimate"] = fmt.Sprintf("%d", fencePendingKeys)
+	stats["treedb.cache.deferred_vlog.pending_bytes_estimate"] = fmt.Sprintf("%d", fencePendingBytes)
+	stats["treedb.cache.deferred_vlog.assist_calls"] = fmt.Sprintf("%d", db.deferredFenceAssistCalls.Load())
+	stats["treedb.cache.deferred_vlog.assist_flushed_memtables"] = fmt.Sprintf("%d", db.deferredFenceAssistFlushedMemtables.Load())
+	stats["treedb.cache.deferred_vlog.assist_early_triggers"] = fmt.Sprintf("%d", db.deferredFenceAssistEarlyTriggers.Load())
 	stats["treedb.cache.v2_fenceptr.wal_fence_mode"] = db.valueLogWALFenceMode
 	stats["treedb.cache.v2_fenceptr.deferred_candidates"] = fmt.Sprintf("%d", fenceCandidates)
 	stats["treedb.cache.v2_fenceptr.deferred_groups"] = fmt.Sprintf("%d", fenceGroups)
@@ -16622,6 +16635,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.v2_fenceptr.assist_calls"] = fmt.Sprintf("%d", db.deferredFenceAssistCalls.Load())
 	stats["treedb.cache.v2_fenceptr.assist_flushed_memtables"] = fmt.Sprintf("%d", db.deferredFenceAssistFlushedMemtables.Load())
 	stats["treedb.cache.v2_fenceptr.assist_early_triggers"] = fmt.Sprintf("%d", db.deferredFenceAssistEarlyTriggers.Load())
+	stats["treedb.cache.v1_leaflog_route.deferred_pending_keys_estimate"] = fmt.Sprintf("%d", fencePendingKeys)
+	stats["treedb.cache.v1_leaflog_route.deferred_pending_bytes_estimate"] = fmt.Sprintf("%d", fencePendingBytes)
+	stats["treedb.cache.v1_leaflog_route.assist_calls"] = fmt.Sprintf("%d", db.deferredFenceAssistCalls.Load())
+	stats["treedb.cache.v1_leaflog_route.assist_flushed_memtables"] = fmt.Sprintf("%d", db.deferredFenceAssistFlushedMemtables.Load())
+	stats["treedb.cache.v1_leaflog_route.assist_early_triggers"] = fmt.Sprintf("%d", db.deferredFenceAssistEarlyTriggers.Load())
 	stats["treedb.cache.v1_leaflog_route.fallback_direct_attempts"] = fmt.Sprintf("%d", db.routeLeaflogFallbackDirectAttempts.Load())
 	stats["treedb.cache.v1_leaflog_route.fallback_direct_rewrites"] = fmt.Sprintf("%d", db.routeLeaflogFallbackDirectRewrites.Load())
 	if fenceGroups > 0 {
@@ -18120,6 +18138,7 @@ func (b *Batch) write(sync bool) error {
 		b.backend = nil
 		if err == nil && b.size > 0 {
 			b.db.noteWrite()
+			b.db.maybeAssistFlush()
 		}
 		b.updateBatchEntryHint()
 		b.updateBatchCopyHint()
@@ -18246,6 +18265,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 
 	if b.size > 0 {
 		b.db.noteWrite()
+		b.db.maybeAssistFlush()
 	}
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
@@ -19183,6 +19203,7 @@ func (b *Batch) writeBypass(sync bool) error {
 
 	if b.size > 0 {
 		b.db.noteWrite()
+		b.db.maybeAssistFlush()
 	}
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
