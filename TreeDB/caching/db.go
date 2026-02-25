@@ -2590,6 +2590,12 @@ func (p *fenceAnchorPromoter) lookupRouteSourceMonotonic(key []byte) ([]byte, pa
 			return nil, page.ValuePtr{}, false, err
 		}
 	}
+	// Monotonic fast-path safety: if callers regress to a smaller key, the
+	// cursor may already be advanced past the correct predecessor anchor.
+	// Return miss so callers can fall back to exact/reverse predecessor lookup.
+	if p.routeCursorHaveCur && bytes.Compare(p.routeCursorCurrent, key) > 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
 	if !p.routeCursorHaveCur {
 		return nil, page.ValuePtr{}, false, nil
 	}
