@@ -3821,7 +3821,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	ps, _ := backendBatch.(ptrSetter)
 	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
 	reserveHint := scaledReserveHint(memLen, db.flushBackendInitEntries)
-	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
+	if routeAnchorMode && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		// Route-mode overlap rewrites can fan out many backend ops; keep reserve
 		// at least at init sizing to avoid repeated entry-slice growth churn.
 		reserveHint = db.flushBackendInitEntries
@@ -4405,7 +4405,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		ptrCap += n
 	}
 	reserveHint := scaledReserveHint(ptrCap, db.flushBackendInitEntries)
-	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
+	if routeAnchorMode && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		reserveHint = db.flushBackendInitEntries
 	}
 	reserveBackendBatchOps(backendBatch, reserveHint)
