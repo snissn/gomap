@@ -3737,7 +3737,10 @@ func (p *fenceAnchorPromoter) shouldEmitRouteDelete(key []byte) bool {
 	}
 	has, err := p.db.backend.Has(key)
 	if err != nil {
-		return true
+		p.db.reportError(fmt.Errorf("cachingdb: route-delete Has(%q) failed: %w", key, err))
+		// Fail closed for safety: do not emit deletes when backend existence
+		// checks are uncertain.
+		return false
 	}
 	return has
 }
@@ -5741,7 +5744,10 @@ func (db *DB) maybePruneRetainedValueLogs() {
 	}
 	db.pruneRetainedValueLogs()
 	db.valueLogRetainLastPruneUnixNano.Store(now)
-	db.valueLogRetainDirty.Store(false)
+	// Keep prune attempts armed while retained paths remain. Some paths can be
+	// temporarily non-removable (e.g. still in use) and become reclaimable later
+	// without any new retain additions.
+	db.valueLogRetainDirty.Store(len(db.valueLogRetainedPaths()) > 0)
 }
 
 func hashKey(key []byte) uint64 {
