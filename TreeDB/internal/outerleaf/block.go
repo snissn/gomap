@@ -1802,10 +1802,22 @@ func lookupV3EntryRange(entries []byte, key []byte, start int, limit int) (Looku
 	var currStack [256]byte
 	prev := prevStack[:0]
 	curr := currStack[:0]
+	prevPooled := false
+	currPooled := false
 	if prevCap > len(prevStack) {
-		prev = make([]byte, 0, prevCap)
-		curr = make([]byte, 0, prevCap)
+		prev = getPooledBytes(prevCap)
+		curr = getPooledBytes(prevCap)
+		prevPooled = true
+		currPooled = true
 	}
+	defer func() {
+		if prevPooled {
+			putPooledBytes(prev)
+		}
+		if currPooled {
+			putPooledBytes(curr)
+		}
+	}()
 	for off < limit {
 		if off+9 > limit {
 			return LookupResult{}, false, fmt.Errorf("outerleaf: truncated entry")
@@ -1823,10 +1835,15 @@ func lookupV3EntryRange(entries []byte, key []byte, start int, limit int) (Looku
 		}
 		needCap := shared + suffixLen
 		if cap(curr) < needCap {
-			curr = growPooledBytes(curr[:0], needCap)
-			// growPooledBytes returns a resized slice; this lookup path builds keys
-			// via append and requires zero-length start.
-			curr = curr[:0]
+			if currPooled {
+				curr = growPooledBytes(curr[:0], needCap)
+				// growPooledBytes returns a resized slice; this lookup path builds
+				// keys via append and requires zero-length start.
+				curr = curr[:0]
+			} else {
+				curr = getPooledBytes(needCap)
+				currPooled = true
+			}
 		} else {
 			curr = curr[:0]
 		}
@@ -1857,6 +1874,7 @@ func lookupV3EntryRange(entries []byte, key []byte, start int, limit int) (Looku
 			return LookupResult{}, false, nil
 		}
 		prev, curr = curr, prev
+		prevPooled, currPooled = currPooled, prevPooled
 	}
 	return LookupResult{}, false, nil
 }

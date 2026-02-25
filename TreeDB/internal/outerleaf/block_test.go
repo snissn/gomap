@@ -577,6 +577,36 @@ func TestLookupV3EntryFromRestartRaw_BoundaryMatchesDecodedRestarts(t *testing.T
 	}
 }
 
+func TestLookupV3EntryRange_StackSeededGrowthUsesSafeBuffers(t *testing.T) {
+	longSuffix := bytes.Repeat([]byte("x"), 320)
+	entries := []TypedEntry{
+		{Key: append([]byte("a"), longSuffix...), Kind: EntryKindInline, Value: []byte("v1")},
+		{Key: append([]byte("b"), longSuffix...), Kind: EntryKindInline, Value: []byte("v2")},
+		{Key: append([]byte("c"), longSuffix...), Kind: EntryKindInline, Value: []byte("v3")},
+	}
+	enc, err := EncodeTypedEntries(nil, entries, 0, 16)
+	if err != nil {
+		t.Fatalf("EncodeTypedEntries: %v", err)
+	}
+	blk, err := DecodeBlock(enc, nil)
+	if err != nil {
+		t.Fatalf("DecodeBlock: %v", err)
+	}
+
+	// Keep lookup key short so lookupV3EntryRange starts with stack-backed
+	// buffers, then force growth when scanning long encoded keys.
+	lookupKey := []byte("zzzz")
+	for i := 0; i < 64; i++ {
+		got, found, err := lookupV3EntryRange(blk.entries, lookupKey, 0, len(blk.entries))
+		if err != nil {
+			t.Fatalf("lookupV3EntryRange: %v", err)
+		}
+		if found {
+			t.Fatalf("unexpected found result: %+v", got)
+		}
+	}
+}
+
 func TestLookupFromRestartRaw_RejectsNegativeRestartCount(t *testing.T) {
 	v2Enc, err := EncodeEntries(nil, []Entry{
 		{Key: []byte("k1"), Value: []byte("v1")},
