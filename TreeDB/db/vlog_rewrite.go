@@ -110,6 +110,22 @@ func normalizeValueLogRewriteBatchSize(n int) int {
 	return n
 }
 
+func valueLogRewriteDedupeCacheLimit(batchSize int) int {
+	// Bound dedupe cache growth across long rewrites while still preserving
+	// cross-batch reuse for hot pointer duplicates.
+	if batchSize <= 0 {
+		batchSize = defaultValueLogRewriteBatchSize
+	}
+	limit := batchSize * 8
+	if limit < 4096 {
+		limit = 4096
+	}
+	if limit > 65536 {
+		limit = 65536
+	}
+	return limit
+}
+
 func normalizeValueLogRewriteLocalityPolicy(policy ValueLogRewriteLocalityPolicy) ValueLogRewriteLocalityPolicy {
 	switch policy {
 	case ValueLogRewriteLocalityGrouped:
@@ -581,12 +597,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	defer func() { _ = writer.Close() }()
 
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
+	dedupeLimit := valueLogRewriteDedupeCacheLimit(batchSize)
 	swaps := make([]rewriteSwap, 0, batchSize)
 	localityPolicy := normalizeValueLogRewriteLocalityPolicy(opts.LocalityPolicy)
 	candidates := make([]rewriteCandidate, 0, batchSize)
 	ridExhausted := false
 	var canceledErr error
-	rewrittenByPtr := make(map[page.ValuePtr]page.ValuePtr, batchSize*2)
+	rewrittenByPtr := make(map[page.ValuePtr]page.ValuePtr, dedupeLimit)
 
 	flushBatch := func() error {
 		if len(candidates) == 0 {
@@ -618,6 +635,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			}
 			if err != nil {
 				return err
+			}
+			if len(rewrittenByPtr) >= dedupeLimit {
+				clear(rewrittenByPtr)
 			}
 			rewrittenByPtr[candidate.oldPtr] = newPtr
 			nextRID++

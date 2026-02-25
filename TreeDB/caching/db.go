@@ -1855,7 +1855,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	}
 	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowMutableFencePointerCollapse()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := db.outerLeafRouteModeEnabled()
 
 	eligible := getValueLogEligible(len(ops))
 	defer putValueLogEligible(eligible)
@@ -1908,7 +1908,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	var groups []outerLeafRecordGroup
 	var records []valuelog.Record
 	var outerArena []byte
-	routeMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeMode := db.outerLeafRouteModeEnabled()
 	if routeMode {
 		ptrs, groups, err = db.writeRouteOuterLeafValueRecords(lane, dictID, keys, values, durability)
 		if err != nil {
@@ -2408,7 +2408,6 @@ func (plan *fenceSourceRewritePlan) setValueWithOwnership(key, value []byte, own
 					} else {
 						plan.sets[i].value = append([]byte(nil), value...)
 					}
-					plan.setIndex[keyHash] = i + 1
 					return
 				}
 			}
@@ -2447,7 +2446,6 @@ func (plan *fenceSourceRewritePlan) lookupValue(key []byte) ([]byte, bool) {
 			continue
 		}
 		if bytes.Equal(plan.sets[i].key, key) {
-			plan.setIndex[keyHash] = i + 1
 			return plan.sets[i].value, true
 		}
 	}
@@ -3832,9 +3830,9 @@ func (db *DB) flushDeferredValueLogMemtable(
 	dv, _ := backendBatch.(deleteViewer)
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := db.outerLeafRouteModeEnabled()
 	reserveHint := scaledReserveHint(memLen, db.flushBackendInitEntries)
-	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
+	if routeAnchorMode && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		// Route-mode overlap rewrites can fan out many backend ops; keep reserve
 		// at least at init sizing to avoid repeated entry-slice growth churn.
 		reserveHint = db.flushBackendInitEntries
@@ -4398,7 +4396,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	allowPointers := db.allowValueLogPointers()
 	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := db.outerLeafRouteModeEnabled()
 
 	durability := journalDurabilityNone
 	if sync {
@@ -4418,7 +4416,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		ptrCap += n
 	}
 	reserveHint := scaledReserveHint(ptrCap, db.flushBackendInitEntries)
-	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
+	if routeAnchorMode && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		reserveHint = db.flushBackendInitEntries
 	}
 	reserveBackendBatchOps(backendBatch, reserveHint)
@@ -10591,7 +10589,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	)
 
 	rawPayloadBytes := 0
-	routeOuterLeafMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeOuterLeafMode := db.outerLeafRouteModeEnabled()
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
 	}
@@ -12504,14 +12502,16 @@ func (db *DB) routeLeafLogWriterAssistEnabled() bool {
 	if db == nil {
 		return false
 	}
-	return db.disableJournal && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	return db.disableJournal && db.outerLeafRouteModeEnabled()
 }
 
 func (db *DB) maybeAssistFlush() {
 	routeAssist := db.routeLeafLogWriterAssistEnabled()
 	if routeAssist {
-		// Route mode keeps writer path async; synchronous assist here can cause
-		// severe write-path stalls. Debt shaping is handled by background loops.
+		// WAL-off strict route mode is highly sensitive to writer-assist churn:
+		// repeated bounded assist attempts can trigger severe stalls and deferred
+		// rewrite amplification without making forward queue progress. Let normal
+		// background/checkpoint flush boundaries drain debt instead.
 		return
 	}
 	if db.writerFlushMaxMemtables <= 0 && db.writerFlushMaxDuration <= 0 {
@@ -12888,7 +12888,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	eligible := db.shouldWriteViaValueLogForKeyValue(key, value)
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := db.outerLeafRouteModeEnabled()
 	hybridRIDJoin := allowPointers && db.fenceRIDJoinHybridEnabled()
 	oversized := hybridRIDJoin && db.oversizedOuterLeafValue(value)
 	deferPointers := false
