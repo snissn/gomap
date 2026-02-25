@@ -1622,6 +1622,40 @@ func (db *DB) supportsFenceAnchorPromotion() bool {
 	return ok
 }
 
+func backendSupportsRouteMode(backend BackendDB) bool {
+	if backend == nil {
+		return false
+	}
+	type snapshotProvider interface {
+		AcquireSnapshot() *backenddb.Snapshot
+	}
+	type iteratorWithOptionsProvider interface {
+		IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
+	}
+	if _, ok := backend.(snapshotProvider); !ok {
+		return false
+	}
+	if _, ok := backend.(iteratorWithOptionsProvider); !ok {
+		return false
+	}
+
+	b := backend.NewBatch()
+	if b == nil {
+		return false
+	}
+	defer b.Close()
+
+	type pointerSetter interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	}
+	type pointerSetterView interface {
+		SetPointerView(key []byte, ptr page.ValuePtr) error
+	}
+	_, hasSetPointer := b.(pointerSetter)
+	_, hasSetPointerView := b.(pointerSetterView)
+	return hasSetPointer || hasSetPointerView
+}
+
 // sumKeyValueBytes returns the total bytes across paired key/value entries.
 // If keys and values differ in length, only the shared prefix is counted.
 func sumKeyValueBytes(keys, values [][]byte) uint64 {
@@ -5921,7 +5955,8 @@ type Options struct {
 	// IndexOuterLeafMode selects the outer-leaf payload format.
 	// Supported values: "v1", "v1_leaflog", "v1_leaflog_route",
 	// "v1_leaflog_legacy", "v2_blockptr", "v2_fenceptr".
-	// Empty defaults to "v2_fenceptr".
+	// Empty defaults to "v1_leaflog_route" when the backend supports route-mode
+	// primitives; otherwise it falls back to "v1" (never "v2_fenceptr").
 	IndexOuterLeafMode string
 	// ValueLogWALFenceMode selects WAL encoding behavior for pointer-eligible
 	// writes under v2 fence-pointer mode.
@@ -7311,15 +7346,26 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			inlineThreshold = v
 		}
 	}
-	indexOuterLeafMode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
+	normalizedOuterLeafMode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
+	outerLeafModeExplicit := normalizedOuterLeafMode != ""
+	indexOuterLeafMode := normalizedOuterLeafMode
 	if indexOuterLeafMode == "" {
-		indexOuterLeafMode = backenddb.IndexOuterLeafModeV2FencePtr
+		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1LeafLogRoute
 	}
 	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr &&
 		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr &&
 		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLog &&
 		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLogRoute &&
 		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLogLegacy {
+		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
+	}
+	if indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute && !backendSupportsRouteMode(backend) {
+		if outerLeafModeExplicit {
+			return nil, errors.New("cachingdb: index outer leaf mode v1_leaflog_route requires backend SetPointer support plus IteratorWithOptions and AcquireSnapshot")
+		}
+		// Generic/mock backends used by caching tests and adapters do not always
+		// expose route-mode pointer/index primitives. Keep the non-v2 default path
+		// by falling back to v1 rather than v2_fenceptr.
 		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
 	}
 	// In relaxed durability modes, storing moderate values out-of-line avoids a
@@ -7733,10 +7779,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	nowNS := time.Now().UnixNano()
 	db.materializationLastDrainUnixNano.Store(nowNS)
 	db.publishWatermarkLastUnixNano = nowNS
-
-	if db.indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute && !db.supportsFenceAnchorPromotion() {
-		return nil, errors.New("cachingdb: index outer leaf mode v1_leaflog_route requires snapshot-capable backend and value-log reader")
-	}
 
 	// Open initial value-log segments (if enabled) and journal/commit log
 	// segments (if enabled). Journal and value log are decoupled.

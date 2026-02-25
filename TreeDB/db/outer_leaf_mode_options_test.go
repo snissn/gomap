@@ -115,14 +115,14 @@ func TestOpen_IndexOuterLeafMode_V1LeafLogLegacyPreserved(t *testing.T) {
 	}
 }
 
-func TestOpen_IndexOuterLeafMode_DefaultEmptyUsesV2FencePtr(t *testing.T) {
+func TestOpen_IndexOuterLeafMode_DefaultEmptyUsesV1LeafLogRoute(t *testing.T) {
 	db, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open default: %v", err)
 	}
 	defer func() { _ = db.Close() }()
-	if got := db.indexOuterLeafMode; got != IndexOuterLeafModeV2FencePtr {
-		t.Fatalf("default index outer leaf mode = %q, want %q", got, IndexOuterLeafModeV2FencePtr)
+	if got := db.indexOuterLeafMode; got != IndexOuterLeafModeV1LeafLogRoute {
+		t.Fatalf("default index outer leaf mode = %q, want %q", got, IndexOuterLeafModeV1LeafLogRoute)
 	}
 }
 
@@ -151,7 +151,8 @@ func TestOpen_ValueLogWALFenceMode_DefaultAndSimpleInline(t *testing.T) {
 	}
 
 	dbSimpleInline, err := Open(Options{
-		Dir: t.TempDir(),
+		Dir:                t.TempDir(),
+		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
 		ValueLog: ValueLogOptions{
 			WALFenceMode: ValueLogWALFenceModeSimpleInline,
 		},
@@ -161,6 +162,21 @@ func TestOpen_ValueLogWALFenceMode_DefaultAndSimpleInline(t *testing.T) {
 	}
 	if err := dbSimpleInline.Close(); err != nil {
 		t.Fatalf("close simple_inline: %v", err)
+	}
+}
+
+func TestOpen_ValueLogWALFenceMode_DefaultModeRejectsSimpleInline(t *testing.T) {
+	_, err := Open(Options{
+		Dir: t.TempDir(),
+		ValueLog: ValueLogOptions{
+			WALFenceMode: ValueLogWALFenceModeSimpleInline,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected validation error")
+	}
+	if !strings.Contains(err.Error(), "requires index outer leaf mode") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
