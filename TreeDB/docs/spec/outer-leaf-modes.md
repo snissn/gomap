@@ -20,7 +20,6 @@ Implementation note for lower-level opens:
 | `v1_leaflog` | internal nodes + leaf anchors (one anchor per outer-leaf payload block), with predecessor probing scoped to one candidate | outer-leaf envelope payload (`TOL2`) | routing-style index contract with API parity to `v1` |
 | `v1_leaflog_route` | internal nodes + route/directory anchors (one anchor per outer-leaf payload block), no per-key outer-leaf exact siblings in index | outer-leaf envelope payload (`TOL2`) | strict routing-only index with leaf payloads in the value log |
 | `v1_leaflog_legacy` | internal nodes + exact-key leaf entry per user key (legacy `v1_leaflog` behavior) | outer-leaf envelope payload (`TOL2`) | compatibility/bisect mode while `v1_leaflog` evolves |
-| `v1_leaflog_route` | internal nodes + routing anchors (no per-key outer-leaf rows) | outer-leaf envelope payload (`TOL2`) | routing-only index with leaf payloads in value log |
 | `v2_blockptr` | internal nodes + exact-key leaf entry per user key | grouped outer-leaf block payload | payload batching with exact-key index semantics |
 | `v2_fenceptr` | internal nodes + fence-key leaf anchors with predecessor probing (steady state) | grouped outer-leaf block payload; WAL-on `rid_join` oversized writes may temporarily surface direct exact-key pointers before flush collapse | smallest index footprint with fence-key routing |
 
