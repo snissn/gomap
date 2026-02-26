@@ -758,6 +758,25 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
+	m.resetLocked()
+}
+
+// TryReset resets the table only when no iterator leases are currently held.
+// It returns false when a frozen iterator is still open.
+func (m *AppendOnly) TryReset() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.iteratorLeaseMu.Lock()
+	held := m.iteratorLeases > 0
+	m.iteratorLeaseMu.Unlock()
+	if held {
+		return false
+	}
+	m.resetLocked()
+	return true
+}
+
+func (m *AppendOnly) resetLocked() {
 	for i := 0; i < m.count; i++ {
 		ent := &m.entries[i]
 		ent.ptr = page.ValuePtr{}

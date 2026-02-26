@@ -292,3 +292,81 @@ func TestIterator_BackendErrorClosesQueuedIterators(t *testing.T) {
 		t.Fatalf("queued memtable len after publish=%d want=0", got)
 	}
 }
+
+func TestRecycleMemtables_DoesNotBlockOnFrozenIteratorLease(t *testing.T) {
+	backend := NewMockBackend()
+	db, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if err := db.Set([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := db.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate: %v", err)
+	}
+	db.mu.Unlock()
+
+	view := db.memtables.Load()
+	if view == nil || len(view.queue) != 1 {
+		t.Fatalf("expected one queued memtable view, got=%v", view)
+	}
+	queued, ok := view.queue[0].(*memtable.AppendOnly)
+	if !ok {
+		t.Fatalf("queued memtable type=%T want *memtable.AppendOnly", view.queue[0])
+	}
+
+	// Direct memtable iterator simulates an internal lease holder that is not
+	// represented by memtable view refs.
+	holdIter := queued.NewIterator(nil, nil)
+	iterClosed := false
+	defer func() {
+		if !iterClosed {
+			_ = holdIter.Close()
+		}
+	}()
+
+	done := make(chan struct{})
+	go func() {
+		db.mu.Lock()
+		db.queueRetiredMemtableLocked(queued)
+		clearQueueLockedForIteratorLeaseTest(db)
+		db.publishMemtablesLocked()
+		db.mu.Unlock()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publish blocked while frozen iterator lease remained open")
+	}
+
+	if got := queued.Len(); got == 0 {
+		t.Fatalf("queued memtable reset unexpectedly while iterator lease is open")
+	}
+
+	if err := holdIter.Close(); err != nil {
+		t.Fatalf("close held iterator: %v", err)
+	}
+	iterClosed = true
+
+	db.recycleMemtables([]memtable.Table{queued})
+	if got := queued.Len(); got != 0 {
+		t.Fatalf("queued memtable len after lease release recycle=%d want=0", got)
+	}
+}

@@ -6800,7 +6800,11 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	for _, mt := range mems {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
-			typed.Reset()
+			if !typed.TryReset() {
+				// A lingering frozen iterator lease should not stall flush/rewrite
+				// progress; skip pooling and let the object retire naturally.
+				continue
+			}
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
 			}
