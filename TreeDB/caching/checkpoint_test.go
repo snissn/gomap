@@ -98,7 +98,7 @@ func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 	backend := NewMockBackend()
 
 	db, err := Open(dir, backend, Options{
-		FlushThreshold:           1,
+		FlushThreshold:           1 << 20,
 		ValueLogPointerThreshold: 16 << 20,
 		JournalLanes:             1,
 	})
@@ -233,6 +233,77 @@ func withRaceTimeout(d time.Duration) time.Duration {
 		return d * 5
 	}
 	return d
+}
+
+func TestCachingDB_BatchWrite_NotBlockedByPendingCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:           1,
+		ValueLogPointerThreshold: 16 << 20,
+		JournalLanes:             1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Keep this test on the regular (non-bypass) batch write path.
+	db.flushThreshold = 1 << 30
+
+	db.flushMu.Lock()
+	flushLocked := true
+	defer func() {
+		if flushLocked {
+			db.flushMu.Unlock()
+		}
+	}()
+	checkpointDone := make(chan error, 1)
+	go func() {
+		checkpointDone <- db.Checkpoint()
+	}()
+
+	// Give Checkpoint() a chance to start and block on flushMu.
+	time.Sleep(50 * time.Millisecond)
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Batch.Set: %v", err)
+	}
+	if b.size >= int(db.flushThreshold) {
+		t.Fatalf("unexpected bypass precondition: batch_size=%d flush_threshold=%d", b.size, db.flushThreshold)
+	}
+	writeDone := make(chan error, 1)
+	go func() { writeDone <- b.Write() }()
+
+	select {
+	case err := <-writeDone:
+		if err != nil {
+			t.Fatalf("Batch.Write: %v", err)
+		}
+	case <-time.After(withRaceTimeout(2 * time.Second)):
+		t.Fatalf("Batch.Write blocked by checkpoint pending on flushMu")
+	}
+
+	db.flushMu.Unlock()
+	flushLocked = false
+	select {
+	case err := <-checkpointDone:
+		if err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+	case <-time.After(withRaceTimeout(3 * time.Second)):
+		t.Fatalf("Checkpoint did not finish after releasing flushMu")
+	}
+
+	got, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "v" {
+		t.Fatalf("unexpected value: got=%q", string(got))
+	}
 }
 
 func TestCachingDB_AutoCheckpoint_IdleTrigger_SkipsTinyWrites(t *testing.T) {

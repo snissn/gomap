@@ -40,6 +40,69 @@ func TestBuildTreeDBOptions_ExplicitV1LeafLogRouteFlagAccepted(t *testing.T) {
 	}
 }
 
+func TestBuildTreeDBOptions_DefaultPointerThreshold_V1LeafLogRoute(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v1_leaflog_route"
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions default route threshold: %v", err)
+	}
+	if got := opts.ValueLog.PointerThreshold; got != 0 {
+		t.Fatalf("expected unset pointer threshold in options, got %d", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.pointer_threshold=default (effective=512B)") {
+		t.Fatalf("resolved options missing route effective pointer threshold 512B: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_DefaultPointerThreshold_V2FencePtrRelaxed(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+	*treedbAllowUnsafe = true
+	*treedbDisableWAL = true
+	explicitFlags = map[string]bool{
+		"treedb-disable-wal":  true,
+		"treedb-allow-unsafe": true,
+	}
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions relaxed v2 threshold: %v", err)
+	}
+	if got := opts.ValueLog.PointerThreshold; got != 0 {
+		t.Fatalf("expected unset pointer threshold in options, got %d", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.pointer_threshold=default (effective=127B)") {
+		t.Fatalf("resolved options missing relaxed v2 effective pointer threshold 127B: %q", got)
+	}
+}
+
+func TestBuildTreeDBOptions_DefaultPointerThreshold_V2FencePtrDurable(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexOuterLeafMode = "v2_fenceptr"
+
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions durable v2 threshold: %v", err)
+	}
+	if got := opts.ValueLog.PointerThreshold; got != 0 {
+		t.Fatalf("expected unset pointer threshold in options, got %d", got)
+	}
+	if got := rep.formatText(""); !strings.Contains(got, "vlog.pointer_threshold=default (effective=256B)") {
+		t.Fatalf("resolved options missing durable v2 effective pointer threshold 256B: %q", got)
+	}
+}
+
 func TestBuildTreeDBOptions_V1LeafLogModeAccepted(t *testing.T) {
 	saved := saveTreeDBFlagState()
 	defer restoreTreeDBFlagState(saved)
@@ -130,6 +193,7 @@ func TestParseTreeDBOuterLeafMode_InvalidErrorMentionsLegacyAlias(t *testing.T) 
 type savedTreeDBFlagState struct {
 	indexOptimizations bool
 	indexOuterLeafMode string
+	valueLogThreshold  int
 	forcePointers      bool
 	leafPrefix         bool
 	columnarLeaves     bool
@@ -156,6 +220,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 	return savedTreeDBFlagState{
 		indexOptimizations: *treedbIndexOptimizations,
 		indexOuterLeafMode: *treedbIndexOuterLeafMode,
+		valueLogThreshold:  *treedbValueLogThreshold,
 		forcePointers:      *treedbForceValuePointers,
 		leafPrefix:         *treedbLeafPrefixCompression,
 		columnarLeaves:     *treedbIndexColumnarLeaves,
@@ -178,6 +243,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbIndexOptimizations = s.indexOptimizations
 	*treedbIndexOuterLeafMode = s.indexOuterLeafMode
+	*treedbValueLogThreshold = s.valueLogThreshold
 	*treedbForceValuePointers = s.forcePointers
 	*treedbLeafPrefixCompression = s.leafPrefix
 	*treedbIndexColumnarLeaves = s.columnarLeaves
@@ -199,6 +265,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexOptimizations = false
 	*treedbIndexOuterLeafMode = "v1"
+	*treedbValueLogThreshold = 0
 	*treedbForceValuePointers = false
 	*treedbLeafPrefixCompression = false
 	*treedbIndexColumnarLeaves = false

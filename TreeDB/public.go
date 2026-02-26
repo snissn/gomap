@@ -557,6 +557,7 @@ func Open(opts Options) (*DB, error) {
 		AllowUnsafe:                           allowUnsafe,
 		MaxValueLogRetainedBytes:              opts.ValueLog.MaxRetainedBytes,
 		MaxValueLogRetainedBytesHard:          opts.ValueLog.MaxRetainedBytesHard,
+		RetainedValueLogPruneInterval:         opts.RetainedValueLogPruneInterval,
 		NotifyError:                           opts.NotifyError,
 	})
 	if err != nil {
@@ -1190,6 +1191,21 @@ func (db *DB) Checkpoint() error {
 		return err
 	}
 	return b.Close()
+}
+
+// Flush materializes cached writes into the backend without forcing WAL
+// segment rotation/trimming. This is lighter than Checkpoint and is intended
+// for callers that need immediate backend visibility but do not need a full
+// checkpoint boundary.
+func (db *DB) Flush() error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.Drain()
+	}
+	// Backend-only mode has no memtable staging; writes are already applied.
+	return nil
 }
 
 // CompactIndex performs an in-place index vacuum (bulk rebuild) on the backend.

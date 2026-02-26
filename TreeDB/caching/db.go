@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/bits"
@@ -45,6 +46,10 @@ var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
+var visibilityDebugOnce sync.Once
+var visibilityDebugEnabled atomic.Bool
+var visibilityDebugMu sync.Mutex
+var visibilityDebugLogFile *os.File
 
 var valueLogEligiblePool sync.Pool                          // stores []int
 var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
@@ -76,6 +81,55 @@ const (
 	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
 	maxOuterLeafArenaLeases  = 64
 )
+
+func visibilityDebugOn() bool {
+	visibilityDebugOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_VISIBILITY"))
+		if raw == "" || raw == "0" || strings.EqualFold(raw, "false") {
+			return
+		}
+		visibilityDebugEnabled.Store(true)
+		path := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_VISIBILITY_LOG"))
+		if path == "" {
+			return
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "treedb visibility debug: open %q failed: %v\n", path, err)
+			return
+		}
+		visibilityDebugLogFile = f
+	})
+	return visibilityDebugEnabled.Load()
+}
+
+func visibilityDebugf(format string, args ...any) {
+	if !visibilityDebugOn() {
+		return
+	}
+	line := fmt.Sprintf("treedb-visibility %s "+format+"\n", append([]any{time.Now().Format(time.RFC3339Nano)}, args...)...)
+	visibilityDebugMu.Lock()
+	defer visibilityDebugMu.Unlock()
+	if visibilityDebugLogFile != nil {
+		_, _ = visibilityDebugLogFile.WriteString(line)
+		return
+	}
+	_, _ = os.Stderr.WriteString(line)
+}
+
+func looksLikeIAVLRootNodeKey(key []byte) (version uint64, ok bool) {
+	if len(key) < 13 {
+		return 0, false
+	}
+	base := key[len(key)-13:]
+	if base[0] != 's' {
+		return 0, false
+	}
+	if binary.BigEndian.Uint32(base[9:13]) != 1 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(base[1:9]), true
+}
 
 type vlogPreparedFrameBody struct {
 	buf []byte
@@ -1602,7 +1656,13 @@ func (db *DB) deferredValueLogNeedsSingleLaneRegroup() bool {
 func (db *DB) allowFencePointerCollapse() bool {
 	// Collapse is correctness-coupled with anchor promotion and is only allowed in
 	// deferred fence mode where flush regrouping is single-lane.
-	return db != nil && db.deferredValueLogEnabled() && db.supportsFenceAnchorPromotion()
+	//
+	// Route mode anchors have stricter directory semantics than fence modes; keep
+	// collapse disabled until route overlap/promotion ordering is proven safe.
+	if db == nil || db.outerLeafRouteModeEnabled() {
+		return false
+	}
+	return db.deferredValueLogEnabled() && db.supportsFenceAnchorPromotion()
 }
 
 func (db *DB) allowMutableFencePointerCollapse() bool {
@@ -5763,18 +5823,25 @@ func (db *DB) pruneRetainedValueLogs() {
 	}
 }
 
-const retainedValueLogPruneMinInterval = 5 * time.Second
+const defaultRetainedValueLogPruneMinInterval = 5 * time.Second
 
 func (db *DB) maybePruneRetainedValueLogs() {
 	if db == nil || !db.valueLogEnabled() {
 		return
+	}
+	interval := db.retainedValueLogPruneInterval
+	if interval < 0 {
+		return
+	}
+	if interval == 0 {
+		interval = defaultRetainedValueLogPruneMinInterval
 	}
 	if !db.valueLogRetainDirty.Load() {
 		return
 	}
 	now := time.Now().UnixNano()
 	last := db.valueLogRetainLastPruneUnixNano.Load()
-	if last > 0 && now-last < int64(retainedValueLogPruneMinInterval) {
+	if last > 0 && now-last < int64(interval) {
 		return
 	}
 	db.pruneRetainedValueLogs()
@@ -6027,6 +6094,10 @@ type Options struct {
 	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
 	// values once retained bytes exceed this threshold (0 disables the cap).
 	MaxValueLogRetainedBytesHard int64
+	// RetainedValueLogPruneInterval controls how frequently checkpoint/maintenance
+	// attempts retained value-log pruning (live-ID scan + unlink).
+	// 0 uses a default; <0 disables prune attempts.
+	RetainedValueLogPruneInterval time.Duration
 
 	// ValueLogDictTrain configures background dictionary training for value-log frame compression.
 	// TrainBytes <= 0 disables training.
@@ -6219,6 +6290,7 @@ type DB struct {
 	valueLogRetainedClosedBytes     atomic.Int64
 	valueLogRetainDirty             atomic.Bool
 	valueLogRetainLastPruneUnixNano atomic.Int64
+	retainedValueLogPruneInterval   time.Duration
 	maxValueLogRetainedBytes        int64
 	maxValueLogRetainedBytesHard    int64
 
@@ -6800,7 +6872,11 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	for _, mt := range mems {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
-			typed.Reset()
+			if !typed.TryReset() {
+				// A lingering frozen iterator lease should not stall flush/rewrite
+				// progress; skip pooling and let the object retire naturally.
+				continue
+			}
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
 			}
@@ -7346,32 +7422,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			inlineThreshold = v
 		}
 	}
-	// In relaxed durability modes, storing moderate values out-of-line avoids a
-	// catastrophic random_write cliff at large key counts (perf gate II / #229).
-	//
-	// We pick a default threshold that still keeps small values inline, but
-	// pushes the unified-bench default 128B values into the value log.
-	const defaultRelaxedValueLogThreshold = 127
-	valueLogThreshold := opts.ValueLogPointerThreshold
-	if valueLogThreshold <= 0 {
-		valueLogThreshold = page.DefaultInlineThreshold
-		if opts.DisableWAL || opts.RelaxedSync {
-			valueLogThreshold = defaultRelaxedValueLogThreshold
-		}
-	}
-	valueLogDomainThresholds := backenddb.NormalizeValueLogDomainThresholds(opts.ValueLogDomainInlineThresholds)
-	valueLogMaxSegmentBytes := opts.ValueLogMaxSegmentBytes
-	if valueLogMaxSegmentBytes < 0 {
-		valueLogMaxSegmentBytes = 0
-	}
-	valueLogRawWritevMinAvgBytes := opts.ValueLogRawWritevMinAvgBytes
-	if valueLogRawWritevMinAvgBytes < 0 {
-		valueLogRawWritevMinAvgBytes = 0
-	}
-	valueLogRawWritevMinRecords := opts.ValueLogRawWritevMinBatchRecords
-	if valueLogRawWritevMinRecords <= 0 {
-		valueLogRawWritevMinRecords = 8
-	}
 	normalizedOuterLeafMode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
 	outerLeafModeExplicit := normalizedOuterLeafMode != ""
 	indexOuterLeafMode := normalizedOuterLeafMode
@@ -7393,6 +7443,42 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		// expose route-mode pointer/index primitives. Keep the non-v2 default path
 		// by falling back to v1 rather than v2_fenceptr.
 		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
+	}
+	// In relaxed durability modes, storing moderate values out-of-line avoids a
+	// catastrophic random_write cliff at large key counts (perf gate II / #229).
+	//
+	// v1_leaflog_route stores outer-leaf payloads in the value log already; a
+	// higher default threshold keeps medium values inline inside route payloads
+	// and avoids second-hop pointer indirection.
+	const (
+		defaultDurableValueLogThreshold = page.DefaultInlineThreshold
+		defaultRelaxedValueLogThreshold = 127
+		defaultRouteValueLogThreshold   = 512
+	)
+	valueLogThreshold := opts.ValueLogPointerThreshold
+	if valueLogThreshold <= 0 {
+		switch indexOuterLeafMode {
+		case backenddb.IndexOuterLeafModeV1LeafLogRoute:
+			valueLogThreshold = defaultRouteValueLogThreshold
+		default:
+			valueLogThreshold = defaultDurableValueLogThreshold
+			if opts.DisableWAL || opts.RelaxedSync {
+				valueLogThreshold = defaultRelaxedValueLogThreshold
+			}
+		}
+	}
+	valueLogDomainThresholds := backenddb.NormalizeValueLogDomainThresholds(opts.ValueLogDomainInlineThresholds)
+	valueLogMaxSegmentBytes := opts.ValueLogMaxSegmentBytes
+	if valueLogMaxSegmentBytes < 0 {
+		valueLogMaxSegmentBytes = 0
+	}
+	valueLogRawWritevMinAvgBytes := opts.ValueLogRawWritevMinAvgBytes
+	if valueLogRawWritevMinAvgBytes < 0 {
+		valueLogRawWritevMinAvgBytes = 0
+	}
+	valueLogRawWritevMinRecords := opts.ValueLogRawWritevMinBatchRecords
+	if valueLogRawWritevMinRecords <= 0 {
+		valueLogRawWritevMinRecords = 8
 	}
 	rawValueLogWALFenceMode := strings.TrimSpace(opts.ValueLogWALFenceMode)
 	valueLogWALFenceMode := normalizeValueLogWALFenceMode(rawValueLogWALFenceMode)
@@ -7653,6 +7739,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			selectorSeedCodec,
 		)
 	}
+	retainedValueLogPruneInterval := opts.RetainedValueLogPruneInterval
+	if retainedValueLogPruneInterval == 0 {
+		retainedValueLogPruneInterval = defaultRetainedValueLogPruneMinInterval
+	}
 	db := &DB{
 		dir:                                  walDir,
 		backend:                              backend,
@@ -7717,6 +7807,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		debugV1LeafLogInvariantsPanic:        debugV1LeafLogInvariantsPanic,
 		maxValueLogRetainedBytes:             opts.MaxValueLogRetainedBytes,
 		maxValueLogRetainedBytesHard:         opts.MaxValueLogRetainedBytesHard,
+		retainedValueLogPruneInterval:        retainedValueLogPruneInterval,
 		valueLogDictTrain:                    valueLogDictTrain,
 		valueLogDictMaxK:                     valueLogDictMaxK,
 		valueLogDictFrameEncodeLevel:         valueLogDictFrameEncodeLevel,
@@ -8198,6 +8289,32 @@ func (db *DB) logBatchSize(records []logRecord) int64 {
 		total += commitLogRecordHeaderBytes + len(r.Key) + len(r.Value)
 	}
 	return int64(total)
+}
+
+// appendWALRecordsAdaptive appends a commit batch to the WAL writer, splitting
+// oversized batches when commitlog returns ErrRecordTooLarge. This preserves
+// sequence/order while avoiding hard failures on large importer batches.
+func (db *DB) appendWALRecordsAdaptive(w commitWriter, records []logRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	if len(records) == 1 {
+		return w.Append(records[0])
+	}
+	if err := w.AppendBatch(records); err != nil {
+		if !errors.Is(err, commitlog.ErrRecordTooLarge) {
+			return err
+		}
+		mid := len(records) / 2
+		if mid <= 0 || mid >= len(records) {
+			return err
+		}
+		if err := db.appendWALRecordsAdaptive(w, records[:mid]); err != nil {
+			return err
+		}
+		return db.appendWALRecordsAdaptive(w, records[mid:])
+	}
+	return nil
 }
 
 func (db *DB) assignCommitSeq(records []logRecord) {
@@ -9530,20 +9647,15 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 	}
 	for i := range requests {
 		req := &requests[i]
+		err := db.appendWALRecordsAdaptive(w, req.records)
+		if err != nil {
+			l.walMu.Unlock()
+			return err
+		}
 		if len(req.records) == 1 {
 			rec := req.records[0]
-			err := w.Append(rec)
-			if err != nil {
-				l.walMu.Unlock()
-				return err
-			}
 			totalBytes += db.logRecordSize(rec.Key, rec.Value)
 		} else {
-			err := w.AppendBatch(req.records)
-			if err != nil {
-				l.walMu.Unlock()
-				return err
-			}
 			totalBytes += db.logBatchSize(req.records)
 		}
 		if req.sync {
@@ -11780,12 +11892,11 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	err = db.appendWALRecordsAdaptive(w, records)
 	if len(records) == 1 {
 		rec := records[0]
-		err = w.Append(rec)
 		totalBytes = db.logRecordSize(rec.Key, rec.Value)
 	} else {
-		err = w.AppendBatch(records)
 		totalBytes = db.logBatchSize(records)
 	}
 	if err == nil && flush {
@@ -12212,8 +12323,11 @@ func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time)
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
-	// Mark checkpointing before waiting for flushMu so in-flight flush paths
-	// can observe checkpoint mode while this call is pending.
+	// Acquire flushMu first, then publish checkpointing=true. This avoids a
+	// pending-checkpoint state where writers block on waitForCheckpoint while the
+	// checkpoint itself is still waiting to enter flush critical sections.
+	db.flushMu.Lock()
+
 	db.checkpointMu.Lock()
 	for db.checkpointing.Load() {
 		db.checkpointCond.Wait()
@@ -12226,10 +12340,8 @@ func (db *DB) Checkpoint() error {
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
+		db.flushMu.Unlock()
 	}()
-
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock() // Ensure it's released
 
 	db.writeMu.Lock()
 	cutoverStart := time.Now()
@@ -12617,7 +12729,12 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	if maxMemtables <= 0 && maxDuration <= 0 {
 		return 0
 	}
-	db.flushMu.Lock()
+	// Opportunistic assist path: never block the writer on flushMu. A dedicated
+	// flush loop (or stop-backpressure path via flushSomeBlocking) is
+	// responsible for guaranteed progress.
+	if !db.flushMu.TryLock() {
+		return 0
+	}
 	defer db.flushMu.Unlock()
 	sync = db.flushSyncRequested(sync)
 	start := time.Now()
@@ -16270,6 +16387,7 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	rootVersion, trackRoot := looksLikeIAVLRootNodeKey(key)
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableRead(view, key)
 	if view != nil {
@@ -16279,7 +16397,11 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 			return nil, err
 		}
-		return db.backend.Get(key)
+		val, err := db.backend.Get(key)
+		if trackRoot {
+			visibilityDebugf("get root=v%d source=backend_bypass key=%x val_nil=%t val_len=%d err=%v", rootVersion, key, val == nil, len(val), err)
+		}
+		return val, err
 	}
 	val, found, err := db.getMemtable(key)
 	if err != nil {
@@ -16287,16 +16409,26 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 	if found {
 		if val == nil {
+			if trackRoot {
+				visibilityDebugf("get root=v%d source=memtable key=%x tombstone=true", rootVersion, key)
+			}
 			return nil, nil
 		}
 		cpy := make([]byte, len(val))
 		copy(cpy, val)
+		if trackRoot {
+			visibilityDebugf("get root=v%d source=memtable key=%x val_nil=%t val_len=%d", rootVersion, key, cpy == nil, len(cpy))
+		}
 		return cpy, nil
 	}
 	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
-	return db.backend.Get(key)
+	val, err = db.backend.Get(key)
+	if trackRoot {
+		visibilityDebugf("get root=v%d source=backend key=%x val_nil=%t val_len=%d err=%v", rootVersion, key, val == nil, len(val), err)
+	}
+	return val, err
 }
 
 // GetMany returns safe copies of values for keys.
@@ -16375,6 +16507,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
+	rootVersion, trackRoot := looksLikeIAVLRootNodeKey(key)
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
@@ -16406,6 +16539,9 @@ func (db *DB) Has(key []byte) (bool, error) {
 		if idx < len(mutables) && mutables[idx] != nil {
 			_, deleted, found := mutables[idx].Get(key)
 			if found {
+				if trackRoot {
+					visibilityDebugf("has root=v%d source=mutable key=%x deleted=%t", rootVersion, key, deleted)
+				}
 				return !deleted, nil
 			}
 		}
@@ -16421,11 +16557,18 @@ func (db *DB) Has(key []byte) (bool, error) {
 		}
 		_, deleted, found := queue[i].Get(key)
 		if found {
+			if trackRoot {
+				visibilityDebugf("has root=v%d source=queue key=%x deleted=%t idx=%d", rootVersion, key, deleted, i)
+			}
 			return !deleted, nil
 		}
 	}
 
-	return db.backend.Has(key)
+	ok, err := db.backend.Has(key)
+	if trackRoot {
+		visibilityDebugf("has root=v%d source=backend key=%x ok=%t err=%v", rootVersion, key, ok, err)
+	}
+	return ok, err
 }
 
 func (db *DB) Stats() map[string]string {
@@ -17085,10 +17228,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			}
 			return it
 		}
-		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
-			out := merging.Iterator(&emptyIterator{start: start, end: end})
-			return decorate(out, 0), nil
-		}
 		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
 			diskIter, err := db.backend.Iterator(nil, nil)
 			if err != nil {
@@ -17168,7 +17307,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// Note: We skip mutable shards because we just rotated them (so they're empty) or they were already empty.
 	prio := 0
 	for i := len(queue) - 1; i >= 0; i-- {
-		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
+		if i < len(queueRanges) && queueRanges[i].valid && !overlapsQuery(start, end, queueRanges[i]) {
 			prio++
 			continue
 		}
@@ -17188,7 +17327,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	// Disk Iterator
 	// Only skip if we definitively know the range and it doesn't overlap.
-	if !backendRangeKnown || overlapsQuery(start, end, backendRange) {
+	if true {
 		diskIter, err := db.backend.Iterator(start, end)
 		if err != nil {
 			for i := range sources {
