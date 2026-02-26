@@ -942,6 +942,62 @@ func TestIterator_CombinedColumnarPrefixV2(t *testing.T) {
 	})
 }
 
+func TestCombinedLeafKeyState_InitCopiesNodeData(t *testing.T) {
+	data := make([]byte, page.PageSize)
+	b := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+		PackedValuePtr:        true,
+	})
+	if err := b.AddLeafEntry([]byte("aa00"), []byte("v0"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry(aa00): %v", err)
+	}
+	if err := b.AddLeafEntry([]byte("aa01"), []byte("v1"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry(aa01): %v", err)
+	}
+	n := b.Finish()
+
+	var state combinedLeafKeyState
+	ok, err := state.init(42, n)
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected combined leaf state")
+	}
+
+	raw := n.Data()
+	if len(raw) == 0 || len(state.data) == 0 {
+		t.Fatalf("expected non-empty node data")
+	}
+	if unsafe.Pointer(&raw[0]) == unsafe.Pointer(&state.data[0]) {
+		t.Fatalf("combined leaf state unexpectedly aliases node data")
+	}
+
+	keyBefore, _, err := state.keyFlagsAt(0)
+	if err != nil {
+		t.Fatalf("keyFlagsAt before mutate: %v", err)
+	}
+	if string(keyBefore) != "aa00" {
+		t.Fatalf("unexpected key before mutate: %q", keyBefore)
+	}
+
+	needle := []byte("aa00")
+	pos := bytes.Index(raw, needle)
+	if pos < 0 {
+		t.Fatalf("failed to locate key bytes in node data")
+	}
+	copy(raw[pos:pos+len(needle)], []byte("zzzz"))
+
+	keyAfter, _, err := state.keyFlagsAt(0)
+	if err != nil {
+		t.Fatalf("keyFlagsAt after mutate: %v", err)
+	}
+	if string(keyAfter) != "aa00" {
+		t.Fatalf("expected copied key to remain stable, got %q", keyAfter)
+	}
+}
+
 func TestIterator_SeekPrunesByFence(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)

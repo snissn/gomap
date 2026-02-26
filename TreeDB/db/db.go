@@ -752,6 +752,10 @@ type Options struct {
 	// size trigger). This is an operational safety cap; it does not make each
 	// individual write durable (use *Sync APIs for that).
 	MaxWALBytes int64
+	// RetainedValueLogPruneInterval controls how often cached-mode checkpoint/
+	// maintenance attempts retained value-log prune scans.
+	// 0 uses a default; <0 disables prune attempts.
+	RetainedValueLogPruneInterval time.Duration
 }
 
 type Snapshot struct {

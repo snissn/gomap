@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/bits"
@@ -45,6 +46,10 @@ var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
+var visibilityDebugOnce sync.Once
+var visibilityDebugEnabled atomic.Bool
+var visibilityDebugMu sync.Mutex
+var visibilityDebugLogFile *os.File
 
 var valueLogEligiblePool sync.Pool                          // stores []int
 var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
@@ -76,6 +81,55 @@ const (
 	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
 	maxOuterLeafArenaLeases  = 64
 )
+
+func visibilityDebugOn() bool {
+	visibilityDebugOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_VISIBILITY"))
+		if raw == "" || raw == "0" || strings.EqualFold(raw, "false") {
+			return
+		}
+		visibilityDebugEnabled.Store(true)
+		path := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_VISIBILITY_LOG"))
+		if path == "" {
+			return
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "treedb visibility debug: open %q failed: %v\n", path, err)
+			return
+		}
+		visibilityDebugLogFile = f
+	})
+	return visibilityDebugEnabled.Load()
+}
+
+func visibilityDebugf(format string, args ...any) {
+	if !visibilityDebugOn() {
+		return
+	}
+	line := fmt.Sprintf("treedb-visibility %s "+format+"\n", append([]any{time.Now().Format(time.RFC3339Nano)}, args...)...)
+	visibilityDebugMu.Lock()
+	defer visibilityDebugMu.Unlock()
+	if visibilityDebugLogFile != nil {
+		_, _ = visibilityDebugLogFile.WriteString(line)
+		return
+	}
+	_, _ = os.Stderr.WriteString(line)
+}
+
+func looksLikeIAVLRootNodeKey(key []byte) (version uint64, ok bool) {
+	if len(key) < 13 {
+		return 0, false
+	}
+	base := key[len(key)-13:]
+	if base[0] != 's' {
+		return 0, false
+	}
+	if binary.BigEndian.Uint32(base[9:13]) != 1 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(base[1:9]), true
+}
 
 type vlogPreparedFrameBody struct {
 	buf []byte
@@ -1602,7 +1656,13 @@ func (db *DB) deferredValueLogNeedsSingleLaneRegroup() bool {
 func (db *DB) allowFencePointerCollapse() bool {
 	// Collapse is correctness-coupled with anchor promotion and is only allowed in
 	// deferred fence mode where flush regrouping is single-lane.
-	return db != nil && db.deferredValueLogEnabled() && db.supportsFenceAnchorPromotion()
+	//
+	// Route mode anchors have stricter directory semantics than fence modes; keep
+	// collapse disabled until route overlap/promotion ordering is proven safe.
+	if db == nil || db.outerLeafRouteModeEnabled() {
+		return false
+	}
+	return db.deferredValueLogEnabled() && db.supportsFenceAnchorPromotion()
 }
 
 func (db *DB) allowMutableFencePointerCollapse() bool {
@@ -5763,18 +5823,25 @@ func (db *DB) pruneRetainedValueLogs() {
 	}
 }
 
-const retainedValueLogPruneMinInterval = 5 * time.Second
+const defaultRetainedValueLogPruneMinInterval = 5 * time.Second
 
 func (db *DB) maybePruneRetainedValueLogs() {
 	if db == nil || !db.valueLogEnabled() {
 		return
+	}
+	interval := db.retainedValueLogPruneInterval
+	if interval < 0 {
+		return
+	}
+	if interval == 0 {
+		interval = defaultRetainedValueLogPruneMinInterval
 	}
 	if !db.valueLogRetainDirty.Load() {
 		return
 	}
 	now := time.Now().UnixNano()
 	last := db.valueLogRetainLastPruneUnixNano.Load()
-	if last > 0 && now-last < int64(retainedValueLogPruneMinInterval) {
+	if last > 0 && now-last < int64(interval) {
 		return
 	}
 	db.pruneRetainedValueLogs()
@@ -6027,6 +6094,10 @@ type Options struct {
 	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
 	// values once retained bytes exceed this threshold (0 disables the cap).
 	MaxValueLogRetainedBytesHard int64
+	// RetainedValueLogPruneInterval controls how frequently checkpoint/maintenance
+	// attempts retained value-log pruning (live-ID scan + unlink).
+	// 0 uses a default; <0 disables prune attempts.
+	RetainedValueLogPruneInterval time.Duration
 
 	// ValueLogDictTrain configures background dictionary training for value-log frame compression.
 	// TrainBytes <= 0 disables training.
@@ -6219,6 +6290,7 @@ type DB struct {
 	valueLogRetainedClosedBytes     atomic.Int64
 	valueLogRetainDirty             atomic.Bool
 	valueLogRetainLastPruneUnixNano atomic.Int64
+	retainedValueLogPruneInterval   time.Duration
 	maxValueLogRetainedBytes        int64
 	maxValueLogRetainedBytesHard    int64
 
@@ -7667,6 +7739,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			selectorSeedCodec,
 		)
 	}
+	retainedValueLogPruneInterval := opts.RetainedValueLogPruneInterval
+	if retainedValueLogPruneInterval == 0 {
+		retainedValueLogPruneInterval = defaultRetainedValueLogPruneMinInterval
+	}
 	db := &DB{
 		dir:                                  walDir,
 		backend:                              backend,
@@ -7731,6 +7807,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		debugV1LeafLogInvariantsPanic:        debugV1LeafLogInvariantsPanic,
 		maxValueLogRetainedBytes:             opts.MaxValueLogRetainedBytes,
 		maxValueLogRetainedBytesHard:         opts.MaxValueLogRetainedBytesHard,
+		retainedValueLogPruneInterval:        retainedValueLogPruneInterval,
 		valueLogDictTrain:                    valueLogDictTrain,
 		valueLogDictMaxK:                     valueLogDictMaxK,
 		valueLogDictFrameEncodeLevel:         valueLogDictFrameEncodeLevel,
@@ -16310,6 +16387,7 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	rootVersion, trackRoot := looksLikeIAVLRootNodeKey(key)
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableRead(view, key)
 	if view != nil {
@@ -16319,7 +16397,11 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 			return nil, err
 		}
-		return db.backend.Get(key)
+		val, err := db.backend.Get(key)
+		if trackRoot {
+			visibilityDebugf("get root=v%d source=backend_bypass key=%x val_nil=%t val_len=%d err=%v", rootVersion, key, val == nil, len(val), err)
+		}
+		return val, err
 	}
 	val, found, err := db.getMemtable(key)
 	if err != nil {
@@ -16327,16 +16409,26 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 	if found {
 		if val == nil {
+			if trackRoot {
+				visibilityDebugf("get root=v%d source=memtable key=%x tombstone=true", rootVersion, key)
+			}
 			return nil, nil
 		}
 		cpy := make([]byte, len(val))
 		copy(cpy, val)
+		if trackRoot {
+			visibilityDebugf("get root=v%d source=memtable key=%x val_nil=%t val_len=%d", rootVersion, key, cpy == nil, len(cpy))
+		}
 		return cpy, nil
 	}
 	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
-	return db.backend.Get(key)
+	val, err = db.backend.Get(key)
+	if trackRoot {
+		visibilityDebugf("get root=v%d source=backend key=%x val_nil=%t val_len=%d err=%v", rootVersion, key, val == nil, len(val), err)
+	}
+	return val, err
 }
 
 // GetMany returns safe copies of values for keys.
@@ -16415,6 +16507,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
+	rootVersion, trackRoot := looksLikeIAVLRootNodeKey(key)
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
@@ -16446,6 +16539,9 @@ func (db *DB) Has(key []byte) (bool, error) {
 		if idx < len(mutables) && mutables[idx] != nil {
 			_, deleted, found := mutables[idx].Get(key)
 			if found {
+				if trackRoot {
+					visibilityDebugf("has root=v%d source=mutable key=%x deleted=%t", rootVersion, key, deleted)
+				}
 				return !deleted, nil
 			}
 		}
@@ -16461,11 +16557,18 @@ func (db *DB) Has(key []byte) (bool, error) {
 		}
 		_, deleted, found := queue[i].Get(key)
 		if found {
+			if trackRoot {
+				visibilityDebugf("has root=v%d source=queue key=%x deleted=%t idx=%d", rootVersion, key, deleted, i)
+			}
 			return !deleted, nil
 		}
 	}
 
-	return db.backend.Has(key)
+	ok, err := db.backend.Has(key)
+	if trackRoot {
+		visibilityDebugf("has root=v%d source=backend key=%x ok=%t err=%v", rootVersion, key, ok, err)
+	}
+	return ok, err
 }
 
 func (db *DB) Stats() map[string]string {
@@ -17125,10 +17228,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			}
 			return it
 		}
-		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
-			out := merging.Iterator(&emptyIterator{start: start, end: end})
-			return decorate(out, 0), nil
-		}
 		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
 			diskIter, err := db.backend.Iterator(nil, nil)
 			if err != nil {
@@ -17208,7 +17307,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// Note: We skip mutable shards because we just rotated them (so they're empty) or they were already empty.
 	prio := 0
 	for i := len(queue) - 1; i >= 0; i-- {
-		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
+		if i < len(queueRanges) && queueRanges[i].valid && !overlapsQuery(start, end, queueRanges[i]) {
 			prio++
 			continue
 		}
@@ -17228,7 +17327,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	// Disk Iterator
 	// Only skip if we definitively know the range and it doesn't overlap.
-	if !backendRangeKnown || overlapsQuery(start, end, backendRange) {
+	if true {
 		diskIter, err := db.backend.Iterator(start, end)
 		if err != nil {
 			for i := range sources {
