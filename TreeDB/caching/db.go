@@ -6824,28 +6824,10 @@ func (r *snapshotMemtableReader) GetEntry(key []byte) (node.LeafEntry, bool, err
 	if r == nil || r.db == nil || r.view == nil {
 		return node.LeafEntry{}, false, nil
 	}
-	mutables := r.view.mutables
 	queue := r.view.queue
 	queueShardIDs := r.view.queueShardIDs
 
-	if len(mutables) > 0 {
-		idx := r.db.shardIndex(key)
-		if idx < len(mutables) && mutables[idx] != nil {
-			val, ptr, flags, found := mutables[idx].GetEntry(key)
-			if found {
-				return node.LeafEntry{
-					Value:    val,
-					ValuePtr: ptr,
-					Flags:    flags,
-				}, true, nil
-			}
-		}
-	}
-
-	shardIdx := 0
-	if len(mutables) > 0 {
-		shardIdx = r.db.shardIndex(key)
-	}
+	shardIdx := r.db.shardIndex(key)
 	for i := len(queue) - 1; i >= 0; i-- {
 		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
 			continue
@@ -18058,130 +18040,132 @@ func (it *singletonReverseEntryIterator) IsDeleted() bool {
 	return it.flags&node.FlagTombstone != 0
 }
 
-type reverseMergeSource struct {
-	iter     iterator.UnsafeIterator
-	priority int
+type reverseMaterializedEntry struct {
+	key   []byte
+	value []byte
+	ptr   page.ValuePtr
+	flags byte
 }
 
-type reverseMergeEntry struct {
-	key      []byte
-	value    []byte
-	flags    byte
-	priority int
+type reverseMaterializedIterator struct {
+	entries []reverseMaterializedEntry
+	idx     int
+	start   []byte
+	end     []byte
 }
 
-type reverseMergedIterator struct {
-	entries   []reverseMergeEntry
-	idx       int
-	start     []byte
-	end       []byte
-	mergedErr error
-}
-
-func (it *reverseMergedIterator) Valid() bool {
-	return it != nil && it.idx < len(it.entries)
-}
-
-func (it *reverseMergedIterator) Next() {
+func (it *reverseMaterializedIterator) Next() {
 	if !it.Valid() {
 		panic("iterator invalid")
 	}
 	it.idx++
 }
 
-func (it *reverseMergedIterator) Key() []byte {
+func (it *reverseMaterializedIterator) Valid() bool {
+	return it != nil && it.idx >= 0 && it.idx < len(it.entries)
+}
+
+func (it *reverseMaterializedIterator) UnsafeKey() []byte {
 	if !it.Valid() {
-		panic("iterator invalid")
+		return nil
 	}
 	return it.entries[it.idx].key
 }
 
-func (it *reverseMergedIterator) Value() []byte {
+func (it *reverseMaterializedIterator) UnsafeValue() []byte {
 	if !it.Valid() {
-		panic("iterator invalid")
+		return nil
+	}
+	if it.entries[it.idx].flags&node.FlagTombstone != 0 {
+		return nil
 	}
 	return it.entries[it.idx].value
 }
 
-func (it *reverseMergedIterator) KeyCopy(dst []byte) []byte {
+func (it *reverseMaterializedIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if !it.Valid() {
-		panic("iterator invalid")
+		return nil, page.ValuePtr{}, 0
 	}
-	return append(dst[:0], it.entries[it.idx].key...)
+	entry := it.entries[it.idx]
+	return entry.value, entry.ptr, entry.flags
 }
 
-func (it *reverseMergedIterator) ValueCopy(dst []byte) []byte {
+func (it *reverseMaterializedIterator) IsDeleted() bool {
 	if !it.Valid() {
-		panic("iterator invalid")
+		return false
 	}
-	return append(dst[:0], it.entries[it.idx].value...)
+	return it.entries[it.idx].flags&node.FlagTombstone != 0
 }
 
-func (it *reverseMergedIterator) Close() error { return nil }
-
-func (it *reverseMergedIterator) Error() error { return it.mergedErr }
-
-func (it *reverseMergedIterator) Domain() (start, end []byte) { return it.start, it.end }
-
-func newReverseMergedIterator(sources []reverseMergeSource, start, end []byte) (*reverseMergedIterator, error) {
-	winnersByKey := make(map[string]reverseMergeEntry, len(sources))
-
-	for _, src := range sources {
-		it := src.iter
-		if it == nil {
-			continue
-		}
-		for it.Valid() {
-			key := append([]byte(nil), it.UnsafeKey()...)
-			if len(key) == 0 {
-				it.Next()
-				continue
-			}
-			var (
-				val   []byte
-				flags byte
-			)
-			if it.IsDeleted() {
-				flags = node.FlagTombstone
-			} else {
-				val = append([]byte(nil), it.Value()...)
-			}
-
-			keyStr := string(key)
-			existing, ok := winnersByKey[keyStr]
-			if !ok || src.priority < existing.priority {
-				winnersByKey[keyStr] = reverseMergeEntry{
-					key:      key,
-					value:    val,
-					flags:    flags,
-					priority: src.priority,
-				}
-			}
-			it.Next()
-		}
-		if err := it.Error(); err != nil {
-			_ = it.Close()
-			return nil, err
-		}
-		if err := it.Close(); err != nil {
-			return nil, err
+func (it *reverseMaterializedIterator) Seek(key []byte) {
+	it.idx = -1
+	for i := range it.entries {
+		if bytes.Compare(it.entries[i].key, key) < 0 {
+			it.idx = i
+			return
 		}
 	}
+}
 
-	out := make([]reverseMergeEntry, 0, len(winnersByKey))
-	for _, entry := range winnersByKey {
-		if entry.flags&node.FlagTombstone != 0 {
+func (it *reverseMaterializedIterator) Key() []byte { return it.UnsafeKey() }
+
+func (it *reverseMaterializedIterator) Value() []byte { return it.UnsafeValue() }
+
+func (it *reverseMaterializedIterator) KeyCopy(dst []byte) []byte {
+	k := it.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *reverseMaterializedIterator) ValueCopy(dst []byte) []byte {
+	v := it.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
+func (it *reverseMaterializedIterator) Close() error { return nil }
+
+func (it *reverseMaterializedIterator) Error() error { return nil }
+
+func (it *reverseMaterializedIterator) Domain() (start, end []byte) { return it.start, it.end }
+
+func newReverseIteratorFromForward(iter iterator.UnsafeIterator, start, end []byte) (iterator.UnsafeIterator, error) {
+	if iter == nil {
+		return &reverseMaterializedIterator{start: start, end: end}, nil
+	}
+	entries := make([]reverseMaterializedEntry, 0, 256)
+	for iter.Valid() {
+		k := append([]byte(nil), iter.UnsafeKey()...)
+		if len(k) == 0 {
+			iter.Next()
 			continue
 		}
-		out = append(out, entry)
+		v, ptr, flags := iter.UnsafeEntry()
+		entries = append(entries, reverseMaterializedEntry{
+			key:   k,
+			value: append([]byte(nil), v...),
+			ptr:   ptr,
+			flags: flags,
+		})
+		iter.Next()
 	}
-
-	sort.Slice(out, func(i, j int) bool {
-		return bytes.Compare(out[i].key, out[j].key) > 0
+	if err := iter.Error(); err != nil {
+		_ = iter.Close()
+		return nil, err
+	}
+	if err := iter.Close(); err != nil {
+		return nil, err
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return bytes.Compare(entries[i].key, entries[j].key) > 0
 	})
-
-	return &reverseMergedIterator{
-		entries: out,
+	return &reverseMaterializedIterator{
+		entries: entries,
+		idx:     0,
 		start:   start,
 		end:     end,
 	}, nil
@@ -18262,14 +18246,23 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		view = nil
 	}
 
-	sources := make([]reverseMergeSource, 0, len(queue)+1)
+	sources := make([]merging.IteratorSource, 0, len(queue)+1)
 	prio := 0
 	for i := len(queue) - 1; i >= 0; i-- {
 		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
 			prio++
 			continue
 		}
-		qIter := queue[i].NewIterator(start, end)
+		var qIter iterator.UnsafeIterator
+		if reverseTable, ok := queue[i].(memtable.ReverseIterable); ok {
+			qIter = reverseTable.NewReverseIterator(start, end)
+		} else {
+			materializedIter, err := newReverseIteratorFromForward(queue[i].NewIterator(start, end), start, end)
+			if err != nil {
+				return nil, err
+			}
+			qIter = materializedIter
+		}
 		if qIter == nil {
 			prio++
 			continue
@@ -18279,37 +18272,53 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 				return db.readValueLog(key, ptr)
 			})
 		}
-		sources = append(sources, reverseMergeSource{
-			iter:     qIter,
-			priority: prio,
+		sources = append(sources, merging.IteratorSource{
+			Iter:     qIter,
+			Priority: prio,
 		})
 		prio++
 	}
 	diskIter, err := db.backend.ReverseIterator(start, end)
 	if err != nil {
+		for i := range sources {
+			if sources[i].Iter != nil {
+				_ = sources[i].Iter.Close()
+			}
+		}
 		return nil, err
 	}
-	sources = append(sources, reverseMergeSource{
-		iter:     diskIter,
-		priority: prio,
+	sources = append(sources, merging.IteratorSource{
+		Iter:     diskIter,
+		Priority: prio,
 	})
 	if releaseView {
 		db.releaseMemtableView(view)
 		releaseView = false
 	}
 
-	merged, err := newReverseMergedIterator(sources, start, end)
+	if len(sources) == 0 {
+		out := merging.Iterator(&emptyIterator{start: start, end: end})
+		if iteratorDebugEnabled.Load() {
+			out = &debugIterator{Iterator: out, queueLen: len(queue), sourcesUsed: 0}
+		}
+		return out, nil
+	}
+
+	if len(sources) == 1 {
+		out := newSingleSourceIterator(sources[0].Iter, start, end)
+		if iteratorDebugEnabled.Load() {
+			out = &debugIterator{Iterator: out, queueLen: len(queue), sourcesUsed: 1}
+		}
+		return out, nil
+	}
+
+	merged := merging.NewReverseMergingIterator(sources, start, end)
 	if traceIAVLRange {
-		if err != nil {
-			visibilityDebugf("reviter error stage=reverse_merge err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
-		} else if merged != nil && merged.Valid() {
+		if merged != nil && merged.Valid() {
 			visibilityDebugf("reviter done iavl_range=true top_key=%x elapsed_ms=%.3f", merged.Key(), float64(time.Since(traceStart))/float64(time.Millisecond))
 		} else {
 			visibilityDebugf("reviter done iavl_range=true empty elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
 		}
-	}
-	if err != nil {
-		return nil, err
 	}
 	if iteratorDebugEnabled.Load() {
 		return &debugIterator{Iterator: merged, queueLen: len(queue), sourcesUsed: len(sources)}, nil

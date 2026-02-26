@@ -343,6 +343,33 @@ func (s *SkipList) LastKey() []byte {
 	return s.getKey(last)
 }
 
+func (s *SkipList) findLessThan(key []byte) uint32 {
+	if key == nil {
+		last := s.tail[0]
+		if last == 0 || last == s.head {
+			return 0
+		}
+		return last
+	}
+	x := s.head
+	for i := maxHeight - 1; i >= 0; i-- {
+		for {
+			next := s.getNext(x, i)
+			if next == 0 {
+				break
+			}
+			if bytes.Compare(s.getKey(next), key) >= 0 {
+				break
+			}
+			x = next
+		}
+	}
+	if x == s.head {
+		return 0
+	}
+	return x
+}
+
 // AppendWithCallback inserts a new entry assuming the key is strictly greater
 // than the current maximum key in the skiplist.
 func (s *SkipList) AppendWithCallback(key, value []byte, flags uint8, cb func(k, v []byte) error) error {
@@ -570,9 +597,36 @@ type Iterator struct {
 	valid bool
 }
 
+type ReverseIterator struct {
+	sl    *SkipList
+	curr  uint32
+	valid bool
+	start []byte
+	end   []byte
+}
+
 func (s *SkipList) NewIterator(start, end []byte) *Iterator {
 	it := &Iterator{sl: s}
 	it.Seek(start)
+	return it
+}
+
+func (s *SkipList) NewReverseIterator(start, end []byte) *ReverseIterator {
+	it := &ReverseIterator{
+		sl:    s,
+		start: start,
+		end:   end,
+	}
+	seekKey := end
+	if seekKey == nil {
+		it.curr = s.findLessThan(nil)
+	} else {
+		it.curr = s.findLessThan(seekKey)
+	}
+	it.valid = it.curr != 0
+	if it.valid && start != nil && bytes.Compare(s.getKey(it.curr), start) < 0 {
+		it.valid = false
+	}
 	return it
 }
 
@@ -683,4 +737,119 @@ func (it *Iterator) Error() error {
 
 func (it *Iterator) Domain() (start, end []byte) {
 	return nil, nil
+}
+
+func (it *ReverseIterator) Seek(key []byte) {
+	if it == nil || it.sl == nil {
+		return
+	}
+	seekKey := key
+	if it.end != nil && (seekKey == nil || bytes.Compare(seekKey, it.end) > 0) {
+		seekKey = it.end
+	}
+	it.curr = it.sl.findLessThan(seekKey)
+	it.valid = it.curr != 0
+	if it.valid && it.start != nil && bytes.Compare(it.sl.getKey(it.curr), it.start) < 0 {
+		it.valid = false
+	}
+}
+
+func (it *ReverseIterator) Next() {
+	if !it.valid {
+		return
+	}
+	curKey := it.sl.getKey(it.curr)
+	it.curr = it.sl.findLessThan(curKey)
+	it.valid = it.curr != 0
+	if it.valid && it.start != nil && bytes.Compare(it.sl.getKey(it.curr), it.start) < 0 {
+		it.valid = false
+	}
+}
+
+func (it *ReverseIterator) Valid() bool {
+	return it.valid
+}
+
+func (it *ReverseIterator) UnsafeKey() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.sl.getKey(it.curr)
+}
+
+func (it *ReverseIterator) UnsafeValue() []byte {
+	if !it.valid {
+		return nil
+	}
+	flags := it.sl.getFlags(it.curr)
+	if flags&flagPointer != 0 {
+		val := it.sl.getValue(it.curr)
+		if len(val) > page.ValuePtrSize {
+			return val[page.ValuePtrSize:]
+		}
+		return nil
+	}
+	return it.sl.getValue(it.curr)
+}
+
+func (it *ReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.valid {
+		return nil, page.ValuePtr{}, 0
+	}
+	val := it.sl.getValue(it.curr)
+	flags := it.sl.getFlags(it.curr)
+	if flags&flagPointer != 0 {
+		if len(val) >= page.ValuePtrSize {
+			inline := []byte(nil)
+			if len(val) > page.ValuePtrSize {
+				inline = val[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags
+		}
+		return nil, page.ValuePtr{}, flags
+	}
+	return val, page.ValuePtr{}, flags
+}
+
+func (it *ReverseIterator) IsDeleted() bool {
+	if !it.valid {
+		return false
+	}
+	return it.sl.getFlags(it.curr)&flagDeleted != 0
+}
+
+func (it *ReverseIterator) Close() error {
+	return nil
+}
+
+func (it *ReverseIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *ReverseIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *ReverseIterator) KeyCopy(dst []byte) []byte {
+	k := it.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *ReverseIterator) ValueCopy(dst []byte) []byte {
+	v := it.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
+func (it *ReverseIterator) Error() error {
+	return nil
+}
+
+func (it *ReverseIterator) Domain() (start, end []byte) {
+	return it.start, it.end
 }

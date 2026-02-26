@@ -112,16 +112,20 @@ func assertSnapshotChecks(t *testing.T, snap snapshotVisibilityReader, cases []s
 			t.Fatalf("snapshot.Get(%q): got=%q want=%q", tc.key, got, tc.wantValue)
 		}
 
-		gotAppend, err := snap.GetAppend([]byte(tc.key), appendPrefix[:0])
+		dstPrefix := append([]byte(nil), appendPrefix...)
+		gotAppend, err := snap.GetAppend([]byte(tc.key), dstPrefix)
 		if tc.missing {
 			if !errors.Is(err, ErrKeyNotFound) {
 				t.Fatalf("snapshot.GetAppend(%q): want ErrKeyNotFound, got err=%v, val=%q", tc.key, err, gotAppend)
+			}
+			if !bytes.Equal(gotAppend, appendPrefix) {
+				t.Fatalf("snapshot.GetAppend(%q): want dst preserved as %q, got=%q", tc.key, appendPrefix, gotAppend)
 			}
 		} else {
 			if err != nil {
 				t.Fatalf("snapshot.GetAppend(%q): %v", tc.key, err)
 			}
-			expected := append(appendPrefix[:0], tc.wantValue...)
+			expected := append(append([]byte(nil), appendPrefix...), tc.wantValue...)
 			if !bytes.Equal(gotAppend, expected) {
 				t.Fatalf("snapshot.GetAppend(%q): got=%q want=%q", tc.key, gotAppend, expected)
 			}
@@ -227,6 +231,46 @@ func TestAcquireSnapshot_SeesJustWrittenBatch(t *testing.T) {
 }
 
 func TestAcquireSnapshot_SeesJustWrittenBatch_AfterCheckpoint(t *testing.T) {
+	checkpoint := true
+	for _, mode := range snapshotVisibilityModesForCheckpoint(checkpoint) {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			for _, shards := range snapshotVisibilityShards() {
+				shards := shards
+				t.Run(fmt.Sprintf("memtable_shards_%d", shards), func(t *testing.T) {
+					opts := baseSnapshotVisibilityOptions(t, mode, func(mut *Options) {
+						mut.MemtableShards = shards
+					})
+					db, err := Open(opts)
+					if err != nil {
+						t.Fatalf("Open: %v", err)
+					}
+					defer db.Close()
+
+					batch := db.NewBatch()
+					if batch == nil {
+						t.Fatal("NewBatch returned nil")
+					}
+					if err := batch.Set([]byte("k"), []byte("v")); err != nil {
+						t.Fatalf("batch.Set: %v", err)
+					}
+					if err := batch.Write(); err != nil {
+						t.Fatalf("batch.Write: %v", err)
+					}
+					if err := batch.Close(); err != nil {
+						t.Fatalf("batch.Close: %v", err)
+					}
+
+					runVisibilitySnapshotCheck(t, db, []snapshotVisibilityCase{
+						{key: "k", wantValue: []byte("v")},
+					}, checkpoint)
+				})
+			}
+		})
+	}
+}
+
+func TestAcquireSnapshot_IsolatedFromSubsequentWritesAcrossMemtableModes(t *testing.T) {
 	for _, checkpoint := range snapshotVisibilityCheckpointModes() {
 		checkpoint := checkpoint
 		t.Run(snapshotVisibilityCheckpointLabel(checkpoint), func(t *testing.T) {
@@ -245,23 +289,45 @@ func TestAcquireSnapshot_SeesJustWrittenBatch_AfterCheckpoint(t *testing.T) {
 							}
 							defer db.Close()
 
-							batch := db.NewBatch()
-							if batch == nil {
-								t.Fatal("NewBatch returned nil")
+							if err := db.Set([]byte("k"), []byte("v1")); err != nil {
+								t.Fatalf("Set(v1): %v", err)
 							}
-							if err := batch.Set([]byte("k"), []byte("v")); err != nil {
-								t.Fatalf("batch.Set: %v", err)
-							}
-							if err := batch.Write(); err != nil {
-								t.Fatalf("batch.Write: %v", err)
-							}
-							if err := batch.Close(); err != nil {
-								t.Fatalf("batch.Close: %v", err)
+							if checkpoint {
+								if err := db.Checkpoint(); err != nil {
+									t.Fatalf("Checkpoint before snapshot: %v", err)
+								}
 							}
 
-							runVisibilitySnapshotCheck(t, db, []snapshotVisibilityCase{
-								{key: "k", wantValue: []byte("v")},
-							}, checkpoint)
+							snap := db.AcquireSnapshot()
+							if snap == nil {
+								t.Fatal("AcquireSnapshot returned nil")
+							}
+							defer func() {
+								if err := snap.Close(); err != nil {
+									t.Fatalf("snapshot.Close: %v", err)
+								}
+							}()
+
+							if err := db.Set([]byte("k"), []byte("v2")); err != nil {
+								t.Fatalf("Set(v2): %v", err)
+							}
+							if checkpoint {
+								if err := db.Checkpoint(); err != nil {
+									t.Fatalf("Checkpoint after snapshot write: %v", err)
+								}
+							}
+
+							assertSnapshotChecks(t, snap, []snapshotVisibilityCase{
+								{key: "k", wantValue: []byte("v1")},
+							})
+
+							live, err := db.Get([]byte("k"))
+							if err != nil {
+								t.Fatalf("db.Get(k): %v", err)
+							}
+							if !bytes.Equal(live, []byte("v2")) {
+								t.Fatalf("db.Get(k): got=%q want=%q", live, []byte("v2"))
+							}
 						})
 					}
 				})

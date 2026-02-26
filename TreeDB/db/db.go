@@ -953,11 +953,11 @@ func (s *Snapshot) Close() error {
 			}
 		}
 	}
+	if s.onClose != nil {
+		s.onClose()
+		s.onClose = nil
+	}
 	if s.db != nil {
-		if s.onClose != nil {
-			s.onClose()
-			s.onClose = nil
-		}
 		s.db.snapPool.Put(s)
 	}
 	return err

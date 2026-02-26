@@ -122,3 +122,87 @@ func TestTwoWayMerger(t *testing.T) {
 		t.Errorf("Merge results mismatch (domain).\nGot: %v\nWant:%v", results2, expected2)
 	}
 }
+
+func TestTwoWayReverseMerger(t *testing.T) {
+	// Source 1 (newer): E:1, C:1, B:del, A:1
+	mut := &mockUnsafeIter{
+		data: []entry{
+			{"E", "valE_new", false},
+			{"C", "valC_new", false},
+			{"B", "", true},
+			{"A", "valA_new", false},
+		},
+	}
+	// Source 2 (older): F:0, D:0, B:0, A:0
+	disk := &mockUnsafeIter{
+		data: []entry{
+			{"F", "valF_old", false},
+			{"D", "valD_old", false},
+			{"B", "valB_old", false},
+			{"A", "valA_old", false},
+		},
+	}
+
+	merger := NewTwoWayReverseMerger(mut, disk, nil, nil)
+	expected := []struct {
+		k, v string
+	}{
+		{"F", "valF_old"},
+		{"E", "valE_new"},
+		{"D", "valD_old"},
+		{"C", "valC_new"},
+		{"A", "valA_new"},
+	}
+	results := make([]struct{ k, v string }, 0, len(expected))
+	for merger.Valid() {
+		results = append(results, struct{ k, v string }{string(merger.Key()), string(merger.Value())})
+		merger.Next()
+	}
+	if !reflect.DeepEqual(results, expected) {
+		t.Errorf("Reverse merge results mismatch.\nGot: %v\nWant:%v", results, expected)
+	}
+}
+
+func TestReverseMergingIterator_ThreeSources(t *testing.T) {
+	src0 := &mockUnsafeIter{data: []entry{
+		{"H", "h0", false},
+		{"G", "g0", false},
+		{"C", "", true},
+	}}
+	src1 := &mockUnsafeIter{data: []entry{
+		{"I", "i1", false},
+		{"G", "g1", false},
+		{"E", "e1", false},
+		{"C", "c1", false},
+	}}
+	src2 := &mockUnsafeIter{data: []entry{
+		{"F", "f2", false},
+		{"D", "d2", false},
+	}}
+
+	it := NewReverseMergingIterator([]IteratorSource{
+		{Iter: src0, Priority: 0},
+		{Iter: src1, Priority: 1},
+		{Iter: src2, Priority: 2},
+	}, []byte("D"), []byte("Z"))
+
+	expected := []struct {
+		k, v string
+	}{
+		{"I", "i1"},
+		{"H", "h0"},
+		{"G", "g0"},
+		{"F", "f2"},
+		{"E", "e1"},
+		{"D", "d2"},
+	}
+
+	var got []struct{ k, v string }
+	for it.Valid() {
+		got = append(got, struct{ k, v string }{string(it.Key()), string(it.Value())})
+		it.Next()
+	}
+	if !reflect.DeepEqual(got, expected) {
+		t.Fatalf("reverse merge mismatch got=%v want=%v", got, expected)
+	}
+}

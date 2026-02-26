@@ -73,11 +73,13 @@ func (panicBackend) Iterator(_, _ []byte) (iterator.UnsafeIterator, error) {
 func (panicBackend) ReverseIterator(_, _ []byte) (iterator.UnsafeIterator, error) {
 	panic("backend ReverseIterator should not be called")
 }
-func (panicBackend) NewBatch() batch.Interface     { panic("backend NewBatch should not be called") }
-func (panicBackend) Close() error                  { panic("backend Close should not be called") }
-func (panicBackend) Print() error                  { panic("backend Print should not be called") }
-func (panicBackend) Stats() map[string]string      { return nil }
-func (panicBackend) AcquireSnapshot() *db.Snapshot { return nil }
+func (panicBackend) NewBatch() batch.Interface { panic("backend NewBatch should not be called") }
+func (panicBackend) Close() error              { panic("backend Close should not be called") }
+func (panicBackend) Print() error              { panic("backend Print should not be called") }
+func (panicBackend) Stats() map[string]string  { return nil }
+func (panicBackend) AcquireSnapshot() *db.Snapshot {
+	panic("backend AcquireSnapshot should not be called")
+}
 
 type countingBackend struct {
 	panicBackend
