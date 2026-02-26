@@ -16,6 +16,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/largevalue"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -252,6 +253,17 @@ func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int
 	if err != nil {
 		return nil, err
 	}
+	manifest, isManifest, err := largevalue.DecodeManifest(payload)
+	if err != nil {
+		return nil, err
+	}
+	if isManifest {
+		refs := make(map[uint32]int64, len(manifest.Chunks))
+		if err := db.addLargeValueManifestChunkLiveBytes(manifest, refs); err != nil {
+			return nil, err
+		}
+		return refs, nil
+	}
 	if !outerleaf.HasMagic(payload) {
 		return nil, nil
 	}
@@ -269,17 +281,55 @@ func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int
 		if typed[i].Kind != outerleaf.EntryKindBlobRef {
 			continue
 		}
-		blobPtr := typed[i].BlobPtr
-		if !page.IsValueLogFileID(blobPtr.FileID) {
-			return nil, fmt.Errorf("treedb: invalid nested blob pointer file %d", blobPtr.FileID)
-		}
-		recordLen, err := db.valueLogRecordLengthForRewrite(blobPtr)
-		if err != nil {
+		if err := db.addNestedBlobRefLiveBytes(typed[i].BlobPtr, refs); err != nil {
 			return nil, err
 		}
-		refs[blobPtr.FileID] += int64(recordLen)
 	}
 	return refs, nil
+}
+
+func (db *DB) addLargeValueManifestChunkLiveBytes(manifest largevalue.Manifest, refs map[uint32]int64) error {
+	if refs == nil {
+		return nil
+	}
+	for i := range manifest.Chunks {
+		chunkPtr := manifest.Chunks[i]
+		if !page.IsValueLogFileID(chunkPtr.FileID) {
+			return fmt.Errorf("treedb: invalid large-value chunk pointer file %d", chunkPtr.FileID)
+		}
+		recordLen, err := db.valueLogRecordLengthForRewrite(chunkPtr)
+		if err != nil {
+			return err
+		}
+		refs[chunkPtr.FileID] += int64(recordLen)
+	}
+	return nil
+}
+
+func (db *DB) addNestedBlobRefLiveBytes(blobPtr page.ValuePtr, refs map[uint32]int64) error {
+	if !page.IsValueLogFileID(blobPtr.FileID) {
+		return fmt.Errorf("treedb: invalid nested blob pointer file %d", blobPtr.FileID)
+	}
+	recordLen, err := db.valueLogRecordLengthForRewrite(blobPtr)
+	if err != nil {
+		return err
+	}
+	refs[blobPtr.FileID] += int64(recordLen)
+	if db == nil || db.valueLogManager == nil {
+		return nil
+	}
+	payload, err := db.valueLogManager.Read(blobPtr)
+	if err != nil {
+		return err
+	}
+	manifest, isManifest, err := largevalue.DecodeManifest(payload)
+	if err != nil {
+		return err
+	}
+	if !isManifest {
+		return nil
+	}
+	return db.addLargeValueManifestChunkLiveBytes(manifest, refs)
 }
 
 func valueLogRecordLengthNeedsHeader(ptr page.ValuePtr, hint uint32) bool {
@@ -1293,6 +1343,20 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 								nestedBlobRefFileIDs = make(map[uint32]struct{})
 							}
 							nestedBlobRefFileIDs[nestedPtr.FileID] = struct{}{}
+							if it.vlogs != nil {
+								nestedPayload, readErr := it.vlogs.Read(nestedPtr)
+								if readErr == nil {
+									manifest, isManifest, decErr := largevalue.DecodeManifest(nestedPayload)
+									if decErr == nil && isManifest {
+										for i := range manifest.Chunks {
+											chunkPtr := manifest.Chunks[i]
+											if page.IsValueLogFileID(chunkPtr.FileID) {
+												nestedBlobRefFileIDs[chunkPtr.FileID] = struct{}{}
+											}
+										}
+									}
+								}
+							}
 						}
 					}
 					return nil

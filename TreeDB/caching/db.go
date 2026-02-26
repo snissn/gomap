@@ -23,6 +23,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/largevalue"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
@@ -1039,6 +1040,48 @@ func normalizeValueLogWALFenceMode(mode string) string {
 const defaultOuterLeafBlobThresholdMin = 16 << 10
 const defaultOuterLeafFenceBlockTargetBytes = 4 << 10
 const outerLeafFenceAdaptiveLZ4MaxAvgValueBytes = 64
+const defaultLargeValueChunkBytes = 8 << 20
+const minLargeValueChunkBytes = 1 << 20
+
+func valueLogSingleRecordPayloadCap() int {
+	if limits.MaxRecordSize <= 0 {
+		return int(^uint(0) >> 1)
+	}
+	// One-frame, one-record layout overhead:
+	// valuelog header + frame header + 1 RID + 2 offsets + safety margin.
+	overhead := int64(valuelog.HeaderSize + valuelog.FrameHeaderSize + 8 + 8 + 128)
+	capBytes := limits.MaxRecordSize - overhead
+	if capBytes < 1 {
+		return 1
+	}
+	maxInt := int64(int(^uint(0) >> 1))
+	if capBytes > maxInt {
+		capBytes = maxInt
+	}
+	return int(capBytes)
+}
+
+func (db *DB) largeValueNeedsChunking(valueLen int) bool {
+	if valueLen <= 0 {
+		return false
+	}
+	return valueLen > valueLogSingleRecordPayloadCap()
+}
+
+func (db *DB) largeValueChunkBytes() int {
+	maxPayload := valueLogSingleRecordPayloadCap()
+	chunk := defaultLargeValueChunkBytes
+	if chunk > maxPayload {
+		chunk = maxPayload
+	}
+	if chunk < minLargeValueChunkBytes {
+		chunk = maxPayload
+	}
+	if chunk < 1 {
+		chunk = 1
+	}
+	return chunk
+}
 
 func (db *DB) effectiveOuterLeafBlobThresholdBytes() int {
 	if db == nil {
@@ -1119,7 +1162,36 @@ func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
 		if db.valueLogReader == nil {
 			return nil, fmt.Errorf("cachingdb: blob-ref entry requires value-log reader")
 		}
-		return db.valueLogReader.Read(entry.BlobPtr)
+		raw, err := db.valueLogReader.Read(entry.BlobPtr)
+		if err != nil {
+			return nil, err
+		}
+		manifest, ok, err := largevalue.DecodeManifest(raw)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return raw, nil
+		}
+		if manifest.TotalLen > uint64(int(^uint(0)>>1)) {
+			return nil, fmt.Errorf("cachingdb: large-value manifest length overflows int: %d", manifest.TotalLen)
+		}
+		out := make([]byte, 0, int(manifest.TotalLen))
+		for i := range manifest.Chunks {
+			chunk := manifest.Chunks[i]
+			if !page.IsValueLogFileID(chunk.FileID) {
+				return nil, fmt.Errorf("cachingdb: invalid large-value chunk file %d", chunk.FileID)
+			}
+			chunkData, readErr := db.valueLogReader.Read(chunk)
+			if readErr != nil {
+				return nil, readErr
+			}
+			out = append(out, chunkData...)
+		}
+		if uint64(len(out)) != manifest.TotalLen {
+			return nil, fmt.Errorf("cachingdb: large-value length mismatch got=%d want=%d", len(out), manifest.TotalLen)
+		}
+		return out, nil
 	}
 	return entry.Value, nil
 }
@@ -1229,6 +1301,75 @@ func appendOuterLeafTypedRecordGroup(db *DB, encoder *outerleaf.Encoder, entries
 	return records, groups, arena, nil
 }
 
+func (db *DB) appendLargeValueManifest(lane *lane, dictID uint64, value []byte, durability journalDurability) (page.ValuePtr, error) {
+	if db == nil {
+		return page.ValuePtr{}, errWALUnavailable
+	}
+	if lane == nil {
+		return page.ValuePtr{}, errWALUnavailable
+	}
+	if len(value) == 0 {
+		return page.ValuePtr{}, fmt.Errorf("cachingdb: empty large value")
+	}
+	chunkSize := db.largeValueChunkBytes()
+	if chunkSize <= 0 {
+		return page.ValuePtr{}, fmt.Errorf("cachingdb: invalid large value chunk size %d", chunkSize)
+	}
+	chunkCount := (len(value) + chunkSize - 1) / chunkSize
+	if chunkCount <= 1 {
+		rid := db.nextRID.Add(1)
+		rec := []valuelog.Record{{RID: rid, Value: value}}
+		ptrs, err := db.appendValueLog(lane, dictID, nil, rec, durability)
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+		if len(ptrs) != 1 {
+			putValueLogPtrs(ptrs)
+			return page.ValuePtr{}, fmt.Errorf("cachingdb: expected 1 ptr for single large value, got %d", len(ptrs))
+		}
+		ptr := ptrs[0]
+		putValueLogPtrs(ptrs)
+		return ptr, nil
+	}
+
+	chunkPtrs := make([]page.ValuePtr, 0, chunkCount)
+	for off := 0; off < len(value); off += chunkSize {
+		end := off + chunkSize
+		if end > len(value) {
+			end = len(value)
+		}
+		rid := db.nextRID.Add(1)
+		rec := []valuelog.Record{{RID: rid, Value: value[off:end]}}
+		ptrs, err := db.appendValueLog(lane, dictID, nil, rec, durability)
+		if err != nil {
+			return page.ValuePtr{}, err
+		}
+		if len(ptrs) != 1 {
+			putValueLogPtrs(ptrs)
+			return page.ValuePtr{}, fmt.Errorf("cachingdb: expected 1 ptr for large value chunk, got %d", len(ptrs))
+		}
+		chunkPtrs = append(chunkPtrs, ptrs[0])
+		putValueLogPtrs(ptrs)
+	}
+	manifest, err := largevalue.EncodeManifest(nil, uint64(len(value)), chunkPtrs, 0, 0)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	rid := db.nextRID.Add(1)
+	manifestRec := []valuelog.Record{{RID: rid, Value: manifest}}
+	manifestPtrs, err := db.appendValueLog(lane, dictID, nil, manifestRec, durability)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	if len(manifestPtrs) != 1 {
+		putValueLogPtrs(manifestPtrs)
+		return page.ValuePtr{}, fmt.Errorf("cachingdb: expected 1 ptr for large value manifest, got %d", len(manifestPtrs))
+	}
+	ptr := manifestPtrs[0]
+	putValueLogPtrs(manifestPtrs)
+	return ptr, nil
+}
+
 func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys [][]byte, values [][]byte, durability journalDurability) ([]page.ValuePtr, []outerLeafRecordGroup, error) {
 	if len(keys) != len(values) {
 		return nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
@@ -1313,25 +1454,39 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 		}
 		nestedRecords := getValueLogRecordsCap(len(nestedIdxs))
 		defer putValueLogRecordsCheckpointAware(db, nestedRecords)
+		nestedRecordPositions := make([]int, 0, len(nestedIdxs))
 		if len(nestedIdxs) > 0 {
-			startRID := db.nextRID.Add(uint64(len(nestedIdxs))) - uint64(len(nestedIdxs)) + 1
 			for _, nestedPos := range nestedIdxs {
-				nestedRecords = append(nestedRecords, valuelog.Record{
-					RID:   startRID + uint64(len(nestedRecords)),
-					Value: entries[nestedPos].Value,
-				})
+				rawValue := entries[nestedPos].Value
+				if db.largeValueNeedsChunking(len(rawValue)) {
+					manifestPtr, err := db.appendLargeValueManifest(lane, dictID, rawValue, durability)
+					if err != nil {
+						return err
+					}
+					entries[nestedPos].BlobPtr = manifestPtr
+					entries[nestedPos].Value = nil
+					continue
+				}
+				nestedRecordPositions = append(nestedRecordPositions, nestedPos)
+				nestedRecords = append(nestedRecords, valuelog.Record{Value: rawValue})
 			}
-			nestedPtrs, err := db.appendValueLog(lane, dictID, nil, nestedRecords, durability)
-			if err != nil {
-				return err
-			}
-			defer putValueLogPtrs(nestedPtrs)
-			if len(nestedPtrs) != len(nestedIdxs) {
-				return fmt.Errorf("cachingdb: route nested pointer count mismatch expected=%d got=%d", len(nestedIdxs), len(nestedPtrs))
-			}
-			for i, nestedPos := range nestedIdxs {
-				entries[nestedPos].BlobPtr = nestedPtrs[i]
-				entries[nestedPos].Value = nil
+			if len(nestedRecords) > 0 {
+				startRID := db.nextRID.Add(uint64(len(nestedRecords))) - uint64(len(nestedRecords)) + 1
+				for i := range nestedRecords {
+					nestedRecords[i].RID = startRID + uint64(i)
+				}
+				nestedPtrs, err := db.appendValueLog(lane, dictID, nil, nestedRecords, durability)
+				if err != nil {
+					return err
+				}
+				defer putValueLogPtrs(nestedPtrs)
+				if len(nestedPtrs) != len(nestedRecordPositions) {
+					return fmt.Errorf("cachingdb: route nested pointer count mismatch expected=%d got=%d", len(nestedRecordPositions), len(nestedPtrs))
+				}
+				for i, nestedPos := range nestedRecordPositions {
+					entries[nestedPos].BlobPtr = nestedPtrs[i]
+					entries[nestedPos].Value = nil
+				}
 			}
 		}
 
@@ -11353,11 +11508,23 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	default:
 	}
 	if encodeOuterLeaf {
-		encodedValue, encodeErr := db.encodeOuterLeafValue(key, value)
-		if encodeErr != nil {
-			return page.ValuePtr{}, "", encodeErr
+		if db.largeValueNeedsChunking(len(value)) {
+			manifestPtr, manifestErr := db.appendLargeValueManifest(l, dictID, value, durability)
+			if manifestErr != nil {
+				return page.ValuePtr{}, "", manifestErr
+			}
+			encodedValue, encodeErr := db.encodeOuterLeafBlobRef(nil, key, manifestPtr)
+			if encodeErr != nil {
+				return page.ValuePtr{}, "", encodeErr
+			}
+			value = encodedValue
+		} else {
+			encodedValue, encodeErr := db.encodeOuterLeafValue(key, value)
+			if encodeErr != nil {
+				return page.ValuePtr{}, "", encodeErr
+			}
+			value = encodedValue
 		}
-		value = encodedValue
 	}
 	wallStart := time.Time{}
 	if db.needsVlogAutotuneTiming() {
@@ -12971,16 +13138,17 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
 	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeHugeImmediate := routeAnchorMode && !db.disableJournal && db.largeValueNeedsChunking(len(value))
 	hybridRIDJoin := allowPointers && db.fenceRIDJoinHybridEnabled()
 	oversized := hybridRIDJoin && db.oversizedOuterLeafValue(value)
 	deferPointers := false
-	if allowPointers && routeAnchorMode {
+	if allowPointers && routeAnchorMode && !routeHugeImmediate {
 		// Route mode publishes one directory anchor per outer-leaf payload block at
 		// flush time. Avoid per-key pointer appends on Set path.
 		deferPointers = true
 		allowPointers = false
 	}
-	if allowPointers && db.deferredValueLogEnabled() && !(hybridRIDJoin && oversized) {
+	if allowPointers && db.deferredValueLogEnabled() && !(hybridRIDJoin && oversized) && !routeHugeImmediate {
 		// In deferred mode we keep the mutable entry inline and regroup+append to
 		// value-log at flush time.
 		deferPointers = true
@@ -18494,6 +18662,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		deferredFencePath := b.db.deferredValueLogEnabled()
 		allowPointers = eligibleCountTotal > 0 && valueLogEnabled && b.db.allowValueLogPointers()
 		hybridRIDJoin = allowPointers && b.db.fenceRIDJoinHybridEnabled()
+		routeHugeImmediate := allowPointers &&
+			b.db.outerLeafRouteModeEnabled() &&
+			!b.db.disableJournal
 		if allowPointers && deferredFencePath {
 			if hybridRIDJoin {
 				// WAL-on v2_fenceptr rid_join hybrid:
@@ -18505,6 +18676,27 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				for _, idx := range eligibleIdxs {
 					op := &b.entries[idx]
 					if b.db.oversizedOuterLeafValue(op.Value) {
+						immediate = append(immediate, idx)
+						continue
+					}
+					deferredCount++
+					deferredBytes += uint64(len(op.Key) + len(op.Value))
+				}
+				if deferredCount > 0 {
+					b.db.recordDeferredFenceEnqueued(deferredCount, deferredBytes)
+				}
+				eligibleIdxs = immediate
+				b.eligibleIdxs = eligibleIdxs
+				if len(eligibleIdxs) == 0 {
+					allowPointers = false
+				}
+			} else if routeHugeImmediate {
+				immediate := eligibleIdxs[:0]
+				deferredCount := 0
+				var deferredBytes uint64
+				for _, idx := range eligibleIdxs {
+					op := &b.entries[idx]
+					if b.db.largeValueNeedsChunking(len(op.Value)) {
 						immediate = append(immediate, idx)
 						continue
 					}
@@ -18602,6 +18794,32 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				}
 				if rids != nil {
 					rids[idx] = outerRID
+				}
+				if retainPath != "" {
+					b.db.markValueLogRetain(retainPath)
+				}
+				used++
+			}
+			if debugPtr && used > 0 {
+				b.db.debugPtrUsed.Add(int64(used))
+			}
+		} else if b.db.outerLeafRouteModeEnabled() && !b.db.disableJournal {
+			used := 0
+			for _, idx := range eligibleIdxs {
+				op := &b.entries[idx]
+				rid := b.db.nextRID.Add(1)
+				ptr, retainPath, err := b.db.appendValueLogOneWithKey(lane, b.dictID, nil, rid, op.Key, op.Value, durability)
+				if err != nil {
+					b.db.writeMu.RUnlock()
+					return err
+				}
+				op.ValuePtr = ptr
+				op.IsPtr = true
+				if b.db.memtableValueLogPointers {
+					op.Value = nil
+				}
+				if rids != nil {
+					rids[idx] = rid
 				}
 				if retainPath != "" {
 					b.db.markValueLogRetain(retainPath)

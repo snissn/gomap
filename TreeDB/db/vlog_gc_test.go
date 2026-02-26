@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/internal/largevalue"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -111,6 +112,156 @@ func TestValueLogGC_FenceMode_NestedBlobRefSegmentLiveness(t *testing.T) {
 
 func TestValueLogGC_V1LeafLogRoute_NestedBlobRefSegmentLiveness(t *testing.T) {
 	testValueLogGCNestedBlobRefSegmentLiveness(t, IndexOuterLeafModeV1LeafLogRoute)
+}
+
+func TestValueLogGC_V1LeafLogRoute_NestedManifestChunkSegmentLiveness(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir:                dir,
+		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLogRoute,
+		ValueLog: ValueLogOptions{
+			ForcePointers: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	chunkAPath := filepath.Join(walDir, "value-l0-000001.log")
+	chunkAFileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("chunkA file id: %v", err)
+	}
+	chunkAWriter, err := valuelog.NewWriter(chunkAPath, chunkAFileID)
+	if err != nil {
+		t.Fatalf("chunkA writer: %v", err)
+	}
+	chunkA := bytes.Repeat([]byte("chunkA|"), 96)
+	chunkAPtr, err := chunkAWriter.Append(0, nil, 30_001, chunkA)
+	if err != nil {
+		_ = chunkAWriter.Close()
+		t.Fatalf("append chunkA: %v", err)
+	}
+	if err := chunkAWriter.Close(); err != nil {
+		t.Fatalf("close chunkA writer: %v", err)
+	}
+
+	chunkBPath := filepath.Join(walDir, "value-l0-000002.log")
+	chunkBFileID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("chunkB file id: %v", err)
+	}
+	chunkBWriter, err := valuelog.NewWriter(chunkBPath, chunkBFileID)
+	if err != nil {
+		t.Fatalf("chunkB writer: %v", err)
+	}
+	chunkB := bytes.Repeat([]byte("chunkB|"), 80)
+	chunkBPtr, err := chunkBWriter.Append(0, nil, 30_002, chunkB)
+	if err != nil {
+		_ = chunkBWriter.Close()
+		t.Fatalf("append chunkB: %v", err)
+	}
+	if err := chunkBWriter.Close(); err != nil {
+		t.Fatalf("close chunkB writer: %v", err)
+	}
+
+	manifestPayload, err := largevalue.EncodeManifest(nil, uint64(len(chunkA)+len(chunkB)), []page.ValuePtr{chunkAPtr, chunkBPtr}, 0, 0)
+	if err != nil {
+		t.Fatalf("EncodeManifest: %v", err)
+	}
+	manifestPath := filepath.Join(walDir, "value-l0-000003.log")
+	manifestFileID, err := valuelog.EncodeFileID(0, 3)
+	if err != nil {
+		t.Fatalf("manifest file id: %v", err)
+	}
+	manifestWriter, err := valuelog.NewWriter(manifestPath, manifestFileID)
+	if err != nil {
+		t.Fatalf("manifest writer: %v", err)
+	}
+	manifestPtr, err := manifestWriter.Append(0, nil, 30_003, manifestPayload)
+	if err != nil {
+		_ = manifestWriter.Close()
+		t.Fatalf("append manifest: %v", err)
+	}
+	if err := manifestWriter.Close(); err != nil {
+		t.Fatalf("close manifest writer: %v", err)
+	}
+
+	key := []byte("k-manifest-nested")
+	outerPayload, err := outerleaf.EncodeSingleBlobRef(nil, key, manifestPtr, uint8(ValueLogBlockSnappy), 16)
+	if err != nil {
+		t.Fatalf("EncodeSingleBlobRef: %v", err)
+	}
+	outerPath := filepath.Join(walDir, "value-l0-000004.log")
+	outerFileID, err := valuelog.EncodeFileID(0, 4)
+	if err != nil {
+		t.Fatalf("outer file id: %v", err)
+	}
+	outerWriter, err := valuelog.NewWriter(outerPath, outerFileID)
+	if err != nil {
+		t.Fatalf("outer writer: %v", err)
+	}
+	outerPtr, err := outerWriter.Append(0, nil, 30_004, outerPayload)
+	if err != nil {
+		_ = outerWriter.Close()
+		t.Fatalf("append outer: %v", err)
+	}
+	if err := outerWriter.Close(); err != nil {
+		t.Fatalf("close outer writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer(key, outerPtr); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write pointer batch: %v", err)
+	}
+	_ = b.Close()
+
+	want := append(append([]byte(nil), chunkA...), chunkB...)
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", key, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Get(%q) mismatch: got len=%d want len=%d", key, len(got), len(want))
+	}
+
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC while referenced: %v", err)
+	}
+	if _, err := os.Stat(chunkAPath); err != nil {
+		t.Fatalf("expected chunkA segment to remain while referenced: %v", err)
+	}
+	if _, err := os.Stat(chunkBPath); err != nil {
+		t.Fatalf("expected chunkB segment to remain while referenced: %v", err)
+	}
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Fatalf("expected manifest segment to remain while referenced: %v", err)
+	}
+
+	if err := db.Delete(key); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC after delete: %v", err)
+	}
+	if _, err := os.Stat(chunkAPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected chunkA segment to be collected after delete, err=%v", err)
+	}
+	if _, err := os.Stat(chunkBPath); err == nil || !os.IsNotExist(err) {
+		t.Fatalf("expected chunkB segment to be collected after delete, err=%v", err)
+	}
 }
 
 func testValueLogGCNestedBlobRefSegmentLiveness(t *testing.T, mode string) {

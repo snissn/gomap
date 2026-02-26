@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/internal/largevalue"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -1130,10 +1131,7 @@ func (r valueReader) resolveLookupResult(entry outerleaf.LookupResult, unsafe bo
 		if !page.IsValueLogFileID(entry.BlobPtr.FileID) {
 			return nil, fmt.Errorf("value reader: invalid nested blob pointer file %d", entry.BlobPtr.FileID)
 		}
-		if unsafe {
-			return r.readRawUnsafe(entry.BlobPtr)
-		}
-		return r.readRaw(entry.BlobPtr)
+		return r.readValueOrLargeValue(entry.BlobPtr, unsafe)
 	default:
 		return nil, fmt.Errorf("value reader: unsupported outer-leaf entry kind %d", entry.Kind)
 	}
@@ -1173,10 +1171,7 @@ func (r valueReader) resolveLookupResultAppend(entry outerleaf.LookupResult, dst
 		if !page.IsValueLogFileID(entry.BlobPtr.FileID) {
 			return nil, fmt.Errorf("value reader: invalid nested blob pointer file %d", entry.BlobPtr.FileID)
 		}
-		if app, ok := r.vlogs.(unsafeAppendReader); ok {
-			return app.ReadUnsafeAppend(entry.BlobPtr, dst[:0])
-		}
-		val, err := r.readRawUnsafe(entry.BlobPtr)
+		val, err := r.readValueOrLargeValue(entry.BlobPtr, true)
 		if err != nil {
 			return nil, err
 		}
@@ -1194,6 +1189,52 @@ func (r valueReader) resolveLookupResultAppend(entry outerleaf.LookupResult, dst
 	default:
 		return nil, fmt.Errorf("value reader: unsupported outer-leaf entry kind %d", entry.Kind)
 	}
+}
+
+func (r valueReader) readValueOrLargeValue(ptr page.ValuePtr, unsafe bool) ([]byte, error) {
+	var (
+		raw []byte
+		err error
+	)
+	if unsafe {
+		raw, err = r.readRawUnsafe(ptr)
+	} else {
+		raw, err = r.readRaw(ptr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	manifest, ok, err := largevalue.DecodeManifest(raw)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return raw, nil
+	}
+	if manifest.TotalLen > uint64(int(^uint(0)>>1)) {
+		return nil, fmt.Errorf("value reader: large-value manifest length overflows int: %d", manifest.TotalLen)
+	}
+	out := make([]byte, 0, int(manifest.TotalLen))
+	for i := range manifest.Chunks {
+		chunkPtr := manifest.Chunks[i]
+		if !page.IsValueLogFileID(chunkPtr.FileID) {
+			return nil, fmt.Errorf("value reader: invalid large-value chunk file %d", chunkPtr.FileID)
+		}
+		var chunk []byte
+		if unsafe {
+			chunk, err = r.readRawUnsafe(chunkPtr)
+		} else {
+			chunk, err = r.readRaw(chunkPtr)
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, chunk...)
+	}
+	if uint64(len(out)) != manifest.TotalLen {
+		return nil, fmt.Errorf("value reader: large-value length mismatch got=%d want=%d", len(out), manifest.TotalLen)
+	}
+	return out, nil
 }
 
 func (r valueReader) decodeOuterLeafAppendForKeyNoCache(raw, key, dst []byte) ([]byte, bool, error) {

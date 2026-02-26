@@ -59,6 +59,22 @@ Current defaults:
 - No segment deletion before unreachable proof from a consistent snapshot.
 - Mode isolation: no regression in `v1`, `v2_fenceptr`, `v2_blockptr`, `v1_leaflog_route`.
 
+### WAL Mode Parity (Required)
+
+- All value-log behavior changes must preserve correctness under both:
+  - WAL on (`DurabilityDurable`, `DurabilityWALOnRelaxed`)
+  - WAL off (`DurabilityWALOffRelaxed`)
+- WAL on: large/huge values must avoid inline-WAL payload overflow paths and use
+  RID/pointer publication semantics.
+- WAL off: large/huge values must use the same value-log object layout and
+  reopen behavior without relying on WAL replay.
+- Maintenance parity:
+  - GC and rewrite must account for nested value-log references identically in
+    WAL on/off modes.
+- Validation parity:
+  - Add reopen/recovery and maintenance tests for both WAL on and WAL off
+    profiles for any new large-value object format.
+
 ## 2. Observability First
 
 Add counters and reports before behavior changes:
