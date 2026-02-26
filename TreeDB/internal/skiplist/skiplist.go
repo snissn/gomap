@@ -17,7 +17,8 @@ const (
 	nodeKeyLenOff  = 1
 	nodeValLenOff  = 3
 	nodeFlagsOff   = 7
-	nodeHeaderBase = 8 // Height + KeyLen + ValLen + Flags
+	nodePrevOff    = 8
+	nodeHeaderBase = 12 // Height + KeyLen + ValLen + Flags + Prev
 
 	flagPointer = node.FlagPointer
 	flagDeleted = node.FlagTombstone
@@ -298,6 +299,14 @@ func (s *SkipList) setNext(node uint32, level int, next uint32) {
 	binary.LittleEndian.PutUint32(s.bytesAt(offset, 4), next)
 }
 
+func (s *SkipList) getPrev(node uint32) uint32 {
+	return binary.LittleEndian.Uint32(s.bytesAt(node+nodePrevOff, 4))
+}
+
+func (s *SkipList) setPrev(node uint32, prev uint32) {
+	binary.LittleEndian.PutUint32(s.bytesAt(node+nodePrevOff, 4), prev)
+}
+
 // --- Standard SkipList Logic ---
 
 // Put inserts or updates a key.
@@ -421,6 +430,16 @@ func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte
 		}
 	}
 
+	next0 := s.getNext(prev[0], 0)
+	prev0 := prev[0]
+	if prev0 == s.head {
+		prev0 = 0
+	}
+	s.setPrev(newNode, prev0)
+	if next0 != 0 {
+		s.setPrev(next0, newNode)
+	}
+
 	for i := 0; i < h; i++ {
 		next := s.getNext(prev[i], i)
 		s.setNext(newNode, i, next)
@@ -492,6 +511,11 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 	if next != 0 && bytes.Equal(s.getKey(next), key) {
 		// Unlink logic:
 		oldHeight := int(s.valAt(next, nodeHeightOff))
+		next0 := s.getNext(next, 0)
+		pred0 := prev[0]
+		if pred0 == s.head {
+			pred0 = 0
+		}
 		for i := 0; i < oldHeight; i++ {
 			if s.getNext(prev[i], i) == next {
 				s.setNext(prev[i], i, s.getNext(next, i))
@@ -499,6 +523,9 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 			if s.tail[i] == next {
 				s.tail[i] = prev[i]
 			}
+		}
+		if next0 != 0 {
+			s.setPrev(next0, pred0)
 		}
 		// Now OldNode is gone.
 	}
@@ -758,8 +785,7 @@ func (it *ReverseIterator) Next() {
 	if !it.valid {
 		return
 	}
-	curKey := it.sl.getKey(it.curr)
-	it.curr = it.sl.findLessThan(curKey)
+	it.curr = it.sl.getPrev(it.curr)
 	it.valid = it.curr != 0
 	if it.valid && it.start != nil && bytes.Compare(it.sl.getKey(it.curr), it.start) < 0 {
 		it.valid = false

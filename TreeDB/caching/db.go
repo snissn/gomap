@@ -7151,11 +7151,17 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 	if db != nil && mode == memtable.ModeAppendOnly {
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			mt.Reset()
+			if _, ok := interface{}(mt).(memtable.ReverseIterable); !ok {
+				return nil, fmt.Errorf("memtable %T does not implement reverse iteration", mt)
+			}
 			return mt, nil
 		}
 		if v := db.appendOnlyMemPool.Get(); v != nil {
 			if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
 				mt.Reset()
+				if _, reverseOk := interface{}(mt).(memtable.ReverseIterable); !reverseOk {
+					return nil, fmt.Errorf("memtable %T does not implement reverse iteration", mt)
+				}
 				return mt, nil
 			}
 		}
@@ -7163,9 +7169,20 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 		if db.deferredValueLogEnabled() {
 			estimate = appendOnlyEstimatedBytesPerEntryDeferredFence
 		}
-		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
+		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate)
+		if _, ok := interface{}(mt).(memtable.ReverseIterable); !ok {
+			return nil, fmt.Errorf("memtable %T does not implement reverse iteration", mt)
+		}
+		return mt, nil
 	}
-	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
+	mt, err := memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := mt.(memtable.ReverseIterable); !ok {
+		return nil, fmt.Errorf("memtable %T does not implement reverse iteration", mt)
+	}
+	return mt, nil
 }
 
 // publishMemtablesLocked publishes a new memtable snapshot.
@@ -18040,137 +18057,6 @@ func (it *singletonReverseEntryIterator) IsDeleted() bool {
 	return it.flags&node.FlagTombstone != 0
 }
 
-type reverseMaterializedEntry struct {
-	key   []byte
-	value []byte
-	ptr   page.ValuePtr
-	flags byte
-}
-
-type reverseMaterializedIterator struct {
-	entries []reverseMaterializedEntry
-	idx     int
-	start   []byte
-	end     []byte
-}
-
-func (it *reverseMaterializedIterator) Next() {
-	if !it.Valid() {
-		panic("iterator invalid")
-	}
-	it.idx++
-}
-
-func (it *reverseMaterializedIterator) Valid() bool {
-	return it != nil && it.idx >= 0 && it.idx < len(it.entries)
-}
-
-func (it *reverseMaterializedIterator) UnsafeKey() []byte {
-	if !it.Valid() {
-		return nil
-	}
-	return it.entries[it.idx].key
-}
-
-func (it *reverseMaterializedIterator) UnsafeValue() []byte {
-	if !it.Valid() {
-		return nil
-	}
-	if it.entries[it.idx].flags&node.FlagTombstone != 0 {
-		return nil
-	}
-	return it.entries[it.idx].value
-}
-
-func (it *reverseMaterializedIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
-	if !it.Valid() {
-		return nil, page.ValuePtr{}, 0
-	}
-	entry := it.entries[it.idx]
-	return entry.value, entry.ptr, entry.flags
-}
-
-func (it *reverseMaterializedIterator) IsDeleted() bool {
-	if !it.Valid() {
-		return false
-	}
-	return it.entries[it.idx].flags&node.FlagTombstone != 0
-}
-
-func (it *reverseMaterializedIterator) Seek(key []byte) {
-	it.idx = -1
-	for i := range it.entries {
-		if bytes.Compare(it.entries[i].key, key) < 0 {
-			it.idx = i
-			return
-		}
-	}
-}
-
-func (it *reverseMaterializedIterator) Key() []byte { return it.UnsafeKey() }
-
-func (it *reverseMaterializedIterator) Value() []byte { return it.UnsafeValue() }
-
-func (it *reverseMaterializedIterator) KeyCopy(dst []byte) []byte {
-	k := it.UnsafeKey()
-	if k == nil {
-		return nil
-	}
-	return append(dst[:0], k...)
-}
-
-func (it *reverseMaterializedIterator) ValueCopy(dst []byte) []byte {
-	v := it.UnsafeValue()
-	if v == nil {
-		return nil
-	}
-	return append(dst[:0], v...)
-}
-
-func (it *reverseMaterializedIterator) Close() error { return nil }
-
-func (it *reverseMaterializedIterator) Error() error { return nil }
-
-func (it *reverseMaterializedIterator) Domain() (start, end []byte) { return it.start, it.end }
-
-func newReverseIteratorFromForward(iter iterator.UnsafeIterator, start, end []byte) (iterator.UnsafeIterator, error) {
-	if iter == nil {
-		return &reverseMaterializedIterator{start: start, end: end}, nil
-	}
-	entries := make([]reverseMaterializedEntry, 0, 256)
-	for iter.Valid() {
-		k := append([]byte(nil), iter.UnsafeKey()...)
-		if len(k) == 0 {
-			iter.Next()
-			continue
-		}
-		v, ptr, flags := iter.UnsafeEntry()
-		entries = append(entries, reverseMaterializedEntry{
-			key:   k,
-			value: append([]byte(nil), v...),
-			ptr:   ptr,
-			flags: flags,
-		})
-		iter.Next()
-	}
-	if err := iter.Error(); err != nil {
-		_ = iter.Close()
-		return nil, err
-	}
-	if err := iter.Close(); err != nil {
-		return nil, err
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		return bytes.Compare(entries[i].key, entries[j].key) > 0
-	})
-	return &reverseMaterializedIterator{
-		entries: entries,
-		idx:     0,
-		start:   start,
-		end:     end,
-	}, nil
-}
-
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	traceIAVLRange := looksLikeIAVLNodeVersionRange(start, end)
 	traceStart := time.Now()
@@ -18257,11 +18143,12 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		if reverseTable, ok := queue[i].(memtable.ReverseIterable); ok {
 			qIter = reverseTable.NewReverseIterator(start, end)
 		} else {
-			materializedIter, err := newReverseIteratorFromForward(queue[i].NewIterator(start, end), start, end)
-			if err != nil {
-				return nil, err
+			for j := range sources {
+				if sources[j].Iter != nil {
+					_ = sources[j].Iter.Close()
+				}
 			}
-			qIter = materializedIter
+			return nil, fmt.Errorf("memtable %T does not implement reverse iteration", queue[i])
 		}
 		if qIter == nil {
 			prio++
