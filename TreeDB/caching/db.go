@@ -18058,6 +18058,135 @@ func (it *singletonReverseEntryIterator) IsDeleted() bool {
 	return it.flags&node.FlagTombstone != 0
 }
 
+type reverseMergeSource struct {
+	iter     iterator.UnsafeIterator
+	priority int
+}
+
+type reverseMergeEntry struct {
+	key      []byte
+	value    []byte
+	flags    byte
+	priority int
+}
+
+type reverseMergedIterator struct {
+	entries   []reverseMergeEntry
+	idx       int
+	start     []byte
+	end       []byte
+	mergedErr error
+}
+
+func (it *reverseMergedIterator) Valid() bool {
+	return it != nil && it.idx < len(it.entries)
+}
+
+func (it *reverseMergedIterator) Next() {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	it.idx++
+}
+
+func (it *reverseMergedIterator) Key() []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return it.entries[it.idx].key
+}
+
+func (it *reverseMergedIterator) Value() []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return it.entries[it.idx].value
+}
+
+func (it *reverseMergedIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return append(dst[:0], it.entries[it.idx].key...)
+}
+
+func (it *reverseMergedIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return append(dst[:0], it.entries[it.idx].value...)
+}
+
+func (it *reverseMergedIterator) Close() error { return nil }
+
+func (it *reverseMergedIterator) Error() error { return it.mergedErr }
+
+func (it *reverseMergedIterator) Domain() (start, end []byte) { return it.start, it.end }
+
+func newReverseMergedIterator(sources []reverseMergeSource, start, end []byte) (*reverseMergedIterator, error) {
+	winnersByKey := make(map[string]reverseMergeEntry, len(sources))
+
+	for _, src := range sources {
+		it := src.iter
+		if it == nil {
+			continue
+		}
+		for it.Valid() {
+			key := append([]byte(nil), it.UnsafeKey()...)
+			if len(key) == 0 {
+				it.Next()
+				continue
+			}
+			var (
+				val   []byte
+				flags byte
+			)
+			if it.IsDeleted() {
+				flags = node.FlagTombstone
+			} else {
+				val = append([]byte(nil), it.Value()...)
+			}
+
+			keyStr := string(key)
+			existing, ok := winnersByKey[keyStr]
+			if !ok || src.priority < existing.priority {
+				winnersByKey[keyStr] = reverseMergeEntry{
+					key:      key,
+					value:    val,
+					flags:    flags,
+					priority: src.priority,
+				}
+			}
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			return nil, err
+		}
+		if err := it.Close(); err != nil {
+			return nil, err
+		}
+	}
+
+	out := make([]reverseMergeEntry, 0, len(winnersByKey))
+	for _, entry := range winnersByKey {
+		if entry.flags&node.FlagTombstone != 0 {
+			continue
+		}
+		out = append(out, entry)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].key, out[j].key) > 0
+	})
+
+	return &reverseMergedIterator{
+		entries: out,
+		start:   start,
+		end:     end,
+	}, nil
+}
+
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	traceIAVLRange := looksLikeIAVLNodeVersionRange(start, end)
 	traceStart := time.Now()
@@ -18065,101 +18194,127 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		queueLen := db.snapshotQueueLen()
 		visibilityDebugf("reviter start iavl_range=true queue_len=%d mutable_bytes=%d checkpointing=%t", queueLen, db.mutableBytes.Load(), db.checkpointing.Load())
 	}
-	// Flush everything to backend to simplify reverse iteration.
+	// Snapshot isolation: rotate mutable memtable into queue for this iterator.
 	db.writeMu.Lock()
 	db.mu.Lock()
 	db.noteIterator(start, end)
-	needRotate := true
-	if needRotate {
-		if err := db.rotateMemtableLockedWithCapacity(true, minMemtablePrealloc); err != nil {
+	needsRotate := db.mutableBytes.Load() > 0
+	if !needsRotate {
+		needsRotate = db.snapshotMutableRange().valid
+	}
+	if needsRotate {
+		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
 			db.writeMu.Unlock()
 			return nil, err
 		}
 	}
+	queueLenLocked := len(db.queue)
 	db.mu.Unlock()
-	db.flushAll(false)
+	db.writeMu.Unlock()
+
 	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
-		db.writeMu.Unlock()
 		if traceIAVLRange {
 			visibilityDebugf("reviter error stage=flush_deferred err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
 		}
 		return nil, err
 	}
-	if traceIAVLRange {
-		full, err := db.backend.ReverseIterator(nil, nil)
-		if err != nil {
-			db.writeMu.Unlock()
-			visibilityDebugf("reviter error stage=backend_full_reverse err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
-			return nil, err
+	view := db.retainMemtableView()
+	releaseView := true
+	defer func() {
+		if releaseView && view != nil {
+			db.releaseMemtableView(view)
 		}
-		defer func() { _ = full.Close() }()
-		var (
-			bestVersion uint64
-			best        *singletonReverseEntryIterator
-		)
-		for full.Valid() {
-			k := full.UnsafeKey()
-			if end != nil && bytes.Compare(k, end) >= 0 {
-				full.Next()
-				continue
-			}
-			if start != nil && bytes.Compare(k, start) < 0 {
-				full.Next()
-				continue
-			}
-			version, ok := iavlNodeVersionFromNodeKey(k)
-			if ok && (best == nil || version >= bestVersion) {
-				val, ptr, flags := full.UnsafeEntry()
-				entry := &singletonReverseEntryIterator{
-					start: start,
-					end:   end,
-					key:   append([]byte(nil), k...),
-					ptr:   ptr,
-					flags: flags,
-					valid: true,
-				}
-				if len(val) > 0 {
-					entry.val = append([]byte(nil), val...)
-				}
-				best = entry
-				bestVersion = version
-			}
-			full.Next()
-		}
-		if err := full.Error(); err != nil {
-			db.writeMu.Unlock()
-			visibilityDebugf("reviter error stage=backend_full_scan err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
-			return nil, err
-		}
-		if best != nil {
-			db.writeMu.Unlock()
-			visibilityDebugf("reviter done iavl_range=true top_version=v%d elapsed_ms=%.3f", bestVersion, float64(time.Since(traceStart))/float64(time.Millisecond))
-			return best, nil
-		}
-		db.writeMu.Unlock()
-		visibilityDebugf("reviter done iavl_range=true top_version=none elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
-		return &emptyIterator{start: start, end: end}, nil
-	}
-	it, err := db.backend.ReverseIterator(start, end)
-	db.writeMu.Unlock()
-	if traceIAVLRange {
-		if err != nil {
-			visibilityDebugf("reviter error stage=backend_reverse err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
-		} else {
-			top := uint64(0)
-			topOK := false
-			if it != nil && it.Valid() {
-				top, topOK = iavlNodeVersionFromNodeKey(it.Key())
-			}
-			if topOK {
-				visibilityDebugf("reviter done iavl_range=true top_version=v%d elapsed_ms=%.3f", top, float64(time.Since(traceStart))/float64(time.Millisecond))
+	}()
+
+	if queueLenLocked == 0 && view == nil {
+		it, err := db.backend.ReverseIterator(start, end)
+		if traceIAVLRange {
+			if err != nil {
+				visibilityDebugf("reviter error stage=backend_reverse err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
+			} else if it != nil && it.Valid() {
+				visibilityDebugf("reviter done iavl_range=true top_key=%x elapsed_ms=%.3f", it.Key(), float64(time.Since(traceStart))/float64(time.Millisecond))
 			} else {
-				visibilityDebugf("reviter done iavl_range=true top_version=none elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
+				visibilityDebugf("reviter done iavl_range=true empty elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
 			}
 		}
+		if err != nil {
+			return nil, err
+		}
+		if iteratorDebugEnabled.Load() {
+			return &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: 1}, nil
+		}
+		return it, nil
 	}
-	return it, err
+
+	var queue []memtable.Table
+	var queueRanges []keyRange
+	if view != nil {
+		queue = view.queue
+		queueRanges = view.queueRanges
+	} else {
+		db.mu.RLock()
+		queue = append([]memtable.Table(nil), db.queue...)
+		queueRanges = append([]keyRange(nil), db.queueRanges...)
+		db.mu.RUnlock()
+		releaseView = false
+		db.releaseMemtableView(view)
+		view = nil
+	}
+
+	sources := make([]reverseMergeSource, 0, len(queue)+1)
+	prio := 0
+	for i := len(queue) - 1; i >= 0; i-- {
+		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
+			prio++
+			continue
+		}
+		qIter := queue[i].NewIterator(start, end)
+		if qIter == nil {
+			prio++
+			continue
+		}
+		if db.memtableValueLogPointers && db.valueLogReader != nil {
+			qIter = newValueLogIterator(qIter, func(key []byte, ptr page.ValuePtr) ([]byte, error) {
+				return db.readValueLog(key, ptr)
+			})
+		}
+		sources = append(sources, reverseMergeSource{
+			iter:     qIter,
+			priority: prio,
+		})
+		prio++
+	}
+	diskIter, err := db.backend.ReverseIterator(start, end)
+	if err != nil {
+		return nil, err
+	}
+	sources = append(sources, reverseMergeSource{
+		iter:     diskIter,
+		priority: prio,
+	})
+	if releaseView {
+		db.releaseMemtableView(view)
+		releaseView = false
+	}
+
+	merged, err := newReverseMergedIterator(sources, start, end)
+	if traceIAVLRange {
+		if err != nil {
+			visibilityDebugf("reviter error stage=reverse_merge err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
+		} else if merged != nil && merged.Valid() {
+			visibilityDebugf("reviter done iavl_range=true top_key=%x elapsed_ms=%.3f", merged.Key(), float64(time.Since(traceStart))/float64(time.Millisecond))
+		} else {
+			visibilityDebugf("reviter done iavl_range=true empty elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	if iteratorDebugEnabled.Load() {
+		return &debugIterator{Iterator: merged, queueLen: len(queue), sourcesUsed: len(sources)}, nil
+	}
+	return merged, nil
 }
 
 // NewBatch implementation for CachingDB
