@@ -12172,28 +12172,6 @@ func (db *DB) waitForCheckpoint() {
 	db.checkpointMu.Unlock()
 }
 
-// waitForCheckpointBounded mirrors waitForCheckpoint but permits callers to
-// bail out after maxWait. This is used by large batch-write paths to avoid a
-// checkpoint/flush/iterator-lease cycle during long snapshot restores.
-// Returns true when the checkpoint fully cleared before returning.
-func (db *DB) waitForCheckpointBounded(maxWait time.Duration) bool {
-	if !db.checkpointing.Load() {
-		return true
-	}
-	if maxWait <= 0 {
-		db.waitForCheckpoint()
-		return true
-	}
-	deadline := time.Now().Add(maxWait)
-	for db.checkpointing.Load() {
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(2 * time.Millisecond)
-	}
-	return true
-}
-
 func (db *DB) recordCheckpointCutover(d time.Duration) {
 	if db == nil {
 		return
@@ -12264,8 +12242,11 @@ func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time)
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
-	// Mark checkpointing before waiting for flushMu so in-flight flush paths
-	// can observe checkpoint mode while this call is pending.
+	// Acquire flushMu first, then publish checkpointing=true. This avoids a
+	// pending-checkpoint state where writers block on waitForCheckpoint while the
+	// checkpoint itself is still waiting to enter flush critical sections.
+	db.flushMu.Lock()
+
 	db.checkpointMu.Lock()
 	for db.checkpointing.Load() {
 		db.checkpointCond.Wait()
@@ -12278,10 +12259,8 @@ func (db *DB) Checkpoint() error {
 		db.checkpointing.Store(false)
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
+		db.flushMu.Unlock()
 	}()
-
-	db.flushMu.Lock()
-	defer db.flushMu.Unlock() // Ensure it's released
 
 	db.writeMu.Lock()
 	cutoverStart := time.Now()
@@ -18236,8 +18215,7 @@ func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	const batchCheckpointMaxWait = 2 * time.Second
-	_ = b.db.waitForCheckpointBounded(batchCheckpointMaxWait)
+	b.db.waitForCheckpoint()
 
 	if b.backend != nil {
 		var err error
