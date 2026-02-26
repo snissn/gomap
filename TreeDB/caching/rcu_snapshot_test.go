@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -463,6 +464,8 @@ func (b *noAllocBackend) Close() error { return nil }
 func (b *noAllocBackend) Print() error { return nil }
 
 func (b *noAllocBackend) Stats() map[string]string { return nil }
+
+func (b *noAllocBackend) AcquireSnapshot() *db.Snapshot { return nil }
 
 type noAllocBatch struct{}
 

@@ -6157,6 +6157,7 @@ type BackendDB interface {
 	Has(key []byte) (bool, error)
 	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
 	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error)
+	AcquireSnapshot() *backenddb.Snapshot
 	NewBatch() batch.Interface
 	Close() error
 	Print() error
@@ -6812,6 +6813,53 @@ type memtableView struct {
 	refs                     atomic.Int64
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
+}
+
+type snapshotMemtableReader struct {
+	db   *DB
+	view *memtableView
+}
+
+func (r *snapshotMemtableReader) GetEntry(key []byte) (node.LeafEntry, bool, error) {
+	if r == nil || r.db == nil || r.view == nil {
+		return node.LeafEntry{}, false, nil
+	}
+	mutables := r.view.mutables
+	queue := r.view.queue
+	queueShardIDs := r.view.queueShardIDs
+
+	if len(mutables) > 0 {
+		idx := r.db.shardIndex(key)
+		if idx < len(mutables) && mutables[idx] != nil {
+			val, ptr, flags, found := mutables[idx].GetEntry(key)
+			if found {
+				return node.LeafEntry{
+					Value:    val,
+					ValuePtr: ptr,
+					Flags:    flags,
+				}, true, nil
+			}
+		}
+	}
+
+	shardIdx := 0
+	if len(mutables) > 0 {
+		shardIdx = r.db.shardIndex(key)
+	}
+	for i := len(queue) - 1; i >= 0; i-- {
+		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
+			continue
+		}
+		val, ptr, flags, found := queue[i].GetEntry(key)
+		if found {
+			return node.LeafEntry{
+				Value:    val,
+				ValuePtr: ptr,
+				Flags:    flags,
+			}, true, nil
+		}
+	}
+	return node.LeafEntry{}, false, nil
 }
 
 const maxAppendOnlyMemLeases = 256
@@ -16728,6 +16776,47 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	return db.backend.GetAppend(key, dst)
 }
 
+// AcquireSnapshot returns a snapshot that includes current memtable state.
+func (db *DB) AcquireSnapshot() *backenddb.Snapshot {
+	if db == nil || db.backend == nil {
+		return nil
+	}
+	if db.closing.Load() {
+		return nil
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	if db.closing.Load() {
+		return nil
+	}
+
+	db.mu.Lock()
+	rotateNeeded := db.mutableBytes.Load() > 0 || db.snapshotMutableRange().valid
+	if rotateNeeded {
+		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
+			db.mu.Unlock()
+			return nil
+		}
+	}
+	snap := db.backend.AcquireSnapshot()
+	view := db.retainMemtableView()
+	db.mu.Unlock()
+	if snap == nil {
+		if view != nil {
+			db.releaseMemtableView(view)
+		}
+		return nil
+	}
+	if view == nil {
+		return snap
+	}
+	snap.AttachMemtableReader(&snapshotMemtableReader{db: db, view: view}, func() {
+		db.releaseMemtableView(view)
+	})
+	return snap
+}
+
 func (db *DB) Has(key []byte) (bool, error) {
 	rootVersion, trackRoot := looksLikeIAVLRootNodeKey(key)
 	view := db.retainMemtableView()
@@ -17601,6 +17690,18 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			}
 		}
 		return nil, err
+	}
+
+	if !hasMemSource {
+		if view != nil {
+			db.releaseMemtableView(view)
+			view = nil
+			releaseView = false
+		}
+		if iteratorDebugEnabled.Load() {
+			return &debugIterator{Iterator: diskIter, queueLen: queueLen, sourcesUsed: 1}, nil
+		}
+		return diskIter, nil
 	}
 
 	sources = append(sources, merging.IteratorSource{

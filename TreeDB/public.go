@@ -1118,6 +1118,9 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil {
 		return nil
 	}
+	if db.cached != nil {
+		return db.cached.AcquireSnapshot()
+	}
 	return db.backend.AcquireSnapshot()
 }
 

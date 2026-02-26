@@ -45,11 +45,8 @@ func snapshotVisibilityModesForCheckpoint(checkpoint bool) []string {
 	return append(snapshotVisibilityModes(), snapshotVisibilityAdaptivePrefixModes()...)
 }
 
-func snapshotVisibilityShardsForCheckpoint(checkpoint bool) []int {
-	if !checkpoint {
-		return []int{1}
-	}
-	return []int{2, 4, 8}
+func snapshotVisibilityShards() []int {
+	return []int{1, 2, 4, 8}
 }
 
 func snapshotVisibilityCheckpointModes() []bool {
@@ -122,7 +119,7 @@ func TestAcquireSnapshot_SeesJustWrittenBatch(t *testing.T) {
 			for _, mode := range snapshotVisibilityModesForCheckpoint(checkpoint) {
 				mode := mode
 				t.Run(mode, func(t *testing.T) {
-					for _, shards := range snapshotVisibilityShardsForCheckpoint(checkpoint) {
+					for _, shards := range snapshotVisibilityShards() {
 						shards := shards
 						t.Run(fmt.Sprintf("memtable_shards_%d", shards), func(t *testing.T) {
 							opts := baseSnapshotVisibilityOptions(t, mode, func(mut *Options) {
@@ -166,7 +163,7 @@ func TestAcquireSnapshot_SeesJustWrittenBatch_AfterCheckpoint(t *testing.T) {
 			for _, mode := range snapshotVisibilityModesForCheckpoint(checkpoint) {
 				mode := mode
 				t.Run(mode, func(t *testing.T) {
-					for _, shards := range snapshotVisibilityShardsForCheckpoint(checkpoint) {
+					for _, shards := range snapshotVisibilityShards() {
 						shards := shards
 						t.Run(fmt.Sprintf("memtable_shards_%d", shards), func(t *testing.T) {
 							opts := baseSnapshotVisibilityOptions(t, mode, func(mut *Options) {
@@ -210,7 +207,7 @@ func TestAcquireSnapshot_SeesDirectSetWritesAcrossMemtableModes(t *testing.T) {
 			for _, mode := range snapshotVisibilityModesForCheckpoint(checkpoint) {
 				mode := mode
 				t.Run(mode, func(t *testing.T) {
-					for _, shards := range snapshotVisibilityShardsForCheckpoint(checkpoint) {
+					for _, shards := range snapshotVisibilityShards() {
 						shards := shards
 						t.Run(fmt.Sprintf("memtable_shards_%d", shards), func(t *testing.T) {
 							opts := baseSnapshotVisibilityOptions(t, mode, func(mut *Options) {
@@ -252,7 +249,7 @@ func TestAcquireSnapshot_SeesOverwriteAndDeleteAcrossMemtableModes(t *testing.T)
 			for _, mode := range snapshotVisibilityModesForCheckpoint(checkpoint) {
 				mode := mode
 				t.Run(mode, func(t *testing.T) {
-					for _, shards := range snapshotVisibilityShardsForCheckpoint(checkpoint) {
+					for _, shards := range snapshotVisibilityShards() {
 						shards := shards
 						t.Run(fmt.Sprintf("memtable_shards_%d", shards), func(t *testing.T) {
 							opts := baseSnapshotVisibilityOptions(t, mode, func(mut *Options) {
@@ -299,7 +296,7 @@ func TestAcquireSnapshot_SeesLargePointerValuesAcrossMemtableModes(t *testing.T)
 			for _, mode := range snapshotVisibilityModesForCheckpoint(checkpoint) {
 				mode := mode
 				t.Run(mode, func(t *testing.T) {
-					for _, shards := range snapshotVisibilityShardsForCheckpoint(checkpoint) {
+					for _, shards := range snapshotVisibilityShards() {
 						shards := shards
 						t.Run(fmt.Sprintf("memtable_shards_%d", shards), func(t *testing.T) {
 							opts := baseSnapshotVisibilityOptions(t, mode, func(mut *Options) {
@@ -350,7 +347,7 @@ func TestAcquireSnapshot_SeesWritesWithDurableModeAcrossMemtableModes(t *testing
 			for _, mode := range snapshotVisibilityModesForCheckpoint(checkpoint) {
 				mode := mode
 				t.Run(mode, func(t *testing.T) {
-					for _, shards := range snapshotVisibilityShardsForCheckpoint(checkpoint) {
+					for _, shards := range snapshotVisibilityShards() {
 						shards := shards
 						t.Run(fmt.Sprintf("memtable_shards_%d", shards), func(t *testing.T) {
 							opts := baseSnapshotVisibilityOptions(t, mode, func(mut *Options) {

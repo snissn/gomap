@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -69,10 +70,11 @@ func (panicBackend) Iterator(_, _ []byte) (iterator.UnsafeIterator, error) {
 func (panicBackend) ReverseIterator(_, _ []byte) (iterator.UnsafeIterator, error) {
 	panic("backend ReverseIterator should not be called")
 }
-func (panicBackend) NewBatch() batch.Interface { panic("backend NewBatch should not be called") }
-func (panicBackend) Close() error              { panic("backend Close should not be called") }
-func (panicBackend) Print() error              { panic("backend Print should not be called") }
-func (panicBackend) Stats() map[string]string  { return nil }
+func (panicBackend) NewBatch() batch.Interface     { panic("backend NewBatch should not be called") }
+func (panicBackend) Close() error                  { panic("backend Close should not be called") }
+func (panicBackend) Print() error                  { panic("backend Print should not be called") }
+func (panicBackend) Stats() map[string]string      { return nil }
+func (panicBackend) AcquireSnapshot() *db.Snapshot { return nil }
 
 type countingBackend struct {
 	panicBackend
