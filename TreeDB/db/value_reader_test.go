@@ -1521,11 +1521,13 @@ func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_UsesAppendReader(t 
 	if !bytes.Equal(got, want) {
 		t.Fatalf("value = %q, want %q", got, want)
 	}
-	if reader.readUnsafeAppendCalls != 2 {
-		t.Fatalf("readUnsafeAppendCalls = %d, want 2 (outer + blob)", reader.readUnsafeAppendCalls)
+	// Outer payload uses append reader fast path; nested blob resolution flows
+	// through readRawUnsafe to support large-value manifest decoding.
+	if reader.readUnsafeAppendCalls != 1 {
+		t.Fatalf("readUnsafeAppendCalls = %d, want 1 (outer only)", reader.readUnsafeAppendCalls)
 	}
-	if reader.readUnsafeCalls != 0 {
-		t.Fatalf("readUnsafeCalls = %d, want 0", reader.readUnsafeCalls)
+	if reader.readUnsafeCalls != 1 {
+		t.Fatalf("readUnsafeCalls = %d, want 1 (blob raw read)", reader.readUnsafeCalls)
 	}
 }
 
@@ -1673,10 +1675,11 @@ func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_CacheHitUsesAppendR
 	if !bytes.Equal(got, want) {
 		t.Fatalf("value = %q, want %q", got, want)
 	}
-	if reader.readUnsafeAppendCalls != 1 {
-		t.Fatalf("readUnsafeAppendCalls = %d, want 1 (blob only)", reader.readUnsafeAppendCalls)
+	// Cache hit bypasses outer read; blob resolution uses readRawUnsafe path.
+	if reader.readUnsafeAppendCalls != 0 {
+		t.Fatalf("readUnsafeAppendCalls = %d, want 0", reader.readUnsafeAppendCalls)
 	}
-	if reader.readUnsafeCalls != 0 {
-		t.Fatalf("readUnsafeCalls = %d, want 0", reader.readUnsafeCalls)
+	if reader.readUnsafeCalls != 1 {
+		t.Fatalf("readUnsafeCalls = %d, want 1 (blob raw read)", reader.readUnsafeCalls)
 	}
 }

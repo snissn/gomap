@@ -12,7 +12,8 @@ const envLargeValueSweep = "TREEDB_TEST_LARGE_VALUE_SWEEP"
 // first value size that fails under Celestia-style TreeDB options.
 //
 // Enable with:
-//   TREEDB_TEST_LARGE_VALUE_SWEEP=1 go test ./TreeDB -run TestLargeValueSweepCelestiaOptions -v
+//
+//	TREEDB_TEST_LARGE_VALUE_SWEEP=1 go test ./TreeDB -run TestLargeValueSweepCelestiaOptions -v
 func TestLargeValueSweepCelestiaOptions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping large value sweep in -short mode")
