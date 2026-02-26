@@ -235,6 +235,55 @@ func withRaceTimeout(d time.Duration) time.Duration {
 	return d
 }
 
+func TestCachingDB_BatchWrite_DoesNotBlockIndefinitelyDuringCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:           1,
+		ValueLogPointerThreshold: 16 << 20,
+		JournalLanes:             1,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	db.checkpointMu.Lock()
+	db.checkpointing.Store(true)
+	db.checkpointMu.Unlock()
+	defer func() {
+		db.checkpointMu.Lock()
+		db.checkpointing.Store(false)
+		db.checkpointCond.Broadcast()
+		db.checkpointMu.Unlock()
+	}()
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		b := db.NewBatch()
+		if err := b.Set([]byte("k"), []byte("v")); err != nil {
+			done <- err
+			return
+		}
+		done <- b.Write()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Batch.Write: %v", err)
+		}
+	case <-time.After(withRaceTimeout(6 * time.Second)):
+		t.Fatalf("Batch.Write blocked while checkpointing remained true")
+	}
+
+	if elapsed := time.Since(start); elapsed < 1500*time.Millisecond {
+		t.Fatalf("Batch.Write returned too quickly while checkpointing=true: elapsed=%v", elapsed)
+	}
+}
+
 func TestCachingDB_AutoCheckpoint_IdleTrigger_SkipsTinyWrites(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

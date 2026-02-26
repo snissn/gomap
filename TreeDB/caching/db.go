@@ -8210,6 +8210,32 @@ func (db *DB) logBatchSize(records []logRecord) int64 {
 	return int64(total)
 }
 
+// appendWALRecordsAdaptive appends a commit batch to the WAL writer, splitting
+// oversized batches when commitlog returns ErrRecordTooLarge. This preserves
+// sequence/order while avoiding hard failures on large importer batches.
+func (db *DB) appendWALRecordsAdaptive(w commitWriter, records []logRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+	if len(records) == 1 {
+		return w.Append(records[0])
+	}
+	if err := w.AppendBatch(records); err != nil {
+		if !errors.Is(err, commitlog.ErrRecordTooLarge) {
+			return err
+		}
+		mid := len(records) / 2
+		if mid <= 0 || mid >= len(records) {
+			return err
+		}
+		if err := db.appendWALRecordsAdaptive(w, records[:mid]); err != nil {
+			return err
+		}
+		return db.appendWALRecordsAdaptive(w, records[mid:])
+	}
+	return nil
+}
+
 func (db *DB) assignCommitSeq(records []logRecord) {
 	if len(records) == 0 {
 		return
@@ -9540,20 +9566,15 @@ func (db *DB) flushWALRequests(l *lane, requests []walWriteRequest) error {
 	}
 	for i := range requests {
 		req := &requests[i]
+		err := db.appendWALRecordsAdaptive(w, req.records)
+		if err != nil {
+			l.walMu.Unlock()
+			return err
+		}
 		if len(req.records) == 1 {
 			rec := req.records[0]
-			err := w.Append(rec)
-			if err != nil {
-				l.walMu.Unlock()
-				return err
-			}
 			totalBytes += db.logRecordSize(rec.Key, rec.Value)
 		} else {
-			err := w.AppendBatch(req.records)
-			if err != nil {
-				l.walMu.Unlock()
-				return err
-			}
 			totalBytes += db.logBatchSize(req.records)
 		}
 		if req.sync {
@@ -11790,12 +11811,11 @@ func (db *DB) appendWALInline(l *lane, records []logRecord, flush bool) error {
 		l.walMu.Unlock()
 		return errWALUnavailable
 	}
+	err = db.appendWALRecordsAdaptive(w, records)
 	if len(records) == 1 {
 		rec := records[0]
-		err = w.Append(rec)
 		totalBytes = db.logRecordSize(rec.Key, rec.Value)
 	} else {
-		err = w.AppendBatch(records)
 		totalBytes = db.logBatchSize(records)
 	}
 	if err == nil && flush {
@@ -12150,6 +12170,28 @@ func (db *DB) waitForCheckpoint() {
 		db.checkpointCond.Wait()
 	}
 	db.checkpointMu.Unlock()
+}
+
+// waitForCheckpointBounded mirrors waitForCheckpoint but permits callers to
+// bail out after maxWait. This is used by large batch-write paths to avoid a
+// checkpoint/flush/iterator-lease cycle during long snapshot restores.
+// Returns true when the checkpoint fully cleared before returning.
+func (db *DB) waitForCheckpointBounded(maxWait time.Duration) bool {
+	if !db.checkpointing.Load() {
+		return true
+	}
+	if maxWait <= 0 {
+		db.waitForCheckpoint()
+		return true
+	}
+	deadline := time.Now().Add(maxWait)
+	for db.checkpointing.Load() {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	return true
 }
 
 func (db *DB) recordCheckpointCutover(d time.Duration) {
@@ -12627,7 +12669,12 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 	if maxMemtables <= 0 && maxDuration <= 0 {
 		return 0
 	}
-	db.flushMu.Lock()
+	// Opportunistic assist path: never block the writer on flushMu. A dedicated
+	// flush loop (or stop-backpressure path via flushSomeBlocking) is
+	// responsible for guaranteed progress.
+	if !db.flushMu.TryLock() {
+		return 0
+	}
 	defer db.flushMu.Unlock()
 	sync = db.flushSyncRequested(sync)
 	start := time.Now()
@@ -18189,7 +18236,8 @@ func (b *Batch) write(sync bool) error {
 	if b.closed {
 		return ErrBatchClosed
 	}
-	b.db.waitForCheckpoint()
+	const batchCheckpointMaxWait = 2 * time.Second
+	_ = b.db.waitForCheckpointBounded(batchCheckpointMaxWait)
 
 	if b.backend != nil {
 		var err error
