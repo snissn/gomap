@@ -1,7 +1,9 @@
 package caching
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -10,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 type countingTable struct {
@@ -100,6 +103,16 @@ func (b *countingBackend) GetMany(keys [][]byte) ([][]byte, error) {
 		out[i] = []byte("backend")
 	}
 	return out, nil
+}
+
+type snapshotPointReadBackend struct {
+	panicBackend
+	acknowledgeSnapshots int
+}
+
+func (b *snapshotPointReadBackend) AcquireSnapshot() *db.Snapshot {
+	b.acknowledgeSnapshots++
+	return &db.Snapshot{}
 }
 
 func TestPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
@@ -300,5 +313,284 @@ func TestPointReads_EmptyMemtableBypassGuardChecksMutableLen(t *testing.T) {
 	}
 	if ct.getEntryCalls < 2 {
 		t.Fatalf("expected memtable GetEntry to be consulted by GetAppend")
+	}
+}
+
+func TestSnapshotPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
+	const shards = 8
+	const targetShard = 4
+
+	db := &DB{
+		backend:          &snapshotPointReadBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var key [8]byte
+	var wantKey []byte
+	for i := uint64(0); ; i++ {
+		binary.BigEndian.PutUint64(key[:], i)
+		if db.shardIndex(key[:]) == targetShard {
+			wantKey = append(wantKey[:0], key[:]...)
+			break
+		}
+	}
+	if len(wantKey) == 0 {
+		t.Fatalf("failed to locate key for shard %d", targetShard)
+	}
+
+	queue := make([]memtable.Table, 0, shards)
+	queueShardIDs := make([]uint16, 0, shards)
+	tables := make([]*countingTable, 0, shards)
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		ct := &countingTable{inner: mt}
+		queue = append(queue, ct)
+		queueShardIDs = append(queueShardIDs, uint16(shard))
+		tables = append(tables, ct)
+	}
+	queue[targetShard].SetEntry(wantKey, []byte("visible"), page.ValuePtr{}, node.FlagInline)
+
+	db.memtables.Store(&memtableView{
+		mutables:      make([]memtable.Table, shards),
+		queue:         queue,
+		queueShardIDs: queueShardIDs,
+	})
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	defer func() {
+		_ = snap.Close()
+	}()
+
+	got, err := snap.Get(wantKey)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != "visible" {
+		t.Fatalf("Get: got=%q want=%q", got, "visible")
+	}
+
+	gotUnsafe, err := snap.GetUnsafe(wantKey)
+	if err != nil {
+		t.Fatalf("GetUnsafe: %v", err)
+	}
+	if string(gotUnsafe) != "visible" {
+		t.Fatalf("GetUnsafe: got=%q want=%q", gotUnsafe, "visible")
+	}
+
+	gotAppend, err := snap.GetAppend(wantKey, []byte("p:"))
+	if err != nil {
+		t.Fatalf("GetAppend: %v", err)
+	}
+	if string(gotAppend) != "p:visible" {
+		t.Fatalf("GetAppend: got=%q want=%q", gotAppend, "p:visible")
+	}
+
+	ok, err := snap.Has(wantKey)
+	if err != nil {
+		t.Fatalf("Has: %v", err)
+	}
+	if !ok {
+		t.Fatalf("Has: want true for %q", wantKey)
+	}
+
+	entry, err := snap.GetEntry(wantKey)
+	if err != nil {
+		t.Fatalf("GetEntry: %v", err)
+	}
+	if string(entry.Value) != "visible" {
+		t.Fatalf("GetEntry: got=%q want=%q", entry.Value, "visible")
+	}
+
+	for shard := 0; shard < shards; shard++ {
+		calls := tables[shard].getEntryCalls
+		if shard == targetShard {
+			if calls == 0 {
+				t.Fatalf("expected target shard GetEntry calls > 0, got %d", calls)
+			}
+			continue
+		}
+		if calls != 0 {
+			t.Fatalf("expected non-target shard %d GetEntry calls = 0, got %d", shard, calls)
+		}
+	}
+}
+
+func TestSnapshotPointReads_TombstoneSkipsBackend(t *testing.T) {
+	const shards = 4
+	const targetShard = 2
+
+	db := &DB{
+		backend:          &snapshotPointReadBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var key [8]byte
+	var targetKey []byte
+	for i := uint64(0); ; i++ {
+		binary.BigEndian.PutUint64(key[:], i)
+		if db.shardIndex(key[:]) == targetShard {
+			targetKey = append(targetKey[:0], key[:]...)
+			break
+		}
+	}
+	if len(targetKey) == 0 {
+		t.Fatalf("failed to locate key for shard %d", targetShard)
+	}
+
+	queue := make([]memtable.Table, 0, shards)
+	queueShardIDs := make([]uint16, 0, shards)
+	tables := make([]*countingTable, 0, shards)
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		ct := &countingTable{inner: mt}
+		queue = append(queue, ct)
+		queueShardIDs = append(queueShardIDs, uint16(shard))
+		tables = append(tables, ct)
+	}
+	queue[targetShard].SetEntry(targetKey, nil, page.ValuePtr{}, node.FlagTombstone)
+
+	db.memtables.Store(&memtableView{
+		mutables:      make([]memtable.Table, shards),
+		queue:         queue,
+		queueShardIDs: queueShardIDs,
+	})
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatalf("snapshot nil")
+	}
+	defer func() {
+		_ = snap.Close()
+	}()
+
+	if _, err := snap.Get(targetKey); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("Get: want ErrKeyNotFound, got %v", err)
+	}
+	if _, err := snap.GetUnsafe(targetKey); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetUnsafe: want ErrKeyNotFound, got %v", err)
+	}
+	if _, err := snap.GetAppend(targetKey, []byte("p:")); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetAppend: want ErrKeyNotFound, got %v", err)
+	}
+	ok, err := snap.Has(targetKey)
+	if err != nil {
+		t.Fatalf("Has: %v", err)
+	}
+	if ok {
+		t.Fatalf("Has: want false")
+	}
+	if _, err := snap.GetEntry(targetKey); !errors.Is(err, tree.ErrKeyNotFound) {
+		t.Fatalf("GetEntry: want ErrKeyNotFound, got %v", err)
+	}
+
+	for shard := 0; shard < shards; shard++ {
+		calls := tables[shard].getEntryCalls
+		if shard == targetShard {
+			if calls == 0 {
+				t.Fatalf("expected target shard GetEntry calls > 0, got %d", calls)
+			}
+			continue
+		}
+		if calls != 0 {
+			t.Fatalf("expected non-target shard %d GetEntry calls = 0, got %d", shard, calls)
+		}
+	}
+}
+
+func TestSnapshotMemtableReader_SkipsNonTargetQueueShardsForMiss(t *testing.T) {
+	const shards = 8
+	const targetShard = 1
+
+	db := &DB{
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var targetKey [8]byte
+	targetFound := false
+	for i := uint64(0); i < 1<<18; i++ {
+		binary.BigEndian.PutUint64(targetKey[:], i)
+		if db.shardIndex(targetKey[:]) == targetShard {
+			targetFound = true
+			break
+		}
+	}
+	if !targetFound {
+		t.Fatalf("failed to locate key for shard %d", targetShard)
+	}
+
+	var missKey [8]byte
+	missFound := false
+	missShard := -1
+	for i := uint64(0); i < 1<<18; i++ {
+		binary.BigEndian.PutUint64(missKey[:], i<<1|1)
+		shard := db.shardIndex(missKey[:])
+		if shard != targetShard {
+			missFound = true
+			missShard = shard
+			break
+		}
+	}
+	if !missFound {
+		t.Fatalf("failed to locate miss key not in shard %d", targetShard)
+	}
+
+	queue := make([]memtable.Table, 0, shards)
+	queueShardIDs := make([]uint16, 0, shards)
+	tables := make([]*countingTable, 0, shards)
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		ct := &countingTable{inner: mt}
+		queue = append(queue, ct)
+		queueShardIDs = append(queueShardIDs, uint16(shard))
+		tables = append(tables, ct)
+	}
+	queue[targetShard].SetEntry(targetKey[:], []byte("visible"), page.ValuePtr{}, node.FlagInline)
+
+	view := &memtableView{
+		mutables:      make([]memtable.Table, shards),
+		queue:         queue,
+		queueShardIDs: queueShardIDs,
+	}
+	reader := &snapshotMemtableReader{
+		db:   db,
+		view: view,
+	}
+
+	entry, found, err := reader.GetEntry(missKey[:])
+	if err != nil {
+		t.Fatalf("GetEntry miss: %v", err)
+	}
+	if found {
+		t.Fatalf("expected miss for key %x", missKey)
+	}
+	if !bytes.Equal(entry.Value, nil) {
+		t.Fatalf("expected nil entry value on miss")
+	}
+
+	for shard := 0; shard < shards; shard++ {
+		if shard == missShard {
+			if tables[shard].getEntryCalls == 0 {
+				t.Fatalf("expected shard %d GetEntry calls > 0 on miss, got %d", shard, tables[shard].getEntryCalls)
+			}
+			continue
+		}
+		if tables[shard].getEntryCalls != 0 {
+			t.Fatalf("expected shard %d GetEntry calls = 0 on miss, got %d", shard, tables[shard].getEntryCalls)
+		}
 	}
 }

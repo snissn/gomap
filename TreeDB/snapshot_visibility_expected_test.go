@@ -5,10 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/node"
 )
 
-type snapshotReader interface {
+type snapshotVisibilityReader interface {
+	Get([]byte) ([]byte, error)
 	GetUnsafe([]byte) ([]byte, error)
+	GetAppend([]byte, []byte) ([]byte, error)
+	Has([]byte) (bool, error)
+	GetEntry([]byte) (node.LeafEntry, error)
 	Close() error
 }
 
@@ -74,8 +80,9 @@ func baseSnapshotVisibilityOptions(t *testing.T, mode string, mutator func(*Opti
 	return opts
 }
 
-func assertSnapshotChecks(t *testing.T, snap snapshotReader, cases []snapshotVisibilityCase) {
+func assertSnapshotChecks(t *testing.T, snap snapshotVisibilityReader, cases []snapshotVisibilityCase) {
 	t.Helper()
+	appendPrefix := []byte("prefix:")
 	for _, tc := range cases {
 		got, err := snap.GetUnsafe([]byte(tc.key))
 		if tc.missing {
@@ -89,6 +96,69 @@ func assertSnapshotChecks(t *testing.T, snap snapshotReader, cases []snapshotVis
 		}
 		if !bytes.Equal(got, tc.wantValue) {
 			t.Fatalf("snapshot.GetUnsafe(%q): got=%q want=%q", tc.key, got, tc.wantValue)
+		}
+
+		got, err = snap.Get([]byte(tc.key))
+		if tc.missing {
+			if !errors.Is(err, ErrKeyNotFound) {
+				t.Fatalf("snapshot.Get(%q): want ErrKeyNotFound, got err=%v, val=%q", tc.key, err, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("snapshot.Get(%q): %v", tc.key, err)
+		}
+		if !bytes.Equal(got, tc.wantValue) {
+			t.Fatalf("snapshot.Get(%q): got=%q want=%q", tc.key, got, tc.wantValue)
+		}
+
+		gotAppend, err := snap.GetAppend([]byte(tc.key), appendPrefix[:0])
+		if tc.missing {
+			if !errors.Is(err, ErrKeyNotFound) {
+				t.Fatalf("snapshot.GetAppend(%q): want ErrKeyNotFound, got err=%v, val=%q", tc.key, err, gotAppend)
+			}
+		} else {
+			if err != nil {
+				t.Fatalf("snapshot.GetAppend(%q): %v", tc.key, err)
+			}
+			expected := append(appendPrefix[:0], tc.wantValue...)
+			if !bytes.Equal(gotAppend, expected) {
+				t.Fatalf("snapshot.GetAppend(%q): got=%q want=%q", tc.key, gotAppend, expected)
+			}
+		}
+
+		ok, err := snap.Has([]byte(tc.key))
+		if tc.missing {
+			if err != nil {
+				t.Fatalf("snapshot.Has(%q): %v", tc.key, err)
+			}
+			if ok {
+				t.Fatalf("snapshot.Has(%q): want false, got true", tc.key)
+			}
+		} else {
+			if err != nil {
+				t.Fatalf("snapshot.Has(%q): %v", tc.key, err)
+			}
+			if !ok {
+				t.Fatalf("snapshot.Has(%q): want true, got false", tc.key)
+			}
+		}
+
+		entry, err := snap.GetEntry([]byte(tc.key))
+		if tc.missing {
+			if !errors.Is(err, ErrKeyNotFound) {
+				t.Fatalf("snapshot.GetEntry(%q): want ErrKeyNotFound, got err=%v", tc.key, err)
+			}
+		} else {
+			if err != nil {
+				t.Fatalf("snapshot.GetEntry(%q): %v", tc.key, err)
+			}
+			if entry.Flags&node.FlagTombstone != 0 {
+				t.Fatalf("snapshot.GetEntry(%q): got tombstone flags=%#x", tc.key, entry.Flags)
+			}
+			if entry.Flags&node.FlagPointer == 0 && !bytes.Equal(entry.Value, tc.wantValue) {
+				t.Fatalf("snapshot.GetEntry(%q): got=%q want=%q", tc.key, entry.Value, tc.wantValue)
+			}
 		}
 	}
 }
