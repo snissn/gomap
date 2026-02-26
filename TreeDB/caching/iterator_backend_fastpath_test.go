@@ -61,7 +61,7 @@ func TestIterator_BackendOnlyFastPathUsesBackendIterator(t *testing.T) {
 	}
 }
 
-func TestIterator_BackendOnlyFastPathSkipsBackendOnKnownDisjointRange(t *testing.T) {
+func TestIterator_BackendOnlyFastPathQueriesBackendOnKnownDisjointRange(t *testing.T) {
 	backend := &countingIteratorBackend{MockBackend: NewMockBackend()}
 	backend.Set([]byte("k1"), []byte("v1"))
 	backend.Set([]byte("k2"), []byte("v2"))
@@ -95,7 +95,7 @@ func TestIterator_BackendOnlyFastPathSkipsBackendOnKnownDisjointRange(t *testing
 	if err := it.Error(); err != nil {
 		t.Fatalf("iterator error: %v", err)
 	}
-	if calls := backend.iteratorCalls.Load(); calls != 0 {
-		t.Fatalf("backend iterator calls=%d want=0", calls)
+	if calls := backend.iteratorCalls.Load(); calls != 1 {
+		t.Fatalf("backend iterator calls=%d want=1", calls)
 	}
 }

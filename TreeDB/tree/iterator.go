@@ -87,6 +87,7 @@ type combinedLeafKeyState struct {
 
 	pageID uint64
 	data   []byte
+	owned  []byte
 	count  uint16
 
 	flagsStart   int
@@ -164,6 +165,15 @@ func (s *combinedLeafKeyState) init(pageID uint64, n *node.Node) (bool, error) {
 		if keysBlobBase < headerEnd || keysBlobBase > len(data) {
 			return false, node.ErrCorruptedNode
 		}
+	}
+
+	if len(data) > 0 {
+		if cap(s.owned) < len(data) {
+			s.owned = make([]byte, len(data))
+		}
+		s.owned = s.owned[:len(data)]
+		copy(s.owned, data)
+		data = s.owned
 	}
 
 	s.valid = true

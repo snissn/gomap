@@ -235,41 +235,77 @@ func (w *Writer) AppendBatch(records []Record) error {
 		return ErrRecordTooLarge
 	}
 
-	total := int64(batchHeaderSize)
 	batchSeq := records[0].Seq
+	if w.maxSegmentSize > 0 {
+		start := 0
+		chunkTotal := int64(batchHeaderSize)
+		for i := range records {
+			recSize, err := validateBatchRecordSize(&records[i], batchSeq)
+			if err != nil {
+				return err
+			}
+			// A single record must fit in one segment payload (including batch header).
+			if int64(batchHeaderSize)+recSize > w.maxSegmentSize {
+				return ErrRecordTooLarge
+			}
+			if i > start && chunkTotal+recSize > w.maxSegmentSize {
+				if err := w.appendBatchChunk(records[start:i], chunkTotal); err != nil {
+					return err
+				}
+				start = i
+				chunkTotal = int64(batchHeaderSize)
+			}
+			chunkTotal += recSize
+		}
+		if start < len(records) {
+			return w.appendBatchChunk(records[start:], chunkTotal)
+		}
+		return nil
+	}
+
+	total := int64(batchHeaderSize)
 	for i := range records {
-		r := &records[i]
-		if err := validateRecord(r); err != nil {
+		recSize, err := validateBatchRecordSize(&records[i], batchSeq)
+		if err != nil {
 			return err
 		}
-		if r.Seq != batchSeq {
-			return ErrMixedBatchSeq
-		}
-		if len(r.Key) > int(^uint16(0)) {
-			return ErrRecordTooLarge
-		}
-		if len(r.Value) > int(^uint32(0)) {
-			return ErrRecordTooLarge
-		}
-		keyLen := uint16(len(r.Key))
-		valLen := uint32(len(r.Value))
-		if recordSizeExceedsMax(keyLen, valLen) {
-			return ErrRecordTooLarge
-		}
-		total += int64(recordHeaderSize) + int64(len(r.Key)) + int64(len(r.Value))
+		total += recSize
 	}
-	if w.maxSegmentSize > 0 && total > w.maxSegmentSize {
-		return ErrRecordTooLarge
+	return w.appendBatchChunk(records, total)
+}
+
+func validateBatchRecordSize(r *Record, batchSeq uint64) (int64, error) {
+	if err := validateRecord(r); err != nil {
+		return 0, err
+	}
+	if r.Seq != batchSeq {
+		return 0, ErrMixedBatchSeq
+	}
+	if len(r.Key) > int(^uint16(0)) {
+		return 0, ErrRecordTooLarge
+	}
+	if len(r.Value) > int(^uint32(0)) {
+		return 0, ErrRecordTooLarge
+	}
+	keyLen := uint16(len(r.Key))
+	valLen := uint32(len(r.Value))
+	if recordSizeExceedsMax(keyLen, valLen) {
+		return 0, ErrRecordTooLarge
+	}
+	return int64(recordHeaderSize) + int64(len(r.Key)) + int64(len(r.Value)), nil
+}
+
+func (w *Writer) appendBatchChunk(records []Record, total int64) error {
+	if len(records) == 0 {
+		return nil
 	}
 	if total > int64(int(^uint(0)>>1)) {
 		return ErrRecordTooLarge
 	}
-
 	if cap(w.scratch) < int(total) {
 		w.scratch = make([]byte, int(total))
 	}
 	buf := w.scratch[:int(total)]
-
 	buf[0] = Version
 	binary.LittleEndian.PutUint32(buf[1:5], uint32(len(records)))
 
@@ -287,7 +323,6 @@ func (w *Writer) AppendBatch(records []Record) error {
 		copy(buf[off+recordHeaderSize+len(r.Key):], r.Value)
 		off += recordHeaderSize + len(r.Key) + len(r.Value)
 	}
-
 	return w.writeSegment(buf)
 }
 

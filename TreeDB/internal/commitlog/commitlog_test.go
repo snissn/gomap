@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -218,6 +219,81 @@ func TestCommitLogAppendBatchRejectsMixedSequence(t *testing.T) {
 	})
 	if !errors.Is(err, ErrMixedBatchSeq) {
 		t.Fatalf("expected ErrMixedBatchSeq, got %v", err)
+	}
+}
+
+func TestCommitLogAppendBatchSplitsLargeBatchAcrossSegments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "commit.log")
+
+	writer, err := NewWriterWithOptions(path, Options{MaxSegmentSize: 1024})
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	records := make([]Record, 0, 48)
+	for i := 0; i < 48; i++ {
+		records = append(records, Record{
+			Op:    OpSetInline,
+			Key:   []byte(fmt.Sprintf("k%03d", i)),
+			Value: bytes.Repeat([]byte{byte(i)}, 64),
+			Seq:   7,
+		})
+	}
+	if err := writer.AppendBatch(records); err != nil {
+		_ = writer.Close()
+		t.Fatalf("append large batch: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	segCount := 0
+	off := 0
+	for off < len(data) {
+		if off+segmentHeaderSize > len(data) {
+			t.Fatalf("truncated segment header at %d", off)
+		}
+		segLenField := binary.LittleEndian.Uint32(data[off : off+4])
+		segLen := int(segLenField & segmentLenMask)
+		off += segmentHeaderSize
+		if off+segLen > len(data) {
+			t.Fatalf("truncated segment payload at %d", off)
+		}
+		off += segLen
+		segCount++
+	}
+	if segCount < 2 {
+		t.Fatalf("expected split batch into multiple segments, got %d", segCount)
+	}
+
+	reader, err := NewReader(path)
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	got := make([]Record, 0, len(records))
+	for {
+		batch, err := reader.ReadBatch()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read batch: %v", err)
+		}
+		got = append(got, batch...)
+	}
+	if len(got) != len(records) {
+		t.Fatalf("record count mismatch: got %d want %d", len(got), len(records))
+	}
+	for i := range records {
+		if got[i].Op != records[i].Op || got[i].Seq != records[i].Seq || !bytes.Equal(got[i].Key, records[i].Key) || !bytes.Equal(got[i].Value, records[i].Value) {
+			t.Fatalf("record %d mismatch", i)
+		}
 	}
 }
 

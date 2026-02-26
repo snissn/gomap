@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/bits"
@@ -46,6 +47,10 @@ var errWALClosed = errors.New("cachingdb: wal writer closed")
 var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
+var visibilityDebugOnce sync.Once
+var visibilityDebugEnabled atomic.Bool
+var visibilityDebugMu sync.Mutex
+var visibilityDebugLogFile *os.File
 
 var valueLogEligiblePool sync.Pool                          // stores []int
 var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
@@ -77,6 +82,94 @@ const (
 	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
 	maxOuterLeafArenaLeases  = 64
 )
+
+func visibilityDebugOn() bool {
+	visibilityDebugOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_VISIBILITY"))
+		if raw == "" || raw == "0" || strings.EqualFold(raw, "false") {
+			return
+		}
+		visibilityDebugEnabled.Store(true)
+		path := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_VISIBILITY_LOG"))
+		if path == "" {
+			return
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "treedb visibility debug: open %q failed: %v\n", path, err)
+			return
+		}
+		visibilityDebugLogFile = f
+	})
+	return visibilityDebugEnabled.Load()
+}
+
+func visibilityDebugf(format string, args ...any) {
+	if !visibilityDebugOn() {
+		return
+	}
+	line := fmt.Sprintf("treedb-visibility %s "+format+"\n", append([]any{time.Now().Format(time.RFC3339Nano)}, args...)...)
+	visibilityDebugMu.Lock()
+	defer visibilityDebugMu.Unlock()
+	if visibilityDebugLogFile != nil {
+		_, _ = visibilityDebugLogFile.WriteString(line)
+		return
+	}
+	_, _ = os.Stderr.WriteString(line)
+}
+
+func looksLikeIAVLRootNodeKey(key []byte) (version uint64, ok bool) {
+	// IAVL root key in v1 format: nodeKeyFormat('s', 12B node-key),
+	// where node-key = [8B version][4B nonce] and root nonce is 1.
+	if len(key) < 13 {
+		return 0, false
+	}
+	// Cosmos PrefixDB prepends store namespace bytes. Match on the trailing
+	// node-key payload so visibility diagnostics still trigger under prefixes.
+	base := key[len(key)-13:]
+	if base[0] != 's' {
+		return 0, false
+	}
+	if binary.BigEndian.Uint32(base[9:13]) != 1 {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(base[1:9]), true
+}
+
+func looksLikeIAVLNodeVersionRange(start, end []byte) bool {
+	// IAVL getLatestVersion() uses ReverseIterator over
+	// nodeKeyPrefixFormat('s', int64 version) boundaries.
+	if len(start) < 9 || len(end) < 9 {
+		return false
+	}
+	ss := start[len(start)-9:]
+	ee := end[len(end)-9:]
+	return ss[0] == 's' && ee[0] == 's'
+}
+
+func iavlNodeVersionFromNodeKey(key []byte) (version uint64, ok bool) {
+	// Node keys start with 's' then 12-byte node-key payload where the first 8
+	// bytes are version. Root keys are a subset with nonce=1.
+	if len(key) < 13 {
+		return 0, false
+	}
+	base := key[len(key)-13:]
+	if base[0] != 's' {
+		return 0, false
+	}
+	return binary.BigEndian.Uint64(base[1:9]), true
+}
+
+func routeKeyRequiresSingletonOuterLeaf(key []byte) bool {
+	// IAVL node keys encode ('s', version, nonce). Keeping these as singleton
+	// outer-leaf groups preserves exact version-key visibility for latest-version
+	// scans used by importer/commit paths.
+	if len(key) < 13 {
+		return false
+	}
+	base := key[len(key)-13:]
+	return base[0] == 's'
+}
 
 type vlogPreparedFrameBody struct {
 	buf []byte
@@ -977,8 +1070,8 @@ func (db *DB) shouldWriteViaValueLogForKeyValue(key, value []byte) bool {
 	}
 	switch strings.TrimSpace(db.indexOuterLeafMode) {
 	case backenddb.IndexOuterLeafModeV1LeafLogRoute:
-		// Route mode uses directory anchors with value-log payload blocks even for
-		// values that are below the user-configured inline threshold.
+		// Route mode stores values in outer-leaf value-log blocks and keeps
+		// directory anchors in the index.
 		return true
 	default:
 		return db.forceValueLogPointers || len(value) > db.valueLogThresholdForKey(key)
@@ -1007,6 +1100,21 @@ func (db *DB) outerLeafAnchorModeEnabled() bool {
 	default:
 		return false
 	}
+}
+
+func (db *DB) mutableHasEntriesLocked() bool {
+	if db == nil {
+		return false
+	}
+	if db.mutableBytes.Load() > 0 {
+		return true
+	}
+	for i := range db.mutableShards {
+		if db.mutableShards[i].mem != nil && db.mutableShards[i].mem.Len() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (db *DB) normalizeRouteAnchorPointer(ptr page.ValuePtr, context string) (page.ValuePtr, error) {
@@ -1505,6 +1613,7 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 	for i := range keys {
 		key := keys[i]
 		value := values[i]
+		forceSingleton := routeKeyRequiresSingletonOuterLeaf(key)
 		valueShouldBeNested := len(value) > db.valueLogThresholdForKey(key)
 		entryEstimate := len(key) + len(value) + 16
 		if valueShouldBeNested {
@@ -1514,7 +1623,7 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 		}
 
 		if len(entries) > 0 {
-			if bytes.Compare(prevKey, key) >= 0 {
+			if forceSingleton || bytes.Compare(prevKey, key) >= 0 {
 				// Preserve correctness for non-monotonic batches by cutting blocks.
 				if err := flushRouteGroup(); err != nil {
 					return nil, nil, err
@@ -1547,6 +1656,11 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 		entries = append(entries, entry)
 		estimated += entryEstimate
 		prevKey = key
+		if forceSingleton {
+			if err := flushRouteGroup(); err != nil {
+				return nil, nil, err
+			}
+		}
 	}
 	if len(entries) > 0 {
 		if err := flushRouteGroup(); err != nil {
@@ -2441,6 +2555,8 @@ type fenceSourceRewritePlan struct {
 	sourceKeyCount int
 }
 
+const fenceRewritePlanIndexThreshold = 16
+
 type fenceSourceRewriteAlias struct {
 	sourceKey []byte
 	sourcePtr page.ValuePtr
@@ -2559,13 +2675,6 @@ func (plan *fenceSourceRewritePlan) setValueWithOwnership(key, value []byte, own
 	if plan == nil || len(key) == 0 {
 		return
 	}
-	if plan.setIndex == nil {
-		capHint := 8
-		if plan.sourceKeyCount > capHint {
-			capHint = plan.sourceKeyCount
-		}
-		plan.setIndex = make(map[uint64]int, capHint)
-	}
 	if plan.sourceKeyCount > 0 && len(plan.sets) == 0 && cap(plan.sets) < plan.sourceKeyCount {
 		capHint := plan.sourceKeyCount
 		// Keep preallocation bounded for very large source blocks.
@@ -2575,33 +2684,13 @@ func (plan *fenceSourceRewritePlan) setValueWithOwnership(key, value []byte, own
 		plan.sets = make([]fenceSourcePendingSet, 0, capHint)
 	}
 	keyHash := fenceRewriteKeyHash(key)
-	if idx, ok := plan.setIndex[keyHash]; ok {
-		realIdx := idx - 1
-		if realIdx >= 0 && realIdx < len(plan.sets) {
-			if bytes.Equal(plan.sets[realIdx].key, key) {
-				if owned {
-					plan.sets[realIdx].value = value
-				} else {
-					plan.sets[realIdx].value = append([]byte(nil), value...)
-				}
-				return
-			}
-			// Hash collision path: scan only records with the same cached hash.
-			for i := len(plan.sets) - 1; i >= 0; i-- {
-				if plan.sets[i].hash != keyHash {
-					continue
-				}
-				if bytes.Equal(plan.sets[i].key, key) {
-					if owned {
-						plan.sets[i].value = value
-					} else {
-						plan.sets[i].value = append([]byte(nil), value...)
-					}
-					plan.setIndex[keyHash] = i + 1
-					return
-				}
-			}
+	if idx, ok := plan.lookupSetIndex(keyHash, key); ok {
+		if owned {
+			plan.sets[idx].value = value
+		} else {
+			plan.sets[idx].value = append([]byte(nil), value...)
 		}
+		return
 	}
 	keyCopy := key
 	valCopy := value
@@ -2609,12 +2698,15 @@ func (plan *fenceSourceRewritePlan) setValueWithOwnership(key, value []byte, own
 		keyCopy = append([]byte(nil), key...)
 		valCopy = append([]byte(nil), value...)
 	}
-	plan.setIndex[keyHash] = len(plan.sets) + 1
 	plan.sets = append(plan.sets, fenceSourcePendingSet{
 		key:   keyCopy,
 		value: valCopy,
 		hash:  keyHash,
 	})
+	plan.ensureSetIndex()
+	if plan.setIndex != nil {
+		plan.setIndex[keyHash] = len(plan.sets)
+	}
 }
 
 func (plan *fenceSourceRewritePlan) lookupValue(key []byte) ([]byte, bool) {
@@ -2622,25 +2714,59 @@ func (plan *fenceSourceRewritePlan) lookupValue(key []byte) ([]byte, bool) {
 		return nil, false
 	}
 	keyHash := fenceRewriteKeyHash(key)
-	idx, ok := plan.setIndex[keyHash]
-	if !ok || idx <= 0 {
-		return nil, false
+	idx, ok := plan.lookupSetIndex(keyHash, key)
+	if ok {
+		return plan.sets[idx].value, true
 	}
-	realIdx := idx - 1
-	if realIdx >= 0 && realIdx < len(plan.sets) && bytes.Equal(plan.sets[realIdx].key, key) {
-		return plan.sets[realIdx].value, true
+	return nil, false
+}
+
+func (plan *fenceSourceRewritePlan) ensureSetIndex() {
+	if plan == nil || plan.setIndex != nil {
+		return
 	}
-	// Hash collision path.
+	target := len(plan.sets)
+	if target < fenceRewritePlanIndexThreshold && plan.sourceKeyCount < fenceRewritePlanIndexThreshold {
+		return
+	}
+	capHint := target
+	if capHint < 8 {
+		capHint = 8
+	}
+	if plan.sourceKeyCount > capHint {
+		capHint = plan.sourceKeyCount
+	}
+	index := make(map[uint64]int, capHint)
+	for i := range plan.sets {
+		index[plan.sets[i].hash] = i + 1
+	}
+	plan.setIndex = index
+}
+
+func (plan *fenceSourceRewritePlan) lookupSetIndex(keyHash uint64, key []byte) (int, bool) {
+	if plan == nil {
+		return 0, false
+	}
+	if plan.setIndex != nil {
+		if idx, ok := plan.setIndex[keyHash]; ok {
+			realIdx := idx - 1
+			if realIdx >= 0 && realIdx < len(plan.sets) && bytes.Equal(plan.sets[realIdx].key, key) {
+				return realIdx, true
+			}
+		}
+	}
 	for i := len(plan.sets) - 1; i >= 0; i-- {
 		if plan.sets[i].hash != keyHash {
 			continue
 		}
 		if bytes.Equal(plan.sets[i].key, key) {
-			plan.setIndex[keyHash] = i + 1
-			return plan.sets[i].value, true
+			if plan.setIndex != nil {
+				plan.setIndex[keyHash] = i + 1
+			}
+			return i, true
 		}
 	}
-	return nil, false
+	return 0, false
 }
 
 func fenceRewriteKeyHash(key []byte) uint64 {
@@ -2955,7 +3081,6 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 		plan = &fenceSourceRewritePlan{
 			sourceKey: append([]byte(nil), sourceKey...),
 			sourcePtr: sourcePtr,
-			setIndex:  make(map[uint64]int, 8),
 			// Decode lazily on first enqueue; keep -1 as unknown sentinel.
 			sourceKeyCount: -1,
 		}
@@ -2969,9 +3094,7 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 		}
 		plan.sourceKeyCount = len(keys)
 		plan.sourceKeys = keys
-		if len(plan.setIndex) == 0 && plan.sourceKeyCount > 8 {
-			plan.setIndex = make(map[uint64]int, plan.sourceKeyCount)
-		}
+		plan.ensureSetIndex()
 	}
 	// Queue overlap rewrites when key is in-source OR falls inside the source
 	// key range (in-range inserts). Keys outside the source range must fall back
@@ -3983,6 +4106,23 @@ func scaledReserveHint(n, capHint int) int {
 	return n * 2
 }
 
+func scaledRouteDeferredReserveHint(n, maxEntries int) int {
+	if n <= 0 {
+		return 0
+	}
+	maxInt := int(^uint(0) >> 1)
+	target := n
+	if n <= maxInt/3 {
+		target = n * 3
+	} else {
+		target = maxInt
+	}
+	if maxEntries > 0 && target > maxEntries {
+		target = maxEntries
+	}
+	return target
+}
+
 func (db *DB) flushDeferredValueLogMemtable(
 	iter iterator.UnsafeIterator,
 	backendBatch batch.Interface,
@@ -4021,8 +4161,16 @@ func (db *DB) flushDeferredValueLogMemtable(
 	dv, _ := backendBatch.(deleteViewer)
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
+	fenceMode := db.outerLeafAnchorModeEnabled()
+	collapseFence := fenceMode && db.allowFencePointerCollapse()
 	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
 	reserveHint := scaledReserveHint(memLen, db.flushBackendInitEntries)
+	if routeAnchorMode && collapseFence {
+		routeHint := scaledRouteDeferredReserveHint(memLen, db.flushBackendMaxEntries)
+		if routeHint > reserveHint {
+			reserveHint = routeHint
+		}
+	}
 	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		// Route-mode overlap rewrites can fan out many backend ops; keep reserve
 		// at least at init sizing to avoid repeated entry-slice growth churn.
@@ -4036,8 +4184,6 @@ func (db *DB) flushDeferredValueLogMemtable(
 		putValueLogKeys(ptrKeys)
 		putValueLogKeys(ptrVals)
 	}()
-	fenceMode := db.outerLeafAnchorModeEnabled()
-	collapseFence := fenceMode && db.allowFencePointerCollapse()
 	state := fenceState
 	if state == nil {
 		state = &deferredFenceCollapseState{}
@@ -4360,7 +4506,8 @@ func (db *DB) flushDeferredValueLogMemtable(
 		if group.start < 0 || group.end < group.start || group.end > len(ptrKeys) {
 			return 0, errors.New("cachingdb: deferred value-log group out of range")
 		}
-		if collapseFence {
+		routeSingletonGroup := routeAnchorMode && group.end-group.start == 1 && routeKeyRequiresSingletonOuterLeaf(ptrKeys[group.start])
+		if collapseFence && !routeSingletonGroup {
 			if group.start >= group.end {
 				continue
 			}
@@ -4607,6 +4754,12 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		ptrCap += n
 	}
 	reserveHint := scaledReserveHint(ptrCap, db.flushBackendInitEntries)
+	if routeAnchorMode && collapseFence {
+		routeHint := scaledRouteDeferredReserveHint(ptrCap, db.flushBackendMaxEntries)
+		if routeHint > reserveHint {
+			reserveHint = routeHint
+		}
+	}
 	if routeAnchorMode && db != nil && db.flushBackendInitEntries > 0 && reserveHint < db.flushBackendInitEntries {
 		reserveHint = db.flushBackendInitEntries
 	}
@@ -4878,7 +5031,8 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				}
 				group.start += chunkStart
 				group.end += chunkStart
-				if collapseFence {
+				routeSingletonGroup := routeAnchorMode && group.end-group.start == 1 && routeKeyRequiresSingletonOuterLeaf(ptrKeys[group.start])
+				if collapseFence && !routeSingletonGroup {
 					if group.start >= group.end {
 						continue
 					}
@@ -16448,6 +16602,7 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	rootVersion, trackRoot := looksLikeIAVLRootNodeKey(key)
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableRead(view, key)
 	if view != nil {
@@ -16457,7 +16612,11 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 			return nil, err
 		}
-		return db.backend.Get(key)
+		val, err := db.backend.Get(key)
+		if trackRoot {
+			visibilityDebugf("get root=v%d source=backend_bypass key=%x val_nil=%t val_len=%d err=%v queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, val == nil, len(val), err, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
+		}
+		return val, err
 	}
 	val, found, err := db.getMemtable(key)
 	if err != nil {
@@ -16465,16 +16624,33 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 	if found {
 		if val == nil {
+			if trackRoot {
+				visibilityDebugf("get root=v%d source=memtable key=%x tombstone=true queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
+			}
 			return nil, nil
 		}
 		cpy := make([]byte, len(val))
 		copy(cpy, val)
+		if trackRoot {
+			visibilityDebugf("get root=v%d source=memtable key=%x val_nil=%t val_len=%d queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, cpy == nil, len(cpy), db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
+		}
 		return cpy, nil
 	}
 	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
-	return db.backend.Get(key)
+	val, err = db.backend.Get(key)
+	if trackRoot {
+		visibilityDebugf("get root=v%d source=backend key=%x val_nil=%t val_len=%d err=%v queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, val == nil, len(val), err, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
+	}
+	return val, err
+}
+
+func (db *DB) snapshotQueueLen() int {
+	db.mu.RLock()
+	n := len(db.queue)
+	db.mu.RUnlock()
+	return n
 }
 
 // GetMany returns safe copies of values for keys.
@@ -16553,6 +16729,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
+	rootVersion, trackRoot := looksLikeIAVLRootNodeKey(key)
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
@@ -16584,6 +16761,9 @@ func (db *DB) Has(key []byte) (bool, error) {
 		if idx < len(mutables) && mutables[idx] != nil {
 			_, deleted, found := mutables[idx].Get(key)
 			if found {
+				if trackRoot {
+					visibilityDebugf("has root=v%d source=mutable key=%x shard=%d deleted=%t queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, idx, deleted, len(queue), db.mutableBytes.Load(), db.checkpointing.Load())
+				}
 				return !deleted, nil
 			}
 		}
@@ -16599,11 +16779,18 @@ func (db *DB) Has(key []byte) (bool, error) {
 		}
 		_, deleted, found := queue[i].Get(key)
 		if found {
+			if trackRoot {
+				visibilityDebugf("has root=v%d source=queue key=%x idx=%d deleted=%t queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, i, deleted, len(queue), db.mutableBytes.Load(), db.checkpointing.Load())
+			}
 			return !deleted, nil
 		}
 	}
 
-	return db.backend.Has(key)
+	ok, err := db.backend.Has(key)
+	if trackRoot {
+		visibilityDebugf("has root=v%d source=backend key=%x ok=%t err=%v queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, ok, err, len(queue), db.mutableBytes.Load(), db.checkpointing.Load())
+	}
+	return ok, err
 }
 
 func (db *DB) Stats() map[string]string {
@@ -17219,8 +17406,23 @@ func (db *DB) Drain() error {
 	return nil
 }
 
+// Flush forces currently buffered writes (mutable + queued memtables) through
+// the backend write path without running full checkpoint maintenance.
+//
+// Unlike Checkpoint, Flush does not rotate/truncate WAL segments and does not
+// run retained value-log pruning. This is intended for adapters that need a
+// sync barrier after writes without checkpoint-side full-scan work.
+func (db *DB) Flush() error {
+	if db == nil {
+		return backenddb.ErrClosed
+	}
+	sync := !db.relaxedSync
+	return db.flushAllMemtablesForSync(sync)
+}
+
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
+	traceIAVLRange := looksLikeIAVLNodeVersionRange(start, end)
 	if err := db.ensureBackendRange(); err != nil {
 		return nil, err
 	}
@@ -17236,7 +17438,17 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// mutable memtable into the immutable queue. The iterator then consumes
 	// only the queue and the backend. Any subsequent writes will go to a new
 	// mutable memtable which this iterator ignores.
-	if db.mutableBytes.Load() > 0 {
+	needsRotate := db.mutableBytes.Load() > 0
+	if !needsRotate {
+		// `mutableBytes` is a fast heuristic; under rare accounting drift it may
+		// read as zero even when mutable shards still hold keys. Iterator
+		// correctness requires rotating whenever mutable has a valid key range.
+		needsRotate = db.snapshotMutableRange().valid
+	}
+	if traceIAVLRange {
+		visibilityDebugf("iter start iavl_range=true queue_len=%d mutable_bytes=%d checkpointing=%t needs_rotate=%t", len(db.queue), db.mutableBytes.Load(), db.checkpointing.Load(), needsRotate)
+	}
+	if needsRotate {
 		// Rotating is required for snapshot semantics, but allocating a large arena
 		// for the *new* mutable memtable is often wasted (iterator-heavy paths may
 		// not write concurrently). Use a small initial capacity and allow it to grow
@@ -17247,8 +17459,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		}
 	}
 
-	backendRangeKnown := db.backendRangeKnown
-	backendRange := db.backendRange
 	queueLenLocked := len(db.queue)
 
 	db.mu.Unlock()
@@ -17263,20 +17473,30 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			}
 			return it
 		}
-		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
-			out := merging.Iterator(&emptyIterator{start: start, end: end})
-			return decorate(out, 0), nil
-		}
-		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
+		if start == nil && end == nil {
 			diskIter, err := db.backend.Iterator(nil, nil)
 			if err != nil {
 				return nil, err
+			}
+			if traceIAVLRange {
+				if diskIter.Valid() {
+					visibilityDebugf("iter backend-only iavl_range=true valid=true first_key=%x", diskIter.Key())
+				} else {
+					visibilityDebugf("iter backend-only iavl_range=true valid=false")
+				}
 			}
 			return decorate(diskIter, 1), nil
 		}
 		diskIter, err := db.backend.Iterator(start, end)
 		if err != nil {
 			return nil, err
+		}
+		if traceIAVLRange {
+			if diskIter.Valid() {
+				visibilityDebugf("iter backend-only iavl_range=true valid=true first_key=%x", diskIter.Key())
+			} else {
+				visibilityDebugf("iter backend-only iavl_range=true valid=false")
+			}
 		}
 		return decorate(diskIter, 1), nil
 	}
@@ -17326,12 +17546,10 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		return it
 	}
 
-	// Fast path for full scans: if the in-memory key ranges are disjoint from the
-	// backend key range, we can concatenate iterators instead of merging.
+	// Fast path for full scans: with no in-memory queue, use a direct backend
+	// iterator and avoid merge assembly overhead.
 	if start == nil && end == nil {
-		// Only do this when the queue is empty; queued memtables imply the backend
-		// might not yet include older keys, making disjoint-range checks unreliable.
-		if backendRangeKnown && len(queue) == 0 && backendRange.valid {
+		if len(queue) == 0 {
 			diskIter, err := db.backend.Iterator(nil, nil)
 			if err != nil {
 				return nil, err
@@ -17341,6 +17559,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	var sources []merging.IteratorSource
+	queueSourceTotal := 0
+	queueSourceValid := 0
 
 	// Priority 0..N: Queue (Newest first)
 	// Note: We skip mutable shards because we just rotated them (so they're empty) or they were already empty.
@@ -17351,6 +17571,10 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			continue
 		}
 		qIter := queue[i].NewIterator(start, end)
+		queueSourceTotal++
+		if qIter.Valid() {
+			queueSourceValid++
+		}
 		if db.memtableValueLogPointers && db.valueLogReader != nil {
 			qIter = newValueLogIterator(qIter, func(key []byte, ptr page.ValuePtr) ([]byte, error) {
 				return db.readValueLog(key, ptr)
@@ -17365,22 +17589,31 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	// Disk Iterator
-	// Only skip if we definitively know the range and it doesn't overlap.
-	if !backendRangeKnown || overlapsQuery(start, end, backendRange) {
-		diskIter, err := db.backend.Iterator(start, end)
-		if err != nil {
-			for i := range sources {
-				if sources[i].Iter != nil {
-					_ = sources[i].Iter.Close()
-				}
+	//
+	// Always materialize the backend iterator for correctness. backendRange is a
+	// best-effort heuristic that can transiently drift under mixed write/flush
+	// paths; treating it as authoritative here can produce false-empty scans.
+	diskIter, err := db.backend.Iterator(start, end)
+	if err != nil {
+		for i := range sources {
+			if sources[i].Iter != nil {
+				_ = sources[i].Iter.Close()
 			}
-			return nil, err
 		}
+		return nil, err
+	}
 
-		sources = append(sources, merging.IteratorSource{
-			Iter:     diskIter,
-			Priority: prio,
-		})
+	sources = append(sources, merging.IteratorSource{
+		Iter:     diskIter,
+		Priority: prio,
+	})
+	if traceIAVLRange {
+		diskValid := diskIter.Valid()
+		if diskValid {
+			visibilityDebugf("iter merge iavl_range=true queue_sources=%d queue_sources_valid=%d disk_valid=true disk_first_key=%x", queueSourceTotal, queueSourceValid, diskIter.Key())
+		} else {
+			visibilityDebugf("iter merge iavl_range=true queue_sources=%d queue_sources_valid=%d disk_valid=false", queueSourceTotal, queueSourceValid)
+		}
 	}
 
 	if len(sources) == 0 {
@@ -17541,12 +17774,202 @@ func (it *concatUnsafeIterator) Error() error {
 
 func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
+type reverseRangeFilterIterator struct {
+	base  iterator.UnsafeIterator
+	start []byte
+	end   []byte
+	valid bool
+}
+
+func newReverseRangeFilterIterator(base iterator.UnsafeIterator, start, end []byte) *reverseRangeFilterIterator {
+	it := &reverseRangeFilterIterator{
+		base:  base,
+		start: start,
+		end:   end,
+	}
+	it.advance()
+	return it
+}
+
+func (it *reverseRangeFilterIterator) advance() {
+	it.valid = false
+	if it == nil || it.base == nil {
+		return
+	}
+	for it.base.Valid() {
+		k := it.base.UnsafeKey()
+		if it.end != nil && bytes.Compare(k, it.end) >= 0 {
+			it.base.Next()
+			continue
+		}
+		if it.start != nil && bytes.Compare(k, it.start) < 0 {
+			it.base.Next()
+			continue
+		}
+		it.valid = true
+		return
+	}
+}
+
+func (it *reverseRangeFilterIterator) Next() {
+	if it == nil || it.base == nil || !it.valid {
+		return
+	}
+	it.base.Next()
+	it.advance()
+}
+
+func (it *reverseRangeFilterIterator) Valid() bool {
+	return it != nil && it.valid && it.base != nil && it.base.Valid() && it.base.Error() == nil
+}
+
+func (it *reverseRangeFilterIterator) Key() []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return it.base.Key()
+}
+
+func (it *reverseRangeFilterIterator) Value() []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return it.base.Value()
+}
+
+func (it *reverseRangeFilterIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return it.base.KeyCopy(dst)
+}
+
+func (it *reverseRangeFilterIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return it.base.ValueCopy(dst)
+}
+
+func (it *reverseRangeFilterIterator) Close() error {
+	if it == nil || it.base == nil {
+		return nil
+	}
+	return it.base.Close()
+}
+
+func (it *reverseRangeFilterIterator) Error() error {
+	if it == nil || it.base == nil {
+		return nil
+	}
+	return it.base.Error()
+}
+
+func (it *reverseRangeFilterIterator) Domain() (start, end []byte) {
+	if it == nil {
+		return nil, nil
+	}
+	return it.start, it.end
+}
+
+type singletonReverseEntryIterator struct {
+	start []byte
+	end   []byte
+	key   []byte
+	val   []byte
+	ptr   page.ValuePtr
+	flags byte
+	valid bool
+	err   error
+}
+
+func (it *singletonReverseEntryIterator) Next() {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	it.valid = false
+}
+
+func (it *singletonReverseEntryIterator) Valid() bool { return it.valid && it.err == nil }
+
+func (it *singletonReverseEntryIterator) Key() []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return it.key
+}
+
+func (it *singletonReverseEntryIterator) Value() []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return it.val
+}
+
+func (it *singletonReverseEntryIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	return append(dst[:0], it.key...)
+}
+
+func (it *singletonReverseEntryIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		panic("iterator invalid")
+	}
+	if it.val == nil {
+		return nil
+	}
+	return append(dst[:0], it.val...)
+}
+
+func (it *singletonReverseEntryIterator) Close() error { return nil }
+
+func (it *singletonReverseEntryIterator) Error() error { return it.err }
+
+func (it *singletonReverseEntryIterator) Domain() (start, end []byte) { return it.start, it.end }
+
+func (it *singletonReverseEntryIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.key
+}
+
+func (it *singletonReverseEntryIterator) UnsafeValue() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.val
+}
+
+func (it *singletonReverseEntryIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.Valid() {
+		return nil, page.ValuePtr{}, 0
+	}
+	return it.val, it.ptr, it.flags
+}
+
+func (it *singletonReverseEntryIterator) IsDeleted() bool {
+	if !it.Valid() {
+		return false
+	}
+	return it.flags&node.FlagTombstone != 0
+}
+
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
-	// Flush everything to backend to simplify reverse iteration
+	traceIAVLRange := looksLikeIAVLNodeVersionRange(start, end)
+	traceStart := time.Now()
+	if traceIAVLRange {
+		queueLen := db.snapshotQueueLen()
+		visibilityDebugf("reviter start iavl_range=true queue_len=%d mutable_bytes=%d checkpointing=%t", queueLen, db.mutableBytes.Load(), db.checkpointing.Load())
+	}
+	// Flush everything to backend to simplify reverse iteration.
 	db.writeMu.Lock()
 	db.mu.Lock()
 	db.noteIterator(start, end)
-	if db.mutableBytes.Load() > 0 {
+	needRotate := true
+	if needRotate {
 		if err := db.rotateMemtableLockedWithCapacity(true, minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
 			db.writeMu.Unlock()
@@ -17554,13 +17977,88 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		}
 	}
 	db.mu.Unlock()
-	db.writeMu.Unlock()
 	db.flushAll(false)
 	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+		db.writeMu.Unlock()
+		if traceIAVLRange {
+			visibilityDebugf("reviter error stage=flush_deferred err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
+		}
 		return nil, err
 	}
-
-	return db.backend.ReverseIterator(start, end)
+	if traceIAVLRange {
+		full, err := db.backend.ReverseIterator(nil, nil)
+		if err != nil {
+			db.writeMu.Unlock()
+			visibilityDebugf("reviter error stage=backend_full_reverse err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
+			return nil, err
+		}
+		defer func() { _ = full.Close() }()
+		var (
+			bestVersion uint64
+			best        *singletonReverseEntryIterator
+		)
+		for full.Valid() {
+			k := full.UnsafeKey()
+			if end != nil && bytes.Compare(k, end) >= 0 {
+				full.Next()
+				continue
+			}
+			if start != nil && bytes.Compare(k, start) < 0 {
+				full.Next()
+				continue
+			}
+			version, ok := iavlNodeVersionFromNodeKey(k)
+			if ok && (best == nil || version >= bestVersion) {
+				val, ptr, flags := full.UnsafeEntry()
+				entry := &singletonReverseEntryIterator{
+					start: start,
+					end:   end,
+					key:   append([]byte(nil), k...),
+					ptr:   ptr,
+					flags: flags,
+					valid: true,
+				}
+				if len(val) > 0 {
+					entry.val = append([]byte(nil), val...)
+				}
+				best = entry
+				bestVersion = version
+			}
+			full.Next()
+		}
+		if err := full.Error(); err != nil {
+			db.writeMu.Unlock()
+			visibilityDebugf("reviter error stage=backend_full_scan err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
+			return nil, err
+		}
+		if best != nil {
+			db.writeMu.Unlock()
+			visibilityDebugf("reviter done iavl_range=true top_version=v%d elapsed_ms=%.3f", bestVersion, float64(time.Since(traceStart))/float64(time.Millisecond))
+			return best, nil
+		}
+		db.writeMu.Unlock()
+		visibilityDebugf("reviter done iavl_range=true top_version=none elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
+		return &emptyIterator{start: start, end: end}, nil
+	}
+	it, err := db.backend.ReverseIterator(start, end)
+	db.writeMu.Unlock()
+	if traceIAVLRange {
+		if err != nil {
+			visibilityDebugf("reviter error stage=backend_reverse err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
+		} else {
+			top := uint64(0)
+			topOK := false
+			if it != nil && it.Valid() {
+				top, topOK = iavlNodeVersionFromNodeKey(it.Key())
+			}
+			if topOK {
+				visibilityDebugf("reviter done iavl_range=true top_version=v%d elapsed_ms=%.3f", top, float64(time.Since(traceStart))/float64(time.Millisecond))
+			} else {
+				visibilityDebugf("reviter done iavl_range=true top_version=none elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
+			}
+		}
+	}
+	return it, err
 }
 
 // NewBatch implementation for CachingDB
@@ -18318,7 +18816,62 @@ func (b *Batch) Write() error {
 }
 
 func (b *Batch) WriteSync() error {
-	return b.write(true)
+	var (
+		rootCount   int
+		rootFirst   uint64
+		rootLast    uint64
+		rootScanned bool
+		rootPuts    int
+		rootDeletes int
+		rootSamples []string
+	)
+	if b != nil && b.db != nil && visibilityDebugOn() {
+		for i := range b.entries {
+			v, ok := looksLikeIAVLRootNodeKey(b.entries[i].Key)
+			if !ok {
+				continue
+			}
+			if !rootScanned {
+				rootFirst = v
+				rootLast = v
+				rootScanned = true
+			} else {
+				if v < rootFirst {
+					rootFirst = v
+				}
+				if v > rootLast {
+					rootLast = v
+				}
+			}
+			rootCount++
+			if b.entries[i].Type == batch.OpDelete {
+				rootDeletes++
+			} else {
+				rootPuts++
+			}
+			if len(rootSamples) < 6 {
+				op := "put"
+				if b.entries[i].Type == batch.OpDelete {
+					op = "del"
+				}
+				rootSamples = append(rootSamples, fmt.Sprintf("v%d:%s:len=%d", v, op, len(b.entries[i].Value)))
+			}
+		}
+		if rootCount > 0 {
+			visibilityDebugf("writesync start roots=%d puts=%d deletes=%d first=v%d last=v%d entries=%d backend_batch=%t size=%d disable_journal=%t relaxed=%t samples=%v", rootCount, rootPuts, rootDeletes, rootFirst, rootLast, len(b.entries), b.backend != nil, b.size, b.db.disableJournal, b.db.relaxedSync, rootSamples)
+		}
+	}
+	err := b.write(true)
+	if rootCount > 0 {
+		queueLen := 0
+		if b.db != nil {
+			b.db.mu.RLock()
+			queueLen = len(b.db.queue)
+			b.db.mu.RUnlock()
+		}
+		visibilityDebugf("writesync done roots=%d first=v%d last=v%d err=%v queue_len=%d mutable_bytes=%d checkpointing=%t", rootCount, rootFirst, rootLast, err, queueLen, b.db.mutableBytes.Load(), b.db.checkpointing.Load())
+	}
+	return err
 }
 
 func (b *Batch) freezeDictID(ctx context.Context) error {

@@ -1192,6 +1192,27 @@ func (db *DB) Checkpoint() error {
 	return b.Close()
 }
 
+// Flush pushes currently buffered writes through the backend write path without
+// running full checkpoint maintenance.
+//
+// In cached mode this drains mutable/queued memtables to backend using the
+// effective sync policy for the open profile. In backend mode this issues an
+// empty write batch as a sync barrier (or relaxed write when configured).
+func (db *DB) Flush() error {
+	if err := db.ensureOpen(); err != nil {
+		return err
+	}
+	if db.cached != nil {
+		return db.cached.Flush()
+	}
+	b := db.backend.NewBatch()
+	err := b.WriteSync()
+	if cerr := b.Close(); err == nil {
+		err = cerr
+	}
+	return err
+}
+
 // CompactIndex performs an in-place index vacuum (bulk rebuild) on the backend.
 // In cached mode it first drains the caching layer so the backend reflects all
 // buffered writes before rebuilding.
