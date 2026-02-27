@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -913,6 +914,9 @@ func (db *DB) validateV1LeafLogDirectoryInvariants() error {
 		}
 		if bytes.Compare(k, rng.min) < 0 || bytes.Compare(k, rng.max) > 0 {
 			return fmt.Errorf("cachingdb: v1_leaflog invariant violation: anchor key outside decoded range key=%q range=[%q,%q] ptr=%+v", k, rng.min, rng.max, ptr)
+		}
+		if routeMode && !bytes.Equal(k, rng.min) {
+			return fmt.Errorf("cachingdb: v1_leaflog invariant violation: route mode anchor must equal payload-min key=%q min=%q ptr=%+v", k, rng.min, ptr)
 		}
 		if prev != nil {
 			if bytes.Compare(prev.anchor, k) >= 0 {
@@ -3687,7 +3691,7 @@ func (p *fenceAnchorPromoter) rewriteFallbackSourceBlock(sourceKey, mutationKey 
 	}
 
 	emitKey := sourceKey
-	if !sourceKept || bytes.Equal(mutationKey, sourceKey) {
+	if p.v1LeafLogRouteMode() || !sourceKept || bytes.Equal(mutationKey, sourceKey) {
 		emitKey = kept[0].Key
 	}
 	if len(emitKey) == 0 {
@@ -4617,23 +4621,62 @@ func (db *DB) flushDeferredValueLogMemtable(
 					confirmedOverlap = true
 					if routeAnchorMode {
 						if len(unresolved) > 0 {
-							// Route mode keeps overlap handling in rewrite anchors
-							// only; emit one canonical anchor row at payload min.
-							// unresolved is built in-group key order, so the first
-							// unresolved position is the payload-min anchor key.
-							anchorPos := unresolved[0]
-							if err := emitKey(ptrKeys[anchorPos], ptr); err != nil {
+							if err := ensureVlogLane(); err != nil {
 								putValueLogEligible(unresolved)
 								return 0, err
 							}
-							for _, srcPos := range unresolved[1:] {
-								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-										putValueLogEligible(unresolved)
-										return 0, err
+							unresolvedKeys := getValueLogKeys(len(unresolved))
+							unresolvedVals := getValueLogKeys(len(unresolved))
+							for _, srcPos := range unresolved {
+								unresolvedKeys = append(unresolvedKeys, ptrKeys[srcPos])
+								unresolvedVals = append(unresolvedVals, ptrVals[srcPos])
+							}
+							routePtrs, routeGroups, routeErr := db.writeRouteOuterLeafValueRecords(vlogLane, dictID, unresolvedKeys, unresolvedVals, durability)
+							putValueLogKeys(unresolvedKeys)
+							putValueLogKeys(unresolvedVals)
+							if routeErr != nil {
+								putValueLogEligible(unresolved)
+								return 0, routeErr
+							}
+							if len(routePtrs) != len(routeGroups) {
+								putValueLogPtrs(routePtrs)
+								putValueLogEligible(unresolved)
+								return 0, errors.New("cachingdb: route overlap unresolved pointer/group count mismatch")
+							}
+							for gi := range routeGroups {
+								routeGroup := routeGroups[gi]
+								if routeGroup.start < 0 || routeGroup.end < routeGroup.start || routeGroup.end > len(unresolved) {
+									putValueLogPtrs(routePtrs)
+									putValueLogEligible(unresolved)
+									return 0, errors.New("cachingdb: route overlap unresolved group out of range")
+								}
+								if routeGroup.start >= routeGroup.end {
+									continue
+								}
+								anchorPos := unresolved[routeGroup.start]
+								routePtr, routeErr := db.normalizeRouteAnchorPointer(routePtrs[gi], "deferred overlap unresolved route publish")
+								if routeErr != nil {
+									putValueLogPtrs(routePtrs)
+									putValueLogEligible(unresolved)
+									return 0, routeErr
+								}
+								if err := emitKey(ptrKeys[anchorPos], routePtr); err != nil {
+									putValueLogPtrs(routePtrs)
+									putValueLogEligible(unresolved)
+									return 0, err
+								}
+								for groupPos := routeGroup.start + 1; groupPos < routeGroup.end; groupPos++ {
+									srcPos := unresolved[groupPos]
+									if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+										if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+											putValueLogPtrs(routePtrs)
+											putValueLogEligible(unresolved)
+											return 0, err
+										}
 									}
 								}
 							}
+							putValueLogPtrs(routePtrs)
 						}
 					} else {
 						for _, srcPos := range unresolved {
@@ -5127,25 +5170,69 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							confirmedOverlap = true
 							if routeAnchorMode {
 								if len(unresolved) > 0 {
-									// Route mode keeps overlap handling in rewrite
-									// anchors only; emit one canonical anchor row
-									// at payload min. unresolved is built in-group
-									// key order, so unresolved[0] is payload-min.
-									anchorPos := unresolved[0]
-									if err := emitPointer(ptrKeys[anchorPos], ptr); err != nil {
+									if err := ensureVlogLane(); err != nil {
 										putValueLogEligible(unresolved)
 										putValueLogPtrs(ptrs)
 										return err
 									}
-									for _, srcPos := range unresolved[1:] {
-										if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-											if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-												putValueLogEligible(unresolved)
-												putValueLogPtrs(ptrs)
-												return err
+									unresolvedKeys := getValueLogKeys(len(unresolved))
+									unresolvedVals := getValueLogKeys(len(unresolved))
+									for _, srcPos := range unresolved {
+										unresolvedKeys = append(unresolvedKeys, ptrKeys[srcPos])
+										unresolvedVals = append(unresolvedVals, ptrVals[srcPos])
+									}
+									routePtrs, routeGroups, routeErr := db.writeRouteOuterLeafValueRecords(vlogLane, dictID, unresolvedKeys, unresolvedVals, durability)
+									putValueLogKeys(unresolvedKeys)
+									putValueLogKeys(unresolvedVals)
+									if routeErr != nil {
+										putValueLogEligible(unresolved)
+										putValueLogPtrs(ptrs)
+										return routeErr
+									}
+									if len(routePtrs) != len(routeGroups) {
+										putValueLogPtrs(routePtrs)
+										putValueLogEligible(unresolved)
+										putValueLogPtrs(ptrs)
+										return errors.New("cachingdb: route overlap unresolved pointer/group count mismatch")
+									}
+									for gi := range routeGroups {
+										routeGroup := routeGroups[gi]
+										if routeGroup.start < 0 || routeGroup.end < routeGroup.start || routeGroup.end > len(unresolved) {
+											putValueLogPtrs(routePtrs)
+											putValueLogEligible(unresolved)
+											putValueLogPtrs(ptrs)
+											return errors.New("cachingdb: route overlap unresolved group out of range")
+										}
+										if routeGroup.start >= routeGroup.end {
+											continue
+										}
+										anchorPos := unresolved[routeGroup.start]
+										routePtr, routeErr := db.normalizeRouteAnchorPointer(routePtrs[gi], "flush deferred overlap unresolved route publish")
+										if routeErr != nil {
+											putValueLogPtrs(routePtrs)
+											putValueLogEligible(unresolved)
+											putValueLogPtrs(ptrs)
+											return routeErr
+										}
+										if err := emitPointer(ptrKeys[anchorPos], routePtr); err != nil {
+											putValueLogPtrs(routePtrs)
+											putValueLogEligible(unresolved)
+											putValueLogPtrs(ptrs)
+											return err
+										}
+										for groupPos := routeGroup.start + 1; groupPos < routeGroup.end; groupPos++ {
+											srcPos := unresolved[groupPos]
+											if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+												if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+													putValueLogPtrs(routePtrs)
+													putValueLogEligible(unresolved)
+													putValueLogPtrs(ptrs)
+													return err
+												}
 											}
 										}
 									}
+									putValueLogPtrs(routePtrs)
 								}
 							} else {
 								for _, srcPos := range unresolved {
@@ -6549,6 +6636,11 @@ type DB struct {
 	walAckMu      sync.Mutex
 	walErr        error
 	nextRID       atomic.Uint64
+	// RID bootstrap telemetry (captured once at open).
+	ridBootstrapMaxRID           uint64
+	ridBootstrapInitialNextRID   uint64
+	ridBootstrapSegmentsScanned  uint64
+	ridBootstrapRecordsScanned   uint64
 
 	// Legacy flags removed from public options; retained internally for code paths.
 	disableValueLog          bool
@@ -7747,6 +7839,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			maxWALSeq[seg.lane] = seg.seq
 		}
 	}
+	ridBootstrapMaxRID, ridBootstrapSegmentsScanned, ridBootstrapRecordsScanned, err := bootstrapNextRIDFromValueLogSegments(segments)
+	if err != nil {
+		return nil, err
+	}
+	if ridBootstrapMaxRID == ^uint64(0) {
+		return nil, fmt.Errorf("cachingdb: value-log rid space exhausted")
+	}
+	ridBootstrapInitialNextRID := ridBootstrapMaxRID + 1
+	if ridBootstrapRecordsScanned > 0 && ridBootstrapMaxRID == 0 {
+		return nil, fmt.Errorf("cachingdb: invalid rid bootstrap state: records_scanned=%d max_rid=%d", ridBootstrapRecordsScanned, ridBootstrapMaxRID)
+	}
 	laneCount := opts.JournalLanes
 	if laneCount <= 0 {
 		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
@@ -8181,6 +8284,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if len(retained) > 0 {
 		db.valueLogRetainDirty.Store(true)
 	}
+	db.nextRID.Store(ridBootstrapMaxRID)
+	db.ridBootstrapMaxRID = ridBootstrapMaxRID
+	db.ridBootstrapInitialNextRID = ridBootstrapInitialNextRID
+	db.ridBootstrapSegmentsScanned = ridBootstrapSegmentsScanned
+	db.ridBootstrapRecordsScanned = ridBootstrapRecordsScanned
+	visibilityDebugf(
+		"rid-bootstrap max=%d next=%d segments=%d records=%d",
+		db.ridBootstrapMaxRID,
+		db.ridBootstrapInitialNextRID,
+		db.ridBootstrapSegmentsScanned,
+		db.ridBootstrapRecordsScanned,
+	)
 	if db.indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
 		// Route mode must regroup key/value mutations into directory-backed
 		// outer-leaf blocks at flush time. Per-key pointer memtable rows can
@@ -17053,6 +17168,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
+	stats["treedb.cache.vlog_rid.bootstrap.max"] = fmt.Sprintf("%d", db.ridBootstrapMaxRID)
+	stats["treedb.cache.vlog_rid.bootstrap.next"] = fmt.Sprintf("%d", db.ridBootstrapInitialNextRID)
+	stats["treedb.cache.vlog_rid.bootstrap.segments_scanned"] = fmt.Sprintf("%d", db.ridBootstrapSegmentsScanned)
+	stats["treedb.cache.vlog_rid.bootstrap.records_scanned"] = fmt.Sprintf("%d", db.ridBootstrapRecordsScanned)
 	stats["treedb.cache.memtable_mode"] = memtableMode.String()
 	if memtableAdaptive {
 		stats["treedb.cache.memtable_mode_config"] = "adaptive"
@@ -20057,6 +20176,62 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 		}
 	}
 	return segments, nonEmptyBytes
+}
+
+func bootstrapNextRIDFromValueLogSegments(segments []logSegmentInfo) (maxRID uint64, scannedSegments uint64, scannedRecords uint64, err error) {
+	if len(segments) == 0 {
+		return 0, 0, 0, nil
+	}
+	valueSegments := make([]logSegmentInfo, 0, len(segments))
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 {
+			continue
+		}
+		valueSegments = append(valueSegments, seg)
+	}
+	if len(valueSegments) == 0 {
+		return 0, 0, 0, nil
+	}
+	// Deterministic ordering for repeatable startup diagnostics.
+	sort.Slice(valueSegments, func(i, j int) bool {
+		if valueSegments[i].lane != valueSegments[j].lane {
+			return valueSegments[i].lane < valueSegments[j].lane
+		}
+		if valueSegments[i].seq != valueSegments[j].seq {
+			return valueSegments[i].seq < valueSegments[j].seq
+		}
+		return valueSegments[i].path < valueSegments[j].path
+	})
+	for _, seg := range valueSegments {
+		if seg.seq < 0 || uint64(seg.seq) > uint64(^uint32(0)) {
+			return 0, scannedSegments, scannedRecords, fmt.Errorf("cachingdb: invalid value-log sequence for rid bootstrap: lane=%d seq=%d path=%q", seg.lane, seg.seq, filepath.Base(seg.path))
+		}
+		reader, openErr := valuelog.NewReader(seg.path, uint32(seg.seq))
+		if openErr != nil {
+			return 0, scannedSegments, scannedRecords, fmt.Errorf("cachingdb: open value-log segment for rid bootstrap %q: %w", filepath.Base(seg.path), openErr)
+		}
+		reader.DisableValueDecode()
+		for {
+			rid, _, _, readErr := reader.ReadNext()
+			if readErr == nil {
+				scannedRecords++
+				if rid > maxRID {
+					maxRID = rid
+				}
+				continue
+			}
+			if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+				break
+			}
+			_ = reader.Close()
+			return 0, scannedSegments, scannedRecords, fmt.Errorf("cachingdb: scan value-log segment for rid bootstrap %q: %w", filepath.Base(seg.path), readErr)
+		}
+		if closeErr := reader.Close(); closeErr != nil {
+			return 0, scannedSegments, scannedRecords, fmt.Errorf("cachingdb: close value-log segment after rid bootstrap scan %q: %w", filepath.Base(seg.path), closeErr)
+		}
+		scannedSegments++
+	}
+	return maxRID, scannedSegments, scannedRecords, nil
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {
