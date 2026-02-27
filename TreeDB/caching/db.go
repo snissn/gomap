@@ -172,6 +172,91 @@ func routeKeyRequiresSingletonOuterLeaf(key []byte) bool {
 	return base[0] == 's'
 }
 
+type routePersistedGapScanner struct {
+	it    iterator.UnsafeIterator
+	cur   []byte
+	valid bool
+}
+
+func newRoutePersistedGapScanner(backend BackendDB, start []byte) (*routePersistedGapScanner, error) {
+	if backend == nil {
+		return nil, nil
+	}
+	type iteratorWithOptionsProvider interface {
+		IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
+	}
+	var (
+		it  iterator.UnsafeIterator
+		err error
+	)
+	if provider, ok := backend.(iteratorWithOptionsProvider); ok {
+		it, err = provider.IteratorWithOptions(start, nil, backenddb.IteratorOptions{
+			Mode:              backenddb.IteratorModePointerProjection,
+			IncludeTombstones: false,
+		})
+	} else {
+		it, err = backend.Iterator(start, nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	scanner := &routePersistedGapScanner{it: it}
+	if err := scanner.refresh(); err != nil {
+		scanner.close()
+		return nil, err
+	}
+	return scanner, nil
+}
+
+func (s *routePersistedGapScanner) refresh() error {
+	if s == nil || s.it == nil {
+		return nil
+	}
+	if !s.it.Valid() {
+		s.valid = false
+		return s.it.Error()
+	}
+	s.cur = append(s.cur[:0], s.it.UnsafeKey()...)
+	s.valid = true
+	return nil
+}
+
+func (s *routePersistedGapScanner) advance() error {
+	if s == nil || s.it == nil {
+		return nil
+	}
+	s.it.Next()
+	return s.refresh()
+}
+
+func (s *routePersistedGapScanner) hasPersistedBetween(lower, upper []byte) (bool, error) {
+	if s == nil || s.it == nil {
+		return false, nil
+	}
+	if len(lower) == 0 || len(upper) == 0 || bytes.Compare(lower, upper) >= 0 {
+		return false, nil
+	}
+	for s.valid && bytes.Compare(s.cur, lower) <= 0 {
+		if err := s.advance(); err != nil {
+			return false, err
+		}
+	}
+	if !s.valid {
+		return false, nil
+	}
+	return bytes.Compare(s.cur, upper) < 0, nil
+}
+
+func (s *routePersistedGapScanner) close() {
+	if s == nil || s.it == nil {
+		return
+	}
+	_ = s.it.Close()
+	s.it = nil
+	s.valid = false
+	s.cur = nil
+}
+
 type vlogPreparedFrameBody struct {
 	buf []byte
 }
@@ -922,6 +1007,9 @@ func (db *DB) validateV1LeafLogDirectoryInvariants() error {
 			if bytes.Compare(prev.anchor, k) >= 0 {
 				return fmt.Errorf("cachingdb: v1_leaflog invariant violation: non-increasing anchor order prev=%q curr=%q", prev.anchor, k)
 			}
+			if routeMode && bytes.Compare(prev.max, k) >= 0 {
+				return fmt.Errorf("cachingdb: v1_leaflog invariant violation: route anchor range overlap prev_max=%q curr_anchor=%q", prev.max, k)
+			}
 		}
 		next := rng
 		prev = &next
@@ -1602,6 +1690,13 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 	estimated := 0
 	groupStart := 0
 	var prevKey []byte
+	gapScanner, err := newRoutePersistedGapScanner(db.backend, keys[0])
+	if err != nil {
+		return nil, nil, err
+	}
+	if gapScanner != nil {
+		defer gapScanner.close()
+	}
 
 	flushRouteGroup := func() error {
 		if len(entries) == 0 {
@@ -1670,7 +1765,15 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 		}
 
 		if len(entries) > 0 {
-			if forceSingleton || bytes.Compare(prevKey, key) >= 0 {
+			hasPersistedGap := false
+			if gapScanner != nil {
+				gap, gapErr := gapScanner.hasPersistedBetween(prevKey, key)
+				if gapErr != nil {
+					return nil, nil, gapErr
+				}
+				hasPersistedGap = gap
+			}
+			if forceSingleton || hasPersistedGap || bytes.Compare(prevKey, key) >= 0 {
 				// Preserve correctness for non-monotonic batches by cutting blocks.
 				if err := flushRouteGroup(); err != nil {
 					return nil, nil, err
