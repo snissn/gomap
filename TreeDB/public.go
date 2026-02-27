@@ -1,7 +1,6 @@
 package treedb
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -111,123 +110,6 @@ type maintenanceCoordinator struct {
 
 	lastGCAt     atomic.Int64
 	lastVacuumAt atomic.Int64
-}
-
-type reverseBoundFilterIterator struct {
-	start []byte
-	end   []byte
-	src   Iterator
-	valid bool
-}
-
-func newReverseBoundFilterIterator(start, end []byte, src Iterator) *reverseBoundFilterIterator {
-	it := &reverseBoundFilterIterator{
-		start: start,
-		end:   end,
-		src:   src,
-	}
-	it.seek()
-	return it
-}
-
-func (it *reverseBoundFilterIterator) Valid() bool {
-	return it != nil && it.src != nil && it.valid && it.src.Valid()
-}
-
-func (it *reverseBoundFilterIterator) Next() {
-	if !it.Valid() {
-		panic("iterator is invalid")
-	}
-	it.src.Next()
-	it.seek()
-}
-
-func (it *reverseBoundFilterIterator) Key() []byte {
-	if !it.Valid() {
-		panic("iterator is invalid")
-	}
-	return it.src.Key()
-}
-
-func (it *reverseBoundFilterIterator) Value() []byte {
-	if !it.Valid() {
-		panic("iterator is invalid")
-	}
-	return it.src.Value()
-}
-
-func (it *reverseBoundFilterIterator) KeyCopy(dst []byte) []byte {
-	if !it.Valid() {
-		panic("iterator is invalid")
-	}
-	return it.src.KeyCopy(dst)
-}
-
-func (it *reverseBoundFilterIterator) ValueCopy(dst []byte) []byte {
-	if !it.Valid() {
-		panic("iterator is invalid")
-	}
-	return it.src.ValueCopy(dst)
-}
-
-func (it *reverseBoundFilterIterator) Close() error {
-	if it == nil || it.src == nil {
-		return nil
-	}
-	return it.src.Close()
-}
-
-func (it *reverseBoundFilterIterator) Error() error {
-	if it == nil || it.src == nil {
-		return nil
-	}
-	return it.src.Error()
-}
-
-func (it *reverseBoundFilterIterator) seek() {
-	it.valid = false
-	if it == nil || it.src == nil {
-		return
-	}
-	for it.src.Valid() {
-		key := it.src.Key()
-		if it.end != nil && bytes.Compare(key, it.end) >= 0 {
-			it.src.Next()
-			continue
-		}
-		if it.start != nil && bytes.Compare(key, it.start) < 0 {
-			it.src.Next()
-			continue
-		}
-		it.valid = true
-		return
-	}
-}
-
-func maybeRecoverBoundedReverseIterator(start, end []byte, primary Iterator, openReverse func(start, end []byte) (Iterator, error)) (Iterator, error) {
-	if primary == nil || openReverse == nil {
-		return primary, nil
-	}
-	// Recovery is only needed for bounded domains. Unbounded reverse iteration
-	// should preserve backend behavior directly.
-	if start == nil || end == nil {
-		return primary, nil
-	}
-	if primary.Valid() || primary.Error() != nil {
-		return primary, nil
-	}
-
-	fallbackSrc, err := openReverse(nil, end)
-	if err != nil {
-		return primary, nil
-	}
-	fallback := newReverseBoundFilterIterator(start, end, fallbackSrc)
-	if fallback.Valid() || fallback.Error() != nil {
-		_ = primary.Close()
-		return fallback, nil
-	}
-	_ = fallback.Close()
-	return primary, nil
 }
 
 const (
@@ -1303,21 +1185,10 @@ func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
 	}
-	var openReverse func(start, end []byte) (Iterator, error)
 	if db.cached != nil {
-		openReverse = func(start, end []byte) (Iterator, error) {
-			return db.cached.ReverseIterator(start, end)
-		}
-	} else {
-		openReverse = func(start, end []byte) (Iterator, error) {
-			return db.backend.ReverseIterator(start, end)
-		}
+		return db.cached.ReverseIterator(start, end)
 	}
-	primary, err := openReverse(start, end)
-	if err != nil {
-		return nil, err
-	}
-	return maybeRecoverBoundedReverseIterator(start, end, primary, openReverse)
+	return db.backend.ReverseIterator(start, end)
 }
 
 // NewBatch creates a new batch for buffered writes.
