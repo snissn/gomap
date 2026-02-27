@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +38,8 @@ const (
 	defaultV2FenceStopBacklogSeconds           = 1.0
 	defaultAdaptiveMaxBacklogBytes       int64 = 2 << 30
 )
+
+var openBannerOnce sync.Once
 
 // Iterator is the public iterator contract returned by TreeDB.
 //
@@ -107,6 +111,123 @@ type maintenanceCoordinator struct {
 
 	lastGCAt     atomic.Int64
 	lastVacuumAt atomic.Int64
+}
+
+type reverseBoundFilterIterator struct {
+	start []byte
+	end   []byte
+	src   Iterator
+	valid bool
+}
+
+func newReverseBoundFilterIterator(start, end []byte, src Iterator) *reverseBoundFilterIterator {
+	it := &reverseBoundFilterIterator{
+		start: start,
+		end:   end,
+		src:   src,
+	}
+	it.seek()
+	return it
+}
+
+func (it *reverseBoundFilterIterator) Valid() bool {
+	return it != nil && it.src != nil && it.valid && it.src.Valid()
+}
+
+func (it *reverseBoundFilterIterator) Next() {
+	if !it.Valid() {
+		panic("iterator is invalid")
+	}
+	it.src.Next()
+	it.seek()
+}
+
+func (it *reverseBoundFilterIterator) Key() []byte {
+	if !it.Valid() {
+		panic("iterator is invalid")
+	}
+	return it.src.Key()
+}
+
+func (it *reverseBoundFilterIterator) Value() []byte {
+	if !it.Valid() {
+		panic("iterator is invalid")
+	}
+	return it.src.Value()
+}
+
+func (it *reverseBoundFilterIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		panic("iterator is invalid")
+	}
+	return it.src.KeyCopy(dst)
+}
+
+func (it *reverseBoundFilterIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		panic("iterator is invalid")
+	}
+	return it.src.ValueCopy(dst)
+}
+
+func (it *reverseBoundFilterIterator) Close() error {
+	if it == nil || it.src == nil {
+		return nil
+	}
+	return it.src.Close()
+}
+
+func (it *reverseBoundFilterIterator) Error() error {
+	if it == nil || it.src == nil {
+		return nil
+	}
+	return it.src.Error()
+}
+
+func (it *reverseBoundFilterIterator) seek() {
+	it.valid = false
+	if it == nil || it.src == nil {
+		return
+	}
+	for it.src.Valid() {
+		key := it.src.Key()
+		if it.end != nil && bytes.Compare(key, it.end) >= 0 {
+			it.src.Next()
+			continue
+		}
+		if it.start != nil && bytes.Compare(key, it.start) < 0 {
+			it.src.Next()
+			continue
+		}
+		it.valid = true
+		return
+	}
+}
+
+func maybeRecoverBoundedReverseIterator(start, end []byte, primary Iterator, openReverse func(start, end []byte) (Iterator, error)) (Iterator, error) {
+	if primary == nil || openReverse == nil {
+		return primary, nil
+	}
+	// Recovery is only needed for bounded domains. Unbounded reverse iteration
+	// should preserve backend behavior directly.
+	if start == nil || end == nil {
+		return primary, nil
+	}
+	if primary.Valid() || primary.Error() != nil {
+		return primary, nil
+	}
+
+	fallbackSrc, err := openReverse(nil, end)
+	if err != nil {
+		return primary, nil
+	}
+	fallback := newReverseBoundFilterIterator(start, end, fallbackSrc)
+	if fallback.Valid() || fallback.Error() != nil {
+		_ = primary.Close()
+		return fallback, nil
+	}
+	_ = fallback.Close()
+	return primary, nil
 }
 
 const (
@@ -307,6 +428,105 @@ func normalizePublicOuterLeafMode(mode string) string {
 	}
 }
 
+func valueLogCompressionLabel(mode db.ValueLogCompressionMode) string {
+	switch mode {
+	case db.ValueLogCompressionOff:
+		return "off"
+	case db.ValueLogCompressionBlock:
+		return "block"
+	case db.ValueLogCompressionDict:
+		return "dict"
+	case db.ValueLogCompressionAuto:
+		return "auto"
+	default:
+		return fmt.Sprintf("mode_%d", mode)
+	}
+}
+
+func valueLogBlockCodecLabel(codec db.ValueLogBlockCodec) string {
+	switch codec {
+	case db.ValueLogBlockSnappy:
+		return "snappy"
+	case db.ValueLogBlockLZ4:
+		return "lz4"
+	default:
+		return fmt.Sprintf("codec_%d", codec)
+	}
+}
+
+func moduleBuildIdentity(path string) string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info == nil {
+		return "buildinfo=unavailable"
+	}
+	var selected *debug.Module
+	if info.Main.Path == path {
+		selected = &info.Main
+	}
+	if selected == nil {
+		for i := range info.Deps {
+			if info.Deps[i] != nil && info.Deps[i].Path == path {
+				selected = info.Deps[i]
+				break
+			}
+		}
+	}
+	moduleStr := fmt.Sprintf("%s@unknown", path)
+	if selected != nil {
+		version := selected.Version
+		if version == "" {
+			version = "(devel)"
+		}
+		moduleStr = fmt.Sprintf("%s@%s", selected.Path, version)
+		if selected.Replace != nil {
+			repVer := selected.Replace.Version
+			if repVer != "" {
+				moduleStr += fmt.Sprintf(" replace=%s@%s", selected.Replace.Path, repVer)
+			} else {
+				moduleStr += fmt.Sprintf(" replace=%s", selected.Replace.Path)
+			}
+		}
+	}
+	var vcsRev, vcsTime string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			vcsRev = s.Value
+		case "vcs.time":
+			vcsTime = s.Value
+		}
+	}
+	if vcsRev != "" {
+		moduleStr += fmt.Sprintf(" vcs.revision=%s", vcsRev)
+	}
+	if vcsTime != "" {
+		moduleStr += fmt.Sprintf(" vcs.time=%s", vcsTime)
+	}
+	return moduleStr
+}
+
+func emitOpenBanner(opts Options, normalizedMode string) {
+	openBannerOnce.Do(func() {
+		msg := fmt.Sprintf(
+			"treedb open banner mode=%s durability=%s force_pointers=%t pointer_threshold=%d vlog_compression=%s vlog_block_codec=%s outer_leaf_block_codec=%s keep_recent=%d module=%s",
+			normalizedMode,
+			computeDurabilityMode(opts),
+			opts.ValueLog.ForcePointers,
+			opts.ValueLog.PointerThreshold,
+			valueLogCompressionLabel(opts.ValueLog.Compression),
+			valueLogBlockCodecLabel(opts.ValueLog.BlockCodec),
+			valueLogBlockCodecLabel(opts.ValueLog.OuterLeafBlockCodec),
+			opts.KeepRecent,
+			moduleBuildIdentity("github.com/snissn/gomap"),
+		)
+		if opts.NotifyError != nil {
+			opts.NotifyError(errors.New(msg))
+			return
+		}
+		fmt.Fprintln(os.Stderr, msg)
+	})
+}
+
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
 	opts.IndexOuterLeafMode = normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
@@ -334,6 +554,7 @@ func Open(opts Options) (*DB, error) {
 	if opts.ValueLog.Compression == 0 {
 		opts.ValueLog.Compression = db.ValueLogCompressionAuto
 	}
+	emitOpenBanner(opts, opts.IndexOuterLeafMode)
 
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {
@@ -1082,10 +1303,21 @@ func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
 	if err := db.ensureOpen(); err != nil {
 		return nil, err
 	}
+	var openReverse func(start, end []byte) (Iterator, error)
 	if db.cached != nil {
-		return db.cached.ReverseIterator(start, end)
+		openReverse = func(start, end []byte) (Iterator, error) {
+			return db.cached.ReverseIterator(start, end)
+		}
+	} else {
+		openReverse = func(start, end []byte) (Iterator, error) {
+			return db.backend.ReverseIterator(start, end)
+		}
 	}
-	return db.backend.ReverseIterator(start, end)
+	primary, err := openReverse(start, end)
+	if err != nil {
+		return nil, err
+	}
+	return maybeRecoverBoundedReverseIterator(start, end, primary, openReverse)
 }
 
 // NewBatch creates a new batch for buffered writes.
