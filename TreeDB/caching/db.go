@@ -1134,6 +1134,49 @@ func (db *DB) normalizeRouteAnchorPointer(ptr page.ValuePtr, context string) (pa
 	return ptr, nil
 }
 
+func (db *DB) validateRouteAnchorPointers(context string) error {
+	if db == nil || !db.outerLeafRouteModeEnabled() {
+		return nil
+	}
+	type pointerProjectionIter interface {
+		IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
+	}
+	provider, ok := db.backend.(pointerProjectionIter)
+	if !ok {
+		return nil
+	}
+	it, err := provider.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	if err != nil {
+		return err
+	}
+	if it == nil {
+		return nil
+	}
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		key := it.UnsafeKey()
+		_, ptr, flags := it.UnsafeEntry()
+		it.Next()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			continue
+		}
+		inspectCtx := context
+		if len(key) > 0 {
+			inspectCtx = fmt.Sprintf("%s key=%q", context, key)
+		}
+		if _, routeErr := db.normalizeRouteAnchorPointer(ptr, inspectCtx); routeErr != nil {
+			return routeErr
+		}
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return nil
+}
+
 func normalizeValueLogWALFenceMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "", string(backenddb.ValueLogWALFenceModeRIDJoin):
@@ -3018,8 +3061,25 @@ func (p *fenceAnchorPromoter) lookupFenceSourceForMutation(key []byte) ([]byte, 
 		return nil, page.ValuePtr{}, false, err
 	}
 	if found && len(sourceKey) > 0 {
+		if p.v1LeafLogRouteMode() {
+			var routeErr error
+			sourcePtr, routeErr = p.db.normalizeRouteAnchorPointer(sourcePtr, "route source lookup")
+			if routeErr != nil {
+				return nil, page.ValuePtr{}, false, routeErr
+			}
+		}
 		sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, page.ValuePtrClearFenceOuter(sourcePtr))
 		return sourceKey, sourcePtr, true, nil
+	}
+	if p.v1LeafLogRouteMode() {
+		sourceKey, sourcePtr, found, err = p.lookupPredecessorFenceAnchor(key)
+		if err != nil {
+			return nil, page.ValuePtr{}, false, err
+		}
+		if found && len(sourceKey) > 0 {
+			sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, sourcePtr)
+			return sourceKey, sourcePtr, true, nil
+		}
 	}
 	// In strict route mode, exact persisted pointer rows are themselves anchor
 	// directory entries. Use the exact pointer row as rewrite source so updates
@@ -12615,11 +12675,15 @@ func (db *DB) Checkpoint() error {
 		db.writeMu.Unlock()
 		db.recordCheckpointCutover(time.Since(cutoverStart))
 	}
+	if err := db.validateRouteAnchorPointers("checkpoint preflight"); err != nil {
+		releaseWriteMu()
+		return err
+	}
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
 	db.mu.Lock()
-	if db.mutableBytes.Load() > 0 {
+	if db.mutableHasEntriesLocked() {
 		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
 			db.mu.Unlock()
 			releaseWriteMu()
@@ -13075,7 +13139,7 @@ func (db *DB) Close() error {
 	db.flushMu.Lock()
 	db.writeMu.Lock()
 	db.mu.Lock()
-	if db.mutableBytes.Load() > 0 {
+	if db.mutableHasEntriesLocked() {
 		hadMemtables = true
 		_ = db.rotateMemtableLocked(true)
 	} else if len(db.queue) > 0 {
@@ -13244,7 +13308,7 @@ func (db *DB) flushAllMemtablesForSync(sync bool) error {
 	db.writeMu.Lock()
 
 	db.mu.Lock()
-	if db.mutableBytes.Load() > 0 {
+	if db.mutableHasEntriesLocked() {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
 			db.writeMu.Unlock()
@@ -17480,7 +17544,7 @@ func (db *DB) Print() error {
 func (db *DB) Drain() error {
 	db.writeMu.Lock()
 	db.mu.Lock()
-	if db.mutableBytes.Load() > 0 {
+	if db.mutableHasEntriesLocked() {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
 			db.writeMu.Unlock()

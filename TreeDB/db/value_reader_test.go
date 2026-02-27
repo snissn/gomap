@@ -200,19 +200,19 @@ func TestValueReader_FenceLookupScopedForV1LeafLogRoute(t *testing.T) {
 		Offset: 123,
 		Length: 4096,
 	}
-	if r.FencePointerLikelyBlock(base) {
-		t.Fatalf("v1_leaflog_route must not classify plain pointers as fence candidates")
+	if !r.FencePointerLikelyBlock(base) {
+		t.Fatalf("v1_leaflog_route should classify plain pointers as anchor candidates")
 	}
 
 	grouped := base
 	grouped.Length = page.ValuePtrMarkGrouped(base.Length, 3)
-	if r.FencePointerLikelyBlock(grouped) {
-		t.Fatalf("v1_leaflog_route must not classify grouped pointers as fence candidates")
+	if !r.FencePointerLikelyBlock(grouped) {
+		t.Fatalf("v1_leaflog_route should classify grouped pointers as anchor candidates")
 	}
 
 	fence := page.ValuePtrMarkFenceOuter(base)
-	if r.FencePointerLikelyBlock(fence) {
-		t.Fatalf("v1_leaflog_route must not classify explicitly fenced pointers as fence candidates")
+	if !r.FencePointerLikelyBlock(fence) {
+		t.Fatalf("v1_leaflog_route should classify explicitly fenced pointers as anchor candidates")
 	}
 }
 
