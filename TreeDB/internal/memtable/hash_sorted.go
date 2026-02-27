@@ -547,12 +547,87 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 
 	it := hashIteratorPool.Get().(*hashIterator)
 	*it = hashIterator{
-		mt:     m,
-		keys:   keys,
-		idx:    idx,
-		end:    endKey,
-		hasEnd: hasEnd,
-		mu:     &m.mu,
+		mt:       m,
+		keys:     keys,
+		idx:      idx,
+		end:      endKey,
+		hasEnd:   hasEnd,
+		reverse:  false,
+		hasStart: false,
+		mu:       &m.mu,
+	}
+	it.refresh()
+	return it
+}
+
+func (m *HashSorted) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	m.mu.RLock()
+	frozen := m.frozen
+	finalizeDone := m.finalizeDone
+	sortedValid := m.sortedValid
+	m.mu.RUnlock()
+
+	if frozen {
+		if finalizeDone != nil {
+			<-finalizeDone
+		}
+		m.ensureIndexFrozen()
+		m.mu.RLock()
+		keys := m.sortedKeys
+		it := hashIteratorPool.Get().(*hashIterator)
+		*it = hashIterator{
+			mt:       m,
+			keys:     keys,
+			start:    bytesToStringNoCopy(start),
+			hasStart: start != nil,
+			end:      bytesToStringNoCopy(end),
+			hasEnd:   end != nil,
+			reverse:  true,
+			mu:       &m.mu,
+		}
+		if end != nil {
+			it.idx = sort.SearchStrings(keys, bytesToStringNoCopy(end)) - 1
+		} else {
+			it.idx = len(keys) - 1
+		}
+		it.refresh()
+		return it
+	}
+
+	if !sortedValid {
+		m.mu.Lock()
+		m.ensureSortedLocked()
+		m.mu.Unlock()
+	}
+
+	startKey := ""
+	if start != nil {
+		startKey = bytesToStringNoCopy(start)
+	}
+	endKey := ""
+	hasEnd := false
+	if end != nil {
+		endKey = bytesToStringNoCopy(end)
+		hasEnd = true
+	}
+
+	m.mu.RLock()
+	keys := m.sortedKeys
+	idx := len(keys) - 1
+	if hasEnd {
+		idx = sort.SearchStrings(keys, endKey) - 1
+	}
+	it := hashIteratorPool.Get().(*hashIterator)
+	*it = hashIterator{
+		mt:       m,
+		keys:     keys,
+		idx:      idx,
+		start:    startKey,
+		hasStart: startKey != "",
+		end:      endKey,
+		hasEnd:   hasEnd,
+		reverse:  true,
+		mu:       &m.mu,
 	}
 	it.refresh()
 	return it
@@ -1087,16 +1162,19 @@ func mergeSortedStringRunsInto(dst []string, runs [][]string, total int) []strin
 }
 
 type hashIterator struct {
-	mt     *HashSorted
-	keys   []string
-	idx    int
-	end    string
-	hasEnd bool
-	curKey string
-	cur    hashEntry
-	loaded bool
-	valid  bool
-	mu     *sync.RWMutex
+	mt       *HashSorted
+	keys     []string
+	idx      int
+	start    string
+	hasStart bool
+	end      string
+	hasEnd   bool
+	reverse  bool
+	curKey   string
+	cur      hashEntry
+	loaded   bool
+	valid    bool
+	mu       *sync.RWMutex
 }
 
 var hashIteratorPool = sync.Pool{
@@ -1112,12 +1190,20 @@ func (it *hashIterator) Seek(key []byte) {
 		return
 	}
 	seekKey := bytesToStringNoCopy(key)
-	it.idx = sort.SearchStrings(it.keys, seekKey)
+	if it.reverse {
+		it.idx = sort.SearchStrings(it.keys, seekKey) - 1
+	} else {
+		it.idx = sort.SearchStrings(it.keys, seekKey)
+	}
 	it.refresh()
 }
 
 func (it *hashIterator) Next() {
-	it.idx++
+	if it.reverse {
+		it.idx--
+	} else {
+		it.idx++
+	}
 	it.refresh()
 }
 
@@ -1214,10 +1300,18 @@ func (it *hashIterator) Close() error {
 }
 
 func (it *hashIterator) Domain() (start, end []byte) {
-	if !it.hasEnd {
+	if !it.hasStart && !it.hasEnd {
 		return nil, nil
 	}
-	return nil, []byte(it.end)
+	var startCopy []byte
+	if it.hasStart {
+		startCopy = []byte(it.start)
+	}
+	var endCopy []byte
+	if it.hasEnd {
+		endCopy = []byte(it.end)
+	}
+	return startCopy, endCopy
 }
 
 func (it *hashIterator) refresh() {
@@ -1227,10 +1321,14 @@ func (it *hashIterator) refresh() {
 	if it.idx < 0 || it.idx >= len(it.keys) {
 		return
 	}
-	if it.hasEnd && strings.Compare(it.keys[it.idx], it.end) >= 0 {
+	key := it.keys[it.idx]
+	if it.hasEnd && strings.Compare(key, it.end) >= 0 {
 		return
 	}
-	it.curKey = it.keys[it.idx]
+	if it.hasStart && strings.Compare(key, it.start) < 0 {
+		return
+	}
+	it.curKey = key
 	it.valid = true
 }
 

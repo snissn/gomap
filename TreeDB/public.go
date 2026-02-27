@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,8 @@ const (
 	defaultV2FenceStopBacklogSeconds           = 1.0
 	defaultAdaptiveMaxBacklogBytes       int64 = 2 << 30
 )
+
+var openBannerOnce sync.Once
 
 // Iterator is the public iterator contract returned by TreeDB.
 //
@@ -307,6 +310,105 @@ func normalizePublicOuterLeafMode(mode string) string {
 	}
 }
 
+func valueLogCompressionLabel(mode db.ValueLogCompressionMode) string {
+	switch mode {
+	case db.ValueLogCompressionOff:
+		return "off"
+	case db.ValueLogCompressionBlock:
+		return "block"
+	case db.ValueLogCompressionDict:
+		return "dict"
+	case db.ValueLogCompressionAuto:
+		return "auto"
+	default:
+		return fmt.Sprintf("mode_%d", mode)
+	}
+}
+
+func valueLogBlockCodecLabel(codec db.ValueLogBlockCodec) string {
+	switch codec {
+	case db.ValueLogBlockSnappy:
+		return "snappy"
+	case db.ValueLogBlockLZ4:
+		return "lz4"
+	default:
+		return fmt.Sprintf("codec_%d", codec)
+	}
+}
+
+func moduleBuildIdentity(path string) string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info == nil {
+		return "buildinfo=unavailable"
+	}
+	var selected *debug.Module
+	if info.Main.Path == path {
+		selected = &info.Main
+	}
+	if selected == nil {
+		for i := range info.Deps {
+			if info.Deps[i] != nil && info.Deps[i].Path == path {
+				selected = info.Deps[i]
+				break
+			}
+		}
+	}
+	moduleStr := fmt.Sprintf("%s@unknown", path)
+	if selected != nil {
+		version := selected.Version
+		if version == "" {
+			version = "(devel)"
+		}
+		moduleStr = fmt.Sprintf("%s@%s", selected.Path, version)
+		if selected.Replace != nil {
+			repVer := selected.Replace.Version
+			if repVer != "" {
+				moduleStr += fmt.Sprintf(" replace=%s@%s", selected.Replace.Path, repVer)
+			} else {
+				moduleStr += fmt.Sprintf(" replace=%s", selected.Replace.Path)
+			}
+		}
+	}
+	var vcsRev, vcsTime string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			vcsRev = s.Value
+		case "vcs.time":
+			vcsTime = s.Value
+		}
+	}
+	if vcsRev != "" {
+		moduleStr += fmt.Sprintf(" vcs.revision=%s", vcsRev)
+	}
+	if vcsTime != "" {
+		moduleStr += fmt.Sprintf(" vcs.time=%s", vcsTime)
+	}
+	return moduleStr
+}
+
+func emitOpenBanner(opts Options, normalizedMode string) {
+	openBannerOnce.Do(func() {
+		msg := fmt.Sprintf(
+			"treedb open banner mode=%s durability=%s force_pointers=%t pointer_threshold=%d vlog_compression=%s vlog_block_codec=%s outer_leaf_block_codec=%s keep_recent=%d module=%s",
+			normalizedMode,
+			computeDurabilityMode(opts),
+			opts.ValueLog.ForcePointers,
+			opts.ValueLog.PointerThreshold,
+			valueLogCompressionLabel(opts.ValueLog.Compression),
+			valueLogBlockCodecLabel(opts.ValueLog.BlockCodec),
+			valueLogBlockCodecLabel(opts.ValueLog.OuterLeafBlockCodec),
+			opts.KeepRecent,
+			moduleBuildIdentity("github.com/snissn/gomap"),
+		)
+		if opts.NotifyError != nil {
+			opts.NotifyError(errors.New(msg))
+			return
+		}
+		fmt.Fprintln(os.Stderr, msg)
+	})
+}
+
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
 	opts.IndexOuterLeafMode = normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
@@ -334,6 +436,7 @@ func Open(opts Options) (*DB, error) {
 	if opts.ValueLog.Compression == 0 {
 		opts.ValueLog.Compression = db.ValueLogCompressionAuto
 	}
+	emitOpenBanner(opts, opts.IndexOuterLeafMode)
 
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {
@@ -1117,6 +1220,9 @@ type Snapshot = db.Snapshot
 func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil {
 		return nil
+	}
+	if db.cached != nil {
+		return db.cached.AcquireSnapshot()
 	}
 	return db.backend.AcquireSnapshot()
 }

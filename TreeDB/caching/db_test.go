@@ -402,6 +402,10 @@ func (b *MockBatch) GetByteSize() (int, error) { return 0, nil }
 
 func (m *MockBackend) Close() error { return nil }
 
+func (m *MockBackend) AcquireSnapshot() *db.Snapshot {
+	return nil
+}
+
 func TestCachingDB_WriteAndFlush(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()

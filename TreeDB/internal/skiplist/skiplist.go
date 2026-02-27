@@ -17,7 +17,8 @@ const (
 	nodeKeyLenOff  = 1
 	nodeValLenOff  = 3
 	nodeFlagsOff   = 7
-	nodeHeaderBase = 8 // Height + KeyLen + ValLen + Flags
+	nodePrevOff    = 8
+	nodeHeaderBase = 12 // Height + KeyLen + ValLen + Flags + Prev
 
 	flagPointer = node.FlagPointer
 	flagDeleted = node.FlagTombstone
@@ -298,6 +299,14 @@ func (s *SkipList) setNext(node uint32, level int, next uint32) {
 	binary.LittleEndian.PutUint32(s.bytesAt(offset, 4), next)
 }
 
+func (s *SkipList) getPrev(node uint32) uint32 {
+	return binary.LittleEndian.Uint32(s.bytesAt(node+nodePrevOff, 4))
+}
+
+func (s *SkipList) setPrev(node uint32, prev uint32) {
+	binary.LittleEndian.PutUint32(s.bytesAt(node+nodePrevOff, 4), prev)
+}
+
 // --- Standard SkipList Logic ---
 
 // Put inserts or updates a key.
@@ -341,6 +350,33 @@ func (s *SkipList) LastKey() []byte {
 		return nil
 	}
 	return s.getKey(last)
+}
+
+func (s *SkipList) findLessThan(key []byte) uint32 {
+	if key == nil {
+		last := s.tail[0]
+		if last == 0 || last == s.head {
+			return 0
+		}
+		return last
+	}
+	x := s.head
+	for i := maxHeight - 1; i >= 0; i-- {
+		for {
+			next := s.getNext(x, i)
+			if next == 0 {
+				break
+			}
+			if bytes.Compare(s.getKey(next), key) >= 0 {
+				break
+			}
+			x = next
+		}
+	}
+	if x == s.head {
+		return 0
+	}
+	return x
 }
 
 // AppendWithCallback inserts a new entry assuming the key is strictly greater
@@ -392,6 +428,16 @@ func (s *SkipList) insertNew(key, value []byte, flags uint8, cb func(k, v []byte
 		if err := cb(kView, vView); err != nil {
 			return err // Abort: New node allocated but not linked.
 		}
+	}
+
+	next0 := s.getNext(prev[0], 0)
+	prev0 := prev[0]
+	if prev0 == s.head {
+		prev0 = 0
+	}
+	s.setPrev(newNode, prev0)
+	if next0 != 0 {
+		s.setPrev(next0, newNode)
 	}
 
 	for i := 0; i < h; i++ {
@@ -465,6 +511,11 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 	if next != 0 && bytes.Equal(s.getKey(next), key) {
 		// Unlink logic:
 		oldHeight := int(s.valAt(next, nodeHeightOff))
+		next0 := s.getNext(next, 0)
+		pred0 := prev[0]
+		if pred0 == s.head {
+			pred0 = 0
+		}
 		for i := 0; i < oldHeight; i++ {
 			if s.getNext(prev[i], i) == next {
 				s.setNext(prev[i], i, s.getNext(next, i))
@@ -472,6 +523,9 @@ func (s *SkipList) put(key, value []byte, flags uint8, cb func(k, v []byte) erro
 			if s.tail[i] == next {
 				s.tail[i] = prev[i]
 			}
+		}
+		if next0 != 0 {
+			s.setPrev(next0, pred0)
 		}
 		// Now OldNode is gone.
 	}
@@ -570,9 +624,36 @@ type Iterator struct {
 	valid bool
 }
 
+type ReverseIterator struct {
+	sl    *SkipList
+	curr  uint32
+	valid bool
+	start []byte
+	end   []byte
+}
+
 func (s *SkipList) NewIterator(start, end []byte) *Iterator {
 	it := &Iterator{sl: s}
 	it.Seek(start)
+	return it
+}
+
+func (s *SkipList) NewReverseIterator(start, end []byte) *ReverseIterator {
+	it := &ReverseIterator{
+		sl:    s,
+		start: start,
+		end:   end,
+	}
+	seekKey := end
+	if seekKey == nil {
+		it.curr = s.findLessThan(nil)
+	} else {
+		it.curr = s.findLessThan(seekKey)
+	}
+	it.valid = it.curr != 0
+	if it.valid && start != nil && bytes.Compare(s.getKey(it.curr), start) < 0 {
+		it.valid = false
+	}
 	return it
 }
 
@@ -683,4 +764,118 @@ func (it *Iterator) Error() error {
 
 func (it *Iterator) Domain() (start, end []byte) {
 	return nil, nil
+}
+
+func (it *ReverseIterator) Seek(key []byte) {
+	if it == nil || it.sl == nil {
+		return
+	}
+	seekKey := key
+	if it.end != nil && (seekKey == nil || bytes.Compare(seekKey, it.end) > 0) {
+		seekKey = it.end
+	}
+	it.curr = it.sl.findLessThan(seekKey)
+	it.valid = it.curr != 0
+	if it.valid && it.start != nil && bytes.Compare(it.sl.getKey(it.curr), it.start) < 0 {
+		it.valid = false
+	}
+}
+
+func (it *ReverseIterator) Next() {
+	if !it.valid {
+		return
+	}
+	it.curr = it.sl.getPrev(it.curr)
+	it.valid = it.curr != 0
+	if it.valid && it.start != nil && bytes.Compare(it.sl.getKey(it.curr), it.start) < 0 {
+		it.valid = false
+	}
+}
+
+func (it *ReverseIterator) Valid() bool {
+	return it.valid
+}
+
+func (it *ReverseIterator) UnsafeKey() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.sl.getKey(it.curr)
+}
+
+func (it *ReverseIterator) UnsafeValue() []byte {
+	if !it.valid {
+		return nil
+	}
+	flags := it.sl.getFlags(it.curr)
+	if flags&flagPointer != 0 {
+		val := it.sl.getValue(it.curr)
+		if len(val) > page.ValuePtrSize {
+			return val[page.ValuePtrSize:]
+		}
+		return nil
+	}
+	return it.sl.getValue(it.curr)
+}
+
+func (it *ReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.valid {
+		return nil, page.ValuePtr{}, 0
+	}
+	val := it.sl.getValue(it.curr)
+	flags := it.sl.getFlags(it.curr)
+	if flags&flagPointer != 0 {
+		if len(val) >= page.ValuePtrSize {
+			inline := []byte(nil)
+			if len(val) > page.ValuePtrSize {
+				inline = val[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags
+		}
+		return nil, page.ValuePtr{}, flags
+	}
+	return val, page.ValuePtr{}, flags
+}
+
+func (it *ReverseIterator) IsDeleted() bool {
+	if !it.valid {
+		return false
+	}
+	return it.sl.getFlags(it.curr)&flagDeleted != 0
+}
+
+func (it *ReverseIterator) Close() error {
+	return nil
+}
+
+func (it *ReverseIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *ReverseIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *ReverseIterator) KeyCopy(dst []byte) []byte {
+	k := it.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *ReverseIterator) ValueCopy(dst []byte) []byte {
+	v := it.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
+func (it *ReverseIterator) Error() error {
+	return nil
+}
+
+func (it *ReverseIterator) Domain() (start, end []byte) {
+	return it.start, it.end
 }

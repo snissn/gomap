@@ -352,28 +352,85 @@ func (m *BTree) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	}
 
 	it := &btreeIterator{
-		iter:   iter,
-		end:    endKey,
-		hasEnd: hasEnd,
-		valid:  valid,
-		mu:     &m.mu,
+		iter:     iter,
+		end:      endKey,
+		hasEnd:   hasEnd,
+		reverse:  false,
+		hasStart: false,
+		valid:    valid,
+		mu:       &m.mu,
+	}
+	it.refresh()
+	return it
+}
+
+func (m *BTree) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	startKey := ""
+	if start != nil {
+		startKey = bytesToStringNoCopy(start)
+	}
+	endKey := ""
+	hasEnd := false
+	if end != nil {
+		endKey = bytesToStringNoCopy(end)
+		hasEnd = true
+	}
+
+	m.mu.RLock()
+	iter := m.tree.Iter()
+	valid := false
+	if hasEnd {
+		valid = iter.Seek(endKey)
+		if valid && strings.Compare(iter.Key(), endKey) >= 0 {
+			valid = iter.Prev()
+		}
+		if !valid {
+			valid = iter.Last()
+		}
+	} else {
+		valid = iter.Last()
+	}
+
+	it := &btreeIterator{
+		iter:     iter,
+		start:    startKey,
+		hasStart: start != nil,
+		end:      endKey,
+		hasEnd:   hasEnd,
+		reverse:  true,
+		valid:    valid,
+		mu:       &m.mu,
 	}
 	it.refresh()
 	return it
 }
 
 type btreeIterator struct {
-	iter   btree.MapIter[string, btreeEntry]
-	end    string
-	hasEnd bool
-	valid  bool
-	cur    btreeEntry
-	hasCur bool
-	mu     *sync.RWMutex
+	iter     btree.MapIter[string, btreeEntry]
+	start    string
+	hasStart bool
+	end      string
+	hasEnd   bool
+	reverse  bool
+	valid    bool
+	cur      btreeEntry
+	hasCur   bool
+	mu       *sync.RWMutex
 }
 
 func (it *btreeIterator) Seek(key []byte) {
-	it.valid = it.iter.Seek(bytesToStringNoCopy(key))
+	seekKey := bytesToStringNoCopy(key)
+	if it.reverse {
+		it.valid = it.iter.Seek(seekKey)
+		if it.valid && strings.Compare(it.iter.Key(), seekKey) >= 0 {
+			it.valid = it.iter.Prev()
+		}
+		if !it.valid {
+			it.valid = it.iter.Last()
+		}
+	} else {
+		it.valid = it.iter.Seek(seekKey)
+	}
 	it.refresh()
 }
 
@@ -381,7 +438,11 @@ func (it *btreeIterator) Next() {
 	if !it.valid {
 		return
 	}
-	it.valid = it.iter.Next()
+	if it.reverse {
+		it.valid = it.iter.Prev()
+	} else {
+		it.valid = it.iter.Next()
+	}
 	it.refresh()
 }
 
@@ -389,7 +450,11 @@ func (it *btreeIterator) Valid() bool {
 	if !it.valid || !it.hasCur {
 		return false
 	}
-	if it.hasEnd && strings.Compare(it.iter.Key(), it.end) >= 0 {
+	key := it.iter.Key()
+	if it.hasEnd && strings.Compare(key, it.end) >= 0 {
+		return false
+	}
+	if it.hasStart && strings.Compare(key, it.start) < 0 {
 		return false
 	}
 	return true
@@ -479,10 +544,18 @@ func (it *btreeIterator) Close() error {
 }
 
 func (it *btreeIterator) Domain() (start, end []byte) {
-	if !it.hasEnd {
+	if !it.hasStart && !it.hasEnd {
 		return nil, nil
 	}
-	return nil, []byte(it.end)
+	var startCopy []byte
+	if it.hasStart {
+		startCopy = []byte(it.start)
+	}
+	var endCopy []byte
+	if it.hasEnd {
+		endCopy = []byte(it.end)
+	}
+	return startCopy, endCopy
 }
 
 func (it *btreeIterator) refresh() {
@@ -490,7 +563,12 @@ func (it *btreeIterator) refresh() {
 	if !it.valid {
 		return
 	}
-	if it.hasEnd && strings.Compare(it.iter.Key(), it.end) >= 0 {
+	key := it.iter.Key()
+	if it.hasEnd && strings.Compare(key, it.end) >= 0 {
+		it.valid = false
+		return
+	}
+	if it.hasStart && strings.Compare(key, it.start) < 0 {
 		it.valid = false
 		return
 	}

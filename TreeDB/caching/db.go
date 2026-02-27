@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -169,6 +170,91 @@ func routeKeyRequiresSingletonOuterLeaf(key []byte) bool {
 	}
 	base := key[len(key)-13:]
 	return base[0] == 's'
+}
+
+type routePersistedGapScanner struct {
+	it    iterator.UnsafeIterator
+	cur   []byte
+	valid bool
+}
+
+func newRoutePersistedGapScanner(backend BackendDB, start []byte) (*routePersistedGapScanner, error) {
+	if backend == nil {
+		return nil, nil
+	}
+	type iteratorWithOptionsProvider interface {
+		IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
+	}
+	var (
+		it  iterator.UnsafeIterator
+		err error
+	)
+	if provider, ok := backend.(iteratorWithOptionsProvider); ok {
+		it, err = provider.IteratorWithOptions(start, nil, backenddb.IteratorOptions{
+			Mode:              backenddb.IteratorModePointerProjection,
+			IncludeTombstones: false,
+		})
+	} else {
+		it, err = backend.Iterator(start, nil)
+	}
+	if err != nil {
+		return nil, err
+	}
+	scanner := &routePersistedGapScanner{it: it}
+	if err := scanner.refresh(); err != nil {
+		scanner.close()
+		return nil, err
+	}
+	return scanner, nil
+}
+
+func (s *routePersistedGapScanner) refresh() error {
+	if s == nil || s.it == nil {
+		return nil
+	}
+	if !s.it.Valid() {
+		s.valid = false
+		return s.it.Error()
+	}
+	s.cur = append(s.cur[:0], s.it.UnsafeKey()...)
+	s.valid = true
+	return nil
+}
+
+func (s *routePersistedGapScanner) advance() error {
+	if s == nil || s.it == nil {
+		return nil
+	}
+	s.it.Next()
+	return s.refresh()
+}
+
+func (s *routePersistedGapScanner) hasPersistedBetween(lower, upper []byte) (bool, error) {
+	if s == nil || s.it == nil {
+		return false, nil
+	}
+	if len(lower) == 0 || len(upper) == 0 || bytes.Compare(lower, upper) >= 0 {
+		return false, nil
+	}
+	for s.valid && bytes.Compare(s.cur, lower) <= 0 {
+		if err := s.advance(); err != nil {
+			return false, err
+		}
+	}
+	if !s.valid {
+		return false, nil
+	}
+	return bytes.Compare(s.cur, upper) < 0, nil
+}
+
+func (s *routePersistedGapScanner) close() {
+	if s == nil || s.it == nil {
+		return
+	}
+	_ = s.it.Close()
+	s.it = nil
+	s.valid = false
+	s.cur = nil
 }
 
 type vlogPreparedFrameBody struct {
@@ -914,9 +1000,15 @@ func (db *DB) validateV1LeafLogDirectoryInvariants() error {
 		if bytes.Compare(k, rng.min) < 0 || bytes.Compare(k, rng.max) > 0 {
 			return fmt.Errorf("cachingdb: v1_leaflog invariant violation: anchor key outside decoded range key=%q range=[%q,%q] ptr=%+v", k, rng.min, rng.max, ptr)
 		}
+		if routeMode && !bytes.Equal(k, rng.min) {
+			return fmt.Errorf("cachingdb: v1_leaflog invariant violation: route mode anchor must equal payload-min key=%q min=%q ptr=%+v", k, rng.min, ptr)
+		}
 		if prev != nil {
 			if bytes.Compare(prev.anchor, k) >= 0 {
 				return fmt.Errorf("cachingdb: v1_leaflog invariant violation: non-increasing anchor order prev=%q curr=%q", prev.anchor, k)
+			}
+			if routeMode && bytes.Compare(prev.max, k) >= 0 {
+				return fmt.Errorf("cachingdb: v1_leaflog invariant violation: route anchor range overlap prev_max=%q curr_anchor=%q", prev.max, k)
 			}
 		}
 		next := rng
@@ -1132,6 +1224,49 @@ func (db *DB) normalizeRouteAnchorPointer(ptr page.ValuePtr, context string) (pa
 		return ptr, fmt.Errorf("cachingdb: v1_leaflog_route requires value-log anchor pointer (%s): ptr=%+v", context, ptr)
 	}
 	return ptr, nil
+}
+
+func (db *DB) validateRouteAnchorPointers(context string) error {
+	if db == nil || !db.outerLeafRouteModeEnabled() {
+		return nil
+	}
+	type pointerProjectionIter interface {
+		IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
+	}
+	provider, ok := db.backend.(pointerProjectionIter)
+	if !ok {
+		return nil
+	}
+	it, err := provider.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	if err != nil {
+		return err
+	}
+	if it == nil {
+		return nil
+	}
+	defer func() { _ = it.Close() }()
+	for it.Valid() {
+		key := it.UnsafeKey()
+		_, ptr, flags := it.UnsafeEntry()
+		it.Next()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			continue
+		}
+		inspectCtx := context
+		if len(key) > 0 {
+			inspectCtx = fmt.Sprintf("%s key=%q", context, key)
+		}
+		if _, routeErr := db.normalizeRouteAnchorPointer(ptr, inspectCtx); routeErr != nil {
+			return routeErr
+		}
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func normalizeValueLogWALFenceMode(mode string) string {
@@ -1555,6 +1690,13 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 	estimated := 0
 	groupStart := 0
 	var prevKey []byte
+	gapScanner, err := newRoutePersistedGapScanner(db.backend, keys[0])
+	if err != nil {
+		return nil, nil, err
+	}
+	if gapScanner != nil {
+		defer gapScanner.close()
+	}
 
 	flushRouteGroup := func() error {
 		if len(entries) == 0 {
@@ -1623,7 +1765,15 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 		}
 
 		if len(entries) > 0 {
-			if forceSingleton || bytes.Compare(prevKey, key) >= 0 {
+			hasPersistedGap := false
+			if gapScanner != nil {
+				gap, gapErr := gapScanner.hasPersistedBetween(prevKey, key)
+				if gapErr != nil {
+					return nil, nil, gapErr
+				}
+				hasPersistedGap = gap
+			}
+			if forceSingleton || hasPersistedGap || bytes.Compare(prevKey, key) >= 0 {
 				// Preserve correctness for non-monotonic batches by cutting blocks.
 				if err := flushRouteGroup(); err != nil {
 					return nil, nil, err
@@ -3018,8 +3168,25 @@ func (p *fenceAnchorPromoter) lookupFenceSourceForMutation(key []byte) ([]byte, 
 		return nil, page.ValuePtr{}, false, err
 	}
 	if found && len(sourceKey) > 0 {
+		if p.v1LeafLogRouteMode() {
+			var routeErr error
+			sourcePtr, routeErr = p.db.normalizeRouteAnchorPointer(sourcePtr, "route source lookup")
+			if routeErr != nil {
+				return nil, page.ValuePtr{}, false, routeErr
+			}
+		}
 		sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, page.ValuePtrClearFenceOuter(sourcePtr))
 		return sourceKey, sourcePtr, true, nil
+	}
+	if p.v1LeafLogRouteMode() {
+		sourceKey, sourcePtr, found, err = p.lookupPredecessorFenceAnchor(key)
+		if err != nil {
+			return nil, page.ValuePtr{}, false, err
+		}
+		if found && len(sourceKey) > 0 {
+			sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, sourcePtr)
+			return sourceKey, sourcePtr, true, nil
+		}
 	}
 	// In strict route mode, exact persisted pointer rows are themselves anchor
 	// directory entries. Use the exact pointer row as rewrite source so updates
@@ -3627,7 +3794,7 @@ func (p *fenceAnchorPromoter) rewriteFallbackSourceBlock(sourceKey, mutationKey 
 	}
 
 	emitKey := sourceKey
-	if !sourceKept || bytes.Equal(mutationKey, sourceKey) {
+	if p.v1LeafLogRouteMode() || !sourceKept || bytes.Equal(mutationKey, sourceKey) {
 		emitKey = kept[0].Key
 	}
 	if len(emitKey) == 0 {
@@ -4557,23 +4724,62 @@ func (db *DB) flushDeferredValueLogMemtable(
 					confirmedOverlap = true
 					if routeAnchorMode {
 						if len(unresolved) > 0 {
-							// Route mode keeps overlap handling in rewrite anchors
-							// only; emit one canonical anchor row at payload min.
-							// unresolved is built in-group key order, so the first
-							// unresolved position is the payload-min anchor key.
-							anchorPos := unresolved[0]
-							if err := emitKey(ptrKeys[anchorPos], ptr); err != nil {
+							if err := ensureVlogLane(); err != nil {
 								putValueLogEligible(unresolved)
 								return 0, err
 							}
-							for _, srcPos := range unresolved[1:] {
-								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-										putValueLogEligible(unresolved)
-										return 0, err
+							unresolvedKeys := getValueLogKeys(len(unresolved))
+							unresolvedVals := getValueLogKeys(len(unresolved))
+							for _, srcPos := range unresolved {
+								unresolvedKeys = append(unresolvedKeys, ptrKeys[srcPos])
+								unresolvedVals = append(unresolvedVals, ptrVals[srcPos])
+							}
+							routePtrs, routeGroups, routeErr := db.writeRouteOuterLeafValueRecords(vlogLane, dictID, unresolvedKeys, unresolvedVals, durability)
+							putValueLogKeys(unresolvedKeys)
+							putValueLogKeys(unresolvedVals)
+							if routeErr != nil {
+								putValueLogEligible(unresolved)
+								return 0, routeErr
+							}
+							if len(routePtrs) != len(routeGroups) {
+								putValueLogPtrs(routePtrs)
+								putValueLogEligible(unresolved)
+								return 0, errors.New("cachingdb: route overlap unresolved pointer/group count mismatch")
+							}
+							for gi := range routeGroups {
+								routeGroup := routeGroups[gi]
+								if routeGroup.start < 0 || routeGroup.end < routeGroup.start || routeGroup.end > len(unresolved) {
+									putValueLogPtrs(routePtrs)
+									putValueLogEligible(unresolved)
+									return 0, errors.New("cachingdb: route overlap unresolved group out of range")
+								}
+								if routeGroup.start >= routeGroup.end {
+									continue
+								}
+								anchorPos := unresolved[routeGroup.start]
+								routePtr, routeErr := db.normalizeRouteAnchorPointer(routePtrs[gi], "deferred overlap unresolved route publish")
+								if routeErr != nil {
+									putValueLogPtrs(routePtrs)
+									putValueLogEligible(unresolved)
+									return 0, routeErr
+								}
+								if err := emitKey(ptrKeys[anchorPos], routePtr); err != nil {
+									putValueLogPtrs(routePtrs)
+									putValueLogEligible(unresolved)
+									return 0, err
+								}
+								for groupPos := routeGroup.start + 1; groupPos < routeGroup.end; groupPos++ {
+									srcPos := unresolved[groupPos]
+									if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+										if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+											putValueLogPtrs(routePtrs)
+											putValueLogEligible(unresolved)
+											return 0, err
+										}
 									}
 								}
 							}
+							putValueLogPtrs(routePtrs)
 						}
 					} else {
 						for _, srcPos := range unresolved {
@@ -5067,25 +5273,69 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							confirmedOverlap = true
 							if routeAnchorMode {
 								if len(unresolved) > 0 {
-									// Route mode keeps overlap handling in rewrite
-									// anchors only; emit one canonical anchor row
-									// at payload min. unresolved is built in-group
-									// key order, so unresolved[0] is payload-min.
-									anchorPos := unresolved[0]
-									if err := emitPointer(ptrKeys[anchorPos], ptr); err != nil {
+									if err := ensureVlogLane(); err != nil {
 										putValueLogEligible(unresolved)
 										putValueLogPtrs(ptrs)
 										return err
 									}
-									for _, srcPos := range unresolved[1:] {
-										if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-											if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
-												putValueLogEligible(unresolved)
-												putValueLogPtrs(ptrs)
-												return err
+									unresolvedKeys := getValueLogKeys(len(unresolved))
+									unresolvedVals := getValueLogKeys(len(unresolved))
+									for _, srcPos := range unresolved {
+										unresolvedKeys = append(unresolvedKeys, ptrKeys[srcPos])
+										unresolvedVals = append(unresolvedVals, ptrVals[srcPos])
+									}
+									routePtrs, routeGroups, routeErr := db.writeRouteOuterLeafValueRecords(vlogLane, dictID, unresolvedKeys, unresolvedVals, durability)
+									putValueLogKeys(unresolvedKeys)
+									putValueLogKeys(unresolvedVals)
+									if routeErr != nil {
+										putValueLogEligible(unresolved)
+										putValueLogPtrs(ptrs)
+										return routeErr
+									}
+									if len(routePtrs) != len(routeGroups) {
+										putValueLogPtrs(routePtrs)
+										putValueLogEligible(unresolved)
+										putValueLogPtrs(ptrs)
+										return errors.New("cachingdb: route overlap unresolved pointer/group count mismatch")
+									}
+									for gi := range routeGroups {
+										routeGroup := routeGroups[gi]
+										if routeGroup.start < 0 || routeGroup.end < routeGroup.start || routeGroup.end > len(unresolved) {
+											putValueLogPtrs(routePtrs)
+											putValueLogEligible(unresolved)
+											putValueLogPtrs(ptrs)
+											return errors.New("cachingdb: route overlap unresolved group out of range")
+										}
+										if routeGroup.start >= routeGroup.end {
+											continue
+										}
+										anchorPos := unresolved[routeGroup.start]
+										routePtr, routeErr := db.normalizeRouteAnchorPointer(routePtrs[gi], "flush deferred overlap unresolved route publish")
+										if routeErr != nil {
+											putValueLogPtrs(routePtrs)
+											putValueLogEligible(unresolved)
+											putValueLogPtrs(ptrs)
+											return routeErr
+										}
+										if err := emitPointer(ptrKeys[anchorPos], routePtr); err != nil {
+											putValueLogPtrs(routePtrs)
+											putValueLogEligible(unresolved)
+											putValueLogPtrs(ptrs)
+											return err
+										}
+										for groupPos := routeGroup.start + 1; groupPos < routeGroup.end; groupPos++ {
+											srcPos := unresolved[groupPos]
+											if shouldEmitRouteDelete(ptrKeys[srcPos]) {
+												if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+													putValueLogPtrs(routePtrs)
+													putValueLogEligible(unresolved)
+													putValueLogPtrs(ptrs)
+													return err
+												}
 											}
 										}
 									}
+									putValueLogPtrs(routePtrs)
 								}
 							} else {
 								for _, srcPos := range unresolved {
@@ -6157,6 +6407,7 @@ type BackendDB interface {
 	Has(key []byte) (bool, error)
 	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
 	ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error)
+	AcquireSnapshot() *backenddb.Snapshot
 	NewBatch() batch.Interface
 	Close() error
 	Print() error
@@ -6488,6 +6739,11 @@ type DB struct {
 	walAckMu      sync.Mutex
 	walErr        error
 	nextRID       atomic.Uint64
+	// RID bootstrap telemetry (captured once at open).
+	ridBootstrapMaxRID           uint64
+	ridBootstrapInitialNextRID   uint64
+	ridBootstrapSegmentsScanned  uint64
+	ridBootstrapRecordsScanned   uint64
 
 	// Legacy flags removed from public options; retained internally for code paths.
 	disableValueLog          bool
@@ -6814,6 +7070,35 @@ type memtableView struct {
 	deferredRetiredMemtables atomic.Int64
 }
 
+type snapshotMemtableReader struct {
+	db   *DB
+	view *memtableView
+}
+
+func (r *snapshotMemtableReader) GetEntry(key []byte) (node.LeafEntry, bool, error) {
+	if r == nil || r.db == nil || r.view == nil {
+		return node.LeafEntry{}, false, nil
+	}
+	queue := r.view.queue
+	queueShardIDs := r.view.queueShardIDs
+
+	shardIdx := r.db.shardIndex(key)
+	for i := len(queue) - 1; i >= 0; i-- {
+		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
+			continue
+		}
+		val, ptr, flags, found := queue[i].GetEntry(key)
+		if found {
+			return node.LeafEntry{
+				Value:    val,
+				ValuePtr: ptr,
+				Flags:    flags,
+			}, true, nil
+		}
+	}
+	return node.LeafEntry{}, false, nil
+}
+
 const maxAppendOnlyMemLeases = 256
 const appendOnlyEstimatedBytesPerEntryDeferredFence = 128
 
@@ -7121,11 +7406,17 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 	if db != nil && mode == memtable.ModeAppendOnly {
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			mt.Reset()
+			if _, ok := interface{}(mt).(memtable.ReverseIterable); !ok {
+				return nil, fmt.Errorf("memtable %T does not implement reverse iteration", mt)
+			}
 			return mt, nil
 		}
 		if v := db.appendOnlyMemPool.Get(); v != nil {
 			if mt, ok := v.(*memtable.AppendOnly); ok && mt != nil {
 				mt.Reset()
+				if _, reverseOk := interface{}(mt).(memtable.ReverseIterable); !reverseOk {
+					return nil, fmt.Errorf("memtable %T does not implement reverse iteration", mt)
+				}
 				return mt, nil
 			}
 		}
@@ -7133,9 +7424,20 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 		if db.deferredValueLogEnabled() {
 			estimate = appendOnlyEstimatedBytesPerEntryDeferredFence
 		}
-		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
+		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate)
+		if _, ok := interface{}(mt).(memtable.ReverseIterable); !ok {
+			return nil, fmt.Errorf("memtable %T does not implement reverse iteration", mt)
+		}
+		return mt, nil
 	}
-	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
+	mt, err := memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := mt.(memtable.ReverseIterable); !ok {
+		return nil, fmt.Errorf("memtable %T does not implement reverse iteration", mt)
+	}
+	return mt, nil
 }
 
 // publishMemtablesLocked publishes a new memtable snapshot.
@@ -7640,6 +7942,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			maxWALSeq[seg.lane] = seg.seq
 		}
 	}
+	ridBootstrapMaxRID, ridBootstrapSegmentsScanned, ridBootstrapRecordsScanned, err := bootstrapNextRIDFromValueLogSegments(segments)
+	if err != nil {
+		return nil, err
+	}
+	if ridBootstrapMaxRID == ^uint64(0) {
+		return nil, fmt.Errorf("cachingdb: value-log rid space exhausted")
+	}
+	ridBootstrapInitialNextRID := ridBootstrapMaxRID + 1
+	if ridBootstrapRecordsScanned > 0 && ridBootstrapMaxRID == 0 {
+		return nil, fmt.Errorf("cachingdb: invalid rid bootstrap state: records_scanned=%d max_rid=%d", ridBootstrapRecordsScanned, ridBootstrapMaxRID)
+	}
 	laneCount := opts.JournalLanes
 	if laneCount <= 0 {
 		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
@@ -8074,6 +8387,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if len(retained) > 0 {
 		db.valueLogRetainDirty.Store(true)
 	}
+	db.nextRID.Store(ridBootstrapMaxRID)
+	db.ridBootstrapMaxRID = ridBootstrapMaxRID
+	db.ridBootstrapInitialNextRID = ridBootstrapInitialNextRID
+	db.ridBootstrapSegmentsScanned = ridBootstrapSegmentsScanned
+	db.ridBootstrapRecordsScanned = ridBootstrapRecordsScanned
+	visibilityDebugf(
+		"rid-bootstrap max=%d next=%d segments=%d records=%d",
+		db.ridBootstrapMaxRID,
+		db.ridBootstrapInitialNextRID,
+		db.ridBootstrapSegmentsScanned,
+		db.ridBootstrapRecordsScanned,
+	)
 	if db.indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
 		// Route mode must regroup key/value mutations into directory-backed
 		// outer-leaf blocks at flush time. Per-key pointer memtable rows can
@@ -12568,11 +12893,15 @@ func (db *DB) Checkpoint() error {
 		db.writeMu.Unlock()
 		db.recordCheckpointCutover(time.Since(cutoverStart))
 	}
+	if err := db.validateRouteAnchorPointers("checkpoint preflight"); err != nil {
+		releaseWriteMu()
+		return err
+	}
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
 	db.mu.Lock()
-	if db.mutableBytes.Load() > 0 {
+	if db.mutableHasEntriesLocked() {
 		if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
 			db.mu.Unlock()
 			releaseWriteMu()
@@ -13028,7 +13357,7 @@ func (db *DB) Close() error {
 	db.flushMu.Lock()
 	db.writeMu.Lock()
 	db.mu.Lock()
-	if db.mutableBytes.Load() > 0 {
+	if db.mutableHasEntriesLocked() {
 		hadMemtables = true
 		_ = db.rotateMemtableLocked(true)
 	} else if len(db.queue) > 0 {
@@ -13197,7 +13526,7 @@ func (db *DB) flushAllMemtablesForSync(sync bool) error {
 	db.writeMu.Lock()
 
 	db.mu.Lock()
-	if db.mutableBytes.Load() > 0 {
+	if db.mutableHasEntriesLocked() {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
 			db.writeMu.Unlock()
@@ -16728,6 +17057,47 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	return db.backend.GetAppend(key, dst)
 }
 
+// AcquireSnapshot returns a snapshot that includes current memtable state.
+func (db *DB) AcquireSnapshot() *backenddb.Snapshot {
+	if db == nil || db.backend == nil {
+		return nil
+	}
+	if db.closing.Load() {
+		return nil
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	if db.closing.Load() {
+		return nil
+	}
+
+	db.mu.Lock()
+	rotateNeeded := db.mutableBytes.Load() > 0 || db.snapshotMutableRange().valid
+	if rotateNeeded {
+		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
+			db.mu.Unlock()
+			return nil
+		}
+	}
+	snap := db.backend.AcquireSnapshot()
+	view := db.retainMemtableView()
+	db.mu.Unlock()
+	if snap == nil {
+		if view != nil {
+			db.releaseMemtableView(view)
+		}
+		return nil
+	}
+	if view == nil {
+		return snap
+	}
+	snap.AttachMemtableReader(&snapshotMemtableReader{db: db, view: view}, func() {
+		db.releaseMemtableView(view)
+	})
+	return snap
+}
+
 func (db *DB) Has(key []byte) (bool, error) {
 	rootVersion, trackRoot := looksLikeIAVLRootNodeKey(key)
 	view := db.retainMemtableView()
@@ -16901,6 +17271,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
+	stats["treedb.cache.vlog_rid.bootstrap.max"] = fmt.Sprintf("%d", db.ridBootstrapMaxRID)
+	stats["treedb.cache.vlog_rid.bootstrap.next"] = fmt.Sprintf("%d", db.ridBootstrapInitialNextRID)
+	stats["treedb.cache.vlog_rid.bootstrap.segments_scanned"] = fmt.Sprintf("%d", db.ridBootstrapSegmentsScanned)
+	stats["treedb.cache.vlog_rid.bootstrap.records_scanned"] = fmt.Sprintf("%d", db.ridBootstrapRecordsScanned)
 	stats["treedb.cache.memtable_mode"] = memtableMode.String()
 	if memtableAdaptive {
 		stats["treedb.cache.memtable_mode_config"] = "adaptive"
@@ -17392,7 +17766,7 @@ func (db *DB) Print() error {
 func (db *DB) Drain() error {
 	db.writeMu.Lock()
 	db.mu.Lock()
-	if db.mutableBytes.Load() > 0 {
+	if db.mutableHasEntriesLocked() {
 		if err := db.rotateMemtableLocked(true); err != nil {
 			db.mu.Unlock()
 			db.writeMu.Unlock()
@@ -17601,6 +17975,18 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			}
 		}
 		return nil, err
+	}
+
+	if !hasMemSource {
+		if view != nil {
+			db.releaseMemtableView(view)
+			view = nil
+			releaseView = false
+		}
+		if iteratorDebugEnabled.Load() {
+			return &debugIterator{Iterator: diskIter, queueLen: queueLen, sourcesUsed: 1}, nil
+		}
+		return diskIter, nil
 	}
 
 	sources = append(sources, merging.IteratorSource{
@@ -17964,101 +18350,153 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		queueLen := db.snapshotQueueLen()
 		visibilityDebugf("reviter start iavl_range=true queue_len=%d mutable_bytes=%d checkpointing=%t", queueLen, db.mutableBytes.Load(), db.checkpointing.Load())
 	}
-	// Flush everything to backend to simplify reverse iteration.
+	// Snapshot isolation: rotate mutable memtable into queue for this iterator.
 	db.writeMu.Lock()
 	db.mu.Lock()
 	db.noteIterator(start, end)
-	needRotate := true
-	if needRotate {
-		if err := db.rotateMemtableLockedWithCapacity(true, minMemtablePrealloc); err != nil {
+	needsRotate := db.mutableBytes.Load() > 0
+	if !needsRotate {
+		needsRotate = db.snapshotMutableRange().valid
+	}
+	if needsRotate {
+		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
 			db.writeMu.Unlock()
 			return nil, err
 		}
 	}
+	queueLenLocked := len(db.queue)
 	db.mu.Unlock()
-	db.flushAll(false)
+	db.writeMu.Unlock()
+
 	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
-		db.writeMu.Unlock()
 		if traceIAVLRange {
 			visibilityDebugf("reviter error stage=flush_deferred err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
 		}
 		return nil, err
 	}
-	if traceIAVLRange {
-		full, err := db.backend.ReverseIterator(nil, nil)
-		if err != nil {
-			db.writeMu.Unlock()
-			visibilityDebugf("reviter error stage=backend_full_reverse err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
-			return nil, err
+	view := db.retainMemtableView()
+	releaseView := true
+	defer func() {
+		if releaseView && view != nil {
+			db.releaseMemtableView(view)
 		}
-		defer func() { _ = full.Close() }()
-		var (
-			bestVersion uint64
-			best        *singletonReverseEntryIterator
-		)
-		for full.Valid() {
-			k := full.UnsafeKey()
-			if end != nil && bytes.Compare(k, end) >= 0 {
-				full.Next()
-				continue
-			}
-			if start != nil && bytes.Compare(k, start) < 0 {
-				full.Next()
-				continue
-			}
-			version, ok := iavlNodeVersionFromNodeKey(k)
-			if ok && (best == nil || version >= bestVersion) {
-				val, ptr, flags := full.UnsafeEntry()
-				entry := &singletonReverseEntryIterator{
-					start: start,
-					end:   end,
-					key:   append([]byte(nil), k...),
-					ptr:   ptr,
-					flags: flags,
-					valid: true,
-				}
-				if len(val) > 0 {
-					entry.val = append([]byte(nil), val...)
-				}
-				best = entry
-				bestVersion = version
-			}
-			full.Next()
-		}
-		if err := full.Error(); err != nil {
-			db.writeMu.Unlock()
-			visibilityDebugf("reviter error stage=backend_full_scan err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
-			return nil, err
-		}
-		if best != nil {
-			db.writeMu.Unlock()
-			visibilityDebugf("reviter done iavl_range=true top_version=v%d elapsed_ms=%.3f", bestVersion, float64(time.Since(traceStart))/float64(time.Millisecond))
-			return best, nil
-		}
-		db.writeMu.Unlock()
-		visibilityDebugf("reviter done iavl_range=true top_version=none elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
-		return &emptyIterator{start: start, end: end}, nil
-	}
-	it, err := db.backend.ReverseIterator(start, end)
-	db.writeMu.Unlock()
-	if traceIAVLRange {
-		if err != nil {
-			visibilityDebugf("reviter error stage=backend_reverse err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
-		} else {
-			top := uint64(0)
-			topOK := false
-			if it != nil && it.Valid() {
-				top, topOK = iavlNodeVersionFromNodeKey(it.Key())
-			}
-			if topOK {
-				visibilityDebugf("reviter done iavl_range=true top_version=v%d elapsed_ms=%.3f", top, float64(time.Since(traceStart))/float64(time.Millisecond))
+	}()
+
+	if queueLenLocked == 0 && view == nil {
+		it, err := db.backend.ReverseIterator(start, end)
+		if traceIAVLRange {
+			if err != nil {
+				visibilityDebugf("reviter error stage=backend_reverse err=%v elapsed_ms=%.3f", err, float64(time.Since(traceStart))/float64(time.Millisecond))
+			} else if it != nil && it.Valid() {
+				visibilityDebugf("reviter done iavl_range=true top_key=%x elapsed_ms=%.3f", it.Key(), float64(time.Since(traceStart))/float64(time.Millisecond))
 			} else {
-				visibilityDebugf("reviter done iavl_range=true top_version=none elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
+				visibilityDebugf("reviter done iavl_range=true empty elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
 			}
 		}
+		if err != nil {
+			return nil, err
+		}
+		if iteratorDebugEnabled.Load() {
+			return &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: 1}, nil
+		}
+		return it, nil
 	}
-	return it, err
+
+	var queue []memtable.Table
+	var queueRanges []keyRange
+	if view != nil {
+		queue = view.queue
+		queueRanges = view.queueRanges
+	} else {
+		db.mu.RLock()
+		queue = append([]memtable.Table(nil), db.queue...)
+		queueRanges = append([]keyRange(nil), db.queueRanges...)
+		db.mu.RUnlock()
+		releaseView = false
+		db.releaseMemtableView(view)
+		view = nil
+	}
+
+	sources := make([]merging.IteratorSource, 0, len(queue)+1)
+	prio := 0
+	for i := len(queue) - 1; i >= 0; i-- {
+		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
+			prio++
+			continue
+		}
+		var qIter iterator.UnsafeIterator
+		if reverseTable, ok := queue[i].(memtable.ReverseIterable); ok {
+			qIter = reverseTable.NewReverseIterator(start, end)
+		} else {
+			for j := range sources {
+				if sources[j].Iter != nil {
+					_ = sources[j].Iter.Close()
+				}
+			}
+			return nil, fmt.Errorf("memtable %T does not implement reverse iteration", queue[i])
+		}
+		if qIter == nil {
+			prio++
+			continue
+		}
+		if db.memtableValueLogPointers && db.valueLogReader != nil {
+			qIter = newValueLogIterator(qIter, func(key []byte, ptr page.ValuePtr) ([]byte, error) {
+				return db.readValueLog(key, ptr)
+			})
+		}
+		sources = append(sources, merging.IteratorSource{
+			Iter:     qIter,
+			Priority: prio,
+		})
+		prio++
+	}
+	diskIter, err := db.backend.ReverseIterator(start, end)
+	if err != nil {
+		for i := range sources {
+			if sources[i].Iter != nil {
+				_ = sources[i].Iter.Close()
+			}
+		}
+		return nil, err
+	}
+	sources = append(sources, merging.IteratorSource{
+		Iter:     diskIter,
+		Priority: prio,
+	})
+	if releaseView {
+		db.releaseMemtableView(view)
+		releaseView = false
+	}
+
+	if len(sources) == 0 {
+		out := merging.Iterator(&emptyIterator{start: start, end: end})
+		if iteratorDebugEnabled.Load() {
+			out = &debugIterator{Iterator: out, queueLen: len(queue), sourcesUsed: 0}
+		}
+		return out, nil
+	}
+
+	if len(sources) == 1 {
+		out := newSingleSourceIterator(sources[0].Iter, start, end)
+		if iteratorDebugEnabled.Load() {
+			out = &debugIterator{Iterator: out, queueLen: len(queue), sourcesUsed: 1}
+		}
+		return out, nil
+	}
+
+	merged := merging.NewReverseMergingIterator(sources, start, end)
+	if traceIAVLRange {
+		if merged != nil && merged.Valid() {
+			visibilityDebugf("reviter done iavl_range=true top_key=%x elapsed_ms=%.3f", merged.Key(), float64(time.Since(traceStart))/float64(time.Millisecond))
+		} else {
+			visibilityDebugf("reviter done iavl_range=true empty elapsed_ms=%.3f", float64(time.Since(traceStart))/float64(time.Millisecond))
+		}
+	}
+	if iteratorDebugEnabled.Load() {
+		return &debugIterator{Iterator: merged, queueLen: len(queue), sourcesUsed: len(sources)}, nil
+	}
+	return merged, nil
 }
 
 // NewBatch implementation for CachingDB
@@ -19841,6 +20279,62 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 		}
 	}
 	return segments, nonEmptyBytes
+}
+
+func bootstrapNextRIDFromValueLogSegments(segments []logSegmentInfo) (maxRID uint64, scannedSegments uint64, scannedRecords uint64, err error) {
+	if len(segments) == 0 {
+		return 0, 0, 0, nil
+	}
+	valueSegments := make([]logSegmentInfo, 0, len(segments))
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 {
+			continue
+		}
+		valueSegments = append(valueSegments, seg)
+	}
+	if len(valueSegments) == 0 {
+		return 0, 0, 0, nil
+	}
+	// Deterministic ordering for repeatable startup diagnostics.
+	sort.Slice(valueSegments, func(i, j int) bool {
+		if valueSegments[i].lane != valueSegments[j].lane {
+			return valueSegments[i].lane < valueSegments[j].lane
+		}
+		if valueSegments[i].seq != valueSegments[j].seq {
+			return valueSegments[i].seq < valueSegments[j].seq
+		}
+		return valueSegments[i].path < valueSegments[j].path
+	})
+	for _, seg := range valueSegments {
+		if seg.seq < 0 || uint64(seg.seq) > uint64(^uint32(0)) {
+			return 0, scannedSegments, scannedRecords, fmt.Errorf("cachingdb: invalid value-log sequence for rid bootstrap: lane=%d seq=%d path=%q", seg.lane, seg.seq, filepath.Base(seg.path))
+		}
+		reader, openErr := valuelog.NewReader(seg.path, uint32(seg.seq))
+		if openErr != nil {
+			return 0, scannedSegments, scannedRecords, fmt.Errorf("cachingdb: open value-log segment for rid bootstrap %q: %w", filepath.Base(seg.path), openErr)
+		}
+		reader.DisableValueDecode()
+		for {
+			rid, _, _, readErr := reader.ReadNext()
+			if readErr == nil {
+				scannedRecords++
+				if rid > maxRID {
+					maxRID = rid
+				}
+				continue
+			}
+			if errors.Is(readErr, io.EOF) || errors.Is(readErr, io.ErrUnexpectedEOF) {
+				break
+			}
+			_ = reader.Close()
+			return 0, scannedSegments, scannedRecords, fmt.Errorf("cachingdb: scan value-log segment for rid bootstrap %q: %w", filepath.Base(seg.path), readErr)
+		}
+		if closeErr := reader.Close(); closeErr != nil {
+			return 0, scannedSegments, scannedRecords, fmt.Errorf("cachingdb: close value-log segment after rid bootstrap scan %q: %w", filepath.Base(seg.path), closeErr)
+		}
+		scannedSegments++
+	}
+	return maxRID, scannedSegments, scannedRecords, nil
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {

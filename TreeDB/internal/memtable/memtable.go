@@ -75,6 +75,13 @@ type Table interface {
 	Freeze()
 }
 
+// ReverseIterable is an optional extension implemented by memtables that can
+// produce a reverse (descending key order) iterator without materializing all
+// keys up front.
+type ReverseIterable interface {
+	NewReverseIterator(start, end []byte) iterator.UnsafeIterator
+}
+
 // SortedBatchApplier is an optional fast path for applying a strictly-increasing
 // batch under a single memtable lock.
 //
@@ -294,6 +301,17 @@ func (m *Memtable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	return &Iterator{iter: it, end: end, mu: &m.mu}
 }
 
+type ReverseIterator struct {
+	iter *skiplist.ReverseIterator
+	mu   *sync.RWMutex
+}
+
+func (m *Memtable) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	m.mu.RLock()
+	it := m.sl.NewReverseIterator(start, end)
+	return &ReverseIterator{iter: it, mu: &m.mu}
+}
+
 func (it *Iterator) Seek(key []byte) {
 	it.iter.Seek(key)
 	it.checkEnd()
@@ -386,4 +404,77 @@ func (it *Iterator) Error() error {
 
 func (it *Iterator) Domain() (start, end []byte) {
 	return nil, it.end
+}
+
+func (it *ReverseIterator) Seek(key []byte) {
+	it.iter.Seek(key)
+}
+
+func (it *ReverseIterator) Next() {
+	it.iter.Next()
+}
+
+func (it *ReverseIterator) Valid() bool {
+	return it.iter.Valid()
+}
+
+func (it *ReverseIterator) UnsafeKey() []byte {
+	return it.iter.UnsafeKey()
+}
+
+func (it *ReverseIterator) UnsafeValue() []byte {
+	return it.iter.UnsafeValue()
+}
+
+func (it *ReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.iter.UnsafeEntry()
+}
+
+func (it *ReverseIterator) IsDeleted() bool {
+	return it.iter.IsDeleted()
+}
+
+func (it *ReverseIterator) Key() []byte {
+	return it.iter.Key()
+}
+
+func (it *ReverseIterator) Value() []byte {
+	return it.iter.Value()
+}
+
+func (it *ReverseIterator) KeyCopy(dst []byte) []byte {
+	k := it.iter.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *ReverseIterator) ValueCopy(dst []byte) []byte {
+	v := it.iter.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
+func (it *ReverseIterator) Close() error {
+	if it.mu != nil {
+		it.mu.RUnlock()
+		it.mu = nil
+	}
+	if it.iter == nil {
+		return nil
+	}
+	err := it.iter.Close()
+	it.iter = nil
+	return err
+}
+
+func (it *ReverseIterator) Error() error {
+	return it.iter.Error()
+}
+
+func (it *ReverseIterator) Domain() (start, end []byte) {
+	return it.iter.Domain()
 }

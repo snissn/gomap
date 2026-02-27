@@ -763,12 +763,18 @@ type Snapshot struct {
 	registryID  int64
 	reader      valueReader
 	tree        tree.Tree
+	memtable    SnapshotMemtableReader
+	onClose     func()
 	closed      atomic.Bool
 	treePager   *pager.Pager
 	treeRoot    uint64
 	// registryShardHint is used to route reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
 	registryShardHint int
+}
+
+type SnapshotMemtableReader interface {
+	GetEntry(key []byte) (node.LeafEntry, bool, error)
 }
 
 func registryHintFromSnapshot(s *Snapshot) int {
@@ -872,6 +878,56 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	return snap
 }
 
+func (s *Snapshot) AttachMemtableReader(reader SnapshotMemtableReader, onClose func()) {
+	if s == nil {
+		return
+	}
+	s.memtable = reader
+	s.onClose = onClose
+}
+
+func (s *Snapshot) memtableEntry(key []byte) (node.LeafEntry, bool, error) {
+	if s == nil || s.memtable == nil {
+		return node.LeafEntry{}, false, nil
+	}
+	entry, found, err := s.memtable.GetEntry(key)
+	if err != nil {
+		return node.LeafEntry{}, false, err
+	}
+	return entry, found, nil
+}
+
+func (s *Snapshot) readMemtableValue(key []byte, entry node.LeafEntry) ([]byte, bool, error) {
+	if entry.Flags&node.FlagTombstone != 0 {
+		return nil, false, tree.ErrKeyNotFound
+	}
+	if entry.Flags&node.FlagPointer != 0 {
+		val, err := s.reader.ReadForKey(entry.ValuePtr, key)
+		if err != nil {
+			return nil, false, err
+		}
+		return val, true, nil
+	}
+	return entry.Value, true, nil
+}
+
+func (s *Snapshot) readMemtableValueAppend(key []byte, entry node.LeafEntry, dst []byte) ([]byte, bool, error) {
+	if entry.Flags&node.FlagTombstone != 0 {
+		return dst, false, tree.ErrKeyNotFound
+	}
+	if entry.Flags&node.FlagPointer != 0 {
+		val, err := s.reader.ReadUnsafeAppendForKey(entry.ValuePtr, key, dst)
+		if err != nil {
+			return dst, false, err
+		}
+		return val, true, nil
+	}
+	if entry.Value == nil {
+		return dst, true, nil
+	}
+	return append(dst, entry.Value...), true, nil
+}
+
 // Close releases the snapshot.
 func (s *Snapshot) Close() error {
 	if s == nil {
@@ -896,6 +952,10 @@ func (s *Snapshot) Close() error {
 				s.db.maybeReleaseRetiredIndex(s.idx)
 			}
 		}
+	}
+	if s.onClose != nil {
+		s.onClose()
+		s.onClose = nil
 	}
 	if s.db != nil {
 		s.db.snapPool.Put(s)
@@ -1798,22 +1858,73 @@ func (db *DB) Prune() {
 
 // Get returns value from snapshot.
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
+	entry, found, err := s.memtableEntry(key)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		val, _, err := s.readMemtableValue(key, entry)
+		if err != nil {
+			return nil, err
+		}
+		if val == nil {
+			return []byte{}, nil
+		}
+		cpy := make([]byte, len(val))
+		copy(cpy, val)
+		return cpy, nil
+	}
 	return s.tree.Get(key)
 }
 
 // GetAppend appends the value for key to dst and returns the grown slice.
 // If key is not found, it returns dst and tree.ErrKeyNotFound.
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
+	entry, found, err := s.memtableEntry(key)
+	if err != nil {
+		return dst, err
+	}
+	if found {
+		val, read, err := s.readMemtableValueAppend(key, entry, dst)
+		if err != nil {
+			return dst, err
+		}
+		if read {
+			return val, nil
+		}
+		return val, tree.ErrKeyNotFound
+	}
 	return s.tree.GetAppend(key, dst)
 }
 
 // GetUnsafe returns a zero-copy view of the value from the snapshot.
 // The slice is valid until the snapshot is closed.
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
+	entry, found, err := s.memtableEntry(key)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		val, _, err := s.readMemtableValue(key, entry)
+		if err != nil {
+			return nil, err
+		}
+		if val == nil {
+			return []byte{}, nil
+		}
+		return val, nil
+	}
 	return s.tree.GetUnsafe(key)
 }
 
 func (s *Snapshot) Has(key []byte) (bool, error) {
+	entry, found, err := s.memtableEntry(key)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		return entry.Flags&node.FlagTombstone == 0, nil
+	}
 	return s.tree.Has(key)
 }
 
@@ -1823,6 +1934,19 @@ func (s *Snapshot) Has(key []byte) (bool, error) {
 // resolve via fence-pointer fallback, it returns a synthesized inline entry.
 // Use GetEntryExact when callers require exact persisted entries only.
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
+	entry, found, err := s.memtableEntry(key)
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	if found {
+		if entry.Flags&node.FlagTombstone != 0 {
+			return node.LeafEntry{}, tree.ErrKeyNotFound
+		}
+		if entry.Key == nil {
+			entry.Key = append([]byte(nil), key...)
+		}
+		return entry, nil
+	}
 	return s.tree.GetEntry(key)
 }
 

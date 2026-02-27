@@ -834,6 +834,7 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		it := &appendOnlyIterator{
 			entries: entries,
 			end:     end,
+			reverse: false,
 			mu:      &m.mu,
 		}
 		if start != nil {
@@ -855,6 +856,7 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		it := &appendOnlyIterator{
 			entryPtrs:       ptrs,
 			end:             end,
+			reverse:         false,
 			pooledEntryPtrs: true,
 			leaseOwner:      m,
 			leaseHeld:       true,
@@ -877,6 +879,7 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	it := &appendOnlyIterator{
 		entries:       entries,
 		end:           end,
+		reverse:       false,
 		pooledEntries: true,
 	}
 	if start != nil {
@@ -885,11 +888,83 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	return it
 }
 
+func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	m.mu.RLock()
+	if m.ordered {
+		entries := m.entries[:m.count]
+		it := &appendOnlyIterator{
+			entries: entries,
+			start:   start,
+			end:     end,
+			reverse: true,
+			mu:      &m.mu,
+		}
+		if end != nil {
+			it.Seek(end)
+		} else {
+			it.idx = len(entries) - 1
+		}
+		return it
+	}
+	m.mu.RUnlock()
+
+	// Unordered iterators need a sorted latest-key view. Build/update shared
+	// caches under an exclusive lock.
+	m.mu.Lock()
+	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
+	if m.frozen {
+		ptrs := getAppendOnlyIteratorPtrs(len(snapshotPtrs))
+		copy(ptrs, snapshotPtrs)
+		m.acquireIteratorLeaseLocked()
+		m.mu.Unlock()
+		it := &appendOnlyIterator{
+			entryPtrs:       ptrs,
+			start:           start,
+			end:             end,
+			reverse:         true,
+			pooledEntryPtrs: true,
+			leaseOwner:      m,
+			leaseHeld:       true,
+		}
+		if end != nil {
+			it.Seek(end)
+		} else {
+			it.idx = len(ptrs) - 1
+		}
+		return it
+	}
+	// Mutable unordered memtables must copy entries so readers can iterate
+	// without holding write locks while writers append concurrently.
+	entries := getAppendOnlyIteratorEntries(len(snapshotPtrs))
+	for i := range snapshotPtrs {
+		if snapshotPtrs[i] != nil {
+			entries[i] = *snapshotPtrs[i]
+		}
+	}
+	m.mu.Unlock()
+
+	it := &appendOnlyIterator{
+		entries:       entries,
+		start:         start,
+		end:           end,
+		reverse:       true,
+		pooledEntries: true,
+	}
+	if end != nil {
+		it.Seek(end)
+	} else {
+		it.idx = len(entries) - 1
+	}
+	return it
+}
+
 type appendOnlyIterator struct {
 	entries         []appendOnlyEntry
 	entryPtrs       []*appendOnlyEntry
 	idx             int
+	start           []byte
 	end             []byte
+	reverse         bool
 	mu              *sync.RWMutex
 	pooledEntries   bool
 	pooledEntryPtrs bool
@@ -928,7 +1003,11 @@ func (it *appendOnlyIterator) validIndex() bool {
 	if ent == nil {
 		return false
 	}
-	if it.end != nil && bytes.Compare(appendOnlyEntryKey(ent), it.end) >= 0 {
+	key := appendOnlyEntryKey(ent)
+	if it.end != nil && bytes.Compare(key, it.end) >= 0 {
+		return false
+	}
+	if it.start != nil && bytes.Compare(key, it.start) < 0 {
 		return false
 	}
 	return true
@@ -939,12 +1018,28 @@ func (it *appendOnlyIterator) Valid() bool {
 }
 
 func (it *appendOnlyIterator) Next() {
+	if it.reverse {
+		if it.idx >= 0 {
+			it.idx--
+		}
+		return
+	}
 	if it.idx < it.len() {
 		it.idx++
 	}
 }
 
 func (it *appendOnlyIterator) Seek(key []byte) {
+	if it.reverse {
+		it.idx = sort.Search(it.len(), func(i int) bool {
+			ent := it.entryAt(i)
+			if ent == nil {
+				return true
+			}
+			return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
+		}) - 1
+		return
+	}
 	it.idx = sort.Search(it.len(), func(i int) bool {
 		ent := it.entryAt(i)
 		if ent == nil {
@@ -1038,4 +1133,4 @@ func (it *appendOnlyIterator) Close() error {
 	return nil
 }
 
-func (it *appendOnlyIterator) Domain() (start, end []byte) { return nil, it.end }
+func (it *appendOnlyIterator) Domain() (start, end []byte) { return it.start, it.end }

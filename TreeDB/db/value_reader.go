@@ -528,7 +528,7 @@ func (r *valueReader) setOuterLeafMode(mode string) {
 	r.fenceGlobalEnabled = false
 	r.fenceSingleCandidate = false
 	switch mode {
-	case outerleaf.ModeV1LeafLog, outerleaf.ModeV1LeafLogRoute:
+	case outerleaf.ModeV1LeafLog:
 		r.fenceLookupEnabled = true
 		r.fenceSingleCandidate = true
 	case outerleaf.ModeV2FencePtr:
@@ -550,6 +550,18 @@ func (r valueReader) fenceLookupModeEnabled() bool {
 		return r.fenceLookupEnabled
 	}
 	switch strings.ToLower(strings.TrimSpace(r.outerLeafMode)) {
+	case outerleaf.ModeV1LeafLog, outerleaf.ModeV2FencePtr:
+		return true
+	default:
+		return false
+	}
+}
+
+func (r valueReader) fenceBlockModeEnabled() bool {
+	if r.modeInit {
+		return r.fenceLookupEnabled || r.outerLeafMode == outerleaf.ModeV1LeafLogRoute
+	}
+	switch strings.ToLower(strings.TrimSpace(r.outerLeafMode)) {
 	case outerleaf.ModeV1LeafLog, outerleaf.ModeV1LeafLogRoute, outerleaf.ModeV2FencePtr:
 		return true
 	default:
@@ -559,6 +571,10 @@ func (r valueReader) fenceLookupModeEnabled() bool {
 
 func (r valueReader) KeyAwareEnabled() bool {
 	return r.outerLeafModeEnabled()
+}
+
+func (r valueReader) RouteLookupEnabled() bool {
+	return strings.ToLower(strings.TrimSpace(r.outerLeafMode)) == outerleaf.ModeV1LeafLogRoute
 }
 
 func (r valueReader) FenceLookupEnabled() bool {
@@ -577,7 +593,7 @@ func (r valueReader) FenceLookupSingleCandidateEnabled() bool {
 		return r.fenceSingleCandidate
 	}
 	switch strings.ToLower(strings.TrimSpace(r.outerLeafMode)) {
-	case outerleaf.ModeV1LeafLog, outerleaf.ModeV1LeafLogRoute:
+	case outerleaf.ModeV1LeafLog:
 		return true
 	default:
 		return false
@@ -587,12 +603,12 @@ func (r valueReader) FenceLookupSingleCandidateEnabled() bool {
 func (r valueReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
 	if r.modeInit {
 		if r.outerLeafMode == outerleaf.ModeV1LeafLogRoute {
-			// Route mode uses plain anchor pointers (no fence marker bit).
+			// Route mode stores plain anchor pointers (no fence marker bit).
 			return true
 		}
 	}
 	if strings.ToLower(strings.TrimSpace(r.outerLeafMode)) == outerleaf.ModeV1LeafLogRoute {
-		// Route mode uses plain anchor pointers (no fence marker bit).
+		// Route mode stores plain anchor pointers (no fence marker bit).
 		return true
 	}
 	if r.modeInit {
@@ -605,6 +621,65 @@ func (r valueReader) FencePointerLikelyBlock(ptr page.ValuePtr) bool {
 	// Fence expansion should only trigger for explicitly fence-marked pointers.
 	// Grouped pointers are also used by non-fence per-key payloads.
 	return page.ValuePtrIsFenceOuter(ptr)
+}
+
+func (r valueReader) ReadUnsafeRouteForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error) {
+	if !r.RouteLookupEnabled() {
+		return nil, false, nil
+	}
+	if block, cacheLease := r.cachedOuterLeafBlock(ptr); block != nil {
+		defer cacheLease.Release()
+		entry, found, err := block.EntryForKey(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return nil, false, nil
+		}
+		val, err := r.resolveLookupResult(entry, true)
+		if err != nil {
+			return nil, false, err
+		}
+		val = cloneInlineValueIfNeeded(entry.Kind, val)
+		return val, true, nil
+	}
+	raw, err := r.readRawUnsafe(ptr)
+	if err != nil {
+		return nil, false, err
+	}
+	if !outerleaf.HasMagic(raw) {
+		return nil, false, nil
+	}
+	return r.decodeValueForKeyFound(ptr, key, raw, true)
+}
+
+func (r valueReader) ReadUnsafeRouteAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, bool, error) {
+	if !r.RouteLookupEnabled() {
+		return dst, false, nil
+	}
+	if block, cacheLease := r.cachedOuterLeafBlock(ptr); block != nil {
+		defer cacheLease.Release()
+		entry, found, err := block.EntryForKey(key)
+		if err != nil {
+			return nil, false, err
+		}
+		if !found {
+			return dst, false, nil
+		}
+		out, err := r.resolveLookupResultAppend(entry, dst)
+		if err != nil {
+			return nil, false, err
+		}
+		return out, true, nil
+	}
+	raw, err := r.readRawUnsafe(ptr)
+	if err != nil {
+		return nil, false, err
+	}
+	if !outerleaf.HasMagic(raw) {
+		return dst, false, nil
+	}
+	return r.decodeValueForKeyFoundAppend(ptr, key, raw, dst)
 }
 
 func (r valueReader) withoutOuterLeafCaches() valueReader {
@@ -1334,7 +1409,7 @@ func (r valueReader) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]tree.FenceBlockE
 }
 
 func (r valueReader) ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []tree.FenceBlockEntry) ([]tree.FenceBlockEntry, tree.FenceBlockLease, bool, error) {
-	if !r.fenceLookupModeEnabled() {
+	if !r.fenceBlockModeEnabled() {
 		return nil, nil, false, nil
 	}
 	block, cacheLease := r.cachedOuterLeafBlock(ptr)
@@ -1387,7 +1462,7 @@ func (r valueReader) ReadUnsafeFenceBlockLeaseInto(ptr page.ValuePtr, dst []tree
 }
 
 func (r valueReader) ReadUnsafeFenceBlockInto(ptr page.ValuePtr, dst []tree.FenceBlockEntry) ([]tree.FenceBlockEntry, bool, error) {
-	if !r.fenceLookupModeEnabled() {
+	if !r.fenceBlockModeEnabled() {
 		return nil, false, nil
 	}
 	block, cacheLease := r.cachedOuterLeafBlock(ptr)
@@ -1438,7 +1513,7 @@ func (r valueReader) ReadUnsafeFenceBlockInto(ptr page.ValuePtr, dst []tree.Fenc
 }
 
 func (r valueReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
-	if !r.fenceLookupModeEnabled() {
+	if !r.fenceBlockModeEnabled() {
 		return nil, false, nil
 	}
 	if keys := r.cachedOuterLeafKeys(ptr); keys != nil {
@@ -1473,7 +1548,7 @@ func (r valueReader) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool
 }
 
 func (r valueReader) ReadUnsafeFenceBlockKeysRangeLease(ptr page.ValuePtr, lower []byte, upper []byte) (tree.FenceKeysLease, bool, error) {
-	if !r.fenceLookupModeEnabled() {
+	if !r.fenceBlockModeEnabled() {
 		return nil, false, nil
 	}
 	if len(lower) > 0 && len(upper) > 0 && bytes.Compare(lower, upper) >= 0 {
@@ -1520,7 +1595,7 @@ func (r valueReader) ReadUnsafeFenceBlockKeysRangeLease(ptr page.ValuePtr, lower
 }
 
 func (r valueReader) ReadUnsafeFenceBlockKeysRange(ptr page.ValuePtr, lower []byte, upper []byte) ([][]byte, bool, error) {
-	if !r.fenceLookupModeEnabled() {
+	if !r.fenceBlockModeEnabled() {
 		return nil, false, nil
 	}
 	if len(lower) == 0 && len(upper) == 0 {
@@ -1555,7 +1630,7 @@ func (r valueReader) ReadUnsafeFenceBlockKeysRange(ptr page.ValuePtr, lower []by
 }
 
 func (r valueReader) ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (pos int, below bool, above bool, keys [][]byte, ok bool, err error) {
-	if !r.fenceLookupModeEnabled() {
+	if !r.fenceBlockModeEnabled() {
 		return 0, false, false, nil, false, nil
 	}
 	if cachedKeys := r.cachedOuterLeafKeys(ptr); cachedKeys != nil {
@@ -1602,7 +1677,7 @@ func (r valueReader) ReadUnsafeFenceBlockSeek(ptr page.ValuePtr, key []byte) (po
 }
 
 func (r valueReader) ReadUnsafeFenceBlockSeekLease(ptr page.ValuePtr, key []byte) (pos int, below bool, above bool, lease tree.FenceKeysLease, ok bool, err error) {
-	if !r.fenceLookupModeEnabled() {
+	if !r.fenceBlockModeEnabled() {
 		return 0, false, false, nil, false, nil
 	}
 	if cachedKeys := r.cachedOuterLeafKeys(ptr); cachedKeys != nil {

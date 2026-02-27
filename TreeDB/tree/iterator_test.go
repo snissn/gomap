@@ -102,6 +102,10 @@ type iteratorFenceClassifier struct {
 	likely map[page.ValuePtr]bool
 }
 
+type fenceLookupReaderUnsortedBlock struct {
+	*fenceLookupReader
+}
+
 func (r *fenceLookupReaderKeysUnavailable) ReadUnsafeFenceBlockKeys(ptr page.ValuePtr) ([][]byte, bool, error) {
 	r.keyCalls++
 	return nil, false, nil
@@ -271,6 +275,19 @@ func (c iteratorFenceClassifier) FencePointerLikelyBlock(ptr page.ValuePtr) bool
 		return true
 	}
 	return likely
+}
+
+func (r *fenceLookupReaderUnsortedBlock) ReadUnsafeFenceBlock(ptr page.ValuePtr) ([]FenceBlockEntry, bool, error) {
+	entries, ok, err := r.fenceLookupReader.ReadUnsafeFenceBlock(ptr)
+	if err != nil || !ok || len(entries) < 3 {
+		return entries, ok, err
+	}
+	// Return a deterministically unsorted block to exercise iterator-side
+	// normalization.
+	out := make([]FenceBlockEntry, len(entries))
+	copy(out, entries[1:])
+	out[len(out)-1] = entries[0]
+	return out, true, nil
 }
 
 func TestIteratorPointerLikelyFenceBlock_ExplicitFenceMarkerOverridesClassifier(t *testing.T) {
@@ -1921,6 +1938,179 @@ func TestIterator_FencePointerReverseSeekBetweenFenceAndLogicalKeys(t *testing.T
 	}
 
 	want := []string{"f060", "f050", "f020", "f010"}
+	if len(got) != len(want) {
+		t.Fatalf("reverse keys len=%d want=%d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("reverse key[%d]=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIterator_RoutePointerReverseBoundedRange_DoesNotFalseEmptyWhenAnchorBelowStart(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	baseReader := newFenceLookupReader()
+	reader := &fenceLookupReaderRangeAware{fenceLookupReader: baseReader}
+	ptr := reader.addBlock(map[string]string{
+		"f020": "v20",
+		"f050": "v50",
+		"f060": "v60",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	// Physical anchor key is below the scan lower bound, while the logical
+	// grouped payload still contains in-range keys.
+	if err := root.AddLeafEntry([]byte("f020"), nil, node.FlagPointer, ptr); err != nil {
+		t.Fatalf("AddLeafEntry(f020): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	rit := tr.ReverseIterator([]byte("f050"), []byte("f070"))
+	defer rit.Close()
+
+	var got []string
+	for ; rit.Valid(); rit.Next() {
+		got = append(got, string(rit.Key()))
+	}
+	if err := rit.Error(); err != nil {
+		t.Fatalf("reverse iterator error: %v", err)
+	}
+	want := []string{"f060", "f050"}
+	if len(got) != len(want) {
+		t.Fatalf("reverse keys len=%d want=%d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("reverse key[%d]=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIterator_ReverseBounded_UnsortedFenceEntriesStillReturnInRangeKeys(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	baseReader := newFenceLookupReader()
+	reader := &fenceLookupReaderUnsortedBlock{fenceLookupReader: baseReader}
+	ptr := reader.addBlock(map[string]string{
+		"c1": "vc1",
+		"d1": "vd1",
+		"d2": "vd2",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	if err := root.AddLeafEntry([]byte("d_anchor"), nil, node.FlagPointer, ptr); err != nil {
+		t.Fatalf("AddLeafEntry(d_anchor): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	rit := tr.ReverseIterator([]byte("d"), []byte("e"))
+	defer rit.Close()
+
+	var got []string
+	for ; rit.Valid(); rit.Next() {
+		got = append(got, string(rit.Key()))
+	}
+	if err := rit.Error(); err != nil {
+		t.Fatalf("reverse iterator error: %v", err)
+	}
+
+	want := []string{"d2", "d1"}
+	if len(got) != len(want) {
+		t.Fatalf("reverse keys len=%d want=%d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("reverse key[%d]=%q want=%q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestIterator_ReverseBounded_SkipsOutOfRangeExpandedBlockAndContinues(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatalf("Alloc root: %v", err)
+	}
+
+	reader := newFenceLookupReader()
+	// ptrLow expands below range start.
+	ptrLow := reader.addBlock(map[string]string{
+		"c1": "vc1",
+	})
+	// ptrInRange expands inside [d, e).
+	ptrInRange := reader.addBlock(map[string]string{
+		"d1": "vd1",
+		"d2": "vd2",
+	})
+
+	rootData, err := p.Get(0)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
+	root := node.NewNode(rootData)
+	root.SetType(page.PageTypeLeaf)
+	root.SetPageID(0)
+	// Keep physical pointer keys sorted so reverse seek(end) lands on pLow first.
+	if err := root.AddLeafEntry([]byte("f100"), nil, node.FlagPointer, ptrInRange); err != nil {
+		t.Fatalf("AddLeafEntry(f100): %v", err)
+	}
+	if err := root.AddLeafEntry([]byte("f200"), nil, node.FlagPointer, ptrLow); err != nil {
+		t.Fatalf("AddLeafEntry(f200): %v", err)
+	}
+	root.UpdateChecksum()
+
+	tr := New(p, reader, 0)
+	rit := tr.ReverseIterator([]byte("d"), []byte("e"))
+	defer rit.Close()
+
+	var got []string
+	for ; rit.Valid(); rit.Next() {
+		got = append(got, string(rit.Key()))
+	}
+	if err := rit.Error(); err != nil {
+		t.Fatalf("reverse iterator error: %v", err)
+	}
+
+	want := []string{"d2", "d1"}
 	if len(got) != len(want) {
 		t.Fatalf("reverse keys len=%d want=%d (%v)", len(got), len(want), got)
 	}

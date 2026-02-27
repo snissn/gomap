@@ -60,6 +60,23 @@ type slabUnsafeKeyReader interface {
 	ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, error)
 }
 
+// Optional key-aware route lookup reads used by v1_leaflog_route miss paths.
+// found=false indicates the key does not exist in the referenced anchor block.
+type slabUnsafeRouteKeyReader interface {
+	ReadUnsafeRouteForKey(ptr page.ValuePtr, key []byte) ([]byte, bool, error)
+}
+
+// Optional append-style route lookup reads.
+type slabUnsafeRouteKeyAppender interface {
+	ReadUnsafeRouteAppendForKey(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, bool, error)
+}
+
+// Optional capability probe for route-key lookup mode.
+// When false, tree miss paths skip route predecessor fallback scans.
+type slabRouteLookupMode interface {
+	RouteLookupEnabled() bool
+}
+
 // Optional fence-key lookup reads for fence-only outer-leaf mode.
 // found=false indicates the key does not exist in the referenced block.
 type slabUnsafeFenceKeyReader interface {
@@ -186,6 +203,13 @@ func keyAwarePointerReadsEnabled(sr SlabReader) bool {
 	return true
 }
 
+func routePointerLookupsEnabled(sr SlabReader) bool {
+	if gate, ok := sr.(slabRouteLookupMode); ok {
+		return gate.RouteLookupEnabled()
+	}
+	return false
+}
+
 func fencePointerLookupsEnabled(sr SlabReader) bool {
 	if gate, ok := sr.(slabFenceLookupMode); ok {
 		return gate.FenceLookupEnabled()
@@ -225,8 +249,11 @@ type Tree struct {
 	slabAppender      slabUnsafeAppender
 	slabBatcher       slabUnsafeBatchAppender
 	slabKeyReader     slabUnsafeKeyReader
+	slabRouteReader   slabUnsafeRouteKeyReader
+	slabRouteAppender slabUnsafeRouteKeyAppender
 	slabFenceReader   slabUnsafeFenceKeyReader
 	slabFenceAppender slabUnsafeFenceKeyAppender
+	routeLookupMode   bool
 	fenceLookupMode   bool
 	fenceLookupGlobal bool
 	fenceLookupSingle bool
@@ -251,6 +278,7 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		rootPageID: root,
 	}
 	keyAwareEnabled := keyAwarePointerReadsEnabled(sr)
+	routeEnabled := routePointerLookupsEnabled(sr)
 	fenceEnabled := fencePointerLookupsEnabled(sr)
 	fenceGlobalEnabled := fencePointerGlobalLookupsEnabled(sr)
 	fenceSingleCandidate := fencePointerSingleCandidateEnabled(sr)
@@ -271,6 +299,14 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 			t.slabKeyBatcher = keyBatcher
 		}
 	}
+	if routeEnabled {
+		if routeReader, ok := sr.(slabUnsafeRouteKeyReader); ok {
+			t.slabRouteReader = routeReader
+		}
+		if routeAppender, ok := sr.(slabUnsafeRouteKeyAppender); ok {
+			t.slabRouteAppender = routeAppender
+		}
+	}
 	if fenceEnabled {
 		if fenceReader, ok := sr.(slabUnsafeFenceKeyReader); ok {
 			t.slabFenceReader = fenceReader
@@ -278,6 +314,11 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		if fenceAppender, ok := sr.(slabUnsafeFenceKeyAppender); ok {
 			t.slabFenceAppender = fenceAppender
 		}
+	} else {
+		t.slabFenceReader = nil
+		t.slabFenceAppender = nil
+	}
+	if fenceEnabled || routeEnabled {
 		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
 			t.slabFenceBlocks = fenceBlocks
 		}
@@ -305,7 +346,18 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 		if cls, ok := sr.(slabFencePointerClassifier); ok {
 			t.slabFencePtrCls = cls
 		}
+	} else {
+		t.slabFenceBlocks = nil
+		t.slabFenceBlocksI = nil
+		t.slabFenceBlocksL = nil
+		t.slabFenceKeys = nil
+		t.slabFenceRange = nil
+		t.slabFenceRangeL = nil
+		t.slabFenceSeek = nil
+		t.slabFenceSeekL = nil
+		t.slabFencePtrCls = nil
 	}
+	t.routeLookupMode = routeEnabled && (t.slabRouteReader != nil || t.slabRouteAppender != nil)
 	t.fenceLookupMode = fenceEnabled && (t.slabFenceReader != nil || t.slabFenceAppender != nil)
 	t.fenceLookupGlobal = t.fenceLookupMode && fenceGlobalEnabled
 	t.fenceLookupSingle = t.fenceLookupMode && fenceSingleCandidate
@@ -317,6 +369,7 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	t.pager = p
 	t.slabReader = sr
 	keyAwareEnabled := keyAwarePointerReadsEnabled(sr)
+	routeEnabled := routePointerLookupsEnabled(sr)
 	fenceEnabled := fencePointerLookupsEnabled(sr)
 	fenceGlobalEnabled := fencePointerGlobalLookupsEnabled(sr)
 	fenceSingleCandidate := fencePointerSingleCandidateEnabled(sr)
@@ -351,6 +404,21 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabKeyAppender = nil
 		t.slabKeyBatcher = nil
 	}
+	if routeEnabled {
+		if routeReader, ok := sr.(slabUnsafeRouteKeyReader); ok {
+			t.slabRouteReader = routeReader
+		} else {
+			t.slabRouteReader = nil
+		}
+		if routeAppender, ok := sr.(slabUnsafeRouteKeyAppender); ok {
+			t.slabRouteAppender = routeAppender
+		} else {
+			t.slabRouteAppender = nil
+		}
+	} else {
+		t.slabRouteReader = nil
+		t.slabRouteAppender = nil
+	}
 	if fenceEnabled {
 		if fenceReader, ok := sr.(slabUnsafeFenceKeyReader); ok {
 			t.slabFenceReader = fenceReader
@@ -362,6 +430,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		} else {
 			t.slabFenceAppender = nil
 		}
+	} else {
+		t.slabFenceReader = nil
+		t.slabFenceAppender = nil
+	}
+	if fenceEnabled || routeEnabled {
 		if fenceBlocks, ok := sr.(slabUnsafeFenceBlockReader); ok {
 			t.slabFenceBlocks = fenceBlocks
 		} else {
@@ -408,8 +481,6 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 			t.slabFencePtrCls = nil
 		}
 	} else {
-		t.slabFenceReader = nil
-		t.slabFenceAppender = nil
 		t.slabFenceBlocks = nil
 		t.slabFenceBlocksI = nil
 		t.slabFenceBlocksL = nil
@@ -420,6 +491,7 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabFenceSeekL = nil
 		t.slabFencePtrCls = nil
 	}
+	t.routeLookupMode = routeEnabled && (t.slabRouteReader != nil || t.slabRouteAppender != nil)
 	t.fenceLookupMode = fenceEnabled && (t.slabFenceReader != nil || t.slabFenceAppender != nil)
 	t.fenceLookupGlobal = t.fenceLookupMode && fenceGlobalEnabled
 	t.fenceLookupSingle = t.fenceLookupMode && fenceSingleCandidate
@@ -510,6 +582,24 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 							Flags: 0,
 						}, nil
 					}
+				}
+				if val, ok, err := t.lookupRouteValueView(&n, idx, key); err != nil {
+					return node.LeafEntry{}, err
+				} else if ok {
+					return node.LeafEntry{
+						Key:   append([]byte(nil), key...),
+						Value: val,
+						Flags: 0,
+					}, nil
+				}
+				if val, ok, err := t.lookupRouteValueViewGlobal(key); err != nil {
+					return node.LeafEntry{}, err
+				} else if ok {
+					return node.LeafEntry{
+						Key:   append([]byte(nil), key...),
+						Value: val,
+						Flags: 0,
+					}, nil
 				}
 				return node.LeafEntry{}, ErrKeyNotFound
 			}
@@ -675,6 +765,16 @@ func (t *Tree) LookupFencePointerSource(key []byte) (page.ValuePtr, bool, error)
 			if t.fenceLookupGlobal {
 				return t.lookupFencePointerSourceGlobalPtr(key)
 			}
+			if _, routePtr, routeOK, routeErr := t.lookupRoutePointerSource(&n, idx, key); routeErr != nil {
+				return page.ValuePtr{}, false, routeErr
+			} else if routeOK {
+				return routePtr, true, nil
+			}
+			if _, routePtr, routeOK, routeErr := t.lookupRoutePointerSourceGlobal(key); routeErr != nil {
+				return page.ValuePtr{}, false, routeErr
+			} else if routeOK {
+				return routePtr, true, nil
+			}
 			return page.ValuePtr{}, false, nil
 
 		default:
@@ -749,6 +849,16 @@ func (t *Tree) LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool
 			if t.fenceLookupGlobal {
 				return t.lookupFencePointerSourceGlobal(key)
 			}
+			if routeKey, routePtr, routeOK, routeErr := t.lookupRoutePointerSource(&n, idx, key); routeErr != nil {
+				return nil, page.ValuePtr{}, false, routeErr
+			} else if routeOK {
+				return routeKey, routePtr, true, nil
+			}
+			if routeKey, routePtr, routeOK, routeErr := t.lookupRoutePointerSourceGlobal(key); routeErr != nil {
+				return nil, page.ValuePtr{}, false, routeErr
+			} else if routeOK {
+				return routeKey, routePtr, true, nil
+			}
 			return nil, page.ValuePtr{}, false, nil
 
 		default:
@@ -756,6 +866,254 @@ func (t *Tree) LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool
 		}
 	}
 	return nil, page.ValuePtr{}, false, errors.New("tree too deep")
+}
+
+func (t *Tree) lookupRouteValueFromPointer(ptr page.ValuePtr, key []byte) ([]byte, bool, error) {
+	if !t.routeLookupMode {
+		return nil, false, nil
+	}
+	if t.slabRouteReader != nil {
+		val, found, err := t.slabRouteReader.ReadUnsafeRouteForKey(ptr, key)
+		if err != nil {
+			return nil, false, err
+		}
+		if found {
+			return val, true, nil
+		}
+		return nil, false, nil
+	}
+	if t.slabRouteAppender != nil {
+		val, found, err := t.slabRouteAppender.ReadUnsafeRouteAppendForKey(ptr, key, nil)
+		if err != nil {
+			return nil, false, err
+		}
+		if found {
+			return val, true, nil
+		}
+		return nil, false, nil
+	}
+	return nil, false, nil
+}
+
+func (t *Tree) lookupRouteValueAppendFromPointer(ptr page.ValuePtr, key []byte, dst []byte) ([]byte, bool, error) {
+	if !t.routeLookupMode {
+		return dst, false, nil
+	}
+	if t.slabRouteAppender != nil {
+		oldLen := len(dst)
+		tail, found, err := t.slabRouteAppender.ReadUnsafeRouteAppendForKey(ptr, key, dst[oldLen:oldLen])
+		if err != nil {
+			return dst, false, err
+		}
+		if !found {
+			return dst, false, nil
+		}
+		if oldLen == 0 {
+			return tail, true, nil
+		}
+		if len(tail) == 0 {
+			return dst[:oldLen], true, nil
+		}
+		if cap(dst) > oldLen {
+			base := dst[:cap(dst):cap(dst)]
+			if &tail[0] == &base[oldLen] {
+				return dst[:oldLen+len(tail)], true, nil
+			}
+		}
+		return append(dst[:oldLen], tail...), true, nil
+	}
+	if t.slabRouteReader != nil {
+		val, found, err := t.slabRouteReader.ReadUnsafeRouteForKey(ptr, key)
+		if err != nil {
+			return dst, false, err
+		}
+		if !found {
+			return dst, false, nil
+		}
+		return append(dst, val...), true, nil
+	}
+	return dst, false, nil
+}
+
+func (t *Tree) lookupRouteValueView(n *node.Node, idx uint16, key []byte) ([]byte, bool, error) {
+	if !t.routeLookupMode || n == nil || idx == 0 {
+		return nil, false, nil
+	}
+	_, ptr, flags, err := n.GetLeafValueView(idx - 1)
+	if err != nil {
+		return nil, false, err
+	}
+	if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+		return nil, false, nil
+	}
+	return t.lookupRouteValueFromPointer(ptr, key)
+}
+
+func (t *Tree) lookupRouteValueViewAppend(n *node.Node, idx uint16, key []byte, dst []byte) ([]byte, bool, error) {
+	if !t.routeLookupMode || n == nil || idx == 0 {
+		return dst, false, nil
+	}
+	_, ptr, flags, err := n.GetLeafValueView(idx - 1)
+	if err != nil {
+		return dst, false, err
+	}
+	if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+		return dst, false, nil
+	}
+	return t.lookupRouteValueAppendFromPointer(ptr, key, dst)
+}
+
+func (t *Tree) lookupRouteValueViewGlobal(key []byte) ([]byte, bool, error) {
+	if !t.routeLookupMode {
+		return nil, false, nil
+	}
+	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
+	defer func() { _ = it.Close() }()
+	scanned := 0
+	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			it.Next()
+			continue
+		}
+		val, found, err := t.lookupRouteValueFromPointer(ptr, key)
+		if err != nil {
+			return nil, false, err
+		}
+		if found {
+			return val, true, nil
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, false, err
+	}
+	return nil, false, nil
+}
+
+func (t *Tree) lookupRouteValueViewAppendGlobal(key []byte, dst []byte) ([]byte, bool, error) {
+	if !t.routeLookupMode {
+		return dst, false, nil
+	}
+	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
+	defer func() { _ = it.Close() }()
+	scanned := 0
+	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			it.Next()
+			continue
+		}
+		out, found, err := t.lookupRouteValueAppendFromPointer(ptr, key, dst)
+		if err != nil {
+			return dst, false, err
+		}
+		if found {
+			return out, true, nil
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return dst, false, err
+	}
+	return dst, false, nil
+}
+
+func (t *Tree) lookupRouteHasKey(n *node.Node, idx uint16, key []byte) (found bool, ok bool, err error) {
+	if !t.routeLookupMode || n == nil || idx == 0 {
+		return false, false, nil
+	}
+	_, ptr, flags, err := n.GetLeafValueView(idx - 1)
+	if err != nil {
+		return false, false, err
+	}
+	if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+		return false, false, nil
+	}
+	_, found, err = t.lookupRouteValueFromPointer(ptr, key)
+	if err != nil {
+		return false, false, err
+	}
+	return found, true, nil
+}
+
+func (t *Tree) lookupRouteHasKeyGlobal(key []byte) (bool, bool, error) {
+	if !t.routeLookupMode {
+		return false, false, nil
+	}
+	_, found, err := t.lookupRouteValueViewGlobal(key)
+	if err != nil {
+		return false, false, err
+	}
+	if !found {
+		return false, true, nil
+	}
+	return true, true, nil
+}
+
+func (t *Tree) lookupRoutePointerSource(n *node.Node, idx uint16, key []byte) ([]byte, page.ValuePtr, bool, error) {
+	if !t.routeLookupMode || n == nil || idx == 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	_, ptr, flags, err := n.GetLeafValueView(idx - 1)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if flags&node.FlagTombstone != 0 || flags&node.FlagPointer == 0 {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	_, found, err := t.lookupRouteValueFromPointer(ptr, key)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	if !found {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	srcKey, _, _, _, err := n.GetLeafEntryView(idx - 1)
+	if err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	return append([]byte(nil), srcKey...), ptr, true, nil
+}
+
+func (t *Tree) lookupRoutePointerSourceGlobal(key []byte) ([]byte, page.ValuePtr, bool, error) {
+	if !t.routeLookupMode {
+		return nil, page.ValuePtr{}, false, nil
+	}
+	it := t.ReverseIteratorWithOptions(nil, key, IteratorOptions{Mode: IteratorModePointerProjection})
+	defer func() { _ = it.Close() }()
+	scanned := 0
+	for it.Valid() {
+		if scanned >= fenceGlobalFallbackScanLimit {
+			break
+		}
+		scanned++
+		k, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			it.Next()
+			continue
+		}
+		_, found, err := t.lookupRouteValueFromPointer(ptr, key)
+		if err != nil {
+			return nil, page.ValuePtr{}, false, err
+		}
+		if found {
+			return append([]byte(nil), k...), ptr, true, nil
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, page.ValuePtr{}, false, err
+	}
+	return nil, page.ValuePtr{}, false, nil
 }
 
 func (t *Tree) lookupFenceValueView(n *node.Node, idx uint16, key []byte) ([]byte, bool, error) {
@@ -1529,6 +1887,16 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 							return val, page.ValuePtr{}, 0, true, nil
 						}
 					}
+					if val, ok, err := t.lookupRouteValueViewAppend(&n, idx, key, dst); err != nil {
+						return nil, page.ValuePtr{}, 0, false, err
+					} else if ok {
+						return val, page.ValuePtr{}, 0, true, nil
+					}
+					if val, ok, err := t.lookupRouteValueViewAppendGlobal(key, dst); err != nil {
+						return nil, page.ValuePtr{}, 0, false, err
+					} else if ok {
+						return val, page.ValuePtr{}, 0, true, nil
+					}
 				} else if val, ok, err := t.lookupFenceValueView(&n, idx, key); err != nil {
 					return nil, page.ValuePtr{}, 0, false, err
 				} else if ok {
@@ -1537,6 +1905,18 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					return val, page.ValuePtr{}, 0, false, nil
 				} else if t.fenceLookupGlobal {
 					if val, ok, err := t.lookupFenceValueViewGlobal(key); err != nil {
+						return nil, page.ValuePtr{}, 0, false, err
+					} else if ok {
+						return val, page.ValuePtr{}, 0, false, nil
+					}
+				}
+				if !appendMode {
+					if val, ok, err := t.lookupRouteValueView(&n, idx, key); err != nil {
+						return nil, page.ValuePtr{}, 0, false, err
+					} else if ok {
+						return val, page.ValuePtr{}, 0, false, nil
+					}
+					if val, ok, err := t.lookupRouteValueViewGlobal(key); err != nil {
 						return nil, page.ValuePtr{}, 0, false, err
 					} else if ok {
 						return val, page.ValuePtr{}, 0, false, nil
@@ -1730,6 +2110,16 @@ func (t *Tree) Has(key []byte) (bool, error) {
 				return false, err
 			} else if ok {
 				return true, nil
+			}
+			if routeFound, ok, err := t.lookupRouteHasKey(&n, idx, key); err != nil {
+				return false, err
+			} else if ok {
+				return routeFound, nil
+			}
+			if routeFound, ok, err := t.lookupRouteHasKeyGlobal(key); err != nil {
+				return false, err
+			} else if ok {
+				return routeFound, nil
 			}
 			return false, nil
 		default:

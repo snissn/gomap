@@ -182,6 +182,137 @@ func TestSkipList_Iterator(t *testing.T) {
 	}
 }
 
+func TestSkipList_ReverseIterator(t *testing.T) {
+	s := New(0)
+	for _, key := range []string{"A", "C", "E", "G"} {
+		s.Put([]byte(key), []byte("val"+key))
+	}
+
+	it := s.NewReverseIterator(nil, nil)
+	expected := []string{"G", "E", "C", "A"}
+	for i := 0; i < len(expected); i++ {
+		if !it.Valid() {
+			t.Fatalf("reverse iterator ended early at %d", i)
+		}
+		if got := string(it.Key()); got != expected[i] {
+			t.Fatalf("reverse key[%d]=%q want=%q", i, got, expected[i])
+		}
+		it.Next()
+	}
+	if it.Valid() {
+		t.Fatalf("reverse iterator returned extra key %q", string(it.Key()))
+	}
+
+	bounded := s.NewReverseIterator([]byte("B"), []byte("F"))
+	boundedExpected := []string{"E", "C"}
+	for i := 0; i < len(boundedExpected); i++ {
+		if !bounded.Valid() {
+			t.Fatalf("bounded reverse ended early at %d", i)
+		}
+		if got := string(bounded.Key()); got != boundedExpected[i] {
+			t.Fatalf("bounded reverse key[%d]=%q want=%q", i, got, boundedExpected[i])
+		}
+		bounded.Next()
+	}
+	if bounded.Valid() {
+		t.Fatalf("bounded reverse returned extra key %q", string(bounded.Key()))
+	}
+
+	seek := s.NewReverseIterator(nil, nil)
+	seek.Seek([]byte("F"))
+	if !seek.Valid() || string(seek.Key()) != "E" {
+		t.Fatalf("reverse seek(F) got=%q valid=%v want=E", string(seek.Key()), seek.Valid())
+	}
+	seek.Seek([]byte("A"))
+	if seek.Valid() {
+		t.Fatalf("reverse seek(A) expected invalid, got key=%q", string(seek.Key()))
+	}
+	seek.Seek(nil)
+	if !seek.Valid() || string(seek.Key()) != "G" {
+		t.Fatalf("reverse seek(nil) got=%q valid=%v want=G", string(seek.Key()), seek.Valid())
+	}
+}
+
+func TestSkipList_ReverseIterator_ReplaceAndDelete(t *testing.T) {
+	s := New(0)
+	s.Put([]byte("A"), []byte("a1"))
+	s.Put([]byte("B"), []byte("b1"))
+	s.Put([]byte("C"), []byte("c1"))
+	s.Put([]byte("D"), []byte("d1"))
+
+	s.Put([]byte("A"), []byte("a2"))
+	s.Put([]byte("C"), []byte("c2"))
+	s.Delete([]byte("B"))
+	s.Put([]byte("B"), []byte("b2"))
+	s.Delete([]byte("D"))
+
+	it := s.NewReverseIterator(nil, nil)
+	expected := []struct {
+		key     string
+		value   string
+		deleted bool
+	}{
+		{key: "D", value: "", deleted: true},
+		{key: "C", value: "c2", deleted: false},
+		{key: "B", value: "b2", deleted: false},
+		{key: "A", value: "a2", deleted: false},
+	}
+	for i := 0; i < len(expected); i++ {
+		if !it.Valid() {
+			t.Fatalf("reverse iterator ended early at %d", i)
+		}
+		gotKey := string(it.Key())
+		if gotKey != expected[i].key {
+			t.Fatalf("reverse key[%d]=%q want=%q", i, gotKey, expected[i].key)
+		}
+		if gotDeleted := it.IsDeleted(); gotDeleted != expected[i].deleted {
+			t.Fatalf("reverse key[%d]=%q deleted=%v want=%v", i, gotKey, gotDeleted, expected[i].deleted)
+		}
+		if !expected[i].deleted {
+			if gotValue := string(it.Value()); gotValue != expected[i].value {
+				t.Fatalf("reverse key[%d]=%q value=%q want=%q", i, gotKey, gotValue, expected[i].value)
+			}
+		} else if gotValue := it.Value(); len(gotValue) != 0 {
+			t.Fatalf("reverse tombstone key[%d]=%q value_len=%d want=0", i, gotKey, len(gotValue))
+		}
+		it.Next()
+	}
+	if it.Valid() {
+		t.Fatalf("reverse iterator returned extra key %q", string(it.Key()))
+	}
+}
+
+func benchmarkSkipListReverseIterator(b *testing.B, keys int) {
+	b.Helper()
+	s := New(0)
+	for i := 0; i < keys; i++ {
+		k := fmt.Sprintf("k%08d", i)
+		v := fmt.Sprintf("v%08d", i)
+		s.Put([]byte(k), []byte(v))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		it := s.NewReverseIterator(nil, nil)
+		seen := 0
+		for it.Valid() {
+			seen++
+			it.Next()
+		}
+		if seen != keys {
+			b.Fatalf("reverse scan count=%d want=%d", seen, keys)
+		}
+	}
+}
+
+func BenchmarkSkipList_ReverseIterator_10K(b *testing.B) {
+	benchmarkSkipListReverseIterator(b, 10_000)
+}
+
+func BenchmarkSkipList_ReverseIterator_100K(b *testing.B) {
+	benchmarkSkipListReverseIterator(b, 100_000)
+}
+
 func TestSkipList_RandomStress(t *testing.T) {
 	// Fuzz testing with mixed operations to catch boundary/pointer bugs
 	s := New(0)

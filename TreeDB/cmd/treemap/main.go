@@ -40,6 +40,7 @@ Commands:
   vlog-gc-vacuum  Run vlog-gc then vacuum index.db (requires -rw)
   vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
   get             Get a single key
+  probe-key       Probe a key via Get + forward/reverse exact iterators
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
   scan-jsonl      Scan keys and values to JSONL {key,val} (requires -allow-values)
@@ -97,6 +98,8 @@ func main() {
 		runVlogRewrite(dir, args)
 	case "get":
 		runGet(dir, args)
+	case "probe-key":
+		runProbeKey(dir, args)
 	case "keys":
 		runKeys(dir, args)
 	case "scan", "dump":
@@ -675,6 +678,118 @@ func runGet(dir string, args []string) {
 		fatalf("output error: %v", err)
 	}
 	fmt.Println(out)
+}
+
+type probeResult struct {
+	found bool
+	key   []byte
+	val   []byte
+	err   error
+}
+
+func runProbeKey(dir string, args []string) {
+	fs := flag.NewFlagSet("probe-key", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (unsafe; may replay WAL or repair files)")
+	hexInput := fs.Bool("hex", false, "Interpret key as hex")
+	allowValues := fs.Bool("allow-values", false, "Allow printing values to stdout")
+	keyOut := fs.String("key-out", "hex", "Key output format: string|hex|base64")
+	valOut := fs.String("val-out", "hex", "Value output format: string|hex|base64")
+	_ = fs.Parse(args)
+
+	if fs.NArg() != 1 {
+		fatalf("probe-key requires exactly one key argument")
+	}
+	key, err := parseInputBytes(fs.Arg(0), *hexInput)
+	if err != nil {
+		fatalf("invalid key: %v", err)
+	}
+
+	db := openTreeDB(dir, *rw)
+	defer closeTreeDB(db)
+
+	getVal, getErr := db.Get(key)
+	exactForward := probeExactIterator(db, key, false)
+	exactReverse := probeExactIterator(db, key, true)
+	fromForward := probeRangeFirst(db, key, nil, false)
+	end := exactKeyRangeEnd(key)
+	fromReverse := probeRangeFirst(db, nil, end, true)
+
+	renderKey := func(k []byte) string {
+		out, err := formatOutput(k, *keyOut)
+		if err != nil {
+			fatalf("key output error: %v", err)
+		}
+		return out
+	}
+	renderVal := func(v []byte) string {
+		out, err := formatOutput(v, *valOut)
+		if err != nil {
+			fatalf("value output error: %v", err)
+		}
+		return out
+	}
+
+	fmt.Printf("key=%s\n", renderKey(key))
+	if getErr != nil {
+		fmt.Printf("get: err=%v\n", getErr)
+	} else if getVal == nil {
+		fmt.Println("get: found=false")
+	} else {
+		fmt.Printf("get: found=true val_len=%d\n", len(getVal))
+		if *allowValues {
+			fmt.Printf("get.value=%s\n", renderVal(getVal))
+		}
+	}
+
+	printProbe := func(name string, res probeResult) {
+		if res.err != nil {
+			fmt.Printf("%s: err=%v\n", name, res.err)
+			return
+		}
+		if !res.found {
+			fmt.Printf("%s: found=false\n", name)
+			return
+		}
+		fmt.Printf("%s: found=true key=%s val_len=%d\n", name, renderKey(res.key), len(res.val))
+		if *allowValues {
+			fmt.Printf("%s.value=%s\n", name, renderVal(res.val))
+		}
+	}
+
+	printProbe("iter.exact.forward", exactForward)
+	printProbe("iter.exact.reverse", exactReverse)
+	printProbe("iter.first.from_key.forward", fromForward)
+	printProbe("iter.first.to_key.reverse", fromReverse)
+}
+
+func probeExactIterator(db *treedb.DB, key []byte, reverse bool) probeResult {
+	start := append([]byte(nil), key...)
+	end := exactKeyRangeEnd(key)
+	return probeRangeFirst(db, start, end, reverse)
+}
+
+func probeRangeFirst(db *treedb.DB, start, end []byte, reverse bool) probeResult {
+	it, err := openIterator(db, start, end, reverse)
+	if err != nil {
+		return probeResult{err: err}
+	}
+	defer func() { _ = it.Close() }()
+	if !it.Valid() {
+		return probeResult{err: it.Error()}
+	}
+	return probeResult{
+		found: true,
+		key:   append([]byte(nil), it.Key()...),
+		val:   append([]byte(nil), it.Value()...),
+		err:   it.Error(),
+	}
+}
+
+func exactKeyRangeEnd(key []byte) []byte {
+	end := make([]byte, len(key)+1)
+	copy(end, key)
+	end[len(key)] = 0x00
+	return end
 }
 
 func runKeys(dir string, args []string) {

@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 	"time"
@@ -86,5 +87,51 @@ func TestMemtableIteratorBlocksWritesUntilClose(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("writer did not proceed after iterator closed")
+	}
+}
+
+func TestMemtableReverseIteratorAcrossModes(t *testing.T) {
+	modes := []Mode{
+		ModeSkiplist,
+		ModeHashSorted,
+		ModeBTree,
+		ModeAppendOnly,
+	}
+
+	for _, mode := range modes {
+		mode := mode
+		t.Run(mode.String(), func(t *testing.T) {
+			table, err := NewWithCapacityMode(0, mode)
+			if err != nil {
+				t.Fatalf("NewWithCapacityMode(%s): %v", mode.String(), err)
+			}
+			for i := 0; i < 5; i++ {
+				table.Set([]byte(fmt.Sprintf("k%d", i)), []byte(fmt.Sprintf("v%d", i)))
+			}
+
+			reverseTable, ok := table.(ReverseIterable)
+			if !ok {
+				t.Fatalf("mode %s does not implement ReverseIterable", mode.String())
+			}
+
+			it := reverseTable.NewReverseIterator([]byte("k1"), []byte("k4"))
+			defer it.Close()
+
+			var keys [][]byte
+			for it.Valid() {
+				keys = append(keys, append([]byte(nil), it.UnsafeKey()...))
+				it.Next()
+			}
+
+			expected := [][]byte{[]byte("k3"), []byte("k2"), []byte("k1")}
+			if len(keys) != len(expected) {
+				t.Fatalf("reverse key count mismatch: got=%d want=%d", len(keys), len(expected))
+			}
+			for i := range expected {
+				if !bytes.Equal(keys[i], expected[i]) {
+					t.Fatalf("reverse key[%d] mismatch: got=%q want=%q", i, keys[i], expected[i])
+				}
+			}
+		})
 	}
 }

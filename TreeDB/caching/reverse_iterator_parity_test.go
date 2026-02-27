@@ -16,6 +16,10 @@ type countingReverseIteratorBackend struct {
 	reverseIteratorCalls atomic.Int64
 }
 
+type noReverseTable struct {
+	memtable.Table
+}
+
 func (b *countingReverseIteratorBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	b.reverseIteratorCalls.Add(1)
 	return b.MockBackend.ReverseIterator(start, end)
@@ -127,6 +131,49 @@ func TestReverseIterator_PropagatesDeferredValueLogFlushError(t *testing.T) {
 	}
 	if !errors.Is(err, errWALUnavailable) {
 		t.Fatalf("expected errWALUnavailable, got %v", err)
+	}
+	if calls := backend.reverseIteratorCalls.Load(); calls != 0 {
+		t.Fatalf("backend reverse calls=%d want=0", calls)
+	}
+}
+
+func TestReverseIterator_ErrorsWhenQueueTableLacksReverseIterator(t *testing.T) {
+	backend := &countingReverseIteratorBackend{MockBackend: NewMockBackend()}
+	db, err := Open(t.TempDir(), backend, Options{
+		DisableWAL:         true,
+		AllowUnsafe:        true,
+		FlushThreshold:     1 << 30,
+		MemtableShards:     1,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV2FencePtr,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	mt := memtable.New()
+	mt.Set([]byte("k"), []byte("v"))
+
+	db.mu.Lock()
+	db.queue = []memtable.Table{noReverseTable{Table: mt}}
+	db.queueShardIDs = []uint16{0}
+	db.queueRanges = []keyRange{{
+		valid: true,
+		min:   []byte("k"),
+		max:   []byte("k"),
+	}}
+	db.publishMemtablesLocked()
+	db.mu.Unlock()
+
+	it, err := db.ReverseIterator(nil, nil)
+	if it != nil {
+		_ = it.Close()
+	}
+	if err == nil {
+		t.Fatalf("expected reverse iterator error for non-reverse memtable")
+	}
+	if !strings.Contains(err.Error(), "does not implement reverse iteration") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if calls := backend.reverseIteratorCalls.Load(); calls != 0 {
 		t.Fatalf("backend reverse calls=%d want=0", calls)

@@ -538,7 +538,11 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
 		return t.acquireIterator(nil, nil, mode, opts.IncludeTombstones, true)
 	}
-	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
+	// Initialize reverse positioning without the lower-bound guard.
+	// Some routed-pointer layouts can transiently position on an anchor key
+	// below start while the logical predecessor within [start,end) still
+	// exists. We apply start bound after initial reverse positioning.
+	it := t.acquireIterator(nil, end, mode, opts.IncludeTombstones, true)
 	// Reverse seek: Find >= end, then step back.
 	if end == nil {
 		it.seekRightMost()
@@ -560,9 +564,10 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 		}
 	}
 
-	// Check Start bound
-	if it.valid && it.start != nil && compareTreeKey(it.currKey, it.start) < 0 {
-		it.valid = false
+	it.start = start
+	// Check Start bound after initial reverse positioning.
+	for it.valid && start != nil && compareTreeKey(it.currKey, start) < 0 {
+		it.stepBackward()
 	}
 	if end == nil {
 		it.prefetchArmed = true
@@ -840,6 +845,43 @@ func copyFenceKeyRefs(dst [][]byte, src [][]byte) [][]byte {
 	return dst
 }
 
+func ensureFenceKeysSorted(keys [][]byte) [][]byte {
+	if len(keys) < 2 {
+		return keys
+	}
+	for i := 1; i < len(keys); i++ {
+		if compareTreeKey(keys[i-1], keys[i]) > 0 {
+			// Defensive normalization for legacy/dirty blocks: iterator domain
+			// logic (lower-bound seek and reverse positioning) relies on monotonic
+			// key order.
+			cloned := make([][]byte, len(keys))
+			copy(cloned, keys)
+			sort.Slice(cloned, func(a, b int) bool {
+				return compareTreeKey(cloned[a], cloned[b]) < 0
+			})
+			return cloned
+		}
+	}
+	return keys
+}
+
+func ensureFenceEntriesSorted(entries []FenceBlockEntry) []FenceBlockEntry {
+	if len(entries) < 2 {
+		return entries
+	}
+	for i := 1; i < len(entries); i++ {
+		if compareTreeKey(entries[i-1].Key, entries[i].Key) > 0 {
+			cloned := make([]FenceBlockEntry, len(entries))
+			copy(cloned, entries)
+			sort.Slice(cloned, func(a, b int) bool {
+				return compareTreeKey(cloned[a].Key, cloned[b].Key) < 0
+			})
+			return cloned
+		}
+	}
+	return entries
+}
+
 func (it *Iterator) pointerLikelyFenceBlock(ptr page.ValuePtr) bool {
 	// Explicit fence markers are authoritative and must never be skipped.
 	if page.ValuePtrIsFenceOuter(ptr) {
@@ -1021,6 +1063,7 @@ func (it *Iterator) tryRepositionPendingFence(top *CursorItem) (bool, error) {
 				}
 				continue
 			}
+			entries = ensureFenceEntriesSorted(entries)
 			if len(entries) == 0 {
 				if lease != nil {
 					lease.Release()
@@ -1111,24 +1154,24 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		} else {
 			var readOK bool
 			var keyErr error
-			if !it.reverse {
-				lower := it.start
-				if len(it.pendingSeekKey) > 0 {
-					lower = it.pendingSeekKey
+			lower := it.start
+			if !it.reverse && len(it.pendingSeekKey) > 0 {
+				lower = it.pendingSeekKey
+			}
+			// Reverse scans should also prefer bounded key-range expansion.
+			// Route-mode anchor blocks may contain keys spanning multiple prefixes;
+			// reading the full key list can position reverse cursors on out-of-range
+			// keys before in-range keys, causing false-empty bounded iterators.
+			if it.slabFenceRangeL != nil {
+				readLease, readOK, keyErr = it.slabFenceRangeL.ReadUnsafeFenceBlockKeysRangeLease(ptr, lower, it.end)
+				if readOK && readLease != nil {
+					readKeys = readLease.Keys()
 				}
-				if it.slabFenceRangeL != nil {
-					readLease, readOK, keyErr = it.slabFenceRangeL.ReadUnsafeFenceBlockKeysRangeLease(ptr, lower, it.end)
-					if readOK && readLease != nil {
-						readKeys = readLease.Keys()
-					}
-				}
-				if keyErr == nil && !readOK && it.slabFenceRange != nil {
-					readKeys, readOK, keyErr = it.slabFenceRange.ReadUnsafeFenceBlockKeysRange(ptr, lower, it.end)
-				}
-				if keyErr == nil && !readOK && it.slabFenceKeys != nil {
-					readKeys, readOK, keyErr = it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
-				}
-			} else if it.slabFenceKeys != nil {
+			}
+			if keyErr == nil && !readOK && it.slabFenceRange != nil {
+				readKeys, readOK, keyErr = it.slabFenceRange.ReadUnsafeFenceBlockKeysRange(ptr, lower, it.end)
+			}
+			if keyErr == nil && !readOK && it.slabFenceKeys != nil {
 				readKeys, readOK, keyErr = it.slabFenceKeys.ReadUnsafeFenceBlockKeys(ptr)
 			}
 			if keyErr != nil {
@@ -1145,7 +1188,7 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 			}
 		}
 		if keyOK {
-			keys = readKeys
+			keys = ensureFenceKeysSorted(readKeys)
 			keyLease = readLease
 			ok = true
 			it.fenceValuesLazy = it.mode == IteratorModeFull
@@ -1180,6 +1223,7 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 			}
 			return false, false, false, nil
 		}
+		entries = ensureFenceEntriesSorted(entries)
 		it.releaseFenceBlockLease()
 		it.fenceBlockLease = blockLease
 		it.fenceValuesLazy = false
@@ -1251,7 +1295,10 @@ func (it *Iterator) expandFenceBlockAt(top *CursorItem) (handled bool, produced 
 		if keyLease != nil {
 			keyLease.Release()
 		}
-		return handled, false, true, nil
+		// Route-expanded reverse scans can transiently surface out-of-range keys
+		// while still having in-range data in earlier physical entries. Skip this
+		// pointer and continue walking backward instead of terminating.
+		return handled, false, false, nil
 	}
 
 	it.fenceEntries = entries
@@ -1361,9 +1408,9 @@ func (it *Iterator) loadCurrent() {
 		// expansion. The physical pointer key can sit below start while expanded
 		// logical keys are still within [start,end).
 		if it.reverse && it.start != nil && compareTreeKey(keyView, it.start) < 0 {
-			it.valid = false
 			it.clearPendingFenceSeek()
-			return
+			top.Index--
+			continue
 		}
 
 		it.currKey = keyView

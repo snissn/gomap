@@ -55,6 +55,8 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	} else {
 		s.reader.clearForPoolReuse()
 	}
+	s.memtable = nil
+	s.onClose = nil
 	s.registryID = 0
 	s.closed.Store(false)
 	// treePager/treeRoot are intentionally preserved as a pooled cache key for

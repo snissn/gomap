@@ -106,4 +106,3 @@ func TestCachingDB_V1LeafLogRoute_PrefixedBinaryRootsVisibleAfterCheckpoint(t *t
 		t.Fatalf("authz root mismatch got=%d want=%d", len(got), len(authzRootVal))
 	}
 }
-
