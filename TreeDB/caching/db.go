@@ -162,14 +162,11 @@ func iavlNodeVersionFromNodeKey(key []byte) (version uint64, ok bool) {
 }
 
 func routeKeyRequiresSingletonOuterLeaf(key []byte) bool {
-	// IAVL node keys encode ('s', version, nonce). Keeping these as singleton
-	// outer-leaf groups preserves exact version-key visibility for latest-version
-	// scans used by importer/commit paths.
-	if len(key) < 13 {
-		return false
-	}
-	base := key[len(key)-13:]
-	return base[0] == 's'
+	_ = key
+	// Route mode relies on exact predecessor-anchor resolution; forcing singleton
+	// blocks for heuristic key patterns can introduce directory gaps and false
+	// negatives. Keep grouping policy purely range/materialization driven.
+	return false
 }
 
 type routePersistedGapScanner struct {
@@ -2937,7 +2934,28 @@ func (plan *fenceSourceRewritePlan) sourceFullyCovered() bool {
 	if plan == nil || plan.sourceKeyCount < 0 {
 		return false
 	}
-	return len(plan.sets) >= plan.sourceKeyCount
+	if plan.sourceKeyCount == 0 {
+		return true
+	}
+	if len(plan.sourceKeys) == 0 {
+		return false
+	}
+	if len(plan.sets) < plan.sourceKeyCount {
+		return false
+	}
+	// Full coverage requires an explicit set mutation for every decoded source
+	// key. Additional in-range inserts must not count toward this threshold.
+	for i := 0; i < len(plan.sourceKeys); i++ {
+		key := plan.sourceKeys[i]
+		if len(key) == 0 {
+			continue
+		}
+		keyHash := fenceRewriteKeyHash(key)
+		if _, ok := plan.lookupSetIndex(keyHash, key); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (plan *fenceSourceRewritePlan) containsKey(key []byte) bool {
@@ -3068,9 +3086,6 @@ func (p *fenceAnchorPromoter) overlapRewriteSourceFullyCovered(sourcePtr page.Va
 
 func (p *fenceAnchorPromoter) remapRewrittenSource(sourceKey []byte, sourcePtr page.ValuePtr) ([]byte, page.ValuePtr) {
 	if p == nil || len(sourceKey) == 0 {
-		return sourceKey, sourcePtr
-	}
-	if p.v1LeafLogRouteMode() {
 		return sourceKey, sourcePtr
 	}
 	for hop := 0; hop < 8; hop++ {
@@ -3254,6 +3269,11 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 		}
 		plan.sourceKeyCount = len(keys)
 		plan.sourceKeys = keys
+		if p.v1LeafLogRouteMode() && len(plan.sourceKeys) > 0 {
+			// Route mode must reason over canonical block anchors (payload min-key),
+			// not arbitrary exact sibling rows that may still exist transiently.
+			plan.sourceKey = append(plan.sourceKey[:0], plan.sourceKeys[0]...)
+		}
 		plan.ensureSetIndex()
 	}
 	// Queue overlap rewrites when key is in-source OR falls inside the source
@@ -3312,13 +3332,13 @@ func (p *fenceAnchorPromoter) materializeRewriteBlobRefs(entries []outerleaf.Typ
 	return nil
 }
 
-func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan, lane *lane, dictID uint64) ([]byte, []byte, bool, error) {
+func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan, lane *lane, dictID uint64) ([]byte, []byte, []byte, bool, error) {
 	if p == nil || p.db == nil || plan == nil || len(plan.sourceKey) == 0 {
-		return nil, nil, false, nil
+		return nil, nil, nil, false, nil
 	}
 	if plan.sourceFullyCovered() {
 		if len(plan.sets) == 0 {
-			return nil, nil, true, nil
+			return nil, nil, nil, true, nil
 		}
 		out := p.getRewriteEntries(len(plan.sets))
 		defer func() { p.putRewriteEntries(out) }()
@@ -3336,7 +3356,7 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 			return bytes.Compare(out[i].Key, out[j].Key) < 0
 		})
 		if err := p.materializeRewriteBlobRefs(out, lane, dictID); err != nil {
-			return nil, nil, false, err
+			return nil, nil, nil, false, err
 		}
 		totalInlineBytes := 0
 		for i := range out {
@@ -3349,26 +3369,26 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		payload, err := enc.EncodeTypedEntriesAssumeSorted(nil, out, codec, p.db.outerLeafBlockRestart)
 		putOuterLeafEncoder(enc)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, nil, nil, false, err
 		}
-		return append([]byte(nil), out[0].Key...), payload, false, nil
+		return append([]byte(nil), out[0].Key...), payload, append([]byte(nil), out[len(out)-1].Key...), false, nil
 	}
 	if p.db.valueLogReader == nil {
-		return nil, nil, false, errors.New("cachingdb: missing value-log reader for overlap rewrite")
+		return nil, nil, nil, false, errors.New("cachingdb: missing value-log reader for overlap rewrite")
 	}
 	raw, err := p.db.valueLogReader.Read(plan.sourcePtr)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
 	if !outerleaf.HasMagic(raw) {
-		return nil, nil, false, fmt.Errorf("cachingdb: overlap rewrite source not outer-leaf payload key=%q ptr=%+v", plan.sourceKey, plan.sourcePtr)
+		return nil, nil, nil, false, fmt.Errorf("cachingdb: overlap rewrite source not outer-leaf payload key=%q ptr=%+v", plan.sourceKey, plan.sourcePtr)
 	}
 	decoded, err := outerleaf.DecodeBlockLeaseWithVerify(raw, true)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
 	if decoded == nil {
-		return nil, nil, false, nil
+		return nil, nil, nil, false, nil
 	}
 	defer decoded.Release()
 
@@ -3411,10 +3431,10 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 		out = append(out, next)
 		return nil
 	}); err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
 	if len(out) == 0 && len(plan.sets) == 0 {
-		return nil, nil, false, nil
+		return nil, nil, nil, false, nil
 	}
 
 	for i := range plan.sets {
@@ -3435,13 +3455,13 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 	}
 
 	if len(out) == 0 {
-		return nil, nil, true, nil
+		return nil, nil, nil, true, nil
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return bytes.Compare(out[i].Key, out[j].Key) < 0
 	})
 	if err := p.materializeRewriteBlobRefs(out, lane, dictID); err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
 	totalInlineBytes := 0
 	for i := range out {
@@ -3455,9 +3475,9 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 	payload, err := enc.EncodeTypedEntriesAssumeSorted(nil, out, codec, p.db.outerLeafBlockRestart)
 	putOuterLeafEncoder(enc)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
-	return append([]byte(nil), out[0].Key...), payload, false, nil
+	return append([]byte(nil), out[0].Key...), payload, append([]byte(nil), out[len(out)-1].Key...), false, nil
 }
 
 func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer func(key []byte, ptr page.ValuePtr) error, emitDelete func(key []byte) error) error {
@@ -3484,9 +3504,10 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 	type overlapRewritePending struct {
 		plan      *fenceSourceRewritePlan
 		anchorKey []byte
+		maxKey    []byte
+		payload   []byte
 	}
 	pending := make([]overlapRewritePending, 0, len(order))
-	records := make([]valuelog.Record, 0, len(order))
 	preferredLane := -1
 	if p.db.deferredValueLogNeedsSingleLaneRegroup() {
 		preferredLane = 0
@@ -3507,7 +3528,7 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 		if plan == nil {
 			continue
 		}
-		anchorKey, payload, removedAll, err := p.rewriteSourceFromPlan(plan, lane, dictID)
+		anchorKey, payload, maxKey, removedAll, err := p.rewriteSourceFromPlan(plan, lane, dictID)
 		if err != nil {
 			return err
 		}
@@ -3520,11 +3541,43 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 		if len(anchorKey) == 0 {
 			continue
 		}
-		pending = append(pending, overlapRewritePending{plan: plan, anchorKey: anchorKey})
-		records = append(records, valuelog.Record{Value: payload})
+		if len(maxKey) == 0 {
+			maxKey = anchorKey
+		}
+		pending = append(pending, overlapRewritePending{
+			plan:      plan,
+			anchorKey: anchorKey,
+			maxKey:    maxKey,
+			payload:   payload,
+		})
 	}
 
-	if len(records) > 0 {
+	if len(pending) > 0 {
+		sort.Slice(pending, func(i, j int) bool {
+			if cmp := bytes.Compare(pending[i].anchorKey, pending[j].anchorKey); cmp != 0 {
+				return cmp < 0
+			}
+			return bytes.Compare(pending[i].plan.sourceKey, pending[j].plan.sourceKey) < 0
+		})
+		if p.v1LeafLogRouteMode() {
+			for i := 1; i < len(pending); i++ {
+				if bytes.Compare(pending[i-1].maxKey, pending[i].anchorKey) >= 0 {
+					return fmt.Errorf(
+						"cachingdb: route overlap rewrite produced overlapping ranges prev=[%q,%q] curr=[%q,%q]",
+						pending[i-1].anchorKey,
+						pending[i-1].maxKey,
+						pending[i].anchorKey,
+						pending[i].maxKey,
+					)
+				}
+			}
+		}
+		records := make([]valuelog.Record, len(pending))
+		pendingAnchorKeys := make(map[string]struct{}, len(pending))
+		for i := range pending {
+			records[i] = valuelog.Record{Value: pending[i].payload}
+			pendingAnchorKeys[string(pending[i].anchorKey)] = struct{}{}
+		}
 		startRID := p.db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
 		for i := range records {
 			records[i].RID = startRID + uint64(i)
@@ -3558,12 +3611,29 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 					if len(oldKey) == 0 || bytes.Equal(oldKey, pending[i].anchorKey) {
 						continue
 					}
+					if _, keep := pendingAnchorKeys[string(oldKey)]; keep {
+						// Avoid deleting anchors scheduled for publication in the
+						// same overlap-rewrite flush.
+						continue
+					}
 					if p.lookup != nil {
 						if pendingMut, ok := p.lookup(oldKey); ok && pendingMut.kind != fencePendingMutationDelete {
-							// The current flush rewrites this key via a non-delete
-							// mutation path; keep the fresh publish and avoid
-							// clobbering it with a source-sibling cleanup delete.
-							continue
+							// Route overlap rewrites already materialize queued set
+							// mutations into the rewritten payload. In that case we
+							// must delete stale exact siblings even when a non-delete
+							// mutation exists in the current flush; otherwise stale
+							// anchors survive and overlap rewritten ranges.
+							if pending[i].plan != nil {
+								if _, covered := pending[i].plan.lookupValue(oldKey); covered {
+									// Covered by this rewritten payload: do not skip.
+								} else {
+									// Not covered by this rewrite plan; keep a separate
+									// fresh publish from another path.
+									continue
+								}
+							} else {
+								continue
+							}
 						}
 					}
 					if err := emitDelete(oldKey); err != nil {
@@ -3573,6 +3643,9 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 				}
 			}
 			if !bytes.Equal(pending[i].anchorKey, pending[i].plan.sourceKey) {
+				if _, keep := pendingAnchorKeys[string(pending[i].plan.sourceKey)]; keep {
+					continue
+				}
 				if err := emitDelete(pending[i].plan.sourceKey); err != nil {
 					putValueLogPtrs(ptrs)
 					return err
@@ -4046,6 +4119,12 @@ func (p *fenceAnchorPromoter) maybeRematerializeFallbackMutation(mutationKey []b
 			}
 		}
 		if hasNonDeleteMutation {
+			if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+				// In route mode, mixed delete+set for the same source block must be
+				// resolved by the queued overlap rewrite path so one canonical anchor
+				// is published for the rewritten payload.
+				return nil
+			}
 			// Mixed delete+set overlap is normally rewritten by the queued
 			// source-block COW path during deferred pointer group publish.
 			// Only skip direct rewrite when a rewrite plan for this source has
@@ -4224,6 +4303,21 @@ func (p *fenceAnchorPromoter) shouldEmitRouteDelete(key []byte) bool {
 	}
 	if !p.keyCouldExistInBackend(key) {
 		return false
+	}
+	if snap := p.snapshotView(); snap != nil {
+		entry, err := snap.GetEntryExact(key)
+		if err == nil {
+			// Route cleanup deletes are only for persisted exact rows. Logical
+			// fallback coverage from anchor pointers must not trigger tombstones.
+			return entry.Flags&node.FlagTombstone == 0
+		}
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return false
+		}
+		p.db.reportError(fmt.Errorf("cachingdb: route-delete GetEntryExact(%q) failed: %w", key, err))
+		// On lookup uncertainty, keep delete behavior conservative to avoid
+		// leaving stale exact siblings behind.
+		return true
 	}
 	if p.db == nil || p.db.backend == nil {
 		return true

@@ -1,0 +1,29 @@
+name: "unified_bench: parity-500k"
+
+on:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    name: parity (treedb vs leveldb, 500k)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: |
+            go.sum
+
+      - name: Run 500k parity gate
+        env:
+          RUN_UNIFIED_BENCH_PARITY_500K: "1"
+        run: go test ./cmd/unified_bench -run TestIntegration_TreeDBLevelDBParity500k -count=1 -v
