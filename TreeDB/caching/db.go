@@ -950,7 +950,7 @@ func (db *DB) validateV1LeafLogDirectoryInvariants() error {
 	rangeByPtr := make(map[page.ValuePtr]anchorRange, 256)
 	var prev *anchorRange
 	for it.Valid() {
-		k := it.UnsafeKey()
+		k := append([]byte(nil), it.UnsafeKey()...)
 		_, ptr, flags := it.UnsafeEntry()
 		it.Next()
 		if routeMode && flags&node.FlagTombstone == 0 && flags&node.FlagPointer == 0 {
@@ -2982,7 +2982,7 @@ func (p *fenceAnchorPromoter) routeCursorLoadNext() error {
 		return nil
 	}
 	for p.routeCursor.Valid() {
-		k := p.routeCursor.UnsafeKey()
+		k := append([]byte(nil), p.routeCursor.UnsafeKey()...)
 		_, ptr, flags := p.routeCursor.UnsafeEntry()
 		p.routeCursor.Next()
 		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
@@ -3068,6 +3068,9 @@ func (p *fenceAnchorPromoter) overlapRewriteSourceFullyCovered(sourcePtr page.Va
 
 func (p *fenceAnchorPromoter) remapRewrittenSource(sourceKey []byte, sourcePtr page.ValuePtr) ([]byte, page.ValuePtr) {
 	if p == nil || len(sourceKey) == 0 {
+		return sourceKey, sourcePtr
+	}
+	if p.v1LeafLogRouteMode() {
 		return sourceKey, sourcePtr
 	}
 	for hop := 0; hop < 8; hop++ {
@@ -3163,12 +3166,31 @@ func (p *fenceAnchorPromoter) lookupFenceSourceForMutation(key []byte) ([]byte, 
 	if snap == nil {
 		return nil, page.ValuePtr{}, false, nil
 	}
+	routeMode := p.v1LeafLogRouteMode()
+	if routeMode {
+		// Route mode keeps directory anchors as exact pointer rows; prefer the
+		// exact row when present so delete/set rewrites target the correct block.
+		if exact, err := snap.GetEntryExact(key); err == nil {
+			if exact.Flags&node.FlagPointer != 0 {
+				sourceKey := append([]byte(nil), key...)
+				sourcePtr, routeErr := p.db.normalizeRouteAnchorPointer(exact.ValuePtr, "route exact source lookup")
+				if routeErr != nil {
+					return nil, page.ValuePtr{}, false, routeErr
+				}
+				sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, page.ValuePtrClearFenceOuter(sourcePtr))
+				return sourceKey, sourcePtr, true, nil
+			}
+		} else if !errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, page.ValuePtr{}, false, err
+		}
+	}
+
 	sourceKey, sourcePtr, found, err := snap.LookupFencePointerOrigin(key)
 	if err != nil {
 		return nil, page.ValuePtr{}, false, err
 	}
 	if found && len(sourceKey) > 0 {
-		if p.v1LeafLogRouteMode() {
+		if routeMode {
 			var routeErr error
 			sourcePtr, routeErr = p.db.normalizeRouteAnchorPointer(sourcePtr, "route source lookup")
 			if routeErr != nil {
@@ -3178,36 +3200,7 @@ func (p *fenceAnchorPromoter) lookupFenceSourceForMutation(key []byte) ([]byte, 
 		sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, page.ValuePtrClearFenceOuter(sourcePtr))
 		return sourceKey, sourcePtr, true, nil
 	}
-	if p.v1LeafLogRouteMode() {
-		sourceKey, sourcePtr, found, err = p.lookupPredecessorFenceAnchor(key)
-		if err != nil {
-			return nil, page.ValuePtr{}, false, err
-		}
-		if found && len(sourceKey) > 0 {
-			sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, sourcePtr)
-			return sourceKey, sourcePtr, true, nil
-		}
-	}
-	// In strict route mode, exact persisted pointer rows are themselves anchor
-	// directory entries. Use the exact pointer row as rewrite source so updates
-	// replace the anchored payload block instead of leaving stale exact rows.
-	if exact, err := snap.GetEntryExact(key); err == nil {
-		if !p.v1LeafLogRouteMode() {
-			return nil, page.ValuePtr{}, false, nil
-		}
-		if exact.Flags&node.FlagPointer == 0 {
-			return nil, page.ValuePtr{}, false, nil
-		}
-		sourceKey := append([]byte(nil), key...)
-		sourcePtr, routeErr := p.db.normalizeRouteAnchorPointer(exact.ValuePtr, "route exact source lookup")
-		if routeErr != nil {
-			return nil, page.ValuePtr{}, false, routeErr
-		}
-		sourceKey, sourcePtr = p.remapRewrittenSource(sourceKey, sourcePtr)
-		return sourceKey, sourcePtr, true, nil
-	} else if err != nil && !errors.Is(err, tree.ErrKeyNotFound) {
-		return nil, page.ValuePtr{}, false, err
-	}
+
 	sourceKey, sourcePtr, found, err = p.lookupPredecessorFenceAnchor(key)
 	if err != nil || !found || len(sourceKey) == 0 {
 		return sourceKey, sourcePtr, found, err
@@ -3564,6 +3557,14 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 				for _, oldKey := range sourceKeys {
 					if len(oldKey) == 0 || bytes.Equal(oldKey, pending[i].anchorKey) {
 						continue
+					}
+					if p.lookup != nil {
+						if pendingMut, ok := p.lookup(oldKey); ok && pendingMut.kind != fencePendingMutationDelete {
+							// The current flush rewrites this key via a non-delete
+							// mutation path; keep the fresh publish and avoid
+							// clobbering it with a source-sibling cleanup delete.
+							continue
+						}
 					}
 					if err := emitDelete(oldKey); err != nil {
 						putValueLogPtrs(ptrs)
@@ -4143,6 +4144,8 @@ func (p *fenceAnchorPromoter) maybePromoteAnchor(key []byte, pending fencePendin
 	if pending.kind == fencePendingMutationNone {
 		return nil
 	}
+	mode := strings.TrimSpace(p.db.indexOuterLeafMode)
+	routeMode := mode == backenddb.IndexOuterLeafModeV1LeafLogRoute
 	if !p.keyCouldExistInBackend(key) {
 		return nil
 	}
@@ -4154,7 +4157,6 @@ func (p *fenceAnchorPromoter) maybePromoteAnchor(key []byte, pending fencePendin
 	if err != nil {
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			if pending.kind == fencePendingMutationDelete {
-				mode := strings.TrimSpace(p.db.indexOuterLeafMode)
 				allowExactFallback := mode != backenddb.IndexOuterLeafModeV1LeafLog && mode != backenddb.IndexOuterLeafModeV1LeafLogRoute
 				return p.maybeRematerializeFallbackMutation(key, snap, emitPointer, emitDelete, allowExactFallback)
 			}
@@ -4167,6 +4169,18 @@ func (p *fenceAnchorPromoter) maybePromoteAnchor(key []byte, pending fencePendin
 	}
 	if !pending.replacesFenceAnchor(entry.ValuePtr) {
 		return nil
+	}
+	if routeMode {
+		// Route mode requires directory anchors to remain exact block-min keys.
+		// Generic successor promotion can emit non-min anchors, so route mode
+		// handles delete anchor replacement via block rewrite and skips
+		// promotion for set mutations.
+		switch pending.kind {
+		case fencePendingMutationDelete:
+			return p.maybeRematerializeFallbackMutation(key, snap, emitPointer, emitDelete, false)
+		case fencePendingMutationSetInline, fencePendingMutationSetPointer:
+			return nil
+		}
 	}
 	promoteKey, shouldEmit, err := p.findPromotion(entry.ValuePtr, key)
 	if err != nil {
@@ -4792,12 +4806,11 @@ func (db *DB) flushDeferredValueLogMemtable(
 					putValueLogEligible(unresolved)
 					continue
 				}
-				if len(unresolved) > 0 && !routeAnchorMode {
-					emitWholeGroup = true
-				} else {
+				if len(unresolved) == 0 {
 					putValueLogEligible(unresolved)
 					continue
 				}
+				emitWholeGroup = true
 				putValueLogEligible(unresolved)
 				if !emitWholeGroup {
 					if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
@@ -4822,7 +4835,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 		// collapseFence block ends here
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
 			key := ptrKeys[srcPos]
-			if collapseFence && emitWholeGroup && routeAnchorMode {
+			if collapseFence && routeAnchorMode {
 				// In route mode (strict directory contract), emit only one
 				// anchor per new outer-leaf block; do not emit exact per-key siblings.
 				if srcPos != group.start {
@@ -4925,11 +4938,15 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if stable, ok := units[i].mem.(memtable.StableUnsafeIteratorTable); ok {
 			stableUnsafe = stable.StableUnsafeIteratorSlices()
 		}
+		key := it.UnsafeKey()
+		if !stableUnsafe {
+			key = append([]byte(nil), key...)
+		}
 		priority := len(units) - 1 - i
 		heap = append(heap, opUnsafeMergeItem{
 			iter:     it,
 			priority: priority,
-			key:      it.UnsafeKey(),
+			key:      key,
 			stable:   stableUnsafe,
 		})
 	}
@@ -4989,12 +5006,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	)
 	var promoter *fenceAnchorPromoter
 	if collapseFence {
-		lookup := fenceMutationLookupFn(nil)
-		// Route-mode set-heavy workloads do not require eager global mutation map
-		// construction; defer until a delete is actually observed.
-		if !routeAnchorMode {
-			lookup = fenceMutationLookupForUnits(units)
-		}
+		lookup := fenceMutationLookupForUnits(units)
 		promoter = newFenceAnchorPromoter(db, lookup)
 		defer promoter.close()
 	}
@@ -5350,12 +5362,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							putValueLogEligible(unresolved)
 							continue
 						}
-						if len(unresolved) > 0 && !routeAnchorMode {
-							emitWholeGroup = true
-						} else {
+						if len(unresolved) == 0 {
 							putValueLogEligible(unresolved)
 							continue
 						}
+						emitWholeGroup = true
 						putValueLogEligible(unresolved)
 						if !emitWholeGroup {
 							if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
@@ -5393,7 +5404,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				}
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
 					key := ptrKeys[srcPos]
-					if collapseFence && emitWholeGroup && routeAnchorMode {
+					if collapseFence && routeAnchorMode {
 						// In route mode (strict directory contract), emit only one
 						// anchor per new outer-leaf block; do not emit exact per-key siblings.
 						if srcPos != group.start {
@@ -5454,7 +5465,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				shadowed := heap.pop()
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
-					shadowed.key = shadowed.iter.UnsafeKey()
+					nextKey := shadowed.iter.UnsafeKey()
+					if !shadowed.stable {
+						nextKey = append([]byte(nil), nextKey...)
+					}
+					shadowed.key = nextKey
 					heap.push(shadowed)
 				} else {
 					_ = shadowed.iter.Close()
@@ -5546,7 +5561,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 
 		top.iter.Next()
 		if top.iter.Valid() {
-			top.key = top.iter.UnsafeKey()
+			nextKey := top.iter.UnsafeKey()
+			if !top.stable {
+				nextKey = append([]byte(nil), nextKey...)
+			}
+			top.key = nextKey
 			heap.push(top)
 			currentIter = nil
 		} else {
@@ -6740,10 +6759,10 @@ type DB struct {
 	walErr        error
 	nextRID       atomic.Uint64
 	// RID bootstrap telemetry (captured once at open).
-	ridBootstrapMaxRID           uint64
-	ridBootstrapInitialNextRID   uint64
-	ridBootstrapSegmentsScanned  uint64
-	ridBootstrapRecordsScanned   uint64
+	ridBootstrapMaxRID          uint64
+	ridBootstrapInitialNextRID  uint64
+	ridBootstrapSegmentsScanned uint64
+	ridBootstrapRecordsScanned  uint64
 
 	// Legacy flags removed from public options; retained internally for code paths.
 	disableValueLog          bool
@@ -11427,6 +11446,11 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		if k > valuelog.MaxFrameK {
 			k = valuelog.MaxFrameK
 		}
+	}
+	if routeOuterLeafMode && allOuterLeafRecordValues(records) {
+		// Route anchors require one pointer per encoded outer-leaf payload so the
+		// directory key maps exactly to that payload record.
+		k = 1
 	}
 
 	ioNsPerStored, encodeNsPerRaw, safetyMargin := db.valueLogKeepPolicy()
@@ -20006,6 +20030,17 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
 					idx := eligibleIdxs[srcPos]
 					op := &b.entries[idx]
+					if routeMode && srcPos != group.start {
+						op.Type = batch.OpDelete
+						op.IsPtr = false
+						op.Value = nil
+						op.ValuePtr = page.ValuePtr{}
+						if rids != nil {
+							rids[idx] = 0
+						}
+						used++
+						continue
+					}
 					op.ValuePtr = ptr
 					op.IsPtr = true
 					if b.db.memtableValueLogPointers {
