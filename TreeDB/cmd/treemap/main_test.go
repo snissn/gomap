@@ -122,6 +122,48 @@ func TestImportJSONLInvalidBase64(t *testing.T) {
 	}
 }
 
+func TestProbeExactIteratorForwardReverse(t *testing.T) {
+	dir := t.TempDir()
+	writeDB(t, dir, []kv{
+		{key: []byte("s/latest"), val: []byte("v-latest")},
+		{key: []byte("s/latest\x00"), val: []byte("v-next-byte")},
+		{key: []byte("s/latest/extra"), val: []byte("v-prefix-child")},
+	})
+
+	db, err := treedb.Open(treedb.Options{Dir: dir, ReadOnly: true})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	key := []byte("s/latest")
+	for _, reverse := range []bool{false, true} {
+		got := probeExactIterator(db, key, reverse)
+		if got.err != nil {
+			t.Fatalf("probeExactIterator(reverse=%t) err: %v", reverse, got.err)
+		}
+		if !got.found {
+			t.Fatalf("probeExactIterator(reverse=%t) expected found", reverse)
+		}
+		if !bytes.Equal(got.key, key) {
+			t.Fatalf("probeExactIterator(reverse=%t) key mismatch: got=%q want=%q", reverse, string(got.key), string(key))
+		}
+		if !bytes.Equal(got.val, []byte("v-latest")) {
+			t.Fatalf("probeExactIterator(reverse=%t) val mismatch: got=%q", reverse, string(got.val))
+		}
+	}
+
+	for _, reverse := range []bool{false, true} {
+		got := probeExactIterator(db, []byte("s/missing"), reverse)
+		if got.err != nil {
+			t.Fatalf("probeExactIterator missing (reverse=%t) err: %v", reverse, got.err)
+		}
+		if got.found {
+			t.Fatalf("probeExactIterator missing (reverse=%t) unexpectedly found key=%q", reverse, string(got.key))
+		}
+	}
+}
+
 func writeDB(t *testing.T, dir string, entries []kv) {
 	t.Helper()
 	db, err := treedb.Open(treedb.Options{Dir: dir})
