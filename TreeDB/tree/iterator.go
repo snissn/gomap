@@ -43,6 +43,7 @@ type iteratorReusableBuffers struct {
 	prefetchVals     [][]byte
 	ptrScratch       []byte
 	keyScratch       []byte
+	leafOwned        []byte
 }
 
 func retainSliceCap[T any](s []T, maxCap int) []T {
@@ -447,6 +448,7 @@ func (it *Iterator) captureReusableBuffers() iteratorReusableBuffers {
 		prefetchVals:     it.prefetchVals,
 		ptrScratch:       it.ptrScratch,
 		keyScratch:       it.leafState.keyScratch,
+		leafOwned:        it.leafState.owned,
 	}
 }
 
@@ -463,6 +465,7 @@ func (it *Iterator) trimReusableBuffers() iteratorReusableBuffers {
 	buf.prefetchVals = retainSliceCap(it.prefetchVals, iteratorPoolMaxPrefetchCap)
 	buf.ptrScratch = retainSliceCap(it.ptrScratch, iteratorPoolMaxScratchBytes)
 	buf.keyScratch = retainSliceCap(it.leafState.keyScratch, iteratorPoolMaxScratchBytes)
+	buf.leafOwned = retainSliceCap(it.leafState.owned, iteratorPoolMaxScratchBytes)
 	return buf
 }
 
@@ -480,6 +483,7 @@ func (it *Iterator) installReusableBuffers(buf iteratorReusableBuffers) {
 	it.prefetchVals = buf.prefetchVals[:0]
 	it.ptrScratch = buf.ptrScratch[:0]
 	it.leafState.keyScratch = buf.keyScratch[:0]
+	it.leafState.owned = buf.leafOwned[:0]
 }
 
 func (t *Tree) acquireIterator(start, end []byte, mode IteratorMode, includeTombstones bool, reverse bool) *Iterator {
