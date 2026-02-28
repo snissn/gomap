@@ -177,7 +177,8 @@ func TestIntegration_TreeDBLevelDBParity500k(t *testing.T) {
 		"-keys", "500000",
 		"-progress=false",
 		"-format", "markdown",
-		"-test", "all",
+		// Parity compares final DB state; run only mutating tests to keep gate time bounded.
+		"-test", "sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_write_steady,batch_random,batch_delete,batch_small_seq,random_delete",
 		"-keep",
 		"-checkpoint-between-tests",
 		"-treedb-index-outer-leaf-mode", "v1_leaflog_route",
