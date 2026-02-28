@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +53,28 @@ var visibilityDebugOnce sync.Once
 var visibilityDebugEnabled atomic.Bool
 var visibilityDebugMu sync.Mutex
 var visibilityDebugLogFile *os.File
+var getMissDebugOnce sync.Once
+var getMissDebugEnabled atomic.Bool
+var getMissDebugPrefix []byte
+var getMissDebugLimit int64
+var getMissDebugCount atomic.Int64
+var keyTraceOnce sync.Once
+var keyTraceEnabled atomic.Bool
+var keyTracePrefix []byte
+var keyTraceMatchKey []byte
+var keyTraceLimit int64
+var keyTraceCount atomic.Int64
+var writeSyncDumpOnce sync.Once
+var writeSyncDumpPath string
+var writeSyncDumpValuesOnce sync.Once
+var writeSyncDumpValues bool
+var writeSyncDumpPrefixOnce sync.Once
+var writeSyncDumpPrefix []byte
+var writeSyncDumpMatchKeyOnce sync.Once
+var writeSyncDumpMatchKey []byte
+var writeSyncDumpMatchWindowOnce sync.Once
+var writeSyncDumpMatchWindow int64
+var writeSyncDumpMatchWindowRemaining atomic.Int64
 
 var valueLogEligiblePool sync.Pool                          // stores []int
 var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
@@ -117,6 +140,280 @@ func visibilityDebugf(format string, args ...any) {
 		return
 	}
 	_, _ = os.Stderr.WriteString(line)
+}
+
+func getMissDebugOn() bool {
+	getMissDebugOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_GET_MISS"))
+		if raw == "" || raw == "0" || strings.EqualFold(raw, "false") {
+			return
+		}
+		getMissDebugEnabled.Store(true)
+		pfx := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_GET_MISS_PREFIX_HEX"))
+		if pfx != "" {
+			pfx = strings.TrimPrefix(strings.ToLower(pfx), "0x")
+			if len(pfx)%2 != 0 {
+				pfx = "0" + pfx
+			}
+			decoded, err := hex.DecodeString(pfx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "treedb get-miss debug: invalid prefix %q: %v\n", pfx, err)
+			} else {
+				getMissDebugPrefix = decoded
+			}
+		}
+		limitRaw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_GET_MISS_LIMIT"))
+		if limitRaw != "" {
+			if n, err := strconv.ParseInt(limitRaw, 10, 64); err == nil && n > 0 {
+				getMissDebugLimit = n
+			}
+		}
+	})
+	return getMissDebugEnabled.Load()
+}
+
+func logGetMissDebug(key []byte, source string, err error, queueLen int, mutableBytes int64, checkpointing bool) {
+	if !getMissDebugOn() {
+		return
+	}
+	if len(getMissDebugPrefix) > 0 && !bytes.HasPrefix(key, getMissDebugPrefix) {
+		return
+	}
+	idx := getMissDebugCount.Add(1)
+	if getMissDebugLimit > 0 && idx > getMissDebugLimit {
+		return
+	}
+	msg := fmt.Sprintf("get miss source=%s key=%x err=%v queue_len=%d mutable_bytes=%d checkpointing=%t miss_idx=%d", source, key, err, queueLen, mutableBytes, checkpointing, idx)
+	if visibilityDebugOn() {
+		visibilityDebugf(msg)
+		return
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "treedb-get-miss %s %s\n", time.Now().Format(time.RFC3339Nano), msg)
+}
+
+func keyTraceOn() bool {
+	keyTraceOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_KEY_TRACE"))
+		if raw == "" || raw == "0" || strings.EqualFold(raw, "false") {
+			return
+		}
+		keyTraceEnabled.Store(true)
+		pfx := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_KEY_TRACE_PREFIX_HEX"))
+		if pfx != "" {
+			pfx = strings.TrimPrefix(strings.ToLower(pfx), "0x")
+			if len(pfx)%2 != 0 {
+				pfx = "0" + pfx
+			}
+			decoded, err := hex.DecodeString(pfx)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "treedb key-trace: invalid prefix %q: %v\n", pfx, err)
+			} else {
+				keyTracePrefix = decoded
+			}
+		}
+		match := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_KEY_TRACE_MATCH_KEY_HEX"))
+		if match != "" {
+			match = strings.TrimPrefix(strings.ToLower(match), "0x")
+			if len(match)%2 != 0 {
+				match = "0" + match
+			}
+			decoded, err := hex.DecodeString(match)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "treedb key-trace: invalid match key %q: %v\n", match, err)
+			} else {
+				keyTraceMatchKey = decoded
+			}
+		}
+		limitRaw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_KEY_TRACE_LIMIT"))
+		if limitRaw != "" {
+			if n, err := strconv.ParseInt(limitRaw, 10, 64); err == nil && n > 0 {
+				keyTraceLimit = n
+			}
+		}
+	})
+	return keyTraceEnabled.Load()
+}
+
+func logKeyTrace(op string, key []byte, valueLen int, extra string) {
+	if !keyTraceOn() {
+		return
+	}
+	if len(keyTracePrefix) > 0 && !bytes.HasPrefix(key, keyTracePrefix) {
+		return
+	}
+	if len(keyTraceMatchKey) > 0 && !bytes.Equal(key, keyTraceMatchKey) {
+		return
+	}
+	idx := keyTraceCount.Add(1)
+	if keyTraceLimit > 0 && idx > keyTraceLimit {
+		return
+	}
+	msg := fmt.Sprintf("key-trace op=%s key=%x val_len=%d idx=%d", op, key, valueLen, idx)
+	if strings.TrimSpace(extra) != "" {
+		msg += " " + extra
+	}
+	if visibilityDebugOn() {
+		visibilityDebugf(msg)
+		return
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "treedb-key-trace %s %s\n", time.Now().Format(time.RFC3339Nano), msg)
+}
+
+func writeSyncDumpLogPath() string {
+	writeSyncDumpOnce.Do(func() {
+		writeSyncDumpPath = strings.TrimSpace(os.Getenv("TREEDB_DEBUG_WRITESYNC_DUMP_LOG"))
+	})
+	return writeSyncDumpPath
+}
+
+func writeSyncDumpIncludeValues() bool {
+	writeSyncDumpValuesOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_WRITESYNC_DUMP_VALUES"))
+		if raw == "" || raw == "0" || strings.EqualFold(raw, "false") {
+			return
+		}
+		writeSyncDumpValues = true
+	})
+	return writeSyncDumpValues
+}
+
+func writeSyncDumpFilterPrefix() []byte {
+	writeSyncDumpPrefixOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_WRITESYNC_DUMP_PREFIX_HEX"))
+		if raw == "" {
+			return
+		}
+		raw = strings.TrimPrefix(strings.ToLower(raw), "0x")
+		if len(raw)%2 != 0 {
+			raw = "0" + raw
+		}
+		decoded, err := hex.DecodeString(raw)
+		if err != nil {
+			visibilityDebugf("writesync dump prefix decode failed raw=%q err=%v", raw, err)
+			return
+		}
+		writeSyncDumpPrefix = decoded
+	})
+	return writeSyncDumpPrefix
+}
+
+func writeSyncDumpFilterMatchKey() []byte {
+	writeSyncDumpMatchKeyOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_WRITESYNC_DUMP_MATCH_KEY_HEX"))
+		if raw == "" {
+			return
+		}
+		raw = strings.TrimPrefix(strings.ToLower(raw), "0x")
+		if len(raw)%2 != 0 {
+			raw = "0" + raw
+		}
+		decoded, err := hex.DecodeString(raw)
+		if err != nil {
+			visibilityDebugf("writesync dump match-key decode failed raw=%q err=%v", raw, err)
+			return
+		}
+		writeSyncDumpMatchKey = decoded
+	})
+	return writeSyncDumpMatchKey
+}
+
+func writeSyncDumpMatchWindowBatches() int64 {
+	writeSyncDumpMatchWindowOnce.Do(func() {
+		raw := strings.TrimSpace(os.Getenv("TREEDB_DEBUG_WRITESYNC_DUMP_MATCH_WINDOW_BATCHES"))
+		if raw == "" {
+			return
+		}
+		n, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			visibilityDebugf("writesync dump match-window decode failed raw=%q err=%v", raw, err)
+			return
+		}
+		if n < 0 {
+			n = 0
+		}
+		writeSyncDumpMatchWindow = n
+	})
+	return writeSyncDumpMatchWindow
+}
+
+func writeSyncDumpEntries(entries []batch.Entry) {
+	path := writeSyncDumpLogPath()
+	if path == "" {
+		return
+	}
+	prefix := writeSyncDumpFilterPrefix()
+	matchKey := writeSyncDumpFilterMatchKey()
+	windowBatches := writeSyncDumpMatchWindowBatches()
+	matchedBatch := false
+	if len(matchKey) > 0 {
+		for i := range entries {
+			if bytes.Equal(entries[i].Key, matchKey) {
+				matchedBatch = true
+				break
+			}
+		}
+		if matchedBatch {
+			if windowBatches > 0 {
+				writeSyncDumpMatchWindowRemaining.Store(windowBatches)
+			}
+		} else {
+			remaining := writeSyncDumpMatchWindowRemaining.Load()
+			if remaining > 0 {
+				writeSyncDumpMatchWindowRemaining.Add(-1)
+			} else {
+				return
+			}
+		}
+	}
+	if len(matchKey) > 0 && !matchedBatch {
+		remaining := writeSyncDumpMatchWindowRemaining.Load()
+		if remaining < 0 {
+			return
+		}
+	}
+	matched := len(entries)
+	if len(prefix) > 0 {
+		matched = 0
+		for i := range entries {
+			if bytes.HasPrefix(entries[i].Key, prefix) {
+				matched++
+			}
+		}
+		if matched == 0 {
+			return
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		visibilityDebugf("writesync dump open failed path=%q err=%v", path, err)
+		return
+	}
+	defer f.Close()
+	ts := time.Now().Format(time.RFC3339Nano)
+	if len(prefix) > 0 && len(matchKey) > 0 {
+		_, _ = fmt.Fprintf(f, "writesync-dump ts=%s entries=%d matched=%d prefix_hex=%x match_key_hex=%x match_hit=%t window_remaining=%d\n", ts, len(entries), matched, prefix, matchKey, matchedBatch, writeSyncDumpMatchWindowRemaining.Load())
+	} else if len(prefix) > 0 {
+		_, _ = fmt.Fprintf(f, "writesync-dump ts=%s entries=%d matched=%d prefix_hex=%x\n", ts, len(entries), matched, prefix)
+	} else if len(matchKey) > 0 {
+		_, _ = fmt.Fprintf(f, "writesync-dump ts=%s entries=%d match_key_hex=%x match_hit=%t window_remaining=%d\n", ts, len(entries), matchKey, matchedBatch, writeSyncDumpMatchWindowRemaining.Load())
+	} else {
+		_, _ = fmt.Fprintf(f, "writesync-dump ts=%s entries=%d\n", ts, len(entries))
+	}
+	withValues := writeSyncDumpIncludeValues()
+	for i := range entries {
+		if len(prefix) > 0 && !bytes.HasPrefix(entries[i].Key, prefix) {
+			continue
+		}
+		op := "put"
+		if entries[i].Type == batch.OpDelete {
+			op = "del"
+		}
+		if withValues && entries[i].Type != batch.OpDelete {
+			_, _ = fmt.Fprintf(f, "  %06d op=%s key=%x val_len=%d val=%x\n", i, op, entries[i].Key, len(entries[i].Value), entries[i].Value)
+			continue
+		}
+		_, _ = fmt.Fprintf(f, "  %06d op=%s key=%x val_len=%d\n", i, op, entries[i].Key, len(entries[i].Value))
+	}
 }
 
 func looksLikeIAVLRootNodeKey(key []byte) (version uint64, ok bool) {
@@ -1612,15 +1909,20 @@ func (db *DB) appendLargeValueManifest(lane *lane, dictID uint64, value []byte, 
 	return ptr, nil
 }
 
-func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys [][]byte, values [][]byte, durability journalDurability) ([]page.ValuePtr, []outerLeafRecordGroup, error) {
+func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys [][]byte, values [][]byte, durability journalDurability) ([]page.ValuePtr, []outerLeafRecordGroup, []int, error) {
 	if len(keys) != len(values) {
-		return nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
+		return nil, nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
 	}
 	if len(keys) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	if lane == nil {
-		return nil, nil, errWALUnavailable
+		return nil, nil, nil, errWALUnavailable
+	}
+
+	normalizedToSource := make([]int, len(keys))
+	for i := range keys {
+		normalizedToSource[i] = i
 	}
 
 	if len(keys) > 1 {
@@ -1660,9 +1962,11 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 			}
 			keys = make([][]byte, len(norm))
 			values = make([][]byte, len(norm))
+			normalizedToSource = make([]int, len(norm))
 			for i := range norm {
 				keys[i] = norm[i].key
 				values[i] = norm[i].value
+				normalizedToSource[i] = norm[i].ord
 			}
 		}
 	}
@@ -1735,7 +2039,7 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 	var prevKey []byte
 	gapScanner, err := newRoutePersistedGapScanner(db.backend, keys[0])
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if gapScanner != nil {
 		defer gapScanner.close()
@@ -1812,19 +2116,19 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 			if gapScanner != nil {
 				gap, gapErr := gapScanner.hasPersistedBetween(prevKey, key)
 				if gapErr != nil {
-					return nil, nil, gapErr
+					return nil, nil, nil, gapErr
 				}
 				hasPersistedGap = gap
 			}
 			if forceSingleton || hasPersistedGap || bytes.Compare(prevKey, key) >= 0 {
 				// Preserve correctness for non-monotonic batches by cutting blocks.
 				if err := flushRouteGroup(); err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				groupStart = i
 			} else if estimated+entryEstimate > targetBytes {
 				if err := flushRouteGroup(); err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				groupStart = i
 			}
@@ -1851,18 +2155,18 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 		prevKey = key
 		if forceSingleton {
 			if err := flushRouteGroup(); err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 		}
 	}
 	if len(entries) > 0 {
 		if err := flushRouteGroup(); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
 	if len(records) == 0 {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
 	for i := range records {
@@ -1870,13 +2174,13 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 	}
 	ptrs, err := db.appendValueLog(lane, dictID, nil, records, durability)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if len(ptrs) != len(records) {
 		putValueLogPtrs(ptrs)
-		return nil, nil, fmt.Errorf("cachingdb: outer route value-log returned %d ptrs for %d records", len(ptrs), len(records))
+		return nil, nil, nil, fmt.Errorf("cachingdb: outer route value-log returned %d ptrs for %d records", len(ptrs), len(records))
 	}
-	return ptrs, groups, nil
+	return ptrs, groups, normalizedToSource, nil
 }
 
 // buildOuterLeafValueRecords encodes key/value pairs into value-log records.
@@ -2402,11 +2706,12 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 
 	var ptrs []page.ValuePtr
 	var groups []outerLeafRecordGroup
+	var routeNormToSource []int
 	var records []valuelog.Record
 	var outerArena []byte
 	routeMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
 	if routeMode {
-		ptrs, groups, err = db.writeRouteOuterLeafValueRecords(lane, dictID, keys, values, durability)
+		ptrs, groups, routeNormToSource, err = db.writeRouteOuterLeafValueRecords(lane, dictID, keys, values, durability)
 		if err != nil {
 			return nil, err
 		}
@@ -2466,12 +2771,23 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 			}
 		}
 		group := groups[i]
-		if group.start < 0 || group.end < group.start || group.end > len(eligible) {
+		groupLimit := len(eligible)
+		if routeMode {
+			groupLimit = len(routeNormToSource)
+		}
+		if group.start < 0 || group.end < group.start || group.end > groupLimit {
 			return nil, errors.New("cachingdb: deferred value-log group out of range")
 		}
 		if collapseFence {
 			if group.start < group.end {
-				idx := eligible[group.start]
+				srcPos := group.start
+				if routeMode {
+					srcPos = routeNormToSource[srcPos]
+				}
+				if srcPos < 0 || srcPos >= len(eligible) {
+					return nil, errors.New("cachingdb: deferred value-log route source index out of range")
+				}
+				idx := eligible[srcPos]
 				op := &ops[idx]
 				op.ValuePtr = ptr
 				op.IsPtr = true
@@ -2480,7 +2796,14 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 			continue
 		}
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
-			idx := eligible[srcPos]
+			mappedPos := srcPos
+			if routeMode {
+				mappedPos = routeNormToSource[srcPos]
+			}
+			if mappedPos < 0 || mappedPos >= len(eligible) {
+				return nil, errors.New("cachingdb: deferred value-log route source index out of range")
+			}
+			idx := eligible[mappedPos]
 			op := &ops[idx]
 			op.ValuePtr = ptr
 			op.IsPtr = true
@@ -2728,7 +3051,21 @@ type fenceAnchorPromoter struct {
 	routeCursorHaveNext bool
 	routeCursorLastKey  []byte
 
+	routeDeleteDecision map[uint64][]routeDeleteDecisionEntry
+
 	rewriteEntries []outerleaf.TypedEntry
+}
+
+type routeDeleteDecisionEntry struct {
+	key  []byte
+	emit bool
+}
+
+type overlapRewritePending struct {
+	plans     []*fenceSourceRewritePlan
+	anchorKey []byte
+	maxKey    []byte
+	payload   []byte
 }
 
 type fenceSourcePendingSet struct {
@@ -2827,6 +3164,13 @@ func (p *fenceAnchorPromoter) v1LeafLogMode() bool {
 	}
 	mode := strings.TrimSpace(p.db.indexOuterLeafMode)
 	return mode == backenddb.IndexOuterLeafModeV1LeafLog || mode == backenddb.IndexOuterLeafModeV1LeafLogRoute
+}
+
+func (p *fenceAnchorPromoter) v1LeafLogLegacyMode() bool {
+	if p == nil || p.db == nil {
+		return false
+	}
+	return strings.TrimSpace(p.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLog
 }
 
 func (p *fenceAnchorPromoter) v1LeafLogRouteMode() bool {
@@ -2967,7 +3311,21 @@ func (plan *fenceSourceRewritePlan) lookupSetIndex(keyHash uint64, key []byte) (
 			if realIdx >= 0 && realIdx < len(plan.sets) && bytes.Equal(plan.sets[realIdx].key, key) {
 				return realIdx, true
 			}
+			// Handle rare hash collisions by scanning only entries with the same
+			// hash in reverse insertion order.
+			for i := realIdx - 1; i >= 0; i-- {
+				if plan.sets[i].hash != keyHash {
+					continue
+				}
+				if bytes.Equal(plan.sets[i].key, key) {
+					plan.setIndex[keyHash] = i + 1
+					return i, true
+				}
+			}
 		}
+		// Indexed mode is enabled specifically for large plans; a full reverse
+		// scan on hash misses becomes quadratic during overlap rewrites.
+		return 0, false
 	}
 	for i := len(plan.sets) - 1; i >= 0; i-- {
 		if plan.sets[i].hash != keyHash {
@@ -3177,20 +3535,35 @@ func (p *fenceAnchorPromoter) remapRewrittenSourceForKey(sourceKey []byte, sourc
 		alias := aliases[0]
 		if len(key) > 0 && len(aliases) > 1 {
 			foundRange := false
-			for i := range aliases {
-				candidate := aliases[i]
-				if len(candidate.sourceKey) == 0 {
-					continue
+			idx := sort.Search(len(aliases), func(i int) bool {
+				return bytes.Compare(aliases[i].sourceKey, key) > 0
+			}) - 1
+			if idx >= 0 && idx < len(aliases) {
+				candidate := aliases[idx]
+				if len(candidate.sourceKey) > 0 &&
+					bytes.Compare(key, candidate.sourceKey) >= 0 &&
+					(len(candidate.maxKey) == 0 || bytes.Compare(key, candidate.maxKey) <= 0) {
+					alias = candidate
+					foundRange = true
 				}
-				if bytes.Compare(key, candidate.sourceKey) < 0 {
-					continue
+			}
+			// Fallback for any unexpected overlap disorder in legacy alias slices.
+			if !foundRange {
+				for i := range aliases {
+					candidate := aliases[i]
+					if len(candidate.sourceKey) == 0 {
+						continue
+					}
+					if bytes.Compare(key, candidate.sourceKey) < 0 {
+						continue
+					}
+					if len(candidate.maxKey) > 0 && bytes.Compare(key, candidate.maxKey) > 0 {
+						continue
+					}
+					alias = candidate
+					foundRange = true
+					break
 				}
-				if len(candidate.maxKey) > 0 && bytes.Compare(key, candidate.maxKey) > 0 {
-					continue
-				}
-				alias = candidate
-				foundRange = true
-				break
 			}
 			if !foundRange {
 				// No alias range covers this key; keep the original source pointer.
@@ -3214,14 +3587,20 @@ func (p *fenceAnchorPromoter) recordRewrittenSourceAlias(oldSourcePtr page.Value
 		p.rewrittenSourceAlias = make(map[page.ValuePtr][]fenceSourceRewriteAlias, 8)
 	}
 	aliases := p.rewrittenSourceAlias[oldSourcePtr]
+	needsSort := false
+	if len(aliases) > 0 && bytes.Compare(aliases[len(aliases)-1].sourceKey, newSourceKey) > 0 {
+		needsSort = true
+	}
 	aliases = append(aliases, fenceSourceRewriteAlias{
 		sourceKey: append([]byte(nil), newSourceKey...),
 		maxKey:    append([]byte(nil), newMaxKey...),
 		sourcePtr: page.ValuePtrClearFenceOuter(newSourcePtr),
 	})
-	sort.Slice(aliases, func(i, j int) bool {
-		return bytes.Compare(aliases[i].sourceKey, aliases[j].sourceKey) < 0
-	})
+	if needsSort {
+		sort.Slice(aliases, func(i, j int) bool {
+			return bytes.Compare(aliases[i].sourceKey, aliases[j].sourceKey) < 0
+		})
+	}
 	p.rewrittenSourceAlias[oldSourcePtr] = aliases
 }
 
@@ -3349,7 +3728,22 @@ func (p *fenceAnchorPromoter) lookupFenceSourceForMutation(key []byte) ([]byte, 
 }
 
 func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (queued bool, sourcePtr page.ValuePtr, foundSource bool, err error) {
-	if p == nil || !p.v1LeafLogMode() || len(key) == 0 {
+	return p.queueLeafLogOverlapRewrite(key, value, false)
+}
+
+func (p *fenceAnchorPromoter) queueV1LeafLogRouteOverlapRewrite(key, value []byte) (queued bool, sourcePtr page.ValuePtr, foundSource bool, err error) {
+	return p.queueLeafLogOverlapRewrite(key, value, true)
+}
+
+func (p *fenceAnchorPromoter) queueLeafLogOverlapRewrite(key, value []byte, routeMode bool) (queued bool, sourcePtr page.ValuePtr, foundSource bool, err error) {
+	if p == nil || len(key) == 0 {
+		return false, page.ValuePtr{}, false, nil
+	}
+	if routeMode {
+		if !p.v1LeafLogRouteMode() {
+			return false, page.ValuePtr{}, false, nil
+		}
+	} else if !p.v1LeafLogLegacyMode() {
 		return false, page.ValuePtr{}, false, nil
 	}
 	// Fast path for sorted/clustered workloads: consecutive keys often belong to
@@ -3358,11 +3752,35 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 		p.lastOverlapPlan.setValueOwned(key, value)
 		return true, p.lastOverlapSourcePtr, true, nil
 	}
-	sourceKey, sourcePtr, found, err := p.lookupRouteSourceMonotonic(key)
-	if err != nil {
-		return false, page.ValuePtr{}, false, err
-	}
-	if !found || len(sourceKey) == 0 {
+	var (
+		sourceKey []byte
+		found     bool
+	)
+	if routeMode {
+		// Route-mode monotonic predecessor lookup is an optimization only.
+		// If the candidate cannot be queued (candidate block does not cover the
+		// key), retry with exact source lookup before treating the key as
+		// unresolved. This prevents wrong-source fallthrough from leaving stale
+		// overlapping anchors behind.
+		sourceKey, sourcePtr, found, err = p.lookupRouteSourceMonotonic(key)
+		if err != nil {
+			return false, page.ValuePtr{}, false, err
+		}
+		if found && len(sourceKey) > 0 {
+			if queued, queueErr := p.queueLeafLogOverlapRewriteWithSource(sourceKey, sourcePtr, key, value, routeMode); queueErr != nil {
+				return false, sourcePtr, true, queueErr
+			} else if queued {
+				return true, sourcePtr, true, nil
+			}
+		}
+		sourceKey, sourcePtr, found, err = p.lookupFenceSourceForMutation(key)
+		if err != nil {
+			return false, page.ValuePtr{}, false, err
+		}
+		if !found || len(sourceKey) == 0 {
+			return false, page.ValuePtr{}, false, nil
+		}
+	} else {
 		sourceKey, sourcePtr, found, err = p.lookupFenceSourceForMutation(key)
 		if err != nil {
 			return false, page.ValuePtr{}, false, err
@@ -3371,22 +3789,31 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewrite(key, value []byte) (q
 			return false, page.ValuePtr{}, false, nil
 		}
 	}
-	if queued, queueErr := p.queueV1LeafLogOverlapRewriteWithSource(sourceKey, sourcePtr, key, value); queueErr != nil {
+	if queued, queueErr := p.queueLeafLogOverlapRewriteWithSource(sourceKey, sourcePtr, key, value, routeMode); queueErr != nil {
 		return false, sourcePtr, true, queueErr
 	} else if queued {
 		return true, sourcePtr, true, nil
-	}
-	// Queue overlap rewrites when key is in-source OR falls inside the source
-	// key range (in-range inserts). Keys outside the source range must fall back
-	// to direct unresolved publishing to avoid rewriting unrelated blocks.
-	if p.v1LeafLogRouteMode() {
-		return false, sourcePtr, true, nil
 	}
 	return false, sourcePtr, true, nil
 }
 
 func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewriteWithSource(sourceKey []byte, sourcePtr page.ValuePtr, key, value []byte) (bool, error) {
-	if p == nil || !p.v1LeafLogMode() || len(key) == 0 || len(sourceKey) == 0 {
+	return p.queueLeafLogOverlapRewriteWithSource(sourceKey, sourcePtr, key, value, false)
+}
+
+func (p *fenceAnchorPromoter) queueV1LeafLogRouteOverlapRewriteWithSource(sourceKey []byte, sourcePtr page.ValuePtr, key, value []byte) (bool, error) {
+	return p.queueLeafLogOverlapRewriteWithSource(sourceKey, sourcePtr, key, value, true)
+}
+
+func (p *fenceAnchorPromoter) queueLeafLogOverlapRewriteWithSource(sourceKey []byte, sourcePtr page.ValuePtr, key, value []byte, routeMode bool) (bool, error) {
+	if p == nil || len(key) == 0 || len(sourceKey) == 0 {
+		return false, nil
+	}
+	if routeMode {
+		if !p.v1LeafLogRouteMode() {
+			return false, nil
+		}
+	} else if !p.v1LeafLogLegacyMode() {
 		return false, nil
 	}
 	sourceKey, sourcePtr = p.remapRewrittenSourceForKey(sourceKey, page.ValuePtrClearFenceOuter(sourcePtr), key)
@@ -3411,7 +3838,7 @@ func (p *fenceAnchorPromoter) queueV1LeafLogOverlapRewriteWithSource(sourceKey [
 		}
 		plan.sourceKeyCount = len(keys)
 		plan.sourceKeys = keys
-		if p.v1LeafLogRouteMode() && len(plan.sourceKeys) > 0 {
+		if routeMode && len(plan.sourceKeys) > 0 {
 			// Route mode must reason over canonical block anchors (payload min-key),
 			// not arbitrary exact sibling rows that may still exist transiently.
 			plan.sourceKey = append(plan.sourceKey[:0], plan.sourceKeys[0]...)
@@ -3709,7 +4136,22 @@ func (p *fenceAnchorPromoter) rewriteSourceFromPlan(plan *fenceSourceRewritePlan
 }
 
 func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer func(key []byte, ptr page.ValuePtr) error, emitDelete func(key []byte) error) error {
-	if p == nil || !p.v1LeafLogMode() {
+	return p.flushQueuedLeafLogOverlapRewrites(false, emitPointer, emitDelete)
+}
+
+func (p *fenceAnchorPromoter) flushQueuedV1LeafLogRouteOverlapRewrites(emitPointer func(key []byte, ptr page.ValuePtr) error, emitDelete func(key []byte) error) error {
+	return p.flushQueuedLeafLogOverlapRewrites(true, emitPointer, emitDelete)
+}
+
+func (p *fenceAnchorPromoter) flushQueuedLeafLogOverlapRewrites(routeMode bool, emitPointer func(key []byte, ptr page.ValuePtr) error, emitDelete func(key []byte) error) error {
+	if p == nil {
+		return nil
+	}
+	if routeMode {
+		if !p.v1LeafLogRouteMode() {
+			return nil
+		}
+	} else if !p.v1LeafLogLegacyMode() {
 		return nil
 	}
 	if len(p.overlapRewriteOrder) == 0 {
@@ -3729,12 +4171,6 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 		return bytes.Compare(left.sourceKey, right.sourceKey) < 0
 	})
 
-	type overlapRewritePending struct {
-		plan      *fenceSourceRewritePlan
-		anchorKey []byte
-		maxKey    []byte
-		payload   []byte
-	}
 	pending := make([]overlapRewritePending, 0, len(order))
 	preferredLane := -1
 	if p.db.deferredValueLogNeedsSingleLaneRegroup() {
@@ -3776,7 +4212,7 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 				maxKey = anchorKey
 			}
 			pending = append(pending, overlapRewritePending{
-				plan:      plan,
+				plans:     []*fenceSourceRewritePlan{plan},
 				anchorKey: anchorKey,
 				maxKey:    maxKey,
 				payload:   blocks[i].payload,
@@ -3789,9 +4225,19 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 			if cmp := bytes.Compare(pending[i].anchorKey, pending[j].anchorKey); cmp != 0 {
 				return cmp < 0
 			}
-			return bytes.Compare(pending[i].plan.sourceKey, pending[j].plan.sourceKey) < 0
+			return bytes.Compare(overlapRewritePendingSortKey(pending[i]), overlapRewritePendingSortKey(pending[j])) < 0
 		})
-		if p.v1LeafLogRouteMode() {
+		if routeMode {
+			pending, err = p.coalesceRouteOverlapPending(pending)
+			if err != nil {
+				return err
+			}
+			sort.Slice(pending, func(i, j int) bool {
+				if cmp := bytes.Compare(pending[i].anchorKey, pending[j].anchorKey); cmp != 0 {
+					return cmp < 0
+				}
+				return bytes.Compare(overlapRewritePendingSortKey(pending[i]), overlapRewritePendingSortKey(pending[j])) < 0
+			})
 			for i := 1; i < len(pending); i++ {
 				if bytes.Compare(pending[i-1].anchorKey, pending[i].anchorKey) >= 0 {
 					return fmt.Errorf(
@@ -3801,14 +4247,16 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 					)
 				}
 				if bytes.Compare(pending[i-1].maxKey, pending[i].anchorKey) >= 0 {
+					prevPlan := overlapRewritePendingPrimaryPlan(pending[i-1])
+					currPlan := overlapRewritePendingPrimaryPlan(pending[i])
 					return fmt.Errorf(
 						"cachingdb: route overlap rewrite produced overlapping ranges prev_source_key=%q prev_source_ptr=%+v prev_range=[%q,%q] curr_source_key=%q curr_source_ptr=%+v curr_range=[%q,%q]",
-						pending[i-1].plan.sourceKey,
-						pending[i-1].plan.sourcePtr,
+						overlapRewritePendingSourceKey(prevPlan),
+						overlapRewritePendingSourcePtr(prevPlan),
 						pending[i-1].anchorKey,
 						pending[i-1].maxKey,
-						pending[i].plan.sourceKey,
-						pending[i].plan.sourcePtr,
+						overlapRewritePendingSourceKey(currPlan),
+						overlapRewritePendingSourcePtr(currPlan),
 						pending[i].anchorKey,
 						pending[i].maxKey,
 					)
@@ -3834,15 +4282,20 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 			putValueLogPtrs(ptrs)
 			return fmt.Errorf("cachingdb: overlap rewrite returned %d pointers for %d records", len(ptrs), len(pending))
 		}
-		if p.v1LeafLogRouteMode() {
+		if routeMode {
 			seenSources := make(map[page.ValuePtr]struct{}, len(pending))
 			for i := range pending {
-				src := pending[i].plan.sourcePtr
-				if _, seen := seenSources[src]; seen {
-					continue
+				for _, plan := range pending[i].plans {
+					if plan == nil {
+						continue
+					}
+					src := plan.sourcePtr
+					if _, seen := seenSources[src]; seen {
+						continue
+					}
+					seenSources[src] = struct{}{}
+					p.resetRewrittenSourceAliasesFor(src)
 				}
-				seenSources[src] = struct{}{}
-				p.resetRewrittenSourceAliasesFor(src)
 			}
 		}
 		for i := range pending {
@@ -3851,76 +4304,80 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 				putValueLogPtrs(ptrs)
 				return err
 			}
-			p.recordRewrittenSourceAlias(pending[i].plan.sourcePtr, pending[i].anchorKey, pending[i].maxKey, rewrittenPtr)
+			for _, plan := range pending[i].plans {
+				if plan == nil {
+					continue
+				}
+				p.recordRewrittenSourceAlias(plan.sourcePtr, pending[i].anchorKey, pending[i].maxKey, rewrittenPtr)
+			}
 		}
 		emittedDeletes := make(map[string]struct{}, len(pending))
 		rewrittenSources := make(map[page.ValuePtr]struct{}, len(pending))
 		for i := range pending {
-			if p.v1LeafLogRouteMode() {
-				if _, seen := rewrittenSources[pending[i].plan.sourcePtr]; !seen {
-					rewrittenSources[pending[i].plan.sourcePtr] = struct{}{}
-					// Route mode is directory-only: purge any stale exact sibling
-					// rows from the rewritten source block so exact-key reads cannot
-					// shadow newer anchor coverage after overlap rewrites.
-					sourceKeys, err := p.decodeFenceKeys(pending[i].plan.sourcePtr)
-					if err != nil {
-						putValueLogPtrs(ptrs)
-						return err
-					}
-					for _, oldKey := range sourceKeys {
-						if len(oldKey) == 0 || bytes.Equal(oldKey, pending[i].anchorKey) {
-							continue
+			for _, plan := range pending[i].plans {
+				if plan == nil {
+					continue
+				}
+				if routeMode {
+					if _, seen := rewrittenSources[plan.sourcePtr]; !seen {
+						rewrittenSources[plan.sourcePtr] = struct{}{}
+						// Route mode is directory-only: purge any stale exact sibling
+						// rows from the rewritten source block so exact-key reads cannot
+						// shadow newer anchor coverage after overlap rewrites.
+						sourceKeys, err := p.decodeFenceKeys(plan.sourcePtr)
+						if err != nil {
+							putValueLogPtrs(ptrs)
+							return err
 						}
-						if _, keep := pendingAnchorKeys[string(oldKey)]; keep {
-							// Avoid deleting anchors scheduled for publication in the
-							// same overlap-rewrite flush.
-							continue
-						}
-						if p.lookup != nil {
-							if pendingMut, ok := p.lookup(oldKey); ok && pendingMut.kind != fencePendingMutationDelete {
-								// Route overlap rewrites already materialize queued set
-								// mutations into the rewritten payload. In that case we
-								// must delete stale exact siblings even when a non-delete
-								// mutation exists in the current flush; otherwise stale
-								// anchors survive and overlap rewritten ranges.
-								if pending[i].plan != nil {
-									if _, covered := pending[i].plan.lookupValue(oldKey); covered {
-										// Covered by this rewritten payload: do not skip.
-									} else {
+						for _, oldKey := range sourceKeys {
+							if len(oldKey) == 0 || bytes.Equal(oldKey, pending[i].anchorKey) {
+								continue
+							}
+							if _, keep := pendingAnchorKeys[string(oldKey)]; keep {
+								// Avoid deleting anchors scheduled for publication in the
+								// same overlap-rewrite flush.
+								continue
+							}
+							if p.lookup != nil {
+								if pendingMut, ok := p.lookup(oldKey); ok && pendingMut.kind != fencePendingMutationDelete {
+									// Route overlap rewrites already materialize queued set
+									// mutations into the rewritten payload. In that case we
+									// must delete stale exact siblings even when a non-delete
+									// mutation exists in the current flush; otherwise stale
+									// anchors survive and overlap rewritten ranges.
+									if _, covered := plan.lookupValue(oldKey); !covered {
 										// Not covered by this rewrite plan; keep a separate
 										// fresh publish from another path.
 										continue
 									}
-								} else {
-									continue
 								}
 							}
+							oldKeyStr := string(oldKey)
+							if _, already := emittedDeletes[oldKeyStr]; already {
+								continue
+							}
+							if err := emitDelete(oldKey); err != nil {
+								putValueLogPtrs(ptrs)
+								return err
+							}
+							emittedDeletes[oldKeyStr] = struct{}{}
 						}
-						oldKeyStr := string(oldKey)
-						if _, already := emittedDeletes[oldKeyStr]; already {
-							continue
-						}
-						if err := emitDelete(oldKey); err != nil {
-							putValueLogPtrs(ptrs)
-							return err
-						}
-						emittedDeletes[oldKeyStr] = struct{}{}
 					}
 				}
-			}
-			if !bytes.Equal(pending[i].anchorKey, pending[i].plan.sourceKey) {
-				sourceKeyStr := string(pending[i].plan.sourceKey)
-				if _, already := emittedDeletes[sourceKeyStr]; already {
-					continue
+				if !bytes.Equal(pending[i].anchorKey, plan.sourceKey) {
+					sourceKeyStr := string(plan.sourceKey)
+					if _, already := emittedDeletes[sourceKeyStr]; already {
+						continue
+					}
+					if _, keep := pendingAnchorKeys[sourceKeyStr]; keep {
+						continue
+					}
+					if err := emitDelete(plan.sourceKey); err != nil {
+						putValueLogPtrs(ptrs)
+						return err
+					}
+					emittedDeletes[sourceKeyStr] = struct{}{}
 				}
-				if _, keep := pendingAnchorKeys[sourceKeyStr]; keep {
-					continue
-				}
-				if err := emitDelete(pending[i].plan.sourceKey); err != nil {
-					putValueLogPtrs(ptrs)
-					return err
-				}
-				emittedDeletes[sourceKeyStr] = struct{}{}
 			}
 		}
 		putValueLogPtrs(ptrs)
@@ -3931,6 +4388,208 @@ func (p *fenceAnchorPromoter) flushQueuedV1LeafLogOverlapRewrites(emitPointer fu
 	}
 	p.clearOverlapRewritePlans()
 	return nil
+}
+
+func overlapRewritePendingSortKey(pending overlapRewritePending) []byte {
+	plan := overlapRewritePendingPrimaryPlan(pending)
+	if plan == nil {
+		return nil
+	}
+	return plan.sourceKey
+}
+
+func overlapRewritePendingPrimaryPlan(pending overlapRewritePending) *fenceSourceRewritePlan {
+	for _, plan := range pending.plans {
+		if plan != nil {
+			return plan
+		}
+	}
+	return nil
+}
+
+func overlapRewritePendingSourceKey(plan *fenceSourceRewritePlan) []byte {
+	if plan == nil {
+		return nil
+	}
+	return plan.sourceKey
+}
+
+func overlapRewritePendingSourcePtr(plan *fenceSourceRewritePlan) page.ValuePtr {
+	if plan == nil {
+		return page.ValuePtr{}
+	}
+	return plan.sourcePtr
+}
+
+func dedupeOverlapRewritePlans(plans []*fenceSourceRewritePlan) []*fenceSourceRewritePlan {
+	if len(plans) <= 1 {
+		return plans
+	}
+	uniq := make(map[page.ValuePtr]*fenceSourceRewritePlan, len(plans))
+	for _, plan := range plans {
+		if plan == nil {
+			continue
+		}
+		uniq[plan.sourcePtr] = plan
+	}
+	out := make([]*fenceSourceRewritePlan, 0, len(uniq))
+	for _, plan := range uniq {
+		out = append(out, plan)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i].sourceKey, out[j].sourceKey) < 0
+	})
+	return out
+}
+
+func (p *fenceAnchorPromoter) coalesceRouteOverlapPending(pending []overlapRewritePending) ([]overlapRewritePending, error) {
+	if p == nil || !p.v1LeafLogRouteMode() || len(pending) <= 1 {
+		return pending, nil
+	}
+	merged := make([]overlapRewritePending, 0, len(pending))
+	decodeEntries := func(payload []byte) ([]outerleaf.TypedEntry, error) {
+		decoded, err := outerleaf.DecodeBlockLeaseWithVerify(payload, true)
+		if err != nil {
+			return nil, err
+		}
+		if decoded == nil {
+			return nil, nil
+		}
+		defer decoded.Release()
+		out := make([]outerleaf.TypedEntry, 0, decoded.EntryCount())
+		if err := decoded.VisitTypedEntries(func(key []byte, kind outerleaf.EntryKind, value []byte, ptr page.ValuePtr) error {
+			keyCopy := append([]byte(nil), key...)
+			next := outerleaf.TypedEntry{Key: keyCopy, Kind: kind, BlobPtr: ptr}
+			if kind == outerleaf.EntryKindInline && len(value) > 0 {
+				next.Value = append([]byte(nil), value...)
+			}
+			out = append(out, next)
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+
+	for i := 0; i < len(pending); {
+		j := i + 1
+		clusterMax := pending[i].maxKey
+		for j < len(pending) && bytes.Compare(clusterMax, pending[j].anchorKey) >= 0 {
+			if bytes.Compare(clusterMax, pending[j].maxKey) < 0 {
+				clusterMax = pending[j].maxKey
+			}
+			j++
+		}
+		if j-i == 1 {
+			merged = append(merged, pending[i])
+			i = j
+			continue
+		}
+
+		planCluster := make([]*fenceSourceRewritePlan, 0, (j-i)*2)
+		entryIdx := make(map[string]int, 1024)
+		combined := make([]outerleaf.TypedEntry, 0, 1024)
+		for k := i; k < j; k++ {
+			planCluster = append(planCluster, pending[k].plans...)
+			entries, err := decodeEntries(pending[k].payload)
+			if err != nil {
+				return nil, err
+			}
+			for n := range entries {
+				keyStr := string(entries[n].Key)
+				if idx, ok := entryIdx[keyStr]; ok {
+					combined[idx] = entries[n]
+					continue
+				}
+				entryIdx[keyStr] = len(combined)
+				combined = append(combined, entries[n])
+			}
+		}
+		if len(combined) == 0 {
+			i = j
+			continue
+		}
+		sort.Slice(combined, func(a, b int) bool {
+			return bytes.Compare(combined[a].Key, combined[b].Key) < 0
+		})
+		blocks, err := p.encodeRewriteBlocks(combined)
+		if err != nil {
+			return nil, err
+		}
+		plans := dedupeOverlapRewritePlans(planCluster)
+		blockPlans := make([][]*fenceSourceRewritePlan, len(blocks))
+		if len(blocks) > 0 && len(plans) > 0 {
+			for _, plan := range plans {
+				if plan == nil {
+					continue
+				}
+				assigned := -1
+				predecessor := -1
+				for b := range blocks {
+					if len(blocks[b].anchorKey) == 0 {
+						continue
+					}
+					maxKey := blocks[b].maxKey
+					if len(maxKey) == 0 {
+						maxKey = blocks[b].anchorKey
+					}
+					if len(plan.sourceKey) > 0 {
+						if bytes.Compare(plan.sourceKey, blocks[b].anchorKey) < 0 {
+							break
+						}
+						predecessor = b
+						if bytes.Compare(plan.sourceKey, maxKey) <= 0 {
+							assigned = b
+							break
+						}
+						continue
+					}
+					// Empty sourceKey should not happen, but keep deterministic
+					// behavior by pinning to the first non-empty block.
+					assigned = b
+					break
+				}
+				if assigned < 0 {
+					if predecessor >= 0 {
+						assigned = predecessor
+					} else {
+						for b := range blocks {
+							if len(blocks[b].anchorKey) > 0 {
+								assigned = b
+								break
+							}
+						}
+					}
+				}
+				if assigned >= 0 {
+					blockPlans[assigned] = append(blockPlans[assigned], plan)
+				}
+			}
+		}
+		for b := range blocks {
+			if len(blocks[b].anchorKey) == 0 {
+				continue
+			}
+			maxKey := blocks[b].maxKey
+			if len(maxKey) == 0 {
+				maxKey = blocks[b].anchorKey
+			}
+			plansForBlock := blockPlans[b]
+			if len(plansForBlock) == 0 && len(plans) > 0 {
+				// Keep a conservative fallback to avoid dropping source-key deletes
+				// if a plan cannot be range-mapped to a rewritten block.
+				plansForBlock = plans
+			}
+			merged = append(merged, overlapRewritePending{
+				plans:     plansForBlock,
+				anchorKey: blocks[b].anchorKey,
+				maxKey:    maxKey,
+				payload:   blocks[b].payload,
+			})
+		}
+		i = j
+	}
+	return merged, nil
 }
 
 func (p *fenceAnchorPromoter) decodeFenceKeys(ptr page.ValuePtr) ([][]byte, error) {
@@ -4572,35 +5231,75 @@ func (p *fenceAnchorPromoter) shouldEmitRouteDelete(key []byte) bool {
 	if p == nil {
 		return true
 	}
+	if emit, ok := p.cachedRouteDeleteDecision(key); ok {
+		return emit
+	}
+	recordDecision := func(emit bool) bool {
+		p.storeRouteDeleteDecision(key, emit)
+		return emit
+	}
 	if !p.keyCouldExistInBackend(key) {
-		return false
+		return recordDecision(false)
 	}
 	if snap := p.snapshotView(); snap != nil {
 		entry, err := snap.GetEntryExact(key)
 		if err == nil {
 			// Route cleanup deletes are only for persisted exact rows. Logical
 			// fallback coverage from anchor pointers must not trigger tombstones.
-			return entry.Flags&node.FlagTombstone == 0
+			return recordDecision(entry.Flags&node.FlagTombstone == 0)
 		}
 		if errors.Is(err, tree.ErrKeyNotFound) {
-			return false
+			return recordDecision(false)
 		}
 		p.db.reportError(fmt.Errorf("cachingdb: route-delete GetEntryExact(%q) failed: %w", key, err))
 		// On lookup uncertainty, keep delete behavior conservative to avoid
 		// leaving stale exact siblings behind.
-		return true
+		return recordDecision(true)
 	}
 	if p.db == nil || p.db.backend == nil {
-		return true
+		return recordDecision(true)
 	}
 	has, err := p.db.backend.Has(key)
 	if err != nil {
 		p.db.reportError(fmt.Errorf("cachingdb: route-delete Has(%q) failed: %w", key, err))
 		// Route deletes are idempotent; on Has uncertainty, emit deletes so stale
 		// exact-key entries do not survive failed existence probes.
-		return true
+		return recordDecision(true)
 	}
-	return has
+	return recordDecision(has)
+}
+
+func (p *fenceAnchorPromoter) cachedRouteDeleteDecision(key []byte) (bool, bool) {
+	if p == nil || len(key) == 0 || len(p.routeDeleteDecision) == 0 {
+		return false, false
+	}
+	bucket := p.routeDeleteDecision[xxhash.Sum64(key)]
+	for i := range bucket {
+		if bytes.Equal(bucket[i].key, key) {
+			return bucket[i].emit, true
+		}
+	}
+	return false, false
+}
+
+func (p *fenceAnchorPromoter) storeRouteDeleteDecision(key []byte, emit bool) {
+	if p == nil || len(key) == 0 {
+		return
+	}
+	if p.routeDeleteDecision == nil {
+		p.routeDeleteDecision = make(map[uint64][]routeDeleteDecisionEntry, 64)
+	}
+	h := xxhash.Sum64(key)
+	bucket := p.routeDeleteDecision[h]
+	for i := range bucket {
+		if bytes.Equal(bucket[i].key, key) {
+			bucket[i].emit = emit
+			p.routeDeleteDecision[h] = bucket
+			return
+		}
+	}
+	keyCopy := append([]byte(nil), key...)
+	p.routeDeleteDecision[h] = append(bucket, routeDeleteDecisionEntry{key: keyCopy, emit: emit})
 }
 
 func (p *fenceAnchorPromoter) backendDefinitelyEmpty() bool {
@@ -4667,6 +5366,22 @@ func scaledRouteDeferredReserveHint(n, maxEntries int) int {
 		target = maxEntries
 	}
 	return target
+}
+
+func mapRouteUnresolvedSourcePos(unresolved []int, normToSource []int, pos int) (int, error) {
+	if pos < 0 {
+		return 0, errors.New("cachingdb: route overlap unresolved group index out of range")
+	}
+	if len(normToSource) > 0 {
+		if pos >= len(normToSource) {
+			return 0, errors.New("cachingdb: route overlap unresolved group index out of range")
+		}
+		pos = normToSource[pos]
+	}
+	if pos < 0 || pos >= len(unresolved) {
+		return 0, errors.New("cachingdb: route overlap unresolved source index out of range")
+	}
+	return unresolved[pos], nil
 }
 
 func (db *DB) flushDeferredValueLogMemtable(
@@ -4945,15 +5660,16 @@ func (db *DB) flushDeferredValueLogMemtable(
 		return 0, err
 	}
 	var (
-		ptrs       []page.ValuePtr
-		records    []valuelog.Record
-		groups     []outerLeafRecordGroup
-		outerArena []byte
-		err        error
+		ptrs              []page.ValuePtr
+		records           []valuelog.Record
+		groups            []outerLeafRecordGroup
+		routeNormToSource []int
+		outerArena        []byte
+		err               error
 	)
 	routeMode := routeAnchorMode
 	if routeMode {
-		ptrs, groups, err = db.writeRouteOuterLeafValueRecords(vlogLane, dictID, ptrKeys, ptrVals, durability)
+		ptrs, groups, routeNormToSource, err = db.writeRouteOuterLeafValueRecords(vlogLane, dictID, ptrKeys, ptrVals, durability)
 	} else {
 		records, groups, outerArena, err = db.buildOuterLeafValueRecords(ptrKeys, ptrVals)
 	}
@@ -5037,6 +5753,23 @@ func (db *DB) flushDeferredValueLogMemtable(
 		return nil
 	}
 
+	groupLimit := len(ptrKeys)
+	if routeMode {
+		groupLimit = len(routeNormToSource)
+	}
+	mapGroupSourcePos := func(pos int) (int, error) {
+		if pos < 0 || pos >= groupLimit {
+			return 0, errors.New("cachingdb: deferred value-log group index out of range")
+		}
+		if routeMode {
+			pos = routeNormToSource[pos]
+		}
+		if pos < 0 || pos >= len(ptrKeys) || pos >= len(ptrVals) {
+			return 0, errors.New("cachingdb: deferred value-log route source index out of range")
+		}
+		return pos, nil
+	}
+
 	emittedGroups := uint64(0)
 	for i := range groups {
 		basePtr := ptrs[i]
@@ -5049,10 +5782,17 @@ func (db *DB) flushDeferredValueLogMemtable(
 		}
 		group := groups[i]
 		emitWholeGroup := false
-		if group.start < 0 || group.end < group.start || group.end > len(ptrKeys) {
+		if group.start < 0 || group.end < group.start || group.end > groupLimit {
 			return 0, errors.New("cachingdb: deferred value-log group out of range")
 		}
-		routeSingletonGroup := routeAnchorMode && group.end-group.start == 1 && routeKeyRequiresSingletonOuterLeaf(ptrKeys[group.start])
+		routeSingletonGroup := false
+		if routeAnchorMode && group.end-group.start == 1 {
+			srcPos, mapErr := mapGroupSourcePos(group.start)
+			if mapErr != nil {
+				return 0, mapErr
+			}
+			routeSingletonGroup = routeKeyRequiresSingletonOuterLeaf(ptrKeys[srcPos])
+		}
 		if collapseFence && !routeSingletonGroup {
 			if group.start >= group.end {
 				continue
@@ -5060,7 +5800,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 			emittedGroups++
 			overlap := false
 			if promoter != nil {
-				if routeAnchorMode && promoter.v1LeafLogMode() {
+				if routeAnchorMode && promoter.v1LeafLogRouteMode() {
 					// Route mode requires exact non-overlapping directory semantics.
 					// Do not rely on keyCouldExistInBackend() heuristics here; always
 					// route through overlap-queue resolution so stale source anchors
@@ -5068,14 +5808,19 @@ func (db *DB) flushDeferredValueLogMemtable(
 					overlap = true
 				} else {
 					for srcPos := group.start; srcPos < group.end; srcPos++ {
-						if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
+						mappedPos, mapErr := mapGroupSourcePos(srcPos)
+						if mapErr != nil {
+							return 0, mapErr
+						}
+						if promoter.keyCouldExistInBackend(ptrKeys[mappedPos]) {
 							overlap = true
 							break
 						}
 					}
 				}
 			}
-			if overlap && promoter != nil && promoter.v1LeafLogMode() {
+			if overlap && promoter != nil &&
+				((routeAnchorMode && promoter.v1LeafLogRouteMode()) || (!routeAnchorMode && promoter.v1LeafLogLegacyMode())) {
 				confirmedOverlap := false
 				emitKey := func(key []byte, emitPtr page.ValuePtr) error {
 					if psv != nil {
@@ -5096,7 +5841,18 @@ func (db *DB) flushDeferredValueLogMemtable(
 				unresolved := getValueLogEligible(group.end - group.start)
 				queuedCount := 0
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
-					queued, _, _, err := promoter.queueV1LeafLogOverlapRewrite(ptrKeys[srcPos], ptrVals[srcPos])
+					mappedPos, mapErr := mapGroupSourcePos(srcPos)
+					if mapErr != nil {
+						putValueLogEligible(unresolved)
+						return 0, mapErr
+					}
+					queued := false
+					var err error
+					if routeAnchorMode {
+						queued, _, _, err = promoter.queueV1LeafLogRouteOverlapRewrite(ptrKeys[mappedPos], ptrVals[mappedPos])
+					} else {
+						queued, _, _, err = promoter.queueV1LeafLogOverlapRewrite(ptrKeys[mappedPos], ptrVals[mappedPos])
+					}
 					if err != nil {
 						putValueLogEligible(unresolved)
 						return 0, err
@@ -5105,7 +5861,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 						queuedCount++
 						continue
 					}
-					unresolved = append(unresolved, srcPos)
+					unresolved = append(unresolved, mappedPos)
 				}
 				if queuedCount > 0 {
 					confirmedOverlap = true
@@ -5121,7 +5877,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 								unresolvedKeys = append(unresolvedKeys, ptrKeys[srcPos])
 								unresolvedVals = append(unresolvedVals, ptrVals[srcPos])
 							}
-							routePtrs, routeGroups, routeErr := db.writeRouteOuterLeafValueRecords(vlogLane, dictID, unresolvedKeys, unresolvedVals, durability)
+							routePtrs, routeGroups, routeNormToSource, routeErr := db.writeRouteOuterLeafValueRecords(vlogLane, dictID, unresolvedKeys, unresolvedVals, durability)
 							putValueLogKeys(unresolvedKeys)
 							putValueLogKeys(unresolvedVals)
 							if routeErr != nil {
@@ -5133,9 +5889,13 @@ func (db *DB) flushDeferredValueLogMemtable(
 								putValueLogEligible(unresolved)
 								return 0, errors.New("cachingdb: route overlap unresolved pointer/group count mismatch")
 							}
+							routeGroupLimit := len(routeNormToSource)
+							if routeGroupLimit == 0 {
+								routeGroupLimit = len(unresolved)
+							}
 							for gi := range routeGroups {
 								routeGroup := routeGroups[gi]
-								if routeGroup.start < 0 || routeGroup.end < routeGroup.start || routeGroup.end > len(unresolved) {
+								if routeGroup.start < 0 || routeGroup.end < routeGroup.start || routeGroup.end > routeGroupLimit {
 									putValueLogPtrs(routePtrs)
 									putValueLogEligible(unresolved)
 									return 0, errors.New("cachingdb: route overlap unresolved group out of range")
@@ -5143,7 +5903,12 @@ func (db *DB) flushDeferredValueLogMemtable(
 								if routeGroup.start >= routeGroup.end {
 									continue
 								}
-								anchorPos := unresolved[routeGroup.start]
+								anchorPos, mapErr := mapRouteUnresolvedSourcePos(unresolved, routeNormToSource, routeGroup.start)
+								if mapErr != nil {
+									putValueLogPtrs(routePtrs)
+									putValueLogEligible(unresolved)
+									return 0, mapErr
+								}
 								routePtr, routeErr := db.normalizeRouteAnchorPointer(routePtrs[gi], "deferred overlap unresolved route publish")
 								if routeErr != nil {
 									putValueLogPtrs(routePtrs)
@@ -5156,7 +5921,12 @@ func (db *DB) flushDeferredValueLogMemtable(
 									return 0, err
 								}
 								for groupPos := routeGroup.start + 1; groupPos < routeGroup.end; groupPos++ {
-									srcPos := unresolved[groupPos]
+									srcPos, mapErr := mapRouteUnresolvedSourcePos(unresolved, routeNormToSource, groupPos)
+									if mapErr != nil {
+										putValueLogPtrs(routePtrs)
+										putValueLogEligible(unresolved)
+										return 0, mapErr
+									}
 									if shouldEmitRouteDelete(ptrKeys[srcPos]) {
 										if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
 											putValueLogPtrs(routePtrs)
@@ -5188,8 +5958,13 @@ func (db *DB) flushDeferredValueLogMemtable(
 				if !emitWholeGroup {
 					if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
 						for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-							if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-								if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+							mappedPos, mapErr := mapGroupSourcePos(srcPos)
+							if mapErr != nil {
+								putValueLogEligible(unresolved)
+								return 0, mapErr
+							}
+							if shouldEmitRouteDelete(ptrKeys[mappedPos]) {
+								if err := emitPromotionDelete(ptrKeys[mappedPos]); err != nil {
 									putValueLogEligible(unresolved)
 									return 0, err
 								}
@@ -5207,7 +5982,11 @@ func (db *DB) flushDeferredValueLogMemtable(
 		}
 		// collapseFence block ends here
 		for srcPos := group.start; srcPos < group.end; srcPos++ {
-			key := ptrKeys[srcPos]
+			mappedPos, mapErr := mapGroupSourcePos(srcPos)
+			if mapErr != nil {
+				return 0, mapErr
+			}
+			key := ptrKeys[mappedPos]
 			if collapseFence && routeAnchorMode {
 				// In route mode (strict directory contract), emit only one
 				// anchor per new outer-leaf block; do not emit exact per-key siblings.
@@ -5239,8 +6018,12 @@ func (db *DB) flushDeferredValueLogMemtable(
 			emittedOps++
 		}
 	}
-	if collapseFence && promoter != nil && promoter.v1LeafLogMode() {
-		if err := promoter.flushQueuedV1LeafLogOverlapRewrites(emitQueuedPointer, emitQueuedDelete); err != nil {
+	if collapseFence && promoter != nil {
+		if routeAnchorMode {
+			if err := promoter.flushQueuedV1LeafLogRouteOverlapRewrites(emitQueuedPointer, emitQueuedDelete); err != nil {
+				return 0, err
+			}
+		} else if err := promoter.flushQueuedV1LeafLogOverlapRewrites(emitQueuedPointer, emitQueuedDelete); err != nil {
 			return 0, err
 		}
 	}
@@ -5551,12 +6334,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			chunkVals := ptrVals[chunkStart:chunkEnd]
 
 			var (
-				ptrs   []page.ValuePtr
-				groups []outerLeafRecordGroup
-				err    error
+				ptrs              []page.ValuePtr
+				groups            []outerLeafRecordGroup
+				routeNormToSource []int
+				err               error
 			)
 			if routeAnchorMode {
-				ptrs, groups, err = db.writeRouteOuterLeafValueRecords(vlogLane, dictID, chunkKeys, chunkVals, durability)
+				ptrs, groups, routeNormToSource, err = db.writeRouteOuterLeafValueRecords(vlogLane, dictID, chunkKeys, chunkVals, durability)
 				if err != nil {
 					return err
 				}
@@ -5605,6 +6389,26 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					return fmt.Errorf("cachingdb: deferred inline pointer invalid before publish idx=%d chunk=[%d,%d) ptr=%+v", i, chunkStart, chunkEnd, ptrs[i])
 				}
 			}
+			chunkGroupLimit := len(chunkKeys)
+			if routeAnchorMode {
+				chunkGroupLimit = len(routeNormToSource)
+			}
+			mapChunkSourcePos := func(pos int) (int, error) {
+				if pos < 0 || pos >= chunkGroupLimit {
+					return 0, errors.New("cachingdb: deferred inline pointer group index out of range")
+				}
+				if routeAnchorMode {
+					pos = routeNormToSource[pos]
+				}
+				if pos < 0 || pos >= len(chunkKeys) || pos >= len(chunkVals) {
+					return 0, errors.New("cachingdb: deferred inline pointer route source index out of range")
+				}
+				globalPos := chunkStart + pos
+				if globalPos < 0 || globalPos >= len(ptrKeys) || globalPos >= len(ptrVals) {
+					return 0, errors.New("cachingdb: deferred inline pointer global source index out of range")
+				}
+				return globalPos, nil
+			}
 			for i := range groups {
 				basePtr := ptrs[i]
 				ptr := basePtr
@@ -5616,13 +6420,19 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				}
 				group := groups[i]
 				emitWholeGroup := false
-				if group.start < 0 || group.end < group.start || group.end > len(chunkKeys) {
+				if group.start < 0 || group.end < group.start || group.end > chunkGroupLimit {
 					putValueLogPtrs(ptrs)
 					return errors.New("cachingdb: deferred inline pointer source group out of range")
 				}
-				group.start += chunkStart
-				group.end += chunkStart
-				routeSingletonGroup := routeAnchorMode && group.end-group.start == 1 && routeKeyRequiresSingletonOuterLeaf(ptrKeys[group.start])
+				routeSingletonGroup := false
+				if routeAnchorMode && group.end-group.start == 1 {
+					srcPos, mapErr := mapChunkSourcePos(group.start)
+					if mapErr != nil {
+						putValueLogPtrs(ptrs)
+						return mapErr
+					}
+					routeSingletonGroup = routeKeyRequiresSingletonOuterLeaf(ptrKeys[srcPos])
+				}
 				if collapseFence && !routeSingletonGroup {
 					if group.start >= group.end {
 						continue
@@ -5630,7 +6440,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					emittedGroups++
 					overlap := false
 					if promoter != nil {
-						if routeAnchorMode && promoter.v1LeafLogMode() {
+						if routeAnchorMode && promoter.v1LeafLogRouteMode() {
 							// Route mode requires exact non-overlapping directory semantics.
 							// Do not rely on keyCouldExistInBackend() heuristics here; always
 							// route through overlap-queue resolution so stale source anchors
@@ -5638,19 +6448,37 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 							overlap = true
 						} else {
 							for srcPos := group.start; srcPos < group.end; srcPos++ {
-								if promoter.keyCouldExistInBackend(ptrKeys[srcPos]) {
+								mappedPos, mapErr := mapChunkSourcePos(srcPos)
+								if mapErr != nil {
+									putValueLogPtrs(ptrs)
+									return mapErr
+								}
+								if promoter.keyCouldExistInBackend(ptrKeys[mappedPos]) {
 									overlap = true
 									break
 								}
 							}
 						}
 					}
-					if overlap && promoter != nil && promoter.v1LeafLogMode() {
+					if overlap && promoter != nil &&
+						((routeAnchorMode && promoter.v1LeafLogRouteMode()) || (!routeAnchorMode && promoter.v1LeafLogLegacyMode())) {
 						confirmedOverlap := false
 						unresolved := getValueLogEligible(group.end - group.start)
 						queuedCount := 0
 						for srcPos := group.start; srcPos < group.end; srcPos++ {
-							queued, _, _, err := promoter.queueV1LeafLogOverlapRewrite(ptrKeys[srcPos], ptrVals[srcPos])
+							mappedPos, mapErr := mapChunkSourcePos(srcPos)
+							if mapErr != nil {
+								putValueLogEligible(unresolved)
+								putValueLogPtrs(ptrs)
+								return mapErr
+							}
+							queued := false
+							var err error
+							if routeAnchorMode {
+								queued, _, _, err = promoter.queueV1LeafLogRouteOverlapRewrite(ptrKeys[mappedPos], ptrVals[mappedPos])
+							} else {
+								queued, _, _, err = promoter.queueV1LeafLogOverlapRewrite(ptrKeys[mappedPos], ptrVals[mappedPos])
+							}
 							if err != nil {
 								putValueLogEligible(unresolved)
 								putValueLogPtrs(ptrs)
@@ -5660,7 +6488,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 								queuedCount++
 								continue
 							}
-							unresolved = append(unresolved, srcPos)
+							unresolved = append(unresolved, mappedPos)
 						}
 						if queuedCount > 0 {
 							confirmedOverlap = true
@@ -5677,7 +6505,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 										unresolvedKeys = append(unresolvedKeys, ptrKeys[srcPos])
 										unresolvedVals = append(unresolvedVals, ptrVals[srcPos])
 									}
-									routePtrs, routeGroups, routeErr := db.writeRouteOuterLeafValueRecords(vlogLane, dictID, unresolvedKeys, unresolvedVals, durability)
+									routePtrs, routeGroups, routeNormToSource, routeErr := db.writeRouteOuterLeafValueRecords(vlogLane, dictID, unresolvedKeys, unresolvedVals, durability)
 									putValueLogKeys(unresolvedKeys)
 									putValueLogKeys(unresolvedVals)
 									if routeErr != nil {
@@ -5691,9 +6519,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 										putValueLogPtrs(ptrs)
 										return errors.New("cachingdb: route overlap unresolved pointer/group count mismatch")
 									}
+									routeGroupLimit := len(routeNormToSource)
+									if routeGroupLimit == 0 {
+										routeGroupLimit = len(unresolved)
+									}
 									for gi := range routeGroups {
 										routeGroup := routeGroups[gi]
-										if routeGroup.start < 0 || routeGroup.end < routeGroup.start || routeGroup.end > len(unresolved) {
+										if routeGroup.start < 0 || routeGroup.end < routeGroup.start || routeGroup.end > routeGroupLimit {
 											putValueLogPtrs(routePtrs)
 											putValueLogEligible(unresolved)
 											putValueLogPtrs(ptrs)
@@ -5702,7 +6534,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 										if routeGroup.start >= routeGroup.end {
 											continue
 										}
-										anchorPos := unresolved[routeGroup.start]
+										anchorPos, mapErr := mapRouteUnresolvedSourcePos(unresolved, routeNormToSource, routeGroup.start)
+										if mapErr != nil {
+											putValueLogPtrs(routePtrs)
+											putValueLogEligible(unresolved)
+											putValueLogPtrs(ptrs)
+											return mapErr
+										}
 										routePtr, routeErr := db.normalizeRouteAnchorPointer(routePtrs[gi], "flush deferred overlap unresolved route publish")
 										if routeErr != nil {
 											putValueLogPtrs(routePtrs)
@@ -5717,7 +6555,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 											return err
 										}
 										for groupPos := routeGroup.start + 1; groupPos < routeGroup.end; groupPos++ {
-											srcPos := unresolved[groupPos]
+											srcPos, mapErr := mapRouteUnresolvedSourcePos(unresolved, routeNormToSource, groupPos)
+											if mapErr != nil {
+												putValueLogPtrs(routePtrs)
+												putValueLogEligible(unresolved)
+												putValueLogPtrs(ptrs)
+												return mapErr
+											}
 											if shouldEmitRouteDelete(ptrKeys[srcPos]) {
 												if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
 													putValueLogPtrs(routePtrs)
@@ -5752,8 +6596,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 						if !emitWholeGroup {
 							if routeAnchorMode && confirmedOverlap && group.end-group.start > 1 {
 								for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-									if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-										if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+									mappedPos, mapErr := mapChunkSourcePos(srcPos)
+									if mapErr != nil {
+										putValueLogPtrs(ptrs)
+										return mapErr
+									}
+									if shouldEmitRouteDelete(ptrKeys[mappedPos]) {
+										if err := emitPromotionDelete(ptrKeys[mappedPos]); err != nil {
 											putValueLogPtrs(ptrs)
 											return err
 										}
@@ -5772,8 +6621,13 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					if !emitWholeGroup {
 						if routeAnchorMode && group.end-group.start > 1 {
 							for srcPos := group.start + 1; srcPos < group.end; srcPos++ {
-								if shouldEmitRouteDelete(ptrKeys[srcPos]) {
-									if err := emitPromotionDelete(ptrKeys[srcPos]); err != nil {
+								mappedPos, mapErr := mapChunkSourcePos(srcPos)
+								if mapErr != nil {
+									putValueLogPtrs(ptrs)
+									return mapErr
+								}
+								if shouldEmitRouteDelete(ptrKeys[mappedPos]) {
+									if err := emitPromotionDelete(ptrKeys[mappedPos]); err != nil {
 										putValueLogPtrs(ptrs)
 										return err
 									}
@@ -5784,7 +6638,12 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					}
 				}
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
-					key := ptrKeys[srcPos]
+					mappedPos, mapErr := mapChunkSourcePos(srcPos)
+					if mapErr != nil {
+						putValueLogPtrs(ptrs)
+						return mapErr
+					}
+					key := ptrKeys[mappedPos]
 					if collapseFence && routeAnchorMode {
 						// In route mode (strict directory contract), emit only one
 						// anchor per new outer-leaf block; do not emit exact per-key siblings.
@@ -5819,8 +6678,12 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			}
 			putValueLogPtrs(ptrs)
 		}
-		if collapseFence && promoter != nil && promoter.v1LeafLogMode() {
-			if err := promoter.flushQueuedV1LeafLogOverlapRewrites(emitPromotionPointer, emitPromotionDelete); err != nil {
+		if collapseFence && promoter != nil {
+			if routeAnchorMode {
+				if err := promoter.flushQueuedV1LeafLogRouteOverlapRewrites(emitPromotionPointer, emitPromotionDelete); err != nil {
+					return err
+				}
+			} else if err := promoter.flushQueuedV1LeafLogOverlapRewrites(emitPromotionPointer, emitPromotionDelete); err != nil {
 				return err
 			}
 		}
@@ -14143,6 +15006,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
+	logKeyTrace("setDirect", key, len(value), fmt.Sprintf("sync=%t pointer=%t deferred_pointer=%t disable_journal=%t", sync, usePointer, deferPointers, db.disableJournal))
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -14846,6 +15710,7 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
+	logKeyTrace("deleteDirect", key, 0, fmt.Sprintf("sync=%t disable_journal=%t", sync, db.disableJournal))
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -17337,6 +18202,8 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	rootVersion, trackRoot := looksLikeIAVLRootNodeKey(key)
+	nodeVersion, trackNode := iavlNodeVersionFromNodeKey(key)
+	trackNodeMiss := trackNode && !trackRoot
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableRead(view, key)
 	if view != nil {
@@ -17347,8 +18214,13 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 			return nil, err
 		}
 		val, err := db.backend.Get(key)
+		if val == nil || err != nil {
+			logGetMissDebug(key, "backend_bypass", err, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
+		}
 		if trackRoot {
 			visibilityDebugf("get root=v%d source=backend_bypass key=%x val_nil=%t val_len=%d err=%v queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, val == nil, len(val), err, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
+		} else if trackNodeMiss && (val == nil || err != nil) {
+			visibilityDebugf("get node=v%d source=backend_bypass key=%x val_nil=%t val_len=%d err=%v queue_len=%d mutable_bytes=%d checkpointing=%t", nodeVersion, key, val == nil, len(val), err, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
 		}
 		return val, err
 	}
@@ -17358,8 +18230,11 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 	}
 	if found {
 		if val == nil {
+			logGetMissDebug(key, "memtable", nil, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
 			if trackRoot {
 				visibilityDebugf("get root=v%d source=memtable key=%x tombstone=true queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
+			} else if trackNodeMiss {
+				visibilityDebugf("get node=v%d source=memtable key=%x tombstone=true queue_len=%d mutable_bytes=%d checkpointing=%t", nodeVersion, key, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
 			}
 			return nil, nil
 		}
@@ -17374,8 +18249,13 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		return nil, err
 	}
 	val, err = db.backend.Get(key)
+	if val == nil || err != nil {
+		logGetMissDebug(key, "backend", err, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
+	}
 	if trackRoot {
 		visibilityDebugf("get root=v%d source=backend key=%x val_nil=%t val_len=%d err=%v queue_len=%d mutable_bytes=%d checkpointing=%t", rootVersion, key, val == nil, len(val), err, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
+	} else if trackNodeMiss && (val == nil || err != nil) {
+		visibilityDebugf("get node=v%d source=backend key=%x val_nil=%t val_len=%d err=%v queue_len=%d mutable_bytes=%d checkpointing=%t", nodeVersion, key, val == nil, len(val), err, db.snapshotQueueLen(), db.mutableBytes.Load(), db.checkpointing.Load())
 	}
 	return val, err
 }
@@ -19341,6 +20221,7 @@ func (b *Batch) Set(key, value []byte) error {
 	}
 
 	keyCopy, valCopy := b.cloneKeyValue(key, value)
+	logKeyTrace("batch.Set", keyCopy, len(valCopy), fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
@@ -19390,6 +20271,7 @@ func (b *Batch) SetView(key, value []byte) error {
 		return ErrValueNil
 	}
 
+	logKeyTrace("batch.SetView", key, len(value), fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key) + len(value)
@@ -19431,6 +20313,7 @@ func (b *Batch) Delete(key []byte) error {
 	}
 
 	keyCopy := b.cloneKey(key)
+	logKeyTrace("batch.Delete", keyCopy, 0, fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy)
@@ -19472,6 +20355,7 @@ func (b *Batch) DeleteView(key []byte) error {
 		return ErrKeyEmpty
 	}
 
+	logKeyTrace("batch.DeleteView", key, 0, fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key)
@@ -19587,6 +20471,11 @@ func (b *Batch) maybeSwitchToStreaming() {
 	if b.streamTried || !b.streamEligible || b.backend != nil {
 		return
 	}
+	// Debug write-dump mode expects complete in-memory entry visibility.
+	// Keep buffered writes so dump capture can include all batch entries.
+	if writeSyncDumpLogPath() != "" {
+		return
+	}
 	// Streaming writes directly to the backend batch and therefore bypasses the
 	// journal/value-log orchestration. Only enable it when the journal is
 	// disabled and value-log pointers are disabled.
@@ -19655,6 +20544,9 @@ func (b *Batch) maybeSwitchToStreaming() {
 }
 
 func (b *Batch) Write() error {
+	if b != nil && writeSyncDumpLogPath() != "" {
+		writeSyncDumpEntries(b.entries)
+	}
 	return b.write(false)
 }
 
@@ -19668,6 +20560,9 @@ func (b *Batch) WriteSync() error {
 		rootDeletes int
 		rootSamples []string
 	)
+	if b != nil && writeSyncDumpLogPath() != "" {
+		writeSyncDumpEntries(b.entries)
+	}
 	if b != nil && b.db != nil && visibilityDebugOn() {
 		for i := range b.entries {
 			v, ok := looksLikeIAVLRootNodeKey(b.entries[i].Key)
@@ -20326,14 +21221,15 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			routeMode := strings.TrimSpace(b.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
 			var (
-				ptrs         []page.ValuePtr
-				groups       []outerLeafRecordGroup
-				valueRecords []valuelog.Record
-				outerArena   []byte
+				ptrs              []page.ValuePtr
+				groups            []outerLeafRecordGroup
+				routeNormToSource []int
+				valueRecords      []valuelog.Record
+				outerArena        []byte
 			)
 			var buildErr error
 			if routeMode {
-				ptrs, groups, buildErr = b.db.writeRouteOuterLeafValueRecords(lane, b.dictID, keys, values, durability)
+				ptrs, groups, routeNormToSource, buildErr = b.db.writeRouteOuterLeafValueRecords(lane, b.dictID, keys, values, durability)
 				if buildErr != nil {
 					b.db.writeMu.RUnlock()
 					return buildErr
@@ -20388,6 +21284,22 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				return fmt.Errorf("cachingdb: value-log pointer group count mismatch expected=%d got=%d", len(groups), len(ptrs))
 			}
 			defer putValueLogPtrs(ptrs)
+			groupLimit := len(eligibleIdxs)
+			if routeMode {
+				groupLimit = len(routeNormToSource)
+			}
+			mapGroupSourcePos := func(pos int) (int, error) {
+				if pos < 0 || pos >= groupLimit {
+					return 0, fmt.Errorf("cachingdb: value-log pointer group index out of range [%d,%d)", pos, groupLimit)
+				}
+				if routeMode {
+					pos = routeNormToSource[pos]
+				}
+				if pos < 0 || pos >= len(eligibleIdxs) {
+					return 0, fmt.Errorf("cachingdb: value-log pointer source index out of range [%d,%d)", pos, len(eligibleIdxs))
+				}
+				return pos, nil
+			}
 
 			used := 0
 			for i := range groups {
@@ -20404,12 +21316,17 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					}
 				}
 				group := groups[i]
-				if group.start < 0 || group.end < group.start || group.end > len(eligibleIdxs) {
+				if group.start < 0 || group.end < group.start || group.end > groupLimit {
 					b.db.writeMu.RUnlock()
-					return fmt.Errorf("cachingdb: value-log pointer group out of range [%d,%d) len=%d", group.start, group.end, len(eligibleIdxs))
+					return fmt.Errorf("cachingdb: value-log pointer group out of range [%d,%d) len=%d", group.start, group.end, groupLimit)
 				}
 				for srcPos := group.start; srcPos < group.end; srcPos++ {
-					idx := eligibleIdxs[srcPos]
+					mappedPos, mapErr := mapGroupSourcePos(srcPos)
+					if mapErr != nil {
+						b.db.writeMu.RUnlock()
+						return mapErr
+					}
+					idx := eligibleIdxs[mappedPos]
 					op := &b.entries[idx]
 					if routeMode && srcPos != group.start {
 						op.Type = batch.OpDelete

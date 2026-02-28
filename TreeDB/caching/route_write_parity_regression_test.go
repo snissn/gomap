@@ -20,6 +20,15 @@ func phaseValue(tag byte) []byte {
 	return bytes.Repeat([]byte{tag}, 100)
 }
 
+func bankLikeRouteKey(version uint64, seq uint32) []byte {
+	const prefix = "s/k:bank/s"
+	key := make([]byte, len(prefix)+8+4)
+	copy(key, prefix)
+	binary.BigEndian.PutUint64(key[len(prefix):len(prefix)+8], version)
+	binary.BigEndian.PutUint32(key[len(prefix)+8:], seq)
+	return key
+}
+
 func putExpected(expected map[string][]byte, key, value []byte) {
 	expected[string(key)] = append([]byte(nil), value...)
 }
@@ -237,4 +246,60 @@ func TestRegression_RouteMode_BatchRandom8BParity(t *testing.T) {
 	}
 
 	assertRouteParityState(t, db, expected)
+}
+
+// Regression: route mode WriteSync with unsorted bank-like keys must keep
+// Get/Has/Iterator/ReverseIterator parity (including after reopen).
+func TestRegression_RouteMode_UnsortedWriteSyncBankLikeParityAfterReopen(t *testing.T) {
+	const total = 2048
+	dir := t.TempDir()
+	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
+	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1LeafLogRoute
+	opts.ValueLog.ForcePointers = false
+	opts.ValueLog.PointerThreshold = 512
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	expected := make(map[string][]byte, total)
+	perm := rand.New(rand.NewSource(911))
+	order := perm.Perm(total)
+
+	b := db.NewBatch()
+	for i := 0; i < total; i++ {
+		seq := uint32(order[i])
+		key := bankLikeRouteKey(10014000, seq)
+		value := bytes.Repeat([]byte{byte(seq % 251)}, 64)
+		if err := b.Set(key, value); err != nil {
+			_ = b.Close()
+			t.Fatalf("set seq=%d: %v", seq, err)
+		}
+		putExpected(expected, key, value)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("writesync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	assertRouteParityState(t, db, expected)
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close before reopen: %v", err)
+	}
+
+	reopened, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	assertRouteParityState(t, reopened, expected)
 }
