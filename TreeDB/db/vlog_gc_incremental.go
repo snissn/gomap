@@ -416,18 +416,14 @@ func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64
 		return nil, err
 	}
 	defer block.Release()
-	typed, err := block.TypedEntries(nil)
-	if err != nil {
-		return nil, err
-	}
 	refs := make(map[uint32]uint64, 4)
-	for i := range typed {
-		if typed[i].Kind != outerleaf.EntryKindBlobRef {
-			continue
+	if err := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, blobPtr page.ValuePtr) error {
+		if kind != outerleaf.EntryKindBlobRef {
+			return nil
 		}
-		if err := db.addNestedBlobRefCounts(typed[i].BlobPtr, refs); err != nil {
-			return nil, err
-		}
+		return db.addNestedBlobRefCounts(blobPtr, refs)
+	}); err != nil {
+		return nil, err
 	}
 	return refs, nil
 }

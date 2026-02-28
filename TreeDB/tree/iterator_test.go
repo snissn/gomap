@@ -353,6 +353,7 @@ func TestIteratorTrimReusableBuffers(t *testing.T) {
 	it.ptrScratch = make([]byte, 0, 128)
 	it.prefetchPtrs = make([]page.ValuePtr, 0, 8)
 	it.stack = make([]CursorItem, 0, 64)
+	it.leafState.owned = make([]byte, 0, 4096)
 	buf := it.trimReusableBuffers()
 	if cap(buf.ptrScratch) != 128 {
 		t.Fatalf("ptr scratch cap=%d want=128", cap(buf.ptrScratch))
@@ -363,11 +364,15 @@ func TestIteratorTrimReusableBuffers(t *testing.T) {
 	if cap(buf.stack) != 64 {
 		t.Fatalf("stack cap=%d want=64", cap(buf.stack))
 	}
+	if cap(buf.leafOwned) != 4096 {
+		t.Fatalf("leaf owned cap=%d want=4096", cap(buf.leafOwned))
+	}
 
 	it = &Iterator{}
 	it.ptrScratch = make([]byte, 0, iteratorPoolMaxScratchBytes+1)
 	it.prefetchPtrs = make([]page.ValuePtr, 0, iteratorPoolMaxPrefetchCap+1)
 	it.stack = make([]CursorItem, 0, iteratorPoolMaxStackCap+1)
+	it.leafState.owned = make([]byte, 0, iteratorPoolMaxScratchBytes+1)
 	buf = it.trimReusableBuffers()
 	if cap(buf.ptrScratch) != 0 {
 		t.Fatalf("oversized ptr scratch should be dropped (cap=%d)", cap(buf.ptrScratch))
@@ -377,6 +382,9 @@ func TestIteratorTrimReusableBuffers(t *testing.T) {
 	}
 	if cap(buf.stack) != 0 {
 		t.Fatalf("oversized stack should be dropped (cap=%d)", cap(buf.stack))
+	}
+	if cap(buf.leafOwned) != 0 {
+		t.Fatalf("oversized leaf owned should be dropped (cap=%d)", cap(buf.leafOwned))
 	}
 }
 

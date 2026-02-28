@@ -272,18 +272,14 @@ func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int
 		return nil, err
 	}
 	defer block.Release()
-	typed, err := block.TypedEntries(nil)
-	if err != nil {
-		return nil, err
-	}
 	refs := make(map[uint32]int64, 4)
-	for i := range typed {
-		if typed[i].Kind != outerleaf.EntryKindBlobRef {
-			continue
+	if err := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, blobPtr page.ValuePtr) error {
+		if kind != outerleaf.EntryKindBlobRef {
+			return nil
 		}
-		if err := db.addNestedBlobRefLiveBytes(typed[i].BlobPtr, refs); err != nil {
-			return nil, err
-		}
+		return db.addNestedBlobRefLiveBytes(blobPtr, refs)
+	}); err != nil {
+		return nil, err
 	}
 	return refs, nil
 }
