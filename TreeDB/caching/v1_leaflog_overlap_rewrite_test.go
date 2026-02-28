@@ -732,3 +732,182 @@ func TestCachingDB_V1LeafLogRoute_OverlapRewritePreservesBlobRefThreshold(t *tes
 		t.Fatalf("expected pointer-backed route blocks")
 	}
 }
+
+func TestFenceAnchorPromoter_EncodeRewriteBlocks_RouteSplitsLargeEntrySet(t *testing.T) {
+	const totalEntries = 70000
+	db := &DB{
+		indexOuterLeafMode:        backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		outerLeafBlockTargetBytes: 4 << 10,
+		outerLeafBlockRestart:     outerleaf.NormalizeRestartInterval(16),
+	}
+	p := &fenceAnchorPromoter{db: db}
+
+	entries := make([]outerleaf.TypedEntry, 0, totalEntries)
+	for i := 0; i < totalEntries; i++ {
+		entries = append(entries, outerleaf.TypedEntry{
+			Key:   []byte(fmt.Sprintf("k%06d", i)),
+			Kind:  outerleaf.EntryKindInline,
+			Value: []byte{byte(i)},
+		})
+	}
+
+	blocks, err := p.encodeRewriteBlocks(entries)
+	if err != nil {
+		t.Fatalf("encodeRewriteBlocks: %v", err)
+	}
+	if len(blocks) <= 1 {
+		t.Fatalf("expected route split into multiple blocks, got %d", len(blocks))
+	}
+
+	totalDecoded := 0
+	maxEntries := 0
+	var prevMax []byte
+	for i := range blocks {
+		b := blocks[i]
+		if len(b.anchorKey) == 0 || len(b.maxKey) == 0 || len(b.payload) == 0 {
+			t.Fatalf("block %d missing anchor/max/payload", i)
+		}
+		if i > 0 && bytes.Compare(prevMax, b.anchorKey) >= 0 {
+			t.Fatalf("non-increasing block ranges at %d prev_max=%q next_anchor=%q", i, prevMax, b.anchorKey)
+		}
+		prevMax = b.maxKey
+
+		decoded, err := outerleaf.DecodeBlockLeaseWithVerify(b.payload, true)
+		if err != nil {
+			t.Fatalf("decode block %d: %v", i, err)
+		}
+		if decoded == nil {
+			t.Fatalf("decode block %d returned nil", i)
+		}
+		count := decoded.EntryCount()
+		totalDecoded += count
+		if count > maxEntries {
+			maxEntries = count
+		}
+		decoded.Release()
+	}
+	if totalDecoded != totalEntries {
+		t.Fatalf("decoded entry total mismatch got=%d want=%d", totalDecoded, totalEntries)
+	}
+	if maxEntries >= 65535 {
+		t.Fatalf("route rewrite emitted oversized block entries=%d", maxEntries)
+	}
+}
+
+func TestCachingDB_V1LeafLogRoute_OverlapRewriteRespectsTargetAfterLargeSource(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{
+		Dir:                dir,
+		ChunkSize:          64 * 1024,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLog: backenddb.ValueLogOptions{
+			PointerThreshold:          1,
+			ForcePointers:             true,
+			OuterLeafBlockCodec:       backenddb.ValueLogBlockLZ4,
+			OuterLeafBlockTargetBytes: 1 << 20,
+		},
+	})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		FlushThreshold:                    1 << 30,
+		MemtableShards:                    1,
+		JournalLanes:                      1,
+		ForceValueLogPointers:             true,
+		ValueLogPointerThreshold:          1,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
+		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	keyFor := func(i int) []byte { return []byte(fmt.Sprintf("k%05d", i)) }
+	valueFor := func(seed int) []byte { return []byte{byte(seed), byte(seed >> 8), byte(seed >> 16), byte(seed >> 24)} }
+
+	const initialKeys = 55000
+	for i := 0; i < initialKeys; i++ {
+		if err := cache.Set(keyFor(i), valueFor(i)); err != nil {
+			t.Fatalf("seed Set(%d): %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("seed checkpoint: %v", err)
+	}
+
+	// Force subsequent overlap rewrites to respect a much smaller target.
+	cache.outerLeafBlockTargetBytes = 4 << 10
+
+	const inserts = 12000
+	for i := 0; i < inserts; i++ {
+		k := []byte(fmt.Sprintf("k%05da%04d", i*4, i))
+		if err := cache.Set(k, valueFor(100000+i)); err != nil {
+			t.Fatalf("insert(%d): %v", i, err)
+		}
+	}
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("rewrite checkpoint: %v", err)
+	}
+
+	if cache.valueLogReader == nil {
+		t.Fatalf("missing value-log reader")
+	}
+	it, err := backend.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
+		Mode:              backenddb.IteratorModePointerProjection,
+		IncludeTombstones: true,
+	})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions(pointer_projection): %v", err)
+	}
+	defer it.Close()
+
+	anchors := 0
+	maxEntries := 0
+	for it.Valid() {
+		_, ptr, flags := it.UnsafeEntry()
+		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
+			it.Next()
+			continue
+		}
+		raw, err := cache.valueLogReader.Read(ptr)
+		if err != nil {
+			t.Fatalf("read payload ptr=%+v: %v", ptr, err)
+		}
+		if !outerleaf.HasMagic(raw) {
+			it.Next()
+			continue
+		}
+		blk, err := outerleaf.DecodeBlockLeaseWithVerify(raw, true)
+		if err != nil {
+			t.Fatalf("decode block ptr=%+v: %v", ptr, err)
+		}
+		if blk == nil {
+			t.Fatalf("nil decoded block ptr=%+v", ptr)
+		}
+		if c := blk.EntryCount(); c > maxEntries {
+			maxEntries = c
+		}
+		blk.Release()
+		anchors++
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if anchors == 0 {
+		t.Fatalf("expected pointer-backed anchors after overlap rewrite")
+	}
+	if maxEntries > int(^uint16(0)) {
+		t.Fatalf("overlap rewrite exceeded v2 entry-count limit: max_entries_per_block=%d", maxEntries)
+	}
+	if err := cache.validateV1LeafLogDirectoryInvariants(); err != nil {
+		t.Fatalf("v1_leaflog invariant validation: %v", err)
+	}
+}
