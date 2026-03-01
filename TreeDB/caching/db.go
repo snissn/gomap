@@ -1347,8 +1347,8 @@ func (db *DB) normalizeAnchorPointer(ptr page.ValuePtr, context string) (page.Va
 }
 
 const defaultOuterLeafBlobThresholdMin = 16 << 10
-const defaultOuterLeafFenceBlockTargetBytes = 4 << 10
-const outerLeafFenceAdaptiveLZ4MaxAvgValueBytes = 64
+const defaultOuterLeafBlockTargetBytes = 4 << 10
+const outerLeafAdaptiveLZ4MaxAvgValueBytes = 64
 const defaultLargeValueChunkBytes = 8 << 20
 const minLargeValueChunkBytes = 1 << 20
 
@@ -1401,7 +1401,7 @@ func (db *DB) selectOuterLeafBlockCodec(totalValueBytes, entryCount int) uint8 {
 		return codec
 	}
 	avgValueBytes := totalValueBytes / entryCount
-	if avgValueBytes <= outerLeafFenceAdaptiveLZ4MaxAvgValueBytes {
+	if avgValueBytes <= outerLeafAdaptiveLZ4MaxAvgValueBytes {
 		return uint8(backenddb.ValueLogBlockLZ4)
 	}
 	return codec
@@ -2970,17 +2970,17 @@ type Options struct {
 	// ValueLogBlockTargetCompressedBytes controls block-mode grouped frame K
 	// adaptation target (0=default).
 	ValueLogBlockTargetCompressedBytes int
-	// ValueLogOuterLeafBlockTargetBytes controls v2 outer-leaf payload target
-	// size (0=mode-aware default).
+	// ValueLogOuterLeafBlockTargetBytes controls outer-leaf payload target size
+	// (0=default).
 	ValueLogOuterLeafBlockTargetBytes int
-	// ValueLogOuterLeafBlockCodec selects v2 outer-leaf payload codec:
+	// ValueLogOuterLeafBlockCodec selects outer-leaf payload codec:
 	// 0=snappy, 1=lz4.
 	ValueLogOuterLeafBlockCodec uint8
 	// ValueLogOuterLeafBlockRestartInterval controls restart cadence encoded in
-	// v2 outer-leaf payload metadata (0=default).
+	// outer-leaf payload metadata (0=default).
 	ValueLogOuterLeafBlockRestartInterval int
-	// ValueLogOuterLeafBlobThresholdBytes controls when v2 fence-pointer outer
-	// entries use blob references instead of inline bytes (0=default threshold).
+	// ValueLogOuterLeafBlobThresholdBytes controls when outer-leaf entries use
+	// blob references instead of inline bytes (0=default threshold).
 	ValueLogOuterLeafBlobThresholdBytes int
 	// ValueLogIncompressibleHoldBytes configures auto-mode incompressible hold
 	// window bytes (0=default).
@@ -3507,7 +3507,7 @@ func (r *snapshotMemtableReader) GetEntry(key []byte) (node.LeafEntry, bool, err
 }
 
 const maxAppendOnlyMemLeases = 256
-const appendOnlyEstimatedBytesPerEntryDeferredFence = 128
+const appendOnlyEstimatedBytesPerEntryIngest = 128
 
 func updateInt64Max(dst *atomic.Int64, value int64) {
 	for {
@@ -4404,7 +4404,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	outerLeafBlockTargetOpt := opts.ValueLogOuterLeafBlockTargetBytes
 	if outerLeafBlockTargetOpt <= 0 {
-		outerLeafBlockTargetOpt = defaultOuterLeafFenceBlockTargetBytes
+		outerLeafBlockTargetOpt = defaultOuterLeafBlockTargetBytes
 	}
 	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(outerLeafBlockTargetOpt)
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
@@ -4416,8 +4416,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	disableJournal := opts.DisableWAL
 	if writerFlushMaxMemtablesUnset &&
 		disableJournal &&
-		opts.WriterFlushMaxMemtables < v2DeferredAssistSlowdownMinMemtables {
-		opts.WriterFlushMaxMemtables = v2DeferredAssistSlowdownMinMemtables
+		opts.WriterFlushMaxMemtables < ingestWriterFlushMinMemtables {
+		opts.WriterFlushMaxMemtables = ingestWriterFlushMinMemtables
 	}
 	var retained map[string]struct{}
 	for _, seg := range segments {
@@ -4440,7 +4440,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	mutableShards := make([]memShard, shardCount)
 	appendOnlyEstimate := 0
 	if mode == memtable.ModeAppendOnly {
-		appendOnlyEstimate = appendOnlyEstimatedBytesPerEntryDeferredFence
+		appendOnlyEstimate = appendOnlyEstimatedBytesPerEntryIngest
 	}
 	for i := range mutableShards {
 		if mode == memtable.ModeAppendOnly {
@@ -6037,7 +6037,7 @@ func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync b
 	if db.domainIngressWorkers <= 0 {
 		return false, nil
 	}
-	// Preserve legacy sync behavior until ingress batching has explicit sync-fence
+	// Preserve legacy sync behavior until ingress batching has explicit sync-boundary
 	// handling and per-request durable completion accounting.
 	if sync {
 		return false, nil
@@ -9095,17 +9095,7 @@ func (db *DB) computeBackendRange() (keyRange, bool, error) {
 const stopResumeFraction = 0.70
 const stopBackpressureStallLimit = 16
 
-const (
-	// Start pushing down v2 deferred fence debt earlier than the generic
-	// slowdown threshold so checkpoint work is less bursty.
-	// Dividing by 2 starts assists at 50% of the configured slowdown/stop
-	// thresholds when possible.
-	v2DeferredAssistEarlyTriggerDiv = 2
-	// Run the assist path once every 32 write assists to limit overhead.
-	v2DeferredAssistTickMask             = 31 // once every 32 write assists
-	v2DeferredAssistSlowdownMinMemtables = 2
-	v2DeferredAssistStopMinMemtables     = 4
-)
+const ingestWriterFlushMinMemtables = 2
 
 func (db *DB) adaptiveBackpressureEnabled() bool {
 	return db.slowdownBacklogSeconds > 0 || db.stopBacklogSeconds > 0 || db.maxBacklogBytes > 0
