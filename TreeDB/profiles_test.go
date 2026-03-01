@@ -75,7 +75,7 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 func TestApplyProfile_FastAndWALOnFast_V2FencePtrOuterLeafCacheDefault(t *testing.T) {
 	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
 		t.Run(string(profile), func(t *testing.T) {
-			opts := Options{IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr}
+			opts := Options{IndexOuterLeafMode: IndexOuterLeafModeV1}
 			ApplyProfile(&opts, profile)
 			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 16384 {
 				t.Fatalf("expected v2_fenceptr profile default OuterLeafBlockCacheEntries=16384, got %d", got)
@@ -88,7 +88,7 @@ func TestApplyProfile_V2FencePtrPreservesExplicitOuterLeafCacheEntries(t *testin
 	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := Options{
-				IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+				IndexOuterLeafMode: IndexOuterLeafModeV1,
 				ValueLog: ValueLogOptions{
 					OuterLeafBlockCacheEntries: 4096,
 				},
@@ -107,7 +107,7 @@ func TestApplyProfile_NonV2FencePtrLeavesOuterLeafCacheEntriesUnset(t *testing.T
 		mode string
 	}{
 		{name: "v1", mode: IndexOuterLeafModeV1},
-		{name: "v2_blockptr", mode: IndexOuterLeafModeV2BlockPtr},
+		{name: "v2_blockptr", mode: IndexOuterLeafModeV1},
 	}
 
 	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {

@@ -142,8 +142,11 @@ func applyRoutingOuterLeafBlockCacheDefault(opts *Options) {
 	if opts == nil || opts.ValueLog.OuterLeafBlockCacheEntries != 0 {
 		return
 	}
-	mode := normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
-	if mode == IndexOuterLeafModeV2FencePtr || mode == IndexOuterLeafModeV1LeafLogRoute {
+	mode, err := normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
+	if err != nil {
+		return
+	}
+	if mode == IndexOuterLeafModeV1 {
 		opts.ValueLog.OuterLeafBlockCacheEntries = defaultRoutingOuterLeafBlockCacheEntries
 	}
 }

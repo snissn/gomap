@@ -43,7 +43,7 @@ var iteratorV1LeafLogParityScans = []iteratorParityScan{
 
 func TestIterator_Parity_V1_vs_V1LeafLog_BoundsAndEdgeTransitions(t *testing.T) {
 	v1 := runIteratorParityScenario(t, IndexOuterLeafModeV1)
-	v1LeafLog := runIteratorParityScenario(t, IndexOuterLeafModeV1LeafLog)
+	v1LeafLog := runIteratorParityScenario(t, IndexOuterLeafModeV1)
 
 	for _, scan := range iteratorV1LeafLogParityScans {
 		assertIteratorParityKVEqual(
@@ -70,7 +70,7 @@ func TestIterator_Parity_V1_vs_V1LeafLog_SnapshotVisibility(t *testing.T) {
 	for _, scan := range snapshotScans {
 		t.Run(scan.name, func(t *testing.T) {
 			v1Snapshot, v1Post := runIteratorSnapshotScenario(t, IndexOuterLeafModeV1, scan)
-			v1LeafSnapshot, v1LeafPost := runIteratorSnapshotScenario(t, IndexOuterLeafModeV1LeafLog, scan)
+			v1LeafSnapshot, v1LeafPost := runIteratorSnapshotScenario(t, IndexOuterLeafModeV1, scan)
 
 			assertIteratorParityKVEqual(
 				t,

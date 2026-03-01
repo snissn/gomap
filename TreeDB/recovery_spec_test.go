@@ -150,7 +150,7 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	walFenceMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_WAL_FENCE_MODE"))
 	if outerLeafMode == "" && outerLeafV2 {
 		// Backward-compatible helper knob.
-		outerLeafMode = treedb.IndexOuterLeafModeV2BlockPtr
+		outerLeafMode = treedb.IndexOuterLeafModeV1
 	}
 
 	durability := treedb.DurabilityDurable
@@ -168,7 +168,7 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	switch outerLeafMode {
 	case "":
 		// default mode
-	case treedb.IndexOuterLeafModeV1LeafLog, treedb.IndexOuterLeafModeV1LeafLogRoute, treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
+	case treedb.IndexOuterLeafModeV1:
 		opts.IndexOuterLeafMode = outerLeafMode
 		opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
 		opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
@@ -259,7 +259,7 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeNoTrailingSyncWriter(t *testing.T) 
 	switch outerLeafMode {
 	case "":
 		// default mode
-	case treedb.IndexOuterLeafModeV1LeafLog, treedb.IndexOuterLeafModeV1LeafLogRoute, treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
+	case treedb.IndexOuterLeafModeV1:
 		opts.IndexOuterLeafMode = outerLeafMode
 		opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
 		opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
@@ -420,7 +420,7 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 				"TREEDB_CRASH_OUTERLEAF_MODE=v2_fenceptr",
 				"TREEDB_CRASH_WAL_FENCE_MODE=simple_inline",
 			},
-			outerMode:    treedb.IndexOuterLeafModeV2FencePtr,
+			outerMode:    treedb.IndexOuterLeafModeV1,
 			walFenceMode: treedb.ValueLogWALFenceModeSimpleInline,
 		},
 		{
@@ -430,7 +430,7 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 				"TREEDB_CRASH_RELAXED_SYNC=1",
 				"TREEDB_CRASH_OUTERLEAF_MODE=v2_blockptr",
 			},
-			outerMode: treedb.IndexOuterLeafModeV2BlockPtr,
+			outerMode: treedb.IndexOuterLeafModeV1,
 		},
 		{
 			name: "wal_on_relaxed_v1_leaflog",
@@ -439,7 +439,7 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 				"TREEDB_CRASH_RELAXED_SYNC=1",
 				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog",
 			},
-			outerMode: treedb.IndexOuterLeafModeV1LeafLog,
+			outerMode: treedb.IndexOuterLeafModeV1,
 		},
 		{
 			name: "wal_on_relaxed_v1_leaflog_route",
@@ -448,7 +448,7 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 				"TREEDB_CRASH_RELAXED_SYNC=1",
 				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog_route",
 			},
-			outerMode: treedb.IndexOuterLeafModeV1LeafLogRoute,
+			outerMode: treedb.IndexOuterLeafModeV1,
 		},
 	}
 
@@ -556,7 +556,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				"TREEDB_CRASH_OUTERLEAF_MODE=v2_blockptr",
 			},
 			expectLarge: true,
-			outerMode:   treedb.IndexOuterLeafModeV2BlockPtr,
+			outerMode:   treedb.IndexOuterLeafModeV1,
 		},
 		{
 			name: "wal_on_strict_sync_large_value_outerleaf_v1_leaflog",
@@ -567,7 +567,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog",
 			},
 			expectLarge: true,
-			outerMode:   treedb.IndexOuterLeafModeV1LeafLog,
+			outerMode:   treedb.IndexOuterLeafModeV1,
 		},
 		{
 			name: "wal_on_strict_sync_large_value_outerleaf_v1_leaflog_route",
@@ -578,7 +578,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog_route",
 			},
 			expectLarge: true,
-			outerMode:   treedb.IndexOuterLeafModeV1LeafLogRoute,
+			outerMode:   treedb.IndexOuterLeafModeV1,
 		},
 		{
 			name: "wal_on_strict_sync_large_value_outerleaf_v2_fenceptr",
@@ -589,7 +589,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				"TREEDB_CRASH_OUTERLEAF_MODE=v2_fenceptr",
 			},
 			expectLarge: true,
-			outerMode:   treedb.IndexOuterLeafModeV2FencePtr,
+			outerMode:   treedb.IndexOuterLeafModeV1,
 		},
 		{
 			name: "wal_on_strict_sync_large_value_outerleaf_v2_fenceptr_simple_inline",
@@ -601,7 +601,7 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 				"TREEDB_CRASH_WAL_FENCE_MODE=simple_inline",
 			},
 			expectLarge:  true,
-			outerMode:    treedb.IndexOuterLeafModeV2FencePtr,
+			outerMode:    treedb.IndexOuterLeafModeV1,
 			walFenceMode: treedb.ValueLogWALFenceModeSimpleInline,
 		},
 	}

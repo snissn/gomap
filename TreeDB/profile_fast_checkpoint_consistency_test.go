@@ -79,7 +79,7 @@ func TestProfileFast_CheckpointMaintainsLatestValues(t *testing.T) {
 	for _, profile := range profiles {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := OptionsFor(profile, t.TempDir())
-			opts.IndexOuterLeafMode = IndexOuterLeafModeV2FencePtr
+			opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 			db, err := Open(opts)
 			if err != nil {
 				t.Fatalf("open: %v", err)
@@ -104,7 +104,7 @@ func TestProfileWALOnFast_CheckpointMaintainsLatestValues_FenceModeMatrix(t *tes
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := OptionsFor(ProfileWALOnFast, t.TempDir())
-			opts.IndexOuterLeafMode = IndexOuterLeafModeV2FencePtr
+			opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 			opts.ValueLog.WALFenceMode = tc.walFenceMode
 			opts.ValueLog.ForcePointers = tc.forcePointers
 			opts.ValueLog.PointerThreshold = 1

@@ -127,7 +127,7 @@ func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, mode string, code
 }
 
 func TestReplayInlineAppender_UsesConfiguredOuterLeafEncodingForFenceMode(t *testing.T) {
-	assertReplayInlineAppenderOuterLeafEncoding(t, IndexOuterLeafModeV2FencePtr, ValueLogBlockLZ4, 7)
+	assertReplayInlineAppenderOuterLeafEncoding(t, IndexOuterLeafModeV1, ValueLogBlockLZ4, 7)
 }
 
 func TestReplayInlineAppender_UsesOuterLeafEncodingForV1LeafLogAndBlockPtrModes(t *testing.T) {
@@ -139,19 +139,19 @@ func TestReplayInlineAppender_UsesOuterLeafEncodingForV1LeafLogAndBlockPtrModes(
 	}{
 		{
 			name:    "v1_leaflog",
-			mode:    IndexOuterLeafModeV1LeafLog,
+			mode:    IndexOuterLeafModeV1,
 			codec:   ValueLogBlockSnappy,
 			restart: 11,
 		},
 		{
 			name:    "v1_leaflog_route",
-			mode:    IndexOuterLeafModeV1LeafLogRoute,
+			mode:    IndexOuterLeafModeV1,
 			codec:   ValueLogBlockSnappy,
 			restart: 9,
 		},
 		{
 			name:    "v2_blockptr",
-			mode:    IndexOuterLeafModeV2BlockPtr,
+			mode:    IndexOuterLeafModeV1,
 			codec:   ValueLogBlockLZ4,
 			restart: 5,
 		},

@@ -70,7 +70,7 @@ func TestValuePlacement_PerDomainThreshold_Respected(t *testing.T) {
 	opts := Options{
 		Dir:                dir,
 		FlushThreshold:     1,
-		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
 		ValueLog: ValueLogOptions{
 			PointerThreshold: 256,
 			DomainInlineThresholds: []ValueLogDomainThreshold{

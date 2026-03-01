@@ -107,11 +107,11 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 }
 
 func TestValueLogGC_FenceMode_NestedBlobRefSegmentLiveness(t *testing.T) {
-	testValueLogGCNestedBlobRefSegmentLiveness(t, IndexOuterLeafModeV2FencePtr)
+	testValueLogGCNestedBlobRefSegmentLiveness(t, IndexOuterLeafModeV1)
 }
 
 func TestValueLogGC_V1LeafLogRoute_NestedBlobRefSegmentLiveness(t *testing.T) {
-	testValueLogGCNestedBlobRefSegmentLiveness(t, IndexOuterLeafModeV1LeafLogRoute)
+	testValueLogGCNestedBlobRefSegmentLiveness(t, IndexOuterLeafModeV1)
 }
 
 func TestValueLogGC_V1LeafLogRoute_NestedManifestChunkSegmentLiveness(t *testing.T) {
@@ -119,7 +119,7 @@ func TestValueLogGC_V1LeafLogRoute_NestedManifestChunkSegmentLiveness(t *testing
 
 	db, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
 		ValueLog: ValueLogOptions{
 			ForcePointers: true,
 		},

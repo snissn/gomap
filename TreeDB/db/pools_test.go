@@ -11,7 +11,7 @@ func TestSnapshotPoolPutRetainsDecodeLeasesWhileDBOpen(t *testing.T) {
 	s := pool.Get()
 	openDB := &DB{}
 	s.db = openDB
-	s.reader.reconfigure(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	s.reader.reconfigure(nil, outerleaf.ModeV1, false, nil, nil)
 	if s.reader.fenceDecodeLeases == nil {
 		t.Fatalf("fenceDecodeLeases=nil want initialized")
 	}
@@ -47,7 +47,7 @@ func TestSnapshotPoolPutReleasesDecodeLeasesWhenDBClosing(t *testing.T) {
 	closingDB := &DB{}
 	closingDB.closing.Store(true)
 	s.db = closingDB
-	s.reader.reconfigure(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	s.reader.reconfigure(nil, outerleaf.ModeV1, false, nil, nil)
 	if s.reader.fenceDecodeLeases == nil {
 		t.Fatalf("fenceDecodeLeases=nil want initialized")
 	}

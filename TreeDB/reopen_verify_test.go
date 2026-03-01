@@ -244,7 +244,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2(t *testing.T) {
 
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2BlockPtr,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:          1,
 			OuterLeafBlockCodec:       treedb.ValueLogBlockLZ4,
@@ -281,7 +281,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_ReadPath_HitMiss_Reope
 
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1LeafLog,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
@@ -526,28 +526,28 @@ func runOverwriteDeleteReopenScenario(t *testing.T, mode string, syncPerWrite bo
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_ReopenParity(t *testing.T) {
-	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, false)
+	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, false)
 	if got.mainFlags&node.FlagPointer == 0 {
 		t.Fatalf("expected pointer-backed keyMain in v1_leaflog checkpoint flow, flags=%08b", got.mainFlags)
 	}
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLogRoute_OverwriteDelete_ReopenParity(t *testing.T) {
-	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLogRoute, false)
+	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, false)
 	if got.mainFlags&node.FlagPointer == 0 {
 		t.Fatalf("expected pointer-backed keyMain in v1_leaflog_route checkpoint flow, flags=%08b", got.mainFlags)
 	}
 }
 
 func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLog_OverwriteDelete_ReopenParity(t *testing.T) {
-	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, true)
+	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, true)
 	if got.mainFlags&node.FlagPointer == 0 {
 		t.Fatalf("expected pointer-backed keyMain in v1_leaflog writesync flow, flags=%08b", got.mainFlags)
 	}
 }
 
 func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLogRoute_OverwriteDelete_ReopenParity(t *testing.T) {
-	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLogRoute, true)
+	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, true)
 	if got.mainFlags&node.FlagPointer == 0 {
 		t.Fatalf("expected pointer-backed keyMain in v1_leaflog_route writesync flow, flags=%08b", got.mainFlags)
 	}
@@ -555,7 +555,7 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLogRoute_OverwriteDelete_Re
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_ParityWithV1(t *testing.T) {
 	v1 := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, false)
-	v1LeafLog := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, false)
+	v1LeafLog := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, false)
 	if !bytes.Equal(v1.mainValue, v1LeafLog.mainValue) {
 		t.Fatalf("main key parity mismatch: v1=%dB v1_leaflog=%dB", len(v1.mainValue), len(v1LeafLog.mainValue))
 	}
@@ -569,7 +569,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_Parity
 
 func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLog_OverwriteDelete_ParityWithV1(t *testing.T) {
 	v1 := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, true)
-	v1LeafLog := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, true)
+	v1LeafLog := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, true)
 	if !bytes.Equal(v1.mainValue, v1LeafLog.mainValue) {
 		t.Fatalf("main key parity mismatch (writesync): v1=%dB v1_leaflog=%dB", len(v1.mainValue), len(v1LeafLog.mainValue))
 	}
@@ -587,7 +587,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr(t *testing.T) {
 
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
@@ -625,7 +625,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr_SimpleInline(t *testi
 
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			WALFenceMode:                  treedb.ValueLogWALFenceModeSimpleInline,
@@ -677,7 +677,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2_GroupedBlocks(t *testing.T) {
 
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2BlockPtr,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockSnappy,
@@ -879,19 +879,19 @@ func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity(t *testing
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV2(t *testing.T) {
-	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2BlockPtr)
+	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV2FencePtr(t *testing.T) {
-	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2FencePtr)
+	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV1LeafLog(t *testing.T) {
-	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLog)
+	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV1LeafLogRoute(t *testing.T) {
-	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLogRoute)
+	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1)
 }
 
 func runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t *testing.T, mode string) {
@@ -963,19 +963,19 @@ func runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t *testing.T, mod
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV2_ReopenParity(t *testing.T) {
-	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2BlockPtr)
+	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV2FencePtr_ReopenParity(t *testing.T) {
-	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2FencePtr)
+	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV1LeafLog_ReopenParity(t *testing.T) {
-	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLog)
+	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV1LeafLogRoute_ReopenParity(t *testing.T) {
-	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLogRoute)
+	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1)
 }
 
 func runValueLogGCReopenParityOuterLeaf(t *testing.T, mode string) {
@@ -1132,7 +1132,7 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV2(t *testing.T) {
 
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2BlockPtr,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
@@ -1167,7 +1167,7 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV2FencePtr(t *testing.T) {
 
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
@@ -1416,19 +1416,19 @@ func testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t *testing.T, 
 }
 
 func TestReopenVerify_OuterLeafV2_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
-	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV2BlockPtr)
+	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_OuterLeafV1LeafLog_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
-	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV1LeafLog)
+	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_OuterLeafV1LeafLogRoute_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
-	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV1LeafLogRoute)
+	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_OuterLeafV2FencePtr_SplitMergeDeleteRange_IteratorParity(t *testing.T) {
-	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV2FencePtr)
+	testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t, treedb.IndexOuterLeafModeV1)
 }
 
 func TestReopenVerify_OuterLeafV1LeafLog_SplitMergeDeleteRange_ParityWithV1(t *testing.T) {
@@ -1593,7 +1593,7 @@ func TestReopenVerify_OuterLeafV1LeafLog_SplitMergeDeleteRange_ParityWithV1(t *t
 	}
 
 	v1 := run(treedb.IndexOuterLeafModeV1)
-	v1LeafLog := run(treedb.IndexOuterLeafModeV1LeafLog)
+	v1LeafLog := run(treedb.IndexOuterLeafModeV1)
 	if v1.forwardCount != v1LeafLog.forwardCount {
 		t.Fatalf("forward count mismatch v1=%d v1_leaflog=%d", v1.forwardCount, v1LeafLog.forwardCount)
 	}
@@ -1622,7 +1622,7 @@ func TestReopenVerify_OuterLeafV2FencePtr_CompactIndex_ReopenParity(t *testing.T
 	const total = 4000
 	opts := treedb.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: treedb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: treedb.IndexOuterLeafModeV1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,

@@ -44,7 +44,7 @@ func TestWriteSyncImmediateVisibility_WithInFlightBatches(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := OptionsFor(ProfileWALOnFast, t.TempDir())
 			opts.KeepRecent = tc.keepRecent
-			opts.IndexOuterLeafMode = IndexOuterLeafModeV1LeafLogRoute
+			opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 			opts.DisableBackgroundPrune = tc.disableBgPrune
 			if tc.disableBgVLogTasks {
 				opts.BackgroundValueLogGCInterval = -1
@@ -132,7 +132,7 @@ func TestWriteSyncImmediateVisibility_WithInFlightBatches(t *testing.T) {
 func TestWriteSyncLatestVersionVisibleViaReverseIterator_WithInFlightBatches(t *testing.T) {
 	opts := OptionsFor(ProfileWALOnFast, t.TempDir())
 	opts.KeepRecent = 100000
-	opts.IndexOuterLeafMode = IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 1 << 20
 	opts.DisableBackgroundPrune = true
@@ -213,7 +213,7 @@ func TestWriteSyncLatestVersionVisibleViaReverseIterator_WithInFlightBatches(t *
 func TestWriteSyncLatestVersionVisibleViaReverseIterator_ConcurrentStores(t *testing.T) {
 	opts := OptionsFor(ProfileWALOnFast, t.TempDir())
 	opts.KeepRecent = 100000
-	opts.IndexOuterLeafMode = IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 1 << 20
 	opts.DisableBackgroundPrune = true
@@ -262,7 +262,7 @@ func TestWriteSyncLatestVersionVisibleViaReverseIterator_ConcurrentStores(t *tes
 func TestWriteSyncLatestVersionVisibleViaReverseIterator_ConcurrentStoresRootOnly(t *testing.T) {
 	opts := OptionsFor(ProfileWALOnFast, t.TempDir())
 	opts.KeepRecent = 100000
-	opts.IndexOuterLeafMode = IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 1 << 20
 	opts.DisableBackgroundPrune = true
@@ -360,7 +360,7 @@ func TestWriteSyncLatestVersionVisibleViaReverseIterator_ConcurrentStoresRootOnl
 func TestWriteSyncLatestVersionVisibleViaReverseIterator_ConcurrentStoresRootOnlyPointerPath(t *testing.T) {
 	opts := OptionsFor(ProfileWALOnFast, t.TempDir())
 	opts.KeepRecent = 100000
-	opts.IndexOuterLeafMode = IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 1
 	opts.DisableBackgroundPrune = true
@@ -448,7 +448,7 @@ func TestWriteSyncLatestVersionVisibleViaReverseIterator_ConcurrentStoresRootOnl
 func TestWriteSyncLatestVersionVisibleViaReverseIterator_SequentialStoreRootOnly(t *testing.T) {
 	opts := OptionsFor(ProfileWALOnFast, t.TempDir())
 	opts.KeepRecent = 100000
-	opts.IndexOuterLeafMode = IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 1 << 20
 	opts.DisableBackgroundPrune = true
@@ -490,7 +490,7 @@ func TestWriteSyncLatestVersionVisibleViaReverseIterator_SequentialStoreRootOnly
 func TestWriteSyncLatestVersionVisibleViaReverseIterator_ConcurrentWritesSequentialReverse(t *testing.T) {
 	opts := OptionsFor(ProfileWALOnFast, t.TempDir())
 	opts.KeepRecent = 100000
-	opts.IndexOuterLeafMode = IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 1 << 20
 	opts.DisableBackgroundPrune = true

@@ -140,9 +140,9 @@ func runDeleteRangeCheckpointConsistencyProfileMatrix(t *testing.T, mode string,
 }
 
 func TestDeleteRange_CheckpointConsistency_ProfileFenceMatrix(t *testing.T) {
-	runDeleteRangeCheckpointConsistencyProfileMatrix(t, IndexOuterLeafModeV2FencePtr, true)
+	runDeleteRangeCheckpointConsistencyProfileMatrix(t, IndexOuterLeafModeV1, true)
 }
 
 func TestDeleteRange_CheckpointConsistency_ProfileV1LeafLogMatrix(t *testing.T) {
-	runDeleteRangeCheckpointConsistencyProfileMatrix(t, IndexOuterLeafModeV1LeafLog, false)
+	runDeleteRangeCheckpointConsistencyProfileMatrix(t, IndexOuterLeafModeV1, false)
 }

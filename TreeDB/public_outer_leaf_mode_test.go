@@ -4,102 +4,63 @@ import (
 	"testing"
 )
 
-func TestNormalizePublicOuterLeafMode_V1LeafLogLegacyPreserved(t *testing.T) {
-	if got := normalizePublicOuterLeafMode(IndexOuterLeafModeV1LeafLogLegacy); got != IndexOuterLeafModeV1LeafLogLegacy {
-		t.Fatalf("normalizePublicOuterLeafMode=%q want %q", got, IndexOuterLeafModeV1LeafLogLegacy)
+func TestNormalizePublicOuterLeafMode_V1Preserved(t *testing.T) {
+	if got := normalizePublicOuterLeafMode(IndexOuterLeafModeV1); got != IndexOuterLeafModeV1 {
+		t.Fatalf("normalizePublicOuterLeafMode=%q want %q", got, IndexOuterLeafModeV1)
 	}
 }
 
 func TestNormalizePublicOuterLeafMode_CanonicalizesKnownModeCasing(t *testing.T) {
-	const in = "V2_FENCEPTR"
-	if got := normalizePublicOuterLeafMode(in); got != IndexOuterLeafModeV2FencePtr {
-		t.Fatalf("normalizePublicOuterLeafMode=%q want %q", got, IndexOuterLeafModeV2FencePtr)
+	const in = "V1"
+	if got := normalizePublicOuterLeafMode(in); got != IndexOuterLeafModeV1 {
+		t.Fatalf("normalizePublicOuterLeafMode=%q want %q", got, IndexOuterLeafModeV1)
 	}
 }
 
-func TestNormalizePublicOuterLeafMode_CanonicalizesLeafLogModeCasing(t *testing.T) {
-	tests := []struct {
-		in   string
-		want string
-	}{
-		{
-			in:   " V1_LEAFLOG ",
-			want: IndexOuterLeafModeV1LeafLog,
-		},
-		{
-			in:   " V1_LEAFLOG_LEGACY ",
-			want: IndexOuterLeafModeV1LeafLogLegacy,
-		},
-		{
-			in:   " V1_LEAFLOG_ROUTE ",
-			want: IndexOuterLeafModeV1LeafLogRoute,
-		},
-	}
-	for _, tc := range tests {
-		if got := normalizePublicOuterLeafMode(tc.in); got != tc.want {
-			t.Fatalf("normalizePublicOuterLeafMode(%q)=%q want %q", tc.in, got, tc.want)
-		}
+func TestNormalizePublicOuterLeafMode_LeavesLegacyModeRaw(t *testing.T) {
+	if got := normalizePublicOuterLeafMode(" v1_leaflog "); got != "v1_leaflog" {
+		t.Fatalf("normalizePublicOuterLeafMode(%q)=%q want %q", " v1_leaflog ", got, "v1_leaflog")
 	}
 }
 
-func TestOpen_V1LeafLogLegacy_StatsModePreserved(t *testing.T) {
+func TestOpen_V1Mode_StatsModePreserved(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                t.TempDir(),
-		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLogLegacy,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
 	})
 	if err != nil {
-		t.Fatalf("open %q: %v", IndexOuterLeafModeV1LeafLogLegacy, err)
+		t.Fatalf("open %q: %v", IndexOuterLeafModeV1, err)
 	}
 	defer db.Close()
 
 	stats := db.Stats()
-	if got := stats["treedb.index.outer_leaf_mode"]; got != IndexOuterLeafModeV1LeafLogLegacy {
-		t.Fatalf("treedb.index.outer_leaf_mode=%q want %q", got, IndexOuterLeafModeV1LeafLogLegacy)
+	if got := stats["treedb.index.outer_leaf_mode"]; got != IndexOuterLeafModeV1 {
+		t.Fatalf("treedb.index.outer_leaf_mode=%q want %q", got, IndexOuterLeafModeV1)
 	}
 }
 
-func TestOpen_V1LeafLogMixedCase_StatsModeCanonicalized(t *testing.T) {
+func TestOpen_V1MixedCase_StatsModeCanonicalized(t *testing.T) {
 	db, err := Open(Options{
 		Dir:                t.TempDir(),
-		IndexOuterLeafMode: " V1_LEAFLOG ",
+		IndexOuterLeafMode: " v1 ",
 	})
 	if err != nil {
-		t.Fatalf("open mixed-case v1_leaflog: %v", err)
+		t.Fatalf("open mixed-case v1: %v", err)
 	}
 	defer db.Close()
 
 	stats := db.Stats()
-	if got := stats["treedb.index.outer_leaf_mode"]; got != IndexOuterLeafModeV1LeafLog {
-		t.Fatalf("treedb.index.outer_leaf_mode=%q want %q", got, IndexOuterLeafModeV1LeafLog)
+	if got := stats["treedb.index.outer_leaf_mode"]; got != IndexOuterLeafModeV1 {
+		t.Fatalf("treedb.index.outer_leaf_mode=%q want %q", got, IndexOuterLeafModeV1)
 	}
 }
 
-func TestOpen_V1LeafLogRouteMixedCase_StatsModeCanonicalized(t *testing.T) {
-	db, err := Open(Options{
+func TestOpen_RejectsLegacyMode(t *testing.T) {
+	_, err := Open(Options{
 		Dir:                t.TempDir(),
-		IndexOuterLeafMode: " V1_LEAFLOG_ROUTE ",
+		IndexOuterLeafMode: "v1_leaflog_route",
 	})
-	if err != nil {
-		t.Fatalf("open mixed-case v1_leaflog_route: %v", err)
+	if err == nil {
+		t.Fatalf("expected unsupported outer-leaf mode error")
 	}
-	defer db.Close()
-
-	stats := db.Stats()
-	if got := stats["treedb.index.outer_leaf_mode"]; got != IndexOuterLeafModeV1LeafLogRoute {
-		t.Fatalf("treedb.index.outer_leaf_mode=%q want %q", got, IndexOuterLeafModeV1LeafLogRoute)
-	}
-}
-
-func TestOpen_V2FencePtrMixedCase_AllowsSimpleInlineWALFenceMode(t *testing.T) {
-	db, err := Open(Options{
-		Dir:                t.TempDir(),
-		IndexOuterLeafMode: "V2_FENCEPTR",
-		ValueLog: ValueLogOptions{
-			WALFenceMode: ValueLogWALFenceModeSimpleInline,
-		},
-	})
-	if err != nil {
-		t.Fatalf("open mixed-case v2_fenceptr simple_inline: %v", err)
-	}
-	defer db.Close()
 }

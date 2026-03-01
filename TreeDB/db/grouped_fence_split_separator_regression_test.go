@@ -43,7 +43,7 @@ func TestGroupedFencePointGetAcrossSplitUsesFullSeparator(t *testing.T) {
 		IndexColumnarLeaves:        true,
 		IndexPackedValuePtr:        true,
 		IndexInternalBaseDelta:     true,
-		IndexOuterLeafMode:         IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:         IndexOuterLeafModeV1,
 		PreferAppendAlloc:          true,
 		DisablePiggybackCompaction: true,
 		ValueLog: ValueLogOptions{

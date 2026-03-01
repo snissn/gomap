@@ -291,9 +291,9 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 }
 
 func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *testing.T) {
-	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV2BlockPtr, false)
+	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV1, false)
 }
 
 func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV1LeafLogPointers(t *testing.T) {
-	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV1LeafLog, true)
+	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV1, true)
 }

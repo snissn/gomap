@@ -24,7 +24,7 @@ func TestNormalizeBackpressureDefaults_Standard(t *testing.T) {
 func TestNormalizeBackpressureDefaults_V2FenceWALOff(t *testing.T) {
 	opts := Options{
 		Durability:         db.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 	}
 	normalizeBackpressureDefaults(&opts)
 
@@ -59,7 +59,7 @@ func TestNormalizeBackpressureDefaults_EmptyModeUsesStandardDefaultsWhenWALOff(t
 func TestNormalizeBackpressureDefaults_ExplicitPreserved(t *testing.T) {
 	opts := Options{
 		Durability:              db.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode:      db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:      db.IndexOuterLeafModeV1,
 		SlowdownBacklogSeconds:  0.5,
 		StopBacklogSeconds:      1.5,
 		MaxBacklogBytes:         12345,

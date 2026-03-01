@@ -26,7 +26,7 @@ func runLargeValueManifestParity(t *testing.T, profile Profile) {
 	})
 
 	opts := OptionsFor(profile, t.TempDir())
-	opts.IndexOuterLeafMode = IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundValueLogGCInterval = -1
 	opts.BackgroundValueLogRewriteInterval = -1
