@@ -238,6 +238,41 @@ func TestReopenVerify_WALOn_Checkpoint(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
+func TestReopenVerify_WALOn_Checkpoint_LeafPagesInValueLog(t *testing.T) {
+	dir := t.TempDir()
+	keys, values, hash := buildVerifyDataset(2000)
+
+	opts := treedb.Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	writeDataset(t, db, keys, values, false)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	checkGets(t, reopen, keys, values, false)
+	scanAndCheck(t, reopen, values, false, hash)
+}
+
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
@@ -976,6 +1011,67 @@ func TestReopenVerify_ValueLogGC_OuterLeafV1LeafLog_ReopenParity(t *testing.T) {
 
 func TestReopenVerify_ValueLogGC_OuterLeafV1LeafLogRoute_ReopenParity(t *testing.T) {
 	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLogRoute)
+}
+
+func TestReopenVerify_ValueLogGC_LeafPagesInValueLog_ReopenParity(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir:                        dir,
+		IndexOuterLeafMode:         treedb.IndexOuterLeafModeV1,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 1 << 20,
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	const total = 240
+	for i := 0; i < total; i++ {
+		key := []byte(fmt.Sprintf("leafgc-key-%04d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, 32)
+		if err := db.Set(key, val); err != nil {
+			_ = db.Close()
+			t.Fatalf("set %q: %v", string(key), err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint before gc: %v", err)
+	}
+
+	stats, err := db.ValueLogGC(context.Background(), treedb.ValueLogGCOptions{})
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsEligible == 0 {
+		t.Fatalf("expected GC to find eligible segments, stats=%+v", stats)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	for i := 0; i < total; i++ {
+		key := []byte(fmt.Sprintf("leafgc-key-%04d", i))
+		got, err := reopen.Get(key)
+		if err != nil {
+			t.Fatalf("reopen get %q: %v", string(key), err)
+		}
+		want := bytes.Repeat([]byte{byte(i % 251)}, 32)
+		if !bytes.Equal(got, want) {
+			t.Fatalf("reopen mismatch key=%q got=%dB want=%dB", string(key), len(got), len(want))
+		}
+	}
 }
 
 func runValueLogGCReopenParityOuterLeaf(t *testing.T, mode string) {
