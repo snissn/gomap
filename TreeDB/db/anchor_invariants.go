@@ -36,15 +36,15 @@ func validateV1LeafLogAnchors(anchors []v1LeafLogAnchor) error {
 	for i := range anchors {
 		a := anchors[i]
 		if len(a.Key) == 0 {
-			return fmt.Errorf("v1_leaflog anchor invariant: empty key at index=%d", i)
+			return fmt.Errorf("route anchor invariant: empty key at index=%d", i)
 		}
 		if i > 0 {
 			if bytes.Compare(a.Key, prevKey) <= 0 {
-				return fmt.Errorf("v1_leaflog anchor invariant: non-increasing key at index=%d", i)
+				return fmt.Errorf("route anchor invariant: non-increasing key at index=%d", i)
 			}
 		}
 		if firstIdx, exists := seenPtrs[a.Ptr]; exists {
-			return fmt.Errorf("v1_leaflog anchor invariant: duplicate pointer at index=%d first_index=%d", i, firstIdx)
+			return fmt.Errorf("route anchor invariant: duplicate pointer at index=%d first_index=%d", i, firstIdx)
 		}
 		seenPtrs[a.Ptr] = i
 		prevKey = a.Key

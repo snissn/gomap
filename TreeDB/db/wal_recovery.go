@@ -369,19 +369,17 @@ func (a *replayInlineAppender) append(db *DB, key, value []byte) (page.ValuePtr,
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
 	payload := value
-	if outerleaf.ModeEnabled(strings.TrimSpace(db.indexOuterLeafMode)) {
-		encoded, err := outerleaf.EncodeSingle(
-			nil,
-			key,
-			value,
-			uint8(db.outerLeafBlockCodec),
-			outerleaf.NormalizeRestartInterval(db.outerLeafBlockRestart),
-		)
-		if err != nil {
-			return page.ValuePtr{}, err
-		}
-		payload = encoded
+	encoded, err := outerleaf.EncodeSingle(
+		nil,
+		key,
+		value,
+		uint8(db.outerLeafBlockCodec),
+		outerleaf.NormalizeRestartInterval(db.outerLeafBlockRestart),
+	)
+	if err != nil {
+		return page.ValuePtr{}, err
 	}
+	payload = encoded
 	rid := a.nextRID
 	a.nextRID++
 	ptr, err := a.writer.appendValue(rid, payload)

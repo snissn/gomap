@@ -113,7 +113,13 @@ func recycleOuterLeafDecodedBlock(block *outerleaf.DecodedBlock) {
 	}
 	block.Release()
 	*block = outerleaf.DecodedBlock{}
-	outerLeafFenceDecodedBlockPut(block)
+	outerLeafDecodedBlockPool.Put(block)
+}
+
+var outerLeafDecodedBlockPool = sync.Pool{
+	New: func() any {
+		return &outerleaf.DecodedBlock{}
+	},
 }
 
 type outerLeafBlockCacheLease struct {

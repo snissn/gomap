@@ -3,7 +3,6 @@ package db
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -13,7 +12,6 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
-	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/largevalue"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -193,7 +191,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	}
 	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, "", false, nil, nil), snap.state.SystemRootPageID).
+	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, false), snap.state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID); err != nil {
 		_ = sysIter.Close()
@@ -322,29 +320,8 @@ func (db *DB) addNestedBlobRefLiveBytes(blobPtr page.ValuePtr, refs map[uint32]i
 }
 
 func valueLogRecordLengthNeedsHeader(ptr page.ValuePtr, hint uint32) bool {
-	if hint == 0 {
-		return true
-	}
-	// Grouped legacy fence markers reuse bit 23 inside the length-hint field.
-	// Use on-disk headers for exact sizing in this ambiguous case.
-	return page.ValuePtrIsGrouped(ptr) && page.ValuePtrIsFenceOuter(ptr)
-}
-
-func preserveFenceMarkerOnRewrite(ptr page.ValuePtr, raw []byte) bool {
-	if !page.ValuePtrIsFenceOuter(ptr) {
-		return false
-	}
-	if !page.ValuePtrIsGrouped(ptr) {
-		return true
-	}
-	if !outerleaf.HasMagic(raw) {
-		return false
-	}
-	// Grouped pointers may carry a legacy bit-23 marker collision. Preserve the
-	// fence marker only when the payload structurally decodes as an outer-leaf
-	// block (magic prefix alone is not sufficient).
-	_, err := outerleaf.DecodeBlockWithVerify(raw, nil, false)
-	return err == nil
+	_ = ptr
+	return hint == 0
 }
 
 func readValueLogRecordLengthFromHeader(r io.ReaderAt, start int64) (uint32, error) {
@@ -649,12 +626,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			if err != nil {
 				return err
 			}
-			var newPtr page.ValuePtr
-			if preserveFenceMarkerOnRewrite(candidate.oldPtr, val) {
-				newPtr, err = writer.appendFenceValue(nextRID, val)
-			} else {
-				newPtr, err = writer.appendValue(nextRID, val)
-			}
+			newPtr, err := writer.appendValue(nextRID, val)
 			if err != nil {
 				return err
 			}
@@ -988,7 +960,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	retainedOldValueIDs := make(map[uint32]struct{})
 
 	buildTree := func(root uint64) (uint64, error) {
-		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet, "", false, nil, nil), root).
+		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet, false), root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		rewriter := &rewriteIterator{
 			inner:               iter,
@@ -1178,40 +1150,6 @@ func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, er
 	}
 	w.records++
 	return ptr, nil
-}
-
-func (w *rewriteWriter) appendFenceValue(rid uint64, value []byte) (page.ValuePtr, error) {
-	raw, length, err := buildRawFenceRecord(rid, value)
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	ptr, err := w.appendRaw(raw, length)
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	return ptr, nil
-}
-
-func buildRawFenceRecord(rid uint64, value []byte) ([]byte, uint32, error) {
-	if rid == 0 {
-		return nil, 0, fmt.Errorf("vlog-rewrite: missing rid")
-	}
-	if len(value) > int(^uint32(0)) {
-		return nil, 0, fmt.Errorf("vlog-rewrite: record too large")
-	}
-	raw := make([]byte, valuelog.HeaderSize+len(value))
-	raw[4] = valuelog.Version
-	raw[5] = 0 // non-grouped; required so fence marker bit remains representable
-	raw[6] = 0
-	raw[7] = 0
-	binary.LittleEndian.PutUint64(raw[8:16], rid)
-	binary.LittleEndian.PutUint32(raw[16:20], uint32(len(value)))
-	copy(raw[valuelog.HeaderSize:], value)
-	sum := crc.ChecksumParts(raw[4:valuelog.HeaderSize], raw[valuelog.HeaderSize:])
-	binary.LittleEndian.PutUint32(raw[0:4], sum)
-	length := uint32(valuelog.HeaderSize-4) + uint32(len(value))
-	length = page.ValuePtrMarkFenceOuter(page.ValuePtr{Length: length}).Length
-	return raw, length, nil
 }
 
 func (w *rewriteWriter) Sync() error {

@@ -129,7 +129,7 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains(t *testing.T) {
 	}
 }
 
-func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode string, expectStrictCollapse bool) {
+func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T) {
 	dir := t.TempDir()
 
 	d, err := Open(Options{
@@ -138,7 +138,6 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 		LeafFillTargetPPM:         850_000,
 		InternalFillTargetPPM:     900_000,
 		MaintenanceOpsPerCoalesce: -1,
-		IndexOuterLeafMode:        mode,
 		ValueLog: ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           ValueLogBlockLZ4,
@@ -195,9 +194,6 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 	}
 
 	keep := 50
-	if expectStrictCollapse {
-		keep = 8
-	}
 	{
 		b := d.NewBatch().(*Batch)
 		for i := keep; i < total; i++ {
@@ -238,23 +234,14 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 		t.Fatalf("parse internal: %v", err)
 	}
 
-	if expectStrictCollapse {
-		if leaf != 1 {
-			t.Fatalf("expected strict root-collapse to a single leaf, got leaf pages=%d", leaf)
-		}
-		if internal != 0 {
-			t.Fatalf("expected strict root-collapse to leaf root, got internal pages=%d", internal)
-		}
-	} else {
-		if beforeLeaf <= leaf {
-			t.Fatalf("expected leaf pages to shrink after heavy deletes, before=%d after=%d", beforeLeaf, leaf)
-		}
-		if leaf > 16 {
-			t.Fatalf("expected post-delete leaf pages to stay small, got %d", leaf)
-		}
-		if internal > 1 {
-			t.Fatalf("expected shallow tree after heavy deletes, got internal pages=%d", internal)
-		}
+	if beforeLeaf <= leaf {
+		t.Fatalf("expected leaf pages to shrink after heavy deletes, before=%d after=%d", beforeLeaf, leaf)
+	}
+	if leaf > 16 {
+		t.Fatalf("expected post-delete leaf pages to stay small, got %d", leaf)
+	}
+	if internal > 1 {
+		t.Fatalf("expected shallow tree after heavy deletes, got internal pages=%d", internal)
 	}
 
 	for i := 0; i < keep; i++ {
@@ -290,10 +277,6 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 	}
 }
 
-func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *testing.T) {
-	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV1, false)
-}
-
-func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV1LeafLogPointers(t *testing.T) {
-	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV1, true)
+func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafPointers(t *testing.T) {
+	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t)
 }

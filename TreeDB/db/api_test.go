@@ -195,32 +195,6 @@ func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
 	}
 }
 
-func TestStatsIncludesV1LeafLogAnchorScaffolding(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(Options{Dir: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	stats := db.Stats()
-	keys := []string{
-		"treedb.v1_leaflog.anchor_lookups",
-		"treedb.v1_leaflog.anchor_block_decodes",
-		"treedb.v1_leaflog.anchor_misses",
-		"treedb.v1_leaflog.anchor_max_probes",
-	}
-	for _, key := range keys {
-		got, ok := stats[key]
-		if !ok {
-			t.Fatalf("missing %s", key)
-		}
-		if got != "0" {
-			t.Fatalf("%s=%q want 0", key, got)
-		}
-	}
-}
-
 func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{

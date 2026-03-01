@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -93,7 +92,6 @@ type DB struct {
 	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
 	indexAdaptiveLeafEncoding bool
-	indexOuterLeafMode        string
 	outerLeafBlockCodec       ValueLogBlockCodec
 	outerLeafBlockRestart     int
 	skipOuterLeafChecksums    bool
@@ -139,19 +137,6 @@ const (
 const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
-
-// normalizeIndexOuterLeafMode canonicalizes the supported outer-leaf mode.
-// Empty mode defaults to v1.
-func normalizeIndexOuterLeafMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "":
-		return IndexOuterLeafModeV1
-	case IndexOuterLeafModeV1:
-		return IndexOuterLeafModeV1
-	default:
-		return strings.ToLower(strings.TrimSpace(mode))
-	}
-}
 
 // DurabilityMode configures cached-mode durability semantics.
 //
@@ -205,23 +190,8 @@ const (
 	ValueLogBlockLZ4
 )
 
-// ValueLogWALFenceMode controls how WAL records are encoded for pointer-eligible
-// writes when the outer-leaf fence-pointer mode is active.
-type ValueLogWALFenceMode string
-
-const (
-	// ValueLogWALFenceModeRIDJoin logs pointer writes as RID references in WAL
-	// (current/default behavior).
-	ValueLogWALFenceModeRIDJoin ValueLogWALFenceMode = "rid_join"
-	// ValueLogWALFenceModeSimpleInline logs pointer-eligible writes as inline WAL
-	// records and defers pointer materialization to flush/checkpoint boundaries.
-	ValueLogWALFenceModeSimpleInline ValueLogWALFenceMode = "simple_inline"
-)
-
-const (
-	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
-	IndexOuterLeafModeV1 = "v1"
-)
+// NOTE: The previous "index outer-leaf mode" and "WAL fence mode" configuration
+// surfaces were removed. Outer-leaf envelopes are detected by the magic header.
 
 // ValueLogAutoPolicy controls auto-mode dict vs block selection bias.
 type ValueLogAutoPolicy uint8
@@ -231,17 +201,6 @@ const (
 	ValueLogAutoThroughput
 	ValueLogAutoSize
 )
-
-func normalizeValueLogWALFenceMode(mode ValueLogWALFenceMode) ValueLogWALFenceMode {
-	switch strings.ToLower(strings.TrimSpace(string(mode))) {
-	case "", string(ValueLogWALFenceModeRIDJoin):
-		return ValueLogWALFenceModeRIDJoin
-	case string(ValueLogWALFenceModeSimpleInline):
-		return ValueLogWALFenceModeSimpleInline
-	default:
-		return ValueLogWALFenceMode(strings.ToLower(strings.TrimSpace(string(mode))))
-	}
-}
 
 // ValueLogDomainThreshold overrides inline-vs-pointer placement policy for keys
 // under a domain prefix.
@@ -310,7 +269,7 @@ type ValueLogOptions struct {
 	// <=0 uses the default blob-ref threshold.
 	OuterLeafBlobThresholdBytes int
 	// OuterLeafBlockCacheEntries bounds the number of decoded blocks cached for
-	// outer-leaf reads in IndexOuterLeafMode=v1.
+	// outer-leaf reads.
 	// 0 disables the cache.
 	OuterLeafBlockCacheEntries int
 	// IncompressibleHoldBytes configures auto-mode suppression duration after
@@ -325,13 +284,6 @@ type ValueLogOptions struct {
 	IncompressibleProbeIntervalBytes int
 	// AutoPolicy controls auto-mode bias (throughput, balanced, size).
 	AutoPolicy ValueLogAutoPolicy
-	// WALFenceMode controls WAL encoding behavior for pointer-eligible writes.
-	//
-	// Supported values:
-	// - "rid_join" (default): WAL uses RID records joined against value-log RIDs.
-	// - "simple_inline": WAL records inline values and deferred materialization
-	//   publishes pointers at flush/checkpoint.
-	WALFenceMode ValueLogWALFenceMode
 
 	// PointerThreshold controls when value-log pointers are used.
 	// Values <= 0 use a default threshold. In cached mode, relaxed durability
@@ -540,10 +492,6 @@ type Options struct {
 	//
 	// This option only affects newly-written leaf pages.
 	IndexAdaptiveLeafEncoding bool
-	// IndexOuterLeafMode selects the index outer-leaf format:
-	// - "": defaults to "v1"
-	// - "v1": existing per-key leaf entries
-	IndexOuterLeafMode string
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
@@ -816,7 +764,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
-	snap.reader.reconfigure(vlogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, db.outerLeafBlockCache, db.outerLeafKeyCache)
+	snap.reader.reconfigure(vlogSet, db.skipOuterLeafChecksums, db.outerLeafBlockCache, db.outerLeafKeyCache)
 	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
@@ -970,8 +918,6 @@ func Open(opts Options) (*DB, error) {
 	if opts.ValueLog.Compression == 0 {
 		opts.ValueLog.Compression = ValueLogCompressionAuto
 	}
-	opts.IndexOuterLeafMode = normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
-	opts.ValueLog.WALFenceMode = normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode)
 
 	if err := validateOptions(opts); err != nil {
 		return nil, err
@@ -1026,21 +972,6 @@ func validateOptions(opts Options) error {
 	case ValueLogBlockSnappy, ValueLogBlockLZ4:
 	default:
 		return fmt.Errorf("treedb: invalid value-log outer-leaf block codec %d", opts.ValueLog.OuterLeafBlockCodec)
-	}
-	indexOuterLeafMode := normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
-	switch indexOuterLeafMode {
-	case IndexOuterLeafModeV1:
-	default:
-		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
-	}
-	walFenceMode := normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode)
-	switch walFenceMode {
-	case ValueLogWALFenceModeRIDJoin, ValueLogWALFenceModeSimpleInline:
-	default:
-		return fmt.Errorf("treedb: invalid value-log WAL fence mode %q", opts.ValueLog.WALFenceMode)
-	}
-	if walFenceMode == ValueLogWALFenceModeSimpleInline {
-		return fmt.Errorf("treedb: value-log WAL fence mode %q is unsupported with index outer leaf mode %q", opts.ValueLog.WALFenceMode, IndexOuterLeafModeV1)
 	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
@@ -1187,7 +1118,6 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexPackedValuePtr:       opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
 		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
-		indexOuterLeafMode:        opts.IndexOuterLeafMode,
 		outerLeafBlockCodec:       opts.ValueLog.OuterLeafBlockCodec,
 		outerLeafBlockRestart:     opts.ValueLog.OuterLeafBlockRestartInterval,
 		skipOuterLeafChecksums:    opts.ValueLog.ReadIntegrity == IntegritySkipChecksums,
@@ -1880,10 +1810,6 @@ func (s *Snapshot) Has(key []byte) (bool, error) {
 }
 
 // GetEntry returns the logical entry from snapshot.
-//
-// On exact leaf hits, this returns the persisted leaf entry. On misses that
-// resolve via fence-pointer fallback, it returns a synthesized inline entry.
-// Use GetEntryExact when callers require exact persisted entries only.
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	entry, found, err := s.memtableEntry(key)
 	if err != nil {
@@ -1902,23 +1828,8 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 }
 
 // GetEntryExact returns only exact persisted leaf entries for key.
-//
-// Unlike GetEntry, this method does not perform fence-pointer fallback on
-// misses.
 func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
 	return s.tree.GetEntryExact(key)
-}
-
-// LookupFencePointerSource returns the predecessor fence pointer record that
-// currently resolves key when key has no exact leaf entry.
-func (s *Snapshot) LookupFencePointerSource(key []byte) (page.ValuePtr, bool, error) {
-	return s.tree.LookupFencePointerSource(key)
-}
-
-// LookupFencePointerOrigin returns the predecessor key and pointer record that
-// currently resolve key when key has no exact leaf entry.
-func (s *Snapshot) LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool, error) {
-	return s.tree.LookupFencePointerOrigin(key)
 }
 
 // Getters
@@ -2036,7 +1947,7 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	reader := newValueReader(state.ValueLogSet, db.indexOuterLeafMode, db.skipOuterLeafChecksums, nil, nil)
+	reader := newValueReader(state.ValueLogSet, db.skipOuterLeafChecksums)
 	tr := tree.New(idx.pager, reader, state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()
@@ -2048,8 +1959,8 @@ func (db *DB) CompactIndex() error {
 		return err
 	}
 
-	// Scan in pointer-projection mode so pointer-backed layouts (including
-	// fence-pointer outer leaves) preserve raw pointer metadata during rebuild.
+	// Scan in pointer-projection mode so pointer-backed layouts preserve raw
+	// pointer metadata during rebuild.
 	iter := tr.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	defer iter.Close()
 

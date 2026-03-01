@@ -270,7 +270,7 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 		if err != nil {
 			return err
 		}
-		if outerleaf.ModeEnabled(b.db.indexOuterLeafMode) {
+		if outerleaf.HasMagic(val) {
 			decoded, ok, found, _, decErr := outerleaf.DecodeEntryForKey(val, entry.Key, nil)
 			if decErr != nil {
 				return decErr

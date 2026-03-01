@@ -156,8 +156,6 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 
 func (db *DB) getManySequential(snap *Snapshot, keys [][]byte, out [][]byte) error {
 	reader := snap.reader
-	(&reader).withDedicatedFenceDecodeContext()
-	defer (&reader).releaseDedicatedFenceDecodeContext()
 	tr := tree.New(snap.treePager, &reader, snap.treeRoot)
 
 	// Copy all found values into a single arena to avoid one allocation per key.
@@ -226,8 +224,6 @@ func (db *DB) getManyParallel(snap *Snapshot, keys [][]byte, out [][]byte, worke
 		go func(start, end, arenaCap int) {
 			defer wg.Done()
 			workerReader := snap.reader
-			(&workerReader).withDedicatedFenceDecodeContext()
-			defer (&workerReader).releaseDedicatedFenceDecodeContext()
 			workerTree := tree.New(snap.treePager, &workerReader, snap.treeRoot)
 			arena := make([]byte, 0, arenaCap)
 			processIndex := func(i int) {
@@ -517,15 +513,6 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
-	if db.indexOuterLeafMode != "" {
-		stats["treedb.index.outer_leaf_mode"] = db.indexOuterLeafMode
-	}
-	// Phase-1 anchor observability scaffolding for the planned routing-only
-	// v1_leaflog path. These remain zero until the path is activated.
-	stats["treedb.v1_leaflog.anchor_lookups"] = "0"
-	stats["treedb.v1_leaflog.anchor_block_decodes"] = "0"
-	stats["treedb.v1_leaflog.anchor_misses"] = "0"
-	stats["treedb.v1_leaflog.anchor_max_probes"] = "0"
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()

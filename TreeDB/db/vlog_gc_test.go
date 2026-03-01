@@ -21,7 +21,6 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 
 	db, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -106,12 +105,8 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 }
 
-func TestValueLogGC_FenceMode_NestedBlobRefSegmentLiveness(t *testing.T) {
-	testValueLogGCNestedBlobRefSegmentLiveness(t, IndexOuterLeafModeV1)
-}
-
-func TestValueLogGC_V1LeafLogRoute_NestedBlobRefSegmentLiveness(t *testing.T) {
-	testValueLogGCNestedBlobRefSegmentLiveness(t, IndexOuterLeafModeV1)
+func TestValueLogGC_NestedBlobRefSegmentLiveness(t *testing.T) {
+	testValueLogGCNestedBlobRefSegmentLiveness(t)
 }
 
 func TestValueLogGC_V1LeafLogRoute_NestedManifestChunkSegmentLiveness(t *testing.T) {
@@ -119,7 +114,6 @@ func TestValueLogGC_V1LeafLogRoute_NestedManifestChunkSegmentLiveness(t *testing
 
 	db, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1,
 		ValueLog: ValueLogOptions{
 			ForcePointers: true,
 		},
@@ -264,12 +258,11 @@ func TestValueLogGC_V1LeafLogRoute_NestedManifestChunkSegmentLiveness(t *testing
 	}
 }
 
-func testValueLogGCNestedBlobRefSegmentLiveness(t *testing.T, mode string) {
+func testValueLogGCNestedBlobRefSegmentLiveness(t *testing.T) {
 	dir := t.TempDir()
 
 	db, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: mode,
 		ValueLog: ValueLogOptions{
 			ForcePointers: true,
 		},
@@ -359,7 +352,6 @@ func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 
 	db, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -425,7 +417,6 @@ func TestValueLogGC_IncrementalCounterRollbackOnFailedCommit(t *testing.T) {
 
 	db, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)

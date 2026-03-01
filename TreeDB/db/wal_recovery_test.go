@@ -61,11 +61,10 @@ func TestNewReplayInlineAppender_UnpackedNoSegmentCap(t *testing.T) {
 	}
 }
 
-func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, mode string, codec ValueLogBlockCodec, restart int) {
+func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, codec ValueLogBlockCodec, restart int) {
 	t.Helper()
 	db := &DB{
 		dir:                   t.TempDir(),
-		indexOuterLeafMode:    mode,
 		outerLeafBlockCodec:   codec,
 		outerLeafBlockRestart: restart,
 	}
@@ -126,40 +125,6 @@ func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, mode string, code
 	}
 }
 
-func TestReplayInlineAppender_UsesConfiguredOuterLeafEncodingForFenceMode(t *testing.T) {
-	assertReplayInlineAppenderOuterLeafEncoding(t, IndexOuterLeafModeV1, ValueLogBlockLZ4, 7)
-}
-
-func TestReplayInlineAppender_UsesOuterLeafEncodingForV1LeafLogAndBlockPtrModes(t *testing.T) {
-	tests := []struct {
-		name    string
-		mode    string
-		codec   ValueLogBlockCodec
-		restart int
-	}{
-		{
-			name:    "v1_leaflog",
-			mode:    IndexOuterLeafModeV1,
-			codec:   ValueLogBlockSnappy,
-			restart: 11,
-		},
-		{
-			name:    "v1_leaflog_route",
-			mode:    IndexOuterLeafModeV1,
-			codec:   ValueLogBlockSnappy,
-			restart: 9,
-		},
-		{
-			name:    "v2_blockptr",
-			mode:    IndexOuterLeafModeV1,
-			codec:   ValueLogBlockLZ4,
-			restart: 5,
-		},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			assertReplayInlineAppenderOuterLeafEncoding(t, tt.mode, tt.codec, tt.restart)
-		})
-	}
+func TestReplayInlineAppender_UsesConfiguredOuterLeafEncoding(t *testing.T) {
+	assertReplayInlineAppenderOuterLeafEncoding(t, ValueLogBlockLZ4, 7)
 }

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -337,7 +338,7 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, "", false, nil, nil), snap.state.SystemRootPageID).
+	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, false), snap.state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := collectValueLogRefCounts(ctx, db, sysIter, counts); err != nil {
 		_ = sysIter.Close()
@@ -450,14 +451,97 @@ func (db *DB) addNestedBlobRefCounts(blobPtr page.ValuePtr, refs map[uint32]uint
 	return nil
 }
 
-func (db *DB) buildValueLogRefDelta(_ *pager.Pager, _ uint64, baseSeq uint64, _ []batchpkg.Entry) (*valueLogRefDelta, error) {
+	func (db *DB) buildValueLogRefDelta(p *pager.Pager, root uint64, baseSeq uint64, ops []batchpkg.Entry) (*valueLogRefDelta, error) {
+		if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
+			return nil, nil
+		}
+		// Implement an exact delta by diffing old/new pointers for touched keys.
+		// This is more expensive than the old fence/route fast paths, but it keeps
+		// the incremental tracker correct (including nested blob refs).
+		return db.buildValueLogRefDeltaExact(baseSeq, p, root, ops)
+	}
+
+func (db *DB) buildValueLogRefDeltaExact(baseSeq uint64, p *pager.Pager, root uint64, ops []batchpkg.Entry) (*valueLogRefDelta, error) {
 	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
 		return nil, nil
 	}
-	// Conservative correctness fallback for nested blob refs in value-log records:
-	// incremental per-key deltas can miss nested reference fanout changes.
-	// Returning nil invalidates the tracker and forces a safe full rescan.
-	return nil, nil
+	if p == nil {
+		return nil, fmt.Errorf("treedb: missing pager for value-log delta build")
+	}
+
+	tr := tree.New(p, nil, root)
+	delta := newValueLogRefDelta()
+
+	// Coalesce duplicate keys (last-wins) to avoid double-counting old pointers.
+	coalesced := ops
+	if len(ops) > 1 {
+		coalesced = coalesced[:0]
+		for i := 0; i < len(ops); {
+			j := i + 1
+			for j < len(ops) && bytes.Equal(ops[j].Key, ops[i].Key) {
+				j++
+			}
+			coalesced = append(coalesced, ops[j-1])
+			i = j
+		}
+	}
+
+	for i := range coalesced {
+		op := coalesced[i]
+		if len(op.Key) == 0 {
+			continue
+		}
+
+		var oldPtr page.ValuePtr
+		oldPtrOK := false
+		if entry, err := tr.GetEntryExact(op.Key); err == nil {
+			if entry.Flags&node.FlagPointer != 0 && page.IsValueLogFileID(entry.ValuePtr.FileID) {
+				oldPtr = entry.ValuePtr
+				oldPtrOK = true
+			}
+		} else if !errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, err
+		}
+
+		var newPtr page.ValuePtr
+		newPtrOK := false
+		if op.Type == batchpkg.OpPut && op.IsPtr && page.IsValueLogFileID(op.ValuePtr.FileID) {
+			newPtr = op.ValuePtr
+			newPtrOK = true
+		}
+
+		if oldPtrOK && newPtrOK && oldPtr == newPtr {
+			continue
+		}
+
+		if oldPtrOK {
+			delta.add(oldPtr.FileID, -1)
+			nested, err := db.outerLeafNestedBlobRefCounts(oldPtr)
+			if err != nil {
+				return nil, err
+			}
+			for fileID, n := range nested {
+				if n == 0 {
+					continue
+				}
+				delta.add(fileID, -int64(n))
+			}
+		}
+		if newPtrOK {
+			delta.add(newPtr.FileID, 1)
+			nested, err := db.outerLeafNestedBlobRefCounts(newPtr)
+			if err != nil {
+				return nil, err
+			}
+			for fileID, n := range nested {
+				if n == 0 {
+					continue
+				}
+				delta.add(fileID, int64(n))
+			}
+		}
+	}
+	return delta, nil
 }
 
 type valueLogRefCountsDisk struct {
