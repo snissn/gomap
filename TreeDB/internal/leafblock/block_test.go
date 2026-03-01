@@ -135,7 +135,7 @@ func TestEncodePayloadIncompressibleBypass(t *testing.T) {
 }
 
 func TestEncodePayloadCompressibleKeepsCodec(t *testing.T) {
-	raw := bytes.Repeat([]byte("outerleaf-compressible-payload|"), 256)
+	raw := bytes.Repeat([]byte("leafblock-compressible-payload|"), 256)
 	cases := []struct {
 		name       string
 		codec      uint8
@@ -161,7 +161,7 @@ func TestEncodePayloadCompressibleKeepsCodec(t *testing.T) {
 }
 
 func TestEncodePayloadSnappyReusesDstNoAllocs(t *testing.T) {
-	raw := bytes.Repeat([]byte("outerleaf-compressible-payload|"), 256)
+	raw := bytes.Repeat([]byte("leafblock-compressible-payload|"), 256)
 	dst := make([]byte, 0, snappy.MaxEncodedLen(len(raw)))
 	encoded, gotCodec, err := encodePayload(0, raw, dst[:0])
 	if err != nil {
@@ -187,7 +187,7 @@ func TestEncodePayloadSnappyReusesDstNoAllocs(t *testing.T) {
 }
 
 func TestDecodePayloadSnappyPreallocatedDstRoundTrip(t *testing.T) {
-	raw := bytes.Repeat([]byte("outerleaf-decode-payload|"), 256)
+	raw := bytes.Repeat([]byte("leafblock-decode-payload|"), 256)
 	encoded := snappy.Encode(nil, raw)
 	dst := make([]byte, 0, len(raw))
 
@@ -204,7 +204,7 @@ func TestDecodePayloadSnappyPreallocatedDstRoundTrip(t *testing.T) {
 }
 
 func TestDecodePayloadSnappyPreallocatedDstNoAllocs(t *testing.T) {
-	raw := bytes.Repeat([]byte("outerleaf-decode-payload|"), 256)
+	raw := bytes.Repeat([]byte("leafblock-decode-payload|"), 256)
 	encoded := snappy.Encode(nil, raw)
 	dst := make([]byte, len(raw))
 

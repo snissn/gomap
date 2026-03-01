@@ -187,13 +187,13 @@ func (l *KeyLease) Release() {
 	releaseKeyLease(l)
 }
 
-// Entry is one key/value record in an outer-leaf block payload.
+// Entry is one key/value record in an leaf-block block payload.
 type Entry struct {
 	Key   []byte
 	Value []byte
 }
 
-// DecodedBlock represents a parsed outer-leaf payload.
+// DecodedBlock represents a parsed leaf-block payload.
 type DecodedBlock struct {
 	version      uint8
 	entryCount   int
@@ -237,7 +237,7 @@ func (d *DecodedBlock) RawBytes() []byte {
 	return d.raw
 }
 
-// Encoder reuses encode scratch buffers across outer-leaf block encodes.
+// Encoder reuses encode scratch buffers across leaf-block block encodes.
 //
 // It is not safe for concurrent use.
 type Encoder struct {
@@ -246,8 +246,8 @@ type Encoder struct {
 	restartsScratch []uint32
 }
 
-// HasMagic reports whether payload begins with the outer-leaf block magic
-// header. It is a cheap classifier for outer-leaf encoded values.
+// HasMagic reports whether payload begins with the leaf-block block magic
+// header. It is a cheap classifier for leaf-block encoded values.
 func HasMagic(payload []byte) bool {
 	if len(payload) < len(blockMagic) {
 		return false
@@ -372,7 +372,7 @@ func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
 		return nil, blockCodecNone, nil
 	}
 	codec = normalizeCodec(codec)
-	// Snappy is the default outer-leaf codec. Running a probe (sample + optional
+	// Snappy is the default leaf-block codec. Running a probe (sample + optional
 	// sample-compress) on every block adds measurable CPU overhead on
 	// compressible write-heavy paths while the full encode still applies
 	// keepCompressedPayload gating. Keep probe logic for non-default codecs.
@@ -1896,18 +1896,18 @@ func lookupV3EntryFromRestartRaw(entries []byte, entryCount int, key []byte, res
 	return out, found, nil
 }
 
-// DecodeBlock parses an outer-leaf payload and keeps the decoded data alive.
+// DecodeBlock parses an leaf-block payload and keeps the decoded data alive.
 func DecodeBlock(payload []byte, scratch []byte) (*DecodedBlock, error) {
 	return decodeBlock(payload, scratch, true)
 }
 
-// DecodeBlockWithVerify parses an outer-leaf payload and optionally verifies
+// DecodeBlockWithVerify parses an leaf-block payload and optionally verifies
 // the block checksum.
 func DecodeBlockWithVerify(payload []byte, scratch []byte, verifyChecksum bool) (*DecodedBlock, error) {
 	return decodeBlock(payload, scratch, verifyChecksum)
 }
 
-// DecodeBlockLease parses an outer-leaf payload using lease-owned decode
+// DecodeBlockLease parses an leaf-block payload using lease-owned decode
 // buffers. Callers must call Release on the returned block.
 //
 // Any slices returned by the decoded block may alias lease-owned storage and
@@ -1916,7 +1916,7 @@ func DecodeBlockLease(payload []byte) (*DecodedBlock, error) {
 	return decodeBlockLease(payload, true)
 }
 
-// DecodeBlockLeaseWithVerify parses an outer-leaf payload using lease-owned
+// DecodeBlockLeaseWithVerify parses an leaf-block payload using lease-owned
 // decode buffers and optional checksum verification. Callers must call Release
 // on the returned block.
 //
@@ -1926,7 +1926,7 @@ func DecodeBlockLeaseWithVerify(payload []byte, verifyChecksum bool) (*DecodedBl
 	return decodeBlockLease(payload, verifyChecksum)
 }
 
-// DecodeBlockLeaseWithScratchAndVerify parses an outer-leaf payload using
+// DecodeBlockLeaseWithScratchAndVerify parses an leaf-block payload using
 // caller-provided scratch and lease-owned decode buffers.
 //
 // It returns the decoded block and a caller-owned scratch slice to reuse on the
@@ -1962,7 +1962,7 @@ func DecodeBlockLeaseWithScratchAndVerify(payload []byte, scratch []byte, dst *D
 
 // ReclaimTransferredScratchForRelease hands caller-owned scratch (returned by
 // DecodeBlockLeaseWithScratchAndVerify) back to the block so Release can return
-// it to the outerleaf bytes pool.
+// it to the leafblock bytes pool.
 //
 // It returns nil when ownership was reclaimed; otherwise it returns scratch
 // unchanged.
@@ -2002,7 +2002,7 @@ func decodeBlockMode(payload []byte, scratch []byte, verifyChecksum bool, leaseO
 		return nil, fmt.Errorf("leafblock: truncated header")
 	}
 	if payload[0] != blockMagic[0] || payload[1] != blockMagic[1] || payload[2] != blockMagic[2] || payload[3] != blockMagic[3] {
-		return nil, fmt.Errorf("leafblock: invalid outer-leaf payload")
+		return nil, fmt.Errorf("leafblock: invalid leaf-block payload")
 	}
 
 	version := payload[4]
@@ -2206,7 +2206,7 @@ func (d *DecodedBlock) lookupRestarts() ([]uint32, error) {
 	return d.restarts, nil
 }
 
-// Release returns lease-owned decode buffers back to outerleaf pools.
+// Release returns lease-owned decode buffers back to leafblock pools.
 // Any slices previously returned by this block become invalid after Release.
 // It is safe to call Release multiple times.
 func (d *DecodedBlock) Release() {
@@ -3193,13 +3193,13 @@ func decodeStructuredKeysBoundedLease(version uint8, entryCount int, encoded []b
 	return lease, nil
 }
 
-// DecodeKeysWithVerify decodes logical keys from an encoded outer-leaf payload.
+// DecodeKeysWithVerify decodes logical keys from an encoded leaf-block payload.
 func DecodeKeysWithVerify(payload []byte, verifyChecksum bool) ([][]byte, error) {
 	if len(payload) < blockHeaderSize {
 		return nil, fmt.Errorf("leafblock: truncated header")
 	}
 	if payload[0] != blockMagic[0] || payload[1] != blockMagic[1] || payload[2] != blockMagic[2] || payload[3] != blockMagic[3] {
-		return nil, fmt.Errorf("leafblock: invalid outer-leaf payload")
+		return nil, fmt.Errorf("leafblock: invalid leaf-block payload")
 	}
 
 	version := payload[4]
@@ -3262,7 +3262,7 @@ func DecodeKeysWithVerify(payload []byte, verifyChecksum bool) ([][]byte, error)
 }
 
 // DecodeKeysRangeWithVerify decodes only keys in [lower, upper) from an
-// encoded outer-leaf payload.
+// encoded leaf-block payload.
 func DecodeKeysRangeWithVerify(payload []byte, lower []byte, upper []byte, verifyChecksum bool) ([][]byte, error) {
 	lease, err := DecodeKeysRangeLeaseWithVerify(payload, lower, upper, verifyChecksum)
 	if err != nil {
@@ -3286,7 +3286,7 @@ func DecodeKeysRangeLeaseWithVerify(payload []byte, lower []byte, upper []byte, 
 		return nil, fmt.Errorf("leafblock: truncated header")
 	}
 	if payload[0] != blockMagic[0] || payload[1] != blockMagic[1] || payload[2] != blockMagic[2] || payload[3] != blockMagic[3] {
-		return nil, fmt.Errorf("leafblock: invalid outer-leaf payload")
+		return nil, fmt.Errorf("leafblock: invalid leaf-block payload")
 	}
 
 	version := payload[4]
@@ -3383,7 +3383,7 @@ func DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload []byte, target []byte
 		return 0, false, false, nil, fmt.Errorf("leafblock: truncated header")
 	}
 	if payload[0] != blockMagic[0] || payload[1] != blockMagic[1] || payload[2] != blockMagic[2] || payload[3] != blockMagic[3] {
-		return 0, false, false, nil, fmt.Errorf("leafblock: invalid outer-leaf payload")
+		return 0, false, false, nil, fmt.Errorf("leafblock: invalid leaf-block payload")
 	}
 
 	version := payload[4]
@@ -3468,7 +3468,7 @@ func DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload []byte, target []byte
 	}
 }
 
-// Decode returns the first key/value in an encoded outer-leaf payload.
+// Decode returns the first key/value in an encoded leaf-block payload.
 func Decode(payload []byte, scratch []byte) (key []byte, value []byte, ok bool, outScratch []byte, err error) {
 	if len(payload) < blockHeaderSize {
 		return nil, nil, false, scratch, nil
@@ -3552,15 +3552,15 @@ func Decode(payload []byte, scratch []byte) (key []byte, value []byte, ok bool, 
 	}
 }
 
-// DecodeValue returns the first value in an encoded outer-leaf payload.
+// DecodeValue returns the first value in an encoded leaf-block payload.
 func DecodeValue(payload []byte, scratch []byte) (value []byte, ok bool, outScratch []byte, err error) {
 	_, value, ok, outScratch, err = Decode(payload, scratch)
 	return value, ok, outScratch, err
 }
 
-// DecodeValueForKey resolves key inside an encoded outer-leaf payload.
+// DecodeValueForKey resolves key inside an encoded leaf-block payload.
 //
-// ok reports whether payload is an outer-leaf payload.
+// ok reports whether payload is an leaf-block payload.
 // found reports whether key exists in that payload.
 func DecodeValueForKey(payload []byte, key []byte, scratch []byte) (value []byte, ok bool, found bool, outScratch []byte, err error) {
 	if len(payload) < blockHeaderSize {
@@ -3648,19 +3648,19 @@ func DecodeValueForKey(payload []byte, key []byte, scratch []byte) (value []byte
 	}
 }
 
-// DecodeEntryForKey resolves key inside an encoded outer-leaf payload and
+// DecodeEntryForKey resolves key inside an encoded leaf-block payload and
 // returns typed payload info (inline value or blob reference).
 //
-// ok reports whether payload is an outer-leaf payload.
+// ok reports whether payload is an leaf-block payload.
 // found reports whether key exists in that payload.
 func DecodeEntryForKey(payload []byte, key []byte, scratch []byte) (entry LookupResult, ok bool, found bool, outScratch []byte, err error) {
 	return DecodeEntryForKeyWithVerify(payload, key, scratch, true)
 }
 
-// DecodeEntryForKeyWithVerify resolves key inside an encoded outer-leaf payload
+// DecodeEntryForKeyWithVerify resolves key inside an encoded leaf-block payload
 // and optionally verifies the block checksum.
 //
-// ok reports whether payload is an outer-leaf payload.
+// ok reports whether payload is an leaf-block payload.
 // found reports whether key exists in that payload.
 func DecodeEntryForKeyWithVerify(payload []byte, key []byte, scratch []byte, verifyChecksum bool) (entry LookupResult, ok bool, found bool, outScratch []byte, err error) {
 	if len(payload) < blockHeaderSize {
