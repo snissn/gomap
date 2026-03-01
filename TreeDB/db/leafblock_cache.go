@@ -190,7 +190,7 @@ const (
 	leafBlockCachePolicySLRU
 )
 
-const leafBlockCachePolicyEnv = "TREEDB_OUTER_LEAF_BLOCK_CACHE_POLICY"
+const leafBlockCachePolicyEnv = "TREEDB_LEAF_BLOCK_CACHE_POLICY"
 
 var leafBlockCachePolicyOnce sync.Once
 var leafBlockCachePolicyCached leafBlockCachePolicy
