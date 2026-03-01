@@ -55,7 +55,7 @@ func NewRedisServer(dbdir string) *RedisServer {
 
 	return &RedisServer{
 		store:     &store,
-		batchSets: os.Getenv("HASHDB_BATCH_SETS") == "1" || os.Getenv("GOMAP_BATCH_SETS") == "1",
+		batchSets: os.Getenv("HASHDB_BATCH_SETS") == "1",
 	}
 }
 

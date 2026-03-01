@@ -80,12 +80,12 @@ This note summarizes the main engine and benchmark changes made during the recen
 ## Pipeline and Large Value SET Batching
 
 - `redisserver/hashdbredis` now supports optional batched SETs per connection:
-  - `RedisServer` holds `batchSets bool`, enabled via `HASHDB_BATCH_SETS=1` (or legacy `GOMAP_BATCH_SETS=1`).
+  - `RedisServer` holds `batchSets bool`, enabled via `HASHDB_BATCH_SETS=1`.
   - Connection state (`connState`) accumulates `hashdb.Item{Key, Value}` in `pending`.
   - Once `pending` reaches `setBatchSize` (currently 16), it calls `HashDB.PutMany(pending)` and then writes `+OK` once per item.
   - This is specifically tuned for `redis-benchmark -P16` workloads.
 - Benchmark harness integration:
-  - `benchmark/runner.go` sets `GOMAP_BATCH_SETS=1` in the hashdb server environment only for:
+  - `benchmark/runner.go` sets `HASHDB_BATCH_SETS=1` in the hashdb server environment only for:
     - `Scenario.Name == "Pipeline16"` or `"LargeVal1KB"`.
   - Standard and RandomKeys scenarios, and non-benchmark hashdbredis usage, keep the original one-SET-per-Put behavior.
 
