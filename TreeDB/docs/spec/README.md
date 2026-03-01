@@ -69,5 +69,4 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ## Relationship to Existing Docs
 
-The legacy TreeDB docs in `docs/TREEDB_*.md` remain useful supporting material.
 For architecture/behavior/format authority, prefer this folder.

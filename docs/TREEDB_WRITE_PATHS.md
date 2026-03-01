@@ -19,7 +19,7 @@ For the canonical TreeDB spec, see:
 | **WAL on** | ON | ON | Durable after `*Sync` or `Checkpoint()` | **Default** |
 | **WAL off** | OFF | ON | Unsafe (recent writes may be lost) | **Opt-in via `Options.Durability`** |
 
-Legacy modes (value-log off / backend-only) have been removed.
+Value-log-off / backend-only write paths have been removed.
 
 ## Practical knobs (public API)
 
