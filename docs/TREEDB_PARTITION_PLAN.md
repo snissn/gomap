@@ -249,7 +249,7 @@
   2. Load:
       - idx := db.idx.Load()
       - state := db.state.Load()
-      - layout := state.Keyspace; if nil, treat as Single(meta.UserRootPageID) for partition routing
+      - layout := state.Keyspace; if nil, treat as Single(meta.UserRootPageID) for partition selection
   3. Partition ops from b.batch.SortedEntries() -> touched[] with baseRoot from layout.Parts[idx].Root
   4. Apply per partition in parallel -> newRoots map[partIdx]uint64, retired []uint64 (concat), metrics aggregated
      (optional)

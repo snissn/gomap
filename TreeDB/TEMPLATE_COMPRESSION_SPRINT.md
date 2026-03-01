@@ -5,7 +5,7 @@ This is an executable implementation plan for a **schema-blind template compress
 
 Git workflow (MUST):
 - Do all work on feature/sprint branches (never commit to `main`).
-- Use one branch per sprint or per PR unit (e.g. `feature/template-t0-codec`, `feature/template-t1-routing`).
+- Use one branch per sprint or per PR unit (e.g. `feature/template-t0-codec`, `feature/template-t1-index`).
 - Keep PR-sized changesets small and reviewable; do not merge until final review post-implementation.
 - Before starting: `git fetch --all` and branch from the current `origin/main`.
 - When the worktree is already dirty, create the branch first (so changes are captured on the branch), then commit.
@@ -57,7 +57,7 @@ For this sprint: implement strict by default; allow an option for lenient recove
 For this sprint:
 - No asynchronous/background template training goroutines.
 - Training (sampling, synthesis attempts, publish decisions) runs inline on the write path under strict CPU/ops budgets.
-- Publishing templates and routing index updates are done inline via a single `WriteSync` batch.
+- Publishing templates and index updates are done inline via a single `WriteSync` batch.
 
 Rationale: deterministic behavior and simplicity first. If this is slow, the optimization target is TreeDB and/or a future async design, not a bespoke cache in the compressor.
 
@@ -136,7 +136,7 @@ Prefix all keys with a store schema version byte to prevent silent drift:
 
 - Template definitions:
   - `[0x01 't' <templateID_be64>]` -> `TemplateDefBytes`
-- Fingerprint routing index:
+- Fingerprint index:
   - `[0x01 'f' <fp_be64>]` -> `CandidateListBytes`
 - Optional meta keys (if needed):
   - `[0x01 'm' ...]`
@@ -203,9 +203,9 @@ Implementation note:
 
 ### C5) Write amplification mitigation (MUST)
 
-Publishing a template must NOT update unbounded numbers of routing keys.
+Publishing a template must NOT update unbounded numbers of index keys.
 
-Define per-template routing key set:
+Define per-template index key set:
 - `IndexFPCount = 8..16` (fixed)
 - Fingerprints are chosen deterministically, e.g.:
   - compute fingerprints over `concat(anchors)` and take the smallest `IndexFPCount` hashes, or
@@ -223,12 +223,12 @@ If partial write ever occurs (should not), strict read mode treats missing templ
 
 ### C7) Template activation threshold (MUST)
 
-To prevent low-quality or early templates from polluting routing lists:
+To prevent low-quality or early templates from polluting candidate lists:
 
 - A template MUST NOT be added to any `[0x01 'f' <fp>]` candidate lists until it is “activated”.
 - Activation policy (minimal, in-memory; no new on-disk schema required):
   - during training, after building a candidate template, simulate matching/encoding on reservoir samples
-  - only add routing index entries if the template achieves `MinActivateHits` matches among the M samples
+  - only add index entries if the template achieves `MinActivateHits` matches among the M samples
     (or `MinActivateSavedBytes` total savings)
 - Even after activation, enforce per-bucket cooldown (see training section).
 
@@ -373,7 +373,7 @@ Training must be bounded so it cannot dominate ingest:
   - `MaxAnchorScanPerSynthesis`
   - `MaxValuesScannedPerSynthesis`
 
-### F7) Routing keys for published template (deterministic)
+### F7) Index keys for published template (deterministic)
 
 Fingerprints for a template are:
 - compute fingerprints over `concat(anchors)` and take smallest `IndexFPCount`
@@ -484,7 +484,7 @@ Expected outcomes (ranges, after a warm-up window):
 - `highly_compressible_tail64`:
   - no strict requirement for template (it may or may not help depending on anchors), but MUST not publish unbounded templates and MUST remain within CPU/ops caps.
 
-The point of the corpus is autonomy: it gives agents a stable target to validate routing/training and avoid regressions.
+The point of the corpus is autonomy: it gives agents a stable target to validate index/training and avoid regressions.
 
 ---
 
@@ -523,7 +523,7 @@ PR-sized breakdown (recommended):
 - PR-T0c: CandidateListBytes tuple format + deterministic eviction + unit tests.
 - PR-T0d: templatedb backed by public TreeDB API only + import constraint test.
 
-### Sprint T1 — Fingerprinting + routing + matching (end-to-end)
+### Sprint T1 — Fingerprinting + index + matching (end-to-end)
 - Implement fingerprinting and candidate retrieval from templatedb.
 - Implement bounded matching with guardrails and keep policy.
 - Implement TemplateOnly integration on write + read.
@@ -543,7 +543,7 @@ PR-sized breakdown (recommended):
 - Add bounded reservoirs + deterministic bucketing.
 - Add anchor counting with collision defense and ambiguity checks.
 - Add template synthesis + publish quality gate + cooldown.
-- Publish templates via one WriteSync batch (def + routing updates).
+- Publish templates via one WriteSync batch (def + index updates).
 
 Acceptance:
 - Under template-friendly workload, templates are published and hit rate rises.
@@ -553,7 +553,7 @@ PR-sized breakdown (recommended):
 - PR-T2a: Reservoir/bucketing + training budgets + unit tests.
 - PR-T2b: Anchor counting + collision defense + ambiguity checks.
 - PR-T2c: Backbone selection + anchor extension + publish quality gate.
-- PR-T2d: Activation threshold + atomic publish (template + routing updates in one batch).
+- PR-T2d: Activation threshold + atomic publish (template + index updates in one batch).
 
 ### Sprint T3 — Hardening + operational knobs
 - Add strict/lenient read mode option handling.

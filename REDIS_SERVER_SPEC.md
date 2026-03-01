@@ -40,7 +40,7 @@ for command behavior (and track Redis OSS behavior where it differs).
 ## Multi-Backend Modes (HashDB + TreeDB Together)
 
 The simplest and most Redis-like model is **one server instance = one backend engine**.
-If you want both engines available at the same time, make the routing explicit.
+If you want both engines available at the same time, make the selection explicit.
 
 Supported design options (in increasing complexity):
 
@@ -60,7 +60,7 @@ Supported design options (in increasing complexity):
      - Commands operate only within the selected DB.
      - Cross-DB commands (`MOVE`, `SWAPDB`) can be `-ERR unsupported`.
 
-3) **Key-prefix routing**
+3) **Key-prefix dispatch**
    - Example: keys beginning with `h:{...}` go to HashDB, `t:{...}` go to TreeDB.
    - Pros: single endpoint; selection is explicit in the key.
    - Cons: application-visible; KEYS/SCAN become "scan both + merge" unless you scope
@@ -79,7 +79,7 @@ This spec assumes mode (1) for correctness and simplicity, and allows (2) later 
 Introduce a new, unified server package and CLI:
 
 - `internal/redisserver/`
-  - Command routing and connection-state batching logic.
+  - Command dispatch and connection-state batching logic.
   - A small engine abstraction (primarily `kvstore.DB` + optional capabilities).
 - `cmd/redisserver/`
   - Binary entrypoint (flags/env, opens engine, starts redcon server).
