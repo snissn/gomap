@@ -481,7 +481,7 @@ func Open(opts Options) (*DB, error) {
 	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
 	valueLogMaxSegmentBytes := int64(0)
-	if opts.IndexPackedValuePtr {
+	if opts.IndexPackedValuePtr || opts.IndexOuterLeavesInValueLog {
 		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
 	}
 
