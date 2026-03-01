@@ -554,6 +554,17 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 			LeafBlockBlobThresholdBytes:      *treedbLeafBlockBlobThresholdBytes,
 			LeafBlockCacheEntries:            *treedbLeafBlockCacheEntries,
 		},
+
+		// unified-bench wants deterministic DB-visible state. Background maintenance
+		// (vlog GC/rewrite, vacuum, checkpoints) can race the workload and change
+		// timings/state in ways that make parity checks meaningless. Keep it off
+		// unless a benchmark explicitly opts into it.
+		BackgroundCheckpointInterval:      -1,
+		BackgroundCheckpointIdleDuration:  -1,
+		MaxWALBytes:                       -1,
+		BackgroundIndexVacuumInterval:     -1,
+		BackgroundValueLogGCInterval:      -1,
+		BackgroundValueLogRewriteInterval: -1,
 	}
 	if *treedbWriterFlushMaxMs > 0 {
 		opts.WriterFlushMaxDuration = time.Duration(*treedbWriterFlushMaxMs) * time.Millisecond

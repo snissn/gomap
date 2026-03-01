@@ -1315,6 +1315,12 @@ func (db *DB) shouldWriteViaValueLogForKeyValue(key, value []byte) bool {
 	if db == nil {
 		return false
 	}
+	// In WAL-off cached mode, treat the value log as the persistent store for
+	// user values. Inline values in the backend are not a supported durability
+	// path here; values are materialized into the value log at flush boundaries.
+	if db.disableJournal && db.valueLogEnabled() {
+		return true
+	}
 	if db.forceValueLogPointers {
 		return true
 	}
@@ -2676,83 +2682,57 @@ func (db *DB) pruneRetainedValueLogs() {
 		return
 	}
 
-	live, err := db.collectValueLogLiveIDs()
-	if err != nil {
-		db.reportError(fmt.Errorf("cachingdb: failed to scan value-log pointers: %w", err))
-		return
-	}
-
 	inUse := make(map[string]struct{})
-	if db.splitValueLogEnabled() {
-		for _, path := range db.currentValueLogPaths() {
+	for _, path := range db.currentValueLogPaths() {
+		inUse[path] = struct{}{}
+	}
+	for _, paths := range db.queueValueLogPaths {
+		for _, path := range paths {
 			inUse[path] = struct{}{}
-		}
-		for _, paths := range db.queueValueLogPaths {
-			for _, path := range paths {
-				inUse[path] = struct{}{}
-			}
-		}
-	} else {
-		for _, path := range db.currentWALPaths() {
-			inUse[path] = struct{}{}
-		}
-		for _, paths := range db.queueWALPaths {
-			for _, path := range paths {
-				inUse[path] = struct{}{}
-			}
 		}
 	}
 
-	removed := false
-	marked := false
 	for _, path := range paths {
 		if _, ok := inUse[path]; ok {
 			continue
 		}
-		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
-		if !ok || !valueLog {
-			continue
-		}
-		if laneID < 0 {
-			continue
-		}
-		id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
-		if err != nil {
-			continue
-		}
-		if _, ok := live[id]; ok {
-			continue
-		}
-
-		if marker, ok := db.backend.(valueLogZombieMarker); ok {
-			if db.valueLogReader != nil {
-				_ = db.valueLogReader.EvictSegment(id)
-			}
-			if err := marker.MarkValueLogZombie(id); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
-				continue
-			}
-			marked = true
-		} else {
-			db.dropValueLogSegment(path)
-			_ = db.removeFileRetry(path)
-			db.mu.Lock()
-			db.untrackValueLogSegmentLocked(path)
-			db.mu.Unlock()
-			removed = true
-		}
-		db.forgetValueLogRetain(path)
-	}
-
-	if marked {
-		if refresher, ok := db.backend.(valueLogSetRefresher); ok {
-			if err := refresher.RefreshValueLogSet(); err != nil {
-				db.reportError(fmt.Errorf("cachingdb: failed to refresh value-log set: %w", err))
+		// Value-log segments are persistent storage, not an ephemeral WAL. The
+		// retained-path bookkeeping exists to bound how long we "pin" newly-written
+		// segments while pointers are being materialized/flushed. Once a segment is
+		// no longer the current writer target and no queued memtables reference it,
+		// it is safe to drop the retain marker.
+		//
+		// Important: allowValueLogPointers() uses valueLogRetainedClosedBytes as a
+		// backpressure signal. When we drop a retain marker for a closed segment we
+		// must also decrement the retained-bytes counter, otherwise pointers will be
+		// permanently disabled after a few rotations.
+		wasRetained := false
+		db.valueLogMu.Lock()
+		if db.valueLogRetain != nil {
+			if _, ok := db.valueLogRetain[path]; ok {
+				wasRetained = true
+				delete(db.valueLogRetain, path)
 			}
 		}
-	}
-	if removed {
-		db.syncDirBestEffort(db.dir)
+		db.valueLogMu.Unlock()
+		if !wasRetained {
+			continue
+		}
+		if db.splitValueLogEnabled() {
+			laneID, _, valueLog, ok := parseLogSeq(filepath.Base(path))
+			if ok && valueLog && laneID >= 0 && laneID < len(db.lanes) {
+				l := &db.lanes[laneID]
+				l.vlogMu.Lock()
+				size := int64(0)
+				if l.vlogClosedSizes != nil {
+					size = l.vlogClosedSizes[path]
+				}
+				l.vlogMu.Unlock()
+				if size > 0 {
+					db.valueLogRetainedClosedBytes.Add(-size)
+				}
+			}
+		}
 	}
 }
 
@@ -9289,7 +9269,9 @@ func (db *DB) Checkpoint() error {
 		filtered := segments[:0]
 		nonEmptyBytes = 0
 		for _, seg := range segments {
-			if seg.valueLog != db.walUsesValueLog() {
+			// Value-log segments are persistent storage; do not delete them as part
+			// of checkpoint/WAL trimming. Space is reclaimed via value-log GC/rewrite.
+			if seg.valueLog {
 				continue
 			}
 			filtered = append(filtered, seg)
@@ -9342,10 +9324,6 @@ func (db *DB) Checkpoint() error {
 		if _, ok := unsafeWALDeletes[path]; ok {
 			continue
 		}
-		if db.valueLogRetained(path) {
-			continue
-		}
-		db.dropValueLogSegment(path)
 		if err := db.removeFileRetry(path); err != nil {
 			// Best effort cleanup; ignore errors to prevent flakiness on Windows
 			continue
@@ -9354,13 +9332,44 @@ func (db *DB) Checkpoint() error {
 		db.mu.Lock()
 		db.untrackWALSegmentLocked(path)
 		db.mu.Unlock()
-		db.forgetValueLogRetain(path)
 	}
 	if removed {
 		db.syncDirBestEffort(db.dir)
 	}
+
+	// Before pruning retained value-log segments, ensure that any writes that
+	// occurred while Checkpoint had released writeMu are also rotated+flushed so
+	// the backend pointer scan sees them. Without this, pruning can delete a
+	// segment that is only referenced by the new mutable memtable, and the next
+	// checkpoint flush will fail with "valuelog file ... not found".
+	for {
+		needRotate := false
+		db.writeMu.Lock()
+		db.mu.Lock()
+		if db.mutableHasEntriesLocked() {
+			needRotate = true
+			if err := db.rotateMutableShardsLocked(db.checkpointRotateCapacity(), false); err != nil {
+				db.mu.Unlock()
+				db.writeMu.Unlock()
+				return err
+			}
+		}
+		db.mu.Unlock()
+		db.writeMu.Unlock()
+		if !needRotate {
+			break
+		}
+
+		db.flushAllLocked(true)
+		if bgErr := db.backgroundError(); bgErr != nil {
+			return fmt.Errorf("cachingdb: checkpoint flush (tail): %w", bgErr)
+		}
+	}
+
 	db.checkValueLogRetention()
+	db.writeMu.Lock()
 	db.maybePruneRetainedValueLogs()
+	db.writeMu.Unlock()
 
 	return nil
 }
