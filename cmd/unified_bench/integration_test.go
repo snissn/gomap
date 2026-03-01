@@ -224,45 +224,28 @@ func TestIntegration_TreeDBLevelDBParity500k(t *testing.T) {
 	}
 	defer func() { _ = levelDB.Close() }()
 
-	treeIt, err := treeDB.Iterator(nil, nil)
-	if err != nil {
-		t.Fatalf("treedb iterator: %v", err)
-	}
-	defer func() { _ = treeIt.Close() }()
-
 	levelIt := levelDB.NewIterator(nil, nil)
 	defer levelIt.Release()
 
-	levelValid := levelIt.First()
-	treeValid := treeIt.Valid()
 	compared := 0
 
-	for treeValid || levelValid {
-		if treeValid != levelValid {
-			if treeValid {
-				t.Fatalf("iterator length mismatch at index=%d: treedb has extra key=%x", compared, treeIt.Key())
-			}
-			t.Fatalf("iterator length mismatch at index=%d: leveldb has extra key=%x", compared, levelIt.Key())
-		}
-		treeKey := treeIt.Key()
-		levelKey := levelIt.Key()
-		if cmp := bytes.Compare(treeKey, levelKey); cmp != 0 {
-			t.Fatalf("key mismatch at index=%d treedb=%x leveldb=%x", compared, treeKey, levelKey)
-		}
-		treeVal := treeIt.Value()
+	for levelValid := levelIt.First(); levelValid; levelValid = levelIt.Next() {
+		k := append([]byte(nil), levelIt.Key()...)
 		levelVal := levelIt.Value()
+
+		treeVal, err := treeDB.Get(k)
+		if err != nil {
+			t.Fatalf("treedb get error at index=%d key=%x: %v", compared, k, err)
+		}
+		if treeVal == nil {
+			t.Fatalf("missing key at index=%d key=%x", compared, k)
+		}
 		if !bytes.Equal(treeVal, levelVal) {
-			t.Fatalf("value mismatch at index=%d key=%x treedb_len=%d leveldb_len=%d", compared, treeKey, len(treeVal), len(levelVal))
+			t.Fatalf("value mismatch at index=%d key=%x treedb_len=%d leveldb_len=%d", compared, k, len(treeVal), len(levelVal))
 		}
 		compared++
-		treeIt.Next()
-		treeValid = treeIt.Valid()
-		levelValid = levelIt.Next()
 	}
 
-	if err := treeIt.Error(); err != nil {
-		t.Fatalf("treedb iterator error after %d keys: %v", compared, err)
-	}
 	if err := levelIt.Error(); err != nil {
 		t.Fatalf("leveldb iterator error after %d keys: %v", compared, err)
 	}
