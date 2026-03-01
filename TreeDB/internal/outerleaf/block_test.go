@@ -564,7 +564,7 @@ func TestLookupV3EntryFromRestartRaw_BoundaryMatchesDecodedRestarts(t *testing.T
 
 func TestLookupFromRestartRaw_RejectsNegativeRestartCount(t *testing.T) {
 	v2Enc, err := EncodeEntries(nil, []Entry{
-		{Key: []byte("k1"), Value: []byte("v1")},
+		{Key: []byte("k1"), Value: []byte("val1")},
 		{Key: []byte("k2"), Value: []byte("v2")},
 	}, 0, 1)
 	if err != nil {
@@ -581,7 +581,7 @@ func TestLookupFromRestartRaw_RejectsNegativeRestartCount(t *testing.T) {
 	}
 
 	v3Enc, err := EncodeTypedEntries(nil, []TypedEntry{
-		{Key: []byte("k1"), Kind: EntryKindInline, Value: []byte("v1")},
+		{Key: []byte("k1"), Kind: EntryKindInline, Value: []byte("val1")},
 		{Key: []byte("k2"), Kind: EntryKindInline, Value: []byte("v2")},
 	}, 0, 1)
 	if err != nil {
@@ -644,7 +644,7 @@ func TestEncodeDecodeEntriesLookup(t *testing.T) {
 func TestEncodeEntriesRequiresIncreasingKeys(t *testing.T) {
 	entries := []Entry{
 		{Key: []byte("k2"), Value: []byte("v2")},
-		{Key: []byte("k1"), Value: []byte("v1")},
+		{Key: []byte("k1"), Value: []byte("val1")},
 	}
 	if _, err := EncodeEntries(nil, entries, 0, 16); err == nil {
 		t.Fatalf("expected error for unsorted keys")
@@ -882,19 +882,19 @@ func TestDecodeLowerBoundAndKeysOnMatchWithVerify(t *testing.T) {
 		t.Fatalf("v2 above expected nil keys")
 	}
 
-	v1Payload, err := EncodeSingle(nil, []byte("k10"), []byte("v10"), 0, 4)
+	singlePayload, err := EncodeSingle(nil, []byte("k10"), []byte("v10"), 0, 4)
 	if err != nil {
-		t.Fatalf("EncodeSingle(v1): %v", err)
+		t.Fatalf("EncodeSingle(single): %v", err)
 	}
-	pos, below, above, keys, err = DecodeLowerBoundAndKeysOnMatchWithVerify(v1Payload, []byte("k10"), true)
+	pos, below, above, keys, err = DecodeLowerBoundAndKeysOnMatchWithVerify(singlePayload, []byte("k10"), true)
 	if err != nil {
-		t.Fatalf("DecodeLowerBoundAndKeysOnMatchWithVerify(v1 equal): %v", err)
+		t.Fatalf("DecodeLowerBoundAndKeysOnMatchWithVerify(single equal): %v", err)
 	}
 	if pos != 0 || below || above {
-		t.Fatalf("v1 equal got (pos=%d below=%v above=%v)", pos, below, above)
+		t.Fatalf("single equal got (pos=%d below=%v above=%v)", pos, below, above)
 	}
 	if len(keys) != 1 || !bytes.Equal(keys[0], []byte("k10")) {
-		t.Fatalf("v1 equal keys=%v", keys)
+		t.Fatalf("single equal keys=%v", keys)
 	}
 }
 
@@ -955,7 +955,7 @@ func TestDecodedBlockLowerBound_LongKeysUseHeapFallback(t *testing.T) {
 	}
 
 	entries := []Entry{
-		{Key: makeLongKey('1'), Value: []byte("v1")},
+		{Key: makeLongKey('1'), Value: []byte("val1")},
 		{Key: makeLongKey('2'), Value: []byte("v2")},
 		{Key: makeLongKey('3'), Value: []byte("v3")},
 	}
@@ -1070,23 +1070,23 @@ func TestDecodeKeysRangeWithVerify(t *testing.T) {
 		t.Fatalf("v2 empty len=%d want=0", len(keys))
 	}
 
-	v1Payload, err := EncodeSingle(nil, []byte("k10"), []byte("v10"), 0, 4)
+	singlePayload, err := EncodeSingle(nil, []byte("k10"), []byte("v10"), 0, 4)
 	if err != nil {
-		t.Fatalf("EncodeSingle(v1): %v", err)
+		t.Fatalf("EncodeSingle(single): %v", err)
 	}
-	keys, err = DecodeKeysRangeWithVerify(v1Payload, []byte("k00"), []byte("k20"), true)
+	keys, err = DecodeKeysRangeWithVerify(singlePayload, []byte("k00"), []byte("k20"), true)
 	if err != nil {
-		t.Fatalf("DecodeKeysRangeWithVerify(v1 in-range): %v", err)
+		t.Fatalf("DecodeKeysRangeWithVerify(single in-range): %v", err)
 	}
 	if len(keys) != 1 || !bytes.Equal(keys[0], []byte("k10")) {
-		t.Fatalf("v1 in-range keys=%q want=[k10]", keys)
+		t.Fatalf("single in-range keys=%q want=[k10]", keys)
 	}
-	keys, err = DecodeKeysRangeWithVerify(v1Payload, []byte("k20"), []byte("k30"), true)
+	keys, err = DecodeKeysRangeWithVerify(singlePayload, []byte("k20"), []byte("k30"), true)
 	if err != nil {
-		t.Fatalf("DecodeKeysRangeWithVerify(v1 miss): %v", err)
+		t.Fatalf("DecodeKeysRangeWithVerify(single miss): %v", err)
 	}
 	if len(keys) != 0 {
-		t.Fatalf("v1 miss len=%d want=0", len(keys))
+		t.Fatalf("single miss len=%d want=0", len(keys))
 	}
 }
 
@@ -1536,32 +1536,32 @@ func TestDecodedBlockEntries(t *testing.T) {
 		}
 	}
 
-	v1Key := []byte("single:key")
-	v1Val := bytes.Repeat([]byte("z"), 40)
-	enc, err = EncodeSingle(nil, v1Key, v1Val, 0, 16)
+	singleKey := []byte("single:key")
+	singleVal := bytes.Repeat([]byte("z"), 40)
+	enc, err = EncodeSingle(nil, singleKey, singleVal, 0, 16)
 	if err != nil {
 		t.Fatalf("EncodeSingle: %v", err)
 	}
 	blk, err = DecodeBlock(enc, nil)
 	if err != nil {
-		t.Fatalf("DecodeBlock(v1): %v", err)
+		t.Fatalf("DecodeBlock(single): %v", err)
 	}
 	got, err = blk.Entries(nil)
 	if err != nil {
-		t.Fatalf("Entries(v1): %v", err)
+		t.Fatalf("Entries(single): %v", err)
 	}
 	if len(got) != 1 {
-		t.Fatalf("Entries(v1) len=%d want=1", len(got))
+		t.Fatalf("Entries(single) len=%d want=1", len(got))
 	}
-	if !bytes.Equal(got[0].Key, v1Key) || !bytes.Equal(got[0].Value, v1Val) {
-		t.Fatalf("Entries(v1) mismatch")
+	if !bytes.Equal(got[0].Key, singleKey) || !bytes.Equal(got[0].Value, singleVal) {
+		t.Fatalf("Entries(single) mismatch")
 	}
 	keys, err = blk.Keys(nil)
 	if err != nil {
-		t.Fatalf("Keys(v1): %v", err)
+		t.Fatalf("Keys(single): %v", err)
 	}
-	if len(keys) != 1 || !bytes.Equal(keys[0], v1Key) {
-		t.Fatalf("Keys(v1) mismatch")
+	if len(keys) != 1 || !bytes.Equal(keys[0], singleKey) {
+		t.Fatalf("Keys(single) mismatch")
 	}
 }
 
