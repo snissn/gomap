@@ -32,7 +32,7 @@ func TestValueLogDictCandidateK_ExplicitOverridesDefault(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("valueLogDictCandidateK explicit: got=%v want=%v", got, want)
 	}
-	// Ensure caller receives a copy and cannot mutate DB-owned options by alias.
+	// Ensure caller receives a copy and cannot mutate DB-owned options via shared storage.
 	got[0] = 99
 	if db.valueLogAutotuneOptions.CandidateK[0] != 2 {
 		t.Fatalf("valueLogDictCandidateK returned aliased slice")

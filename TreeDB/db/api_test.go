@@ -161,10 +161,10 @@ func TestIteratorKeyValueAreDefensiveCopies(t *testing.T) {
 	val := it.Value()
 
 	if len(key) > 0 && len(it.UnsafeKey()) > 0 && &key[0] == &it.UnsafeKey()[0] {
-		t.Fatalf("Key returned unsafe alias")
+		t.Fatalf("Key returned unsafe shared storage")
 	}
 	if len(val) > 0 && len(it.UnsafeValue()) > 0 && &val[0] == &it.UnsafeValue()[0] {
-		t.Fatalf("Value returned unsafe alias")
+		t.Fatalf("Value returned unsafe shared storage")
 	}
 
 	if len(key) > 0 {
