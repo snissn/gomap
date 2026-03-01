@@ -135,11 +135,11 @@ Acceptance test (MUST):
 Prefix all keys with a store schema version byte to prevent silent drift:
 
 - Template definitions:
-  - `v1:t:<templateID_be64>` -> `TemplateDefBytes`
+  - `[0x01 't' <templateID_be64>]` -> `TemplateDefBytes`
 - Fingerprint routing index:
-  - `v1:f:<fp_be64>` -> `CandidateListBytes`
+  - `[0x01 'f' <fp_be64>]` -> `CandidateListBytes`
 - Optional meta keys (if needed):
-  - `v1:m:...`
+  - `[0x01 'm' ...]`
 
 ### C3) Template ID assignment (MUST pick one)
 
@@ -206,13 +206,13 @@ Implementation note:
 Publishing a template must NOT update unbounded numbers of routing keys.
 
 Define per-template routing key set:
-- `RouteFPCount = 8..16` (fixed)
-- RouteFPs are chosen deterministically, e.g.:
-  - compute fingerprints over `concat(anchors)` and take the smallest `RouteFPCount` hashes, or
-  - compute fingerprints over a representative sample that matched the template and take smallest `RouteFPCount`
+- `IndexFPCount = 8..16` (fixed)
+- Fingerprints are chosen deterministically, e.g.:
+  - compute fingerprints over `concat(anchors)` and take the smallest `IndexFPCount` hashes, or
+  - compute fingerprints over a representative sample that matched the template and take smallest `IndexFPCount`
 
 Hard cap:
-- max index updates per published template = `RouteFPCount`.
+- max index updates per published template = `IndexFPCount`.
 
 ### C6) Atomic publish semantics
 
@@ -225,7 +225,7 @@ If partial write ever occurs (should not), strict read mode treats missing templ
 
 To prevent low-quality or early templates from polluting routing lists:
 
-- A template MUST NOT be added to any `v1:f:<fp>` candidate lists until it is “activated”.
+- A template MUST NOT be added to any `[0x01 'f' <fp>]` candidate lists until it is “activated”.
 - Activation policy (minimal, in-memory; no new on-disk schema required):
   - during training, after building a candidate template, simulate matching/encoding on reservoir samples
   - only add routing index entries if the template achieves `MinActivateHits` matches among the M samples
@@ -242,7 +242,7 @@ This is mandatory for viability once template count grows.
 
 We need determinism + implementability without research-grade rolling hashes.
 
-Fingerprinting v1 (simple, stable):
+Fingerprinting (simple, stable):
 - Parameters:
   - `K = 16` (k-gram length)
   - `W = 64` (winnowing window in k-grams)
@@ -375,10 +375,10 @@ Training must be bounded so it cannot dominate ingest:
 
 ### F7) Routing keys for published template (deterministic)
 
-RouteFPs for template are:
-- compute fingerprints over `concat(anchors)` and take smallest `RouteFPCount`
+Fingerprints for a template are:
+- compute fingerprints over `concat(anchors)` and take smallest `IndexFPCount`
 
-Do not update more than `RouteFPCount` index keys.
+Do not update more than `IndexFPCount` index keys.
 
 ---
 

@@ -319,7 +319,7 @@ We rely on Gomap’s semantics:
   - Recovery strategy:
     - On startup, either:
       - Trust the last meta + nodes (best-effort), or
-      - Optionally run a validation/rebuild routine (out of scope for v1).
+      - Optionally run a validation/rebuild routine (out of scope for the initial implementation).
 
 To keep things robust:
 

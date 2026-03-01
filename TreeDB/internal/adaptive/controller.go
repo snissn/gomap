@@ -99,8 +99,8 @@ func (c *Controller) adjustThreshold() {
 	w1 := 2.0 // Leaf Fill
 	w2 := 2.0 // Split Rate
 
-	v1 := 1.0 // Slab Dead Ratio
-	v2 := 1.0 // Slab Write Bytes
+	ws1 := 1.0 // Slab Dead Ratio
+	ws2 := 1.0 // Slab Write Bytes
 
 	indexPressure := w1*max(0, targetLeafFill-c.leafFillAvg) +
 		w2*max(0, c.splitRateAvg-targetSplitRate)
@@ -110,8 +110,8 @@ func (c *Controller) adjustThreshold() {
 		slabWritePressure = max(0, (c.slabWriteBytesAvg/targetSlabWriteBytes)-1.0)
 	}
 
-	slabPressure := v1*max(0, c.slabDeadRatioAvg-targetSlabDead) +
-		v2*slabWritePressure
+	slabPressure := ws1*max(0, c.slabDeadRatioAvg-targetSlabDead) +
+		ws2*slabWritePressure
 
 	// Update Rule
 	delta := 0

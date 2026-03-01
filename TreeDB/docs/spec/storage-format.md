@@ -150,7 +150,7 @@ bytes Key
 bytes Value | ValuePtr(16) | PackedValuePtr(12)
 ```
 
-### 5.2 Prefix-compressed leaf v1
+### 5.2 Prefix-compressed leaf (u16 header)
 
 ```text
 u16 SharedPrefixLen
@@ -161,7 +161,7 @@ bytes KeySuffix
 bytes Value | Pointer
 ```
 
-### 5.3 Prefix-compressed leaf v2
+### 5.3 Prefix-compressed leaf (compact header)
 
 ```text
 u8 SharedPrefixLen8

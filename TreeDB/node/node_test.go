@@ -127,7 +127,7 @@ func TestLeafNodePrefixCompression(t *testing.T) {
 	}
 }
 
-func TestLeafNodePrefixCompression_SearchMatchesSortedKeys_V1AndV2(t *testing.T) {
+func TestLeafNodePrefixCompression_SearchMatchesSortedKeys_AcrossEncodings(t *testing.T) {
 	keys := makeBenchKeys(48, 16)
 
 	makeQueries := func() [][]byte {

@@ -250,10 +250,9 @@ type ValueLogOptions struct {
 	//
 	// 0 uses a default.
 	BlockTargetCompressedBytes int
-	// OuterLeafBlockTargetBytes guides outer-leaf block payload sizing for the
-	// v1 outer-leaf encoding.
+	// OuterLeafBlockTargetBytes guides outer-leaf block payload sizing.
 	//
-	// 0 uses a mode-aware default.
+	// 0 uses a default.
 	OuterLeafBlockTargetBytes int
 	// OuterLeafBlockCodec selects the codec used for experimental outer-leaf
 	// block payloads stored in the value log.

@@ -89,7 +89,7 @@ var (
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
 	treedbOuterLeafBlockRestart           = flag.Int("treedb-outer-leaf-block-restart-interval", 0, "TreeDB: experimental outer-leaf restart interval (0=default)")
-		treedbOuterLeafBlobThresholdBytes     = flag.Int("treedb-vlog-outer-leaf-blob-threshold-bytes", 0, "TreeDB: outer-leaf blob threshold bytes (0=default)")
+	treedbOuterLeafBlobThresholdBytes     = flag.Int("treedb-vlog-outer-leaf-blob-threshold-bytes", 0, "TreeDB: outer-leaf blob threshold bytes (0=default)")
 	treedbOuterLeafBlockCacheEntries      = flag.Int("treedb-outer-leaf-block-cache-entries", 0, "TreeDB: decoded outer-leaf block cache entries (0=disabled)")
 
 	treedbDisableWAL             = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
@@ -477,7 +477,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		notes = append(notes, "index_optimizations enables force value pointers + leaf prefix compression + columnar leaves + packed value pointers + internal base-delta")
 	}
 	if leafPrefixEffective {
-		notes = append(notes, "leaf_prefix_compression uses front-coding with restart points (compact v2 leaf entry header for new pages)")
+		notes = append(notes, "leaf_prefix_compression uses front-coding with restart points (compact leaf entry header for new pages)")
 	}
 	if leafPrefixEffective && columnarLeavesEffective {
 		notes = append(notes, "leaf_prefix_compression + index_columnar_leaves: enabling combined columnar+prefix leaf encoding for new pages")

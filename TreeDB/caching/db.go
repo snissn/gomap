@@ -417,7 +417,7 @@ func writeSyncDumpEntries(entries []batch.Entry) {
 }
 
 func looksLikeIAVLRootNodeKey(key []byte) (version uint64, ok bool) {
-	// IAVL root key in v1 format: nodeKeyFormat('s', 12B node-key),
+	// IAVL root key format: nodeKeyFormat('s', 12B node-key),
 	// where node-key = [8B version][4B nonce] and root nonce is 1.
 	if len(key) < 13 {
 		return 0, false

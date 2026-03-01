@@ -91,12 +91,12 @@ const (
 	blockChecksumOff  = 18
 	blockChecksumSize = 4
 
-	// v1 header layout
+	// Single-entry header layout (version 1)
 	blockV1KeyLenOff   = 8
 	blockV1ValueLenOff = 10
 	blockV1RawLenOff   = 14
 
-	// v2 header layout
+	// Structured header layout (version 2+)
 	blockV2EntryCountOff = 8
 	blockV2EntriesLenOff = 10
 	blockV2RawLenOff     = 14
@@ -1256,7 +1256,7 @@ func (e *Encoder) EncodeTypedEntriesAssumeSorted(dst []byte, entries []TypedEntr
 	return encodeV3EntriesCore(dst, entries, codec, restartInterval, false, &e.rawScratch, &e.encScratch, &e.restartsScratch)
 }
 
-// EncodeSingle encodes one key/value record in a v1-compatible payload.
+// EncodeSingle encodes one key/value record in a single-entry payload.
 func EncodeSingle(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
 	return encodeV1Single(dst, key, value, codec, restartInterval)
 }
@@ -2494,7 +2494,7 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 	switch d.version {
 	case blockVersionV1:
 		if d.firstKey == nil || d.firstValue == nil {
-			return fmt.Errorf("outerleaf: missing v1 entry")
+			return fmt.Errorf("outerleaf: missing entry")
 		}
 		return fn(d.firstKey, EntryKindInline, d.firstValue, page.ValuePtr{})
 	case blockVersionV2:
@@ -2717,7 +2717,7 @@ func (d *DecodedBlock) Keys(dst [][]byte) ([][]byte, error) {
 			dst = dst[:0]
 		}
 		if d.firstKey == nil {
-			return nil, fmt.Errorf("outerleaf: missing v1 key")
+			return nil, fmt.Errorf("outerleaf: missing key")
 		}
 		dst = append(dst, d.firstKey)
 		return dst, nil
@@ -2759,7 +2759,7 @@ func (d *DecodedBlock) KeysRange(dst [][]byte, lower []byte, upper []byte) ([][]
 	switch d.version {
 	case blockVersionV1:
 		if d.firstKey == nil {
-			return nil, fmt.Errorf("outerleaf: missing v1 key")
+			return nil, fmt.Errorf("outerleaf: missing key")
 		}
 		if !keyWithinRange(d.firstKey, lower, upper) {
 			if dst == nil {
@@ -2806,7 +2806,7 @@ func (d *DecodedBlock) KeysRangeLease(lower []byte, upper []byte) (*KeyLease, er
 	switch d.version {
 	case blockVersionV1:
 		if d.firstKey == nil {
-			return nil, fmt.Errorf("outerleaf: missing v1 key")
+			return nil, fmt.Errorf("outerleaf: missing key")
 		}
 		if !keyWithinRange(d.firstKey, lower, upper) {
 			return nil, nil
@@ -2830,7 +2830,7 @@ func (d *DecodedBlock) LowerBound(target []byte) (pos int, below bool, above boo
 	switch d.version {
 	case blockVersionV1:
 		if d.firstKey == nil {
-			return 0, false, false, fmt.Errorf("outerleaf: missing v1 key")
+			return 0, false, false, fmt.Errorf("outerleaf: missing key")
 		}
 		if len(target) == 0 {
 			return 0, false, false, nil

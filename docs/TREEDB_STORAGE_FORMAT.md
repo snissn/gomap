@@ -129,7 +129,7 @@ are set, leaf entries use a combined columnar+prefix encoding (see below).
 [ Inline value bytes (ValueLen) | ValuePtr (16 bytes) | PackedValuePtr (12 bytes) ]
 ```
 
-#### Prefix-compressed leaf entries (v1)
+#### Prefix-compressed leaf entries (u16 header)
 
 When prefix compression is enabled and `leaf prefix v2` is **not** set:
 
@@ -163,8 +163,8 @@ When prefix compression is enabled and `leaf prefix v2` is set:
 Notes:
 - For pointer/tombstone entries, `ValueLen` is omitted to reduce leaf payload.
 - Tombstone entries store no value bytes.
-- Restart points follow the same fixed interval as v1 (see `TreeDB/node` for the
-  current restart interval).
+- Restart points follow the same fixed interval as the u16-header encoding (see
+  `TreeDB/node` for the current restart interval).
 
 #### Columnar leaf entries (non-prefix, v2)
 
