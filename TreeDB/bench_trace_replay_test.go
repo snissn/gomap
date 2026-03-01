@@ -75,15 +75,15 @@ func BenchmarkTraceReplay(b *testing.B) {
 			b.Fatal(err)
 		}
 
-			opts := Options{
-				Dir:            dir,
-				FlushThreshold: int64(flushThreshold),
-				MemtableShards: memtableShards,
-				Durability:     DurabilityWALOffRelaxed,
-				ValueLog: ValueLogOptions{
-					ReadIntegrity: IntegritySkipChecksums,
-				},
-			}
+		opts := Options{
+			Dir:            dir,
+			FlushThreshold: int64(flushThreshold),
+			MemtableShards: memtableShards,
+			Durability:     DurabilityWALOffRelaxed,
+			ValueLog: ValueLogOptions{
+				ReadIntegrity: IntegritySkipChecksums,
+			},
+		}
 		db, err := Open(opts)
 		if err != nil {
 			_ = os.RemoveAll(dir)
@@ -110,10 +110,10 @@ func BenchmarkTraceReplay(b *testing.B) {
 	}
 }
 
-	func parseIntEnv(key string, def int) int {
-		val := strings.TrimSpace(os.Getenv(key))
-		if val == "" {
-			return def
+func parseIntEnv(key string, def int) int {
+	val := strings.TrimSpace(os.Getenv(key))
+	if val == "" {
+		return def
 	}
 	n, err := strconv.Atoi(val)
 	if err != nil {

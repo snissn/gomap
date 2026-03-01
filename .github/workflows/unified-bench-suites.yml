@@ -58,4 +58,4 @@ jobs:
         run: make unified-bench
 
       - name: "Smoke: ${{ matrix.profile }}"
-        run: ./bin/unified-bench -dbs treedb -profile ${{ matrix.profile }} -test write_rand,read_rand -keys 20000 -seed 1 -progress=false -checkpoint-between-tests
+        run: ./bin/unified-bench -dbs treedb -profile ${{ matrix.profile }} -test random_write,random_read -keys 20000 -seed 1 -progress=false -checkpoint-between-tests

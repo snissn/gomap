@@ -68,8 +68,8 @@ func TestForceValueLogPointers_UsesPointersForSmallValues(t *testing.T) {
 func TestValuePlacement_PerDomainThreshold_Respected(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
-		Dir:                dir,
-		FlushThreshold:     1,
+		Dir:            dir,
+		FlushThreshold: 1,
 		ValueLog: ValueLogOptions{
 			PointerThreshold: 256,
 			DomainInlineThresholds: []ValueLogDomainThreshold{

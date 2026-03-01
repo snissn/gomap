@@ -24,16 +24,16 @@ func TestCachedBenchBloat_PageCountRatioVsVacuum(t *testing.T) {
 
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{
-		Dir:                dir,
-		PreferAppendAlloc:  false,
-		KeepRecent:         1,
+		Dir:               dir,
+		PreferAppendAlloc: false,
+		KeepRecent:        1,
 	})
 	if err != nil {
 		t.Fatalf("backend open: %v", err)
 	}
 
 	cached, err := Open(dir, backend, Options{
-		FlushThreshold:     1 << 20,
+		FlushThreshold: 1 << 20,
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -87,16 +87,16 @@ func TestCachedBenchBloat_PageCountRatioVsVacuum(t *testing.T) {
 	_ = backend.Close()
 
 	if err := db.VacuumIndexOffline(db.Options{
-		Dir:                dir,
-		KeepRecent:         1,
+		Dir:        dir,
+		KeepRecent: 1,
 	}); err != nil {
 		t.Fatalf("vacuum offline: %v", err)
 	}
 
 	backend2, err := db.Open(db.Options{
-		Dir:                dir,
-		PreferAppendAlloc:  false,
-		KeepRecent:         1,
+		Dir:               dir,
+		PreferAppendAlloc: false,
+		KeepRecent:        1,
 	})
 	if err != nil {
 		t.Fatalf("backend reopen after vacuum: %v", err)

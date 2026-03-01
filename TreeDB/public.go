@@ -490,9 +490,9 @@ func Open(opts Options) (*DB, error) {
 		templateOpts.DisableBackgroundPrune = true
 		templateOpts.ValueLog.DictLookup = nil
 		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
-			// templatedb uses batch.Set for small index entries. Do not
-			// propagate ForcePointers from the main DB into this internal store.
-			templateOpts.ValueLog.ForcePointers = false
+		// templatedb uses batch.Set for small index entries. Do not
+		// propagate ForcePointers from the main DB into this internal store.
+		templateOpts.ValueLog.ForcePointers = false
 		templateOpts.ValueLog.Compression = db.ValueLogCompressionOff
 		templateOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		templateOpts.ValueLog.TemplateMode = template.TemplateOff

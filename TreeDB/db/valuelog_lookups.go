@@ -31,4 +31,3 @@ func (db *DB) SetValueLogTemplateLookup(lookup valuelog.TemplateLookup, opts tem
 	}
 	vm.SetTemplateLookup(lookup, opts)
 }
-

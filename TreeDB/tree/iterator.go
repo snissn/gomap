@@ -53,20 +53,20 @@ func normalizeIteratorMode(mode IteratorMode) IteratorMode {
 }
 
 type Iterator struct {
-	tree             *Tree
-	stack            []CursorItem
-	stackBuf         [16]CursorItem
-	start            []byte
-	end              []byte
-	valid            bool
-	err              error
-	mode             IteratorMode
+	tree              *Tree
+	stack             []CursorItem
+	stackBuf          [16]CursorItem
+	start             []byte
+	end               []byte
+	valid             bool
+	err               error
+	mode              IteratorMode
 	includeTombstones bool
-	reverse          bool
+	reverse           bool
 
-	currKey []byte
-	leafVal []byte
-	leafPtr page.ValuePtr
+	currKey   []byte
+	leafVal   []byte
+	leafPtr   page.ValuePtr
 	leafFlags byte
 
 	valOK   bool

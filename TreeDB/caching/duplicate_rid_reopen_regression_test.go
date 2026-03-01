@@ -15,8 +15,8 @@ func TestRegression_ReopenWriteSessions_DoNotReuseValueLogRID(t *testing.T) {
 
 	openFast := func() *treedb.DB {
 		db, err := treedb.Open(treedb.Options{
-			Dir:                dir,
-			Durability:         treedb.DurabilityWALOffRelaxed,
+			Dir:        dir,
+			Durability: treedb.DurabilityWALOffRelaxed,
 			ValueLog: treedb.ValueLogOptions{
 				PointerThreshold: 1,
 			},
