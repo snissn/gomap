@@ -89,10 +89,10 @@ Each commit record maps to backend batch op:
 - `OpSetInline` -> `Set(key, value)`
 - `OpSetRID` -> lookup `RID` in map, then `SetPointer(key, ptr)`
 
-WAL fence mode implications:
+WAL replay strategy:
 
 - `rid_join`: pointer-eligible writes replay through `OpSetRID` and therefore
-  depend on the RID map/fence rules above.
+  depend on the RID map rules above.
 - `simple_inline`: pointer-eligible writes replay through `OpSetInline`; RID
   join is not required for those records.
 

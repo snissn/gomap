@@ -190,8 +190,8 @@ const (
 	ValueLogBlockLZ4
 )
 
-// NOTE: The previous "index outer-leaf mode" and "WAL fence mode" configuration
-// surfaces were removed. Outer-leaf envelopes are detected by the magic header.
+// NOTE: Legacy mode configuration surfaces were removed. Outer-leaf envelopes
+// are detected by the magic header.
 
 // ValueLogAutoPolicy controls auto-mode dict vs block selection bias.
 type ValueLogAutoPolicy uint8
