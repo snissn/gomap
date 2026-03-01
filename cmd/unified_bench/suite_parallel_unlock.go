@@ -1055,29 +1055,6 @@ func runHotspotRebalanceSuite(baseCfg BenchConfig) (string, error) {
 	return sb.String(), nil
 }
 
-func runFenceLagSuite(baseCfg BenchConfig) (string, error) {
-	cfg := baseCfg
-	if cfg.Keys > 50_000 {
-		cfg.Keys = 50_000
-	}
-	s, cleanup, err := runSingleTreeDBWriteSuite(cfg, "update_fork_choice")
-	if err != nil {
-		return "", err
-	}
-	defer cleanup()
-
-	var sb strings.Builder
-	sb.WriteString("# unified_bench suite: fence_lag\n\n")
-	sb.WriteString(fmt.Sprintf("- requested keys: %s\n", formatInt(baseCfg.Keys)))
-	sb.WriteString(fmt.Sprintf("- effective keys: %s\n", formatInt(s.cfg.Keys)))
-	sb.WriteString(fmt.Sprintf("- valsize: %d\n", s.cfg.ValueSize))
-	sb.WriteString(fmt.Sprintf("- ops/sec (sync-heavy): %s\n", formatFloat(s.ops)))
-	sb.WriteString(fmt.Sprintf("- wall time: %s\n", s.wall.Truncate(time.Millisecond)))
-	sb.WriteString("\n")
-	sb.WriteString("- note: explicit fence lag percentiles are not exported yet; sync-heavy throughput is reported as a proxy.\n")
-	return sb.String(), nil
-}
-
 func runStorageCeilingSuite(baseCfg BenchConfig) (string, error) {
 	cfg1 := baseCfg
 	cfg1.WriteWorkers = 1

@@ -181,7 +181,6 @@ func TestIntegration_TreeDBLevelDBParity500k(t *testing.T) {
 		"-test", "sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_write_steady,batch_random,batch_delete,batch_small_seq,random_delete",
 		"-keep",
 		"-checkpoint-between-tests",
-		"-treedb-index-outer-leaf-mode", "v1_leaflog_route",
 		"-treedb-force-value-pointers=false",
 		"-valsize", "100",
 	)
@@ -213,7 +212,6 @@ func TestIntegration_TreeDBLevelDBParity500k(t *testing.T) {
 
 	opts := treedb.OptionsFor(treedb.ProfileDurable, treeDir)
 	opts.ReadOnly = true
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	treeDB, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("open treedb readonly: %v (dir=%s)", err, treeDir)

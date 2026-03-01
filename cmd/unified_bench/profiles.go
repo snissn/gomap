@@ -6,8 +6,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-
-	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 var (
@@ -20,12 +18,8 @@ const (
 )
 
 func fastProfileOuterLeafCacheDefault(mode string) int {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case treedb.IndexOuterLeafModeV1:
-		return defaultOuterLeafBlockCacheEntriesReadHeavy
-	default:
-		return defaultOuterLeafBlockCacheEntries
-	}
+	_ = mode
+	return defaultOuterLeafBlockCacheEntriesReadHeavy
 }
 
 type Profile struct {
@@ -44,9 +38,9 @@ func init() {
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
-		// Fence-pointer outer-leaf reads are decode-heavy without a decoded-block
-		// cache; keep a moderate default in throughput profiles.
-		outerLeafCacheDefault := fastProfileOuterLeafCacheDefault(*treedbIndexOuterLeafMode)
+			// Outer-leaf reads are decode-heavy without a decoded-block cache; keep a
+			// moderate default in throughput profiles.
+		outerLeafCacheDefault := defaultOuterLeafBlockCacheEntriesReadHeavy
 		setIntIfUnset("treedb-outer-leaf-block-cache-entries", outerLeafCacheDefault, isSet, treedbOuterLeafBlockCacheEntries)
 
 		// Badger
@@ -77,8 +71,8 @@ func init() {
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
-		// Match fast profile defaults for decode-heavy fence-pointer reads.
-		outerLeafCacheDefault := fastProfileOuterLeafCacheDefault(*treedbIndexOuterLeafMode)
+			// Match fast profile defaults for decode-heavy outer-leaf reads.
+		outerLeafCacheDefault := defaultOuterLeafBlockCacheEntriesReadHeavy
 		setIntIfUnset("treedb-outer-leaf-block-cache-entries", outerLeafCacheDefault, isSet, treedbOuterLeafBlockCacheEntries)
 
 		// Other DBs: match "fast" behavior (nosync).

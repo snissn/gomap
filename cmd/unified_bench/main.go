@@ -554,22 +554,10 @@ func main() {
 				log.Fatalf("hotspot_rebalance suite: %v", err)
 			}
 			fmt.Print(out)
-		case "fence_lag", "fence-lag":
-			out, err := runFenceLagSuite(baseCfg)
-			if err != nil {
-				log.Fatalf("fence_lag suite: %v", err)
-			}
-			fmt.Print(out)
 		case "storage_ceiling", "storage-ceiling":
 			out, err := runStorageCeilingSuite(baseCfg)
 			if err != nil {
 				log.Fatalf("storage_ceiling suite: %v", err)
-			}
-			fmt.Print(out)
-		case "outerleaf_approx", "outerleaf-approx":
-			out, err := runOuterLeafApproxSuite(baseCfg)
-			if err != nil {
-				log.Fatalf("outerleaf_approx suite: %v", err)
 			}
 			fmt.Print(out)
 		case "vlog_dict", "vlog-dict":
@@ -1069,23 +1057,23 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.deferred_vlog.assist_flushed_memtables",
 		"treedb.cache.deferred_vlog.assist_early_triggers",
 		"treedb.cache.deferred_vlog.checkpoint_pool_skips",
-		"treedb.cache.v2_fenceptr.deferred_candidates",
-		"treedb.cache.v2_fenceptr.deferred_groups",
-		"treedb.cache.v2_fenceptr.deferred_pending_keys_estimate",
-		"treedb.cache.v2_fenceptr.deferred_pending_bytes_estimate",
-		"treedb.cache.v2_fenceptr.avg_keys_per_group",
-		"treedb.cache.v2_fenceptr.assist_calls",
-		"treedb.cache.v2_fenceptr.assist_flushed_memtables",
-		"treedb.cache.v2_fenceptr.assist_early_triggers",
-		"treedb.cache.v2_fenceptr.checkpoint_pool_skips",
-		"treedb.cache.v1_leaflog_route.deferred_pending_keys_estimate",
-		"treedb.cache.v1_leaflog_route.deferred_pending_bytes_estimate",
-		"treedb.cache.v1_leaflog_route.assist_calls",
-		"treedb.cache.v1_leaflog_route.assist_flushed_memtables",
-		"treedb.cache.v1_leaflog_route.assist_early_triggers",
-		"treedb.cache.v1_leaflog_route.checkpoint_pool_skips",
-		"treedb.cache.v1_leaflog_route.fallback_direct_attempts",
-		"treedb.cache.v1_leaflog_route.fallback_direct_rewrites",
+		"treedb.cache.route.deferred_candidates",
+		"treedb.cache.route.deferred_groups",
+		"treedb.cache.route.deferred_pending_keys_estimate",
+		"treedb.cache.route.deferred_pending_bytes_estimate",
+		"treedb.cache.route.avg_keys_per_group",
+		"treedb.cache.route.assist_calls",
+		"treedb.cache.route.assist_flushed_memtables",
+		"treedb.cache.route.assist_early_triggers",
+		"treedb.cache.route.checkpoint_pool_skips",
+		"treedb.cache.route.deferred_pending_keys_estimate",
+		"treedb.cache.route.deferred_pending_bytes_estimate",
+		"treedb.cache.route.assist_calls",
+		"treedb.cache.route.assist_flushed_memtables",
+		"treedb.cache.route.assist_early_triggers",
+		"treedb.cache.route.checkpoint_pool_skips",
+		"treedb.cache.route.fallback_direct_attempts",
+		"treedb.cache.route.fallback_direct_rewrites",
 		"treedb.vlog.outer_leaf_block_cache.policy",
 		"treedb.vlog.outer_leaf_block_cache.hits",
 		"treedb.vlog.outer_leaf_block_cache.misses",

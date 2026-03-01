@@ -712,27 +712,6 @@ func TestRunBigKeysGuardSuite_Smoke(t *testing.T) {
 	}
 }
 
-func TestRunOuterLeafApproxSuite_Smoke(t *testing.T) {
-	out, err := runOuterLeafApproxSuite(BenchConfig{
-		Keys:         2_000,
-		ValueSize:    64,
-		BatchSize:    128,
-		RangeQueries: 20,
-		RangeSpan:    20,
-		DBsArg:       "treedb",
-		TestsArg:     "all",
-		KeepDir:      false,
-		Progress:     false,
-		SeedUsed:     1,
-	})
-	if err != nil {
-		t.Fatalf("runOuterLeafApproxSuite: %v", err)
-	}
-	if out == "" {
-		t.Fatalf("expected non-empty output")
-	}
-}
-
 func TestRunBenchmark_CheckpointBetweenTests_Smoke(t *testing.T) {
 	run, err := runBenchmark(BenchConfig{
 		Keys:         2_000,
