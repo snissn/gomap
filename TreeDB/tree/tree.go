@@ -431,6 +431,51 @@ func (t *Tree) SetRoot(root uint64) {
 	t.rootPageID = root
 }
 
+func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error) {
+	if t == nil {
+		return node.Node{}, errors.New("missing tree")
+	}
+	if ptr, ok := page.DecodeLeafRef(pageID); ok {
+		if t.slabReader == nil {
+			return node.Node{}, errors.New("missing slab reader")
+		}
+		data, err := t.slabReader.ReadUnsafe(ptr)
+		if err != nil {
+			return node.Node{}, err
+		}
+		if len(data) != page.PageSize {
+			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
+		}
+		n := node.NewNodeView(data)
+		if !n.VerifyChecksum() {
+			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
+		}
+		if n.Type() != page.PageTypeLeaf {
+			return node.Node{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
+		}
+		return n, nil
+	}
+	if t.pager == nil {
+		return node.Node{}, errors.New("missing pager")
+	}
+	// Use Get (mmap) instead of ReadPage (Copy).
+	data, err := t.pager.Get(pageID)
+	if err != nil {
+		return node.Node{}, err
+	}
+	n := node.NewNodeView(data) // VerifyChecksum is fast (CRC32C hardware accelerated).
+	// We use Verified Cache to skip it if already checked.
+	if verifyAlways || !t.pager.IsVerified(pageID) {
+		if !n.VerifyChecksum() {
+			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
+		}
+		if !verifyAlways {
+			t.pager.MarkVerified(pageID)
+		}
+	}
+	return n, nil
+}
+
 // GetEntry returns the logical entry for key.
 //
 // On exact leaf hits, this returns the persisted leaf entry. On leaf misses
@@ -448,21 +493,9 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 	}
 
 	for depth := 0; depth < 50; depth++ {
-		// Use Get (mmap) instead of ReadPage (Copy)
-		data, err := t.pager.Get(currID)
+		n, err := t.loadNodeView(currID, verifyAlways)
 		if err != nil {
 			return node.LeafEntry{}, err
-		}
-
-		n := node.NewNodeView(data) // VerifyChecksum is fast (CRC32C hardware accelerated).
-		// We use Verified Cache to skip it if already checked.
-		if verifyAlways || !t.pager.IsVerified(currID) {
-			if !n.VerifyChecksum() {
-				return node.LeafEntry{}, fmt.Errorf("checksum mismatch on page %d", currID)
-			}
-			if !verifyAlways {
-				t.pager.MarkVerified(currID)
-			}
 		}
 
 		switch n.Type() {
@@ -547,19 +580,9 @@ func (t *Tree) GetEntryExact(key []byte) (node.LeafEntry, error) {
 	}
 
 	for depth := 0; depth < 50; depth++ {
-		data, err := t.pager.Get(currID)
+		n, err := t.loadNodeView(currID, verifyAlways)
 		if err != nil {
 			return node.LeafEntry{}, err
-		}
-
-		n := node.NewNodeView(data)
-		if verifyAlways || !t.pager.IsVerified(currID) {
-			if !n.VerifyChecksum() {
-				return node.LeafEntry{}, fmt.Errorf("checksum mismatch on page %d", currID)
-			}
-			if !verifyAlways {
-				t.pager.MarkVerified(currID)
-			}
 		}
 
 		switch n.Type() {
@@ -622,19 +645,9 @@ func (t *Tree) LookupFencePointerSource(key []byte) (page.ValuePtr, bool, error)
 	}
 
 	for depth := 0; depth < 50; depth++ {
-		data, err := t.pager.Get(currID)
+		n, err := t.loadNodeView(currID, verifyAlways)
 		if err != nil {
 			return page.ValuePtr{}, false, err
-		}
-
-		n := node.NewNodeView(data)
-		if verifyAlways || !t.pager.IsVerified(currID) {
-			if !n.VerifyChecksum() {
-				return page.ValuePtr{}, false, fmt.Errorf("checksum mismatch on page %d", currID)
-			}
-			if !verifyAlways {
-				t.pager.MarkVerified(currID)
-			}
 		}
 
 		switch n.Type() {
@@ -696,19 +709,9 @@ func (t *Tree) LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool
 	}
 
 	for depth := 0; depth < 50; depth++ {
-		data, err := t.pager.Get(currID)
+		n, err := t.loadNodeView(currID, verifyAlways)
 		if err != nil {
 			return nil, page.ValuePtr{}, false, err
-		}
-
-		n := node.NewNodeView(data)
-		if verifyAlways || !t.pager.IsVerified(currID) {
-			if !n.VerifyChecksum() {
-				return nil, page.ValuePtr{}, false, fmt.Errorf("checksum mismatch on page %d", currID)
-			}
-			if !verifyAlways {
-				t.pager.MarkVerified(currID)
-			}
 		}
 
 		switch n.Type() {
@@ -1474,19 +1477,9 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 	}
 
 	for depth := 0; depth < 50; depth++ {
-		data, err := t.pager.Get(currID)
+		n, err := t.loadNodeView(currID, verifyAlways)
 		if err != nil {
 			return nil, page.ValuePtr{}, 0, false, err
-		}
-
-		n := node.NewNodeView(data)
-		if verifyAlways || !t.pager.IsVerified(currID) {
-			if !n.VerifyChecksum() {
-				return nil, page.ValuePtr{}, 0, false, fmt.Errorf("checksum mismatch on page %d", currID)
-			}
-			if !verifyAlways {
-				t.pager.MarkVerified(currID)
-			}
 		}
 
 		switch n.Type() {
@@ -1675,19 +1668,9 @@ func (t *Tree) Has(key []byte) (bool, error) {
 	}
 
 	for depth := 0; depth < 50; depth++ {
-		data, err := t.pager.Get(currID)
+		n, err := t.loadNodeView(currID, verifyAlways)
 		if err != nil {
 			return false, err
-		}
-
-		n := node.NewNodeView(data)
-		if verifyAlways || !t.pager.IsVerified(currID) {
-			if !n.VerifyChecksum() {
-				return false, fmt.Errorf("checksum mismatch on page %d", currID)
-			}
-			if !verifyAlways {
-				t.pager.MarkVerified(currID)
-			}
 		}
 
 		switch n.Type() {

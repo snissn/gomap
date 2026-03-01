@@ -1,6 +1,7 @@
 package tree
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -1734,25 +1735,10 @@ func (it *Iterator) Domain() (start, end []byte) {
 }
 
 func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
-	// Use Get (mmap) instead of ReadPage (copy).
-	data, err := it.tree.pager.Get(pageID)
-	if err != nil {
-		return node.Node{}, err
+	if it == nil || it.tree == nil {
+		return node.Node{}, errors.New("missing tree")
 	}
-	n := node.NewNodeView(data)
-
-	// Skip checksum verification for pages we've already verified.
-	verifyAlways := it.verifyAlways
-	if verifyAlways || !it.tree.pager.IsVerified(pageID) {
-		if !n.VerifyChecksum() {
-			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
-		}
-		if !verifyAlways {
-			it.tree.pager.MarkVerified(pageID)
-		}
-	}
-
-	return n, nil
+	return it.tree.loadNodeView(pageID, it.verifyAlways)
 }
 
 func (it *Iterator) ensurePointerLoaded() bool {

@@ -2,7 +2,6 @@ package tree
 
 import (
 	"errors"
-	"fmt"
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -35,21 +34,12 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 		}
 		visited[pageID] = struct{}{}
 
-		data, err := t.pager.Get(pageID)
+		n, err := t.loadNodeView(pageID, verifyAlways)
 		if err != nil {
 			return err
 		}
-		n := node.NewNode(data)
-		if verifyAlways || !t.pager.IsVerified(pageID) {
-			if !n.VerifyChecksum() {
-				return fmt.Errorf("checksum mismatch on page %d", pageID)
-			}
-			if !verifyAlways {
-				t.pager.MarkVerified(pageID)
-			}
-		}
 
-		if err := fn(pageID, *n); err != nil {
+		if err := fn(pageID, n); err != nil {
 			return err
 		}
 
