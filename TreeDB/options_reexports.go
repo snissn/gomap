@@ -52,7 +52,7 @@ const (
 	ValueLogAutoSize       = db.ValueLogAutoSize
 )
 
-// Index leaf-block envelopes are always supported; legacy mode knobs removed.
+// Leaf-block envelopes are always supported.
 
 // Value-log compression autotune types (re-exported from internal packages so
 // callers can configure Options without importing internal/).
