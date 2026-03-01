@@ -83,18 +83,18 @@ var (
 )
 
 const (
-	blockVersionV1 = uint8(1)
-	blockVersionV2 = uint8(2)
-	blockVersionV3 = uint8(3)
+	blockVersionSingle = uint8(1)
+	blockVersionV2     = uint8(2)
+	blockVersionV3     = uint8(3)
 
 	blockHeaderSize   = 22
 	blockChecksumOff  = 18
 	blockChecksumSize = 4
 
 	// Single-entry header layout (version 1)
-	blockV1KeyLenOff   = 8
-	blockV1ValueLenOff = 10
-	blockV1RawLenOff   = 14
+	blockSingleKeyLenOff   = 8
+	blockSingleValueLenOff = 10
+	blockSingleRawLenOff   = 14
 
 	// Structured header layout (version 2+)
 	blockV2EntryCountOff = 8
@@ -870,7 +870,7 @@ func encodedPayloadBound(codec uint8, rawLen int) int {
 	return snappy.MaxEncodedLen(rawLen)
 }
 
-func encodeV1SingleCore(dst, key, value []byte, codec uint8, restartInterval int, rawScratch, encScratch *[]byte) ([]byte, error) {
+func encodeSingleCore(dst, key, value []byte, codec uint8, restartInterval int, rawScratch, encScratch *[]byte) ([]byte, error) {
 	rawLen := len(key) + len(value)
 	if rawLen > int(^uint32(0)) {
 		return nil, fmt.Errorf("outerleaf: payload too large %d", rawLen)
@@ -912,12 +912,12 @@ func encodeV1SingleCore(dst, key, value []byte, codec uint8, restartInterval int
 		dst = dst[:total]
 	}
 	copy(dst[:4], blockMagic[:])
-	dst[4] = blockVersionV1
+	dst[4] = blockVersionSingle
 	dst[5] = encodedCodec
 	binary.LittleEndian.PutUint16(dst[6:8], uint16(NormalizeRestartInterval(restartInterval)))
-	binary.LittleEndian.PutUint16(dst[blockV1KeyLenOff:blockV1KeyLenOff+2], uint16(len(key)))
-	binary.LittleEndian.PutUint32(dst[blockV1ValueLenOff:blockV1ValueLenOff+4], uint32(len(value)))
-	binary.LittleEndian.PutUint32(dst[blockV1RawLenOff:blockV1RawLenOff+4], uint32(rawLen))
+	binary.LittleEndian.PutUint16(dst[blockSingleKeyLenOff:blockSingleKeyLenOff+2], uint16(len(key)))
+	binary.LittleEndian.PutUint32(dst[blockSingleValueLenOff:blockSingleValueLenOff+4], uint32(len(value)))
+	binary.LittleEndian.PutUint32(dst[blockSingleRawLenOff:blockSingleRawLenOff+4], uint32(rawLen))
 	binary.LittleEndian.PutUint32(dst[blockChecksumOff:blockChecksumOff+blockChecksumSize], 0)
 	copy(dst[blockHeaderSize:], encodedPayload)
 
@@ -926,8 +926,8 @@ func encodeV1SingleCore(dst, key, value []byte, codec uint8, restartInterval int
 	return dst, nil
 }
 
-func encodeV1Single(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
-	return encodeV1SingleCore(dst, key, value, codec, restartInterval, nil, nil)
+func encodeSingle(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
+	return encodeSingleCore(dst, key, value, codec, restartInterval, nil, nil)
 }
 
 func encodeV2EntriesCore(dst []byte, entries []Entry, codec uint8, restartInterval int, validateOrder bool, rawScratch, encScratch *[]byte, restartsScratch *[]uint32) ([]byte, error) {
@@ -1205,9 +1205,9 @@ func (e *Encoder) Trim(maxRawCap, maxEncCap, maxRestartsCap int) {
 // EncodeSingle encodes one key/value record using reusable scratch buffers.
 func (e *Encoder) EncodeSingle(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
 	if e == nil {
-		return encodeV1Single(dst, key, value, codec, restartInterval)
+		return encodeSingle(dst, key, value, codec, restartInterval)
 	}
-	return encodeV1SingleCore(dst, key, value, codec, restartInterval, &e.rawScratch, &e.encScratch)
+	return encodeSingleCore(dst, key, value, codec, restartInterval, &e.rawScratch, &e.encScratch)
 }
 
 // EncodeEntries encodes ordered key/value records using reusable scratch buffers.
@@ -1258,13 +1258,13 @@ func (e *Encoder) EncodeTypedEntriesAssumeSorted(dst []byte, entries []TypedEntr
 
 // EncodeSingle encodes one key/value record in a single-entry payload.
 func EncodeSingle(dst, key, value []byte, codec uint8, restartInterval int) ([]byte, error) {
-	return encodeV1Single(dst, key, value, codec, restartInterval)
+	return encodeSingle(dst, key, value, codec, restartInterval)
 }
 
 // EncodeEntries encodes an ordered block of key/value records using v2 layout.
 func EncodeEntries(dst []byte, entries []Entry, codec uint8, restartInterval int) ([]byte, error) {
 	if len(entries) == 1 {
-		return encodeV1Single(dst, entries[0].Key, entries[0].Value, codec, restartInterval)
+		return encodeSingle(dst, entries[0].Key, entries[0].Value, codec, restartInterval)
 	}
 	return encodeV2Entries(dst, entries, codec, restartInterval, true)
 }
@@ -1273,7 +1273,7 @@ func EncodeEntries(dst []byte, entries []Entry, codec uint8, restartInterval int
 // v2 layout without re-validating strict key ordering.
 func EncodeEntriesAssumeSorted(dst []byte, entries []Entry, codec uint8, restartInterval int) ([]byte, error) {
 	if len(entries) == 1 {
-		return encodeV1Single(dst, entries[0].Key, entries[0].Value, codec, restartInterval)
+		return encodeSingle(dst, entries[0].Key, entries[0].Value, codec, restartInterval)
 	}
 	return encodeV2Entries(dst, entries, codec, restartInterval, false)
 }
@@ -2008,10 +2008,10 @@ func decodeBlockMode(payload []byte, scratch []byte, verifyChecksum bool, leaseO
 	version := payload[4]
 	codec := payload[5]
 	switch version {
-	case blockVersionV1:
-		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
-		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
-		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+	case blockVersionSingle:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockSingleKeyLenOff : blockSingleKeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockSingleValueLenOff : blockSingleValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockSingleRawLenOff : blockSingleRawLenOff+4]))
 		expected := keyLen + valueLen
 		if rawLen != expected {
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
@@ -2261,7 +2261,7 @@ func (d *DecodedBlock) FirstValue() ([]byte, error) {
 		return nil, fmt.Errorf("outerleaf: nil block")
 	}
 	switch d.version {
-	case blockVersionV1:
+	case blockVersionSingle:
 		if d.firstValue == nil {
 			return nil, fmt.Errorf("outerleaf: missing first value")
 		}
@@ -2323,7 +2323,7 @@ func (d *DecodedBlock) ValueForKey(key []byte) ([]byte, bool, error) {
 		return nil, false, fmt.Errorf("outerleaf: nil block")
 	}
 	switch d.version {
-	case blockVersionV1:
+	case blockVersionSingle:
 		if len(key) == 0 || bytes.Equal(d.firstKey, key) {
 			return d.firstValue, true, nil
 		}
@@ -2380,7 +2380,7 @@ func (d *DecodedBlock) EntryForKeyNoRestartKeys(key []byte) (LookupResult, bool,
 		return LookupResult{}, false, fmt.Errorf("outerleaf: nil block")
 	}
 	switch d.version {
-	case blockVersionV1:
+	case blockVersionSingle:
 		if len(key) == 0 || bytes.Equal(d.firstKey, key) {
 			return LookupResult{Kind: EntryKindInline, Value: d.firstValue}, true, nil
 		}
@@ -2439,7 +2439,7 @@ func (d *DecodedBlock) EntryForKey(key []byte) (LookupResult, bool, error) {
 		return LookupResult{}, false, fmt.Errorf("outerleaf: nil block")
 	}
 	switch d.version {
-	case blockVersionV1:
+	case blockVersionSingle:
 		if len(key) == 0 || bytes.Equal(d.firstKey, key) {
 			return LookupResult{Kind: EntryKindInline, Value: d.firstValue}, true, nil
 		}
@@ -2492,7 +2492,7 @@ func (d *DecodedBlock) VisitTypedEntries(fn func(key []byte, kind EntryKind, val
 		return nil
 	}
 	switch d.version {
-	case blockVersionV1:
+	case blockVersionSingle:
 		if d.firstKey == nil || d.firstValue == nil {
 			return fmt.Errorf("outerleaf: missing entry")
 		}
@@ -2710,7 +2710,7 @@ func (d *DecodedBlock) Keys(dst [][]byte) ([][]byte, error) {
 		return nil, fmt.Errorf("outerleaf: nil block")
 	}
 	switch d.version {
-	case blockVersionV1:
+	case blockVersionSingle:
 		if cap(dst) < d.entryCount {
 			dst = make([][]byte, 0, d.entryCount)
 		} else {
@@ -2757,7 +2757,7 @@ func (d *DecodedBlock) KeysRange(dst [][]byte, lower []byte, upper []byte) ([][]
 		return dst[:0], nil
 	}
 	switch d.version {
-	case blockVersionV1:
+	case blockVersionSingle:
 		if d.firstKey == nil {
 			return nil, fmt.Errorf("outerleaf: missing key")
 		}
@@ -2804,7 +2804,7 @@ func (d *DecodedBlock) KeysRangeLease(lower []byte, upper []byte) (*KeyLease, er
 		return nil, nil
 	}
 	switch d.version {
-	case blockVersionV1:
+	case blockVersionSingle:
 		if d.firstKey == nil {
 			return nil, fmt.Errorf("outerleaf: missing key")
 		}
@@ -2828,7 +2828,7 @@ func (d *DecodedBlock) LowerBound(target []byte) (pos int, below bool, above boo
 		return 0, false, false, fmt.Errorf("outerleaf: nil block")
 	}
 	switch d.version {
-	case blockVersionV1:
+	case blockVersionSingle:
 		if d.firstKey == nil {
 			return 0, false, false, fmt.Errorf("outerleaf: missing key")
 		}
@@ -3205,10 +3205,10 @@ func DecodeKeysWithVerify(payload []byte, verifyChecksum bool) ([][]byte, error)
 	version := payload[4]
 	codec := payload[5]
 	switch version {
-	case blockVersionV1:
-		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
-		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
-		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+	case blockVersionSingle:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockSingleKeyLenOff : blockSingleKeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockSingleValueLenOff : blockSingleValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockSingleRawLenOff : blockSingleRawLenOff+4]))
 		expected := keyLen + valueLen
 		if rawLen != expected {
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
@@ -3292,10 +3292,10 @@ func DecodeKeysRangeLeaseWithVerify(payload []byte, lower []byte, upper []byte, 
 	version := payload[4]
 	codec := payload[5]
 	switch version {
-	case blockVersionV1:
-		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
-		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
-		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+	case blockVersionSingle:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockSingleKeyLenOff : blockSingleKeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockSingleValueLenOff : blockSingleValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockSingleRawLenOff : blockSingleRawLenOff+4]))
 		expected := keyLen + valueLen
 		if rawLen != expected {
 			return nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
@@ -3389,10 +3389,10 @@ func DecodeLowerBoundAndKeysOnMatchLeaseWithVerify(payload []byte, target []byte
 	version := payload[4]
 	codec := payload[5]
 	switch version {
-	case blockVersionV1:
-		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
-		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
-		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+	case blockVersionSingle:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockSingleKeyLenOff : blockSingleKeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockSingleValueLenOff : blockSingleValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockSingleRawLenOff : blockSingleRawLenOff+4]))
 		expected := keyLen + valueLen
 		if rawLen != expected {
 			return 0, false, false, nil, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
@@ -3480,10 +3480,10 @@ func Decode(payload []byte, scratch []byte) (key []byte, value []byte, ok bool, 
 	version := payload[4]
 	codec := payload[5]
 	switch version {
-	case blockVersionV1:
-		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
-		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
-		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+	case blockVersionSingle:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockSingleKeyLenOff : blockSingleKeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockSingleValueLenOff : blockSingleValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockSingleRawLenOff : blockSingleRawLenOff+4]))
 		expected := keyLen + valueLen
 		if rawLen != expected {
 			return nil, nil, true, scratch, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
@@ -3574,10 +3574,10 @@ func DecodeValueForKey(payload []byte, key []byte, scratch []byte) (value []byte
 	version := payload[4]
 	codec := payload[5]
 	switch version {
-	case blockVersionV1:
-		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
-		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
-		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+	case blockVersionSingle:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockSingleKeyLenOff : blockSingleKeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockSingleValueLenOff : blockSingleValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockSingleRawLenOff : blockSingleRawLenOff+4]))
 		expected := keyLen + valueLen
 		if rawLen != expected {
 			return nil, true, false, scratch, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
@@ -3673,10 +3673,10 @@ func DecodeEntryForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 	version := payload[4]
 	codec := payload[5]
 	switch version {
-	case blockVersionV1:
-		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
-		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
-		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+	case blockVersionSingle:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockSingleKeyLenOff : blockSingleKeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockSingleValueLenOff : blockSingleValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockSingleRawLenOff : blockSingleRawLenOff+4]))
 		expected := keyLen + valueLen
 		if rawLen != expected {
 			return LookupResult{}, true, false, scratch, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
@@ -3740,10 +3740,10 @@ func decodeValueForKeyWithVerify(payload []byte, key []byte, scratch []byte, ver
 	version := payload[4]
 	codec := payload[5]
 	switch version {
-	case blockVersionV1:
-		keyLen := int(binary.LittleEndian.Uint16(payload[blockV1KeyLenOff : blockV1KeyLenOff+2]))
-		valueLen := int(binary.LittleEndian.Uint32(payload[blockV1ValueLenOff : blockV1ValueLenOff+4]))
-		rawLen := int(binary.LittleEndian.Uint32(payload[blockV1RawLenOff : blockV1RawLenOff+4]))
+	case blockVersionSingle:
+		keyLen := int(binary.LittleEndian.Uint16(payload[blockSingleKeyLenOff : blockSingleKeyLenOff+2]))
+		valueLen := int(binary.LittleEndian.Uint32(payload[blockSingleValueLenOff : blockSingleValueLenOff+4]))
+		rawLen := int(binary.LittleEndian.Uint32(payload[blockSingleRawLenOff : blockSingleRawLenOff+4]))
 		expected := keyLen + valueLen
 		if rawLen != expected {
 			return nil, true, false, scratch, fmt.Errorf("outerleaf: invalid raw length %d want %d", rawLen, expected)
