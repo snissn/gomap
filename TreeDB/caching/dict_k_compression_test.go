@@ -94,7 +94,6 @@ func TestValueLogDictCompressionReducesBytes(t *testing.T) {
 	cached, err := Open(maindbDir, backend, Options{
 		FlushThreshold:           8 << 20,
 		ValueLogPointerThreshold: 1,
-		IndexOuterLeafMode:       db.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -109,8 +108,9 @@ func TestValueLogDictCompressionReducesBytes(t *testing.T) {
 			t.Fatalf("set: %v", err)
 		}
 	}
-	if err := cached.flushValueLog(); err != nil {
-		t.Fatalf("flush value log: %v", err)
+	// Materialize deferred value-log entries via a checkpoint boundary.
+	if err := cached.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
 	}
 
 	valueBytes := func() int64 {

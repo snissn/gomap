@@ -21,24 +21,6 @@ func TestNormalizeBackpressureDefaults_Standard(t *testing.T) {
 	}
 }
 
-func TestNormalizeBackpressureDefaults_V2FenceWALOff(t *testing.T) {
-	opts := Options{
-		Durability:         db.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
-	}
-	normalizeBackpressureDefaults(&opts)
-
-	if opts.SlowdownBacklogSeconds != defaultV2FenceSlowdownBacklogSeconds {
-		t.Fatalf("slowdown=%v want %v", opts.SlowdownBacklogSeconds, defaultV2FenceSlowdownBacklogSeconds)
-	}
-	if opts.StopBacklogSeconds != defaultV2FenceStopBacklogSeconds {
-		t.Fatalf("stop=%v want %v", opts.StopBacklogSeconds, defaultV2FenceStopBacklogSeconds)
-	}
-	if opts.MaxBacklogBytes != defaultAdaptiveMaxBacklogBytes {
-		t.Fatalf("max_backlog=%d want %d", opts.MaxBacklogBytes, defaultAdaptiveMaxBacklogBytes)
-	}
-}
-
 func TestNormalizeBackpressureDefaults_EmptyModeUsesStandardDefaultsWhenWALOff(t *testing.T) {
 	opts := Options{
 		Durability: db.DurabilityWALOffRelaxed,
@@ -59,7 +41,6 @@ func TestNormalizeBackpressureDefaults_EmptyModeUsesStandardDefaultsWhenWALOff(t
 func TestNormalizeBackpressureDefaults_ExplicitPreserved(t *testing.T) {
 	opts := Options{
 		Durability:              db.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode:      db.IndexOuterLeafModeV1,
 		SlowdownBacklogSeconds:  0.5,
 		StopBacklogSeconds:      1.5,
 		MaxBacklogBytes:         12345,

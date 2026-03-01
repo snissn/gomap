@@ -112,24 +112,11 @@ through `wal/` even when WAL is off.
 
 Details: `docs/TREEDB_WRITE_PATHS.md`.
 
-## Outer-Leaf Modes
+## Outer-Leaf Payloads
 
-TreeDB supports six index outer-leaf modes:
-
-- `v1`: baseline exact-key index semantics.
-- `v1_leaflog`: routing-style mode using leaf anchors in the index and outer-leaf payload envelopes (`TOL2`) in the value log.
-- `v1_leaflog_route`: strict routing-only index (directory anchors only; no per-key outer-leaf exact siblings in `index.db`) with outer-leaf payload envelopes (`TOL2`) in the value log.
-- `v1_leaflog_legacy`: legacy compatibility mode that keeps exact-key leaf entries with outer-leaf payload envelopes.
-- `v2_blockptr`: exact-key index entries that can point to grouped outer-leaf payload blocks.
-- `v2_fenceptr`: fence-key routing mode (smallest index footprint, predecessor-probe lookup model).
-
-If unset (`""`), `IndexOuterLeafMode` defaults to `v1_leaflog_route`.
-
-Current Step 2 guarantees:
-- `v1_leaflog` and `v1_leaflog_legacy` remain distinct selectable mode strings (no auto-aliasing).
-- Existing read/write behavior is unchanged in this step; algorithm rewrite/hardening work is tracked in #610.
-
-Canonical mode semantics and invariants: `TreeDB/docs/spec/outer-leaf-modes.md`.
+TreeDB stores grouped outer-leaf payloads in the value log and detects them by
+the magic header (`TOL2`). The previous multi-mode outer-leaf surface has been
+removed: there is one built-in behavior.
 
 ## Durability & Safety Notes
 
@@ -164,7 +151,7 @@ Canonical mode semantics and invariants: `TreeDB/docs/spec/outer-leaf-modes.md`.
 - Optional piggyback compaction toggle: `DisablePiggybackCompaction`
 - Value-log retention guardrails: `ValueLog.MaxRetainedBytes`, `ValueLog.MaxRetainedBytesHard`
 - Value-log compression mode: `ValueLog.Compression` (`off|block|dict|auto`) and `ValueLog.BlockCodec` (`snappy|lz4`)
-- Value placement threshold: `ValueLog.PointerThreshold` (default `512` for `v1_leaflog_route`; otherwise `256` durable / `127` relaxed)
+- Value placement threshold: `ValueLog.PointerThreshold` (default `512`)
 - Index rebuild (in-place): `treedb.CompactIndex()` or `treedb.VacuumIndexOffline(opts)` (currently an alias for CompactIndex)
 
 `ValueLog.Compression` defaults to `auto` when unset.

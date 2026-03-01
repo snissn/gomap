@@ -87,7 +87,6 @@ func TestValueLogDictPauseAndProbeResume(t *testing.T) {
 	cached, err := Open(maindbDir, backend, Options{
 		FlushThreshold:           8 << 20,
 		ValueLogPointerThreshold: 1,
-		IndexOuterLeafMode:       db.IndexOuterLeafModeV1,
 		ValueLogCompression:      uint8(vlogCompressionDict),
 		ValueLogDictTrain: compression.TrainConfig{
 			TrainBytes:     64 << 10,
@@ -118,8 +117,8 @@ func TestValueLogDictPauseAndProbeResume(t *testing.T) {
 		return v
 	}
 
-	{
-		b := cached.NewBatchWithSize(batchRecords)
+		{
+			b := cached.NewBatchWithSize(batchRecords)
 		for i := 0; i < batchRecords; i++ {
 			key := []byte(fmt.Sprintf("i%02d", i))
 			if err := b.Set(key, incompressible()); err != nil {
@@ -131,16 +130,19 @@ func TestValueLogDictPauseAndProbeResume(t *testing.T) {
 			_ = b.Close()
 			t.Fatalf("write: %v", err)
 		}
-		_ = b.Close()
-	}
-	pause1 := cached.valueLogDictPauseRemaining.Load()
-	if pause1 == 0 {
-		t.Fatalf("expected pause after incompressible batch, got 0")
-	}
+			_ = b.Close()
+		}
+		if err := cached.Checkpoint(); err != nil {
+			t.Fatalf("checkpoint after incompressible batch: %v", err)
+		}
+		pause1 := cached.valueLogDictPauseRemaining.Load()
+		if pause1 == 0 {
+			t.Fatalf("expected pause after incompressible batch, got 0")
+		}
 
 	// 2) First compressible batch: should still be paused (no probe yet).
-	{
-		b := cached.NewBatchWithSize(batchRecords)
+		{
+			b := cached.NewBatchWithSize(batchRecords)
 		for i := 0; i < batchRecords; i++ {
 			key := []byte(fmt.Sprintf("c1%02d", i))
 			if err := b.Set(key, values[i]); err != nil {
@@ -152,19 +154,22 @@ func TestValueLogDictPauseAndProbeResume(t *testing.T) {
 			_ = b.Close()
 			t.Fatalf("write: %v", err)
 		}
-		_ = b.Close()
-	}
-	pause2 := cached.valueLogDictPauseRemaining.Load()
-	if pause2 == 0 {
-		t.Fatalf("expected pause to remain after first compressible batch")
-	}
+			_ = b.Close()
+		}
+		if err := cached.Checkpoint(); err != nil {
+			t.Fatalf("checkpoint after first compressible batch: %v", err)
+		}
+		pause2 := cached.valueLogDictPauseRemaining.Load()
+		if pause2 == 0 {
+			t.Fatalf("expected pause to remain after first compressible batch")
+		}
 	if pause2 >= pause1 {
 		t.Fatalf("expected pause to be consumed: pause1=%d pause2=%d", pause1, pause2)
 	}
 
 	// 3) Second compressible batch: should trigger a probe and clear the pause.
-	{
-		b := cached.NewBatchWithSize(batchRecords)
+		{
+			b := cached.NewBatchWithSize(batchRecords)
 		for i := 0; i < batchRecords; i++ {
 			key := []byte(fmt.Sprintf("c2%02d", i))
 			if err := b.Set(key, values[i+batchRecords]); err != nil {
@@ -176,9 +181,12 @@ func TestValueLogDictPauseAndProbeResume(t *testing.T) {
 			_ = b.Close()
 			t.Fatalf("write: %v", err)
 		}
-		_ = b.Close()
+			_ = b.Close()
+		}
+		if err := cached.Checkpoint(); err != nil {
+			t.Fatalf("checkpoint after second compressible batch: %v", err)
+		}
+		if pause3 := cached.valueLogDictPauseRemaining.Load(); pause3 != 0 {
+			t.Fatalf("expected pause to clear after probe success, got %d", pause3)
+		}
 	}
-	if pause3 := cached.valueLogDictPauseRemaining.Load(); pause3 != 0 {
-		t.Fatalf("expected pause to clear after probe success, got %d", pause3)
-	}
-}

@@ -2,7 +2,6 @@ package caching_test
 
 import (
 	"bytes"
-	"fmt"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -18,7 +17,6 @@ func TestRegression_ReopenWriteSessions_DoNotReuseValueLogRID(t *testing.T) {
 		db, err := treedb.Open(treedb.Options{
 			Dir:                dir,
 			Durability:         treedb.DurabilityWALOffRelaxed,
-			IndexOuterLeafMode: "v1_leaflog_route",
 			ValueLog: treedb.ValueLogOptions{
 				PointerThreshold: 1,
 			},
@@ -76,10 +74,7 @@ func TestRegression_ReopenWriteSessions_DoNotReuseValueLogRID(t *testing.T) {
 	}
 
 	stats := db.Stats()
-	if mode, ok := stats["treedb.index.outer_leaf_mode"]; ok && mode != "v1_leaflog_route" {
-		t.Fatalf("unexpected outer leaf mode: %s", mode)
-	}
-	if got := fmt.Sprintf("%d", len(stats)); got == "0" {
+	if len(stats) == 0 {
 		t.Fatalf("expected non-empty stats")
 	}
 }

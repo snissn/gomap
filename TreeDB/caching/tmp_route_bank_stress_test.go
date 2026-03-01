@@ -24,7 +24,6 @@ func bankBalanceFastKey(addr []byte) []byte {
 func Test_TMP_RouteBankBalanceStressParity(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 512
 
