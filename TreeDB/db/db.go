@@ -589,6 +589,12 @@ type Options struct {
 	IndexPackedValuePtr bool
 	// IndexInternalBaseDelta enables the experimental internal-node base-delta encoding.
 	IndexInternalBaseDelta bool
+	// IndexOuterLeavesInValueLog stores B+Tree leaf pages (the pages containing
+	// key/value entries) in the persistent value log instead of index.db.
+	//
+	// When enabled, internal nodes store encoded value-log pointers for leaf
+	// children. This is pre-alpha and changes on-disk format/assumptions.
+	IndexOuterLeavesInValueLog bool
 	// IndexAdaptiveLeafEncoding enables per-page adaptive selection of leaf
 	// encoding flags using deterministic heuristics from key/value shape.
 	//
