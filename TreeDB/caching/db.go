@@ -80,15 +80,15 @@ var valueLogEligiblePool sync.Pool                          // stores []int
 var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
 var valueLogKeyPool sync.Pool                               // stores [][]byte
 var valueLogPtrPool sync.Pool                               // stores []page.ValuePtr
-var outerLeafEntryPool sync.Pool                            // stores []leafblock.Entry
+var leafBlockEntryPool sync.Pool                            // stores []leafblock.Entry
 var batchArenaPools [batchArenaClassCount]sync.Pool         // stores []byte
 var batchArenaLeasePool sync.Pool                           // stores *batchArenaLease
 var batchEntrySliceRefPool sync.Pool                        // stores *batchEntrySliceRef
-var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
-var outerLeafArenaLeaseMu sync.Mutex
-var outerLeafArenaLeases [outerLeafArenaClassCount][][]byte
-var outerLeafBlobRefScratchPool sync.Pool
-var outerLeafEncoderPool sync.Pool // stores *leafblock.Encoder
+var leafBlockArenaPools [leafBlockArenaClassCount]sync.Pool // stores []byte
+var leafBlockArenaLeaseMu sync.Mutex
+var leafBlockArenaLeases [leafBlockArenaClassCount][][]byte
+var leafBlockBlobRefScratchPool sync.Pool
+var leafBlockEncoderPool sync.Pool // stores *leafblock.Encoder
 var valueLogPreparedBodyPool sync.Pool
 var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
@@ -101,10 +101,10 @@ const (
 	batchArenaMinShift       = 12
 	batchArenaMaxShift       = 22
 	batchArenaClassCount     = batchArenaMaxShift - batchArenaMinShift + 1
-	outerLeafArenaMinShift   = 12
-	outerLeafArenaMaxShift   = 24
-	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
-	maxOuterLeafArenaLeases  = 64
+	leafBlockArenaMinShift   = 12
+	leafBlockArenaMaxShift   = 24
+	leafBlockArenaClassCount = leafBlockArenaMaxShift - leafBlockArenaMinShift + 1
+	maxLeafBlockArenaLeases  = 64
 )
 
 func visibilityDebugOn() bool {
@@ -673,11 +673,11 @@ func putValueLogRecordsCheckpointAware(db *DB, s []valuelog.Record) {
 	putValueLogRecordsNoClear(s)
 }
 
-func getOuterLeafEntriesCap(capacity int) []leafblock.Entry {
+func getLeafBlockEntriesCap(capacity int) []leafblock.Entry {
 	if capacity < 0 {
 		capacity = 0
 	}
-	if v := outerLeafEntryPool.Get(); v != nil {
+	if v := leafBlockEntryPool.Get(); v != nil {
 		if s, ok := v.([]leafblock.Entry); ok && cap(s) >= capacity {
 			return s[:0]
 		}
@@ -685,7 +685,7 @@ func getOuterLeafEntriesCap(capacity int) []leafblock.Entry {
 	return make([]leafblock.Entry, 0, capacity)
 }
 
-func putOuterLeafEntries(s []leafblock.Entry) {
+func putLeafBlockEntries(s []leafblock.Entry) {
 	if s == nil {
 		return
 	}
@@ -699,17 +699,17 @@ func putOuterLeafEntries(s []leafblock.Entry) {
 	for i := range entries {
 		entries[i] = leafblock.Entry{}
 	}
-	outerLeafEntryPool.Put(s[:0])
+	leafBlockEntryPool.Put(s[:0])
 }
 
-func outerLeafArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
+func leafBlockArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
 	if capacity < 0 {
 		capacity = 0
 	}
-	if capacity > maxOuterLeafArenaPoolCap {
+	if capacity > maxLeafBlockArenaPoolCap {
 		return 0, 0, false
 	}
-	minCap := 1 << outerLeafArenaMinShift
+	minCap := 1 << leafBlockArenaMinShift
 	if capacity <= minCap {
 		return 0, minCap, true
 	}
@@ -717,47 +717,47 @@ func outerLeafArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
 	if classCap < minCap {
 		classCap = minCap
 	}
-	if classCap > maxOuterLeafArenaPoolCap {
+	if classCap > maxLeafBlockArenaPoolCap {
 		return 0, 0, false
 	}
 	shift := bits.Len(uint(classCap)) - 1
-	idx = shift - outerLeafArenaMinShift
-	if idx < 0 || idx >= outerLeafArenaClassCount {
+	idx = shift - leafBlockArenaMinShift
+	if idx < 0 || idx >= leafBlockArenaClassCount {
 		return 0, 0, false
 	}
 	return idx, classCap, true
 }
 
-func outerLeafArenaClassForCap(capacity int) (idx int, ok bool) {
-	minCap := 1 << outerLeafArenaMinShift
-	if capacity < minCap || capacity > maxOuterLeafArenaPoolCap {
+func leafBlockArenaClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << leafBlockArenaMinShift
+	if capacity < minCap || capacity > maxLeafBlockArenaPoolCap {
 		return 0, false
 	}
 	if capacity&(capacity-1) != 0 {
 		return 0, false
 	}
 	shift := bits.TrailingZeros(uint(capacity))
-	idx = shift - outerLeafArenaMinShift
-	if idx < 0 || idx >= outerLeafArenaClassCount {
+	idx = shift - leafBlockArenaMinShift
+	if idx < 0 || idx >= leafBlockArenaClassCount {
 		return 0, false
 	}
 	return idx, true
 }
 
-func outerLeafArenaMaxReuseCap(capacity int) int {
+func leafBlockArenaMaxReuseCap(capacity int) int {
 	if capacity <= 0 {
-		return 1 << outerLeafArenaMinShift
+		return 1 << leafBlockArenaMinShift
 	}
 	// Clamp before multiplication to avoid potential integer overflow.
-	if capacity > maxOuterLeafArenaPoolCap/8 {
-		return maxOuterLeafArenaPoolCap
+	if capacity > maxLeafBlockArenaPoolCap/8 {
+		return maxLeafBlockArenaPoolCap
 	}
 	maxCap := capacity * 8
 	if maxCap < 1<<20 {
 		maxCap = 1 << 20
 	}
-	if maxCap > maxOuterLeafArenaPoolCap {
-		maxCap = maxOuterLeafArenaPoolCap
+	if maxCap > maxLeafBlockArenaPoolCap {
+		maxCap = maxLeafBlockArenaPoolCap
 	}
 	return maxCap
 }
@@ -845,40 +845,40 @@ func putBatchArenas(chunks [][]byte) {
 	}
 }
 
-func getOuterLeafArena(capacity int) []byte {
+func getLeafBlockArena(capacity int) []byte {
 	if capacity < 0 {
 		capacity = 0
 	}
-	idx, classCap, ok := outerLeafArenaClassForLen(capacity)
+	idx, classCap, ok := leafBlockArenaClassForLen(capacity)
 	if !ok {
 		return make([]byte, 0, capacity)
 	}
-	maxReuseCap := outerLeafArenaMaxReuseCap(capacity)
-	maxIdx, _, maxOK := outerLeafArenaClassForLen(maxReuseCap)
+	maxReuseCap := leafBlockArenaMaxReuseCap(capacity)
+	maxIdx, _, maxOK := leafBlockArenaClassForLen(maxReuseCap)
 	if !maxOK {
 		maxIdx = idx
 	}
 
-	outerLeafArenaLeaseMu.Lock()
+	leafBlockArenaLeaseMu.Lock()
 	for bucket := idx; bucket <= maxIdx; bucket++ {
-		leases := outerLeafArenaLeases[bucket]
+		leases := leafBlockArenaLeases[bucket]
 		if n := len(leases); n > 0 {
 			buf := leases[n-1]
-			outerLeafArenaLeases[bucket][n-1] = nil
-			outerLeafArenaLeases[bucket] = leases[:n-1]
-			outerLeafArenaLeaseMu.Unlock()
+			leafBlockArenaLeases[bucket][n-1] = nil
+			leafBlockArenaLeases[bucket] = leases[:n-1]
+			leafBlockArenaLeaseMu.Unlock()
 			if cap(buf) >= capacity {
 				return buf[:0]
 			}
-			if capIdx, ok := outerLeafArenaClassForCap(cap(buf)); ok {
-				outerLeafArenaPools[capIdx].Put(buf[:0])
+			if capIdx, ok := leafBlockArenaClassForCap(cap(buf)); ok {
+				leafBlockArenaPools[capIdx].Put(buf[:0])
 			}
 			return make([]byte, 0, classCap)
 		}
 	}
-	outerLeafArenaLeaseMu.Unlock()
+	leafBlockArenaLeaseMu.Unlock()
 	for bucket := idx; bucket <= maxIdx; bucket++ {
-		if v := outerLeafArenaPools[bucket].Get(); v != nil {
+		if v := leafBlockArenaPools[bucket].Get(); v != nil {
 			if s, ok := v.([]byte); ok && cap(s) >= capacity && cap(s) <= maxReuseCap {
 				return s[:0]
 			}
@@ -887,46 +887,46 @@ func getOuterLeafArena(capacity int) []byte {
 	return make([]byte, 0, classCap)
 }
 
-func putOuterLeafArena(buf []byte) {
+func putLeafBlockArena(buf []byte) {
 	if buf == nil {
 		return
 	}
-	if cap(buf) > maxOuterLeafArenaPoolCap {
+	if cap(buf) > maxLeafBlockArenaPoolCap {
 		return
 	}
-	idx, ok := outerLeafArenaClassForCap(cap(buf))
+	idx, ok := leafBlockArenaClassForCap(cap(buf))
 	if !ok {
 		return
 	}
 	buf = buf[:0]
-	outerLeafArenaLeaseMu.Lock()
-	if len(outerLeafArenaLeases[idx]) < maxOuterLeafArenaLeases {
-		outerLeafArenaLeases[idx] = append(outerLeafArenaLeases[idx], buf)
-		outerLeafArenaLeaseMu.Unlock()
+	leafBlockArenaLeaseMu.Lock()
+	if len(leafBlockArenaLeases[idx]) < maxLeafBlockArenaLeases {
+		leafBlockArenaLeases[idx] = append(leafBlockArenaLeases[idx], buf)
+		leafBlockArenaLeaseMu.Unlock()
 		return
 	}
-	outerLeafArenaLeaseMu.Unlock()
-	outerLeafArenaPools[idx].Put(buf)
+	leafBlockArenaLeaseMu.Unlock()
+	leafBlockArenaPools[idx].Put(buf)
 }
 
-func getOuterLeafBlobRefScratch() *[outerLeafBlobRefStackScratchCap]byte {
-	if v := outerLeafBlobRefScratchPool.Get(); v != nil {
-		if s, ok := v.(*[outerLeafBlobRefStackScratchCap]byte); ok && s != nil {
+func getLeafBlockBlobRefScratch() *[leafBlockBlobRefStackScratchCap]byte {
+	if v := leafBlockBlobRefScratchPool.Get(); v != nil {
+		if s, ok := v.(*[leafBlockBlobRefStackScratchCap]byte); ok && s != nil {
 			return s
 		}
 	}
-	return new([outerLeafBlobRefStackScratchCap]byte)
+	return new([leafBlockBlobRefStackScratchCap]byte)
 }
 
-func putOuterLeafBlobRefScratch(buf *[outerLeafBlobRefStackScratchCap]byte) {
+func putLeafBlockBlobRefScratch(buf *[leafBlockBlobRefStackScratchCap]byte) {
 	if buf == nil {
 		return
 	}
-	outerLeafBlobRefScratchPool.Put(buf)
+	leafBlockBlobRefScratchPool.Put(buf)
 }
 
-func getOuterLeafEncoder() *leafblock.Encoder {
-	if v := outerLeafEncoderPool.Get(); v != nil {
+func getLeafBlockEncoder() *leafblock.Encoder {
+	if v := leafBlockEncoderPool.Get(); v != nil {
 		if e, ok := v.(*leafblock.Encoder); ok && e != nil {
 			return e
 		}
@@ -934,12 +934,12 @@ func getOuterLeafEncoder() *leafblock.Encoder {
 	return &leafblock.Encoder{}
 }
 
-func putOuterLeafEncoder(e *leafblock.Encoder) {
+func putLeafBlockEncoder(e *leafblock.Encoder) {
 	if e == nil {
 		return
 	}
-	e.Trim(maxOuterLeafEncoderRawScratchCap, maxOuterLeafEncoderEncScratchCap, maxOuterLeafEncoderRestartsCap)
-	outerLeafEncoderPool.Put(e)
+	e.Trim(maxLeafBlockEncoderRawScratchCap, maxLeafBlockEncoderEncScratchCap, maxLeafBlockEncoderRestartsCap)
+	leafBlockEncoderPool.Put(e)
 }
 
 func getValueLogPtrs(n int) []page.ValuePtr {
@@ -1138,11 +1138,11 @@ const (
 	adaptiveOverwriteWritePct        = 0.25
 	adaptiveWarmupBytes              = 16 * 1024 * 1024
 	maxMemtableBytesPerShard         = int64(3 << 30)
-	maxOuterLeafArenaPoolCap         = 16 << 20
-	outerLeafBlobRefStackScratchCap  = 256
-	maxOuterLeafEncoderRawScratchCap = 2 << 20
-	maxOuterLeafEncoderEncScratchCap = 2 << 20
-	maxOuterLeafEncoderRestartsCap   = 1 << 15
+	maxLeafBlockArenaPoolCap         = 16 << 20
+	leafBlockBlobRefStackScratchCap  = 256
+	maxLeafBlockEncoderRawScratchCap = 2 << 20
+	maxLeafBlockEncoderEncScratchCap = 2 << 20
+	maxLeafBlockEncoderRestartsCap   = 1 << 15
 	maxVlogPreparedBodyPoolCap       = 8 << 20
 	maxVlogPreparedFramesPoolCap     = 1 << 14
 	maxVlogDictPrepareResultsPoolCap = 1 << 14
@@ -1346,9 +1346,9 @@ func (db *DB) normalizeAnchorPointer(ptr page.ValuePtr, context string) (page.Va
 	return ptr, nil
 }
 
-const defaultOuterLeafBlobThresholdMin = 16 << 10
-const defaultOuterLeafBlockTargetBytes = 4 << 10
-const outerLeafAdaptiveLZ4MaxAvgValueBytes = 64
+const defaultLeafBlockBlobThresholdMin = 16 << 10
+const defaultLeafBlockTargetBytes = 4 << 10
+const leafBlockAdaptiveLZ4MaxAvgValueBytes = 64
 const defaultLargeValueChunkBytes = 8 << 20
 const minLargeValueChunkBytes = 1 << 20
 
@@ -1392,38 +1392,38 @@ func (db *DB) largeValueChunkBytes() int {
 	return chunk
 }
 
-func (db *DB) selectOuterLeafBlockCodec(totalValueBytes, entryCount int) uint8 {
+func (db *DB) selectLeafBlockCodec(totalValueBytes, entryCount int) uint8 {
 	if db == nil {
 		return uint8(backenddb.ValueLogBlockSnappy)
 	}
-	codec := db.outerLeafBlockCodec
+	codec := db.leafBlockCodec
 	if codec != uint8(backenddb.ValueLogBlockSnappy) || entryCount <= 0 {
 		return codec
 	}
 	avgValueBytes := totalValueBytes / entryCount
-	if avgValueBytes <= outerLeafAdaptiveLZ4MaxAvgValueBytes {
+	if avgValueBytes <= leafBlockAdaptiveLZ4MaxAvgValueBytes {
 		return uint8(backenddb.ValueLogBlockLZ4)
 	}
 	return codec
 }
 
-func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
+func (db *DB) encodeLeafBlockValue(key, value []byte) ([]byte, error) {
 	_ = key
 	return value, nil
 }
 
-func (db *DB) encodeOuterLeafBlobRef(dst, key []byte, ptr page.ValuePtr) ([]byte, error) {
-	enc := getOuterLeafEncoder()
-	defer putOuterLeafEncoder(enc)
+func (db *DB) encodeLeafBlockBlobRef(dst, key []byte, ptr page.ValuePtr) ([]byte, error) {
+	enc := getLeafBlockEncoder()
+	defer putLeafBlockEncoder(enc)
 	var single [1]leafblock.TypedEntry
 	single[0].Key = key
 	single[0].Kind = leafblock.EntryKindBlobRef
 	single[0].BlobPtr = ptr
-	codec := db.selectOuterLeafBlockCodec(0, 1)
-	return enc.EncodeTypedEntries(dst, single[:], codec, db.outerLeafBlockRestart)
+	codec := db.selectLeafBlockCodec(0, 1)
+	return enc.EncodeTypedEntries(dst, single[:], codec, db.leafBlockRestart)
 }
 
-func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
+func (db *DB) decodeLeafBlockValue(key, value []byte) ([]byte, error) {
 	entry, ok, found, _, err := leafblock.DecodeEntryForKey(value, key, nil)
 	if err != nil {
 		return nil, err
@@ -1432,7 +1432,7 @@ func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
 		return value, nil
 	}
 	if !found {
-		return nil, fmt.Errorf("cachingdb: outer-leaf key lookup miss")
+		return nil, fmt.Errorf("cachingdb: leaf-block key lookup miss")
 	}
 	if entry.Kind == leafblock.EntryKindBlobRef {
 		if db.valueLogReader == nil {
@@ -1472,7 +1472,7 @@ func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	return entry.Value, nil
 }
 
-func allOuterLeafRecordValues(records []valuelog.Record) bool {
+func allLeafBlockRecordValues(records []valuelog.Record) bool {
 	if len(records) == 0 {
 		return false
 	}
@@ -1484,14 +1484,14 @@ func allOuterLeafRecordValues(records []valuelog.Record) bool {
 	return true
 }
 
-type outerLeafRecordGroup struct {
+type leafBlockRecordGroup struct {
 	start int
 	end   int
 }
 
-const outerLeafEncodedHeaderBytes = 22
+const leafBlockEncodedHeaderBytes = 22
 
-func ensureOuterLeafArenaCap(buf []byte, need int) []byte {
+func ensureLeafBlockArenaCap(buf []byte, need int) []byte {
 	if need <= 0 || cap(buf)-len(buf) >= need {
 		return buf
 	}
@@ -1505,14 +1505,14 @@ func ensureOuterLeafArenaCap(buf []byte, need int) []byte {
 	return grown
 }
 
-func appendOuterLeafRecordGroup(db *DB, encoder *leafblock.Encoder, entries []leafblock.Entry, groupStart int, records []valuelog.Record, groups []outerLeafRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
+func appendLeafBlockRecordGroup(db *DB, encoder *leafblock.Encoder, entries []leafblock.Entry, groupStart int, records []valuelog.Record, groups []leafBlockRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []leafBlockRecordGroup, []byte, error) {
 	if len(entries) == 0 {
 		return records, groups, arena, nil
 	}
-	if maxEncodedHint < outerLeafEncodedHeaderBytes+32 {
-		maxEncodedHint = outerLeafEncodedHeaderBytes + 32
+	if maxEncodedHint < leafBlockEncodedHeaderBytes+32 {
+		maxEncodedHint = leafBlockEncodedHeaderBytes + 32
 	}
-	arena = ensureOuterLeafArenaCap(arena, maxEncodedHint)
+	arena = ensureLeafBlockArenaCap(arena, maxEncodedHint)
 	base := len(arena)
 	dst := arena[base:base]
 
@@ -1524,11 +1524,11 @@ func appendOuterLeafRecordGroup(db *DB, encoder *leafblock.Encoder, entries []le
 	for i := range entries {
 		totalValueBytes += len(entries[i].Value)
 	}
-	codec := db.selectOuterLeafBlockCodec(totalValueBytes, len(entries))
+	codec := db.selectLeafBlockCodec(totalValueBytes, len(entries))
 	if encoder != nil {
-		payload, err = encoder.EncodeEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
+		payload, err = encoder.EncodeEntriesAssumeSorted(dst, entries, codec, db.leafBlockRestart)
 	} else {
-		payload, err = leafblock.EncodeEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
+		payload, err = leafblock.EncodeEntriesAssumeSorted(dst, entries, codec, db.leafBlockRestart)
 	}
 	if err != nil {
 		return nil, nil, nil, err
@@ -1536,18 +1536,18 @@ func appendOuterLeafRecordGroup(db *DB, encoder *leafblock.Encoder, entries []le
 	arena = arena[:base+len(payload)]
 	payload = arena[base : base+len(payload)]
 	records = append(records, valuelog.Record{Value: payload})
-	groups = append(groups, outerLeafRecordGroup{start: groupStart, end: groupStart + len(entries)})
+	groups = append(groups, leafBlockRecordGroup{start: groupStart, end: groupStart + len(entries)})
 	return records, groups, arena, nil
 }
 
-func appendOuterLeafTypedRecordGroup(db *DB, encoder *leafblock.Encoder, entries []leafblock.TypedEntry, groupStart int, records []valuelog.Record, groups []outerLeafRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
+func appendLeafBlockTypedRecordGroup(db *DB, encoder *leafblock.Encoder, entries []leafblock.TypedEntry, groupStart int, records []valuelog.Record, groups []leafBlockRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []leafBlockRecordGroup, []byte, error) {
 	if len(entries) == 0 {
 		return records, groups, arena, nil
 	}
-	if maxEncodedHint < outerLeafEncodedHeaderBytes+32 {
-		maxEncodedHint = outerLeafEncodedHeaderBytes + 32
+	if maxEncodedHint < leafBlockEncodedHeaderBytes+32 {
+		maxEncodedHint = leafBlockEncodedHeaderBytes + 32
 	}
-	arena = ensureOuterLeafArenaCap(arena, maxEncodedHint)
+	arena = ensureLeafBlockArenaCap(arena, maxEncodedHint)
 	base := len(arena)
 	dst := arena[base:base]
 
@@ -1561,11 +1561,11 @@ func appendOuterLeafTypedRecordGroup(db *DB, encoder *leafblock.Encoder, entries
 			totalValueBytes += len(entries[i].Value)
 		}
 	}
-	codec := db.selectOuterLeafBlockCodec(totalValueBytes, len(entries))
+	codec := db.selectLeafBlockCodec(totalValueBytes, len(entries))
 	if encoder != nil {
-		payload, err = encoder.EncodeTypedEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
+		payload, err = encoder.EncodeTypedEntriesAssumeSorted(dst, entries, codec, db.leafBlockRestart)
 	} else {
-		payload, err = leafblock.EncodeTypedEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
+		payload, err = leafblock.EncodeTypedEntriesAssumeSorted(dst, entries, codec, db.leafBlockRestart)
 	}
 	if err != nil {
 		return nil, nil, nil, err
@@ -1573,7 +1573,7 @@ func appendOuterLeafTypedRecordGroup(db *DB, encoder *leafblock.Encoder, entries
 	arena = arena[:base+len(payload)]
 	payload = arena[base : base+len(payload)]
 	records = append(records, valuelog.Record{Value: payload})
-	groups = append(groups, outerLeafRecordGroup{start: groupStart, end: groupStart + len(entries)})
+	groups = append(groups, leafBlockRecordGroup{start: groupStart, end: groupStart + len(entries)})
 	return records, groups, arena, nil
 }
 
@@ -1646,12 +1646,12 @@ func (db *DB) appendLargeValueManifest(lane *lane, dictID uint64, value []byte, 
 	return ptr, nil
 }
 
-// buildOuterLeafValueRecords encodes key/value pairs into value-log records.
+// buildLeafBlockValueRecords encodes key/value pairs into value-log records.
 // The returned groups map each encoded record back to a contiguous source range
 // [start,end).
-func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
+func (db *DB) buildLeafBlockValueRecords(keys [][]byte, values [][]byte) ([]valuelog.Record, []leafBlockRecordGroup, []byte, error) {
 	if len(keys) != len(values) {
-		return nil, nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
+		return nil, nil, nil, fmt.Errorf("cachingdb: leaf-block key/value length mismatch %d/%d", len(keys), len(values))
 	}
 	if len(keys) == 0 {
 		return nil, nil, nil, nil
@@ -1661,7 +1661,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	entriesCap := 8
 
 	if len(keys) > 1 {
-		targetBytes := db.outerLeafBlockTargetBytes
+		targetBytes := db.leafBlockTargetBytes
 		if targetBytes <= 0 {
 			targetBytes = leafblock.NormalizeBlockTargetBytes(0)
 		}
@@ -1702,38 +1702,38 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	}
 
 	records := getValueLogRecordsCap(recordsCap)
-	groups := make([]outerLeafRecordGroup, 0, groupsCap)
+	groups := make([]leafBlockRecordGroup, 0, groupsCap)
 
 	if len(keys) == 1 {
 		for i := range keys {
-			payload, err := db.encodeOuterLeafValue(keys[i], values[i])
+			payload, err := db.encodeLeafBlockValue(keys[i], values[i])
 			if err != nil {
 				return nil, nil, nil, err
 			}
 			records = append(records, valuelog.Record{Value: payload})
-			groups = append(groups, outerLeafRecordGroup{start: i, end: i + 1})
+			groups = append(groups, leafBlockRecordGroup{start: i, end: i + 1})
 		}
 		return records, groups, nil, nil
 	}
 
-	targetBytes := db.outerLeafBlockTargetBytes
+	targetBytes := db.leafBlockTargetBytes
 	if targetBytes <= 0 {
 		targetBytes = leafblock.NormalizeBlockTargetBytes(0)
 	}
 
-	entries := getOuterLeafEntriesCap(entriesCap)
-	defer putOuterLeafEntries(entries)
-	outerEncoder := getOuterLeafEncoder()
-	defer putOuterLeafEncoder(outerEncoder)
-	arenaCap := outerLeafEncodedHeaderBytes + len(keys)*8
+	entries := getLeafBlockEntriesCap(entriesCap)
+	defer putLeafBlockEntries(entries)
+	outerEncoder := getLeafBlockEncoder()
+	defer putLeafBlockEncoder(outerEncoder)
+	arenaCap := leafBlockEncodedHeaderBytes + len(keys)*8
 	for i := range keys {
 		arenaCap += len(keys[i]) + len(values[i])
 	}
-	arena := getOuterLeafArena(arenaCap)
+	arena := getLeafBlockArena(arenaCap)
 	releaseArena := true
 	defer func() {
 		if releaseArena {
-			putOuterLeafArena(arena)
+			putLeafBlockArena(arena)
 		}
 	}()
 	estimated := 0
@@ -1748,7 +1748,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 			if bytes.Compare(prevKey, key) >= 0 {
 				// Preserve correctness for non-monotonic batches by cutting blocks.
 				var err error
-				records, groups, arena, err = appendOuterLeafRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
+				records, groups, arena, err = appendLeafBlockRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -1757,7 +1757,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 				prevKey = nil
 			} else if estimated+entryEstimate > targetBytes {
 				var err error
-				records, groups, arena, err = appendOuterLeafRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
+				records, groups, arena, err = appendLeafBlockRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
 				if err != nil {
 					return nil, nil, nil, err
 				}
@@ -1775,7 +1775,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	}
 	if len(entries) > 0 {
 		var err error
-		records, groups, arena, err = appendOuterLeafRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
+		records, groups, arena, err = appendLeafBlockRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -2198,7 +2198,7 @@ func (db *DB) readValueLog(key []byte, ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return db.decodeOuterLeafValue(key, raw)
+	return db.decodeLeafBlockValue(key, raw)
 }
 
 func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]byte, error) {
@@ -2217,7 +2217,7 @@ func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]b
 	if err != nil {
 		return nil, err
 	}
-	decoded, err := db.decodeOuterLeafValue(key, raw)
+	decoded, err := db.decodeLeafBlockValue(key, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -2567,7 +2567,7 @@ func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			live[ptr.FileID] = struct{}{}
-			if err := db.collectNestedValueLogLiveIDsFromOuterLeaf(ptr, live); err != nil {
+			if err := db.collectNestedValueLogLiveIDsFromLeafBlock(ptr, live); err != nil {
 				if err := it.Close(); err != nil {
 					return nil, err
 				}
@@ -2582,7 +2582,7 @@ func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 	return live, nil
 }
 
-func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live map[uint32]struct{}) error {
+func (db *DB) collectNestedValueLogLiveIDsFromLeafBlock(ptr page.ValuePtr, live map[uint32]struct{}) error {
 	if db == nil || len(live) == 0 || db.valueLogReader == nil {
 		return nil
 	}
@@ -3177,10 +3177,10 @@ type DB struct {
 	inlineThreshold                 int
 	valueLogThreshold               int
 	valueLogDomainThresholds        []backenddb.ValueLogDomainThreshold
-	outerLeafBlockTargetBytes       int
-	outerLeafBlockCodec             uint8
-	outerLeafBlockRestart           int
-	outerLeafBlobThresholdBytes     int
+	leafBlockTargetBytes            int
+	leafBlockCodec                  uint8
+	leafBlockRestart                int
+	leafBlockBlobThresholdBytes     int
 	forceValueLogPointers           bool
 	valueLogRawWritevMinAvgBytes    int
 	valueLogRawWritevMinRecords     int
@@ -4404,14 +4404,14 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	leafBlockTargetOpt := opts.ValueLogLeafBlockTargetBytes
 	if leafBlockTargetOpt <= 0 {
-		leafBlockTargetOpt = defaultOuterLeafBlockTargetBytes
+		leafBlockTargetOpt = defaultLeafBlockTargetBytes
 	}
-	outerLeafBlockTarget := leafblock.NormalizeBlockTargetBytes(leafBlockTargetOpt)
-	outerLeafBlockCodec := opts.ValueLogLeafBlockCodec
-	outerLeafBlockRestart := leafblock.NormalizeRestartInterval(opts.ValueLogLeafBlockRestartInterval)
-	outerLeafBlobThreshold := opts.ValueLogLeafBlockBlobThresholdBytes
-	if outerLeafBlobThreshold < 0 {
-		return nil, fmt.Errorf("cachingdb: invalid value-log leaf block blob threshold bytes %d", outerLeafBlobThreshold)
+	leafBlockTarget := leafblock.NormalizeBlockTargetBytes(leafBlockTargetOpt)
+	leafBlockCodec := opts.ValueLogLeafBlockCodec
+	leafBlockRestart := leafblock.NormalizeRestartInterval(opts.ValueLogLeafBlockRestartInterval)
+	leafBlockBlobThreshold := opts.ValueLogLeafBlockBlobThresholdBytes
+	if leafBlockBlobThreshold < 0 {
+		return nil, fmt.Errorf("cachingdb: invalid value-log leaf block blob threshold bytes %d", leafBlockBlobThreshold)
 	}
 	disableJournal := opts.DisableWAL
 	if writerFlushMaxMemtablesUnset &&
@@ -4677,10 +4677,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		inlineThreshold:                      inlineThreshold,
 		valueLogThreshold:                    valueLogThreshold,
 		valueLogDomainThresholds:             valueLogDomainThresholds,
-		outerLeafBlockTargetBytes:            outerLeafBlockTarget,
-		outerLeafBlockCodec:                  outerLeafBlockCodec,
-		outerLeafBlockRestart:                outerLeafBlockRestart,
-		outerLeafBlobThresholdBytes:          outerLeafBlobThreshold,
+		leafBlockTargetBytes:                 leafBlockTarget,
+		leafBlockCodec:                       leafBlockCodec,
+		leafBlockRestart:                     leafBlockRestart,
+		leafBlockBlobThresholdBytes:          leafBlockBlobThreshold,
 		forceValueLogPointers:                opts.ForceValueLogPointers,
 		valueLogRawWritevMinAvgBytes:         valueLogRawWritevMinAvgBytes,
 		valueLogRawWritevMinRecords:          valueLogRawWritevMinRecords,
@@ -6990,7 +6990,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 					framesTotal++
 				}
 			} else if plan.writeMode == vlogWriteOff && (rawWriterInto != nil || rawBufferedInto != nil) {
-				useBufferedRaw := rawBufferedInto != nil && false && allOuterLeafRecordValues(segment)
+				useBufferedRaw := rawBufferedInto != nil && false && allLeafBlockRecordValues(segment)
 				var (
 					stats    valuelog.FrameStats
 					batchErr error
@@ -7638,14 +7638,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 
-	outerLeafPayloadBatch := allOuterLeafRecordValues(records)
+	leafBlockPayloadBatch := allLeafBlockRecordValues(records)
 
-	// Track v2 outer-leaf payload batches so raw-mode append paths can use the
+	// Track v2 leaf-block payload batches so raw-mode append paths can use the
 	// buffered frame writer when selected.
-	autoOuterLeafPayloads := true &&
+	autoLeafBlockPayloads := true &&
 		!templatePrepass &&
 		dictID == 0 &&
-		outerLeafPayloadBatch
+		leafBlockPayloadBatch
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	selectorPayloadBytes := rawPayloadBytes
@@ -7654,7 +7654,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes)
-	if autoOuterLeafPayloads && mode == vlogCompressionAuto {
+	if autoLeafBlockPayloads && mode == vlogCompressionAuto {
 		writeMode = vlogWriteOff
 	}
 	blockMode := writeMode == vlogWriteBlock
@@ -7774,8 +7774,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			k = valuelog.MaxFrameK
 		}
 	}
-	if outerLeafPayloadBatch {
-		// Anchor keys require one pointer per encoded outer-leaf payload so the key
+	if leafBlockPayloadBatch {
+		// Anchor keys require one pointer per encoded leaf-block payload so the key
 		// maps exactly to that payload record.
 		k = 1
 	}
@@ -7969,8 +7969,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	if err == nil && !rawBatchUsed {
 		// This path is correctness-critical and must never publish invalid pointers.
-		useRawBatch := !outerLeafPayloadBatch && dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
-		preferBufferedRaw := useRawBatch && autoOuterLeafPayloads && hasRawBufferedInto
+		useRawBatch := !leafBlockPayloadBatch && dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
+		preferBufferedRaw := useRawBatch && autoLeafBlockPayloads && hasRawBufferedInto
 		if useRawBatch && (preferBufferedRaw || hasRawInto) {
 			ptrs = getValueLogPtrs(len(records))
 			var (
@@ -8288,7 +8288,7 @@ func (db *DB) appendValueLogOneWithKey(l *lane, dictID uint64, dict []byte, rid 
 	return db.appendValueLogOneInternal(l, dictID, dict, rid, key, value, durability, true)
 }
 
-func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability, encodeOuterLeaf bool) (page.ValuePtr, string, error) {
+func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability, encodeLeafBlock bool) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
@@ -8300,19 +8300,19 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		return page.ValuePtr{}, "", errWALClosed
 	default:
 	}
-	if encodeOuterLeaf {
+	if encodeLeafBlock {
 		if db.largeValueNeedsChunking(len(value)) {
 			manifestPtr, manifestErr := db.appendLargeValueManifest(l, dictID, value, durability)
 			if manifestErr != nil {
 				return page.ValuePtr{}, "", manifestErr
 			}
-			encodedValue, encodeErr := db.encodeOuterLeafBlobRef(nil, key, manifestPtr)
+			encodedValue, encodeErr := db.encodeLeafBlockBlobRef(nil, key, manifestPtr)
 			if encodeErr != nil {
 				return page.ValuePtr{}, "", encodeErr
 			}
 			value = encodedValue
 		} else {
-			encodedValue, encodeErr := db.encodeOuterLeafValue(key, value)
+			encodedValue, encodeErr := db.encodeLeafBlockValue(key, value)
 			if encodeErr != nil {
 				return page.ValuePtr{}, "", encodeErr
 			}
@@ -15646,7 +15646,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 			for _, idx := range eligibleIdxs {
 				op := &b.entries[idx]
-				payload, encErr := b.db.encodeOuterLeafValue(op.Key, op.Value)
+				payload, encErr := b.db.encodeLeafBlockValue(op.Key, op.Value)
 				if encErr != nil {
 					b.db.writeMu.RUnlock()
 					return encErr
@@ -15717,7 +15717,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			defer putValueLogRecordsCheckpointAware(b.db, valueRecords)
 			for _, idx := range eligibleIdxs {
 				op := &b.entries[idx]
-				payload, encErr := b.db.encodeOuterLeafValue(op.Key, op.Value)
+				payload, encErr := b.db.encodeLeafBlockValue(op.Key, op.Value)
 				if encErr != nil {
 					b.db.writeMu.RUnlock()
 					return encErr
