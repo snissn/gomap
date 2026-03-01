@@ -83,30 +83,30 @@ func runValueLogDictSuite(baseCfg BenchConfig) (string, error) {
 		// WAL on: journal enabled.
 		{mode: "wal_on", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "wal_on", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_on", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_on", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_on", dictOn: false, pattern: "incompressible", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_on", dictOn: true, pattern: "incompressible", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: false, pattern: "repeat_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "repeat_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: false, pattern: "random", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "random", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "wal_on", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "wal_on", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_on", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_on", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_on", dictOn: false, pattern: "incompressible", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_on", dictOn: true, pattern: "incompressible", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: false, pattern: "repeat_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "repeat_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: false, pattern: "random", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_on", dictOn: true, pattern: "random", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 
 		// WAL off: journal disabled (value-log pointers still enabled). Unsafe; requires AllowUnsafe.
 		{mode: "wal_off", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "wal_off", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_off", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_off", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_off", dictOn: false, pattern: "incompressible", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_off", dictOn: true, pattern: "incompressible", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: false, pattern: "repeat_tail64", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "repeat_tail64", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: false, pattern: "random", valueSz: 1024, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "random", valueSz: 1024, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "wal_off", dictOn: false, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
 		{mode: "wal_off", dictOn: true, pattern: "ultra_compressible_repeat", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_off", dictOn: false, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_off", dictOn: true, pattern: "highly_compressible_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_off", dictOn: false, pattern: "incompressible", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
-		{mode: "wal_off", dictOn: true, pattern: "incompressible", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: false, pattern: "repeat_tail64", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "repeat_tail64", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: false, pattern: "random", valueSz: 16 << 10, trainB: -1, dictB: 0, warmupB: warmupBytes, measureB: measureBytes},
+		{mode: "wal_off", dictOn: true, pattern: "random", valueSz: 16 << 10, trainB: 4 << 20, dictB: 40 << 10, warmupB: warmupBytes, measureB: measureBytes},
 	}
 
 	results := make([]valueLogDictSuiteResult, 0, len(cases))
@@ -376,20 +376,25 @@ func makeValuePool(seed int64, pattern string, size int, poolSize int) [][]byte 
 		poolSize = 1
 	}
 	out := make([][]byte, poolSize)
-	mode := strings.ToLower(strings.TrimSpace(pattern))
+	mode, err := normalizeWriteValuePattern(pattern)
+	if err != nil {
+		panic(err)
+	}
 	for i := 0; i < poolSize; i++ {
 		buf := make([]byte, size)
 		switch mode {
-		case "zero", "zeros":
+		case "zero":
 			// Leave zeroed.
-		case "ultra_compressible", "ultra_compressible_repeat":
+		case "ultra_compressible_repeat":
 			// Keep values ultra-compressible but not identical so dict training triggers.
 			// A tiny random tail avoids degenerate "all samples identical" dictionaries
 			// while keeping the stream near the best-case for compression ratios.
 			fillRepeatTail(rng, buf, 4, []byte("{\"key\":\"value\",\"active\":true}"))
 		case "highly_compressible_notail":
 			fillRepeatTail(rng, buf, 0, []byte("{\"key\":\"value\",\"active\":true}"))
-		case "", "repeat", "repeat_tail64", "highly_compressible", "highly_compressible_tail64":
+		case "repeat":
+			fillRepeatTail(rng, buf, 64, []byte("{\"key\":\"value\",\"active\":true}"))
+		case "repeat_tail64":
 			fillRepeatTail(rng, buf, 64, []byte("{\"key\":\"value\",\"active\":true}"))
 		case "half_repeat_half_random":
 			fillRepeatTail(rng, buf, 0, []byte("{\"key\":\"value\",\"active\":true}"))
@@ -397,14 +402,14 @@ func makeValuePool(seed int64, pattern string, size int, poolSize int) [][]byte 
 				half := len(buf) / 2
 				_, _ = rng.Read(buf[half:])
 			}
-		case "medium_compressible", "medium_compressible_sparse":
+		case "medium_compressible_sparse":
 			fillSparseNoise(rng, buf, 256, 16, []byte("abcd1234"))
 		case "celestia_height_prefix_fill":
 			fillCelestiaHeightPrefix(buf, i)
-		case "incompressible", "random":
+		case "random":
 			_, _ = rng.Read(buf)
 		default:
-			_, _ = rng.Read(buf)
+			panic(fmt.Errorf("unsupported value pattern %q (normalized=%q)", pattern, mode))
 		}
 		out[i] = buf
 	}
@@ -508,7 +513,7 @@ func waitForDictPublish(db kvstore.DB, timeout time.Duration) error {
 			return nil
 		}
 		// If dict compression is paused before a dict is published (common on
-		// incompressible streams), don't burn the full timeout waiting.
+		// random streams), don't burn the full timeout waiting.
 		if parseUint(stats, "treedb.cache.vlog_dict.pause_remaining_bytes") != 0 {
 			return nil
 		}

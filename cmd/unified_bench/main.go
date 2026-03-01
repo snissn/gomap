@@ -1387,9 +1387,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		datasetErr        error
 	)
 	// dataset_write_* uses the same normalized -val-pattern pipeline as the
-	// regular write tests (via makeValuePool). Legacy names remain accepted by
-	// normalizeWriteValuePattern, but generation semantics are unified here:
-	// "repeat" maps to the shared repeat+tail behavior and "random" is seeded
+	// regular write tests (via makeValuePool). Value generation is seeded
 	// deterministically from cfg.SeedUsed.
 	makeWriteDataset := func(count, ksize, vsize int, order bool) ([][]byte, [][]byte, error) {
 		mode, err := normalizeWriteValuePattern(cfg.ValuePattern)

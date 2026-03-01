@@ -94,10 +94,6 @@ func init() {
 			Description: "TreeDB fast WAL-on profile: relaxed durability + disabled read checksums (WAL on, fsync/checksums off), enables -treedb-index-optimizations, and sets throughput-biased value-log auto policy.",
 			Apply:       applyWALOnFast,
 		},
-		"unsafe": { // Alias for fast
-			Description: "Alias for 'fast'",
-			Apply:       applyFast,
-		},
 		"durable": {
 			Description: "Strict durability: WAL/sync enabled (defaults). Ideal for correctness verification.",
 			Apply: func(isSet map[string]bool) {

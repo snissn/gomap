@@ -30,19 +30,21 @@ func makeWriteValuePool(seed int64, pattern string, size int, poolSize int) ([][
 func normalizeWriteValuePattern(pattern string) (string, error) {
 	mode := strings.ToLower(strings.TrimSpace(pattern))
 	switch mode {
-	case "", "zero", "zeros":
+	case "", "zero":
 		return "zero", nil
-	case "repeat", "repeat_tail64", "highly_compressible", "highly_compressible_tail64":
+	case "repeat":
 		return "repeat", nil
+	case "repeat_tail64":
+		return "repeat_tail64", nil
 	case "half_repeat_half_random":
 		return "half_repeat_half_random", nil
-	case "random", "rand", "incompressible":
-		return "incompressible", nil
-	case "ultra_compressible", "ultra_compressible_repeat":
+	case "random":
+		return "random", nil
+	case "ultra_compressible_repeat":
 		return "ultra_compressible_repeat", nil
 	case "highly_compressible_notail":
 		return "highly_compressible_notail", nil
-	case "medium_compressible", "medium_compressible_sparse":
+	case "medium_compressible_sparse":
 		return "medium_compressible_sparse", nil
 	case "celestia_height_prefix_fill":
 		return "celestia_height_prefix_fill", nil
