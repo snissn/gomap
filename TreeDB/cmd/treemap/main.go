@@ -44,8 +44,6 @@ Commands:
   keys            List keys in a range/prefix
   scan            Scan keys and values in a range/prefix (requires -allow-values)
   scan-jsonl      Scan keys and values to JSONL {key,val} (requires -allow-values)
-  dump            Alias for scan
-  dump-jsonl      Alias for scan-jsonl
   import-jsonl    Import JSONL {key,val} into the store
 
 Run "treemap <command> -h" for command-specific options.
@@ -102,9 +100,9 @@ func main() {
 		runProbeKey(dir, args)
 	case "keys":
 		runKeys(dir, args)
-	case "scan", "dump":
+	case "scan":
 		runScan(dir, args)
-	case "scan-jsonl", "dump-jsonl":
+	case "scan-jsonl":
 		runScanJSONL(dir, args)
 	case "import-jsonl":
 		runImportJSONL(dir, args)
