@@ -58,7 +58,6 @@ func BenchmarkTraceReplay(b *testing.B) {
 		b.Fatal("trace summary has no phases")
 	}
 
-	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -76,20 +75,15 @@ func BenchmarkTraceReplay(b *testing.B) {
 			b.Fatal(err)
 		}
 
-		opts := Options{
-			Dir:            dir,
-			FlushThreshold: int64(flushThreshold),
-			MemtableShards: memtableShards,
-			Durability: func() DurabilityMode {
-				if disableWAL {
-					return DurabilityWALOffRelaxed
-				}
-				return DurabilityWALOnRelaxed
-			}(),
-			ValueLog: ValueLogOptions{
-				ReadIntegrity: IntegritySkipChecksums,
-			},
-		}
+			opts := Options{
+				Dir:            dir,
+				FlushThreshold: int64(flushThreshold),
+				MemtableShards: memtableShards,
+				Durability:     DurabilityWALOffRelaxed,
+				ValueLog: ValueLogOptions{
+					ReadIntegrity: IntegritySkipChecksums,
+				},
+			}
 		db, err := Open(opts)
 		if err != nil {
 			_ = os.RemoveAll(dir)
@@ -116,25 +110,10 @@ func BenchmarkTraceReplay(b *testing.B) {
 	}
 }
 
-func parseBoolEnv(key string, def bool) bool {
-	val := strings.TrimSpace(os.Getenv(key))
-	if val == "" {
-		return def
-	}
-	switch strings.ToLower(val) {
-	case "1", "true", "t", "yes", "y":
-		return true
-	case "0", "false", "f", "no", "n":
-		return false
-	default:
-		return def
-	}
-}
-
-func parseIntEnv(key string, def int) int {
-	val := strings.TrimSpace(os.Getenv(key))
-	if val == "" {
-		return def
+	func parseIntEnv(key string, def int) int {
+		val := strings.TrimSpace(os.Getenv(key))
+		if val == "" {
+			return def
 	}
 	n, err := strconv.Atoi(val)
 	if err != nil {

@@ -78,7 +78,6 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 		b.Fatal("trace summary has no phases")
 	}
 
-	disableWAL := parseBoolEnv("TREEDB_TRACE_DISABLE_WAL", false)
 	scale := parseFloatEnv("TREEDB_TRACE_SCALE", 1.0)
 	flushThreshold := parseIntEnv("TREEDB_TRACE_FLUSH_THRESHOLD", 32*1024*1024)
 	memtableShards := parseIntEnv("TREEDB_TRACE_MEMTABLE_SHARDS", 0)
@@ -101,12 +100,7 @@ func BenchmarkTraceReplayTimeline(b *testing.B) {
 	opts := Options{
 		FlushThreshold: int64(flushThreshold),
 		MemtableShards: memtableShards,
-		Durability: func() DurabilityMode {
-			if disableWAL {
-				return DurabilityWALOffRelaxed
-			}
-			return DurabilityWALOnRelaxed
-		}(),
+		Durability:     DurabilityWALOffRelaxed,
 		ValueLog: ValueLogOptions{
 			ReadIntegrity: IntegritySkipChecksums,
 		},
