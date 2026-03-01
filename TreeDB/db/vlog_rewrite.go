@@ -221,7 +221,7 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 			return err
 		}
 		liveByID[ptr.FileID] += int64(recordLen)
-		nested, err := db.outerLeafNestedBlobRefLiveBytes(ptr)
+		nested, err := db.leafBlockNestedBlobRefLiveBytes(ptr)
 		if err != nil {
 			return err
 		}
@@ -236,7 +236,7 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 	return it.Error()
 }
 
-func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int64, error) {
+func (db *DB) leafBlockNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int64, error) {
 	if db == nil || db.valueLogManager == nil {
 		return nil, nil
 	}
@@ -1194,7 +1194,7 @@ type rewriteIterator struct {
 	vlogs  *valuelog.Set
 	writer *rewriteWriter
 	// Old value-log file IDs that must remain because at least one pointer was
-	// intentionally left unchanged (for example nested blob-ref outerleaf
+	// intentionally left unchanged (for example nested blob-ref leafblock
 	// payloads).
 	retainedOldValueIDs map[uint32]struct{}
 	err                 error
@@ -1291,7 +1291,7 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 				block.Release()
 				if visitErr != nil {
 					// Preserve prior behavior on decode/visit errors by treating payload
-					// as non-outerleaf content and falling back to raw record rewrite.
+					// as non-leafblock content and falling back to raw record rewrite.
 				} else if hasBlobRef {
 					// Conservative correctness fallback: keep pointers to nested
 					// blob-ref outer blocks unchanged until nested remap is active.

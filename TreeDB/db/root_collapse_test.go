@@ -129,7 +129,7 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains(t *testing.T) {
 	}
 }
 
-func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T) {
+func testDeleteMostKeysCollapsesRootLeafBlockPointerMode(t *testing.T) {
 	dir := t.TempDir()
 
 	d, err := Open(Options{
@@ -150,7 +150,7 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T) {
 	}
 	defer d.Close()
 
-	// Force pointer-backed values so this test exercises pointer-mode outer-leaf decode
+	// Force pointer-backed values so this test exercises pointer-mode leaf-block decode
 	// while stressing split/merge maintenance under delete-heavy churn.
 	val := bytes.Repeat([]byte("y"), 256)
 	const total = 5000
@@ -277,6 +277,6 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T) {
 	}
 }
 
-func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafPointers(t *testing.T) {
-	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t)
+func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_LeafBlockPointers(t *testing.T) {
+	testDeleteMostKeysCollapsesRootLeafBlockPointerMode(t)
 }

@@ -276,7 +276,7 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 					return decErr
 				}
 				if !ok || !found {
-					return fmt.Errorf("outerleaf: key lookup miss in replay")
+					return fmt.Errorf("leafblock: key lookup miss in replay")
 				}
 				if decoded.Kind == leafblock.EntryKindBlobRef {
 					val, err = b.db.valueLogManager.Read(decoded.BlobPtr)

@@ -61,7 +61,7 @@ func TestNewReplayInlineAppender_UnpackedNoSegmentCap(t *testing.T) {
 	}
 }
 
-func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, codec ValueLogBlockCodec, restart int) {
+func assertReplayInlineAppenderLeafBlockEncoding(t *testing.T, codec ValueLogBlockCodec, restart int) {
 	t.Helper()
 	db := &DB{
 		dir:              t.TempDir(),
@@ -98,20 +98,20 @@ func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, codec ValueLogBlo
 		t.Fatalf("read appended payload: %v", err)
 	}
 	if !leafblock.HasMagic(raw) {
-		t.Fatalf("expected outer-leaf encoded payload")
+		t.Fatalf("expected leaf-block encoded payload")
 	}
 	if len(raw) < 8 {
-		t.Fatalf("outer-leaf payload too short: %d", len(raw))
+		t.Fatalf("leaf-block payload too short: %d", len(raw))
 	}
 	wantCodec := leafBlockCodecHeaderID(codec)
 	if wantCodec == 0 {
 		t.Fatalf("unsupported test codec %d", codec)
 	}
 	if got := int(raw[5]); got != wantCodec {
-		t.Fatalf("outer-leaf codec id = %d, want %d", got, wantCodec)
+		t.Fatalf("leaf-block codec id = %d, want %d", got, wantCodec)
 	}
 	if got, want := int(binary.LittleEndian.Uint16(raw[6:8])), leafblock.NormalizeRestartInterval(db.leafBlockRestart); got != want {
-		t.Fatalf("outer-leaf restart interval = %d, want %d", got, want)
+		t.Fatalf("leaf-block restart interval = %d, want %d", got, want)
 	}
 	decoded, ok, found, _, err := leafblock.DecodeValueForKey(raw, key, nil)
 	if err != nil {
@@ -125,6 +125,6 @@ func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, codec ValueLogBlo
 	}
 }
 
-func TestReplayInlineAppender_UsesConfiguredOuterLeafEncoding(t *testing.T) {
-	assertReplayInlineAppenderOuterLeafEncoding(t, ValueLogBlockLZ4, 7)
+func TestReplayInlineAppender_UsesConfiguredLeafBlockEncoding(t *testing.T) {
+	assertReplayInlineAppenderLeafBlockEncoding(t, ValueLogBlockLZ4, 7)
 }

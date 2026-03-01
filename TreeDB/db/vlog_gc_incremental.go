@@ -362,7 +362,7 @@ func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIte
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			refs[ptr.FileID]++
 			if db != nil {
-				nested, err := db.outerLeafNestedBlobRefCounts(ptr)
+				nested, err := db.leafBlockNestedBlobRefCounts(ptr)
 				if err != nil {
 					return err
 				}
@@ -379,7 +379,7 @@ func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIte
 	return it.Error()
 }
 
-func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64, error) {
+func (db *DB) leafBlockNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64, error) {
 	if db == nil || db.valueLogManager == nil {
 		return nil, nil
 	}
@@ -516,7 +516,7 @@ func (db *DB) buildValueLogRefDeltaExact(baseSeq uint64, p *pager.Pager, root ui
 
 		if oldPtrOK {
 			delta.add(oldPtr.FileID, -1)
-			nested, err := db.outerLeafNestedBlobRefCounts(oldPtr)
+			nested, err := db.leafBlockNestedBlobRefCounts(oldPtr)
 			if err != nil {
 				return nil, err
 			}
@@ -529,7 +529,7 @@ func (db *DB) buildValueLogRefDeltaExact(baseSeq uint64, p *pager.Pager, root ui
 		}
 		if newPtrOK {
 			delta.add(newPtr.FileID, 1)
-			nested, err := db.outerLeafNestedBlobRefCounts(newPtr)
+			nested, err := db.leafBlockNestedBlobRefCounts(newPtr)
 			if err != nil {
 				return nil, err
 			}
