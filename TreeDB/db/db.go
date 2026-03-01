@@ -59,6 +59,7 @@ type DB struct {
 	snapshotViewRO     atomic.Pointer[snapshotView]
 	snapshotAcquireRO  [snapshotAcquireShardCount]atomic.Int32
 	valueLogRefTracker *valueLogRefTracker
+	leafPageLog        LeafPageLog
 	lock               *lockfile.Lock
 	adaptive           *adaptive.Controller
 	pruner             pruneWorker
@@ -92,6 +93,7 @@ type DB struct {
 	indexColumnarLeaves       bool
 	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
+	indexOuterLeavesInValueLog bool
 	indexAdaptiveLeafEncoding bool
 	indexOuterLeafMode        string
 	outerLeafBlockCodec       ValueLogBlockCodec
@@ -1157,6 +1159,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexColumnarLeaves:       opts.IndexColumnarLeaves,
 		indexPackedValuePtr:       opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
+		indexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
 		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
 		indexOuterLeafMode:        opts.IndexOuterLeafMode,
 		outerLeafBlockCodec:       opts.ValueLog.OuterLeafBlockCodec,
@@ -1557,6 +1560,20 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	idx := db.idx.Load()
 	if idx == nil {
 		return post, errors.New("missing index")
+	}
+
+	// Ensure value-log-backed leaf pages are flushed before we publish an index
+	// commit that references them.
+	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+		if sync {
+			if err := db.leafPageLog.Sync(); err != nil {
+				return post, err
+			}
+		} else {
+			if err := db.leafPageLog.Flush(); err != nil {
+				return post, err
+			}
+		}
 	}
 	debugTiming := commitTimingEnabled()
 	var (
