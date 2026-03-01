@@ -21,7 +21,7 @@ const (
 
 func fastProfileOuterLeafCacheDefault(mode string) int {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case treedb.IndexOuterLeafModeV2FencePtr, treedb.IndexOuterLeafModeV1LeafLogRoute:
+	case treedb.IndexOuterLeafModeV1:
 		return defaultOuterLeafBlockCacheEntriesReadHeavy
 	default:
 		return defaultOuterLeafBlockCacheEntries

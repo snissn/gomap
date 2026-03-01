@@ -272,41 +272,24 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 	slowdown := defaultSlowdownBacklogSeconds
 	stop := defaultStopBacklogSeconds
-	indexOuterLeafMode := normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
-	if opts.Durability == db.DurabilityWALOffRelaxed &&
-		indexOuterLeafMode == db.IndexOuterLeafModeV2FencePtr {
-		slowdown = defaultV2FenceSlowdownBacklogSeconds
-		stop = defaultV2FenceStopBacklogSeconds
-	}
+	_, _ = normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
 
 	opts.SlowdownBacklogSeconds = slowdown
 	opts.StopBacklogSeconds = stop
 	opts.MaxBacklogBytes = defaultAdaptiveMaxBacklogBytes
 }
 
-func normalizePublicOuterLeafMode(mode string) string {
+func normalizePublicOuterLeafMode(mode string) (string, error) {
 	trimmed := strings.TrimSpace(mode)
 	if trimmed == "" {
-		return db.IndexOuterLeafModeV1LeafLogRoute
+		return db.IndexOuterLeafModeV1, nil
 	}
 	normalized := strings.ToLower(trimmed)
 	switch normalized {
 	case db.IndexOuterLeafModeV1:
-		return db.IndexOuterLeafModeV1
-	case db.IndexOuterLeafModeV1LeafLog:
-		return db.IndexOuterLeafModeV1LeafLog
-	case db.IndexOuterLeafModeV1LeafLogLegacy:
-		return db.IndexOuterLeafModeV1LeafLogLegacy
-	case db.IndexOuterLeafModeV1LeafLogRoute:
-		return db.IndexOuterLeafModeV1LeafLogRoute
-	case db.IndexOuterLeafModeV2BlockPtr:
-		return db.IndexOuterLeafModeV2BlockPtr
-	case db.IndexOuterLeafModeV2FencePtr:
-		return db.IndexOuterLeafModeV2FencePtr
+		return db.IndexOuterLeafModeV1, nil
 	default:
-		// Keep non-alias values unchanged to avoid broad behavior drift in
-		// cached-mode parsing/validation paths.
-		return trimmed
+		return "", fmt.Errorf("unsupported outer-leaf mode %q (expected %s)", trimmed, db.IndexOuterLeafModeV1)
 	}
 }
 
@@ -411,7 +394,11 @@ func emitOpenBanner(opts Options, normalizedMode string) {
 
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
-	opts.IndexOuterLeafMode = normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
+	normalizedMode, err := normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
+	if err != nil {
+		return nil, err
+	}
+	opts.IndexOuterLeafMode = normalizedMode
 
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value

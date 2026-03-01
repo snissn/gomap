@@ -86,8 +86,8 @@ var (
 	treedbIndexColumnarLeaves             = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
-	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v1_leaflog_route", "TreeDB: index outer-leaf mode (v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
-	treedbWALFenceMode                    = flag.String("treedb-wal-fence-mode", "rid_join", "TreeDB: WAL fence mode (rid_join|simple_inline). simple_inline is only valid with v2_fenceptr; other modes use rid_join.")
+	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v1", "TreeDB: index outer-leaf mode (v1)")
+	treedbWALFenceMode                    = flag.String("treedb-wal-fence-mode", "rid_join", "TreeDB: WAL fence mode (rid_join)")
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
 	treedbOuterLeafBlockRestart           = flag.Int("treedb-outer-leaf-block-restart-interval", 0, "TreeDB: experimental outer-leaf restart interval (0=default)")
@@ -265,21 +265,11 @@ func parseTreeDBVlogAutoPolicy(s string) (treedb.ValueLogAutoPolicy, error) {
 func parseTreeDBOuterLeafMode(s string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "":
-		return treedb.IndexOuterLeafModeV1LeafLogRoute, nil
+		return treedb.IndexOuterLeafModeV1, nil
 	case "v1":
 		return treedb.IndexOuterLeafModeV1, nil
-	case "v1_leaflog":
-		return treedb.IndexOuterLeafModeV1LeafLog, nil
-	case "v1_leaflog_route":
-		return treedb.IndexOuterLeafModeV1LeafLogRoute, nil
-	case "v1_leaflog_legacy":
-		return treedb.IndexOuterLeafModeV1LeafLogLegacy, nil
-	case "v2_blockptr":
-		return treedb.IndexOuterLeafModeV2BlockPtr, nil
-	case "v2_fenceptr":
-		return treedb.IndexOuterLeafModeV2FencePtr, nil
 	default:
-		return "", fmt.Errorf("unsupported -treedb-index-outer-leaf-mode=%q (expected v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)", s)
+		return "", fmt.Errorf("unsupported -treedb-index-outer-leaf-mode=%q (expected v1)", s)
 	}
 }
 
@@ -287,10 +277,8 @@ func parseTreeDBWALFenceMode(s string) (treedb.ValueLogWALFenceMode, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "rid_join":
 		return treedb.ValueLogWALFenceModeRIDJoin, nil
-	case "simple_inline":
-		return treedb.ValueLogWALFenceModeSimpleInline, nil
 	default:
-		return "", fmt.Errorf("unsupported -treedb-wal-fence-mode=%q (expected rid_join|simple_inline)", s)
+		return "", fmt.Errorf("unsupported -treedb-wal-fence-mode=%q (expected rid_join)", s)
 	}
 }
 
@@ -301,10 +289,6 @@ type treeDBOptionsReport struct {
 }
 
 func defaultTreeDBPointerThreshold(opts treedb.Options) int {
-	mode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
-	if mode == treedb.IndexOuterLeafModeV1LeafLogRoute {
-		return 512
-	}
 	if opts.Durability != treedb.DurabilityDurable {
 		return 127
 	}
@@ -624,17 +608,8 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
-	if opts.IndexOuterLeafMode != treedb.IndexOuterLeafModeV2FencePtr &&
-		walFenceMode == treedb.ValueLogWALFenceModeSimpleInline {
-		return treedb.Options{}, treeDBOptionsReport{}, fmt.Errorf("unsupported -treedb-wal-fence-mode=%q for -treedb-index-outer-leaf-mode=%q (simple_inline requires v2_fenceptr)", *treedbWALFenceMode, *treedbIndexOuterLeafMode)
-	}
-	walFenceModeExplicit := flagExplicit("treedb-wal-fence-mode")
-	walEnabled := opts.Durability != treedb.DurabilityWALOffRelaxed
-	if opts.IndexOuterLeafMode == treedb.IndexOuterLeafModeV2FencePtr && walEnabled {
-		if !walFenceModeExplicit && walFenceMode != treedb.ValueLogWALFenceModeSimpleInline {
-			walFenceMode = treedb.ValueLogWALFenceModeSimpleInline
-			notes = append(notes, "v2_fenceptr with WAL enabled defaults vlog.wal_fence_mode=simple_inline unless explicitly set")
-		}
+	if walFenceMode == treedb.ValueLogWALFenceModeSimpleInline {
+		return treedb.Options{}, treeDBOptionsReport{}, fmt.Errorf("unsupported -treedb-wal-fence-mode=%q for -treedb-index-outer-leaf-mode=%q", *treedbWALFenceMode, *treedbIndexOuterLeafMode)
 	}
 	opts.ValueLog.WALFenceMode = walFenceMode
 	outerCodec, err := parseTreeDBVlogBlockCodec(*treedbOuterLeafBlockCodec)

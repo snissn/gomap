@@ -140,24 +140,14 @@ const snapshotShardHintUnset = -1
 
 var errTestFinalizeCommitFailpoint = errors.New("treedb: finalize commit failpoint")
 
-// normalizeIndexOuterLeafMode canonicalizes known mode names without remapping
-// distinct modes (for example, v1_leaflog vs v1_leaflog_legacy).
+// normalizeIndexOuterLeafMode canonicalizes the supported outer-leaf mode.
+// Empty mode defaults to v1.
 func normalizeIndexOuterLeafMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case "":
-		return IndexOuterLeafModeV1LeafLogRoute
+		return IndexOuterLeafModeV1
 	case IndexOuterLeafModeV1:
 		return IndexOuterLeafModeV1
-	case IndexOuterLeafModeV1LeafLog:
-		return IndexOuterLeafModeV1LeafLog
-	case IndexOuterLeafModeV1LeafLogLegacy:
-		return IndexOuterLeafModeV1LeafLogLegacy
-	case IndexOuterLeafModeV1LeafLogRoute:
-		return IndexOuterLeafModeV1LeafLogRoute
-	case IndexOuterLeafModeV2BlockPtr:
-		return IndexOuterLeafModeV2BlockPtr
-	case IndexOuterLeafModeV2FencePtr:
-		return IndexOuterLeafModeV2FencePtr
 	default:
 		return strings.ToLower(strings.TrimSpace(mode))
 	}
@@ -231,26 +221,6 @@ const (
 const (
 	// IndexOuterLeafModeV1 keeps the existing per-key leaf layout.
 	IndexOuterLeafModeV1 = "v1"
-	// IndexOuterLeafModeV1LeafLog enables the routing-style leaf-anchor contract:
-	// - internal nodes route to leaf anchors (one anchor per outer-leaf payload block)
-	// - value-log payloads store key/value entries in outer-leaf envelopes
-	// - API semantics stay aligned with v1; further algorithm hardening is tracked in #610
-	IndexOuterLeafModeV1LeafLog = "v1_leaflog"
-	// IndexOuterLeafModeV1LeafLogLegacy preserves legacy exact-key v1_leaflog
-	// semantics (one leaf entry per user key) for compatibility/bisect.
-	IndexOuterLeafModeV1LeafLogLegacy = "v1_leaflog_legacy"
-	// IndexOuterLeafModeV1LeafLogRoute is an explicit mode surface for the
-	// non-fence routing-only design (routing rows in index + leaf blocks in vlog).
-	// It stores plain (non-fence-marked) directory anchors in the index.
-	IndexOuterLeafModeV1LeafLogRoute = "v1_leaflog_route"
-	// IndexOuterLeafModeV2BlockPtr enables the outer-leaf block-pointer payload
-	// format. Values are encoded as key+value blocks in the value log and index
-	// leaves continue to store pointers.
-	IndexOuterLeafModeV2BlockPtr = "v2_blockptr"
-	// IndexOuterLeafModeV2FencePtr is the follow-on fence-key-only outer-leaf
-	// mode. Index leaves store fence keys + block pointers and user keys are
-	// resolved from outer blocks.
-	IndexOuterLeafModeV2FencePtr = "v2_fenceptr"
 )
 
 // ValueLogAutoPolicy controls auto-mode dict vs block selection bias.
@@ -322,7 +292,7 @@ type ValueLogOptions struct {
 	// 0 uses a default.
 	BlockTargetCompressedBytes int
 	// OuterLeafBlockTargetBytes guides outer-leaf block payload sizing for the
-	// experimental index outer-leaf modes.
+	// v1 outer-leaf encoding.
 	//
 	// 0 uses a mode-aware default.
 	OuterLeafBlockTargetBytes int
@@ -334,14 +304,13 @@ type ValueLogOptions struct {
 	//
 	// 0 uses a default.
 	OuterLeafBlockRestartInterval int
-	// OuterLeafBlobThresholdBytes controls when v2 fence-pointer outer-leaf
-	// entries store a blob reference instead of inline value bytes.
+	// OuterLeafBlobThresholdBytes controls when outer-leaf entries store a blob
+	// reference instead of inline value bytes.
 	//
 	// <=0 uses the default blob-ref threshold.
 	OuterLeafBlobThresholdBytes int
 	// OuterLeafBlockCacheEntries bounds the number of decoded blocks cached for
-	// pointer and fence-pointer reads when an index outer-leaf mode is enabled
-	// (for example, IndexOuterLeafMode=v2_blockptr or v2_fenceptr).
+	// outer-leaf reads in IndexOuterLeafMode=v1.
 	// 0 disables the cache.
 	OuterLeafBlockCacheEntries int
 	// IncompressibleHoldBytes configures auto-mode suppression duration after
@@ -356,12 +325,11 @@ type ValueLogOptions struct {
 	IncompressibleProbeIntervalBytes int
 	// AutoPolicy controls auto-mode bias (throughput, balanced, size).
 	AutoPolicy ValueLogAutoPolicy
-	// WALFenceMode controls WAL encoding behavior for pointer-eligible writes when
-	// IndexOuterLeafMode=v2_fenceptr.
+	// WALFenceMode controls WAL encoding behavior for pointer-eligible writes.
 	//
 	// Supported values:
 	// - "rid_join" (default): WAL uses RID records joined against value-log RIDs.
-	// - "simple_inline": WAL records inline values and deferred fence materialization
+	// - "simple_inline": WAL records inline values and deferred materialization
 	//   publishes pointers at flush/checkpoint.
 	WALFenceMode ValueLogWALFenceMode
 
@@ -573,17 +541,8 @@ type Options struct {
 	// This option only affects newly-written leaf pages.
 	IndexAdaptiveLeafEncoding bool
 	// IndexOuterLeafMode selects the index outer-leaf format:
-	// - "": defaults to "v1_leaflog_route"
+	// - "": defaults to "v1"
 	// - "v1": existing per-key leaf entries
-	// - "v1_leaflog": routing-style leaf-anchor contract (current Step 2 behavior)
-	// - "v1_leaflog_legacy": legacy exact-key compatibility mode
-	// - "v1_leaflog_route": explicit non-fence routing-only mode name
-	//   (plain anchor pointers; intended for routing-only index layouts)
-	// - "v2_blockptr": pointer payloads encode key+value outer-leaf blocks
-	// - "v2_fenceptr": fence-key-only index entries with outer block payloads
-	//
-	// v1_leaflog and v1_leaflog_legacy are distinct mode strings and are not
-	// auto-aliased during normalization.
 	IndexOuterLeafMode string
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
@@ -1012,15 +971,7 @@ func Open(opts Options) (*DB, error) {
 		opts.ValueLog.Compression = ValueLogCompressionAuto
 	}
 	opts.IndexOuterLeafMode = normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
-	if opts.IndexOuterLeafMode == IndexOuterLeafModeV2FencePtr &&
-		opts.Durability != DurabilityWALOffRelaxed &&
-		strings.TrimSpace(string(opts.ValueLog.WALFenceMode)) == "" {
-		// WAL-enabled v2_fenceptr defaults to simple_inline unless an explicit
-		// fence mode is provided.
-		opts.ValueLog.WALFenceMode = ValueLogWALFenceModeSimpleInline
-	} else {
-		opts.ValueLog.WALFenceMode = normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode)
-	}
+	opts.ValueLog.WALFenceMode = normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode)
 
 	if err := validateOptions(opts); err != nil {
 		return nil, err
@@ -1078,7 +1029,7 @@ func validateOptions(opts Options) error {
 	}
 	indexOuterLeafMode := normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
 	switch indexOuterLeafMode {
-	case IndexOuterLeafModeV1, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogLegacy, IndexOuterLeafModeV1LeafLogRoute, IndexOuterLeafModeV2BlockPtr, IndexOuterLeafModeV2FencePtr:
+	case IndexOuterLeafModeV1:
 	default:
 		return fmt.Errorf("treedb: invalid index outer leaf mode %q", opts.IndexOuterLeafMode)
 	}
@@ -1088,8 +1039,8 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid value-log WAL fence mode %q", opts.ValueLog.WALFenceMode)
 	}
-	if indexOuterLeafMode != IndexOuterLeafModeV2FencePtr && walFenceMode == ValueLogWALFenceModeSimpleInline {
-		return fmt.Errorf("treedb: value-log WAL fence mode %q requires index outer leaf mode %q", opts.ValueLog.WALFenceMode, IndexOuterLeafModeV2FencePtr)
+	if walFenceMode == ValueLogWALFenceModeSimpleInline {
+		return fmt.Errorf("treedb: value-log WAL fence mode %q is unsupported with index outer leaf mode %q", opts.ValueLog.WALFenceMode, IndexOuterLeafModeV1)
 	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)

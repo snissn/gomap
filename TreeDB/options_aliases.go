@@ -60,12 +60,7 @@ const (
 )
 
 const (
-	IndexOuterLeafModeV1              = db.IndexOuterLeafModeV1
-	IndexOuterLeafModeV1LeafLog       = db.IndexOuterLeafModeV1LeafLog
-	IndexOuterLeafModeV1LeafLogLegacy = db.IndexOuterLeafModeV1LeafLogLegacy
-	IndexOuterLeafModeV1LeafLogRoute  = db.IndexOuterLeafModeV1LeafLogRoute
-	IndexOuterLeafModeV2BlockPtr      = db.IndexOuterLeafModeV2BlockPtr
-	IndexOuterLeafModeV2FencePtr      = db.IndexOuterLeafModeV2FencePtr
+	IndexOuterLeafModeV1 = db.IndexOuterLeafModeV1
 )
 
 // Value-log compression autotune types (re-exported from internal packages so

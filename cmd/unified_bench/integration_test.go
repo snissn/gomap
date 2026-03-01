@@ -213,7 +213,7 @@ func TestIntegration_TreeDBLevelDBParity500k(t *testing.T) {
 
 	opts := treedb.OptionsFor(treedb.ProfileDurable, treeDir)
 	opts.ReadOnly = true
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	treeDB, err := treedb.Open(opts)
 	if err != nil {
 		t.Fatalf("open treedb readonly: %v (dir=%s)", err, treeDir)
