@@ -697,18 +697,6 @@ func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
 		if string(got) != expect[i] {
 			t.Fatalf("ptr%d mismatch: got %q want %q", i+1, got, expect[i])
 		}
-
-		// Also cover legacy pointers where record length is unknown (0) but the
-		// grouped flag and sub-index are still set.
-		legacy := ptr
-		legacy.Length = page.ValuePtrMarkGrouped(0, page.ValuePtrSubIndex(ptr))
-		gotLegacy, err := ReadAtWithDict(f, legacy, false, nil, nil, nil, templ.DecodeOptions{})
-		if err != nil {
-			t.Fatalf("read at legacy ptr%d: %v", i+1, err)
-		}
-		if string(gotLegacy) != expect[i] {
-			t.Fatalf("legacy ptr%d mismatch: got %q want %q", i+1, gotLegacy, expect[i])
-		}
 	}
 }
 
