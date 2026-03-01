@@ -130,6 +130,16 @@ Current Step 2 guarantees:
 
 Canonical mode semantics and invariants: `TreeDB/docs/spec/outer-leaf-modes.md`.
 
+## Leaf Pages in the Value Log
+
+`Options.IndexOuterLeavesInValueLog` stores the B+Tree **leaf pages** (the 4096B
+pages that contain keys and values/pointers) in the persistent value log instead
+of in `index.db`. Internal pages remain in `index.db` and still provide exact
+lookup routing to a single leaf page (no leaf scanning).
+
+This option is orthogonal to `IndexOuterLeafMode`: leaf pages may still contain
+inline values or `ValuePtr` entries using the existing placement rules.
+
 ## Durability & Safety Notes
 
 - Safe defaults keep WAL, fsync, and read checksums enabled; relax safety knobs via `Options.Durability` and `Options.ValueLog.ReadIntegrity`.

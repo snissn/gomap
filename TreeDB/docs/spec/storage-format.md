@@ -239,6 +239,30 @@ u64 baseChildID
 
 Child page id reconstructs as `baseChildID + ChildDelta`.
 
+### 6.3 LeafRef child IDs (IndexOuterLeavesInValueLog)
+
+When `Options.IndexOuterLeavesInValueLog` is enabled, B+Tree leaf pages are
+stored as 4096-byte value-log records instead of pager pages in `index.db`.
+Internal pages still live in `index.db`.
+
+To preserve the existing internal-page wire format (`u64 ChildPageID`), internal
+entries that reference a leaf page store a **LeafRef** in `ChildPageID`:
+
+```text
+u64 ChildPageID = (u64(ValuePtr.FileID) << 32) | u32(ValuePtr.Offset)
+```
+
+Notes:
+
+- LeafRef encodes only `(FileID, Offset)`; it intentionally omits
+  `ValuePtr.Length` and always reconstructs a grouped pointer with sub-index 0.
+- Leaf pages are written as single-record grouped frames (`K=1`) in the value
+  log, so sub-index is always 0.
+- Offsets must fit in `u32`; value-log segment size is capped accordingly when
+  this mode is enabled.
+- Base-delta internal encoding is incompatible with LeafRef child IDs and is
+  disabled when `IndexOuterLeavesInValueLog` is enabled.
+
 ## 7. Value-Log Record Format
 
 Each value-log record is:
