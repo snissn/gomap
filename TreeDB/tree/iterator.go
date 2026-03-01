@@ -545,13 +545,22 @@ func (it *Iterator) advanceToNextLeaf() bool {
 			continue
 		}
 		parent.Index++
-		if parent.Index < int(parent.Node.Count()) {
+		for parent.Index < int(parent.Node.Count()) {
 			childID, err := parent.Node.GetInternalChildID(uint16(parent.Index))
 			if err != nil {
 				it.err = err
 				return false
 			}
-			return it.descendToLeaf(childID, false)
+			savedLen := len(it.stack)
+			if it.descendToLeaf(childID, false) {
+				return true
+			}
+			// Skip empty/corrupt subtrees only when descendToLeaf did not set an error.
+			it.stack = it.stack[:savedLen]
+			if it.err != nil {
+				return false
+			}
+			parent.Index++
 		}
 		it.stack = it.stack[:len(it.stack)-1]
 	}
@@ -568,13 +577,21 @@ func (it *Iterator) advanceToPrevLeaf() bool {
 			continue
 		}
 		parent.Index--
-		if parent.Index >= 0 {
+		for parent.Index >= 0 {
 			childID, err := parent.Node.GetInternalChildID(uint16(parent.Index))
 			if err != nil {
 				it.err = err
 				return false
 			}
-			return it.descendToLeaf(childID, true)
+			savedLen := len(it.stack)
+			if it.descendToLeaf(childID, true) {
+				return true
+			}
+			it.stack = it.stack[:savedLen]
+			if it.err != nil {
+				return false
+			}
+			parent.Index--
 		}
 		it.stack = it.stack[:len(it.stack)-1]
 	}

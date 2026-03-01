@@ -17,6 +17,7 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	}
 	dir := t.TempDir()
 	chunkSize := int64(64 * 1024)
+	const nKeys = 4000
 
 	d, err := Open(Options{
 		Dir:               dir,
@@ -32,7 +33,7 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	value := bytes.Repeat([]byte("v"), 200) // inline-ish to force page pressure
 	for round := 0; round < 6; round++ {
 		b := d.NewBatch()
-		for i := 0; i < 4000; i++ {
+		for i := 0; i < nKeys; i++ {
 			k := []byte(fmt.Sprintf("k%06d", i))
 			if err := b.Set(k, value); err != nil {
 				t.Fatalf("set: %v", err)
@@ -64,12 +65,32 @@ func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 		t.Fatalf("expected vacuum to shrink index.db: before=%d after=%d", beforeInfo.Size(), afterInfo.Size())
 	}
 
-	got, err := d.Get([]byte("k000010"))
-	if err != nil {
-		t.Fatalf("get: %v", err)
+	// The vacuum rebuild depends on full iterator correctness; verify the full
+	// keyset remains readable and that a full scan sees exactly nKeys keys.
+	for i := 0; i < nKeys; i++ {
+		k := []byte(fmt.Sprintf("k%06d", i))
+		got, err := d.Get(k)
+		if err != nil {
+			t.Fatalf("get %q: %v", k, err)
+		}
+		if !bytes.Equal(got, value) {
+			t.Fatalf("value mismatch for %q", k)
+		}
 	}
-	if !bytes.Equal(got, value) {
-		t.Fatalf("value mismatch")
+	it, err := d.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("iterator: %v", err)
+	}
+	defer func() { _ = it.Close() }()
+	count := 0
+	for ; it.Valid(); it.Next() {
+		count++
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iter error: %v", err)
+	}
+	if count != nKeys {
+		t.Fatalf("expected %d keys via iterator, got %d", nKeys, count)
 	}
 }
 
