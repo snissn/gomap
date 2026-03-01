@@ -65,7 +65,6 @@ type kvSample struct {
 
 type benchConfig struct {
 	Mode              string
-	Compression       string
 	CompressionMode   string
 	BlockCodec        string
 	Template          string
@@ -96,7 +95,6 @@ const (
 
 type benchReport struct {
 	Mode                     string   `json:"mode"`
-	Compression              string   `json:"compression"`
 	CompressionMode          string   `json:"compression_mode,omitempty"`
 	BlockCodec               string   `json:"block_codec,omitempty"`
 	Template                 string   `json:"template"`
@@ -182,7 +180,6 @@ func main() {
 	maxEval := flag.Int("max-eval", 25_000, "Max eval values used per sweep (0 disables)")
 	benchKV := flag.Bool("bench-kv", false, "Enable KV throughput bench (TreeDB public API)")
 	benchMode := flag.String("bench-mode", "wal_on", "Bench write-path: wal_on|wal_off")
-	benchCompression := flag.String("bench-compression", "off", "Bench compression: on|off")
 	benchCompressionMode := flag.String("bench-compression-mode", "default", "Bench compression mode: default|off|dict|block")
 	benchBlockCodec := flag.String("bench-block-codec", "snappy", "Bench block codec when -bench-compression-mode=block: snappy|lz4")
 	benchTemplate := flag.String("bench-template", "off", "Bench template compression: on|off|prepass")
@@ -252,7 +249,6 @@ func main() {
 		}
 		cfg := benchConfig{
 			Mode:              *benchMode,
-			Compression:       *benchCompression,
 			CompressionMode:   *benchCompressionMode,
 			BlockCodec:        *benchBlockCodec,
 			Template:          *benchTemplate,
@@ -684,19 +680,11 @@ func decodeValue(value string, encoding string) ([]byte, error) {
 	}
 }
 
-func resolveBenchCompressionMode(mode, legacy string) (string, error) {
+func normalizeBenchCompressionMode(mode string) (string, error) {
 	m := strings.ToLower(strings.TrimSpace(mode))
 	switch m {
 	case "", "default", "unset":
-		l := strings.ToLower(strings.TrimSpace(legacy))
-		switch l {
-		case "", "off":
-			return "off", nil
-		case "on":
-			return "dict", nil
-		default:
-			return "", fmt.Errorf("unsupported -bench-compression=%q (expected on|off)", legacy)
-		}
+		return "off", nil
 	case "off", "dict", "block":
 		return m, nil
 	default:
@@ -718,7 +706,6 @@ func parseBenchBlockCodec(codec string) (string, treedb.ValueLogBlockCodec, erro
 
 func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSample, stats datasetStats, loadDur time.Duration) (*benchReport, error) {
 	cfg.Mode = strings.ToLower(strings.TrimSpace(cfg.Mode))
-	cfg.Compression = strings.ToLower(strings.TrimSpace(cfg.Compression))
 	cfg.CompressionMode = strings.ToLower(strings.TrimSpace(cfg.CompressionMode))
 	cfg.BlockCodec = strings.ToLower(strings.TrimSpace(cfg.BlockCodec))
 	cfg.Template = strings.ToLower(strings.TrimSpace(cfg.Template))
@@ -733,16 +720,11 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 	if cfg.Mode != "wal_on" && cfg.Mode != "wal_off" {
 		return nil, fmt.Errorf("unsupported -bench-mode=%q (expected wal_on|wal_off)", cfg.Mode)
 	}
-	mode, err := resolveBenchCompressionMode(cfg.CompressionMode, cfg.Compression)
+	mode, err := normalizeBenchCompressionMode(cfg.CompressionMode)
 	if err != nil {
 		return nil, err
 	}
 	cfg.CompressionMode = mode
-	if cfg.CompressionMode == "off" {
-		cfg.Compression = "off"
-	} else {
-		cfg.Compression = "on"
-	}
 	resolvedCodec, _, err := parseBenchBlockCodec(cfg.BlockCodec)
 	if err != nil {
 		return nil, err
@@ -1122,7 +1104,6 @@ func runKVBench(input string, capBytes int, cfg benchConfig, train, eval []kvSam
 
 	report := &benchReport{
 		Mode:                cfg.Mode,
-		Compression:         cfg.Compression,
 		CompressionMode:     cfg.CompressionMode,
 		BlockCodec:          cfg.BlockCodec,
 		Template:            cfg.Template,

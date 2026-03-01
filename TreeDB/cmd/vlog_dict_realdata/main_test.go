@@ -48,7 +48,6 @@ func TestWALOffCompressionActivatesDictBeforeSteady(t *testing.T) {
 
 	cfg := benchConfig{
 		Mode:             "wal_off",
-		Compression:      "on",
 		CompressionMode:  "dict",
 		BlockCodec:       "snappy",
 		RawMiB:           64,
@@ -121,24 +120,23 @@ func TestGenerateSyntheticKVDataset_CelestiaHeightPrefixFill(t *testing.T) {
 	}
 }
 
-func TestResolveBenchCompressionMode(t *testing.T) {
+func TestNormalizeBenchCompressionMode(t *testing.T) {
 	cases := []struct {
-		name   string
-		mode   string
-		legacy string
-		want   string
-		err    bool
+		name string
+		mode string
+		want string
+		err  bool
 	}{
-		{name: "legacy on", mode: "default", legacy: "on", want: "dict"},
-		{name: "legacy off", mode: "default", legacy: "off", want: "off"},
-		{name: "explicit block", mode: "block", legacy: "off", want: "block"},
-		{name: "explicit dict", mode: "dict", legacy: "off", want: "dict"},
-		{name: "bad explicit", mode: "nope", legacy: "off", err: true},
-		{name: "bad legacy", mode: "default", legacy: "maybe", err: true},
+		{name: "default", mode: "default", want: "off"},
+		{name: "unset empty", mode: "", want: "off"},
+		{name: "explicit block", mode: "block", want: "block"},
+		{name: "explicit dict", mode: "dict", want: "dict"},
+		{name: "explicit off", mode: "off", want: "off"},
+		{name: "bad explicit", mode: "nope", err: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveBenchCompressionMode(tc.mode, tc.legacy)
+			got, err := normalizeBenchCompressionMode(tc.mode)
 			if tc.err {
 				if err == nil {
 					t.Fatalf("expected error")
@@ -146,7 +144,7 @@ func TestResolveBenchCompressionMode(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("resolveBenchCompressionMode: %v", err)
+				t.Fatalf("normalizeBenchCompressionMode: %v", err)
 			}
 			if got != tc.want {
 				t.Fatalf("got %q want %q", got, tc.want)
@@ -251,7 +249,6 @@ func TestRunKVBench_WarmupRatioAccounting(t *testing.T) {
 	}
 	cfg := benchConfig{
 		Mode:             "wal_on",
-		Compression:      "off",
 		CompressionMode:  "off",
 		BlockCodec:       "snappy",
 		RawMiB:           4,
