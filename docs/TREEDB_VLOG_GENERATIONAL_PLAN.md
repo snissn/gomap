@@ -114,7 +114,7 @@ Bench-facing additions (`unified-bench` + `treemap stats`):
 
 - Run lightweight GC often for fully-unreferenced segments.
 - Prefer dead `hot` segments first where possible.
-- Enforce active-segment protection and snapshot-fenced reachability.
+- Enforce active-segment protection and snapshot-pinned reachability.
 
 ## 6. Coordinate Rewrite And Index Maintenance
 

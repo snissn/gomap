@@ -576,7 +576,7 @@ func TestRecovery_ReplaysPointerBackedValues(t *testing.T) {
 	}
 }
 
-func TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs(t *testing.T) {
+func TestRecovery_CommitBarrier_PublishesOnlyCommittedVLogRefs(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "maindb", "wal")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
@@ -647,7 +647,7 @@ func TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs(t *testing.T) {
 	}
 }
 
-func TestRecovery_PartialFlushFence_NoPhantomPointers(t *testing.T) {
+func TestRecovery_PartialFlushBarrier_NoPhantomPointers(t *testing.T) {
 	dir := t.TempDir()
 	walDir := filepath.Join(dir, "maindb", "wal")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {

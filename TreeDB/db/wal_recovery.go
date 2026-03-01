@@ -166,10 +166,10 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 	}
 
 	var (
-		batches       []commitBatch
-		legacyBatches []commitBatch
-		commitPaths   []string
-		readOrder     int
+		batches            []commitBatch
+		unsequencedBatches []commitBatch
+		commitPaths        []string
+		readOrder          int
 	)
 	for _, segment := range segments {
 		if segment.valueLog {
@@ -193,8 +193,8 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 				batch := commitBatch{seq: seq, order: readOrder, records: records}
 				readOrder++
 				if seq == 0 {
-					// Legacy commit logs don't carry sequence numbers; preserve read order.
-					legacyBatches = append(legacyBatches, batch)
+					// Unsequenced commit batches preserve read order.
+					unsequencedBatches = append(unsequencedBatches, batch)
 				} else {
 					batches = append(batches, batch)
 				}
@@ -227,14 +227,14 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		return err
 	}
 	defer func() { _ = inlineAppender.close() }()
-	for _, batch := range legacyBatches {
+	for _, batch := range unsequencedBatches {
 		if err := applyCommitBatch(db, batch.records, ridMap, inlineAppender); err != nil {
 			return err
 		}
 	}
 	for _, batch := range batches {
-		if !commitFenceSatisfied(batch.records, ridMap) {
-			// Sequence-numbered commit batches act as recovery fences. If any RID
+		if !commitBarrierSatisfied(batch.records, ridMap) {
+			// Sequence-numbered commit batches act as recovery barriers. If any RID
 			// referenced by the batch is absent from the scanned value-log set, we
 			// treat the whole batch as not committed and skip it.
 			continue
@@ -270,7 +270,7 @@ func commitBatchSeq(records []commitlog.Record) (uint64, error) {
 	return seq, nil
 }
 
-func commitFenceSatisfied(records []commitlog.Record, ridMap map[uint64]page.ValuePtr) bool {
+func commitBarrierSatisfied(records []commitlog.Record, ridMap map[uint64]page.ValuePtr) bool {
 	for _, rec := range records {
 		if rec.Op != commitlog.OpSetRID {
 			continue
