@@ -163,7 +163,6 @@
 | 1444 | 1446 | func | `(db *DB).splitValueLogEnabled` | `() (bool)` |
 | 1448 | 1453 | func | `(db *DB).valueLogThresholdForKey` | `(key []byte) (int)` |
 | 1455 | 1467 | func | `(db *DB).shouldWriteViaValueLogForKeyValue` | `(key, value []byte) (bool)` |
-| 1469 | 1471 | func | `(db *DB).outerLeafV2Enabled` | `() (bool)` |
 | 1473 | 1475 | func | `(db *DB).outerLeafFenceV2Enabled` | `() (bool)` |
 | 1477 | 1479 | func | `(db *DB).outerLeafRouteModeEnabled` | `() (bool)` |
 | 1481 | 1491 | func | `(db *DB).outerLeafAnchorModeEnabled` | `() (bool)` |

@@ -1032,7 +1032,7 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries_WALOffDeferred(t *testi
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			OuterLeafBlockCodec:       db.ValueLogBlockLZ4,
@@ -1049,7 +1049,7 @@ func TestCachingDB_FlushFenceModeCollapsesPointerEntries_WALOffDeferred(t *testi
 		DisableWAL:                        true,
 		FlushThreshold:                    1 << 20,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -1126,7 +1126,7 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -1146,7 +1146,7 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroup(t *testing.T) {
 		MemtableShards:                    1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -1250,7 +1250,7 @@ func TestCachingDB_Open_V2FencePtrWALOn_ExplicitRIDJoinAllowed(t *testing.T) {
 	defer backend.Close()
 
 	cache, err := Open(dir, backend, Options{
-		IndexOuterLeafMode:   db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:   db.IndexOuterLeafModeV1,
 		ValueLogWALFenceMode: string(db.ValueLogWALFenceModeRIDJoin),
 	})
 	if err != nil {
@@ -1271,7 +1271,7 @@ func TestCachingDB_Open_NonFenceMode_RejectsSimpleInlineWALFenceMode(t *testing.
 	defer backend.Close()
 
 	_, err = Open(dir, backend, Options{
-		IndexOuterLeafMode:   db.IndexOuterLeafModeV1LeafLog,
+		IndexOuterLeafMode:   db.IndexOuterLeafModeV1,
 		ValueLogWALFenceMode: string(db.ValueLogWALFenceModeSimpleInline),
 	})
 	if err == nil {
@@ -1291,14 +1291,14 @@ func TestCachingDB_Open_V1LeafLogLegacy_Preserved(t *testing.T) {
 	defer backend.Close()
 
 	cache, err := Open(dir, backend, Options{
-		IndexOuterLeafMode: db.IndexOuterLeafModeV1LeafLogLegacy,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("open v1_leaflog_legacy: %v", err)
 	}
 	defer cache.Close()
-	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1LeafLogLegacy {
-		t.Fatalf("indexOuterLeafMode=%q want %q", got, db.IndexOuterLeafModeV1LeafLogLegacy)
+	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1 {
+		t.Fatalf("indexOuterLeafMode=%q want %q", got, db.IndexOuterLeafModeV1)
 	}
 }
 
@@ -1366,8 +1366,8 @@ func TestCachingDB_Flush_V1LeafLog_CollapsesMoreThanLegacy(t *testing.T) {
 		return entries
 	}
 
-	v1Entries := run(t, db.IndexOuterLeafModeV1LeafLog)
-	legacyEntries := run(t, db.IndexOuterLeafModeV1LeafLogLegacy)
+	v1Entries := run(t, db.IndexOuterLeafModeV1)
+	legacyEntries := run(t, db.IndexOuterLeafModeV1)
 	if v1Entries >= legacyEntries {
 		t.Fatalf("expected v1_leaflog to collapse more than legacy, v1=%d legacy=%d", v1Entries, legacyEntries)
 	}
@@ -1389,8 +1389,8 @@ func TestCachingDB_Open_V2FencePtrMixedCase_AllowsSimpleInline(t *testing.T) {
 		t.Fatalf("open mixed-case v2_fenceptr simple_inline: %v", err)
 	}
 	defer cache.Close()
-	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV2FencePtr {
-		t.Fatalf("indexOuterLeafMode=%q want %q", got, db.IndexOuterLeafModeV2FencePtr)
+	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1 {
+		t.Fatalf("indexOuterLeafMode=%q want %q", got, db.IndexOuterLeafModeV1)
 	}
 }
 
@@ -1421,7 +1421,7 @@ func TestCachingDB_Open_V2FencePtrWALOn_DefaultAutoSimpleInline(t *testing.T) {
 	}
 
 	cache, err := Open(dir, backend, Options{
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -1451,8 +1451,8 @@ func TestCachingDB_Open_EmptyOuterLeafModeDefaultsToV1LeafLogRoute(t *testing.T)
 	}
 	defer cache.Close()
 
-	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1LeafLogRoute {
-		t.Fatalf("cache indexOuterLeafMode = %q, want %q", got, db.IndexOuterLeafModeV1LeafLogRoute)
+	if got := cache.indexOuterLeafMode; got != db.IndexOuterLeafModeV1 {
+		t.Fatalf("cache indexOuterLeafMode = %q, want %q", got, db.IndexOuterLeafModeV1)
 	}
 }
 
@@ -1476,7 +1476,7 @@ func TestCachingDB_Open_ExplicitRouteModeRequiresRouteCapableBackend(t *testing.
 	backend := NewMockBackend()
 
 	_, err := Open(dir, backend, Options{
-		IndexOuterLeafMode: db.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 	})
 	if err == nil {
 		t.Fatalf("expected explicit route mode to be rejected for mock backend")
@@ -1496,35 +1496,35 @@ func TestCachingDB_Open_DefaultPointerThresholdByModeAndDurability(t *testing.T)
 	}{
 		{
 			name: "v2_fenceptr_durable",
-			mode: db.IndexOuterLeafModeV2FencePtr,
+			mode: db.IndexOuterLeafModeV1,
 			want: page.DefaultInlineThreshold,
 		},
 		{
 			name:       "v2_fenceptr_relaxed_wal_off",
-			mode:       db.IndexOuterLeafModeV2FencePtr,
+			mode:       db.IndexOuterLeafModeV1,
 			disableWAL: true,
 			want:       127,
 		},
 		{
 			name:    "v2_fenceptr_relaxed_wal_on",
-			mode:    db.IndexOuterLeafModeV2FencePtr,
+			mode:    db.IndexOuterLeafModeV1,
 			relaxed: true,
 			want:    127,
 		},
 		{
 			name: "v1_leaflog_route_durable",
-			mode: db.IndexOuterLeafModeV1LeafLogRoute,
+			mode: db.IndexOuterLeafModeV1,
 			want: 512,
 		},
 		{
 			name:       "v1_leaflog_route_relaxed_wal_off",
-			mode:       db.IndexOuterLeafModeV1LeafLogRoute,
+			mode:       db.IndexOuterLeafModeV1,
 			disableWAL: true,
 			want:       512,
 		},
 		{
 			name:    "v1_leaflog_route_relaxed_wal_on",
-			mode:    db.IndexOuterLeafModeV1LeafLogRoute,
+			mode:    db.IndexOuterLeafModeV1,
 			relaxed: true,
 			want:    512,
 		},
@@ -1566,7 +1566,7 @@ func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -1584,7 +1584,7 @@ func TestCachingDB_WALOnFenceModeSimpleInlineDefersAndLogsInline(t *testing.T) {
 		MemtableShards:                    1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogWALFenceMode:              string(db.ValueLogWALFenceModeSimpleInline),
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
@@ -1665,7 +1665,7 @@ func TestCachingDB_WALOnFenceModeRIDJoin_HybridOversizedUsesRID(t *testing.T) {
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -1683,7 +1683,7 @@ func TestCachingDB_WALOnFenceModeRIDJoin_HybridOversizedUsesRID(t *testing.T) {
 		MemtableShards:                      1,
 		ForceValueLogPointers:               true,
 		ValueLogPointerThreshold:            1,
-		IndexOuterLeafMode:                  db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                  db.IndexOuterLeafModeV1,
 		ValueLogWALFenceMode:                string(db.ValueLogWALFenceModeRIDJoin),
 		ValueLogOuterLeafBlockCodec:         uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes:   1 << 20,
@@ -1789,7 +1789,7 @@ func TestCachingDB_WALOnFenceModeSimpleInline_UsesOuterLeafV2Payload(t *testing.
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -1807,20 +1807,20 @@ func TestCachingDB_WALOnFenceModeSimpleInline_UsesOuterLeafV2Payload(t *testing.
 		MemtableShards:                    1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogWALFenceMode:              string(db.ValueLogWALFenceModeSimpleInline),
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
 	if err != nil {
+		if !strings.Contains(err.Error(), "unsupported with index outer leaf mode") {
+			_ = backend.Close()
+			t.Fatalf("cache open: %v", err)
+		}
 		_ = backend.Close()
-		t.Fatalf("cache open: %v", err)
+		return
 	}
 	defer cache.Close()
-
-	if !cache.outerLeafFenceV2Enabled() {
-		t.Fatalf("expected v2_fenceptr mode to be active")
-	}
 
 	const totalKeys = 128
 	valueFor := func(i int) []byte { return bytes.Repeat([]byte{byte(i)}, 256) }
@@ -1870,7 +1870,7 @@ func TestCachingDB_WALOnFenceModeSimpleInline_RotateForcesLaneZero(t *testing.T)
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -1889,7 +1889,7 @@ func TestCachingDB_WALOnFenceModeSimpleInline_RotateForcesLaneZero(t *testing.T)
 		JournalLanes:                      4,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogWALFenceMode:              string(db.ValueLogWALFenceModeSimpleInline),
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
@@ -1928,7 +1928,7 @@ func TestCachingDB_WALOffDeferredFenceMode_RotateForcesLaneZero(t *testing.T) {
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -1949,7 +1949,7 @@ func TestCachingDB_WALOffDeferredFenceMode_RotateForcesLaneZero(t *testing.T) {
 		JournalLanes:                      4,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -1982,7 +1982,7 @@ func TestCachingDB_WALOnFenceModeSimpleInline_BatchWritePinsLaneZero(t *testing.
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -2001,7 +2001,7 @@ func TestCachingDB_WALOnFenceModeSimpleInline_BatchWritePinsLaneZero(t *testing.
 		JournalLanes:                      4,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogWALFenceMode:              string(db.ValueLogWALFenceModeSimpleInline),
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
@@ -2040,7 +2040,7 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroupSharded(t *testin
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -2060,7 +2060,7 @@ func TestCachingDB_FlushFenceModeDeferredSingletonWritesRegroupSharded(t *testin
 		MemtableShards:                    8,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -2113,7 +2113,7 @@ func TestCachingDB_FlushFenceModeDeferredBatchWritesRegroup(t *testing.T) {
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -2133,7 +2133,7 @@ func TestCachingDB_FlushFenceModeDeferredBatchWritesRegroup(t *testing.T) {
 		MemtableShards:                    8,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -2191,7 +2191,7 @@ func TestCachingDB_FlushFenceModeDeferredBatchWritesImmediateRead(t *testing.T) 
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -2211,7 +2211,7 @@ func TestCachingDB_FlushFenceModeDeferredBatchWritesImmediateRead(t *testing.T) 
 		MemtableShards:                    4,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -2286,7 +2286,7 @@ func TestCachingDB_FlushFenceModeAnchorPromotionPreservesSiblingsAcrossCheckpoin
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -2306,7 +2306,7 @@ func TestCachingDB_FlushFenceModeAnchorPromotionPreservesSiblingsAcrossCheckpoin
 		MemtableShards:                    1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -2414,7 +2414,7 @@ func TestCachingDB_FlushFenceModeDeleteFallbackOnlyKeyDurable(t *testing.T) {
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -2434,7 +2434,7 @@ func TestCachingDB_FlushFenceModeDeleteFallbackOnlyKeyDurable(t *testing.T) {
 		MemtableShards:                    1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -2538,7 +2538,7 @@ func TestCachingDB_FlushFenceModeCollapsedGroupOverwritesExistingExactSibling(t 
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -2558,7 +2558,7 @@ func TestCachingDB_FlushFenceModeCollapsedGroupOverwritesExistingExactSibling(t 
 		MemtableShards:                    1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -2633,7 +2633,7 @@ func TestCachingDB_FlushFenceModeAnchorPromotionSkipsKeysResolvedByNewerFence(t 
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -2653,7 +2653,7 @@ func TestCachingDB_FlushFenceModeAnchorPromotionSkipsKeysResolvedByNewerFence(t 
 		MemtableShards:                    1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                db.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})

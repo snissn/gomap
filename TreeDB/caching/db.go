@@ -1195,7 +1195,7 @@ func (db *DB) maybeValidateV1LeafLogInvariants() error {
 		return nil
 	}
 	mode := strings.TrimSpace(db.indexOuterLeafMode)
-	if mode != backenddb.IndexOuterLeafModeV1LeafLog && mode != backenddb.IndexOuterLeafModeV1LeafLogRoute {
+	if mode != backenddb.IndexOuterLeafModeV1 {
 		return nil
 	}
 	err := db.validateV1LeafLogDirectoryInvariants()
@@ -1210,10 +1210,10 @@ func (db *DB) validateV1LeafLogDirectoryInvariants() error {
 		return nil
 	}
 	mode := strings.TrimSpace(db.indexOuterLeafMode)
-	if mode != backenddb.IndexOuterLeafModeV1LeafLog && mode != backenddb.IndexOuterLeafModeV1LeafLogRoute {
+	if mode != backenddb.IndexOuterLeafModeV1 {
 		return nil
 	}
-	routeMode := mode == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeMode := mode == backenddb.IndexOuterLeafModeV1
 	if db.valueLogReader == nil {
 		return errors.New("cachingdb: missing value-log reader for v1_leaflog invariant validation")
 	}
@@ -1457,7 +1457,7 @@ func (db *DB) shouldWriteViaValueLogForKeyValue(key, value []byte) bool {
 		return false
 	}
 	switch strings.TrimSpace(db.indexOuterLeafMode) {
-	case backenddb.IndexOuterLeafModeV1LeafLogRoute:
+	case backenddb.IndexOuterLeafModeV1:
 		// Route mode stores values in outer-leaf value-log blocks and keeps
 		// directory anchors in the index.
 		return true
@@ -1466,28 +1466,16 @@ func (db *DB) shouldWriteViaValueLogForKeyValue(key, value []byte) bool {
 	}
 }
 
-func (db *DB) outerLeafV2Enabled() bool {
-	return db != nil && outerleaf.ModeEnabled(db.indexOuterLeafMode)
-}
-
 func (db *DB) outerLeafFenceV2Enabled() bool {
-	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV2FencePtr
+	return false
 }
 
 func (db *DB) outerLeafRouteModeEnabled() bool {
-	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 }
 
 func (db *DB) outerLeafAnchorModeEnabled() bool {
-	if db == nil {
-		return false
-	}
-	switch strings.TrimSpace(db.indexOuterLeafMode) {
-	case backenddb.IndexOuterLeafModeV2FencePtr, backenddb.IndexOuterLeafModeV1LeafLog, backenddb.IndexOuterLeafModeV1LeafLogRoute:
-		return true
-	default:
-		return false
-	}
+	return db != nil && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 }
 
 func (db *DB) mutableHasEntriesLocked() bool {
@@ -1633,7 +1621,7 @@ func (db *DB) effectiveOuterLeafBlobThresholdBytes() int {
 }
 
 func (db *DB) oversizedOuterLeafValue(value []byte) bool {
-	if db == nil || !db.outerLeafFenceV2Enabled() {
+	if db == nil {
 		return false
 	}
 	return len(value) >= db.effectiveOuterLeafBlobThresholdBytes()
@@ -1641,7 +1629,6 @@ func (db *DB) oversizedOuterLeafValue(value []byte) bool {
 
 func (db *DB) fenceRIDJoinHybridEnabled() bool {
 	return db != nil &&
-		db.outerLeafFenceV2Enabled() &&
 		!db.disableJournal &&
 		db.valueLogWALFenceMode == string(backenddb.ValueLogWALFenceModeRIDJoin)
 }
@@ -1651,7 +1638,7 @@ func (db *DB) selectOuterLeafBlockCodec(totalValueBytes, entryCount int) uint8 {
 		return uint8(backenddb.ValueLogBlockSnappy)
 	}
 	codec := db.outerLeafBlockCodec
-	if codec != uint8(backenddb.ValueLogBlockSnappy) || !db.outerLeafFenceV2Enabled() || entryCount <= 0 {
+	if codec != uint8(backenddb.ValueLogBlockSnappy) || entryCount <= 0 {
 		return codec
 	}
 	avgValueBytes := totalValueBytes / entryCount
@@ -1662,17 +1649,15 @@ func (db *DB) selectOuterLeafBlockCodec(totalValueBytes, entryCount int) uint8 {
 }
 
 func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
-	if !db.outerLeafV2Enabled() {
-		return value, nil
-	}
-	codec := db.selectOuterLeafBlockCodec(len(value), 1)
-	return outerleaf.EncodeSingle(nil, key, value, codec, db.outerLeafBlockRestart)
+	_ = key
+	return value, nil
 }
 
 func (db *DB) encodeOuterLeafBlobRef(dst, key []byte, ptr page.ValuePtr) ([]byte, error) {
-	if !db.outerLeafV2Enabled() {
-		return nil, fmt.Errorf("cachingdb: blob-ref outer-leaf encoding requires v2 mode")
-	}
+	_ = dst
+	_ = key
+	_ = ptr
+	return nil, fmt.Errorf("cachingdb: blob-ref outer-leaf encoding requires v2 mode")
 	enc := getOuterLeafEncoder()
 	defer putOuterLeafEncoder(enc)
 	var single [1]outerleaf.TypedEntry
@@ -1684,9 +1669,8 @@ func (db *DB) encodeOuterLeafBlobRef(dst, key []byte, ptr page.ValuePtr) ([]byte
 }
 
 func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
-	if !db.outerLeafV2Enabled() {
-		return value, nil
-	}
+	_ = key
+	return value, nil
 	entry, ok, found, _, err := outerleaf.DecodeEntryForKey(value, key, nil)
 	if err != nil {
 		return nil, err
@@ -2187,6 +2171,7 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 // The returned groups map each encoded record back to a contiguous source range
 // [start,end).
 func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
+	routeMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 	if len(keys) != len(values) {
 		return nil, nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
 	}
@@ -2197,7 +2182,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	groupsCap := len(keys)
 	entriesCap := 8
 
-	if db.outerLeafV2Enabled() && len(keys) > 1 {
+	if routeMode && len(keys) > 1 {
 		targetBytes := db.outerLeafBlockTargetBytes
 		if targetBytes <= 0 {
 			targetBytes = outerleaf.NormalizeBlockTargetBytes(0)
@@ -2241,7 +2226,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	records := getValueLogRecordsCap(recordsCap)
 	groups := make([]outerLeafRecordGroup, 0, groupsCap)
 
-	if !db.outerLeafV2Enabled() || len(keys) == 1 {
+	if !routeMode || len(keys) == 1 {
 		for i := range keys {
 			payload, err := db.encodeOuterLeafValue(keys[i], values[i])
 			if err != nil {
@@ -2655,7 +2640,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	}
 	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowMutableFencePointerCollapse()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 
 	eligible := getValueLogEligible(len(ops))
 	defer putValueLogEligible(eligible)
@@ -2709,7 +2694,7 @@ func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, err
 	var routeNormToSource []int
 	var records []valuelog.Record
 	var outerArena []byte
-	routeMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 	if routeMode {
 		ptrs, groups, routeNormToSource, err = db.writeRouteOuterLeafValueRecords(lane, dictID, keys, values, durability)
 		if err != nil {
@@ -3163,21 +3148,21 @@ func (p *fenceAnchorPromoter) v1LeafLogMode() bool {
 		return false
 	}
 	mode := strings.TrimSpace(p.db.indexOuterLeafMode)
-	return mode == backenddb.IndexOuterLeafModeV1LeafLog || mode == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	return mode == backenddb.IndexOuterLeafModeV1
 }
 
 func (p *fenceAnchorPromoter) v1LeafLogLegacyMode() bool {
 	if p == nil || p.db == nil {
 		return false
 	}
-	return strings.TrimSpace(p.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLog
+	return strings.TrimSpace(p.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 }
 
 func (p *fenceAnchorPromoter) v1LeafLogRouteMode() bool {
 	if p == nil || p.db == nil {
 		return false
 	}
-	return strings.TrimSpace(p.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	return strings.TrimSpace(p.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 }
 
 func (p *fenceAnchorPromoter) encodeAnchorPointer(basePtr page.ValuePtr) page.ValuePtr {
@@ -4860,7 +4845,7 @@ func (p *fenceAnchorPromoter) rematerializeFallbackSingleCandidate(sourceKey, mu
 		return false, nil
 	}
 	mode := strings.TrimSpace(p.db.indexOuterLeafMode)
-	if mode != backenddb.IndexOuterLeafModeV1LeafLog && mode != backenddb.IndexOuterLeafModeV1LeafLogRoute {
+	if mode != backenddb.IndexOuterLeafModeV1 {
 		return false, nil
 	}
 	provider, ok := p.db.backend.(fenceProjectionIteratorProvider)
@@ -5034,7 +5019,7 @@ func (p *fenceAnchorPromoter) maybeRematerializeFallbackMutation(mutationKey []b
 		return nil
 	}
 	mode := strings.TrimSpace(p.db.indexOuterLeafMode)
-	if mode == backenddb.IndexOuterLeafModeV1LeafLog || mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+	if mode == backenddb.IndexOuterLeafModeV1 {
 		hasNonDeleteMutation := false
 		if p.lookup != nil {
 			for i := range keys {
@@ -5049,7 +5034,7 @@ func (p *fenceAnchorPromoter) maybeRematerializeFallbackMutation(mutationKey []b
 			}
 		}
 		if hasNonDeleteMutation {
-			if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+			if mode == backenddb.IndexOuterLeafModeV1 {
 				// In route mode, mixed delete+set for the same source block must be
 				// resolved by the queued overlap rewrite path so one canonical anchor
 				// is published for the rewritten payload.
@@ -5090,7 +5075,7 @@ func (p *fenceAnchorPromoter) maybeRematerializeFallbackMutation(mutationKey []b
 			p.deleteRematerializedBySource[sourcePtr] = struct{}{}
 			return nil
 		}
-		if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+		if mode == backenddb.IndexOuterLeafModeV1 {
 			// Route mode must never persist per-key exact fallback rows.
 			// When block rewrite cannot proceed, fail instead of rematerializing.
 			return fmt.Errorf("cachingdb: v1_leaflog_route requires fallback block rewrite for key %q", mutationKey)
@@ -5154,7 +5139,7 @@ func (p *fenceAnchorPromoter) maybePromoteAnchor(key []byte, pending fencePendin
 		return nil
 	}
 	mode := strings.TrimSpace(p.db.indexOuterLeafMode)
-	routeMode := mode == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeMode := mode == backenddb.IndexOuterLeafModeV1
 	if !p.keyCouldExistInBackend(key) {
 		return nil
 	}
@@ -5166,7 +5151,7 @@ func (p *fenceAnchorPromoter) maybePromoteAnchor(key []byte, pending fencePendin
 	if err != nil {
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			if pending.kind == fencePendingMutationDelete {
-				allowExactFallback := mode != backenddb.IndexOuterLeafModeV1LeafLog && mode != backenddb.IndexOuterLeafModeV1LeafLogRoute
+				allowExactFallback := false
 				return p.maybeRematerializeFallbackMutation(key, snap, emitPointer, emitDelete, allowExactFallback)
 			}
 			return nil
@@ -5424,7 +5409,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 	ps, _ := backendBatch.(ptrSetter)
 	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 	reserveHint := scaledReserveHint(memLen, db.flushBackendInitEntries)
 	if routeAnchorMode && collapseFence {
 		routeHint := scaledRouteDeferredReserveHint(memLen, db.flushBackendMaxEntries)
@@ -6113,7 +6098,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	allowPointers := db.allowValueLogPointers()
 	fenceMode := db.outerLeafAnchorModeEnabled()
 	collapseFence := fenceMode && db.allowFencePointerCollapse()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 
 	durability := journalDurabilityNone
 	if sync {
@@ -9232,31 +9217,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	}
 	normalizedOuterLeafMode := strings.ToLower(strings.TrimSpace(opts.IndexOuterLeafMode))
-	outerLeafModeExplicit := normalizedOuterLeafMode != ""
+	if normalizedOuterLeafMode == "" {
+		normalizedOuterLeafMode = backenddb.IndexOuterLeafModeV1
+	}
+	if normalizedOuterLeafMode != backenddb.IndexOuterLeafModeV1 {
+		return nil, fmt.Errorf("cachingdb: unsupported index outer-leaf mode %q (expected %s)", opts.IndexOuterLeafMode, backenddb.IndexOuterLeafModeV1)
+	}
 	indexOuterLeafMode := normalizedOuterLeafMode
-	if indexOuterLeafMode == "" {
-		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1LeafLogRoute
-	}
-	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2BlockPtr &&
-		indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr &&
-		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLog &&
-		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLogRoute &&
-		indexOuterLeafMode != backenddb.IndexOuterLeafModeV1LeafLogLegacy {
-		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
-	}
-	if indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute && !backendSupportsRouteMode(backend) {
-		if outerLeafModeExplicit {
-			return nil, errors.New("cachingdb: index outer leaf mode v1_leaflog_route requires backend SetPointer support plus IteratorWithOptions and AcquireSnapshot")
-		}
-		// Generic/mock backends used by caching tests and adapters do not always
-		// expose route-mode pointer/index primitives. Keep the non-v2 default path
-		// by falling back to v1 rather than v2_fenceptr.
-		indexOuterLeafMode = backenddb.IndexOuterLeafModeV1
-	}
 	// In relaxed durability modes, storing moderate values out-of-line avoids a
 	// catastrophic random_write cliff at large key counts (perf gate II / #229).
 	//
-	// v1_leaflog_route stores outer-leaf payloads in the value log already; a
+	// Route mode stores outer-leaf payloads in the value log; a
 	// higher default threshold keeps medium values inline inside route payloads
 	// and avoids second-hop pointer indirection.
 	const (
@@ -9267,7 +9238,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogThreshold := opts.ValueLogPointerThreshold
 	if valueLogThreshold <= 0 {
 		switch indexOuterLeafMode {
-		case backenddb.IndexOuterLeafModeV1LeafLogRoute:
+		case backenddb.IndexOuterLeafModeV1:
 			valueLogThreshold = defaultRouteValueLogThreshold
 		default:
 			valueLogThreshold = defaultDurableValueLogThreshold
@@ -9295,12 +9266,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogWALFenceMode != string(backenddb.ValueLogWALFenceModeSimpleInline) {
 		return nil, fmt.Errorf("cachingdb: invalid value-log WAL fence mode %q", opts.ValueLogWALFenceMode)
 	}
-	if indexOuterLeafMode != backenddb.IndexOuterLeafModeV2FencePtr &&
-		valueLogWALFenceMode == string(backenddb.ValueLogWALFenceModeSimpleInline) {
-		return nil, fmt.Errorf("cachingdb: value-log WAL fence mode %q requires index outer leaf mode %q", opts.ValueLogWALFenceMode, backenddb.IndexOuterLeafModeV2FencePtr)
+	if valueLogWALFenceMode == string(backenddb.ValueLogWALFenceModeSimpleInline) {
+		return nil, fmt.Errorf("cachingdb: value-log WAL fence mode %q is unsupported with index outer leaf mode %q", opts.ValueLogWALFenceMode, backenddb.IndexOuterLeafModeV1)
 	}
 	outerLeafBlockTargetOpt := opts.ValueLogOuterLeafBlockTargetBytes
-	if outerLeafBlockTargetOpt <= 0 && indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr {
+	if outerLeafBlockTargetOpt <= 0 && indexOuterLeafMode == backenddb.IndexOuterLeafModeV1 {
 		outerLeafBlockTargetOpt = defaultOuterLeafFenceBlockTargetBytes
 	}
 	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(outerLeafBlockTargetOpt)
@@ -9311,16 +9281,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("cachingdb: invalid value-log outer leaf blob threshold bytes %d", outerLeafBlobThreshold)
 	}
 	disableJournal := opts.DisableWAL
-	if indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr && !disableJournal {
-		// Keep existing default semantics: WAL-on v2_fenceptr defaults to
-		// simple_inline unless caller explicitly chooses a compatible mode.
-		if rawValueLogWALFenceMode == "" {
-			valueLogWALFenceMode = string(backenddb.ValueLogWALFenceModeSimpleInline)
-		}
-	}
 	if writerFlushMaxMemtablesUnset &&
 		disableJournal &&
-		indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr &&
+		indexOuterLeafMode == backenddb.IndexOuterLeafModeV1 &&
 		opts.WriterFlushMaxMemtables < v2DeferredAssistSlowdownMinMemtables {
 		opts.WriterFlushMaxMemtables = v2DeferredAssistSlowdownMinMemtables
 	}
@@ -9345,10 +9308,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	mutableShards := make([]memShard, shardCount)
 	appendOnlyEstimate := 0
 	if mode == memtable.ModeAppendOnly &&
-		(indexOuterLeafMode == backenddb.IndexOuterLeafModeV2FencePtr ||
-			indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLog ||
-			indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute ||
-			indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogLegacy) {
+		indexOuterLeafMode == backenddb.IndexOuterLeafModeV1 {
 		appendOnlyEstimate = appendOnlyEstimatedBytesPerEntryDeferredFence
 	}
 	for i := range mutableShards {
@@ -9662,7 +9622,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.ridBootstrapSegmentsScanned,
 		db.ridBootstrapRecordsScanned,
 	)
-	if db.indexOuterLeafMode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+	if db.indexOuterLeafMode == backenddb.IndexOuterLeafModeV1 {
 		// Route mode must regroup key/value mutations into directory-backed
 		// outer-leaf blocks at flush time. Per-key pointer memtable rows can
 		// collapse by shared record and leave stale exact rows reachable.
@@ -12540,7 +12500,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	)
 
 	rawPayloadBytes := 0
-	routeOuterLeafMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeOuterLeafMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
 	}
@@ -12564,7 +12524,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 
 	// Track v2 outer-leaf payload batches so raw-mode append paths can use the
 	// buffered frame writer when selected.
-	autoOuterLeafPayloads := db.outerLeafV2Enabled() &&
+	autoOuterLeafPayloads := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1 &&
 		!templatePrepass &&
 		dictID == 0 &&
 		allOuterLeafRecordValues(records)
@@ -14474,7 +14434,7 @@ func (db *DB) routeLeafLogWriterAssistEnabled() bool {
 	if db == nil {
 		return false
 	}
-	return db.disableJournal && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	return db.disableJournal && strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 }
 
 func (db *DB) maybeAssistFlush() {
@@ -14858,7 +14818,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	eligible := db.shouldWriteViaValueLogForKeyValue(key, value)
 	valueLogEnabled := db.valueLogEnabled()
 	allowPointers := eligible && valueLogEnabled && db.allowValueLogPointers()
-	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+	routeAnchorMode := strings.TrimSpace(db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 	routeHugeImmediate := routeAnchorMode && !db.disableJournal && db.largeValueNeedsChunking(len(value))
 	hybridRIDJoin := allowPointers && db.fenceRIDJoinHybridEnabled()
 	oversized := hybridRIDJoin && db.oversizedOuterLeafValue(value)
@@ -20705,7 +20665,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 		return false, nil
 	}
 	mode := strings.TrimSpace(b.db.indexOuterLeafMode)
-	if b.db.outerLeafAnchorModeEnabled() && mode != backenddb.IndexOuterLeafModeV1LeafLogRoute {
+	if b.db.outerLeafAnchorModeEnabled() && mode != backenddb.IndexOuterLeafModeV1 {
 		// Non-route anchor modes need flush-time fence collapse semantics; direct
 		// stream bypass emits backend pointer ops at commit boundaries and can
 		// regress immediate read/prefix-scan behavior.
@@ -20753,7 +20713,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	}
 	// Route-mode bypass is only safe for strict append-only batches beyond the
 	// persisted backend max key as well.
-	if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute && backendRangeKnown && backendRange.valid {
+	if mode == backenddb.IndexOuterLeafModeV1 && backendRangeKnown && backendRange.valid {
 		if bytes.Compare(b.firstKey, backendRange.max) <= 0 {
 			return false, nil
 		}
@@ -21000,7 +20960,6 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 		}
 		multiLanePointers = allowPointers &&
-			!b.db.outerLeafV2Enabled() &&
 			b.db.disableJournal &&
 			durability == journalDurabilityNone &&
 			len(b.db.lanes) > 1 &&
@@ -21219,7 +21178,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				keys = append(keys, op.Key)
 				values = append(values, op.Value)
 			}
-			routeMode := strings.TrimSpace(b.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1LeafLogRoute
+			routeMode := strings.TrimSpace(b.db.indexOuterLeafMode) == backenddb.IndexOuterLeafModeV1
 			var (
 				ptrs              []page.ValuePtr
 				groups            []outerLeafRecordGroup
