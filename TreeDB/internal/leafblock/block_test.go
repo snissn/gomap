@@ -1238,26 +1238,26 @@ func TestDecodeLowerBoundAndKeysOnMatchLeaseWithVerify_V3(t *testing.T) {
 	}
 }
 
-func TestOuterLeafPoolCapsBounded(t *testing.T) {
-	if maxPooledOuterLeafBytesCap > (1 << 20) {
-		t.Fatalf("maxPooledOuterLeafBytesCap=%d want <=1MiB", maxPooledOuterLeafBytesCap)
+func TestLeafBlockPoolCapsBounded(t *testing.T) {
+	if maxPooledLeafBlockBytesCap > (1 << 20) {
+		t.Fatalf("maxPooledLeafBlockBytesCap=%d want <=1MiB", maxPooledLeafBlockBytesCap)
 	}
-	if maxPooledOuterLeafRestartsCap > 4096 {
-		t.Fatalf("maxPooledOuterLeafRestartsCap=%d want <=4096", maxPooledOuterLeafRestartsCap)
+	if maxPooledLeafBlockRestartsCap > 4096 {
+		t.Fatalf("maxPooledLeafBlockRestartsCap=%d want <=4096", maxPooledLeafBlockRestartsCap)
 	}
-	if maxPooledOuterLeafLeaseKeysCap > 4096 {
-		t.Fatalf("maxPooledOuterLeafLeaseKeysCap=%d want <=4096", maxPooledOuterLeafLeaseKeysCap)
+	if maxPooledLeafBlockLeaseKeysCap > 4096 {
+		t.Fatalf("maxPooledLeafBlockLeaseKeysCap=%d want <=4096", maxPooledLeafBlockLeaseKeysCap)
 	}
-	if maxPooledOuterLeafLeaseArenaCap > (1 << 20) {
-		t.Fatalf("maxPooledOuterLeafLeaseArenaCap=%d want <=1MiB", maxPooledOuterLeafLeaseArenaCap)
+	if maxPooledLeafBlockLeaseArenaCap > (1 << 20) {
+		t.Fatalf("maxPooledLeafBlockLeaseArenaCap=%d want <=1MiB", maxPooledLeafBlockLeaseArenaCap)
 	}
 }
 
 func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
-	for outerLeafLeaseKeysPool.Get() != nil {
+	for leafBlockLeaseKeysPool.Get() != nil {
 	}
 	t.Cleanup(func() {
-		for outerLeafLeaseKeysPool.Get() != nil {
+		for leafBlockLeaseKeysPool.Get() != nil {
 		}
 	})
 
@@ -1271,10 +1271,10 @@ func TestGetPooledLeaseKeys_RequeuesUndersizedBuffer(t *testing.T) {
 }
 
 func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
-	for outerLeafLeaseArenaPool.Get() != nil {
+	for leafBlockLeaseArenaPool.Get() != nil {
 	}
 	t.Cleanup(func() {
-		for outerLeafLeaseArenaPool.Get() != nil {
+		for leafBlockLeaseArenaPool.Get() != nil {
 		}
 	})
 
@@ -1288,10 +1288,10 @@ func TestGetPooledLeaseArena_RequeuesUndersizedArena(t *testing.T) {
 }
 
 func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
-	for outerLeafLeaseKeysPool.Get() != nil {
+	for leafBlockLeaseKeysPool.Get() != nil {
 	}
 	t.Cleanup(func() {
-		for outerLeafLeaseKeysPool.Get() != nil {
+		for leafBlockLeaseKeysPool.Get() != nil {
 		}
 	})
 
@@ -1343,10 +1343,10 @@ func TestGetPooledLeaseKeys_WarmReuseAndClearsBuffer(t *testing.T) {
 }
 
 func TestGetPooledLeaseArena_WarmReuse(t *testing.T) {
-	for outerLeafLeaseArenaPool.Get() != nil {
+	for leafBlockLeaseArenaPool.Get() != nil {
 	}
 	t.Cleanup(func() {
-		for outerLeafLeaseArenaPool.Get() != nil {
+		for leafBlockLeaseArenaPool.Get() != nil {
 		}
 	})
 

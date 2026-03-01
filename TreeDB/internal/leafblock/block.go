@@ -27,11 +27,11 @@ const (
 
 	// Skip full-block compression when a small sample shows incompressible or
 	// near-incompressible behavior.
-	outerLeafIncompressibleProbeMinBytes = 1024
-	outerLeafIncompressibleProbeBytes    = 512
-	outerLeafMinSavingsDiv               = 50 // 2%
-	outerLeafMinSavingsBytes             = 8
-	outerLeafHighEntropyUniqueThreshold  = 224
+	leafBlockIncompressibleProbeMinBytes = 1024
+	leafBlockIncompressibleProbeBytes    = 512
+	leafBlockMinSavingsDiv               = 50 // 2%
+	leafBlockMinSavingsBytes             = 8
+	leafBlockHighEntropyUniqueThreshold  = 224
 )
 
 var blockMagic = [4]byte{'T', 'O', 'L', '2'}
@@ -40,42 +40,42 @@ const (
 	// Keep pooled scratch buffers bounded to avoid retaining outsized slices.
 	// These classed pools trade additional retained memory for fewer decode
 	// allocations on hot read paths.
-	maxPooledOuterLeafBytesCap      = 512 << 10
-	maxPooledOuterLeafRestartsCap   = 4096
-	maxPooledOuterLeafLeaseKeysCap  = 4096
-	maxPooledOuterLeafLeaseArenaCap = 1 << 20
-	outerLeafBytesMinClassShift     = 10 // 1 KiB
-	outerLeafBytesMaxClassShift     = 19 // 512 KiB
-	outerLeafBytesClassCount        = outerLeafBytesMaxClassShift - outerLeafBytesMinClassShift + 1
+	maxPooledLeafBlockBytesCap      = 512 << 10
+	maxPooledLeafBlockRestartsCap   = 4096
+	maxPooledLeafBlockLeaseKeysCap  = 4096
+	maxPooledLeafBlockLeaseArenaCap = 1 << 20
+	leafBlockBytesMinClassShift     = 10 // 1 KiB
+	leafBlockBytesMaxClassShift     = 19 // 512 KiB
+	leafBlockBytesClassCount        = leafBlockBytesMaxClassShift - leafBlockBytesMinClassShift + 1
 )
 
 var (
-	outerLeafBytesPools     [outerLeafBytesClassCount]sync.Pool
-	outerLeafBytesEntryPool = sync.Pool{
+	leafBlockBytesPools     [leafBlockBytesClassCount]sync.Pool
+	leafBlockBytesEntryPool = sync.Pool{
 		New: func() any {
 			return &bytesPoolEntry{}
 		},
 	}
-	outerLeafRestartsPool      sync.Pool
-	outerLeafRestartsEntryPool = sync.Pool{
+	leafBlockRestartsPool      sync.Pool
+	leafBlockRestartsEntryPool = sync.Pool{
 		New: func() any {
 			return &restartsPoolEntry{}
 		},
 	}
-	outerLeafLeaseKeysPool      sync.Pool
-	outerLeafLeaseArenaPool     sync.Pool
-	outerLeafLeaseKeysEntryPool = sync.Pool{
+	leafBlockLeaseKeysPool      sync.Pool
+	leafBlockLeaseArenaPool     sync.Pool
+	leafBlockLeaseKeysEntryPool = sync.Pool{
 		New: func() any {
 			return &leaseKeysPoolEntry{}
 		},
 	}
-	outerLeafLeaseArenaEntryPool = sync.Pool{
+	leafBlockLeaseArenaEntryPool = sync.Pool{
 		New: func() any {
 			return &leaseArenaPoolEntry{}
 		},
 	}
-	outerLeafKeyLeasePool sync.Pool
-	outerLeafKeyChunkPool = sync.Pool{
+	leafBlockKeyLeasePool sync.Pool
+	leafBlockKeyChunkPool = sync.Pool{
 		New: func() any {
 			return &keyLeaseChunk{}
 		},
@@ -291,9 +291,9 @@ func minCompressionSavings(rawLen int) int {
 	if rawLen <= 1 {
 		return 1
 	}
-	minSavings := rawLen / outerLeafMinSavingsDiv
-	if minSavings < outerLeafMinSavingsBytes {
-		minSavings = outerLeafMinSavingsBytes
+	minSavings := rawLen / leafBlockMinSavingsDiv
+	if minSavings < leafBlockMinSavingsBytes {
+		minSavings = leafBlockMinSavingsBytes
 	}
 	if minSavings >= rawLen {
 		minSavings = rawLen - 1
@@ -311,28 +311,28 @@ func keepCompressedPayload(rawLen, encodedLen int) bool {
 	return rawLen-encodedLen >= minCompressionSavings(rawLen)
 }
 
-func sampleForIncompressibleProbe(raw []byte, sampleBuf *[outerLeafIncompressibleProbeBytes]byte) []byte {
-	if len(raw) <= outerLeafIncompressibleProbeBytes {
+func sampleForIncompressibleProbe(raw []byte, sampleBuf *[leafBlockIncompressibleProbeBytes]byte) []byte {
+	if len(raw) <= leafBlockIncompressibleProbeBytes {
 		return raw
 	}
 	// Spread the sample across the full payload so a compressible middle section
 	// is still represented (prefix+suffix-only sampling can miss it).
 	last := len(raw) - 1
-	for i := 0; i < outerLeafIncompressibleProbeBytes; i++ {
-		idx := (i * last) / (outerLeafIncompressibleProbeBytes - 1)
+	for i := 0; i < leafBlockIncompressibleProbeBytes; i++ {
+		idx := (i * last) / (leafBlockIncompressibleProbeBytes - 1)
 		sampleBuf[i] = raw[idx]
 	}
 	return sampleBuf[:]
 }
 
 func shouldBypassCompressionProbe(codec uint8, raw []byte, dst []byte) bool {
-	if len(raw) < outerLeafIncompressibleProbeMinBytes {
+	if len(raw) < leafBlockIncompressibleProbeMinBytes {
 		return false
 	}
 	if normalizeCodec(codec) != blockCodecLZ4 {
 		return false
 	}
-	var sampleBuf [outerLeafIncompressibleProbeBytes]byte
+	var sampleBuf [leafBlockIncompressibleProbeBytes]byte
 	sample := sampleForIncompressibleProbe(raw, &sampleBuf)
 	// Fast-path clearly high-entropy blocks to raw mode and skip probe/full
 	// codec work.
@@ -364,7 +364,7 @@ func isLikelyHighEntropy(sample []byte) bool {
 		seen[b>>6] |= 1 << (b & 63)
 	}
 	unique := bits.OnesCount64(seen[0]) + bits.OnesCount64(seen[1]) + bits.OnesCount64(seen[2]) + bits.OnesCount64(seen[3])
-	return unique >= outerLeafHighEntropyUniqueThreshold
+	return unique >= leafBlockHighEntropyUniqueThreshold
 }
 
 func encodePayload(codec uint8, raw []byte, dst []byte) ([]byte, uint8, error) {
@@ -556,30 +556,30 @@ func decodeValuePtr16(payload []byte) (page.ValuePtr, error) {
 	}, nil
 }
 
-func outerLeafBytesClassShiftCeil(minCap int) int {
-	if minCap <= (1 << outerLeafBytesMinClassShift) {
-		return outerLeafBytesMinClassShift
+func leafBlockBytesClassShiftCeil(minCap int) int {
+	if minCap <= (1 << leafBlockBytesMinClassShift) {
+		return leafBlockBytesMinClassShift
 	}
 	shift := bits.Len(uint(minCap - 1))
-	if shift < outerLeafBytesMinClassShift {
-		return outerLeafBytesMinClassShift
+	if shift < leafBlockBytesMinClassShift {
+		return leafBlockBytesMinClassShift
 	}
-	if shift > outerLeafBytesMaxClassShift {
-		return outerLeafBytesMaxClassShift
+	if shift > leafBlockBytesMaxClassShift {
+		return leafBlockBytesMaxClassShift
 	}
 	return shift
 }
 
-func outerLeafBytesClassShiftFloor(capacity int) int {
-	if capacity <= (1 << outerLeafBytesMinClassShift) {
-		return outerLeafBytesMinClassShift
+func leafBlockBytesClassShiftFloor(capacity int) int {
+	if capacity <= (1 << leafBlockBytesMinClassShift) {
+		return leafBlockBytesMinClassShift
 	}
 	shift := bits.Len(uint(capacity)) - 1
-	if shift < outerLeafBytesMinClassShift {
-		return outerLeafBytesMinClassShift
+	if shift < leafBlockBytesMinClassShift {
+		return leafBlockBytesMinClassShift
 	}
-	if shift > outerLeafBytesMaxClassShift {
-		return outerLeafBytesMaxClassShift
+	if shift > leafBlockBytesMaxClassShift {
+		return leafBlockBytesMaxClassShift
 	}
 	return shift
 }
@@ -588,16 +588,16 @@ func getPooledBytes(minCap int) []byte {
 	if minCap <= 0 {
 		minCap = 1
 	}
-	if minCap > maxPooledOuterLeafBytesCap {
+	if minCap > maxPooledLeafBlockBytesCap {
 		return make([]byte, 0, minCap)
 	}
-	shift := outerLeafBytesClassShiftCeil(minCap)
-	pool := &outerLeafBytesPools[shift-outerLeafBytesMinClassShift]
+	shift := leafBlockBytesClassShiftCeil(minCap)
+	pool := &leafBlockBytesPools[shift-leafBlockBytesMinClassShift]
 	if v := pool.Get(); v != nil {
 		if entry, ok := v.(*bytesPoolEntry); ok && entry != nil {
 			buf := entry.buf
 			entry.buf = nil
-			outerLeafBytesEntryPool.Put(entry)
+			leafBlockBytesEntryPool.Put(entry)
 			if cap(buf) >= minCap {
 				return buf[:0]
 			}
@@ -611,12 +611,12 @@ func getPooledBytes(minCap int) []byte {
 }
 
 func putPooledBytes(buf []byte) {
-	if cap(buf) == 0 || cap(buf) > maxPooledOuterLeafBytesCap {
+	if cap(buf) == 0 || cap(buf) > maxPooledLeafBlockBytesCap {
 		return
 	}
-	shift := outerLeafBytesClassShiftFloor(cap(buf))
-	pool := &outerLeafBytesPools[shift-outerLeafBytesMinClassShift]
-	entry := outerLeafBytesEntryPool.Get().(*bytesPoolEntry)
+	shift := leafBlockBytesClassShiftFloor(cap(buf))
+	pool := &leafBlockBytesPools[shift-leafBlockBytesMinClassShift]
+	entry := leafBlockBytesEntryPool.Get().(*bytesPoolEntry)
 	entry.buf = buf[:0]
 	pool.Put(entry)
 }
@@ -625,11 +625,11 @@ func getPooledRestarts(minCap int) []uint32 {
 	if minCap <= 0 {
 		minCap = 1
 	}
-	if v := outerLeafRestartsPool.Get(); v != nil {
+	if v := leafBlockRestartsPool.Get(); v != nil {
 		if entry, ok := v.(*restartsPoolEntry); ok && entry != nil {
 			buf := entry.buf
 			entry.buf = nil
-			outerLeafRestartsEntryPool.Put(entry)
+			leafBlockRestartsEntryPool.Put(entry)
 			if cap(buf) >= minCap {
 				return buf[:0]
 			}
@@ -639,23 +639,23 @@ func getPooledRestarts(minCap int) []uint32 {
 }
 
 func putPooledRestarts(buf []uint32) {
-	if cap(buf) == 0 || cap(buf) > maxPooledOuterLeafRestartsCap {
+	if cap(buf) == 0 || cap(buf) > maxPooledLeafBlockRestartsCap {
 		return
 	}
-	entry := outerLeafRestartsEntryPool.Get().(*restartsPoolEntry)
+	entry := leafBlockRestartsEntryPool.Get().(*restartsPoolEntry)
 	entry.buf = buf[:0]
-	outerLeafRestartsPool.Put(entry)
+	leafBlockRestartsPool.Put(entry)
 }
 
 func getPooledLeaseKeys(minCap int) [][]byte {
 	if minCap <= 0 {
 		minCap = 1
 	}
-	if v := outerLeafLeaseKeysPool.Get(); v != nil {
+	if v := leafBlockLeaseKeysPool.Get(); v != nil {
 		if entry, ok := v.(*leaseKeysPoolEntry); ok && entry != nil {
 			keys := entry.buf
 			entry.buf = nil
-			outerLeafLeaseKeysEntryPool.Put(entry)
+			leafBlockLeaseKeysEntryPool.Put(entry)
 			if cap(keys) >= minCap {
 				return keys[:0]
 			}
@@ -666,25 +666,25 @@ func getPooledLeaseKeys(minCap int) [][]byte {
 }
 
 func putPooledLeaseKeys(keys [][]byte) {
-	if cap(keys) == 0 || cap(keys) > maxPooledOuterLeafLeaseKeysCap {
+	if cap(keys) == 0 || cap(keys) > maxPooledLeafBlockLeaseKeysCap {
 		return
 	}
 	full := keys[:cap(keys)]
 	clear(full)
-	entry := outerLeafLeaseKeysEntryPool.Get().(*leaseKeysPoolEntry)
+	entry := leafBlockLeaseKeysEntryPool.Get().(*leaseKeysPoolEntry)
 	entry.buf = full[:0]
-	outerLeafLeaseKeysPool.Put(entry)
+	leafBlockLeaseKeysPool.Put(entry)
 }
 
 func getPooledLeaseArena(minCap int) []byte {
 	if minCap <= 0 {
 		minCap = 1
 	}
-	if v := outerLeafLeaseArenaPool.Get(); v != nil {
+	if v := leafBlockLeaseArenaPool.Get(); v != nil {
 		if entry, ok := v.(*leaseArenaPoolEntry); ok && entry != nil {
 			arena := entry.buf
 			entry.buf = nil
-			outerLeafLeaseArenaEntryPool.Put(entry)
+			leafBlockLeaseArenaEntryPool.Put(entry)
 			if cap(arena) >= minCap {
 				return arena[:0]
 			}
@@ -695,12 +695,12 @@ func getPooledLeaseArena(minCap int) []byte {
 }
 
 func putPooledLeaseArena(arena []byte) {
-	if cap(arena) == 0 || cap(arena) > maxPooledOuterLeafLeaseArenaCap {
+	if cap(arena) == 0 || cap(arena) > maxPooledLeafBlockLeaseArenaCap {
 		return
 	}
-	entry := outerLeafLeaseArenaEntryPool.Get().(*leaseArenaPoolEntry)
+	entry := leafBlockLeaseArenaEntryPool.Get().(*leaseArenaPoolEntry)
 	entry.buf = arena[:0]
-	outerLeafLeaseArenaPool.Put(entry)
+	leafBlockLeaseArenaPool.Put(entry)
 }
 
 func acquireKeyLease(minKeys int) *KeyLease {
@@ -708,7 +708,7 @@ func acquireKeyLease(minKeys int) *KeyLease {
 		minKeys = 1
 	}
 	var lease *KeyLease
-	if v := outerLeafKeyLeasePool.Get(); v != nil {
+	if v := leafBlockKeyLeasePool.Get(); v != nil {
 		if l, ok := v.(*KeyLease); ok {
 			lease = l
 		}
@@ -728,7 +728,7 @@ func (l *KeyLease) addChunk(arena []byte) {
 		return
 	}
 	var node *keyLeaseChunk
-	if v := outerLeafKeyChunkPool.Get(); v != nil {
+	if v := leafBlockKeyChunkPool.Get(); v != nil {
 		if n, ok := v.(*keyLeaseChunk); ok {
 			node = n
 		}
@@ -761,12 +761,12 @@ func releaseKeyLease(lease *KeyLease) {
 		putPooledLeaseArena(node.buf)
 		node.buf = nil
 		node.next = nil
-		outerLeafKeyChunkPool.Put(node)
+		leafBlockKeyChunkPool.Put(node)
 		node = next
 	}
 	lease.chunkHead = nil
 	lease.chunkTail = nil
-	outerLeafKeyLeasePool.Put(lease)
+	leafBlockKeyLeasePool.Put(lease)
 }
 
 func cloneKeySlices(keys [][]byte) [][]byte {
