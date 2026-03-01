@@ -82,7 +82,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if db.cached != nil {
 		switch mode {
 		case ValueLogGCModeStrict:
-			// Route through public checkpoint entry point to preserve lock ordering.
+			// Call through the public checkpoint entry point to preserve lock ordering.
 			if err := db.Checkpoint(); err != nil {
 				return out, err
 			}

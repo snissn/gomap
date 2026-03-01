@@ -118,7 +118,7 @@ func (s *Store) GetCandidates(_ context.Context, fp uint64, max int) ([]template
 	return cands, nil
 }
 
-// PutTemplateDef stores a template definition and updates routing indices.
+// PutTemplateDef stores a template definition and updates lookup indices.
 func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []uint64) (uint64, error) {
 	if s == nil || s.kv == nil {
 		return 0, errStoreUnavailable
@@ -128,7 +128,7 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Dedup and sort route fingerprints deterministically.
+	// Dedup and sort fingerprints deterministically.
 	if len(routeFPs) > 0 {
 		sort.Slice(routeFPs, func(i, j int) bool { return routeFPs[i] < routeFPs[j] })
 		j := 0
@@ -156,7 +156,7 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 			break
 		}
 		if bytes.Equal(existing, defBytes) {
-			// Idempotent publish; still refresh routing lists.
+			// Idempotent publish; still refresh candidate lists.
 			break
 		}
 		if attempt == cfg.MaxIDAttempts-1 {
@@ -212,7 +212,7 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 	return id, nil
 }
 
-// PutTemplateDefs stores multiple template definitions and updates routing
+// PutTemplateDefs stores multiple template definitions and updates lookup
 // indices in a single durable batch.
 //
 // This is an optional acceleration used by the template engine when publishing
@@ -244,7 +244,7 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 		defBytes := defs[i].DefBytes
 		routeFPs := defs[i].RouteFPs
 
-		// Dedup and sort route fingerprints deterministically.
+		// Dedup and sort fingerprints deterministically.
 		if len(routeFPs) > 0 {
 			sort.Slice(routeFPs, func(i, j int) bool { return routeFPs[i] < routeFPs[j] })
 			j := 0

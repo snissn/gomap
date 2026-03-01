@@ -13,9 +13,9 @@ import (
 // readViaMmapViewPrefixCacheEnabled controls whether unsafe mmap-view reads
 // consult/publish the shared per-file grouped prefix cache.
 //
-// Random parallel key-lookups in fence mode tend to have low temporal locality
-// and high fan-in to the same file cache mutex; disabling this avoids
-// lock-contention amplification on the unsafe view path.
+// Random parallel key-lookups can have low temporal locality and high fan-in to
+// the same file cache mutex; disabling this avoids lock-contention amplification
+// on the unsafe view path.
 const readViaMmapViewPrefixCacheEnabled = false
 
 // MaxDeadMappings caps the number of old mmaps retained to avoid exhausting

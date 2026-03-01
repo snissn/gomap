@@ -227,7 +227,7 @@ encoding mode in high bits (in addition to the low-bit page type).
 Internal-encoding flags (current):
 - `0x0800`: internal base-delta enabled
 - `0x0200`: internal base-delta uses `u16` child deltas (otherwise `u32`)
-- `0x0100`: exact subtree fence bounds persisted (`low`/`high`)
+- `0x0100`: exact subtree bounds persisted (`low`/`high`)
 
 #### Plain internal entries (no base-delta)
 
@@ -249,11 +249,11 @@ selected per page):
 ```
 
 The page stores a footer payload at the end containing optional exact subtree
-fence bounds plus the shared key prefix, followed by a fixed tail:
+bounds plus the shared key prefix, followed by a fixed tail:
 
 ```text
-[ low fence bytes (lowLen) ]
-[ high fence bytes (highLen) ]
+[ low bound bytes (lowLen) ]
+[ high bound bytes (highLen) ]
 [ prefix bytes (prefixLen) ]
 [ u16 lowLen ]
 [ u16 highLen ]
@@ -262,7 +262,7 @@ fence bounds plus the shared key prefix, followed by a fixed tail:
 ```
 
 The full separator key for an entry is `prefix || suffix`. `prefixLen` may be
-`0` (no prefix bytes stored). Fence semantics are `low` inclusive and `high`
+`0` (no prefix bytes stored). Bound semantics are `low` inclusive and `high`
 exclusive; an empty `high` means unbounded (e.g. root upper bound).
 
 ## Value-log record format (`TreeDB/internal/valuelog`)

@@ -94,7 +94,7 @@ Bench-facing additions (`unified-bench` + `treemap stats`):
 ## 3. Generation-Aware Segment Allocator
 
 - Keep append-only semantics.
-- Route new and updated records to `hot` segments.
+- Place new and updated records in `hot` segments.
 - Size classes:
   - `hot`: smaller segments for quick turnover/reclaim.
   - `warm/cold`: larger segments for density and scan locality.

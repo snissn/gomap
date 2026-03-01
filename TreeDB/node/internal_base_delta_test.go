@@ -197,10 +197,10 @@ func TestInternalBaseDelta_CompactPreservesFooter(t *testing.T) {
 		t.Fatalf("InternalFenceBounds: %v", err)
 	}
 	if !ok {
-		t.Fatalf("expected persisted fence bounds")
+		t.Fatalf("expected persisted bounds")
 	}
 	if !bytes.Equal(low, []byte("user:00000000")) || !bytes.Equal(high, []byte("user:00000099")) {
-		t.Fatalf("unexpected fence bounds low=%q high=%q", low, high)
+		t.Fatalf("unexpected bounds low=%q high=%q", low, high)
 	}
 
 	// Spot-check entries still decode.
@@ -261,20 +261,20 @@ func TestInternalBaseDelta_SplitRoundTrip(t *testing.T) {
 		t.Fatalf("n1 InternalFenceBounds: %v", err)
 	}
 	if !ok1 {
-		t.Fatalf("expected n1 fence bounds")
+		t.Fatalf("expected n1 bounds")
 	}
 	low2, high2, ok2, err := n2.InternalFenceBounds()
 	if err != nil {
 		t.Fatalf("n2 InternalFenceBounds: %v", err)
 	}
 	if !ok2 {
-		t.Fatalf("expected n2 fence bounds")
+		t.Fatalf("expected n2 bounds")
 	}
 	if !bytes.Equal(low1, []byte("user:00000000")) || !bytes.Equal(high1, pivot) {
-		t.Fatalf("unexpected n1 fences low=%q high=%q pivot=%q", low1, high1, pivot)
+		t.Fatalf("unexpected n1 bounds low=%q high=%q pivot=%q", low1, high1, pivot)
 	}
 	if !bytes.Equal(low2, pivot) || !bytes.Equal(high2, []byte("user:00000099")) {
-		t.Fatalf("unexpected n2 fences low=%q high=%q pivot=%q", low2, high2, pivot)
+		t.Fatalf("unexpected n2 bounds low=%q high=%q pivot=%q", low2, high2, pivot)
 	}
 
 	for i := uint16(0); i < splitIndex; i++ {

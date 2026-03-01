@@ -903,7 +903,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 			// Record split
 			// Use the full first key of the right node as the parent separator.
-			// Shortened separators are unsafe for sparse/fence layouts where leaf
+			// Shortened separators are unsafe for sparse/bounded layouts where leaf
 			// entries are not a complete key set.
 			splitKey := cloneKeyIntoArena(key, &splitKeyArena)
 			// Split keys escape this call via the returned []Split, so clone out of

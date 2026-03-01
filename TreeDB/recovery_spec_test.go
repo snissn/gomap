@@ -356,8 +356,8 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 
 func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *testing.T) {
 	tiers := []struct {
-		name         string
-		env          []string
+		name string
+		env  []string
 	}{
 		{
 			name: "durable_default",
@@ -425,9 +425,9 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 
 func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 	type tier struct {
-		name         string
-		env          []string
-		expectLarge  bool
+		name        string
+		env         []string
+		expectLarge bool
 	}
 
 	tiers := []tier{
@@ -643,7 +643,7 @@ func TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs(t *testing.T) {
 		t.Fatalf("get k2: %v", err)
 	}
 	if got != nil {
-		t.Fatalf("expected k2 to be absent because seq2 fence is unsatisfied, got %q", string(got))
+		t.Fatalf("expected k2 to be absent because seq2 commit boundary is unsatisfied, got %q", string(got))
 	}
 }
 
@@ -702,7 +702,7 @@ func TestRecovery_PartialFlushFence_NoPhantomPointers(t *testing.T) {
 		t.Fatalf("get k-good: %v", err)
 	}
 	if got != nil {
-		t.Fatalf("expected k-good to be absent when mixed RID batch fence is unsatisfied, got %q", string(got))
+		t.Fatalf("expected k-good to be absent when mixed RID batch commit boundary is unsatisfied, got %q", string(got))
 	}
 	got, err = db.Get([]byte("k-missing"))
 	if err != nil {

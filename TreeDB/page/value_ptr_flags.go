@@ -35,7 +35,7 @@ func ValuePtrRecordLength(ptr ValuePtr) uint32 {
 //
 // A zero hint means "omitted hint" and always matches.
 //
-// For grouped pointers carrying the legacy grouped fence marker bit, this helper
+// For grouped pointers carrying a legacy grouped marker bit, this helper
 // accepts both the raw decoded hint and the marker-cleared variant so older
 // pointers can still validate against on-disk headers.
 func ValuePtrRecordLengthHintMatches(ptr ValuePtr, expected uint32) bool {

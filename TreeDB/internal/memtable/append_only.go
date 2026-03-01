@@ -354,10 +354,10 @@ func appendOnlyNextCapacity(current int, flags byte) int {
 	if flags&node.FlagPointer != 0 && current < appendOnlyPointerGrowCutoff {
 		next = current * 4
 	} else if current < appendOnlyPointerGrowCutoff {
-		// Route-mode inline-heavy workloads (e.g. batch_write_steady with valsize
-		// below pointer threshold) still pay significant growth churn. Use a
-		// moderate early growth factor for inline records as well to reduce
-		// repeated reallocation/copy amplification.
+		// Inline-heavy workloads (e.g. batch_write_steady with valsize below the
+		// pointer threshold) still pay significant growth churn. Use a moderate
+		// early growth factor for inline records as well to reduce repeated
+		// reallocation/copy amplification.
 		next = current * 3
 	}
 	if next <= current {

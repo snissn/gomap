@@ -609,7 +609,7 @@
   Modify:
 
   - TreeDB/db/db.go (Options, DBState, Snapshot acquisition, open load layout, autoscaler lifecycle hooks)
-  - TreeDB/db/api.go (Iterator/ReverseIterator route through partition-aware snapshot)
+  - TreeDB/db/api.go (Iterator/ReverseIterator go through partition-aware snapshot)
   - TreeDB/db/batch.go (partitioned write paths; optimistic + serialized)
   - TreeDB/db/vlog_gc.go (scan partition-aware user iter)
   - TreeDB/db/vacuum_offline.go, TreeDB/db/vacuum_online.go, TreeDB/db/vlog_rewrite.go (replace single-root

@@ -675,7 +675,7 @@ type Snapshot struct {
 	closed      atomic.Bool
 	treePager   *pager.Pager
 	treeRoot    uint64
-	// registryShardHint is used to route reader registrations to a stable fast
+	// registryShardHint is used to shard reader registrations to a stable fast
 	// registry shard for this snapshot object across operations.
 	registryShardHint int
 }

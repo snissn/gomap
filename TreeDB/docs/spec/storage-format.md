@@ -207,7 +207,7 @@ Internal encoding flags:
 
 - `0x0800`: base-delta enabled
 - `0x0200`: delta width `u16` (otherwise `u32`)
-- `0x0100`: exact fence bounds persisted
+- `0x0100`: exact bounds persisted
 
 ### 6.1 Plain internal entry
 

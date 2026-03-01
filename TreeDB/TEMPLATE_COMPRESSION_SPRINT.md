@@ -221,7 +221,7 @@ Template publish must be all-or-nothing:
 
 If partial write ever occurs (should not), strict read mode treats missing template as error; lenient mode may recover by treating as raw or error (choose one).
 
-### C7) Template activation fence (MUST)
+### C7) Template activation threshold (MUST)
 
 To prevent low-quality or early templates from polluting routing lists:
 
@@ -553,7 +553,7 @@ PR-sized breakdown (recommended):
 - PR-T2a: Reservoir/bucketing + training budgets + unit tests.
 - PR-T2b: Anchor counting + collision defense + ambiguity checks.
 - PR-T2c: Backbone selection + anchor extension + publish quality gate.
-- PR-T2d: Activation fence + atomic publish (template + routing updates in one batch).
+- PR-T2d: Activation threshold + atomic publish (template + routing updates in one batch).
 
 ### Sprint T3 — Hardening + operational knobs
 - Add strict/lenient read mode option handling.

@@ -1,8 +1,8 @@
 package db
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -451,15 +451,15 @@ func (db *DB) addNestedBlobRefCounts(blobPtr page.ValuePtr, refs map[uint32]uint
 	return nil
 }
 
-	func (db *DB) buildValueLogRefDelta(p *pager.Pager, root uint64, baseSeq uint64, ops []batchpkg.Entry) (*valueLogRefDelta, error) {
-		if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
-			return nil, nil
-		}
-		// Implement an exact delta by diffing old/new pointers for touched keys.
-		// This is more expensive than the old fence/route fast paths, but it keeps
-		// the incremental tracker correct (including nested blob refs).
-		return db.buildValueLogRefDeltaExact(baseSeq, p, root, ops)
+func (db *DB) buildValueLogRefDelta(p *pager.Pager, root uint64, baseSeq uint64, ops []batchpkg.Entry) (*valueLogRefDelta, error) {
+	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
+		return nil, nil
 	}
+	// Implement an exact delta by diffing old/new pointers for touched keys.
+	// This is more expensive than earlier fast paths, but it keeps the incremental
+	// tracker correct (including nested blob refs).
+	return db.buildValueLogRefDeltaExact(baseSeq, p, root, ops)
+}
 
 func (db *DB) buildValueLogRefDeltaExact(baseSeq uint64, p *pager.Pager, root uint64, ops []batchpkg.Entry) (*valueLogRefDelta, error) {
 	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
