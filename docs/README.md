@@ -16,7 +16,6 @@ TreeDB is a persistent B+Tree with a high-throughput cached write-back layer.
 - **[Concepts](TREEDB_CONCEPTS.md)**: High-level design (Pages, Value Log, COW Merge).
 - **[Storage Format](TREEDB_STORAGE_FORMAT.md)**: On-disk layout, `ValuePtr`, and value-log lifecycle (GC/rewrite).
 - **[Write Paths](TREEDB_WRITE_PATHS.md)**: WAL on/off semantics.
-- **[Cached vs Backend](TREEDB_CACHED_VS_BACKEND.md)**: Legacy note (backend-only removed).
 - **[Recovery](TREEDB_RECOVERY.md)**: Crash consistency and journal replay details.
 - **[Profiles](TREEDB_PROFILES.md)**: High-level `durable` / `fast` / `bench` option presets.
 - **[Tuning](TREEDB_TUNING.md)**: Configuration knobs for performance.
@@ -48,7 +47,7 @@ Behavioral guarantees for downstream systems (e.g., replication layers).
 - **[Redis Protocol Benchmarking](REDIS_PROTOCOL_BENCHMARKING.md)**: Preferred way to measure Redis wrapper throughput.
 - **[Dev Notes](DEV_NOTES.md)**: Performance investigations and future optimization ideas.
 
-## 🏚️ Legacy & Planning
+## Planning
 
 - **[Improvement Plan](IMPROVEMENT_PLAN.md)**: Roadmap pointers.
 - **[Agent Runbooks](agents/README.md)**: Implementation-focused notes (not normative contracts).
