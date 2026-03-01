@@ -458,21 +458,13 @@ func iavlNodeVersionFromNodeKey(key []byte) (version uint64, ok bool) {
 	return binary.BigEndian.Uint64(base[1:9]), true
 }
 
-func routeKeyRequiresSingletonOuterLeaf(key []byte) bool {
-	_ = key
-	// Route mode relies on exact predecessor-anchor resolution; forcing singleton
-	// blocks for heuristic key patterns can introduce directory gaps and false
-	// negatives. Keep grouping policy purely range/materialization driven.
-	return false
-}
-
-type routePersistedGapScanner struct {
+type persistedGapScanner struct {
 	it    iterator.UnsafeIterator
 	cur   []byte
 	valid bool
 }
 
-func newRoutePersistedGapScanner(backend BackendDB, start []byte) (*routePersistedGapScanner, error) {
+func newPersistedGapScanner(backend BackendDB, start []byte) (*persistedGapScanner, error) {
 	if backend == nil {
 		return nil, nil
 	}
@@ -494,7 +486,7 @@ func newRoutePersistedGapScanner(backend BackendDB, start []byte) (*routePersist
 	if err != nil {
 		return nil, err
 	}
-	scanner := &routePersistedGapScanner{it: it}
+	scanner := &persistedGapScanner{it: it}
 	if err := scanner.refresh(); err != nil {
 		scanner.close()
 		return nil, err
@@ -502,7 +494,7 @@ func newRoutePersistedGapScanner(backend BackendDB, start []byte) (*routePersist
 	return scanner, nil
 }
 
-func (s *routePersistedGapScanner) refresh() error {
+func (s *persistedGapScanner) refresh() error {
 	if s == nil || s.it == nil {
 		return nil
 	}
@@ -515,7 +507,7 @@ func (s *routePersistedGapScanner) refresh() error {
 	return nil
 }
 
-func (s *routePersistedGapScanner) advance() error {
+func (s *persistedGapScanner) advance() error {
 	if s == nil || s.it == nil {
 		return nil
 	}
@@ -523,7 +515,7 @@ func (s *routePersistedGapScanner) advance() error {
 	return s.refresh()
 }
 
-func (s *routePersistedGapScanner) hasPersistedBetween(lower, upper []byte) (bool, error) {
+func (s *persistedGapScanner) hasPersistedBetween(lower, upper []byte) (bool, error) {
 	if s == nil || s.it == nil {
 		return false, nil
 	}
@@ -541,7 +533,7 @@ func (s *routePersistedGapScanner) hasPersistedBetween(lower, upper []byte) (boo
 	return bytes.Compare(s.cur, upper) < 0, nil
 }
 
-func (s *routePersistedGapScanner) close() {
+func (s *persistedGapScanner) close() {
 	if s == nil || s.it == nil {
 		return
 	}
@@ -1345,60 +1337,14 @@ func (db *DB) mutableHasEntriesLocked() bool {
 	return false
 }
 
-func (db *DB) normalizeRouteAnchorPointer(ptr page.ValuePtr, context string) (page.ValuePtr, error) {
-	if db == nil || !true {
-		return ptr, nil
-	}
+func (db *DB) normalizeAnchorPointer(ptr page.ValuePtr, context string) (page.ValuePtr, error) {
 	if ptr == (page.ValuePtr{}) {
-		return ptr, fmt.Errorf("cachingdb: route emitted zero anchor pointer (%s)", context)
+		return ptr, fmt.Errorf("cachingdb: emitted zero anchor pointer (%s)", context)
 	}
 	if !page.IsValueLogFileID(ptr.FileID) {
-		return ptr, fmt.Errorf("cachingdb: route requires value-log anchor pointer (%s): ptr=%+v", context, ptr)
+		return ptr, fmt.Errorf("cachingdb: expected value-log anchor pointer (%s): ptr=%+v", context, ptr)
 	}
 	return ptr, nil
-}
-
-func (db *DB) validateRouteAnchorPointers(context string) error {
-	if db == nil || !true {
-		return nil
-	}
-	type pointerProjectionIter interface {
-		IteratorWithOptions(start, end []byte, opts backenddb.IteratorOptions) (iterator.UnsafeIterator, error)
-	}
-	provider, ok := db.backend.(pointerProjectionIter)
-	if !ok {
-		return nil
-	}
-	it, err := provider.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
-		Mode:              backenddb.IteratorModePointerProjection,
-		IncludeTombstones: true,
-	})
-	if err != nil {
-		return err
-	}
-	if it == nil {
-		return nil
-	}
-	defer func() { _ = it.Close() }()
-	for it.Valid() {
-		key := it.UnsafeKey()
-		_, ptr, flags := it.UnsafeEntry()
-		it.Next()
-		if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
-			continue
-		}
-		inspectCtx := context
-		if len(key) > 0 {
-			inspectCtx = fmt.Sprintf("%s key=%q", context, key)
-		}
-		if _, routeErr := db.normalizeRouteAnchorPointer(ptr, inspectCtx); routeErr != nil {
-			return routeErr
-		}
-	}
-	if err := it.Error(); err != nil {
-		return err
-	}
-	return nil
 }
 
 const defaultOuterLeafBlobThresholdMin = 16 << 10
@@ -1829,7 +1775,7 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 	estimated := 0
 	groupStart := 0
 	var prevKey []byte
-	gapScanner, err := newRoutePersistedGapScanner(db.backend, keys[0])
+	gapScanner, err := newPersistedGapScanner(db.backend, keys[0])
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1870,7 +1816,7 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 				}
 				defer putValueLogPtrs(nestedPtrs)
 				if len(nestedPtrs) != len(nestedRecordPositions) {
-					return fmt.Errorf("cachingdb: route nested pointer count mismatch expected=%d got=%d", len(nestedRecordPositions), len(nestedPtrs))
+					return fmt.Errorf("cachingdb: nested pointer count mismatch expected=%d got=%d", len(nestedRecordPositions), len(nestedPtrs))
 				}
 				for i, nestedPos := range nestedRecordPositions {
 					entries[nestedPos].BlobPtr = nestedPtrs[i]
@@ -1894,7 +1840,6 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 	for i := range keys {
 		key := keys[i]
 		value := values[i]
-		forceSingleton := routeKeyRequiresSingletonOuterLeaf(key)
 		valueShouldBeNested := len(value) > db.valueLogThresholdForKey(key)
 		entryEstimate := len(key) + len(value) + 16
 		if valueShouldBeNested {
@@ -1912,7 +1857,7 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 				}
 				hasPersistedGap = gap
 			}
-			if forceSingleton || hasPersistedGap || bytes.Compare(prevKey, key) >= 0 {
+			if hasPersistedGap || bytes.Compare(prevKey, key) >= 0 {
 				// Preserve correctness for non-monotonic batches by cutting blocks.
 				if err := flushRouteGroup(); err != nil {
 					return nil, nil, nil, err
@@ -1945,11 +1890,6 @@ func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys []
 		entries = append(entries, entry)
 		estimated += entryEstimate
 		prevKey = key
-		if forceSingleton {
-			if err := flushRouteGroup(); err != nil {
-				return nil, nil, nil, err
-			}
-		}
 	}
 	if len(entries) > 0 {
 		if err := flushRouteGroup(); err != nil {
@@ -9581,10 +9521,6 @@ func (db *DB) Checkpoint() error {
 		db.writeMu.Unlock()
 		db.recordCheckpointCutover(time.Since(cutoverStart))
 	}
-	if err := db.validateRouteAnchorPointers("checkpoint preflight"); err != nil {
-		releaseWriteMu()
-		return err
-	}
 
 	// Rotate mutable into the flush queue and ensure future writes land in a fresh
 	// WAL segment (so all older segments can be trimmed after the sync boundary).
@@ -12107,7 +12043,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			case entry.IsPtr:
 				ptr := entry.ValuePtr
 				if routeAnchorMode {
-					ptr, err = db.normalizeRouteAnchorPointer(ptr, "queued-unit flush pointer")
+					ptr, err = db.normalizeAnchorPointer(ptr, "queued-unit flush pointer")
 					if err != nil {
 						break
 					}
@@ -12407,9 +12343,9 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				}
 			} else if flags&node.FlagPointer != 0 {
 				if routeAnchorMode {
-					routePtr, routeErr := db.normalizeRouteAnchorPointer(ptr, "flush-unit mem pointer")
+					routePtr, routeErr := db.normalizeAnchorPointer(ptr, "flush-unit mem pointer")
 					if routeErr != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (route ptr): %w", routeErr))
+						db.reportError(fmt.Errorf("cachingdb: flush failed (anchor ptr): %w", routeErr))
 						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
@@ -12835,9 +12771,9 @@ func (db *DB) flushOneLocked(sync bool) bool {
 				}
 			} else if flags&node.FlagPointer != 0 {
 				if routeAnchorMode {
-					routePtr, routeErr := db.normalizeRouteAnchorPointer(ptr, "flush-memtable pointer")
+					routePtr, routeErr := db.normalizeAnchorPointer(ptr, "flush-memtable pointer")
 					if routeErr != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (route ptr): %w", routeErr))
+						db.reportError(fmt.Errorf("cachingdb: flush failed (anchor ptr): %w", routeErr))
 						_ = iter.Close()
 						_ = backendBatch.Close()
 						return false
