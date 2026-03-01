@@ -336,9 +336,6 @@ func leafBlockCacheDefaultPolicy() leafBlockCachePolicy {
 			leafBlockCachePolicyCached = leafBlockCachePolicySIEVE
 		case "slru", "2q":
 			leafBlockCachePolicyCached = leafBlockCachePolicySLRU
-		case "clock":
-			// Backward-compatible alias from the prior experiment.
-			leafBlockCachePolicyCached = leafBlockCachePolicySLRU
 		default:
 			leafBlockCachePolicyCached = leafBlockCachePolicyLRU
 		}
