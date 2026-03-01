@@ -11077,7 +11077,7 @@ func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64,
 }
 
 func (db *DB) appendValueLogOneRaw(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
-	return db.appendValueLogOneInternal(l, dictID, dict, rid, nil, value, durability, false)
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, nil, value, durability, false, true)
 }
 
 // appendFenceRIDJoinOversizedOne materializes an oversized v2_fenceptr value as
@@ -11101,10 +11101,10 @@ func (db *DB) appendFenceRIDJoinOversizedOne(l *lane, dictID uint64, key, value 
 }
 
 func (db *DB) appendValueLogOneWithKey(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
-	return db.appendValueLogOneInternal(l, dictID, dict, rid, key, value, durability, true)
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, key, value, durability, true, true)
 }
 
-func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability, encodeOuterLeaf bool) (page.ValuePtr, string, error) {
+func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, key []byte, value []byte, durability journalDurability, encodeOuterLeaf bool, allowQueue bool) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
@@ -11221,7 +11221,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		}
 	}
 
-	if db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
+	if allowQueue && db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {

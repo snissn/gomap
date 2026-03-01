@@ -25,7 +25,7 @@ func (l *cachingLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, err
 	}
 	lane := &l.db.lanes[l.laneID]
 	rid := l.db.nextRID.Add(1)
-	ptr, retainPath, err := l.db.appendValueLogOneInternal(lane, 0, nil, rid, nil, leafPage, journalDurabilityNone, false)
+	ptr, retainPath, err := l.db.appendValueLogOneInternal(lane, 0, nil, rid, nil, leafPage, journalDurabilityNone, false, false)
 	if retainPath != "" {
 		l.db.markValueLogRetain(retainPath)
 	}
@@ -51,4 +51,3 @@ func (l *cachingLeafPageLog) Sync() error {
 	}
 	return l.db.syncValueLog(l.laneID)
 }
-
