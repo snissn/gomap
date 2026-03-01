@@ -276,7 +276,7 @@ bytes FramePayload
 
 ### 7.2 Outer-leaf payload envelope
 
-Value-log payload bytes may be wrapped in an outer-leaf envelope (`Magic="TOL2"`):
+Value-log payload bytes may be wrapped in an leaf-block envelope (`Magic="TOL2"`):
 
 ```text
 bytes[4] Magic            // "TOL2"
@@ -298,7 +298,7 @@ Version 2 stores multiple sorted `{key,value}` pairs in one block payload:
 Version 3 stores one or more typed entries (inline value or nested blob
 reference) with restart metadata and the same envelope checksum rules.
 
-When a pointer references an outer-leaf envelope, the read path resolves
+When a pointer references an leaf-block envelope, the read path resolves
 `{pointer,key}` by decoding one block payload and searching inside it for the
 requested key.
 

@@ -127,7 +127,7 @@ Policy coupling without hard coupling of operations:
 
 ## 7. Outer-Leaf Density Tuning
 
-- Default outer-leaf block target to `8KiB`.
+- Default leaf-block block target to `8KiB`.
 - Offer `16KiB` size-oriented profile option.
 - Add latency guardrails to avoid oversized-block read cliffs.
 - Keep codec behavior explicit and measurable.

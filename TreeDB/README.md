@@ -114,8 +114,8 @@ Details: `docs/TREEDB_WRITE_PATHS.md`.
 
 ## Outer-Leaf Payloads
 
-TreeDB stores grouped outer-leaf payloads in the value log and detects them by
-the magic header (`TOL2`). The previous multi-mode outer-leaf surface has been
+TreeDB stores grouped leaf-block payloads in the value log and detects them by
+the magic header (`TOL2`). The previous multi-mode leaf-block surface has been
 removed: there is one built-in behavior.
 
 ## Durability & Safety Notes
