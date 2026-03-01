@@ -50,7 +50,7 @@ func BenchmarkValueReaderReadUnsafeAppendForKey_NoCacheInline(b *testing.B) {
 	}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 	key := []byte("k2")
 	dst := make([]byte, 0, 64)
@@ -82,7 +82,7 @@ func BenchmarkValueReaderReadUnsafeAppendForKey_NoCacheBlobRef(b *testing.B) {
 	}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 	dst := make([]byte, 0, 64)
 

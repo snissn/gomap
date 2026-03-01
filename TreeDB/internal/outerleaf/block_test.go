@@ -27,11 +27,10 @@ func TestModeEnabled(t *testing.T) {
 		mode string
 		want bool
 	}{
-		{mode: ModeV1LeafLog, want: true},
-		{mode: ModeV1LeafLogLegacy, want: true},
-		{mode: ModeV1LeafLogRoute, want: true},
-		{mode: ModeV2BlockPtr, want: true},
-		{mode: ModeV2FencePtr, want: true},
+		{mode: ModeV1, want: true},
+		{mode: " V1 ", want: true},
+		{mode: "", want: false},
+		{mode: "v1_leaflog_route", want: false},
 		{mode: "unknown", want: false},
 	}
 	for _, tc := range cases {

@@ -2,7 +2,6 @@ package db
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
@@ -264,39 +263,32 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 			if !page.IsValueLogFileID(ptr.FileID) {
 				return fmt.Errorf("expected value-log pointer, got file=%d", ptr.FileID)
 			}
-			if b.db == nil || b.db.valueLogManager == nil {
-				return fmt.Errorf("missing value log manager")
-			}
-			val, err := b.db.valueLogManager.Read(ptr)
-			if err != nil {
-				return err
-			}
-			if outerleaf.ModeEnabled(b.db.indexOuterLeafMode) {
-				decoded, ok, found, _, decErr := outerleaf.DecodeEntryForKey(val, entry.Key, nil)
-				if decErr != nil {
-					return decErr
-				}
-				if !ok {
-					if strings.TrimSpace(b.db.indexOuterLeafMode) == outerleaf.ModeV2FencePtr {
-						return fmt.Errorf("outerleaf: expected wrapped payload in fence mode replay")
-					}
-				}
-				if ok {
-					if !found {
-						return fmt.Errorf("outerleaf: key lookup miss in replay")
-					}
-					if decoded.Kind == outerleaf.EntryKindBlobRef {
-						val, err = b.db.valueLogManager.Read(decoded.BlobPtr)
-						if err != nil {
-							return err
-						}
-					} else {
-						val = decoded.Value
-					}
-				}
-			}
-			entry.Value = val
+		if b.db == nil || b.db.valueLogManager == nil {
+			return fmt.Errorf("missing value log manager")
 		}
+		val, err := b.db.valueLogManager.Read(ptr)
+		if err != nil {
+			return err
+		}
+		if outerleaf.ModeEnabled(b.db.indexOuterLeafMode) {
+			decoded, ok, found, _, decErr := outerleaf.DecodeEntryForKey(val, entry.Key, nil)
+			if decErr != nil {
+				return decErr
+			}
+			if !ok || !found {
+				return fmt.Errorf("outerleaf: key lookup miss in replay")
+			}
+			if decoded.Kind == outerleaf.EntryKindBlobRef {
+				val, err = b.db.valueLogManager.Read(decoded.BlobPtr)
+				if err != nil {
+					return err
+				}
+			} else {
+				val = decoded.Value
+			}
+		}
+		entry.Value = val
+	}
 		if err := fn(entry); err != nil {
 			return err
 		}

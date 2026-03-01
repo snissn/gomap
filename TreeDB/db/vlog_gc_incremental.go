@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -383,12 +382,6 @@ func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64
 	if db == nil || db.valueLogManager == nil {
 		return nil, nil
 	}
-	switch strings.TrimSpace(db.indexOuterLeafMode) {
-	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
-		// modes with outer-leaf blocks that can include nested blob refs.
-	default:
-		return nil, nil
-	}
 	payload, err := db.valueLogManager.Read(ptr)
 	if err != nil {
 		return nil, err
@@ -457,52 +450,14 @@ func (db *DB) addNestedBlobRefCounts(blobPtr page.ValuePtr, refs map[uint32]uint
 	return nil
 }
 
-func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry) (*valueLogRefDelta, error) {
+func (db *DB) buildValueLogRefDelta(_ *pager.Pager, _ uint64, baseSeq uint64, _ []batchpkg.Entry) (*valueLogRefDelta, error) {
 	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
 		return nil, nil
 	}
-	switch strings.TrimSpace(db.indexOuterLeafMode) {
-	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
-		// Conservative correctness fallback for nested blob refs in v3 fence blocks:
-		// incremental per-key deltas can miss nested reference fanout changes.
-		// Returning nil invalidates the tracker and forces a safe full rescan.
-		return nil, nil
-	}
-	delta := newValueLogRefDelta()
-	if p == nil {
-		return delta, nil
-	}
-	tr := tree.New(p, nil, rootID)
-	for i := range entries {
-		oldFileID, oldRef, err := lookupValueLogRefAtKey(tr, entries[i].Key)
-		if err != nil {
-			return nil, err
-		}
-		if oldRef {
-			delta.add(oldFileID, -1)
-		}
-		if entries[i].Type == batchpkg.OpPut && entries[i].IsPtr && page.IsValueLogFileID(entries[i].ValuePtr.FileID) {
-			delta.add(entries[i].ValuePtr.FileID, 1)
-		}
-	}
-	return delta, nil
-}
-
-func lookupValueLogRefAtKey(tr *tree.Tree, key []byte) (uint32, bool, error) {
-	if tr == nil {
-		return 0, false, nil
-	}
-	entry, err := tr.GetEntry(key)
-	if err != nil {
-		if errors.Is(err, tree.ErrKeyNotFound) {
-			return 0, false, nil
-		}
-		return 0, false, err
-	}
-	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
-		return 0, false, nil
-	}
-	return entry.ValuePtr.FileID, true, nil
+	// Conservative correctness fallback for nested blob refs in value-log records:
+	// incremental per-key deltas can miss nested reference fanout changes.
+	// Returning nil invalidates the tracker and forces a safe full rescan.
+	return nil, nil
 }
 
 type valueLogRefCountsDisk struct {

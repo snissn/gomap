@@ -143,56 +143,24 @@ func TestValueReader_FencePointerLikelyBlock_RequiresExplicitFenceMarker(t *test
 	}
 }
 
-func TestValueReader_FenceLookupScopedForV1LeafLog(t *testing.T) {
-	r := newValueReader(nil, outerleaf.ModeV1LeafLog, false, nil, nil)
+func TestValueReader_RouteLookupModeUsesSinglePathForV1(t *testing.T) {
+	r := newValueReader(nil, outerleaf.ModeV1, false, nil, nil)
 	defer (&r).releaseDecodeContext()
 
 	if !r.KeyAwareEnabled() {
-		t.Fatalf("v1_leaflog should keep key-aware outer-leaf reads enabled")
+		t.Fatalf("v1 should keep key-aware outer-leaf reads enabled")
 	}
-	if !r.FenceLookupEnabled() {
-		t.Fatalf("v1_leaflog should enable fence lookup mode")
-	}
-	if r.FenceLookupGlobalEnabled() {
-		t.Fatalf("v1_leaflog must disable global fallback lookups")
-	}
-	if !r.FenceLookupSingleCandidateEnabled() {
-		t.Fatalf("v1_leaflog must probe only one predecessor candidate")
-	}
-
-	base := page.ValuePtr{
-		FileID: page.ValueLogFileID(7),
-		Offset: 123,
-		Length: 4096,
-	}
-	fence := page.ValuePtrMarkFenceOuter(base)
-	if !r.FencePointerLikelyBlock(fence) {
-		t.Fatalf("v1_leaflog should classify explicit fence pointers as fence blocks")
-	}
-
-	grouped := base
-	grouped.Length = page.ValuePtrMarkGrouped(base.Length, 3)
-	groupedFence := page.ValuePtrMarkFenceOuter(grouped)
-	if r.FencePointerLikelyBlock(groupedFence) {
-		t.Fatalf("v1_leaflog must not classify grouped pointers as fence blocks")
-	}
-}
-
-func TestValueReader_FenceLookupScopedForV1LeafLogRoute(t *testing.T) {
-	r := newValueReader(nil, outerleaf.ModeV1LeafLogRoute, false, nil, nil)
-	defer (&r).releaseDecodeContext()
-
-	if !r.KeyAwareEnabled() {
-		t.Fatalf("v1_leaflog_route should keep key-aware outer-leaf reads enabled")
+	if !r.RouteLookupEnabled() {
+		t.Fatalf("v1 should keep key-aware route reads enabled")
 	}
 	if r.FenceLookupEnabled() {
-		t.Fatalf("v1_leaflog_route must keep fence lookup mode disabled")
+		t.Fatalf("v1 should not use legacy fence lookup mode")
 	}
 	if r.FenceLookupGlobalEnabled() {
-		t.Fatalf("v1_leaflog_route must disable global fallback lookups")
+		t.Fatalf("v1 should not enable global fence lookup mode")
 	}
 	if r.FenceLookupSingleCandidateEnabled() {
-		t.Fatalf("v1_leaflog_route must not advertise single-candidate fence probing")
+		t.Fatalf("v1 should not use single-candidate fence probing")
 	}
 
 	base := page.ValuePtr{
@@ -201,46 +169,18 @@ func TestValueReader_FenceLookupScopedForV1LeafLogRoute(t *testing.T) {
 		Length: 4096,
 	}
 	if !r.FencePointerLikelyBlock(base) {
-		t.Fatalf("v1_leaflog_route should classify plain pointers as anchor candidates")
+		t.Fatalf("v1 should treat plain anchor pointers as candidate payloads")
 	}
 
 	grouped := base
 	grouped.Length = page.ValuePtrMarkGrouped(base.Length, 3)
 	if !r.FencePointerLikelyBlock(grouped) {
-		t.Fatalf("v1_leaflog_route should classify grouped pointers as anchor candidates")
+		t.Fatalf("v1 should treat grouped anchors as candidate payloads")
 	}
 
 	fence := page.ValuePtrMarkFenceOuter(base)
 	if !r.FencePointerLikelyBlock(fence) {
-		t.Fatalf("v1_leaflog_route should classify explicitly fenced pointers as anchor candidates")
-	}
-}
-
-func TestValueReader_FenceLookupDisabledForV1LeafLogLegacy(t *testing.T) {
-	r := newValueReader(nil, outerleaf.ModeV1LeafLogLegacy, false, nil, nil)
-	defer (&r).releaseDecodeContext()
-
-	if !r.KeyAwareEnabled() {
-		t.Fatalf("v1_leaflog_legacy should keep key-aware outer-leaf reads enabled")
-	}
-	if r.FenceLookupEnabled() {
-		t.Fatalf("v1_leaflog_legacy must keep fence lookup mode disabled")
-	}
-	if r.FenceLookupGlobalEnabled() {
-		t.Fatalf("v1_leaflog_legacy must keep global fence fallback disabled")
-	}
-	if r.FenceLookupSingleCandidateEnabled() {
-		t.Fatalf("v1_leaflog_legacy should not advertise single-candidate fence probing")
-	}
-
-	base := page.ValuePtr{
-		FileID: page.ValueLogFileID(7),
-		Offset: 123,
-		Length: 4096,
-	}
-	fence := page.ValuePtrMarkFenceOuter(base)
-	if r.FencePointerLikelyBlock(fence) {
-		t.Fatalf("v1_leaflog_legacy must not classify pointers as fence blocks")
+		t.Fatalf("v1 should treat fenced anchors as candidate payloads")
 	}
 }
 
@@ -368,8 +308,8 @@ func TestOuterLeafFenceDecodeLeaseSetCloseConcurrentReleaseDoesNotRetainContext(
 }
 
 func TestNewValueReader_FenceDecodeLeasesReaderLocal(t *testing.T) {
-	r1 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
-	r2 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	r1 := newValueReader(nil, outerleaf.ModeV1, false, nil, nil)
+	r2 := newValueReader(nil, outerleaf.ModeV1, false, nil, nil)
 	defer (&r1).releaseDecodeContext()
 	defer (&r2).releaseDecodeContext()
 
@@ -385,8 +325,8 @@ func TestNewValueReader_FenceDecodeLeasesReaderLocal(t *testing.T) {
 }
 
 func TestValueReaderReleaseDecodeContext_DoesNotAffectOtherReader(t *testing.T) {
-	r1 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
-	r2 := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	r1 := newValueReader(nil, outerleaf.ModeV1, false, nil, nil)
+	r2 := newValueReader(nil, outerleaf.ModeV1, false, nil, nil)
 	defer (&r2).releaseDecodeContext()
 
 	(&r1).releaseDecodeContext()
@@ -404,7 +344,7 @@ func TestValueReaderReleaseDecodeContext_DoesNotAffectOtherReader(t *testing.T) 
 }
 
 func TestValueReaderReleaseDecodeContext_CleansReturnedLeaseContexts(t *testing.T) {
-	r := newValueReader(nil, outerleaf.ModeV2FencePtr, false, nil, nil)
+	r := newValueReader(nil, outerleaf.ModeV1, false, nil, nil)
 	if r.fenceDecodeLeases == nil {
 		t.Fatalf("fenceDecodeLeases=nil want initialized")
 	}
@@ -442,7 +382,7 @@ func TestValueReaderDecodeValueForKeyFound_LeaseReleasedOnDecodeError(t *testing
 	set := newOuterLeafFenceDecodeLeaseSet(1)
 	defer set.close()
 	var r valueReader
-	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	r.setOuterLeafMode(outerleaf.ModeV1)
 	r.fenceDecodeLeases = set
 
 	_, _, err := r.decodeValueForKeyFound(page.ValuePtr{}, []byte("k1"), payload, true)
@@ -465,7 +405,7 @@ func TestValueReaderDecodeValueForKeyFoundAppend_LeaseReleasedOnDecodeError(t *t
 	set := newOuterLeafFenceDecodeLeaseSet(1)
 	defer set.close()
 	var r valueReader
-	r.setOuterLeafMode(outerleaf.ModeV2FencePtr)
+	r.setOuterLeafMode(outerleaf.ModeV1)
 	r.fenceDecodeLeases = set
 
 	_, _, err := r.decodeValueForKeyFoundAppend(page.ValuePtr{}, []byte("k1"), payload, nil)
@@ -509,7 +449,7 @@ func TestValueReaderReadUnsafeAppendForKey_CacheHitSkipsReadUnsafe(t *testing.T)
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 	got, err := r.ReadUnsafeAppendForKey(ptr, []byte("k2"), nil)
@@ -531,7 +471,7 @@ func TestValueReaderReadUnsafeAppendForKey_CacheWarmsAfterMiss(t *testing.T) {
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -565,7 +505,7 @@ func TestValueReaderReadUnsafeAppendForKey_AppendPathDoesNotCacheOuterLeafBlock(
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -595,7 +535,7 @@ func TestValueReaderReadUnsafeAppendBatchForKeys_AppendBatchPathDoesNotCacheOute
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -621,7 +561,7 @@ func TestValueReaderReadUnsafeFenceForKey_CacheHitSkipsReadUnsafe(t *testing.T) 
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -674,7 +614,7 @@ func TestValueReaderReadUnsafeFenceForKey_NoCacheInline(t *testing.T) {
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: payload}}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 
 	got, found, err := r.ReadUnsafeFenceForKey(ptr, []byte("k2"))
@@ -737,7 +677,7 @@ func TestValueReaderReadUnsafeFenceForKey_LeaseCtxCacheBlocksRemainStable(t *tes
 		},
 	}
 	cache := newOuterLeafBlockCache(8)
-	r := newValueReader(reader, outerleaf.ModeV2FencePtr, false, cache, nil)
+	r := newValueReader(reader, outerleaf.ModeV1, false, cache, nil)
 	defer (&r).releaseDecodeContext()
 
 	gotA1, found, err := r.ReadUnsafeFenceForKey(ptrA, keyA)
@@ -800,7 +740,7 @@ func TestValueReaderReadUnsafeFenceForKey_NoCacheLeaseCtxInlineValuesRemainStabl
 			ptrB: payloadB,
 		},
 	}
-	r := newValueReader(reader, outerleaf.ModeV2FencePtr, false, nil, nil)
+	r := newValueReader(reader, outerleaf.ModeV1, false, nil, nil)
 	defer (&r).releaseDecodeContext()
 	if r.fenceDecodeLeases == nil {
 		t.Fatalf("fenceDecodeLeases=nil want initialized for no-cache fence mode")
@@ -838,7 +778,7 @@ func TestValueReaderReadUnsafeFenceBlockKeys_CacheHitSkipsReadUnsafe(t *testing.
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -873,7 +813,7 @@ func TestValueReaderReadUnsafeFenceBlockKeys_BlobRefWarmsCacheAfterMiss(t *testi
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 		keyCache:      keyCache,
 	}
@@ -920,7 +860,7 @@ func TestValueReaderReadUnsafeFenceBlock_UsesVisitTypedEntries(t *testing.T) {
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -950,7 +890,7 @@ func TestValueReaderReadUnsafeFenceBlockLeaseInto_CacheHitReturnsLease(t *testin
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -981,7 +921,7 @@ func TestValueReaderReadUnsafeFenceBlockInto_CacheHitClonesInlineEntries(t *test
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -1026,7 +966,7 @@ func TestValueReaderReadUnsafeFenceBlockKeysRange_CacheHitSkipsReadUnsafe(t *tes
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -1053,7 +993,7 @@ func TestValueReaderReadUnsafeFenceBlockKeysRangeLease_CacheHitSkipsReadUnsafe(t
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -1085,7 +1025,7 @@ func TestValueReaderReadUnsafeFenceBlockKeysRangeLease_CacheHitUnboundedUsesCach
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -1121,7 +1061,7 @@ func TestValueReaderReadUnsafeFenceBlockKeysRangeLease_KeyCacheHitReturnsStaticL
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		keyCache:      keyCache,
 	}
 
@@ -1182,7 +1122,7 @@ func TestValueReaderReadUnsafeFenceBlockKeysRangeLease_CacheBlockLeaseReleaseCon
 
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 
@@ -1226,7 +1166,7 @@ func TestValueReaderReadUnsafeFenceBlockKeysRange_UsesKeyCacheWindow(t *testing.
 	keyCache := newOuterLeafKeyCache(8)
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 		keyCache:      keyCache,
 	}
@@ -1270,7 +1210,7 @@ func TestValueReaderReadUnsafeFenceBlockSeek_ClassifiesBoundsAndReusesCache(t *t
 	keyCache := newOuterLeafKeyCache(8)
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 		keyCache:      keyCache,
 	}
@@ -1325,7 +1265,7 @@ func TestValueReaderReadUnsafeFenceBlockSeekLease_CachesClonedKeys(t *testing.T)
 	keyCache := newOuterLeafKeyCache(8)
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 		keyCache:      keyCache,
 	}
@@ -1375,7 +1315,7 @@ func TestValueReaderFenceMode_DirectPointerReadForKey(t *testing.T) {
 	reader := &stubValueLogReader{payloads: map[page.ValuePtr][]byte{ptr: raw}}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 
 	got, err := r.ReadUnsafeForKey(ptr, []byte("k1"))
@@ -1447,7 +1387,7 @@ func TestValueReaderBlobRefResolution_ReadForKey(t *testing.T) {
 	}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 	got, err := r.ReadForKey(outerPtr, key)
 	if err != nil {
@@ -1469,7 +1409,7 @@ func TestValueReaderBlobRefResolution_MissingNestedPointer(t *testing.T) {
 	}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 	if _, err := r.ReadForKey(outerPtr, key); err == nil {
 		t.Fatalf("expected missing nested blob pointer read to fail")
@@ -1487,7 +1427,7 @@ func TestValueReaderBlobRefResolution_InvalidNestedPointerFile(t *testing.T) {
 	}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 	if _, err := r.ReadForKey(outerPtr, key); err == nil {
 		t.Fatalf("expected invalid nested blob pointer file to fail")
@@ -1509,7 +1449,7 @@ func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_UsesAppendReader(t 
 	}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 
 	got, err := r.ReadUnsafeAppendForKey(outerPtr, key, nil)
@@ -1544,7 +1484,7 @@ func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_RetainsOuterBufferC
 	}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 
 	dst := make([]byte, 0, 1)
@@ -1595,7 +1535,7 @@ func TestValueReaderBlobRefResolution_ReadUnsafeAppendBatchForKeys_RetainsOuterB
 	}
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 	}
 	ptrs := []page.ValuePtr{outerPtrA, outerPtrB}
 	keys := [][]byte{keyA, keyB}
@@ -1662,7 +1602,7 @@ func TestValueReaderBlobRefResolution_ReadUnsafeAppendForKey_CacheHitUsesAppendR
 	cache.put(newOuterLeafBlockKey(outerPtr), block)
 	r := valueReader{
 		vlogs:         reader,
-		outerLeafMode: outerleaf.ModeV2FencePtr,
+		outerLeafMode: outerleaf.ModeV1,
 		cache:         cache,
 	}
 

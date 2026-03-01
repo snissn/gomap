@@ -18,11 +18,7 @@ import (
 )
 
 const (
-	ModeV1LeafLog       = "v1_leaflog"
-	ModeV1LeafLogLegacy = "v1_leaflog_legacy"
-	ModeV1LeafLogRoute  = "v1_leaflog_route"
-	ModeV2BlockPtr      = "v2_blockptr"
-	ModeV2FencePtr      = "v2_fenceptr"
+	ModeV1 = "v1"
 
 	defaultBlockTargetBytes = 4 << 10
 	defaultRestartInterval  = 16
@@ -267,7 +263,7 @@ func HasMagic(payload []byte) bool {
 
 func ModeEnabled(mode string) bool {
 	switch strings.TrimSpace(mode) {
-	case ModeV1LeafLog, ModeV1LeafLogLegacy, ModeV1LeafLogRoute, ModeV2BlockPtr, ModeV2FencePtr:
+	case ModeV1:
 		return true
 	default:
 		return false
