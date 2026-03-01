@@ -5261,6 +5261,28 @@ func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 	if err := it.Error(); err != nil {
 		return nil, err
 	}
+
+	if snapper, ok := db.backend.(interface{ AcquireSnapshot() *backenddb.Snapshot }); ok {
+		snap := snapper.AcquireSnapshot()
+		if snap != nil {
+			state := snap.State()
+			p := snap.Pager()
+			if state != nil && p != nil {
+				if err := collectLeafRefValueLogLiveIDs(p, state.RootPageID, live); err != nil {
+					_ = snap.Close()
+					return nil, err
+				}
+				if err := collectLeafRefValueLogLiveIDs(p, state.SystemRootPageID, live); err != nil {
+					_ = snap.Close()
+					return nil, err
+				}
+			}
+			if err := snap.Close(); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	return live, nil
 }
 
