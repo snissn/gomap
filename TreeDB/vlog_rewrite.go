@@ -46,8 +46,8 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 // ValueLogRewriteOnline rewrites pointer-backed values in bounded commit
 // batches and atomically swaps keys to rewritten pointers.
 //
-// In cached mode this method checkpoints first to establish a stable backend
-// baseline before running online rewrite against the backend DB.
+// In cached mode this method flushes first so the backend reflects all buffered
+// writes before running online rewrite against the backend DB.
 func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewriteStats, error) {
 	if err := db.ensureOpen(); err != nil {
 		return ValueLogRewriteStats{}, err
@@ -59,7 +59,10 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	success := false
 	defer func() { finishMaintenance(success) }()
 	if db.cached != nil {
-		if err := db.Checkpoint(); err != nil {
+		// Avoid Checkpoint() here: it may rotate/prune log segments, which is not
+		// required for rewrite correctness and can surprise callers that use
+		// rewrite as a pure compaction step.
+		if err := db.cached.Flush(); err != nil {
 			return ValueLogRewriteStats{}, err
 		}
 	}

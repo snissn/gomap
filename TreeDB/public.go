@@ -1319,7 +1319,10 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	// that temporarily "forgets" keys that only existed in memtables/WAL, which
 	// can break higher layers that assume a stable durable boundary.
 	if db.cached != nil {
-		if err := db.cached.Checkpoint(); err != nil {
+		// Flush is sufficient here: we only need the backend index to reflect all
+		// buffered writes. Checkpoint rotates/prunes log segments and is not
+		// required for vacuum correctness.
+		if err := db.cached.Flush(); err != nil {
 			return err
 		}
 	}
