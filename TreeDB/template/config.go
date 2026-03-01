@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// Config controls template encoding, routing, and training behavior.
+// Config controls template encoding, indexing, and training behavior.
 // Zero values use defaults via NormalizeConfig.
 type Config struct {
 	// Encoding/decoding caps.
@@ -18,7 +18,7 @@ type Config struct {
 	MaxAnchorBytesTotal   int
 	MaxAnchorSearchOps    int
 
-	// Fingerprinting (routing).
+	// Fingerprinting (indexing).
 	FingerprintK          int
 	FingerprintW          int
 	MaxFingerprints       int
@@ -26,8 +26,8 @@ type Config struct {
 	MaxTemplateFetch      int
 	MaxCandidatesPerFP    int
 	MaxCandidateListBytes int
-	RoutePrefixBytes      int
-	RouteSuffixBytes      int
+	IndexPrefixBytes      int
+	IndexSuffixBytes      int
 	LengthBucketMinLen    int
 	DefCacheSize          int
 	RecentTemplates       int
@@ -61,7 +61,7 @@ type Config struct {
 	MinPublishRatio              float64
 	MinActivateHits              int
 	MinActivateSavedBytes        int
-	RouteFPCount                 int
+	IndexFPCount                 int
 	DisableMaskTemplates         bool
 	MaskMinPresenceRatio         float64
 	MaskMinConstBytes            int
@@ -75,7 +75,7 @@ type Config struct {
 	// These settings control the background pipeline used to ingest samples,
 	// synthesize templates, and publish them without stalling writers.
 	TrainShards         int
-	TrainRouters        int
+	TrainDispatchers    int
 	TrainQueueSize      int
 	TrainShardQueueSize int
 	TrainMaxValueBytes  int
@@ -127,11 +127,11 @@ func NormalizeConfig(cfg Config) Config {
 	if cfg.MaxCandidateListBytes <= 0 {
 		cfg.MaxCandidateListBytes = 4 << 10
 	}
-	if cfg.RoutePrefixBytes <= 0 {
-		cfg.RoutePrefixBytes = 32
+	if cfg.IndexPrefixBytes <= 0 {
+		cfg.IndexPrefixBytes = 32
 	}
-	if cfg.RouteSuffixBytes <= 0 {
-		cfg.RouteSuffixBytes = 32
+	if cfg.IndexSuffixBytes <= 0 {
+		cfg.IndexSuffixBytes = 32
 	}
 	if cfg.LengthBucketMinLen <= 0 {
 		cfg.LengthBucketMinLen = 64
@@ -214,8 +214,8 @@ func NormalizeConfig(cfg Config) Config {
 	if cfg.MinActivateSavedBytes <= 0 {
 		cfg.MinActivateSavedBytes = 256
 	}
-	if cfg.RouteFPCount <= 0 {
-		cfg.RouteFPCount = 12
+	if cfg.IndexFPCount <= 0 {
+		cfg.IndexFPCount = 12
 	}
 	if cfg.MaskMinPresenceRatio <= 0 {
 		cfg.MaskMinPresenceRatio = 0.9
@@ -247,13 +247,13 @@ func NormalizeConfig(cfg Config) Config {
 	if cfg.MaxBuckets > 0 && cfg.TrainShards > cfg.MaxBuckets {
 		cfg.TrainShards = cfg.MaxBuckets
 	}
-	if cfg.TrainRouters <= 0 {
-		cfg.TrainRouters = cfg.TrainShards
-		if cfg.TrainRouters > 4 {
-			cfg.TrainRouters = 4
+	if cfg.TrainDispatchers <= 0 {
+		cfg.TrainDispatchers = cfg.TrainShards
+		if cfg.TrainDispatchers > 4 {
+			cfg.TrainDispatchers = 4
 		}
-		if cfg.TrainRouters < 1 {
-			cfg.TrainRouters = 1
+		if cfg.TrainDispatchers < 1 {
+			cfg.TrainDispatchers = 1
 		}
 	}
 	if cfg.TrainQueueSize <= 0 {

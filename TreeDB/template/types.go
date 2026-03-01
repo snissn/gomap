@@ -10,23 +10,23 @@ const (
 	TemplateMask
 )
 
-// Candidate represents a routing candidate from templatedb.
+// Candidate represents a candidate template ID returned by the store index.
 type Candidate struct {
 	ID   uint64
 	Size int
 }
 
-// Store provides access to template definitions and routing candidates.
+// Store provides access to template definitions and index candidates.
 type Store interface {
 	GetCandidates(ctx context.Context, fp uint64, max int) ([]Candidate, error)
 	GetTemplateDef(ctx context.Context, templateID uint64) ([]byte, error)
-	PutTemplateDef(ctx context.Context, defBytes []byte, routeFPs []uint64) (uint64, error)
+	PutTemplateDef(ctx context.Context, defBytes []byte, fps []uint64) (uint64, error)
 }
 
 // PublishSpec describes a template definition publish request.
 type PublishSpec struct {
 	DefBytes []byte
-	RouteFPs []uint64
+	IndexFPs []uint64
 }
 
 // BatchPublisher is an optional extension to Store that allows publishing

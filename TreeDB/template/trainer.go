@@ -39,7 +39,7 @@ type pendingPublish struct {
 	samplesSeen int
 	def         TemplateDef
 	defBytes    []byte
-	routeFPs    []uint64
+	fps         []uint64
 }
 
 type trainShard struct {
@@ -100,9 +100,9 @@ func newTrainer(e *Engine) *trainer {
 	}
 	t.shards = shards
 
-	for i := 0; i < cfg.TrainRouters; i++ {
+	for i := 0; i < cfg.TrainDispatchers; i++ {
 		t.wg.Add(1)
-		go t.runRouter()
+		go t.runDispatcher()
 	}
 	for i := range t.shards {
 		shard := &t.shards[i]
@@ -144,7 +144,7 @@ func (t *trainer) Enqueue(store Store, value []byte) {
 	}
 }
 
-func (t *trainer) runRouter() {
+func (t *trainer) runDispatcher() {
 	defer t.wg.Done()
 	cfg := t.cfg
 	shardCount := len(t.shards)
@@ -182,7 +182,7 @@ func (t *trainer) runRouter() {
 			task := trainTask{store: sample.store, bucketKey: key, value: sample.value}
 			select {
 			case t.shards[idx].in <- task:
-				t.stats.TrainRouted.Add(1)
+				t.stats.TrainDispatched.Add(1)
 			default:
 				t.stats.TrainDroppedShardFull.Add(1)
 			}
@@ -258,7 +258,7 @@ func (s *trainShard) process(task trainTask) {
 	if cfg.MaxTemplatesTotal > 0 && s.totalTemplates.Load() >= uint64(cfg.MaxTemplatesTotal) {
 		return
 	}
-	def, routeValue, activated, ok := synthesizeTemplate(b.samples, cfg)
+	def, indexValue, activated, ok := synthesizeTemplate(b.samples, cfg)
 	if !ok || !activated {
 		return
 	}
@@ -266,11 +266,10 @@ func (s *trainShard) process(task trainTask) {
 	if err != nil {
 		return
 	}
-	routeFPs := RoutingFingerprints(routeValue, cfg)
-	if len(routeFPs) == 0 {
+	fps := IndexFingerprints(indexValue, cfg)
+	if len(fps) == 0 {
 		return
 	}
-	routeFPs = append(routeFPs, RoutingFingerprintsLegacy(routeValue, cfg)...)
 
 	b.publishPending = true
 	s.pending = append(s.pending, pendingPublish{
@@ -279,7 +278,7 @@ func (s *trainShard) process(task trainTask) {
 		samplesSeen: b.samplesSeen,
 		def:         def,
 		defBytes:    defBytes,
-		routeFPs:    routeFPs,
+		fps:         fps,
 	})
 	if len(s.pending) >= cfg.PublishBatchSize {
 		s.flushPublishes(context.Background())
@@ -329,7 +328,7 @@ func (s *trainShard) publishBatch(ctx context.Context, store Store, items []pend
 	if bp, ok := store.(BatchPublisher); ok && len(items) > 1 {
 		specs := make([]PublishSpec, len(items))
 		for i := range items {
-			specs[i] = PublishSpec{DefBytes: items[i].defBytes, RouteFPs: items[i].routeFPs}
+			specs[i] = PublishSpec{DefBytes: items[i].defBytes, IndexFPs: items[i].fps}
 		}
 		ids, err := bp.PutTemplateDefs(ctx, specs)
 		if err != nil || len(ids) != len(items) {
@@ -347,7 +346,7 @@ func (s *trainShard) publishBatch(ctx context.Context, store Store, items []pend
 		return
 	}
 	for i := range items {
-		id, err := store.PutTemplateDef(ctx, items[i].defBytes, items[i].routeFPs)
+		id, err := store.PutTemplateDef(ctx, items[i].defBytes, items[i].fps)
 		if err != nil {
 			s.stats.PublishErrors.Add(1)
 			if items[i].bucket != nil {

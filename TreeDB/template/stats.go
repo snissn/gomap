@@ -38,7 +38,7 @@ type TemplateStats struct {
 	TrainEnqueued         atomic.Uint64
 	TrainDroppedQueueFull atomic.Uint64
 	TrainDroppedTooLarge  atomic.Uint64
-	TrainRouted           atomic.Uint64
+	TrainDispatched       atomic.Uint64
 	TrainDroppedShardFull atomic.Uint64
 	TrainProcessed        atomic.Uint64
 	PublishBatches        atomic.Uint64
@@ -78,7 +78,7 @@ func (s *TemplateStats) Snapshot() map[string]string {
 		"train_enqueued_total":                 fmt.Sprintf("%d", s.TrainEnqueued.Load()),
 		"train_dropped_queue_full_total":       fmt.Sprintf("%d", s.TrainDroppedQueueFull.Load()),
 		"train_dropped_too_large_total":        fmt.Sprintf("%d", s.TrainDroppedTooLarge.Load()),
-		"train_routed_total":                   fmt.Sprintf("%d", s.TrainRouted.Load()),
+		"train_dispatched_total":               fmt.Sprintf("%d", s.TrainDispatched.Load()),
 		"train_dropped_shard_full_total":       fmt.Sprintf("%d", s.TrainDroppedShardFull.Load()),
 		"train_processed_total":                fmt.Sprintf("%d", s.TrainProcessed.Load()),
 		"publish_batches_total":                fmt.Sprintf("%d", s.PublishBatches.Load()),

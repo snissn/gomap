@@ -67,14 +67,14 @@ func lengthFingerprint(length int) uint64 {
 }
 
 const (
-	routeTagLen    uint64 = 1
-	routeTagPrefix uint64 = 2
-	routeTagMid1   uint64 = 3
-	routeTagMid2   uint64 = 4
-	routeTagSuffix uint64 = 5
+	indexTagLen    uint64 = 1
+	indexTagPrefix uint64 = 2
+	indexTagMid1   uint64 = 3
+	indexTagMid2   uint64 = 4
+	indexTagSuffix uint64 = 5
 )
 
-func mixRouteFP(tag uint64, h uint64) uint64 {
+func mixIndexFP(tag uint64, h uint64) uint64 {
 	// Mix in a small tag so different segment roles don't trivially collide.
 	return h ^ (tag * 0x9e3779b97f4a7c15)
 }
@@ -104,43 +104,41 @@ func BucketFingerprints(value []byte, cfg Config) []uint64 {
 	if cfg.LengthBucketMinLen > 0 && len(value) >= cfg.LengthBucketMinLen {
 		return []uint64{lengthFingerprint(len(value))}
 	}
-	prefixLen := cfg.RoutePrefixBytes
+	prefixLen := cfg.IndexPrefixBytes
 	if prefixLen < k {
 		prefixLen = k
 	}
 	if prefixLen >= len(value) {
 		return Fingerprints(value, cfg)
 	}
-	return fingerprintsLimited(value[:prefixLen], cfg, cfg.RouteFPCount)
+	return fingerprintsLimited(value[:prefixLen], cfg, cfg.IndexFPCount)
 }
 
-// AppendRoutingFingerprints appends deterministic routing fingerprints into dst.
+// AppendIndexFingerprints appends deterministic index fingerprints into dst.
 // It avoids winnowing and favors a few fixed segment hashes (plus length).
-func AppendRoutingFingerprints(dst []uint64, value []byte, cfg Config) []uint64 {
+func AppendIndexFingerprints(dst []uint64, value []byte, cfg Config) []uint64 {
 	cfg = NormalizeConfig(cfg)
-	return appendRoutingFingerprints(dst, value, cfg)
+	return appendIndexFingerprints(dst, value, cfg)
 }
 
-func appendRoutingFingerprints(dst []uint64, value []byte, cfg Config) []uint64 {
+func appendIndexFingerprints(dst []uint64, value []byte, cfg Config) []uint64 {
 	k := cfg.FingerprintK
 	if k <= 0 || len(value) < k {
 		return dst
 	}
-	limit := cfg.RouteFPCount
+	limit := cfg.IndexFPCount
 	if limit <= 0 {
 		limit = cfg.MaxFingerprints
 	}
 	if cfg.LengthBucketMinLen > 0 && len(value) >= cfg.LengthBucketMinLen {
-		// Keep the legacy length fingerprint unmodified so templates published by
-		// older versions remain discoverable.
 		dst = appendUniqueFP(dst, lengthFingerprint(len(value)), limit)
 	}
 
-	prefixLen := cfg.RoutePrefixBytes
+	prefixLen := cfg.IndexPrefixBytes
 	if prefixLen < k {
 		prefixLen = k
 	}
-	suffixLen := cfg.RouteSuffixBytes
+	suffixLen := cfg.IndexSuffixBytes
 	if suffixLen < k {
 		suffixLen = k
 	}
@@ -154,25 +152,25 @@ func appendRoutingFingerprints(dst []uint64, value []byte, cfg Config) []uint64 
 	if segLen > len(value) {
 		segLen = len(value)
 	}
-	dst = appendUniqueFP(dst, mixRouteFP(routeTagPrefix, xxh3.Hash(value[:segLen])), limit)
+	dst = appendUniqueFP(dst, mixIndexFP(indexTagPrefix, xxh3.Hash(value[:segLen])), limit)
 
 	if len(value) >= suffixLen {
 		if suffixLen > len(value) {
 			suffixLen = len(value)
 		}
-		dst = appendUniqueFP(dst, mixRouteFP(routeTagSuffix, xxh3.Hash(value[len(value)-suffixLen:])), limit)
+		dst = appendUniqueFP(dst, mixIndexFP(indexTagSuffix, xxh3.Hash(value[len(value)-suffixLen:])), limit)
 	}
 
 	// Add one or two middle probes to reduce collision/candidate list size while
-	// keeping routing cost O(1) per value.
+	// keeping index cost O(1) per value.
 	if len(dst) < limit && segLen < len(value) {
 		start := (len(value) - segLen) / 2
-		dst = appendUniqueFP(dst, mixRouteFP(routeTagMid1, xxh3.Hash(value[start:start+segLen])), limit)
+		dst = appendUniqueFP(dst, mixIndexFP(indexTagMid1, xxh3.Hash(value[start:start+segLen])), limit)
 	}
 	if len(dst) < limit && segLen < len(value) {
 		start := (len(value) - segLen) / 4
 		if start > 0 && start+segLen <= len(value) {
-			dst = appendUniqueFP(dst, mixRouteFP(routeTagMid2, xxh3.Hash(value[start:start+segLen])), limit)
+			dst = appendUniqueFP(dst, mixIndexFP(indexTagMid2, xxh3.Hash(value[start:start+segLen])), limit)
 		}
 	}
 
@@ -195,84 +193,21 @@ func BucketKey(fps []uint64) uint64 {
 	return xxh3.Hash(buf[:limit*8])
 }
 
-// RoutingFingerprints returns fingerprints used for routing/bucketing.
-// Prefer AppendRoutingFingerprints to avoid allocations.
-func RoutingFingerprints(value []byte, cfg Config) []uint64 {
+// IndexFingerprints returns fingerprints used for bucketing and index lookups.
+// Prefer AppendIndexFingerprints to avoid allocations.
+func IndexFingerprints(value []byte, cfg Config) []uint64 {
 	cfg = NormalizeConfig(cfg)
-	limit := cfg.RouteFPCount
+	limit := cfg.IndexFPCount
 	if limit <= 0 {
 		limit = cfg.MaxFingerprints
 	}
 	out := make([]uint64, 0, limit)
-	return appendRoutingFingerprints(out, value, cfg)
+	return appendIndexFingerprints(out, value, cfg)
 }
 
-// RoutingFingerprintsLegacy returns deterministic winnowed routing fingerprints.
-// It prefers prefix+suffix slices to avoid random middle bytes dominating.
-func RoutingFingerprintsLegacy(value []byte, cfg Config) []uint64 {
-	cfg = NormalizeConfig(cfg)
-	k := cfg.FingerprintK
-	if k <= 0 || len(value) < k {
-		return nil
-	}
-	if cfg.LengthBucketMinLen > 0 && len(value) >= cfg.LengthBucketMinLen {
-		return []uint64{lengthFingerprint(len(value))}
-	}
-	limit := cfg.RouteFPCount
-	if limit <= 0 {
-		limit = cfg.MaxFingerprints
-	}
-	out := make([]uint64, 0, limit)
-	seen := make(map[uint64]struct{}, limit)
-	if cfg.LengthBucketMinLen > 0 && len(value) >= cfg.LengthBucketMinLen {
-		fp := lengthFingerprint(len(value))
-		out = append(out, fp)
-		seen[fp] = struct{}{}
-	}
-	prefixLen := cfg.RoutePrefixBytes
-	suffixLen := cfg.RouteSuffixBytes
-	if prefixLen < k {
-		prefixLen = k
-	}
-	if suffixLen < k {
-		suffixLen = k
-	}
-	if prefixLen >= len(value) {
-		return Fingerprints(value, cfg)
-	}
-	if prefixLen+suffixLen > len(value) {
-		suffixLen = len(value) - prefixLen
-	}
-	prefix := value[:prefixLen]
-	suffix := value[len(value)-suffixLen:]
-	prefixLimit := limit / 2
-	if prefixLimit < 1 {
-		prefixLimit = limit
-	}
-	suffixLimit := limit - prefixLimit
-	fps := make([]uint64, 0, limit)
-	fps = append(fps, fingerprintsLimited(prefix, cfg, prefixLimit)...)
-	if suffixLimit > 0 && suffixLen >= k {
-		fps = append(fps, fingerprintsLimited(suffix, cfg, suffixLimit)...)
-	}
-	if len(fps) == 0 {
-		return Fingerprints(value, cfg)
-	}
-	for _, fp := range fps {
-		if len(out) >= limit {
-			break
-		}
-		if _, ok := seen[fp]; ok {
-			continue
-		}
-		out = append(out, fp)
-		seen[fp] = struct{}{}
-	}
-	return out
-}
-
-// RouteFingerprints returns deterministic routing fingerprints for template anchors.
-func RouteFingerprints(anchors [][]byte, cfg Config) []uint64 {
+// AnchorFingerprints returns deterministic fingerprints for indexing a template
+// definition based on its anchors.
+func AnchorFingerprints(anchors [][]byte, cfg Config) []uint64 {
 	cfg = NormalizeConfig(cfg)
 	if len(anchors) == 0 {
 		return nil
@@ -290,8 +225,8 @@ func RouteFingerprints(anchors [][]byte, cfg Config) []uint64 {
 	if len(fps) == 0 {
 		return nil
 	}
-	if cfg.RouteFPCount > 0 && len(fps) > cfg.RouteFPCount {
-		fps = fps[:cfg.RouteFPCount]
+	if cfg.IndexFPCount > 0 && len(fps) > cfg.IndexFPCount {
+		fps = fps[:cfg.IndexFPCount]
 	}
 	return fps
 }

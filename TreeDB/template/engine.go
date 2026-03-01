@@ -284,7 +284,7 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 		ctx = context.Background()
 	}
 	var fpBuf [16]uint64
-	fps := appendRoutingFingerprints(fpBuf[:0], value, cfg)
+	fps := appendIndexFingerprints(fpBuf[:0], value, cfg)
 	if len(fps) == 0 {
 		fps = Fingerprints(value, cfg)
 	}
@@ -317,35 +317,6 @@ func (e *Engine) Encode(ctx context.Context, value []byte, store Store) ([]byte,
 				cs.size = c.Size
 			}
 			candMap[c.ID] = cs
-		}
-	}
-	if len(candMap) == 0 {
-		legacy := RoutingFingerprintsLegacy(value, cfg)
-		if len(legacy) > 0 {
-			maxReads := cfg.MaxFPReads
-			if maxReads <= 0 || maxReads > len(legacy) {
-				maxReads = len(legacy)
-			}
-			for i := 0; i < maxReads; i++ {
-				fp := legacy[i]
-				e.stats.CandidateFPReads.Add(1)
-				cands, err := store.GetCandidates(ctx, fp, cfg.MaxCandidatesPerFP)
-				if err != nil {
-					e.stats.addReason(reasonFPLookupErr)
-					continue
-				}
-				for _, c := range cands {
-					cs, ok := candMap[c.ID]
-					if !ok {
-						cs = candScore{id: c.ID, size: c.Size}
-					}
-					cs.score++
-					if c.Size > 0 && (cs.size == 0 || c.Size < cs.size) {
-						cs.size = c.Size
-					}
-					candMap[c.ID] = cs
-				}
-			}
 		}
 	}
 	if len(candMap) == 0 {
@@ -708,8 +679,8 @@ func synthesizeTemplate(samples []sample, cfg Config) (TemplateDef, []byte, bool
 		return TemplateDef{}, nil, false, false
 	}
 	if !cfg.DisableMaskTemplates {
-		if def, routeValue, activated, ok := synthesizeMaskTemplate(samples, cfg); ok {
-			return def, routeValue, activated, true
+		if def, indexValue, activated, ok := synthesizeMaskTemplate(samples, cfg); ok {
+			return def, indexValue, activated, true
 		}
 	}
 	k := cfg.FingerprintK

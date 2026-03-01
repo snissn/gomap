@@ -147,7 +147,7 @@ func TestEngineStartupColdGateLimitsCandidateLookups_DefaultConfig(t *testing.T)
 		MinSavingsBytes:       1,
 		FingerprintK:          4,
 		FingerprintW:          4,
-		RouteFPCount:          1,
+		IndexFPCount:          1,
 		MaxFPReads:            1,
 		MaxTemplateFetch:      1,
 		MaxCandidatesPerFP:    1,

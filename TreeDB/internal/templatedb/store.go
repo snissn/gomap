@@ -119,7 +119,7 @@ func (s *Store) GetCandidates(_ context.Context, fp uint64, max int) ([]template
 }
 
 // PutTemplateDef stores a template definition and updates lookup indices.
-func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []uint64) (uint64, error) {
+func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, fps []uint64) (uint64, error) {
 	if s == nil || s.kv == nil {
 		return 0, errStoreUnavailable
 	}
@@ -129,16 +129,16 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 	defer s.mu.Unlock()
 
 	// Dedup and sort fingerprints deterministically.
-	if len(routeFPs) > 0 {
-		sort.Slice(routeFPs, func(i, j int) bool { return routeFPs[i] < routeFPs[j] })
+	if len(fps) > 0 {
+		sort.Slice(fps, func(i, j int) bool { return fps[i] < fps[j] })
 		j := 0
-		for i := 0; i < len(routeFPs); i++ {
-			if i == 0 || routeFPs[i] != routeFPs[i-1] {
-				routeFPs[j] = routeFPs[i]
+		for i := 0; i < len(fps); i++ {
+			if i == 0 || fps[i] != fps[i-1] {
+				fps[j] = fps[i]
 				j++
 			}
 		}
-		routeFPs = routeFPs[:j]
+		fps = fps[:j]
 	}
 
 	id := uint64(0)
@@ -169,8 +169,8 @@ func (s *Store) PutTemplateDef(_ context.Context, defBytes []byte, routeFPs []ui
 	}
 
 	candidateSize := len(defBytes)
-	updates := make(map[uint64][]byte, len(routeFPs))
-	for _, fp := range routeFPs {
+	updates := make(map[uint64][]byte, len(fps))
+	for _, fp := range fps {
 		listBytes, err := s.kv.Get(fpKey(fp))
 		if err != nil {
 			return 0, err
@@ -242,21 +242,21 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 	// Assign IDs and collect candidate list additions.
 	for i := range defs {
 		defBytes := defs[i].DefBytes
-		routeFPs := defs[i].RouteFPs
+		fps := defs[i].IndexFPs
 
 		// Dedup and sort fingerprints deterministically.
-		if len(routeFPs) > 0 {
-			sort.Slice(routeFPs, func(i, j int) bool { return routeFPs[i] < routeFPs[j] })
+		if len(fps) > 0 {
+			sort.Slice(fps, func(i, j int) bool { return fps[i] < fps[j] })
 			j := 0
-			for k := 0; k < len(routeFPs); k++ {
-				if k == 0 || routeFPs[k] != routeFPs[k-1] {
-					routeFPs[j] = routeFPs[k]
+			for k := 0; k < len(fps); k++ {
+				if k == 0 || fps[k] != fps[k-1] {
+					fps[j] = fps[k]
 					j++
 				}
 			}
-			routeFPs = routeFPs[:j]
+			fps = fps[:j]
 		}
-		defs[i].RouteFPs = routeFPs
+		defs[i].IndexFPs = fps
 
 		id := uint64(0)
 		for attempt := 0; attempt < cfg.MaxIDAttempts; attempt++ {
@@ -295,11 +295,11 @@ func (s *Store) PutTemplateDefs(_ context.Context, defs []template.PublishSpec) 
 		ids[i] = id
 		reserved[id] = defBytes
 
-		if len(routeFPs) == 0 {
+		if len(fps) == 0 {
 			continue
 		}
 		candidateSize := len(defBytes)
-		for _, fp := range routeFPs {
+		for _, fp := range fps {
 			additions = append(additions, candAdd{
 				fp:   fp,
 				cand: template.Candidate{ID: id, Size: candidateSize},
