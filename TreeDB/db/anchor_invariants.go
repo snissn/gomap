@@ -21,14 +21,14 @@ func debugAnchorInvariantsEnabled() bool {
 	}
 }
 
-type leafLogAnchor struct {
+type valueLogAnchor struct {
 	Key []byte
 	Ptr page.ValuePtr
 }
 
-// validateLeafLogAnchors performs a lightweight ordering/disjointness check for
-// persisted leaf-log anchors. It is intentionally side-effect free.
-func validateLeafLogAnchors(anchors []leafLogAnchor) error {
+// validateValueLogAnchors performs a lightweight ordering/disjointness check for
+// persisted value-log anchors. It is intentionally side-effect free.
+func validateValueLogAnchors(anchors []valueLogAnchor) error {
 	var (
 		prevKey []byte
 	)
@@ -52,7 +52,7 @@ func validateLeafLogAnchors(anchors []leafLogAnchor) error {
 	return nil
 }
 
-func debugFailFastOnLeafLogAnchorInvariant(err error) {
+func debugFailFastOnValueLogAnchorInvariant(err error) {
 	if err == nil || !debugAnchorInvariantsEnabled() {
 		return
 	}
