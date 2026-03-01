@@ -48,7 +48,7 @@ Current defaults:
 
 ### Targets
 
-- Steady-state value-log bytes lower than current v1_leaflog_route churn baseline.
+- Steady-state value-log bytes lower than current churn baseline.
 - Rewrite write amplification bounded by explicit ceiling (report and gate in CI/bench).
 - Read latency guardrail: no major p95 regression vs current baseline.
 - Crash/reopen parity: no data loss, no stale-pointer reads.
@@ -57,7 +57,7 @@ Current defaults:
 
 - Pointer remap publish is atomic from reader perspective.
 - No segment deletion before unreachable proof from a consistent snapshot.
-- Mode isolation: no regression in `v1`, `v2_fenceptr`, `v2_blockptr`, `v1_leaflog_route`.
+- No correctness regressions across durable vs relaxed durability profiles.
 
 ### WAL Mode Parity (Required)
 
@@ -127,7 +127,7 @@ Policy coupling without hard coupling of operations:
 
 ## 7. Outer-Leaf Density Tuning
 
-- Default outer-leaf block target to `8KiB` for route mode.
+- Default outer-leaf block target to `8KiB`.
 - Offer `16KiB` size-oriented profile option.
 - Add latency guardrails to avoid oversized-block read cliffs.
 - Keep codec behavior explicit and measurable.
@@ -154,7 +154,7 @@ Targeted tests:
 ## 10. Merge Gates
 
 - CI green across Linux/macOS/Windows.
-- No correctness regressions across all outer-leaf modes.
+- No correctness regressions.
 - Bench evidence includes:
   - reduced steady-state wal bytes under churn,
   - bounded rewrite amplification,
@@ -163,8 +163,4 @@ Targeted tests:
 
 ## Implementation Notes
 
-- Use mode-explicit tooling paths for maintenance commands:
-  - `treemap stats ... -index-outer-leaf-mode ...`
-  - `treemap vlog-gc ... -index-outer-leaf-mode ...`
-  - `treemap vlog-rewrite ... -index-outer-leaf-mode ...`
 - Keep all changes behind explicit defaults and feature gates until parity tests are complete.

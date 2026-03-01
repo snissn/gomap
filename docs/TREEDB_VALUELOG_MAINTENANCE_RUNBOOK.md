@@ -98,11 +98,8 @@ Alert on:
    - after copy before publish,
    - after publish before cleanup.
 3. No orphan pointers and no deleted-live segment regressions.
-4. Cross-mode parity:
-   - `v1`
-   - `v2_fenceptr`
-   - `v2_blockptr`
-   - `v1_leaflog_route`
+4. Parity: `Get`/`Has`/`Iterator`/`ReverseIterator` behavior remains consistent
+   across reopen boundaries and maintenance runs.
 
 ## Notes For Bench Runs
 

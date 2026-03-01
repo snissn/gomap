@@ -76,10 +76,10 @@ Notes:
 - Compression is encoded in the value-log record header (frame flags), not in
   `ValuePtr.Length`.
 
-### Outer-leaf value-log payloads (`IndexOuterLeafMode=v2_blockptr|v2_fenceptr`)
+### Outer-leaf value-log payloads
 
-When `IndexOuterLeafMode` is `v2_blockptr` or `v2_fenceptr`, pointer payloads
-may be wrapped using the `TOL2` envelope before being written to the value log:
+Pointer payloads may be wrapped using the `TOL2` envelope before being written
+to the value log:
 
 ```text
 bytes[4] Magic = "TOL2"
@@ -95,37 +95,8 @@ bytes    EncodedPayload
 - Version 2 stores multiple sorted `{key,value}` pairs with prefix-compressed
   keys plus a restart-offset table/trailer.
 
-Mode semantics:
-- `v2_blockptr`: index leaves still store per-user-key pointer entries.
-- `v2_fenceptr`: index leaves store one fence-key pointer per grouped block; user
-  keys are resolved from block payloads.
-
 Point lookups and iterators resolve `{pointer,key}` by decoding one payload
 block and finding the requested key inside that block.
-
-Pre-alpha note: these `v2` outer-leaf layouts are intentionally allowed to
-change. Old experimental DB directories may fail to open after format updates.
-
-### Routing-only outer-leaf payloads (`IndexOuterLeafMode=v1_leaflog_route`)
-
-`v1_leaflog_route` is the routing-only mode:
-
-- `index.db` stores routing/index pages and directory anchors, not key-sorted outer
-  leaf pages.
-- The index points to one outer-leaf payload block per anchor.
-- Each outer-leaf block is written as one coherent blob in the value log and is
-  compressed by default (snappy path).
-- Each block entry may store either:
-  - full inline small values, or
-  - a nested value pointer for larger values.
-- Reads follow an exact one-probe routing contract: locate the covering anchor,
-  decode that blob, and resolve the key by binary search inside the decoded
-  block.
-- Writes publish blob anchors atomically so an anchor is never visible before the
-  referenced blob is durable.
-
-For the exact semantics, invariants, and acceptance criteria of this mode, see:
-`docs/TREEDB_V1_LEAFLOG_ROUTE_SPEC.md`
 
 ### Leaf entry encoding (index leaf pages)
 
