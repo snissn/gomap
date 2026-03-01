@@ -20,9 +20,9 @@ import (
 
 func TestValueLogAppendRead(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestValueLogAppendRead(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	reader, err := NewReader(path, page.ValueLogFileID(1))
+	reader, err := NewReader(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new reader: %v", err)
 	}
@@ -659,9 +659,9 @@ func TestValueLogManager_GroupedFrameCache_MaxRawBytesSkipsOversize(t *testing.T
 
 func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -702,9 +702,9 @@ func TestReadAtGroupedFastPathWithoutChecksum(t *testing.T) {
 
 func TestReadAtGroupedFastPathSubIndexRange(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -748,7 +748,7 @@ func TestReadAtGroupedFastPathSubIndexRange(t *testing.T) {
 
 func TestReadAtGroupedK128WithDict(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
 	records := make([]Record, MaxFrameK)
 	expect := make([]string, len(records))
@@ -791,7 +791,7 @@ func TestReadAtGroupedK128WithDict(t *testing.T) {
 		t.Fatalf("BuildDict: empty dict")
 	}
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -834,7 +834,7 @@ func TestReadAtGroupedK128WithDict(t *testing.T) {
 
 func TestAppendEncodedFrameInto_RoundTripWithDict(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
 	records := make([]Record, 16)
 	expect := make([][]byte, len(records))
@@ -881,7 +881,7 @@ func TestAppendEncodedFrameInto_RoundTripWithDict(t *testing.T) {
 		t.Fatalf("EncodeFrameWithOptions: %v", err)
 	}
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -924,7 +924,7 @@ func TestAppendEncodedFrameInto_RoundTripWithDict(t *testing.T) {
 
 func TestFramePreparer_PrepareFrame_RoundTripWithDict(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
 	records := make([]Record, 16)
 	expect := make([][]byte, len(records))
@@ -982,7 +982,7 @@ func TestFramePreparer_PrepareFrame_RoundTripWithDict(t *testing.T) {
 		t.Fatalf("expected compression attempt")
 	}
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -1121,9 +1121,9 @@ func TestFramePreparer_KeepPolicySkipsCompression(t *testing.T) {
 
 func TestReadAtLargeValueLengthHintOmitted(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -1168,9 +1168,9 @@ func TestReadAtLargeValueLengthHintOmitted(t *testing.T) {
 
 func TestReadAtGroupedLengthHintBit23RoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -1217,9 +1217,9 @@ func TestReadAtGroupedLengthHintBit23RoundTrip(t *testing.T) {
 
 func TestValueLogCorruptCRC(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -1243,7 +1243,7 @@ func TestValueLogCorruptCRC(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	reader, err := NewReader(path, page.ValueLogFileID(1))
+	reader, err := NewReader(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new reader: %v", err)
 	}
@@ -1257,7 +1257,7 @@ func TestValueLogCorruptCRC(t *testing.T) {
 
 func TestValueLogTruncatedRecord(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
@@ -1280,7 +1280,7 @@ func TestValueLogTruncatedRecord(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	reader, err := NewReader(path, page.ValueLogFileID(1))
+	reader, err := NewReader(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new reader: %v", err)
 	}
@@ -1324,7 +1324,7 @@ func TestValueLogBlockCodecRoundTrip(t *testing.T) {
 	for _, codec := range codecs {
 		t.Run(fmt.Sprintf("codec_%d", codec), func(t *testing.T) {
 			dir := t.TempDir()
-			path := filepath.Join(dir, "value-000001.log")
+			path := filepath.Join(dir, "value-l0-000001.log")
 
 			records := make([]Record, 16)
 			for i := range records {
@@ -1333,7 +1333,7 @@ func TestValueLogBlockCodecRoundTrip(t *testing.T) {
 					Value: bytes.Repeat([]byte("block-compressible-payload|"), 128),
 				}
 			}
-			writer, err := NewWriter(path, page.ValueLogFileID(1))
+			writer, err := NewWriter(path, mustFileID(0, 1))
 			if err != nil {
 				t.Fatalf("new writer: %v", err)
 			}
@@ -1404,9 +1404,9 @@ func TestValueLogBlockCodecSnappy_ReusesProvidedBuffer(t *testing.T) {
 
 func TestValueLogUnsupportedBlockCodecID(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -1459,7 +1459,7 @@ func TestValueLogUnsupportedBlockCodecID(t *testing.T) {
 }
 
 func TestValueLogBlockCodec_IncompressibleBackoff(t *testing.T) {
-	w := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	w := NewWriterWithSink(io.Discard, mustFileID(0, 1))
 	w.SetBlockCompression(BlockCodecSnappy, true)
 
 	makeBatch := func(seed int64) []Record {

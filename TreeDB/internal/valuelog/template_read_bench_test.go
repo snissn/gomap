@@ -12,8 +12,8 @@ import (
 
 func BenchmarkValueLogTemplateReadAppend(b *testing.B) {
 	dir := b.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
-	fileID := page.ValueLogFileID(1)
+	path := filepath.Join(dir, "value-l0-000001.log")
+	fileID := mustFileID(0, 1)
 
 	anchorA := bytes.Repeat([]byte{'A'}, 16)
 	anchorB := bytes.Repeat([]byte{'B'}, 16)
@@ -137,8 +137,8 @@ func BenchmarkValueLogTemplateReadAppend(b *testing.B) {
 
 func BenchmarkValueLogTemplateMixedReadWrite(b *testing.B) {
 	dir := b.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
-	fileID := page.ValueLogFileID(1)
+	path := filepath.Join(dir, "value-l0-000001.log")
+	fileID := mustFileID(0, 1)
 
 	anchorA := bytes.Repeat([]byte{'A'}, 16)
 	anchorB := bytes.Repeat([]byte{'B'}, 16)

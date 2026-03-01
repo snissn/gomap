@@ -17,9 +17,9 @@ func TestAppendRawFramesWritevInto(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
+	path := filepath.Join(dir, "value-l0-000001.log")
 
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestAppendRawFramesWritevInto(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	reader, err := NewReader(path, page.ValueLogFileID(1))
+	reader, err := NewReader(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new reader: %v", err)
 	}
@@ -89,8 +89,8 @@ func TestShouldUseRawWritev_DefaultsPrefer4KiBMediumBatch(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	path := filepath.Join(dir, "value-l0-000001.log")
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -119,8 +119,8 @@ func TestShouldUseRawWritev_RespectsBatchAndMinAvgKnobs(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	path := filepath.Join(dir, "value-l0-000001.log")
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -155,8 +155,8 @@ func TestShouldUseRawWritev_PrefersFallbackWithBufferedAppendData(t *testing.T) 
 	}
 
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	path := filepath.Join(dir, "value-l0-000001.log")
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
@@ -210,8 +210,8 @@ func BenchmarkRawWritevStrategy_ValueSizes(b *testing.B) {
 	}
 
 	dir := b.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	path := filepath.Join(dir, "value-l0-000001.log")
+	writer, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		b.Fatalf("new writer: %v", err)
 	}

@@ -11,8 +11,8 @@ import (
 
 func TestDictAppendReadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
-	w, err := NewWriter(path, page.ValueLogFileID(1))
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := NewWriter(path, mustFileID(0, 1))
 	if err != nil {
 		t.Fatalf("NewWriter: %v", err)
 	}

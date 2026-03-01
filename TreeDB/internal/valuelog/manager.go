@@ -1146,15 +1146,8 @@ func listSegments(dir string) ([]segmentInfo, error) {
 				continue
 			}
 		} else {
-			seq, parseErr := strconv.ParseUint(core, 10, 32)
-			if parseErr != nil {
-				continue
-			}
-			if seq > maxSegmentSeq {
-				// Legacy segments use raw seq; skip ones that would collide with lane-encoded IDs.
-				continue
-			}
-			id = page.ValueLogFileID(uint32(seq))
+			// Pre-alpha: accept only lane-tagged segment names.
+			continue
 		}
 
 		segments = append(segments, segmentInfo{
