@@ -346,10 +346,79 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	_ = sysIter.Close()
 
+	if db.indexOuterLeavesInValueLog && snap.idx != nil && snap.idx.pager != nil {
+		if err := collectLeafRefValueLogRefCounts(snap.idx.pager, snap.state.RootPageID, counts); err != nil {
+			_ = snap.Close()
+			return nil, 0, err
+		}
+		if err := collectLeafRefValueLogRefCounts(snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
+			_ = snap.Close()
+			return nil, 0, err
+		}
+	}
+
 	if err := snap.Close(); err != nil {
 		return nil, 0, err
 	}
 	return counts, commitSeq, nil
+}
+
+func collectLeafRefValueLogRefCounts(p *pager.Pager, rootID uint64, refs map[uint32]uint64) error {
+	if p == nil || rootID == 0 || refs == nil {
+		return nil
+	}
+	if ptr, ok := page.DecodeLeafRef(rootID); ok {
+		refs[ptr.FileID]++
+		return nil
+	}
+	stack := make([]uint64, 0, 128)
+	stack = append(stack, rootID)
+	visited := make(map[uint64]struct{}, 1024)
+	verifyAlways := p.VerifyOnRead()
+
+	for len(stack) > 0 {
+		pageID := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := visited[pageID]; ok {
+			continue
+		}
+		visited[pageID] = struct{}{}
+
+		data, err := p.Get(pageID)
+		if err != nil {
+			return err
+		}
+		n := node.NewNodeView(data)
+		if verifyAlways || !p.IsVerified(pageID) {
+			if !n.VerifyChecksum() {
+				return fmt.Errorf("checksum mismatch on page %d", pageID)
+			}
+			if !verifyAlways {
+				p.MarkVerified(pageID)
+			}
+		}
+
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				childID, err := n.GetInternalChildID(i)
+				if err != nil {
+					return err
+				}
+				if ptr, ok := page.DecodeLeafRef(childID); ok {
+					refs[ptr.FileID]++
+					continue
+				}
+				stack = append(stack, childID)
+			}
+		case page.PageTypeLeaf:
+			// no children
+		default:
+			return errors.New("invalid page type")
+		}
+	}
+	return nil
 }
 
 func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIterator, refs map[uint32]uint64) error {
@@ -419,6 +488,9 @@ func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry) (*valueLogRefDelta, error) {
 	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
+		return nil, nil
+	}
+	if db.indexOuterLeavesInValueLog {
 		return nil, nil
 	}
 	switch strings.TrimSpace(db.indexOuterLeafMode) {
