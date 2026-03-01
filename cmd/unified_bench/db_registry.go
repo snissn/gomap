@@ -12,7 +12,6 @@ type DBFactory func(dir string) (kvstore.DB, error)
 var (
 	dbFactories = make(map[string]DBFactory)
 	dbOrder     = []string{}
-	dbAliases   = make(map[string]string)
 )
 
 func RegisterDB(name string, factory DBFactory) {
@@ -30,14 +29,7 @@ func RegisterHiddenDB(name string, factory DBFactory) {
 	dbFactories[name] = factory
 }
 
-func RegisterAlias(alias, target string) {
-	dbAliases[alias] = target
-}
-
 func GetDBFactory(name string) (DBFactory, error) {
-	if target, isAlias := dbAliases[name]; isAlias {
-		name = target
-	}
 	f, ok := dbFactories[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown DB: %q", name)
@@ -77,18 +69,11 @@ func resolveDBs(arg, excludeArg string) []string {
 		}
 		if _, ok := dbFactories[name]; ok {
 			out = append(out, name)
-			continue
-		}
-		if target, isAlias := dbAliases[name]; isAlias {
-			if _, ok := dbFactories[target]; ok {
-				out = append(out, target)
-			}
 		}
 	}
 	return out
 }
 
 func init() {
-	// Pre-register legacy aliases or ensure order if needed.
 	// Actual DBs register themselves in their init() functions.
 }

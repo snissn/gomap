@@ -19,7 +19,6 @@ var (
 
 func init() {
 	RegisterDB("hashdb", NewHashDB)
-	RegisterAlias("gomap", "hashdb")
 	RegisterDB("btree", NewBTree)
 }
 
