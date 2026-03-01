@@ -12056,24 +12056,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 						return false
 					}
 				} else {
-					type ptrSetterLegacy interface {
-						SetPointer(key []byte, ptr page.ValuePtr) error
-					}
-					if psl, ok := backendBatch.(ptrSetterLegacy); ok {
-						if err := psl.SetPointer(key, ptr); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
-					} else {
-						single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
-						if err := backendBatch.SetOps(single[:]); err != nil {
-							db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-							_ = iter.Close()
-							_ = backendBatch.Close()
-							return false
-						}
+					single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+					if err := backendBatch.SetOps(single[:]); err != nil {
+						db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
+						_ = iter.Close()
+						_ = backendBatch.Close()
+						return false
 					}
 				}
 				backendPendingOps++
@@ -12121,24 +12109,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 							return false
 						}
 					} else {
-						type ptrSetterLegacy interface {
-							SetPointer(key []byte, ptr page.ValuePtr) error
-						}
-						if psl, ok := backendBatch.(ptrSetterLegacy); ok {
-							if err := psl.SetPointer(key, ptr); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
-							}
-						} else {
-							single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
-							if err := backendBatch.SetOps(single[:]); err != nil {
-								db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
-								_ = iter.Close()
-								_ = backendBatch.Close()
-								return false
-							}
+						single[0] = batch.Entry{Type: batch.OpPut, Key: key, ValuePtr: ptr, IsPtr: true}
+						if err := backendBatch.SetOps(single[:]); err != nil {
+							db.reportError(fmt.Errorf("cachingdb: flush failed (setops ptr): %w", err))
+							_ = iter.Close()
+							_ = backendBatch.Close()
+							return false
 						}
 					}
 					backendPendingOps++
@@ -14679,14 +14655,6 @@ func (db *DB) getBatchEntries(minCap int) []batch.Entry {
 				if c := cap(entries); c > 0 && c <= batchEntriesPoolMaxRetain {
 					db.batchEntriesPool.Put(getBatchEntrySliceRef(entries[:0]))
 				}
-			case []batch.Entry:
-				// Backward-compatible fallback for any legacy pooled shape.
-				if cap(v) >= minCap {
-					return v[:0]
-				}
-				if c := cap(v); c > 0 && c <= batchEntriesPoolMaxRetain {
-					db.batchEntriesPool.Put(getBatchEntrySliceRef(v[:0]))
-				}
 			}
 		}
 	}
@@ -14717,11 +14685,6 @@ func (db *DB) getBatchShardEntries(minCap int) []batch.Entry {
 				putBatchEntrySliceRef(v)
 				if cap(entries) >= minCap {
 					return entries[:0]
-				}
-			case []batch.Entry:
-				// Backward-compatible fallback for any legacy pooled shape.
-				if cap(v) >= minCap {
-					return v[:0]
 				}
 			}
 		}
