@@ -55,7 +55,6 @@ Segments are discovered from `<dir>/wal` by filename parsing.
 Accepted patterns include:
 
 - canonical: `commit-l<lane>-<seq>.log`, `value-l<lane>-<seq>.log`
-- legacy accepted: `commit-<seq>.log`, `value-<seq>.log`, `wal-<seq>.log`, `vlog-<seq>.log`
 
 Discovered segments are sorted by `(lane, seq)`.
 

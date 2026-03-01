@@ -355,5 +355,3 @@ Current canonical names:
 
 - commit log: `commit-l<lane>-<seq>.log`
 - value log: `value-l<lane>-<seq>.log`
-
-Recovery parser also accepts legacy names (`commit-`, `value-`, `wal-`, `vlog-`) for backward compatibility during pre-alpha evolution.

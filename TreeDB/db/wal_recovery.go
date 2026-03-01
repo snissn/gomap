@@ -76,11 +76,7 @@ func listWALSegments(dir string) ([]logSegment, error) {
 
 func parseLogSeq(name string) (int, uint64, bool, bool) {
 	const (
-		commitPrefix = "commit-"
-		valuePrefix  = "value-"
-		walPrefix    = "wal-"
-		vlogPrefix   = "vlog-"
-		suffix       = ".log"
+		suffix = ".log"
 	)
 	if !strings.HasSuffix(name, suffix) {
 		return 0, 0, false, false
@@ -110,38 +106,6 @@ func parseLogSeq(name string) (int, uint64, bool, bool) {
 	if strings.HasPrefix(base, "value-l") {
 		lane, seq, ok := parseLaneSeq(strings.TrimPrefix(base, "value-l"))
 		return lane, seq, true, ok
-	}
-	if strings.HasPrefix(base, commitPrefix) {
-		num := strings.TrimPrefix(base, commitPrefix)
-		seq, err := strconv.ParseUint(num, 10, 64)
-		if err != nil {
-			return 0, 0, false, false
-		}
-		return 0, seq, false, true
-	}
-	if strings.HasPrefix(base, valuePrefix) {
-		num := strings.TrimPrefix(base, valuePrefix)
-		seq, err := strconv.ParseUint(num, 10, 64)
-		if err != nil {
-			return 0, 0, false, false
-		}
-		return 0, seq, true, true
-	}
-	if strings.HasPrefix(base, walPrefix) {
-		num := strings.TrimPrefix(base, walPrefix)
-		seq, err := strconv.ParseUint(num, 10, 64)
-		if err != nil {
-			return 0, 0, false, false
-		}
-		return 0, seq, false, true
-	}
-	if strings.HasPrefix(base, vlogPrefix) {
-		num := strings.TrimPrefix(base, vlogPrefix)
-		seq, err := strconv.ParseUint(num, 10, 64)
-		if err != nil {
-			return 0, 0, false, false
-		}
-		return 0, seq, true, true
 	}
 	return 0, 0, false, false
 }

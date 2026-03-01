@@ -16043,12 +16043,6 @@ func bootstrapNextRIDFromValueLogSegments(segments []logSegmentInfo) (maxRID uin
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {
-	const (
-		commitPrefix = "commit-"
-		valuePrefix  = "value-"
-		walPrefix    = "wal-"
-		vlogPrefix   = "vlog-"
-	)
 	if filepath.Ext(name) != ".log" {
 		return 0, 0, false, false
 	}
@@ -16077,50 +16071,6 @@ func parseLogSeq(name string) (int, int, bool, bool) {
 	if strings.HasPrefix(base, "value-l") {
 		lane, seq, ok := parseLaneSeq(strings.TrimPrefix(base, "value-l"))
 		return lane, seq, true, ok
-	}
-	if strings.HasPrefix(base, commitPrefix) {
-		core := strings.TrimPrefix(base, commitPrefix)
-		if core == "" {
-			return 0, 0, false, false
-		}
-		seq, err := strconv.Atoi(core)
-		if err != nil {
-			return 0, 0, false, false
-		}
-		return 0, seq, false, true
-	}
-	if strings.HasPrefix(base, valuePrefix) {
-		core := strings.TrimPrefix(base, valuePrefix)
-		if core == "" {
-			return 0, 0, false, false
-		}
-		seq, err := strconv.Atoi(core)
-		if err != nil {
-			return 0, 0, false, false
-		}
-		return 0, seq, true, true
-	}
-	if strings.HasPrefix(base, walPrefix) {
-		core := strings.TrimPrefix(base, walPrefix)
-		if core == "" {
-			return 0, 0, false, false
-		}
-		seq, err := strconv.Atoi(core)
-		if err != nil {
-			return 0, 0, false, false
-		}
-		return 0, seq, false, true
-	}
-	if strings.HasPrefix(base, vlogPrefix) {
-		core := strings.TrimPrefix(base, vlogPrefix)
-		if core == "" {
-			return 0, 0, false, false
-		}
-		seq, err := strconv.Atoi(core)
-		if err != nil {
-			return 0, 0, false, false
-		}
-		return 0, seq, true, true
 	}
 	return 0, 0, false, false
 }
