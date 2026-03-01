@@ -36,19 +36,18 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 
 ## Tests
 
-- `write_seq` — Sequential Write
-- `write_rand` — Random Write
+- `sequential_write` — Sequential Write
+- `random_write` — Random Write
 - `batch_write` — Batch Write
 - `batch_random` — Batch Random
 - `batch_delete` — Batch Delete
-- `delete_rand` — Random Delete
+- `random_delete` — Random Delete
 - `random_read` — Random Read
 - `random_read_parallel` — Random Read (Parallel aggregate throughput)
 - `random_read_parallel_acquire_snapshot` — Random Read (Parallel, Snapshot Per Key)
 - `random_read_batch` — Random Read (Batch)
 - `full_scan` — Full Scan (iterate the full keyspace)
 - `prefix_scan` — Prefix Scan (range scans over `[start,end)`)
-  - Aliases: `scan` → `full_scan`, `range_scan` → `prefix_scan`, `read_rand` → `random_read`, `read_rand_parallel` → `random_read_parallel`, `read_rand_batch`/`read_random_batch` → `random_read_batch`
 
 `random_read_batch` always exercises value-read paths:
 - Uses `GetMany` when available.

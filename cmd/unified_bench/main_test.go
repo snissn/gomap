@@ -235,7 +235,7 @@ func TestRunBenchmark_PreloadsForReadAndScanOnly(t *testing.T) {
 		RangeQueries: 50,
 		RangeSpan:    20,
 		DBsArg:       "treedb",
-		TestsArg:     "read_rand,full_scan,prefix_scan",
+		TestsArg:     "random_read,full_scan,prefix_scan",
 		KeepDir:      false,
 		Progress:     false,
 		SeedUsed:     1,
@@ -512,32 +512,6 @@ func TestRunBenchmark_RandomReadParallelAcquireSnapshot_UsesSnapshots(t *testing
 	got := run.Results["random_read_parallel_acquire_snapshot"][db.Name()]
 	if math.IsNaN(got) || got <= 0 {
 		t.Fatalf("expected random_read_parallel_acquire_snapshot > 0 for %s, got %v", db.Name(), got)
-	}
-}
-
-func TestNormalizeTests_ReadRandomBatchAliases(t *testing.T) {
-	got := normalizeTests(parseList("read_rand_batch,read_random_batch,random_read_batch"))
-	want := []string{"random_read_batch"}
-	if len(got) != len(want) {
-		t.Fatalf("unexpected len: got=%v want=%v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("unexpected normalize result: got=%v want=%v", got, want)
-		}
-	}
-}
-
-func TestNormalizeTests_ReadRandomParallelAlias(t *testing.T) {
-	got := normalizeTests(parseList("read_rand_parallel,random_read_parallel"))
-	want := []string{"random_read_parallel"}
-	if len(got) != len(want) {
-		t.Fatalf("unexpected len: got=%v want=%v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("unexpected normalize result: got=%v want=%v", got, want)
-		}
 	}
 }
 

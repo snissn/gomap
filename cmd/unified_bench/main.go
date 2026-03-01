@@ -54,7 +54,7 @@ var (
 	keysMax              = flag.Int("keys-max", 10000000, "Maximum key count for -keyscale")
 	dbsArg               = flag.String("dbs", "all", "Comma-separated list of DBs to run. Use 'all' for registered DBs.")
 	dbsExcludeArg        = flag.String("exclude-dbs", "", "Comma-separated list of DBs to exclude")
-	testArg              = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,update_fork_choice); aliases: write_seq->sequential_write, write_rand->random_write, write_sorted->dataset_write_sorted, write_dataset->dataset_write_random, read_rand->random_read, read_rand_parallel->random_read_parallel, read_rand_batch->random_read_batch, read_random_batch->random_read_batch, delete_rand->random_delete, scan->full_scan, range_scan->prefix_scan, batch_write_ss->batch_write_steady, forkchoice->update_fork_choice")
+	testArg              = flag.String("test", "all", "Comma-separated list of tests (sequential_write,random_read,random_read_parallel,random_read_parallel_acquire_snapshot,random_read_batch,random_write,random_write_parallel,dataset_write_random,dataset_write_sorted,dataset_update_fork_choice,dataset_read_random,random_delete,full_scan,prefix_scan,batch_write,batch_write_steady,batch_random,batch_delete,update_fork_choice)")
 	formatArg            = flag.String("format", "table", "Output format: table or markdown")
 	suiteArg             = flag.String("suite", "", "Named benchmark suite (e.g. readme)")
 	outDirArg            = flag.String("outdir", "", "Write plots/results to this directory (used by -suite readme)")
@@ -4642,40 +4642,6 @@ func normalizeTests(list []string) []string {
 	seen := make(map[string]struct{}, len(list))
 	out := make([]string, 0, len(list))
 	for _, t := range list {
-		switch t {
-		case "full_scan":
-			// keep
-		case "scan":
-			t = "full_scan"
-		case "range_scan":
-			t = "prefix_scan"
-		case "prefix_scan":
-			// keep
-		case "forkchoice":
-			t = "update_fork_choice"
-		case "write_seq":
-			t = "sequential_write"
-		case "write_rand":
-			t = "random_write"
-		case "write_sorted":
-			t = "dataset_write_sorted"
-		case "write_dataset":
-			t = "dataset_write_random"
-		case "read_rand":
-			t = "random_read"
-		case "read_rand_parallel":
-			t = "random_read_parallel"
-		case "read_rand_batch", "read_random_batch":
-			t = "random_read_batch"
-		case "delete_rand":
-			t = "random_delete"
-		case "batch_write_random":
-			t = "batch_random"
-		case "batch_write_small_seq":
-			t = "batch_small_seq"
-		case "batch_write_ss":
-			t = "batch_write_steady"
-		}
 		if t == "" {
 			continue
 		}
