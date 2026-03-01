@@ -263,6 +263,9 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		return err
 	}
 	defer func() { _ = inlineAppender.close() }()
+	if db != nil && db.indexOuterLeavesInValueLog {
+		db.SetLeafPageLog(inlineAppender)
+	}
 	for _, batch := range legacyBatches {
 		if err := applyCommitBatch(db, batch.records, ridMap, inlineAppender); err != nil {
 			return err
@@ -350,7 +353,7 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 		return nil, fmt.Errorf("value-log rid space exhausted")
 	}
 	maxSegmentBytes := int64(0)
-	if db.indexPackedValuePtr {
+	if db.indexPackedValuePtr || db.indexOuterLeavesInValueLog {
 		// Packed ValuePtr stores offset as u32; keep replay-appended value-log
 		// segments within the same cap used by the write path.
 		maxSegmentBytes = int64(^uint32(0)) - 4
@@ -390,6 +393,38 @@ func (a *replayInlineAppender) append(db *DB, key, value []byte) (page.ValuePtr,
 	}
 	a.dirty = true
 	return ptr, nil
+}
+
+func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+	if a == nil || a.writer == nil {
+		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	if a.nextRID == 0 {
+		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+	}
+	rid := a.nextRID
+	a.nextRID++
+	ptr, err := a.writer.appendValue(rid, leafPage)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	a.dirty = true
+	return ptr, nil
+}
+
+func (a *replayInlineAppender) Flush() error {
+	if a == nil || a.writer == nil || !a.dirty {
+		return nil
+	}
+	if err := a.writer.Flush(); err != nil {
+		return err
+	}
+	a.dirty = false
+	return nil
+}
+
+func (a *replayInlineAppender) Sync() error {
+	return a.syncIfDirty()
 }
 
 func (a *replayInlineAppender) syncIfDirty() error {
