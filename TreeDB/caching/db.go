@@ -666,9 +666,8 @@ func putValueLogRecordsCheckpointAware(db *DB, s []valuelog.Record) {
 		return
 	}
 	// During checkpoint debt-drain, dropping record slices avoids large
-	// clear-and-pool costs on oversized deferred batches.
+	// clear-and-pool costs on oversized batches.
 	if db != nil && db.checkpointing.Load() {
-		db.deferredFenceCheckpointPoolSkips.Add(1)
 		return
 	}
 	putValueLogRecordsNoClear(s)
@@ -1647,279 +1646,10 @@ func (db *DB) appendLargeValueManifest(lane *lane, dictID uint64, value []byte, 
 	return ptr, nil
 }
 
-func (db *DB) writeRouteOuterLeafValueRecords(lane *lane, dictID uint64, keys [][]byte, values [][]byte, durability journalDurability) ([]page.ValuePtr, []outerLeafRecordGroup, []int, error) {
-	if len(keys) != len(values) {
-		return nil, nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
-	}
-	if len(keys) == 0 {
-		return nil, nil, nil, nil
-	}
-	if lane == nil {
-		return nil, nil, nil, errWALUnavailable
-	}
-
-	normalizedToSource := make([]int, len(keys))
-	for i := range keys {
-		normalizedToSource[i] = i
-	}
-
-	if len(keys) > 1 {
-		needsSort := false
-		for i := 1; i < len(keys); i++ {
-			if bytes.Compare(keys[i-1], keys[i]) >= 0 {
-				needsSort = true
-				break
-			}
-		}
-		if needsSort {
-			type routeKV struct {
-				key   []byte
-				value []byte
-				ord   int
-			}
-			pairs := make([]routeKV, len(keys))
-			for i := range keys {
-				pairs[i] = routeKV{key: keys[i], value: values[i], ord: i}
-			}
-			sort.SliceStable(pairs, func(i, j int) bool {
-				if cmp := bytes.Compare(pairs[i].key, pairs[j].key); cmp != 0 {
-					return cmp < 0
-				}
-				return pairs[i].ord < pairs[j].ord
-			})
-			// Route mode requires strict anchor monotonicity. Normalize duplicate
-			// keys to last-write-wins so grouped payloads remain globally ordered.
-			norm := pairs[:0]
-			for i := 0; i < len(pairs); {
-				j := i + 1
-				for j < len(pairs) && bytes.Equal(pairs[i].key, pairs[j].key) {
-					j++
-				}
-				norm = append(norm, pairs[j-1])
-				i = j
-			}
-			keys = make([][]byte, len(norm))
-			values = make([][]byte, len(norm))
-			normalizedToSource = make([]int, len(norm))
-			for i := range norm {
-				keys[i] = norm[i].key
-				values[i] = norm[i].value
-				normalizedToSource[i] = norm[i].ord
-			}
-		}
-	}
-
-	recordsCap := len(keys)
-	groupsCap := len(keys)
-	entriesCap := 8
-
-	targetBytes := db.outerLeafBlockTargetBytes
-	if targetBytes <= 0 {
-		targetBytes = outerleaf.NormalizeBlockTargetBytes(0)
-	}
-
-	if len(keys) > 1 {
-		sample := len(keys)
-		if sample > 8 {
-			sample = 8
-		}
-		avgEntryEstimate := 1
-		if sample > 0 {
-			total := 0
-			for i := 0; i < sample; i++ {
-				total += len(keys[i]) + len(values[i]) + 16
-			}
-			avgEntryEstimate = total / sample
-			if avgEntryEstimate <= 0 {
-				avgEntryEstimate = 1
-			}
-		}
-		entriesPerBlock := targetBytes / avgEntryEstimate
-		if entriesPerBlock < 1 {
-			entriesPerBlock = 1
-		}
-		entriesCap = entriesPerBlock
-		if entriesCap < 8 {
-			entriesCap = 8
-		}
-		if entriesCap > len(keys) {
-			entriesCap = len(keys)
-		}
-		recordsCap = (len(keys) + entriesPerBlock - 1) / entriesPerBlock
-		if recordsCap < 1 {
-			recordsCap = 1
-		}
-		if recordsCap > len(keys) {
-			recordsCap = len(keys)
-		}
-		groupsCap = recordsCap
-	}
-
-	records := getValueLogRecordsCap(recordsCap)
-	defer putValueLogRecordsCheckpointAware(db, records)
-	groups := make([]outerLeafRecordGroup, 0, groupsCap)
-
-	entries := make([]outerleaf.TypedEntry, 0, entriesCap)
-	nestedIdxs := make([]int, 0, entriesCap/2)
-	outerEncoder := getOuterLeafEncoder()
-	defer putOuterLeafEncoder(outerEncoder)
-
-	arenaCap := outerLeafEncodedHeaderBytes + len(keys)*8
-	for i := range keys {
-		arenaCap += len(keys[i])
-		arenaCap += len(values[i])
-	}
-	arena := getOuterLeafArena(arenaCap)
-	defer putOuterLeafArena(arena)
-
-	estimated := 0
-	groupStart := 0
-	var prevKey []byte
-	gapScanner, err := newPersistedGapScanner(db.backend, keys[0])
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if gapScanner != nil {
-		defer gapScanner.close()
-	}
-
-	flushRouteGroup := func() error {
-		if len(entries) == 0 {
-			return nil
-		}
-		nestedRecords := getValueLogRecordsCap(len(nestedIdxs))
-		defer putValueLogRecordsCheckpointAware(db, nestedRecords)
-		nestedRecordPositions := make([]int, 0, len(nestedIdxs))
-		if len(nestedIdxs) > 0 {
-			for _, nestedPos := range nestedIdxs {
-				rawValue := entries[nestedPos].Value
-				if db.largeValueNeedsChunking(len(rawValue)) {
-					manifestPtr, err := db.appendLargeValueManifest(lane, dictID, rawValue, durability)
-					if err != nil {
-						return err
-					}
-					entries[nestedPos].BlobPtr = manifestPtr
-					entries[nestedPos].Value = nil
-					continue
-				}
-				nestedRecordPositions = append(nestedRecordPositions, nestedPos)
-				nestedRecords = append(nestedRecords, valuelog.Record{Value: rawValue})
-			}
-			if len(nestedRecords) > 0 {
-				startRID := db.nextRID.Add(uint64(len(nestedRecords))) - uint64(len(nestedRecords)) + 1
-				for i := range nestedRecords {
-					nestedRecords[i].RID = startRID + uint64(i)
-				}
-				nestedPtrs, err := db.appendValueLog(lane, dictID, nil, nestedRecords, durability)
-				if err != nil {
-					return err
-				}
-				defer putValueLogPtrs(nestedPtrs)
-				if len(nestedPtrs) != len(nestedRecordPositions) {
-					return fmt.Errorf("cachingdb: nested pointer count mismatch expected=%d got=%d", len(nestedRecordPositions), len(nestedPtrs))
-				}
-				for i, nestedPos := range nestedRecordPositions {
-					entries[nestedPos].BlobPtr = nestedPtrs[i]
-					entries[nestedPos].Value = nil
-				}
-			}
-		}
-
-		var err error
-		records, groups, arena, err = appendOuterLeafTypedRecordGroup(db, outerEncoder, entries, groupStart, records, groups, arena, estimated+32)
-		if err != nil {
-			return err
-		}
-		entries = entries[:0]
-		nestedIdxs = nestedIdxs[:0]
-		estimated = 0
-		prevKey = nil
-		return nil
-	}
-
-	for i := range keys {
-		key := keys[i]
-		value := values[i]
-		valueShouldBeNested := len(value) > db.valueLogThresholdForKey(key)
-		entryEstimate := len(key) + len(value) + 16
-		if valueShouldBeNested {
-			// Nested values are represented as pointer entries and do not grow
-			// in-blob payloads with raw value bytes.
-			entryEstimate = len(key) + 16
-		}
-
-		if len(entries) > 0 {
-			hasPersistedGap := false
-			if gapScanner != nil {
-				gap, gapErr := gapScanner.hasPersistedBetween(prevKey, key)
-				if gapErr != nil {
-					return nil, nil, nil, gapErr
-				}
-				hasPersistedGap = gap
-			}
-			if hasPersistedGap || bytes.Compare(prevKey, key) >= 0 {
-				// Preserve correctness for non-monotonic batches by cutting blocks.
-				if err := flushRouteGroup(); err != nil {
-					return nil, nil, nil, err
-				}
-				groupStart = i
-			} else if estimated+entryEstimate > targetBytes {
-				if err := flushRouteGroup(); err != nil {
-					return nil, nil, nil, err
-				}
-				groupStart = i
-			}
-		}
-
-		entry := outerleaf.TypedEntry{
-			Key: key,
-		}
-		if valueShouldBeNested {
-			entry.Kind = outerleaf.EntryKindBlobRef
-			entry.Value = value
-		} else {
-			entry.Kind = outerleaf.EntryKindInline
-			entry.Value = value
-		}
-		if valueShouldBeNested {
-			nestedIdxs = append(nestedIdxs, len(entries))
-		}
-		if len(entries) == 0 {
-			groupStart = i
-		}
-		entries = append(entries, entry)
-		estimated += entryEstimate
-		prevKey = key
-	}
-	if len(entries) > 0 {
-		if err := flushRouteGroup(); err != nil {
-			return nil, nil, nil, err
-		}
-	}
-
-	if len(records) == 0 {
-		return nil, nil, nil, nil
-	}
-	startRID := db.nextRID.Add(uint64(len(records))) - uint64(len(records)) + 1
-	for i := range records {
-		records[i].RID = startRID + uint64(i)
-	}
-	ptrs, err := db.appendValueLog(lane, dictID, nil, records, durability)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if len(ptrs) != len(records) {
-		putValueLogPtrs(ptrs)
-		return nil, nil, nil, fmt.Errorf("cachingdb: outer route value-log returned %d ptrs for %d records", len(ptrs), len(records))
-	}
-	return ptrs, groups, normalizedToSource, nil
-}
-
 // buildOuterLeafValueRecords encodes key/value pairs into value-log records.
 // The returned groups map each encoded record back to a contiguous source range
 // [start,end).
 func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
-	routeMode := true
 	if len(keys) != len(values) {
 		return nil, nil, nil, fmt.Errorf("cachingdb: outer-leaf key/value length mismatch %d/%d", len(keys), len(values))
 	}
@@ -1930,7 +1660,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	groupsCap := len(keys)
 	entriesCap := 8
 
-	if routeMode && len(keys) > 1 {
+	if len(keys) > 1 {
 		targetBytes := db.outerLeafBlockTargetBytes
 		if targetBytes <= 0 {
 			targetBytes = outerleaf.NormalizeBlockTargetBytes(0)
@@ -1974,7 +1704,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	records := getValueLogRecordsCap(recordsCap)
 	groups := make([]outerLeafRecordGroup, 0, groupsCap)
 
-	if !routeMode || len(keys) == 1 {
+	if len(keys) == 1 {
 		for i := range keys {
 			payload, err := db.encodeOuterLeafValue(keys[i], values[i])
 			if err != nil {
@@ -3465,12 +3195,6 @@ type DB struct {
 	valueLogRetain                  map[string]struct{}
 	backendReadVlogDirtySeq         atomic.Uint64
 	backendReadVlogFlushedSeq       atomic.Uint64
-	deferredFenceCandidateKeys      atomic.Uint64
-	deferredFenceEmittedGroups      atomic.Uint64
-	deferredFenceEnqueuedKeys       atomic.Uint64
-	deferredFenceEnqueuedBytes      atomic.Uint64
-	deferredFenceMaterializedKeys   atomic.Uint64
-	deferredFenceMaterializedBytes  atomic.Uint64
 	valueLogWarned                  atomic.Bool
 	valueLogHardCapWarned           atomic.Bool
 	valueLogRetainedClosedBytes     atomic.Int64
@@ -3586,37 +3310,30 @@ type DB struct {
 	valueLogMaxSegmentBytes   int64
 	journalCompression        bool
 
-	disableJournal                     bool
-	relaxedSync                        bool
-	notifyError                        func(error)
-	debugFlushPointers                 bool
-	debugFlushTiming                   bool
-	debugPtrEligible                   atomic.Int64
-	debugPtrUsed                       atomic.Int64
-	debugPtrNoPtr                      atomic.Int64
-	debugPtrDenied                     atomic.Int64
-	debugPtrDisabled                   atomic.Int64
-	routeLeaflogFallbackDirectAttempts atomic.Uint64
-	routeLeaflogFallbackDirectRewrites atomic.Uint64
-	bgErrMu                            sync.Mutex
-	bgErr                              error
+	disableJournal     bool
+	relaxedSync        bool
+	notifyError        func(error)
+	debugFlushPointers bool
+	debugFlushTiming   bool
+	debugPtrEligible   atomic.Int64
+	debugPtrUsed       atomic.Int64
+	debugPtrNoPtr      atomic.Int64
+	debugPtrDenied     atomic.Int64
+	debugPtrDisabled   atomic.Int64
+	bgErrMu            sync.Mutex
+	bgErr              error
 
 	// Backpressure state
-	queueBacklogBytes                   atomic.Int64
-	flushBpsEWMA                        float64
-	queueLaneIDMisses                   atomic.Int64
-	backendWriteBatchesTotal            atomic.Int64
-	deferredFenceAssistCalls            atomic.Uint64
-	deferredFenceAssistFlushedMemtables atomic.Uint64
-	deferredFenceAssistEarlyTriggers    atomic.Uint64
-	deferredFenceAssistTicker           atomic.Uint64
-	deferredFenceCheckpointPoolSkips    atomic.Uint64
-	domainIngressMu                     sync.Mutex
-	domainIngressCh                     []chan domainIngressRequest
-	domainIngressEnqueued               atomic.Uint64
-	domainIngressProcessed              atomic.Uint64
-	domainIngressFallback               atomic.Uint64
-	domainIngressDepthMax               atomic.Uint64
+	queueBacklogBytes        atomic.Int64
+	flushBpsEWMA             float64
+	queueLaneIDMisses        atomic.Int64
+	backendWriteBatchesTotal atomic.Int64
+	domainIngressMu          sync.Mutex
+	domainIngressCh          []chan domainIngressRequest
+	domainIngressEnqueued    atomic.Uint64
+	domainIngressProcessed   atomic.Uint64
+	domainIngressFallback    atomic.Uint64
+	domainIngressDepthMax    atomic.Uint64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -5030,12 +4747,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		db.ridBootstrapSegmentsScanned,
 		db.ridBootstrapRecordsScanned,
 	)
-	if true {
-		// Route mode must regroup key/value mutations into directory-backed
-		// outer-leaf blocks at flush time. Per-key pointer memtable rows can
-		// collapse by shared record and leave stale exact rows reachable.
-		db.memtableValueLogPointers = false
-	}
+	db.memtableValueLogPointers = false
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
@@ -7908,7 +7620,6 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	for i := range records {
 		rawPayloadBytes += len(records[i].Value)
 	}
-	routeOuterLeafMode := allOuterLeafRecordValues(records)
 	templatePrepass := false
 	if db.valueLogTemplateEnabled && db.valueLogTemplateMode != template.TemplateOff {
 		if db.valueLogTemplateMode == template.TemplateOnly {
@@ -7927,12 +7638,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 	}
 
+	outerLeafPayloadBatch := allOuterLeafRecordValues(records)
+
 	// Track v2 outer-leaf payload batches so raw-mode append paths can use the
 	// buffered frame writer when selected.
 	autoOuterLeafPayloads := true &&
 		!templatePrepass &&
 		dictID == 0 &&
-		allOuterLeafRecordValues(records)
+		outerLeafPayloadBatch
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	selectorPayloadBytes := rawPayloadBytes
@@ -8061,9 +7774,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 			k = valuelog.MaxFrameK
 		}
 	}
-	if routeOuterLeafMode && allOuterLeafRecordValues(records) {
-		// Route anchors require one pointer per encoded outer-leaf payload so the
-		// directory key maps exactly to that payload record.
+	if outerLeafPayloadBatch {
+		// Anchor keys require one pointer per encoded outer-leaf payload so the key
+		// maps exactly to that payload record.
 		k = 1
 	}
 
@@ -8255,9 +7968,8 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	}
 
 	if err == nil && !rawBatchUsed {
-		// Route mode is correctness-critical and must never publish invalid
-		// pointers. Keep it on the mature per-frame append path.
-		useRawBatch := !routeOuterLeafMode && dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
+		// This path is correctness-critical and must never publish invalid pointers.
+		useRawBatch := !outerLeafPayloadBatch && dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
 		preferBufferedRaw := useRawBatch && autoOuterLeafPayloads && hasRawBufferedInto
 		if useRawBatch && (preferBufferedRaw || hasRawInto) {
 			ptrs = getValueLogPtrs(len(records))
@@ -9767,18 +9479,11 @@ func (db *DB) maybeWaitForStop() {
 	}
 }
 
-func (db *DB) routeLeafLogWriterAssistEnabled() bool {
-	if db == nil {
-		return false
-	}
-	return db.disableJournal && true
-}
-
 func (db *DB) maybeAssistFlush() {
-	routeAssist := db.routeLeafLogWriterAssistEnabled()
-	if routeAssist {
-		// Route mode keeps writer path async; synchronous assist here can cause
-		// severe write-path stalls. Debt shaping is handled by background loops.
+	if db.disableJournal {
+		// When the journal is disabled (ingest mode), keep the writer path async;
+		// synchronous assist here can cause severe write-path stalls. Debt shaping
+		// is handled by background loops.
 		return
 	}
 	if db.writerFlushMaxMemtables <= 0 && db.writerFlushMaxDuration <= 0 {
@@ -11934,7 +11639,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		backendPendingOps := 0
 		chunkBackend := totalLen > backendEntriesCap
 		emittedChunk := false
-		routeAnchorMode := true
 
 		type ptrSetterView interface {
 			SetPointerView(key []byte, ptr page.ValuePtr) error
@@ -12042,11 +11746,9 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				applied = true
 			case entry.IsPtr:
 				ptr := entry.ValuePtr
-				if routeAnchorMode {
-					ptr, err = db.normalizeAnchorPointer(ptr, "queued-unit flush pointer")
-					if err != nil {
-						break
-					}
+				ptr, err = db.normalizeAnchorPointer(ptr, "queued-unit flush pointer")
+				if err != nil {
+					break
 				}
 				if psv != nil {
 					err = psv.SetPointerView(entry.Key, ptr)
@@ -12270,7 +11972,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	psv, _ := backendBatch.(ptrSetterView)
 	ps, _ := backendBatch.(ptrSetter)
 	var single [1]batch.Entry
-	routeAnchorMode := true
 
 	// Best-effort: ensure value-log bytes are flushed before we start committing
 	// pointers into the index when we expect to emit multiple backend commits.
@@ -12342,16 +12043,14 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 					return false
 				}
 			} else if flags&node.FlagPointer != 0 {
-				if routeAnchorMode {
-					routePtr, routeErr := db.normalizeAnchorPointer(ptr, "flush-unit mem pointer")
-					if routeErr != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (anchor ptr): %w", routeErr))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
-					ptr = routePtr
+				anchorPtr, anchorErr := db.normalizeAnchorPointer(ptr, "flush-unit mem pointer")
+				if anchorErr != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (anchor ptr): %w", anchorErr))
+					_ = iter.Close()
+					_ = backendBatch.Close()
+					return false
 				}
+				ptr = anchorPtr
 				if psv != nil {
 					if err := psv.SetPointerView(key, ptr); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
@@ -12711,7 +12410,6 @@ func (db *DB) flushOneLocked(sync bool) bool {
 		psv, _ := backendBatch.(ptrSetterView)
 		ps, _ := backendBatch.(ptrSetter)
 		var single [1]batch.Entry
-		routeAnchorMode := true
 
 		flushBackendChunk := func() error {
 			if !chunkBackend || backendPendingOps < backendEntriesCap {
@@ -12770,16 +12468,14 @@ func (db *DB) flushOneLocked(sync bool) bool {
 					return false
 				}
 			} else if flags&node.FlagPointer != 0 {
-				if routeAnchorMode {
-					routePtr, routeErr := db.normalizeAnchorPointer(ptr, "flush-memtable pointer")
-					if routeErr != nil {
-						db.reportError(fmt.Errorf("cachingdb: flush failed (anchor ptr): %w", routeErr))
-						_ = iter.Close()
-						_ = backendBatch.Close()
-						return false
-					}
-					ptr = routePtr
+				anchorPtr, anchorErr := db.normalizeAnchorPointer(ptr, "flush-memtable pointer")
+				if anchorErr != nil {
+					db.reportError(fmt.Errorf("cachingdb: flush failed (anchor ptr): %w", anchorErr))
+					_ = iter.Close()
+					_ = backendBatch.Close()
+					return false
 				}
+				ptr = anchorPtr
 				if psv != nil {
 					if err := psv.SetPointerView(key, ptr); err != nil {
 						db.reportError(fmt.Errorf("cachingdb: flush failed (set ptr): %w", err))
@@ -13786,29 +13482,6 @@ func (db *DB) Stats() map[string]string {
 	if totalVlogSyscalls > 0 {
 		stats["treedb.cache.vlog_io.bytes_per_syscall"] = fmt.Sprintf("%.1f", float64(totalVlogBytes)/float64(totalVlogSyscalls))
 	}
-	fenceEnqueuedKeys := db.deferredFenceEnqueuedKeys.Load()
-	fenceEnqueuedBytes := db.deferredFenceEnqueuedBytes.Load()
-	fenceMaterializedKeys := db.deferredFenceMaterializedKeys.Load()
-	fenceMaterializedBytes := db.deferredFenceMaterializedBytes.Load()
-	fencePendingKeys := uint64(0)
-	if fenceEnqueuedKeys > fenceMaterializedKeys {
-		fencePendingKeys = fenceEnqueuedKeys - fenceMaterializedKeys
-	}
-	fencePendingBytes := uint64(0)
-	if fenceEnqueuedBytes > fenceMaterializedBytes {
-		fencePendingBytes = fenceEnqueuedBytes - fenceMaterializedBytes
-	}
-	// Mode-agnostic deferred value-log debt/assist counters.
-	stats["treedb.cache.deferred_vlog.enqueued_keys"] = fmt.Sprintf("%d", fenceEnqueuedKeys)
-	stats["treedb.cache.deferred_vlog.enqueued_bytes"] = fmt.Sprintf("%d", fenceEnqueuedBytes)
-	stats["treedb.cache.deferred_vlog.materialized_keys"] = fmt.Sprintf("%d", fenceMaterializedKeys)
-	stats["treedb.cache.deferred_vlog.materialized_bytes"] = fmt.Sprintf("%d", fenceMaterializedBytes)
-	stats["treedb.cache.deferred_vlog.pending_keys_estimate"] = fmt.Sprintf("%d", fencePendingKeys)
-	stats["treedb.cache.deferred_vlog.pending_bytes_estimate"] = fmt.Sprintf("%d", fencePendingBytes)
-	stats["treedb.cache.deferred_vlog.assist_calls"] = fmt.Sprintf("%d", db.deferredFenceAssistCalls.Load())
-	stats["treedb.cache.deferred_vlog.assist_flushed_memtables"] = fmt.Sprintf("%d", db.deferredFenceAssistFlushedMemtables.Load())
-	stats["treedb.cache.deferred_vlog.assist_early_triggers"] = fmt.Sprintf("%d", db.deferredFenceAssistEarlyTriggers.Load())
-	stats["treedb.cache.deferred_vlog.checkpoint_pool_skips"] = fmt.Sprintf("%d", db.deferredFenceCheckpointPoolSkips.Load())
 	if db.adaptiveBackpressureEnabled() {
 		stats["treedb.cache.backpressure_mode"] = "adaptive"
 	} else {

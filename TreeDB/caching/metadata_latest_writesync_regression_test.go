@@ -23,14 +23,13 @@ func latestValueBytesRegression(height uint64) []byte {
 	return buf
 }
 
-// Regression for issue #657 (bug A): under fast + route mode, metadata
-// WriteSync may return while "s/latest" is not visible.
-func TestRegression_MetadataLatestVisibleAfterWriteSync_FastRoute(t *testing.T) {
+// Regression for issue #657 (bug A): metadata WriteSync may return while
+// "s/latest" is not visible.
+func TestRegression_MetadataLatestVisibleAfterWriteSync_Fast(t *testing.T) {
 	dir := t.TempDir()
 
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	// Match cosmos-db adapter behavior: keep route mode but do not force all
-	// values onto pointer/deferred materialization.
+	// Match cosmos-db adapter behavior: do not force all values onto pointers.
 	opts.ValueLog.ForcePointers = false
 	if opts.MemtableMode == "" || opts.MemtableMode == "adaptive" {
 		opts.MemtableMode = "adaptive:hash_sorted"
@@ -98,7 +97,6 @@ func TestRegression_MetadataLatestVisibleAfterWriteSync_FastRoute(t *testing.T) 
 		t.Fatalf("metadata close: %v", err)
 	}
 
-	// Current buggy behavior: gotLatest == nil.
 	gotLatest, err := db.Get([]byte("s/latest"))
 	if err != nil {
 		t.Fatalf("get s/latest: %v", err)
