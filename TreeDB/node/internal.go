@@ -306,11 +306,11 @@ func (n *Node) GetInternalEntryView(index uint16) (key []byte, childID uint64, e
 	return key, childID, nil
 }
 
-// InternalFenceBounds returns exact subtree bounds when persisted on this
+// InternalBounds returns exact subtree bounds when persisted on this
 // internal page: low inclusive and high exclusive. A nil/empty high bound means
 // unbounded.
-func (n *Node) InternalFenceBounds() (low, high []byte, ok bool, err error) {
-	if !n.internalBaseDelta() || !n.internalFenceBounds() {
+func (n *Node) InternalBounds() (low, high []byte, ok bool, err error) {
+	if !n.internalBaseDelta() || !n.internalBounds() {
 		return nil, nil, false, nil
 	}
 	meta, err := n.internalBaseDeltaMeta()

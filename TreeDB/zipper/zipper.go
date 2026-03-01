@@ -590,7 +590,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 					currentBuilder.SetPageID(pid)
 
 					currentStartKey = child.Key
-					currentBuilder.SetInternalFenceBounds(currentStartKey, nil)
+					currentBuilder.SetInternalBounds(currentStartKey, nil)
 				}
 
 				// Add child
@@ -626,7 +626,7 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 					currentBuilder = z.newBuilderForType(data, page.PageTypeInternal, nil)
 					currentBuilder.SetPageID(pid)
 					currentStartKey = child.Key
-					currentBuilder.SetInternalFenceBounds(currentStartKey, nil)
+					currentBuilder.SetInternalBounds(currentStartKey, nil)
 
 					if err := currentBuilder.AddInternalChild(childKey, child.NodeID); err != nil {
 						return 0, nil, metrics, err // Should fit in empty node
@@ -694,7 +694,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		return nr, splits, err
 	} else if oldNode.Type() == page.PageTypeInternal {
 		// Internal merge
-		builder.SetInternalFenceBounds(low, high)
+		builder.SetInternalBounds(low, high)
 		nr, splits, err := z.mergeInternal(oldNode, builder, ops, maintenance, budget, metrics, retired, low, high)
 		if err != nil {
 			return 0, nil, err
@@ -2089,7 +2089,7 @@ func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder
 
 	sb := z.newBuilderForType(sdata, page.PageTypeInternal, nil)
 	sb.SetPageID(sid)
-	sb.SetInternalFenceBounds(key, nil)
+	sb.SetInternalBounds(key, nil)
 
 	*splits = append(*splits, Split{Key: append([]byte(nil), key...), NodeID: sid})
 

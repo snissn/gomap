@@ -304,12 +304,12 @@ func (n *Node) splitInternalBaseDeltaRebuild(newNode *Node) ([]byte, error) {
 	})
 	rightBuilder.SetPageID(newNode.PageID())
 
-	var lowFence, highFence []byte
-	if low, high, ok, err := src.InternalFenceBounds(); err != nil {
+	var lowBound, highBound []byte
+	if low, high, ok, err := src.InternalBounds(); err != nil {
 		return nil, err
 	} else if ok {
-		lowFence = append([]byte(nil), low...)
-		highFence = append([]byte(nil), high...)
+		lowBound = append([]byte(nil), low...)
+		highBound = append([]byte(nil), high...)
 	}
 
 	pivotView, _, err := src.GetInternalEntryView(splitIndex)
@@ -317,8 +317,8 @@ func (n *Node) splitInternalBaseDeltaRebuild(newNode *Node) ([]byte, error) {
 		return nil, err
 	}
 	pivotKey := append([]byte(nil), pivotView...)
-	leftBuilder.SetInternalFenceBounds(lowFence, pivotKey)
-	rightBuilder.SetInternalFenceBounds(pivotKey, highFence)
+	leftBuilder.SetInternalBounds(lowBound, pivotKey)
+	rightBuilder.SetInternalBounds(pivotKey, highBound)
 
 	for i := uint16(0); i < splitIndex; i++ {
 		key, child, err := src.GetInternalEntryView(i)

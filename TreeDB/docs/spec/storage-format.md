@@ -228,8 +228,8 @@ bytes KeySuffix
 With footer payload:
 
 ```text
-bytes lowFence
-bytes highFence
+bytes lowBound
+bytes highBound
 bytes sharedPrefix
 u16 lowLen
 u16 highLen

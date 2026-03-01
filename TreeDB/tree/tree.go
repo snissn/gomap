@@ -187,7 +187,7 @@ func (t *Tree) GetEntryExact(key []byte) (node.LeafEntry, error) {
 		switch n.Type() {
 		case page.PageTypeInternal:
 			if depth == 0 {
-				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+				if low, high, ok, err := n.InternalBounds(); err != nil {
 					return node.LeafEntry{}, err
 				} else if ok {
 					if len(low) > 0 && compareTreeKey(key, low) < 0 {
@@ -256,7 +256,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 		switch n.Type() {
 		case page.PageTypeInternal:
 			if depth == 0 {
-				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+				if low, high, ok, err := n.InternalBounds(); err != nil {
 					return nil, page.ValuePtr{}, 0, false, err
 				} else if ok {
 					if len(low) > 0 && compareTreeKey(key, low) < 0 {
@@ -427,7 +427,7 @@ func (t *Tree) Has(key []byte) (bool, error) {
 		switch n.Type() {
 		case page.PageTypeInternal:
 			if depth == 0 {
-				if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+				if low, high, ok, err := n.InternalBounds(); err != nil {
 					return false, err
 				} else if ok {
 					if len(low) > 0 && compareTreeKey(key, low) < 0 {
@@ -465,4 +465,3 @@ func (t *Tree) Has(key []byte) (bool, error) {
 
 	return false, errors.New("tree too deep")
 }
-

@@ -30,9 +30,9 @@ type Builder struct {
 	internalBaseHasChild  bool
 	internalBaseMinChild  uint64
 	internalBaseMaxChild  uint64
-	internalFenceBounds   bool
-	internalFenceLow      []byte
-	internalFenceHigh     []byte
+	internalBoundsSet     bool
+	internalLowBound      []byte
+	internalHighBound     []byte
 	leafPrevKeyBuf        [64]byte
 	leafPrevKey           []byte
 	leafIndex             int
@@ -342,8 +342,8 @@ func (b *Builder) ReleaseScratch() {
 	b.releaseInternalBaseDeltaScratch()
 	b.data = nil
 	b.leafPrevKey = nil
-	b.internalFenceLow = nil
-	b.internalFenceHigh = nil
+	b.internalLowBound = nil
+	b.internalHighBound = nil
 }
 
 // SetPageID sets the page ID (can be done at finish too).
@@ -360,22 +360,22 @@ func (b *Builder) Count() uint16 {
 	return b.count
 }
 
-// SetInternalFenceBounds configures exact subtree bounds for internal pages.
+// SetInternalBounds configures exact subtree bounds for internal pages.
 // low is inclusive and high is exclusive; nil high means unbounded.
-func (b *Builder) SetInternalFenceBounds(low, high []byte) {
+func (b *Builder) SetInternalBounds(low, high []byte) {
 	if b.pType != page.PageTypeInternal {
 		return
 	}
-	b.internalFenceBounds = true
+	b.internalBoundsSet = true
 	if len(low) == 0 {
-		b.internalFenceLow = nil
+		b.internalLowBound = nil
 	} else {
-		b.internalFenceLow = append(b.internalFenceLow[:0], low...)
+		b.internalLowBound = append(b.internalLowBound[:0], low...)
 	}
 	if len(high) == 0 {
-		b.internalFenceHigh = nil
+		b.internalHighBound = nil
 	} else {
-		b.internalFenceHigh = append(b.internalFenceHigh[:0], high...)
+		b.internalHighBound = append(b.internalHighBound[:0], high...)
 	}
 }
 
@@ -870,8 +870,8 @@ func (b *Builder) finalize() {
 			if b.internalBaseDeltaW == 2 {
 				flags |= internalBaseDeltaU16Flag
 			}
-			if b.internalFenceBounds {
-				flags |= internalFenceBoundsFlag
+			if b.internalBoundsSet {
+				flags |= internalBoundsFlag
 			}
 		}
 	}
@@ -1396,7 +1396,7 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 	if len(key) > int(^uint16(0)) {
 		return ErrKeyTooLarge
 	}
-	if b.internalFenceBounds && (len(b.internalFenceLow) > int(^uint16(0)) || len(b.internalFenceHigh) > int(^uint16(0))) {
+	if b.internalBoundsSet && (len(b.internalLowBound) > int(^uint16(0)) || len(b.internalHighBound) > int(^uint16(0))) {
 		return ErrKeyTooLarge
 	}
 
@@ -1452,9 +1452,9 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 
 	lowLen := 0
 	highLen := 0
-	if b.internalFenceBounds {
-		lowLen = len(b.internalFenceLow)
-		highLen = len(b.internalFenceHigh)
+	if b.internalBoundsSet {
+		lowLen = len(b.internalLowBound)
+		highLen = len(b.internalHighBound)
 	}
 	footerBytes := internalBaseDeltaFooterTailSize + lowLen + highLen + prefixLen
 	entriesBytes := nextCount*(2+deltaWidth) + totalSuffixBytes
@@ -1519,9 +1519,9 @@ func (b *Builder) finishInternalBaseDelta() bool {
 
 	lowLen := 0
 	highLen := 0
-	if b.internalFenceBounds {
-		lowLen = len(b.internalFenceLow)
-		highLen = len(b.internalFenceHigh)
+	if b.internalBoundsSet {
+		lowLen = len(b.internalLowBound)
+		highLen = len(b.internalHighBound)
 	}
 	footerBytes := internalBaseDeltaFooterTailSize + lowLen + highLen + prefixLen
 	entriesBytes := count*(2+deltaWidth) + totalSuffixBytes
@@ -1535,11 +1535,11 @@ func (b *Builder) finishInternalBaseDelta() bool {
 
 	payloadPos := footerStart
 	if lowLen > 0 {
-		copy(b.data[payloadPos:payloadPos+lowLen], b.internalFenceLow)
+		copy(b.data[payloadPos:payloadPos+lowLen], b.internalLowBound)
 		payloadPos += lowLen
 	}
 	if highLen > 0 {
-		copy(b.data[payloadPos:payloadPos+highLen], b.internalFenceHigh)
+		copy(b.data[payloadPos:payloadPos+highLen], b.internalHighBound)
 		payloadPos += highLen
 	}
 	if prefixLen > 0 {

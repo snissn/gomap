@@ -174,7 +174,7 @@ func TestInternalBaseDelta_CompactPreservesFooter(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
-	b.SetInternalFenceBounds([]byte("user:00000000"), []byte("user:00000099"))
+	b.SetInternalBounds([]byte("user:00000000"), []byte("user:00000099"))
 	for i := 0; i < 32; i++ {
 		key := []byte(fmt.Sprintf("user:%08d", i))
 		if err := b.AddInternalChild(key, uint64(1_000+i)); err != nil {
@@ -192,9 +192,9 @@ func TestInternalBaseDelta_CompactPreservesFooter(t *testing.T) {
 	if !n.internalBaseDelta() {
 		t.Fatalf("expected internalBaseDelta preserved after compact")
 	}
-	low, high, ok, err := n.InternalFenceBounds()
+	low, high, ok, err := n.InternalBounds()
 	if err != nil {
-		t.Fatalf("InternalFenceBounds: %v", err)
+		t.Fatalf("InternalBounds: %v", err)
 	}
 	if !ok {
 		t.Fatalf("expected persisted bounds")
@@ -230,7 +230,7 @@ func TestInternalBaseDelta_SplitRoundTrip(t *testing.T) {
 	buf := make([]byte, page.PageSize)
 	b := NewBuilderWithOptions(buf, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true})
 	b.SetPageID(1)
-	b.SetInternalFenceBounds([]byte("user:00000000"), []byte("user:00000099"))
+	b.SetInternalBounds([]byte("user:00000000"), []byte("user:00000099"))
 	for i := 0; i < nKeys; i++ {
 		if err := b.AddInternalChild(keys[i], childIDs[i]); err != nil {
 			t.Fatalf("AddInternalChild: %v", err)
@@ -256,16 +256,16 @@ func TestInternalBaseDelta_SplitRoundTrip(t *testing.T) {
 		t.Fatalf("expected internalBaseDelta enabled on split node")
 	}
 
-	low1, high1, ok1, err := n1.InternalFenceBounds()
+	low1, high1, ok1, err := n1.InternalBounds()
 	if err != nil {
-		t.Fatalf("n1 InternalFenceBounds: %v", err)
+		t.Fatalf("n1 InternalBounds: %v", err)
 	}
 	if !ok1 {
 		t.Fatalf("expected n1 bounds")
 	}
-	low2, high2, ok2, err := n2.InternalFenceBounds()
+	low2, high2, ok2, err := n2.InternalBounds()
 	if err != nil {
-		t.Fatalf("n2 InternalFenceBounds: %v", err)
+		t.Fatalf("n2 InternalBounds: %v", err)
 	}
 	if !ok2 {
 		t.Fatalf("expected n2 bounds")

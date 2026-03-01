@@ -34,12 +34,12 @@ const (
 	internalBaseDeltaFlag    uint16 = 0x0800
 	leafColumnarV2Flag       uint16 = 0x0400
 	internalBaseDeltaU16Flag uint16 = 0x0200
-	internalFenceBoundsFlag  uint16 = 0x0100
+	internalBoundsFlag       uint16 = 0x0100
 
 	// NOTE: TreeDB is currently pre-alpha; on-disk formats are not yet stable and
 	// backward compatibility is not guaranteed. Leaf/internal flags may change.
 	leafNodeFlagMask     = leafPrefixCompressedFlag | leafColumnarFlag | leafPrefixV2Flag | leafPackedValuePtrFlag | leafColumnarV2Flag
-	internalNodeFlagMask = internalBaseDeltaFlag | internalBaseDeltaU16Flag | internalFenceBoundsFlag
+	internalNodeFlagMask = internalBaseDeltaFlag | internalBaseDeltaU16Flag | internalBoundsFlag
 	nodeFlagMask         = leafNodeFlagMask | internalNodeFlagMask
 	pageTypeMask         = ^nodeFlagMask
 
@@ -229,11 +229,11 @@ func (n *Node) internalBaseDeltaU16() bool {
 	return n.rawFlags()&internalBaseDeltaU16Flag != 0
 }
 
-func (n *Node) internalFenceBounds() bool {
+func (n *Node) internalBounds() bool {
 	if n.ptype != page.PageTypeInternal {
 		return false
 	}
-	return n.rawFlags()&internalFenceBoundsFlag != 0
+	return n.rawFlags()&internalBoundsFlag != 0
 }
 
 func (n *Node) setInternalBaseDelta(enabled bool) {
