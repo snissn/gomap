@@ -46,7 +46,7 @@ func runDeleteRangeCheckpointConsistencyProfileMatrix(t *testing.T) {
 			opts := OptionsFor(profile, t.TempDir())
 			opts.ValueLog.PointerThreshold = 1
 			opts.ValueLog.ForcePointers = true
-			opts.ValueLog.OuterLeafBlobThresholdBytes = 256
+			opts.ValueLog.LeafBlockBlobThresholdBytes = 256
 
 			db, err := Open(opts)
 			if err != nil {

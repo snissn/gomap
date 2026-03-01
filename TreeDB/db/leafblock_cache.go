@@ -10,74 +10,74 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-type outerLeafBlockKey struct {
+type leafBlockKey struct {
 	fileID uint32
 	offset uint64
 	length uint32
 }
 
-func newOuterLeafBlockKey(ptr page.ValuePtr) outerLeafBlockKey {
-	return outerLeafBlockKey{
+func newLeafBlockKey(ptr page.ValuePtr) leafBlockKey {
+	return leafBlockKey{
 		fileID: ptr.FileID,
 		offset: ptr.Offset,
 		length: ptr.Length,
 	}
 }
 
-type outerLeafBlockCacheEntry struct {
-	key     outerLeafBlockKey
-	ref     *outerLeafBlockRef
+type leafBlockCacheEntry struct {
+	key     leafBlockKey
+	ref     *leafBlockRef
 	prev    int
 	next    int
 	segment uint8
 }
 
-type outerLeafBlockRef struct {
+type leafBlockRef struct {
 	block *leafblock.DecodedBlock
 	refs  atomic.Int32
 }
 
-var outerLeafBlockRefPool sync.Pool
+var leafBlockRefPool sync.Pool
 
-func getOuterLeafBlockRefSlot() *outerLeafBlockRef {
-	var ref *outerLeafBlockRef
-	if v := outerLeafBlockRefPool.Get(); v != nil {
-		if pooled, ok := v.(*outerLeafBlockRef); ok {
+func getLeafBlockRefSlot() *leafBlockRef {
+	var ref *leafBlockRef
+	if v := leafBlockRefPool.Get(); v != nil {
+		if pooled, ok := v.(*leafBlockRef); ok {
 			ref = pooled
 		}
 	}
 	if ref == nil {
-		ref = &outerLeafBlockRef{}
+		ref = &leafBlockRef{}
 	}
 	return ref
 }
 
-func initOuterLeafBlockRefSlot(ref *outerLeafBlockRef, block *leafblock.DecodedBlock) *outerLeafBlockRef {
+func initLeafBlockRefSlot(ref *leafBlockRef, block *leafblock.DecodedBlock) *leafBlockRef {
 	if block == nil {
 		return nil
 	}
 	if ref == nil {
-		ref = getOuterLeafBlockRefSlot()
+		ref = getLeafBlockRefSlot()
 	}
 	ref.block = block
 	ref.refs.Store(1) // cache ownership
 	return ref
 }
 
-func newOuterLeafBlockRef(block *leafblock.DecodedBlock) *outerLeafBlockRef {
-	return initOuterLeafBlockRefSlot(nil, block)
+func newLeafBlockRef(block *leafblock.DecodedBlock) *leafBlockRef {
+	return initLeafBlockRefSlot(nil, block)
 }
 
-func putOuterLeafBlockRefSlot(ref *outerLeafBlockRef) {
+func putLeafBlockRefSlot(ref *leafBlockRef) {
 	if ref == nil {
 		return
 	}
 	ref.block = nil
 	ref.refs.Store(0)
-	outerLeafBlockRefPool.Put(ref)
+	leafBlockRefPool.Put(ref)
 }
 
-func (r *outerLeafBlockRef) retain() bool {
+func (r *leafBlockRef) retain() bool {
 	if r == nil {
 		return false
 	}
@@ -92,7 +92,7 @@ func (r *outerLeafBlockRef) retain() bool {
 	}
 }
 
-func (r *outerLeafBlockRef) release() {
+func (r *leafBlockRef) release() {
 	if r == nil {
 		return
 	}
@@ -102,31 +102,31 @@ func (r *outerLeafBlockRef) release() {
 	if r.block != nil {
 		block := r.block
 		r.block = nil
-		recycleOuterLeafDecodedBlock(block)
+		recycleLeafBlockDecodedBlock(block)
 	}
-	putOuterLeafBlockRefSlot(r)
+	putLeafBlockRefSlot(r)
 }
 
-func recycleOuterLeafDecodedBlock(block *leafblock.DecodedBlock) {
+func recycleLeafBlockDecodedBlock(block *leafblock.DecodedBlock) {
 	if block == nil {
 		return
 	}
 	block.Release()
 	*block = leafblock.DecodedBlock{}
-	outerLeafDecodedBlockPool.Put(block)
+	leafBlockDecodedBlockPool.Put(block)
 }
 
-var outerLeafDecodedBlockPool = sync.Pool{
+var leafBlockDecodedBlockPool = sync.Pool{
 	New: func() any {
 		return &leafblock.DecodedBlock{}
 	},
 }
 
-type outerLeafBlockCacheLease struct {
-	ref *outerLeafBlockRef
+type leafBlockCacheLease struct {
+	ref *leafBlockRef
 }
 
-func (l *outerLeafBlockCacheLease) Release() {
+func (l *leafBlockCacheLease) Release() {
 	if l == nil || l.ref == nil {
 		return
 	}
@@ -134,10 +134,10 @@ func (l *outerLeafBlockCacheLease) Release() {
 	l.ref = nil
 }
 
-type outerLeafBlockCacheShard struct {
+type leafBlockCacheShard struct {
 	mu       sync.RWMutex
-	entries  map[outerLeafBlockKey]int
-	nodes    []outerLeafBlockCacheEntry
+	entries  map[leafBlockKey]int
+	nodes    []leafBlockCacheEntry
 	free     []int
 	head     int
 	tail     int
@@ -170,10 +170,10 @@ type outerLeafBlockCacheShard struct {
 	slruProtCap   int
 }
 
-type outerLeafBlockCache struct {
-	shards   []outerLeafBlockCacheShard
+type leafBlockCache struct {
+	shards   []leafBlockCacheShard
 	capacity int
-	policy   outerLeafBlockCachePolicy
+	policy   leafBlockCachePolicy
 	// Temporary counters for validating put-path contention/allocation work.
 	putAttempts       atomic.Uint64
 	putAdmitted       atomic.Uint64
@@ -181,63 +181,63 @@ type outerLeafBlockCache struct {
 	putLockContention atomic.Uint64
 }
 
-type outerLeafBlockCachePolicy uint8
+type leafBlockCachePolicy uint8
 
 const (
-	outerLeafBlockCachePolicyLRU outerLeafBlockCachePolicy = iota
-	outerLeafBlockCachePolicyLRULight
-	outerLeafBlockCachePolicySIEVE
-	outerLeafBlockCachePolicySLRU
+	leafBlockCachePolicyLRU leafBlockCachePolicy = iota
+	leafBlockCachePolicyLRULight
+	leafBlockCachePolicySIEVE
+	leafBlockCachePolicySLRU
 )
 
-const outerLeafBlockCachePolicyEnv = "TREEDB_OUTER_LEAF_BLOCK_CACHE_POLICY"
+const leafBlockCachePolicyEnv = "TREEDB_OUTER_LEAF_BLOCK_CACHE_POLICY"
 
-var outerLeafBlockCachePolicyOnce sync.Once
-var outerLeafBlockCachePolicyCached outerLeafBlockCachePolicy
+var leafBlockCachePolicyOnce sync.Once
+var leafBlockCachePolicyCached leafBlockCachePolicy
 
 // On heavily contended read paths, full LRU promotion on every cache hit
 // creates avoidable write-lock churn. Promote a sampled subset of hits to keep
 // recency reasonably fresh while reducing lock pressure.
-const outerLeafBlockCachePromoteSampleMask uint64 = 0x0f              // 1/16
-const outerLeafBlockCachePromoteSampleMaskLight uint64 = 0x3f         // 1/64
-const outerLeafBlockCacheSLRUProbationPromoteSampleMask uint64 = 0x03 // 1/4
+const leafBlockCachePromoteSampleMask uint64 = 0x0f              // 1/16
+const leafBlockCachePromoteSampleMaskLight uint64 = 0x3f         // 1/64
+const leafBlockCacheSLRUProbationPromoteSampleMask uint64 = 0x03 // 1/4
 
 // Keep shard fanout bounded while aiming for modest per-shard queueing under
 // mixed read/write contention.
-const outerLeafBlockCacheTargetEntriesPerShard = 64
-const outerLeafBlockCacheMaxShards = 64
-const outerLeafBlockCacheAdmitCountersPerEntry = 16
-const outerLeafBlockCacheAdmitMinCounters = 256
-const outerLeafBlockCacheAdmitCountersPerWord = 16
-const outerLeafBlockCacheAdmitCounterMask uint64 = 0x0f
-const outerLeafBlockCacheAdmitDecayNibbleHalfMask uint64 = 0x7777777777777777
-const outerLeafBlockCacheAdmitCounterMax uint8 = 15
-const outerLeafBlockCacheAdmitDecayMultiplier = 8
-const outerLeafBlockCacheAdmitDecayMinSamples = 256
-const outerLeafBlockCacheAdmitThresholdMin uint8 = 2
-const outerLeafBlockCacheAdmitThresholdMax uint8 = 4
-const outerLeafBlockCacheAdmitVictimEWMAWeight = 7 // 7/8 old + 1/8 new
-const outerLeafBlockCacheSLRUProtectedFractionNum = 1
-const outerLeafBlockCacheSLRUProtectedFractionDen = 2
-const outerLeafBlockCacheSegmentProbation uint8 = 0
-const outerLeafBlockCacheSegmentProtected uint8 = 1
+const leafBlockCacheTargetEntriesPerShard = 64
+const leafBlockCacheMaxShards = 64
+const leafBlockCacheAdmitCountersPerEntry = 16
+const leafBlockCacheAdmitMinCounters = 256
+const leafBlockCacheAdmitCountersPerWord = 16
+const leafBlockCacheAdmitCounterMask uint64 = 0x0f
+const leafBlockCacheAdmitDecayNibbleHalfMask uint64 = 0x7777777777777777
+const leafBlockCacheAdmitCounterMax uint8 = 15
+const leafBlockCacheAdmitDecayMultiplier = 8
+const leafBlockCacheAdmitDecayMinSamples = 256
+const leafBlockCacheAdmitThresholdMin uint8 = 2
+const leafBlockCacheAdmitThresholdMax uint8 = 4
+const leafBlockCacheAdmitVictimEWMAWeight = 7 // 7/8 old + 1/8 new
+const leafBlockCacheSLRUProtectedFractionNum = 1
+const leafBlockCacheSLRUProtectedFractionDen = 2
+const leafBlockCacheSegmentProbation uint8 = 0
+const leafBlockCacheSegmentProtected uint8 = 1
 
-func newOuterLeafBlockCache(capacity int) *outerLeafBlockCache {
-	return newOuterLeafBlockCacheWithPolicy(capacity, outerLeafBlockCacheDefaultPolicy())
+func newLeafBlockCache(capacity int) *leafBlockCache {
+	return newLeafBlockCacheWithPolicy(capacity, leafBlockCacheDefaultPolicy())
 }
 
-func newOuterLeafBlockCacheWithPolicy(capacity int, policy outerLeafBlockCachePolicy) *outerLeafBlockCache {
+func newLeafBlockCacheWithPolicy(capacity int, policy leafBlockCachePolicy) *leafBlockCache {
 	if capacity <= 0 {
 		return nil
 	}
 
 	// Keep per-shard capacity reasonably sized while bounding lock fanout.
 	shardCount := 1
-	targetShards := capacity / outerLeafBlockCacheTargetEntriesPerShard
+	targetShards := capacity / leafBlockCacheTargetEntriesPerShard
 	if targetShards < 1 {
 		targetShards = 1
 	}
-	for shardCount < targetShards && shardCount < outerLeafBlockCacheMaxShards {
+	for shardCount < targetShards && shardCount < leafBlockCacheMaxShards {
 		shardCount <<= 1
 	}
 	if shardCount > capacity {
@@ -247,7 +247,7 @@ func newOuterLeafBlockCacheWithPolicy(capacity int, policy outerLeafBlockCachePo
 		}
 	}
 
-	shards := make([]outerLeafBlockCacheShard, shardCount)
+	shards := make([]leafBlockCacheShard, shardCount)
 	baseCap := capacity / shardCount
 	extra := capacity % shardCount
 	for i := range shards {
@@ -258,34 +258,34 @@ func newOuterLeafBlockCacheWithPolicy(capacity int, policy outerLeafBlockCachePo
 		admitCounters := 0
 		admitDecayEvery := uint32(0)
 		if capI > 0 {
-			targetCounters := capI * outerLeafBlockCacheAdmitCountersPerEntry
-			if targetCounters < outerLeafBlockCacheAdmitMinCounters {
-				targetCounters = outerLeafBlockCacheAdmitMinCounters
+			targetCounters := capI * leafBlockCacheAdmitCountersPerEntry
+			if targetCounters < leafBlockCacheAdmitMinCounters {
+				targetCounters = leafBlockCacheAdmitMinCounters
 			}
 			admitCounters = 1
 			for admitCounters < targetCounters {
 				admitCounters <<= 1
 			}
-			admitDecayEvery = uint32(admitCounters * outerLeafBlockCacheAdmitDecayMultiplier)
-			if admitDecayEvery < outerLeafBlockCacheAdmitDecayMinSamples {
-				admitDecayEvery = outerLeafBlockCacheAdmitDecayMinSamples
+			admitDecayEvery = uint32(admitCounters * leafBlockCacheAdmitDecayMultiplier)
+			if admitDecayEvery < leafBlockCacheAdmitDecayMinSamples {
+				admitDecayEvery = leafBlockCacheAdmitDecayMinSamples
 			}
 		}
 		admitWords := 0
 		admitMask := uint64(0)
 		if admitCounters > 0 {
-			admitWords = (admitCounters + outerLeafBlockCacheAdmitCountersPerWord - 1) / outerLeafBlockCacheAdmitCountersPerWord
+			admitWords = (admitCounters + leafBlockCacheAdmitCountersPerWord - 1) / leafBlockCacheAdmitCountersPerWord
 			admitMask = uint64(admitCounters - 1)
 		}
 		free := make([]int, capI)
-		nodes := make([]outerLeafBlockCacheEntry, capI)
+		nodes := make([]leafBlockCacheEntry, capI)
 		for j := 0; j < capI; j++ {
 			nodes[j].prev = -1
 			nodes[j].next = -1
 			free[j] = capI - 1 - j
 		}
-		shards[i] = outerLeafBlockCacheShard{
-			entries:         make(map[outerLeafBlockKey]int, capI),
+		shards[i] = leafBlockCacheShard{
+			entries:         make(map[leafBlockKey]int, capI),
 			nodes:           nodes,
 			free:            free,
 			head:            -1,
@@ -301,11 +301,11 @@ func newOuterLeafBlockCacheWithPolicy(capacity int, policy outerLeafBlockCachePo
 			slruProtTail:    -1,
 			slruProtCap:     0,
 		}
-		if policy == outerLeafBlockCachePolicySIEVE {
+		if policy == leafBlockCachePolicySIEVE {
 			shards[i].sieveRef = make([]atomic.Uint32, capI)
 		}
-		if policy == outerLeafBlockCachePolicySLRU {
-			protCap := (capI * outerLeafBlockCacheSLRUProtectedFractionNum) / outerLeafBlockCacheSLRUProtectedFractionDen
+		if policy == leafBlockCachePolicySLRU {
+			protCap := (capI * leafBlockCacheSLRUProtectedFractionNum) / leafBlockCacheSLRUProtectedFractionDen
 			if capI <= 1 {
 				protCap = capI
 			} else {
@@ -320,65 +320,65 @@ func newOuterLeafBlockCacheWithPolicy(capacity int, policy outerLeafBlockCachePo
 		}
 	}
 
-	return &outerLeafBlockCache{
+	return &leafBlockCache{
 		shards:   shards,
 		capacity: capacity,
 		policy:   policy,
 	}
 }
 
-func outerLeafBlockCacheDefaultPolicy() outerLeafBlockCachePolicy {
-	outerLeafBlockCachePolicyOnce.Do(func() {
-		switch strings.ToLower(strings.TrimSpace(os.Getenv(outerLeafBlockCachePolicyEnv))) {
+func leafBlockCacheDefaultPolicy() leafBlockCachePolicy {
+	leafBlockCachePolicyOnce.Do(func() {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(leafBlockCachePolicyEnv))) {
 		case "lru_light", "lru-light", "lrulight":
-			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicyLRULight
+			leafBlockCachePolicyCached = leafBlockCachePolicyLRULight
 		case "sieve":
-			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicySIEVE
+			leafBlockCachePolicyCached = leafBlockCachePolicySIEVE
 		case "slru", "2q":
-			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicySLRU
+			leafBlockCachePolicyCached = leafBlockCachePolicySLRU
 		case "clock":
 			// Backward-compatible alias from the prior experiment.
-			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicySLRU
+			leafBlockCachePolicyCached = leafBlockCachePolicySLRU
 		default:
-			outerLeafBlockCachePolicyCached = outerLeafBlockCachePolicyLRU
+			leafBlockCachePolicyCached = leafBlockCachePolicyLRU
 		}
 	})
-	return outerLeafBlockCachePolicyCached
+	return leafBlockCachePolicyCached
 }
 
-func (c *outerLeafBlockCache) policyName() string {
+func (c *leafBlockCache) policyName() string {
 	if c == nil {
 		return "disabled"
 	}
-	if c.policy == outerLeafBlockCachePolicyLRULight {
+	if c.policy == leafBlockCachePolicyLRULight {
 		return "lru_light"
 	}
-	if c.policy == outerLeafBlockCachePolicySIEVE {
+	if c.policy == leafBlockCachePolicySIEVE {
 		return "sieve"
 	}
-	if c.policy == outerLeafBlockCachePolicySLRU {
+	if c.policy == leafBlockCachePolicySLRU {
 		return "slru"
 	}
 	return "lru"
 }
 
-func (c *outerLeafBlockCache) isSLRU() bool {
-	return c != nil && c.policy == outerLeafBlockCachePolicySLRU
+func (c *leafBlockCache) isSLRU() bool {
+	return c != nil && c.policy == leafBlockCachePolicySLRU
 }
 
-func (c *outerLeafBlockCache) isSIEVE() bool {
-	return c != nil && c.policy == outerLeafBlockCachePolicySIEVE
+func (c *leafBlockCache) isSIEVE() bool {
+	return c != nil && c.policy == leafBlockCachePolicySIEVE
 }
 
-func (c *outerLeafBlockCache) lruPromoteMask() uint64 {
-	if c != nil && c.policy == outerLeafBlockCachePolicyLRULight {
-		return outerLeafBlockCachePromoteSampleMaskLight
+func (c *leafBlockCache) lruPromoteMask() uint64 {
+	if c != nil && c.policy == leafBlockCachePolicyLRULight {
+		return leafBlockCachePromoteSampleMaskLight
 	}
-	return outerLeafBlockCachePromoteSampleMask
+	return leafBlockCachePromoteSampleMask
 }
 
-func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*leafblock.DecodedBlock, outerLeafBlockCacheLease) {
-	var lease outerLeafBlockCacheLease
+func (c *leafBlockCache) get(key leafBlockKey) (*leafblock.DecodedBlock, leafBlockCacheLease) {
+	var lease leafBlockCacheLease
 	s := c.shardFor(key)
 	s.mu.RLock()
 	idx, ok := s.entries[key]
@@ -398,8 +398,8 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*leafblock.DecodedBloc
 	}
 	block := ref.block
 	segment := s.nodes[idx].segment
-	needPromoteLRU := c.policy == outerLeafBlockCachePolicyLRU && idx != s.head
-	needPromoteLRULight := c.policy == outerLeafBlockCachePolicyLRULight && idx != s.head
+	needPromoteLRU := c.policy == leafBlockCachePolicyLRU && idx != s.head
+	needPromoteLRULight := c.policy == leafBlockCachePolicyLRULight && idx != s.head
 	s.mu.RUnlock()
 	if block == nil {
 		ref.release()
@@ -410,11 +410,11 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*leafblock.DecodedBloc
 	if c.isSLRU() {
 		// Probation hits should promote into protected, but sample promotions so
 		// the read path does not attempt a write lock on every hit.
-		shouldPromoteProbation := segment == outerLeafBlockCacheSegmentProbation && (hits&outerLeafBlockCacheSLRUProbationPromoteSampleMask) == 0
-		shouldRefreshProtected := segment == outerLeafBlockCacheSegmentProtected && (hits&outerLeafBlockCachePromoteSampleMask) == 0
+		shouldPromoteProbation := segment == leafBlockCacheSegmentProbation && (hits&leafBlockCacheSLRUProbationPromoteSampleMask) == 0
+		shouldRefreshProtected := segment == leafBlockCacheSegmentProtected && (hits&leafBlockCachePromoteSampleMask) == 0
 		if (shouldPromoteProbation || shouldRefreshProtected) && s.mu.TryLock() {
 			if idx2, ok2 := s.entries[key]; ok2 {
-				if s.nodes[idx2].segment == outerLeafBlockCacheSegmentProbation {
+				if s.nodes[idx2].segment == leafBlockCacheSegmentProbation {
 					if shouldPromoteProbation {
 						s.slruPromoteToProtected(idx2)
 					}
@@ -436,10 +436,10 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*leafblock.DecodedBloc
 	return block, lease
 }
 
-func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *leafblock.DecodedBlock) {
+func (c *leafBlockCache) put(key leafBlockKey, block *leafblock.DecodedBlock) {
 	_, admitted := c.putInternal(key, block, false)
 	if !admitted {
-		recycleOuterLeafDecodedBlock(block)
+		recycleLeafBlockDecodedBlock(block)
 	}
 }
 
@@ -447,13 +447,13 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *leafblock.Decode
 // already observed a cache miss and do not require a lease. It intentionally
 // avoids a pre-lock read probe and can drop admission under contention once the
 // shard is warm to reduce write-lock amplification on parallel read misses.
-func (c *outerLeafBlockCache) putAfterMissNoLease(key outerLeafBlockKey, block *leafblock.DecodedBlock) {
+func (c *leafBlockCache) putAfterMissNoLease(key leafBlockKey, block *leafblock.DecodedBlock) {
 	if !c.putAfterMissNoLeaseInternal(key, block) {
-		recycleOuterLeafDecodedBlock(block)
+		recycleLeafBlockDecodedBlock(block)
 	}
 }
 
-func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey, block *leafblock.DecodedBlock) bool {
+func (c *leafBlockCache) putAfterMissNoLeaseInternal(key leafBlockKey, block *leafblock.DecodedBlock) bool {
 	if c == nil || block == nil {
 		return false
 	}
@@ -466,25 +466,25 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 		return false
 	}
 
-	stagedRef := getOuterLeafBlockRefSlot()
+	stagedRef := getLeafBlockRefSlot()
 	warmOrFull := int(s.entryCount.Load()) >= s.capacity/2
 	if !s.mu.TryLock() {
 		c.putLockContention.Add(1)
 		if warmOrFull {
-			putOuterLeafBlockRefSlot(stagedRef)
+			putLeafBlockRefSlot(stagedRef)
 			return false
 		}
 		s.mu.Lock()
 	}
 
-	var releaseEvicted *outerLeafBlockRef
+	var releaseEvicted *leafBlockRef
 	var duplicateDropBlock *leafblock.DecodedBlock
 	var evictedHash uint64
 	evicted := false
 	if idx, ok := s.entries[key]; ok {
 		ref := s.nodes[idx].ref
 		if ref == nil {
-			ref = initOuterLeafBlockRefSlot(stagedRef, block)
+			ref = initLeafBlockRefSlot(stagedRef, block)
 			stagedRef = nil
 			s.nodes[idx].ref = ref
 		} else if ref.block != block {
@@ -498,10 +498,10 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 		// sampled recency maintenance.
 		s.mu.Unlock()
 		if stagedRef != nil {
-			putOuterLeafBlockRefSlot(stagedRef)
+			putLeafBlockRefSlot(stagedRef)
 		}
 		if duplicateDropBlock != nil {
-			recycleOuterLeafDecodedBlock(duplicateDropBlock)
+			recycleLeafBlockDecodedBlock(duplicateDropBlock)
 		}
 		c.putAdmitted.Add(1)
 		return true
@@ -524,12 +524,12 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 		if idx < 0 {
 			s.mu.Unlock()
 			if stagedRef != nil {
-				putOuterLeafBlockRefSlot(stagedRef)
+				putLeafBlockRefSlot(stagedRef)
 			}
 			return false
 		}
 		evictedKey := s.nodes[idx].key
-		evictedHash = outerLeafBlockKeyHash(evictedKey)
+		evictedHash = leafBlockKeyHash(evictedKey)
 		evicted = true
 		releaseEvicted = s.nodes[idx].ref
 		if c.isSLRU() {
@@ -548,7 +548,7 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 		node.ref = releaseEvicted
 		releaseEvicted = nil
 	} else {
-		node.ref = initOuterLeafBlockRefSlot(stagedRef, block)
+		node.ref = initLeafBlockRefSlot(stagedRef, block)
 		stagedRef = nil
 	}
 	node.prev = -1
@@ -568,7 +568,7 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 	s.mu.Unlock()
 
 	if stagedRef != nil {
-		putOuterLeafBlockRefSlot(stagedRef)
+		putLeafBlockRefSlot(stagedRef)
 	}
 	if releaseEvicted != nil {
 		releaseEvicted.release()
@@ -580,12 +580,12 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 	return true
 }
 
-func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *leafblock.DecodedBlock) (outerLeafBlockCacheLease, bool) {
+func (c *leafBlockCache) putWithLease(key leafBlockKey, block *leafblock.DecodedBlock) (leafBlockCacheLease, bool) {
 	return c.putInternal(key, block, true)
 }
 
-func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafblock.DecodedBlock, wantLease bool) (outerLeafBlockCacheLease, bool) {
-	var lease outerLeafBlockCacheLease
+func (c *leafBlockCache) putInternal(key leafBlockKey, block *leafblock.DecodedBlock, wantLease bool) (leafBlockCacheLease, bool) {
+	var lease leafBlockCacheLease
 	if c == nil || block == nil {
 		return lease, false
 	}
@@ -597,7 +597,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafbloc
 	if !wantLease {
 		if hit, same := s.hasCachedRefMaybeMark(key, block, c.isSIEVE()); hit {
 			if !same {
-				recycleOuterLeafDecodedBlock(block)
+				recycleLeafBlockDecodedBlock(block)
 				c.putDuplicateDrops.Add(1)
 			}
 			c.putAdmitted.Add(1)
@@ -606,7 +606,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafbloc
 	} else {
 		if ref := s.tryRetainMaybeMark(key, c.isSIEVE()); ref != nil {
 			if ref.block != block {
-				recycleOuterLeafDecodedBlock(block)
+				recycleLeafBlockDecodedBlock(block)
 				c.putDuplicateDrops.Add(1)
 			}
 			lease.ref = ref
@@ -622,7 +622,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafbloc
 		// were outside the shard lock.
 		if ref := s.tryRetainMaybeMark(key, c.isSIEVE()); ref != nil {
 			if ref.block != block {
-				recycleOuterLeafDecodedBlock(block)
+				recycleLeafBlockDecodedBlock(block)
 				c.putDuplicateDrops.Add(1)
 			}
 			lease.ref = ref
@@ -631,19 +631,19 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafbloc
 		}
 	}
 
-	stagedRef := getOuterLeafBlockRefSlot()
+	stagedRef := getLeafBlockRefSlot()
 	if !s.mu.TryLock() {
 		c.putLockContention.Add(1)
 		s.mu.Lock()
 	}
-	var releaseEvicted *outerLeafBlockRef
+	var releaseEvicted *leafBlockRef
 	var duplicateDropBlock *leafblock.DecodedBlock
 	var evictedHash uint64
 	evicted := false
 	if idx, ok := s.entries[key]; ok {
 		ref := s.nodes[idx].ref
 		if ref == nil {
-			ref = initOuterLeafBlockRefSlot(stagedRef, block)
+			ref = initLeafBlockRefSlot(stagedRef, block)
 			stagedRef = nil
 			s.nodes[idx].ref = ref
 		} else if ref.block != block {
@@ -668,10 +668,10 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafbloc
 		}
 		s.mu.Unlock()
 		if stagedRef != nil {
-			putOuterLeafBlockRefSlot(stagedRef)
+			putLeafBlockRefSlot(stagedRef)
 		}
 		if duplicateDropBlock != nil {
-			recycleOuterLeafDecodedBlock(duplicateDropBlock)
+			recycleLeafBlockDecodedBlock(duplicateDropBlock)
 		}
 		if !wantLease {
 			c.putAdmitted.Add(1)
@@ -700,12 +700,12 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafbloc
 		if idx < 0 {
 			s.mu.Unlock()
 			if stagedRef != nil {
-				putOuterLeafBlockRefSlot(stagedRef)
+				putLeafBlockRefSlot(stagedRef)
 			}
 			return lease, false
 		}
 		evictedKey := s.nodes[idx].key
-		evictedHash = outerLeafBlockKeyHash(evictedKey)
+		evictedHash = leafBlockKeyHash(evictedKey)
 		evicted = true
 		releaseEvicted = s.nodes[idx].ref
 		if c.isSLRU() {
@@ -723,7 +723,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafbloc
 		node.ref = releaseEvicted
 		releaseEvicted = nil
 	} else {
-		node.ref = initOuterLeafBlockRefSlot(stagedRef, block)
+		node.ref = initLeafBlockRefSlot(stagedRef, block)
 		stagedRef = nil
 	}
 	node.prev = -1
@@ -747,7 +747,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafbloc
 	}
 	s.mu.Unlock()
 	if stagedRef != nil {
-		putOuterLeafBlockRefSlot(stagedRef)
+		putLeafBlockRefSlot(stagedRef)
 	}
 	if releaseEvicted != nil {
 		releaseEvicted.release()
@@ -765,11 +765,11 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafbloc
 	return lease, lease.ref != nil
 }
 
-func (s *outerLeafBlockCacheShard) hasCachedRef(key outerLeafBlockKey, block *leafblock.DecodedBlock) (hit bool, same bool) {
+func (s *leafBlockCacheShard) hasCachedRef(key leafBlockKey, block *leafblock.DecodedBlock) (hit bool, same bool) {
 	return s.hasCachedRefMaybeMark(key, block, false)
 }
 
-func (s *outerLeafBlockCacheShard) hasCachedRefMaybeMark(key outerLeafBlockKey, block *leafblock.DecodedBlock, markSIEVE bool) (hit bool, same bool) {
+func (s *leafBlockCacheShard) hasCachedRefMaybeMark(key leafBlockKey, block *leafblock.DecodedBlock, markSIEVE bool) (hit bool, same bool) {
 	if s == nil {
 		return false, false
 	}
@@ -793,11 +793,11 @@ func (s *outerLeafBlockCacheShard) hasCachedRefMaybeMark(key outerLeafBlockKey, 
 	return hit, same
 }
 
-func (s *outerLeafBlockCacheShard) tryRetain(key outerLeafBlockKey) *outerLeafBlockRef {
+func (s *leafBlockCacheShard) tryRetain(key leafBlockKey) *leafBlockRef {
 	return s.tryRetainMaybeMark(key, false)
 }
 
-func (s *outerLeafBlockCacheShard) tryRetainMaybeMark(key outerLeafBlockKey, markSIEVE bool) *outerLeafBlockRef {
+func (s *leafBlockCacheShard) tryRetainMaybeMark(key leafBlockKey, markSIEVE bool) *leafBlockRef {
 	if s == nil {
 		return nil
 	}
@@ -820,7 +820,7 @@ func (s *outerLeafBlockCacheShard) tryRetainMaybeMark(key outerLeafBlockKey, mar
 	return ref
 }
 
-func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
+func (c *leafBlockCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
 	var totalEntries int
 	var totalHits uint64
 	var totalMisses uint64
@@ -835,20 +835,20 @@ func (c *outerLeafBlockCache) stats() (hits uint64, misses uint64, entries int, 
 	return totalHits, totalMisses, totalEntries, c.capacity
 }
 
-func (c *outerLeafBlockCache) putStats() (attempts uint64, admitted uint64, duplicateDrops uint64, lockContention uint64) {
+func (c *leafBlockCache) putStats() (attempts uint64, admitted uint64, duplicateDrops uint64, lockContention uint64) {
 	if c == nil {
 		return 0, 0, 0, 0
 	}
 	return c.putAttempts.Load(), c.putAdmitted.Load(), c.putDuplicateDrops.Load(), c.putLockContention.Load()
 }
 
-func (c *outerLeafBlockCache) shardFor(key outerLeafBlockKey) *outerLeafBlockCacheShard {
+func (c *leafBlockCache) shardFor(key leafBlockKey) *leafBlockCacheShard {
 	s, _ := c.shardForAndHash(key)
 	return s
 }
 
-func (c *outerLeafBlockCache) shardForAndHash(key outerLeafBlockKey) (*outerLeafBlockCacheShard, uint64) {
-	h := outerLeafBlockKeyHash(key)
+func (c *leafBlockCache) shardForAndHash(key leafBlockKey) (*leafBlockCacheShard, uint64) {
+	h := leafBlockKeyHash(key)
 	if len(c.shards) == 1 {
 		return &c.shards[0], h
 	}
@@ -856,11 +856,11 @@ func (c *outerLeafBlockCache) shardForAndHash(key outerLeafBlockKey) (*outerLeaf
 	return &c.shards[idx], h
 }
 
-func (s *outerLeafBlockCacheShard) shouldAdmit(key outerLeafBlockKey) bool {
-	return s.shouldAdmitHash(outerLeafBlockKeyHash(key))
+func (s *leafBlockCacheShard) shouldAdmit(key leafBlockKey) bool {
+	return s.shouldAdmitHash(leafBlockKeyHash(key))
 }
 
-func (s *outerLeafBlockCacheShard) shouldAdmitHash(h uint64) bool {
+func (s *leafBlockCacheShard) shouldAdmitHash(h uint64) bool {
 	if s == nil || s.capacity <= 0 {
 		return false
 	}
@@ -872,24 +872,24 @@ func (s *outerLeafBlockCacheShard) shouldAdmitHash(h uint64) bool {
 		return true
 	}
 	freq := s.admitTouchHash(h)
-	threshold := outerLeafBlockCacheAdmitThresholdMin
+	threshold := leafBlockCacheAdmitThresholdMin
 	if entries >= s.capacity/2 {
 		floor := uint8(s.admitFloor.Load())
 		if floor > threshold {
 			threshold = floor
 		}
-		if threshold > outerLeafBlockCacheAdmitThresholdMax {
-			threshold = outerLeafBlockCacheAdmitThresholdMax
+		if threshold > leafBlockCacheAdmitThresholdMax {
+			threshold = leafBlockCacheAdmitThresholdMax
 		}
 	}
 	return freq >= threshold
 }
 
-func (s *outerLeafBlockCacheShard) admitTouchHash(h uint64) uint8 {
+func (s *leafBlockCacheShard) admitTouchHash(h uint64) uint8 {
 	if s == nil || len(s.admit) == 0 || s.admitMask == 0 {
 		return 0
 	}
-	idxA, idxB := outerLeafBlockCacheAdmitIndexes(h, s.admitMask)
+	idxA, idxB := leafBlockCacheAdmitIndexes(h, s.admitMask)
 	if idxA == idxB {
 		est := s.admitIncrementCounter(idxA)
 		s.admitMaybeDecay()
@@ -904,11 +904,11 @@ func (s *outerLeafBlockCacheShard) admitTouchHash(h uint64) uint8 {
 	return b
 }
 
-func (s *outerLeafBlockCacheShard) admitEstimateHash(h uint64) uint8 {
+func (s *leafBlockCacheShard) admitEstimateHash(h uint64) uint8 {
 	if s == nil || len(s.admit) == 0 || s.admitMask == 0 {
 		return 0
 	}
-	idxA, idxB := outerLeafBlockCacheAdmitIndexes(h, s.admitMask)
+	idxA, idxB := leafBlockCacheAdmitIndexes(h, s.admitMask)
 	a := s.admitCounterAtIndex(idxA)
 	if idxA == idxB {
 		return a
@@ -920,7 +920,7 @@ func (s *outerLeafBlockCacheShard) admitEstimateHash(h uint64) uint8 {
 	return b
 }
 
-func (s *outerLeafBlockCacheShard) admitObserveVictimHash(h uint64) {
+func (s *leafBlockCacheShard) admitObserveVictimHash(h uint64) {
 	if s == nil || len(s.admit) == 0 || s.admitMask == 0 {
 		return
 	}
@@ -928,8 +928,8 @@ func (s *outerLeafBlockCacheShard) admitObserveVictimHash(h uint64) {
 	if freq == 0 {
 		return
 	}
-	if freq > outerLeafBlockCacheAdmitThresholdMax {
-		freq = outerLeafBlockCacheAdmitThresholdMax
+	if freq > leafBlockCacheAdmitThresholdMax {
+		freq = leafBlockCacheAdmitThresholdMax
 	}
 	for {
 		old := s.admitFloor.Load()
@@ -937,10 +937,10 @@ func (s *outerLeafBlockCacheShard) admitObserveVictimHash(h uint64) {
 		if old == 0 {
 			next = uint32(freq)
 		} else {
-			next = (old*outerLeafBlockCacheAdmitVictimEWMAWeight + uint32(freq)) / (outerLeafBlockCacheAdmitVictimEWMAWeight + 1)
+			next = (old*leafBlockCacheAdmitVictimEWMAWeight + uint32(freq)) / (leafBlockCacheAdmitVictimEWMAWeight + 1)
 		}
-		if next > uint32(outerLeafBlockCacheAdmitCounterMax) {
-			next = uint32(outerLeafBlockCacheAdmitCounterMax)
+		if next > uint32(leafBlockCacheAdmitCounterMax) {
+			next = uint32(leafBlockCacheAdmitCounterMax)
 		}
 		if s.admitFloor.CompareAndSwap(old, next) {
 			return
@@ -948,7 +948,7 @@ func (s *outerLeafBlockCacheShard) admitObserveVictimHash(h uint64) {
 	}
 }
 
-func (s *outerLeafBlockCacheShard) admitMaybeDecay() {
+func (s *leafBlockCacheShard) admitMaybeDecay() {
 	if s == nil || s.admitDecayEvery == 0 || len(s.admit) == 0 {
 		return
 	}
@@ -966,7 +966,7 @@ func (s *outerLeafBlockCacheShard) admitMaybeDecay() {
 		word := &s.admit[i]
 		for {
 			old := word.Load()
-			next := (old >> 1) & outerLeafBlockCacheAdmitDecayNibbleHalfMask
+			next := (old >> 1) & leafBlockCacheAdmitDecayNibbleHalfMask
 			if word.CompareAndSwap(old, next) {
 				break
 			}
@@ -981,28 +981,28 @@ func (s *outerLeafBlockCacheShard) admitMaybeDecay() {
 	}
 }
 
-func (s *outerLeafBlockCacheShard) admitCounterAtIndex(idx uint64) uint8 {
-	wordIdx, shift := outerLeafBlockCacheAdmitWordShift(idx)
+func (s *leafBlockCacheShard) admitCounterAtIndex(idx uint64) uint8 {
+	wordIdx, shift := leafBlockCacheAdmitWordShift(idx)
 	if wordIdx < 0 || wordIdx >= len(s.admit) {
 		return 0
 	}
 	word := s.admit[wordIdx].Load()
-	return uint8((word >> shift) & outerLeafBlockCacheAdmitCounterMask)
+	return uint8((word >> shift) & leafBlockCacheAdmitCounterMask)
 }
 
-func (s *outerLeafBlockCacheShard) admitIncrementCounter(idx uint64) uint8 {
-	wordIdx, shift := outerLeafBlockCacheAdmitWordShift(idx)
+func (s *leafBlockCacheShard) admitIncrementCounter(idx uint64) uint8 {
+	wordIdx, shift := leafBlockCacheAdmitWordShift(idx)
 	if wordIdx < 0 || wordIdx >= len(s.admit) {
 		return 0
 	}
 	word := &s.admit[wordIdx]
-	mask := outerLeafBlockCacheAdmitCounterMask << shift
+	mask := leafBlockCacheAdmitCounterMask << shift
 	step := uint64(1) << shift
 	for {
 		old := word.Load()
 		cur := (old & mask) >> shift
-		if cur >= outerLeafBlockCacheAdmitCounterMask {
-			return outerLeafBlockCacheAdmitCounterMax
+		if cur >= leafBlockCacheAdmitCounterMask {
+			return leafBlockCacheAdmitCounterMax
 		}
 		if word.CompareAndSwap(old, old+step) {
 			return uint8(cur + 1)
@@ -1010,13 +1010,13 @@ func (s *outerLeafBlockCacheShard) admitIncrementCounter(idx uint64) uint8 {
 	}
 }
 
-func outerLeafBlockCacheAdmitWordShift(idx uint64) (int, uint) {
+func leafBlockCacheAdmitWordShift(idx uint64) (int, uint) {
 	word := int(idx >> 4)
 	shift := uint((idx & 0x0f) << 2)
 	return word, shift
 }
 
-func outerLeafBlockCacheAdmitIndexes(h, mask uint64) (uint64, uint64) {
+func leafBlockCacheAdmitIndexes(h, mask uint64) (uint64, uint64) {
 	// Two derived bit positions preserve second-touch admission while sharply
 	// lowering false positives from hash collisions under large random key sets.
 	idxA := h & mask
@@ -1027,7 +1027,7 @@ func outerLeafBlockCacheAdmitIndexes(h, mask uint64) (uint64, uint64) {
 	return idxA, idxB
 }
 
-func (s *outerLeafBlockCacheShard) sieveMark(idx int) {
+func (s *leafBlockCacheShard) sieveMark(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.sieveRef) {
 		return
 	}
@@ -1037,7 +1037,7 @@ func (s *outerLeafBlockCacheShard) sieveMark(idx int) {
 	}
 }
 
-func (s *outerLeafBlockCacheShard) sieveInsert(idx int) {
+func (s *leafBlockCacheShard) sieveInsert(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.sieveRef) {
 		return
 	}
@@ -1049,7 +1049,7 @@ func (s *outerLeafBlockCacheShard) sieveInsert(idx int) {
 	}
 }
 
-func (s *outerLeafBlockCacheShard) sieveRemove(idx int) {
+func (s *leafBlockCacheShard) sieveRemove(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.nodes) {
 		return
 	}
@@ -1070,7 +1070,7 @@ func (s *outerLeafBlockCacheShard) sieveRemove(idx int) {
 	}
 }
 
-func (s *outerLeafBlockCacheShard) sievePickVictim() int {
+func (s *leafBlockCacheShard) sievePickVictim() int {
 	if s == nil {
 		return -1
 	}
@@ -1120,7 +1120,7 @@ func (s *outerLeafBlockCacheShard) sievePickVictim() int {
 	return s.tail
 }
 
-func (s *outerLeafBlockCacheShard) slruPickVictim() int {
+func (s *leafBlockCacheShard) slruPickVictim() int {
 	if s == nil {
 		return -1
 	}
@@ -1130,36 +1130,36 @@ func (s *outerLeafBlockCacheShard) slruPickVictim() int {
 	return s.slruProtTail
 }
 
-func (s *outerLeafBlockCacheShard) slruInsertProbation(idx int) {
+func (s *leafBlockCacheShard) slruInsertProbation(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.nodes) {
 		return
 	}
-	s.nodes[idx].segment = outerLeafBlockCacheSegmentProbation
-	s.slruLinkFront(idx, outerLeafBlockCacheSegmentProbation)
+	s.nodes[idx].segment = leafBlockCacheSegmentProbation
+	s.slruLinkFront(idx, leafBlockCacheSegmentProbation)
 }
 
-func (s *outerLeafBlockCacheShard) slruTouch(idx int) {
+func (s *leafBlockCacheShard) slruTouch(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.nodes) {
 		return
 	}
-	if s.nodes[idx].segment == outerLeafBlockCacheSegmentProtected {
+	if s.nodes[idx].segment == leafBlockCacheSegmentProtected {
 		s.slruMoveToFront(idx)
 		return
 	}
 	s.slruPromoteToProtected(idx)
 }
 
-func (s *outerLeafBlockCacheShard) slruPromoteToProtected(idx int) {
+func (s *leafBlockCacheShard) slruPromoteToProtected(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.nodes) {
 		return
 	}
-	if s.nodes[idx].segment == outerLeafBlockCacheSegmentProtected {
+	if s.nodes[idx].segment == leafBlockCacheSegmentProtected {
 		s.slruMoveToFront(idx)
 		return
 	}
 	s.slruUnlink(idx)
-	s.nodes[idx].segment = outerLeafBlockCacheSegmentProtected
-	s.slruLinkFront(idx, outerLeafBlockCacheSegmentProtected)
+	s.nodes[idx].segment = leafBlockCacheSegmentProtected
+	s.slruLinkFront(idx, leafBlockCacheSegmentProtected)
 	s.slruProtCount++
 	if s.slruProtCount <= s.slruProtCap {
 		return
@@ -1172,16 +1172,16 @@ func (s *outerLeafBlockCacheShard) slruPromoteToProtected(idx int) {
 	if s.slruProtCount > 0 {
 		s.slruProtCount--
 	}
-	s.nodes[demote].segment = outerLeafBlockCacheSegmentProbation
-	s.slruLinkFront(demote, outerLeafBlockCacheSegmentProbation)
+	s.nodes[demote].segment = leafBlockCacheSegmentProbation
+	s.slruLinkFront(demote, leafBlockCacheSegmentProbation)
 }
 
-func (s *outerLeafBlockCacheShard) slruMoveToFront(idx int) {
+func (s *leafBlockCacheShard) slruMoveToFront(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.nodes) {
 		return
 	}
 	node := &s.nodes[idx]
-	if node.segment == outerLeafBlockCacheSegmentProtected {
+	if node.segment == leafBlockCacheSegmentProtected {
 		if idx == s.slruProtHead {
 			return
 		}
@@ -1195,22 +1195,22 @@ func (s *outerLeafBlockCacheShard) slruMoveToFront(idx int) {
 	s.slruLinkFront(idx, segment)
 }
 
-func (s *outerLeafBlockCacheShard) slruRemove(idx int) {
+func (s *leafBlockCacheShard) slruRemove(idx int) {
 	if s == nil || idx < 0 || idx >= len(s.nodes) {
 		return
 	}
 	segment := s.nodes[idx].segment
 	s.slruUnlink(idx)
-	if segment == outerLeafBlockCacheSegmentProtected && s.slruProtCount > 0 {
+	if segment == leafBlockCacheSegmentProtected && s.slruProtCount > 0 {
 		s.slruProtCount--
 	}
 }
 
-func (s *outerLeafBlockCacheShard) slruLinkFront(idx int, segment uint8) {
+func (s *leafBlockCacheShard) slruLinkFront(idx int, segment uint8) {
 	node := &s.nodes[idx]
 	node.segment = segment
 	node.prev = -1
-	if segment == outerLeafBlockCacheSegmentProtected {
+	if segment == leafBlockCacheSegmentProtected {
 		node.next = s.slruProtHead
 		if s.slruProtHead >= 0 {
 			s.nodes[s.slruProtHead].prev = idx
@@ -1231,11 +1231,11 @@ func (s *outerLeafBlockCacheShard) slruLinkFront(idx int, segment uint8) {
 	}
 }
 
-func (s *outerLeafBlockCacheShard) slruUnlink(idx int) {
+func (s *leafBlockCacheShard) slruUnlink(idx int) {
 	node := &s.nodes[idx]
 	prev := node.prev
 	next := node.next
-	if node.segment == outerLeafBlockCacheSegmentProtected {
+	if node.segment == leafBlockCacheSegmentProtected {
 		if prev >= 0 {
 			s.nodes[prev].next = next
 		} else {
@@ -1262,7 +1262,7 @@ func (s *outerLeafBlockCacheShard) slruUnlink(idx int) {
 	node.next = -1
 }
 
-func (s *outerLeafBlockCacheShard) moveToFront(idx int) {
+func (s *leafBlockCacheShard) moveToFront(idx int) {
 	if idx == s.head {
 		return
 	}
@@ -1270,7 +1270,7 @@ func (s *outerLeafBlockCacheShard) moveToFront(idx int) {
 	s.linkFront(idx)
 }
 
-func (s *outerLeafBlockCacheShard) linkFront(idx int) {
+func (s *leafBlockCacheShard) linkFront(idx int) {
 	node := &s.nodes[idx]
 	node.prev = -1
 	node.next = s.head
@@ -1283,7 +1283,7 @@ func (s *outerLeafBlockCacheShard) linkFront(idx int) {
 	}
 }
 
-func (s *outerLeafBlockCacheShard) unlink(idx int) {
+func (s *leafBlockCacheShard) unlink(idx int) {
 	node := &s.nodes[idx]
 	prev := node.prev
 	next := node.next

@@ -83,8 +83,8 @@ type DB struct {
 	keepRecent                uint64
 	policy                    WritePolicy
 	valueLogDomainThresholds  []ValueLogDomainThreshold
-	outerLeafBlockCache       *outerLeafBlockCache
-	outerLeafKeyCache         *outerLeafKeyCache
+	leafBlockCache            *leafBlockCache
+	leafBlockKeyCache         *leafBlockKeyCache
 	leafFillTargetPPM         uint32
 	internalFillTargetPPM     uint32
 	leafPrefixCompression     bool
@@ -92,9 +92,9 @@ type DB struct {
 	indexPackedValuePtr       bool
 	indexInternalBaseDelta    bool
 	indexAdaptiveLeafEncoding bool
-	outerLeafBlockCodec       ValueLogBlockCodec
-	outerLeafBlockRestart     int
-	skipOuterLeafChecksums    bool
+	leafBlockCodec            ValueLogBlockCodec
+	leafBlockRestart          int
+	skipLeafBlockChecksums    bool
 	piggybackCompaction       bool
 	maintenanceOpsPerCoalesce int
 
@@ -250,27 +250,27 @@ type ValueLogOptions struct {
 	//
 	// 0 uses a default.
 	BlockTargetCompressedBytes int
-	// OuterLeafBlockTargetBytes guides outer-leaf block payload sizing.
+	// LeafBlockTargetBytes guides leaf-block block payload sizing.
 	//
 	// 0 uses a default.
-	OuterLeafBlockTargetBytes int
-	// OuterLeafBlockCodec selects the codec used for experimental outer-leaf
+	LeafBlockTargetBytes int
+	// LeafBlockCodec selects the codec used for experimental leaf-block
 	// block payloads stored in the value log.
-	OuterLeafBlockCodec ValueLogBlockCodec
-	// OuterLeafBlockRestartInterval controls key restart cadence inside
-	// experimental outer-leaf blocks.
+	LeafBlockCodec ValueLogBlockCodec
+	// LeafBlockRestartInterval controls key restart cadence inside
+	// experimental leaf-block blocks.
 	//
 	// 0 uses a default.
-	OuterLeafBlockRestartInterval int
-	// OuterLeafBlobThresholdBytes controls when outer-leaf entries store a blob
+	LeafBlockRestartInterval int
+	// LeafBlockBlobThresholdBytes controls when leaf-block entries store a blob
 	// reference instead of inline value bytes.
 	//
 	// <=0 uses the default blob-ref threshold.
-	OuterLeafBlobThresholdBytes int
-	// OuterLeafBlockCacheEntries bounds the number of decoded blocks cached for
-	// outer-leaf reads.
+	LeafBlockBlobThresholdBytes int
+	// LeafBlockCacheEntries bounds the number of decoded blocks cached for
+	// leaf-block reads.
 	// 0 disables the cache.
-	OuterLeafBlockCacheEntries int
+	LeafBlockCacheEntries int
 	// IncompressibleHoldBytes configures auto-mode suppression duration after
 	// repeated incompressible probes.
 	//
@@ -763,7 +763,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	snap.state = state
 	snap.vlogManager = vm
 	snap.vlogPinned = vlogNeedsPin
-	snap.reader.reconfigure(vlogSet, db.skipOuterLeafChecksums, db.outerLeafBlockCache, db.outerLeafKeyCache)
+	snap.reader.reconfigure(vlogSet, db.skipLeafBlockChecksums, db.leafBlockCache, db.leafBlockKeyCache)
 	snap.registryID = registryID
 	if idx != nil {
 		sameTree := snap.treePager == idx.pager &&
@@ -967,10 +967,10 @@ func validateOptions(opts Options) error {
 	default:
 		return fmt.Errorf("treedb: invalid value-log block codec %d", opts.ValueLog.BlockCodec)
 	}
-	switch opts.ValueLog.OuterLeafBlockCodec {
+	switch opts.ValueLog.LeafBlockCodec {
 	case ValueLogBlockSnappy, ValueLogBlockLZ4:
 	default:
-		return fmt.Errorf("treedb: invalid value-log outer-leaf block codec %d", opts.ValueLog.OuterLeafBlockCodec)
+		return fmt.Errorf("treedb: invalid value-log leaf-block block codec %d", opts.ValueLog.LeafBlockCodec)
 	}
 	if opts.ValueLog.BlockTargetCompressedBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log block target compressed bytes %d", opts.ValueLog.BlockTargetCompressedBytes)
@@ -999,26 +999,26 @@ func validateOptions(opts Options) error {
 			return fmt.Errorf("treedb: value-log block target compressed bytes out of range [%d,%d]: %d", minBlockTargetCompressedBytes, maxBlockTargetCompressedBytes, opts.ValueLog.BlockTargetCompressedBytes)
 		}
 	}
-	if opts.ValueLog.OuterLeafBlockTargetBytes < 0 {
-		return fmt.Errorf("treedb: invalid value-log outer-leaf block target bytes %d", opts.ValueLog.OuterLeafBlockTargetBytes)
+	if opts.ValueLog.LeafBlockTargetBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log leaf-block block target bytes %d", opts.ValueLog.LeafBlockTargetBytes)
 	}
-	if opts.ValueLog.OuterLeafBlockTargetBytes > 0 {
+	if opts.ValueLog.LeafBlockTargetBytes > 0 {
 		const (
-			minOuterLeafBlockTargetBytes = 256
-			maxOuterLeafBlockTargetBytes = 1 << 20
+			minLeafBlockTargetBytes = 256
+			maxLeafBlockTargetBytes = 1 << 20
 		)
-		if opts.ValueLog.OuterLeafBlockTargetBytes < minOuterLeafBlockTargetBytes || opts.ValueLog.OuterLeafBlockTargetBytes > maxOuterLeafBlockTargetBytes {
-			return fmt.Errorf("treedb: value-log outer-leaf block target bytes out of range [%d,%d]: %d", minOuterLeafBlockTargetBytes, maxOuterLeafBlockTargetBytes, opts.ValueLog.OuterLeafBlockTargetBytes)
+		if opts.ValueLog.LeafBlockTargetBytes < minLeafBlockTargetBytes || opts.ValueLog.LeafBlockTargetBytes > maxLeafBlockTargetBytes {
+			return fmt.Errorf("treedb: value-log leaf-block block target bytes out of range [%d,%d]: %d", minLeafBlockTargetBytes, maxLeafBlockTargetBytes, opts.ValueLog.LeafBlockTargetBytes)
 		}
 	}
-	if opts.ValueLog.OuterLeafBlockCacheEntries < 0 {
-		return fmt.Errorf("treedb: invalid value-log outer-leaf block cache entries %d", opts.ValueLog.OuterLeafBlockCacheEntries)
+	if opts.ValueLog.LeafBlockCacheEntries < 0 {
+		return fmt.Errorf("treedb: invalid value-log leaf-block block cache entries %d", opts.ValueLog.LeafBlockCacheEntries)
 	}
-	if opts.ValueLog.OuterLeafBlockRestartInterval < 0 {
-		return fmt.Errorf("treedb: invalid value-log outer-leaf block restart interval %d", opts.ValueLog.OuterLeafBlockRestartInterval)
+	if opts.ValueLog.LeafBlockRestartInterval < 0 {
+		return fmt.Errorf("treedb: invalid value-log leaf-block block restart interval %d", opts.ValueLog.LeafBlockRestartInterval)
 	}
-	if opts.ValueLog.OuterLeafBlobThresholdBytes < 0 {
-		return fmt.Errorf("treedb: invalid value-log outer-leaf blob threshold bytes %d", opts.ValueLog.OuterLeafBlobThresholdBytes)
+	if opts.ValueLog.LeafBlockBlobThresholdBytes < 0 {
+		return fmt.Errorf("treedb: invalid value-log leaf-block blob threshold bytes %d", opts.ValueLog.LeafBlockBlobThresholdBytes)
 	}
 	if opts.ValueLog.IncompressibleHoldBytes < 0 {
 		return fmt.Errorf("treedb: invalid value-log incompressible hold bytes %d", opts.ValueLog.IncompressibleHoldBytes)
@@ -1108,8 +1108,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		adaptive:                  adaptiveCtrl,
 		keepRecent:                opts.KeepRecent,
 		valueLogDomainThresholds:  NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
-		outerLeafBlockCache:       newOuterLeafBlockCache(opts.ValueLog.OuterLeafBlockCacheEntries),
-		outerLeafKeyCache:         newOuterLeafKeyCache(opts.ValueLog.OuterLeafBlockCacheEntries),
+		leafBlockCache:            newLeafBlockCache(opts.ValueLog.LeafBlockCacheEntries),
+		leafBlockKeyCache:         newLeafBlockKeyCache(opts.ValueLog.LeafBlockCacheEntries),
 		leafFillTargetPPM:         opts.LeafFillTargetPPM,
 		internalFillTargetPPM:     opts.InternalFillTargetPPM,
 		leafPrefixCompression:     opts.LeafPrefixCompression,
@@ -1117,9 +1117,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		indexPackedValuePtr:       opts.IndexPackedValuePtr,
 		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
 		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
-		outerLeafBlockCodec:       opts.ValueLog.OuterLeafBlockCodec,
-		outerLeafBlockRestart:     opts.ValueLog.OuterLeafBlockRestartInterval,
-		skipOuterLeafChecksums:    opts.ValueLog.ReadIntegrity == IntegritySkipChecksums,
+		leafBlockCodec:            opts.ValueLog.LeafBlockCodec,
+		leafBlockRestart:          opts.ValueLog.LeafBlockRestartInterval,
+		skipLeafBlockChecksums:    opts.ValueLog.ReadIntegrity == IntegritySkipChecksums,
 		piggybackCompaction:       !opts.DisablePiggybackCompaction,
 		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
 		dir:                       opts.Dir,
@@ -1946,7 +1946,7 @@ func (db *DB) CompactIndex() error {
 	// Acquire Snapshot
 	db.mu.RLock()
 	state := db.state.Load()
-	reader := newValueReader(state.ValueLogSet, db.skipOuterLeafChecksums)
+	reader := newValueReader(state.ValueLogSet, db.skipLeafBlockChecksums)
 	tr := tree.New(idx.pager, reader, state.RootPageID)
 	rootID := state.RootPageID
 	db.mu.RUnlock()

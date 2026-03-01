@@ -3,13 +3,13 @@ package db
 import "sync"
 
 const (
-	outerLeafKeyCacheMultiplier = 8
-	outerLeafKeyCacheMaxEntries = 1 << 16
+	leafBlockKeyCacheMultiplier = 8
+	leafBlockKeyCacheMaxEntries = 1 << 16
 )
 
-type outerLeafKeyCacheShard struct {
+type leafBlockKeyCacheShard struct {
 	mu        sync.Mutex
-	entries   map[outerLeafBlockKey][][]byte
+	entries   map[leafBlockKey][][]byte
 	hits      uint64
 	misses    uint64
 	capacity  int
@@ -17,27 +17,27 @@ type outerLeafKeyCacheShard struct {
 	admitMask uint64
 }
 
-type outerLeafKeyCache struct {
-	shards   []outerLeafKeyCacheShard
+type leafBlockKeyCache struct {
+	shards   []leafBlockKeyCacheShard
 	capacity int
 }
 
-func deriveOuterLeafKeyCacheEntries(blockCacheEntries int) int {
+func deriveLeafBlockKeyCacheEntries(blockCacheEntries int) int {
 	if blockCacheEntries <= 0 {
 		return 0
 	}
-	capacity := blockCacheEntries * outerLeafKeyCacheMultiplier
+	capacity := blockCacheEntries * leafBlockKeyCacheMultiplier
 	if capacity < blockCacheEntries {
 		capacity = blockCacheEntries
 	}
-	if capacity > outerLeafKeyCacheMaxEntries {
-		capacity = outerLeafKeyCacheMaxEntries
+	if capacity > leafBlockKeyCacheMaxEntries {
+		capacity = leafBlockKeyCacheMaxEntries
 	}
 	return capacity
 }
 
-func newOuterLeafKeyCache(blockCacheEntries int) *outerLeafKeyCache {
-	capacity := deriveOuterLeafKeyCacheEntries(blockCacheEntries)
+func newLeafBlockKeyCache(blockCacheEntries int) *leafBlockKeyCache {
+	capacity := deriveLeafBlockKeyCacheEntries(blockCacheEntries)
 	if capacity <= 0 {
 		return nil
 	}
@@ -57,7 +57,7 @@ func newOuterLeafKeyCache(blockCacheEntries int) *outerLeafKeyCache {
 		}
 	}
 
-	shards := make([]outerLeafKeyCacheShard, shardCount)
+	shards := make([]leafBlockKeyCacheShard, shardCount)
 	baseCap := capacity / shardCount
 	extra := capacity % shardCount
 	for i := range shards {
@@ -76,20 +76,20 @@ func newOuterLeafKeyCache(blockCacheEntries int) *outerLeafKeyCache {
 				admitBits <<= 1
 			}
 		}
-		shards[i] = outerLeafKeyCacheShard{
-			entries:   make(map[outerLeafBlockKey][][]byte, capI),
+		shards[i] = leafBlockKeyCacheShard{
+			entries:   make(map[leafBlockKey][][]byte, capI),
 			capacity:  capI,
 			admit:     make([]uint64, admitBits/64),
 			admitMask: uint64(admitBits - 1),
 		}
 	}
-	return &outerLeafKeyCache{
+	return &leafBlockKeyCache{
 		shards:   shards,
 		capacity: capacity,
 	}
 }
 
-func (c *outerLeafKeyCache) get(key outerLeafBlockKey) [][]byte {
+func (c *leafBlockKeyCache) get(key leafBlockKey) [][]byte {
 	s := c.shardFor(key)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -102,7 +102,7 @@ func (c *outerLeafKeyCache) get(key outerLeafBlockKey) [][]byte {
 	return keys
 }
 
-func (c *outerLeafKeyCache) put(key outerLeafBlockKey, keys [][]byte) {
+func (c *leafBlockKeyCache) put(key leafBlockKey, keys [][]byte) {
 	if len(keys) == 0 {
 		return
 	}
@@ -128,7 +128,7 @@ func (c *outerLeafKeyCache) put(key outerLeafBlockKey, keys [][]byte) {
 	s.entries[key] = keys
 }
 
-func (c *outerLeafKeyCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
+func (c *leafBlockKeyCache) stats() (hits uint64, misses uint64, entries int, capacity int) {
 	var totalEntries int
 	var totalHits uint64
 	var totalMisses uint64
@@ -143,16 +143,16 @@ func (c *outerLeafKeyCache) stats() (hits uint64, misses uint64, entries int, ca
 	return totalHits, totalMisses, totalEntries, c.capacity
 }
 
-func (c *outerLeafKeyCache) shardFor(key outerLeafBlockKey) *outerLeafKeyCacheShard {
+func (c *leafBlockKeyCache) shardFor(key leafBlockKey) *leafBlockKeyCacheShard {
 	if len(c.shards) == 1 {
 		return &c.shards[0]
 	}
-	h := outerLeafBlockKeyHash(key)
+	h := leafBlockKeyHash(key)
 	idx := int(h & uint64(len(c.shards)-1))
 	return &c.shards[idx]
 }
 
-func outerLeafBlockKeyHash(key outerLeafBlockKey) uint64 {
+func leafBlockKeyHash(key leafBlockKey) uint64 {
 	h := uint64(key.fileID)*11400714819323198485 ^
 		key.offset*14029467366897019727 ^
 		uint64(key.length)*1609587929392839161
@@ -162,7 +162,7 @@ func outerLeafBlockKeyHash(key outerLeafBlockKey) uint64 {
 	return h
 }
 
-func (s *outerLeafKeyCacheShard) shouldAdmit(key outerLeafBlockKey) bool {
+func (s *leafBlockKeyCacheShard) shouldAdmit(key leafBlockKey) bool {
 	if s == nil || s.capacity <= 0 {
 		return false
 	}
@@ -172,7 +172,7 @@ func (s *outerLeafKeyCacheShard) shouldAdmit(key outerLeafBlockKey) bool {
 	if len(s.admit) == 0 || s.admitMask == 0 {
 		return true
 	}
-	idx := outerLeafBlockKeyHash(key) & s.admitMask
+	idx := leafBlockKeyHash(key) & s.admitMask
 	word := idx >> 6
 	bit := uint64(1) << (idx & 63)
 	seen := s.admit[word]&bit != 0

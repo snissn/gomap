@@ -373,8 +373,8 @@ func (a *replayInlineAppender) append(db *DB, key, value []byte) (page.ValuePtr,
 		nil,
 		key,
 		value,
-		uint8(db.outerLeafBlockCodec),
-		leafblock.NormalizeRestartInterval(db.outerLeafBlockRestart),
+		uint8(db.leafBlockCodec),
+		leafblock.NormalizeRestartInterval(db.leafBlockRestart),
 	)
 	if err != nil {
 		return page.ValuePtr{}, err

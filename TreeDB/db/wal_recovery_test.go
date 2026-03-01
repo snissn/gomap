@@ -11,7 +11,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
-func outerLeafCodecHeaderID(codec ValueLogBlockCodec) int {
+func leafBlockCodecHeaderID(codec ValueLogBlockCodec) int {
 	switch codec {
 	case ValueLogBlockSnappy:
 		return 1
@@ -64,9 +64,9 @@ func TestNewReplayInlineAppender_UnpackedNoSegmentCap(t *testing.T) {
 func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, codec ValueLogBlockCodec, restart int) {
 	t.Helper()
 	db := &DB{
-		dir:                   t.TempDir(),
-		outerLeafBlockCodec:   codec,
-		outerLeafBlockRestart: restart,
+		dir:              t.TempDir(),
+		leafBlockCodec:   codec,
+		leafBlockRestart: restart,
 	}
 	app, err := newReplayInlineAppender(db, nil, nil)
 	if err != nil {
@@ -103,14 +103,14 @@ func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, codec ValueLogBlo
 	if len(raw) < 8 {
 		t.Fatalf("outer-leaf payload too short: %d", len(raw))
 	}
-	wantCodec := outerLeafCodecHeaderID(codec)
+	wantCodec := leafBlockCodecHeaderID(codec)
 	if wantCodec == 0 {
 		t.Fatalf("unsupported test codec %d", codec)
 	}
 	if got := int(raw[5]); got != wantCodec {
 		t.Fatalf("outer-leaf codec id = %d, want %d", got, wantCodec)
 	}
-	if got, want := int(binary.LittleEndian.Uint16(raw[6:8])), leafblock.NormalizeRestartInterval(db.outerLeafBlockRestart); got != want {
+	if got, want := int(binary.LittleEndian.Uint16(raw[6:8])), leafblock.NormalizeRestartInterval(db.leafBlockRestart); got != want {
 		t.Fatalf("outer-leaf restart interval = %d, want %d", got, want)
 	}
 	decoded, ok, found, _, err := leafblock.DecodeValueForKey(raw, key, nil)

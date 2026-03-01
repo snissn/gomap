@@ -82,7 +82,7 @@ const (
 	ProfileBench Profile = "bench"
 )
 
-const defaultOuterLeafBlockCacheEntries = 16384
+const defaultLeafBlockCacheEntries = 16384
 
 // OptionsFor returns a copy of Options pre-filled for the given Profile.
 //
@@ -138,11 +138,11 @@ func applyIndexOptimizationsProfile(opts *Options) {
 	opts.IndexInternalBaseDelta = true
 }
 
-func applyOuterLeafBlockCacheDefault(opts *Options) {
-	if opts == nil || opts.ValueLog.OuterLeafBlockCacheEntries != 0 {
+func applyLeafBlockCacheDefault(opts *Options) {
+	if opts == nil || opts.ValueLog.LeafBlockCacheEntries != 0 {
 		return
 	}
-	opts.ValueLog.OuterLeafBlockCacheEntries = defaultOuterLeafBlockCacheEntries
+	opts.ValueLog.LeafBlockCacheEntries = defaultLeafBlockCacheEntries
 }
 
 func applyFastProfile(opts *Options) {
@@ -161,7 +161,7 @@ func applyFastProfile(opts *Options) {
 		opts.PreferAppendAlloc = true
 	}
 	applyIndexOptimizationsProfile(opts)
-	applyOuterLeafBlockCacheDefault(opts)
+	applyLeafBlockCacheDefault(opts)
 }
 
 func applyWALOnFastProfile(opts *Options) {
@@ -177,7 +177,7 @@ func applyWALOnFastProfile(opts *Options) {
 	// Prefer appending new pages for throughput under churn.
 	opts.PreferAppendAlloc = true
 	applyIndexOptimizationsProfile(opts)
-	applyOuterLeafBlockCacheDefault(opts)
+	applyLeafBlockCacheDefault(opts)
 }
 
 func applyBenchProfile(opts *Options) {

@@ -72,13 +72,13 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	}
 }
 
-func TestApplyProfile_FastAndWALOnFast_SetOuterLeafCacheDefault(t *testing.T) {
+func TestApplyProfile_FastAndWALOnFast_SetLeafBlockCacheDefault(t *testing.T) {
 	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
 		t.Run(string(profile), func(t *testing.T) {
 			var opts Options
 			ApplyProfile(&opts, profile)
-			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 16384 {
-				t.Fatalf("expected OuterLeafBlockCacheEntries=16384, got %d", got)
+			if got := opts.ValueLog.LeafBlockCacheEntries; got != 16384 {
+				t.Fatalf("expected LeafBlockCacheEntries=16384, got %d", got)
 			}
 		})
 	}

@@ -31,9 +31,9 @@ const (
 	defaultChunkSize     = 256 * 1024
 	defaultDictChunkSize = 64 * 1024
 
-	defaultSlowdownBacklogSeconds              = 1.0
-	defaultStopBacklogSeconds                  = 2.0
-	defaultAdaptiveMaxBacklogBytes       int64 = 2 << 30
+	defaultSlowdownBacklogSeconds        = 1.0
+	defaultStopBacklogSeconds            = 2.0
+	defaultAdaptiveMaxBacklogBytes int64 = 2 << 30
 )
 
 var openBannerOnce sync.Once
@@ -270,7 +270,7 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 	slowdown := defaultSlowdownBacklogSeconds
 	stop := defaultStopBacklogSeconds
-	// No mode normalization: single built-in outer-leaf behavior.
+	// No mode normalization: single built-in leaf-block behavior.
 
 	opts.SlowdownBacklogSeconds = slowdown
 	opts.StopBacklogSeconds = stop
@@ -357,13 +357,13 @@ func moduleBuildIdentity(path string) string {
 func emitOpenBanner(opts Options) {
 	openBannerOnce.Do(func() {
 		msg := fmt.Sprintf(
-			"treedb open banner durability=%s force_pointers=%t pointer_threshold=%d vlog_compression=%s vlog_block_codec=%s outer_leaf_block_codec=%s keep_recent=%d module=%s",
+			"treedb open banner durability=%s force_pointers=%t pointer_threshold=%d vlog_compression=%s vlog_block_codec=%s leaf_block_block_codec=%s keep_recent=%d module=%s",
 			computeDurabilityMode(opts),
 			opts.ValueLog.ForcePointers,
 			opts.ValueLog.PointerThreshold,
 			valueLogCompressionLabel(opts.ValueLog.Compression),
 			valueLogBlockCodecLabel(opts.ValueLog.BlockCodec),
-			valueLogBlockCodecLabel(opts.ValueLog.OuterLeafBlockCodec),
+			valueLogBlockCodecLabel(opts.ValueLog.LeafBlockCodec),
 			opts.KeepRecent,
 			moduleBuildIdentity("github.com/snissn/gomap"),
 		)
@@ -561,68 +561,68 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
-		FlushThreshold:                        opts.FlushThreshold,
-		MemtableMode:                          opts.MemtableMode,
-		MemtableShards:                        opts.MemtableShards,
-		DomainIngressWorkers:                  opts.DomainIngressWorkers,
-		DomainIngressQueueSize:                opts.DomainIngressQueueSize,
-		MaxQueuedMemtables:                    opts.MaxQueuedMemtables,
-		SlowdownBacklogSeconds:                opts.SlowdownBacklogSeconds,
-		StopBacklogSeconds:                    opts.StopBacklogSeconds,
-		MaxBacklogBytes:                       opts.MaxBacklogBytes,
-		WriterFlushMaxMemtables:               opts.WriterFlushMaxMemtables,
-		WriterFlushMaxDuration:                opts.WriterFlushMaxDuration,
-		FlushBuildConcurrency:                 opts.FlushBuildConcurrency,
-		FlushBuildMinEntries:                  opts.FlushBuildMinEntries,
-		FlushBuildMinUnits:                    opts.FlushBuildMinUnits,
-		FlushBuildChunkCap:                    opts.FlushBuildChunkCap,
-		FlushBuildChunkTargetBytes:            opts.FlushBuildChunkTargetBytes,
-		FlushBuildChunkMinBytes:               opts.FlushBuildChunkMinBytes,
-		FlushBuildChunkMaxBytes:               opts.FlushBuildChunkMaxBytes,
-		FlushBuildPrefetchUnits:               opts.FlushBuildPrefetchUnits,
-		FlushBackendMaxEntries:                opts.FlushBackendMaxEntries,
-		FlushBackendMaxBatches:                opts.FlushBackendMaxBatches,
-		DisableWAL:                            disableWAL,
-		JournalLanes:                          opts.JournalLanes,
-		WALMaxSegmentBytes:                    opts.WALMaxSegmentBytes,
-		JournalCompression:                    opts.JournalCompression,
-		RelaxedSync:                           relaxedSync,
-		DisableReadChecksum:                   disableReadChecksum,
-		ValueLogPointerThreshold:              opts.ValueLog.PointerThreshold,
-		ValueLogDomainInlineThresholds:        opts.ValueLog.DomainInlineThresholds,
-		ValueLogRawWritevMinAvgBytes:          opts.ValueLog.RawWritevMinAvgBytes,
-		ValueLogRawWritevMinBatchRecords:      opts.ValueLog.RawWritevMinBatchRecords,
-		ValueLogMaxSegmentBytes:               valueLogMaxSegmentBytes,
-		ValueLogCompression:                   uint8(opts.ValueLog.Compression),
-		ValueLogBlockCodec:                    uint8(opts.ValueLog.BlockCodec),
-		ValueLogBlockTargetCompressedBytes:    opts.ValueLog.BlockTargetCompressedBytes,
-		ValueLogOuterLeafBlockTargetBytes:     opts.ValueLog.OuterLeafBlockTargetBytes,
-		ValueLogOuterLeafBlockCodec:           uint8(opts.ValueLog.OuterLeafBlockCodec),
-		ValueLogOuterLeafBlockRestartInterval: opts.ValueLog.OuterLeafBlockRestartInterval,
-		ValueLogOuterLeafBlobThresholdBytes:   opts.ValueLog.OuterLeafBlobThresholdBytes,
-		ValueLogIncompressibleHoldBytes:       opts.ValueLog.IncompressibleHoldBytes,
-		ValueLogIncompressibleProbeBytes:      opts.ValueLog.IncompressibleProbeIntervalBytes,
-		ValueLogAutoPolicy:                    uint8(opts.ValueLog.AutoPolicy),
-		ForceValueLogPointers:                 opts.ValueLog.ForcePointers,
-		ValueLogDictTrain:                     opts.ValueLog.DictTrain,
-		ValueLogDictMaxK:                      opts.ValueLog.DictMaxK,
-		ValueLogDictFrameEncodeLevel:          opts.ValueLog.DictFrameEncodeLevel,
-		ValueLogDictFrameEnableEntropy:        opts.ValueLog.DictFrameEnableEntropy,
-		ValueLogDictAdaptiveRatio:             opts.ValueLog.DictAdaptiveRatio,
-		ValueLogDictMetricsWindowBytes:        opts.ValueLog.DictMetricsWindowBytes,
-		ValueLogDictMetricsMinRecords:         opts.ValueLog.DictMetricsMinRecords,
-		ValueLogDictMetricsPauseBytes:         opts.ValueLog.DictMetricsPauseBytes,
-		ValueLogDictIncompressibleHoldBytes:   opts.ValueLog.DictIncompressibleHoldBytes,
-		ValueLogDictProbeIntervalBytes:        opts.ValueLog.DictProbeIntervalBytes,
-		ValueLogDictMinPayloadSavingsRatio:    opts.ValueLog.DictMinPayloadSavingsRatio,
-		ValueLogCompressionAutotune:           opts.ValueLog.CompressionAutotune,
-		ValueLogTemplateMode:                  opts.ValueLog.TemplateMode,
-		ValueLogTemplateConfig:                opts.ValueLog.TemplateConfig,
-		ValueLogTemplateReadStrict:            opts.ValueLog.TemplateReadStrict,
-		AllowUnsafe:                           allowUnsafe,
-		MaxValueLogRetainedBytes:              opts.ValueLog.MaxRetainedBytes,
-		MaxValueLogRetainedBytesHard:          opts.ValueLog.MaxRetainedBytesHard,
-		NotifyError:                           opts.NotifyError,
+		FlushThreshold:                      opts.FlushThreshold,
+		MemtableMode:                        opts.MemtableMode,
+		MemtableShards:                      opts.MemtableShards,
+		DomainIngressWorkers:                opts.DomainIngressWorkers,
+		DomainIngressQueueSize:              opts.DomainIngressQueueSize,
+		MaxQueuedMemtables:                  opts.MaxQueuedMemtables,
+		SlowdownBacklogSeconds:              opts.SlowdownBacklogSeconds,
+		StopBacklogSeconds:                  opts.StopBacklogSeconds,
+		MaxBacklogBytes:                     opts.MaxBacklogBytes,
+		WriterFlushMaxMemtables:             opts.WriterFlushMaxMemtables,
+		WriterFlushMaxDuration:              opts.WriterFlushMaxDuration,
+		FlushBuildConcurrency:               opts.FlushBuildConcurrency,
+		FlushBuildMinEntries:                opts.FlushBuildMinEntries,
+		FlushBuildMinUnits:                  opts.FlushBuildMinUnits,
+		FlushBuildChunkCap:                  opts.FlushBuildChunkCap,
+		FlushBuildChunkTargetBytes:          opts.FlushBuildChunkTargetBytes,
+		FlushBuildChunkMinBytes:             opts.FlushBuildChunkMinBytes,
+		FlushBuildChunkMaxBytes:             opts.FlushBuildChunkMaxBytes,
+		FlushBuildPrefetchUnits:             opts.FlushBuildPrefetchUnits,
+		FlushBackendMaxEntries:              opts.FlushBackendMaxEntries,
+		FlushBackendMaxBatches:              opts.FlushBackendMaxBatches,
+		DisableWAL:                          disableWAL,
+		JournalLanes:                        opts.JournalLanes,
+		WALMaxSegmentBytes:                  opts.WALMaxSegmentBytes,
+		JournalCompression:                  opts.JournalCompression,
+		RelaxedSync:                         relaxedSync,
+		DisableReadChecksum:                 disableReadChecksum,
+		ValueLogPointerThreshold:            opts.ValueLog.PointerThreshold,
+		ValueLogDomainInlineThresholds:      opts.ValueLog.DomainInlineThresholds,
+		ValueLogRawWritevMinAvgBytes:        opts.ValueLog.RawWritevMinAvgBytes,
+		ValueLogRawWritevMinBatchRecords:    opts.ValueLog.RawWritevMinBatchRecords,
+		ValueLogMaxSegmentBytes:             valueLogMaxSegmentBytes,
+		ValueLogCompression:                 uint8(opts.ValueLog.Compression),
+		ValueLogBlockCodec:                  uint8(opts.ValueLog.BlockCodec),
+		ValueLogBlockTargetCompressedBytes:  opts.ValueLog.BlockTargetCompressedBytes,
+		ValueLogLeafBlockTargetBytes:        opts.ValueLog.LeafBlockTargetBytes,
+		ValueLogLeafBlockCodec:              uint8(opts.ValueLog.LeafBlockCodec),
+		ValueLogLeafBlockRestartInterval:    opts.ValueLog.LeafBlockRestartInterval,
+		ValueLogLeafBlockBlobThresholdBytes: opts.ValueLog.LeafBlockBlobThresholdBytes,
+		ValueLogIncompressibleHoldBytes:     opts.ValueLog.IncompressibleHoldBytes,
+		ValueLogIncompressibleProbeBytes:    opts.ValueLog.IncompressibleProbeIntervalBytes,
+		ValueLogAutoPolicy:                  uint8(opts.ValueLog.AutoPolicy),
+		ForceValueLogPointers:               opts.ValueLog.ForcePointers,
+		ValueLogDictTrain:                   opts.ValueLog.DictTrain,
+		ValueLogDictMaxK:                    opts.ValueLog.DictMaxK,
+		ValueLogDictFrameEncodeLevel:        opts.ValueLog.DictFrameEncodeLevel,
+		ValueLogDictFrameEnableEntropy:      opts.ValueLog.DictFrameEnableEntropy,
+		ValueLogDictAdaptiveRatio:           opts.ValueLog.DictAdaptiveRatio,
+		ValueLogDictMetricsWindowBytes:      opts.ValueLog.DictMetricsWindowBytes,
+		ValueLogDictMetricsMinRecords:       opts.ValueLog.DictMetricsMinRecords,
+		ValueLogDictMetricsPauseBytes:       opts.ValueLog.DictMetricsPauseBytes,
+		ValueLogDictIncompressibleHoldBytes: opts.ValueLog.DictIncompressibleHoldBytes,
+		ValueLogDictProbeIntervalBytes:      opts.ValueLog.DictProbeIntervalBytes,
+		ValueLogDictMinPayloadSavingsRatio:  opts.ValueLog.DictMinPayloadSavingsRatio,
+		ValueLogCompressionAutotune:         opts.ValueLog.CompressionAutotune,
+		ValueLogTemplateMode:                opts.ValueLog.TemplateMode,
+		ValueLogTemplateConfig:              opts.ValueLog.TemplateConfig,
+		ValueLogTemplateReadStrict:          opts.ValueLog.TemplateReadStrict,
+		AllowUnsafe:                         allowUnsafe,
+		MaxValueLogRetainedBytes:            opts.ValueLog.MaxRetainedBytes,
+		MaxValueLogRetainedBytesHard:        opts.ValueLog.MaxRetainedBytesHard,
+		NotifyError:                         opts.NotifyError,
 	})
 	if err != nil {
 		_ = backend.Close()

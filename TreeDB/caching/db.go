@@ -2970,18 +2970,18 @@ type Options struct {
 	// ValueLogBlockTargetCompressedBytes controls block-mode grouped frame K
 	// adaptation target (0=default).
 	ValueLogBlockTargetCompressedBytes int
-	// ValueLogOuterLeafBlockTargetBytes controls outer-leaf payload target size
+	// ValueLogLeafBlockTargetBytes controls leaf-block payload target size
 	// (0=default).
-	ValueLogOuterLeafBlockTargetBytes int
-	// ValueLogOuterLeafBlockCodec selects outer-leaf payload codec:
+	ValueLogLeafBlockTargetBytes int
+	// ValueLogLeafBlockCodec selects leaf-block payload codec:
 	// 0=snappy, 1=lz4.
-	ValueLogOuterLeafBlockCodec uint8
-	// ValueLogOuterLeafBlockRestartInterval controls restart cadence encoded in
-	// outer-leaf payload metadata (0=default).
-	ValueLogOuterLeafBlockRestartInterval int
-	// ValueLogOuterLeafBlobThresholdBytes controls when outer-leaf entries use
+	ValueLogLeafBlockCodec uint8
+	// ValueLogLeafBlockRestartInterval controls restart cadence encoded in
+	// leaf-block payload metadata (0=default).
+	ValueLogLeafBlockRestartInterval int
+	// ValueLogLeafBlockBlobThresholdBytes controls when leaf-block entries use
 	// blob references instead of inline bytes (0=default threshold).
-	ValueLogOuterLeafBlobThresholdBytes int
+	ValueLogLeafBlockBlobThresholdBytes int
 	// ValueLogIncompressibleHoldBytes configures auto-mode incompressible hold
 	// window bytes (0=default).
 	ValueLogIncompressibleHoldBytes int
@@ -4402,16 +4402,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogRawWritevMinRecords <= 0 {
 		valueLogRawWritevMinRecords = 8
 	}
-	outerLeafBlockTargetOpt := opts.ValueLogOuterLeafBlockTargetBytes
-	if outerLeafBlockTargetOpt <= 0 {
-		outerLeafBlockTargetOpt = defaultOuterLeafBlockTargetBytes
+	leafBlockTargetOpt := opts.ValueLogLeafBlockTargetBytes
+	if leafBlockTargetOpt <= 0 {
+		leafBlockTargetOpt = defaultOuterLeafBlockTargetBytes
 	}
-	outerLeafBlockTarget := leafblock.NormalizeBlockTargetBytes(outerLeafBlockTargetOpt)
-	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
-	outerLeafBlockRestart := leafblock.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
-	outerLeafBlobThreshold := opts.ValueLogOuterLeafBlobThresholdBytes
+	outerLeafBlockTarget := leafblock.NormalizeBlockTargetBytes(leafBlockTargetOpt)
+	outerLeafBlockCodec := opts.ValueLogLeafBlockCodec
+	outerLeafBlockRestart := leafblock.NormalizeRestartInterval(opts.ValueLogLeafBlockRestartInterval)
+	outerLeafBlobThreshold := opts.ValueLogLeafBlockBlobThresholdBytes
 	if outerLeafBlobThreshold < 0 {
-		return nil, fmt.Errorf("cachingdb: invalid value-log outer leaf blob threshold bytes %d", outerLeafBlobThreshold)
+		return nil, fmt.Errorf("cachingdb: invalid value-log leaf block blob threshold bytes %d", outerLeafBlobThreshold)
 	}
 	disableJournal := opts.DisableWAL
 	if writerFlushMaxMemtablesUnset &&

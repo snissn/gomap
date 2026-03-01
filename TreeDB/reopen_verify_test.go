@@ -265,17 +265,17 @@ func TestReopenVerify_WALOn_WriteSync(t *testing.T) {
 	scanAndCheck(t, reopen, values, false, hash)
 }
 
-func TestReopenVerify_OuterLeafHitMiss_ReopenParity(t *testing.T) {
+func TestReopenVerify_LeafBlockHitMiss_ReopenParity(t *testing.T) {
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
 
 	opts := treedb.Options{
 		Dir: dir,
 		ValueLog: treedb.ValueLogOptions{
-			PointerThreshold:              1,
-			OuterLeafBlockCodec:           treedb.ValueLogBlockLZ4,
-			OuterLeafBlockTargetBytes:     4 << 10,
-			OuterLeafBlockRestartInterval: 16,
+			PointerThreshold:         1,
+			LeafBlockCodec:           treedb.ValueLogBlockLZ4,
+			LeafBlockTargetBytes:     4 << 10,
+			LeafBlockRestartInterval: 16,
 		},
 	}
 

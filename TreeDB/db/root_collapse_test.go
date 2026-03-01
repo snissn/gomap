@@ -139,10 +139,10 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T) {
 		InternalFillTargetPPM:     900_000,
 		MaintenanceOpsPerCoalesce: -1,
 		ValueLog: ValueLogOptions{
-			PointerThreshold:              1,
-			OuterLeafBlockCodec:           ValueLogBlockLZ4,
-			OuterLeafBlockTargetBytes:     512,
-			OuterLeafBlockRestartInterval: 8,
+			PointerThreshold:         1,
+			LeafBlockCodec:           ValueLogBlockLZ4,
+			LeafBlockTargetBytes:     512,
+			LeafBlockRestartInterval: 8,
 		},
 	})
 	if err != nil {

@@ -9,7 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 )
 
-func makeOuterLeafCacheTestBlock(t *testing.T, n int) *leafblock.DecodedBlock {
+func makeLeafBlockCacheTestBlock(t *testing.T, n int) *leafblock.DecodedBlock {
 	t.Helper()
 	encoded, err := leafblock.EncodeEntries(nil, []leafblock.Entry{
 		{Key: []byte(fmt.Sprintf("k%08d", n)), Value: []byte("v")},
@@ -24,7 +24,7 @@ func makeOuterLeafCacheTestBlock(t *testing.T, n int) *leafblock.DecodedBlock {
 	return block
 }
 
-func makeOuterLeafCacheTestLeaseBlock(t *testing.T, n int) *leafblock.DecodedBlock {
+func makeLeafBlockCacheTestLeaseBlock(t *testing.T, n int) *leafblock.DecodedBlock {
 	t.Helper()
 	encoded, err := leafblock.EncodeEntries(nil, []leafblock.Entry{
 		{Key: []byte(fmt.Sprintf("k%08d", n)), Value: []byte("v")},
@@ -39,84 +39,84 @@ func makeOuterLeafCacheTestLeaseBlock(t *testing.T, n int) *leafblock.DecodedBlo
 	return block
 }
 
-func makeOuterLeafCacheTestKey(n int) outerLeafBlockKey {
-	return outerLeafBlockKey{
+func makeLeafBlockCacheTestKey(n int) leafBlockKey {
+	return leafBlockKey{
 		fileID: 1,
 		offset: uint64(n) * 4096,
 		length: 128,
 	}
 }
 
-func fillOuterLeafCacheShardToThreshold(t *testing.T, c *outerLeafBlockCache, shard *outerLeafBlockCacheShard) {
+func fillLeafBlockCacheShardToThreshold(t *testing.T, c *leafBlockCache, shard *leafBlockCacheShard) {
 	t.Helper()
 	target := shard.capacity / 4
 	if target < 1 {
 		target = 1
 	}
 	for i := 1; len(shard.entries) < target && i < 1_000_000; i++ {
-		key := makeOuterLeafCacheTestKey(i)
+		key := makeLeafBlockCacheTestKey(i)
 		if c.shardFor(key) != shard {
 			continue
 		}
 		if _, exists := shard.entries[key]; exists {
 			continue
 		}
-		c.put(key, makeOuterLeafCacheTestBlock(t, i))
+		c.put(key, makeLeafBlockCacheTestBlock(t, i))
 	}
 	if len(shard.entries) < target {
 		t.Fatalf("entries=%d want at least %d for threshold fill", len(shard.entries), target)
 	}
 }
 
-func fillOuterLeafCacheShardToEntries(t *testing.T, c *outerLeafBlockCache, shard *outerLeafBlockCacheShard, target int) {
+func fillLeafBlockCacheShardToEntries(t *testing.T, c *leafBlockCache, shard *leafBlockCacheShard, target int) {
 	t.Helper()
 	if target < 1 {
 		target = 1
 	}
 	for i := 1; len(shard.entries) < target && i < 2_000_000; i++ {
-		key := makeOuterLeafCacheTestKey(i)
+		key := makeLeafBlockCacheTestKey(i)
 		if c.shardFor(key) != shard {
 			continue
 		}
 		if _, exists := shard.entries[key]; exists {
 			continue
 		}
-		c.put(key, makeOuterLeafCacheTestBlock(t, i))
+		c.put(key, makeLeafBlockCacheTestBlock(t, i))
 	}
 	if len(shard.entries) < target {
 		t.Fatalf("entries=%d want at least %d for target fill", len(shard.entries), target)
 	}
 }
 
-func findOuterLeafCacheUnseenAdmitKey(t *testing.T, c *outerLeafBlockCache, shard *outerLeafBlockCacheShard, start int) outerLeafBlockKey {
+func findLeafBlockCacheUnseenAdmitKey(t *testing.T, c *leafBlockCache, shard *leafBlockCacheShard, start int) leafBlockKey {
 	t.Helper()
 	if len(shard.admit) == 0 || shard.admitMask == 0 {
 		t.Fatalf("shard admission filter not configured")
 	}
 	for i := start; i < start+2_000_000; i++ {
-		key := makeOuterLeafCacheTestKey(i)
+		key := makeLeafBlockCacheTestKey(i)
 		if c.shardFor(key) != shard {
 			continue
 		}
 		if _, exists := shard.entries[key]; exists {
 			continue
 		}
-		if shard.admitEstimateHash(outerLeafBlockKeyHash(key)) == 0 {
+		if shard.admitEstimateHash(leafBlockKeyHash(key)) == 0 {
 			return key
 		}
 	}
 	t.Fatalf("unable to find unseen admission counter candidate")
-	return outerLeafBlockKey{}
+	return leafBlockKey{}
 }
 
-func findOuterLeafCachePrimaryCollisionSecondUnseenKey(t *testing.T, c *outerLeafBlockCache, shard *outerLeafBlockCacheShard, base outerLeafBlockKey, start int) outerLeafBlockKey {
+func findLeafBlockCachePrimaryCollisionSecondUnseenKey(t *testing.T, c *leafBlockCache, shard *leafBlockCacheShard, base leafBlockKey, start int) leafBlockKey {
 	t.Helper()
 	if len(shard.admit) == 0 || shard.admitMask == 0 {
 		t.Fatalf("shard admission filter not configured")
 	}
-	baseA, baseB := outerLeafBlockCacheAdmitIndexes(outerLeafBlockKeyHash(base), shard.admitMask)
+	baseA, baseB := leafBlockCacheAdmitIndexes(leafBlockKeyHash(base), shard.admitMask)
 	for i := start; i < start+2_000_000; i++ {
-		key := makeOuterLeafCacheTestKey(i)
+		key := makeLeafBlockCacheTestKey(i)
 		if c.shardFor(key) != shard {
 			continue
 		}
@@ -126,7 +126,7 @@ func findOuterLeafCachePrimaryCollisionSecondUnseenKey(t *testing.T, c *outerLea
 		if _, exists := shard.entries[key]; exists {
 			continue
 		}
-		idxA, idxB := outerLeafBlockCacheAdmitIndexes(outerLeafBlockKeyHash(key), shard.admitMask)
+		idxA, idxB := leafBlockCacheAdmitIndexes(leafBlockKeyHash(key), shard.admitMask)
 		if idxA != baseA || idxB == baseB {
 			continue
 		}
@@ -135,10 +135,10 @@ func findOuterLeafCachePrimaryCollisionSecondUnseenKey(t *testing.T, c *outerLea
 		}
 	}
 	t.Fatalf("unable to find primary-collision key with unseen secondary counter")
-	return outerLeafBlockKey{}
+	return leafBlockKey{}
 }
 
-func collectOuterLeafCacheShardKeys(t *testing.T, shard *outerLeafBlockCacheShard, limit int) []outerLeafBlockKey {
+func collectLeafBlockCacheShardKeys(t *testing.T, shard *leafBlockCacheShard, limit int) []leafBlockKey {
 	t.Helper()
 	if shard == nil {
 		t.Fatalf("shard=nil")
@@ -148,7 +148,7 @@ func collectOuterLeafCacheShardKeys(t *testing.T, shard *outerLeafBlockCacheShar
 	}
 	shard.mu.RLock()
 	defer shard.mu.RUnlock()
-	keys := make([]outerLeafBlockKey, 0, limit)
+	keys := make([]leafBlockKey, 0, limit)
 	for key := range shard.entries {
 		keys = append(keys, key)
 		if len(keys) >= limit {
@@ -161,13 +161,13 @@ func collectOuterLeafCacheShardKeys(t *testing.T, shard *outerLeafBlockCacheShar
 	return keys
 }
 
-func TestOuterLeafBlockCachePutWithLeaseSmallCacheAdmitsFirstTouch(t *testing.T) {
-	cache := newOuterLeafBlockCache(8)
+func TestLeafBlockCachePutWithLeaseSmallCacheAdmitsFirstTouch(t *testing.T) {
+	cache := newLeafBlockCache(8)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
-	key := makeOuterLeafCacheTestKey(1)
-	block := makeOuterLeafCacheTestBlock(t, 1)
+	key := makeLeafBlockCacheTestKey(1)
+	block := makeLeafBlockCacheTestBlock(t, 1)
 	lease, admitted := cache.putWithLease(key, block)
 	if !admitted {
 		t.Fatalf("admitted=false want=true")
@@ -183,8 +183,8 @@ func TestOuterLeafBlockCachePutWithLeaseSmallCacheAdmitsFirstTouch(t *testing.T)
 	readLease.Release()
 }
 
-func TestOuterLeafBlockCachePutWithLeaseSecondTouchAdmission(t *testing.T) {
-	cache := newOuterLeafBlockCache(8192)
+func TestLeafBlockCachePutWithLeaseSecondTouchAdmission(t *testing.T) {
+	cache := newLeafBlockCache(8192)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
@@ -195,10 +195,10 @@ func TestOuterLeafBlockCachePutWithLeaseSecondTouchAdmission(t *testing.T) {
 	if shard.capacity <= 64 {
 		t.Fatalf("shard capacity=%d want >64 to exercise admission filter", shard.capacity)
 	}
-	fillOuterLeafCacheShardToThreshold(t, cache, shard)
-	key := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, 1_000_000)
+	fillLeafBlockCacheShardToThreshold(t, cache, shard)
+	key := findLeafBlockCacheUnseenAdmitKey(t, cache, shard, 1_000_000)
 
-	firstBlock := makeOuterLeafCacheTestBlock(t, 2_000_001)
+	firstBlock := makeLeafBlockCacheTestBlock(t, 2_000_001)
 	lease, admitted := cache.putWithLease(key, firstBlock)
 	if admitted {
 		lease.Release()
@@ -213,7 +213,7 @@ func TestOuterLeafBlockCachePutWithLeaseSecondTouchAdmission(t *testing.T) {
 		t.Fatalf("first touch unexpectedly present in cache")
 	}
 
-	secondBlock := makeOuterLeafCacheTestBlock(t, 2_000_002)
+	secondBlock := makeLeafBlockCacheTestBlock(t, 2_000_002)
 	lease, admitted = cache.putWithLease(key, secondBlock)
 	if !admitted {
 		t.Fatalf("second touch admitted=false want=true")
@@ -230,8 +230,8 @@ func TestOuterLeafBlockCachePutWithLeaseSecondTouchAdmission(t *testing.T) {
 	readLease.Release()
 }
 
-func TestOuterLeafBlockCachePutWithLeasePrimaryCollisionStillNeedsSecondTouch(t *testing.T) {
-	cache := newOuterLeafBlockCache(8192)
+func TestLeafBlockCachePutWithLeasePrimaryCollisionStillNeedsSecondTouch(t *testing.T) {
+	cache := newLeafBlockCache(8192)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
@@ -242,10 +242,10 @@ func TestOuterLeafBlockCachePutWithLeasePrimaryCollisionStillNeedsSecondTouch(t 
 	if shard.capacity <= 64 {
 		t.Fatalf("shard capacity=%d want >64 to exercise admission filter", shard.capacity)
 	}
-	fillOuterLeafCacheShardToEntries(t, cache, shard, shard.capacity/2)
-	baseKey := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, 4_000_000)
+	fillLeafBlockCacheShardToEntries(t, cache, shard, shard.capacity/2)
+	baseKey := findLeafBlockCacheUnseenAdmitKey(t, cache, shard, 4_000_000)
 
-	baseBlock := makeOuterLeafCacheTestBlock(t, 4_100_001)
+	baseBlock := makeLeafBlockCacheTestBlock(t, 4_100_001)
 	lease, admitted := cache.putWithLease(baseKey, baseBlock)
 	if admitted {
 		lease.Release()
@@ -256,8 +256,8 @@ func TestOuterLeafBlockCachePutWithLeasePrimaryCollisionStillNeedsSecondTouch(t 
 		t.Fatalf("base first touch lease.ref non-nil want nil")
 	}
 
-	collideKey := findOuterLeafCachePrimaryCollisionSecondUnseenKey(t, cache, shard, baseKey, 4_200_000)
-	first := makeOuterLeafCacheTestBlock(t, 4_300_001)
+	collideKey := findLeafBlockCachePrimaryCollisionSecondUnseenKey(t, cache, shard, baseKey, 4_200_000)
+	first := makeLeafBlockCacheTestBlock(t, 4_300_001)
 	lease, admitted = cache.putWithLease(collideKey, first)
 	if admitted {
 		lease.Release()
@@ -272,7 +272,7 @@ func TestOuterLeafBlockCachePutWithLeasePrimaryCollisionStillNeedsSecondTouch(t 
 		t.Fatalf("colliding first touch unexpectedly present in cache")
 	}
 
-	second := makeOuterLeafCacheTestBlock(t, 4_300_002)
+	second := makeLeafBlockCacheTestBlock(t, 4_300_002)
 	lease, admitted = cache.putWithLease(collideKey, second)
 	if !admitted || lease.ref == nil {
 		t.Fatalf("colliding second touch admitted=%v lease.ref=nil=%v want admitted with lease", admitted, lease.ref == nil)
@@ -280,8 +280,8 @@ func TestOuterLeafBlockCachePutWithLeasePrimaryCollisionStillNeedsSecondTouch(t 
 	lease.Release()
 }
 
-func TestOuterLeafBlockCachePut_FirstTouchRejectRecyclesBlock(t *testing.T) {
-	cache := newOuterLeafBlockCache(8192)
+func TestLeafBlockCachePut_FirstTouchRejectRecyclesBlock(t *testing.T) {
+	cache := newLeafBlockCache(8192)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
@@ -292,10 +292,10 @@ func TestOuterLeafBlockCachePut_FirstTouchRejectRecyclesBlock(t *testing.T) {
 	if shard.capacity <= 64 {
 		t.Fatalf("shard capacity=%d want >64 to exercise admission filter", shard.capacity)
 	}
-	fillOuterLeafCacheShardToThreshold(t, cache, shard)
-	key := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, 2_000_000)
+	fillLeafBlockCacheShardToThreshold(t, cache, shard)
+	key := findLeafBlockCacheUnseenAdmitKey(t, cache, shard, 2_000_000)
 
-	block := makeOuterLeafCacheTestLeaseBlock(t, 3_000_001)
+	block := makeLeafBlockCacheTestLeaseBlock(t, 3_000_001)
 	if len(block.RawBytes()) == 0 {
 		t.Fatalf("block raw bytes empty before put")
 	}
@@ -312,14 +312,14 @@ func TestOuterLeafBlockCachePut_FirstTouchRejectRecyclesBlock(t *testing.T) {
 	}
 }
 
-func TestOuterLeafBlockCachePut_DuplicateKeyRecyclesIncomingBlock(t *testing.T) {
-	cache := newOuterLeafBlockCache(8)
+func TestLeafBlockCachePut_DuplicateKeyRecyclesIncomingBlock(t *testing.T) {
+	cache := newLeafBlockCache(8)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
-	key := makeOuterLeafCacheTestKey(42)
+	key := makeLeafBlockCacheTestKey(42)
 
-	first := makeOuterLeafCacheTestLeaseBlock(t, 5001)
+	first := makeLeafBlockCacheTestLeaseBlock(t, 5001)
 	if len(first.RawBytes()) == 0 {
 		t.Fatalf("first block raw bytes empty before put")
 	}
@@ -336,7 +336,7 @@ func TestOuterLeafBlockCachePut_DuplicateKeyRecyclesIncomingBlock(t *testing.T) 
 	}
 	readLease.Release()
 
-	second := makeOuterLeafCacheTestLeaseBlock(t, 5002)
+	second := makeLeafBlockCacheTestLeaseBlock(t, 5002)
 	if len(second.RawBytes()) == 0 {
 		t.Fatalf("second block raw bytes empty before duplicate put")
 	}
@@ -361,8 +361,8 @@ func TestOuterLeafBlockCachePut_DuplicateKeyRecyclesIncomingBlock(t *testing.T) 
 	readLease.Release()
 }
 
-func TestOuterLeafBlockCachePutAfterMissNoLease_DuplicateDoesNotPromote(t *testing.T) {
-	cache := newOuterLeafBlockCache(8)
+func TestLeafBlockCachePutAfterMissNoLease_DuplicateDoesNotPromote(t *testing.T) {
+	cache := newLeafBlockCache(8)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
@@ -370,11 +370,11 @@ func TestOuterLeafBlockCachePutAfterMissNoLease_DuplicateDoesNotPromote(t *testi
 		t.Fatalf("shard count=%d want=1", len(cache.shards))
 	}
 	shard := &cache.shards[0]
-	keyA := makeOuterLeafCacheTestKey(7001)
-	keyB := makeOuterLeafCacheTestKey(7002)
+	keyA := makeLeafBlockCacheTestKey(7001)
+	keyB := makeLeafBlockCacheTestKey(7002)
 
-	blockA := makeOuterLeafCacheTestLeaseBlock(t, 7001)
-	blockB := makeOuterLeafCacheTestLeaseBlock(t, 7002)
+	blockA := makeLeafBlockCacheTestLeaseBlock(t, 7001)
+	blockB := makeLeafBlockCacheTestLeaseBlock(t, 7002)
 	cache.put(keyA, blockA)
 	cache.put(keyB, blockB)
 
@@ -393,7 +393,7 @@ func TestOuterLeafBlockCachePutAfterMissNoLease_DuplicateDoesNotPromote(t *testi
 	}
 	shard.mu.RUnlock()
 
-	dup := makeOuterLeafCacheTestLeaseBlock(t, 7003)
+	dup := makeLeafBlockCacheTestLeaseBlock(t, 7003)
 	cache.putAfterMissNoLease(keyA, dup)
 
 	if dup.RawBytes() != nil {
@@ -415,8 +415,8 @@ func TestOuterLeafBlockCachePutAfterMissNoLease_DuplicateDoesNotPromote(t *testi
 	shard.mu.RUnlock()
 }
 
-func TestOuterLeafBlockCachePutAfterMissNoLease_WarmShardDropsUnderContention(t *testing.T) {
-	cache := newOuterLeafBlockCache(130)
+func TestLeafBlockCachePutAfterMissNoLease_WarmShardDropsUnderContention(t *testing.T) {
+	cache := newLeafBlockCache(130)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
@@ -427,12 +427,12 @@ func TestOuterLeafBlockCachePutAfterMissNoLease_WarmShardDropsUnderContention(t 
 	if shard.capacity <= 64 {
 		t.Fatalf("shard capacity=%d want >64 to exercise warm/full admission behavior", shard.capacity)
 	}
-	fillOuterLeafCacheShardToEntries(t, cache, shard, shard.capacity/2)
-	key := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, 8_000_000)
+	fillLeafBlockCacheShardToEntries(t, cache, shard, shard.capacity/2)
+	key := findLeafBlockCacheUnseenAdmitKey(t, cache, shard, 8_000_000)
 	_ = shard.shouldAdmit(key) // prime seen bits so second-touch admission passes
 
 	_, _, _, lockContentionBefore := cache.putStats()
-	block := makeOuterLeafCacheTestLeaseBlock(t, 8_100_000)
+	block := makeLeafBlockCacheTestLeaseBlock(t, 8_100_000)
 	shard.mu.Lock()
 	done := make(chan struct{})
 	go func() {
@@ -460,8 +460,8 @@ func TestOuterLeafBlockCachePutAfterMissNoLease_WarmShardDropsUnderContention(t 
 	}
 }
 
-func TestOuterLeafBlockCacheSLRUPolicy_ProtectsPromotedEntry(t *testing.T) {
-	cache := newOuterLeafBlockCacheWithPolicy(2, outerLeafBlockCachePolicySLRU)
+func TestLeafBlockCacheSLRUPolicy_ProtectsPromotedEntry(t *testing.T) {
+	cache := newLeafBlockCacheWithPolicy(2, leafBlockCachePolicySLRU)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
@@ -469,11 +469,11 @@ func TestOuterLeafBlockCacheSLRUPolicy_ProtectsPromotedEntry(t *testing.T) {
 		t.Fatalf("shard count=%d want=1", len(cache.shards))
 	}
 	shard := &cache.shards[0]
-	keyA := makeOuterLeafCacheTestKey(9001)
-	keyB := makeOuterLeafCacheTestKey(9002)
-	keyC := makeOuterLeafCacheTestKey(9003)
+	keyA := makeLeafBlockCacheTestKey(9001)
+	keyB := makeLeafBlockCacheTestKey(9002)
+	keyC := makeLeafBlockCacheTestKey(9003)
 
-	first := makeOuterLeafCacheTestLeaseBlock(t, 9001)
+	first := makeLeafBlockCacheTestLeaseBlock(t, 9001)
 	cache.put(keyA, first)
 	if got, lease := cache.get(keyA); got == nil {
 		lease.Release()
@@ -482,7 +482,7 @@ func TestOuterLeafBlockCacheSLRUPolicy_ProtectsPromotedEntry(t *testing.T) {
 		lease.Release()
 	}
 
-	second := makeOuterLeafCacheTestLeaseBlock(t, 9002)
+	second := makeLeafBlockCacheTestLeaseBlock(t, 9002)
 	cache.put(keyB, second)
 
 	if got, lease := cache.get(keyA); got == nil {
@@ -494,12 +494,12 @@ func TestOuterLeafBlockCacheSLRUPolicy_ProtectsPromotedEntry(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		shard.mu.RLock()
 		idxA, okA := shard.entries[keyA]
-		segment := outerLeafBlockCacheSegmentProbation
+		segment := leafBlockCacheSegmentProbation
 		if okA {
 			segment = shard.nodes[idxA].segment
 		}
 		shard.mu.RUnlock()
-		if okA && segment == outerLeafBlockCacheSegmentProtected {
+		if okA && segment == leafBlockCacheSegmentProtected {
 			break
 		}
 		if got, lease := cache.get(keyA); got == nil {
@@ -516,13 +516,13 @@ func TestOuterLeafBlockCacheSLRUPolicy_ProtectsPromotedEntry(t *testing.T) {
 		shard.mu.RUnlock()
 		t.Fatalf("missing keyA after promotion")
 	}
-	if got := shard.nodes[idxA].segment; got != outerLeafBlockCacheSegmentProtected {
+	if got := shard.nodes[idxA].segment; got != leafBlockCacheSegmentProtected {
 		shard.mu.RUnlock()
 		t.Fatalf("keyA segment=%d want protected", got)
 	}
 	shard.mu.RUnlock()
 
-	third := makeOuterLeafCacheTestLeaseBlock(t, 9003)
+	third := makeLeafBlockCacheTestLeaseBlock(t, 9003)
 	cache.put(keyC, third)
 
 	if got, lease := cache.get(keyB); got != nil {
@@ -543,21 +543,21 @@ func TestOuterLeafBlockCacheSLRUPolicy_ProtectsPromotedEntry(t *testing.T) {
 	}
 }
 
-func TestOuterLeafBlockCacheSLRUPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *testing.T) {
-	cache := newOuterLeafBlockCacheWithPolicy(8, outerLeafBlockCachePolicySLRU)
+func TestLeafBlockCacheSLRUPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *testing.T) {
+	cache := newLeafBlockCacheWithPolicy(8, leafBlockCachePolicySLRU)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
-	key := makeOuterLeafCacheTestKey(9101)
+	key := makeLeafBlockCacheTestKey(9101)
 
-	first := makeOuterLeafCacheTestLeaseBlock(t, 9101)
+	first := makeLeafBlockCacheTestLeaseBlock(t, 9101)
 	lease, admitted := cache.putWithLease(key, first)
 	if !admitted || lease.ref == nil {
 		t.Fatalf("first putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
 	}
 	lease.Release()
 
-	second := makeOuterLeafCacheTestLeaseBlock(t, 9102)
+	second := makeLeafBlockCacheTestLeaseBlock(t, 9102)
 	lease, admitted = cache.putWithLease(key, second)
 	if !admitted || lease.ref == nil {
 		t.Fatalf("duplicate putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
@@ -568,17 +568,17 @@ func TestOuterLeafBlockCacheSLRUPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *
 	}
 }
 
-func TestOuterLeafBlockCacheSIEVEPolicy_SecondChanceProtectsHitEntry(t *testing.T) {
-	cache := newOuterLeafBlockCacheWithPolicy(2, outerLeafBlockCachePolicySIEVE)
+func TestLeafBlockCacheSIEVEPolicy_SecondChanceProtectsHitEntry(t *testing.T) {
+	cache := newLeafBlockCacheWithPolicy(2, leafBlockCachePolicySIEVE)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
-	keyA := makeOuterLeafCacheTestKey(9201)
-	keyB := makeOuterLeafCacheTestKey(9202)
-	keyC := makeOuterLeafCacheTestKey(9203)
+	keyA := makeLeafBlockCacheTestKey(9201)
+	keyB := makeLeafBlockCacheTestKey(9202)
+	keyC := makeLeafBlockCacheTestKey(9203)
 
-	cache.put(keyA, makeOuterLeafCacheTestLeaseBlock(t, 9201))
-	cache.put(keyB, makeOuterLeafCacheTestLeaseBlock(t, 9202))
+	cache.put(keyA, makeLeafBlockCacheTestLeaseBlock(t, 9201))
+	cache.put(keyB, makeLeafBlockCacheTestLeaseBlock(t, 9202))
 
 	// Hit keyA once so SIEVE grants it a second chance during eviction scan.
 	if got, lease := cache.get(keyA); got == nil {
@@ -588,7 +588,7 @@ func TestOuterLeafBlockCacheSIEVEPolicy_SecondChanceProtectsHitEntry(t *testing.
 		lease.Release()
 	}
 
-	cache.put(keyC, makeOuterLeafCacheTestLeaseBlock(t, 9203))
+	cache.put(keyC, makeLeafBlockCacheTestLeaseBlock(t, 9203))
 
 	if got, lease := cache.get(keyA); got == nil {
 		lease.Release()
@@ -608,21 +608,21 @@ func TestOuterLeafBlockCacheSIEVEPolicy_SecondChanceProtectsHitEntry(t *testing.
 	}
 }
 
-func TestOuterLeafBlockCacheSIEVEPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *testing.T) {
-	cache := newOuterLeafBlockCacheWithPolicy(8, outerLeafBlockCachePolicySIEVE)
+func TestLeafBlockCacheSIEVEPolicy_DuplicatePutWithLeaseRecyclesIncoming(t *testing.T) {
+	cache := newLeafBlockCacheWithPolicy(8, leafBlockCachePolicySIEVE)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
-	key := makeOuterLeafCacheTestKey(9301)
+	key := makeLeafBlockCacheTestKey(9301)
 
-	first := makeOuterLeafCacheTestLeaseBlock(t, 9301)
+	first := makeLeafBlockCacheTestLeaseBlock(t, 9301)
 	lease, admitted := cache.putWithLease(key, first)
 	if !admitted || lease.ref == nil {
 		t.Fatalf("first putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
 	}
 	lease.Release()
 
-	second := makeOuterLeafCacheTestLeaseBlock(t, 9302)
+	second := makeLeafBlockCacheTestLeaseBlock(t, 9302)
 	lease, admitted = cache.putWithLease(key, second)
 	if !admitted || lease.ref == nil {
 		t.Fatalf("duplicate putWithLease admitted=%v lease.nil=%v", admitted, lease.ref == nil)
@@ -633,8 +633,8 @@ func TestOuterLeafBlockCacheSIEVEPolicy_DuplicatePutWithLeaseRecyclesIncoming(t 
 	}
 }
 
-func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrentReadPressure(t *testing.T) {
-	cache := newOuterLeafBlockCache(130)
+func TestLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrentReadPressure(t *testing.T) {
+	cache := newLeafBlockCache(130)
 	if cache == nil {
 		t.Fatalf("cache=nil")
 	}
@@ -645,8 +645,8 @@ func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrent
 	if shard.capacity <= 64 {
 		t.Fatalf("shard capacity=%d want >64 to exercise admission filter", shard.capacity)
 	}
-	fillOuterLeafCacheShardToEntries(t, cache, shard, shard.capacity)
-	hotKeys := collectOuterLeafCacheShardKeys(t, shard, 16)
+	fillLeafBlockCacheShardToEntries(t, cache, shard, shard.capacity)
+	hotKeys := collectLeafBlockCacheShardKeys(t, shard, 16)
 
 	var (
 		wg       sync.WaitGroup
@@ -680,16 +680,16 @@ func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrent
 	}
 
 	type putResult struct {
-		lease    outerLeafBlockCacheLease
+		lease    leafBlockCacheLease
 		admitted bool
 	}
 
 	const probeKeys = 6
 	for i := 0; i < probeKeys; i++ {
 		base := 9_000_000 + i*1000
-		key := findOuterLeafCacheUnseenAdmitKey(t, cache, shard, base)
+		key := findLeafBlockCacheUnseenAdmitKey(t, cache, shard, base)
 
-		first := makeOuterLeafCacheTestBlock(t, base+1)
+		first := makeLeafBlockCacheTestBlock(t, base+1)
 		lease, admitted := cache.putWithLease(key, first)
 		if admitted {
 			lease.Release()
@@ -701,7 +701,7 @@ func TestOuterLeafBlockCachePutWithLeaseHotFullShardAdmitsNewKeysUnderConcurrent
 		}
 
 		keyForSecond := key
-		second := makeOuterLeafCacheTestBlock(t, base+2)
+		second := makeLeafBlockCacheTestBlock(t, base+2)
 		resCh := make(chan putResult, 1)
 		go func() {
 			lease, admitted := cache.putWithLease(keyForSecond, second)

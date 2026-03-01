@@ -536,7 +536,7 @@ func (db *DB) Stats() map[string]string {
 		if total := hits + misses; total > 0 {
 			stats["treedb.vlog.template_def_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 		}
-		if cache := db.outerLeafBlockCache; cache != nil {
+		if cache := db.leafBlockCache; cache != nil {
 			hits, misses, entries, capacity := cache.stats()
 			stats["treedb.vlog.outer_leaf_block_cache.hits"] = fmt.Sprintf("%d", hits)
 			stats["treedb.vlog.outer_leaf_block_cache.misses"] = fmt.Sprintf("%d", misses)
@@ -552,7 +552,7 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.vlog.outer_leaf_block_cache.put_duplicate_drops"] = fmt.Sprintf("%d", putDuplicateDrops)
 			stats["treedb.vlog.outer_leaf_block_cache.put_lock_contention"] = fmt.Sprintf("%d", putLockContention)
 		}
-		if keyCache := db.outerLeafKeyCache; keyCache != nil {
+		if keyCache := db.leafBlockKeyCache; keyCache != nil {
 			hits, misses, entries, capacity := keyCache.stats()
 			stats["treedb.vlog.outer_leaf_key_cache.hits"] = fmt.Sprintf("%d", hits)
 			stats["treedb.vlog.outer_leaf_key_cache.misses"] = fmt.Sprintf("%d", misses)

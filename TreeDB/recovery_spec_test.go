@@ -158,9 +158,9 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 		ChunkSize:  64 * 1024,
 		Durability: durability,
 	}
-	opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
-	opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
-	opts.ValueLog.OuterLeafBlockRestartInterval = 16
+	opts.ValueLog.LeafBlockCodec = treedb.ValueLogBlockLZ4
+	opts.ValueLog.LeafBlockTargetBytes = 4 << 10
+	opts.ValueLog.LeafBlockRestartInterval = 16
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -231,9 +231,9 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeNoTrailingSyncWriter(t *testing.T) 
 		ChunkSize:  64 * 1024,
 		Durability: durability,
 	}
-	opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
-	opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
-	opts.ValueLog.OuterLeafBlockRestartInterval = 16
+	opts.ValueLog.LeafBlockCodec = treedb.ValueLogBlockLZ4
+	opts.ValueLog.LeafBlockTargetBytes = 4 << 10
+	opts.ValueLog.LeafBlockRestartInterval = 16
 
 	db, err := treedb.Open(opts)
 	if err != nil {
@@ -377,9 +377,9 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 			runCrashRecoveryDeleteRangeNoTrailingSyncWriter(t, dir, tc.env...)
 
 			opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024}
-			opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
-			opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
-			opts.ValueLog.OuterLeafBlockRestartInterval = 16
+			opts.ValueLog.LeafBlockCodec = treedb.ValueLogBlockLZ4
+			opts.ValueLog.LeafBlockTargetBytes = 4 << 10
+			opts.ValueLog.LeafBlockRestartInterval = 16
 
 			db, err := treedb.Open(opts)
 			if err != nil {
@@ -466,9 +466,9 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			runCrashRecoveryDurabilityWriter(t, dir, tc.env...)
 
 			opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024}
-			opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
-			opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
-			opts.ValueLog.OuterLeafBlockRestartInterval = 16
+			opts.ValueLog.LeafBlockCodec = treedb.ValueLogBlockLZ4
+			opts.ValueLog.LeafBlockTargetBytes = 4 << 10
+			opts.ValueLog.LeafBlockRestartInterval = 16
 			db, err := treedb.Open(opts)
 			if err != nil {
 				t.Fatalf("open: %v", err)

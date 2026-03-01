@@ -11,7 +11,7 @@ import (
 
 type valueReader struct {
 	vlogs                  tree.SlabReader
-	skipOuterLeafChecksums bool
+	skipLeafBlockChecksums bool
 }
 
 // ValueReaderForState returns a reader that resolves value-log pointers.
@@ -22,19 +22,19 @@ func ValueReaderForState(state *DBState) tree.SlabReader {
 	return newValueReader(state.ValueLogSet, false)
 }
 
-func newValueReader(vlogs tree.SlabReader, skipOuterLeafChecksums bool) valueReader {
+func newValueReader(vlogs tree.SlabReader, skipLeafBlockChecksums bool) valueReader {
 	return valueReader{
 		vlogs:                  vlogs,
-		skipOuterLeafChecksums: skipOuterLeafChecksums,
+		skipLeafBlockChecksums: skipLeafBlockChecksums,
 	}
 }
 
-func (r *valueReader) reconfigure(vlogs tree.SlabReader, skipOuterLeafChecksums bool, _ any, _ any) {
+func (r *valueReader) reconfigure(vlogs tree.SlabReader, skipLeafBlockChecksums bool, _ any, _ any) {
 	if r == nil {
 		return
 	}
 	r.vlogs = vlogs
-	r.skipOuterLeafChecksums = skipOuterLeafChecksums
+	r.skipLeafBlockChecksums = skipLeafBlockChecksums
 }
 
 func (r *valueReader) clearForPoolReuse() {
@@ -42,7 +42,7 @@ func (r *valueReader) clearForPoolReuse() {
 		return
 	}
 	r.vlogs = nil
-	r.skipOuterLeafChecksums = false
+	r.skipLeafBlockChecksums = false
 }
 
 func (r *valueReader) releaseDecodeContext() {
@@ -75,7 +75,7 @@ func (r valueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if !leafblock.HasMagic(raw) {
 		return raw, nil
 	}
-	return r.decodeOuterLeafEntry(ptr, nil, raw)
+	return r.decodeLeafBlockEntry(ptr, nil, raw)
 }
 
 func (r valueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
@@ -113,7 +113,7 @@ func (r valueReader) ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, er
 	if !leafblock.HasMagic(raw) {
 		return raw, nil
 	}
-	return r.decodeOuterLeafEntry(ptr, key, raw)
+	return r.decodeLeafBlockEntry(ptr, key, raw)
 }
 
 func (r valueReader) ReadForKey(ptr page.ValuePtr, key []byte) ([]byte, error) {
@@ -156,8 +156,8 @@ func (r valueReader) ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][
 	return dst, nil
 }
 
-func (r valueReader) decodeOuterLeafEntry(ptr page.ValuePtr, key []byte, raw []byte) ([]byte, error) {
-	verify := !r.skipOuterLeafChecksums
+func (r valueReader) decodeLeafBlockEntry(ptr page.ValuePtr, key []byte, raw []byte) ([]byte, error) {
+	verify := !r.skipLeafBlockChecksums
 	entry, ok, found, _, err := leafblock.DecodeEntryForKeyWithVerify(raw, key, nil, verify)
 	if err != nil {
 		return nil, err
@@ -166,7 +166,7 @@ func (r valueReader) decodeOuterLeafEntry(ptr page.ValuePtr, key []byte, raw []b
 		return raw, nil
 	}
 	if !found {
-		return nil, fmt.Errorf("value reader: outerleaf key miss ptr=%+v", ptr)
+		return nil, fmt.Errorf("value reader: leafblock key miss ptr=%+v", ptr)
 	}
 	return r.resolveLookup(entry, 0)
 }
@@ -202,16 +202,16 @@ func (r valueReader) resolveLookup(entry leafblock.LookupResult, depth int) ([]b
 		if !leafblock.HasMagic(raw) {
 			return raw, nil
 		}
-		// Nested outerleaf: treat as singleton lookup.
-		nested, ok, found, _, err := leafblock.DecodeEntryForKeyWithVerify(raw, nil, nil, !r.skipOuterLeafChecksums)
+		// Nested leafblock: treat as singleton lookup.
+		nested, ok, found, _, err := leafblock.DecodeEntryForKeyWithVerify(raw, nil, nil, !r.skipLeafBlockChecksums)
 		if err != nil {
 			return nil, err
 		}
 		if !ok || !found {
-			return nil, fmt.Errorf("value reader: invalid nested outerleaf blobref")
+			return nil, fmt.Errorf("value reader: invalid nested leafblock blobref")
 		}
 		return r.resolveLookup(nested, depth+1)
 	default:
-		return nil, fmt.Errorf("value reader: unsupported outerleaf kind %d", entry.Kind)
+		return nil, fmt.Errorf("value reader: unsupported leafblock kind %d", entry.Kind)
 	}
 }
