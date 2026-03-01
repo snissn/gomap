@@ -437,7 +437,7 @@ func TestRestartDecodeModeForCountBoundaries(t *testing.T) {
 		want    restartDecodeMode
 		wantErr string
 	}{
-		{name: "negative", count: -1, want: restartDecodeModeNone, wantErr: "outerleaf: invalid restart count -1"},
+		{name: "negative", count: -1, want: restartDecodeModeNone, wantErr: "leafblock: invalid restart count -1"},
 		{name: "zero", count: 0, want: restartDecodeModeNone},
 		{name: "stack_cap", count: restartDecodeStackCap, want: restartDecodeModeStack},
 		{name: "pooled", count: restartDecodeStackCap + 1, want: restartDecodeModePooled},
@@ -576,8 +576,8 @@ func TestLookupFromRestartRaw_RejectsNegativeRestartCount(t *testing.T) {
 	}
 	if _, _, err := lookupV2ValueFromRestartRaw(v2Block.entries, v2Block.entryCount, []byte("k1"), v2Block.restartRaw, -1); err == nil {
 		t.Fatalf("lookupV2ValueFromRestartRaw err=nil want invalid restart count")
-	} else if got := err.Error(); got != "outerleaf: invalid restart count -1" {
-		t.Fatalf("lookupV2ValueFromRestartRaw err=%q want=%q", got, "outerleaf: invalid restart count -1")
+	} else if got := err.Error(); got != "leafblock: invalid restart count -1" {
+		t.Fatalf("lookupV2ValueFromRestartRaw err=%q want=%q", got, "leafblock: invalid restart count -1")
 	}
 
 	v3Enc, err := EncodeTypedEntries(nil, []TypedEntry{
@@ -593,8 +593,8 @@ func TestLookupFromRestartRaw_RejectsNegativeRestartCount(t *testing.T) {
 	}
 	if _, _, err := lookupV3EntryFromRestartRaw(v3Block.entries, v3Block.entryCount, []byte("k1"), v3Block.restartRaw, -1); err == nil {
 		t.Fatalf("lookupV3EntryFromRestartRaw err=nil want invalid restart count")
-	} else if got := err.Error(); got != "outerleaf: invalid restart count -1" {
-		t.Fatalf("lookupV3EntryFromRestartRaw err=%q want=%q", got, "outerleaf: invalid restart count -1")
+	} else if got := err.Error(); got != "leafblock: invalid restart count -1" {
+		t.Fatalf("lookupV3EntryFromRestartRaw err=%q want=%q", got, "leafblock: invalid restart count -1")
 	}
 }
 
