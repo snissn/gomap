@@ -23,21 +23,7 @@ func pseudoRandomBytes(n int) []byte {
 }
 
 func TestModeEnabled(t *testing.T) {
-	cases := []struct {
-		mode string
-		want bool
-	}{
-		{mode: ModeV1, want: true},
-		{mode: " V1 ", want: true},
-		{mode: "", want: false},
-		{mode: "v1_leaflog_route", want: false},
-		{mode: "unknown", want: false},
-	}
-	for _, tc := range cases {
-		if got := ModeEnabled(tc.mode); got != tc.want {
-			t.Fatalf("ModeEnabled(%q)=%v want %v", tc.mode, got, tc.want)
-		}
-	}
+	t.Skip("mode selection removed; see TestHasMagic for envelope detection")
 }
 
 func TestEncodeDecodeSingleRoundTrip(t *testing.T) {

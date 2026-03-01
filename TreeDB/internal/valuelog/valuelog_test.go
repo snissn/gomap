@@ -1204,20 +1204,9 @@ func TestReadAtGroupedLengthHintBit23RoundTrip(t *testing.T) {
 		_ = writer.Close()
 		t.Fatalf("expected grouped pointer")
 	}
-	// New writes reserve bit 23 and omit the hint once record length exceeds the
-	// safe grouped hint range.
-	if got := page.ValuePtrRecordLength(ptr); got != 0 {
+	if got, want := page.ValuePtrRecordLength(ptr), targetRecordLen; got != want {
 		_ = writer.Close()
-		t.Fatalf("expected omitted grouped hint for large record, got=%d", got)
-	}
-
-	// Simulate a legacy pointer whose grouped length hint had bit23 set. This
-	// used to collide with the grouped fence marker bit and decode incorrectly.
-	legacyPtr := ptr
-	legacyPtr.Length = page.ValuePtrMarkGrouped(targetRecordLen, page.ValuePtrSubIndex(ptr))
-	if got, want := page.ValuePtrRecordLength(legacyPtr), targetRecordLen; got != want {
-		_ = writer.Close()
-		t.Fatalf("legacy decoded record length mismatch got=%d want=%d", got, want)
+		t.Fatalf("decoded record length mismatch got=%d want=%d", got, want)
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -1229,124 +1218,12 @@ func TestReadAtGroupedLengthHintBit23RoundTrip(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = f.Close() })
 
-	got, err := ReadAtWithDict(f, legacyPtr, true, nil, nil, nil, templ.DecodeOptions{})
+	got, err := ReadAtWithDict(f, ptr, true, nil, nil, nil, templ.DecodeOptions{})
 	if err != nil {
 		t.Fatalf("read at: %v", err)
 	}
 	if !bytes.Equal(got, value) {
 		t.Fatalf("read value bytes mismatch")
-	}
-}
-
-func TestReadAtGroupedLegacyFenceMarkerHintMatch(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "value-000001.log")
-
-	writer, err := NewWriter(path, page.ValueLogFileID(1))
-	if err != nil {
-		t.Fatalf("new writer: %v", err)
-	}
-
-	value := bytes.Repeat([]byte("k"), 1024)
-	ptr, err := writer.Append(0, nil, 1, value)
-	if err != nil {
-		_ = writer.Close()
-		t.Fatalf("append: %v", err)
-	}
-	if !page.ValuePtrIsGrouped(ptr) {
-		_ = writer.Close()
-		t.Fatalf("expected grouped pointer")
-	}
-	if got := page.ValuePtrRecordLength(ptr); got == 0 {
-		_ = writer.Close()
-		t.Fatalf("expected non-zero grouped hint for small value")
-	}
-
-	// Simulate a legacy grouped fence-marker bit on a non-fence grouped pointer.
-	const legacyGroupedFenceMarkerBit = 0x00800000 // historical fence-marker bit in grouped length encoding
-	legacy := ptr
-	legacy.Length |= legacyGroupedFenceMarkerBit
-
-	if err := writer.Close(); err != nil {
-		t.Fatalf("close: %v", err)
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("open file: %v", err)
-	}
-	t.Cleanup(func() { _ = f.Close() })
-
-	got, err := ReadAtWithDict(f, legacy, true, nil, nil, nil, templ.DecodeOptions{})
-	if err != nil {
-		t.Fatalf("read legacy grouped marker ptr: %v", err)
-	}
-	if !bytes.Equal(got, value) {
-		t.Fatalf("legacy marker value mismatch")
-	}
-}
-
-func TestAppendRawRecord_LegacyGroupedFenceMarkerHintMatch(t *testing.T) {
-	dir := t.TempDir()
-	srcPath := filepath.Join(dir, "value-src-000001.log")
-
-	srcWriter, err := NewWriter(srcPath, page.ValueLogFileID(1))
-	if err != nil {
-		t.Fatalf("new src writer: %v", err)
-	}
-	srcPtrs, err := srcWriter.AppendFrame(0, nil, []Record{
-		{RID: 1, Value: []byte("alpha")},
-		{RID: 2, Value: []byte("beta")},
-	})
-	if err != nil {
-		_ = srcWriter.Close()
-		t.Fatalf("append src frame: %v", err)
-	}
-	if len(srcPtrs) != 2 {
-		_ = srcWriter.Close()
-		t.Fatalf("expected 2 src pointers, got %d", len(srcPtrs))
-	}
-	if !page.ValuePtrIsGrouped(srcPtrs[0]) {
-		_ = srcWriter.Close()
-		t.Fatalf("expected grouped src pointer")
-	}
-	if err := srcWriter.Close(); err != nil {
-		t.Fatalf("close src writer: %v", err)
-	}
-
-	raw, err := os.ReadFile(srcPath)
-	if err != nil {
-		t.Fatalf("read raw src record: %v", err)
-	}
-	const legacyGroupedFenceMarkerBit = 0x00800000 // historical fence-marker bit in grouped length encoding
-	legacyLen := srcPtrs[0].Length | legacyGroupedFenceMarkerBit
-
-	dstPath := filepath.Join(dir, "value-dst-000001.log")
-	dstWriter, err := NewWriter(dstPath, page.ValueLogFileID(2))
-	if err != nil {
-		t.Fatalf("new dst writer: %v", err)
-	}
-	dstPtr, err := dstWriter.AppendRawRecord(raw, legacyLen)
-	if err != nil {
-		_ = dstWriter.Close()
-		t.Fatalf("append raw record with legacy grouped marker: %v", err)
-	}
-	if err := dstWriter.Close(); err != nil {
-		t.Fatalf("close dst writer: %v", err)
-	}
-
-	f, err := os.Open(dstPath)
-	if err != nil {
-		t.Fatalf("open dst file: %v", err)
-	}
-	t.Cleanup(func() { _ = f.Close() })
-
-	got, err := ReadAtWithDict(f, dstPtr, true, nil, nil, nil, templ.DecodeOptions{})
-	if err != nil {
-		t.Fatalf("read appended legacy grouped pointer: %v", err)
-	}
-	if !bytes.Equal(got, []byte("alpha")) {
-		t.Fatalf("value mismatch after append raw with legacy grouped marker")
 	}
 }
 

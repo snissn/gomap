@@ -584,7 +584,7 @@ func (w *Writer) Flush() error {
 	if err := w.flushAppendBuf(); err != nil {
 		return err
 	}
-	if w.f == nil {
+	if w.bw != nil {
 		return w.bw.Flush()
 	}
 	return nil

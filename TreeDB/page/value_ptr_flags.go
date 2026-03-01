@@ -3,18 +3,6 @@ package page
 const (
 	valuePtrCompressedMask uint32 = 0x80000000
 	valuePtrGroupedMask    uint32 = 0x40000000
-	// valuePtrFenceOuterMask marks non-grouped pointers that reference
-	// outer-leaf fence blocks (v2_fenceptr expansion candidates).
-	//
-	// It intentionally reuses one of the non-grouped sub-index bits so existing
-	// record-length decoding (ValuePtrRecordLength) strips it automatically.
-	valuePtrFenceOuterMask uint32 = 0x20000000
-	// valuePtrFenceOuterGroupedMask is a legacy grouped fence marker bit.
-	//
-	// It sits in the grouped length-hint region and therefore collides with
-	// legitimate grouped length hints above 0x007fffff. New writes no longer set
-	// this bit; it is only recognized for backward-compatible hint matching.
-	valuePtrFenceOuterGroupedMask uint32 = 0x00800000
 
 	valuePtrSubIndexMask  uint32 = 0x3c000000
 	valuePtrSubIndexShift        = 26
@@ -29,10 +17,9 @@ const (
 // can be encoded in a grouped ValuePtr length hint for new writes.
 //
 // Grouped pointers embed a sub-index in the Length field, leaving 24 bits for a
-// best-effort record length hint. Bit 23 is reserved for legacy grouped fence
-// marker compatibility, so new hints are capped at 23 bits. Larger records must
-// set the hint to 0 and rely on the value-log record header's ValueLen instead.
-const ValuePtrGroupedMaxRecordLen uint32 = 0x007fffff
+// best-effort record length hint. Larger records must set the hint to 0 and
+// rely on the value-log record header's ValueLen instead.
+const ValuePtrGroupedMaxRecordLen uint32 = 0x00ffffff
 
 // ValuePtrRecordLength returns the record length with internal flags stripped.
 func ValuePtrRecordLength(ptr ValuePtr) uint32 {
@@ -55,12 +42,6 @@ func ValuePtrRecordLengthHintMatches(ptr ValuePtr, expected uint32) bool {
 	recordLen := ValuePtrRecordLength(ptr)
 	if recordLen == 0 || recordLen == expected {
 		return true
-	}
-	if ValuePtrIsGrouped(ptr) && ptr.Length&valuePtrFenceOuterGroupedMask != 0 {
-		legacyCleared := recordLen &^ valuePtrFenceOuterGroupedMask
-		if legacyCleared == 0 || legacyCleared == expected {
-			return true
-		}
 	}
 	return false
 }
@@ -91,61 +72,6 @@ func ValuePtrSubIndex(ptr ValuePtr) uint8 {
 		idx |= 0x10
 	}
 	return idx
-}
-
-// ValuePtrIsFenceOuter reports whether ptr references an outer-leaf fence block
-// payload.
-//
-// Grouped pointers may return true only for legacy grouped fence markers.
-func ValuePtrIsFenceOuter(ptr ValuePtr) bool {
-	if ValuePtrIsGrouped(ptr) {
-		// Legacy grouped fence marker bit (new grouped writes do not set this).
-		return ptr.Length&valuePtrFenceOuterGroupedMask != 0
-	}
-	return ptr.Length&valuePtrFenceOuterMask != 0
-}
-
-// ValuePtrMarkFenceOuter marks a non-grouped pointer as an outer-leaf fence
-// block pointer.
-//
-// Grouped pointers are returned unchanged: grouped fence markers are legacy-only
-// and new grouped writes do not encode a dedicated fence bit.
-func ValuePtrMarkFenceOuter(ptr ValuePtr) ValuePtr {
-	if ValuePtrIsGrouped(ptr) {
-		// Grouped pointers no longer embed a fence marker bit because it collides
-		// with large grouped length hints.
-		return ptr
-	}
-	ptr.Length |= valuePtrFenceOuterMask
-	return ptr
-}
-
-// ValuePtrMarkFenceOuterCollapsed marks a pointer as an outer-leaf fence block
-// anchor for collapsed fence storage.
-//
-// For grouped pointers this sets the legacy grouped fence marker bit so readers
-// and iterators can classify the pointer as fence-carrying. This helper is only
-// safe when the pointer is emitted as a dedicated fence anchor key (not per-key
-// grouped pointers).
-func ValuePtrMarkFenceOuterCollapsed(ptr ValuePtr) ValuePtr {
-	if ValuePtrIsGrouped(ptr) {
-		ptr.Length |= valuePtrFenceOuterGroupedMask
-		return ptr
-	}
-	return ValuePtrMarkFenceOuter(ptr)
-}
-
-// ValuePtrClearFenceOuter clears outer-leaf fence marker bits.
-//
-// This preserves grouped/non-grouped identity and pointer sub-index data while
-// normalizing pointers for exact (non-fence fallback) storage.
-func ValuePtrClearFenceOuter(ptr ValuePtr) ValuePtr {
-	if ValuePtrIsGrouped(ptr) {
-		ptr.Length &^= valuePtrFenceOuterGroupedMask
-		return ptr
-	}
-	ptr.Length &^= valuePtrFenceOuterMask
-	return ptr
 }
 
 // ValuePtrMarkCompressed sets the compression flag on a record length.
