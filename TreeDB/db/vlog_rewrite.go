@@ -14,8 +14,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/largevalue"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -255,17 +255,17 @@ func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int
 		}
 		return refs, nil
 	}
-	if !outerleaf.HasMagic(payload) {
+	if !leafblock.HasMagic(payload) {
 		return nil, nil
 	}
-	block, err := outerleaf.DecodeBlockLease(payload)
+	block, err := leafblock.DecodeBlockLease(payload)
 	if err != nil {
 		return nil, err
 	}
 	defer block.Release()
 	refs := make(map[uint32]int64, 4)
-	if err := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, blobPtr page.ValuePtr) error {
-		if kind != outerleaf.EntryKindBlobRef {
+	if err := block.VisitTypedEntries(func(_ []byte, kind leafblock.EntryKind, _ []byte, blobPtr page.ValuePtr) error {
+		if kind != leafblock.EntryKindBlobRef {
 			return nil
 		}
 		return db.addNestedBlobRefLiveBytes(blobPtr, refs)
@@ -1258,12 +1258,12 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: expected value log pointer, got file %d", ptr.FileID)
 	}
 	if it.vlogs != nil {
-		if payload, err := it.vlogs.Read(ptr); err == nil && outerleaf.HasMagic(payload) {
-			if block, decErr := outerleaf.DecodeBlockLease(payload); decErr == nil {
+		if payload, err := it.vlogs.Read(ptr); err == nil && leafblock.HasMagic(payload) {
+			if block, decErr := leafblock.DecodeBlockLease(payload); decErr == nil {
 				hasBlobRef := false
 				var nestedBlobRefFileIDs map[uint32]struct{}
-				visitErr := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, nestedPtr page.ValuePtr) error {
-					if kind == outerleaf.EntryKindBlobRef {
+				visitErr := block.VisitTypedEntries(func(_ []byte, kind leafblock.EntryKind, _ []byte, nestedPtr page.ValuePtr) error {
+					if kind == leafblock.EntryKindBlobRef {
 						hasBlobRef = true
 						if it.retainedOldValueIDs != nil && page.IsValueLogFileID(nestedPtr.FileID) {
 							if nestedBlobRefFileIDs == nil {

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -97,7 +97,7 @@ func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, codec ValueLogBlo
 	if err != nil {
 		t.Fatalf("read appended payload: %v", err)
 	}
-	if !outerleaf.HasMagic(raw) {
+	if !leafblock.HasMagic(raw) {
 		t.Fatalf("expected outer-leaf encoded payload")
 	}
 	if len(raw) < 8 {
@@ -110,10 +110,10 @@ func assertReplayInlineAppenderOuterLeafEncoding(t *testing.T, codec ValueLogBlo
 	if got := int(raw[5]); got != wantCodec {
 		t.Fatalf("outer-leaf codec id = %d, want %d", got, wantCodec)
 	}
-	if got, want := int(binary.LittleEndian.Uint16(raw[6:8])), outerleaf.NormalizeRestartInterval(db.outerLeafBlockRestart); got != want {
+	if got, want := int(binary.LittleEndian.Uint16(raw[6:8])), leafblock.NormalizeRestartInterval(db.outerLeafBlockRestart); got != want {
 		t.Fatalf("outer-leaf restart interval = %d, want %d", got, want)
 	}
-	decoded, ok, found, _, err := outerleaf.DecodeValueForKey(raw, key, nil)
+	decoded, ok, found, _, err := leafblock.DecodeValueForKey(raw, key, nil)
 	if err != nil {
 		t.Fatalf("decode appended payload: %v", err)
 	}

@@ -6,33 +6,33 @@ import (
 	"testing"
 	"time"
 
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 )
 
-func makeOuterLeafCacheTestBlock(t *testing.T, n int) *outerleaf.DecodedBlock {
+func makeOuterLeafCacheTestBlock(t *testing.T, n int) *leafblock.DecodedBlock {
 	t.Helper()
-	encoded, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
+	encoded, err := leafblock.EncodeEntries(nil, []leafblock.Entry{
 		{Key: []byte(fmt.Sprintf("k%08d", n)), Value: []byte("v")},
 	}, uint8(ValueLogBlockSnappy), 16)
 	if err != nil {
 		t.Fatalf("EncodeEntries: %v", err)
 	}
-	block, err := outerleaf.DecodeBlock(encoded, nil)
+	block, err := leafblock.DecodeBlock(encoded, nil)
 	if err != nil {
 		t.Fatalf("DecodeBlock: %v", err)
 	}
 	return block
 }
 
-func makeOuterLeafCacheTestLeaseBlock(t *testing.T, n int) *outerleaf.DecodedBlock {
+func makeOuterLeafCacheTestLeaseBlock(t *testing.T, n int) *leafblock.DecodedBlock {
 	t.Helper()
-	encoded, err := outerleaf.EncodeEntries(nil, []outerleaf.Entry{
+	encoded, err := leafblock.EncodeEntries(nil, []leafblock.Entry{
 		{Key: []byte(fmt.Sprintf("k%08d", n)), Value: []byte("v")},
 	}, uint8(ValueLogBlockSnappy), 16)
 	if err != nil {
 		t.Fatalf("EncodeEntries: %v", err)
 	}
-	block, err := outerleaf.DecodeBlockLease(encoded)
+	block, err := leafblock.DecodeBlockLease(encoded)
 	if err != nil {
 		t.Fatalf("DecodeBlockLease: %v", err)
 	}

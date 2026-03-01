@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/largevalue"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -189,7 +189,7 @@ func TestValueLogGC_NestedManifestChunkSegmentLiveness(t *testing.T) {
 	}
 
 	key := []byte("k-manifest-nested")
-	outerPayload, err := outerleaf.EncodeSingleBlobRef(nil, key, manifestPtr, uint8(ValueLogBlockSnappy), 16)
+	outerPayload, err := leafblock.EncodeSingleBlobRef(nil, key, manifestPtr, uint8(ValueLogBlockSnappy), 16)
 	if err != nil {
 		t.Fatalf("EncodeSingleBlobRef: %v", err)
 	}
@@ -296,7 +296,7 @@ func testValueLogGCNestedBlobRefSegmentLiveness(t *testing.T) {
 	}
 
 	key := []byte("k-nested")
-	outerPayload, err := outerleaf.EncodeSingleBlobRef(nil, key, blobPtr, uint8(ValueLogBlockSnappy), 16)
+	outerPayload, err := leafblock.EncodeSingleBlobRef(nil, key, blobPtr, uint8(ValueLogBlockSnappy), 16)
 	if err != nil {
 		t.Fatalf("EncodeSingleBlobRef: %v", err)
 	}

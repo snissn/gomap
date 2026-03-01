@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/internal/largevalue"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -72,7 +72,7 @@ func (r valueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !outerleaf.HasMagic(raw) {
+	if !leafblock.HasMagic(raw) {
 		return raw, nil
 	}
 	return r.decodeOuterLeafEntry(ptr, nil, raw)
@@ -110,7 +110,7 @@ func (r valueReader) ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, er
 	if err != nil {
 		return nil, err
 	}
-	if !outerleaf.HasMagic(raw) {
+	if !leafblock.HasMagic(raw) {
 		return raw, nil
 	}
 	return r.decodeOuterLeafEntry(ptr, key, raw)
@@ -158,7 +158,7 @@ func (r valueReader) ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][
 
 func (r valueReader) decodeOuterLeafEntry(ptr page.ValuePtr, key []byte, raw []byte) ([]byte, error) {
 	verify := !r.skipOuterLeafChecksums
-	entry, ok, found, _, err := outerleaf.DecodeEntryForKeyWithVerify(raw, key, nil, verify)
+	entry, ok, found, _, err := leafblock.DecodeEntryForKeyWithVerify(raw, key, nil, verify)
 	if err != nil {
 		return nil, err
 	}
@@ -171,14 +171,14 @@ func (r valueReader) decodeOuterLeafEntry(ptr page.ValuePtr, key []byte, raw []b
 	return r.resolveLookup(entry, 0)
 }
 
-func (r valueReader) resolveLookup(entry outerleaf.LookupResult, depth int) ([]byte, error) {
+func (r valueReader) resolveLookup(entry leafblock.LookupResult, depth int) ([]byte, error) {
 	if depth > 8 {
 		return nil, fmt.Errorf("value reader: blobref recursion too deep")
 	}
 	switch entry.Kind {
-	case outerleaf.EntryKindInline:
+	case leafblock.EntryKindInline:
 		return entry.Value, nil
-	case outerleaf.EntryKindBlobRef:
+	case leafblock.EntryKindBlobRef:
 		if r.vlogs == nil {
 			return nil, fmt.Errorf("value reader: nil backing reader")
 		}
@@ -199,11 +199,11 @@ func (r valueReader) resolveLookup(entry outerleaf.LookupResult, depth int) ([]b
 			}
 			return out, nil
 		}
-		if !outerleaf.HasMagic(raw) {
+		if !leafblock.HasMagic(raw) {
 			return raw, nil
 		}
 		// Nested outerleaf: treat as singleton lookup.
-		nested, ok, found, _, err := outerleaf.DecodeEntryForKeyWithVerify(raw, nil, nil, !r.skipOuterLeafChecksums)
+		nested, ok, found, _, err := leafblock.DecodeEntryForKeyWithVerify(raw, nil, nil, !r.skipOuterLeafChecksums)
 		if err != nil {
 			return nil, err
 		}

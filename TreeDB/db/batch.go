@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -263,32 +263,32 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 			if !page.IsValueLogFileID(ptr.FileID) {
 				return fmt.Errorf("expected value-log pointer, got file=%d", ptr.FileID)
 			}
-		if b.db == nil || b.db.valueLogManager == nil {
-			return fmt.Errorf("missing value log manager")
-		}
-		val, err := b.db.valueLogManager.Read(ptr)
-		if err != nil {
-			return err
-		}
-		if outerleaf.HasMagic(val) {
-			decoded, ok, found, _, decErr := outerleaf.DecodeEntryForKey(val, entry.Key, nil)
-			if decErr != nil {
-				return decErr
+			if b.db == nil || b.db.valueLogManager == nil {
+				return fmt.Errorf("missing value log manager")
 			}
-			if !ok || !found {
-				return fmt.Errorf("outerleaf: key lookup miss in replay")
+			val, err := b.db.valueLogManager.Read(ptr)
+			if err != nil {
+				return err
 			}
-			if decoded.Kind == outerleaf.EntryKindBlobRef {
-				val, err = b.db.valueLogManager.Read(decoded.BlobPtr)
-				if err != nil {
-					return err
+			if leafblock.HasMagic(val) {
+				decoded, ok, found, _, decErr := leafblock.DecodeEntryForKey(val, entry.Key, nil)
+				if decErr != nil {
+					return decErr
 				}
-			} else {
-				val = decoded.Value
+				if !ok || !found {
+					return fmt.Errorf("outerleaf: key lookup miss in replay")
+				}
+				if decoded.Kind == leafblock.EntryKindBlobRef {
+					val, err = b.db.valueLogManager.Read(decoded.BlobPtr)
+					if err != nil {
+						return err
+					}
+				} else {
+					val = decoded.Value
+				}
 			}
+			entry.Value = val
 		}
-		entry.Value = val
-	}
 		if err := fn(entry); err != nil {
 			return err
 		}

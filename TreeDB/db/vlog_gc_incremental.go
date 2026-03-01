@@ -15,7 +15,7 @@ import (
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/largevalue"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -402,17 +402,17 @@ func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64
 		}
 		return refs, nil
 	}
-	if !outerleaf.HasMagic(payload) {
+	if !leafblock.HasMagic(payload) {
 		return nil, nil
 	}
-	block, err := outerleaf.DecodeBlockLease(payload)
+	block, err := leafblock.DecodeBlockLease(payload)
 	if err != nil {
 		return nil, err
 	}
 	defer block.Release()
 	refs := make(map[uint32]uint64, 4)
-	if err := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, blobPtr page.ValuePtr) error {
-		if kind != outerleaf.EntryKindBlobRef {
+	if err := block.VisitTypedEntries(func(_ []byte, kind leafblock.EntryKind, _ []byte, blobPtr page.ValuePtr) error {
+		if kind != leafblock.EntryKindBlobRef {
 			return nil
 		}
 		return db.addNestedBlobRefCounts(blobPtr, refs)

@@ -27,10 +27,10 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/compression"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/largevalue"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -80,7 +80,7 @@ var valueLogEligiblePool sync.Pool                          // stores []int
 var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
 var valueLogKeyPool sync.Pool                               // stores [][]byte
 var valueLogPtrPool sync.Pool                               // stores []page.ValuePtr
-var outerLeafEntryPool sync.Pool                            // stores []outerleaf.Entry
+var outerLeafEntryPool sync.Pool                            // stores []leafblock.Entry
 var batchArenaPools [batchArenaClassCount]sync.Pool         // stores []byte
 var batchArenaLeasePool sync.Pool                           // stores *batchArenaLease
 var batchEntrySliceRefPool sync.Pool                        // stores *batchEntrySliceRef
@@ -88,7 +88,7 @@ var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
 var outerLeafArenaLeaseMu sync.Mutex
 var outerLeafArenaLeases [outerLeafArenaClassCount][][]byte
 var outerLeafBlobRefScratchPool sync.Pool
-var outerLeafEncoderPool sync.Pool // stores *outerleaf.Encoder
+var outerLeafEncoderPool sync.Pool // stores *leafblock.Encoder
 var valueLogPreparedBodyPool sync.Pool
 var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
@@ -673,19 +673,19 @@ func putValueLogRecordsCheckpointAware(db *DB, s []valuelog.Record) {
 	putValueLogRecordsNoClear(s)
 }
 
-func getOuterLeafEntriesCap(capacity int) []outerleaf.Entry {
+func getOuterLeafEntriesCap(capacity int) []leafblock.Entry {
 	if capacity < 0 {
 		capacity = 0
 	}
 	if v := outerLeafEntryPool.Get(); v != nil {
-		if s, ok := v.([]outerleaf.Entry); ok && cap(s) >= capacity {
+		if s, ok := v.([]leafblock.Entry); ok && cap(s) >= capacity {
 			return s[:0]
 		}
 	}
-	return make([]outerleaf.Entry, 0, capacity)
+	return make([]leafblock.Entry, 0, capacity)
 }
 
-func putOuterLeafEntries(s []outerleaf.Entry) {
+func putOuterLeafEntries(s []leafblock.Entry) {
 	if s == nil {
 		return
 	}
@@ -697,7 +697,7 @@ func putOuterLeafEntries(s []outerleaf.Entry) {
 		entries = entries[:cap(entries)]
 	}
 	for i := range entries {
-		entries[i] = outerleaf.Entry{}
+		entries[i] = leafblock.Entry{}
 	}
 	outerLeafEntryPool.Put(s[:0])
 }
@@ -925,16 +925,16 @@ func putOuterLeafBlobRefScratch(buf *[outerLeafBlobRefStackScratchCap]byte) {
 	outerLeafBlobRefScratchPool.Put(buf)
 }
 
-func getOuterLeafEncoder() *outerleaf.Encoder {
+func getOuterLeafEncoder() *leafblock.Encoder {
 	if v := outerLeafEncoderPool.Get(); v != nil {
-		if e, ok := v.(*outerleaf.Encoder); ok && e != nil {
+		if e, ok := v.(*leafblock.Encoder); ok && e != nil {
 			return e
 		}
 	}
-	return &outerleaf.Encoder{}
+	return &leafblock.Encoder{}
 }
 
-func putOuterLeafEncoder(e *outerleaf.Encoder) {
+func putOuterLeafEncoder(e *leafblock.Encoder) {
 	if e == nil {
 		return
 	}
@@ -1415,16 +1415,16 @@ func (db *DB) encodeOuterLeafValue(key, value []byte) ([]byte, error) {
 func (db *DB) encodeOuterLeafBlobRef(dst, key []byte, ptr page.ValuePtr) ([]byte, error) {
 	enc := getOuterLeafEncoder()
 	defer putOuterLeafEncoder(enc)
-	var single [1]outerleaf.TypedEntry
+	var single [1]leafblock.TypedEntry
 	single[0].Key = key
-	single[0].Kind = outerleaf.EntryKindBlobRef
+	single[0].Kind = leafblock.EntryKindBlobRef
 	single[0].BlobPtr = ptr
 	codec := db.selectOuterLeafBlockCodec(0, 1)
 	return enc.EncodeTypedEntries(dst, single[:], codec, db.outerLeafBlockRestart)
 }
 
 func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
-	entry, ok, found, _, err := outerleaf.DecodeEntryForKey(value, key, nil)
+	entry, ok, found, _, err := leafblock.DecodeEntryForKey(value, key, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -1434,7 +1434,7 @@ func (db *DB) decodeOuterLeafValue(key, value []byte) ([]byte, error) {
 	if !found {
 		return nil, fmt.Errorf("cachingdb: outer-leaf key lookup miss")
 	}
-	if entry.Kind == outerleaf.EntryKindBlobRef {
+	if entry.Kind == leafblock.EntryKindBlobRef {
 		if db.valueLogReader == nil {
 			return nil, fmt.Errorf("cachingdb: blob-ref entry requires value-log reader")
 		}
@@ -1477,7 +1477,7 @@ func allOuterLeafRecordValues(records []valuelog.Record) bool {
 		return false
 	}
 	for i := range records {
-		if !outerleaf.HasMagic(records[i].Value) {
+		if !leafblock.HasMagic(records[i].Value) {
 			return false
 		}
 	}
@@ -1505,7 +1505,7 @@ func ensureOuterLeafArenaCap(buf []byte, need int) []byte {
 	return grown
 }
 
-func appendOuterLeafRecordGroup(db *DB, encoder *outerleaf.Encoder, entries []outerleaf.Entry, groupStart int, records []valuelog.Record, groups []outerLeafRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
+func appendOuterLeafRecordGroup(db *DB, encoder *leafblock.Encoder, entries []leafblock.Entry, groupStart int, records []valuelog.Record, groups []outerLeafRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
 	if len(entries) == 0 {
 		return records, groups, arena, nil
 	}
@@ -1528,7 +1528,7 @@ func appendOuterLeafRecordGroup(db *DB, encoder *outerleaf.Encoder, entries []ou
 	if encoder != nil {
 		payload, err = encoder.EncodeEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
 	} else {
-		payload, err = outerleaf.EncodeEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
+		payload, err = leafblock.EncodeEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
 	}
 	if err != nil {
 		return nil, nil, nil, err
@@ -1540,7 +1540,7 @@ func appendOuterLeafRecordGroup(db *DB, encoder *outerleaf.Encoder, entries []ou
 	return records, groups, arena, nil
 }
 
-func appendOuterLeafTypedRecordGroup(db *DB, encoder *outerleaf.Encoder, entries []outerleaf.TypedEntry, groupStart int, records []valuelog.Record, groups []outerLeafRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
+func appendOuterLeafTypedRecordGroup(db *DB, encoder *leafblock.Encoder, entries []leafblock.TypedEntry, groupStart int, records []valuelog.Record, groups []outerLeafRecordGroup, arena []byte, maxEncodedHint int) ([]valuelog.Record, []outerLeafRecordGroup, []byte, error) {
 	if len(entries) == 0 {
 		return records, groups, arena, nil
 	}
@@ -1557,7 +1557,7 @@ func appendOuterLeafTypedRecordGroup(db *DB, encoder *outerleaf.Encoder, entries
 	)
 	totalValueBytes := 0
 	for i := range entries {
-		if entries[i].Kind == outerleaf.EntryKindInline {
+		if entries[i].Kind == leafblock.EntryKindInline {
 			totalValueBytes += len(entries[i].Value)
 		}
 	}
@@ -1565,7 +1565,7 @@ func appendOuterLeafTypedRecordGroup(db *DB, encoder *outerleaf.Encoder, entries
 	if encoder != nil {
 		payload, err = encoder.EncodeTypedEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
 	} else {
-		payload, err = outerleaf.EncodeTypedEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
+		payload, err = leafblock.EncodeTypedEntriesAssumeSorted(dst, entries, codec, db.outerLeafBlockRestart)
 	}
 	if err != nil {
 		return nil, nil, nil, err
@@ -1663,7 +1663,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 	if len(keys) > 1 {
 		targetBytes := db.outerLeafBlockTargetBytes
 		if targetBytes <= 0 {
-			targetBytes = outerleaf.NormalizeBlockTargetBytes(0)
+			targetBytes = leafblock.NormalizeBlockTargetBytes(0)
 		}
 		sample := len(keys)
 		if sample > 8 {
@@ -1718,7 +1718,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 
 	targetBytes := db.outerLeafBlockTargetBytes
 	if targetBytes <= 0 {
-		targetBytes = outerleaf.NormalizeBlockTargetBytes(0)
+		targetBytes = leafblock.NormalizeBlockTargetBytes(0)
 	}
 
 	entries := getOuterLeafEntriesCap(entriesCap)
@@ -1769,7 +1769,7 @@ func (db *DB) buildOuterLeafValueRecords(keys [][]byte, values [][]byte) ([]valu
 		if len(entries) == 0 {
 			groupStart = i
 		}
-		entries = append(entries, outerleaf.Entry{Key: key, Value: value})
+		entries = append(entries, leafblock.Entry{Key: key, Value: value})
 		estimated += entryEstimate
 		prevKey = key
 	}
@@ -2590,17 +2590,17 @@ func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live 
 	if err != nil {
 		return err
 	}
-	if !outerleaf.HasMagic(raw) {
+	if !leafblock.HasMagic(raw) {
 		return nil
 	}
-	block, err := outerleaf.DecodeBlockLeaseWithVerify(raw, false)
+	block, err := leafblock.DecodeBlockLeaseWithVerify(raw, false)
 	if err != nil {
 		return nil
 	}
 	defer block.Release()
 
-	if err := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, blobPtr page.ValuePtr) error {
-		if kind != outerleaf.EntryKindBlobRef {
+	if err := block.VisitTypedEntries(func(_ []byte, kind leafblock.EntryKind, _ []byte, blobPtr page.ValuePtr) error {
+		if kind != leafblock.EntryKindBlobRef {
 			return nil
 		}
 		if blobPtr.FileID == 0 {
@@ -4406,9 +4406,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if outerLeafBlockTargetOpt <= 0 {
 		outerLeafBlockTargetOpt = defaultOuterLeafBlockTargetBytes
 	}
-	outerLeafBlockTarget := outerleaf.NormalizeBlockTargetBytes(outerLeafBlockTargetOpt)
+	outerLeafBlockTarget := leafblock.NormalizeBlockTargetBytes(outerLeafBlockTargetOpt)
 	outerLeafBlockCodec := opts.ValueLogOuterLeafBlockCodec
-	outerLeafBlockRestart := outerleaf.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
+	outerLeafBlockRestart := leafblock.NormalizeRestartInterval(opts.ValueLogOuterLeafBlockRestartInterval)
 	outerLeafBlobThreshold := opts.ValueLogOuterLeafBlobThresholdBytes
 	if outerLeafBlobThreshold < 0 {
 		return nil, fmt.Errorf("cachingdb: invalid value-log outer leaf blob threshold bytes %d", outerLeafBlobThreshold)

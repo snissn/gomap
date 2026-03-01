@@ -6,7 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -33,7 +33,7 @@ type outerLeafBlockCacheEntry struct {
 }
 
 type outerLeafBlockRef struct {
-	block *outerleaf.DecodedBlock
+	block *leafblock.DecodedBlock
 	refs  atomic.Int32
 }
 
@@ -52,7 +52,7 @@ func getOuterLeafBlockRefSlot() *outerLeafBlockRef {
 	return ref
 }
 
-func initOuterLeafBlockRefSlot(ref *outerLeafBlockRef, block *outerleaf.DecodedBlock) *outerLeafBlockRef {
+func initOuterLeafBlockRefSlot(ref *outerLeafBlockRef, block *leafblock.DecodedBlock) *outerLeafBlockRef {
 	if block == nil {
 		return nil
 	}
@@ -64,7 +64,7 @@ func initOuterLeafBlockRefSlot(ref *outerLeafBlockRef, block *outerleaf.DecodedB
 	return ref
 }
 
-func newOuterLeafBlockRef(block *outerleaf.DecodedBlock) *outerLeafBlockRef {
+func newOuterLeafBlockRef(block *leafblock.DecodedBlock) *outerLeafBlockRef {
 	return initOuterLeafBlockRefSlot(nil, block)
 }
 
@@ -107,18 +107,18 @@ func (r *outerLeafBlockRef) release() {
 	putOuterLeafBlockRefSlot(r)
 }
 
-func recycleOuterLeafDecodedBlock(block *outerleaf.DecodedBlock) {
+func recycleOuterLeafDecodedBlock(block *leafblock.DecodedBlock) {
 	if block == nil {
 		return
 	}
 	block.Release()
-	*block = outerleaf.DecodedBlock{}
+	*block = leafblock.DecodedBlock{}
 	outerLeafDecodedBlockPool.Put(block)
 }
 
 var outerLeafDecodedBlockPool = sync.Pool{
 	New: func() any {
-		return &outerleaf.DecodedBlock{}
+		return &leafblock.DecodedBlock{}
 	},
 }
 
@@ -377,7 +377,7 @@ func (c *outerLeafBlockCache) lruPromoteMask() uint64 {
 	return outerLeafBlockCachePromoteSampleMask
 }
 
-func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBlock, outerLeafBlockCacheLease) {
+func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*leafblock.DecodedBlock, outerLeafBlockCacheLease) {
 	var lease outerLeafBlockCacheLease
 	s := c.shardFor(key)
 	s.mu.RLock()
@@ -436,7 +436,7 @@ func (c *outerLeafBlockCache) get(key outerLeafBlockKey) (*outerleaf.DecodedBloc
 	return block, lease
 }
 
-func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.DecodedBlock) {
+func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *leafblock.DecodedBlock) {
 	_, admitted := c.putInternal(key, block, false)
 	if !admitted {
 		recycleOuterLeafDecodedBlock(block)
@@ -447,13 +447,13 @@ func (c *outerLeafBlockCache) put(key outerLeafBlockKey, block *outerleaf.Decode
 // already observed a cache miss and do not require a lease. It intentionally
 // avoids a pre-lock read probe and can drop admission under contention once the
 // shard is warm to reduce write-lock amplification on parallel read misses.
-func (c *outerLeafBlockCache) putAfterMissNoLease(key outerLeafBlockKey, block *outerleaf.DecodedBlock) {
+func (c *outerLeafBlockCache) putAfterMissNoLease(key outerLeafBlockKey, block *leafblock.DecodedBlock) {
 	if !c.putAfterMissNoLeaseInternal(key, block) {
 		recycleOuterLeafDecodedBlock(block)
 	}
 }
 
-func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey, block *outerleaf.DecodedBlock) bool {
+func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey, block *leafblock.DecodedBlock) bool {
 	if c == nil || block == nil {
 		return false
 	}
@@ -478,7 +478,7 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 	}
 
 	var releaseEvicted *outerLeafBlockRef
-	var duplicateDropBlock *outerleaf.DecodedBlock
+	var duplicateDropBlock *leafblock.DecodedBlock
 	var evictedHash uint64
 	evicted := false
 	if idx, ok := s.entries[key]; ok {
@@ -580,11 +580,11 @@ func (c *outerLeafBlockCache) putAfterMissNoLeaseInternal(key outerLeafBlockKey,
 	return true
 }
 
-func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *outerleaf.DecodedBlock) (outerLeafBlockCacheLease, bool) {
+func (c *outerLeafBlockCache) putWithLease(key outerLeafBlockKey, block *leafblock.DecodedBlock) (outerLeafBlockCacheLease, bool) {
 	return c.putInternal(key, block, true)
 }
 
-func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerleaf.DecodedBlock, wantLease bool) (outerLeafBlockCacheLease, bool) {
+func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *leafblock.DecodedBlock, wantLease bool) (outerLeafBlockCacheLease, bool) {
 	var lease outerLeafBlockCacheLease
 	if c == nil || block == nil {
 		return lease, false
@@ -637,7 +637,7 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 		s.mu.Lock()
 	}
 	var releaseEvicted *outerLeafBlockRef
-	var duplicateDropBlock *outerleaf.DecodedBlock
+	var duplicateDropBlock *leafblock.DecodedBlock
 	var evictedHash uint64
 	evicted := false
 	if idx, ok := s.entries[key]; ok {
@@ -765,11 +765,11 @@ func (c *outerLeafBlockCache) putInternal(key outerLeafBlockKey, block *outerlea
 	return lease, lease.ref != nil
 }
 
-func (s *outerLeafBlockCacheShard) hasCachedRef(key outerLeafBlockKey, block *outerleaf.DecodedBlock) (hit bool, same bool) {
+func (s *outerLeafBlockCacheShard) hasCachedRef(key outerLeafBlockKey, block *leafblock.DecodedBlock) (hit bool, same bool) {
 	return s.hasCachedRefMaybeMark(key, block, false)
 }
 
-func (s *outerLeafBlockCacheShard) hasCachedRefMaybeMark(key outerLeafBlockKey, block *outerleaf.DecodedBlock, markSIEVE bool) (hit bool, same bool) {
+func (s *outerLeafBlockCacheShard) hasCachedRefMaybeMark(key outerLeafBlockKey, block *leafblock.DecodedBlock, markSIEVE bool) (hit bool, same bool) {
 	if s == nil {
 		return false, false
 	}

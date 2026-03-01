@@ -12,7 +12,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/leafblock"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -369,12 +369,12 @@ func (a *replayInlineAppender) append(db *DB, key, value []byte) (page.ValuePtr,
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
 	payload := value
-	encoded, err := outerleaf.EncodeSingle(
+	encoded, err := leafblock.EncodeSingle(
 		nil,
 		key,
 		value,
 		uint8(db.outerLeafBlockCodec),
-		outerleaf.NormalizeRestartInterval(db.outerLeafBlockRestart),
+		leafblock.NormalizeRestartInterval(db.outerLeafBlockRestart),
 	)
 	if err != nil {
 		return page.ValuePtr{}, err
