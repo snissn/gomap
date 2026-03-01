@@ -514,6 +514,7 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:                              relaxedSync,
 		DisableReadChecksum:                      disableReadChecksum,
 		ValueLogPointerThreshold:                 opts.ValueLog.PointerThreshold,
+		IndexOuterLeavesInValueLog:               opts.IndexOuterLeavesInValueLog,
 		IndexOuterLeafMode:                       opts.IndexOuterLeafMode,
 		ValueLogWALFenceMode:                     string(opts.ValueLog.WALFenceMode),
 		ValueLogDomainInlineThresholds:           opts.ValueLog.DomainInlineThresholds,

@@ -5670,6 +5670,9 @@ type Options struct {
 	// default is smaller to avoid catastrophic update-heavy cliffs at large key
 	// counts by pushing moderate values into the value log.
 	ValueLogPointerThreshold int
+	// IndexOuterLeavesInValueLog stores B+Tree leaf pages (the pages containing
+	// key/value entries) in the persistent value log instead of index.db.
+	IndexOuterLeavesInValueLog bool
 	// IndexOuterLeafMode selects the outer-leaf payload format.
 	// Supported values: "v1", "v1_leaflog", "v1_leaflog_route",
 	// "v1_leaflog_legacy", "v2_blockptr", "v2_fenceptr".
@@ -7681,6 +7684,14 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		for i := range db.lanes {
 			db.startVlogWriter(&db.lanes[i])
 		}
+	}
+
+	if opts.IndexOuterLeavesInValueLog {
+		setter, ok := backend.(interface{ SetLeafPageLog(backenddb.LeafPageLog) })
+		if !ok {
+			return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
+		}
+		setter.SetLeafPageLog(newCachingLeafPageLog(db, 0))
 	}
 
 	// Publish initial memtable snapshot for lock-free reads.
