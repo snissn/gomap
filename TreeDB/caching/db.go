@@ -9953,7 +9953,9 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
-	logKeyTrace("setDirect", key, len(value), fmt.Sprintf("sync=%t pointer=%t disable_journal=%t", sync, usePointer, db.disableJournal))
+	if keyTraceOn() {
+		logKeyTrace("setDirect", key, len(value), fmt.Sprintf("sync=%t pointer=%t disable_journal=%t", sync, usePointer, db.disableJournal))
+	}
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -10657,7 +10659,9 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
-	logKeyTrace("deleteDirect", key, 0, fmt.Sprintf("sync=%t disable_journal=%t", sync, db.disableJournal))
+	if keyTraceOn() {
+		logKeyTrace("deleteDirect", key, 0, fmt.Sprintf("sync=%t disable_journal=%t", sync, db.disableJournal))
+	}
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -14901,7 +14905,9 @@ func (b *Batch) Set(key, value []byte) error {
 	}
 
 	keyCopy, valCopy := b.cloneKeyValue(key, value)
-	logKeyTrace("batch.Set", keyCopy, len(valCopy), fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
+	if keyTraceOn() {
+		logKeyTrace("batch.Set", keyCopy, len(valCopy), fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
+	}
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
@@ -14951,7 +14957,9 @@ func (b *Batch) SetView(key, value []byte) error {
 		return ErrValueNil
 	}
 
-	logKeyTrace("batch.SetView", key, len(value), fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
+	if keyTraceOn() {
+		logKeyTrace("batch.SetView", key, len(value), fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
+	}
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key) + len(value)
@@ -14993,7 +15001,9 @@ func (b *Batch) Delete(key []byte) error {
 	}
 
 	keyCopy := b.cloneKey(key)
-	logKeyTrace("batch.Delete", keyCopy, 0, fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
+	if keyTraceOn() {
+		logKeyTrace("batch.Delete", keyCopy, 0, fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
+	}
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy)
@@ -15035,7 +15045,9 @@ func (b *Batch) DeleteView(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	logKeyTrace("batch.DeleteView", key, 0, fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
+	if keyTraceOn() {
+		logKeyTrace("batch.DeleteView", key, 0, fmt.Sprintf("backend=%t stream_eligible=%t entries_before=%d", b.backend != nil, b.streamEligible, len(b.entries)))
+	}
 	if b.backend != nil {
 		b.batchRange.add(key)
 		b.size += len(key)
