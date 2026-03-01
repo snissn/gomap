@@ -86,11 +86,11 @@ var (
 	treedbIndexColumnarLeaves             = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
-	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
-	treedbOuterLeafBlockCodec             = flag.String("treedb-outer-leaf-block-codec", "snappy", "TreeDB: experimental outer-leaf block codec (snappy|lz4)")
-	treedbOuterLeafBlockRestart           = flag.Int("treedb-outer-leaf-block-restart-interval", 0, "TreeDB: experimental outer-leaf restart interval (0=default)")
-	treedbOuterLeafBlobThresholdBytes     = flag.Int("treedb-vlog-outer-leaf-blob-threshold-bytes", 0, "TreeDB: outer-leaf blob threshold bytes (0=default)")
-	treedbOuterLeafBlockCacheEntries      = flag.Int("treedb-outer-leaf-block-cache-entries", 0, "TreeDB: decoded outer-leaf block cache entries (0=disabled)")
+	treedbLeafBlockTargetBytes            = flag.Int("treedb-leaf-block-target-bytes", 0, "TreeDB: experimental leaf-block block target bytes (0=default)")
+	treedbLeafBlockCodec                  = flag.String("treedb-leaf-block-codec", "snappy", "TreeDB: experimental leaf-block block codec (snappy|lz4)")
+	treedbLeafBlockRestart                = flag.Int("treedb-leaf-block-restart-interval", 0, "TreeDB: experimental leaf-block restart interval (0=default)")
+	treedbLeafBlockBlobThresholdBytes     = flag.Int("treedb-vlog-leaf-block-blob-threshold-bytes", 0, "TreeDB: leaf-block blob threshold bytes (0=default)")
+	treedbLeafBlockCacheEntries           = flag.Int("treedb-leaf-block-cache-entries", 0, "TreeDB: decoded leaf-block block cache entries (0=disabled)")
 
 	treedbDisableWAL             = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
 	treedbRelaxedSync            = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
@@ -313,23 +313,23 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	} else {
 		lines = append(lines, fmt.Sprintf("vlog.block_target_bytes=%dB", target))
 	}
-	if target := r.opts.ValueLog.OuterLeafBlockTargetBytes; target <= 0 {
-		lines = append(lines, "vlog.outer_leaf_block_target_bytes=default")
+	if target := r.opts.ValueLog.LeafBlockTargetBytes; target <= 0 {
+		lines = append(lines, "vlog.leaf_block_block_target_bytes=default")
 	} else {
-		lines = append(lines, fmt.Sprintf("vlog.outer_leaf_block_target_bytes=%dB", target))
+		lines = append(lines, fmt.Sprintf("vlog.leaf_block_block_target_bytes=%dB", target))
 	}
-	if threshold := r.opts.ValueLog.OuterLeafBlobThresholdBytes; threshold <= 0 {
-		lines = append(lines, "vlog.outer_leaf_blob_threshold_bytes=default")
+	if threshold := r.opts.ValueLog.LeafBlockBlobThresholdBytes; threshold <= 0 {
+		lines = append(lines, "vlog.leaf_block_blob_threshold_bytes=default")
 	} else {
-		lines = append(lines, fmt.Sprintf("vlog.outer_leaf_blob_threshold_bytes=%dB", threshold))
+		lines = append(lines, fmt.Sprintf("vlog.leaf_block_blob_threshold_bytes=%dB", threshold))
 	}
-	lines = append(lines, fmt.Sprintf("vlog.outer_leaf_block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.OuterLeafBlockCodec)))
-	if interval := r.opts.ValueLog.OuterLeafBlockRestartInterval; interval <= 0 {
-		lines = append(lines, "vlog.outer_leaf_block_restart_interval=default")
+	lines = append(lines, fmt.Sprintf("vlog.leaf_block_block_codec=%s", formatTreeDBVlogBlockCodec(r.opts.ValueLog.LeafBlockCodec)))
+	if interval := r.opts.ValueLog.LeafBlockRestartInterval; interval <= 0 {
+		lines = append(lines, "vlog.leaf_block_block_restart_interval=default")
 	} else {
-		lines = append(lines, fmt.Sprintf("vlog.outer_leaf_block_restart_interval=%d", interval))
+		lines = append(lines, fmt.Sprintf("vlog.leaf_block_block_restart_interval=%d", interval))
 	}
-	lines = append(lines, fmt.Sprintf("vlog.outer_leaf_block_cache_entries=%d", r.opts.ValueLog.OuterLeafBlockCacheEntries))
+	lines = append(lines, fmt.Sprintf("vlog.leaf_block_block_cache_entries=%d", r.opts.ValueLog.LeafBlockCacheEntries))
 	if hold := r.opts.ValueLog.IncompressibleHoldBytes; hold <= 0 {
 		lines = append(lines, "vlog.incompressible_hold_bytes=default (effective=67108864B)")
 	} else {
@@ -540,7 +540,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 			RawWritevMinAvgBytes:             *treedbVlogRawWritevMinAvgBytes,
 			RawWritevMinBatchRecords:         *treedbVlogRawWritevMinBatchRecs,
 			BlockTargetCompressedBytes:       *treedbVlogBlockTargetBytes,
-			OuterLeafBlockTargetBytes:        *treedbOuterLeafBlockTargetBytes,
+			LeafBlockTargetBytes:             *treedbLeafBlockTargetBytes,
 			IncompressibleHoldBytes:          *treedbVlogIncompressibleHoldBytes,
 			IncompressibleProbeIntervalBytes: *treedbVlogIncompressibleProbeBytes,
 			ReadIntegrity:                    readIntegrity,
@@ -551,9 +551,9 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 			DictIncompressibleHoldBytes:      *treedbVlogDictIncompressibleHoldBytes,
 			DictProbeIntervalBytes:           *treedbVlogDictProbeIntervalBytes,
 			DictMinPayloadSavingsRatio:       *treedbVlogDictMinSavingsRatio,
-			OuterLeafBlockRestartInterval:    *treedbOuterLeafBlockRestart,
-			OuterLeafBlobThresholdBytes:      *treedbOuterLeafBlobThresholdBytes,
-			OuterLeafBlockCacheEntries:       *treedbOuterLeafBlockCacheEntries,
+			LeafBlockRestartInterval:         *treedbLeafBlockRestart,
+			LeafBlockBlobThresholdBytes:      *treedbLeafBlockBlobThresholdBytes,
+			LeafBlockCacheEntries:            *treedbLeafBlockCacheEntries,
 		},
 	}
 	if *treedbWriterFlushMaxMs > 0 {
@@ -575,11 +575,11 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	opts.ValueLog.AutoPolicy = autoPolicy
-	outerCodec, err := parseTreeDBVlogBlockCodec(*treedbOuterLeafBlockCodec)
+	outerCodec, err := parseTreeDBVlogBlockCodec(*treedbLeafBlockCodec)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
-	opts.ValueLog.OuterLeafBlockCodec = outerCodec
+	opts.ValueLog.LeafBlockCodec = outerCodec
 
 	setOptionalVlogTrainConfig(&opts,
 		*treedbVlogDictTrainBytes,

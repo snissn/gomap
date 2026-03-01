@@ -96,10 +96,10 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
 - `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
-- `-treedb-outer-leaf-block-target-bytes` TreeDB: target block size for outer-leaf block payloads
-- `-treedb-outer-leaf-block-codec` TreeDB: block codec for outer-leaf payloads (`snappy|lz4`)
-- `-treedb-outer-leaf-block-restart-interval` TreeDB: restart interval metadata for outer-leaf payloads
-- `-treedb-outer-leaf-block-cache-entries` TreeDB: decoded outer-leaf block cache capacity in entries (`0` disables cache)
+- `-treedb-leaf-block-block-target-bytes` TreeDB: target block size for leaf-block block payloads
+- `-treedb-leaf-block-block-codec` TreeDB: block codec for leaf-block payloads (`snappy|lz4`)
+- `-treedb-leaf-block-block-restart-interval` TreeDB: restart interval metadata for leaf-block payloads
+- `-treedb-leaf-block-block-cache-entries` TreeDB: decoded leaf-block block cache capacity in entries (`0` disables cache)
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-settle-before-scans` close+reopen DBs before `full_scan`/`prefix_scan` to measure scan performance on a “settled” (fully flushed) state
