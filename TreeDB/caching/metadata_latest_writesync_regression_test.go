@@ -29,7 +29,7 @@ func TestRegression_MetadataLatestVisibleAfterWriteSync_FastRoute(t *testing.T) 
 	dir := t.TempDir()
 
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	// Match cosmos-db adapter behavior: keep route mode but do not force all
 	// values onto pointer/deferred materialization.
 	opts.ValueLog.ForcePointers = false

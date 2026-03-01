@@ -36,7 +36,7 @@ func TestCachingDB_DeferredFence_WALOff_FlushThenCheckpointPreservesLatest(t *te
 	backendOpts := db.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold:              1,
 			OuterLeafBlockCodec:           db.ValueLogBlockLZ4,
@@ -55,7 +55,7 @@ func TestCachingDB_DeferredFence_WALOff_FlushThenCheckpointPreservesLatest(t *te
 		DisableWAL:                          true,
 		FlushThreshold:                      1 << 30,
 		MemtableShards:                      1,
-		IndexOuterLeafMode:                  db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:                  db.IndexOuterLeafModeV1,
 		ValueLogPointerThreshold:            1,
 		ValueLogOuterLeafBlockCodec:         uint8(db.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes:   1 << 20,
@@ -189,7 +189,7 @@ func TestCachingDB_DeferredFence_WALOn_FenceModeFlushCheckpointMatrix(t *testing
 			backendOpts := db.Options{
 				Dir:                dir,
 				ChunkSize:          64 * 1024,
-				IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+				IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 				ValueLog: db.ValueLogOptions{
 					PointerThreshold:              1,
 					ForcePointers:                 tc.forcePointers,
@@ -208,7 +208,7 @@ func TestCachingDB_DeferredFence_WALOn_FenceModeFlushCheckpointMatrix(t *testing
 			cache, err := Open(dir, backend, Options{
 				FlushThreshold:                      1 << 30,
 				MemtableShards:                      1,
-				IndexOuterLeafMode:                  db.IndexOuterLeafModeV2FencePtr,
+				IndexOuterLeafMode:                  db.IndexOuterLeafModeV1,
 				ValueLogWALFenceMode:                tc.walFenceMode,
 				ForceValueLogPointers:               tc.forcePointers,
 				ValueLogPointerThreshold:            1,

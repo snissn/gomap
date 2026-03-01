@@ -20,8 +20,8 @@ import (
 
 func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.T) {
 	for _, mode := range []string{
-		backenddb.IndexOuterLeafModeV1LeafLog,
-		backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		backenddb.IndexOuterLeafModeV1,
+		backenddb.IndexOuterLeafModeV1,
 	} {
 		mode := mode
 		t.Run(mode, func(t *testing.T) {
@@ -73,7 +73,7 @@ func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.
 			if err := cache.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint(initial): %v", err)
 			}
-			if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+			if mode == backenddb.IndexOuterLeafModeV1 {
 				itInit, err := backend.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
 					Mode:              backenddb.IteratorModePointerProjection,
 					IncludeTombstones: true,
@@ -134,7 +134,7 @@ func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.
 			if err := cache.Checkpoint(); err != nil {
 				t.Fatalf("Checkpoint(overlap rewrite): %v", err)
 			}
-			if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+			if mode == backenddb.IndexOuterLeafModeV1 {
 				itRows, err := backend.IteratorWithOptions(nil, nil, backenddb.IteratorOptions{
 					Mode:              backenddb.IteratorModePointerProjection,
 					IncludeTombstones: true,
@@ -190,7 +190,7 @@ func TestCachingDB_V1LeafLog_OverlapRewritePreservesFallbackOnlyKeys(t *testing.
 				k := it.UnsafeKey()
 				_, ptr, flags := it.UnsafeEntry()
 				if flags&node.FlagPointer != 0 {
-					if mode == backenddb.IndexOuterLeafModeV1LeafLogRoute {
+					if mode == backenddb.IndexOuterLeafModeV1 {
 						if page.ValuePtrIsFenceOuter(ptr) {
 							t.Fatalf("expected plain anchor pointer in %s overlap rewrite, key=%q ptr=%+v", mode, k, ptr)
 						}
@@ -229,7 +229,7 @@ func TestCachingDB_V1LeafLogRoute_OverlapRewritePreservesGroupingUnderChurn(t *t
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -250,7 +250,7 @@ func TestCachingDB_V1LeafLogRoute_OverlapRewritePreservesGroupingUnderChurn(t *t
 		JournalLanes:                      1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -353,7 +353,7 @@ func TestCachingDB_V1LeafLogRoute_AnchorFanoutIsOnePerBlock(t *testing.T) {
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -374,7 +374,7 @@ func TestCachingDB_V1LeafLogRoute_AnchorFanoutIsOnePerBlock(t *testing.T) {
 		JournalLanes:                      1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -503,7 +503,7 @@ func TestCachingDB_V1LeafLogRoute_AnchorFanoutStaysOnePerBlockUnderMixedSetDelet
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -524,7 +524,7 @@ func TestCachingDB_V1LeafLogRoute_AnchorFanoutStaysOnePerBlockUnderMixedSetDelet
 		JournalLanes:                      1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -623,7 +623,7 @@ func TestCachingDB_V1LeafLogRoute_OverlapRewritePreservesBlobRefThreshold(t *tes
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          127,
 			ForcePointers:             false,
@@ -644,7 +644,7 @@ func TestCachingDB_V1LeafLogRoute_OverlapRewritePreservesBlobRefThreshold(t *tes
 		JournalLanes:                      1,
 		ForceValueLogPointers:             false,
 		ValueLogPointerThreshold:          127,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -741,7 +741,7 @@ func TestCachingDB_V1LeafLogRoute_OverlapRewritePreservesBlobRefThreshold(t *tes
 func TestFenceAnchorPromoter_EncodeRewriteBlocks_RouteSplitsLargeEntrySet(t *testing.T) {
 	const totalEntries = 70000
 	db := &DB{
-		indexOuterLeafMode:        backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		indexOuterLeafMode:        backenddb.IndexOuterLeafModeV1,
 		outerLeafBlockTargetBytes: 4 << 10,
 		outerLeafBlockRestart:     outerleaf.NormalizeRestartInterval(16),
 	}
@@ -804,7 +804,7 @@ func TestFenceAnchorPromoter_FlushQueuedRouteOverlapRewrites_CoalescesOverlappin
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1 << 20,
 			ForcePointers:             false,
@@ -825,7 +825,7 @@ func TestFenceAnchorPromoter_FlushQueuedRouteOverlapRewrites_CoalescesOverlappin
 		JournalLanes:                      1,
 		ForceValueLogPointers:             false,
 		ValueLogPointerThreshold:          1 << 20,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
@@ -1013,7 +1013,7 @@ func TestFenceAnchorPromoter_QueueRouteOverlapRewrite_FallbacksToExactSourceOnMo
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -1034,7 +1034,7 @@ func TestFenceAnchorPromoter_QueueRouteOverlapRewrite_FallbacksToExactSourceOnMo
 		JournalLanes:                      1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 512,
 	})
@@ -1046,7 +1046,7 @@ func TestFenceAnchorPromoter_QueueRouteOverlapRewrite_FallbacksToExactSourceOnMo
 	seed := cache.NewBatch()
 	for i := 0; i < 1024; i++ {
 		k := []byte(fmt.Sprintf("s/k:ibc/s%08d", i))
-		v := bytes.Repeat([]byte{byte((i%251)+1)}, 96)
+		v := bytes.Repeat([]byte{byte((i % 251) + 1)}, 96)
 		if err := seed.Set(k, v); err != nil {
 			_ = seed.Close()
 			t.Fatalf("seed set %d: %v", i, err)
@@ -1182,7 +1182,7 @@ func TestCachingDB_V1LeafLogRoute_OverlapRewriteRespectsTargetAfterLargeSource(t
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -1203,7 +1203,7 @@ func TestCachingDB_V1LeafLogRoute_OverlapRewriteRespectsTargetAfterLargeSource(t
 		JournalLanes:                      1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockCodec:       uint8(backenddb.ValueLogBlockLZ4),
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})

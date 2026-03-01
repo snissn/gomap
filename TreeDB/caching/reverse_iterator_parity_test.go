@@ -32,7 +32,7 @@ func TestReverseIterator_PropagatesRotateError(t *testing.T) {
 		AllowUnsafe:        true,
 		FlushThreshold:     1 << 30,
 		MemtableShards:     1,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -65,7 +65,7 @@ func TestReverseIterator_FlushesDeferredValueLogBeforeBackendRead(t *testing.T) 
 		FlushThreshold:        1 << 30,
 		MemtableShards:        1,
 		ForceValueLogPointers: true,
-		IndexOuterLeafMode:    backenddb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:    backenddb.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -99,7 +99,7 @@ func TestReverseIterator_PropagatesDeferredValueLogFlushError(t *testing.T) {
 		FlushThreshold:        1 << 30,
 		MemtableShards:        1,
 		ForceValueLogPointers: true,
-		IndexOuterLeafMode:    backenddb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:    backenddb.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -144,7 +144,7 @@ func TestReverseIterator_ErrorsWhenQueueTableLacksReverseIterator(t *testing.T) 
 		AllowUnsafe:        true,
 		FlushThreshold:     1 << 30,
 		MemtableShards:     1,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)

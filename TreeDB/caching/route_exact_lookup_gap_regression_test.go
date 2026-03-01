@@ -14,7 +14,7 @@ func TestRegression_RouteExactLookupWithPersistedGapAfterWriteSync(t *testing.T)
 	dir := t.TempDir()
 
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	if opts.MemtableMode == "" || opts.MemtableMode == "adaptive" {
 		opts.MemtableMode = "adaptive:hash_sorted"
@@ -29,7 +29,7 @@ func TestRegression_RouteExactLookupWithPersistedGapAfterWriteSync(t *testing.T)
 	seed := db.NewBatch()
 	for i := 1000; i < 2000; i++ {
 		key := []byte(fmt.Sprintf("k%04d", i))
-		val := bytes.Repeat([]byte{byte((i%251)+1)}, 96)
+		val := bytes.Repeat([]byte{byte((i % 251) + 1)}, 96)
 		if err := seed.Set(key, val); err != nil {
 			_ = seed.Close()
 			t.Fatalf("seed set %q: %v", key, err)
@@ -95,4 +95,3 @@ func TestRegression_RouteExactLookupWithPersistedGapAfterWriteSync(t *testing.T)
 		t.Fatalf("expected right key to exist")
 	}
 }
-

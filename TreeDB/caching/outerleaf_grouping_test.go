@@ -22,7 +22,7 @@ func makeOuterLeafTestKV(n int, valueBytes int) ([][]byte, [][]byte) {
 func TestBuildOuterLeafValueRecords_V2GroupsAndLookup(t *testing.T) {
 	keys, vals := makeOuterLeafTestKV(32, 96)
 	db := &DB{
-		indexOuterLeafMode:        backenddb.IndexOuterLeafModeV2BlockPtr,
+		indexOuterLeafMode:        backenddb.IndexOuterLeafModeV1,
 		outerLeafBlockTargetBytes: 1024,
 		outerLeafBlockCodec:       0,
 		outerLeafBlockRestart:     8,
@@ -77,7 +77,7 @@ func TestBuildOuterLeafValueRecords_V2NonMonotonicFallsBackSafely(t *testing.T) 
 	keys := [][]byte{[]byte("k1"), []byte("k3"), []byte("k2")}
 	vals := [][]byte{[]byte("v1"), []byte("v3"), []byte("v2")}
 	db := &DB{
-		indexOuterLeafMode:        backenddb.IndexOuterLeafModeV2BlockPtr,
+		indexOuterLeafMode:        backenddb.IndexOuterLeafModeV1,
 		outerLeafBlockTargetBytes: 1024,
 		outerLeafBlockCodec:       0,
 		outerLeafBlockRestart:     8,
@@ -133,7 +133,7 @@ func TestBuildOuterLeafValueRecords_V1NoGrouping(t *testing.T) {
 func TestSelectOuterLeafBlockCodec(t *testing.T) {
 	t.Run("fence threshold boundary uses lz4 at 64 and snappy at 65", func(t *testing.T) {
 		db := &DB{
-			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV2FencePtr,
+			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV1,
 			outerLeafBlockCodec: uint8(backenddb.ValueLogBlockSnappy),
 		}
 
@@ -147,7 +147,7 @@ func TestSelectOuterLeafBlockCodec(t *testing.T) {
 
 	t.Run("fence large values keep snappy", func(t *testing.T) {
 		db := &DB{
-			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV2FencePtr,
+			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV1,
 			outerLeafBlockCodec: uint8(backenddb.ValueLogBlockSnappy),
 		}
 		got := db.selectOuterLeafBlockCodec(8192, 1)
@@ -169,7 +169,7 @@ func TestSelectOuterLeafBlockCodec(t *testing.T) {
 
 	t.Run("explicit lz4 is preserved", func(t *testing.T) {
 		db := &DB{
-			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV2FencePtr,
+			indexOuterLeafMode:  backenddb.IndexOuterLeafModeV1,
 			outerLeafBlockCodec: uint8(backenddb.ValueLogBlockLZ4),
 		}
 		got := db.selectOuterLeafBlockCodec(16384, 1)

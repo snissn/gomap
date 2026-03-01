@@ -28,7 +28,7 @@ func TestCachedBenchBloatVacuum(t *testing.T) {
 		Dir:                dir,
 		PreferAppendAlloc:  false,
 		KeepRecent:         1,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("backend open: %v", err)
@@ -36,7 +36,7 @@ func TestCachedBenchBloatVacuum(t *testing.T) {
 
 	cached, err := Open(dir, backend, Options{
 		FlushThreshold:     1 << 20,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -104,7 +104,7 @@ func TestCachedBenchBloatVacuum(t *testing.T) {
 	if err := db.VacuumIndexOffline(db.Options{
 		Dir:                dir,
 		KeepRecent:         1,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 	}); err != nil {
 		t.Fatalf("vacuum offline: %v", err)
 	}

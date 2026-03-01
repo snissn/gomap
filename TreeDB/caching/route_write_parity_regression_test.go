@@ -71,7 +71,7 @@ func TestRegression_RouteMode_DatasetWriteSortedParity(t *testing.T) {
 	const keys = 5000
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 512
 
@@ -144,7 +144,7 @@ func TestRegression_RouteMode_BatchRandom8BParity(t *testing.T) {
 	)
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 512
 
@@ -254,7 +254,7 @@ func TestRegression_RouteMode_UnsortedWriteSyncBankLikeParityAfterReopen(t *test
 	const total = 2048
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 512
 

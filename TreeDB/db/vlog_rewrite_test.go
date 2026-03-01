@@ -480,7 +480,7 @@ func TestValueLogRewriteOnline_PreservesFenceOuterMarkerAndIteratorParity(t *tes
 
 	db, err := Open(Options{
 		Dir:                 dir,
-		IndexOuterLeafMode:  IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:  IndexOuterLeafModeV1,
 		IndexPackedValuePtr: false,
 	})
 	if err != nil {
@@ -695,7 +695,7 @@ func TestValueLogRewriteOnline_PreservesFenceOuterMarkerAndIteratorParity(t *tes
 
 	db, err = Open(Options{
 		Dir:                 dir,
-		IndexOuterLeafMode:  IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:  IndexOuterLeafModeV1,
 		IndexPackedValuePtr: false,
 	})
 	if err != nil {
@@ -957,7 +957,7 @@ func TestValueLogRewriteOffline_BlobRefOuterLeafPointerPreserved(t *testing.T) {
 
 	db, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
 		ValueLog: ValueLogOptions{
 			ForcePointers: true,
 		},
@@ -1037,7 +1037,7 @@ func TestValueLogRewriteOffline_BlobRefOuterLeafPointerPreserved(t *testing.T) {
 
 	reopen, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
@@ -1152,7 +1152,7 @@ func TestValueLogRewriteOnline_V1LeafLogRoute_PreservesNestedBlobRefSegments(t *
 
 	db, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
 		ValueLog: ValueLogOptions{
 			ForcePointers: true,
 		},
@@ -1250,7 +1250,7 @@ func TestValueLogRewriteOnline_V1LeafLogRoute_PreservesNestedManifestChunkSegmen
 
 	db, err := Open(Options{
 		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: IndexOuterLeafModeV1,
 		ValueLog: ValueLogOptions{
 			ForcePointers: true,
 		},

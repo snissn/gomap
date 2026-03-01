@@ -158,7 +158,7 @@ func TestBatchWrite_DeleteOnlyFastPath_WALOffDoesNotEnqueueDeferredStats(t *test
 	dir := t.TempDir()
 	backend, err := db.Open(db.Options{
 		Dir:                dir,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
 		ValueLog: db.ValueLogOptions{
 			PointerThreshold: 1,
 		},
@@ -171,7 +171,7 @@ func TestBatchWrite_DeleteOnlyFastPath_WALOffDoesNotEnqueueDeferredStats(t *test
 		AllowUnsafe:              true,
 		DisableWAL:               true,
 		FlushThreshold:           1 << 20,
-		IndexOuterLeafMode:       db.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeafMode:       db.IndexOuterLeafModeV1,
 		ValueLogPointerThreshold: 1,
 		ForceValueLogPointers:    true,
 	})

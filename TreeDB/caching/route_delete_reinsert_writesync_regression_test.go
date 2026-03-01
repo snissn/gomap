@@ -84,7 +84,7 @@ func assertSingleKeyParity(t *testing.T, db *treedb.DB, key, want []byte) {
 func TestRegression_RouteMode_DeleteReinsertSeparateWriteSyncVisibleAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	// Force pointer eligibility so deferred route materialization is exercised.
 	opts.ValueLog.PointerThreshold = 1

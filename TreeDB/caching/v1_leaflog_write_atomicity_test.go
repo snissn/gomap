@@ -86,7 +86,7 @@ func assertKeyNotVisibleAnywhere(t *testing.T, cache *DB, backend *MockBackend, 
 
 func TestCachingDB_V1LeafLog_SetAtomicOnWALError(t *testing.T) {
 	for _, mode := range []string{
-		backenddb.IndexOuterLeafModeV1LeafLog,
+		backenddb.IndexOuterLeafModeV1,
 	} {
 		t.Run(mode, func(t *testing.T) {
 			cache, backend := openLeafLogAtomicityCache(t, mode)
@@ -107,7 +107,7 @@ func TestCachingDB_V1LeafLog_SetAtomicOnWALError(t *testing.T) {
 
 func TestCachingDB_V1LeafLog_SetSyncAtomicOnWALError(t *testing.T) {
 	for _, mode := range []string{
-		backenddb.IndexOuterLeafModeV1LeafLog,
+		backenddb.IndexOuterLeafModeV1,
 	} {
 		t.Run(mode, func(t *testing.T) {
 			cache, backend := openLeafLogAtomicityCache(t, mode)
@@ -128,7 +128,7 @@ func TestCachingDB_V1LeafLog_SetSyncAtomicOnWALError(t *testing.T) {
 
 func TestCachingDB_V1LeafLog_BatchWriteAtomicOnWALError(t *testing.T) {
 	for _, mode := range []string{
-		backenddb.IndexOuterLeafModeV1LeafLog,
+		backenddb.IndexOuterLeafModeV1,
 	} {
 		t.Run(mode, func(t *testing.T) {
 			cache, backend := openLeafLogAtomicityCache(t, mode)
@@ -159,7 +159,7 @@ func TestCachingDB_V1LeafLog_BatchWriteAtomicOnWALError(t *testing.T) {
 
 func TestCachingDB_V1LeafLog_BatchWriteSyncAtomicOnWALError(t *testing.T) {
 	for _, mode := range []string{
-		backenddb.IndexOuterLeafModeV1LeafLog,
+		backenddb.IndexOuterLeafModeV1,
 	} {
 		t.Run(mode, func(t *testing.T) {
 			cache, backend := openLeafLogAtomicityCache(t, mode)
@@ -197,7 +197,7 @@ func TestCachingDB_V1LeafLogRoute_RequiresSnapshotCapableBackend(t *testing.T) {
 		JournalLanes:             1,
 		ForceValueLogPointers:    true,
 		ValueLogPointerThreshold: 1,
-		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1,
 	})
 	if err == nil {
 		if cache != nil {

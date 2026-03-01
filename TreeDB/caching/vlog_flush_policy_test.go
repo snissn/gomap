@@ -10,7 +10,7 @@ import (
 
 func TestShouldFlushDeferredValueLog_RIDJoinOversizedBlobSkipsFlush(t *testing.T) {
 	db := &DB{
-		indexOuterLeafMode:          backenddb.IndexOuterLeafModeV2FencePtr,
+		indexOuterLeafMode:          backenddb.IndexOuterLeafModeV1,
 		valueLogWALFenceMode:        string(backenddb.ValueLogWALFenceModeRIDJoin),
 		outerLeafBlobThresholdBytes: 256,
 	}
@@ -26,7 +26,7 @@ func TestShouldFlushDeferredValueLog_RIDJoinOversizedBlobSkipsFlush(t *testing.T
 
 func TestShouldFlushDeferredValueLog_RIDJoinSmallRawStillFlushes(t *testing.T) {
 	db := &DB{
-		indexOuterLeafMode:          backenddb.IndexOuterLeafModeV2FencePtr,
+		indexOuterLeafMode:          backenddb.IndexOuterLeafModeV1,
 		valueLogWALFenceMode:        string(backenddb.ValueLogWALFenceModeRIDJoin),
 		outerLeafBlobThresholdBytes: 256,
 	}

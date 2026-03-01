@@ -114,7 +114,7 @@ func assertRouteParityState(t *testing.T, db *treedb.DB, expected map[string][]b
 func TestRegression_RouteMode_ReadParityAfterDeleteAppendReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := treedb.OptionsFor(treedb.ProfileFast, dir)
-	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1LeafLogRoute
+	opts.IndexOuterLeafMode = treedb.IndexOuterLeafModeV1
 	opts.ValueLog.ForcePointers = false
 	opts.ValueLog.PointerThreshold = 512
 	opts.ValueLog.OuterLeafBlockTargetBytes = 512

@@ -22,7 +22,7 @@ func TestCachingDB_V1LeafLogRoute_PrefixedBinaryRootsVisibleAfterCheckpoint(t *t
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -43,7 +43,7 @@ func TestCachingDB_V1LeafLogRoute_PrefixedBinaryRootsVisibleAfterCheckpoint(t *t
 		MemtableShards:           1,
 		ForceValueLogPointers:    true,
 		ValueLogPointerThreshold: 1,
-		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("cache open: %v", err)

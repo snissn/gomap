@@ -26,7 +26,7 @@ func TestCachingDB_V1LeafLogRoute_NoInvalidPointersAfterMixedBatches(t *testing.
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          chunkSize,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			ForcePointers: true,
 		},
@@ -43,7 +43,7 @@ func TestCachingDB_V1LeafLogRoute_NoInvalidPointersAfterMixedBatches(t *testing.
 		MemtableShards:        1,
 		JournalLanes:          1,
 		ForceValueLogPointers: true,
-		IndexOuterLeafMode:    backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:    backenddb.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("cache open: %v", err)
@@ -146,8 +146,8 @@ func TestCachingDB_V1LeafLogRoute_NoInvalidPointersAfterMixedBatches(t *testing.
 
 func TestV1LeafLogInvariantValidation_NonPanicErrorPath(t *testing.T) {
 	for _, mode := range []string{
-		backenddb.IndexOuterLeafModeV1LeafLog,
-		backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		backenddb.IndexOuterLeafModeV1,
+		backenddb.IndexOuterLeafModeV1,
 	} {
 		t.Run(mode, func(t *testing.T) {
 			db := &DB{
@@ -164,8 +164,8 @@ func TestV1LeafLogInvariantValidation_NonPanicErrorPath(t *testing.T) {
 
 func TestV1LeafLogInvariantValidation_PanicPath(t *testing.T) {
 	for _, mode := range []string{
-		backenddb.IndexOuterLeafModeV1LeafLog,
-		backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		backenddb.IndexOuterLeafModeV1,
+		backenddb.IndexOuterLeafModeV1,
 	} {
 		mode := mode
 		t.Run(mode, func(t *testing.T) {
@@ -186,8 +186,8 @@ func TestV1LeafLogInvariantValidation_PanicPath(t *testing.T) {
 
 func TestCachingDB_V1LeafLog_DirectoryInvariantsHold(t *testing.T) {
 	for _, mode := range []string{
-		backenddb.IndexOuterLeafModeV1LeafLog,
-		backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		backenddb.IndexOuterLeafModeV1,
+		backenddb.IndexOuterLeafModeV1,
 	} {
 		mode := mode
 		t.Run(mode, func(t *testing.T) {
@@ -272,7 +272,7 @@ func TestCachingDB_V1LeafLogRoute_SmallValuesPublishToValueLogAnchors(t *testing
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          threshold,
 			OuterLeafBlockTargetBytes: 1 << 20,
@@ -291,7 +291,7 @@ func TestCachingDB_V1LeafLogRoute_SmallValuesPublishToValueLogAnchors(t *testing
 		JournalLanes:                      1,
 		ForceValueLogPointers:             false,
 		ValueLogPointerThreshold:          threshold,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
 	if err != nil {
@@ -394,7 +394,7 @@ func TestCachingDB_V1LeafLogRoute_NoFenceMarkedAnchorsAfterMixedCRUDReopen(t *te
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			OuterLeafBlockTargetBytes: 1 << 20,
@@ -413,7 +413,7 @@ func TestCachingDB_V1LeafLogRoute_NoFenceMarkedAnchorsAfterMixedCRUDReopen(t *te
 		JournalLanes:                      1,
 		ForceValueLogPointers:             false,
 		ValueLogPointerThreshold:          threshold,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	}
 
@@ -485,7 +485,7 @@ func TestCachingDB_V1LeafLogRoute_NoFenceMarkedAnchorsAfterMixedCRUDReopen(t *te
 	backend2, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			OuterLeafBlockTargetBytes: 1 << 20,
@@ -549,7 +549,7 @@ func TestCachingDB_V1LeafLogRoute_InvariantFailsOnPersistedInlineRow(t *testing.
 	backend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			OuterLeafBlockTargetBytes: 1 << 20,
@@ -568,7 +568,7 @@ func TestCachingDB_V1LeafLogRoute_InvariantFailsOnPersistedInlineRow(t *testing.
 		JournalLanes:                      1,
 		ForceValueLogPointers:             false,
 		ValueLogPointerThreshold:          1 << 20,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
 	if err != nil {
@@ -611,7 +611,7 @@ func TestCachingDB_V1LeafLogRoute_FailsOnFenceMarkedLegacyAnchors(t *testing.T) 
 	legacyBackend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLog,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -629,7 +629,7 @@ func TestCachingDB_V1LeafLogRoute_FailsOnFenceMarkedLegacyAnchors(t *testing.T) 
 		JournalLanes:                      1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLog,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
 	if err != nil {
@@ -661,7 +661,7 @@ func TestCachingDB_V1LeafLogRoute_FailsOnFenceMarkedLegacyAnchors(t *testing.T) 
 	routeBackend, err := backenddb.Open(backenddb.Options{
 		Dir:                dir,
 		ChunkSize:          64 * 1024,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold:          1,
 			ForcePointers:             true,
@@ -681,7 +681,7 @@ func TestCachingDB_V1LeafLogRoute_FailsOnFenceMarkedLegacyAnchors(t *testing.T) 
 		JournalLanes:                      1,
 		ForceValueLogPointers:             true,
 		ValueLogPointerThreshold:          1,
-		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1LeafLogRoute,
+		IndexOuterLeafMode:                backenddb.IndexOuterLeafModeV1,
 		ValueLogOuterLeafBlockTargetBytes: 1 << 20,
 	})
 	if err != nil {
