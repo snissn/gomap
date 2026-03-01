@@ -38,10 +38,10 @@ func init() {
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
-		// Outer-leaf reads are decode-heavy without a decoded-block cache; keep a
+		// Leaf-block reads are decode-heavy without a decoded-block cache; keep a
 		// moderate default in throughput profiles.
-		outerLeafCacheDefault := defaultLeafBlockCacheEntriesReadHeavy
-		setIntIfUnset("treedb-leaf-block-block-cache-entries", outerLeafCacheDefault, isSet, treedbLeafBlockCacheEntries)
+		leafBlockCacheDefault := defaultLeafBlockCacheEntriesReadHeavy
+		setIntIfUnset("treedb-leaf-block-cache-entries", leafBlockCacheDefault, isSet, treedbLeafBlockCacheEntries)
 
 		// Badger
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
@@ -72,8 +72,8 @@ func init() {
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
 		// Match fast profile defaults for decode-heavy leaf-block reads.
-		outerLeafCacheDefault := defaultLeafBlockCacheEntriesReadHeavy
-		setIntIfUnset("treedb-leaf-block-block-cache-entries", outerLeafCacheDefault, isSet, treedbLeafBlockCacheEntries)
+		leafBlockCacheDefault := defaultLeafBlockCacheEntriesReadHeavy
+		setIntIfUnset("treedb-leaf-block-cache-entries", leafBlockCacheDefault, isSet, treedbLeafBlockCacheEntries)
 
 		// Other DBs: match "fast" behavior (nosync).
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
