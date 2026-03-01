@@ -125,7 +125,7 @@ Policy coupling without hard coupling of operations:
 - Index vacuum only on index fragmentation/space thresholds or post-major rewrite windows.
 - Do not force index vacuum for every GC pass.
 
-## 7. Outer-Leaf Density Tuning
+## 7. Leaf-Block Density Tuning
 
 - Default leaf-block block target to `8KiB`.
 - Offer `16KiB` size-oriented profile option.

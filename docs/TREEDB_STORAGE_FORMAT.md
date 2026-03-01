@@ -76,7 +76,7 @@ Notes:
 - Compression is encoded in the value-log record header (frame flags), not in
   `ValuePtr.Length`.
 
-### Outer-leaf value-log payloads
+### Leaf-block value-log payloads
 
 Pointer payloads may be wrapped using the `TOL2` envelope before being written
 to the value log:

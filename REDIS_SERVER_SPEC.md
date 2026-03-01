@@ -441,7 +441,7 @@ Redis data types).
   - Requires an internal encoding/representation and often efficient iteration by
     secondary keys (e.g. zset score ordering, stream IDs).
   - Practical implication: a serious push toward data-type parity almost certainly means
-    TreeDB as the primary backend (or a multi-backend mode where type-heavy keys route to
+    TreeDB as the primary backend (or a multi-backend mode where type-heavy keys go to
     TreeDB).
 - **Lua scripting (`EVAL`):** requires a Lua VM and strict atomicity/timeout semantics.
 - **Replication (PSYNC) / Cluster:** requires protocol-level state machines and a lot of

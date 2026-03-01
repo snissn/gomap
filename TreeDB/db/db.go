@@ -190,7 +190,7 @@ const (
 	ValueLogBlockLZ4
 )
 
-// NOTE: Legacy mode configuration surfaces were removed. Outer-leaf envelopes
+// NOTE: Legacy mode configuration surfaces were removed. Leaf-block envelopes
 // are detected by the magic header.
 
 // ValueLogAutoPolicy controls auto-mode dict vs block selection bias.

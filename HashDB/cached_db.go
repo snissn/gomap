@@ -257,7 +257,7 @@ func (c *CachedDB) Compact() error {
 
 // PutMany inserts a batch of items into the write-back cache.
 func (c *CachedDB) PutMany(items []Item) error {
-	// Route batched writes through the write-back cache so they are
+	// Send batched writes through the write-back cache so they are
 	// coalesced with other pending writes. CacheKV will flush to the
 	// underlying DB using PutMany when thresholds or timers fire.
 	for _, it := range items {

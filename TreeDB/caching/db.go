@@ -4375,7 +4375,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// In relaxed durability modes, storing moderate values out-of-line avoids a
 	// catastrophic random_write cliff at large key counts (perf gate II / #229).
 	//
-	// Outer-leaf payloads store values in the value log; a higher default
+	// Leaf-block payloads store values in the value log; a higher default
 	// threshold keeps medium values inline inside payloads and avoids second-hop
 	// pointer indirection.
 	valueLogThreshold := opts.ValueLogPointerThreshold

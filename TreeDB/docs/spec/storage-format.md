@@ -274,9 +274,9 @@ bytes FramePayload
 - If `FrameFlags` indicates compression, frame payload is decoded first.
 - `DictID` selects dictionary for dict-compressed payloads.
 
-### 7.2 Outer-leaf payload envelope
+### 7.2 Leaf-block payload envelope
 
-Value-log payload bytes may be wrapped in an leaf-block envelope (`Magic="TOL2"`):
+Value-log payload bytes may be wrapped in a leaf-block envelope (`Magic="TOL2"`):
 
 ```text
 bytes[4] Magic            // "TOL2"

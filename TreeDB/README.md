@@ -112,7 +112,7 @@ through `wal/` even when WAL is off.
 
 Details: `docs/TREEDB_WRITE_PATHS.md`.
 
-## Outer-Leaf Payloads
+## Leaf-Block Payloads
 
 TreeDB stores grouped leaf-block payloads in the value log and detects them by
 the magic header (`TOL2`). The previous multi-mode leaf-block surface has been
