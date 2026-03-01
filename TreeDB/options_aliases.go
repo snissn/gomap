@@ -52,16 +52,7 @@ const (
 	ValueLogAutoSize       = db.ValueLogAutoSize
 )
 
-type ValueLogWALFenceMode = db.ValueLogWALFenceMode
-
-const (
-	ValueLogWALFenceModeRIDJoin      = db.ValueLogWALFenceModeRIDJoin
-	ValueLogWALFenceModeSimpleInline = db.ValueLogWALFenceModeSimpleInline
-)
-
-const (
-	IndexOuterLeafModeV1 = db.IndexOuterLeafModeV1
-)
+// Index outer-leaf envelopes are always supported; legacy mode knobs removed.
 
 // Value-log compression autotune types (re-exported from internal packages so
 // callers can configure Options without importing internal/).

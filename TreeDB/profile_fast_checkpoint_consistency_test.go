@@ -72,14 +72,13 @@ func assertCheckpointConsistencyLiveSet(t *testing.T, db *DB, live map[int][]byt
 	}
 }
 
-// Regression for deferred v2_fenceptr flush semantics:
-// repeated checkpoint boundaries must not lose last-write-wins visibility.
+// Regression: repeated checkpoint boundaries must not lose last-write-wins
+// visibility.
 func TestProfileFast_CheckpointMaintainsLatestValues(t *testing.T) {
 	profiles := []Profile{ProfileFast, ProfileWALOnFast}
 	for _, profile := range profiles {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := OptionsFor(profile, t.TempDir())
-			opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 			db, err := Open(opts)
 			if err != nil {
 				t.Fatalf("open: %v", err)
@@ -87,48 +86,6 @@ func TestProfileFast_CheckpointMaintainsLatestValues(t *testing.T) {
 			defer db.Close()
 			live := runCheckpointConsistencyWorkload(t, db, 2)
 			assertCheckpointConsistencyLiveSet(t, db, live)
-		})
-	}
-}
-
-func TestProfileWALOnFast_CheckpointMaintainsLatestValues_FenceModeMatrix(t *testing.T) {
-	cases := []struct {
-		name          string
-		walFenceMode  ValueLogWALFenceMode
-		forcePointers bool
-	}{
-		{name: "simple_inline_force_pointers", walFenceMode: ValueLogWALFenceModeSimpleInline, forcePointers: true},
-		{name: "rid_join_mixed_pointer_paths", walFenceMode: ValueLogWALFenceModeRIDJoin, forcePointers: false},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			opts := OptionsFor(ProfileWALOnFast, t.TempDir())
-			opts.IndexOuterLeafMode = IndexOuterLeafModeV1
-			opts.ValueLog.WALFenceMode = tc.walFenceMode
-			opts.ValueLog.ForcePointers = tc.forcePointers
-			opts.ValueLog.PointerThreshold = 1
-			opts.ValueLog.OuterLeafBlobThresholdBytes = 256
-
-			db, err := Open(opts)
-			if err != nil {
-				t.Fatalf("open: %v", err)
-			}
-
-			live := runCheckpointConsistencyWorkload(t, db, 11)
-			assertCheckpointConsistencyLiveSet(t, db, live)
-
-			if err := db.Close(); err != nil {
-				t.Fatalf("close: %v", err)
-			}
-
-			reopened, err := Open(opts)
-			if err != nil {
-				t.Fatalf("reopen: %v", err)
-			}
-			defer reopened.Close()
-
-			assertCheckpointConsistencyLiveSet(t, reopened, live)
 		})
 	}
 }

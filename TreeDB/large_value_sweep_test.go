@@ -29,7 +29,6 @@ func TestLargeValueSweepCelestiaOptions(t *testing.T) {
 
 	opts := OptionsFor(ProfileWALOnFast, t.TempDir())
 	opts.KeepRecent = 100000
-	opts.IndexOuterLeafMode = IndexOuterLeafModeV1
 	opts.DisableBackgroundPrune = true
 	opts.BackgroundValueLogGCInterval = -1
 	opts.BackgroundValueLogRewriteInterval = -1

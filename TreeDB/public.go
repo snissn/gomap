@@ -33,8 +33,6 @@ const (
 
 	defaultSlowdownBacklogSeconds              = 1.0
 	defaultStopBacklogSeconds                  = 2.0
-	defaultV2FenceSlowdownBacklogSeconds       = 0.5
-	defaultV2FenceStopBacklogSeconds           = 1.0
 	defaultAdaptiveMaxBacklogBytes       int64 = 2 << 30
 )
 
@@ -272,25 +270,11 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 	slowdown := defaultSlowdownBacklogSeconds
 	stop := defaultStopBacklogSeconds
-	_, _ = normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
+	// No mode normalization: single built-in outer-leaf behavior.
 
 	opts.SlowdownBacklogSeconds = slowdown
 	opts.StopBacklogSeconds = stop
 	opts.MaxBacklogBytes = defaultAdaptiveMaxBacklogBytes
-}
-
-func normalizePublicOuterLeafMode(mode string) (string, error) {
-	trimmed := strings.TrimSpace(mode)
-	if trimmed == "" {
-		return db.IndexOuterLeafModeV1, nil
-	}
-	normalized := strings.ToLower(trimmed)
-	switch normalized {
-	case db.IndexOuterLeafModeV1:
-		return db.IndexOuterLeafModeV1, nil
-	default:
-		return "", fmt.Errorf("unsupported outer-leaf mode %q (expected %s)", trimmed, db.IndexOuterLeafModeV1)
-	}
 }
 
 func valueLogCompressionLabel(mode db.ValueLogCompressionMode) string {
@@ -370,11 +354,10 @@ func moduleBuildIdentity(path string) string {
 	return moduleStr
 }
 
-func emitOpenBanner(opts Options, normalizedMode string) {
+func emitOpenBanner(opts Options) {
 	openBannerOnce.Do(func() {
 		msg := fmt.Sprintf(
-			"treedb open banner mode=%s durability=%s force_pointers=%t pointer_threshold=%d vlog_compression=%s vlog_block_codec=%s outer_leaf_block_codec=%s keep_recent=%d module=%s",
-			normalizedMode,
+			"treedb open banner durability=%s force_pointers=%t pointer_threshold=%d vlog_compression=%s vlog_block_codec=%s outer_leaf_block_codec=%s keep_recent=%d module=%s",
 			computeDurabilityMode(opts),
 			opts.ValueLog.ForcePointers,
 			opts.ValueLog.PointerThreshold,
@@ -394,12 +377,6 @@ func emitOpenBanner(opts Options, normalizedMode string) {
 
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
-	normalizedMode, err := normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
-	if err != nil {
-		return nil, err
-	}
-	opts.IndexOuterLeafMode = normalizedMode
-
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
 	// can therefore delay page reuse for a very long time (and cause index.db to
@@ -423,7 +400,7 @@ func Open(opts Options) (*DB, error) {
 	if opts.ValueLog.Compression == 0 {
 		opts.ValueLog.Compression = db.ValueLogCompressionAuto
 	}
-	emitOpenBanner(opts, opts.IndexOuterLeafMode)
+	emitOpenBanner(opts)
 
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {
@@ -612,8 +589,6 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:                           relaxedSync,
 		DisableReadChecksum:                   disableReadChecksum,
 		ValueLogPointerThreshold:              opts.ValueLog.PointerThreshold,
-		IndexOuterLeafMode:                    opts.IndexOuterLeafMode,
-		ValueLogWALFenceMode:                  string(opts.ValueLog.WALFenceMode),
 		ValueLogDomainInlineThresholds:        opts.ValueLog.DomainInlineThresholds,
 		ValueLogRawWritevMinAvgBytes:          opts.ValueLog.RawWritevMinAvgBytes,
 		ValueLogRawWritevMinBatchRecords:      opts.ValueLog.RawWritevMinBatchRecords,
