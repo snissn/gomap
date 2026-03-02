@@ -197,6 +197,7 @@ func TestBuildTreeDBOptions_VlogGenerationConfig(t *testing.T) {
 	defer restoreTreeDBFlagState(saved)
 
 	resetTreeDBIndexFlagsForTest()
+	*treedbMaintenanceMode = "bench"
 	*treedbVlogGenerationPolicy = "hot_warm_cold"
 	*treedbVlogGenerationHotSegmentBytes = 32 << 20
 	*treedbVlogGenerationWarmSegmentBytes = 64 << 20
@@ -232,6 +233,53 @@ func TestBuildTreeDBOptions_VlogGenerationConfig(t *testing.T) {
 	}
 }
 
+func TestBuildTreeDBOptions_MaintenanceModeNormalDefaultsGenerationPolicy(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbMaintenanceMode = "normal"
+	// Keep -treedb-vlog-generation-policy at its default ("off") but not explicit.
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ValueLog.Generational.Policy != treedb.ValueLogGenerationHotWarmCold {
+		t.Fatalf("generation policy=%d want %d", opts.ValueLog.Generational.Policy, treedb.ValueLogGenerationHotWarmCold)
+	}
+	formatted := rep.formatText("")
+	if !strings.Contains(formatted, "maintenance_mode=normal") {
+		t.Fatalf("report missing maintenance_mode: %q", formatted)
+	}
+	if !strings.Contains(formatted, "vlog.generation_policy=hot_warm_cold") {
+		t.Fatalf("report missing generation policy: %q", formatted)
+	}
+}
+
+func TestBuildTreeDBOptions_MaintenanceModeBenchDisablesBackgroundLoops(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbMaintenanceMode = "bench"
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.BackgroundCheckpointInterval >= 0 {
+		t.Fatalf("BackgroundCheckpointInterval=%s want disabled (<0)", opts.BackgroundCheckpointInterval)
+	}
+	if opts.BackgroundCheckpointIdleDuration >= 0 {
+		t.Fatalf("BackgroundCheckpointIdleDuration=%s want disabled (<0)", opts.BackgroundCheckpointIdleDuration)
+	}
+	if opts.MaxWALBytes >= 0 {
+		t.Fatalf("MaxWALBytes=%d want disabled (<0)", opts.MaxWALBytes)
+	}
+	if opts.BackgroundIndexVacuumInterval >= 0 {
+		t.Fatalf("BackgroundIndexVacuumInterval=%s want disabled (<0)", opts.BackgroundIndexVacuumInterval)
+	}
+}
+
 type savedTreeDBFlagState struct {
 	indexOptimizations     bool
 	indexOuterLeafMode     string
@@ -257,6 +305,7 @@ type savedTreeDBFlagState struct {
 	relaxedSync            bool
 	disableChecksum        bool
 	allowUnsafe            bool
+	maintenanceMode        string
 	flushThreshold         int64
 	explicitFlags          map[string]bool
 }
@@ -291,6 +340,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		relaxedSync:            *treedbRelaxedSync,
 		disableChecksum:        *treedbDisableReadChecksum,
 		allowUnsafe:            *treedbAllowUnsafe,
+		maintenanceMode:        *treedbMaintenanceMode,
 		flushThreshold:         *treedbFlushThreshold,
 		explicitFlags:          copyMap,
 	}
@@ -321,6 +371,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbRelaxedSync = s.relaxedSync
 	*treedbDisableReadChecksum = s.disableChecksum
 	*treedbAllowUnsafe = s.allowUnsafe
+	*treedbMaintenanceMode = s.maintenanceMode
 	*treedbFlushThreshold = s.flushThreshold
 	explicitFlags = s.explicitFlags
 }
@@ -350,6 +401,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbRelaxedSync = false
 	*treedbDisableReadChecksum = false
 	*treedbAllowUnsafe = false
+	*treedbMaintenanceMode = "bench"
 	*treedbFlushThreshold = 64 * 1024 * 1024
 	explicitFlags = map[string]bool{}
 }
