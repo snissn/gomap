@@ -1015,12 +1015,20 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 	return db.backend.NewBatchWithSize(size)
 }
 
-// Snapshot is a consistent point-in-time view of the database.
-type Snapshot = db.Snapshot
-
 // AcquireSnapshot returns a new snapshot.
-func (db *DB) AcquireSnapshot() *Snapshot {
-	if db == nil || db.backend == nil {
+//
+// In cached mode, snapshots include writes that are buffered in memtables.
+// In read-only mode (no caching), snapshots are backend-only.
+//
+// Callers may use GetUnsafe to obtain zero-copy views tied to the snapshot lifetime.
+func (db *DB) AcquireSnapshot() Snapshot {
+	if db == nil {
+		return nil
+	}
+	if db.cached != nil {
+		return db.cached.AcquireSnapshot()
+	}
+	if db.backend == nil {
 		return nil
 	}
 	return db.backend.AcquireSnapshot()
