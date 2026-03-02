@@ -17087,6 +17087,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		return nil, err
 	}
 
+	var view *memtableView
 	db.mu.Lock()
 	db.noteIterator(start, end)
 
@@ -17095,7 +17096,17 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// mutable memtable into the immutable queue. The iterator then consumes
 	// only the queue and the backend. Any subsequent writes will go to a new
 	// mutable memtable which this iterator ignores.
-	if db.mutableBytes.Load() > 0 {
+	rotate := db.mutableBytes.Load() > 0
+	if !rotate {
+		for i := range db.mutableShards {
+			mt := db.mutableShards[i].mem
+			if mt != nil && mt.Len() != 0 {
+				rotate = true
+				break
+			}
+		}
+	}
+	if rotate {
 		// Rotating is required for snapshot semantics, but allocating a large arena
 		// for the *new* mutable memtable is often wasted (iterator-heavy paths may
 		// not write concurrently). Use a small initial capacity and allow it to grow
@@ -17109,6 +17120,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	backendRangeKnown := db.backendRangeKnown
 	backendRange := db.backendRange
 	queueLenLocked := len(db.queue)
+	if queueLenLocked > 0 {
+		view = db.retainMemtableView()
+	}
 
 	db.mu.Unlock()
 
@@ -17140,7 +17154,6 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		return decorate(diskIter, 1), nil
 	}
 
-	view := db.retainMemtableView()
 	releaseView := true
 	defer func() {
 		if releaseView && view != nil {
@@ -17405,6 +17418,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		return nil, err
 	}
 
+	var view *memtableView
 	db.mu.Lock()
 	db.noteIterator(start, end)
 
@@ -17412,7 +17426,17 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Mirror Iterator() semantics: rotate mutable memtables into the immutable
 	// queue so the reverse iterator sees a stable point-in-time view (queue +
 	// backend). Subsequent writes land in a new mutable memtable and are ignored.
-	if db.mutableBytes.Load() > 0 {
+	rotate := db.mutableBytes.Load() > 0
+	if !rotate {
+		for i := range db.mutableShards {
+			mt := db.mutableShards[i].mem
+			if mt != nil && mt.Len() != 0 {
+				rotate = true
+				break
+			}
+		}
+	}
+	if rotate {
 		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
 			return nil, err
@@ -17420,6 +17444,9 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	}
 
 	queueLenLocked := len(db.queue)
+	if queueLenLocked > 0 {
+		view = db.retainMemtableView()
+	}
 
 	db.mu.Unlock()
 
@@ -17457,7 +17484,6 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		return decorate(diskIter, 1), nil
 	}
 
-	view := db.retainMemtableView()
 	releaseView := true
 	defer func() {
 		if releaseView && view != nil {
