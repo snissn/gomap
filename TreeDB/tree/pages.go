@@ -14,20 +14,27 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 	if t.rootPageID == 0 {
 		return nil
 	}
+	if t.pager == nil {
+		return errors.New("missing pager")
+	}
 
 	stack := make([]uint64, 0, 128)
 	stack = append(stack, t.rootPageID)
 
 	visited := make(map[uint64]struct{}, 1024)
-	verifyAlways := false
-	if t.pager != nil {
-		verifyAlways = t.pager.VerifyOnRead()
-	}
+	verifyAlways := t.pager.VerifyOnRead()
 
 	for len(stack) > 0 {
 		// pop
 		pageID := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
+
+		// LeafRef ids encode value-log pointers for leaf pages; they are not
+		// pager-backed pages and must not be returned to callers that retire/free
+		// index.db page IDs.
+		if _, ok := page.DecodeLeafRef(pageID); ok {
+			continue
+		}
 
 		if _, ok := visited[pageID]; ok {
 			continue
@@ -52,6 +59,9 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 				childID, err := n.GetInternalChildID(i)
 				if err != nil {
 					return err
+				}
+				if _, ok := page.DecodeLeafRef(childID); ok {
+					continue
 				}
 				stack = append(stack, childID)
 			}
