@@ -206,6 +206,12 @@ func applyBenchProfile(opts *Options) {
 	if opts.MaxWALBytes == 0 {
 		opts.MaxWALBytes = -1
 	}
+	if opts.BackgroundIndexVacuumInterval == 0 {
+		opts.BackgroundIndexVacuumInterval = -1
+	}
+	if opts.ValueLog.Generational.Policy == ValueLogGenerationDefault {
+		opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	}
 
 	// Background pruner: disable concurrent pruning to avoid allocator work in the
 	// background. This may increase commit cost, but makes the workload more
