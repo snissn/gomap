@@ -7120,7 +7120,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	}
 	laneCount := opts.JournalLanes
-	if laneCount <= 0 {
+	laneCountDefaulted := laneCount <= 0
+	if laneCountDefaulted {
 		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
 	}
 	valueLogGenerationPolicy := backenddb.ValueLogGenerationPolicy(opts.ValueLogGenerationPolicy)
@@ -7134,7 +7135,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("cachingdb: invalid value-log generation policy %d", opts.ValueLogGenerationPolicy)
 	}
 	valueLogGenerationPolicyUint8 := uint8(valueLogGenerationPolicy)
-	if valueLogGenerationPolicy == backenddb.ValueLogGenerationHotWarmCold && laneCount < 3 {
+	if laneCountDefaulted && valueLogGenerationPolicy == backenddb.ValueLogGenerationHotWarmCold && laneCount < 3 {
 		laneCount = 3
 	}
 	// Temporarily remove the logic that increases laneCount based on maxLaneID
