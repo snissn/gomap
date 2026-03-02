@@ -272,8 +272,15 @@ const (
 type ValueLogGenerationPolicy uint8
 
 const (
-	// ValueLogGenerationOff keeps legacy single-generation behavior.
-	ValueLogGenerationOff ValueLogGenerationPolicy = iota
+	// ValueLogGenerationDefault selects the library default (currently
+	// hot/warm/cold in cached mode).
+	//
+	// This is intentionally the zero value so callers can opt into the default
+	// behavior without explicitly setting a policy.
+	ValueLogGenerationDefault ValueLogGenerationPolicy = iota
+	// ValueLogGenerationOff keeps legacy single-generation behavior (no
+	// background generation maintenance).
+	ValueLogGenerationOff
 	// ValueLogGenerationHotWarmCold enables hot/warm/cold generation policy.
 	ValueLogGenerationHotWarmCold
 )
@@ -1067,7 +1074,7 @@ func validateOptions(opts Options) error {
 		return fmt.Errorf("treedb: invalid value-log auto policy %d", opts.ValueLog.AutoPolicy)
 	}
 	switch opts.ValueLog.Generational.Policy {
-	case ValueLogGenerationOff, ValueLogGenerationHotWarmCold:
+	case ValueLogGenerationDefault, ValueLogGenerationOff, ValueLogGenerationHotWarmCold:
 	default:
 		return fmt.Errorf("treedb: invalid value-log generation policy %d", opts.ValueLog.Generational.Policy)
 	}
