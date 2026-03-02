@@ -61,7 +61,7 @@ var (
 	treedbVlogCompression                 = flag.String("treedb-vlog-compression", "default", "TreeDB: value-log compression mode (default=auto; values: off|block|dict|auto)")
 	treedbVlogBlockCodec                  = flag.String("treedb-vlog-block-codec", "snappy", "TreeDB: value-log block codec (snappy|lz4)")
 	treedbVlogAutoPolicy                  = flag.String("treedb-vlog-auto-policy", "balanced", "TreeDB: value-log auto policy (balanced|throughput|size)")
-	treedbVlogGenerationPolicy            = flag.String("treedb-vlog-generation-policy", "off", "TreeDB: value-log generation policy (off|hot_warm_cold)")
+	treedbVlogGenerationPolicy            = flag.String("treedb-vlog-generation-policy", "default", "TreeDB: value-log generation policy (default|off|hot_warm_cold)")
 	treedbVlogGenerationHotSegmentBytes   = flag.Int64("treedb-vlog-generation-hot-segment-bytes", 0, "TreeDB: generational hot segment target bytes (0=default)")
 	treedbVlogGenerationWarmSegmentBytes  = flag.Int64("treedb-vlog-generation-warm-segment-bytes", 0, "TreeDB: generational warm segment target bytes (0=default)")
 	treedbVlogGenerationColdSegmentBytes  = flag.Int64("treedb-vlog-generation-cold-segment-bytes", 0, "TreeDB: generational cold segment target bytes (0=default)")
@@ -276,17 +276,21 @@ func parseTreeDBVlogAutoPolicy(s string) (treedb.ValueLogAutoPolicy, error) {
 
 func parseTreeDBVlogGenerationPolicy(s string) (treedb.ValueLogGenerationPolicy, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", "off", "default":
+	case "", "default":
+		return treedb.ValueLogGenerationDefault, nil
+	case "off":
 		return treedb.ValueLogGenerationOff, nil
 	case "hot_warm_cold", "hotwarmcold", "generational":
 		return treedb.ValueLogGenerationHotWarmCold, nil
 	default:
-		return treedb.ValueLogGenerationOff, fmt.Errorf("unsupported -treedb-vlog-generation-policy=%q (expected off|hot_warm_cold)", s)
+		return treedb.ValueLogGenerationOff, fmt.Errorf("unsupported -treedb-vlog-generation-policy=%q (expected default|off|hot_warm_cold)", s)
 	}
 }
 
 func formatTreeDBVlogGenerationPolicy(p treedb.ValueLogGenerationPolicy) string {
 	switch p {
+	case treedb.ValueLogGenerationDefault:
+		return "default"
 	case treedb.ValueLogGenerationOff:
 		return "off"
 	case treedb.ValueLogGenerationHotWarmCold:
@@ -694,6 +698,10 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	if maintenanceMode == "normal" && !genPolicyExplicit {
 		opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
 		notes = append(notes, "maintenance_mode=normal defaults vlog.generation_policy=hot_warm_cold")
+	}
+	if maintenanceMode == "bench" && !genPolicyExplicit {
+		opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
+		notes = append(notes, "maintenance_mode=bench defaults vlog.generation_policy=off")
 	}
 	opts.ValueLog.Generational.HotSegmentTargetBytes = *treedbVlogGenerationHotSegmentBytes
 	opts.ValueLog.Generational.WarmSegmentTargetBytes = *treedbVlogGenerationWarmSegmentBytes

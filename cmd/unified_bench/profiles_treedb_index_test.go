@@ -180,6 +180,14 @@ func TestParseTreeDBOuterLeafMode_InvalidErrorMentionsLegacyAlias(t *testing.T) 
 }
 
 func TestParseTreeDBVlogGenerationPolicy(t *testing.T) {
+	got, err := parseTreeDBVlogGenerationPolicy("default")
+	if err != nil {
+		t.Fatalf("parseTreeDBVlogGenerationPolicy: %v", err)
+	}
+	if got != treedb.ValueLogGenerationDefault {
+		t.Fatalf("policy=%d want %d", got, treedb.ValueLogGenerationDefault)
+	}
+
 	got, err := parseTreeDBVlogGenerationPolicy("hot_warm_cold")
 	if err != nil {
 		t.Fatalf("parseTreeDBVlogGenerationPolicy: %v", err)
@@ -199,6 +207,7 @@ func TestBuildTreeDBOptions_VlogGenerationConfig(t *testing.T) {
 	resetTreeDBIndexFlagsForTest()
 	*treedbMaintenanceMode = "bench"
 	*treedbVlogGenerationPolicy = "hot_warm_cold"
+	explicitFlags["treedb-vlog-generation-policy"] = true
 	*treedbVlogGenerationHotSegmentBytes = 32 << 20
 	*treedbVlogGenerationWarmSegmentBytes = 64 << 20
 	*treedbVlogGenerationColdSegmentBytes = 128 << 20
@@ -239,7 +248,7 @@ func TestBuildTreeDBOptions_MaintenanceModeNormalDefaultsGenerationPolicy(t *tes
 
 	resetTreeDBIndexFlagsForTest()
 	*treedbMaintenanceMode = "normal"
-	// Keep -treedb-vlog-generation-policy at its default ("off") but not explicit.
+	// Keep -treedb-vlog-generation-policy at its default ("default") but not explicit.
 	opts, rep, err := buildTreeDBOptions("")
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions: %v", err)
@@ -387,7 +396,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexInternalBaseDelta = false
 	*treedbChunkSize = defaultTreeDBChunkSizeBytes
 	*treedbVlogAutoPolicy = "balanced"
-	*treedbVlogGenerationPolicy = "off"
+	*treedbVlogGenerationPolicy = "default"
 	*treedbVlogGenerationHotSegmentBytes = 0
 	*treedbVlogGenerationWarmSegmentBytes = 0
 	*treedbVlogGenerationColdSegmentBytes = 0
