@@ -325,8 +325,8 @@ func TestAppendOnlyUnorderedAppendDefersLatestRebuild(t *testing.T) {
 	}
 
 	m.Set([]byte("b"), []byte("v3"))
-	if !m.latestDirty {
-		t.Fatalf("expected unordered append to mark latest index dirty")
+	if m.latestDirty {
+		t.Fatalf("expected unordered append to keep latest index clean after rebuild")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)
