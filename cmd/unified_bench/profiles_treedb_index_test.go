@@ -159,7 +159,7 @@ func TestParseTreeDBVlogGenerationPolicy(t *testing.T) {
 		t.Fatalf("policy=%d want %d", got, treedb.ValueLogGenerationDefault)
 	}
 
-	got, err := parseTreeDBVlogGenerationPolicy("hot_warm_cold")
+	got, err = parseTreeDBVlogGenerationPolicy("hot_warm_cold")
 	if err != nil {
 		t.Fatalf("parseTreeDBVlogGenerationPolicy: %v", err)
 	}

@@ -96,6 +96,7 @@ var (
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
 	treedbIndexOuterLeafMode              = flag.String("treedb-index-outer-leaf-mode", "v2_fenceptr", "TreeDB: index outer-leaf mode (v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
+	treedbIndexOuterLeavesInVlog          = flag.Bool("treedb-index-outer-leaves-in-vlog", false, "TreeDB: store outer leaf pages in the value log")
 	treedbWALFenceMode                    = flag.String("treedb-wal-fence-mode", "rid_join", "TreeDB: WAL fence mode for v2_fenceptr (rid_join|simple_inline). For WAL-on v2_fenceptr, default remains simple_inline unless explicitly set.")
 	treedbOuterLeafBlockTargetBytes       = flag.Int("treedb-outer-leaf-block-target-bytes", 0, "TreeDB: experimental outer-leaf block target bytes (0=default)")
 	treedbV1LeafLogRoutePayloadProfile    = flag.String("treedb-v1-leaflog-route-payload-profile", "default", "TreeDB: v1_leaflog_route payload profile (default|size16k). Ignored when -treedb-outer-leaf-block-target-bytes is set")
@@ -385,6 +386,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("index_packed_valueptr=%t", r.opts.IndexPackedValuePtr))
 	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
 	lines = append(lines, fmt.Sprintf("index_outer_leaf_mode=%s", strings.TrimSpace(r.opts.IndexOuterLeafMode)))
+	lines = append(lines, fmt.Sprintf("index_outer_leaves_in_vlog=%t", r.opts.IndexOuterLeavesInValueLog))
 	lines = append(lines, fmt.Sprintf("vlog.wal_fence_mode=%s", strings.TrimSpace(string(r.opts.ValueLog.WALFenceMode))))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_queue_size=%d", r.opts.DomainIngressQueueSize))
@@ -615,11 +617,12 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		InternalFillTargetPPM:     uint32(clampPPM(*treedbInternalFillPPM)),
 		MaintenanceOpsPerCoalesce: *treedbMaintenanceOpsPerCoalesce,
 
-		LeafPrefixCompression:  leafPrefixEffective,
-		IndexColumnarLeaves:    columnarLeavesEffective,
-		IndexPackedValuePtr:    packedValuePtrEffective,
-		IndexInternalBaseDelta: internalBaseDeltaEffective,
-		IndexOuterLeafMode:     treedb.IndexOuterLeafModeV2FencePtr,
+		LeafPrefixCompression:      leafPrefixEffective,
+		IndexColumnarLeaves:        columnarLeavesEffective,
+		IndexPackedValuePtr:        packedValuePtrEffective,
+		IndexInternalBaseDelta:     internalBaseDeltaEffective,
+		IndexOuterLeafMode:         treedb.IndexOuterLeafModeV2FencePtr,
+		IndexOuterLeavesInValueLog: *treedbIndexOuterLeavesInVlog,
 
 		MemtableMode:               *treedbMemtableMode,
 		DomainIngressWorkers:       *treedbDomainIngressWorkers,
