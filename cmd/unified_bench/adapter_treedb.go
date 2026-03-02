@@ -109,6 +109,7 @@ var (
 	treedbDisableReadChecksum    = flag.Bool("treedb-disable-read-checksum", false, "TreeDB: disable read checksum (unsafe)")
 	treedbAllowUnsafe            = flag.Bool("treedb-allow-unsafe", false, "TreeDB: allow unsafe durability/integrity options (required for -treedb-disable-wal/-treedb-relaxed-sync/-treedb-disable-read-checksum)")
 	treedbDisablePiggyback       = flag.Bool("treedb-disable-piggyback-compaction", false, "TreeDB: disable piggyback compaction")
+	treedbMaintenanceMode        = flag.String("treedb-maintenance-mode", "normal", "TreeDB: maintenance preset (normal|bench)")
 	treedbMemtableMode           = flag.String("treedb-memtable-mode", "", "TreeDB (cached): memtable mode (adaptive|skiplist|hash_sorted|btree|append_only)")
 	treedbDomainIngressWorkers   = flag.Int("treedb-domain-ingress-workers", 0, "TreeDB (cached): experimental domain ingress worker count (0=disabled)")
 	treedbDomainIngressQueueSize = flag.Int("treedb-domain-ingress-queue-size", 0, "TreeDB (cached): per-worker ingress queue length (0=default)")
@@ -294,6 +295,17 @@ func formatTreeDBVlogGenerationPolicy(p treedb.ValueLogGenerationPolicy) string 
 	}
 }
 
+func normalizeTreeDBMaintenanceMode(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "normal":
+		return "normal", nil
+	case "bench", "benchmark":
+		return "bench", nil
+	default:
+		return "", fmt.Errorf("unsupported -treedb-maintenance-mode=%q (expected normal|bench)", s)
+	}
+}
+
 func parseTreeDBOuterLeafMode(s string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "":
@@ -338,9 +350,10 @@ func parseTreeDBV1LeafLogRoutePayloadProfile(s string) (int, string, error) {
 }
 
 type treeDBOptionsReport struct {
-	opts     treedb.Options
-	notes    []string
-	warnings []string
+	opts            treedb.Options
+	maintenanceMode string
+	notes           []string
+	warnings        []string
 }
 
 func (r treeDBOptionsReport) hasReport() bool {
@@ -354,6 +367,9 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	var lines []string
 	lines = append(lines, fmt.Sprintf("durability=%s", formatTreeDBDurability(r.opts.Durability)))
 	lines = append(lines, fmt.Sprintf("read_integrity=%s", formatTreeDBIntegrity(r.opts.ValueLog.ReadIntegrity)))
+	if strings.TrimSpace(r.maintenanceMode) != "" {
+		lines = append(lines, fmt.Sprintf("maintenance_mode=%s", strings.TrimSpace(r.maintenanceMode)))
+	}
 	lines = append(lines, fmt.Sprintf("index_optimizations=%t",
 		r.opts.ValueLog.ForcePointers &&
 			r.opts.LeafPrefixCompression &&
@@ -538,6 +554,10 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	if !*treedbAllowUnsafe && (*treedbDisableWAL || *treedbRelaxedSync || *treedbDisableReadChecksum) {
 		return treedb.Options{}, treeDBOptionsReport{}, fmt.Errorf("TreeDB: unsafe flags require -treedb-allow-unsafe")
 	}
+	maintenanceMode, err := normalizeTreeDBMaintenanceMode(*treedbMaintenanceMode)
+	if err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
 
 	durability := treedb.DurabilityDurable
 	if *treedbDisableWAL {
@@ -667,6 +687,11 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		return treedb.Options{}, treeDBOptionsReport{}, err
 	}
 	opts.ValueLog.Generational.Policy = genPolicy
+	genPolicyExplicit := flagExplicit("treedb-vlog-generation-policy")
+	if maintenanceMode == "normal" && !genPolicyExplicit {
+		opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationHotWarmCold
+		notes = append(notes, "maintenance_mode=normal defaults vlog.generation_policy=hot_warm_cold")
+	}
 	opts.ValueLog.Generational.HotSegmentTargetBytes = *treedbVlogGenerationHotSegmentBytes
 	opts.ValueLog.Generational.WarmSegmentTargetBytes = *treedbVlogGenerationWarmSegmentBytes
 	opts.ValueLog.Generational.ColdSegmentTargetBytes = *treedbVlogGenerationColdSegmentBytes
@@ -675,6 +700,18 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	opts.ValueLog.Generational.RewriteTriggerStaleRatioPPM = clampUint32(uint64(*treedbVlogRewriteTriggerStaleRatioPPM))
 	opts.ValueLog.Generational.RewriteTriggerTotalBytes = *treedbVlogRewriteTriggerTotalBytes
 	opts.ValueLog.Generational.RewriteTriggerChurnPerSec = *treedbVlogRewriteTriggerChurnPerSec
+
+	if maintenanceMode == "bench" {
+		// Disable background maintenance loops. "bench" mode aims for stable
+		// throughput measurements without background GC/vacuum/checkpoint noise.
+		//
+		// Note: these are TreeDB-level cached-mode loops; value-log generation
+		// scheduling is controlled via vlog.generation_policy.
+		opts.BackgroundCheckpointInterval = -1
+		opts.BackgroundCheckpointIdleDuration = -1
+		opts.MaxWALBytes = -1
+		opts.BackgroundIndexVacuumInterval = -1
+	}
 	outerMode, err := parseTreeDBOuterLeafMode(*treedbIndexOuterLeafMode)
 	if err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
@@ -793,7 +830,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 		notes = append(notes, "vlog.force_pointers=true: pointer_threshold does not affect pointer eligibility")
 	}
 
-	rep := treeDBOptionsReport{opts: opts, notes: notes, warnings: warnings}
+	rep := treeDBOptionsReport{opts: opts, maintenanceMode: maintenanceMode, notes: notes, warnings: warnings}
 	return opts, rep, nil
 }
 
