@@ -115,6 +115,13 @@ type BenchConfig struct {
 	RangeSpan     int
 	ValuePattern  string
 	ValuePoolSize int
+	// ReadRequireHit makes read benchmarks fail fast when a read misses.
+	// It is intended for correctness guardrails, not throughput reporting.
+	//
+	// When enabled, read paths assert both:
+	//   - no error (or miss) is returned
+	//   - the returned value length equals ValueSize
+	ReadRequireHit bool
 
 	DBsArg        string
 	DBsExcludeArg string
@@ -2255,9 +2262,26 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				encodeKey(k[:], uint64(rng.Intn(cfg.Keys)))
 				if hasAppendGetter {
-					buf, _ = appendGetter.GetAppend(k[:], buf[:0])
+					var err error
+					buf, err = appendGetter.GetAppend(k[:], buf[:0])
+					if cfg.ReadRequireHit {
+						if err != nil {
+							return 0, fmt.Errorf("random_read: miss: %w", err)
+						}
+						if len(buf) != cfg.ValueSize {
+							return 0, fmt.Errorf("random_read: value length mismatch: got=%d want=%d", len(buf), cfg.ValueSize)
+						}
+					}
 				} else {
-					_, _ = db.Get(k[:])
+					val, err := db.Get(k[:])
+					if cfg.ReadRequireHit {
+						if err != nil {
+							return 0, fmt.Errorf("random_read: miss: %w", err)
+						}
+						if len(val) != cfg.ValueSize {
+							return 0, fmt.Errorf("random_read: value length mismatch: got=%d want=%d", len(val), cfg.ValueSize)
+						}
+					}
 				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
@@ -2314,9 +2338,26 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
 					if workerAppendGetter != nil {
-						buf, _ = workerAppendGetter.GetAppend(k[:], buf[:0])
+						var err error
+						buf, err = workerAppendGetter.GetAppend(k[:], buf[:0])
+						if cfg.ReadRequireHit {
+							if err != nil {
+								return err
+							}
+							if len(buf) != cfg.ValueSize {
+								return fmt.Errorf("random_read_parallel: value length mismatch: got=%d want=%d", len(buf), cfg.ValueSize)
+							}
+						}
 					} else {
-						_, _ = getter.Get(k[:])
+						val, err := getter.Get(k[:])
+						if cfg.ReadRequireHit {
+							if err != nil {
+								return err
+							}
+							if len(val) != cfg.ValueSize {
+								return fmt.Errorf("random_read_parallel: value length mismatch: got=%d want=%d", len(val), cfg.ValueSize)
+							}
+						}
 					}
 				}
 				return nil
@@ -2410,6 +2451,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					if closeErr != nil {
 						return fmt.Errorf("random_read_parallel_acquire_snapshot close: %w", closeErr)
 					}
+					if cfg.ReadRequireHit {
+						if getErr != nil {
+							return getErr
+						}
+						if len(nextBuf) != cfg.ValueSize {
+							return fmt.Errorf("random_read_parallel_acquire_snapshot: value length mismatch: got=%d want=%d", len(nextBuf), cfg.ValueSize)
+						}
+						buf = nextBuf
+						continue
+					}
 					// Keep parity with random_read/random_read_parallel semantics:
 					// this benchmark does not fail on point-read misses.
 					if getErr == nil {
@@ -2484,13 +2535,28 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					encodeKey(keys[j], uint64(rng.Intn(cfg.Keys)))
 				}
 				if hasMany {
-					if _, err := mg.GetMany(keys[:n]); err != nil {
+					vals, err := mg.GetMany(keys[:n])
+					if err != nil {
 						return 0, fmt.Errorf("random_read_batch: %w", err)
+					}
+					if cfg.ReadRequireHit {
+						if len(vals) != n {
+							return 0, fmt.Errorf("random_read_batch: GetMany returned %d values for %d keys", len(vals), n)
+						}
+						for j := 0; j < n; j++ {
+							if len(vals[j]) != cfg.ValueSize {
+								return 0, fmt.Errorf("random_read_batch: value length mismatch: got=%d want=%d", len(vals[j]), cfg.ValueSize)
+							}
+						}
 					}
 				} else {
 					for j := 0; j < n; j++ {
-						if _, err := db.Get(keys[j]); err != nil {
+						val, err := db.Get(keys[j])
+						if err != nil {
 							return 0, fmt.Errorf("random_read_batch: %w", err)
+						}
+						if cfg.ReadRequireHit && len(val) != cfg.ValueSize {
+							return 0, fmt.Errorf("random_read_batch: value length mismatch: got=%d want=%d", len(val), cfg.ValueSize)
 						}
 					}
 				}

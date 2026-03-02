@@ -30,18 +30,19 @@ func TestRunBenchmark_ReadSnapshotAppendOnlyGuardrail(t *testing.T) {
 	*treedbMaxQueuedMems = 2
 
 	run, err := runBenchmark(BenchConfig{
-		Keys:         40_000,
-		ValueSize:    256,
-		BatchSize:    256,
-		ReadWorkers:  4,
-		RangeQueries: 0,
-		RangeSpan:    0,
-		DBsArg:       "treedb",
-		TestsArg:     "sequential_write,random_read_parallel,random_read_parallel_acquire_snapshot",
-		KeepDir:      false,
-		Progress:     false,
-		SeedUsed:     1,
-		MaxWall:      30 * time.Second,
+		Keys:           40_000,
+		ValueSize:      256,
+		BatchSize:      256,
+		ReadWorkers:    4,
+		ReadRequireHit: true,
+		RangeQueries:   0,
+		RangeSpan:      0,
+		DBsArg:         "treedb",
+		TestsArg:       "sequential_write,random_read_parallel,random_read_parallel_acquire_snapshot",
+		KeepDir:        false,
+		Progress:       false,
+		SeedUsed:       1,
+		MaxWall:        30 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("runBenchmark append-only snapshot guardrail: %v", err)
