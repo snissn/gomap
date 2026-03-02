@@ -21,8 +21,7 @@ const formatConfigVersion = 1
 type FormatConfig struct {
 	Version int `json:"version"`
 
-	IndexOuterLeafMode         string `json:"index_outer_leaf_mode"`
-	IndexOuterLeavesInValueLog bool   `json:"index_outer_leaves_in_vlog"`
+	IndexOuterLeavesInValueLog bool `json:"index_outer_leaves_in_vlog"`
 
 	LeafPrefixCompression     bool `json:"leaf_prefix_compression"`
 	IndexColumnarLeaves       bool `json:"index_columnar_leaves"`
@@ -33,13 +32,6 @@ type FormatConfig struct {
 	ValueLogCompression string `json:"vlog_compression"`
 	ValueLogBlockCodec  string `json:"vlog_block_codec"`
 	ValueLogAutoPolicy  string `json:"vlog_auto_policy"`
-
-	ValueLogOuterLeafBlockTargetBytes     int    `json:"vlog_outer_leaf_block_target_bytes"`
-	ValueLogOuterLeafBlockCodec           string `json:"vlog_outer_leaf_block_codec"`
-	ValueLogOuterLeafBlockRestartInterval int    `json:"vlog_outer_leaf_block_restart_interval"`
-	ValueLogOuterLeafBlobThresholdBytes   int    `json:"vlog_outer_leaf_blob_threshold_bytes"`
-
-	ValueLogWALFenceMode string `json:"vlog_wal_fence_mode"`
 }
 
 func formatConfigPath(dir string) string {
@@ -57,7 +49,6 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	cfg := FormatConfig{
 		Version: formatConfigVersion,
 
-		IndexOuterLeafMode:         normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode),
 		IndexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
 
 		LeafPrefixCompression:     opts.LeafPrefixCompression,
@@ -69,13 +60,6 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 		ValueLogCompression: normalizeFormatConfigMode(formatValueLogCompressionMode(opts.ValueLog.Compression)),
 		ValueLogBlockCodec:  normalizeFormatConfigMode(formatValueLogBlockCodec(opts.ValueLog.BlockCodec)),
 		ValueLogAutoPolicy:  normalizeFormatConfigMode(formatValueLogAutoPolicy(opts.ValueLog.AutoPolicy)),
-
-		ValueLogOuterLeafBlockTargetBytes:     opts.ValueLog.OuterLeafBlockTargetBytes,
-		ValueLogOuterLeafBlockCodec:           normalizeFormatConfigMode(formatValueLogBlockCodec(opts.ValueLog.OuterLeafBlockCodec)),
-		ValueLogOuterLeafBlockRestartInterval: opts.ValueLog.OuterLeafBlockRestartInterval,
-		ValueLogOuterLeafBlobThresholdBytes:   opts.ValueLog.OuterLeafBlobThresholdBytes,
-
-		ValueLogWALFenceMode: normalizeFormatConfigMode(string(normalizeValueLogWALFenceMode(opts.ValueLog.WALFenceMode))),
 	}
 
 	// Leaf refs encode value-log pointers in internal child IDs, which are
@@ -96,7 +80,6 @@ func (cfg FormatConfig) ApplyToOptions(opts *Options) {
 	if opts == nil {
 		return
 	}
-	opts.IndexOuterLeafMode = normalizeIndexOuterLeafMode(cfg.IndexOuterLeafMode)
 	opts.IndexOuterLeavesInValueLog = cfg.IndexOuterLeavesInValueLog
 
 	opts.LeafPrefixCompression = cfg.LeafPrefixCompression
@@ -113,16 +96,6 @@ func (cfg FormatConfig) ApplyToOptions(opts *Options) {
 	}
 	if p, ok := parseValueLogAutoPolicy(cfg.ValueLogAutoPolicy); ok {
 		opts.ValueLog.AutoPolicy = p
-	}
-
-	opts.ValueLog.OuterLeafBlockTargetBytes = cfg.ValueLogOuterLeafBlockTargetBytes
-	if c, ok := parseValueLogBlockCodec(cfg.ValueLogOuterLeafBlockCodec); ok {
-		opts.ValueLog.OuterLeafBlockCodec = c
-	}
-	opts.ValueLog.OuterLeafBlockRestartInterval = cfg.ValueLogOuterLeafBlockRestartInterval
-	opts.ValueLog.OuterLeafBlobThresholdBytes = cfg.ValueLogOuterLeafBlobThresholdBytes
-	if cfg.ValueLogWALFenceMode != "" {
-		opts.ValueLog.WALFenceMode = ValueLogWALFenceMode(cfg.ValueLogWALFenceMode)
 	}
 }
 

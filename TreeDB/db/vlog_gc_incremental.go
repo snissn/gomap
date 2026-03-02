@@ -9,12 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -380,7 +378,7 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, "", false, nil, nil), snap.state.SystemRootPageID).
+	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := collectValueLogRefCounts(ctx, db, sysIter, counts); err != nil {
 		_ = sysIter.Close()
@@ -472,61 +470,10 @@ func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIte
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			refs[ptr.FileID]++
-			if db != nil {
-				nested, err := db.outerLeafNestedBlobRefCounts(ptr)
-				if err != nil {
-					return err
-				}
-				for fileID, n := range nested {
-					if n == 0 {
-						continue
-					}
-					refs[fileID] += n
-				}
-			}
 		}
 		it.Next()
 	}
 	return it.Error()
-}
-
-func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64, error) {
-	if db == nil || db.valueLogManager == nil {
-		return nil, nil
-	}
-	switch strings.TrimSpace(db.indexOuterLeafMode) {
-	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
-		// modes with outer-leaf blocks that can include nested blob refs.
-	default:
-		return nil, nil
-	}
-	payload, err := db.valueLogManager.Read(ptr)
-	if err != nil {
-		return nil, err
-	}
-	if !outerleaf.HasMagic(payload) {
-		return nil, nil
-	}
-	block, err := outerleaf.DecodeBlockLease(payload)
-	if err != nil {
-		return nil, err
-	}
-	defer block.Release()
-	typed, err := block.TypedEntries(nil)
-	if err != nil {
-		return nil, err
-	}
-	refs := make(map[uint32]uint64, 4)
-	for i := range typed {
-		if typed[i].Kind != outerleaf.EntryKindBlobRef {
-			continue
-		}
-		if !page.IsValueLogFileID(typed[i].BlobPtr.FileID) {
-			return nil, fmt.Errorf("treedb: invalid nested blob pointer file %d", typed[i].BlobPtr.FileID)
-		}
-		refs[typed[i].BlobPtr.FileID]++
-	}
-	return refs, nil
 }
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry) (*valueLogRefDelta, error) {
@@ -534,13 +481,6 @@ func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint6
 		return nil, nil
 	}
 	if db.indexOuterLeavesInValueLog {
-		return nil, nil
-	}
-	switch strings.TrimSpace(db.indexOuterLeafMode) {
-	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
-		// Conservative correctness fallback for nested blob refs in v3 fence blocks:
-		// incremental per-key deltas can miss nested reference fanout changes.
-		// Returning nil invalidates the tracker and forces a safe full rescan.
 		return nil, nil
 	}
 	delta := newValueLogRefDelta()

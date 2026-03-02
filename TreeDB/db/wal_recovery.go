@@ -12,7 +12,6 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -367,30 +366,16 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 	}, nil
 }
 
-func (a *replayInlineAppender) append(db *DB, key, value []byte) (page.ValuePtr, error) {
+func (a *replayInlineAppender) append(value []byte) (page.ValuePtr, error) {
 	if a == nil || a.writer == nil {
 		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
 	}
 	if a.nextRID == 0 {
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
-	payload := value
-	if outerleaf.ModeEnabled(strings.TrimSpace(db.indexOuterLeafMode)) {
-		encoded, err := outerleaf.EncodeSingle(
-			nil,
-			key,
-			value,
-			uint8(db.outerLeafBlockCodec),
-			outerleaf.NormalizeRestartInterval(db.outerLeafBlockRestart),
-		)
-		if err != nil {
-			return page.ValuePtr{}, err
-		}
-		payload = encoded
-	}
 	rid := a.nextRID
 	a.nextRID++
-	ptr, err := a.writer.appendValue(rid, payload)
+	ptr, err := a.writer.appendValue(rid, value)
 	if err != nil {
 		return page.ValuePtr{}, err
 	}
@@ -481,7 +466,7 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 				if inlineAppender == nil {
 					return fmt.Errorf("commitlog: missing replay value-log appender")
 				}
-				ptr, err := inlineAppender.append(db, rec.Key, rec.Value)
+				ptr, err := inlineAppender.append(rec.Value)
 				if err != nil {
 					return err
 				}
