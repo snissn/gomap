@@ -936,6 +936,13 @@ func Open(opts Options) (*DB, error) {
 		opts.ValueLog.Compression = ValueLogCompressionAuto
 	}
 	opts.IndexOuterLeafMode = normalizeIndexOuterLeafMode(opts.IndexOuterLeafMode)
+	if opts.IndexOuterLeavesInValueLog && opts.IndexInternalBaseDelta {
+		// Leaf refs encode value-log pointers in internal child IDs, which are
+		// incompatible with internal base-delta child ID encodings. Enforce the
+		// effective behavior early so Options and persisted format config remain
+		// consistent.
+		opts.IndexInternalBaseDelta = false
+	}
 	if opts.IndexOuterLeafMode == IndexOuterLeafModeV2FencePtr &&
 		opts.Durability != DurabilityWALOffRelaxed &&
 		strings.TrimSpace(string(opts.ValueLog.WALFenceMode)) == "" {
@@ -1240,6 +1247,13 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		maxDuration: opts.PruneMaxDuration,
 	})
 	db.startCommitCombiner()
+
+	// Best-effort: persist the format knobs used for this DB directory so
+	// offline maintenance tooling (treemap, offline vacuum/rewrite) can preserve
+	// the intended on-disk layout without requiring callers to re-specify flags.
+	if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil && opts.NotifyError != nil {
+		opts.NotifyError(err)
+	}
 
 	return db, nil
 }
