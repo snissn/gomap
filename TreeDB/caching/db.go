@@ -16096,12 +16096,15 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 				if flags&node.FlagTombstone != 0 {
 					return nil, true, nil
 				}
-				if flags&node.FlagPointer != 0 && db.valueLogReader != nil {
-					readVal, err := db.readValueLog(key, ptr)
-					if err != nil {
-						return nil, true, err
+				if flags&node.FlagPointer != 0 {
+					if val == nil {
+						readVal, err := db.readValueLog(key, ptr)
+						if err != nil {
+							return nil, true, err
+						}
+						return readVal, true, nil
 					}
-					return readVal, true, nil
+					return val, true, nil
 				}
 				if val == nil {
 					return []byte{}, true, nil
@@ -16125,12 +16128,15 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 			if flags&node.FlagTombstone != 0 {
 				return nil, true, nil
 			}
-			if flags&node.FlagPointer != 0 && db.valueLogReader != nil {
-				readVal, err := db.readValueLog(key, ptr)
-				if err != nil {
-					return nil, true, err
+			if flags&node.FlagPointer != 0 {
+				if val == nil {
+					readVal, err := db.readValueLog(key, ptr)
+					if err != nil {
+						return nil, true, err
+					}
+					return readVal, true, nil
 				}
-				return readVal, true, nil
+				return val, true, nil
 			}
 			if val == nil {
 				return []byte{}, true, nil
@@ -16181,12 +16187,15 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 				if flags&node.FlagTombstone != 0 {
 					return dst, true, tree.ErrKeyNotFound
 				}
-				if flags&node.FlagPointer != 0 && db.valueLogReader != nil {
-					out, err := db.readValueLogAppend(key, ptr, dst)
-					if err != nil {
-						return dst, true, err
+				if flags&node.FlagPointer != 0 {
+					if val == nil {
+						out, err := db.readValueLogAppend(key, ptr, dst)
+						if err != nil {
+							return dst, true, err
+						}
+						return out, true, nil
 					}
-					return out, true, nil
+					return append(dst, val...), true, nil
 				}
 				if val == nil {
 					return dst, true, nil
@@ -16210,12 +16219,15 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 			if flags&node.FlagTombstone != 0 {
 				return dst, true, tree.ErrKeyNotFound
 			}
-			if flags&node.FlagPointer != 0 && db.valueLogReader != nil {
-				out, err := db.readValueLogAppend(key, ptr, dst)
-				if err != nil {
-					return dst, true, err
+			if flags&node.FlagPointer != 0 {
+				if val == nil {
+					out, err := db.readValueLogAppend(key, ptr, dst)
+					if err != nil {
+						return dst, true, err
+					}
+					return out, true, nil
 				}
-				return out, true, nil
+				return append(dst, val...), true, nil
 			}
 			if val == nil {
 				return dst, true, nil
@@ -17223,7 +17235,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			continue
 		}
 		qIter := queue[i].NewIterator(start, end)
-		if db.memtableValueLogPointers && db.valueLogReader != nil {
+		if db.memtableValueLogPointers {
 			qIter = newValueLogIterator(qIter, func(key []byte, ptr page.ValuePtr) ([]byte, error) {
 				return db.readValueLog(key, ptr)
 			})
@@ -17537,7 +17549,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 			continue
 		}
 		qIter := queue[i].NewReverseIterator(start, end)
-		if db.memtableValueLogPointers && db.valueLogReader != nil {
+		if db.memtableValueLogPointers {
 			qIter = newValueLogIterator(qIter, func(key []byte, ptr page.ValuePtr) ([]byte, error) {
 				return db.readValueLog(key, ptr)
 			})
