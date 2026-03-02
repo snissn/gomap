@@ -88,7 +88,11 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	return cfg
 }
 
-func (cfg FormatConfig) applyToOptions(opts *Options) {
+// ApplyToOptions overwrites format-affecting knobs in opts from cfg.
+//
+// Callers should treat cfg as best-effort (it may be absent or partially
+// populated) and may apply explicit overrides after this call.
+func (cfg FormatConfig) ApplyToOptions(opts *Options) {
 	if opts == nil {
 		return
 	}
@@ -242,4 +246,3 @@ func parseValueLogAutoPolicy(raw string) (ValueLogAutoPolicy, bool) {
 		return 0, false
 	}
 }
-
