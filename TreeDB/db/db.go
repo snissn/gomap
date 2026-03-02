@@ -84,6 +84,8 @@ type DB struct {
 
 	keepRecent                 uint64
 	policy                     WritePolicy
+	valueLogCompression        ValueLogCompressionMode
+	valueLogBlockCodec         ValueLogBlockCodec
 	valueLogDomainThresholds   []ValueLogDomainThreshold
 	outerLeafBlockCache        *outerLeafBlockCache
 	outerLeafKeyCache          *outerLeafKeyCache
@@ -1150,6 +1152,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		lock:                       lock,
 		adaptive:                   adaptiveCtrl,
 		keepRecent:                 opts.KeepRecent,
+		valueLogCompression:        opts.ValueLog.Compression,
+		valueLogBlockCodec:         opts.ValueLog.BlockCodec,
 		valueLogDomainThresholds:   NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		outerLeafBlockCache:        newOuterLeafBlockCache(opts.ValueLog.OuterLeafBlockCacheEntries),
 		outerLeafKeyCache:          newOuterLeafKeyCache(opts.ValueLog.OuterLeafBlockCacheEntries),
