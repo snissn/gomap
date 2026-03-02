@@ -82,25 +82,25 @@ type DB struct {
 
 	readOnly bool
 
-	keepRecent                uint64
-	policy                    WritePolicy
-	valueLogDomainThresholds  []ValueLogDomainThreshold
-	outerLeafBlockCache       *outerLeafBlockCache
-	outerLeafKeyCache         *outerLeafKeyCache
-	leafFillTargetPPM         uint32
-	internalFillTargetPPM     uint32
-	leafPrefixCompression     bool
-	indexColumnarLeaves       bool
-	indexPackedValuePtr       bool
-	indexInternalBaseDelta    bool
+	keepRecent                 uint64
+	policy                     WritePolicy
+	valueLogDomainThresholds   []ValueLogDomainThreshold
+	outerLeafBlockCache        *outerLeafBlockCache
+	outerLeafKeyCache          *outerLeafKeyCache
+	leafFillTargetPPM          uint32
+	internalFillTargetPPM      uint32
+	leafPrefixCompression      bool
+	indexColumnarLeaves        bool
+	indexPackedValuePtr        bool
+	indexInternalBaseDelta     bool
 	indexOuterLeavesInValueLog bool
-	indexAdaptiveLeafEncoding bool
-	indexOuterLeafMode        string
-	outerLeafBlockCodec       ValueLogBlockCodec
-	outerLeafBlockRestart     int
-	skipOuterLeafChecksums    bool
-	piggybackCompaction       bool
-	maintenanceOpsPerCoalesce int
+	indexAdaptiveLeafEncoding  bool
+	indexOuterLeafMode         string
+	outerLeafBlockCodec        ValueLogBlockCodec
+	outerLeafBlockRestart      int
+	skipOuterLeafChecksums     bool
+	piggybackCompaction        bool
+	maintenanceOpsPerCoalesce  int
 
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
@@ -1145,33 +1145,33 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	db := &DB{
-		valueLogManager:           vm,
-		valueLogRefTracker:        newValueLogRefTracker(),
-		lock:                      lock,
-		adaptive:                  adaptiveCtrl,
-		keepRecent:                opts.KeepRecent,
-		valueLogDomainThresholds:  NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
-		outerLeafBlockCache:       newOuterLeafBlockCache(opts.ValueLog.OuterLeafBlockCacheEntries),
-		outerLeafKeyCache:         newOuterLeafKeyCache(opts.ValueLog.OuterLeafBlockCacheEntries),
-		leafFillTargetPPM:         opts.LeafFillTargetPPM,
-		internalFillTargetPPM:     opts.InternalFillTargetPPM,
-		leafPrefixCompression:     opts.LeafPrefixCompression,
-		indexColumnarLeaves:       opts.IndexColumnarLeaves,
-		indexPackedValuePtr:       opts.IndexPackedValuePtr,
-		indexInternalBaseDelta:    opts.IndexInternalBaseDelta,
+		valueLogManager:            vm,
+		valueLogRefTracker:         newValueLogRefTracker(),
+		lock:                       lock,
+		adaptive:                   adaptiveCtrl,
+		keepRecent:                 opts.KeepRecent,
+		valueLogDomainThresholds:   NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
+		outerLeafBlockCache:        newOuterLeafBlockCache(opts.ValueLog.OuterLeafBlockCacheEntries),
+		outerLeafKeyCache:          newOuterLeafKeyCache(opts.ValueLog.OuterLeafBlockCacheEntries),
+		leafFillTargetPPM:          opts.LeafFillTargetPPM,
+		internalFillTargetPPM:      opts.InternalFillTargetPPM,
+		leafPrefixCompression:      opts.LeafPrefixCompression,
+		indexColumnarLeaves:        opts.IndexColumnarLeaves,
+		indexPackedValuePtr:        opts.IndexPackedValuePtr,
+		indexInternalBaseDelta:     opts.IndexInternalBaseDelta,
 		indexOuterLeavesInValueLog: opts.IndexOuterLeavesInValueLog,
-		indexAdaptiveLeafEncoding: opts.IndexAdaptiveLeafEncoding,
-		indexOuterLeafMode:        opts.IndexOuterLeafMode,
-		outerLeafBlockCodec:       opts.ValueLog.OuterLeafBlockCodec,
-		outerLeafBlockRestart:     opts.ValueLog.OuterLeafBlockRestartInterval,
-		skipOuterLeafChecksums:    opts.ValueLog.ReadIntegrity == IntegritySkipChecksums,
-		piggybackCompaction:       !opts.DisablePiggybackCompaction,
-		maintenanceOpsPerCoalesce: opts.MaintenanceOpsPerCoalesce,
-		dir:                       opts.Dir,
-		chunkSize:                 opts.ChunkSize,
-		preferAppendAlloc:         opts.PreferAppendAlloc,
-		freelistRegionPages:       opts.FreelistRegionPages,
-		freelistRegionRadius:      opts.FreelistRegionRadius,
+		indexAdaptiveLeafEncoding:  opts.IndexAdaptiveLeafEncoding,
+		indexOuterLeafMode:         opts.IndexOuterLeafMode,
+		outerLeafBlockCodec:        opts.ValueLog.OuterLeafBlockCodec,
+		outerLeafBlockRestart:      opts.ValueLog.OuterLeafBlockRestartInterval,
+		skipOuterLeafChecksums:     opts.ValueLog.ReadIntegrity == IntegritySkipChecksums,
+		piggybackCompaction:        !opts.DisablePiggybackCompaction,
+		maintenanceOpsPerCoalesce:  opts.MaintenanceOpsPerCoalesce,
+		dir:                        opts.Dir,
+		chunkSize:                  opts.ChunkSize,
+		preferAppendAlloc:          opts.PreferAppendAlloc,
+		freelistRegionPages:        opts.FreelistRegionPages,
+		freelistRegionRadius:       opts.FreelistRegionRadius,
 		policy: WritePolicy{
 			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
