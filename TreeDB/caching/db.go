@@ -17401,25 +17401,159 @@ func (it *concatUnsafeIterator) Error() error {
 func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
-	// Flush everything to backend to simplify reverse iteration
-	db.writeMu.Lock()
-	db.mu.Lock()
-	db.noteIterator(start, end)
-	if db.mutableBytes.Load() > 0 {
-		if err := db.rotateMemtableLockedWithCapacity(true, minMemtablePrealloc); err != nil {
-			db.mu.Unlock()
-			db.writeMu.Unlock()
-			return nil, err
-		}
-	}
-	db.mu.Unlock()
-	db.writeMu.Unlock()
-	db.flushAll(false)
 	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 
-	return db.backend.ReverseIterator(start, end)
+	db.mu.Lock()
+	db.noteIterator(start, end)
+
+	// Snapshot Isolation:
+	// Mirror Iterator() semantics: rotate mutable memtables into the immutable
+	// queue so the reverse iterator sees a stable point-in-time view (queue +
+	// backend). Subsequent writes land in a new mutable memtable and are ignored.
+	if db.mutableBytes.Load() > 0 {
+		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
+			db.mu.Unlock()
+			return nil, err
+		}
+	}
+
+	queueLenLocked := len(db.queue)
+
+	db.mu.Unlock()
+
+	if err := db.ensureBackendRange(); err != nil {
+		return nil, err
+	}
+	db.mu.RLock()
+	backendRangeKnown := db.backendRangeKnown
+	backendRange := db.backendRange
+	db.mu.RUnlock()
+
+	// Backend-only fast path.
+	if queueLenLocked == 0 {
+		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
+			if iteratorDebugEnabled.Load() {
+				return &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
+			}
+			return it
+		}
+		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
+			out := merging.Iterator(&emptyIterator{start: start, end: end})
+			return decorate(out, 0), nil
+		}
+		if start == nil && end == nil && backendRangeKnown && backendRange.valid {
+			diskIter, err := db.backend.ReverseIterator(nil, nil)
+			if err != nil {
+				return nil, err
+			}
+			return decorate(diskIter, 1), nil
+		}
+		diskIter, err := db.backend.ReverseIterator(start, end)
+		if err != nil {
+			return nil, err
+		}
+		return decorate(diskIter, 1), nil
+	}
+
+	view := db.retainMemtableView()
+	releaseView := true
+	defer func() {
+		if releaseView && view != nil {
+			db.releaseMemtableView(view)
+		}
+	}()
+	var queue []memtable.Table
+	var queueRanges []keyRange
+	if view != nil {
+		queue = view.queue
+		queueRanges = view.queueRanges
+	} else {
+		// Defensive fallback: should not happen after Open().
+		db.mu.RLock()
+		queue = append([]memtable.Table(nil), db.queue...)
+		queueRanges = append([]keyRange(nil), db.queueRanges...)
+		db.mu.RUnlock()
+	}
+	queueLen := len(queue)
+	hasMemSource := false
+	decorateIterator := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
+		if iteratorDebugEnabled.Load() {
+			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
+		}
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return &leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
+			}
+		}
+		if view != nil {
+			db.releaseMemtableView(view)
+			view = nil
+			releaseView = false
+		}
+		return it
+	}
+
+	var sources []merging.IteratorSource
+
+	// Priority 0..N: Queue (Newest first)
+	prio := 0
+	for i := len(queue) - 1; i >= 0; i-- {
+		if i < len(queueRanges) && !overlapsQuery(start, end, queueRanges[i]) {
+			prio++
+			continue
+		}
+		qIter := queue[i].NewReverseIterator(start, end)
+		if db.memtableValueLogPointers && db.valueLogReader != nil {
+			qIter = newValueLogIterator(qIter, func(key []byte, ptr page.ValuePtr) ([]byte, error) {
+				return db.readValueLog(key, ptr)
+			})
+		}
+		sources = append(sources, merging.IteratorSource{
+			Iter:     qIter,
+			Priority: prio,
+		})
+		hasMemSource = true
+		prio++
+	}
+
+	// Disk Iterator
+	if !backendRangeKnown || overlapsQuery(start, end, backendRange) {
+		diskIter, err := db.backend.ReverseIterator(start, end)
+		if err != nil {
+			for i := range sources {
+				if sources[i].Iter != nil {
+					_ = sources[i].Iter.Close()
+				}
+			}
+			return nil, err
+		}
+
+		sources = append(sources, merging.IteratorSource{
+			Iter:     diskIter,
+			Priority: prio,
+		})
+	}
+
+	if len(sources) == 0 {
+		out := merging.Iterator(&emptyIterator{start: start, end: end})
+		return decorateIterator(out, 0), nil
+	}
+
+	if len(sources) == 1 {
+		out := newSingleSourceIterator(sources[0].Iter, start, end)
+		return decorateIterator(out, 1), nil
+	}
+
+	out := merging.NewReverseMergingIterator(sources, start, end)
+	return decorateIterator(out, len(sources)), nil
 }
 
 // NewBatch implementation for CachingDB
