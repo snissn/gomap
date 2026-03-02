@@ -258,6 +258,9 @@ Notes:
   `ValuePtr.Length` and always reconstructs a grouped pointer with sub-index 0.
 - Leaf pages are written as single-record grouped frames (`K=1`) in the value
   log, so sub-index is always 0.
+- LeafRef IDs may also appear in `MetaPageBody.{User,System}RootPageID` when the
+  tree height is 1 (i.e. the root page is itself a leaf page stored in the
+  value log).
 - Offsets must fit in `u32`; value-log segment size is capped accordingly when
   this mode is enabled.
 - Base-delta internal encoding is incompatible with LeafRef child IDs and is
