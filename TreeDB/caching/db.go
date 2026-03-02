@@ -5461,7 +5461,7 @@ func (db *DB) laneForShardIndex(shardID int) int {
 	if shardID < 0 {
 		shardID = 0
 	}
-	if db.valueLogGenerationPolicy == 1 && len(db.valueLogHotLanes) > 0 {
+	if db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold) && len(db.valueLogHotLanes) > 0 {
 		return db.valueLogHotLanes[shardID%len(db.valueLogHotLanes)]
 	}
 	return shardID % len(db.lanes)
@@ -5495,7 +5495,7 @@ func (db *DB) valueLogMaxSegmentBytesForLane(l *lane) int64 {
 	}
 	// Legacy cap still applies when generation class targets are unset.
 	base := db.valueLogMaxSegmentBytes
-	if db.valueLogGenerationPolicy != 1 || l == nil {
+	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) || l == nil {
 		return base
 	}
 	target := int64(0)
@@ -5732,7 +5732,8 @@ type Options struct {
 	// smaller representable range.
 	ValueLogMaxSegmentBytes int64
 	// ValueLogGenerationPolicy selects generational mode:
-	// 0=off, 1=hot_warm_cold.
+	// 0=default(unset; normalized to hot_warm_cold by Open),
+	// 1=off, 2=hot_warm_cold.
 	ValueLogGenerationPolicy uint8
 	// ValueLogGenerationHotSegmentTargetBytes configures hot segment target size.
 	ValueLogGenerationHotSegmentTargetBytes int64
@@ -7122,7 +7123,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if laneCount <= 0 {
 		laneCount = defaultJournalLaneCount(runtime.GOMAXPROCS(0))
 	}
-	if opts.ValueLogGenerationPolicy == 1 && laneCount < 3 {
+	valueLogGenerationPolicy := backenddb.ValueLogGenerationPolicy(opts.ValueLogGenerationPolicy)
+	switch valueLogGenerationPolicy {
+	case backenddb.ValueLogGenerationDefault:
+		// In cached mode, default generation policy enables background
+		// maintenance. Bench profiles explicitly set ValueLogGenerationOff.
+		valueLogGenerationPolicy = backenddb.ValueLogGenerationHotWarmCold
+	case backenddb.ValueLogGenerationOff, backenddb.ValueLogGenerationHotWarmCold:
+	default:
+		return nil, fmt.Errorf("cachingdb: invalid value-log generation policy %d", opts.ValueLogGenerationPolicy)
+	}
+	valueLogGenerationPolicyUint8 := uint8(valueLogGenerationPolicy)
+	if valueLogGenerationPolicy == backenddb.ValueLogGenerationHotWarmCold && laneCount < 3 {
 		laneCount = 3
 	}
 	// Temporarily remove the logic that increases laneCount based on maxLaneID
@@ -7153,10 +7165,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogMaxSegmentBytes := opts.ValueLogMaxSegmentBytes
 	if valueLogMaxSegmentBytes < 0 {
 		valueLogMaxSegmentBytes = 0
-	}
-	valueLogGenerationPolicy := opts.ValueLogGenerationPolicy
-	if valueLogGenerationPolicy > 1 {
-		return nil, fmt.Errorf("cachingdb: invalid value-log generation policy %d", valueLogGenerationPolicy)
 	}
 	valueLogGenerationHotTarget := opts.ValueLogGenerationHotSegmentTargetBytes
 	valueLogGenerationWarmTarget := opts.ValueLogGenerationWarmSegmentTargetBytes
@@ -7467,7 +7475,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			selectorSeedCodec,
 		)
 	}
-	if valueLogGenerationPolicy == 1 && len(lanes) >= 3 {
+	if valueLogGenerationPolicyUint8 == uint8(backenddb.ValueLogGenerationHotWarmCold) && len(lanes) >= 3 {
 		// Reserve one lane for warm and one for cold; remaining lanes serve hot.
 		lanes[1].vlogGenerationClass = vlogGenerationClassWarm
 		lanes[2].vlogGenerationClass = vlogGenerationClassCold
@@ -7527,7 +7535,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogIncompressibleHold:           uint64(valueLogIncompressibleHold),
 		valueLogIncompressibleProbe:          uint64(valueLogIncompressibleProbe),
 		valueLogAutoPolicy:                   uint8(valueLogAutoPolicy),
-		valueLogGenerationPolicy:             valueLogGenerationPolicy,
+		valueLogGenerationPolicy:             valueLogGenerationPolicyUint8,
 		valueLogGenerationHotTarget:          valueLogGenerationHotTarget,
 		valueLogGenerationWarmTarget:         valueLogGenerationWarmTarget,
 		valueLogGenerationColdTarget:         valueLogGenerationColdTarget,
@@ -11835,7 +11843,7 @@ func (db *DB) startVlogGenerationLoop() {
 	if db == nil {
 		return
 	}
-	if db.valueLogGenerationPolicy == 0 {
+	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
@@ -11866,7 +11874,7 @@ func (db *DB) vlogGenerationLoop() {
 }
 
 func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
-	if db == nil || db.valueLogGenerationPolicy == 0 {
+	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
 	if db.checkpointing.Load() {
@@ -11966,7 +11974,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 }
 
 func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
-	if db == nil || db.valueLogGenerationPolicy == 0 {
+	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
 	vacuumer, ok := db.backend.(backendIndexVacuumer)
@@ -11996,7 +12004,7 @@ func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 }
 
 func (db *DB) shouldRunVlogGenerationIndexVacuum(rewriteBytesIn int64, now time.Time) bool {
-	if db == nil || db.valueLogGenerationPolicy == 0 {
+	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return false
 	}
 	if rewriteBytesIn < vlogGenerationVacuumTriggerRewriteBytes {
@@ -12013,7 +12021,7 @@ func (db *DB) shouldRunVlogGenerationIndexVacuum(rewriteBytesIn int64, now time.
 }
 
 func (db *DB) shouldRunVlogGenerationGC(retained valueLogRetainedGenerationStats, reclaimable int64, churnBps int64) bool {
-	if db == nil || db.valueLogGenerationPolicy == 0 {
+	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return false
 	}
 	if reclaimable >= vlogGenerationGCMinBytes {
@@ -16613,7 +16621,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
-	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy != 0)
+	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
 	stats["treedb.cache.vlog_generation.churn_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationChurnBytes.Load())
