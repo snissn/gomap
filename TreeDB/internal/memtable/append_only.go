@@ -693,6 +693,7 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 				}
 			}
 		}
+		return nil, false, false
 	}
 	for i := m.count - 1; i >= 0; i-- {
 		ent := &m.entries[i]
@@ -750,6 +751,7 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 				}
 			}
 		}
+		return nil, page.ValuePtr{}, 0, false
 	}
 	for i := m.count - 1; i >= 0; i-- {
 		ent := &m.entries[i]
