@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -835,6 +836,115 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 		if seg.valueLog && seg.seq > maxValueSeqBefore {
 			t.Fatalf("unexpected new value-log segment created for no-op rewrite: %+v", seg)
 		}
+	}
+}
+
+func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockSnappy,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 1, 1, func(i int) []byte {
+		// A highly compressible payload to make FrameFlagCompressed deterministic.
+		return bytes.Repeat([]byte{0}, 4096)
+	})
+	if len(ptrs) != 1 {
+		t.Fatalf("expected 1 pointer, got %d", len(ptrs))
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	segmentsBefore, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments before rewrite: %v", err)
+	}
+	before := make(map[string]struct{}, len(segmentsBefore))
+	for _, seg := range segmentsBefore {
+		before[seg.path] = struct{}{}
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		BatchSize:     1,
+		SyncEachBatch: true,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected copied records, got %+v", stats)
+	}
+
+	segmentsAfter, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments after rewrite: %v", err)
+	}
+	var newSeg string
+	for _, seg := range segmentsAfter {
+		if !seg.valueLog {
+			continue
+		}
+		if _, ok := before[seg.path]; ok {
+			continue
+		}
+		newSeg = seg.path
+		break
+	}
+	if newSeg == "" {
+		t.Fatalf("expected rewrite to create a new value-log segment")
+	}
+
+	f, err := os.Open(newSeg)
+	if err != nil {
+		t.Fatalf("open new segment: %v", err)
+	}
+	defer f.Close()
+
+	var header [valuelog.HeaderSize]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		t.Fatalf("read record header: %v", err)
+	}
+	if header[4] != valuelog.Version {
+		t.Fatalf("unexpected valuelog version %d", header[4])
+	}
+
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	payload := make([]byte, int(valueLen))
+	if _, err := io.ReadFull(f, payload); err != nil {
+		t.Fatalf("read record payload: %v", err)
+	}
+	frameHeader, _, _, _, err := valuelog.DecodeFrame(payload)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if frameHeader.DictID != 0 {
+		t.Fatalf("expected dictID=0, got %d", frameHeader.DictID)
+	}
+	if frameHeader.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("expected rewritten frame to be block-compressed, header=%+v", frameHeader)
+	}
+	if got, want := frameHeader.Reserved, uint8(valuelog.BlockCodecSnappy); got != want {
+		t.Fatalf("unexpected codec id %d, want %d", got, want)
 	}
 }
 
