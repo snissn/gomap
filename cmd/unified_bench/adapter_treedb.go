@@ -365,6 +365,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	lines = append(lines, fmt.Sprintf("index_columnar_leaves=%t", r.opts.IndexColumnarLeaves))
 	lines = append(lines, fmt.Sprintf("index_packed_valueptr=%t", r.opts.IndexPackedValuePtr))
 	lines = append(lines, fmt.Sprintf("index_internal_base_delta=%t", r.opts.IndexInternalBaseDelta))
+	lines = append(lines, fmt.Sprintf("index_outer_leaves_in_vlog=%t", r.opts.IndexOuterLeavesInValueLog))
 	lines = append(lines, fmt.Sprintf("index_outer_leaf_mode=%s", strings.TrimSpace(r.opts.IndexOuterLeafMode)))
 	lines = append(lines, fmt.Sprintf("vlog.wal_fence_mode=%s", strings.TrimSpace(string(r.opts.ValueLog.WALFenceMode))))
 	lines = append(lines, fmt.Sprintf("cached.domain_ingress_workers=%d", r.opts.DomainIngressWorkers))
