@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -295,5 +297,87 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	want := bytes.Repeat([]byte{10}, 2*1024)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("value mismatch after reopen: got=%dB want=%dB", len(got), len(want))
+	}
+}
+
+func TestValueLogGC_LeafPagesInValueLog_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T) {
+	dir := t.TempDir()
+	const (
+		keyCount = 20000
+		valSize  = 100
+	)
+	opts := treedb.Options{
+		Dir:                        dir,
+		DisableSideStores:          true,
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeafMode:         treedb.IndexOuterLeafModeV1,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			// Disable compression/dict/template so the only value-log reachability
+			// comes from LeafRef pages (mirrors the original data-loss report).
+			Compression:      treedb.ValueLogCompressionOff,
+			PointerThreshold: 127, // keep values inline (no value-log pointers)
+		},
+	}
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(1))
+	scratch := make([]byte, valSize)
+	for i := 0; i < keyCount; i++ {
+		_, _ = rng.Read(scratch)
+		value := append([]byte(nil), scratch...)
+		key := []byte(fmt.Sprintf("gc-%08d", i))
+		if err := db.Set(key, value); err != nil {
+			_ = db.Close()
+			t.Fatalf("set %q: %v", string(key), err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Mimic treemap's vlog-gc path: open the backend directly without the
+	// IndexOuterLeavesInValueLog option, then run GC. GC must still treat leaf
+	// pages stored in the value log as referenced.
+	backend, err := treedbdb.Open(treedbdb.Options{
+		Dir:                dir,
+		ReadOnly:           false,
+		IndexOuterLeafMode: treedbdb.IndexOuterLeafModeV1,
+	})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+	stats, err := backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatalf("backend close: %v", err)
+	}
+	if stats.SegmentsReferenced == 0 {
+		t.Fatalf("expected referenced segments to be non-zero with leaf pages in value log; stats=%+v", stats)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("gc-00000000"))
+	if err != nil {
+		t.Fatalf("get after gc: %v", err)
+	}
+	if len(got) != valSize {
+		t.Fatalf("expected %dB value after gc, got %dB", valSize, len(got))
 	}
 }
