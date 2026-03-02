@@ -838,6 +838,7 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		entries := m.entries[:m.count]
 		it := &appendOnlyIterator{
 			entries: entries,
+			start:   start,
 			end:     end,
 			mu:      &m.mu,
 		}
@@ -859,10 +860,12 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		m.mu.Unlock()
 		it := &appendOnlyIterator{
 			entryPtrs:       ptrs,
+			start:           start,
 			end:             end,
 			pooledEntryPtrs: true,
 			leaseOwner:      m,
 			leaseHeld:       true,
+			reverse:         false,
 		}
 		if start != nil {
 			it.Seek(start)
@@ -881,8 +884,10 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 
 	it := &appendOnlyIterator{
 		entries:       entries,
+		start:         start,
 		end:           end,
 		pooledEntries: true,
+		reverse:       false,
 	}
 	if start != nil {
 		it.Seek(start)
@@ -890,16 +895,76 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	return it
 }
 
+func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	m.mu.RLock()
+	if m.ordered {
+		entries := m.entries[:m.count]
+		it := &appendOnlyIterator{
+			entries: entries,
+			start:   start,
+			end:     end,
+			mu:      &m.mu,
+			reverse: true,
+		}
+		it.seekToReverseEnd(end)
+		return it
+	}
+	m.mu.RUnlock()
+
+	// Unordered iterators need a sorted latest-key view. Build/update shared
+	// caches under an exclusive lock.
+	m.mu.Lock()
+	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
+	if m.frozen {
+		ptrs := getAppendOnlyIteratorPtrs(len(snapshotPtrs))
+		copy(ptrs, snapshotPtrs)
+		m.acquireIteratorLeaseLocked()
+		m.mu.Unlock()
+		it := &appendOnlyIterator{
+			entryPtrs:       ptrs,
+			start:           start,
+			end:             end,
+			pooledEntryPtrs: true,
+			leaseOwner:      m,
+			leaseHeld:       true,
+			reverse:         true,
+		}
+		it.seekToReverseEnd(end)
+		return it
+	}
+	// Mutable unordered memtables must copy entries so readers can iterate
+	// without holding write locks while writers append concurrently.
+	entries := getAppendOnlyIteratorEntries(len(snapshotPtrs))
+	for i := range snapshotPtrs {
+		if snapshotPtrs[i] != nil {
+			entries[i] = *snapshotPtrs[i]
+		}
+	}
+	m.mu.Unlock()
+
+	it := &appendOnlyIterator{
+		entries:       entries,
+		start:         start,
+		end:           end,
+		pooledEntries: true,
+		reverse:       true,
+	}
+	it.seekToReverseEnd(end)
+	return it
+}
+
 type appendOnlyIterator struct {
 	entries         []appendOnlyEntry
 	entryPtrs       []*appendOnlyEntry
 	idx             int
+	start           []byte
 	end             []byte
 	mu              *sync.RWMutex
 	pooledEntries   bool
 	pooledEntryPtrs bool
 	leaseOwner      *AppendOnly
 	leaseHeld       bool
+	reverse         bool
 }
 
 func (it *appendOnlyIterator) len() int {
@@ -933,6 +998,9 @@ func (it *appendOnlyIterator) validIndex() bool {
 	if ent == nil {
 		return false
 	}
+	if it.start != nil && bytes.Compare(appendOnlyEntryKey(ent), it.start) < 0 {
+		return false
+	}
 	if it.end != nil && bytes.Compare(appendOnlyEntryKey(ent), it.end) >= 0 {
 		return false
 	}
@@ -944,12 +1012,20 @@ func (it *appendOnlyIterator) Valid() bool {
 }
 
 func (it *appendOnlyIterator) Next() {
+	if it.reverse {
+		it.idx--
+		return
+	}
 	if it.idx < it.len() {
 		it.idx++
 	}
 }
 
 func (it *appendOnlyIterator) Seek(key []byte) {
+	if it.reverse && key == nil {
+		it.idx = it.len() - 1
+		return
+	}
 	it.idx = sort.Search(it.len(), func(i int) bool {
 		ent := it.entryAt(i)
 		if ent == nil {
@@ -957,6 +1033,29 @@ func (it *appendOnlyIterator) Seek(key []byte) {
 		}
 		return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
 	})
+	if it.reverse && it.idx >= it.len() {
+		it.idx = it.len() - 1
+	}
+}
+
+func (it *appendOnlyIterator) seekToReverseEnd(end []byte) {
+	n := it.len()
+	if n == 0 {
+		it.idx = -1
+		return
+	}
+	if end == nil {
+		it.idx = n - 1
+		return
+	}
+	pos := sort.Search(n, func(i int) bool {
+		ent := it.entryAt(i)
+		if ent == nil {
+			return true
+		}
+		return bytes.Compare(appendOnlyEntryKey(ent), end) >= 0
+	})
+	it.idx = pos - 1
 }
 
 func (it *appendOnlyIterator) UnsafeKey() []byte {
