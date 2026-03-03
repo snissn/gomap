@@ -393,6 +393,29 @@ func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyGet_EmptyKey_IncrementalLatestIndex(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+
+	// Force the memtable into the unordered path so it uses the latest-index maps.
+	m.Set([]byte("b"), []byte("1"))
+	m.Set([]byte("a"), []byte("2"))
+
+	// Trigger a point read to build the latest index (latestDirty=false) before
+	// adding the empty key.
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "2" {
+		t.Fatalf("precondition Get(a) = (%q,%v,%v), want (2,false,true)", string(got), del, ok)
+	}
+
+	m.Set([]byte{}, []byte("empty"))
+
+	if got, del, ok := m.Get([]byte{}); !ok || del || string(got) != "empty" {
+		t.Fatalf("Get(empty key) = (%q,%v,%v), want (empty,false,true)", string(got), del, ok)
+	}
+	if got, ptr, flags, ok := m.GetEntry([]byte{}); !ok || string(got) != "empty" || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
+		t.Fatalf("GetEntry(empty key) = (%q,%+v,%d,%v), want (empty,zero,%d,true)", string(got), ptr, flags, ok, node.FlagInline)
+	}
+}
+
 var appendOnlyGetBenchSink []byte
 var appendOnlyGetBenchSinkBool bool
 

@@ -450,9 +450,6 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	if idx < 0 || idx >= m.count {
 		return
 	}
-	if len(key) == 0 {
-		return
-	}
 	if k64, ok := appendOnlyKeyU64(key); ok {
 		if m.latest64 == nil {
 			m.latest64 = make(map[uint64]int, 1)
