@@ -737,19 +737,32 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	stats.BytesBefore = beforeBytes
 
 	lane, startSeq := chooseRewriteLane(segments)
+	nextRID, err := nextRewriteRIDStart(segments)
+	if err != nil {
+		_ = d.Close()
+		return stats, err
+	}
 	maxBytes := opts.WALMaxSegmentBytes
 	if maxBytes <= 0 {
 		maxBytes = defaultValueLogRewriteSegmentBytes
 	}
-	if opts.IndexPackedValuePtr {
+	if opts.IndexPackedValuePtr || opts.IndexOuterLeavesInValueLog {
 		// Packed on-disk pointers store Offset as u32. Ensure rewritten segments
-		// rotate so newly written pointers remain representable.
+		// rotate so newly written pointers remain representable. LeafRef ids
+		// (outer leaves in value log) also encode Offset as u32.
 		const packedMax = int64(^uint32(0)) - 4
 		if maxBytes > packedMax {
 			maxBytes = packedMax
 		}
 	}
 	writer := newRewriteWriter(walDir, lane, startSeq, maxBytes)
+	writer.nextRID = nextRID
+	compressionMode := opts.ValueLog.Compression
+	if compressionMode == 0 {
+		compressionMode = ValueLogCompressionAuto
+	}
+	writer.blockCompression = compressionMode != ValueLogCompressionOff
+	writer.blockCodec = valuelogBlockCodecFromDB(opts.ValueLog.BlockCodec)
 	if err := writer.ensureWriter(); err != nil {
 		_ = d.Close()
 		return stats, err
@@ -787,12 +800,16 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			vlogs:  state.ValueLogSet,
 			writer: writer,
 		}
-		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, bulk.BuildOptions{
+		buildOpts := bulk.BuildOptions{
 			LeafPrefixCompression: opts.LeafPrefixCompression,
 			LeafColumnar:          opts.IndexColumnarLeaves,
 			PackedValuePtr:        opts.IndexPackedValuePtr,
 			InternalBaseDelta:     opts.IndexInternalBaseDelta,
-		})
+		}
+		if opts.IndexOuterLeavesInValueLog {
+			buildOpts.LeafPageLog = writer
+		}
+		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, buildOpts)
 		_ = rewriter.Close()
 		if err != nil {
 			return 0, err
@@ -903,6 +920,7 @@ type rewriteWriter struct {
 	seq     uint32
 	start   uint32
 	maxSize int64
+	nextRID uint64
 	// blockCompression enables per-frame block compression for dictID=0 append
 	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
 	// not consult this setting.
@@ -914,6 +932,21 @@ type rewriteWriter struct {
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
 	return &rewriteWriter{walDir: walDir, lane: lane, seq: startSeq, start: startSeq, maxSize: maxSize}
+}
+
+func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+	if w == nil {
+		return page.ValuePtr{}, errors.New("vlog-rewrite: nil writer")
+	}
+	if w.nextRID == 0 {
+		w.nextRID = 1
+	}
+	rid := w.nextRID
+	w.nextRID++
+	if w.nextRID == 0 {
+		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+	}
+	return w.appendValue(rid, leafPage)
 }
 
 func (w *rewriteWriter) ensureWriter() error {
