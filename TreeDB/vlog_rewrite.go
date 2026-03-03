@@ -40,12 +40,14 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	// Preserve the persisted on-disk format knobs by default so offline rewrite
 	// doesn't accidentally rebuild the index/value-log into a different layout.
 	outerLeafModeOverride := strings.TrimSpace(opts.IndexOuterLeafMode)
-	if cfg, ok, err := treedbdb.LoadFormatConfig(maindbDir); err != nil {
-		return ValueLogRewriteStats{}, err
-	} else if ok {
-		cfg.ApplyToOptions(&opts)
-		if outerLeafModeOverride != "" {
-			opts.IndexOuterLeafMode = outerLeafModeOverride
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := treedbdb.LoadFormatConfig(maindbDir); err != nil {
+			return ValueLogRewriteStats{}, err
+		} else if ok {
+			cfg.ApplyToOptions(&opts)
+			if outerLeafModeOverride != "" {
+				opts.IndexOuterLeafMode = outerLeafModeOverride
+			}
 		}
 	}
 

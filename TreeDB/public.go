@@ -1165,12 +1165,14 @@ func VacuumIndexOffline(opts Options) error {
 	// Preserve the persisted on-disk format knobs by default so offline index
 	// maintenance doesn't accidentally rewrite the DB into a different layout.
 	outerLeafModeOverride := strings.TrimSpace(opts.IndexOuterLeafMode)
-	if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
-		return err
-	} else if ok {
-		cfg.ApplyToOptions(&opts)
-		if outerLeafModeOverride != "" {
-			opts.IndexOuterLeafMode = outerLeafModeOverride
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
+			return err
+		} else if ok {
+			cfg.ApplyToOptions(&opts)
+			if outerLeafModeOverride != "" {
+				opts.IndexOuterLeafMode = outerLeafModeOverride
+			}
 		}
 	}
 	return db.VacuumIndexOffline(opts)

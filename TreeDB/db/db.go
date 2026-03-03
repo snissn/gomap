@@ -501,6 +501,12 @@ type ValueLogOptions struct {
 
 type Options struct {
 	Dir string
+	// IgnoreFormatConfig disables best-effort persisted format.json loading in
+	// offline maintenance helpers (VacuumIndexOffline, ValueLogRewriteOffline,
+	// treemap vacuum/rewrite/vlog-gc).
+	//
+	// It has no effect on normal DB open.
+	IgnoreFormatConfig bool
 	// ReadOnly opens the database without acquiring an exclusive lock and without
 	// modifying on-disk state (no recovery truncation, no WAL replay, no background
 	// maintenance). Only read operations are supported.
