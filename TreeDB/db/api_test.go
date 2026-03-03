@@ -200,7 +200,7 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 	db, err := Open(Options{
 		Dir: dir,
 		ValueLog: ValueLogOptions{
-			PointerThreshold: 1,
+			PointerThreshold: page.DefaultInlineThreshold,
 		},
 	})
 	if err != nil {
