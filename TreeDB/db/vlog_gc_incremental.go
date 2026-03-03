@@ -8,9 +8,12 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -682,13 +685,58 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if path == "" {
 		return nil
 	}
-	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	f, err := os.CreateTemp(dir, base+".tmp.*")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
 		return err
 	}
-	return nil
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	const attempts = 8
+	sleep := 5 * time.Millisecond
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if err := os.Rename(tmp, path); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			if runtime.GOOS != "windows" {
+				return err
+			}
+			var errno syscall.Errno
+			if errors.As(err, &errno) {
+				switch errno {
+				case syscall.Errno(5), syscall.Errno(32), syscall.Errno(33):
+					time.Sleep(sleep)
+					if sleep < 100*time.Millisecond {
+						sleep *= 2
+					}
+					continue
+				}
+			}
+			msg := strings.ToLower(err.Error())
+			if strings.Contains(msg, "used by another process") || strings.Contains(msg, "access is denied") {
+				time.Sleep(sleep)
+				if sleep < 100*time.Millisecond {
+					sleep *= 2
+				}
+				continue
+			}
+			return err
+		}
+	}
+	return lastErr
 }

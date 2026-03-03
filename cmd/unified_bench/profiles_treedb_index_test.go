@@ -180,7 +180,15 @@ func TestParseTreeDBOuterLeafMode_InvalidErrorMentionsLegacyAlias(t *testing.T) 
 }
 
 func TestParseTreeDBVlogGenerationPolicy(t *testing.T) {
-	got, err := parseTreeDBVlogGenerationPolicy("hot_warm_cold")
+	got, err := parseTreeDBVlogGenerationPolicy("default")
+	if err != nil {
+		t.Fatalf("parseTreeDBVlogGenerationPolicy: %v", err)
+	}
+	if got != treedb.ValueLogGenerationDefault {
+		t.Fatalf("policy=%d want %d", got, treedb.ValueLogGenerationDefault)
+	}
+
+	got, err = parseTreeDBVlogGenerationPolicy("hot_warm_cold")
 	if err != nil {
 		t.Fatalf("parseTreeDBVlogGenerationPolicy: %v", err)
 	}
@@ -197,7 +205,9 @@ func TestBuildTreeDBOptions_VlogGenerationConfig(t *testing.T) {
 	defer restoreTreeDBFlagState(saved)
 
 	resetTreeDBIndexFlagsForTest()
+	*treedbMaintenanceMode = "bench"
 	*treedbVlogGenerationPolicy = "hot_warm_cold"
+	explicitFlags["treedb-vlog-generation-policy"] = true
 	*treedbVlogGenerationHotSegmentBytes = 32 << 20
 	*treedbVlogGenerationWarmSegmentBytes = 64 << 20
 	*treedbVlogGenerationColdSegmentBytes = 128 << 20
@@ -232,6 +242,53 @@ func TestBuildTreeDBOptions_VlogGenerationConfig(t *testing.T) {
 	}
 }
 
+func TestBuildTreeDBOptions_MaintenanceModeNormalDefaultsGenerationPolicy(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbMaintenanceMode = "normal"
+	// Keep -treedb-vlog-generation-policy at its default ("default") but not explicit.
+	opts, rep, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.ValueLog.Generational.Policy != treedb.ValueLogGenerationHotWarmCold {
+		t.Fatalf("generation policy=%d want %d", opts.ValueLog.Generational.Policy, treedb.ValueLogGenerationHotWarmCold)
+	}
+	formatted := rep.formatText("")
+	if !strings.Contains(formatted, "maintenance_mode=normal") {
+		t.Fatalf("report missing maintenance_mode: %q", formatted)
+	}
+	if !strings.Contains(formatted, "vlog.generation_policy=hot_warm_cold") {
+		t.Fatalf("report missing generation policy: %q", formatted)
+	}
+}
+
+func TestBuildTreeDBOptions_MaintenanceModeBenchDisablesBackgroundLoops(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+
+	resetTreeDBIndexFlagsForTest()
+	*treedbMaintenanceMode = "bench"
+	opts, _, err := buildTreeDBOptions("")
+	if err != nil {
+		t.Fatalf("buildTreeDBOptions: %v", err)
+	}
+	if opts.BackgroundCheckpointInterval >= 0 {
+		t.Fatalf("BackgroundCheckpointInterval=%v want disabled (<0)", opts.BackgroundCheckpointInterval)
+	}
+	if opts.BackgroundCheckpointIdleDuration >= 0 {
+		t.Fatalf("BackgroundCheckpointIdleDuration=%v want disabled (<0)", opts.BackgroundCheckpointIdleDuration)
+	}
+	if opts.MaxWALBytes >= 0 {
+		t.Fatalf("MaxWALBytes=%d want disabled (<0)", opts.MaxWALBytes)
+	}
+	if opts.BackgroundIndexVacuumInterval >= 0 {
+		t.Fatalf("BackgroundIndexVacuumInterval=%v want disabled (<0)", opts.BackgroundIndexVacuumInterval)
+	}
+}
+
 type savedTreeDBFlagState struct {
 	indexOptimizations     bool
 	indexOuterLeafMode     string
@@ -257,6 +314,7 @@ type savedTreeDBFlagState struct {
 	relaxedSync            bool
 	disableChecksum        bool
 	allowUnsafe            bool
+	maintenanceMode        string
 	flushThreshold         int64
 	explicitFlags          map[string]bool
 }
@@ -291,6 +349,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		relaxedSync:            *treedbRelaxedSync,
 		disableChecksum:        *treedbDisableReadChecksum,
 		allowUnsafe:            *treedbAllowUnsafe,
+		maintenanceMode:        *treedbMaintenanceMode,
 		flushThreshold:         *treedbFlushThreshold,
 		explicitFlags:          copyMap,
 	}
@@ -321,6 +380,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 	*treedbRelaxedSync = s.relaxedSync
 	*treedbDisableReadChecksum = s.disableChecksum
 	*treedbAllowUnsafe = s.allowUnsafe
+	*treedbMaintenanceMode = s.maintenanceMode
 	*treedbFlushThreshold = s.flushThreshold
 	explicitFlags = s.explicitFlags
 }
@@ -336,7 +396,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexInternalBaseDelta = false
 	*treedbChunkSize = defaultTreeDBChunkSizeBytes
 	*treedbVlogAutoPolicy = "balanced"
-	*treedbVlogGenerationPolicy = "off"
+	*treedbVlogGenerationPolicy = "default"
 	*treedbVlogGenerationHotSegmentBytes = 0
 	*treedbVlogGenerationWarmSegmentBytes = 0
 	*treedbVlogGenerationColdSegmentBytes = 0
@@ -350,6 +410,7 @@ func resetTreeDBIndexFlagsForTest() {
 	*treedbRelaxedSync = false
 	*treedbDisableReadChecksum = false
 	*treedbAllowUnsafe = false
+	*treedbMaintenanceMode = "bench"
 	*treedbFlushThreshold = 64 * 1024 * 1024
 	explicitFlags = map[string]bool{}
 }

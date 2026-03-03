@@ -481,7 +481,9 @@ func runVacuum(dir string, args []string) {
 		fatalf("vacuum requires -rw")
 	}
 
-	if err := treedb.VacuumIndexOffline(treedb.Options{Dir: dir}); err != nil {
+	opts := treedb.Options{Dir: resolveTreeDBRootDir(dir)}
+	applyPersistedFormatConfig(dir, &opts)
+	if err := treedb.VacuumIndexOffline(opts); err != nil {
 		fatalf("VacuumIndexOffline error: %v", err)
 	}
 	fmt.Println("Index vacuum complete.")
@@ -491,9 +493,8 @@ func runVlogGC(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-gc", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
 	dryRun := fs.Bool("dry-run", false, "Report deletions without removing segments")
-	indexOuterLeafMode := fs.String("index-outer-leaf-mode", "", "Index outer-leaf mode override (v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
+	indexOuterLeafMode := fs.String("index-outer-leaf-mode", "", "Index outer-leaf mode override (default: from format.json when present)")
 	_ = fs.Parse(args)
-	mode := parseIndexOuterLeafMode(*indexOuterLeafMode)
 
 	if !*rw {
 		fatalf("vlog-gc requires -rw")
@@ -502,7 +503,12 @@ func runVlogGC(dir string, args []string) {
 	// Use backend DB directly for GC to avoid cached-layer lane initialization,
 	// which can pre-create empty value-log segments and pollute GC stats.
 	backendDir := resolveMainDBDir(dir)
-	backend, err := treedbdb.Open(treedbdb.Options{Dir: backendDir, ReadOnly: false, IndexOuterLeafMode: mode})
+	opts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
+	applyPersistedFormatConfig(dir, &opts)
+	if strings.TrimSpace(*indexOuterLeafMode) != "" {
+		opts.IndexOuterLeafMode = parseIndexOuterLeafMode(*indexOuterLeafMode)
+	}
+	backend, err := treedbdb.Open(opts)
 	if err != nil {
 		fatalf("Failed to open DB: %v", err)
 	}
@@ -547,16 +553,20 @@ func resolveMainDBDir(dir string) string {
 func runVlogRewrite(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-rewrite", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
-	indexOuterLeafMode := fs.String("index-outer-leaf-mode", "", "Index outer-leaf mode override (v1|v1_leaflog|v1_leaflog_route|v1_leaflog_legacy|v2_blockptr|v2_fenceptr)")
+	indexOuterLeafMode := fs.String("index-outer-leaf-mode", "", "Index outer-leaf mode override (default: from format.json when present)")
 	_ = fs.Parse(args)
-	mode := parseIndexOuterLeafMode(*indexOuterLeafMode)
 
 	if !*rw {
 		fatalf("vlog-rewrite requires -rw")
 	}
 
 	rootDir := resolveTreeDBRootDir(dir)
-	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: rootDir, IndexOuterLeafMode: mode})
+	opts := treedb.Options{Dir: rootDir}
+	applyPersistedFormatConfig(dir, &opts)
+	if strings.TrimSpace(*indexOuterLeafMode) != "" {
+		opts.IndexOuterLeafMode = parseIndexOuterLeafMode(*indexOuterLeafMode)
+	}
+	stats, err := treedb.ValueLogRewriteOffline(opts)
 	if err != nil {
 		fatalf("ValueLogRewriteOffline error: %v", err)
 	}
@@ -965,7 +975,11 @@ func openTreeDB(dir string, rw bool) *treedb.DB {
 
 func openTreeDBWithMode(dir string, rw bool, indexOuterLeafMode string) *treedb.DB {
 	rootDir := resolveTreeDBRootDir(dir)
-	opts := treedb.Options{Dir: rootDir, IndexOuterLeafMode: indexOuterLeafMode}
+	opts := treedb.Options{Dir: rootDir}
+	applyPersistedFormatConfig(dir, &opts)
+	if strings.TrimSpace(indexOuterLeafMode) != "" {
+		opts.IndexOuterLeafMode = indexOuterLeafMode
+	}
 	if !rw {
 		opts.ReadOnly = true
 	}
@@ -975,6 +989,21 @@ func openTreeDBWithMode(dir string, rw bool, indexOuterLeafMode string) *treedb.
 	}
 	registerSignalCloser(func() { _ = db.Close() })
 	return db
+}
+
+func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
+	if opts == nil {
+		return
+	}
+	backendDir := resolveMainDBDir(dir)
+	cfg, ok, err := treedbdb.LoadFormatConfig(backendDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: format config: %v\n", err)
+		return
+	}
+	if ok {
+		cfg.ApplyToOptions(opts)
+	}
 }
 
 func resolveTreeDBRootDir(dir string) string {

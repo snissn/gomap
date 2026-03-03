@@ -56,6 +56,7 @@ type ValueLogGenerationPolicy = db.ValueLogGenerationPolicy
 type ValueLogGenerationConfig = db.ValueLogGenerationConfig
 
 const (
+	ValueLogGenerationDefault     = db.ValueLogGenerationDefault
 	ValueLogGenerationOff         = db.ValueLogGenerationOff
 	ValueLogGenerationHotWarmCold = db.ValueLogGenerationHotWarmCold
 )
