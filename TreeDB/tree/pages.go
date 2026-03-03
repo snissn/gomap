@@ -8,8 +8,9 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-// WalkPages visits each page reachable from the Tree's current root exactly
-// once. It is primarily intended for diagnostics, vacuuming, and tests.
+// WalkPages visits each pager-backed page reachable from the Tree's current
+// root exactly once. Leaf pages stored in the value log (LeafRef IDs) are
+// skipped. It is primarily intended for diagnostics, vacuuming, and tests.
 func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 	if t.rootPageID == 0 {
 		return nil
@@ -73,8 +74,8 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 	return nil
 }
 
-// CollectPageIDs returns the set of page IDs reachable from the Tree root.
-// The returned slice is sorted.
+// CollectPageIDs returns the sorted set of pager-backed page IDs reachable from
+// the Tree root. Leaf pages stored in the value log (LeafRef IDs) are excluded.
 func (t *Tree) CollectPageIDs() ([]uint64, error) {
 	out := make([]uint64, 0, 1024)
 	if err := t.WalkPages(func(pageID uint64, _ node.Node) error {
