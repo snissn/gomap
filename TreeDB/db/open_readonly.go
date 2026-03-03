@@ -6,10 +6,8 @@ import (
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
-	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/zipper"
 )
@@ -56,11 +54,12 @@ func openReadOnly(opts Options) (*DB, error) {
 	z := zipper.New(p, alloc)
 	gen := newIndexGen(1, p, alloc, z)
 
+	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
 		readOnly:                   true,
 		valueLogManager:            vm,
 		lock:                       lock,
-		adaptive:                   adaptive.New(),
+		adaptive:                   adaptiveCtrl,
 		keepRecent:                 opts.KeepRecent,
 		valueLogCompression:        opts.ValueLog.Compression,
 		valueLogBlockCodec:         opts.ValueLog.BlockCodec,
@@ -81,7 +80,7 @@ func openReadOnly(opts Options) (*DB, error) {
 		freelistRegionPages:        opts.FreelistRegionPages,
 		freelistRegionRadius:       opts.FreelistRegionRadius,
 		policy: WritePolicy{
-			InlineThreshold: page.DefaultInlineThreshold,
+			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
 		},
 
@@ -145,10 +144,11 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	z := zipper.New(p, alloc)
 	gen := newIndexGen(1, p, alloc, z)
 
+	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	db := &DB{
 		readOnly:                   true,
 		valueLogManager:            vm,
-		adaptive:                   adaptive.New(),
+		adaptive:                   adaptiveCtrl,
 		keepRecent:                 opts.KeepRecent,
 		valueLogCompression:        opts.ValueLog.Compression,
 		valueLogBlockCodec:         opts.ValueLog.BlockCodec,
@@ -169,7 +169,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 		freelistRegionPages:        opts.FreelistRegionPages,
 		freelistRegionRadius:       opts.FreelistRegionRadius,
 		policy: WritePolicy{
-			InlineThreshold: page.DefaultInlineThreshold,
+			InlineThreshold: inlineThreshold,
 			FlushThreshold:  opts.FlushThreshold,
 		},
 
