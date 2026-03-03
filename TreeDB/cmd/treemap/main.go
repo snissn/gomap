@@ -974,6 +974,9 @@ func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
 	if opts == nil {
 		return
 	}
+	if opts.IgnoreFormatConfig {
+		return
+	}
 	backendDir := resolveMainDBDir(dir)
 	cfg, ok, err := treedbdb.LoadFormatConfig(backendDir)
 	if err != nil {

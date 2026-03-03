@@ -1122,10 +1122,12 @@ func VacuumIndexOffline(opts Options) error {
 
 	// Preserve the persisted on-disk format knobs by default so offline index
 	// maintenance doesn't accidentally rewrite the DB into a different layout.
-	if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
-		return err
-	} else if ok {
-		cfg.ApplyToOptions(&opts)
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
+			return err
+		} else if ok {
+			cfg.ApplyToOptions(&opts)
+		}
 	}
 	return db.VacuumIndexOffline(opts)
 }
