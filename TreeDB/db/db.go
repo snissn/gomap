@@ -624,6 +624,9 @@ type Options struct {
 	// v1_leaflog and v1_leaflog_legacy are distinct mode strings and are not
 	// auto-aliased during normalization.
 	IndexOuterLeafMode string
+	// IndexOuterLeavesInValueLog stores B+Tree outer-leaf pages in the value log
+	// rather than inlining them in index.db.
+	IndexOuterLeavesInValueLog bool
 	// MaxQueuedMemtables controls how much immutable-memtable backlog the cached
 	// layer will allow before applying backpressure (i.e. forcing flush work on
 	// writers). A negative value disables backpressure entirely (higher short-term
