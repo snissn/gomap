@@ -17,7 +17,9 @@ const formatConfigVersion = 1
 // should preserve when rewriting index/value-log state.
 //
 // This file is best-effort and pre-alpha; callers should tolerate it being
-// absent and may provide explicit overrides via Options.
+// absent. Versioned files written by SaveFormatConfig are expected to be fully
+// populated; if new fields are added in the future, the version should be
+// bumped so older binaries do not accidentally apply zero-values.
 type FormatConfig struct {
 	Version int `json:"version"`
 
@@ -90,8 +92,8 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 
 // ApplyToOptions overwrites format-affecting knobs in opts from cfg.
 //
-// Callers should treat cfg as best-effort (it may be absent or partially
-// populated) and may apply explicit overrides after this call.
+// Callers should treat cfg as best-effort (it may be absent) and may apply
+// explicit overrides after this call.
 func (cfg FormatConfig) ApplyToOptions(opts *Options) {
 	if opts == nil {
 		return
