@@ -1327,7 +1327,8 @@ func (b *Builder) leafColumnarV2AppendBytes(src []byte) (off uint32, n uint16) {
 }
 
 func (b *Builder) leafColumnarPrefixV2AppendValueBytes(src []byte) (off uint32, n uint16) {
-	if len(src) == 0 {
+	if len(src) == 0 && b.leafColumnarPrefixV2ValueArena == nil {
+		// Avoid allocating an arena just to record an empty value.
 		return 0, 0
 	}
 	if len(src) > int(^uint16(0)) {
