@@ -1693,7 +1693,7 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 
 // GetEntryExact is an alias for GetEntry.
 func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
-	return s.tree.GetEntryExact(key)
+	return s.GetEntry(key)
 }
 
 // Getters

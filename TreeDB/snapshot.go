@@ -9,6 +9,8 @@ import (
 // Snapshot is a consistent point-in-time view of the database.
 //
 // In cached mode, snapshots include writes that are buffered in memtables.
+//
+// TreeDB is pre-alpha; this interface may change without notice.
 type Snapshot interface {
 	Pager() *pager.Pager
 	State() *backenddb.DBState
