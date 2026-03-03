@@ -330,20 +330,24 @@ func (db *DB) mergeLeafRefValueLogRefs(ctx context.Context, refs map[uint32]stru
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	snap := db.AcquireSnapshot()
-	if snap == nil || snap.idx == nil || snap.idx.pager == nil || snap.state == nil {
-		if snap != nil {
-			_ = snap.Close()
-		}
-		return nil
+	if snap == nil {
+		return fmt.Errorf("acquire snapshot: nil")
+	}
+	if snap.idx == nil || snap.idx.pager == nil || snap.state == nil {
+		_ = snap.Close()
+		return fmt.Errorf("missing db state")
 	}
 	counts := make(map[uint32]uint64, 8)
-	if err := collectLeafRefValueLogRefCounts(snap.idx.pager, snap.state.RootPageID, counts); err != nil {
+	if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts); err != nil {
 		_ = snap.Close()
 		return err
 	}
-	if err := collectLeafRefValueLogRefCounts(snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
+	if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
 		_ = snap.Close()
 		return err
 	}
@@ -391,11 +395,11 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	_ = sysIter.Close()
 
 	if snap.idx != nil && snap.idx.pager != nil {
-		if err := collectLeafRefValueLogRefCounts(snap.idx.pager, snap.state.RootPageID, counts); err != nil {
+		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts); err != nil {
 			_ = snap.Close()
 			return nil, 0, err
 		}
-		if err := collectLeafRefValueLogRefCounts(snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
+		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
 			_ = snap.Close()
 			return nil, 0, err
 		}
@@ -407,7 +411,10 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	return counts, commitSeq, nil
 }
 
-func collectLeafRefValueLogRefCounts(p *pager.Pager, rootID uint64, refs map[uint32]uint64) error {
+func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID uint64, refs map[uint32]uint64) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if p == nil || rootID == 0 || refs == nil {
 		return nil
 	}
@@ -421,6 +428,9 @@ func collectLeafRefValueLogRefCounts(p *pager.Pager, rootID uint64, refs map[uin
 	verifyAlways := p.VerifyOnRead()
 
 	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		pageID := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if _, ok := visited[pageID]; ok {
