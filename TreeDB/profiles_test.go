@@ -22,11 +22,14 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.ValueLog.ReadIntegrity != IntegritySkipChecksums {
 		t.Fatalf("expected IntegritySkipChecksums for fast profile, got %v", opts.ValueLog.ReadIntegrity)
 	}
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("expected IndexOuterLeavesInValueLog=true for fast profile")
+	}
 	if !opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=true for fast profile")
 	}
-	if !opts.ValueLog.ForcePointers {
-		t.Fatalf("expected ValueLog.ForcePointers=true for fast profile")
+	if opts.ValueLog.ForcePointers {
+		t.Fatalf("expected ValueLog.ForcePointers=false for fast profile")
 	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for fast profile")
@@ -37,8 +40,8 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if !opts.IndexPackedValuePtr {
 		t.Fatalf("expected IndexPackedValuePtr=true for fast profile")
 	}
-	if !opts.IndexInternalBaseDelta {
-		t.Fatalf("expected IndexInternalBaseDelta=true for fast profile")
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta=false for fast profile (incompatible with outer leaves in value log)")
 	}
 }
 
@@ -52,11 +55,14 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	if opts.ValueLog.ReadIntegrity != IntegritySkipChecksums {
 		t.Fatalf("expected IntegritySkipChecksums for wal_on_fast profile, got %v", opts.ValueLog.ReadIntegrity)
 	}
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("expected IndexOuterLeavesInValueLog=true for wal_on_fast profile")
+	}
 	if !opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=true for wal_on_fast profile")
 	}
-	if !opts.ValueLog.ForcePointers {
-		t.Fatalf("expected ValueLog.ForcePointers=true for wal_on_fast profile")
+	if opts.ValueLog.ForcePointers {
+		t.Fatalf("expected ValueLog.ForcePointers=false for wal_on_fast profile")
 	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for wal_on_fast profile")
@@ -67,8 +73,8 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	if !opts.IndexPackedValuePtr {
 		t.Fatalf("expected IndexPackedValuePtr=true for wal_on_fast profile")
 	}
-	if !opts.IndexInternalBaseDelta {
-		t.Fatalf("expected IndexInternalBaseDelta=true for wal_on_fast profile")
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta=false for wal_on_fast profile (incompatible with outer leaves in value log)")
 	}
 }
 
@@ -88,8 +94,8 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	if !opts.DisableBackgroundPrune {
 		t.Fatalf("expected DisableBackgroundPrune=true for bench profile")
 	}
-	if !opts.ValueLog.ForcePointers {
-		t.Fatalf("expected ValueLog.ForcePointers=true for bench profile")
+	if opts.ValueLog.ForcePointers {
+		t.Fatalf("expected ValueLog.ForcePointers=false for bench profile")
 	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for bench profile")
@@ -100,14 +106,17 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	if !opts.IndexPackedValuePtr {
 		t.Fatalf("expected IndexPackedValuePtr=true for bench profile")
 	}
-	if !opts.IndexInternalBaseDelta {
-		t.Fatalf("expected IndexInternalBaseDelta=true for bench profile")
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta=false for bench profile (incompatible with outer leaves in value log)")
 	}
 }
 
 func TestApplyProfile_DurableKeepsIndexOptimizationsDisabled(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileDurable)
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("expected IndexOuterLeavesInValueLog=true for durable profile")
+	}
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for durable profile")
 	}

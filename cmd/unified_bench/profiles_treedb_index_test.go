@@ -8,13 +8,13 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 )
 
-func TestTreeDBIndexOuterLeavesInVlogFlag_DefaultIsFalse(t *testing.T) {
+func TestTreeDBIndexOuterLeavesInVlogFlag_DefaultIsTrue(t *testing.T) {
 	f := flag.Lookup("treedb-index-outer-leaves-in-vlog")
 	if f == nil {
 		t.Fatalf("missing treedb-index-outer-leaves-in-vlog flag")
 	}
-	if got := f.DefValue; got != "false" {
-		t.Fatalf("flag default=%q want %q", got, "false")
+	if got := f.DefValue; got != "true" {
+		t.Fatalf("flag default=%q want %q", got, "true")
 	}
 }
 
@@ -230,7 +230,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 
 func resetTreeDBIndexFlagsForTest() {
 	*treedbIndexOptimizations = false
-	*treedbIndexOuterLeavesInVlog = false
+	*treedbIndexOuterLeavesInVlog = true
 	*treedbForceValuePointers = false
 	*treedbLeafPrefixCompression = false
 	*treedbIndexColumnarLeaves = false
@@ -349,8 +349,14 @@ func TestBuildTreeDBOptions_IndexOptimizationsPerFlagOverride(t *testing.T) {
 	if opts.IndexColumnarLeaves {
 		t.Fatalf("expected explicit per-flag override to keep IndexColumnarLeaves=false")
 	}
-	if !opts.ValueLog.ForcePointers || !opts.LeafPrefixCompression || !opts.IndexPackedValuePtr || !opts.IndexInternalBaseDelta {
+	if opts.ValueLog.ForcePointers {
+		t.Fatalf("expected index optimizations to not enable force pointers")
+	}
+	if !opts.LeafPrefixCompression || !opts.IndexPackedValuePtr {
 		t.Fatalf("expected composite optimization settings to apply to non-overridden fields")
+	}
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta to be disabled when outer leaves are stored in the value log")
 	}
 }
 
@@ -371,8 +377,8 @@ func TestBuildTreeDBOptions_ExplicitCompositeFalseWinsUnlessPerFlagExplicit(t *t
 	if err != nil {
 		t.Fatalf("buildTreeDBOptions: %v", err)
 	}
-	if opts.ValueLog.ForcePointers {
-		t.Fatalf("expected explicit composite=false to disable non-explicit force pointers")
+	if !opts.ValueLog.ForcePointers {
+		t.Fatalf("expected force pointers to remain enabled when explicitly set")
 	}
 	if !opts.IndexPackedValuePtr {
 		t.Fatalf("expected explicit per-flag override to keep IndexPackedValuePtr=true")

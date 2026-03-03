@@ -134,6 +134,11 @@ func applyIndexOptimizationsProfile(opts *Options) {
 	opts.IndexColumnarLeaves = true
 	opts.IndexPackedValuePtr = true
 	opts.IndexInternalBaseDelta = true
+	if opts.IndexOuterLeavesInValueLog {
+		// Leaf refs encode value-log pointers in internal child IDs, which are
+		// incompatible with internal base-delta child ID encodings.
+		opts.IndexInternalBaseDelta = false
+	}
 }
 
 func applyFastProfile(opts *Options) {
