@@ -84,6 +84,8 @@ type DB struct {
 
 	keepRecent                 uint64
 	policy                     WritePolicy
+	valueLogCompression        ValueLogCompressionMode
+	valueLogBlockCodec         ValueLogBlockCodec
 	valueLogDomainThresholds   []ValueLogDomainThreshold
 	outerLeafBlockCache        *outerLeafBlockCache
 	outerLeafKeyCache          *outerLeafKeyCache
@@ -1150,6 +1152,8 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		lock:                       lock,
 		adaptive:                   adaptiveCtrl,
 		keepRecent:                 opts.KeepRecent,
+		valueLogCompression:        opts.ValueLog.Compression,
+		valueLogBlockCodec:         opts.ValueLog.BlockCodec,
 		valueLogDomainThresholds:   NormalizeValueLogDomainThresholds(opts.ValueLog.DomainInlineThresholds),
 		outerLeafBlockCache:        newOuterLeafBlockCache(opts.ValueLog.OuterLeafBlockCacheEntries),
 		outerLeafKeyCache:          newOuterLeafKeyCache(opts.ValueLog.OuterLeafBlockCacheEntries),
@@ -1443,6 +1447,23 @@ func (db *DB) recover() error {
 func (db *DB) rootPageValid(p *pager.Pager, pageID uint64) bool {
 	if pageID == 0 || p == nil {
 		return false
+	}
+	if ptr, ok := page.DecodeLeafRef(pageID); ok {
+		if db == nil || db.valueLogManager == nil {
+			return false
+		}
+		data, err := db.valueLogManager.ReadUnsafe(ptr)
+		if err != nil {
+			return false
+		}
+		if len(data) != page.PageSize {
+			return false
+		}
+		n := node.NewNodeView(data)
+		if !n.VerifyChecksum() {
+			return false
+		}
+		return n.Type() == page.PageTypeLeaf
 	}
 	data, err := p.Get(pageID)
 	if err != nil {

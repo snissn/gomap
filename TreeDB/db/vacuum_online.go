@@ -368,6 +368,13 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			}
 		}
 
+		// Ensure the new generation preserves leaf-page-in-value-log wiring for
+		// subsequent writes. Do this after rebuild/cutover work is complete so
+		// vacuum itself never depends on leaf-page-log flushing semantics.
+		newZ.SetLeafPageReader(db.valueLogManager)
+		newZ.SetLeafPageLog(db.leafPageLog)
+		newZ.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
+
 		// Publish the new index generation (old readers keep oldGen pinned).
 		newGen := newIndexGen(db.nextIndexID(), newPager, newAlloc, newZ)
 		db.trackIndex(newGen)
