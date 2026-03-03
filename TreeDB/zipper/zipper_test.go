@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math/rand"
 	"path/filepath"
 	"sync/atomic"
@@ -33,6 +34,80 @@ func (panicValueReader) Read(ptr page.ValuePtr) ([]byte, error) {
 
 func (panicValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	panic("unexpected value pointer read in zipper test")
+}
+
+type countingLeafPageReader struct {
+	calls atomic.Int64
+}
+
+func (r *countingLeafPageReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	r.calls.Add(1)
+	return nil, io.EOF
+}
+
+type stubLeafPageLog struct {
+	next uint32
+}
+
+func (l *stubLeafPageLog) AppendLeafPage(_ []byte) (page.ValuePtr, error) {
+	if l.next == 0 {
+		l.next = 4
+	}
+	ptr := page.ValuePtr{
+		FileID:  page.ValueLogFileID(1),
+		Offset:  uint64(l.next),
+		Length:  0,
+	}
+	l.next += 4096 + 32
+	return ptr, nil
+}
+
+func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	log := &stubLeafPageLog{}
+	reader := &countingLeafPageReader{}
+	z.SetLeafPageLog(log)
+	z.SetLeafPageReader(reader)
+
+	// Simulate Apply() scope: enable the in-flight leaf-ref cache so loadNode can
+	// resolve freshly appended leaf pages before the leafPageLog is flushed.
+	z.leafRefCache = make(map[uint64][]byte)
+
+	data := make([]byte, page.PageSize)
+	b := node.NewBuilder(data, page.PageTypeLeaf)
+	b.SetPageID(0)
+	if err := b.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{}); err != nil {
+		t.Fatalf("AddLeafEntry: %v", err)
+	}
+	b.FinishNoNode()
+
+	leafID, err := z.persistLeafPage(b)
+	if err != nil {
+		t.Fatalf("persistLeafPage: %v", err)
+	}
+
+	loaded, fromPager, err := z.loadNode(leafID)
+	if err != nil {
+		t.Fatalf("loadNode: %v", err)
+	}
+	if fromPager {
+		t.Fatalf("fromPager=%t want false", fromPager)
+	}
+	if loaded.Type() != page.PageTypeLeaf {
+		t.Fatalf("loaded.Type()=%d want %d", loaded.Type(), page.PageTypeLeaf)
+	}
+	if got := reader.calls.Load(); got != 0 {
+		t.Fatalf("leafPageReader calls=%d want 0", got)
+	}
 }
 
 func TestZipperInsertSplit(t *testing.T) {

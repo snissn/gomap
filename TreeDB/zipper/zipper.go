@@ -36,6 +36,8 @@ type Zipper struct {
 	outerLeavesInValueLog bool
 	leafPageLog           LeafPageLog
 	leafPageReader        LeafPageReader
+	leafRefCacheMu        sync.RWMutex
+	leafRefCache          map[uint64][]byte
 
 	leafReserveBytes          int
 	internalReserveBytes      int
@@ -568,6 +570,17 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 		return rootID, nil, metrics, nil
 	}
 
+	if z != nil && z.outerLeavesInValueLog {
+		z.leafRefCacheMu.Lock()
+		z.leafRefCache = make(map[uint64][]byte)
+		z.leafRefCacheMu.Unlock()
+		defer func() {
+			z.leafRefCacheMu.Lock()
+			z.leafRefCache = nil
+			z.leafRefCacheMu.Unlock()
+		}()
+	}
+
 	// Underfull merge/rebalance maintenance is only beneficial when the batch
 	// includes deletes (can create empty/underfull pages).
 	maintenance, deleteCount := z.shouldRunMaintenance(ops)
@@ -692,6 +705,21 @@ func (z *Zipper) loadNode(id uint64) (*node.Node, bool, error) {
 		return nil, false, errors.New("zipper: missing pager")
 	}
 	if ptr, ok := page.DecodeLeafRef(id); ok {
+		if z.outerLeavesInValueLog {
+			z.leafRefCacheMu.RLock()
+			data, cached := z.leafRefCache[id]
+			z.leafRefCacheMu.RUnlock()
+			if cached {
+				if len(data) != page.PageSize {
+					return nil, false, errors.New("zipper: cached leaf page has invalid size")
+				}
+				n := node.NewNode(data)
+				if n.Type() != page.PageTypeLeaf {
+					return nil, false, errors.New("zipper: cached leafref resolved to non-leaf page")
+				}
+				return n, false, nil
+			}
+		}
 		if z.leafPageReader == nil {
 			return nil, false, errors.New("zipper: missing leaf page reader")
 		}
@@ -729,7 +757,16 @@ func (z *Zipper) persistLeafPage(b *node.Builder) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return page.EncodeLeafRef(ptr)
+	leafID, err := page.EncodeLeafRef(ptr)
+	if err != nil {
+		return 0, err
+	}
+	z.leafRefCacheMu.Lock()
+	if z.leafRefCache != nil {
+		z.leafRefCache[leafID] = b.Data()
+	}
+	z.leafRefCacheMu.Unlock()
+	return leafID, nil
 }
 
 // writeRecursive handles the COW merge.
