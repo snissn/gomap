@@ -101,6 +101,35 @@ func (d *errorGetDB) Delete(key []byte) error {
 	return nil
 }
 
+type checkpointCountingDB struct {
+	checkpointCalls int
+}
+
+func (d *checkpointCountingDB) Name() string {
+	return "CheckpointCountingDB"
+}
+
+func (d *checkpointCountingDB) Close() error {
+	return nil
+}
+
+func (d *checkpointCountingDB) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (d *checkpointCountingDB) Set(key, value []byte) error {
+	return nil
+}
+
+func (d *checkpointCountingDB) Delete(key []byte) error {
+	return nil
+}
+
+func (d *checkpointCountingDB) Checkpoint() error {
+	d.checkpointCalls++
+	return nil
+}
+
 type preferGetManyDB struct {
 	getCalls     int
 	getManyCalls int
@@ -724,6 +753,42 @@ func TestRunBenchmark_CheckpointBetweenTests_Smoke(t *testing.T) {
 	}
 	if math.IsNaN(randWrite) || randWrite <= 0 {
 		t.Fatalf("expected random_write > 0, got %v", randWrite)
+	}
+}
+
+func TestRunBenchmark_CheckpointBetweenTests_RunsFinalCheckpoint(t *testing.T) {
+	const dbName = "checkpoint_final_mock"
+	var db *checkpointCountingDB
+	RegisterHiddenDB(dbName, func(dir string) (kvstore.DB, error) {
+		db = &checkpointCountingDB{}
+		return db, nil
+	})
+
+	run, err := runBenchmark(BenchConfig{
+		Keys:         1,
+		ValueSize:    0,
+		BatchSize:    1,
+		RangeQueries: 0,
+		RangeSpan:    0,
+		DBsArg:       dbName,
+		TestsArg:     "sequential_write",
+		KeepDir:      false,
+		Progress:     false,
+		SeedUsed:     1,
+
+		CheckpointBetweenTests: true,
+	})
+	if err != nil {
+		t.Fatalf("runBenchmark: %v", err)
+	}
+	if db == nil {
+		t.Fatalf("expected db to be initialized")
+	}
+	if got, want := db.checkpointCalls, 2; got != want {
+		t.Fatalf("checkpoint calls=%d, want %d", got, want)
+	}
+	if _, ok := run.CheckpointDurations[checkpointPostRunLabel]; !ok {
+		t.Fatalf("expected post-run checkpoint durations under %q", checkpointPostRunLabel)
 	}
 }
 
