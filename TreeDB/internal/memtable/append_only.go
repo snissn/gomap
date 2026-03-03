@@ -467,7 +467,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 }
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) {
-	if key == nil {
+	if len(key) == 0 {
 		return
 	}
 	if m.count == len(m.entries) {
@@ -564,7 +564,7 @@ func (m *AppendOnly) DeleteSteal(key []byte) {
 }
 
 func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
-	if key == nil {
+	if len(key) == 0 {
 		return nil
 	}
 	k := cloneBytes(key)
@@ -581,7 +581,7 @@ func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 }
 
 func (m *AppendOnly) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
-	if key == nil {
+	if len(key) == 0 {
 		return nil
 	}
 	k := cloneBytes(key)
