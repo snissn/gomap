@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -12,6 +13,12 @@ import (
 )
 
 var ErrKeyNotFound = errors.New("key not found")
+
+var leafRefPageScratchPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, page.PageSize)
+	},
+}
 
 func compareTreeKey(a, b []byte) int {
 	if len(a) == 8 && len(b) == 8 {
@@ -276,9 +283,42 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 	}
 
 	for depth := 0; depth < 50; depth++ {
-		n, err := t.loadNodeView(currID, verifyAlways)
-		if err != nil {
-			return nil, page.ValuePtr{}, 0, false, err
+		var (
+			n              node.Node
+			leafScratch    []byte
+			leafScratchRef bool
+		)
+		if appendMode && t.slabAppender != nil {
+			if ptr, ok := page.DecodeLeafRef(currID); ok {
+				leafScratch, _ = leafRefPageScratchPool.Get().([]byte)
+				data, err := t.slabAppender.ReadUnsafeAppend(ptr, leafScratch[:0])
+				if err != nil {
+					leafRefPageScratchPool.Put(leafScratch[:0])
+					return nil, page.ValuePtr{}, 0, false, err
+				}
+				leafScratch = data
+				if len(leafScratch) != page.PageSize {
+					leafRefPageScratchPool.Put(leafScratch[:0])
+					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid leaf page size %d for page %d", len(leafScratch), currID)
+				}
+				n = node.NewNodeView(leafScratch)
+				if !n.VerifyChecksum() {
+					leafRefPageScratchPool.Put(leafScratch[:0])
+					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("checksum mismatch on page %d", currID)
+				}
+				if n.Type() != page.PageTypeLeaf {
+					leafRefPageScratchPool.Put(leafScratch[:0])
+					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+				}
+				leafScratchRef = true
+			}
+		}
+		if !leafScratchRef {
+			var err error
+			n, err = t.loadNodeView(currID, verifyAlways)
+			if err != nil {
+				return nil, page.ValuePtr{}, 0, false, err
+			}
 		}
 
 		switch n.Type() {
@@ -304,19 +344,44 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)
 			if err != nil {
+				if leafScratchRef {
+					leafRefPageScratchPool.Put(leafScratch[:0])
+				}
 				return nil, page.ValuePtr{}, 0, false, err
 			}
 			if !found {
+				if leafScratchRef {
+					leafRefPageScratchPool.Put(leafScratch[:0])
+				}
 				return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
 			}
 
 			val, ptr, flags, err := n.GetLeafValueView(idx)
 			if err != nil {
+				if leafScratchRef {
+					leafRefPageScratchPool.Put(leafScratch[:0])
+				}
 				return nil, page.ValuePtr{}, 0, false, err
+			}
+			if appendMode && flags&(node.FlagPointer|node.FlagTombstone) == 0 {
+				out := dst
+				if val != nil {
+					out = append(dst, val...)
+				}
+				if leafScratchRef {
+					leafRefPageScratchPool.Put(leafScratch[:0])
+				}
+				return out, ptr, flags, true, nil
+			}
+			if leafScratchRef {
+				leafRefPageScratchPool.Put(leafScratch[:0])
 			}
 			return val, ptr, flags, false, nil
 
 		default:
+			if leafScratchRef {
+				leafRefPageScratchPool.Put(leafScratch[:0])
+			}
 			return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
 		}
 	}
