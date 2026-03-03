@@ -32,12 +32,13 @@ const (
 )
 
 type iteratorReusableBuffers struct {
-	stack        []CursorItem
-	prefetchPtrs []page.ValuePtr
-	prefetchKeys [][]byte
-	prefetchVals [][]byte
-	ptrScratch   []byte
-	keyScratch   []byte
+	stack          []CursorItem
+	prefetchPtrs   []page.ValuePtr
+	prefetchKeys   [][]byte
+	prefetchVals   [][]byte
+	ptrScratch     []byte
+	leafRefScratch []byte
+	keyScratch     []byte
 }
 
 func retainSliceCap[T any](s []T, maxCap int) []T {
@@ -360,6 +361,7 @@ type Iterator struct {
 	valOK           bool
 	ptrOK           bool
 	ptrScratch      []byte
+	leafRefScratch  []byte
 	slabAppender    slabUnsafeAppender
 	slabBatcher     slabUnsafeBatchAppender
 	slabKeyReader   slabUnsafeKeyReader
@@ -397,12 +399,13 @@ func normalizeIteratorMode(mode IteratorMode) IteratorMode {
 
 func (it *Iterator) captureReusableBuffers() iteratorReusableBuffers {
 	return iteratorReusableBuffers{
-		stack:        it.stack,
-		prefetchPtrs: it.prefetchPtrs,
-		prefetchKeys: it.prefetchKeys,
-		prefetchVals: it.prefetchVals,
-		ptrScratch:   it.ptrScratch,
-		keyScratch:   it.leafState.keyScratch,
+		stack:          it.stack,
+		prefetchPtrs:   it.prefetchPtrs,
+		prefetchKeys:   it.prefetchKeys,
+		prefetchVals:   it.prefetchVals,
+		ptrScratch:     it.ptrScratch,
+		leafRefScratch: it.leafRefScratch,
+		keyScratch:     it.leafState.keyScratch,
 	}
 }
 
@@ -415,6 +418,7 @@ func (it *Iterator) trimReusableBuffers() iteratorReusableBuffers {
 	buf.prefetchKeys = retainSliceCap(it.prefetchKeys, iteratorPoolMaxPrefetchCap)
 	buf.prefetchVals = retainSliceCap(it.prefetchVals, iteratorPoolMaxPrefetchCap)
 	buf.ptrScratch = retainSliceCap(it.ptrScratch, iteratorPoolMaxScratchBytes)
+	buf.leafRefScratch = retainSliceCap(it.leafRefScratch, page.PageSize)
 	buf.keyScratch = retainSliceCap(it.leafState.keyScratch, iteratorPoolMaxScratchBytes)
 	return buf
 }
@@ -429,6 +433,7 @@ func (it *Iterator) installReusableBuffers(buf iteratorReusableBuffers) {
 	it.prefetchKeys = buf.prefetchKeys[:0]
 	it.prefetchVals = buf.prefetchVals[:0]
 	it.ptrScratch = buf.ptrScratch[:0]
+	it.leafRefScratch = buf.leafRefScratch[:0]
 	it.leafState.keyScratch = buf.keyScratch[:0]
 }
 
@@ -999,6 +1004,27 @@ func (it *Iterator) Domain() (start, end []byte) {
 func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 	if it == nil || it.tree == nil {
 		return node.Node{}, errors.New("missing tree")
+	}
+	if ptr, ok := page.DecodeLeafRef(pageID); ok && it.slabAppender != nil {
+		if cap(it.leafRefScratch) != page.PageSize {
+			it.leafRefScratch = make([]byte, 0, page.PageSize)
+		}
+		data, err := it.slabAppender.ReadUnsafeAppend(ptr, it.leafRefScratch[:0])
+		if err != nil {
+			return node.Node{}, err
+		}
+		if len(data) != page.PageSize {
+			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
+		}
+		n := node.NewNodeView(data)
+		if !n.VerifyChecksum() {
+			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
+		}
+		if n.Type() != page.PageTypeLeaf {
+			return node.Node{}, fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
+		}
+		it.leafRefScratch = data[:0]
+		return n, nil
 	}
 	return it.tree.loadNodeView(pageID, it.verifyAlways)
 }
