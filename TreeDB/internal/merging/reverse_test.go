@@ -48,13 +48,14 @@ func (m *mockUnsafeReverseIter) Seek(key []byte) {
 		m.idx = len(m.data) - 1
 		return
 	}
+	m.idx = -1
 	for i, e := range m.data {
-		if bytes.Compare([]byte(e.k), key) >= 0 {
+		if bytes.Compare([]byte(e.k), key) <= 0 {
 			m.idx = i
-			return
+			continue
 		}
+		break
 	}
-	m.idx = len(m.data) - 1
 }
 
 func (m *mockUnsafeReverseIter) Domain() (start, end []byte) { return nil, nil }
