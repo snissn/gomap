@@ -23,7 +23,11 @@ import (
 
 const (
 	valueLogRefCountsFileName = "vlog_ref_counts.meta"
-	valueLogRefCountsVersion  = uint32(1)
+	// valueLogRefCountsVersion is the on-disk version for vlog_ref_counts.meta.
+	//
+	// Version 2 includes leaf-page LeafRef reachability for IndexOuterLeavesInValueLog
+	// trees (and is robust to callers opening the backend without the option).
+	valueLogRefCountsVersion = uint32(2)
 )
 
 var (
@@ -295,6 +299,9 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 	seq := db.currentCommitSeq()
 	if db.valueLogRefTracker != nil {
 		if refs, ok := db.valueLogRefTracker.referencedSet(seq); ok {
+			if err := db.mergeLeafRefValueLogRefs(ctx, refs); err != nil {
+				return nil, err
+			}
 			return refs, nil
 		}
 	}
@@ -313,6 +320,46 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 		refs[fileID] = struct{}{}
 	}
 	return refs, nil
+}
+
+func (db *DB) mergeLeafRefValueLogRefs(ctx context.Context, refs map[uint32]struct{}) error {
+	if db == nil || refs == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return fmt.Errorf("acquire snapshot: nil")
+	}
+	if snap.idx == nil || snap.idx.pager == nil || snap.state == nil {
+		_ = snap.Close()
+		return fmt.Errorf("missing db state")
+	}
+	counts := make(map[uint32]uint64, 8)
+	if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts); err != nil {
+		_ = snap.Close()
+		return err
+	}
+	if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
+		_ = snap.Close()
+		return err
+	}
+	if err := snap.Close(); err != nil {
+		return err
+	}
+	for fileID, n := range counts {
+		if n == 0 {
+			continue
+		}
+		refs[fileID] = struct{}{}
+	}
+	return nil
 }
 
 func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uint64, error) {
@@ -346,12 +393,12 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	_ = sysIter.Close()
 
-	if db.indexOuterLeavesInValueLog && snap.idx != nil && snap.idx.pager != nil {
-		if err := collectLeafRefValueLogRefCounts(snap.idx.pager, snap.state.RootPageID, counts); err != nil {
+	if snap.idx != nil && snap.idx.pager != nil {
+		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts); err != nil {
 			_ = snap.Close()
 			return nil, 0, err
 		}
-		if err := collectLeafRefValueLogRefCounts(snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
+		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
 			_ = snap.Close()
 			return nil, 0, err
 		}
@@ -363,7 +410,10 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	return counts, commitSeq, nil
 }
 
-func collectLeafRefValueLogRefCounts(p *pager.Pager, rootID uint64, refs map[uint32]uint64) error {
+func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID uint64, refs map[uint32]uint64) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if p == nil || rootID == 0 || refs == nil {
 		return nil
 	}
@@ -377,6 +427,9 @@ func collectLeafRefValueLogRefCounts(p *pager.Pager, rootID uint64, refs map[uin
 	verifyAlways := p.VerifyOnRead()
 
 	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		pageID := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if _, ok := visited[pageID]; ok {

@@ -127,6 +127,15 @@ func orderRewriteCandidates(candidates []rewriteCandidate, policy ValueLogRewrit
 	})
 }
 
+func valuelogBlockCodecFromDB(codec ValueLogBlockCodec) valuelog.BlockCodec {
+	switch codec {
+	case ValueLogBlockLZ4:
+		return valuelog.BlockCodecLZ4
+	default:
+		return valuelog.BlockCodecSnappy
+	}
+}
+
 func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
 	if len(opts.SourceFileIDs) > 0 {
 		return true
@@ -494,7 +503,17 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if maxBytes <= 0 {
 		maxBytes = defaultValueLogRewriteSegmentBytes
 	}
+	if db.indexPackedValuePtr {
+		// Packed on-disk pointers store Offset as u32. Ensure rewritten segments
+		// rotate so newly written pointers remain representable.
+		const packedMax = int64(^uint32(0)) - 4
+		if maxBytes > packedMax {
+			maxBytes = packedMax
+		}
+	}
 	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), lane, startSeq, maxBytes)
+	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
+	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	defer func() { _ = writer.Close() }()
 
 	batchSize := normalizeValueLogRewriteBatchSize(opts.BatchSize)
@@ -971,8 +990,13 @@ type rewriteWriter struct {
 	seq     uint32
 	start   uint32
 	maxSize int64
-	w       *valuelog.Writer
-	records int
+	// blockCompression enables per-frame block compression for dictID=0 append
+	// paths (used by online rewrite). Offline rewrites use AppendRawRecord and do
+	// not consult this setting.
+	blockCompression bool
+	blockCodec       valuelog.BlockCodec
+	w                *valuelog.Writer
+	records          int
 }
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
@@ -998,10 +1022,15 @@ func (w *rewriteWriter) rotate() error {
 		if err != nil {
 			return err
 		}
+		writer.SetBlockCompression(w.blockCodec, w.blockCompression)
 		w.w = writer
 		return nil
 	}
-	return w.w.RotateTo(path, fileID)
+	if err := w.w.RotateTo(path, fileID); err != nil {
+		return err
+	}
+	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
+	return nil
 }
 
 func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, error) {
