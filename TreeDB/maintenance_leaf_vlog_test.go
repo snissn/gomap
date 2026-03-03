@@ -295,6 +295,71 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline(t *testing.T) {
+	dir := t.TempDir()
+	opts := treedb.Options{
+		Dir:                        dir,
+		Durability:                 treedb.DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		ValueLog: treedb.ValueLogOptions{
+			PointerThreshold: 127, // keep small values inline
+		},
+	}
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	// Keep the tree height 1 so meta.UserRootPageID should remain a LeafRef.
+	for i := 0; i < 16; i++ {
+		key := []byte(fmt.Sprintf("rew-inline-%03d", i))
+		val := bytes.Repeat([]byte{byte(i)}, 32)
+		if err := db.Set(key, val); err != nil {
+			_ = db.Close()
+			t.Fatalf("set %q: %v", string(key), err)
+		}
+	}
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	metaBefore := readMainMeta(t, dir)
+	if _, ok := page.DecodeLeafRef(metaBefore.UserRootPageID); !ok {
+		t.Fatalf("expected root to be a LeafRef before rewrite, got %d", metaBefore.UserRootPageID)
+	}
+
+	stats, err := treedb.ValueLogRewriteOffline(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 || stats.BytesAfter == 0 {
+		t.Fatalf("expected rewrite to copy leaf-page records, stats=%+v", stats)
+	}
+
+	metaAfter := readMainMeta(t, dir)
+	if _, ok := page.DecodeLeafRef(metaAfter.UserRootPageID); !ok {
+		t.Fatalf("expected root to be a LeafRef after rewrite, got %d", metaAfter.UserRootPageID)
+	}
+
+	reopen, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("rew-inline-010"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	if len(got) != 32 {
+		t.Fatalf("expected 32B value after reopen, got %dB", len(got))
+	}
+}
+
 func TestValueLogGC_LeafPagesInValueLog_BackendOpenWithoutFlag_PreservesLeafRefs(t *testing.T) {
 	dir := t.TempDir()
 	const (

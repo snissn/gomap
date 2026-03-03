@@ -11,6 +11,15 @@ type Allocator interface {
 	Alloc(hint uint64) (uint64, error)
 }
 
+// LeafPageLog persists leaf pages as value-log records and returns their pointers.
+//
+// When BuildOptions.LeafPageLog is non-nil, BuildWithOptions writes leaf pages
+// via this interface and returns LeafRef ids (encoded from the returned
+// ValuePtr) in internal children and as the tree root when the height is 1.
+type LeafPageLog interface {
+	AppendLeafPage(leafPage []byte) (page.ValuePtr, error)
+}
+
 type levelBuilder struct {
 	builder  *node.Builder
 	startKey []byte
@@ -21,6 +30,7 @@ type BuildOptions struct {
 	LeafColumnar          bool
 	InternalBaseDelta     bool
 	PackedValuePtr        bool
+	LeafPageLog           LeafPageLog
 }
 
 // Build creates a new B-Tree from a sorted iterator.
@@ -30,15 +40,26 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 
 // BuildWithOptions creates a new B-Tree from a sorted iterator with custom options.
 func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager, opts BuildOptions) (uint64, error) {
+	leafLog := opts.LeafPageLog
 	if !iter.Valid() {
 		// Empty tree? Return a new empty root.
+		buf := make([]byte, page.PageSize)
+		b := newLeafBuilder(buf, opts)
+		if leafLog != nil {
+			b.SetPageID(0)
+			n := b.Finish()
+			ptr, err := leafLog.AppendLeafPage(n.Data())
+			if err != nil {
+				return 0, err
+			}
+			return page.EncodeLeafRef(ptr)
+		}
+
 		rootID, err := alloc.Alloc(0)
 		if err != nil {
 			return 0, err
 		}
 		// Write empty leaf
-		buf := make([]byte, page.PageSize)
-		b := newLeafBuilder(buf, opts)
 		b.SetPageID(rootID)
 		n := b.Finish()
 		if err := p.Write(rootID, n.Data()); err != nil {
@@ -63,10 +84,6 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 
 	ensureLevel := func(lvl int) error {
 		for len(levels) <= lvl {
-			pid, err := alloc.Alloc(0)
-			if err != nil {
-				return err
-			}
 			buf := make([]byte, page.PageSize)
 
 			typ := page.PageTypeInternal
@@ -75,7 +92,15 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			}
 
 			b := newBuilder(buf, typ)
-			b.SetPageID(pid)
+			if typ == page.PageTypeLeaf && leafLog != nil {
+				b.SetPageID(0)
+			} else {
+				pid, err := alloc.Alloc(0)
+				if err != nil {
+					return err
+				}
+				b.SetPageID(pid)
+			}
 			levels = append(levels, &levelBuilder{
 				builder:  b,
 				startKey: nil,
@@ -94,8 +119,21 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 	flush = func(lvl int) error {
 		lb := levels[lvl]
 		n := lb.builder.Finish()
-		if err := p.Write(lb.builder.PageID(), n.Data()); err != nil {
-			return err
+		childID := lb.builder.PageID()
+		if lvl == 0 && leafLog != nil {
+			ptr, err := leafLog.AppendLeafPage(n.Data())
+			if err != nil {
+				return err
+			}
+			id, err := page.EncodeLeafRef(ptr)
+			if err != nil {
+				return err
+			}
+			childID = id
+		} else {
+			if err := p.Write(childID, n.Data()); err != nil {
+				return err
+			}
 		}
 
 		// Promote to parent
@@ -112,7 +150,6 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 			// Should not happen for valid tree
 			key = []byte{}
 		}
-		childID := lb.builder.PageID()
 
 		// Add to parent
 		if parent.startKey == nil {
@@ -138,17 +175,21 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 		}
 
 		// Reset current level builder
-		pid, err := alloc.Alloc(0)
-		if err != nil {
-			return err
-		}
 		buf := make([]byte, page.PageSize)
 		typ := page.PageTypeInternal
 		if lvl == 0 {
 			typ = page.PageTypeLeaf
 		}
 		lb.builder = newBuilder(buf, typ)
-		lb.builder.SetPageID(pid)
+		if typ == page.PageTypeLeaf && leafLog != nil {
+			lb.builder.SetPageID(0)
+		} else {
+			pid, err := alloc.Alloc(0)
+			if err != nil {
+				return err
+			}
+			lb.builder.SetPageID(pid)
+		}
 		lb.startKey = nil
 
 		return nil
@@ -193,10 +234,23 @@ func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pa
 	for i := 0; i < len(levels); i++ {
 		lb := levels[i]
 		n := lb.builder.Finish()
-		if err := p.Write(lb.builder.PageID(), n.Data()); err != nil {
-			return 0, err
+		childID := lb.builder.PageID()
+		if i == 0 && leafLog != nil {
+			ptr, err := leafLog.AppendLeafPage(n.Data())
+			if err != nil {
+				return 0, err
+			}
+			id, err := page.EncodeLeafRef(ptr)
+			if err != nil {
+				return 0, err
+			}
+			childID = id
+		} else {
+			if err := p.Write(childID, n.Data()); err != nil {
+				return 0, err
+			}
 		}
-		currID = lb.builder.PageID()
+		currID = childID
 
 		// If this is not the top level, add to parent
 		if i < len(levels)-1 {
