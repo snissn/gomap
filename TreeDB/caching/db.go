@@ -4149,18 +4149,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			inlineThreshold = v
 		}
 	}
-	// In relaxed durability modes, storing moderate values out-of-line avoids a
-	// catastrophic random_write cliff at large key counts (perf gate II / #229).
-	//
-	// We pick a default threshold that still keeps small values inline, but
-	// pushes the unified-bench default 128B values into the value log.
-	const defaultRelaxedValueLogThreshold = 127
 	valueLogThreshold := opts.ValueLogPointerThreshold
 	if valueLogThreshold <= 0 {
 		valueLogThreshold = page.DefaultInlineThreshold
-		if opts.DisableWAL || opts.RelaxedSync {
-			valueLogThreshold = defaultRelaxedValueLogThreshold
-		}
 	}
 	valueLogDomainThresholds := backenddb.NormalizeValueLogDomainThresholds(opts.ValueLogDomainInlineThresholds)
 	valueLogMaxSegmentBytes := opts.ValueLogMaxSegmentBytes

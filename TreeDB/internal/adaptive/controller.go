@@ -5,7 +5,7 @@ import (
 )
 
 const (
-	DefaultInlineThreshold = 256
+	DefaultInlineThreshold = 512
 	InlineHardMin          = DefaultInlineThreshold
 	InlineHardMax          = 2048
 	DefaultStep            = 64

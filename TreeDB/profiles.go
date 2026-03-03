@@ -126,10 +126,10 @@ func ApplyProfile(opts *Options, profile Profile) {
 func applyDurableProfile(opts *Options) {
 	opts.Durability = DurabilityDurable
 	opts.ValueLog.ReadIntegrity = IntegrityVerify
+	opts.IndexOuterLeavesInValueLog = true
 }
 
 func applyIndexOptimizationsProfile(opts *Options) {
-	opts.ValueLog.ForcePointers = true
 	opts.LeafPrefixCompression = true
 	opts.IndexColumnarLeaves = true
 	opts.IndexPackedValuePtr = true
@@ -139,6 +139,7 @@ func applyIndexOptimizationsProfile(opts *Options) {
 func applyFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
+	opts.IndexOuterLeavesInValueLog = true
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}
@@ -157,6 +158,7 @@ func applyFastProfile(opts *Options) {
 func applyWALOnFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOnRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
+	opts.IndexOuterLeavesInValueLog = true
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}
