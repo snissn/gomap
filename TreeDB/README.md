@@ -112,24 +112,6 @@ through `wal/` even when WAL is off.
 
 Details: `docs/TREEDB_WRITE_PATHS.md`.
 
-## Outer-Leaf Modes
-
-TreeDB supports five index outer-leaf modes:
-
-- `v1`: baseline exact-key index semantics.
-- `v1_leaflog`: routing-style mode using leaf anchors in the index and outer-leaf payload envelopes (`TOL2`) in the value log.
-- `v1_leaflog_legacy`: legacy compatibility mode that keeps exact-key leaf entries with outer-leaf payload envelopes.
-- `v2_blockptr`: exact-key index entries that can point to grouped outer-leaf payload blocks.
-- `v2_fenceptr`: fence-key routing mode (smallest index footprint, predecessor-probe lookup model).
-
-If unset (`""`), `IndexOuterLeafMode` defaults to `v2_fenceptr`.
-
-Current Step 2 guarantees:
-- `v1_leaflog` and `v1_leaflog_legacy` remain distinct selectable mode strings (no auto-aliasing).
-- Existing read/write behavior is unchanged in this step; algorithm rewrite/hardening work is tracked in #610.
-
-Canonical mode semantics and invariants: `TreeDB/docs/spec/outer-leaf-modes.md`.
-
 ## Leaf Pages in the Value Log
 
 `Options.IndexOuterLeavesInValueLog` stores the B+Tree **leaf pages** (the 4096B
@@ -137,8 +119,8 @@ pages that contain keys and values/pointers) in the persistent value log instead
 of in `index.db`. Internal pages remain in `index.db` and still provide exact
 lookup routing to a single leaf page (no leaf scanning).
 
-This option is orthogonal to `IndexOuterLeafMode`: leaf pages may still contain
-inline values or `ValuePtr` entries using the existing placement rules.
+Leaf pages may still contain inline values or `ValuePtr` entries using the
+existing placement rules.
 
 ## Durability & Safety Notes
 

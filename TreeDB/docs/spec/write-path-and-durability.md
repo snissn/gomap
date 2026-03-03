@@ -68,23 +68,6 @@ sequence acts as a durable commit fence:
 This prevents replaying partial pointer commits and avoids phantom pointer
 visibility after crash recovery.
 
-### 3.2 WAL Fence Mode (`v2_fenceptr`)
-
-`ValueLog.WALFenceMode` controls WAL encoding for pointer-eligible writes when
-`IndexOuterLeafMode=v2_fenceptr`.
-
-- `rid_join` (default):
-  - write path appends value-log records first,
-  - WAL stores `OpSetRID` records,
-  - recovery requires RID fence satisfaction for sequenced batches.
-- `simple_inline`:
-  - WAL stores `OpSetInline` records for pointer-eligible writes,
-  - writes stay inline in mutable memtables,
-  - pointer materialization and fence collapse occur at flush/checkpoint.
-
-`simple_inline` keeps direct write-path structure intact and avoids requiring
-client-side batching or ingress behavior changes. WAL-off behavior is unchanged.
-
 ## 4. Backend Commit Model
 
 Backend applies flushed operations through copy-on-write zipper merge.
