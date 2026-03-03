@@ -894,15 +894,13 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	m.mu.Lock()
 	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
 	if m.frozen {
-		ptrs := getAppendOnlyIteratorPtrs(len(snapshotPtrs))
-		copy(ptrs, snapshotPtrs)
 		m.acquireIteratorLeaseLocked()
 		m.mu.Unlock()
 		it := &appendOnlyIterator{
-			entryPtrs:       ptrs,
+			entryPtrs:       snapshotPtrs,
 			start:           start,
 			end:             end,
-			pooledEntryPtrs: true,
+			pooledEntryPtrs: false,
 			leaseOwner:      m,
 			leaseHeld:       true,
 			reverse:         false,
@@ -956,15 +954,13 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 	m.mu.Lock()
 	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
 	if m.frozen {
-		ptrs := getAppendOnlyIteratorPtrs(len(snapshotPtrs))
-		copy(ptrs, snapshotPtrs)
 		m.acquireIteratorLeaseLocked()
 		m.mu.Unlock()
 		it := &appendOnlyIterator{
-			entryPtrs:       ptrs,
+			entryPtrs:       snapshotPtrs,
 			start:           start,
 			end:             end,
-			pooledEntryPtrs: true,
+			pooledEntryPtrs: false,
 			leaseOwner:      m,
 			leaseHeld:       true,
 			reverse:         true,
