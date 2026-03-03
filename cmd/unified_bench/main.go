@@ -3290,6 +3290,21 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	// Final clear of live table
 	_ = liveTbl.Clear()
 
+	// If the user requests checkpoints between tests, also checkpoint after the
+	// final test so disk usage reflects a settled backend state (especially for
+	// front-end ingest benchmarks like TreeDB batch_write).
+	if cfg.CheckpointBetweenTests {
+		for _, inst := range instances {
+			cp, ok := inst.Wrapper.(checkpointer)
+			if !ok {
+				continue
+			}
+			if err := cp.Checkpoint(); err != nil {
+				return BenchRun{}, fmt.Errorf("checkpoint %s after run: %w", inst.Name, err)
+			}
+		}
+	}
+
 	// Shutdown
 	treedbDisk := make(map[string]treeDBDiskUsage)
 	treedbStats := make(map[string]map[string]string)
