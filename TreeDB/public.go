@@ -364,6 +364,10 @@ func Open(opts Options) (*DB, error) {
 		// dictdb stores small metadata values (e.g. current dict id, hash->id map)
 		// inline. ForcePointers would set InlineThreshold=0 and break these writes.
 		dictOpts.ValueLog.ForcePointers = false
+		// Avoid inheriting pointer/domain placement rules from the main DB. Side
+		// stores keep small values inline by default.
+		dictOpts.ValueLog.PointerThreshold = 0
+		dictOpts.ValueLog.DomainInlineThresholds = nil
 		dictOpts.ValueLog.Compression = db.ValueLogCompressionOff
 		dictOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		dictOpts.ChunkSize = dictChunkSize
@@ -389,6 +393,8 @@ func Open(opts Options) (*DB, error) {
 		// templatedb uses batch.Set for small routing/index entries. Do not
 		// propagate ForcePointers from the main DB into this internal store.
 		templateOpts.ValueLog.ForcePointers = false
+		templateOpts.ValueLog.PointerThreshold = 0
+		templateOpts.ValueLog.DomainInlineThresholds = nil
 		templateOpts.ValueLog.Compression = db.ValueLogCompressionOff
 		templateOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		templateOpts.ValueLog.TemplateMode = template.TemplateOff
