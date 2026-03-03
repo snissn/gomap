@@ -606,6 +606,45 @@ func TestTreeGetAppend_AppendsAndUsesAppendReaderForPointers(t *testing.T) {
 	}
 }
 
+func TestTreeGetAppend_UsesAppendReaderForLeafRefPages(t *testing.T) {
+	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
+
+	leafData := make([]byte, page.PageSize)
+	leaf := node.NewNode(leafData)
+	leaf.SetType(page.PageTypeLeaf)
+	leaf.SetPageID(1)
+	leaf.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
+	leaf.UpdateChecksum()
+
+	leafRefID, err := page.EncodeLeafRef(page.ValuePtr{
+		FileID: page.ValueLogFileID(1),
+		Offset: 8,
+	})
+	if err != nil {
+		t.Fatalf("EncodeLeafRef: %v", err)
+	}
+	ptr, ok := page.DecodeLeafRef(leafRefID)
+	if !ok {
+		t.Fatalf("DecodeLeafRef failed")
+	}
+	tracked.values[ptr] = append([]byte(nil), leafData...)
+
+	tr := New(nil, tracked, leafRefID)
+	got, err := tr.GetAppend([]byte("k"), nil)
+	if err != nil {
+		t.Fatalf("GetAppend failed: %v", err)
+	}
+	if string(got) != "v" {
+		t.Fatalf("unexpected value: %q", got)
+	}
+	if tracked.readUnsafeAppendCalls != 1 {
+		t.Fatalf("expected ReadUnsafeAppend to be used once, got %d", tracked.readUnsafeAppendCalls)
+	}
+	if tracked.readUnsafeCalls != 0 {
+		t.Fatalf("expected ReadUnsafe to be bypassed, got %d calls", tracked.readUnsafeCalls)
+	}
+}
+
 func TestTreeGetUnsafe_UsesUnsafeReaderForPointers(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")
