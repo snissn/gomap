@@ -80,12 +80,12 @@ Behavior:
   - `Durability = DurabilityWALOffRelaxed` (WAL off + relaxed sync)
   - `ValueLog.ReadIntegrity = IntegritySkipChecksums`
 - Prefers append allocation for throughput under churn (`PreferAppendAlloc=true`)
+- Enables leaf pages in the value log (`IndexOuterLeavesInValueLog = true`)
 - Enables index optimization bundle:
-  - `ValueLog.ForcePointers = true`
   - `LeafPrefixCompression = true`
   - `IndexColumnarLeaves = true`
   - `IndexPackedValuePtr = true`
-  - `IndexInternalBaseDelta = true`
+  - `IndexInternalBaseDelta = false` (incompatible with leaf refs)
 - Leaves background maintenance enabled by default.
 
 Notes:
