@@ -18,12 +18,11 @@ func TestBatch_WALOffStreamBypass_DisabledWithValueLog(t *testing.T) {
 	defer backend.Close()
 
 	cached, err := Open(dir, backend, Options{
-		AllowUnsafe:        true,
-		DisableWAL:         true,
-		FlushThreshold:     1 << 30,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
-		MemtableMode:       "skiplist",
-		MemtableShards:     1,
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "skiplist",
+		MemtableShards: 1,
 	})
 	if err != nil {
 		t.Fatalf("open cached: %v", err)
@@ -76,12 +75,11 @@ func TestBatch_WALOffStreamBypass_SkipsWhenOverlappingMemtables(t *testing.T) {
 	defer backend.Close()
 
 	cached, err := Open(dir, backend, Options{
-		AllowUnsafe:        true,
-		DisableWAL:         true,
-		FlushThreshold:     1 << 30,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV1,
-		MemtableMode:       "skiplist",
-		MemtableShards:     1,
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "skiplist",
+		MemtableShards: 1,
 	})
 	if err != nil {
 		t.Fatalf("open cached: %v", err)
@@ -130,7 +128,6 @@ func TestBatch_WALOffValueLogMultiLaneFanout(t *testing.T) {
 		AllowUnsafe:                      true,
 		DisableWAL:                       true,
 		FlushThreshold:                   1 << 30,
-		IndexOuterLeafMode:               db.IndexOuterLeafModeV1,
 		MemtableMode:                     "skiplist",
 		MemtableShards:                   8,
 		JournalLanes:                     4,

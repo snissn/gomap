@@ -1680,33 +1680,14 @@ func (s *Snapshot) Has(key []byte) (bool, error) {
 	return s.tree.Has(key)
 }
 
-// GetEntry returns the logical entry from snapshot.
-//
-// On exact leaf hits, this returns the persisted leaf entry. On misses that
-// resolve via fence-pointer fallback, it returns a synthesized inline entry.
-// Use GetEntryExact when callers require exact persisted entries only.
+// GetEntry returns the persisted leaf entry for key.
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 	return s.tree.GetEntry(key)
 }
 
-// GetEntryExact returns only exact persisted leaf entries for key.
-//
-// Unlike GetEntry, this method does not perform fence-pointer fallback on
-// misses.
+// GetEntryExact is an alias for GetEntry.
 func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
 	return s.tree.GetEntryExact(key)
-}
-
-// LookupFencePointerSource returns the predecessor fence pointer record that
-// currently resolves key when key has no exact leaf entry.
-func (s *Snapshot) LookupFencePointerSource(key []byte) (page.ValuePtr, bool, error) {
-	return s.tree.LookupFencePointerSource(key)
-}
-
-// LookupFencePointerOrigin returns the predecessor key and pointer record that
-// currently resolve key when key has no exact leaf entry.
-func (s *Snapshot) LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool, error) {
-	return s.tree.LookupFencePointerOrigin(key)
 }
 
 // Getters

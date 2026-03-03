@@ -3,8 +3,6 @@ package caching
 import (
 	"reflect"
 	"testing"
-
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestReverseIterator_IncludesCachedWrites_SnapshotIsolated(t *testing.T) {
@@ -12,11 +10,10 @@ func TestReverseIterator_IncludesCachedWrites_SnapshotIsolated(t *testing.T) {
 	backend.Set([]byte("b"), []byte("backend_b"))
 
 	db, err := Open(t.TempDir(), backend, Options{
-		DisableWAL:         true,
-		AllowUnsafe:        true,
-		FlushThreshold:     1 << 30,
-		MemtableShards:     1,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV2FencePtr,
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableShards: 1,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)

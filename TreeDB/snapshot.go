@@ -3,7 +3,6 @@ package treedb
 import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
-	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
@@ -21,8 +20,6 @@ type Snapshot interface {
 
 	GetEntry(key []byte) (node.LeafEntry, error)
 	GetEntryExact(key []byte) (node.LeafEntry, error)
-	LookupFencePointerSource(key []byte) (page.ValuePtr, bool, error)
-	LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool, error)
 
 	Close() error
 }

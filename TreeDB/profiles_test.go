@@ -72,69 +72,6 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	}
 }
 
-func TestApplyProfile_FastAndWALOnFast_V2FencePtrOuterLeafCacheDefault(t *testing.T) {
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
-		t.Run(string(profile), func(t *testing.T) {
-			opts := Options{IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr}
-			ApplyProfile(&opts, profile)
-			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 16384 {
-				t.Fatalf("expected v2_fenceptr profile default OuterLeafBlockCacheEntries=16384, got %d", got)
-			}
-		})
-	}
-}
-
-func TestApplyProfile_V2FencePtrPreservesExplicitOuterLeafCacheEntries(t *testing.T) {
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
-		t.Run(string(profile), func(t *testing.T) {
-			opts := Options{
-				IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
-				ValueLog: ValueLogOptions{
-					OuterLeafBlockCacheEntries: 4096,
-				},
-			}
-			ApplyProfile(&opts, profile)
-			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 4096 {
-				t.Fatalf("expected explicit OuterLeafBlockCacheEntries to be preserved, got %d", got)
-			}
-		})
-	}
-}
-
-func TestApplyProfile_NonV2FencePtrLeavesOuterLeafCacheEntriesUnset(t *testing.T) {
-	modes := []struct {
-		name string
-		mode string
-	}{
-		{name: "v1", mode: IndexOuterLeafModeV1},
-		{name: "v2_blockptr", mode: IndexOuterLeafModeV2BlockPtr},
-	}
-
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
-		for _, tc := range modes {
-			t.Run(string(profile)+"_"+tc.name, func(t *testing.T) {
-				opts := Options{IndexOuterLeafMode: tc.mode}
-				ApplyProfile(&opts, profile)
-				if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 0 {
-					t.Fatalf("expected non-v2_fenceptr mode %q to keep OuterLeafBlockCacheEntries=0, got %d", tc.mode, got)
-				}
-			})
-		}
-	}
-}
-
-func TestApplyProfile_EmptyOuterLeafModeUsesV2FencePtrCacheDefault(t *testing.T) {
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
-		t.Run(string(profile), func(t *testing.T) {
-			var opts Options
-			ApplyProfile(&opts, profile)
-			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 16384 {
-				t.Fatalf("expected empty mode to use v2_fenceptr default OuterLeafBlockCacheEntries=16384, got %d", got)
-			}
-		})
-	}
-}
-
 func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileBench)

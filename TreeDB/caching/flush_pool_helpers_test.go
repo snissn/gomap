@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -242,7 +241,6 @@ func TestFlushDeferredValueLogUnitsInlinePointerChunkingNoDropsOrDuplicates(t *t
 		ForceValueLogPointers:    true,
 		ValueLogPointerThreshold: 1,
 		FlushBuildChunkCap:       1024,
-		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -306,7 +304,7 @@ func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
 	db := &DB{valueLogThreshold: page.DefaultInlineThreshold}
 	const reserveHint = 7
 
-	if emitted, err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, false, 0, nil, nil); err != nil {
+	if emitted, err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, false, 0); err != nil {
 		_ = iter.Close()
 		t.Fatalf("flushDeferredValueLogMemtable: %v", err)
 	} else if emitted != 2 {

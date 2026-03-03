@@ -74,7 +74,6 @@ func TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites(t *testing
 	opts := treedb.Options{
 		Dir:                        dir,
 		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode:         treedb.IndexOuterLeafModeV1,
 		IndexOuterLeavesInValueLog: true,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
@@ -133,7 +132,6 @@ func TestVacuumIndexOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	opts := treedb.Options{
 		Dir:                        dir,
 		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode:         treedb.IndexOuterLeafModeV1,
 		IndexOuterLeavesInValueLog: true,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
@@ -184,7 +182,6 @@ func TestValueLogRewriteOnline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	opts := treedb.Options{
 		Dir:                        dir,
 		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode:         treedb.IndexOuterLeafModeV1,
 		IndexOuterLeavesInValueLog: true,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
@@ -249,7 +246,6 @@ func TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(t *testing.T) {
 	opts := treedb.Options{
 		Dir:                        dir,
 		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode:         treedb.IndexOuterLeafModeV1,
 		IndexOuterLeavesInValueLog: true,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
@@ -310,7 +306,6 @@ func TestValueLogGC_LeafPagesInValueLog_BackendOpenWithoutFlag_PreservesLeafRefs
 		Dir:                        dir,
 		DisableSideStores:          true,
 		Durability:                 treedb.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode:         treedb.IndexOuterLeafModeV1,
 		IndexOuterLeavesInValueLog: true,
 		ValueLog: treedb.ValueLogOptions{
 			// Disable compression/dict/template so the only value-log reachability
@@ -348,9 +343,8 @@ func TestValueLogGC_LeafPagesInValueLog_BackendOpenWithoutFlag_PreservesLeafRefs
 	// IndexOuterLeavesInValueLog option, then run GC. GC must still treat leaf
 	// pages stored in the value log as referenced.
 	backend, err := treedbdb.Open(treedbdb.Options{
-		Dir:                dir,
-		ReadOnly:           false,
-		IndexOuterLeafMode: treedbdb.IndexOuterLeafModeV1,
+		Dir:      dir,
+		ReadOnly: false,
 	})
 	if err != nil {
 		t.Fatalf("backend open: %v", err)
