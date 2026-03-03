@@ -76,16 +76,20 @@ Notes:
 - Compression is encoded in the value-log record header (frame flags), not in
   `ValuePtr.Length`.
 
-### Outer-leaf value-log payloads (`IndexOuterLeafMode=v2_blockptr|v2_fenceptr`)
+### Outer-leaf blocks (`TOL2`)
 
-When `IndexOuterLeafMode` is `v2_blockptr` or `v2_fenceptr`, pointer payloads
-may be wrapped using the `TOL2` envelope before being written to the value log:
+TreeDB may store *outer-leaf blocks* in the value log. These blocks bundle one
+or more sorted key entries into one value-log record payload and support
+optional compression (snappy/lz4) plus prefix-compressed keys with restart
+points.
+
+Each block uses the `TOL2` envelope:
 
 ```text
-bytes[4] Magic = "TOL2"
-u8       Version          // 1=single KV, 2=multi-KV block
+bytes[4] Magic            // "TOL2"
+u8       Version          // 1=single KV, 2=multi-KV, 3=typed entries
 u8       Codec            // 0=raw, 1=snappy, 2=lz4
-u16      RestartInterval
+u16      RestartInterval  // restart interval for prefix-compressed keys
 u16/u32  Version-specific metadata
 u32      Checksum         // CRC32C(header-with-zero-checksum || encoded-payload)
 bytes    EncodedPayload
@@ -94,38 +98,13 @@ bytes    EncodedPayload
 - Version 1 stores one `{key,value}` pair.
 - Version 2 stores multiple sorted `{key,value}` pairs with prefix-compressed
   keys plus a restart-offset table/trailer.
+- Version 3 stores multiple sorted `{key,kind,value}` entries where `kind`
+  selects either:
+  - inline bytes, or
+  - a nested `page.ValuePtr` blob reference for very large values.
 
-Mode semantics:
-- `v2_blockptr`: index leaves still store per-user-key pointer entries.
-- `v2_fenceptr`: index leaves store one fence-key pointer per grouped block; user
-  keys are resolved from block payloads.
-
-Point lookups and iterators resolve `{pointer,key}` by decoding one payload
-block and finding the requested key inside that block.
-
-Pre-alpha note: these `v2` outer-leaf layouts are intentionally allowed to
-change. Old experimental DB directories may fail to open after format updates.
-
-### Routing-only outer-leaf payloads (`IndexOuterLeafMode=v1_leaflog_route`)
-
-`v1_leaflog_route` is the routing-only mode:
-
-- `index.db` stores routing/index pages and directory anchors, not key-sorted outer
-  leaf pages.
-- The index points to one outer-leaf payload block per anchor.
-- Each outer-leaf block is written as one coherent blob in the value log and is
-  compressed by default (snappy path).
-- Each block entry may store either:
-  - full inline small values, or
-  - a nested value pointer for larger values.
-- Reads follow an exact one-probe routing contract: locate the covering anchor,
-  decode that blob, and resolve the key by binary search inside the decoded
-  block.
-- Writes publish blob anchors atomically so an anchor is never visible before the
-  referenced blob is durable.
-
-For the exact semantics, invariants, and acceptance criteria of this mode, see:
-`docs/TREEDB_V1_LEAFLOG_ROUTE_SPEC.md`
+Lookup resolves `{pointer,key}` by decoding one block and finding the requested
+key inside that block (binary search with a small linear-scan fallback).
 
 ### Leaf entry encoding (index leaf pages)
 

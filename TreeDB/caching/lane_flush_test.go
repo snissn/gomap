@@ -16,7 +16,6 @@ func TestLaneAwareFlush(t *testing.T) {
 	opts := Options{
 		JournalLanes:             4,
 		MemtableShards:           4,
-		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1,
 		ValueLogPointerThreshold: 1, // Always use vlog pointers
 		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
 		AllowUnsafe:              true,
@@ -105,7 +104,6 @@ func TestLaneAwareFlushAll(t *testing.T) {
 	opts := Options{
 		JournalLanes:             4,
 		MemtableShards:           4,
-		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1,
 		ValueLogPointerThreshold: 1,
 		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
 		AllowUnsafe:              true,

@@ -2,8 +2,6 @@ package treedb
 
 import (
 	"testing"
-
-	"github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestNormalizeBackpressureDefaults_Standard(t *testing.T) {
@@ -21,45 +19,8 @@ func TestNormalizeBackpressureDefaults_Standard(t *testing.T) {
 	}
 }
 
-func TestNormalizeBackpressureDefaults_V2FenceWALOff(t *testing.T) {
-	opts := Options{
-		Durability:         db.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode: db.IndexOuterLeafModeV2FencePtr,
-	}
-	normalizeBackpressureDefaults(&opts)
-
-	if opts.SlowdownBacklogSeconds != defaultV2FenceSlowdownBacklogSeconds {
-		t.Fatalf("slowdown=%v want %v", opts.SlowdownBacklogSeconds, defaultV2FenceSlowdownBacklogSeconds)
-	}
-	if opts.StopBacklogSeconds != defaultV2FenceStopBacklogSeconds {
-		t.Fatalf("stop=%v want %v", opts.StopBacklogSeconds, defaultV2FenceStopBacklogSeconds)
-	}
-	if opts.MaxBacklogBytes != defaultAdaptiveMaxBacklogBytes {
-		t.Fatalf("max_backlog=%d want %d", opts.MaxBacklogBytes, defaultAdaptiveMaxBacklogBytes)
-	}
-}
-
-func TestNormalizeBackpressureDefaults_EmptyModeUsesV2FenceDefaultsWhenWALOff(t *testing.T) {
-	opts := Options{
-		Durability: db.DurabilityWALOffRelaxed,
-	}
-	normalizeBackpressureDefaults(&opts)
-
-	if opts.SlowdownBacklogSeconds != defaultV2FenceSlowdownBacklogSeconds {
-		t.Fatalf("slowdown=%v want %v", opts.SlowdownBacklogSeconds, defaultV2FenceSlowdownBacklogSeconds)
-	}
-	if opts.StopBacklogSeconds != defaultV2FenceStopBacklogSeconds {
-		t.Fatalf("stop=%v want %v", opts.StopBacklogSeconds, defaultV2FenceStopBacklogSeconds)
-	}
-	if opts.MaxBacklogBytes != defaultAdaptiveMaxBacklogBytes {
-		t.Fatalf("max_backlog=%d want %d", opts.MaxBacklogBytes, defaultAdaptiveMaxBacklogBytes)
-	}
-}
-
 func TestNormalizeBackpressureDefaults_ExplicitPreserved(t *testing.T) {
 	opts := Options{
-		Durability:              db.DurabilityWALOffRelaxed,
-		IndexOuterLeafMode:      db.IndexOuterLeafModeV2FencePtr,
 		SlowdownBacklogSeconds:  0.5,
 		StopBacklogSeconds:      1.5,
 		MaxBacklogBytes:         12345,

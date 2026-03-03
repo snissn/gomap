@@ -24,7 +24,7 @@ type iteratorParityCapture struct {
 	post     map[string][]iteratorParityKV
 }
 
-var iteratorV1LeafLogParityScans = []iteratorParityScan{
+var iteratorParityScans = []iteratorParityScan{
 	{name: "full-forward", reverse: false},
 	{name: "full-reverse", reverse: true},
 	{name: "upper-ab-forward", end: []byte("ab"), reverse: false},
@@ -41,27 +41,11 @@ var iteratorV1LeafLogParityScans = []iteratorParityScan{
 	{name: "prefix-zz-reverse", start: []byte("zz/"), end: []byte("zz0"), reverse: true},
 }
 
-func TestIterator_Parity_V1_vs_V1LeafLog_BoundsAndEdgeTransitions(t *testing.T) {
-	v1 := runIteratorParityScenario(t, IndexOuterLeafModeV1)
-	v1LeafLog := runIteratorParityScenario(t, IndexOuterLeafModeV1LeafLog)
-
-	for _, scan := range iteratorV1LeafLogParityScans {
-		assertIteratorParityKVEqual(
-			t,
-			v1.snapshot[scan.name],
-			v1LeafLog.snapshot[scan.name],
-			fmt.Sprintf("snapshot parity %s", scan.name),
-		)
-		assertIteratorParityKVEqual(
-			t,
-			v1.post[scan.name],
-			v1LeafLog.post[scan.name],
-			fmt.Sprintf("post parity %s", scan.name),
-		)
-	}
+func TestIterator_Parity_BoundsAndEdgeTransitions(t *testing.T) {
+	runIteratorParityScenario(t)
 }
 
-func TestIterator_Parity_V1_vs_V1LeafLog_SnapshotVisibility(t *testing.T) {
+func TestIterator_Parity_SnapshotVisibility(t *testing.T) {
 	snapshotScans := []iteratorParityScan{
 		{name: "snapshot-forward", start: []byte("ab/001"), end: []byte("ac/005"), reverse: false},
 		{name: "snapshot-reverse", start: []byte("ab/001"), end: []byte("ac/005"), reverse: true},
@@ -69,78 +53,62 @@ func TestIterator_Parity_V1_vs_V1LeafLog_SnapshotVisibility(t *testing.T) {
 
 	for _, scan := range snapshotScans {
 		t.Run(scan.name, func(t *testing.T) {
-			v1Snapshot, v1Post := runIteratorSnapshotScenario(t, IndexOuterLeafModeV1, scan)
-			v1LeafSnapshot, v1LeafPost := runIteratorSnapshotScenario(t, IndexOuterLeafModeV1LeafLog, scan)
-
-			assertIteratorParityKVEqual(
-				t,
-				v1Snapshot,
-				v1LeafSnapshot,
-				fmt.Sprintf("%s snapshot parity", scan.name),
-			)
-			assertIteratorParityKVEqual(
-				t,
-				v1Post,
-				v1LeafPost,
-				fmt.Sprintf("%s post parity", scan.name),
-			)
+			runIteratorSnapshotScenario(t, scan)
 		})
 	}
 }
 
-func runIteratorParityScenario(t *testing.T, mode string) iteratorParityCapture {
+func runIteratorParityScenario(t *testing.T) {
 	t.Helper()
 
 	base := iteratorParityBaseData()
 	expectedPost := iteratorParityPostData(base)
-	db := openIteratorParityDB(t, mode)
+	db := openIteratorParityDB(t)
 
 	seedIteratorParityData(t, db, base)
 	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint seeded mode=%s: %v", mode, err)
+		t.Fatalf("checkpoint seeded: %v", err)
 	}
 
-	snapshot := collectIteratorParityScans(t, db, iteratorV1LeafLogParityScans)
-	assertIteratorParityScansAgainstFixture(t, mode, "snapshot", snapshot, base)
+	snapshot := collectIteratorParityScans(t, db, iteratorParityScans)
+	assertIteratorParityScansAgainstFixture(t, "snapshot", snapshot, base)
 
 	if err := applyIteratorParityMutations(db); err != nil {
-		t.Fatalf("mutate mode=%s: %v", mode, err)
+		t.Fatalf("mutate: %v", err)
 	}
 	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint post-mutation mode=%s: %v", mode, err)
+		t.Fatalf("checkpoint post-mutation: %v", err)
 	}
 
-	post := collectIteratorParityScans(t, db, iteratorV1LeafLogParityScans)
-	assertIteratorParityScansAgainstFixture(t, mode, "post", post, expectedPost)
-
-	return iteratorParityCapture{snapshot: snapshot, post: post}
+	post := collectIteratorParityScans(t, db, iteratorParityScans)
+	assertIteratorParityScansAgainstFixture(t, "post", post, expectedPost)
 }
 
-func runIteratorSnapshotScenario(t *testing.T, mode string, scan iteratorParityScan) ([]iteratorParityKV, []iteratorParityKV) {
+func runIteratorSnapshotScenario(t *testing.T, scan iteratorParityScan) {
 	t.Helper()
 
 	base := iteratorParityBaseData()
 	expectedPost := iteratorParityPostData(base)
-	db := openIteratorParityDB(t, mode)
+	db := openIteratorParityDB(t)
 
 	seedIteratorParityData(t, db, base)
 	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint seeded mode=%s scan=%s: %v", mode, scan.name, err)
+		t.Fatalf("checkpoint seeded scan=%s: %v", scan.name, err)
 	}
 
 	it := openIteratorParityScanOrFail(t, db, scan)
 	if err := applyIteratorParityMutations(db); err != nil {
-		t.Fatalf("mutate mode=%s scan=%s: %v", mode, scan.name, err)
+		t.Fatalf("mutate scan=%s: %v", scan.name, err)
 	}
 	snapshot := collectIteratorParityKV(t, it)
 	assertIteratorParityKVEqual(
 		t,
 		snapshot,
 		iteratorParityExpectedForScan(base, scan),
-		fmt.Sprintf("mode=%s snapshot %s", mode, scan.name),
+		fmt.Sprintf("snapshot %s", scan.name),
 	)
 	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint post-mutation mode=%s scan=%s: %v", mode, scan.name, err)
+		t.Fatalf("checkpoint post-mutation scan=%s: %v", scan.name, err)
 	}
 
 	post := collectIteratorParityScan(t, db, scan)
@@ -148,24 +116,22 @@ func runIteratorSnapshotScenario(t *testing.T, mode string, scan iteratorParityS
 		t,
 		post,
 		iteratorParityExpectedForScan(expectedPost, scan),
-		fmt.Sprintf("mode=%s post %s", mode, scan.name),
+		fmt.Sprintf("post %s", scan.name),
 	)
-	return snapshot, post
 }
 
-func openIteratorParityDB(t *testing.T, mode string) *DB {
+func openIteratorParityDB(t *testing.T) *DB {
 	t.Helper()
 	opts := OptionsFor(ProfileDurable, t.TempDir())
-	opts.IndexOuterLeafMode = mode
 	opts.ValueLog.PointerThreshold = 1
 	opts.ValueLog.ForcePointers = true
 	db, err := Open(opts)
 	if err != nil {
-		t.Fatalf("open mode=%s: %v", mode, err)
+		t.Fatalf("open: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
-			t.Fatalf("close mode=%s: %v", mode, err)
+			t.Fatalf("close: %v", err)
 		}
 	})
 	return db
@@ -282,18 +248,17 @@ func collectIteratorParityKV(t *testing.T, it Iterator) []iteratorParityKV {
 
 func assertIteratorParityScansAgainstFixture(
 	t *testing.T,
-	mode string,
 	phase string,
 	capture map[string][]iteratorParityKV,
 	fixture map[string][]byte,
 ) {
 	t.Helper()
-	for _, scan := range iteratorV1LeafLogParityScans {
+	for _, scan := range iteratorParityScans {
 		assertIteratorParityKVEqual(
 			t,
 			capture[scan.name],
 			iteratorParityExpectedForScan(fixture, scan),
-			fmt.Sprintf("%s mode=%s %s", phase, mode, scan.name),
+			fmt.Sprintf("%s %s", phase, scan.name),
 		)
 	}
 }

@@ -94,7 +94,6 @@ func TestValueLogDictCompressionReducesBytes(t *testing.T) {
 	cached, err := Open(maindbDir, backend, Options{
 		FlushThreshold:           8 << 20,
 		ValueLogPointerThreshold: 1,
-		IndexOuterLeafMode:       db.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		_ = backend.Close()

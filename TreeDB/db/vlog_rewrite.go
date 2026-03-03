@@ -3,7 +3,6 @@ package db
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -11,13 +10,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
-	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -187,7 +183,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	}
 	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, "", false, nil, nil), snap.state.SystemRootPageID).
+	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID); err != nil {
 		_ = sysIter.Close()
@@ -217,89 +213,13 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 			return err
 		}
 		liveByID[ptr.FileID] += int64(recordLen)
-		nested, err := db.outerLeafNestedBlobRefLiveBytes(ptr)
-		if err != nil {
-			return err
-		}
-		for fileID, n := range nested {
-			if n == 0 {
-				continue
-			}
-			liveByID[fileID] += n
-		}
 		it.Next()
 	}
 	return it.Error()
 }
 
-func (db *DB) outerLeafNestedBlobRefLiveBytes(ptr page.ValuePtr) (map[uint32]int64, error) {
-	if db == nil || db.valueLogManager == nil {
-		return nil, nil
-	}
-	switch strings.TrimSpace(db.indexOuterLeafMode) {
-	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
-		// modes with outer-leaf blocks that can carry nested blob refs.
-	default:
-		return nil, nil
-	}
-	payload, err := db.valueLogManager.Read(ptr)
-	if err != nil {
-		return nil, err
-	}
-	if !outerleaf.HasMagic(payload) {
-		return nil, nil
-	}
-	block, err := outerleaf.DecodeBlockLease(payload)
-	if err != nil {
-		return nil, err
-	}
-	defer block.Release()
-	typed, err := block.TypedEntries(nil)
-	if err != nil {
-		return nil, err
-	}
-	refs := make(map[uint32]int64, 4)
-	for i := range typed {
-		if typed[i].Kind != outerleaf.EntryKindBlobRef {
-			continue
-		}
-		blobPtr := typed[i].BlobPtr
-		if !page.IsValueLogFileID(blobPtr.FileID) {
-			return nil, fmt.Errorf("treedb: invalid nested blob pointer file %d", blobPtr.FileID)
-		}
-		recordLen, err := db.valueLogRecordLengthForRewrite(blobPtr)
-		if err != nil {
-			return nil, err
-		}
-		refs[blobPtr.FileID] += int64(recordLen)
-	}
-	return refs, nil
-}
-
 func valueLogRecordLengthNeedsHeader(ptr page.ValuePtr, hint uint32) bool {
-	if hint == 0 {
-		return true
-	}
-	// Grouped legacy fence markers reuse bit 23 inside the length-hint field.
-	// Use on-disk headers for exact sizing in this ambiguous case.
-	return page.ValuePtrIsGrouped(ptr) && page.ValuePtrIsFenceOuter(ptr)
-}
-
-func preserveFenceMarkerOnRewrite(ptr page.ValuePtr, raw []byte) bool {
-	if !page.ValuePtrIsFenceOuter(ptr) {
-		return false
-	}
-	if !page.ValuePtrIsGrouped(ptr) {
-		return true
-	}
-	if !outerleaf.HasMagic(raw) {
-		return false
-	}
-	// Grouped pointers may carry a legacy bit-23 marker collision. Preserve the
-	// fence marker only when the payload structurally decodes as an outer-leaf
-	// block (magic prefix alone is not sufficient).
-	_, err := outerleaf.DecodeBlockWithVerify(raw, nil, false)
-	return err == nil
+	return hint == 0
 }
 
 func readValueLogRecordLengthFromHeader(r io.ReaderAt, start int64) (uint32, error) {
@@ -537,12 +457,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			if err != nil {
 				return err
 			}
-			var newPtr page.ValuePtr
-			if preserveFenceMarkerOnRewrite(candidate.oldPtr, val) {
-				newPtr, err = writer.appendFenceValue(nextRID, val)
-			} else {
-				newPtr, err = writer.appendValue(nextRID, val)
-			}
+			newPtr, err := writer.appendValue(nextRID, val)
 			if err != nil {
 				return err
 			}
@@ -862,17 +777,15 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 
 	alloc := &pagerAllocator{p: newPager}
 	ptrMap := make(map[recordKey]recordLoc)
-	retainedOldValueIDs := make(map[uint32]struct{})
 
 	buildTree := func(root uint64) (uint64, error) {
-		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet, "", false, nil, nil), root).
+		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		rewriter := &rewriteIterator{
-			inner:               iter,
-			ptrMap:              ptrMap,
-			vlogs:               state.ValueLogSet,
-			writer:              writer,
-			retainedOldValueIDs: retainedOldValueIDs,
+			inner:  iter,
+			ptrMap: ptrMap,
+			vlogs:  state.ValueLogSet,
+			writer: writer,
 		}
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: opts.LeafPrefixCompression,
@@ -965,7 +878,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		}
 	}
 
-	if err := removeOldValueLogSegments(walDir, segments, retainedOldValueIDs); err != nil {
+	if err := removeOldValueLogSegments(segments); err != nil {
 		return stats, err
 	}
 	if err := updateValueLogHealthAfterRewrite(opts.Dir, oldValueIDs); err != nil {
@@ -1067,40 +980,6 @@ func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, er
 	return ptr, nil
 }
 
-func (w *rewriteWriter) appendFenceValue(rid uint64, value []byte) (page.ValuePtr, error) {
-	raw, length, err := buildRawFenceRecord(rid, value)
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	ptr, err := w.appendRaw(raw, length)
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	return ptr, nil
-}
-
-func buildRawFenceRecord(rid uint64, value []byte) ([]byte, uint32, error) {
-	if rid == 0 {
-		return nil, 0, fmt.Errorf("vlog-rewrite: missing rid")
-	}
-	if len(value) > int(^uint32(0)) {
-		return nil, 0, fmt.Errorf("vlog-rewrite: record too large")
-	}
-	raw := make([]byte, valuelog.HeaderSize+len(value))
-	raw[4] = valuelog.Version
-	raw[5] = 0 // non-grouped; required so fence marker bit remains representable
-	raw[6] = 0
-	raw[7] = 0
-	binary.LittleEndian.PutUint64(raw[8:16], rid)
-	binary.LittleEndian.PutUint32(raw[16:20], uint32(len(value)))
-	copy(raw[valuelog.HeaderSize:], value)
-	sum := crc.ChecksumParts(raw[4:valuelog.HeaderSize], raw[valuelog.HeaderSize:])
-	binary.LittleEndian.PutUint32(raw[0:4], sum)
-	length := uint32(valuelog.HeaderSize-4) + uint32(len(value))
-	length = page.ValuePtrMarkFenceOuter(page.ValuePtr{Length: length}).Length
-	return raw, length, nil
-}
-
 func (w *rewriteWriter) Sync() error {
 	if w == nil || w.w == nil {
 		return nil
@@ -1142,15 +1021,11 @@ type rewriteIterator struct {
 	ptrMap map[recordKey]recordLoc
 	vlogs  *valuelog.Set
 	writer *rewriteWriter
-	// Old value-log file IDs that must remain because at least one pointer was
-	// intentionally left unchanged (for example nested blob-ref outerleaf
-	// payloads).
-	retainedOldValueIDs map[uint32]struct{}
-	err                 error
-	cached              bool
-	val                 []byte
-	ptr                 page.ValuePtr
-	flags               byte
+	err    error
+	cached bool
+	val    []byte
+	ptr    page.ValuePtr
+	flags  byte
 }
 
 type iteratorWithEntry interface {
@@ -1205,41 +1080,6 @@ func (it *rewriteIterator) ensure() {
 func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) {
 	if !page.IsValueLogFileID(ptr.FileID) {
 		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: expected value log pointer, got file %d", ptr.FileID)
-	}
-	if it.vlogs != nil {
-		if payload, err := it.vlogs.Read(ptr); err == nil && outerleaf.HasMagic(payload) {
-			if block, decErr := outerleaf.DecodeBlockLease(payload); decErr == nil {
-				hasBlobRef := false
-				var nestedBlobRefFileIDs map[uint32]struct{}
-				visitErr := block.VisitTypedEntries(func(_ []byte, kind outerleaf.EntryKind, _ []byte, nestedPtr page.ValuePtr) error {
-					if kind == outerleaf.EntryKindBlobRef {
-						hasBlobRef = true
-						if it.retainedOldValueIDs != nil && page.IsValueLogFileID(nestedPtr.FileID) {
-							if nestedBlobRefFileIDs == nil {
-								nestedBlobRefFileIDs = make(map[uint32]struct{})
-							}
-							nestedBlobRefFileIDs[nestedPtr.FileID] = struct{}{}
-						}
-					}
-					return nil
-				})
-				block.Release()
-				if visitErr != nil {
-					// Preserve prior behavior on decode/visit errors by treating payload
-					// as non-outerleaf content and falling back to raw record rewrite.
-				} else if hasBlobRef {
-					// Conservative correctness fallback: keep pointers to nested
-					// blob-ref outer blocks unchanged until nested remap is active.
-					if it.retainedOldValueIDs != nil {
-						for fileID := range nestedBlobRefFileIDs {
-							it.retainedOldValueIDs[fileID] = struct{}{}
-						}
-						it.retainedOldValueIDs[ptr.FileID] = struct{}{}
-					}
-					return ptr, nil
-				}
-			}
-		}
 	}
 	if it.ptrMap == nil {
 		it.ptrMap = make(map[recordKey]recordLoc)
@@ -1406,12 +1246,9 @@ func valueLogSegmentStats(dir string) (count int, bytes int64, err error) {
 	return count, bytes, nil
 }
 
-func removeOldValueLogSegments(walDir string, segments []logSegment, retainedOldValueIDs map[uint32]struct{}) error {
+func removeOldValueLogSegments(segments []logSegment) error {
 	for _, seg := range segments {
 		if !seg.valueLog {
-			continue
-		}
-		if _, keep := retainedOldValueIDs[seg.fileID]; keep {
 			continue
 		}
 		_ = os.Remove(seg.path)

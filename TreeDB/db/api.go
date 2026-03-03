@@ -440,15 +440,6 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.system_root_page"] = fmt.Sprintf("%d", state.SystemRootPageID)
 
 	stats["treedb.pages.total"] = fmt.Sprintf("%d", idx.pager.PageCount())
-	if db.indexOuterLeafMode != "" {
-		stats["treedb.index.outer_leaf_mode"] = db.indexOuterLeafMode
-	}
-	// Phase-1 anchor observability scaffolding for the planned routing-only
-	// v1_leaflog path. These remain zero until the path is activated.
-	stats["treedb.v1_leaflog.anchor_lookups"] = "0"
-	stats["treedb.v1_leaflog.anchor_block_decodes"] = "0"
-	stats["treedb.v1_leaflog.anchor_misses"] = "0"
-	stats["treedb.v1_leaflog.anchor_max_probes"] = "0"
 	// PR1 generational scaffolding (backend/read-only path). Cached mode exports
 	// richer live counters; backend path reports stable defaults.
 	stats["treedb.vlog_generation.enabled"] = "false"
@@ -486,32 +477,6 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.template_def_cache.capacity"] = fmt.Sprintf("%d", capacity)
 		if total := hits + misses; total > 0 {
 			stats["treedb.vlog.template_def_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
-		}
-		if cache := db.outerLeafBlockCache; cache != nil {
-			hits, misses, entries, capacity := cache.stats()
-			stats["treedb.vlog.outer_leaf_block_cache.hits"] = fmt.Sprintf("%d", hits)
-			stats["treedb.vlog.outer_leaf_block_cache.misses"] = fmt.Sprintf("%d", misses)
-			stats["treedb.vlog.outer_leaf_block_cache.entries"] = fmt.Sprintf("%d", entries)
-			stats["treedb.vlog.outer_leaf_block_cache.capacity"] = fmt.Sprintf("%d", capacity)
-			stats["treedb.vlog.outer_leaf_block_cache.policy"] = cache.policyName()
-			if total := hits + misses; total > 0 {
-				stats["treedb.vlog.outer_leaf_block_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
-			}
-			putAttempts, putAdmitted, putDuplicateDrops, putLockContention := cache.putStats()
-			stats["treedb.vlog.outer_leaf_block_cache.put_attempts"] = fmt.Sprintf("%d", putAttempts)
-			stats["treedb.vlog.outer_leaf_block_cache.put_admitted"] = fmt.Sprintf("%d", putAdmitted)
-			stats["treedb.vlog.outer_leaf_block_cache.put_duplicate_drops"] = fmt.Sprintf("%d", putDuplicateDrops)
-			stats["treedb.vlog.outer_leaf_block_cache.put_lock_contention"] = fmt.Sprintf("%d", putLockContention)
-		}
-		if keyCache := db.outerLeafKeyCache; keyCache != nil {
-			hits, misses, entries, capacity := keyCache.stats()
-			stats["treedb.vlog.outer_leaf_key_cache.hits"] = fmt.Sprintf("%d", hits)
-			stats["treedb.vlog.outer_leaf_key_cache.misses"] = fmt.Sprintf("%d", misses)
-			stats["treedb.vlog.outer_leaf_key_cache.entries"] = fmt.Sprintf("%d", entries)
-			stats["treedb.vlog.outer_leaf_key_cache.capacity"] = fmt.Sprintf("%d", capacity)
-			if total := hits + misses; total > 0 {
-				stats["treedb.vlog.outer_leaf_key_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
-			}
 		}
 	}
 	watermarkLockDelaySharePct, watermarkLatencyP99Ms := db.publishWatermarkStats()

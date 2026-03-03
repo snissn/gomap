@@ -557,12 +557,6 @@ func main() {
 				log.Fatalf("storage_ceiling suite: %v", err)
 			}
 			fmt.Print(out)
-		case "outerleaf_approx", "outerleaf-approx":
-			out, err := runOuterLeafApproxSuite(baseCfg)
-			if err != nil {
-				log.Fatalf("outerleaf_approx suite: %v", err)
-			}
-			fmt.Print(out)
 		case "vlog_dict", "vlog-dict":
 			out, err := runValueLogDictSuite(baseCfg)
 			if err != nil {
@@ -1065,14 +1059,6 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_generation.vacuum.failures",
 		"treedb.cache.vlog_generation.remap.successes",
 		"treedb.cache.vlog_generation.remap.failures",
-		"treedb.cache.v2_fenceptr.deferred_candidates",
-		"treedb.cache.v2_fenceptr.deferred_groups",
-		"treedb.cache.v2_fenceptr.deferred_pending_keys_estimate",
-		"treedb.cache.v2_fenceptr.deferred_pending_bytes_estimate",
-		"treedb.cache.v2_fenceptr.avg_keys_per_group",
-		"treedb.cache.v2_fenceptr.assist_calls",
-		"treedb.cache.v2_fenceptr.assist_flushed_memtables",
-		"treedb.cache.v2_fenceptr.assist_early_triggers",
 		"treedb.vlog.outer_leaf_block_cache.policy",
 		"treedb.vlog.outer_leaf_block_cache.hits",
 		"treedb.vlog.outer_leaf_block_cache.misses",

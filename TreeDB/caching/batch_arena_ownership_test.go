@@ -3,19 +3,16 @@ package caching
 import (
 	"bytes"
 	"testing"
-
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestBatchReset_DoesNotCorruptPriorStealWrites(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir, NewMockBackend(), Options{
-		AllowUnsafe:        true,
-		DisableWAL:         true,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
-		MemtableMode:       "append_only",
-		MemtableShards:     1,
-		FlushThreshold:     1 << 30,
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -58,12 +55,11 @@ func TestBatchReset_DoesNotCorruptPriorStealWrites(t *testing.T) {
 func TestBatchArenaLeases_ReleasedAfterCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir, NewMockBackend(), Options{
-		AllowUnsafe:        true,
-		DisableWAL:         true,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
-		MemtableMode:       "append_only",
-		MemtableShards:     1,
-		FlushThreshold:     1 << 30,
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)

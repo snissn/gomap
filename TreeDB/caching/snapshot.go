@@ -265,25 +265,3 @@ func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
 	}
 	return s.backend.GetEntryExact(key)
 }
-
-func (s *Snapshot) LookupFencePointerSource(key []byte) (page.ValuePtr, bool, error) {
-	_, _, _, found := s.lookupQueueEntry(key)
-	if found {
-		return page.ValuePtr{}, false, nil
-	}
-	if s == nil || s.backend == nil {
-		return page.ValuePtr{}, false, nil
-	}
-	return s.backend.LookupFencePointerSource(key)
-}
-
-func (s *Snapshot) LookupFencePointerOrigin(key []byte) ([]byte, page.ValuePtr, bool, error) {
-	_, _, _, found := s.lookupQueueEntry(key)
-	if found {
-		return nil, page.ValuePtr{}, false, nil
-	}
-	if s == nil || s.backend == nil {
-		return nil, page.ValuePtr{}, false, nil
-	}
-	return s.backend.LookupFencePointerOrigin(key)
-}

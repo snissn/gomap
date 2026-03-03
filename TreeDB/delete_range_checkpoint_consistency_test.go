@@ -38,20 +38,14 @@ func collectIteratorInts(t *testing.T, it Iterator) []int {
 	return out
 }
 
-func runDeleteRangeCheckpointConsistencyProfileMatrix(t *testing.T, mode string, allowSimpleInline bool) {
+func runDeleteRangeCheckpointConsistencyProfileMatrix(t *testing.T) {
 	t.Helper()
 	profiles := []Profile{ProfileDurable, ProfileFast, ProfileWALOnFast}
 	for _, profile := range profiles {
 		t.Run(string(profile), func(t *testing.T) {
 			opts := OptionsFor(profile, t.TempDir())
-			opts.IndexOuterLeafMode = mode
 			opts.ValueLog.PointerThreshold = 1
 			opts.ValueLog.ForcePointers = true
-			opts.ValueLog.OuterLeafBlobThresholdBytes = 256
-			opts.ValueLog.WALFenceMode = ValueLogWALFenceModeRIDJoin
-			if allowSimpleInline && profile == ProfileWALOnFast {
-				opts.ValueLog.WALFenceMode = ValueLogWALFenceModeSimpleInline
-			}
 
 			db, err := Open(opts)
 			if err != nil {
@@ -139,10 +133,6 @@ func runDeleteRangeCheckpointConsistencyProfileMatrix(t *testing.T, mode string,
 	}
 }
 
-func TestDeleteRange_CheckpointConsistency_ProfileFenceMatrix(t *testing.T) {
-	runDeleteRangeCheckpointConsistencyProfileMatrix(t, IndexOuterLeafModeV2FencePtr, true)
-}
-
-func TestDeleteRange_CheckpointConsistency_ProfileV1LeafLogMatrix(t *testing.T) {
-	runDeleteRangeCheckpointConsistencyProfileMatrix(t, IndexOuterLeafModeV1LeafLog, false)
+func TestDeleteRange_CheckpointConsistency_ProfileMatrix(t *testing.T) {
+	runDeleteRangeCheckpointConsistencyProfileMatrix(t)
 }

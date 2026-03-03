@@ -87,7 +87,6 @@ func TestValueLogDictPauseAndProbeResume(t *testing.T) {
 	cached, err := Open(maindbDir, backend, Options{
 		FlushThreshold:           8 << 20,
 		ValueLogPointerThreshold: 1,
-		IndexOuterLeafMode:       db.IndexOuterLeafModeV1,
 		ValueLogCompression:      uint8(vlogCompressionDict),
 		ValueLogDictTrain: compression.TrainConfig{
 			TrainBytes:     64 << 10,
