@@ -446,8 +446,28 @@ func (m *AppendOnly) rebuildLatestIndexLocked() {
 	m.clearSnapshotLocked()
 }
 
+func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
+	if idx < 0 || idx >= m.count {
+		return
+	}
+	if len(key) == 0 {
+		return
+	}
+	if k64, ok := appendOnlyKeyU64(key); ok {
+		if m.latest64 == nil {
+			m.latest64 = make(map[uint64]int, 1)
+		}
+		m.latest64[k64] = idx
+		return
+	}
+	if m.latest == nil {
+		m.latest = make(map[string]int, 1)
+	}
+	m.latest[appendOnlyKeyString(key)] = idx
+}
+
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) {
-	if key == nil {
+	if len(key) == 0 {
 		return
 	}
 	if m.count == len(m.entries) {
@@ -509,7 +529,9 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 		m.clearSnapshotLocked()
 		return
 	}
-	m.latestDirty = true
+	if !m.latestDirty {
+		m.updateLatestIndexLocked(k, idx)
+	}
 	m.clearSnapshotLocked()
 }
 
@@ -542,7 +564,7 @@ func (m *AppendOnly) DeleteSteal(key []byte) {
 }
 
 func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
-	if key == nil {
+	if len(key) == 0 {
 		return nil
 	}
 	k := cloneBytes(key)
@@ -559,7 +581,7 @@ func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 }
 
 func (m *AppendOnly) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error {
-	if key == nil {
+	if len(key) == 0 {
 		return nil
 	}
 	k := cloneBytes(key)
@@ -621,16 +643,33 @@ func (m *AppendOnly) orderedLookupEntryLocked(key []byte) *appendOnlyEntry {
 
 func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	if ent := m.orderedLookupEntryLocked(key); ent != nil {
-		if ent.flags&node.FlagTombstone != 0 {
+		deleted := ent.flags&node.FlagTombstone != 0
+		val := ent.value
+		m.mu.RUnlock()
+		if deleted {
 			return nil, true, true
 		}
-		return ent.value, false, true
+		return val, false, true
 	}
-	if m.ordered {
+	ordered := m.ordered
+	dirty := m.latestDirty
+	m.mu.RUnlock()
+
+	if ordered {
 		return nil, false, false
 	}
+
+	if dirty {
+		m.mu.Lock()
+		if !m.ordered && m.latestDirty {
+			m.rebuildLatestIndexLocked()
+		}
+		m.mu.Unlock()
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if !m.ordered && !m.latestDirty {
 		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
@@ -654,6 +693,7 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 				}
 			}
 		}
+		return nil, false, false
 	}
 	for i := m.count - 1; i >= 0; i-- {
 		ent := &m.entries[i]
@@ -669,13 +709,31 @@ func (m *AppendOnly) Get(key []byte) ([]byte, bool, bool) {
 
 func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
 	if ent := m.orderedLookupEntryLocked(key); ent != nil {
-		return ent.value, ent.ptr, ent.flags, true
+		val := ent.value
+		ptr := ent.ptr
+		flags := ent.flags
+		m.mu.RUnlock()
+		return val, ptr, flags, true
 	}
-	if m.ordered {
+	ordered := m.ordered
+	dirty := m.latestDirty
+	m.mu.RUnlock()
+
+	if ordered {
 		return nil, page.ValuePtr{}, 0, false
 	}
+
+	if dirty {
+		m.mu.Lock()
+		if !m.ordered && m.latestDirty {
+			m.rebuildLatestIndexLocked()
+		}
+		m.mu.Unlock()
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if !m.ordered && !m.latestDirty {
 		if k64, ok := appendOnlyKeyU64(key); ok && m.latest64 != nil {
 			if idx, ok := m.latest64[k64]; ok && idx >= 0 && idx < m.count {
@@ -693,6 +751,7 @@ func (m *AppendOnly) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 				}
 			}
 		}
+		return nil, page.ValuePtr{}, 0, false
 	}
 	for i := m.count - 1; i >= 0; i-- {
 		ent := &m.entries[i]
@@ -1022,20 +1081,32 @@ func (it *appendOnlyIterator) Next() {
 }
 
 func (it *appendOnlyIterator) Seek(key []byte) {
-	if it.reverse && key == nil {
-		it.idx = it.len() - 1
+	if !it.reverse {
+		it.idx = sort.Search(it.len(), func(i int) bool {
+			ent := it.entryAt(i)
+			if ent == nil {
+				return true
+			}
+			return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
+		})
 		return
 	}
-	it.idx = sort.Search(it.len(), func(i int) bool {
+
+	if key == nil || (it.end != nil && bytes.Compare(key, it.end) >= 0) {
+		it.seekToReverseEnd(it.end)
+		return
+	}
+
+	// Reverse Seek positions at the greatest key <= target key.
+	n := it.len()
+	pos := sort.Search(n, func(i int) bool {
 		ent := it.entryAt(i)
 		if ent == nil {
 			return true
 		}
-		return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
+		return bytes.Compare(appendOnlyEntryKey(ent), key) > 0
 	})
-	if it.reverse && it.idx >= it.len() {
-		it.idx = it.len() - 1
-	}
+	it.idx = pos - 1
 }
 
 func (it *appendOnlyIterator) seekToReverseEnd(end []byte) {

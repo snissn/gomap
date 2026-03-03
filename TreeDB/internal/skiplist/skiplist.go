@@ -726,32 +726,43 @@ func (it *Iterator) Domain() (start, end []byte) {
 
 type ReverseIterator struct {
 	sl    *SkipList
+	end   []byte
 	curr  uint32
 	valid bool
 }
 
 func (s *SkipList) NewReverseIterator(start, end []byte) *ReverseIterator {
-	it := &ReverseIterator{sl: s}
-	if end == nil {
-		it.curr = s.findLessThan(nil)
-		it.valid = it.curr != 0
-		return it
-	}
-	it.curr = s.findLessThan(end)
-	it.valid = it.curr != 0
+	it := &ReverseIterator{sl: s, end: end}
+	it.Seek(nil)
 	return it
 }
 
 func (it *ReverseIterator) Seek(key []byte) {
-	if key == nil {
+	if it == nil || it.sl == nil {
+		return
+	}
+	if key == nil || (it.end != nil && bytes.Compare(key, it.end) >= 0) {
+		if it.end == nil {
+			it.curr = it.sl.findLessThan(nil)
+		} else {
+			it.curr = it.sl.findLessThan(it.end)
+		}
+		it.valid = it.curr != 0
+		return
+	}
+	pos := it.sl.seekGE(key)
+	if pos == 0 {
 		it.curr = it.sl.findLessThan(nil)
 		it.valid = it.curr != 0
 		return
 	}
-	it.curr = it.sl.seekGE(key)
-	if it.curr == 0 {
-		it.curr = it.sl.findLessThan(nil)
+	k := it.sl.getKey(pos)
+	if bytes.Equal(k, key) {
+		it.curr = pos
+		it.valid = true
+		return
 	}
+	it.curr = it.sl.findLessThan(key)
 	it.valid = it.curr != 0
 }
 
