@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -670,24 +671,13 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 }
 
 func isWindowsRenameRetryable(err error) bool {
-	const (
-		windowsErrAccessDenied     syscall.Errno = 5  // ERROR_ACCESS_DENIED
-		windowsErrSharingViolation syscall.Errno = 32 // ERROR_SHARING_VIOLATION
-	)
-	var linkErr *os.LinkError
-	if errors.As(err, &linkErr) {
-		if errno, ok := linkErr.Err.(syscall.Errno); ok {
-			return errno == windowsErrAccessDenied || errno == windowsErrSharingViolation
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch errno {
+		case syscall.Errno(5), syscall.Errno(32), syscall.Errno(33):
+			return true
 		}
 	}
-	var pathErr *os.PathError
-	if errors.As(err, &pathErr) {
-		if errno, ok := pathErr.Err.(syscall.Errno); ok {
-			return errno == windowsErrAccessDenied || errno == windowsErrSharingViolation
-		}
-	}
-	if errno, ok := err.(syscall.Errno); ok {
-		return errno == windowsErrAccessDenied || errno == windowsErrSharingViolation
-	}
-	return false
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "used by another process") || strings.Contains(msg, "access is denied")
 }

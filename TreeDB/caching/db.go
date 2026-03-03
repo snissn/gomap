@@ -4132,6 +4132,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		return nil, fmt.Errorf("cachingdb: invalid value-log generation policy %d", opts.ValueLogGenerationPolicy)
 	}
 	valueLogGenerationPolicyUint8 := uint8(valueLogGenerationPolicy)
+	// Hot/warm/cold generation reserves lanes 1 and 2 for non-hot classes when
+	// available. When the lane count is caller-provided (e.g., tests pinning
+	// JournalLanes=1), allow fewer lanes and treat all lanes as hot.
 	if laneCountDefaulted && valueLogGenerationPolicy == backenddb.ValueLogGenerationHotWarmCold && laneCount < 3 {
 		laneCount = 3
 	}
