@@ -84,7 +84,6 @@ func TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites(t *testing
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
 
 	// Small dataset: keep the tree as a single leaf so meta.UserRootPageID can
 	// flip between a pager page-id (after vacuum) and a LeafRef (after a write).
