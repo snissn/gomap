@@ -276,16 +276,16 @@ func TestBuildTreeDBOptions_MaintenanceModeBenchDisablesBackgroundLoops(t *testi
 		t.Fatalf("buildTreeDBOptions: %v", err)
 	}
 	if opts.BackgroundCheckpointInterval >= 0 {
-		t.Fatalf("BackgroundCheckpointInterval=%s want disabled (<0)", opts.BackgroundCheckpointInterval)
+		t.Fatalf("BackgroundCheckpointInterval=%v want disabled (<0)", opts.BackgroundCheckpointInterval)
 	}
 	if opts.BackgroundCheckpointIdleDuration >= 0 {
-		t.Fatalf("BackgroundCheckpointIdleDuration=%s want disabled (<0)", opts.BackgroundCheckpointIdleDuration)
+		t.Fatalf("BackgroundCheckpointIdleDuration=%v want disabled (<0)", opts.BackgroundCheckpointIdleDuration)
 	}
 	if opts.MaxWALBytes >= 0 {
 		t.Fatalf("MaxWALBytes=%d want disabled (<0)", opts.MaxWALBytes)
 	}
 	if opts.BackgroundIndexVacuumInterval >= 0 {
-		t.Fatalf("BackgroundIndexVacuumInterval=%s want disabled (<0)", opts.BackgroundIndexVacuumInterval)
+		t.Fatalf("BackgroundIndexVacuumInterval=%v want disabled (<0)", opts.BackgroundIndexVacuumInterval)
 	}
 }
 
