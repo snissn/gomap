@@ -3103,6 +3103,8 @@ type DB struct {
 	vlogGenerationVacuumRuns           atomic.Uint64
 	vlogGenerationVacuumFailures       atomic.Uint64
 	vlogGenerationLastVacuumUnixNano   atomic.Int64
+	vlogGenerationLastRewriteUnixNano  atomic.Int64
+	vlogGenerationLastGCUnixNano       atomic.Int64
 	vlogGenerationChurnBytes           atomic.Uint64
 	vlogGenerationSchedulerState       atomic.Uint32
 	vlogGenerationLastReason           atomic.Uint32
@@ -3185,12 +3187,23 @@ const (
 )
 
 const (
-	vlogGenerationLoopInterval = 1 * time.Second
-	vlogGenerationGCEvery      = 5
-	vlogGenerationGCMinBytes   = int64(1 << 20)
+	vlogGenerationLoopInterval       = 1 * time.Second
+	vlogGenerationGCEvery            = 5
+	vlogGenerationGCMinBytes         = int64(1 << 20)
+	vlogGenerationRewriteMinInterval = 30 * time.Second
+	vlogGenerationGCMinInterval      = 60 * time.Second
 	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
 	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
 	vlogGenerationVacuumMinInterval         = 5 * time.Minute
+)
+
+const (
+	defaultVlogGenerationHotTargetBytes  int64  = 256 << 20
+	defaultVlogGenerationWarmTargetBytes int64  = 256 << 20
+	defaultVlogGenerationColdTargetBytes int64  = 512 << 20
+	defaultVlogRewriteBudgetBytesPerSec  int64  = 128 << 20
+	defaultVlogRewriteTriggerTotalBytes  int64  = 4 << 30
+	defaultVlogRewriteTriggerStalePPM    uint32 = 200000
 )
 
 func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
@@ -4186,6 +4199,26 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	if valueLogRewriteTriggerChurn < 0 {
 		return nil, fmt.Errorf("cachingdb: invalid value-log generational rewrite trigger churn/sec %d", valueLogRewriteTriggerChurn)
+	}
+	if valueLogGenerationPolicyUint8 == uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		if valueLogGenerationHotTarget == 0 {
+			valueLogGenerationHotTarget = defaultVlogGenerationHotTargetBytes
+		}
+		if valueLogGenerationWarmTarget == 0 {
+			valueLogGenerationWarmTarget = defaultVlogGenerationWarmTargetBytes
+		}
+		if valueLogGenerationColdTarget == 0 {
+			valueLogGenerationColdTarget = defaultVlogGenerationColdTargetBytes
+		}
+		if valueLogRewriteBudgetBytes == 0 {
+			valueLogRewriteBudgetBytes = defaultVlogRewriteBudgetBytesPerSec
+		}
+		if valueLogRewriteTriggerBytes == 0 {
+			valueLogRewriteTriggerBytes = defaultVlogRewriteTriggerTotalBytes
+		}
+		if valueLogRewriteTriggerRatioPPM == 0 {
+			valueLogRewriteTriggerRatioPPM = defaultVlogRewriteTriggerStalePPM
+		}
 	}
 	valueLogRawWritevMinAvgBytes := opts.ValueLogRawWritevMinAvgBytes
 	if valueLogRawWritevMinAvgBytes < 0 {
@@ -8769,6 +8802,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if queueLen != 0 {
 		return
 	}
+	now := time.Now()
 
 	retained := db.valueLogRetainedStatsDetailed()
 	totalBytes := retained.BytesTotal
@@ -8788,9 +8822,19 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	shouldRewrite, reason := db.shouldRunVlogGenerationRewrite(totalBytes, staleRatioPPM, churnBps)
 	rewriter, hasRewriter := db.backend.(backendValueLogRewriter)
 	if shouldRewrite && hasRewriter {
+		last := db.vlogGenerationLastRewriteUnixNano.Load()
+		if last > 0 {
+			lastAt := time.Unix(0, last)
+			if now.Sub(lastAt) < vlogGenerationRewriteMinInterval {
+				shouldRewrite = false
+			}
+		}
+	}
+	if shouldRewrite && hasRewriter {
+		db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 		db.vlogGenerationLastReason.Store(reason)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
 			BatchSize:         db.valueLogRewriteBatchSize(),
 			SyncEachBatch:     false,
@@ -8831,12 +8875,21 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps) {
 		return
 	}
+	now = time.Now()
+	lastGC := db.vlogGenerationLastGCUnixNano.Load()
+	if lastGC > 0 {
+		lastAt := time.Unix(0, lastGC)
+		if now.Sub(lastAt) < vlogGenerationGCMinInterval {
+			return
+		}
+	}
 	gcer, ok := db.backend.(backendValueLogGCer)
 	if !ok {
 		return
 	}
+	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	gcStats, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})
 	cancel()
 	if err != nil {
@@ -13175,9 +13228,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewriteUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
+	stats["treedb.cache.vlog_generation.gc.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCUnixNano.Load())
 	stats["treedb.cache.vlog_generation.vacuum.runs"] = fmt.Sprintf("%d", db.vlogGenerationVacuumRuns.Load())
 	stats["treedb.cache.vlog_generation.vacuum.failures"] = fmt.Sprintf("%d", db.vlogGenerationVacuumFailures.Load())
 	stats["treedb.cache.vlog_generation.vacuum.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastVacuumUnixNano.Load())
