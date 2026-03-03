@@ -20,8 +20,8 @@ func TestLeafRef_EncodeDecode_RoundTrip(t *testing.T) {
 		if out.FileID != in.FileID {
 			t.Fatalf("LeafRef FileID mismatch: got=%d want=%d", out.FileID, in.FileID)
 		}
-		if out.Offset != uint64(uint32(in.Offset)) {
-			t.Fatalf("LeafRef Offset mismatch: got=%d want=%d", out.Offset, uint64(uint32(in.Offset)))
+		if out.Offset != in.Offset {
+			t.Fatalf("LeafRef Offset mismatch: got=%d want=%d", out.Offset, in.Offset)
 		}
 		if !ValuePtrIsGrouped(out) {
 			t.Fatalf("LeafRef ptr should be grouped: %+v", out)
@@ -35,21 +35,21 @@ func TestLeafRef_EncodeDecode_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestLeafRef_EncodeLeafRef_InvalidFileID(t *testing.T) {
-	if _, err := EncodeLeafRef(ValuePtr{FileID: 1, Offset: 0}); err == nil {
+func TestLeafRef_EncodeRejectsNonValueLogFileID(t *testing.T) {
+	if _, err := EncodeLeafRef(ValuePtr{FileID: 123, Offset: 0}); err == nil {
 		t.Fatalf("expected EncodeLeafRef to reject non-value-log file id")
 	}
 }
 
-func TestLeafRef_EncodeLeafRef_OffsetOverflow(t *testing.T) {
+func TestLeafRef_EncodeRejectsOffsetOverflow(t *testing.T) {
 	if _, err := EncodeLeafRef(ValuePtr{FileID: ValueLogFileID(1), Offset: uint64(^uint32(0)) + 1}); err == nil {
-		t.Fatalf("expected EncodeLeafRef to reject offset overflow")
+		t.Fatalf("expected EncodeLeafRef to reject u32 overflow offset")
 	}
 }
 
-func TestLeafRef_DecodeLeafRef_InvalidFileID(t *testing.T) {
-	id := (uint64(1) << 32) | 123
+func TestLeafRef_DecodeRejectsNonValueLogFileID(t *testing.T) {
+	id := (uint64(123) << 32) | 1 // FileID without value-log marker.
 	if _, ok := DecodeLeafRef(id); ok {
-		t.Fatalf("expected DecodeLeafRef to reject non-value-log file id")
+		t.Fatalf("expected DecodeLeafRef ok=false for non-value-log file id")
 	}
 }

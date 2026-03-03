@@ -1208,18 +1208,20 @@ func (it *hashReverseIterator) Seek(key []byte) {
 		it.loaded = false
 		return
 	}
-	if key == nil {
-		it.idx = len(it.keys) - 1
+	if key == nil || (it.hasEnd && strings.Compare(bytesToStringNoCopy(key), it.end) >= 0) {
+		if it.hasEnd {
+			it.idx = sort.SearchStrings(it.keys, it.end) - 1
+		} else {
+			it.idx = len(it.keys) - 1
+		}
 		it.refresh()
 		return
 	}
 	seekKey := bytesToStringNoCopy(key)
-	pos := sort.SearchStrings(it.keys, seekKey)
-	if pos >= len(it.keys) {
-		it.idx = len(it.keys) - 1
-	} else {
-		it.idx = pos
-	}
+	pos := sort.Search(len(it.keys), func(i int) bool {
+		return strings.Compare(it.keys[i], seekKey) > 0
+	})
+	it.idx = pos - 1
 	it.refresh()
 }
 
