@@ -1081,20 +1081,32 @@ func (it *appendOnlyIterator) Next() {
 }
 
 func (it *appendOnlyIterator) Seek(key []byte) {
-	if it.reverse && key == nil {
-		it.idx = it.len() - 1
+	if !it.reverse {
+		it.idx = sort.Search(it.len(), func(i int) bool {
+			ent := it.entryAt(i)
+			if ent == nil {
+				return true
+			}
+			return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
+		})
 		return
 	}
-	it.idx = sort.Search(it.len(), func(i int) bool {
+
+	if key == nil || (it.end != nil && bytes.Compare(key, it.end) >= 0) {
+		it.seekToReverseEnd(it.end)
+		return
+	}
+
+	// Reverse Seek positions at the greatest key <= target key.
+	n := it.len()
+	pos := sort.Search(n, func(i int) bool {
 		ent := it.entryAt(i)
 		if ent == nil {
 			return true
 		}
-		return bytes.Compare(appendOnlyEntryKey(ent), key) >= 0
+		return bytes.Compare(appendOnlyEntryKey(ent), key) > 0
 	})
-	if it.reverse && it.idx >= it.len() {
-		it.idx = it.len() - 1
-	}
+	it.idx = pos - 1
 }
 
 func (it *appendOnlyIterator) seekToReverseEnd(end []byte) {

@@ -556,14 +556,41 @@ type btreeReverseIterator struct {
 }
 
 func (it *btreeReverseIterator) Seek(key []byte) {
+	seekToReverseEnd := func() {
+		if !it.hasEnd {
+			it.valid = it.iter.Last()
+			return
+		}
+		it.valid = it.iter.Seek(it.end)
+		if it.valid {
+			// Seek positions at the first key >= end. Reverse iteration is over
+			// [start, end), so step back to the last key < end.
+			it.valid = it.iter.Prev()
+			return
+		}
+		it.valid = it.iter.Last()
+	}
+
 	if key == nil {
+		seekToReverseEnd()
+		it.refresh()
+		return
+	}
+	keyStr := bytesToStringNoCopy(key)
+	if it.hasEnd && strings.Compare(keyStr, it.end) >= 0 {
+		seekToReverseEnd()
+		it.refresh()
+		return
+	}
+	found := it.iter.Seek(keyStr)
+	if !found {
 		it.valid = it.iter.Last()
 		it.refresh()
 		return
 	}
-	it.valid = it.iter.Seek(bytesToStringNoCopy(key))
-	if !it.valid {
-		it.valid = it.iter.Last()
+	it.valid = true
+	if strings.Compare(it.iter.Key(), keyStr) > 0 {
+		it.valid = it.iter.Prev()
 	}
 	it.refresh()
 }
