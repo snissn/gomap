@@ -362,13 +362,13 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					putLeafRefPageScratch(leafScratch)
 				}
 				return nil, page.ValuePtr{}, 0, false, err
-			}
-			if !found {
-				if leafScratchRef {
-					putLeafRefPageScratch(leafScratch)
 				}
-				return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
-			}
+				if !found {
+					if leafScratchRef {
+						putLeafRefPageScratch(leafScratch)
+					}
+					return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
+				}
 
 			val, ptr, flags, err := n.GetLeafValueView(idx)
 			if err != nil {
