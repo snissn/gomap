@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -646,8 +646,7 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 			if runtime.GOOS != "windows" {
 				return err
 			}
-			msg := strings.ToLower(err.Error())
-			if strings.Contains(msg, "used by another process") || strings.Contains(msg, "access is denied") {
+			if isWindowsRenameRetryable(err) {
 				time.Sleep(sleep)
 				if sleep < 100*time.Millisecond {
 					sleep *= 2
@@ -658,4 +657,27 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		}
 	}
 	return lastErr
+}
+
+func isWindowsRenameRetryable(err error) bool {
+	const (
+		windowsErrAccessDenied     syscall.Errno = 5  // ERROR_ACCESS_DENIED
+		windowsErrSharingViolation syscall.Errno = 32 // ERROR_SHARING_VIOLATION
+	)
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		if errno, ok := linkErr.Err.(syscall.Errno); ok {
+			return errno == windowsErrAccessDenied || errno == windowsErrSharingViolation
+		}
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		if errno, ok := pathErr.Err.(syscall.Errno); ok {
+			return errno == windowsErrAccessDenied || errno == windowsErrSharingViolation
+		}
+	}
+	if errno, ok := err.(syscall.Errno); ok {
+		return errno == windowsErrAccessDenied || errno == windowsErrSharingViolation
+	}
+	return false
 }
