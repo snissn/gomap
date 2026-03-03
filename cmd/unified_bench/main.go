@@ -46,6 +46,7 @@ var (
 	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
 	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
 	readWorkers        = flag.Int("read-workers", runtime.GOMAXPROCS(0), "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default GOMAXPROCS)")
+	readRequireHit     = flag.Bool("read-require-hit", false, "Fail read benchmarks on misses and validate value length matches -valsize")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
 	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
@@ -364,6 +365,7 @@ func main() {
 		RangeSpan:                        *rangeSpan,
 		ValuePattern:                     *valPattern,
 		ValuePoolSize:                    *valPoolSize,
+		ReadRequireHit:                   *readRequireHit,
 		DBsArg:                           *dbsArg,
 		DBsExcludeArg:                    *dbsExcludeArg,
 		TestsArg:                         *testArg,
