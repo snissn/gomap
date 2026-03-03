@@ -14,6 +14,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 	"github.com/snissn/gomap/TreeDB/zipper"
@@ -173,20 +175,28 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ.SetIndexInternalBaseDelta(db.indexInternalBaseDelta)
 	newZ.SetAdaptiveLeafEncoding(db.indexAdaptiveLeafEncoding)
 	newZ.SetMaintenanceOpsPerCoalesce(db.maintenanceOpsPerCoalesce)
+	newZ.SetLeafPageReader(db.valueLogManager)
+	newZ.SetLeafPageLog(db.leafPageLog)
+	newZ.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()
 
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
-	baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	newRoot, err := bulk.BuildWithOptions(baseIter, newAlloc, newPager, bulk.BuildOptions{
-		LeafPrefixCompression: db.leafPrefixCompression,
-		LeafColumnar:          db.indexColumnarLeaves,
-		PackedValuePtr:        db.indexPackedValuePtr,
-		InternalBaseDelta:     db.indexInternalBaseDelta,
-	})
-	_ = baseIter.Close()
+	var newRoot uint64
+	if db.indexOuterLeavesInValueLog {
+		newRoot, err = vacuumClonePagerTreeWithLeafRefs(baseSnap.Pager(), baseSnap.treeRoot, newAlloc, newPager, db.leafPageLog)
+	} else {
+		baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, bulk.BuildOptions{
+			LeafPrefixCompression: db.leafPrefixCompression,
+			LeafColumnar:          db.indexColumnarLeaves,
+			PackedValuePtr:        db.indexPackedValuePtr,
+			InternalBaseDelta:     db.indexInternalBaseDelta,
+		})
+		_ = baseIter.Close()
+	}
 	_ = baseSnap.Close()
 	if err != nil {
 		cleanupNewPager()
@@ -220,6 +230,12 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			return err
 		}
 		freeRetired(retired)
+		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+			if err := db.leafPageLog.Flush(); err != nil {
+				cleanupNewPager()
+				return err
+			}
+		}
 		if err := checkGrowth(); err != nil {
 			cleanupNewPager()
 			return err
@@ -253,6 +269,12 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 				return err
 			}
 			freeRetired(retired)
+			if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+				if err := db.leafPageLog.Flush(); err != nil {
+					cleanupNewPager()
+					return err
+				}
+			}
 			if err := checkGrowth(); err != nil {
 				cleanupNewPager()
 				return err
@@ -269,6 +291,13 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 				return err
 			}
 			freeRetired(retired)
+			if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+				if err := db.leafPageLog.Flush(); err != nil {
+					db.writeMu.Unlock()
+					cleanupNewPager()
+					return err
+				}
+			}
 			if err := checkGrowth(); err != nil {
 				db.writeMu.Unlock()
 				cleanupNewPager()
@@ -315,6 +344,14 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		nextMeta.SystemRootPageID = newSysRoot
 		nextMeta.FreelistHeadID = newAlloc.Head()
 		nextMeta.TotalPages = newPager.PageCount()
+
+		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+			if err := db.leafPageLog.Sync(); err != nil {
+				db.writeMu.Unlock()
+				cleanupNewPager()
+				return err
+			}
+		}
 
 		// Write redundant Meta pages (0/1) to the new file and sync it.
 		if err := writeMetaToPager(newPager, MetaPage0ID, nextMeta); err != nil {
@@ -369,8 +406,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		}
 
 		// Ensure the new generation preserves leaf-page-in-value-log wiring for
-		// subsequent writes. Do this after rebuild/cutover work is complete so
-		// vacuum itself never depends on leaf-page-log flushing semantics.
+		// subsequent writes.
 		newZ.SetLeafPageReader(db.valueLogManager)
 		newZ.SetLeafPageLog(db.leafPageLog)
 		newZ.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
@@ -461,4 +497,126 @@ func (db *DB) applyVacuumDelta(root uint64, opsMap map[string]batch.Entry, z *zi
 	}
 
 	return root, retired, nil
+}
+
+type vacuumCloneCtx struct {
+	oldPager *pager.Pager
+	newPager *pager.Pager
+	alloc    interface {
+		Alloc(hint uint64) (uint64, error)
+	}
+	leafPageLog  LeafPageLog
+	outerLeafLog bool
+	remap        map[uint64]uint64
+}
+
+func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, alloc interface {
+	Alloc(hint uint64) (uint64, error)
+}, newPager *pager.Pager, leafPageLog LeafPageLog) (uint64, error) {
+	if _, ok := page.DecodeLeafRef(rootID); ok {
+		return rootID, nil
+	}
+	if oldPager == nil {
+		return 0, errors.New("vacuum: missing source pager")
+	}
+	if newPager == nil {
+		return 0, errors.New("vacuum: missing destination pager")
+	}
+	c := &vacuumCloneCtx{
+		oldPager:     oldPager,
+		newPager:     newPager,
+		alloc:        alloc,
+		leafPageLog:  leafPageLog,
+		outerLeafLog: true,
+		remap:        make(map[uint64]uint64, 1024),
+	}
+	return c.cloneNode(rootID)
+}
+
+func (c *vacuumCloneCtx) cloneNode(oldID uint64) (uint64, error) {
+	if _, ok := page.DecodeLeafRef(oldID); ok {
+		return oldID, nil
+	}
+	if newID, ok := c.remap[oldID]; ok {
+		return newID, nil
+	}
+	if c.oldPager == nil || c.newPager == nil || c.alloc == nil {
+		return 0, errors.New("vacuum: clone missing pager/allocator")
+	}
+
+	data, err := c.oldPager.Get(oldID)
+	if err != nil {
+		return 0, err
+	}
+	n := node.NewNode(data)
+
+	switch n.Type() {
+	case page.PageTypeInternal:
+		newID, err := c.alloc.Alloc(oldID)
+		if err != nil {
+			return 0, err
+		}
+		c.remap[oldID] = newID
+
+		buf := make([]byte, page.PageSize)
+		b := node.NewBuilder(buf, page.PageTypeInternal)
+		b.SetPageID(newID)
+		if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+			return 0, err
+		} else if ok {
+			b.SetInternalFenceBounds(low, high)
+		}
+
+		count := n.Count()
+		for i := uint16(0); i < count; i++ {
+			keyView, childID, err := n.GetInternalEntryView(i)
+			if err != nil {
+				return 0, err
+			}
+			childNew, err := c.cloneNode(childID)
+			if err != nil {
+				return 0, err
+			}
+			if err := b.AddInternalChild(keyView, childNew); err != nil {
+				return 0, err
+			}
+		}
+
+		out := b.Finish()
+		if err := c.newPager.Write(newID, out.Data()); err != nil {
+			return 0, err
+		}
+		return newID, nil
+
+	case page.PageTypeLeaf:
+		if c.outerLeafLog {
+			if c.leafPageLog == nil {
+				return 0, errors.New("vacuum: leaf page log not configured")
+			}
+			ptr, err := c.leafPageLog.AppendLeafPage(data)
+			if err != nil {
+				return 0, err
+			}
+			return page.EncodeLeafRef(ptr)
+		}
+
+		newID, err := c.alloc.Alloc(oldID)
+		if err != nil {
+			return 0, err
+		}
+		c.remap[oldID] = newID
+
+		buf := make([]byte, page.PageSize)
+		copy(buf, data)
+		out := node.NewNode(buf)
+		out.SetPageID(newID)
+		out.UpdateChecksum()
+		if err := c.newPager.Write(newID, out.Data()); err != nil {
+			return 0, err
+		}
+		return newID, nil
+
+	default:
+		return 0, fmt.Errorf("vacuum: unexpected page type %d at page %d", n.Type(), oldID)
+	}
 }
