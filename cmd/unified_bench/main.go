@@ -29,6 +29,7 @@ import (
 	"time"
 	"unicode"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/internal/benchprof"
 	"github.com/snissn/gomap/kvstore"
@@ -91,6 +92,7 @@ var (
 	settleBeforeScans           = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
 	treedbCacheStatsBeforeReads = flag.Bool("treedb-cache-stats-before-reads", false, "Print select treedb.cache.* stats before read/scan tests (treedb only)")
 	treedbCacheStatsAfterTests  = flag.Bool("treedb-cache-stats-after-tests", false, "Print select treedb.cache.* stats after each benchmark test (treedb only)")
+	treedbVlogRewriteAfterRun   = flag.Bool("treedb-vlog-rewrite-after-run", false, "Run a full TreeDB value-log rewrite after the benchmark run and report before/after disk usage (treedb only)")
 )
 
 var explicitFlags = map[string]bool{}
@@ -176,6 +178,7 @@ type BenchConfig struct {
 
 	TreeDBCacheStatsBeforeReads bool
 	TreeDBCacheStatsAfterTests  bool
+	TreeDBVlogRewriteAfterRun   bool
 }
 
 type dirDiskUsage struct {
@@ -193,6 +196,7 @@ type BenchRun struct {
 	VacuumDurations     map[string]map[string]time.Duration
 	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
 	TreeDBDiskUsage     map[string]treeDBDiskUsage
+	TreeDBVlogRewrite   map[string]treeDBVlogRewriteReport
 	TreeDBStats         map[string]map[string]string
 	DiskUsage           map[string]dirDiskUsage
 }
@@ -244,6 +248,22 @@ type treeDBDiskUsage struct {
 
 	DictIndexBytes uint64
 	DictWAL        walDiskUsage
+}
+
+type treeDBVlogRewriteReport struct {
+	Dir string
+
+	BeforeUsage dirDiskUsage
+	AfterUsage  dirDiskUsage
+
+	BeforeTree treeDBDiskUsage
+	AfterTree  treeDBDiskUsage
+
+	SegmentsBefore int
+	SegmentsAfter  int
+	BytesBefore    int64
+	BytesAfter     int64
+	RecordsCopied  int
 }
 
 type benchKeyShape uint8
@@ -394,6 +414,7 @@ func main() {
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
+		TreeDBVlogRewriteAfterRun:        *treedbVlogRewriteAfterRun,
 		TreeDBIterDebug:                  *treedbIterDebug,
 		TreeDBIterDebugLimit:             *treedbIterDebugLimit,
 		TreeDBDisableWAL:                 *treedbDisableWAL,
@@ -642,6 +663,11 @@ func main() {
 				}
 			}
 		}
+		if len(run.TreeDBVlogRewrite) > 0 {
+			fmt.Println()
+			fmt.Println("TreeDB ValueLog Rewrite (After Run)")
+			fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
+		}
 		if hasArtifacts {
 			runBenchprof(*profileDir)
 		}
@@ -690,6 +716,11 @@ func main() {
 						fmt.Printf("  %s\n", line)
 					}
 				}
+			}
+			if len(run.TreeDBVlogRewrite) > 0 {
+				fmt.Println()
+				fmt.Println("TreeDB ValueLog Rewrite (After Run)")
+				fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 			}
 		}
 	case "markdown":
@@ -3335,6 +3366,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 
 	// Shutdown
 	treedbDisk := make(map[string]treeDBDiskUsage)
+	treedbRewrite := make(map[string]treeDBVlogRewriteReport)
 	treedbStats := make(map[string]map[string]string)
 	diskUsage := make(map[string]dirDiskUsage)
 	for _, inst := range instances {
@@ -3349,6 +3381,34 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		_ = inst.Wrapper.Close()
+		if cfg.TreeDBVlogRewriteAfterRun && isTreeDBInstance(inst) {
+			beforeUsage, _ := computeDirDiskUsage(inst.Dir)
+			beforeTree, _ := computeTreeDBDiskUsage(inst.Dir)
+
+			opts, _, err := buildTreeDBOptions(inst.Dir)
+			if err != nil {
+				return BenchRun{}, err
+			}
+			stats, err := treedb.ValueLogRewriteOffline(opts)
+			if err != nil {
+				return BenchRun{}, err
+			}
+
+			afterUsage, _ := computeDirDiskUsage(inst.Dir)
+			afterTree, _ := computeTreeDBDiskUsage(inst.Dir)
+			treedbRewrite[inst.Wrapper.Name()] = treeDBVlogRewriteReport{
+				Dir:            inst.Dir,
+				BeforeUsage:    beforeUsage,
+				AfterUsage:     afterUsage,
+				BeforeTree:     beforeTree,
+				AfterTree:      afterTree,
+				SegmentsBefore: stats.SegmentsBefore,
+				SegmentsAfter:  stats.SegmentsAfter,
+				BytesBefore:    stats.BytesBefore,
+				BytesAfter:     stats.BytesAfter,
+				RecordsCopied:  stats.RecordsCopied,
+			}
+		}
 		if usage, err := computeDirDiskUsage(inst.Dir); err == nil {
 			if usage.TotalBytes > 0 || usage.TotalFiles > 0 {
 				diskUsage[inst.Wrapper.Name()] = usage
@@ -3376,6 +3436,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		VacuumDurations:     vacuumDurations,
 		VacuumIndexBytes:    vacuumIndexBytes,
 		TreeDBDiskUsage:     treedbDisk,
+		TreeDBVlogRewrite:   treedbRewrite,
 		TreeDBStats:         treedbStats,
 		DiskUsage:           diskUsage,
 	}, nil
@@ -3591,6 +3652,50 @@ func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
 	return sb.String()
 }
 
+func renderTreeDBVlogRewriteString(reports map[string]treeDBVlogRewriteReport) string {
+	if len(reports) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(reports))
+	for name := range reports {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	formatBytesSigned := func(v int64) string {
+		if v <= 0 {
+			return "0 B"
+		}
+		return formatBytes(uint64(v))
+	}
+
+	var sb strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		rep := reports[name]
+		sb.WriteString(name)
+		sb.WriteString(":\n")
+		if strings.TrimSpace(rep.Dir) != "" {
+			sb.WriteString(fmt.Sprintf("  dir: %s\n", rep.Dir))
+		}
+		sb.WriteString(fmt.Sprintf("  bytes: %s -> %s\n", formatBytes(rep.BeforeUsage.TotalBytes), formatBytes(rep.AfterUsage.TotalBytes)))
+		if rep.BeforeTree.MainIndexBytes > 0 || rep.AfterTree.MainIndexBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/index.db: %s -> %s\n", formatBytes(rep.BeforeTree.MainIndexBytes), formatBytes(rep.AfterTree.MainIndexBytes)))
+		}
+		if rep.BeforeTree.MainWAL.TotalBytes > 0 || rep.AfterTree.MainWAL.TotalBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/wal: %s -> %s\n", formatBytes(rep.BeforeTree.MainWAL.TotalBytes), formatBytes(rep.AfterTree.MainWAL.TotalBytes)))
+		}
+		sb.WriteString(fmt.Sprintf("  vlog-rewrite: segments %d -> %d bytes %s -> %s records=%d\n",
+			rep.SegmentsBefore, rep.SegmentsAfter,
+			formatBytesSigned(rep.BytesBefore), formatBytesSigned(rep.BytesAfter),
+			rep.RecordsCopied))
+	}
+	return sb.String()
+}
+
 func renderDirDiskUsageString(usage map[string]dirDiskUsage) string {
 	if len(usage) == 0 {
 		return ""
@@ -3738,6 +3843,13 @@ func renderMarkdownSingle(run BenchRun) string {
 		}
 		sb.WriteString("```\n")
 	}
+	if len(run.TreeDBVlogRewrite) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("## TreeDB ValueLog Rewrite (After Run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
+		sb.WriteString("```\n")
+	}
 	return sb.String()
 }
 
@@ -3826,6 +3938,26 @@ func renderMarkdownSweep(runs []BenchRun) string {
 			} else {
 				sb.WriteString(renderDirDiskUsageString(run.DiskUsage))
 			}
+			sb.WriteString("```\n\n")
+		}
+	}
+
+	anyRewrite := false
+	for _, run := range runs {
+		if len(run.TreeDBVlogRewrite) > 0 {
+			anyRewrite = true
+			break
+		}
+	}
+	if anyRewrite {
+		sb.WriteString("## TreeDB ValueLog Rewrite (After Run)\n\n")
+		for _, run := range runs {
+			if len(run.TreeDBVlogRewrite) == 0 {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 			sb.WriteString("```\n\n")
 		}
 	}
