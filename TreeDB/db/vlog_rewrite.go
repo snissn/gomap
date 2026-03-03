@@ -995,8 +995,8 @@ type rewriteWriter struct {
 	// not consult this setting.
 	blockCompression bool
 	blockCodec       valuelog.BlockCodec
-	w       *valuelog.Writer
-	records int
+	w                *valuelog.Writer
+	records          int
 }
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
