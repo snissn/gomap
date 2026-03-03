@@ -124,7 +124,11 @@ func (cfg FormatConfig) ApplyToOptions(opts *Options) {
 	opts.ValueLog.OuterLeafBlockRestartInterval = cfg.ValueLogOuterLeafBlockRestartInterval
 	opts.ValueLog.OuterLeafBlobThresholdBytes = cfg.ValueLogOuterLeafBlobThresholdBytes
 	if cfg.ValueLogWALFenceMode != "" {
-		opts.ValueLog.WALFenceMode = ValueLogWALFenceMode(cfg.ValueLogWALFenceMode)
+		mode := normalizeValueLogWALFenceMode(ValueLogWALFenceMode(cfg.ValueLogWALFenceMode))
+		switch mode {
+		case ValueLogWALFenceModeRIDJoin, ValueLogWALFenceModeSimpleInline:
+			opts.ValueLog.WALFenceMode = mode
+		}
 	}
 }
 
@@ -149,7 +153,7 @@ func LoadFormatConfig(dir string) (FormatConfig, bool, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return FormatConfig{}, false, fmt.Errorf("treedb: decode %s: %w", filepath.Base(path), err)
 	}
-	if cfg.Version != 0 && cfg.Version != formatConfigVersion {
+	if cfg.Version != formatConfigVersion {
 		return FormatConfig{}, false, fmt.Errorf("treedb: unsupported %s version %d", filepath.Base(path), cfg.Version)
 	}
 	return cfg, true, nil

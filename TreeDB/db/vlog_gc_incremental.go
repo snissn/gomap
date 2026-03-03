@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -704,6 +705,17 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 			lastErr = err
 			if runtime.GOOS != "windows" {
 				return err
+			}
+			var errno syscall.Errno
+			if errors.As(err, &errno) {
+				switch errno {
+				case syscall.Errno(5), syscall.Errno(32), syscall.Errno(33):
+					time.Sleep(sleep)
+					if sleep < 100*time.Millisecond {
+						sleep *= 2
+					}
+					continue
+				}
 			}
 			msg := strings.ToLower(err.Error())
 			if strings.Contains(msg, "used by another process") || strings.Contains(msg, "access is denied") {

@@ -26,7 +26,7 @@ const (
 	verifyLargeValLen = 16 * 1024
 )
 
-func skipDeprecatedOuterLeafModeTestsOnWindows(t *testing.T) {
+func skipOuterLeafModeMatrixOnWindows(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("deprecated outer-leaf mode matrix is slow on windows (covered on unix)")
@@ -282,7 +282,7 @@ func TestReopenVerify_WALOn_Checkpoint_LeafPagesInValueLog(t *testing.T) {
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
@@ -321,7 +321,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2(t *testing.T) {
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_ReadPath_HitMiss_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
@@ -573,7 +573,7 @@ func runOverwriteDeleteReopenScenario(t *testing.T, mode string, syncPerWrite bo
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, false)
 	if got.mainFlags&node.FlagPointer == 0 {
@@ -582,7 +582,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_Reopen
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLogRoute_OverwriteDelete_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLogRoute, false)
 	if got.mainFlags&node.FlagPointer == 0 {
@@ -591,7 +591,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLogRoute_OverwriteDelete_R
 }
 
 func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLog_OverwriteDelete_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, true)
 	if got.mainFlags&node.FlagPointer == 0 {
@@ -600,7 +600,7 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLog_OverwriteDelete_ReopenP
 }
 
 func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLogRoute_OverwriteDelete_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	got := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLogRoute, true)
 	if got.mainFlags&node.FlagPointer == 0 {
@@ -609,7 +609,7 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLogRoute_OverwriteDelete_Re
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_ParityWithV1(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	v1 := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, false)
 	v1LeafLog := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, false)
@@ -625,7 +625,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV1LeafLog_OverwriteDelete_Parity
 }
 
 func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLog_OverwriteDelete_ParityWithV1(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	v1 := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1, true)
 	v1LeafLog := runOverwriteDeleteReopenScenario(t, treedb.IndexOuterLeafModeV1LeafLog, true)
@@ -641,7 +641,7 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV1LeafLog_OverwriteDelete_ParityW
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
@@ -681,7 +681,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr(t *testing.T) {
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr_SimpleInline(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
@@ -722,7 +722,7 @@ func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2FencePtr_SimpleInline(t *testi
 }
 
 func TestReopenVerify_WALOn_Checkpoint_OuterLeafV2_GroupedBlocks(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	n := 500
@@ -944,32 +944,32 @@ func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity(t *testing
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV2(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2BlockPtr)
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV2FencePtr(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2FencePtr)
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV1LeafLog(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLog)
 }
 
 func TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity_OuterLeafV1LeafLogRoute(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLogRoute)
 }
 
 func runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t *testing.T, mode string) {
 	t.Helper()
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	opts := treedb.Options{
@@ -1037,25 +1037,25 @@ func runValueLogRewriteBatchedPointerSwapReopenParityOuterLeaf(t *testing.T, mod
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV2_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2BlockPtr)
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV2FencePtr_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV2FencePtr)
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV1LeafLog_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLog)
 }
 
 func TestReopenVerify_ValueLogGC_OuterLeafV1LeafLogRoute_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	runValueLogGCReopenParityOuterLeaf(t, treedb.IndexOuterLeafModeV1LeafLogRoute)
 }
@@ -1123,7 +1123,7 @@ func TestReopenVerify_ValueLogGC_LeafPagesInValueLog_ReopenParity(t *testing.T) 
 
 func runValueLogGCReopenParityOuterLeaf(t *testing.T, mode string) {
 	t.Helper()
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	opts := treedb.Options{
@@ -1271,7 +1271,7 @@ func TestReopenVerify_WALOn_WriteSync(t *testing.T) {
 }
 
 func TestReopenVerify_WALOn_WriteSync_OuterLeafV2(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
@@ -1308,7 +1308,7 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV2(t *testing.T) {
 }
 
 func TestReopenVerify_WALOn_WriteSync_OuterLeafV2FencePtr(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	keys, values, hash := buildVerifyDataset(2000)
@@ -1345,7 +1345,7 @@ func TestReopenVerify_WALOn_WriteSync_OuterLeafV2FencePtr(t *testing.T) {
 }
 
 func testReopenVerifyOuterLeafSplitMergeDeleteRangeIteratorParity(t *testing.T, mode string) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	const total = 12000
@@ -1582,7 +1582,7 @@ func TestReopenVerify_OuterLeafV2FencePtr_SplitMergeDeleteRange_IteratorParity(t
 }
 
 func TestReopenVerify_OuterLeafV1LeafLog_SplitMergeDeleteRange_ParityWithV1(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	type apiParityFingerprint struct {
 		forwardDigest string
@@ -1770,7 +1770,7 @@ func TestReopenVerify_OuterLeafV1LeafLog_SplitMergeDeleteRange_ParityWithV1(t *t
 }
 
 func TestReopenVerify_OuterLeafV2FencePtr_CompactIndex_ReopenParity(t *testing.T) {
-	skipDeprecatedOuterLeafModeTestsOnWindows(t)
+	skipOuterLeafModeMatrixOnWindows(t)
 
 	dir := t.TempDir()
 	const total = 4000
