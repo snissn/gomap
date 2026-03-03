@@ -977,7 +977,8 @@ func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
 	backendDir := resolveMainDBDir(dir)
 	cfg, ok, err := treedbdb.LoadFormatConfig(backendDir)
 	if err != nil {
-		fatalf("format config: %v", err)
+		fmt.Fprintf(os.Stderr, "warning: format config: %v\n", err)
+		return
 	}
 	if ok {
 		cfg.ApplyToOptions(opts)
