@@ -16,6 +16,8 @@ func TestWALOffCompressionActivatesDictBeforeSteady(t *testing.T) {
 	// wal_off uses deferred value-log pointers, so small warmup phases can otherwise
 	// leave the dict inactive until after steady completes.
 
+	benchDir := t.TempDir()
+
 	train := make([]kvSample, 20000)
 	eval := make([]kvSample, 5000)
 	// Synthetic-but-realistic-ish payloads: fixed-size, compressible, with a
@@ -37,14 +39,6 @@ func TestWALOffCompressionActivatesDictBeforeSteady(t *testing.T) {
 		eval[i] = kvSample{Val: val}
 	}
 
-	stats := datasetStats{
-		count: len(train) + len(eval),
-		total: (len(train) + len(eval)) * valueLen,
-		min:   valueLen,
-		max:   valueLen,
-		avg:   float64(valueLen),
-	}
-
 	cfg := benchConfig{
 		Mode:             "wal_off",
 		Compression:      "on",
@@ -59,10 +53,27 @@ func TestWALOffCompressionActivatesDictBeforeSteady(t *testing.T) {
 	}
 
 	start := time.Now()
-	report, err := runKVBench("synthetic", 512, cfg, train, eval, stats, 0)
+	opts, _, err := benchOptions(cfg)
 	if err != nil {
-		t.Fatalf("runKVBench failed: %v", err)
+		t.Fatalf("benchOptions failed: %v", err)
 	}
+	opts.Dir = benchDir
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer db.Close()
+
+	keyState := newBenchKeyState(cfg.KeyMode)
+	if _, _, err := writeSamplesOnce(db, train, cfg.Batch, cfg.KeyMode, keyState); err != nil {
+		t.Fatalf("warmup writeSamplesOnce failed: %v", err)
+	}
+	active, snap, err := ensureDictActiveBeforeSteady(db, cfg)
+	if err != nil {
+		t.Fatalf("ensureDictActiveBeforeSteady failed: %v", err)
+	}
+
 	maxElapsed := 30 * time.Second
 	if raceEnabled {
 		maxElapsed = 3 * time.Minute
@@ -71,15 +82,18 @@ func TestWALOffCompressionActivatesDictBeforeSteady(t *testing.T) {
 		t.Fatalf("bench took too long; dict activation should not time out pre-steady (elapsed=%s)", time.Since(start))
 	}
 
-	if report.DictID == nil || *report.DictID == 0 {
-		t.Fatalf("expected non-zero dict_id in report; got %#v", report.DictID)
+	if !active {
+		t.Fatalf("expected dict to become active before steady (active=false)")
 	}
-	preSteadyActive := report.PreSteadyDictID != nil && *report.PreSteadyDictID > 0
-	if report.PreSteadyFramesKept != nil && *report.PreSteadyFramesKept > 0 {
+
+	dictID, dictOK := parseStatUint(snap, "treedb.cache.vlog_dict.last_applied_dict_id")
+	keptFrames, keptOK := parseStatUint(snap, "treedb.cache.vlog_dict.frames_kept")
+	preSteadyActive := dictOK && dictID > 0
+	if keptOK && keptFrames > 0 {
 		preSteadyActive = true
 	}
 	if !preSteadyActive {
-		t.Fatalf("expected pre-steady dict activation via dict_id>0 or frames_kept>0; got pre_steady_dict_id=%#v pre_steady_frames_kept=%#v", report.PreSteadyDictID, report.PreSteadyFramesKept)
+		t.Fatalf("expected pre-steady dict activation via dict_id>0 or frames_kept>0; got dict_id=%s kept_frames=%s", formatStatUint(dictID, dictOK), formatStatUint(keptFrames, keptOK))
 	}
 }
 
