@@ -99,6 +99,8 @@ func flagExplicit(name string) bool {
 	return explicitFlags[name]
 }
 
+const checkpointPostRunLabel = "post-run"
+
 type DBInstance struct {
 	Name    string
 	Wrapper kvstore.DB
@@ -3304,6 +3306,47 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	// Final clear of live table
 	_ = liveTbl.Clear()
 
+	// If the user requests checkpoints between tests, also checkpoint after the
+	// final test so disk usage reflects a settled backend state (especially for
+	// front-end ingest benchmarks like TreeDB batch_write).
+	if cfg.CheckpointBetweenTests {
+		chkMap := make(map[string]time.Duration)
+		for _, inst := range instances {
+			cp, ok := inst.Wrapper.(checkpointer)
+			if !ok {
+				continue
+			}
+
+			var (
+				checkpointCPUFile *os.File
+				err               error
+			)
+			if shouldCheckpointCPUProfile(cfg, checkpointPostRunLabel) {
+				checkpointCPUFile, err = startCheckpointCPUProfile(cfg, checkpointPostRunLabel, inst.Wrapper.Name())
+				if err != nil {
+					return BenchRun{}, fmt.Errorf("checkpoint %s after run profiling: %w", inst.Name, err)
+				}
+			}
+
+			start := time.Now()
+			checkpointErr := cp.Checkpoint()
+
+			if checkpointCPUFile != nil {
+				stopCPUProfileFn()
+				_ = checkpointCPUFile.Close()
+			}
+
+			if checkpointErr != nil {
+				return BenchRun{}, fmt.Errorf("checkpoint %s after run: %w", inst.Name, checkpointErr)
+			}
+			chkMap[inst.Wrapper.Name()] = time.Since(start)
+		}
+		if len(chkMap) > 0 {
+			checkpointDurations[checkpointPostRunLabel] = chkMap
+			displayNames[checkpointPostRunLabel] = "After Run"
+		}
+	}
+
 	// Shutdown
 	treedbDisk := make(map[string]treeDBDiskUsage)
 	treedbStats := make(map[string]map[string]string)
@@ -3663,7 +3706,11 @@ func renderMarkdownSingle(run BenchRun) string {
 
 	if len(run.CheckpointDurations) > 0 {
 		sb.WriteString("\n")
-		sb.WriteString("## Checkpoint Time (Between Tests)\n\n")
+		title := "## Checkpoint Time (Between Tests)\n\n"
+		if _, ok := run.CheckpointDurations[checkpointPostRunLabel]; ok {
+			title = "## Checkpoint Time (Between Tests + Post-run)\n\n"
+		}
+		sb.WriteString(title)
 		sb.WriteString("```text\n")
 		sb.WriteString(renderCheckpointDurationsTableString(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations))
 		sb.WriteString("```\n")
@@ -4308,12 +4355,23 @@ func printResultsTable(instances []*DBInstance, finalTestOrder []string, display
 func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) string {
 
 	rows := make([]string, 0, len(finalTestOrder))
+	inOrder := make(map[string]struct{}, len(finalTestOrder))
 	for _, testName := range finalTestOrder {
+		inOrder[testName] = struct{}{}
 		if _, ok := durs[testName]; ok {
 
 			rows = append(rows, testName)
 		}
 	}
+	extra := make([]string, 0, len(durs))
+	for testName := range durs {
+		if _, ok := inOrder[testName]; ok {
+			continue
+		}
+		extra = append(extra, testName)
+	}
+	sort.Strings(extra)
+	rows = append(rows, extra...)
 	if len(rows) == 0 {
 		return ""
 	}
@@ -4330,6 +4388,9 @@ func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrde
 
 	for _, testName := range rows {
 		disp := displayNames[testName]
+		if disp == "" {
+			disp = testName
+		}
 		if len(disp) > colWidths["Before Test"] {
 			colWidths["Before Test"] = len(disp)
 		}
@@ -4370,7 +4431,11 @@ func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrde
 	sb.WriteString("\n")
 
 	for _, testName := range rows {
-		dataRow := fmt.Sprintf("%*s", colWidths["Before Test"], displayNames[testName])
+		disp := displayNames[testName]
+		if disp == "" {
+			disp = testName
+		}
+		dataRow := fmt.Sprintf("%*s", colWidths["Before Test"], disp)
 		perDB := durs[testName]
 		for _, inst := range instances {
 			dbName := inst.Wrapper.Name()
@@ -4394,7 +4459,11 @@ func printCheckpointDurationsTable(instances []*DBInstance, finalTestOrder []str
 	if table == "" {
 		return
 	}
-	fmt.Println("Checkpoint Time (Between Tests)")
+	title := "Checkpoint Time (Between Tests)"
+	if _, ok := durs[checkpointPostRunLabel]; ok {
+		title = "Checkpoint Time (Between Tests + Post-run)"
+	}
+	fmt.Println(title)
 	fmt.Print(table)
 }
 
