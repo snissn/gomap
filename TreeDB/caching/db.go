@@ -8854,7 +8854,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			MaxSegmentBytes:   db.valueLogGenerationWarmTarget,
 			MaxSourceSegments: 1,
 			MaxSourceBytes:    db.valueLogRewriteBudgetBytes,
-			ProtectedPaths:    db.valueLogRetainedPaths(),
+			ProtectedPaths:    append(db.valueLogRetainedPaths(), db.currentValueLogPaths()...),
 			MinSegmentStaleRatio: func() float64 {
 				if db.valueLogRewriteTriggerRatioPPM <= 0 {
 					return 0
@@ -8915,7 +8915,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogRetainedPaths()}
+	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: append(db.valueLogRetainedPaths(), db.currentValueLogPaths()...)}
 	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 	cancel()
 	if err != nil {
