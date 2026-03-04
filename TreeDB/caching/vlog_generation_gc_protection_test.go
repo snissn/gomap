@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"testing"
 
@@ -243,5 +244,90 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 	}
 	if !bytes.Equal(got, val1) {
 		t.Fatalf("value mismatch after reopen: got=%dB want=%dB", len(got), len(val1))
+	}
+}
+
+func TestVlogGenerationGC_ProtectedPathsSnapshotDoesNotDeleteNewerSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend open: %v", err)
+	}
+
+	db, err := Open(dir, backend, Options{
+		FlushThreshold:           256 << 20,
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		MemtableShards:           1,
+		JournalLanes:             1,
+		ValueLogPointerThreshold: 1,
+		ValueLogMaxSegmentBytes:  4 << 10,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	// Establish a stable backend boundary and create the initial (protected)
+	// value-log segment.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	protected := append(db.valueLogRetainedPaths(), db.currentValueLogPaths()...)
+	if len(protected) == 0 {
+		t.Fatalf("expected non-empty protected paths snapshot")
+	}
+
+	// Rotate after taking the snapshot so subsequent writes land in a segment
+	// that is not present in the protected-path list.
+	if err := db.rotateValueLogLocked(&db.lanes[0]); err != nil {
+		t.Fatalf("rotateValueLogLocked(before write): %v", err)
+	}
+
+	val1 := bytes.Repeat([]byte("a"), 8<<10)
+	if err := db.Set([]byte("k1"), val1); err != nil {
+		t.Fatalf("Set k1: %v", err)
+	}
+
+	k1Path := ""
+	func() {
+		l := &db.lanes[0]
+		l.vlogMu.Lock()
+		k1Path = l.vlogPath
+		l.vlogMu.Unlock()
+	}()
+	if k1Path == "" {
+		t.Fatalf("expected non-empty value-log path for k1")
+	}
+
+	// Force rotate again so k1 points at a non-active segment. The GC must not
+	// delete it, even though the protected-path snapshot pre-dates the segment.
+	if err := db.rotateValueLogLocked(&db.lanes[0]); err != nil {
+		t.Fatalf("rotateValueLogLocked(after write): %v", err)
+	}
+
+	gcer, ok := db.backend.(backendValueLogGCer)
+	if !ok {
+		t.Fatalf("backend does not implement ValueLogGC")
+	}
+	if _, err := gcer.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{ProtectedPaths: protected}); err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+
+	if _, err := os.Stat(k1Path); err != nil {
+		t.Fatalf("expected k1 segment to remain after GC; stat: %v", err)
+	}
+
+	got, err := db.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("Get k1 after GC: %v", err)
+	}
+	if !bytes.Equal(got, val1) {
+		t.Fatalf("value mismatch after GC: got=%dB want=%dB", len(got), len(val1))
 	}
 }
