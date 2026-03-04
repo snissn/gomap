@@ -36,7 +36,11 @@ func TestProfileFast_BulkRestoreMaintainsKeyValueParity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
 
 	const (
 		keys      = 50_000
@@ -44,25 +48,42 @@ func TestProfileFast_BulkRestoreMaintainsKeyValueParity(t *testing.T) {
 	)
 
 	live := make([][]byte, keys)
-	b := db.NewBatch()
-	if b == nil {
-		t.Fatalf("NewBatch returned nil")
-	}
-	defer b.Close()
-
-	commitBatch := func() {
-		t.Helper()
-		if err := b.Write(); err != nil {
-			t.Fatalf("batch write: %v", err)
+	var b Batch
+	defer func() {
+		if b != nil {
+			_ = b.Close()
 		}
-		_ = b.Close()
+	}()
+
+	newBatch := func() {
+		t.Helper()
+		if b != nil {
+			_ = b.Close()
+			b = nil
+		}
 		b = db.NewBatch()
 		if b == nil {
 			t.Fatalf("NewBatch returned nil")
 		}
 	}
 
+	commitBatch := func(createNew bool) {
+		t.Helper()
+		if b == nil {
+			return
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("batch write: %v", err)
+		}
+		_ = b.Close()
+		b = nil
+		if createNew {
+			newBatch()
+		}
+	}
+
 	// Phase 1: restore-like strictly increasing keys.
+	newBatch()
 	for i := 0; i < keys; i++ {
 		key := bulkRestoreKey(i)
 		val := bulkRestoreValue(1, i)
@@ -71,21 +92,17 @@ func TestProfileFast_BulkRestoreMaintainsKeyValueParity(t *testing.T) {
 			t.Fatalf("set i=%d: %v", i, err)
 		}
 		if (i+1)%batchSize == 0 {
-			commitBatch()
+			commitBatch(i+1 < keys)
 		}
 	}
-	commitBatch()
+	commitBatch(false)
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint after restore: %v", err)
 	}
 
 	// Phase 2: overwrite/delete churn similar to IAVL updates after restore.
-	b = db.NewBatch()
-	if b == nil {
-		t.Fatalf("NewBatch returned nil")
-	}
-	defer b.Close()
+	newBatch()
 	for i := 0; i < keys; i++ {
 		key := bulkRestoreKey(i)
 		switch {
@@ -102,10 +119,10 @@ func TestProfileFast_BulkRestoreMaintainsKeyValueParity(t *testing.T) {
 			live[i] = val
 		}
 		if (i+1)%batchSize == 0 {
-			commitBatch()
+			commitBatch(i+1 < keys)
 		}
 	}
-	commitBatch()
+	commitBatch(false)
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint after churn: %v", err)
@@ -223,11 +240,11 @@ func TestProfileFast_BulkRestoreMaintainsKeyValueParity(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+	db = nil
 	db, err = Open(opts)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer db.Close()
 	for i := 0; i < keys; i++ {
 		got, gerr := db.Get(bulkRestoreKey(i))
 		if gerr != nil {
