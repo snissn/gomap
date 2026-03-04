@@ -49,9 +49,11 @@ type ValueLogRewriteOnlineOptions struct {
 	// value-log segment IDs. Missing IDs are ignored.
 	SourceFileIDs []uint32
 	// ProtectedPaths are value-log segment paths that must not be marked zombie
-	// during rewrite cleanup. This is primarily used by cached-mode background
-	// maintenance to avoid deleting segments still referenced by in-memory
-	// pointers that are not yet visible in the backend index.
+	// during rewrite cleanup.
+	//
+	// When non-empty, cleanup also avoids zombifying currently-active pre-existing
+	// segments (cached-mode maintenance), since concurrent writers may still be
+	// appending records whose pointers are not yet visible in the backend index.
 	ProtectedPaths []string
 	// MaxSourceSegments bounds the number of source segments selected by sparse
 	// segment selection. Applies only when SourceFileIDs is empty.
