@@ -53,7 +53,7 @@ var (
 	treedbIterDebug                       = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit                  = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 	treedbForceValuePointers              = flag.Bool("treedb-force-value-pointers", false, "TreeDB: store all values out-of-line in the value log (no inline values)")
-	treedbIndexOptimizations              = flag.Bool("treedb-index-optimizations", false, "TreeDB: enable profile-driven index optimization bundle (force value pointers + leaf prefix compression + columnar leaves + packed value pointers + internal base-delta)")
+	treedbIndexOptimizations              = flag.Bool("treedb-index-optimizations", false, "TreeDB: enable profile-driven index optimization bundle (leaf prefix compression + columnar leaves + packed value pointers + internal base-delta)")
 	treedbLeafPrefixCompression           = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable front-coded leaf key compression (restart points; compact entry header)")
 	treedbValueLogThreshold               = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
 	treedbVlogRawWritevMinAvgBytes        = flag.Int("treedb-vlog-raw-writev-min-avg-bytes", 0, "TreeDB: raw grouped-frame writev min average payload bytes/record (0=adaptive)")
@@ -95,7 +95,7 @@ var (
 	treedbIndexColumnarLeaves             = flag.Bool("treedb-index-columnar-leaves", false, "TreeDB: enable columnar leaf encoding")
 	treedbIndexPackedValuePtr             = flag.Bool("treedb-index-packed-valueptr", false, "TreeDB: enable packed 12-byte ValuePtr encoding for pointer entries in leaf pages")
 	treedbIndexInternalBaseDelta          = flag.Bool("treedb-index-internal-base-delta", false, "TreeDB: enable internal base-delta encoding")
-	treedbIndexOuterLeavesInVlog          = flag.Bool("treedb-index-outer-leaves-in-vlog", false, "TreeDB: store B+Tree leaf pages (outer leaves) in the value log instead of index.db")
+	treedbIndexOuterLeavesInVlog          = flag.Bool("treedb-index-outer-leaves-in-vlog", true, "TreeDB: store B+Tree leaf pages (outer leaves) in the value log instead of index.db")
 
 	treedbDisableWAL             = flag.Bool("treedb-disable-wal", false, "TreeDB: disable journal/redo log while keeping value-log pointers (unsafe)")
 	treedbRelaxedSync            = flag.Bool("treedb-relaxed-sync", false, "TreeDB: relaxed sync (unsafe)")
@@ -325,8 +325,7 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 		lines = append(lines, fmt.Sprintf("maintenance_mode=%s", strings.TrimSpace(r.maintenanceMode)))
 	}
 	lines = append(lines, fmt.Sprintf("index_optimizations=%t",
-		r.opts.ValueLog.ForcePointers &&
-			r.opts.LeafPrefixCompression &&
+		r.opts.LeafPrefixCompression &&
 			r.opts.IndexColumnarLeaves &&
 			r.opts.IndexPackedValuePtr &&
 			r.opts.IndexInternalBaseDelta))
@@ -342,11 +341,6 @@ func (r treeDBOptionsReport) formatText(indent string) string {
 	threshold := r.opts.ValueLog.PointerThreshold
 	if threshold <= 0 {
 		effective := page.DefaultInlineThreshold
-		if r.opts.Durability != treedb.DurabilityDurable {
-			// TreeDB cached mode uses a smaller default in relaxed durability modes.
-			// Keep this in sync with the cached-mode default (TreeDB/caching/db.go).
-			effective = 127
-		}
 		lines = append(lines, fmt.Sprintf("vlog.pointer_threshold=default (effective=%dB)", effective))
 	} else {
 		lines = append(lines, fmt.Sprintf("vlog.pointer_threshold=%dB", threshold))
@@ -508,7 +502,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 
 	indexOptimizationsRequested := *treedbIndexOptimizations
 	indexOptimizationsExplicit := flagExplicit("treedb-index-optimizations")
-	forcePointersEffective := resolveIndexOptimizationBool("treedb-force-value-pointers", *treedbForceValuePointers, indexOptimizationsRequested, indexOptimizationsExplicit)
+	forcePointersEffective := *treedbForceValuePointers
 	leafPrefixEffective := resolveIndexOptimizationBool("treedb-leaf-prefix-compression", *treedbLeafPrefixCompression, indexOptimizationsRequested, indexOptimizationsExplicit)
 	columnarLeavesEffective := resolveIndexOptimizationBool("treedb-index-columnar-leaves", *treedbIndexColumnarLeaves, indexOptimizationsRequested, indexOptimizationsExplicit)
 	packedValuePtrEffective := resolveIndexOptimizationBool("treedb-index-packed-valueptr", *treedbIndexPackedValuePtr, indexOptimizationsRequested, indexOptimizationsExplicit)
@@ -516,7 +510,7 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	var notes []string
 	var warnings []string
 	if indexOptimizationsRequested {
-		notes = append(notes, "index_optimizations enables force value pointers + leaf prefix compression + columnar leaves + packed value pointers + internal base-delta")
+		notes = append(notes, "index_optimizations enables leaf prefix compression + columnar leaves + packed value pointers + internal base-delta")
 	}
 	if leafPrefixEffective {
 		notes = append(notes, "leaf_prefix_compression uses front-coding with restart points (compact v2 leaf entry header for new pages)")
@@ -530,6 +524,10 @@ func buildTreeDBOptions(dir string) (treedb.Options, treeDBOptionsReport, error)
 	}
 	if packedValuePtrEffective {
 		notes = append(notes, "index_packed_valueptr uses a packed 12B leaf ValuePtr encoding (u32 offset cap; cached mode rotates value-log segments automatically)")
+	}
+	if *treedbIndexOuterLeavesInVlog && internalBaseDeltaEffective {
+		internalBaseDeltaEffective = false
+		notes = append(notes, "index_internal_base_delta disabled: leaf-page LeafRef child IDs are incompatible with base-delta encoding")
 	}
 
 	opts := treedb.Options{

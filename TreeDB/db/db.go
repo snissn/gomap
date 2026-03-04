@@ -949,6 +949,20 @@ func validateOptions(opts Options) error {
 	return nil
 }
 
+func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int) {
+	inlineThreshold := page.DefaultInlineThreshold
+	adaptiveCtrl := adaptive.New()
+	if opts.ValueLog.PointerThreshold > 0 {
+		inlineThreshold = opts.ValueLog.PointerThreshold
+		adaptiveCtrl = nil
+	}
+	if opts.ValueLog.ForcePointers {
+		inlineThreshold = 0
+		adaptiveCtrl = nil
+	}
+	return adaptiveCtrl, inlineThreshold
+}
+
 func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	if err := recoverIndexSwap(opts.Dir); err != nil {
 		return nil, err
@@ -985,12 +999,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	gen := newIndexGen(1, p, alloc, z)
 
-	adaptiveCtrl := adaptive.New()
-	inlineThreshold := page.DefaultInlineThreshold
-	if opts.ValueLog.ForcePointers {
-		inlineThreshold = 0
-		adaptiveCtrl = nil
-	}
+	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 
 	db := &DB{
 		valueLogManager:            vm,

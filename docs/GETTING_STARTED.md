@@ -38,7 +38,8 @@ import (
 )
 
 func main() {
-	db, err := treedb.Open(treedb.Options{Dir: "./db"})
+	opts := treedb.OptionsFor(treedb.ProfileDurable, "./db")
+	db, err := treedb.Open(opts)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -2,8 +2,12 @@ package db
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains(t *testing.T) {
@@ -152,6 +156,27 @@ func testDeleteMostKeysCollapsesRootWithPointerValues(t *testing.T) {
 	val := bytes.Repeat([]byte("y"), 256)
 	const total = 5000
 
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	vw, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("new valuelog writer: %v", err)
+	}
+	vwClosed := false
+	defer func() {
+		if vwClosed {
+			return
+		}
+		_ = vw.Close()
+	}()
+	nextRID := uint64(1)
+
 	{
 		const batchSize = 512
 		for base := 0; base < total; base += batchSize {
@@ -166,7 +191,12 @@ func testDeleteMostKeysCollapsesRootWithPointerValues(t *testing.T) {
 				k[1] = byte(i >> 16)
 				k[2] = byte(i >> 8)
 				k[3] = byte(i)
-				if err := b.Set(k[:], val); err != nil {
+				ptr, err := vw.Append(0, nil, nextRID, val)
+				if err != nil {
+					t.Fatalf("append: %v", err)
+				}
+				nextRID++
+				if err := b.SetPointer(k[:], ptr); err != nil {
 					t.Fatalf("set: %v", err)
 				}
 			}
@@ -176,6 +206,10 @@ func testDeleteMostKeysCollapsesRootWithPointerValues(t *testing.T) {
 			_ = b.Close()
 		}
 	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("close valuelog writer: %v", err)
+	}
+	vwClosed = true
 
 	repBefore, err := d.FragmentationReport()
 	if err != nil {
