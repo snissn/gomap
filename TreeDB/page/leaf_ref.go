@@ -14,7 +14,7 @@ import "fmt"
 // stored as single-record grouped frames (K=1), so the reader can reconstruct a
 // stable ValuePtr with grouped flag and zero record-length hint.
 
-var leafRefPtrLength = ValuePtrMarkGrouped(0, 0)
+const leafRefPtrLength = valuePtrGroupedMask
 
 // EncodeLeafRef encodes ptr as a LeafRef id.
 func EncodeLeafRef(ptr ValuePtr) (uint64, error) {

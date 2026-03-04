@@ -193,7 +193,7 @@ func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup)
 	return ridMap, nil
 }
 
-func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64) error {
+func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64) (retErr error) {
 	type commitBatch struct {
 		seq     uint64
 		order   int
@@ -270,7 +270,9 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		if db != nil && db.indexOuterLeavesInValueLog {
 			db.SetLeafPageLog(prevLeafPageLog)
 		}
-		_ = inlineAppender.close()
+		if err := inlineAppender.close(); err != nil && retErr == nil {
+			retErr = err
+		}
 	}()
 	for _, batch := range legacyBatches {
 		if err := applyCommitBatch(db, batch.records, ridMap, inlineAppender); err != nil {
@@ -289,12 +291,6 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		}
 	}
 	if err := inlineAppender.syncIfDirty(); err != nil {
-		return err
-	}
-	if db != nil && db.indexOuterLeavesInValueLog {
-		db.SetLeafPageLog(prevLeafPageLog)
-	}
-	if err := inlineAppender.close(); err != nil {
 		return err
 	}
 	for _, path := range commitPaths {
