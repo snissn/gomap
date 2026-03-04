@@ -709,15 +709,24 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 		return false, fmt.Errorf("missing index")
 	}
 
+	var vlogSet *valuelog.Set
 	db.mu.RLock()
 	rootID := db.meta.UserRootPageID
 	baseSeq := db.meta.CommitSeq
+	state := db.state.Load()
+	if state != nil {
+		vlogSet = state.ValueLogSet
+	}
 	regID := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
 	defer idx.registry.Unregister(regID)
 	defer db.writeMu.RUnlock()
+	if vlogSet != nil {
+		db.valueLogManager.Acquire(vlogSet)
+		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
+	}
 
-	tr := tree.New(idx.pager, nil, rootID)
+	tr := tree.New(idx.pager, vlogSet, rootID)
 	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
@@ -799,15 +808,24 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 		return fmt.Errorf("missing index")
 	}
 
+	var vlogSet *valuelog.Set
 	db.mu.RLock()
 	rootID := db.meta.UserRootPageID
 	sysRoot := db.meta.SystemRootPageID
 	baseSeq := db.meta.CommitSeq
+	state := db.state.Load()
+	if state != nil {
+		vlogSet = state.ValueLogSet
+	}
 	regID := idx.registry.Register(baseSeq)
 	db.mu.RUnlock()
 	defer idx.registry.Unregister(regID)
+	if vlogSet != nil {
+		db.valueLogManager.Acquire(vlogSet)
+		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
+	}
 
-	tr := tree.New(idx.pager, nil, rootID)
+	tr := tree.New(idx.pager, vlogSet, rootID)
 	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
 	defer batch.Release(b)
 	b.Reserve(len(swaps))
