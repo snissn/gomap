@@ -35,7 +35,9 @@ func TestVlogGenerationGC_ProtectsRetainedSegmentsBeforeFlush(t *testing.T) {
 
 	// Write a value-log-backed key, then force-rotate so it points at a non-active
 	// segment that is still only referenced by cached state.
-	val1 := bytes.Repeat([]byte("a"), 8<<10)
+	// Keep the first value below ValueLogMaxSegmentBytes so the write doesn't
+	// trigger pre-rotation (which can make this regression less deterministic).
+	val1 := bytes.Repeat([]byte("a"), 2<<10)
 	if err := db.Set([]byte("k1"), val1); err != nil {
 		_ = db.Close()
 		t.Fatalf("Set k1: %v", err)
@@ -85,7 +87,6 @@ func TestVlogGenerationGC_ProtectsRetainedSegmentsBeforeFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backend reopen: %v", err)
 	}
-	defer backend2.Close()
 
 	reopen, err := Open(dir, backend2, Options{
 		FlushThreshold:           256 << 20,
@@ -97,6 +98,7 @@ func TestVlogGenerationGC_ProtectsRetainedSegmentsBeforeFlush(t *testing.T) {
 		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
 	})
 	if err != nil {
+		_ = backend2.Close()
 		t.Fatalf("reopen: %v", err)
 	}
 	defer reopen.Close()
@@ -137,7 +139,7 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 		t.Fatalf("Open: %v", err)
 	}
 
-	val1 := bytes.Repeat([]byte("a"), 8<<10)
+	val1 := bytes.Repeat([]byte("a"), 2<<10)
 	if err := db.Set([]byte("k1"), val1); err != nil {
 		_ = db.Close()
 		t.Fatalf("Set k1: %v", err)
@@ -219,7 +221,6 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 	if err != nil {
 		t.Fatalf("backend reopen: %v", err)
 	}
-	defer backend2.Close()
 
 	reopen, err := Open(dir, backend2, Options{
 		FlushThreshold:           256 << 20,
@@ -234,6 +235,7 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
 	})
 	if err != nil {
+		_ = backend2.Close()
 		t.Fatalf("reopen: %v", err)
 	}
 	defer reopen.Close()

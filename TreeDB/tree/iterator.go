@@ -790,7 +790,6 @@ func (it *Iterator) stepBackward() {
 				return
 			}
 			currID := childID
-			stackBase := len(it.stack)
 
 			for {
 				n, err := it.loadNode(currID)
@@ -799,25 +798,25 @@ func (it *Iterator) stepBackward() {
 					it.valid = false
 					return
 				}
-
-				if n.Count() == 0 {
-					// Empty nodes can be reachable during concurrent maintenance
-					// or transitional states (e.g. after merges) and should not
-					// terminate reverse iteration. Treat the subtree as exhausted
-					// and continue stepping backward at the parent.
-					it.stack = it.stack[:stackBase]
-					break
-				}
-
-				item := CursorItem{PageID: currID, Node: n, Index: int(n.Count() - 1)}
+				count := int(n.Count())
+				item := CursorItem{PageID: currID, Node: n, Index: count - 1}
 				it.stack = append(it.stack, item)
+
+				if count == 0 {
+					// Defensive: empty pages can appear transiently during churny
+					// delete-heavy workloads. Forward iteration implicitly skips them
+					// via bounds checks + stepForward; mirror that behavior here by
+					// letting loadCurrent/stepBackward unwind and continue.
+					it.loadCurrent()
+					return
+				}
 
 				if n.Type() == page.PageTypeLeaf {
 					it.loadCurrent()
 					return
 				}
 
-				childID, err := n.GetInternalChildID(uint16(n.Count() - 1))
+				childID, err := n.GetInternalChildID(uint16(count - 1))
 				if err != nil {
 					it.err = err
 					it.valid = false
@@ -825,7 +824,6 @@ func (it *Iterator) stepBackward() {
 				}
 				currID = childID
 			}
-			continue
 		}
 		it.stack = it.stack[:idx]
 	}

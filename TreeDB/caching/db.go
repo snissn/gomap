@@ -620,7 +620,7 @@ func putVlogDictPrepareResults(ch chan vlogDictPrepareResult) {
 const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
 	envDebugFlushTiming   = "TREEDB_DEBUG_FLUSH_TIMING"
-	// Generational maintenance toggles (for forensics / isolation).
+	// Generational maintenance toggles (forensics / isolation).
 	envDisableVlogGenerationRewrite = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
 	envDisableVlogGenerationGC      = "TREEDB_DISABLE_VLOG_GENERATION_GC"
 	envDisableVlogGenerationVacuum  = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
@@ -8912,7 +8912,6 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		return
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
-	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
 	// Establish a stable backend boundary before computing reachability. A GC
 	// pass that scans only the backend index can otherwise miss in-memory
@@ -8924,6 +8923,8 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		}
 		return
 	}
+	now = time.Now()
+	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: append(db.valueLogRetainedPaths(), db.currentValueLogPaths()...)}
 	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)

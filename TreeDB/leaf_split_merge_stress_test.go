@@ -126,6 +126,10 @@ func verifyIteratorMatchesModel(t *testing.T, db *DB, model map[uint64]uint32) {
 }
 
 func TestProfileFast_LeafSplitMerge_NoKeyLoss(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping heavy leaf split/merge stress test in -short mode")
+	}
+
 	// This test is intentionally heavier than typical unit tests because it is
 	// meant to catch rare key-loss bugs in leaf split/merge and merge iteration.
 	const (
