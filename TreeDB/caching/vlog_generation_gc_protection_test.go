@@ -220,7 +220,6 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 	if err != nil {
 		t.Fatalf("backend reopen: %v", err)
 	}
-	defer backend2.Close()
 
 	reopen, err := Open(dir, backend2, Options{
 		FlushThreshold:           256 << 20,
@@ -235,6 +234,7 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
 	})
 	if err != nil {
+		_ = backend2.Close()
 		t.Fatalf("reopen: %v", err)
 	}
 	defer reopen.Close()
