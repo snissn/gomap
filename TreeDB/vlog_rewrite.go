@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"context"
+	"strings"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -35,6 +36,20 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return ValueLogRewriteStats{}, err
 	}
 	opts.Dir = maindbDir
+
+	// Preserve the persisted on-disk format knobs by default so offline rewrite
+	// doesn't accidentally rebuild the index/value-log into a different layout.
+	outerLeafModeOverride := strings.TrimSpace(opts.IndexOuterLeafMode)
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := treedbdb.LoadFormatConfig(maindbDir); err != nil {
+			return ValueLogRewriteStats{}, err
+		} else if ok {
+			cfg.ApplyToOptions(&opts)
+			if outerLeafModeOverride != "" {
+				opts.IndexOuterLeafMode = outerLeafModeOverride
+			}
+		}
+	}
 
 	stats, err := treedbdb.ValueLogRewriteOffline(opts)
 	if err != nil {
