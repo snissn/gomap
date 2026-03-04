@@ -8901,18 +8901,21 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if !ok {
 		return
 	}
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
+	// Establish a stable backend boundary before computing reachability. A GC
+	// pass that scans only the backend index can otherwise miss in-memory
+	// pointers (e.g. mutable memtables) and delete still-needed segments.
+	if err := db.Checkpoint(); err != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: generational gc checkpoint: %w", err))
+		}
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	gcOpts := backenddb.ValueLogGCOptions{
-		ProtectedPaths: db.valueLogRetainedPaths(),
-	}
-	// Fail closed when we don't have retained-path protection data. Cached-mode
-	// value-log pointers can reference recently-rotated segments that are not yet
-	// visible in the backend index, and deleting those segments corrupts state.
-	if !gcOpts.DryRun && len(gcOpts.ProtectedPaths) == 0 {
-		gcOpts.DryRun = true
-	}
+	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogRetainedPaths()}
 	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 	cancel()
 	if err != nil {
