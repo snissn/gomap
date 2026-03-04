@@ -798,21 +798,25 @@ func (it *Iterator) stepBackward() {
 					it.valid = false
 					return
 				}
+				count := int(n.Count())
+				item := CursorItem{PageID: currID, Node: n, Index: count - 1}
+				it.stack = append(it.stack, item)
 
-				if n.Count() == 0 {
-					it.valid = false
+				if count == 0 {
+					// Defensive: empty pages can appear transiently during churny
+					// delete-heavy workloads. Forward iteration implicitly skips them
+					// via bounds checks + stepForward; mirror that behavior here by
+					// letting loadCurrent/stepBackward unwind and continue.
+					it.loadCurrent()
 					return
 				}
-
-				item := CursorItem{PageID: currID, Node: n, Index: int(n.Count() - 1)}
-				it.stack = append(it.stack, item)
 
 				if n.Type() == page.PageTypeLeaf {
 					it.loadCurrent()
 					return
 				}
 
-				childID, err := n.GetInternalChildID(uint16(n.Count() - 1))
+				childID, err := n.GetInternalChildID(uint16(count - 1))
 				if err != nil {
 					it.err = err
 					it.valid = false
