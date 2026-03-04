@@ -54,9 +54,9 @@ func (l *stubLeafPageLog) AppendLeafPage(_ []byte) (page.ValuePtr, error) {
 		l.next = 4
 	}
 	ptr := page.ValuePtr{
-		FileID:  page.ValueLogFileID(1),
-		Offset:  uint64(l.next),
-		Length:  0,
+		FileID: page.ValueLogFileID(1),
+		Offset: uint64(l.next),
+		Length: 0,
 	}
 	l.next += 4096 + 32
 	return ptr, nil
