@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -47,6 +48,13 @@ type ValueLogRewriteOnlineOptions struct {
 	// SourceFileIDs restricts rewrite to pointers currently referencing these
 	// value-log segment IDs. Missing IDs are ignored.
 	SourceFileIDs []uint32
+	// ProtectedPaths are value-log segment paths that must not be marked zombie
+	// during rewrite cleanup.
+	//
+	// When non-empty, cleanup also avoids zombifying currently-active pre-existing
+	// segments (cached-mode maintenance), since concurrent writers may still be
+	// appending records whose pointers are not yet visible in the backend index.
+	ProtectedPaths []string
 	// MaxSourceSegments bounds the number of source segments selected by sparse
 	// segment selection. Applies only when SourceFileIDs is empty.
 	MaxSourceSegments int
@@ -560,6 +568,39 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
+	var protectedPaths map[string]struct{}
+	allowActiveSkip := len(opts.ProtectedPaths) > 0
+	if allowActiveSkip {
+		protectedPaths = make(map[string]struct{}, len(opts.ProtectedPaths))
+		for _, path := range opts.ProtectedPaths {
+			if path == "" {
+				continue
+			}
+			protectedPaths[path] = struct{}{}
+		}
+	}
+	var (
+		protectedIDs map[uint32]struct{}
+		activeIDs    map[uint32]struct{}
+	)
+	currentSet := db.valueLogManager.CurrentSetNoRefresh()
+	if currentSet != nil {
+		if allowActiveSkip {
+			activeIDs = currentValueLogIDs(currentSet)
+		}
+		if len(protectedPaths) > 0 {
+			protectedIDs = make(map[uint32]struct{})
+			for id, f := range currentSet.Files {
+				if f == nil || f.Path == "" {
+					continue
+				}
+				if _, ok := protectedPaths[f.Path]; ok {
+					protectedIDs[id] = struct{}{}
+				}
+			}
+		}
+		_ = db.valueLogManager.Release(currentSet)
+	}
 	zombieCandidates := make(map[uint32]struct{}, len(oldValueIDs)+len(newValueIDs))
 	for id := range oldValueIDs {
 		zombieCandidates[id] = struct{}{}
@@ -570,6 +611,20 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	for id := range zombieCandidates {
 		if _, ok := referencedAfter[id]; ok {
 			continue
+		}
+		if _, ok := protectedIDs[id]; ok {
+			continue
+		}
+		// Never mark currently-active pre-existing segments zombie when callers
+		// provide ProtectedPaths (cached-mode maintenance). Concurrent writers may
+		// still be appending records whose pointers are not yet visible in the
+		// backend index.
+		if allowActiveSkip {
+			if _, ok := activeIDs[id]; ok {
+				if _, existed := oldValueIDs[id]; existed {
+					continue
+				}
+			}
 		}
 		if err := db.valueLogManager.MarkZombie(id); err != nil {
 			return stats, err
@@ -633,43 +688,185 @@ func (db *DB) applyRewriteSwapBatch(swaps []rewriteSwap, sync bool) error {
 	if len(swaps) == 0 {
 		return nil
 	}
-	snap := db.AcquireSnapshot()
-	if snap == nil {
-		return fmt.Errorf("missing snapshot")
+	for attempt := 0; attempt < optimisticWriteMaxAttempts; attempt++ {
+		committed, err := db.applyRewriteSwapBatchOptimistic(swaps, sync)
+		if err != nil {
+			return err
+		}
+		if committed {
+			return nil
+		}
 	}
-	eligible := make([]rewriteSwap, 0, len(swaps))
+	return db.applyRewriteSwapBatchSerialized(swaps, sync)
+}
+
+func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (bool, error) {
+	db.writeMu.RLock()
+	idx := db.idx.Load()
+	if idx == nil {
+		db.writeMu.RUnlock()
+		return false, fmt.Errorf("missing index")
+	}
+
+	var vlogSet *valuelog.Set
+	db.mu.RLock()
+	rootID := db.meta.UserRootPageID
+	baseSeq := db.meta.CommitSeq
+	state := db.state.Load()
+	if state != nil {
+		vlogSet = state.ValueLogSet
+	}
+	regID := idx.registry.Register(baseSeq)
+	db.mu.RUnlock()
+	defer idx.registry.Unregister(regID)
+	defer db.writeMu.RUnlock()
+	if vlogSet != nil {
+		db.valueLogManager.Acquire(vlogSet)
+		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
+	}
+
+	tr := tree.New(idx.pager, vlogSet, rootID)
+	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
+	defer batch.Release(b)
+	b.Reserve(len(swaps))
+
 	for _, swap := range swaps {
-		entry, err := snap.GetEntry(swap.key)
+		entry, err := tr.GetEntry(swap.key)
 		if err != nil {
 			if errors.Is(err, tree.ErrKeyNotFound) {
 				continue
 			}
-			_ = snap.Close()
+			return false, err
+		}
+		if entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != swap.oldPtr {
+			continue
+		}
+		if err := b.SetPointerView(swap.key, swap.newPtr); err != nil {
+			return false, err
+		}
+	}
+
+	entries := b.SortedEntries()
+	if len(entries) == 0 {
+		return true, nil
+	}
+	touchedValueLogSegments := b.TouchedValueLogSegments()
+
+	tracker := newAllocTracker(idx.allocator)
+	z := idx.zipper.CloneWithAllocator(tracker)
+	newRoot, retired, metrics, err := z.Apply(rootID, b)
+	if err != nil {
+		freeErr := tracker.FreeAll()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, err
+	}
+	entries = b.SortedEntries()
+	vlogRefDelta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	if err != nil {
+		freeErr := tracker.FreeAll()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, err
+	}
+
+	db.commitMu.Lock()
+	db.mu.RLock()
+	currentRoot := db.meta.UserRootPageID
+	sysRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if currentRoot != rootID {
+		db.commitMu.Unlock()
+		freeErr := tracker.FreeAll()
+		if freeErr != nil {
+			return false, freeErr
+		}
+		return false, nil
+	}
+
+	post, err := db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta)
+	db.commitMu.Unlock()
+	if err != nil {
+		return false, err
+	}
+	db.finalizeCommitPostWork(post)
+	if db.vacuum.Active() {
+		db.vacuum.RecordOps(b.Ops())
+	}
+	return true, nil
+}
+
+func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) error {
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	idx := db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("missing index")
+	}
+
+	var vlogSet *valuelog.Set
+	db.mu.RLock()
+	rootID := db.meta.UserRootPageID
+	sysRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
+	state := db.state.Load()
+	if state != nil {
+		vlogSet = state.ValueLogSet
+	}
+	regID := idx.registry.Register(baseSeq)
+	db.mu.RUnlock()
+	defer idx.registry.Unregister(regID)
+	if vlogSet != nil {
+		db.valueLogManager.Acquire(vlogSet)
+		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
+	}
+
+	tr := tree.New(idx.pager, vlogSet, rootID)
+	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
+	defer batch.Release(b)
+	b.Reserve(len(swaps))
+
+	for _, swap := range swaps {
+		entry, err := tr.GetEntry(swap.key)
+		if err != nil {
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				continue
+			}
 			return err
 		}
 		if entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != swap.oldPtr {
 			continue
 		}
-		eligible = append(eligible, swap)
-	}
-	if err := snap.Close(); err != nil {
-		return err
-	}
-	if len(eligible) == 0 {
-		return nil
-	}
-
-	b := db.NewBatch().(*Batch)
-	defer func() { _ = b.Close() }()
-	for _, swap := range eligible {
-		if err := b.SetPointer(swap.key, swap.newPtr); err != nil {
+		if err := b.SetPointerView(swap.key, swap.newPtr); err != nil {
 			return err
 		}
 	}
-	if sync {
-		return b.WriteSync()
+
+	entries := b.SortedEntries()
+	if len(entries) == 0 {
+		return nil
 	}
-	return b.Write()
+	touchedValueLogSegments := b.TouchedValueLogSegments()
+
+	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b)
+	if err != nil {
+		return err
+	}
+	entries = b.SortedEntries()
+	vlogRefDelta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	if err != nil {
+		return err
+	}
+	if err := db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
+		return err
+	}
+	if db.vacuum.Active() {
+		db.vacuum.RecordOps(b.Ops())
+	}
+	return nil
 }
 
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and

@@ -101,6 +101,109 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog(t *testing.T) {
+	dir := t.TempDir()
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+
+	// Use an otherwise-unused lane so TreeDB can create its own lane0 segments
+	// for outer leaves without colliding with this test's explicit segments.
+	const lane uint32 = 100
+
+	path1 := filepath.Join(walDir, "value-l100-000001.log")
+	id1, err := valuelog.EncodeFileID(lane, 1)
+	if err != nil {
+		t.Fatalf("fileid1: %v", err)
+	}
+	w1, err := valuelog.NewWriter(path1, id1)
+	if err != nil {
+		t.Fatalf("writer1: %v", err)
+	}
+	ptr1, err := w1.Append(0, nil, 1, bytes.Repeat([]byte("value-1|"), 64))
+	if err != nil {
+		t.Fatalf("append1: %v", err)
+	}
+	if err := w1.Close(); err != nil {
+		t.Fatalf("close1: %v", err)
+	}
+
+	path2 := filepath.Join(walDir, "value-l100-000002.log")
+	id2, err := valuelog.EncodeFileID(lane, 2)
+	if err != nil {
+		t.Fatalf("fileid2: %v", err)
+	}
+	w2, err := valuelog.NewWriter(path2, id2)
+	if err != nil {
+		t.Fatalf("writer2: %v", err)
+	}
+	ptr2, err := w2.Append(0, nil, 2, bytes.Repeat([]byte("value-2|"), 64))
+	if err != nil {
+		t.Fatalf("append2: %v", err)
+	}
+	if err := w2.Close(); err != nil {
+		t.Fatalf("close2: %v", err)
+	}
+
+	db, err := Open(Options{
+		Dir:                        dir,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		LeafPrefixCompression:      true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := newRewriteWriter(filepath.Join(dir, "wal"), 0, 0, 0)
+	leafLog.blockCompression = false
+	leafLog.blockCodec = valuelog.BlockCodecSnappy
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	b := db.NewBatch()
+	ptrBatch, ok := b.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch")
+	}
+	if err := ptrBatch.SetPointer([]byte("k1"), ptr1); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := ptrBatch.SetPointer([]byte("k2"), ptr2); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	// Lane100 seq2 is active; the GC must still treat the older referenced
+	// segment (seq1) as referenced and keep it.
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("expected referenced non-active segment to remain, err=%v", err)
+	}
+
+	got, err := db.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get k1: %v", err)
+	}
+	if !bytes.Equal(got, bytes.Repeat([]byte("value-1|"), 64)) {
+		t.Fatalf("k1 mismatch after GC")
+	}
+}
+
 func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 	dir := t.TempDir()
 
