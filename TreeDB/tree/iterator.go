@@ -790,6 +790,7 @@ func (it *Iterator) stepBackward() {
 				return
 			}
 			currID := childID
+			stackBase := len(it.stack)
 
 			for {
 				n, err := it.loadNode(currID)
@@ -800,8 +801,12 @@ func (it *Iterator) stepBackward() {
 				}
 
 				if n.Count() == 0 {
-					it.valid = false
-					return
+					// Empty nodes can be reachable during concurrent maintenance
+					// or transitional states (e.g. after merges) and should not
+					// terminate reverse iteration. Treat the subtree as exhausted
+					// and continue stepping backward at the parent.
+					it.stack = it.stack[:stackBase]
+					break
 				}
 
 				item := CursorItem{PageID: currID, Node: n, Index: int(n.Count() - 1)}
@@ -820,6 +825,7 @@ func (it *Iterator) stepBackward() {
 				}
 				currID = childID
 			}
+			continue
 		}
 		it.stack = it.stack[:idx]
 	}
