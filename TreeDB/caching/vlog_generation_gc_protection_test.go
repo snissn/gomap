@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"os"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -31,18 +32,40 @@ func TestVlogGenerationGC_ProtectsRetainedSegmentsBeforeFlush(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	// Force the first value-log segment to exceed max bytes so the second write
-	// triggers a rotation. The first segment then becomes eligible for GC even
-	// though it is still referenced by in-memory pointers.
+	// Write a value-log-backed key, then force-rotate so it points at a non-active
+	// segment that is still only referenced by cached state.
 	val1 := bytes.Repeat([]byte("a"), 8<<10)
 	if err := db.Set([]byte("k1"), val1); err != nil {
 		_ = db.Close()
 		t.Fatalf("Set k1: %v", err)
 	}
-	if err := db.Set([]byte("k2"), []byte("b")); err != nil {
+	// Force-rotate the value log so k1's pointer refers to a non-active segment
+	// that is still only referenced by in-memory state.
+	beforeSeq := 0
+	beforePath := ""
+	func() {
+		l := &db.lanes[0]
+		l.vlogMu.Lock()
+		beforeSeq = l.vlogSeq
+		beforePath = l.vlogPath
+		l.vlogMu.Unlock()
+	}()
+	if err := db.rotateValueLogLocked(&db.lanes[0]); err != nil {
 		_ = db.Close()
-		t.Fatalf("Set k2: %v", err)
+		t.Fatalf("rotateValueLogLocked: %v", err)
 	}
+	func() {
+		l := &db.lanes[0]
+		l.vlogMu.Lock()
+		afterSeq := l.vlogSeq
+		afterPath := l.vlogPath
+		closed := len(l.vlogClosedSizes)
+		l.vlogMu.Unlock()
+		if afterSeq <= beforeSeq || afterPath == "" || afterPath == beforePath || closed == 0 {
+			_ = db.Close()
+			t.Fatalf("expected vlog rotation: seq %d->%d path %q->%q closed=%d", beforeSeq, afterSeq, beforePath, afterPath, closed)
+		}
+	}()
 
 	// Run the same GC path used by the generational scheduler. Without retained
 	// path protection this can delete the just-rotated segment and corrupt the
@@ -101,7 +124,7 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 		AllowUnsafe:              true,
 		MemtableShards:           1,
 		JournalLanes:             1,
-		ValueLogCompression:      1, // off: ensure value-log segment rotation triggers deterministically
+		ValueLogCompression:      1, // off
 		ValueLogPointerThreshold: 1,
 		ValueLogMaxSegmentBytes:  4 << 10,
 		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
@@ -118,10 +141,6 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 		_ = db.Close()
 		t.Fatalf("Set k1: %v", err)
 	}
-	if err := db.Set([]byte("k2"), []byte("b")); err != nil {
-		_ = db.Close()
-		t.Fatalf("Set k2: %v", err)
-	}
 
 	// The flush threshold keeps data in-memory; backend must not see it yet.
 	if got, err := backend.Get([]byte("k1")); err != nil {
@@ -132,33 +151,64 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 		t.Fatalf("expected backend to miss k1 before checkpoint; got=%dB", len(got))
 	}
 
+	// Force-rotate the value log so k1's pointer refers to a non-active segment
+	// that is still only referenced by in-memory state.
+	k1Path := ""
+	func() {
+		l := &db.lanes[0]
+		l.vlogMu.Lock()
+		k1Path = l.vlogPath
+		l.vlogMu.Unlock()
+	}()
+	if k1Path == "" {
+		_ = db.Close()
+		t.Fatalf("expected non-empty value-log path for k1")
+	}
+	if err := db.rotateValueLogLocked(&db.lanes[0]); err != nil {
+		_ = db.Close()
+		t.Fatalf("rotateValueLogLocked: %v", err)
+	}
+	keepPath := ""
+	func() {
+		l := &db.lanes[0]
+		l.vlogMu.Lock()
+		keepPath = l.vlogPath
+		l.vlogMu.Unlock()
+	}()
+	if keepPath == "" || keepPath == k1Path {
+		_ = db.Close()
+		t.Fatalf("expected rotated value-log path; k1=%q keep=%q", k1Path, keepPath)
+	}
+	if info, err := os.Stat(k1Path); err != nil {
+		_ = db.Close()
+		t.Fatalf("stat k1 segment: %v", err)
+	} else if info.Size() == 0 {
+		_ = db.Close()
+		t.Fatalf("expected k1 segment to have data; size=0")
+	}
+
 	// Simulate a bug/edge case where retained-path protection is non-empty but
 	// missing a rotated segment that still backs in-memory pointers.
-	rotatedPath := ""
-	keepPath := ""
-	for i := range db.lanes {
-		l := &db.lanes[i]
-		l.vlogMu.Lock()
-		if len(l.vlogClosedSizes) > 0 && l.vlogPath != "" {
-			for path := range l.vlogClosedSizes {
-				rotatedPath = path
-				break
-			}
-			keepPath = l.vlogPath
-			l.vlogMu.Unlock()
-			break
-		}
-		l.vlogMu.Unlock()
-	}
-	if rotatedPath == "" || keepPath == "" || rotatedPath == keepPath {
-		_ = db.Close()
-		t.Fatalf("expected a rotated + current vlog path; rotated=%q keep=%q", rotatedPath, keepPath)
-	}
 	db.valueLogMu.Lock()
 	db.valueLogRetain = map[string]struct{}{keepPath: {}}
 	db.valueLogMu.Unlock()
 
 	db.maybeRunVlogGenerationMaintenance(true)
+
+	// The maintenance path establishes a stable backend boundary before GC, so
+	// k1 must now be readable from the backend.
+	if got, err := backend.Get([]byte("k1")); err != nil {
+		_ = db.Close()
+		t.Fatalf("backend Get k1 after maintenance: %v", err)
+	} else if !bytes.Equal(got, val1) {
+		_ = db.Close()
+		t.Fatalf("backend value mismatch after maintenance: got=%dB want=%dB", len(got), len(val1))
+	}
+
+	if _, err := os.Stat(k1Path); err != nil {
+		_ = db.Close()
+		t.Fatalf("expected k1 segment to remain after maintenance; stat: %v", err)
+	}
 
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
