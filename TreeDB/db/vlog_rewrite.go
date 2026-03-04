@@ -877,6 +877,9 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if opts.Dir == "" {
 		return stats, errors.New("db dir required")
 	}
+	if err := applyFormatConfigForMaintenance(&opts); err != nil {
+		return stats, err
+	}
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = defaultChunkSize
 	}

@@ -221,3 +221,21 @@ func parseValueLogAutoPolicy(raw string) (ValueLogAutoPolicy, bool) {
 		return 0, false
 	}
 }
+
+func applyFormatConfigForMaintenance(opts *Options) error {
+	if opts == nil {
+		return nil
+	}
+	if opts.IgnoreFormatConfig {
+		return nil
+	}
+	cfg, ok, err := LoadFormatConfig(opts.Dir)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	cfg.ApplyToOptions(opts)
+	return nil
+}

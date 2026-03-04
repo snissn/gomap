@@ -8,6 +8,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
+// valueLogKeepRecentSegmentsPerLane bounds how aggressively GC/rewrite may mark
+// segments zombie while writers are online. In cached mode, new value-log
+// segments can be created/rotated after a protected-path snapshot is taken but
+// before reachability is re-evaluated; keeping a small recent window prevents
+// deleting freshly rotated segments that may still back in-memory pointers.
+const valueLogKeepRecentSegmentsPerLane = 2
+
 // ValueLogGCOptions controls value-log garbage collection.
 type ValueLogGCOptions struct {
 	DryRun         bool
@@ -59,6 +66,10 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 
 	set := db.valueLogManager.CurrentSet()
 	activeIDs := currentValueLogIDs(set)
+	keptIDs := activeIDs
+	if len(opts.ProtectedPaths) > 0 {
+		keptIDs = recentValueLogIDs(set, valueLogKeepRecentSegmentsPerLane)
+	}
 	protectedPaths := make(map[string]struct{}, len(opts.ProtectedPaths))
 	for _, path := range opts.ProtectedPaths {
 		if path == "" {
@@ -85,7 +96,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 			stats.BytesReferenced += size
 			continue
 		}
-		if _, ok := activeIDs[id]; ok {
+		if _, ok := keptIDs[id]; ok {
 			stats.SegmentsActive++
 			stats.BytesActive += size
 			continue
@@ -167,6 +178,36 @@ func currentValueLogIDs(set *valuelog.Set) map[uint32]struct{} {
 	for id := range set.Files {
 		lane, seq := valuelog.DecodeFileID(id)
 		if maxByLane[lane] == seq {
+			active[id] = struct{}{}
+		}
+	}
+	return active
+}
+
+func recentValueLogIDs(set *valuelog.Set, keepPerLane int) map[uint32]struct{} {
+	if keepPerLane <= 1 {
+		return currentValueLogIDs(set)
+	}
+	active := make(map[uint32]struct{})
+	if set == nil || len(set.Files) == 0 {
+		return active
+	}
+	maxByLane := make(map[uint32]uint32)
+	for id := range set.Files {
+		lane, seq := valuelog.DecodeFileID(id)
+		if cur, ok := maxByLane[lane]; !ok || seq > cur {
+			maxByLane[lane] = seq
+		}
+	}
+	for id := range set.Files {
+		lane, seq := valuelog.DecodeFileID(id)
+		maxSeq := maxByLane[lane]
+		if maxSeq <= seq {
+			active[id] = struct{}{}
+			continue
+		}
+		delta := int64(maxSeq) - int64(seq)
+		if delta < int64(keepPerLane) {
 			active[id] = struct{}{}
 		}
 	}
