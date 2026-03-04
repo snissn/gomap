@@ -121,6 +121,58 @@ func TestLeafColumnarPrefixSearchDoesNotUseLeafEntryKeyAt(t *testing.T) {
 	}
 }
 
+func TestLeafColumnarPrefixV2_AllInlineAllowsEmptyValues(t *testing.T) {
+	data := make([]byte, page.PageSize)
+	b := NewBuilderWithOptions(data, page.PageTypeLeaf, BuilderOptions{
+		LeafPrefixCompression: true,
+		LeafColumnar:          true,
+	})
+	b.SetPageID(1)
+
+	keys := [][]byte{
+		[]byte("a"),
+		[]byte("b"),
+		[]byte("c"),
+		[]byte("d"),
+	}
+	values := [][]byte{
+		[]byte("value-a"),
+		nil, // empty inline value (len=0)
+		[]byte("value-c"),
+		[]byte(""),
+	}
+
+	for i := range keys {
+		if err := b.AddLeafEntry(keys[i], values[i], FlagInline, page.ValuePtr{}); err != nil {
+			t.Fatalf("AddLeafEntry(%q): %v", keys[i], err)
+		}
+	}
+
+	n := b.Finish()
+	if !n.leafColumnar() || !n.leafPrefixCompressed() || !n.leafPrefixV2() {
+		t.Fatalf("expected combined columnar+prefix v2 flags")
+	}
+
+	for i := range keys {
+		k, v, _, flags, err := n.GetLeafEntryView(uint16(i))
+		if err != nil {
+			t.Fatalf("GetLeafEntryView(%d): %v", i, err)
+		}
+		if !bytes.Equal(k, keys[i]) {
+			t.Fatalf("key mismatch idx=%d got=%q want=%q", i, k, keys[i])
+		}
+		if flags != FlagInline {
+			t.Fatalf("flags mismatch idx=%d got=%d want=%d", i, flags, FlagInline)
+		}
+		if len(v) != len(values[i]) {
+			t.Fatalf("value len mismatch idx=%d got=%d want=%d", i, len(v), len(values[i]))
+		}
+		if !bytes.Equal(v, values[i]) {
+			t.Fatalf("value mismatch idx=%d got=%q want=%q", i, v, values[i])
+		}
+	}
+}
+
 func benchmarkSearchLeafPrefixVariant(b *testing.B, opts BuilderOptions) {
 	const keyCount = 128
 	keys := makeBenchKeys(keyCount, 24)
