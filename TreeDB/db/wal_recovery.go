@@ -12,7 +12,6 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -194,7 +193,7 @@ func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup)
 	return ridMap, nil
 }
 
-func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64) error {
+func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]page.ValuePtr, maxSegmentBytes int64) (retErr error) {
 	type commitBatch struct {
 		seq     uint64
 		order   int
@@ -262,7 +261,19 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 	if err != nil {
 		return err
 	}
-	defer func() { _ = inlineAppender.close() }()
+	prevLeafPageLog := LeafPageLog(nil)
+	if db != nil && db.indexOuterLeavesInValueLog {
+		prevLeafPageLog = db.leafPageLog
+		db.SetLeafPageLog(inlineAppender)
+	}
+	defer func() {
+		if db != nil && db.indexOuterLeavesInValueLog {
+			db.SetLeafPageLog(prevLeafPageLog)
+		}
+		if err := inlineAppender.close(); err != nil && retErr == nil {
+			retErr = err
+		}
+	}()
 	for _, batch := range legacyBatches {
 		if err := applyCommitBatch(db, batch.records, ridMap, inlineAppender); err != nil {
 			return err
@@ -280,9 +291,6 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		}
 	}
 	if err := inlineAppender.syncIfDirty(); err != nil {
-		return err
-	}
-	if err := inlineAppender.close(); err != nil {
 		return err
 	}
 	for _, path := range commitPaths {
@@ -350,46 +358,67 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 		return nil, fmt.Errorf("value-log rid space exhausted")
 	}
 	maxSegmentBytes := int64(0)
-	if db.indexPackedValuePtr {
+	if db.indexPackedValuePtr || db.indexOuterLeavesInValueLog {
 		// Packed ValuePtr stores offset as u32; keep replay-appended value-log
 		// segments within the same cap used by the write path.
 		maxSegmentBytes = int64(^uint32(0)) - 4
 	}
+	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), 0, maxLane0Seq, maxSegmentBytes)
+	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
+	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	return &replayInlineAppender{
-		writer:  newRewriteWriter(filepath.Join(db.dir, "wal"), 0, maxLane0Seq, maxSegmentBytes),
+		writer:  writer,
 		nextRID: maxRID + 1,
 	}, nil
 }
 
-func (a *replayInlineAppender) append(db *DB, key, value []byte) (page.ValuePtr, error) {
+func (a *replayInlineAppender) append(value []byte) (page.ValuePtr, error) {
 	if a == nil || a.writer == nil {
 		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
 	}
 	if a.nextRID == 0 {
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
-	payload := value
-	if outerleaf.ModeEnabled(strings.TrimSpace(db.indexOuterLeafMode)) {
-		encoded, err := outerleaf.EncodeSingle(
-			nil,
-			key,
-			value,
-			uint8(db.outerLeafBlockCodec),
-			outerleaf.NormalizeRestartInterval(db.outerLeafBlockRestart),
-		)
-		if err != nil {
-			return page.ValuePtr{}, err
-		}
-		payload = encoded
-	}
 	rid := a.nextRID
 	a.nextRID++
-	ptr, err := a.writer.appendValue(rid, payload)
+	ptr, err := a.writer.appendValue(rid, value)
 	if err != nil {
 		return page.ValuePtr{}, err
 	}
 	a.dirty = true
 	return ptr, nil
+}
+
+func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+	if a == nil || a.writer == nil {
+		return page.ValuePtr{}, fmt.Errorf("commitlog: replay value-log appender unavailable")
+	}
+	if a.nextRID == 0 {
+		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
+	}
+	rid := a.nextRID
+	a.nextRID++
+	ptr, err := a.writer.appendValue(rid, leafPage)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	a.dirty = true
+	return ptr, nil
+}
+
+func (a *replayInlineAppender) Flush() error {
+	if a == nil || a.writer == nil || !a.dirty {
+		return nil
+	}
+	if err := a.writer.Flush(); err != nil {
+		return err
+	}
+	a.dirty = false
+	return nil
+}
+
+func (a *replayInlineAppender) Sync() error {
+	return a.syncIfDirty()
 }
 
 func (a *replayInlineAppender) syncIfDirty() error {
@@ -443,7 +472,7 @@ func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page
 				if inlineAppender == nil {
 					return fmt.Errorf("commitlog: missing replay value-log appender")
 				}
-				ptr, err := inlineAppender.append(db, rec.Key, rec.Value)
+				ptr, err := inlineAppender.append(rec.Value)
 				if err != nil {
 					return err
 				}

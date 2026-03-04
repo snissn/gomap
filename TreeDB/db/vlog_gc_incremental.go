@@ -8,13 +8,15 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -23,7 +25,11 @@ import (
 
 const (
 	valueLogRefCountsFileName = "vlog_ref_counts.meta"
-	valueLogRefCountsVersion  = uint32(1)
+	// valueLogRefCountsVersion is the on-disk version for vlog_ref_counts.meta.
+	//
+	// Version 2 includes leaf-page LeafRef reachability for IndexOuterLeavesInValueLog
+	// trees (and is robust to callers opening the backend without the option).
+	valueLogRefCountsVersion = uint32(2)
 )
 
 var (
@@ -295,6 +301,9 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 	seq := db.currentCommitSeq()
 	if db.valueLogRefTracker != nil {
 		if refs, ok := db.valueLogRefTracker.referencedSet(seq); ok {
+			if err := db.mergeLeafRefValueLogRefs(ctx, refs); err != nil {
+				return nil, err
+			}
 			return refs, nil
 		}
 	}
@@ -313,6 +322,46 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 		refs[fileID] = struct{}{}
 	}
 	return refs, nil
+}
+
+func (db *DB) mergeLeafRefValueLogRefs(ctx context.Context, refs map[uint32]struct{}) error {
+	if db == nil || refs == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return fmt.Errorf("acquire snapshot: nil")
+	}
+	if snap.idx == nil || snap.idx.pager == nil || snap.state == nil {
+		_ = snap.Close()
+		return fmt.Errorf("missing db state")
+	}
+	counts := make(map[uint32]uint64, 8)
+	if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts); err != nil {
+		_ = snap.Close()
+		return err
+	}
+	if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
+		_ = snap.Close()
+		return err
+	}
+	if err := snap.Close(); err != nil {
+		return err
+	}
+	for fileID, n := range counts {
+		if n == 0 {
+			continue
+		}
+		refs[fileID] = struct{}{}
+	}
+	return nil
 }
 
 func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uint64, error) {
@@ -337,7 +386,7 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet, "", false, nil, nil), snap.state.SystemRootPageID).
+	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := collectValueLogRefCounts(ctx, db, sysIter, counts); err != nil {
 		_ = sysIter.Close()
@@ -346,10 +395,85 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	_ = sysIter.Close()
 
+	if snap.idx != nil && snap.idx.pager != nil {
+		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts); err != nil {
+			_ = snap.Close()
+			return nil, 0, err
+		}
+		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
+			_ = snap.Close()
+			return nil, 0, err
+		}
+	}
+
 	if err := snap.Close(); err != nil {
 		return nil, 0, err
 	}
 	return counts, commitSeq, nil
+}
+
+func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID uint64, refs map[uint32]uint64) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if p == nil || rootID == 0 || refs == nil {
+		return nil
+	}
+	if ptr, ok := page.DecodeLeafRef(rootID); ok {
+		refs[ptr.FileID]++
+		return nil
+	}
+	stack := make([]uint64, 0, 128)
+	stack = append(stack, rootID)
+	visited := make(map[uint64]struct{}, 1024)
+	verifyAlways := p.VerifyOnRead()
+
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pageID := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := visited[pageID]; ok {
+			continue
+		}
+		visited[pageID] = struct{}{}
+
+		data, err := p.Get(pageID)
+		if err != nil {
+			return err
+		}
+		n := node.NewNodeView(data)
+		if verifyAlways || !p.IsVerified(pageID) {
+			if !n.VerifyChecksum() {
+				return fmt.Errorf("checksum mismatch on page %d", pageID)
+			}
+			if !verifyAlways {
+				p.MarkVerified(pageID)
+			}
+		}
+
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				childID, err := n.GetInternalChildID(i)
+				if err != nil {
+					return err
+				}
+				if ptr, ok := page.DecodeLeafRef(childID); ok {
+					refs[ptr.FileID]++
+					continue
+				}
+				stack = append(stack, childID)
+			}
+		case page.PageTypeLeaf:
+			// no children
+		default:
+			return errors.New("invalid page type")
+		}
+	}
+	return nil
 }
 
 func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIterator, refs map[uint32]uint64) error {
@@ -360,72 +484,17 @@ func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIte
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			refs[ptr.FileID]++
-			if db != nil {
-				nested, err := db.outerLeafNestedBlobRefCounts(ptr)
-				if err != nil {
-					return err
-				}
-				for fileID, n := range nested {
-					if n == 0 {
-						continue
-					}
-					refs[fileID] += n
-				}
-			}
 		}
 		it.Next()
 	}
 	return it.Error()
 }
 
-func (db *DB) outerLeafNestedBlobRefCounts(ptr page.ValuePtr) (map[uint32]uint64, error) {
-	if db == nil || db.valueLogManager == nil {
-		return nil, nil
-	}
-	switch strings.TrimSpace(db.indexOuterLeafMode) {
-	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
-		// modes with outer-leaf blocks that can include nested blob refs.
-	default:
-		return nil, nil
-	}
-	payload, err := db.valueLogManager.Read(ptr)
-	if err != nil {
-		return nil, err
-	}
-	if !outerleaf.HasMagic(payload) {
-		return nil, nil
-	}
-	block, err := outerleaf.DecodeBlockLease(payload)
-	if err != nil {
-		return nil, err
-	}
-	defer block.Release()
-	typed, err := block.TypedEntries(nil)
-	if err != nil {
-		return nil, err
-	}
-	refs := make(map[uint32]uint64, 4)
-	for i := range typed {
-		if typed[i].Kind != outerleaf.EntryKindBlobRef {
-			continue
-		}
-		if !page.IsValueLogFileID(typed[i].BlobPtr.FileID) {
-			return nil, fmt.Errorf("treedb: invalid nested blob pointer file %d", typed[i].BlobPtr.FileID)
-		}
-		refs[typed[i].BlobPtr.FileID]++
-	}
-	return refs, nil
-}
-
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry) (*valueLogRefDelta, error) {
 	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
 		return nil, nil
 	}
-	switch strings.TrimSpace(db.indexOuterLeafMode) {
-	case IndexOuterLeafModeV2FencePtr, IndexOuterLeafModeV1LeafLog, IndexOuterLeafModeV1LeafLogRoute:
-		// Conservative correctness fallback for nested blob refs in v3 fence blocks:
-		// incremental per-key deltas can miss nested reference fanout changes.
-		// Returning nil invalidates the tracker and forces a safe full rescan.
+	if db.indexOuterLeavesInValueLog {
 		return nil, nil
 	}
 	delta := newValueLogRefDelta()
@@ -557,13 +626,58 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if path == "" {
 		return nil
 	}
-	tmp := fmt.Sprintf("%s.tmp.%d", path, os.Getpid())
-	if err := os.WriteFile(tmp, data, perm); err != nil {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	f, err := os.CreateTemp(dir, base+".tmp.*")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	tmp := f.Name()
+	defer func() { _ = os.Remove(tmp) }()
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
 		return err
 	}
-	return nil
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	const attempts = 8
+	sleep := 5 * time.Millisecond
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		if err := os.Rename(tmp, path); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			if runtime.GOOS != "windows" {
+				return err
+			}
+			if isWindowsRenameRetryable(err) {
+				time.Sleep(sleep)
+				if sleep < 100*time.Millisecond {
+					sleep *= 2
+				}
+				continue
+			}
+			return err
+		}
+	}
+	return lastErr
+}
+
+func isWindowsRenameRetryable(err error) bool {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch errno {
+		case syscall.Errno(5), syscall.Errno(32), syscall.Errno(33):
+			return true
+		}
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "used by another process") || strings.Contains(msg, "access is denied")
 }

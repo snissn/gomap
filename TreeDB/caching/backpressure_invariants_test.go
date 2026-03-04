@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"testing"
 	"time"
-
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 type bpScenario struct {
@@ -27,7 +25,6 @@ func TestBackpressureInvariantsAcrossWorkloads(t *testing.T) {
 	baseOpts := Options{
 		FlushThreshold:          1 << 20,
 		MemtableShards:          1,
-		IndexOuterLeafMode:      backenddb.IndexOuterLeafModeV1,
 		MaxBacklogBytes:         1 << 20,
 		SlowdownBacklogSeconds:  0.25,
 		StopBacklogSeconds:      0.5,

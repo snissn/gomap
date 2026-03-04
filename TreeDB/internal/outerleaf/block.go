@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math/bits"
 	"sort"
-	"strings"
 	"sync"
 
 	"github.com/golang/snappy"
@@ -18,12 +17,6 @@ import (
 )
 
 const (
-	ModeV1LeafLog       = "v1_leaflog"
-	ModeV1LeafLogLegacy = "v1_leaflog_legacy"
-	ModeV1LeafLogRoute  = "v1_leaflog_route"
-	ModeV2BlockPtr      = "v2_blockptr"
-	ModeV2FencePtr      = "v2_fenceptr"
-
 	defaultBlockTargetBytes = 4 << 10
 	defaultRestartInterval  = 16
 	linearScanMaxEntries    = 32
@@ -263,15 +256,6 @@ func HasMagic(payload []byte) bool {
 		payload[1] == blockMagic[1] &&
 		payload[2] == blockMagic[2] &&
 		payload[3] == blockMagic[3]
-}
-
-func ModeEnabled(mode string) bool {
-	switch strings.TrimSpace(mode) {
-	case ModeV1LeafLog, ModeV1LeafLogLegacy, ModeV1LeafLogRoute, ModeV2BlockPtr, ModeV2FencePtr:
-		return true
-	default:
-		return false
-	}
 }
 
 func NormalizeBlockTargetBytes(target int) int {

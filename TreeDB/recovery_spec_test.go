@@ -145,13 +145,6 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
 	largeValue := os.Getenv("TREEDB_CRASH_LARGE_VALUE") == "1"
-	outerLeafV2 := os.Getenv("TREEDB_CRASH_OUTERLEAF_V2") == "1"
-	outerLeafMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_OUTERLEAF_MODE"))
-	walFenceMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_WAL_FENCE_MODE"))
-	if outerLeafMode == "" && outerLeafV2 {
-		// Backward-compatible helper knob.
-		outerLeafMode = treedb.IndexOuterLeafModeV2BlockPtr
-	}
 
 	durability := treedb.DurabilityDurable
 	if disableWAL {
@@ -164,25 +157,6 @@ func TestHelperTreeDBCrashRecoveryDurabilityWriter(t *testing.T) {
 		Dir:        dir,
 		ChunkSize:  64 * 1024,
 		Durability: durability,
-	}
-	switch outerLeafMode {
-	case "":
-		// default mode
-	case treedb.IndexOuterLeafModeV1LeafLog, treedb.IndexOuterLeafModeV1LeafLogRoute, treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
-		opts.IndexOuterLeafMode = outerLeafMode
-		opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
-		opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
-		opts.ValueLog.OuterLeafBlockRestartInterval = 16
-	default:
-		t.Fatalf("unsupported TREEDB_CRASH_OUTERLEAF_MODE=%q", outerLeafMode)
-	}
-	switch walFenceMode {
-	case "":
-		// default mode
-	case string(treedb.ValueLogWALFenceModeRIDJoin), string(treedb.ValueLogWALFenceModeSimpleInline):
-		opts.ValueLog.WALFenceMode = treedb.ValueLogWALFenceMode(walFenceMode)
-	default:
-		t.Fatalf("unsupported TREEDB_CRASH_WAL_FENCE_MODE=%q", walFenceMode)
 	}
 
 	db, err := treedb.Open(opts)
@@ -241,8 +215,6 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeNoTrailingSyncWriter(t *testing.T) 
 
 	disableWAL := os.Getenv("TREEDB_CRASH_DISABLE_WAL") == "1"
 	relaxedSync := os.Getenv("TREEDB_CRASH_RELAXED_SYNC") == "1"
-	outerLeafMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_OUTERLEAF_MODE"))
-	walFenceMode := strings.TrimSpace(os.Getenv("TREEDB_CRASH_WAL_FENCE_MODE"))
 
 	durability := treedb.DurabilityDurable
 	if disableWAL {
@@ -255,25 +227,6 @@ func TestHelperTreeDBCrashRecoveryDeleteRangeNoTrailingSyncWriter(t *testing.T) 
 		Dir:        dir,
 		ChunkSize:  64 * 1024,
 		Durability: durability,
-	}
-	switch outerLeafMode {
-	case "":
-		// default mode
-	case treedb.IndexOuterLeafModeV1LeafLog, treedb.IndexOuterLeafModeV1LeafLogRoute, treedb.IndexOuterLeafModeV2BlockPtr, treedb.IndexOuterLeafModeV2FencePtr:
-		opts.IndexOuterLeafMode = outerLeafMode
-		opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
-		opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
-		opts.ValueLog.OuterLeafBlockRestartInterval = 16
-	default:
-		t.Fatalf("unsupported TREEDB_CRASH_OUTERLEAF_MODE=%q", outerLeafMode)
-	}
-	switch walFenceMode {
-	case "":
-		// default mode
-	case string(treedb.ValueLogWALFenceModeRIDJoin), string(treedb.ValueLogWALFenceModeSimpleInline):
-		opts.ValueLog.WALFenceMode = treedb.ValueLogWALFenceMode(walFenceMode)
-	default:
-		t.Fatalf("unsupported TREEDB_CRASH_WAL_FENCE_MODE=%q", walFenceMode)
 	}
 
 	db, err := treedb.Open(opts)
@@ -397,10 +350,8 @@ func TestCrashRecovery_DeleteRangeReplaysCorrectKeys(t *testing.T) {
 
 func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *testing.T) {
 	tiers := []struct {
-		name         string
-		env          []string
-		outerMode    string
-		walFenceMode treedb.ValueLogWALFenceMode
+		name string
+		env  []string
 	}{
 		{
 			name: "durable_default",
@@ -412,44 +363,6 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 				"TREEDB_CRASH_RELAXED_SYNC=1",
 			},
 		},
-		{
-			name: "wal_on_relaxed_v2_fenceptr_simple_inline",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=1",
-				"TREEDB_CRASH_OUTERLEAF_MODE=v2_fenceptr",
-				"TREEDB_CRASH_WAL_FENCE_MODE=simple_inline",
-			},
-			outerMode:    treedb.IndexOuterLeafModeV2FencePtr,
-			walFenceMode: treedb.ValueLogWALFenceModeSimpleInline,
-		},
-		{
-			name: "wal_on_relaxed_v2_blockptr",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=1",
-				"TREEDB_CRASH_OUTERLEAF_MODE=v2_blockptr",
-			},
-			outerMode: treedb.IndexOuterLeafModeV2BlockPtr,
-		},
-		{
-			name: "wal_on_relaxed_v1_leaflog",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=1",
-				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog",
-			},
-			outerMode: treedb.IndexOuterLeafModeV1LeafLog,
-		},
-		{
-			name: "wal_on_relaxed_v1_leaflog_route",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=1",
-				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog_route",
-			},
-			outerMode: treedb.IndexOuterLeafModeV1LeafLogRoute,
-		},
 	}
 
 	for _, tc := range tiers {
@@ -458,15 +371,6 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 			runCrashRecoveryDeleteRangeNoTrailingSyncWriter(t, dir, tc.env...)
 
 			opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024}
-			if tc.outerMode != "" {
-				opts.IndexOuterLeafMode = tc.outerMode
-				opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
-				opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
-				opts.ValueLog.OuterLeafBlockRestartInterval = 16
-			}
-			if tc.walFenceMode != "" {
-				opts.ValueLog.WALFenceMode = tc.walFenceMode
-			}
 
 			db, err := treedb.Open(opts)
 			if err != nil {
@@ -512,11 +416,9 @@ func TestCrashRecovery_DeleteRangeWithoutTrailingSync_ReplaysCorrectKeys(t *test
 
 func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 	type tier struct {
-		name         string
-		env          []string
-		expectLarge  bool
-		outerMode    string
-		walFenceMode treedb.ValueLogWALFenceMode
+		name        string
+		env         []string
+		expectLarge bool
 	}
 
 	tiers := []tier{
@@ -547,63 +449,6 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			},
 			expectLarge: true,
 		},
-		{
-			name: "wal_on_strict_sync_large_value_outerleaf_v2",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=0",
-				"TREEDB_CRASH_LARGE_VALUE=1",
-				"TREEDB_CRASH_OUTERLEAF_MODE=v2_blockptr",
-			},
-			expectLarge: true,
-			outerMode:   treedb.IndexOuterLeafModeV2BlockPtr,
-		},
-		{
-			name: "wal_on_strict_sync_large_value_outerleaf_v1_leaflog",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=0",
-				"TREEDB_CRASH_LARGE_VALUE=1",
-				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog",
-			},
-			expectLarge: true,
-			outerMode:   treedb.IndexOuterLeafModeV1LeafLog,
-		},
-		{
-			name: "wal_on_strict_sync_large_value_outerleaf_v1_leaflog_route",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=0",
-				"TREEDB_CRASH_LARGE_VALUE=1",
-				"TREEDB_CRASH_OUTERLEAF_MODE=v1_leaflog_route",
-			},
-			expectLarge: true,
-			outerMode:   treedb.IndexOuterLeafModeV1LeafLogRoute,
-		},
-		{
-			name: "wal_on_strict_sync_large_value_outerleaf_v2_fenceptr",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=0",
-				"TREEDB_CRASH_LARGE_VALUE=1",
-				"TREEDB_CRASH_OUTERLEAF_MODE=v2_fenceptr",
-			},
-			expectLarge: true,
-			outerMode:   treedb.IndexOuterLeafModeV2FencePtr,
-		},
-		{
-			name: "wal_on_strict_sync_large_value_outerleaf_v2_fenceptr_simple_inline",
-			env: []string{
-				"TREEDB_CRASH_DISABLE_WAL=0",
-				"TREEDB_CRASH_RELAXED_SYNC=0",
-				"TREEDB_CRASH_LARGE_VALUE=1",
-				"TREEDB_CRASH_OUTERLEAF_MODE=v2_fenceptr",
-				"TREEDB_CRASH_WAL_FENCE_MODE=simple_inline",
-			},
-			expectLarge:  true,
-			outerMode:    treedb.IndexOuterLeafModeV2FencePtr,
-			walFenceMode: treedb.ValueLogWALFenceModeSimpleInline,
-		},
 	}
 
 	for _, tc := range tiers {
@@ -612,15 +457,6 @@ func TestCrashRecovery_DurabilityTiers(t *testing.T) {
 			runCrashRecoveryDurabilityWriter(t, dir, tc.env...)
 
 			opts := treedb.Options{Dir: dir, ChunkSize: 64 * 1024}
-			if tc.outerMode != "" {
-				opts.IndexOuterLeafMode = tc.outerMode
-				opts.ValueLog.OuterLeafBlockCodec = treedb.ValueLogBlockLZ4
-				opts.ValueLog.OuterLeafBlockTargetBytes = 4 << 10
-				opts.ValueLog.OuterLeafBlockRestartInterval = 16
-			}
-			if tc.walFenceMode != "" {
-				opts.ValueLog.WALFenceMode = tc.walFenceMode
-			}
 			db, err := treedb.Open(opts)
 			if err != nil {
 				t.Fatalf("open: %v", err)

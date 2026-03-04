@@ -362,6 +362,51 @@ func (m *BTree) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	return it
 }
 
+func (m *BTree) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	startKey := ""
+	hasStart := false
+	if start != nil {
+		startKey = bytesToStringNoCopy(start)
+		hasStart = true
+	}
+	endKey := ""
+	hasEnd := false
+	if end != nil {
+		endKey = bytesToStringNoCopy(end)
+		hasEnd = true
+	}
+
+	m.mu.RLock()
+	iter := m.tree.Iter()
+
+	valid := false
+	if !hasEnd {
+		valid = iter.Last()
+	} else {
+		valid = iter.Seek(endKey)
+		if valid {
+			// Seek positions at the first key >= end. Reverse iteration is over
+			// [start, end), so step back to the last key < end.
+			valid = iter.Prev()
+		} else {
+			// seek(end) fell off the end.
+			valid = iter.Last()
+		}
+	}
+
+	it := &btreeReverseIterator{
+		iter:     iter,
+		start:    startKey,
+		hasStart: hasStart,
+		end:      endKey,
+		hasEnd:   hasEnd,
+		valid:    valid,
+		mu:       &m.mu,
+	}
+	it.refresh()
+	return it
+}
+
 type btreeIterator struct {
 	iter   btree.MapIter[string, btreeEntry]
 	end    string
@@ -491,6 +536,194 @@ func (it *btreeIterator) refresh() {
 		return
 	}
 	if it.hasEnd && strings.Compare(it.iter.Key(), it.end) >= 0 {
+		it.valid = false
+		return
+	}
+	it.cur = it.iter.Value()
+	it.hasCur = true
+}
+
+type btreeReverseIterator struct {
+	iter     btree.MapIter[string, btreeEntry]
+	start    string
+	hasStart bool
+	end      string
+	hasEnd   bool
+	valid    bool
+	cur      btreeEntry
+	hasCur   bool
+	mu       *sync.RWMutex
+}
+
+func (it *btreeReverseIterator) Seek(key []byte) {
+	seekToReverseEnd := func() {
+		if !it.hasEnd {
+			it.valid = it.iter.Last()
+			return
+		}
+		it.valid = it.iter.Seek(it.end)
+		if it.valid {
+			// Seek positions at the first key >= end. Reverse iteration is over
+			// [start, end), so step back to the last key < end.
+			it.valid = it.iter.Prev()
+			return
+		}
+		it.valid = it.iter.Last()
+	}
+
+	if key == nil {
+		seekToReverseEnd()
+		it.refresh()
+		return
+	}
+	keyStr := bytesToStringNoCopy(key)
+	if it.hasEnd && strings.Compare(keyStr, it.end) >= 0 {
+		seekToReverseEnd()
+		it.refresh()
+		return
+	}
+	found := it.iter.Seek(keyStr)
+	if !found {
+		it.valid = it.iter.Last()
+		it.refresh()
+		return
+	}
+	it.valid = true
+	if strings.Compare(it.iter.Key(), keyStr) > 0 {
+		it.valid = it.iter.Prev()
+	}
+	it.refresh()
+}
+
+func (it *btreeReverseIterator) Next() {
+	if !it.valid {
+		return
+	}
+	it.valid = it.iter.Prev()
+	it.refresh()
+}
+
+func (it *btreeReverseIterator) Valid() bool {
+	if !it.valid || !it.hasCur {
+		return false
+	}
+	if it.hasEnd && strings.Compare(it.iter.Key(), it.end) >= 0 {
+		return false
+	}
+	if it.hasStart && strings.Compare(it.iter.Key(), it.start) < 0 {
+		return false
+	}
+	return true
+}
+
+func (it *btreeReverseIterator) UnsafeKey() []byte {
+	if !it.hasCur {
+		return nil
+	}
+	return stringToBytesNoCopy(it.iter.Key())
+}
+
+func (it *btreeReverseIterator) UnsafeValue() []byte {
+	if !it.hasCur {
+		return nil
+	}
+	if it.cur.flags&node.FlagPointer != 0 {
+		if len(it.cur.value) > page.ValuePtrSize {
+			return it.cur.value[page.ValuePtrSize:]
+		}
+		return nil
+	}
+	return it.cur.value
+}
+
+func (it *btreeReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.hasCur {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if it.cur.flags&node.FlagTombstone != 0 {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if it.cur.flags&node.FlagPointer != 0 {
+		if len(it.cur.value) >= page.ValuePtrSize {
+			inline := []byte(nil)
+			if len(it.cur.value) > page.ValuePtrSize {
+				inline = it.cur.value[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(it.cur.value[:page.ValuePtrSize]), it.cur.flags
+		}
+		return nil, page.ValuePtr{}, it.cur.flags
+	}
+	return it.cur.value, page.ValuePtr{}, node.FlagInline
+}
+
+func (it *btreeReverseIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *btreeReverseIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *btreeReverseIterator) KeyCopy(dst []byte) []byte {
+	k := it.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *btreeReverseIterator) ValueCopy(dst []byte) []byte {
+	v := it.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
+func (it *btreeReverseIterator) IsDeleted() bool {
+	if !it.hasCur {
+		return false
+	}
+	return it.cur.flags&node.FlagTombstone != 0
+}
+
+func (it *btreeReverseIterator) Error() error {
+	return nil
+}
+
+func (it *btreeReverseIterator) Close() error {
+	if it.mu != nil {
+		it.mu.RUnlock()
+		it.mu = nil
+	}
+	return nil
+}
+
+func (it *btreeReverseIterator) Domain() (start, end []byte) {
+	if !it.hasEnd && !it.hasStart {
+		return nil, nil
+	}
+	var s []byte
+	if it.hasStart {
+		s = []byte(it.start)
+	}
+	var e []byte
+	if it.hasEnd {
+		e = []byte(it.end)
+	}
+	return s, e
+}
+
+func (it *btreeReverseIterator) refresh() {
+	it.hasCur = false
+	if !it.valid {
+		return
+	}
+	if it.hasEnd && strings.Compare(it.iter.Key(), it.end) >= 0 {
+		it.valid = false
+		return
+	}
+	if it.hasStart && strings.Compare(it.iter.Key(), it.start) < 0 {
 		it.valid = false
 		return
 	}

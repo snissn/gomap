@@ -2,8 +2,12 @@ package db
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains(t *testing.T) {
@@ -129,7 +133,7 @@ func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains(t *testing.T) {
 	}
 }
 
-func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode string, expectStrictCollapse bool) {
+func testDeleteMostKeysCollapsesRootWithPointerValues(t *testing.T) {
 	dir := t.TempDir()
 
 	d, err := Open(Options{
@@ -138,12 +142,8 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 		LeafFillTargetPPM:         850_000,
 		InternalFillTargetPPM:     900_000,
 		MaintenanceOpsPerCoalesce: -1,
-		IndexOuterLeafMode:        mode,
 		ValueLog: ValueLogOptions{
-			PointerThreshold:              1,
-			OuterLeafBlockCodec:           ValueLogBlockLZ4,
-			OuterLeafBlockTargetBytes:     512,
-			OuterLeafBlockRestartInterval: 8,
+			PointerThreshold: 1,
 		},
 	})
 	if err != nil {
@@ -155,6 +155,27 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 	// while stressing split/merge maintenance under delete-heavy churn.
 	val := bytes.Repeat([]byte("y"), 256)
 	const total = 5000
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	vw, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("new valuelog writer: %v", err)
+	}
+	vwClosed := false
+	defer func() {
+		if vwClosed {
+			return
+		}
+		_ = vw.Close()
+	}()
+	nextRID := uint64(1)
 
 	{
 		const batchSize = 512
@@ -170,7 +191,12 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 				k[1] = byte(i >> 16)
 				k[2] = byte(i >> 8)
 				k[3] = byte(i)
-				if err := b.Set(k[:], val); err != nil {
+				ptr, err := vw.Append(0, nil, nextRID, val)
+				if err != nil {
+					t.Fatalf("append: %v", err)
+				}
+				nextRID++
+				if err := b.SetPointer(k[:], ptr); err != nil {
 					t.Fatalf("set: %v", err)
 				}
 			}
@@ -180,6 +206,10 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 			_ = b.Close()
 		}
 	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("close valuelog writer: %v", err)
+	}
+	vwClosed = true
 
 	repBefore, err := d.FragmentationReport()
 	if err != nil {
@@ -195,9 +225,6 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 	}
 
 	keep := 50
-	if expectStrictCollapse {
-		keep = 8
-	}
 	{
 		b := d.NewBatch().(*Batch)
 		for i := keep; i < total; i++ {
@@ -238,23 +265,14 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 		t.Fatalf("parse internal: %v", err)
 	}
 
-	if expectStrictCollapse {
-		if leaf != 1 {
-			t.Fatalf("expected strict root-collapse to a single leaf, got leaf pages=%d", leaf)
-		}
-		if internal != 0 {
-			t.Fatalf("expected strict root-collapse to leaf root, got internal pages=%d", internal)
-		}
-	} else {
-		if beforeLeaf <= leaf {
-			t.Fatalf("expected leaf pages to shrink after heavy deletes, before=%d after=%d", beforeLeaf, leaf)
-		}
-		if leaf > 16 {
-			t.Fatalf("expected post-delete leaf pages to stay small, got %d", leaf)
-		}
-		if internal > 1 {
-			t.Fatalf("expected shallow tree after heavy deletes, got internal pages=%d", internal)
-		}
+	if beforeLeaf <= leaf {
+		t.Fatalf("expected leaf pages to shrink after heavy deletes, before=%d after=%d", beforeLeaf, leaf)
+	}
+	if leaf > 16 {
+		t.Fatalf("expected post-delete leaf pages to stay small, got %d", leaf)
+	}
+	if internal > 1 {
+		t.Fatalf("expected shallow tree after heavy deletes, got internal pages=%d", internal)
 	}
 
 	for i := 0; i < keep; i++ {
@@ -290,10 +308,6 @@ func testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t *testing.T, mode stri
 	}
 }
 
-func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV2Pointers(t *testing.T) {
-	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV2BlockPtr, false)
-}
-
-func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_OuterLeafV1LeafLogPointers(t *testing.T) {
-	testDeleteMostKeysCollapsesRootOuterLeafPointerMode(t, IndexOuterLeafModeV1LeafLog, true)
+func TestDeleteMostKeys_CollapsesRootWhenOneLeafRemains_PointerValues(t *testing.T) {
+	testDeleteMostKeysCollapsesRootWithPointerValues(t)
 }

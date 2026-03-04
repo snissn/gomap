@@ -72,6 +72,9 @@ type Table interface {
 	// NewIterator may hold a read lock until Close; callers should avoid
 	// iterating over mutable memtables on hot write paths.
 	NewIterator(start, end []byte) iterator.UnsafeIterator
+	// NewReverseIterator returns a reverse iterator over [start, end).
+	// Like NewIterator, it may hold a read lock until Close.
+	NewReverseIterator(start, end []byte) iterator.UnsafeIterator
 	Freeze()
 }
 
@@ -294,6 +297,12 @@ func (m *Memtable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	return &Iterator{iter: it, end: end, mu: &m.mu}
 }
 
+func (m *Memtable) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	m.mu.RLock()
+	it := m.sl.NewReverseIterator(start, end)
+	return &ReverseIterator{iter: it, start: start, end: end, mu: &m.mu}
+}
+
 func (it *Iterator) Seek(key []byte) {
 	it.iter.Seek(key)
 	it.checkEnd()
@@ -386,4 +395,94 @@ func (it *Iterator) Error() error {
 
 func (it *Iterator) Domain() (start, end []byte) {
 	return nil, it.end
+}
+
+type ReverseIterator struct {
+	iter  *skiplist.ReverseIterator
+	start []byte
+	end   []byte
+	mu    *sync.RWMutex
+}
+
+func (it *ReverseIterator) Seek(key []byte) {
+	it.iter.Seek(key)
+}
+
+func (it *ReverseIterator) Next() {
+	it.iter.Next()
+}
+
+func (it *ReverseIterator) Valid() bool {
+	if !it.iter.Valid() {
+		return false
+	}
+	k := it.iter.UnsafeKey()
+	if it.end != nil && bytes.Compare(k, it.end) >= 0 {
+		return false
+	}
+	if it.start != nil && bytes.Compare(k, it.start) < 0 {
+		return false
+	}
+	return true
+}
+
+func (it *ReverseIterator) UnsafeKey() []byte {
+	return it.iter.UnsafeKey()
+}
+
+func (it *ReverseIterator) UnsafeValue() []byte {
+	return it.iter.UnsafeValue()
+}
+
+func (it *ReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return it.iter.UnsafeEntry()
+}
+
+func (it *ReverseIterator) IsDeleted() bool {
+	return it.iter.IsDeleted()
+}
+
+func (it *ReverseIterator) Key() []byte {
+	return it.iter.Key()
+}
+
+func (it *ReverseIterator) Value() []byte {
+	return it.iter.Value()
+}
+
+func (it *ReverseIterator) KeyCopy(dst []byte) []byte {
+	k := it.iter.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *ReverseIterator) ValueCopy(dst []byte) []byte {
+	v := it.iter.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
+func (it *ReverseIterator) Close() error {
+	if it.mu != nil {
+		it.mu.RUnlock()
+		it.mu = nil
+	}
+	if it.iter == nil {
+		return nil
+	}
+	err := it.iter.Close()
+	it.iter = nil
+	return err
+}
+
+func (it *ReverseIterator) Error() error {
+	return it.iter.Error()
+}
+
+func (it *ReverseIterator) Domain() (start, end []byte) {
+	return it.start, it.end
 }

@@ -110,8 +110,8 @@ func TestAppendOnlyFrozenUnorderedIteratorUsesPointerSnapshot(t *testing.T) {
 	if it.pooledEntries {
 		t.Fatalf("frozen unordered iterator should avoid entry-copy pool")
 	}
-	if !it.pooledEntryPtrs {
-		t.Fatalf("frozen unordered iterator should use pooled pointer snapshot")
+	if it.pooledEntryPtrs {
+		t.Fatalf("frozen unordered iterator should avoid per-iterator pointer snapshot copies")
 	}
 	if it.entryPtrs == nil || len(it.entryPtrs) != 2 {
 		t.Fatalf("unexpected pointer snapshot len=%d", len(it.entryPtrs))
@@ -325,8 +325,8 @@ func TestAppendOnlyUnorderedAppendDefersLatestRebuild(t *testing.T) {
 	}
 
 	m.Set([]byte("b"), []byte("v3"))
-	if !m.latestDirty {
-		t.Fatalf("expected unordered append to mark latest index dirty")
+	if m.latestDirty {
+		t.Fatalf("expected unordered append to keep latest index clean after rebuild")
 	}
 	if m.snapCount != 0 {
 		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)

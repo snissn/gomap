@@ -29,10 +29,8 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 
 ### 2.1 Threshold selection
 
-- Baseline inline threshold: 256 bytes (`page.DefaultInlineThreshold`).
-- Cached-mode pointer threshold defaults:
-  - durable: 256,
-  - relaxed durability (`WALOnRelaxed` or `WALOffRelaxed`): 127.
+- Baseline inline threshold: 512 bytes (`page.DefaultInlineThreshold`).
+- Cached-mode pointer threshold default: 512.
 - `ValueLog.PointerThreshold > 0` overrides default.
 - `ValueLog.ForcePointers=true` stores all values out-of-line.
 
@@ -67,23 +65,6 @@ sequence acts as a durable commit fence:
 
 This prevents replaying partial pointer commits and avoids phantom pointer
 visibility after crash recovery.
-
-### 3.2 WAL Fence Mode (`v2_fenceptr`)
-
-`ValueLog.WALFenceMode` controls WAL encoding for pointer-eligible writes when
-`IndexOuterLeafMode=v2_fenceptr`.
-
-- `rid_join` (default):
-  - write path appends value-log records first,
-  - WAL stores `OpSetRID` records,
-  - recovery requires RID fence satisfaction for sequenced batches.
-- `simple_inline`:
-  - WAL stores `OpSetInline` records for pointer-eligible writes,
-  - writes stay inline in mutable memtables,
-  - pointer materialization and fence collapse occur at flush/checkpoint.
-
-`simple_inline` keeps direct write-path structure intact and avoids requiring
-client-side batching or ingress behavior changes. WAL-off behavior is unchanged.
 
 ## 4. Backend Commit Model
 

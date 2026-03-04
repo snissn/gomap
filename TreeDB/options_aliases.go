@@ -56,24 +56,9 @@ type ValueLogGenerationPolicy = db.ValueLogGenerationPolicy
 type ValueLogGenerationConfig = db.ValueLogGenerationConfig
 
 const (
+	ValueLogGenerationDefault     = db.ValueLogGenerationDefault
 	ValueLogGenerationOff         = db.ValueLogGenerationOff
 	ValueLogGenerationHotWarmCold = db.ValueLogGenerationHotWarmCold
-)
-
-type ValueLogWALFenceMode = db.ValueLogWALFenceMode
-
-const (
-	ValueLogWALFenceModeRIDJoin      = db.ValueLogWALFenceModeRIDJoin
-	ValueLogWALFenceModeSimpleInline = db.ValueLogWALFenceModeSimpleInline
-)
-
-const (
-	IndexOuterLeafModeV1              = db.IndexOuterLeafModeV1
-	IndexOuterLeafModeV1LeafLog       = db.IndexOuterLeafModeV1LeafLog
-	IndexOuterLeafModeV1LeafLogLegacy = db.IndexOuterLeafModeV1LeafLogLegacy
-	IndexOuterLeafModeV1LeafLogRoute  = db.IndexOuterLeafModeV1LeafLogRoute
-	IndexOuterLeafModeV2BlockPtr      = db.IndexOuterLeafModeV2BlockPtr
-	IndexOuterLeafModeV2FencePtr      = db.IndexOuterLeafModeV2FencePtr
 )
 
 // Value-log compression autotune types (re-exported from internal packages so

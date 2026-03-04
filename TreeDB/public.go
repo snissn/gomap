@@ -30,11 +30,9 @@ const (
 	defaultChunkSize     = 256 * 1024
 	defaultDictChunkSize = 64 * 1024
 
-	defaultSlowdownBacklogSeconds              = 1.0
-	defaultStopBacklogSeconds                  = 2.0
-	defaultV2FenceSlowdownBacklogSeconds       = 0.5
-	defaultV2FenceStopBacklogSeconds           = 1.0
-	defaultAdaptiveMaxBacklogBytes       int64 = 2 << 30
+	defaultSlowdownBacklogSeconds        = 1.0
+	defaultStopBacklogSeconds            = 2.0
+	defaultAdaptiveMaxBacklogBytes int64 = 2 << 30
 )
 
 // Iterator is the public iterator contract returned by TreeDB.
@@ -268,48 +266,14 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 	slowdown := defaultSlowdownBacklogSeconds
 	stop := defaultStopBacklogSeconds
-	indexOuterLeafMode := normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
-	if opts.Durability == db.DurabilityWALOffRelaxed &&
-		indexOuterLeafMode == db.IndexOuterLeafModeV2FencePtr {
-		slowdown = defaultV2FenceSlowdownBacklogSeconds
-		stop = defaultV2FenceStopBacklogSeconds
-	}
 
 	opts.SlowdownBacklogSeconds = slowdown
 	opts.StopBacklogSeconds = stop
 	opts.MaxBacklogBytes = defaultAdaptiveMaxBacklogBytes
 }
 
-func normalizePublicOuterLeafMode(mode string) string {
-	trimmed := strings.TrimSpace(mode)
-	if trimmed == "" {
-		return db.IndexOuterLeafModeV2FencePtr
-	}
-	normalized := strings.ToLower(trimmed)
-	switch normalized {
-	case db.IndexOuterLeafModeV1:
-		return db.IndexOuterLeafModeV1
-	case db.IndexOuterLeafModeV1LeafLog:
-		return db.IndexOuterLeafModeV1LeafLog
-	case db.IndexOuterLeafModeV1LeafLogLegacy:
-		return db.IndexOuterLeafModeV1LeafLogLegacy
-	case db.IndexOuterLeafModeV1LeafLogRoute:
-		return db.IndexOuterLeafModeV1LeafLogRoute
-	case db.IndexOuterLeafModeV2BlockPtr:
-		return db.IndexOuterLeafModeV2BlockPtr
-	case db.IndexOuterLeafModeV2FencePtr:
-		return db.IndexOuterLeafModeV2FencePtr
-	default:
-		// Keep non-alias values unchanged to avoid broad behavior drift in
-		// cached-mode parsing/validation paths.
-		return trimmed
-	}
-}
-
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
-	opts.IndexOuterLeafMode = normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
-
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
 	// can therefore delay page reuse for a very long time (and cause index.db to
@@ -400,6 +364,10 @@ func Open(opts Options) (*DB, error) {
 		// dictdb stores small metadata values (e.g. current dict id, hash->id map)
 		// inline. ForcePointers would set InlineThreshold=0 and break these writes.
 		dictOpts.ValueLog.ForcePointers = false
+		// Avoid inheriting pointer/domain placement rules from the main DB. Side
+		// stores keep small values inline by default.
+		dictOpts.ValueLog.PointerThreshold = 0
+		dictOpts.ValueLog.DomainInlineThresholds = nil
 		dictOpts.ValueLog.Compression = db.ValueLogCompressionOff
 		dictOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		dictOpts.ChunkSize = dictChunkSize
@@ -425,6 +393,8 @@ func Open(opts Options) (*DB, error) {
 		// templatedb uses batch.Set for small routing/index entries. Do not
 		// propagate ForcePointers from the main DB into this internal store.
 		templateOpts.ValueLog.ForcePointers = false
+		templateOpts.ValueLog.PointerThreshold = 0
+		templateOpts.ValueLog.DomainInlineThresholds = nil
 		templateOpts.ValueLog.Compression = db.ValueLogCompressionOff
 		templateOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		templateOpts.ValueLog.TemplateMode = template.TemplateOff
@@ -481,7 +451,7 @@ func Open(opts Options) (*DB, error) {
 	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
 	valueLogMaxSegmentBytes := int64(0)
-	if opts.IndexPackedValuePtr {
+	if opts.IndexPackedValuePtr || opts.IndexOuterLeavesInValueLog {
 		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
 	}
 
@@ -514,8 +484,7 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:                              relaxedSync,
 		DisableReadChecksum:                      disableReadChecksum,
 		ValueLogPointerThreshold:                 opts.ValueLog.PointerThreshold,
-		IndexOuterLeafMode:                       opts.IndexOuterLeafMode,
-		ValueLogWALFenceMode:                     string(opts.ValueLog.WALFenceMode),
+		IndexOuterLeavesInValueLog:               opts.IndexOuterLeavesInValueLog,
 		ValueLogDomainInlineThresholds:           opts.ValueLog.DomainInlineThresholds,
 		ValueLogRawWritevMinAvgBytes:             opts.ValueLog.RawWritevMinAvgBytes,
 		ValueLogRawWritevMinBatchRecords:         opts.ValueLog.RawWritevMinBatchRecords,
@@ -523,10 +492,6 @@ func Open(opts Options) (*DB, error) {
 		ValueLogCompression:                      uint8(opts.ValueLog.Compression),
 		ValueLogBlockCodec:                       uint8(opts.ValueLog.BlockCodec),
 		ValueLogBlockTargetCompressedBytes:       opts.ValueLog.BlockTargetCompressedBytes,
-		ValueLogOuterLeafBlockTargetBytes:        opts.ValueLog.OuterLeafBlockTargetBytes,
-		ValueLogOuterLeafBlockCodec:              uint8(opts.ValueLog.OuterLeafBlockCodec),
-		ValueLogOuterLeafBlockRestartInterval:    opts.ValueLog.OuterLeafBlockRestartInterval,
-		ValueLogOuterLeafBlobThresholdBytes:      opts.ValueLog.OuterLeafBlobThresholdBytes,
 		ValueLogIncompressibleHoldBytes:          opts.ValueLog.IncompressibleHoldBytes,
 		ValueLogIncompressibleProbeBytes:         opts.ValueLog.IncompressibleProbeIntervalBytes,
 		ValueLogAutoPolicy:                       uint8(opts.ValueLog.AutoPolicy),
@@ -1014,12 +979,20 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 	return db.backend.NewBatchWithSize(size)
 }
 
-// Snapshot is a consistent point-in-time view of the database.
-type Snapshot = db.Snapshot
-
 // AcquireSnapshot returns a new snapshot.
-func (db *DB) AcquireSnapshot() *Snapshot {
-	if db == nil || db.backend == nil {
+//
+// In cached mode, snapshots include writes that are buffered in memtables.
+// In read-only mode (no caching), snapshots are backend-only.
+//
+// Callers may use GetUnsafe to obtain zero-copy views tied to the snapshot lifetime.
+func (db *DB) AcquireSnapshot() Snapshot {
+	if db == nil {
+		return nil
+	}
+	if db.cached != nil {
+		return db.cached.AcquireSnapshot()
+	}
+	if db.backend == nil {
 		return nil
 	}
 	return db.backend.AcquireSnapshot()
@@ -1152,6 +1125,16 @@ func VacuumIndexOffline(opts Options) error {
 		return err
 	}
 	opts.Dir = maindbDir
+
+	// Preserve the persisted on-disk format knobs by default so offline index
+	// maintenance doesn't accidentally rewrite the DB into a different layout.
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
+			return err
+		} else if ok {
+			cfg.ApplyToOptions(&opts)
+		}
+	}
 	return db.VacuumIndexOffline(opts)
 }
 

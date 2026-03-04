@@ -36,6 +36,16 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	opts.Dir = maindbDir
 
+	// Preserve the persisted on-disk format knobs by default so offline rewrite
+	// doesn't accidentally rebuild the index/value-log into a different layout.
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := treedbdb.LoadFormatConfig(maindbDir); err != nil {
+			return ValueLogRewriteStats{}, err
+		} else if ok {
+			cfg.ApplyToOptions(&opts)
+		}
+	}
+
 	stats, err := treedbdb.ValueLogRewriteOffline(opts)
 	if err != nil {
 		return ValueLogRewriteStats{}, err

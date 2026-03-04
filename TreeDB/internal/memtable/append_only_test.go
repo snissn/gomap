@@ -263,6 +263,159 @@ func TestAppendOnlyOrderedGetAndGetEntryFastPath(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyGetBuildsLatestIndexOnFirstPointRead(t *testing.T) {
+	keyKinds := []struct {
+		name       string
+		makeKey    func(v uint64) []byte
+		latestIdx  func(m *AppendOnly, key []byte) (idx int, ok bool)
+		latestSize func(m *AppendOnly) int
+	}{
+		{
+			name: "non-8-byte",
+			makeKey: func(v uint64) []byte {
+				return []byte{byte('a' + v)}
+			},
+			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
+				if m.latest == nil {
+					return 0, false
+				}
+				idx, ok := m.latest[appendOnlyKeyString(key)]
+				return idx, ok
+			},
+			latestSize: func(m *AppendOnly) int {
+				if m.latest == nil {
+					return 0
+				}
+				return len(m.latest)
+			},
+		},
+		{
+			name: "8-byte",
+			makeKey: func(v uint64) []byte {
+				k := make([]byte, 8)
+				binary.BigEndian.PutUint64(k, v)
+				return k
+			},
+			latestIdx: func(m *AppendOnly, key []byte) (int, bool) {
+				k64, ok := appendOnlyKeyU64(key)
+				if !ok || m.latest64 == nil {
+					return 0, false
+				}
+				idx, ok := m.latest64[k64]
+				return idx, ok
+			},
+			latestSize: func(m *AppendOnly) int {
+				if m.latest64 == nil {
+					return 0
+				}
+				return len(m.latest64)
+			},
+		},
+	}
+
+	for _, kk := range keyKinds {
+		kk := kk
+		t.Run(kk.name, func(t *testing.T) {
+			m := NewAppendOnlyWithCapacity(0)
+
+			hi := kk.makeKey(2)
+			lo := kk.makeKey(1)
+
+			m.Set(hi, []byte("hi"))
+			m.Set(lo, []byte("lo")) // force unordered
+
+			m.mu.RLock()
+			ordered := m.ordered
+			dirty := m.latestDirty
+			m.mu.RUnlock()
+			if ordered {
+				t.Fatalf("expected memtable to become unordered")
+			}
+			if !dirty {
+				t.Fatalf("expected latest index to start dirty")
+			}
+
+			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo" {
+				t.Fatalf("Get(lo) = (%q,%v,%v), want (lo,false,true)", string(got), del, ok)
+			}
+
+			m.mu.RLock()
+			dirty = m.latestDirty
+			latestSize := kk.latestSize(m)
+			m.mu.RUnlock()
+			if dirty {
+				t.Fatalf("expected point read to rebuild latest index (latestDirty=false)")
+			}
+			if latestSize < 2 {
+				t.Fatalf("expected latest index to be populated, size=%d", latestSize)
+			}
+
+			m.Set(lo, []byte("lo2"))
+
+			m.mu.RLock()
+			dirty = m.latestDirty
+			count := m.count
+			idx, ok := kk.latestIdx(m, lo)
+			m.mu.RUnlock()
+			if dirty {
+				t.Fatalf("expected writes to keep latest index clean after rebuild")
+			}
+			if !ok {
+				t.Fatalf("expected latest index lookup to succeed after rebuild")
+			}
+			if idx != count-1 {
+				t.Fatalf("latest index points at %d, want %d", idx, count-1)
+			}
+			if got, del, ok := m.Get(lo); !ok || del || string(got) != "lo2" {
+				t.Fatalf("Get(lo after overwrite) = (%q,%v,%v), want (lo2,false,true)", string(got), del, ok)
+			}
+
+			m.Delete(lo)
+
+			m.mu.RLock()
+			dirty = m.latestDirty
+			count = m.count
+			idx, ok = kk.latestIdx(m, lo)
+			m.mu.RUnlock()
+			if dirty {
+				t.Fatalf("expected deletes to keep latest index clean after rebuild")
+			}
+			if !ok {
+				t.Fatalf("expected latest index lookup to succeed after delete")
+			}
+			if idx != count-1 {
+				t.Fatalf("latest index points at %d after delete, want %d", idx, count-1)
+			}
+			if got, del, ok := m.Get(lo); !ok || !del || got != nil {
+				t.Fatalf("Get(lo after delete) = (%v,%v,%v), want (nil,true,true)", got, del, ok)
+			}
+		})
+	}
+}
+
+func TestAppendOnlyGet_EmptyKey_IncrementalLatestIndex(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+
+	// Force the memtable into the unordered path so it uses the latest-index maps.
+	m.Set([]byte("b"), []byte("1"))
+	m.Set([]byte("a"), []byte("2"))
+
+	// Trigger a point read to build the latest index (latestDirty=false) before
+	// adding the empty key.
+	if got, del, ok := m.Get([]byte("a")); !ok || del || string(got) != "2" {
+		t.Fatalf("precondition Get(a) = (%q,%v,%v), want (2,false,true)", string(got), del, ok)
+	}
+
+	m.Set([]byte{}, []byte("empty"))
+
+	if got, del, ok := m.Get([]byte{}); !ok || del || string(got) != "empty" {
+		t.Fatalf("Get(empty key) = (%q,%v,%v), want (empty,false,true)", string(got), del, ok)
+	}
+	if got, ptr, flags, ok := m.GetEntry([]byte{}); !ok || string(got) != "empty" || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
+		t.Fatalf("GetEntry(empty key) = (%q,%+v,%d,%v), want (empty,zero,%d,true)", string(got), ptr, flags, ok, node.FlagInline)
+	}
+}
+
 var appendOnlyGetBenchSink []byte
 var appendOnlyGetBenchSinkBool bool
 

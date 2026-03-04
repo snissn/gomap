@@ -46,6 +46,9 @@ func (t *countingTable) Len() int    { return t.inner.Len() }
 func (t *countingTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	return t.inner.NewIterator(start, end)
 }
+func (t *countingTable) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	return t.inner.NewReverseIterator(start, end)
+}
 func (t *countingTable) Freeze() { t.inner.Freeze() }
 
 var _ memtable.Table = (*countingTable)(nil)

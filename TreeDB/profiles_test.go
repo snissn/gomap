@@ -22,11 +22,14 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.ValueLog.ReadIntegrity != IntegritySkipChecksums {
 		t.Fatalf("expected IntegritySkipChecksums for fast profile, got %v", opts.ValueLog.ReadIntegrity)
 	}
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("expected IndexOuterLeavesInValueLog=true for fast profile")
+	}
 	if !opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=true for fast profile")
 	}
-	if !opts.ValueLog.ForcePointers {
-		t.Fatalf("expected ValueLog.ForcePointers=true for fast profile")
+	if opts.ValueLog.ForcePointers {
+		t.Fatalf("expected ValueLog.ForcePointers=false for fast profile")
 	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for fast profile")
@@ -37,8 +40,8 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if !opts.IndexPackedValuePtr {
 		t.Fatalf("expected IndexPackedValuePtr=true for fast profile")
 	}
-	if !opts.IndexInternalBaseDelta {
-		t.Fatalf("expected IndexInternalBaseDelta=true for fast profile")
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta=false for fast profile (incompatible with outer leaves in value log)")
 	}
 }
 
@@ -52,11 +55,14 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	if opts.ValueLog.ReadIntegrity != IntegritySkipChecksums {
 		t.Fatalf("expected IntegritySkipChecksums for wal_on_fast profile, got %v", opts.ValueLog.ReadIntegrity)
 	}
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("expected IndexOuterLeavesInValueLog=true for wal_on_fast profile")
+	}
 	if !opts.PreferAppendAlloc {
 		t.Fatalf("expected PreferAppendAlloc=true for wal_on_fast profile")
 	}
-	if !opts.ValueLog.ForcePointers {
-		t.Fatalf("expected ValueLog.ForcePointers=true for wal_on_fast profile")
+	if opts.ValueLog.ForcePointers {
+		t.Fatalf("expected ValueLog.ForcePointers=false for wal_on_fast profile")
 	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for wal_on_fast profile")
@@ -67,71 +73,8 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	if !opts.IndexPackedValuePtr {
 		t.Fatalf("expected IndexPackedValuePtr=true for wal_on_fast profile")
 	}
-	if !opts.IndexInternalBaseDelta {
-		t.Fatalf("expected IndexInternalBaseDelta=true for wal_on_fast profile")
-	}
-}
-
-func TestApplyProfile_FastAndWALOnFast_V2FencePtrOuterLeafCacheDefault(t *testing.T) {
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
-		t.Run(string(profile), func(t *testing.T) {
-			opts := Options{IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr}
-			ApplyProfile(&opts, profile)
-			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 16384 {
-				t.Fatalf("expected v2_fenceptr profile default OuterLeafBlockCacheEntries=16384, got %d", got)
-			}
-		})
-	}
-}
-
-func TestApplyProfile_V2FencePtrPreservesExplicitOuterLeafCacheEntries(t *testing.T) {
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
-		t.Run(string(profile), func(t *testing.T) {
-			opts := Options{
-				IndexOuterLeafMode: IndexOuterLeafModeV2FencePtr,
-				ValueLog: ValueLogOptions{
-					OuterLeafBlockCacheEntries: 4096,
-				},
-			}
-			ApplyProfile(&opts, profile)
-			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 4096 {
-				t.Fatalf("expected explicit OuterLeafBlockCacheEntries to be preserved, got %d", got)
-			}
-		})
-	}
-}
-
-func TestApplyProfile_NonV2FencePtrLeavesOuterLeafCacheEntriesUnset(t *testing.T) {
-	modes := []struct {
-		name string
-		mode string
-	}{
-		{name: "v1", mode: IndexOuterLeafModeV1},
-		{name: "v2_blockptr", mode: IndexOuterLeafModeV2BlockPtr},
-	}
-
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
-		for _, tc := range modes {
-			t.Run(string(profile)+"_"+tc.name, func(t *testing.T) {
-				opts := Options{IndexOuterLeafMode: tc.mode}
-				ApplyProfile(&opts, profile)
-				if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 0 {
-					t.Fatalf("expected non-v2_fenceptr mode %q to keep OuterLeafBlockCacheEntries=0, got %d", tc.mode, got)
-				}
-			})
-		}
-	}
-}
-
-func TestApplyProfile_EmptyOuterLeafModeUsesV2FencePtrCacheDefault(t *testing.T) {
-	for _, profile := range []Profile{ProfileFast, ProfileWALOnFast} {
-		t.Run(string(profile), func(t *testing.T) {
-			var opts Options
-			ApplyProfile(&opts, profile)
-			if got := opts.ValueLog.OuterLeafBlockCacheEntries; got != 16384 {
-				t.Fatalf("expected empty mode to use v2_fenceptr default OuterLeafBlockCacheEntries=16384, got %d", got)
-			}
-		})
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta=false for wal_on_fast profile (incompatible with outer leaves in value log)")
 	}
 }
 
@@ -151,8 +94,8 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	if !opts.DisableBackgroundPrune {
 		t.Fatalf("expected DisableBackgroundPrune=true for bench profile")
 	}
-	if !opts.ValueLog.ForcePointers {
-		t.Fatalf("expected ValueLog.ForcePointers=true for bench profile")
+	if opts.ValueLog.ForcePointers {
+		t.Fatalf("expected ValueLog.ForcePointers=false for bench profile")
 	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for bench profile")
@@ -163,14 +106,17 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	if !opts.IndexPackedValuePtr {
 		t.Fatalf("expected IndexPackedValuePtr=true for bench profile")
 	}
-	if !opts.IndexInternalBaseDelta {
-		t.Fatalf("expected IndexInternalBaseDelta=true for bench profile")
+	if opts.IndexInternalBaseDelta {
+		t.Fatalf("expected IndexInternalBaseDelta=false for bench profile (incompatible with outer leaves in value log)")
 	}
 }
 
 func TestApplyProfile_DurableKeepsIndexOptimizationsDisabled(t *testing.T) {
 	var opts Options
 	ApplyProfile(&opts, ProfileDurable)
+	if !opts.IndexOuterLeavesInValueLog {
+		t.Fatalf("expected IndexOuterLeavesInValueLog=true for durable profile")
+	}
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for durable profile")
 	}

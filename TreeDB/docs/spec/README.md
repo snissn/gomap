@@ -58,8 +58,6 @@ Given pre-alpha status, this is a living spec that tracks implementation.
   - complete concurrency mechanism inventory, lock/worker topology, and option/flag matrix for perf/refactor audits.
 - `TreeDB/docs/spec/storage-format.md`
   - on-disk encodings for pages, node layouts, pointers, value-log records/frames, commit-log segments.
-- `TreeDB/docs/spec/outer-leaf-modes.md`
-  - mode matrix for `v1`, `v1_leaflog`, `v2_blockptr`, and `v2_fenceptr`, plus parity requirements and benchmark workflow.
 - `TreeDB/docs/spec/write-path-and-durability.md`
   - write pipeline and durability semantics for all durability modes.
 - `TreeDB/docs/spec/recovery.md`

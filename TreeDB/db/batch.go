@@ -2,10 +2,8 @@ package db
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -168,7 +166,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, false, vlogRefDelta)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -220,7 +218,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, false, vlogRefDelta); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
 		return err
 	}
 	if b.db.vacuum.Active() {
@@ -264,30 +262,6 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 			val, err := b.db.valueLogManager.Read(ptr)
 			if err != nil {
 				return err
-			}
-			if outerleaf.ModeEnabled(b.db.indexOuterLeafMode) {
-				decoded, ok, found, _, decErr := outerleaf.DecodeEntryForKey(val, entry.Key, nil)
-				if decErr != nil {
-					return decErr
-				}
-				if !ok {
-					if strings.TrimSpace(b.db.indexOuterLeafMode) == outerleaf.ModeV2FencePtr {
-						return fmt.Errorf("outerleaf: expected wrapped payload in fence mode replay")
-					}
-				}
-				if ok {
-					if !found {
-						return fmt.Errorf("outerleaf: key lookup miss in replay")
-					}
-					if decoded.Kind == outerleaf.EntryKindBlobRef {
-						val, err = b.db.valueLogManager.Read(decoded.BlobPtr)
-						if err != nil {
-							return err
-						}
-					} else {
-						val = decoded.Value
-					}
-				}
 			}
 			entry.Value = val
 		}

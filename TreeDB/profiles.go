@@ -1,7 +1,5 @@
 package treedb
 
-import "strings"
-
 // Profiles are intentionally defined in the public package so downstream users
 // can pick a coherent option bundle without duplicating the mapping from
 // “intent” (durable vs fast vs bench) to low-level knobs.
@@ -84,8 +82,6 @@ const (
 	ProfileBench Profile = "bench"
 )
 
-const defaultV2FencePtrOuterLeafBlockCacheEntries = 16384
-
 // OptionsFor returns a copy of Options pre-filled for the given Profile.
 //
 // The returned Options still follow TreeDB's normal defaulting rules for fields
@@ -130,32 +126,25 @@ func ApplyProfile(opts *Options, profile Profile) {
 func applyDurableProfile(opts *Options) {
 	opts.Durability = DurabilityDurable
 	opts.ValueLog.ReadIntegrity = IntegrityVerify
+	opts.IndexOuterLeavesInValueLog = true
 }
 
 func applyIndexOptimizationsProfile(opts *Options) {
-	opts.ValueLog.ForcePointers = true
 	opts.LeafPrefixCompression = true
 	opts.IndexColumnarLeaves = true
 	opts.IndexPackedValuePtr = true
 	opts.IndexInternalBaseDelta = true
-}
-
-func applyV2FencePtrOuterLeafBlockCacheDefault(opts *Options) {
-	if opts == nil || opts.ValueLog.OuterLeafBlockCacheEntries != 0 {
-		return
-	}
-	mode := strings.TrimSpace(opts.IndexOuterLeafMode)
-	if mode == "" {
-		mode = IndexOuterLeafModeV2FencePtr
-	}
-	if strings.EqualFold(mode, IndexOuterLeafModeV2FencePtr) {
-		opts.ValueLog.OuterLeafBlockCacheEntries = defaultV2FencePtrOuterLeafBlockCacheEntries
+	if opts.IndexOuterLeavesInValueLog {
+		// Leaf refs encode value-log pointers in internal child IDs, which are
+		// incompatible with internal base-delta child ID encodings.
+		opts.IndexInternalBaseDelta = false
 	}
 }
 
 func applyFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
+	opts.IndexOuterLeavesInValueLog = true
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}
@@ -169,12 +158,12 @@ func applyFastProfile(opts *Options) {
 		opts.PreferAppendAlloc = true
 	}
 	applyIndexOptimizationsProfile(opts)
-	applyV2FencePtrOuterLeafBlockCacheDefault(opts)
 }
 
 func applyWALOnFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOnRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
+	opts.IndexOuterLeavesInValueLog = true
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}
@@ -185,7 +174,6 @@ func applyWALOnFastProfile(opts *Options) {
 	// Prefer appending new pages for throughput under churn.
 	opts.PreferAppendAlloc = true
 	applyIndexOptimizationsProfile(opts)
-	applyV2FencePtrOuterLeafBlockCacheDefault(opts)
 }
 
 func applyBenchProfile(opts *Options) {
@@ -205,6 +193,12 @@ func applyBenchProfile(opts *Options) {
 	}
 	if opts.MaxWALBytes == 0 {
 		opts.MaxWALBytes = -1
+	}
+	if opts.BackgroundIndexVacuumInterval == 0 {
+		opts.BackgroundIndexVacuumInterval = -1
+	}
+	if opts.ValueLog.Generational.Policy == ValueLogGenerationDefault {
+		opts.ValueLog.Generational.Policy = ValueLogGenerationOff
 	}
 
 	// Background pruner: disable concurrent pruning to avoid allocator work in the
