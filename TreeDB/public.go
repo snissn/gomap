@@ -298,6 +298,8 @@ func Open(opts Options) (*DB, error) {
 		opts.ValueLog.Compression = db.ValueLogCompressionAuto
 	}
 
+	applyEnvMaintenanceOverrides(&opts)
+
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {
 		fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
@@ -586,6 +588,27 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	return out, nil
+}
+
+const (
+	envDisableBackgroundPrune       = "TREEDB_DISABLE_BACKGROUND_PRUNE"
+	envDisableBackgroundIndexVacuum = "TREEDB_DISABLE_BACKGROUND_INDEX_VACUUM"
+	envDisableVlogGeneration        = "TREEDB_DISABLE_VLOG_GENERATION"
+)
+
+func applyEnvMaintenanceOverrides(opts *Options) {
+	if opts == nil {
+		return
+	}
+	if envBool(envDisableBackgroundPrune) {
+		opts.DisableBackgroundPrune = true
+	}
+	if envBool(envDisableBackgroundIndexVacuum) {
+		opts.BackgroundIndexVacuumInterval = -1
+	}
+	if envBool(envDisableVlogGeneration) {
+		opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	}
 }
 
 func computeDurabilityMode(opts Options) string {
