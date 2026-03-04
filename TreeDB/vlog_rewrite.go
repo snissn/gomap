@@ -68,12 +68,17 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	_, finishMaintenance := db.beginFullScanMaintenance("rewrite")
 	success := false
 	defer func() { finishMaintenance(success) }()
+
+	backendOpts := treedbdb.ValueLogRewriteOnlineOptions(opts)
 	if db.cached != nil {
 		if err := db.Checkpoint(); err != nil {
 			return ValueLogRewriteStats{}, err
 		}
+		if len(backendOpts.ProtectedPaths) == 0 {
+			backendOpts.ProtectedPaths = db.cached.ValueLogRetainedPaths()
+		}
 	}
-	stats, err := db.backend.ValueLogRewriteOnline(ctx, treedbdb.ValueLogRewriteOnlineOptions(opts))
+	stats, err := db.backend.ValueLogRewriteOnline(ctx, backendOpts)
 	if err != nil {
 		return ValueLogRewriteStats{}, err
 	}

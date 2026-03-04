@@ -47,6 +47,11 @@ type ValueLogRewriteOnlineOptions struct {
 	// SourceFileIDs restricts rewrite to pointers currently referencing these
 	// value-log segment IDs. Missing IDs are ignored.
 	SourceFileIDs []uint32
+	// ProtectedPaths are value-log segment paths that must not be marked zombie
+	// during rewrite cleanup. This is primarily used by cached-mode background
+	// maintenance to avoid deleting segments still referenced by in-memory
+	// pointers that are not yet visible in the backend index.
+	ProtectedPaths []string
 	// MaxSourceSegments bounds the number of source segments selected by sparse
 	// segment selection. Applies only when SourceFileIDs is empty.
 	MaxSourceSegments int
@@ -560,6 +565,30 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
+	protectedIDs := make(map[uint32]struct{})
+	if len(opts.ProtectedPaths) > 0 {
+		protectedPaths := make(map[string]struct{}, len(opts.ProtectedPaths))
+		for _, path := range opts.ProtectedPaths {
+			if path == "" {
+				continue
+			}
+			protectedPaths[path] = struct{}{}
+		}
+		if len(protectedPaths) > 0 {
+			protectedSet := db.valueLogManager.CurrentSetNoRefresh()
+			if protectedSet != nil {
+				for id, f := range protectedSet.Files {
+					if f == nil || f.Path == "" {
+						continue
+					}
+					if _, ok := protectedPaths[f.Path]; ok {
+						protectedIDs[id] = struct{}{}
+					}
+				}
+				_ = db.valueLogManager.Release(protectedSet)
+			}
+		}
+	}
 	zombieCandidates := make(map[uint32]struct{}, len(oldValueIDs)+len(newValueIDs))
 	for id := range oldValueIDs {
 		zombieCandidates[id] = struct{}{}
@@ -569,6 +598,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	for id := range zombieCandidates {
 		if _, ok := referencedAfter[id]; ok {
+			continue
+		}
+		if _, ok := protectedIDs[id]; ok {
 			continue
 		}
 		if err := db.valueLogManager.MarkZombie(id); err != nil {
