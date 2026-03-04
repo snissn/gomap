@@ -101,6 +101,7 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 		AllowUnsafe:              true,
 		MemtableShards:           1,
 		JournalLanes:             1,
+		ValueLogCompression:      1, // off: ensure value-log segment rotation triggers deterministically
 		ValueLogPointerThreshold: 1,
 		ValueLogMaxSegmentBytes:  4 << 10,
 		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
@@ -176,6 +177,7 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 		AllowUnsafe:              true,
 		MemtableShards:           1,
 		JournalLanes:             1,
+		ValueLogCompression:      1, // off
 		ValueLogPointerThreshold: 1,
 		ValueLogMaxSegmentBytes:  4 << 10,
 		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
