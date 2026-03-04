@@ -593,7 +593,12 @@ func (c *vacuumCloneCtx) cloneNode(oldID uint64) (uint64, error) {
 			if c.leafPageLog == nil {
 				return 0, errors.New("vacuum: leaf page log not configured")
 			}
-			ptr, err := c.leafPageLog.AppendLeafPage(data)
+			buf := make([]byte, page.PageSize)
+			copy(buf, data)
+			out := node.NewNode(buf)
+			out.SetPageID(0)
+			out.UpdateChecksum()
+			ptr, err := c.leafPageLog.AppendLeafPage(out.Data())
 			if err != nil {
 				return 0, err
 			}
