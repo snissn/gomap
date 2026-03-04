@@ -8831,9 +8831,22 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		}
 	}
 	if shouldRewrite && hasRewriter {
-		db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 		db.vlogGenerationLastReason.Store(reason)
+		// Establish a stable backend boundary before rewriting value-log pointers.
+		// Online rewrite scans and publishes pointer swaps against the backend
+		// index; without draining cached writes first, it can miss in-memory
+		// pointers and subsequently mark still-needed segments as zombies.
+		if err := db.Checkpoint(); err != nil {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+			db.vlogGenerationRemapFailures.Add(1)
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: generational rewrite checkpoint: %w", err))
+			}
+			return
+		}
+		now = time.Now()
+		db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
 			BatchSize:         db.valueLogRewriteBatchSize(),
@@ -8841,6 +8854,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			MaxSegmentBytes:   db.valueLogGenerationWarmTarget,
 			MaxSourceSegments: 1,
 			MaxSourceBytes:    db.valueLogRewriteBudgetBytes,
+			ProtectedPaths:    db.valueLogRetainedPaths(),
 			MinSegmentStaleRatio: func() float64 {
 				if db.valueLogRewriteTriggerRatioPPM <= 0 {
 					return 0
@@ -8890,7 +8904,16 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	gcStats, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})
+	gcOpts := backenddb.ValueLogGCOptions{
+		ProtectedPaths: db.valueLogRetainedPaths(),
+	}
+	// Fail closed when we don't have retained-path protection data. Cached-mode
+	// value-log pointers can reference recently-rotated segments that are not yet
+	// visible in the backend index, and deleting those segments corrupts state.
+	if !gcOpts.DryRun && len(gcOpts.ProtectedPaths) == 0 {
+		gcOpts.DryRun = true
+	}
+	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 	cancel()
 	if err != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -8923,6 +8946,16 @@ func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 	}
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPostRewriteVacuum)
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+	// Ensure cached writes are drained before swapping index.db underneath
+	// cached-mode readers. This mirrors the public VacuumIndexOnline behavior.
+	if err := db.Checkpoint(); err != nil {
+		db.vlogGenerationVacuumFailures.Add(1)
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: generational index vacuum checkpoint: %w", err))
+		}
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	err := vacuumer.VacuumIndexOnline(ctx)
 	cancel()
