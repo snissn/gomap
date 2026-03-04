@@ -620,6 +620,10 @@ func putVlogDictPrepareResults(ch chan vlogDictPrepareResult) {
 const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
 	envDebugFlushTiming   = "TREEDB_DEBUG_FLUSH_TIMING"
+	// Generational maintenance toggles (for forensics / isolation).
+	envDisableVlogGenerationRewrite = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
+	envDisableVlogGenerationGC      = "TREEDB_DISABLE_VLOG_GENERATION_GC"
+	envDisableVlogGenerationVacuum  = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
 
 	minMemtablePrealloc              = 64 * 1024
 	maxMemtablePrealloc              = 256 << 20
@@ -8820,6 +8824,9 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	churnBps := db.vlogGenerationEstimateChurnBps()
 
 	shouldRewrite, reason := db.shouldRunVlogGenerationRewrite(totalBytes, staleRatioPPM, churnBps)
+	if shouldRewrite && envBool(envDisableVlogGenerationRewrite) {
+		shouldRewrite = false
+	}
 	rewriter, hasRewriter := db.backend.(backendValueLogRewriter)
 	if shouldRewrite && hasRewriter {
 		last := db.vlogGenerationLastRewriteUnixNano.Load()
@@ -8886,6 +8893,9 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		}
 	}
 
+	if envBool(envDisableVlogGenerationGC) {
+		return
+	}
 	if !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps) {
 		return
 	}
@@ -8937,6 +8947,9 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 
 func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	if envBool(envDisableVlogGenerationVacuum) {
 		return
 	}
 	vacuumer, ok := db.backend.(backendIndexVacuumer)
