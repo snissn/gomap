@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
@@ -594,6 +595,36 @@ const (
 	envDisableBackgroundPrune       = "TREEDB_DISABLE_BACKGROUND_PRUNE"
 	envDisableBackgroundIndexVacuum = "TREEDB_DISABLE_BACKGROUND_INDEX_VACUUM"
 	envDisableVlogGeneration        = "TREEDB_DISABLE_VLOG_GENERATION"
+
+	// Value-log compression knobs (cached mode).
+	//
+	// These are env-driven so downstream apps can toggle behavior without
+	// plumbing new CLI flags through multiple repos.
+	envVlogCompression      = "TREEDB_VLOG_COMPRESSION"        // auto|dict|block|off
+	envVlogAutoPolicy       = "TREEDB_VLOG_AUTO_POLICY"        // balanced|throughput|size
+	envVlogBlockCodec       = "TREEDB_VLOG_BLOCK_CODEC"        // snappy|lz4
+	envVlogBlockTargetBytes = "TREEDB_VLOG_BLOCK_TARGET_BYTES" // int (compressed target bytes)
+
+	// Value-log dictionary compression knobs (cached mode).
+	//
+	// Enabling dict compression requires:
+	//   - ValueLog compression mode that allows dicts (auto/dict), and
+	//   - Dict training enabled (TrainBytes > 0), and
+	//   - Side stores enabled (dictdb), and
+	//   - Split value log enabled (value pointers used).
+	envVlogDictEnable            = "TREEDB_VLOG_DICT_ENABLE"                    // bool
+	envVlogDictTrainBytes        = "TREEDB_VLOG_DICT_TRAIN_BYTES"               // int
+	envVlogDictBytes             = "TREEDB_VLOG_DICT_BYTES"                     // int
+	envVlogDictMinRecords        = "TREEDB_VLOG_DICT_MIN_RECORDS"               // int
+	envVlogDictMaxRecordBytes    = "TREEDB_VLOG_DICT_MAX_RECORD_BYTES"          // int
+	envVlogDictSampleStride      = "TREEDB_VLOG_DICT_SAMPLE_STRIDE"             // int
+	envVlogDictDedupWindow       = "TREEDB_VLOG_DICT_DEDUP_WINDOW"              // int
+	envVlogDictTrainLevel        = "TREEDB_VLOG_DICT_TRAIN_LEVEL"               // int
+	envVlogDictMaxK              = "TREEDB_VLOG_DICT_MAX_K"                     // int
+	envVlogDictZstdLevel         = "TREEDB_VLOG_DICT_ZSTD_LEVEL"                // fastest|default|better|best|int
+	envVlogDictEntropy           = "TREEDB_VLOG_DICT_ENTROPY"                   // bool
+	envVlogDictAdaptiveRatio     = "TREEDB_VLOG_DICT_ADAPTIVE_RATIO"            // float64
+	envVlogDictMinPayloadSavings = "TREEDB_VLOG_DICT_MIN_PAYLOAD_SAVINGS_RATIO" // float64
 )
 
 func applyEnvMaintenanceOverrides(opts *Options) {
@@ -608,6 +639,98 @@ func applyEnvMaintenanceOverrides(opts *Options) {
 	}
 	if envBool(envDisableVlogGeneration) {
 		opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	}
+
+	if val, ok := envString(envVlogCompression); ok {
+		switch strings.ToLower(val) {
+		case "auto":
+			opts.ValueLog.Compression = ValueLogCompressionAuto
+		case "dict":
+			opts.ValueLog.Compression = ValueLogCompressionDict
+		case "block":
+			opts.ValueLog.Compression = ValueLogCompressionBlock
+		case "off", "none", "0":
+			opts.ValueLog.Compression = ValueLogCompressionOff
+		}
+	}
+	if val, ok := envString(envVlogAutoPolicy); ok {
+		switch strings.ToLower(val) {
+		case "balanced":
+			opts.ValueLog.AutoPolicy = ValueLogAutoBalanced
+		case "throughput":
+			opts.ValueLog.AutoPolicy = ValueLogAutoThroughput
+		case "size":
+			opts.ValueLog.AutoPolicy = ValueLogAutoSize
+		}
+	}
+	if val, ok := envString(envVlogBlockCodec); ok {
+		switch strings.ToLower(val) {
+		case "snappy":
+			opts.ValueLog.BlockCodec = ValueLogBlockSnappy
+		case "lz4":
+			opts.ValueLog.BlockCodec = ValueLogBlockLZ4
+		}
+	}
+	if v, ok := envInt(envVlogBlockTargetBytes); ok {
+		opts.ValueLog.BlockTargetCompressedBytes = v
+	}
+
+	if enabled, ok := envBoolSet(envVlogDictEnable); ok {
+		if enabled {
+			EnableValueLogDictCompression(opts)
+		} else {
+			DisableValueLogDictCompression(opts)
+		}
+	}
+	train := opts.ValueLog.DictTrain
+	trainTouched := false
+	if v, ok := envInt(envVlogDictTrainBytes); ok {
+		train.TrainBytes = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictBytes); ok {
+		train.DictBytes = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictMinRecords); ok {
+		train.MinRecords = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictMaxRecordBytes); ok {
+		train.MaxRecordBytes = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictSampleStride); ok {
+		train.SampleStride = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictDedupWindow); ok {
+		train.DedupWindow = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictTrainLevel); ok {
+		train.Level = v
+		trainTouched = true
+	}
+	if trainTouched {
+		opts.ValueLog.DictTrain = train
+	}
+	if v, ok := envInt(envVlogDictMaxK); ok {
+		opts.ValueLog.DictMaxK = v
+	}
+	if v, ok := envString(envVlogDictZstdLevel); ok {
+		if level, ok := parseZstdEncoderLevel(v); ok {
+			opts.ValueLog.DictFrameEncodeLevel = level
+		}
+	}
+	if enabled, ok := envBoolSet(envVlogDictEntropy); ok {
+		opts.ValueLog.DictFrameEnableEntropy = enabled
+	}
+	if v, ok := envFloat64(envVlogDictAdaptiveRatio); ok {
+		opts.ValueLog.DictAdaptiveRatio = v
+	}
+	if v, ok := envFloat64(envVlogDictMinPayloadSavings); ok {
+		opts.ValueLog.DictMinPayloadSavingsRatio = v
 	}
 }
 
@@ -655,6 +778,92 @@ func envBool(name string) bool {
 	}
 	parsed, err := strconv.ParseBool(val)
 	return err == nil && parsed
+}
+
+func envBoolSet(name string) (bool, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return false, false
+	}
+	if val == "" {
+		return true, true
+	}
+	parsed, err := strconv.ParseBool(val)
+	if err != nil {
+		return false, false
+	}
+	return parsed, true
+}
+
+func envString(name string) (string, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return "", false
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return "", false
+	}
+	return val, true
+}
+
+func envInt(name string) (int, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return 0, false
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func envFloat64(name string) (float64, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return 0, false
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func parseZstdEncoderLevel(val string) (zstd.EncoderLevel, bool) {
+	v := strings.TrimSpace(strings.ToLower(val))
+	switch v {
+	case "fastest":
+		return zstd.SpeedFastest, true
+	case "default":
+		return zstd.SpeedDefault, true
+	case "better":
+		return zstd.SpeedBetterCompression, true
+	case "best":
+		return zstd.SpeedBestCompression, true
+	default:
+		// Accept integer levels for convenience.
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, false
+		}
+		level := zstd.EncoderLevel(i)
+		switch level {
+		case zstd.SpeedFastest, zstd.SpeedDefault, zstd.SpeedBetterCompression, zstd.SpeedBestCompression:
+			return level, true
+		default:
+			return 0, false
+		}
+	}
 }
 
 func envDuration(name string, def time.Duration) time.Duration {
