@@ -73,10 +73,16 @@ Backend applies flushed operations through copy-on-write zipper merge.
 Commit visibility sequence:
 
 1. rewrite affected pages,
-2. optionally sync page data,
-3. write next meta page (`MetaPage0` or `MetaPage1` alternating),
-4. optionally sync meta write,
-5. publish new state (commit sequence, roots, value-log set).
+2. flush/sync any value-log leaf pages for every root touched by the commit
+   (user root, system root, or dedicated named roots),
+3. optionally sync page data,
+4. write next meta page (`MetaPage0` or `MetaPage1` alternating),
+5. optionally sync meta write,
+6. publish new state (commit sequence, roots, value-log set).
+
+Named-root commits may use root-local leaf-page placement that differs from the
+DB-global user-root setting. Publish ordering must still ensure any referenced
+leaf-page records are visible before new root ids become visible.
 
 ## 5. API Durability Semantics
 

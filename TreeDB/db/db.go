@@ -1040,6 +1040,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 	db.ghostManager.start()
 	db.idx.Store(gen)
+	db.leafPageLog = &runtimeLeafPageLog{db: db}
 
 	gen.zipper.SetFillTargets(opts.LeafFillTargetPPM, opts.InternalFillTargetPPM)
 	gen.zipper.SetPiggybackCompaction(!opts.DisablePiggybackCompaction)
@@ -1049,6 +1050,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetIndexInternalBaseDelta(opts.IndexInternalBaseDelta)
 	gen.zipper.SetOuterLeavesInValueLog(opts.IndexOuterLeavesInValueLog)
 	gen.zipper.SetLeafPageReader(vm)
+	gen.zipper.SetLeafPageLog(db.leafPageLog)
 	gen.zipper.SetAdaptiveLeafEncoding(opts.IndexAdaptiveLeafEncoding)
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
@@ -1454,7 +1456,7 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 
 	// Ensure value-log-backed leaf pages are flushed before we publish an index
 	// commit that references them.
-	if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+	if forceValueLogRefresh && db.leafPageLog != nil {
 		if sync {
 			if err := db.leafPageLog.Sync(); err != nil {
 				return post, err

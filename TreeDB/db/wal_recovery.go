@@ -261,9 +261,10 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 	if err != nil {
 		return err
 	}
-	defer func() { _ = inlineAppender.close() }()
-	if db != nil && db.indexOuterLeavesInValueLog {
-		db.SetLeafPageLog(inlineAppender)
+	if db != nil {
+		db.inlineAppendMu.Lock()
+		db.inlineAppender = inlineAppender
+		db.inlineAppendMu.Unlock()
 	}
 	for _, batch := range legacyBatches {
 		if err := applyCommitBatch(db, batch.records, ridMap, inlineAppender); err != nil {
@@ -282,9 +283,6 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 		}
 	}
 	if err := inlineAppender.syncIfDirty(); err != nil {
-		return err
-	}
-	if err := inlineAppender.close(); err != nil {
 		return err
 	}
 	for _, path := range commitPaths {
@@ -352,12 +350,16 @@ func newReplayInlineAppender(db *DB, segments []logSegment, ridMap map[uint64]pa
 		return nil, fmt.Errorf("value-log rid space exhausted")
 	}
 	maxSegmentBytes := int64(0)
-	if db.indexPackedValuePtr || db.indexOuterLeavesInValueLog {
+	if db.indexPackedValuePtr || db.leafPageLog != nil {
 		// Packed ValuePtr stores offset as u32; keep replay-appended value-log
-		// segments within the same cap used by the write path.
+		// segments within the same cap used by the write path and leafref paths.
 		maxSegmentBytes = int64(^uint32(0)) - 4
 	}
-	writer := newRewriteWriter(filepath.Join(db.dir, "wal"), 0, maxLane0Seq, maxSegmentBytes)
+	walDir := filepath.Join(db.dir, "wal")
+	if err := os.MkdirAll(walDir, 0o700); err != nil {
+		return nil, err
+	}
+	writer := newRewriteWriter(walDir, 0, maxLane0Seq, maxSegmentBytes)
 	writer.blockCompression = db.valueLogCompression != ValueLogCompressionOff
 	writer.blockCodec = valuelogBlockCodecFromDB(db.valueLogBlockCodec)
 	return &replayInlineAppender{

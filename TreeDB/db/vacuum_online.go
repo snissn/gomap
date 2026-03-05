@@ -323,6 +323,13 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			cleanupNewPager()
 			return err
 		}
+		namedRootsUseLeafPageLog := false
+		for _, desc := range namedRoots {
+			if desc.format.outerLeavesInValueLog {
+				namedRootsUseLeafPageLog = true
+				break
+			}
+		}
 		systemOverrides := make(map[string][]byte, len(namedRoots))
 		for _, desc := range namedRoots {
 			rootIter := tree.New(oldGen.pager, newValueReader(state.ValueLogSet), desc.rootPageID).
@@ -381,7 +388,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		nextMeta.FreelistHeadID = newAlloc.Head()
 		nextMeta.TotalPages = newPager.PageCount()
 
-		if db.indexOuterLeavesInValueLog && db.leafPageLog != nil {
+		if (db.indexOuterLeavesInValueLog || namedRootsUseLeafPageLog) && db.leafPageLog != nil {
 			if err := db.leafPageLog.Sync(); err != nil {
 				db.writeMu.Unlock()
 				cleanupNewPager()
