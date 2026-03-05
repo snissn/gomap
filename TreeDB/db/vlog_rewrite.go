@@ -12,6 +12,7 @@ import (
 	"sort"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
@@ -328,6 +329,21 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	}
 	_ = sysIter.Close()
 
+	// When outer leaves are stored in the value log, leaf pages are referenced by
+	// LeafRef child IDs (not normal key/value pointers) and must be included in
+	// live-byte estimation; otherwise rewrite planning can select "stale" segments
+	// that are actually pinned by live leaf pages.
+	if snap.idx != nil && snap.idx.pager != nil {
+		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords); err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByID, &seenGroupedRecords); err != nil {
+			_ = snap.Close()
+			return nil, err
+		}
+	}
+
 	if err := snap.Close(); err != nil {
 		return nil, err
 	}
@@ -376,6 +392,111 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 		it.Next()
 	}
 	return it.Error()
+}
+
+func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Pager, rootID uint64, liveByID map[uint32]int64, seenGroupedRecords *map[uint64]struct{}) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if p == nil || rootID == 0 || liveByID == nil {
+		return nil
+	}
+	if ptr, ok := page.DecodeLeafRef(rootID); ok {
+		return db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords)
+	}
+	stack := make([]uint64, 0, 128)
+	stack = append(stack, rootID)
+	visited := make(map[uint64]struct{}, 1024)
+	verifyAlways := p.VerifyOnRead()
+
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pageID := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := visited[pageID]; ok {
+			continue
+		}
+		visited[pageID] = struct{}{}
+
+		if ptr, ok := page.DecodeLeafRef(pageID); ok {
+			if err := db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, err := p.Get(pageID)
+		if err != nil {
+			return err
+		}
+		n := node.NewNodeView(data)
+		if verifyAlways || !p.IsVerified(pageID) {
+			if !n.VerifyChecksum() {
+				return fmt.Errorf("checksum mismatch on page %d", pageID)
+			}
+			if !verifyAlways {
+				p.MarkVerified(pageID)
+			}
+		}
+
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				childID, err := n.GetInternalChildID(i)
+				if err != nil {
+					return err
+				}
+				stack = append(stack, childID)
+			}
+		case page.PageTypeLeaf:
+			// Leaf pages stored in the pager have no children; outer-leaf-in-vlog
+			// mode should not encounter them, but handle gracefully.
+		default:
+			return errors.New("invalid page type")
+		}
+	}
+	return nil
+}
+
+func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]int64, seenGroupedRecords *map[uint64]struct{}) error {
+	if liveByID == nil {
+		return nil
+	}
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return nil
+	}
+	// Dedup grouped-record live-byte accounting (LeafRef pointers are grouped).
+	if page.ValuePtrIsGrouped(ptr) {
+		if ptr.Offset < 4 {
+			return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+		}
+		start := uint32(ptr.Offset - 4)
+		k := (uint64(ptr.FileID) << 32) | uint64(start)
+		seen := map[uint64]struct{}(nil)
+		if seenGroupedRecords != nil {
+			seen = *seenGroupedRecords
+		}
+		if seen == nil {
+			seen = make(map[uint64]struct{}, 1024)
+			if seenGroupedRecords != nil {
+				*seenGroupedRecords = seen
+			}
+		}
+		if _, ok := seen[k]; ok {
+			return nil
+		}
+		seen[k] = struct{}{}
+	}
+
+	recordLen, err := db.valueLogRecordLengthForRewrite(ptr)
+	if err != nil {
+		return err
+	}
+	liveByID[ptr.FileID] += int64(recordLen)
+	return nil
 }
 
 func valueLogRecordLengthNeedsHeader(ptr page.ValuePtr, hint uint32) bool {
@@ -693,6 +814,17 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if err := flushBatch(); err != nil {
 			return stats, err
 		}
+		// When leaf pages are stored in the value log, segments can remain pinned
+		// by LeafRef pointers even if all key/value pointers are rewritten. Move
+		// referenced leaf pages out of the selected source segments so cleanup can
+		// actually reclaim space.
+		if restrictSource && db.indexOuterLeavesInValueLog && len(sourceIDs) > 0 {
+			copied, err := db.rewriteLeafRefsOnline(ctx, writer, &nextRID, &ridExhausted, sourceIDs, opts.SyncEachBatch)
+			if err != nil {
+				return stats, err
+			}
+			stats.RecordsCopied += copied
+		}
 	} else {
 		// Stop publishing further swaps after cancellation; cleanup below still
 		// reconciles already-committed rewrite batches and rewrite-created files.
@@ -799,6 +931,285 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, canceledErr
 	}
 	return stats, nil
+}
+
+type leafRefRewriteCtx struct {
+	ctx context.Context
+	db  *DB
+
+	pager *pager.Pager
+	alloc interface {
+		Alloc(hint uint64) (uint64, error)
+	}
+
+	writer       *rewriteWriter
+	nextRID      *uint64
+	ridExhausted *bool
+
+	sourceIDs map[uint32]struct{}
+
+	leafMap     map[uint64]uint64 // old leafref id -> new leafref id
+	internalMap map[uint64]uint64 // old internal page id -> new page id
+
+	retired []uint64
+	copied  int
+}
+
+func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
+	if c == nil {
+		return id, false, errors.New("vlog-rewrite: nil leafref rewrite ctx")
+	}
+	if c.ctx != nil {
+		if err := c.ctx.Err(); err != nil {
+			return id, false, err
+		}
+	}
+	if id == 0 {
+		return 0, false, nil
+	}
+
+	if ptr, ok := page.DecodeLeafRef(id); ok {
+		if c.leafMap != nil {
+			if mapped, ok := c.leafMap[id]; ok {
+				return mapped, mapped != id, nil
+			}
+		}
+		if c.sourceIDs != nil {
+			if _, ok := c.sourceIDs[ptr.FileID]; !ok {
+				return id, false, nil
+			}
+		}
+		if c.db == nil || c.db.valueLogManager == nil {
+			return id, false, fmt.Errorf("vlog-rewrite: value-log manager unavailable")
+		}
+		if c.writer == nil || c.nextRID == nil || c.ridExhausted == nil {
+			return id, false, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
+		}
+		if *c.ridExhausted {
+			return id, false, fmt.Errorf("value-log rid space exhausted")
+		}
+		leafPage, err := c.db.valueLogManager.ReadUnsafe(ptr)
+		if err != nil {
+			return id, false, err
+		}
+		if len(leafPage) != page.PageSize {
+			return id, false, fmt.Errorf("vlog-rewrite: leaf page has invalid size: got=%dB want=%dB", len(leafPage), page.PageSize)
+		}
+		rid := *c.nextRID
+		if rid == 0 {
+			rid = 1
+		}
+		newPtr, err := c.writer.appendValue(rid, leafPage)
+		if err != nil {
+			return id, false, err
+		}
+		rid++
+		*c.nextRID = rid
+		if rid == 0 {
+			*c.ridExhausted = true
+		}
+		leafID, err := page.EncodeLeafRef(newPtr)
+		if err != nil {
+			return id, false, err
+		}
+		if c.leafMap == nil {
+			c.leafMap = make(map[uint64]uint64, 1024)
+		}
+		c.leafMap[id] = leafID
+		c.copied++
+		return leafID, true, nil
+	}
+
+	if c.internalMap != nil {
+		if mapped, ok := c.internalMap[id]; ok {
+			return mapped, mapped != id, nil
+		}
+	}
+
+	if c.pager == nil {
+		return id, false, errors.New("vlog-rewrite: missing pager")
+	}
+	data, err := c.pager.Get(id)
+	if err != nil {
+		return id, false, err
+	}
+	n := node.NewNodeView(data)
+	switch n.Type() {
+	case page.PageTypeInternal:
+		count := n.Count()
+		if count == 0 {
+			return id, false, nil
+		}
+		childIDs := make([]uint64, int(count))
+		keys := make([][]byte, int(count))
+		changed := false
+		for i := uint16(0); i < count; i++ {
+			keyView, childID, err := n.GetInternalEntryView(i)
+			if err != nil {
+				return id, false, err
+			}
+			nextChild, childChanged, err := c.rewriteNode(childID)
+			if err != nil {
+				return id, false, err
+			}
+			if childChanged {
+				changed = true
+			}
+			childIDs[int(i)] = nextChild
+			keys[int(i)] = keyView
+		}
+		if !changed {
+			return id, false, nil
+		}
+		if c.alloc == nil {
+			return id, false, errors.New("vlog-rewrite: missing allocator")
+		}
+		newID, err := c.alloc.Alloc(id)
+		if err != nil {
+			return id, false, err
+		}
+		buf, err := c.pager.GetForWrite(newID)
+		if err != nil {
+			return id, false, err
+		}
+		b := node.NewBuilder(buf, page.PageTypeInternal)
+		b.SetPageID(newID)
+		if low, high, ok, err := n.InternalFenceBounds(); err != nil {
+			return id, false, err
+		} else if ok {
+			b.SetInternalFenceBounds(low, high)
+		}
+		for i := range childIDs {
+			if err := b.AddInternalChild(keys[i], childIDs[i]); err != nil {
+				return id, false, err
+			}
+		}
+		b.FinishNoNode()
+		if id != 0 {
+			c.retired = append(c.retired, id)
+		}
+		if c.internalMap == nil {
+			c.internalMap = make(map[uint64]uint64, 1024)
+		}
+		c.internalMap[id] = newID
+		return newID, true, nil
+
+	case page.PageTypeLeaf:
+		// Pager-backed leaf pages are not expected in outer-leaves-in-vlog mode.
+		// Keep them intact.
+		return id, false, nil
+
+	default:
+		return id, false, fmt.Errorf("vlog-rewrite: unexpected page type %d at page %d", n.Type(), id)
+	}
+}
+
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, nextRID *uint64, ridExhausted *bool, sourceIDs map[uint32]struct{}, sync bool) (int, error) {
+	if db == nil {
+		return 0, fmt.Errorf("missing db")
+	}
+	if !db.indexOuterLeavesInValueLog {
+		return 0, nil
+	}
+	if db.readOnly {
+		return 0, ErrReadOnly
+	}
+	if db.valueLogManager == nil {
+		return 0, fmt.Errorf("value log manager unavailable")
+	}
+	if writer == nil || nextRID == nil || ridExhausted == nil {
+		return 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
+	}
+	if len(sourceIDs) == 0 {
+		return 0, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	idx := db.idx.Load()
+	if idx == nil {
+		return 0, fmt.Errorf("missing index")
+	}
+
+	db.mu.RLock()
+	rootID := db.meta.UserRootPageID
+	sysRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
+	regID := idx.registry.Register(baseSeq)
+	db.mu.RUnlock()
+	defer idx.registry.Unregister(regID)
+
+	tracker := newAllocTracker(idx.allocator)
+	leafCtx := &leafRefRewriteCtx{
+		ctx:          ctx,
+		db:           db,
+		pager:        idx.pager,
+		alloc:        tracker,
+		writer:       writer,
+		nextRID:      nextRID,
+		ridExhausted: ridExhausted,
+		sourceIDs:    sourceIDs,
+	}
+
+	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)
+	if err != nil {
+		freeErr := tracker.FreeAll()
+		if freeErr != nil {
+			return 0, freeErr
+		}
+		return 0, err
+	}
+	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
+	if err != nil {
+		freeErr := tracker.FreeAll()
+		if freeErr != nil {
+			return 0, freeErr
+		}
+		return 0, err
+	}
+	if !sysChanged && !userChanged {
+		freeErr := tracker.FreeAll()
+		if freeErr != nil {
+			return 0, freeErr
+		}
+		return 0, nil
+	}
+
+	// Ensure the copied leaf-page records are visible before publishing new leaf
+	// refs that point at them.
+	if sync {
+		if err := writer.Sync(); err != nil {
+			freeErr := tracker.FreeAll()
+			if freeErr != nil {
+				return 0, freeErr
+			}
+			return 0, err
+		}
+	} else {
+		if err := writer.Flush(); err != nil {
+			freeErr := tracker.FreeAll()
+			if freeErr != nil {
+				return 0, freeErr
+			}
+			return 0, err
+		}
+	}
+
+	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, nil, db.indexOuterLeavesInValueLog, nil); err != nil {
+		freeErr := tracker.FreeAll()
+		if freeErr != nil {
+			return 0, freeErr
+		}
+		return 0, err
+	}
+	return leafCtx.copied, nil
 }
 
 func nextRewriteRIDStart(segments []logSegment) (uint64, error) {

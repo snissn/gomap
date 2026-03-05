@@ -7,9 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 func TestValueLogGC_WithLeafPagesInValueLog_KeepsReferencedLeafSegments(t *testing.T) {
@@ -242,5 +245,265 @@ func TestValueLogRewriteOnline_WithLeafPagesInValueLog_ReopenPreservesData(t *te
 		if !bytes.Equal(got, want) {
 			t.Fatalf("value mismatch for %q", key)
 		}
+	}
+}
+
+func collectLeafRefs(t *testing.T, p *pager.Pager, rootID uint64) []uint64 {
+	t.Helper()
+	if p == nil || rootID == 0 {
+		return nil
+	}
+	if _, ok := page.DecodeLeafRef(rootID); ok {
+		return []uint64{rootID}
+	}
+
+	stack := make([]uint64, 0, 128)
+	stack = append(stack, rootID)
+	visited := make(map[uint64]struct{}, 1024)
+	out := make([]uint64, 0, 1024)
+
+	for len(stack) > 0 {
+		pageID := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if _, ok := visited[pageID]; ok {
+			continue
+		}
+		visited[pageID] = struct{}{}
+
+		if _, ok := page.DecodeLeafRef(pageID); ok {
+			out = append(out, pageID)
+			continue
+		}
+
+		data, err := p.Get(pageID)
+		if err != nil {
+			t.Fatalf("pager.Get(%d): %v", pageID, err)
+		}
+		n := node.NewNodeView(data)
+		if !n.VerifyChecksum() {
+			t.Fatalf("checksum mismatch on page %d", pageID)
+		}
+
+		switch n.Type() {
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				childID, err := n.GetInternalChildID(i)
+				if err != nil {
+					t.Fatalf("GetInternalChildID(%d,%d): %v", pageID, i, err)
+				}
+				stack = append(stack, childID)
+			}
+		case page.PageTypeLeaf:
+			// no children
+		default:
+			t.Fatalf("unexpected page type %d at page %d", n.Type(), pageID)
+		}
+	}
+	return out
+}
+
+func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	var leafLog *rewriteWriter
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		if leafLog != nil {
+			_ = leafLog.Close()
+		}
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	leafLog = newRewriteWriter(walDir, 0, 0, 64<<10)
+	leafLog.blockCompression = false
+	leafLog.blockCodec = valuelog.BlockCodecSnappy
+	db.SetLeafPageLog(leafLog)
+
+	// Seed a tree with many leaves in a single commit so the current leaf refs
+	// are spread across multiple value-log segments.
+	const (
+		keyCount = 8000
+		valSize  = 32
+	)
+	b := db.NewBatch().(*Batch)
+	for i := 0; i < keyCount; i++ {
+		key := []byte(fmt.Sprintf("k%06d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, valSize)
+		if err := b.Set(key, val); err != nil {
+			t.Fatalf("seed set %q: %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	state := db.State()
+	if state == nil {
+		t.Fatalf("missing state")
+	}
+	refs := collectLeafRefs(t, db.Pager(), state.RootPageID)
+	if len(refs) < 2 {
+		t.Fatalf("expected multiple leaf refs, got %d", len(refs))
+	}
+	refsByFile := make(map[uint32][]uint64, 8)
+	for _, id := range refs {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		refsByFile[ptr.FileID] = append(refsByFile[ptr.FileID], id)
+	}
+
+	active := map[uint32]struct{}{}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set != nil {
+		active = currentValueLogIDs(set)
+		_ = db.valueLogManager.Release(set)
+	}
+
+	var targetID uint32
+	for fileID, ids := range refsByFile {
+		if len(ids) < 2 {
+			continue
+		}
+		if _, ok := active[fileID]; ok {
+			continue
+		}
+		targetID = fileID
+		break
+	}
+	if targetID == 0 {
+		for fileID, ids := range refsByFile {
+			if len(ids) >= 2 {
+				targetID = fileID
+				break
+			}
+		}
+	}
+	if targetID == 0 {
+		t.Fatalf("expected at least one value-log segment with multiple leaf refs")
+	}
+	targetPath := db.valueLogManager.SegmentPath(targetID)
+	if _, err := os.Stat(targetPath); err != nil {
+		t.Fatalf("expected segment %d to exist at %s: %v", targetID, targetPath, err)
+	}
+
+	// Move one leaf ref out of the target segment to ensure the segment contains
+	// both live and stale leaf pages (GC alone can't reclaim it).
+	moveID := refsByFile[targetID][0]
+	movePtr, ok := page.DecodeLeafRef(moveID)
+	if !ok {
+		t.Fatalf("expected leafref id, got %d", moveID)
+	}
+	leafPage, err := db.valueLogManager.ReadUnsafe(movePtr)
+	if err != nil {
+		t.Fatalf("read leaf page: %v", err)
+	}
+	leafNode := node.NewNodeView(leafPage)
+	if leafNode.Type() != page.PageTypeLeaf {
+		t.Fatalf("expected leaf page, got type=%d", leafNode.Type())
+	}
+	kView, vView, _, flags, err := leafNode.GetLeafEntryView(0)
+	if err != nil {
+		t.Fatalf("GetLeafEntryView: %v", err)
+	}
+	if flags&node.FlagPointer != 0 {
+		t.Fatalf("expected inline seed values for touch, got pointer flags=0x%x", flags)
+	}
+	key := append([]byte(nil), kView...)
+	val := append([]byte(nil), vView...)
+	if err := db.Set(key, val); err != nil {
+		t.Fatalf("touch set: %v", err)
+	}
+
+	// Sanity: the target segment should still be referenced before rewrite.
+	state2 := db.State()
+	if state2 == nil {
+		t.Fatalf("missing state after touch")
+	}
+	refs2 := collectLeafRefs(t, db.Pager(), state2.RootPageID)
+	inTarget := 0
+	for _, id := range refs2 {
+		ptr, ok := page.DecodeLeafRef(id)
+		if ok && ptr.FileID == targetID {
+			inTarget++
+		}
+	}
+	if inTarget == 0 {
+		t.Fatalf("expected target segment %d to still be referenced before rewrite", targetID)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stats, err := db.ValueLogRewriteOnline(ctx, ValueLogRewriteOnlineOptions{
+		BatchSize:     16,
+		SyncEachBatch: true,
+		SourceFileIDs: []uint32{targetID},
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected rewrite to copy leaf-page records, stats=%+v", stats)
+	}
+
+	// After rewrite, no leaf refs should point at the old segment.
+	state3 := db.State()
+	if state3 == nil {
+		t.Fatalf("missing state after rewrite")
+	}
+	refs3 := collectLeafRefs(t, db.Pager(), state3.RootPageID)
+	for _, id := range refs3 {
+		ptr, ok := page.DecodeLeafRef(id)
+		if ok && ptr.FileID == targetID {
+			t.Fatalf("leaf ref still points at source segment %d after rewrite", targetID)
+		}
+	}
+	if _, err := os.Stat(targetPath); err == nil {
+		t.Fatalf("expected source segment to be removed after rewrite: %s", targetPath)
+	}
+
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("leafLog close: %v", err)
+	}
+	leafLog = nil
+	if err := db.Close(); err != nil {
+		t.Fatalf("db close: %v", err)
+	}
+	db = nil
+
+	reopen, err := Open(Options{
+		Dir:                        dir,
+		ReadOnly:                   true,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("k000010"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	want := bytes.Repeat([]byte{10}, valSize)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after reopen: got=%x want=%x", got, want)
 	}
 }
