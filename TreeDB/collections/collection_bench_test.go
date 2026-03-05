@@ -237,3 +237,79 @@ func BenchmarkSecondaryUpsertFieldChange(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkCollectionStats(b *testing.B) {
+	database, err := db.Open(db.Options{Dir: b.TempDir()})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer database.Close()
+
+	manager := NewCollectionManager(database)
+	meta, err := manager.CreateCollection(&CollectionMeta{Name: "bench_stats"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+		b.Fatal(err)
+	}
+	collection, err := manager.OpenCollection(meta.Name)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for idx := 0; idx < 1024; idx++ {
+		doc := []byte(fmt.Sprintf(`{"email":"user-%d@example.com","city":"hnl"}`, idx))
+		if _, err := collection.Insert([]byte(fmt.Sprintf("u-%d", idx)), doc); err != nil {
+			b.Fatalf("seed insert: %v", err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for idx := 0; idx < b.N; idx++ {
+		if _, err := collection.Stats(); err != nil {
+			b.Fatalf("stats: %v", err)
+		}
+	}
+}
+
+func BenchmarkCollectionCheckConsistency(b *testing.B) {
+	database, err := db.Open(db.Options{Dir: b.TempDir()})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer database.Close()
+
+	manager := NewCollectionManager(database)
+	meta, err := manager.CreateCollection(&CollectionMeta{Name: "bench_consistency"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+		b.Fatal(err)
+	}
+	collection, err := manager.OpenCollection(meta.Name)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for idx := 0; idx < 1024; idx++ {
+		doc := []byte(fmt.Sprintf(`{"email":"user-%d@example.com","city":"hnl"}`, idx))
+		if _, err := collection.Insert([]byte(fmt.Sprintf("u-%d", idx)), doc); err != nil {
+			b.Fatalf("seed insert: %v", err)
+		}
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for idx := 0; idx < b.N; idx++ {
+		if _, err := collection.CheckConsistency(); err != nil {
+			b.Fatalf("check consistency: %v", err)
+		}
+	}
+}
