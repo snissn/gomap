@@ -22,6 +22,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 )
 
 const usageText = `Usage:
@@ -495,14 +496,11 @@ func runVlogGC(dir string, args []string) {
 
 	// Use backend DB directly for GC to avoid cached-layer lane initialization,
 	// which can pre-create empty value-log segments and pollute GC stats.
-	backendDir := resolveMainDBDir(dir)
-	opts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
-	applyPersistedFormatConfig(dir, &opts)
-	backend, err := treedbdb.Open(opts)
+	backend, cleanup, err := openBackendForVlogGC(dir)
 	if err != nil {
 		fatalf("Failed to open DB: %v", err)
 	}
-	defer func() { _ = backend.Close() }()
+	defer func() { _ = cleanup() }()
 
 	stats, err := backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: *dryRun})
 	if err != nil {
@@ -526,6 +524,54 @@ func runVlogGC(dir string, args []string) {
 		stats.BytesEligible,
 		stats.BytesDeleted,
 	)
+}
+
+func openBackendForVlogGC(dir string) (*treedbdb.DB, func() error, error) {
+	backendDir := resolveMainDBDir(dir)
+	opts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
+	applyPersistedFormatConfig(dir, &opts)
+
+	var closers []func() error
+	rootDir := resolveTreeDBRootDir(dir)
+	dictDir := filepath.Join(rootDir, "dictdb")
+	if _, err := os.Stat(filepath.Join(dictDir, "index.db")); err == nil {
+		// When the main DB uses dict-compressed frames, backend open replays WAL
+		// by scanning value-log segments and validating dict IDs. Wire DictLookup
+		// from dictdb/ so recovery and GC can proceed.
+		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: true}
+		// dictdb should not require dict lookup itself; force compression off in
+		// case a stale format.json is present.
+		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
+		dictBackend, err := treedbdb.Open(dictOpts)
+		if err != nil {
+			return nil, nil, fmt.Errorf("dictdb open: %w", err)
+		}
+		store := dictdb.New(dictBackend)
+		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
+			return store.GetDictBytes(context.Background(), dictID)
+		}
+		closers = append(closers, dictBackend.Close)
+	}
+
+	backend, err := treedbdb.Open(opts)
+	if err != nil {
+		for i := len(closers) - 1; i >= 0; i-- {
+			_ = closers[i]()
+		}
+		return nil, nil, err
+	}
+	closers = append(closers, backend.Close)
+
+	cleanup := func() error {
+		var first error
+		for i := len(closers) - 1; i >= 0; i-- {
+			if err := closers[i](); err != nil && first == nil {
+				first = err
+			}
+		}
+		return first
+	}
+	return backend, cleanup, nil
 }
 
 func resolveMainDBDir(dir string) string {
