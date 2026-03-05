@@ -134,3 +134,40 @@ Coverage:
   - `TestReverseIterator_IncludesCachedWrites_SnapshotIsolated`
 - `kvstore/adapters/treedb/read_snapshot_cached_writes_test.go`
 - Unified-bench correctness guardrail: `cmd/unified_bench/read_snapshot_guardrail_test.go` and `BenchConfig.ReadRequireHit`
+
+## 11. Collection Document and Index Coherence
+
+Invariant:
+- Collection metadata round-trips cleanly.
+- Caller-provided and auto-generated ids remain stable across reopen.
+- Primary document writes and derived secondary-index entries stay mutually
+  coherent for normal collection mutations.
+- Collection diagnostics report consistent counts on healthy state and detect
+  missing/orphan secondary-index entries after deliberate corruption.
+
+Coverage:
+- `TreeDB/collections/collection_lifecycle_test.go`
+- `TreeDB/collections/id_generation_test.go`
+- `TreeDB/collections/document_primary_test.go`
+- `TreeDB/collections/secondary_index_lifecycle_test.go`
+- `TreeDB/collections/secondary_index_query_test.go`
+- `TreeDB/collections/secondary_index_update_test.go`
+- `TreeDB/collections/secondary_index_conflict_test.go`
+- `TreeDB/collections/collection_tx_atomic_test.go`
+- `TreeDB/collections/recovery_matrix_test.go`
+- `TreeDB/collections/maintenance_api_test.go`
+- `TreeDB/collections/api_doc_test.go`
+- `TreeDB/collections/edge_case_test.go`
+- `TreeDB/collections/consistency_fuzz_test.go`
+
+Benchmark coverage:
+- `TreeDB/collections/collection_bench_test.go`:
+  - `BenchmarkCollectionCreate`
+  - `BenchmarkCollectionInsertProvidedID`
+  - `BenchmarkCollectionInsertAutoID`
+  - `BenchmarkCollectionGetByID`
+  - `BenchmarkCollectionDeleteByID`
+  - `BenchmarkSecondaryLookupUnique`
+  - `BenchmarkSecondaryUpsertFieldChange`
+  - `BenchmarkCollectionStats`
+  - `BenchmarkCollectionCheckConsistency`
