@@ -20,7 +20,11 @@ import (
 
 const headerWithoutCRC = HeaderSize - 4
 
-const defaultBufferSize = 16 << 20
+// defaultBufferSize controls the default per-writer buffering in file-backed
+// value-log writers (bufio + append buffer + scratch). A smaller default keeps
+// heap high-watermarks reasonable when workloads open many concurrent writers
+// (e.g. sharded cached mode under state-sync restore).
+const defaultBufferSize = 4 << 20
 
 var syncDirFn = syncDir
 
