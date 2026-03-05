@@ -63,16 +63,19 @@ var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResul
 var valueLogKeyLeaseMu sync.Mutex
 var valueLogKeyLeases [][][]byte
 
-const (
-	maxValueLogKeyLeaseCount = 64
-	maxValueLogKeyLeaseCap   = 1 << 20
-	batchArenaMinShift       = 12
-	batchArenaMaxShift       = 22
-	batchArenaClassCount     = batchArenaMaxShift - batchArenaMinShift + 1
-	outerLeafArenaMinShift   = 12
-	outerLeafArenaMaxShift   = 24
-	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
-	maxOuterLeafArenaLeases  = 64
+	const (
+		maxValueLogKeyLeaseCount = 64
+		maxValueLogKeyLeaseCap   = 1 << 20
+		batchArenaMinShift       = 12
+		// batch arenas are chunked key/value copy buffers that may be leased to
+		// memtables. Keep the max pooled chunk size modest to avoid retaining large
+		// mostly-empty tail chunks during big restore batches.
+		batchArenaMaxShift       = 21
+		batchArenaClassCount     = batchArenaMaxShift - batchArenaMinShift + 1
+		outerLeafArenaMinShift   = 12
+		outerLeafArenaMaxShift   = 24
+		outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
+		maxOuterLeafArenaLeases  = 64
 )
 
 type vlogPreparedFrameBody struct {
@@ -15045,8 +15048,8 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	return nil
 }
 
-const (
-	batchDefaultEntriesCap = 16
+	const (
+		batchDefaultEntriesCap = 16
 	// Keep the adaptive NewBatch reserve bounded so one huge batch cannot
 	// permanently over-provision typical batch allocations.
 	batchHintEntriesMax    = 8192
@@ -15054,15 +15057,18 @@ const (
 	streamSwitchMinBytes   = 1 << 20 // 1MiB
 	// Only fan out value-log appends across multiple lanes when a batch is large
 	// enough to amortize per-lane setup and goroutine overhead.
-	multiLaneValueLogMinRecords = 1024
-	batchCopyArenaMinChunk      = 4 << 10
-	batchCopyArenaUnsizedInit   = 8 << 10
-	batchCopyArenaBytesPerEntry = 192
-	batchCopyArenaInitMax       = 2 << 20
-	batchCopyArenaMaxRetain     = 4 << 20
-	batchEntriesPoolMaxRetain   = 16 << 10
-	batchIntSlicePoolMaxRetain  = 16 << 10
-)
+		multiLaneValueLogMinRecords = 1024
+		batchCopyArenaMinChunk      = 4 << 10
+		batchCopyArenaUnsizedInit   = 8 << 10
+		batchCopyArenaBytesPerEntry = 192
+		batchCopyArenaInitMax       = 2 << 20
+		// Avoid retaining 4MiB chunks in the pool/leases; they are easy to
+		// underfill (e.g. a ~2MiB batch spills into a second chunk) and can inflate
+		// peak RSS during restore workloads.
+		batchCopyArenaMaxRetain     = 2 << 20
+		batchEntriesPoolMaxRetain   = 16 << 10
+		batchIntSlicePoolMaxRetain  = 16 << 10
+	)
 
 func batchCopyArenaInitCapForEntries(entries int) int {
 	if entries <= 0 {
