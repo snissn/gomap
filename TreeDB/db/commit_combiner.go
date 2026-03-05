@@ -139,7 +139,7 @@ func (db *DB) applyCombinedBatch(batch []*commitCombineReq) error {
 		return nil
 	}
 	anySync := false
-	b := db.NewBatchWithSize(len(batch)).(*Batch)
+	b := db.newBatchWithEntryReserve(len(batch)).(*Batch)
 	for _, req := range batch {
 		if req == nil {
 			continue

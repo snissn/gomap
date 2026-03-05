@@ -15,15 +15,50 @@ type Batch struct {
 
 const optimisticWriteMaxAttempts = 3
 
+const (
+	// Public NewBatchWithSize comes from cosmos-db, where callers often pass a
+	// byte-oriented flush threshold rather than an entry count. Keep small hints
+	// behaving like entry reserves, but normalize larger hints conservatively so
+	// a 100kB budget does not preallocate 100k entries.
+	publicBatchReserveEntryHintCutover = 8 * 1024
+	publicBatchHintBytesPerEntry       = 256
+	publicBatchReserveEntriesMax       = 8 * 1024
+)
+
 func (db *DB) NewBatch() batch.Interface {
-	return db.NewBatchWithSize(0)
+	return db.newBatchWithEntryReserve(0)
 }
 
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
+	return db.newBatchWithReserveHint(normalizePublicBatchReserveHint(size))
+}
+
+func normalizePublicBatchReserveHint(size int) int {
+	if size <= 0 {
+		return 0
+	}
+	if size <= publicBatchReserveEntryHintCutover {
+		return size
+	}
+	entries := (size + publicBatchHintBytesPerEntry - 1) / publicBatchHintBytesPerEntry
+	if entries < 1 {
+		entries = 1
+	}
+	if entries > publicBatchReserveEntriesMax {
+		entries = publicBatchReserveEntriesMax
+	}
+	return entries
+}
+
+func (db *DB) newBatchWithEntryReserve(entries int) batch.Interface {
+	return db.newBatchWithReserveHint(entries)
+}
+
+func (db *DB) newBatchWithReserveHint(reserveHint int) batch.Interface {
 	threshold := db.InlineThreshold()
 	domains := db.valueLogDomainThresholds
-	if size < 0 {
-		size = 0
+	if reserveHint < 0 {
+		reserveHint = 0
 	}
 	internal := batch.New(db.valueLogManager, threshold)
 	if threshold > 0 {
@@ -31,7 +66,7 @@ func (db *DB) NewBatchWithSize(size int) batch.Interface {
 			return ResolveInlineThresholdForKey(threshold, key, domains)
 		})
 	}
-	internal.Reserve(size)
+	internal.Reserve(reserveHint)
 	return &Batch{
 		db:    db,
 		batch: internal,
