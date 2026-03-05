@@ -440,6 +440,13 @@ func (a *replayInlineAppender) close() error {
 	return nil
 }
 
+func (a *replayInlineAppender) createdFileIDs() ([]uint32, error) {
+	if a == nil || a.writer == nil {
+		return nil, nil
+	}
+	return a.writer.createdFileIDs()
+}
+
 func applyCommitBatch(db *DB, records []commitlog.Record, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender) error {
 	if len(records) == 0 {
 		return nil
