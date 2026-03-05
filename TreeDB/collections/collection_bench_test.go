@@ -47,11 +47,17 @@ func BenchmarkCollectionInsertProvidedID(b *testing.B) {
 		b.Fatal(err)
 	}
 
+	ids := make([][]byte, b.N)
+	docs := make([][]byte, b.N)
+	for idx := 0; idx < b.N; idx++ {
+		ids[idx] = []byte(fmt.Sprintf("doc-%d", idx))
+		docs[idx] = []byte("payload")
+	}
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for idx := 0; idx < b.N; idx++ {
-		id := []byte(fmt.Sprintf("doc-%d", idx))
-		if _, err := collection.Insert(id, []byte("payload")); err != nil {
+		if _, err := collection.Insert(ids[idx], docs[idx]); err != nil {
 			b.Fatalf("insert: %v", err)
 		}
 	}
@@ -152,14 +158,19 @@ func BenchmarkCollectionDeleteByID(b *testing.B) {
 		b.Fatal(err)
 	}
 
+	ids := make([][]byte, b.N)
+	for idx := 0; idx < b.N; idx++ {
+		id := []byte(fmt.Sprintf("doc-%d", idx))
+		ids[idx] = id
+		if _, err := collection.Insert(id, []byte("payload")); err != nil {
+			b.Fatalf("seed insert: %v", err)
+		}
+	}
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for idx := 0; idx < b.N; idx++ {
-		id := []byte(fmt.Sprintf("doc-%d", idx))
-		if _, err := collection.Insert(id, []byte("payload")); err != nil {
-			b.Fatalf("insert before delete: %v", err)
-		}
-		if err := collection.Delete(id); err != nil {
+		if err := collection.Delete(ids[idx]); err != nil {
 			b.Fatalf("delete: %v", err)
 		}
 	}
@@ -224,15 +235,14 @@ func BenchmarkSecondaryUpsertFieldChange(b *testing.B) {
 	if _, err := collection.Insert(id, []byte(`{"city":"hnl"}`)); err != nil {
 		b.Fatal(err)
 	}
+	docs := [][]byte{
+		[]byte(`{"city":"hnl"}`),
+		[]byte(`{"city":"sea"}`),
+	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for idx := 0; idx < b.N; idx++ {
-		city := "hnl"
-		if idx%2 == 1 {
-			city = "sea"
-		}
-		doc := []byte(fmt.Sprintf(`{"city":%q}`, city))
-		if _, err := collection.Insert(id, doc); err != nil {
+		if _, err := collection.Insert(id, docs[idx%len(docs)]); err != nil {
 			b.Fatalf("upsert: %v", err)
 		}
 	}
