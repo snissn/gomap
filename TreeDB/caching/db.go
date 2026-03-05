@@ -2152,6 +2152,22 @@ func (db *DB) cleanupMissingRetainedValueLog(path string) bool {
 	return true
 }
 
+func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
+	if path == "" {
+		return false
+	}
+	db.dropValueLogSegment(path)
+	if err := db.removeFileRetry(path); err != nil {
+		return false
+	}
+	db.mu.Lock()
+	db.untrackValueLogSegmentLocked(path)
+	db.mu.Unlock()
+	db.forgetValueLogRetain(path)
+	db.syncDirBestEffort(db.dir)
+	return true
+}
+
 func (db *DB) dropValueLogSegment(path string) {
 	if db.valueLogReader == nil || path == "" {
 		return
@@ -2570,6 +2586,10 @@ func (db *DB) pruneRetainedValueLogs() {
 				_ = db.valueLogReader.EvictSegment(id)
 			}
 			if err := marker.MarkValueLogZombie(id); err != nil {
+				if errors.Is(err, valuelog.ErrFileNotFound) && db.cleanupOrphanedRetainedValueLog(path) {
+					removed = true
+					continue
+				}
 				if db.cleanupMissingRetainedValueLog(path) {
 					continue
 				}
@@ -3018,26 +3038,26 @@ type DB struct {
 	checkpointing  atomic.Bool
 
 	// Level 0 (Memory)
-	mutableShards         []memShard
-	mutableShardMask      uint64
-	mutableBytes          atomic.Int64
-	mutableThreshold      atomic.Int64
-	rotatePending         atomic.Bool
-	queue                 []memtable.Table
-	queueShardIDs         []uint16
-	queueLaneIDs          []uint16
-	queueIDs              []uint64
-	queueEnqueueNS        []int64
-	nextQueueID           atomic.Uint64
-	batchEntryHint        atomic.Int32
-	batchCopyBytesHint    atomic.Int32
-	batchArenaLeaseMu     sync.Mutex
-	batchArenaLeasesByMem map[memtable.Table][]*batchArenaLease
-	batchArenaLeaseBytes  atomic.Int64
+	mutableShards           []memShard
+	mutableShardMask        uint64
+	mutableBytes            atomic.Int64
+	mutableThreshold        atomic.Int64
+	rotatePending           atomic.Bool
+	queue                   []memtable.Table
+	queueShardIDs           []uint16
+	queueLaneIDs            []uint16
+	queueIDs                []uint64
+	queueEnqueueNS          []int64
+	nextQueueID             atomic.Uint64
+	batchEntryHint          atomic.Int32
+	batchCopyBytesHint      atomic.Int32
+	batchArenaLeaseMu       sync.Mutex
+	batchArenaLeasesByMem   map[memtable.Table][]*batchArenaLease
+	batchArenaLeaseBytes    atomic.Int64
 	batchArenaLeaseBytesMax atomic.Int64
-	batchEntriesPool      sync.Pool
-	batchShardEntriesPool sync.Pool
-	batchIntPool          sync.Pool
+	batchEntriesPool        sync.Pool
+	batchShardEntriesPool   sync.Pool
+	batchIntPool            sync.Pool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.

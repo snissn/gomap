@@ -550,7 +550,7 @@ type Set struct {
 func (s *Set) Read(ptr page.ValuePtr) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
-		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.Read(ptr, !s.disableReadChecksum)
 }
@@ -558,7 +558,7 @@ func (s *Set) Read(ptr page.ValuePtr) ([]byte, error) {
 func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
-		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.ReadUnsafe(ptr, !s.disableReadChecksum)
 }
@@ -566,7 +566,7 @@ func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 func (s *Set) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
-		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.ReadAppend(ptr, !s.disableReadChecksum, dst)
 }
@@ -574,7 +574,7 @@ func (s *Set) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 func (s *Set) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
-		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.ReadUnsafeAppend(ptr, !s.disableReadChecksum, dst)
 }
@@ -598,7 +598,7 @@ func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byt
 		if i == 0 || ptr.FileID != fileID {
 			next, ok := s.Files[ptr.FileID]
 			if !ok {
-				return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+				return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 			}
 			fileID = ptr.FileID
 			f = next
@@ -849,7 +849,7 @@ func (m *Manager) fileFor(id uint32) (*File, error) {
 	if ok {
 		return f, nil
 	}
-	return nil, fmt.Errorf("valuelog file %d not found", id)
+	return nil, &fileNotFoundError{id: id}
 }
 
 // Acquire increments the Set refcount (O(1)).
@@ -945,7 +945,7 @@ func (m *Manager) MarkZombie(id uint32) error {
 	defer m.mu.Unlock()
 	f, ok := m.files[id]
 	if !ok {
-		return fmt.Errorf("valuelog file %d not found", id)
+		return &fileNotFoundError{id: id}
 	}
 	f.IsZombie.Store(true)
 	return nil
