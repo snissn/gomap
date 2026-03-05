@@ -393,13 +393,14 @@ col:i:<base64(collection_name)>:<base64(index_name)>:<u16 encoded_value_len><enc
 The full key is the uniqueness boundary for secondary-index membership. Values
 remain empty; the document id is encoded in the key suffix.
 
-### 7.7 Transitional note
+### 7.7 Maintenance participation
 
-The collection root catalog now drives both dedicated primary and dedicated
-secondary roots. Follow-on hardening work still needs to extend DB-wide
-maintenance and value-log reachability accounting so named roots participate in
-the same rewrite/GC coverage as the user/system roots.
-- LeafRef IDs may also appear in `MetaPageBody.{User,System}RootPageID` when the
+The collection root catalog drives both dedicated primary and dedicated
+secondary roots, and DB-wide maintenance walks those named roots alongside the
+user/system roots for GC, online/offline value-log rewrite, and
+online/offline index vacuum.
+- LeafRef IDs may also appear in named-root `RootPageID` values and in
+  `MetaPageBody.{User,System}RootPageID` when the
   tree height is 1 (i.e. the root page is itself a leaf page stored in the
   value log).
 - Offsets must fit in `u32`; value-log segment size is capped accordingly when

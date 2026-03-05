@@ -352,6 +352,28 @@ func (db *DB) mergeLeafRefValueLogRefs(ctx context.Context, refs map[uint32]stru
 		_ = snap.Close()
 		return err
 	}
+	namedRoots, err := loadNamedRootDescriptors(snap.idx.pager, snap.state.ValueLogSet, snap.state.SystemRootPageID)
+	if err != nil {
+		_ = snap.Close()
+		return err
+	}
+	seenRoots := map[uint64]struct{}{
+		snap.state.RootPageID:       {},
+		snap.state.SystemRootPageID: {},
+	}
+	for _, desc := range namedRoots {
+		if desc.rootPageID == 0 {
+			continue
+		}
+		if _, ok := seenRoots[desc.rootPageID]; ok {
+			continue
+		}
+		seenRoots[desc.rootPageID] = struct{}{}
+		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, desc.rootPageID, counts); err != nil {
+			_ = snap.Close()
+			return err
+		}
+	}
 	if err := snap.Close(); err != nil {
 		return err
 	}
@@ -395,6 +417,33 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	_ = sysIter.Close()
 
+	namedRoots, err := loadNamedRootDescriptors(snap.idx.pager, snap.state.ValueLogSet, snap.state.SystemRootPageID)
+	if err != nil {
+		_ = snap.Close()
+		return nil, 0, err
+	}
+	seenRoots := map[uint64]struct{}{
+		snap.state.RootPageID:       {},
+		snap.state.SystemRootPageID: {},
+	}
+	for _, desc := range namedRoots {
+		if desc.rootPageID == 0 {
+			continue
+		}
+		if _, ok := seenRoots[desc.rootPageID]; ok {
+			continue
+		}
+		seenRoots[desc.rootPageID] = struct{}{}
+		rootIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), desc.rootPageID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		if err := collectValueLogRefCounts(ctx, db, rootIter, counts); err != nil {
+			_ = rootIter.Close()
+			_ = snap.Close()
+			return nil, 0, err
+		}
+		_ = rootIter.Close()
+	}
+
 	if snap.idx != nil && snap.idx.pager != nil {
 		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts); err != nil {
 			_ = snap.Close()
@@ -403,6 +452,23 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
 			_ = snap.Close()
 			return nil, 0, err
+		}
+		leafSeenRoots := map[uint64]struct{}{
+			snap.state.RootPageID:       {},
+			snap.state.SystemRootPageID: {},
+		}
+		for _, desc := range namedRoots {
+			if desc.rootPageID == 0 {
+				continue
+			}
+			if _, ok := leafSeenRoots[desc.rootPageID]; ok {
+				continue
+			}
+			leafSeenRoots[desc.rootPageID] = struct{}{}
+			if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, desc.rootPageID, counts); err != nil {
+				_ = snap.Close()
+				return nil, 0, err
+			}
 		}
 	}
 

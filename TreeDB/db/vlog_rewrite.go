@@ -93,14 +93,16 @@ type ValueLogRewriteOnlineOptions struct {
 }
 
 type rewriteSwap struct {
-	key    []byte
-	oldPtr page.ValuePtr
-	newPtr page.ValuePtr
+	rootKey []byte
+	key     []byte
+	oldPtr  page.ValuePtr
+	newPtr  page.ValuePtr
 }
 
 type rewriteCandidate struct {
-	key    []byte
-	oldPtr page.ValuePtr
+	rootKey []byte
+	key     []byte
+	oldPtr  page.ValuePtr
 }
 
 // ValueLogRewriteLocalityPolicy controls pointer rewrite ordering.
@@ -329,6 +331,33 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	}
 	_ = sysIter.Close()
 
+	namedRoots, err := loadNamedRootDescriptors(snap.idx.pager, snap.state.ValueLogSet, snap.state.SystemRootPageID)
+	if err != nil {
+		_ = snap.Close()
+		return nil, err
+	}
+	seenRoots := map[uint64]struct{}{
+		snap.state.RootPageID:       {},
+		snap.state.SystemRootPageID: {},
+	}
+	for _, desc := range namedRoots {
+		if desc.rootPageID == 0 {
+			continue
+		}
+		if _, ok := seenRoots[desc.rootPageID]; ok {
+			continue
+		}
+		seenRoots[desc.rootPageID] = struct{}{}
+		rootIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), desc.rootPageID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		if err := db.collectValueLogLiveBytes(ctx, rootIter, liveByID, &seenGroupedRecords); err != nil {
+			_ = rootIter.Close()
+			_ = snap.Close()
+			return nil, err
+		}
+		_ = rootIter.Close()
+	}
+
 	// When outer leaves are stored in the value log, leaf pages are referenced by
 	// LeafRef child IDs (not normal key/value pointers) and must be included in
 	// live-byte estimation; otherwise rewrite planning can select "stale" segments
@@ -341,6 +370,23 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByID, &seenGroupedRecords); err != nil {
 			_ = snap.Close()
 			return nil, err
+		}
+		leafSeenRoots := map[uint64]struct{}{
+			snap.state.RootPageID:       {},
+			snap.state.SystemRootPageID: {},
+		}
+		for _, desc := range namedRoots {
+			if desc.rootPageID == 0 {
+				continue
+			}
+			if _, ok := leafSeenRoots[desc.rootPageID]; ok {
+				continue
+			}
+			leafSeenRoots[desc.rootPageID] = struct{}{}
+			if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, desc.rootPageID, liveByID, &seenGroupedRecords); err != nil {
+				_ = snap.Close()
+				return nil, err
+			}
 		}
 	}
 
@@ -729,6 +775,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		orderRewriteCandidates(candidates, localityPolicy)
 		swaps = swaps[:0]
+		rootSwaps := make(map[string][]rewriteSwap, 4)
 		for _, candidate := range candidates {
 			if ridExhausted {
 				return fmt.Errorf("value-log rid space exhausted")
@@ -746,11 +793,14 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				ridExhausted = true
 			}
 			stats.RecordsCopied++
-			swaps = append(swaps, rewriteSwap{
-				key:    candidate.key,
-				oldPtr: candidate.oldPtr,
-				newPtr: newPtr,
-			})
+			swap := rewriteSwap{
+				rootKey: append([]byte(nil), candidate.rootKey...),
+				key:     candidate.key,
+				oldPtr:  candidate.oldPtr,
+				newPtr:  newPtr,
+			}
+			swaps = append(swaps, swap)
+			rootSwaps[string(swap.rootKey)] = append(rootSwaps[string(swap.rootKey)], swap)
 		}
 		if opts.SyncEachBatch {
 			if err := writer.Sync(); err != nil {
@@ -761,8 +811,18 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 				return err
 			}
 		}
-		if err := db.applyRewriteSwapBatch(swaps, opts.SyncEachBatch); err != nil {
-			return err
+		if userSwaps := rootSwaps[""]; len(userSwaps) > 0 {
+			if err := db.applyRewriteSwapBatch(userSwaps, opts.SyncEachBatch); err != nil {
+				return err
+			}
+		}
+		for rootKey, namedSwaps := range rootSwaps {
+			if rootKey == "" {
+				continue
+			}
+			if err := db.applyNamedRootRewriteSwapBatch([]byte(rootKey), namedSwaps, opts.SyncEachBatch); err != nil {
+				return err
+			}
 		}
 		candidates = candidates[:0]
 		return nil
@@ -775,36 +835,64 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		return stats, fmt.Errorf("missing snapshot state")
 	}
-	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	for ; it.Valid(); it.Next() {
-		if err := ctx.Err(); err != nil {
-			canceledErr = err
-			break
-		}
-		_, oldPtr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
-			continue
-		}
-		if restrictSource {
-			if _, ok := sourceIDs[oldPtr.FileID]; !ok {
+	appendCandidatesFromIterator := func(rootKey []byte, it iteratorWithEntry) error {
+		for ; it.Valid(); it.Next() {
+			if err := ctx.Err(); err != nil {
+				canceledErr = err
+				return nil
+			}
+			_, oldPtr, flags := it.UnsafeEntry()
+			if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
 				continue
 			}
+			if restrictSource {
+				if _, ok := sourceIDs[oldPtr.FileID]; !ok {
+					continue
+				}
+			}
+			key := append([]byte(nil), it.UnsafeKey()...)
+			candidateRootKey := append([]byte(nil), rootKey...)
+			candidates = append(candidates, rewriteCandidate{
+				rootKey: candidateRootKey,
+				key:     key,
+				oldPtr:  oldPtr,
+			})
+			if len(candidates) >= batchSize {
+				if err := flushBatch(); err != nil {
+					return err
+				}
+			}
 		}
-		key := append([]byte(nil), it.UnsafeKey()...)
-		candidates = append(candidates, rewriteCandidate{
-			key:    key,
-			oldPtr: oldPtr,
-		})
-		if len(candidates) >= batchSize {
-			if err := flushBatch(); err != nil {
-				_ = it.Close()
-				_ = snap.Close()
-				return stats, err
+		return it.Error()
+	}
+
+	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	iterErr := appendCandidatesFromIterator(nil, it)
+	_ = it.Close()
+	if iterErr == nil {
+		namedRoots, err := loadNamedRootDescriptors(snap.idx.pager, snap.state.ValueLogSet, snap.state.SystemRootPageID)
+		if err != nil {
+			_ = snap.Close()
+			return stats, err
+		}
+		seenRoots := make(map[string]struct{}, len(namedRoots))
+		for _, desc := range namedRoots {
+			if desc.rootPageID == 0 {
+				continue
+			}
+			if _, ok := seenRoots[string(desc.key)]; ok {
+				continue
+			}
+			seenRoots[string(desc.key)] = struct{}{}
+			rootIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), desc.rootPageID).
+				IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+			iterErr = appendCandidatesFromIterator(desc.key, rootIter)
+			_ = rootIter.Close()
+			if iterErr != nil || canceledErr != nil {
+				break
 			}
 		}
 	}
-	iterErr := it.Error()
-	_ = it.Close()
 	_ = snap.Close()
 	if iterErr != nil {
 		return stats, iterErr
@@ -1431,6 +1519,121 @@ func (db *DB) applyRewriteSwapBatchSerialized(swaps []rewriteSwap, sync bool) er
 	return nil
 }
 
+func (db *DB) applyNamedRootRewriteSwapBatch(rootKey []byte, swaps []rewriteSwap, sync bool) error {
+	if len(swaps) == 0 {
+		return nil
+	}
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	idx := db.idx.Load()
+	if idx == nil {
+		return fmt.Errorf("missing index")
+	}
+
+	var vlogSet *valuelog.Set
+	db.mu.RLock()
+	currentUserRoot := db.meta.UserRootPageID
+	currentSystemRoot := db.meta.SystemRootPageID
+	baseSeq := db.meta.CommitSeq
+	state := db.state.Load()
+	if state != nil {
+		vlogSet = state.ValueLogSet
+	}
+	regID := idx.registry.Register(baseSeq)
+	db.mu.RUnlock()
+	defer idx.registry.Unregister(regID)
+	if vlogSet != nil {
+		db.valueLogManager.Acquire(vlogSet)
+		defer func() { _ = db.valueLogManager.Release(vlogSet) }()
+	}
+
+	sysTree := tree.New(idx.pager, vlogSet, currentSystemRoot)
+	descEntry, err := sysTree.GetEntry(rootKey)
+	if err != nil {
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return nil
+		}
+		return err
+	}
+	if descEntry.Flags&node.FlagTombstone != 0 || len(descEntry.Value) == 0 {
+		return nil
+	}
+	desc, err := decodeNamedRootDescriptor(rootKey, descEntry.Value)
+	if err != nil {
+		return err
+	}
+
+	tr := tree.New(idx.pager, vlogSet, desc.rootPageID)
+	b := batch.Acquire(db.valueLogManager, db.InlineThreshold())
+	defer batch.Release(b)
+	b.Reserve(len(swaps))
+
+	for _, swap := range swaps {
+		entry, err := tr.GetEntry(swap.key)
+		if err != nil {
+			if errors.Is(err, tree.ErrKeyNotFound) {
+				continue
+			}
+			return err
+		}
+		if entry.Flags&node.FlagPointer == 0 || entry.ValuePtr != swap.oldPtr {
+			continue
+		}
+		if err := b.SetPointerView(swap.key, swap.newPtr); err != nil {
+			return err
+		}
+	}
+
+	entries := b.SortedEntries()
+	if len(entries) == 0 {
+		return nil
+	}
+	touchedValueLogSegments := b.TouchedValueLogSegments()
+
+	newRoot, retired, metrics, err := idx.zipper.Apply(desc.rootPageID, b)
+	if err != nil {
+		return err
+	}
+	rootDelta, err := db.buildValueLogRefDelta(idx.pager, desc.rootPageID, baseSeq, entries)
+	if err != nil {
+		return err
+	}
+
+	systemBatch := batch.Acquire(db.valueLogManager, db.InlineThreshold())
+	defer batch.Release(systemBatch)
+	var systemDelta *valueLogRefDelta
+	newSystemRoot := currentSystemRoot
+	systemRetired := []uint64(nil)
+	systemMetrics := adaptive.Metrics{}
+
+	if newRoot != desc.rootPageID {
+		desc.rootPageID = newRoot
+		encoded, err := desc.encode()
+		if err != nil {
+			return err
+		}
+		if err := systemBatch.Set(rootKey, encoded); err != nil {
+			return err
+		}
+		systemDelta, err = db.buildValueLogRefDelta(idx.pager, currentSystemRoot, baseSeq, systemBatch.SortedEntries())
+		if err != nil {
+			return err
+		}
+		newSystemRoot, systemRetired, systemMetrics, err = idx.zipper.Apply(currentSystemRoot, systemBatch)
+		if err != nil {
+			return err
+		}
+	}
+
+	retired = append(retired, systemRetired...)
+	metrics = mergeAdaptiveMetrics(metrics, systemMetrics)
+	if err := db.finalizeCommit(currentUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, mergeValueLogRefDeltas(rootDelta, systemDelta)); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and
 // swaps index.db to reference the new log. This is an offline operation
 // (requires exclusive lock and a clean commitlog).
@@ -1552,24 +1755,25 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 
 	alloc := &pagerAllocator{p: newPager}
 	ptrMap := make(map[recordKey]recordLoc)
+	namedRoots, err := loadNamedRootDescriptors(d.Pager(), state.ValueLogSet, state.SystemRootPageID)
+	if err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return stats, err
+	}
 
-	buildTree := func(root uint64) (uint64, error) {
+	buildTree := func(root uint64, buildOpts bulk.BuildOptions, overrides map[string][]byte) (uint64, error) {
 		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		inner := iteratorWithEntry(iter)
+		if len(overrides) > 0 {
+			inner = &overrideIterator{inner: iter, overrides: overrides}
+		}
 		rewriter := &rewriteIterator{
-			inner:  iter,
+			inner:  inner,
 			ptrMap: ptrMap,
 			vlogs:  state.ValueLogSet,
 			writer: writer,
-		}
-		buildOpts := bulk.BuildOptions{
-			LeafPrefixCompression: opts.LeafPrefixCompression,
-			LeafColumnar:          opts.IndexColumnarLeaves,
-			PackedValuePtr:        opts.IndexPackedValuePtr,
-			InternalBaseDelta:     opts.IndexInternalBaseDelta,
-		}
-		if opts.IndexOuterLeavesInValueLog {
-			buildOpts.LeafPageLog = writer
 		}
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, buildOpts)
 		_ = rewriter.Close()
@@ -1580,14 +1784,54 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return newRoot, nil
 	}
 
-	sysRoot, err := buildTree(state.SystemRootPageID)
+	userRoot, err := buildTree(state.RootPageID, bulk.BuildOptions{
+		LeafPrefixCompression: opts.LeafPrefixCompression,
+		LeafColumnar:          opts.IndexColumnarLeaves,
+		PackedValuePtr:        opts.IndexPackedValuePtr,
+		InternalBaseDelta:     opts.IndexInternalBaseDelta,
+		LeafPageLog: func() bulk.LeafPageLog {
+			if opts.IndexOuterLeavesInValueLog {
+				return writer
+			}
+			return nil
+		}(),
+	}, nil)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
 		return stats, err
 	}
 
-	userRoot, err := buildTree(state.RootPageID)
+	systemOverrides := make(map[string][]byte, len(namedRoots))
+	for _, desc := range namedRoots {
+		newRootID, err := buildTree(desc.rootPageID, namedRootBuildOptions(desc.format, writer, opts.IndexColumnarLeaves, opts.IndexPackedValuePtr, opts.IndexInternalBaseDelta), nil)
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return stats, err
+		}
+		desc.rootPageID = newRootID
+		encoded, err := desc.encode()
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return stats, err
+		}
+		systemOverrides[string(desc.key)] = encoded
+	}
+
+	sysRoot, err := buildTree(state.SystemRootPageID, bulk.BuildOptions{
+		LeafPrefixCompression: opts.LeafPrefixCompression,
+		LeafColumnar:          opts.IndexColumnarLeaves,
+		PackedValuePtr:        opts.IndexPackedValuePtr,
+		InternalBaseDelta:     opts.IndexInternalBaseDelta,
+		LeafPageLog: func() bulk.LeafPageLog {
+			if opts.IndexOuterLeavesInValueLog {
+				return writer
+			}
+			return nil
+		}(),
+	}, systemOverrides)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()

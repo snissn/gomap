@@ -83,8 +83,10 @@ Offline rewrite rewrites live pointer records into fresh segments and swaps inde
 ### 6.2 Procedure
 
 1. Open DB read-only under exclusive lock.
-2. Build new value-log segments by iterating current trees and copying referenced records.
-3. Rebuild index file (`index.db.new`) with rewritten pointers.
+2. Build new value-log segments by iterating the current user root, system
+   root, and all named collection roots, copying referenced records once.
+3. Rebuild `index.db.new`, updating named-root descriptors in the system root
+   when rebuilt collection/index roots receive new root page ids.
 4. Write ready marker and fsync.
 5. Atomically swap `index.db.new` into `index.db`.
 6. Remove obsolete value-log segments.

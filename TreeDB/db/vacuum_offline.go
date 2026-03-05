@@ -98,15 +98,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 
 	alloc := &pagerAllocator{p: newPager}
 
-	sysIter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), state.SystemRootPageID).
-		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	sysRoot, err := bulk.BuildWithOptions(sysIter, alloc, newPager, bulk.BuildOptions{
-		LeafPrefixCompression: opts.LeafPrefixCompression,
-		LeafColumnar:          opts.IndexColumnarLeaves,
-		PackedValuePtr:        opts.IndexPackedValuePtr,
-		InternalBaseDelta:     opts.IndexInternalBaseDelta,
-	})
-	_ = sysIter.Close()
+	namedRoots, err := loadNamedRootDescriptors(d.Pager(), state.ValueLogSet, state.SystemRootPageID)
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
@@ -122,6 +114,46 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		InternalBaseDelta:     opts.IndexInternalBaseDelta,
 	})
 	_ = userIter.Close()
+	if err != nil {
+		_ = newPager.Close()
+		_ = d.Close()
+		return err
+	}
+
+	systemOverrides := make(map[string][]byte, len(namedRoots))
+	for _, desc := range namedRoots {
+		rootIter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), desc.rootPageID).
+			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		newRootID, err := bulk.BuildWithOptions(rootIter, alloc, newPager, namedRootBuildOptions(desc.format, nil, opts.IndexColumnarLeaves, opts.IndexPackedValuePtr, opts.IndexInternalBaseDelta))
+		_ = rootIter.Close()
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
+		desc.rootPageID = newRootID
+		encoded, err := desc.encode()
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
+		systemOverrides[string(desc.key)] = encoded
+	}
+
+	sysIter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), state.SystemRootPageID).
+		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	var sysSource iteratorWithEntry = sysIter
+	if len(systemOverrides) > 0 {
+		sysSource = &overrideIterator{inner: sysIter, overrides: systemOverrides}
+	}
+	sysRoot, err := bulk.BuildWithOptions(sysSource, alloc, newPager, bulk.BuildOptions{
+		LeafPrefixCompression: opts.LeafPrefixCompression,
+		LeafColumnar:          opts.IndexColumnarLeaves,
+		PackedValuePtr:        opts.IndexPackedValuePtr,
+		InternalBaseDelta:     opts.IndexInternalBaseDelta,
+	})
+	_ = sysSource.Close()
 	if err != nil {
 		_ = newPager.Close()
 		_ = d.Close()
