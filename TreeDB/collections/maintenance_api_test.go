@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -104,7 +105,16 @@ func TestConsistencyDiagnosticCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("document key: %v", err)
 	}
-	if err := d.Delete(docKey); err != nil {
+	rootDesc := mustLoadPrimaryRootDescriptor(t, d, meta.PrimaryRoot)
+	rootKey, err := SystemCollectionRootKey(meta.PrimaryRoot)
+	if err != nil {
+		t.Fatalf("root key: %v", err)
+	}
+	if _, err := d.MutateRoot(rootDesc.RootPageID, false, func(root batch.Interface) error {
+		return root.Delete(docKey)
+	}, func(sys batch.Interface, newRootID uint64) error {
+		return writeRootDescriptorUpdate(sys, rootKey, &rootDesc, newRootID)
+	}); err != nil {
 		t.Fatalf("corrupt primary delete: %v", err)
 	}
 

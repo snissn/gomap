@@ -140,6 +140,8 @@ Coverage:
 Invariant:
 - Collection metadata round-trips cleanly.
 - Caller-provided and auto-generated ids remain stable across reopen.
+- Primary document writes live in dedicated named roots keyed by `_id`, not in
+  the legacy shared `col:d:` keyspace.
 - Primary document writes and derived secondary-index entries stay mutually
   coherent for normal collection mutations.
 - Collection diagnostics report consistent counts on healthy state and detect
@@ -161,6 +163,7 @@ Coverage:
 - `TreeDB/collections/edge_case_test.go`
 - `TreeDB/collections/consistency_fuzz_test.go`
 - `TreeDB/db/named_root_catalog_test.go`
+- `TreeDB/db/named_root_api_test.go`
 - `TreeDB/db/system_root_catalog_internals_test.go`
 
 Benchmark coverage:

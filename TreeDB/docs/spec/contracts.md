@@ -121,8 +121,9 @@ When opened read-only:
 ## 9. Collection Contracts (Experimental)
 
 Collections are a higher-level document API layered on top of TreeDB keyspaces.
-The current implementation stores collection schema in the system root and stores
-document + secondary-index entries in the main user root.
+The current implementation stores collection schema in the system root, stores
+primary documents in dedicated named roots, and stores secondary-index entries
+in the main user root until the dedicated secondary-root phase lands.
 
 ### 9.1 Collection lifecycle and metadata
 
@@ -136,8 +137,7 @@ document + secondary-index entries in the main user root.
 - `OpenCollection(name)` rejects legacy version-1 shared-keyspace metadata.
 - `ListCollections()` returns collection metadata sorted by collection name.
 - `DropCollection(name)` removes collection metadata, auto-id sequence state,
-  root descriptors, primary document entries, and secondary-index entries for
-  that collection.
+  root descriptors, and secondary-index entries for that collection.
 
 ### 9.2 ID modes and document identity
 
@@ -152,6 +152,8 @@ document + secondary-index entries in the main user root.
 - Default `CollectionOptions.StorageMode` is
   `collections.CollectionStorageModeOuterLeafInValueLog`.
 - `Insert(id, document)` behaves as an upsert keyed by document id.
+- New-version collections store primary documents in a dedicated TreeDB root
+  keyed directly by `_id` bytes, not under the legacy shared `col:d:` prefix.
 - `Get(id)` returns the raw stored document bytes or `(nil, nil)` on miss.
 - `Delete(id)` removes the primary document and any derived secondary-index
   entries for that document.
@@ -168,16 +170,16 @@ document + secondary-index entries in the main user root.
   lexicographic order.
 - Unique indexes reject writes that would make two different document ids share
   the same encoded indexed value.
-- Indexed writes update the primary document key and all derived index keys in a
-  single user-root batch, so partial visibility is not allowed for normal
-  document mutations.
+- Indexed writes update the dedicated primary root, the shared user-root
+  secondary-index keyspace, and the system-root primary descriptor in one commit
+  boundary, so partial visibility is not allowed for normal document mutations.
 
 ### 9.5 Transitional root-layout note
 
-- As of the current phase, collection metadata declares dedicated primary and
-  secondary root descriptors, but normal collection CRUD/index reads still use
-  the legacy shared user-root keyspaces (`col:d:` / `col:i:`).
-- Subsequent phases are responsible for moving the live data path to those
+- As of the current phase, primary collection CRUD uses dedicated named roots
+  and secondary indexes still live in the shared user-root keyspace (`col:i:`).
+- Subsequent phases are responsible for moving secondary-index reads/writes to
+  their own named roots and extending maintenance/GC to scan those roots.
   dedicated roots and proving cross-root atomic publish.
 
 ### 9.6 Diagnostics and maintenance visibility
