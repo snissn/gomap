@@ -116,10 +116,14 @@ func (db *DB) writeViaCommitCombiner(key, value []byte, del, sync bool) (bool, e
 func (db *DB) writeSingleKV(key, value []byte, del, sync bool) error {
 	b := db.NewBatch().(*Batch)
 	var err error
+	usedPointer := false
 	if del {
 		err = b.batch.Delete(key)
 	} else {
-		err = b.batch.Set(key, value)
+		usedPointer, err = db.batchSetWithPointerFallback(b, key, value, false)
+	}
+	if err == nil && usedPointer {
+		err = db.flushInlineAppender(sync)
 	}
 	if err == nil {
 		if sync {
@@ -139,6 +143,7 @@ func (db *DB) applyCombinedBatch(batch []*commitCombineReq) error {
 		return nil
 	}
 	anySync := false
+	usedPointer := false
 	b := db.NewBatchWithSize(len(batch)).(*Batch)
 	for _, req := range batch {
 		if req == nil {
@@ -149,7 +154,12 @@ func (db *DB) applyCombinedBatch(batch []*commitCombineReq) error {
 			err = b.DeleteView(req.key)
 		} else {
 			// request key/value slices are combiner-owned copies, safe for SetView.
-			err = b.SetView(req.key, req.value)
+			pointer, setErr := db.batchSetWithPointerFallback(b, req.key, req.value, true)
+			if setErr != nil {
+				err = setErr
+			} else if pointer {
+				usedPointer = true
+			}
 		}
 		if err != nil {
 			_ = b.Close()
@@ -160,6 +170,13 @@ func (db *DB) applyCombinedBatch(batch []*commitCombineReq) error {
 		}
 	}
 	var err error
+	if usedPointer {
+		err = db.flushInlineAppender(anySync)
+	}
+	if err != nil {
+		_ = b.Close()
+		return err
+	}
 	if anySync {
 		err = b.WriteSync()
 	} else {
