@@ -2,9 +2,10 @@ package collections
 
 import "testing"
 
-func TestCollectionMetaV1_RoundTripStable(t *testing.T) {
+func TestCollectionMetaV2_RoundTripStable(t *testing.T) {
 	meta := &CollectionMeta{
-		Name: "users",
+		Name:        "users",
+		PrimaryRoot: "collections:dXNlcnM=:primary",
 		Options: CollectionOptions{
 			IDMode:                  idModeCallerProvided,
 			StorageMode:             CollectionStorageModeOuterLeafInValueLog,
@@ -12,9 +13,9 @@ func TestCollectionMetaV1_RoundTripStable(t *testing.T) {
 			AllowArrayValuesInIndex: true,
 		},
 		Indexes: []IndexDefinition{
-			{Name: "by_name", Field: "name", Unique: true},
-			{Name: "by_email", Field: "contact.email"},
-			{Name: "by_age", Field: "age", MultiKey: true},
+			{Name: "by_name", Field: "name", Unique: true, RootName: "collections:dXNlcnM=:index:YnlfbmFtZQ=="},
+			{Name: "by_email", Field: "contact.email", RootName: "collections:dXNlcnM=:index:YnlfZW1haWw="},
+			{Name: "by_age", Field: "age", MultiKey: true, RootName: "collections:dXNlcnM=:index:YnlfYWdl"},
 		},
 	}
 	b, err := meta.Encode()
@@ -36,6 +37,9 @@ func TestCollectionMetaV1_RoundTripStable(t *testing.T) {
 
 	if decoded.Name != "users" {
 		t.Fatalf("name mismatch: %q", decoded.Name)
+	}
+	if decoded.PrimaryRoot != meta.PrimaryRoot {
+		t.Fatalf("primary root mismatch: got=%q want=%q", decoded.PrimaryRoot, meta.PrimaryRoot)
 	}
 	if len(decoded.Indexes) != 3 {
 		t.Fatalf("expected 3 indexes, got %d", len(decoded.Indexes))
@@ -64,11 +68,31 @@ func TestCollectionMeta_DefaultsAndFutureCompat(t *testing.T) {
 	if !meta.Options.RejectMissingFields {
 		t.Fatalf("expected default RejectMissingFields=true")
 	}
+	if meta.PrimaryRoot == "" {
+		t.Fatalf("expected default primary root assignment")
+	}
 
 	b[0] = byte(collectionMetaVersion + 1)
 	var future CollectionMeta
 	if err := future.Decode(b); err == nil {
 		t.Fatalf("expected future version rejection")
+	}
+}
+
+func TestCollectionMeta_LegacyV1Rejected(t *testing.T) {
+	meta := &CollectionMeta{
+		Version: 1,
+		Name:    "users",
+		Options: DefaultCollectionOptions(),
+	}
+	raw, err := meta.encodeVersion1ForTest()
+	if err != nil {
+		t.Fatalf("encode v1: %v", err)
+	}
+
+	var decoded CollectionMeta
+	if err := decoded.Decode(raw); err == nil {
+		t.Fatalf("expected legacy v1 decode rejection")
 	}
 }
 

@@ -34,14 +34,22 @@ func TestSystemKeyspacePrefixIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("index key: %v", err)
 	}
+	rootName, err := CollectionPrimaryRootName("users")
+	if err != nil {
+		t.Fatalf("primary root name: %v", err)
+	}
+	rootKey, err := SystemCollectionRootKey(rootName)
+	if err != nil {
+		t.Fatalf("root key: %v", err)
+	}
 	docPrefix, err := SystemCollectionPrefix("users")
 	if err != nil {
 		t.Fatalf("doc prefix: %v", err)
 	}
-	if string(metaKey) == string(idxKey) || string(metaKey) == string(docPrefix) || string(idxKey) == string(docPrefix) {
+	if string(metaKey) == string(idxKey) || string(metaKey) == string(docPrefix) || string(idxKey) == string(docPrefix) || string(rootKey) == string(metaKey) || string(rootKey) == string(idxKey) || string(rootKey) == string(docPrefix) {
 		t.Fatalf("system key collision detected")
 	}
-	if len(metaKey) == 0 || len(idxKey) == 0 || len(docPrefix) == 0 {
+	if len(metaKey) == 0 || len(idxKey) == 0 || len(rootKey) == 0 || len(docPrefix) == 0 {
 		t.Fatalf("empty system key")
 	}
 }
@@ -88,6 +96,26 @@ func BenchmarkCollectionMeta_EncodeLarge(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := meta.Encode(); err != nil {
+			b.Fatalf("encode: %v", err)
+		}
+	}
+}
+
+func BenchmarkCollectionRootDescriptorEncode(b *testing.B) {
+	desc := &CollectionRootDescriptor{
+		Name:       "collections:dXNlcnM=:primary",
+		Collection: "users",
+		Kind:       CollectionRootKindPrimary,
+		Format: CollectionRootFormat{
+			OuterLeavesInValueLog: true,
+			LeafPrefixCompression: true,
+			AllowValues:           true,
+		},
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := desc.Encode(); err != nil {
 			b.Fatalf("encode: %v", err)
 		}
 	}
