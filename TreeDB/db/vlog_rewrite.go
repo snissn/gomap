@@ -33,6 +33,28 @@ type ValueLogRewriteStats struct {
 	RecordsCopied  int
 }
 
+// ValueLogRewritePlan summarizes which segments a sparse online rewrite would
+// target given the current value-log set and selection knobs.
+//
+// It is intended for cached-mode maintenance schedulers to decide whether a
+// rewrite run is worth performing without forcing the rewrite implementation
+// to do expensive live-byte estimation work twice.
+type ValueLogRewritePlan struct {
+	// SourceFileIDs are the selected value-log segment IDs. The slice is sorted.
+	SourceFileIDs []uint32
+
+	SegmentsTotal    int
+	SegmentsSelected int
+
+	BytesTotal int64
+	BytesLive  int64
+	BytesStale int64
+
+	SelectedBytesTotal int64
+	SelectedBytesLive  int64
+	SelectedBytesStale int64
+}
+
 // ValueLogRewriteOnlineOptions controls online rewrite behavior.
 type ValueLogRewriteOnlineOptions struct {
 	// BatchSize bounds pointer swaps per commit.
@@ -167,6 +189,106 @@ func normalizeStaleRatio(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+// ValueLogRewritePlan returns the segments that would be selected for sparse
+// online rewrite given opts. It performs the same live-byte estimation work as
+// ValueLogRewriteOnline sparse selection, but does not modify the DB.
+func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewritePlan, error) {
+	var plan ValueLogRewritePlan
+	if db == nil {
+		return plan, fmt.Errorf("missing db")
+	}
+	if db.valueLogManager == nil {
+		return plan, fmt.Errorf("value log manager unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	set := db.valueLogManager.CurrentSet()
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		return plan, nil
+	}
+
+	plan.SegmentsTotal = len(set.Files)
+	for _, f := range set.Files {
+		plan.BytesTotal += fileSize(f)
+	}
+
+	active := currentValueLogIDs(set)
+
+	var liveByID map[uint32]int64
+	var err error
+	// SourceFileIDs selection does not require live-byte estimation; all other
+	// selection modes do.
+	if len(opts.SourceFileIDs) == 0 {
+		liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
+		if err != nil {
+			_ = db.valueLogManager.Release(set)
+			return plan, err
+		}
+	}
+
+	sourceIDs := selectRewriteSourceSegments(opts, set.Files, active, liveByID)
+
+	// Populate live/stale totals when we have a live-byte estimate.
+	if liveByID != nil {
+		for id, f := range set.Files {
+			size := fileSize(f)
+			if size <= 0 {
+				continue
+			}
+			live := liveByID[id]
+			if live < 0 {
+				live = 0
+			}
+			if live > size {
+				live = size
+			}
+			plan.BytesLive += live
+			plan.BytesStale += size - live
+		}
+	}
+
+	if len(sourceIDs) > 0 {
+		plan.SourceFileIDs = make([]uint32, 0, len(sourceIDs))
+		for id := range sourceIDs {
+			plan.SourceFileIDs = append(plan.SourceFileIDs, id)
+		}
+		sort.Slice(plan.SourceFileIDs, func(i, j int) bool { return plan.SourceFileIDs[i] < plan.SourceFileIDs[j] })
+		plan.SegmentsSelected = len(plan.SourceFileIDs)
+
+		for _, id := range plan.SourceFileIDs {
+			f := set.Files[id]
+			if f == nil {
+				continue
+			}
+			size := fileSize(f)
+			if size <= 0 {
+				continue
+			}
+			plan.SelectedBytesTotal += size
+			if liveByID == nil {
+				continue
+			}
+			live := liveByID[id]
+			if live < 0 {
+				live = 0
+			}
+			if live > size {
+				live = size
+			}
+			plan.SelectedBytesLive += live
+			plan.SelectedBytesStale += size - live
+		}
+	}
+
+	_ = db.valueLogManager.Release(set)
+	return plan, nil
 }
 
 func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint32]int64, error) {

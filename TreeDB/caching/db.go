@@ -2657,6 +2657,10 @@ type backendValueLogRewriter interface {
 	ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error)
 }
 
+type backendValueLogRewritePlanner interface {
+	ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error)
+}
+
 type backendValueLogGCer interface {
 	ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
 }
@@ -3143,35 +3147,36 @@ type DB struct {
 	valueLogMaxSegmentBytes   int64
 	journalCompression        bool
 
-	disableJournal                     bool
-	relaxedSync                        bool
-	notifyError                        func(error)
-	debugFlushPointers                 bool
-	debugFlushTiming                   bool
-	debugPtrEligible                   atomic.Int64
-	debugPtrUsed                       atomic.Int64
-	debugPtrNoPtr                      atomic.Int64
-	debugPtrDenied                     atomic.Int64
-	debugPtrDisabled                   atomic.Int64
-	vlogGenerationRemapSuccesses       atomic.Uint64
-	vlogGenerationRemapFailures        atomic.Uint64
-	vlogGenerationRewriteBytesIn       atomic.Uint64
-	vlogGenerationRewriteBytesOut      atomic.Uint64
-	vlogGenerationRewriteRuns          atomic.Uint64
-	vlogGenerationGCSegmentsDeleted    atomic.Uint64
-	vlogGenerationGCBytesDeleted       atomic.Uint64
-	vlogGenerationGCRuns               atomic.Uint64
-	vlogGenerationVacuumRuns           atomic.Uint64
-	vlogGenerationVacuumFailures       atomic.Uint64
-	vlogGenerationLastVacuumUnixNano   atomic.Int64
-	vlogGenerationLastRewriteUnixNano  atomic.Int64
-	vlogGenerationLastGCUnixNano       atomic.Int64
-	vlogGenerationChurnBytes           atomic.Uint64
-	vlogGenerationSchedulerState       atomic.Uint32
-	vlogGenerationLastReason           atomic.Uint32
-	vlogGenerationLastChurnBps         atomic.Int64
-	vlogGenerationLastChurnSampleBytes atomic.Uint64
-	vlogGenerationLastChurnSampleNS    atomic.Int64
+	disableJournal                        bool
+	relaxedSync                           bool
+	notifyError                           func(error)
+	debugFlushPointers                    bool
+	debugFlushTiming                      bool
+	debugPtrEligible                      atomic.Int64
+	debugPtrUsed                          atomic.Int64
+	debugPtrNoPtr                         atomic.Int64
+	debugPtrDenied                        atomic.Int64
+	debugPtrDisabled                      atomic.Int64
+	vlogGenerationRemapSuccesses          atomic.Uint64
+	vlogGenerationRemapFailures           atomic.Uint64
+	vlogGenerationRewriteBytesIn          atomic.Uint64
+	vlogGenerationRewriteBytesOut         atomic.Uint64
+	vlogGenerationRewriteRuns             atomic.Uint64
+	vlogGenerationGCSegmentsDeleted       atomic.Uint64
+	vlogGenerationGCBytesDeleted          atomic.Uint64
+	vlogGenerationGCRuns                  atomic.Uint64
+	vlogGenerationVacuumRuns              atomic.Uint64
+	vlogGenerationVacuumFailures          atomic.Uint64
+	vlogGenerationLastVacuumUnixNano      atomic.Int64
+	vlogGenerationLastRewritePlanUnixNano atomic.Int64
+	vlogGenerationLastRewriteUnixNano     atomic.Int64
+	vlogGenerationLastGCUnixNano          atomic.Int64
+	vlogGenerationChurnBytes              atomic.Uint64
+	vlogGenerationSchedulerState          atomic.Uint32
+	vlogGenerationLastReason              atomic.Uint32
+	vlogGenerationLastChurnBps            atomic.Int64
+	vlogGenerationLastChurnSampleBytes    atomic.Uint64
+	vlogGenerationLastChurnSampleNS       atomic.Int64
 	// Rewrite budget token bucket (bytes) for online maintenance. This lets us
 	// interpret ValueLogRewriteBudgetBytesPerSec as a true per-second bandwidth
 	// budget while still running maintenance at coarse intervals.
@@ -8980,6 +8985,63 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	churnBps := db.vlogGenerationEstimateChurnBps()
 
 	shouldRewrite, reason := db.shouldRunVlogGenerationRewrite(totalBytes, staleRatioPPM, churnBps)
+	var rewritePlan backenddb.ValueLogRewritePlan
+	haveRewritePlan := false
+	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
+	// Stale-ratio trigger: use a sparse rewrite plan (live-byte estimate) to
+	// detect when any segments are meaningfully stale. This avoids relying on
+	// reclaimable-WAL heuristics (which can be 0 in split-value-log mode).
+	if !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
+		lastPlan := db.vlogGenerationLastRewritePlanUnixNano.Load()
+		if lastPlan > 0 {
+			lastAt := time.Unix(0, lastPlan)
+			if now.Sub(lastAt) < vlogGenerationRewriteMinInterval {
+				goto planned
+			}
+		}
+		// Avoid planning work before we have at least one full hot segment worth
+		// of data; early on this is almost always pure inserts with no stale
+		// bytes, and planning would just scan the tree.
+		if db.valueLogGenerationHotTarget > 0 && totalBytes < db.valueLogGenerationHotTarget {
+			goto planned
+		}
+		maxSourceBytes := db.vlogGenerationRewriteBudgetTokensBytes.Load()
+		if maxSourceBytes < 0 {
+			maxSourceBytes = 0
+		}
+		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded". Use a
+		// small floor so planning never selects an unbounded set when the token
+		// bucket is empty (e.g. first tick).
+		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
+			maxSourceBytes = db.valueLogRewriteBudgetBytes
+		}
+		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
+			maxSourceBytes = totalBytes
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
+		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
+			MaxSourceSegments:    0,
+			MaxSourceBytes:       maxSourceBytes,
+			MinSegmentStaleRatio: minStaleRatio,
+			MinSegmentStaleBytes: 1,
+		})
+		cancel()
+		db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+		if err != nil {
+			// Best-effort planning: keep legacy triggers (total-bytes/churn) alive,
+			// but surface the failure for observability.
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
+			}
+		} else if len(plan.SourceFileIDs) > 0 {
+			shouldRewrite = true
+			reason = vlogGenerationReasonStaleRatio
+			rewritePlan = plan
+			haveRewritePlan = true
+		}
+	}
+planned:
 	if shouldRewrite && envBool(envDisableVlogGenerationRewrite) {
 		shouldRewrite = false
 	}
@@ -9010,33 +9072,40 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		}
 		now = time.Now()
 		db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
-		maxSourceBytes := db.vlogGenerationRewriteBudgetTokensBytes.Load()
-		if maxSourceBytes < 0 {
-			maxSourceBytes = 0
-		}
-		// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". Use a
-		// small floor so we never accidentally run an unbounded rewrite when the
-		// token bucket is empty (e.g. first tick).
-		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-			maxSourceBytes = db.valueLogRewriteBudgetBytes
-		}
-		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
-			maxSourceBytes = totalBytes
+		maxSourceBytes := int64(0)
+		if !haveRewritePlan {
+			maxSourceBytes = db.vlogGenerationRewriteBudgetTokensBytes.Load()
+			if maxSourceBytes < 0 {
+				maxSourceBytes = 0
+			}
+			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". Use a
+			// small floor so we never accidentally run an unbounded rewrite when the
+			// token bucket is empty (e.g. first tick).
+			if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
+				maxSourceBytes = db.valueLogRewriteBudgetBytes
+			}
+			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
+				maxSourceBytes = totalBytes
+			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
-			BatchSize:         db.valueLogRewriteBatchSize(),
-			SyncEachBatch:     false,
-			MaxSegmentBytes:   db.valueLogGenerationWarmTarget,
-			MaxSourceSegments: 0,
-			MaxSourceBytes:    maxSourceBytes,
-			ProtectedPaths:    db.valueLogInUsePaths(),
-			MinSegmentStaleRatio: func() float64 {
+			BatchSize:       db.valueLogRewriteBatchSize(),
+			SyncEachBatch:   false,
+			MaxSegmentBytes: db.valueLogGenerationWarmTarget,
+			ProtectedPaths:  db.valueLogInUsePaths(),
+		}
+		if haveRewritePlan {
+			rewriteOpts.SourceFileIDs = append([]uint32(nil), rewritePlan.SourceFileIDs...)
+		} else {
+			rewriteOpts.MaxSourceSegments = 0
+			rewriteOpts.MaxSourceBytes = maxSourceBytes
+			rewriteOpts.MinSegmentStaleRatio = func() float64 {
 				if db.valueLogRewriteTriggerRatioPPM <= 0 {
 					return 0
 				}
 				return float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
-			}(),
+			}()
 		}
 		stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
 		cancel()
@@ -9054,10 +9123,18 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			}
 			if stats.BytesAfter > 0 {
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
-				db.vlogGenerationConsumeRewriteBudgetBytes(stats.BytesAfter)
 			}
 			if stats.RecordsCopied > 0 {
 				db.vlogGenerationRemapSuccesses.Add(uint64(stats.RecordsCopied))
+				consumed := int64(0)
+				if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
+					consumed = rewritePlan.SelectedBytesLive
+				} else if maxSourceBytes > 0 {
+					consumed = maxSourceBytes
+				}
+				if consumed > 0 {
+					db.vlogGenerationConsumeRewriteBudgetBytes(consumed)
+				}
 			}
 			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
 		}
@@ -13455,6 +13532,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewritePlanUnixNano.Load())
 	stats["treedb.cache.vlog_generation.rewrite.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewriteUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())

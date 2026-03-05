@@ -710,6 +710,62 @@ func TestValueLogRewriteOnline_SparseSelection_NoSelectedSources_IsNoOp(t *testi
 	}
 }
 
+func TestValueLogRewritePlan_SparseSelection_SelectsHighStaleSegment(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	// Segment 1: two records (one referenced, one stale).
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 230_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("x"), 256)
+	})
+	// Segment 2: one referenced record.
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 230_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("y"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	plan, err := db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    1,
+		MaxSourceBytes:       4 << 20,
+		MinSegmentStaleRatio: 0.30,
+		MinSegmentStaleBytes: 1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewritePlan: %v", err)
+	}
+	if len(plan.SourceFileIDs) != 1 {
+		t.Fatalf("expected one selected source segment, got %d (%v)", len(plan.SourceFileIDs), plan.SourceFileIDs)
+	}
+	if plan.SourceFileIDs[0] != ptrs1[0].FileID {
+		t.Fatalf("expected stale segment %d to be selected, got %d", ptrs1[0].FileID, plan.SourceFileIDs[0])
+	}
+	if plan.SelectedBytesStale <= 0 {
+		t.Fatalf("expected non-zero stale bytes for selected segment, got %d", plan.SelectedBytesStale)
+	}
+	if plan.SelectedBytesLive <= 0 {
+		t.Fatalf("expected non-zero live bytes for selected segment, got %d", plan.SelectedBytesLive)
+	}
+	if plan.BytesTotal <= 0 {
+		t.Fatalf("expected non-zero total bytes, got %d", plan.BytesTotal)
+	}
+}
+
 func readProjectedPointerByKey(t *testing.T, db *DB, key []byte) (page.ValuePtr, byte) {
 	t.Helper()
 	it, err := db.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
