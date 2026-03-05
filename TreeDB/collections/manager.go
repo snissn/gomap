@@ -47,6 +47,7 @@ type Collection struct {
 
 type collectionDB interface {
 	Get(key []byte) ([]byte, error)
+	GetAtRoot(rootID uint64, key []byte) ([]byte, error)
 	Set(key, value []byte) error
 	Delete(key []byte) error
 	GetSystem(key []byte) ([]byte, error)
@@ -54,7 +55,10 @@ type collectionDB interface {
 	NewBatch() batch.Interface
 	NewSystemBatch() batch.Interface
 	Iterator(start, end []byte) (systemIterator, error)
+	IteratorAtRoot(rootID uint64, start, end []byte) (systemIterator, error)
 	SystemIterator(start, end []byte) (systemIterator, error)
+	MutateRoot(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
+	MutateRootAndUser(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
 }
 
 type systemIterator = iterator.UnsafeIterator
@@ -486,7 +490,11 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c.db == nil {
 		return nil, errCollectionManagerNil
 	}
-	existing, err := c.db.Get(key)
+	rootDesc, rootKey, err := c.primaryRootDescriptor()
+	if err != nil {
+		return nil, err
+	}
+	existing, err := c.db.GetAtRoot(rootDesc.RootPageID, key)
 	if err != nil {
 		return nil, err
 	}
@@ -494,31 +502,33 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	writeSystem := func(sys batch.Interface, newRootID uint64) error {
+		return writeRootDescriptorUpdate(sys, rootKey, rootDesc, newRootID)
+	}
+	writePrimary := func(root batch.Interface) error {
+		return setDocumentOnBatch(root, key, document)
+	}
 	if len(removals) == 0 && len(additions) == 0 {
-		if err := c.db.Set(key, document); err != nil {
+		if _, err := c.db.MutateRoot(rootDesc.RootPageID, false, writePrimary, writeSystem); err != nil {
 			return nil, err
 		}
 		return persistedID, nil
 	}
-	b := c.db.NewBatch()
-	if b == nil {
-		return nil, fmt.Errorf("collections: failed to create batch")
-	}
-	defer func() { _ = b.Close() }()
-	if err := setDocumentOnBatch(b, key, document); err != nil {
-		return nil, err
-	}
-	for _, idxKey := range removals {
-		if err := b.Delete(idxKey); err != nil {
-			return nil, err
+	writeUser := func(user batch.Interface) error {
+		for _, idxKey := range removals {
+			if err := user.Delete(idxKey); err != nil {
+				return err
+			}
 		}
-	}
-	for _, idxKey := range additions {
-		if err := b.Set(idxKey, nil); err != nil {
-			return nil, err
+		for _, idxKey := range additions {
+			if err := user.Set(idxKey, nil); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
-	if err := b.Write(); err != nil {
+	if _, err := c.db.MutateRootAndUser(rootDesc.RootPageID, false, writePrimary, writeUser, writeSystem); err != nil {
 		return nil, err
 	}
 	return persistedID, nil
@@ -538,7 +548,11 @@ func (c *Collection) Get(documentID []byte) ([]byte, error) {
 	if c.db == nil {
 		return nil, errCollectionManagerNil
 	}
-	return c.db.Get(key)
+	rootDesc, _, err := c.primaryRootDescriptor()
+	if err != nil {
+		return nil, err
+	}
+	return c.db.GetAtRoot(rootDesc.RootPageID, key)
 }
 
 func (c *Collection) Delete(documentID []byte) error {
@@ -558,34 +572,41 @@ func (c *Collection) Delete(documentID []byte) error {
 	if c.db == nil {
 		return errCollectionManagerNil
 	}
-	existing, err := c.db.Get(key)
+	rootDesc, rootKey, err := c.primaryRootDescriptor()
+	if err != nil {
+		return err
+	}
+	existing, err := c.db.GetAtRoot(rootDesc.RootPageID, key)
 	if err != nil {
 		return err
 	}
 	if len(existing) == 0 {
-		return c.db.Delete(key)
+		return nil
 	}
 	entries, err := c.indexEntriesForDocument(documentID, existing)
 	if err != nil {
 		return err
 	}
+	writeSystem := func(sys batch.Interface, newRootID uint64) error {
+		return writeRootDescriptorUpdate(sys, rootKey, rootDesc, newRootID)
+	}
+	writePrimaryDelete := func(root batch.Interface) error {
+		return root.Delete(key)
+	}
 	if len(entries) == 0 {
-		return c.db.Delete(key)
-	}
-	b := c.db.NewBatch()
-	if b == nil {
-		return fmt.Errorf("collections: failed to create batch")
-	}
-	defer func() { _ = b.Close() }()
-	if err := b.Delete(key); err != nil {
+		_, err := c.db.MutateRoot(rootDesc.RootPageID, false, writePrimaryDelete, writeSystem)
 		return err
 	}
-	for _, idxKey := range entries {
-		if err := b.Delete(idxKey); err != nil {
-			return err
+	writeUser := func(user batch.Interface) error {
+		for _, idxKey := range entries {
+			if err := user.Delete(idxKey); err != nil {
+				return err
+			}
 		}
+		return nil
 	}
-	return b.Write()
+	_, err = c.db.MutateRootAndUser(rootDesc.RootPageID, false, writePrimaryDelete, writeUser, writeSystem)
+	return err
 }
 
 func (c *Collection) Upsert(documentID, document []byte) ([]byte, error) {
@@ -602,12 +623,7 @@ func (c *Collection) documentKey(documentID []byte) ([]byte, error) {
 	if err := requireDocumentID(documentID); err != nil {
 		return nil, err
 	}
-	prefix, err := CollectionDataPrefix(c.meta.Name)
-	if err != nil {
-		return nil, err
-	}
-	key := make([]byte, 0, len(prefix)+len(documentID))
-	key = append(key, prefix...)
+	key := make([]byte, 0, len(documentID))
 	key = append(key, documentID...)
 	return key, nil
 }
@@ -850,11 +866,18 @@ func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 }
 
 func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition) error {
-	dataPrefix, err := CollectionDataPrefix(collection)
+	meta, err := m.getCollection(collection)
 	if err != nil {
 		return err
 	}
-	it, err := m.db.Iterator(dataPrefix, nil)
+	if meta == nil {
+		return errCollectionNotFound
+	}
+	rootDesc, err := m.rootDescriptor(meta.PrimaryRoot)
+	if err != nil {
+		return err
+	}
+	it, err := m.db.IteratorAtRoot(rootDesc.RootPageID, nil, nil)
 	if err != nil {
 		return err
 	}
@@ -866,12 +889,17 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 	defer func() { _ = b.Close() }()
 	for it.Valid() {
 		key := it.UnsafeKey()
-		if !bytes.HasPrefix(key, dataPrefix) {
-			break
-		}
 		if !it.IsDeleted() {
-			docID := append([]byte{}, key[len(dataPrefix):]...)
-			indexKeys, err := indexKeysForSingleDefinition(collection, docID, it.UnsafeValue(), def, DefaultCollectionOptions())
+			docID := append([]byte{}, key...)
+			var decoded any
+			if err := json.Unmarshal(it.UnsafeValue(), &decoded); err != nil {
+				return fmt.Errorf("collections: index backfill requires JSON document: %w", err)
+			}
+			obj, ok := decoded.(map[string]any)
+			if !ok {
+				return fmt.Errorf("collections: index backfill requires JSON object document")
+			}
+			indexKeys, err := indexKeysForSingleDefinition(collection, docID, obj, def, meta.Options)
 			if err != nil {
 				return err
 			}
@@ -1207,4 +1235,64 @@ func setDocumentOnBatch(b batch.Interface, key, value []byte) error {
 		return auto.SetAuto(key, value)
 	}
 	return b.Set(key, value)
+}
+
+func (m *CollectionManager) rootDescriptor(rootName string) (*CollectionRootDescriptor, error) {
+	if m == nil {
+		return nil, errCollectionManagerNil
+	}
+	return loadRootDescriptor(m.db, rootName)
+}
+
+func (c *Collection) primaryRootDescriptor() (*CollectionRootDescriptor, []byte, error) {
+	if c == nil {
+		return nil, nil, errCollectionNil
+	}
+	rootKey, err := SystemCollectionRootKey(c.meta.PrimaryRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	desc, err := loadRootDescriptor(c.db, c.meta.PrimaryRoot)
+	if err != nil {
+		return nil, nil, err
+	}
+	return desc, rootKey, nil
+}
+
+func loadRootDescriptor(database collectionDB, rootName string) (*CollectionRootDescriptor, error) {
+	if database == nil {
+		return nil, errCollectionManagerNil
+	}
+	rootKey, err := SystemCollectionRootKey(rootName)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := database.GetSystem(rootKey)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("collections: root descriptor %q not found", rootName)
+	}
+	var desc CollectionRootDescriptor
+	if err := desc.Decode(raw); err != nil {
+		return nil, err
+	}
+	return &desc, nil
+}
+
+func writeRootDescriptorUpdate(sys batch.Interface, rootKey []byte, desc *CollectionRootDescriptor, newRootID uint64) error {
+	if sys == nil {
+		return fmt.Errorf("collections: nil system batch")
+	}
+	if desc == nil {
+		return fmt.Errorf("collections: nil root descriptor")
+	}
+	next := *desc
+	next.RootPageID = newRootID
+	encoded, err := next.Encode()
+	if err != nil {
+		return err
+	}
+	return sys.Set(rootKey, encoded)
 }

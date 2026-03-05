@@ -55,12 +55,10 @@ func (c *Collection) Stats() (CollectionStats, error) {
 		stats.IndexEntryCounts[idx.Name] = 0
 	}
 
-	dataPrefix, err := CollectionDataPrefix(c.meta.Name)
-	if err != nil {
-		return CollectionStats{}, err
-	}
-	stats.DocumentCount, err = c.countVisibleKeysWithPrefix(dataPrefix)
-	if err != nil {
+	if err := c.walkDocuments(func(_ []byte, _ []byte) error {
+		stats.DocumentCount++
+		return nil
+	}); err != nil {
 		return CollectionStats{}, err
 	}
 
@@ -150,23 +148,19 @@ func (c *Collection) walkDocuments(fn func(documentID, document []byte) error) e
 	if c.db == nil {
 		return errCollectionManagerNil
 	}
-	prefix, err := CollectionDataPrefix(c.meta.Name)
+	rootDesc, _, err := c.primaryRootDescriptor()
 	if err != nil {
 		return err
 	}
-	it, err := c.db.Iterator(prefix, nil)
+	it, err := c.db.IteratorAtRoot(rootDesc.RootPageID, nil, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = it.Close() }()
 
 	for it.Valid() {
-		key := it.UnsafeKey()
-		if !bytes.HasPrefix(key, prefix) {
-			break
-		}
 		if !it.IsDeleted() {
-			documentID := key[len(prefix):]
+			documentID := it.UnsafeKey()
 			if err := fn(documentID, it.UnsafeValue()); err != nil {
 				return err
 			}

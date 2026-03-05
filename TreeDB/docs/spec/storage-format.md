@@ -261,8 +261,9 @@ Notes:
 
 ## 7. Collection Keyspaces and Metadata (Experimental)
 
-Collections currently use the system root for schema/sequence metadata and the
-main user root for document + secondary-index entries.
+Collections currently use the system root for schema/sequence metadata,
+dedicated named roots for primary documents, and the main user root for
+secondary-index entries.
 
 ### 7.1 System-root collection metadata
 
@@ -351,19 +352,27 @@ u16 CollectionNameLen
 bytes CollectionName
 u16 IndexNameLen
 bytes IndexName              // empty for primary roots
-u64 RootPageID               // 0 until dedicated root materialization phases publish it
+u64 RootPageID               // 0 before first root-local write; otherwise current root page id
 ```
 
-### 7.5 User-root primary document keys
+### 7.5 Dedicated primary document roots
 
-Primary collection documents are stored in the user root at:
+Primary collection documents for metadata version `2` are stored in the
+collection's dedicated named root, keyed directly by `_id` bytes:
 
 ```text
-col:d:<base64(collection_name)>:<document_id> => raw document bytes
+<document_id> => raw document bytes
 ```
 
 The document payload is opaque to TreeDB itself, but the current collection
 indexer expects JSON-object documents when secondary indexes are configured.
+
+Legacy note:
+
+- Version `1` collections used the shared user-root keyspace
+  `col:d:<base64(collection_name)>:<document_id>`.
+- New code rejects version `1` collection metadata rather than silently reading
+  mixed layouts.
 
 ### 7.6 User-root secondary-index keys
 
@@ -384,9 +393,10 @@ The full key is the uniqueness boundary for secondary-index membership.
 
 ### 7.7 Transitional note
 
-The collection root catalog now declares dedicated primary and secondary roots,
-but the live collection data path still uses the shared user-root keyspaces
-above until the follow-on multi-root phases land.
+The collection root catalog now declares dedicated primary and secondary roots.
+The live data path uses the dedicated primary roots described above, while
+secondary-index entries still use the shared user-root keyspace until the
+follow-on secondary-root phases land.
 - LeafRef IDs may also appear in `MetaPageBody.{User,System}RootPageID` when the
   tree height is 1 (i.e. the root page is itself a leaf page stored in the
   value log).
