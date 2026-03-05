@@ -320,8 +320,11 @@ func TestAppendOnlyUnorderedAppendDefersLatestRebuild(t *testing.T) {
 	if m.latestDirty {
 		t.Fatalf("expected iterator snapshot build to refresh latest index")
 	}
-	if m.snapCount == 0 {
-		t.Fatalf("expected sorted latest snapshot to be cached")
+	if m.snapCount != 0 {
+		t.Fatalf("expected mutable unordered iterator to avoid caching snapshot; got snapCount=%d", m.snapCount)
+	}
+	if len(m.snapshot) != 0 {
+		t.Fatalf("expected mutable unordered iterator to leave shared snapshot empty; got len=%d", len(m.snapshot))
 	}
 
 	m.Set([]byte("b"), []byte("v3"))
@@ -346,6 +349,9 @@ func TestAppendOnlyUnorderedAppendDefersLatestRebuild(t *testing.T) {
 	}
 	if m.latestDirty {
 		t.Fatalf("expected latest index rebuild on second iterator snapshot")
+	}
+	if m.snapCount != 0 {
+		t.Fatalf("expected mutable unordered iterator to keep shared snapshot uncached after rebuild; got snapCount=%d", m.snapCount)
 	}
 	idx, ok := m.latest[appendOnlyKeyString([]byte("b"))]
 	if !ok {

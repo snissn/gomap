@@ -425,6 +425,34 @@ func (m *AppendOnly) clearSnapshotLocked() {
 	m.snapCount = 0
 }
 
+func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
+	if m.count == 0 || m.ordered {
+		return nil
+	}
+	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
+		m.rebuildLatestIndexLocked()
+	}
+	need := len(m.latest) + len(m.latest64)
+	indices := m.indexBuf[:0]
+	if cap(indices) < need {
+		indices = make([]int, 0, need)
+	}
+	for _, idx := range m.latest {
+		indices = append(indices, idx)
+	}
+	for _, idx := range m.latest64 {
+		indices = append(indices, idx)
+	}
+	active := m.entries[:m.count]
+	sort.Slice(indices, func(i, j int) bool {
+		return bytes.Compare(
+			appendOnlyEntryKey(&active[indices[i]]),
+			appendOnlyEntryKey(&active[indices[j]]),
+		) < 0
+	})
+	return indices
+}
+
 func (m *AppendOnly) rebuildLatestIndexLocked() {
 	if m.count == 0 {
 		if m.latest != nil {
@@ -907,26 +935,7 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 		return m.snapshot
 	}
 	active := m.entries[:m.count]
-	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
-		m.rebuildLatestIndexLocked()
-	}
-	need := len(m.latest) + len(m.latest64)
-	indices := m.indexBuf[:0]
-	if cap(indices) < need {
-		indices = make([]int, 0, need)
-	}
-	for _, idx := range m.latest {
-		indices = append(indices, idx)
-	}
-	for _, idx := range m.latest64 {
-		indices = append(indices, idx)
-	}
-	sort.Slice(indices, func(i, j int) bool {
-		return bytes.Compare(
-			appendOnlyEntryKey(&active[indices[i]]),
-			appendOnlyEntryKey(&active[indices[j]]),
-		) < 0
-	})
+	indices := m.buildSortedLatestIndicesLocked()
 	snapshot := m.snapshot
 	if cap(snapshot) < len(indices) {
 		snapshot = make([]*appendOnlyEntry, len(indices))
@@ -940,6 +949,21 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 	m.snapshot = snapshot
 	m.snapCount = m.count
 	return snapshot
+}
+
+func (m *AppendOnly) buildMutableSortedIteratorEntriesLocked() []appendOnlyEntry {
+	if m.count == 0 || m.ordered {
+		return nil
+	}
+	indices := m.buildSortedLatestIndicesLocked()
+	active := m.entries[:m.count]
+	entries := getAppendOnlyIteratorEntries(len(indices))
+	for i, idx := range indices {
+		entries[i] = active[idx]
+	}
+	m.indexBuf = indices[:0]
+	m.clearSnapshotLocked()
+	return entries
 }
 
 func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
@@ -959,11 +983,12 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	}
 	m.mu.RUnlock()
 
-	// Unordered iterators need a sorted latest-key view. Build/update shared
-	// caches under an exclusive lock.
+	// Unordered iterators need a sorted latest-key view. Frozen memtables can
+	// share a cached pointer snapshot, while mutable memtables materialize a
+	// per-iterator copy without pinning an extra shared []*entry snapshot.
 	m.mu.Lock()
-	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
 	if m.frozen {
+		snapshotPtrs := m.buildSortedLatestSnapshotLocked()
 		m.acquireIteratorLeaseLocked()
 		m.mu.Unlock()
 		it := &appendOnlyIterator{
@@ -980,14 +1005,7 @@ func (m *AppendOnly) NewIterator(start, end []byte) iterator.UnsafeIterator {
 		}
 		return it
 	}
-	// Mutable unordered memtables must copy entries so readers can iterate
-	// without holding write locks while writers append concurrently.
-	entries := getAppendOnlyIteratorEntries(len(snapshotPtrs))
-	for i := range snapshotPtrs {
-		if snapshotPtrs[i] != nil {
-			entries[i] = *snapshotPtrs[i]
-		}
-	}
+	entries := m.buildMutableSortedIteratorEntriesLocked()
 	m.mu.Unlock()
 
 	it := &appendOnlyIterator{
@@ -1019,11 +1037,12 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 	}
 	m.mu.RUnlock()
 
-	// Unordered iterators need a sorted latest-key view. Build/update shared
-	// caches under an exclusive lock.
+	// Unordered iterators need a sorted latest-key view. Frozen memtables can
+	// share a cached pointer snapshot, while mutable memtables materialize a
+	// per-iterator copy without pinning an extra shared []*entry snapshot.
 	m.mu.Lock()
-	snapshotPtrs := m.buildSortedLatestSnapshotLocked()
 	if m.frozen {
+		snapshotPtrs := m.buildSortedLatestSnapshotLocked()
 		m.acquireIteratorLeaseLocked()
 		m.mu.Unlock()
 		it := &appendOnlyIterator{
@@ -1038,14 +1057,7 @@ func (m *AppendOnly) NewReverseIterator(start, end []byte) iterator.UnsafeIterat
 		it.seekToReverseEnd(end)
 		return it
 	}
-	// Mutable unordered memtables must copy entries so readers can iterate
-	// without holding write locks while writers append concurrently.
-	entries := getAppendOnlyIteratorEntries(len(snapshotPtrs))
-	for i := range snapshotPtrs {
-		if snapshotPtrs[i] != nil {
-			entries[i] = *snapshotPtrs[i]
-		}
-	}
+	entries := m.buildMutableSortedIteratorEntriesLocked()
 	m.mu.Unlock()
 
 	it := &appendOnlyIterator{
