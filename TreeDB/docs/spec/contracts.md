@@ -177,9 +177,9 @@ secondary-index entries in dedicated named roots.
 ### 9.5 Transitional root-layout note
 
 - Primary documents and secondary indexes now both use dedicated named roots.
-- Follow-on hardening work still needs to extend DB-wide maintenance, GC, and
-  rewrite/recovery tooling so named-root reachability is treated equivalently to
-  the user/system roots.
+- DB-wide maintenance now scans and rebuilds dedicated named roots alongside
+  the user/system roots, so GC, rewrite, and vacuum preserve collection data
+  and secondary-index coherence across reopen.
 
 ### 9.6 Diagnostics and maintenance visibility
 

@@ -146,6 +146,9 @@ Invariant:
   shared `col:i:` keyspace.
 - Primary document writes and derived secondary-index entries stay mutually
   coherent for normal collection mutations.
+- DB-wide maintenance (`ValueLogGC`, `ValueLogRewriteOnline`,
+  `ValueLogRewriteOffline`, `VacuumIndexOnline`, `VacuumIndexOffline`) keeps
+  named-root collection data and secondary indexes reachable across reopen.
 - Collection diagnostics report consistent counts on healthy state and detect
   missing/orphan secondary-index entries after deliberate corruption.
 
@@ -158,6 +161,7 @@ Coverage:
 - `TreeDB/collections/secondary_index_query_test.go`
 - `TreeDB/collections/secondary_index_update_test.go`
 - `TreeDB/collections/secondary_index_conflict_test.go`
+- `TreeDB/db/named_root_maintenance_test.go`
 - `TreeDB/collections/collection_tx_atomic_test.go`
 - `TreeDB/collections/recovery_matrix_test.go`
 - `TreeDB/collections/maintenance_api_test.go`

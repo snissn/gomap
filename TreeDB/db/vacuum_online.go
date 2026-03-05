@@ -317,15 +317,51 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			return errors.New("vacuum: missing db state")
 		}
 
+		namedRoots, err := loadNamedRootDescriptors(oldGen.pager, state.ValueLogSet, state.SystemRootPageID)
+		if err != nil {
+			db.writeMu.Unlock()
+			cleanupNewPager()
+			return err
+		}
+		systemOverrides := make(map[string][]byte, len(namedRoots))
+		for _, desc := range namedRoots {
+			rootIter := tree.New(oldGen.pager, newValueReader(state.ValueLogSet), desc.rootPageID).
+				IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+			newRootID, err := bulk.BuildWithOptions(rootIter, newAlloc, newPager, namedRootBuildOptions(desc.format, db.leafPageLog, db.indexColumnarLeaves, db.indexPackedValuePtr, db.indexInternalBaseDelta))
+			_ = rootIter.Close()
+			if err != nil {
+				db.writeMu.Unlock()
+				cleanupNewPager()
+				return err
+			}
+			desc.rootPageID = newRootID
+			encoded, err := desc.encode()
+			if err != nil {
+				db.writeMu.Unlock()
+				cleanupNewPager()
+				return err
+			}
+			systemOverrides[string(desc.key)] = encoded
+			if err := checkGrowth(); err != nil {
+				db.writeMu.Unlock()
+				cleanupNewPager()
+				return err
+			}
+		}
+
 		sysIter := tree.New(oldGen.pager, newValueReader(state.ValueLogSet), state.SystemRootPageID).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
+		var sysSource iteratorWithEntry = sysIter
+		if len(systemOverrides) > 0 {
+			sysSource = &overrideIterator{inner: sysIter, overrides: systemOverrides}
+		}
+		newSysRoot, err := bulk.BuildWithOptions(sysSource, newAlloc, newPager, bulk.BuildOptions{
 			LeafPrefixCompression: db.leafPrefixCompression,
 			LeafColumnar:          db.indexColumnarLeaves,
 			PackedValuePtr:        db.indexPackedValuePtr,
 			InternalBaseDelta:     db.indexInternalBaseDelta,
 		})
-		_ = sysIter.Close()
+		_ = sysSource.Close()
 		if err != nil {
 			db.writeMu.Unlock()
 			cleanupNewPager()
