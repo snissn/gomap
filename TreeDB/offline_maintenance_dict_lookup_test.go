@@ -1,35 +1,28 @@
-package main
+package treedb
 
 import (
 	"bytes"
-	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
-
-	treedb "github.com/snissn/gomap/TreeDB"
-	treedbdb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
-func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
+func TestVacuumIndexOffline_WithDictFrames_WiresDictLookup(t *testing.T) {
 	dir := t.TempDir()
 	bgErrCh := make(chan error, 16)
-	opts := treedb.Options{
+
+	opts := Options{
 		Dir:            dir,
 		FlushThreshold: 1 << 20,
-		ValueLog: treedb.ValueLogOptions{
+		ValueLog: ValueLogOptions{
 			ForcePointers:    true,
 			PointerThreshold: 1,
-			Compression:      treedb.ValueLogCompressionAuto,
-			AutoPolicy:       treedb.ValueLogAutoSize,
-			CompressionAutotune: treedb.AutotuneOptions{
-				Mode: treedb.AutotuneOff,
+			Compression:      ValueLogCompressionAuto,
+			AutoPolicy:       ValueLogAutoSize,
+			CompressionAutotune: AutotuneOptions{
+				Mode: AutotuneOff,
 			},
 			// Keep dict training/publish deterministic across hosts.
 			DictAdaptiveRatio: -1,
@@ -41,9 +34,9 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 			}
 		},
 	}
-	treedb.EnableValueLogDictCompression(&opts)
+	EnableValueLogDictCompression(&opts)
 
-	db, err := treedb.Open(opts)
+	db, err := Open(opts)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -85,7 +78,7 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// Phase 2: write enough bytes for auto mode to probe dict frames.
+	// Phase 2: write enough bytes for auto mode to emit dict frames.
 	writeBatch("b", 512) // ~8MiB
 	if err := db.Checkpoint(); err != nil {
 		_ = db.Close()
@@ -109,27 +102,7 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// This mirrors treemap's previous behavior: backend open without DictLookup
-	// fails when WAL/value-log segments contain dict-compressed frames.
-	backendDir := filepath.Join(dir, "maindb")
-	backendOpts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
-	if cfg, ok, err := treedbdb.LoadFormatConfig(backendDir); err == nil && ok {
-		cfg.ApplyIndexFormatToOptions(&backendOpts)
-	}
-	if backend, err := treedbdb.Open(backendOpts); err == nil {
-		_ = backend.Close()
-		t.Fatalf("expected backend Open to fail without DictLookup")
-	} else if !errors.Is(err, valuelog.ErrMissingDict) && !strings.Contains(err.Error(), valuelog.ErrMissingDict.Error()) {
-		t.Fatalf("expected ErrMissingDict, got %v", err)
-	}
-
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: false})
-	if err != nil {
-		t.Fatalf("OpenBackend: %v", err)
-	}
-	t.Cleanup(func() { _ = cleanup() })
-
-	if _, err := backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: true}); err != nil {
-		t.Fatalf("ValueLogGC: %v", err)
+	if err := VacuumIndexOffline(Options{Dir: dir}); err != nil {
+		t.Fatalf("VacuumIndexOffline: %v", err)
 	}
 }

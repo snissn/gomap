@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"context"
+	"path/filepath"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -45,6 +46,16 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			cfg.ApplyToOptions(&opts)
 		}
 	}
+
+	rootDir := maindbDir
+	if !opts.DisableSideStores && filepath.Base(maindbDir) == "maindb" {
+		rootDir = filepath.Dir(maindbDir)
+	}
+	sideCleanup, err := wireSideStoreLookups(rootDir, &opts)
+	if err != nil {
+		return ValueLogRewriteStats{}, err
+	}
+	defer func() { _ = sideCleanup() }()
 
 	stats, err := treedbdb.ValueLogRewriteOffline(opts)
 	if err != nil {

@@ -22,7 +22,6 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 )
 
 const usageText = `Usage:
@@ -476,8 +475,7 @@ func runVacuum(dir string, args []string) {
 		fatalf("vacuum requires -rw")
 	}
 
-	opts := treedb.Options{Dir: resolveTreeDBRootDir(dir)}
-	applyPersistedFormatConfig(dir, &opts)
+	opts := treedb.Options{Dir: dir}
 	if err := treedb.VacuumIndexOffline(opts); err != nil {
 		fatalf("VacuumIndexOffline error: %v", err)
 	}
@@ -496,7 +494,7 @@ func runVlogGC(dir string, args []string) {
 
 	// Use backend DB directly for GC to avoid cached-layer lane initialization,
 	// which can pre-create empty value-log segments and pollute GC stats.
-	backend, cleanup, err := openBackendForVlogGC(dir)
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: false})
 	if err != nil {
 		fatalf("Failed to open DB: %v", err)
 	}
@@ -526,66 +524,6 @@ func runVlogGC(dir string, args []string) {
 	)
 }
 
-func openBackendForVlogGC(dir string) (*treedbdb.DB, func() error, error) {
-	backendDir := resolveMainDBDir(dir)
-	opts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
-	applyPersistedFormatConfig(dir, &opts)
-
-	var closers []func() error
-	rootDir := resolveTreeDBRootDir(dir)
-	dictDir := filepath.Join(rootDir, "dictdb")
-	if _, err := os.Stat(filepath.Join(dictDir, "index.db")); err == nil {
-		// When the main DB uses dict-compressed frames, backend open replays WAL
-		// by scanning value-log segments and validating dict IDs. Wire DictLookup
-		// from dictdb/ so recovery and GC can proceed.
-		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: true}
-		// dictdb should not require dict lookup itself; force compression off in
-		// case a stale format.json is present.
-		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
-		dictBackend, err := treedbdb.Open(dictOpts)
-		if err != nil {
-			return nil, nil, fmt.Errorf("dictdb open: %w", err)
-		}
-		store := dictdb.New(dictBackend)
-		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
-			return store.GetDictBytes(context.Background(), dictID)
-		}
-		closers = append(closers, dictBackend.Close)
-	}
-
-	backend, err := treedbdb.Open(opts)
-	if err != nil {
-		for i := len(closers) - 1; i >= 0; i-- {
-			_ = closers[i]()
-		}
-		return nil, nil, err
-	}
-	closers = append(closers, backend.Close)
-
-	cleanup := func() error {
-		var first error
-		for i := len(closers) - 1; i >= 0; i-- {
-			if err := closers[i](); err != nil && first == nil {
-				first = err
-			}
-		}
-		return first
-	}
-	return backend, cleanup, nil
-}
-
-func resolveMainDBDir(dir string) string {
-	root := resolveTreeDBRootDir(dir)
-	mainDir := filepath.Join(root, "maindb")
-	if _, err := os.Stat(filepath.Join(mainDir, "index.db")); err == nil {
-		return mainDir
-	}
-	if _, err := os.Stat(filepath.Join(root, "index.db")); err == nil {
-		return root
-	}
-	return dir
-}
-
 func runVlogRewrite(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-rewrite", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
@@ -595,9 +533,7 @@ func runVlogRewrite(dir string, args []string) {
 		fatalf("vlog-rewrite requires -rw")
 	}
 
-	rootDir := resolveTreeDBRootDir(dir)
-	opts := treedb.Options{Dir: rootDir}
-	applyPersistedFormatConfig(dir, &opts)
+	opts := treedb.Options{Dir: dir}
 	stats, err := treedb.ValueLogRewriteOffline(opts)
 	if err != nil {
 		fatalf("ValueLogRewriteOffline error: %v", err)
@@ -1002,9 +938,7 @@ func registerSignalCloser(fn func()) {
 }
 
 func openTreeDB(dir string, rw bool) *treedb.DB {
-	rootDir := resolveTreeDBRootDir(dir)
-	opts := treedb.Options{Dir: rootDir}
-	applyPersistedFormatConfig(dir, &opts)
+	opts := treedb.Options{Dir: dir}
 	if !rw {
 		opts.ReadOnly = true
 	}
@@ -1014,41 +948,6 @@ func openTreeDB(dir string, rw bool) *treedb.DB {
 	}
 	registerSignalCloser(func() { _ = db.Close() })
 	return db
-}
-
-func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
-	if opts == nil {
-		return
-	}
-	if opts.IgnoreFormatConfig {
-		return
-	}
-	backendDir := resolveMainDBDir(dir)
-	cfg, ok, err := treedbdb.LoadFormatConfig(backendDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: format config: %v\n", err)
-		return
-	}
-	if ok {
-		cfg.ApplyToOptions(opts)
-	}
-}
-
-func resolveTreeDBRootDir(dir string) string {
-	clean := filepath.Clean(dir)
-	if _, err := os.Stat(filepath.Join(clean, "maindb", "index.db")); err == nil {
-		return clean
-	}
-	if _, err := os.Stat(filepath.Join(clean, "index.db")); err == nil {
-		if filepath.Base(clean) == "maindb" {
-			parent := filepath.Dir(clean)
-			if _, err := os.Stat(filepath.Join(parent, "dictdb", "index.db")); err == nil {
-				return parent
-			}
-		}
-		return clean
-	}
-	return clean
 }
 
 func closeTreeDB(db *treedb.DB) {

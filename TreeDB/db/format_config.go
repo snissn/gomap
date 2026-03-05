@@ -101,6 +101,26 @@ func (cfg FormatConfig) ApplyToOptions(opts *Options) {
 	}
 }
 
+// ApplyIndexFormatToOptions overwrites index-format-affecting knobs in opts
+// from cfg.
+//
+// This is intentionally narrower than ApplyToOptions: it is safe for normal
+// DB opens where callers may want to tune runtime policies (e.g. value-log
+// compression) via env vars or flags, while still ensuring the index encoding
+// matches on-disk state.
+func (cfg FormatConfig) ApplyIndexFormatToOptions(opts *Options) {
+	if opts == nil {
+		return
+	}
+	opts.IndexOuterLeavesInValueLog = cfg.IndexOuterLeavesInValueLog
+
+	opts.LeafPrefixCompression = cfg.LeafPrefixCompression
+	opts.IndexColumnarLeaves = cfg.IndexColumnarLeaves
+	opts.IndexPackedValuePtr = cfg.IndexPackedValuePtr
+	opts.IndexInternalBaseDelta = cfg.IndexInternalBaseDelta
+	opts.IndexAdaptiveLeafEncoding = cfg.IndexAdaptiveLeafEncoding
+}
+
 // LoadFormatConfig loads the best-effort persisted format config for dir.
 // The returned bool reports whether the file was found.
 func LoadFormatConfig(dir string) (FormatConfig, bool, error) {

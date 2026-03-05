@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -20,13 +21,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	opts := db.Options{Dir: *dir}
-	d, err := db.Open(opts)
+	d, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: *dir, ReadOnly: false})
 	if err != nil {
 		fmt.Printf("Failed to open DB: %v\n", err)
 		os.Exit(1)
 	}
-	defer d.Close()
+	defer func() { _ = cleanup() }()
 
 	if *vacuumIndex {
 		if *report {

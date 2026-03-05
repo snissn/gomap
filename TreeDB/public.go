@@ -301,6 +301,37 @@ func Open(opts Options) (*DB, error) {
 
 	applyEnvMaintenanceOverrides(&opts)
 
+	writePath := writePathFromOptions(opts)
+	if envBool(envWritePathLog) {
+		fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
+	}
+
+	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	if err != nil {
+		return nil, err
+	}
+	rootDir := layout.rootDir
+	maindbDir := layout.mainDir
+	dictdbDir := layout.dictdbDir
+	templatedbDir := layout.templatedbDir
+
+	// Apply persisted index encoding knobs so tools and apps can open existing
+	// dirs without needing to re-specify format-affecting flags.
+	//
+	// This is intentionally limited to index encoding flags; runtime policies
+	// (like value-log compression) remain controlled by opts/env unless the
+	// caller opts out via IgnoreFormatConfig.
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
+			return nil, err
+		} else if ok {
+			cfg.ApplyIndexFormatToOptions(&opts)
+		}
+	}
+
+	// Keep opts.DisableSideStores consistent with the resolved layout.
+	opts.DisableSideStores = layout.disableSideStores
+
 	// Dict compression requires a persistent dict store so dictionaries can be
 	// published and older dict-compressed frames remain decodable.
 	//
@@ -322,20 +353,6 @@ func Open(opts Options) (*DB, error) {
 		}
 	}
 
-	writePath := writePathFromOptions(opts)
-	if envBool(envWritePathLog) {
-		fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
-	}
-
-	rootDir := opts.Dir
-	maindbDir := filepath.Join(rootDir, "maindb")
-	dictdbDir := filepath.Join(rootDir, "dictdb")
-	templatedbDir := filepath.Join(rootDir, "templatedb")
-	if opts.DisableSideStores {
-		maindbDir = rootDir
-		dictdbDir = ""
-		templatedbDir = ""
-	}
 	if opts.ReadOnly {
 		if _, err := os.Stat(maindbDir); err != nil {
 			if os.IsNotExist(err) {
@@ -1396,6 +1413,17 @@ func VacuumIndexOffline(opts Options) error {
 			cfg.ApplyToOptions(&opts)
 		}
 	}
+
+	rootDir := maindbDir
+	if !opts.DisableSideStores && filepath.Base(maindbDir) == "maindb" {
+		rootDir = filepath.Dir(maindbDir)
+	}
+	sideCleanup, err := wireSideStoreLookups(rootDir, &opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sideCleanup() }()
+
 	return db.VacuumIndexOffline(opts)
 }
 
