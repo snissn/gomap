@@ -404,26 +404,11 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 					return nil, ErrCorrupt
 				}
 
-				n := int(valEnd - valStart)
-				oldLen := len(dst)
-				dst = grow(dst, n)
-				if _, err := f.File.ReadAt(dst[oldLen:], frameOff+int64(prefixLen)+int64(valStart)); err != nil {
+				val := make([]byte, int(valEnd-valStart))
+				if _, err := f.File.ReadAt(val, frameOff+int64(prefixLen)+int64(valStart)); err != nil {
 					return nil, err
 				}
-				if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-					payload := dst[oldLen:]
-					decodedStart := len(dst)
-					dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-						return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-					}, f.templateDecodeOpts)
-					if err != nil {
-						return nil, err
-					}
-					decodedLen := len(dst) - decodedStart
-					copy(dst[oldLen:], dst[decodedStart:])
-					dst = dst[:oldLen+decodedLen]
-				}
-				return dst, nil
+				return appendDecodedTemplatePayload(dst, val, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 			}
 			f.cacheMu.Unlock()
 		}
@@ -503,26 +488,11 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
 
-		n := int(valEnd - valStart)
-		oldLen := len(dst)
-		dst = grow(dst, n)
-		if _, err := f.File.ReadAt(dst[oldLen:], frameOff+int64(prefixLen)+int64(valStart)); err != nil {
+		val := make([]byte, int(valEnd-valStart))
+		if _, err := f.File.ReadAt(val, frameOff+int64(prefixLen)+int64(valStart)); err != nil {
 			return nil, err
 		}
-		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-			payload := dst[oldLen:]
-			decodedStart := len(dst)
-			dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-			}, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err
-			}
-			decodedLen := len(dst) - decodedStart
-			copy(dst[oldLen:], dst[decodedStart:])
-			dst = dst[:oldLen+decodedLen]
-		}
-		return dst, nil
+		return appendDecodedTemplatePayload(dst, val, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	}
 
 	// Slow path: use existing decoder and append.

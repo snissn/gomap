@@ -119,7 +119,11 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 	// fails when WAL/value-log segments contain dict-compressed frames.
 	backendDir := filepath.Join(dir, "maindb")
 	backendOpts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
-	if cfg, ok, err := treedbdb.LoadFormatConfig(backendDir); err == nil && ok {
+	cfg, ok, err := treedbdb.LoadFormatConfig(backendDir)
+	if err != nil {
+		t.Fatalf("LoadFormatConfig: %v", err)
+	}
+	if ok {
 		cfg.ApplyIndexFormatToOptions(&backendOpts)
 	}
 	if backend, err := treedbdb.Open(backendOpts); err == nil {
