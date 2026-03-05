@@ -45,6 +45,8 @@ func TestInsert_BatchWriteFailure_NoPartialPrimary(t *testing.T) {
 type atomicMockDB struct {
 	userStore          map[string][]byte
 	systemStore        map[string][]byte
+	rootStores         map[uint64]map[string][]byte
+	nextRootID         uint64
 	failUserBatchWrite bool
 	failSystemBatch    bool
 	directSetCalled    bool
@@ -54,6 +56,8 @@ func newAtomicMockDB() *atomicMockDB {
 	return &atomicMockDB{
 		userStore:   make(map[string][]byte),
 		systemStore: make(map[string][]byte),
+		rootStores:  make(map[uint64]map[string][]byte),
+		nextRootID:  1,
 	}
 }
 
@@ -95,6 +99,21 @@ func (d *atomicMockDB) SetSystem(key, value []byte) error {
 	return nil
 }
 
+func (d *atomicMockDB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
+	if rootID == 0 {
+		return nil, nil
+	}
+	store := d.rootStores[rootID]
+	if store == nil {
+		return nil, nil
+	}
+	value := store[string(key)]
+	if value == nil {
+		return nil, nil
+	}
+	return append([]byte{}, value...), nil
+}
+
 func (d *atomicMockDB) NewBatch() batch.Interface {
 	return &atomicMockBatch{db: d}
 }
@@ -107,8 +126,69 @@ func (d *atomicMockDB) Iterator(start, end []byte) (systemIterator, error) {
 	return newAtomicMapIterator(d.userStore, start), nil
 }
 
+func (d *atomicMockDB) IteratorAtRoot(rootID uint64, start, end []byte) (systemIterator, error) {
+	if rootID == 0 {
+		return newAtomicMapIterator(nil, start), nil
+	}
+	return newAtomicMapIterator(d.rootStores[rootID], start), nil
+}
+
 func (d *atomicMockDB) SystemIterator(start, end []byte) (systemIterator, error) {
 	return newAtomicMapIterator(d.systemStore, start), nil
+}
+
+func (d *atomicMockDB) MutateRoot(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
+	return d.mutateRootInternal(rootID, mutateRoot, nil, updateSystem)
+}
+
+func (d *atomicMockDB) MutateRootAndUser(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
+	return d.mutateRootInternal(rootID, mutateRoot, mutateUser, updateSystem)
+}
+
+func (d *atomicMockDB) mutateRootInternal(rootID uint64, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
+	rootBatch := &atomicMockBatch{db: d}
+	if mutateRoot != nil {
+		if err := mutateRoot(rootBatch); err != nil {
+			return 0, err
+		}
+	}
+	userBatch := &atomicMockBatch{db: d}
+	if mutateUser != nil {
+		if err := mutateUser(userBatch); err != nil {
+			return 0, err
+		}
+	}
+	newRootID := rootID
+	if newRootID == 0 && len(rootBatch.ops) > 0 {
+		newRootID = d.nextRootID
+		d.nextRootID++
+	}
+	systemBatch := &atomicMockBatch{db: d, system: true}
+	if updateSystem != nil {
+		if err := updateSystem(systemBatch, newRootID); err != nil {
+			return 0, err
+		}
+	}
+	if d.failUserBatchWrite && len(userBatch.ops) > 0 {
+		return 0, errors.New("user batch write failed")
+	}
+	if d.failSystemBatch && len(systemBatch.ops) > 0 {
+		return 0, errors.New("system batch write failed")
+	}
+
+	nextRootStore := cloneAtomicStore(d.rootStores[rootID])
+	applyAtomicOps(nextRootStore, rootBatch.ops)
+	nextUserStore := cloneAtomicStore(d.userStore)
+	applyAtomicOps(nextUserStore, userBatch.ops)
+	nextSystemStore := cloneAtomicStore(d.systemStore)
+	applyAtomicOps(nextSystemStore, systemBatch.ops)
+
+	if newRootID != 0 {
+		d.rootStores[newRootID] = nextRootStore
+	}
+	d.userStore = nextUserStore
+	d.systemStore = nextSystemStore
+	return newRootID, nil
 }
 
 type atomicMockBatch struct {
@@ -169,6 +249,27 @@ func (b *atomicMockBatch) Replay(fn func(batch.Entry) error) error {
 }
 
 func (b *atomicMockBatch) GetByteSize() (int, error) { return len(b.ops), nil }
+
+func cloneAtomicStore(source map[string][]byte) map[string][]byte {
+	if len(source) == 0 {
+		return make(map[string][]byte)
+	}
+	out := make(map[string][]byte, len(source))
+	for key, value := range source {
+		out[key] = append([]byte{}, value...)
+	}
+	return out
+}
+
+func applyAtomicOps(target map[string][]byte, ops []batch.Entry) {
+	for _, op := range ops {
+		if op.Type == batch.OpDelete {
+			delete(target, string(op.Key))
+			continue
+		}
+		target[string(op.Key)] = append([]byte{}, op.Value...)
+	}
+}
 
 type atomicMapIterator struct {
 	keys [][]byte

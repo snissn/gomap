@@ -69,6 +69,56 @@ func TestInsertGetDelete_DocumentsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestInsertStoresDocumentsInDedicatedPrimaryRoot(t *testing.T) {
+	d, err := db.Open(db.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	docID := []byte("u1")
+	doc := []byte(`{"email":"ada@example.com","city":"hnl"}`)
+	if _, err := col.Insert(docID, doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	desc := mustLoadPrimaryRootDescriptor(t, d, meta.PrimaryRoot)
+	if desc.RootPageID == 0 {
+		t.Fatalf("expected dedicated primary root page id after insert")
+	}
+
+	rootValue, err := d.GetAtRoot(desc.RootPageID, docID)
+	if err != nil {
+		t.Fatalf("GetAtRoot: %v", err)
+	}
+	if !bytes.Equal(rootValue, doc) {
+		t.Fatalf("dedicated root value mismatch: got=%q want=%q", rootValue, doc)
+	}
+
+	sharedPrefix, err := CollectionDataPrefix(meta.Name)
+	if err != nil {
+		t.Fatalf("collection data prefix: %v", err)
+	}
+	sharedKey := append(append([]byte{}, sharedPrefix...), docID...)
+	sharedValue, err := d.Get(sharedKey)
+	if err != nil {
+		t.Fatalf("Get shared key: %v", err)
+	}
+	if sharedValue != nil {
+		t.Fatalf("expected shared keyspace to remain empty, got %q", sharedValue)
+	}
+}
+
 func TestInsertUpsertOverwrite_ReplacesDocument(t *testing.T) {
 	d, err := db.Open(db.Options{Dir: t.TempDir()})
 	if err != nil {
@@ -177,21 +227,8 @@ func TestPrimaryReadAfterCheckpoint_Reopen(t *testing.T) {
 }
 
 func TestPrimaryStoreUsesValueLogMode(t *testing.T) {
-	collectionName := "vlogged"
-	dataPrefix, err := CollectionDataPrefix(collectionName)
-	if err != nil {
-		t.Fatalf("collection data prefix: %v", err)
-	}
 	d, err := db.Open(db.Options{
 		Dir: t.TempDir(),
-		ValueLog: db.ValueLogOptions{
-			DomainInlineThresholds: []db.ValueLogDomainThreshold{
-				{
-					Prefix:          append(append([]byte{}, dataPrefix...), 0xff),
-					InlineThreshold: 8,
-				},
-			},
-		},
 	})
 	if err != nil {
 		t.Fatalf("open db: %v", err)
@@ -200,7 +237,7 @@ func TestPrimaryStoreUsesValueLogMode(t *testing.T) {
 
 	mgr := NewCollectionManager(d)
 	collection, err := mgr.CreateCollection(&CollectionMeta{
-		Name: collectionName,
+		Name: "vlogged",
 		Options: CollectionOptions{
 			IDMode:                  idModeCallerProvided,
 			StorageMode:             CollectionStorageModeOuterLeafInValueLog,
@@ -222,12 +259,10 @@ func TestPrimaryStoreUsesValueLogMode(t *testing.T) {
 		t.Fatalf("insert large: %v", err)
 	}
 
-	start, err := CollectionDataPrefix(collection.Name)
-	if err != nil {
-		t.Fatalf("data prefix: %v", err)
-	}
-	end := append(start, 0xff)
-	it, err := d.IteratorWithOptions(start, end, db.IteratorOptions{Mode: db.IteratorModePointerProjection})
+	desc := mustLoadPrimaryRootDescriptor(t, d, collection.PrimaryRoot)
+	start := []byte(id)
+	end := append(append([]byte{}, id...), 0xff)
+	it, err := d.IteratorAtRootWithOptions(desc.RootPageID, start, end, db.IteratorOptions{Mode: db.IteratorModePointerProjection})
 	if err != nil {
 		t.Fatalf("projection iterator: %v", err)
 	}
@@ -236,7 +271,7 @@ func TestPrimaryStoreUsesValueLogMode(t *testing.T) {
 	seen := false
 	for ; it.Valid(); it.Next() {
 		key := it.UnsafeKey()
-		if !bytes.HasPrefix(key, start) {
+		if !bytes.Equal(key, id) {
 			continue
 		}
 		val := it.UnsafeValue()
@@ -250,6 +285,45 @@ func TestPrimaryStoreUsesValueLogMode(t *testing.T) {
 		t.Fatalf("iterator error: %v", err)
 	}
 	if !seen {
-		t.Fatalf("did not observe collection key in pointer projection scan")
+		t.Fatalf("did not observe collection key in dedicated root pointer projection scan")
 	}
+
+	legacyStart, err := CollectionDataPrefix(collection.Name)
+	if err != nil {
+		t.Fatalf("data prefix: %v", err)
+	}
+	legacyEnd := append(append([]byte{}, legacyStart...), 0xff)
+	legacyIt, err := d.IteratorWithOptions(legacyStart, legacyEnd, db.IteratorOptions{Mode: db.IteratorModePointerProjection})
+	if err != nil {
+		t.Fatalf("legacy projection iterator: %v", err)
+	}
+	defer legacyIt.Close()
+	for ; legacyIt.Valid(); legacyIt.Next() {
+		if !legacyIt.IsDeleted() && bytes.HasPrefix(legacyIt.UnsafeKey(), legacyStart) {
+			t.Fatalf("expected no shared-keyspace primary documents, found %q", legacyIt.UnsafeKey())
+		}
+	}
+	if err := legacyIt.Error(); err != nil {
+		t.Fatalf("legacy iterator error: %v", err)
+	}
+}
+
+func mustLoadPrimaryRootDescriptor(t *testing.T, d *db.DB, rootName string) CollectionRootDescriptor {
+	t.Helper()
+	rootKey, err := SystemCollectionRootKey(rootName)
+	if err != nil {
+		t.Fatalf("root key: %v", err)
+	}
+	raw, err := d.GetSystem(rootKey)
+	if err != nil {
+		t.Fatalf("get root descriptor: %v", err)
+	}
+	if len(raw) == 0 {
+		t.Fatalf("expected root descriptor for %q", rootName)
+	}
+	var desc CollectionRootDescriptor
+	if err := desc.Decode(raw); err != nil {
+		t.Fatalf("decode root descriptor: %v", err)
+	}
+	return desc
 }
