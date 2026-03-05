@@ -3115,8 +3115,13 @@ type DB struct {
 	vlogGenerationLastChurnBps         atomic.Int64
 	vlogGenerationLastChurnSampleBytes atomic.Uint64
 	vlogGenerationLastChurnSampleNS    atomic.Int64
-	bgErrMu                            sync.Mutex
-	bgErr                              error
+	// Rewrite budget token bucket (bytes) for online maintenance. This lets us
+	// interpret ValueLogRewriteBudgetBytesPerSec as a true per-second bandwidth
+	// budget while still running maintenance at coarse intervals.
+	vlogGenerationRewriteBudgetLastUnixNano atomic.Int64
+	vlogGenerationRewriteBudgetTokensBytes  atomic.Int64
+	bgErrMu                                 sync.Mutex
+	bgErr                                   error
 
 	// Backpressure state
 	queueBacklogBytes        atomic.Int64
@@ -8807,6 +8812,87 @@ func (db *DB) vlogGenerationLoop() {
 	}
 }
 
+func (db *DB) vlogGenerationRewriteBudgetCapBytes() int64 {
+	if db == nil {
+		return 0
+	}
+	// Allow rewrite bursts up to one "generation footprint" (hot+warm+cold) and
+	// at least up to the configured retained-bytes trigger when set. These values
+	// come from caller configuration/profile defaults and avoid hard-coded burst
+	// ceilings.
+	capBytes := int64(0)
+	if db.valueLogRewriteTriggerBytes > 0 {
+		capBytes = db.valueLogRewriteTriggerBytes
+	}
+	targets := int64(0)
+	if db.valueLogGenerationHotTarget > 0 {
+		targets += db.valueLogGenerationHotTarget
+	}
+	if db.valueLogGenerationWarmTarget > 0 {
+		targets += db.valueLogGenerationWarmTarget
+	}
+	if db.valueLogGenerationColdTarget > 0 {
+		targets += db.valueLogGenerationColdTarget
+	}
+	if targets > capBytes {
+		capBytes = targets
+	}
+	if capBytes < 1 {
+		capBytes = 1
+	}
+	return capBytes
+}
+
+func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
+	if db == nil {
+		return
+	}
+	budgetBps := db.valueLogRewriteBudgetBytes
+	if budgetBps <= 0 {
+		return
+	}
+	nowNs := now.UnixNano()
+	prevNs := db.vlogGenerationRewriteBudgetLastUnixNano.Swap(nowNs)
+	if prevNs <= 0 || nowNs <= prevNs {
+		return
+	}
+	deltaNs := nowNs - prevNs
+	add := (budgetBps * deltaNs) / int64(time.Second)
+	if add <= 0 {
+		return
+	}
+	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
+	for {
+		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
+		next := cur + add
+		if next > capBytes {
+			next = capBytes
+		}
+		if next < 0 {
+			next = 0
+		}
+		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
+			return
+		}
+	}
+}
+
+func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
+	if db == nil || n <= 0 {
+		return
+	}
+	for {
+		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
+		next := cur - n
+		if next < 0 {
+			next = 0
+		}
+		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
+			return
+		}
+	}
+}
+
 func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
@@ -8814,13 +8900,8 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if db.checkpointing.Load() {
 		return
 	}
-	db.mu.RLock()
-	queueLen := len(db.queue)
-	db.mu.RUnlock()
-	if queueLen != 0 {
-		return
-	}
 	now := time.Now()
+	db.vlogGenerationAccrueRewriteBudget(now)
 
 	retained := db.valueLogRetainedStatsDetailed()
 	totalBytes := retained.BytesTotal
@@ -8868,13 +8949,26 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		}
 		now = time.Now()
 		db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
+		maxSourceBytes := db.vlogGenerationRewriteBudgetTokensBytes.Load()
+		if maxSourceBytes < 0 {
+			maxSourceBytes = 0
+		}
+		// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". Use a
+		// small floor so we never accidentally run an unbounded rewrite when the
+		// token bucket is empty (e.g. first tick).
+		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
+			maxSourceBytes = db.valueLogRewriteBudgetBytes
+		}
+		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
+			maxSourceBytes = totalBytes
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
 			BatchSize:         db.valueLogRewriteBatchSize(),
 			SyncEachBatch:     false,
 			MaxSegmentBytes:   db.valueLogGenerationWarmTarget,
-			MaxSourceSegments: 1,
-			MaxSourceBytes:    db.valueLogRewriteBudgetBytes,
+			MaxSourceSegments: 0,
+			MaxSourceBytes:    maxSourceBytes,
 			ProtectedPaths:    append(db.valueLogRetainedPaths(), db.currentValueLogPaths()...),
 			MinSegmentStaleRatio: func() float64 {
 				if db.valueLogRewriteTriggerRatioPPM <= 0 {
@@ -8899,6 +8993,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			}
 			if stats.BytesAfter > 0 {
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
+				db.vlogGenerationConsumeRewriteBudgetBytes(stats.BytesAfter)
 			}
 			if stats.RecordsCopied > 0 {
 				db.vlogGenerationRemapSuccesses.Add(uint64(stats.RecordsCopied))
