@@ -4307,6 +4307,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogCompressionMode == vlogCompressionOff || valueLogCompressionMode == vlogCompressionBlock {
 		// Explicit off/block mode bypasses dictionary writes and training.
 		valueLogDictTrain.TrainBytes = -1
+	} else if valueLogDictTrain.TrainBytes == 0 {
+		// "auto" and explicit "dict" modes are expected to train dictionaries by
+		// default so dict compression can become active without additional config.
+		// Callers may explicitly disable training via TrainBytes < 0.
+		valueLogDictTrain.TrainBytes = compression.DefaultTrainBytes
 	}
 	valueLogDictMaxK := opts.ValueLogDictMaxK
 	if valueLogDictMaxK <= 0 {
@@ -7474,8 +7479,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	case vlogCompressionAuto:
 		// In auto mode, skip background dict sampling while fully bypassing
 		// compression so incompressible workloads stay close to off-mode cost.
-		allowDictSampling := true
-		if l != nil && l.vlogCompressionSelector != nil {
+		// Bootstrap quickly: until a dict is published, sample aggressively so
+		// auto mode can discover dict wins without requiring extra tuning knobs.
+		allowDictSampling := db.valueLogDictLastAppliedDictID.Load() == 0
+		if !allowDictSampling && l != nil && l.vlogCompressionSelector != nil {
 			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
 		}
 		if writeMode != vlogWriteOff && allowDictSampling {
@@ -8124,8 +8131,11 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSample(value)
 	case vlogCompressionAuto:
-		allowDictSampling := true
-		if l != nil && l.vlogCompressionSelector != nil {
+		// Bootstrap quickly: until we publish the first dict, always sample so
+		// "auto" really means auto (the selector may not have block metrics yet,
+		// e.g. when using the stable forced-pointer block fast-path).
+		allowDictSampling := db.valueLogDictLastAppliedDictID.Load() == 0
+		if !allowDictSampling && l != nil && l.vlogCompressionSelector != nil {
 			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
 		}
 		if writeMode != vlogWriteOff && allowDictSampling {

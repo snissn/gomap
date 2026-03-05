@@ -301,6 +301,27 @@ func Open(opts Options) (*DB, error) {
 
 	applyEnvMaintenanceOverrides(&opts)
 
+	// Dict compression requires a persistent dict store so dictionaries can be
+	// published and older dict-compressed frames remain decodable.
+	//
+	// DisableSideStores removes dictdb/templatedb plumbing. Allow it only when
+	// dict training is explicitly disabled (auto mode can still fall back to
+	// block/off in that configuration).
+	if opts.DisableSideStores {
+		switch opts.ValueLog.Compression {
+		case ValueLogCompressionDict:
+			return nil, fmt.Errorf("treedb: dict compression requires side stores (dictdb); set DisableSideStores=false")
+		case ValueLogCompressionAuto:
+			// Side stores disabled means we cannot publish dictionaries. In this
+			// configuration auto mode behaves as "no-dict auto" (block/off only).
+			if opts.ValueLog.DictTrain.TrainBytes >= 0 {
+				train := opts.ValueLog.DictTrain
+				train.TrainBytes = -1
+				opts.ValueLog.DictTrain = train
+			}
+		}
+	}
+
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {
 		fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
@@ -361,6 +382,10 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores {
 		dictOpts := opts
 		dictOpts.Dir = dictdbDir
+		// Side stores are opened via the backend (no caching layer). They must
+		// not inherit outer-leaf-in-value-log from the main DB, since that mode
+		// requires a leaf-page log wired by the cached layer.
+		dictOpts.IndexOuterLeavesInValueLog = false
 		dictOpts.DisableBackgroundPrune = true
 		dictOpts.ValueLog.DictLookup = nil
 		dictOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
@@ -391,6 +416,10 @@ func Open(opts Options) (*DB, error) {
 		templateOpts.Dir = templatedbDir
 		templateOpts.DisableSideStores = true
 		templateOpts.DisableBackgroundPrune = true
+		// Like dictdb, templatedb is an internal side store; avoid inheriting the
+		// main DB's outer-leaf value-log layout (not needed here, and it adds
+		// unnecessary value-log churn).
+		templateOpts.IndexOuterLeavesInValueLog = false
 		templateOpts.ValueLog.DictLookup = nil
 		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
 		// templatedb uses batch.Set for small routing/index entries. Do not
