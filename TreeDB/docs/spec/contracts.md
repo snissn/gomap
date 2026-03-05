@@ -121,9 +121,9 @@ When opened read-only:
 ## 9. Collection Contracts (Experimental)
 
 Collections are a higher-level document API layered on top of TreeDB keyspaces.
-The current implementation stores collection schema in the system root, stores
-primary documents in dedicated named roots, and stores secondary-index entries
-in the main user root until the dedicated secondary-root phase lands.
+The current implementation stores collection schema and named-root descriptors
+in the system root, primary documents in dedicated named roots, and
+secondary-index entries in dedicated named roots.
 
 ### 9.1 Collection lifecycle and metadata
 
@@ -164,23 +164,22 @@ in the main user root until the dedicated secondary-root phase lands.
   for currently visible documents.
 - `CreateIndex(collection, def)` assigns a deterministic secondary root name and
   persists a root descriptor for that index in the system root.
-- `DropIndex(collection, name)` removes index metadata and deletes the matching
-  secondary-index entries and root descriptor.
+- `DropIndex(collection, name)` removes index metadata and its root descriptor;
+  the detached index root becomes unreachable from collection reads.
 - `FindByIndex(indexName, value)` returns matching document ids sorted in
   lexicographic order.
 - Unique indexes reject writes that would make two different document ids share
   the same encoded indexed value.
-- Indexed writes update the dedicated primary root, the shared user-root
-  secondary-index keyspace, and the system-root primary descriptor in one commit
-  boundary, so partial visibility is not allowed for normal document mutations.
+- Indexed writes update the dedicated primary root, every affected dedicated
+  secondary root, and the system-root root descriptors in one commit boundary,
+  so partial visibility is not allowed for normal document mutations.
 
 ### 9.5 Transitional root-layout note
 
-- As of the current phase, primary collection CRUD uses dedicated named roots
-  and secondary indexes still live in the shared user-root keyspace (`col:i:`).
-- Subsequent phases are responsible for moving secondary-index reads/writes to
-  their own named roots and extending maintenance/GC to scan those roots.
-  dedicated roots and proving cross-root atomic publish.
+- Primary documents and secondary indexes now both use dedicated named roots.
+- Follow-on hardening work still needs to extend DB-wide maintenance, GC, and
+  rewrite/recovery tooling so named-root reachability is treated equivalently to
+  the user/system roots.
 
 ### 9.6 Diagnostics and maintenance visibility
 

@@ -129,11 +129,20 @@ func TestConsistencyDiagnosticCommand(t *testing.T) {
 	if _, err := col.Insert(id, []byte(`{"email":"a@example.com"}`)); err != nil {
 		t.Fatalf("restore doc: %v", err)
 	}
+	indexDef, ok := col.indexByName("email_idx")
+	if !ok {
+		t.Fatalf("expected email_idx metadata")
+	}
+	indexRootDesc := mustLoadSecondaryRootDescriptor(t, d, indexDef.RootName)
+	indexRootKey, err := SystemCollectionRootKey(indexDef.RootName)
+	if err != nil {
+		t.Fatalf("index root key: %v", err)
+	}
 	idxPrefix, err := CollectionIndexPrefix(meta.Name, "email_idx")
 	if err != nil {
 		t.Fatalf("index prefix: %v", err)
 	}
-	it, err := d.Iterator(idxPrefix, nil)
+	it, err := d.IteratorAtRoot(indexRootDesc.RootPageID, idxPrefix, nil)
 	if err != nil {
 		t.Fatalf("iterator: %v", err)
 	}
@@ -151,7 +160,11 @@ func TestConsistencyDiagnosticCommand(t *testing.T) {
 	if len(staleKey) == 0 {
 		t.Fatalf("expected index key for corruption setup")
 	}
-	if err := d.Delete(staleKey); err != nil {
+	if _, err := d.MutateRoot(indexRootDesc.RootPageID, false, func(root batch.Interface) error {
+		return root.Delete(staleKey)
+	}, func(sys batch.Interface, newRootID uint64) error {
+		return writeRootDescriptorUpdate(sys, indexRootKey, &indexRootDesc, newRootID)
+	}); err != nil {
 		t.Fatalf("corrupt index delete: %v", err)
 	}
 

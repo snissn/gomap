@@ -142,6 +142,8 @@ Invariant:
 - Caller-provided and auto-generated ids remain stable across reopen.
 - Primary document writes live in dedicated named roots keyed by `_id`, not in
   the legacy shared `col:d:` keyspace.
+- Secondary-index entries live in dedicated named roots, not in the legacy
+  shared `col:i:` keyspace.
 - Primary document writes and derived secondary-index entries stay mutually
   coherent for normal collection mutations.
 - Collection diagnostics report consistent counts on healthy state and detect

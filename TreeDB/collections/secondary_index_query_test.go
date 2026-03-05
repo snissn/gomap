@@ -98,12 +98,20 @@ func TestSecondaryIndex_StoresNoValuePayload(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
+	indexDef, ok := col.indexByName("city_idx")
+	if !ok {
+		t.Fatalf("expected city_idx metadata")
+	}
+	rootDesc := mustLoadSecondaryRootDescriptor(t, d, indexDef.RootName)
+	if rootDesc.RootPageID == 0 {
+		t.Fatalf("expected secondary root page id after insert")
+	}
 	prefix, err := CollectionIndexPrefix(meta.Name, "city_idx")
 	if err != nil {
 		t.Fatalf("prefix: %v", err)
 	}
 	end := append(append([]byte{}, prefix...), 0xff)
-	it, err := d.IteratorWithOptions(prefix, end, db.IteratorOptions{Mode: db.IteratorModePointerProjection})
+	it, err := d.IteratorAtRootWithOptions(rootDesc.RootPageID, prefix, end, db.IteratorOptions{Mode: db.IteratorModePointerProjection})
 	if err != nil {
 		t.Fatalf("iterator: %v", err)
 	}
@@ -113,5 +121,19 @@ func TestSecondaryIndex_StoresNoValuePayload(t *testing.T) {
 	}
 	if len(it.UnsafeValue()) != 0 {
 		t.Fatalf("expected no value payload for secondary index entry")
+	}
+
+	sharedIt, err := d.Iterator(prefix, end)
+	if err != nil {
+		t.Fatalf("shared iterator: %v", err)
+	}
+	defer sharedIt.Close()
+	for ; sharedIt.Valid(); sharedIt.Next() {
+		if !sharedIt.IsDeleted() && bytes.HasPrefix(sharedIt.UnsafeKey(), prefix) {
+			t.Fatalf("expected no shared user-root secondary entries, found %q", sharedIt.UnsafeKey())
+		}
+	}
+	if err := sharedIt.Error(); err != nil {
+		t.Fatalf("shared iterator error: %v", err)
 	}
 }

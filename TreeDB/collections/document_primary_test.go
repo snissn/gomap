@@ -327,3 +327,23 @@ func mustLoadPrimaryRootDescriptor(t *testing.T, d *db.DB, rootName string) Coll
 	}
 	return desc
 }
+
+func mustLoadSecondaryRootDescriptor(t *testing.T, d *db.DB, rootName string) CollectionRootDescriptor {
+	t.Helper()
+	rootKey, err := SystemCollectionRootKey(rootName)
+	if err != nil {
+		t.Fatalf("root key: %v", err)
+	}
+	raw, err := d.GetSystem(rootKey)
+	if err != nil {
+		t.Fatalf("get root descriptor: %v", err)
+	}
+	if len(raw) == 0 {
+		t.Fatalf("expected root descriptor for %q", rootName)
+	}
+	var desc CollectionRootDescriptor
+	if err := desc.Decode(raw); err != nil {
+		t.Fatalf("decode root descriptor: %v", err)
+	}
+	return desc
+}

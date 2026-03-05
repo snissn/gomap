@@ -11,6 +11,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+// RootMutation describes a detached-root mutation to publish in one commit
+// boundary alongside any system catalog updates.
+type RootMutation struct {
+	RootID uint64
+	Mutate func(batchpkg.Interface) error
+}
+
 // GetAtRoot returns the value for a key in the specified root page.
 func (db *DB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	if rootID == 0 {
@@ -57,6 +64,140 @@ func (db *DB) MutateRoot(rootID uint64, sync bool, mutateRoot func(batchpkg.Inte
 // root, and the system root in one commit boundary.
 func (db *DB) MutateRootAndUser(rootID uint64, sync bool, mutateRoot func(batchpkg.Interface) error, mutateUser func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {
 	return db.mutateRootInternal(rootID, sync, mutateRoot, mutateUser, updateSystem)
+}
+
+// MutateRoots atomically applies mutations to multiple detached roots and the
+// system root in one commit boundary. The user root remains unchanged.
+func (db *DB) MutateRoots(sync bool, roots []RootMutation, updateSystem func(batchpkg.Interface, []uint64) error) ([]uint64, error) {
+	rootIDs := make([]uint64, len(roots))
+	mutators := make([]func(batchpkg.Interface) error, len(roots))
+	for i := range roots {
+		rootIDs[i] = roots[i].RootID
+		mutators[i] = roots[i].Mutate
+	}
+	return db.MutateRootsWithFuncs(sync, rootIDs, mutators, updateSystem)
+}
+
+// MutateRootsWithFuncs is the function-based form of MutateRoots. It is used
+// by higher-level packages that cannot import db.RootMutation without creating
+// package import cycles in tests.
+func (db *DB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, []uint64) error) ([]uint64, error) {
+	if db == nil {
+		return nil, fmt.Errorf("missing db")
+	}
+	if db.readOnly {
+		return nil, ErrReadOnly
+	}
+	if len(rootIDs) != len(mutateRoots) {
+		return nil, fmt.Errorf("mutate roots length mismatch")
+	}
+
+	rootBatches := make([]*Batch, len(rootIDs))
+	for i := range rootIDs {
+		rootBatch, err := newDetachedBatch(db, false)
+		if err != nil {
+			return nil, err
+		}
+		rootBatches[i] = rootBatch
+		defer func(batch *Batch) { _ = batch.Close() }(rootBatch)
+		if mutateRoots[i] == nil {
+			continue
+		}
+		if err := mutateRoots[i](rootBatch); err != nil {
+			return nil, err
+		}
+	}
+
+	for _, rootBatch := range rootBatches {
+		if rootBatch != nil && rootBatch.usedAutoPtr {
+			if err := db.flushInlineAppender(sync); err != nil {
+				return nil, err
+			}
+			break
+		}
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	idx := db.idx.Load()
+	if idx == nil {
+		return nil, fmt.Errorf("missing index")
+	}
+
+	db.mu.RLock()
+	baseSeq := db.meta.CommitSeq
+	currentUserRoot := db.meta.UserRootPageID
+	currentSystemRoot := db.meta.SystemRootPageID
+	regID := idx.registry.Register(baseSeq)
+	db.mu.RUnlock()
+	defer idx.registry.Unregister(regID)
+
+	newRootIDs := make([]uint64, len(rootIDs))
+	retired := make([]uint64, 0, len(rootIDs)*2)
+	metrics := adaptive.Metrics{}
+	valueLogDeltas := make([]*valueLogRefDelta, 0, len(rootIDs))
+
+	for i := range rootIDs {
+		rootID := rootIDs[i]
+		rootBatch := rootBatches[i]
+		if rootID == 0 && rootBatch != nil && len(rootBatch.batch.SortedEntries()) > 0 {
+			var err error
+			rootID, err = db.allocateDetachedRootLocked(idx)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		newRootID, rootRetired, rootMetrics, err := idx.zipper.Apply(rootID, rootBatch.batch)
+		if err != nil {
+			return nil, err
+		}
+		rootDelta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, rootBatch.batch.SortedEntries())
+		if err != nil {
+			return nil, err
+		}
+		newRootIDs[i] = newRootID
+		retired = append(retired, rootRetired...)
+		metrics = mergeAdaptiveMetrics(metrics, rootMetrics)
+		valueLogDeltas = append(valueLogDeltas, rootDelta)
+	}
+
+	systemBatch, err := newDetachedBatch(db, true)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = systemBatch.Close() }()
+	if updateSystem != nil {
+		if err := updateSystem(systemBatch, newRootIDs); err != nil {
+			return nil, err
+		}
+	}
+
+	newSystemRoot := currentSystemRoot
+	systemRetired := []uint64(nil)
+	systemMetrics := adaptive.Metrics{}
+	var systemDelta *valueLogRefDelta
+	if len(systemBatch.batch.SortedEntries()) > 0 {
+		systemDelta, err = db.buildValueLogRefDelta(idx.pager, currentSystemRoot, baseSeq, systemBatch.batch.SortedEntries())
+		if err != nil {
+			return nil, err
+		}
+		newSystemRoot, systemRetired, systemMetrics, err = idx.zipper.Apply(currentSystemRoot, systemBatch.batch)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	retired = append(retired, systemRetired...)
+	metrics = mergeAdaptiveMetrics(metrics, systemMetrics)
+	valueLogDeltas = append(valueLogDeltas, systemDelta)
+	vlogRefDelta := mergeValueLogRefDeltas(valueLogDeltas...)
+	touchedValueLogSegments := combineTouchedValueLogSegments(append(rootBatches, systemBatch)...)
+	if err := db.finalizeCommit(currentUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
+		return nil, err
+	}
+	return newRootIDs, nil
 }
 
 func (db *DB) mutateRootInternal(rootID uint64, sync bool, mutateRoot func(batchpkg.Interface) error, mutateUser func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {

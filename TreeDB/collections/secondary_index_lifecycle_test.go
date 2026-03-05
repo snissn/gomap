@@ -131,4 +131,28 @@ func TestCreateIndex_BackfillsExistingDocumentsFromDedicatedPrimaryRoot(t *testi
 	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
 		t.Fatalf("expected one backfilled result for u1, got %#v", ids)
 	}
+
+	rootDesc := mustLoadSecondaryRootDescriptor(t, d, "collections:dXNlcnM=:index:ZW1haWxfaWR4")
+	if rootDesc.RootPageID == 0 {
+		t.Fatalf("expected dedicated secondary root to be materialized during backfill")
+	}
+
+	sharedPrefix, err := CollectionIndexPrefix(meta.Name, "email_idx")
+	if err != nil {
+		t.Fatalf("shared prefix: %v", err)
+	}
+	sharedEnd := append(append([]byte{}, sharedPrefix...), 0xff)
+	sharedIt, err := d.Iterator(sharedPrefix, sharedEnd)
+	if err != nil {
+		t.Fatalf("shared iterator: %v", err)
+	}
+	defer sharedIt.Close()
+	for ; sharedIt.Valid(); sharedIt.Next() {
+		if !sharedIt.IsDeleted() && bytes.HasPrefix(sharedIt.UnsafeKey(), sharedPrefix) {
+			t.Fatalf("expected no shared user-root secondary keys, found %q", sharedIt.UnsafeKey())
+		}
+	}
+	if err := sharedIt.Error(); err != nil {
+		t.Fatalf("shared iterator error: %v", err)
+	}
 }

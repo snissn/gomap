@@ -63,11 +63,15 @@ func (c *Collection) Stats() (CollectionStats, error) {
 	}
 
 	for _, idx := range c.meta.Indexes {
+		rootDesc, _, err := c.secondaryRootDescriptor(idx)
+		if err != nil {
+			return CollectionStats{}, err
+		}
 		indexPrefix, err := CollectionIndexPrefix(c.meta.Name, idx.Name)
 		if err != nil {
 			return CollectionStats{}, err
 		}
-		count, err := c.countVisibleKeysWithPrefix(indexPrefix)
+		count, err := c.countVisibleKeysWithPrefixAtRoot(rootDesc.RootPageID, indexPrefix)
 		if err != nil {
 			return CollectionStats{}, err
 		}
@@ -103,16 +107,22 @@ func (c *Collection) CheckConsistency() (ConsistencyReport, error) {
 	}
 	report.ExpectedIndexEntries = uint64(len(expected))
 
-	indexPrefix, err := CollectionIndexDataPrefix(c.meta.Name)
-	if err != nil {
-		return ConsistencyReport{}, err
-	}
 	actual := make(map[string]struct{}, len(expected))
-	if err := c.walkVisibleKeysWithPrefix(indexPrefix, func(key []byte) error {
-		actual[string(key)] = struct{}{}
-		return nil
-	}); err != nil {
-		return ConsistencyReport{}, err
+	for _, idx := range c.meta.Indexes {
+		rootDesc, _, err := c.secondaryRootDescriptor(idx)
+		if err != nil {
+			return ConsistencyReport{}, err
+		}
+		indexPrefix, err := CollectionIndexPrefix(c.meta.Name, idx.Name)
+		if err != nil {
+			return ConsistencyReport{}, err
+		}
+		if err := c.walkVisibleKeysWithPrefixAtRoot(rootDesc.RootPageID, indexPrefix, func(key []byte) error {
+			actual[string(key)] = struct{}{}
+			return nil
+		}); err != nil {
+			return ConsistencyReport{}, err
+		}
 	}
 	report.ActualIndexEntries = uint64(len(actual))
 
@@ -133,6 +143,17 @@ func (c *Collection) CheckConsistency() (ConsistencyReport, error) {
 func (c *Collection) countVisibleKeysWithPrefix(prefix []byte) (uint64, error) {
 	var count uint64
 	if err := c.walkVisibleKeysWithPrefix(prefix, func(_ []byte) error {
+		count++
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (c *Collection) countVisibleKeysWithPrefixAtRoot(rootID uint64, prefix []byte) (uint64, error) {
+	var count uint64
+	if err := c.walkVisibleKeysWithPrefixAtRoot(rootID, prefix, func(_ []byte) error {
 		count++
 		return nil
 	}); err != nil {
@@ -178,6 +199,34 @@ func (c *Collection) walkVisibleKeysWithPrefix(prefix []byte, fn func(key []byte
 		return errCollectionManagerNil
 	}
 	it, err := c.db.Iterator(prefix, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+
+	for it.Valid() {
+		key := it.UnsafeKey()
+		if !bytes.HasPrefix(key, prefix) {
+			break
+		}
+		if !it.IsDeleted() {
+			if err := fn(key); err != nil {
+				return err
+			}
+		}
+		it.Next()
+	}
+	return it.Error()
+}
+
+func (c *Collection) walkVisibleKeysWithPrefixAtRoot(rootID uint64, prefix []byte, fn func(key []byte) error) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionManagerNil
+	}
+	it, err := c.db.IteratorAtRoot(rootID, prefix, nil)
 	if err != nil {
 		return err
 	}
