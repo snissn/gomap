@@ -9,9 +9,10 @@ import (
 
 // Batch implements the cosmos-db Batch interface.
 type Batch struct {
-	db         *DB
-	batch      *batch.Batch
-	targetRoot batchRootTarget
+	db          *DB
+	batch       *batch.Batch
+	targetRoot  batchRootTarget
+	usedAutoPtr bool
 }
 
 const optimisticWriteMaxAttempts = 3
@@ -85,6 +86,19 @@ func (b *Batch) Set(key, value []byte) error {
 	return b.batch.Set(key, value)
 }
 
+// SetAuto records a Put and transparently falls back to value-log pointer
+// storage when inline thresholds are exceeded.
+func (b *Batch) SetAuto(key, value []byte) error {
+	if b == nil || b.db == nil {
+		return fmt.Errorf("missing db")
+	}
+	usedPointer, err := b.db.batchSetWithPointerFallback(b, key, value, false)
+	if usedPointer {
+		b.usedAutoPtr = true
+	}
+	return err
+}
+
 // SetView records a Put without copying key/value bytes. Callers must treat
 // key/value as immutable until the batch is written or closed.
 //
@@ -154,6 +168,11 @@ func (b *Batch) write(sync bool) error {
 }
 
 func (b *Batch) writeOptimistic(sync bool) (bool, error) {
+	if b.usedAutoPtr {
+		if err := b.db.flushInlineAppender(sync); err != nil {
+			return false, err
+		}
+	}
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
 	b.db.writeMu.RLock()
@@ -238,6 +257,11 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 }
 
 func (b *Batch) writeSerialized(sync bool) error {
+	if b.usedAutoPtr {
+		if err := b.db.flushInlineAppender(sync); err != nil {
+			return err
+		}
+	}
 	touchedValueLogSegments := b.batch.TouchedValueLogSegments()
 
 	b.db.writeMu.Lock()
@@ -304,9 +328,11 @@ func (b *Batch) Close() error {
 	if b.batch != nil {
 		err := b.batch.Close()
 		b.batch = nil
+		b.usedAutoPtr = false
 		return err
 	}
 	b.batch = nil
+	b.usedAutoPtr = false
 	return nil
 }
 
