@@ -2228,6 +2228,63 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
+// valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
+// that may be referenced by in-memory state (mutable + queued memtables).
+//
+// This is intentionally narrower than valueLogRetainedPaths: retained paths can
+// include segments that are still referenced in the backend index (and thus
+// candidates for rewrite), while in-use paths are only about protecting against
+// concurrent writers while online maintenance is running.
+func (db *DB) valueLogInUsePaths() []string {
+	if db == nil || !db.valueLogEnabled() {
+		return nil
+	}
+	inUse := make(map[string]struct{})
+	if db.splitValueLogEnabled() {
+		for _, path := range db.currentValueLogPaths() {
+			if path == "" {
+				continue
+			}
+			inUse[path] = struct{}{}
+		}
+		db.mu.RLock()
+		for _, paths := range db.queueValueLogPaths {
+			for _, path := range paths {
+				if path == "" {
+					continue
+				}
+				inUse[path] = struct{}{}
+			}
+		}
+		db.mu.RUnlock()
+	} else {
+		for _, path := range db.currentWALPaths() {
+			if path == "" {
+				continue
+			}
+			inUse[path] = struct{}{}
+		}
+		db.mu.RLock()
+		for _, paths := range db.queueWALPaths {
+			for _, path := range paths {
+				if path == "" {
+					continue
+				}
+				inUse[path] = struct{}{}
+			}
+		}
+		db.mu.RUnlock()
+	}
+	if len(inUse) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(inUse))
+	for path := range inUse {
+		out = append(out, path)
+	}
+	return out
+}
+
 // ReadValueLogRecord reads a raw value-log record for diagnostics and tooling.
 func (db *DB) ReadValueLogRecord(ptr page.ValuePtr) ([]byte, error) {
 	if db == nil || db.valueLogReader == nil {
@@ -8973,7 +9030,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			MaxSegmentBytes:   db.valueLogGenerationWarmTarget,
 			MaxSourceSegments: 0,
 			MaxSourceBytes:    maxSourceBytes,
-			ProtectedPaths:    append(db.valueLogRetainedPaths(), db.currentValueLogPaths()...),
+			ProtectedPaths:    db.valueLogInUsePaths(),
 			MinSegmentStaleRatio: func() float64 {
 				if db.valueLogRewriteTriggerRatioPPM <= 0 {
 					return 0
@@ -9046,7 +9103,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	now = time.Now()
 	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: append(db.valueLogRetainedPaths(), db.currentValueLogPaths()...)}
+	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogInUsePaths()}
 	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 	cancel()
 	if err != nil {
