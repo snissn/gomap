@@ -117,3 +117,62 @@ When opened read-only:
 - write operations must fail,
 - no mutating recovery steps run,
 - no background maintenance mutates on-disk state.
+
+## 9. Collection Contracts (Experimental)
+
+Collections are a higher-level document API layered on top of TreeDB keyspaces.
+The current implementation stores collection schema in the system root and stores
+document + secondary-index entries in the main user root.
+
+### 9.1 Collection lifecycle and metadata
+
+- `collections.NewCollectionManager(db)` binds collection operations to the
+  provided TreeDB instance.
+- `CreateCollection(meta)` is idempotent for the same normalized schema and
+  rejects incompatible redefinitions.
+- `OpenCollection(name)` returns `errCollectionNotFound` when metadata is absent.
+- `ListCollections()` returns collection metadata sorted by collection name.
+- `DropCollection(name)` removes collection metadata, auto-id sequence state,
+  primary document entries, and secondary-index entries for that collection.
+
+### 9.2 ID modes and document identity
+
+- Default `CollectionOptions.IDMode` is caller-provided.
+- `collections.IDModeCallerProvided` requires a non-empty caller-supplied `_id`.
+- `collections.IDModeAuto` allocates an 8-byte big-endian monotonically
+  increasing id per collection and persists the last issued value in the system
+  root.
+
+### 9.3 Primary document writes
+
+- Default `CollectionOptions.StorageMode` is
+  `collections.CollectionStorageModeOuterLeafInValueLog`.
+- `Insert(id, document)` behaves as an upsert keyed by document id.
+- `Get(id)` returns the raw stored document bytes or `(nil, nil)` on miss.
+- `Delete(id)` removes the primary document and any derived secondary-index
+  entries for that document.
+
+### 9.4 Secondary indexes
+
+- `CreateIndex(collection, def)` persists index metadata and backfills entries
+  for currently visible documents.
+- `DropIndex(collection, name)` removes index metadata and deletes the matching
+  secondary-index entries.
+- `FindByIndex(indexName, value)` returns matching document ids sorted in
+  lexicographic order.
+- Unique indexes reject writes that would make two different document ids share
+  the same encoded indexed value.
+- Indexed writes update the primary document key and all derived index keys in a
+  single user-root batch, so partial visibility is not allowed for normal
+  document mutations.
+
+### 9.5 Diagnostics and maintenance visibility
+
+- `ListIndexes()` returns a defensive copy of the current index definitions for
+  an opened collection.
+- `Stats()` reports metadata version, id mode, storage mode, document count,
+  per-index entry counts, and user/system root page ids when the underlying DB
+  exposes stats.
+- `CheckConsistency()` is read-only. It recomputes expected index entries from
+  visible documents and reports counts of missing and orphaned secondary-index
+  entries; it does not repair them.

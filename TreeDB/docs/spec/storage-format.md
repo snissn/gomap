@@ -258,6 +258,96 @@ Notes:
   `ValuePtr.Length` and always reconstructs a grouped pointer with sub-index 0.
 - Leaf pages are written as single-record grouped frames (`K=1`) in the value
   log, so sub-index is always 0.
+
+## 7. Collection Keyspaces and Metadata (Experimental)
+
+Collections currently use the system root for schema/sequence metadata and the
+main user root for document + secondary-index entries.
+
+### 7.1 System-root collection metadata
+
+Collection schema metadata is stored at:
+
+```text
+sys:c:<base64(collection_name)> => CollectionMeta
+```
+
+Individual index definitions are also mirrored under:
+
+```text
+sys:i:<base64(collection_name)>:<base64(index_name)> => IndexDefinition
+```
+
+Auto-id sequence state is stored in the system root at:
+
+```text
+col:d:<base64(collection_name)>:id_seq => u64 big-endian last_issued_id
+```
+
+### 7.2 `CollectionMeta` binary value format
+
+```text
+u8  Version                  // currently 1
+u16 NameLen
+bytes Name
+u8  IDMode                   // 0=caller-provided, 1=auto
+u8  StorageMode              // 0=outer-leaf-in-vlog, 1=inner-only
+u8  RejectMissingFields      // 0 or 1
+u8  AllowArrayValuesInIndex  // 0 or 1
+u16 IndexCount
+repeated IndexDefinition records
+```
+
+### 7.3 `IndexDefinition` record format
+
+Each index definition is length-prefixed:
+
+```text
+u16 RecordLen
+bytes Record
+```
+
+`Record` is a compact tagged field stream:
+
+```text
+u8  FieldTag
+bytes FieldPayload
+...
+```
+
+Defined tags:
+
+- `0x01`: index name (`u16 len` + bytes)
+- `0x02`: indexed field path (`u16 len` + bytes)
+- `0x03`: option flags (`u8`, bit0=`Unique`, bit1=`MultiKey`)
+
+### 7.4 User-root primary document keys
+
+Primary collection documents are stored in the user root at:
+
+```text
+col:d:<base64(collection_name)>:<document_id> => raw document bytes
+```
+
+The document payload is opaque to TreeDB itself, but the current collection
+indexer expects JSON-object documents when secondary indexes are configured.
+
+### 7.5 User-root secondary-index keys
+
+Secondary index entries are stored in the user root at:
+
+```text
+col:i:<base64(collection_name)>:<base64(index_name)>:<u16 encoded_value_len><encoded_value><document_id> => empty value
+```
+
+`encoded_value` uses a typed scalar prefix:
+
+- `s:<utf8 bytes>` for strings
+- `b:1` / `b:0` for booleans
+- `n:<strconv.FormatFloat(value, 'g', -1, 64)>` for numbers
+- `z:` for `null`
+
+The full key is the uniqueness boundary for secondary-index membership.
 - LeafRef IDs may also appear in `MetaPageBody.{User,System}RootPageID` when the
   tree height is 1 (i.e. the root page is itself a leaf page stored in the
   value log).

@@ -36,6 +36,11 @@ const (
 	CollectionStorageModeInnerOnly
 )
 
+const (
+	IDModeCallerProvided IDMode = idModeCallerProvided
+	IDModeAuto           IDMode = idModeAuto
+)
+
 type IndexDefinition struct {
 	Name     string
 	Field    string
