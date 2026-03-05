@@ -14402,22 +14402,26 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 // batchOp removed, using batch.Entry directly
 
 type Batch struct {
-	db              *DB
-	entries         []batch.Entry
-	backend         batch.Interface
-	size            int
-	copyArena       []byte
-	copyArenaChunks [][]byte
-	copyArenaCap    int
-	copyBytes       int
-	walBuf          []logRecord
-	shardIdxs       []int
-	eligibleIdxs    []int
-	shardAdds       []int64
-	shardCnts       []int
-	shardEntries    [][]batch.Entry
-	shardIdxSets    [][]int
-	maxEntries      int
+	db                 *DB
+	entries            []batch.Entry
+	backend            batch.Interface
+	size               int
+	copyArena          []byte
+	copyArenaChunks    [][]byte
+	copyArenaCap       int
+	copyBytes          int
+	ptrCopyArena       []byte
+	ptrCopyArenaChunks [][]byte
+	ptrCopyBytes       int
+	ptrValueIdxs       []int
+	walBuf             []logRecord
+	shardIdxs          []int
+	eligibleIdxs       []int
+	shardAdds          []int64
+	shardCnts          []int
+	shardEntries       [][]batch.Entry
+	shardIdxSets       [][]int
+	maxEntries         int
 
 	closed         bool
 	streamEligible bool
@@ -14701,6 +14705,7 @@ func (b *Batch) Reset() {
 		b.shardIdxSets = b.shardIdxSets[:0]
 	}
 	b.recycleCopyArenaChunks()
+	b.recyclePtrCopyArenaChunks()
 	if b.db != nil {
 		b.copyArenaCap = b.db.batchCopyArenaInitCap(0)
 	}
@@ -14716,6 +14721,9 @@ func (b *Batch) Reset() {
 	b.dictBytes = nil
 	b.dictBytesValid = false
 	b.maxEntries = 0
+	if b.ptrValueIdxs != nil {
+		b.ptrValueIdxs = b.ptrValueIdxs[:0]
+	}
 }
 
 func (b *Batch) noteEntryAppend() {
@@ -14756,6 +14764,28 @@ func (b *Batch) recycleCopyArenaChunks() {
 		return
 	}
 	chunks := b.drainCopyArenaChunks()
+	if len(chunks) == 0 {
+		return
+	}
+	putBatchArenas(chunks)
+}
+
+func (b *Batch) drainPtrCopyArenaChunks() [][]byte {
+	if b == nil {
+		return nil
+	}
+	chunks := b.ptrCopyArenaChunks
+	b.ptrCopyArenaChunks = nil
+	b.ptrCopyArena = nil
+	b.ptrCopyBytes = 0
+	return chunks
+}
+
+func (b *Batch) recyclePtrCopyArenaChunks() {
+	if b == nil {
+		return
+	}
+	chunks := b.drainPtrCopyArenaChunks()
 	if len(chunks) == 0 {
 		return
 	}
@@ -14809,6 +14839,31 @@ func (b *Batch) arenaCopy(n int) []byte {
 	return b.copyArena[start : start+n : start+n]
 }
 
+func (b *Batch) arenaCopyPtr(n int) []byte {
+	if n == 0 {
+		return nil
+	}
+	if cap(b.ptrCopyArena)-len(b.ptrCopyArena) < n {
+		chunkCap := cap(b.ptrCopyArena) * 2
+		if chunkCap < batchCopyArenaMinChunk {
+			chunkCap = batchCopyArenaMinChunk
+		}
+		if chunkCap < n {
+			chunkCap = n
+		}
+		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
+			chunkCap = batchCopyArenaMaxRetain
+		}
+		chunk := getBatchArena(chunkCap)
+		b.ptrCopyArena = chunk[:0]
+		b.ptrCopyArenaChunks = append(b.ptrCopyArenaChunks, b.ptrCopyArena)
+	}
+	start := len(b.ptrCopyArena)
+	b.ptrCopyArena = b.ptrCopyArena[:start+n]
+	b.ptrCopyBytes += n
+	return b.ptrCopyArena[start : start+n : start+n]
+}
+
 func (b *Batch) cloneKey(key []byte) []byte {
 	dst := b.arenaCopy(len(key))
 	copy(dst, key)
@@ -14830,6 +14885,24 @@ func (b *Batch) cloneKeyValue(key, value []byte) ([]byte, []byte) {
 	return keyCopy, valCopy
 }
 
+func (b *Batch) clonePtrValue(value []byte) []byte {
+	dst := b.arenaCopyPtr(len(value))
+	copy(dst, value)
+	return dst
+}
+
+func (b *Batch) shouldCopyValueToPtrArena(key, value []byte) bool {
+	if b == nil || b.db == nil || b.backend != nil {
+		return false
+	}
+	// Only split when pointer-in-memtable mode is enabled, meaning the inline
+	// value bytes will be discarded once the value-log pointer is assigned.
+	if !b.db.memtableValueLogPointers || !b.db.valueLogEnabled() {
+		return false
+	}
+	return b.db.shouldWriteViaValueLogForKeyValue(key, value)
+}
+
 func (b *Batch) Set(key, value []byte) error {
 	if b.closed {
 		return ErrBatchClosed
@@ -14841,7 +14914,15 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueNil
 	}
 
-	keyCopy, valCopy := b.cloneKeyValue(key, value)
+	idx := len(b.entries)
+	var keyCopy, valCopy []byte
+	if b.shouldCopyValueToPtrArena(key, value) {
+		keyCopy = b.cloneKey(key)
+		valCopy = b.clonePtrValue(value)
+		b.ptrValueIdxs = append(b.ptrValueIdxs, idx)
+	} else {
+		keyCopy, valCopy = b.cloneKeyValue(key, value)
+	}
 	if b.backend != nil {
 		b.batchRange.add(keyCopy)
 		b.size += len(keyCopy) + len(valCopy)
@@ -15893,7 +15974,18 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
-	b.db.retainBatchArenaChunksForMemtables(b.drainCopyArenaChunks(), touchedMems)
+	chunks := b.drainCopyArenaChunks()
+	retainPtrArena := false
+	for _, idx := range b.ptrValueIdxs {
+		if idx >= 0 && idx < len(b.entries) && b.entries[idx].Value != nil {
+			retainPtrArena = true
+			break
+		}
+	}
+	if retainPtrArena {
+		chunks = append(chunks, b.drainPtrCopyArenaChunks()...)
+	}
+	b.db.retainBatchArenaChunksForMemtables(chunks, touchedMems)
 	b.db.writeMu.RUnlock()
 
 	if needRotate {
@@ -16199,6 +16291,7 @@ func (b *Batch) Close() error {
 		}
 	}
 	b.recycleCopyArenaChunks()
+	b.recyclePtrCopyArenaChunks()
 	b.entries = nil
 	b.walBuf = nil
 	b.shardIdxs = nil
@@ -16209,6 +16302,7 @@ func (b *Batch) Close() error {
 	b.shardIdxSets = nil
 	b.firstKey = nil
 	b.lastKey = nil
+	b.ptrValueIdxs = nil
 	return nil
 }
 
