@@ -144,11 +144,20 @@ func TestTreeGet_UsesAppendReaderForPointers(t *testing.T) {
 	if string(got) != "pointer-value" {
 		t.Fatalf("unexpected value: %q", got)
 	}
-	if tracked.readUnsafeAppendCalls != 1 {
-		t.Fatalf("expected ReadUnsafeAppend to be used once, got %d", tracked.readUnsafeAppendCalls)
+	if tracked.readUnsafeCalls != 1 {
+		t.Fatalf("expected ReadUnsafe to be used once, got %d", tracked.readUnsafeCalls)
 	}
-	if tracked.readUnsafeCalls != 0 {
-		t.Fatalf("expected ReadUnsafe to be bypassed, got %d calls", tracked.readUnsafeCalls)
+	if tracked.readUnsafeAppendCalls != 0 {
+		t.Fatalf("expected ReadUnsafeAppend to be bypassed, got %d calls", tracked.readUnsafeAppendCalls)
+	}
+
+	got[0] = 'X'
+	gotAgain, err := tr.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get second read failed: %v", err)
+	}
+	if string(gotAgain) != "pointer-value" {
+		t.Fatalf("Get should return a safe copy, got %q", gotAgain)
 	}
 
 	// Regression: caller-provided dst commonly has spare capacity.

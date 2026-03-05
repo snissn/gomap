@@ -134,6 +134,80 @@ func TestConcurrentReads(t *testing.T) {
 	}
 }
 
+func TestSnapshotGet_ReturnsSafeCopyForValueLogPointer(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	key := []byte("k")
+	val := bytes.Repeat([]byte("v"), 4096)
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	vw, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("new valuelog writer: %v", err)
+	}
+	ptr, err := vw.Append(0, nil, 1, val)
+	if err != nil {
+		_ = vw.Close()
+		t.Fatalf("append valuelog: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("close valuelog writer: %v", err)
+	}
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer(key, ptr); err != nil {
+		_ = b.Close()
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write pointer batch: %v", err)
+	}
+	_ = b.Close()
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer snap.Close()
+
+	got, err := snap.Get(key)
+	if err != nil {
+		t.Fatalf("Snapshot.Get failed: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("Snapshot.Get mismatch")
+	}
+
+	got[0] = 'x'
+
+	gotAgain, err := snap.Get(key)
+	if err != nil {
+		t.Fatalf("Snapshot.Get second read failed: %v", err)
+	}
+	if !bytes.Equal(gotAgain, val) {
+		t.Fatalf("Snapshot.Get did not return a safe copy")
+	}
+
+	unsafeVal, err := snap.GetUnsafe(key)
+	if err != nil {
+		t.Fatalf("Snapshot.GetUnsafe failed: %v", err)
+	}
+	if !bytes.Equal(unsafeVal, val) {
+		t.Fatalf("Snapshot.GetUnsafe mismatch")
+	}
+}
+
 func TestIteratorKeyValueAreDefensiveCopies(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})

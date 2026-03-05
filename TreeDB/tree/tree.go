@@ -508,7 +508,11 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (t *Tree) Get(key []byte) ([]byte, error) {
-	return t.GetAppend(key, nil)
+	val, err := t.GetUnsafe(key)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), val...), nil
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {
