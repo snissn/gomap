@@ -8902,6 +8902,10 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	}
 	now := time.Now()
 	db.vlogGenerationAccrueRewriteBudget(now)
+	queueLen := 0
+	if view := db.memtables.Load(); view != nil {
+		queueLen = len(view.queue)
+	}
 
 	retained := db.valueLogRetainedStatsDetailed()
 	totalBytes := retained.BytesTotal
@@ -9003,6 +9007,13 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	}
 
 	if envBool(envDisableVlogGenerationGC) {
+		return
+	}
+	// GC is a best-effort background maintenance task. It requires a checkpoint
+	// barrier to be safe, and that barrier can be very expensive during sustained
+	// ingest/restore when the flush queue is non-empty. Avoid introducing long
+	// stalls by only running the GC path when the cached write queue is drained.
+	if queueLen != 0 {
 		return
 	}
 	if !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps) {
