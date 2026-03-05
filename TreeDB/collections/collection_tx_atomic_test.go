@@ -48,6 +48,7 @@ type atomicMockDB struct {
 	systemStore        map[string][]byte
 	rootStores         map[uint64]map[string][]byte
 	nextRootID         uint64
+	systemVersion      uint64
 	failUserBatchWrite bool
 	failSystemBatch    bool
 	directSetCalled    bool
@@ -97,7 +98,12 @@ func (d *atomicMockDB) GetSystem(key []byte) ([]byte, error) {
 func (d *atomicMockDB) SetSystem(key, value []byte) error {
 	cp := append([]byte{}, value...)
 	d.systemStore[string(key)] = cp
+	d.systemVersion++
 	return nil
+}
+
+func (d *atomicMockDB) SystemRootVersion() uint64 {
+	return d.systemVersion
 }
 
 func (d *atomicMockDB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
@@ -113,6 +119,18 @@ func (d *atomicMockDB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 		return nil, nil
 	}
 	return append([]byte{}, value...), nil
+}
+
+func (d *atomicMockDB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
+	if rootID == 0 {
+		return false, nil
+	}
+	store := d.rootStores[rootID]
+	if store == nil {
+		return false, nil
+	}
+	_, ok := store[string(key)]
+	return ok, nil
 }
 
 func (d *atomicMockDB) NewBatch() batch.Interface {
@@ -206,6 +224,9 @@ func (d *atomicMockDB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateR
 
 	d.rootStores = nextRoots
 	d.systemStore = nextSystemStore
+	if len(systemBatch.ops) > 0 {
+		d.systemVersion++
+	}
 	return newRootIDs, nil
 }
 
@@ -256,6 +277,9 @@ func (d *atomicMockDB) mutateRootInternal(rootID uint64, mutateRoot func(batch.I
 	}
 	d.userStore = nextUserStore
 	d.systemStore = nextSystemStore
+	if len(systemBatch.ops) > 0 {
+		d.systemVersion++
+	}
 	return newRootID, nil
 }
 
@@ -300,6 +324,9 @@ func (b *atomicMockBatch) Write() error {
 			continue
 		}
 		target[string(op.Key)] = append([]byte{}, op.Value...)
+	}
+	if b.system && len(b.ops) > 0 {
+		b.db.systemVersion++
 	}
 	return nil
 }
