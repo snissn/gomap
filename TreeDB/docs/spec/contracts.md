@@ -130,10 +130,14 @@ document + secondary-index entries in the main user root.
   provided TreeDB instance.
 - `CreateCollection(meta)` is idempotent for the same normalized schema and
   rejects incompatible redefinitions.
+- `CreateCollection(meta)` assigns a deterministic primary root name and
+  persists a root descriptor for that collection in the system root.
 - `OpenCollection(name)` returns `errCollectionNotFound` when metadata is absent.
+- `OpenCollection(name)` rejects legacy version-1 shared-keyspace metadata.
 - `ListCollections()` returns collection metadata sorted by collection name.
 - `DropCollection(name)` removes collection metadata, auto-id sequence state,
-  primary document entries, and secondary-index entries for that collection.
+  root descriptors, primary document entries, and secondary-index entries for
+  that collection.
 
 ### 9.2 ID modes and document identity
 
@@ -156,8 +160,10 @@ document + secondary-index entries in the main user root.
 
 - `CreateIndex(collection, def)` persists index metadata and backfills entries
   for currently visible documents.
+- `CreateIndex(collection, def)` assigns a deterministic secondary root name and
+  persists a root descriptor for that index in the system root.
 - `DropIndex(collection, name)` removes index metadata and deletes the matching
-  secondary-index entries.
+  secondary-index entries and root descriptor.
 - `FindByIndex(indexName, value)` returns matching document ids sorted in
   lexicographic order.
 - Unique indexes reject writes that would make two different document ids share
@@ -166,7 +172,15 @@ document + secondary-index entries in the main user root.
   single user-root batch, so partial visibility is not allowed for normal
   document mutations.
 
-### 9.5 Diagnostics and maintenance visibility
+### 9.5 Transitional root-layout note
+
+- As of the current phase, collection metadata declares dedicated primary and
+  secondary root descriptors, but normal collection CRUD/index reads still use
+  the legacy shared user-root keyspaces (`col:d:` / `col:i:`).
+- Subsequent phases are responsible for moving the live data path to those
+  dedicated roots and proving cross-root atomic publish.
+
+### 9.6 Diagnostics and maintenance visibility
 
 - `ListIndexes()` returns a defensive copy of the current index definitions for
   an opened collection.

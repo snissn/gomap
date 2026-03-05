@@ -103,7 +103,42 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	if err != nil {
 		return nil, err
 	}
-	if err := m.db.SetSystem(key, encoded); err != nil {
+	sysBatch := m.db.NewSystemBatch()
+	if sysBatch == nil {
+		return nil, fmt.Errorf("collections: failed to create system batch")
+	}
+	defer func() { _ = sysBatch.Close() }()
+	if err := sysBatch.Set(key, encoded); err != nil {
+		return nil, err
+	}
+	primaryRootDesc, err := newPrimaryCollectionRootDescriptor(meta)
+	if err != nil {
+		return nil, err
+	}
+	if err := setCollectionRootDescriptorOnBatch(sysBatch, primaryRootDesc); err != nil {
+		return nil, err
+	}
+	for i := range meta.Indexes {
+		indexKey, err := SystemIndexKey(meta.Name, meta.Indexes[i].Name)
+		if err != nil {
+			return nil, err
+		}
+		encodedDef := make([]byte, 0, 128)
+		if err := encodeIndexDefinition(&encodedDef, &meta.Indexes[i]); err != nil {
+			return nil, err
+		}
+		if err := sysBatch.Set(indexKey, encodedDef); err != nil {
+			return nil, err
+		}
+		rootDesc, err := newSecondaryCollectionRootDescriptor(meta.Name, &meta.Indexes[i])
+		if err != nil {
+			return nil, err
+		}
+		if err := setCollectionRootDescriptorOnBatch(sysBatch, rootDesc); err != nil {
+			return nil, err
+		}
+	}
+	if err := sysBatch.Write(); err != nil {
 		return nil, err
 	}
 	m.epoch.Add(1)
@@ -193,9 +228,21 @@ func (m *CollectionManager) DropCollection(name string) error {
 		m.clearSequenceState(name)
 		return nil
 	}
+	var existingMeta CollectionMeta
+	if err := existingMeta.Decode(existing); err != nil {
+		return err
+	}
 
 	keys := make([][]byte, 0, 8)
 	keys = append(keys, metaKey)
+	if rootKey, err := SystemCollectionRootKey(existingMeta.PrimaryRoot); err == nil {
+		keys = append(keys, rootKey)
+	}
+	for _, idx := range existingMeta.Indexes {
+		if rootKey, err := SystemCollectionRootKey(idx.RootName); err == nil {
+			keys = append(keys, rootKey)
+		}
+	}
 
 	if seqKey, err := SystemCollectionIDSequenceKey(name); err == nil {
 		keys = append(keys, seqKey)
@@ -585,6 +632,16 @@ func (m *CollectionManager) CreateIndex(collection string, def IndexDefinition) 
 	if err := ValidateIndexPath(def.Field); err != nil {
 		return nil, err
 	}
+	if def.RootName == "" {
+		rootName, err := CollectionIndexRootName(collection, def.Name)
+		if err != nil {
+			return nil, err
+		}
+		def.RootName = rootName
+	}
+	if err := ValidateRootName(def.RootName); err != nil {
+		return nil, err
+	}
 	meta, err := m.getCollection(collection)
 	if err != nil {
 		return nil, err
@@ -629,6 +686,13 @@ func (m *CollectionManager) CreateIndex(collection string, def IndexDefinition) 
 	if err := sysBatch.Set(indexKey, encodedDef); err != nil {
 		return nil, err
 	}
+	rootDesc, err := newSecondaryCollectionRootDescriptor(collection, &def)
+	if err != nil {
+		return nil, err
+	}
+	if err := setCollectionRootDescriptorOnBatch(sysBatch, rootDesc); err != nil {
+		return nil, err
+	}
 	if err := sysBatch.Write(); err != nil {
 		return nil, err
 	}
@@ -659,9 +723,11 @@ func (m *CollectionManager) DropIndex(collection, indexName string) error {
 	}
 	next := make([]IndexDefinition, 0, len(meta.Indexes))
 	found := false
+	var removed IndexDefinition
 	for _, idx := range meta.Indexes {
 		if idx.Name == indexName {
 			found = true
+			removed = idx
 			continue
 		}
 		next = append(next, idx)
@@ -692,6 +758,11 @@ func (m *CollectionManager) DropIndex(collection, indexName string) error {
 	}
 	if err := sysBatch.Delete(indexKey); err != nil {
 		return err
+	}
+	if rootKey, err := SystemCollectionRootKey(removed.RootName); err == nil {
+		if err := sysBatch.Delete(rootKey); err != nil {
+			return err
+		}
 	}
 	if err := sysBatch.Write(); err != nil {
 		return err
