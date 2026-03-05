@@ -3,9 +3,12 @@ package collections
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -45,6 +48,7 @@ type collectionDB interface {
 	Delete(key []byte) error
 	GetSystem(key []byte) ([]byte, error)
 	SetSystem(key, value []byte) error
+	NewBatch() batch.Interface
 	NewSystemBatch() batch.Interface
 	Iterator(start, end []byte) (systemIterator, error)
 	SystemIterator(start, end []byte) (systemIterator, error)
@@ -236,6 +240,27 @@ func (m *CollectionManager) DropCollection(name string) error {
 			return err
 		}
 	}
+	if indexDataPrefix, err := CollectionIndexDataPrefix(name); err == nil {
+		it, err := m.db.Iterator(indexDataPrefix, nil)
+		if err != nil {
+			return err
+		}
+		for it.Valid() {
+			key := it.UnsafeKey()
+			if !bytes.HasPrefix(key, indexDataPrefix) {
+				break
+			}
+			if !it.IsDeleted() {
+				keys = append(keys, append([]byte{}, key...))
+			}
+			it.Next()
+		}
+		err = it.Error()
+		_ = it.Close()
+		if err != nil {
+			return err
+		}
+	}
 
 	b := m.db.NewSystemBatch()
 	if b == nil {
@@ -405,7 +430,36 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c.db == nil {
 		return nil, errCollectionManagerNil
 	}
+	existing, err := c.db.Get(key)
+	if err != nil {
+		return nil, err
+	}
+	removals, additions, err := c.indexMutationForUpsert(persistedID, existing, document)
+	if err != nil {
+		return nil, err
+	}
 	if err := c.db.Set(key, document); err != nil {
+		return nil, err
+	}
+	if len(removals) == 0 && len(additions) == 0 {
+		return persistedID, nil
+	}
+	b := c.db.NewBatch()
+	if b == nil {
+		return nil, fmt.Errorf("collections: failed to create batch")
+	}
+	defer func() { _ = b.Close() }()
+	for _, idxKey := range removals {
+		if err := b.Delete(idxKey); err != nil {
+			return nil, err
+		}
+	}
+	for _, idxKey := range additions {
+		if err := b.Set(idxKey, nil); err != nil {
+			return nil, err
+		}
+	}
+	if err := b.Write(); err != nil {
 		return nil, err
 	}
 	return persistedID, nil
@@ -439,7 +493,34 @@ func (c *Collection) Delete(documentID []byte) error {
 	if c.db == nil {
 		return errCollectionManagerNil
 	}
-	return c.db.Delete(key)
+	existing, err := c.db.Get(key)
+	if err != nil {
+		return err
+	}
+	if len(existing) == 0 {
+		return c.db.Delete(key)
+	}
+	entries, err := c.indexEntriesForDocument(documentID, existing)
+	if err != nil {
+		return err
+	}
+	if err := c.db.Delete(key); err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	b := c.db.NewBatch()
+	if b == nil {
+		return fmt.Errorf("collections: failed to create batch")
+	}
+	defer func() { _ = b.Close() }()
+	for _, idxKey := range entries {
+		if err := b.Delete(idxKey); err != nil {
+			return err
+		}
+	}
+	return b.Write()
 }
 
 func (c *Collection) Upsert(documentID, document []byte) ([]byte, error) {
@@ -471,4 +552,533 @@ func requireDocumentID(documentID []byte) error {
 		return errors.New("collections: document id cannot be empty")
 	}
 	return nil
+}
+
+func (m *CollectionManager) CreateIndex(collection string, def IndexDefinition) (*IndexDefinition, error) {
+	if m == nil {
+		return nil, errCollectionManagerNil
+	}
+	if err := ValidateCollectionName(collection); err != nil {
+		return nil, err
+	}
+	if err := ValidateIndexName(def.Name); err != nil {
+		return nil, err
+	}
+	if err := ValidateIndexPath(def.Field); err != nil {
+		return nil, err
+	}
+	meta, err := m.getCollection(collection)
+	if err != nil {
+		return nil, err
+	}
+	if meta == nil {
+		return nil, errCollectionNotFound
+	}
+	for _, existing := range meta.Indexes {
+		if existing.Name == def.Name {
+			if existing == def {
+				cp := existing
+				return &cp, nil
+			}
+			return nil, fmt.Errorf("collections: index %q already exists", def.Name)
+		}
+	}
+	meta.Indexes = append(meta.Indexes, def)
+	encodedMeta, err := meta.Encode()
+	if err != nil {
+		return nil, err
+	}
+	sysBatch := m.db.NewSystemBatch()
+	if sysBatch == nil {
+		return nil, fmt.Errorf("collections: failed to create system batch")
+	}
+	defer func() { _ = sysBatch.Close() }()
+	metaKey, err := SystemCollectionMetaKey(collection)
+	if err != nil {
+		return nil, err
+	}
+	if err := sysBatch.Set(metaKey, encodedMeta); err != nil {
+		return nil, err
+	}
+	indexKey, err := SystemIndexKey(collection, def.Name)
+	if err != nil {
+		return nil, err
+	}
+	encodedDef := make([]byte, 0, 128)
+	if err := encodeIndexDefinition(&encodedDef, &def); err != nil {
+		return nil, err
+	}
+	if err := sysBatch.Set(indexKey, encodedDef); err != nil {
+		return nil, err
+	}
+	if err := sysBatch.Write(); err != nil {
+		return nil, err
+	}
+	if err := m.backfillIndex(collection, def); err != nil {
+		return nil, err
+	}
+	cp := def
+	return &cp, nil
+}
+
+func (m *CollectionManager) DropIndex(collection, indexName string) error {
+	if m == nil {
+		return errCollectionManagerNil
+	}
+	if err := ValidateCollectionName(collection); err != nil {
+		return err
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return err
+	}
+	meta, err := m.getCollection(collection)
+	if err != nil {
+		return err
+	}
+	if meta == nil {
+		return errCollectionNotFound
+	}
+	next := make([]IndexDefinition, 0, len(meta.Indexes))
+	found := false
+	for _, idx := range meta.Indexes {
+		if idx.Name == indexName {
+			found = true
+			continue
+		}
+		next = append(next, idx)
+	}
+	if !found {
+		return nil
+	}
+	meta.Indexes = next
+	encodedMeta, err := meta.Encode()
+	if err != nil {
+		return err
+	}
+	sysBatch := m.db.NewSystemBatch()
+	if sysBatch == nil {
+		return fmt.Errorf("collections: failed to create system batch")
+	}
+	defer func() { _ = sysBatch.Close() }()
+	metaKey, err := SystemCollectionMetaKey(collection)
+	if err != nil {
+		return err
+	}
+	if err := sysBatch.Set(metaKey, encodedMeta); err != nil {
+		return err
+	}
+	indexKey, err := SystemIndexKey(collection, indexName)
+	if err != nil {
+		return err
+	}
+	if err := sysBatch.Delete(indexKey); err != nil {
+		return err
+	}
+	if err := sysBatch.Write(); err != nil {
+		return err
+	}
+	prefix, err := CollectionIndexPrefix(collection, indexName)
+	if err != nil {
+		return err
+	}
+	it, err := m.db.Iterator(prefix, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+	b := m.db.NewBatch()
+	if b == nil {
+		return fmt.Errorf("collections: failed to create batch")
+	}
+	defer func() { _ = b.Close() }()
+	for it.Valid() {
+		key := it.UnsafeKey()
+		if !bytes.HasPrefix(key, prefix) {
+			break
+		}
+		if !it.IsDeleted() {
+			if err := b.Delete(append([]byte{}, key...)); err != nil {
+				return err
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return b.Write()
+}
+
+func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return nil, err
+	}
+	idxDef, ok := c.indexByName(indexName)
+	if !ok {
+		return nil, nil
+	}
+	encodedValue, err := encodeIndexScalar(value)
+	if err != nil {
+		return nil, err
+	}
+	prefix, err := indexValuePrefix(c.meta.Name, idxDef.Name, encodedValue)
+	if err != nil {
+		return nil, err
+	}
+	it, err := c.db.Iterator(prefix, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = it.Close() }()
+	out := make([][]byte, 0, 8)
+	for it.Valid() {
+		key := it.UnsafeKey()
+		if !bytes.HasPrefix(key, prefix) {
+			break
+		}
+		if !it.IsDeleted() {
+			docID, err := parseIndexEntryDocID(c.meta.Name, idxDef.Name, key)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, docID)
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i], out[j]) < 0 })
+	return out, nil
+}
+
+func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition) error {
+	dataPrefix, err := CollectionDataPrefix(collection)
+	if err != nil {
+		return err
+	}
+	it, err := m.db.Iterator(dataPrefix, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = it.Close() }()
+	b := m.db.NewBatch()
+	if b == nil {
+		return fmt.Errorf("collections: failed to create batch")
+	}
+	defer func() { _ = b.Close() }()
+	for it.Valid() {
+		key := it.UnsafeKey()
+		if !bytes.HasPrefix(key, dataPrefix) {
+			break
+		}
+		if !it.IsDeleted() {
+			docID := append([]byte{}, key[len(dataPrefix):]...)
+			indexKeys, err := indexKeysForSingleDefinition(collection, docID, it.UnsafeValue(), def, DefaultCollectionOptions())
+			if err != nil {
+				return err
+			}
+			for _, idxKey := range indexKeys {
+				if err := b.Set(idxKey, nil); err != nil {
+					return err
+				}
+			}
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return err
+	}
+	return b.Write()
+}
+
+func (c *Collection) indexMutationForUpsert(documentID, oldDoc, newDoc []byte) ([][]byte, [][]byte, error) {
+	oldEntries, err := c.indexEntriesForDocument(documentID, oldDoc)
+	if err != nil {
+		return nil, nil, err
+	}
+	newEntries, err := c.indexEntriesForDocument(documentID, newDoc)
+	if err != nil {
+		return nil, nil, err
+	}
+	oldSet := make(map[string][]byte, len(oldEntries))
+	for _, key := range oldEntries {
+		oldSet[string(key)] = key
+	}
+	newSet := make(map[string][]byte, len(newEntries))
+	for _, key := range newEntries {
+		newSet[string(key)] = key
+	}
+	removals := make([][]byte, 0, len(oldEntries))
+	for k, key := range oldSet {
+		if _, keep := newSet[k]; !keep {
+			removals = append(removals, key)
+		}
+	}
+	additions := make([][]byte, 0, len(newEntries))
+	for k, key := range newSet {
+		if _, exists := oldSet[k]; !exists {
+			additions = append(additions, key)
+		}
+	}
+	if err := c.ensureUniqueConflicts(documentID, additions); err != nil {
+		return nil, nil, err
+	}
+	return removals, additions, nil
+}
+
+func (c *Collection) ensureUniqueConflicts(documentID []byte, additions [][]byte) error {
+	if len(additions) == 0 {
+		return nil
+	}
+	for _, key := range additions {
+		indexName, valuePrefix, err := parseIndexEntryForConflict(c.meta.Name, key)
+		if err != nil {
+			return err
+		}
+		idx, ok := c.indexByName(indexName)
+		if !ok || !idx.Unique {
+			continue
+		}
+		it, err := c.db.Iterator(valuePrefix, nil)
+		if err != nil {
+			return err
+		}
+		for it.Valid() {
+			existing := it.UnsafeKey()
+			if !bytes.HasPrefix(existing, valuePrefix) {
+				break
+			}
+			if !it.IsDeleted() {
+				existingID, err := parseIndexEntryDocID(c.meta.Name, idx.Name, existing)
+				if err != nil {
+					_ = it.Close()
+					return err
+				}
+				if !bytes.Equal(existingID, documentID) {
+					_ = it.Close()
+					return fmt.Errorf("collections: unique index %q conflict", idx.Name)
+				}
+			}
+			it.Next()
+		}
+		err = it.Error()
+		_ = it.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Collection) indexEntriesForDocument(documentID, document []byte) ([][]byte, error) {
+	if len(document) == 0 || len(c.meta.Indexes) == 0 {
+		return nil, nil
+	}
+	var decoded any
+	if err := json.Unmarshal(document, &decoded); err != nil {
+		return nil, fmt.Errorf("collections: index extraction requires JSON document: %w", err)
+	}
+	obj, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("collections: index extraction requires JSON object document")
+	}
+	out := make([][]byte, 0, len(c.meta.Indexes))
+	seen := make(map[string]struct{}, len(c.meta.Indexes))
+	for _, idx := range c.meta.Indexes {
+		keys, err := indexKeysForSingleDefinition(c.meta.Name, documentID, obj, idx, c.meta.Options)
+		if err != nil {
+			return nil, err
+		}
+		for _, key := range keys {
+			s := string(key)
+			if _, exists := seen[s]; exists {
+				continue
+			}
+			seen[s] = struct{}{}
+			out = append(out, key)
+		}
+	}
+	return out, nil
+}
+
+func indexKeysForSingleDefinition(collection string, documentID []byte, document any, idx IndexDefinition, opts CollectionOptions) ([][]byte, error) {
+	value, found := extractIndexPathValue(document, idx.Field)
+	if !found || value == nil {
+		return nil, nil
+	}
+	values, err := normalizeIndexValues(value, idx.MultiKey, opts.AllowArrayValuesInIndex)
+	if err != nil {
+		return nil, err
+	}
+	out := make([][]byte, 0, len(values))
+	for _, v := range values {
+		encoded, err := encodeIndexScalar(v)
+		if err != nil {
+			return nil, err
+		}
+		key, err := buildIndexEntryKey(collection, idx.Name, encoded, documentID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, key)
+	}
+	return out, nil
+}
+
+func normalizeIndexValues(value any, multiKey, allowArray bool) ([]any, error) {
+	if arr, ok := value.([]any); ok {
+		if !multiKey && !allowArray {
+			return nil, fmt.Errorf("collections: array value not allowed for index")
+		}
+		if len(arr) == 0 {
+			return nil, nil
+		}
+		out := make([]any, 0, len(arr))
+		for _, elem := range arr {
+			out = append(out, elem)
+		}
+		return out, nil
+	}
+	return []any{value}, nil
+}
+
+func extractIndexPathValue(document any, path string) (any, bool) {
+	if path == "" {
+		return nil, false
+	}
+	current := document
+	for _, segment := range strings.Split(path, ".") {
+		obj, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		next, ok := obj[segment]
+		if !ok {
+			return nil, false
+		}
+		current = next
+	}
+	return current, true
+}
+
+func encodeIndexScalar(value any) ([]byte, error) {
+	switch v := value.(type) {
+	case string:
+		return append([]byte("s:"), []byte(v)...), nil
+	case bool:
+		if v {
+			return []byte("b:1"), nil
+		}
+		return []byte("b:0"), nil
+	case float64:
+		return []byte("n:" + strconv.FormatFloat(v, 'g', -1, 64)), nil
+	case nil:
+		return []byte("z:"), nil
+	default:
+		return nil, fmt.Errorf("collections: unsupported indexed value type %T", value)
+	}
+}
+
+func buildIndexEntryKey(collection, indexName string, encodedValue, documentID []byte) ([]byte, error) {
+	prefix, err := CollectionIndexPrefix(collection, indexName)
+	if err != nil {
+		return nil, err
+	}
+	if len(encodedValue) > 65535 {
+		return nil, fmt.Errorf("collections: index key too large")
+	}
+	key := make([]byte, 0, len(prefix)+2+len(encodedValue)+len(documentID))
+	key = append(key, prefix...)
+	key = binary.BigEndian.AppendUint16(key, uint16(len(encodedValue)))
+	key = append(key, encodedValue...)
+	key = append(key, documentID...)
+	return key, nil
+}
+
+func indexValuePrefix(collection, indexName string, encodedValue []byte) ([]byte, error) {
+	prefix, err := CollectionIndexPrefix(collection, indexName)
+	if err != nil {
+		return nil, err
+	}
+	if len(encodedValue) > 65535 {
+		return nil, fmt.Errorf("collections: index key too large")
+	}
+	out := make([]byte, 0, len(prefix)+2+len(encodedValue))
+	out = append(out, prefix...)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(encodedValue)))
+	out = append(out, encodedValue...)
+	return out, nil
+}
+
+func parseIndexEntryDocID(collection, indexName string, key []byte) ([]byte, error) {
+	prefix, err := CollectionIndexPrefix(collection, indexName)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) < len(prefix)+2 {
+		return nil, fmt.Errorf("collections: malformed index entry key")
+	}
+	if !bytes.HasPrefix(key, prefix) {
+		return nil, fmt.Errorf("collections: invalid index entry prefix")
+	}
+	cursor := len(prefix)
+	valueLen := int(binary.BigEndian.Uint16(key[cursor : cursor+2]))
+	cursor += 2
+	if len(key) < cursor+valueLen {
+		return nil, fmt.Errorf("collections: malformed index entry value length")
+	}
+	cursor += valueLen
+	if len(key) < cursor {
+		return nil, fmt.Errorf("collections: malformed index entry")
+	}
+	out := make([]byte, len(key[cursor:]))
+	copy(out, key[cursor:])
+	return out, nil
+}
+
+func parseIndexEntryForConflict(collection string, key []byte) (string, []byte, error) {
+	basePrefix, err := CollectionIndexDataPrefix(collection)
+	if err != nil {
+		return "", nil, err
+	}
+	if !bytes.HasPrefix(key, basePrefix) {
+		return "", nil, fmt.Errorf("collections: malformed index key")
+	}
+	remainder := key[len(basePrefix):]
+	sep := bytes.IndexByte(remainder, ':')
+	if sep <= 0 {
+		return "", nil, fmt.Errorf("collections: malformed index key")
+	}
+	indexPart := remainder[:sep]
+	indexNameRaw, err := base64DecodeString(string(indexPart))
+	if err != nil {
+		return "", nil, err
+	}
+	indexName := string(indexNameRaw)
+	prefix, err := CollectionIndexPrefix(collection, indexName)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(key) < len(prefix)+2 {
+		return "", nil, fmt.Errorf("collections: malformed index key")
+	}
+	valueLen := int(binary.BigEndian.Uint16(key[len(prefix) : len(prefix)+2]))
+	cut := len(prefix) + 2 + valueLen
+	if len(key) < cut {
+		return "", nil, fmt.Errorf("collections: malformed index key")
+	}
+	return indexName, append([]byte{}, key[:cut]...), nil
+}
+
+func (c *Collection) indexByName(indexName string) (IndexDefinition, bool) {
+	for _, idx := range c.meta.Indexes {
+		if idx.Name == indexName {
+			return idx, true
+		}
+	}
+	return IndexDefinition{}, false
 }

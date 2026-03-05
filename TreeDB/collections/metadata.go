@@ -15,10 +15,11 @@ const (
 )
 
 var (
-	systemCollectionMetaKeyPrefix  = []byte("sys:c:")
-	systemCollectionIndexKeyPrefix = []byte("sys:i:")
-	systemCollectionDataKeyPrefix  = []byte("col:d:")
-	systemCollectionIDSeqKeySuffix = []byte("id_seq")
+	systemCollectionMetaKeyPrefix   = []byte("sys:c:")
+	systemCollectionIndexKeyPrefix  = []byte("sys:i:")
+	systemCollectionDataKeyPrefix   = []byte("col:d:")
+	systemCollectionIndexDataPrefix = []byte("col:i:")
+	systemCollectionIDSeqKeySuffix  = []byte("id_seq")
 )
 
 const (
@@ -435,6 +436,10 @@ func normalizeKeyPart(value string) string {
 	return base64.StdEncoding.EncodeToString([]byte(value))
 }
 
+func base64DecodeString(value string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(value)
+}
+
 func SystemCollectionMetaPrefix() []byte {
 	return append([]byte{}, systemCollectionMetaKeyPrefix...)
 }
@@ -484,6 +489,31 @@ func SystemCollectionPrefix(collection string) ([]byte, error) {
 // Stored keys are user-root keys with this prefix followed by collection-local IDs.
 func CollectionDataPrefix(collection string) ([]byte, error) {
 	return SystemCollectionPrefix(collection)
+}
+
+func CollectionIndexDataPrefix(collection string) ([]byte, error) {
+	if err := ValidateCollectionName(collection); err != nil {
+		return nil, err
+	}
+	key := append([]byte{}, systemCollectionIndexDataPrefix...)
+	key = append(key, normalizeKeyPart(collection)...)
+	key = append(key, ':')
+	return key, nil
+}
+
+func CollectionIndexPrefix(collection, indexName string) ([]byte, error) {
+	if err := ValidateCollectionName(collection); err != nil {
+		return nil, err
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return nil, err
+	}
+	key := append([]byte{}, systemCollectionIndexDataPrefix...)
+	key = append(key, normalizeKeyPart(collection)...)
+	key = append(key, ':')
+	key = append(key, normalizeKeyPart(indexName)...)
+	key = append(key, ':')
+	return key, nil
 }
 
 func SystemCollectionIDSequenceKey(collection string) ([]byte, error) {
