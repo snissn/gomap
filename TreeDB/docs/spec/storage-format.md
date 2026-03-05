@@ -261,9 +261,9 @@ Notes:
 
 ## 7. Collection Keyspaces and Metadata (Experimental)
 
-Collections currently use the system root for schema/sequence metadata,
-dedicated named roots for primary documents, and the main user root for
-secondary-index entries.
+Collections currently use the system root for schema/sequence metadata and
+named-root descriptors, dedicated named roots for primary documents, and
+dedicated named roots for secondary-index entries.
 
 ### 7.1 System-root collection metadata
 
@@ -374,9 +374,10 @@ Legacy note:
 - New code rejects version `1` collection metadata rather than silently reading
   mixed layouts.
 
-### 7.6 User-root secondary-index keys
+### 7.6 Dedicated secondary-index roots
 
-Secondary index entries are stored in the user root at:
+Secondary index entries are stored inside each index's dedicated named root.
+The key format within that root remains:
 
 ```text
 col:i:<base64(collection_name)>:<base64(index_name)>:<u16 encoded_value_len><encoded_value><document_id> => empty value
@@ -389,14 +390,15 @@ col:i:<base64(collection_name)>:<base64(index_name)>:<u16 encoded_value_len><enc
 - `n:<strconv.FormatFloat(value, 'g', -1, 64)>` for numbers
 - `z:` for `null`
 
-The full key is the uniqueness boundary for secondary-index membership.
+The full key is the uniqueness boundary for secondary-index membership. Values
+remain empty; the document id is encoded in the key suffix.
 
 ### 7.7 Transitional note
 
-The collection root catalog now declares dedicated primary and secondary roots.
-The live data path uses the dedicated primary roots described above, while
-secondary-index entries still use the shared user-root keyspace until the
-follow-on secondary-root phases land.
+The collection root catalog now drives both dedicated primary and dedicated
+secondary roots. Follow-on hardening work still needs to extend DB-wide
+maintenance and value-log reachability accounting so named roots participate in
+the same rewrite/GC coverage as the user/system roots.
 - LeafRef IDs may also appear in `MetaPageBody.{User,System}RootPageID` when the
   tree height is 1 (i.e. the root page is itself a leaf page stored in the
   value log).
