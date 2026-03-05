@@ -236,4 +236,3 @@ func TestAutoID_ConcurrentContention(t *testing.T) {
 		t.Fatalf("expected %d ids, got %d", workers*perWorker, len(seen))
 	}
 }
-
