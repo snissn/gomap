@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -34,12 +35,14 @@ type CollectionManager struct {
 	db      collectionDB
 	seqMu   sync.Mutex
 	autoSeq map[string]autoIDState
+	epoch   atomic.Uint64
 }
 
 type Collection struct {
-	db   collectionDB
-	mgr  *CollectionManager
-	meta CollectionMeta
+	db        collectionDB
+	mgr       *CollectionManager
+	meta      CollectionMeta
+	metaEpoch uint64
 }
 
 type collectionDB interface {
@@ -103,6 +106,7 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	if err := m.db.SetSystem(key, encoded); err != nil {
 		return nil, err
 	}
+	m.epoch.Add(1)
 	result := meta.copy()
 	result.SetDefaults()
 	return result, nil
@@ -120,9 +124,10 @@ func (m *CollectionManager) OpenCollection(name string) (*Collection, error) {
 		return nil, errCollectionNotFound
 	}
 	return &Collection{
-		db:   m.db,
-		mgr:  m,
-		meta: *meta,
+		db:        m.db,
+		mgr:       m,
+		meta:      *meta,
+		metaEpoch: m.epoch.Load(),
 	}, nil
 }
 
@@ -279,6 +284,7 @@ func (m *CollectionManager) DropCollection(name string) error {
 	if err := b.Write(); err != nil {
 		return err
 	}
+	m.epoch.Add(1)
 	m.clearSequenceState(name)
 	return nil
 }
@@ -419,6 +425,9 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if err := c.refreshMeta(); err != nil {
+		return nil, err
+	}
 	persistedID, err := c.AllocateID(id)
 	if err != nil {
 		return nil, err
@@ -472,6 +481,9 @@ func (c *Collection) Get(documentID []byte) ([]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	if err := c.refreshMeta(); err != nil {
+		return nil, err
+	}
 	key, err := c.documentKey(documentID)
 	if err != nil {
 		return nil, err
@@ -485,6 +497,9 @@ func (c *Collection) Get(documentID []byte) ([]byte, error) {
 func (c *Collection) Delete(documentID []byte) error {
 	if c == nil {
 		return errCollectionNil
+	}
+	if err := c.refreshMeta(); err != nil {
+		return err
 	}
 	if err := requireDocumentID(documentID); err != nil {
 		return err
@@ -617,6 +632,7 @@ func (m *CollectionManager) CreateIndex(collection string, def IndexDefinition) 
 	if err := sysBatch.Write(); err != nil {
 		return nil, err
 	}
+	m.epoch.Add(1)
 	if err := m.backfillIndex(collection, def); err != nil {
 		return nil, err
 	}
@@ -680,6 +696,7 @@ func (m *CollectionManager) DropIndex(collection, indexName string) error {
 	if err := sysBatch.Write(); err != nil {
 		return err
 	}
+	m.epoch.Add(1)
 	prefix, err := CollectionIndexPrefix(collection, indexName)
 	if err != nil {
 		return err
@@ -715,6 +732,9 @@ func (m *CollectionManager) DropIndex(collection, indexName string) error {
 func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
+	}
+	if err := c.refreshMeta(); err != nil {
+		return nil, err
 	}
 	if err := ValidateIndexName(indexName); err != nil {
 		return nil, err
@@ -1084,6 +1104,29 @@ func (c *Collection) indexByName(indexName string) (IndexDefinition, bool) {
 		}
 	}
 	return IndexDefinition{}, false
+}
+
+func (c *Collection) refreshMeta() error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.mgr == nil {
+		return nil
+	}
+	currentEpoch := c.mgr.epoch.Load()
+	if c.metaEpoch == currentEpoch {
+		return nil
+	}
+	meta, err := c.mgr.getCollection(c.meta.Name)
+	if err != nil {
+		return err
+	}
+	if meta == nil {
+		return errCollectionNotFound
+	}
+	c.meta = *meta
+	c.metaEpoch = currentEpoch
+	return nil
 }
 
 func setDocumentOnBatch(b batch.Interface, key, value []byte) error {
