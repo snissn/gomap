@@ -164,3 +164,76 @@ func BenchmarkCollectionDeleteByID(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkSecondaryLookupUnique(b *testing.B) {
+	database, err := db.Open(db.Options{Dir: b.TempDir()})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer database.Close()
+	manager := NewCollectionManager(database)
+	meta, err := manager.CreateCollection(&CollectionMeta{Name: "bench_secondary_unique"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		b.Fatal(err)
+	}
+	collection, err := manager.OpenCollection(meta.Name)
+	if err != nil {
+		b.Fatal(err)
+	}
+	const count = 1024
+	emails := make([]string, count)
+	for idx := 0; idx < count; idx++ {
+		email := fmt.Sprintf("user-%d@example.com", idx)
+		emails[idx] = email
+		doc := []byte(fmt.Sprintf(`{"email":%q}`, email))
+		if _, err := collection.Insert([]byte(fmt.Sprintf("u-%d", idx)), doc); err != nil {
+			b.Fatalf("seed insert: %v", err)
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for idx := 0; idx < b.N; idx++ {
+		if _, err := collection.FindByIndex("email_idx", emails[idx%count]); err != nil {
+			b.Fatalf("find: %v", err)
+		}
+	}
+}
+
+func BenchmarkSecondaryUpsertFieldChange(b *testing.B) {
+	database, err := db.Open(db.Options{Dir: b.TempDir()})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer database.Close()
+	manager := NewCollectionManager(database)
+	meta, err := manager.CreateCollection(&CollectionMeta{Name: "bench_secondary_upsert"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+		b.Fatal(err)
+	}
+	collection, err := manager.OpenCollection(meta.Name)
+	if err != nil {
+		b.Fatal(err)
+	}
+	id := []byte("u-1")
+	if _, err := collection.Insert(id, []byte(`{"city":"hnl"}`)); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for idx := 0; idx < b.N; idx++ {
+		city := "hnl"
+		if idx%2 == 1 {
+			city = "sea"
+		}
+		doc := []byte(fmt.Sprintf(`{"city":%q}`, city))
+		if _, err := collection.Insert(id, doc); err != nil {
+			b.Fatalf("upsert: %v", err)
+		}
+	}
+}
