@@ -97,3 +97,38 @@ func TestDeleteDocument_RemovesFromAllIndexes(t *testing.T) {
 		t.Fatalf("expected city postings removed, got %#v", cityIDs)
 	}
 }
+
+func TestSecondaryUpsertFieldChange_StressNoWriteCorruption(t *testing.T) {
+	d, err := db.Open(db.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	id := []byte("u1")
+	if _, err := col.Insert(id, []byte(`{"city":"hnl"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+	for i := 0; i < 10000; i++ {
+		city := "hnl"
+		if i%2 == 1 {
+			city = "sea"
+		}
+		doc := []byte(`{"city":"` + city + `"}`)
+		if _, err := col.Insert(id, doc); err != nil {
+			t.Fatalf("upsert iteration %d: %v", i, err)
+		}
+	}
+}

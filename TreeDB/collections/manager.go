@@ -438,10 +438,10 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.db.Set(key, document); err != nil {
-		return nil, err
-	}
 	if len(removals) == 0 && len(additions) == 0 {
+		if err := c.db.Set(key, document); err != nil {
+			return nil, err
+		}
 		return persistedID, nil
 	}
 	b := c.db.NewBatch()
@@ -449,6 +449,9 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, fmt.Errorf("collections: failed to create batch")
 	}
 	defer func() { _ = b.Close() }()
+	if err := setDocumentOnBatch(b, key, document); err != nil {
+		return nil, err
+	}
 	for _, idxKey := range removals {
 		if err := b.Delete(idxKey); err != nil {
 			return nil, err
@@ -504,17 +507,17 @@ func (c *Collection) Delete(documentID []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := c.db.Delete(key); err != nil {
-		return err
-	}
 	if len(entries) == 0 {
-		return nil
+		return c.db.Delete(key)
 	}
 	b := c.db.NewBatch()
 	if b == nil {
 		return fmt.Errorf("collections: failed to create batch")
 	}
 	defer func() { _ = b.Close() }()
+	if err := b.Delete(key); err != nil {
+		return err
+	}
 	for _, idxKey := range entries {
 		if err := b.Delete(idxKey); err != nil {
 			return err
@@ -1081,4 +1084,13 @@ func (c *Collection) indexByName(indexName string) (IndexDefinition, bool) {
 		}
 	}
 	return IndexDefinition{}, false
+}
+
+func setDocumentOnBatch(b batch.Interface, key, value []byte) error {
+	if auto, ok := b.(interface {
+		SetAuto(key, value []byte) error
+	}); ok {
+		return auto.SetAuto(key, value)
+	}
+	return b.Set(key, value)
 }
