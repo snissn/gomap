@@ -14768,31 +14768,38 @@ func (b *Batch) updateBatchCopyHint() {
 	}
 }
 
-func (b *Batch) arenaCopy(n int) []byte {
-	if n == 0 {
-		return nil
-	}
-	if cap(b.copyArena)-len(b.copyArena) < n {
-		chunkCap := cap(b.copyArena) * 2
-		if chunkCap < batchCopyArenaMinChunk {
-			chunkCap = batchCopyArenaMinChunk
+	func (b *Batch) arenaCopy(n int) []byte {
+		if n == 0 {
+			return nil
 		}
-		if cap(b.copyArena) == 0 {
-			// Keep unsized batches conservative. Entry-slice capacity can come from
-			// pooled high-water marks and is not a reliable signal for copy payload.
-			if b.copyArenaCap > chunkCap {
-				chunkCap = b.copyArenaCap
+		if cap(b.copyArena)-len(b.copyArena) < n {
+			chunkCap := cap(b.copyArena) * 2
+			if chunkCap < batchCopyArenaMinChunk {
+				chunkCap = batchCopyArenaMinChunk
 			}
+			if cap(b.copyArena) == 0 {
+				// Keep unsized batches conservative. Entry-slice capacity can come from
+				// pooled high-water marks and is not a reliable signal for copy payload.
+				if b.copyArenaCap > chunkCap {
+					chunkCap = b.copyArenaCap
+				}
+			}
+			if chunkCap < n {
+				chunkCap = n
+			}
+			// Avoid unbounded exponential growth once we reach the pooling limit. Large
+			// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MB)
+			// that is mostly unused, inflating RSS. Only allow larger chunks when a
+			// *single* copy needs it.
+			if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
+				chunkCap = batchCopyArenaMaxRetain
+			}
+			// Switch to a fresh chunk when exhausted so existing entry slices keep
+			// their backing arrays without per-op allocations.
+			chunk := getBatchArena(chunkCap)
+			b.copyArena = chunk[:0]
+			b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
 		}
-		if chunkCap < n {
-			chunkCap = n
-		}
-		// Switch to a fresh chunk when exhausted so existing entry slices keep
-		// their backing arrays without per-op allocations.
-		chunk := getBatchArena(chunkCap)
-		b.copyArena = chunk[:0]
-		b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
-	}
 	start := len(b.copyArena)
 	b.copyArena = b.copyArena[:start+n]
 	b.copyBytes += n
