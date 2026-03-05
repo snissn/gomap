@@ -126,3 +126,96 @@ func TestMutateRoot_PublishesDedicatedRootAndSurvivesReopen(t *testing.T) {
 		t.Fatalf("root value mismatch after reopen: got=%q want=%q", reopenGot, doc)
 	}
 }
+
+func TestMutateRoots_PublishesMultipleDedicatedRootsAndSurvivesReopen(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	primaryDesc := collections.CollectionRootDescriptor{
+		Name:       "col.users.primary",
+		Collection: "users",
+		Kind:       collections.CollectionRootKindPrimary,
+		Format: collections.CollectionRootFormat{
+			OuterLeavesInValueLog: true,
+			LeafPrefixCompression: true,
+			AllowValues:           true,
+		},
+	}
+	indexDesc := collections.CollectionRootDescriptor{
+		Name:       "col.users.email_idx",
+		Collection: "users",
+		IndexName:  "email_idx",
+		Kind:       collections.CollectionRootKindSecondaryIndex,
+		Format: collections.CollectionRootFormat{
+			LeafPrefixCompression: true,
+		},
+	}
+	primaryRootKey, err := collections.SystemCollectionRootKey(primaryDesc.Name)
+	if err != nil {
+		t.Fatalf("primary root key: %v", err)
+	}
+	indexRootKey, err := collections.SystemCollectionRootKey(indexDesc.Name)
+	if err != nil {
+		t.Fatalf("index root key: %v", err)
+	}
+
+	docID := []byte("u1")
+	doc := []byte(`{"email":"ada@example.com"}`)
+	indexKey := []byte("col:i:users:email_idx:\x00\x11s:ada@example.comu1")
+	rootIDs, err := d.MutateRoots(false, []RootMutation{
+		{RootID: 0, Mutate: func(b batch.Interface) error { return b.Set(docID, doc) }},
+		{RootID: 0, Mutate: func(b batch.Interface) error { return b.Set(indexKey, nil) }},
+	}, func(sys batch.Interface, newRootIDs []uint64) error {
+		if len(newRootIDs) != 2 {
+			t.Fatalf("expected 2 root ids, got %d", len(newRootIDs))
+		}
+		primaryDesc.RootPageID = newRootIDs[0]
+		indexDesc.RootPageID = newRootIDs[1]
+		primaryEncoded, err := primaryDesc.Encode()
+		if err != nil {
+			return err
+		}
+		indexEncoded, err := indexDesc.Encode()
+		if err != nil {
+			return err
+		}
+		if err := sys.Set(primaryRootKey, primaryEncoded); err != nil {
+			return err
+		}
+		return sys.Set(indexRootKey, indexEncoded)
+	})
+	if err != nil {
+		t.Fatalf("MutateRoots: %v", err)
+	}
+	if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
+		t.Fatalf("expected two non-zero root ids, got %#v", rootIDs)
+	}
+
+	if err := d.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopen, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	gotDoc, err := reopen.GetAtRoot(rootIDs[0], docID)
+	if err != nil {
+		t.Fatalf("GetAtRoot primary after reopen: %v", err)
+	}
+	if !bytes.Equal(gotDoc, doc) {
+		t.Fatalf("primary doc mismatch after reopen: got=%q want=%q", gotDoc, doc)
+	}
+	gotIndex, err := reopen.GetAtRoot(rootIDs[1], indexKey)
+	if err != nil {
+		t.Fatalf("GetAtRoot secondary after reopen: %v", err)
+	}
+	if len(gotIndex) != 0 {
+		t.Fatalf("expected empty secondary value payload, got %q", gotIndex)
+	}
+}

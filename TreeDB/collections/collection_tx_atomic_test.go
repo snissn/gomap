@@ -145,6 +145,61 @@ func (d *atomicMockDB) MutateRootAndUser(rootID uint64, sync bool, mutateRoot fu
 	return d.mutateRootInternal(rootID, mutateRoot, mutateUser, updateSystem)
 }
 
+func (d *atomicMockDB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error) {
+	rootBatches := make([]*atomicMockBatch, len(rootIDs))
+	newRootIDs := make([]uint64, len(rootIDs))
+	for i := range rootIDs {
+		rootBatches[i] = &atomicMockBatch{db: d}
+		if mutateRoots[i] != nil {
+			if err := mutateRoots[i](rootBatches[i]); err != nil {
+				return nil, err
+			}
+		}
+		newRootIDs[i] = rootIDs[i]
+		if newRootIDs[i] == 0 && len(rootBatches[i].ops) > 0 {
+			newRootIDs[i] = d.nextRootID
+			d.nextRootID++
+		}
+	}
+
+	systemBatch := &atomicMockBatch{db: d, system: true}
+	if updateSystem != nil {
+		if err := updateSystem(systemBatch, newRootIDs); err != nil {
+			return nil, err
+		}
+	}
+	if d.failUserBatchWrite {
+		for i := 1; i < len(rootBatches); i++ {
+			if len(rootBatches[i].ops) > 0 {
+				return nil, errors.New("secondary root batch write failed")
+			}
+		}
+	}
+	if d.failSystemBatch && len(systemBatch.ops) > 0 {
+		return nil, errors.New("system batch write failed")
+	}
+
+	nextRoots := make(map[uint64]map[string][]byte, len(d.rootStores))
+	for rootID, store := range d.rootStores {
+		nextRoots[rootID] = cloneAtomicStore(store)
+	}
+	for i := range rootIDs {
+		targetRootID := newRootIDs[i]
+		if targetRootID == 0 {
+			continue
+		}
+		nextStore := cloneAtomicStore(d.rootStores[rootIDs[i]])
+		applyAtomicOps(nextStore, rootBatches[i].ops)
+		nextRoots[targetRootID] = nextStore
+	}
+	nextSystemStore := cloneAtomicStore(d.systemStore)
+	applyAtomicOps(nextSystemStore, systemBatch.ops)
+
+	d.rootStores = nextRoots
+	d.systemStore = nextSystemStore
+	return newRootIDs, nil
+}
+
 func (d *atomicMockDB) mutateRootInternal(rootID uint64, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
 	rootBatch := &atomicMockBatch{db: d}
 	if mutateRoot != nil {
