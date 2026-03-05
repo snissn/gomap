@@ -2137,6 +2137,21 @@ func (db *DB) forgetValueLogRetain(path string) {
 	db.valueLogMu.Unlock()
 }
 
+func (db *DB) cleanupMissingRetainedValueLog(path string) bool {
+	if path == "" {
+		return false
+	}
+	if _, err := os.Stat(path); err == nil || !os.IsNotExist(err) {
+		return false
+	}
+	db.dropValueLogSegment(path)
+	db.mu.Lock()
+	db.untrackValueLogSegmentLocked(path)
+	db.mu.Unlock()
+	db.forgetValueLogRetain(path)
+	return true
+}
+
 func (db *DB) dropValueLogSegment(path string) {
 	if db.valueLogReader == nil || path == "" {
 		return
@@ -2532,6 +2547,9 @@ func (db *DB) pruneRetainedValueLogs() {
 		if _, ok := inUse[path]; ok {
 			continue
 		}
+		if db.cleanupMissingRetainedValueLog(path) {
+			continue
+		}
 		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
 		if !ok || !valueLog {
 			continue
@@ -2552,6 +2570,9 @@ func (db *DB) pruneRetainedValueLogs() {
 				_ = db.valueLogReader.EvictSegment(id)
 			}
 			if err := marker.MarkValueLogZombie(id); err != nil {
+				if db.cleanupMissingRetainedValueLog(path) {
+					continue
+				}
 				db.reportError(fmt.Errorf("cachingdb: failed to mark value-log %d zombie: %w", id, err))
 				continue
 			}
