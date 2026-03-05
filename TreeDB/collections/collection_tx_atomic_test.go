@@ -8,6 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
 func TestInsert_BatchWriteFailure_NoPartialPrimary(t *testing.T) {
@@ -141,7 +142,15 @@ func (d *atomicMockDB) MutateRoot(rootID uint64, sync bool, mutateRoot func(batc
 	return d.mutateRootInternal(rootID, mutateRoot, nil, updateSystem)
 }
 
+func (d *atomicMockDB) MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
+	return d.mutateRootInternal(rootID, mutateRoot, nil, updateSystem)
+}
+
 func (d *atomicMockDB) MutateRootAndUser(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
+	return d.mutateRootInternal(rootID, mutateRoot, mutateUser, updateSystem)
+}
+
+func (d *atomicMockDB) MutateRootAndUserWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
 	return d.mutateRootInternal(rootID, mutateRoot, mutateUser, updateSystem)
 }
 
@@ -198,6 +207,10 @@ func (d *atomicMockDB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateR
 	d.rootStores = nextRoots
 	d.systemStore = nextSystemStore
 	return newRootIDs, nil
+}
+
+func (d *atomicMockDB) MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error) {
+	return d.MutateRootsWithFuncs(sync, rootIDs, mutateRoots, updateSystem)
 }
 
 func (d *atomicMockDB) mutateRootInternal(rootID uint64, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {

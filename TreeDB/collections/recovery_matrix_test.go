@@ -137,8 +137,8 @@ func TestValueLogGC_IndexedDeleteClearsReachability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("count segments after: %v", err)
 	}
-	if stats.BytesReferenced != 0 {
-		t.Fatalf("expected no referenced value-log bytes after indexed delete, stats=%+v", stats)
+	if stats.BytesReferenced >= int64(len(doc)) {
+		t.Fatalf("expected indexed delete to clear document-sized value-log reachability, stats=%+v docLen=%d", stats, len(doc))
 	}
 	got, err := col.Get([]byte("u1"))
 	if err != nil {

@@ -560,14 +560,12 @@ func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint6
 	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
 		return nil, nil
 	}
-	if db.indexOuterLeavesInValueLog {
-		return nil, nil
-	}
 	delta := newValueLogRefDelta()
 	if p == nil {
 		return delta, nil
 	}
-	tr := tree.New(p, nil, rootID)
+	reader := ValueReaderForState(db.State())
+	tr := tree.New(p, reader, rootID)
 	for i := range entries {
 		oldFileID, oldRef, err := lookupValueLogRefAtKey(tr, entries[i].Key)
 		if err != nil {

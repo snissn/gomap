@@ -8,6 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/rootfmt"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -15,6 +16,7 @@ import (
 // boundary alongside any system catalog updates.
 type RootMutation struct {
 	RootID uint64
+	Format *rootfmt.Format
 	Mutate func(batchpkg.Interface) error
 }
 
@@ -57,31 +59,53 @@ func (db *DB) IteratorAtRootWithOptions(rootID uint64, start, end []byte, opts I
 // MutateRoot applies a batch to the provided root page and updates the system
 // catalog in the same durable commit.
 func (db *DB) MutateRoot(rootID uint64, sync bool, mutateRoot func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {
-	return db.mutateRootInternal(rootID, sync, mutateRoot, nil, updateSystem)
+	return db.MutateRootWithFormat(rootID, nil, sync, mutateRoot, updateSystem)
+}
+
+// MutateRootWithFormat applies a batch to the provided root page using the
+// supplied root-local format overrides and updates the system catalog in the
+// same durable commit.
+func (db *DB) MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {
+	return db.mutateRootInternal(rootID, format, sync, mutateRoot, nil, updateSystem)
 }
 
 // MutateRootAndUser atomically applies mutations to a dedicated root, the user
 // root, and the system root in one commit boundary.
 func (db *DB) MutateRootAndUser(rootID uint64, sync bool, mutateRoot func(batchpkg.Interface) error, mutateUser func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {
-	return db.mutateRootInternal(rootID, sync, mutateRoot, mutateUser, updateSystem)
+	return db.MutateRootAndUserWithFormat(rootID, nil, sync, mutateRoot, mutateUser, updateSystem)
+}
+
+// MutateRootAndUserWithFormat atomically applies mutations to a dedicated root,
+// the user root, and the system root in one commit boundary using the supplied
+// root-local format overrides for the detached root.
+func (db *DB) MutateRootAndUserWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batchpkg.Interface) error, mutateUser func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {
+	return db.mutateRootInternal(rootID, format, sync, mutateRoot, mutateUser, updateSystem)
 }
 
 // MutateRoots atomically applies mutations to multiple detached roots and the
 // system root in one commit boundary. The user root remains unchanged.
 func (db *DB) MutateRoots(sync bool, roots []RootMutation, updateSystem func(batchpkg.Interface, []uint64) error) ([]uint64, error) {
 	rootIDs := make([]uint64, len(roots))
+	formats := make([]*rootfmt.Format, len(roots))
 	mutators := make([]func(batchpkg.Interface) error, len(roots))
 	for i := range roots {
 		rootIDs[i] = roots[i].RootID
+		formats[i] = roots[i].Format
 		mutators[i] = roots[i].Mutate
 	}
-	return db.MutateRootsWithFuncs(sync, rootIDs, mutators, updateSystem)
+	return db.MutateRootsWithFormats(sync, rootIDs, formats, mutators, updateSystem)
 }
 
 // MutateRootsWithFuncs is the function-based form of MutateRoots. It is used
 // by higher-level packages that cannot import db.RootMutation without creating
 // package import cycles in tests.
 func (db *DB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, []uint64) error) ([]uint64, error) {
+	return db.MutateRootsWithFormats(sync, rootIDs, nil, mutateRoots, updateSystem)
+}
+
+// MutateRootsWithFormats is the function-based form of MutateRoots with
+// explicit per-root format overrides.
+func (db *DB) MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, []uint64) error) ([]uint64, error) {
 	if db == nil {
 		return nil, fmt.Errorf("missing db")
 	}
@@ -90,6 +114,9 @@ func (db *DB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []fu
 	}
 	if len(rootIDs) != len(mutateRoots) {
 		return nil, fmt.Errorf("mutate roots length mismatch")
+	}
+	if len(formats) > 0 && len(formats) != len(rootIDs) {
+		return nil, fmt.Errorf("mutate root formats length mismatch")
 	}
 
 	rootBatches := make([]*Batch, len(rootIDs))
@@ -137,19 +164,21 @@ func (db *DB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []fu
 	retired := make([]uint64, 0, len(rootIDs)*2)
 	metrics := adaptive.Metrics{}
 	valueLogDeltas := make([]*valueLogRefDelta, 0, len(rootIDs))
+	forceValueLogRefresh := db.indexOuterLeavesInValueLog
 
 	for i := range rootIDs {
 		rootID := rootIDs[i]
 		rootBatch := rootBatches[i]
+		format := rootMutationFormatAt(formats, i)
 		if rootID == 0 && rootBatch != nil && len(rootBatch.batch.SortedEntries()) > 0 {
 			var err error
-			rootID, err = db.allocateDetachedRootLocked(idx)
+			rootID, err = db.allocateDetachedRootLocked(idx, format)
 			if err != nil {
 				return nil, err
 			}
 		}
 
-		newRootID, rootRetired, rootMetrics, err := idx.zipper.Apply(rootID, rootBatch.batch)
+		newRootID, rootRetired, rootMetrics, err := db.zipperForRootFormat(idx, format).Apply(rootID, rootBatch.batch)
 		if err != nil {
 			return nil, err
 		}
@@ -161,6 +190,9 @@ func (db *DB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []fu
 		retired = append(retired, rootRetired...)
 		metrics = mergeAdaptiveMetrics(metrics, rootMetrics)
 		valueLogDeltas = append(valueLogDeltas, rootDelta)
+		if db.rootFormatUsesLeafPageValueLog(format) {
+			forceValueLogRefresh = true
+		}
 	}
 
 	systemBatch, err := newDetachedBatch(db, true)
@@ -194,13 +226,13 @@ func (db *DB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []fu
 	valueLogDeltas = append(valueLogDeltas, systemDelta)
 	vlogRefDelta := mergeValueLogRefDeltas(valueLogDeltas...)
 	touchedValueLogSegments := combineTouchedValueLogSegments(append(rootBatches, systemBatch)...)
-	if err := db.finalizeCommit(currentUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
+	if err := db.finalizeCommit(currentUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta); err != nil {
 		return nil, err
 	}
 	return newRootIDs, nil
 }
 
-func (db *DB) mutateRootInternal(rootID uint64, sync bool, mutateRoot func(batchpkg.Interface) error, mutateUser func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {
+func (db *DB) mutateRootInternal(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batchpkg.Interface) error, mutateUser func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {
 	if db == nil {
 		return 0, fmt.Errorf("missing db")
 	}
@@ -259,13 +291,13 @@ func (db *DB) mutateRootInternal(rootID uint64, sync bool, mutateRoot func(batch
 	defer idx.registry.Unregister(regID)
 
 	if rootID == 0 && len(rootBatch.batch.SortedEntries()) > 0 {
-		rootID, err = db.allocateDetachedRootLocked(idx)
+		rootID, err = db.allocateDetachedRootLocked(idx, format)
 		if err != nil {
 			return 0, err
 		}
 	}
 
-	newRootID, rootRetired, rootMetrics, err := idx.zipper.Apply(rootID, rootBatch.batch)
+	newRootID, rootRetired, rootMetrics, err := db.zipperForRootFormat(idx, format).Apply(rootID, rootBatch.batch)
 	if err != nil {
 		return 0, err
 	}
@@ -317,7 +349,7 @@ func (db *DB) mutateRootInternal(rootID uint64, sync bool, mutateRoot func(batch
 	metrics := mergeAdaptiveMetrics(rootMetrics, userMetrics, systemMetrics)
 	touchedValueLogSegments := combineTouchedValueLogSegments(rootBatch, userBatch, systemBatch)
 	vlogRefDelta := mergeValueLogRefDeltas(rootDelta, userDelta)
-	if err := db.finalizeCommit(newUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
+	if err := db.finalizeCommit(newUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog || db.rootFormatUsesLeafPageValueLog(format), vlogRefDelta); err != nil {
 		return 0, err
 	}
 	if db.vacuum.Active() && userBatch != nil {
@@ -419,10 +451,11 @@ func mergeAdaptiveMetrics(metrics ...adaptive.Metrics) adaptive.Metrics {
 	return out
 }
 
-func (db *DB) allocateDetachedRootLocked(idx *indexGen) (uint64, error) {
+func (db *DB) allocateDetachedRootLocked(idx *indexGen, format *rootfmt.Format) (uint64, error) {
 	if db == nil || idx == nil || idx.pager == nil {
 		return 0, fmt.Errorf("missing index pager")
 	}
+	rootFormat := db.normalizeRootMutationFormat(format)
 	rootID, err := idx.pager.Alloc(1)
 	if err != nil {
 		return 0, err
@@ -432,7 +465,7 @@ func (db *DB) allocateDetachedRootLocked(idx *indexGen) (uint64, error) {
 		return 0, err
 	}
 	builder := node.NewBuilderWithOptions(data, page.PageTypeLeaf, node.BuilderOptions{
-		LeafPrefixCompression: db.leafPrefixCompression,
+		LeafPrefixCompression: rootFormat.LeafPrefixCompression,
 		LeafColumnar:          db.indexColumnarLeaves,
 		PackedValuePtr:        db.indexPackedValuePtr,
 		InternalBaseDelta:     db.indexInternalBaseDelta,
@@ -440,6 +473,51 @@ func (db *DB) allocateDetachedRootLocked(idx *indexGen) (uint64, error) {
 	builder.SetPageID(rootID)
 	builder.Finish()
 	return rootID, nil
+}
+
+func rootMutationFormatAt(formats []*rootfmt.Format, index int) *rootfmt.Format {
+	if len(formats) == 0 || index < 0 || index >= len(formats) {
+		return nil
+	}
+	return formats[index]
+}
+
+func (db *DB) normalizeRootMutationFormat(format *rootfmt.Format) rootfmt.Format {
+	if format != nil {
+		return *format
+	}
+	return rootfmt.Format{
+		OuterLeavesInValueLog: db.indexOuterLeavesInValueLog,
+		LeafPrefixCompression: db.leafPrefixCompression,
+		AllowValues:           true,
+	}
+}
+
+func (db *DB) rootFormatUsesLeafPageValueLog(format *rootfmt.Format) bool {
+	return db.normalizeRootMutationFormat(format).OuterLeavesInValueLog
+}
+
+func (db *DB) zipperForRootFormat(idx *indexGen, format *rootfmt.Format) interface {
+	Apply(rootID uint64, b *batchpkg.Batch) (uint64, []uint64, adaptive.Metrics, error)
+} {
+	if idx == nil || idx.zipper == nil {
+		return nil
+	}
+	rootFormat := db.normalizeRootMutationFormat(format)
+	if rootFormat.OuterLeavesInValueLog == db.indexOuterLeavesInValueLog && rootFormat.LeafPrefixCompression == db.leafPrefixCompression {
+		return idx.zipper
+	}
+	clone := idx.zipper.CloneWithAllocator(idx.allocator)
+	clone.SetLeafPrefixCompression(rootFormat.LeafPrefixCompression)
+	clone.SetIndexInternalBaseDelta(db.indexInternalBaseDelta)
+	clone.SetOuterLeavesInValueLog(rootFormat.OuterLeavesInValueLog)
+	if rootFormat.OuterLeavesInValueLog {
+		clone.SetLeafPageReader(db.valueLogManager)
+		clone.SetLeafPageLog(db.leafPageLog)
+	} else {
+		clone.SetLeafPageLog(nil)
+	}
+	return clone
 }
 
 type emptyIterator struct{}

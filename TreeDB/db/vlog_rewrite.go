@@ -1628,7 +1628,7 @@ func (db *DB) applyNamedRootRewriteSwapBatch(rootKey []byte, swaps []rewriteSwap
 
 	retired = append(retired, systemRetired...)
 	metrics = mergeAdaptiveMetrics(metrics, systemMetrics)
-	if err := db.finalizeCommit(currentUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog, mergeValueLogRefDeltas(rootDelta, systemDelta)); err != nil {
+	if err := db.finalizeCommit(currentUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, db.indexOuterLeavesInValueLog || desc.format.outerLeavesInValueLog, mergeValueLogRefDeltas(rootDelta, systemDelta)); err != nil {
 		return err
 	}
 	return nil

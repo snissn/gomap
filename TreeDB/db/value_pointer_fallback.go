@@ -88,7 +88,7 @@ func (db *DB) inlineAppenderLocked() (*replayInlineAppender, error) {
 		}
 	}
 	maxSegmentBytes := int64(0)
-	if db.indexPackedValuePtr || db.indexOuterLeavesInValueLog {
+	if db.indexPackedValuePtr || db.leafPageLog != nil {
 		maxSegmentBytes = int64(^uint32(0)) - 4
 	}
 	walDir := filepath.Join(db.dir, "wal")

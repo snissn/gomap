@@ -121,3 +121,5 @@ Template and dictionary lookup failures for encoded/compressed records are treat
 2. Unreferenced segments may be deleted; referenced segments must remain.
 3. Segment deletion is reachability-based, not age-based.
 4. Rewrite must preserve key/value visibility across reopen.
+5. Named-root descriptor format bits must survive rewrite/vacuum so dedicated
+   roots keep their configured outer-leaf-vlog behavior after maintenance.

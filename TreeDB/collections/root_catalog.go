@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
 const collectionRootDescriptorVersion = 1
@@ -17,11 +18,7 @@ const (
 	CollectionRootKindSecondaryIndex
 )
 
-type CollectionRootFormat struct {
-	OuterLeavesInValueLog bool
-	LeafPrefixCompression bool
-	AllowValues           bool
-}
+type CollectionRootFormat = rootfmt.Format
 
 type CollectionRootDescriptor struct {
 	Version    uint16

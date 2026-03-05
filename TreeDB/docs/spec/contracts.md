@@ -154,6 +154,10 @@ secondary-index entries in dedicated named roots.
 - `Insert(id, document)` behaves as an upsert keyed by document id.
 - New-version collections store primary documents in a dedicated TreeDB root
   keyed directly by `_id` bytes, not under the legacy shared `col:d:` prefix.
+- The primary root descriptor's format bits control live writes independently
+  of DB-global `Options.IndexOuterLeavesInValueLog`; outer-leaf-vlog
+  collections keep writing leaf pages through the value log even when the DB's
+  user root is pager-backed.
 - `Get(id)` returns the raw stored document bytes or `(nil, nil)` on miss.
 - `Delete(id)` removes the primary document and any derived secondary-index
   entries for that document.
@@ -166,6 +170,9 @@ secondary-index entries in dedicated named roots.
   persists a root descriptor for that index in the system root.
 - `DropIndex(collection, name)` removes index metadata and its root descriptor;
   the detached index root becomes unreachable from collection reads.
+- Secondary-index root descriptors disable value-bearing entries and outer-leaf
+  value-log writes for those roots even when DB-global
+  `Options.IndexOuterLeavesInValueLog` is enabled.
 - `FindByIndex(indexName, value)` returns matching document ids sorted in
   lexicographic order.
 - Unique indexes reject writes that would make two different document ids share
@@ -174,12 +181,15 @@ secondary-index entries in dedicated named roots.
   secondary root, and the system-root root descriptors in one commit boundary,
   so partial visibility is not allowed for normal document mutations.
 
-### 9.5 Transitional root-layout note
+### 9.5 Root-format and maintenance guarantees
 
-- Primary documents and secondary indexes now both use dedicated named roots.
-- DB-wide maintenance now scans and rebuilds dedicated named roots alongside
-  the user/system roots, so GC, rewrite, and vacuum preserve collection data
-  and secondary-index coherence across reopen.
+- Primary documents and secondary indexes both use dedicated named roots.
+- Named-root descriptor format bits are enforced on live writes, online/offline
+  rewrite, and online/offline vacuum, so per-root storage mode does not drift
+  toward the DB-global user-root setting.
+- DB-wide maintenance scans and rebuilds dedicated named roots alongside the
+  user/system roots, so GC, rewrite, and vacuum preserve collection data and
+  secondary-index coherence across reopen.
 
 ### 9.6 Diagnostics and maintenance visibility
 

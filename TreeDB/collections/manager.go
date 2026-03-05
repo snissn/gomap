@@ -14,6 +14,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
 const (
@@ -57,6 +58,9 @@ type collectionDB interface {
 	Iterator(start, end []byte) (systemIterator, error)
 	IteratorAtRoot(rootID uint64, start, end []byte) (systemIterator, error)
 	SystemIterator(start, end []byte) (systemIterator, error)
+	MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error)
+	MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
+	MutateRootAndUserWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
 	MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error)
 	MutateRoot(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
 	MutateRootAndUser(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
@@ -884,7 +888,9 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 	if len(indexKeys) == 0 {
 		return nil
 	}
-	_, err = m.db.MutateRootsWithFuncs(false, []uint64{indexRootDesc.RootPageID}, []func(batch.Interface) error{
+	_, err = m.db.MutateRootsWithFormats(false, []uint64{indexRootDesc.RootPageID}, []*rootfmt.Format{
+		&indexRootDesc.Format,
+	}, []func(batch.Interface) error{
 		func(root batch.Interface) error {
 			for _, indexKey := range indexKeys {
 				if err := root.Set(indexKey, nil); err != nil {
@@ -1331,22 +1337,25 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		return err
 	}
 	if len(indexMutations) == 0 {
-		_, err := c.db.MutateRoot(primaryDesc.RootPageID, false, mutatePrimary, func(sys batch.Interface, newRootID uint64) error {
+		_, err := c.db.MutateRootWithFormat(primaryDesc.RootPageID, &primaryDesc.Format, false, mutatePrimary, func(sys batch.Interface, newRootID uint64) error {
 			return writeRootDescriptorUpdate(sys, primaryRootKey, primaryDesc, newRootID)
 		})
 		return err
 	}
 
 	rootIDs := make([]uint64, 0, len(indexMutations)+1)
+	rootFormats := make([]*rootfmt.Format, 0, len(indexMutations)+1)
 	rootMutations := make([]func(batch.Interface) error, 0, len(indexMutations)+1)
 	rootUpdates := make([]collectionRootUpdate, 0, len(indexMutations)+1)
 	rootIDs = append(rootIDs, primaryDesc.RootPageID)
+	rootFormats = append(rootFormats, &primaryDesc.Format)
 	rootMutations = append(rootMutations, mutatePrimary)
 	rootUpdates = append(rootUpdates, collectionRootUpdate{desc: primaryDesc, rootKey: primaryRootKey})
 
 	for i := range indexMutations {
 		indexMutation := indexMutations[i]
 		rootIDs = append(rootIDs, indexMutation.desc.RootPageID)
+		rootFormats = append(rootFormats, &indexMutation.desc.Format)
 		rootMutations = append(rootMutations, func(root batch.Interface) error {
 			for _, indexKey := range indexMutation.removals {
 				if err := root.Delete(indexKey); err != nil {
@@ -1366,7 +1375,7 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		})
 	}
 
-	_, err = c.db.MutateRootsWithFuncs(false, rootIDs, rootMutations, func(sys batch.Interface, newRootIDs []uint64) error {
+	_, err = c.db.MutateRootsWithFormats(false, rootIDs, rootFormats, rootMutations, func(sys batch.Interface, newRootIDs []uint64) error {
 		if len(newRootIDs) != len(rootUpdates) {
 			return fmt.Errorf("collections: root publish mismatch: got %d ids for %d updates", len(newRootIDs), len(rootUpdates))
 		}

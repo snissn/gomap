@@ -355,6 +355,10 @@ bytes IndexName              // empty for primary roots
 u64 RootPageID               // 0 before first root-local write; otherwise current root page id
 ```
 
+These descriptor flags are the source of truth for dedicated-root writes and
+maintenance. They are applied independently of the DB-global user-root format
+knobs.
+
 ### 7.5 Dedicated primary document roots
 
 Primary collection documents for metadata version `2` are stored in the
@@ -366,6 +370,10 @@ collection's dedicated named root, keyed directly by `_id` bytes:
 
 The document payload is opaque to TreeDB itself, but the current collection
 indexer expects JSON-object documents when secondary indexes are configured.
+
+If the primary root descriptor has `outer-leaves-in-vlog` set, the root may be
+a LeafRef even when `Options.IndexOuterLeavesInValueLog` is false for the DB's
+main user root.
 
 Legacy note:
 
@@ -393,12 +401,19 @@ col:i:<base64(collection_name)>:<base64(index_name)>:<u16 encoded_value_len><enc
 The full key is the uniqueness boundary for secondary-index membership. Values
 remain empty; the document id is encoded in the key suffix.
 
+If the secondary root descriptor clears `outer-leaves-in-vlog`, the root stays
+pager-backed even when `Options.IndexOuterLeavesInValueLog` is true for the
+DB's main user root.
+
 ### 7.7 Maintenance participation
 
 The collection root catalog drives both dedicated primary and dedicated
 secondary roots, and DB-wide maintenance walks those named roots alongside the
 user/system roots for GC, online/offline value-log rewrite, and
 online/offline index vacuum.
+- Deleting all documents from a collection can still leave a small live
+  value-log footprint when the primary root uses outer-leaf-in-vlog mode,
+  because the now-empty root leaf remains reachable until rewritten.
 - LeafRef IDs may also appear in named-root `RootPageID` values and in
   `MetaPageBody.{User,System}RootPageID` when the
   tree height is 1 (i.e. the root page is itself a leaf page stored in the
