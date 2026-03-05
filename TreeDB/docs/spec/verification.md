@@ -148,6 +148,7 @@ Invariant:
 Coverage:
 - `TreeDB/collections/collection_lifecycle_test.go`
 - `TreeDB/collections/id_generation_test.go`
+- `TreeDB/collections/root_catalog_test.go`
 - `TreeDB/collections/document_primary_test.go`
 - `TreeDB/collections/secondary_index_lifecycle_test.go`
 - `TreeDB/collections/secondary_index_query_test.go`
@@ -159,6 +160,8 @@ Coverage:
 - `TreeDB/collections/api_doc_test.go`
 - `TreeDB/collections/edge_case_test.go`
 - `TreeDB/collections/consistency_fuzz_test.go`
+- `TreeDB/db/named_root_catalog_test.go`
+- `TreeDB/db/system_root_catalog_internals_test.go`
 
 Benchmark coverage:
 - `TreeDB/collections/collection_bench_test.go`:
@@ -171,3 +174,5 @@ Benchmark coverage:
   - `BenchmarkSecondaryUpsertFieldChange`
   - `BenchmarkCollectionStats`
   - `BenchmarkCollectionCheckConsistency`
+  - `BenchmarkCollectionMeta_EncodeLarge`
+  - `BenchmarkCollectionRootDescriptorEncode`

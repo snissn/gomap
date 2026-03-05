@@ -286,10 +286,14 @@ col:d:<base64(collection_name)>:id_seq => u64 big-endian last_issued_id
 
 ### 7.2 `CollectionMeta` binary value format
 
+Current collection metadata version is `2`.
+
 ```text
-u8  Version                  // currently 1
+u8  Version                  // currently 2
 u16 NameLen
 bytes Name
+u16 PrimaryRootNameLen
+bytes PrimaryRootName
 u8  IDMode                   // 0=caller-provided, 1=auto
 u8  StorageMode              // 0=outer-leaf-in-vlog, 1=inner-only
 u8  RejectMissingFields      // 0 or 1
@@ -320,8 +324,37 @@ Defined tags:
 - `0x01`: index name (`u16 len` + bytes)
 - `0x02`: indexed field path (`u16 len` + bytes)
 - `0x03`: option flags (`u8`, bit0=`Unique`, bit1=`MultiKey`)
+- `0x05`: named secondary-root reference (`u16 len` + bytes)
 
-### 7.4 User-root primary document keys
+Versioning note:
+
+- Version `1` represented the legacy shared-keyspace collection layout and is
+  now rejected by the collection manager.
+
+### 7.4 System-root named collection roots
+
+Collection root descriptors are stored at:
+
+```text
+sys:r:<base64(root_name)> => CollectionRootDescriptor
+```
+
+`CollectionRootDescriptor` binary format:
+
+```text
+u8  Version                  // currently 1
+u8  Kind                     // 1=primary, 2=secondary_index
+u8  Flags                    // bit0=outer-leaves-in-vlog, bit1=leaf-prefix-compression, bit2=allow-values
+u16 RootNameLen
+bytes RootName
+u16 CollectionNameLen
+bytes CollectionName
+u16 IndexNameLen
+bytes IndexName              // empty for primary roots
+u64 RootPageID               // 0 until dedicated root materialization phases publish it
+```
+
+### 7.5 User-root primary document keys
 
 Primary collection documents are stored in the user root at:
 
@@ -332,7 +365,7 @@ col:d:<base64(collection_name)>:<document_id> => raw document bytes
 The document payload is opaque to TreeDB itself, but the current collection
 indexer expects JSON-object documents when secondary indexes are configured.
 
-### 7.5 User-root secondary-index keys
+### 7.6 User-root secondary-index keys
 
 Secondary index entries are stored in the user root at:
 
@@ -348,6 +381,12 @@ col:i:<base64(collection_name)>:<base64(index_name)>:<u16 encoded_value_len><enc
 - `z:` for `null`
 
 The full key is the uniqueness boundary for secondary-index membership.
+
+### 7.7 Transitional note
+
+The collection root catalog now declares dedicated primary and secondary roots,
+but the live collection data path still uses the shared user-root keyspaces
+above until the follow-on multi-root phases land.
 - LeafRef IDs may also appear in `MetaPageBody.{User,System}RootPageID` when the
   tree height is 1 (i.e. the root page is itself a leaf page stored in the
   value log).

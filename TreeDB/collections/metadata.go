@@ -11,12 +11,13 @@ import (
 )
 
 const (
-	collectionMetaVersion = 1
+	collectionMetaVersion = 2
 )
 
 var (
 	systemCollectionMetaKeyPrefix   = []byte("sys:c:")
 	systemCollectionIndexKeyPrefix  = []byte("sys:i:")
+	systemCollectionRootKeyPrefix   = []byte("sys:r:")
 	systemCollectionDataKeyPrefix   = []byte("col:d:")
 	systemCollectionIndexDataPrefix = []byte("col:i:")
 	systemCollectionIDSeqKeySuffix  = []byte("id_seq")
@@ -46,6 +47,7 @@ type IndexDefinition struct {
 	Field    string
 	Unique   bool
 	MultiKey bool
+	RootName string
 }
 
 type CollectionOptions struct {
@@ -56,10 +58,11 @@ type CollectionOptions struct {
 }
 
 type CollectionMeta struct {
-	Version uint16
-	Name    string
-	Options CollectionOptions
-	Indexes []IndexDefinition
+	Version     uint16
+	Name        string
+	PrimaryRoot string
+	Options     CollectionOptions
+	Indexes     []IndexDefinition
 }
 
 type indexDefField uint8
@@ -69,6 +72,7 @@ const (
 	indexDefFieldField    indexDefField = 2
 	indexDefFieldUnique   indexDefField = 3
 	indexDefFieldMultiKey indexDefField = 4
+	indexDefFieldRootName indexDefField = 5
 )
 
 func (m *CollectionMeta) normalizeAndValidate() error {
@@ -76,12 +80,15 @@ func (m *CollectionMeta) normalizeAndValidate() error {
 		return errors.New("collections: nil collection metadata")
 	}
 	if m.Version == 0 {
-		m.Version = 1
+		m.Version = collectionMetaVersion
 	}
 	if m.Version != collectionMetaVersion {
 		return fmt.Errorf("collections: unsupported collection metadata version %d", m.Version)
 	}
 	if err := ValidateCollectionName(m.Name); err != nil {
+		return err
+	}
+	if err := m.ensureRootNames(); err != nil {
 		return err
 	}
 	nameCounted := m.Name
@@ -97,9 +104,15 @@ func (m *CollectionMeta) normalizeAndValidate() error {
 	if m.Options.StorageMode != CollectionStorageModeOuterLeafInValueLog && m.Options.StorageMode != CollectionStorageModeInnerOnly {
 		return errors.New("collections: unsupported storage mode")
 	}
+	if err := ValidateRootName(m.PrimaryRoot); err != nil {
+		return fmt.Errorf("collections: invalid primary root: %w", err)
+	}
 	for i := range m.Indexes {
 		if err := ValidateIndexPath(m.Indexes[i].Field); err != nil {
 			return fmt.Errorf("collections: invalid index[%d].field: %w", i, err)
+		}
+		if err := ValidateRootName(m.Indexes[i].RootName); err != nil {
+			return fmt.Errorf("collections: invalid index[%d].root_name: %w", i, err)
 		}
 	}
 	sort.SliceStable(m.Indexes, func(i, j int) bool {
@@ -133,10 +146,11 @@ func DefaultCollectionOptions() CollectionOptions {
 
 func (m *CollectionMeta) copy() *CollectionMeta {
 	cp := &CollectionMeta{
-		Version: m.Version,
-		Name:    m.Name,
-		Options: m.Options,
-		Indexes: append([]IndexDefinition(nil), m.Indexes...),
+		Version:     m.Version,
+		Name:        m.Name,
+		PrimaryRoot: m.PrimaryRoot,
+		Options:     m.Options,
+		Indexes:     append([]IndexDefinition(nil), m.Indexes...),
 	}
 	return cp
 }
@@ -149,6 +163,9 @@ func (m *CollectionMeta) SetDefaults() {
 		m.Options.StorageMode = DefaultCollectionOptions().StorageMode
 	}
 	m.Options.RejectMissingFields = true
+	if m.Name != "" {
+		_ = m.ensureRootNames()
+	}
 }
 
 func (m *CollectionMeta) Encode() ([]byte, error) {
@@ -162,12 +179,18 @@ func (m *CollectionMeta) Encode() ([]byte, error) {
 	if len(name) > 65535 {
 		return nil, errors.New("collections: collection name too long")
 	}
-	out := make([]byte, 0, 64+len(name))
+	primaryRoot := []byte(memo.PrimaryRoot)
+	if len(primaryRoot) > 65535 {
+		return nil, errors.New("collections: primary root name too long")
+	}
+	out := make([]byte, 0, 96+len(name)+len(primaryRoot))
 	out = append(out, byte(collectionMetaVersion))
 	tmp := make([]byte, 2)
 	binary.BigEndian.PutUint16(tmp, uint16(len(name)))
 	out = append(out, tmp...)
 	out = append(out, name...)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(primaryRoot)))
+	out = append(out, primaryRoot...)
 	out = append(out, byte(memo.Options.IDMode))
 	out = append(out, byte(memo.Options.StorageMode))
 	if memo.Options.RejectMissingFields {
@@ -190,10 +213,13 @@ func (m *CollectionMeta) Encode() ([]byte, error) {
 }
 
 func (m *CollectionMeta) Decode(raw []byte) error {
-	if len(raw) < 11 {
+	if len(raw) < 13 {
 		return errors.New("collections: truncated collection metadata")
 	}
 	ver := int(raw[0])
+	if ver == 1 && collectionMetaVersion > 1 {
+		return errors.New("collections: legacy shared-keyspace collection metadata is unsupported")
+	}
 	if ver != collectionMetaVersion {
 		return fmt.Errorf("collections: unsupported collection metadata version %d", ver)
 	}
@@ -205,6 +231,16 @@ func (m *CollectionMeta) Decode(raw []byte) error {
 	}
 	name := string(raw[cursor : cursor+nameLen])
 	cursor += nameLen
+	if cursor+2 > len(raw) {
+		return errors.New("collections: malformed collection metadata payload")
+	}
+	rootLen := int(binary.BigEndian.Uint16(raw[cursor : cursor+2]))
+	cursor += 2
+	if cursor+rootLen > len(raw) {
+		return errors.New("collections: malformed primary root name length")
+	}
+	primaryRoot := string(raw[cursor : cursor+rootLen])
+	cursor += rootLen
 	if cursor >= len(raw) {
 		return errors.New("collections: malformed collection metadata payload")
 	}
@@ -248,10 +284,11 @@ func (m *CollectionMeta) Decode(raw []byte) error {
 		return errors.New("collections: trailing bytes in collection metadata")
 	}
 	candidate := CollectionMeta{
-		Version: uint16(ver),
-		Name:    name,
-		Options: opts,
-		Indexes: indexes,
+		Version:     uint16(ver),
+		Name:        name,
+		PrimaryRoot: primaryRoot,
+		Options:     opts,
+		Indexes:     indexes,
 	}
 	if err := candidate.normalizeAndValidate(); err != nil {
 		return err
@@ -260,7 +297,104 @@ func (m *CollectionMeta) Decode(raw []byte) error {
 	return nil
 }
 
+func (m *CollectionMeta) ensureRootNames() error {
+	if m == nil {
+		return errors.New("collections: nil collection metadata")
+	}
+	if m.Name == "" {
+		return errors.New("collections: collection name cannot be empty")
+	}
+	if m.PrimaryRoot == "" {
+		rootName, err := CollectionPrimaryRootName(m.Name)
+		if err != nil {
+			return err
+		}
+		m.PrimaryRoot = rootName
+	}
+	for i := range m.Indexes {
+		if m.Indexes[i].RootName != "" {
+			continue
+		}
+		rootName, err := CollectionIndexRootName(m.Name, m.Indexes[i].Name)
+		if err != nil {
+			return err
+		}
+		m.Indexes[i].RootName = rootName
+	}
+	return nil
+}
+
+func (m *CollectionMeta) encodeVersion1ForTest() ([]byte, error) {
+	if m == nil {
+		return nil, errors.New("collections: nil collection metadata")
+	}
+	legacy := m.copy()
+	legacy.Version = 1
+	if err := ValidateCollectionName(legacy.Name); err != nil {
+		return nil, err
+	}
+	legacy.SetDefaults()
+	name := []byte(legacy.Name)
+	out := make([]byte, 0, 64+len(name))
+	out = append(out, byte(1))
+	tmp := make([]byte, 2)
+	binary.BigEndian.PutUint16(tmp, uint16(len(name)))
+	out = append(out, tmp...)
+	out = append(out, name...)
+	out = append(out, byte(legacy.Options.IDMode))
+	out = append(out, byte(legacy.Options.StorageMode))
+	if legacy.Options.RejectMissingFields {
+		out = append(out, 1)
+	} else {
+		out = append(out, 0)
+	}
+	if legacy.Options.AllowArrayValuesInIndex {
+		out = append(out, 1)
+	} else {
+		out = append(out, 0)
+	}
+	out = binary.BigEndian.AppendUint16(out, uint16(len(legacy.Indexes)))
+	for _, idxDef := range legacy.Indexes {
+		idxDef.RootName = ""
+		if err := encodeIndexDefinitionVersion1(&out, &idxDef); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 func encodeIndexDefinition(out *[]byte, def *IndexDefinition) error {
+	if def == nil {
+		return errors.New("collections: nil index definition")
+	}
+	if err := ValidateIndexName(def.Name); err != nil {
+		return fmt.Errorf("collections: invalid index name %q: %w", def.Name, err)
+	}
+	if err := ValidateIndexPath(def.Field); err != nil {
+		return fmt.Errorf("collections: invalid index field %q: %w", def.Field, err)
+	}
+	flags := uint8(0)
+	if def.Unique {
+		flags |= 1 << 0
+	}
+	if def.MultiKey {
+		flags |= 1 << 1
+	}
+	record := make([]byte, 0, 32)
+	record = append(record, byte(indexDefFieldName))
+	record = appendWithLenPrefix(record, def.Name)
+	record = append(record, byte(indexDefFieldField))
+	record = appendWithLenPrefix(record, def.Field)
+	record = append(record, byte(indexDefFieldRootName))
+	record = appendWithLenPrefix(record, def.RootName)
+	record = append(record, byte(indexDefFieldUnique))
+	record = append(record, flags)
+	*out = binary.BigEndian.AppendUint16(*out, uint16(len(record)))
+	*out = append(*out, record...)
+	return nil
+}
+
+func encodeIndexDefinitionVersion1(out *[]byte, def *IndexDefinition) error {
 	if def == nil {
 		return errors.New("collections: nil index definition")
 	}
@@ -315,6 +449,13 @@ func decodeIndexDefinition(raw []byte) (IndexDefinition, int, error) {
 			} else {
 				def.Field = s
 			}
+		case indexDefFieldRootName:
+			_, used := readLenPrefixed(payload)
+			if used == 0 {
+				return IndexDefinition{}, 0, errors.New("collections: invalid root name length")
+			}
+			def.RootName = string(payload[2:used])
+			payload = payload[used:]
 		case indexDefFieldUnique:
 			if len(payload) == 0 {
 				return IndexDefinition{}, 0, errors.New("collections: missing index option byte")
@@ -477,6 +618,49 @@ func SystemIndexPrefix(collection string) ([]byte, error) {
 	key = append(key, normalizeKeyPart(collection)...)
 	key = append(key, ':')
 	return key, nil
+}
+
+func ValidateRootName(name string) error {
+	if len(name) == 0 {
+		return errors.New("root name cannot be empty")
+	}
+	if len(name) > 512 {
+		return errors.New("root name too long")
+	}
+	if strings.Contains(name, "\x00") {
+		return errors.New("root name contains NUL")
+	}
+	if strings.TrimSpace(name) != name {
+		return errors.New("root name has leading or trailing spaces")
+	}
+	if !utf8.ValidString(name) {
+		return errors.New("root name invalid utf-8")
+	}
+	return nil
+}
+
+func CollectionPrimaryRootName(collection string) (string, error) {
+	if err := ValidateCollectionName(collection); err != nil {
+		return "", err
+	}
+	return "collections:" + normalizeKeyPart(collection) + ":primary", nil
+}
+
+func CollectionIndexRootName(collection, indexName string) (string, error) {
+	if err := ValidateCollectionName(collection); err != nil {
+		return "", err
+	}
+	if err := ValidateIndexName(indexName); err != nil {
+		return "", err
+	}
+	return "collections:" + normalizeKeyPart(collection) + ":index:" + normalizeKeyPart(indexName), nil
+}
+
+func SystemCollectionRootKey(rootName string) ([]byte, error) {
+	if err := ValidateRootName(rootName); err != nil {
+		return nil, err
+	}
+	return append([]byte("sys:r:"), normalizeKeyPart(rootName)...), nil
 }
 
 func SystemCollectionPrefix(collection string) ([]byte, error) {
