@@ -305,8 +305,14 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 		return nil, fmt.Errorf("missing snapshot state")
 	}
 
+	// Pointer-projection iterators can return many keys pointing at the same
+	// grouped value-log record. When estimating live bytes we must count each
+	// referenced record once, not once per referencing key, otherwise grouped
+	// workloads will vastly over-count live bytes and mask stale segments.
+	var seenGroupedRecords map[uint64]struct{}
+
 	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID); err != nil {
+	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords); err != nil {
 		_ = userIter.Close()
 		_ = snap.Close()
 		return nil, err
@@ -315,7 +321,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 
 	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID); err != nil {
+	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID, &seenGroupedRecords); err != nil {
 		_ = sysIter.Close()
 		_ = snap.Close()
 		return nil, err
@@ -328,7 +334,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	return liveByID, nil
 }
 
-func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64) error {
+func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[uint64]struct{}) error {
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -338,6 +344,30 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 			it.Next()
 			continue
 		}
+
+		if page.ValuePtrIsGrouped(ptr) {
+			if ptr.Offset < 4 {
+				return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+			}
+			start := uint32(ptr.Offset - 4)
+			k := (uint64(ptr.FileID) << 32) | uint64(start)
+			seen := map[uint64]struct{}(nil)
+			if seenGroupedRecords != nil {
+				seen = *seenGroupedRecords
+			}
+			if seen == nil {
+				seen = make(map[uint64]struct{}, 1024)
+				if seenGroupedRecords != nil {
+					*seenGroupedRecords = seen
+				}
+			}
+			if _, ok := seen[k]; ok {
+				it.Next()
+				continue
+			}
+			seen[k] = struct{}{}
+		}
+
 		recordLen, err := db.valueLogRecordLengthForRewrite(ptr)
 		if err != nil {
 			return err

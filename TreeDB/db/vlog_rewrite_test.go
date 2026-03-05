@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -763,6 +764,72 @@ func TestValueLogRewritePlan_SparseSelection_SelectsHighStaleSegment(t *testing.
 	}
 	if plan.BytesTotal <= 0 {
 		t.Fatalf("expected non-zero total bytes, got %d", plan.BytesTotal)
+	}
+}
+
+func TestValueLogRewritePlan_GroupedPointers_DedupLiveBytes(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	// Segment 1: two records, but many keys reference the first record via
+	// grouped pointers (same record, different sub-index). The second record is
+	// stale.
+	//
+	// Live-byte estimation must count the referenced grouped record once, not
+	// once per key, otherwise the live-byte sum will saturate to the segment
+	// size and hide stale bytes.
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 240_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("x"), 256)
+	})
+	// Segment 2: one referenced record so segment 1 is not "active" in the
+	// current set (active = latest seq per lane).
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 240_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("y"), 256)
+	})
+	base := ptrs[0]
+	recordLenHint := page.ValuePtrRecordLength(base)
+
+	b := db.NewBatch().(*Batch)
+	for i := 0; i < 3; i++ {
+		ptr := base
+		ptr.Length = page.ValuePtrMarkGrouped(recordLenHint, uint8(i))
+		if err := b.SetPointer([]byte(fmt.Sprintf("k%d", i)), ptr); err != nil {
+			t.Fatalf("set k%d: %v", i, err)
+		}
+	}
+	if err := b.SetPointer([]byte("k_active"), ptrs2[0]); err != nil {
+		t.Fatalf("set k_active: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	plan, err := db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    1,
+		MaxSourceBytes:       4 << 20,
+		MinSegmentStaleRatio: 0.10,
+		MinSegmentStaleBytes: 1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewritePlan: %v", err)
+	}
+	if len(plan.SourceFileIDs) != 1 {
+		t.Fatalf("expected one selected source segment, got %d (%v)", len(plan.SourceFileIDs), plan.SourceFileIDs)
+	}
+	if plan.SourceFileIDs[0] != base.FileID {
+		t.Fatalf("expected stale segment %d to be selected, got %d", base.FileID, plan.SourceFileIDs[0])
+	}
+	if plan.SelectedBytesStale <= 0 {
+		t.Fatalf("expected non-zero stale bytes for selected segment, got %d", plan.SelectedBytesStale)
+	}
+	if plan.SelectedBytesLive <= 0 {
+		t.Fatalf("expected non-zero live bytes for selected segment, got %d", plan.SelectedBytesLive)
 	}
 }
 
