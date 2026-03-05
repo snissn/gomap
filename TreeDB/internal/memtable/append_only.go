@@ -62,15 +62,16 @@ type appendOnlyValueArena struct {
 type AppendOnly struct {
 	mu sync.RWMutex
 
-	entries    []appendOnlyEntry
-	latest     map[string]int
-	latest64   map[uint64]int
-	snapshot   []*appendOnlyEntry
-	indexBuf   []int
-	valueArena appendOnlyValueArena
-	count      int
-	snapCount  int
-	sizeBytes  int64
+	entries        []appendOnlyEntry
+	baseEntriesLen int
+	latest         map[string]int
+	latest64       map[uint64]int
+	snapshot       []*appendOnlyEntry
+	indexBuf       []int
+	valueArena     appendOnlyValueArena
+	count          int
+	snapCount      int
+	sizeBytes      int64
 
 	ordered     bool
 	latestDirty bool
@@ -94,7 +95,22 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 	}
 	if v := appendOnlyEntryPool.Get(); v != nil {
 		if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
-			return entries[:length]
+			// Prevent huge retained entry slices from being reused for much smaller
+			// memtables/iterators, which can otherwise pin large heaps after short-lived
+			// spikes (e.g. state-sync restore).
+			maxReuse := appendOnlyEntryPoolMaxCap
+			if length > 0 && length <= appendOnlyEntryPoolMaxCap/4 {
+				maxReuse = length * 4
+				if maxReuse < appendOnlyMinInitialEntries {
+					maxReuse = appendOnlyMinInitialEntries
+				}
+				if maxReuse > appendOnlyEntryPoolMaxCap {
+					maxReuse = appendOnlyEntryPoolMaxCap
+				}
+			}
+			if cap(entries) <= maxReuse {
+				return entries[:length]
+			}
 		}
 	}
 	return make([]appendOnlyEntry, length)
@@ -183,13 +199,14 @@ func NewAppendOnlyWithCapacity(capacity int) *AppendOnly {
 func NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimatedBytesPerEntry int) *AppendOnly {
 	n := appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
 	return &AppendOnly{
-		entries:   getAppendOnlyEntries(n),
-		count:     0,
-		ordered:   true,
-		hasLast:   false,
-		lastIdx:   -1,
-		snapCount: 0,
-		sizeBytes: 0,
+		entries:        getAppendOnlyEntries(n),
+		baseEntriesLen: n,
+		count:          0,
+		ordered:        true,
+		hasLast:        false,
+		lastIdx:        -1,
+		snapCount:      0,
+		sizeBytes:      0,
 	}
 }
 
@@ -800,6 +817,27 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
+	m.resetLocked(0, 0)
+}
+
+func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLocked(capacity, estimatedBytesPerEntry)
+}
+
+func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
+	desiredEntries := m.baseEntriesLen
+	if capacity > 0 {
+		desiredEntries = appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
+		m.baseEntriesLen = desiredEntries
+	}
+	if desiredEntries <= 0 {
+		desiredEntries = appendOnlyMinInitialEntries
+	}
+
+	oldCount := m.count
 	for i := 0; i < m.count; i++ {
 		ent := &m.entries[i]
 		ent.ptr = page.ValuePtr{}
@@ -814,9 +852,26 @@ func (m *AppendOnly) Reset() {
 		ent.value = nil
 	}
 	m.valueArena.reset()
-	clear(m.latest)
-	clear(m.latest64)
-	m.clearSnapshotLocked()
+	// Clear small maps in-place; drop large ones so they don't pin hash tables
+	// after one-off spikes.
+	if oldCount > 0 && oldCount >= 1<<15 {
+		m.latest = nil
+		m.latest64 = nil
+	} else {
+		clear(m.latest)
+		clear(m.latest64)
+	}
+	// Snapshot/index buffers are only needed for unordered memtables; drop large
+	// ones on reset to keep post-spike memory bounded.
+	if cap(m.snapshot) > 0 && cap(m.snapshot) >= 1<<15 {
+		m.snapshot = nil
+		m.snapCount = 0
+	} else {
+		m.clearSnapshotLocked()
+	}
+	if cap(m.indexBuf) > 0 && cap(m.indexBuf) >= 1<<15 {
+		m.indexBuf = nil
+	}
 	m.count = 0
 	m.sizeBytes = 0
 	m.ordered = true
@@ -824,6 +879,21 @@ func (m *AppendOnly) Reset() {
 	m.frozen = false
 	m.hasLast = false
 	m.lastIdx = -1
+
+	// If the entry slice grew far beyond the configured baseline, shrink it.
+	// This avoids permanently ratcheting heap high-water when a workload briefly
+	// spikes in write volume (common during state-sync restore).
+	if cap(m.entries) > desiredEntries*4 {
+		m.entries = make([]appendOnlyEntry, desiredEntries)
+		return
+	}
+	if cap(m.entries) < desiredEntries {
+		m.entries = make([]appendOnlyEntry, desiredEntries)
+		return
+	}
+	if len(m.entries) != desiredEntries {
+		m.entries = m.entries[:desiredEntries]
+	}
 }
 
 func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
