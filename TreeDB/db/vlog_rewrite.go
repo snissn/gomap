@@ -420,13 +420,6 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 		}
 		visited[pageID] = struct{}{}
 
-		if ptr, ok := page.DecodeLeafRef(pageID); ok {
-			if err := db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords); err != nil {
-				return err
-			}
-			continue
-		}
-
 		data, err := p.Get(pageID)
 		if err != nil {
 			return err
@@ -448,6 +441,12 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 				childID, err := n.GetInternalChildID(i)
 				if err != nil {
 					return err
+				}
+				if ptr, ok := page.DecodeLeafRef(childID); ok {
+					if err := db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords); err != nil {
+						return err
+					}
+					continue
 				}
 				stack = append(stack, childID)
 			}
