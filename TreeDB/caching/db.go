@@ -3308,8 +3308,15 @@ type memtableView struct {
 	deferredRetiredMemtables atomic.Int64
 }
 
-const maxAppendOnlyMemLeases = 256
-const appendOnlyEstimatedBytesPerEntryDeferredFence = 96
+// appendOnlyEstimatedBytesPerEntryDefault tunes initial append-only memtable
+// entry slice sizing. The historical pointer-heavy estimate (24B) can cause
+// large over-allocation in real workloads where key bytes dominate.
+const appendOnlyEstimatedBytesPerEntryDefault = 96
+
+// maxAppendOnlyMemLeases bounds strong references to recycled append-only
+// memtables. Keeping this too high can retain large entry slices after
+// short-lived spikes (e.g. state-sync restore), inflating heap high-water.
+const maxAppendOnlyMemLeases = 64
 
 func updateInt64Max(dst *atomic.Int64, value int64) {
 	for {
@@ -3623,10 +3630,7 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 				return mt, nil
 			}
 		}
-		estimate := 0
-		if db.deferredValueLogEnabled() {
-			estimate = appendOnlyEstimatedBytesPerEntryDeferredFence
-		}
+		estimate := appendOnlyEstimatedBytesPerEntryDefault
 		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
 	}
 	return memtable.NewWithCapacityModeAndIndexer(capacity, mode, db.hashSortedIndexer)
@@ -4252,7 +4256,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	warmupCap := shardCapacity(memtableCapacity(warmupThreshold), shardCount)
 	indexer := memtable.NewHashSortedIndexer()
 	mutableShards := make([]memShard, shardCount)
-	appendOnlyEstimate := 0
+	appendOnlyEstimate := appendOnlyEstimatedBytesPerEntryDefault
 	for i := range mutableShards {
 		if mode == memtable.ModeAppendOnly {
 			mutableShards[i] = memShard{mem: memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(warmupCap, appendOnlyEstimate)}
