@@ -16067,7 +16067,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	chunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
 	for _, idx := range b.ptrValueEntryIdxs {
-		if idx >= 0 && idx < len(b.entries) && b.entries[idx].Value != nil {
+		if idx < len(b.entries) && b.entries[idx].Value != nil {
 			retainPtrArena = true
 			break
 		}
