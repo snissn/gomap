@@ -86,6 +86,7 @@ type DB struct {
 	valueLogCompression        ValueLogCompressionMode
 	valueLogBlockCodec         ValueLogBlockCodec
 	valueLogDomainThresholds   []ValueLogDomainThreshold
+	inlineThresholdResolver    func([]byte) int
 	leafFillTargetPPM          uint32
 	internalFillTargetPPM      uint32
 	leafPrefixCompression      bool
@@ -1038,6 +1039,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
+	if len(db.valueLogDomainThresholds) > 0 {
+		db.inlineThresholdResolver = db.InlineThresholdForKey
+	}
 	db.ghostManager.start()
 	db.idx.Store(gen)
 	db.leafPageLog = &runtimeLeafPageLog{db: db}
@@ -1551,16 +1555,11 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		if len(touchedValueLogSegments) > 0 {
-			if err := db.valueLogManager.EnsureTracked(touchedValueLogSegments); err != nil {
-				db.mu.Unlock()
-				return post, err
-			}
-			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
-		} else if forceValueLogRefresh {
-			valueLogSet = db.valueLogManager.CurrentSet()
-		} else {
-			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+		var err error
+		valueLogSet, err = db.valueLogSetForCommit(post.oldState, touchedValueLogSegments, forceValueLogRefresh)
+		if err != nil {
+			db.mu.Unlock()
+			return post, err
 		}
 	}
 	newState := &DBState{
@@ -1589,6 +1588,41 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	}
 
 	return post, nil
+}
+
+func (db *DB) valueLogSetForCommit(oldState *DBState, touchedValueLogSegments []uint32, forceValueLogRefresh bool) (*valuelog.Set, error) {
+	if db == nil || db.valueLogManager == nil {
+		return nil, nil
+	}
+	if !forceValueLogRefresh && canReuseValueLogSet(oldState, touchedValueLogSegments) {
+		db.valueLogManager.Acquire(oldState.ValueLogSet)
+		return oldState.ValueLogSet, nil
+	}
+	if len(touchedValueLogSegments) > 0 {
+		if err := db.valueLogManager.EnsureTracked(touchedValueLogSegments); err != nil {
+			return nil, err
+		}
+		return db.valueLogManager.CurrentSetNoRefresh(), nil
+	}
+	if forceValueLogRefresh {
+		return db.valueLogManager.CurrentSet(), nil
+	}
+	return db.valueLogManager.CurrentSetNoRefresh(), nil
+}
+
+func canReuseValueLogSet(state *DBState, touchedValueLogSegments []uint32) bool {
+	if state == nil || state.ValueLogSet == nil {
+		return false
+	}
+	if len(touchedValueLogSegments) == 0 {
+		return true
+	}
+	for _, fileID := range touchedValueLogSegments {
+		if _, ok := state.ValueLogSet.Files[fileID]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (db *DB) inlineAppenderCreatedFileIDs() ([]uint32, error) {

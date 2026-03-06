@@ -617,6 +617,7 @@ type Manager struct {
 
 	mu    sync.RWMutex
 	files map[uint32]*File
+	view  map[uint32]*File
 
 	disableReadChecksum      bool
 	dictLookup               DictLookup
@@ -701,6 +702,7 @@ func (m *Manager) Close() error {
 			err = e
 		}
 	}
+	m.view = nil
 	m.files = nil
 	return err
 }
@@ -723,6 +725,7 @@ func (m *Manager) ensureTrackedLocked(id uint32) error {
 	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
 	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
 	m.files[id] = f
+	m.view = nil
 	return nil
 }
 
@@ -786,19 +789,33 @@ func (m *Manager) CurrentSet() *Set {
 // segments can be referenced by the state being published.
 func (m *Manager) CurrentSetNoRefresh() *Set {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	if m.view != nil {
+		set := m.currentSetLocked()
+		m.mu.RUnlock()
+		return set
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.currentSetLocked()
 }
 
 // currentSetLocked builds a ref-counted snapshot.
 // m.mu must be held (read or write).
 func (m *Manager) currentSetLocked() *Set {
-	files := make(map[uint32]*File, len(m.files))
-	for id, f := range m.files {
-		if f.IsZombie.Load() {
-			continue
+	files := m.view
+	if files == nil {
+		files = make(map[uint32]*File, len(m.files))
+		for id, f := range m.files {
+			if f.IsZombie.Load() {
+				continue
+			}
+			files[id] = f
 		}
-		files[id] = f
+		m.view = files
+	}
+	for _, f := range files {
 		f.RefCount.Add(1)
 	}
 	s := &Set{
@@ -987,6 +1004,7 @@ func (m *Manager) MarkZombie(id uint32) error {
 		return fmt.Errorf("valuelog file %d not found", id)
 	}
 	f.IsZombie.Store(true)
+	m.view = nil
 	return nil
 }
 
@@ -1004,6 +1022,7 @@ func (m *Manager) EvictSegment(id uint32) error {
 		return fmt.Errorf("cannot evict valuelog file %d: still pinned", id)
 	}
 	delete(m.files, id)
+	m.view = nil
 	m.mu.Unlock()
 	return f.Close()
 }
