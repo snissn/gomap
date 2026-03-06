@@ -75,7 +75,12 @@ var batchArenaPoolBudgetState atomic.Value
 var batchArenaPoolNumGC = func() uint32 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
 	metrics.Read(samples)
-	return uint32(samples[0].Value.Uint64())
+	if samples[0].Value.Kind() == metrics.KindUint64 {
+		return uint32(samples[0].Value.Uint64())
+	}
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return uint32(ms.NumGC)
 }
 
 func computeBatchArenaPoolBudgetBytes() int64 {
