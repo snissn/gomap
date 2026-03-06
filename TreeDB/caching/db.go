@@ -69,6 +69,7 @@ var valueLogKeyLeases [][][]byte
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolBudgetBytes int64 = computeBatchArenaPoolBudgetBytes()
+var batchArenaPoolLastGC atomic.Uint32
 
 func computeBatchArenaPoolBudgetBytes() int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
@@ -5537,12 +5538,12 @@ func putEntrySlice(entries []batch.Entry) {
 	if !ok {
 		return
 	}
+	full := entries[:cap(entries)]
+	clear(full)
 	leaseBytes := int64(cap(entries)) * entrySliceEntrySizeBytes
 	if !reserveEntrySlicePoolBytes(leaseBytes) {
 		return
 	}
-	full := entries[:cap(entries)]
-	clear(full)
 	entries = entries[:0]
 	entrySliceLeaseMu.Lock()
 	if len(entrySliceLeases[idx]) < maxEntrySliceLeasesPerBucket {
@@ -13677,7 +13678,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
 	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
-	stats["treedb.cache.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
 	stats["treedb.cache.entry_slice.pool_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	db.domainIngressMu.Lock()
