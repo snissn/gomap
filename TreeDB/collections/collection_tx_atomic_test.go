@@ -188,6 +188,8 @@ func (d *atomicMockDB) SystemIterator(start, end []byte) (systemIterator, error)
 	return newAtomicMapIterator(d.systemStore, start), nil
 }
 
+func (*atomicMockDB) PreferWarmIteratorBatchPublish() bool { return true }
+
 func (d *atomicMockDB) MutateRoot(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
 	return d.mutateRootInternal(rootID, mutateRoot, nil, updateSystem)
 }

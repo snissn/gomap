@@ -13,6 +13,13 @@ import (
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
+type rootMutationTableIterator struct {
+	iterator.UnsafeIterator
+	table memtable.Table
+}
+
+func (it rootMutationTableIterator) RootMutationTable() memtable.Table { return it.table }
+
 func TestGetAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -648,8 +655,8 @@ func TestMutateRootsWithFormatIterators_EmptyRootsUseBulkBuilder(t *testing.T) {
 			},
 		},
 		[]iterator.UnsafeIterator{
-			primaryMem.NewIterator(nil, nil),
-			indexMem.NewIterator(nil, nil),
+			rootMutationTableIterator{UnsafeIterator: primaryMem.NewIterator(nil, nil), table: primaryMem},
+			rootMutationTableIterator{UnsafeIterator: indexMem.NewIterator(nil, nil), table: indexMem},
 		},
 		nil,
 	)
@@ -661,5 +668,122 @@ func TestMutateRootsWithFormatIterators_EmptyRootsUseBulkBuilder(t *testing.T) {
 	}
 	if builds != 2 {
 		t.Fatalf("bulk builds=%d want 2", builds)
+	}
+}
+
+func TestMutateRootsWithFormatIterators_WarmRootsUseBulkMergeBuilder(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	primaryMem, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("primary memtable: %v", err)
+	}
+	indexMem, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("index memtable: %v", err)
+	}
+	for i := 0; i < 192; i++ {
+		docID := []byte("u-initial-" + string(rune('a'+(i%26))) + string(rune('A'+((i/26)%26))))
+		doc := []byte(`{"email":"initial@example.com"}`)
+		indexKey := []byte("idx:" + string(docID))
+		primaryMem.SetSteal(docID, doc)
+		indexMem.SetSteal(indexKey, nil)
+	}
+
+	rootIDs, err := d.MutateRootsWithFormatIterators(false,
+		[]uint64{0, 0},
+		[]*rootfmt.Format{
+			{
+				OuterLeavesInValueLog: true,
+				LeafPrefixCompression: true,
+				AllowValues:           true,
+			},
+			{
+				LeafPrefixCompression: true,
+			},
+		},
+		[]iterator.UnsafeIterator{
+			primaryMem.NewIterator(nil, nil),
+			indexMem.NewIterator(nil, nil),
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("initial mutate: %v", err)
+	}
+
+	updatePrimary, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("update primary memtable: %v", err)
+	}
+	updateIndex, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("update index memtable: %v", err)
+	}
+	for i := 0; i < 192; i++ {
+		docID := []byte("u-update-" + string(rune('a'+(i%26))) + string(rune('A'+((i/26)%26))))
+		doc := []byte(`{"email":"update@example.com"}`)
+		indexKey := []byte("idx:" + string(docID))
+		updatePrimary.SetSteal(docID, doc)
+		updateIndex.SetSteal(indexKey, nil)
+	}
+
+	builds := 0
+	restoreBuild := setRootIteratorBulkBuildTestHook(func(rootIndex int) {
+		builds++
+	})
+	defer restoreBuild()
+
+	merges := 0
+	restoreMerge := setRootIteratorWarmMergeTestHook(func(rootIndex int) {
+		merges++
+	})
+	defer restoreMerge()
+
+	rootIDs, err = d.MutateRootsWithFormatIterators(false,
+		rootIDs,
+		[]*rootfmt.Format{
+			{
+				OuterLeavesInValueLog: true,
+				LeafPrefixCompression: true,
+				AllowValues:           true,
+			},
+			{
+				LeafPrefixCompression: true,
+			},
+		},
+		[]iterator.UnsafeIterator{
+			rootMutationTableIterator{UnsafeIterator: updatePrimary.NewIterator(nil, nil), table: updatePrimary},
+			rootMutationTableIterator{UnsafeIterator: updateIndex.NewIterator(nil, nil), table: updateIndex},
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("warm mutate: %v", err)
+	}
+	if builds != 2 {
+		t.Fatalf("bulk builds=%d want 2", builds)
+	}
+	if merges != 2 {
+		t.Fatalf("warm merges=%d want 2", merges)
+	}
+
+	gotDoc, err := d.GetAtRoot(rootIDs[0], []byte("u-update-aA"))
+	if err != nil {
+		t.Fatalf("get updated doc: %v", err)
+	}
+	if !bytes.Equal(gotDoc, []byte(`{"email":"update@example.com"}`)) {
+		t.Fatalf("updated doc=%q", gotDoc)
+	}
+	hasOld, err := d.HasAtRoot(rootIDs[0], []byte("u-initial-aA"))
+	if err != nil {
+		t.Fatalf("has initial doc: %v", err)
+	}
+	if !hasOld {
+		t.Fatalf("expected initial doc to remain after warm merge publish")
 	}
 }
