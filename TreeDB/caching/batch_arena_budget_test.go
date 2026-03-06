@@ -1,7 +1,9 @@
 package caching
 
 import (
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -10,8 +12,7 @@ var batchArenaPoolTestMu sync.Mutex
 func resetBatchArenaPoolsForTest() {
 	batchArenaPoolBytes.Store(0)
 	batchArenaPoolLastGC.Store(0)
-	batchArenaPoolBudgetProcs.Store(0)
-	batchArenaPoolBudgetCached.Store(0)
+	batchArenaPoolBudgetState = atomic.Value{}
 	for i := range batchArenaPools {
 		batchArenaPools[i] = sync.Pool{}
 	}
@@ -122,5 +123,29 @@ func TestBatchArenaPoolBudgetDoesNotOvercount(t *testing.T) {
 	}
 	if got := batchArenaPoolBytes.Load(); got < 0 || got > budget {
 		t.Fatalf("batchArenaPoolBytes=%d want in [0,%d]", got, budget)
+	}
+}
+
+func TestBatchArenaPoolBudgetCacheRecomputesOnProcsMismatch(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	currentProcs := runtime.GOMAXPROCS(0)
+	if currentProcs < 1 {
+		currentProcs = 1
+	}
+	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{
+		procs:  int32(currentProcs + 1),
+		budget: 1,
+	})
+	got := currentBatchArenaPoolBudgetBytes()
+	want := computeBatchArenaPoolBudgetBytesForProcs(currentProcs)
+	if got != want {
+		t.Fatalf("currentBatchArenaPoolBudgetBytes=%d want %d", got, want)
+	}
+	cached, _ := batchArenaPoolBudgetState.Load().(batchArenaPoolBudgetCache)
+	if cached.procs != int32(currentProcs) || cached.budget != want {
+		t.Fatalf("cached budget=%+v want procs=%d budget=%d", cached, currentProcs, want)
 	}
 }
