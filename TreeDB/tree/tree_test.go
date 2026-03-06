@@ -120,23 +120,24 @@ func TestTreeGet_UsesUnsafeReaderForPointers(t *testing.T) {
 	}
 	defer p.Close()
 
-	if _, err := p.Alloc(1); err != nil {
+	rootID, err := p.Alloc(1)
+	if err != nil {
 		t.Fatalf("Alloc root: %v", err)
 	}
 	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
 	ptr := tracked.Add([]byte("pointer-value"))
 
-	rootData, err := p.Get(0)
+	rootData, err := p.Get(rootID)
 	if err != nil {
 		t.Fatalf("Get root page: %v", err)
 	}
 	root := node.NewNode(rootData)
 	root.SetType(page.PageTypeLeaf)
-	root.SetPageID(0)
+	root.SetPageID(rootID)
 	root.AddLeafEntry([]byte("k"), nil, node.FlagPointer, ptr)
 	root.UpdateChecksum()
 
-	tr := New(p, tracked, 0)
+	tr := New(p, tracked, rootID)
 	got, err := tr.Get([]byte("k"))
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
@@ -182,20 +183,21 @@ func TestTreeGet_ZeroLengthValueReturnsNil(t *testing.T) {
 	}
 	defer p.Close()
 
-	if _, err := p.Alloc(1); err != nil {
+	rootID, err := p.Alloc(1)
+	if err != nil {
 		t.Fatalf("Alloc root: %v", err)
 	}
-	rootData, err := p.Get(0)
+	rootData, err := p.Get(rootID)
 	if err != nil {
 		t.Fatalf("Get root page: %v", err)
 	}
 	root := node.NewNode(rootData)
 	root.SetType(page.PageTypeLeaf)
-	root.SetPageID(0)
+	root.SetPageID(rootID)
 	root.AddLeafEntry([]byte("empty"), []byte{}, node.FlagInline, page.ValuePtr{})
 	root.UpdateChecksum()
 
-	tr := New(p, newMapValueReader(), 0)
+	tr := New(p, newMapValueReader(), rootID)
 	got, err := tr.Get([]byte("empty"))
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
@@ -214,20 +216,21 @@ func TestTreeGetAppend_AppendsAndUsesAppendReaderForPointers(t *testing.T) {
 	}
 	defer p.Close()
 
-	if _, err := p.Alloc(1); err != nil {
+	rootID, err := p.Alloc(1)
+	if err != nil {
 		t.Fatalf("Alloc root: %v", err)
 	}
 	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
 	ptr := tracked.Add([]byte("pointer-value"))
 
-	rootData, _ := p.Get(0)
+	rootData, _ := p.Get(rootID)
 	root := node.NewNode(rootData)
 	root.SetType(page.PageTypeLeaf)
-	root.SetPageID(0)
+	root.SetPageID(rootID)
 	root.AddLeafEntry([]byte("k"), nil, node.FlagPointer, ptr)
 	root.UpdateChecksum()
 
-	tr := New(p, tracked, 0)
+	tr := New(p, tracked, rootID)
 	got, err := tr.GetAppend([]byte("k"), []byte("prefix:"))
 	if err != nil {
 		t.Fatalf("GetAppend failed: %v", err)
@@ -291,23 +294,24 @@ func TestTreeGetUnsafe_UsesUnsafeReaderForPointers(t *testing.T) {
 	}
 	defer p.Close()
 
-	if _, err := p.Alloc(1); err != nil {
+	rootID, err := p.Alloc(1)
+	if err != nil {
 		t.Fatalf("Alloc root: %v", err)
 	}
 	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
 	ptr := tracked.Add([]byte("pointer-value"))
 
-	rootData, err := p.Get(0)
+	rootData, err := p.Get(rootID)
 	if err != nil {
 		t.Fatalf("Get root page: %v", err)
 	}
 	root := node.NewNode(rootData)
 	root.SetType(page.PageTypeLeaf)
-	root.SetPageID(0)
+	root.SetPageID(rootID)
 	root.AddLeafEntry([]byte("k"), nil, node.FlagPointer, ptr)
 	root.UpdateChecksum()
 
-	tr := New(p, tracked, 0)
+	tr := New(p, tracked, rootID)
 	got, err := tr.GetUnsafe([]byte("k"))
 	if err != nil {
 		t.Fatalf("GetUnsafe failed: %v", err)

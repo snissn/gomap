@@ -177,7 +177,9 @@ func TestSnapshotGet_ReturnsSafeCopyForValueLogPointer(t *testing.T) {
 		_ = b.Close()
 		t.Fatalf("Write pointer batch: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close pointer batch: %v", err)
+	}
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
