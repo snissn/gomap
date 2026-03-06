@@ -142,6 +142,14 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 		if uint64(count-1) > ^uint64(0)-start {
 			return 0, fmt.Errorf("value-log rid space exhausted")
 		}
+		end := start + uint64(count) - 1
+		if end < start || end == 0 {
+			return 0, fmt.Errorf("value-log rid space exhausted")
+		}
+		if a.next != 0 && start < a.next {
+			return 0, fmt.Errorf("value-log rid allocator returned overlapping range [%d,%d], need >= %d", start, end, a.next)
+		}
+		a.next = end + 1
 		return start, nil
 	}
 	start := a.next
@@ -1131,7 +1139,9 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		b := node.NewBuilder(buf, page.PageTypeInternal)
+		b := node.NewBuilderWithOptions(buf, page.PageTypeInternal, node.BuilderOptions{
+			InternalBaseDelta: n.InternalBaseDeltaEnabled(),
+		})
 		b.SetPageID(newID)
 		if low, high, ok, err := n.InternalFenceBounds(); err != nil {
 			return id, false, err
@@ -1220,7 +1230,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
@@ -1228,14 +1238,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
 	if !sysChanged && !userChanged {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, fmt.Errorf("vlog-rewrite: cleanup failed after no leaf-ref rewrite changes: %w", freeErr)
 		}
 		return 0, nil
 	}
@@ -1246,7 +1256,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if err := writer.Sync(); err != nil {
 			freeErr := tracker.FreeAll()
 			if freeErr != nil {
-				return 0, freeErr
+				return 0, errors.Join(err, freeErr)
 			}
 			return 0, err
 		}
@@ -1254,7 +1264,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if err := writer.Flush(); err != nil {
 			freeErr := tracker.FreeAll()
 			if freeErr != nil {
-				return 0, freeErr
+				return 0, errors.Join(err, freeErr)
 			}
 			return 0, err
 		}
@@ -1263,7 +1273,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, nil, db.indexOuterLeavesInValueLog, nil); err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
