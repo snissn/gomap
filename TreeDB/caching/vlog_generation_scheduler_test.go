@@ -285,6 +285,12 @@ func TestVlogGenerationRewrite_ConsumesActualSourceBytesWhenRewriteExceedsBudget
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
+	backendOwnedByDB := false
+	t.Cleanup(func() {
+		if !backendOwnedByDB {
+			_ = backend.Close()
+		}
+	})
 
 	recorder := &rewriteBudgetRecordingBackend{
 		DB:              backend,
@@ -300,9 +306,9 @@ func TestVlogGenerationRewrite_ConsumesActualSourceBytesWhenRewriteExceedsBudget
 		ForceValueLogPointers:            true,
 	})
 	if err != nil {
-		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	backendOwnedByDB = true
 	t.Cleanup(func() { _ = db.Close() })
 
 	value := make([]byte, 2048)

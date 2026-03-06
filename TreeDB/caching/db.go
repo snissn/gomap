@@ -16102,7 +16102,7 @@ func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
 	if len(segments) == 0 {
 		return nil
 	}
-	tailByLane := make(map[int]logSegmentInfo, len(segments))
+	tailByLane := make(map[int]logSegmentInfo)
 	for _, seg := range segments {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue
