@@ -284,7 +284,10 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		ctx = context.Background()
 	}
 
-	set := db.valueLogManager.CurrentSet()
+	if err := db.valueLogManager.Refresh(); err != nil {
+		return plan, err
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
 	if set != nil {
 		defer func() { _ = db.valueLogManager.Release(set) }()
 	}
@@ -729,7 +732,10 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		ctx = context.Background()
 	}
 
-	set := db.valueLogManager.CurrentSet()
+	if err := db.valueLogManager.Refresh(); err != nil {
+		return stats, err
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
 	if set == nil || len(set.Files) == 0 {
 		if set != nil {
 			_ = db.valueLogManager.Release(set)

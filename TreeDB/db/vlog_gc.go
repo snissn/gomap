@@ -64,7 +64,11 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		return stats, err
 	}
 
-	set := db.valueLogManager.CurrentSet()
+	if err := db.valueLogManager.Refresh(); err != nil {
+		return stats, err
+	}
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	defer func() { _ = db.valueLogManager.Release(set) }()
 	activeIDs := currentValueLogIDs(set)
 	keptIDs := activeIDs
 	if len(opts.ProtectedPaths) > 0 {
