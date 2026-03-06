@@ -8,6 +8,8 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
@@ -453,4 +455,154 @@ func TestMutateRootsWithFormatOps_MatchesCallbackForm(t *testing.T) {
 
 	t.Run("callbacks", func(t *testing.T) { run(t, false) })
 	t.Run("ops", func(t *testing.T) { run(t, true) })
+}
+
+func TestMutateRootsWithFormatIterators_MatchesCallbackForm(t *testing.T) {
+	dir := t.TempDir()
+
+	run := func(t *testing.T, useIters bool) {
+		t.Helper()
+		subdir := filepath.Join(dir, t.Name())
+		if err := os.MkdirAll(subdir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", subdir, err)
+		}
+		d, err := Open(Options{Dir: subdir})
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		defer d.Close()
+
+		primaryDesc := collections.CollectionRootDescriptor{
+			Name:       "col.users.primary",
+			Collection: "users",
+			Kind:       collections.CollectionRootKindPrimary,
+			Format: collections.CollectionRootFormat{
+				OuterLeavesInValueLog: true,
+				LeafPrefixCompression: true,
+				AllowValues:           true,
+			},
+		}
+		indexDesc := collections.CollectionRootDescriptor{
+			Name:       "col.users.email_idx",
+			Collection: "users",
+			IndexName:  "email_idx",
+			Kind:       collections.CollectionRootKindSecondaryIndex,
+			Format: collections.CollectionRootFormat{
+				LeafPrefixCompression: true,
+			},
+		}
+		primaryRootKey, err := collections.SystemCollectionRootKey(primaryDesc.Name)
+		if err != nil {
+			t.Fatalf("primary root key: %v", err)
+		}
+		indexRootKey, err := collections.SystemCollectionRootKey(indexDesc.Name)
+		if err != nil {
+			t.Fatalf("index root key: %v", err)
+		}
+
+		docID := []byte("u1")
+		doc := []byte(`{"email":"ada@example.com"}`)
+		indexKey := []byte("col:i:users:email_idx:\x00\x11s:ada@example.comu1")
+
+		var (
+			rootIDs []uint64
+			errRun  error
+		)
+		encodeDesc := func(desc collections.CollectionRootDescriptor, rootID uint64) []byte {
+			desc.RootPageID = rootID
+			encoded, err := desc.Encode()
+			if err != nil {
+				t.Fatalf("encode descriptor %s: %v", desc.Name, err)
+			}
+			return encoded
+		}
+
+		if useIters {
+			primaryMem, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+			if err != nil {
+				t.Fatalf("primary memtable: %v", err)
+			}
+			indexMem, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+			if err != nil {
+				t.Fatalf("index memtable: %v", err)
+			}
+			primaryMem.SetSteal(append([]byte(nil), docID...), append([]byte(nil), doc...))
+			indexMem.SetSteal(append([]byte(nil), indexKey...), nil)
+
+			rootIDs, errRun = d.MutateRootsWithFormatIterators(false,
+				[]uint64{0, 0},
+				[]*rootfmt.Format{
+					{
+						OuterLeavesInValueLog: true,
+						LeafPrefixCompression: true,
+						AllowValues:           true,
+					},
+					{
+						LeafPrefixCompression: true,
+					},
+				},
+				[]iterator.UnsafeIterator{
+					primaryMem.NewIterator(nil, nil),
+					indexMem.NewIterator(nil, nil),
+				},
+				func(newRootIDs []uint64) ([]batch.Entry, error) {
+					return []batch.Entry{
+						{Type: batch.OpPut, Key: primaryRootKey, Value: encodeDesc(primaryDesc, newRootIDs[0])},
+						{Type: batch.OpPut, Key: indexRootKey, Value: encodeDesc(indexDesc, newRootIDs[1])},
+					}, nil
+				},
+			)
+		} else {
+			rootIDs, errRun = d.MutateRootsWithFormats(false,
+				[]uint64{0, 0},
+				[]*rootfmt.Format{
+					{
+						OuterLeavesInValueLog: true,
+						LeafPrefixCompression: true,
+						AllowValues:           true,
+					},
+					{
+						LeafPrefixCompression: true,
+					},
+				},
+				[]func(batch.Interface) error{
+					func(b batch.Interface) error { return b.Set(docID, doc) },
+					func(b batch.Interface) error { return b.Set(indexKey, []byte{}) },
+				},
+				func(sys batch.Interface, newRootIDs []uint64) error {
+					if len(newRootIDs) != 2 {
+						t.Fatalf("expected 2 root ids, got %d", len(newRootIDs))
+					}
+					if err := sys.Set(primaryRootKey, encodeDesc(primaryDesc, newRootIDs[0])); err != nil {
+						return err
+					}
+					return sys.Set(indexRootKey, encodeDesc(indexDesc, newRootIDs[1]))
+				},
+			)
+		}
+		if errRun != nil {
+			t.Fatalf("mutate roots: %v", errRun)
+		}
+		if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
+			t.Fatalf("unexpected root ids: %#v", rootIDs)
+		}
+
+		gotDoc, err := d.GetAtRoot(rootIDs[0], docID)
+		if err != nil {
+			t.Fatalf("get doc: %v", err)
+		}
+		if !bytes.Equal(gotDoc, doc) {
+			t.Fatalf("doc mismatch: got=%q want=%q", gotDoc, doc)
+		}
+		hasIndex, err := d.HasAtRoot(rootIDs[1], indexKey)
+		if err != nil {
+			t.Fatalf("has index key: %v", err)
+		}
+		if !hasIndex {
+			t.Fatalf("expected index key")
+		}
+	}
+
+	t.Run("callbacks", func(t *testing.T) { run(t, false) })
+	t.Run("iterators", func(t *testing.T) { run(t, true) })
 }

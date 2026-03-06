@@ -112,6 +112,35 @@ func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionInsertBatchCheckpointWithSecondaryIndexes(b *testing.B) {
+	_, collection, checkpoint := openFocusedBenchmarkCollection(
+		b,
+		"bench_insert_batch_checkpoint_secondary_indexes",
+		collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true},
+		collections.IndexDefinition{Name: "city_idx", Field: "city"},
+	)
+
+	const batchSize = 256
+	ids := make([][]byte, batchSize)
+	docs := make([][]byte, batchSize)
+
+	b.ReportAllocs()
+	b.ReportMetric(batchSize, "docs/checkpoint")
+	b.ResetTimer()
+	for batchIdx := 0; batchIdx < b.N; batchIdx++ {
+		base := batchIdx * batchSize
+		for idx := range ids {
+			docIdx := base + idx
+			ids[idx] = []byte(fmt.Sprintf("u-%d", docIdx))
+			docs[idx] = []byte(fmt.Sprintf(`{"email":"user-%d@example.com","city":"city-%d"}`, docIdx, docIdx%32))
+		}
+		if _, err := collection.InsertBatch(ids, docs); err != nil {
+			b.Fatalf("insert batch secondary indexes: %v", err)
+		}
+		checkpoint()
+	}
+}
+
 func BenchmarkCollectionDeleteWithSecondaryIndexes(b *testing.B) {
 	_, collection, checkpoint := openFocusedBenchmarkCollection(
 		b,
