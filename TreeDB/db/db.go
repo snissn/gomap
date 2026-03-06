@@ -106,6 +106,7 @@ type DB struct {
 	combineDoneCh    chan struct{}
 	vacuumInProgress atomic.Bool
 	vacuum           vacuumRecorder
+	leafRefState     atomic.Uint32
 	meta             page.MetaPageBody
 	metaPageID       uint64
 

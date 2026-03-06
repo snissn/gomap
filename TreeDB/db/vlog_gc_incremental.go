@@ -17,6 +17,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -35,6 +36,12 @@ const (
 var (
 	valueLogRefCountsMagic = [8]byte{'T', 'V', 'R', 'E', 'F', 'C', 'N', 'T'}
 	errValueLogRefCorrupt  = errors.New("treedb: corrupt value-log ref counters metadata")
+)
+
+const (
+	leafRefStateUnknown uint32 = iota
+	leafRefStateAbsent
+	leafRefStatePresent
 )
 
 type valueLogRefDelta struct {
@@ -334,6 +341,9 @@ func (db *DB) mergeLeafRefValueLogRefs(ctx context.Context, refs map[uint32]stru
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if !db.shouldScanLeafRefValueLogRefs() {
+		return nil
+	}
 
 	snap := db.AcquireSnapshot()
 	if snap == nil {
@@ -344,17 +354,20 @@ func (db *DB) mergeLeafRefValueLogRefs(ctx context.Context, refs map[uint32]stru
 		return fmt.Errorf("missing db state")
 	}
 	counts := make(map[uint32]uint64, 8)
-	if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts); err != nil {
+	userFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts)
+	if err != nil {
 		_ = snap.Close()
 		return err
 	}
-	if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
+	systemFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts)
+	if err != nil {
 		_ = snap.Close()
 		return err
 	}
 	if err := snap.Close(); err != nil {
 		return err
 	}
+	db.noteLeafRefValueLogReachability(userFound || systemFound)
 	for fileID, n := range counts {
 		if n == 0 {
 			continue
@@ -396,14 +409,17 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	_ = sysIter.Close()
 
 	if snap.idx != nil && snap.idx.pager != nil {
-		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts); err != nil {
+		userFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts)
+		if err != nil {
 			_ = snap.Close()
 			return nil, 0, err
 		}
-		if err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts); err != nil {
+		systemFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts)
+		if err != nil {
 			_ = snap.Close()
 			return nil, 0, err
 		}
+		db.noteLeafRefValueLogReachability(userFound || systemFound)
 	}
 
 	if err := snap.Close(); err != nil {
@@ -412,38 +428,13 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	return counts, commitSeq, nil
 }
 
-func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID uint64, refs map[uint32]uint64) error {
-	if ctx == nil {
-		ctx = context.Background()
-	}
+func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID uint64, refs map[uint32]uint64) (bool, error) {
 	if p == nil || rootID == 0 || refs == nil {
-		return nil
+		return false, nil
 	}
-	if ptr, ok := page.DecodeLeafRef(rootID); ok {
-		refs[ptr.FileID]++
-		return nil
-	}
-	stack := make([]uint64, 0, 128)
-	stack = append(stack, rootID)
-	visited := make(map[uint64]struct{}, 1024)
 	verifyAlways := p.VerifyOnRead()
-
-	for len(stack) > 0 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		pageID := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if _, ok := visited[pageID]; ok {
-			continue
-		}
-		visited[pageID] = struct{}{}
-
-		data, err := p.Get(pageID)
-		if err != nil {
-			return err
-		}
-		n := node.NewNodeView(data)
+	found := false
+	err := leafrefscan.Walk(ctx, rootID, p.Get, func(pageID uint64, n node.Node) error {
 		if verifyAlways || !p.IsVerified(pageID) {
 			if !n.VerifyChecksum() {
 				return fmt.Errorf("checksum mismatch on page %d", pageID)
@@ -452,28 +443,42 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 				p.MarkVerified(pageID)
 			}
 		}
+		return nil
+	}, func(ptr page.ValuePtr) error {
+		refs[ptr.FileID]++
+		found = true
+		return nil
+	})
+	return found, err
+}
 
-		switch n.Type() {
-		case page.PageTypeInternal:
-			count := n.Count()
-			for i := uint16(0); i < count; i++ {
-				childID, err := n.GetInternalChildID(i)
-				if err != nil {
-					return err
-				}
-				if ptr, ok := page.DecodeLeafRef(childID); ok {
-					refs[ptr.FileID]++
-					continue
-				}
-				stack = append(stack, childID)
-			}
-		case page.PageTypeLeaf:
-			// no children
-		default:
-			return fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
-		}
+func (db *DB) shouldScanLeafRefValueLogRefs() bool {
+	if db == nil {
+		return false
 	}
-	return nil
+	if db.indexOuterLeavesInValueLog || db.leafPageLog != nil {
+		return true
+	}
+	return db.leafRefState.Load() != leafRefStateAbsent
+}
+
+func (db *DB) noteLeafRefValueLogReachability(found bool) {
+	if db == nil {
+		return
+	}
+	if db.indexOuterLeavesInValueLog || db.leafPageLog != nil {
+		if found {
+			db.leafRefState.Store(leafRefStatePresent)
+		} else {
+			db.leafRefState.Store(leafRefStateUnknown)
+		}
+		return
+	}
+	if found {
+		db.leafRefState.Store(leafRefStatePresent)
+		return
+	}
+	db.leafRefState.Store(leafRefStateAbsent)
 }
 
 func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIterator, refs map[uint32]uint64) error {

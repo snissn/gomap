@@ -22,6 +22,9 @@ func (db *DB) SetLeafPageLog(log LeafPageLog) {
 	}
 	db.writeMu.Lock()
 	db.leafPageLog = log
+	if log != nil {
+		db.leafRefState.Store(leafRefStateUnknown)
+	}
 	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
 		idx.zipper.SetLeafPageLog(log)
 	}
