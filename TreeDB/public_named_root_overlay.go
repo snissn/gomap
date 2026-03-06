@@ -10,6 +10,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
@@ -23,6 +24,7 @@ type namedRootOverlayState struct {
 	rootKey       []byte
 	hasFormat     bool
 	format        rootfmt.Format
+	pointState    memtable.Table
 	entries       map[string]namedRootOverlayValue
 }
 
@@ -69,6 +71,11 @@ var namedRootBufferedIteratorHook struct {
 	fn func(rootID uint64, start, end []byte)
 }
 
+var namedRootOverlayEntryReadHook struct {
+	mu sync.RWMutex
+	fn func(op string, rootID uint64, key []byte)
+}
+
 func setNamedRootPublishTestHook(fn func(string) error) func() {
 	namedRootPublishHook.mu.Lock()
 	prev := namedRootPublishHook.fn
@@ -112,6 +119,27 @@ func runNamedRootBufferedIteratorTestHook(rootID uint64, start, end []byte) {
 	}
 }
 
+func setNamedRootOverlayEntryReadTestHook(fn func(op string, rootID uint64, key []byte)) func() {
+	namedRootOverlayEntryReadHook.mu.Lock()
+	prev := namedRootOverlayEntryReadHook.fn
+	namedRootOverlayEntryReadHook.fn = fn
+	namedRootOverlayEntryReadHook.mu.Unlock()
+	return func() {
+		namedRootOverlayEntryReadHook.mu.Lock()
+		namedRootOverlayEntryReadHook.fn = prev
+		namedRootOverlayEntryReadHook.mu.Unlock()
+	}
+}
+
+func runNamedRootOverlayEntryReadTestHook(op string, rootID uint64, key []byte) {
+	namedRootOverlayEntryReadHook.mu.RLock()
+	fn := namedRootOverlayEntryReadHook.fn
+	namedRootOverlayEntryReadHook.mu.RUnlock()
+	if fn != nil {
+		fn(op, rootID, key)
+	}
+}
+
 func (db *DB) hasBufferedNamedRoot(rootID uint64) bool {
 	if db == nil || rootID == 0 {
 		return false
@@ -127,11 +155,22 @@ func (db *DB) bufferedGetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if entry, ok := state.entries[string(key)]; ok {
-		if entry.deleted {
-			return nil, nil
+	if state.pointState != nil {
+		value, _, flags, found := state.pointState.GetEntry(key)
+		if found {
+			if flags&node.FlagTombstone != 0 {
+				return nil, nil
+			}
+			return append([]byte(nil), value...), nil
 		}
-		return append([]byte(nil), entry.value...), nil
+	} else {
+		runNamedRootOverlayEntryReadTestHook("get", rootID, key)
+		if entry, ok := state.entries[string(key)]; ok {
+			if entry.deleted {
+				return nil, nil
+			}
+			return append([]byte(nil), entry.value...), nil
+		}
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -145,11 +184,22 @@ func (db *DB) bufferedGetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, e
 	if err != nil {
 		return dst, err
 	}
-	if entry, ok := state.entries[string(key)]; ok {
-		if entry.deleted {
-			return dst, nil
+	if state.pointState != nil {
+		value, _, flags, found := state.pointState.GetEntry(key)
+		if found {
+			if flags&node.FlagTombstone != 0 {
+				return dst, nil
+			}
+			return append(dst, value...), nil
 		}
-		return append(dst, entry.value...), nil
+	} else {
+		runNamedRootOverlayEntryReadTestHook("get_append", rootID, key)
+		if entry, ok := state.entries[string(key)]; ok {
+			if entry.deleted {
+				return dst, nil
+			}
+			return append(dst, entry.value...), nil
+		}
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -163,8 +213,16 @@ func (db *DB) bufferedHasAtRoot(rootID uint64, key []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if entry, ok := state.entries[string(key)]; ok {
-		return !entry.deleted, nil
+	if state.pointState != nil {
+		_, _, flags, found := state.pointState.GetEntry(key)
+		if found {
+			return flags&node.FlagTombstone == 0, nil
+		}
+	} else {
+		runNamedRootOverlayEntryReadTestHook("has", rootID, key)
+		if entry, ok := state.entries[string(key)]; ok {
+			return !entry.deleted, nil
+		}
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -554,12 +612,17 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 	}
 	state := db.namedRootsByID[pending.virtualRootID]
 	if state == nil {
+		pointState, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			panic(fmt.Sprintf("treedb: create named-root point state: %v", err))
+		}
 		state = &namedRootOverlayState{
 			virtualRootID: pending.virtualRootID,
 			baseRootID:    pending.baseRootID,
 			rootKey:       append([]byte(nil), pending.rootKey...),
 			hasFormat:     pending.hasFormat,
 			format:        pending.format,
+			pointState:    pointState,
 			entries:       make(map[string]namedRootOverlayValue, len(pending.entries)),
 		}
 		if db.namedRootsByID == nil {
@@ -582,11 +645,17 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 				key:     append([]byte(nil), entry.Key...),
 				deleted: true,
 			}
+			if state.pointState != nil {
+				state.pointState.SetEntry(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
+			}
 			continue
 		}
 		state.entries[key] = namedRootOverlayValue{
 			key:   append([]byte(nil), entry.Key...),
 			value: append([]byte(nil), entry.Value...),
+		}
+		if state.pointState != nil {
+			state.pointState.SetEntry(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
 		}
 	}
 }
