@@ -16072,6 +16072,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			break
 		}
 	}
+	if b.ptrValueEntryIdxs != nil {
+		b.ptrValueEntryIdxs = b.ptrValueEntryIdxs[:0]
+	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	if retainPtrArena {
 		chunks = append(chunks, ptrChunks...)
