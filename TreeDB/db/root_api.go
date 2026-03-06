@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"sync"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -18,6 +19,16 @@ type RootMutation struct {
 	RootID uint64
 	Format *rootfmt.Format
 	Mutate func(batchpkg.Interface) error
+}
+
+type detachedBatch struct {
+	Batch
+}
+
+var detachedBatchPool = sync.Pool{
+	New: func() any {
+		return &detachedBatch{}
+	},
 }
 
 // GetAtRoot returns the value for a key in the specified root page.
@@ -132,14 +143,14 @@ func (db *DB) MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*roo
 		return nil, fmt.Errorf("mutate root formats length mismatch")
 	}
 
-	rootBatches := make([]*Batch, len(rootIDs))
+	rootBatches := make([]*detachedBatch, len(rootIDs))
 	for i := range rootIDs {
 		rootBatch, err := newDetachedBatch(db, false)
 		if err != nil {
 			return nil, err
 		}
 		rootBatches[i] = rootBatch
-		defer func(batch *Batch) { _ = batch.Close() }(rootBatch)
+		defer func(batch *detachedBatch) { _ = batch.Close() }(rootBatch)
 		if mutateRoots[i] == nil {
 			continue
 		}
@@ -264,7 +275,7 @@ func (db *DB) mutateRootInternal(rootID uint64, format *rootfmt.Format, sync boo
 		}
 	}
 
-	var userBatch *Batch
+	var userBatch *detachedBatch
 	if mutateUser != nil {
 		userBatch, err = newDetachedBatch(db, false)
 		if err != nil {
@@ -371,48 +382,69 @@ func (db *DB) mutateRootInternal(rootID uint64, format *rootfmt.Format, sync boo
 	return newRootID, nil
 }
 
-func newDetachedBatch(db *DB, system bool) (*Batch, error) {
+func newDetachedBatch(db *DB, system bool) (*detachedBatch, error) {
 	if db == nil {
 		return nil, fmt.Errorf("missing db")
-	}
-	threshold := db.InlineThreshold()
-	domains := db.valueLogDomainThresholds
-	internal := batchpkg.New(db.valueLogManager, threshold)
-	if threshold > 0 {
-		internal.SetInlineThresholdResolver(func(key []byte) int {
-			return ResolveInlineThresholdForKey(threshold, key, domains)
-		})
 	}
 	target := batchRootUser
 	if system {
 		target = batchRootSystem
 	}
-	return &Batch{
-		db:         db,
-		batch:      internal,
-		targetRoot: target,
-	}, nil
+	b := detachedBatchPool.Get().(*detachedBatch)
+	b.db = db
+	b.batch = db.newInternalBatch(0)
+	b.targetRoot = target
+	b.usedAutoPtr = false
+	return b, nil
 }
 
-func combineTouchedValueLogSegments(batches ...*Batch) []uint32 {
-	if len(batches) == 0 {
+func (b *detachedBatch) Close() error {
+	if b == nil {
 		return nil
 	}
-	seen := make(map[uint32]struct{}, 8)
-	out := make([]uint32, 0, 8)
+	var err error
+	if b.batch != nil {
+		err = b.batch.Close()
+	}
+	b.db = nil
+	b.batch = nil
+	b.targetRoot = batchRootUser
+	b.usedAutoPtr = false
+	detachedBatchPool.Put(b)
+	return err
+}
+
+func combineTouchedValueLogSegments(batches ...*detachedBatch) []uint32 {
+	var out []uint32
 	for _, b := range batches {
 		if b == nil || b.batch == nil {
 			continue
 		}
-		for _, fileID := range b.batch.TouchedValueLogSegments() {
-			if _, ok := seen[fileID]; ok {
+		touched := b.batch.TouchedValueLogSegments()
+		if len(touched) == 0 {
+			continue
+		}
+		if out == nil {
+			out = touched
+			continue
+		}
+		for _, fileID := range touched {
+			if containsValueLogSegmentID(out, fileID) {
 				continue
 			}
-			seen[fileID] = struct{}{}
 			out = append(out, fileID)
 		}
 	}
 	return out
+}
+
+func containsValueLogSegmentID(ids []uint32, target uint32) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeValueLogRefDeltas(deltas ...*valueLogRefDelta) *valueLogRefDelta {

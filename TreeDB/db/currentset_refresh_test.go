@@ -173,6 +173,34 @@ func TestLeafPageCommitPublishesLeafRefSegment(t *testing.T) {
 	}
 }
 
+func TestInlineCommitReusesValueLogSetWhenSegmentsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if err := d.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("Set k1: %v", err)
+	}
+	first := d.State()
+	if first == nil || first.ValueLogSet == nil {
+		t.Fatalf("first state missing value-log set")
+	}
+
+	if err := d.Set([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("Set k2: %v", err)
+	}
+	second := d.State()
+	if second == nil || second.ValueLogSet == nil {
+		t.Fatalf("second state missing value-log set")
+	}
+	if second.ValueLogSet != first.ValueLogSet {
+		t.Fatalf("expected inline-only commit to reuse value-log set")
+	}
+}
+
 func TestCurrentSetRefresh_InlineThenPointerThenInline(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})

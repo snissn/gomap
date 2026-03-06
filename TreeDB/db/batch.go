@@ -33,23 +33,25 @@ func (db *DB) NewBatch() batch.Interface {
 }
 
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
-	threshold := db.InlineThreshold()
-	domains := db.valueLogDomainThresholds
-	if size < 0 {
-		size = 0
-	}
-	internal := batch.New(db.valueLogManager, threshold)
-	if threshold > 0 {
-		internal.SetInlineThresholdResolver(func(key []byte) int {
-			return ResolveInlineThresholdForKey(threshold, key, domains)
-		})
-	}
-	internal.Reserve(size)
+	internal := db.newInternalBatch(size)
 	return &Batch{
 		db:         db,
 		batch:      internal,
 		targetRoot: batchRootUser,
 	}
+}
+
+func (db *DB) newInternalBatch(size int) *batch.Batch {
+	threshold := db.InlineThreshold()
+	if size < 0 {
+		size = 0
+	}
+	internal := batch.New(db.valueLogManager, threshold)
+	if db != nil && db.inlineThresholdResolver != nil {
+		internal.SetInlineThresholdResolver(db.inlineThresholdResolver)
+	}
+	internal.Reserve(size)
+	return internal
 }
 
 // NewSystemBatch targets writes into the system catalog root.
