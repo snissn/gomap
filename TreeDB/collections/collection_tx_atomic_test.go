@@ -7,6 +7,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
@@ -333,6 +334,21 @@ func (d *atomicMockDB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint6
 	rootOps := make([][]batch.Entry, len(rootIters))
 	for i := range rootIters {
 		ops, err := collectIteratorOps(rootIters[i])
+		if err != nil {
+			return nil, err
+		}
+		rootOps[i] = ops
+	}
+	return d.MutateRootsWithFormatOps(sync, rootIDs, formats, rootOps, buildSystemOps)
+}
+
+func (d *atomicMockDB) MutateRootsWithFormatTables(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootTables []memtable.Table, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	rootOps := make([][]batch.Entry, len(rootTables))
+	for i := range rootTables {
+		if rootTables[i] == nil {
+			continue
+		}
+		ops, err := collectIteratorOps(rootTables[i].NewIterator(nil, nil))
 		if err != nil {
 			return nil, err
 		}

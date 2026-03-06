@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
@@ -118,6 +119,11 @@ func (d *perfMockDB) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, forma
 func (d *perfMockDB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
 	d.rootIteratorCalls++
 	return d.atomicMockDB.MutateRootsWithFormatIterators(sync, rootIDs, formats, rootIters, buildSystemOps)
+}
+
+func (d *perfMockDB) MutateRootsWithFormatTables(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootTables []memtable.Table, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	d.rootIteratorCalls++
+	return d.atomicMockDB.MutateRootsWithFormatTables(sync, rootIDs, formats, rootTables, buildSystemOps)
 }
 
 func TestInsertWithoutIndexes_SkipsExistingDocumentRead(t *testing.T) {
