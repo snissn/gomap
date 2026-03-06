@@ -1093,6 +1093,14 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		return id, false, err
 	}
 	n := node.NewNodeView(data)
+	if c.pager.VerifyOnRead() || !c.pager.IsVerified(id) {
+		if !n.VerifyChecksum() {
+			return id, false, fmt.Errorf("checksum mismatch on page %d", id)
+		}
+		if !c.pager.VerifyOnRead() {
+			c.pager.MarkVerified(id)
+		}
+	}
 	switch n.Type() {
 	case page.PageTypeInternal:
 		count := n.Count()
@@ -1165,7 +1173,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sync bool) (int, error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sync bool) (copied int, err error) {
 	if db == nil {
 		return 0, fmt.Errorf("missing db")
 	}
@@ -1205,6 +1213,21 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	defer idx.registry.Unregister(regID)
 
 	tracker := newAllocTracker(idx.allocator)
+	defer func() {
+		if tracker == nil {
+			return
+		}
+		freeErr := tracker.FreeAll()
+		if freeErr == nil {
+			return
+		}
+		if err != nil {
+			err = errors.Join(err, freeErr)
+			return
+		}
+		err = freeErr
+	}()
+
 	leafCtx := &leafRefRewriteCtx{
 		ctx:       ctx,
 		db:        db,
@@ -1217,25 +1240,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)
 	if err != nil {
-		freeErr := tracker.FreeAll()
-		if freeErr != nil {
-			return 0, errors.Join(err, freeErr)
-		}
 		return 0, err
 	}
 	newRoot, userChanged, err := leafCtx.rewriteNode(rootID)
 	if err != nil {
-		freeErr := tracker.FreeAll()
-		if freeErr != nil {
-			return 0, errors.Join(err, freeErr)
-		}
 		return 0, err
 	}
 	if !sysChanged && !userChanged {
-		freeErr := tracker.FreeAll()
-		if freeErr != nil {
-			return 0, errors.Join(err, freeErr)
-		}
 		return 0, nil
 	}
 
@@ -1243,29 +1254,18 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// refs that point at them.
 	if sync {
 		if err := writer.Sync(); err != nil {
-			freeErr := tracker.FreeAll()
-			if freeErr != nil {
-				return 0, errors.Join(err, freeErr)
-			}
 			return 0, err
 		}
 	} else {
 		if err := writer.Flush(); err != nil {
-			freeErr := tracker.FreeAll()
-			if freeErr != nil {
-				return 0, errors.Join(err, freeErr)
-			}
 			return 0, err
 		}
 	}
 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, nil, db.indexOuterLeavesInValueLog, nil); err != nil {
-		freeErr := tracker.FreeAll()
-		if freeErr != nil {
-			return 0, errors.Join(err, freeErr)
-		}
 		return 0, err
 	}
+	tracker = nil
 	return leafCtx.copied, nil
 }
 
