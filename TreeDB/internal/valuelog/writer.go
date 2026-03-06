@@ -661,6 +661,13 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 
 	old := w.f
 	w.f = f
+	if w.bw != nil {
+		if err := w.bw.Flush(); err != nil {
+			_ = f.Close()
+			w.f = old
+			return err
+		}
+	}
 	// File-backed writers do not use bufio; drop any leftover sink buffer
 	// rather than retargeting it across rotations.
 	w.bw = nil
