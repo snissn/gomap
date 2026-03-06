@@ -4,55 +4,13 @@ import (
 	"fmt"
 	"testing"
 
-	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
-	dbpkg "github.com/snissn/gomap/TreeDB/db"
 )
-
-type collectionBenchEngine struct {
-	name string
-	open func(tb testing.TB, dir string) (manager *collections.CollectionManager, cleanup func())
-}
-
-func collectionBenchEngines() []collectionBenchEngine {
-	return []collectionBenchEngine{
-		{
-			name: "backend_direct",
-			open: func(tb testing.TB, dir string) (*collections.CollectionManager, func()) {
-				tb.Helper()
-				d, err := dbpkg.Open(dbpkg.Options{Dir: dir})
-				if err != nil {
-					tb.Fatalf("open backend: %v", err)
-				}
-				return collections.NewCollectionManager(d), func() {
-					if err := d.Close(); err != nil {
-						tb.Fatalf("close backend: %v", err)
-					}
-				}
-			},
-		},
-		{
-			name: "cached",
-			open: func(tb testing.TB, dir string) (*collections.CollectionManager, func()) {
-				tb.Helper()
-				d, err := treedb.Open(treedb.Options{Dir: dir})
-				if err != nil {
-					tb.Fatalf("open cached: %v", err)
-				}
-				return treedb.NewCollectionManager(d), func() {
-					if err := d.Close(); err != nil {
-						tb.Fatalf("close cached: %v", err)
-					}
-				}
-			},
-		},
-	}
-}
 
 func BenchmarkCollectionEngineInsertProvidedID(b *testing.B) {
 	for _, engine := range collectionBenchEngines() {
 		b.Run(engine.name, func(b *testing.B) {
-			manager, cleanup := engine.open(b, b.TempDir())
+			manager, _, cleanup := engine.open(b, b.TempDir())
 			defer cleanup()
 
 			meta, err := manager.CreateCollection(&collections.CollectionMeta{Name: "users"})
@@ -79,7 +37,7 @@ func BenchmarkCollectionEngineInsertProvidedID(b *testing.B) {
 func BenchmarkCollectionEngineGetByID(b *testing.B) {
 	for _, engine := range collectionBenchEngines() {
 		b.Run(engine.name, func(b *testing.B) {
-			manager, cleanup := engine.open(b, b.TempDir())
+			manager, checkpoint, cleanup := engine.open(b, b.TempDir())
 			defer cleanup()
 
 			meta, err := manager.CreateCollection(&collections.CollectionMeta{Name: "users"})
@@ -93,6 +51,7 @@ func BenchmarkCollectionEngineGetByID(b *testing.B) {
 			if _, err := col.Insert([]byte("u1"), []byte(`{"name":"ada"}`)); err != nil {
 				b.Fatalf("seed insert: %v", err)
 			}
+			checkpoint()
 
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -108,7 +67,7 @@ func BenchmarkCollectionEngineGetByID(b *testing.B) {
 func BenchmarkCollectionEngineFindByIndex(b *testing.B) {
 	for _, engine := range collectionBenchEngines() {
 		b.Run(engine.name, func(b *testing.B) {
-			manager, cleanup := engine.open(b, b.TempDir())
+			manager, checkpoint, cleanup := engine.open(b, b.TempDir())
 			defer cleanup()
 
 			meta, err := manager.CreateCollection(&collections.CollectionMeta{Name: "users"})
@@ -125,6 +84,7 @@ func BenchmarkCollectionEngineFindByIndex(b *testing.B) {
 			if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
 				b.Fatalf("seed insert: %v", err)
 			}
+			checkpoint()
 
 			b.ReportAllocs()
 			b.ResetTimer()

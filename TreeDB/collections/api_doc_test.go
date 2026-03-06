@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/collections"
-	"github.com/snissn/gomap/TreeDB/db"
 )
 
 func ExampleCollection_autoIDsAndIndexLookup() {
@@ -15,13 +15,13 @@ func ExampleCollection_autoIDsAndIndexLookup() {
 	}
 	defer os.RemoveAll(dir)
 
-	database, err := db.Open(db.Options{Dir: dir})
+	database, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
 		panic(err)
 	}
 	defer database.Close()
 
-	manager := collections.NewCollectionManager(database)
+	manager := treedb.NewCollectionManager(database)
 	meta, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "users",
 		Options: collections.CollectionOptions{
@@ -74,13 +74,13 @@ func ExampleCollection_checkConsistency() {
 	}
 	defer os.RemoveAll(dir)
 
-	database, err := db.Open(db.Options{Dir: dir})
+	database, err := treedb.Open(treedb.Options{Dir: dir})
 	if err != nil {
 		panic(err)
 	}
 	defer database.Close()
 
-	manager := collections.NewCollectionManager(database)
+	manager := treedb.NewCollectionManager(database)
 	meta, err := manager.CreateCollection(&collections.CollectionMeta{Name: "users"})
 	if err != nil {
 		panic(err)

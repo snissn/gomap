@@ -70,6 +70,22 @@ The primary benchmarking tool is `cmd/unified_bench`, which runs a consistent wo
 ./bin/unified-bench -test write_seq,read_rand -dbs treedb,hashdb
 ```
 
+## Collections Benchmarks
+
+The focused collections benchmark bundle defaults to the public cached
+TreeDB handle:
+
+```bash
+scripts/bench_collections_report.sh
+```
+
+- Default engine: cached `treedb.Open(...)`
+- Explicit backend-direct override for storage-engine profiling:
+
+```bash
+TREEDB_COLLECTION_BENCH_ENGINE=backend_direct scripts/bench_collections_report.sh
+```
+
 ## Profiling + Analysis (Standard Workflow)
 
 Use `-profile-dir` so one directory contains all artifacts needed by

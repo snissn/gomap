@@ -127,8 +127,10 @@ secondary-index entries in dedicated named roots.
 
 ### 9.1 Collection lifecycle and metadata
 
-- `collections.NewCollectionManager(db)` binds collection operations to the
-  provided TreeDB instance.
+- `treedb.NewCollectionManager(db)` on a public `treedb.Open(...)` handle is
+  the default collection entrypoint and exercises cached TreeDB semantics.
+- `collections.NewCollectionManager(db)` remains the explicit backend-direct
+  debugging/profiling hook when the caller is intentionally using `TreeDB/db`.
 - `CreateCollection(meta)` is idempotent for the same normalized schema and
   rejects incompatible redefinitions.
 - `CreateCollection(meta)` assigns deterministic primary and index-state root
