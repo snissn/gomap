@@ -27,6 +27,9 @@ func TestWriterFlushFlushesBufferedFileWriter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new writer: %v", err)
 	}
+	// Public constructors no longer produce file-backed writers with bufio
+	// attached. Set up that stale internal state explicitly so Flush protects
+	// against older writers or future regressions.
 	writer.bw = bufio.NewWriterSize(writer.f, 16)
 	if _, err := writer.bw.WriteString("abc"); err != nil {
 		_ = writer.Close()
