@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func TestBatchReset_DoesNotCorruptPriorStealWrites(t *testing.T) {
@@ -146,7 +148,7 @@ func TestBatchArenaLeases_ReleasedAfterCheckpoint_BTree(t *testing.T) {
 	}
 }
 
-func TestMemtableBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
+func TestCachedBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
 	cases := []struct {
 		name string
 		new  func() memtable.Table
@@ -160,9 +162,75 @@ func TestMemtableBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
 		{name: "append_only", new: func() memtable.Table { return memtable.NewAppendOnlyWithCapacity(0) }, want: false},
 	}
 	for _, tc := range cases {
-		mt := tc.new()
-		if got := memtableBatchWriteUsesSteal(mt); got != tc.want {
-			t.Fatalf("memtable=%s useSteal=%v want=%v", tc.name, got, tc.want)
-		}
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			mt := tc.new()
+			if got := cachedBatchWriteUsesSteal(mt); got != tc.want {
+				t.Fatalf("memtable=%s useSteal=%v want=%v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBatchArenaLeases_NotNeededForPointerWritesOnCopiedMemtables(t *testing.T) {
+	for _, mode := range []string{"append_only", "hash_sorted"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			db, err := Open(dir, NewMockBackend(), Options{
+				AllowUnsafe:              true,
+				DisableWAL:               true,
+				MemtableMode:             mode,
+				MemtableShards:           1,
+				FlushThreshold:           1 << 30,
+				ValueLogPointerThreshold: 1,
+			})
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			defer db.Close()
+
+			b := db.NewBatchWithSize(1)
+			defer func() { _ = b.Close() }()
+			key := []byte("ptr-key")
+			value := bytes.Repeat([]byte("p"), 256)
+			if err := b.Set(key, value); err != nil {
+				t.Fatalf("set: %v", err)
+			}
+			if err := b.Write(); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			memVal, ptr, flags, ok := db.mutableShards[0].mem.GetEntry(key)
+			if !ok {
+				t.Fatalf("expected memtable entry for pointer write")
+			}
+			if ptr == (page.ValuePtr{}) {
+				t.Fatalf("expected non-zero value pointer")
+			}
+			if flags != node.FlagPointer {
+				t.Fatalf("expected pointer flag, got=%d", flags)
+			}
+			if memVal != nil {
+				t.Fatalf("expected pointer-backed memtable entry to drop inline value bytes")
+			}
+
+			db.batchArenaLeaseMu.Lock()
+			leased := len(db.batchArenaLeasesByMem)
+			db.batchArenaLeaseMu.Unlock()
+			if leased != 0 {
+				t.Fatalf("expected no active batch arena leases after pointer write, got=%d", leased)
+			}
+			if got := db.batchArenaLeaseBytes.Load(); got != 0 {
+				t.Fatalf("expected zero leased batch arena bytes after pointer write, got=%d", got)
+			}
+
+			got, err := db.Get(key)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if !bytes.Equal(got, value) {
+				t.Fatalf("value mismatch: got=%q want=%q", got, value)
+			}
+		})
 	}
 }

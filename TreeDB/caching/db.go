@@ -3716,17 +3716,17 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 
 func memtableNeedsBatchArenaRetention(mt memtable.Table) bool {
 	// This helper is only used for the cached batch write path, where
-	// memtableBatchWriteUsesSteal governs whether a memtable receives borrowed
+	// cachedBatchWriteUsesSteal governs whether a memtable receives borrowed
 	// batch slices or copied writes. append_only and hash_sorted are forced onto
 	// copy writes there, so they do not need batch-arena leases.
-	if !memtableBatchWriteUsesSteal(mt) {
+	if !cachedBatchWriteUsesSteal(mt) {
 		return false
 	}
 	_, skiplist := mt.(*memtable.Memtable)
 	return !skiplist
 }
 
-func memtableBatchWriteUsesSteal(mt memtable.Table) bool {
+func cachedBatchWriteUsesSteal(mt memtable.Table) bool {
 	// append_only and hash_sorted borrow key/value slices on Steal paths, so the
 	// cached batch writer feeds them copied writes instead. Keep the Steal path
 	// on an explicit allowlist so new memtable implementations do not silently
@@ -3747,10 +3747,10 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 	mt.Delete(key)
 }
 
-func memtableBatchSet(mt memtable.Table, useSteal bool, memtableStoresPointerInlineValue bool, op batch.Entry) {
+func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlineValueForPtrEntries bool, op batch.Entry) {
 	if op.IsPtr {
 		memVal := []byte(nil)
-		if memtableStoresPointerInlineValue {
+		if storeInlineValueForPtrEntries {
 			memVal = op.Value
 		}
 		if useSteal {
@@ -16280,7 +16280,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
-			useSteal := memtableBatchWriteUsesSteal(shard.mem)
+			useSteal := cachedBatchWriteUsesSteal(shard.mem)
 			if b.streamEligible {
 				first := b.entries[idxs[0]].Key
 				last := first
@@ -16344,8 +16344,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
 			useStream := b.streamEligible
-			useSteal := memtableBatchWriteUsesSteal(shard.mem)
-			memtableStoresPointerInlineValue := !b.db.memtableValueLogPointers
+			useSteal := cachedBatchWriteUsesSteal(shard.mem)
+			storeInlineValueForPtrEntries := !b.db.memtableValueLogPointers
 			if useStream && useSteal {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
 					applier.ApplyStealSortedBatchTrusted(entries, nil)
@@ -16356,7 +16356,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						if op.Type == batch.OpDelete {
 							memtableBatchDelete(shard.mem, true, op.Key)
 						} else {
-							memtableBatchSet(shard.mem, true, memtableStoresPointerInlineValue, op)
+							memtableBatchSet(shard.mem, true, storeInlineValueForPtrEntries, op)
 						}
 					}
 				}
@@ -16372,7 +16372,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
-						memtableBatchSet(shard.mem, useSteal, memtableStoresPointerInlineValue, op)
+						memtableBatchSet(shard.mem, useSteal, storeInlineValueForPtrEntries, op)
 					}
 					if useStream {
 						// Preserve sorted-run accounting even when we avoid Steal.
