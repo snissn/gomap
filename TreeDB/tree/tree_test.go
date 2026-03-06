@@ -111,7 +111,7 @@ func TestTreeGet(t *testing.T) {
 	}
 }
 
-func TestTreeGet_UsesUnsafeReaderForPointers(t *testing.T) {
+func TestTreeGet_UsesUnsafeReaderForPointersAndReturnsSafeCopy(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")
 	p, err := pager.Open(idxPath, 65536)
