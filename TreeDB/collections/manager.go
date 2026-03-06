@@ -80,6 +80,7 @@ var documentScratchPool = sync.Pool{
 type collectionDB interface {
 	Get(key []byte) ([]byte, error)
 	HasAtRoot(rootID uint64, key []byte) (bool, error)
+	HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error)
 	GetAtRoot(rootID uint64, key []byte) ([]byte, error)
 	GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error)
 	Set(key, value []byte) error
@@ -1129,32 +1130,19 @@ func (c *Collection) ensureUniqueConflicts(documentID []byte, additions [][]byte
 			return fmt.Errorf("collections: malformed index key")
 		}
 		valuePrefix := key[:len(key)-len(documentID)]
-		it, err := c.db.IteratorAtRoot(runtime.desc.RootPageID, valuePrefix, nil)
+		hasPrefix, err := c.db.HasPrefixAtRoot(runtime.desc.RootPageID, valuePrefix)
 		if err != nil {
 			return err
 		}
-		for it.Valid() {
-			existing := it.UnsafeKey()
-			if !bytes.HasPrefix(existing, valuePrefix) {
-				break
-			}
-			if !it.IsDeleted() {
-				existingID, err := parseIndexEntryDocIDWithPrefix(runtime.prefix, existing)
-				if err != nil {
-					_ = it.Close()
-					return err
-				}
-				if !bytes.Equal(existingID, documentID) {
-					_ = it.Close()
-					return fmt.Errorf("collections: unique index %q conflict", runtime.def.Name)
-				}
-			}
-			it.Next()
+		if !hasPrefix {
+			continue
 		}
-		err = it.Error()
-		_ = it.Close()
+		exact, err := c.db.HasAtRoot(runtime.desc.RootPageID, key)
 		if err != nil {
 			return err
+		}
+		if !exact {
+			return fmt.Errorf("collections: unique index %q conflict", runtime.def.Name)
 		}
 	}
 	return nil

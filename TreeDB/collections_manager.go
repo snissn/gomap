@@ -40,6 +40,10 @@ func (a *collectionManagerAdapter) HasAtRoot(rootID uint64, key []byte) (bool, e
 	return a.db.HasAtRoot(rootID, key)
 }
 
+func (a *collectionManagerAdapter) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
+	return a.db.HasPrefixAtRoot(rootID, prefix)
+}
+
 func (a *collectionManagerAdapter) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	return a.db.GetAtRoot(rootID, key)
 }
