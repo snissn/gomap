@@ -18,7 +18,11 @@ func TestNewBatchWithSize_NormalizesLargePublicHint(t *testing.T) {
 
 	const rawHint = 100_000
 	b := db.NewBatchWithSize(rawHint)
-	defer b.Close()
+	defer func() {
+		if err := b.Close(); err != nil {
+			t.Errorf("Close batch: %v", err)
+		}
+	}()
 
 	want := backenddb.NormalizePublicBatchReserveHint(rawHint)
 	if got := cap(b.entries); got < want {
