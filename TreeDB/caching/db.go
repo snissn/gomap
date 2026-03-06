@@ -71,7 +71,6 @@ var valueLogKeyLeases [][][]byte
 var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolLastGC atomic.Uint32
 var batchArenaPoolBudgetBytes int64 = computeBatchArenaPoolBudgetBytes()
-var batchArenaPoolLastGC atomic.Uint32
 
 func computeBatchArenaPoolBudgetBytes() int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
@@ -5594,8 +5593,6 @@ func putEntrySlice(entries []batch.Entry) {
 	if !ok {
 		return
 	}
-	full := entries[:cap(entries)]
-	clear(full)
 	leaseBytes := int64(cap(entries)) * entrySliceEntrySizeBytes
 	if !reserveEntrySlicePoolBytes(leaseBytes) {
 		return
