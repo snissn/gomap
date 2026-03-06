@@ -401,3 +401,28 @@ func TestAppendOnlyResetKeepsSnapshotBuffersWarm(t *testing.T) {
 		t.Fatalf("index cap shrank after reset: got=%d want>=%d", cap(m.indexBuf), indexCap)
 	}
 }
+
+func TestBuildSortedLatestIndicesLockedRetainsGrownIndexBuf(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("k2"), []byte("v2"))
+	m.Set([]byte("k1"), []byte("v1")) // force unordered latest-index path
+	m.indexBuf = make([]int, 0, 1)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	indices := m.buildSortedLatestIndicesLocked()
+	if len(indices) != 2 {
+		t.Fatalf("indices len=%d want=2", len(indices))
+	}
+	if cap(m.indexBuf) < len(indices) {
+		t.Fatalf("indexBuf cap=%d want >= %d", cap(m.indexBuf), len(indices))
+	}
+	if cap(m.indexBuf) == 0 {
+		t.Fatal("indexBuf cap=0 want retained grown buffer")
+	}
+	retained := m.indexBuf[:len(indices)]
+	if &retained[0] != &indices[0] {
+		t.Fatal("indexBuf does not retain grown indices backing array")
+	}
+}

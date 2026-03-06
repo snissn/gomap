@@ -22,7 +22,7 @@ const (
 	// a 100kB budget does not preallocate 100k entries.
 	publicBatchReserveEntryHintCutover = 8 * 1024
 	publicBatchHintBytesPerEntry       = 256
-	publicBatchReserveEntriesMax       = 8 * 1024
+	publicBatchReserveEntriesMax       = publicBatchReserveEntryHintCutover
 )
 
 func (db *DB) NewBatch() batch.Interface {
@@ -33,6 +33,9 @@ func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	return db.newBatchWithReserveHint(normalizePublicBatchReserveHint(size))
 }
 
+// normalizePublicBatchReserveHint keeps small public hints behaving like entry
+// reserves, but treats larger hints as approximate byte budgets so callers do
+// not accidentally preallocate one entry per byte.
 func normalizePublicBatchReserveHint(size int) int {
 	if size <= 0 {
 		return 0
