@@ -95,6 +95,10 @@ type ValueLogRewriteOnlineOptions struct {
 	// MinSegmentStaleBytes requires estimated stale bytes to be at least this
 	// threshold when sparse segment selection is used.
 	MinSegmentStaleBytes int64
+	// ReserveRIDs allocates a contiguous RID range for rewrite-created records.
+	// Cached-mode callers should provide the live runtime allocator here so
+	// online rewrite and foreground writes share one RID namespace.
+	ReserveRIDs func(count int) (start uint64, err error)
 }
 
 type rewriteSwap struct {
@@ -106,6 +110,50 @@ type rewriteSwap struct {
 type rewriteCandidate struct {
 	key    []byte
 	oldPtr page.ValuePtr
+}
+
+type rewriteRIDAllocator struct {
+	next    uint64
+	reserve func(count int) (uint64, error)
+}
+
+func newRewriteRIDAllocator(start uint64, reserve func(count int) (uint64, error)) *rewriteRIDAllocator {
+	return &rewriteRIDAllocator{
+		next:    start,
+		reserve: reserve,
+	}
+}
+
+func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
+	if count <= 0 {
+		return 0, nil
+	}
+	if a == nil {
+		return 0, fmt.Errorf("value-log rid allocator unavailable")
+	}
+	if a.reserve != nil {
+		start, err := a.reserve(count)
+		if err != nil {
+			return 0, err
+		}
+		if start == 0 {
+			return 0, fmt.Errorf("value-log rid allocator returned rid 0")
+		}
+		return start, nil
+	}
+	start := a.next
+	if start == 0 {
+		start = 1
+	}
+	if uint64(count-1) > ^uint64(0)-start {
+		return 0, fmt.Errorf("value-log rid space exhausted")
+	}
+	a.next = start + uint64(count)
+	return start, nil
+}
+
+func (a *rewriteRIDAllocator) Next() (uint64, error) {
+	return a.Reserve(1)
 }
 
 // ValueLogRewriteLocalityPolicy controls pointer rewrite ordering.
@@ -701,6 +749,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
+	ridAlloc := newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
 	lane, startSeq := chooseRewriteLane(segments)
 	maxBytes := opts.MaxSegmentBytes
 	if maxBytes <= 0 {
@@ -723,7 +772,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	swaps := make([]rewriteSwap, 0, batchSize)
 	localityPolicy := normalizeValueLogRewriteLocalityPolicy(opts.LocalityPolicy)
 	candidates := make([]rewriteCandidate, 0, batchSize)
-	ridExhausted := false
 	var canceledErr error
 
 	flushBatch := func() error {
@@ -732,22 +780,20 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		orderRewriteCandidates(candidates, localityPolicy)
 		swaps = swaps[:0]
+		startRID, err := ridAlloc.Reserve(len(candidates))
+		if err != nil {
+			return err
+		}
 		for _, candidate := range candidates {
-			if ridExhausted {
-				return fmt.Errorf("value-log rid space exhausted")
-			}
 			val, err := db.valueLogManager.Read(candidate.oldPtr)
 			if err != nil {
 				return err
 			}
-			newPtr, err := writer.appendValue(nextRID, val)
+			newPtr, err := writer.appendValue(startRID, val)
 			if err != nil {
 				return err
 			}
-			nextRID++
-			if nextRID == 0 {
-				ridExhausted = true
-			}
+			startRID++
 			stats.RecordsCopied++
 			swaps = append(swaps, rewriteSwap{
 				key:    candidate.key,
@@ -821,7 +867,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// referenced leaf pages out of the selected source segments so cleanup can
 		// actually reclaim space.
 		if restrictSource && db.indexOuterLeavesInValueLog && len(sourceIDs) > 0 {
-			copied, err := db.rewriteLeafRefsOnline(ctx, writer, &nextRID, &ridExhausted, sourceIDs, opts.SyncEachBatch)
+			copied, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, opts.SyncEachBatch)
 			if err != nil {
 				return stats, err
 			}
@@ -944,9 +990,8 @@ type leafRefRewriteCtx struct {
 		Alloc(hint uint64) (uint64, error)
 	}
 
-	writer       *rewriteWriter
-	nextRID      *uint64
-	ridExhausted *bool
+	writer   *rewriteWriter
+	ridAlloc *rewriteRIDAllocator
 
 	sourceIDs map[uint32]struct{}
 
@@ -984,11 +1029,8 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if c.db == nil || c.db.valueLogManager == nil {
 			return id, false, fmt.Errorf("vlog-rewrite: value-log manager unavailable")
 		}
-		if c.writer == nil || c.nextRID == nil || c.ridExhausted == nil {
+		if c.writer == nil || c.ridAlloc == nil {
 			return id, false, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
-		}
-		if *c.ridExhausted {
-			return id, false, fmt.Errorf("value-log rid space exhausted")
 		}
 		leafPage, err := c.db.valueLogManager.ReadUnsafe(ptr)
 		if err != nil {
@@ -997,18 +1039,13 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if len(leafPage) != page.PageSize {
 			return id, false, fmt.Errorf("vlog-rewrite: leaf page has invalid size: got=%dB want=%dB", len(leafPage), page.PageSize)
 		}
-		rid := *c.nextRID
-		if rid == 0 {
-			rid = 1
+		rid, err := c.ridAlloc.Next()
+		if err != nil {
+			return id, false, err
 		}
 		newPtr, err := c.writer.appendValue(rid, leafPage)
 		if err != nil {
 			return id, false, err
-		}
-		rid++
-		*c.nextRID = rid
-		if rid == 0 {
-			*c.ridExhausted = true
 		}
 		leafID, err := page.EncodeLeafRef(newPtr)
 		if err != nil {
@@ -1108,7 +1145,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 	}
 }
 
-func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, nextRID *uint64, ridExhausted *bool, sourceIDs map[uint32]struct{}, sync bool) (int, error) {
+func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, ridAlloc *rewriteRIDAllocator, sourceIDs map[uint32]struct{}, sync bool) (int, error) {
 	if db == nil {
 		return 0, fmt.Errorf("missing db")
 	}
@@ -1121,7 +1158,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if db.valueLogManager == nil {
 		return 0, fmt.Errorf("value log manager unavailable")
 	}
-	if writer == nil || nextRID == nil || ridExhausted == nil {
+	if writer == nil || ridAlloc == nil {
 		return 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
 	if len(sourceIDs) == 0 {
@@ -1157,8 +1194,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		pager:        idx.pager,
 		alloc:        tracker,
 		writer:       writer,
-		nextRID:      nextRID,
-		ridExhausted: ridExhausted,
+		ridAlloc:     ridAlloc,
 		sourceIDs:    sourceIDs,
 	}
 

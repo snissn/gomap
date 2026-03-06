@@ -614,6 +614,114 @@ func TestValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 260_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte(i + 1)}, 256)
+	})
+	b := db.NewBatch().(*Batch)
+	for i := range ptrs {
+		if err := b.SetPointer([]byte{byte('a' + i)}, ptrs[i]); err != nil {
+			t.Fatalf("set pointer %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	segmentsBefore, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("listWALSegments before: %v", err)
+	}
+	beforeIDs := make(map[uint32]struct{}, len(segmentsBefore))
+	for _, seg := range segmentsBefore {
+		if seg.valueLog {
+			beforeIDs[seg.fileID] = struct{}{}
+		}
+	}
+
+	var (
+		reserveCalls []int
+		nextRIDBase  uint64 = 900_000
+	)
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs[0].FileID},
+		ReserveRIDs: func(count int) (uint64, error) {
+			reserveCalls = append(reserveCalls, count)
+			start := nextRIDBase
+			nextRIDBase += uint64(count)
+			return start, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 2 {
+		t.Fatalf("expected 2 copied records, got %d", stats.RecordsCopied)
+	}
+	if len(reserveCalls) == 0 {
+		t.Fatalf("expected ReserveRIDs to be called")
+	}
+
+	segmentsAfter, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("listWALSegments after: %v", err)
+	}
+	var newSegments []logSegment
+	for _, seg := range segmentsAfter {
+		if !seg.valueLog {
+			continue
+		}
+		if _, ok := beforeIDs[seg.fileID]; ok {
+			continue
+		}
+		newSegments = append(newSegments, seg)
+	}
+	if len(newSegments) == 0 {
+		t.Fatalf("expected rewrite to create at least one new segment")
+	}
+
+	gotRIDs := make(map[uint64]struct{})
+	for _, seg := range newSegments {
+		reader, err := valuelog.NewReader(seg.path, seg.fileID)
+		if err != nil {
+			t.Fatalf("new reader %s: %v", seg.path, err)
+		}
+		reader.DisableValueDecode()
+		for {
+			rid, _, _, err := reader.ReadNext()
+			if err == nil {
+				gotRIDs[rid] = struct{}{}
+				continue
+			}
+			if err == io.EOF || isTruncatedLogError(err) {
+				break
+			}
+			_ = reader.Close()
+			t.Fatalf("ReadNext(%s): %v", seg.path, err)
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatalf("close reader %s: %v", seg.path, err)
+		}
+	}
+
+	wantRIDs := map[uint64]struct{}{
+		900_000: {},
+		900_001: {},
+	}
+	if !reflect.DeepEqual(gotRIDs, wantRIDs) {
+		t.Fatalf("unexpected rewritten RID set: got=%v want=%v", gotRIDs, wantRIDs)
+	}
+}
+
 func TestValueLogRewriteOnline_SparseSelection_RewritesHighStaleSegment(t *testing.T) {
 	dir := t.TempDir()
 
