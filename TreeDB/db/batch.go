@@ -30,7 +30,8 @@ func (db *DB) NewBatch() batch.Interface {
 }
 
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
-	return db.newBatchWithReserveHint(NormalizePublicBatchReserveHint(size))
+	reserveHint := NormalizePublicBatchReserveHint(size)
+	return db.newBatchWithReserveHint(reserveHint)
 }
 
 // NormalizePublicBatchReserveHint keeps small public hints behaving like entry
@@ -54,10 +55,6 @@ func NormalizePublicBatchReserveHint(size int) int {
 		entries = publicBatchReserveEntriesMax
 	}
 	return entries
-}
-
-func normalizePublicBatchReserveHint(size int) int {
-	return NormalizePublicBatchReserveHint(size)
 }
 
 func (db *DB) newBatchWithEntryReserve(entries int) batch.Interface {

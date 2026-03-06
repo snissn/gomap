@@ -512,6 +512,9 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(val) == 0 {
+		return nil, nil
+	}
 	buf := make([]byte, len(val))
 	copy(buf, val)
 	return buf, nil
