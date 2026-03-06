@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/metrics"
 	"sort"
 	"strconv"
 	"strings"
@@ -73,9 +74,9 @@ var batchArenaPoolBudgetProcs atomic.Int32
 var batchArenaPoolBudgetCached atomic.Int64
 
 var batchArenaPoolNumGC = func() uint32 {
-	var ms runtime.MemStats
-	runtime.ReadMemStats(&ms)
-	return uint32(ms.NumGC)
+	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
+	metrics.Read(samples)
+	return uint32(samples[0].Value.Uint64())
 }
 
 func computeBatchArenaPoolBudgetBytes() int64 {
