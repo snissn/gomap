@@ -606,3 +606,60 @@ func TestMutateRootsWithFormatIterators_MatchesCallbackForm(t *testing.T) {
 	t.Run("callbacks", func(t *testing.T) { run(t, false) })
 	t.Run("iterators", func(t *testing.T) { run(t, true) })
 }
+
+func TestMutateRootsWithFormatIterators_EmptyRootsUseBulkBuilder(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	primaryMem, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("primary memtable: %v", err)
+	}
+	indexMem, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("index memtable: %v", err)
+	}
+
+	docID := []byte("u1")
+	doc := []byte(`{"email":"ada@example.com"}`)
+	indexKey := []byte("col:i:users:email_idx:\x00\x11s:ada@example.comu1")
+	primaryMem.SetSteal(append([]byte(nil), docID...), append([]byte(nil), doc...))
+	indexMem.SetSteal(append([]byte(nil), indexKey...), nil)
+
+	builds := 0
+	restore := setRootIteratorBulkBuildTestHook(func(rootIndex int) {
+		builds++
+	})
+	defer restore()
+
+	rootIDs, err := d.MutateRootsWithFormatIterators(false,
+		[]uint64{0, 0},
+		[]*rootfmt.Format{
+			{
+				OuterLeavesInValueLog: true,
+				LeafPrefixCompression: true,
+				AllowValues:           true,
+			},
+			{
+				LeafPrefixCompression: true,
+			},
+		},
+		[]iterator.UnsafeIterator{
+			primaryMem.NewIterator(nil, nil),
+			indexMem.NewIterator(nil, nil),
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("MutateRootsWithFormatIterators: %v", err)
+	}
+	if len(rootIDs) != 2 || rootIDs[0] == 0 || rootIDs[1] == 0 {
+		t.Fatalf("unexpected root ids: %#v", rootIDs)
+	}
+	if builds != 2 {
+		t.Fatalf("bulk builds=%d want 2", builds)
+	}
+}
