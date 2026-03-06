@@ -110,9 +110,13 @@ func TestValueLogCompressionAuto_DefaultsToDictTrainingAndProbesDict(t *testing.
 		default:
 		}
 		stats = db.Stats()
-		if stats != nil && stats["treedb.cache.vlog_dict.last_applied_dict_id"] != "0" {
-			published = true
-			break
+		if stats != nil {
+			if v, ok := stats["treedb.cache.vlog_dict.last_applied_dict_id"]; ok {
+				if id, err := strconv.ParseUint(v, 10, 64); err == nil && id > 0 {
+					published = true
+					break
+				}
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

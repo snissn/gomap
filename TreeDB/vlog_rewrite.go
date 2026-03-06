@@ -35,6 +35,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		return ValueLogRewriteStats{}, err
 	}
 	opts.Dir = layout.mainDir
+	opts.DisableSideStores = layout.disableSideStores
 
 	// Preserve the persisted on-disk format knobs by default so offline rewrite
 	// doesn't accidentally rebuild the index/value-log into a different layout.
