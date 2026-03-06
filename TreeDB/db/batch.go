@@ -252,7 +252,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	}
 	var userRootID, systemRootID uint64
 	if b.targetRoot == batchRootSystem {
-		userRootID = currentTargetRoot
+		userRootID = currentPeerRoot
 		systemRootID = newRoot
 	} else {
 		userRootID = newRoot
