@@ -2082,6 +2082,37 @@ func (db *DB) markValueLogRetain(path string) {
 	db.valueLogMu.Unlock()
 }
 
+func (db *DB) replaceBackendDirectValueLogRetain(set *valuelog.Set, paths []string) {
+	db.valueLogMu.Lock()
+	if len(paths) == 0 {
+		db.backendDirectValueLogRetain = nil
+		db.backendDirectValueLogSet = set
+		db.valueLogMu.Unlock()
+		return
+	}
+	if db.backendDirectValueLogRetain == nil {
+		db.backendDirectValueLogRetain = make(map[string]struct{}, len(paths))
+	} else {
+		for path := range db.backendDirectValueLogRetain {
+			delete(db.backendDirectValueLogRetain, path)
+		}
+	}
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		db.backendDirectValueLogRetain[path] = struct{}{}
+	}
+	db.backendDirectValueLogSet = set
+	db.valueLogMu.Unlock()
+}
+
+func (db *DB) backendDirectValueLogSetMatches(set *valuelog.Set) bool {
+	db.valueLogMu.Lock()
+	defer db.valueLogMu.Unlock()
+	return db.backendDirectValueLogSet == set
+}
+
 func (db *DB) forgetValueLogRetain(path string) {
 	if path == "" {
 		return
@@ -2117,7 +2148,10 @@ func (db *DB) valueLogRetained(path string) bool {
 	}
 	db.valueLogMu.Lock()
 	defer db.valueLogMu.Unlock()
-	_, retained := db.valueLogRetain[path]
+	if _, retained := db.valueLogRetain[path]; retained {
+		return true
+	}
+	_, retained := db.backendDirectValueLogRetain[path]
 	return retained
 }
 
@@ -2213,16 +2247,32 @@ func (db *DB) valueLogRetainedStatsDetailed() valueLogRetainedGenerationStats {
 
 func (db *DB) valueLogRetainedPaths() []string {
 	db.valueLogMu.Lock()
-	if len(db.valueLogRetain) == 0 {
+	if len(db.valueLogRetain) == 0 && len(db.backendDirectValueLogRetain) == 0 {
 		db.valueLogMu.Unlock()
 		return nil
 	}
-	paths := make([]string, 0, len(db.valueLogRetain))
+	paths := make([]string, 0, len(db.valueLogRetain)+len(db.backendDirectValueLogRetain))
 	for path := range db.valueLogRetain {
+		paths = append(paths, path)
+	}
+	for path := range db.backendDirectValueLogRetain {
+		if _, ok := db.valueLogRetain[path]; ok {
+			continue
+		}
 		paths = append(paths, path)
 	}
 	db.valueLogMu.Unlock()
 	return paths
+}
+
+func (db *DB) backendDirectValueLogRetained(path string) bool {
+	if path == "" {
+		return false
+	}
+	db.valueLogMu.Lock()
+	defer db.valueLogMu.Unlock()
+	_, retained := db.backendDirectValueLogRetain[path]
+	return retained
 }
 
 // ValueLogRetainedPaths returns a best-effort snapshot of retained value-log
@@ -2490,6 +2540,9 @@ func (db *DB) pruneRetainedValueLogs() {
 	removed := false
 	marked := false
 	for _, path := range paths {
+		if db.backendDirectValueLogRetained(path) {
+			continue
+		}
 		if _, ok := inUse[path]; ok {
 			continue
 		}
@@ -3040,6 +3093,8 @@ type DB struct {
 	valueLogColdLanes              []int
 	valueLogMu                     sync.Mutex
 	valueLogRetain                 map[string]struct{}
+	backendDirectValueLogRetain    map[string]struct{}
+	backendDirectValueLogSet       *valuelog.Set
 	backendReadVlogDirtySeq        atomic.Uint64
 	backendReadVlogFlushedSeq      atomic.Uint64
 	valueLogWarned                 atomic.Bool

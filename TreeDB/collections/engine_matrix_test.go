@@ -2,6 +2,7 @@ package collections_test
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -134,5 +135,43 @@ func TestCollectionEngineMatrix_LiveIndexRoundTrip(t *testing.T) {
 				t.Fatalf("unexpected ids: %#v", ids)
 			}
 		})
+	}
+}
+
+func TestCollectionEngineMatrix_CachedMultiInsertRetainsNamedRootValueLogState(t *testing.T) {
+	dir := t.TempDir()
+	d, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer func() {
+		if err := d.Close(); err != nil {
+			t.Fatalf("close cached: %v", err)
+		}
+	}()
+
+	mgr := treedb.NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	for i := 0; i < 30000; i++ {
+		id := []byte(fmt.Sprintf("user-%08d", i))
+		if _, err := col.Insert(id, []byte(`{"name":"ada"}`)); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+
+	got, err := col.Get([]byte("user-00000000"))
+	if err != nil {
+		t.Fatalf("get earliest doc: %v", err)
+	}
+	if !bytes.Equal(got, []byte(`{"name":"ada"}`)) {
+		t.Fatalf("unexpected earliest doc: %q", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
@@ -57,7 +58,10 @@ func (db *DB) WithBackendDirectWrite(fn func(BackendDirectBridge) error) error {
 	if err != nil {
 		return err
 	}
-	return fn(bridge)
+	if err := fn(bridge); err != nil {
+		return err
+	}
+	return db.refreshBackendDirectValueLogRetention(bridge)
 }
 
 // DirectBridge exposes the backend-direct bridge after waiting for any
@@ -70,6 +74,41 @@ func (db *DB) DirectBridge() (BackendDirectBridge, error) {
 	}
 	db.waitForCheckpoint()
 	return db.directBridge()
+}
+
+type backendValueLogStateRefresher interface {
+	State() *backenddb.DBState
+}
+
+func (db *DB) refreshBackendDirectValueLogRetention(bridge BackendDirectBridge) error {
+	if db == nil || !db.valueLogEnabled() || bridge == nil {
+		return nil
+	}
+	refresher, ok := bridge.(backendValueLogStateRefresher)
+	if !ok {
+		return nil
+	}
+	state := refresher.State()
+	var set *valuelog.Set
+	if state != nil {
+		set = state.ValueLogSet
+	}
+	if set == nil {
+		db.replaceBackendDirectValueLogRetain(nil, nil)
+		return nil
+	}
+	if db.backendDirectValueLogSetMatches(set) {
+		return nil
+	}
+	paths := make([]string, 0, len(state.ValueLogSet.Files))
+	for _, file := range set.Files {
+		if file == nil || file.Path == "" {
+			continue
+		}
+		paths = append(paths, file.Path)
+	}
+	db.replaceBackendDirectValueLogRetain(set, paths)
+	return nil
 }
 
 var _ BackendDirectBridge = (*backenddb.DB)(nil)
