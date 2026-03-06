@@ -131,6 +131,85 @@ func TestCachedCollectionsInsertBatch_UsesSingleRootIteratorMutationCall(t *test
 	}
 }
 
+func TestCachedCollectionsInsertBatch_UsesIteratorPublishForWarmLargeBatches(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			IDMode: collections.IDModeCallerProvided,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	seedIDs := make([][]byte, 8)
+	seedDocs := make([][]byte, 8)
+	for i := range seedIDs {
+		seedIDs[i] = []byte(fmt.Sprintf("seed-%d", i))
+		seedDocs[i] = []byte(fmt.Sprintf(`{"email":"seed-%d@example.com","city":"seed"}`, i))
+	}
+	if _, err := col.InsertBatch(seedIDs, seedDocs); err != nil {
+		t.Fatalf("seed insert batch: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint seed batch: %v", err)
+	}
+
+	iteratorCalls := 0
+	restoreIter := setRootIteratorMutationTestHook(func(rootCount int) {
+		iteratorCalls++
+		if rootCount != 4 {
+			t.Fatalf("root count=%d want 4", rootCount)
+		}
+	})
+	defer restoreIter()
+
+	bulkCalls := 0
+	restoreBulk := setRootBulkMutationOpsTestHook(func(rootCount int) {
+		bulkCalls++
+	})
+	defer restoreBulk()
+
+	const batchSize = 128
+	ids := make([][]byte, batchSize)
+	docs := make([][]byte, batchSize)
+	for i := range ids {
+		n := 1000 + i
+		ids[i] = []byte(fmt.Sprintf("warm-%d", n))
+		docs[i] = []byte(fmt.Sprintf(`{"email":"warm-%d@example.com","city":"hnl"}`, n))
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("warm insert batch: %v", err)
+	}
+	if iteratorCalls != 1 {
+		t.Fatalf("iterator calls=%d want 1", iteratorCalls)
+	}
+	if bulkCalls != 0 {
+		t.Fatalf("bulk calls=%d want 0", bulkCalls)
+	}
+}
+
 func TestCachedCollectionsInsertBatch_AutoFlushRefreshesValueLogState(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 128})
 	if err != nil {
