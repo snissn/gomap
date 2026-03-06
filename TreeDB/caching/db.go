@@ -15177,11 +15177,19 @@ func (b *Batch) updateBatchCopyHint() {
 }
 
 func (b *Batch) arenaCopy(n int) []byte {
+	return b.arenaAlloc(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n)
+}
+
+func (b *Batch) arenaCopyPtr(n int) []byte {
+	return b.arenaAlloc(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n)
+}
+
+func (b *Batch) arenaAlloc(arena *[]byte, chunks *[][]byte, copyBytes *int, n int) []byte {
 	if n == 0 {
 		return nil
 	}
-	if cap(b.copyArena)-len(b.copyArena) < n {
-		chunkCap := cap(b.copyArena) * 2
+	if cap(*arena)-len(*arena) < n {
+		chunkCap := cap(*arena) * 2
 		if chunkCap < batchCopyArenaMinChunk {
 			chunkCap = batchCopyArenaMinChunk
 		}
@@ -15205,38 +15213,13 @@ func (b *Batch) arenaCopy(n int) []byte {
 		// Switch to a fresh chunk when exhausted so existing entry slices keep
 		// their backing arrays without per-op allocations.
 		chunk := getBatchArena(chunkCap)
-		b.copyArena = chunk[:0]
-		b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
+		*arena = chunk[:0]
+		*chunks = append(*chunks, *arena)
 	}
-	start := len(b.copyArena)
-	b.copyArena = b.copyArena[:start+n]
-	b.copyBytes += n
-	return b.copyArena[start : start+n : start+n]
-}
-
-func (b *Batch) arenaCopyPtr(n int) []byte {
-	if n == 0 {
-		return nil
-	}
-	if cap(b.ptrCopyArena)-len(b.ptrCopyArena) < n {
-		chunkCap := cap(b.ptrCopyArena) * 2
-		if chunkCap < batchCopyArenaMinChunk {
-			chunkCap = batchCopyArenaMinChunk
-		}
-		if chunkCap < n {
-			chunkCap = n
-		}
-		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
-			chunkCap = batchCopyArenaMaxRetain
-		}
-		chunk := getBatchArena(chunkCap)
-		b.ptrCopyArena = chunk[:0]
-		b.ptrCopyArenaChunks = append(b.ptrCopyArenaChunks, b.ptrCopyArena)
-	}
-	start := len(b.ptrCopyArena)
-	b.ptrCopyArena = b.ptrCopyArena[:start+n]
-	b.ptrCopyBytes += n
-	return b.ptrCopyArena[start : start+n : start+n]
+	start := len(*arena)
+	*arena = (*arena)[:start+n]
+	*copyBytes += n
+	return (*arena)[start : start+n : start+n]
 }
 
 func (b *Batch) cloneKey(key []byte) []byte {
