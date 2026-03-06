@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1407,27 +1406,23 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 //
 // It is an offline operation: it acquires the exclusive open lock for opts.Dir.
 func VacuumIndexOffline(opts Options) error {
-	maindbDir, err := resolveMainDBDir(opts.Dir)
+	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return err
 	}
-	opts.Dir = maindbDir
+	opts.Dir = layout.mainDir
 
 	// Preserve the persisted on-disk format knobs by default so offline index
 	// maintenance doesn't accidentally rewrite the DB into a different layout.
 	if !opts.IgnoreFormatConfig {
-		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
+		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return err
 		} else if ok {
 			cfg.ApplyToOptions(&opts)
 		}
 	}
 
-	rootDir := maindbDir
-	if !opts.DisableSideStores && filepath.Base(maindbDir) == "maindb" {
-		rootDir = filepath.Dir(maindbDir)
-	}
-	sideCleanup, err := wireSideStoreLookups(rootDir, &opts)
+	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
 	if err != nil {
 		return err
 	}

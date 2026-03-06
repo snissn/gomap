@@ -2,6 +2,7 @@ package caching
 
 import (
 	"encoding/binary"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -14,6 +15,14 @@ type pointerBatch struct {
 	entries      []batch.Entry
 	reserveCalls int
 	lastReserve  int
+}
+
+var entrySlicePoolTestMu sync.Mutex
+
+func lockEntrySlicePoolStateForTest(t *testing.T) {
+	t.Helper()
+	entrySlicePoolTestMu.Lock()
+	t.Cleanup(entrySlicePoolTestMu.Unlock)
 }
 
 func (b *pointerBatch) Set(key, value []byte) error {
@@ -449,6 +458,7 @@ func resetEntrySliceLeasesForTest(t *testing.T) {
 }
 
 func TestEntrySliceLeaseRoundTrip(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
 	resetEntrySliceLeasesForTest(t)
 
 	entries := make([]batch.Entry, 1, 256)
@@ -475,6 +485,7 @@ func TestEntrySliceLeaseRoundTrip(t *testing.T) {
 }
 
 func TestEntrySliceLeaseRoundTripWithOversizeReuse(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
 	resetEntrySliceLeasesForTest(t)
 
 	entries := make([]batch.Entry, 1, 512)
@@ -490,6 +501,7 @@ func TestEntrySliceLeaseRoundTripWithOversizeReuse(t *testing.T) {
 }
 
 func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
 	resetEntrySliceLeasesForTest(t)
 
 	big := make([]batch.Entry, 0, 1<<18)
@@ -518,7 +530,58 @@ func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
 	}
 }
 
+func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySliceLeasesForTest(t)
+
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 0
+	t.Cleanup(func() { entrySlicePoolBudgetBytes = savedBudget })
+
+	entries := make([]batch.Entry, 1, 64)
+	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
+	putEntrySlice(entries)
+
+	if entries[0].Key != nil || entries[0].Value != nil {
+		t.Fatalf("expected putEntrySlice to clear backing entries on budget early return; got key=%v value=%v", entries[0].Key, entries[0].Value)
+	}
+}
+
+func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySliceLeasesForTest(t)
+
+	savedBudget := entrySlicePoolBudgetBytes
+	savedBytes := entrySlicePoolBytes.Load()
+	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
+	entrySlicePoolBytes.Store(0)
+	t.Cleanup(func() {
+		entrySlicePoolBudgetBytes = savedBudget
+		entrySlicePoolBytes.Store(savedBytes)
+	})
+
+	leaseIdx, ok := entrySliceLeaseClassForCap(64)
+	if !ok {
+		t.Fatalf("expected lease class for cap=%d", 64)
+	}
+
+	putEntrySlice(make([]batch.Entry, 0, 64))
+	putEntrySlice(make([]batch.Entry, 0, 64))
+
+	if got := entrySlicePoolBytes.Load(); got < 0 || got > entrySlicePoolBudgetBytes {
+		t.Fatalf("entrySlicePoolBytes=%d want within [0,%d]", got, entrySlicePoolBudgetBytes)
+	}
+
+	entrySliceLeaseMu.Lock()
+	leased := len(entrySliceLeases[leaseIdx])
+	entrySliceLeaseMu.Unlock()
+	if leased > 1 {
+		t.Fatalf("expected budget to cap retained entry slices; leased=%d", leased)
+	}
+}
+
 func TestGetEntrySliceIgnoresUnexpectedPoolType(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
 	capacity := 64
 	idx, _, ok := entrySliceLeaseClassForLen(capacity)
 	if !ok {

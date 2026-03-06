@@ -512,7 +512,9 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append([]byte(nil), val...), nil
+	buf := make([]byte, len(val))
+	copy(buf, val)
+	return buf, nil
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {

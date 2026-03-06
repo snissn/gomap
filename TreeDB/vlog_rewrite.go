@@ -2,7 +2,6 @@ package treedb
 
 import (
 	"context"
-	"path/filepath"
 
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -31,27 +30,23 @@ const (
 // index.db to reference the new log. This is an offline operation that requires
 // an exclusive lock and a clean commitlog.
 func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
-	maindbDir, err := resolveMainDBDir(opts.Dir)
+	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return ValueLogRewriteStats{}, err
 	}
-	opts.Dir = maindbDir
+	opts.Dir = layout.mainDir
 
 	// Preserve the persisted on-disk format knobs by default so offline rewrite
 	// doesn't accidentally rebuild the index/value-log into a different layout.
 	if !opts.IgnoreFormatConfig {
-		if cfg, ok, err := treedbdb.LoadFormatConfig(maindbDir); err != nil {
+		if cfg, ok, err := treedbdb.LoadFormatConfig(layout.mainDir); err != nil {
 			return ValueLogRewriteStats{}, err
 		} else if ok {
 			cfg.ApplyToOptions(&opts)
 		}
 	}
 
-	rootDir := maindbDir
-	if !opts.DisableSideStores && filepath.Base(maindbDir) == "maindb" {
-		rootDir = filepath.Dir(maindbDir)
-	}
-	sideCleanup, err := wireSideStoreLookups(rootDir, &opts)
+	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
 	if err != nil {
 		return ValueLogRewriteStats{}, err
 	}

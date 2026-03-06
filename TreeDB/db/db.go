@@ -1067,6 +1067,17 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		}
 	}
 
+	// Recovery and WAL/value-log replay may touch the manager's file set. Reapply
+	// decode hooks and refresh before publishing the initial snapshot so
+	// read-write opens decode dict/template-backed values the same way as
+	// read-only opens and offline maintenance helpers.
+	vm.SetDictLookup(opts.ValueLog.DictLookup)
+	vm.SetTemplateLookup(opts.ValueLog.TemplateLookup, opts.ValueLog.TemplateDecodeOptions)
+	if err := vm.Refresh(); err != nil {
+		db.Close()
+		return nil, err
+	}
+
 	// Initialize State after recovery so log cleanup can proceed without pinning.
 	initialState := &DBState{
 		CommitSeq:        db.meta.CommitSeq,
