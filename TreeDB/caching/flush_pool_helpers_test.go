@@ -611,6 +611,8 @@ func TestGetEntrySliceMissResetsPoolBytesAfterGC(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	resetEntrySliceLeasesForTest(t)
 	resetEntrySlicePoolsForTest(t)
+	batchArenaPoolTestMu.Lock()
+	t.Cleanup(batchArenaPoolTestMu.Unlock)
 
 	origNumGC := batchArenaPoolNumGC
 	defer func() { batchArenaPoolNumGC = origNumGC }()
@@ -631,6 +633,29 @@ func TestGetEntrySliceMissResetsPoolBytesAfterGC(t *testing.T) {
 	}
 	if gotGC := entrySlicePoolLastGC.Load(); gotGC != fakeNumGC {
 		t.Fatalf("entrySlicePoolLastGC=%d want %d", gotGC, fakeNumGC)
+	}
+}
+
+func TestPutEntrySliceDoesNotAdvanceGCEpochWhenPoolAlreadyAccounted(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySliceLeasesForTest(t)
+	resetEntrySlicePoolsForTest(t)
+	batchArenaPoolTestMu.Lock()
+	t.Cleanup(batchArenaPoolTestMu.Unlock)
+
+	origNumGC := batchArenaPoolNumGC
+	defer func() { batchArenaPoolNumGC = origNumGC }()
+
+	var fakeNumGC uint32 = 11
+	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+
+	entrySlicePoolBytes.Store(1234)
+	entrySlicePoolLastGC.Store(fakeNumGC - 1)
+
+	putEntrySlice(make([]batch.Entry, 0, 64))
+
+	if gotGC := entrySlicePoolLastGC.Load(); gotGC != fakeNumGC-1 {
+		t.Fatalf("entrySlicePoolLastGC=%d want %d", gotGC, fakeNumGC-1)
 	}
 }
 

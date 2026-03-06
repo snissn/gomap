@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -134,7 +135,7 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 
 	// This mirrors treemap's previous behavior: backend open without DictLookup
 	// fails when WAL/value-log segments contain dict-compressed frames.
-	backendDir := filepath.Join(dir, "maindb")
+	backendDir := resolveMainDBDir(dir)
 	backendOpts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
 	cfg, ok, err := treedbdb.LoadFormatConfig(backendDir)
 	if err != nil {
@@ -158,5 +159,26 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 
 	if _, err := backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: true}); err != nil {
 		t.Fatalf("ValueLogGC: %v", err)
+	}
+}
+
+func TestResolveTreeDBRootDir_DictDBDirUsesParentRoot(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "maindb")
+	dictDir := filepath.Join(root, "dictdb")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	if err := os.MkdirAll(dictDir, 0o755); err != nil {
+		t.Fatalf("mkdir dictdb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write maindb/index.db: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dictDir, "index.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write dictdb/index.db: %v", err)
+	}
+	if got := resolveTreeDBRootDir(dictDir); got != root {
+		t.Fatalf("resolveTreeDBRootDir(%q)=%q want %q", dictDir, got, root)
 	}
 }

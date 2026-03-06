@@ -3,8 +3,9 @@ package caching
 import (
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 var batchArenaPoolTestMu sync.Mutex
@@ -12,7 +13,7 @@ var batchArenaPoolTestMu sync.Mutex
 func resetBatchArenaPoolsForTest() {
 	batchArenaPoolBytes.Store(0)
 	batchArenaPoolLastGC.Store(0)
-	batchArenaPoolBudgetState = atomic.Value{}
+	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
 	for i := range batchArenaPools {
 		batchArenaPools[i] = sync.Pool{}
 	}
@@ -147,5 +148,35 @@ func TestBatchArenaPoolBudgetCacheRecomputesOnProcsMismatch(t *testing.T) {
 	cached, _ := batchArenaPoolBudgetState.Load().(batchArenaPoolBudgetCache)
 	if cached.procs != int32(currentProcs) || cached.budget != want {
 		t.Fatalf("cached budget=%+v want procs=%d budget=%d", cached, currentProcs, want)
+	}
+}
+
+func TestBatchArenaLeaseBytesTracksRetainReleaseLifecycle(t *testing.T) {
+	db := &DB{}
+	mt1 := memtable.NewBTree()
+	mt2 := memtable.NewBTree()
+	chunk := make([]byte, 0, 1<<batchArenaMinShift)
+
+	db.retainBatchArenaChunksForMemtables([][]byte{chunk}, []memtable.Table{mt1, mt2})
+
+	want := int64(cap(chunk))
+	if got := db.batchArenaLeaseBytes.Load(); got != want {
+		t.Fatalf("leased bytes after retain=%d want=%d", got, want)
+	}
+	if got := db.batchArenaLeaseBytesMax.Load(); got != want {
+		t.Fatalf("leased bytes max after retain=%d want=%d", got, want)
+	}
+
+	db.releaseBatchArenaLeasesForMemtable(mt1)
+	if got := db.batchArenaLeaseBytes.Load(); got != want {
+		t.Fatalf("leased bytes after first release=%d want=%d", got, want)
+	}
+
+	db.releaseBatchArenaLeasesForMemtable(mt2)
+	if got := db.batchArenaLeaseBytes.Load(); got != 0 {
+		t.Fatalf("leased bytes after final release=%d want=0", got)
+	}
+	if got := db.batchArenaLeaseBytesMax.Load(); got != want {
+		t.Fatalf("leased bytes max after final release=%d want=%d", got, want)
 	}
 }
