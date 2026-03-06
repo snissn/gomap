@@ -997,6 +997,12 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
+	if db.cached != nil {
+		if err := db.flushNamedRootOverlays(true); err != nil {
+			return errors.Join(err, db.backgroundError())
+		}
+	}
+
 	db.bgVac.Stop()
 	var err error
 	if db.cached != nil || db.backend != nil {
@@ -1005,14 +1011,11 @@ func (db *DB) Close() error {
 		}
 	}
 
-	// Close cached layer first if present
 	if db.cached != nil {
-		err = errors.Join(err, db.flushNamedRootOverlays(true))
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
 	}
 
-	// Always close backend if present
 	if db.backend != nil {
 		err = errors.Join(err, db.backend.Close())
 		db.backend = nil
