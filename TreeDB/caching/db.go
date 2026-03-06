@@ -3634,10 +3634,30 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 }
 
 func memtableNeedsBatchArenaRetention(mt memtable.Table) bool {
-	// Skiplist-backed memtables copy key/value bytes into their own arena, so
-	// batch-owned buffers can be recycled immediately after write.
-	_, skiplist := mt.(*memtable.Memtable)
-	return !skiplist
+	// Only memtables still ingesting borrowed slices from batch copy arenas need
+	// leases. Skiplist copies even on Steal, while append_only and hash_sorted
+	// now take copied writes on the cached batch path to release batch arenas
+	// immediately after write.
+	switch mt.(type) {
+	case nil:
+		return false
+	case *memtable.Memtable, *memtable.AppendOnly, *memtable.HashSorted:
+		return false
+	default:
+		return true
+	}
+}
+
+func memtableBatchWriteUsesSteal(mt memtable.Table) bool {
+	// append_only and hash_sorted borrow key/value slices on Steal paths, so the
+	// cached batch writer feeds them copied writes instead. Other memtables can
+	// keep the Steal hot path.
+	switch mt.(type) {
+	case *memtable.AppendOnly, *memtable.HashSorted:
+		return false
+	default:
+		return true
+	}
 }
 
 func getBatchArenaLease(refs int, chunks [][]byte) *batchArenaLease {
@@ -16045,13 +16065,18 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
+			useSteal := memtableBatchWriteUsesSteal(shard.mem)
 			if b.streamEligible {
 				first := b.entries[idxs[0]].Key
 				last := first
 				for _, entryIdx := range idxs {
 					key := b.entries[entryIdx].Key
 					last = key
-					shard.mem.DeleteSteal(key)
+					if useSteal {
+						shard.mem.DeleteSteal(key)
+					} else {
+						shard.mem.Delete(key)
+					}
 				}
 				shard.rng.add(first)
 				if len(idxs) > 1 {
@@ -16061,7 +16086,11 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			} else {
 				for _, entryIdx := range idxs {
 					key := b.entries[entryIdx].Key
-					shard.mem.DeleteSteal(key)
+					if useSteal {
+						shard.mem.DeleteSteal(key)
+					} else {
+						shard.mem.Delete(key)
+					}
 					shard.rng.add(key)
 					b.db.noteWriteKey(key)
 				}
@@ -16108,7 +16137,8 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
 			useStream := b.streamEligible
-			if useStream {
+			useSteal := memtableBatchWriteUsesSteal(shard.mem)
+			if useStream && useSteal {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
 					applier.ApplyStealSortedBatchTrusted(entries, nil)
 				} else if applier, ok := shard.mem.(memtable.SortedBatchApplier); ok {
@@ -16140,20 +16170,49 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			} else {
 				for _, op := range entries {
 					if op.Type == batch.OpDelete {
-						shard.mem.DeleteSteal(op.Key)
-					} else {
-						if op.IsPtr {
-							memVal := []byte(nil)
-							if !b.db.memtableValueLogPointers {
-								memVal = op.Value
-							}
-							shard.mem.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+						if useSteal {
+							shard.mem.DeleteSteal(op.Key)
 						} else {
-							shard.mem.SetSteal(op.Key, op.Value)
+							shard.mem.Delete(op.Key)
 						}
+					} else {
+						if useSteal {
+							if op.IsPtr {
+								memVal := []byte(nil)
+								if !b.db.memtableValueLogPointers {
+									memVal = op.Value
+								}
+								shard.mem.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+							} else {
+								shard.mem.SetSteal(op.Key, op.Value)
+							}
+						} else {
+							if op.IsPtr {
+								memVal := []byte(nil)
+								if !b.db.memtableValueLogPointers {
+									memVal = op.Value
+								}
+								shard.mem.SetEntry(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+							} else {
+								shard.mem.Set(op.Key, op.Value)
+							}
+						}
+					}
+					if useStream {
+						// Preserve sorted-run accounting even when we avoid Steal.
+						continue
 					}
 					shard.rng.add(op.Key)
 					b.db.noteWriteKey(op.Key)
+				}
+				if useStream {
+					first := entries[0].Key
+					last := entries[len(entries)-1].Key
+					shard.rng.add(first)
+					if len(entries) > 1 {
+						shard.rng.add(last)
+					}
+					b.db.noteWriteSortedRun(first, last, len(entries))
 				}
 			}
 			newBytes := shard.mem.Size()
