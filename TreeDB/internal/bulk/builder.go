@@ -11,12 +11,12 @@ type Allocator interface {
 	Alloc(hint uint64) (uint64, error)
 }
 
-// LeafPageLog persists leaf pages as value-log records and returns their pointers.
+// LeafPageAppender persists leaf pages as value-log records and returns their pointers.
 //
 // When BuildOptions.LeafPageLog is non-nil, BuildWithOptions writes leaf pages
 // via this interface and returns LeafRef ids (encoded from the returned
 // ValuePtr) in internal children and as the tree root when the height is 1.
-type LeafPageLog interface {
+type LeafPageAppender interface {
 	AppendLeafPage(leafPage []byte) (page.ValuePtr, error)
 }
 
@@ -30,7 +30,7 @@ type BuildOptions struct {
 	LeafColumnar          bool
 	InternalBaseDelta     bool
 	PackedValuePtr        bool
-	LeafPageLog           LeafPageLog
+	LeafPageLog           LeafPageAppender
 }
 
 // Build creates a new B-Tree from a sorted iterator.

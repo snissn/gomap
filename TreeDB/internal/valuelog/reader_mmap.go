@@ -10,6 +10,18 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
+func appendDecodedTemplatePayload(dst, payload []byte, lookup TemplateLookup, cache *templateDefCache, opts templ.DecodeOptions) ([]byte, error) {
+	if lookup == nil || !templ.IsEncodedPayload(payload) {
+		oldLen := len(dst)
+		dst = grow(dst, len(payload))
+		copy(dst[oldLen:], payload)
+		return dst, nil
+	}
+	return templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+		return resolveTemplateDef(id, lookup, cache)
+	}, opts)
+}
+
 // readViaMmapViewPrefixCacheEnabled controls whether unsafe mmap-view reads
 // consult/publish the shared per-file grouped prefix cache.
 //
@@ -371,21 +383,9 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 
 	if flags&recordFlagGrouped == 0 {
-		oldLen := len(dst)
-		dst = grow(dst, len(payload))
-		copy(dst[oldLen:], payload)
-		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-			payload := dst[oldLen:]
-			decodedStart := len(dst)
-			dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-			}, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err, true
-			}
-			decodedLen := len(dst) - decodedStart
-			copy(dst[oldLen:], dst[decodedStart:])
-			dst = dst[:oldLen+decodedLen]
+		dst, err := appendDecodedTemplatePayload(dst, payload, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		if err != nil {
+			return nil, err, true
 		}
 		return dst, nil, true
 	}
@@ -433,24 +433,10 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 				if cPrefixLen+int(rawLen) != int(valueLen) {
 					return nil, ErrCorrupt, true
 				}
-				n := int(valEnd - valStart)
-				oldLen := len(dst)
-				dst = grow(dst, n)
-				srcStart := cPrefixLen + int(valStart)
-				srcEnd := srcStart + n
-				copy(dst[oldLen:], payload[srcStart:srcEnd])
-				if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-					payload := dst[oldLen:]
-					decodedStart := len(dst)
-					dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-						return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-					}, f.templateDecodeOpts)
-					if err != nil {
-						return nil, err, true
-					}
-					decodedLen := len(dst) - decodedStart
-					copy(dst[oldLen:], dst[decodedStart:])
-					dst = dst[:oldLen+decodedLen]
+				var err error
+				dst, err = appendDecodedTemplatePayload(dst, payload[cPrefixLen+int(valStart):cPrefixLen+int(valEnd)], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+				if err != nil {
+					return nil, err, true
 				}
 				return dst, nil, true
 			}
@@ -492,24 +478,10 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
 
-		n := int(valEnd - valStart)
-		oldLen := len(dst)
-		dst = grow(dst, n)
-		srcStart := prefixLen + int(valStart)
-		srcEnd := srcStart + n
-		copy(dst[oldLen:], payload[srcStart:srcEnd])
-		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-			payload := dst[oldLen:]
-			decodedStart := len(dst)
-			dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-			}, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err, true
-			}
-			decodedLen := len(dst) - decodedStart
-			copy(dst[oldLen:], dst[decodedStart:])
-			dst = dst[:oldLen+decodedLen]
+		var err error
+		dst, err = appendDecodedTemplatePayload(dst, payload[prefixLen+int(valStart):prefixLen+int(valEnd)], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		if err != nil {
+			return nil, err, true
 		}
 		return dst, nil, true
 	}
@@ -529,23 +501,9 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		if uint32(len(cachedRaw)) != rawLen || valEnd < valStart || valEnd > rawLen {
 			return nil, ErrCorrupt, true
 		}
-		n := int(valEnd - valStart)
-		oldLen := len(dst)
-		dst = grow(dst, n)
-		copy(dst[oldLen:], cachedRaw[valStart:valEnd])
-		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-			payload := dst[oldLen:]
-			decodedStart := len(dst)
-			var err error
-			dst, err = templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-			}, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err, true
-			}
-			decodedLen := len(dst) - decodedStart
-			copy(dst[oldLen:], dst[decodedStart:])
-			dst = dst[:oldLen+decodedLen]
+		dst, err := appendDecodedTemplatePayload(dst, cachedRaw[valStart:valEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		if err != nil {
+			return nil, err, true
 		}
 		return dst, nil, true
 	}
@@ -641,10 +599,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw)
 	}
 
-	n := int(valEnd - valStart)
 	oldLen := len(dst)
-	dst = grow(dst, n)
-	copy(dst[oldLen:], raw[valStart:valEnd])
 
 	f.cacheMu.Lock()
 	f.cacheK = k
@@ -658,22 +613,16 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	f.cacheStart.Store(start)
 	f.cacheMu.Unlock()
+
+	dst, err = appendDecodedTemplatePayload(dst, raw[valStart:valEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	if pooledRaw {
 		f.releaseDecodeScratch(raw)
 	}
-
-	if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-		payload := dst[oldLen:]
-		decodedStart := len(dst)
-		dst, err = templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-			return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-		}, f.templateDecodeOpts)
-		if err != nil {
-			return nil, err, true
-		}
-		decodedLen := len(dst) - decodedStart
-		copy(dst[oldLen:], dst[decodedStart:])
-		dst = dst[:oldLen+decodedLen]
+	if err != nil {
+		return nil, err, true
+	}
+	if len(dst) < oldLen {
+		return nil, ErrCorrupt, true
 	}
 	return dst, nil, true
 }

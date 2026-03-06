@@ -722,27 +722,28 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	}
 }
 
-func TestRewriteRIDAllocator_BatchesExternalReserveCalls(t *testing.T) {
-	var reserveCalls []int
-	alloc := newRewriteRIDAllocator(0, func(count int) (uint64, error) {
-		reserveCalls = append(reserveCalls, count)
-		return 1, nil
+func TestRewriteRIDAllocatorReserve_NilAllocatorFailsEvenForZeroCount(t *testing.T) {
+	var alloc *rewriteRIDAllocator
+	if _, err := alloc.Reserve(0); err == nil {
+		t.Fatalf("expected nil allocator to fail")
+	}
+}
+
+func TestRewriteRIDAllocatorReserve_ExternalRangeOverlapFails(t *testing.T) {
+	alloc := newRewriteRIDAllocator(100, func(count int) (uint64, error) {
+		return 99, nil
 	})
+	if _, err := alloc.Reserve(1); err == nil {
+		t.Fatalf("expected overlapping external RID range to fail")
+	}
+}
 
-	for i := 0; i < defaultValueLogRewriteBatchSize+8; i++ {
-		if _, err := alloc.Next(); err != nil {
-			t.Fatalf("Next(%d): %v", i, err)
-		}
-	}
-
-	if len(reserveCalls) != 2 {
-		t.Fatalf("reserve call count=%d want 2 (%v)", len(reserveCalls), reserveCalls)
-	}
-	if reserveCalls[0] != defaultValueLogRewriteBatchSize {
-		t.Fatalf("first reserve call=%d want %d", reserveCalls[0], defaultValueLogRewriteBatchSize)
-	}
-	if reserveCalls[1] != defaultValueLogRewriteBatchSize {
-		t.Fatalf("second reserve call=%d want %d", reserveCalls[1], defaultValueLogRewriteBatchSize)
+func TestRewriteRIDAllocatorReserve_ExternalRangeOverflowFails(t *testing.T) {
+	alloc := newRewriteRIDAllocator(1, func(count int) (uint64, error) {
+		return ^uint64(0) - uint64(count) + 2, nil
+	})
+	if _, err := alloc.Reserve(2); err == nil {
+		t.Fatalf("expected overflowing external RID range to fail")
 	}
 }
 
@@ -1018,5 +1019,21 @@ func TestSelectRewriteSourceSegments_OversizeCandidates_SelectsOne(t *testing.T)
 	}
 	if _, ok := selected[2]; !ok {
 		t.Fatalf("expected segment 2 selected by stale priority, got=%v", selected)
+	}
+}
+
+func TestGroupedRecordKeyForPtr_UsesFullOffsetWidth(t *testing.T) {
+	ptrA := page.ValuePtr{FileID: 7, Offset: (1 << 32) + 12}
+	ptrB := page.ValuePtr{FileID: 7, Offset: (1 << 33) + 12}
+	keyA, err := groupedRecordKeyForPtr(ptrA)
+	if err != nil {
+		t.Fatalf("groupedRecordKeyForPtr(ptrA): %v", err)
+	}
+	keyB, err := groupedRecordKeyForPtr(ptrB)
+	if err != nil {
+		t.Fatalf("groupedRecordKeyForPtr(ptrB): %v", err)
+	}
+	if keyA == keyB {
+		t.Fatalf("grouped record keys collided: %+v", keyA)
 	}
 }

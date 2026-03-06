@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"path/filepath"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -53,7 +54,7 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 	writeSession('a')
 	writeSession('b')
 
-	segments, _ := listNonEmptyLogSegments(dir + "/wal")
+	segments, _ := listNonEmptyLogSegments(filepath.Join(dir, "wal"))
 	dups := duplicateValueLogRIDCount(t, segments)
 	if dups != 0 {
 		t.Fatalf("expected no duplicate RIDs after reopen, got %d", dups)
@@ -95,7 +96,7 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 		t.Fatalf("Checkpoint seed: %v", err)
 	}
 
-	segments, _ := listNonEmptyLogSegments(dir + "/wal")
+	segments, _ := listNonEmptyLogSegments(filepath.Join(dir, "wal"))
 	var sourceID uint32
 	for _, seg := range segments {
 		if seg.valueLog {
@@ -145,7 +146,7 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 		t.Fatalf("Checkpoint after rewrite: %v", err)
 	}
 
-	segments, _ = listNonEmptyLogSegments(dir + "/wal")
+	segments, _ = listNonEmptyLogSegments(filepath.Join(dir, "wal"))
 	dups := duplicateValueLogRIDCount(t, segments)
 	if dups != 0 {
 		t.Fatalf("expected no duplicate RIDs after online rewrite, got %d", dups)
