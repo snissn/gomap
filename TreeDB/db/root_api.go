@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
@@ -38,10 +39,21 @@ var rootIteratorBulkBuildHook struct {
 	fn func(int)
 }
 
+var rootIteratorWarmMergeHook struct {
+	mu sync.RWMutex
+	fn func(int)
+}
+
 type stableRootEntryIterator interface {
 	iterator.UnsafeIterator
 	StableUnsafeIteratorSlices() bool
 }
+
+type rootMutationTableProvider interface {
+	RootMutationTable() memtable.Table
+}
+
+const rootIteratorWarmMergeMinEntries = 128
 
 func setRootIteratorBulkBuildTestHook(fn func(int)) func() {
 	rootIteratorBulkBuildHook.mu.Lock()
@@ -63,6 +75,29 @@ func runRootIteratorBulkBuildTestHook(rootIndex int) {
 		fn(rootIndex)
 	}
 }
+
+func setRootIteratorWarmMergeTestHook(fn func(int)) func() {
+	rootIteratorWarmMergeHook.mu.Lock()
+	prev := rootIteratorWarmMergeHook.fn
+	rootIteratorWarmMergeHook.fn = fn
+	rootIteratorWarmMergeHook.mu.Unlock()
+	return func() {
+		rootIteratorWarmMergeHook.mu.Lock()
+		rootIteratorWarmMergeHook.fn = prev
+		rootIteratorWarmMergeHook.mu.Unlock()
+	}
+}
+
+func runRootIteratorWarmMergeTestHook(rootIndex int) {
+	rootIteratorWarmMergeHook.mu.RLock()
+	fn := rootIteratorWarmMergeHook.fn
+	rootIteratorWarmMergeHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootIndex)
+	}
+}
+
+func (*DB) PreferWarmIteratorBatchPublish() bool { return true }
 
 // GetAtRoot returns the value for a key in the specified root page.
 func (db *DB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
@@ -254,7 +289,18 @@ func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, format
 	}
 
 	rootBatches := make([]*detachedBatch, len(rootIDs))
+	mergeWarmRoots := make([]bool, len(rootIDs))
+	mergeWarmTables := make([]memtable.Table, len(rootIDs))
 	for i := range rootIDs {
+		if rootIDs[i] != 0 {
+			if provider, ok := rootIters[i].(rootMutationTableProvider); ok {
+				if table := provider.RootMutationTable(); table != nil && table.Len() >= rootIteratorWarmMergeMinEntries {
+					mergeWarmRoots[i] = true
+					mergeWarmTables[i] = table
+					continue
+				}
+			}
+		}
 		if rootIDs[i] == 0 {
 			continue
 		}
@@ -315,6 +361,20 @@ func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, format
 				forceValueLogRefresh = true
 			}
 			valueLogDeltas = append(valueLogDeltas, nil)
+			continue
+		}
+		if mergeWarmRoots[i] {
+			newRootID, rootRetired, rootTouched, rootNeedsRefresh, rootDelta, err := db.mergeRootFromIteratorLocked(idx, rootID, baseSeq, format, rootIters[i], mergeWarmTables[i], i)
+			if err != nil {
+				return nil, err
+			}
+			newRootIDs[i] = newRootID
+			retired = append(retired, rootRetired...)
+			valueLogDeltas = append(valueLogDeltas, rootDelta)
+			touchedValueLogSegments = mergeValueLogSegmentIDs(touchedValueLogSegments, rootTouched)
+			if rootNeedsRefresh {
+				forceValueLogRefresh = true
+			}
 			continue
 		}
 
@@ -622,6 +682,232 @@ func applyBulkRootIterator(target batchpkg.Interface, iter iterator.UnsafeIterat
 	return flush()
 }
 
+type rootDeltaMergeSource uint8
+
+const (
+	rootDeltaMergeSourceNone rootDeltaMergeSource = iota
+	rootDeltaMergeSourceDelta
+	rootDeltaMergeSourceBase
+)
+
+type rootDeltaMergeIterator struct {
+	delta          iterator.UnsafeIterator
+	base           iterator.UnsafeIterator
+	current        rootDeltaMergeSource
+	skipBaseOnNext bool
+}
+
+func newRootDeltaMergeIterator(delta, base iterator.UnsafeIterator) *rootDeltaMergeIterator {
+	it := &rootDeltaMergeIterator{
+		delta: delta,
+		base:  base,
+	}
+	it.advance()
+	return it
+}
+
+func (it *rootDeltaMergeIterator) advance() {
+	it.current = rootDeltaMergeSourceNone
+	if it == nil {
+		return
+	}
+	deltaValid := it.delta != nil && it.delta.Valid()
+	baseValid := it.base != nil && it.base.Valid()
+	switch {
+	case deltaValid && baseValid:
+		cmp := bytes.Compare(it.delta.UnsafeKey(), it.base.UnsafeKey())
+		switch {
+		case cmp < 0:
+			it.current = rootDeltaMergeSourceDelta
+		case cmp == 0:
+			it.current = rootDeltaMergeSourceDelta
+			it.skipBaseOnNext = true
+		default:
+			it.current = rootDeltaMergeSourceBase
+		}
+	case deltaValid:
+		it.current = rootDeltaMergeSourceDelta
+	case baseValid:
+		it.current = rootDeltaMergeSourceBase
+	}
+}
+
+func (it *rootDeltaMergeIterator) Valid() bool {
+	return it != nil && it.current != rootDeltaMergeSourceNone
+}
+
+func (it *rootDeltaMergeIterator) Next() {
+	if it == nil {
+		return
+	}
+	switch it.current {
+	case rootDeltaMergeSourceDelta:
+		if it.delta != nil {
+			it.delta.Next()
+		}
+		if it.skipBaseOnNext {
+			it.skipBaseOnNext = false
+			if it.base != nil && it.base.Valid() {
+				it.base.Next()
+			}
+		}
+	case rootDeltaMergeSourceBase:
+		if it.base != nil {
+			it.base.Next()
+		}
+	}
+	it.advance()
+}
+
+func (it *rootDeltaMergeIterator) Seek(key []byte) {
+	if it == nil {
+		return
+	}
+	it.skipBaseOnNext = false
+	if it.delta != nil {
+		it.delta.Seek(key)
+	}
+	if it.base != nil {
+		it.base.Seek(key)
+	}
+	it.advance()
+}
+
+func (it *rootDeltaMergeIterator) source() iterator.UnsafeIterator {
+	switch it.current {
+	case rootDeltaMergeSourceDelta:
+		return it.delta
+	case rootDeltaMergeSourceBase:
+		return it.base
+	default:
+		return nil
+	}
+}
+
+func (it *rootDeltaMergeIterator) UnsafeKey() []byte {
+	src := it.source()
+	if src == nil {
+		return nil
+	}
+	return src.UnsafeKey()
+}
+
+func (it *rootDeltaMergeIterator) UnsafeValue() []byte {
+	src := it.source()
+	if src == nil {
+		return nil
+	}
+	return src.UnsafeValue()
+}
+
+func (it *rootDeltaMergeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	src := it.source()
+	if src == nil {
+		return nil, page.ValuePtr{}, 0
+	}
+	return src.UnsafeEntry()
+}
+
+func (it *rootDeltaMergeIterator) Key() []byte { return it.UnsafeKey() }
+
+func (it *rootDeltaMergeIterator) Value() []byte { return it.UnsafeValue() }
+
+func (it *rootDeltaMergeIterator) KeyCopy(dst []byte) []byte {
+	src := it.source()
+	if src == nil {
+		return dst[:0]
+	}
+	return src.KeyCopy(dst)
+}
+
+func (it *rootDeltaMergeIterator) ValueCopy(dst []byte) []byte {
+	src := it.source()
+	if src == nil {
+		return dst[:0]
+	}
+	return src.ValueCopy(dst)
+}
+
+func (it *rootDeltaMergeIterator) IsDeleted() bool {
+	src := it.source()
+	return src != nil && src.IsDeleted()
+}
+
+func (it *rootDeltaMergeIterator) Error() error {
+	if it == nil {
+		return nil
+	}
+	if it.delta != nil {
+		if err := it.delta.Error(); err != nil {
+			return err
+		}
+	}
+	if it.base != nil {
+		return it.base.Error()
+	}
+	return nil
+}
+
+func (it *rootDeltaMergeIterator) Close() error {
+	if it == nil {
+		return nil
+	}
+	var err error
+	if it.delta != nil {
+		err = it.delta.Close()
+	}
+	if it.base != nil {
+		if closeErr := it.base.Close(); err == nil {
+			err = closeErr
+		}
+	}
+	return err
+}
+
+func (it *rootDeltaMergeIterator) Domain() (start, end []byte) {
+	return nil, nil
+}
+
+func collectRootIteratorEntries(iter iterator.UnsafeIterator) ([]batchpkg.Entry, error) {
+	if iter == nil {
+		return nil, nil
+	}
+	stable := false
+	if st, ok := iter.(stableRootEntryIterator); ok {
+		stable = st.StableUnsafeIteratorSlices()
+	}
+	entries := make([]batchpkg.Entry, 0, 128)
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		value, ptr, flags := iter.UnsafeEntry()
+		if !stable {
+			key = append([]byte(nil), key...)
+			if len(value) > 0 {
+				value = append([]byte(nil), value...)
+			}
+		}
+		entry := batchpkg.Entry{Key: key}
+		switch {
+		case flags&node.FlagTombstone != 0:
+			entry.Type = batchpkg.OpDelete
+		case flags&node.FlagPointer != 0:
+			entry.Type = batchpkg.OpPut
+			entry.IsPtr = true
+			entry.ValuePtr = ptr
+			entry.Value = value
+		default:
+			entry.Type = batchpkg.OpPut
+			entry.Value = value
+		}
+		entries = append(entries, entry)
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 func (db *DB) mutateRootInternal(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batchpkg.Interface) error, mutateUser func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {
 	if db == nil {
 		return 0, fmt.Errorf("missing db")
@@ -845,6 +1131,47 @@ func (it *rootBuildIterator) Domain() (start, end []byte) {
 		return nil, nil
 	}
 	return it.inner.Domain()
+}
+
+func (db *DB) mergeRootFromIteratorLocked(idx *indexGen, rootID uint64, baseSeq uint64, format *rootfmt.Format, deltaIter iterator.UnsafeIterator, deltaTable memtable.Table, rootIndex int) (uint64, []uint64, []uint32, bool, *valueLogRefDelta, error) {
+	if idx == nil {
+		return 0, nil, nil, false, nil, fmt.Errorf("missing index")
+	}
+	if deltaIter == nil {
+		return 0, nil, nil, false, nil, fmt.Errorf("missing delta iterator")
+	}
+	if deltaTable == nil {
+		return 0, nil, nil, false, nil, fmt.Errorf("missing delta table")
+	}
+
+	runRootIteratorWarmMergeTestHook(rootIndex)
+
+	deltaEntriesIter := deltaTable.NewIterator(nil, nil)
+	deltaEntries, err := collectRootIteratorEntries(deltaEntriesIter)
+	if closeErr := deltaEntriesIter.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return 0, nil, nil, false, nil, err
+	}
+	delta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, deltaEntries)
+	if err != nil {
+		return 0, nil, nil, false, nil, err
+	}
+
+	reader := ValueReaderForState(db.State())
+	tr := tree.New(idx.pager, reader, rootID)
+	retired, err := tr.CollectPageIDs()
+	if err != nil {
+		return 0, nil, nil, false, nil, err
+	}
+	baseIter := tr.Iterator(nil, nil)
+	mergedIter := newRootDeltaMergeIterator(deltaIter, baseIter)
+	newRootID, touched, needsRefresh, err := db.buildRootFromIteratorLocked(idx, format, mergedIter, rootIndex)
+	if err != nil {
+		return 0, nil, nil, false, nil, err
+	}
+	return newRootID, retired, touched, needsRefresh, delta, nil
 }
 
 func (db *DB) buildRootFromIteratorLocked(idx *indexGen, format *rootfmt.Format, iter iterator.UnsafeIterator, rootIndex int) (uint64, []uint32, bool, error) {

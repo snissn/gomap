@@ -88,6 +88,10 @@ func (a *collectionManagerAdapter) SystemIterator(start, end []byte) (iterator.U
 	return a.db.SystemIterator(start, end)
 }
 
+func (a *collectionManagerAdapter) PreferWarmIteratorBatchPublish() bool {
+	return a.db.cached == nil
+}
+
 func (a *collectionManagerAdapter) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
 	return a.db.MutateRootsWithFormatOps(sync, rootIDs, formats, rootOps, buildSystemOps)
 }
