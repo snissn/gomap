@@ -29,6 +29,10 @@ func (db *DB) NewBatch() batch.Interface {
 	return db.newBatchWithEntryReserve(0)
 }
 
+// NewBatchWithSize accepts the public cosmos-db style size hint. Small values
+// are treated like exact entry reserves; larger values are normalized as
+// approximate byte budgets and capped to avoid preallocating one entry per
+// byte.
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	reserveHint := NormalizePublicBatchReserveHint(size)
 	return db.newBatchWithReserveHint(reserveHint)
@@ -48,6 +52,7 @@ func NormalizePublicBatchReserveHint(size int) int {
 	if size%publicBatchHintBytesPerEntry != 0 {
 		entries++
 	}
+	// Defensive guard in case the cutover/bytes-per-entry constants change.
 	if entries < 1 {
 		entries = 1
 	}

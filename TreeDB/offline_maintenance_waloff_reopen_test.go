@@ -51,11 +51,11 @@ func TestOpenBackend_WALOffReopen_AllowsOfflineValueLogMaintenance(t *testing.T)
 	if err != nil {
 		t.Fatalf("OpenBackend: %v", err)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		if err := cleanup(); err != nil {
-			t.Fatalf("cleanup: %v", err)
+			t.Errorf("cleanup: %v", err)
 		}
-	}()
+	})
 
 	stats, err := backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: true})
 	if err != nil {
