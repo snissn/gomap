@@ -14631,9 +14631,7 @@ func (db *DB) NewBatch() *Batch {
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	if size < 0 {
-		size = 0
-	}
+	size = backenddb.NormalizePublicBatchReserveHint(size)
 	return &Batch{
 		db:             db,
 		entries:        db.getBatchEntries(size),

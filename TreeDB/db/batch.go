@@ -30,20 +30,23 @@ func (db *DB) NewBatch() batch.Interface {
 }
 
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
-	return db.newBatchWithReserveHint(normalizePublicBatchReserveHint(size))
+	return db.newBatchWithReserveHint(NormalizePublicBatchReserveHint(size))
 }
 
-// normalizePublicBatchReserveHint keeps small public hints behaving like entry
+// NormalizePublicBatchReserveHint keeps small public hints behaving like entry
 // reserves, but treats larger hints as approximate byte budgets so callers do
 // not accidentally preallocate one entry per byte.
-func normalizePublicBatchReserveHint(size int) int {
+func NormalizePublicBatchReserveHint(size int) int {
 	if size <= 0 {
 		return 0
 	}
 	if size <= publicBatchReserveEntryHintCutover {
 		return size
 	}
-	entries := (size + publicBatchHintBytesPerEntry - 1) / publicBatchHintBytesPerEntry
+	entries := size / publicBatchHintBytesPerEntry
+	if size%publicBatchHintBytesPerEntry != 0 {
+		entries++
+	}
 	if entries < 1 {
 		entries = 1
 	}
@@ -51,6 +54,10 @@ func normalizePublicBatchReserveHint(size int) int {
 		entries = publicBatchReserveEntriesMax
 	}
 	return entries
+}
+
+func normalizePublicBatchReserveHint(size int) int {
+	return NormalizePublicBatchReserveHint(size)
 }
 
 func (db *DB) newBatchWithEntryReserve(entries int) batch.Interface {
