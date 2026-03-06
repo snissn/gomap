@@ -56,6 +56,11 @@ type ValueLogRewritePlan struct {
 	SelectedBytesStale int64
 }
 
+type groupedRecordKey struct {
+	fileID uint32
+	start  uint64
+}
+
 // ValueLogRewriteOnlineOptions controls online rewrite behavior.
 type ValueLogRewriteOnlineOptions struct {
 	// BatchSize bounds pointer swaps per commit.
@@ -310,7 +315,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	// grouped value-log record. When estimating live bytes we must count each
 	// referenced record once, not once per referencing key, otherwise grouped
 	// workloads will vastly over-count live bytes and mask stale segments.
-	var seenGroupedRecords map[uint64]struct{}
+	var seenGroupedRecords map[groupedRecordKey]struct{}
 
 	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords); err != nil {
@@ -350,7 +355,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	return liveByID, nil
 }
 
-func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[uint64]struct{}) error {
+func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -365,14 +370,13 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 			if ptr.Offset < 4 {
 				return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
 			}
-			start := uint32(ptr.Offset - 4)
-			k := (uint64(ptr.FileID) << 32) | uint64(start)
-			seen := map[uint64]struct{}(nil)
+			k := groupedRecordKey{fileID: ptr.FileID, start: ptr.Offset - 4}
+			seen := map[groupedRecordKey]struct{}(nil)
 			if seenGroupedRecords != nil {
 				seen = *seenGroupedRecords
 			}
 			if seen == nil {
-				seen = make(map[uint64]struct{}, 1024)
+				seen = make(map[groupedRecordKey]struct{}, 1024)
 				if seenGroupedRecords != nil {
 					*seenGroupedRecords = seen
 				}
@@ -394,7 +398,7 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 	return it.Error()
 }
 
-func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Pager, rootID uint64, liveByID map[uint32]int64, seenGroupedRecords *map[uint64]struct{}) error {
+func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Pager, rootID uint64, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -460,7 +464,7 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 	return nil
 }
 
-func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]int64, seenGroupedRecords *map[uint64]struct{}) error {
+func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
 	if liveByID == nil {
 		return nil
 	}
@@ -472,14 +476,13 @@ func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]
 		if ptr.Offset < 4 {
 			return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
 		}
-		start := uint32(ptr.Offset - 4)
-		k := (uint64(ptr.FileID) << 32) | uint64(start)
-		seen := map[uint64]struct{}(nil)
+		k := groupedRecordKey{fileID: ptr.FileID, start: ptr.Offset - 4}
+		seen := map[groupedRecordKey]struct{}(nil)
 		if seenGroupedRecords != nil {
 			seen = *seenGroupedRecords
 		}
 		if seen == nil {
-			seen = make(map[uint64]struct{}, 1024)
+			seen = make(map[groupedRecordKey]struct{}, 1024)
 			if seenGroupedRecords != nil {
 				*seenGroupedRecords = seen
 			}
@@ -1071,7 +1074,9 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		b := node.NewBuilder(buf, page.PageTypeInternal)
+		b := node.NewBuilderWithOptions(buf, page.PageTypeInternal, node.BuilderOptions{
+			InternalBaseDelta: n.InternalBaseDeltaEnabled(),
+		})
 		b.SetPageID(newID)
 		if low, high, ok, err := n.InternalFenceBounds(); err != nil {
 			return id, false, err
