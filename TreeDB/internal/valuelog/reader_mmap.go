@@ -10,24 +10,16 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
-func decodeTemplatePayloadCopy(payload []byte, lookup TemplateLookup, cache *templateDefCache, opts templ.DecodeOptions) ([]byte, error) {
+func appendDecodedTemplatePayload(dst, payload []byte, lookup TemplateLookup, cache *templateDefCache, opts templ.DecodeOptions) ([]byte, error) {
 	if lookup == nil || !templ.IsEncodedPayload(payload) {
-		return payload, nil
+		oldLen := len(dst)
+		dst = grow(dst, len(payload))
+		copy(dst[oldLen:], payload)
+		return dst, nil
 	}
-	return templ.DecodePayloadAppend(nil, payload, func(id uint64) (templ.TemplateDef, error) {
+	return templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
 		return resolveTemplateDef(id, lookup, cache)
 	}, opts)
-}
-
-func appendDecodedTemplatePayload(dst, payload []byte, lookup TemplateLookup, cache *templateDefCache, opts templ.DecodeOptions) ([]byte, error) {
-	decoded, err := decodeTemplatePayloadCopy(payload, lookup, cache, opts)
-	if err != nil {
-		return nil, err
-	}
-	oldLen := len(dst)
-	dst = grow(dst, len(decoded))
-	copy(dst[oldLen:], decoded)
-	return dst, nil
 }
 
 // readViaMmapViewPrefixCacheEnabled controls whether unsafe mmap-view reads

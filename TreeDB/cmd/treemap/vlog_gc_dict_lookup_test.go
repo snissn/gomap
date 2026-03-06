@@ -76,6 +76,7 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(20 * time.Second)
+	published := false
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-bgErrCh:
@@ -85,9 +86,16 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		}
 		stats := db.Stats()
 		if stats != nil && stats["treedb.cache.vlog_dict.last_applied_dict_id"] != "0" {
+			published = true
 			break
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+	if !published {
+		stats := db.Stats()
+		_ = db.Close()
+		t.Fatalf("timed out waiting for dict publish: last_applied_dict_id=%q stats=%#v",
+			stats["treedb.cache.vlog_dict.last_applied_dict_id"], stats)
 	}
 
 	// Phase 2: write enough bytes for auto mode to probe dict frames.
@@ -101,11 +109,20 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		_ = db.Close()
 		t.Fatalf("Stats: nil")
 	}
-	dictFrames, _ := strconv.ParseUint(stats["treedb.cache.vlog_auto.frames.dict"], 10, 64)
+	rawDictFrames, ok := stats["treedb.cache.vlog_auto.frames.dict"]
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("missing treedb.cache.vlog_auto.frames.dict stat: %#v", stats)
+	}
+	dictFrames, err := strconv.ParseUint(rawDictFrames, 10, 64)
+	if err != nil {
+		_ = db.Close()
+		t.Fatalf("invalid treedb.cache.vlog_auto.frames.dict stat %q: %v (all stats: %#v)", rawDictFrames, err, stats)
+	}
 	if dictFrames == 0 {
 		_ = db.Close()
 		t.Fatalf("expected at least one dict frame, got frames.dict=%q last_applied_dict_id=%q",
-			stats["treedb.cache.vlog_auto.frames.dict"],
+			rawDictFrames,
 			stats["treedb.cache.vlog_dict.last_applied_dict_id"],
 		)
 	}

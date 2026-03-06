@@ -404,11 +404,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 					return nil, ErrCorrupt
 				}
 
-				val := make([]byte, int(valEnd-valStart))
-				if _, err := f.File.ReadAt(val, frameOff+int64(prefixLen)+int64(valStart)); err != nil {
-					return nil, err
-				}
-				return appendDecodedTemplatePayload(dst, val, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+				return f.appendPayloadFromFile(dst, frameOff+int64(prefixLen)+int64(valStart), int(valEnd-valStart))
 			}
 			f.cacheMu.Unlock()
 		}
@@ -488,11 +484,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
 
-		val := make([]byte, int(valEnd-valStart))
-		if _, err := f.File.ReadAt(val, frameOff+int64(prefixLen)+int64(valStart)); err != nil {
-			return nil, err
-		}
-		return appendDecodedTemplatePayload(dst, val, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+		return f.appendPayloadFromFile(dst, frameOff+int64(prefixLen)+int64(valStart), int(valEnd-valStart))
 	}
 
 	// Slow path: use existing decoder and append.
@@ -508,6 +500,20 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 
 func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
 	return f.ReadAppend(ptr, verifyCRC, dst)
+}
+
+func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]byte, error) {
+	oldLen := len(dst)
+	dst = grow(dst, payloadLen)
+	payload := dst[oldLen : oldLen+payloadLen]
+	if _, err := f.File.ReadAt(payload, off); err != nil {
+		return nil, err
+	}
+	if f.templateLookup == nil || !templ.IsEncodedPayload(payload) {
+		return dst, nil
+	}
+	encoded := append([]byte(nil), payload...)
+	return appendDecodedTemplatePayload(dst[:oldLen], encoded, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
 
 // Set is an immutable snapshot of value-log files for snapshot isolation.
