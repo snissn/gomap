@@ -482,33 +482,24 @@ func TestCachedCollectionsBufferedNamedRoots_KeepMemtableOnlyState(t *testing.T)
 	}
 
 	primaryState := requireBufferedNamedRootStateByName(t, d, mustCollectionPrimaryRootName(t, meta.Name))
-	if !primaryState.HasPointState || !primaryState.HasPrefixState {
-		t.Fatalf("expected primary buffered root to keep point and prefix memtables")
-	}
-	if !primaryState.SharedState {
-		t.Fatalf("expected primary buffered root to share one memtable for point and prefix state")
+	if !primaryState.HasDomain {
+		t.Fatalf("expected primary buffered root to use root-domain state")
 	}
 	if primaryState.LegacyEntryCount != 0 {
 		t.Fatalf("expected primary buffered root to avoid legacy entry map, got %d entries", primaryState.LegacyEntryCount)
 	}
 
 	indexState := requireBufferedNamedRootStateByName(t, d, mustCollectionIndexStateRootName(t, meta.Name))
-	if !indexState.HasPointState || !indexState.HasPrefixState {
-		t.Fatalf("expected index-state buffered root to keep point and prefix memtables")
-	}
-	if !indexState.SharedState {
-		t.Fatalf("expected index-state buffered root to share one memtable for point and prefix state")
+	if !indexState.HasDomain {
+		t.Fatalf("expected index-state buffered root to use root-domain state")
 	}
 	if indexState.LegacyEntryCount != 0 {
 		t.Fatalf("expected index-state buffered root to avoid legacy entry map, got %d entries", indexState.LegacyEntryCount)
 	}
 
 	secondaryState := requireBufferedNamedRootStateByName(t, d, mustCollectionIndexRootName(t, meta.Name, "email_idx"))
-	if !secondaryState.HasPointState || !secondaryState.HasPrefixState {
-		t.Fatalf("expected secondary buffered root to keep point and prefix memtables")
-	}
-	if !secondaryState.SharedState {
-		t.Fatalf("expected secondary buffered root to share one memtable for point and prefix state")
+	if !secondaryState.HasDomain {
+		t.Fatalf("expected secondary buffered root to use root-domain state")
 	}
 	if secondaryState.LegacyEntryCount != 0 {
 		t.Fatalf("expected secondary buffered root to avoid legacy entry map, got %d entries", secondaryState.LegacyEntryCount)
