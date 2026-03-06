@@ -14,6 +14,24 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestValueLogGC_EmptySet_NoValueLogSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats != (ValueLogGCStats{}) {
+		t.Fatalf("expected zero stats for empty value-log set, got %+v", stats)
+	}
+}
+
 func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	dir := t.TempDir()
 
