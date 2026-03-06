@@ -139,6 +139,14 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 		if start == 0 {
 			return 0, fmt.Errorf("value-log rid allocator returned rid 0")
 		}
+		end := start + uint64(count) - 1
+		if end < start || end == 0 {
+			return 0, fmt.Errorf("value-log rid space exhausted")
+		}
+		if a.next != 0 && start < a.next {
+			return 0, fmt.Errorf("value-log rid allocator returned overlapping range [%d,%d], need >= %d", start, end, a.next)
+		}
+		a.next = end + 1
 		return start, nil
 	}
 	start := a.next
@@ -385,7 +393,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	// LeafRef child IDs (not normal key/value pointers) and must be included in
 	// live-byte estimation; otherwise rewrite planning can select "stale" segments
 	// that are actually pinned by live leaf pages.
-	if snap.idx != nil && snap.idx.pager != nil {
+	if db.indexOuterLeavesInValueLog && snap.idx != nil && snap.idx.pager != nil {
 		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords); err != nil {
 			_ = snap.Close()
 			return nil, err

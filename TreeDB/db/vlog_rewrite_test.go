@@ -722,6 +722,27 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	}
 }
 
+func TestRewriteRIDAllocator_ReserveRejectsOverlappingExternalRange(t *testing.T) {
+	a := newRewriteRIDAllocator(100, func(count int) (uint64, error) {
+		return 99, nil
+	})
+
+	if _, err := a.Reserve(1); err == nil {
+		fatalf := t.Fatalf
+		fatalf("expected overlapping external range to be rejected")
+	}
+}
+
+func TestRewriteRIDAllocator_ReserveRejectsOverflowingExternalRange(t *testing.T) {
+	a := newRewriteRIDAllocator(1, func(count int) (uint64, error) {
+		return ^uint64(0), nil
+	})
+
+	if _, err := a.Reserve(2); err == nil {
+		t.Fatalf("expected overflowing external range to be rejected")
+	}
+}
+
 func TestValueLogRewriteOnline_SparseSelection_RewritesHighStaleSegment(t *testing.T) {
 	dir := t.TempDir()
 
