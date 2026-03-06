@@ -3640,7 +3640,10 @@ func memtableNeedsBatchArenaRetention(mt memtable.Table) bool {
 	// immediately after write.
 	switch mt.(type) {
 	case nil:
-		return false
+		// Treat an unexpected nil memtable conservatively so batch arenas are not
+		// dropped on the floor if a caller reaches this path during shutdown or a
+		// failed init.
+		return true
 	case *memtable.Memtable, *memtable.AppendOnly, *memtable.HashSorted:
 		return false
 	default:
@@ -3658,6 +3661,34 @@ func memtableBatchWriteUsesSteal(mt memtable.Table) bool {
 	default:
 		return true
 	}
+}
+
+func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
+	if useSteal {
+		mt.DeleteSteal(key)
+		return
+	}
+	mt.Delete(key)
+}
+
+func memtableBatchSet(mt memtable.Table, useSteal bool, keepInlinePtrValue bool, op batch.Entry) {
+	if op.IsPtr {
+		memVal := []byte(nil)
+		if keepInlinePtrValue {
+			memVal = op.Value
+		}
+		if useSteal {
+			mt.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+			return
+		}
+		mt.SetEntry(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+		return
+	}
+	if useSteal {
+		mt.SetSteal(op.Key, op.Value)
+		return
+	}
+	mt.Set(op.Key, op.Value)
 }
 
 func getBatchArenaLease(refs int, chunks [][]byte) *batchArenaLease {
@@ -16098,11 +16129,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				for _, entryIdx := range idxs {
 					key := b.entries[entryIdx].Key
 					last = key
-					if useSteal {
-						shard.mem.DeleteSteal(key)
-					} else {
-						shard.mem.Delete(key)
-					}
+					memtableBatchDelete(shard.mem, useSteal, key)
 				}
 				shard.rng.add(first)
 				if len(idxs) > 1 {
@@ -16112,11 +16139,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			} else {
 				for _, entryIdx := range idxs {
 					key := b.entries[entryIdx].Key
-					if useSteal {
-						shard.mem.DeleteSteal(key)
-					} else {
-						shard.mem.Delete(key)
-					}
+					memtableBatchDelete(shard.mem, useSteal, key)
 					shard.rng.add(key)
 					b.db.noteWriteKey(key)
 				}
@@ -16164,6 +16187,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard.mu.Lock()
 			useStream := b.streamEligible
 			useSteal := memtableBatchWriteUsesSteal(shard.mem)
+			keepInlinePtrValue := !b.db.memtableValueLogPointers
 			if useStream && useSteal {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
 					applier.ApplyStealSortedBatchTrusted(entries, nil)
@@ -16172,17 +16196,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				} else {
 					for _, op := range entries {
 						if op.Type == batch.OpDelete {
-							shard.mem.DeleteSteal(op.Key)
+							memtableBatchDelete(shard.mem, true, op.Key)
 						} else {
-							if op.IsPtr {
-								memVal := []byte(nil)
-								if !b.db.memtableValueLogPointers {
-									memVal = op.Value
-								}
-								shard.mem.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
-							} else {
-								shard.mem.SetSteal(op.Key, op.Value)
-							}
+							memtableBatchSet(shard.mem, true, keepInlinePtrValue, op)
 						}
 					}
 				}
@@ -16196,33 +16212,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			} else {
 				for _, op := range entries {
 					if op.Type == batch.OpDelete {
-						if useSteal {
-							shard.mem.DeleteSteal(op.Key)
-						} else {
-							shard.mem.Delete(op.Key)
-						}
+						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
-						if useSteal {
-							if op.IsPtr {
-								memVal := []byte(nil)
-								if !b.db.memtableValueLogPointers {
-									memVal = op.Value
-								}
-								shard.mem.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
-							} else {
-								shard.mem.SetSteal(op.Key, op.Value)
-							}
-						} else {
-							if op.IsPtr {
-								memVal := []byte(nil)
-								if !b.db.memtableValueLogPointers {
-									memVal = op.Value
-								}
-								shard.mem.SetEntry(op.Key, memVal, op.ValuePtr, node.FlagPointer)
-							} else {
-								shard.mem.Set(op.Key, op.Value)
-							}
-						}
+						memtableBatchSet(shard.mem, useSteal, keepInlinePtrValue, op)
 					}
 					if useStream {
 						// Preserve sorted-run accounting even when we avoid Steal.
