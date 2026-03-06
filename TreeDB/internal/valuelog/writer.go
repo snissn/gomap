@@ -356,7 +356,7 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		return nil, err
 	}
 	return &Writer{
-		f:                     f,
+		f: f,
 		// File-backed writers use direct writes and append buffers; bufio is only
 		// needed for sink-backed writers (tests/benchmarks).
 		bw:                    nil,
