@@ -86,11 +86,11 @@ func setMutable(db *DB, key, value []byte) {
 
 func TestTailValueLogSegmentsByLane(t *testing.T) {
 	segments := []logSegmentInfo{
-		{path: "value-0-000001.log", lane: 0, seq: 1, valueLog: true, size: 128},
-		{path: "value-0-000003.log", lane: 0, seq: 3, valueLog: true, size: 128},
-		{path: "value-0-000002.log", lane: 0, seq: 2, valueLog: true, size: 128},
-		{path: "value-1-000004.log", lane: 1, seq: 4, valueLog: true, size: 0},
-		{path: "value-1-000005.log", lane: 1, seq: 5, valueLog: true, size: 128},
+		{path: "value-l0-000001.log", lane: 0, seq: 1, valueLog: true, size: 128},
+		{path: "value-l0-000003.log", lane: 0, seq: 3, valueLog: true, size: 128},
+		{path: "value-l0-000002.log", lane: 0, seq: 2, valueLog: true, size: 128},
+		{path: "value-l1-000004.log", lane: 1, seq: 4, valueLog: true, size: 0},
+		{path: "value-l1-000005.log", lane: 1, seq: 5, valueLog: true, size: 128},
 		{path: "commit-1-000006.log", lane: 1, seq: 6, valueLog: false, size: 128},
 	}
 
