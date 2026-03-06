@@ -1,28 +1,22 @@
-package collections
+package collections_test
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
-func openFocusedBenchmarkCollection(b *testing.B, name string, indexes ...IndexDefinition) (*CollectionManager, *Collection) {
+func openFocusedBenchmarkCollection(b *testing.B, name string, indexes ...collections.IndexDefinition) (*collections.CollectionManager, *collections.Collection, func()) {
 	b.Helper()
 
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
-	if err != nil {
-		b.Fatal(err)
-	}
-	b.Cleanup(func() {
-		_ = database.Close()
-	})
+	manager, checkpoint, cleanup := openCollectionBenchmarkManager(b)
+	b.Cleanup(cleanup)
 
-	manager := NewCollectionManager(database)
-	meta, err := manager.CreateCollection(&CollectionMeta{
+	meta, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: name,
-		Options: CollectionOptions{
-			IDMode: idModeCallerProvided,
+		Options: collections.CollectionOptions{
+			IDMode: collections.IDModeCallerProvided,
 		},
 	})
 	if err != nil {
@@ -37,15 +31,15 @@ func openFocusedBenchmarkCollection(b *testing.B, name string, indexes ...IndexD
 	if err != nil {
 		b.Fatal(err)
 	}
-	return manager, collection
+	return manager, collection, checkpoint
 }
 
 func BenchmarkCollectionInsertWithSecondaryIndexes(b *testing.B) {
-	_, collection := openFocusedBenchmarkCollection(
+	_, collection, _ := openFocusedBenchmarkCollection(
 		b,
 		"bench_insert_secondary_indexes",
-		IndexDefinition{Name: "email_idx", Field: "email", Unique: true},
-		IndexDefinition{Name: "city_idx", Field: "city"},
+		collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true},
+		collections.IndexDefinition{Name: "city_idx", Field: "city"},
 	)
 
 	ids := make([][]byte, b.N)
@@ -65,11 +59,11 @@ func BenchmarkCollectionInsertWithSecondaryIndexes(b *testing.B) {
 }
 
 func BenchmarkCollectionDeleteWithSecondaryIndexes(b *testing.B) {
-	_, collection := openFocusedBenchmarkCollection(
+	_, collection, checkpoint := openFocusedBenchmarkCollection(
 		b,
 		"bench_delete_secondary_indexes",
-		IndexDefinition{Name: "email_idx", Field: "email", Unique: true},
-		IndexDefinition{Name: "city_idx", Field: "city"},
+		collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true},
+		collections.IndexDefinition{Name: "city_idx", Field: "city"},
 	)
 
 	ids := make([][]byte, b.N)
@@ -81,6 +75,7 @@ func BenchmarkCollectionDeleteWithSecondaryIndexes(b *testing.B) {
 			b.Fatalf("seed insert: %v", err)
 		}
 	}
+	checkpoint()
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -92,10 +87,10 @@ func BenchmarkCollectionDeleteWithSecondaryIndexes(b *testing.B) {
 }
 
 func BenchmarkSecondaryLookupNonUnique(b *testing.B) {
-	_, collection := openFocusedBenchmarkCollection(
+	_, collection, checkpoint := openFocusedBenchmarkCollection(
 		b,
 		"bench_secondary_non_unique",
-		IndexDefinition{Name: "city_idx", Field: "city"},
+		collections.IndexDefinition{Name: "city_idx", Field: "city"},
 	)
 
 	const (
@@ -111,6 +106,7 @@ func BenchmarkSecondaryLookupNonUnique(b *testing.B) {
 			b.Fatalf("seed insert: %v", err)
 		}
 	}
+	checkpoint()
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -122,13 +118,8 @@ func BenchmarkSecondaryLookupNonUnique(b *testing.B) {
 }
 
 func BenchmarkCollectionCreateIndexBackfillExistingDocs(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer database.Close()
-
-	manager := NewCollectionManager(database)
+	manager, checkpoint, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
 	const seededDocs = 1024
 	ids := make([][]byte, seededDocs)
 	docs := make([][]byte, seededDocs)
@@ -142,10 +133,10 @@ func BenchmarkCollectionCreateIndexBackfillExistingDocs(b *testing.B) {
 	for idx := 0; idx < b.N; idx++ {
 		b.StopTimer()
 		name := fmt.Sprintf("bench_backfill_%d", idx)
-		meta, err := manager.CreateCollection(&CollectionMeta{
+		meta, err := manager.CreateCollection(&collections.CollectionMeta{
 			Name: name,
-			Options: CollectionOptions{
-				IDMode: idModeCallerProvided,
+			Options: collections.CollectionOptions{
+				IDMode: collections.IDModeCallerProvided,
 			},
 		})
 		if err != nil {
@@ -160,11 +151,13 @@ func BenchmarkCollectionCreateIndexBackfillExistingDocs(b *testing.B) {
 				b.Fatalf("seed insert: %v", err)
 			}
 		}
+		checkpoint()
 		b.StartTimer()
-		if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		if _, err := manager.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
 			b.Fatalf("create index with backfill: %v", err)
 		}
 		b.StopTimer()
+		checkpoint()
 		if err := manager.DropCollection(meta.Name); err != nil {
 			b.Fatalf("drop collection: %v", err)
 		}

@@ -1594,6 +1594,7 @@ func (c *Collection) indexRuntime(idx IndexDefinition) (*collectionIndexRuntime,
 	if c == nil {
 		return nil, errCollectionNil
 	}
+	c.ensureRuntimeCacheFresh()
 	if c.indexes == nil {
 		c.indexes = make(map[string]*collectionIndexRuntime, len(c.meta.Indexes))
 	}

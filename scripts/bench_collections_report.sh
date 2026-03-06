@@ -8,6 +8,7 @@ OUT_DIR="${OUT_DIR:-$(mktemp -d /tmp/gomap_collections_report_XXXXXX)}"
 BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertProvidedID|CollectionGetByID|CollectionDeleteByID|CollectionInsertWithSecondaryIndexes|CollectionDeleteWithSecondaryIndexes|SecondaryLookupUnique|SecondaryLookupNonUnique|SecondaryUpsertFieldChange|CollectionCreateIndexBackfillExistingDocs)}"
 COUNT="${COUNT:-3}"
 BENCHTIME="${BENCHTIME:-}"
+BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-cached}"
 
 RAW_JSON="$OUT_DIR/collections_bench.json"
 CPU_PROFILE="$OUT_DIR/collections_cpu.pprof"
@@ -33,7 +34,8 @@ if [[ -n "$BENCHTIME" ]]; then
 fi
 
 echo "running focused collections benchmarks into: $OUT_DIR"
-GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
+echo "benchmark engine: $BENCH_ENGINE"
+TREEDB_COLLECTION_BENCH_ENGINE="$BENCH_ENGINE" GOWORK=off "${cmd[@]}" | tee "$RAW_JSON"
 
 GOWORK=off go run ./cmd/collection_bench_report \
   -in "$RAW_JSON" \
@@ -51,12 +53,14 @@ cat >"$OUT_DIR/README.md" <<EOF
 - commit: \`$COMMIT\`
 - benchmark regex: \`$BENCH_REGEX\`
 - benchmark count: \`$COUNT\`
+- benchmark engine: \`$BENCH_ENGINE\`
 - raw benchmark json: \`$RAW_JSON\`
 - cpu profile: \`$CPU_PROFILE\`
 - memory profile: \`$MEM_PROFILE\`
 - markdown report: \`$OUT_DIR/collections_report.md\`
 - html report: \`$OUT_DIR/collections_report.html\`
 - json report: \`$OUT_DIR/collections_report.json\`
+- backend-direct override: \`TREEDB_COLLECTION_BENCH_ENGINE=backend_direct scripts/bench_collections_report.sh\`
 EOF
 
 echo "markdown report: $OUT_DIR/collections_report.md"

@@ -2,6 +2,7 @@ package treedb
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -275,6 +276,61 @@ func TestCachedCollectionsDelete_NamedRootTombstonesBufferedUntilCheckpoint(t *t
 	assertBackendDocMissingAtRoot(t, d, stateAfterDelete.RootPageID, []byte("u1"))
 	if got := countBackendRootEntries(t, d, indexAfterDelete.RootPageID); got != 0 {
 		t.Fatalf("expected backend secondary entry to be removed after checkpoint, got %d", got)
+	}
+}
+
+func TestCachedCollectionsCheckpoint_SameHandleReadsPublishedNamedRoots(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	const docCount = 1024
+	emails := make([]string, docCount)
+	for i := 0; i < docCount; i++ {
+		emails[i] = fmt.Sprintf("user-%d@example.com", i)
+		if _, err := col.Insert([]byte(fmt.Sprintf("u-%d", i)), []byte(fmt.Sprintf(`{"email":"%s"}`, emails[i]))); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint insert: %v", err)
+	}
+
+	got, err := col.Get([]byte("u-0"))
+	if err != nil {
+		t.Fatalf("get after checkpoint on same handle: %v", err)
+	}
+	if !bytes.Equal(got, []byte(`{"email":"user-0@example.com"}`)) {
+		t.Fatalf("doc after checkpoint on same handle = %q", got)
+	}
+
+	for i := 0; i < 100000; i++ {
+		ids, err := col.FindByIndex("email_idx", emails[i%docCount])
+		if err != nil {
+			t.Fatalf("find by index after checkpoint on same handle (iteration %d): %v", i, err)
+		}
+		wantID := []byte(fmt.Sprintf("u-%d", i%docCount))
+		if len(ids) != 1 || !bytes.Equal(ids[0], wantID) {
+			t.Fatalf("ids after checkpoint on same handle (iteration %d) = %#v", i, ids)
+		}
 	}
 }
 

@@ -1,24 +1,19 @@
-package collections
+package collections_test
 
 import (
 	"fmt"
 	"testing"
 
-	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/collections"
 )
 
 func BenchmarkCollectionCreate(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer database.Close()
-
-	manager := NewCollectionManager(database)
+	manager, _, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for idx := 0; idx < b.N; idx++ {
-		meta := &CollectionMeta{Name: fmt.Sprintf("bench_create_%d", idx)}
+		meta := &collections.CollectionMeta{Name: fmt.Sprintf("bench_create_%d", idx)}
 		if _, err := manager.CreateCollection(meta); err != nil {
 			b.Fatalf("create collection: %v", err)
 		}
@@ -26,17 +21,13 @@ func BenchmarkCollectionCreate(b *testing.B) {
 }
 
 func BenchmarkCollectionInsertProvidedID(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer database.Close()
+	manager, _, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
 
-	manager := NewCollectionManager(database)
-	meta, err := manager.CreateCollection(&CollectionMeta{
+	meta, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench_insert_provided",
-		Options: CollectionOptions{
-			IDMode: idModeCallerProvided,
+		Options: collections.CollectionOptions{
+			IDMode: collections.IDModeCallerProvided,
 		},
 	})
 	if err != nil {
@@ -64,17 +55,13 @@ func BenchmarkCollectionInsertProvidedID(b *testing.B) {
 }
 
 func BenchmarkCollectionInsertAutoID(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer database.Close()
+	manager, _, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
 
-	manager := NewCollectionManager(database)
-	meta, err := manager.CreateCollection(&CollectionMeta{
+	meta, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench_insert_auto",
-		Options: CollectionOptions{
-			IDMode: idModeAuto,
+		Options: collections.CollectionOptions{
+			IDMode: collections.IDModeAuto,
 		},
 	})
 	if err != nil {
@@ -95,17 +82,13 @@ func BenchmarkCollectionInsertAutoID(b *testing.B) {
 }
 
 func BenchmarkCollectionGetByID(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer database.Close()
+	manager, checkpoint, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
 
-	manager := NewCollectionManager(database)
-	meta, err := manager.CreateCollection(&CollectionMeta{
+	meta, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench_get",
-		Options: CollectionOptions{
-			IDMode: idModeCallerProvided,
+		Options: collections.CollectionOptions{
+			IDMode: collections.IDModeCallerProvided,
 		},
 	})
 	if err != nil {
@@ -125,6 +108,7 @@ func BenchmarkCollectionGetByID(b *testing.B) {
 			b.Fatalf("seed insert: %v", err)
 		}
 	}
+	checkpoint()
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -137,17 +121,13 @@ func BenchmarkCollectionGetByID(b *testing.B) {
 }
 
 func BenchmarkCollectionDeleteByID(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer database.Close()
+	manager, checkpoint, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
 
-	manager := NewCollectionManager(database)
-	meta, err := manager.CreateCollection(&CollectionMeta{
+	meta, err := manager.CreateCollection(&collections.CollectionMeta{
 		Name: "bench_delete",
-		Options: CollectionOptions{
-			IDMode: idModeCallerProvided,
+		Options: collections.CollectionOptions{
+			IDMode: collections.IDModeCallerProvided,
 		},
 	})
 	if err != nil {
@@ -166,6 +146,7 @@ func BenchmarkCollectionDeleteByID(b *testing.B) {
 			b.Fatalf("seed insert: %v", err)
 		}
 	}
+	checkpoint()
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -177,17 +158,14 @@ func BenchmarkCollectionDeleteByID(b *testing.B) {
 }
 
 func BenchmarkSecondaryLookupUnique(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
+	manager, checkpoint, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
+
+	meta, err := manager.CreateCollection(&collections.CollectionMeta{Name: "bench_secondary_unique"})
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer database.Close()
-	manager := NewCollectionManager(database)
-	meta, err := manager.CreateCollection(&CollectionMeta{Name: "bench_secondary_unique"})
-	if err != nil {
-		b.Fatal(err)
-	}
-	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+	if _, err := manager.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
 		b.Fatal(err)
 	}
 	collection, err := manager.OpenCollection(meta.Name)
@@ -204,6 +182,7 @@ func BenchmarkSecondaryLookupUnique(b *testing.B) {
 			b.Fatalf("seed insert: %v", err)
 		}
 	}
+	checkpoint()
 	b.ReportAllocs()
 	b.ResetTimer()
 	for idx := 0; idx < b.N; idx++ {
@@ -214,17 +193,14 @@ func BenchmarkSecondaryLookupUnique(b *testing.B) {
 }
 
 func BenchmarkSecondaryUpsertFieldChange(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
+	manager, _, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
+
+	meta, err := manager.CreateCollection(&collections.CollectionMeta{Name: "bench_secondary_upsert"})
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer database.Close()
-	manager := NewCollectionManager(database)
-	meta, err := manager.CreateCollection(&CollectionMeta{Name: "bench_secondary_upsert"})
-	if err != nil {
-		b.Fatal(err)
-	}
-	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+	if _, err := manager.CreateIndex(meta.Name, collections.IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
 		b.Fatal(err)
 	}
 	collection, err := manager.OpenCollection(meta.Name)
@@ -249,21 +225,17 @@ func BenchmarkSecondaryUpsertFieldChange(b *testing.B) {
 }
 
 func BenchmarkCollectionStats(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer database.Close()
+	manager, checkpoint, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
 
-	manager := NewCollectionManager(database)
-	meta, err := manager.CreateCollection(&CollectionMeta{Name: "bench_stats"})
+	meta, err := manager.CreateCollection(&collections.CollectionMeta{Name: "bench_stats"})
 	if err != nil {
 		b.Fatal(err)
 	}
-	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+	if _, err := manager.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
 		b.Fatal(err)
 	}
-	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+	if _, err := manager.CreateIndex(meta.Name, collections.IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
 		b.Fatal(err)
 	}
 	collection, err := manager.OpenCollection(meta.Name)
@@ -276,6 +248,7 @@ func BenchmarkCollectionStats(b *testing.B) {
 			b.Fatalf("seed insert: %v", err)
 		}
 	}
+	checkpoint()
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -287,21 +260,17 @@ func BenchmarkCollectionStats(b *testing.B) {
 }
 
 func BenchmarkCollectionCheckConsistency(b *testing.B) {
-	database, err := db.Open(db.Options{Dir: b.TempDir()})
-	if err != nil {
-		b.Fatal(err)
-	}
-	defer database.Close()
+	manager, checkpoint, cleanup := openCollectionBenchmarkManager(b)
+	defer cleanup()
 
-	manager := NewCollectionManager(database)
-	meta, err := manager.CreateCollection(&CollectionMeta{Name: "bench_consistency"})
+	meta, err := manager.CreateCollection(&collections.CollectionMeta{Name: "bench_consistency"})
 	if err != nil {
 		b.Fatal(err)
 	}
-	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+	if _, err := manager.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
 		b.Fatal(err)
 	}
-	if _, err := manager.CreateIndex(meta.Name, IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+	if _, err := manager.CreateIndex(meta.Name, collections.IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
 		b.Fatal(err)
 	}
 	collection, err := manager.OpenCollection(meta.Name)
@@ -314,6 +283,7 @@ func BenchmarkCollectionCheckConsistency(b *testing.B) {
 			b.Fatalf("seed insert: %v", err)
 		}
 	}
+	checkpoint()
 
 	b.ReportAllocs()
 	b.ResetTimer()
