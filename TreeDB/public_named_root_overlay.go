@@ -802,13 +802,9 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 	}
 	state := db.namedRootsByID[pending.virtualRootID]
 	if state == nil {
-		pointState, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		sharedState, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
 		if err != nil {
-			panic(fmt.Sprintf("treedb: create named-root point state: %v", err))
-		}
-		prefixState, err := memtable.NewWithCapacityMode(0, memtable.ModeSkiplist)
-		if err != nil {
-			panic(fmt.Sprintf("treedb: create named-root prefix state: %v", err))
+			panic(fmt.Sprintf("treedb: create named-root shared state: %v", err))
 		}
 		state = &namedRootOverlayState{
 			virtualRootID: pending.virtualRootID,
@@ -816,8 +812,8 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 			rootKey:       append([]byte(nil), pending.rootKey...),
 			hasFormat:     pending.hasFormat,
 			format:        pending.format,
-			pointState:    pointState,
-			prefixState:   prefixState,
+			pointState:    sharedState,
+			prefixState:   sharedState,
 		}
 		if db.namedRootsByID == nil {
 			db.namedRootsByID = make(map[uint64]*namedRootOverlayState)
@@ -835,17 +831,21 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 	for _, entry := range pending.entries {
 		if entry.Type == batch.OpDelete {
 			if state.pointState != nil {
+				runNamedRootMemtableWriteTestHook(pending.virtualRootID, "point", entry.Key)
 				state.pointState.SetEntrySteal(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
 			}
-			if state.prefixState != nil {
+			if state.prefixState != nil && state.prefixState != state.pointState {
+				runNamedRootMemtableWriteTestHook(pending.virtualRootID, "prefix", entry.Key)
 				state.prefixState.SetEntrySteal(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
 			}
 			continue
 		}
 		if state.pointState != nil {
+			runNamedRootMemtableWriteTestHook(pending.virtualRootID, "point", entry.Key)
 			state.pointState.SetEntrySteal(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
 		}
-		if state.prefixState != nil {
+		if state.prefixState != nil && state.prefixState != state.pointState {
+			runNamedRootMemtableWriteTestHook(pending.virtualRootID, "prefix", entry.Key)
 			state.prefixState.SetEntrySteal(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
 		}
 	}
