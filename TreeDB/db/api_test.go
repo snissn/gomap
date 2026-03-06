@@ -164,7 +164,11 @@ func TestSnapshotGet_ReturnsSafeCopyForValueLogPointer(t *testing.T) {
 	if err := vw.Close(); err != nil {
 		t.Fatalf("close valuelog writer: %v", err)
 	}
-	b := db.NewBatch().(*Batch)
+	rawBatch := db.NewBatch()
+	b, ok := rawBatch.(*Batch)
+	if !ok {
+		t.Fatalf("NewBatch() returned %T, want *Batch", rawBatch)
+	}
 	if err := b.SetPointer(key, ptr); err != nil {
 		_ = b.Close()
 		t.Fatalf("SetPointer: %v", err)
