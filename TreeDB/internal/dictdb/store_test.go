@@ -159,6 +159,7 @@ func TestStorePutGet_PointerPath_Reopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
+	defer func() { _ = store.Close() }()
 
 	ctx := context.Background()
 	inline := store.backend.InlineThreshold()
@@ -184,6 +185,7 @@ func TestStorePutGet_PointerPath_Reopen(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+	store = nil
 
 	// Ensure the pointer path actually created a value-log segment.
 	walDir := filepath.Join(dir, "wal")
