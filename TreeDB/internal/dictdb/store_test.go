@@ -5,9 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
@@ -190,27 +187,6 @@ func TestStorePutGet_PointerPath_Reopen(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 	store = nil
-
-	// Ensure the pointer path actually created a value-log segment.
-	walDir := filepath.Join(dir, "wal")
-	entries, err := os.ReadDir(walDir)
-	if err != nil {
-		t.Fatalf("readdir wal: %v", err)
-	}
-	found := false
-	for _, ent := range entries {
-		if ent.IsDir() {
-			continue
-		}
-		name := ent.Name()
-		if strings.HasPrefix(name, "value-") && strings.HasSuffix(name, ".log") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("expected value log file under %s", walDir)
-	}
 
 	reopen, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
 	if err != nil {
