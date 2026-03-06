@@ -876,3 +876,95 @@ func TestMutateRootsWithFormatIterators_WarmRootsUseBulkMergeBuilder(t *testing.
 		t.Fatalf("expected initial doc to remain after warm merge publish")
 	}
 }
+
+func TestMutateRootsWithFormatIterators_WarmRootsAvoidEntryMaterialization(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	seedPrimary, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("seed primary memtable: %v", err)
+	}
+	seedIndex, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("seed index memtable: %v", err)
+	}
+	for i := 0; i < 192; i++ {
+		docID := []byte("seed-" + string(rune('a'+(i%26))) + string(rune('A'+((i/26)%26))))
+		doc := []byte(`{"email":"seed@example.com"}`)
+		indexKey := []byte("idx:" + string(docID))
+		seedPrimary.SetSteal(docID, doc)
+		seedIndex.SetSteal(indexKey, nil)
+	}
+	rootIDs, err := d.MutateRootsWithFormatIterators(false,
+		[]uint64{0, 0},
+		[]*rootfmt.Format{
+			{
+				OuterLeavesInValueLog: true,
+				LeafPrefixCompression: true,
+				AllowValues:           true,
+			},
+			{
+				LeafPrefixCompression: true,
+			},
+		},
+		[]iterator.UnsafeIterator{
+			rootMutationTableIterator{UnsafeIterator: seedPrimary.NewIterator(nil, nil), table: seedPrimary},
+			rootMutationTableIterator{UnsafeIterator: seedIndex.NewIterator(nil, nil), table: seedIndex},
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("seed mutate: %v", err)
+	}
+
+	updatePrimary, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("update primary memtable: %v", err)
+	}
+	updateIndex, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+	if err != nil {
+		t.Fatalf("update index memtable: %v", err)
+	}
+	for i := 0; i < 192; i++ {
+		docID := []byte("update-" + string(rune('a'+(i%26))) + string(rune('A'+((i/26)%26))))
+		doc := []byte(`{"email":"update@example.com"}`)
+		indexKey := []byte("idx:" + string(docID))
+		updatePrimary.SetSteal(docID, doc)
+		updateIndex.SetSteal(indexKey, nil)
+	}
+
+	collectCalls := 0
+	restoreCollect := setRootIteratorCollectEntriesTestHook(func(rootIndex int) {
+		collectCalls++
+	})
+	defer restoreCollect()
+
+	_, err = d.MutateRootsWithFormatIterators(false,
+		rootIDs,
+		[]*rootfmt.Format{
+			{
+				OuterLeavesInValueLog: true,
+				LeafPrefixCompression: true,
+				AllowValues:           true,
+			},
+			{
+				LeafPrefixCompression: true,
+			},
+		},
+		[]iterator.UnsafeIterator{
+			rootMutationTableIterator{UnsafeIterator: updatePrimary.NewIterator(nil, nil), table: updatePrimary},
+			rootMutationTableIterator{UnsafeIterator: updateIndex.NewIterator(nil, nil), table: updateIndex},
+		},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("warm mutate: %v", err)
+	}
+	if collectCalls != 0 {
+		t.Fatalf("collectRootIteratorEntries calls=%d want 0", collectCalls)
+	}
+}
