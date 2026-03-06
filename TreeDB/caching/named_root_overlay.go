@@ -126,6 +126,11 @@ var namedRootOwnedWriteHook struct {
 	fn func(kind string, key []byte)
 }
 
+var namedRootBulkPublishOpsHook struct {
+	mu sync.RWMutex
+	fn func(int)
+}
+
 func setNamedRootPublishTestHook(fn func(string) error) func() {
 	namedRootPublishHook.mu.Lock()
 	prev := namedRootPublishHook.fn
@@ -316,6 +321,31 @@ func setNamedRootOwnedWriteTestHook(fn func(kind string, key []byte)) func() {
 
 func SetNamedRootOwnedWriteTestHook(fn func(kind string, key []byte)) func() {
 	return setNamedRootOwnedWriteTestHook(fn)
+}
+
+func setNamedRootBulkPublishOpsTestHook(fn func(int)) func() {
+	namedRootBulkPublishOpsHook.mu.Lock()
+	prev := namedRootBulkPublishOpsHook.fn
+	namedRootBulkPublishOpsHook.fn = fn
+	namedRootBulkPublishOpsHook.mu.Unlock()
+	return func() {
+		namedRootBulkPublishOpsHook.mu.Lock()
+		namedRootBulkPublishOpsHook.fn = prev
+		namedRootBulkPublishOpsHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootBulkPublishOpsTestHook(fn func(int)) func() {
+	return setNamedRootBulkPublishOpsTestHook(fn)
+}
+
+func runNamedRootBulkPublishOpsTestHook(rootCount int) {
+	namedRootBulkPublishOpsHook.mu.RLock()
+	fn := namedRootBulkPublishOpsHook.fn
+	namedRootBulkPublishOpsHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootCount)
+	}
 }
 
 func runNamedRootOwnedWriteTestHook(kind string, key []byte) {
@@ -580,6 +610,38 @@ func (db *DB) BufferNamedRootMutations(sync bool, rootIDs []uint64, formats []*r
 		return nil, fmt.Errorf("named root mutation length mismatch")
 	}
 
+	rootOps := make([][]batch.Entry, len(rootIDs))
+	for i := range rootIDs {
+		var opScratch [8]batch.Entry
+		b := newOverlayEntryBatch(opScratch[:0])
+		if mutateRoots[i] != nil {
+			if err := mutateRoots[i](&b); err != nil {
+				return nil, err
+			}
+		}
+		rootOps[i] = b.entries
+	}
+	return db.BufferNamedRootMutationsOps(sync, rootIDs, formats, rootOps, func(newRootIDs []uint64) ([]batch.Entry, error) {
+		if updateSystem == nil {
+			return nil, nil
+		}
+		var sysScratch [8]batch.Entry
+		sys := newOverlayEntryBatch(sysScratch[:0])
+		if err := updateSystem(&sys, newRootIDs); err != nil {
+			return nil, err
+		}
+		return sys.entries, nil
+	})
+}
+
+func (db *DB) BufferNamedRootMutationsOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	if db == nil {
+		return nil, errDBClosing
+	}
+	if len(rootIDs) != len(rootOps) {
+		return nil, fmt.Errorf("named root ops length mismatch")
+	}
+
 	db.namedRootMu.Lock()
 	virtualRootIDs := make([]uint64, len(rootIDs))
 	pending := make([]namedRootPendingMutation, len(rootIDs))
@@ -605,32 +667,26 @@ func (db *DB) BufferNamedRootMutations(sync bool, rootIDs []uint64, formats []*r
 			pending[i].hasFormat = true
 			pending[i].format = *format
 		}
-		b := newOverlayEntryBatch(pending[i].entryScratch[:0])
-		if mutateRoots[i] != nil {
-			if err := mutateRoots[i](&b); err != nil {
-				db.namedRootMu.Unlock()
-				return nil, err
-			}
-		}
-		pending[i].entries = b.entries
+		pending[i].entries = rootOps[i]
 	}
 
-	var sysScratch [8]batch.Entry
-	sys := newOverlayEntryBatch(sysScratch[:0])
-	if updateSystem != nil {
-		if err := updateSystem(&sys, virtualRootIDs); err != nil {
+	var sysEntries []batch.Entry
+	if buildSystemOps != nil {
+		ops, err := buildSystemOps(virtualRootIDs)
+		if err != nil {
 			db.namedRootMu.Unlock()
 			return nil, err
 		}
+		sysEntries = ops
 	}
-	if err := db.bindPendingNamedRootKeysLocked(pending, sys.entries); err != nil {
+	if err := db.bindPendingNamedRootKeysLocked(pending, sysEntries); err != nil {
 		db.namedRootMu.Unlock()
 		return nil, err
 	}
 	for i := range pending {
 		db.applyPendingNamedRootLocked(&pending[i])
 	}
-	if err := db.ApplySystemOverlayEntriesOwned(sys.entries); err != nil {
+	if err := db.ApplySystemOverlayEntriesOwned(sysEntries); err != nil {
 		db.namedRootMu.Unlock()
 		return nil, err
 	}
@@ -753,7 +809,7 @@ func (db *DB) flushNamedRootOverlaysLocked(bridge BackendDirectBridge, sync bool
 	err := func(bridge BackendDirectBridge) error {
 		rootIDs := make([]uint64, len(snapshots))
 		formats := make([]*rootfmt.Format, len(snapshots))
-		mutators := make([]func(batch.Interface) error, len(snapshots))
+		rootOps := make([][]batch.Entry, len(snapshots))
 		for i := range snapshots {
 			snapshot := snapshots[i]
 			rootIDs[i] = snapshot.state.baseRootID
@@ -761,61 +817,19 @@ func (db *DB) flushNamedRootOverlaysLocked(bridge BackendDirectBridge, sync bool
 				format := snapshot.state.format
 				formats[i] = &format
 			}
-			entries := snapshot.entries
-			mutators[i] = func(target batch.Interface) error {
-				for _, entry := range entries {
-					if entry.Type == batch.OpDelete {
-						if deleteView, ok := target.(interface{ DeleteView([]byte) error }); ok {
-							if err := deleteView.DeleteView(entry.Key); err != nil {
-								return err
-							}
-						} else if err := target.Delete(entry.Key); err != nil {
-							return err
-						}
-						continue
-					}
-					if len(entry.Value) > 0 {
-						if autoView, ok := target.(interface{ SetAutoView(key, value []byte) error }); ok {
-							if err := autoView.SetAutoView(entry.Key, entry.Value); err != nil {
-								return err
-							}
-						} else if auto, ok := target.(interface{ SetAuto(key, value []byte) error }); ok {
-							if err := auto.SetAuto(entry.Key, entry.Value); err != nil {
-								return err
-							}
-						} else if err := target.Set(entry.Key, entry.Value); err != nil {
-							return err
-						}
-						continue
-					}
-					if setView, ok := target.(interface{ SetView(key, value []byte) error }); ok {
-						if err := setView.SetView(entry.Key, nil); err != nil {
-							return err
-						}
-					} else if err := target.Set(entry.Key, nil); err != nil {
-						return err
-					}
-				}
-				return nil
-			}
+			rootOps[i] = snapshot.entries
 		}
 
-		_, err := bridge.MutateRootsWithFormats(sync, rootIDs, formats, mutators, func(sys batch.Interface, newRootIDs []uint64) error {
+		runNamedRootBulkPublishOpsTestHook(len(rootIDs))
+		_, err := bridge.MutateRootsWithFormatOps(sync, rootIDs, formats, rootOps, func(newRootIDs []uint64) ([]batch.Entry, error) {
 			if len(newRootIDs) != len(snapshots) {
-				return fmt.Errorf("treedb: named-root checkpoint publish mismatch")
+				return nil, fmt.Errorf("treedb: named-root checkpoint publish mismatch")
 			}
 			updatedSystemEntries = make([]batch.Entry, 0, len(newRootIDs))
 			for i := range snapshots {
 				encoded, err := collections.UpdateEncodedCollectionRootDescriptorRootPageID(snapshots[i].descriptorRaw, newRootIDs[i])
 				if err != nil {
-					return err
-				}
-				if setView, ok := sys.(interface{ SetView(key, value []byte) error }); ok {
-					if err := setView.SetView(snapshots[i].state.rootKey, encoded); err != nil {
-						return err
-					}
-				} else if err := sys.Set(snapshots[i].state.rootKey, encoded); err != nil {
-					return err
+					return nil, err
 				}
 				updatedSystemEntries = append(updatedSystemEntries, batch.Entry{
 					Type:  batch.OpPut,
@@ -823,7 +837,7 @@ func (db *DB) flushNamedRootOverlaysLocked(bridge BackendDirectBridge, sync bool
 					Value: encoded,
 				})
 			}
-			return nil
+			return updatedSystemEntries, nil
 		})
 		return err
 	}(bridge)

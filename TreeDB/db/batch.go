@@ -169,6 +169,36 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	return b.batch.SetOps(ops)
 }
 
+// SetAutoOpsView records a batch of operations without copying key/value
+// buffers and transparently falls back to value-log pointers for oversized
+// values. Callers must treat referenced buffers as immutable until the batch is
+// written or closed.
+func (b *Batch) SetAutoOpsView(ops []batch.Entry) error {
+	if b == nil {
+		return fmt.Errorf("missing batch")
+	}
+	b.Reserve(len(ops))
+	for _, op := range ops {
+		switch op.Type {
+		case batch.OpDelete:
+			if err := b.DeleteView(op.Key); err != nil {
+				return err
+			}
+		case batch.OpPut:
+			if op.IsPtr {
+				if err := b.SetPointerView(op.Key, op.ValuePtr); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := b.SetAutoView(op.Key, op.Value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // Reserve forwards best-effort preallocation hints to the internal batch.
 func (b *Batch) Reserve(n int) {
 	if b == nil || b.batch == nil || n <= 0 {

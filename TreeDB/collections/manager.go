@@ -92,6 +92,7 @@ type collectionDB interface {
 	Iterator(start, end []byte) (systemIterator, error)
 	IteratorAtRoot(rootID uint64, start, end []byte) (systemIterator, error)
 	SystemIterator(start, end []byte) (systemIterator, error)
+	MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
 	MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error)
 	MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
 	MutateRootAndUserWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
@@ -1037,46 +1038,32 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 	}
 	rootIDs := make([]uint64, 0, 2)
 	rootFormats := make([]*rootfmt.Format, 0, 2)
-	rootMutations := make([]func(batch.Interface) error, 0, 2)
+	rootOps := make([][]batch.Entry, 0, 2)
 	rootUpdates := make([]collectionRootUpdate, 0, 2)
 	if len(indexKeys) > 0 {
 		rootIDs = append(rootIDs, indexRootDesc.RootPageID)
 		rootFormats = append(rootFormats, &indexRootDesc.Format)
-		rootMutations = append(rootMutations, func(root batch.Interface) error {
-			for _, indexKey := range indexKeys {
-				if err := setOwnedIndexEntryOnBatch(root, indexKey); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+		ops := make([]batch.Entry, 0, len(indexKeys))
+		for _, indexKey := range indexKeys {
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: indexKey, Value: nil})
+		}
+		rootOps = append(rootOps, ops)
 		rootUpdates = append(rootUpdates, collectionRootUpdate{desc: indexRootDesc, rootKey: indexRootKey})
 	}
 	if len(stateEntries) > 0 {
 		rootIDs = append(rootIDs, stateRootDesc.RootPageID)
 		rootFormats = append(rootFormats, &stateRootDesc.Format)
-		rootMutations = append(rootMutations, func(root batch.Interface) error {
-			for _, entry := range stateEntries {
-				if err := setOwnedBytesOnBatch(root, entry.documentID, entry.stateRaw); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+		ops := make([]batch.Entry, 0, len(stateEntries))
+		for _, entry := range stateEntries {
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: entry.documentID, Value: entry.stateRaw})
+		}
+		rootOps = append(rootOps, ops)
 		rootUpdates = append(rootUpdates, collectionRootUpdate{desc: stateRootDesc, rootKey: stateRootKey})
 	}
 	var publishedRootIDs []uint64
-	_, err = m.db.MutateRootsWithFormats(false, rootIDs, rootFormats, rootMutations, func(sys batch.Interface, newRootIDs []uint64) error {
-		if len(newRootIDs) != len(rootUpdates) {
-			return fmt.Errorf("collections: expected %d backfill root ids, got %d", len(rootUpdates), len(newRootIDs))
-		}
+	_, err = m.db.MutateRootsWithFormatOps(false, rootIDs, rootFormats, rootOps, func(newRootIDs []uint64) ([]batch.Entry, error) {
 		publishedRootIDs = append(publishedRootIDs[:0], newRootIDs...)
-		for i := range rootUpdates {
-			if err := writeRootDescriptorUpdate(sys, rootUpdates[i].rootKey, rootUpdates[i].desc, newRootIDs[i]); err != nil {
-				return err
-			}
-		}
-		return nil
+		return buildRootDescriptorEntries(rootUpdates, newRootIDs)
 	})
 	if err == nil {
 		for i := range rootUpdates {
@@ -1439,6 +1426,64 @@ func (c *Collection) ensureRuntimeCacheFresh() {
 	c.cacheVersion = currentVersion
 }
 
+type collectionOpBatch struct {
+	entries []batch.Entry
+	closed  bool
+}
+
+func newCollectionOpBatch(backing []batch.Entry) collectionOpBatch {
+	return collectionOpBatch{entries: backing[:0]}
+}
+
+func (b *collectionOpBatch) Set(key, value []byte) error {
+	if b.closed {
+		return fmt.Errorf("collections: op batch closed")
+	}
+	if value == nil {
+		return fmt.Errorf("collections: nil value")
+	}
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+	return nil
+}
+
+func (b *collectionOpBatch) Delete(key []byte) error {
+	if b.closed {
+		return fmt.Errorf("collections: op batch closed")
+	}
+	b.entries = append(b.entries, batch.Entry{Type: batch.OpDelete, Key: key})
+	return nil
+}
+
+func (b *collectionOpBatch) SetOps(ops []batch.Entry) error {
+	if b.closed {
+		return fmt.Errorf("collections: op batch closed")
+	}
+	b.entries = append(b.entries, ops...)
+	return nil
+}
+
+func (b *collectionOpBatch) Write() error     { return nil }
+func (b *collectionOpBatch) WriteSync() error { return nil }
+func (b *collectionOpBatch) Close() error {
+	b.closed = true
+	return nil
+}
+func (b *collectionOpBatch) Replay(fn func(batch.Entry) error) error {
+	for _, entry := range b.entries {
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (b *collectionOpBatch) GetByteSize() (int, error) {
+	size := 0
+	for _, entry := range b.entries {
+		size += len(entry.Key) + len(entry.Value)
+	}
+	return size, nil
+}
+
 func setDocumentOnBatch(b batch.Interface, key, value []byte) error {
 	if autoView, ok := b.(interface {
 		SetAutoView(key, value []byte) error
@@ -1662,6 +1707,21 @@ type collectionIndexRootMutation struct {
 	additions [][]byte
 }
 
+func buildRootDescriptorEntries(rootUpdates []collectionRootUpdate, newRootIDs []uint64) ([]batch.Entry, error) {
+	if len(rootUpdates) != len(newRootIDs) {
+		return nil, fmt.Errorf("collections: root publish mismatch: got %d ids for %d updates", len(newRootIDs), len(rootUpdates))
+	}
+	ops := make([]batch.Entry, 0, len(rootUpdates))
+	for i := range rootUpdates {
+		ops = append(ops, batch.Entry{
+			Type:  batch.OpPut,
+			Key:   rootUpdates[i].rootKey,
+			Value: rootUpdates[i].desc.encodeWithRootPageIDAssumeValid(newRootIDs[i]),
+		})
+	}
+	return ops, nil
+}
+
 func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescriptor, primaryRootKey []byte, mutatePrimary func(batch.Interface) error, documentID, stateValue []byte, deleteState bool, removals, additions [][]byte) error {
 	if c == nil {
 		return errCollectionNil
@@ -1674,25 +1734,31 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		return err
 	}
 	hasStateMutation := deleteState || len(stateValue) > 0
+	var primaryOps []batch.Entry
 	if len(indexMutations) == 0 && !hasStateMutation {
-		newRootID, err := c.db.MutateRootWithFormat(primaryDesc.RootPageID, &primaryDesc.Format, false, mutatePrimary, func(sys batch.Interface, newRootID uint64) error {
-			return writeRootDescriptorUpdate(sys, primaryRootKey, primaryDesc, newRootID)
-		})
-		if err == nil {
-			primaryDesc.RootPageID = newRootID
-			c.cacheVersion = c.db.SystemRootVersion()
+		var primaryScratch [1]batch.Entry
+		b := newCollectionOpBatch(primaryScratch[:0])
+		if err := mutatePrimary(&b); err != nil {
+			return err
 		}
-		return err
+		primaryOps = b.entries
+	} else {
+		var primaryScratch [1]batch.Entry
+		b := newCollectionOpBatch(primaryScratch[:0])
+		if err := mutatePrimary(&b); err != nil {
+			return err
+		}
+		primaryOps = b.entries
 	}
 
 	rootIDs := make([]uint64, 0, len(indexMutations)+2)
 	rootFormats := make([]*rootfmt.Format, 0, len(indexMutations)+2)
-	rootMutations := make([]func(batch.Interface) error, 0, len(indexMutations)+2)
+	rootOps := make([][]batch.Entry, 0, len(indexMutations)+2)
 	rootUpdates := make([]collectionRootUpdate, 0, len(indexMutations)+2)
 	var publishedRootIDs []uint64
 	rootIDs = append(rootIDs, primaryDesc.RootPageID)
 	rootFormats = append(rootFormats, &primaryDesc.Format)
-	rootMutations = append(rootMutations, mutatePrimary)
+	rootOps = append(rootOps, primaryOps)
 	rootUpdates = append(rootUpdates, collectionRootUpdate{desc: primaryDesc, rootKey: primaryRootKey})
 	if hasStateMutation {
 		stateDesc, stateRootKey, err := c.indexStateRootDescriptor()
@@ -1701,12 +1767,11 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		}
 		rootIDs = append(rootIDs, stateDesc.RootPageID)
 		rootFormats = append(rootFormats, &stateDesc.Format)
-		rootMutations = append(rootMutations, func(root batch.Interface) error {
-			if deleteState {
-				return deleteDocumentOnBatch(root, documentID)
-			}
-			return setBytesOnBatch(root, documentID, stateValue)
-		})
+		if deleteState {
+			rootOps = append(rootOps, []batch.Entry{{Type: batch.OpDelete, Key: documentID}})
+		} else {
+			rootOps = append(rootOps, []batch.Entry{{Type: batch.OpPut, Key: documentID, Value: stateValue}})
+		}
 		rootUpdates = append(rootUpdates, collectionRootUpdate{
 			desc:    stateDesc,
 			rootKey: stateRootKey,
@@ -1717,36 +1782,23 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		indexMutation := indexMutations[i]
 		rootIDs = append(rootIDs, indexMutation.desc.RootPageID)
 		rootFormats = append(rootFormats, &indexMutation.desc.Format)
-		rootMutations = append(rootMutations, func(root batch.Interface) error {
-			for _, indexKey := range indexMutation.removals {
-				if err := deleteOwnedIndexEntryOnBatch(root, indexKey); err != nil {
-					return err
-				}
-			}
-			for _, indexKey := range indexMutation.additions {
-				if err := setOwnedIndexEntryOnBatch(root, indexKey); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
+		ops := make([]batch.Entry, 0, len(indexMutation.removals)+len(indexMutation.additions))
+		for _, indexKey := range indexMutation.removals {
+			ops = append(ops, batch.Entry{Type: batch.OpDelete, Key: indexKey})
+		}
+		for _, indexKey := range indexMutation.additions {
+			ops = append(ops, batch.Entry{Type: batch.OpPut, Key: indexKey, Value: nil})
+		}
+		rootOps = append(rootOps, ops)
 		rootUpdates = append(rootUpdates, collectionRootUpdate{
 			desc:    indexMutation.desc,
 			rootKey: indexMutation.rootKey,
 		})
 	}
 
-	_, err = c.db.MutateRootsWithFormats(false, rootIDs, rootFormats, rootMutations, func(sys batch.Interface, newRootIDs []uint64) error {
-		if len(newRootIDs) != len(rootUpdates) {
-			return fmt.Errorf("collections: root publish mismatch: got %d ids for %d updates", len(newRootIDs), len(rootUpdates))
-		}
+	_, err = c.db.MutateRootsWithFormatOps(false, rootIDs, rootFormats, rootOps, func(newRootIDs []uint64) ([]batch.Entry, error) {
 		publishedRootIDs = append(publishedRootIDs[:0], newRootIDs...)
-		for i := range rootUpdates {
-			if err := writeRootDescriptorUpdate(sys, rootUpdates[i].rootKey, rootUpdates[i].desc, newRootIDs[i]); err != nil {
-				return err
-			}
-		}
-		return nil
+		return buildRootDescriptorEntries(rootUpdates, newRootIDs)
 	})
 	if err == nil {
 		for i := range rootUpdates {

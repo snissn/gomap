@@ -1,6 +1,8 @@
 package treedb
 
 import (
+	"sync"
+
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -16,6 +18,32 @@ type bridgeSystemBatch struct {
 type recordingSystemBatch struct {
 	target  batch.Interface
 	entries []batch.Entry
+}
+
+var rootBulkMutationOpsHook struct {
+	mu sync.RWMutex
+	fn func(int)
+}
+
+func setRootBulkMutationOpsTestHook(fn func(int)) func() {
+	rootBulkMutationOpsHook.mu.Lock()
+	prev := rootBulkMutationOpsHook.fn
+	rootBulkMutationOpsHook.fn = fn
+	rootBulkMutationOpsHook.mu.Unlock()
+	return func() {
+		rootBulkMutationOpsHook.mu.Lock()
+		rootBulkMutationOpsHook.fn = prev
+		rootBulkMutationOpsHook.mu.Unlock()
+	}
+}
+
+func runRootBulkMutationOpsTestHook(rootCount int) {
+	rootBulkMutationOpsHook.mu.RLock()
+	fn := rootBulkMutationOpsHook.fn
+	rootBulkMutationOpsHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootCount)
+	}
 }
 
 func (db *DB) collectionsBridge() (caching.BackendDirectBridge, error) {
@@ -163,6 +191,14 @@ func (db *DB) IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeI
 		return nil, err
 	}
 	return bridge.IteratorAtRoot(rootID, start, end)
+}
+
+func (db *DB) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	runRootBulkMutationOpsTestHook(len(rootIDs))
+	if db.cached != nil {
+		return db.cached.BufferNamedRootMutationsOps(sync, rootIDs, formats, rootOps, buildSystemOps)
+	}
+	return db.backend.MutateRootsWithFormatOps(sync, rootIDs, formats, rootOps, buildSystemOps)
 }
 
 // MutateRootWithFormat delegates named-root mutation to the backend.
