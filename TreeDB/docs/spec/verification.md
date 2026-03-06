@@ -144,12 +144,15 @@ Invariant:
   the legacy shared `col:d:` keyspace.
 - Secondary-index entries live in dedicated named roots, not in the legacy
   shared `col:i:` keyspace.
+- Each collection has a dedicated index-state root, and indexed deletes can
+  use that state without rereading the primary document.
 - Dedicated-root format bits override DB-global outer-leaf placement in both
   directions: primary roots can use leafrefs while the user root stays
   pager-backed, and secondary roots stay pager-backed while the user root uses
   outer-leaf-vlog mode.
-- Primary document writes and derived secondary-index entries stay mutually
-  coherent for normal collection mutations.
+- Primary document writes, per-document index-state entries, and derived
+  secondary-index entries stay mutually coherent for normal collection
+  mutations.
 - DB-wide maintenance (`ValueLogGC`, `ValueLogRewriteOnline`,
   `ValueLogRewriteOffline`, `VacuumIndexOnline`, `VacuumIndexOffline`) keeps
   named-root collection data and secondary indexes reachable across reopen.
@@ -166,6 +169,7 @@ Coverage:
 - `TreeDB/collections/secondary_index_query_test.go`
 - `TreeDB/collections/secondary_index_update_test.go`
 - `TreeDB/collections/secondary_index_conflict_test.go`
+- `TreeDB/collections/perf_path_test.go`
 - `TreeDB/db/named_root_maintenance_test.go`
 - `TreeDB/db/named_root_format_closeout_test.go`
 - `TreeDB/collections/collection_tx_atomic_test.go`

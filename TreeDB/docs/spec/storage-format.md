@@ -344,14 +344,14 @@ sys:r:<base64(root_name)> => CollectionRootDescriptor
 
 ```text
 u8  Version                  // currently 1
-u8  Kind                     // 1=primary, 2=secondary_index
+u8  Kind                     // 1=primary, 2=secondary_index, 3=index_state
 u8  Flags                    // bit0=outer-leaves-in-vlog, bit1=leaf-prefix-compression, bit2=allow-values
 u16 RootNameLen
 bytes RootName
 u16 CollectionNameLen
 bytes CollectionName
 u16 IndexNameLen
-bytes IndexName              // empty for primary roots
+bytes IndexName              // empty for primary and index-state roots
 u64 RootPageID               // 0 before first root-local write; otherwise current root page id
 ```
 
@@ -405,11 +405,44 @@ If the secondary root descriptor clears `outer-leaves-in-vlog`, the root stays
 pager-backed even when `Options.IndexOuterLeavesInValueLog` is true for the
 DB's main user root.
 
-### 7.7 Maintenance participation
+### 7.7 Dedicated index-state roots
 
-The collection root catalog drives both dedicated primary and dedicated
-secondary roots, and DB-wide maintenance walks those named roots alongside the
-user/system roots for GC, online/offline value-log rewrite, and
+Each collection also has a dedicated index-state root keyed directly by
+document id:
+
+```text
+<document_id> => DocumentIndexState
+```
+
+`DocumentIndexState` is a compact binary summary of the currently configured
+secondary-index values for that document:
+
+```text
+u8  Version                  // currently 1
+u16 IndexCount
+repeat IndexCount:
+  u16 IndexNameLen
+  bytes IndexName
+  u16 ValueCount
+  repeat ValueCount:
+    u16 EncodedValueLen
+    bytes EncodedValue
+```
+
+- `EncodedValue` reuses the secondary-index typed scalar encoding (`s:`, `n:`,
+  `b:`, `z:`).
+- Values are stored sorted and deduplicated per index name.
+- Documents with no current indexed values still store a versioned empty state
+  blob so indexed deletes can avoid reopening and reparsing the primary
+  document.
+- The index-state root keeps `allow-values=true` and
+  `outer-leaves-in-vlog=false`.
+
+### 7.8 Maintenance participation
+
+The collection root catalog drives dedicated primary, secondary-index, and
+index-state roots, and DB-wide maintenance walks those named roots alongside
+the user/system roots for GC, online/offline value-log rewrite, and
 online/offline index vacuum.
 - Deleting all documents from a collection can still leave a small live
   value-log footprint when the primary root uses outer-leaf-in-vlog mode,

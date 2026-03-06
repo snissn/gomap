@@ -3,7 +3,6 @@ package collections
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -45,6 +44,7 @@ type Collection struct {
 	meta         CollectionMeta
 	metaEpoch    uint64
 	primary      *collectionRootRuntime
+	state        *collectionRootRuntime
 	indexes      map[string]*collectionIndexRuntime
 	cacheVersion uint64
 }
@@ -181,6 +181,13 @@ func (m *CollectionManager) CreateCollection(meta *CollectionMeta) (*CollectionM
 	if err := setCollectionRootDescriptorOnBatch(sysBatch, primaryRootDesc); err != nil {
 		return nil, err
 	}
+	indexStateRootDesc, err := newIndexStateCollectionRootDescriptor(meta.Name)
+	if err != nil {
+		return nil, err
+	}
+	if err := setCollectionRootDescriptorOnBatch(sysBatch, indexStateRootDesc); err != nil {
+		return nil, err
+	}
 	for i := range meta.Indexes {
 		indexKey, err := SystemIndexKey(meta.Name, meta.Indexes[i].Name)
 		if err != nil {
@@ -300,6 +307,11 @@ func (m *CollectionManager) DropCollection(name string) error {
 	keys = append(keys, metaKey)
 	if rootKey, err := SystemCollectionRootKey(existingMeta.PrimaryRoot); err == nil {
 		keys = append(keys, rootKey)
+	}
+	if stateRootName, err := CollectionIndexStateRootName(existingMeta.Name); err == nil {
+		if rootKey, err := SystemCollectionRootKey(stateRootName); err == nil {
+			keys = append(keys, rootKey)
+		}
 	}
 	for _, idx := range existingMeta.Indexes {
 		if rootKey, err := SystemCollectionRootKey(idx.RootName); err == nil {
@@ -557,7 +569,7 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return setDocumentOnBatch(root, key, document)
 	}
 	if len(c.meta.Indexes) == 0 {
-		if err := c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimary, nil, nil); err != nil {
+		if err := c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimary, persistedID, nil, false, nil, nil); err != nil {
 			return nil, err
 		}
 		return persistedID, nil
@@ -566,24 +578,42 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	var existing []byte
-	var existingScratch *documentScratchHandle
+	var (
+		oldStateRaw []byte
+		stateStored bool
+	)
 	if exists {
-		existingScratch = getDocumentScratch()
-		existing, err = c.db.GetAtRootAppend(rootDesc.RootPageID, key, existingScratch.buf[:0])
+		oldStateRaw, err = c.loadIndexState(persistedID)
 		if err != nil {
-			putDocumentScratch(existingScratch, existingScratch.buf)
 			return nil, err
 		}
+		stateStored = len(oldStateRaw) > 0
+		if len(oldStateRaw) == 0 {
+			existingScratch := getDocumentScratch()
+			existing, getErr := c.db.GetAtRootAppend(rootDesc.RootPageID, key, existingScratch.buf[:0])
+			if getErr != nil {
+				putDocumentScratch(existingScratch, existingScratch.buf)
+				return nil, getErr
+			}
+			existingState, stateErr := c.indexStateForDocument(existing)
+			putDocumentScratch(existingScratch, existing)
+			if stateErr != nil {
+				return nil, stateErr
+			}
+			oldStateRaw, err = encodeDocumentIndexState(existingState)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
-	removals, additions, err := c.indexMutationForUpsert(persistedID, existing, document)
-	if existingScratch != nil {
-		putDocumentScratch(existingScratch, existing)
-	}
+	newStateRaw, removals, additions, err := c.indexMutationForUpsert(persistedID, oldStateRaw, document)
 	if err != nil {
 		return nil, err
 	}
-	if err := c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimary, removals, additions); err != nil {
+	if exists && stateStored && bytes.Equal(oldStateRaw, newStateRaw) {
+		newStateRaw = nil
+	}
+	if err := c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimary, persistedID, newStateRaw, false, removals, additions); err != nil {
 		return nil, err
 	}
 	return persistedID, nil
@@ -635,27 +665,46 @@ func (c *Collection) Delete(documentID []byte) error {
 		writePrimaryDelete := func(root batch.Interface) error {
 			return deleteDocumentOnBatch(root, key)
 		}
-		return c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimaryDelete, nil, nil)
+		return c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimaryDelete, documentID, nil, false, nil, nil)
 	}
-	existingScratch := getDocumentScratch()
-	existing, err := c.db.GetAtRootAppend(rootDesc.RootPageID, key, existingScratch.buf[:0])
+	oldStateRaw, err := c.loadIndexState(documentID)
 	if err != nil {
-		putDocumentScratch(existingScratch, existingScratch.buf)
 		return err
 	}
-	if len(existing) == 0 {
+	stateStored := len(oldStateRaw) > 0
+	if len(oldStateRaw) == 0 {
+		existingScratch := getDocumentScratch()
+		existing, getErr := c.db.GetAtRootAppend(rootDesc.RootPageID, key, existingScratch.buf[:0])
+		if getErr != nil {
+			putDocumentScratch(existingScratch, existingScratch.buf)
+			return getErr
+		}
+		if len(existing) == 0 {
+			putDocumentScratch(existingScratch, existing)
+			return nil
+		}
+		existingState, stateErr := c.indexStateForDocument(existing)
 		putDocumentScratch(existingScratch, existing)
-		return nil
+		if stateErr != nil {
+			return stateErr
+		}
+		oldStateRaw, err = encodeDocumentIndexState(existingState)
+		if err != nil {
+			return err
+		}
 	}
-	entries, err := c.indexEntriesForDocument(documentID, existing)
-	putDocumentScratch(existingScratch, existing)
+	oldState, err := decodeDocumentIndexState(oldStateRaw)
+	if err != nil {
+		return err
+	}
+	entries, err := c.indexEntriesForState(documentID, oldState)
 	if err != nil {
 		return err
 	}
 	writePrimaryDelete := func(root batch.Interface) error {
 		return deleteDocumentOnBatch(root, key)
 	}
-	return c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimaryDelete, entries, nil)
+	return c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimaryDelete, documentID, nil, stateStored, entries, nil)
 }
 
 func (c *Collection) Upsert(documentID, document []byte) ([]byte, error) {
@@ -933,33 +982,45 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 		return err
 	}
 	defer func() { _ = it.Close() }()
-	indexRootDesc, err := m.rootDescriptor(def.RootName)
+	col := &Collection{
+		db:        m.db,
+		mgr:       m,
+		meta:      *meta,
+		metaEpoch: m.epoch.Load(),
+	}
+	indexRootDesc, indexRootKey, err := col.secondaryRootDescriptor(def)
 	if err != nil {
 		return err
 	}
-	rootKey, err := SystemCollectionRootKey(def.RootName)
+	stateRootDesc, stateRootKey, err := col.indexStateRootDescriptor()
 	if err != nil {
 		return err
 	}
-	prefix, err := CollectionIndexPrefix(collection, def.Name)
-	if err != nil {
-		return err
+	type stateBackfillEntry struct {
+		documentID []byte
+		stateRaw   []byte
 	}
-	path := splitIndexPath(def.Field)
-	var indexKeys [][]byte
+	var (
+		indexKeys    [][]byte
+		stateEntries []stateBackfillEntry
+	)
 	for it.Valid() {
 		key := it.UnsafeKey()
 		if !it.IsDeleted() {
 			docID := append([]byte{}, key...)
-			var decoded any
-			if err := json.Unmarshal(it.UnsafeValue(), &decoded); err != nil {
-				return fmt.Errorf("collections: index backfill requires JSON document: %w", err)
+			state, err := col.indexStateForDocument(it.UnsafeValue())
+			if err != nil {
+				return err
 			}
-			obj, ok := decoded.(map[string]any)
-			if !ok {
-				return fmt.Errorf("collections: index backfill requires JSON object document")
+			stateRaw, err := encodeDocumentIndexState(state)
+			if err != nil {
+				return err
 			}
-			keysForDoc, err := indexKeysForSingleDefinition(docID, obj, def, meta.Options, prefix, path)
+			stateEntries = append(stateEntries, stateBackfillEntry{
+				documentID: docID,
+				stateRaw:   stateRaw,
+			})
+			keysForDoc, err := col.indexEntriesForState(docID, documentIndexState{def.Name: state[def.Name]})
 			if err != nil {
 				return err
 			}
@@ -970,72 +1031,86 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 	if err := it.Error(); err != nil {
 		return err
 	}
-	if len(indexKeys) == 0 {
+	if len(indexKeys) == 0 && len(stateEntries) == 0 {
 		return nil
 	}
-	_, err = m.db.MutateRootsWithFormats(false, []uint64{indexRootDesc.RootPageID}, []*rootfmt.Format{
-		&indexRootDesc.Format,
-	}, []func(batch.Interface) error{
-		func(root batch.Interface) error {
+	rootIDs := make([]uint64, 0, 2)
+	rootFormats := make([]*rootfmt.Format, 0, 2)
+	rootMutations := make([]func(batch.Interface) error, 0, 2)
+	rootUpdates := make([]collectionRootUpdate, 0, 2)
+	if len(indexKeys) > 0 {
+		rootIDs = append(rootIDs, indexRootDesc.RootPageID)
+		rootFormats = append(rootFormats, &indexRootDesc.Format)
+		rootMutations = append(rootMutations, func(root batch.Interface) error {
 			for _, indexKey := range indexKeys {
 				if err := setIndexEntryOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}
 			return nil
-		},
-	}, func(sys batch.Interface, newRootIDs []uint64) error {
-		if len(newRootIDs) != 1 {
-			return fmt.Errorf("collections: expected one backfill root id, got %d", len(newRootIDs))
+		})
+		rootUpdates = append(rootUpdates, collectionRootUpdate{desc: indexRootDesc, rootKey: indexRootKey})
+	}
+	if len(stateEntries) > 0 {
+		rootIDs = append(rootIDs, stateRootDesc.RootPageID)
+		rootFormats = append(rootFormats, &stateRootDesc.Format)
+		rootMutations = append(rootMutations, func(root batch.Interface) error {
+			for _, entry := range stateEntries {
+				if err := setBytesOnBatch(root, entry.documentID, entry.stateRaw); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		rootUpdates = append(rootUpdates, collectionRootUpdate{desc: stateRootDesc, rootKey: stateRootKey})
+	}
+	var publishedRootIDs []uint64
+	_, err = m.db.MutateRootsWithFormats(false, rootIDs, rootFormats, rootMutations, func(sys batch.Interface, newRootIDs []uint64) error {
+		if len(newRootIDs) != len(rootUpdates) {
+			return fmt.Errorf("collections: expected %d backfill root ids, got %d", len(rootUpdates), len(newRootIDs))
 		}
-		return writeRootDescriptorUpdate(sys, rootKey, indexRootDesc, newRootIDs[0])
+		publishedRootIDs = append(publishedRootIDs[:0], newRootIDs...)
+		for i := range rootUpdates {
+			if err := writeRootDescriptorUpdate(sys, rootUpdates[i].rootKey, rootUpdates[i].desc, newRootIDs[i]); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
+	if err == nil {
+		for i := range rootUpdates {
+			rootUpdates[i].desc.RootPageID = publishedRootIDs[i]
+		}
+	}
 	return err
 }
 
-func (c *Collection) indexMutationForUpsert(documentID, oldDoc, newDoc []byte) ([][]byte, [][]byte, error) {
-	if len(oldDoc) == 0 {
-		additions, err := c.indexEntriesForDocument(documentID, newDoc)
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := c.ensureUniqueConflicts(documentID, additions); err != nil {
-			return nil, nil, err
-		}
-		return nil, additions, nil
-	}
-	oldEntries, err := c.indexEntriesForDocument(documentID, oldDoc)
+func (c *Collection) indexMutationForUpsert(documentID []byte, oldStateRaw, newDoc []byte) ([]byte, [][]byte, [][]byte, error) {
+	oldState, err := decodeDocumentIndexState(oldStateRaw)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	newEntries, err := c.indexEntriesForDocument(documentID, newDoc)
+	newState, err := c.indexStateForDocument(newDoc)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	oldSet := make(map[string][]byte, len(oldEntries))
-	for _, key := range oldEntries {
-		oldSet[string(key)] = key
+	newStateRaw, err := encodeDocumentIndexState(newState)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	newSet := make(map[string][]byte, len(newEntries))
-	for _, key := range newEntries {
-		newSet[string(key)] = key
+	oldEntries, err := c.indexEntriesForState(documentID, oldState)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	removals := make([][]byte, 0, len(oldEntries))
-	for k, key := range oldSet {
-		if _, keep := newSet[k]; !keep {
-			removals = append(removals, key)
-		}
+	newEntries, err := c.indexEntriesForState(documentID, newState)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	additions := make([][]byte, 0, len(newEntries))
-	for k, key := range newSet {
-		if _, exists := oldSet[k]; !exists {
-			additions = append(additions, key)
-		}
-	}
+	removals, additions := diffIndexEntries(oldEntries, newEntries)
 	if err := c.ensureUniqueConflicts(documentID, additions); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return removals, additions, nil
+	return newStateRaw, removals, additions, nil
 }
 
 func (c *Collection) ensureUniqueConflicts(documentID []byte, additions [][]byte) error {
@@ -1086,62 +1161,52 @@ func (c *Collection) ensureUniqueConflicts(documentID []byte, additions [][]byte
 }
 
 func (c *Collection) indexEntriesForDocument(documentID, document []byte) ([][]byte, error) {
-	if len(document) == 0 || len(c.meta.Indexes) == 0 {
-		return nil, nil
+	state, err := c.indexStateForDocument(document)
+	if err != nil {
+		return nil, err
 	}
-	var decoded any
-	if err := json.Unmarshal(document, &decoded); err != nil {
-		return nil, fmt.Errorf("collections: index extraction requires JSON document: %w", err)
+	return c.indexEntriesForState(documentID, state)
+}
+
+func diffIndexEntries(oldEntries, newEntries [][]byte) ([][]byte, [][]byte) {
+	oldSet := make(map[string][]byte, len(oldEntries))
+	for _, key := range oldEntries {
+		oldSet[string(key)] = key
 	}
-	obj, ok := decoded.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("collections: index extraction requires JSON object document")
+	newSet := make(map[string][]byte, len(newEntries))
+	for _, key := range newEntries {
+		newSet[string(key)] = key
 	}
-	out := make([][]byte, 0, len(c.meta.Indexes))
-	var seen map[string]struct{}
-	for _, idx := range c.meta.Indexes {
-		runtime, err := c.indexRuntime(idx)
-		if err != nil {
-			return nil, err
-		}
-		keys, err := indexKeysForSingleDefinition(documentID, obj, idx, c.meta.Options, runtime.prefix, runtime.path)
-		if err != nil {
-			return nil, err
-		}
-		if len(keys) <= 1 {
-			out = append(out, keys...)
-			continue
-		}
-		if seen == nil {
-			seen = make(map[string]struct{}, len(keys))
-		}
-		for _, key := range keys {
-			s := string(key)
-			if _, exists := seen[s]; exists {
-				continue
-			}
-			seen[s] = struct{}{}
-			out = append(out, key)
+	removals := make([][]byte, 0, len(oldEntries))
+	for k, key := range oldSet {
+		if _, keep := newSet[k]; !keep {
+			removals = append(removals, key)
 		}
 	}
-	return out, nil
+	additions := make([][]byte, 0, len(newEntries))
+	for k, key := range newSet {
+		if _, exists := oldSet[k]; !exists {
+			additions = append(additions, key)
+		}
+	}
+	return removals, additions
+}
+
+func (c *Collection) loadIndexState(documentID []byte) ([]byte, error) {
+	stateDesc, _, err := c.indexStateRootDescriptor()
+	if err != nil {
+		return nil, err
+	}
+	return c.db.GetAtRoot(stateDesc.RootPageID, documentID)
 }
 
 func indexKeysForSingleDefinition(documentID []byte, document any, idx IndexDefinition, opts CollectionOptions, prefix []byte, path []string) ([][]byte, error) {
-	value, found := extractIndexPathValue(document, path)
-	if !found || value == nil {
-		return nil, nil
-	}
-	values, err := normalizeIndexValues(value, idx.MultiKey, opts.AllowArrayValuesInIndex)
+	values, err := encodedIndexValuesForDefinition(document, idx, opts, path)
 	if err != nil {
 		return nil, err
 	}
 	out := make([][]byte, 0, len(values))
-	for _, v := range values {
-		encoded, err := encodeIndexScalar(v)
-		if err != nil {
-			return nil, err
-		}
+	for _, encoded := range values {
 		key, err := buildIndexEntryKeyWithPrefix(prefix, encoded, documentID)
 		if err != nil {
 			return nil, err
@@ -1371,6 +1436,7 @@ func (c *Collection) resetRuntimeCache() {
 		return
 	}
 	c.primary = nil
+	c.state = nil
 	c.indexes = nil
 }
 
@@ -1443,6 +1509,33 @@ func (c *Collection) secondaryRootDescriptor(idx IndexDefinition) (*CollectionRo
 		return nil, nil, err
 	}
 	return &runtime.desc, runtime.rootKey, nil
+}
+
+func (c *Collection) indexStateRootDescriptor() (*CollectionRootDescriptor, []byte, error) {
+	if c == nil {
+		return nil, nil, errCollectionNil
+	}
+	c.ensureRuntimeCacheFresh()
+	if c.state != nil {
+		return &c.state.desc, c.state.rootKey, nil
+	}
+	rootName, err := CollectionIndexStateRootName(c.meta.Name)
+	if err != nil {
+		return nil, nil, err
+	}
+	rootKey, err := SystemCollectionRootKey(rootName)
+	if err != nil {
+		return nil, nil, err
+	}
+	desc, err := loadRootDescriptorByKey(c.db, rootKey, rootName)
+	if err != nil {
+		return nil, nil, err
+	}
+	c.state = &collectionRootRuntime{
+		desc:    *desc,
+		rootKey: rootKey,
+	}
+	return &c.state.desc, c.state.rootKey, nil
 }
 
 func (c *Collection) primaryRootDescriptor() (*CollectionRootDescriptor, []byte, error) {
@@ -1558,7 +1651,7 @@ type collectionIndexRootMutation struct {
 	additions [][]byte
 }
 
-func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescriptor, primaryRootKey []byte, mutatePrimary func(batch.Interface) error, removals, additions [][]byte) error {
+func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescriptor, primaryRootKey []byte, mutatePrimary func(batch.Interface) error, documentID, stateValue []byte, deleteState bool, removals, additions [][]byte) error {
 	if c == nil {
 		return errCollectionNil
 	}
@@ -1569,7 +1662,8 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 	if err != nil {
 		return err
 	}
-	if len(indexMutations) == 0 {
+	hasStateMutation := deleteState || len(stateValue) > 0
+	if len(indexMutations) == 0 && !hasStateMutation {
 		newRootID, err := c.db.MutateRootWithFormat(primaryDesc.RootPageID, &primaryDesc.Format, false, mutatePrimary, func(sys batch.Interface, newRootID uint64) error {
 			return writeRootDescriptorUpdate(sys, primaryRootKey, primaryDesc, newRootID)
 		})
@@ -1580,15 +1674,33 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		return err
 	}
 
-	rootIDs := make([]uint64, 0, len(indexMutations)+1)
-	rootFormats := make([]*rootfmt.Format, 0, len(indexMutations)+1)
-	rootMutations := make([]func(batch.Interface) error, 0, len(indexMutations)+1)
-	rootUpdates := make([]collectionRootUpdate, 0, len(indexMutations)+1)
+	rootIDs := make([]uint64, 0, len(indexMutations)+2)
+	rootFormats := make([]*rootfmt.Format, 0, len(indexMutations)+2)
+	rootMutations := make([]func(batch.Interface) error, 0, len(indexMutations)+2)
+	rootUpdates := make([]collectionRootUpdate, 0, len(indexMutations)+2)
 	var publishedRootIDs []uint64
 	rootIDs = append(rootIDs, primaryDesc.RootPageID)
 	rootFormats = append(rootFormats, &primaryDesc.Format)
 	rootMutations = append(rootMutations, mutatePrimary)
 	rootUpdates = append(rootUpdates, collectionRootUpdate{desc: primaryDesc, rootKey: primaryRootKey})
+	if hasStateMutation {
+		stateDesc, stateRootKey, err := c.indexStateRootDescriptor()
+		if err != nil {
+			return err
+		}
+		rootIDs = append(rootIDs, stateDesc.RootPageID)
+		rootFormats = append(rootFormats, &stateDesc.Format)
+		rootMutations = append(rootMutations, func(root batch.Interface) error {
+			if deleteState {
+				return deleteDocumentOnBatch(root, documentID)
+			}
+			return setBytesOnBatch(root, documentID, stateValue)
+		})
+		rootUpdates = append(rootUpdates, collectionRootUpdate{
+			desc:    stateDesc,
+			rootKey: stateRootKey,
+		})
+	}
 
 	for i := range indexMutations {
 		indexMutation := indexMutations[i]

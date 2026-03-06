@@ -646,6 +646,13 @@ func CollectionPrimaryRootName(collection string) (string, error) {
 	return "collections:" + normalizeKeyPart(collection) + ":primary", nil
 }
 
+func CollectionIndexStateRootName(collection string) (string, error) {
+	if err := ValidateCollectionName(collection); err != nil {
+		return "", err
+	}
+	return "collections:" + normalizeKeyPart(collection) + ":index-state", nil
+}
+
 func CollectionIndexRootName(collection, indexName string) (string, error) {
 	if err := ValidateCollectionName(collection); err != nil {
 		return "", err
