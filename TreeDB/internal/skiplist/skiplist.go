@@ -726,13 +726,14 @@ func (it *Iterator) Domain() (start, end []byte) {
 
 type ReverseIterator struct {
 	sl    *SkipList
+	start []byte
 	end   []byte
 	curr  uint32
 	valid bool
 }
 
 func (s *SkipList) NewReverseIterator(start, end []byte) *ReverseIterator {
-	it := &ReverseIterator{sl: s, end: end}
+	it := &ReverseIterator{sl: s, start: start, end: end}
 	it.Seek(nil)
 	return it
 }
@@ -748,22 +749,26 @@ func (it *ReverseIterator) Seek(key []byte) {
 			it.curr = it.sl.findLessThan(it.end)
 		}
 		it.valid = it.curr != 0
+		it.clampStart()
 		return
 	}
 	pos := it.sl.seekGE(key)
 	if pos == 0 {
 		it.curr = it.sl.findLessThan(nil)
 		it.valid = it.curr != 0
+		it.clampStart()
 		return
 	}
 	k := it.sl.getKey(pos)
 	if bytes.Equal(k, key) {
 		it.curr = pos
 		it.valid = true
+		it.clampStart()
 		return
 	}
 	it.curr = it.sl.findLessThan(key)
 	it.valid = it.curr != 0
+	it.clampStart()
 }
 
 func (it *ReverseIterator) Next() {
@@ -773,6 +778,7 @@ func (it *ReverseIterator) Next() {
 	key := it.sl.getKey(it.curr)
 	it.curr = it.sl.findLessThan(key)
 	it.valid = it.curr != 0
+	it.clampStart()
 }
 
 func (it *ReverseIterator) Valid() bool { return it.valid }
@@ -837,4 +843,14 @@ func (it *ReverseIterator) ValueCopy(dst []byte) []byte {
 
 func (it *ReverseIterator) Error() error { return nil }
 
-func (it *ReverseIterator) Domain() (start, end []byte) { return nil, nil }
+func (it *ReverseIterator) Domain() (start, end []byte) { return it.start, it.end }
+
+func (it *ReverseIterator) clampStart() {
+	if !it.valid || it.start == nil {
+		return
+	}
+	if key := it.sl.getKey(it.curr); bytes.Compare(key, it.start) < 0 {
+		it.curr = 0
+		it.valid = false
+	}
+}

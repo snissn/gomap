@@ -1,7 +1,6 @@
 package caching
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -60,7 +59,7 @@ func collectLeafRefValueLogLiveIDs(p pageGetter, rootID uint64, live map[uint32]
 				stack = append(stack, childID)
 			}
 		default:
-			return errors.New("invalid page type")
+			return fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
 		}
 	}
 
