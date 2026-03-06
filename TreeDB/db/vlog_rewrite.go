@@ -1201,7 +1201,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if writer == nil || ridAlloc == nil {
 		return 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
-	if len(sourceIDs) == 0 {
+	if sourceIDs != nil && len(sourceIDs) == 0 {
 		return 0, nil
 	}
 	if ctx == nil {
