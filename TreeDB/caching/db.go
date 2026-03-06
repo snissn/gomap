@@ -5430,6 +5430,7 @@ var entrySliceLeases [entrySliceLeaseClassCount][][]batch.Entry
 // Entry slice pooling can retain very large backing arrays (up to maxEntryPoolCap).
 // Track pooled bytes and enforce a byte-budget to cap retention after spikes.
 var entrySlicePoolBytes atomic.Int64
+var entrySlicePoolLastGC atomic.Uint32
 var entrySlicePoolBudgetBytes int64 = computeEntrySlicePoolBudgetBytes()
 var entrySliceEntrySizeBytes int64 = int64(unsafe.Sizeof(batch.Entry{}))
 
@@ -5479,6 +5480,41 @@ func releaseEntrySlicePoolBytes(bytes int64) {
 	next := entrySlicePoolBytes.Add(-bytes)
 	if next < 0 {
 		// Counter can drift if sync.Pool drops objects at GC.
+		entrySlicePoolBytes.Store(0)
+	}
+}
+
+func noteEntrySlicePoolGC(numGC uint32) {
+	if numGC == 0 {
+		return
+	}
+	for {
+		last := entrySlicePoolLastGC.Load()
+		if last >= numGC {
+			return
+		}
+		if entrySlicePoolLastGC.CompareAndSwap(last, numGC) {
+			return
+		}
+	}
+}
+
+func maybeResetEntrySlicePoolBytesAfterGC() {
+	if entrySlicePoolBytes.Load() <= 0 {
+		return
+	}
+	numGC := batchArenaPoolNumGC()
+	last := entrySlicePoolLastGC.Load()
+	if last == numGC {
+		return
+	}
+	if last == 0 {
+		if entrySlicePoolLastGC.CompareAndSwap(0, numGC) {
+			entrySlicePoolBytes.Store(0)
+		}
+		return
+	}
+	if entrySlicePoolLastGC.CompareAndSwap(last, numGC) {
 		entrySlicePoolBytes.Store(0)
 	}
 }
@@ -5592,6 +5628,7 @@ func getEntrySlice(capacity int) []batch.Entry {
 			}
 		}
 	}
+	maybeResetEntrySlicePoolBytesAfterGC()
 	return make([]batch.Entry, 0, classCap)
 }
 
@@ -5599,15 +5636,16 @@ func putEntrySlice(entries []batch.Entry) {
 	if entries == nil {
 		return
 	}
+	full := entries[:cap(entries)]
+	clear(full)
 	if cap(entries) > maxEntryPoolCap {
 		return
 	}
+	noteEntrySlicePoolGC(batchArenaPoolNumGC())
 	idx, ok := entrySliceLeaseClassForCap(cap(entries))
 	if !ok {
 		return
 	}
-	full := entries[:cap(entries)]
-	clear(full)
 	leaseBytes := int64(cap(entries)) * entrySliceEntrySizeBytes
 	if !reserveEntrySlicePoolBytes(leaseBytes) {
 		return
