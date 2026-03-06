@@ -966,6 +966,46 @@ func TestValueLogRewritePlan_GroupedPointers_DedupLiveBytes(t *testing.T) {
 	}
 }
 
+func TestValueLogRewritePlan_NoSelectionKnobs_ReturnsTotalsOnly(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 245_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("z"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	plan, err := db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogRewritePlan: %v", err)
+	}
+	if len(plan.SourceFileIDs) != 0 {
+		t.Fatalf("expected no selected source segments without selection knobs, got %v", plan.SourceFileIDs)
+	}
+	if plan.SegmentsSelected != 0 {
+		t.Fatalf("SegmentsSelected=%d want 0", plan.SegmentsSelected)
+	}
+	if plan.SelectedBytesTotal != 0 || plan.SelectedBytesLive != 0 || plan.SelectedBytesStale != 0 {
+		t.Fatalf("expected zero selected-byte stats without selection knobs, got total=%d live=%d stale=%d", plan.SelectedBytesTotal, plan.SelectedBytesLive, plan.SelectedBytesStale)
+	}
+	if plan.BytesTotal <= 0 {
+		t.Fatalf("expected non-zero total bytes, got %d", plan.BytesTotal)
+	}
+}
+
 func readProjectedPointerByKey(t *testing.T, db *DB, key []byte) (page.ValuePtr, byte) {
 	t.Helper()
 	it, err := db.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
