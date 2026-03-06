@@ -4,6 +4,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
@@ -106,6 +107,10 @@ func (a *collectionManagerAdapter) MutateRootsWithFormatOps(sync bool, rootIDs [
 
 func (a *collectionManagerAdapter) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
 	return a.db.MutateRootsWithFormatIterators(sync, rootIDs, formats, rootIters, buildSystemOps)
+}
+
+func (a *collectionManagerAdapter) MutateRootsWithFormatTables(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootTables []memtable.Table, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	return a.db.MutateRootsWithFormatTables(sync, rootIDs, formats, rootTables, buildSystemOps)
 }
 
 func (a *collectionManagerAdapter) MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error) {

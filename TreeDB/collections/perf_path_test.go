@@ -13,23 +13,23 @@ import (
 
 type perfMockDB struct {
 	*atomicMockDB
-	failGetAtRoot        bool
-	failGetAtRootAppend  bool
-	failHasAtRoot        bool
-	failHasPrefixAtRoot  bool
-	failIteratorAtRoot   bool
-	getAtRootCalls       int
-	getAtRootRootIDs     []uint64
-	getAtRootAppendCalls int
-	getAtRootAppendRoots []uint64
-	hasAtRootCalls       int
-	hasManyAtRootCalls   int
-	hasPrefixAtRootCalls int
+	failGetAtRoot          bool
+	failGetAtRootAppend    bool
+	failHasAtRoot          bool
+	failHasPrefixAtRoot    bool
+	failIteratorAtRoot     bool
+	getAtRootCalls         int
+	getAtRootRootIDs       []uint64
+	getAtRootAppendCalls   int
+	getAtRootAppendRoots   []uint64
+	hasAtRootCalls         int
+	hasManyAtRootCalls     int
+	hasPrefixAtRootCalls   int
 	hasPrefixesAtRootCalls int
-	iteratorAtRootCalls  int
-	rootIteratorCalls    int
-	rootBulkOpsCalls     int
-	getSystemCalls       map[string]int
+	iteratorAtRootCalls    int
+	rootIteratorCalls      int
+	rootBulkOpsCalls       int
+	getSystemCalls         map[string]int
 }
 
 func newPerfMockDB() *perfMockDB {
