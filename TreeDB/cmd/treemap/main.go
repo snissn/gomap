@@ -539,8 +539,9 @@ func openBackendForVlogGC(dir string) (*treedbdb.DB, func() error, error) {
 		// When the main DB uses dict-compressed frames, backend open replays WAL
 		// by scanning value-log segments and validating dict IDs. Wire DictLookup
 		// from dictdb/ so recovery and GC can proceed.
-		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: true}
+		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: false}
 		applyPersistedFormatConfig(dictDir, &dictOpts)
+		dictOpts.DisableBackgroundPrune = true
 		// dictdb should not require dict lookup itself; force compression off in
 		// case a stale format.json is present.
 		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
