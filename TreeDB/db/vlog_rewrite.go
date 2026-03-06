@@ -56,11 +56,6 @@ type ValueLogRewritePlan struct {
 	SelectedBytesStale int64
 }
 
-type groupedRecordKey struct {
-	fileID uint32
-	start  uint64
-}
-
 // ValueLogRewriteOnlineOptions controls online rewrite behavior.
 type ValueLogRewriteOnlineOptions struct {
 	// BatchSize bounds pointer swaps per commit.
@@ -112,6 +107,11 @@ type rewriteCandidate struct {
 	oldPtr page.ValuePtr
 }
 
+type groupedRecordKey struct {
+	fileID uint32
+	start  uint64
+}
+
 type rewriteRIDAllocator struct {
 	next    uint64
 	reserve func(count int) (uint64, error)
@@ -125,11 +125,11 @@ func newRewriteRIDAllocator(start uint64, reserve func(count int) (uint64, error
 }
 
 func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
-	if count <= 0 {
-		return 0, nil
-	}
 	if a == nil {
 		return 0, fmt.Errorf("value-log rid allocator unavailable")
+	}
+	if count <= 0 {
+		return 0, nil
 	}
 	if a.reserve != nil {
 		start, err := a.reserve(count)
@@ -138,6 +138,9 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 		}
 		if start == 0 {
 			return 0, fmt.Errorf("value-log rid allocator returned rid 0")
+		}
+		if uint64(count-1) > ^uint64(0)-start {
+			return 0, fmt.Errorf("value-log rid space exhausted")
 		}
 		return start, nil
 	}
@@ -412,6 +415,7 @@ func groupedRecordKeyForPtr(ptr page.ValuePtr) (groupedRecordKey, error) {
 		start:  uint64(ptr.Offset - 4),
 	}, nil
 }
+
 func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
@@ -515,7 +519,7 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 			// Leaf pages stored in the pager have no children; outer-leaf-in-vlog
 			// mode should not encounter them, but handle gracefully.
 		default:
-			return errors.New("invalid page type")
+			return fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
 		}
 	}
 	return nil
@@ -530,10 +534,10 @@ func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]
 	}
 	// Dedup grouped-record live-byte accounting (LeafRef pointers are grouped).
 	if page.ValuePtrIsGrouped(ptr) {
-		if ptr.Offset < 4 {
-			return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+		k, err := groupedRecordKeyForPtr(ptr)
+		if err != nil {
+			return err
 		}
-		k := groupedRecordKey{fileID: ptr.FileID, start: ptr.Offset - 4}
 		seen := map[groupedRecordKey]struct{}(nil)
 		if seenGroupedRecords != nil {
 			seen = *seenGroupedRecords
@@ -792,6 +796,12 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		startRID, err := ridAlloc.Reserve(len(candidates))
 		if err != nil {
 			return err
+		}
+		if count := uint64(len(candidates)); count > 0 {
+			endRID := startRID + count - 1
+			if endRID < startRID || endRID == 0 {
+				return fmt.Errorf("value-log rid space exhausted")
+			}
 		}
 		for _, candidate := range candidates {
 			val, err := db.valueLogManager.Read(candidate.oldPtr)
@@ -1120,9 +1130,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		b := node.NewBuilderWithOptions(buf, page.PageTypeInternal, node.BuilderOptions{
-			InternalBaseDelta: n.InternalBaseDeltaEnabled(),
-		})
+		b := node.NewBuilder(buf, page.PageTypeInternal)
 		b.SetPageID(newID)
 		if low, high, ok, err := n.InternalFenceBounds(); err != nil {
 			return id, false, err
@@ -1169,6 +1177,9 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}
 	if writer == nil || ridAlloc == nil {
 		return 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
+	}
+	if len(sourceIDs) == 0 {
+		return 0, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
