@@ -115,6 +115,11 @@ var namedRootMemtableWriteHook struct {
 	fn func(rootID uint64, kind string, key []byte)
 }
 
+var namedRootOwnedWriteHook struct {
+	mu sync.RWMutex
+	fn func(kind string, key []byte)
+}
+
 func setNamedRootPublishTestHook(fn func(string) error) func() {
 	namedRootPublishHook.mu.Lock()
 	prev := namedRootPublishHook.fn
@@ -260,6 +265,27 @@ func runNamedRootMemtableWriteTestHook(rootID uint64, kind string, key []byte) {
 	namedRootMemtableWriteHook.mu.RUnlock()
 	if fn != nil {
 		fn(rootID, kind, key)
+	}
+}
+
+func setNamedRootOwnedWriteTestHook(fn func(kind string, key []byte)) func() {
+	namedRootOwnedWriteHook.mu.Lock()
+	prev := namedRootOwnedWriteHook.fn
+	namedRootOwnedWriteHook.fn = fn
+	namedRootOwnedWriteHook.mu.Unlock()
+	return func() {
+		namedRootOwnedWriteHook.mu.Lock()
+		namedRootOwnedWriteHook.fn = prev
+		namedRootOwnedWriteHook.mu.Unlock()
+	}
+}
+
+func runNamedRootOwnedWriteTestHook(kind string, key []byte) {
+	namedRootOwnedWriteHook.mu.RLock()
+	fn := namedRootOwnedWriteHook.fn
+	namedRootOwnedWriteHook.mu.RUnlock()
+	if fn != nil {
+		fn(kind, key)
 	}
 }
 
@@ -889,6 +915,19 @@ func (b *overlayEntryBatch) SetView(key, value []byte) error {
 	return b.Set(key, value)
 }
 
+func (b *overlayEntryBatch) SetOwnedBytes(key, value []byte) error {
+	if b.closed {
+		return batch.ErrBatchClosed
+	}
+	runNamedRootOwnedWriteTestHook("set_bytes", key)
+	b.entries = append(b.entries, batch.Entry{
+		Type:  batch.OpPut,
+		Key:   key,
+		Value: value,
+	})
+	return nil
+}
+
 func (b *overlayEntryBatch) SetAuto(key, value []byte) error {
 	return b.Set(key, value)
 }
@@ -910,6 +949,30 @@ func (b *overlayEntryBatch) Delete(key []byte) error {
 
 func (b *overlayEntryBatch) DeleteView(key []byte) error {
 	return b.Delete(key)
+}
+
+func (b *overlayEntryBatch) SetOwnedKey(key []byte) error {
+	if b.closed {
+		return batch.ErrBatchClosed
+	}
+	runNamedRootOwnedWriteTestHook("set_key", key)
+	b.entries = append(b.entries, batch.Entry{
+		Type: batch.OpPut,
+		Key:  key,
+	})
+	return nil
+}
+
+func (b *overlayEntryBatch) DeleteOwnedKey(key []byte) error {
+	if b.closed {
+		return batch.ErrBatchClosed
+	}
+	runNamedRootOwnedWriteTestHook("delete_key", key)
+	b.entries = append(b.entries, batch.Entry{
+		Type: batch.OpDelete,
+		Key:  key,
+	})
+	return nil
 }
 
 func (b *overlayEntryBatch) SetOps(ops []batch.Entry) error {
