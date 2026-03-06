@@ -51,7 +51,6 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	t.Cleanup(func() { _ = backend.Close() })
 
 	recorder := &rewriteRecordingBackend{DB: backend}
 
@@ -113,7 +112,6 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	t.Cleanup(func() { _ = backend.Close() })
 
 	recorder := &rewriteRecordingBackend{DB: backend}
 

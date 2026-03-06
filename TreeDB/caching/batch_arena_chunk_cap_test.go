@@ -22,7 +22,7 @@ func TestBatchArenaCopy_ChunkCapClamped(t *testing.T) {
 	// Force enough copied payload so the arena would previously grow beyond
 	// batchCopyArenaMaxRetain via exponential chunk doubling (8MB+ tail chunk),
 	// even though each individual Set() payload stays under the threshold.
-	value := bytes.Repeat([]byte{0xAB}, (1<<19)-1) // 512KB - 1; +1B key == 512KB total copy
+	value := bytes.Repeat([]byte{0xAB}, (1<<19)-1) // 512KiB - 1; +1B key == 512KiB total copy
 
 	b := db.NewBatchWithSize(0)
 	defer b.Close()

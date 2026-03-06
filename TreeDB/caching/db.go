@@ -4200,7 +4200,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	segments, _ := listNonEmptyLogSegments(walDir)
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
-	// RID here rather than risk reusing low RIDs after a clean reopen.
+	// RID here rather than risk reusing low RIDs after a clean reopen. Scanning
+	// only the newest value-log segment per lane keeps this bounded on large DBs.
 	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
 	if err != nil {
 		return nil, err
@@ -14861,7 +14862,7 @@ func (b *Batch) arenaCopy(n int) []byte {
 			chunkCap = n
 		}
 		// Avoid unbounded exponential growth once we reach the pooling limit. Large
-		// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MB)
+		// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MiB)
 		// that is mostly unused, inflating RSS. Only allow larger chunks when a
 		// *single* copy needs it.
 		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {

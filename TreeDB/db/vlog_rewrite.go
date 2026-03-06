@@ -875,7 +875,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// by LeafRef pointers even if all key/value pointers are rewritten. Move
 		// referenced leaf pages out of the selected source segments so cleanup can
 		// actually reclaim space.
-		if db.indexOuterLeavesInValueLog {
+		if restrictSource && db.indexOuterLeavesInValueLog && len(sourceIDs) > 0 {
 			copied, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, opts.SyncEachBatch)
 			if err != nil {
 				return stats, err
