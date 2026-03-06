@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/compress/zstd"
@@ -69,22 +70,6 @@ var valueLogKeyLeases [][][]byte
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolLastGC atomic.Uint32
-
-func maybeResetBatchArenaPoolBytesOnGCMiss() {
-	var stats runtime.MemStats
-	runtime.ReadMemStats(&stats)
-	gc := uint32(stats.NumGC)
-	for {
-		prev := batchArenaPoolLastGC.Load()
-		if prev == gc {
-			return
-		}
-		if batchArenaPoolLastGC.CompareAndSwap(prev, gc) {
-			batchArenaPoolBytes.Store(0)
-			return
-		}
-	}
-}
 
 func computeBatchArenaPoolBudgetBytes() int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
@@ -367,11 +352,6 @@ func getBatchArena(capacity int) []byte {
 				return buf[:0]
 			}
 		}
-	} else if batchArenaPoolBytes.Load() > 0 {
-		// sync.Pool may drop retained objects at GC; only clear the global estimate
-		// when a miss coincides with a new GC cycle so per-class misses do not
-		// undercount still-live buffers held in other class pools.
-		maybeResetBatchArenaPoolBytesOnGCMiss()
 	}
 	return make([]byte, 0, classCap)
 }
@@ -5383,6 +5363,62 @@ var opMergeHeapPool sync.Pool
 var entrySliceLeaseMu sync.Mutex
 var entrySliceLeases [entrySliceLeaseClassCount][][]batch.Entry
 
+// Entry slice pooling can retain very large backing arrays (up to maxEntryPoolCap).
+// Track pooled bytes and enforce a byte-budget to cap retention after spikes.
+var entrySlicePoolBytes atomic.Int64
+var entrySlicePoolBudgetBytes int64 = computeEntrySlicePoolBudgetBytes()
+var entrySliceEntrySizeBytes int64 = int64(unsafe.Sizeof(batch.Entry{}))
+
+func computeEntrySlicePoolBudgetBytes() int64 {
+	// Keep enough slices to amortize allocations without letting `sync.Pool` and
+	// lease buckets accumulate unbounded heap during restore spikes.
+	const perPBudgetBytes = int64(16 << 20) // 16MiB per P
+	const minBudgetBytes = int64(64 << 20)
+	const maxBudgetBytes = int64(512 << 20)
+	procs := runtime.GOMAXPROCS(0)
+	if procs < 1 {
+		procs = 1
+	}
+	budget := int64(procs) * perPBudgetBytes
+	if budget < minBudgetBytes {
+		budget = minBudgetBytes
+	}
+	if budget > maxBudgetBytes {
+		budget = maxBudgetBytes
+	}
+	return budget
+}
+
+func reserveEntrySlicePoolBytes(bytes int64) bool {
+	if bytes <= 0 {
+		return true
+	}
+	budget := entrySlicePoolBudgetBytes
+	if budget <= 0 {
+		return false
+	}
+	for {
+		held := entrySlicePoolBytes.Load()
+		if held+bytes > budget {
+			return false
+		}
+		if entrySlicePoolBytes.CompareAndSwap(held, held+bytes) {
+			return true
+		}
+	}
+}
+
+func releaseEntrySlicePoolBytes(bytes int64) {
+	if bytes <= 0 {
+		return
+	}
+	next := entrySlicePoolBytes.Add(-bytes)
+	if next < 0 {
+		// Counter can drift if sync.Pool drops objects at GC.
+		entrySlicePoolBytes.Store(0)
+	}
+}
+
 func entrySliceLeaseClassForLen(capacity int) (idx int, classCap int, ok bool) {
 	if capacity < 0 {
 		capacity = 0
@@ -5464,11 +5500,17 @@ func getEntrySlice(capacity int) []batch.Entry {
 			entrySliceLeases[bucket][n-1] = nil
 			entrySliceLeases[bucket] = leases[:n-1]
 			entrySliceLeaseMu.Unlock()
+			leaseBytes := int64(cap(s)) * entrySliceEntrySizeBytes
+			releaseEntrySlicePoolBytes(leaseBytes)
 			if cap(s) >= capacity {
 				return s[:0]
 			}
 			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
-				entrySlicePools[capIdx].Put(s[:0])
+				// The slice is too small for this request; return it to the pool if
+				// we're within budget so smaller requests can reuse it.
+				if reserveEntrySlicePoolBytes(leaseBytes) {
+					entrySlicePools[capIdx].Put(s[:0])
+				}
 			}
 			return make([]batch.Entry, 0, classCap)
 		}
@@ -5480,6 +5522,7 @@ func getEntrySlice(capacity int) []batch.Entry {
 			if !ok {
 				continue
 			}
+			releaseEntrySlicePoolBytes(int64(cap(s)) * entrySliceEntrySizeBytes)
 			if cap(s) >= capacity && cap(s) <= maxReuseCap {
 				return s[:0]
 			}
@@ -5495,10 +5538,14 @@ func putEntrySlice(entries []batch.Entry) {
 	if cap(entries) > maxEntryPoolCap {
 		return
 	}
-	full := entries[:cap(entries)]
-	clear(full)
 	idx, ok := entrySliceLeaseClassForCap(cap(entries))
 	if !ok {
+		return
+	}
+	full := entries[:cap(entries)]
+	clear(full)
+	leaseBytes := int64(cap(entries)) * entrySliceEntrySizeBytes
+	if !reserveEntrySlicePoolBytes(leaseBytes) {
 		return
 	}
 	entries = entries[:0]
@@ -13655,6 +13702,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.cache.entry_slice.pool_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
