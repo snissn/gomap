@@ -1189,13 +1189,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	tracker := newAllocTracker(idx.allocator)
 	leafCtx := &leafRefRewriteCtx{
-		ctx:          ctx,
-		db:           db,
-		pager:        idx.pager,
-		alloc:        tracker,
-		writer:       writer,
-		ridAlloc:     ridAlloc,
-		sourceIDs:    sourceIDs,
+		ctx:       ctx,
+		db:        db,
+		pager:     idx.pager,
+		alloc:     tracker,
+		writer:    writer,
+		ridAlloc:  ridAlloc,
+		sourceIDs: sourceIDs,
 	}
 
 	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)
