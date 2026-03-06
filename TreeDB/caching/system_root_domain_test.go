@@ -170,3 +170,45 @@ func TestSystemRootDomain_FlushPublishesAndClearsMutableState(t *testing.T) {
 		t.Fatalf("backend GetSystem=%q want %q", got, []byte("v1"))
 	}
 }
+
+func TestFlushSome_FlushesSystemRootWithoutQueuedMemtables(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{FlushThreshold: 1 << 20})
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	defer cache.Close()
+
+	if err := cache.ApplySystemOverlayEntriesOwned([]batch.Entry{{
+		Type:  batch.OpPut,
+		Key:   []byte("sys:users"),
+		Value: []byte("v1"),
+	}}); err != nil {
+		t.Fatalf("apply system entries: %v", err)
+	}
+	if !cache.PendingSystemOverlay() {
+		t.Fatalf("expected pending system root-domain state before flush")
+	}
+
+	flushed := cache.flushSome(false, 1, 0)
+	if flushed != 1 {
+		t.Fatalf("flushSome flushed=%d want 1", flushed)
+	}
+	if cache.PendingSystemOverlay() {
+		t.Fatalf("expected system root-domain state drained by flushSome")
+	}
+
+	got, err := backend.GetSystem([]byte("sys:users"))
+	if err != nil {
+		t.Fatalf("backend GetSystem: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v1")) {
+		t.Fatalf("backend GetSystem=%q want %q", got, []byte("v1"))
+	}
+}
