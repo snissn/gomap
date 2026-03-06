@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -2231,13 +2232,17 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
-// valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
-// that may be referenced by in-memory state (mutable + queued memtables).
+// valueLogInUsePaths returns a best-effort snapshot of value-log (or WAL)
+// segment paths that are currently in use by the active lanes plus any queued
+// memtable snapshots.
 //
-// This is intentionally narrower than valueLogRetainedPaths: retained paths can
-// include segments that are still referenced in the backend index (and thus
-// candidates for rewrite), while in-use paths are only about protecting against
-// concurrent writers while online maintenance is running.
+// IMPORTANT: This snapshot is intentionally narrower than
+// valueLogRetainedPaths and is derived only from the "current" lane/WAL paths
+// and queued paths. It does not attempt to track segments that rotated while a
+// mutable memtable was still active, so callers must not assume it includes
+// every segment that might still be referenced by in-memory state. It is
+// intended only as a best-effort aid for protecting against concurrent writers
+// during online maintenance.
 func (db *DB) valueLogInUsePaths() []string {
 	if db == nil || !db.valueLogEnabled() {
 		return nil
@@ -4192,6 +4197,13 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
 	segments, _ := listNonEmptyLogSegments(walDir)
+	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
+	// Until we persist nextRID separately, opening must recover the max on-disk
+	// RID here rather than risk reusing low RIDs after a clean reopen.
+	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
+	if err != nil {
+		return nil, err
+	}
 	maxLaneID := -1
 	maxWALSeq := make(map[int]int)
 	maxVlogSeq := make(map[int]int)
@@ -4632,6 +4644,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		autoCheckpointWriteCh: make(chan struct{}, 1),
 		lanes:                 lanes,
 		flushLaneMu:           make([]sync.Mutex, len(lanes)),
+	}
+	if maxExistingRID > 0 {
+		db.nextRID.Store(maxExistingRID)
 	}
 	db.rebuildGenerationLaneSets()
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
@@ -8891,13 +8906,13 @@ func (db *DB) vlogGenerationRewriteBudgetCapBytes() int64 {
 	}
 	targets := int64(0)
 	if db.valueLogGenerationHotTarget > 0 {
-		targets += db.valueLogGenerationHotTarget
+		targets = addClampInt64(targets, db.valueLogGenerationHotTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationWarmTarget > 0 {
-		targets += db.valueLogGenerationWarmTarget
+		targets = addClampInt64(targets, db.valueLogGenerationWarmTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationColdTarget > 0 {
-		targets += db.valueLogGenerationColdTarget
+		targets = addClampInt64(targets, db.valueLogGenerationColdTarget, maxPositiveInt64)
 	}
 	if targets > capBytes {
 		capBytes = targets
@@ -8917,29 +8932,72 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 		return
 	}
 	nowNs := now.UnixNano()
-	prevNs := db.vlogGenerationRewriteBudgetLastUnixNano.Swap(nowNs)
-	if prevNs <= 0 || nowNs <= prevNs {
+	var prevNs int64
+	for {
+		prevNs = db.vlogGenerationRewriteBudgetLastUnixNano.Load()
+		if prevNs > 0 && nowNs <= prevNs {
+			return
+		}
+		if db.vlogGenerationRewriteBudgetLastUnixNano.CompareAndSwap(prevNs, nowNs) {
+			break
+		}
+	}
+	if prevNs <= 0 {
 		return
 	}
 	deltaNs := nowNs - prevNs
-	add := (budgetBps * deltaNs) / int64(time.Second)
+	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
+	add := mulDivClampInt64(budgetBps, deltaNs, int64(time.Second), capBytes)
 	if add <= 0 {
 		return
 	}
-	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
 	for {
 		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
-		next := cur + add
-		if next > capBytes {
-			next = capBytes
-		}
-		if next < 0 {
-			next = 0
-		}
+		next := addClampInt64(cur, add, capBytes)
 		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
 			return
 		}
 	}
+}
+
+const maxPositiveInt64 = int64(^uint64(0) >> 1)
+
+func addClampInt64(cur, add, limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	if cur <= 0 {
+		cur = 0
+	}
+	if add <= 0 {
+		if cur > limit {
+			return limit
+		}
+		return cur
+	}
+	if cur >= limit || cur > limit-add {
+		return limit
+	}
+	return cur + add
+}
+func mulDivClampInt64(a, b, div, cap int64) int64 {
+	if a <= 0 || b <= 0 || div <= 0 || cap <= 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	var q uint64
+	if hi == 0 {
+		q = lo / uint64(div)
+	} else {
+		if hi >= uint64(div) {
+			return cap
+		}
+		q, _ = bits.Div64(hi, lo, uint64(div))
+	}
+	if q > uint64(cap) {
+		return cap
+	}
+	return int64(q)
 }
 
 func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
@@ -9097,6 +9155,17 @@ planned:
 			SyncEachBatch:   false,
 			MaxSegmentBytes: db.valueLogGenerationWarmTarget,
 			ProtectedPaths:  db.valueLogInUsePaths(),
+			ReserveRIDs: func(count int) (uint64, error) {
+				if count <= 0 {
+					return 0, nil
+				}
+				end := db.nextRID.Add(uint64(count))
+				start := end - uint64(count) + 1
+				if start == 0 || end < start {
+					return 0, fmt.Errorf("value-log rid space exhausted")
+				}
+				return start, nil
+			},
 		}
 		if haveRewritePlan {
 			rewriteOpts.SourceFileIDs = append([]uint32(nil), rewritePlan.SourceFileIDs...)
@@ -15949,6 +16018,42 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 		}
 	}
 	return segments, nonEmptyBytes
+}
+
+func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
+	var maxRID uint64
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
+			continue
+		}
+		fileID, err := valuelog.EncodeFileID(uint32(seg.lane), uint32(seg.seq))
+		if err != nil {
+			return 0, err
+		}
+		reader, err := valuelog.NewReader(seg.path, fileID)
+		if err != nil {
+			return 0, err
+		}
+		reader.DisableValueDecode()
+		for {
+			rid, _, _, err := reader.ReadNext()
+			if err == nil {
+				if rid > maxRID {
+					maxRID = rid
+				}
+				continue
+			}
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
+			_ = reader.Close()
+			return 0, err
+		}
+		if err := reader.Close(); err != nil {
+			return 0, err
+		}
+	}
+	return maxRID, nil
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {

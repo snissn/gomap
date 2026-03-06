@@ -1,6 +1,8 @@
 package caching
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -100,5 +102,161 @@ func TestShouldRunVlogGenerationIndexVacuum_Cooldown(t *testing.T) {
 	ok := db.shouldRunVlogGenerationIndexVacuum(vlogGenerationVacuumTriggerRewriteBytes, now)
 	if ok {
 		t.Fatalf("expected index vacuum to be blocked by cooldown")
+	}
+}
+
+func TestVlogGenerationRewriteBudgetAccruesAtConfiguredRate(t *testing.T) {
+	db := &DB{
+		valueLogRewriteTriggerBytes:  4096,
+		valueLogGenerationHotTarget:  1024,
+		valueLogGenerationWarmTarget: 1024,
+		valueLogGenerationColdTarget: 1024,
+		valueLogRewriteBudgetBytes:   512,
+		valueLogGenerationPolicy:     uint8(backenddb.ValueLogGenerationHotWarmCold),
+	}
+	start := time.Unix(100, 0)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(start.UnixNano())
+	db.vlogGenerationAccrueRewriteBudget(start.Add(3500 * time.Millisecond))
+	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), int64(1792); got != want {
+		t.Fatalf("tokens=%d want=%d", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteBudgetCapEnforcedOnLargeElapsed(t *testing.T) {
+	db := &DB{
+		valueLogRewriteTriggerBytes:  1024,
+		valueLogGenerationHotTarget:  128,
+		valueLogGenerationWarmTarget: 128,
+		valueLogGenerationColdTarget: 128,
+		valueLogRewriteBudgetBytes:   1 << 62,
+		valueLogGenerationPolicy:     uint8(backenddb.ValueLogGenerationHotWarmCold),
+	}
+	start := time.Unix(100, 0)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(start.UnixNano())
+	db.vlogGenerationAccrueRewriteBudget(start.Add(24 * time.Hour))
+	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), int64(1024); got != want {
+		t.Fatalf("tokens=%d want=%d", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteBudgetIgnoresBackwardClock(t *testing.T) {
+	db := &DB{
+		valueLogRewriteTriggerBytes:  1024,
+		valueLogGenerationHotTarget:  256,
+		valueLogGenerationWarmTarget: 256,
+		valueLogGenerationColdTarget: 256,
+		valueLogRewriteBudgetBytes:   512,
+		valueLogGenerationPolicy:     uint8(backenddb.ValueLogGenerationHotWarmCold),
+	}
+	start := time.Unix(100, 0)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(start.UnixNano())
+	db.vlogGenerationAccrueRewriteBudget(start.Add(-time.Second))
+	if got := db.vlogGenerationRewriteBudgetTokensBytes.Load(); got != 0 {
+		t.Fatalf("tokens after backward clock=%d want=0", got)
+	}
+	if got := db.vlogGenerationRewriteBudgetLastUnixNano.Load(); got != start.UnixNano() {
+		t.Fatalf("last timestamp moved backwards: got=%d want=%d", got, start.UnixNano())
+	}
+	db.vlogGenerationAccrueRewriteBudget(start.Add(2 * time.Second))
+	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), int64(1024); got != want {
+		t.Fatalf("tokens after forward clock=%d want=%d", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteBudgetCapSaturatesTargets(t *testing.T) {
+	db := &DB{
+		valueLogRewriteTriggerBytes:  1,
+		valueLogGenerationHotTarget:  maxPositiveInt64 - 16,
+		valueLogGenerationWarmTarget: 32,
+		valueLogGenerationColdTarget: 64,
+	}
+	if got, want := db.vlogGenerationRewriteBudgetCapBytes(), maxPositiveInt64; got != want {
+		t.Fatalf("budget cap=%d want=%d", got, want)
+	}
+}
+
+type rewriteBudgetRecordingBackend struct {
+	*backenddb.DB
+
+	mu              sync.Mutex
+	rewriteOpts     backenddb.ValueLogRewriteOnlineOptions
+	rewriteCalls    int
+	rewriteResponse backenddb.ValueLogRewriteStats
+}
+
+func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
+	b.mu.Lock()
+	b.rewriteOpts = opts
+	b.rewriteCalls++
+	stats := b.rewriteResponse
+	b.mu.Unlock()
+	return stats, nil
+}
+
+func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRewriteOnlineOptions, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.rewriteOpts, b.rewriteCalls
+}
+
+func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 128, BytesAfter: 64, RecordsCopied: 1},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	value := make([]byte, 2048)
+	for i := 0; i < 4; i++ {
+		b := db.NewBatch()
+		key := []byte{byte('k'), byte('0' + i)}
+		if err := b.Set(key, value); err != nil {
+			_ = b.Close()
+			t.Fatalf("set %d: %v", i, err)
+		}
+		if err := b.Write(); err != nil {
+			_ = b.Close()
+			t.Fatalf("write %d: %v", i, err)
+		}
+		_ = b.Close()
+	}
+
+	initialTokens := int64(1024)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(initialTokens)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if opts.MaxSourceBytes <= 0 {
+		t.Fatalf("MaxSourceBytes=%d want > 0", opts.MaxSourceBytes)
+	}
+	if opts.MaxSourceBytes > initialTokens {
+		t.Fatalf("MaxSourceBytes=%d initialTokens=%d", opts.MaxSourceBytes, initialTokens)
+	}
+	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), initialTokens-opts.MaxSourceBytes; got != want {
+		t.Fatalf("tokens after rewrite=%d want=%d", got, want)
 	}
 }
