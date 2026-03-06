@@ -220,6 +220,10 @@ func setNamedRootBulkPublishOpsTestHook(fn func(int)) func() {
 	return caching.SetNamedRootBulkPublishOpsTestHook(fn)
 }
 
+func setNamedRootBulkPublishIteratorsTestHook(fn func(int)) func() {
+	return caching.SetNamedRootBulkPublishIteratorsTestHook(fn)
+}
+
 func runNamedRootOwnedWriteTestHook(kind string, key []byte) {
 	namedRootOwnedWriteHook.mu.RLock()
 	fn := namedRootOwnedWriteHook.fn

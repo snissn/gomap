@@ -86,6 +86,17 @@ type namedRootMergeIterator struct {
 	end            []byte
 }
 
+type namedRootStableIterator struct {
+	iterator.UnsafeIterator
+}
+
+func (namedRootStableIterator) StableUnsafeIteratorSlices() bool { return true }
+
+type batchEntryIterator struct {
+	entries []batch.Entry
+	index   int
+}
+
 var namedRootPublishHook struct {
 	mu sync.RWMutex
 	fn func(string) error
@@ -127,6 +138,11 @@ var namedRootOwnedWriteHook struct {
 }
 
 var namedRootBulkPublishOpsHook struct {
+	mu sync.RWMutex
+	fn func(int)
+}
+
+var namedRootBulkPublishIteratorsHook struct {
 	mu sync.RWMutex
 	fn func(int)
 }
@@ -343,6 +359,31 @@ func runNamedRootBulkPublishOpsTestHook(rootCount int) {
 	namedRootBulkPublishOpsHook.mu.RLock()
 	fn := namedRootBulkPublishOpsHook.fn
 	namedRootBulkPublishOpsHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootCount)
+	}
+}
+
+func setNamedRootBulkPublishIteratorsTestHook(fn func(int)) func() {
+	namedRootBulkPublishIteratorsHook.mu.Lock()
+	prev := namedRootBulkPublishIteratorsHook.fn
+	namedRootBulkPublishIteratorsHook.fn = fn
+	namedRootBulkPublishIteratorsHook.mu.Unlock()
+	return func() {
+		namedRootBulkPublishIteratorsHook.mu.Lock()
+		namedRootBulkPublishIteratorsHook.fn = prev
+		namedRootBulkPublishIteratorsHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootBulkPublishIteratorsTestHook(fn func(int)) func() {
+	return setNamedRootBulkPublishIteratorsTestHook(fn)
+}
+
+func runNamedRootBulkPublishIteratorsTestHook(rootCount int) {
+	namedRootBulkPublishIteratorsHook.mu.RLock()
+	fn := namedRootBulkPublishIteratorsHook.fn
+	namedRootBulkPublishIteratorsHook.mu.RUnlock()
 	if fn != nil {
 		fn(rootCount)
 	}
@@ -742,38 +783,22 @@ func (db *DB) flushNamedRootOverlaysLocked(bridge BackendDirectBridge, sync bool
 
 	type rootFlushSnapshot struct {
 		state         *namedRootOverlayState
-		entries       []batch.Entry
+		iter          iterator.UnsafeIterator
 		descriptorRaw []byte
 	}
 	snapshots := make([]rootFlushSnapshot, 0, len(states))
 	for _, state := range states {
-		var entries []batch.Entry
+		var flushIter iterator.UnsafeIterator
 		if state.prefixState != nil {
 			iter := state.prefixState.NewIterator(nil, nil)
-			entries = make([]batch.Entry, 0, state.prefixState.Len())
-			for iter.Valid() {
-				next := batch.Entry{
-					Key: append([]byte(nil), iter.UnsafeKey()...),
-				}
-				if iter.IsDeleted() {
-					next.Type = batch.OpDelete
-				} else {
-					next.Type = batch.OpPut
-					next.Value = append([]byte(nil), iter.UnsafeValue()...)
-				}
-				entries = append(entries, next)
-				iter.Next()
-			}
-			if err := iter.Error(); err != nil {
-				_ = iter.Close()
-				return err
-			}
-			if err := iter.Close(); err != nil {
-				return err
+			if stable, ok := state.prefixState.(memtable.StableUnsafeIteratorTable); ok && stable.StableUnsafeIteratorSlices() {
+				flushIter = namedRootStableIterator{UnsafeIterator: iter}
+			} else {
+				flushIter = iter
 			}
 		} else {
 			runNamedRootLegacyFlushSnapshotTestHook(state.virtualRootID)
-			entries = make([]batch.Entry, 0, len(state.entries))
+			entries := make([]batch.Entry, 0, len(state.entries))
 			keys := make([]string, 0, len(state.entries))
 			for key := range state.entries {
 				keys = append(keys, key)
@@ -790,17 +815,24 @@ func (db *DB) flushNamedRootOverlaysLocked(bridge BackendDirectBridge, sync bool
 				}
 				entries = append(entries, next)
 			}
+			flushIter = &batchEntryIterator{entries: entries}
 		}
 		raw, err := db.GetSystem(state.rootKey)
 		if err != nil {
+			if flushIter != nil {
+				_ = flushIter.Close()
+			}
 			return err
 		}
 		if len(raw) == 0 {
+			if flushIter != nil {
+				_ = flushIter.Close()
+			}
 			return fmt.Errorf("treedb: missing cached root descriptor for %q", state.rootKey)
 		}
 		snapshots = append(snapshots, rootFlushSnapshot{
 			state:         state,
-			entries:       entries,
+			iter:          flushIter,
 			descriptorRaw: raw,
 		})
 	}
@@ -809,7 +841,7 @@ func (db *DB) flushNamedRootOverlaysLocked(bridge BackendDirectBridge, sync bool
 	err := func(bridge BackendDirectBridge) error {
 		rootIDs := make([]uint64, len(snapshots))
 		formats := make([]*rootfmt.Format, len(snapshots))
-		rootOps := make([][]batch.Entry, len(snapshots))
+		rootIters := make([]iterator.UnsafeIterator, len(snapshots))
 		for i := range snapshots {
 			snapshot := snapshots[i]
 			rootIDs[i] = snapshot.state.baseRootID
@@ -817,11 +849,12 @@ func (db *DB) flushNamedRootOverlaysLocked(bridge BackendDirectBridge, sync bool
 				format := snapshot.state.format
 				formats[i] = &format
 			}
-			rootOps[i] = snapshot.entries
+			rootIters[i] = snapshot.iter
 		}
 
 		runNamedRootBulkPublishOpsTestHook(len(rootIDs))
-		_, err := bridge.MutateRootsWithFormatOps(sync, rootIDs, formats, rootOps, func(newRootIDs []uint64) ([]batch.Entry, error) {
+		runNamedRootBulkPublishIteratorsTestHook(len(rootIDs))
+		_, err := bridge.MutateRootsWithFormatIterators(sync, rootIDs, formats, rootIters, func(newRootIDs []uint64) ([]batch.Entry, error) {
 			if len(newRootIDs) != len(snapshots) {
 				return nil, fmt.Errorf("treedb: named-root checkpoint publish mismatch")
 			}
@@ -992,6 +1025,77 @@ func namedRootKeyInRange(key, start, end []byte) bool {
 	}
 	return true
 }
+
+func (it *batchEntryIterator) Valid() bool {
+	return it != nil && it.index < len(it.entries)
+}
+
+func (it *batchEntryIterator) Next() {
+	if it != nil && it.index < len(it.entries) {
+		it.index++
+	}
+}
+
+func (it *batchEntryIterator) Seek(key []byte) {
+	if it == nil {
+		return
+	}
+	it.index = 0
+	for it.index < len(it.entries) && bytes.Compare(it.entries[it.index].Key, key) < 0 {
+		it.index++
+	}
+}
+
+func (it *batchEntryIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.index].Key
+}
+
+func (it *batchEntryIterator) UnsafeValue() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.index].Value
+}
+
+func (it *batchEntryIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.Valid() {
+		return nil, page.ValuePtr{}, 0
+	}
+	entry := it.entries[it.index]
+	switch {
+	case entry.Type == batch.OpDelete:
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	case entry.IsPtr:
+		return entry.Value, entry.ValuePtr, node.FlagPointer
+	default:
+		return entry.Value, page.ValuePtr{}, node.FlagInline
+	}
+}
+
+func (it *batchEntryIterator) Key() []byte { return it.UnsafeKey() }
+
+func (it *batchEntryIterator) Value() []byte { return it.UnsafeValue() }
+
+func (it *batchEntryIterator) KeyCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeKey()...)
+}
+
+func (it *batchEntryIterator) ValueCopy(dst []byte) []byte {
+	return append(dst[:0], it.UnsafeValue()...)
+}
+
+func (it *batchEntryIterator) IsDeleted() bool {
+	return it.Valid() && it.entries[it.index].Type == batch.OpDelete
+}
+
+func (it *batchEntryIterator) Error() error { return nil }
+
+func (it *batchEntryIterator) Close() error { return nil }
+
+func (it *batchEntryIterator) Domain() (start, end []byte) { return nil, nil }
 
 func newOverlayEntryBatch(backing []batch.Entry) overlayEntryBatch {
 	return overlayEntryBatch{entries: backing[:0]}
