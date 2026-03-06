@@ -58,6 +58,60 @@ func BenchmarkCollectionInsertWithSecondaryIndexes(b *testing.B) {
 	}
 }
 
+func BenchmarkCollectionInsertBatchProvidedID(b *testing.B) {
+	_, collection, _ := openFocusedBenchmarkCollection(
+		b,
+		"bench_insert_batch_provided",
+	)
+
+	const batchSize = 256
+	ids := make([][]byte, b.N*batchSize)
+	docs := make([][]byte, b.N*batchSize)
+	for idx := range ids {
+		ids[idx] = []byte(fmt.Sprintf("u-%d", idx))
+		docs[idx] = []byte(`{"name":"ada"}`)
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(batchSize, "docs/op")
+	b.ResetTimer()
+	for batchIdx := 0; batchIdx < b.N; batchIdx++ {
+		start := batchIdx * batchSize
+		end := start + batchSize
+		if _, err := collection.InsertBatch(ids[start:end], docs[start:end]); err != nil {
+			b.Fatalf("insert batch provided: %v", err)
+		}
+	}
+}
+
+func BenchmarkCollectionInsertBatchWithSecondaryIndexes(b *testing.B) {
+	_, collection, _ := openFocusedBenchmarkCollection(
+		b,
+		"bench_insert_batch_secondary_indexes",
+		collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true},
+		collections.IndexDefinition{Name: "city_idx", Field: "city"},
+	)
+
+	const batchSize = 256
+	ids := make([][]byte, b.N*batchSize)
+	docs := make([][]byte, b.N*batchSize)
+	for idx := range ids {
+		ids[idx] = []byte(fmt.Sprintf("u-%d", idx))
+		docs[idx] = []byte(fmt.Sprintf(`{"email":"user-%d@example.com","city":"city-%d"}`, idx, idx%32))
+	}
+
+	b.ReportAllocs()
+	b.ReportMetric(batchSize, "docs/op")
+	b.ResetTimer()
+	for batchIdx := 0; batchIdx < b.N; batchIdx++ {
+		start := batchIdx * batchSize
+		end := start + batchSize
+		if _, err := collection.InsertBatch(ids[start:end], docs[start:end]); err != nil {
+			b.Fatalf("insert batch secondary indexes: %v", err)
+		}
+	}
+}
+
 func BenchmarkCollectionDeleteWithSecondaryIndexes(b *testing.B) {
 	_, collection, checkpoint := openFocusedBenchmarkCollection(
 		b,
