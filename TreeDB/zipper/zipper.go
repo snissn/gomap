@@ -29,6 +29,36 @@ type LeafPageReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
 
+type leafPageAppender interface {
+	ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error)
+}
+
+type leafRefCacheEntry struct {
+	data   []byte
+	pooled bool
+}
+
+var leafRefPageBufferPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, page.PageSize)
+	},
+}
+
+func getLeafRefPageBuffer() []byte {
+	buf, _ := leafRefPageBufferPool.Get().([]byte)
+	if cap(buf) != page.PageSize {
+		return make([]byte, 0, page.PageSize)
+	}
+	return buf[:0]
+}
+
+func putLeafRefPageBuffer(buf []byte) {
+	if cap(buf) != page.PageSize {
+		return
+	}
+	leafRefPageBufferPool.Put(buf[:0])
+}
+
 type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
@@ -36,8 +66,9 @@ type Zipper struct {
 	outerLeavesInValueLog bool
 	leafPageLog           LeafPageLog
 	leafPageReader        LeafPageReader
+	leafPageAppender      leafPageAppender
 	leafRefCacheMu        sync.RWMutex
-	leafRefCache          map[uint64][]byte
+	leafRefCache          map[uint64]leafRefCacheEntry
 
 	leafReserveBytes          int
 	internalReserveBytes      int
@@ -370,6 +401,7 @@ func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 		outerLeavesInValueLog:     z.outerLeavesInValueLog,
 		leafPageLog:               z.leafPageLog,
 		leafPageReader:            z.leafPageReader,
+		leafPageAppender:          z.leafPageAppender,
 		leafReserveBytes:          z.leafReserveBytes,
 		internalReserveBytes:      z.internalReserveBytes,
 		piggybackCompaction:       z.piggybackCompaction,
@@ -424,6 +456,11 @@ func (z *Zipper) SetLeafPageLog(log LeafPageLog) {
 
 func (z *Zipper) SetLeafPageReader(reader LeafPageReader) {
 	z.leafPageReader = reader
+	if appender, ok := reader.(leafPageAppender); ok {
+		z.leafPageAppender = appender
+	} else {
+		z.leafPageAppender = nil
+	}
 }
 
 func (z *Zipper) SetAdaptiveLeafEncoding(enabled bool) {
@@ -599,10 +636,15 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 
 	if z != nil && z.outerLeavesInValueLog {
 		z.leafRefCacheMu.Lock()
-		z.leafRefCache = make(map[uint64][]byte)
+		z.leafRefCache = make(map[uint64]leafRefCacheEntry)
 		z.leafRefCacheMu.Unlock()
 		defer func() {
 			z.leafRefCacheMu.Lock()
+			for _, entry := range z.leafRefCache {
+				if entry.pooled {
+					putLeafRefPageBuffer(entry.data)
+				}
+			}
 			z.leafRefCache = nil
 			z.leafRefCacheMu.Unlock()
 		}()
@@ -734,9 +776,10 @@ func (z *Zipper) loadNode(id uint64) (node.Node, bool, error) {
 	if ptr, ok := page.DecodeLeafRef(id); ok {
 		if z.outerLeavesInValueLog {
 			z.leafRefCacheMu.RLock()
-			data, cached := z.leafRefCache[id]
+			entry, cached := z.leafRefCache[id]
 			z.leafRefCacheMu.RUnlock()
 			if cached {
+				data := entry.data
 				if len(data) != page.PageSize {
 					return node.Node{}, false, errors.New("zipper: cached leaf page has invalid size")
 				}
@@ -750,15 +793,51 @@ func (z *Zipper) loadNode(id uint64) (node.Node, bool, error) {
 		if z.leafPageReader == nil {
 			return node.Node{}, false, errors.New("zipper: missing leaf page reader")
 		}
-		data, err := z.leafPageReader.ReadUnsafe(ptr)
-		if err != nil {
-			return node.Node{}, false, err
+		cacheLoad := z.outerLeavesInValueLog && z.leafRefCache != nil && z.leafPageAppender != nil
+		var (
+			data   []byte
+			err    error
+			pooled bool
+		)
+		if cacheLoad {
+			buf := getLeafRefPageBuffer()
+			data, err = z.leafPageAppender.ReadUnsafeAppend(ptr, buf[:0])
+			if err != nil {
+				putLeafRefPageBuffer(buf)
+				return node.Node{}, false, err
+			}
+			pooled = true
+		} else {
+			data, err = z.leafPageReader.ReadUnsafe(ptr)
+			if err != nil {
+				return node.Node{}, false, err
+			}
 		}
 		if len(data) != page.PageSize {
+			if pooled {
+				putLeafRefPageBuffer(data)
+			}
 			return node.Node{}, false, errors.New("zipper: leaf page has invalid size")
+		}
+		if z.outerLeavesInValueLog {
+			z.leafRefCacheMu.Lock()
+			if z.leafRefCache != nil {
+				z.leafRefCache[id] = leafRefCacheEntry{data: data, pooled: pooled}
+			} else if pooled {
+				putLeafRefPageBuffer(data)
+			}
+			z.leafRefCacheMu.Unlock()
+		} else if pooled {
+			putLeafRefPageBuffer(data)
 		}
 		n := node.NewNodeView(data)
 		if n.Type() != page.PageTypeLeaf {
+			if pooled {
+				z.leafRefCacheMu.Lock()
+				delete(z.leafRefCache, id)
+				z.leafRefCacheMu.Unlock()
+				putLeafRefPageBuffer(data)
+			}
 			return node.Node{}, false, errors.New("zipper: leafref resolved to non-leaf page")
 		}
 		return n, false, nil
@@ -790,7 +869,7 @@ func (z *Zipper) persistLeafPage(b *node.Builder) (uint64, error) {
 	}
 	z.leafRefCacheMu.Lock()
 	if z.leafRefCache != nil {
-		z.leafRefCache[leafID] = b.Data()
+		z.leafRefCache[leafID] = leafRefCacheEntry{data: b.Data()}
 	}
 	z.leafRefCacheMu.Unlock()
 	return leafID, nil

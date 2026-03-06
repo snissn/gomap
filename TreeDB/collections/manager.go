@@ -62,10 +62,26 @@ type collectionIndexRuntime struct {
 	path    []string
 }
 
+type documentScratchHandle struct {
+	buf []byte
+}
+
+const (
+	documentScratchInitCap = 4 << 10
+	documentScratchMaxCap  = 256 << 10
+)
+
+var documentScratchPool = sync.Pool{
+	New: func() any {
+		return &documentScratchHandle{buf: make([]byte, 0, documentScratchInitCap)}
+	},
+}
+
 type collectionDB interface {
 	Get(key []byte) ([]byte, error)
 	HasAtRoot(rootID uint64, key []byte) (bool, error)
 	GetAtRoot(rootID uint64, key []byte) ([]byte, error)
+	GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error)
 	Set(key, value []byte) error
 	Delete(key []byte) error
 	GetSystem(key []byte) ([]byte, error)
@@ -85,6 +101,26 @@ type collectionDB interface {
 }
 
 type systemIterator = iterator.UnsafeIterator
+
+func getDocumentScratch() *documentScratchHandle {
+	handle := documentScratchPool.Get().(*documentScratchHandle)
+	if cap(handle.buf) == 0 {
+		handle.buf = make([]byte, 0, documentScratchInitCap)
+	}
+	return handle
+}
+
+func putDocumentScratch(handle *documentScratchHandle, buf []byte) {
+	if handle == nil {
+		return
+	}
+	if cap(buf) > documentScratchMaxCap {
+		handle.buf = nil
+		return
+	}
+	handle.buf = buf[:0]
+	documentScratchPool.Put(handle)
+}
 
 func NewCollectionManager(database collectionDB) *CollectionManager {
 	return &CollectionManager{
@@ -531,13 +567,19 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 		return nil, err
 	}
 	var existing []byte
+	var existingScratch *documentScratchHandle
 	if exists {
-		existing, err = c.db.GetAtRoot(rootDesc.RootPageID, key)
+		existingScratch = getDocumentScratch()
+		existing, err = c.db.GetAtRootAppend(rootDesc.RootPageID, key, existingScratch.buf[:0])
 		if err != nil {
+			putDocumentScratch(existingScratch, existingScratch.buf)
 			return nil, err
 		}
 	}
 	removals, additions, err := c.indexMutationForUpsert(persistedID, existing, document)
+	if existingScratch != nil {
+		putDocumentScratch(existingScratch, existing)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -595,14 +637,18 @@ func (c *Collection) Delete(documentID []byte) error {
 		}
 		return c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimaryDelete, nil, nil)
 	}
-	existing, err := c.db.GetAtRoot(rootDesc.RootPageID, key)
+	existingScratch := getDocumentScratch()
+	existing, err := c.db.GetAtRootAppend(rootDesc.RootPageID, key, existingScratch.buf[:0])
 	if err != nil {
+		putDocumentScratch(existingScratch, existingScratch.buf)
 		return err
 	}
 	if len(existing) == 0 {
+		putDocumentScratch(existingScratch, existing)
 		return nil
 	}
 	entries, err := c.indexEntriesForDocument(documentID, existing)
+	putDocumentScratch(existingScratch, existing)
 	if err != nil {
 		return err
 	}

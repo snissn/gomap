@@ -48,6 +48,27 @@ func (db *DB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	return val, err
 }
 
+// GetAtRootAppend appends the value for a key in the specified root page to
+// dst and returns the grown slice. If the key is not found, it returns dst, nil.
+func (db *DB) GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
+	if rootID == 0 {
+		return dst, nil
+	}
+	snap, err := db.acquireSnapshotWithRoot(rootID)
+	if err != nil {
+		return dst, err
+	}
+	defer snap.Close()
+	val, err := snap.GetAppend(key, dst)
+	if err == tree.ErrKeyNotFound {
+		return dst, nil
+	}
+	if err != nil {
+		return dst, err
+	}
+	return val, nil
+}
+
 // HasAtRoot reports whether a key exists in the specified root page.
 func (db *DB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 	if rootID == 0 {
