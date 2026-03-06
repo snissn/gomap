@@ -12,11 +12,14 @@ type perfMockDB struct {
 	failGetAtRoot        bool
 	failGetAtRootAppend  bool
 	failHasAtRoot        bool
+	failIteratorAtRoot   bool
 	getAtRootCalls       int
 	getAtRootRootIDs     []uint64
 	getAtRootAppendCalls int
 	getAtRootAppendRoots []uint64
 	hasAtRootCalls       int
+	hasPrefixAtRootCalls int
+	iteratorAtRootCalls  int
 	getSystemCalls       map[string]int
 }
 
@@ -33,6 +36,8 @@ func (d *perfMockDB) resetCounters() {
 	d.getAtRootAppendCalls = 0
 	d.getAtRootAppendRoots = d.getAtRootAppendRoots[:0]
 	d.hasAtRootCalls = 0
+	d.hasPrefixAtRootCalls = 0
+	d.iteratorAtRootCalls = 0
 	clear(d.getSystemCalls)
 }
 
@@ -65,6 +70,19 @@ func (d *perfMockDB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 		return false, errors.New("unexpected HasAtRoot call")
 	}
 	return d.atomicMockDB.HasAtRoot(rootID, key)
+}
+
+func (d *perfMockDB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
+	d.hasPrefixAtRootCalls++
+	return d.atomicMockDB.HasPrefixAtRoot(rootID, prefix)
+}
+
+func (d *perfMockDB) IteratorAtRoot(rootID uint64, start, end []byte) (systemIterator, error) {
+	d.iteratorAtRootCalls++
+	if d.failIteratorAtRoot {
+		return nil, errors.New("unexpected IteratorAtRoot call")
+	}
+	return d.atomicMockDB.IteratorAtRoot(rootID, start, end)
 }
 
 func TestInsertWithoutIndexes_SkipsExistingDocumentRead(t *testing.T) {
@@ -198,6 +216,37 @@ func TestInsertWithIndexes_UsesHasBeforeLoadingExistingDocument(t *testing.T) {
 	}
 	if d.getAtRootCalls != 0 {
 		t.Fatalf("expected indexed insert to skip GetAtRoot when document is absent, got %d calls", d.getAtRootCalls)
+	}
+}
+
+func TestInsertWithUniqueIndexes_UsesPrefixProbeInsteadOfIteratorConflictScan(t *testing.T) {
+	d := newPerfMockDB()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+
+	d.resetCounters()
+	d.failIteratorAtRoot = true
+	if _, err := col.Insert([]byte("u2"), []byte(`{"email":"ada@example.com"}`)); err == nil {
+		t.Fatalf("expected duplicate unique-key conflict")
+	}
+	if d.hasPrefixAtRootCalls == 0 {
+		t.Fatalf("expected unique indexed insert to probe with HasPrefixAtRoot")
+	}
+	if d.iteratorAtRootCalls != 0 {
+		t.Fatalf("expected unique indexed insert to avoid IteratorAtRoot, got %d calls", d.iteratorAtRootCalls)
 	}
 }
 

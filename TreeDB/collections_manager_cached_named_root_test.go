@@ -177,6 +177,112 @@ func TestCachedCollectionsInsert_SecondaryRootsBufferedUntilCheckpoint(t *testin
 	}
 }
 
+func TestCachedCollectionsUniqueConflict_BufferedWithoutOverlayIterator(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+
+	bufferedIteratorCalls := 0
+	restore := setNamedRootBufferedIteratorTestHook(func(rootID uint64, start, end []byte) {
+		bufferedIteratorCalls++
+	})
+	defer restore()
+
+	if _, err := col.Insert([]byte("u2"), []byte(`{"email":"ada@example.com"}`)); err == nil {
+		t.Fatalf("expected duplicate unique-key conflict")
+	}
+	if bufferedIteratorCalls != 0 {
+		t.Fatalf("expected cached duplicate unique conflict to avoid bufferedIteratorAtRoot, got %d calls", bufferedIteratorCalls)
+	}
+}
+
+func TestCachedCollectionsUniqueUpsertSameDocument_SameValueNoConflictBeforeCheckpoint(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"hnl"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com","city":"sea"}`)); err != nil {
+		t.Fatalf("same-document upsert before checkpoint: %v", err)
+	}
+}
+
+func TestCachedCollectionsDeleteThenReuseUniqueValue_BeforeCheckpoint(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+	if err := col.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete before checkpoint: %v", err)
+	}
+	if _, err := col.Insert([]byte("u2"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("reuse unique value before checkpoint: %v", err)
+	}
+}
+
 func TestCachedCollectionsDelete_NamedRootTombstonesBufferedUntilCheckpoint(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
