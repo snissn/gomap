@@ -275,6 +275,8 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 
 // ResetWithOptions reinitializes an existing builder instance for reuse.
 func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts BuilderOptions) {
+	fenceLow := b.internalFenceLow[:0]
+	fenceHigh := b.internalFenceHigh[:0]
 	b.ReleaseScratch()
 
 	leafPrefix := opts.LeafPrefixCompression
@@ -291,6 +293,8 @@ func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts Builde
 		leafColumnarV2:        leafColumnarV2,
 		leafPackedValuePtr:    opts.PackedValuePtr,
 		internalBaseDelta:     opts.InternalBaseDelta,
+		internalFenceLow:      fenceLow,
+		internalFenceHigh:     fenceHigh,
 	}
 	if pType == page.PageTypeLeaf && opts.LeafColumnar {
 		if leafPrefix {
