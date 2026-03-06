@@ -104,6 +104,41 @@ func TestBatchArenaPoolAccountingMissResetsAfterGC(t *testing.T) {
 	}
 }
 
+func TestPutBatchArenaBudgetResetsAfterGC(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	origNumGC := batchArenaPoolNumGC
+	defer func() { batchArenaPoolNumGC = origNumGC }()
+
+	var fakeNumGC uint32 = 11
+	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+
+	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
+	if !ok {
+		t.Fatal("batchArenaClassForLen failed")
+	}
+	budget := currentBatchArenaPoolBudgetBytes()
+	if budget <= int64(classCap) {
+		t.Fatalf("budget=%d want > classCap=%d", budget, classCap)
+	}
+
+	// Simulate sync.Pool being cleared by GC while the byte counter stayed high.
+	batchArenaPoolBytes.Store(budget)
+	batchArenaPoolLastGC.Store(fakeNumGC)
+	fakeNumGC++
+
+	putBatchArena(make([]byte, 0, classCap))
+
+	if got := batchArenaPoolBytes.Load(); got != int64(classCap) {
+		t.Fatalf("batchArenaPoolBytes after GC-aware put=%d want %d", got, classCap)
+	}
+	if got := batchArenaPoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("batchArenaPoolLastGC=%d want %d", got, fakeNumGC)
+	}
+}
+
 func TestBatchArenaPoolBudgetDoesNotOvercount(t *testing.T) {
 	batchArenaPoolTestMu.Lock()
 	defer batchArenaPoolTestMu.Unlock()

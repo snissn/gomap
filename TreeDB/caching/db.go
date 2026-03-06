@@ -434,6 +434,7 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
+	maybeResetBatchArenaPoolBytesAfterGC()
 	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
 		noteEpoch := false
