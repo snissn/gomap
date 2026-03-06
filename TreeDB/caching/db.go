@@ -16014,6 +16014,10 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 	return segments, nonEmptyBytes
 }
 
+func isTruncatedValueLogScanError(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	var maxRID uint64
 	for _, seg := range segments {
@@ -16037,7 +16041,7 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 				}
 				continue
 			}
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			if isTruncatedValueLogScanError(err) {
 				break
 			}
 			_ = reader.Close()

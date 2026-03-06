@@ -125,11 +125,11 @@ func newRewriteRIDAllocator(start uint64, reserve func(count int) (uint64, error
 }
 
 func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
-	if count <= 0 {
-		return 0, nil
-	}
 	if a == nil {
 		return 0, fmt.Errorf("value-log rid allocator unavailable")
+	}
+	if count <= 0 {
+		return 0, nil
 	}
 	if a.reserve != nil {
 		start, err := a.reserve(count)
@@ -138,6 +138,9 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 		}
 		if start == 0 {
 			return 0, fmt.Errorf("value-log rid allocator returned rid 0")
+		}
+		if uint64(count-1) > ^uint64(0)-start {
+			return 0, fmt.Errorf("value-log rid space exhausted")
 		}
 		return start, nil
 	}
@@ -793,6 +796,12 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		startRID, err := ridAlloc.Reserve(len(candidates))
 		if err != nil {
 			return err
+		}
+		if count := uint64(len(candidates)); count > 0 {
+			endRID := startRID + count - 1
+			if endRID < startRID || endRID == 0 {
+				return fmt.Errorf("value-log rid space exhausted")
+			}
 		}
 		for _, candidate := range candidates {
 			val, err := db.valueLogManager.Read(candidate.oldPtr)
