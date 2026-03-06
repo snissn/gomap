@@ -47,6 +47,11 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
 
 	const valueSize = 16 << 10
 	base := bytes.Repeat([]byte("compressible-"), valueSize/len("compressible-")+1)[:valueSize]
@@ -108,6 +113,7 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+	db = nil
 
 	// This mirrors treemap's previous behavior: backend open without DictLookup
 	// fails when WAL/value-log segments contain dict-compressed frames.
