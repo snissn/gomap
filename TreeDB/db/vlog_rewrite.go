@@ -133,11 +133,11 @@ func validateRewriteRIDRange(start uint64, count int) error {
 }
 
 func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
-	if count <= 0 {
-		return 0, nil
-	}
 	if a == nil {
 		return 0, fmt.Errorf("value-log rid allocator unavailable")
+	}
+	if count <= 0 {
+		return 0, nil
 	}
 	if a.reserve != nil {
 		start, err := a.reserve(count)
@@ -147,6 +147,11 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 		if err := validateRewriteRIDRange(start, count); err != nil {
 			return 0, err
 		}
+		end := start + uint64(count) - 1
+		if a.next != 0 && start < a.next {
+			return 0, fmt.Errorf("value-log rid allocator returned overlapping range [%d,%d], need >= %d", start, end, a.next)
+		}
+		a.next = end + 1
 		return start, nil
 	}
 	start := a.next
@@ -162,6 +167,17 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 
 func (a *rewriteRIDAllocator) Next() (uint64, error) {
 	return a.Reserve(1)
+}
+
+func groupedRecordKeyForPtr(ptr page.ValuePtr) (groupedRecordKey, error) {
+	if ptr.Offset < 4 {
+		return groupedRecordKey{}, fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+	}
+	return groupedRecordKey{fileID: ptr.FileID, start: uint64(ptr.Offset - 4)}, nil
+}
+
+func formatValueLogPtr(ptr page.ValuePtr) string {
+	return fmt.Sprintf("file=%d offset=%d grouped=%t", ptr.FileID, ptr.Offset, page.ValuePtrIsGrouped(ptr))
 }
 
 // ValueLogRewriteLocalityPolicy controls pointer rewrite ordering.
@@ -428,10 +444,10 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 		}
 
 		if page.ValuePtrIsGrouped(ptr) {
-			if ptr.Offset < 4 {
-				return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+			k, err := groupedRecordKeyForPtr(ptr)
+			if err != nil {
+				return err
 			}
-			k := groupedRecordKey{fileID: ptr.FileID, start: ptr.Offset - 4}
 			seen := map[groupedRecordKey]struct{}(nil)
 			if seenGroupedRecords != nil {
 				seen = *seenGroupedRecords

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -86,6 +87,22 @@ func TestParseValueLogAuditFileID_AcceptsLegacyAndLaneNames(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("parseValueLogAuditFileID(%q)=%d want %d", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestScanValueLogRIDs_ReportsTruncatedSegments(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	if err := os.WriteFile(path, []byte{1, 2, 3}, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	report, err := scanValueLogRIDs([]valueLogSegmentAudit{{Name: filepath.Base(path), Path: path, Bytes: 3}})
+	if err != nil {
+		t.Fatalf("scanValueLogRIDs: %v", err)
+	}
+	if report.TruncatedSegments != 1 {
+		t.Fatalf("TruncatedSegments=%d want 1", report.TruncatedSegments)
 	}
 }
 
