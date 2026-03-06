@@ -14698,11 +14698,11 @@ func (db *DB) NewBatch() *Batch {
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	size = backenddb.NormalizePublicBatchReserveHint(size)
+	reserveHint := backenddb.NormalizePublicBatchReserveHint(size)
 	return &Batch{
 		db:             db,
-		entries:        db.getBatchEntries(size),
-		copyArenaCap:   db.batchCopyArenaInitCap(size),
+		entries:        db.getBatchEntries(reserveHint),
+		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
 		streamEligible: true,
 	}
 }

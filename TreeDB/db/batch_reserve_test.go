@@ -36,8 +36,8 @@ func TestBatchReserveNilSafe(t *testing.T) {
 
 func TestNormalizePublicBatchReserveHint_PreservesSmallEntryHints(t *testing.T) {
 	const hint = 512
-	if got := normalizePublicBatchReserveHint(hint); got != hint {
-		t.Fatalf("normalizePublicBatchReserveHint(%d)=%d want %d", hint, got, hint)
+	if got := NormalizePublicBatchReserveHint(hint); got != hint {
+		t.Fatalf("NormalizePublicBatchReserveHint(%d)=%d want %d", hint, got, hint)
 	}
 }
 
@@ -47,20 +47,20 @@ func TestNormalizePublicBatchReserveHint_ConvertsLargeByteBudgets(t *testing.T) 
 	if sizeHint%publicBatchHintBytesPerEntry != 0 {
 		want++
 	}
-	if got := normalizePublicBatchReserveHint(sizeHint); got != want {
-		t.Fatalf("normalizePublicBatchReserveHint(%d)=%d want %d", sizeHint, got, want)
+	if got := NormalizePublicBatchReserveHint(sizeHint); got != want {
+		t.Fatalf("NormalizePublicBatchReserveHint(%d)=%d want %d", sizeHint, got, want)
 	}
 }
 
 func TestNormalizePublicBatchReserveHint_HandlesEdgeCases(t *testing.T) {
-	if got := normalizePublicBatchReserveHint(-1); got != 0 {
-		t.Fatalf("normalizePublicBatchReserveHint(-1)=%d want 0", got)
+	if got := NormalizePublicBatchReserveHint(-1); got != 0 {
+		t.Fatalf("NormalizePublicBatchReserveHint(-1)=%d want 0", got)
 	}
-	if got := normalizePublicBatchReserveHint(0); got != 0 {
-		t.Fatalf("normalizePublicBatchReserveHint(0)=%d want 0", got)
+	if got := NormalizePublicBatchReserveHint(0); got != 0 {
+		t.Fatalf("NormalizePublicBatchReserveHint(0)=%d want 0", got)
 	}
-	if got := normalizePublicBatchReserveHint(int(^uint(0) >> 1)); got != publicBatchReserveEntriesMax {
-		t.Fatalf("normalizePublicBatchReserveHint(maxint)=%d want %d", got, publicBatchReserveEntriesMax)
+	if got := NormalizePublicBatchReserveHint(int(^uint(0) >> 1)); got != publicBatchReserveEntriesMax {
+		t.Fatalf("NormalizePublicBatchReserveHint(maxint)=%d want %d", got, publicBatchReserveEntriesMax)
 	}
 }
 
@@ -70,8 +70,8 @@ func TestNewBatchWithSize_NormalizesLargePublicHint(t *testing.T) {
 	defer func() { _ = b.Close() }()
 
 	got := testBatchEntriesCap(b.batch)
-	if got < normalizePublicBatchReserveHint(100_000) {
-		t.Fatalf("internal batch cap=%d want >= %d", got, normalizePublicBatchReserveHint(100_000))
+	if got < NormalizePublicBatchReserveHint(100_000) {
+		t.Fatalf("internal batch cap=%d want >= %d", got, NormalizePublicBatchReserveHint(100_000))
 	}
 	if got >= 100_000 {
 		t.Fatalf("internal batch cap=%d want < %d", got, 100_000)
