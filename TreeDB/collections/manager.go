@@ -482,6 +482,60 @@ func (m *CollectionManager) allocateAutoID(name string) ([]byte, error) {
 	return out, nil
 }
 
+func (m *CollectionManager) allocateAutoIDs(name string, count int) ([][]byte, error) {
+	if m == nil {
+		return nil, errCollectionManagerNil
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	if err := ValidateCollectionName(name); err != nil {
+		return nil, err
+	}
+	seqKey, err := SystemCollectionIDSequenceKey(name)
+	if err != nil {
+		return nil, err
+	}
+
+	m.seqMu.Lock()
+	defer m.seqMu.Unlock()
+
+	state, ok := m.autoSeq[name]
+	if !ok {
+		state = autoIDState{}
+	}
+	if !state.initialized {
+		encoded, err := m.db.GetSystem(seqKey)
+		if err != nil {
+			return nil, err
+		}
+		var last uint64
+		if len(encoded) > 0 {
+			if len(encoded) != autoIDBytesLen {
+				return nil, errors.New("collections: corrupted auto-id sequence")
+			}
+			last = binary.BigEndian.Uint64(encoded)
+		}
+		state.lastID = last
+		state.initialized = true
+	}
+
+	out := make([][]byte, count)
+	nextID := state.lastID
+	for i := 0; i < count; i++ {
+		nextID++
+		encoded := make([]byte, autoIDBytesLen)
+		binary.BigEndian.PutUint64(encoded, nextID)
+		out[i] = encoded
+	}
+	if err := m.db.SetSystem(seqKey, out[len(out)-1]); err != nil {
+		return nil, err
+	}
+	state.lastID = nextID
+	m.autoSeq[name] = state
+	return out, nil
+}
+
 func (m *CollectionManager) clearSequenceState(name string) {
 	m.seqMu.Lock()
 	defer m.seqMu.Unlock()
@@ -621,6 +675,159 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	return persistedID, nil
 }
 
+func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if err := c.refreshMeta(); err != nil {
+		return nil, err
+	}
+	if len(documents) == 0 {
+		return nil, nil
+	}
+	if c.db == nil {
+		return nil, errCollectionManagerNil
+	}
+
+	resolvedIDs, err := c.resolveBatchInsertIDs(ids, len(documents))
+	if err != nil {
+		return nil, err
+	}
+	rootDesc, rootKey, err := c.primaryRootDescriptor()
+	if err != nil {
+		return nil, err
+	}
+
+	seenIDs := make(map[string]struct{}, len(resolvedIDs))
+	primaryOps := make([]batch.Entry, 0, len(documents))
+	for i := range documents {
+		documentID := resolvedIDs[i]
+		if _, exists := seenIDs[string(documentID)]; exists {
+			return nil, fmt.Errorf("collections: duplicate document id in batch")
+		}
+		seenIDs[string(documentID)] = struct{}{}
+		key, err := c.documentKey(documentID)
+		if err != nil {
+			return nil, err
+		}
+		exists, err := c.db.HasAtRoot(rootDesc.RootPageID, key)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, fmt.Errorf("collections: document already exists")
+		}
+		primaryOps = append(primaryOps, batch.Entry{
+			Type:  batch.OpPut,
+			Key:   key,
+			Value: documents[i],
+		})
+	}
+
+	rootIDs := make([]uint64, 0, len(c.meta.Indexes)+2)
+	rootFormats := make([]*rootfmt.Format, 0, len(c.meta.Indexes)+2)
+	rootOps := make([][]batch.Entry, 0, len(c.meta.Indexes)+2)
+	rootUpdates := make([]collectionRootUpdate, 0, len(c.meta.Indexes)+2)
+	rootIDs = append(rootIDs, rootDesc.RootPageID)
+	rootFormats = append(rootFormats, &rootDesc.Format)
+	rootOps = append(rootOps, primaryOps)
+	rootUpdates = append(rootUpdates, collectionRootUpdate{desc: rootDesc, rootKey: rootKey})
+
+	if len(c.meta.Indexes) > 0 {
+		stateDesc, stateRootKey, err := c.indexStateRootDescriptor()
+		if err != nil {
+			return nil, err
+		}
+		stateOps := make([]batch.Entry, 0, len(documents))
+		indexOpsByName := make(map[string][]batch.Entry, len(c.meta.Indexes))
+		seenUniquePrefixes := make(map[string]string, len(documents)*len(c.meta.Indexes))
+
+		for i := range documents {
+			documentID := resolvedIDs[i]
+			state, err := c.indexStateForDocument(documents[i])
+			if err != nil {
+				return nil, err
+			}
+			stateRaw, err := encodeDocumentIndexState(state)
+			if err != nil {
+				return nil, err
+			}
+			stateOps = append(stateOps, batch.Entry{
+				Type:  batch.OpPut,
+				Key:   documentID,
+				Value: stateRaw,
+			})
+
+			for _, idx := range c.meta.Indexes {
+				values := state[idx.Name]
+				if len(values) == 0 {
+					continue
+				}
+				runtime, err := c.indexRuntime(idx)
+				if err != nil {
+					return nil, err
+				}
+				ops := indexOpsByName[idx.Name]
+				for _, encoded := range values {
+					key, err := buildIndexEntryKeyWithPrefix(runtime.prefix, encoded, documentID)
+					if err != nil {
+						return nil, err
+					}
+					if idx.Unique {
+						if len(key) < len(documentID) || !bytes.HasSuffix(key, documentID) {
+							return nil, fmt.Errorf("collections: malformed index key")
+						}
+						valuePrefix := key[:len(key)-len(documentID)]
+						batchKey := string(valuePrefix)
+						if existingID, ok := seenUniquePrefixes[batchKey]; ok && existingID != string(documentID) {
+							return nil, fmt.Errorf("collections: unique index %q conflict", idx.Name)
+						}
+						seenUniquePrefixes[batchKey] = string(documentID)
+						hasPrefix, err := c.db.HasPrefixAtRoot(runtime.desc.RootPageID, valuePrefix)
+						if err != nil {
+							return nil, err
+						}
+						if hasPrefix {
+							return nil, fmt.Errorf("collections: unique index %q conflict", idx.Name)
+						}
+					}
+					ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key})
+				}
+				if len(ops) > 0 {
+					indexOpsByName[idx.Name] = ops
+				}
+			}
+		}
+
+		rootIDs = append(rootIDs, stateDesc.RootPageID)
+		rootFormats = append(rootFormats, &stateDesc.Format)
+		rootOps = append(rootOps, stateOps)
+		rootUpdates = append(rootUpdates, collectionRootUpdate{desc: stateDesc, rootKey: stateRootKey})
+		for _, idx := range c.meta.Indexes {
+			ops := indexOpsByName[idx.Name]
+			if len(ops) == 0 {
+				continue
+			}
+			runtime, err := c.indexRuntime(idx)
+			if err != nil {
+				return nil, err
+			}
+			rootIDs = append(rootIDs, runtime.desc.RootPageID)
+			rootFormats = append(rootFormats, &runtime.desc.Format)
+			rootOps = append(rootOps, ops)
+			rootUpdates = append(rootUpdates, collectionRootUpdate{
+				desc:    &runtime.desc,
+				rootKey: runtime.rootKey,
+			})
+		}
+	}
+
+	if err := c.publishRootOps(rootIDs, rootFormats, rootOps, rootUpdates); err != nil {
+		return nil, err
+	}
+	return resolvedIDs, nil
+}
+
 func (c *Collection) Get(documentID []byte) ([]byte, error) {
 	if c == nil {
 		return nil, errCollectionNil
@@ -711,6 +918,36 @@ func (c *Collection) Delete(documentID []byte) error {
 
 func (c *Collection) Upsert(documentID, document []byte) ([]byte, error) {
 	return c.Insert(documentID, document)
+}
+
+func (c *Collection) resolveBatchInsertIDs(ids [][]byte, count int) ([][]byte, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	switch c.meta.Options.IDMode {
+	case idModeCallerProvided:
+		if len(ids) != count {
+			return nil, fmt.Errorf("collections: caller-provided batch ids length mismatch")
+		}
+		out := make([][]byte, count)
+		for i := 0; i < count; i++ {
+			if err := requireDocumentID(ids[i]); err != nil {
+				return nil, err
+			}
+			out[i] = append([]byte(nil), ids[i]...)
+		}
+		return out, nil
+	case idModeAuto:
+		if c.mgr == nil {
+			return nil, errCollectionManagerNil
+		}
+		return c.mgr.allocateAutoIDs(c.meta.Name, count)
+	default:
+		return nil, fmt.Errorf("collections: unsupported id mode %d", c.meta.Options.IDMode)
+	}
 }
 
 func (c *Collection) documentKey(documentID []byte) ([]byte, error) {
@@ -1755,7 +1992,6 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 	rootFormats := make([]*rootfmt.Format, 0, len(indexMutations)+2)
 	rootOps := make([][]batch.Entry, 0, len(indexMutations)+2)
 	rootUpdates := make([]collectionRootUpdate, 0, len(indexMutations)+2)
-	var publishedRootIDs []uint64
 	rootIDs = append(rootIDs, primaryDesc.RootPageID)
 	rootFormats = append(rootFormats, &primaryDesc.Format)
 	rootOps = append(rootOps, primaryOps)
@@ -1796,17 +2032,29 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		})
 	}
 
-	_, err = c.db.MutateRootsWithFormatOps(false, rootIDs, rootFormats, rootOps, func(newRootIDs []uint64) ([]batch.Entry, error) {
+	return c.publishRootOps(rootIDs, rootFormats, rootOps, rootUpdates)
+}
+
+func (c *Collection) publishRootOps(rootIDs []uint64, rootFormats []*rootfmt.Format, rootOps [][]batch.Entry, rootUpdates []collectionRootUpdate) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionManagerNil
+	}
+	var publishedRootIDs []uint64
+	_, err := c.db.MutateRootsWithFormatOps(false, rootIDs, rootFormats, rootOps, func(newRootIDs []uint64) ([]batch.Entry, error) {
 		publishedRootIDs = append(publishedRootIDs[:0], newRootIDs...)
 		return buildRootDescriptorEntries(rootUpdates, newRootIDs)
 	})
-	if err == nil {
-		for i := range rootUpdates {
-			rootUpdates[i].desc.RootPageID = publishedRootIDs[i]
-		}
-		c.cacheVersion = c.db.SystemRootVersion()
+	if err != nil {
+		return err
 	}
-	return err
+	for i := range rootUpdates {
+		rootUpdates[i].desc.RootPageID = publishedRootIDs[i]
+	}
+	c.cacheVersion = c.db.SystemRootVersion()
+	return nil
 }
 
 func (c *Collection) indexRootMutations(removals, additions [][]byte) ([]collectionIndexRootMutation, error) {
