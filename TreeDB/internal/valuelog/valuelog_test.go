@@ -1,6 +1,7 @@
 package valuelog
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -17,6 +18,35 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
+
+func TestWriterFlushFlushesBufferedFileWriter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.bw = bufio.NewWriterSize(writer.f, 16)
+	if _, err := writer.bw.WriteString("abc"); err != nil {
+		_ = writer.Close()
+		t.Fatalf("buffered write: %v", err)
+	}
+	if err := writer.Flush(); err != nil {
+		_ = writer.Close()
+		t.Fatalf("flush: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(got) != "abc" {
+		t.Fatalf("file contents=%q want %q", got, "abc")
+	}
+}
 
 func TestValueLogAppendRead(t *testing.T) {
 	dir := t.TempDir()

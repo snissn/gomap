@@ -590,7 +590,7 @@ func (w *Writer) Flush() error {
 	if err := w.flushAppendBuf(); err != nil {
 		return err
 	}
-	if w.f == nil && w.bw != nil {
+	if w.bw != nil {
 		return w.bw.Flush()
 	}
 	return nil
@@ -661,9 +661,9 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 
 	old := w.f
 	w.f = f
-	if w.bw != nil {
-		w.bw.Reset(f)
-	}
+	// File-backed writers do not use bufio; drop any leftover sink buffer
+	// rather than retargeting it across rotations.
+	w.bw = nil
 	w.size = info.Size()
 	w.fileID = fileID
 	w.appendBuf = w.appendBuf[:0]
