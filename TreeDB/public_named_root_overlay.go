@@ -1,0 +1,679 @@
+package treedb
+
+import (
+	"bytes"
+	"fmt"
+	"sort"
+
+	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/TreeDB/collections"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/rootfmt"
+)
+
+const virtualNamedRootMask uint64 = 1 << 63
+
+type namedRootOverlayState struct {
+	virtualRootID uint64
+	baseRootID    uint64
+	rootKey       []byte
+	hasFormat     bool
+	format        rootfmt.Format
+	entries       map[string]namedRootOverlayValue
+}
+
+type namedRootOverlayValue struct {
+	key     []byte
+	value   []byte
+	deleted bool
+}
+
+type namedRootPendingMutation struct {
+	virtualRootID uint64
+	baseRootID    uint64
+	rootKey       []byte
+	hasFormat     bool
+	format        rootfmt.Format
+	entries       []batch.Entry
+}
+
+type overlayEntryBatch struct {
+	entries []batch.Entry
+	closed  bool
+}
+
+type namedRootIterEntry struct {
+	key     []byte
+	value   []byte
+	deleted bool
+}
+
+type namedRootOverlayIterator struct {
+	entries []namedRootIterEntry
+	index   int
+	start   []byte
+	end     []byte
+}
+
+func (db *DB) hasBufferedNamedRoot(rootID uint64) bool {
+	if db == nil || rootID == 0 {
+		return false
+	}
+	db.namedRootMu.RLock()
+	defer db.namedRootMu.RUnlock()
+	_, ok := db.namedRootsByID[rootID]
+	return ok
+}
+
+func (db *DB) bufferedGetAtRoot(rootID uint64, key []byte) ([]byte, error) {
+	state, err := db.namedRootState(rootID)
+	if err != nil {
+		return nil, err
+	}
+	if entry, ok := state.entries[string(key)]; ok {
+		if entry.deleted {
+			return nil, nil
+		}
+		return append([]byte(nil), entry.value...), nil
+	}
+	bridge, err := db.collectionsBridge()
+	if err != nil {
+		return nil, err
+	}
+	return bridge.GetAtRoot(state.baseRootID, key)
+}
+
+func (db *DB) bufferedGetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
+	state, err := db.namedRootState(rootID)
+	if err != nil {
+		return dst, err
+	}
+	if entry, ok := state.entries[string(key)]; ok {
+		if entry.deleted {
+			return dst, nil
+		}
+		return append(dst, entry.value...), nil
+	}
+	bridge, err := db.collectionsBridge()
+	if err != nil {
+		return dst, err
+	}
+	return bridge.GetAtRootAppend(state.baseRootID, key, dst)
+}
+
+func (db *DB) bufferedHasAtRoot(rootID uint64, key []byte) (bool, error) {
+	state, err := db.namedRootState(rootID)
+	if err != nil {
+		return false, err
+	}
+	if entry, ok := state.entries[string(key)]; ok {
+		return !entry.deleted, nil
+	}
+	bridge, err := db.collectionsBridge()
+	if err != nil {
+		return false, err
+	}
+	return bridge.HasAtRoot(state.baseRootID, key)
+}
+
+func (db *DB) bufferedIteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
+	state, err := db.namedRootState(rootID)
+	if err != nil {
+		return nil, err
+	}
+	bridge, err := db.collectionsBridge()
+	if err != nil {
+		return nil, err
+	}
+	merged := make(map[string]namedRootIterEntry, len(state.entries))
+	baseIter, err := bridge.IteratorAtRoot(state.baseRootID, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = baseIter.Close() }()
+	for baseIter.Valid() {
+		key := baseIter.KeyCopy(nil)
+		entry := namedRootIterEntry{key: key}
+		if baseIter.IsDeleted() {
+			entry.deleted = true
+		} else {
+			entry.value = baseIter.ValueCopy(nil)
+		}
+		merged[string(key)] = entry
+		baseIter.Next()
+	}
+	if err := baseIter.Error(); err != nil {
+		return nil, err
+	}
+
+	db.namedRootMu.RLock()
+	for _, entry := range state.entries {
+		if !namedRootKeyInRange(entry.key, start, end) {
+			continue
+		}
+		merged[string(entry.key)] = namedRootIterEntry{
+			key:     append([]byte(nil), entry.key...),
+			value:   append([]byte(nil), entry.value...),
+			deleted: entry.deleted,
+		}
+	}
+	db.namedRootMu.RUnlock()
+
+	keys := make([]string, 0, len(merged))
+	for key := range merged {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return bytes.Compare([]byte(keys[i]), []byte(keys[j])) < 0
+	})
+	out := make([]namedRootIterEntry, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, merged[key])
+	}
+	return &namedRootOverlayIterator{
+		entries: out,
+		start:   append([]byte(nil), start...),
+		end:     append([]byte(nil), end...),
+	}, nil
+}
+
+func (db *DB) bufferNamedRootMutations(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error) {
+	if db == nil || db.cached == nil {
+		return nil, fmt.Errorf("missing cached db")
+	}
+	if len(rootIDs) != len(mutateRoots) {
+		return nil, fmt.Errorf("named root mutation length mismatch")
+	}
+
+	db.namedRootMu.Lock()
+	virtualRootIDs := make([]uint64, len(rootIDs))
+	pending := make([]namedRootPendingMutation, len(rootIDs))
+	for i := range rootIDs {
+		existing := db.namedRootsByID[rootIDs[i]]
+		if existing != nil {
+			virtualRootIDs[i] = existing.virtualRootID
+			pending[i] = namedRootPendingMutation{
+				virtualRootID: existing.virtualRootID,
+				baseRootID:    existing.baseRootID,
+				rootKey:       append([]byte(nil), existing.rootKey...),
+				hasFormat:     existing.hasFormat,
+				format:        existing.format,
+			}
+		} else {
+			virtualRootIDs[i] = db.nextVirtualNamedRootIDLocked()
+			pending[i] = namedRootPendingMutation{
+				virtualRootID: virtualRootIDs[i],
+				baseRootID:    rootIDs[i],
+			}
+		}
+		if format := rootFormatAt(formats, i); format != nil {
+			pending[i].hasFormat = true
+			pending[i].format = *format
+		}
+		b := &overlayEntryBatch{entries: make([]batch.Entry, 0, 16)}
+		if mutateRoots[i] != nil {
+			if err := mutateRoots[i](b); err != nil {
+				db.namedRootMu.Unlock()
+				return nil, err
+			}
+		}
+		pending[i].entries = append(pending[i].entries, b.entries...)
+	}
+
+	sys := &overlayEntryBatch{entries: make([]batch.Entry, 0, len(rootIDs))}
+	if updateSystem != nil {
+		if err := updateSystem(sys, virtualRootIDs); err != nil {
+			db.namedRootMu.Unlock()
+			return nil, err
+		}
+	}
+	if err := db.bindPendingNamedRootKeysLocked(pending, sys.entries); err != nil {
+		db.namedRootMu.Unlock()
+		return nil, err
+	}
+	for i := range pending {
+		db.applyPendingNamedRootLocked(&pending[i])
+	}
+	if err := db.cached.ApplySystemOverlayEntriesOwned(sys.entries); err != nil {
+		db.namedRootMu.Unlock()
+		return nil, err
+	}
+	db.namedRootMu.Unlock()
+
+	if sync {
+		if err := db.flushNamedRootOverlays(true); err != nil {
+			return nil, err
+		}
+		if err := db.cached.Checkpoint(); err != nil {
+			return nil, err
+		}
+	}
+	return virtualRootIDs, nil
+}
+
+func (db *DB) flushNamedRootOverlays(sync bool) error {
+	if db == nil || db.cached == nil {
+		return nil
+	}
+	db.namedRootMu.Lock()
+	defer db.namedRootMu.Unlock()
+	if len(db.namedRootsByID) == 0 {
+		return nil
+	}
+
+	states := make([]*namedRootOverlayState, 0, len(db.namedRootsByID))
+	for _, state := range db.namedRootsByID {
+		states = append(states, state)
+	}
+	sort.Slice(states, func(i, j int) bool {
+		return states[i].virtualRootID < states[j].virtualRootID
+	})
+
+	type rootFlushSnapshot struct {
+		state         *namedRootOverlayState
+		entries       []batch.Entry
+		descriptorRaw []byte
+	}
+	snapshots := make([]rootFlushSnapshot, 0, len(states))
+	for _, state := range states {
+		entries := make([]batch.Entry, 0, len(state.entries))
+		keys := make([]string, 0, len(state.entries))
+		for key := range state.entries {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			entry := state.entries[key]
+			next := batch.Entry{Key: append([]byte(nil), entry.key...)}
+			if entry.deleted {
+				next.Type = batch.OpDelete
+			} else {
+				next.Type = batch.OpPut
+				next.Value = append([]byte(nil), entry.value...)
+			}
+			entries = append(entries, next)
+		}
+		raw, err := db.GetSystem(state.rootKey)
+		if err != nil {
+			return err
+		}
+		if len(raw) == 0 {
+			return fmt.Errorf("treedb: missing cached root descriptor for %q", state.rootKey)
+		}
+		snapshots = append(snapshots, rootFlushSnapshot{
+			state:         state,
+			entries:       entries,
+			descriptorRaw: raw,
+		})
+	}
+
+	var updatedSystemEntries []batch.Entry
+	err := db.withCollectionsBridgeWrite(func(bridge caching.BackendDirectBridge) error {
+		rootIDs := make([]uint64, len(snapshots))
+		formats := make([]*rootfmt.Format, len(snapshots))
+		mutators := make([]func(batch.Interface) error, len(snapshots))
+		for i := range snapshots {
+			snapshot := snapshots[i]
+			rootIDs[i] = snapshot.state.baseRootID
+			if snapshot.state.hasFormat {
+				format := snapshot.state.format
+				formats[i] = &format
+			}
+			entries := snapshot.entries
+			mutators[i] = func(target batch.Interface) error {
+				for _, entry := range entries {
+					if entry.Type == batch.OpDelete {
+						if deleteView, ok := target.(interface{ DeleteView([]byte) error }); ok {
+							if err := deleteView.DeleteView(entry.Key); err != nil {
+								return err
+							}
+						} else if err := target.Delete(entry.Key); err != nil {
+							return err
+						}
+						continue
+					}
+					if len(entry.Value) > 0 {
+						if autoView, ok := target.(interface{ SetAutoView(key, value []byte) error }); ok {
+							if err := autoView.SetAutoView(entry.Key, entry.Value); err != nil {
+								return err
+							}
+						} else if auto, ok := target.(interface{ SetAuto(key, value []byte) error }); ok {
+							if err := auto.SetAuto(entry.Key, entry.Value); err != nil {
+								return err
+							}
+						} else if err := target.Set(entry.Key, entry.Value); err != nil {
+							return err
+						}
+						continue
+					}
+					if setView, ok := target.(interface{ SetView(key, value []byte) error }); ok {
+						if err := setView.SetView(entry.Key, nil); err != nil {
+							return err
+						}
+					} else if err := target.Set(entry.Key, nil); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+		}
+
+		_, err := bridge.MutateRootsWithFormats(sync, rootIDs, formats, mutators, func(sys batch.Interface, newRootIDs []uint64) error {
+			if len(newRootIDs) != len(snapshots) {
+				return fmt.Errorf("treedb: named-root checkpoint publish mismatch")
+			}
+			updatedSystemEntries = make([]batch.Entry, 0, len(newRootIDs))
+			for i := range snapshots {
+				var desc collections.CollectionRootDescriptor
+				if err := desc.Decode(snapshots[i].descriptorRaw); err != nil {
+					return err
+				}
+				desc.RootPageID = newRootIDs[i]
+				encoded, err := desc.Encode()
+				if err != nil {
+					return err
+				}
+				if err := sys.Set(snapshots[i].state.rootKey, encoded); err != nil {
+					return err
+				}
+				updatedSystemEntries = append(updatedSystemEntries, batch.Entry{
+					Type:  batch.OpPut,
+					Key:   append([]byte(nil), snapshots[i].state.rootKey...),
+					Value: encoded,
+				})
+			}
+			return nil
+		})
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	if err := db.cached.ApplySystemOverlayEntriesOwned(updatedSystemEntries); err != nil {
+		return err
+	}
+	clear(db.namedRootsByID)
+	clear(db.namedRootsByKey)
+	return nil
+}
+
+func (db *DB) namedRootState(rootID uint64) (*namedRootOverlayState, error) {
+	db.namedRootMu.RLock()
+	state := db.namedRootsByID[rootID]
+	db.namedRootMu.RUnlock()
+	if state == nil {
+		return nil, fmt.Errorf("treedb: named root %d not buffered", rootID)
+	}
+	return state, nil
+}
+
+func (db *DB) nextVirtualNamedRootIDLocked() uint64 {
+	return virtualNamedRootMask | db.nextNamedRootID.Add(1)
+}
+
+func (db *DB) bindPendingNamedRootKeysLocked(pending []namedRootPendingMutation, sysEntries []batch.Entry) error {
+	for _, entry := range sysEntries {
+		if entry.Type != batch.OpPut || len(entry.Value) == 0 {
+			continue
+		}
+		var desc collections.CollectionRootDescriptor
+		if err := desc.Decode(entry.Value); err != nil {
+			continue
+		}
+		for i := range pending {
+			if pending[i].virtualRootID != desc.RootPageID || len(pending[i].rootKey) > 0 {
+				continue
+			}
+			pending[i].rootKey = append([]byte(nil), entry.Key...)
+			break
+		}
+	}
+	for i := range pending {
+		if len(pending[i].rootKey) == 0 {
+			return fmt.Errorf("treedb: missing root key for buffered root %d", pending[i].virtualRootID)
+		}
+	}
+	return nil
+}
+
+func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
+	if pending == nil {
+		return
+	}
+	state := db.namedRootsByID[pending.virtualRootID]
+	if state == nil {
+		state = &namedRootOverlayState{
+			virtualRootID: pending.virtualRootID,
+			baseRootID:    pending.baseRootID,
+			rootKey:       append([]byte(nil), pending.rootKey...),
+			hasFormat:     pending.hasFormat,
+			format:        pending.format,
+			entries:       make(map[string]namedRootOverlayValue, len(pending.entries)),
+		}
+		if db.namedRootsByID == nil {
+			db.namedRootsByID = make(map[uint64]*namedRootOverlayState)
+		}
+		if db.namedRootsByKey == nil {
+			db.namedRootsByKey = make(map[string]*namedRootOverlayState)
+		}
+		db.namedRootsByID[pending.virtualRootID] = state
+		db.namedRootsByKey[string(pending.rootKey)] = state
+	}
+	if pending.hasFormat {
+		state.hasFormat = true
+		state.format = pending.format
+	}
+	for _, entry := range pending.entries {
+		key := string(entry.Key)
+		if entry.Type == batch.OpDelete {
+			state.entries[key] = namedRootOverlayValue{
+				key:     append([]byte(nil), entry.Key...),
+				deleted: true,
+			}
+			continue
+		}
+		state.entries[key] = namedRootOverlayValue{
+			key:   append([]byte(nil), entry.Key...),
+			value: append([]byte(nil), entry.Value...),
+		}
+	}
+}
+
+func rootFormatAt(formats []*rootfmt.Format, idx int) *rootfmt.Format {
+	if idx < 0 || idx >= len(formats) {
+		return nil
+	}
+	return formats[idx]
+}
+
+func namedRootKeyInRange(key, start, end []byte) bool {
+	if len(start) > 0 && bytes.Compare(key, start) < 0 {
+		return false
+	}
+	if len(end) > 0 && bytes.Compare(key, end) >= 0 {
+		return false
+	}
+	return true
+}
+
+func (b *overlayEntryBatch) Set(key, value []byte) error {
+	if b.closed {
+		return batch.ErrBatchClosed
+	}
+	b.entries = append(b.entries, batch.Entry{
+		Type:  batch.OpPut,
+		Key:   append([]byte(nil), key...),
+		Value: append([]byte(nil), value...),
+	})
+	return nil
+}
+
+func (b *overlayEntryBatch) SetView(key, value []byte) error {
+	return b.Set(key, value)
+}
+
+func (b *overlayEntryBatch) SetAuto(key, value []byte) error {
+	return b.Set(key, value)
+}
+
+func (b *overlayEntryBatch) SetAutoView(key, value []byte) error {
+	return b.Set(key, value)
+}
+
+func (b *overlayEntryBatch) Delete(key []byte) error {
+	if b.closed {
+		return batch.ErrBatchClosed
+	}
+	b.entries = append(b.entries, batch.Entry{
+		Type: batch.OpDelete,
+		Key:  append([]byte(nil), key...),
+	})
+	return nil
+}
+
+func (b *overlayEntryBatch) DeleteView(key []byte) error {
+	return b.Delete(key)
+}
+
+func (b *overlayEntryBatch) SetOps(ops []batch.Entry) error {
+	for _, entry := range ops {
+		if entry.IsPtr {
+			return batch.ErrValueTooLarge
+		}
+		switch entry.Type {
+		case batch.OpPut:
+			if err := b.Set(entry.Key, entry.Value); err != nil {
+				return err
+			}
+		case batch.OpDelete:
+			if err := b.Delete(entry.Key); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (b *overlayEntryBatch) Write() error {
+	b.closed = true
+	return nil
+}
+
+func (b *overlayEntryBatch) WriteSync() error {
+	b.closed = true
+	return nil
+}
+
+func (b *overlayEntryBatch) Close() error {
+	b.closed = true
+	b.entries = nil
+	return nil
+}
+
+func (b *overlayEntryBatch) Replay(fn func(batch.Entry) error) error {
+	for _, entry := range b.entries {
+		if err := fn(entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *overlayEntryBatch) GetByteSize() (int, error) {
+	size := 0
+	for _, entry := range b.entries {
+		size += len(entry.Key) + len(entry.Value)
+	}
+	return size, nil
+}
+
+func (it *namedRootOverlayIterator) Valid() bool {
+	return it != nil && it.index < len(it.entries)
+}
+
+func (it *namedRootOverlayIterator) Next() {
+	if it != nil && it.index < len(it.entries) {
+		it.index++
+	}
+}
+
+func (it *namedRootOverlayIterator) Seek(key []byte) {
+	if it == nil {
+		return
+	}
+	it.index = sort.Search(len(it.entries), func(i int) bool {
+		return bytes.Compare(it.entries[i].key, key) >= 0
+	})
+}
+
+func (it *namedRootOverlayIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.index].key
+}
+
+func (it *namedRootOverlayIterator) UnsafeValue() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.entries[it.index].value
+}
+
+func (it *namedRootOverlayIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.Valid() {
+		return nil, page.ValuePtr{}, 0
+	}
+	entry := it.entries[it.index]
+	if entry.deleted {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	return entry.value, page.ValuePtr{}, node.FlagInline
+}
+
+func (it *namedRootOverlayIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *namedRootOverlayIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *namedRootOverlayIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst[:0]
+	}
+	return append(dst[:0], it.entries[it.index].key...)
+}
+
+func (it *namedRootOverlayIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst[:0]
+	}
+	return append(dst[:0], it.entries[it.index].value...)
+}
+
+func (it *namedRootOverlayIterator) IsDeleted() bool {
+	return it.Valid() && it.entries[it.index].deleted
+}
+
+func (it *namedRootOverlayIterator) Error() error {
+	return nil
+}
+
+func (it *namedRootOverlayIterator) Close() error {
+	if it != nil {
+		it.entries = nil
+	}
+	return nil
+}
+
+func (it *namedRootOverlayIterator) Domain() ([]byte, []byte) {
+	if it == nil {
+		return nil, nil
+	}
+	return it.start, it.end
+}

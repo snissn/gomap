@@ -104,3 +104,39 @@ func BenchmarkCollectionEngineGetByID(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkCollectionEngineFindByIndex(b *testing.B) {
+	for _, engine := range collectionBenchEngines() {
+		b.Run(engine.name, func(b *testing.B) {
+			manager, cleanup := engine.open(b, b.TempDir())
+			defer cleanup()
+
+			meta, err := manager.CreateCollection(&collections.CollectionMeta{Name: "users"})
+			if err != nil {
+				b.Fatalf("create collection: %v", err)
+			}
+			if _, err := manager.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+				b.Fatalf("create index: %v", err)
+			}
+			col, err := manager.OpenCollection(meta.Name)
+			if err != nil {
+				b.Fatalf("open collection: %v", err)
+			}
+			if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+				b.Fatalf("seed insert: %v", err)
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				ids, err := col.FindByIndex("email_idx", "ada@example.com")
+				if err != nil {
+					b.Fatalf("find by index: %v", err)
+				}
+				if len(ids) != 1 {
+					b.Fatalf("unexpected ids: %#v", ids)
+				}
+			}
+		})
+	}
+}
