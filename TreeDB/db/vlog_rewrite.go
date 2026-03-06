@@ -1127,7 +1127,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 				changed = true
 			}
 			childIDs[int(i)] = nextChild
-			keys[int(i)] = keyView
+			keys[int(i)] = append([]byte(nil), keyView...)
 		}
 		if !changed {
 			return id, false, nil
