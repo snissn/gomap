@@ -14791,7 +14791,7 @@ func (b *Batch) arenaCopy(n int) []byte {
 			chunkCap = n
 		}
 		// Avoid unbounded exponential growth once we reach the pooling limit. Large
-		// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MB)
+		// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MiB)
 		// that is mostly unused, inflating RSS. Only allow larger chunks when a
 		// *single* copy needs it.
 		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
