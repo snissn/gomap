@@ -109,6 +109,11 @@ var namedRootLegacyFlushSnapshotHook struct {
 	fn func(rootID uint64)
 }
 
+var namedRootMemtableWriteHook struct {
+	mu sync.RWMutex
+	fn func(rootID uint64, kind string, key []byte)
+}
+
 func setNamedRootPublishTestHook(fn func(string) error) func() {
 	namedRootPublishHook.mu.Lock()
 	prev := namedRootPublishHook.fn
@@ -233,6 +238,27 @@ func runNamedRootLegacyFlushSnapshotTestHook(rootID uint64) {
 	namedRootLegacyFlushSnapshotHook.mu.RUnlock()
 	if fn != nil {
 		fn(rootID)
+	}
+}
+
+func setNamedRootMemtableWriteTestHook(fn func(rootID uint64, kind string, key []byte)) func() {
+	namedRootMemtableWriteHook.mu.Lock()
+	prev := namedRootMemtableWriteHook.fn
+	namedRootMemtableWriteHook.fn = fn
+	namedRootMemtableWriteHook.mu.Unlock()
+	return func() {
+		namedRootMemtableWriteHook.mu.Lock()
+		namedRootMemtableWriteHook.fn = prev
+		namedRootMemtableWriteHook.mu.Unlock()
+	}
+}
+
+func runNamedRootMemtableWriteTestHook(rootID uint64, kind string, key []byte) {
+	namedRootMemtableWriteHook.mu.RLock()
+	fn := namedRootMemtableWriteHook.fn
+	namedRootMemtableWriteHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootID, kind, key)
 	}
 }
 
@@ -776,13 +802,9 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 	}
 	state := db.namedRootsByID[pending.virtualRootID]
 	if state == nil {
-		pointState, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		sharedState, err := memtable.NewWithCapacityMode(0, memtable.ModeBTree)
 		if err != nil {
-			panic(fmt.Sprintf("treedb: create named-root point state: %v", err))
-		}
-		prefixState, err := memtable.NewWithCapacityMode(0, memtable.ModeSkiplist)
-		if err != nil {
-			panic(fmt.Sprintf("treedb: create named-root prefix state: %v", err))
+			panic(fmt.Sprintf("treedb: create named-root shared state: %v", err))
 		}
 		state = &namedRootOverlayState{
 			virtualRootID: pending.virtualRootID,
@@ -790,8 +812,8 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 			rootKey:       append([]byte(nil), pending.rootKey...),
 			hasFormat:     pending.hasFormat,
 			format:        pending.format,
-			pointState:    pointState,
-			prefixState:   prefixState,
+			pointState:    sharedState,
+			prefixState:   sharedState,
 		}
 		if db.namedRootsByID == nil {
 			db.namedRootsByID = make(map[uint64]*namedRootOverlayState)
@@ -809,17 +831,21 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 	for _, entry := range pending.entries {
 		if entry.Type == batch.OpDelete {
 			if state.pointState != nil {
+				runNamedRootMemtableWriteTestHook(pending.virtualRootID, "point", entry.Key)
 				state.pointState.SetEntrySteal(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
 			}
-			if state.prefixState != nil {
+			if state.prefixState != nil && state.prefixState != state.pointState {
+				runNamedRootMemtableWriteTestHook(pending.virtualRootID, "prefix", entry.Key)
 				state.prefixState.SetEntrySteal(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
 			}
 			continue
 		}
 		if state.pointState != nil {
+			runNamedRootMemtableWriteTestHook(pending.virtualRootID, "point", entry.Key)
 			state.pointState.SetEntrySteal(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
 		}
-		if state.prefixState != nil {
+		if state.prefixState != nil && state.prefixState != state.pointState {
+			runNamedRootMemtableWriteTestHook(pending.virtualRootID, "prefix", entry.Key)
 			state.prefixState.SetEntrySteal(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
 		}
 	}
