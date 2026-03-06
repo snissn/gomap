@@ -689,6 +689,43 @@ func TestMaybeResetEntrySlicePoolBytesAfterGC_FirstEpochKeepsAccountedBytes(t *t
 	}
 }
 
+func TestMaybeResetEntrySlicePoolBytesAfterGC_PreservesLeaseBytes(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySliceLeasesForTest(t)
+	resetEntrySlicePoolsForTest(t)
+	batchArenaPoolTestMu.Lock()
+	t.Cleanup(batchArenaPoolTestMu.Unlock)
+
+	origNumGC := batchArenaPoolNumGC
+	defer func() { batchArenaPoolNumGC = origNumGC }()
+
+	var fakeNumGC uint32 = 17
+	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
+	t.Cleanup(func() { entrySlicePoolBudgetBytes = savedBudget })
+
+	putEntrySlice(make([]batch.Entry, 0, 64))
+	expected := int64(64) * entrySliceEntrySizeBytes
+	if got := entrySlicePoolBytes.Load(); got != expected {
+		t.Fatalf("entrySlicePoolBytes=%d want %d before GC", got, expected)
+	}
+
+	entrySlicePoolLastGC.Store(fakeNumGC)
+	entrySlicePoolBytes.Store(expected + 1234)
+	fakeNumGC++
+
+	maybeResetEntrySlicePoolBytesAfterGC()
+
+	if got := entrySlicePoolBytes.Load(); got != expected {
+		t.Fatalf("entrySlicePoolBytes=%d want %d after GC", got, expected)
+	}
+	if got := entrySlicePoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("entrySlicePoolLastGC=%d want %d", got, fakeNumGC)
+	}
+}
+
 func TestGetEntrySliceIgnoresUnexpectedPoolType(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	capacity := 64

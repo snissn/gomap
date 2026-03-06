@@ -5510,6 +5510,22 @@ func noteEntrySlicePoolGC(numGC uint32) {
 	}
 }
 
+func entrySliceLeaseBytes() int64 {
+	entrySliceLeaseMu.Lock()
+	defer entrySliceLeaseMu.Unlock()
+
+	var held int64
+	for bucket := range entrySliceLeases {
+		for _, entries := range entrySliceLeases[bucket] {
+			if entries == nil {
+				continue
+			}
+			held += int64(cap(entries)) * entrySliceEntrySizeBytes
+		}
+	}
+	return held
+}
+
 func maybeResetEntrySlicePoolBytesAfterGC() {
 	if entrySlicePoolBytes.Load() <= 0 {
 		return
@@ -5524,7 +5540,7 @@ func maybeResetEntrySlicePoolBytesAfterGC() {
 		return
 	}
 	if entrySlicePoolLastGC.CompareAndSwap(last, numGC) {
-		entrySlicePoolBytes.Store(0)
+		entrySlicePoolBytes.Store(entrySliceLeaseBytes())
 	}
 }
 
