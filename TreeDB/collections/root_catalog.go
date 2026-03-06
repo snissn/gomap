@@ -65,10 +65,10 @@ func (d *CollectionRootDescriptor) Encode() ([]byte, error) {
 	if err := d.normalizeAndValidate(); err != nil {
 		return nil, err
 	}
-	name := []byte(d.Name)
-	collection := []byte(d.Collection)
-	indexName := []byte(d.IndexName)
-	if len(name) > 65535 || len(collection) > 65535 || len(indexName) > 65535 {
+	nameLen := len(d.Name)
+	collectionLen := len(d.Collection)
+	indexNameLen := len(d.IndexName)
+	if nameLen > 65535 || collectionLen > 65535 || indexNameLen > 65535 {
 		return nil, errors.New("collections: root descriptor field too long")
 	}
 	flags := uint8(0)
@@ -81,16 +81,16 @@ func (d *CollectionRootDescriptor) Encode() ([]byte, error) {
 	if d.Format.AllowValues {
 		flags |= 1 << 2
 	}
-	out := make([]byte, 0, 64+len(name)+len(collection)+len(indexName))
+	out := make([]byte, 0, 64+nameLen+collectionLen+indexNameLen)
 	out = append(out, byte(collectionRootDescriptorVersion))
 	out = append(out, byte(d.Kind))
 	out = append(out, flags)
-	out = binary.BigEndian.AppendUint16(out, uint16(len(name)))
-	out = append(out, name...)
-	out = binary.BigEndian.AppendUint16(out, uint16(len(collection)))
-	out = append(out, collection...)
-	out = binary.BigEndian.AppendUint16(out, uint16(len(indexName)))
-	out = append(out, indexName...)
+	out = binary.BigEndian.AppendUint16(out, uint16(nameLen))
+	out = append(out, d.Name...)
+	out = binary.BigEndian.AppendUint16(out, uint16(collectionLen))
+	out = append(out, d.Collection...)
+	out = binary.BigEndian.AppendUint16(out, uint16(indexNameLen))
+	out = append(out, d.IndexName...)
 	out = binary.BigEndian.AppendUint64(out, d.RootPageID)
 	return out, nil
 }
