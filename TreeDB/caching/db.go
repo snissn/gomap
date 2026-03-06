@@ -9276,6 +9276,17 @@ planned:
 			SyncEachBatch:   false,
 			MaxSegmentBytes: db.valueLogGenerationWarmTarget,
 			ProtectedPaths:  db.valueLogInUsePaths(),
+			ReserveRIDs: func(count int) (uint64, error) {
+				if count <= 0 {
+					return 0, nil
+				}
+				end := db.nextRID.Add(uint64(count))
+				start := end - uint64(count) + 1
+				if start == 0 || end < start {
+					return 0, fmt.Errorf("value-log rid space exhausted")
+				}
+				return start, nil
+			},
 		}
 		if haveRewritePlan {
 			rewriteOpts.SourceFileIDs = append([]uint32(nil), rewritePlan.SourceFileIDs...)
