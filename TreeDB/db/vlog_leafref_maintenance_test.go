@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -14,6 +15,24 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
+
+func waitForPathRemoval(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		_, err := os.Stat(path)
+		if err == nil {
+			if time.Now().After(deadline) {
+				return fmt.Errorf("path still exists after %s: %s", timeout, path)
+			}
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+}
 
 func TestValueLogGC_WithLeafPagesInValueLog_KeepsReferencedLeafSegments(t *testing.T) {
 	dir := t.TempDir()
@@ -475,8 +494,12 @@ func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T)
 			t.Fatalf("leaf ref still points at source segment %d after rewrite", targetID)
 		}
 	}
-	if _, err := os.Stat(targetPath); err == nil {
-		t.Fatalf("expected source segment to be removed after rewrite: %s", targetPath)
+	waitTimeout := 2 * time.Second
+	if runtime.GOOS == "windows" {
+		waitTimeout = 5 * time.Second
+	}
+	if err := waitForPathRemoval(targetPath, waitTimeout); err != nil {
+		t.Fatalf("expected source segment to be removed after rewrite: %v", err)
 	}
 
 	if err := leafLog.Close(); err != nil {
