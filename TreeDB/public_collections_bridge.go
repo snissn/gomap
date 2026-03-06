@@ -140,6 +140,19 @@ func (db *DB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 	return bridge.HasAtRoot(rootID, key)
 }
 
+// HasPrefixAtRoot reports whether the named root currently contains any
+// non-deleted key with the provided prefix.
+func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
+	if db.cached != nil && db.hasBufferedNamedRoot(rootID) {
+		return db.bufferedHasPrefixAtRoot(rootID, prefix)
+	}
+	bridge, err := db.collectionsBridge()
+	if err != nil {
+		return false, err
+	}
+	return bridge.HasPrefixAtRoot(rootID, prefix)
+}
+
 // IteratorAtRoot exposes the backend named-root iterator.
 func (db *DB) IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
 	if db.cached != nil && db.hasBufferedNamedRoot(rootID) {

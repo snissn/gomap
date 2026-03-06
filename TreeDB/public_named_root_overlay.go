@@ -64,6 +64,11 @@ var namedRootPublishHook struct {
 	fn func(string) error
 }
 
+var namedRootBufferedIteratorHook struct {
+	mu sync.RWMutex
+	fn func(rootID uint64, start, end []byte)
+}
+
 func setNamedRootPublishTestHook(fn func(string) error) func() {
 	namedRootPublishHook.mu.Lock()
 	prev := namedRootPublishHook.fn
@@ -84,6 +89,27 @@ func runNamedRootPublishTestHook(stage string) error {
 		return nil
 	}
 	return fn(stage)
+}
+
+func setNamedRootBufferedIteratorTestHook(fn func(rootID uint64, start, end []byte)) func() {
+	namedRootBufferedIteratorHook.mu.Lock()
+	prev := namedRootBufferedIteratorHook.fn
+	namedRootBufferedIteratorHook.fn = fn
+	namedRootBufferedIteratorHook.mu.Unlock()
+	return func() {
+		namedRootBufferedIteratorHook.mu.Lock()
+		namedRootBufferedIteratorHook.fn = prev
+		namedRootBufferedIteratorHook.mu.Unlock()
+	}
+}
+
+func runNamedRootBufferedIteratorTestHook(rootID uint64, start, end []byte) {
+	namedRootBufferedIteratorHook.mu.RLock()
+	fn := namedRootBufferedIteratorHook.fn
+	namedRootBufferedIteratorHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootID, start, end)
+	}
 }
 
 func (db *DB) hasBufferedNamedRoot(rootID uint64) bool {
@@ -147,7 +173,59 @@ func (db *DB) bufferedHasAtRoot(rootID uint64, key []byte) (bool, error) {
 	return bridge.HasAtRoot(state.baseRootID, key)
 }
 
+func (db *DB) bufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
+	state, err := db.namedRootState(rootID)
+	if err != nil {
+		return false, err
+	}
+
+	db.namedRootMu.RLock()
+	for _, entry := range state.entries {
+		if entry.deleted || !bytes.HasPrefix(entry.key, prefix) {
+			continue
+		}
+		db.namedRootMu.RUnlock()
+		return true, nil
+	}
+	db.namedRootMu.RUnlock()
+
+	bridge, err := db.collectionsBridge()
+	if err != nil {
+		return false, err
+	}
+	baseIter, err := bridge.IteratorAtRoot(state.baseRootID, prefix, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = baseIter.Close() }()
+	for baseIter.Valid() {
+		key := baseIter.UnsafeKey()
+		if !bytes.HasPrefix(key, prefix) {
+			break
+		}
+		db.namedRootMu.RLock()
+		overlayEntry, ok := state.entries[string(key)]
+		db.namedRootMu.RUnlock()
+		if ok {
+			if overlayEntry.deleted {
+				baseIter.Next()
+				continue
+			}
+			return true, nil
+		}
+		if !baseIter.IsDeleted() {
+			return true, nil
+		}
+		baseIter.Next()
+	}
+	if err := baseIter.Error(); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 func (db *DB) bufferedIteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
+	runNamedRootBufferedIteratorTestHook(rootID, start, end)
 	state, err := db.namedRootState(rootID)
 	if err != nil {
 		return nil, err

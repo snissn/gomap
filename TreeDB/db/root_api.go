@@ -1,6 +1,7 @@
 package db
 
 import (
+	"bytes"
 	"fmt"
 	"sync"
 
@@ -80,6 +81,33 @@ func (db *DB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 	}
 	defer snap.Close()
 	return snap.Has(key)
+}
+
+// HasPrefixAtRoot reports whether any non-deleted key with the provided prefix
+// exists in the specified root page.
+func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
+	if rootID == 0 {
+		return false, nil
+	}
+	it, err := db.IteratorAtRoot(rootID, prefix, nil)
+	if err != nil {
+		return false, err
+	}
+	defer it.Close()
+	for it.Valid() {
+		key := it.UnsafeKey()
+		if !bytes.HasPrefix(key, prefix) {
+			break
+		}
+		if !it.IsDeleted() {
+			return true, nil
+		}
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // IteratorAtRoot returns an iterator over the specified root page.

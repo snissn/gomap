@@ -21,6 +21,7 @@ type BackendDirectBridge interface {
 	GetAtRoot(rootID uint64, key []byte) ([]byte, error)
 	GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error)
 	HasAtRoot(rootID uint64, key []byte) (bool, error)
+	HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error)
 	IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error)
 	MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
 	MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error)

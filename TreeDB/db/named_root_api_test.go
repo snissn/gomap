@@ -59,6 +59,55 @@ func TestHasAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
 	}
 }
 
+func TestHasPrefixAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	has, err := d.HasPrefixAtRoot(0, []byte("missing"))
+	if err != nil {
+		t.Fatalf("HasPrefixAtRoot zero root: %v", err)
+	}
+	if has {
+		t.Fatalf("expected HasPrefixAtRoot zero root to be false")
+	}
+}
+
+func TestHasPrefixAtRoot_FindsMatchingEntries(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	rootID, err := d.MutateRoot(0, false, func(b batch.Interface) error {
+		if err := b.Set([]byte("email:a@example.com:u1"), nil); err != nil {
+			return err
+		}
+		return b.Set([]byte("city:hnl:u1"), nil)
+	}, nil)
+	if err != nil {
+		t.Fatalf("MutateRoot: %v", err)
+	}
+
+	has, err := d.HasPrefixAtRoot(rootID, []byte("email:a@example.com:"))
+	if err != nil {
+		t.Fatalf("HasPrefixAtRoot match: %v", err)
+	}
+	if !has {
+		t.Fatalf("expected matching prefix to be present")
+	}
+	has, err = d.HasPrefixAtRoot(rootID, []byte("email:missing:"))
+	if err != nil {
+		t.Fatalf("HasPrefixAtRoot missing: %v", err)
+	}
+	if has {
+		t.Fatalf("expected missing prefix to be absent")
+	}
+}
+
 func TestMutateRoot_PublishesDedicatedRootAndSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
