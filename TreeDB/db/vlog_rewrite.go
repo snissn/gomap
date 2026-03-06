@@ -515,7 +515,7 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 			// Leaf pages stored in the pager have no children; outer-leaf-in-vlog
 			// mode should not encounter them, but handle gracefully.
 		default:
-			return errors.New("invalid page type")
+			return fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
 		}
 	}
 	return nil
@@ -1208,7 +1208,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
@@ -1216,14 +1216,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
 	if !sysChanged && !userChanged {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, nil
 	}
@@ -1234,7 +1234,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if err := writer.Sync(); err != nil {
 			freeErr := tracker.FreeAll()
 			if freeErr != nil {
-				return 0, freeErr
+				return 0, errors.Join(err, freeErr)
 			}
 			return 0, err
 		}
@@ -1242,7 +1242,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if err := writer.Flush(); err != nil {
 			freeErr := tracker.FreeAll()
 			if freeErr != nil {
-				return 0, freeErr
+				return 0, errors.Join(err, freeErr)
 			}
 			return 0, err
 		}
@@ -1251,7 +1251,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, nil, db.indexOuterLeavesInValueLog, nil); err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
