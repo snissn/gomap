@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
@@ -56,6 +57,33 @@ type namedRootOverlayIterator struct {
 	index   int
 	start   []byte
 	end     []byte
+}
+
+var namedRootPublishHook struct {
+	mu sync.RWMutex
+	fn func(string) error
+}
+
+func setNamedRootPublishTestHook(fn func(string) error) func() {
+	namedRootPublishHook.mu.Lock()
+	prev := namedRootPublishHook.fn
+	namedRootPublishHook.fn = fn
+	namedRootPublishHook.mu.Unlock()
+	return func() {
+		namedRootPublishHook.mu.Lock()
+		namedRootPublishHook.fn = prev
+		namedRootPublishHook.mu.Unlock()
+	}
+}
+
+func runNamedRootPublishTestHook(stage string) error {
+	namedRootPublishHook.mu.RLock()
+	fn := namedRootPublishHook.fn
+	namedRootPublishHook.mu.RUnlock()
+	if fn == nil {
+		return nil
+	}
+	return fn(stage)
 }
 
 func (db *DB) hasBufferedNamedRoot(rootID uint64) bool {
@@ -262,6 +290,9 @@ func (db *DB) flushNamedRootOverlays(sync bool) error {
 	defer db.namedRootMu.Unlock()
 	if len(db.namedRootsByID) == 0 {
 		return nil
+	}
+	if err := runNamedRootPublishTestHook("before_publish"); err != nil {
+		return err
 	}
 
 	states := make([]*namedRootOverlayState, 0, len(db.namedRootsByID))
