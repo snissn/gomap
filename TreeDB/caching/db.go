@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -4197,7 +4198,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
 	segments, _ := listNonEmptyLogSegments(walDir)
-	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
+	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
+	// Until we persist nextRID separately, opening must recover the max on-disk
+	// RID here rather than risk reusing low RIDs after a clean reopen.
+	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
 	if err != nil {
 		return nil, err
 	}
@@ -8903,13 +8907,13 @@ func (db *DB) vlogGenerationRewriteBudgetCapBytes() int64 {
 	}
 	targets := int64(0)
 	if db.valueLogGenerationHotTarget > 0 {
-		targets += db.valueLogGenerationHotTarget
+		targets = addClampInt64(targets, db.valueLogGenerationHotTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationWarmTarget > 0 {
-		targets += db.valueLogGenerationWarmTarget
+		targets = addClampInt64(targets, db.valueLogGenerationWarmTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationColdTarget > 0 {
-		targets += db.valueLogGenerationColdTarget
+		targets = addClampInt64(targets, db.valueLogGenerationColdTarget, maxPositiveInt64)
 	}
 	if targets > capBytes {
 		capBytes = targets
@@ -8929,8 +8933,17 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 		return
 	}
 	nowNs := now.UnixNano()
-	prevNs := db.vlogGenerationRewriteBudgetLastUnixNano.Swap(nowNs)
-	if prevNs <= 0 || nowNs <= prevNs {
+	var prevNs int64
+	for {
+		prevNs = db.vlogGenerationRewriteBudgetLastUnixNano.Load()
+		if prevNs > 0 && nowNs <= prevNs {
+			return
+		}
+		if db.vlogGenerationRewriteBudgetLastUnixNano.CompareAndSwap(prevNs, nowNs) {
+			break
+		}
+	}
+	if prevNs <= 0 {
 		return
 	}
 	deltaNs := nowNs - prevNs
@@ -8941,19 +8954,33 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 	}
 	for {
 		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
-		next := cur + add
-		if next > capBytes {
-			next = capBytes
-		}
-		if next < 0 {
-			next = 0
-		}
+		next := addClampInt64(cur, add, capBytes)
 		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
 			return
 		}
 	}
 }
 
+const maxPositiveInt64 = int64(^uint64(0) >> 1)
+
+func addClampInt64(cur, add, limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	if cur <= 0 {
+		cur = 0
+	}
+	if add <= 0 {
+		if cur > limit {
+			return limit
+		}
+		return cur
+	}
+	if cur >= limit || cur > limit-add {
+		return limit
+	}
+	return cur + add
+}
 func mulDivClampInt64(a, b, div, cap int64) int64 {
 	if a <= 0 || b <= 0 || div <= 0 || cap <= 0 {
 		return 0
@@ -16028,6 +16055,36 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 		}
 	}
 	return maxRID, nil
+}
+
+func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
+	if len(segments) == 0 {
+		return nil
+	}
+	tailByLane := make(map[int]logSegmentInfo, len(segments))
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
+			continue
+		}
+		prev, ok := tailByLane[seg.lane]
+		if !ok || seg.seq > prev.seq {
+			tailByLane[seg.lane] = seg
+		}
+	}
+	if len(tailByLane) == 0 {
+		return nil
+	}
+	tails := make([]logSegmentInfo, 0, len(tailByLane))
+	for _, seg := range tailByLane {
+		tails = append(tails, seg)
+	}
+	sort.Slice(tails, func(i, j int) bool {
+		if tails[i].lane != tails[j].lane {
+			return tails[i].lane < tails[j].lane
+		}
+		return tails[i].seq < tails[j].seq
+	})
+	return tails
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {

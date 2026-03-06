@@ -84,6 +84,28 @@ func setMutable(db *DB, key, value []byte) {
 	db.mutableBytes.Add(delta)
 }
 
+func TestTailValueLogSegmentsByLane(t *testing.T) {
+	segments := []logSegmentInfo{
+		{path: "value-0-000001.log", lane: 0, seq: 1, valueLog: true, size: 128},
+		{path: "value-0-000003.log", lane: 0, seq: 3, valueLog: true, size: 128},
+		{path: "value-0-000002.log", lane: 0, seq: 2, valueLog: true, size: 128},
+		{path: "value-1-000004.log", lane: 1, seq: 4, valueLog: true, size: 0},
+		{path: "value-1-000005.log", lane: 1, seq: 5, valueLog: true, size: 128},
+		{path: "commit-1-000006.log", lane: 1, seq: 6, valueLog: false, size: 128},
+	}
+
+	got := tailValueLogSegmentsByLane(segments)
+	if len(got) != 2 {
+		t.Fatalf("tailValueLogSegmentsByLane len=%d want 2", len(got))
+	}
+	if got[0].lane != 0 || got[0].seq != 3 {
+		t.Fatalf("lane 0 tail=%+v want seq=3", got[0])
+	}
+	if got[1].lane != 1 || got[1].seq != 5 {
+		t.Fatalf("lane 1 tail=%+v want seq=5", got[1])
+	}
+}
+
 func deleteMutable(db *DB, key []byte) {
 	shard := db.shardForKey(key)
 	shard.mu.Lock()
