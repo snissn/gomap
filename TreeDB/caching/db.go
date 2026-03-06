@@ -431,17 +431,21 @@ func putBatchArena(buf []byte) {
 	}
 	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
+		noteEpoch := false
 		for {
 			held := batchArenaPoolBytes.Load()
 			if held+size > budget {
 				return
 			}
 			if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
+				noteEpoch = held == 0
 				break
 			}
 		}
+		if noteEpoch {
+			noteBatchArenaPoolGC(batchArenaPoolNumGC())
+		}
 	}
-	noteBatchArenaPoolGC(batchArenaPoolNumGC())
 	batchArenaPools[idx].Put(buf[:0])
 }
 
