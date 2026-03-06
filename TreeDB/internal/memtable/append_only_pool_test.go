@@ -323,8 +323,11 @@ func TestAppendOnlyUnorderedAppendDefersLatestRebuild(t *testing.T) {
 	if m.snapCount != 0 {
 		t.Fatalf("expected mutable unordered iterator to avoid caching snapshot; got snapCount=%d", m.snapCount)
 	}
-	if len(m.snapshot) != 0 {
-		t.Fatalf("expected mutable unordered iterator to leave shared snapshot empty; got len=%d", len(m.snapshot))
+	if m.snapshot != nil {
+		t.Fatalf("expected mutable unordered iterator to leave shared snapshot nil")
+	}
+	if cap(m.snapshot) != 0 {
+		t.Fatalf("expected mutable unordered iterator to release shared snapshot backing array; got cap=%d", cap(m.snapshot))
 	}
 
 	m.Set([]byte("b"), []byte("v3"))
