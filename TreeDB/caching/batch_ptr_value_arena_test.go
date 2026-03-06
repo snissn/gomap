@@ -69,6 +69,52 @@ func TestBatchPtrValueArena_RetainedWhenPointersDenied(t *testing.T) {
 	}
 }
 
+func TestBatchPtrValueArena_RecycledWhenPointersAssigned(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		MemtableMode:             "btree",
+		MemtableShards:           1,
+		FlushThreshold:           1 << 30,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("k1")
+	val := bytes.Repeat([]byte{0x33}, 64)
+
+	b := db.NewBatchWithSize(1)
+	defer b.Close()
+	if err := b.Set(key, val); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if len(b.ptrValueIdxs) != 0 {
+		t.Fatalf("expected pointer entry indices to be cleared after write, got %d", len(b.ptrValueIdxs))
+	}
+	if len(b.ptrCopyArenaChunks) != 0 {
+		t.Fatalf("expected ptr copy arena chunks to drain after write, got %d", len(b.ptrCopyArenaChunks))
+	}
+	if count := countBatchArenaLeaseChunks(db, db.mutableShards[0].mem); count != 1 {
+		t.Fatalf("expected only the main batch arena lease to remain; got %d chunks", count)
+	}
+
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("value corrupted: got=%x want=%x", got, val)
+	}
+}
+
 func countBatchArenaLeaseChunks(db *DB, mt memtable.Table) int {
 	db.batchArenaLeaseMu.Lock()
 	defer db.batchArenaLeaseMu.Unlock()

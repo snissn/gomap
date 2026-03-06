@@ -88,6 +88,21 @@ type AppendOnly struct {
 
 func (*AppendOnly) StableUnsafeIteratorSlices() bool { return true }
 
+func appendOnlyMaxReuseEntries(length int) int {
+	maxReuse := appendOnlyEntryPoolMaxCap
+	if length <= appendOnlyEntryPoolMaxCap/appendOnlyReuseOversizeFactor {
+		target := length
+		if target < appendOnlyMinInitialEntries {
+			target = appendOnlyMinInitialEntries
+		}
+		maxReuse = target * appendOnlyReuseOversizeFactor
+		if maxReuse > appendOnlyEntryPoolMaxCap {
+			maxReuse = appendOnlyEntryPoolMaxCap
+		}
+	}
+	return maxReuse
+}
+
 func getAppendOnlyEntries(length int) []appendOnlyEntry {
 	if length < 0 {
 		length = 0
@@ -100,17 +115,7 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 			// Prevent huge retained entry slices from being reused for much smaller
 			// memtables/iterators, which can otherwise pin large heaps after short-lived
 			// spikes (e.g. state-sync restore).
-			maxReuse := appendOnlyEntryPoolMaxCap
-			if length > 0 && length <= appendOnlyEntryPoolMaxCap/appendOnlyReuseOversizeFactor {
-				maxReuse = length * appendOnlyReuseOversizeFactor
-				if maxReuse < appendOnlyMinInitialEntries {
-					maxReuse = appendOnlyMinInitialEntries
-				}
-				if maxReuse > appendOnlyEntryPoolMaxCap {
-					maxReuse = appendOnlyEntryPoolMaxCap
-				}
-			}
-			if cap(entries) <= maxReuse {
+			if cap(entries) <= appendOnlyMaxReuseEntries(length) {
 				return entries[:length]
 			}
 		}
@@ -431,8 +436,10 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	if m.count == 0 || m.ordered {
 		if m.indexBuf == nil {
 			m.indexBuf = make([]int, 0)
+		} else {
+			m.indexBuf = m.indexBuf[:0]
 		}
-		return m.indexBuf[:0]
+		return m.indexBuf
 	}
 	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
@@ -440,14 +447,12 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	// The returned slice aliases m.indexBuf scratch storage. It is only valid
 	// while m.mu is held and may be overwritten by the next call.
 	need := len(m.latest) + len(m.latest64)
-	indices := m.indexBuf[:0]
-	if cap(indices) < need {
-		indices = make([]int, 0, need)
+	if cap(m.indexBuf) < need {
+		m.indexBuf = make([]int, 0, need)
+	} else {
+		m.indexBuf = m.indexBuf[:0]
 	}
-	if indices == nil {
-		indices = make([]int, 0)
-	}
-	m.indexBuf = indices[:0]
+	indices := m.indexBuf
 	for _, idx := range m.latest {
 		indices = append(indices, idx)
 	}
@@ -922,7 +927,7 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	// If the entry slice grew far beyond the configured baseline, shrink it.
 	// This avoids permanently ratcheting heap high-water when a workload briefly
 	// spikes in write volume (common during state-sync restore).
-	if cap(m.entries) > desiredEntries*appendOnlyReuseOversizeFactor {
+	if cap(m.entries) > appendOnlyMaxReuseEntries(desiredEntries) {
 		m.entries = make([]appendOnlyEntry, desiredEntries)
 		return
 	}

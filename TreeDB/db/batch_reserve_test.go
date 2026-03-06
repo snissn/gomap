@@ -43,8 +43,8 @@ func TestNormalizePublicBatchReserveHint_PreservesSmallEntryHints(t *testing.T) 
 
 func TestNormalizePublicBatchReserveHint_ConvertsLargeByteBudgets(t *testing.T) {
 	const sizeHint = 100_000
-	want := sizeHint / publicBatchHintBytesPerEntry
-	if sizeHint%publicBatchHintBytesPerEntry != 0 {
+	want := sizeHint / publicBatchHintApproxBytesPerEntry
+	if sizeHint%publicBatchHintApproxBytesPerEntry != 0 {
 		want++
 	}
 	if got := NormalizePublicBatchReserveHint(sizeHint); got != want {
@@ -59,8 +59,8 @@ func TestNormalizePublicBatchReserveHint_HandlesEdgeCases(t *testing.T) {
 	if got := NormalizePublicBatchReserveHint(0); got != 0 {
 		t.Fatalf("NormalizePublicBatchReserveHint(0)=%d want 0", got)
 	}
-	if got := NormalizePublicBatchReserveHint(int(^uint(0) >> 1)); got != publicBatchReserveEntriesMax {
-		t.Fatalf("NormalizePublicBatchReserveHint(maxint)=%d want %d", got, publicBatchReserveEntriesMax)
+	if got := NormalizePublicBatchReserveHint(int(^uint(0) >> 1)); got != publicBatchHintNormalizedEntryCap {
+		t.Fatalf("NormalizePublicBatchReserveHint(maxint)=%d want %d", got, publicBatchHintNormalizedEntryCap)
 	}
 }
 
@@ -80,7 +80,7 @@ func TestNewBatchWithSize_NormalizesLargePublicHint(t *testing.T) {
 
 func TestNewBatchWithEntryReserve_PreservesExplicitEntryCounts(t *testing.T) {
 	db := &DB{}
-	const reserveHint = publicBatchReserveEntryHintCutover + 1
+	const reserveHint = publicBatchHintExactEntryReserveMax + 1
 	b := db.newBatchWithEntryReserve(reserveHint).(*Batch)
 	defer func() { _ = b.Close() }()
 

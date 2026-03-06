@@ -19,7 +19,7 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
-func TestWriterFlushFlushesBufferedFileWriter(t *testing.T) {
+func TestWriterFlushFlushesBufferedFileBackedWriter(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
 

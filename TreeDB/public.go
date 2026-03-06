@@ -1410,6 +1410,7 @@ func VacuumIndexOffline(opts Options) error {
 		return err
 	}
 	opts.Dir = layout.mainDir
+	opts.DisableSideStores = layout.disableSideStores
 
 	// Preserve the persisted on-disk format knobs by default so offline index
 	// maintenance doesn't accidentally rewrite the DB into a different layout.
