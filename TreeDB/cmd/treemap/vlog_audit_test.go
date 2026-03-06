@@ -10,6 +10,7 @@ import (
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
@@ -54,6 +55,47 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	if report.SegmentsOnDisk == 0 || report.BytesOnDisk == 0 {
 		t.Fatalf("expected segment inventory, got segments=%d bytes=%d", report.SegmentsOnDisk, report.BytesOnDisk)
 	}
+}
+
+func TestParseValueLogAuditFileID_AcceptsLegacyAndLaneNames(t *testing.T) {
+	tests := []struct {
+		name   string
+		want   uint32
+		wantOK bool
+	}{
+		{
+			name:   "value-42.log",
+			want:   mustEncodeAuditFileID(t, 0, 42),
+			wantOK: true,
+		},
+		{
+			name:   "value-l7-42.log",
+			want:   mustEncodeAuditFileID(t, 7, 42),
+			wantOK: true,
+		},
+		{
+			name:   "value-lbad-42.log",
+			wantOK: false,
+		},
+	}
+	for _, tc := range tests {
+		got, ok := parseValueLogAuditFileID(tc.name)
+		if ok != tc.wantOK {
+			t.Fatalf("parseValueLogAuditFileID(%q) ok=%v want %v", tc.name, ok, tc.wantOK)
+		}
+		if got != tc.want {
+			t.Fatalf("parseValueLogAuditFileID(%q)=%d want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func mustEncodeAuditFileID(t *testing.T, lane, seq uint32) uint32 {
+	t.Helper()
+	fileID, err := valuelog.EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("EncodeFileID(%d,%d): %v", lane, seq, err)
+	}
+	return fileID
 }
 
 func buildDictCompressedDBForAudit(t *testing.T, dir string) {

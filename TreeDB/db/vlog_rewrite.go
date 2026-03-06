@@ -119,6 +119,19 @@ func newRewriteRIDAllocator(start uint64, reserve func(count int) (uint64, error
 	}
 }
 
+func validateRewriteRIDRange(start uint64, count int) error {
+	if count <= 0 {
+		return nil
+	}
+	if start == 0 {
+		return fmt.Errorf("value-log rid allocator returned rid 0")
+	}
+	if uint64(count-1) > ^uint64(0)-start {
+		return fmt.Errorf("value-log rid space exhausted")
+	}
+	return nil
+}
+
 func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 	if count <= 0 {
 		return 0, nil
@@ -131,8 +144,8 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if start == 0 {
-			return 0, fmt.Errorf("value-log rid allocator returned rid 0")
+		if err := validateRewriteRIDRange(start, count); err != nil {
+			return 0, err
 		}
 		return start, nil
 	}
@@ -140,8 +153,8 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 	if start == 0 {
 		start = 1
 	}
-	if uint64(count-1) > ^uint64(0)-start {
-		return 0, fmt.Errorf("value-log rid space exhausted")
+	if err := validateRewriteRIDRange(start, count); err != nil {
+		return 0, err
 	}
 	a.next = start + uint64(count)
 	return start, nil
@@ -1184,13 +1197,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	tracker := newAllocTracker(idx.allocator)
 	leafCtx := &leafRefRewriteCtx{
-		ctx:          ctx,
-		db:           db,
-		pager:        idx.pager,
-		alloc:        tracker,
-		writer:       writer,
-		ridAlloc:     ridAlloc,
-		sourceIDs:    sourceIDs,
+		ctx:       ctx,
+		db:        db,
+		pager:     idx.pager,
+		alloc:     tracker,
+		writer:    writer,
+		ridAlloc:  ridAlloc,
+		sourceIDs: sourceIDs,
 	}
 
 	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)

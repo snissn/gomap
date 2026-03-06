@@ -278,23 +278,34 @@ func scanValueLogRIDs(segments []valueLogSegmentAudit) (valueLogRIDAudit, error)
 }
 
 func parseValueLogAuditFileID(name string) (uint32, bool) {
-	if !strings.HasPrefix(name, "value-l") || !strings.HasSuffix(name, ".log") {
+	if !strings.HasPrefix(name, "value-") || !strings.HasSuffix(name, ".log") {
 		return 0, false
 	}
-	rest := strings.TrimSuffix(strings.TrimPrefix(name, "value-l"), ".log")
-	parts := strings.SplitN(rest, "-", 2)
-	if len(parts) != 2 {
-		return 0, false
+	rest := strings.TrimSuffix(strings.TrimPrefix(name, "value-"), ".log")
+	if strings.HasPrefix(rest, "l") {
+		parts := strings.SplitN(strings.TrimPrefix(rest, "l"), "-", 2)
+		if len(parts) != 2 {
+			return 0, false
+		}
+		lane, err := strconv.ParseUint(parts[0], 10, 32)
+		if err != nil {
+			return 0, false
+		}
+		seq, err := strconv.ParseUint(parts[1], 10, 32)
+		if err != nil {
+			return 0, false
+		}
+		fileID, err := valuelog.EncodeFileID(uint32(lane), uint32(seq))
+		if err != nil {
+			return 0, false
+		}
+		return fileID, true
 	}
-	lane, err := strconv.ParseUint(parts[0], 10, 32)
+	seq, err := strconv.ParseUint(rest, 10, 32)
 	if err != nil {
 		return 0, false
 	}
-	seq, err := strconv.ParseUint(parts[1], 10, 32)
-	if err != nil {
-		return 0, false
-	}
-	fileID, err := valuelog.EncodeFileID(uint32(lane), uint32(seq))
+	fileID, err := valuelog.EncodeFileID(0, uint32(seq))
 	if err != nil {
 		return 0, false
 	}
