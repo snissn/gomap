@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -1248,14 +1247,13 @@ func (db *DB) NewBatch() Batch {
 
 // NewBatchWithSize creates a new batch with a best-effort capacity hint.
 //
-// The size parameter is not a strict limit and does not guarantee that a batch
-// can hold exactly size entries. Small hints are treated like approximate entry
-// reserves. Larger hints may be interpreted as a byte budget and normalized
-// into an internal entry estimate instead. Extremely large hints may also be
-// capped internally.
+// The size parameter is a best-effort hint, not a strict limit. Small hints are
+// treated like approximate entry reserves. Larger hints may be interpreted as a
+// byte budget and normalized into an internal entry estimate instead.
+// Extremely large hints may also be capped internally.
 //
 // Callers must not rely on an exact 1:1 mapping between size and the number of
-// entries that can be written to the batch.
+// entries or bytes that can be written to the batch.
 func (db *DB) NewBatchWithSize(size int) Batch {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return nil
@@ -1407,27 +1405,23 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 //
 // It is an offline operation: it acquires the exclusive open lock for opts.Dir.
 func VacuumIndexOffline(opts Options) error {
-	maindbDir, err := resolveMainDBDir(opts.Dir)
+	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return err
 	}
-	opts.Dir = maindbDir
+	opts.Dir = layout.mainDir
 
 	// Preserve the persisted on-disk format knobs by default so offline index
 	// maintenance doesn't accidentally rewrite the DB into a different layout.
 	if !opts.IgnoreFormatConfig {
-		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
+		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
 			return err
 		} else if ok {
 			cfg.ApplyToOptions(&opts)
 		}
 	}
 
-	rootDir := maindbDir
-	if !opts.DisableSideStores && filepath.Base(maindbDir) == "maindb" {
-		rootDir = filepath.Dir(maindbDir)
-	}
-	sideCleanup, err := wireSideStoreLookups(rootDir, &opts)
+	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
 	if err != nil {
 		return err
 	}
