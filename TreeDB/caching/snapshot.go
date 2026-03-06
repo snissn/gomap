@@ -69,6 +69,9 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 			// iterator prealloc policy to keep the rotation cheap for read-heavy paths.
 			if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 				db.mu.Unlock()
+				if db.notifyError != nil {
+					db.notifyError(err)
+				}
 				return nil
 			}
 		}

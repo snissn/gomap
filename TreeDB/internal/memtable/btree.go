@@ -21,6 +21,13 @@ type btreeEntry struct {
 	flags byte
 }
 
+func canonicalizeBTreePointerValue(flags byte, value []byte) []byte {
+	if flags&node.FlagPointer != 0 && len(value) == 0 {
+		return nil
+	}
+	return value
+}
+
 func btreeEntryValueSize(flags byte, value []byte) int {
 	if flags&node.FlagPointer != 0 {
 		// page.ValuePtrSize is defined as the in-memory ValuePtr struct size.
@@ -83,7 +90,7 @@ func (m *BTree) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key [
 				m.sizeBytes += int64(len(op.Key))
 			}
 		} else if op.IsPtr {
-			entry := btreeEntry{value: op.Value, ptr: op.ValuePtr, flags: node.FlagPointer}
+			entry := btreeEntry{value: canonicalizeBTreePointerValue(node.FlagPointer, op.Value), ptr: op.ValuePtr, flags: node.FlagPointer}
 			if m.hasLast && keyStr > m.lastKey {
 				prev, replaced = m.tree.Load(keyStr, entry)
 			} else {
@@ -207,6 +214,7 @@ func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	if entry.flags&node.FlagTombstone != 0 {
 	} else if entry.flags&node.FlagPointer != 0 {
 		entry.ptr = ptr
+		value = canonicalizeBTreePointerValue(entry.flags, value)
 		if len(value) > 0 {
 			entry.value = m.arena.Copy(value)
 		}
@@ -242,7 +250,7 @@ func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) 
 	if entry.flags&node.FlagTombstone != 0 {
 	} else if entry.flags&node.FlagPointer != 0 {
 		entry.ptr = ptr
-		entry.value = value
+		entry.value = canonicalizeBTreePointerValue(entry.flags, value)
 	} else {
 		entry.value = value
 	}
@@ -304,7 +312,7 @@ func (m *BTree) Get(key []byte) ([]byte, bool, bool) {
 		return nil, false, false
 	}
 	if val.flags&node.FlagPointer != 0 {
-		return val.value, val.flags&node.FlagTombstone != 0, true
+		return canonicalizeBTreePointerValue(val.flags, val.value), val.flags&node.FlagTombstone != 0, true
 	}
 	return val.value, val.flags&node.FlagTombstone != 0, true
 }
@@ -317,7 +325,7 @@ func (m *BTree) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 		return nil, page.ValuePtr{}, 0, false
 	}
 	if val.flags&node.FlagPointer != 0 {
-		return val.value, val.ptr, val.flags, true
+		return canonicalizeBTreePointerValue(val.flags, val.value), val.ptr, val.flags, true
 	}
 	return val.value, page.ValuePtr{}, val.flags, true
 }
