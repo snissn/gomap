@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/collections"
@@ -1085,6 +1086,143 @@ func TestCachedCollectionsCheckpoint_SameHandleReadsPublishedNamedRoots(t *testi
 	}
 }
 
+func TestCachedCollectionsTriggerFlush_PublishesBufferedNamedRootsWithoutCheckpoint(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	primaryRootName := mustCollectionPrimaryRootName(t, meta.Name)
+	primaryBefore := loadBackendRootDescriptor(t, d, primaryRootName)
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if !d.cached.PendingNamedRoots() {
+		t.Fatalf("expected pending named roots before trigger flush")
+	}
+
+	d.cached.TriggerFlush()
+	waitForCachedFlushCondition(t, "named roots trigger flush", func() bool {
+		return !d.cached.PendingNamedRoots()
+	})
+
+	primaryAfter := loadBackendRootDescriptor(t, d, primaryRootName)
+	if primaryAfter.RootPageID == 0 || primaryAfter.RootPageID == primaryBefore.RootPageID {
+		t.Fatalf("expected trigger flush to publish new primary root, before=%d after=%d", primaryBefore.RootPageID, primaryAfter.RootPageID)
+	}
+	assertBackendDocAtRoot(t, d, primaryAfter.RootPageID, []byte("u1"), []byte(`{"email":"ada@example.com"}`))
+}
+
+func TestCachedCollectionsBufferedNamedRoots_AutoFlushOnThreshold(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 128})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := []byte(`{"email":"ada@example.com","payload":"` + strings.Repeat("x", 1024) + `"}`)
+	if _, err := col.Insert([]byte("u1"), doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	waitForCachedFlushCondition(t, "named roots auto flush", func() bool {
+		return !d.cached.PendingNamedRoots()
+	})
+
+	primaryRootName := mustCollectionPrimaryRootName(t, meta.Name)
+	primaryAfter := loadBackendRootDescriptor(t, d, primaryRootName)
+	if primaryAfter.RootPageID == 0 {
+		t.Fatalf("expected auto flush to publish primary root")
+	}
+	assertBackendDocAtRoot(t, d, primaryAfter.RootPageID, []byte("u1"), doc)
+}
+
+func TestCachedCollectionsGetAtRoot_ResolvesFlushedVirtualRootID(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 1 << 30})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"name":"ada"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	primaryRootKey, err := collections.SystemCollectionRootKey(meta.PrimaryRoot)
+	if err != nil {
+		t.Fatalf("primary root key: %v", err)
+	}
+	rawDesc, err := d.GetSystem(primaryRootKey)
+	if err != nil {
+		t.Fatalf("cached get primary descriptor: %v", err)
+	}
+	var desc collections.CollectionRootDescriptor
+	if err := desc.Decode(rawDesc); err != nil {
+		t.Fatalf("decode primary descriptor: %v", err)
+	}
+	virtualRootID := desc.RootPageID
+
+	d.cached.TriggerFlush()
+	waitForCachedFlushCondition(t, "named roots trigger flush", func() bool {
+		return !d.cached.PendingNamedRoots()
+	})
+
+	got, err := d.GetAtRoot(virtualRootID, []byte("u1"))
+	if err != nil {
+		t.Fatalf("get at flushed virtual root: %v", err)
+	}
+	if !bytes.Equal(got, []byte(`{"name":"ada"}`)) {
+		t.Fatalf("get at flushed virtual root = %q", got)
+	}
+}
+
 func loadBackendRootDescriptor(t *testing.T, d *DB, rootName string) collections.CollectionRootDescriptor {
 	t.Helper()
 	rootKey, err := collections.SystemCollectionRootKey(rootName)
@@ -1199,4 +1337,16 @@ func mustCollectionIndexRootName(t *testing.T, collection, indexName string) str
 		t.Fatalf("index root name for %s/%s: %v", collection, indexName, err)
 	}
 	return rootName
+}
+
+func waitForCachedFlushCondition(t *testing.T, label string, fn func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", label)
 }
