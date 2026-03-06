@@ -223,7 +223,10 @@ func TestTreeGetAppend_AppendsAndUsesAppendReaderForPointers(t *testing.T) {
 	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
 	ptr := tracked.Add([]byte("pointer-value"))
 
-	rootData, _ := p.Get(rootID)
+	rootData, err := p.Get(rootID)
+	if err != nil {
+		t.Fatalf("Get root page: %v", err)
+	}
 	root := node.NewNode(rootData)
 	root.SetType(page.PageTypeLeaf)
 	root.SetPageID(rootID)
