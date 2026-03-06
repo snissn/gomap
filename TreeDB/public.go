@@ -70,18 +70,22 @@ type getManyPlanner interface {
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
-	cached         *caching.DB
-	backend        *db.DB
-	dictdb         *db.DB
-	templateDB     *DB
-	writePath      writePathInfo
-	bgVac          bgIndexVacuumWorker
-	notifyError    func(error)
-	bgErrMu        sync.Mutex
-	bgErr          error
-	durabilityMode string
-	dir            string
-	maintenance    maintenanceCoordinator
+	cached          *caching.DB
+	backend         *db.DB
+	dictdb          *db.DB
+	templateDB      *DB
+	writePath       writePathInfo
+	bgVac           bgIndexVacuumWorker
+	notifyError     func(error)
+	bgErrMu         sync.Mutex
+	bgErr           error
+	durabilityMode  string
+	dir             string
+	maintenance     maintenanceCoordinator
+	namedRootMu     sync.RWMutex
+	namedRootsByID  map[uint64]*namedRootOverlayState
+	namedRootsByKey map[string]*namedRootOverlayState
+	nextNamedRootID atomic.Uint64
 }
 
 type writePathInfo struct {
@@ -1003,6 +1007,7 @@ func (db *DB) Close() error {
 
 	// Close cached layer first if present
 	if db.cached != nil {
+		err = errors.Join(err, db.flushNamedRootOverlays(true))
 		err = errors.Join(err, db.cached.Close())
 		db.cached = nil
 	}
@@ -1333,6 +1338,9 @@ func (db *DB) Checkpoint() error {
 		return err
 	}
 	if db.cached != nil {
+		if err := db.flushNamedRootOverlays(true); err != nil {
+			return err
+		}
 		return db.cached.Checkpoint()
 	}
 	b := db.backend.NewBatch()
