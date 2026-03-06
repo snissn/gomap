@@ -1,6 +1,7 @@
 package db
 
 import (
+	"math"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -59,7 +60,7 @@ func TestNormalizePublicBatchReserveHint_HandlesEdgeCases(t *testing.T) {
 	if got := NormalizePublicBatchReserveHint(0); got != 0 {
 		t.Fatalf("NormalizePublicBatchReserveHint(0)=%d want 0", got)
 	}
-	if got := NormalizePublicBatchReserveHint(int(^uint(0) >> 1)); got != publicBatchHintNormalizedEntryCap {
+	if got := NormalizePublicBatchReserveHint(math.MaxInt); got != publicBatchHintNormalizedEntryCap {
 		t.Fatalf("NormalizePublicBatchReserveHint(maxint)=%d want %d", got, publicBatchHintNormalizedEntryCap)
 	}
 }

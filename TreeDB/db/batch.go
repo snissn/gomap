@@ -45,6 +45,9 @@ func (db *DB) NewBatchWithSize(size int) batch.Interface {
 // reserves, but treats larger hints as approximate byte budgets so callers do
 // not accidentally preallocate one entry per byte. This is intentionally
 // discontinuous at the cutover for compatibility with small entry-count hints.
+//
+// For internal use; behavior may change without notice and is not part of the
+// supported external API surface of the db package.
 func NormalizePublicBatchReserveHint(size int) int {
 	if size <= 0 {
 		return 0
