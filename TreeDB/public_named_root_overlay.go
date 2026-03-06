@@ -224,6 +224,10 @@ func setNamedRootBulkPublishIteratorsTestHook(fn func(int)) func() {
 	return caching.SetNamedRootBulkPublishIteratorsTestHook(fn)
 }
 
+func setNamedRootBulkPublishTablesTestHook(fn func(int)) func() {
+	return caching.SetNamedRootBulkPublishTablesTestHook(fn)
+}
+
 func runNamedRootOwnedWriteTestHook(kind string, key []byte) {
 	namedRootOwnedWriteHook.mu.RLock()
 	fn := namedRootOwnedWriteHook.fn

@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
@@ -26,6 +27,7 @@ type BackendDirectBridge interface {
 	HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error)
 	IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error)
 	MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
+	MutateRootsWithFormatTables(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootTables []memtable.Table, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
 	MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
 	MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
 	MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error)

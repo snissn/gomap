@@ -92,17 +92,6 @@ func newCollectionRootTable() (memtable.Table, error) {
 	return memtable.NewWithCapacityMode(0, memtable.ModeBTree)
 }
 
-func newCollectionRootIterator(table memtable.Table) iterator.UnsafeIterator {
-	if table == nil {
-		return nil
-	}
-	iter := table.NewIterator(nil, nil)
-	if stable, ok := table.(memtable.StableUnsafeIteratorTable); ok && stable.StableUnsafeIteratorSlices() {
-		return stableCollectionIterator{UnsafeIterator: iter, table: table}
-	}
-	return iter
-}
-
 type collectionDB interface {
 	Get(key []byte) ([]byte, error)
 	HasAtRoot(rootID uint64, key []byte) (bool, error)
@@ -123,6 +112,7 @@ type collectionDB interface {
 	PreferWarmIteratorBatchPublish() bool
 	MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
 	MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
+	MutateRootsWithFormatTables(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootTables []memtable.Table, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
 	MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error)
 	MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
 	MutateRootAndUserWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
@@ -950,7 +940,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	}
 
 	if useIteratorPublish {
-		if err := c.publishRootIterators(rootIDs, rootFormats, rootTables, rootUpdates); err != nil {
+		if err := c.publishRootTables(rootIDs, rootFormats, rootTables, rootUpdates); err != nil {
 			return nil, err
 		}
 	} else {
@@ -2190,19 +2180,15 @@ func (c *Collection) publishRootOps(rootIDs []uint64, rootFormats []*rootfmt.For
 	return nil
 }
 
-func (c *Collection) publishRootIterators(rootIDs []uint64, rootFormats []*rootfmt.Format, rootTables []memtable.Table, rootUpdates []collectionRootUpdate) error {
+func (c *Collection) publishRootTables(rootIDs []uint64, rootFormats []*rootfmt.Format, rootTables []memtable.Table, rootUpdates []collectionRootUpdate) error {
 	if c == nil {
 		return errCollectionNil
 	}
 	if c.db == nil {
 		return errCollectionManagerNil
 	}
-	rootIters := make([]iterator.UnsafeIterator, len(rootTables))
-	for i := range rootTables {
-		rootIters[i] = newCollectionRootIterator(rootTables[i])
-	}
 	var publishedRootIDs []uint64
-	_, err := c.db.MutateRootsWithFormatIterators(false, rootIDs, rootFormats, rootIters, func(newRootIDs []uint64) ([]batch.Entry, error) {
+	_, err := c.db.MutateRootsWithFormatTables(false, rootIDs, rootFormats, rootTables, func(newRootIDs []uint64) ([]batch.Entry, error) {
 		publishedRootIDs = append(publishedRootIDs[:0], newRootIDs...)
 		return buildRootDescriptorEntries(rootUpdates, newRootIDs)
 	})

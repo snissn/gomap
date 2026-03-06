@@ -67,7 +67,7 @@ func TestCachedCollectionsInsertBatch_BufferedBeforeCheckpoint(t *testing.T) {
 	}
 }
 
-func TestCachedCollectionsInsertBatch_UsesSingleRootIteratorMutationCall(t *testing.T) {
+func TestCachedCollectionsInsertBatch_UsesSingleRootTableMutationCall(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open cached: %v", err)
@@ -99,12 +99,18 @@ func TestCachedCollectionsInsertBatch_UsesSingleRootIteratorMutationCall(t *test
 		t.Fatalf("open collection: %v", err)
 	}
 
-	iteratorCalls := 0
-	restoreIter := setRootIteratorMutationTestHook(func(rootCount int) {
-		iteratorCalls++
+	tableCalls := 0
+	restoreTables := setRootTableMutationTestHook(func(rootCount int) {
+		tableCalls++
 		if rootCount != 4 {
 			t.Fatalf("root count=%d want 4", rootCount)
 		}
+	})
+	defer restoreTables()
+
+	iteratorCalls := 0
+	restoreIter := setRootIteratorMutationTestHook(func(rootCount int) {
+		iteratorCalls++
 	})
 	defer restoreIter()
 
@@ -123,15 +129,18 @@ func TestCachedCollectionsInsertBatch_UsesSingleRootIteratorMutationCall(t *test
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
-	if iteratorCalls != 1 {
-		t.Fatalf("iterator calls=%d want 1", iteratorCalls)
+	if tableCalls != 1 {
+		t.Fatalf("table calls=%d want 1", tableCalls)
+	}
+	if iteratorCalls != 0 {
+		t.Fatalf("iterator calls=%d want 0", iteratorCalls)
 	}
 	if bulkCalls != 0 {
 		t.Fatalf("bulk calls=%d want 0", bulkCalls)
 	}
 }
 
-func TestCachedCollectionsInsertBatch_UsesIteratorPublishForWarmLargeBatches(t *testing.T) {
+func TestCachedCollectionsInsertBatch_UsesTablePublishForWarmLargeBatches(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open cached: %v", err)
@@ -176,12 +185,18 @@ func TestCachedCollectionsInsertBatch_UsesIteratorPublishForWarmLargeBatches(t *
 		t.Fatalf("checkpoint seed batch: %v", err)
 	}
 
-	iteratorCalls := 0
-	restoreIter := setRootIteratorMutationTestHook(func(rootCount int) {
-		iteratorCalls++
+	tableCalls := 0
+	restoreTables := setRootTableMutationTestHook(func(rootCount int) {
+		tableCalls++
 		if rootCount != 4 {
 			t.Fatalf("root count=%d want 4", rootCount)
 		}
+	})
+	defer restoreTables()
+
+	iteratorCalls := 0
+	restoreIter := setRootIteratorMutationTestHook(func(rootCount int) {
+		iteratorCalls++
 	})
 	defer restoreIter()
 
@@ -202,8 +217,11 @@ func TestCachedCollectionsInsertBatch_UsesIteratorPublishForWarmLargeBatches(t *
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		t.Fatalf("warm insert batch: %v", err)
 	}
-	if iteratorCalls != 1 {
-		t.Fatalf("iterator calls=%d want 1", iteratorCalls)
+	if tableCalls != 1 {
+		t.Fatalf("table calls=%d want 1", tableCalls)
+	}
+	if iteratorCalls != 0 {
+		t.Fatalf("iterator calls=%d want 0", iteratorCalls)
 	}
 	if bulkCalls != 0 {
 		t.Fatalf("bulk calls=%d want 0", bulkCalls)

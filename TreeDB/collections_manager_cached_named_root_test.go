@@ -842,7 +842,7 @@ func TestCachedCollectionsCheckpoint_UsesRootBulkMutationOps(t *testing.T) {
 	}
 }
 
-func TestCachedCollectionsCheckpoint_UsesRootMutationIterators(t *testing.T) {
+func TestCachedCollectionsCheckpoint_UsesRootMutationTables(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open cached: %v", err)
@@ -869,9 +869,9 @@ func TestCachedCollectionsCheckpoint_UsesRootMutationIterators(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	iteratorPublishCalls := 0
-	restore := setNamedRootBulkPublishIteratorsTestHook(func(rootCount int) {
-		iteratorPublishCalls++
+	tablePublishCalls := 0
+	restore := setNamedRootBulkPublishTablesTestHook(func(rootCount int) {
+		tablePublishCalls++
 		if rootCount != 3 {
 			t.Fatalf("root count=%d want 3", rootCount)
 		}
@@ -881,8 +881,8 @@ func TestCachedCollectionsCheckpoint_UsesRootMutationIterators(t *testing.T) {
 	if err := d.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint insert: %v", err)
 	}
-	if iteratorPublishCalls == 0 {
-		t.Fatalf("expected checkpoint to publish named roots through iterators")
+	if tablePublishCalls == 0 {
+		t.Fatalf("expected checkpoint to publish named roots through tables")
 	}
 }
 

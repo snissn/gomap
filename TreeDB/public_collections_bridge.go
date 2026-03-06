@@ -6,6 +6,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
@@ -20,12 +21,31 @@ type recordingSystemBatch struct {
 	entries []batch.Entry
 }
 
+type rootTableMutationIterator struct {
+	iterator.UnsafeIterator
+	table memtable.Table
+}
+
+func (it rootTableMutationIterator) RootMutationTable() memtable.Table { return it.table }
+
+func (it rootTableMutationIterator) StableUnsafeIteratorSlices() bool {
+	if stable, ok := it.table.(memtable.StableUnsafeIteratorTable); ok {
+		return stable.StableUnsafeIteratorSlices()
+	}
+	return false
+}
+
 var rootBulkMutationOpsHook struct {
 	mu sync.RWMutex
 	fn func(int)
 }
 
 var rootIteratorMutationHook struct {
+	mu sync.RWMutex
+	fn func(int)
+}
+
+var rootTableMutationHook struct {
 	mu sync.RWMutex
 	fn func(int)
 }
@@ -67,6 +87,27 @@ func runRootIteratorMutationTestHook(rootCount int) {
 	rootIteratorMutationHook.mu.RLock()
 	fn := rootIteratorMutationHook.fn
 	rootIteratorMutationHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootCount)
+	}
+}
+
+func setRootTableMutationTestHook(fn func(int)) func() {
+	rootTableMutationHook.mu.Lock()
+	prev := rootTableMutationHook.fn
+	rootTableMutationHook.fn = fn
+	rootTableMutationHook.mu.Unlock()
+	return func() {
+		rootTableMutationHook.mu.Lock()
+		rootTableMutationHook.fn = prev
+		rootTableMutationHook.mu.Unlock()
+	}
+}
+
+func runRootTableMutationTestHook(rootCount int) {
+	rootTableMutationHook.mu.RLock()
+	fn := rootTableMutationHook.fn
+	rootTableMutationHook.mu.RUnlock()
 	if fn != nil {
 		fn(rootCount)
 	}
@@ -280,6 +321,24 @@ func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, format
 		return db.cached.BufferNamedRootMutationsIterators(sync, rootIDs, formats, rootIters, buildSystemOps)
 	}
 	return db.backend.MutateRootsWithFormatIterators(sync, rootIDs, formats, rootIters, buildSystemOps)
+}
+
+func (db *DB) MutateRootsWithFormatTables(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootTables []memtable.Table, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	runRootTableMutationTestHook(len(rootIDs))
+	if db.cached != nil {
+		rootIters := make([]iterator.UnsafeIterator, len(rootTables))
+		for i := range rootTables {
+			if rootTables[i] == nil {
+				continue
+			}
+			rootIters[i] = rootTableMutationIterator{
+				UnsafeIterator: rootTables[i].NewIterator(nil, nil),
+				table:          rootTables[i],
+			}
+		}
+		return db.cached.BufferNamedRootMutationsIterators(sync, rootIDs, formats, rootIters, buildSystemOps)
+	}
+	return db.backend.MutateRootsWithFormatTables(sync, rootIDs, formats, rootTables, buildSystemOps)
 }
 
 // MutateRootWithFormat delegates named-root mutation to the backend.
