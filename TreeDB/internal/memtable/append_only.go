@@ -103,14 +103,17 @@ func appendOnlyMaxReuseEntries(length int) int {
 	return maxReuse
 }
 
-func getAppendOnlyEntries(length int) []appendOnlyEntry {
+func getAppendOnlyEntriesFromPool(length int, pool *sync.Pool) []appendOnlyEntry {
 	if length < 0 {
 		length = 0
 	}
 	if length > appendOnlyEntryPoolMaxCap {
 		return make([]appendOnlyEntry, length)
 	}
-	if v := appendOnlyEntryPool.Get(); v != nil {
+	if pool == nil {
+		return make([]appendOnlyEntry, length)
+	}
+	if v := pool.Get(); v != nil {
 		if entries, ok := v.([]appendOnlyEntry); ok && cap(entries) >= length {
 			// Prevent huge retained entry slices from being reused for much smaller
 			// memtables/iterators, which can otherwise pin large heaps after short-lived
@@ -121,6 +124,10 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 		}
 	}
 	return make([]appendOnlyEntry, length)
+}
+
+func getAppendOnlyEntries(length int) []appendOnlyEntry {
+	return getAppendOnlyEntriesFromPool(length, &appendOnlyEntryPool)
 }
 
 func putAppendOnlyEntries(entries []appendOnlyEntry) {

@@ -80,16 +80,11 @@ func TestAppendOnlyIteratorCloseClearsPooledPointerEntries(t *testing.T) {
 }
 
 func TestGetAppendOnlyEntriesSkipsOversizedPooledSliceForEmptyRequest(t *testing.T) {
-	oldPool := appendOnlyEntryPool
-	appendOnlyEntryPool = sync.Pool{}
-	defer func() {
-		appendOnlyEntryPool = oldPool
-	}()
-
+	var pool sync.Pool
 	oversized := make([]appendOnlyEntry, 0, appendOnlyMaxReuseEntries(0)+1)
-	appendOnlyEntryPool.Put(oversized)
+	pool.Put(oversized)
 
-	got := getAppendOnlyEntries(0)
+	got := getAppendOnlyEntriesFromPool(0, &pool)
 	if got == nil {
 		t.Fatalf("getAppendOnlyEntries(0) returned nil slice")
 	}
