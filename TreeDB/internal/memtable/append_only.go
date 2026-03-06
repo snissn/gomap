@@ -436,8 +436,10 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	if m.count == 0 || m.ordered {
 		if m.indexBuf == nil {
 			m.indexBuf = make([]int, 0)
+		} else {
+			m.indexBuf = m.indexBuf[:0]
 		}
-		return m.indexBuf[:0]
+		return m.indexBuf
 	}
 	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
@@ -445,14 +447,12 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	// The returned slice aliases m.indexBuf scratch storage. It is only valid
 	// while m.mu is held and may be overwritten by the next call.
 	need := len(m.latest) + len(m.latest64)
-	indices := m.indexBuf[:0]
-	if cap(indices) < need {
-		indices = make([]int, 0, need)
+	if cap(m.indexBuf) < need {
+		m.indexBuf = make([]int, 0, need)
+	} else {
+		m.indexBuf = m.indexBuf[:0]
 	}
-	if indices == nil {
-		indices = make([]int, 0)
-	}
-	m.indexBuf = indices[:0]
+	indices := m.indexBuf
 	for _, idx := range m.latest {
 		indices = append(indices, idx)
 	}
