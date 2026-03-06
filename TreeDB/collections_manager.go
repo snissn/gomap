@@ -92,6 +92,10 @@ func (a *collectionManagerAdapter) MutateRootsWithFormatOps(sync bool, rootIDs [
 	return a.db.MutateRootsWithFormatOps(sync, rootIDs, formats, rootOps, buildSystemOps)
 }
 
+func (a *collectionManagerAdapter) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	return a.db.MutateRootsWithFormatIterators(sync, rootIDs, formats, rootIters, buildSystemOps)
+}
+
 func (a *collectionManagerAdapter) MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error) {
 	return a.db.MutateRootsWithFormats(sync, rootIDs, formats, mutateRoots, updateSystem)
 }

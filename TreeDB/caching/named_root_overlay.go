@@ -51,6 +51,15 @@ type namedRootPendingMutation struct {
 	entryScratch  [8]batch.Entry
 }
 
+type namedRootPendingIteratorMutation struct {
+	virtualRootID uint64
+	baseRootID    uint64
+	rootKey       []byte
+	hasFormat     bool
+	format        rootfmt.Format
+	iter          iterator.UnsafeIterator
+}
+
 type overlayEntryBatch struct {
 	entries []batch.Entry
 	closed  bool
@@ -95,6 +104,15 @@ func (namedRootStableIterator) StableUnsafeIteratorSlices() bool { return true }
 type batchEntryIterator struct {
 	entries []batch.Entry
 	index   int
+}
+
+type stableNamedRootEntryIterator interface {
+	iterator.UnsafeIterator
+	StableUnsafeIteratorSlices() bool
+}
+
+type namedRootMutationTableProvider interface {
+	RootMutationTable() memtable.Table
 }
 
 var namedRootPublishHook struct {
@@ -744,6 +762,79 @@ func (db *DB) BufferNamedRootMutationsOps(sync bool, rootIDs []uint64, formats [
 	return virtualRootIDs, nil
 }
 
+func (db *DB) BufferNamedRootMutationsIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	if db == nil {
+		return nil, errDBClosing
+	}
+	if len(rootIDs) != len(rootIters) {
+		return nil, fmt.Errorf("named root iterators length mismatch")
+	}
+
+	db.namedRootMu.Lock()
+	virtualRootIDs := make([]uint64, len(rootIDs))
+	pending := make([]namedRootPendingIteratorMutation, len(rootIDs))
+	for i := range rootIDs {
+		existing := db.namedRootsByID[rootIDs[i]]
+		if existing != nil {
+			virtualRootIDs[i] = existing.virtualRootID
+			pending[i] = namedRootPendingIteratorMutation{
+				virtualRootID: existing.virtualRootID,
+				baseRootID:    existing.baseRootID,
+				rootKey:       append([]byte(nil), existing.rootKey...),
+				hasFormat:     existing.hasFormat,
+				format:        existing.format,
+				iter:          rootIters[i],
+			}
+		} else {
+			virtualRootIDs[i] = db.nextVirtualNamedRootIDLocked()
+			pending[i] = namedRootPendingIteratorMutation{
+				virtualRootID: virtualRootIDs[i],
+				baseRootID:    rootIDs[i],
+				iter:          rootIters[i],
+			}
+		}
+		if format := rootFormatAt(formats, i); format != nil {
+			pending[i].hasFormat = true
+			pending[i].format = *format
+		}
+	}
+
+	var sysEntries []batch.Entry
+	if buildSystemOps != nil {
+		ops, err := buildSystemOps(virtualRootIDs)
+		if err != nil {
+			db.namedRootMu.Unlock()
+			return nil, err
+		}
+		sysEntries = ops
+	}
+	if err := db.bindPendingNamedRootIteratorKeysLocked(pending, sysEntries); err != nil {
+		db.namedRootMu.Unlock()
+		return nil, err
+	}
+	for i := range pending {
+		if err := db.applyPendingNamedRootIteratorLocked(&pending[i]); err != nil {
+			db.namedRootMu.Unlock()
+			return nil, err
+		}
+	}
+	if err := db.ApplySystemOverlayEntriesOwned(sysEntries); err != nil {
+		db.namedRootMu.Unlock()
+		return nil, err
+	}
+	db.namedRootMu.Unlock()
+
+	if sync {
+		if err := db.FlushNamedRootOverlays(true); err != nil {
+			return nil, err
+		}
+		if err := db.Checkpoint(); err != nil {
+			return nil, err
+		}
+	}
+	return virtualRootIDs, nil
+}
+
 func (db *DB) FlushNamedRootOverlays(sync bool) error {
 	if db == nil {
 		return errDBClosing
@@ -954,6 +1045,31 @@ func (db *DB) bindPendingNamedRootKeysLocked(pending []namedRootPendingMutation,
 	return nil
 }
 
+func (db *DB) bindPendingNamedRootIteratorKeysLocked(pending []namedRootPendingIteratorMutation, sysEntries []batch.Entry) error {
+	for _, entry := range sysEntries {
+		if entry.Type != batch.OpPut || len(entry.Value) == 0 {
+			continue
+		}
+		var desc collections.CollectionRootDescriptor
+		if err := desc.Decode(entry.Value); err != nil {
+			continue
+		}
+		for i := range pending {
+			if pending[i].virtualRootID != desc.RootPageID || len(pending[i].rootKey) > 0 {
+				continue
+			}
+			pending[i].rootKey = append([]byte(nil), entry.Key...)
+			break
+		}
+	}
+	for i := range pending {
+		if len(pending[i].rootKey) == 0 {
+			return fmt.Errorf("treedb: missing root key for buffered root %d", pending[i].virtualRootID)
+		}
+	}
+	return nil
+}
+
 func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 	if pending == nil {
 		return
@@ -1007,6 +1123,126 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 			state.prefixState.SetEntrySteal(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
 		}
 	}
+}
+
+func (db *DB) applyPendingNamedRootIteratorLocked(pending *namedRootPendingIteratorMutation) error {
+	if pending == nil {
+		return nil
+	}
+	state := db.namedRootsByID[pending.virtualRootID]
+	sourceTable, hasSourceTable := pending.iter.(namedRootMutationTableProvider)
+	if state == nil {
+		var sharedState memtable.Table
+		if hasSourceTable {
+			sharedState = sourceTable.RootMutationTable()
+		} else {
+			var err error
+			sharedState, err = memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+			if err != nil {
+				panic(fmt.Sprintf("treedb: create named-root shared state: %v", err))
+			}
+		}
+		state = &namedRootOverlayState{
+			virtualRootID: pending.virtualRootID,
+			baseRootID:    pending.baseRootID,
+			rootKey:       append([]byte(nil), pending.rootKey...),
+			hasFormat:     pending.hasFormat,
+			format:        pending.format,
+			pointState:    sharedState,
+			prefixState:   sharedState,
+		}
+		if db.namedRootsByID == nil {
+			db.namedRootsByID = make(map[uint64]*namedRootOverlayState)
+		}
+		if db.namedRootsByKey == nil {
+			db.namedRootsByKey = make(map[string]*namedRootOverlayState)
+		}
+		db.namedRootsByID[pending.virtualRootID] = state
+		db.namedRootsByKey[string(pending.rootKey)] = state
+	}
+	if pending.hasFormat {
+		state.hasFormat = true
+		state.format = pending.format
+	}
+	if pending.iter == nil {
+		return nil
+	}
+	defer func() { _ = pending.iter.Close() }()
+	if hasSourceTable && state.pointState == sourceTable.RootMutationTable() {
+		return nil
+	}
+
+	stable := false
+	if stableIter, ok := pending.iter.(stableNamedRootEntryIterator); ok {
+		stable = stableIter.StableUnsafeIteratorSlices()
+	}
+	if applier, ok := state.pointState.(memtable.SortedBatchApplier); ok {
+		hint := 0
+		if hasSourceTable && sourceTable.RootMutationTable() != nil {
+			hint = sourceTable.RootMutationTable().Len()
+		}
+		ops, err := collectNamedRootIteratorOps(pending.iter, hint, stable)
+		if err != nil {
+			return err
+		}
+		applier.ApplyStealSortedBatch(ops, func(key []byte) {
+			runNamedRootMemtableWriteTestHook(pending.virtualRootID, "point", key)
+		})
+		return nil
+	}
+	for pending.iter.Valid() {
+		key := pending.iter.UnsafeKey()
+		value, ptr, flags := pending.iter.UnsafeEntry()
+		if !stable {
+			key = append([]byte(nil), key...)
+			if flags&node.FlagTombstone == 0 && len(value) > 0 {
+				value = append([]byte(nil), value...)
+			}
+		}
+		runNamedRootMemtableWriteTestHook(pending.virtualRootID, "point", key)
+		state.pointState.SetEntrySteal(key, value, ptr, flags)
+		pending.iter.Next()
+	}
+	return pending.iter.Error()
+}
+
+func collectNamedRootIteratorOps(iter iterator.UnsafeIterator, hint int, stable bool) ([]batch.Entry, error) {
+	if iter == nil {
+		return nil, nil
+	}
+	if hint < 0 {
+		hint = 0
+	}
+	ops := make([]batch.Entry, 0, hint)
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		value, ptr, flags := iter.UnsafeEntry()
+		if !stable {
+			key = append([]byte(nil), key...)
+			if flags&node.FlagTombstone == 0 && len(value) > 0 {
+				value = append([]byte(nil), value...)
+			}
+		}
+		entry := batch.Entry{Key: key}
+		switch {
+		case flags&node.FlagTombstone != 0:
+			entry.Type = batch.OpDelete
+		case flags&node.FlagPointer != 0:
+			entry.Type = batch.OpPut
+			entry.IsPtr = true
+			entry.ValuePtr = ptr
+			entry.Value = value
+		default:
+			entry.Type = batch.OpPut
+			entry.Value = value
+		}
+		ops = append(ops, entry)
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return ops, nil
 }
 
 func rootFormatAt(formats []*rootfmt.Format, idx int) *rootfmt.Format {
