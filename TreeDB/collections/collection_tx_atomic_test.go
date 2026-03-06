@@ -149,6 +149,21 @@ func (d *atomicMockDB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 	return ok, nil
 }
 
+func (d *atomicMockDB) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	if rootID == 0 {
+		return out, nil
+	}
+	store := d.rootStores[rootID]
+	if store == nil {
+		return out, nil
+	}
+	for i, key := range keys {
+		_, out[i] = store[string(key)]
+	}
+	return out, nil
+}
+
 func (d *atomicMockDB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 	if rootID == 0 {
 		return false, nil
@@ -163,6 +178,26 @@ func (d *atomicMockDB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, erro
 		}
 	}
 	return false, nil
+}
+
+func (d *atomicMockDB) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {
+	out := make([]bool, len(prefixes))
+	if rootID == 0 {
+		return out, nil
+	}
+	store := d.rootStores[rootID]
+	if store == nil {
+		return out, nil
+	}
+	for i, prefix := range prefixes {
+		for key := range store {
+			if bytes.HasPrefix([]byte(key), prefix) {
+				out[i] = true
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 func (d *atomicMockDB) NewBatch() batch.Interface {

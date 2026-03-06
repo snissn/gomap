@@ -15,13 +15,16 @@ type perfMockDB struct {
 	failGetAtRoot        bool
 	failGetAtRootAppend  bool
 	failHasAtRoot        bool
+	failHasPrefixAtRoot  bool
 	failIteratorAtRoot   bool
 	getAtRootCalls       int
 	getAtRootRootIDs     []uint64
 	getAtRootAppendCalls int
 	getAtRootAppendRoots []uint64
 	hasAtRootCalls       int
+	hasManyAtRootCalls   int
 	hasPrefixAtRootCalls int
+	hasPrefixesAtRootCalls int
 	iteratorAtRootCalls  int
 	rootIteratorCalls    int
 	rootBulkOpsCalls     int
@@ -41,7 +44,9 @@ func (d *perfMockDB) resetCounters() {
 	d.getAtRootAppendCalls = 0
 	d.getAtRootAppendRoots = d.getAtRootAppendRoots[:0]
 	d.hasAtRootCalls = 0
+	d.hasManyAtRootCalls = 0
 	d.hasPrefixAtRootCalls = 0
+	d.hasPrefixesAtRootCalls = 0
 	d.iteratorAtRootCalls = 0
 	d.rootIteratorCalls = 0
 	d.rootBulkOpsCalls = 0
@@ -79,9 +84,22 @@ func (d *perfMockDB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 	return d.atomicMockDB.HasAtRoot(rootID, key)
 }
 
+func (d *perfMockDB) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
+	d.hasManyAtRootCalls++
+	return d.atomicMockDB.HasManyAtRoot(rootID, keys)
+}
+
 func (d *perfMockDB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 	d.hasPrefixAtRootCalls++
+	if d.failHasPrefixAtRoot {
+		return false, errors.New("unexpected HasPrefixAtRoot call")
+	}
 	return d.atomicMockDB.HasPrefixAtRoot(rootID, prefix)
+}
+
+func (d *perfMockDB) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {
+	d.hasPrefixesAtRootCalls++
+	return d.atomicMockDB.HasPrefixesAtRoot(rootID, prefixes)
 }
 
 func (d *perfMockDB) IteratorAtRoot(rootID uint64, start, end []byte) (systemIterator, error) {
@@ -310,6 +328,83 @@ func TestInsertBatchWithIndexes_UsesIteratorPublishForWarmLargeBatches(t *testin
 	}
 	if d.rootBulkOpsCalls != 0 {
 		t.Fatalf("bulk ops calls=%d want 0", d.rootBulkOpsCalls)
+	}
+}
+
+func TestInsertBatch_UsesBatchPrimaryExistenceProbe(t *testing.T) {
+	d := newPerfMockDB()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("seed-1"), []byte("seed-2")},
+		[][]byte{[]byte(`{"name":"seed-1"}`), []byte(`{"name":"seed-2"}`)},
+	); err != nil {
+		t.Fatalf("seed insert batch: %v", err)
+	}
+
+	d.resetCounters()
+	d.failHasAtRoot = true
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"name":"ada"}`), []byte(`{"name":"grace"}`)},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if d.hasManyAtRootCalls == 0 {
+		t.Fatalf("expected insert batch to use HasManyAtRoot")
+	}
+	if d.hasAtRootCalls != 0 {
+		t.Fatalf("expected insert batch to avoid HasAtRoot, got %d calls", d.hasAtRootCalls)
+	}
+}
+
+func TestInsertBatchWithUniqueIndexes_UsesBatchPrefixProbe(t *testing.T) {
+	d := newPerfMockDB()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("seed-1"), []byte("seed-2")},
+		[][]byte{
+			[]byte(`{"email":"seed-1@example.com"}`),
+			[]byte(`{"email":"seed-2@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("seed insert batch: %v", err)
+	}
+
+	d.resetCounters()
+	d.failHasPrefixAtRoot = true
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{
+			[]byte(`{"email":"ada@example.com"}`),
+			[]byte(`{"email":"grace@example.com"}`),
+		},
+	); err != nil {
+		t.Fatalf("insert batch: %v", err)
+	}
+	if d.hasPrefixesAtRootCalls == 0 {
+		t.Fatalf("expected insert batch to use HasPrefixesAtRoot")
+	}
+	if d.hasPrefixAtRootCalls != 0 {
+		t.Fatalf("expected insert batch to avoid HasPrefixAtRoot, got %d calls", d.hasPrefixAtRootCalls)
 	}
 }
 
