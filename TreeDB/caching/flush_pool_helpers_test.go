@@ -462,12 +462,14 @@ func resetEntrySlicePoolsForTest(t *testing.T) {
 	savedBudget := entrySlicePoolBudgetBytes
 	entrySlicePoolBudgetBytes = 0
 	entrySlicePoolBytes.Store(0)
+	entrySlicePoolLastGC.Store(0)
 	for i := range entrySlicePools {
 		entrySlicePools[i] = sync.Pool{}
 	}
 	t.Cleanup(func() {
 		entrySlicePoolBudgetBytes = savedBudget
 		entrySlicePoolBytes.Store(0)
+		entrySlicePoolLastGC.Store(0)
 		for i := range entrySlicePools {
 			entrySlicePools[i] = sync.Pool{}
 		}
@@ -564,6 +566,20 @@ func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
 	}
 }
 
+func TestPutEntrySliceClearsEntriesOnUnclassedEarlyReturn(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySliceLeasesForTest(t)
+	resetEntrySlicePoolsForTest(t)
+
+	entries := make([]batch.Entry, 1, 96)
+	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
+	putEntrySlice(entries)
+
+	if entries[0].Key != nil || entries[0].Value != nil {
+		t.Fatalf("expected putEntrySlice to clear backing entries on unclassed early return; got key=%v value=%v", entries[0].Key, entries[0].Value)
+	}
+}
+
 func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	resetEntrySliceLeasesForTest(t)
@@ -588,6 +604,33 @@ func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
 	entrySliceLeaseMu.Unlock()
 	if leased > 1 {
 		t.Fatalf("expected budget to cap retained entry slices; leased=%d", leased)
+	}
+}
+
+func TestGetEntrySliceMissResetsPoolBytesAfterGC(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySliceLeasesForTest(t)
+	resetEntrySlicePoolsForTest(t)
+
+	origNumGC := batchArenaPoolNumGC
+	defer func() { batchArenaPoolNumGC = origNumGC }()
+
+	var fakeNumGC uint32 = 9
+	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+
+	entrySlicePoolBytes.Store(1234)
+	entrySlicePoolLastGC.Store(fakeNumGC)
+	fakeNumGC++
+
+	got := getEntrySlice(64)
+	if cap(got) < 64 {
+		t.Fatalf("entry slice cap=%d want >= 64", cap(got))
+	}
+	if gotBytes := entrySlicePoolBytes.Load(); gotBytes != 0 {
+		t.Fatalf("entrySlicePoolBytes after GC miss=%d want 0", gotBytes)
+	}
+	if gotGC := entrySlicePoolLastGC.Load(); gotGC != fakeNumGC {
+		t.Fatalf("entrySlicePoolLastGC=%d want %d", gotGC, fakeNumGC)
 	}
 }
 
