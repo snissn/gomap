@@ -9101,11 +9101,10 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
 		}
-		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded". Use a
-		// small floor so planning never selects an unbounded set when the token
-		// bucket is empty (e.g. first tick).
+		// In budgeted mode, a zero-token bucket means "do not plan or rewrite
+		// yet", not "plan/rewrite with an implicit floor".
 		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-			maxSourceBytes = db.valueLogRewriteBudgetBytes
+			goto planned
 		}
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
@@ -9170,11 +9169,11 @@ planned:
 			if maxSourceBytes < 0 {
 				maxSourceBytes = 0
 			}
-			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". Use a
-			// small floor so we never accidentally run an unbounded rewrite when the
-			// token bucket is empty (e.g. first tick).
+			// In budgeted mode, a zero-token bucket means "wait", not "run an
+			// unbounded rewrite with an implicit floor".
 			if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-				maxSourceBytes = db.valueLogRewriteBudgetBytes
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+				return
 			}
 			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 				maxSourceBytes = totalBytes
