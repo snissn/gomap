@@ -163,6 +163,9 @@ func (db *DB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
 		return db.cached.BufferedGetAtRoot(rootID, key)
 	}
+	if db.cached != nil {
+		rootID = db.cached.ResolvedNamedRootID(rootID)
+	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
 		return nil, err
@@ -175,6 +178,9 @@ func (db *DB) GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
 	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
 		return db.cached.BufferedGetAtRootAppend(rootID, key, dst)
 	}
+	if db.cached != nil {
+		rootID = db.cached.ResolvedNamedRootID(rootID)
+	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
 		return nil, err
@@ -186,6 +192,9 @@ func (db *DB) GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
 func (db *DB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
 		return db.cached.BufferedHasAtRoot(rootID, key)
+	}
+	if db.cached != nil {
+		rootID = db.cached.ResolvedNamedRootID(rootID)
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -200,6 +209,9 @@ func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
 		return db.cached.BufferedHasPrefixAtRoot(rootID, prefix)
 	}
+	if db.cached != nil {
+		rootID = db.cached.ResolvedNamedRootID(rootID)
+	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
 		return false, err
@@ -211,6 +223,9 @@ func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 func (db *DB) IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
 	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
 		return db.cached.BufferedIteratorAtRoot(rootID, start, end)
+	}
+	if db.cached != nil {
+		rootID = db.cached.ResolvedNamedRootID(rootID)
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
