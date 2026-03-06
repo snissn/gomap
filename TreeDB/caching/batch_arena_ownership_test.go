@@ -3,6 +3,8 @@ package caching
 import (
 	"bytes"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestBatchReset_DoesNotCorruptPriorStealWrites(t *testing.T) {
@@ -141,5 +143,26 @@ func TestBatchArenaLeases_ReleasedAfterCheckpoint_BTree(t *testing.T) {
 	db.batchArenaLeaseMu.Unlock()
 	if leasedAfter != 0 {
 		t.Fatalf("expected leases to be released after checkpoint, got=%d", leasedAfter)
+	}
+}
+
+func TestMemtableBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
+	cases := []struct {
+		mode memtable.Mode
+		want bool
+	}{
+		{mode: memtable.ModeSkiplist, want: true},
+		{mode: memtable.ModeBTree, want: true},
+		{mode: memtable.ModeHashSorted, want: false},
+		{mode: memtable.ModeAppendOnly, want: false},
+	}
+	for _, tc := range cases {
+		mt, err := memtable.NewWithCapacityMode(0, tc.mode)
+		if err != nil {
+			t.Fatalf("NewWithCapacityMode(%v): %v", tc.mode, err)
+		}
+		if got := memtableBatchWriteUsesSteal(mt); got != tc.want {
+			t.Fatalf("mode=%v useSteal=%v want=%v", tc.mode, got, tc.want)
+		}
 	}
 }

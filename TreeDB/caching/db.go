@@ -3723,13 +3723,14 @@ func memtableNeedsBatchArenaRetention(mt memtable.Table) bool {
 
 func memtableBatchWriteUsesSteal(mt memtable.Table) bool {
 	// append_only and hash_sorted borrow key/value slices on Steal paths, so the
-	// cached batch writer feeds them copied writes instead. Other memtables can
-	// keep the Steal hot path.
+	// cached batch writer feeds them copied writes instead. Keep the Steal path
+	// on an explicit allowlist so new memtable implementations do not silently
+	// reintroduce borrowed-slice lifetime bugs.
 	switch mt.(type) {
-	case *memtable.AppendOnly, *memtable.HashSorted:
-		return false
-	default:
+	case *memtable.BTree, *memtable.Memtable:
 		return true
+	default:
+		return false
 	}
 }
 
@@ -3741,10 +3742,10 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 	mt.Delete(key)
 }
 
-func memtableBatchSet(mt memtable.Table, useSteal bool, keepInlinePtrValue bool, op batch.Entry) {
+func memtableBatchSet(mt memtable.Table, useSteal bool, storePointerInlineValue bool, op batch.Entry) {
 	if op.IsPtr {
 		memVal := []byte(nil)
-		if keepInlinePtrValue {
+		if storePointerInlineValue {
 			memVal = op.Value
 		}
 		if useSteal {
@@ -16341,7 +16342,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard.mu.Lock()
 			useStream := b.streamEligible
 			useSteal := memtableBatchWriteUsesSteal(shard.mem)
-			keepInlinePtrValue := !b.db.memtableValueLogPointers
+			storePointerInlineValue := !b.db.memtableValueLogPointers
 			if useStream && useSteal {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
 					applier.ApplyStealSortedBatchTrusted(entries, nil)
@@ -16352,7 +16353,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						if op.Type == batch.OpDelete {
 							memtableBatchDelete(shard.mem, true, op.Key)
 						} else {
-							memtableBatchSet(shard.mem, true, keepInlinePtrValue, op)
+							memtableBatchSet(shard.mem, true, storePointerInlineValue, op)
 						}
 					}
 				}
@@ -16368,7 +16369,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
-						memtableBatchSet(shard.mem, useSteal, keepInlinePtrValue, op)
+						memtableBatchSet(shard.mem, useSteal, storePointerInlineValue, op)
 					}
 					if useStream {
 						// Preserve sorted-run accounting even when we avoid Steal.
