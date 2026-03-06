@@ -148,21 +148,19 @@ func TestBatchArenaLeases_ReleasedAfterCheckpoint_BTree(t *testing.T) {
 
 func TestMemtableBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
 	cases := []struct {
-		mode memtable.Mode
+		name string
+		new  func() memtable.Table
 		want bool
 	}{
-		{mode: memtable.ModeSkiplist, want: true},
-		{mode: memtable.ModeBTree, want: true},
-		{mode: memtable.ModeHashSorted, want: false},
-		{mode: memtable.ModeAppendOnly, want: false},
+		{name: "skiplist", new: func() memtable.Table { return memtable.NewWithCapacity(0) }, want: true},
+		{name: "btree", new: func() memtable.Table { return memtable.NewBTree() }, want: true},
+		{name: "hash_sorted", new: func() memtable.Table { return memtable.NewHashSortedWithCapacityAndIndexer(0, memtable.NewHashSortedIndexer()) }, want: false},
+		{name: "append_only", new: func() memtable.Table { return memtable.NewAppendOnlyWithCapacity(0) }, want: false},
 	}
 	for _, tc := range cases {
-		mt, err := memtable.NewWithCapacityMode(0, tc.mode)
-		if err != nil {
-			t.Fatalf("NewWithCapacityMode(%v): %v", tc.mode, err)
-		}
+		mt := tc.new()
 		if got := memtableBatchWriteUsesSteal(mt); got != tc.want {
-			t.Fatalf("mode=%v useSteal=%v want=%v", tc.mode, got, tc.want)
+			t.Fatalf("memtable=%s useSteal=%v want=%v", tc.name, got, tc.want)
 		}
 	}
 }

@@ -3747,10 +3747,10 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 	mt.Delete(key)
 }
 
-func memtableBatchSet(mt memtable.Table, useSteal bool, storePointerInlineValue bool, op batch.Entry) {
+func memtableBatchSet(mt memtable.Table, useSteal bool, memtableStoresPointerInlineValue bool, op batch.Entry) {
 	if op.IsPtr {
 		memVal := []byte(nil)
-		if storePointerInlineValue {
+		if memtableStoresPointerInlineValue {
 			memVal = op.Value
 		}
 		if useSteal {
@@ -16345,7 +16345,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard.mu.Lock()
 			useStream := b.streamEligible
 			useSteal := memtableBatchWriteUsesSteal(shard.mem)
-			storePointerInlineValue := !b.db.memtableValueLogPointers
+			memtableStoresPointerInlineValue := !b.db.memtableValueLogPointers
 			if useStream && useSteal {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
 					applier.ApplyStealSortedBatchTrusted(entries, nil)
@@ -16356,7 +16356,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						if op.Type == batch.OpDelete {
 							memtableBatchDelete(shard.mem, true, op.Key)
 						} else {
-							memtableBatchSet(shard.mem, true, storePointerInlineValue, op)
+							memtableBatchSet(shard.mem, true, memtableStoresPointerInlineValue, op)
 						}
 					}
 				}
@@ -16372,7 +16372,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
-						memtableBatchSet(shard.mem, useSteal, storePointerInlineValue, op)
+						memtableBatchSet(shard.mem, useSteal, memtableStoresPointerInlineValue, op)
 					}
 					if useStream {
 						// Preserve sorted-run accounting even when we avoid Steal.
