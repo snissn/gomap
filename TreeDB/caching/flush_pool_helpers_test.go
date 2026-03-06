@@ -457,6 +457,23 @@ func resetEntrySliceLeasesForTest(t *testing.T) {
 	})
 }
 
+func resetEntrySlicePoolsForTest(t *testing.T) {
+	t.Helper()
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 0
+	entrySlicePoolBytes.Store(0)
+	for i := range entrySlicePools {
+		entrySlicePools[i] = sync.Pool{}
+	}
+	t.Cleanup(func() {
+		entrySlicePoolBudgetBytes = savedBudget
+		entrySlicePoolBytes.Store(0)
+		for i := range entrySlicePools {
+			entrySlicePools[i] = sync.Pool{}
+		}
+	})
+}
+
 func TestEntrySliceLeaseRoundTrip(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	resetEntrySliceLeasesForTest(t)
@@ -550,15 +567,9 @@ func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
 func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	resetEntrySliceLeasesForTest(t)
-
-	savedBudget := entrySlicePoolBudgetBytes
-	savedBytes := entrySlicePoolBytes.Load()
+	resetEntrySlicePoolsForTest(t)
 	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
 	entrySlicePoolBytes.Store(0)
-	t.Cleanup(func() {
-		entrySlicePoolBudgetBytes = savedBudget
-		entrySlicePoolBytes.Store(savedBytes)
-	})
 
 	leaseIdx, ok := entrySliceLeaseClassForCap(64)
 	if !ok {

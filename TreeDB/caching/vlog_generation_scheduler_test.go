@@ -175,6 +175,30 @@ func TestVlogGenerationRewriteBudgetCapSaturatesTargets(t *testing.T) {
 	}
 }
 
+func TestAddClampInt64_SaturatesAndClamps(t *testing.T) {
+	if got := addClampInt64(5, 7, 10); got != 10 {
+		t.Fatalf("addClampInt64 saturating add=%d want=10", got)
+	}
+	if got := addClampInt64(-5, 3, 10); got != 3 {
+		t.Fatalf("addClampInt64 negative current=%d want=3", got)
+	}
+	if got := addClampInt64(9, 1, 0); got != 0 {
+		t.Fatalf("addClampInt64 zero limit=%d want=0", got)
+	}
+}
+
+func TestMulDivClampInt64_ClampsOverflowAndCap(t *testing.T) {
+	if got := mulDivClampInt64(maxPositiveInt64, maxPositiveInt64, 1, 123); got != 123 {
+		t.Fatalf("mulDivClampInt64 overflow=%d want=123", got)
+	}
+	if got := mulDivClampInt64(9, 5, 3, 20); got != 15 {
+		t.Fatalf("mulDivClampInt64 normal=%d want=15", got)
+	}
+	if got := mulDivClampInt64(9, 5, 3, 0); got != 0 {
+		t.Fatalf("mulDivClampInt64 zero cap=%d want=0", got)
+	}
+}
+
 type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 

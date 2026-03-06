@@ -94,7 +94,7 @@ func computeBatchArenaPoolBudgetBytes() int64 {
 }
 
 func currentBatchArenaPoolBudgetBytes() int64 {
-	return batchArenaPoolBudgetBytes
+	return computeBatchArenaPoolBudgetBytes()
 }
 
 const (
@@ -368,7 +368,7 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
-	if budget := batchArenaPoolBudgetBytes; budget > 0 {
+	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
 		for {
 			held := batchArenaPoolBytes.Load()
@@ -3642,10 +3642,10 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 }
 
 func memtableNeedsBatchArenaRetention(mt memtable.Table) bool {
-	// Only memtables still ingesting borrowed slices from batch copy arenas need
-	// leases. Skiplist copies even on Steal, while append_only and hash_sorted
-	// now take copied writes on the cached batch path to release batch arenas
-	// immediately after write.
+	// This helper is only used for the cached batch write path, where
+	// memtableBatchWriteUsesSteal governs whether a memtable receives borrowed
+	// batch slices or copied writes. append_only and hash_sorted are forced onto
+	// copy writes there, so they do not need batch-arena leases.
 	switch mt.(type) {
 	case *memtable.Memtable, *memtable.AppendOnly, *memtable.HashSorted:
 		return false
@@ -3731,6 +3731,9 @@ func (db *DB) retainBatchArenaChunksForMemtables(chunks [][]byte, mems []memtabl
 	}
 	filtered := mems[:0]
 	for _, mt := range mems {
+		// Lease retention follows the cached batch writer's actual copy/steal
+		// choice; memtables that only receive copied writes here must not pin
+		// batch arenas past the write call.
 		if mt == nil || !memtableNeedsBatchArenaRetention(mt) {
 			continue
 		}
@@ -4354,7 +4357,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
 	// RID here rather than risk reusing low RIDs after a clean reopen.
-	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
+	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
 	if err != nil {
 		return nil, err
 	}
@@ -5587,6 +5590,8 @@ func putEntrySlice(entries []batch.Entry) {
 	if cap(entries) > maxEntryPoolCap {
 		return
 	}
+	// Clear references even on early return paths so oversized/non-pooled
+	// scratch slices do not keep prior keys/values live longer than needed.
 	full := entries[:cap(entries)]
 	clear(full)
 	idx, ok := entrySliceLeaseClassForCap(cap(entries))
@@ -9314,9 +9319,9 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
 		}
-		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded". Use a
-		// small floor so planning never selects an unbounded set when the token
-		// bucket is empty (e.g. first tick).
+		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded"; skip the
+		// sparse planning pass when the token bucket is empty rather than issuing
+		// an unbounded plan.
 		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
 			goto planned
 		}
@@ -9383,9 +9388,9 @@ planned:
 			if maxSourceBytes < 0 {
 				maxSourceBytes = 0
 			}
-			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". Use a
-			// small floor so we never accidentally run an unbounded rewrite when the
-			// token bucket is empty (e.g. first tick).
+			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit";
+			// stop here when the token bucket is empty rather than issuing an
+			// unbounded rewrite.
 			if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 				return
@@ -13771,13 +13776,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
-	stats["treedb.cache.batch_arena.pool_budget_bytes"] = fmt.Sprintf("%d", batchArenaPoolBudgetBytes)
+	stats["treedb.cache.batch_arena.pool_budget_bytes"] = fmt.Sprintf("%d", currentBatchArenaPoolBudgetBytes())
 	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
 	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
-	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
-	stats["treedb.cache.entry_slice.pool_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
+	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.process.entry_slice.pool_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -14772,11 +14777,11 @@ func (db *DB) NewBatch() *Batch {
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	size = backenddb.NormalizePublicBatchReserveHint(size)
+	reserveHint := backenddb.NormalizePublicBatchReserveHint(size)
 	return &Batch{
 		db:             db,
-		entries:        db.getBatchEntries(size),
-		copyArenaCap:   db.batchCopyArenaInitCap(size),
+		entries:        db.getBatchEntries(reserveHint),
+		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
 		streamEligible: true,
 	}
 }
