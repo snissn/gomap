@@ -46,4 +46,3 @@ func TestBatchArenaCopy_ChunkCapClamped(t *testing.T) {
 		t.Fatalf("copy arena grew beyond pooling limit: maxCap=%d want<=%d", maxCap, batchCopyArenaMaxRetain)
 	}
 }
-
