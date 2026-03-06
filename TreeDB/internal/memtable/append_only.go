@@ -429,7 +429,10 @@ func (m *AppendOnly) clearSnapshotLocked() {
 
 func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	if m.count == 0 || m.ordered {
-		return nil
+		if m.indexBuf == nil {
+			m.indexBuf = make([]int, 0)
+		}
+		return m.indexBuf[:0]
 	}
 	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
@@ -440,6 +443,9 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	indices := m.indexBuf[:0]
 	if cap(indices) < need {
 		indices = make([]int, 0, need)
+	}
+	if indices == nil {
+		indices = make([]int, 0)
 	}
 	m.indexBuf = indices[:0]
 	for _, idx := range m.latest {
