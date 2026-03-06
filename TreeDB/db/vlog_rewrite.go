@@ -550,10 +550,10 @@ func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]
 	}
 	// Dedup grouped-record live-byte accounting (LeafRef pointers are grouped).
 	if page.ValuePtrIsGrouped(ptr) {
-		if ptr.Offset < 4 {
-			return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+		k, err := groupedRecordKeyForPtr(ptr)
+		if err != nil {
+			return err
 		}
-		k := groupedRecordKey{fileID: ptr.FileID, start: ptr.Offset - 4}
 		seen := map[groupedRecordKey]struct{}(nil)
 		if seenGroupedRecords != nil {
 			seen = *seenGroupedRecords
@@ -612,7 +612,7 @@ func (db *DB) valueLogRecordLengthForRewrite(ptr page.ValuePtr) (uint32, error) 
 	defer func() { _ = db.valueLogManager.Release(set) }()
 	f := set.Files[ptr.FileID]
 	if f == nil || f.File == nil {
-		return 0, fmt.Errorf("vlog-rewrite: missing segment %d", ptr.FileID)
+		return 0, fmt.Errorf("vlog-rewrite: missing segment for pointer %s", formatValueLogPtr(ptr))
 	}
 	start := int64(ptr.Offset - 4)
 	return readValueLogRecordLengthFromHeader(f.File, start)
@@ -1246,7 +1246,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if !sysChanged && !userChanged {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, fmt.Errorf("cleanup after no leaf-ref rewrite changes: %w", freeErr)
 		}
 		return 0, nil
 	}
@@ -1958,7 +1958,7 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 	}
 	f := it.vlogs.Files[ptr.FileID]
 	if f == nil || f.File == nil {
-		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: missing segment %d", ptr.FileID)
+		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: missing segment for pointer file=%d offset=%d length=%d", ptr.FileID, ptr.Offset, ptr.Length)
 	}
 	raw, err := readRawRecord(f.File, ptr)
 	if err != nil {
