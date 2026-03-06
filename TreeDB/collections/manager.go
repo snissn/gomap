@@ -13,6 +13,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
@@ -62,6 +63,15 @@ type collectionIndexRuntime struct {
 	path    []string
 }
 
+type stableCollectionIterator struct {
+	iterator.UnsafeIterator
+	table memtable.Table
+}
+
+func (stableCollectionIterator) StableUnsafeIteratorSlices() bool { return true }
+
+func (it stableCollectionIterator) RootMutationTable() memtable.Table { return it.table }
+
 type documentScratchHandle struct {
 	buf []byte
 }
@@ -75,6 +85,21 @@ var documentScratchPool = sync.Pool{
 	New: func() any {
 		return &documentScratchHandle{buf: make([]byte, 0, documentScratchInitCap)}
 	},
+}
+
+func newCollectionRootTable() (memtable.Table, error) {
+	return memtable.NewWithCapacityMode(0, memtable.ModeBTree)
+}
+
+func newCollectionRootIterator(table memtable.Table) iterator.UnsafeIterator {
+	if table == nil {
+		return nil
+	}
+	iter := table.NewIterator(nil, nil)
+	if stable, ok := table.(memtable.StableUnsafeIteratorTable); ok && stable.StableUnsafeIteratorSlices() {
+		return stableCollectionIterator{UnsafeIterator: iter, table: table}
+	}
+	return iter
 }
 
 type collectionDB interface {
@@ -93,6 +118,7 @@ type collectionDB interface {
 	IteratorAtRoot(rootID uint64, start, end []byte) (systemIterator, error)
 	SystemIterator(start, end []byte) (systemIterator, error)
 	MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
+	MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
 	MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error)
 	MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
 	MutateRootAndUserWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
@@ -697,9 +723,48 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	useIteratorPublish := rootDesc.RootPageID == 0
+
+	var (
+		stateDesc    *CollectionRootDescriptor
+		stateRootKey []byte
+		indexRuntime map[string]*collectionIndexRuntime
+	)
+	if len(c.meta.Indexes) > 0 {
+		stateDesc, stateRootKey, err = c.indexStateRootDescriptor()
+		if err != nil {
+			return nil, err
+		}
+		if stateDesc.RootPageID != 0 {
+			useIteratorPublish = false
+		}
+		indexRuntime = make(map[string]*collectionIndexRuntime, len(c.meta.Indexes))
+		for _, idx := range c.meta.Indexes {
+			runtime, err := c.indexRuntime(idx)
+			if err != nil {
+				return nil, err
+			}
+			indexRuntime[idx.Name] = runtime
+			if runtime.desc.RootPageID != 0 {
+				useIteratorPublish = false
+			}
+		}
+	}
+
+	var (
+		primaryOps   []batch.Entry
+		primaryTable memtable.Table
+	)
+	if useIteratorPublish {
+		primaryTable, err = newCollectionRootTable()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		primaryOps = make([]batch.Entry, 0, len(documents))
+	}
 
 	seenIDs := make(map[string]struct{}, len(resolvedIDs))
-	primaryOps := make([]batch.Entry, 0, len(documents))
 	for i := range documents {
 		documentID := resolvedIDs[i]
 		if _, exists := seenIDs[string(documentID)]; exists {
@@ -717,29 +782,48 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		if exists {
 			return nil, fmt.Errorf("collections: document already exists")
 		}
-		primaryOps = append(primaryOps, batch.Entry{
-			Type:  batch.OpPut,
-			Key:   key,
-			Value: documents[i],
-		})
+		if useIteratorPublish {
+			primaryTable.SetSteal(key, documents[i])
+		} else {
+			primaryOps = append(primaryOps, batch.Entry{
+				Type:  batch.OpPut,
+				Key:   key,
+				Value: documents[i],
+			})
+		}
 	}
 
 	rootIDs := make([]uint64, 0, len(c.meta.Indexes)+2)
 	rootFormats := make([]*rootfmt.Format, 0, len(c.meta.Indexes)+2)
+	rootTables := make([]memtable.Table, 0, len(c.meta.Indexes)+2)
 	rootOps := make([][]batch.Entry, 0, len(c.meta.Indexes)+2)
 	rootUpdates := make([]collectionRootUpdate, 0, len(c.meta.Indexes)+2)
 	rootIDs = append(rootIDs, rootDesc.RootPageID)
 	rootFormats = append(rootFormats, &rootDesc.Format)
-	rootOps = append(rootOps, primaryOps)
+	if useIteratorPublish {
+		rootTables = append(rootTables, primaryTable)
+	} else {
+		rootOps = append(rootOps, primaryOps)
+	}
 	rootUpdates = append(rootUpdates, collectionRootUpdate{desc: rootDesc, rootKey: rootKey})
 
 	if len(c.meta.Indexes) > 0 {
-		stateDesc, stateRootKey, err := c.indexStateRootDescriptor()
-		if err != nil {
-			return nil, err
+		var (
+			stateOps          []batch.Entry
+			stateTable        memtable.Table
+			indexOpsByName    map[string][]batch.Entry
+			indexTablesByName map[string]memtable.Table
+		)
+		if useIteratorPublish {
+			stateTable, err = newCollectionRootTable()
+			if err != nil {
+				return nil, err
+			}
+			indexTablesByName = make(map[string]memtable.Table, len(c.meta.Indexes))
+		} else {
+			stateOps = make([]batch.Entry, 0, len(documents))
+			indexOpsByName = make(map[string][]batch.Entry, len(c.meta.Indexes))
 		}
-		stateOps := make([]batch.Entry, 0, len(documents))
-		indexOpsByName := make(map[string][]batch.Entry, len(c.meta.Indexes))
 		seenUniquePrefixes := make(map[string]string, len(documents)*len(c.meta.Indexes))
 
 		for i := range documents {
@@ -752,22 +836,22 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			stateOps = append(stateOps, batch.Entry{
-				Type:  batch.OpPut,
-				Key:   documentID,
-				Value: stateRaw,
-			})
+			if useIteratorPublish {
+				stateTable.SetSteal(documentID, stateRaw)
+			} else {
+				stateOps = append(stateOps, batch.Entry{
+					Type:  batch.OpPut,
+					Key:   documentID,
+					Value: stateRaw,
+				})
+			}
 
 			for _, idx := range c.meta.Indexes {
 				values := state[idx.Name]
 				if len(values) == 0 {
 					continue
 				}
-				runtime, err := c.indexRuntime(idx)
-				if err != nil {
-					return nil, err
-				}
-				ops := indexOpsByName[idx.Name]
+				runtime := indexRuntime[idx.Name]
 				for _, encoded := range values {
 					key, err := buildIndexEntryKeyWithPrefix(runtime.prefix, encoded, documentID)
 					if err != nil {
@@ -791,30 +875,52 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 							return nil, fmt.Errorf("collections: unique index %q conflict", idx.Name)
 						}
 					}
-					ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key})
-				}
-				if len(ops) > 0 {
-					indexOpsByName[idx.Name] = ops
+					if useIteratorPublish {
+						table := indexTablesByName[idx.Name]
+						if table == nil {
+							table, err = newCollectionRootTable()
+							if err != nil {
+								return nil, err
+							}
+							indexTablesByName[idx.Name] = table
+						}
+						table.SetSteal(key, nil)
+					} else {
+						indexOpsByName[idx.Name] = append(indexOpsByName[idx.Name], batch.Entry{Type: batch.OpPut, Key: key})
+					}
 				}
 			}
 		}
 
 		rootIDs = append(rootIDs, stateDesc.RootPageID)
 		rootFormats = append(rootFormats, &stateDesc.Format)
-		rootOps = append(rootOps, stateOps)
+		if useIteratorPublish {
+			rootTables = append(rootTables, stateTable)
+		} else {
+			rootOps = append(rootOps, stateOps)
+		}
 		rootUpdates = append(rootUpdates, collectionRootUpdate{desc: stateDesc, rootKey: stateRootKey})
 		for _, idx := range c.meta.Indexes {
-			ops := indexOpsByName[idx.Name]
-			if len(ops) == 0 {
-				continue
-			}
-			runtime, err := c.indexRuntime(idx)
-			if err != nil {
-				return nil, err
-			}
+			runtime := indexRuntime[idx.Name]
 			rootIDs = append(rootIDs, runtime.desc.RootPageID)
 			rootFormats = append(rootFormats, &runtime.desc.Format)
-			rootOps = append(rootOps, ops)
+			if useIteratorPublish {
+				table := indexTablesByName[idx.Name]
+				if table == nil || table.Len() == 0 {
+					rootIDs = rootIDs[:len(rootIDs)-1]
+					rootFormats = rootFormats[:len(rootFormats)-1]
+					continue
+				}
+				rootTables = append(rootTables, table)
+			} else {
+				ops := indexOpsByName[idx.Name]
+				if len(ops) == 0 {
+					rootIDs = rootIDs[:len(rootIDs)-1]
+					rootFormats = rootFormats[:len(rootFormats)-1]
+					continue
+				}
+				rootOps = append(rootOps, ops)
+			}
 			rootUpdates = append(rootUpdates, collectionRootUpdate{
 				desc:    &runtime.desc,
 				rootKey: runtime.rootKey,
@@ -822,8 +928,14 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		}
 	}
 
-	if err := c.publishRootOps(rootIDs, rootFormats, rootOps, rootUpdates); err != nil {
-		return nil, err
+	if useIteratorPublish {
+		if err := c.publishRootIterators(rootIDs, rootFormats, rootTables, rootUpdates); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := c.publishRootOps(rootIDs, rootFormats, rootOps, rootUpdates); err != nil {
+			return nil, err
+		}
 	}
 	return resolvedIDs, nil
 }
@@ -2044,6 +2156,32 @@ func (c *Collection) publishRootOps(rootIDs []uint64, rootFormats []*rootfmt.For
 	}
 	var publishedRootIDs []uint64
 	_, err := c.db.MutateRootsWithFormatOps(false, rootIDs, rootFormats, rootOps, func(newRootIDs []uint64) ([]batch.Entry, error) {
+		publishedRootIDs = append(publishedRootIDs[:0], newRootIDs...)
+		return buildRootDescriptorEntries(rootUpdates, newRootIDs)
+	})
+	if err != nil {
+		return err
+	}
+	for i := range rootUpdates {
+		rootUpdates[i].desc.RootPageID = publishedRootIDs[i]
+	}
+	c.cacheVersion = c.db.SystemRootVersion()
+	return nil
+}
+
+func (c *Collection) publishRootIterators(rootIDs []uint64, rootFormats []*rootfmt.Format, rootTables []memtable.Table, rootUpdates []collectionRootUpdate) error {
+	if c == nil {
+		return errCollectionNil
+	}
+	if c.db == nil {
+		return errCollectionManagerNil
+	}
+	rootIters := make([]iterator.UnsafeIterator, len(rootTables))
+	for i := range rootTables {
+		rootIters[i] = newCollectionRootIterator(rootTables[i])
+	}
+	var publishedRootIDs []uint64
+	_, err := c.db.MutateRootsWithFormatIterators(false, rootIDs, rootFormats, rootIters, func(newRootIDs []uint64) ([]batch.Entry, error) {
 		publishedRootIDs = append(publishedRootIDs[:0], newRootIDs...)
 		return buildRootDescriptorEntries(rootUpdates, newRootIDs)
 	})

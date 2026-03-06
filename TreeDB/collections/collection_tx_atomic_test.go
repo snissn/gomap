@@ -7,6 +7,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
@@ -291,6 +292,18 @@ func (d *atomicMockDB) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, for
 	})
 }
 
+func (d *atomicMockDB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	rootOps := make([][]batch.Entry, len(rootIters))
+	for i := range rootIters {
+		ops, err := collectIteratorOps(rootIters[i])
+		if err != nil {
+			return nil, err
+		}
+		rootOps[i] = ops
+	}
+	return d.MutateRootsWithFormatOps(sync, rootIDs, formats, rootOps, buildSystemOps)
+}
+
 func (d *atomicMockDB) mutateRootInternal(rootID uint64, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
 	rootBatch := &atomicMockBatch{db: d}
 	if mutateRoot != nil {
@@ -338,6 +351,36 @@ func (d *atomicMockDB) mutateRootInternal(rootID uint64, mutateRoot func(batch.I
 		d.systemVersion++
 	}
 	return newRootID, nil
+}
+
+func collectIteratorOps(iter iterator.UnsafeIterator) ([]batch.Entry, error) {
+	if iter == nil {
+		return nil, nil
+	}
+	defer func() { _ = iter.Close() }()
+	var ops []batch.Entry
+	for iter.Valid() {
+		value, ptr, flags := iter.UnsafeEntry()
+		entry := batch.Entry{Key: append([]byte(nil), iter.UnsafeKey()...)}
+		switch {
+		case flags&node.FlagTombstone != 0:
+			entry.Type = batch.OpDelete
+		case flags&node.FlagPointer != 0:
+			entry.Type = batch.OpPut
+			entry.IsPtr = true
+			entry.ValuePtr = ptr
+			entry.Value = append([]byte(nil), value...)
+		default:
+			entry.Type = batch.OpPut
+			entry.Value = append([]byte(nil), value...)
+		}
+		ops = append(ops, entry)
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return ops, nil
 }
 
 type atomicMockBatch struct {

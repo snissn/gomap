@@ -67,7 +67,7 @@ func TestCachedCollectionsInsertBatch_BufferedBeforeCheckpoint(t *testing.T) {
 	}
 }
 
-func TestCachedCollectionsInsertBatch_UsesSingleRootBulkMutationCall(t *testing.T) {
+func TestCachedCollectionsInsertBatch_UsesSingleRootIteratorMutationCall(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatalf("open cached: %v", err)
@@ -99,14 +99,20 @@ func TestCachedCollectionsInsertBatch_UsesSingleRootBulkMutationCall(t *testing.
 		t.Fatalf("open collection: %v", err)
 	}
 
-	bulkCalls := 0
-	restore := setRootBulkMutationOpsTestHook(func(rootCount int) {
-		bulkCalls++
+	iteratorCalls := 0
+	restoreIter := setRootIteratorMutationTestHook(func(rootCount int) {
+		iteratorCalls++
 		if rootCount != 4 {
 			t.Fatalf("root count=%d want 4", rootCount)
 		}
 	})
-	defer restore()
+	defer restoreIter()
+
+	bulkCalls := 0
+	restoreBulk := setRootBulkMutationOpsTestHook(func(rootCount int) {
+		bulkCalls++
+	})
+	defer restoreBulk()
 
 	ids := make([][]byte, 8)
 	docs := make([][]byte, 8)
@@ -117,7 +123,10 @@ func TestCachedCollectionsInsertBatch_UsesSingleRootBulkMutationCall(t *testing.
 	if _, err := col.InsertBatch(ids, docs); err != nil {
 		t.Fatalf("insert batch: %v", err)
 	}
-	if bulkCalls != 1 {
-		t.Fatalf("bulk calls=%d want 1", bulkCalls)
+	if iteratorCalls != 1 {
+		t.Fatalf("iterator calls=%d want 1", iteratorCalls)
+	}
+	if bulkCalls != 0 {
+		t.Fatalf("bulk calls=%d want 0", bulkCalls)
 	}
 }

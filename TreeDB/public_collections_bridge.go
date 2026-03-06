@@ -25,6 +25,11 @@ var rootBulkMutationOpsHook struct {
 	fn func(int)
 }
 
+var rootIteratorMutationHook struct {
+	mu sync.RWMutex
+	fn func(int)
+}
+
 func setRootBulkMutationOpsTestHook(fn func(int)) func() {
 	rootBulkMutationOpsHook.mu.Lock()
 	prev := rootBulkMutationOpsHook.fn
@@ -41,6 +46,27 @@ func runRootBulkMutationOpsTestHook(rootCount int) {
 	rootBulkMutationOpsHook.mu.RLock()
 	fn := rootBulkMutationOpsHook.fn
 	rootBulkMutationOpsHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootCount)
+	}
+}
+
+func setRootIteratorMutationTestHook(fn func(int)) func() {
+	rootIteratorMutationHook.mu.Lock()
+	prev := rootIteratorMutationHook.fn
+	rootIteratorMutationHook.fn = fn
+	rootIteratorMutationHook.mu.Unlock()
+	return func() {
+		rootIteratorMutationHook.mu.Lock()
+		rootIteratorMutationHook.fn = prev
+		rootIteratorMutationHook.mu.Unlock()
+	}
+}
+
+func runRootIteratorMutationTestHook(rootCount int) {
+	rootIteratorMutationHook.mu.RLock()
+	fn := rootIteratorMutationHook.fn
+	rootIteratorMutationHook.mu.RUnlock()
 	if fn != nil {
 		fn(rootCount)
 	}
@@ -199,6 +225,14 @@ func (db *DB) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*r
 		return db.cached.BufferNamedRootMutationsOps(sync, rootIDs, formats, rootOps, buildSystemOps)
 	}
 	return db.backend.MutateRootsWithFormatOps(sync, rootIDs, formats, rootOps, buildSystemOps)
+}
+
+func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	runRootIteratorMutationTestHook(len(rootIDs))
+	if db.cached != nil {
+		return db.cached.BufferNamedRootMutationsIterators(sync, rootIDs, formats, rootIters, buildSystemOps)
+	}
+	return db.backend.MutateRootsWithFormatIterators(sync, rootIDs, formats, rootIters, buildSystemOps)
 }
 
 // MutateRootWithFormat delegates named-root mutation to the backend.
