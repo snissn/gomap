@@ -68,6 +68,23 @@ var valueLogKeyLeases [][][]byte
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
+var batchArenaPoolLastGC atomic.Uint32
+
+func maybeResetBatchArenaPoolBytesOnGCMiss() {
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	gc := uint32(stats.NumGC)
+	for {
+		prev := batchArenaPoolLastGC.Load()
+		if prev == gc {
+			return
+		}
+		if batchArenaPoolLastGC.CompareAndSwap(prev, gc) {
+			batchArenaPoolBytes.Store(0)
+			return
+		}
+	}
+}
 
 func computeBatchArenaPoolBudgetBytes() int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
@@ -351,9 +368,10 @@ func getBatchArena(capacity int) []byte {
 			}
 		}
 	} else if batchArenaPoolBytes.Load() > 0 {
-		// sync.Pool may drop retained objects at GC; clear the estimate on a miss
-		// so pooling can refill instead of staying artificially budget-capped.
-		batchArenaPoolBytes.Store(0)
+		// sync.Pool may drop retained objects at GC; only clear the global estimate
+		// when a miss coincides with a new GC cycle so per-class misses do not
+		// undercount still-live buffers held in other class pools.
+		maybeResetBatchArenaPoolBytesOnGCMiss()
 	}
 	return make([]byte, 0, classCap)
 }
