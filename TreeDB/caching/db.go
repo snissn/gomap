@@ -431,17 +431,21 @@ func putBatchArena(buf []byte) {
 	}
 	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
+		noteEpoch := false
 		for {
 			held := batchArenaPoolBytes.Load()
 			if held+size > budget {
 				return
 			}
 			if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
+				noteEpoch = held == 0
 				break
 			}
 		}
+		if noteEpoch {
+			noteBatchArenaPoolGC(batchArenaPoolNumGC())
+		}
 	}
-	noteBatchArenaPoolGC(batchArenaPoolNumGC())
 	batchArenaPools[idx].Put(buf[:0])
 }
 
@@ -2438,6 +2442,7 @@ func (db *DB) valueLogInUsePaths() []string {
 	for path := range inUse {
 		out = append(out, path)
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -9368,6 +9373,8 @@ planned:
 				consumed := int64(0)
 				if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 					consumed = rewritePlan.SelectedBytesLive
+				} else if stats.BytesBefore > 0 {
+					consumed = int64(stats.BytesBefore)
 				} else if maxSourceBytes > 0 {
 					consumed = maxSourceBytes
 				}
@@ -16208,6 +16215,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			break
 		}
 	}
+	if b.ptrValueEntryIdxs != nil {
+		b.ptrValueEntryIdxs = b.ptrValueEntryIdxs[:0]
+	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	if retainPtrArena {
 		chunks = append(chunks, ptrChunks...)
@@ -16316,7 +16326,7 @@ func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
 	if len(segments) == 0 {
 		return nil
 	}
-	tailByLane := make(map[int]logSegmentInfo, len(segments))
+	tailByLane := make(map[int]logSegmentInfo)
 	for _, seg := range segments {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue

@@ -538,7 +538,7 @@ func openBackendForVlogGC(dir string) (*treedbdb.DB, func() error, error) {
 		// When the main DB uses dict-compressed frames, backend open replays WAL
 		// by scanning value-log segments and validating dict IDs. Wire DictLookup
 		// from dictdb/ so recovery and GC can proceed.
-		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: false}
+		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: true}
 		applyPersistedFormatConfig(dictDir, &dictOpts)
 		dictOpts.DisableBackgroundPrune = true
 		// dictdb should not require dict lookup itself; force compression off in
@@ -1036,6 +1036,12 @@ func applyPersistedFormatConfig(dir string, opts *treedbdb.Options) {
 
 func resolveTreeDBRootDir(dir string) string {
 	clean := filepath.Clean(dir)
+	if filepath.Base(clean) == "dictdb" {
+		parent := filepath.Dir(clean)
+		if _, err := os.Stat(filepath.Join(parent, "maindb", "index.db")); err == nil {
+			return parent
+		}
+	}
 	if _, err := os.Stat(filepath.Join(clean, "maindb", "index.db")); err == nil {
 		return clean
 	}
