@@ -844,6 +844,9 @@ func (db *DB) flushNamedRootOverlaysLocked(bridge BackendDirectBridge, sync bool
 	if err != nil {
 		return err
 	}
+	if err := db.refreshBackendDirectValueLogRetention(bridge); err != nil {
+		return err
+	}
 	if err := db.ApplySystemOverlayEntriesOwned(updatedSystemEntries); err != nil {
 		return err
 	}

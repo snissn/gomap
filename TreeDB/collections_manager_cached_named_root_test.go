@@ -3,6 +3,7 @@ package treedb
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/caching"
@@ -837,6 +838,49 @@ func TestCachedCollectionsCheckpoint_UsesRootBulkMutationOps(t *testing.T) {
 	}
 	if bulkPublishCalls == 0 {
 		t.Fatalf("expected checkpoint to publish named roots through bulk ops")
+	}
+}
+
+func TestCachedCollectionsCheckpoint_BulkPublishRefreshesValueLogState(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	doc := []byte(`{"email":"ada@example.com","payload":"` + strings.Repeat("x", 2048) + `"}`)
+	if _, err := col.Insert([]byte("u1"), doc); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint insert: %v", err)
+	}
+
+	got, err := col.Get([]byte("u1"))
+	if err != nil {
+		t.Fatalf("get after bulk checkpoint publish: %v", err)
+	}
+	if !bytes.Equal(got, doc) {
+		t.Fatalf("doc after checkpoint = %q", got)
+	}
+	if err := col.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete after bulk checkpoint publish: %v", err)
 	}
 }
 
