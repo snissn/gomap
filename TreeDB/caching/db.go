@@ -342,12 +342,14 @@ func getBatchArena(capacity int) []byte {
 	}
 	if v := batchArenaPools[idx].Get(); v != nil {
 		if buf, ok := v.([]byte); ok {
+			size := int64(cap(buf))
+			next := batchArenaPoolBytes.Add(-size)
+			if next < 0 {
+				// Counter can drift if sync.Pool drops objects at GC or a caller
+				// inserts an unexpected buffer.
+				batchArenaPoolBytes.Store(0)
+			}
 			if cap(buf) == classCap {
-				next := batchArenaPoolBytes.Add(-int64(classCap))
-				if next < 0 {
-					// Counter can drift if sync.Pool drops objects at GC.
-					batchArenaPoolBytes.Store(0)
-				}
 				return buf[:0]
 			}
 		}
@@ -5585,6 +5587,8 @@ func putEntrySlice(entries []batch.Entry) {
 	if cap(entries) > maxEntryPoolCap {
 		return
 	}
+	full := entries[:cap(entries)]
+	clear(full)
 	idx, ok := entrySliceLeaseClassForCap(cap(entries))
 	if !ok {
 		return
@@ -5593,8 +5597,6 @@ func putEntrySlice(entries []batch.Entry) {
 	if !reserveEntrySlicePoolBytes(leaseBytes) {
 		return
 	}
-	full := entries[:cap(entries)]
-	clear(full)
 	entries = entries[:0]
 	entrySliceLeaseMu.Lock()
 	if len(entrySliceLeases[idx]) < maxEntrySliceLeasesPerBucket {
@@ -9125,13 +9127,13 @@ func (db *DB) vlogGenerationRewriteBudgetCapBytes() int64 {
 	}
 	targets := int64(0)
 	if db.valueLogGenerationHotTarget > 0 {
-		targets += db.valueLogGenerationHotTarget
+		targets = addClampInt64(targets, db.valueLogGenerationHotTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationWarmTarget > 0 {
-		targets += db.valueLogGenerationWarmTarget
+		targets = addClampInt64(targets, db.valueLogGenerationWarmTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationColdTarget > 0 {
-		targets += db.valueLogGenerationColdTarget
+		targets = addClampInt64(targets, db.valueLogGenerationColdTarget, maxPositiveInt64)
 	}
 	if targets > capBytes {
 		capBytes = targets
@@ -9151,25 +9153,28 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 		return
 	}
 	nowNs := now.UnixNano()
-	prevNs := db.vlogGenerationRewriteBudgetLastUnixNano.Swap(nowNs)
-	if prevNs <= 0 || nowNs <= prevNs {
+	var prevNs int64
+	for {
+		prevNs = db.vlogGenerationRewriteBudgetLastUnixNano.Load()
+		if prevNs > 0 && nowNs <= prevNs {
+			return
+		}
+		if db.vlogGenerationRewriteBudgetLastUnixNano.CompareAndSwap(prevNs, nowNs) {
+			break
+		}
+	}
+	if prevNs <= 0 {
 		return
 	}
 	deltaNs := nowNs - prevNs
-	add := mulDivClampPositiveInt64(budgetBps, deltaNs, int64(time.Second), db.vlogGenerationRewriteBudgetCapBytes())
+	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
+	add := mulDivClampInt64(budgetBps, deltaNs, int64(time.Second), capBytes)
 	if add <= 0 {
 		return
 	}
-	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
 	for {
 		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
-		next := cur + add
-		if next > capBytes {
-			next = capBytes
-		}
-		if next < 0 {
-			next = 0
-		}
+		next := addClampInt64(cur, add, capBytes)
 		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
 			return
 		}
@@ -9177,6 +9182,45 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 }
 
 const maxPositiveInt64 = int64(^uint64(0) >> 1)
+
+func addClampInt64(cur, add, limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	if cur <= 0 {
+		cur = 0
+	}
+	if add <= 0 {
+		if cur > limit {
+			return limit
+		}
+		return cur
+	}
+	if cur >= limit || cur > limit-add {
+		return limit
+	}
+	return cur + add
+}
+
+func mulDivClampInt64(a, b, div, cap int64) int64 {
+	if a <= 0 || b <= 0 || div <= 0 || cap <= 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	var q uint64
+	if hi == 0 {
+		q = lo / uint64(div)
+	} else {
+		if hi >= uint64(div) {
+			return cap
+		}
+		q, _ = bits.Div64(hi, lo, uint64(div))
+	}
+	if q > uint64(cap) {
+		return cap
+	}
+	return int64(q)
+}
 
 func mulDivClampPositiveInt64(x, y, div, capValue int64) int64 {
 	if x <= 0 || y <= 0 || div <= 0 || capValue <= 0 {
@@ -9275,7 +9319,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		// small floor so planning never selects an unbounded set when the token
 		// bucket is empty (e.g. first tick).
 		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-			maxSourceBytes = db.valueLogRewriteBudgetBytes
+			goto planned
 		}
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
@@ -9344,7 +9388,8 @@ planned:
 			// small floor so we never accidentally run an unbounded rewrite when the
 			// token bucket is empty (e.g. first tick).
 			if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-				maxSourceBytes = db.valueLogRewriteBudgetBytes
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+				return
 			}
 			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 				maxSourceBytes = totalBytes
@@ -14728,9 +14773,7 @@ func (db *DB) NewBatch() *Batch {
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	if size < 0 {
-		size = 0
-	}
+	size = backenddb.NormalizePublicBatchReserveHint(size)
 	return &Batch{
 		db:             db,
 		entries:        db.getBatchEntries(size),
