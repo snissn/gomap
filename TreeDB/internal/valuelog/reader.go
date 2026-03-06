@@ -450,6 +450,181 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 	return decodeRecord(header[:], payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts)
 }
 
+func ReadAtWithDictAppend(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte) ([]byte, error) {
+	if f == nil {
+		return nil, errors.New("valuelog: nil file")
+	}
+	if ptr.Offset < 4 {
+		return dst, ErrCorrupt
+	}
+	start := int64(ptr.Offset - 4)
+	var header [HeaderSize]byte
+	if _, err := f.ReadAt(header[:], start); err != nil {
+		return dst, err
+	}
+
+	crcVal := binary.LittleEndian.Uint32(header[0:4])
+	version := header[4]
+	if version != Version {
+		return dst, ErrCorrupt
+	}
+	flags := header[5]
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLen) {
+		return dst, ErrRecordTooLarge
+	}
+
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	if !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+		return dst, ErrCorrupt
+	}
+
+	payload := getDecodeScratch(int(valueLen))
+	payload = grow(payload[:0], int(valueLen))
+	defer putDecodeScratch(payload)
+	if _, err := f.ReadAt(payload, start+HeaderSize); err != nil {
+		return dst, err
+	}
+	if verifyCRC {
+		sum := crc.ChecksumParts(header[4:], payload)
+		if sum != crcVal {
+			return dst, ErrCorrupt
+		}
+	}
+
+	if flags&recordFlagGrouped == 0 {
+		if page.ValuePtrIsGrouped(ptr) {
+			return dst, ErrCorrupt
+		}
+		return appendDecodedPayload(dst, payload, templateLookup, templateCache, templateOpts)
+	}
+	if !page.ValuePtrIsGrouped(ptr) {
+		return dst, ErrCorrupt
+	}
+
+	frameHeader, k, offsets, framePayload, err := parseFrameForAppend(payload)
+	if err != nil {
+		return dst, err
+	}
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	if subIndex < 0 || subIndex >= k {
+		return dst, ErrCorrupt
+	}
+	rawLen := offsets[k]
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
+		return dst, ErrRecordTooLarge
+	}
+	valStart := offsets[subIndex]
+	valEnd := offsets[subIndex+1]
+	if valEnd < valStart || valEnd > rawLen {
+		return dst, ErrCorrupt
+	}
+
+	if frameHeader.Flags&FrameFlagCompressed != 0 {
+		if templateLookup == nil && k == 1 && subIndex == 0 && valStart == 0 && valEnd == rawLen {
+			oldLen := len(dst)
+			tail, err := decodeFramePayloadTo(frameHeader, framePayload, dictLookup, rawLen, dst[oldLen:oldLen])
+			if err != nil {
+				return dst[:oldLen], err
+			}
+			if uint32(len(tail)) != rawLen {
+				return dst[:oldLen], ErrCorrupt
+			}
+			return mergeAppendTail(dst, oldLen, tail), nil
+		}
+		raw := getDecodeScratch(int(rawLen))
+		raw, err = decodeFramePayloadTo(frameHeader, framePayload, dictLookup, rawLen, raw)
+		if err != nil {
+			putDecodeScratch(raw)
+			return dst, err
+		}
+		defer putDecodeScratch(raw)
+		return appendDecodedPayload(dst, raw[valStart:valEnd], templateLookup, templateCache, templateOpts)
+	}
+	if uint32(len(framePayload)) != rawLen {
+		return dst, ErrCorrupt
+	}
+	return appendDecodedPayload(dst, framePayload[valStart:valEnd], templateLookup, templateCache, templateOpts)
+}
+
+func parseFrameForAppend(body []byte) (FrameHeader, int, [MaxFrameK + 1]uint32, []byte, error) {
+	var offsets [MaxFrameK + 1]uint32
+	if len(body) < FrameHeaderSize {
+		return FrameHeader{}, 0, offsets, nil, ErrCorrupt
+	}
+	if body[0] != FrameVersion {
+		return FrameHeader{}, 0, offsets, nil, ErrCorrupt
+	}
+	k := int(body[2])
+	if k <= 0 || k > MaxFrameK {
+		return FrameHeader{}, 0, offsets, nil, ErrCorrupt
+	}
+	ridBytes := k * 8
+	offsetBytes := (k + 1) * 4
+	headerEnd := FrameHeaderSize + ridBytes + offsetBytes
+	if len(body) < headerEnd {
+		return FrameHeader{}, 0, offsets, nil, ErrCorrupt
+	}
+	header := FrameHeader{
+		Version:  body[0],
+		Flags:    body[1],
+		K:        uint8(k),
+		Reserved: body[3],
+		DictID:   binary.LittleEndian.Uint64(body[4:12]),
+	}
+	off := FrameHeaderSize
+	for i := 0; i < k; i++ {
+		rid := binary.LittleEndian.Uint64(body[off : off+8])
+		if rid == 0 {
+			return FrameHeader{}, 0, offsets, nil, ErrCorrupt
+		}
+		off += 8
+	}
+	prev := uint32(0)
+	for i := 0; i < k+1; i++ {
+		cur := binary.LittleEndian.Uint32(body[off : off+4])
+		if cur < prev {
+			return FrameHeader{}, 0, offsets, nil, ErrCorrupt
+		}
+		offsets[i] = cur
+		prev = cur
+		off += 4
+	}
+	payload := body[headerEnd:]
+	if len(payload) == 0 && offsets[k] != 0 {
+		return FrameHeader{}, 0, offsets, nil, ErrCorrupt
+	}
+	return header, k, offsets, payload, nil
+}
+
+func appendDecodedPayload(dst, payload []byte, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions) ([]byte, error) {
+	if templateLookup != nil && templ.IsEncodedPayload(payload) {
+		return templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
+			return resolveTemplateDef(id, templateLookup, templateCache)
+		}, templateOpts)
+	}
+	oldLen := len(dst)
+	dst = grow(dst, len(payload))
+	copy(dst[oldLen:], payload)
+	return dst, nil
+}
+
+func mergeAppendTail(dst []byte, oldLen int, tail []byte) []byte {
+	if oldLen == 0 {
+		return tail
+	}
+	if len(tail) == 0 {
+		return dst[:oldLen]
+	}
+	if cap(dst) > oldLen {
+		base := dst[:cap(dst):cap(dst)]
+		if &tail[0] == &base[oldLen] {
+			return dst[:oldLen+len(tail)]
+		}
+	}
+	return append(dst[:oldLen], tail...)
+}
+
 func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions) ([]byte, error) {
 	if len(header) < HeaderSize {
 		return nil, ErrCorrupt
