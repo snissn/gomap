@@ -79,6 +79,7 @@ type documentScratchHandle struct {
 const (
 	documentScratchInitCap = 4 << 10
 	documentScratchMaxCap  = 256 << 10
+	batchIteratorPublishMinDocuments = 128
 )
 
 var documentScratchPool = sync.Pool{
@@ -117,6 +118,7 @@ type collectionDB interface {
 	Iterator(start, end []byte) (systemIterator, error)
 	IteratorAtRoot(rootID uint64, start, end []byte) (systemIterator, error)
 	SystemIterator(start, end []byte) (systemIterator, error)
+	PreferWarmIteratorBatchPublish() bool
 	MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
 	MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error)
 	MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error)
@@ -723,7 +725,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	useIteratorPublish := rootDesc.RootPageID == 0
+	useIteratorPublish := rootDesc.RootPageID == 0 || (len(documents) >= batchIteratorPublishMinDocuments && c.db.PreferWarmIteratorBatchPublish())
 
 	var (
 		stateDesc    *CollectionRootDescriptor
@@ -735,9 +737,6 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if stateDesc.RootPageID != 0 {
-			useIteratorPublish = false
-		}
 		indexRuntime = make(map[string]*collectionIndexRuntime, len(c.meta.Indexes))
 		for _, idx := range c.meta.Indexes {
 			runtime, err := c.indexRuntime(idx)
@@ -745,9 +744,6 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 				return nil, err
 			}
 			indexRuntime[idx.Name] = runtime
-			if runtime.desc.RootPageID != 0 {
-				useIteratorPublish = false
-			}
 		}
 	}
 

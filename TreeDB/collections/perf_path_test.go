@@ -4,7 +4,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/rootfmt"
 )
 
 type perfMockDB struct {
@@ -20,6 +23,8 @@ type perfMockDB struct {
 	hasAtRootCalls       int
 	hasPrefixAtRootCalls int
 	iteratorAtRootCalls  int
+	rootIteratorCalls    int
+	rootBulkOpsCalls     int
 	getSystemCalls       map[string]int
 }
 
@@ -38,6 +43,8 @@ func (d *perfMockDB) resetCounters() {
 	d.hasAtRootCalls = 0
 	d.hasPrefixAtRootCalls = 0
 	d.iteratorAtRootCalls = 0
+	d.rootIteratorCalls = 0
+	d.rootBulkOpsCalls = 0
 	clear(d.getSystemCalls)
 }
 
@@ -83,6 +90,16 @@ func (d *perfMockDB) IteratorAtRoot(rootID uint64, start, end []byte) (systemIte
 		return nil, errors.New("unexpected IteratorAtRoot call")
 	}
 	return d.atomicMockDB.IteratorAtRoot(rootID, start, end)
+}
+
+func (d *perfMockDB) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	d.rootBulkOpsCalls++
+	return d.atomicMockDB.MutateRootsWithFormatOps(sync, rootIDs, formats, rootOps, buildSystemOps)
+}
+
+func (d *perfMockDB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	d.rootIteratorCalls++
+	return d.atomicMockDB.MutateRootsWithFormatIterators(sync, rootIDs, formats, rootIters, buildSystemOps)
 }
 
 func TestInsertWithoutIndexes_SkipsExistingDocumentRead(t *testing.T) {
@@ -247,6 +264,52 @@ func TestInsertWithUniqueIndexes_UsesPrefixProbeInsteadOfIteratorConflictScan(t 
 	}
 	if d.iteratorAtRootCalls != 0 {
 		t.Fatalf("expected unique indexed insert to avoid IteratorAtRoot, got %d calls", d.iteratorAtRootCalls)
+	}
+}
+
+func TestInsertBatchWithIndexes_UsesIteratorPublishForWarmLargeBatches(t *testing.T) {
+	d := newPerfMockDB()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	initialIDs := make([][]byte, 8)
+	initialDocs := make([][]byte, 8)
+	for i := range initialIDs {
+		initialIDs[i] = []byte("seed-" + string(rune('a'+i)))
+		initialDocs[i] = []byte(`{"email":"seed-` + string(rune('a'+i)) + `@example.com","city":"seed"}`)
+	}
+	if _, err := col.InsertBatch(initialIDs, initialDocs); err != nil {
+		t.Fatalf("seed insert batch: %v", err)
+	}
+
+	d.resetCounters()
+	ids := make([][]byte, batchIteratorPublishMinDocuments)
+	docs := make([][]byte, batchIteratorPublishMinDocuments)
+	for i := range ids {
+		ids[i] = []byte("warm-" + string(rune('a'+(i%26))) + string(rune('A'+((i/26)%26))))
+		docs[i] = []byte(`{"email":"warm-` + string(rune('a'+(i%26))) + string(rune('A'+((i/26)%26))) + `@example.com","city":"hnl"}`)
+	}
+	if _, err := col.InsertBatch(ids, docs); err != nil {
+		t.Fatalf("warm insert batch: %v", err)
+	}
+	if d.rootIteratorCalls != 1 {
+		t.Fatalf("iterator publish calls=%d want 1", d.rootIteratorCalls)
+	}
+	if d.rootBulkOpsCalls != 0 {
+		t.Fatalf("bulk ops calls=%d want 0", d.rootBulkOpsCalls)
 	}
 }
 
