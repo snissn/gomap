@@ -71,6 +71,25 @@ func TestHasAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
 	}
 }
 
+func TestHasManyAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	has, err := d.HasManyAtRoot(0, [][]byte{[]byte("missing"), []byte("other")})
+	if err != nil {
+		t.Fatalf("HasManyAtRoot zero root: %v", err)
+	}
+	if len(has) != 2 {
+		t.Fatalf("HasManyAtRoot zero root len=%d want 2", len(has))
+	}
+	if has[0] || has[1] {
+		t.Fatalf("expected HasManyAtRoot zero root to be all false, got %#v", has)
+	}
+}
+
 func TestHasPrefixAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -84,6 +103,25 @@ func TestHasPrefixAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
 	}
 	if has {
 		t.Fatalf("expected HasPrefixAtRoot zero root to be false")
+	}
+}
+
+func TestHasPrefixesAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	has, err := d.HasPrefixesAtRoot(0, [][]byte{[]byte("missing"), []byte("other")})
+	if err != nil {
+		t.Fatalf("HasPrefixesAtRoot zero root: %v", err)
+	}
+	if len(has) != 2 {
+		t.Fatalf("HasPrefixesAtRoot zero root len=%d want 2", len(has))
+	}
+	if has[0] || has[1] {
+		t.Fatalf("expected HasPrefixesAtRoot zero root to be all false, got %#v", has)
 	}
 }
 
@@ -117,6 +155,57 @@ func TestHasPrefixAtRoot_FindsMatchingEntries(t *testing.T) {
 	}
 	if has {
 		t.Fatalf("expected missing prefix to be absent")
+	}
+}
+
+func TestHasManyAtRootAndHasPrefixesAtRoot_FindMatches(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	rootID, err := d.MutateRoot(0, false, func(b batch.Interface) error {
+		if err := b.Set([]byte("email:a@example.com:u1"), nil); err != nil {
+			return err
+		}
+		if err := b.Set([]byte("email:b@example.com:u2"), nil); err != nil {
+			return err
+		}
+		return b.Set([]byte("doc:u1"), []byte(`{"email":"a@example.com"}`))
+	}, nil)
+	if err != nil {
+		t.Fatalf("MutateRoot: %v", err)
+	}
+
+	hasKeys, err := d.HasManyAtRoot(rootID, [][]byte{
+		[]byte("doc:u1"),
+		[]byte("doc:missing"),
+		[]byte("doc:u1"),
+	})
+	if err != nil {
+		t.Fatalf("HasManyAtRoot: %v", err)
+	}
+	if got, want := len(hasKeys), 3; got != want {
+		t.Fatalf("HasManyAtRoot len=%d want %d", got, want)
+	}
+	if !hasKeys[0] || hasKeys[1] || !hasKeys[2] {
+		t.Fatalf("HasManyAtRoot results=%#v", hasKeys)
+	}
+
+	hasPrefixes, err := d.HasPrefixesAtRoot(rootID, [][]byte{
+		[]byte("email:a@example.com:"),
+		[]byte("email:missing:"),
+		[]byte("email:a@example.com:"),
+	})
+	if err != nil {
+		t.Fatalf("HasPrefixesAtRoot: %v", err)
+	}
+	if got, want := len(hasPrefixes), 3; got != want {
+		t.Fatalf("HasPrefixesAtRoot len=%d want %d", got, want)
+	}
+	if !hasPrefixes[0] || hasPrefixes[1] || !hasPrefixes[2] {
+		t.Fatalf("HasPrefixesAtRoot results=%#v", hasPrefixes)
 	}
 }
 

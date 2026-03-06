@@ -188,3 +188,139 @@ func TestCachedCollectionsInsertBatch_AutoFlushRefreshesValueLogState(t *testing
 		t.Fatalf("insert batch 2 after auto flush: %v", err)
 	}
 }
+
+func TestCachedCollectionsInsertBatch_RejectsBufferedExistingDocumentIDBeforeCheckpoint(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			IDMode: collections.IDModeCallerProvided,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"name":"ada"}`)},
+	); err != nil {
+		t.Fatalf("seed insert batch: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1"), []byte("u2")},
+		[][]byte{[]byte(`{"name":"dup"}`), []byte(`{"name":"grace"}`)},
+	); err == nil {
+		t.Fatalf("expected duplicate buffered document id conflict")
+	}
+}
+
+func TestCachedCollectionsInsertBatch_RejectsBufferedExistingUniqueValueBeforeCheckpoint(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			IDMode: collections.IDModeCallerProvided,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u1")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err != nil {
+		t.Fatalf("seed insert batch: %v", err)
+	}
+	if _, err := col.InsertBatch(
+		[][]byte{[]byte("u2")},
+		[][]byte{[]byte(`{"email":"ada@example.com"}`)},
+	); err == nil {
+		t.Fatalf("expected duplicate buffered unique value conflict")
+	}
+}
+
+func TestCachedCollectionsInsertBatch_SameHandleSurvivesRepeatedAutoFlushes(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), FlushThreshold: 128})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{
+		Name: "users",
+		Options: collections.CollectionOptions{
+			IDMode: collections.IDModeCallerProvided,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	makeBatch := func(offset int) ([][]byte, [][]byte) {
+		const batchSize = 256
+		ids := make([][]byte, batchSize)
+		docs := make([][]byte, batchSize)
+		for i := 0; i < batchSize; i++ {
+			n := offset + i
+			ids[i] = []byte(fmt.Sprintf("u-%d", n))
+			docs[i] = []byte(fmt.Sprintf(`{"email":"user-%d@example.com","city":"city-%d"}`, n, n%32))
+		}
+		return ids, docs
+	}
+
+	for round := 0; round < 3; round++ {
+		ids, docs := makeBatch(round * 256)
+		if _, err := col.InsertBatch(ids, docs); err != nil {
+			t.Fatalf("insert batch round %d: %v", round, err)
+		}
+		waitForCachedFlushCondition(t, fmt.Sprintf("named roots auto flush after round %d", round), func() bool {
+			return !d.cached.PendingNamedRoots()
+		})
+	}
+}
