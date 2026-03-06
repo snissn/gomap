@@ -154,7 +154,9 @@ func TestMemtableBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
 	}{
 		{name: "skiplist", new: func() memtable.Table { return memtable.NewWithCapacity(0) }, want: true},
 		{name: "btree", new: func() memtable.Table { return memtable.NewBTree() }, want: true},
-		{name: "hash_sorted", new: func() memtable.Table { return memtable.NewHashSortedWithCapacityAndIndexer(0, memtable.NewHashSortedIndexer()) }, want: false},
+		{name: "hash_sorted", new: func() memtable.Table {
+			return memtable.NewHashSortedWithCapacityAndIndexer(0, memtable.NewHashSortedIndexer())
+		}, want: false},
 		{name: "append_only", new: func() memtable.Table { return memtable.NewAppendOnlyWithCapacity(0) }, want: false},
 	}
 	for _, tc := range cases {
