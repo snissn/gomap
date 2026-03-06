@@ -22,6 +22,13 @@ func TestGetAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
 	if got != nil {
 		t.Fatalf("expected nil from zero root, got %q", got)
 	}
+	appended, err := d.GetAtRootAppend(0, []byte("missing"), []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAtRootAppend zero root: %v", err)
+	}
+	if string(appended) != "prefix:" {
+		t.Fatalf("expected GetAtRootAppend zero root to preserve dst, got %q", appended)
+	}
 
 	it, err := d.IteratorAtRoot(0, nil, nil)
 	if err != nil {
@@ -99,6 +106,13 @@ func TestMutateRoot_PublishesDedicatedRootAndSurvivesReopen(t *testing.T) {
 	}
 	if !bytes.Equal(got, doc) {
 		t.Fatalf("root value mismatch before reopen: got=%q want=%q", got, doc)
+	}
+	appended, err := d.GetAtRootAppend(rootID, docID, []byte("prefix:"))
+	if err != nil {
+		t.Fatalf("GetAtRootAppend before reopen: %v", err)
+	}
+	if !bytes.Equal(appended, append([]byte("prefix:"), doc...)) {
+		t.Fatalf("root value mismatch from append before reopen: got=%q want=%q", appended, append([]byte("prefix:"), doc...))
 	}
 	has, err := d.HasAtRoot(rootID, docID)
 	if err != nil {
