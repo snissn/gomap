@@ -59,6 +59,7 @@ type collectionIndexRuntime struct {
 	desc    CollectionRootDescriptor
 	rootKey []byte
 	prefix  []byte
+	path    []string
 }
 
 type collectionDB interface {
@@ -590,7 +591,7 @@ func (c *Collection) Delete(documentID []byte) error {
 	}
 	if len(c.meta.Indexes) == 0 {
 		writePrimaryDelete := func(root batch.Interface) error {
-			return root.Delete(key)
+			return deleteDocumentOnBatch(root, key)
 		}
 		return c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimaryDelete, nil, nil)
 	}
@@ -606,7 +607,7 @@ func (c *Collection) Delete(documentID []byte) error {
 		return err
 	}
 	writePrimaryDelete := func(root batch.Interface) error {
-		return root.Delete(key)
+		return deleteDocumentOnBatch(root, key)
 	}
 	return c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimaryDelete, entries, nil)
 }
@@ -625,9 +626,7 @@ func (c *Collection) documentKey(documentID []byte) ([]byte, error) {
 	if err := requireDocumentID(documentID); err != nil {
 		return nil, err
 	}
-	key := make([]byte, 0, len(documentID))
-	key = append(key, documentID...)
-	return key, nil
+	return documentID, nil
 }
 
 func requireDocumentID(documentID []byte) error {
@@ -832,42 +831,42 @@ func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 	if !ok {
 		return nil, nil
 	}
-	encodedValue, err := encodeIndexScalar(value)
+	runtime, err := c.indexRuntime(idxDef)
 	if err != nil {
 		return nil, err
 	}
-	prefix, err := indexValuePrefix(c.meta.Name, idxDef.Name, encodedValue)
+	prefix, err := indexValuePrefixForString(runtime.prefix, value)
 	if err != nil {
 		return nil, err
 	}
-	rootDesc, _, err := c.secondaryRootDescriptor(idxDef)
-	if err != nil {
-		return nil, err
-	}
-	it, err := c.db.IteratorAtRoot(rootDesc.RootPageID, prefix, nil)
+	it, err := c.db.IteratorAtRoot(runtime.desc.RootPageID, prefix, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = it.Close() }()
-	out := make([][]byte, 0, 8)
+	resultCap := 1
+	arenaCap := 32
+	if !idxDef.Unique {
+		resultCap = 64
+		arenaCap = 1024
+	}
+	out := make([][]byte, 0, resultCap)
+	arena := make([]byte, 0, arenaCap)
 	for it.Valid() {
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
 		if !it.IsDeleted() {
-			docID, err := parseIndexEntryDocID(c.meta.Name, idxDef.Name, key)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, docID)
+			start := len(arena)
+			arena = append(arena, key[len(prefix):]...)
+			out = append(out, arena[start:len(arena)])
 		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
 		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i], out[j]) < 0 })
 	return out, nil
 }
 
@@ -900,6 +899,7 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 	if err != nil {
 		return err
 	}
+	path := splitIndexPath(def.Field)
 	var indexKeys [][]byte
 	for it.Valid() {
 		key := it.UnsafeKey()
@@ -913,7 +913,7 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 			if !ok {
 				return fmt.Errorf("collections: index backfill requires JSON object document")
 			}
-			keysForDoc, err := indexKeysForSingleDefinition(docID, obj, def, meta.Options, prefix)
+			keysForDoc, err := indexKeysForSingleDefinition(docID, obj, def, meta.Options, prefix, path)
 			if err != nil {
 				return err
 			}
@@ -932,7 +932,7 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 	}, []func(batch.Interface) error{
 		func(root batch.Interface) error {
 			for _, indexKey := range indexKeys {
-				if err := root.Set(indexKey, nil); err != nil {
+				if err := setIndexEntryOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}
@@ -1052,15 +1052,22 @@ func (c *Collection) indexEntriesForDocument(documentID, document []byte) ([][]b
 		return nil, fmt.Errorf("collections: index extraction requires JSON object document")
 	}
 	out := make([][]byte, 0, len(c.meta.Indexes))
-	seen := make(map[string]struct{}, len(c.meta.Indexes))
+	var seen map[string]struct{}
 	for _, idx := range c.meta.Indexes {
 		runtime, err := c.indexRuntime(idx)
 		if err != nil {
 			return nil, err
 		}
-		keys, err := indexKeysForSingleDefinition(documentID, obj, idx, c.meta.Options, runtime.prefix)
+		keys, err := indexKeysForSingleDefinition(documentID, obj, idx, c.meta.Options, runtime.prefix, runtime.path)
 		if err != nil {
 			return nil, err
+		}
+		if len(keys) <= 1 {
+			out = append(out, keys...)
+			continue
+		}
+		if seen == nil {
+			seen = make(map[string]struct{}, len(keys))
 		}
 		for _, key := range keys {
 			s := string(key)
@@ -1074,8 +1081,8 @@ func (c *Collection) indexEntriesForDocument(documentID, document []byte) ([][]b
 	return out, nil
 }
 
-func indexKeysForSingleDefinition(documentID []byte, document any, idx IndexDefinition, opts CollectionOptions, prefix []byte) ([][]byte, error) {
-	value, found := extractIndexPathValue(document, idx.Field)
+func indexKeysForSingleDefinition(documentID []byte, document any, idx IndexDefinition, opts CollectionOptions, prefix []byte, path []string) ([][]byte, error) {
+	value, found := extractIndexPathValue(document, path)
 	if !found || value == nil {
 		return nil, nil
 	}
@@ -1106,21 +1113,27 @@ func normalizeIndexValues(value any, multiKey, allowArray bool) ([]any, error) {
 		if len(arr) == 0 {
 			return nil, nil
 		}
-		out := make([]any, 0, len(arr))
-		for _, elem := range arr {
-			out = append(out, elem)
-		}
-		return out, nil
+		return arr, nil
 	}
 	return []any{value}, nil
 }
 
-func extractIndexPathValue(document any, path string) (any, bool) {
+func splitIndexPath(path string) []string {
 	if path == "" {
+		return nil
+	}
+	if !strings.Contains(path, ".") {
+		return []string{path}
+	}
+	return strings.Split(path, ".")
+}
+
+func extractIndexPathValue(document any, path []string) (any, bool) {
+	if len(path) == 0 {
 		return nil, false
 	}
 	current := document
-	for _, segment := range strings.Split(path, ".") {
+	for _, segment := range path {
 		obj, ok := current.(map[string]any)
 		if !ok {
 			return nil, false
@@ -1177,6 +1190,10 @@ func indexValuePrefix(collection, indexName string, encodedValue []byte) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	return indexValuePrefixWithPrefix(prefix, encodedValue)
+}
+
+func indexValuePrefixWithPrefix(prefix, encodedValue []byte) ([]byte, error) {
 	if len(encodedValue) > 65535 {
 		return nil, fmt.Errorf("collections: index key too large")
 	}
@@ -1184,6 +1201,18 @@ func indexValuePrefix(collection, indexName string, encodedValue []byte) ([]byte
 	out = append(out, prefix...)
 	out = binary.BigEndian.AppendUint16(out, uint16(len(encodedValue)))
 	out = append(out, encodedValue...)
+	return out, nil
+}
+
+func indexValuePrefixForString(prefix []byte, value string) ([]byte, error) {
+	if len(value) > 65533 {
+		return nil, fmt.Errorf("collections: index key too large")
+	}
+	out := make([]byte, 0, len(prefix)+4+len(value))
+	out = append(out, prefix...)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(value)+2))
+	out = append(out, 's', ':')
+	out = append(out, value...)
 	return out, nil
 }
 
@@ -1311,12 +1340,44 @@ func (c *Collection) ensureRuntimeCacheFresh() {
 }
 
 func setDocumentOnBatch(b batch.Interface, key, value []byte) error {
+	if autoView, ok := b.(interface {
+		SetAutoView(key, value []byte) error
+	}); ok {
+		return autoView.SetAutoView(key, value)
+	}
 	if auto, ok := b.(interface {
 		SetAuto(key, value []byte) error
 	}); ok {
 		return auto.SetAuto(key, value)
 	}
 	return b.Set(key, value)
+}
+
+func setBytesOnBatch(b batch.Interface, key, value []byte) error {
+	if setView, ok := b.(interface {
+		SetView(key, value []byte) error
+	}); ok {
+		return setView.SetView(key, value)
+	}
+	return b.Set(key, value)
+}
+
+func deleteDocumentOnBatch(b batch.Interface, key []byte) error {
+	if deleteView, ok := b.(interface {
+		DeleteView(key []byte) error
+	}); ok {
+		return deleteView.DeleteView(key)
+	}
+	return b.Delete(key)
+}
+
+func setIndexEntryOnBatch(b batch.Interface, key []byte) error {
+	if setView, ok := b.(interface {
+		SetView(key, value []byte) error
+	}); ok {
+		return setView.SetView(key, nil)
+	}
+	return b.Set(key, nil)
 }
 
 func (m *CollectionManager) rootDescriptor(rootName string) (*CollectionRootDescriptor, error) {
@@ -1417,6 +1478,7 @@ func (c *Collection) indexRuntime(idx IndexDefinition) (*collectionIndexRuntime,
 		desc:    *desc,
 		rootKey: rootKey,
 		prefix:  prefix,
+		path:    splitIndexPath(idx.Field),
 	}
 	c.indexes[idx.Name] = runtime
 	return runtime, nil
@@ -1435,7 +1497,7 @@ func writeRootDescriptorUpdate(sys batch.Interface, rootKey []byte, desc *Collec
 	if err != nil {
 		return err
 	}
-	return sys.Set(rootKey, encoded)
+	return setBytesOnBatch(sys, rootKey, encoded)
 }
 
 type collectionRootUpdate struct {
@@ -1488,12 +1550,12 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		rootFormats = append(rootFormats, &indexMutation.desc.Format)
 		rootMutations = append(rootMutations, func(root batch.Interface) error {
 			for _, indexKey := range indexMutation.removals {
-				if err := root.Delete(indexKey); err != nil {
+				if err := deleteDocumentOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}
 			for _, indexKey := range indexMutation.additions {
-				if err := root.Set(indexKey, nil); err != nil {
+				if err := setIndexEntryOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}

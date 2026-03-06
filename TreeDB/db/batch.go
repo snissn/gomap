@@ -99,6 +99,21 @@ func (b *Batch) SetAuto(key, value []byte) error {
 	return err
 }
 
+// SetAutoView records a Put without copying key/value bytes and transparently
+// falls back to value-log pointer storage when inline thresholds are exceeded.
+// Callers must treat key/value as immutable until the batch is written or
+// closed.
+func (b *Batch) SetAutoView(key, value []byte) error {
+	if b == nil || b.db == nil {
+		return fmt.Errorf("missing db")
+	}
+	usedPointer, err := b.db.batchSetWithPointerFallback(b, key, value, true)
+	if usedPointer {
+		b.usedAutoPtr = true
+	}
+	return err
+}
+
 // SetView records a Put without copying key/value bytes. Callers must treat
 // key/value as immutable until the batch is written or closed.
 //
