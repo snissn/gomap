@@ -534,6 +534,38 @@ func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
 	}
 }
 
+func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
+	resetEntrySliceLeasesForTest(t)
+
+	savedBudget := entrySlicePoolBudgetBytes
+	savedBytes := entrySlicePoolBytes.Load()
+	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
+	entrySlicePoolBytes.Store(0)
+	t.Cleanup(func() {
+		entrySlicePoolBudgetBytes = savedBudget
+		entrySlicePoolBytes.Store(savedBytes)
+	})
+
+	leaseIdx, ok := entrySliceLeaseClassForCap(64)
+	if !ok {
+		t.Fatalf("expected lease class for cap=%d", 64)
+	}
+
+	putEntrySlice(make([]batch.Entry, 0, 64))
+	putEntrySlice(make([]batch.Entry, 0, 64))
+
+	if got := entrySlicePoolBytes.Load(); got < 0 || got > entrySlicePoolBudgetBytes {
+		t.Fatalf("entrySlicePoolBytes=%d want within [0,%d]", got, entrySlicePoolBudgetBytes)
+	}
+
+	entrySliceLeaseMu.Lock()
+	leased := len(entrySliceLeases[leaseIdx])
+	entrySliceLeaseMu.Unlock()
+	if leased > 1 {
+		t.Fatalf("expected budget to cap retained entry slices; leased=%d", leased)
+	}
+}
+
 func TestGetEntrySliceIgnoresUnexpectedPoolType(t *testing.T) {
 	capacity := 64
 	idx, _, ok := entrySliceLeaseClassForLen(capacity)
