@@ -34,6 +34,8 @@ const (
 	appendOnlyValueArenaPoolMaxCap          = 1 << appendOnlyValueArenaMaxShift
 	appendOnlyValueArenaRetainMaxCap        = 4 << 20
 	appendOnlyValueArenaRetainChunks        = 128
+	appendOnlyReuseOversizeFactor           = 4
+	appendOnlyResetDropThresholdEntries     = 1 << 15
 )
 
 var appendOnlyEntryPool sync.Pool
@@ -99,8 +101,8 @@ func getAppendOnlyEntries(length int) []appendOnlyEntry {
 			// memtables/iterators, which can otherwise pin large heaps after short-lived
 			// spikes (e.g. state-sync restore).
 			maxReuse := appendOnlyEntryPoolMaxCap
-			if length > 0 && length <= appendOnlyEntryPoolMaxCap/4 {
-				maxReuse = length * 4
+			if length > 0 && length <= appendOnlyEntryPoolMaxCap/appendOnlyReuseOversizeFactor {
+				maxReuse = length * appendOnlyReuseOversizeFactor
 				if maxReuse < appendOnlyMinInitialEntries {
 					maxReuse = appendOnlyMinInitialEntries
 				}
@@ -436,6 +438,7 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	indices := m.indexBuf[:0]
 	if cap(indices) < need {
 		indices = make([]int, 0, need)
+		m.indexBuf = indices[:0]
 	}
 	for _, idx := range m.latest {
 		indices = append(indices, idx)
@@ -882,7 +885,7 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	m.valueArena.reset()
 	// Clear small maps in-place; drop large ones so they don't pin hash tables
 	// after one-off spikes.
-	if oldCount > 0 && oldCount >= 1<<15 {
+	if oldCount > 0 && oldCount >= appendOnlyResetDropThresholdEntries {
 		m.latest = nil
 		m.latest64 = nil
 	} else {
@@ -891,13 +894,13 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	}
 	// Snapshot/index buffers are only needed for unordered memtables; drop large
 	// ones on reset to keep post-spike memory bounded.
-	if cap(m.snapshot) > 0 && cap(m.snapshot) >= 1<<15 {
+	if cap(m.snapshot) > 0 && cap(m.snapshot) >= appendOnlyResetDropThresholdEntries {
 		m.snapshot = nil
 		m.snapCount = 0
 	} else {
 		m.clearSnapshotLocked()
 	}
-	if cap(m.indexBuf) > 0 && cap(m.indexBuf) >= 1<<15 {
+	if cap(m.indexBuf) > 0 && cap(m.indexBuf) >= appendOnlyResetDropThresholdEntries {
 		m.indexBuf = nil
 	}
 	m.count = 0
@@ -911,7 +914,7 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	// If the entry slice grew far beyond the configured baseline, shrink it.
 	// This avoids permanently ratcheting heap high-water when a workload briefly
 	// spikes in write volume (common during state-sync restore).
-	if cap(m.entries) > desiredEntries*4 {
+	if cap(m.entries) > desiredEntries*appendOnlyReuseOversizeFactor {
 		m.entries = make([]appendOnlyEntry, desiredEntries)
 		return
 	}

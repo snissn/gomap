@@ -1247,6 +1247,15 @@ func (db *DB) NewBatch() Batch {
 }
 
 // NewBatchWithSize creates a new batch with a best-effort capacity hint.
+//
+// The size parameter is not a strict limit and does not guarantee that a batch
+// can hold exactly size entries. Small hints are treated like approximate entry
+// reserves. Larger hints may be interpreted as a byte budget and normalized
+// into an internal entry estimate instead. Extremely large hints may also be
+// capped internally.
+//
+// Callers must not rely on an exact 1:1 mapping between size and the number of
+// entries that can be written to the batch.
 func (db *DB) NewBatchWithSize(size int) Batch {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return nil
