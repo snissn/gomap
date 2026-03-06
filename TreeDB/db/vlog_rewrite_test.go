@@ -722,6 +722,30 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	}
 }
 
+func TestRewriteRIDAllocator_BatchesExternalReserveCalls(t *testing.T) {
+	var reserveCalls []int
+	alloc := newRewriteRIDAllocator(0, func(count int) (uint64, error) {
+		reserveCalls = append(reserveCalls, count)
+		return 1, nil
+	})
+
+	for i := 0; i < defaultValueLogRewriteBatchSize+8; i++ {
+		if _, err := alloc.Next(); err != nil {
+			t.Fatalf("Next(%d): %v", i, err)
+		}
+	}
+
+	if len(reserveCalls) != 2 {
+		t.Fatalf("reserve call count=%d want 2 (%v)", len(reserveCalls), reserveCalls)
+	}
+	if reserveCalls[0] != defaultValueLogRewriteBatchSize {
+		t.Fatalf("first reserve call=%d want %d", reserveCalls[0], defaultValueLogRewriteBatchSize)
+	}
+	if reserveCalls[1] != defaultValueLogRewriteBatchSize {
+		t.Fatalf("second reserve call=%d want %d", reserveCalls[1], defaultValueLogRewriteBatchSize)
+	}
+}
+
 func TestValueLogRewriteOnline_SparseSelection_RewritesHighStaleSegment(t *testing.T) {
 	dir := t.TempDir()
 

@@ -114,6 +114,7 @@ type rewriteCandidate struct {
 
 type rewriteRIDAllocator struct {
 	next    uint64
+	end     uint64
 	reserve func(count int) (uint64, error)
 }
 
@@ -132,13 +133,27 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 		return 0, fmt.Errorf("value-log rid allocator unavailable")
 	}
 	if a.reserve != nil {
-		start, err := a.reserve(count)
+		if a.next != 0 && a.end >= a.next && uint64(count) <= a.end-a.next {
+			start := a.next
+			a.next += uint64(count)
+			return start, nil
+		}
+		request := count
+		if request < defaultValueLogRewriteBatchSize {
+			request = defaultValueLogRewriteBatchSize
+		}
+		start, err := a.reserve(request)
 		if err != nil {
 			return 0, err
 		}
 		if start == 0 {
 			return 0, fmt.Errorf("value-log rid allocator returned rid 0")
 		}
+		if uint64(request-1) > ^uint64(0)-start {
+			return 0, fmt.Errorf("value-log rid space exhausted")
+		}
+		a.next = start + uint64(count)
+		a.end = start + uint64(request)
 		return start, nil
 	}
 	start := a.next
