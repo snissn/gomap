@@ -2231,13 +2231,17 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
-// valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
-// that may be referenced by in-memory state (mutable + queued memtables).
+// valueLogInUsePaths returns a best-effort snapshot of value-log (or WAL)
+// segment paths that are currently in use by the active lanes plus any queued
+// memtable snapshots.
 //
-// This is intentionally narrower than valueLogRetainedPaths: retained paths can
-// include segments that are still referenced in the backend index (and thus
-// candidates for rewrite), while in-use paths are only about protecting against
-// concurrent writers while online maintenance is running.
+// IMPORTANT: This snapshot is intentionally narrower than
+// valueLogRetainedPaths and is derived only from the "current" lane/WAL paths
+// and queued paths. It does not attempt to track segments that rotated while a
+// mutable memtable was still active, so callers must not assume it includes
+// every segment that might still be referenced by in-memory state. It is
+// intended only as a best-effort aid for protecting against concurrent writers
+// during online maintenance.
 func (db *DB) valueLogInUsePaths() []string {
 	if db == nil || !db.valueLogEnabled() {
 		return nil
@@ -8922,11 +8926,11 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 		return
 	}
 	deltaNs := nowNs - prevNs
-	add := (budgetBps * deltaNs) / int64(time.Second)
+	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
+	add := mulDivClampInt64(budgetBps, deltaNs, int64(time.Second), capBytes)
 	if add <= 0 {
 		return
 	}
-	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
 	for {
 		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
 		next := cur + add
@@ -8940,6 +8944,26 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 			return
 		}
 	}
+}
+
+func mulDivClampInt64(a, b, div, cap int64) int64 {
+	if a <= 0 || b <= 0 || div <= 0 || cap <= 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	var q uint64
+	if hi == 0 {
+		q = lo / uint64(div)
+	} else {
+		if hi >= uint64(div) {
+			return cap
+		}
+		q, _ = bits.Div64(hi, lo, uint64(div))
+	}
+	if q > uint64(cap) {
+		return cap
+	}
+	return int64(q)
 }
 
 func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
