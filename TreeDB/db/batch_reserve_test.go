@@ -43,9 +43,24 @@ func TestNormalizePublicBatchReserveHint_PreservesSmallEntryHints(t *testing.T) 
 
 func TestNormalizePublicBatchReserveHint_ConvertsLargeByteBudgets(t *testing.T) {
 	const sizeHint = 100_000
-	const want = 391
+	want := sizeHint / publicBatchHintBytesPerEntry
+	if sizeHint%publicBatchHintBytesPerEntry != 0 {
+		want++
+	}
 	if got := normalizePublicBatchReserveHint(sizeHint); got != want {
 		t.Fatalf("normalizePublicBatchReserveHint(%d)=%d want %d", sizeHint, got, want)
+	}
+}
+
+func TestNormalizePublicBatchReserveHint_HandlesEdgeCases(t *testing.T) {
+	if got := normalizePublicBatchReserveHint(-1); got != 0 {
+		t.Fatalf("normalizePublicBatchReserveHint(-1)=%d want 0", got)
+	}
+	if got := normalizePublicBatchReserveHint(0); got != 0 {
+		t.Fatalf("normalizePublicBatchReserveHint(0)=%d want 0", got)
+	}
+	if got := normalizePublicBatchReserveHint(int(^uint(0) >> 1)); got != publicBatchReserveEntriesMax {
+		t.Fatalf("normalizePublicBatchReserveHint(maxint)=%d want %d", got, publicBatchReserveEntriesMax)
 	}
 }
 

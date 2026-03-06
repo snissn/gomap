@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -40,6 +41,7 @@ type valueLogRIDAudit struct {
 	Records           int64  `json:"records"`
 	DistinctRIDs      int    `json:"distinct_rids"`
 	DuplicateRIDs     int    `json:"duplicate_rids"`
+	TruncatedSegments int    `json:"truncated_segments,omitempty"`
 	FirstDuplicateRID uint64 `json:"first_duplicate_rid,omitempty"`
 	MaxRID            uint64 `json:"max_rid"`
 }
@@ -88,6 +90,9 @@ func runVlogAudit(dir string, args []string) {
 		report.RIDScan.FirstDuplicateRID,
 		report.RIDScan.MaxRID,
 	)
+	if report.RIDScan.TruncatedSegments > 0 {
+		fmt.Printf("rid_scan_truncated_segments=%d\n", report.RIDScan.TruncatedSegments)
+	}
 	fmt.Printf("gc_dry_run: segments_total=%d referenced=%d active=%d protected=%d eligible=%d deleted=%d bytes_total=%d bytes_referenced=%d bytes_active=%d bytes_protected=%d bytes_eligible=%d bytes_deleted=%d\n",
 		report.GCDryRun.SegmentsTotal,
 		report.GCDryRun.SegmentsReferenced,
@@ -134,8 +139,8 @@ func runVlogAudit(dir string, args []string) {
 	}
 }
 
-func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions) (valueLogAuditReport, error) {
-	report := valueLogAuditReport{Dir: dir}
+func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions) (report valueLogAuditReport, err error) {
+	report = valueLogAuditReport{Dir: dir}
 	mainDir, err := resolveTreemapMainDir(dir)
 	if err != nil {
 		return report, err
@@ -159,7 +164,18 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	if err != nil {
 		return report, err
 	}
-	defer func() { _ = cleanup() }()
+	defer func() {
+		if cleanup == nil {
+			return
+		}
+		if cerr := cleanup(); cerr != nil {
+			if err == nil {
+				err = cerr
+			} else {
+				err = errors.Join(err, cerr)
+			}
+		}
+	}()
 
 	report.Stats = backend.Stats()
 	report.GCDryRun, err = backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: true})
@@ -263,7 +279,11 @@ func scanValueLogRIDs(segments []valueLogSegmentAudit) (valueLogRIDAudit, error)
 				}
 				continue
 			}
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
+			if err == io.EOF {
+				break
+			}
+			if err == io.ErrUnexpectedEOF {
+				report.TruncatedSegments++
 				break
 			}
 			_ = reader.Close()
