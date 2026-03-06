@@ -434,6 +434,8 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
 	}
+	// The returned slice aliases m.indexBuf scratch storage. It is only valid
+	// while m.mu is held and may be overwritten by the next call.
 	need := len(m.latest) + len(m.latest64)
 	indices := m.indexBuf[:0]
 	if cap(indices) < need {
