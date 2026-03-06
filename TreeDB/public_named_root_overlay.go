@@ -109,6 +109,11 @@ var namedRootLegacyFlushSnapshotHook struct {
 	fn func(rootID uint64)
 }
 
+var namedRootMemtableWriteHook struct {
+	mu sync.RWMutex
+	fn func(rootID uint64, kind string, key []byte)
+}
+
 func setNamedRootPublishTestHook(fn func(string) error) func() {
 	namedRootPublishHook.mu.Lock()
 	prev := namedRootPublishHook.fn
@@ -233,6 +238,27 @@ func runNamedRootLegacyFlushSnapshotTestHook(rootID uint64) {
 	namedRootLegacyFlushSnapshotHook.mu.RUnlock()
 	if fn != nil {
 		fn(rootID)
+	}
+}
+
+func setNamedRootMemtableWriteTestHook(fn func(rootID uint64, kind string, key []byte)) func() {
+	namedRootMemtableWriteHook.mu.Lock()
+	prev := namedRootMemtableWriteHook.fn
+	namedRootMemtableWriteHook.fn = fn
+	namedRootMemtableWriteHook.mu.Unlock()
+	return func() {
+		namedRootMemtableWriteHook.mu.Lock()
+		namedRootMemtableWriteHook.fn = prev
+		namedRootMemtableWriteHook.mu.Unlock()
+	}
+}
+
+func runNamedRootMemtableWriteTestHook(rootID uint64, kind string, key []byte) {
+	namedRootMemtableWriteHook.mu.RLock()
+	fn := namedRootMemtableWriteHook.fn
+	namedRootMemtableWriteHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootID, kind, key)
 	}
 }
 

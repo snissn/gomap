@@ -482,6 +482,9 @@ func TestCachedCollectionsBufferedNamedRoots_KeepMemtableOnlyState(t *testing.T)
 	if primaryState.pointState == nil || primaryState.prefixState == nil {
 		t.Fatalf("expected primary buffered root to keep point and prefix memtables")
 	}
+	if primaryState.pointState != primaryState.prefixState {
+		t.Fatalf("expected primary buffered root to share one memtable for point and prefix state")
+	}
 	if len(primaryState.entries) != 0 {
 		t.Fatalf("expected primary buffered root to avoid legacy entry map, got %d entries", len(primaryState.entries))
 	}
@@ -489,6 +492,9 @@ func TestCachedCollectionsBufferedNamedRoots_KeepMemtableOnlyState(t *testing.T)
 	indexState := requireBufferedNamedRootStateByName(t, d, mustCollectionIndexStateRootName(t, meta.Name))
 	if indexState.pointState == nil || indexState.prefixState == nil {
 		t.Fatalf("expected index-state buffered root to keep point and prefix memtables")
+	}
+	if indexState.pointState != indexState.prefixState {
+		t.Fatalf("expected index-state buffered root to share one memtable for point and prefix state")
 	}
 	if len(indexState.entries) != 0 {
 		t.Fatalf("expected index-state buffered root to avoid legacy entry map, got %d entries", len(indexState.entries))
@@ -498,8 +504,90 @@ func TestCachedCollectionsBufferedNamedRoots_KeepMemtableOnlyState(t *testing.T)
 	if secondaryState.pointState == nil || secondaryState.prefixState == nil {
 		t.Fatalf("expected secondary buffered root to keep point and prefix memtables")
 	}
+	if secondaryState.pointState != secondaryState.prefixState {
+		t.Fatalf("expected secondary buffered root to share one memtable for point and prefix state")
+	}
 	if len(secondaryState.entries) != 0 {
 		t.Fatalf("expected secondary buffered root to avoid legacy entry map, got %d entries", len(secondaryState.entries))
+	}
+}
+
+func TestCachedCollectionsBufferedNamedRoots_InsertUsesSingleMemtableWritePerRoot(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	writes := 0
+	restore := setNamedRootMemtableWriteTestHook(func(rootID uint64, kind string, key []byte) {
+		writes++
+	})
+	defer restore()
+
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if writes != 3 {
+		t.Fatalf("expected one memtable write per buffered named root, got %d", writes)
+	}
+}
+
+func TestCachedCollectionsBufferedNamedRoots_DeleteUsesSingleMemtableWritePerRoot(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+
+	writes := 0
+	restore := setNamedRootMemtableWriteTestHook(func(rootID uint64, kind string, key []byte) {
+		writes++
+	})
+	defer restore()
+
+	if err := col.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if writes != 3 {
+		t.Fatalf("expected one memtable write per buffered named root delete, got %d", writes)
 	}
 }
 
