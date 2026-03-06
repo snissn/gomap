@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,7 +68,23 @@ var valueLogKeyLeases [][][]byte
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
-var batchArenaPoolBudgetBytes int64 = computeBatchArenaPoolBudgetBytes()
+var batchArenaPoolLastGC atomic.Uint32
+
+func maybeResetBatchArenaPoolBytesOnGCMiss() {
+	var stats runtime.MemStats
+	runtime.ReadMemStats(&stats)
+	gc := uint32(stats.NumGC)
+	for {
+		prev := batchArenaPoolLastGC.Load()
+		if prev == gc {
+			return
+		}
+		if batchArenaPoolLastGC.CompareAndSwap(prev, gc) {
+			batchArenaPoolBytes.Store(0)
+			return
+		}
+	}
+}
 
 func computeBatchArenaPoolBudgetBytes() int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
@@ -88,6 +105,10 @@ func computeBatchArenaPoolBudgetBytes() int64 {
 		budget = minBudget
 	}
 	return budget
+}
+
+func currentBatchArenaPoolBudgetBytes() int64 {
+	return computeBatchArenaPoolBudgetBytes()
 }
 
 const (
@@ -335,15 +356,22 @@ func getBatchArena(capacity int) []byte {
 	}
 	if v := batchArenaPools[idx].Get(); v != nil {
 		if buf, ok := v.([]byte); ok {
+			size := int64(cap(buf))
+			next := batchArenaPoolBytes.Add(-size)
+			if next < 0 {
+				// Counter can drift if sync.Pool drops objects at GC or a caller
+				// inserts an unexpected buffer.
+				batchArenaPoolBytes.Store(0)
+			}
 			if cap(buf) == classCap {
-				next := batchArenaPoolBytes.Add(-int64(classCap))
-				if next < 0 {
-					// Counter can drift if sync.Pool drops objects at GC.
-					batchArenaPoolBytes.Store(0)
-				}
 				return buf[:0]
 			}
 		}
+	} else if batchArenaPoolBytes.Load() > 0 {
+		// sync.Pool may drop retained objects at GC; only clear the global estimate
+		// when a miss coincides with a new GC cycle so per-class misses do not
+		// undercount still-live buffers held in other class pools.
+		maybeResetBatchArenaPoolBytesOnGCMiss()
 	}
 	return make([]byte, 0, classCap)
 }
@@ -359,7 +387,7 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
-	if budget := batchArenaPoolBudgetBytes; budget > 0 {
+	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
 		for {
 			held := batchArenaPoolBytes.Load()
@@ -2266,6 +2294,40 @@ func (db *DB) valueLogRetainedPaths() []string {
 		paths = append(paths, path)
 	}
 	db.valueLogMu.Unlock()
+	return paths
+}
+
+func (db *DB) valueLogProtectedPaths() []string {
+	retained := db.valueLogRetainedPaths()
+	inUse := db.valueLogInUsePaths()
+	if len(retained) == 0 {
+		return inUse
+	}
+	if len(inUse) == 0 {
+		return retained
+	}
+	seen := make(map[string]struct{}, len(retained)+len(inUse))
+	paths := make([]string, 0, len(retained)+len(inUse))
+	for _, path := range retained {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	for _, path := range inUse {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
 	return paths
 }
 
@@ -4259,7 +4321,11 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
 	segments, _ := listNonEmptyLogSegments(walDir)
-	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
+	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
+	// Until we persist nextRID separately, opening must recover the max on-disk
+	// RID here rather than risk reusing low RIDs after a clean reopen. Scanning
+	// only the newest value-log segment per lane keeps this bounded on large DBs.
+	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
 	if err != nil {
 		return nil, err
 	}
@@ -8965,13 +9031,13 @@ func (db *DB) vlogGenerationRewriteBudgetCapBytes() int64 {
 	}
 	targets := int64(0)
 	if db.valueLogGenerationHotTarget > 0 {
-		targets += db.valueLogGenerationHotTarget
+		targets = addClampInt64(targets, db.valueLogGenerationHotTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationWarmTarget > 0 {
-		targets += db.valueLogGenerationWarmTarget
+		targets = addClampInt64(targets, db.valueLogGenerationWarmTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationColdTarget > 0 {
-		targets += db.valueLogGenerationColdTarget
+		targets = addClampInt64(targets, db.valueLogGenerationColdTarget, maxPositiveInt64)
 	}
 	if targets > capBytes {
 		capBytes = targets
@@ -8991,8 +9057,17 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 		return
 	}
 	nowNs := now.UnixNano()
-	prevNs := db.vlogGenerationRewriteBudgetLastUnixNano.Swap(nowNs)
-	if prevNs <= 0 || nowNs <= prevNs {
+	var prevNs int64
+	for {
+		prevNs = db.vlogGenerationRewriteBudgetLastUnixNano.Load()
+		if prevNs > 0 && nowNs <= prevNs {
+			return
+		}
+		if db.vlogGenerationRewriteBudgetLastUnixNano.CompareAndSwap(prevNs, nowNs) {
+			break
+		}
+	}
+	if prevNs <= 0 {
 		return
 	}
 	deltaNs := nowNs - prevNs
@@ -9003,19 +9078,33 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 	}
 	for {
 		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
-		next := cur + add
-		if next > capBytes {
-			next = capBytes
-		}
-		if next < 0 {
-			next = 0
-		}
+		next := addClampInt64(cur, add, capBytes)
 		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
 			return
 		}
 	}
 }
 
+const maxPositiveInt64 = int64(^uint64(0) >> 1)
+
+func addClampInt64(cur, add, limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	if cur <= 0 {
+		cur = 0
+	}
+	if add <= 0 {
+		if cur > limit {
+			return limit
+		}
+		return cur
+	}
+	if cur >= limit || cur > limit-add {
+		return limit
+	}
+	return cur + add
+}
 func mulDivClampInt64(a, b, div, cap int64) int64 {
 	if a <= 0 || b <= 0 || div <= 0 || cap <= 0 {
 		return 0
@@ -9106,11 +9195,10 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
 		}
-		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded". Use a
-		// small floor so planning never selects an unbounded set when the token
-		// bucket is empty (e.g. first tick).
+		// In budgeted mode, a zero-token bucket means "do not plan or rewrite
+		// yet", not "plan/rewrite with an implicit floor".
 		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-			maxSourceBytes = db.valueLogRewriteBudgetBytes
+			goto planned
 		}
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
@@ -9175,11 +9263,11 @@ planned:
 			if maxSourceBytes < 0 {
 				maxSourceBytes = 0
 			}
-			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". Use a
-			// small floor so we never accidentally run an unbounded rewrite when the
-			// token bucket is empty (e.g. first tick).
+			// In budgeted mode, a zero-token bucket means "wait", not "run an
+			// unbounded rewrite with an implicit floor".
 			if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-				maxSourceBytes = db.valueLogRewriteBudgetBytes
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+				return
 			}
 			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 				maxSourceBytes = totalBytes
@@ -9190,7 +9278,7 @@ planned:
 			BatchSize:       db.valueLogRewriteBatchSize(),
 			SyncEachBatch:   false,
 			MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-			ProtectedPaths:  db.valueLogInUsePaths(),
+			ProtectedPaths:  db.valueLogProtectedPaths(),
 			ReserveRIDs: func(count int) (uint64, error) {
 				if count <= 0 {
 					return 0, nil
@@ -9288,7 +9376,7 @@ planned:
 	now = time.Now()
 	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogInUsePaths()}
+	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
 	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 	cancel()
 	if err != nil {
@@ -13562,11 +13650,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
-	stats["treedb.cache.batch_arena.pool_budget_bytes"] = fmt.Sprintf("%d", batchArenaPoolBudgetBytes)
-	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
+	stats["treedb.process.batch_arena.pool_budget_bytes"] = fmt.Sprintf("%d", currentBatchArenaPoolBudgetBytes())
+	stats["treedb.process.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
 	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
-	stats["treedb.cache.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -14933,7 +15021,7 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, bytes *int, n int
 			chunkCap = n
 		}
 		// Avoid unbounded exponential growth once we reach the pooling limit. Large
-		// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MB)
+		// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MiB)
 		// that is mostly unused, inflating RSS. Only allow larger chunks when a
 		// *single* copy needs it.
 		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
@@ -16141,6 +16229,10 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 	return segments, nonEmptyBytes
 }
 
+func isTruncatedValueLogScanError(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	var maxRID uint64
 	for _, seg := range segments {
@@ -16164,7 +16256,7 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 				}
 				continue
 			}
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			if isTruncatedValueLogScanError(err) {
 				break
 			}
 			_ = reader.Close()
@@ -16175,6 +16267,36 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 		}
 	}
 	return maxRID, nil
+}
+
+func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
+	if len(segments) == 0 {
+		return nil
+	}
+	tailByLane := make(map[int]logSegmentInfo, len(segments))
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
+			continue
+		}
+		prev, ok := tailByLane[seg.lane]
+		if !ok || seg.seq > prev.seq {
+			tailByLane[seg.lane] = seg
+		}
+	}
+	if len(tailByLane) == 0 {
+		return nil
+	}
+	tails := make([]logSegmentInfo, 0, len(tailByLane))
+	for _, seg := range tailByLane {
+		tails = append(tails, seg)
+	}
+	sort.Slice(tails, func(i, j int) bool {
+		if tails[i].lane != tails[j].lane {
+			return tails[i].lane < tails[j].lane
+		}
+		return tails[i].seq < tails[j].seq
+	})
+	return tails
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {
