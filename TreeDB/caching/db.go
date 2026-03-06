@@ -4317,6 +4317,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
 	segments, _ := listNonEmptyLogSegments(walDir)
+	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
+	// Until we persist nextRID separately, opening must recover the max on-disk
+	// RID here rather than risk reusing low RIDs after a clean reopen.
 	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
 	if err != nil {
 		return nil, err

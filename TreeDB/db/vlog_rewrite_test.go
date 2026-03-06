@@ -776,6 +776,15 @@ func TestValueLogRewriteOnline_SparseSelection_RewritesHighStaleSegment(t *testi
 	}
 }
 
+func TestRewriteRIDAllocatorRejectsOverflowingExternalRange(t *testing.T) {
+	alloc := newRewriteRIDAllocator(0, func(count int) (uint64, error) {
+		return ^uint64(0) - uint64(count) + 2, nil
+	})
+	if _, err := alloc.Reserve(2); err == nil {
+		t.Fatal("expected external reserve overflow to fail")
+	}
+}
+
 func TestValueLogRewriteOnline_SparseSelection_NoSelectedSources_IsNoOp(t *testing.T) {
 	dir := t.TempDir()
 
