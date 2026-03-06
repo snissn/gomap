@@ -210,6 +210,50 @@ func TestCollectionEngineMatrix_ReopenDurability(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "create_collection_then_index_then_insert_then_delete",
+			mutate: func(t *testing.T, mgr *collections.CollectionManager) {
+				t.Helper()
+				meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+				if err != nil {
+					t.Fatalf("create collection: %v", err)
+				}
+				if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+					t.Fatalf("create index: %v", err)
+				}
+				col, err := mgr.OpenCollection(meta.Name)
+				if err != nil {
+					t.Fatalf("open collection: %v", err)
+				}
+				if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+					t.Fatalf("insert: %v", err)
+				}
+				if err := col.Delete([]byte("u1")); err != nil {
+					t.Fatalf("delete: %v", err)
+				}
+			},
+			verify: func(t *testing.T, mgr *collections.CollectionManager) {
+				t.Helper()
+				col, err := mgr.OpenCollection("users")
+				if err != nil {
+					t.Fatalf("open collection after reopen: %v", err)
+				}
+				got, err := col.Get([]byte("u1"))
+				if err != nil {
+					t.Fatalf("get after reopen: %v", err)
+				}
+				if got != nil {
+					t.Fatalf("expected deleted doc to stay absent after reopen, got %q", got)
+				}
+				ids, err := col.FindByIndex("email_idx", "ada@example.com")
+				if err != nil {
+					t.Fatalf("find by index after reopen: %v", err)
+				}
+				if len(ids) != 0 {
+					t.Fatalf("expected deleted index entry to stay absent after reopen, got %#v", ids)
+				}
+			},
+		},
 	}
 
 	for _, engine := range collectionReopenEngineFactories() {
