@@ -44,6 +44,10 @@ func TestCollectionNamedRootCatalogSurvivesReopen(t *testing.T) {
 	if len(reopenMeta.Indexes) != 1 || reopenMeta.Indexes[0].RootName == "" {
 		t.Fatalf("expected secondary root after reopen, got %+v", reopenMeta.Indexes)
 	}
+	stateRootName, err := collections.CollectionIndexStateRootName(reopenMeta.Name)
+	if err != nil {
+		t.Fatalf("index-state root name: %v", err)
+	}
 
 	rootKey, err := collections.SystemCollectionRootKey(reopenMeta.PrimaryRoot)
 	if err != nil {
@@ -55,5 +59,16 @@ func TestCollectionNamedRootCatalogSurvivesReopen(t *testing.T) {
 	}
 	if len(raw) == 0 {
 		t.Fatalf("expected primary root descriptor after reopen")
+	}
+	stateRootKey, err := collections.SystemCollectionRootKey(stateRootName)
+	if err != nil {
+		t.Fatalf("index-state root key: %v", err)
+	}
+	stateRaw, err := reopen.GetSystem(stateRootKey)
+	if err != nil {
+		t.Fatalf("get index-state root descriptor: %v", err)
+	}
+	if len(stateRaw) == 0 {
+		t.Fatalf("expected index-state root descriptor after reopen")
 	}
 }

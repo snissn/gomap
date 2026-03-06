@@ -13,7 +13,9 @@ type perfMockDB struct {
 	failGetAtRootAppend  bool
 	failHasAtRoot        bool
 	getAtRootCalls       int
+	getAtRootRootIDs     []uint64
 	getAtRootAppendCalls int
+	getAtRootAppendRoots []uint64
 	hasAtRootCalls       int
 	getSystemCalls       map[string]int
 }
@@ -27,13 +29,16 @@ func newPerfMockDB() *perfMockDB {
 
 func (d *perfMockDB) resetCounters() {
 	d.getAtRootCalls = 0
+	d.getAtRootRootIDs = d.getAtRootRootIDs[:0]
 	d.getAtRootAppendCalls = 0
+	d.getAtRootAppendRoots = d.getAtRootAppendRoots[:0]
 	d.hasAtRootCalls = 0
 	clear(d.getSystemCalls)
 }
 
 func (d *perfMockDB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	d.getAtRootCalls++
+	d.getAtRootRootIDs = append(d.getAtRootRootIDs, rootID)
 	if d.failGetAtRoot {
 		return nil, errors.New("unexpected GetAtRoot call")
 	}
@@ -42,6 +47,7 @@ func (d *perfMockDB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 
 func (d *perfMockDB) GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
 	d.getAtRootAppendCalls++
+	d.getAtRootAppendRoots = append(d.getAtRootAppendRoots, rootID)
 	if d.failGetAtRootAppend {
 		return nil, errors.New("unexpected GetAtRootAppend call")
 	}
@@ -237,7 +243,7 @@ func TestInsertWithIndexes_LoadsExistingDocumentWhenPresent(t *testing.T) {
 	}
 }
 
-func TestDeleteWithIndexes_UsesGetAtRootAppend(t *testing.T) {
+func TestDeleteWithIndexes_UsesIndexStateInsteadOfPrimaryRead(t *testing.T) {
 	d := newPerfMockDB()
 	mgr := NewCollectionManager(d)
 	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
@@ -254,16 +260,73 @@ func TestDeleteWithIndexes_UsesGetAtRootAppend(t *testing.T) {
 	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
 		t.Fatalf("seed insert: %v", err)
 	}
+	primaryDesc, _, err := col.primaryRootDescriptor()
+	if err != nil {
+		t.Fatalf("primary root descriptor: %v", err)
+	}
+	stateDesc, _, err := col.indexStateRootDescriptor()
+	if err != nil {
+		t.Fatalf("state root descriptor: %v", err)
+	}
 
 	d.resetCounters()
-	d.failGetAtRoot = true
+	d.failGetAtRootAppend = true
 	if err := col.Delete([]byte("u1")); err != nil {
 		t.Fatalf("delete with indexes: %v", err)
 	}
-	if d.getAtRootCalls != 0 {
-		t.Fatalf("expected indexed delete to avoid GetAtRoot, got %d calls", d.getAtRootCalls)
+	if d.getAtRootAppendCalls != 0 {
+		t.Fatalf("expected indexed delete to avoid GetAtRootAppend, got %d calls", d.getAtRootAppendCalls)
 	}
-	if d.getAtRootAppendCalls == 0 {
-		t.Fatalf("expected indexed delete to use GetAtRootAppend")
+	for _, rootID := range d.getAtRootRootIDs {
+		if rootID == primaryDesc.RootPageID {
+			t.Fatalf("expected indexed delete to avoid primary root reads, got GetAtRoot on root %d", rootID)
+		}
+	}
+	if len(d.getAtRootRootIDs) == 0 {
+		t.Fatalf("expected indexed delete to read compact index state")
+	}
+	if d.getAtRootRootIDs[0] != stateDesc.RootPageID {
+		t.Fatalf("expected indexed delete to read state root %d, got %d", stateDesc.RootPageID, d.getAtRootRootIDs[0])
+	}
+}
+
+func TestCreateIndex_BackfillsStateForIndexedDeleteFastPath(t *testing.T) {
+	d := newPerfMockDB()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	stateDesc, _, err := col.indexStateRootDescriptor()
+	if err != nil {
+		t.Fatalf("state root descriptor: %v", err)
+	}
+
+	d.resetCounters()
+	d.failGetAtRootAppend = true
+	if err := col.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete after backfill: %v", err)
+	}
+	if d.getAtRootAppendCalls != 0 {
+		t.Fatalf("expected delete after backfill to avoid GetAtRootAppend, got %d calls", d.getAtRootAppendCalls)
+	}
+	foundStateRead := false
+	for _, rootID := range d.getAtRootRootIDs {
+		if rootID == stateDesc.RootPageID {
+			foundStateRead = true
+		}
+	}
+	if !foundStateRead {
+		t.Fatalf("expected delete after backfill to read state root %d, got %v", stateDesc.RootPageID, d.getAtRootRootIDs)
 	}
 }
