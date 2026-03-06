@@ -14867,7 +14867,7 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	return &Batch{
 		db:             db,
 		entries:        db.getBatchEntries(reserveHint),
-		copyArenaCap:   db.batchCopyArenaInitCap(size),
+		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
 		streamEligible: true,
 	}
 }

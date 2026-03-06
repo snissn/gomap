@@ -31,4 +31,10 @@ func TestNewBatchWithSize_NormalizesLargePublicHint(t *testing.T) {
 	if got := cap(b.entries); got >= rawHint {
 		t.Fatalf("batch entry cap=%d want < %d", got, rawHint)
 	}
+	if got, wantCap := b.copyArenaCap, db.batchCopyArenaInitCap(want); got != wantCap {
+		t.Fatalf("batch copyArenaCap=%d want %d", got, wantCap)
+	}
+	if got := b.copyArenaCap; got >= batchCopyArenaInitMax {
+		t.Fatalf("batch copyArenaCap=%d want below max clamp for normalized hint", got)
+	}
 }
