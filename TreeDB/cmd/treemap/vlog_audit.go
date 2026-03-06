@@ -279,10 +279,10 @@ func scanValueLogRIDs(segments []valueLogSegmentAudit) (valueLogRIDAudit, error)
 				}
 				continue
 			}
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				break
 			}
-			if err == io.ErrUnexpectedEOF {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
 				report.TruncatedSegments++
 				break
 			}

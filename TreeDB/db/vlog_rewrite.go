@@ -1231,7 +1231,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
@@ -1239,7 +1239,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
@@ -1257,7 +1257,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if err := writer.Sync(); err != nil {
 			freeErr := tracker.FreeAll()
 			if freeErr != nil {
-				return 0, freeErr
+				return 0, errors.Join(err, freeErr)
 			}
 			return 0, err
 		}
@@ -1265,7 +1265,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if err := writer.Flush(); err != nil {
 			freeErr := tracker.FreeAll()
 			if freeErr != nil {
-				return 0, freeErr
+				return 0, errors.Join(err, freeErr)
 			}
 			return 0, err
 		}
@@ -1274,7 +1274,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, nil, db.indexOuterLeavesInValueLog, nil); err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
@@ -1390,7 +1390,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return false, freeErr
+			return false, errors.Join(err, freeErr)
 		}
 		return false, err
 	}
@@ -1399,7 +1399,7 @@ func (db *DB) applyRewriteSwapBatchOptimistic(swaps []rewriteSwap, sync bool) (b
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return false, freeErr
+			return false, errors.Join(err, freeErr)
 		}
 		return false, err
 	}

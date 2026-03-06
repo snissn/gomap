@@ -69,7 +69,6 @@ var valueLogKeyLeases [][][]byte
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
-var batchArenaPoolBudgetBytes int64 = computeBatchArenaPoolBudgetBytes()
 var batchArenaPoolLastGC atomic.Uint32
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -94,7 +93,7 @@ func computeBatchArenaPoolBudgetBytes() int64 {
 }
 
 func currentBatchArenaPoolBudgetBytes() int64 {
-	return batchArenaPoolBudgetBytes
+	return computeBatchArenaPoolBudgetBytes()
 }
 
 const (
@@ -366,7 +365,7 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
-	if budget := batchArenaPoolBudgetBytes; budget > 0 {
+	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
 		for {
 			held := batchArenaPoolBytes.Load()
@@ -4306,7 +4305,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
 	// RID here rather than risk reusing low RIDs after a clean reopen.
-	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
+	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
 	if err != nil {
 		return nil, err
 	}
@@ -9079,13 +9078,13 @@ func (db *DB) vlogGenerationRewriteBudgetCapBytes() int64 {
 	}
 	targets := int64(0)
 	if db.valueLogGenerationHotTarget > 0 {
-		targets += db.valueLogGenerationHotTarget
+		targets = addClampInt64(targets, db.valueLogGenerationHotTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationWarmTarget > 0 {
-		targets += db.valueLogGenerationWarmTarget
+		targets = addClampInt64(targets, db.valueLogGenerationWarmTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationColdTarget > 0 {
-		targets += db.valueLogGenerationColdTarget
+		targets = addClampInt64(targets, db.valueLogGenerationColdTarget, maxPositiveInt64)
 	}
 	if targets > capBytes {
 		capBytes = targets
@@ -9105,25 +9104,28 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 		return
 	}
 	nowNs := now.UnixNano()
-	prevNs := db.vlogGenerationRewriteBudgetLastUnixNano.Swap(nowNs)
-	if prevNs <= 0 || nowNs <= prevNs {
+	var prevNs int64
+	for {
+		prevNs = db.vlogGenerationRewriteBudgetLastUnixNano.Load()
+		if prevNs > 0 && nowNs <= prevNs {
+			return
+		}
+		if db.vlogGenerationRewriteBudgetLastUnixNano.CompareAndSwap(prevNs, nowNs) {
+			break
+		}
+	}
+	if prevNs <= 0 {
 		return
 	}
 	deltaNs := nowNs - prevNs
-	add := mulDivClampPositiveInt64(budgetBps, deltaNs, int64(time.Second), db.vlogGenerationRewriteBudgetCapBytes())
+	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
+	add := mulDivClampInt64(budgetBps, deltaNs, int64(time.Second), capBytes)
 	if add <= 0 {
 		return
 	}
-	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
 	for {
 		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
-		next := cur + add
-		if next > capBytes {
-			next = capBytes
-		}
-		if next < 0 {
-			next = 0
-		}
+		next := addClampInt64(cur, add, capBytes)
 		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
 			return
 		}
@@ -9131,6 +9133,45 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 }
 
 const maxPositiveInt64 = int64(^uint64(0) >> 1)
+
+func addClampInt64(cur, add, limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	if cur <= 0 {
+		cur = 0
+	}
+	if add <= 0 {
+		if cur > limit {
+			return limit
+		}
+		return cur
+	}
+	if cur >= limit || cur > limit-add {
+		return limit
+	}
+	return cur + add
+}
+
+func mulDivClampInt64(a, b, div, cap int64) int64 {
+	if a <= 0 || b <= 0 || div <= 0 || cap <= 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	var q uint64
+	if hi == 0 {
+		q = lo / uint64(div)
+	} else {
+		if hi >= uint64(div) {
+			return cap
+		}
+		q, _ = bits.Div64(hi, lo, uint64(div))
+	}
+	if q > uint64(cap) {
+		return cap
+	}
+	return int64(q)
+}
 
 func mulDivClampPositiveInt64(x, y, div, capValue int64) int64 {
 	if x <= 0 || y <= 0 || div <= 0 || capValue <= 0 {
@@ -9225,11 +9266,11 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
 		}
-		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded". Use a
-		// small floor so planning never selects an unbounded set when the token
-		// bucket is empty (e.g. first tick).
+		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded"; skip the
+		// sparse planning pass when the token bucket is empty rather than issuing
+		// an unbounded plan.
 		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-			maxSourceBytes = db.valueLogRewriteBudgetBytes
+			goto planned
 		}
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
@@ -9294,11 +9335,12 @@ planned:
 			if maxSourceBytes < 0 {
 				maxSourceBytes = 0
 			}
-			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". Use a
-			// small floor so we never accidentally run an unbounded rewrite when the
-			// token bucket is empty (e.g. first tick).
+			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit";
+			// stop here when the token bucket is empty rather than issuing an
+			// unbounded rewrite.
 			if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-				maxSourceBytes = db.valueLogRewriteBudgetBytes
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+				return
 			}
 			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 				maxSourceBytes = totalBytes
@@ -13681,13 +13723,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
-	stats["treedb.cache.batch_arena.pool_budget_bytes"] = fmt.Sprintf("%d", batchArenaPoolBudgetBytes)
+	stats["treedb.cache.batch_arena.pool_budget_bytes"] = fmt.Sprintf("%d", currentBatchArenaPoolBudgetBytes())
 	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
 	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
-	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
-	stats["treedb.cache.entry_slice.pool_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
+	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.process.entry_slice.pool_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -14682,13 +14724,11 @@ func (db *DB) NewBatch() *Batch {
 }
 
 func (db *DB) NewBatchWithSize(size int) *Batch {
-	if size < 0 {
-		size = 0
-	}
+	reserveHint := backenddb.NormalizePublicBatchReserveHint(size)
 	return &Batch{
 		db:             db,
-		entries:        db.getBatchEntries(size),
-		copyArenaCap:   db.batchCopyArenaInitCap(size),
+		entries:        db.getBatchEntries(reserveHint),
+		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
 		streamEligible: true,
 	}
 }

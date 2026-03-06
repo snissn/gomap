@@ -440,8 +440,8 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	indices := m.indexBuf[:0]
 	if cap(indices) < need {
 		indices = make([]int, 0, need)
-		m.indexBuf = indices[:0]
 	}
+	m.indexBuf = indices[:0]
 	for _, idx := range m.latest {
 		indices = append(indices, idx)
 	}
