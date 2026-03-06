@@ -4,17 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
-	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
@@ -109,18 +106,19 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// This mirrors treemap's previous behavior: backend open without DictLookup
-	// fails when WAL/value-log segments contain dict-compressed frames.
+	// Direct backend open should succeed for finished WAL-off DBs even without an
+	// explicit DictLookup, because there are no commit-log segments to replay.
+	// The maintenance path still uses OpenBackend below so future reads that do
+	// require side-store lookups are wired correctly.
 	backendDir := filepath.Join(dir, "maindb")
 	backendOpts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
 	if cfg, ok, err := treedbdb.LoadFormatConfig(backendDir); err == nil && ok {
 		cfg.ApplyIndexFormatToOptions(&backendOpts)
 	}
-	if backend, err := treedbdb.Open(backendOpts); err == nil {
-		_ = backend.Close()
-		t.Fatalf("expected backend Open to fail without DictLookup")
-	} else if !errors.Is(err, valuelog.ErrMissingDict) && !strings.Contains(err.Error(), valuelog.ErrMissingDict.Error()) {
-		t.Fatalf("expected ErrMissingDict, got %v", err)
+	if backend, err := treedbdb.Open(backendOpts); err != nil {
+		t.Fatalf("backend Open: %v", err)
+	} else if err := backend.Close(); err != nil {
+		t.Fatalf("backend Close: %v", err)
 	}
 
 	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: false})

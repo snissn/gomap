@@ -150,6 +150,16 @@ func isTruncatedLogError(err error) bool {
 }
 
 func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
+	hasCommitSegments := false
+	for _, seg := range segments {
+		if !seg.valueLog {
+			hasCommitSegments = true
+			break
+		}
+	}
+	if !hasCommitSegments {
+		return nil
+	}
 	ridMap, err := scanValueLogSegments(segments, dictLookup)
 	if err != nil {
 		return err

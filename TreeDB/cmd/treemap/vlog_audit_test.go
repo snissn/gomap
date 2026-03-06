@@ -1,0 +1,142 @@
+package main
+
+import (
+	"bytes"
+	"encoding/binary"
+	"path/filepath"
+	"strconv"
+	"testing"
+	"time"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
+)
+
+func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(root): %v", err)
+	}
+	if report.MainDir != filepath.Join(dir, "maindb") {
+		t.Fatalf("unexpected main dir: got=%q want=%q", report.MainDir, filepath.Join(dir, "maindb"))
+	}
+	if report.SegmentsOnDisk == 0 {
+		t.Fatalf("expected on-disk value-log segments")
+	}
+	if report.GCDryRun.SegmentsTotal == 0 {
+		t.Fatalf("expected GC dry-run to observe value-log segments: %+v", report.GCDryRun)
+	}
+	if report.RIDScan.Records == 0 || report.RIDScan.MaxRID == 0 {
+		t.Fatalf("expected RID scan to observe value-log records: %+v", report.RIDScan)
+	}
+	if report.RewritePlan.SegmentsTotal == 0 {
+		t.Fatalf("expected rewrite plan to observe value-log segments: %+v", report.RewritePlan)
+	}
+	if got := report.Stats["cosmos.db.type"]; got != "treedb" {
+		t.Fatalf("unexpected stats db type: %q", got)
+	}
+}
+
+func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(maindb): %v", err)
+	}
+	if report.MainDir != filepath.Join(dir, "maindb") {
+		t.Fatalf("unexpected main dir: got=%q want=%q", report.MainDir, filepath.Join(dir, "maindb"))
+	}
+	if report.SegmentsOnDisk == 0 || report.BytesOnDisk == 0 {
+		t.Fatalf("expected segment inventory, got segments=%d bytes=%d", report.SegmentsOnDisk, report.BytesOnDisk)
+	}
+}
+
+func buildDictCompressedDBForAudit(t *testing.T, dir string) {
+	t.Helper()
+
+	bgErrCh := make(chan error, 16)
+	opts := treedb.Options{
+		Dir:            dir,
+		FlushThreshold: 1 << 20,
+		ValueLog: treedb.ValueLogOptions{
+			ForcePointers:    true,
+			PointerThreshold: 1,
+			Compression:      treedb.ValueLogCompressionAuto,
+			AutoPolicy:       treedb.ValueLogAutoSize,
+			CompressionAutotune: treedb.AutotuneOptions{
+				Mode: treedb.AutotuneOff,
+			},
+			DictAdaptiveRatio: -1,
+		},
+		NotifyError: func(err error) {
+			select {
+			case bgErrCh <- err:
+			default:
+			}
+		},
+	}
+	treedb.EnableValueLogDictCompression(&opts)
+
+	db, err := treedb.Open(opts)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	const valueSize = 16 << 10
+	base := bytes.Repeat([]byte("compressible-"), valueSize/len("compressible-")+1)[:valueSize]
+	writeBatch := func(prefix string, n int) {
+		for i := 0; i < n; i++ {
+			key := []byte(prefix + strconv.Itoa(i))
+			val := make([]byte, valueSize)
+			copy(val, base)
+			binary.LittleEndian.PutUint32(val[valueSize-4:], uint32(i))
+			if err := db.Set(key, val); err != nil {
+				t.Fatalf("Set(%q): %v", key, err)
+			}
+		}
+	}
+
+	writeBatch("phase1-", 128)
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint(phase1): %v", err)
+	}
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-bgErrCh:
+			_ = db.Close()
+			t.Fatalf("background error: %v", err)
+		default:
+		}
+		stats := db.Stats()
+		if stats != nil && stats["treedb.cache.vlog_dict.last_applied_dict_id"] != "0" {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	writeBatch("phase2-", 512)
+	if err := db.Checkpoint(); err != nil {
+		_ = db.Close()
+		t.Fatalf("Checkpoint(phase2): %v", err)
+	}
+	stats := db.Stats()
+	if stats == nil {
+		_ = db.Close()
+		t.Fatalf("Stats: nil")
+	}
+	if stats["treedb.cache.vlog_auto.frames.dict"] == "0" {
+		_ = db.Close()
+		t.Fatalf("expected dict frames, got stats=%v", stats)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+}
