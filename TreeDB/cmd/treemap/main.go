@@ -534,11 +534,13 @@ func openBackendForVlogGC(dir string) (*treedbdb.DB, func() error, error) {
 	var closers []func() error
 	rootDir := resolveTreeDBRootDir(dir)
 	dictDir := filepath.Join(rootDir, "dictdb")
-	if _, err := os.Stat(filepath.Join(dictDir, "index.db")); err == nil {
+	dictIndexPath := filepath.Join(dictDir, "index.db")
+	if _, err := os.Stat(dictIndexPath); err == nil {
 		// When the main DB uses dict-compressed frames, backend open replays WAL
 		// by scanning value-log segments and validating dict IDs. Wire DictLookup
 		// from dictdb/ so recovery and GC can proceed.
 		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: true}
+		applyPersistedFormatConfig(dictDir, &dictOpts)
 		// dictdb should not require dict lookup itself; force compression off in
 		// case a stale format.json is present.
 		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
@@ -551,6 +553,8 @@ func openBackendForVlogGC(dir string) (*treedbdb.DB, func() error, error) {
 			return store.GetDictBytes(context.Background(), dictID)
 		}
 		closers = append(closers, dictBackend.Close)
+	} else if !os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("stat dictdb index: %w", err)
 	}
 
 	backend, err := treedbdb.Open(opts)
