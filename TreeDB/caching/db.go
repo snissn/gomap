@@ -2227,6 +2227,40 @@ func (db *DB) valueLogRetainedPaths() []string {
 	return paths
 }
 
+func (db *DB) valueLogProtectedPaths() []string {
+	retained := db.valueLogRetainedPaths()
+	inUse := db.valueLogInUsePaths()
+	if len(retained) == 0 {
+		return inUse
+	}
+	if len(inUse) == 0 {
+		return retained
+	}
+	seen := make(map[string]struct{}, len(retained)+len(inUse))
+	paths := make([]string, 0, len(retained)+len(inUse))
+	for _, path := range retained {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	for _, path := range inUse {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
 // ValueLogRetainedPaths returns a best-effort snapshot of retained value-log
 // segment paths currently pinned by cached-mode pointer lifecycle tracking.
 func (db *DB) ValueLogRetainedPaths() []string {
@@ -9072,11 +9106,10 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
 		}
-		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded". Use a
-		// small floor so planning never selects an unbounded set when the token
-		// bucket is empty (e.g. first tick).
+		// In budgeted mode, a zero-token bucket means "do not plan or rewrite
+		// yet", not "plan/rewrite with an implicit floor".
 		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-			maxSourceBytes = db.valueLogRewriteBudgetBytes
+			goto planned
 		}
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
@@ -9141,11 +9174,11 @@ planned:
 			if maxSourceBytes < 0 {
 				maxSourceBytes = 0
 			}
-			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". Use a
-			// small floor so we never accidentally run an unbounded rewrite when the
-			// token bucket is empty (e.g. first tick).
+			// In budgeted mode, a zero-token bucket means "wait", not "run an
+			// unbounded rewrite with an implicit floor".
 			if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-				maxSourceBytes = db.valueLogRewriteBudgetBytes
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+				return
 			}
 			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 				maxSourceBytes = totalBytes
@@ -9156,7 +9189,7 @@ planned:
 			BatchSize:       db.valueLogRewriteBatchSize(),
 			SyncEachBatch:   false,
 			MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-			ProtectedPaths:  db.valueLogInUsePaths(),
+			ProtectedPaths:  db.valueLogProtectedPaths(),
 			ReserveRIDs: func(count int) (uint64, error) {
 				if count <= 0 {
 					return 0, nil
@@ -9254,7 +9287,7 @@ planned:
 	now = time.Now()
 	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogInUsePaths()}
+	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
 	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 	cancel()
 	if err != nil {

@@ -729,6 +729,15 @@ func TestRewriteRIDAllocatorReserve_NilAllocatorFailsEvenForZeroCount(t *testing
 	}
 }
 
+func TestRewriteRIDAllocatorReserve_ExternalRangeOverlapFails(t *testing.T) {
+	alloc := newRewriteRIDAllocator(100, func(count int) (uint64, error) {
+		return 99, nil
+	})
+	if _, err := alloc.Reserve(1); err == nil {
+		t.Fatalf("expected overlapping external RID range to fail")
+	}
+}
+
 func TestRewriteRIDAllocatorReserve_ExternalRangeOverflowFails(t *testing.T) {
 	alloc := newRewriteRIDAllocator(1, func(count int) (uint64, error) {
 		return ^uint64(0) - uint64(count) + 2, nil

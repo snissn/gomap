@@ -142,6 +142,14 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 		if uint64(count-1) > ^uint64(0)-start {
 			return 0, fmt.Errorf("value-log rid space exhausted")
 		}
+		end := start + uint64(count) - 1
+		if end < start || end == 0 {
+			return 0, fmt.Errorf("value-log rid space exhausted")
+		}
+		if a.next != 0 && start < a.next {
+			return 0, fmt.Errorf("value-log rid allocator returned overlapping range [%d,%d], need >= %d", start, end, a.next)
+		}
+		a.next = end + 1
 		return start, nil
 	}
 	start := a.next
@@ -270,6 +278,7 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		}
 		return plan, nil
 	}
+	defer func() { _ = db.valueLogManager.Release(set) }()
 
 	plan.SegmentsTotal = len(set.Files)
 	for _, f := range set.Files {
@@ -285,7 +294,6 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	if len(opts.SourceFileIDs) == 0 {
 		liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 		if err != nil {
-			_ = db.valueLogManager.Release(set)
 			return plan, err
 		}
 	}
@@ -344,7 +352,6 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		}
 	}
 
-	_ = db.valueLogManager.Release(set)
 	return plan, nil
 }
 
@@ -415,7 +422,9 @@ func groupedRecordKeyForPtr(ptr page.ValuePtr) (groupedRecordKey, error) {
 		start:  uint64(ptr.Offset - 4),
 	}, nil
 }
-
+func formatValueLogPtr(ptr page.ValuePtr) string {
+	return fmt.Sprintf("file=%d offset=%d grouped=%t", ptr.FileID, ptr.Offset, page.ValuePtrIsGrouped(ptr))
+}
 func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
@@ -596,7 +605,7 @@ func (db *DB) valueLogRecordLengthForRewrite(ptr page.ValuePtr) (uint32, error) 
 	defer func() { _ = db.valueLogManager.Release(set) }()
 	f := set.Files[ptr.FileID]
 	if f == nil || f.File == nil {
-		return 0, fmt.Errorf("vlog-rewrite: missing segment %d", ptr.FileID)
+		return 0, fmt.Errorf("vlog-rewrite: missing segment for ptr[%s]", formatValueLogPtr(ptr))
 	}
 	start := int64(ptr.Offset - 4)
 	return readValueLogRecordLengthFromHeader(f.File, start)
@@ -1130,7 +1139,9 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if err != nil {
 			return id, false, err
 		}
-		b := node.NewBuilder(buf, page.PageTypeInternal)
+		b := node.NewBuilderWithOptions(buf, page.PageTypeInternal, node.BuilderOptions{
+			InternalBaseDelta: n.InternalBaseDeltaEnabled(),
+		})
 		b.SetPageID(newID)
 		if low, high, ok, err := n.InternalFenceBounds(); err != nil {
 			return id, false, err
@@ -1219,7 +1230,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
@@ -1227,14 +1238,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
 	if !sysChanged && !userChanged {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, fmt.Errorf("vlog-rewrite: cleanup failed after no leaf-ref rewrite changes: %w", freeErr)
 		}
 		return 0, nil
 	}
@@ -1245,7 +1256,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if err := writer.Sync(); err != nil {
 			freeErr := tracker.FreeAll()
 			if freeErr != nil {
-				return 0, freeErr
+				return 0, errors.Join(err, freeErr)
 			}
 			return 0, err
 		}
@@ -1253,7 +1264,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		if err := writer.Flush(); err != nil {
 			freeErr := tracker.FreeAll()
 			if freeErr != nil {
-				return 0, freeErr
+				return 0, errors.Join(err, freeErr)
 			}
 			return 0, err
 		}
@@ -1262,7 +1273,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if err := db.finalizeCommit(newRoot, newSysRoot, leafCtx.retired, sync, adaptive.Metrics{}, nil, db.indexOuterLeavesInValueLog, nil); err != nil {
 		freeErr := tracker.FreeAll()
 		if freeErr != nil {
-			return 0, freeErr
+			return 0, errors.Join(err, freeErr)
 		}
 		return 0, err
 	}
@@ -1946,7 +1957,7 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 	}
 	f := it.vlogs.Files[ptr.FileID]
 	if f == nil || f.File == nil {
-		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: missing segment %d", ptr.FileID)
+		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: missing segment for ptr[%s]", formatValueLogPtr(ptr))
 	}
 	raw, err := readRawRecord(f.File, ptr)
 	if err != nil {
