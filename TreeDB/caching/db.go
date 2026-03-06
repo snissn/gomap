@@ -14456,7 +14456,7 @@ type Batch struct {
 	ptrCopyArena       []byte
 	ptrCopyArenaChunks [][]byte
 	ptrCopyBytes       int
-	ptrValueIdxs       []int
+	ptrValueEntryIdxs  []int
 	walBuf             []logRecord
 	shardIdxs          []int
 	eligibleIdxs       []int
@@ -14764,8 +14764,8 @@ func (b *Batch) Reset() {
 	b.dictBytes = nil
 	b.dictBytesValid = false
 	b.maxEntries = 0
-	if b.ptrValueIdxs != nil {
-		b.ptrValueIdxs = b.ptrValueIdxs[:0]
+	if b.ptrValueEntryIdxs != nil {
+		b.ptrValueEntryIdxs = b.ptrValueEntryIdxs[:0]
 	}
 }
 
@@ -14844,20 +14844,20 @@ func (b *Batch) updateBatchCopyHint() {
 	}
 }
 
-func (b *Batch) arenaCopy(n int) []byte {
+func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, bytes *int, n int, initialCap int) []byte {
 	if n == 0 {
 		return nil
 	}
-	if cap(b.copyArena)-len(b.copyArena) < n {
-		chunkCap := cap(b.copyArena) * 2
+	if cap(*arena)-len(*arena) < n {
+		chunkCap := cap(*arena) * 2
 		if chunkCap < batchCopyArenaMinChunk {
 			chunkCap = batchCopyArenaMinChunk
 		}
-		if cap(b.copyArena) == 0 {
+		if cap(*arena) == 0 {
 			// Keep unsized batches conservative. Entry-slice capacity can come from
 			// pooled high-water marks and is not a reliable signal for copy payload.
-			if b.copyArenaCap > chunkCap {
-				chunkCap = b.copyArenaCap
+			if initialCap > chunkCap {
+				chunkCap = initialCap
 			}
 		}
 		if chunkCap < n {
@@ -14873,38 +14873,21 @@ func (b *Batch) arenaCopy(n int) []byte {
 		// Switch to a fresh chunk when exhausted so existing entry slices keep
 		// their backing arrays without per-op allocations.
 		chunk := getBatchArena(chunkCap)
-		b.copyArena = chunk[:0]
-		b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
+		*arena = chunk[:0]
+		*chunks = append(*chunks, *arena)
 	}
-	start := len(b.copyArena)
-	b.copyArena = b.copyArena[:start+n]
-	b.copyBytes += n
-	return b.copyArena[start : start+n : start+n]
+	start := len(*arena)
+	*arena = (*arena)[:start+n]
+	*bytes += n
+	return (*arena)[start : start+n : start+n]
+}
+
+func (b *Batch) arenaCopy(n int) []byte {
+	return b.arenaCopyInto(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
 }
 
 func (b *Batch) arenaCopyPtr(n int) []byte {
-	if n == 0 {
-		return nil
-	}
-	if cap(b.ptrCopyArena)-len(b.ptrCopyArena) < n {
-		chunkCap := cap(b.ptrCopyArena) * 2
-		if chunkCap < batchCopyArenaMinChunk {
-			chunkCap = batchCopyArenaMinChunk
-		}
-		if chunkCap < n {
-			chunkCap = n
-		}
-		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
-			chunkCap = batchCopyArenaMaxRetain
-		}
-		chunk := getBatchArena(chunkCap)
-		b.ptrCopyArena = chunk[:0]
-		b.ptrCopyArenaChunks = append(b.ptrCopyArenaChunks, b.ptrCopyArena)
-	}
-	start := len(b.ptrCopyArena)
-	b.ptrCopyArena = b.ptrCopyArena[:start+n]
-	b.ptrCopyBytes += n
-	return b.ptrCopyArena[start : start+n : start+n]
+	return b.arenaCopyInto(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
 }
 
 func (b *Batch) cloneKey(key []byte) []byte {
@@ -14962,7 +14945,7 @@ func (b *Batch) Set(key, value []byte) error {
 	if b.shouldCopyValueToPtrArena(key, value) {
 		keyCopy = b.cloneKey(key)
 		valCopy = b.clonePtrValue(value)
-		b.ptrValueIdxs = append(b.ptrValueIdxs, idx)
+		b.ptrValueEntryIdxs = append(b.ptrValueEntryIdxs, idx)
 	} else {
 		keyCopy, valCopy = b.cloneKeyValue(key, value)
 	}
@@ -16019,14 +16002,17 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.updateBatchCopyHint()
 	chunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
-	for _, idx := range b.ptrValueIdxs {
+	for _, idx := range b.ptrValueEntryIdxs {
 		if idx >= 0 && idx < len(b.entries) && b.entries[idx].Value != nil {
 			retainPtrArena = true
 			break
 		}
 	}
+	ptrChunks := b.drainPtrCopyArenaChunks()
 	if retainPtrArena {
-		chunks = append(chunks, b.drainPtrCopyArenaChunks()...)
+		chunks = append(chunks, ptrChunks...)
+	} else {
+		putBatchArenas(ptrChunks)
 	}
 	b.db.retainBatchArenaChunksForMemtables(chunks, touchedMems)
 	b.db.writeMu.RUnlock()
@@ -16381,7 +16367,7 @@ func (b *Batch) Close() error {
 	b.shardIdxSets = nil
 	b.firstKey = nil
 	b.lastKey = nil
-	b.ptrValueIdxs = nil
+	b.ptrValueEntryIdxs = nil
 	return nil
 }
 
