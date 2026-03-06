@@ -27,6 +27,7 @@ func TestBatchReset_DoesNotCorruptPriorStealWrites(t *testing.T) {
 			secondVal := bytes.Repeat([]byte{0x22}, 64)
 
 			b := db.NewBatchWithSize(1)
+			defer func() { _ = b.Close() }()
 			if err := b.Set(firstKey, firstVal); err != nil {
 				t.Fatalf("set first: %v", err)
 			}
@@ -43,7 +44,6 @@ func TestBatchReset_DoesNotCorruptPriorStealWrites(t *testing.T) {
 			if err := b.Write(); err != nil {
 				t.Fatalf("write second: %v", err)
 			}
-			defer b.Close()
 
 			got, err := db.Get(firstKey)
 			if err != nil {
@@ -73,6 +73,7 @@ func TestBatchArenaLeases_NotNeededForCopiedMemtables(t *testing.T) {
 			defer db.Close()
 
 			b := db.NewBatchWithSize(128)
+			defer func() { _ = b.Close() }()
 			value := bytes.Repeat([]byte{0xAB}, 128)
 			for i := 0; i < 128; i++ {
 				key := []byte{byte(i), byte(i >> 1), byte(i >> 2), byte(i >> 3), byte(i >> 4), byte(i >> 5), byte(i >> 6), byte(i >> 7)}
@@ -83,7 +84,6 @@ func TestBatchArenaLeases_NotNeededForCopiedMemtables(t *testing.T) {
 			if err := b.Write(); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			_ = b.Close()
 
 			db.batchArenaLeaseMu.Lock()
 			leased := len(db.batchArenaLeasesByMem)
@@ -113,6 +113,7 @@ func TestBatchArenaLeases_ReleasedAfterCheckpoint_BTree(t *testing.T) {
 	defer db.Close()
 
 	b := db.NewBatchWithSize(128)
+	defer func() { _ = b.Close() }()
 	value := bytes.Repeat([]byte{0xAB}, 128)
 	for i := 0; i < 128; i++ {
 		key := []byte{byte(i), byte(i >> 1), byte(i >> 2), byte(i >> 3), byte(i >> 4), byte(i >> 5), byte(i >> 6), byte(i >> 7)}
@@ -123,7 +124,6 @@ func TestBatchArenaLeases_ReleasedAfterCheckpoint_BTree(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
 
 	db.batchArenaLeaseMu.Lock()
 	leasedBefore := len(db.batchArenaLeasesByMem)
