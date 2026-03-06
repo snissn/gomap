@@ -17,9 +17,9 @@ func TestAppendOnlyResetWithCapacity_ShrinksEntriesAfterSpike(t *testing.T) {
 	)
 
 	mt := NewAppendOnlyWithCapacityEstimatedEntryBytes(capacityBytes, estimatedBytesPerEntry)
-	base := mt.baseEntriesLen
+	base := appendOnlyInitialEntriesForCapacity(capacityBytes, estimatedBytesPerEntry)
 	if base <= 0 {
-		t.Fatalf("expected baseEntriesLen > 0, got %d", base)
+		t.Fatalf("expected base entry count > 0, got %d", base)
 	}
 
 	for i := 0; i < base*desiredEntriesMultiple; i++ {

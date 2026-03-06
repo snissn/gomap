@@ -47,7 +47,7 @@ func TestWriterFlushFlushesBufferedFileBackedWriter(t *testing.T) {
 		t.Fatalf("read file: %v", err)
 	}
 	if string(got) != "abc" {
-		t.Fatalf("file contents=%q want %q", got, "abc")
+		t.Fatalf("file contents=%q want %q", string(got), "abc")
 	}
 }
 

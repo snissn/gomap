@@ -471,7 +471,7 @@ func (it *btreeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if it.cur.flags&node.FlagPointer != 0 {
 		return it.cur.value, it.cur.ptr, it.cur.flags
 	}
-	return it.cur.value, page.ValuePtr{}, node.FlagInline
+	return it.cur.value, page.ValuePtr{}, it.cur.flags
 }
 
 func (it *btreeIterator) Key() []byte {
@@ -634,7 +634,7 @@ func (it *btreeReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if it.cur.flags&node.FlagPointer != 0 {
 		return it.cur.value, it.cur.ptr, it.cur.flags
 	}
-	return it.cur.value, page.ValuePtr{}, node.FlagInline
+	return it.cur.value, page.ValuePtr{}, it.cur.flags
 }
 
 func (it *btreeReverseIterator) Key() []byte {
