@@ -70,22 +70,6 @@ var valueLogKeyLeases [][][]byte
 var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolLastGC atomic.Uint32
 
-func maybeResetBatchArenaPoolBytesOnGCMiss() {
-	var stats runtime.MemStats
-	runtime.ReadMemStats(&stats)
-	gc := uint32(stats.NumGC)
-	for {
-		prev := batchArenaPoolLastGC.Load()
-		if prev == gc {
-			return
-		}
-		if batchArenaPoolLastGC.CompareAndSwap(prev, gc) {
-			batchArenaPoolBytes.Store(0)
-			return
-		}
-	}
-}
-
 func computeBatchArenaPoolBudgetBytes() int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
 	// retention during restore workloads.
@@ -367,11 +351,6 @@ func getBatchArena(capacity int) []byte {
 				return buf[:0]
 			}
 		}
-	} else if batchArenaPoolBytes.Load() > 0 {
-		// sync.Pool may drop retained objects at GC; only clear the global estimate
-		// when a miss coincides with a new GC cycle so per-class misses do not
-		// undercount still-live buffers held in other class pools.
-		maybeResetBatchArenaPoolBytesOnGCMiss()
 	}
 	return make([]byte, 0, classCap)
 }
