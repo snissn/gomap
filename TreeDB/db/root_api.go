@@ -150,6 +150,34 @@ func (db *DB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 	return snap.Has(key)
 }
 
+// HasManyAtRoot reports whether each key exists in the specified root page.
+func (db *DB) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	if rootID == 0 || len(keys) == 0 {
+		return out, nil
+	}
+	snap, err := db.acquireSnapshotWithRoot(rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer snap.Close()
+	seen := make(map[string]bool, len(keys))
+	for i, key := range keys {
+		cacheKey := string(key)
+		if cached, ok := seen[cacheKey]; ok {
+			out[i] = cached
+			continue
+		}
+		has, err := snap.Has(key)
+		if err != nil {
+			return nil, err
+		}
+		seen[cacheKey] = has
+		out[i] = has
+	}
+	return out, nil
+}
+
 // HasPrefixAtRoot reports whether any non-deleted key with the provided prefix
 // exists in the specified root page.
 func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
@@ -175,6 +203,51 @@ func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 		return false, err
 	}
 	return false, nil
+}
+
+// HasPrefixesAtRoot reports whether any non-deleted key with each prefix exists
+// in the specified root page.
+func (db *DB) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {
+	out := make([]bool, len(prefixes))
+	if rootID == 0 || len(prefixes) == 0 {
+		return out, nil
+	}
+	snap, err := db.acquireSnapshotWithRoot(rootID)
+	if err != nil {
+		return nil, err
+	}
+	defer snap.Close()
+	seen := make(map[string]bool, len(prefixes))
+	for i, prefix := range prefixes {
+		cacheKey := string(prefix)
+		if cached, ok := seen[cacheKey]; ok {
+			out[i] = cached
+			continue
+		}
+		it := snap.tree.IteratorWithOptions(prefix, nil, tree.IteratorOptions{Mode: tree.IteratorModeKeysOnly})
+		has := false
+		for it.Valid() {
+			key := it.UnsafeKey()
+			if !bytes.HasPrefix(key, prefix) {
+				break
+			}
+			if !it.IsDeleted() {
+				has = true
+				break
+			}
+			it.Next()
+		}
+		if err := it.Error(); err != nil {
+			_ = it.Close()
+			return nil, err
+		}
+		if err := it.Close(); err != nil {
+			return nil, err
+		}
+		seen[cacheKey] = has
+		out[i] = has
+	}
+	return out, nil
 }
 
 // IteratorAtRoot returns an iterator over the specified root page.

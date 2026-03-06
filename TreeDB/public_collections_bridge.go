@@ -203,6 +203,22 @@ func (db *DB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 	return bridge.HasAtRoot(rootID, key)
 }
 
+// HasManyAtRoot reports whether a backend named root currently contains each
+// key in order.
+func (db *DB) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
+	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
+		return db.cached.BufferedHasManyAtRoot(rootID, keys)
+	}
+	if db.cached != nil {
+		rootID = db.cached.ResolvedNamedRootID(rootID)
+	}
+	bridge, err := db.collectionsBridge()
+	if err != nil {
+		return nil, err
+	}
+	return bridge.HasManyAtRoot(rootID, keys)
+}
+
 // HasPrefixAtRoot reports whether the named root currently contains any
 // non-deleted key with the provided prefix.
 func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
@@ -217,6 +233,22 @@ func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 		return false, err
 	}
 	return bridge.HasPrefixAtRoot(rootID, prefix)
+}
+
+// HasPrefixesAtRoot reports whether the named root currently contains any
+// non-deleted key matching each prefix in order.
+func (db *DB) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {
+	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
+		return db.cached.BufferedHasPrefixesAtRoot(rootID, prefixes)
+	}
+	if db.cached != nil {
+		rootID = db.cached.ResolvedNamedRootID(rootID)
+	}
+	bridge, err := db.collectionsBridge()
+	if err != nil {
+		return nil, err
+	}
+	return bridge.HasPrefixesAtRoot(rootID, prefixes)
 }
 
 // IteratorAtRoot exposes the backend named-root iterator.

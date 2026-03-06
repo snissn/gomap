@@ -30,6 +30,7 @@ type namedRootOverlayState struct {
 	rootKey       []byte
 	hasFormat     bool
 	format        rootfmt.Format
+	hasDeletes    bool
 	pointState    memtable.Table
 	prefixState   memtable.Table
 	entries       map[string]namedRootOverlayValue
@@ -429,7 +430,11 @@ func (db *DB) HasBufferedNamedRoot(rootID uint64) bool {
 func (db *DB) BufferedGetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	state, err := db.namedRootState(rootID)
 	if err != nil {
-		return nil, err
+		bridge, bridgeErr := db.directBridge()
+		if bridgeErr != nil {
+			return nil, bridgeErr
+		}
+		return bridge.GetAtRoot(db.ResolvedNamedRootID(rootID), key)
 	}
 	if state.pointState != nil {
 		value, _, flags, found := state.pointState.GetEntry(key)
@@ -458,7 +463,11 @@ func (db *DB) BufferedGetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 func (db *DB) BufferedGetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
 	state, err := db.namedRootState(rootID)
 	if err != nil {
-		return dst, err
+		bridge, bridgeErr := db.directBridge()
+		if bridgeErr != nil {
+			return dst, bridgeErr
+		}
+		return bridge.GetAtRootAppend(db.ResolvedNamedRootID(rootID), key, dst)
 	}
 	if state.pointState != nil {
 		value, _, flags, found := state.pointState.GetEntry(key)
@@ -487,7 +496,11 @@ func (db *DB) BufferedGetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, e
 func (db *DB) BufferedHasAtRoot(rootID uint64, key []byte) (bool, error) {
 	state, err := db.namedRootState(rootID)
 	if err != nil {
-		return false, err
+		bridge, bridgeErr := db.directBridge()
+		if bridgeErr != nil {
+			return false, bridgeErr
+		}
+		return bridge.HasAtRoot(db.ResolvedNamedRootID(rootID), key)
 	}
 	if state.pointState != nil {
 		_, _, flags, found := state.pointState.GetEntry(key)
@@ -507,10 +520,67 @@ func (db *DB) BufferedHasAtRoot(rootID uint64, key []byte) (bool, error) {
 	return bridge.HasAtRoot(state.baseRootID, key)
 }
 
+func (db *DB) BufferedHasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
+	state, err := db.namedRootState(rootID)
+	if err != nil {
+		bridge, bridgeErr := db.directBridge()
+		if bridgeErr != nil {
+			return nil, bridgeErr
+		}
+		return bridge.HasManyAtRoot(db.ResolvedNamedRootID(rootID), keys)
+	}
+	out := make([]bool, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	pendingIndexes := make([]int, 0, len(keys))
+	pendingKeys := make([][]byte, 0, len(keys))
+	if state.pointState != nil {
+		for i, key := range keys {
+			_, _, flags, found := state.pointState.GetEntry(key)
+			if found {
+				out[i] = flags&node.FlagTombstone == 0
+				continue
+			}
+			pendingIndexes = append(pendingIndexes, i)
+			pendingKeys = append(pendingKeys, key)
+		}
+	} else {
+		for i, key := range keys {
+			runNamedRootOverlayEntryReadTestHook("has_many", rootID, key)
+			if entry, ok := state.entries[string(key)]; ok {
+				out[i] = !entry.deleted
+				continue
+			}
+			pendingIndexes = append(pendingIndexes, i)
+			pendingKeys = append(pendingKeys, key)
+		}
+	}
+	if len(pendingKeys) == 0 {
+		return out, nil
+	}
+	bridge, err := db.directBridge()
+	if err != nil {
+		return nil, err
+	}
+	baseResults, err := bridge.HasManyAtRoot(state.baseRootID, pendingKeys)
+	if err != nil {
+		return nil, err
+	}
+	for i, idx := range pendingIndexes {
+		out[idx] = baseResults[i]
+	}
+	return out, nil
+}
+
 func (db *DB) BufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 	state, err := db.namedRootState(rootID)
 	if err != nil {
-		return false, err
+		bridge, bridgeErr := db.directBridge()
+		if bridgeErr != nil {
+			return false, bridgeErr
+		}
+		return bridge.HasPrefixAtRoot(db.ResolvedNamedRootID(rootID), prefix)
 	}
 
 	if state.prefixState != nil {
@@ -588,11 +658,103 @@ func (db *DB) BufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error
 	return false, nil
 }
 
+func (db *DB) BufferedHasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {
+	state, err := db.namedRootState(rootID)
+	if err != nil {
+		bridge, bridgeErr := db.directBridge()
+		if bridgeErr != nil {
+			return nil, bridgeErr
+		}
+		return bridge.HasPrefixesAtRoot(db.ResolvedNamedRootID(rootID), prefixes)
+	}
+	out := make([]bool, len(prefixes))
+	if len(prefixes) == 0 {
+		return out, nil
+	}
+	type pendingPrefix struct {
+		index  int
+		prefix []byte
+	}
+	pending := make([]pendingPrefix, 0, len(prefixes))
+	for i, prefix := range prefixes {
+		hasOverlayMatch := false
+		if state.prefixState != nil {
+			overlayIter := state.prefixState.NewIterator(prefix, nil)
+			for overlayIter.Valid() {
+				key := overlayIter.UnsafeKey()
+				if !bytes.HasPrefix(key, prefix) {
+					break
+				}
+				if !overlayIter.IsDeleted() {
+					hasOverlayMatch = true
+					break
+				}
+				overlayIter.Next()
+			}
+			if err := overlayIter.Error(); err != nil {
+				_ = overlayIter.Close()
+				return nil, err
+			}
+			if err := overlayIter.Close(); err != nil {
+				return nil, err
+			}
+		} else {
+			runNamedRootOverlayPrefixScanTestHook(rootID, prefix)
+			db.namedRootMu.RLock()
+			for _, entry := range state.entries {
+				if !entry.deleted && bytes.HasPrefix(entry.key, prefix) {
+					hasOverlayMatch = true
+					break
+				}
+			}
+			db.namedRootMu.RUnlock()
+		}
+		if hasOverlayMatch {
+			out[i] = true
+			continue
+		}
+		pending = append(pending, pendingPrefix{index: i, prefix: prefix})
+	}
+	if len(pending) == 0 {
+		return out, nil
+	}
+	bridge, err := db.directBridge()
+	if err != nil {
+		return nil, err
+	}
+	if !state.hasDeletes {
+		batchPrefixes := make([][]byte, len(pending))
+		for i := range pending {
+			batchPrefixes[i] = pending[i].prefix
+		}
+		baseResults, err := bridge.HasPrefixesAtRoot(state.baseRootID, batchPrefixes)
+		if err != nil {
+			return nil, err
+		}
+		for i := range pending {
+			out[pending[i].index] = baseResults[i]
+		}
+		return out, nil
+	}
+	for _, item := range pending {
+		has, err := db.BufferedHasPrefixAtRoot(rootID, item.prefix)
+		if err != nil {
+			return nil, err
+		}
+		out[item.index] = has
+	}
+	return out, nil
+}
+
 func (db *DB) BufferedIteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
 	runNamedRootBufferedIteratorTestHook(rootID, start, end)
 	state, err := db.namedRootState(rootID)
 	if err != nil {
-		return nil, err
+		bridge, bridgeErr := db.directBridge()
+		if bridgeErr != nil {
+			return nil, bridgeErr
+		}
+		return bridge.IteratorAtRoot(db.ResolvedNamedRootID(rootID), start, end)
 	}
 	bridge, err := db.directBridge()
 	if err != nil {
@@ -1157,6 +1319,7 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 	for _, entry := range pending.entries {
 		if entry.Type == batch.OpDelete {
 			runNamedRootOwnedWriteTestHook("delete_key", entry.Key)
+			state.hasDeletes = true
 			if state.pointState != nil {
 				runNamedRootMemtableWriteTestHook(pending.virtualRootID, "point", entry.Key)
 				state.pointState.SetEntrySteal(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
@@ -1265,6 +1428,7 @@ func (db *DB) applyPendingNamedRootIteratorLocked(pending *namedRootPendingItera
 		switch {
 		case flags&node.FlagTombstone != 0:
 			runNamedRootOwnedWriteTestHook("delete_key", key)
+			state.hasDeletes = true
 		case len(value) == 0:
 			runNamedRootOwnedWriteTestHook("set_key", key)
 		default:

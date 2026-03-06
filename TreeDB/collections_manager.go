@@ -40,8 +40,16 @@ func (a *collectionManagerAdapter) HasAtRoot(rootID uint64, key []byte) (bool, e
 	return a.db.HasAtRoot(rootID, key)
 }
 
+func (a *collectionManagerAdapter) HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error) {
+	return a.db.HasManyAtRoot(rootID, keys)
+}
+
 func (a *collectionManagerAdapter) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 	return a.db.HasPrefixAtRoot(rootID, prefix)
+}
+
+func (a *collectionManagerAdapter) HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error) {
+	return a.db.HasPrefixesAtRoot(rootID, prefixes)
 }
 
 func (a *collectionManagerAdapter) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {

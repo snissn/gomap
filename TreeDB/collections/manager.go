@@ -77,8 +77,8 @@ type documentScratchHandle struct {
 }
 
 const (
-	documentScratchInitCap = 4 << 10
-	documentScratchMaxCap  = 256 << 10
+	documentScratchInitCap           = 4 << 10
+	documentScratchMaxCap            = 256 << 10
 	batchIteratorPublishMinDocuments = 128
 )
 
@@ -106,7 +106,9 @@ func newCollectionRootIterator(table memtable.Table) iterator.UnsafeIterator {
 type collectionDB interface {
 	Get(key []byte) ([]byte, error)
 	HasAtRoot(rootID uint64, key []byte) (bool, error)
+	HasManyAtRoot(rootID uint64, keys [][]byte) ([]bool, error)
 	HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error)
+	HasPrefixesAtRoot(rootID uint64, prefixes [][]byte) ([]bool, error)
 	GetAtRoot(rootID uint64, key []byte) ([]byte, error)
 	GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error)
 	Set(key, value []byte) error
@@ -761,6 +763,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 	}
 
 	seenIDs := make(map[string]struct{}, len(resolvedIDs))
+	documentKeys := make([][]byte, len(documents))
 	for i := range documents {
 		documentID := resolvedIDs[i]
 		if _, exists := seenIDs[string(documentID)]; exists {
@@ -771,13 +774,21 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		exists, err := c.db.HasAtRoot(rootDesc.RootPageID, key)
+		documentKeys[i] = key
+	}
+	if rootDesc.RootPageID != 0 {
+		existsBatch, err := c.db.HasManyAtRoot(rootDesc.RootPageID, documentKeys)
 		if err != nil {
 			return nil, err
 		}
-		if exists {
-			return nil, fmt.Errorf("collections: document already exists")
+		for _, exists := range existsBatch {
+			if exists {
+				return nil, fmt.Errorf("collections: document already exists")
+			}
 		}
+	}
+	for i := range documents {
+		key := documentKeys[i]
 		if useIteratorPublish {
 			primaryTable.SetSteal(key, documents[i])
 		} else {
@@ -821,6 +832,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 			indexOpsByName = make(map[string][]batch.Entry, len(c.meta.Indexes))
 		}
 		seenUniquePrefixes := make(map[string]string, len(documents)*len(c.meta.Indexes))
+		uniquePrefixesByName := make(map[string][][]byte, len(c.meta.Indexes))
 
 		for i := range documents {
 			documentID := resolvedIDs[i]
@@ -863,13 +875,7 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 							return nil, fmt.Errorf("collections: unique index %q conflict", idx.Name)
 						}
 						seenUniquePrefixes[batchKey] = string(documentID)
-						hasPrefix, err := c.db.HasPrefixAtRoot(runtime.desc.RootPageID, valuePrefix)
-						if err != nil {
-							return nil, err
-						}
-						if hasPrefix {
-							return nil, fmt.Errorf("collections: unique index %q conflict", idx.Name)
-						}
+						uniquePrefixesByName[idx.Name] = append(uniquePrefixesByName[idx.Name], valuePrefix)
 					}
 					if useIteratorPublish {
 						table := indexTablesByName[idx.Name]
@@ -884,6 +890,25 @@ func (c *Collection) InsertBatch(ids, documents [][]byte) ([][]byte, error) {
 					} else {
 						indexOpsByName[idx.Name] = append(indexOpsByName[idx.Name], batch.Entry{Type: batch.OpPut, Key: key})
 					}
+				}
+			}
+		}
+		for _, idx := range c.meta.Indexes {
+			if !idx.Unique {
+				continue
+			}
+			prefixes := uniquePrefixesByName[idx.Name]
+			if len(prefixes) == 0 {
+				continue
+			}
+			runtime := indexRuntime[idx.Name]
+			hasPrefixes, err := c.db.HasPrefixesAtRoot(runtime.desc.RootPageID, prefixes)
+			if err != nil {
+				return nil, err
+			}
+			for _, hasPrefix := range hasPrefixes {
+				if hasPrefix {
+					return nil, fmt.Errorf("collections: unique index %q conflict", idx.Name)
 				}
 			}
 		}
