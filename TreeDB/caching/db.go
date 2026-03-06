@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -2274,13 +2275,17 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
-// valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
-// that may be referenced by in-memory state (mutable + queued memtables).
+// valueLogInUsePaths returns a best-effort snapshot of value-log (or WAL)
+// segment paths that are currently in use by the active lanes plus any queued
+// memtable snapshots.
 //
-// This is intentionally narrower than valueLogRetainedPaths: retained paths can
-// include segments that are still referenced in the backend index (and thus
-// candidates for rewrite), while in-use paths are only about protecting against
-// concurrent writers while online maintenance is running.
+// IMPORTANT: This snapshot is intentionally narrower than
+// valueLogRetainedPaths and is derived only from the "current" lane/WAL paths
+// and queued paths. It does not attempt to track segments that rotated while a
+// mutable memtable was still active, so callers must not assume it includes
+// every segment that might still be referenced by in-memory state. It is
+// intended only as a best-effort aid for protecting against concurrent writers
+// during online maintenance.
 func (db *DB) valueLogInUsePaths() []string {
 	if db == nil || !db.valueLogEnabled() {
 		return nil
@@ -4254,6 +4259,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
 	segments, _ := listNonEmptyLogSegments(walDir)
+	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
+	if err != nil {
+		return nil, err
+	}
 	maxLaneID := -1
 	maxWALSeq := make(map[int]int)
 	maxVlogSeq := make(map[int]int)
@@ -4694,6 +4703,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		autoCheckpointWriteCh: make(chan struct{}, 1),
 		lanes:                 lanes,
 		flushLaneMu:           make([]sync.Mutex, len(lanes)),
+	}
+	if maxExistingRID > 0 {
+		db.nextRID.Store(maxExistingRID)
 	}
 	db.rebuildGenerationLaneSets()
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
@@ -8984,11 +8996,11 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 		return
 	}
 	deltaNs := nowNs - prevNs
-	add := (budgetBps * deltaNs) / int64(time.Second)
+	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
+	add := mulDivClampInt64(budgetBps, deltaNs, int64(time.Second), capBytes)
 	if add <= 0 {
 		return
 	}
-	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
 	for {
 		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
 		next := cur + add
@@ -9002,6 +9014,26 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 			return
 		}
 	}
+}
+
+func mulDivClampInt64(a, b, div, cap int64) int64 {
+	if a <= 0 || b <= 0 || div <= 0 || cap <= 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	var q uint64
+	if hi == 0 {
+		q = lo / uint64(div)
+	} else {
+		if hi >= uint64(div) {
+			return cap
+		}
+		q, _ = bits.Div64(hi, lo, uint64(div))
+	}
+	if q > uint64(cap) {
+		return cap
+	}
+	return int64(q)
 }
 
 func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
@@ -9159,6 +9191,17 @@ planned:
 			SyncEachBatch:   false,
 			MaxSegmentBytes: db.valueLogGenerationWarmTarget,
 			ProtectedPaths:  db.valueLogInUsePaths(),
+			ReserveRIDs: func(count int) (uint64, error) {
+				if count <= 0 {
+					return 0, nil
+				}
+				end := db.nextRID.Add(uint64(count))
+				start := end - uint64(count) + 1
+				if start == 0 || end < start {
+					return 0, fmt.Errorf("value-log rid space exhausted")
+				}
+				return start, nil
+			},
 		}
 		if haveRewritePlan {
 			rewriteOpts.SourceFileIDs = append([]uint32(nil), rewritePlan.SourceFileIDs...)
@@ -14482,7 +14525,7 @@ type Batch struct {
 	ptrCopyArena       []byte
 	ptrCopyArenaChunks [][]byte
 	ptrCopyBytes       int
-	ptrValueIdxs       []int
+	ptrValueEntryIdxs  []int
 	walBuf             []logRecord
 	shardIdxs          []int
 	eligibleIdxs       []int
@@ -14790,8 +14833,8 @@ func (b *Batch) Reset() {
 	b.dictBytes = nil
 	b.dictBytesValid = false
 	b.maxEntries = 0
-	if b.ptrValueIdxs != nil {
-		b.ptrValueIdxs = b.ptrValueIdxs[:0]
+	if b.ptrValueEntryIdxs != nil {
+		b.ptrValueEntryIdxs = b.ptrValueEntryIdxs[:0]
 	}
 }
 
@@ -14870,20 +14913,20 @@ func (b *Batch) updateBatchCopyHint() {
 	}
 }
 
-func (b *Batch) arenaCopy(n int) []byte {
+func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, bytes *int, n int, initialCap int) []byte {
 	if n == 0 {
 		return nil
 	}
-	if cap(b.copyArena)-len(b.copyArena) < n {
-		chunkCap := cap(b.copyArena) * 2
+	if cap(*arena)-len(*arena) < n {
+		chunkCap := cap(*arena) * 2
 		if chunkCap < batchCopyArenaMinChunk {
 			chunkCap = batchCopyArenaMinChunk
 		}
-		if cap(b.copyArena) == 0 {
+		if cap(*arena) == 0 {
 			// Keep unsized batches conservative. Entry-slice capacity can come from
 			// pooled high-water marks and is not a reliable signal for copy payload.
-			if b.copyArenaCap > chunkCap {
-				chunkCap = b.copyArenaCap
+			if initialCap > chunkCap {
+				chunkCap = initialCap
 			}
 		}
 		if chunkCap < n {
@@ -14899,38 +14942,21 @@ func (b *Batch) arenaCopy(n int) []byte {
 		// Switch to a fresh chunk when exhausted so existing entry slices keep
 		// their backing arrays without per-op allocations.
 		chunk := getBatchArena(chunkCap)
-		b.copyArena = chunk[:0]
-		b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
+		*arena = chunk[:0]
+		*chunks = append(*chunks, *arena)
 	}
-	start := len(b.copyArena)
-	b.copyArena = b.copyArena[:start+n]
-	b.copyBytes += n
-	return b.copyArena[start : start+n : start+n]
+	start := len(*arena)
+	*arena = (*arena)[:start+n]
+	*bytes += n
+	return (*arena)[start : start+n : start+n]
+}
+
+func (b *Batch) arenaCopy(n int) []byte {
+	return b.arenaCopyInto(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
 }
 
 func (b *Batch) arenaCopyPtr(n int) []byte {
-	if n == 0 {
-		return nil
-	}
-	if cap(b.ptrCopyArena)-len(b.ptrCopyArena) < n {
-		chunkCap := cap(b.ptrCopyArena) * 2
-		if chunkCap < batchCopyArenaMinChunk {
-			chunkCap = batchCopyArenaMinChunk
-		}
-		if chunkCap < n {
-			chunkCap = n
-		}
-		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
-			chunkCap = batchCopyArenaMaxRetain
-		}
-		chunk := getBatchArena(chunkCap)
-		b.ptrCopyArena = chunk[:0]
-		b.ptrCopyArenaChunks = append(b.ptrCopyArenaChunks, b.ptrCopyArena)
-	}
-	start := len(b.ptrCopyArena)
-	b.ptrCopyArena = b.ptrCopyArena[:start+n]
-	b.ptrCopyBytes += n
-	return b.ptrCopyArena[start : start+n : start+n]
+	return b.arenaCopyInto(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
 }
 
 func (b *Batch) cloneKey(key []byte) []byte {
@@ -14988,7 +15014,7 @@ func (b *Batch) Set(key, value []byte) error {
 	if b.shouldCopyValueToPtrArena(key, value) {
 		keyCopy = b.cloneKey(key)
 		valCopy = b.clonePtrValue(value)
-		b.ptrValueIdxs = append(b.ptrValueIdxs, idx)
+		b.ptrValueEntryIdxs = append(b.ptrValueEntryIdxs, idx)
 	} else {
 		keyCopy, valCopy = b.cloneKeyValue(key, value)
 	}
@@ -16045,14 +16071,17 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.updateBatchCopyHint()
 	chunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
-	for _, idx := range b.ptrValueIdxs {
+	for _, idx := range b.ptrValueEntryIdxs {
 		if idx >= 0 && idx < len(b.entries) && b.entries[idx].Value != nil {
 			retainPtrArena = true
 			break
 		}
 	}
+	ptrChunks := b.drainPtrCopyArenaChunks()
 	if retainPtrArena {
-		chunks = append(chunks, b.drainPtrCopyArenaChunks()...)
+		chunks = append(chunks, ptrChunks...)
+	} else {
+		putBatchArenas(ptrChunks)
 	}
 	b.db.retainBatchArenaChunksForMemtables(chunks, touchedMems)
 	b.db.writeMu.RUnlock()
@@ -16110,6 +16139,42 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 		}
 	}
 	return segments, nonEmptyBytes
+}
+
+func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
+	var maxRID uint64
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
+			continue
+		}
+		fileID, err := valuelog.EncodeFileID(uint32(seg.lane), uint32(seg.seq))
+		if err != nil {
+			return 0, err
+		}
+		reader, err := valuelog.NewReader(seg.path, fileID)
+		if err != nil {
+			return 0, err
+		}
+		reader.DisableValueDecode()
+		for {
+			rid, _, _, err := reader.ReadNext()
+			if err == nil {
+				if rid > maxRID {
+					maxRID = rid
+				}
+				continue
+			}
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
+			_ = reader.Close()
+			return 0, err
+		}
+		if err := reader.Close(); err != nil {
+			return 0, err
+		}
+	}
+	return maxRID, nil
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {
@@ -16371,7 +16436,7 @@ func (b *Batch) Close() error {
 	b.shardIdxSets = nil
 	b.firstKey = nil
 	b.lastKey = nil
-	b.ptrValueIdxs = nil
+	b.ptrValueEntryIdxs = nil
 	return nil
 }
 
