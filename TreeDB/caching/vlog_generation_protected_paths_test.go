@@ -61,6 +61,7 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 	}
 	_ = b.Close()
 
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	got := recorder.recordedProtectedPaths()
