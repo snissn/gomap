@@ -1543,7 +1543,11 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
 		if forceValueLogRefresh || len(touchedValueLogSegments) > 0 {
-			valueLogSet = db.valueLogManager.CurrentSet()
+			if err := db.valueLogManager.Refresh(); err != nil {
+				db.mu.Unlock()
+				return post, err
+			}
+			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 		} else {
 			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 		}
@@ -1790,12 +1794,15 @@ func (db *DB) RefreshValueLogSet() error {
 	if oldState == nil {
 		return nil
 	}
+	if err := db.valueLogManager.Refresh(); err != nil {
+		return err
+	}
 
 	newState := &DBState{
 		CommitSeq:        oldState.CommitSeq,
 		RootPageID:       oldState.RootPageID,
 		SystemRootPageID: oldState.SystemRootPageID,
-		ValueLogSet:      db.valueLogManager.CurrentSet(),
+		ValueLogSet:      db.valueLogManager.CurrentSetNoRefresh(),
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
