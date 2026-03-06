@@ -3102,6 +3102,9 @@ type DB struct {
 	valueLogRetainedClosedBytes    atomic.Int64
 	maxValueLogRetainedBytes       int64
 	maxValueLogRetainedBytesHard   int64
+	systemMu                       sync.RWMutex
+	systemOverlay                  map[string]systemOverlayValue
+	systemOverlayVersion           atomic.Uint64
 
 	// Level 1 (Disk)
 	backend       BackendDB
@@ -9633,6 +9636,13 @@ func (db *DB) Checkpoint() error {
 
 	// Flush all queued memtables with backend sync.
 	db.flushAllLocked(true)
+	bridge, err := db.directBridge()
+	if err != nil {
+		return err
+	}
+	if err := db.flushSystemOverlayLocked(bridge, !db.relaxedSync); err != nil {
+		return err
+	}
 
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
 	if len(segments) > 0 {
@@ -9970,6 +9980,11 @@ func (db *DB) Close() error {
 	if hadMemtables {
 		// flushMu is already held by Close.
 		db.flushAllLocked(true)
+	}
+	if bridge, err := db.directBridge(); err != nil {
+		errs = append(errs, err)
+	} else if err := db.flushSystemOverlayLocked(bridge, true); err != nil {
+		errs = append(errs, err)
 	}
 
 	close(db.closeCh)
