@@ -7,6 +7,7 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
+	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -32,9 +33,35 @@ var detachedBatchPool = sync.Pool{
 	},
 }
 
+var rootIteratorBulkBuildHook struct {
+	mu sync.RWMutex
+	fn func(int)
+}
+
 type stableRootEntryIterator interface {
 	iterator.UnsafeIterator
 	StableUnsafeIteratorSlices() bool
+}
+
+func setRootIteratorBulkBuildTestHook(fn func(int)) func() {
+	rootIteratorBulkBuildHook.mu.Lock()
+	prev := rootIteratorBulkBuildHook.fn
+	rootIteratorBulkBuildHook.fn = fn
+	rootIteratorBulkBuildHook.mu.Unlock()
+	return func() {
+		rootIteratorBulkBuildHook.mu.Lock()
+		rootIteratorBulkBuildHook.fn = prev
+		rootIteratorBulkBuildHook.mu.Unlock()
+	}
+}
+
+func runRootIteratorBulkBuildTestHook(rootIndex int) {
+	rootIteratorBulkBuildHook.mu.RLock()
+	fn := rootIteratorBulkBuildHook.fn
+	rootIteratorBulkBuildHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootIndex)
+	}
 }
 
 // GetAtRoot returns the value for a key in the specified root page.
@@ -213,26 +240,141 @@ func (db *DB) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*r
 // named-root flush to publish memtable state without first materializing a full
 // []Entry snapshot.
 func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batchpkg.Entry, error)) ([]uint64, error) {
+	if db == nil {
+		return nil, fmt.Errorf("missing db")
+	}
+	if db.readOnly {
+		return nil, ErrReadOnly
+	}
 	if len(rootIDs) != len(rootIters) {
 		return nil, fmt.Errorf("mutate root iterators length mismatch")
 	}
-	mutators := make([]func(batchpkg.Interface) error, len(rootIters))
-	for i := range rootIters {
-		iter := rootIters[i]
-		mutators[i] = func(target batchpkg.Interface) error {
-			return applyBulkRootIterator(target, iter)
+	if len(formats) > 0 && len(formats) != len(rootIDs) {
+		return nil, fmt.Errorf("mutate root formats length mismatch")
+	}
+
+	rootBatches := make([]*detachedBatch, len(rootIDs))
+	for i := range rootIDs {
+		if rootIDs[i] == 0 {
+			continue
+		}
+		rootBatch, err := newDetachedBatch(db, false)
+		if err != nil {
+			return nil, err
+		}
+		rootBatches[i] = rootBatch
+		defer func(batch *detachedBatch) { _ = batch.Close() }(rootBatch)
+		if err := applyBulkRootIterator(rootBatch, rootIters[i]); err != nil {
+			return nil, err
 		}
 	}
-	return db.MutateRootsWithFormats(sync, rootIDs, formats, mutators, func(sys batchpkg.Interface, newRootIDs []uint64) error {
-		if buildSystemOps == nil {
-			return nil
+
+	for _, rootBatch := range rootBatches {
+		if rootBatch != nil && rootBatch.usedAutoPtr {
+			if err := db.flushInlineAppender(sync); err != nil {
+				return nil, err
+			}
+			break
 		}
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	idx := db.idx.Load()
+	if idx == nil {
+		return nil, fmt.Errorf("missing index")
+	}
+
+	db.mu.RLock()
+	baseSeq := db.meta.CommitSeq
+	currentUserRoot := db.meta.UserRootPageID
+	currentSystemRoot := db.meta.SystemRootPageID
+	regID := idx.registry.Register(baseSeq)
+	db.mu.RUnlock()
+	defer idx.registry.Unregister(regID)
+
+	newRootIDs := make([]uint64, len(rootIDs))
+	retired := make([]uint64, 0, len(rootIDs)*2)
+	metrics := adaptive.Metrics{}
+	valueLogDeltas := make([]*valueLogRefDelta, 0, len(rootIDs))
+	forceValueLogRefresh := db.indexOuterLeavesInValueLog
+	var touchedValueLogSegments []uint32
+
+	for i := range rootIDs {
+		rootID := rootIDs[i]
+		format := rootMutationFormatAt(formats, i)
+		if rootID == 0 {
+			newRootID, rootTouched, rootNeedsRefresh, err := db.buildRootFromIteratorLocked(idx, format, rootIters[i], i)
+			if err != nil {
+				return nil, err
+			}
+			newRootIDs[i] = newRootID
+			touchedValueLogSegments = mergeValueLogSegmentIDs(touchedValueLogSegments, rootTouched)
+			if rootNeedsRefresh {
+				forceValueLogRefresh = true
+			}
+			valueLogDeltas = append(valueLogDeltas, nil)
+			continue
+		}
+
+		rootBatch := rootBatches[i]
+		newRootID, rootRetired, rootMetrics, err := db.zipperForRootFormat(idx, format).Apply(rootID, rootBatch.batch)
+		if err != nil {
+			return nil, err
+		}
+		rootDelta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, rootBatch.batch.SortedEntries())
+		if err != nil {
+			return nil, err
+		}
+		newRootIDs[i] = newRootID
+		retired = append(retired, rootRetired...)
+		metrics = mergeAdaptiveMetrics(metrics, rootMetrics)
+		valueLogDeltas = append(valueLogDeltas, rootDelta)
+		if db.rootFormatUsesLeafPageValueLog(format) {
+			forceValueLogRefresh = true
+		}
+	}
+
+	systemBatch, err := newDetachedBatch(db, true)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = systemBatch.Close() }()
+	if buildSystemOps != nil {
 		ops, err := buildSystemOps(newRootIDs)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		return applyBulkRootOps(sys, ops)
-	})
+		if err := applyBulkRootOps(systemBatch, ops); err != nil {
+			return nil, err
+		}
+	}
+
+	newSystemRoot := currentSystemRoot
+	systemRetired := []uint64(nil)
+	systemMetrics := adaptive.Metrics{}
+	var systemDelta *valueLogRefDelta
+	if len(systemBatch.batch.SortedEntries()) > 0 {
+		systemDelta, err = db.buildValueLogRefDelta(idx.pager, currentSystemRoot, baseSeq, systemBatch.batch.SortedEntries())
+		if err != nil {
+			return nil, err
+		}
+		newSystemRoot, systemRetired, systemMetrics, err = idx.zipper.Apply(currentSystemRoot, systemBatch.batch)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	retired = append(retired, systemRetired...)
+	metrics = mergeAdaptiveMetrics(metrics, systemMetrics)
+	valueLogDeltas = append(valueLogDeltas, systemDelta)
+	vlogRefDelta := mergeValueLogRefDeltas(valueLogDeltas...)
+	touchedValueLogSegments = mergeValueLogSegmentIDs(touchedValueLogSegments, combineTouchedValueLogSegments(append(rootBatches, systemBatch)...))
+	if err := db.finalizeCommit(currentUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta); err != nil {
+		return nil, err
+	}
+	return newRootIDs, nil
 }
 
 // MutateRootsWithFormats is the function-based form of MutateRoots with
@@ -604,6 +746,130 @@ func (db *DB) mutateRootInternal(rootID uint64, format *rootfmt.Format, sync boo
 		db.vacuum.RecordOps(userBatch.batch.Ops())
 	}
 	return newRootID, nil
+}
+
+type rootBuildIterator struct {
+	inner           iterator.UnsafeIterator
+	touchedSegments []uint32
+	sawPointers     bool
+}
+
+func newRootBuildIterator(inner iterator.UnsafeIterator) *rootBuildIterator {
+	it := &rootBuildIterator{inner: inner}
+	it.skipDeletes()
+	return it
+}
+
+func (it *rootBuildIterator) skipDeletes() {
+	for it != nil && it.inner != nil && it.inner.Valid() && it.inner.IsDeleted() {
+		it.inner.Next()
+	}
+}
+
+func (it *rootBuildIterator) Valid() bool { return it != nil && it.inner != nil && it.inner.Valid() }
+
+func (it *rootBuildIterator) Next() {
+	if it == nil || it.inner == nil {
+		return
+	}
+	it.inner.Next()
+	it.skipDeletes()
+}
+
+func (it *rootBuildIterator) Seek(key []byte) {
+	if it == nil || it.inner == nil {
+		return
+	}
+	it.inner.Seek(key)
+	it.skipDeletes()
+}
+
+func (it *rootBuildIterator) UnsafeKey() []byte {
+	if !it.Valid() {
+		return nil
+	}
+	return it.inner.UnsafeKey()
+}
+
+func (it *rootBuildIterator) UnsafeValue() []byte {
+	value, _, _ := it.UnsafeEntry()
+	return value
+}
+
+func (it *rootBuildIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.Valid() {
+		return nil, page.ValuePtr{}, 0
+	}
+	value, ptr, flags := it.inner.UnsafeEntry()
+	if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+		it.sawPointers = true
+		it.touchedSegments = mergeValueLogSegmentIDs(it.touchedSegments, []uint32{ptr.FileID})
+	}
+	return value, ptr, flags &^ node.FlagTombstone
+}
+
+func (it *rootBuildIterator) Key() []byte { return it.UnsafeKey() }
+
+func (it *rootBuildIterator) Value() []byte { return it.UnsafeValue() }
+
+func (it *rootBuildIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst[:0]
+	}
+	return it.inner.KeyCopy(dst)
+}
+
+func (it *rootBuildIterator) ValueCopy(dst []byte) []byte {
+	value, _, _ := it.UnsafeEntry()
+	return append(dst[:0], value...)
+}
+
+func (it *rootBuildIterator) IsDeleted() bool { return false }
+
+func (it *rootBuildIterator) Error() error {
+	if it == nil || it.inner == nil {
+		return nil
+	}
+	return it.inner.Error()
+}
+
+func (it *rootBuildIterator) Close() error {
+	if it == nil || it.inner == nil {
+		return nil
+	}
+	return it.inner.Close()
+}
+
+func (it *rootBuildIterator) Domain() (start, end []byte) {
+	if it == nil || it.inner == nil {
+		return nil, nil
+	}
+	return it.inner.Domain()
+}
+
+func (db *DB) buildRootFromIteratorLocked(idx *indexGen, format *rootfmt.Format, iter iterator.UnsafeIterator, rootIndex int) (uint64, []uint32, bool, error) {
+	if iter == nil {
+		iter = &emptyIterator{}
+	}
+	buildIter := newRootBuildIterator(iter)
+	defer func() { _ = buildIter.Close() }()
+
+	rootFormat := db.normalizeRootMutationFormat(format)
+	buildOpts := bulk.BuildOptions{
+		LeafPrefixCompression: rootFormat.LeafPrefixCompression,
+		LeafColumnar:          db.indexColumnarLeaves,
+		PackedValuePtr:        db.indexPackedValuePtr,
+		InternalBaseDelta:     db.indexInternalBaseDelta,
+	}
+	if rootFormat.OuterLeavesInValueLog {
+		buildOpts.LeafPageLog = db.leafPageLog
+	}
+	runRootIteratorBulkBuildTestHook(rootIndex)
+	newRootID, err := bulk.BuildWithOptions(buildIter, &pagerAllocator{p: idx.pager}, idx.pager, buildOpts)
+	if err != nil {
+		return 0, nil, false, err
+	}
+	return newRootID, buildIter.touchedSegments, rootFormat.OuterLeavesInValueLog || buildIter.sawPointers, nil
 }
 
 func newDetachedBatch(db *DB, system bool) (*detachedBatch, error) {
