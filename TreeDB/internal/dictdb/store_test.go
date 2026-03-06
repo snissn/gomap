@@ -159,7 +159,11 @@ func TestStorePutGet_PointerPath_Reopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer func() { _ = store.Close() }()
+	t.Cleanup(func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	})
 
 	ctx := context.Background()
 	inline := store.backend.InlineThreshold()
