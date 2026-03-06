@@ -841,6 +841,50 @@ func TestCachedCollectionsCheckpoint_UsesRootBulkMutationOps(t *testing.T) {
 	}
 }
 
+func TestCachedCollectionsCheckpoint_UsesRootMutationIterators(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	iteratorPublishCalls := 0
+	restore := setNamedRootBulkPublishIteratorsTestHook(func(rootCount int) {
+		iteratorPublishCalls++
+		if rootCount != 3 {
+			t.Fatalf("root count=%d want 3", rootCount)
+		}
+	})
+	defer restore()
+
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint insert: %v", err)
+	}
+	if iteratorPublishCalls == 0 {
+		t.Fatalf("expected checkpoint to publish named roots through iterators")
+	}
+}
+
 func TestCachedCollectionsCheckpoint_BulkPublishRefreshesValueLogState(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

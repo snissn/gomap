@@ -32,6 +32,11 @@ var detachedBatchPool = sync.Pool{
 	},
 }
 
+type stableRootEntryIterator interface {
+	iterator.UnsafeIterator
+	StableUnsafeIteratorSlices() bool
+}
+
 // GetAtRoot returns the value for a key in the specified root page.
 func (db *DB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	if rootID == 0 {
@@ -189,6 +194,33 @@ func (db *DB) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*r
 		ops := rootOps[i]
 		mutators[i] = func(target batchpkg.Interface) error {
 			return applyBulkRootOps(target, ops)
+		}
+	}
+	return db.MutateRootsWithFormats(sync, rootIDs, formats, mutators, func(sys batchpkg.Interface, newRootIDs []uint64) error {
+		if buildSystemOps == nil {
+			return nil
+		}
+		ops, err := buildSystemOps(newRootIDs)
+		if err != nil {
+			return err
+		}
+		return applyBulkRootOps(sys, ops)
+	})
+}
+
+// MutateRootsWithFormatIterators is the streaming form of MutateRootsWithFormats.
+// Root entries are consumed from sorted iterators, allowing callers like cached
+// named-root flush to publish memtable state without first materializing a full
+// []Entry snapshot.
+func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootIters []iterator.UnsafeIterator, buildSystemOps func([]uint64) ([]batchpkg.Entry, error)) ([]uint64, error) {
+	if len(rootIDs) != len(rootIters) {
+		return nil, fmt.Errorf("mutate root iterators length mismatch")
+	}
+	mutators := make([]func(batchpkg.Interface) error, len(rootIters))
+	for i := range rootIters {
+		iter := rootIters[i]
+		mutators[i] = func(target batchpkg.Interface) error {
+			return applyBulkRootIterator(target, iter)
 		}
 	}
 	return db.MutateRootsWithFormats(sync, rootIDs, formats, mutators, func(sys batchpkg.Interface, newRootIDs []uint64) error {
@@ -380,6 +412,72 @@ func applyBulkRootOps(target batchpkg.Interface, ops []batchpkg.Entry) error {
 		}
 	}
 	return nil
+}
+
+func applyBulkRootIterator(target batchpkg.Interface, iter iterator.UnsafeIterator) (err error) {
+	if iter == nil {
+		return nil
+	}
+	defer func() {
+		closeErr := iter.Close()
+		if err == nil {
+			err = closeErr
+		}
+	}()
+
+	const chunkCap = 1024
+	stable := false
+	if st, ok := iter.(stableRootEntryIterator); ok {
+		stable = st.StableUnsafeIteratorSlices()
+	}
+
+	ops := make([]batchpkg.Entry, 0, chunkCap)
+	flush := func() error {
+		if len(ops) == 0 {
+			return nil
+		}
+		if err := applyBulkRootOps(target, ops); err != nil {
+			return err
+		}
+		ops = ops[:0]
+		return nil
+	}
+
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		value, ptr, flags := iter.UnsafeEntry()
+		if !stable {
+			key = append([]byte(nil), key...)
+			if flags&node.FlagTombstone == 0 && len(value) > 0 {
+				value = append([]byte(nil), value...)
+			}
+		}
+
+		entry := batchpkg.Entry{Key: key}
+		switch {
+		case flags&node.FlagTombstone != 0:
+			entry.Type = batchpkg.OpDelete
+		case flags&node.FlagPointer != 0:
+			entry.Type = batchpkg.OpPut
+			entry.IsPtr = true
+			entry.ValuePtr = ptr
+			entry.Value = value
+		default:
+			entry.Type = batchpkg.OpPut
+			entry.Value = value
+		}
+		ops = append(ops, entry)
+		iter.Next()
+		if len(ops) == cap(ops) {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return err
+	}
+	return flush()
 }
 
 func (db *DB) mutateRootInternal(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batchpkg.Interface) error, mutateUser func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {
