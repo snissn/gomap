@@ -51,6 +51,42 @@ func TestWriterFlushFlushesBufferedFileBackedWriter(t *testing.T) {
 	}
 }
 
+func TestWriterRotateTo_FlushesSinkBufferBeforeSwitchingToFileBacked(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	var sink bytes.Buffer
+	writer := NewWriterWithSink(&sink, page.ValueLogFileID(1))
+	if writer == nil {
+		t.Fatal("NewWriterWithSink returned nil")
+	}
+	if _, err := writer.bw.WriteString("sink-data"); err != nil {
+		t.Fatalf("buffered sink write: %v", err)
+	}
+	if err := writer.RotateTo(path, page.ValueLogFileID(2)); err != nil {
+		t.Fatalf("RotateTo: %v", err)
+	}
+	if got := sink.String(); got != "sink-data" {
+		t.Fatalf("sink contents=%q want %q", got, "sink-data")
+	}
+	if writer.bw != nil {
+		t.Fatalf("expected RotateTo to drop sink-backed bufio state")
+	}
+	if err := writer.writeBytes([]byte("file-data")); err != nil {
+		t.Fatalf("writeBytes(file): %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read file: %v", err)
+	}
+	if string(got) != "file-data" {
+		t.Fatalf("file contents=%q want %q", string(got), "file-data")
+	}
+}
+
 func TestValueLogAppendRead(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")

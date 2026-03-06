@@ -510,9 +510,11 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 // Get returns the value for key.
 //
 // When the stored value is non-empty, Get returns an owned, mutable copy of
-// that value. For compatibility with the long-standing TreeDB API, Get returns
-// (nil, nil) both when the key is missing and when the stored value is
-// zero-length.
+// that value.
+//
+// If the key is missing or tombstoned, Get returns ErrKeyNotFound. For
+// compatibility with the long-standing TreeDB API, when the stored value is
+// zero-length but the key is present, Get returns (nil, nil).
 func (t *Tree) Get(key []byte) ([]byte, error) {
 	val, err := t.GetUnsafe(key)
 	if err != nil {
