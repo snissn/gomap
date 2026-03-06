@@ -2227,6 +2227,40 @@ func (db *DB) valueLogRetainedPaths() []string {
 	return paths
 }
 
+func (db *DB) valueLogProtectedPaths() []string {
+	retained := db.valueLogRetainedPaths()
+	inUse := db.valueLogInUsePaths()
+	if len(retained) == 0 {
+		return inUse
+	}
+	if len(inUse) == 0 {
+		return retained
+	}
+	seen := make(map[string]struct{}, len(retained)+len(inUse))
+	paths := make([]string, 0, len(retained)+len(inUse))
+	for _, path := range retained {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	for _, path := range inUse {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
 // ValueLogRetainedPaths returns a best-effort snapshot of retained value-log
 // segment paths currently pinned by cached-mode pointer lifecycle tracking.
 func (db *DB) ValueLogRetainedPaths() []string {
@@ -4200,7 +4234,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	segments, _ := listNonEmptyLogSegments(walDir)
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
-	// RID here rather than risk reusing low RIDs after a clean reopen.
+	// RID here rather than risk reusing low RIDs after a clean reopen. Scanning
+	// only the newest value-log segment per lane keeps this bounded on large DBs.
 	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
 	if err != nil {
 		return nil, err
@@ -9071,11 +9106,10 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
 		}
-		// ValueLogRewriteOnline treats MaxSourceBytes=0 as "unbounded". Use a
-		// small floor so planning never selects an unbounded set when the token
-		// bucket is empty (e.g. first tick).
+		// In budgeted mode, a zero-token bucket means "do not plan or rewrite
+		// yet", not "plan/rewrite with an implicit floor".
 		if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-			maxSourceBytes = db.valueLogRewriteBudgetBytes
+			goto planned
 		}
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
@@ -9140,11 +9174,11 @@ planned:
 			if maxSourceBytes < 0 {
 				maxSourceBytes = 0
 			}
-			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". Use a
-			// small floor so we never accidentally run an unbounded rewrite when the
-			// token bucket is empty (e.g. first tick).
+			// In budgeted mode, a zero-token bucket means "wait", not "run an
+			// unbounded rewrite with an implicit floor".
 			if maxSourceBytes == 0 && db.valueLogRewriteBudgetBytes > 0 {
-				maxSourceBytes = db.valueLogRewriteBudgetBytes
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+				return
 			}
 			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 				maxSourceBytes = totalBytes
@@ -9155,7 +9189,7 @@ planned:
 			BatchSize:       db.valueLogRewriteBatchSize(),
 			SyncEachBatch:   false,
 			MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-			ProtectedPaths:  db.valueLogInUsePaths(),
+			ProtectedPaths:  db.valueLogProtectedPaths(),
 			ReserveRIDs: func(count int) (uint64, error) {
 				if count <= 0 {
 					return 0, nil
@@ -9253,7 +9287,7 @@ planned:
 	now = time.Now()
 	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogInUsePaths()}
+	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
 	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 	cancel()
 	if err != nil {
@@ -14861,7 +14895,7 @@ func (b *Batch) arenaCopy(n int) []byte {
 			chunkCap = n
 		}
 		// Avoid unbounded exponential growth once we reach the pooling limit. Large
-		// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MB)
+		// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MiB)
 		// that is mostly unused, inflating RSS. Only allow larger chunks when a
 		// *single* copy needs it.
 		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
@@ -16021,6 +16055,10 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 	return segments, nonEmptyBytes
 }
 
+func isTruncatedValueLogScanError(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 	var maxRID uint64
 	for _, seg := range segments {
@@ -16044,7 +16082,7 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 				}
 				continue
 			}
-			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			if isTruncatedValueLogScanError(err) {
 				break
 			}
 			_ = reader.Close()

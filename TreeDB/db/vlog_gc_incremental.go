@@ -470,7 +470,7 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 		case page.PageTypeLeaf:
 			// no children
 		default:
-			return errors.New("invalid page type")
+			return fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
 		}
 	}
 	return nil

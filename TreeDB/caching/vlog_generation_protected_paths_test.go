@@ -51,7 +51,6 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	t.Cleanup(func() { _ = backend.Close() })
 
 	recorder := &rewriteRecordingBackend{DB: backend}
 
@@ -78,6 +77,7 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 	}
 	_ = b.Close()
 
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	got := recorder.recordedProtectedPaths()
@@ -113,7 +113,6 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	t.Cleanup(func() { _ = backend.Close() })
 
 	recorder := &rewriteRecordingBackend{DB: backend}
 
@@ -144,6 +143,7 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 		t.Fatalf("expected nextRID to be seeded by pointer write")
 	}
 
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	got := recorder.recordedReservedStarts()

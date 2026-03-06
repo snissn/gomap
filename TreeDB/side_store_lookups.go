@@ -71,22 +71,32 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 
 	if opts.ValueLog.DictLookup == nil {
 		dictDir := filepath.Join(rootDir, "dictdb")
-		if info, err := os.Stat(dictDir); err == nil && info.IsDir() {
+		indexPath := filepath.Join(dictDir, "index.db")
+		indexInfo, err := os.Stat(indexPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("treedb: stat dictdb index: %w", err)
+			}
+		} else if indexInfo.IsDir() {
+			return nil, fmt.Errorf("treedb: dictdb index path is a directory: %s", indexPath)
+		} else {
 			dictChunk := opts.DictDBChunkSize
 			if dictChunk <= 0 {
 				dictChunk = defaultDictChunkSize
 			}
-			dictOpts := db.Options{
-				Dir:                    dictDir,
-				ReadOnly:               true,
-				ChunkSize:              dictChunk,
-				DisableBackgroundPrune: true,
-				IgnoreFormatConfig:     true,
-			}
+			dictOpts := *opts
+			dictOpts.Dir = dictDir
+			dictOpts.ReadOnly = true
+			dictOpts.ChunkSize = dictChunk
+			dictOpts.DisableBackgroundPrune = true
+			dictOpts.IgnoreFormatConfig = false
 			// Side stores must never require dict/template lookups themselves.
 			dictOpts.IndexOuterLeavesInValueLog = false
+			dictOpts.ValueLog.DictLookup = nil
 			dictOpts.ValueLog.Compression = db.ValueLogCompressionOff
 			dictOpts.ValueLog.TemplateMode = template.TemplateOff
+			dictOpts.ValueLog.TemplateLookup = nil
+			dictOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
 
 			dictBackend, err := db.Open(dictOpts)
 			if err != nil {
@@ -102,21 +112,31 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 
 	if opts.ValueLog.TemplateLookup == nil {
 		templateDir := filepath.Join(rootDir, "templatedb")
-		if info, err := os.Stat(templateDir); err == nil && info.IsDir() {
+		indexPath := filepath.Join(templateDir, "index.db")
+		indexInfo, err := os.Stat(indexPath)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return nil, fmt.Errorf("treedb: stat templatedb index: %w", err)
+			}
+		} else if indexInfo.IsDir() {
+			return nil, fmt.Errorf("treedb: templatedb index path is a directory: %s", indexPath)
+		} else {
 			templateChunk := opts.TemplateDBChunkSize
 			if templateChunk <= 0 {
 				templateChunk = defaultDictChunkSize
 			}
-			templateOpts := db.Options{
-				Dir:                    templateDir,
-				ReadOnly:               true,
-				ChunkSize:              templateChunk,
-				DisableBackgroundPrune: true,
-				IgnoreFormatConfig:     true,
-			}
+			templateOpts := *opts
+			templateOpts.Dir = templateDir
+			templateOpts.ReadOnly = true
+			templateOpts.ChunkSize = templateChunk
+			templateOpts.DisableBackgroundPrune = true
+			templateOpts.IgnoreFormatConfig = false
 			templateOpts.IndexOuterLeavesInValueLog = false
+			templateOpts.ValueLog.DictLookup = nil
 			templateOpts.ValueLog.Compression = db.ValueLogCompressionOff
 			templateOpts.ValueLog.TemplateMode = template.TemplateOff
+			templateOpts.ValueLog.TemplateLookup = nil
+			templateOpts.ValueLog.TemplateDecodeOptions = template.DecodeOptions{}
 
 			templateBackend, err := db.Open(templateOpts)
 			if err != nil {
