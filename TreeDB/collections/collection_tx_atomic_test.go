@@ -121,6 +121,21 @@ func (d *atomicMockDB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	return append([]byte{}, value...), nil
 }
 
+func (d *atomicMockDB) GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
+	if rootID == 0 {
+		return dst, nil
+	}
+	store := d.rootStores[rootID]
+	if store == nil {
+		return dst, nil
+	}
+	value := store[string(key)]
+	if value == nil {
+		return dst, nil
+	}
+	return append(dst[:0], value...), nil
+}
+
 func (d *atomicMockDB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 	if rootID == 0 {
 		return false, nil

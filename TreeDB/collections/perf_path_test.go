@@ -9,11 +9,13 @@ import (
 
 type perfMockDB struct {
 	*atomicMockDB
-	failGetAtRoot  bool
-	failHasAtRoot  bool
-	getAtRootCalls int
-	hasAtRootCalls int
-	getSystemCalls map[string]int
+	failGetAtRoot        bool
+	failGetAtRootAppend  bool
+	failHasAtRoot        bool
+	getAtRootCalls       int
+	getAtRootAppendCalls int
+	hasAtRootCalls       int
+	getSystemCalls       map[string]int
 }
 
 func newPerfMockDB() *perfMockDB {
@@ -25,6 +27,7 @@ func newPerfMockDB() *perfMockDB {
 
 func (d *perfMockDB) resetCounters() {
 	d.getAtRootCalls = 0
+	d.getAtRootAppendCalls = 0
 	d.hasAtRootCalls = 0
 	clear(d.getSystemCalls)
 }
@@ -35,6 +38,14 @@ func (d *perfMockDB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 		return nil, errors.New("unexpected GetAtRoot call")
 	}
 	return d.atomicMockDB.GetAtRoot(rootID, key)
+}
+
+func (d *perfMockDB) GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
+	d.getAtRootAppendCalls++
+	if d.failGetAtRootAppend {
+		return nil, errors.New("unexpected GetAtRootAppend call")
+	}
+	return d.atomicMockDB.GetAtRootAppend(rootID, key, dst)
 }
 
 func (d *perfMockDB) GetSystem(key []byte) ([]byte, error) {
@@ -223,5 +234,36 @@ func TestInsertWithIndexes_LoadsExistingDocumentWhenPresent(t *testing.T) {
 	}
 	if len(newIDs) != 1 || string(newIDs[0]) != "u1" {
 		t.Fatalf("unexpected new ids: %#v", newIDs)
+	}
+}
+
+func TestDeleteWithIndexes_UsesGetAtRootAppend(t *testing.T) {
+	d := newPerfMockDB()
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+
+	d.resetCounters()
+	d.failGetAtRoot = true
+	if err := col.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete with indexes: %v", err)
+	}
+	if d.getAtRootCalls != 0 {
+		t.Fatalf("expected indexed delete to avoid GetAtRoot, got %d calls", d.getAtRootCalls)
+	}
+	if d.getAtRootAppendCalls == 0 {
+		t.Fatalf("expected indexed delete to use GetAtRootAppend")
 	}
 }
