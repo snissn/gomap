@@ -3105,6 +3105,10 @@ type DB struct {
 	systemMu                       sync.RWMutex
 	systemOverlay                  map[string]systemOverlayValue
 	systemOverlayVersion           atomic.Uint64
+	namedRootMu                    sync.RWMutex
+	namedRootsByID                 map[uint64]*namedRootOverlayState
+	namedRootsByKey                map[string]*namedRootOverlayState
+	nextNamedRootID                atomic.Uint64
 
 	// Level 1 (Disk)
 	backend       BackendDB
@@ -9640,6 +9644,9 @@ func (db *DB) Checkpoint() error {
 	if err != nil {
 		return err
 	}
+	if err := db.flushNamedRootOverlaysLocked(bridge, !db.relaxedSync); err != nil {
+		return err
+	}
 	if err := db.flushSystemOverlayLocked(bridge, !db.relaxedSync); err != nil {
 		return err
 	}
@@ -9942,6 +9949,11 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 }
 
 func (db *DB) Close() error {
+	if db.PendingNamedRoots() {
+		if err := db.FlushNamedRootOverlays(true); err != nil {
+			return err
+		}
+	}
 	var errs []error
 	hadMemtables := false
 	db.closing.Store(true)
@@ -9982,6 +9994,8 @@ func (db *DB) Close() error {
 		db.flushAllLocked(true)
 	}
 	if bridge, err := db.directBridge(); err != nil {
+		errs = append(errs, err)
+	} else if err := db.flushNamedRootOverlaysLocked(bridge, true); err != nil {
 		errs = append(errs, err)
 	} else if err := db.flushSystemOverlayLocked(bridge, true); err != nil {
 		errs = append(errs, err)

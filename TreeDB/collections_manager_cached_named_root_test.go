@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/collections"
 )
 
@@ -479,36 +480,81 @@ func TestCachedCollectionsBufferedNamedRoots_KeepMemtableOnlyState(t *testing.T)
 	}
 
 	primaryState := requireBufferedNamedRootStateByName(t, d, mustCollectionPrimaryRootName(t, meta.Name))
-	if primaryState.pointState == nil || primaryState.prefixState == nil {
+	if !primaryState.HasPointState || !primaryState.HasPrefixState {
 		t.Fatalf("expected primary buffered root to keep point and prefix memtables")
 	}
-	if primaryState.pointState != primaryState.prefixState {
+	if !primaryState.SharedState {
 		t.Fatalf("expected primary buffered root to share one memtable for point and prefix state")
 	}
-	if len(primaryState.entries) != 0 {
-		t.Fatalf("expected primary buffered root to avoid legacy entry map, got %d entries", len(primaryState.entries))
+	if primaryState.LegacyEntryCount != 0 {
+		t.Fatalf("expected primary buffered root to avoid legacy entry map, got %d entries", primaryState.LegacyEntryCount)
 	}
 
 	indexState := requireBufferedNamedRootStateByName(t, d, mustCollectionIndexStateRootName(t, meta.Name))
-	if indexState.pointState == nil || indexState.prefixState == nil {
+	if !indexState.HasPointState || !indexState.HasPrefixState {
 		t.Fatalf("expected index-state buffered root to keep point and prefix memtables")
 	}
-	if indexState.pointState != indexState.prefixState {
+	if !indexState.SharedState {
 		t.Fatalf("expected index-state buffered root to share one memtable for point and prefix state")
 	}
-	if len(indexState.entries) != 0 {
-		t.Fatalf("expected index-state buffered root to avoid legacy entry map, got %d entries", len(indexState.entries))
+	if indexState.LegacyEntryCount != 0 {
+		t.Fatalf("expected index-state buffered root to avoid legacy entry map, got %d entries", indexState.LegacyEntryCount)
 	}
 
 	secondaryState := requireBufferedNamedRootStateByName(t, d, mustCollectionIndexRootName(t, meta.Name, "email_idx"))
-	if secondaryState.pointState == nil || secondaryState.prefixState == nil {
+	if !secondaryState.HasPointState || !secondaryState.HasPrefixState {
 		t.Fatalf("expected secondary buffered root to keep point and prefix memtables")
 	}
-	if secondaryState.pointState != secondaryState.prefixState {
+	if !secondaryState.SharedState {
 		t.Fatalf("expected secondary buffered root to share one memtable for point and prefix state")
 	}
-	if len(secondaryState.entries) != 0 {
-		t.Fatalf("expected secondary buffered root to avoid legacy entry map, got %d entries", len(secondaryState.entries))
+	if secondaryState.LegacyEntryCount != 0 {
+		t.Fatalf("expected secondary buffered root to avoid legacy entry map, got %d entries", secondaryState.LegacyEntryCount)
+	}
+}
+
+func TestCachedCollectionsBufferedNamedRoots_LiveInCachingLayer(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	if d.cached == nil {
+		t.Fatalf("expected cached db")
+	}
+	if !d.cached.PendingNamedRoots() {
+		t.Fatalf("expected cached layer to hold pending named roots before checkpoint")
+	}
+	if len(d.namedRootsByID) != 0 || len(d.namedRootsByKey) != 0 {
+		t.Fatalf("expected public db named-root overlay state to stay empty once cached-native buffering is active")
+	}
+
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if d.cached.PendingNamedRoots() {
+		t.Fatalf("expected cached named-root buffers to flush on checkpoint")
 	}
 }
 
@@ -934,7 +980,7 @@ func countBackendRootEntries(t *testing.T, d *DB, rootID uint64) int {
 	return count
 }
 
-func requireBufferedNamedRootStateByName(t *testing.T, d *DB, rootName string) *namedRootOverlayState {
+func requireBufferedNamedRootStateByName(t *testing.T, d *DB, rootName string) caching.NamedRootDebugState {
 	t.Helper()
 	rootKey, err := collections.SystemCollectionRootKey(rootName)
 	if err != nil {
@@ -951,9 +997,12 @@ func requireBufferedNamedRootStateByName(t *testing.T, d *DB, rootName string) *
 	if err := desc.Decode(raw); err != nil {
 		t.Fatalf("decode cached root descriptor %s: %v", rootName, err)
 	}
-	state, err := d.namedRootState(desc.RootPageID)
-	if err != nil {
-		t.Fatalf("named root state %s: %v", rootName, err)
+	if d.cached == nil {
+		t.Fatalf("cached db missing for root %s", rootName)
+	}
+	state, ok := d.cached.DebugNamedRootStateByID(desc.RootPageID)
+	if !ok {
+		t.Fatalf("named root state %s: missing", rootName)
 	}
 	return state
 }

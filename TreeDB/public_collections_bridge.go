@@ -106,8 +106,8 @@ func (db *DB) SystemRootVersion() uint64 {
 
 // GetAtRoot reads from a backend named root.
 func (db *DB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
-	if db.cached != nil && db.hasBufferedNamedRoot(rootID) {
-		return db.bufferedGetAtRoot(rootID, key)
+	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
+		return db.cached.BufferedGetAtRoot(rootID, key)
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -118,8 +118,8 @@ func (db *DB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 
 // GetAtRootAppend reads from a backend named root into the provided buffer.
 func (db *DB) GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
-	if db.cached != nil && db.hasBufferedNamedRoot(rootID) {
-		return db.bufferedGetAtRootAppend(rootID, key, dst)
+	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
+		return db.cached.BufferedGetAtRootAppend(rootID, key, dst)
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -130,8 +130,8 @@ func (db *DB) GetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
 
 // HasAtRoot reports whether a backend named root currently contains the key.
 func (db *DB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
-	if db.cached != nil && db.hasBufferedNamedRoot(rootID) {
-		return db.bufferedHasAtRoot(rootID, key)
+	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
+		return db.cached.BufferedHasAtRoot(rootID, key)
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -143,8 +143,8 @@ func (db *DB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
 // HasPrefixAtRoot reports whether the named root currently contains any
 // non-deleted key with the provided prefix.
 func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
-	if db.cached != nil && db.hasBufferedNamedRoot(rootID) {
-		return db.bufferedHasPrefixAtRoot(rootID, prefix)
+	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
+		return db.cached.BufferedHasPrefixAtRoot(rootID, prefix)
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -155,8 +155,8 @@ func (db *DB) HasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 
 // IteratorAtRoot exposes the backend named-root iterator.
 func (db *DB) IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
-	if db.cached != nil && db.hasBufferedNamedRoot(rootID) {
-		return db.bufferedIteratorAtRoot(rootID, start, end)
+	if db.cached != nil && db.cached.HasBufferedNamedRoot(rootID) {
+		return db.cached.BufferedIteratorAtRoot(rootID, start, end)
 	}
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -168,7 +168,7 @@ func (db *DB) IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeI
 // MutateRootWithFormat delegates named-root mutation to the backend.
 func (db *DB) MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
 	if db.cached != nil {
-		out, err := db.bufferNamedRootMutations(sync, []uint64{rootID}, []*rootfmt.Format{format}, []func(batch.Interface) error{mutateRoot}, func(sys batch.Interface, newRootIDs []uint64) error {
+		out, err := db.cached.BufferNamedRootMutations(sync, []uint64{rootID}, []*rootfmt.Format{format}, []func(batch.Interface) error{mutateRoot}, func(sys batch.Interface, newRootIDs []uint64) error {
 			if updateSystem == nil {
 				return nil
 			}
@@ -198,7 +198,7 @@ func (db *DB) MutateRootWithFormat(rootID uint64, format *rootfmt.Format, sync b
 // MutateRootsWithFormats delegates multi-root mutation to the backend.
 func (db *DB) MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error) {
 	if db.cached != nil {
-		return db.bufferNamedRootMutations(sync, rootIDs, formats, mutateRoots, updateSystem)
+		return db.cached.BufferNamedRootMutations(sync, rootIDs, formats, mutateRoots, updateSystem)
 	}
 	var out []uint64
 	wrappedUpdate, applyMirror := db.wrapSystemMirrorUpdateMany(updateSystem)
@@ -237,7 +237,7 @@ func (db *DB) MutateRootAndUserWithFormat(rootID uint64, format *rootfmt.Format,
 // MutateRootsWithFuncs delegates multi-root mutation to the backend.
 func (db *DB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error) {
 	if db.cached != nil {
-		return db.bufferNamedRootMutations(sync, rootIDs, nil, mutateRoots, updateSystem)
+		return db.cached.BufferNamedRootMutations(sync, rootIDs, nil, mutateRoots, updateSystem)
 	}
 	var out []uint64
 	wrappedUpdate, applyMirror := db.wrapSystemMirrorUpdateMany(updateSystem)
@@ -258,7 +258,7 @@ func (db *DB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []fu
 // MutateRoot delegates single-root mutation to the backend.
 func (db *DB) MutateRoot(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
 	if db.cached != nil {
-		out, err := db.bufferNamedRootMutations(sync, []uint64{rootID}, nil, []func(batch.Interface) error{mutateRoot}, func(sys batch.Interface, newRootIDs []uint64) error {
+		out, err := db.cached.BufferNamedRootMutations(sync, []uint64{rootID}, nil, []func(batch.Interface) error{mutateRoot}, func(sys batch.Interface, newRootIDs []uint64) error {
 			if updateSystem == nil {
 				return nil
 			}
