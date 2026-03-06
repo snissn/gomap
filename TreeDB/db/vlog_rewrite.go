@@ -270,6 +270,7 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		}
 		return plan, nil
 	}
+	defer func() { _ = db.valueLogManager.Release(set) }()
 
 	plan.SegmentsTotal = len(set.Files)
 	for _, f := range set.Files {
@@ -285,7 +286,6 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	if len(opts.SourceFileIDs) == 0 {
 		liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 		if err != nil {
-			_ = db.valueLogManager.Release(set)
 			return plan, err
 		}
 	}
@@ -344,7 +344,6 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		}
 	}
 
-	_ = db.valueLogManager.Release(set)
 	return plan, nil
 }
 
@@ -415,7 +414,9 @@ func groupedRecordKeyForPtr(ptr page.ValuePtr) (groupedRecordKey, error) {
 		start:  uint64(ptr.Offset - 4),
 	}, nil
 }
-
+func formatValueLogPtr(ptr page.ValuePtr) string {
+	return fmt.Sprintf("file=%d offset=%d grouped=%t", ptr.FileID, ptr.Offset, page.ValuePtrIsGrouped(ptr))
+}
 func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
@@ -596,7 +597,7 @@ func (db *DB) valueLogRecordLengthForRewrite(ptr page.ValuePtr) (uint32, error) 
 	defer func() { _ = db.valueLogManager.Release(set) }()
 	f := set.Files[ptr.FileID]
 	if f == nil || f.File == nil {
-		return 0, fmt.Errorf("vlog-rewrite: missing segment %d", ptr.FileID)
+		return 0, fmt.Errorf("vlog-rewrite: missing segment for ptr[%s]", formatValueLogPtr(ptr))
 	}
 	start := int64(ptr.Offset - 4)
 	return readValueLogRecordLengthFromHeader(f.File, start)
@@ -1946,7 +1947,7 @@ func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) 
 	}
 	f := it.vlogs.Files[ptr.FileID]
 	if f == nil || f.File == nil {
-		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: missing segment %d", ptr.FileID)
+		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: missing segment for ptr[%s]", formatValueLogPtr(ptr))
 	}
 	raw, err := readRawRecord(f.File, ptr)
 	if err != nil {
