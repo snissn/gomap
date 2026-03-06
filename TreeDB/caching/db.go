@@ -92,6 +92,10 @@ func computeBatchArenaPoolBudgetBytes() int64 {
 	return budget
 }
 
+func currentBatchArenaPoolBudgetBytes() int64 {
+	return batchArenaPoolBudgetBytes
+}
+
 const (
 	maxValueLogKeyLeaseCount = 64
 	maxValueLogKeyLeaseCap   = 1 << 20
@@ -9125,6 +9129,8 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 	}
 }
 
+const maxPositiveInt64 = int64(^uint64(0) >> 1)
+
 func mulDivClampPositiveInt64(x, y, div, capValue int64) int64 {
 	if x <= 0 || y <= 0 || div <= 0 || capValue <= 0 {
 		return 0
@@ -16306,6 +16312,36 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 		}
 	}
 	return maxRID, nil
+}
+
+func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
+	if len(segments) == 0 {
+		return nil
+	}
+	tailByLane := make(map[int]logSegmentInfo, len(segments))
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
+			continue
+		}
+		prev, ok := tailByLane[seg.lane]
+		if !ok || seg.seq > prev.seq {
+			tailByLane[seg.lane] = seg
+		}
+	}
+	if len(tailByLane) == 0 {
+		return nil
+	}
+	tails := make([]logSegmentInfo, 0, len(tailByLane))
+	for _, seg := range tailByLane {
+		tails = append(tails, seg)
+	}
+	sort.Slice(tails, func(i, j int) bool {
+		if tails[i].lane != tails[j].lane {
+			return tails[i].lane < tails[j].lane
+		}
+		return tails[i].seq < tails[j].seq
+	})
+	return tails
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {
