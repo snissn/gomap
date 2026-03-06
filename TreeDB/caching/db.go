@@ -5459,21 +5459,21 @@ func computeEntrySlicePoolBudgetBytes() int64 {
 	return budget
 }
 
-func reserveEntrySlicePoolBytes(bytes int64) bool {
+func reserveEntrySlicePoolBytes(bytes int64) (ok, transitionedFromZero bool) {
 	if bytes <= 0 {
-		return true
+		return true, false
 	}
 	budget := entrySlicePoolBudgetBytes
 	if budget <= 0 {
-		return false
+		return false, false
 	}
 	for {
 		held := entrySlicePoolBytes.Load()
 		if held+bytes > budget {
-			return false
+			return false, false
 		}
 		if entrySlicePoolBytes.CompareAndSwap(held, held+bytes) {
-			return true
+			return true, held == 0
 		}
 	}
 }
@@ -5613,7 +5613,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
 				// The slice is too small for this request; return it to the pool if
 				// we're within budget so smaller requests can reuse it.
-				if reserveEntrySlicePoolBytes(leaseBytes) {
+				if ok, transitioned := reserveEntrySlicePoolBytes(leaseBytes); ok {
+					if transitioned {
+						noteEntrySlicePoolGC(batchArenaPoolNumGC())
+					}
 					entrySlicePools[capIdx].Put(s[:0])
 				}
 			}
@@ -5646,14 +5649,17 @@ func putEntrySlice(entries []batch.Entry) {
 	if cap(entries) > maxEntryPoolCap {
 		return
 	}
-	noteEntrySlicePoolGC(batchArenaPoolNumGC())
 	idx, ok := entrySliceLeaseClassForCap(cap(entries))
 	if !ok {
 		return
 	}
 	leaseBytes := int64(cap(entries)) * entrySliceEntrySizeBytes
-	if !reserveEntrySlicePoolBytes(leaseBytes) {
+	ok, transitioned := reserveEntrySlicePoolBytes(leaseBytes)
+	if !ok {
 		return
+	}
+	if transitioned {
+		noteEntrySlicePoolGC(batchArenaPoolNumGC())
 	}
 	entries = entries[:0]
 	entrySliceLeaseMu.Lock()
