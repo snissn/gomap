@@ -20,9 +20,9 @@ const (
 	// byte-oriented flush threshold rather than an entry count. Keep small hints
 	// behaving like entry reserves, but normalize larger hints conservatively so
 	// a 100kB budget does not preallocate 100k entries.
-	publicBatchReserveEntryHintCutover = 8 * 1024
-	publicBatchHintBytesPerEntry       = 256
-	publicBatchReserveEntriesMax       = publicBatchReserveEntryHintCutover
+	publicBatchHintExactEntryReserveMax = 8 * 1024
+	publicBatchHintApproxBytesPerEntry  = 256
+	publicBatchHintNormalizedEntryCap   = publicBatchHintExactEntryReserveMax
 )
 
 func (db *DB) NewBatch() batch.Interface {
@@ -32,7 +32,10 @@ func (db *DB) NewBatch() batch.Interface {
 // NewBatchWithSize accepts the public cosmos-db style size hint. Small values
 // are treated like exact entry reserves; larger values are normalized as
 // approximate byte budgets and capped to avoid preallocating one entry per
-// byte.
+// byte. The normalization is intentionally discontinuous at the cutover:
+// `publicBatchHintExactEntryReserveMax` still means "reserve that many
+// entries", while the next value is treated as a byte budget and normalized
+// downward.
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	reserveHint := NormalizePublicBatchReserveHint(size)
 	return db.newBatchWithReserveHint(reserveHint)
@@ -40,24 +43,25 @@ func (db *DB) NewBatchWithSize(size int) batch.Interface {
 
 // NormalizePublicBatchReserveHint keeps small public hints behaving like entry
 // reserves, but treats larger hints as approximate byte budgets so callers do
-// not accidentally preallocate one entry per byte.
+// not accidentally preallocate one entry per byte. This is intentionally
+// discontinuous at the cutover for compatibility with small entry-count hints.
 func NormalizePublicBatchReserveHint(size int) int {
 	if size <= 0 {
 		return 0
 	}
-	if size <= publicBatchReserveEntryHintCutover {
+	if size <= publicBatchHintExactEntryReserveMax {
 		return size
 	}
-	entries := size / publicBatchHintBytesPerEntry
-	if size%publicBatchHintBytesPerEntry != 0 {
+	entries := size / publicBatchHintApproxBytesPerEntry
+	if size%publicBatchHintApproxBytesPerEntry != 0 {
 		entries++
 	}
 	// Defensive guard in case the cutover/bytes-per-entry constants change.
 	if entries < 1 {
 		entries = 1
 	}
-	if entries > publicBatchReserveEntriesMax {
-		entries = publicBatchReserveEntriesMax
+	if entries > publicBatchHintNormalizedEntryCap {
+		entries = publicBatchHintNormalizedEntryCap
 	}
 	return entries
 }
