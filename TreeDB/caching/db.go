@@ -67,7 +67,6 @@ var valueLogKeyLeases [][][]byte
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
-var batchArenaPoolBudgetBytes int64 = computeBatchArenaPoolBudgetBytes()
 
 func computeBatchArenaPoolBudgetBytes() int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
@@ -88,6 +87,10 @@ func computeBatchArenaPoolBudgetBytes() int64 {
 		budget = minBudget
 	}
 	return budget
+}
+
+func currentBatchArenaPoolBudgetBytes() int64 {
+	return computeBatchArenaPoolBudgetBytes()
 }
 
 const (
@@ -335,15 +338,21 @@ func getBatchArena(capacity int) []byte {
 	}
 	if v := batchArenaPools[idx].Get(); v != nil {
 		if buf, ok := v.([]byte); ok {
+			size := int64(cap(buf))
+			next := batchArenaPoolBytes.Add(-size)
+			if next < 0 {
+				// Counter can drift if sync.Pool drops objects at GC or a caller
+				// inserts an unexpected buffer.
+				batchArenaPoolBytes.Store(0)
+			}
 			if cap(buf) == classCap {
-				next := batchArenaPoolBytes.Add(-int64(classCap))
-				if next < 0 {
-					// Counter can drift if sync.Pool drops objects at GC.
-					batchArenaPoolBytes.Store(0)
-				}
 				return buf[:0]
 			}
 		}
+	} else if batchArenaPoolBytes.Load() > 0 {
+		// sync.Pool may drop retained objects at GC; clear the estimate on a miss
+		// so pooling can refill instead of staying artificially budget-capped.
+		batchArenaPoolBytes.Store(0)
 	}
 	return make([]byte, 0, classCap)
 }
@@ -359,7 +368,7 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
-	if budget := batchArenaPoolBudgetBytes; budget > 0 {
+	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
 		for {
 			held := batchArenaPoolBytes.Load()
@@ -13562,11 +13571,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
-	stats["treedb.cache.batch_arena.pool_budget_bytes"] = fmt.Sprintf("%d", batchArenaPoolBudgetBytes)
-	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
+	stats["treedb.process.batch_arena.pool_budget_bytes"] = fmt.Sprintf("%d", currentBatchArenaPoolBudgetBytes())
+	stats["treedb.process.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
 	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
-	stats["treedb.cache.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
