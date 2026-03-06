@@ -62,6 +62,23 @@ type namedRootOverlayIterator struct {
 	end     []byte
 }
 
+type namedRootMergeSource uint8
+
+const (
+	namedRootMergeSourceNone namedRootMergeSource = iota
+	namedRootMergeSourceOverlay
+	namedRootMergeSourceBase
+)
+
+type namedRootMergeIterator struct {
+	overlay        iterator.UnsafeIterator
+	base           iterator.UnsafeIterator
+	current        namedRootMergeSource
+	skipBaseOnNext bool
+	start          []byte
+	end            []byte
+}
+
 var namedRootPublishHook struct {
 	mu sync.RWMutex
 	fn func(string) error
@@ -401,6 +418,17 @@ func (db *DB) bufferedIteratorAtRoot(rootID uint64, start, end []byte) (iterator
 	if err != nil {
 		return nil, err
 	}
+	if state.prefixState != nil {
+		overlayIter := state.prefixState.NewIterator(start, end)
+		baseIter, err := bridge.IteratorAtRoot(state.baseRootID, start, end)
+		if err != nil {
+			_ = overlayIter.Close()
+			return nil, err
+		}
+		return newNamedRootMergeIterator(overlayIter, baseIter, start, end), nil
+	}
+
+	runNamedRootLegacyIteratorMaterializeTestHook(rootID, start, end)
 	merged := make(map[string]namedRootIterEntry, len(state.entries))
 	baseIter, err := bridge.IteratorAtRoot(state.baseRootID, start, end)
 	if err != nil {
@@ -555,22 +583,49 @@ func (db *DB) flushNamedRootOverlays(sync bool) error {
 	}
 	snapshots := make([]rootFlushSnapshot, 0, len(states))
 	for _, state := range states {
-		entries := make([]batch.Entry, 0, len(state.entries))
-		keys := make([]string, 0, len(state.entries))
-		for key := range state.entries {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			entry := state.entries[key]
-			next := batch.Entry{Key: append([]byte(nil), entry.key...)}
-			if entry.deleted {
-				next.Type = batch.OpDelete
-			} else {
-				next.Type = batch.OpPut
-				next.Value = append([]byte(nil), entry.value...)
+		var entries []batch.Entry
+		if state.prefixState != nil {
+			iter := state.prefixState.NewIterator(nil, nil)
+			entries = make([]batch.Entry, 0, state.prefixState.Len())
+			for iter.Valid() {
+				next := batch.Entry{
+					Key: append([]byte(nil), iter.UnsafeKey()...),
+				}
+				if iter.IsDeleted() {
+					next.Type = batch.OpDelete
+				} else {
+					next.Type = batch.OpPut
+					next.Value = append([]byte(nil), iter.UnsafeValue()...)
+				}
+				entries = append(entries, next)
+				iter.Next()
 			}
-			entries = append(entries, next)
+			if err := iter.Error(); err != nil {
+				_ = iter.Close()
+				return err
+			}
+			if err := iter.Close(); err != nil {
+				return err
+			}
+		} else {
+			runNamedRootLegacyFlushSnapshotTestHook(state.virtualRootID)
+			entries = make([]batch.Entry, 0, len(state.entries))
+			keys := make([]string, 0, len(state.entries))
+			for key := range state.entries {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				entry := state.entries[key]
+				next := batch.Entry{Key: append([]byte(nil), entry.key...)}
+				if entry.deleted {
+					next.Type = batch.OpDelete
+				} else {
+					next.Type = batch.OpPut
+					next.Value = append([]byte(nil), entry.value...)
+				}
+				entries = append(entries, next)
+			}
 		}
 		raw, err := db.GetSystem(state.rootKey)
 		if err != nil {
@@ -737,7 +792,6 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 			format:        pending.format,
 			pointState:    pointState,
 			prefixState:   prefixState,
-			entries:       make(map[string]namedRootOverlayValue, len(pending.entries)),
 		}
 		if db.namedRootsByID == nil {
 			db.namedRootsByID = make(map[uint64]*namedRootOverlayState)
@@ -753,29 +807,20 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 		state.format = pending.format
 	}
 	for _, entry := range pending.entries {
-		key := string(entry.Key)
 		if entry.Type == batch.OpDelete {
-			state.entries[key] = namedRootOverlayValue{
-				key:     append([]byte(nil), entry.Key...),
-				deleted: true,
-			}
 			if state.pointState != nil {
-				state.pointState.SetEntry(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
+				state.pointState.SetEntrySteal(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
 			}
 			if state.prefixState != nil {
-				state.prefixState.SetEntry(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
+				state.prefixState.SetEntrySteal(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
 			}
 			continue
 		}
-		state.entries[key] = namedRootOverlayValue{
-			key:   append([]byte(nil), entry.Key...),
-			value: append([]byte(nil), entry.Value...),
-		}
 		if state.pointState != nil {
-			state.pointState.SetEntry(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
+			state.pointState.SetEntrySteal(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
 		}
 		if state.prefixState != nil {
-			state.prefixState.SetEntry(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
+			state.prefixState.SetEntrySteal(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
 		}
 	}
 }
@@ -970,6 +1015,186 @@ func (it *namedRootOverlayIterator) Close() error {
 }
 
 func (it *namedRootOverlayIterator) Domain() ([]byte, []byte) {
+	if it == nil {
+		return nil, nil
+	}
+	return it.start, it.end
+}
+
+func newNamedRootMergeIterator(overlay, base iterator.UnsafeIterator, start, end []byte) *namedRootMergeIterator {
+	it := &namedRootMergeIterator{
+		overlay: overlay,
+		base:    base,
+		start:   append([]byte(nil), start...),
+		end:     append([]byte(nil), end...),
+	}
+	it.selectCurrent()
+	return it
+}
+
+func (it *namedRootMergeIterator) selectCurrent() {
+	it.current = namedRootMergeSourceNone
+	it.skipBaseOnNext = false
+	overlayValid := it.overlay != nil && it.overlay.Valid()
+	baseValid := it.base != nil && it.base.Valid()
+	if !overlayValid && !baseValid {
+		return
+	}
+	if !overlayValid {
+		it.current = namedRootMergeSourceBase
+		return
+	}
+	if !baseValid {
+		it.current = namedRootMergeSourceOverlay
+		return
+	}
+	cmp := bytes.Compare(it.overlay.UnsafeKey(), it.base.UnsafeKey())
+	switch {
+	case cmp < 0:
+		it.current = namedRootMergeSourceOverlay
+	case cmp > 0:
+		it.current = namedRootMergeSourceBase
+	default:
+		it.current = namedRootMergeSourceOverlay
+		it.skipBaseOnNext = true
+	}
+}
+
+func (it *namedRootMergeIterator) Valid() bool {
+	switch it.current {
+	case namedRootMergeSourceOverlay:
+		return it.overlay != nil && it.overlay.Valid()
+	case namedRootMergeSourceBase:
+		return it.base != nil && it.base.Valid()
+	default:
+		return false
+	}
+}
+
+func (it *namedRootMergeIterator) Next() {
+	switch it.current {
+	case namedRootMergeSourceOverlay:
+		if it.overlay != nil {
+			it.overlay.Next()
+		}
+		if it.skipBaseOnNext && it.base != nil {
+			it.base.Next()
+		}
+	case namedRootMergeSourceBase:
+		if it.base != nil {
+			it.base.Next()
+		}
+	}
+	it.selectCurrent()
+}
+
+func (it *namedRootMergeIterator) Seek(key []byte) {
+	if it.overlay != nil {
+		it.overlay.Seek(key)
+	}
+	if it.base != nil {
+		it.base.Seek(key)
+	}
+	it.selectCurrent()
+}
+
+func (it *namedRootMergeIterator) UnsafeKey() []byte {
+	switch it.current {
+	case namedRootMergeSourceOverlay:
+		return it.overlay.UnsafeKey()
+	case namedRootMergeSourceBase:
+		return it.base.UnsafeKey()
+	default:
+		return nil
+	}
+}
+
+func (it *namedRootMergeIterator) UnsafeValue() []byte {
+	switch it.current {
+	case namedRootMergeSourceOverlay:
+		return it.overlay.UnsafeValue()
+	case namedRootMergeSourceBase:
+		return it.base.UnsafeValue()
+	default:
+		return nil
+	}
+}
+
+func (it *namedRootMergeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	switch it.current {
+	case namedRootMergeSourceOverlay:
+		return it.overlay.UnsafeEntry()
+	case namedRootMergeSourceBase:
+		return it.base.UnsafeEntry()
+	default:
+		return nil, page.ValuePtr{}, 0
+	}
+}
+
+func (it *namedRootMergeIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *namedRootMergeIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *namedRootMergeIterator) KeyCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst[:0]
+	}
+	return append(dst[:0], it.UnsafeKey()...)
+}
+
+func (it *namedRootMergeIterator) ValueCopy(dst []byte) []byte {
+	if !it.Valid() {
+		return dst[:0]
+	}
+	return append(dst[:0], it.UnsafeValue()...)
+}
+
+func (it *namedRootMergeIterator) IsDeleted() bool {
+	switch it.current {
+	case namedRootMergeSourceOverlay:
+		return it.overlay.IsDeleted()
+	case namedRootMergeSourceBase:
+		return it.base.IsDeleted()
+	default:
+		return false
+	}
+}
+
+func (it *namedRootMergeIterator) Error() error {
+	if it.overlay != nil {
+		if err := it.overlay.Error(); err != nil {
+			return err
+		}
+	}
+	if it.base != nil {
+		return it.base.Error()
+	}
+	return nil
+}
+
+func (it *namedRootMergeIterator) Close() error {
+	var firstErr error
+	if it.overlay != nil {
+		if err := it.overlay.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		it.overlay = nil
+	}
+	if it.base != nil {
+		if err := it.base.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		it.base = nil
+	}
+	it.current = namedRootMergeSourceNone
+	return firstErr
+}
+
+func (it *namedRootMergeIterator) Domain() ([]byte, []byte) {
 	if it == nil {
 		return nil, nil
 	}
