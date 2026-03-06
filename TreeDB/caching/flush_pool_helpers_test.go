@@ -518,6 +518,22 @@ func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
 	}
 }
 
+func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
+	resetEntrySliceLeasesForTest(t)
+
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 0
+	t.Cleanup(func() { entrySlicePoolBudgetBytes = savedBudget })
+
+	entries := make([]batch.Entry, 1, 64)
+	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
+	putEntrySlice(entries)
+
+	if entries[0].Key != nil || entries[0].Value != nil {
+		t.Fatalf("expected putEntrySlice to clear backing entries on budget early return; got key=%v value=%v", entries[0].Key, entries[0].Value)
+	}
+}
+
 func TestGetEntrySliceIgnoresUnexpectedPoolType(t *testing.T) {
 	capacity := 64
 	idx, _, ok := entrySliceLeaseClassForLen(capacity)

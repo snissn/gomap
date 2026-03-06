@@ -5318,8 +5318,10 @@ var opMergeHeapPool sync.Pool
 var entrySliceLeaseMu sync.Mutex
 var entrySliceLeases [entrySliceLeaseClassCount][][]batch.Entry
 
-// Entry slice pooling can retain very large backing arrays (up to maxEntryPoolCap).
-// Track pooled bytes and enforce a byte-budget to cap retention after spikes.
+// Entry slice pooling can retain very large backing arrays (up to
+// maxEntryPoolCap). Track pooled + leased retained bytes and enforce a
+// byte-budget to cap retention after spikes (best-effort; sync.Pool can drop
+// items at GC).
 var entrySlicePoolBytes atomic.Int64
 var entrySlicePoolBudgetBytes int64 = computeEntrySlicePoolBudgetBytes()
 var entrySliceEntrySizeBytes int64 = int64(unsafe.Sizeof(batch.Entry{}))
@@ -5490,6 +5492,9 @@ func putEntrySlice(entries []batch.Entry) {
 	if entries == nil {
 		return
 	}
+	full := entries[:cap(entries)]
+	clear(full)
+	entries = entries[:0]
 	if cap(entries) > maxEntryPoolCap {
 		return
 	}
@@ -5501,9 +5506,6 @@ func putEntrySlice(entries []batch.Entry) {
 	if !reserveEntrySlicePoolBytes(leaseBytes) {
 		return
 	}
-	full := entries[:cap(entries)]
-	clear(full)
-	entries = entries[:0]
 	entrySliceLeaseMu.Lock()
 	if len(entrySliceLeases[idx]) < maxEntrySliceLeasesPerBucket {
 		entrySliceLeases[idx] = append(entrySliceLeases[idx], entries)
@@ -13636,7 +13638,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
 	stats["treedb.cache.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
-	stats["treedb.cache.entry_slice.pool_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
+	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
