@@ -3639,11 +3639,6 @@ func memtableNeedsBatchArenaRetention(mt memtable.Table) bool {
 	// now take copied writes on the cached batch path to release batch arenas
 	// immediately after write.
 	switch mt.(type) {
-	case nil:
-		// Treat an unexpected nil memtable conservatively so batch arenas are not
-		// dropped on the floor if a caller reaches this path during shutdown or a
-		// failed init.
-		return true
 	case *memtable.Memtable, *memtable.AppendOnly, *memtable.HashSorted:
 		return false
 	default:
