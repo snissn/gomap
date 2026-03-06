@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+var batchArenaPoolTestMu sync.Mutex
+
 func resetBatchArenaPoolsForTest() {
 	batchArenaPoolBytes.Store(0)
 	batchArenaPoolLastGC.Store(0)
@@ -14,6 +16,8 @@ func resetBatchArenaPoolsForTest() {
 }
 
 func TestBatchArenaPoolAccountingRecoversOnUnexpectedCap(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
 	resetBatchArenaPoolsForTest()
 
 	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
@@ -39,6 +43,8 @@ func TestBatchArenaPoolAccountingRecoversOnUnexpectedCap(t *testing.T) {
 }
 
 func TestBatchArenaPoolAccountingMissOnlyResetsAfterGC(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
 	resetBatchArenaPoolsForTest()
 
 	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
@@ -58,6 +64,8 @@ func TestBatchArenaPoolAccountingMissOnlyResetsAfterGC(t *testing.T) {
 }
 
 func TestBatchArenaPoolBudgetDoesNotOvercount(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
 	resetBatchArenaPoolsForTest()
 
 	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
