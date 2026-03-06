@@ -304,16 +304,20 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 
 	var liveByID map[uint32]int64
 	var err error
-	// SourceFileIDs selection does not require live-byte estimation; all other
-	// selection modes do.
-	if len(opts.SourceFileIDs) == 0 {
+	// SourceFileIDs selection does not require live-byte estimation; the other
+	// sparse-selection modes do. Without any selection knobs, the plan is just
+	// the global totals and should not scan the tree to estimate live bytes.
+	if hasRewriteSourceSelection(opts) && len(opts.SourceFileIDs) == 0 {
 		liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 		if err != nil {
 			return plan, err
 		}
 	}
 
-	sourceIDs := selectRewriteSourceSegments(opts, set.Files, active, liveByID)
+	sourceIDs := map[uint32]struct{}(nil)
+	if hasRewriteSourceSelection(opts) {
+		sourceIDs = selectRewriteSourceSegments(opts, set.Files, active, liveByID)
+	}
 
 	// Populate live/stale totals when we have a live-byte estimate.
 	if liveByID != nil {
@@ -1136,7 +1140,7 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 				changed = true
 			}
 			childIDs[int(i)] = nextChild
-			keys[int(i)] = keyView
+			keys[int(i)] = append([]byte(nil), keyView...)
 		}
 		if !changed {
 			return id, false, nil
@@ -1202,7 +1206,7 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if writer == nil || ridAlloc == nil {
 		return 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
-	if len(sourceIDs) == 0 {
+	if sourceIDs != nil && len(sourceIDs) == 0 {
 		return 0, nil
 	}
 	if ctx == nil {

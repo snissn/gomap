@@ -83,9 +83,19 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		default:
 		}
 		stats := db.Stats()
-		if stats != nil && stats["treedb.cache.vlog_dict.last_applied_dict_id"] != "0" {
-			published = true
-			break
+		if stats != nil {
+			rawDictID, ok := stats["treedb.cache.vlog_dict.last_applied_dict_id"]
+			if ok {
+				dictID, parseErr := strconv.ParseUint(rawDictID, 10, 64)
+				if parseErr != nil {
+					_ = db.Close()
+					t.Fatalf("invalid last_applied_dict_id stat %q: %v (all stats: %#v)", rawDictID, parseErr, stats)
+				}
+				if dictID > 0 {
+					published = true
+					break
+				}
+			}
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
