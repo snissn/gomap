@@ -218,6 +218,47 @@ func TestCachedCollectionsUniqueConflict_BufferedWithoutOverlayIterator(t *testi
 	}
 }
 
+func TestCachedCollectionsUniqueConflict_BufferedWithoutOverlayPrefixScan(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+
+	prefixScans := 0
+	restore := setNamedRootOverlayPrefixScanTestHook(func(rootID uint64, prefix []byte) {
+		prefixScans++
+	})
+	defer restore()
+
+	if _, err := col.Insert([]byte("u2"), []byte(`{"email":"ada@example.com"}`)); err == nil {
+		t.Fatalf("expected duplicate unique-key conflict")
+	}
+	if prefixScans != 0 {
+		t.Fatalf("expected cached duplicate unique conflict to avoid overlay prefix scans, got %d calls", prefixScans)
+	}
+}
+
 func TestCachedCollectionsPrimaryGet_BufferedWithoutOverlayEntryPointLookup(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -363,6 +404,50 @@ func TestCachedCollectionsDeleteThenReuseUniqueValue_BeforeCheckpoint(t *testing
 	}
 	if _, err := col.Insert([]byte("u2"), []byte(`{"email":"ada@example.com"}`)); err != nil {
 		t.Fatalf("reuse unique value before checkpoint: %v", err)
+	}
+}
+
+func TestCachedCollectionsDeleteThenReuseUniqueValue_WithoutOverlayPrefixScan(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("seed insert: %v", err)
+	}
+	if err := col.Delete([]byte("u1")); err != nil {
+		t.Fatalf("delete before checkpoint: %v", err)
+	}
+
+	prefixScans := 0
+	restore := setNamedRootOverlayPrefixScanTestHook(func(rootID uint64, prefix []byte) {
+		prefixScans++
+	})
+	defer restore()
+
+	if _, err := col.Insert([]byte("u2"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("reuse unique value before checkpoint: %v", err)
+	}
+	if prefixScans != 0 {
+		t.Fatalf("expected cached delete/reuse unique path to avoid overlay prefix scans, got %d calls", prefixScans)
 	}
 }
 

@@ -76,6 +76,11 @@ var namedRootOverlayEntryReadHook struct {
 	fn func(op string, rootID uint64, key []byte)
 }
 
+var namedRootOverlayPrefixScanHook struct {
+	mu sync.RWMutex
+	fn func(rootID uint64, prefix []byte)
+}
+
 func setNamedRootPublishTestHook(fn func(string) error) func() {
 	namedRootPublishHook.mu.Lock()
 	prev := namedRootPublishHook.fn
@@ -137,6 +142,27 @@ func runNamedRootOverlayEntryReadTestHook(op string, rootID uint64, key []byte) 
 	namedRootOverlayEntryReadHook.mu.RUnlock()
 	if fn != nil {
 		fn(op, rootID, key)
+	}
+}
+
+func setNamedRootOverlayPrefixScanTestHook(fn func(rootID uint64, prefix []byte)) func() {
+	namedRootOverlayPrefixScanHook.mu.Lock()
+	prev := namedRootOverlayPrefixScanHook.fn
+	namedRootOverlayPrefixScanHook.fn = fn
+	namedRootOverlayPrefixScanHook.mu.Unlock()
+	return func() {
+		namedRootOverlayPrefixScanHook.mu.Lock()
+		namedRootOverlayPrefixScanHook.fn = prev
+		namedRootOverlayPrefixScanHook.mu.Unlock()
+	}
+}
+
+func runNamedRootOverlayPrefixScanTestHook(rootID uint64, prefix []byte) {
+	namedRootOverlayPrefixScanHook.mu.RLock()
+	fn := namedRootOverlayPrefixScanHook.fn
+	namedRootOverlayPrefixScanHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootID, prefix)
 	}
 }
 
@@ -237,6 +263,7 @@ func (db *DB) bufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error
 		return false, err
 	}
 
+	runNamedRootOverlayPrefixScanTestHook(rootID, prefix)
 	db.namedRootMu.RLock()
 	for _, entry := range state.entries {
 		if entry.deleted || !bytes.HasPrefix(entry.key, prefix) {
