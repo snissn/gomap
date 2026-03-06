@@ -176,6 +176,33 @@ func (db *DB) MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []fu
 	return db.MutateRootsWithFormats(sync, rootIDs, nil, mutateRoots, updateSystem)
 }
 
+// MutateRootsWithFormatOps is the bulk-entry form of MutateRootsWithFormats.
+// Root entries are applied through detached root batches using view/auto-pointer
+// fast paths. System entries are built after root publication so callers can
+// encode descriptor updates with the published root ids.
+func (db *DB) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batchpkg.Entry, buildSystemOps func([]uint64) ([]batchpkg.Entry, error)) ([]uint64, error) {
+	if len(rootIDs) != len(rootOps) {
+		return nil, fmt.Errorf("mutate root ops length mismatch")
+	}
+	mutators := make([]func(batchpkg.Interface) error, len(rootOps))
+	for i := range rootOps {
+		ops := rootOps[i]
+		mutators[i] = func(target batchpkg.Interface) error {
+			return applyBulkRootOps(target, ops)
+		}
+	}
+	return db.MutateRootsWithFormats(sync, rootIDs, formats, mutators, func(sys batchpkg.Interface, newRootIDs []uint64) error {
+		if buildSystemOps == nil {
+			return nil
+		}
+		ops, err := buildSystemOps(newRootIDs)
+		if err != nil {
+			return err
+		}
+		return applyBulkRootOps(sys, ops)
+	})
+}
+
 // MutateRootsWithFormats is the function-based form of MutateRoots with
 // explicit per-root format overrides.
 func (db *DB) MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, []uint64) error) ([]uint64, error) {
@@ -303,6 +330,56 @@ func (db *DB) MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*roo
 		return nil, err
 	}
 	return newRootIDs, nil
+}
+
+func applyBulkRootOps(target batchpkg.Interface, ops []batchpkg.Entry) error {
+	if len(ops) == 0 {
+		return nil
+	}
+	if reserve, ok := target.(interface{ Reserve(int) }); ok {
+		reserve.Reserve(len(ops))
+	}
+	if autoOps, ok := target.(interface{ SetAutoOpsView([]batchpkg.Entry) error }); ok {
+		return autoOps.SetAutoOpsView(ops)
+	}
+	if setOps, ok := target.(interface{ SetOps([]batchpkg.Entry) error }); ok {
+		return setOps.SetOps(ops)
+	}
+	for _, op := range ops {
+		switch op.Type {
+		case batchpkg.OpDelete:
+			if deleteView, ok := target.(interface{ DeleteView([]byte) error }); ok {
+				if err := deleteView.DeleteView(op.Key); err != nil {
+					return err
+				}
+			} else if err := target.Delete(op.Key); err != nil {
+				return err
+			}
+		case batchpkg.OpPut:
+			if op.IsPtr {
+				if setPtr, ok := target.(interface {
+					SetPointerView([]byte, page.ValuePtr) error
+				}); ok {
+					if err := setPtr.SetPointerView(op.Key, op.ValuePtr); err != nil {
+						return err
+					}
+					continue
+				}
+			}
+			if autoView, ok := target.(interface{ SetAutoView([]byte, []byte) error }); ok {
+				if err := autoView.SetAutoView(op.Key, op.Value); err != nil {
+					return err
+				}
+			} else if setView, ok := target.(interface{ SetView([]byte, []byte) error }); ok {
+				if err := setView.SetView(op.Key, op.Value); err != nil {
+					return err
+				}
+			} else if err := target.Set(op.Key, op.Value); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (db *DB) mutateRootInternal(rootID uint64, format *rootfmt.Format, sync bool, mutateRoot func(batchpkg.Interface) error, mutateUser func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, uint64) error) (uint64, error) {

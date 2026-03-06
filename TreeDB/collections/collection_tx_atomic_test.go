@@ -265,6 +265,32 @@ func (d *atomicMockDB) MutateRootsWithFormats(sync bool, rootIDs []uint64, forma
 	return d.MutateRootsWithFuncs(sync, rootIDs, mutateRoots, updateSystem)
 }
 
+func (d *atomicMockDB) MutateRootsWithFormatOps(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootOps [][]batch.Entry, buildSystemOps func([]uint64) ([]batch.Entry, error)) ([]uint64, error) {
+	mutators := make([]func(batch.Interface) error, len(rootOps))
+	for i := range rootOps {
+		ops := rootOps[i]
+		mutators[i] = func(target batch.Interface) error {
+			if len(ops) == 0 {
+				return nil
+			}
+			return target.SetOps(ops)
+		}
+	}
+	return d.MutateRootsWithFormats(sync, rootIDs, formats, mutators, func(sys batch.Interface, newRootIDs []uint64) error {
+		if buildSystemOps == nil {
+			return nil
+		}
+		ops, err := buildSystemOps(newRootIDs)
+		if err != nil {
+			return err
+		}
+		if len(ops) == 0 {
+			return nil
+		}
+		return sys.SetOps(ops)
+	})
+}
+
 func (d *atomicMockDB) mutateRootInternal(rootID uint64, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error) {
 	rootBatch := &atomicMockBatch{db: d}
 	if mutateRoot != nil {
