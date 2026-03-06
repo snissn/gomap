@@ -87,6 +87,11 @@ func (db *DB) refreshBackendDirectValueLogRetention(bridge BackendDirectBridge) 
 	if db == nil || !db.valueLogEnabled() || bridge == nil {
 		return nil
 	}
+	if refresher, ok := bridge.(valueLogSetRefresher); ok {
+		if err := refresher.RefreshValueLogSet(); err != nil {
+			return err
+		}
+	}
 	refresher, ok := bridge.(backendValueLogStateRefresher)
 	if !ok {
 		return nil

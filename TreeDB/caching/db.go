@@ -3108,6 +3108,8 @@ type DB struct {
 	namedRootMu                    sync.RWMutex
 	namedRootsByID                 map[uint64]*namedRootOverlayState
 	namedRootsByKey                map[string]*namedRootOverlayState
+	namedRootPublishedByVirtual    map[uint64]uint64
+	namedRootBufferedBytes         atomic.Int64
 	nextNamedRootID                atomic.Uint64
 
 	// Level 1 (Disk)
@@ -9639,7 +9641,7 @@ func (db *DB) Checkpoint() error {
 	}
 
 	// Flush all queued memtables with backend sync.
-	db.flushAllLocked(true)
+	db.flushAllLocked(true, false)
 	bridge, err := db.directBridge()
 	if err != nil {
 		return err
@@ -9991,7 +9993,7 @@ func (db *DB) Close() error {
 	// This avoids dropping pending memtables on close.
 	if hadMemtables {
 		// flushMu is already held by Close.
-		db.flushAllLocked(true)
+		db.flushAllLocked(true, false)
 	}
 	if bridge, err := db.directBridge(); err != nil {
 		errs = append(errs, err)
@@ -10157,7 +10159,7 @@ func (db *DB) flushAllMemtablesForSync(sync bool) error {
 	db.writeMu.Unlock()
 
 	db.flushMu.Lock()
-	db.flushAllLocked(sync)
+	db.flushAllLocked(sync, true)
 	db.flushMu.Unlock()
 	return db.backgroundError()
 }
@@ -11569,10 +11571,10 @@ func (db *DB) pickFlushLane() (int, bool) {
 func (db *DB) flushAll(reqSync bool) {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
-	db.flushAllLocked(reqSync)
+	db.flushAllLocked(reqSync, true)
 }
 
-func (db *DB) flushAllLocked(reqSync bool) {
+func (db *DB) flushAllLocked(reqSync bool, includeOverlays bool) {
 	origSync := reqSync
 	syncFlag := db.flushSyncRequested(reqSync)
 	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
@@ -11609,6 +11611,9 @@ func (db *DB) flushAllLocked(reqSync bool) {
 		}
 	}
 	if activeCount == 0 {
+		if includeOverlays {
+			db.flushCachedOverlayUnitsLocked(syncFlag)
+		}
 		return
 	}
 	var wg sync.WaitGroup
@@ -11629,6 +11634,30 @@ func (db *DB) flushAllLocked(reqSync bool) {
 		}()
 	}
 	wg.Wait()
+	if includeOverlays {
+		db.flushCachedOverlayUnitsLocked(syncFlag)
+	}
+}
+
+func (db *DB) flushCachedOverlayUnitsLocked(sync bool) {
+	if db == nil {
+		return
+	}
+	if !db.PendingNamedRoots() && !db.PendingSystemOverlay() {
+		return
+	}
+	bridge, err := db.directBridge()
+	if err != nil {
+		db.reportError(err)
+		return
+	}
+	if err := db.flushNamedRootOverlaysLocked(bridge, sync); err != nil {
+		db.reportError(err)
+		return
+	}
+	if err := db.flushSystemOverlayLocked(bridge, sync); err != nil {
+		db.reportError(err)
+	}
 }
 
 func (db *DB) flushOne() bool {
