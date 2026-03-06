@@ -599,10 +599,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw)
 	}
 
-	n := int(valEnd - valStart)
 	oldLen := len(dst)
-	dst = grow(dst, n)
-	copy(dst[oldLen:], raw[valStart:valEnd])
 
 	f.cacheMu.Lock()
 	f.cacheK = k
@@ -616,14 +613,16 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	f.cacheStart.Store(start)
 	f.cacheMu.Unlock()
+
+	dst, err = appendDecodedTemplatePayload(dst, raw[valStart:valEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	if pooledRaw {
 		f.releaseDecodeScratch(raw)
 	}
-
-	dst = dst[:oldLen]
-	dst, err = appendDecodedTemplatePayload(dst, raw[valStart:valEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err, true
+	}
+	if len(dst) < oldLen {
+		return nil, ErrCorrupt, true
 	}
 	return dst, nil, true
 }
