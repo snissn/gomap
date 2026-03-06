@@ -5,7 +5,58 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
+
+func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
+	dir, err := os.MkdirTemp("", "treedb-snapshot-rotate-fail-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	errCh := make(chan error, 1)
+	cached, err := Open(dir, backend, Options{
+		FlushThreshold: 1024 * 1024,
+		NotifyError: func(err error) {
+			select {
+			case errCh <- err:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+
+	if err := cached.SetSync([]byte("a"), []byte("1")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Force the snapshot rotation path to fail inside newMutableMemtableWithCapacityMode.
+	cached.memtableMode = memtable.Mode(255)
+
+	if snap := cached.AcquireSnapshot(); snap != nil {
+		_ = snap.Close()
+		t.Fatalf("AcquireSnapshot()=%v want nil on rotate failure", snap)
+	}
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatalf("expected non-nil notify error")
+		}
+	default:
+		t.Fatalf("expected NotifyError to be called")
+	}
+}
 
 func TestIteratorSnapshotIsolation(t *testing.T) {
 	dir, err := os.MkdirTemp("", "treedb-snapshot-iso-")

@@ -65,10 +65,6 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	}
 
 	set := db.valueLogManager.CurrentSet()
-	if set == nil {
-		db.persistValueLogRefTrackerBestEffort()
-		return stats, nil
-	}
 	activeIDs := currentValueLogIDs(set)
 	keptIDs := activeIDs
 	if len(opts.ProtectedPaths) > 0 {
