@@ -5519,9 +5519,7 @@ func maybeResetEntrySlicePoolBytesAfterGC() {
 		return
 	}
 	if last == 0 {
-		if entrySlicePoolLastGC.CompareAndSwap(0, numGC) {
-			entrySlicePoolBytes.Store(0)
-		}
+		entrySlicePoolLastGC.CompareAndSwap(0, numGC)
 		return
 	}
 	if entrySlicePoolLastGC.CompareAndSwap(last, numGC) {
