@@ -1044,7 +1044,7 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 		rootFormats = append(rootFormats, &indexRootDesc.Format)
 		rootMutations = append(rootMutations, func(root batch.Interface) error {
 			for _, indexKey := range indexKeys {
-				if err := setIndexEntryOnBatch(root, indexKey); err != nil {
+				if err := setOwnedIndexEntryOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}
@@ -1057,7 +1057,7 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 		rootFormats = append(rootFormats, &stateRootDesc.Format)
 		rootMutations = append(rootMutations, func(root batch.Interface) error {
 			for _, entry := range stateEntries {
-				if err := setBytesOnBatch(root, entry.documentID, entry.stateRaw); err != nil {
+				if err := setOwnedBytesOnBatch(root, entry.documentID, entry.stateRaw); err != nil {
 					return err
 				}
 			}
@@ -1462,6 +1462,15 @@ func setBytesOnBatch(b batch.Interface, key, value []byte) error {
 	return b.Set(key, value)
 }
 
+func setOwnedBytesOnBatch(b batch.Interface, key, value []byte) error {
+	if owned, ok := b.(interface {
+		SetOwnedBytes(key, value []byte) error
+	}); ok {
+		return owned.SetOwnedBytes(key, value)
+	}
+	return setBytesOnBatch(b, key, value)
+}
+
 func deleteDocumentOnBatch(b batch.Interface, key []byte) error {
 	if deleteView, ok := b.(interface {
 		DeleteView(key []byte) error
@@ -1478,6 +1487,24 @@ func setIndexEntryOnBatch(b batch.Interface, key []byte) error {
 		return setView.SetView(key, nil)
 	}
 	return b.Set(key, nil)
+}
+
+func setOwnedIndexEntryOnBatch(b batch.Interface, key []byte) error {
+	if owned, ok := b.(interface {
+		SetOwnedKey(key []byte) error
+	}); ok {
+		return owned.SetOwnedKey(key)
+	}
+	return setIndexEntryOnBatch(b, key)
+}
+
+func deleteOwnedIndexEntryOnBatch(b batch.Interface, key []byte) error {
+	if owned, ok := b.(interface {
+		DeleteOwnedKey(key []byte) error
+	}); ok {
+		return owned.DeleteOwnedKey(key)
+	}
+	return deleteDocumentOnBatch(b, key)
 }
 
 func (m *CollectionManager) rootDescriptor(rootName string) (*CollectionRootDescriptor, error) {
@@ -1620,7 +1647,7 @@ func writeRootDescriptorUpdate(sys batch.Interface, rootKey []byte, desc *Collec
 		return fmt.Errorf("collections: nil root descriptor")
 	}
 	encoded := desc.encodeWithRootPageIDAssumeValid(newRootID)
-	return setBytesOnBatch(sys, rootKey, encoded)
+	return setOwnedBytesOnBatch(sys, rootKey, encoded)
 }
 
 type collectionRootUpdate struct {
@@ -1692,12 +1719,12 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		rootFormats = append(rootFormats, &indexMutation.desc.Format)
 		rootMutations = append(rootMutations, func(root batch.Interface) error {
 			for _, indexKey := range indexMutation.removals {
-				if err := deleteDocumentOnBatch(root, indexKey); err != nil {
+				if err := deleteOwnedIndexEntryOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}
 			for _, indexKey := range indexMutation.additions {
-				if err := setIndexEntryOnBatch(root, indexKey); err != nil {
+				if err := setOwnedIndexEntryOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}

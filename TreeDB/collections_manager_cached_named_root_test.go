@@ -591,6 +591,44 @@ func TestCachedCollectionsBufferedNamedRoots_DeleteUsesSingleMemtableWritePerRoo
 	}
 }
 
+func TestCachedCollectionsInsert_UsesOwnedStagingForDerivedWrites(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	ownedWrites := 0
+	restore := setNamedRootOwnedWriteTestHook(func(kind string, key []byte) {
+		ownedWrites++
+	})
+	defer restore()
+
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if ownedWrites == 0 {
+		t.Fatalf("expected cached insert to use owned staging writes for derived bytes")
+	}
+}
+
 func TestCachedCollectionsFindByIndex_BufferedWithoutLegacyIteratorMaterialization(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {

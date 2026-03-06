@@ -125,6 +125,12 @@ func (b *Batch) SetView(key, value []byte) error {
 	return b.batch.SetView(key, value)
 }
 
+// SetOwnedBytes records a Put without copying key/value bytes. Callers transfer
+// ownership of the provided buffers to the batch for the batch lifetime.
+func (b *Batch) SetOwnedBytes(key, value []byte) error {
+	return b.batch.SetView(key, value)
+}
+
 func (b *Batch) Delete(key []byte) error {
 	return b.batch.Delete(key)
 }
@@ -132,6 +138,20 @@ func (b *Batch) Delete(key []byte) error {
 // DeleteView records a Delete without copying the key bytes. Callers must treat
 // key as immutable until the batch is written or closed.
 func (b *Batch) DeleteView(key []byte) error {
+	return b.batch.DeleteView(key)
+}
+
+// SetOwnedKey records a nil-value Put without copying the key bytes. Callers
+// transfer ownership of the provided key buffer to the batch for the batch
+// lifetime.
+func (b *Batch) SetOwnedKey(key []byte) error {
+	return b.batch.SetView(key, nil)
+}
+
+// DeleteOwnedKey records a Delete without copying the key bytes. Callers
+// transfer ownership of the provided key buffer to the batch for the batch
+// lifetime.
+func (b *Batch) DeleteOwnedKey(key []byte) error {
 	return b.batch.DeleteView(key)
 }
 
