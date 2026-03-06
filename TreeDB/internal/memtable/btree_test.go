@@ -3,6 +3,7 @@ package memtable
 import (
 	"testing"
 
+	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -95,4 +96,53 @@ func TestBTreeSetEntryPreservesExtraFlagBits(t *testing.T) {
 	if flags != node.FlagTombstone|extra {
 		t.Fatalf("flags=%#x want=%#x", flags, node.FlagTombstone|extra)
 	}
+}
+
+func TestBTreePointerEmptySliceCanonicalizesToNil(t *testing.T) {
+	ptr := page.ValuePtr{Offset: 21, Length: 34, FileID: 5}
+
+	t.Run("SetEntry", func(t *testing.T) {
+		m := NewBTree()
+		m.SetEntry([]byte("ptr"), []byte{}, ptr, node.FlagPointer)
+		got, del, ok := m.Get([]byte("ptr"))
+		if !ok || del || got != nil {
+			t.Fatalf("Get(ptr) = (%v,%v,%v), want (nil,false,true)", got, del, ok)
+		}
+		got, gotPtr, flags, ok := m.GetEntry([]byte("ptr"))
+		if !ok || got != nil || gotPtr != ptr || flags != node.FlagPointer {
+			t.Fatalf("GetEntry(ptr) = (%v,%+v,%d,%v), want (nil,%+v,%d,true)", got, gotPtr, flags, ok, ptr, node.FlagPointer)
+		}
+	})
+
+	t.Run("SetEntrySteal", func(t *testing.T) {
+		m := NewBTree()
+		m.SetEntrySteal([]byte("ptr"), []byte{}, ptr, node.FlagPointer)
+		got, del, ok := m.Get([]byte("ptr"))
+		if !ok || del || got != nil {
+			t.Fatalf("Get(ptr) = (%v,%v,%v), want (nil,false,true)", got, del, ok)
+		}
+		got, gotPtr, flags, ok := m.GetEntry([]byte("ptr"))
+		if !ok || got != nil || gotPtr != ptr || flags != node.FlagPointer {
+			t.Fatalf("GetEntry(ptr) = (%v,%+v,%d,%v), want (nil,%+v,%d,true)", got, gotPtr, flags, ok, ptr, node.FlagPointer)
+		}
+	})
+
+	t.Run("ApplyStealSortedBatch", func(t *testing.T) {
+		m := NewBTree()
+		m.ApplyStealSortedBatch([]batchpkg.Entry{{
+			Type:     batchpkg.OpPut,
+			Key:      []byte("ptr"),
+			Value:    []byte{},
+			ValuePtr: ptr,
+			IsPtr:    true,
+		}}, nil)
+		got, del, ok := m.Get([]byte("ptr"))
+		if !ok || del || got != nil {
+			t.Fatalf("Get(ptr) = (%v,%v,%v), want (nil,false,true)", got, del, ok)
+		}
+		got, gotPtr, flags, ok := m.GetEntry([]byte("ptr"))
+		if !ok || got != nil || gotPtr != ptr || flags != node.FlagPointer {
+			t.Fatalf("GetEntry(ptr) = (%v,%+v,%d,%v), want (nil,%+v,%d,true)", got, gotPtr, flags, ok, ptr, node.FlagPointer)
+		}
+	})
 }

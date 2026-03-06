@@ -14,7 +14,7 @@ func TestBatchPtrValueArena_RetainedWhenPointersDenied(t *testing.T) {
 		AllowUnsafe:                  true,
 		DisableWAL:                   true,
 		MemtableMode:                 "btree",
-		MemtableShards:               1,
+		MemtableShards:               2,
 		FlushThreshold:               1 << 20,
 		ValueLogPointerThreshold:     1,
 		MaxValueLogRetainedBytesHard: 1,
@@ -27,12 +27,11 @@ func TestBatchPtrValueArena_RetainedWhenPointersDenied(t *testing.T) {
 	// Force allowValueLogPointers() to return false even though values are eligible.
 	db.valueLogRetainedClosedBytes.Store(db.maxValueLogRetainedBytesHard)
 
-	firstKey := []byte("k1")
+	firstKey, secondKey := keysOnDistinctMutableShards(t, db)
 	firstVal := bytes.Repeat([]byte{0x11}, 64)
-	secondKey := []byte("k2")
 	secondVal := bytes.Repeat([]byte{0x22}, 64)
 
-	b := db.NewBatchWithSize(1)
+	b := db.NewBatchWithSize(2)
 	if err := b.Set(firstKey, firstVal); err != nil {
 		t.Fatalf("set first: %v", err)
 	}
@@ -42,14 +41,28 @@ func TestBatchPtrValueArena_RetainedWhenPointersDenied(t *testing.T) {
 	if len(b.ptrCopyArenaChunks) == 0 && b.ptrCopyBytes == 0 {
 		t.Fatal("expected pointer-value arena path to allocate copy storage after first Set")
 	}
+	if err := b.Set(secondKey, []byte{'i'}); err != nil {
+		t.Fatalf("set second: %v", err)
+	}
+	if got := len(b.ptrValueEntryIdxs); got != 1 {
+		t.Fatalf("expected second Set to stay inline and keep exactly one pointer-value entry, got %d", got)
+	}
 	if err := b.Write(); err != nil {
 		t.Fatalf("write first: %v", err)
 	}
 	if len(b.ptrCopyArenaChunks) != 0 {
 		t.Fatalf("expected ptr copy arena chunks to drain after write, got %d", len(b.ptrCopyArenaChunks))
 	}
-	if count := countBatchArenaLeaseChunks(db, db.mutableShards[0].mem); count == 0 {
-		t.Fatal("expected pointer-value arena chunks to be retained by memtable lease")
+	firstShard := db.shardIndex(firstKey)
+	secondShard := db.shardIndex(secondKey)
+	if firstShard == secondShard {
+		t.Fatalf("expected distinct shards for test keys, got %d", firstShard)
+	}
+	if count := countBatchArenaLeaseChunks(db, db.mutableShards[firstShard].mem); count != 2 {
+		t.Fatalf("expected pointer shard to retain main+ptr arena chunks, got %d", count)
+	}
+	if count := countBatchArenaLeaseChunks(db, db.mutableShards[secondShard].mem); count != 1 {
+		t.Fatalf("expected non-pointer shard to retain only main arena chunk, got %d", count)
 	}
 
 	// Reuse the same batch object; ensure any ptr-value arena chunks are not
@@ -139,4 +152,22 @@ func countBatchArenaLeaseChunks(db *DB, mt memtable.Table) int {
 		total += len(lease.chunks)
 	}
 	return total
+}
+
+func keysOnDistinctMutableShards(t *testing.T, db *DB) ([]byte, []byte) {
+	t.Helper()
+	if db == nil || len(db.mutableShards) < 2 {
+		t.Fatalf("need at least two mutable shards")
+	}
+	first := []byte("k-000")
+	firstShard := db.shardIndex(first)
+	for i := 1; i < 4096; i++ {
+		candidate := []byte(fmt.Sprintf("k-%03d", i))
+		if db.shardIndex(candidate) == firstShard {
+			continue
+		}
+		return first, candidate
+	}
+	t.Fatalf("failed to find keys on distinct shards")
+	return nil, nil
 }
