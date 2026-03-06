@@ -1619,12 +1619,7 @@ func writeRootDescriptorUpdate(sys batch.Interface, rootKey []byte, desc *Collec
 	if desc == nil {
 		return fmt.Errorf("collections: nil root descriptor")
 	}
-	next := *desc
-	next.RootPageID = newRootID
-	encoded, err := next.Encode()
-	if err != nil {
-		return err
-	}
+	encoded := desc.encodeWithRootPageIDAssumeValid(newRootID)
 	return setBytesOnBatch(sys, rootKey, encoded)
 }
 

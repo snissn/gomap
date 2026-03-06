@@ -10,6 +10,7 @@ import (
 )
 
 const collectionRootDescriptorVersion = 1
+const collectionRootDescriptorFixedBytes = 17
 
 type CollectionRootKind uint8
 
@@ -70,12 +71,26 @@ func (d *CollectionRootDescriptor) Encode() ([]byte, error) {
 	if err := d.normalizeAndValidate(); err != nil {
 		return nil, err
 	}
+	if err := validateCollectionRootDescriptorLengths(d); err != nil {
+		return nil, err
+	}
+	return d.encodeWithRootPageIDAssumeValid(d.RootPageID), nil
+}
+
+func (d *CollectionRootDescriptor) EncodeWithRootPageID(rootPageID uint64) ([]byte, error) {
+	if err := d.normalizeAndValidate(); err != nil {
+		return nil, err
+	}
+	if err := validateCollectionRootDescriptorLengths(d); err != nil {
+		return nil, err
+	}
+	return d.encodeWithRootPageIDAssumeValid(rootPageID), nil
+}
+
+func (d *CollectionRootDescriptor) encodeWithRootPageIDAssumeValid(rootPageID uint64) []byte {
 	nameLen := len(d.Name)
 	collectionLen := len(d.Collection)
 	indexNameLen := len(d.IndexName)
-	if nameLen > 65535 || collectionLen > 65535 || indexNameLen > 65535 {
-		return nil, errors.New("collections: root descriptor field too long")
-	}
 	flags := uint8(0)
 	if d.Format.OuterLeavesInValueLog {
 		flags |= 1 << 0
@@ -96,8 +111,49 @@ func (d *CollectionRootDescriptor) Encode() ([]byte, error) {
 	out = append(out, d.Collection...)
 	out = binary.BigEndian.AppendUint16(out, uint16(indexNameLen))
 	out = append(out, d.IndexName...)
-	out = binary.BigEndian.AppendUint64(out, d.RootPageID)
+	out = binary.BigEndian.AppendUint64(out, rootPageID)
+	return out
+}
+
+func UpdateEncodedCollectionRootDescriptorRootPageID(raw []byte, newRootID uint64) ([]byte, error) {
+	if err := validateEncodedCollectionRootDescriptor(raw); err != nil {
+		return nil, err
+	}
+	out := append([]byte(nil), raw...)
+	binary.BigEndian.PutUint64(out[len(out)-8:], newRootID)
 	return out, nil
+}
+
+func validateCollectionRootDescriptorLengths(d *CollectionRootDescriptor) error {
+	if len(d.Name) > 65535 || len(d.Collection) > 65535 || len(d.IndexName) > 65535 {
+		return errors.New("collections: root descriptor field too long")
+	}
+	return nil
+}
+
+func validateEncodedCollectionRootDescriptor(raw []byte) error {
+	if len(raw) < collectionRootDescriptorFixedBytes {
+		return errors.New("collections: truncated root descriptor")
+	}
+	if int(raw[0]) != collectionRootDescriptorVersion {
+		return fmt.Errorf("collections: unsupported root descriptor version %d", raw[0])
+	}
+	cursor := 3
+	for i := 0; i < 3; i++ {
+		if cursor+2 > len(raw) {
+			return errors.New("collections: truncated root descriptor string length")
+		}
+		size := int(binary.BigEndian.Uint16(raw[cursor : cursor+2]))
+		cursor += 2
+		if cursor+size > len(raw) {
+			return errors.New("collections: truncated root descriptor string payload")
+		}
+		cursor += size
+	}
+	if cursor+8 != len(raw) {
+		return errors.New("collections: malformed root descriptor payload")
+	}
+	return nil
 }
 
 func (d *CollectionRootDescriptor) Decode(raw []byte) error {

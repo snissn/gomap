@@ -42,6 +42,7 @@ type namedRootPendingMutation struct {
 	hasFormat     bool
 	format        rootfmt.Format
 	entries       []batch.Entry
+	entryScratch  [8]batch.Entry
 }
 
 type overlayEntryBatch struct {
@@ -540,19 +541,20 @@ func (db *DB) bufferNamedRootMutations(sync bool, rootIDs []uint64, formats []*r
 			pending[i].hasFormat = true
 			pending[i].format = *format
 		}
-		b := &overlayEntryBatch{entries: make([]batch.Entry, 0, 16)}
+		b := newOverlayEntryBatch(pending[i].entryScratch[:0])
 		if mutateRoots[i] != nil {
-			if err := mutateRoots[i](b); err != nil {
+			if err := mutateRoots[i](&b); err != nil {
 				db.namedRootMu.Unlock()
 				return nil, err
 			}
 		}
-		pending[i].entries = append(pending[i].entries, b.entries...)
+		pending[i].entries = b.entries
 	}
 
-	sys := &overlayEntryBatch{entries: make([]batch.Entry, 0, len(rootIDs))}
+	var sysScratch [8]batch.Entry
+	sys := newOverlayEntryBatch(sysScratch[:0])
 	if updateSystem != nil {
-		if err := updateSystem(sys, virtualRootIDs); err != nil {
+		if err := updateSystem(&sys, virtualRootIDs); err != nil {
 			db.namedRootMu.Unlock()
 			return nil, err
 		}
@@ -724,16 +726,15 @@ func (db *DB) flushNamedRootOverlays(sync bool) error {
 			}
 			updatedSystemEntries = make([]batch.Entry, 0, len(newRootIDs))
 			for i := range snapshots {
-				var desc collections.CollectionRootDescriptor
-				if err := desc.Decode(snapshots[i].descriptorRaw); err != nil {
-					return err
-				}
-				desc.RootPageID = newRootIDs[i]
-				encoded, err := desc.Encode()
+				encoded, err := collections.UpdateEncodedCollectionRootDescriptorRootPageID(snapshots[i].descriptorRaw, newRootIDs[i])
 				if err != nil {
 					return err
 				}
-				if err := sys.Set(snapshots[i].state.rootKey, encoded); err != nil {
+				if setView, ok := sys.(interface{ SetView(key, value []byte) error }); ok {
+					if err := setView.SetView(snapshots[i].state.rootKey, encoded); err != nil {
+						return err
+					}
+				} else if err := sys.Set(snapshots[i].state.rootKey, encoded); err != nil {
 					return err
 				}
 				updatedSystemEntries = append(updatedSystemEntries, batch.Entry{
@@ -866,6 +867,10 @@ func namedRootKeyInRange(key, start, end []byte) bool {
 		return false
 	}
 	return true
+}
+
+func newOverlayEntryBatch(backing []batch.Entry) overlayEntryBatch {
+	return overlayEntryBatch{entries: backing[:0]}
 }
 
 func (b *overlayEntryBatch) Set(key, value []byte) error {
