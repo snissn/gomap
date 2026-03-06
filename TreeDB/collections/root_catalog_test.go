@@ -56,6 +56,56 @@ func TestCreateCollection_AssignsPrimaryRootCatalogDescriptor(t *testing.T) {
 	}
 }
 
+func TestCreateCollection_AssignsIndexStateRootCatalogDescriptor(t *testing.T) {
+	d, err := db.Open(db.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+
+	rootName, err := CollectionIndexStateRootName(meta.Name)
+	if err != nil {
+		t.Fatalf("state root name: %v", err)
+	}
+	rootKey, err := SystemCollectionRootKey(rootName)
+	if err != nil {
+		t.Fatalf("root key: %v", err)
+	}
+	raw, err := d.GetSystem(rootKey)
+	if err != nil {
+		t.Fatalf("get root descriptor: %v", err)
+	}
+	if len(raw) == 0 {
+		t.Fatalf("expected index-state root descriptor persisted in system root")
+	}
+
+	var desc CollectionRootDescriptor
+	if err := desc.Decode(raw); err != nil {
+		t.Fatalf("decode root descriptor: %v", err)
+	}
+	if desc.Name != rootName {
+		t.Fatalf("root descriptor name = %q, want %q", desc.Name, rootName)
+	}
+	if desc.Collection != meta.Name {
+		t.Fatalf("root descriptor collection = %q, want %q", desc.Collection, meta.Name)
+	}
+	if desc.Kind != CollectionRootKindIndexState {
+		t.Fatalf("root kind = %v, want index-state", desc.Kind)
+	}
+	if desc.Format.OuterLeavesInValueLog {
+		t.Fatalf("expected index-state root to disable outer-leaf value-log mode")
+	}
+	if !desc.Format.AllowValues {
+		t.Fatalf("expected index-state root to allow values")
+	}
+}
+
 func TestCreateIndex_AssignsSecondaryRootCatalogDescriptor(t *testing.T) {
 	d, err := db.Open(db.Options{Dir: t.TempDir()})
 	if err != nil {

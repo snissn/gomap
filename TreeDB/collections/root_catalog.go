@@ -16,6 +16,7 @@ type CollectionRootKind uint8
 const (
 	CollectionRootKindPrimary CollectionRootKind = iota + 1
 	CollectionRootKindSecondaryIndex
+	CollectionRootKindIndexState
 )
 
 type CollectionRootFormat = rootfmt.Format
@@ -50,6 +51,10 @@ func (d *CollectionRootDescriptor) normalizeAndValidate() error {
 	case CollectionRootKindPrimary:
 		if d.IndexName != "" {
 			return errors.New("collections: primary root descriptor cannot have index name")
+		}
+	case CollectionRootKindIndexState:
+		if d.IndexName != "" {
+			return errors.New("collections: index-state root descriptor cannot have index name")
 		}
 	case CollectionRootKindSecondaryIndex:
 		if err := ValidateIndexName(d.IndexName); err != nil {
@@ -199,6 +204,26 @@ func newSecondaryCollectionRootDescriptor(collection string, def *IndexDefinitio
 			OuterLeavesInValueLog: false,
 			LeafPrefixCompression: true,
 			AllowValues:           false,
+		},
+	}, nil
+}
+
+func newIndexStateCollectionRootDescriptor(collection string) (*CollectionRootDescriptor, error) {
+	if err := ValidateCollectionName(collection); err != nil {
+		return nil, err
+	}
+	rootName, err := CollectionIndexStateRootName(collection)
+	if err != nil {
+		return nil, err
+	}
+	return &CollectionRootDescriptor{
+		Name:       rootName,
+		Collection: collection,
+		Kind:       CollectionRootKindIndexState,
+		Format: CollectionRootFormat{
+			OuterLeavesInValueLog: false,
+			LeafPrefixCompression: true,
+			AllowValues:           true,
 		},
 	}, nil
 }

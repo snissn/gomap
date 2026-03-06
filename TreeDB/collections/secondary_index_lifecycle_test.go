@@ -156,3 +156,49 @@ func TestCreateIndex_BackfillsExistingDocumentsFromDedicatedPrimaryRoot(t *testi
 		t.Fatalf("shared iterator error: %v", err)
 	}
 }
+
+func TestCreateIndex_BackfillsIndexStateRoot(t *testing.T) {
+	d, err := db.Open(db.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"a@example.com","city":"honolulu"}`)); err != nil {
+		t.Fatalf("insert existing document: %v", err)
+	}
+
+	if _, err := mgr.CreateIndex(meta.Name, IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+
+	stateRootName, err := CollectionIndexStateRootName(meta.Name)
+	if err != nil {
+		t.Fatalf("state root name: %v", err)
+	}
+	stateRootDesc := mustLoadPrimaryRootDescriptor(t, d, stateRootName)
+	raw, err := d.GetAtRoot(stateRootDesc.RootPageID, []byte("u1"))
+	if err != nil {
+		t.Fatalf("get state entry: %v", err)
+	}
+	if len(raw) == 0 {
+		t.Fatalf("expected index-state entry for backfilled document")
+	}
+	decoded, err := decodeDocumentIndexState(raw)
+	if err != nil {
+		t.Fatalf("decode state entry: %v", err)
+	}
+	values := decoded["email_idx"]
+	if len(values) != 1 || string(values[0]) != "s:a@example.com" {
+		t.Fatalf("unexpected state values: %#v", values)
+	}
+}

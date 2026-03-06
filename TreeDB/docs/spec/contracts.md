@@ -131,8 +131,8 @@ secondary-index entries in dedicated named roots.
   provided TreeDB instance.
 - `CreateCollection(meta)` is idempotent for the same normalized schema and
   rejects incompatible redefinitions.
-- `CreateCollection(meta)` assigns a deterministic primary root name and
-  persists a root descriptor for that collection in the system root.
+- `CreateCollection(meta)` assigns deterministic primary and index-state root
+  names and persists both root descriptors in the system root.
 - `OpenCollection(name)` returns `errCollectionNotFound` when metadata is absent.
 - `OpenCollection(name)` rejects legacy version-1 shared-keyspace metadata.
 - `ListCollections()` returns collection metadata sorted by collection name.
@@ -161,6 +161,9 @@ secondary-index entries in dedicated named roots.
 - `Get(id)` returns the raw stored document bytes or `(nil, nil)` on miss.
 - `Delete(id)` removes the primary document and any derived secondary-index
   entries for that document.
+- When indexes are configured, collection writes also maintain a dedicated
+  per-collection index-state root keyed by document id so indexed deletes do
+  not need to reread and reparse the primary document.
 
 ### 9.4 Secondary indexes
 
@@ -168,6 +171,8 @@ secondary-index entries in dedicated named roots.
   for currently visible documents.
 - `CreateIndex(collection, def)` assigns a deterministic secondary root name and
   persists a root descriptor for that index in the system root.
+- `CreateIndex(collection, def)` also backfills the collection's index-state
+  root for all currently visible documents using the full post-create index set.
 - `DropIndex(collection, name)` removes index metadata and its root descriptor;
   the detached index root becomes unreachable from collection reads.
 - Secondary-index root descriptors disable value-bearing entries and outer-leaf
@@ -178,8 +183,9 @@ secondary-index entries in dedicated named roots.
 - Unique indexes reject writes that would make two different document ids share
   the same encoded indexed value.
 - Indexed writes update the dedicated primary root, every affected dedicated
-  secondary root, and the system-root root descriptors in one commit boundary,
-  so partial visibility is not allowed for normal document mutations.
+  secondary root, the collection's dedicated index-state root, and the
+  system-root root descriptors in one commit boundary, so partial visibility is
+  not allowed for normal document mutations.
 
 ### 9.5 Root-format and maintenance guarantees
 
