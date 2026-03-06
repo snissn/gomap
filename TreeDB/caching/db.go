@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -4296,6 +4297,10 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	}
 	warnInsecureDir(walDir, opts.NotifyError)
 	segments, _ := listNonEmptyLogSegments(walDir)
+	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
+	if err != nil {
+		return nil, err
+	}
 	maxLaneID := -1
 	maxWALSeq := make(map[int]int)
 	maxVlogSeq := make(map[int]int)
@@ -4736,6 +4741,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		autoCheckpointWriteCh: make(chan struct{}, 1),
 		lanes:                 lanes,
 		flushLaneMu:           make([]sync.Mutex, len(lanes)),
+	}
+	if maxExistingRID > 0 {
+		db.nextRID.Store(maxExistingRID)
 	}
 	db.rebuildGenerationLaneSets()
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
@@ -16221,6 +16229,42 @@ func listNonEmptyLogSegments(walDir string) (segments []logSegmentInfo, nonEmpty
 		}
 	}
 	return segments, nonEmptyBytes
+}
+
+func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
+	var maxRID uint64
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
+			continue
+		}
+		fileID, err := valuelog.EncodeFileID(uint32(seg.lane), uint32(seg.seq))
+		if err != nil {
+			return 0, err
+		}
+		reader, err := valuelog.NewReader(seg.path, fileID)
+		if err != nil {
+			return 0, err
+		}
+		reader.DisableValueDecode()
+		for {
+			rid, _, _, err := reader.ReadNext()
+			if err == nil {
+				if rid > maxRID {
+					maxRID = rid
+				}
+				continue
+			}
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
+			_ = reader.Close()
+			return 0, err
+		}
+		if err := reader.Close(); err != nil {
+			return 0, err
+		}
+	}
+	return maxRID, nil
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {
