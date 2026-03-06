@@ -86,17 +86,20 @@ func TestSystemRootDomain_IteratorMergesBufferedStateAndBackend(t *testing.T) {
 
 	var keys [][]byte
 	var values [][]byte
+	var deleted []bool
 	for it.Valid() {
 		keys = append(keys, it.KeyCopy(nil))
 		values = append(values, it.ValueCopy(nil))
+		deleted = append(deleted, it.IsDeleted())
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
 		t.Fatalf("iterator error: %v", err)
 	}
 
-	wantKeys := [][]byte{[]byte("sys:b"), []byte("sys:c")}
-	wantValues := [][]byte{[]byte("persisted-b"), []byte("buffered-c")}
+	wantKeys := [][]byte{[]byte("sys:a"), []byte("sys:b"), []byte("sys:c")}
+	wantValues := [][]byte{nil, []byte("persisted-b"), []byte("buffered-c")}
+	wantDeleted := []bool{true, false, false}
 	if len(keys) != len(wantKeys) {
 		t.Fatalf("keys len=%d want %d", len(keys), len(wantKeys))
 	}
@@ -106,6 +109,9 @@ func TestSystemRootDomain_IteratorMergesBufferedStateAndBackend(t *testing.T) {
 		}
 		if !bytes.Equal(values[i], wantValues[i]) {
 			t.Fatalf("value[%d]=%q want %q", i, values[i], wantValues[i])
+		}
+		if deleted[i] != wantDeleted[i] {
+			t.Fatalf("deleted[%d]=%t want %t", i, deleted[i], wantDeleted[i])
 		}
 	}
 }
