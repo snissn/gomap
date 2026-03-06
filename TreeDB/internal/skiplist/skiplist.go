@@ -784,10 +784,16 @@ func (it *ReverseIterator) Next() {
 func (it *ReverseIterator) Valid() bool { return it.valid }
 
 func (it *ReverseIterator) UnsafeKey() []byte {
+	if !it.valid || it.curr == 0 {
+		return nil
+	}
 	return it.sl.getKey(it.curr)
 }
 
 func (it *ReverseIterator) UnsafeValue() []byte {
+	if !it.valid || it.curr == 0 {
+		return nil
+	}
 	flags := it.sl.getFlags(it.curr)
 	if flags&flagPointer != 0 {
 		val := it.sl.getValue(it.curr)
@@ -800,6 +806,9 @@ func (it *ReverseIterator) UnsafeValue() []byte {
 }
 
 func (it *ReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.valid || it.curr == 0 {
+		return nil, page.ValuePtr{}, 0
+	}
 	val := it.sl.getValue(it.curr)
 	flags := it.sl.getFlags(it.curr)
 	if flags&flagPointer != 0 {
@@ -816,6 +825,9 @@ func (it *ReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 }
 
 func (it *ReverseIterator) IsDeleted() bool {
+	if !it.valid || it.curr == 0 {
+		return false
+	}
 	return it.sl.getFlags(it.curr)&flagDeleted != 0
 }
 
