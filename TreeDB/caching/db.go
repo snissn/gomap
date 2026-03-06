@@ -9124,7 +9124,7 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 		return
 	}
 	deltaNs := nowNs - prevNs
-	add := (budgetBps * deltaNs) / int64(time.Second)
+	add := mulDivClampPositiveInt64(budgetBps, deltaNs, int64(time.Second), db.vlogGenerationRewriteBudgetCapBytes())
 	if add <= 0 {
 		return
 	}
@@ -9142,6 +9142,29 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 			return
 		}
 	}
+}
+
+func mulDivClampPositiveInt64(x, y, div, capValue int64) int64 {
+	if x <= 0 || y <= 0 || div <= 0 || capValue <= 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(uint64(x), uint64(y))
+	capHi, capLo := bits.Mul64(uint64(capValue), uint64(div))
+	if hi > capHi || (hi == capHi && lo >= capLo) {
+		return capValue
+	}
+	if hi == 0 {
+		q := lo / uint64(div)
+		if q > uint64(capValue) {
+			return capValue
+		}
+		return int64(q)
+	}
+	q, _ := bits.Div64(hi, lo, uint64(div))
+	if q > uint64(capValue) {
+		return capValue
+	}
+	return int64(q)
 }
 
 func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
@@ -16236,6 +16259,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
 	chunks := b.drainCopyArenaChunks()
+	ptrChunks := b.drainPtrCopyArenaChunks()
 	retainPtrArena := false
 	for _, idx := range b.ptrValueIdxs {
 		if idx >= 0 && idx < len(b.entries) && b.entries[idx].Value != nil {
@@ -16244,7 +16268,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 	if retainPtrArena {
-		chunks = append(chunks, b.drainPtrCopyArenaChunks()...)
+		chunks = append(chunks, ptrChunks...)
+	} else if len(ptrChunks) > 0 {
+		putBatchArenas(ptrChunks)
 	}
 	b.db.retainBatchArenaChunksForMemtables(chunks, touchedMems)
 	b.db.writeMu.RUnlock()
