@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -4200,7 +4201,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Cached value-log RIDs remain globally unique across reopen/rewrite cycles.
 	// Until we persist nextRID separately, opening must recover the max on-disk
 	// RID here rather than risk reusing low RIDs after a clean reopen.
-	maxExistingRID, err := maxValueLogRIDFromSegments(segments)
+	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
 	if err != nil {
 		return nil, err
 	}
@@ -16054,6 +16055,36 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 		}
 	}
 	return maxRID, nil
+}
+
+func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
+	if len(segments) == 0 {
+		return nil
+	}
+	tailByLane := make(map[int]logSegmentInfo, len(segments))
+	for _, seg := range segments {
+		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
+			continue
+		}
+		prev, ok := tailByLane[seg.lane]
+		if !ok || seg.seq > prev.seq {
+			tailByLane[seg.lane] = seg
+		}
+	}
+	if len(tailByLane) == 0 {
+		return nil
+	}
+	tails := make([]logSegmentInfo, 0, len(tailByLane))
+	for _, seg := range tailByLane {
+		tails = append(tails, seg)
+	}
+	sort.Slice(tails, func(i, j int) bool {
+		if tails[i].lane != tails[j].lane {
+			return tails[i].lane < tails[j].lane
+		}
+		return tails[i].seq < tails[j].seq
+	})
+	return tails
 }
 
 func parseLogSeq(name string) (int, int, bool, bool) {
