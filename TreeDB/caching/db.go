@@ -70,8 +70,7 @@ var valueLogKeyLeases [][][]byte
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolLastGC atomic.Uint32
-var batchArenaPoolBudgetProcs atomic.Int32
-var batchArenaPoolBudgetCached atomic.Int64
+var batchArenaPoolBudgetState atomic.Value
 
 var batchArenaPoolNumGC = func() uint32 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
@@ -108,14 +107,13 @@ func currentBatchArenaPoolBudgetBytes() int64 {
 	if procs < 1 {
 		procs = 1
 	}
-	if batchArenaPoolBudgetProcs.Load() == int32(procs) {
-		if budget := batchArenaPoolBudgetCached.Load(); budget > 0 {
+	if cached, _ := batchArenaPoolBudgetState.Load().(batchArenaPoolBudgetCache); cached.procs == int32(procs) {
+		if budget := cached.budget; budget > 0 {
 			return budget
 		}
 	}
 	budget := computeBatchArenaPoolBudgetBytesForProcs(procs)
-	batchArenaPoolBudgetCached.Store(budget)
-	batchArenaPoolBudgetProcs.Store(int32(procs))
+	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{procs: int32(procs), budget: budget})
 	return budget
 }
 
@@ -129,11 +127,33 @@ func maybeResetBatchArenaPoolBytesAfterGC() {
 		return
 	}
 	if last == 0 {
-		batchArenaPoolLastGC.CompareAndSwap(0, numGC)
+		if batchArenaPoolLastGC.CompareAndSwap(0, numGC) {
+			batchArenaPoolBytes.Store(0)
+		}
 		return
 	}
 	if batchArenaPoolLastGC.CompareAndSwap(last, numGC) {
 		batchArenaPoolBytes.Store(0)
+	}
+}
+
+type batchArenaPoolBudgetCache struct {
+	procs  int32
+	budget int64
+}
+
+func noteBatchArenaPoolGC(numGC uint32) {
+	if numGC == 0 {
+		return
+	}
+	for {
+		last := batchArenaPoolLastGC.Load()
+		if last >= numGC {
+			return
+		}
+		if batchArenaPoolLastGC.CompareAndSwap(last, numGC) {
+			return
+		}
 	}
 }
 
@@ -421,6 +441,7 @@ func putBatchArena(buf []byte) {
 			}
 		}
 	}
+	noteBatchArenaPoolGC(batchArenaPoolNumGC())
 	batchArenaPools[idx].Put(buf[:0])
 }
 
