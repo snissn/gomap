@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -75,6 +76,25 @@ func TestAppendOnlyIteratorCloseClearsPooledPointerEntries(t *testing.T) {
 	}
 	if it.pooledEntryPtrs {
 		t.Fatalf("pooledEntryPtrs flag not cleared on close")
+	}
+}
+
+func TestGetAppendOnlyEntriesSkipsOversizedPooledSliceForEmptyRequest(t *testing.T) {
+	oldPool := appendOnlyEntryPool
+	appendOnlyEntryPool = sync.Pool{}
+	defer func() {
+		appendOnlyEntryPool = oldPool
+	}()
+
+	oversized := make([]appendOnlyEntry, 0, appendOnlyMaxReuseEntries(0)+1)
+	appendOnlyEntryPool.Put(oversized)
+
+	got := getAppendOnlyEntries(0)
+	if got == nil {
+		t.Fatalf("getAppendOnlyEntries(0) returned nil slice")
+	}
+	if cap(got) > appendOnlyMaxReuseEntries(0) {
+		t.Fatalf("cap=%d want <= %d", cap(got), appendOnlyMaxReuseEntries(0))
 	}
 }
 

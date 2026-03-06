@@ -729,6 +729,13 @@ func TestRewriteRIDAllocatorReserve_NilAllocatorFailsEvenForZeroCount(t *testing
 	}
 }
 
+func TestRewriteRIDAllocatorReserve_ZeroCountFails(t *testing.T) {
+	alloc := newRewriteRIDAllocator(10, nil)
+	if _, err := alloc.Reserve(0); err == nil {
+		t.Fatalf("expected zero-count reserve to fail")
+	}
+}
+
 func TestRewriteRIDAllocatorReserve_ExternalRangeOverlapFails(t *testing.T) {
 	alloc := newRewriteRIDAllocator(100, func(count int) (uint64, error) {
 		return 99, nil

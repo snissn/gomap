@@ -432,17 +432,21 @@ func putBatchArena(buf []byte) {
 	}
 	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
+		noteEpoch := false
 		for {
 			held := batchArenaPoolBytes.Load()
 			if held+size > budget {
 				return
 			}
 			if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
+				noteEpoch = held == 0
 				break
 			}
 		}
+		if noteEpoch {
+			noteBatchArenaPoolGC(batchArenaPoolNumGC())
+		}
 	}
-	noteBatchArenaPoolGC(batchArenaPoolNumGC())
 	batchArenaPools[idx].Put(buf[:0])
 }
 
@@ -2432,6 +2436,7 @@ func (db *DB) valueLogInUsePaths() []string {
 	for path := range inUse {
 		out = append(out, path)
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -5504,21 +5509,21 @@ func computeEntrySlicePoolBudgetBytes() int64 {
 	return budget
 }
 
-func reserveEntrySlicePoolBytes(bytes int64) bool {
+func reserveEntrySlicePoolBytes(bytes int64) (ok, transitionedFromZero bool) {
 	if bytes <= 0 {
-		return true
+		return true, false
 	}
 	budget := entrySlicePoolBudgetBytes
 	if budget <= 0 {
-		return false
+		return false, false
 	}
 	for {
 		held := entrySlicePoolBytes.Load()
 		if held+bytes > budget {
-			return false
+			return false, false
 		}
 		if entrySlicePoolBytes.CompareAndSwap(held, held+bytes) {
-			return true
+			return true, held == 0
 		}
 	}
 }
@@ -5658,7 +5663,10 @@ func getEntrySlice(capacity int) []batch.Entry {
 			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
 				// The slice is too small for this request; return it to the pool if
 				// we're within budget so smaller requests can reuse it.
-				if reserveEntrySlicePoolBytes(leaseBytes) {
+				if ok, transitioned := reserveEntrySlicePoolBytes(leaseBytes); ok {
+					if transitioned {
+						noteEntrySlicePoolGC(batchArenaPoolNumGC())
+					}
 					entrySlicePools[capIdx].Put(s[:0])
 				}
 			}
@@ -5693,14 +5701,17 @@ func putEntrySlice(entries []batch.Entry) {
 	if cap(entries) > maxEntryPoolCap {
 		return
 	}
-	noteEntrySlicePoolGC(batchArenaPoolNumGC())
 	idx, ok := entrySliceLeaseClassForCap(cap(entries))
 	if !ok {
 		return
 	}
 	leaseBytes := int64(cap(entries)) * entrySliceEntrySizeBytes
-	if !reserveEntrySlicePoolBytes(leaseBytes) {
+	ok, transitioned := reserveEntrySlicePoolBytes(leaseBytes)
+	if !ok {
 		return
+	}
+	if transitioned {
+		noteEntrySlicePoolGC(batchArenaPoolNumGC())
 	}
 	entries = entries[:0]
 	entrySliceLeaseMu.Lock()
@@ -9551,6 +9562,8 @@ planned:
 				consumed := int64(0)
 				if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 					consumed = rewritePlan.SelectedBytesLive
+				} else if stats.BytesBefore > 0 {
+					consumed = int64(stats.BytesBefore)
 				} else if maxSourceBytes > 0 {
 					consumed = maxSourceBytes
 				}
@@ -13876,10 +13889,18 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
-	stats["treedb.cache.batch_arena.pool_budget_bytes"] = fmt.Sprintf("%d", currentBatchArenaPoolBudgetBytes())
-	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
-	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
-	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
+	arenaPoolBudget := fmt.Sprintf("%d", currentBatchArenaPoolBudgetBytes())
+	arenaPoolEstimate := fmt.Sprintf("%d", arenaPoolBytes)
+	arenaLeased := fmt.Sprintf("%d", arenaLeasedBytes)
+	arenaLeasedMax := fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
+	stats["treedb.cache.batch_arena.pool_budget_bytes"] = arenaPoolBudget
+	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
+	stats["treedb.cache.batch_arena.leased_bytes"] = arenaLeased
+	stats["treedb.cache.batch_arena.leased_bytes_max"] = arenaLeasedMax
+	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
+	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
+	stats["treedb.process.batch_arena.leased_bytes"] = arenaLeased
+	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
 	stats["treedb.process.entry_slice.pool_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
@@ -15244,7 +15265,7 @@ func (b *Batch) arenaAlloc(arena *[]byte, chunks *[][]byte, copyBytes *int, n in
 		if chunkCap < batchCopyArenaMinChunk {
 			chunkCap = batchCopyArenaMinChunk
 		}
-		if cap(b.copyArena) == 0 {
+		if cap(*arena) == 0 {
 			// Keep unsized batches conservative. Entry-slice capacity can come from
 			// pooled high-water marks and is not a reliable signal for copy payload.
 			if b.copyArenaCap > chunkCap {
@@ -16392,6 +16413,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			break
 		}
 	}
+	if b.ptrValueIdxs != nil {
+		b.ptrValueIdxs = b.ptrValueIdxs[:0]
+	}
 	if retainPtrArena {
 		chunks = append(chunks, ptrChunks...)
 	} else if len(ptrChunks) > 0 {
@@ -16495,7 +16519,7 @@ func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
 	if len(segments) == 0 {
 		return nil
 	}
-	tailByLane := make(map[int]logSegmentInfo, len(segments))
+	tailByLane := make(map[int]logSegmentInfo)
 	for _, seg := range segments {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue
