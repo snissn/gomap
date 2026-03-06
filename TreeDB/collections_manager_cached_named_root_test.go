@@ -451,6 +451,144 @@ func TestCachedCollectionsDeleteThenReuseUniqueValue_WithoutOverlayPrefixScan(t 
 	}
 }
 
+func TestCachedCollectionsBufferedNamedRoots_KeepMemtableOnlyState(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	primaryState := requireBufferedNamedRootStateByName(t, d, mustCollectionPrimaryRootName(t, meta.Name))
+	if primaryState.pointState == nil || primaryState.prefixState == nil {
+		t.Fatalf("expected primary buffered root to keep point and prefix memtables")
+	}
+	if len(primaryState.entries) != 0 {
+		t.Fatalf("expected primary buffered root to avoid legacy entry map, got %d entries", len(primaryState.entries))
+	}
+
+	indexState := requireBufferedNamedRootStateByName(t, d, mustCollectionIndexStateRootName(t, meta.Name))
+	if indexState.pointState == nil || indexState.prefixState == nil {
+		t.Fatalf("expected index-state buffered root to keep point and prefix memtables")
+	}
+	if len(indexState.entries) != 0 {
+		t.Fatalf("expected index-state buffered root to avoid legacy entry map, got %d entries", len(indexState.entries))
+	}
+
+	secondaryState := requireBufferedNamedRootStateByName(t, d, mustCollectionIndexRootName(t, meta.Name, "email_idx"))
+	if secondaryState.pointState == nil || secondaryState.prefixState == nil {
+		t.Fatalf("expected secondary buffered root to keep point and prefix memtables")
+	}
+	if len(secondaryState.entries) != 0 {
+		t.Fatalf("expected secondary buffered root to avoid legacy entry map, got %d entries", len(secondaryState.entries))
+	}
+}
+
+func TestCachedCollectionsFindByIndex_BufferedWithoutLegacyIteratorMaterialization(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	legacyMaterializations := 0
+	restore := setNamedRootLegacyIteratorMaterializeTestHook(func(rootID uint64, start, end []byte) {
+		legacyMaterializations++
+	})
+	defer restore()
+
+	ids, err := col.FindByIndex("email_idx", "ada@example.com")
+	if err != nil {
+		t.Fatalf("find by index before checkpoint: %v", err)
+	}
+	if len(ids) != 1 || !bytes.Equal(ids[0], []byte("u1")) {
+		t.Fatalf("ids before checkpoint = %#v", ids)
+	}
+	if legacyMaterializations != 0 {
+		t.Fatalf("expected buffered find-by-index to avoid legacy iterator materialization, got %d calls", legacyMaterializations)
+	}
+}
+
+func TestCachedCollectionsCheckpoint_BufferedWithoutLegacyFlushSnapshot(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	legacySnapshots := 0
+	restore := setNamedRootLegacyFlushSnapshotTestHook(func(rootID uint64) {
+		legacySnapshots++
+	})
+	defer restore()
+
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint insert: %v", err)
+	}
+	if legacySnapshots != 0 {
+		t.Fatalf("expected checkpoint flush to avoid legacy entry snapshots, got %d calls", legacySnapshots)
+	}
+}
+
 func TestCachedCollectionsDelete_NamedRootTombstonesBufferedUntilCheckpoint(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -668,4 +806,55 @@ func countBackendRootEntries(t *testing.T, d *DB, rootID uint64) int {
 		t.Fatalf("backend iterator root %d error: %v", rootID, err)
 	}
 	return count
+}
+
+func requireBufferedNamedRootStateByName(t *testing.T, d *DB, rootName string) *namedRootOverlayState {
+	t.Helper()
+	rootKey, err := collections.SystemCollectionRootKey(rootName)
+	if err != nil {
+		t.Fatalf("root key for %s: %v", rootName, err)
+	}
+	raw, err := d.GetSystem(rootKey)
+	if err != nil {
+		t.Fatalf("cached get system %s: %v", rootName, err)
+	}
+	if len(raw) == 0 {
+		t.Fatalf("missing cached root descriptor for %s", rootName)
+	}
+	var desc collections.CollectionRootDescriptor
+	if err := desc.Decode(raw); err != nil {
+		t.Fatalf("decode cached root descriptor %s: %v", rootName, err)
+	}
+	state, err := d.namedRootState(desc.RootPageID)
+	if err != nil {
+		t.Fatalf("named root state %s: %v", rootName, err)
+	}
+	return state
+}
+
+func mustCollectionPrimaryRootName(t *testing.T, collection string) string {
+	t.Helper()
+	rootName, err := collections.CollectionPrimaryRootName(collection)
+	if err != nil {
+		t.Fatalf("primary root name for %s: %v", collection, err)
+	}
+	return rootName
+}
+
+func mustCollectionIndexStateRootName(t *testing.T, collection string) string {
+	t.Helper()
+	rootName, err := collections.CollectionIndexStateRootName(collection)
+	if err != nil {
+		t.Fatalf("index-state root name for %s: %v", collection, err)
+	}
+	return rootName
+}
+
+func mustCollectionIndexRootName(t *testing.T, collection, indexName string) string {
+	t.Helper()
+	rootName, err := collections.CollectionIndexRootName(collection, indexName)
+	if err != nil {
+		t.Fatalf("index root name for %s/%s: %v", collection, indexName, err)
+	}
+	return rootName
 }

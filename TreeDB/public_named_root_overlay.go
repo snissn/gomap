@@ -82,6 +82,16 @@ var namedRootOverlayPrefixScanHook struct {
 	fn func(rootID uint64, prefix []byte)
 }
 
+var namedRootLegacyIteratorMaterializeHook struct {
+	mu sync.RWMutex
+	fn func(rootID uint64, start, end []byte)
+}
+
+var namedRootLegacyFlushSnapshotHook struct {
+	mu sync.RWMutex
+	fn func(rootID uint64)
+}
+
 func setNamedRootPublishTestHook(fn func(string) error) func() {
 	namedRootPublishHook.mu.Lock()
 	prev := namedRootPublishHook.fn
@@ -164,6 +174,48 @@ func runNamedRootOverlayPrefixScanTestHook(rootID uint64, prefix []byte) {
 	namedRootOverlayPrefixScanHook.mu.RUnlock()
 	if fn != nil {
 		fn(rootID, prefix)
+	}
+}
+
+func setNamedRootLegacyIteratorMaterializeTestHook(fn func(rootID uint64, start, end []byte)) func() {
+	namedRootLegacyIteratorMaterializeHook.mu.Lock()
+	prev := namedRootLegacyIteratorMaterializeHook.fn
+	namedRootLegacyIteratorMaterializeHook.fn = fn
+	namedRootLegacyIteratorMaterializeHook.mu.Unlock()
+	return func() {
+		namedRootLegacyIteratorMaterializeHook.mu.Lock()
+		namedRootLegacyIteratorMaterializeHook.fn = prev
+		namedRootLegacyIteratorMaterializeHook.mu.Unlock()
+	}
+}
+
+func runNamedRootLegacyIteratorMaterializeTestHook(rootID uint64, start, end []byte) {
+	namedRootLegacyIteratorMaterializeHook.mu.RLock()
+	fn := namedRootLegacyIteratorMaterializeHook.fn
+	namedRootLegacyIteratorMaterializeHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootID, start, end)
+	}
+}
+
+func setNamedRootLegacyFlushSnapshotTestHook(fn func(rootID uint64)) func() {
+	namedRootLegacyFlushSnapshotHook.mu.Lock()
+	prev := namedRootLegacyFlushSnapshotHook.fn
+	namedRootLegacyFlushSnapshotHook.fn = fn
+	namedRootLegacyFlushSnapshotHook.mu.Unlock()
+	return func() {
+		namedRootLegacyFlushSnapshotHook.mu.Lock()
+		namedRootLegacyFlushSnapshotHook.fn = prev
+		namedRootLegacyFlushSnapshotHook.mu.Unlock()
+	}
+}
+
+func runNamedRootLegacyFlushSnapshotTestHook(rootID uint64) {
+	namedRootLegacyFlushSnapshotHook.mu.RLock()
+	fn := namedRootLegacyFlushSnapshotHook.fn
+	namedRootLegacyFlushSnapshotHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootID)
 	}
 }
 
