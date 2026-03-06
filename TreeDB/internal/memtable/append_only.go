@@ -441,12 +441,7 @@ func (m *AppendOnly) clearSnapshotLocked() {
 
 func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 	if m.count == 0 || m.ordered {
-		if m.indexBuf == nil {
-			m.indexBuf = make([]int, 0)
-		} else {
-			m.indexBuf = m.indexBuf[:0]
-		}
-		return m.indexBuf
+		return nil
 	}
 	if m.latestDirty || (len(m.latest) == 0 && len(m.latest64) == 0) {
 		m.rebuildLatestIndexLocked()
@@ -871,6 +866,9 @@ func (m *AppendOnly) Reset() {
 	m.resetLocked(0, 0)
 }
 
+// ResetWithCapacity resets the memtable and, when needed, shrinks retained
+// internal buffers toward the capacity-derived baseline. Unlike Reset, callers
+// provide a capacity estimate so post-spike entry retention can decay.
 func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

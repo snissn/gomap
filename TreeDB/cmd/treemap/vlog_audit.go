@@ -46,6 +46,11 @@ type valueLogRIDAudit struct {
 	MaxRID            uint64 `json:"max_rid"`
 }
 
+type valueLogRIDAuditOptions struct {
+	StopOnFirstDuplicate bool
+	MaxTrackedRIDs       int
+}
+
 func runVlogAudit(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-audit", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
@@ -54,6 +59,8 @@ func runVlogAudit(dir string, args []string) {
 	maxBytes := fs.Int64("rewrite-max-bytes", 0, "Rewrite-plan live-byte selection cap (0=none)")
 	minStaleRatio := fs.Float64("rewrite-min-stale-ratio", 0, "Rewrite-plan minimum per-segment stale ratio (0..1)")
 	minStaleBytes := fs.Int64("rewrite-min-stale-bytes", 0, "Rewrite-plan minimum per-segment stale bytes")
+	stopOnFirstDuplicate := fs.Bool("rid-scan-stop-on-first-duplicate", false, "Stop the RID scan after the first duplicate is detected")
+	maxTrackedRIDs := fs.Int("rid-scan-max-tracked", 0, "Maximum distinct RIDs to track in-memory during RID scan (0=unbounded)")
 	_ = fs.Parse(args)
 
 	if !*rw {
@@ -65,6 +72,9 @@ func runVlogAudit(dir string, args []string) {
 		MaxSourceBytes:       *maxBytes,
 		MinSegmentStaleRatio: *minStaleRatio,
 		MinSegmentStaleBytes: *minStaleBytes,
+	}, valueLogRIDAuditOptions{
+		StopOnFirstDuplicate: *stopOnFirstDuplicate,
+		MaxTrackedRIDs:       *maxTrackedRIDs,
 	})
 	if err != nil {
 		fatalf("ValueLog audit error: %v", err)
@@ -139,7 +149,7 @@ func runVlogAudit(dir string, args []string) {
 	}
 }
 
-func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions) (report valueLogAuditReport, err error) {
+func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions, ridOpts valueLogRIDAuditOptions) (report valueLogAuditReport, err error) {
 	report = valueLogAuditReport{Dir: dir}
 	mainDir, err := resolveTreemapMainDir(dir)
 	if err != nil {
@@ -155,7 +165,7 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	report.Segments = segs
 	report.SegmentsOnDisk = len(segs)
 	report.BytesOnDisk = bytesOnDisk
-	report.RIDScan, err = scanValueLogRIDs(segs)
+	report.RIDScan, err = scanValueLogRIDs(segs, ridOpts)
 	if err != nil {
 		return report, err
 	}
@@ -249,7 +259,7 @@ func listValueLogSegments(dir string) ([]valueLogSegmentAudit, int64, error) {
 	return segs, total, nil
 }
 
-func scanValueLogRIDs(segments []valueLogSegmentAudit) (valueLogRIDAudit, error) {
+func scanValueLogRIDs(segments []valueLogSegmentAudit, opts valueLogRIDAuditOptions) (valueLogRIDAudit, error) {
 	var report valueLogRIDAudit
 	seen := make(map[uint64]struct{})
 	for _, seg := range segments {
@@ -274,7 +284,16 @@ func scanValueLogRIDs(segments []valueLogSegmentAudit) (valueLogRIDAudit, error)
 					if report.FirstDuplicateRID == 0 {
 						report.FirstDuplicateRID = rid
 					}
+					if opts.StopOnFirstDuplicate {
+						_ = reader.Close()
+						report.DistinctRIDs = len(seen)
+						return report, nil
+					}
 				} else {
+					if opts.MaxTrackedRIDs > 0 && len(seen) >= opts.MaxTrackedRIDs {
+						_ = reader.Close()
+						return report, fmt.Errorf("rid scan exceeded max tracked rids: max=%d", opts.MaxTrackedRIDs)
+					}
 					seen[rid] = struct{}{}
 				}
 				continue

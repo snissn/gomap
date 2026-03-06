@@ -18,7 +18,7 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{})
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(root): %v", err)
 	}
@@ -46,7 +46,7 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{})
+	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(maindb): %v", err)
 	}
@@ -97,12 +97,73 @@ func TestScanValueLogRIDs_ReportsTruncatedSegments(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	report, err := scanValueLogRIDs([]valueLogSegmentAudit{{Name: filepath.Base(path), Path: path, Bytes: 3}})
+	report, err := scanValueLogRIDs([]valueLogSegmentAudit{{Name: filepath.Base(path), Path: path, Bytes: 3}}, valueLogRIDAuditOptions{})
 	if err != nil {
 		t.Fatalf("scanValueLogRIDs: %v", err)
 	}
 	if report.TruncatedSegments != 1 {
 		t.Fatalf("TruncatedSegments=%d want 1", report.TruncatedSegments)
+	}
+}
+
+func TestScanValueLogRIDs_StopOnFirstDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	fileID := mustEncodeAuditFileID(t, 0, 1)
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, []byte("a")); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append rid=1 #1: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, []byte("b")); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append rid=1 #2: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	report, err := scanValueLogRIDs([]valueLogSegmentAudit{{Name: filepath.Base(path), Path: path, Bytes: 0}}, valueLogRIDAuditOptions{
+		StopOnFirstDuplicate: true,
+	})
+	if err != nil {
+		t.Fatalf("scanValueLogRIDs(stop on duplicate): %v", err)
+	}
+	if report.DuplicateRIDs != 1 {
+		t.Fatalf("DuplicateRIDs=%d want 1", report.DuplicateRIDs)
+	}
+	if report.FirstDuplicateRID != 1 {
+		t.Fatalf("FirstDuplicateRID=%d want 1", report.FirstDuplicateRID)
+	}
+}
+
+func TestScanValueLogRIDs_MaxTrackedRIDs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	fileID := mustEncodeAuditFileID(t, 0, 1)
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, []byte("a")); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append rid=1: %v", err)
+	}
+	if _, err := w.Append(0, nil, 2, []byte("b")); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append rid=2: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := scanValueLogRIDs([]valueLogSegmentAudit{{Name: filepath.Base(path), Path: path, Bytes: 0}}, valueLogRIDAuditOptions{
+		MaxTrackedRIDs: 1,
+	}); err == nil {
+		t.Fatal("expected max tracked RIDs error")
 	}
 }
 

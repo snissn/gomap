@@ -121,13 +121,13 @@ func newRewriteRIDAllocator(start uint64, reserve func(count int) (uint64, error
 
 func validateRewriteRIDRange(start uint64, count int) error {
 	if count <= 0 {
-		return fmt.Errorf("value-log rid allocator requires positive count")
+		return fmt.Errorf("value-log rid allocator requires positive count: start=%d count=%d", start, count)
 	}
 	if start == 0 {
-		return fmt.Errorf("value-log rid allocator returned rid 0")
+		return fmt.Errorf("value-log rid allocator returned rid 0: start=%d count=%d", start, count)
 	}
 	if uint64(count-1) > ^uint64(0)-start {
-		return fmt.Errorf("value-log rid space exhausted")
+		return fmt.Errorf("value-log rid space exhausted: start=%d count=%d", start, count)
 	}
 	return nil
 }
@@ -285,10 +285,12 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	}
 
 	set := db.valueLogManager.CurrentSet()
+	if set != nil {
+		defer func() { _ = db.valueLogManager.Release(set) }()
+	}
 	if set == nil || len(set.Files) == 0 {
 		return plan, nil
 	}
-	defer func() { _ = db.valueLogManager.Release(set) }()
 
 	plan.SegmentsTotal = len(set.Files)
 	for _, f := range set.Files {

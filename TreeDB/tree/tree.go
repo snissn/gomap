@@ -507,10 +507,12 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 	return append(dst, val...), nil
 }
 
-// Get returns an owned copy of the value for key.
+// Get returns the value for key.
 //
-// For compatibility with the long-standing TreeDB API, Get returns (nil, nil)
-// both when the key is missing and when the stored value is zero-length.
+// When the stored value is non-empty, Get returns an owned, mutable copy of
+// that value. For compatibility with the long-standing TreeDB API, Get returns
+// (nil, nil) both when the key is missing and when the stored value is
+// zero-length.
 func (t *Tree) Get(key []byte) ([]byte, error) {
 	val, err := t.GetUnsafe(key)
 	if err != nil {

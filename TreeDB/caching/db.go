@@ -76,7 +76,12 @@ var batchArenaPoolBudgetState atomic.Value
 var batchArenaPoolNumGC = func() uint32 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
 	metrics.Read(samples)
-	return uint32(samples[0].Value.Uint64())
+	if samples[0].Value.Kind() == metrics.KindUint64 {
+		return uint32(samples[0].Value.Uint64())
+	}
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return uint32(ms.NumGC)
 }
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -5514,9 +5519,7 @@ func maybeResetEntrySlicePoolBytesAfterGC() {
 		return
 	}
 	if last == 0 {
-		if entrySlicePoolLastGC.CompareAndSwap(0, numGC) {
-			entrySlicePoolBytes.Store(0)
-		}
+		entrySlicePoolLastGC.CompareAndSwap(0, numGC)
 		return
 	}
 	if entrySlicePoolLastGC.CompareAndSwap(last, numGC) {
@@ -14851,7 +14854,7 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 	return &Batch{
 		db:             db,
 		entries:        db.getBatchEntries(reserveHint),
-		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
+		copyArenaCap:   db.batchCopyArenaInitCap(size),
 		streamEligible: true,
 	}
 }
@@ -16357,7 +16360,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	retainPtrArena := false
 	for _, idx := range b.ptrValueIdxs {
-		if idx >= 0 && idx < len(b.entries) && b.entries[idx].Value != nil {
+		if idx < len(b.entries) && b.entries[idx].Value != nil {
 			retainPtrArena = true
 			break
 		}

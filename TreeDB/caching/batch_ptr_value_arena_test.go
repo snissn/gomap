@@ -15,7 +15,7 @@ func TestBatchPtrValueArena_RetainedWhenPointersDenied(t *testing.T) {
 		DisableWAL:                   true,
 		MemtableMode:                 "btree",
 		MemtableShards:               1,
-		FlushThreshold:               1 << 30,
+		FlushThreshold:               1 << 20,
 		ValueLogPointerThreshold:     1,
 		MaxValueLogRetainedBytesHard: 1,
 	})
@@ -35,6 +35,12 @@ func TestBatchPtrValueArena_RetainedWhenPointersDenied(t *testing.T) {
 	b := db.NewBatchWithSize(1)
 	if err := b.Set(firstKey, firstVal); err != nil {
 		t.Fatalf("set first: %v", err)
+	}
+	if got := len(b.ptrValueIdxs); got != 1 {
+		t.Fatalf("expected exactly one pointer-value entry after first Set, got %d", got)
+	}
+	if len(b.ptrCopyArenaChunks) == 0 && b.ptrCopyBytes == 0 {
+		t.Fatal("expected pointer-value arena path to allocate copy storage after first Set")
 	}
 	if err := b.Write(); err != nil {
 		t.Fatalf("write first: %v", err)
@@ -76,7 +82,7 @@ func TestBatchPtrValueArena_RecycledWhenPointersAssigned(t *testing.T) {
 		DisableWAL:               true,
 		MemtableMode:             "btree",
 		MemtableShards:           1,
-		FlushThreshold:           1 << 30,
+		FlushThreshold:           1 << 20,
 		ValueLogPointerThreshold: 1,
 	})
 	if err != nil {
@@ -91,6 +97,12 @@ func TestBatchPtrValueArena_RecycledWhenPointersAssigned(t *testing.T) {
 	defer b.Close()
 	if err := b.Set(key, val); err != nil {
 		t.Fatalf("set: %v", err)
+	}
+	if got := len(b.ptrValueIdxs); got != 1 {
+		t.Fatalf("expected exactly one pointer-value entry after Set, got %d", got)
+	}
+	if len(b.ptrCopyArenaChunks) == 0 && b.ptrCopyBytes == 0 {
+		t.Fatal("expected pointer-value arena path to allocate copy storage after Set")
 	}
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
