@@ -23,12 +23,24 @@ type btreeEntry struct {
 
 func btreeEntryValueSize(flags byte, value []byte) int {
 	if flags&node.FlagPointer != 0 {
+		// page.ValuePtrSize is defined as the in-memory ValuePtr struct size.
+		// layout_assert.go keeps the constant and struct layout in sync.
 		return page.ValuePtrSize + len(value)
 	}
 	if flags&node.FlagTombstone != 0 {
 		return 0
 	}
 	return len(value)
+}
+
+func normalizeBTreeEntryFlags(flags byte) byte {
+	if flags&node.FlagTombstone != 0 {
+		return flags &^ node.FlagPointer
+	}
+	if flags&node.FlagPointer != 0 {
+		return flags &^ node.FlagTombstone
+	}
+	return flags &^ (node.FlagPointer | node.FlagTombstone)
 }
 
 type BTree struct {
@@ -191,11 +203,9 @@ func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 
 	keyCopy := m.arena.Copy(key)
 	keyStr := bytesToStringNoCopy(keyCopy)
-	entry := btreeEntry{flags: flags}
-	if flags&node.FlagTombstone != 0 {
-		entry.flags = node.FlagTombstone
-	} else if flags&node.FlagPointer != 0 {
-		entry.flags = node.FlagPointer
+	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags)}
+	if entry.flags&node.FlagTombstone != 0 {
+	} else if entry.flags&node.FlagPointer != 0 {
 		entry.ptr = ptr
 		if len(value) > 0 {
 			entry.value = m.arena.Copy(value)
@@ -228,11 +238,9 @@ func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) 
 	defer m.mu.Unlock()
 
 	keyStr := bytesToStringNoCopy(key)
-	entry := btreeEntry{flags: flags}
-	if flags&node.FlagTombstone != 0 {
-		entry.flags = node.FlagTombstone
-	} else if flags&node.FlagPointer != 0 {
-		entry.flags = node.FlagPointer
+	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags)}
+	if entry.flags&node.FlagTombstone != 0 {
+	} else if entry.flags&node.FlagPointer != 0 {
 		entry.ptr = ptr
 		entry.value = value
 	} else {
