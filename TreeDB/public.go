@@ -997,11 +997,6 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
-	if db.cached != nil {
-		if err := db.flushNamedRootOverlays(true); err != nil {
-			return errors.Join(err, db.backgroundError())
-		}
-	}
 
 	db.bgVac.Stop()
 	var err error
@@ -1012,7 +1007,9 @@ func (db *DB) Close() error {
 	}
 
 	if db.cached != nil {
-		err = errors.Join(err, db.cached.Close())
+		if e := db.cached.Close(); e != nil {
+			return errors.Join(err, e, db.backgroundError())
+		}
 		db.cached = nil
 	}
 
@@ -1341,9 +1338,6 @@ func (db *DB) Checkpoint() error {
 		return err
 	}
 	if db.cached != nil {
-		if err := db.flushNamedRootOverlays(true); err != nil {
-			return err
-		}
 		return db.cached.Checkpoint()
 	}
 	b := db.backend.NewBatch()

@@ -1,4 +1,4 @@
-package treedb
+package caching
 
 import (
 	"bytes"
@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -17,6 +16,13 @@ import (
 )
 
 const virtualNamedRootMask uint64 = 1 << 63
+
+type NamedRootDebugState struct {
+	HasPointState    bool
+	HasPrefixState   bool
+	SharedState      bool
+	LegacyEntryCount int
+}
 
 type namedRootOverlayState struct {
 	virtualRootID uint64
@@ -121,7 +127,19 @@ var namedRootOwnedWriteHook struct {
 }
 
 func setNamedRootPublishTestHook(fn func(string) error) func() {
-	return caching.SetNamedRootPublishTestHook(fn)
+	namedRootPublishHook.mu.Lock()
+	prev := namedRootPublishHook.fn
+	namedRootPublishHook.fn = fn
+	namedRootPublishHook.mu.Unlock()
+	return func() {
+		namedRootPublishHook.mu.Lock()
+		namedRootPublishHook.fn = prev
+		namedRootPublishHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootPublishTestHook(fn func(string) error) func() {
+	return setNamedRootPublishTestHook(fn)
 }
 
 func runNamedRootPublishTestHook(stage string) error {
@@ -135,7 +153,19 @@ func runNamedRootPublishTestHook(stage string) error {
 }
 
 func setNamedRootBufferedIteratorTestHook(fn func(rootID uint64, start, end []byte)) func() {
-	return caching.SetNamedRootBufferedIteratorTestHook(fn)
+	namedRootBufferedIteratorHook.mu.Lock()
+	prev := namedRootBufferedIteratorHook.fn
+	namedRootBufferedIteratorHook.fn = fn
+	namedRootBufferedIteratorHook.mu.Unlock()
+	return func() {
+		namedRootBufferedIteratorHook.mu.Lock()
+		namedRootBufferedIteratorHook.fn = prev
+		namedRootBufferedIteratorHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootBufferedIteratorTestHook(fn func(rootID uint64, start, end []byte)) func() {
+	return setNamedRootBufferedIteratorTestHook(fn)
 }
 
 func runNamedRootBufferedIteratorTestHook(rootID uint64, start, end []byte) {
@@ -148,7 +178,19 @@ func runNamedRootBufferedIteratorTestHook(rootID uint64, start, end []byte) {
 }
 
 func setNamedRootOverlayEntryReadTestHook(fn func(op string, rootID uint64, key []byte)) func() {
-	return caching.SetNamedRootOverlayEntryReadTestHook(fn)
+	namedRootOverlayEntryReadHook.mu.Lock()
+	prev := namedRootOverlayEntryReadHook.fn
+	namedRootOverlayEntryReadHook.fn = fn
+	namedRootOverlayEntryReadHook.mu.Unlock()
+	return func() {
+		namedRootOverlayEntryReadHook.mu.Lock()
+		namedRootOverlayEntryReadHook.fn = prev
+		namedRootOverlayEntryReadHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootOverlayEntryReadTestHook(fn func(op string, rootID uint64, key []byte)) func() {
+	return setNamedRootOverlayEntryReadTestHook(fn)
 }
 
 func runNamedRootOverlayEntryReadTestHook(op string, rootID uint64, key []byte) {
@@ -161,7 +203,19 @@ func runNamedRootOverlayEntryReadTestHook(op string, rootID uint64, key []byte) 
 }
 
 func setNamedRootOverlayPrefixScanTestHook(fn func(rootID uint64, prefix []byte)) func() {
-	return caching.SetNamedRootOverlayPrefixScanTestHook(fn)
+	namedRootOverlayPrefixScanHook.mu.Lock()
+	prev := namedRootOverlayPrefixScanHook.fn
+	namedRootOverlayPrefixScanHook.fn = fn
+	namedRootOverlayPrefixScanHook.mu.Unlock()
+	return func() {
+		namedRootOverlayPrefixScanHook.mu.Lock()
+		namedRootOverlayPrefixScanHook.fn = prev
+		namedRootOverlayPrefixScanHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootOverlayPrefixScanTestHook(fn func(rootID uint64, prefix []byte)) func() {
+	return setNamedRootOverlayPrefixScanTestHook(fn)
 }
 
 func runNamedRootOverlayPrefixScanTestHook(rootID uint64, prefix []byte) {
@@ -174,7 +228,19 @@ func runNamedRootOverlayPrefixScanTestHook(rootID uint64, prefix []byte) {
 }
 
 func setNamedRootLegacyIteratorMaterializeTestHook(fn func(rootID uint64, start, end []byte)) func() {
-	return caching.SetNamedRootLegacyIteratorMaterializeTestHook(fn)
+	namedRootLegacyIteratorMaterializeHook.mu.Lock()
+	prev := namedRootLegacyIteratorMaterializeHook.fn
+	namedRootLegacyIteratorMaterializeHook.fn = fn
+	namedRootLegacyIteratorMaterializeHook.mu.Unlock()
+	return func() {
+		namedRootLegacyIteratorMaterializeHook.mu.Lock()
+		namedRootLegacyIteratorMaterializeHook.fn = prev
+		namedRootLegacyIteratorMaterializeHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootLegacyIteratorMaterializeTestHook(fn func(rootID uint64, start, end []byte)) func() {
+	return setNamedRootLegacyIteratorMaterializeTestHook(fn)
 }
 
 func runNamedRootLegacyIteratorMaterializeTestHook(rootID uint64, start, end []byte) {
@@ -187,7 +253,19 @@ func runNamedRootLegacyIteratorMaterializeTestHook(rootID uint64, start, end []b
 }
 
 func setNamedRootLegacyFlushSnapshotTestHook(fn func(rootID uint64)) func() {
-	return caching.SetNamedRootLegacyFlushSnapshotTestHook(fn)
+	namedRootLegacyFlushSnapshotHook.mu.Lock()
+	prev := namedRootLegacyFlushSnapshotHook.fn
+	namedRootLegacyFlushSnapshotHook.fn = fn
+	namedRootLegacyFlushSnapshotHook.mu.Unlock()
+	return func() {
+		namedRootLegacyFlushSnapshotHook.mu.Lock()
+		namedRootLegacyFlushSnapshotHook.fn = prev
+		namedRootLegacyFlushSnapshotHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootLegacyFlushSnapshotTestHook(fn func(rootID uint64)) func() {
+	return setNamedRootLegacyFlushSnapshotTestHook(fn)
 }
 
 func runNamedRootLegacyFlushSnapshotTestHook(rootID uint64) {
@@ -200,7 +278,19 @@ func runNamedRootLegacyFlushSnapshotTestHook(rootID uint64) {
 }
 
 func setNamedRootMemtableWriteTestHook(fn func(rootID uint64, kind string, key []byte)) func() {
-	return caching.SetNamedRootMemtableWriteTestHook(fn)
+	namedRootMemtableWriteHook.mu.Lock()
+	prev := namedRootMemtableWriteHook.fn
+	namedRootMemtableWriteHook.fn = fn
+	namedRootMemtableWriteHook.mu.Unlock()
+	return func() {
+		namedRootMemtableWriteHook.mu.Lock()
+		namedRootMemtableWriteHook.fn = prev
+		namedRootMemtableWriteHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootMemtableWriteTestHook(fn func(rootID uint64, kind string, key []byte)) func() {
+	return setNamedRootMemtableWriteTestHook(fn)
 }
 
 func runNamedRootMemtableWriteTestHook(rootID uint64, kind string, key []byte) {
@@ -213,7 +303,19 @@ func runNamedRootMemtableWriteTestHook(rootID uint64, kind string, key []byte) {
 }
 
 func setNamedRootOwnedWriteTestHook(fn func(kind string, key []byte)) func() {
-	return caching.SetNamedRootOwnedWriteTestHook(fn)
+	namedRootOwnedWriteHook.mu.Lock()
+	prev := namedRootOwnedWriteHook.fn
+	namedRootOwnedWriteHook.fn = fn
+	namedRootOwnedWriteHook.mu.Unlock()
+	return func() {
+		namedRootOwnedWriteHook.mu.Lock()
+		namedRootOwnedWriteHook.fn = prev
+		namedRootOwnedWriteHook.mu.Unlock()
+	}
+}
+
+func SetNamedRootOwnedWriteTestHook(fn func(kind string, key []byte)) func() {
+	return setNamedRootOwnedWriteTestHook(fn)
 }
 
 func runNamedRootOwnedWriteTestHook(kind string, key []byte) {
@@ -225,7 +327,7 @@ func runNamedRootOwnedWriteTestHook(kind string, key []byte) {
 	}
 }
 
-func (db *DB) hasBufferedNamedRoot(rootID uint64) bool {
+func (db *DB) HasBufferedNamedRoot(rootID uint64) bool {
 	if db == nil || rootID == 0 {
 		return false
 	}
@@ -235,7 +337,7 @@ func (db *DB) hasBufferedNamedRoot(rootID uint64) bool {
 	return ok
 }
 
-func (db *DB) bufferedGetAtRoot(rootID uint64, key []byte) ([]byte, error) {
+func (db *DB) BufferedGetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	state, err := db.namedRootState(rootID)
 	if err != nil {
 		return nil, err
@@ -257,14 +359,14 @@ func (db *DB) bufferedGetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 			return append([]byte(nil), entry.value...), nil
 		}
 	}
-	bridge, err := db.collectionsBridge()
+	bridge, err := db.directBridge()
 	if err != nil {
 		return nil, err
 	}
 	return bridge.GetAtRoot(state.baseRootID, key)
 }
 
-func (db *DB) bufferedGetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
+func (db *DB) BufferedGetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, error) {
 	state, err := db.namedRootState(rootID)
 	if err != nil {
 		return dst, err
@@ -286,14 +388,14 @@ func (db *DB) bufferedGetAtRootAppend(rootID uint64, key, dst []byte) ([]byte, e
 			return append(dst, entry.value...), nil
 		}
 	}
-	bridge, err := db.collectionsBridge()
+	bridge, err := db.directBridge()
 	if err != nil {
 		return dst, err
 	}
 	return bridge.GetAtRootAppend(state.baseRootID, key, dst)
 }
 
-func (db *DB) bufferedHasAtRoot(rootID uint64, key []byte) (bool, error) {
+func (db *DB) BufferedHasAtRoot(rootID uint64, key []byte) (bool, error) {
 	state, err := db.namedRootState(rootID)
 	if err != nil {
 		return false, err
@@ -309,14 +411,14 @@ func (db *DB) bufferedHasAtRoot(rootID uint64, key []byte) (bool, error) {
 			return !entry.deleted, nil
 		}
 	}
-	bridge, err := db.collectionsBridge()
+	bridge, err := db.directBridge()
 	if err != nil {
 		return false, err
 	}
 	return bridge.HasAtRoot(state.baseRootID, key)
 }
 
-func (db *DB) bufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
+func (db *DB) BufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error) {
 	state, err := db.namedRootState(rootID)
 	if err != nil {
 		return false, err
@@ -351,7 +453,7 @@ func (db *DB) bufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error
 		db.namedRootMu.RUnlock()
 	}
 
-	bridge, err := db.collectionsBridge()
+	bridge, err := db.directBridge()
 	if err != nil {
 		return false, err
 	}
@@ -397,13 +499,13 @@ func (db *DB) bufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error
 	return false, nil
 }
 
-func (db *DB) bufferedIteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
+func (db *DB) BufferedIteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
 	runNamedRootBufferedIteratorTestHook(rootID, start, end)
 	state, err := db.namedRootState(rootID)
 	if err != nil {
 		return nil, err
 	}
-	bridge, err := db.collectionsBridge()
+	bridge, err := db.directBridge()
 	if err != nil {
 		return nil, err
 	}
@@ -470,9 +572,9 @@ func (db *DB) bufferedIteratorAtRoot(rootID uint64, start, end []byte) (iterator
 	}, nil
 }
 
-func (db *DB) bufferNamedRootMutations(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error) {
-	if db == nil || db.cached == nil {
-		return nil, fmt.Errorf("missing cached db")
+func (db *DB) BufferNamedRootMutations(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error) {
+	if db == nil {
+		return nil, errDBClosing
 	}
 	if len(rootIDs) != len(mutateRoots) {
 		return nil, fmt.Errorf("named root mutation length mismatch")
@@ -528,26 +630,42 @@ func (db *DB) bufferNamedRootMutations(sync bool, rootIDs []uint64, formats []*r
 	for i := range pending {
 		db.applyPendingNamedRootLocked(&pending[i])
 	}
-	if err := db.cached.ApplySystemOverlayEntriesOwned(sys.entries); err != nil {
+	if err := db.ApplySystemOverlayEntriesOwned(sys.entries); err != nil {
 		db.namedRootMu.Unlock()
 		return nil, err
 	}
 	db.namedRootMu.Unlock()
 
 	if sync {
-		if err := db.flushNamedRootOverlays(true); err != nil {
+		if err := db.FlushNamedRootOverlays(true); err != nil {
 			return nil, err
 		}
-		if err := db.cached.Checkpoint(); err != nil {
+		if err := db.Checkpoint(); err != nil {
 			return nil, err
 		}
 	}
 	return virtualRootIDs, nil
 }
 
-func (db *DB) flushNamedRootOverlays(sync bool) error {
-	if db == nil || db.cached == nil {
-		return nil
+func (db *DB) FlushNamedRootOverlays(sync bool) error {
+	if db == nil {
+		return errDBClosing
+	}
+	db.waitForCheckpoint()
+	db.flushMu.Lock()
+	defer db.flushMu.Unlock()
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	bridge, err := db.directBridge()
+	if err != nil {
+		return err
+	}
+	return db.flushNamedRootOverlaysLocked(bridge, sync)
+}
+
+func (db *DB) flushNamedRootOverlaysLocked(bridge BackendDirectBridge, sync bool) error {
+	if db == nil {
+		return errDBClosing
 	}
 	db.namedRootMu.Lock()
 	defer db.namedRootMu.Unlock()
@@ -632,7 +750,7 @@ func (db *DB) flushNamedRootOverlays(sync bool) error {
 	}
 
 	var updatedSystemEntries []batch.Entry
-	err := db.withCollectionsBridgeWrite(func(bridge caching.BackendDirectBridge) error {
+	err := func(bridge BackendDirectBridge) error {
 		rootIDs := make([]uint64, len(snapshots))
 		formats := make([]*rootfmt.Format, len(snapshots))
 		mutators := make([]func(batch.Interface) error, len(snapshots))
@@ -708,16 +826,43 @@ func (db *DB) flushNamedRootOverlays(sync bool) error {
 			return nil
 		})
 		return err
-	})
+	}(bridge)
 	if err != nil {
 		return err
 	}
-	if err := db.cached.ApplySystemOverlayEntriesOwned(updatedSystemEntries); err != nil {
+	if err := db.ApplySystemOverlayEntriesOwned(updatedSystemEntries); err != nil {
 		return err
 	}
 	clear(db.namedRootsByID)
 	clear(db.namedRootsByKey)
 	return nil
+}
+
+func (db *DB) PendingNamedRoots() bool {
+	if db == nil {
+		return false
+	}
+	db.namedRootMu.RLock()
+	defer db.namedRootMu.RUnlock()
+	return len(db.namedRootsByID) > 0
+}
+
+func (db *DB) DebugNamedRootStateByID(rootID uint64) (NamedRootDebugState, bool) {
+	if db == nil {
+		return NamedRootDebugState{}, false
+	}
+	db.namedRootMu.RLock()
+	defer db.namedRootMu.RUnlock()
+	state := db.namedRootsByID[rootID]
+	if state == nil {
+		return NamedRootDebugState{}, false
+	}
+	return NamedRootDebugState{
+		HasPointState:    state.pointState != nil,
+		HasPrefixState:   state.prefixState != nil,
+		SharedState:      state.pointState != nil && state.pointState == state.prefixState,
+		LegacyEntryCount: len(state.entries),
+	}, true
 }
 
 func (db *DB) namedRootState(rootID uint64) (*namedRootOverlayState, error) {
