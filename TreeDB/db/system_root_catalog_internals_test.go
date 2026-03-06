@@ -182,3 +182,59 @@ func TestNoopUpgradePreservesSystemRootID(t *testing.T) {
 		t.Fatalf("unexpected system root change on user-only write: before=%d after=%d", rootBefore, state1.SystemRootPageID)
 	}
 }
+
+func TestSystemBatchWrite_DoesNotReplaceUserRoot(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("user:k"), []byte("user:v")); err != nil {
+		t.Fatalf("write user key: %v", err)
+	}
+
+	state0 := db.State()
+	if state0 == nil {
+		t.Fatal("missing initial state")
+	}
+	userRootBefore := state0.RootPageID
+	systemRootBefore := state0.SystemRootPageID
+
+	sysBatch := db.NewSystemBatch()
+	if sysBatch == nil {
+		t.Fatal("expected system batch")
+	}
+	defer sysBatch.Close()
+
+	key, err := collections.SystemCollectionMetaKey("users")
+	if err != nil {
+		t.Fatalf("system key: %v", err)
+	}
+	if err := sysBatch.Set(key, []byte("meta")); err != nil {
+		t.Fatalf("system batch set: %v", err)
+	}
+	if err := sysBatch.Write(); err != nil {
+		t.Fatalf("system batch write: %v", err)
+	}
+
+	state1 := db.State()
+	if state1 == nil {
+		t.Fatal("missing state after system write")
+	}
+	if state1.RootPageID != userRootBefore {
+		t.Fatalf("system batch replaced user root: before=%d after=%d", userRootBefore, state1.RootPageID)
+	}
+	if state1.SystemRootPageID == systemRootBefore {
+		t.Fatalf("expected system batch to advance system root")
+	}
+
+	got, err := db.Get([]byte("user:k"))
+	if err != nil {
+		t.Fatalf("get user key: %v", err)
+	}
+	if !bytes.Equal(got, []byte("user:v")) {
+		t.Fatalf("unexpected user value: got=%q want=%q", got, []byte("user:v"))
+	}
+}
