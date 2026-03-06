@@ -25,6 +25,7 @@ type namedRootOverlayState struct {
 	hasFormat     bool
 	format        rootfmt.Format
 	pointState    memtable.Table
+	prefixState   memtable.Table
 	entries       map[string]namedRootOverlayValue
 }
 
@@ -263,16 +264,34 @@ func (db *DB) bufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error
 		return false, err
 	}
 
-	runNamedRootOverlayPrefixScanTestHook(rootID, prefix)
-	db.namedRootMu.RLock()
-	for _, entry := range state.entries {
-		if entry.deleted || !bytes.HasPrefix(entry.key, prefix) {
-			continue
+	if state.prefixState != nil {
+		overlayIter := state.prefixState.NewIterator(prefix, nil)
+		defer func() { _ = overlayIter.Close() }()
+		for overlayIter.Valid() {
+			key := overlayIter.UnsafeKey()
+			if !bytes.HasPrefix(key, prefix) {
+				break
+			}
+			if !overlayIter.IsDeleted() {
+				return true, nil
+			}
+			overlayIter.Next()
+		}
+		if err := overlayIter.Error(); err != nil {
+			return false, err
+		}
+	} else {
+		runNamedRootOverlayPrefixScanTestHook(rootID, prefix)
+		db.namedRootMu.RLock()
+		for _, entry := range state.entries {
+			if entry.deleted || !bytes.HasPrefix(entry.key, prefix) {
+				continue
+			}
+			db.namedRootMu.RUnlock()
+			return true, nil
 		}
 		db.namedRootMu.RUnlock()
-		return true, nil
 	}
-	db.namedRootMu.RUnlock()
 
 	bridge, err := db.collectionsBridge()
 	if err != nil {
@@ -288,15 +307,26 @@ func (db *DB) bufferedHasPrefixAtRoot(rootID uint64, prefix []byte) (bool, error
 		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
-		db.namedRootMu.RLock()
-		overlayEntry, ok := state.entries[string(key)]
-		db.namedRootMu.RUnlock()
-		if ok {
-			if overlayEntry.deleted {
-				baseIter.Next()
-				continue
+		if state.pointState != nil {
+			_, _, flags, found := state.pointState.GetEntry(key)
+			if found {
+				if flags&node.FlagTombstone != 0 {
+					baseIter.Next()
+					continue
+				}
+				return true, nil
 			}
-			return true, nil
+		} else {
+			db.namedRootMu.RLock()
+			overlayEntry, ok := state.entries[string(key)]
+			db.namedRootMu.RUnlock()
+			if ok {
+				if overlayEntry.deleted {
+					baseIter.Next()
+					continue
+				}
+				return true, nil
+			}
 		}
 		if !baseIter.IsDeleted() {
 			return true, nil
@@ -643,6 +673,10 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 		if err != nil {
 			panic(fmt.Sprintf("treedb: create named-root point state: %v", err))
 		}
+		prefixState, err := memtable.NewWithCapacityMode(0, memtable.ModeSkiplist)
+		if err != nil {
+			panic(fmt.Sprintf("treedb: create named-root prefix state: %v", err))
+		}
 		state = &namedRootOverlayState{
 			virtualRootID: pending.virtualRootID,
 			baseRootID:    pending.baseRootID,
@@ -650,6 +684,7 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 			hasFormat:     pending.hasFormat,
 			format:        pending.format,
 			pointState:    pointState,
+			prefixState:   prefixState,
 			entries:       make(map[string]namedRootOverlayValue, len(pending.entries)),
 		}
 		if db.namedRootsByID == nil {
@@ -675,6 +710,9 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 			if state.pointState != nil {
 				state.pointState.SetEntry(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
 			}
+			if state.prefixState != nil {
+				state.prefixState.SetEntry(entry.Key, nil, page.ValuePtr{}, node.FlagTombstone)
+			}
 			continue
 		}
 		state.entries[key] = namedRootOverlayValue{
@@ -683,6 +721,9 @@ func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
 		}
 		if state.pointState != nil {
 			state.pointState.SetEntry(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
+		}
+		if state.prefixState != nil {
+			state.prefixState.SetEntry(entry.Key, entry.Value, page.ValuePtr{}, node.FlagInline)
 		}
 	}
 }
