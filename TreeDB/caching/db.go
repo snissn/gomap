@@ -16094,24 +16094,39 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
-	chunks := b.drainCopyArenaChunks()
+	mainChunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
-	for _, idx := range b.ptrValueEntryIdxs {
-		if idx < len(b.entries) && b.entries[idx].Value != nil {
-			retainPtrArena = true
-			break
+	ptrTouchedMems := make([]memtable.Table, 0, len(b.ptrValueEntryIdxs))
+	if len(b.ptrValueEntryIdxs) > 0 {
+		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueEntryIdxs))
+		for _, idx := range b.ptrValueEntryIdxs {
+			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
+				continue
+			}
+			if b.entries[idx].Value != nil {
+				retainPtrArena = true
+			}
+			mt := b.db.mutableShards[shardIdxs[idx]].mem
+			if mt == nil {
+				continue
+			}
+			if _, ok := seenPtrMems[mt]; ok {
+				continue
+			}
+			seenPtrMems[mt] = struct{}{}
+			ptrTouchedMems = append(ptrTouchedMems, mt)
 		}
 	}
 	if b.ptrValueEntryIdxs != nil {
 		b.ptrValueEntryIdxs = b.ptrValueEntryIdxs[:0]
 	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
+	b.db.retainBatchArenaChunksForMemtables(mainChunks, touchedMems)
 	if retainPtrArena {
-		chunks = append(chunks, ptrChunks...)
+		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {
 		putBatchArenas(ptrChunks)
 	}
-	b.db.retainBatchArenaChunksForMemtables(chunks, touchedMems)
 	b.db.writeMu.RUnlock()
 
 	if needRotate {
