@@ -403,6 +403,15 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	return liveByID, nil
 }
 
+func groupedRecordKeyForPtr(ptr page.ValuePtr) (groupedRecordKey, error) {
+	if ptr.Offset < 4 {
+		return groupedRecordKey{}, fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+	}
+	return groupedRecordKey{
+		fileID: ptr.FileID,
+		start:  uint64(ptr.Offset - 4),
+	}, nil
+}
 func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
@@ -415,10 +424,10 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 		}
 
 		if page.ValuePtrIsGrouped(ptr) {
-			if ptr.Offset < 4 {
-				return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+			k, err := groupedRecordKeyForPtr(ptr)
+			if err != nil {
+				return err
 			}
-			k := groupedRecordKey{fileID: ptr.FileID, start: ptr.Offset - 4}
 			seen := map[groupedRecordKey]struct{}(nil)
 			if seenGroupedRecords != nil {
 				seen = *seenGroupedRecords
@@ -866,7 +875,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		// by LeafRef pointers even if all key/value pointers are rewritten. Move
 		// referenced leaf pages out of the selected source segments so cleanup can
 		// actually reclaim space.
-		if restrictSource && db.indexOuterLeavesInValueLog && len(sourceIDs) > 0 {
+		if db.indexOuterLeavesInValueLog {
 			copied, err := db.rewriteLeafRefsOnline(ctx, writer, ridAlloc, sourceIDs, opts.SyncEachBatch)
 			if err != nil {
 				return stats, err
@@ -1161,9 +1170,6 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if writer == nil || ridAlloc == nil {
 		return 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
-	if len(sourceIDs) == 0 {
-		return 0, nil
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1189,13 +1195,13 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	tracker := newAllocTracker(idx.allocator)
 	leafCtx := &leafRefRewriteCtx{
-		ctx:          ctx,
-		db:           db,
-		pager:        idx.pager,
-		alloc:        tracker,
-		writer:       writer,
-		ridAlloc:     ridAlloc,
-		sourceIDs:    sourceIDs,
+		ctx:       ctx,
+		db:        db,
+		pager:     idx.pager,
+		alloc:     tracker,
+		writer:    writer,
+		ridAlloc:  ridAlloc,
+		sourceIDs: sourceIDs,
 	}
 
 	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)
