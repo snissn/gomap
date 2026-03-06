@@ -12,6 +12,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/rootfmt"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -40,6 +41,11 @@ var rootIteratorBulkBuildHook struct {
 }
 
 var rootIteratorWarmMergeHook struct {
+	mu sync.RWMutex
+	fn func(int)
+}
+
+var rootIteratorCollectEntriesHook struct {
 	mu sync.RWMutex
 	fn func(int)
 }
@@ -92,6 +98,27 @@ func runRootIteratorWarmMergeTestHook(rootIndex int) {
 	rootIteratorWarmMergeHook.mu.RLock()
 	fn := rootIteratorWarmMergeHook.fn
 	rootIteratorWarmMergeHook.mu.RUnlock()
+	if fn != nil {
+		fn(rootIndex)
+	}
+}
+
+func setRootIteratorCollectEntriesTestHook(fn func(int)) func() {
+	rootIteratorCollectEntriesHook.mu.Lock()
+	prev := rootIteratorCollectEntriesHook.fn
+	rootIteratorCollectEntriesHook.fn = fn
+	rootIteratorCollectEntriesHook.mu.Unlock()
+	return func() {
+		rootIteratorCollectEntriesHook.mu.Lock()
+		rootIteratorCollectEntriesHook.fn = prev
+		rootIteratorCollectEntriesHook.mu.Unlock()
+	}
+}
+
+func runRootIteratorCollectEntriesTestHook(rootIndex int) {
+	rootIteratorCollectEntriesHook.mu.RLock()
+	fn := rootIteratorCollectEntriesHook.fn
+	rootIteratorCollectEntriesHook.mu.RUnlock()
 	if fn != nil {
 		fn(rootIndex)
 	}
@@ -362,14 +389,12 @@ func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, format
 	}
 
 	rootBatches := make([]*detachedBatch, len(rootIDs))
-	mergeWarmRoots := make([]bool, len(rootIDs))
 	mergeWarmTables := make([]memtable.Table, len(rootIDs))
 	for i := range rootIDs {
-		if rootIDs[i] != 0 {
-			if provider, ok := rootIters[i].(rootMutationTableProvider); ok {
-				if table := provider.RootMutationTable(); table != nil && table.Len() >= rootIteratorWarmMergeMinEntries {
-					mergeWarmRoots[i] = true
-					mergeWarmTables[i] = table
+		if provider, ok := rootIters[i].(rootMutationTableProvider); ok {
+			if table := provider.RootMutationTable(); table != nil {
+				mergeWarmTables[i] = table
+				if rootIDs[i] != 0 && table.Len() >= rootIteratorWarmMergeMinEntries {
 					continue
 				}
 			}
@@ -424,6 +449,19 @@ func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, format
 		rootID := rootIDs[i]
 		format := rootMutationFormatAt(formats, i)
 		if rootID == 0 {
+			if mergeWarmTables[i] != nil {
+				newRootID, rootTouched, rootNeedsRefresh, err := db.buildRootFromTableLocked(idx, format, mergeWarmTables[i], i)
+				if err != nil {
+					return nil, err
+				}
+				newRootIDs[i] = newRootID
+				touchedValueLogSegments = mergeValueLogSegmentIDs(touchedValueLogSegments, rootTouched)
+				if rootNeedsRefresh {
+					forceValueLogRefresh = true
+				}
+				valueLogDeltas = append(valueLogDeltas, nil)
+				continue
+			}
 			newRootID, rootTouched, rootNeedsRefresh, err := db.buildRootFromIteratorLocked(idx, format, rootIters[i], i)
 			if err != nil {
 				return nil, err
@@ -436,8 +474,8 @@ func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, format
 			valueLogDeltas = append(valueLogDeltas, nil)
 			continue
 		}
-		if mergeWarmRoots[i] {
-			newRootID, rootRetired, rootTouched, rootNeedsRefresh, rootDelta, err := db.mergeRootFromIteratorLocked(idx, rootID, baseSeq, format, rootIters[i], mergeWarmTables[i], i)
+		if mergeWarmTables[i] != nil && mergeWarmTables[i].Len() >= rootIteratorWarmMergeMinEntries {
+			newRootID, rootRetired, rootTouched, rootNeedsRefresh, rootDelta, err := db.mergeRootFromTableLocked(idx, rootID, baseSeq, format, mergeWarmTables[i], i)
 			if err != nil {
 				return nil, err
 			}
@@ -505,6 +543,115 @@ func (db *DB) MutateRootsWithFormatIterators(sync bool, rootIDs []uint64, format
 	vlogRefDelta := mergeValueLogRefDeltas(valueLogDeltas...)
 	touchedValueLogSegments = mergeValueLogSegmentIDs(touchedValueLogSegments, combineTouchedValueLogSegments(append(rootBatches, systemBatch)...))
 	if err := db.finalizeCommit(currentUserRoot, newSystemRoot, retired, sync, metrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta); err != nil {
+		return nil, err
+	}
+	return newRootIDs, nil
+}
+
+// MutateRootsWithFormatTables publishes root-local memtables directly. This
+// avoids iterator -> batch-entry replay for callers that already hold ordered
+// table state, such as cached named-root flush and collection batch ingest.
+func (db *DB) MutateRootsWithFormatTables(sync bool, rootIDs []uint64, formats []*rootfmt.Format, rootTables []memtable.Table, buildSystemOps func([]uint64) ([]batchpkg.Entry, error)) ([]uint64, error) {
+	if db == nil {
+		return nil, fmt.Errorf("missing db")
+	}
+	if db.readOnly {
+		return nil, ErrReadOnly
+	}
+	if len(rootIDs) != len(rootTables) {
+		return nil, fmt.Errorf("mutate root tables length mismatch")
+	}
+	if len(formats) > 0 && len(formats) != len(rootIDs) {
+		return nil, fmt.Errorf("mutate root formats length mismatch")
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	idx := db.idx.Load()
+	if idx == nil {
+		return nil, fmt.Errorf("missing index")
+	}
+
+	db.mu.RLock()
+	baseSeq := db.meta.CommitSeq
+	currentUserRoot := db.meta.UserRootPageID
+	currentSystemRoot := db.meta.SystemRootPageID
+	regID := idx.registry.Register(baseSeq)
+	db.mu.RUnlock()
+	defer idx.registry.Unregister(regID)
+
+	newRootIDs := make([]uint64, len(rootIDs))
+	retired := make([]uint64, 0, len(rootIDs)*2)
+	valueLogDeltas := make([]*valueLogRefDelta, 0, len(rootIDs))
+	forceValueLogRefresh := db.indexOuterLeavesInValueLog
+	var touchedValueLogSegments []uint32
+
+	for i := range rootIDs {
+		rootID := rootIDs[i]
+		format := rootMutationFormatAt(formats, i)
+		table := rootTables[i]
+		if rootID == 0 {
+			newRootID, rootTouched, rootNeedsRefresh, err := db.buildRootFromTableLocked(idx, format, table, i)
+			if err != nil {
+				return nil, err
+			}
+			newRootIDs[i] = newRootID
+			touchedValueLogSegments = mergeValueLogSegmentIDs(touchedValueLogSegments, rootTouched)
+			if rootNeedsRefresh {
+				forceValueLogRefresh = true
+			}
+			valueLogDeltas = append(valueLogDeltas, nil)
+			continue
+		}
+
+		newRootID, rootRetired, rootTouched, rootNeedsRefresh, rootDelta, err := db.mergeRootFromTableLocked(idx, rootID, baseSeq, format, table, i)
+		if err != nil {
+			return nil, err
+		}
+		newRootIDs[i] = newRootID
+		retired = append(retired, rootRetired...)
+		valueLogDeltas = append(valueLogDeltas, rootDelta)
+		touchedValueLogSegments = mergeValueLogSegmentIDs(touchedValueLogSegments, rootTouched)
+		if rootNeedsRefresh {
+			forceValueLogRefresh = true
+		}
+	}
+
+	systemBatch, err := newDetachedBatch(db, true)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = systemBatch.Close() }()
+	if buildSystemOps != nil {
+		ops, err := buildSystemOps(newRootIDs)
+		if err != nil {
+			return nil, err
+		}
+		if err := applyBulkRootOps(systemBatch, ops); err != nil {
+			return nil, err
+		}
+	}
+
+	newSystemRoot := currentSystemRoot
+	systemRetired := []uint64(nil)
+	systemMetrics := adaptive.Metrics{}
+	var systemDelta *valueLogRefDelta
+	if len(systemBatch.batch.SortedEntries()) > 0 {
+		systemDelta, err = db.buildValueLogRefDelta(idx.pager, currentSystemRoot, baseSeq, systemBatch.batch.SortedEntries())
+		if err != nil {
+			return nil, err
+		}
+		newSystemRoot, systemRetired, systemMetrics, err = idx.zipper.Apply(currentSystemRoot, systemBatch.batch)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	retired = append(retired, systemRetired...)
+	vlogRefDelta := mergeValueLogRefDeltas(append(valueLogDeltas, systemDelta)...)
+	touchedValueLogSegments = mergeValueLogSegmentIDs(touchedValueLogSegments, combineTouchedValueLogSegments(systemBatch))
+	if err := db.finalizeCommit(currentUserRoot, newSystemRoot, retired, sync, systemMetrics, touchedValueLogSegments, forceValueLogRefresh, vlogRefDelta); err != nil {
 		return nil, err
 	}
 	return newRootIDs, nil
@@ -753,6 +900,37 @@ func applyBulkRootIterator(target batchpkg.Interface, iter iterator.UnsafeIterat
 		return err
 	}
 	return flush()
+}
+
+func (db *DB) buildValueLogRefDeltaFromIterator(p *pager.Pager, rootID uint64, baseSeq uint64, iter iterator.UnsafeIterator) (*valueLogRefDelta, error) {
+	if db == nil || db.valueLogRefTracker == nil || !db.valueLogRefTracker.canTrack(baseSeq) {
+		return nil, nil
+	}
+	delta := newValueLogRefDelta()
+	if p == nil || iter == nil {
+		return delta, nil
+	}
+	reader := ValueReaderForState(db.State())
+	tr := tree.New(p, reader, rootID)
+	for iter.Valid() {
+		key := iter.UnsafeKey()
+		_, ptr, flags := iter.UnsafeEntry()
+		oldFileID, oldRef, err := lookupValueLogRefAtKey(tr, key)
+		if err != nil {
+			return nil, err
+		}
+		if oldRef {
+			delta.add(oldFileID, -1)
+		}
+		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+			delta.add(ptr.FileID, 1)
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return delta, nil
 }
 
 type rootDeltaMergeSource uint8
@@ -1216,35 +1394,11 @@ func (db *DB) mergeRootFromIteratorLocked(idx *indexGen, rootID uint64, baseSeq 
 	if deltaTable == nil {
 		return 0, nil, nil, false, nil, fmt.Errorf("missing delta table")
 	}
+	_ = deltaIter
 
 	runRootIteratorWarmMergeTestHook(rootIndex)
 
-	deltaEntriesIter := deltaTable.NewIterator(nil, nil)
-	deltaEntries, err := collectRootIteratorEntries(deltaEntriesIter)
-	if closeErr := deltaEntriesIter.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return 0, nil, nil, false, nil, err
-	}
-	delta, err := db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, deltaEntries)
-	if err != nil {
-		return 0, nil, nil, false, nil, err
-	}
-
-	reader := ValueReaderForState(db.State())
-	tr := tree.New(idx.pager, reader, rootID)
-	retired, err := tr.CollectPageIDs()
-	if err != nil {
-		return 0, nil, nil, false, nil, err
-	}
-	baseIter := tr.Iterator(nil, nil)
-	mergedIter := newRootDeltaMergeIterator(deltaIter, baseIter)
-	newRootID, touched, needsRefresh, err := db.buildRootFromIteratorLocked(idx, format, mergedIter, rootIndex)
-	if err != nil {
-		return 0, nil, nil, false, nil, err
-	}
-	return newRootID, retired, touched, needsRefresh, delta, nil
+	return db.mergeRootFromTableLocked(idx, rootID, baseSeq, format, deltaTable, rootIndex)
 }
 
 func (db *DB) buildRootFromIteratorLocked(idx *indexGen, format *rootfmt.Format, iter iterator.UnsafeIterator, rootIndex int) (uint64, []uint32, bool, error) {
@@ -1270,6 +1424,47 @@ func (db *DB) buildRootFromIteratorLocked(idx *indexGen, format *rootfmt.Format,
 		return 0, nil, false, err
 	}
 	return newRootID, buildIter.touchedSegments, rootFormat.OuterLeavesInValueLog || buildIter.sawPointers, nil
+}
+
+func (db *DB) buildRootFromTableLocked(idx *indexGen, format *rootfmt.Format, table memtable.Table, rootIndex int) (uint64, []uint32, bool, error) {
+	if table == nil {
+		return db.buildRootFromIteratorLocked(idx, format, &emptyIterator{}, rootIndex)
+	}
+	return db.buildRootFromIteratorLocked(idx, format, table.NewIterator(nil, nil), rootIndex)
+}
+
+func (db *DB) mergeRootFromTableLocked(idx *indexGen, rootID uint64, baseSeq uint64, format *rootfmt.Format, deltaTable memtable.Table, rootIndex int) (uint64, []uint64, []uint32, bool, *valueLogRefDelta, error) {
+	if idx == nil {
+		return 0, nil, nil, false, nil, fmt.Errorf("missing index")
+	}
+	if deltaTable == nil {
+		return 0, nil, nil, false, nil, fmt.Errorf("missing delta table")
+	}
+
+	runRootIteratorWarmMergeTestHook(rootIndex)
+
+	deltaScanIter := deltaTable.NewIterator(nil, nil)
+	delta, err := db.buildValueLogRefDeltaFromIterator(idx.pager, rootID, baseSeq, deltaScanIter)
+	if closeErr := deltaScanIter.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return 0, nil, nil, false, nil, err
+	}
+
+	reader := ValueReaderForState(db.State())
+	tr := tree.New(idx.pager, reader, rootID)
+	retired, err := tr.CollectPageIDs()
+	if err != nil {
+		return 0, nil, nil, false, nil, err
+	}
+	baseIter := tr.Iterator(nil, nil)
+	mergedIter := newRootDeltaMergeIterator(deltaTable.NewIterator(nil, nil), baseIter)
+	newRootID, touched, needsRefresh, err := db.buildRootFromIteratorLocked(idx, format, mergedIter, rootIndex)
+	if err != nil {
+		return 0, nil, nil, false, nil, err
+	}
+	return newRootID, retired, touched, needsRefresh, delta, nil
 }
 
 func newDetachedBatch(db *DB, system bool) (*detachedBatch, error) {
