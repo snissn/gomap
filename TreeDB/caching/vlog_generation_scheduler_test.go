@@ -306,7 +306,6 @@ func TestVlogGenerationRewrite_DoesNotRunWithZeroBudgetTokens(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
-		_ = backend.Close()
 	})
 
 	value := make([]byte, 2048)
@@ -361,7 +360,6 @@ func TestVlogGenerationRewritePlan_DoesNotRunWithZeroBudgetTokens(t *testing.T) 
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
-		_ = backend.Close()
 	})
 
 	value := make([]byte, 2048)
