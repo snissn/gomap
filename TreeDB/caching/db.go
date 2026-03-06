@@ -63,19 +63,19 @@ var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResul
 var valueLogKeyLeaseMu sync.Mutex
 var valueLogKeyLeases [][][]byte
 
-	const (
-		maxValueLogKeyLeaseCount = 64
-		maxValueLogKeyLeaseCap   = 1 << 20
-		batchArenaMinShift       = 12
-		// batch arenas are chunked key/value copy buffers that may be leased to
-		// memtables. Keep the max pooled chunk size modest to avoid retaining large
-		// mostly-empty tail chunks during big restore batches.
-		batchArenaMaxShift       = 21
-		batchArenaClassCount     = batchArenaMaxShift - batchArenaMinShift + 1
-		outerLeafArenaMinShift   = 12
-		outerLeafArenaMaxShift   = 24
-		outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
-		maxOuterLeafArenaLeases  = 64
+const (
+	maxValueLogKeyLeaseCount = 64
+	maxValueLogKeyLeaseCap   = 1 << 20
+	batchArenaMinShift       = 12
+	// batch arenas are chunked key/value copy buffers that may be leased to
+	// memtables. Keep the max pooled chunk size modest to avoid retaining large
+	// mostly-empty tail chunks during big restore batches.
+	batchArenaMaxShift       = 21
+	batchArenaClassCount     = batchArenaMaxShift - batchArenaMinShift + 1
+	outerLeafArenaMinShift   = 12
+	outerLeafArenaMaxShift   = 24
+	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
+	maxOuterLeafArenaLeases  = 64
 )
 
 type vlogPreparedFrameBody struct {
@@ -14771,38 +14771,38 @@ func (b *Batch) updateBatchCopyHint() {
 	}
 }
 
-	func (b *Batch) arenaCopy(n int) []byte {
-		if n == 0 {
-			return nil
+func (b *Batch) arenaCopy(n int) []byte {
+	if n == 0 {
+		return nil
+	}
+	if cap(b.copyArena)-len(b.copyArena) < n {
+		chunkCap := cap(b.copyArena) * 2
+		if chunkCap < batchCopyArenaMinChunk {
+			chunkCap = batchCopyArenaMinChunk
 		}
-		if cap(b.copyArena)-len(b.copyArena) < n {
-			chunkCap := cap(b.copyArena) * 2
-			if chunkCap < batchCopyArenaMinChunk {
-				chunkCap = batchCopyArenaMinChunk
+		if cap(b.copyArena) == 0 {
+			// Keep unsized batches conservative. Entry-slice capacity can come from
+			// pooled high-water marks and is not a reliable signal for copy payload.
+			if b.copyArenaCap > chunkCap {
+				chunkCap = b.copyArenaCap
 			}
-			if cap(b.copyArena) == 0 {
-				// Keep unsized batches conservative. Entry-slice capacity can come from
-				// pooled high-water marks and is not a reliable signal for copy payload.
-				if b.copyArenaCap > chunkCap {
-					chunkCap = b.copyArenaCap
-				}
-			}
-			if chunkCap < n {
-				chunkCap = n
-			}
-			// Avoid unbounded exponential growth once we reach the pooling limit. Large
-			// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MB)
-			// that is mostly unused, inflating RSS. Only allow larger chunks when a
-			// *single* copy needs it.
-			if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
-				chunkCap = batchCopyArenaMaxRetain
-			}
-			// Switch to a fresh chunk when exhausted so existing entry slices keep
-			// their backing arrays without per-op allocations.
-			chunk := getBatchArena(chunkCap)
-			b.copyArena = chunk[:0]
-			b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
 		}
+		if chunkCap < n {
+			chunkCap = n
+		}
+		// Avoid unbounded exponential growth once we reach the pooling limit. Large
+		// restore batches can otherwise allocate a huge tail chunk (e.g. 8/16/32MB)
+		// that is mostly unused, inflating RSS. Only allow larger chunks when a
+		// *single* copy needs it.
+		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
+			chunkCap = batchCopyArenaMaxRetain
+		}
+		// Switch to a fresh chunk when exhausted so existing entry slices keep
+		// their backing arrays without per-op allocations.
+		chunk := getBatchArena(chunkCap)
+		b.copyArena = chunk[:0]
+		b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
+	}
 	start := len(b.copyArena)
 	b.copyArena = b.copyArena[:start+n]
 	b.copyBytes += n
@@ -15048,8 +15048,8 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	return nil
 }
 
-	const (
-		batchDefaultEntriesCap = 16
+const (
+	batchDefaultEntriesCap = 16
 	// Keep the adaptive NewBatch reserve bounded so one huge batch cannot
 	// permanently over-provision typical batch allocations.
 	batchHintEntriesMax    = 8192
@@ -15057,18 +15057,18 @@ func (b *Batch) SetOps(ops []batch.Entry) error {
 	streamSwitchMinBytes   = 1 << 20 // 1MiB
 	// Only fan out value-log appends across multiple lanes when a batch is large
 	// enough to amortize per-lane setup and goroutine overhead.
-		multiLaneValueLogMinRecords = 1024
-		batchCopyArenaMinChunk      = 4 << 10
-		batchCopyArenaUnsizedInit   = 8 << 10
-		batchCopyArenaBytesPerEntry = 192
-		batchCopyArenaInitMax       = 2 << 20
-		// Avoid retaining 4MiB chunks in the pool/leases; they are easy to
-		// underfill (e.g. a ~2MiB batch spills into a second chunk) and can inflate
-		// peak RSS during restore workloads.
-		batchCopyArenaMaxRetain     = 2 << 20
-		batchEntriesPoolMaxRetain   = 16 << 10
-		batchIntSlicePoolMaxRetain  = 16 << 10
-	)
+	multiLaneValueLogMinRecords = 1024
+	batchCopyArenaMinChunk      = 4 << 10
+	batchCopyArenaUnsizedInit   = 8 << 10
+	batchCopyArenaBytesPerEntry = 192
+	batchCopyArenaInitMax       = 2 << 20
+	// Avoid retaining 4MiB chunks in the pool/leases; they are easy to
+	// underfill (e.g. a ~2MiB batch spills into a second chunk) and can inflate
+	// peak RSS during restore workloads.
+	batchCopyArenaMaxRetain    = 2 << 20
+	batchEntriesPoolMaxRetain  = 16 << 10
+	batchIntSlicePoolMaxRetain = 16 << 10
+)
 
 func batchCopyArenaInitCapForEntries(entries int) int {
 	if entries <= 0 {
