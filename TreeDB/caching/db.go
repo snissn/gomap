@@ -3105,6 +3105,7 @@ type DB struct {
 	systemMu                       sync.RWMutex
 	systemOverlay                  map[string]systemOverlayValue
 	systemOverlayVersion           atomic.Uint64
+	systemDomain                   *rootDomain
 	namedRootMu                    sync.RWMutex
 	namedRootsByID                 map[uint64]*namedRootOverlayState
 	namedRootsByKey                map[string]*namedRootOverlayState

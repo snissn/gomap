@@ -43,7 +43,7 @@ func (db *DB) PendingSystemOverlay() bool {
 	}
 	db.systemMu.RLock()
 	defer db.systemMu.RUnlock()
-	return len(db.systemOverlay) > 0
+	return db.systemDomain != nil && db.systemDomain.pending()
 }
 
 func (db *DB) ApplySystemOverlayEntries(entries []batch.Entry) error {
@@ -76,12 +76,17 @@ func (db *DB) GetSystem(key []byte) ([]byte, error) {
 	if db == nil {
 		return nil, errDBClosing
 	}
-	if entry, ok := db.systemOverlayGet(key); ok {
-		if entry.deleted {
-			return nil, nil
+	db.systemMu.RLock()
+	if domain := db.systemDomain; domain != nil {
+		if value, _, flags, found := domain.getEntry(key); found {
+			db.systemMu.RUnlock()
+			if flags&node.FlagTombstone != 0 {
+				return nil, nil
+			}
+			return append([]byte(nil), value...), nil
 		}
-		return append([]byte(nil), entry.value...), nil
 	}
+	db.systemMu.RUnlock()
 	bridge, err := db.systemBridge(true)
 	if err != nil {
 		return nil, err
@@ -115,15 +120,23 @@ func (db *DB) SystemIterator(start, end []byte) (iterator.UnsafeIterator, error)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := db.buildMergedSystemEntries(bridge, start, end)
+	db.systemMu.RLock()
+	domain := db.systemDomain
+	pending := domain != nil && domain.pending()
+	db.systemMu.RUnlock()
+	if !pending {
+		return bridge.SystemIterator(start, end)
+	}
+	overlayIter, err := db.systemDomainIterator(start, end)
 	if err != nil {
 		return nil, err
 	}
-	return &systemOverlayIterator{
-		entries: entries,
-		start:   append([]byte(nil), start...),
-		end:     append([]byte(nil), end...),
-	}, nil
+	baseIter, err := bridge.SystemIterator(start, end)
+	if err != nil {
+		_ = overlayIter.Close()
+		return nil, err
+	}
+	return newNamedRootMergeIterator(overlayIter, baseIter, start, end), nil
 }
 
 func (db *DB) SystemRootVersion() uint64 {
@@ -136,8 +149,11 @@ func (db *DB) SystemRootVersion() uint64 {
 	}
 	base := bridge.SystemRootVersion()
 	db.systemMu.RLock()
-	pending := len(db.systemOverlay) > 0
-	overlayVersion := db.systemOverlayVersion.Load()
+	pending := db.systemDomain != nil && db.systemDomain.pending()
+	overlayVersion := uint64(0)
+	if db.systemDomain != nil {
+		overlayVersion = db.systemDomain.version.Load()
+	}
 	db.systemMu.RUnlock()
 	if !pending {
 		return base
@@ -168,15 +184,21 @@ func (db *DB) flushSystemOverlayLocked(bridge BackendDirectBridge, sync bool) er
 	if db == nil {
 		return errDBClosing
 	}
-	entries := db.snapshotSystemOverlayEntries()
-	if len(entries) == 0 {
+	db.systemMu.Lock()
+	defer db.systemMu.Unlock()
+	if db.systemDomain == nil || !db.systemDomain.pending() {
 		return nil
 	}
+	flushIter, err := db.systemDomain.newIterator(nil, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = flushIter.Close() }()
 	target := bridge.NewSystemBatch()
 	if target == nil {
 		return errDBClosing
 	}
-	if err := target.SetOps(entries); err != nil {
+	if err := applySystemIterator(target, flushIter); err != nil {
 		_ = target.Close()
 		return err
 	}
@@ -193,7 +215,12 @@ func (db *DB) flushSystemOverlayLocked(bridge BackendDirectBridge, sync bool) er
 	if closeErr != nil {
 		return closeErr
 	}
-	db.clearFlushedSystemOverlayEntries(entries)
+	nextDomain, err := newRootDomain()
+	if err != nil {
+		return err
+	}
+	db.systemDomain = nextDomain
+	db.systemDomain.version.Add(1)
 	return nil
 }
 
@@ -207,25 +234,93 @@ func (db *DB) systemBridge(wait bool) (BackendDirectBridge, error) {
 	return db.directBridge()
 }
 
+func (db *DB) ensureSystemDomainLocked() (*rootDomain, error) {
+	if db.systemDomain != nil && db.systemDomain.table != nil {
+		return db.systemDomain, nil
+	}
+	domain, err := newRootDomain()
+	if err != nil {
+		return nil, err
+	}
+	db.systemDomain = domain
+	return domain, nil
+}
+
+func (db *DB) systemDomainIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	db.systemMu.RLock()
+	defer db.systemMu.RUnlock()
+	if db.systemDomain == nil || !db.systemDomain.pending() {
+		return nil, errDBClosing
+	}
+	return db.systemDomain.newIterator(start, end)
+}
+
+func (db *DB) DebugSystemRootState() SystemRootDebugState {
+	if db == nil {
+		return SystemRootDebugState{}
+	}
+	db.systemMu.RLock()
+	defer db.systemMu.RUnlock()
+	state := SystemRootDebugState{
+		LegacyEntryCount: len(db.systemOverlay),
+	}
+	if db.systemDomain != nil && db.systemDomain.table != nil && db.systemDomain.table.Len() > 0 {
+		state.HasMutable = true
+	}
+	return state
+}
+
+func applySystemIterator(target batch.Interface, iter iterator.UnsafeIterator) error {
+	if iter == nil {
+		return nil
+	}
+	const chunkCap = 256
+	entries := make([]batch.Entry, 0, chunkCap)
+	flush := func() error {
+		if len(entries) == 0 {
+			return nil
+		}
+		if err := target.SetOps(entries); err != nil {
+			return err
+		}
+		entries = entries[:0]
+		return nil
+	}
+	for iter.Valid() {
+		key := iter.KeyCopy(nil)
+		entry := batch.Entry{Key: key}
+		if iter.IsDeleted() {
+			entry.Type = batch.OpDelete
+		} else {
+			entry.Type = batch.OpPut
+			entry.Value = iter.ValueCopy(nil)
+		}
+		entries = append(entries, entry)
+		iter.Next()
+		if len(entries) == cap(entries) {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
+	if err := iter.Error(); err != nil {
+		return err
+	}
+	return flush()
+}
+
 func (db *DB) applySystemOverlayEntriesOwned(entries []batch.Entry) {
 	if len(entries) == 0 {
 		return
 	}
 	db.systemMu.Lock()
 	defer db.systemMu.Unlock()
-	if db.systemOverlay == nil {
-		db.systemOverlay = make(map[string]systemOverlayValue, len(entries))
+	if _, err := db.ensureSystemDomainLocked(); err != nil {
+		panic(err)
 	}
-	for _, entry := range entries {
-		key := string(entry.Key)
-		switch entry.Type {
-		case batch.OpDelete:
-			db.systemOverlay[key] = systemOverlayValue{deleted: true}
-		case batch.OpPut:
-			db.systemOverlay[key] = systemOverlayValue{value: entry.Value}
-		}
+	if err := db.systemDomain.applyEntriesOwned(entries, false); err != nil {
+		panic(err)
 	}
-	db.systemOverlayVersion.Add(1)
 }
 
 func (db *DB) snapshotSystemOverlayEntries() []batch.Entry {
