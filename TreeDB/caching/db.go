@@ -8899,13 +8899,13 @@ func (db *DB) vlogGenerationRewriteBudgetCapBytes() int64 {
 	}
 	targets := int64(0)
 	if db.valueLogGenerationHotTarget > 0 {
-		targets += db.valueLogGenerationHotTarget
+		targets = addClampInt64(targets, db.valueLogGenerationHotTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationWarmTarget > 0 {
-		targets += db.valueLogGenerationWarmTarget
+		targets = addClampInt64(targets, db.valueLogGenerationWarmTarget, maxPositiveInt64)
 	}
 	if db.valueLogGenerationColdTarget > 0 {
-		targets += db.valueLogGenerationColdTarget
+		targets = addClampInt64(targets, db.valueLogGenerationColdTarget, maxPositiveInt64)
 	}
 	if targets > capBytes {
 		capBytes = targets
@@ -8925,29 +8925,73 @@ func (db *DB) vlogGenerationAccrueRewriteBudget(now time.Time) {
 		return
 	}
 	nowNs := now.UnixNano()
-	prevNs := db.vlogGenerationRewriteBudgetLastUnixNano.Swap(nowNs)
-	if prevNs <= 0 || nowNs <= prevNs {
+	var prevNs int64
+	for {
+		prevNs = db.vlogGenerationRewriteBudgetLastUnixNano.Load()
+		if prevNs > 0 && nowNs <= prevNs {
+			return
+		}
+		if db.vlogGenerationRewriteBudgetLastUnixNano.CompareAndSwap(prevNs, nowNs) {
+			break
+		}
+	}
+	if prevNs <= 0 {
 		return
 	}
 	deltaNs := nowNs - prevNs
-	add := (budgetBps * deltaNs) / int64(time.Second)
+	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
+	add := mulDivClampInt64(budgetBps, deltaNs, int64(time.Second), capBytes)
 	if add <= 0 {
 		return
 	}
-	capBytes := db.vlogGenerationRewriteBudgetCapBytes()
 	for {
 		cur := db.vlogGenerationRewriteBudgetTokensBytes.Load()
-		next := cur + add
-		if next > capBytes {
-			next = capBytes
-		}
-		if next < 0 {
-			next = 0
-		}
+		next := addClampInt64(cur, add, capBytes)
 		if db.vlogGenerationRewriteBudgetTokensBytes.CompareAndSwap(cur, next) {
 			return
 		}
 	}
+}
+
+const maxPositiveInt64 = int64(^uint64(0) >> 1)
+
+func addClampInt64(cur, add, limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	if cur <= 0 {
+		cur = 0
+	}
+	if add <= 0 {
+		if cur > limit {
+			return limit
+		}
+		return cur
+	}
+	if cur >= limit || cur > limit-add {
+		return limit
+	}
+	return cur + add
+}
+
+func mulDivClampInt64(a, b, div, cap int64) int64 {
+	if a <= 0 || b <= 0 || div <= 0 || cap <= 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	var q uint64
+	if hi == 0 {
+		q = lo / uint64(div)
+	} else {
+		if hi >= uint64(div) {
+			return cap
+		}
+		q, _ = bits.Div64(hi, lo, uint64(div))
+	}
+	if q > uint64(cap) {
+		return cap
+	}
+	return int64(q)
 }
 
 func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
