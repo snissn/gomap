@@ -443,7 +443,7 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 				p.MarkVerified(pageID)
 			}
 		}
-	return nil
+		return nil
 	}, func(ptr page.ValuePtr) error {
 		if !page.IsValueLogFileID(ptr.FileID) {
 			return nil
