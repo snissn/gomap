@@ -34,6 +34,12 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 			_ = backend.Close()
 			t.Fatalf("Open: %v", err)
 		}
+		closed := false
+		defer func() {
+			if !closed {
+				_ = db.Close()
+			}
+		}()
 		value := bytes.Repeat([]byte{prefix}, 4096)
 		for i := 0; i < 8; i++ {
 			key := []byte{prefix, byte(i)}
@@ -49,6 +55,7 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
+		closed = true
 	}
 
 	writeSession('a')
