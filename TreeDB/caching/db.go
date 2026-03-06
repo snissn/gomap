@@ -70,13 +70,24 @@ var valueLogKeyLeases [][][]byte
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolLastGC atomic.Uint32
+var batchArenaPoolBudgetProcs atomic.Int32
+var batchArenaPoolBudgetCached atomic.Int64
+
+var batchArenaPoolNumGC = func() uint32 {
+	var ms runtime.MemStats
+	runtime.ReadMemStats(&ms)
+	return uint32(ms.NumGC)
+}
 
 func computeBatchArenaPoolBudgetBytes() int64 {
+	return computeBatchArenaPoolBudgetBytesForProcs(runtime.GOMAXPROCS(0))
+}
+
+func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
 	// retention during restore workloads.
 	const maxChunksPerP = 4
 	const maxBudgetBytes = int64(256 << 20)
-	procs := runtime.GOMAXPROCS(0)
 	if procs < 1 {
 		procs = 1
 	}
@@ -93,7 +104,37 @@ func computeBatchArenaPoolBudgetBytes() int64 {
 }
 
 func currentBatchArenaPoolBudgetBytes() int64 {
-	return computeBatchArenaPoolBudgetBytes()
+	procs := runtime.GOMAXPROCS(0)
+	if procs < 1 {
+		procs = 1
+	}
+	if batchArenaPoolBudgetProcs.Load() == int32(procs) {
+		if budget := batchArenaPoolBudgetCached.Load(); budget > 0 {
+			return budget
+		}
+	}
+	budget := computeBatchArenaPoolBudgetBytesForProcs(procs)
+	batchArenaPoolBudgetCached.Store(budget)
+	batchArenaPoolBudgetProcs.Store(int32(procs))
+	return budget
+}
+
+func maybeResetBatchArenaPoolBytesAfterGC() {
+	if batchArenaPoolBytes.Load() <= 0 {
+		return
+	}
+	numGC := batchArenaPoolNumGC()
+	last := batchArenaPoolLastGC.Load()
+	if last == numGC {
+		return
+	}
+	if last == 0 {
+		batchArenaPoolLastGC.CompareAndSwap(0, numGC)
+		return
+	}
+	if batchArenaPoolLastGC.CompareAndSwap(last, numGC) {
+		batchArenaPoolBytes.Store(0)
+	}
 }
 
 const (
@@ -353,6 +394,7 @@ func getBatchArena(capacity int) []byte {
 			}
 		}
 	}
+	maybeResetBatchArenaPoolBytesAfterGC()
 	return make([]byte, 0, classCap)
 }
 
