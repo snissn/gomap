@@ -11537,24 +11537,23 @@ func (db *DB) flushSyncRequested(sync bool) bool {
 
 func (db *DB) pickFlushLane() (int, bool) {
 	db.mu.RLock()
-	if len(db.queue) == 0 {
-		db.mu.RUnlock()
-		return 0, false
-	}
 	laneCount := len(db.lanes)
 	if laneCount == 0 {
 		laneCount = 1
 	}
 	counts := make([]int, laneCount)
-	for i := range db.queue {
-		laneID := 0
-		if i < len(db.queueLaneIDs) {
-			laneID = int(db.queueLaneIDs[i])
+	queueLen := len(db.queue)
+	if queueLen > 0 {
+		for i := range db.queue {
+			laneID := 0
+			if i < len(db.queueLaneIDs) {
+				laneID = int(db.queueLaneIDs[i])
+			}
+			if laneID < 0 || laneID >= laneCount {
+				laneID = 0
+			}
+			counts[laneID]++
 		}
-		if laneID < 0 || laneID >= laneCount {
-			laneID = 0
-		}
-		counts[laneID]++
 	}
 	bestLane := 0
 	bestCount := 0
@@ -11565,6 +11564,21 @@ func (db *DB) pickFlushLane() (int, bool) {
 		}
 	}
 	db.mu.RUnlock()
+	if db.PendingNamedRoots() {
+		if queueLen == 0 {
+			return 0, true
+		}
+		if laneCount > 0 {
+			counts[0]++
+			if counts[0] > bestCount {
+				bestLane = 0
+				bestCount = counts[0]
+			}
+		}
+	}
+	if bestCount == 0 {
+		return 0, false
+	}
 	return bestLane, true
 }
 
@@ -11603,6 +11617,9 @@ func (db *DB) flushAllLocked(reqSync bool, includeOverlays bool) {
 		active[laneID] = true
 	}
 	db.mu.RUnlock()
+	if db.PendingNamedRoots() {
+		active[0] = true
+	}
 
 	activeCount := 0
 	for i := range active {
@@ -11643,15 +11660,11 @@ func (db *DB) flushCachedOverlayUnitsLocked(sync bool) {
 	if db == nil {
 		return
 	}
-	if !db.PendingNamedRoots() && !db.PendingSystemOverlay() {
+	if !db.PendingSystemOverlay() {
 		return
 	}
 	bridge, err := db.directBridge()
 	if err != nil {
-		db.reportError(err)
-		return
-	}
-	if err := db.flushNamedRootOverlaysLocked(bridge, sync); err != nil {
 		db.reportError(err)
 		return
 	}
@@ -11840,7 +11853,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	queueLen := len(db.queue)
 	if queueLen == 0 {
 		db.mu.Unlock()
-		return false
+		return db.flushNamedRootLaneOnce(sync, laneID)
 	}
 	maxMemtables := 1
 	targetBytes := int64(0)
@@ -11862,7 +11875,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	units, ids, totalBytes, totalLen := db.collectFlushUnitsLocked(laneID, maxMemtables, targetBytes)
 	db.mu.Unlock()
 	if len(units) == 0 {
-		return false
+		return db.flushNamedRootLaneOnce(sync, laneID)
 	}
 
 	if totalLen == 0 {
@@ -12529,6 +12542,22 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 		db.bpCond.Broadcast()
 		db.bpMu.Unlock()
+	}
+	return true
+}
+
+func (db *DB) flushNamedRootLaneOnce(sync bool, laneID int) bool {
+	if laneID != 0 || !db.PendingNamedRoots() {
+		return false
+	}
+	bridge, err := db.directBridge()
+	if err != nil {
+		db.reportError(err)
+		return false
+	}
+	if err := db.flushNamedRootOverlaysLocked(bridge, sync); err != nil {
+		db.reportError(err)
+		return false
 	}
 	return true
 }
