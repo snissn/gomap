@@ -1467,6 +1467,13 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 			}
 		}
 	}
+	if forceValueLogRefresh {
+		inlineFileIDs, err := db.inlineAppenderCreatedFileIDs()
+		if err != nil {
+			return post, err
+		}
+		touchedValueLogSegments = mergeValueLogSegmentIDs(touchedValueLogSegments, inlineFileIDs)
+	}
 	debugTiming := commitTimingEnabled()
 	var (
 		start    time.Time
@@ -1544,7 +1551,13 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		if forceValueLogRefresh || len(touchedValueLogSegments) > 0 {
+		if len(touchedValueLogSegments) > 0 {
+			if err := db.valueLogManager.EnsureTracked(touchedValueLogSegments); err != nil {
+				db.mu.Unlock()
+				return post, err
+			}
+			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+		} else if forceValueLogRefresh {
 			valueLogSet = db.valueLogManager.CurrentSet()
 		} else {
 			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
@@ -1576,6 +1589,62 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	}
 
 	return post, nil
+}
+
+func (db *DB) inlineAppenderCreatedFileIDs() ([]uint32, error) {
+	if db == nil {
+		return nil, nil
+	}
+	db.inlineAppendMu.Lock()
+	defer db.inlineAppendMu.Unlock()
+	if db.inlineAppender == nil {
+		return nil, nil
+	}
+	return db.inlineAppender.createdFileIDs()
+}
+
+func mergeValueLogSegmentIDs(base []uint32, extra []uint32) []uint32 {
+	if len(extra) == 0 {
+		return base
+	}
+	if len(base) == 0 {
+		out := make([]uint32, 0, len(extra))
+		seen := make(map[uint32]struct{}, len(extra))
+		for _, id := range extra {
+			if id == 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+		return out
+	}
+	seen := make(map[uint32]struct{}, len(base)+len(extra))
+	out := make([]uint32, 0, len(base)+len(extra))
+	for _, id := range base {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	for _, id := range extra {
+		if id == 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (db *DB) finalizeCommitPostWork(post finalizeCommitPost) {

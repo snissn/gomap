@@ -711,6 +711,52 @@ func (m *Manager) SegmentPath(id uint32) string {
 	return filepath.Join(m.dir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 }
 
+func (m *Manager) ensureTrackedLocked(id uint32) error {
+	if _, ok := m.files[id]; ok {
+		return nil
+	}
+	path := m.SegmentPath(id)
+	f, err := openFile(path, id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
+	if err != nil {
+		return err
+	}
+	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
+	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
+	m.files[id] = f
+	return nil
+}
+
+// EnsureTracked registers the provided segment IDs without scanning the
+// filesystem. Callers in hot commit paths can use this when they already know
+// which value-log segments were referenced by the state being published.
+func (m *Manager) EnsureTracked(ids []uint32) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var seen map[uint32]struct{}
+	if len(ids) > 1 {
+		seen = make(map[uint32]struct{}, len(ids))
+	}
+	for _, id := range ids {
+		if id == 0 {
+			continue
+		}
+		if seen != nil {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+		}
+		if err := m.ensureTrackedLocked(id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Refresh scans the directory and registers any new segments.
 func (m *Manager) Refresh() error {
 	segments, err := listSegments(m.dir)
@@ -720,16 +766,9 @@ func (m *Manager) Refresh() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, seg := range segments {
-		if _, ok := m.files[seg.id]; ok {
-			continue
-		}
-		f, err := openFile(seg.path, seg.id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
-		if err != nil {
+		if err := m.ensureTrackedLocked(seg.id); err != nil {
 			return err
 		}
-		f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
-		f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
-		m.files[seg.id] = f
 	}
 	return nil
 }

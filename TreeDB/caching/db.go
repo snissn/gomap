@@ -2454,6 +2454,11 @@ func (db *DB) pruneRetainedValueLogs() {
 	if len(paths) == 0 {
 		return
 	}
+	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+		if err := refresher.RefreshValueLogSet(); err != nil {
+			db.reportError(fmt.Errorf("cachingdb: failed to refresh backend value-log set before prune: %w", err))
+		}
+	}
 
 	live, err := db.collectValueLogLiveIDs()
 	if err != nil {

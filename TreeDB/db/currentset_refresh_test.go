@@ -145,6 +145,34 @@ func TestPointerCommitRefreshesValueLogSet(t *testing.T) {
 	}
 }
 
+func TestLeafPageCommitPublishesLeafRefSegment(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir:                        dir,
+		IndexOuterLeavesInValueLog: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if err := d.Set([]byte("k"), bytes.Repeat([]byte("v"), 256)); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	ptr, ok := page.DecodeLeafRef(st.RootPageID)
+	if !ok {
+		t.Fatalf("expected leaf-ref root page, got %d", st.RootPageID)
+	}
+	if _, ok := st.ValueLogSet.Files[ptr.FileID]; !ok {
+		t.Fatalf("leaf-page commit missing segment %d from current value-log set", ptr.FileID)
+	}
+}
+
 func TestCurrentSetRefresh_InlineThenPointerThenInline(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})

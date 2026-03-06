@@ -71,6 +71,39 @@ func TestManagerCurrentSetNoRefresh(t *testing.T) {
 	}
 }
 
+func TestManagerEnsureTrackedRegistersSegmentWithoutRefresh(t *testing.T) {
+	dir := t.TempDir()
+	seg1 := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("a"), 64))
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	set1 := mgr.CurrentSetNoRefresh()
+	if _, ok := set1.Files[seg1]; !ok {
+		t.Fatalf("initial CurrentSetNoRefresh missing segment %d", seg1)
+	}
+	if err := mgr.Release(set1); err != nil {
+		t.Fatalf("Release(set1): %v", err)
+	}
+
+	seg2 := writeTestSegment(t, dir, 0, 2, 2, bytes.Repeat([]byte("b"), 64))
+	if err := mgr.EnsureTracked([]uint32{seg2, seg2}); err != nil {
+		t.Fatalf("EnsureTracked(%d): %v", seg2, err)
+	}
+
+	set2 := mgr.CurrentSetNoRefresh()
+	if _, ok := set2.Files[seg2]; !ok {
+		_ = mgr.Release(set2)
+		t.Fatalf("CurrentSetNoRefresh missing EnsureTracked segment %d", seg2)
+	}
+	if err := mgr.Release(set2); err != nil {
+		t.Fatalf("Release(set2): %v", err)
+	}
+}
+
 func TestManagerReleaseZombieDeletesSegmentOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("x"), 64))

@@ -75,6 +75,56 @@ func TestSecondaryFindByKey_NonUnique_ReturnsSortedIDs(t *testing.T) {
 	}
 }
 
+func TestSecondaryFindByKey_NonUnique_ReturnedIDsRemainStableAcrossLookups(t *testing.T) {
+	d, err := db.Open(db.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, IndexDefinition{Name: "city_idx", Field: "city"}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	if _, err := col.Insert([]byte("u2"), []byte(`{"city":"hnl"}`)); err != nil {
+		t.Fatalf("insert u2: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"city":"hnl"}`)); err != nil {
+		t.Fatalf("insert u1: %v", err)
+	}
+	if _, err := col.Insert([]byte("u9"), []byte(`{"city":"sfo"}`)); err != nil {
+		t.Fatalf("insert u9: %v", err)
+	}
+
+	ids, err := col.FindByIndex("city_idx", "hnl")
+	if err != nil {
+		t.Fatalf("find hnl: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected 2 ids, got %d", len(ids))
+	}
+
+	other, err := col.FindByIndex("city_idx", "sfo")
+	if err != nil {
+		t.Fatalf("find sfo: %v", err)
+	}
+	if len(other) != 1 || !bytes.Equal(other[0], []byte("u9")) {
+		t.Fatalf("expected [u9], got %#v", other)
+	}
+	if !bytes.Equal(ids[0], []byte("u1")) || !bytes.Equal(ids[1], []byte("u2")) {
+		t.Fatalf("expected first lookup to remain [u1 u2], got %#v", ids)
+	}
+}
+
 func TestSecondaryIndex_StoresNoValuePayload(t *testing.T) {
 	d, err := db.Open(db.Options{Dir: t.TempDir()})
 	if err != nil {

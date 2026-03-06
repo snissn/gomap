@@ -40,14 +40,31 @@ type CollectionManager struct {
 }
 
 type Collection struct {
-	db        collectionDB
-	mgr       *CollectionManager
-	meta      CollectionMeta
-	metaEpoch uint64
+	db           collectionDB
+	mgr          *CollectionManager
+	meta         CollectionMeta
+	metaEpoch    uint64
+	primary      *collectionRootRuntime
+	indexes      map[string]*collectionIndexRuntime
+	cacheVersion uint64
+}
+
+type collectionRootRuntime struct {
+	desc    CollectionRootDescriptor
+	rootKey []byte
+}
+
+type collectionIndexRuntime struct {
+	def     IndexDefinition
+	desc    CollectionRootDescriptor
+	rootKey []byte
+	prefix  []byte
+	path    []string
 }
 
 type collectionDB interface {
 	Get(key []byte) ([]byte, error)
+	HasAtRoot(rootID uint64, key []byte) (bool, error)
 	GetAtRoot(rootID uint64, key []byte) ([]byte, error)
 	Set(key, value []byte) error
 	Delete(key []byte) error
@@ -64,6 +81,7 @@ type collectionDB interface {
 	MutateRootsWithFuncs(sync bool, rootIDs []uint64, mutateRoots []func(batch.Interface) error, updateSystem func(batch.Interface, []uint64) error) ([]uint64, error)
 	MutateRoot(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
 	MutateRootAndUser(rootID uint64, sync bool, mutateRoot func(batch.Interface) error, mutateUser func(batch.Interface) error, updateSystem func(batch.Interface, uint64) error) (uint64, error)
+	SystemRootVersion() uint64
 }
 
 type systemIterator = iterator.UnsafeIterator
@@ -499,17 +517,29 @@ func (c *Collection) Insert(id, document []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	existing, err := c.db.GetAtRoot(rootDesc.RootPageID, key)
+	writePrimary := func(root batch.Interface) error {
+		return setDocumentOnBatch(root, key, document)
+	}
+	if len(c.meta.Indexes) == 0 {
+		if err := c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimary, nil, nil); err != nil {
+			return nil, err
+		}
+		return persistedID, nil
+	}
+	exists, err := c.db.HasAtRoot(rootDesc.RootPageID, key)
 	if err != nil {
 		return nil, err
+	}
+	var existing []byte
+	if exists {
+		existing, err = c.db.GetAtRoot(rootDesc.RootPageID, key)
+		if err != nil {
+			return nil, err
+		}
 	}
 	removals, additions, err := c.indexMutationForUpsert(persistedID, existing, document)
 	if err != nil {
 		return nil, err
-	}
-
-	writePrimary := func(root batch.Interface) error {
-		return setDocumentOnBatch(root, key, document)
 	}
 	if err := c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimary, removals, additions); err != nil {
 		return nil, err
@@ -559,6 +589,12 @@ func (c *Collection) Delete(documentID []byte) error {
 	if err != nil {
 		return err
 	}
+	if len(c.meta.Indexes) == 0 {
+		writePrimaryDelete := func(root batch.Interface) error {
+			return deleteDocumentOnBatch(root, key)
+		}
+		return c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimaryDelete, nil, nil)
+	}
 	existing, err := c.db.GetAtRoot(rootDesc.RootPageID, key)
 	if err != nil {
 		return err
@@ -571,7 +607,7 @@ func (c *Collection) Delete(documentID []byte) error {
 		return err
 	}
 	writePrimaryDelete := func(root batch.Interface) error {
-		return root.Delete(key)
+		return deleteDocumentOnBatch(root, key)
 	}
 	return c.mutateDocumentAndIndexes(rootDesc, rootKey, writePrimaryDelete, entries, nil)
 }
@@ -590,9 +626,7 @@ func (c *Collection) documentKey(documentID []byte) ([]byte, error) {
 	if err := requireDocumentID(documentID); err != nil {
 		return nil, err
 	}
-	key := make([]byte, 0, len(documentID))
-	key = append(key, documentID...)
-	return key, nil
+	return documentID, nil
 }
 
 func requireDocumentID(documentID []byte) error {
@@ -797,42 +831,42 @@ func (c *Collection) FindByIndex(indexName, value string) ([][]byte, error) {
 	if !ok {
 		return nil, nil
 	}
-	encodedValue, err := encodeIndexScalar(value)
+	runtime, err := c.indexRuntime(idxDef)
 	if err != nil {
 		return nil, err
 	}
-	prefix, err := indexValuePrefix(c.meta.Name, idxDef.Name, encodedValue)
+	prefix, err := indexValuePrefixForString(runtime.prefix, value)
 	if err != nil {
 		return nil, err
 	}
-	rootDesc, _, err := c.secondaryRootDescriptor(idxDef)
-	if err != nil {
-		return nil, err
-	}
-	it, err := c.db.IteratorAtRoot(rootDesc.RootPageID, prefix, nil)
+	it, err := c.db.IteratorAtRoot(runtime.desc.RootPageID, prefix, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = it.Close() }()
-	out := make([][]byte, 0, 8)
+	resultCap := 1
+	arenaCap := 32
+	if !idxDef.Unique {
+		resultCap = 64
+		arenaCap = 1024
+	}
+	out := make([][]byte, 0, resultCap)
+	arena := make([]byte, 0, arenaCap)
 	for it.Valid() {
 		key := it.UnsafeKey()
 		if !bytes.HasPrefix(key, prefix) {
 			break
 		}
 		if !it.IsDeleted() {
-			docID, err := parseIndexEntryDocID(c.meta.Name, idxDef.Name, key)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, docID)
+			start := len(arena)
+			arena = append(arena, key[len(prefix):]...)
+			out = append(out, arena[start:len(arena)])
 		}
 		it.Next()
 	}
 	if err := it.Error(); err != nil {
 		return nil, err
 	}
-	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i], out[j]) < 0 })
 	return out, nil
 }
 
@@ -861,6 +895,11 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 	if err != nil {
 		return err
 	}
+	prefix, err := CollectionIndexPrefix(collection, def.Name)
+	if err != nil {
+		return err
+	}
+	path := splitIndexPath(def.Field)
 	var indexKeys [][]byte
 	for it.Valid() {
 		key := it.UnsafeKey()
@@ -874,7 +913,7 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 			if !ok {
 				return fmt.Errorf("collections: index backfill requires JSON object document")
 			}
-			keysForDoc, err := indexKeysForSingleDefinition(collection, docID, obj, def, meta.Options)
+			keysForDoc, err := indexKeysForSingleDefinition(docID, obj, def, meta.Options, prefix, path)
 			if err != nil {
 				return err
 			}
@@ -893,7 +932,7 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 	}, []func(batch.Interface) error{
 		func(root batch.Interface) error {
 			for _, indexKey := range indexKeys {
-				if err := root.Set(indexKey, nil); err != nil {
+				if err := setIndexEntryOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}
@@ -909,6 +948,16 @@ func (m *CollectionManager) backfillIndex(collection string, def IndexDefinition
 }
 
 func (c *Collection) indexMutationForUpsert(documentID, oldDoc, newDoc []byte) ([][]byte, [][]byte, error) {
+	if len(oldDoc) == 0 {
+		additions, err := c.indexEntriesForDocument(documentID, newDoc)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := c.ensureUniqueConflicts(documentID, additions); err != nil {
+			return nil, nil, err
+		}
+		return nil, additions, nil
+	}
 	oldEntries, err := c.indexEntriesForDocument(documentID, oldDoc)
 	if err != nil {
 		return nil, nil, err
@@ -948,19 +997,18 @@ func (c *Collection) ensureUniqueConflicts(documentID []byte, additions [][]byte
 		return nil
 	}
 	for _, key := range additions {
-		indexName, valuePrefix, err := parseIndexEntryForConflict(c.meta.Name, key)
+		runtime, err := c.indexRuntimeForEntry(key)
 		if err != nil {
 			return err
 		}
-		idx, ok := c.indexByName(indexName)
-		if !ok || !idx.Unique {
+		if !runtime.def.Unique {
 			continue
 		}
-		rootDesc, _, err := c.secondaryRootDescriptor(idx)
-		if err != nil {
-			return err
+		if len(key) < len(documentID) || !bytes.HasSuffix(key, documentID) {
+			return fmt.Errorf("collections: malformed index key")
 		}
-		it, err := c.db.IteratorAtRoot(rootDesc.RootPageID, valuePrefix, nil)
+		valuePrefix := key[:len(key)-len(documentID)]
+		it, err := c.db.IteratorAtRoot(runtime.desc.RootPageID, valuePrefix, nil)
 		if err != nil {
 			return err
 		}
@@ -970,14 +1018,14 @@ func (c *Collection) ensureUniqueConflicts(documentID []byte, additions [][]byte
 				break
 			}
 			if !it.IsDeleted() {
-				existingID, err := parseIndexEntryDocID(c.meta.Name, idx.Name, existing)
+				existingID, err := parseIndexEntryDocIDWithPrefix(runtime.prefix, existing)
 				if err != nil {
 					_ = it.Close()
 					return err
 				}
 				if !bytes.Equal(existingID, documentID) {
 					_ = it.Close()
-					return fmt.Errorf("collections: unique index %q conflict", idx.Name)
+					return fmt.Errorf("collections: unique index %q conflict", runtime.def.Name)
 				}
 			}
 			it.Next()
@@ -1004,11 +1052,22 @@ func (c *Collection) indexEntriesForDocument(documentID, document []byte) ([][]b
 		return nil, fmt.Errorf("collections: index extraction requires JSON object document")
 	}
 	out := make([][]byte, 0, len(c.meta.Indexes))
-	seen := make(map[string]struct{}, len(c.meta.Indexes))
+	var seen map[string]struct{}
 	for _, idx := range c.meta.Indexes {
-		keys, err := indexKeysForSingleDefinition(c.meta.Name, documentID, obj, idx, c.meta.Options)
+		runtime, err := c.indexRuntime(idx)
 		if err != nil {
 			return nil, err
+		}
+		keys, err := indexKeysForSingleDefinition(documentID, obj, idx, c.meta.Options, runtime.prefix, runtime.path)
+		if err != nil {
+			return nil, err
+		}
+		if len(keys) <= 1 {
+			out = append(out, keys...)
+			continue
+		}
+		if seen == nil {
+			seen = make(map[string]struct{}, len(keys))
 		}
 		for _, key := range keys {
 			s := string(key)
@@ -1022,8 +1081,8 @@ func (c *Collection) indexEntriesForDocument(documentID, document []byte) ([][]b
 	return out, nil
 }
 
-func indexKeysForSingleDefinition(collection string, documentID []byte, document any, idx IndexDefinition, opts CollectionOptions) ([][]byte, error) {
-	value, found := extractIndexPathValue(document, idx.Field)
+func indexKeysForSingleDefinition(documentID []byte, document any, idx IndexDefinition, opts CollectionOptions, prefix []byte, path []string) ([][]byte, error) {
+	value, found := extractIndexPathValue(document, path)
 	if !found || value == nil {
 		return nil, nil
 	}
@@ -1037,7 +1096,7 @@ func indexKeysForSingleDefinition(collection string, documentID []byte, document
 		if err != nil {
 			return nil, err
 		}
-		key, err := buildIndexEntryKey(collection, idx.Name, encoded, documentID)
+		key, err := buildIndexEntryKeyWithPrefix(prefix, encoded, documentID)
 		if err != nil {
 			return nil, err
 		}
@@ -1054,21 +1113,27 @@ func normalizeIndexValues(value any, multiKey, allowArray bool) ([]any, error) {
 		if len(arr) == 0 {
 			return nil, nil
 		}
-		out := make([]any, 0, len(arr))
-		for _, elem := range arr {
-			out = append(out, elem)
-		}
-		return out, nil
+		return arr, nil
 	}
 	return []any{value}, nil
 }
 
-func extractIndexPathValue(document any, path string) (any, bool) {
+func splitIndexPath(path string) []string {
 	if path == "" {
+		return nil
+	}
+	if !strings.Contains(path, ".") {
+		return []string{path}
+	}
+	return strings.Split(path, ".")
+}
+
+func extractIndexPathValue(document any, path []string) (any, bool) {
+	if len(path) == 0 {
 		return nil, false
 	}
 	current := document
-	for _, segment := range strings.Split(path, ".") {
+	for _, segment := range path {
 		obj, ok := current.(map[string]any)
 		if !ok {
 			return nil, false
@@ -1105,6 +1170,10 @@ func buildIndexEntryKey(collection, indexName string, encodedValue, documentID [
 	if err != nil {
 		return nil, err
 	}
+	return buildIndexEntryKeyWithPrefix(prefix, encodedValue, documentID)
+}
+
+func buildIndexEntryKeyWithPrefix(prefix, encodedValue, documentID []byte) ([]byte, error) {
 	if len(encodedValue) > 65535 {
 		return nil, fmt.Errorf("collections: index key too large")
 	}
@@ -1121,6 +1190,10 @@ func indexValuePrefix(collection, indexName string, encodedValue []byte) ([]byte
 	if err != nil {
 		return nil, err
 	}
+	return indexValuePrefixWithPrefix(prefix, encodedValue)
+}
+
+func indexValuePrefixWithPrefix(prefix, encodedValue []byte) ([]byte, error) {
 	if len(encodedValue) > 65535 {
 		return nil, fmt.Errorf("collections: index key too large")
 	}
@@ -1131,11 +1204,27 @@ func indexValuePrefix(collection, indexName string, encodedValue []byte) ([]byte
 	return out, nil
 }
 
+func indexValuePrefixForString(prefix []byte, value string) ([]byte, error) {
+	if len(value) > 65533 {
+		return nil, fmt.Errorf("collections: index key too large")
+	}
+	out := make([]byte, 0, len(prefix)+4+len(value))
+	out = append(out, prefix...)
+	out = binary.BigEndian.AppendUint16(out, uint16(len(value)+2))
+	out = append(out, 's', ':')
+	out = append(out, value...)
+	return out, nil
+}
+
 func parseIndexEntryDocID(collection, indexName string, key []byte) ([]byte, error) {
 	prefix, err := CollectionIndexPrefix(collection, indexName)
 	if err != nil {
 		return nil, err
 	}
+	return parseIndexEntryDocIDWithPrefix(prefix, key)
+}
+
+func parseIndexEntryDocIDWithPrefix(prefix, key []byte) ([]byte, error) {
 	if len(key) < len(prefix)+2 {
 		return nil, fmt.Errorf("collections: malformed index entry key")
 	}
@@ -1226,16 +1315,69 @@ func (c *Collection) refreshMeta() error {
 	}
 	c.meta = *meta
 	c.metaEpoch = currentEpoch
+	c.resetRuntimeCache()
+	c.cacheVersion = c.db.SystemRootVersion()
 	return nil
 }
 
+func (c *Collection) resetRuntimeCache() {
+	if c == nil {
+		return
+	}
+	c.primary = nil
+	c.indexes = nil
+}
+
+func (c *Collection) ensureRuntimeCacheFresh() {
+	if c == nil || c.db == nil {
+		return
+	}
+	currentVersion := c.db.SystemRootVersion()
+	if c.cacheVersion != 0 && c.cacheVersion != currentVersion {
+		c.resetRuntimeCache()
+	}
+	c.cacheVersion = currentVersion
+}
+
 func setDocumentOnBatch(b batch.Interface, key, value []byte) error {
+	if autoView, ok := b.(interface {
+		SetAutoView(key, value []byte) error
+	}); ok {
+		return autoView.SetAutoView(key, value)
+	}
 	if auto, ok := b.(interface {
 		SetAuto(key, value []byte) error
 	}); ok {
 		return auto.SetAuto(key, value)
 	}
 	return b.Set(key, value)
+}
+
+func setBytesOnBatch(b batch.Interface, key, value []byte) error {
+	if setView, ok := b.(interface {
+		SetView(key, value []byte) error
+	}); ok {
+		return setView.SetView(key, value)
+	}
+	return b.Set(key, value)
+}
+
+func deleteDocumentOnBatch(b batch.Interface, key []byte) error {
+	if deleteView, ok := b.(interface {
+		DeleteView(key []byte) error
+	}); ok {
+		return deleteView.DeleteView(key)
+	}
+	return b.Delete(key)
+}
+
+func setIndexEntryOnBatch(b batch.Interface, key []byte) error {
+	if setView, ok := b.(interface {
+		SetView(key, value []byte) error
+	}); ok {
+		return setView.SetView(key, nil)
+	}
+	return b.Set(key, nil)
 }
 
 func (m *CollectionManager) rootDescriptor(rootName string) (*CollectionRootDescriptor, error) {
@@ -1249,30 +1391,35 @@ func (c *Collection) secondaryRootDescriptor(idx IndexDefinition) (*CollectionRo
 	if c == nil {
 		return nil, nil, errCollectionNil
 	}
-	rootKey, err := SystemCollectionRootKey(idx.RootName)
+	c.ensureRuntimeCacheFresh()
+	runtime, err := c.indexRuntime(idx)
 	if err != nil {
 		return nil, nil, err
 	}
-	desc, err := loadRootDescriptor(c.db, idx.RootName)
-	if err != nil {
-		return nil, nil, err
-	}
-	return desc, rootKey, nil
+	return &runtime.desc, runtime.rootKey, nil
 }
 
 func (c *Collection) primaryRootDescriptor() (*CollectionRootDescriptor, []byte, error) {
 	if c == nil {
 		return nil, nil, errCollectionNil
 	}
+	c.ensureRuntimeCacheFresh()
+	if c.primary != nil {
+		return &c.primary.desc, c.primary.rootKey, nil
+	}
 	rootKey, err := SystemCollectionRootKey(c.meta.PrimaryRoot)
 	if err != nil {
 		return nil, nil, err
 	}
-	desc, err := loadRootDescriptor(c.db, c.meta.PrimaryRoot)
+	desc, err := loadRootDescriptorByKey(c.db, rootKey, c.meta.PrimaryRoot)
 	if err != nil {
 		return nil, nil, err
 	}
-	return desc, rootKey, nil
+	c.primary = &collectionRootRuntime{
+		desc:    *desc,
+		rootKey: rootKey,
+	}
+	return &c.primary.desc, c.primary.rootKey, nil
 }
 
 func loadRootDescriptor(database collectionDB, rootName string) (*CollectionRootDescriptor, error) {
@@ -1282,6 +1429,13 @@ func loadRootDescriptor(database collectionDB, rootName string) (*CollectionRoot
 	rootKey, err := SystemCollectionRootKey(rootName)
 	if err != nil {
 		return nil, err
+	}
+	return loadRootDescriptorByKey(database, rootKey, rootName)
+}
+
+func loadRootDescriptorByKey(database collectionDB, rootKey []byte, rootName string) (*CollectionRootDescriptor, error) {
+	if database == nil {
+		return nil, errCollectionManagerNil
 	}
 	raw, err := database.GetSystem(rootKey)
 	if err != nil {
@@ -1297,6 +1451,39 @@ func loadRootDescriptor(database collectionDB, rootName string) (*CollectionRoot
 	return &desc, nil
 }
 
+func (c *Collection) indexRuntime(idx IndexDefinition) (*collectionIndexRuntime, error) {
+	if c == nil {
+		return nil, errCollectionNil
+	}
+	if c.indexes == nil {
+		c.indexes = make(map[string]*collectionIndexRuntime, len(c.meta.Indexes))
+	}
+	if runtime := c.indexes[idx.Name]; runtime != nil {
+		return runtime, nil
+	}
+	rootKey, err := SystemCollectionRootKey(idx.RootName)
+	if err != nil {
+		return nil, err
+	}
+	desc, err := loadRootDescriptorByKey(c.db, rootKey, idx.RootName)
+	if err != nil {
+		return nil, err
+	}
+	prefix, err := CollectionIndexPrefix(c.meta.Name, idx.Name)
+	if err != nil {
+		return nil, err
+	}
+	runtime := &collectionIndexRuntime{
+		def:     idx,
+		desc:    *desc,
+		rootKey: rootKey,
+		prefix:  prefix,
+		path:    splitIndexPath(idx.Field),
+	}
+	c.indexes[idx.Name] = runtime
+	return runtime, nil
+}
+
 func writeRootDescriptorUpdate(sys batch.Interface, rootKey []byte, desc *CollectionRootDescriptor, newRootID uint64) error {
 	if sys == nil {
 		return fmt.Errorf("collections: nil system batch")
@@ -1310,7 +1497,7 @@ func writeRootDescriptorUpdate(sys batch.Interface, rootKey []byte, desc *Collec
 	if err != nil {
 		return err
 	}
-	return sys.Set(rootKey, encoded)
+	return setBytesOnBatch(sys, rootKey, encoded)
 }
 
 type collectionRootUpdate struct {
@@ -1337,9 +1524,13 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		return err
 	}
 	if len(indexMutations) == 0 {
-		_, err := c.db.MutateRootWithFormat(primaryDesc.RootPageID, &primaryDesc.Format, false, mutatePrimary, func(sys batch.Interface, newRootID uint64) error {
+		newRootID, err := c.db.MutateRootWithFormat(primaryDesc.RootPageID, &primaryDesc.Format, false, mutatePrimary, func(sys batch.Interface, newRootID uint64) error {
 			return writeRootDescriptorUpdate(sys, primaryRootKey, primaryDesc, newRootID)
 		})
+		if err == nil {
+			primaryDesc.RootPageID = newRootID
+			c.cacheVersion = c.db.SystemRootVersion()
+		}
 		return err
 	}
 
@@ -1347,6 +1538,7 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 	rootFormats := make([]*rootfmt.Format, 0, len(indexMutations)+1)
 	rootMutations := make([]func(batch.Interface) error, 0, len(indexMutations)+1)
 	rootUpdates := make([]collectionRootUpdate, 0, len(indexMutations)+1)
+	var publishedRootIDs []uint64
 	rootIDs = append(rootIDs, primaryDesc.RootPageID)
 	rootFormats = append(rootFormats, &primaryDesc.Format)
 	rootMutations = append(rootMutations, mutatePrimary)
@@ -1358,12 +1550,12 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		rootFormats = append(rootFormats, &indexMutation.desc.Format)
 		rootMutations = append(rootMutations, func(root batch.Interface) error {
 			for _, indexKey := range indexMutation.removals {
-				if err := root.Delete(indexKey); err != nil {
+				if err := deleteDocumentOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}
 			for _, indexKey := range indexMutation.additions {
-				if err := root.Set(indexKey, nil); err != nil {
+				if err := setIndexEntryOnBatch(root, indexKey); err != nil {
 					return err
 				}
 			}
@@ -1379,6 +1571,7 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		if len(newRootIDs) != len(rootUpdates) {
 			return fmt.Errorf("collections: root publish mismatch: got %d ids for %d updates", len(newRootIDs), len(rootUpdates))
 		}
+		publishedRootIDs = append(publishedRootIDs[:0], newRootIDs...)
 		for i := range rootUpdates {
 			if err := writeRootDescriptorUpdate(sys, rootUpdates[i].rootKey, rootUpdates[i].desc, newRootIDs[i]); err != nil {
 				return err
@@ -1386,6 +1579,12 @@ func (c *Collection) mutateDocumentAndIndexes(primaryDesc *CollectionRootDescrip
 		}
 		return nil
 	})
+	if err == nil {
+		for i := range rootUpdates {
+			rootUpdates[i].desc.RootPageID = publishedRootIDs[i]
+		}
+		c.cacheVersion = c.db.SystemRootVersion()
+	}
 	return err
 }
 
@@ -1396,25 +1595,17 @@ func (c *Collection) indexRootMutations(removals, additions [][]byte) ([]collect
 	byName := make(map[string]*collectionIndexRootMutation, len(c.meta.Indexes))
 	appendEntries := func(entries [][]byte, deleteOp bool) error {
 		for _, entry := range entries {
-			indexName, err := parseIndexEntryIndexName(c.meta.Name, entry)
+			runtime, err := c.indexRuntimeForEntry(entry)
 			if err != nil {
 				return err
 			}
-			mutation := byName[indexName]
+			mutation := byName[runtime.def.Name]
 			if mutation == nil {
-				idx, ok := c.indexByName(indexName)
-				if !ok {
-					return fmt.Errorf("collections: unknown index root for %q", indexName)
-				}
-				desc, rootKey, err := c.secondaryRootDescriptor(idx)
-				if err != nil {
-					return err
-				}
 				mutation = &collectionIndexRootMutation{
-					desc:    desc,
-					rootKey: rootKey,
+					desc:    &runtime.desc,
+					rootKey: runtime.rootKey,
 				}
-				byName[indexName] = mutation
+				byName[runtime.def.Name] = mutation
 			}
 			if deleteOp {
 				mutation.removals = append(mutation.removals, entry)
@@ -1439,4 +1630,17 @@ func (c *Collection) indexRootMutations(removals, additions [][]byte) ([]collect
 		out = append(out, *mutation)
 	}
 	return out, nil
+}
+
+func (c *Collection) indexRuntimeForEntry(entry []byte) (*collectionIndexRuntime, error) {
+	for _, idx := range c.meta.Indexes {
+		runtime, err := c.indexRuntime(idx)
+		if err != nil {
+			return nil, err
+		}
+		if bytes.HasPrefix(entry, runtime.prefix) {
+			return runtime, nil
+		}
+	}
+	return nil, fmt.Errorf("collections: unknown index root for entry")
 }

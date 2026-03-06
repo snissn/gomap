@@ -36,6 +36,22 @@ func TestGetAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
 	}
 }
 
+func TestHasAtRoot_ZeroRootBehavesEmpty(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer d.Close()
+
+	has, err := d.HasAtRoot(0, []byte("missing"))
+	if err != nil {
+		t.Fatalf("HasAtRoot zero root: %v", err)
+	}
+	if has {
+		t.Fatalf("expected HasAtRoot zero root to be false")
+	}
+}
+
 func TestMutateRoot_PublishesDedicatedRootAndSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
@@ -83,6 +99,20 @@ func TestMutateRoot_PublishesDedicatedRootAndSurvivesReopen(t *testing.T) {
 	}
 	if !bytes.Equal(got, doc) {
 		t.Fatalf("root value mismatch before reopen: got=%q want=%q", got, doc)
+	}
+	has, err := d.HasAtRoot(rootID, docID)
+	if err != nil {
+		t.Fatalf("HasAtRoot before reopen: %v", err)
+	}
+	if !has {
+		t.Fatalf("expected HasAtRoot before reopen to report existing document")
+	}
+	has, err = d.HasAtRoot(rootID, []byte("missing"))
+	if err != nil {
+		t.Fatalf("HasAtRoot missing before reopen: %v", err)
+	}
+	if has {
+		t.Fatalf("expected HasAtRoot before reopen to report missing document absent")
 	}
 
 	shared, err := d.Get(docID)

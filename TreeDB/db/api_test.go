@@ -533,3 +533,66 @@ func TestSet_LargeValueFallsBackToPointer_DirectPath(t *testing.T) {
 		t.Fatalf("large round-trip after reopen mismatch: got=%d want=%d", len(got), len(value))
 	}
 }
+
+func TestBatchSetAutoView_InlineRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	b := d.NewBatch().(*Batch)
+	defer b.Close()
+
+	key := []byte("docs/inline")
+	value := []byte(`{"name":"inline"}`)
+	if err := b.SetAutoView(key, value); err != nil {
+		t.Fatalf("SetAutoView inline: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	got, err := d.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("inline round-trip mismatch: got=%q want=%q", got, value)
+	}
+}
+
+func TestBatchSetAutoView_LargeValueFallsBackToPointer(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 32,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	b := d.NewBatch().(*Batch)
+	defer b.Close()
+
+	key := []byte("docs/pointer")
+	value := bytes.Repeat([]byte("z"), 1024)
+	if err := b.SetAutoView(key, value); err != nil {
+		t.Fatalf("SetAutoView large: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	got, err := d.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("pointer round-trip mismatch: got=%d want=%d", len(got), len(value))
+	}
+}

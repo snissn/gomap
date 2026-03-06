@@ -37,6 +37,19 @@ func (db *DB) GetAtRoot(rootID uint64, key []byte) ([]byte, error) {
 	return val, err
 }
 
+// HasAtRoot reports whether a key exists in the specified root page.
+func (db *DB) HasAtRoot(rootID uint64, key []byte) (bool, error) {
+	if rootID == 0 {
+		return false, nil
+	}
+	snap, err := db.acquireSnapshotWithRoot(rootID)
+	if err != nil {
+		return false, err
+	}
+	defer snap.Close()
+	return snap.Has(key)
+}
+
 // IteratorAtRoot returns an iterator over the specified root page.
 func (db *DB) IteratorAtRoot(rootID uint64, start, end []byte) (iterator.UnsafeIterator, error) {
 	return db.IteratorAtRootWithOptions(rootID, start, end, IteratorOptions{})
