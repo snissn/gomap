@@ -9325,6 +9325,28 @@ planned:
 			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 				maxSourceBytes = totalBytes
 			}
+			if maxSourceBytes > 0 && hasPlanner {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
+					MaxSourceSegments: 0,
+					MaxSourceBytes:    maxSourceBytes,
+				})
+				cancel()
+				if err != nil {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+					db.vlogGenerationRemapFailures.Add(1)
+					if db.notifyError != nil {
+						db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
+					}
+					return
+				}
+				if len(plan.SourceFileIDs) == 0 {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return
+				}
+				rewritePlan = plan
+				haveRewritePlan = true
+			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
@@ -9367,8 +9389,16 @@ planned:
 		} else {
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
-			if stats.BytesBefore > 0 {
-				db.vlogGenerationRewriteBytesIn.Add(uint64(stats.BytesBefore))
+			rewriteBytesIn := int64(0)
+			if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
+				rewriteBytesIn = rewritePlan.SelectedBytesLive
+			} else if maxSourceBytes > 0 {
+				rewriteBytesIn = maxSourceBytes
+			} else if stats.BytesBefore > 0 {
+				rewriteBytesIn = int64(stats.BytesBefore)
+			}
+			if rewriteBytesIn > 0 {
+				db.vlogGenerationRewriteBytesIn.Add(uint64(rewriteBytesIn))
 			}
 			if stats.BytesAfter > 0 {
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
@@ -9378,10 +9408,10 @@ planned:
 				consumed := int64(0)
 				if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 					consumed = rewritePlan.SelectedBytesLive
-				} else if stats.BytesBefore > 0 {
-					consumed = int64(stats.BytesBefore)
 				} else if maxSourceBytes > 0 {
 					consumed = maxSourceBytes
+				} else if stats.BytesBefore > 0 {
+					consumed = int64(stats.BytesBefore)
 				}
 				if consumed > 0 {
 					db.vlogGenerationConsumeRewriteBudgetBytes(consumed)
@@ -16212,24 +16242,39 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
-	chunks := b.drainCopyArenaChunks()
+	mainChunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
-	for _, idx := range b.ptrValueEntryIdxs {
-		if idx < len(b.entries) && b.entries[idx].Value != nil {
-			retainPtrArena = true
-			break
+	ptrTouchedMems := make([]memtable.Table, 0, len(b.ptrValueEntryIdxs))
+	if len(b.ptrValueEntryIdxs) > 0 {
+		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueEntryIdxs))
+		for _, idx := range b.ptrValueEntryIdxs {
+			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
+				continue
+			}
+			if b.entries[idx].Value != nil {
+				retainPtrArena = true
+			}
+			mt := b.db.mutableShards[shardIdxs[idx]].mem
+			if mt == nil {
+				continue
+			}
+			if _, ok := seenPtrMems[mt]; ok {
+				continue
+			}
+			seenPtrMems[mt] = struct{}{}
+			ptrTouchedMems = append(ptrTouchedMems, mt)
 		}
 	}
 	if b.ptrValueEntryIdxs != nil {
 		b.ptrValueEntryIdxs = b.ptrValueEntryIdxs[:0]
 	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
+	b.db.retainBatchArenaChunksForMemtables(mainChunks, touchedMems)
 	if retainPtrArena {
-		chunks = append(chunks, ptrChunks...)
+		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {
 		putBatchArenas(ptrChunks)
 	}
-	b.db.retainBatchArenaChunksForMemtables(chunks, touchedMems)
 	b.db.writeMu.RUnlock()
 
 	if needRotate {

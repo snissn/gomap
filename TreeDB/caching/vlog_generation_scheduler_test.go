@@ -232,7 +232,11 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	})
 
 	recorder := &rewriteBudgetRecordingBackend{
-		DB:              backend,
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{1},
+			SelectedBytesLive: 128,
+		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 128, BytesAfter: 64, RecordsCopied: 1},
 	}
 
@@ -269,17 +273,27 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(initialTokens)
 	db.maybeRunVlogGenerationMaintenance(false)
 
+	planOpts, planCalls := recorder.recordedPlan()
+	if planCalls != 1 {
+		t.Fatalf("plan calls=%d want=1", planCalls)
+	}
+	if planOpts.MaxSourceBytes <= 0 {
+		t.Fatalf("plan MaxSourceBytes=%d want > 0", planOpts.MaxSourceBytes)
+	}
+	if planOpts.MaxSourceBytes > initialTokens {
+		t.Fatalf("plan MaxSourceBytes=%d initialTokens=%d", planOpts.MaxSourceBytes, initialTokens)
+	}
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
 		t.Fatalf("rewrite calls=%d want=1", calls)
 	}
-	if opts.MaxSourceBytes <= 0 {
-		t.Fatalf("MaxSourceBytes=%d want > 0", opts.MaxSourceBytes)
+	if len(opts.SourceFileIDs) == 0 {
+		t.Fatalf("rewrite SourceFileIDs=%v want non-empty planned selection", opts.SourceFileIDs)
 	}
-	if opts.MaxSourceBytes > initialTokens {
-		t.Fatalf("MaxSourceBytes=%d initialTokens=%d", opts.MaxSourceBytes, initialTokens)
+	if opts.MaxSourceBytes != 0 {
+		t.Fatalf("rewrite MaxSourceBytes=%d want 0 once plan selection is materialized", opts.MaxSourceBytes)
 	}
-	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), initialTokens-int64(recorder.rewriteResponse.BytesBefore); got != want {
+	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), initialTokens-recorder.planResponse.SelectedBytesLive; got != want {
 		t.Fatalf("tokens after rewrite=%d want=%d", got, want)
 	}
 }
@@ -299,7 +313,11 @@ func TestVlogGenerationRewrite_ConsumesActualSourceBytesWhenRewriteExceedsBudget
 	})
 
 	recorder := &rewriteBudgetRecordingBackend{
-		DB:              backend,
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{1},
+			SelectedBytesLive: 128,
+		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 512, BytesAfter: 128, RecordsCopied: 1},
 	}
 
@@ -332,12 +350,18 @@ func TestVlogGenerationRewrite_ConsumesActualSourceBytesWhenRewriteExceedsBudget
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(128)
 	db.maybeRunVlogGenerationMaintenance(false)
 
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls=%d want=1", calls)
+	}
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
 		t.Fatalf("rewrite calls=%d want=1", calls)
 	}
-	if opts.MaxSourceBytes <= 0 || opts.MaxSourceBytes > 128 {
-		t.Fatalf("MaxSourceBytes=%d want in (0,128]", opts.MaxSourceBytes)
+	if len(opts.SourceFileIDs) == 0 {
+		t.Fatalf("rewrite SourceFileIDs=%v want non-empty planned selection", opts.SourceFileIDs)
+	}
+	if opts.MaxSourceBytes != 0 {
+		t.Fatalf("rewrite MaxSourceBytes=%d want 0 once plan selection is materialized", opts.MaxSourceBytes)
 	}
 	if got := db.vlogGenerationRewriteBudgetTokensBytes.Load(); got != 0 {
 		t.Fatalf("tokens after oversize rewrite=%d want=0", got)
