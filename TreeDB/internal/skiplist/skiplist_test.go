@@ -182,6 +182,33 @@ func TestSkipList_Iterator(t *testing.T) {
 	}
 }
 
+func TestSkipList_ReverseIteratorBounds(t *testing.T) {
+	s := New(0)
+	for _, k := range []string{"A", "C", "E", "G"} {
+		s.Put([]byte(k), []byte("val"+k))
+	}
+
+	it := s.NewReverseIterator([]byte("C"), []byte("G"))
+	start, end := it.Domain()
+	if string(start) != "C" || string(end) != "G" {
+		t.Fatalf("Domain()=(%q,%q) want (%q,%q)", start, end, "C", "G")
+	}
+
+	var got []string
+	for ; it.Valid(); it.Next() {
+		got = append(got, string(it.Key()))
+	}
+	want := []string{"E", "C"}
+	if len(got) != len(want) {
+		t.Fatalf("reverse len=%d want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("reverse[%d]=%q want %q (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
 func TestSkipList_RandomStress(t *testing.T) {
 	// Fuzz testing with mixed operations to catch boundary/pointer bugs
 	s := New(0)
