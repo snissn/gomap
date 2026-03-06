@@ -2325,6 +2325,7 @@ func (db *DB) valueLogInUsePaths() []string {
 	for path := range inUse {
 		out = append(out, path)
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -9236,6 +9237,8 @@ planned:
 				consumed := int64(0)
 				if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 					consumed = rewritePlan.SelectedBytesLive
+				} else if stats.BytesBefore > 0 {
+					consumed = int64(stats.BytesBefore)
 				} else if maxSourceBytes > 0 {
 					consumed = maxSourceBytes
 				}

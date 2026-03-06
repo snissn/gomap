@@ -273,8 +273,62 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	if opts.MaxSourceBytes > initialTokens {
 		t.Fatalf("MaxSourceBytes=%d initialTokens=%d", opts.MaxSourceBytes, initialTokens)
 	}
-	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), initialTokens-opts.MaxSourceBytes; got != want {
+	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), initialTokens-int64(recorder.rewriteResponse.BytesBefore); got != want {
 		t.Fatalf("tokens after rewrite=%d want=%d", got, want)
+	}
+}
+
+func TestVlogGenerationRewrite_ConsumesActualSourceBytesWhenRewriteExceedsBudgetCap(t *testing.T) {
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 512, BytesAfter: 128, RecordsCopied: 1},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		_ = backend.Close()
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(128)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if opts.MaxSourceBytes <= 0 || opts.MaxSourceBytes > 128 {
+		t.Fatalf("MaxSourceBytes=%d want in (0,128]", opts.MaxSourceBytes)
+	}
+	if got := db.vlogGenerationRewriteBudgetTokensBytes.Load(); got != 0 {
+		t.Fatalf("tokens after oversize rewrite=%d want=0", got)
 	}
 }
 
