@@ -139,6 +139,42 @@ func TestVlogGenerationRewriteBudgetCapEnforcedOnLargeElapsed(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationRewriteBudgetIgnoresBackwardClock(t *testing.T) {
+	db := &DB{
+		valueLogRewriteTriggerBytes:  1024,
+		valueLogGenerationHotTarget:  256,
+		valueLogGenerationWarmTarget: 256,
+		valueLogGenerationColdTarget: 256,
+		valueLogRewriteBudgetBytes:   512,
+		valueLogGenerationPolicy:     uint8(backenddb.ValueLogGenerationHotWarmCold),
+	}
+	start := time.Unix(100, 0)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(start.UnixNano())
+	db.vlogGenerationAccrueRewriteBudget(start.Add(-time.Second))
+	if got := db.vlogGenerationRewriteBudgetTokensBytes.Load(); got != 0 {
+		t.Fatalf("tokens after backward clock=%d want=0", got)
+	}
+	if got := db.vlogGenerationRewriteBudgetLastUnixNano.Load(); got != start.UnixNano() {
+		t.Fatalf("last timestamp moved backwards: got=%d want=%d", got, start.UnixNano())
+	}
+	db.vlogGenerationAccrueRewriteBudget(start.Add(2 * time.Second))
+	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), int64(1024); got != want {
+		t.Fatalf("tokens after forward clock=%d want=%d", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteBudgetCapSaturatesTargets(t *testing.T) {
+	db := &DB{
+		valueLogRewriteTriggerBytes:  1,
+		valueLogGenerationHotTarget:  maxPositiveInt64 - 16,
+		valueLogGenerationWarmTarget: 32,
+		valueLogGenerationColdTarget: 64,
+	}
+	if got, want := db.vlogGenerationRewriteBudgetCapBytes(), maxPositiveInt64; got != want {
+		t.Fatalf("budget cap=%d want=%d", got, want)
+	}
+}
+
 type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 

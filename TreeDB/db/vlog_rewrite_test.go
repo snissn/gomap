@@ -888,3 +888,19 @@ func TestSelectRewriteSourceSegments_OversizeCandidates_SelectsOne(t *testing.T)
 		t.Fatalf("expected segment 2 selected by stale priority, got=%v", selected)
 	}
 }
+
+func TestGroupedRecordKeyForPtr_UsesFullOffsetWidth(t *testing.T) {
+	ptrA := page.ValuePtr{FileID: 7, Offset: (1 << 32) + 12}
+	ptrB := page.ValuePtr{FileID: 7, Offset: (1 << 33) + 12}
+	keyA, err := groupedRecordKeyForPtr(ptrA)
+	if err != nil {
+		t.Fatalf("groupedRecordKeyForPtr(ptrA): %v", err)
+	}
+	keyB, err := groupedRecordKeyForPtr(ptrB)
+	if err != nil {
+		t.Fatalf("groupedRecordKeyForPtr(ptrB): %v", err)
+	}
+	if keyA == keyB {
+		t.Fatalf("grouped record keys collided: %+v", keyA)
+	}
+}

@@ -102,6 +102,11 @@ type rewriteCandidate struct {
 	oldPtr page.ValuePtr
 }
 
+type groupedRecordKey struct {
+	fileID uint32
+	start  uint64
+}
+
 // ValueLogRewriteLocalityPolicy controls pointer rewrite ordering.
 type ValueLogRewriteLocalityPolicy string
 
@@ -309,7 +314,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	// grouped value-log record. When estimating live bytes we must count each
 	// referenced record once, not once per referencing key, otherwise grouped
 	// workloads will vastly over-count live bytes and mask stale segments.
-	var seenGroupedRecords map[uint64]struct{}
+	var seenGroupedRecords map[groupedRecordKey]struct{}
 
 	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords); err != nil {
@@ -334,7 +339,17 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	return liveByID, nil
 }
 
-func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[uint64]struct{}) error {
+func groupedRecordKeyForPtr(ptr page.ValuePtr) (groupedRecordKey, error) {
+	if ptr.Offset < 4 {
+		return groupedRecordKey{}, fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+	}
+	return groupedRecordKey{
+		fileID: ptr.FileID,
+		start:  uint64(ptr.Offset - 4),
+	}, nil
+}
+
+func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -346,17 +361,16 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 		}
 
 		if page.ValuePtrIsGrouped(ptr) {
-			if ptr.Offset < 4 {
-				return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+			k, err := groupedRecordKeyForPtr(ptr)
+			if err != nil {
+				return err
 			}
-			start := uint32(ptr.Offset - 4)
-			k := (uint64(ptr.FileID) << 32) | uint64(start)
-			seen := map[uint64]struct{}(nil)
+			seen := map[groupedRecordKey]struct{}(nil)
 			if seenGroupedRecords != nil {
 				seen = *seenGroupedRecords
 			}
 			if seen == nil {
-				seen = make(map[uint64]struct{}, 1024)
+				seen = make(map[groupedRecordKey]struct{}, 1024)
 				if seenGroupedRecords != nil {
 					*seenGroupedRecords = seen
 				}
