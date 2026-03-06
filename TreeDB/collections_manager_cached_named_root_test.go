@@ -675,6 +675,44 @@ func TestCachedCollectionsInsert_UsesOwnedStagingForDerivedWrites(t *testing.T) 
 	}
 }
 
+func TestCachedCollectionsInsert_UsesRootBulkMutationOps(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+
+	bulkCalls := 0
+	restore := setRootBulkMutationOpsTestHook(func(rootCount int) {
+		bulkCalls++
+	})
+	defer restore()
+
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if bulkCalls == 0 {
+		t.Fatalf("expected cached insert to use root bulk mutation ops")
+	}
+}
+
 func TestCachedCollectionsFindByIndex_BufferedWithoutLegacyIteratorMaterialization(t *testing.T) {
 	d, err := Open(Options{Dir: t.TempDir()})
 	if err != nil {
@@ -758,6 +796,47 @@ func TestCachedCollectionsCheckpoint_BufferedWithoutLegacyFlushSnapshot(t *testi
 	}
 	if legacySnapshots != 0 {
 		t.Fatalf("expected checkpoint flush to avoid legacy entry snapshots, got %d calls", legacySnapshots)
+	}
+}
+
+func TestCachedCollectionsCheckpoint_UsesRootBulkMutationOps(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("open cached: %v", err)
+	}
+	defer d.Close()
+
+	mgr := NewCollectionManager(d)
+	meta, err := mgr.CreateCollection(&collections.CollectionMeta{Name: "users"})
+	if err != nil {
+		t.Fatalf("create collection: %v", err)
+	}
+	if _, err := mgr.CreateIndex(meta.Name, collections.IndexDefinition{Name: "email_idx", Field: "email", Unique: true}); err != nil {
+		t.Fatalf("create index: %v", err)
+	}
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint schema create: %v", err)
+	}
+
+	col, err := mgr.OpenCollection(meta.Name)
+	if err != nil {
+		t.Fatalf("open collection: %v", err)
+	}
+	if _, err := col.Insert([]byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	bulkPublishCalls := 0
+	restore := setNamedRootBulkPublishOpsTestHook(func(rootCount int) {
+		bulkPublishCalls++
+	})
+	defer restore()
+
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint insert: %v", err)
+	}
+	if bulkPublishCalls == 0 {
+		t.Fatalf("expected checkpoint to publish named roots through bulk ops")
 	}
 }
 
