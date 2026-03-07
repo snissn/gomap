@@ -16,7 +16,7 @@ func TestBatchPtrValueArena_RetainedWhenPointersDenied(t *testing.T) {
 		MemtableMode:                 "btree",
 		MemtableShards:               2,
 		FlushThreshold:               1 << 20,
-		ValueLogPointerThreshold:     1,
+		ValueLogPointerThreshold:     32,
 		MaxValueLogRetainedBytesHard: 1,
 	})
 	if err != nil {
@@ -25,10 +25,11 @@ func TestBatchPtrValueArena_RetainedWhenPointersDenied(t *testing.T) {
 	defer db.Close()
 
 	// Force allowValueLogPointers() to return false even though values are eligible.
-	db.valueLogRetainedClosedBytes.Store(db.maxValueLogRetainedBytesHard)
+	db.valueLogRetainedClosedBytes.Store(db.maxValueLogRetainedBytesHard + 1)
 
 	firstKey, secondKey := keysOnDistinctMutableShards(t, db)
 	firstVal := bytes.Repeat([]byte{0x11}, 64)
+	inlineVal := []byte{0x22}
 	secondVal := bytes.Repeat([]byte{0x22}, 64)
 
 	b := db.NewBatchWithSize(2)
@@ -41,7 +42,7 @@ func TestBatchPtrValueArena_RetainedWhenPointersDenied(t *testing.T) {
 	if len(b.ptrCopyArenaChunks) == 0 && b.ptrCopyBytes == 0 {
 		t.Fatal("expected pointer-value arena path to allocate copy storage after first Set")
 	}
-	if err := b.Set(secondKey, []byte{'i'}); err != nil {
+	if err := b.Set(secondKey, inlineVal); err != nil {
 		t.Fatalf("set second: %v", err)
 	}
 	if got := len(b.ptrValueEntryIdxs); got != 1 {
@@ -96,7 +97,7 @@ func TestBatchPtrValueArena_RecycledWhenPointersAssigned(t *testing.T) {
 		MemtableMode:             "btree",
 		MemtableShards:           1,
 		FlushThreshold:           1 << 20,
-		ValueLogPointerThreshold: 1,
+		ValueLogPointerThreshold: 32,
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)

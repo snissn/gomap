@@ -810,12 +810,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if err != nil {
 			return err
 		}
-		if count := uint64(len(candidates)); count > 0 {
-			endRID := startRID + count - 1
-			if endRID < startRID || endRID == 0 {
-				return fmt.Errorf("value-log rid space exhausted")
-			}
-		}
 		for _, candidate := range candidates {
 			val, err := db.valueLogManager.Read(candidate.oldPtr)
 			if err != nil {
@@ -1201,6 +1195,8 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if writer == nil || ridAlloc == nil {
 		return 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
+	// Treat nil sourceIDs as "all sources" and an empty, non-nil map as "no
+	// sources". The latter means there is nothing to rewrite.
 	if sourceIDs != nil && len(sourceIDs) == 0 {
 		return 0, nil
 	}
