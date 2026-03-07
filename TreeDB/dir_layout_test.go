@@ -66,6 +66,17 @@ func TestResolveOpenDirLayout_FlatDirDisablesSideStores(t *testing.T) {
 	}
 }
 
+func TestResolveOpenDirLayout_IndexPathDirectoryReturnsError(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "index.db"), 0o755); err != nil {
+		t.Fatalf("mkdir index.db: %v", err)
+	}
+
+	if _, err := resolveOpenDirLayout(root, false); err == nil {
+		t.Fatal("expected index.db directory error")
+	}
+}
+
 func TestResolveOpenDirLayout_DisableSideStoresRejectsRootDir(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "maindb"), 0o755); err != nil {

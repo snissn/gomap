@@ -69,18 +69,18 @@ var valueLogKeyLeases [][][]byte
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
-var batchArenaPoolLastGC atomic.Uint32
+var batchArenaPoolLastGC atomic.Uint64
 var batchArenaPoolBudgetState atomic.Value
 
-var batchArenaPoolNumGC = func() uint32 {
+var batchArenaPoolNumGC = func() uint64 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
 	metrics.Read(samples)
 	if samples[0].Value.Kind() == metrics.KindUint64 {
-		return uint32(samples[0].Value.Uint64())
+		return samples[0].Value.Uint64()
 	}
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	return uint32(ms.NumGC)
+	return uint64(ms.NumGC)
 }
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -92,17 +92,25 @@ func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 	// retention during restore workloads.
 	const maxChunksPerP = 4
 	const maxBudgetBytes = int64(256 << 20)
+	const perPBytes = int64(batchCopyArenaMaxRetain) * maxChunksPerP
 	if procs < 1 {
 		procs = 1
 	}
-	budget := int64(procs) * int64(batchCopyArenaMaxRetain) * maxChunksPerP
-	if budget > maxBudgetBytes {
-		budget = maxBudgetBytes
+	maxProcs := maxBudgetBytes / perPBytes
+	if maxProcs < 1 {
+		maxProcs = 1
 	}
+	if int64(procs) > maxProcs {
+		procs = int(maxProcs)
+	}
+	budget := int64(procs) * perPBytes
 	// Ensure we can pool at least a few chunks even on single-core runs.
-	minBudget := int64(batchCopyArenaMaxRetain) * maxChunksPerP
+	minBudget := perPBytes
 	if budget < minBudget {
 		budget = minBudget
+	}
+	if budget > maxBudgetBytes {
+		budget = maxBudgetBytes
 	}
 	return budget
 }
@@ -147,7 +155,11 @@ type batchArenaPoolBudgetCache struct {
 	budget int64
 }
 
-func noteBatchArenaPoolGC(numGC uint32) {
+func init() {
+	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
+}
+
+func noteBatchArenaPoolGC(numGC uint64) {
 	if numGC == 0 {
 		return
 	}
@@ -434,14 +446,19 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
-	maybeResetBatchArenaPoolBytesAfterGC()
 	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
 		noteEpoch := false
 		for {
 			held := batchArenaPoolBytes.Load()
 			if held+size > budget {
-				return
+				before := held
+				maybeResetBatchArenaPoolBytesAfterGC()
+				held = batchArenaPoolBytes.Load()
+				if held == before || held+size > budget {
+					return
+				}
+				continue
 			}
 			if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
 				noteEpoch = held == 0
@@ -7741,24 +7758,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSamples(records)
 	case vlogCompressionAuto:
-		// In auto mode, skip background dict sampling while fully bypassing
-		// compression so incompressible workloads stay close to off-mode cost.
-		// Bootstrap quickly: until a dict is published, sample aggressively so
-		// auto mode can discover dict wins without requiring extra tuning knobs.
-		allowDictSampling := db.valueLogDictLastAppliedDictID.Load() == 0
-		if !allowDictSampling && l != nil && l.vlogCompressionSelector != nil {
-			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
-		}
-		if writeMode != vlogWriteOff && allowDictSampling {
-			if db.valueLogDictLastAppliedDictID.Load() != 0 && writeMode != vlogWriteDict {
-				if selectorUnitPayloadBytes <= 256 {
-					allowDictSampling = false
-				} else {
-					allowDictSampling = db.valueLogDictShouldCollectPaused()
-				}
-			}
-		}
-		if writeMode != vlogWriteOff && allowDictSampling {
+		if db.allowAutoDictSampling(l, writeMode, selectorUnitPayloadBytes) {
 			db.valueLogDictCollectSamples(records)
 		}
 	}
@@ -8395,23 +8395,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSample(value)
 	case vlogCompressionAuto:
-		// Bootstrap quickly: until we publish the first dict, always sample so
-		// "auto" really means auto (the selector may not have block metrics yet,
-		// e.g. when using the stable forced-pointer block fast-path).
-		allowDictSampling := db.valueLogDictLastAppliedDictID.Load() == 0
-		if !allowDictSampling && l != nil && l.vlogCompressionSelector != nil {
-			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
-		}
-		if writeMode != vlogWriteOff && allowDictSampling {
-			if db.valueLogDictLastAppliedDictID.Load() != 0 && writeMode != vlogWriteDict {
-				if len(value) <= 256 {
-					allowDictSampling = false
-				} else {
-					allowDictSampling = db.valueLogDictShouldCollectPaused()
-				}
-			}
-		}
-		if writeMode != vlogWriteOff && allowDictSampling {
+		if db.allowAutoDictSampling(l, writeMode, len(value)) {
 			db.valueLogDictCollectSample(value)
 		}
 	}
@@ -9404,19 +9388,19 @@ planned:
 			if stats.BytesAfter > 0 {
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
+			consumed := int64(0)
+			if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
+				consumed = rewritePlan.SelectedBytesLive
+			} else if maxSourceBytes > 0 {
+				consumed = maxSourceBytes
+			} else if stats.BytesBefore > 0 {
+				consumed = int64(stats.BytesBefore)
+			}
 			if stats.RecordsCopied > 0 {
 				db.vlogGenerationRemapSuccesses.Add(uint64(stats.RecordsCopied))
-				consumed := int64(0)
-				if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
-					consumed = rewritePlan.SelectedBytesLive
-				} else if maxSourceBytes > 0 {
-					consumed = maxSourceBytes
-				} else if stats.BytesBefore > 0 {
-					consumed = int64(stats.BytesBefore)
-				}
-				if consumed > 0 {
-					db.vlogGenerationConsumeRewriteBudgetBytes(consumed)
-				}
+			}
+			if consumed > 0 {
+				db.vlogGenerationConsumeRewriteBudgetBytes(consumed)
 			}
 			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
 		}
@@ -12694,6 +12678,24 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 	return true
 }
 
+func (db *DB) allowAutoDictSampling(l *lane, writeMode vlogCompressionWriteMode, unitPayloadBytes int) bool {
+	if writeMode == vlogWriteOff {
+		return false
+	}
+	bootstrap := db.valueLogDictLastAppliedDictID.Load() == 0
+	allow := true
+	if !bootstrap && l != nil && l.vlogCompressionSelector != nil {
+		allow = l.vlogCompressionSelector.allowDictSampling(writeMode)
+	}
+	if !allow || bootstrap || writeMode == vlogWriteDict {
+		return allow
+	}
+	if unitPayloadBytes <= 256 {
+		return false
+	}
+	return db.valueLogDictShouldCollectPaused()
+}
+
 func (db *DB) finalizeFlushStats(totalLen int, totalBytes int64, flushDur, durPreVlog, durBuild, durSet, durPostVlog, durPostVlogSync, durBackendWrite time.Duration) error {
 	return nil
 }
@@ -13740,7 +13742,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
 	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
-	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -16250,12 +16252,19 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueEntryIdxs))
 		for _, idx := range b.ptrValueEntryIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
+				b.db.writeMu.RUnlock()
+				return fmt.Errorf("cachingdb: ptr value entry index %d out of range", idx)
+			}
+			if b.entries[idx].Value == nil {
 				continue
 			}
-			if b.entries[idx].Value != nil {
-				retainPtrArena = true
+			retainPtrArena = true
+			shardIdx := shardIdxs[idx]
+			if shardIdx < 0 || shardIdx >= len(b.db.mutableShards) {
+				b.db.writeMu.RUnlock()
+				return fmt.Errorf("cachingdb: ptr value shard index %d out of range for entry %d", shardIdx, idx)
 			}
-			mt := b.db.mutableShards[shardIdxs[idx]].mem
+			mt := b.db.mutableShards[shardIdx].mem
 			if mt == nil {
 				continue
 			}
