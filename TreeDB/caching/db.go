@@ -69,18 +69,18 @@ var valueLogKeyLeases [][][]byte
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
-var batchArenaPoolLastGC atomic.Uint32
+var batchArenaPoolLastGC atomic.Uint64
 var batchArenaPoolBudgetState atomic.Value
 
-var batchArenaPoolNumGC = func() uint32 {
+var batchArenaPoolNumGC = func() uint64 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
 	metrics.Read(samples)
 	if samples[0].Value.Kind() == metrics.KindUint64 {
-		return uint32(samples[0].Value.Uint64())
+		return samples[0].Value.Uint64()
 	}
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)
-	return uint32(ms.NumGC)
+	return uint64(ms.NumGC)
 }
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -92,17 +92,25 @@ func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 	// retention during restore workloads.
 	const maxChunksPerP = 4
 	const maxBudgetBytes = int64(256 << 20)
+	const perPBytes = int64(batchCopyArenaMaxRetain) * maxChunksPerP
 	if procs < 1 {
 		procs = 1
 	}
-	budget := int64(procs) * int64(batchCopyArenaMaxRetain) * maxChunksPerP
-	if budget > maxBudgetBytes {
-		budget = maxBudgetBytes
+	maxProcs := maxBudgetBytes / perPBytes
+	if maxProcs < 1 {
+		maxProcs = 1
 	}
+	if int64(procs) > maxProcs {
+		procs = int(maxProcs)
+	}
+	budget := int64(procs) * perPBytes
 	// Ensure we can pool at least a few chunks even on single-core runs.
-	minBudget := int64(batchCopyArenaMaxRetain) * maxChunksPerP
+	minBudget := perPBytes
 	if budget < minBudget {
 		budget = minBudget
+	}
+	if budget > maxBudgetBytes {
+		budget = maxBudgetBytes
 	}
 	return budget
 }
@@ -147,7 +155,11 @@ type batchArenaPoolBudgetCache struct {
 	budget int64
 }
 
-func noteBatchArenaPoolGC(numGC uint32) {
+func init() {
+	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
+}
+
+func noteBatchArenaPoolGC(numGC uint64) {
 	if numGC == 0 {
 		return
 	}
@@ -434,14 +446,19 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
-	maybeResetBatchArenaPoolBytesAfterGC()
 	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
 		noteEpoch := false
 		for {
 			held := batchArenaPoolBytes.Load()
 			if held+size > budget {
-				return
+				before := held
+				maybeResetBatchArenaPoolBytesAfterGC()
+				held = batchArenaPoolBytes.Load()
+				if held == before || held+size > budget {
+					return
+				}
+				continue
 			}
 			if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
 				noteEpoch = held == 0
@@ -13725,7 +13742,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
 	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
-	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
