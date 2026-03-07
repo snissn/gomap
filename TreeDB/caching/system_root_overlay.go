@@ -181,47 +181,7 @@ func (db *DB) flushSystemOverlay(sync bool) error {
 }
 
 func (db *DB) flushSystemOverlayLocked(bridge BackendDirectBridge, sync bool) error {
-	if db == nil {
-		return errDBClosing
-	}
-	db.systemMu.Lock()
-	defer db.systemMu.Unlock()
-	if db.systemDomain == nil || !db.systemDomain.pending() {
-		return nil
-	}
-	flushIter, err := db.systemDomain.newIterator(nil, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = flushIter.Close() }()
-	target := bridge.NewSystemBatch()
-	if target == nil {
-		return errDBClosing
-	}
-	if err := applySystemIterator(target, flushIter); err != nil {
-		_ = target.Close()
-		return err
-	}
-	var writeErr error
-	if sync {
-		writeErr = target.WriteSync()
-	} else {
-		writeErr = target.Write()
-	}
-	closeErr := target.Close()
-	if writeErr != nil {
-		return writeErr
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	nextDomain, err := newRootDomain()
-	if err != nil {
-		return err
-	}
-	db.systemDomain = nextDomain
-	db.systemDomain.version.Add(1)
-	return nil
+	return db.publishSystemRootDomainLocked(bridge, sync)
 }
 
 func (db *DB) systemBridge(wait bool) (BackendDirectBridge, error) {

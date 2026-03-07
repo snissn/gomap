@@ -124,6 +124,55 @@ func TestFlushPendingRootDomainUnitsLocked_PublishesSystemAndNamed(t *testing.T)
 	}
 }
 
+func TestFlushPendingRootDomainUnitsLocked_UsesGenericPublisherHooks(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	cache, err := Open(dir, backend, Options{FlushThreshold: 1 << 20})
+	if err != nil {
+		t.Fatalf("open cache: %v", err)
+	}
+	defer cache.Close()
+
+	if err := cache.ApplySystemOverlayEntriesOwned([]batch.Entry{{
+		Type:  batch.OpPut,
+		Key:   []byte("sys:users"),
+		Value: []byte("v1"),
+	}}); err != nil {
+		t.Fatalf("apply system entries: %v", err)
+	}
+	if err := bufferNamedRootDocument(cache, "users", []byte("u1"), []byte(`{"email":"ada@example.com"}`)); err != nil {
+		t.Fatalf("buffer named root: %v", err)
+	}
+
+	var published []rootDomainFlushKind
+	restore := setRootDomainPublishTestHook(func(kind rootDomainFlushKind, units int) {
+		if units <= 0 {
+			t.Fatalf("publish hook units=%d want > 0", units)
+		}
+		published = append(published, kind)
+	})
+	defer restore()
+
+	bridge, err := cache.directBridge()
+	if err != nil {
+		t.Fatalf("direct bridge: %v", err)
+	}
+	if err := cache.flushPendingRootDomainUnitsLocked(bridge, true); err != nil {
+		t.Fatalf("flush root domains: %v", err)
+	}
+	if !slices.Contains(published, rootDomainFlushKindNamedRoots) {
+		t.Fatalf("published kinds=%v want named roots", published)
+	}
+	if !slices.Contains(published, rootDomainFlushKindSystem) {
+		t.Fatalf("published kinds=%v want system root", published)
+	}
+}
+
 func bufferNamedRootDocument(cache *DB, collection string, docKey, docValue []byte) error {
 	_, _, _, _, err := bufferNamedRootDocumentForTest(cache, collection, docKey, docValue)
 	return err

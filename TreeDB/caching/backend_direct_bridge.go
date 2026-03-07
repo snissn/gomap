@@ -16,6 +16,7 @@ type BackendDirectBridge interface {
 	NewBatch() batch.Interface
 	GetSystem(key []byte) ([]byte, error)
 	SetSystem(key, value []byte) error
+	ApplySystemTable(sync bool, table memtable.Table) error
 	NewSystemBatch() batch.Interface
 	SystemIterator(start, end []byte) (iterator.UnsafeIterator, error)
 	SystemRootVersion() uint64

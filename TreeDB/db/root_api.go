@@ -657,6 +657,39 @@ func (db *DB) MutateRootsWithFormatTables(sync bool, rootIDs []uint64, formats [
 	return newRootIDs, nil
 }
 
+// ApplySystemTable publishes ordered system-root table state directly.
+func (db *DB) ApplySystemTable(sync bool, table memtable.Table) error {
+	if db == nil {
+		return fmt.Errorf("missing db")
+	}
+	if db.readOnly {
+		return ErrReadOnly
+	}
+	if table == nil || table.Len() == 0 {
+		return nil
+	}
+	target := db.NewSystemBatch()
+	if target == nil {
+		return fmt.Errorf("missing db")
+	}
+	iter := table.NewIterator(nil, nil)
+	if err := applyBulkRootIterator(target, iter); err != nil {
+		_ = target.Close()
+		return err
+	}
+	var writeErr error
+	if sync {
+		writeErr = target.WriteSync()
+	} else {
+		writeErr = target.Write()
+	}
+	closeErr := target.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
+}
+
 // MutateRootsWithFormats is the function-based form of MutateRoots with
 // explicit per-root format overrides.
 func (db *DB) MutateRootsWithFormats(sync bool, rootIDs []uint64, formats []*rootfmt.Format, mutateRoots []func(batchpkg.Interface) error, updateSystem func(batchpkg.Interface, []uint64) error) ([]uint64, error) {
