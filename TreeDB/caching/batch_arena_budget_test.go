@@ -19,10 +19,18 @@ func resetBatchArenaPoolsForTest() {
 	}
 }
 
-func TestBatchArenaPoolAccountingRecoversOnUnexpectedCap(t *testing.T) {
+func prepareBatchArenaPoolsForTest(t *testing.T) {
+	t.Helper()
 	batchArenaPoolTestMu.Lock()
-	defer batchArenaPoolTestMu.Unlock()
+	t.Cleanup(func() {
+		resetBatchArenaPoolsForTest()
+		batchArenaPoolTestMu.Unlock()
+	})
 	resetBatchArenaPoolsForTest()
+}
+
+func TestBatchArenaPoolAccountingRecoversOnUnexpectedCap(t *testing.T) {
+	prepareBatchArenaPoolsForTest(t)
 
 	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
 	if !ok {
@@ -47,9 +55,7 @@ func TestBatchArenaPoolAccountingRecoversOnUnexpectedCap(t *testing.T) {
 }
 
 func TestBatchArenaPoolAccountingMissWithoutGCDoesNotReset(t *testing.T) {
-	batchArenaPoolTestMu.Lock()
-	defer batchArenaPoolTestMu.Unlock()
-	resetBatchArenaPoolsForTest()
+	prepareBatchArenaPoolsForTest(t)
 
 	origNumGC := batchArenaPoolNumGC
 	defer func() { batchArenaPoolNumGC = origNumGC }()
@@ -74,9 +80,7 @@ func TestBatchArenaPoolAccountingMissWithoutGCDoesNotReset(t *testing.T) {
 }
 
 func TestBatchArenaPoolAccountingMissResetsAfterGC(t *testing.T) {
-	batchArenaPoolTestMu.Lock()
-	defer batchArenaPoolTestMu.Unlock()
-	resetBatchArenaPoolsForTest()
+	prepareBatchArenaPoolsForTest(t)
 
 	origNumGC := batchArenaPoolNumGC
 	defer func() { batchArenaPoolNumGC = origNumGC }()
@@ -105,9 +109,7 @@ func TestBatchArenaPoolAccountingMissResetsAfterGC(t *testing.T) {
 }
 
 func TestPutBatchArenaBudgetResetsAfterGC(t *testing.T) {
-	batchArenaPoolTestMu.Lock()
-	defer batchArenaPoolTestMu.Unlock()
-	resetBatchArenaPoolsForTest()
+	prepareBatchArenaPoolsForTest(t)
 
 	origNumGC := batchArenaPoolNumGC
 	defer func() { batchArenaPoolNumGC = origNumGC }()
@@ -140,9 +142,7 @@ func TestPutBatchArenaBudgetResetsAfterGC(t *testing.T) {
 }
 
 func TestBatchArenaPoolBudgetDoesNotOvercount(t *testing.T) {
-	batchArenaPoolTestMu.Lock()
-	defer batchArenaPoolTestMu.Unlock()
-	resetBatchArenaPoolsForTest()
+	prepareBatchArenaPoolsForTest(t)
 
 	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
 	if !ok {
@@ -163,9 +163,7 @@ func TestBatchArenaPoolBudgetDoesNotOvercount(t *testing.T) {
 }
 
 func TestBatchArenaPoolBudgetCacheRecomputesOnProcsMismatch(t *testing.T) {
-	batchArenaPoolTestMu.Lock()
-	defer batchArenaPoolTestMu.Unlock()
-	resetBatchArenaPoolsForTest()
+	prepareBatchArenaPoolsForTest(t)
 
 	currentProcs := runtime.GOMAXPROCS(0)
 	if currentProcs < 1 {
