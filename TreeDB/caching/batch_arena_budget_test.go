@@ -170,7 +170,7 @@ func TestBatchArenaPoolBudgetCacheRecomputesOnProcsMismatch(t *testing.T) {
 		currentProcs = 1
 	}
 	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{
-		procs:  int32(currentProcs + 1),
+		procs:  currentProcs + 1,
 		budget: 1,
 	})
 	got := currentBatchArenaPoolBudgetBytes()
@@ -179,7 +179,7 @@ func TestBatchArenaPoolBudgetCacheRecomputesOnProcsMismatch(t *testing.T) {
 		t.Fatalf("currentBatchArenaPoolBudgetBytes=%d want %d", got, want)
 	}
 	cached, _ := batchArenaPoolBudgetState.Load().(batchArenaPoolBudgetCache)
-	if cached.procs != int32(currentProcs) || cached.budget != want {
+	if cached.procs != currentProcs || cached.budget != want {
 		t.Fatalf("cached budget=%+v want procs=%d budget=%d", cached, currentProcs, want)
 	}
 }

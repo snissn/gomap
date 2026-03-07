@@ -120,13 +120,13 @@ func currentBatchArenaPoolBudgetBytes() int64 {
 	if procs < 1 {
 		procs = 1
 	}
-	if cached, _ := batchArenaPoolBudgetState.Load().(batchArenaPoolBudgetCache); cached.procs == int32(procs) {
+	if cached, _ := batchArenaPoolBudgetState.Load().(batchArenaPoolBudgetCache); cached.procs == procs {
 		if budget := cached.budget; budget > 0 {
 			return budget
 		}
 	}
 	budget := computeBatchArenaPoolBudgetBytesForProcs(procs)
-	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{procs: int32(procs), budget: budget})
+	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{procs: procs, budget: budget})
 	return budget
 }
 
@@ -151,7 +151,7 @@ func maybeResetBatchArenaPoolBytesAfterGC() {
 }
 
 type batchArenaPoolBudgetCache struct {
-	procs  int32
+	procs  int
 	budget int64
 }
 
@@ -13742,7 +13742,6 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes)
 	stats["treedb.cache.batch_arena.leased_bytes"] = fmt.Sprintf("%d", arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
-	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
