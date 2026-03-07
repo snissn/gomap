@@ -452,7 +452,6 @@ func resetEntrySlicePoolStateForTest(t *testing.T) {
 	entrySliceLeaseMu.Unlock()
 	savedBytes := entrySlicePoolBytes.Load()
 	savedLastGC := entrySlicePoolLastGC.Load()
-	savedPools := entrySlicePools
 	entrySlicePoolBytes.Store(0)
 	entrySlicePoolLastGC.Store(0)
 	for i := range entrySlicePools {
@@ -464,7 +463,9 @@ func resetEntrySlicePoolStateForTest(t *testing.T) {
 		entrySliceLeaseMu.Unlock()
 		entrySlicePoolBytes.Store(savedBytes)
 		entrySlicePoolLastGC.Store(savedLastGC)
-		entrySlicePools = savedPools
+		for i := range entrySlicePools {
+			entrySlicePools[i] = sync.Pool{}
+		}
 	})
 }
 
