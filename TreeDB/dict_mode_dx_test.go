@@ -122,6 +122,9 @@ func TestValueLogCompressionAuto_DefaultsToDictTrainingAndProbesDict(t *testing.
 	}
 	if !published {
 		stats = db.Stats()
+		if stats == nil {
+			t.Fatalf("expected dict to publish under auto mode, got nil stats")
+		}
 		t.Fatalf("expected dict to publish under auto mode, got last_applied_dict_id=%q frames_attempted=%q",
 			stats["treedb.cache.vlog_dict.last_applied_dict_id"],
 			stats["treedb.cache.vlog_dict.frames_attempted"],

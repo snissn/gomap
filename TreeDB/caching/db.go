@@ -12140,6 +12140,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 }
 
 func (db *DB) allowAutoDictSampling(l *lane, writeMode vlogCompressionWriteMode, unitPayloadBytes int) bool {
+	const minAutoDictSamplingPayloadBytes = 256
 	if writeMode == vlogWriteOff {
 		return false
 	}
@@ -12151,7 +12152,7 @@ func (db *DB) allowAutoDictSampling(l *lane, writeMode vlogCompressionWriteMode,
 	if !allow || bootstrap || writeMode == vlogWriteDict {
 		return allow
 	}
-	if unitPayloadBytes <= 256 {
+	if unitPayloadBytes <= minAutoDictSamplingPayloadBytes {
 		return false
 	}
 	return db.valueLogDictShouldCollectPaused()
