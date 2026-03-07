@@ -3102,16 +3102,7 @@ type DB struct {
 	valueLogRetainedClosedBytes    atomic.Int64
 	maxValueLogRetainedBytes       int64
 	maxValueLogRetainedBytesHard   int64
-	systemMu                       sync.RWMutex
-	systemOverlay                  map[string]systemOverlayValue
-	systemOverlayVersion           atomic.Uint64
-	systemDomain                   *rootDomain
-	namedRootMu                    sync.RWMutex
-	namedRootsByID                 map[uint64]*namedRootOverlayState
-	namedRootsByKey                map[string]*namedRootOverlayState
-	namedRootPublishedByVirtual    map[uint64]uint64
-	namedRootBufferedBytes         atomic.Int64
-	nextNamedRootID                atomic.Uint64
+	rootDomainManager
 
 	// Level 1 (Disk)
 	backend       BackendDB
@@ -9643,12 +9634,14 @@ func (db *DB) Checkpoint() error {
 
 	// Flush all queued memtables with backend sync.
 	db.flushAllLocked(true, false)
-	bridge, err := db.directBridge()
-	if err != nil {
-		return err
-	}
-	if err := db.flushPendingRootDomainUnitsLocked(bridge, !db.relaxedSync); err != nil {
-		return err
+	if db.PendingRootDomains() {
+		bridge, err := db.directBridge()
+		if err != nil {
+			return err
+		}
+		if err := db.flushPendingRootDomainUnitsLocked(bridge, !db.relaxedSync); err != nil {
+			return err
+		}
 	}
 
 	segments, nonEmptyBytes := listNonEmptyLogSegments(walDir)
@@ -9993,10 +9986,12 @@ func (db *DB) Close() error {
 		// flushMu is already held by Close.
 		db.flushAllLocked(true, false)
 	}
-	if bridge, err := db.directBridge(); err != nil {
-		errs = append(errs, err)
-	} else if err := db.flushPendingRootDomainUnitsLocked(bridge, true); err != nil {
-		errs = append(errs, err)
+	if db.PendingRootDomains() {
+		if bridge, err := db.directBridge(); err != nil {
+			errs = append(errs, err)
+		} else if err := db.flushPendingRootDomainUnitsLocked(bridge, true); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	close(db.closeCh)
@@ -12532,6 +12527,9 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 
 func (db *DB) flushRootDomainLaneOnce(sync bool, laneID int) bool {
 	if laneID != 0 {
+		return false
+	}
+	if db.pendingRootDomainUnitCount() == 0 {
 		return false
 	}
 	bridge, err := db.directBridge()
