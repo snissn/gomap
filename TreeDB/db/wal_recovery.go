@@ -20,6 +20,7 @@ type logSegment struct {
 	seq      uint64
 	lane     int
 	path     string
+	size     int64
 	valueLog bool
 	fileID   uint32
 }
@@ -50,6 +51,9 @@ func listWALSegments(dir string) ([]logSegment, error) {
 			lane:     lane,
 			path:     filepath.Join(walDir, name),
 			valueLog: valueLog,
+		}
+		if info, err := entry.Info(); err == nil {
+			seg.size = info.Size()
 		}
 		if valueLog {
 			if lane < 0 {
@@ -152,7 +156,7 @@ func isTruncatedLogError(err error) bool {
 func replayWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {
 	hasCommitSegments := false
 	for _, seg := range segments {
-		if !seg.valueLog {
+		if !seg.valueLog && seg.size > 0 {
 			hasCommitSegments = true
 			break
 		}
