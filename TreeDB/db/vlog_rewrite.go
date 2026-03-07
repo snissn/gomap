@@ -545,10 +545,10 @@ func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]
 	}
 	// Dedup grouped-record live-byte accounting (LeafRef pointers are grouped).
 	if page.ValuePtrIsGrouped(ptr) {
-		if ptr.Offset < 4 {
-			return fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+		k, err := groupedRecordKeyForPtr(ptr)
+		if err != nil {
+			return err
 		}
-		k := groupedRecordKey{fileID: ptr.FileID, start: ptr.Offset - 4}
 		seen := map[groupedRecordKey]struct{}(nil)
 		if seenGroupedRecords != nil {
 			seen = *seenGroupedRecords

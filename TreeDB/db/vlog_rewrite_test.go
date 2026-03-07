@@ -728,8 +728,7 @@ func TestRewriteRIDAllocator_ReserveRejectsOverlappingExternalRange(t *testing.T
 	})
 
 	if _, err := a.Reserve(1); err == nil {
-		fatalf := t.Fatalf
-		fatalf("expected overlapping external range to be rejected")
+		t.Fatalf("expected overlapping external range to be rejected")
 	}
 }
 
