@@ -155,6 +155,7 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	if err != nil {
 		return report, err
 	}
+	rootDir := resolveTreemapRootDir(filepath.Clean(dir), mainDir)
 	report.MainDir = mainDir
 	report.ValueLogDir = filepath.Join(mainDir, "wal")
 
@@ -170,7 +171,7 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 		return report, err
 	}
 
-	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: dir, ReadOnly: false})
+	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: rootDir, ReadOnly: false})
 	if err != nil {
 		return report, err
 	}
@@ -215,6 +216,14 @@ func resolveTreemapMainDir(dir string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("could not resolve maindb dir under %q", dir)
+}
+
+func resolveTreemapRootDir(inputDir, mainDir string) string {
+	clean := filepath.Clean(inputDir)
+	if filepath.Base(clean) == "maindb" {
+		return filepath.Dir(mainDir)
+	}
+	return clean
 }
 
 func listValueLogSegments(dir string) ([]valueLogSegmentAudit, int64, error) {

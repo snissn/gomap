@@ -25,11 +25,12 @@ func TestNewBatchWithSize_NormalizesLargePublicHint(t *testing.T) {
 	}()
 
 	want := backenddb.NormalizePublicBatchReserveHint(rawHint)
-	if got := cap(b.entries); got < want {
-		t.Fatalf("batch entry cap=%d want >= %d", got, want)
+	gotCap := cap(b.entries)
+	if gotCap < want {
+		t.Fatalf("batch entry cap=%d want >= %d", gotCap, want)
 	}
-	if got := cap(b.entries); got >= rawHint {
-		t.Fatalf("batch entry cap=%d want < %d", got, rawHint)
+	if gotCap >= rawHint {
+		t.Fatalf("batch entry cap=%d want < %d", gotCap, rawHint)
 	}
 	if got, wantCap := b.copyArenaCap, db.batchCopyArenaInitCap(want); got != wantCap {
 		t.Fatalf("batch copyArenaCap=%d want %d", got, wantCap)

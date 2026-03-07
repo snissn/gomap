@@ -56,6 +56,15 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	if report.SegmentsOnDisk == 0 || report.BytesOnDisk == 0 {
 		t.Fatalf("expected segment inventory, got segments=%d bytes=%d", report.SegmentsOnDisk, report.BytesOnDisk)
 	}
+	if report.GCDryRun.SegmentsTotal == 0 {
+		t.Fatalf("expected GC dry-run to observe value-log segments from maindb path: %+v", report.GCDryRun)
+	}
+	if report.RewritePlan.SegmentsTotal == 0 {
+		t.Fatalf("expected rewrite plan to observe value-log segments from maindb path: %+v", report.RewritePlan)
+	}
+	if got := report.Stats["cosmos.db.type"]; got != "treedb" {
+		t.Fatalf("unexpected stats db type from maindb path: %q", got)
+	}
 }
 
 func TestParseValueLogAuditFileID_AcceptsLegacyAndLaneNames(t *testing.T) {
