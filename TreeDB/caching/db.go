@@ -9647,10 +9647,7 @@ func (db *DB) Checkpoint() error {
 	if err != nil {
 		return err
 	}
-	if err := db.flushNamedRootOverlaysLocked(bridge, !db.relaxedSync); err != nil {
-		return err
-	}
-	if err := db.flushSystemOverlayLocked(bridge, !db.relaxedSync); err != nil {
+	if err := db.flushPendingRootDomainUnitsLocked(bridge, !db.relaxedSync); err != nil {
 		return err
 	}
 
@@ -9952,8 +9949,8 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 }
 
 func (db *DB) Close() error {
-	if db.PendingNamedRoots() {
-		if err := db.FlushNamedRootOverlays(true); err != nil {
+	if db.PendingRootDomains() {
+		if err := db.flushPendingRootDomainUnits(true); err != nil {
 			return err
 		}
 	}
@@ -9998,9 +9995,7 @@ func (db *DB) Close() error {
 	}
 	if bridge, err := db.directBridge(); err != nil {
 		errs = append(errs, err)
-	} else if err := db.flushNamedRootOverlaysLocked(bridge, true); err != nil {
-		errs = append(errs, err)
-	} else if err := db.flushSystemOverlayLocked(bridge, true); err != nil {
+	} else if err := db.flushPendingRootDomainUnitsLocked(bridge, true); err != nil {
 		errs = append(errs, err)
 	}
 
@@ -11565,24 +11560,13 @@ func (db *DB) pickFlushLane() (int, bool) {
 		}
 	}
 	db.mu.RUnlock()
-	if db.PendingNamedRoots() {
+	rootDomainUnits := db.pendingRootDomainUnitCount()
+	if rootDomainUnits > 0 {
 		if queueLen == 0 {
 			return 0, true
 		}
 		if laneCount > 0 {
-			counts[0]++
-			if counts[0] > bestCount {
-				bestLane = 0
-				bestCount = counts[0]
-			}
-		}
-	}
-	if db.PendingSystemOverlay() {
-		if queueLen == 0 {
-			return 0, true
-		}
-		if laneCount > 0 {
-			counts[0]++
+			counts[0] += rootDomainUnits
 			if counts[0] > bestCount {
 				bestLane = 0
 				bestCount = counts[0]
@@ -11630,10 +11614,7 @@ func (db *DB) flushAllLocked(reqSync bool, includeOverlays bool) {
 		active[laneID] = true
 	}
 	db.mu.RUnlock()
-	if db.PendingNamedRoots() {
-		active[0] = true
-	}
-	if db.PendingSystemOverlay() {
+	if db.PendingRootDomains() {
 		active[0] = true
 	}
 
@@ -12553,31 +12534,17 @@ func (db *DB) flushRootDomainLaneOnce(sync bool, laneID int) bool {
 	if laneID != 0 {
 		return false
 	}
-	if db.PendingNamedRoots() {
-		bridge, err := db.directBridge()
-		if err != nil {
-			db.reportError(err)
-			return false
-		}
-		if err := db.flushNamedRootOverlaysLocked(bridge, sync); err != nil {
-			db.reportError(err)
-			return false
-		}
-		return true
+	bridge, err := db.directBridge()
+	if err != nil {
+		db.reportError(err)
+		return false
 	}
-	if db.PendingSystemOverlay() {
-		bridge, err := db.directBridge()
-		if err != nil {
-			db.reportError(err)
-			return false
-		}
-		if err := db.flushSystemOverlayLocked(bridge, sync); err != nil {
-			db.reportError(err)
-			return false
-		}
-		return true
+	flushed, err := db.flushOnePendingRootDomainUnitLocked(bridge, sync)
+	if err != nil {
+		db.reportError(err)
+		return false
 	}
-	return false
+	return flushed
 }
 
 func (db *DB) finalizeFlushStats(totalLen int, totalBytes int64, flushDur, durPreVlog, durBuild, durSet, durPostVlog, durPostVlogSync, durBackendWrite time.Duration) error {
