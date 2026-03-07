@@ -2267,8 +2267,12 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
-// valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
+// valueLogInUsePaths returns a best-effort snapshot of storage-segment paths
 // that may be referenced by in-memory state (mutable + queued memtables).
+//
+// When split value-log storage is enabled, the returned paths are value-log
+// segment paths. Otherwise they are WAL segment paths that are also serving as
+// the persistent value-log store.
 //
 // IMPORTANT: This snapshot is intentionally narrower than
 // valueLogRetainedPaths and is derived only from the current lane/value-log

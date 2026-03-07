@@ -19,7 +19,6 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("backend open: %v", err)
 		}
-		defer func() { _ = backend.Close() }()
 		db, err := Open(dir, backend, Options{
 			FlushThreshold:           1 << 20,
 			DisableWAL:               true,
@@ -32,6 +31,9 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 			ValueLogMaxSegmentBytes:  8 << 10,
 		})
 		if err != nil {
+			if closeErr := backend.Close(); closeErr != nil {
+				t.Fatalf("backend close after open failure: %v", closeErr)
+			}
 			t.Fatalf("Open: %v", err)
 		}
 		closed := false
@@ -73,7 +75,6 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backend open: %v", err)
 	}
-	defer func() { _ = backend.Close() }()
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:           1 << 20,
 		DisableWAL:               true,
@@ -86,6 +87,9 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 		ValueLogMaxSegmentBytes:  8 << 10,
 	})
 	if err != nil {
+		if closeErr := backend.Close(); closeErr != nil {
+			t.Fatalf("backend close after open failure: %v", closeErr)
+		}
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
