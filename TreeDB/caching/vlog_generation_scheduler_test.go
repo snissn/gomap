@@ -298,7 +298,7 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	}
 }
 
-func TestVlogGenerationRewrite_ConsumesActualSourceBytesWhenRewriteExceedsBudgetCap(t *testing.T) {
+func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})

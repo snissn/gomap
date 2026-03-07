@@ -82,9 +82,16 @@ func TestAppendOnlyIteratorCloseClearsPooledPointerEntries(t *testing.T) {
 func TestGetAppendOnlyEntriesSkipsOversizedPooledSliceForEmptyRequest(t *testing.T) {
 	var pool sync.Pool
 	oversized := make([]appendOnlyEntry, 0, appendOnlyMaxReuseEntries(0)+1)
-	pool.Put(oversized)
+	gets := 0
+	pool.New = func() any {
+		gets++
+		return oversized
+	}
 
 	got := getAppendOnlyEntriesFromPool(0, &pool)
+	if gets != 1 {
+		t.Fatalf("expected pool.New to supply one oversized slice, got %d calls", gets)
+	}
 	if got == nil {
 		t.Fatalf("getAppendOnlyEntries(0) returned nil slice")
 	}
@@ -403,6 +410,12 @@ func TestAppendOnlyResetKeepsSnapshotBuffersWarm(t *testing.T) {
 	indexCap := cap(m.indexBuf)
 
 	m.Reset()
+	if len(m.snapshot) != 0 {
+		t.Fatalf("snapshot len after reset=%d want=0", len(m.snapshot))
+	}
+	if len(m.indexBuf) != 0 {
+		t.Fatalf("index buf len after reset=%d want=0", len(m.indexBuf))
+	}
 	if cap(m.snapshot) < snapshotCap {
 		t.Fatalf("snapshot cap shrank after reset: got=%d want>=%d", cap(m.snapshot), snapshotCap)
 	}
