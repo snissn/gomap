@@ -54,8 +54,8 @@ func TestBatchArenaPoolAccountingMissWithoutGCDoesNotReset(t *testing.T) {
 	origNumGC := batchArenaPoolNumGC
 	defer func() { batchArenaPoolNumGC = origNumGC }()
 
-	const fakeNumGC uint32 = 7
-	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+	const fakeNumGC uint64 = 7
+	batchArenaPoolNumGC = func() uint64 { return fakeNumGC }
 
 	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
 	if !ok {
@@ -81,8 +81,8 @@ func TestBatchArenaPoolAccountingMissResetsAfterGC(t *testing.T) {
 	origNumGC := batchArenaPoolNumGC
 	defer func() { batchArenaPoolNumGC = origNumGC }()
 
-	var fakeNumGC uint32 = 7
-	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+	var fakeNumGC uint64 = 7
+	batchArenaPoolNumGC = func() uint64 { return fakeNumGC }
 
 	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
 	if !ok {
@@ -112,8 +112,8 @@ func TestPutBatchArenaBudgetResetsAfterGC(t *testing.T) {
 	origNumGC := batchArenaPoolNumGC
 	defer func() { batchArenaPoolNumGC = origNumGC }()
 
-	var fakeNumGC uint32 = 11
-	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+	var fakeNumGC uint64 = 11
+	batchArenaPoolNumGC = func() uint64 { return fakeNumGC }
 
 	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
 	if !ok {
@@ -183,6 +183,13 @@ func TestBatchArenaPoolBudgetCacheRecomputesOnProcsMismatch(t *testing.T) {
 	cached, _ := batchArenaPoolBudgetState.Load().(batchArenaPoolBudgetCache)
 	if cached.procs != int32(currentProcs) || cached.budget != want {
 		t.Fatalf("cached budget=%+v want procs=%d budget=%d", cached, currentProcs, want)
+	}
+}
+
+func TestComputeBatchArenaPoolBudgetBytesForProcs_Saturates(t *testing.T) {
+	const maxBudgetBytes = int64(256 << 20)
+	if got := computeBatchArenaPoolBudgetBytesForProcs(int(^uint(0) >> 1)); got != maxBudgetBytes {
+		t.Fatalf("computeBatchArenaPoolBudgetBytesForProcs(maxint)=%d want %d", got, maxBudgetBytes)
 	}
 }
 

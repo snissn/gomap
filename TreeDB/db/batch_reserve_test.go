@@ -67,12 +67,13 @@ func TestNormalizePublicBatchReserveHint_HandlesEdgeCases(t *testing.T) {
 
 func TestNewBatchWithSize_NormalizesLargePublicHint(t *testing.T) {
 	db := &DB{}
+	want := NormalizePublicBatchReserveHint(100_000)
 	b := db.NewBatchWithSize(100_000).(*Batch)
 	defer func() { _ = b.Close() }()
 
 	got := testBatchEntriesCap(b.batch)
-	if got < NormalizePublicBatchReserveHint(100_000) {
-		t.Fatalf("internal batch cap=%d want >= %d", got, NormalizePublicBatchReserveHint(100_000))
+	if got < want {
+		t.Fatalf("internal batch cap=%d want >= %d", got, want)
 	}
 	if got >= 100_000 {
 		t.Fatalf("internal batch cap=%d want < %d", got, 100_000)

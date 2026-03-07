@@ -1206,6 +1206,8 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	if writer == nil || ridAlloc == nil {
 		return 0, fmt.Errorf("vlog-rewrite: missing writer/rid state")
 	}
+	// Treat nil sourceIDs as "all sources" and an empty, non-nil map as "no
+	// sources". The latter means there is nothing to rewrite.
 	if sourceIDs != nil && len(sourceIDs) == 0 {
 		return 0, nil
 	}

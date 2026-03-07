@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"bytes"
 	"testing"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
@@ -145,4 +146,95 @@ func TestBTreePointerEmptySliceCanonicalizesToNil(t *testing.T) {
 			t.Fatalf("GetEntry(ptr) = (%v,%+v,%d,%v), want (nil,%+v,%d,true)", got, gotPtr, flags, ok, ptr, node.FlagPointer)
 		}
 	})
+}
+
+func TestBTreeInlineEmptySliceCanonicalizesToNil(t *testing.T) {
+	t.Run("SetEntrySteal", func(t *testing.T) {
+		m := NewBTree()
+		m.SetEntrySteal([]byte("inline"), []byte{}, page.ValuePtr{}, node.FlagInline)
+		got, del, ok := m.Get([]byte("inline"))
+		if !ok || del || got != nil {
+			t.Fatalf("Get(inline) = (%v,%v,%v), want (nil,false,true)", got, del, ok)
+		}
+		got, ptr, flags, ok := m.GetEntry([]byte("inline"))
+		if !ok || got != nil || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
+			t.Fatalf("GetEntry(inline) = (%v,%+v,%d,%v), want (nil,zero,%d,true)", got, ptr, flags, ok, node.FlagInline)
+		}
+	})
+
+	t.Run("ApplyStealSortedBatch", func(t *testing.T) {
+		m := NewBTree()
+		m.ApplyStealSortedBatch([]batchpkg.Entry{{
+			Type:  batchpkg.OpPut,
+			Key:   []byte("inline"),
+			Value: []byte{},
+		}}, nil)
+		got, del, ok := m.Get([]byte("inline"))
+		if !ok || del || got != nil {
+			t.Fatalf("Get(inline) = (%v,%v,%v), want (nil,false,true)", got, del, ok)
+		}
+		got, ptr, flags, ok := m.GetEntry([]byte("inline"))
+		if !ok || got != nil || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
+			t.Fatalf("GetEntry(inline) = (%v,%+v,%d,%v), want (nil,zero,%d,true)", got, ptr, flags, ok, node.FlagInline)
+		}
+	})
+}
+
+func TestBTreeIteratorUnsafeEntry_ForInlinePointerAndTombstone(t *testing.T) {
+	ptrWant := page.ValuePtr{Offset: 99, Length: 123, FileID: 7}
+	m := NewBTree()
+	m.Set([]byte("a-inline"), []byte("inline"))
+	m.SetEntry([]byte("b-pointer"), []byte("tail"), ptrWant, node.FlagPointer)
+	m.Delete([]byte("c-tomb"))
+
+	assertIter := func(t *testing.T, name string, it interface {
+		Valid() bool
+		Next()
+		UnsafeKey() []byte
+		UnsafeValue() []byte
+		UnsafeEntry() ([]byte, page.ValuePtr, byte)
+		Close() error
+	}, wantKeys []string) {
+		t.Helper()
+		defer func() {
+			if err := it.Close(); err != nil {
+				t.Fatalf("%s close: %v", name, err)
+			}
+		}()
+
+		var gotKeys []string
+		for ; it.Valid(); it.Next() {
+			key := string(it.UnsafeKey())
+			gotKeys = append(gotKeys, key)
+			value := it.UnsafeValue()
+			entryValue, ptr, flags := it.UnsafeEntry()
+			switch key {
+			case "a-inline":
+				if !bytes.Equal(value, []byte("inline")) || !bytes.Equal(entryValue, []byte("inline")) || ptr != (page.ValuePtr{}) || flags != node.FlagInline {
+					t.Fatalf("%s %q = (%q,%q,%+v,%d), want (inline,inline,zero,%d)", name, key, value, entryValue, ptr, flags, node.FlagInline)
+				}
+			case "b-pointer":
+				if !bytes.Equal(value, []byte("tail")) || !bytes.Equal(entryValue, []byte("tail")) || ptr != ptrWant || flags != node.FlagPointer {
+					t.Fatalf("%s %q = (%q,%q,%+v,%d), want (tail,tail,%+v,%d)", name, key, value, entryValue, ptr, flags, ptrWant, node.FlagPointer)
+				}
+			case "c-tomb":
+				if value != nil || entryValue != nil || ptr != (page.ValuePtr{}) || flags != node.FlagTombstone {
+					t.Fatalf("%s %q = (%v,%v,%+v,%d), want (nil,nil,zero,%d)", name, key, value, entryValue, ptr, flags, node.FlagTombstone)
+				}
+			default:
+				t.Fatalf("%s unexpected key %q", name, key)
+			}
+		}
+		if len(gotKeys) != len(wantKeys) {
+			t.Fatalf("%s iterated %v want %v", name, gotKeys, wantKeys)
+		}
+		for i := range wantKeys {
+			if gotKeys[i] != wantKeys[i] {
+				t.Fatalf("%s iterated %v want %v", name, gotKeys, wantKeys)
+			}
+		}
+	}
+
+	assertIter(t, "forward", m.NewIterator(nil, nil), []string{"a-inline", "b-pointer", "c-tomb"})
+	assertIter(t, "reverse", m.NewReverseIterator(nil, nil), []string{"c-tomb", "b-pointer", "a-inline"})
 }

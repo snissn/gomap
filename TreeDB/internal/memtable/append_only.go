@@ -920,6 +920,8 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	}
 	if cap(m.indexBuf) > 0 && cap(m.indexBuf) >= appendOnlyResetDropThresholdEntries {
 		m.indexBuf = nil
+	} else if m.indexBuf != nil {
+		m.indexBuf = m.indexBuf[:0]
 	}
 	m.count = 0
 	m.sizeBytes = 0
@@ -973,8 +975,9 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 }
 
 func (m *AppendOnly) buildMutableSortedIteratorEntriesLocked() []appendOnlyEntry {
-	if m.count == 0 || m.ordered {
-		return nil
+	if m.count == 0 {
+		m.clearSnapshotLocked()
+		return getAppendOnlyIteratorEntries(0)
 	}
 	indices := m.buildSortedLatestIndicesLocked()
 	active := m.entries[:m.count]

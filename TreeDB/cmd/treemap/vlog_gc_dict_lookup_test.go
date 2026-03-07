@@ -74,7 +74,15 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(20 * time.Second)
+	if testDeadline, ok := t.Deadline(); ok {
+		testDeadline = testDeadline.Add(-2 * time.Second)
+		if testDeadline.Before(deadline) {
+			deadline = testDeadline
+		}
+	}
 	published := false
+	var lastStats map[string]string
+	var lastDictID string
 	for time.Now().Before(deadline) {
 		select {
 		case err := <-bgErrCh:
@@ -84,8 +92,10 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		}
 		stats := db.Stats()
 		if stats != nil {
+			lastStats = stats
 			rawDictID, ok := stats["treedb.cache.vlog_dict.last_applied_dict_id"]
 			if ok {
+				lastDictID = rawDictID
 				dictID, parseErr := strconv.ParseUint(rawDictID, 10, 64)
 				if parseErr != nil {
 					_ = db.Close()
@@ -100,10 +110,12 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !published {
-		stats := db.Stats()
 		_ = db.Close()
-		t.Fatalf("timed out waiting for dict publish: last_applied_dict_id=%q stats=%#v",
-			stats["treedb.cache.vlog_dict.last_applied_dict_id"], stats)
+		if lastStats != nil {
+			t.Fatalf("timed out waiting for dict publish: last_applied_dict_id=%q stats=%#v",
+				lastDictID, lastStats)
+		}
+		t.Fatalf("timed out waiting for dict publish: stats=%#v", lastStats)
 	}
 
 	// Phase 2: write enough bytes for auto mode to probe dict frames.
