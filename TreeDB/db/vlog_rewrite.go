@@ -119,9 +119,16 @@ func newRewriteRIDAllocator(start uint64, reserve func(count int) (uint64, error
 	}
 }
 
-func validateRewriteRIDRange(start uint64, count int) error {
+func validateRewriteRIDCount(count int) error {
 	if count <= 0 {
-		return fmt.Errorf("value-log rid allocator requires positive count: start=%d count=%d", start, count)
+		return fmt.Errorf("value-log rid allocator requires positive count: count=%d", count)
+	}
+	return nil
+}
+
+func validateRewriteRIDRange(start uint64, count int) error {
+	if err := validateRewriteRIDCount(count); err != nil {
+		return err
 	}
 	if start == 0 {
 		return fmt.Errorf("value-log rid allocator returned rid 0: start=%d count=%d", start, count)
@@ -139,7 +146,7 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 	if a == nil {
 		return 0, fmt.Errorf("value-log rid allocator unavailable")
 	}
-	if err := validateRewriteRIDRange(1, count); err != nil {
+	if err := validateRewriteRIDCount(count); err != nil {
 		return 0, err
 	}
 	if a.reserve != nil {

@@ -9322,14 +9322,17 @@ func mulDivClampInt64(a, b, div, cap int64) int64 {
 		return 0
 	}
 	hi, lo := bits.Mul64(uint64(a), uint64(b))
+	divU := uint64(div)
 	var q uint64
 	if hi == 0 {
-		q = lo / uint64(div)
+		q = lo / divU
 	} else {
-		if hi >= uint64(div) {
+		// bits.Div64 requires div > hi. If that contract is not met, the exact
+		// quotient is at least 2^64 and will be clamped to cap anyway.
+		if divU <= hi {
 			return cap
 		}
-		q, _ = bits.Div64(hi, lo, uint64(div))
+		q, _ = bits.Div64(hi, lo, divU)
 	}
 	if q > uint64(cap) {
 		return cap
