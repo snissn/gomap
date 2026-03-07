@@ -261,10 +261,11 @@ func replayCommitLogSegments(db *DB, segments []logSegment, ridMap map[uint64]pa
 	if err != nil {
 		return err
 	}
-	defer func() { _ = inlineAppender.close() }()
 	if db != nil && db.indexOuterLeavesInValueLog {
 		db.SetLeafPageLog(inlineAppender)
+		defer db.SetLeafPageLog(nil)
 	}
+	defer func() { _ = inlineAppender.close() }()
 	for _, batch := range legacyBatches {
 		if err := applyCommitBatch(db, batch.records, ridMap, inlineAppender); err != nil {
 			return err

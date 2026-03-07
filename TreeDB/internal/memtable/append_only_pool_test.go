@@ -96,7 +96,7 @@ func TestAppendOnlyUnorderedIteratorUsesPooledEntries(t *testing.T) {
 	}
 }
 
-func TestAppendOnlyFrozenUnorderedIteratorUsesPointerSnapshot(t *testing.T) {
+func TestAppendOnlyFrozenUnorderedIteratorAvoidsPerIteratorPointerSnapshotCopies(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	m.Set([]byte("k2"), []byte("v2"))
 	m.Set([]byte("k1"), []byte("v1")) // force unordered iterator path

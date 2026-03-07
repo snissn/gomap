@@ -1,7 +1,6 @@
 package caching
 
 import (
-	"os"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/db"
@@ -9,11 +8,7 @@ import (
 )
 
 func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
-	dir, err := os.MkdirTemp("", "treedb-snapshot-rotate-fail-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
@@ -59,11 +54,7 @@ func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
 }
 
 func TestIteratorSnapshotIsolation(t *testing.T) {
-	dir, err := os.MkdirTemp("", "treedb-snapshot-iso-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(dir)
+	dir := t.TempDir()
 
 	backend, err := db.Open(db.Options{Dir: dir})
 	if err != nil {
