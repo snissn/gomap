@@ -334,9 +334,9 @@ func Open(opts Options) (*DB, error) {
 	// Dict compression requires a persistent dict store so dictionaries can be
 	// published and older dict-compressed frames remain decodable.
 	//
-	// DisableSideStores removes dictdb/templatedb plumbing. Allow it only when
-	// dict training is explicitly disabled (auto mode can still fall back to
-	// block/off in that configuration).
+	// DisableSideStores removes dictdb/templatedb plumbing. When it is enabled,
+	// auto compression automatically runs in a no-dict configuration by
+	// disabling dictionary training so block/off decisions can continue to work.
 	if opts.DisableSideStores {
 		switch opts.ValueLog.Compression {
 		case ValueLogCompressionDict:
