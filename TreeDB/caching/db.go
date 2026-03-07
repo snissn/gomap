@@ -3734,7 +3734,7 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 	view.retiredMems = nil
 }
 
-func memtableNeedsBatchArenaRetention(mt memtable.Table) bool {
+func cachedBatchWriteNeedsBatchArenaRetention(mt memtable.Table) bool {
 	// This helper is only used for the cached batch write path, where
 	// cachedBatchWriteUsesSteal governs whether a memtable receives borrowed
 	// batch slices or copied writes. append_only and hash_sorted are forced onto
@@ -3827,7 +3827,7 @@ func (db *DB) retainBatchArenaChunksForMemtables(chunks [][]byte, mems []memtabl
 		// Lease retention follows the cached batch writer's actual copy/steal
 		// choice; memtables that only receive copied writes here must not pin
 		// batch arenas past the write call.
-		if mt == nil || !memtableNeedsBatchArenaRetention(mt) {
+		if mt == nil || !cachedBatchWriteNeedsBatchArenaRetention(mt) {
 			continue
 		}
 		filtered = append(filtered, mt)

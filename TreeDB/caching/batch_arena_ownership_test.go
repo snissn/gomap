@@ -150,21 +150,21 @@ func TestBatchArenaLeases_ReleasedAfterCheckpoint_BTree(t *testing.T) {
 
 func TestCachedBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
 	cases := []struct {
-		name string
-		new  func() memtable.Table
-		want bool
+		name        string
+		newMemtable func() memtable.Table
+		want        bool
 	}{
-		{name: "skiplist", new: func() memtable.Table { return memtable.NewWithCapacity(0) }, want: true},
-		{name: "btree", new: func() memtable.Table { return memtable.NewBTree() }, want: true},
-		{name: "hash_sorted", new: func() memtable.Table {
+		{name: "skiplist", newMemtable: func() memtable.Table { return memtable.NewWithCapacity(0) }, want: true},
+		{name: "btree", newMemtable: func() memtable.Table { return memtable.NewBTree() }, want: true},
+		{name: "hash_sorted", newMemtable: func() memtable.Table {
 			return memtable.NewHashSortedWithCapacityAndIndexer(0, memtable.NewHashSortedIndexer())
 		}, want: false},
-		{name: "append_only", new: func() memtable.Table { return memtable.NewAppendOnlyWithCapacity(0) }, want: false},
+		{name: "append_only", newMemtable: func() memtable.Table { return memtable.NewAppendOnlyWithCapacity(0) }, want: false},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			mt := tc.new()
+			mt := tc.newMemtable()
 			if got := cachedBatchWriteUsesSteal(mt); got != tc.want {
 				t.Fatalf("memtable=%s useSteal=%v want=%v", tc.name, got, tc.want)
 			}
@@ -200,7 +200,10 @@ func TestBatchArenaLeases_NotNeededForPointerWritesOnCopiedMemtables(t *testing.
 				t.Fatalf("write: %v", err)
 			}
 
-			memVal, ptr, flags, ok := db.mutableShards[0].mem.GetEntry(key)
+			shard := &db.mutableShards[0]
+			shard.mu.Lock()
+			memVal, ptr, flags, ok := shard.mem.GetEntry(key)
+			shard.mu.Unlock()
 			if !ok {
 				t.Fatalf("expected memtable entry for pointer write")
 			}
