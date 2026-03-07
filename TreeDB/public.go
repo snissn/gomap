@@ -29,6 +29,9 @@ type Options = db.Options
 const (
 	defaultChunkSize     = 256 * 1024
 	defaultDictChunkSize = 64 * 1024
+	// Template side-store pages intentionally use the same default size as dictdb
+	// pages so both auxiliary stores behave consistently under the unified layout.
+	defaultTemplateChunkSize = defaultDictChunkSize
 
 	defaultSlowdownBacklogSeconds        = 1.0
 	defaultStopBacklogSeconds            = 2.0
@@ -289,7 +292,7 @@ func Open(opts Options) (*DB, error) {
 	}
 	templateChunkSize := opts.TemplateDBChunkSize
 	if templateChunkSize <= 0 {
-		templateChunkSize = defaultDictChunkSize
+		templateChunkSize = defaultTemplateChunkSize
 	}
 	if opts.KeepRecent == 0 && !opts.ReadOnly {
 		opts.KeepRecent = 1
@@ -334,9 +337,9 @@ func Open(opts Options) (*DB, error) {
 	// Dict compression requires a persistent dict store so dictionaries can be
 	// published and older dict-compressed frames remain decodable.
 	//
-	// DisableSideStores removes dictdb/templatedb plumbing. Allow it only when
-	// dict training is explicitly disabled (auto mode can still fall back to
-	// block/off in that configuration).
+	// DisableSideStores removes dictdb/templatedb plumbing. When it is enabled,
+	// auto compression automatically runs in a no-dict configuration by
+	// disabling dictionary training so block/off decisions can continue to work.
 	if opts.DisableSideStores {
 		switch opts.ValueLog.Compression {
 		case ValueLogCompressionDict:

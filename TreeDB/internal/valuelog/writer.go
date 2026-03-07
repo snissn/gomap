@@ -393,7 +393,7 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 }
 
 // NewWriterWithSink creates a value-log writer that writes to the provided sink.
-// Intended for deterministic tests/benchmarks (no file-backed durability).
+// Use this for sink-backed/custom outputs that do not provide file-backed durability.
 func NewWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 	if sink == nil {
 		return newWriterWithSink(io.Discard, fileID)
@@ -667,7 +667,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		}
 	}
 	w.f = f
-	// File-backed writers do not use bufio; drop any leftover sink buffer
+	// File-backed writers do not use bufio. Drop any leftover sink buffer
 	// rather than retargeting it across rotations.
 	w.bw = nil
 	w.size = info.Size()

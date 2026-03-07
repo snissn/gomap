@@ -45,7 +45,10 @@ func resolveOpenDirLayout(dir string, disableSideStores bool) (openDirLayout, er
 	}
 
 	// Main dir: <root>/maindb (caller may have passed maindb directly).
-	if _, err := os.Stat(filepath.Join(clean, "index.db")); err == nil {
+	if info, err := os.Stat(filepath.Join(clean, "index.db")); err == nil {
+		if info.IsDir() {
+			return openDirLayout{}, fmt.Errorf("treedb: index.db exists but is a directory: %s", filepath.Join(clean, "index.db"))
+		}
 		if filepath.Base(clean) == "maindb" {
 			parent := filepath.Dir(clean)
 			// Heuristic: treat <root>/maindb as a root-layout main DB dir if the
