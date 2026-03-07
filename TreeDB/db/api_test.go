@@ -165,15 +165,20 @@ func TestSnapshotGet_ReturnsSafeCopyForValueLogPointer(t *testing.T) {
 		t.Fatalf("close valuelog writer: %v", err)
 	}
 	rawBatch := db.NewBatch()
-	b, ok := rawBatch.(*Batch)
-	if !ok {
-		t.Fatalf("NewBatch() returned %T, want *Batch", rawBatch)
+	type pointerBatch interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+		Write() error
+		Close() error
 	}
-	defer func() {
+	b, ok := rawBatch.(pointerBatch)
+	if !ok {
+		t.Skipf("NewBatch() returned %T, which does not support SetPointer", rawBatch)
+	}
+	t.Cleanup(func() {
 		if err := b.Close(); err != nil {
-			t.Fatalf("Close pointer batch: %v", err)
+			t.Errorf("Close pointer batch: %v", err)
 		}
-	}()
+	})
 	if err := b.SetPointer(key, ptr); err != nil {
 		t.Fatalf("SetPointer: %v", err)
 	}

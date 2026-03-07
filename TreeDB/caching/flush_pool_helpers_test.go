@@ -725,6 +725,7 @@ func TestMaybeResetEntrySlicePoolBytesAfterGC_PreservesLeaseBytes(t *testing.T) 
 
 func TestGetEntrySliceIgnoresUnexpectedPoolType(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
 	capacity := 64
 	idx, _, ok := entrySliceLeaseClassForLen(capacity)
 	if !ok {

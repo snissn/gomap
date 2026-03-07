@@ -125,7 +125,8 @@ func TestTreeGet_UsesUnsafeReaderForPointersAndReturnsSafeCopy(t *testing.T) {
 		t.Fatalf("Alloc root: %v", err)
 	}
 	tracked := &trackedValueReader{mapValueReader: newMapValueReader()}
-	ptr := tracked.Add([]byte("pointer-value"))
+	expected := []byte("pointer-value")
+	ptr := tracked.Add(expected)
 
 	rootData, err := p.Get(rootID)
 	if err != nil {
@@ -142,7 +143,7 @@ func TestTreeGet_UsesUnsafeReaderForPointersAndReturnsSafeCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	if !bytes.Equal(got, []byte("pointer-value")) {
+	if !bytes.Equal(got, expected) {
 		t.Fatalf("unexpected value: %q", got)
 	}
 	if tracked.readUnsafeCalls != 1 {
@@ -157,7 +158,7 @@ func TestTreeGet_UsesUnsafeReaderForPointersAndReturnsSafeCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get second read failed: %v", err)
 	}
-	if !bytes.Equal(gotAgain, []byte("pointer-value")) {
+	if !bytes.Equal(gotAgain, expected) {
 		t.Fatalf("Get should return a safe copy, got %q", gotAgain)
 	}
 
