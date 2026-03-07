@@ -16079,11 +16079,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 	b.updateBatchEntryHint()
 	b.updateBatchCopyHint()
-	mainChunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
-	ptrTouchedMems := make([]memtable.Table, 0, len(b.ptrValueEntryIdxs))
+	ptrTouchedMems := make([]memtable.Table, 0, shardCount)
 	if len(b.ptrValueEntryIdxs) > 0 {
-		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueEntryIdxs))
+		seenPtrMems := make(map[memtable.Table]struct{}, shardCount)
 		for _, idx := range b.ptrValueEntryIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
 				b.db.writeMu.RUnlock()
@@ -16112,6 +16111,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	if b.ptrValueEntryIdxs != nil {
 		b.ptrValueEntryIdxs = b.ptrValueEntryIdxs[:0]
 	}
+	mainChunks := b.drainCopyArenaChunks()
 	ptrChunks := b.drainPtrCopyArenaChunks()
 	b.db.retainBatchArenaChunksForMemtables(mainChunks, touchedMems)
 	if retainPtrArena {
