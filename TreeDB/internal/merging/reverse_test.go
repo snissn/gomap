@@ -189,3 +189,123 @@ func TestReverseMergingIterator_Heap(t *testing.T) {
 		t.Errorf("Reverse heap merge results mismatch.\nGot: %v\nWant:%v", results, expected)
 	}
 }
+
+func TestReverseMergingIterator_TwoSourceRespectsPriorityOrder(t *testing.T) {
+	older := &mockUnsafeReverseIter{
+		data: []entry{
+			{"A", "older-a", false},
+			{"C", "older-c", false},
+		},
+		idx: 1,
+	}
+	newer := &mockUnsafeReverseIter{
+		data: []entry{
+			{"A", "newer-a", false},
+			{"B", "newer-b", false},
+		},
+		idx: 1,
+	}
+
+	it := NewReverseMergingIterator([]IteratorSource{
+		{Iter: older, Priority: 9},
+		{Iter: newer, Priority: 1},
+	}, nil, nil)
+
+	expected := []struct {
+		k, v string
+	}{
+		{"C", "older-c"},
+		{"B", "newer-b"},
+		{"A", "newer-a"},
+	}
+
+	var results []struct{ k, v string }
+	for it.Valid() {
+		results = append(results, struct{ k, v string }{string(it.Key()), string(it.Value())})
+		it.Next()
+	}
+
+	if !reflect.DeepEqual(results, expected) {
+		t.Fatalf("Reverse merge priority mismatch.\nGot: %v\nWant:%v", results, expected)
+	}
+}
+
+func TestReverseMergingIterator_TwoSourceTombstoneShadowsLowerPriority(t *testing.T) {
+	winner := &mockUnsafeReverseIter{
+		data: []entry{
+			{"B", "", true},
+		},
+		idx: 0,
+	}
+	shadowed := &mockUnsafeReverseIter{
+		data: []entry{
+			{"A", "old-a", false},
+			{"B", "old-b", false},
+		},
+		idx: 1,
+	}
+
+	it := NewReverseMergingIterator([]IteratorSource{
+		{Iter: shadowed, Priority: 7},
+		{Iter: winner, Priority: 0},
+	}, nil, nil)
+
+	expected := []struct {
+		k, v string
+	}{
+		{"A", "old-a"},
+	}
+
+	var results []struct{ k, v string }
+	for it.Valid() {
+		results = append(results, struct{ k, v string }{string(it.Key()), string(it.Value())})
+		it.Next()
+	}
+
+	if !reflect.DeepEqual(results, expected) {
+		t.Fatalf("Reverse merge tombstone shadow mismatch.\nGot: %v\nWant:%v", results, expected)
+	}
+}
+
+func TestReverseMergingIterator_TwoSourceHonorsBounds(t *testing.T) {
+	left := &mockUnsafeReverseIter{
+		data: []entry{
+			{"A", "a", false},
+			{"C", "c", false},
+			{"E", "e", false},
+		},
+		idx: 2,
+	}
+	right := &mockUnsafeReverseIter{
+		data: []entry{
+			{"B", "b", false},
+			{"D", "d", false},
+			{"F", "f", false},
+		},
+		idx: 2,
+	}
+
+	it := NewReverseMergingIterator([]IteratorSource{
+		{Iter: left, Priority: 0},
+		{Iter: right, Priority: 1},
+	}, []byte("B"), []byte("F"))
+
+	expected := []struct {
+		k, v string
+	}{
+		{"E", "e"},
+		{"D", "d"},
+		{"C", "c"},
+		{"B", "b"},
+	}
+
+	var results []struct{ k, v string }
+	for it.Valid() {
+		results = append(results, struct{ k, v string }{string(it.Key()), string(it.Value())})
+		it.Next()
+	}
+
+	if !reflect.DeepEqual(results, expected) {
+		t.Fatalf("Reverse merge bounds mismatch.\nGot: %v\nWant:%v", results, expected)
+	}
+}

@@ -1,8 +1,8 @@
 package bulk
 
-import "fmt"
-
 import (
+	"fmt"
+
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"

@@ -97,8 +97,14 @@ type ReverseMergingIterator struct {
 
 func NewReverseMergingIterator(sources []IteratorSource, start, end []byte) Iterator {
 	if len(sources) == 2 {
-		// Assume sources[0] has higher priority (lower number).
-		return NewReverseTwoWayMerger(sources[0].Iter, sources[1].Iter, start, end)
+		// Ensure the two-way fast path uses the same priority semantics as the
+		// heap path, where lower Priority wins on equal keys.
+		s0 := sources[0]
+		s1 := sources[1]
+		if s1.Priority < s0.Priority {
+			s0, s1 = s1, s0
+		}
+		return NewReverseTwoWayMerger(s0.Iter, s1.Iter, start, end)
 	}
 
 	h := make(reverseIteratorHeap, 0, len(sources))
