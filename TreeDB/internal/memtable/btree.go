@@ -487,10 +487,10 @@ func (it *btreeIterator) UnsafeValue() []byte {
 
 func (it *btreeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if !it.hasCur {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, 0
 	}
 	if it.cur.flags&node.FlagTombstone != 0 {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, it.cur.flags
 	}
 	if it.cur.flags&node.FlagPointer != 0 {
 		return it.cur.value, it.cur.ptr, it.cur.flags
@@ -650,10 +650,10 @@ func (it *btreeReverseIterator) UnsafeValue() []byte {
 
 func (it *btreeReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	if !it.hasCur {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, 0
 	}
 	if it.cur.flags&node.FlagTombstone != 0 {
-		return nil, page.ValuePtr{}, node.FlagTombstone
+		return nil, page.ValuePtr{}, it.cur.flags
 	}
 	if it.cur.flags&node.FlagPointer != 0 {
 		return it.cur.value, it.cur.ptr, it.cur.flags

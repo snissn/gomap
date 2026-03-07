@@ -182,10 +182,11 @@ func TestBTreeInlineEmptySliceCanonicalizesToNil(t *testing.T) {
 
 func TestBTreeIteratorUnsafeEntry_ForInlinePointerAndTombstone(t *testing.T) {
 	ptrWant := page.ValuePtr{Offset: 99, Length: 123, FileID: 7}
+	tombFlags := byte(node.FlagTombstone | node.FlagInline)
 	m := NewBTree()
 	m.Set([]byte("a-inline"), []byte("inline"))
 	m.SetEntry([]byte("b-pointer"), []byte("tail"), ptrWant, node.FlagPointer)
-	m.Delete([]byte("c-tomb"))
+	m.SetEntry([]byte("c-tomb"), nil, page.ValuePtr{}, tombFlags)
 
 	assertIter := func(t *testing.T, name string, it interface {
 		Valid() bool
@@ -218,8 +219,8 @@ func TestBTreeIteratorUnsafeEntry_ForInlinePointerAndTombstone(t *testing.T) {
 					t.Fatalf("%s %q = (%q,%q,%+v,%d), want (tail,tail,%+v,%d)", name, key, value, entryValue, ptr, flags, ptrWant, node.FlagPointer)
 				}
 			case "c-tomb":
-				if value != nil || entryValue != nil || ptr != (page.ValuePtr{}) || flags != node.FlagTombstone {
-					t.Fatalf("%s %q = (%v,%v,%+v,%d), want (nil,nil,zero,%d)", name, key, value, entryValue, ptr, flags, node.FlagTombstone)
+				if value != nil || entryValue != nil || ptr != (page.ValuePtr{}) || flags != tombFlags {
+					t.Fatalf("%s %q = (%v,%v,%+v,%d), want (nil,nil,zero,%d)", name, key, value, entryValue, ptr, flags, tombFlags)
 				}
 			default:
 				t.Fatalf("%s unexpected key %q", name, key)
