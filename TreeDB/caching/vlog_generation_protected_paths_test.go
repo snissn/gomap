@@ -2,6 +2,7 @@ package caching
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -104,6 +105,61 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 		if _, ok := gotSet[path]; !ok {
 			t.Fatalf("protected paths missing current value-log segment: %s", path)
 		}
+	}
+}
+
+func TestVlogGenerationRewrite_ProtectedPathsIncludeRetainedPaths(t *testing.T) {
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	recorder := &rewriteRecordingBackend{DB: backend}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000999.log")
+	db.valueLogMu.Lock()
+	db.valueLogRetain = map[string]struct{}{retainedPath: {}}
+	db.valueLogMu.Unlock()
+
+	if err := db.Set([]byte("k1"), []byte("value-1")); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	got := recorder.recordedProtectedPaths()
+	if len(got) == 0 {
+		t.Fatalf("expected rewrite to record protected paths")
+	}
+	found := false
+	for _, path := range got {
+		if path == retainedPath {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("protected paths missing retained segment: %s", retainedPath)
 	}
 }
 
