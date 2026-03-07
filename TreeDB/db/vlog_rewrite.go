@@ -143,7 +143,7 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 			return 0, fmt.Errorf("value-log rid space exhausted")
 		}
 		end := start + uint64(count) - 1
-		if end < start || end == 0 {
+		if end < start || end == 0 || end == ^uint64(0) {
 			return 0, fmt.Errorf("value-log rid space exhausted")
 		}
 		if a.next != 0 && start < a.next {
@@ -159,7 +159,11 @@ func (a *rewriteRIDAllocator) Reserve(count int) (uint64, error) {
 	if uint64(count-1) > ^uint64(0)-start {
 		return 0, fmt.Errorf("value-log rid space exhausted")
 	}
-	a.next = start + uint64(count)
+	end := start + uint64(count) - 1
+	if end < start || end == ^uint64(0) {
+		return 0, fmt.Errorf("value-log rid space exhausted")
+	}
+	a.next = end + 1
 	return start, nil
 }
 
