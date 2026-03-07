@@ -15,7 +15,7 @@ import (
 //
 // Snapshot isolation in cached mode is implemented by rotating any pending writes
 // out of the mutable memtables into the immutable queue, then reading from:
-//   - the frozen queue (newest first)
+//   - the frozen queue (stored oldest-to-newest, scanned newest-to-oldest)
 //   - the backend snapshot
 //
 // Mutable memtables are intentionally ignored so that writes after AcquireSnapshot
@@ -142,6 +142,9 @@ func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, 
 	queue := s.view.queue
 	queueShardIDs := s.view.queueShardIDs
 	shardIdx := s.db.shardIndex(key)
+	// The frozen queue stores entries in chronological order with newer
+	// memtables appended at higher indices. Scan from the end so key lookups see
+	// the newest queued entry first.
 	for i := len(queue) - 1; i >= 0; i-- {
 		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
 			continue

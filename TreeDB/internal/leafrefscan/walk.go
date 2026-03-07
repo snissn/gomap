@@ -14,8 +14,14 @@ type VisitFunc func(ptr page.ValuePtr) error
 
 // Walk visits every leaf-ref pointer reachable from rootID.
 func Walk(ctx context.Context, rootID uint64, get GetFunc, verify VerifyFunc, visit VisitFunc) error {
-	if rootID == 0 || get == nil || visit == nil {
+	if rootID == 0 {
 		return nil
+	}
+	if get == nil {
+		return fmt.Errorf("leafrefscan.Walk: get function is nil")
+	}
+	if visit == nil {
+		return fmt.Errorf("leafrefscan.Walk: visit function is nil")
 	}
 	if ctx == nil {
 		ctx = context.Background()

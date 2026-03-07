@@ -116,14 +116,16 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, error) {
 		indexInfo, err := os.Stat(indexPath)
 		if err != nil {
 			if !os.IsNotExist(err) {
+				_ = cleanup()
 				return nil, fmt.Errorf("treedb: stat templatedb index: %w", err)
 			}
 		} else if indexInfo.IsDir() {
+			_ = cleanup()
 			return nil, fmt.Errorf("treedb: templatedb index path is a directory: %s", indexPath)
 		} else {
 			templateChunk := opts.TemplateDBChunkSize
 			if templateChunk <= 0 {
-				templateChunk = defaultDictChunkSize
+				templateChunk = defaultTemplateChunkSize
 			}
 			templateOpts := *opts
 			templateOpts.Dir = templateDir
