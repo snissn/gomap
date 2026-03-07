@@ -142,7 +142,7 @@ func TestTreeGet_UsesUnsafeReaderForPointersAndReturnsSafeCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
-	if string(got) != "pointer-value" {
+	if !bytes.Equal(got, []byte("pointer-value")) {
 		t.Fatalf("unexpected value: %q", got)
 	}
 	if tracked.readUnsafeCalls != 1 {
@@ -157,7 +157,7 @@ func TestTreeGet_UsesUnsafeReaderForPointersAndReturnsSafeCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get second read failed: %v", err)
 	}
-	if string(gotAgain) != "pointer-value" {
+	if !bytes.Equal(gotAgain, []byte("pointer-value")) {
 		t.Fatalf("Get should return a safe copy, got %q", gotAgain)
 	}
 

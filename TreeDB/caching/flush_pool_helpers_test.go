@@ -444,41 +444,43 @@ func TestOuterLeafArenaReuseBoundCapsOversizedArena(t *testing.T) {
 	}
 }
 
-func resetEntrySliceLeasesForTest(t *testing.T) {
+func resetEntrySlicePoolStateForTest(t *testing.T) {
 	t.Helper()
 	entrySliceLeaseMu.Lock()
 	saved := entrySliceLeases
 	entrySliceLeases = [entrySliceLeaseClassCount][][]batch.Entry{}
 	entrySliceLeaseMu.Unlock()
-	t.Cleanup(func() {
-		entrySliceLeaseMu.Lock()
-		entrySliceLeases = saved
-		entrySliceLeaseMu.Unlock()
-	})
-}
-
-func resetEntrySlicePoolsForTest(t *testing.T) {
-	t.Helper()
-	savedBudget := entrySlicePoolBudgetBytes
-	entrySlicePoolBudgetBytes = 0
+	savedBytes := entrySlicePoolBytes.Load()
+	savedLastGC := entrySlicePoolLastGC.Load()
+	savedPools := entrySlicePools
 	entrySlicePoolBytes.Store(0)
 	entrySlicePoolLastGC.Store(0)
 	for i := range entrySlicePools {
 		entrySlicePools[i] = sync.Pool{}
 	}
 	t.Cleanup(func() {
+		entrySliceLeaseMu.Lock()
+		entrySliceLeases = saved
+		entrySliceLeaseMu.Unlock()
+		entrySlicePoolBytes.Store(savedBytes)
+		entrySlicePoolLastGC.Store(savedLastGC)
+		entrySlicePools = savedPools
+	})
+}
+
+func resetEntrySlicePoolsForTest(t *testing.T) {
+	t.Helper()
+	resetEntrySlicePoolStateForTest(t)
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 0
+	t.Cleanup(func() {
 		entrySlicePoolBudgetBytes = savedBudget
-		entrySlicePoolBytes.Store(0)
-		entrySlicePoolLastGC.Store(0)
-		for i := range entrySlicePools {
-			entrySlicePools[i] = sync.Pool{}
-		}
 	})
 }
 
 func TestEntrySliceLeaseRoundTrip(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
+	resetEntrySlicePoolStateForTest(t)
 
 	entries := make([]batch.Entry, 1, 256)
 	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
@@ -505,7 +507,7 @@ func TestEntrySliceLeaseRoundTrip(t *testing.T) {
 
 func TestEntrySliceLeaseRoundTripWithOversizeReuse(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
+	resetEntrySlicePoolStateForTest(t)
 
 	entries := make([]batch.Entry, 1, 512)
 	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
@@ -521,7 +523,7 @@ func TestEntrySliceLeaseRoundTripWithOversizeReuse(t *testing.T) {
 
 func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
+	resetEntrySlicePoolStateForTest(t)
 
 	big := make([]batch.Entry, 0, 1<<18)
 	putEntrySlice(big)
@@ -551,7 +553,7 @@ func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
 
 func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
+	resetEntrySlicePoolStateForTest(t)
 
 	savedBudget := entrySlicePoolBudgetBytes
 	entrySlicePoolBudgetBytes = 0
@@ -566,9 +568,8 @@ func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
 	}
 }
 
-func TestPutEntrySliceClearsEntriesOnUnclassedEarlyReturn(t *testing.T) {
+func TestPutEntrySliceClearsEntriesOnUnclassifiedEarlyReturn(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
 	resetEntrySlicePoolsForTest(t)
 
 	entries := make([]batch.Entry, 1, 96)
@@ -582,7 +583,6 @@ func TestPutEntrySliceClearsEntriesOnUnclassedEarlyReturn(t *testing.T) {
 
 func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
 	resetEntrySlicePoolsForTest(t)
 	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
 	entrySlicePoolBytes.Store(0)
@@ -609,16 +609,15 @@ func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
 
 func TestGetEntrySliceMissResetsPoolBytesAfterGC(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
 	resetEntrySlicePoolsForTest(t)
 	batchArenaPoolTestMu.Lock()
 	t.Cleanup(batchArenaPoolTestMu.Unlock)
 
-	origNumGC := batchArenaPoolNumGC
-	defer func() { batchArenaPoolNumGC = origNumGC }()
+	origNumGC := entrySlicePoolNumGC
+	defer func() { entrySlicePoolNumGC = origNumGC }()
 
-	var fakeNumGC uint32 = 9
-	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+	var fakeNumGC uint64 = 9
+	entrySlicePoolNumGC = func() uint64 { return fakeNumGC }
 
 	entrySlicePoolBytes.Store(1234)
 	entrySlicePoolLastGC.Store(fakeNumGC)
@@ -638,16 +637,15 @@ func TestGetEntrySliceMissResetsPoolBytesAfterGC(t *testing.T) {
 
 func TestPutEntrySliceDoesNotAdvanceGCEpochWhenPoolAlreadyAccounted(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
 	resetEntrySlicePoolsForTest(t)
 	batchArenaPoolTestMu.Lock()
 	t.Cleanup(batchArenaPoolTestMu.Unlock)
 
-	origNumGC := batchArenaPoolNumGC
-	defer func() { batchArenaPoolNumGC = origNumGC }()
+	origNumGC := entrySlicePoolNumGC
+	defer func() { entrySlicePoolNumGC = origNumGC }()
 
-	var fakeNumGC uint32 = 11
-	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+	var fakeNumGC uint64 = 11
+	entrySlicePoolNumGC = func() uint64 { return fakeNumGC }
 
 	savedBudget := entrySlicePoolBudgetBytes
 	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
@@ -665,16 +663,15 @@ func TestPutEntrySliceDoesNotAdvanceGCEpochWhenPoolAlreadyAccounted(t *testing.T
 
 func TestMaybeResetEntrySlicePoolBytesAfterGC_FirstEpochKeepsAccountedBytes(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
 	resetEntrySlicePoolsForTest(t)
 	batchArenaPoolTestMu.Lock()
 	t.Cleanup(batchArenaPoolTestMu.Unlock)
 
-	origNumGC := batchArenaPoolNumGC
-	defer func() { batchArenaPoolNumGC = origNumGC }()
+	origNumGC := entrySlicePoolNumGC
+	defer func() { entrySlicePoolNumGC = origNumGC }()
 
-	const fakeNumGC uint32 = 5
-	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+	const fakeNumGC uint64 = 5
+	entrySlicePoolNumGC = func() uint64 { return fakeNumGC }
 
 	entrySlicePoolBytes.Store(1234)
 	entrySlicePoolLastGC.Store(0)
@@ -691,16 +688,15 @@ func TestMaybeResetEntrySlicePoolBytesAfterGC_FirstEpochKeepsAccountedBytes(t *t
 
 func TestMaybeResetEntrySlicePoolBytesAfterGC_PreservesLeaseBytes(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
-	resetEntrySliceLeasesForTest(t)
 	resetEntrySlicePoolsForTest(t)
 	batchArenaPoolTestMu.Lock()
 	t.Cleanup(batchArenaPoolTestMu.Unlock)
 
-	origNumGC := batchArenaPoolNumGC
-	defer func() { batchArenaPoolNumGC = origNumGC }()
+	origNumGC := entrySlicePoolNumGC
+	defer func() { entrySlicePoolNumGC = origNumGC }()
 
-	var fakeNumGC uint32 = 17
-	batchArenaPoolNumGC = func() uint32 { return fakeNumGC }
+	var fakeNumGC uint64 = 17
+	entrySlicePoolNumGC = func() uint64 { return fakeNumGC }
 
 	savedBudget := entrySlicePoolBudgetBytes
 	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes

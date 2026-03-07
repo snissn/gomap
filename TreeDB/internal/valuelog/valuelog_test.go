@@ -60,6 +60,12 @@ func TestWriterRotateTo_FlushesSinkBufferBeforeSwitchingToFileBacked(t *testing.
 	if writer == nil {
 		t.Fatal("NewWriterWithSink returned nil")
 	}
+	closed := false
+	t.Cleanup(func() {
+		if !closed {
+			_ = writer.Close()
+		}
+	})
 	if _, err := writer.bw.WriteString("sink-data"); err != nil {
 		t.Fatalf("buffered sink write: %v", err)
 	}
@@ -78,6 +84,7 @@ func TestWriterRotateTo_FlushesSinkBufferBeforeSwitchingToFileBacked(t *testing.
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
+	closed = true
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read file: %v", err)
