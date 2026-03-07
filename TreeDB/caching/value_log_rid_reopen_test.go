@@ -178,9 +178,9 @@ func TestDisableWAL_ReopenTruncatedTailStillSeedsNextRID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("backend open: %v", err)
 		}
-		defer func() { _ = backend.Close() }()
 		db, err := Open(dir, backend, opts)
 		if err != nil {
+			_ = backend.Close()
 			t.Fatalf("Open: %v", err)
 		}
 		closed := false
@@ -235,9 +235,9 @@ func TestDisableWAL_ReopenTruncatedTailStillSeedsNextRID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backend reopen: %v", err)
 	}
-	defer func() { _ = backend.Close() }()
 	db, err := Open(dir, backend, opts)
 	if err != nil {
+		_ = backend.Close()
 		t.Fatalf("Open after truncate: %v", err)
 	}
 	closed := false
