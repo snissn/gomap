@@ -665,6 +665,33 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 			if runtime.GOOS != "windows" {
 				return err
 			}
+			if isWindowsRenameNeedsReplace(err) {
+				if rmErr := os.Remove(path); rmErr == nil || os.IsNotExist(rmErr) {
+					if err := os.Rename(tmp, path); err == nil {
+						return nil
+					} else {
+						lastErr = err
+						if isWindowsRenameRetryable(err) {
+							time.Sleep(sleep)
+							if sleep < 100*time.Millisecond {
+								sleep *= 2
+							}
+							continue
+						}
+						return err
+					}
+				} else {
+					lastErr = rmErr
+					if isWindowsRenameRetryable(rmErr) {
+						time.Sleep(sleep)
+						if sleep < 100*time.Millisecond {
+							sleep *= 2
+						}
+						continue
+					}
+					return rmErr
+				}
+			}
 			if isWindowsRenameRetryable(err) {
 				time.Sleep(sleep)
 				if sleep < 100*time.Millisecond {
@@ -676,6 +703,19 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 		}
 	}
 	return lastErr
+}
+
+func isWindowsRenameNeedsReplace(err error) bool {
+	if errors.Is(err, os.ErrExist) {
+		return true
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) && errno == syscall.Errno(183) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already exists") ||
+		strings.Contains(msg, "cannot create a file when that file already exists")
 }
 
 func isWindowsRenameRetryable(err error) bool {

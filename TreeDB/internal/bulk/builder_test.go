@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -229,5 +230,25 @@ func TestBuildWithOptions_LeafPageLogAppendErrorPropagates(t *testing.T) {
 	_, err = BuildWithOptions(&MockIterator{keys: [][]byte{[]byte("a")}}, alloc, p, BuildOptions{LeafPageLog: leafLog})
 	if err == nil || err.Error() != "append leaf failed" {
 		t.Fatalf("BuildWithOptions error=%v want append leaf failed", err)
+	}
+}
+
+func TestBuildWithOptions_RejectsInternalBaseDeltaWithLeafPageLog(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	leafLog := &mockLeafPageLog{}
+
+	_, err = BuildWithOptions(&MockIterator{keys: [][]byte{[]byte("a")}}, alloc, p, BuildOptions{
+		LeafPageLog:       leafLog,
+		InternalBaseDelta: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "InternalBaseDelta is incompatible with LeafPageLog") {
+		t.Fatalf("BuildWithOptions error=%v want InternalBaseDelta/LeafPageLog incompatibility", err)
 	}
 }

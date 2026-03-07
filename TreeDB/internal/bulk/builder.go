@@ -1,5 +1,7 @@
 package bulk
 
+import "fmt"
+
 import (
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -41,6 +43,9 @@ func Build(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager) (uint6
 // BuildWithOptions creates a new B-Tree from a sorted iterator with custom options.
 func BuildWithOptions(iter iterator.UnsafeIterator, alloc Allocator, p *pager.Pager, opts BuildOptions) (uint64, error) {
 	leafLog := opts.LeafPageLog
+	if leafLog != nil && opts.InternalBaseDelta {
+		return 0, fmt.Errorf("bulk.BuildWithOptions: InternalBaseDelta is incompatible with LeafPageLog child refs")
+	}
 	if !iter.Valid() {
 		// Empty tree? Return a new empty root.
 		buf := make([]byte, page.PageSize)

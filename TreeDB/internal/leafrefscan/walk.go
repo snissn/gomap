@@ -75,7 +75,7 @@ func Walk(ctx context.Context, rootID uint64, get GetFunc, verify VerifyFunc, vi
 				stack = append(stack, childID)
 			}
 		default:
-			return fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
+			return fmt.Errorf("leafrefscan.Walk: invalid page type %d on page %d", n.Type(), pageID)
 		}
 	}
 	return nil

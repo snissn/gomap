@@ -117,7 +117,7 @@ func TestWalk_InvalidPageTypeReturnsError(t *testing.T) {
 		}
 		return rootPage, nil
 	}, nil, func(page.ValuePtr) error { return nil })
-	if err == nil || !strings.Contains(err.Error(), "invalid page type") {
+	if err == nil || !strings.Contains(err.Error(), "leafrefscan.Walk: invalid page type") {
 		t.Fatalf("Walk(invalid type) err=%v want invalid page type", err)
 	}
 }
