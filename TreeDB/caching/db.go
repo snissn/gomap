@@ -16088,7 +16088,7 @@ func isTruncatedValueLogScanError(err error) bool {
 
 func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, bool, error) {
 	var maxRID uint64
-	truncatedBeforeFirstRID := false
+	anySegmentTruncatedBeforeFirstRID := false
 	for _, seg := range segments {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue
@@ -16114,7 +16114,7 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, bool, error)
 			}
 			if isTruncatedValueLogScanError(err) {
 				if errors.Is(err, io.ErrUnexpectedEOF) && !readAnyRID {
-					truncatedBeforeFirstRID = true
+					anySegmentTruncatedBeforeFirstRID = true
 				}
 				break
 			}
@@ -16125,7 +16125,7 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, bool, error)
 			return 0, false, err
 		}
 	}
-	return maxRID, truncatedBeforeFirstRID, nil
+	return maxRID, anySegmentTruncatedBeforeFirstRID, nil
 }
 
 func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {

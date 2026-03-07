@@ -1,7 +1,7 @@
 package memtable
 
 import (
-	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -23,7 +23,9 @@ func TestAppendOnlyResetWithCapacity_ShrinksEntriesAfterSpike(t *testing.T) {
 	}
 
 	for i := 0; i < base*desiredEntriesMultiple; i++ {
-		key := []byte(fmt.Sprintf("k%08d", i))
+		key := make([]byte, 1, 16)
+		key[0] = 'k'
+		key = strconv.AppendInt(key, int64(i), 10)
 		mt.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
 	}
 	if got := cap(mt.entries); got <= base*shrinkThresholdMultiple {

@@ -35,7 +35,7 @@ const (
 	appendOnlyValueArenaRetainMaxCap        = 4 << 20
 	appendOnlyValueArenaRetainChunks        = 128
 	appendOnlyReuseOversizeFactor           = 4
-	appendOnlyResetDropThresholdEntries     = 1 << 15
+	appendOnlyResetDropThresholdCap         = 1 << 15
 )
 
 var appendOnlyEntryPool sync.Pool
@@ -871,7 +871,7 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	m.valueArena.reset()
 	// Clear small maps in-place; drop large ones so they don't pin hash tables
 	// after one-off spikes.
-	if oldCount > 0 && oldCount >= appendOnlyResetDropThresholdEntries {
+	if oldCount > 0 && oldCount >= appendOnlyResetDropThresholdCap {
 		m.latest = nil
 		m.latest64 = nil
 	} else {
@@ -880,13 +880,13 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	}
 	// Snapshot/index buffers are only needed for unordered memtables; drop large
 	// ones on reset to keep post-spike memory bounded.
-	if cap(m.snapshot) > 0 && cap(m.snapshot) >= appendOnlyResetDropThresholdEntries {
+	if cap(m.snapshot) > 0 && cap(m.snapshot) >= appendOnlyResetDropThresholdCap {
 		m.snapshot = nil
 		m.snapCount = 0
 	} else {
 		m.clearSnapshotLocked()
 	}
-	if cap(m.indexBuf) > 0 && cap(m.indexBuf) >= appendOnlyResetDropThresholdEntries {
+	if cap(m.indexBuf) > 0 && cap(m.indexBuf) >= appendOnlyResetDropThresholdCap {
 		m.indexBuf = nil
 	} else if m.indexBuf != nil {
 		m.indexBuf = m.indexBuf[:0]
