@@ -112,3 +112,38 @@ func TestResolveOpenDirLayout_DisableSideStoresRejectsRootDir(t *testing.T) {
 		t.Fatalf("expected DisableSideStores root-layout error")
 	}
 }
+
+func TestResolveOpenDirLayout_NewMaindbPathStaysUnderProvidedDir(t *testing.T) {
+	parent := t.TempDir()
+	provided := filepath.Join(parent, "maindb")
+
+	layout, err := resolveOpenDirLayout(provided, false)
+	if err != nil {
+		t.Fatalf("resolve new maindb path: %v", err)
+	}
+	if layout.rootDir != provided || layout.mainDir != filepath.Join(provided, "maindb") {
+		t.Fatalf("unexpected layout for new maindb path: %+v", layout)
+	}
+	if layout.dictdbDir != filepath.Join(provided, "dictdb") || layout.templatedbDir != filepath.Join(provided, "templatedb") {
+		t.Fatalf("unexpected side-store layout for new maindb path: %+v", layout)
+	}
+}
+
+func TestResolveOpenDirLayout_NewMaindbPathUsesInitializedParentRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
+		t.Fatalf("mkdir dictdb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "dictdb", "index.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write dictdb/index.db: %v", err)
+	}
+	provided := filepath.Join(root, "maindb")
+
+	layout, err := resolveOpenDirLayout(provided, false)
+	if err != nil {
+		t.Fatalf("resolve initialized parent maindb path: %v", err)
+	}
+	if layout.rootDir != root || layout.mainDir != provided {
+		t.Fatalf("unexpected initialized-parent layout: %+v", layout)
+	}
+}

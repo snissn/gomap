@@ -24,6 +24,16 @@ func sideStoreLooksInitialized(root, name string) bool {
 	return err == nil && !indexInfo.IsDir()
 }
 
+func rootLayoutLooksInitialized(root string) bool {
+	if root == "" {
+		return false
+	}
+	if info, err := os.Stat(filepath.Join(root, "maindb")); err == nil && info.IsDir() {
+		return true
+	}
+	return sideStoreLooksInitialized(root, "dictdb") || sideStoreLooksInitialized(root, "templatedb")
+}
+
 func resolveOpenDirLayout(dir string, disableSideStores bool) (openDirLayout, error) {
 	if dir == "" {
 		return openDirLayout{}, errors.New("treedb: db dir required")
@@ -90,12 +100,14 @@ func resolveOpenDirLayout(dir string, disableSideStores bool) (openDirLayout, er
 	// New DB: accept either <root> or <root>/maindb as the provided dir.
 	if filepath.Base(clean) == "maindb" {
 		parent := filepath.Dir(clean)
-		return openDirLayout{
-			rootDir:       parent,
-			mainDir:       clean,
-			dictdbDir:     filepath.Join(parent, "dictdb"),
-			templatedbDir: filepath.Join(parent, "templatedb"),
-		}, nil
+		if rootLayoutLooksInitialized(parent) {
+			return openDirLayout{
+				rootDir:       parent,
+				mainDir:       clean,
+				dictdbDir:     filepath.Join(parent, "dictdb"),
+				templatedbDir: filepath.Join(parent, "templatedb"),
+			}, nil
+		}
 	}
 	return openDirLayout{
 		rootDir:       clean,
