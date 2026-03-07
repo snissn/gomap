@@ -747,6 +747,25 @@ func TestRewriteRIDAllocatorReserve_ExternalRangeOverflowFails(t *testing.T) {
 	}
 }
 
+func TestRewriteRIDAllocatorReserve_ExternalNextWraparoundFails(t *testing.T) {
+	alloc := newRewriteRIDAllocator(1, func(count int) (uint64, error) {
+		if count != 1 {
+			t.Fatalf("unexpected count %d", count)
+		}
+		return ^uint64(0), nil
+	})
+	if _, err := alloc.Reserve(1); err == nil {
+		t.Fatalf("expected external terminal RID to fail")
+	}
+}
+
+func TestRewriteRIDAllocatorReserve_TerminalRIDFails(t *testing.T) {
+	alloc := newRewriteRIDAllocator(^uint64(0), nil)
+	if _, err := alloc.Reserve(1); err == nil {
+		t.Fatalf("expected terminal RID to fail")
+	}
+}
+
 func TestValueLogRewriteOnline_SparseSelection_RewritesHighStaleSegment(t *testing.T) {
 	dir := t.TempDir()
 
