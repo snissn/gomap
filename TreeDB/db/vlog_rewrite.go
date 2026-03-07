@@ -15,6 +15,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -477,30 +478,8 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 	if p == nil || rootID == 0 || liveByID == nil {
 		return nil
 	}
-	if ptr, ok := page.DecodeLeafRef(rootID); ok {
-		return db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords)
-	}
-	stack := make([]uint64, 0, 128)
-	stack = append(stack, rootID)
-	visited := make(map[uint64]struct{}, 1024)
 	verifyAlways := p.VerifyOnRead()
-
-	for len(stack) > 0 {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		pageID := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if _, ok := visited[pageID]; ok {
-			continue
-		}
-		visited[pageID] = struct{}{}
-
-		data, err := p.Get(pageID)
-		if err != nil {
-			return err
-		}
-		n := node.NewNodeView(data)
+	return leafrefscan.Walk(ctx, rootID, p.Get, func(pageID uint64, n node.Node) error {
 		if verifyAlways || !p.IsVerified(pageID) {
 			if !n.VerifyChecksum() {
 				return fmt.Errorf("checksum mismatch on page %d", pageID)
@@ -509,31 +488,10 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 				p.MarkVerified(pageID)
 			}
 		}
-
-		switch n.Type() {
-		case page.PageTypeInternal:
-			count := n.Count()
-			for i := uint16(0); i < count; i++ {
-				childID, err := n.GetInternalChildID(i)
-				if err != nil {
-					return err
-				}
-				if ptr, ok := page.DecodeLeafRef(childID); ok {
-					if err := db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords); err != nil {
-						return err
-					}
-					continue
-				}
-				stack = append(stack, childID)
-			}
-		case page.PageTypeLeaf:
-			// Leaf pages stored in the pager have no children; outer-leaf-in-vlog
-			// mode should not encounter them, but handle gracefully.
-		default:
-			return fmt.Errorf("invalid page type %d on page %d", n.Type(), pageID)
-		}
-	}
-	return nil
+		return nil
+	}, func(ptr page.ValuePtr) error {
+		return db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords)
+	})
 }
 
 func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {

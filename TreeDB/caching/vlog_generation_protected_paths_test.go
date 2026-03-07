@@ -64,7 +64,6 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 		ForceValueLogPointers:            true,
 	})
 	if err != nil {
-		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
@@ -128,7 +127,6 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 		ValueLogPointerThreshold:         1,
 	})
 	if err != nil {
-		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })

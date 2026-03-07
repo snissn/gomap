@@ -36,7 +36,6 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 			ValueLogMaxSegmentBytes:  8 << 10,
 		})
 		if err != nil {
-			_ = backend.Close()
 			t.Fatalf("Open: %v", err)
 		}
 		value := bytes.Repeat([]byte{prefix}, 4096)
@@ -90,7 +89,6 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 		ValueLogMaxSegmentBytes:  8 << 10,
 	})
 	if err != nil {
-		_ = backend.Close()
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()

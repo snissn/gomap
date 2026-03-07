@@ -244,7 +244,6 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 		ForceValueLogPointers:            true,
 	})
 	if err != nil {
-		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
@@ -319,7 +318,6 @@ func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t
 		ForceValueLogPointers:            true,
 	})
 	if err != nil {
-		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
