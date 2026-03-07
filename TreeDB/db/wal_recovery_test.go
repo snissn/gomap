@@ -81,3 +81,13 @@ func TestNewReplayInlineAppender_ValueLogCompressionOff_DisablesBlockCompression
 		t.Fatalf("expected replay writer block compression disabled")
 	}
 }
+
+func TestReplayWALIntoBackend_IgnoresEmptyCommitSegments(t *testing.T) {
+	segments := []logSegment{
+		{path: "/tmp/empty-commit.log", size: 0, valueLog: false},
+		{path: "/tmp/value.log", size: 128, valueLog: true, fileID: 1},
+	}
+	if err := replayWALIntoBackend(nil, segments, 0, nil); err != nil {
+		t.Fatalf("replayWALIntoBackend: %v", err)
+	}
+}

@@ -31,11 +31,11 @@ func TestCheckpoint_IgnoresMissingRetainedValueLogPath(t *testing.T) {
 		_ = backend.Close()
 		t.Fatalf("Open: %v", err)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
-			t.Fatalf("Close: %v", err)
+			t.Errorf("Close: %v", err)
 		}
-	}()
+	})
 
 	stalePath := filepath.Join(dir, "value-l0-000001.log")
 	if err := os.WriteFile(stalePath, []byte("stale"), 0o600); err != nil {

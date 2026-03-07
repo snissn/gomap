@@ -156,7 +156,10 @@ func TestVlogGC_BackendOpenWithDictFrames_WiresDictLookup(t *testing.T) {
 	// explicit DictLookup, because there are no commit-log segments to replay.
 	// The maintenance path still uses OpenBackend below so future reads that do
 	// require side-store lookups are wired correctly.
-	backendDir := filepath.Join(dir, "maindb")
+	backendDir, err := resolveTreemapMainDir(dir)
+	if err != nil {
+		t.Fatalf("resolveTreemapMainDir: %v", err)
+	}
 	backendOpts := treedbdb.Options{Dir: backendDir, ReadOnly: false}
 	cfg, ok, err := treedbdb.LoadFormatConfig(backendDir)
 	if err != nil {
