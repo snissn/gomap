@@ -810,12 +810,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if err != nil {
 			return err
 		}
-		if count := uint64(len(candidates)); count > 0 {
-			endRID := startRID + count - 1
-			if endRID < startRID || endRID == 0 {
-				return fmt.Errorf("value-log rid space exhausted")
-			}
-		}
 		for _, candidate := range candidates {
 			val, err := db.valueLogManager.Read(candidate.oldPtr)
 			if err != nil {
