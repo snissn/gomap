@@ -9204,19 +9204,19 @@ planned:
 			if stats.BytesAfter > 0 {
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
+			consumed := int64(0)
+			if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
+				consumed = rewritePlan.SelectedBytesLive
+			} else if maxSourceBytes > 0 {
+				consumed = maxSourceBytes
+			} else if stats.BytesBefore > 0 {
+				consumed = int64(stats.BytesBefore)
+			}
 			if stats.RecordsCopied > 0 {
 				db.vlogGenerationRemapSuccesses.Add(uint64(stats.RecordsCopied))
-				consumed := int64(0)
-				if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
-					consumed = rewritePlan.SelectedBytesLive
-				} else if maxSourceBytes > 0 {
-					consumed = maxSourceBytes
-				} else if stats.BytesBefore > 0 {
-					consumed = int64(stats.BytesBefore)
-				}
-				if consumed > 0 {
-					db.vlogGenerationConsumeRewriteBudgetBytes(consumed)
-				}
+			}
+			if consumed > 0 {
+				db.vlogGenerationConsumeRewriteBudgetBytes(consumed)
 			}
 			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
 		}
