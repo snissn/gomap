@@ -868,6 +868,9 @@ func TestValueLogRewritePlan_NoSelectionKnobs_ReturnsTotalsOnly(t *testing.T) {
 	if plan.SelectedBytesTotal != 0 || plan.SelectedBytesLive != 0 || plan.SelectedBytesStale != 0 {
 		t.Fatalf("expected zero selected-byte stats without selection knobs, got total=%d live=%d stale=%d", plan.SelectedBytesTotal, plan.SelectedBytesLive, plan.SelectedBytesStale)
 	}
+	if plan.LiveBytesEstimated {
+		t.Fatalf("expected no live-byte estimate without selection knobs")
+	}
 	if plan.BytesTotal <= 0 {
 		t.Fatalf("expected non-zero total bytes, got %d", plan.BytesTotal)
 	}

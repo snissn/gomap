@@ -46,6 +46,12 @@ type ValueLogRewritePlan struct {
 	SegmentsTotal    int
 	SegmentsSelected int
 
+	// LiveBytesEstimated reports whether the live/stale byte totals below were
+	// populated from a live-byte estimation pass. When false, BytesLive,
+	// BytesStale, SelectedBytesLive, and SelectedBytesStale remain zero and
+	// should be treated as "not computed" rather than literal totals.
+	LiveBytesEstimated bool
+
 	BytesTotal int64
 	BytesLive  int64
 	BytesStale int64
@@ -246,6 +252,7 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 
 	// Populate live/stale totals when we have a live-byte estimate.
 	if liveByID != nil {
+		plan.LiveBytesEstimated = true
 		for id, f := range set.Files {
 			size := fileSize(f)
 			if size <= 0 {
