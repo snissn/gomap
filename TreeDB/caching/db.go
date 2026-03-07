@@ -2270,10 +2270,12 @@ func (db *DB) ValueLogRetainedPaths() []string {
 // valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
 // that may be referenced by in-memory state (mutable + queued memtables).
 //
-// This is intentionally narrower than valueLogRetainedPaths: retained paths can
-// include segments that are still referenced in the backend index (and thus
-// candidates for rewrite), while in-use paths are only about protecting against
-// concurrent writers while online maintenance is running.
+// IMPORTANT: This snapshot is intentionally narrower than
+// valueLogRetainedPaths and is derived only from the current lane/value-log
+// paths plus queued-path snapshots. It does not attempt to reconstruct every
+// segment that might still be referenced after rotation, so callers must not
+// assume it fully covers all in-memory references. It is only a best-effort
+// protection against concurrent writers during online maintenance.
 func (db *DB) valueLogInUsePaths() []string {
 	if db == nil || !db.valueLogEnabled() {
 		return nil
