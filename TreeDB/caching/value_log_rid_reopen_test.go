@@ -20,7 +20,6 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 		if err != nil {
 			t.Fatalf("backend open: %v", err)
 		}
-		defer func() { _ = backend.Close() }()
 		db, err := Open(dir, backend, Options{
 			FlushThreshold:           1 << 20,
 			DisableWAL:               true,
@@ -33,14 +32,16 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 			ValueLogMaxSegmentBytes:  8 << 10,
 		})
 		if err != nil {
+			if closeErr := backend.Close(); closeErr != nil {
+				t.Fatalf("backend close after open failure: %v", closeErr)
+			}
 			t.Fatalf("Open: %v", err)
 		}
-		closed := false
-		defer func() {
-			if !closed {
+		t.Cleanup(func() {
+			if db != nil {
 				_ = db.Close()
 			}
-		}()
+		})
 		value := bytes.Repeat([]byte{prefix}, 4096)
 		for i := 0; i < 8; i++ {
 			key := []byte{prefix, byte(i)}
@@ -54,7 +55,7 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 		if err := db.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
-		closed = true
+		db = nil
 	}
 
 	writeSession('a')
@@ -74,7 +75,6 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("backend open: %v", err)
 	}
-	defer func() { _ = backend.Close() }()
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:           1 << 20,
 		DisableWAL:               true,
@@ -87,9 +87,16 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 		ValueLogMaxSegmentBytes:  8 << 10,
 	})
 	if err != nil {
+		if closeErr := backend.Close(); closeErr != nil {
+			t.Fatalf("backend close after open failure: %v", closeErr)
+		}
 		t.Fatalf("Open: %v", err)
 	}
-	defer func() { _ = db.Close() }()
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
 
 	value := bytes.Repeat([]byte("seed-"), 1024)
 	for i := 0; i < 8; i++ {
