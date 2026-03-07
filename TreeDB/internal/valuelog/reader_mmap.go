@@ -17,7 +17,7 @@ func appendDecodedTemplatePayload(dst, payload []byte, lookup TemplateLookup, ca
 		copy(dst[oldLen:], payload)
 		return dst, nil
 	}
-	return templ.DecodePayloadAppend(dst[:len(dst):len(dst)], payload, func(id uint64) (templ.TemplateDef, error) {
+	return templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
 		return resolveTemplateDef(id, lookup, cache)
 	}, opts)
 }
