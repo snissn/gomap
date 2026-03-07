@@ -51,7 +51,6 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	t.Cleanup(func() { _ = backend.Close() })
 
 	recorder := &rewriteRecordingBackend{DB: backend}
 
@@ -64,6 +63,9 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 		ForceValueLogPointers:            true,
 	})
 	if err != nil {
+		if closeErr := backend.Close(); closeErr != nil {
+			t.Fatalf("close backend after open failure: %v", closeErr)
+		}
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
@@ -113,7 +115,6 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
-	t.Cleanup(func() { _ = backend.Close() })
 
 	recorder := &rewriteRecordingBackend{DB: backend}
 
@@ -127,6 +128,9 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 		ValueLogPointerThreshold:         1,
 	})
 	if err != nil {
+		if closeErr := backend.Close(); closeErr != nil {
+			t.Fatalf("close backend after open failure: %v", closeErr)
+		}
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
