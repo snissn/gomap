@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -155,6 +156,105 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 	dups := duplicateValueLogRIDCount(t, segments)
 	if dups != 0 {
 		t.Fatalf("expected no duplicate RIDs after online rewrite, got %d", dups)
+	}
+}
+
+func TestDisableWAL_ReopenTruncatedTailStillSeedsNextRID(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		FlushThreshold:           1 << 20,
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		MemtableShards:           1,
+		JournalLanes:             1,
+		ValueLogPointerThreshold: 1,
+		ForceValueLogPointers:    true,
+		ValueLogMaxSegmentBytes:  1 << 10,
+	}
+
+	writeSession := func() {
+		backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+		if err != nil {
+			t.Fatalf("backend open: %v", err)
+		}
+		defer func() { _ = backend.Close() }()
+		db, err := Open(dir, backend, opts)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		closed := false
+		defer func() {
+			if !closed {
+				_ = db.Close()
+			}
+		}()
+
+		value := bytes.Repeat([]byte("seed-"), 2048)
+		for i := 0; i < 32; i++ {
+			if err := db.Set([]byte{byte(i)}, value); err != nil {
+				t.Fatalf("Set(%d): %v", i, err)
+			}
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		closed = true
+	}
+
+	writeSession()
+
+	segments, _ := listNonEmptyLogSegments(filepath.Join(dir, "wal"))
+	if len(segments) < 2 {
+		t.Fatalf("expected multiple value-log segments before truncate, got %d", len(segments))
+	}
+	maxRIDBeforeTruncate, _, err := maxValueLogRIDFromSegments(segments)
+	if err != nil {
+		t.Fatalf("maxValueLogRIDFromSegments: %v", err)
+	}
+	tail := tailValueLogSegmentsByLane(segments)
+	if len(tail) != 1 {
+		t.Fatalf("tailValueLogSegmentsByLane len=%d want 1", len(tail))
+	}
+	if err := os.Truncate(tail[0].path, 1); err != nil {
+		t.Fatalf("Truncate(%s): %v", tail[0].path, err)
+	}
+	segments, _ = listNonEmptyLogSegments(filepath.Join(dir, "wal"))
+	maxRIDAfterTruncate, _, err := maxValueLogRIDFromSegments(segments)
+	if err != nil {
+		t.Fatalf("maxValueLogRIDFromSegments after truncate: %v", err)
+	}
+	if maxRIDAfterTruncate == 0 || maxRIDAfterTruncate >= maxRIDBeforeTruncate {
+		t.Fatalf("unexpected post-truncate maxRID=%d before=%d", maxRIDAfterTruncate, maxRIDBeforeTruncate)
+	}
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("backend reopen: %v", err)
+	}
+	defer func() { _ = backend.Close() }()
+	db, err := Open(dir, backend, opts)
+	if err != nil {
+		t.Fatalf("Open after truncate: %v", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = db.Close()
+		}
+	}()
+
+	if got := db.nextRID.Load(); got != maxRIDAfterTruncate {
+		t.Fatalf("nextRID after reopen=%d want %d", got, maxRIDAfterTruncate)
+	}
+	if err := db.Set([]byte("after"), bytes.Repeat([]byte("after-"), 1024)); err != nil {
+		t.Fatalf("Set(after): %v", err)
+	}
+	if got := db.nextRID.Load(); got != maxRIDAfterTruncate+1 {
+		t.Fatalf("nextRID after Set=%d want %d", got, maxRIDAfterTruncate+1)
 	}
 }
 

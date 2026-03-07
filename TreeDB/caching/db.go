@@ -4235,9 +4235,16 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	// Until we persist nextRID separately, opening must recover the max on-disk
 	// RID here rather than risk reusing low RIDs after a clean reopen. Scanning
 	// only the newest value-log segment per lane keeps this bounded on large DBs.
-	maxExistingRID, err := maxValueLogRIDFromSegments(tailValueLogSegmentsByLane(segments))
+	tailSegments := tailValueLogSegmentsByLane(segments)
+	maxExistingRID, tailScanTruncated, err := maxValueLogRIDFromSegments(tailSegments)
 	if err != nil {
 		return nil, err
+	}
+	if tailScanTruncated || (maxExistingRID == 0 && len(tailSegments) > 0) {
+		maxExistingRID, _, err = maxValueLogRIDFromSegments(segments)
+		if err != nil {
+			return nil, err
+		}
 	}
 	maxLaneID := -1
 	maxWALSeq := make(map[int]int)
@@ -16075,40 +16082,46 @@ func isTruncatedValueLogScanError(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
-func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
+func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, bool, error) {
 	var maxRID uint64
+	truncatedBeforeFirstRID := false
 	for _, seg := range segments {
 		if !seg.valueLog || seg.size <= 0 || seg.lane < 0 || seg.seq < 0 {
 			continue
 		}
 		fileID, err := valuelog.EncodeFileID(uint32(seg.lane), uint32(seg.seq))
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		reader, err := valuelog.NewReader(seg.path, fileID)
 		if err != nil {
-			return 0, err
+			return 0, false, err
 		}
 		reader.DisableValueDecode()
+		readAnyRID := false
 		for {
 			rid, _, _, err := reader.ReadNext()
 			if err == nil {
+				readAnyRID = true
 				if rid > maxRID {
 					maxRID = rid
 				}
 				continue
 			}
 			if isTruncatedValueLogScanError(err) {
+				if errors.Is(err, io.ErrUnexpectedEOF) && !readAnyRID {
+					truncatedBeforeFirstRID = true
+				}
 				break
 			}
 			_ = reader.Close()
-			return 0, err
+			return 0, false, err
 		}
 		if err := reader.Close(); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
-	return maxRID, nil
+	return maxRID, truncatedBeforeFirstRID, nil
 }
 
 func tailValueLogSegmentsByLane(segments []logSegmentInfo) []logSegmentInfo {
