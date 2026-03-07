@@ -888,6 +888,8 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	}
 	if cap(m.indexBuf) > 0 && cap(m.indexBuf) >= appendOnlyResetDropThresholdEntries {
 		m.indexBuf = nil
+	} else if m.indexBuf != nil {
+		m.indexBuf = m.indexBuf[:0]
 	}
 	m.count = 0
 	m.sizeBytes = 0
