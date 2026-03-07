@@ -2271,13 +2271,11 @@ func (db *DB) ValueLogRetainedPaths() []string {
 // segment paths that are currently in use by the active lanes plus any queued
 // memtable snapshots.
 //
-// IMPORTANT: This snapshot is intentionally narrower than
-// valueLogRetainedPaths and is derived only from the "current" lane/WAL paths
-// and queued paths. It does not attempt to track segments that rotated while a
-// mutable memtable was still active, so callers must not assume it includes
-// every segment that might still be referenced by in-memory state. It is
-// intended only as a best-effort aid for protecting against concurrent writers
-// during online maintenance.
+// valueLogRetainedPaths and is derived only from the current lane/value-log
+// paths plus queued-path snapshots. It does not attempt to reconstruct every
+// segment that might still be referenced after rotation, so callers must not
+// assume it fully covers all in-memory references. It is only a best-effort
+// protection against concurrent writers during online maintenance.
 func (db *DB) valueLogInUsePaths() []string {
 	if db == nil || !db.valueLogEnabled() {
 		return nil

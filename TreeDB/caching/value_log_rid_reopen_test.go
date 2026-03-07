@@ -32,7 +32,6 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 			ValueLogMaxSegmentBytes:  8 << 10,
 		})
 		if err != nil {
-			_ = backend.Close()
 			t.Fatalf("Open: %v", err)
 		}
 		closed := false
@@ -45,12 +44,10 @@ func TestDisableWAL_ReopenDoesNotReuseValueLogRIDs(t *testing.T) {
 		for i := 0; i < 8; i++ {
 			key := []byte{prefix, byte(i)}
 			if err := db.Set(key, value); err != nil {
-				_ = db.Close()
 				t.Fatalf("Set(%d): %v", i, err)
 			}
 		}
 		if err := db.Checkpoint(); err != nil {
-			_ = db.Close()
 			t.Fatalf("Checkpoint: %v", err)
 		}
 		if err := db.Close(); err != nil {
@@ -89,7 +86,6 @@ func TestDisableWAL_OnlineRewriteDoesNotReuseValueLogRIDs(t *testing.T) {
 		ValueLogMaxSegmentBytes:  8 << 10,
 	})
 	if err != nil {
-		_ = backend.Close()
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()

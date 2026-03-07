@@ -400,7 +400,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	// LeafRef child IDs (not normal key/value pointers) and must be included in
 	// live-byte estimation; otherwise rewrite planning can select "stale" segments
 	// that are actually pinned by live leaf pages.
-	if snap.idx != nil && snap.idx.pager != nil {
+	if db.indexOuterLeavesInValueLog && snap.idx != nil && snap.idx.pager != nil {
 		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords); err != nil {
 			_ = snap.Close()
 			return nil, err
