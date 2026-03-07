@@ -35,8 +35,12 @@ func TestResolveOpenDirLayout_MainDirWithSideStores(t *testing.T) {
 	if err := os.MkdirAll(mainDir, 0o755); err != nil {
 		t.Fatalf("mkdir maindb: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
+	dictDir := filepath.Join(root, "dictdb")
+	if err := os.MkdirAll(dictDir, 0o755); err != nil {
 		t.Fatalf("mkdir dictdb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dictDir, "index.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write dictdb/index.db: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("write maindb/index.db: %v", err)
@@ -48,6 +52,28 @@ func TestResolveOpenDirLayout_MainDirWithSideStores(t *testing.T) {
 	}
 	if layout.rootDir != root || layout.mainDir != mainDir || layout.dictdbDir != filepath.Join(root, "dictdb") {
 		t.Fatalf("unexpected main-dir layout: %+v", layout)
+	}
+}
+
+func TestResolveOpenDirLayout_MainDirWithUninitializedSiblingSideStoreStaysFlat(t *testing.T) {
+	root := t.TempDir()
+	mainDir := filepath.Join(root, "maindb")
+	if err := os.MkdirAll(mainDir, 0o755); err != nil {
+		t.Fatalf("mkdir maindb: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
+		t.Fatalf("mkdir dictdb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "index.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write maindb/index.db: %v", err)
+	}
+
+	layout, err := resolveOpenDirLayout(mainDir, false)
+	if err != nil {
+		t.Fatalf("resolve main dir layout: %v", err)
+	}
+	if layout.rootDir != mainDir || layout.mainDir != mainDir || !layout.disableSideStores {
+		t.Fatalf("unexpected flat main-dir layout: %+v", layout)
 	}
 }
 
