@@ -16082,7 +16082,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	retainPtrArena := false
 	ptrTouchedMems := make([]memtable.Table, 0, shardCount)
 	if len(b.ptrValueEntryIdxs) > 0 {
-		seenPtrMems := make(map[memtable.Table]struct{}, shardCount)
+		seenPtrShards := make([]bool, shardCount)
 		for _, idx := range b.ptrValueEntryIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
 				b.db.writeMu.RUnlock()
@@ -16097,14 +16097,14 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				b.db.writeMu.RUnlock()
 				return fmt.Errorf("cachingdb: ptr value shard index %d out of range for entry %d", shardIdx, idx)
 			}
+			if seenPtrShards[shardIdx] {
+				continue
+			}
 			mt := b.db.mutableShards[shardIdx].mem
 			if mt == nil {
 				continue
 			}
-			if _, ok := seenPtrMems[mt]; ok {
-				continue
-			}
-			seenPtrMems[mt] = struct{}{}
+			seenPtrShards[shardIdx] = true
 			ptrTouchedMems = append(ptrTouchedMems, mt)
 		}
 	}
