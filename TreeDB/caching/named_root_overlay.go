@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/collections"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -18,6 +17,8 @@ import (
 const virtualNamedRootMask uint64 = 1 << 63
 
 type NamedRootDebugState struct {
+	VirtualRootID    uint64
+	BaseRootID       uint64
 	HasDomain        bool
 	LegacyEntryCount int
 }
@@ -775,11 +776,11 @@ func (db *DB) BufferNamedRootMutationsOps(sync bool, rootIDs []uint64, formats [
 		return nil, fmt.Errorf("named root ops length mismatch")
 	}
 
-	db.namedRootMu.Lock()
+	db.rootDomainManager.namedRootMu.Lock()
 	virtualRootIDs := make([]uint64, len(rootIDs))
 	pending := make([]namedRootPendingMutation, len(rootIDs))
 	for i := range rootIDs {
-		existing := db.namedRootsByID[rootIDs[i]]
+		existing := db.rootDomainManager.namedRootsByID[rootIDs[i]]
 		if existing != nil {
 			virtualRootIDs[i] = existing.virtualRootID
 			pending[i] = namedRootPendingMutation{
@@ -790,8 +791,8 @@ func (db *DB) BufferNamedRootMutationsOps(sync bool, rootIDs []uint64, formats [
 				format:        existing.format,
 			}
 		} else {
-			resolvedRootID := db.resolvePublishedNamedRootIDLocked(rootIDs[i])
-			virtualRootIDs[i] = db.nextVirtualNamedRootIDLocked()
+			resolvedRootID := db.rootDomainManager.resolvePublishedNamedRootIDLocked(rootIDs[i])
+			virtualRootIDs[i] = db.rootDomainManager.nextVirtualNamedRootIDLocked()
 			if rootIDs[i]&virtualNamedRootMask != 0 && resolvedRootID != rootIDs[i] {
 				virtualRootIDs[i] = rootIDs[i]
 			}
@@ -811,23 +812,23 @@ func (db *DB) BufferNamedRootMutationsOps(sync bool, rootIDs []uint64, formats [
 	if buildSystemOps != nil {
 		ops, err := buildSystemOps(virtualRootIDs)
 		if err != nil {
-			db.namedRootMu.Unlock()
+			db.rootDomainManager.namedRootMu.Unlock()
 			return nil, err
 		}
 		sysEntries = ops
 	}
-	if err := db.bindPendingNamedRootKeysLocked(pending, sysEntries); err != nil {
-		db.namedRootMu.Unlock()
+	if err := db.rootDomainManager.bindPendingNamedRootKeysLocked(pending, sysEntries); err != nil {
+		db.rootDomainManager.namedRootMu.Unlock()
 		return nil, err
 	}
 	for i := range pending {
-		db.applyPendingNamedRootLocked(&pending[i])
+		db.rootDomainManager.applyPendingNamedRootLocked(&pending[i])
 	}
 	if err := db.ApplySystemOverlayEntriesOwned(sysEntries); err != nil {
-		db.namedRootMu.Unlock()
+		db.rootDomainManager.namedRootMu.Unlock()
 		return nil, err
 	}
-	db.namedRootMu.Unlock()
+	db.rootDomainManager.namedRootMu.Unlock()
 	if !sync {
 		db.maybeTriggerNamedRootFlush()
 	}
@@ -851,11 +852,11 @@ func (db *DB) BufferNamedRootMutationsIterators(sync bool, rootIDs []uint64, for
 		return nil, fmt.Errorf("named root iterators length mismatch")
 	}
 
-	db.namedRootMu.Lock()
+	db.rootDomainManager.namedRootMu.Lock()
 	virtualRootIDs := make([]uint64, len(rootIDs))
 	pending := make([]namedRootPendingIteratorMutation, len(rootIDs))
 	for i := range rootIDs {
-		existing := db.namedRootsByID[rootIDs[i]]
+		existing := db.rootDomainManager.namedRootsByID[rootIDs[i]]
 		if existing != nil {
 			virtualRootIDs[i] = existing.virtualRootID
 			pending[i] = namedRootPendingIteratorMutation{
@@ -867,8 +868,8 @@ func (db *DB) BufferNamedRootMutationsIterators(sync bool, rootIDs []uint64, for
 				iter:          rootIters[i],
 			}
 		} else {
-			resolvedRootID := db.resolvePublishedNamedRootIDLocked(rootIDs[i])
-			virtualRootIDs[i] = db.nextVirtualNamedRootIDLocked()
+			resolvedRootID := db.rootDomainManager.resolvePublishedNamedRootIDLocked(rootIDs[i])
+			virtualRootIDs[i] = db.rootDomainManager.nextVirtualNamedRootIDLocked()
 			if rootIDs[i]&virtualNamedRootMask != 0 && resolvedRootID != rootIDs[i] {
 				virtualRootIDs[i] = rootIDs[i]
 			}
@@ -888,26 +889,26 @@ func (db *DB) BufferNamedRootMutationsIterators(sync bool, rootIDs []uint64, for
 	if buildSystemOps != nil {
 		ops, err := buildSystemOps(virtualRootIDs)
 		if err != nil {
-			db.namedRootMu.Unlock()
+			db.rootDomainManager.namedRootMu.Unlock()
 			return nil, err
 		}
 		sysEntries = ops
 	}
-	if err := db.bindPendingNamedRootIteratorKeysLocked(pending, sysEntries); err != nil {
-		db.namedRootMu.Unlock()
+	if err := db.rootDomainManager.bindPendingNamedRootIteratorKeysLocked(pending, sysEntries); err != nil {
+		db.rootDomainManager.namedRootMu.Unlock()
 		return nil, err
 	}
 	for i := range pending {
-		if err := db.applyPendingNamedRootIteratorLocked(&pending[i]); err != nil {
-			db.namedRootMu.Unlock()
+		if err := db.rootDomainManager.applyPendingNamedRootIteratorLocked(&pending[i]); err != nil {
+			db.rootDomainManager.namedRootMu.Unlock()
 			return nil, err
 		}
 	}
 	if err := db.ApplySystemOverlayEntriesOwned(sysEntries); err != nil {
-		db.namedRootMu.Unlock()
+		db.rootDomainManager.namedRootMu.Unlock()
 		return nil, err
 	}
-	db.namedRootMu.Unlock()
+	db.rootDomainManager.namedRootMu.Unlock()
 	if !sync {
 		db.maybeTriggerNamedRootFlush()
 	}
@@ -931,11 +932,11 @@ func (db *DB) BufferNamedRootMutationsTables(sync bool, rootIDs []uint64, format
 		return nil, fmt.Errorf("named root tables length mismatch")
 	}
 
-	db.namedRootMu.Lock()
+	db.rootDomainManager.namedRootMu.Lock()
 	virtualRootIDs := make([]uint64, len(rootIDs))
 	pending := make([]namedRootPendingTableMutation, len(rootIDs))
 	for i := range rootIDs {
-		existing := db.namedRootsByID[rootIDs[i]]
+		existing := db.rootDomainManager.namedRootsByID[rootIDs[i]]
 		if existing != nil {
 			virtualRootIDs[i] = existing.virtualRootID
 			pending[i] = namedRootPendingTableMutation{
@@ -947,8 +948,8 @@ func (db *DB) BufferNamedRootMutationsTables(sync bool, rootIDs []uint64, format
 				table:         rootTables[i],
 			}
 		} else {
-			resolvedRootID := db.resolvePublishedNamedRootIDLocked(rootIDs[i])
-			virtualRootIDs[i] = db.nextVirtualNamedRootIDLocked()
+			resolvedRootID := db.rootDomainManager.resolvePublishedNamedRootIDLocked(rootIDs[i])
+			virtualRootIDs[i] = db.rootDomainManager.nextVirtualNamedRootIDLocked()
 			if rootIDs[i]&virtualNamedRootMask != 0 && resolvedRootID != rootIDs[i] {
 				virtualRootIDs[i] = rootIDs[i]
 			}
@@ -968,26 +969,26 @@ func (db *DB) BufferNamedRootMutationsTables(sync bool, rootIDs []uint64, format
 	if buildSystemOps != nil {
 		ops, err := buildSystemOps(virtualRootIDs)
 		if err != nil {
-			db.namedRootMu.Unlock()
+			db.rootDomainManager.namedRootMu.Unlock()
 			return nil, err
 		}
 		sysEntries = ops
 	}
-	if err := db.bindPendingNamedRootTableKeysLocked(pending, sysEntries); err != nil {
-		db.namedRootMu.Unlock()
+	if err := db.rootDomainManager.bindPendingNamedRootTableKeysLocked(pending, sysEntries); err != nil {
+		db.rootDomainManager.namedRootMu.Unlock()
 		return nil, err
 	}
 	for i := range pending {
-		if err := db.applyPendingNamedRootTableLocked(&pending[i]); err != nil {
-			db.namedRootMu.Unlock()
+		if err := db.rootDomainManager.applyPendingNamedRootTableLocked(&pending[i]); err != nil {
+			db.rootDomainManager.namedRootMu.Unlock()
 			return nil, err
 		}
 	}
 	if err := db.ApplySystemOverlayEntriesOwned(sysEntries); err != nil {
-		db.namedRootMu.Unlock()
+		db.rootDomainManager.namedRootMu.Unlock()
 		return nil, err
 	}
-	db.namedRootMu.Unlock()
+	db.rootDomainManager.namedRootMu.Unlock()
 	if !sync {
 		db.maybeTriggerNamedRootFlush()
 	}
@@ -1027,407 +1028,64 @@ func (db *DB) PendingNamedRoots() bool {
 	if db == nil {
 		return false
 	}
-	db.namedRootMu.RLock()
-	defer db.namedRootMu.RUnlock()
-	return len(db.namedRootsByID) > 0
+	return db.rootDomainManager.pendingNamedRoots()
 }
 
 func (db *DB) DebugNamedRootStateByID(rootID uint64) (NamedRootDebugState, bool) {
 	if db == nil {
 		return NamedRootDebugState{}, false
 	}
-	db.namedRootMu.RLock()
-	defer db.namedRootMu.RUnlock()
-	state := db.namedRootsByID[rootID]
-	if state == nil {
+	return db.rootDomainManager.debugNamedRootStateByID(rootID)
+}
+
+func (db *DB) DebugNamedRootStateByKey(rootKey []byte) (NamedRootDebugState, bool) {
+	if db == nil {
 		return NamedRootDebugState{}, false
 	}
-	return NamedRootDebugState{
-		HasDomain:        state.domain != nil && state.domain.table != nil,
-		LegacyEntryCount: 0,
-	}, true
+	return db.rootDomainManager.debugNamedRootStateByKey(rootKey)
 }
 
 func (db *DB) namedRootState(rootID uint64) (*namedRootOverlayState, error) {
-	db.namedRootMu.RLock()
-	state := db.namedRootsByID[rootID]
-	db.namedRootMu.RUnlock()
-	if state == nil {
-		return nil, fmt.Errorf("treedb: named root %d not buffered", rootID)
-	}
-	return state, nil
+	return db.rootDomainManager.namedRootState(rootID)
 }
 
 func (db *DB) ResolvedNamedRootID(rootID uint64) uint64 {
 	if db == nil || rootID == 0 {
 		return rootID
 	}
-	db.namedRootMu.RLock()
-	defer db.namedRootMu.RUnlock()
-	return db.resolvePublishedNamedRootIDLocked(rootID)
+	return db.rootDomainManager.resolvedNamedRootID(rootID)
 }
 
 func (db *DB) resolvePublishedNamedRootIDLocked(rootID uint64) uint64 {
-	if rootID == 0 {
-		return 0
-	}
-	if state := db.namedRootsByID[rootID]; state != nil {
-		return state.baseRootID
-	}
-	if db.namedRootPublishedByVirtual != nil {
-		if resolved, ok := db.namedRootPublishedByVirtual[rootID]; ok {
-			return resolved
-		}
-	}
-	return rootID
+	return db.rootDomainManager.resolvePublishedNamedRootIDLocked(rootID)
 }
 
 func (db *DB) nextVirtualNamedRootIDLocked() uint64 {
-	return virtualNamedRootMask | db.nextNamedRootID.Add(1)
+	return db.rootDomainManager.nextVirtualNamedRootIDLocked()
 }
 
 func (db *DB) bindPendingNamedRootKeysLocked(pending []namedRootPendingMutation, sysEntries []batch.Entry) error {
-	for _, entry := range sysEntries {
-		if entry.Type != batch.OpPut || len(entry.Value) == 0 {
-			continue
-		}
-		var desc collections.CollectionRootDescriptor
-		if err := desc.Decode(entry.Value); err != nil {
-			continue
-		}
-		for i := range pending {
-			if pending[i].virtualRootID != desc.RootPageID || len(pending[i].rootKey) > 0 {
-				continue
-			}
-			pending[i].rootKey = append([]byte(nil), entry.Key...)
-			break
-		}
-	}
-	for i := range pending {
-		if len(pending[i].rootKey) == 0 {
-			return fmt.Errorf("treedb: missing root key for buffered root %d", pending[i].virtualRootID)
-		}
-	}
-	return nil
+	return db.rootDomainManager.bindPendingNamedRootKeysLocked(pending, sysEntries)
 }
 
 func (db *DB) bindPendingNamedRootIteratorKeysLocked(pending []namedRootPendingIteratorMutation, sysEntries []batch.Entry) error {
-	for _, entry := range sysEntries {
-		if entry.Type != batch.OpPut || len(entry.Value) == 0 {
-			continue
-		}
-		var desc collections.CollectionRootDescriptor
-		if err := desc.Decode(entry.Value); err != nil {
-			continue
-		}
-		for i := range pending {
-			if pending[i].virtualRootID != desc.RootPageID || len(pending[i].rootKey) > 0 {
-				continue
-			}
-			pending[i].rootKey = append([]byte(nil), entry.Key...)
-			break
-		}
-	}
-	for i := range pending {
-		if len(pending[i].rootKey) == 0 {
-			return fmt.Errorf("treedb: missing root key for buffered root %d", pending[i].virtualRootID)
-		}
-	}
-	return nil
+	return db.rootDomainManager.bindPendingNamedRootIteratorKeysLocked(pending, sysEntries)
 }
 
 func (db *DB) bindPendingNamedRootTableKeysLocked(pending []namedRootPendingTableMutation, sysEntries []batch.Entry) error {
-	for _, entry := range sysEntries {
-		if entry.Type != batch.OpPut || len(entry.Value) == 0 {
-			continue
-		}
-		var desc collections.CollectionRootDescriptor
-		if err := desc.Decode(entry.Value); err != nil {
-			continue
-		}
-		for i := range pending {
-			if pending[i].virtualRootID != desc.RootPageID || len(pending[i].rootKey) > 0 {
-				continue
-			}
-			pending[i].rootKey = append([]byte(nil), entry.Key...)
-			break
-		}
-	}
-	for i := range pending {
-		if len(pending[i].rootKey) == 0 {
-			return fmt.Errorf("treedb: missing root key for buffered root %d", pending[i].virtualRootID)
-		}
-	}
-	return nil
+	return db.rootDomainManager.bindPendingNamedRootTableKeysLocked(pending, sysEntries)
 }
 
 func (db *DB) applyPendingNamedRootLocked(pending *namedRootPendingMutation) {
-	if pending == nil {
-		return
-	}
-	state := db.namedRootsByID[pending.virtualRootID]
-	beforeBytes := namedRootStateBufferedBytes(state)
-	if state == nil {
-		domain, err := newRootDomain()
-		if err != nil {
-			panic(fmt.Sprintf("treedb: create named-root domain: %v", err))
-		}
-		state = &namedRootOverlayState{
-			virtualRootID: pending.virtualRootID,
-			baseRootID:    pending.baseRootID,
-			rootKey:       append([]byte(nil), pending.rootKey...),
-			hasFormat:     pending.hasFormat,
-			format:        pending.format,
-			domain:        domain,
-		}
-		if db.namedRootsByID == nil {
-			db.namedRootsByID = make(map[uint64]*namedRootOverlayState)
-		}
-		if db.namedRootsByKey == nil {
-			db.namedRootsByKey = make(map[string]*namedRootOverlayState)
-		}
-		db.namedRootsByID[pending.virtualRootID] = state
-		db.namedRootsByKey[string(pending.rootKey)] = state
-	}
-	if pending.hasFormat {
-		state.hasFormat = true
-		state.format = pending.format
-	}
-	for _, entry := range pending.entries {
-		switch {
-		case entry.Type == batch.OpDelete:
-			runNamedRootOwnedWriteTestHook("delete_key", entry.Key)
-		case len(entry.Value) == 0:
-			runNamedRootOwnedWriteTestHook("set_key", entry.Key)
-		default:
-			runNamedRootOwnedWriteTestHook("set_bytes", entry.Key)
-		}
-		runNamedRootMemtableWriteTestHook(pending.virtualRootID, "domain", entry.Key)
-	}
-	if state.domain == nil {
-		domain, err := newRootDomain()
-		if err != nil {
-			panic(fmt.Sprintf("treedb: create named-root domain: %v", err))
-		}
-		state.domain = domain
-	}
-	if err := state.domain.applyEntriesOwned(pending.entries, true); err != nil {
-		panic(fmt.Sprintf("treedb: apply named-root entries: %v", err))
-	}
-	db.namedRootBufferedBytes.Add(namedRootStateBufferedBytes(state) - beforeBytes)
+	db.rootDomainManager.applyPendingNamedRootLocked(pending)
 }
 
 func (db *DB) applyPendingNamedRootTableLocked(pending *namedRootPendingTableMutation) error {
-	if pending == nil {
-		return nil
-	}
-	state := db.namedRootsByID[pending.virtualRootID]
-	beforeBytes := namedRootStateBufferedBytes(state)
-	if state == nil {
-		domain := &rootDomain{table: pending.table}
-		if domain.table == nil {
-			var err error
-			domain, err = newRootDomain()
-			if err != nil {
-				panic(fmt.Sprintf("treedb: create named-root domain: %v", err))
-			}
-		}
-		state = &namedRootOverlayState{
-			virtualRootID: pending.virtualRootID,
-			baseRootID:    pending.baseRootID,
-			rootKey:       append([]byte(nil), pending.rootKey...),
-			hasFormat:     pending.hasFormat,
-			format:        pending.format,
-			domain:        domain,
-		}
-		if db.namedRootsByID == nil {
-			db.namedRootsByID = make(map[uint64]*namedRootOverlayState)
-		}
-		if db.namedRootsByKey == nil {
-			db.namedRootsByKey = make(map[string]*namedRootOverlayState)
-		}
-		db.namedRootsByID[pending.virtualRootID] = state
-		db.namedRootsByKey[string(pending.rootKey)] = state
-	}
-	defer func() {
-		db.namedRootBufferedBytes.Add(namedRootStateBufferedBytes(state) - beforeBytes)
-	}()
-	if pending.hasFormat {
-		state.hasFormat = true
-		state.format = pending.format
-	}
-	if pending.table == nil {
-		return nil
-	}
-	if state.domain != nil && state.domain.table == pending.table {
-		return nil
-	}
-	if state.domain == nil {
-		domain, err := newRootDomain()
-		if err != nil {
-			return err
-		}
-		state.domain = domain
-	}
-	if applier, ok := state.domain.table.(memtable.SortedBatchApplier); ok {
-		iter := pending.table.NewIterator(nil, nil)
-		defer func() { _ = iter.Close() }()
-		stable := false
-		if stableTable, ok := pending.table.(memtable.StableUnsafeIteratorTable); ok {
-			stable = stableTable.StableUnsafeIteratorSlices()
-		}
-		ops, err := collectNamedRootIteratorOps(iter, pending.table.Len(), stable)
-		if err != nil {
-			return err
-		}
-		applier.ApplyStealSortedBatch(ops, func(key []byte) {
-			runNamedRootMemtableWriteTestHook(pending.virtualRootID, "domain", key)
-		})
-		state.domain.version.Add(1)
-		state.domain.bytes.Store(state.domain.table.Size())
-		return nil
-	}
-	iter := pending.table.NewIterator(nil, nil)
-	defer func() { _ = iter.Close() }()
-	stable := false
-	if stableTable, ok := pending.table.(memtable.StableUnsafeIteratorTable); ok {
-		stable = stableTable.StableUnsafeIteratorSlices()
-	}
-	for iter.Valid() {
-		key := iter.UnsafeKey()
-		value, ptr, flags := iter.UnsafeEntry()
-		if !stable {
-			key = append([]byte(nil), key...)
-			if flags&node.FlagTombstone == 0 && len(value) > 0 {
-				value = append([]byte(nil), value...)
-			}
-		}
-		switch {
-		case flags&node.FlagTombstone != 0:
-			runNamedRootOwnedWriteTestHook("delete_key", key)
-			state.domain.hasDeletes = true
-		case len(value) == 0:
-			runNamedRootOwnedWriteTestHook("set_key", key)
-		default:
-			runNamedRootOwnedWriteTestHook("set_bytes", key)
-		}
-		runNamedRootMemtableWriteTestHook(pending.virtualRootID, "domain", key)
-		state.domain.table.SetEntrySteal(key, value, ptr, flags)
-		iter.Next()
-	}
-	if err := iter.Error(); err != nil {
-		return err
-	}
-	state.domain.version.Add(1)
-	state.domain.bytes.Store(state.domain.table.Size())
-	return nil
+	return db.rootDomainManager.applyPendingNamedRootTableLocked(pending)
 }
 
 func (db *DB) applyPendingNamedRootIteratorLocked(pending *namedRootPendingIteratorMutation) error {
-	if pending == nil {
-		return nil
-	}
-	state := db.namedRootsByID[pending.virtualRootID]
-	beforeBytes := namedRootStateBufferedBytes(state)
-	sourceTable, hasSourceTable := pending.iter.(namedRootMutationTableProvider)
-	if state == nil {
-		var domain *rootDomain
-		if hasSourceTable {
-			domain = &rootDomain{table: sourceTable.RootMutationTable()}
-		} else {
-			var err error
-			domain, err = newRootDomain()
-			if err != nil {
-				panic(fmt.Sprintf("treedb: create named-root domain: %v", err))
-			}
-		}
-		state = &namedRootOverlayState{
-			virtualRootID: pending.virtualRootID,
-			baseRootID:    pending.baseRootID,
-			rootKey:       append([]byte(nil), pending.rootKey...),
-			hasFormat:     pending.hasFormat,
-			format:        pending.format,
-			domain:        domain,
-		}
-		if db.namedRootsByID == nil {
-			db.namedRootsByID = make(map[uint64]*namedRootOverlayState)
-		}
-		if db.namedRootsByKey == nil {
-			db.namedRootsByKey = make(map[string]*namedRootOverlayState)
-		}
-		db.namedRootsByID[pending.virtualRootID] = state
-		db.namedRootsByKey[string(pending.rootKey)] = state
-	}
-	defer func() {
-		db.namedRootBufferedBytes.Add(namedRootStateBufferedBytes(state) - beforeBytes)
-	}()
-	if pending.hasFormat {
-		state.hasFormat = true
-		state.format = pending.format
-	}
-	if pending.iter == nil {
-		return nil
-	}
-	defer func() { _ = pending.iter.Close() }()
-	if hasSourceTable && state.domain != nil && state.domain.table == sourceTable.RootMutationTable() {
-		return nil
-	}
-	if state.domain == nil {
-		domain, err := newRootDomain()
-		if err != nil {
-			return err
-		}
-		state.domain = domain
-	}
-
-	stable := false
-	if stableIter, ok := pending.iter.(stableNamedRootEntryIterator); ok {
-		stable = stableIter.StableUnsafeIteratorSlices()
-	}
-	if applier, ok := state.domain.table.(memtable.SortedBatchApplier); ok {
-		hint := 0
-		if hasSourceTable && sourceTable.RootMutationTable() != nil {
-			hint = sourceTable.RootMutationTable().Len()
-		}
-		ops, err := collectNamedRootIteratorOps(pending.iter, hint, stable)
-		if err != nil {
-			return err
-		}
-		applier.ApplyStealSortedBatch(ops, func(key []byte) {
-			runNamedRootMemtableWriteTestHook(pending.virtualRootID, "domain", key)
-		})
-		state.domain.version.Add(1)
-		state.domain.bytes.Store(state.domain.table.Size())
-		return nil
-	}
-	for pending.iter.Valid() {
-		key := pending.iter.UnsafeKey()
-		value, ptr, flags := pending.iter.UnsafeEntry()
-		if !stable {
-			key = append([]byte(nil), key...)
-			if flags&node.FlagTombstone == 0 && len(value) > 0 {
-				value = append([]byte(nil), value...)
-			}
-		}
-		switch {
-		case flags&node.FlagTombstone != 0:
-			runNamedRootOwnedWriteTestHook("delete_key", key)
-			state.domain.hasDeletes = true
-		case len(value) == 0:
-			runNamedRootOwnedWriteTestHook("set_key", key)
-		default:
-			runNamedRootOwnedWriteTestHook("set_bytes", key)
-		}
-		runNamedRootMemtableWriteTestHook(pending.virtualRootID, "domain", key)
-		state.domain.table.SetEntrySteal(key, value, ptr, flags)
-		pending.iter.Next()
-	}
-	if err := pending.iter.Error(); err != nil {
-		return err
-	}
-	state.domain.version.Add(1)
-	state.domain.bytes.Store(state.domain.table.Size())
-	return nil
+	return db.rootDomainManager.applyPendingNamedRootIteratorLocked(pending)
 }
 
 func collectNamedRootIteratorOps(iter iterator.UnsafeIterator, hint int, stable bool) ([]batch.Entry, error) {
