@@ -2407,6 +2407,40 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
+func (db *DB) valueLogProtectedPaths() []string {
+	retained := db.valueLogRetainedPaths()
+	inUse := db.valueLogInUsePaths()
+	if len(retained) == 0 {
+		return inUse
+	}
+	if len(inUse) == 0 {
+		return retained
+	}
+	seen := make(map[string]struct{}, len(retained)+len(inUse))
+	paths := make([]string, 0, len(retained)+len(inUse))
+	for _, path := range retained {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	for _, path := range inUse {
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
 // valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
 // that may be referenced by in-memory state (mutable + queued memtables).
 //
@@ -9503,7 +9537,7 @@ planned:
 			BatchSize:       db.valueLogRewriteBatchSize(),
 			SyncEachBatch:   false,
 			MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-			ProtectedPaths:  db.valueLogInUsePaths(),
+			ProtectedPaths:  db.valueLogProtectedPaths(),
 			ReserveRIDs: func(count int) (uint64, error) {
 				if count <= 0 {
 					return 0, nil
@@ -9611,7 +9645,7 @@ planned:
 	now = time.Now()
 	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogInUsePaths()}
+	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
 	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 	cancel()
 	if err != nil {
