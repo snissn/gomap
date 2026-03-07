@@ -44,6 +44,27 @@ type rootDomain struct {
 	bytes      atomic.Int64
 }
 
+type rootDomainManager struct {
+	systemMu             sync.RWMutex
+	systemOverlay        map[string]systemOverlayValue
+	systemOverlayVersion atomic.Uint64
+	systemDomain         *rootDomain
+
+	namedRootMu                 sync.RWMutex
+	namedRootsByID              map[uint64]*namedRootOverlayState
+	namedRootsByKey             map[string]*namedRootOverlayState
+	namedRootPublishedByVirtual map[uint64]uint64
+	namedRootBufferedBytes      atomic.Int64
+	nextNamedRootID             atomic.Uint64
+}
+
+type RootDomainManagerDebugState struct {
+	HasSystemMutable       bool
+	PendingNamedRoots      int
+	PublishedNamedRoots    int
+	BufferedNamedRootBytes int64
+}
+
 type SystemRootDebugState struct {
 	HasMutable       bool
 	QueueLen         int
@@ -144,6 +165,26 @@ func (d *rootDomain) newIterator(start, end []byte) (iterator.UnsafeIterator, er
 	return iter, nil
 }
 
+func (db *DB) DebugRootDomainManagerState() RootDomainManagerDebugState {
+	if db == nil {
+		return RootDomainManagerDebugState{}
+	}
+	state := RootDomainManagerDebugState{
+		BufferedNamedRootBytes: db.rootDomainManager.namedRootBufferedBytes.Load(),
+	}
+	db.rootDomainManager.systemMu.RLock()
+	if db.rootDomainManager.systemDomain != nil && db.rootDomainManager.systemDomain.table != nil && db.rootDomainManager.systemDomain.table.Len() > 0 {
+		state.HasSystemMutable = true
+	}
+	db.rootDomainManager.systemMu.RUnlock()
+
+	db.rootDomainManager.namedRootMu.RLock()
+	state.PendingNamedRoots = len(db.rootDomainManager.namedRootsByID)
+	state.PublishedNamedRoots = len(db.rootDomainManager.namedRootPublishedByVirtual)
+	db.rootDomainManager.namedRootMu.RUnlock()
+	return state
+}
+
 func (db *DB) PendingRootDomains() bool {
 	return db.pendingRootDomainUnitCount() > 0
 }
@@ -179,6 +220,9 @@ func (db *DB) pendingRootDomainUnitCount() int {
 func (db *DB) flushPendingRootDomainUnits(sync bool) error {
 	if db == nil {
 		return errDBClosing
+	}
+	if db.pendingRootDomainUnitCount() == 0 {
+		return nil
 	}
 	db.waitForCheckpoint()
 	db.flushMu.Lock()
@@ -234,13 +278,13 @@ func (db *DB) publishSystemRootDomainLocked(bridge BackendDirectBridge, sync boo
 	if db == nil {
 		return errDBClosing
 	}
-	db.systemMu.Lock()
-	defer db.systemMu.Unlock()
-	if db.systemDomain == nil || !db.systemDomain.pending() {
+	db.rootDomainManager.systemMu.Lock()
+	defer db.rootDomainManager.systemMu.Unlock()
+	if db.rootDomainManager.systemDomain == nil || !db.rootDomainManager.systemDomain.pending() {
 		return nil
 	}
 	runRootDomainPublishTestHook(rootDomainFlushKindSystem, 1)
-	flushTable := db.systemDomain.table
+	flushTable := db.rootDomainManager.systemDomain.table
 	if err := bridge.ApplySystemTable(sync, flushTable); err != nil {
 		return err
 	}
@@ -248,8 +292,8 @@ func (db *DB) publishSystemRootDomainLocked(bridge BackendDirectBridge, sync boo
 	if err != nil {
 		return err
 	}
-	db.systemDomain = nextDomain
-	db.systemDomain.version.Add(1)
+	db.rootDomainManager.systemDomain = nextDomain
+	db.rootDomainManager.systemDomain.version.Add(1)
 	return nil
 }
 
@@ -257,8 +301,8 @@ func (db *DB) publishNamedRootDomainsLocked(bridge BackendDirectBridge, sync boo
 	if db == nil {
 		return errDBClosing
 	}
-	db.namedRootMu.Lock()
-	defer db.namedRootMu.Unlock()
+	db.rootDomainManager.namedRootMu.Lock()
+	defer db.rootDomainManager.namedRootMu.Unlock()
 	snapshots, err := db.snapshotPendingNamedRootDomainsLocked()
 	if err != nil {
 		return err
@@ -319,25 +363,25 @@ func (db *DB) publishNamedRootDomainsLocked(bridge BackendDirectBridge, sync boo
 		return err
 	}
 	if len(publishedRootIDs) > 0 {
-		if db.namedRootPublishedByVirtual == nil {
-			db.namedRootPublishedByVirtual = make(map[uint64]uint64, len(publishedRootIDs))
+		if db.rootDomainManager.namedRootPublishedByVirtual == nil {
+			db.rootDomainManager.namedRootPublishedByVirtual = make(map[uint64]uint64, len(publishedRootIDs))
 		}
 		for i := range snapshots {
-			db.namedRootPublishedByVirtual[snapshots[i].state.virtualRootID] = publishedRootIDs[i]
+			db.rootDomainManager.namedRootPublishedByVirtual[snapshots[i].state.virtualRootID] = publishedRootIDs[i]
 		}
 	}
-	clear(db.namedRootsByID)
-	clear(db.namedRootsByKey)
-	db.namedRootBufferedBytes.Store(0)
+	clear(db.rootDomainManager.namedRootsByID)
+	clear(db.rootDomainManager.namedRootsByKey)
+	db.rootDomainManager.namedRootBufferedBytes.Store(0)
 	return nil
 }
 
 func (db *DB) snapshotPendingNamedRootDomainsLocked() ([]namedRootDomainSnapshot, error) {
-	if len(db.namedRootsByID) == 0 {
+	if len(db.rootDomainManager.namedRootsByID) == 0 {
 		return nil, nil
 	}
-	states := make([]*namedRootOverlayState, 0, len(db.namedRootsByID))
-	for _, state := range db.namedRootsByID {
+	states := make([]*namedRootOverlayState, 0, len(db.rootDomainManager.namedRootsByID))
+	for _, state := range db.rootDomainManager.namedRootsByID {
 		states = append(states, state)
 	}
 	sort.Slice(states, func(i, j int) bool {
