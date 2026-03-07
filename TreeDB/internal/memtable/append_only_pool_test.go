@@ -384,6 +384,54 @@ func TestAppendOnlyUnorderedAppendDefersLatestRebuild(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyUnorderedReverseIteratorDoesNotCacheSharedSnapshot(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	m.Set([]byte("b"), []byte("v1"))
+	m.Set([]byte("a"), []byte("v2")) // force unordered path
+	if m.ordered {
+		t.Fatalf("expected unordered memtable")
+	}
+	if !m.latestDirty {
+		t.Fatalf("expected latest index to be dirty after order break")
+	}
+
+	it := m.NewReverseIterator(nil, nil)
+	if err := it.Close(); err != nil {
+		t.Fatalf("reverse iterator close: %v", err)
+	}
+	if m.latestDirty {
+		t.Fatalf("expected reverse iterator snapshot build to refresh latest index")
+	}
+	if m.snapCount != 0 {
+		t.Fatalf("expected mutable unordered reverse iterator to avoid caching snapshot; got snapCount=%d", m.snapCount)
+	}
+	if m.snapshot != nil {
+		t.Fatalf("expected mutable unordered reverse iterator to leave shared snapshot nil")
+	}
+
+	m.Set([]byte("b"), []byte("v3"))
+	if m.latestDirty {
+		t.Fatalf("expected unordered append to keep latest index clean after reverse rebuild")
+	}
+	if m.snapCount != 0 {
+		t.Fatalf("expected snapshot invalidation after append; got snapCount=%d", m.snapCount)
+	}
+
+	it = m.NewReverseIterator(nil, nil)
+	if err := it.Close(); err != nil {
+		t.Fatalf("reverse iterator close after append: %v", err)
+	}
+	if m.latestDirty {
+		t.Fatalf("expected latest index rebuild on second reverse iterator snapshot")
+	}
+	if m.snapCount != 0 {
+		t.Fatalf("expected mutable unordered reverse iterator to keep shared snapshot uncached after rebuild; got snapCount=%d", m.snapCount)
+	}
+	if m.snapshot != nil {
+		t.Fatalf("expected mutable unordered reverse iterator to keep shared snapshot nil after rebuild")
+	}
+}
+
 func TestAppendOnlyResetDoesNotPoolStolenValueSlices(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	external := []byte("external-immutable")

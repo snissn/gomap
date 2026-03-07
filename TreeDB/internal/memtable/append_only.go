@@ -975,8 +975,9 @@ func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
 }
 
 func (m *AppendOnly) buildMutableSortedIteratorEntriesLocked() []appendOnlyEntry {
-	if m.count == 0 || m.ordered {
-		return nil
+	if m.count == 0 {
+		m.clearSnapshotLocked()
+		return getAppendOnlyIteratorEntries(0)
 	}
 	indices := m.buildSortedLatestIndicesLocked()
 	active := m.entries[:m.count]
