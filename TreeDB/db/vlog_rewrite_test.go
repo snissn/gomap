@@ -817,6 +817,13 @@ func TestRewriteRIDAllocatorRejectsOverflowingExternalRange(t *testing.T) {
 	}
 }
 
+func TestRewriteRIDAllocatorRejectsNextWraparound(t *testing.T) {
+	alloc := newRewriteRIDAllocator(^uint64(0)-1, nil)
+	if _, err := alloc.Reserve(2); err == nil {
+		t.Fatal("expected next rid wraparound to fail")
+	}
+}
+
 func TestValueLogRewriteOnline_SparseSelection_NoSelectedSources_IsNoOp(t *testing.T) {
 	dir := t.TempDir()
 

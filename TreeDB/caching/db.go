@@ -5686,6 +5686,10 @@ func putEntrySlice(entries []batch.Entry) {
 	if entries == nil {
 		return
 	}
+	// Clear the full backing array on every path, including early returns. Batch
+	// callers can hand us slices with len==0 but non-nil elements beyond len, and
+	// leaving those hidden references intact can pin large heaps even when we do
+	// not retain the slice in the pool.
 	full := entries[:cap(entries)]
 	clear(full)
 	if cap(entries) > maxEntryPoolCap {
@@ -13913,6 +13917,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
 	stats["treedb.process.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	db.domainIngressMu.Lock()
@@ -15260,14 +15266,14 @@ func (b *Batch) updateBatchCopyHint() {
 }
 
 func (b *Batch) arenaCopy(n int) []byte {
-	return b.arenaAlloc(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n)
+	return b.arenaCopyInto(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
 }
 
 func (b *Batch) arenaCopyPtr(n int) []byte {
-	return b.arenaAlloc(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n)
+	return b.arenaCopyInto(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
 }
 
-func (b *Batch) arenaAlloc(arena *[]byte, chunks *[][]byte, copyBytes *int, n int) []byte {
+func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n int, initialCap int) []byte {
 	if n == 0 {
 		return nil
 	}
@@ -15279,8 +15285,8 @@ func (b *Batch) arenaAlloc(arena *[]byte, chunks *[][]byte, copyBytes *int, n in
 		if cap(*arena) == 0 {
 			// Keep unsized batches conservative. Entry-slice capacity can come from
 			// pooled high-water marks and is not a reliable signal for copy payload.
-			if b.copyArenaCap > chunkCap {
-				chunkCap = b.copyArenaCap
+			if initialCap > chunkCap {
+				chunkCap = initialCap
 			}
 		}
 		if chunkCap < n {
