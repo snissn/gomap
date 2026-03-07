@@ -113,6 +113,19 @@ func TestResolveOpenDirLayout_DisableSideStoresRejectsRootDir(t *testing.T) {
 	}
 }
 
+func TestResolveOpenDirLayout_DisableSideStoresRejectsInitializedSideStoreRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "dictdb"), 0o755); err != nil {
+		t.Fatalf("mkdir dictdb: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "dictdb", "index.db"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write dictdb/index.db: %v", err)
+	}
+	if _, err := resolveOpenDirLayout(root, true); err == nil {
+		t.Fatalf("expected DisableSideStores initialized-root error")
+	}
+}
+
 func TestResolveOpenDirLayout_NewMaindbPathStaysUnderProvidedDir(t *testing.T) {
 	parent := t.TempDir()
 	provided := filepath.Join(parent, "maindb")

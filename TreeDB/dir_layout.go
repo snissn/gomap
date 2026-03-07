@@ -43,8 +43,8 @@ func resolveOpenDirLayout(dir string, disableSideStores bool) (openDirLayout, er
 	if disableSideStores {
 		// Refuse obviously-root layouts to avoid silently creating a second DB at
 		// <root>/index.db while the real DB lives in <root>/maindb.
-		if info, err := os.Stat(filepath.Join(clean, "maindb")); err == nil && info.IsDir() {
-			return openDirLayout{}, fmt.Errorf("treedb: DisableSideStores=true but dir looks like a TreeDB root (contains maindb/): %s", clean)
+		if rootLayoutLooksInitialized(clean) {
+			return openDirLayout{}, fmt.Errorf("treedb: DisableSideStores=true but dir looks like a TreeDB root layout: %s", clean)
 		}
 		return openDirLayout{
 			rootDir:           clean,
