@@ -2,7 +2,6 @@ package caching
 
 import (
 	"fmt"
-	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -303,7 +302,7 @@ func (db *DB) publishNamedRootDomainsLocked(bridge BackendDirectBridge, sync boo
 	}
 	db.rootDomainManager.namedRootMu.Lock()
 	defer db.rootDomainManager.namedRootMu.Unlock()
-	snapshots, err := db.snapshotPendingNamedRootDomainsLocked()
+	snapshots, err := db.rootDomainManager.snapshotPendingNamedRootDomainsLocked(db.GetSystem)
 	if err != nil {
 		return err
 	}
@@ -374,37 +373,4 @@ func (db *DB) publishNamedRootDomainsLocked(bridge BackendDirectBridge, sync boo
 	clear(db.rootDomainManager.namedRootsByKey)
 	db.rootDomainManager.namedRootBufferedBytes.Store(0)
 	return nil
-}
-
-func (db *DB) snapshotPendingNamedRootDomainsLocked() ([]namedRootDomainSnapshot, error) {
-	if len(db.rootDomainManager.namedRootsByID) == 0 {
-		return nil, nil
-	}
-	states := make([]*namedRootOverlayState, 0, len(db.rootDomainManager.namedRootsByID))
-	for _, state := range db.rootDomainManager.namedRootsByID {
-		states = append(states, state)
-	}
-	sort.Slice(states, func(i, j int) bool {
-		return states[i].virtualRootID < states[j].virtualRootID
-	})
-	snapshots := make([]namedRootDomainSnapshot, 0, len(states))
-	for _, state := range states {
-		flushTable := namedRootFlushTable(state)
-		if flushTable == nil {
-			return nil, fmt.Errorf("treedb: missing named-root domain for %q", state.rootKey)
-		}
-		raw, err := db.GetSystem(state.rootKey)
-		if err != nil {
-			return nil, err
-		}
-		if len(raw) == 0 {
-			return nil, fmt.Errorf("treedb: missing cached root descriptor for %q", state.rootKey)
-		}
-		snapshots = append(snapshots, namedRootDomainSnapshot{
-			state:         state,
-			table:         flushTable,
-			descriptorRaw: raw,
-		})
-	}
-	return snapshots, nil
 }
