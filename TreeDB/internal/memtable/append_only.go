@@ -447,7 +447,9 @@ func (m *AppendOnly) buildSortedLatestIndicesLocked() []int {
 		m.rebuildLatestIndexLocked()
 	}
 	// The returned slice aliases m.indexBuf scratch storage. It is only valid
-	// while m.mu is held and may be overwritten by the next call.
+	// while m.mu is held and may be overwritten by the next call. When
+	// m.count == 0 or m.ordered is true, this helper returns nil, which callers
+	// may treat as "no indices" (equivalent to an empty result).
 	need := len(m.latest) + len(m.latest64)
 	if cap(m.indexBuf) < need {
 		m.indexBuf = make([]int, 0, need)

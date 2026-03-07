@@ -3738,7 +3738,10 @@ func cachedBatchWriteNeedsBatchArenaRetention(mt memtable.Table) bool {
 	// This helper is only used for the cached batch write path, where
 	// cachedBatchWriteUsesSteal governs whether a memtable receives borrowed
 	// batch slices or copied writes. append_only and hash_sorted are forced onto
-	// copy writes there, so they do not need batch-arena leases.
+	// copy writes there, so they do not need batch-arena leases. Skiplist is the
+	// other non-retained case: it accepts Steal calls, but still copies key/value
+	// bytes into its own arena, so batch-owned buffers can be released
+	// immediately after the write.
 	if !cachedBatchWriteUsesSteal(mt) {
 		return false
 	}
@@ -3750,7 +3753,9 @@ func cachedBatchWriteUsesSteal(mt memtable.Table) bool {
 	// append_only and hash_sorted borrow key/value slices on Steal paths, so the
 	// cached batch writer feeds them copied writes instead. Keep the Steal path
 	// on an explicit allowlist so new memtable implementations do not silently
-	// reintroduce borrowed-slice lifetime bugs.
+	// reintroduce borrowed-slice lifetime bugs. Mutable shard memtables are
+	// constructed internally from concrete types, so wrappers should opt in here
+	// explicitly instead of inheriting Steal behavior accidentally.
 	switch mt.(type) {
 	case *memtable.BTree, *memtable.Memtable:
 		return true
@@ -3767,10 +3772,13 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 	mt.Delete(key)
 }
 
-func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlineValueForPtrEntries bool, op batch.Entry) {
+// memtableBatchSet applies a cached batch write while preserving the ownership
+// rules selected by cachedBatchWriteUsesSteal. Pointer entries may still keep
+// inline bytes in memtables that do not use value-log pointers internally.
+func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues bool, op batch.Entry) {
 	if op.IsPtr {
 		memVal := []byte(nil)
-		if storeInlineValueForPtrEntries {
+		if storeInlinePtrValues {
 			memVal = op.Value
 		}
 		if useSteal {
@@ -5735,8 +5743,10 @@ func putEntrySlice(entries []batch.Entry) {
 	if entries == nil {
 		return
 	}
-	// Clear references even on early return paths so oversized/non-pooled
-	// scratch slices do not keep prior keys/values live longer than needed.
+	// Clear the full backing array on every path, including early returns. Batch
+	// callers can hand us slices with len==0 but non-nil elements beyond len, and
+	// leaving those hidden references intact can pin large heaps even when we do
+	// not retain the slice in the pool.
 	full := entries[:cap(entries)]
 	clear(full)
 	if cap(entries) > maxEntryPoolCap {
@@ -13963,6 +13973,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
 	stats["treedb.process.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	db.domainIngressMu.Lock()
@@ -15310,14 +15322,14 @@ func (b *Batch) updateBatchCopyHint() {
 }
 
 func (b *Batch) arenaCopy(n int) []byte {
-	return b.arenaAlloc(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n)
+	return b.arenaCopyInto(&b.copyArena, &b.copyArenaChunks, &b.copyBytes, n, b.copyArenaCap)
 }
 
 func (b *Batch) arenaCopyPtr(n int) []byte {
-	return b.arenaAlloc(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n)
+	return b.arenaCopyInto(&b.ptrCopyArena, &b.ptrCopyArenaChunks, &b.ptrCopyBytes, n, 0)
 }
 
-func (b *Batch) arenaAlloc(arena *[]byte, chunks *[][]byte, copyBytes *int, n int) []byte {
+func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n int, initialCap int) []byte {
 	if n == 0 {
 		return nil
 	}
@@ -15329,8 +15341,8 @@ func (b *Batch) arenaAlloc(arena *[]byte, chunks *[][]byte, copyBytes *int, n in
 		if cap(*arena) == 0 {
 			// Keep unsized batches conservative. Entry-slice capacity can come from
 			// pooled high-water marks and is not a reliable signal for copy payload.
-			if b.copyArenaCap > chunkCap {
-				chunkCap = b.copyArenaCap
+			if initialCap > chunkCap {
+				chunkCap = initialCap
 			}
 		}
 		if chunkCap < n {
@@ -16402,7 +16414,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard.mu.Lock()
 			useStream := b.streamEligible
 			useSteal := cachedBatchWriteUsesSteal(shard.mem)
-			storeInlineValueForPtrEntries := !b.db.memtableValueLogPointers
+			storeInlinePtrValues := !b.db.memtableValueLogPointers
 			if useStream && useSteal {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
 					applier.ApplyStealSortedBatchTrusted(entries, nil)
@@ -16413,7 +16425,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						if op.Type == batch.OpDelete {
 							memtableBatchDelete(shard.mem, true, op.Key)
 						} else {
-							memtableBatchSet(shard.mem, true, storeInlineValueForPtrEntries, op)
+							memtableBatchSet(shard.mem, true, storeInlinePtrValues, op)
 						}
 					}
 				}
@@ -16429,7 +16441,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
-						memtableBatchSet(shard.mem, useSteal, storeInlineValueForPtrEntries, op)
+						memtableBatchSet(shard.mem, useSteal, storeInlinePtrValues, op)
 					}
 					if useStream {
 						// Preserve sorted-run accounting even when we avoid Steal.

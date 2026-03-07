@@ -129,6 +129,9 @@ func validateRewriteRIDRange(start uint64, count int) error {
 	if uint64(count-1) > ^uint64(0)-start {
 		return fmt.Errorf("value-log rid space exhausted: start=%d count=%d", start, count)
 	}
+	if uint64(count) > ^uint64(0)-start {
+		return fmt.Errorf("value-log rid allocator exhausted next rid space: start=%d count=%d", start, count)
+	}
 	return nil
 }
 
