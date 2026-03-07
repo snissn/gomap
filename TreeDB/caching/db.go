@@ -7477,24 +7477,7 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSamples(records)
 	case vlogCompressionAuto:
-		// In auto mode, skip background dict sampling while fully bypassing
-		// compression so incompressible workloads stay close to off-mode cost.
-		// Bootstrap quickly: until a dict is published, sample aggressively so
-		// auto mode can discover dict wins without requiring extra tuning knobs.
-		allowDictSampling := db.valueLogDictLastAppliedDictID.Load() == 0
-		if !allowDictSampling && l != nil && l.vlogCompressionSelector != nil {
-			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
-		}
-		if writeMode != vlogWriteOff && allowDictSampling {
-			if db.valueLogDictLastAppliedDictID.Load() != 0 && writeMode != vlogWriteDict {
-				if selectorUnitPayloadBytes <= 256 {
-					allowDictSampling = false
-				} else {
-					allowDictSampling = db.valueLogDictShouldCollectPaused()
-				}
-			}
-		}
-		if writeMode != vlogWriteOff && allowDictSampling {
+		if db.allowAutoDictSampling(l, writeMode, selectorUnitPayloadBytes) {
 			db.valueLogDictCollectSamples(records)
 		}
 	}
@@ -8131,23 +8114,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSample(value)
 	case vlogCompressionAuto:
-		// Bootstrap quickly: until we publish the first dict, always sample so
-		// "auto" really means auto (the selector may not have block metrics yet,
-		// e.g. when using the stable forced-pointer block fast-path).
-		allowDictSampling := db.valueLogDictLastAppliedDictID.Load() == 0
-		if !allowDictSampling && l != nil && l.vlogCompressionSelector != nil {
-			allowDictSampling = l.vlogCompressionSelector.allowDictSampling(writeMode)
-		}
-		if writeMode != vlogWriteOff && allowDictSampling {
-			if db.valueLogDictLastAppliedDictID.Load() != 0 && writeMode != vlogWriteDict {
-				if len(value) <= 256 {
-					allowDictSampling = false
-				} else {
-					allowDictSampling = db.valueLogDictShouldCollectPaused()
-				}
-			}
-		}
-		if writeMode != vlogWriteOff && allowDictSampling {
+		if db.allowAutoDictSampling(l, writeMode, len(value)) {
 			db.valueLogDictCollectSample(value)
 		}
 	}
@@ -12170,6 +12137,24 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		db.bpMu.Unlock()
 	}
 	return true
+}
+
+func (db *DB) allowAutoDictSampling(l *lane, writeMode vlogCompressionWriteMode, unitPayloadBytes int) bool {
+	if writeMode == vlogWriteOff {
+		return false
+	}
+	bootstrap := db.valueLogDictLastAppliedDictID.Load() == 0
+	allow := true
+	if !bootstrap && l != nil && l.vlogCompressionSelector != nil {
+		allow = l.vlogCompressionSelector.allowDictSampling(writeMode)
+	}
+	if !allow || bootstrap || writeMode == vlogWriteDict {
+		return allow
+	}
+	if unitPayloadBytes <= 256 {
+		return false
+	}
+	return db.valueLogDictShouldCollectPaused()
 }
 
 func (db *DB) finalizeFlushStats(totalLen int, totalBytes int64, flushDur, durPreVlog, durBuild, durSet, durPostVlog, durPostVlogSync, durBackendWrite time.Duration) error {
