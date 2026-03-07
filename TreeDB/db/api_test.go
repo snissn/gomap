@@ -309,7 +309,7 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 		t.Fatalf("new valuelog writer: %v", err)
 	}
 	large := bytes.Repeat([]byte("p"), 8*1024)
-	ptr, err := vw.Append(0, []byte("k-pointer"), 1, large)
+	ptr, err := vw.Append(0, nil, 1, large)
 	if err != nil {
 		_ = vw.Close()
 		t.Fatalf("append valuelog: %v", err)
