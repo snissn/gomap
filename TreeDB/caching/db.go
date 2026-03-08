@@ -2630,6 +2630,8 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 			p := snap.Pager()
 			if state != nil && p != nil {
 				reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
+				leafCtx, leafCancel := db.foregroundWriteResumeContext(lastWrite, 0)
+				defer leafCancel()
 				if state.RootPageID != 0 {
 					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
 						_ = snap.Close()
@@ -2646,7 +2648,7 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
-				if err := collectLeafRefValueLogLiveIDs(p, state.RootPageID, reader, live); err != nil {
+				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.RootPageID, reader, live); err != nil {
 					_ = snap.Close()
 					return nil, err
 				}
@@ -2654,7 +2656,7 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
-				if err := collectLeafRefValueLogLiveIDs(p, state.SystemRootPageID, reader, live); err != nil {
+				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.SystemRootPageID, reader, live); err != nil {
 					_ = snap.Close()
 					return nil, err
 				}
@@ -3810,6 +3812,10 @@ const (
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
 	vlogForegroundQuietWindow = 2 * time.Second
+	// Generational rewrite planning / rewrite / GC can scan a large live tree
+	// and should only run when the foreground has been quiet for a meaningfully
+	// longer window than lightweight maintenance.
+	vlogGenerationMaintenanceQuietWindow = 15 * time.Second
 	// Retained-path prune performs a full live-ID scan and is pure best-effort
 	// reclaim. Require a meaningfully idle window before starting it so hot
 	// write workloads do not pay for a large scan between active phases.
@@ -5598,6 +5604,53 @@ func foregroundMaintenancePollInterval() time.Duration {
 		return interval
 	}
 	return time.Millisecond
+}
+
+func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duration) (context.Context, context.CancelFunc) {
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	if db == nil {
+		return ctx, cancel
+	}
+	if lastWrite <= 0 {
+		return ctx, cancel
+	}
+	go func(lastWrite int64) {
+		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-db.closeCh:
+				cancel()
+				return
+			case <-ticker.C:
+				if db.foregroundWritesResumedSince(lastWrite) {
+					cancel()
+					return
+				}
+			}
+		}
+	}(lastWrite)
+	return ctx, cancel
+}
+
+func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	if db == nil {
+		if timeout > 0 {
+			return context.WithTimeout(context.Background(), timeout)
+		}
+		return context.WithCancel(context.Background())
+	}
+	return db.foregroundWriteResumeContext(db.lastForegroundWriteUnixNano.Load(), timeout)
 }
 
 func (db *DB) noteWrite() {
@@ -9822,7 +9875,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
-	if !runGC && !db.foregroundWriteQuiet(time.Now()) {
+	if !runGC && !db.foregroundWriteQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow) {
 		return
 	}
 	// In WAL-off mode, do not start rewrite/GC planning before the first
@@ -9895,7 +9948,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
 		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 			MaxSourceSegments:    0,
@@ -9904,18 +9957,25 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			MinSegmentStaleBytes: 1,
 		})
 		cancel()
-		db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+				return
+			}
+			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
 			// Best-effort planning: keep legacy triggers (total-bytes/churn) alive,
 			// but surface the failure for observability.
 			if db.notifyError != nil {
 				db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
 			}
 		} else if len(plan.SourceFileIDs) > 0 {
+			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
 			shouldRewrite = true
 			reason = vlogGenerationReasonStaleRatio
 			rewritePlan = plan
 			haveRewritePlan = true
+		} else {
+			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
 		}
 	}
 planned:
@@ -9947,13 +10007,17 @@ planned:
 				maxSourceBytes = totalBytes
 			}
 			if maxSourceBytes > 0 {
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 					MaxSourceSegments: 0,
 					MaxSourceBytes:    maxSourceBytes,
 				})
 				cancel()
 				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return
+					}
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 					db.vlogGenerationRemapFailures.Add(1)
 					if db.notifyError != nil {
@@ -9993,7 +10057,7 @@ planned:
 					maxSourceBytes = totalBytes
 				}
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			ctx, cancel := db.foregroundMaintenanceContext(2 * time.Minute)
 			rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
@@ -10072,6 +10136,10 @@ planned:
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+				return
+			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 			db.vlogGenerationRemapFailures.Add(1)
 			if db.notifyError != nil {
@@ -10117,7 +10185,7 @@ planned:
 		}
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
@@ -10134,6 +10202,10 @@ planned:
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+			return
+		}
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 		if db.notifyError != nil {
 			db.notifyError(fmt.Errorf("cachingdb: %w", err))

@@ -68,19 +68,28 @@ func isValueLogFileNotFound(err error) bool {
 	return errors.Is(err, valuelog.ErrFileNotFound)
 }
 
-func collectLeafRefValueLogLiveIDs(p pageGetter, rootID uint64, reader tree.SlabReader, live map[uint32]struct{}) error {
-	return leafrefscan.Walk(context.Background(), rootID, p.Get, func(pageID uint64, n node.Node) error {
+func collectLeafRefValueLogLiveIDs(ctx context.Context, p pageGetter, rootID uint64, reader tree.SlabReader, live map[uint32]struct{}) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return leafrefscan.Walk(ctx, rootID, p.Get, func(pageID uint64, n node.Node) error {
 		if !n.VerifyChecksum() {
 			return fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		return nil
 	}, func(ptr page.ValuePtr) error {
 		live[ptr.FileID] = struct{}{}
-		return collectNestedLeafPageValueLogLiveIDs(ptr, reader, live)
+		return collectNestedLeafPageValueLogLiveIDs(ctx, ptr, reader, live)
 	})
 }
 
-func collectNestedLeafPageValueLogLiveIDs(ptr page.ValuePtr, reader tree.SlabReader, live map[uint32]struct{}) error {
+func collectNestedLeafPageValueLogLiveIDs(ctx context.Context, ptr page.ValuePtr, reader tree.SlabReader, live map[uint32]struct{}) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if reader == nil || live == nil || !page.IsValueLogFileID(ptr.FileID) {
 		return nil
 	}
@@ -102,6 +111,11 @@ func collectNestedLeafPageValueLogLiveIDs(ptr page.ValuePtr, reader tree.SlabRea
 	// payload pointers here. Their entries may point at value-log payloads, but we
 	// do not recursively interpret those payload pointers as more leaf pages.
 	for i := uint16(0); i < leaf.Count(); i++ {
+		if i&255 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		_, _, valPtr, flags, err := leaf.GetLeafEntryView(i)
 		if err != nil {
 			return err
