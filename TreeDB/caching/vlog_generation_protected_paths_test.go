@@ -94,6 +94,7 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1)
+	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	got := recorder.recordedProtectedPaths()
@@ -218,6 +219,7 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1)
+	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	got := recorder.recordedReservedStarts()

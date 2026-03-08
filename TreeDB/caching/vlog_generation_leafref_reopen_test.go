@@ -586,8 +586,10 @@ func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
 	}
 
 	for round := 0; round < 6; round++ {
+		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 		writeBatch(fmt.Sprintf("post-%02d", round), 512)
+		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 	}
 
@@ -739,6 +741,7 @@ func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_CacheWAL
 		t.Fatalf("pre-maintenance backend references missing value-log files: %v", missing[:min(8, len(missing))])
 	}
 
+	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	after, err := tryCollectBackendLiveFileCounts(t, backend)
@@ -951,9 +954,11 @@ func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_CacheWALOn(t
 	}
 
 	for round := 0; round < 20; round++ {
+		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 		writeBatch(fmt.Sprintf("round-%02d", round), 2048)
 		ageValueLogFiles()
+		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 
 		counts, err := tryCollectBackendLiveFileCounts(t, backend)

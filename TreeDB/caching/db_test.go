@@ -1927,6 +1927,78 @@ func TestCheckpoint_SchedulesRetainedValueLogPruneAsynchronously(t *testing.T) {
 	}
 }
 
+func TestCheckpoint_DefersRetainedValueLogPruneUntilForegroundQuiet(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 199)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000199.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("r"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	cache.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+
+	if err := cache.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	select {
+	case <-backend.iteratorStartedCh:
+		t.Fatalf("background prune started during quiet-window defer")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogForegroundQuietWindow).UnixNano())
+
+	select {
+	case <-backend.iteratorStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("background prune did not start after quiet window elapsed")
+	}
+	close(backend.iteratorBlockCh)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if !cache.retainedPruneActive() {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("background retained prune did not finish")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
 func TestCheckpoint_DoesNotWaitForPriorRetainedValueLogPrune(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
