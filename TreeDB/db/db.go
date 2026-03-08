@@ -1542,19 +1542,13 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		if len(touchedValueLogSegments) > 0 {
+		if forceValueLogRefresh || len(touchedValueLogSegments) > 0 {
 			if err := db.valueLogManager.Refresh(); err != nil {
 				db.mu.Unlock()
 				return post, err
 			}
 			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 		} else {
-			// Outer-leaf commits can publish new value-log references without a
-			// filesystem rescan because cached mode registers newly rotated
-			// segments as soon as they are created. We still refresh for explicit
-			// touched segments, which may reference files discovered outside that
-			// hot path (for example SetPointer or maintenance rewrites).
-			_ = forceValueLogRefresh
 			valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 		}
 	}
