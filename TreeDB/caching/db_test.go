@@ -1617,6 +1617,7 @@ func TestCachingDB_FlushPersistsValueLogPointer(t *testing.T) {
 
 	cache, err := Open(dir, backend, Options{
 		FlushThreshold:           1,
+		MaxValueLogRetainedBytes: 1,
 		ValueLogPointerThreshold: 1,
 	})
 	if err != nil {
@@ -1800,6 +1801,13 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	if segments == 0 {
 		t.Fatalf("expected retained value-log segments after non-sync flush")
 	}
+	for _, path := range cache.valueLogRetainedPaths() {
+		seedRetainedPrunePressure(cache, path, 2<<30)
+	}
+	retainedBefore := cache.valueLogRetainedClosedBytes.Load()
+	if retainedBefore <= 0 {
+		t.Fatalf("expected retained closed bytes after seeding prune pressure")
+	}
 
 	// Delete the key and checkpoint. The value-log segments that only contain
 	// now-unreferenced payloads should become reclaimable and be pruned.
@@ -1815,8 +1823,11 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse retained segments: %v", err)
 	}
-	if segments != 0 {
-		t.Fatalf("expected retained segments to be pruned after checkpoint, got %d", segments)
+	if got := cache.valueLogRetainedClosedBytes.Load(); got >= retainedBefore {
+		t.Fatalf("expected closed retained bytes to shrink after checkpoint, before=%d after=%d", retainedBefore, got)
+	}
+	if segments > 1 {
+		t.Fatalf("expected at most one in-use retained segment after checkpoint, got %d", segments)
 	}
 }
 
@@ -1829,6 +1840,7 @@ func TestPruneRetainedValueLogs_SkipsLiveScanWhenAllRetainedPathsInUse(t *testin
 		RelaxedSync:              true,
 		AllowUnsafe:              true,
 		FlushThreshold:           1 << 20,
+		MaxValueLogRetainedBytes: 1,
 		ValueLogPointerThreshold: 1,
 	})
 	if err != nil {
@@ -1853,6 +1865,19 @@ func TestPruneRetainedValueLogs_SkipsLiveScanWhenAllRetainedPathsInUse(t *testin
 	if !cache.valueLogRetained(retained) {
 		t.Fatalf("expected in-use retained path to remain retained")
 	}
+}
+
+func seedRetainedPrunePressure(cache *DB, retainedPath string, size int64) {
+	l := &cache.lanes[0]
+	l.vlogMu.Lock()
+	if l.vlogClosedSizes == nil {
+		l.vlogClosedSizes = make(map[string]int64)
+	}
+	prev := l.vlogClosedSizes[retainedPath]
+	l.vlogClosedSizes[retainedPath] = size
+	l.vlogClosedBytes.Add(size - prev)
+	l.vlogMu.Unlock()
+	cache.valueLogRetainedClosedBytes.Add(size - prev)
 }
 
 func TestCheckpoint_SchedulesRetainedValueLogPruneAsynchronously(t *testing.T) {
@@ -1893,6 +1918,7 @@ func TestCheckpoint_SchedulesRetainedValueLogPruneAsynchronously(t *testing.T) {
 		t.Fatalf("Close writer: %v", err)
 	}
 	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 2<<30)
 	done := make(chan error, 1)
 	go func() {
 		done <- cache.Checkpoint()
@@ -1965,6 +1991,7 @@ func TestCheckpoint_DefersRetainedValueLogPruneUntilForegroundQuiet(t *testing.T
 		t.Fatalf("Close writer: %v", err)
 	}
 	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 2<<30)
 	cache.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
 
 	if err := cache.Checkpoint(); err != nil {
@@ -1977,7 +2004,7 @@ func TestCheckpoint_DefersRetainedValueLogPruneUntilForegroundQuiet(t *testing.T
 	case <-time.After(150 * time.Millisecond):
 	}
 
-	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogForegroundQuietWindow).UnixNano())
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
 
 	select {
 	case <-backend.iteratorStartedCh:
@@ -1996,6 +2023,205 @@ func TestCheckpoint_DefersRetainedValueLogPruneUntilForegroundQuiet(t *testing.T
 			t.Fatalf("background retained prune did not finish")
 		case <-time.After(10 * time.Millisecond):
 		}
+	}
+}
+
+func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 211)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000211.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("q"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 2<<30)
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+
+	cache.scheduleRetainedValueLogPrune()
+
+	select {
+	case <-backend.iteratorStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("background prune did not start")
+	}
+
+	cache.noteWrite()
+	close(backend.iteratorBlockCh)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if !cache.retainedPruneActive() {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("background retained prune did not finish")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	if _, err := os.Stat(retainedPath); err != nil {
+		t.Fatalf("retained path removed after prune abort: %v", err)
+	}
+	if !cache.valueLogRetained(retainedPath) {
+		t.Fatalf("retained path unmarked after prune abort")
+	}
+}
+
+func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 233)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000233.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("p"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 2<<30)
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+
+	cache.scheduleRetainedValueLogPrune()
+	select {
+	case <-backend.iteratorStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("first prune did not start")
+	}
+	cache.noteWrite()
+	close(backend.iteratorBlockCh)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if !cache.retainedPruneActive() {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("first prune did not finish")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	backend.iteratorStartedCh = make(chan struct{})
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+	cache.scheduleRetainedValueLogPrune()
+
+	select {
+	case <-backend.iteratorStartedCh:
+		t.Fatalf("second prune started despite rate limit")
+	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+func TestCheckpoint_SkipsRetainedValueLogPruneBelowPressureThreshold(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		MaxValueLogRetainedBytes: 1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 244)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000244.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("s"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 128)
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+
+	cache.scheduleRetainedValueLogPrune()
+
+	select {
+	case <-backend.iteratorStartedCh:
+		t.Fatalf("background prune started below retained-byte pressure threshold")
+	case <-time.After(150 * time.Millisecond):
+	}
+	if cache.retainedPruneActive() {
+		cache.waitForRetainedValueLogPrune()
 	}
 }
 
@@ -2037,6 +2263,7 @@ func TestCheckpoint_DoesNotWaitForPriorRetainedValueLogPrune(t *testing.T) {
 		t.Fatalf("Close writer: %v", err)
 	}
 	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 2<<30)
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatalf("first Checkpoint: %v", err)
 	}
