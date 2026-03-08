@@ -112,6 +112,57 @@ func TestTailValueLogSegmentsByLane(t *testing.T) {
 	}
 }
 
+func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	backendOwnedByDB := false
+	t.Cleanup(func() {
+		if !backendOwnedByDB {
+			_ = backend.Close()
+		}
+	})
+
+	cdb, err := Open(dir, backend, Options{
+		AllowUnsafe:           true,
+		DisableWAL:            true,
+		ForceValueLogPointers: true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	backendOwnedByDB = true
+	t.Cleanup(func() { _ = cdb.Close() })
+
+	b := cdb.NewBatch()
+	if err := b.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := cdb.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	it, err := cdb.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("iterator: %v", err)
+	}
+	if got := cdb.activeForegroundIterators.Load(); got != 1 {
+		t.Fatalf("activeForegroundIterators=%d want=1", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("close iterator: %v", err)
+	}
+	if got := cdb.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
+	}
+}
+
 func deleteMutable(db *DB, key []byte) {
 	shard := db.shardForKey(key)
 	shard.mu.Lock()
