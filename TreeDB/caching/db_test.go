@@ -1700,7 +1700,7 @@ func TestCheckpoint_SchedulesRetainedValueLogPruneAsynchronously(t *testing.T) {
 
 	deadline := time.After(2 * time.Second)
 	for {
-		if !cache.retainedPruneRunning.Load() {
+		if !cache.retainedPruneActive() {
 			break
 		}
 		select {
@@ -1777,7 +1777,7 @@ func TestCheckpoint_DoesNotWaitForPriorRetainedValueLogPrune(t *testing.T) {
 
 	deadline := time.After(2 * time.Second)
 	for {
-		if !cache.retainedPruneRunning.Load() {
+		if !cache.retainedPruneActive() {
 			break
 		}
 		select {

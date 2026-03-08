@@ -240,7 +240,6 @@ func TestManagerRegisterSegment_ReinitializesNilFilesMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
 
 	mgr.mu.Lock()
 	mgr.files = nil
@@ -256,5 +255,8 @@ func TestManagerRegisterSegment_ReinitializesNilFilesMap(t *testing.T) {
 	mgr.mu.RUnlock()
 	if !ok {
 		t.Fatalf("segment %d missing after RegisterSegment reinitialized files map", segID)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }

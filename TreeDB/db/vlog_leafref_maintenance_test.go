@@ -3,6 +3,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1124,6 +1125,9 @@ func TestValueLogRewriteOnline_UnsyncedRewriteThenVacuumRemainsReopenable(t *tes
 		t.Fatalf("expected rewrite copies")
 	}
 	if err := db.VacuumIndexOnline(context.Background()); err != nil {
+		if errors.Is(err, ErrVacuumUnsupported) {
+			t.Skipf("VacuumIndexOnline unsupported on this platform: %v", err)
+		}
 		t.Fatalf("VacuumIndexOnline: %v", err)
 	}
 

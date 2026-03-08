@@ -2731,24 +2731,8 @@ func (db *DB) pruneRetainedValueLogs() {
 	}
 
 	inUse := make(map[string]struct{})
-	if db.splitValueLogEnabled() {
-		for _, path := range db.currentValueLogPaths() {
-			inUse[path] = struct{}{}
-		}
-		for _, paths := range db.queueValueLogPaths {
-			for _, path := range paths {
-				inUse[path] = struct{}{}
-			}
-		}
-	} else {
-		for _, path := range db.currentWALPaths() {
-			inUse[path] = struct{}{}
-		}
-		for _, paths := range db.queueWALPaths {
-			for _, path := range paths {
-				inUse[path] = struct{}{}
-			}
-		}
+	for _, path := range db.valueLogInUsePaths() {
+		inUse[path] = struct{}{}
 	}
 
 	candidatePaths := make([]string, 0, len(paths))
@@ -2835,25 +2819,44 @@ func (db *DB) scheduleRetainedValueLogPrune() {
 	if db.testSkipRetainedPrune {
 		return
 	}
-	if !db.retainedPruneRunning.CompareAndSwap(false, true) {
+	db.retainedPruneMu.Lock()
+	if db.retainedPruneDone != nil {
+		db.retainedPruneMu.Unlock()
 		return
 	}
-	db.retainedPruneWG.Add(1)
+	done := make(chan struct{})
+	db.retainedPruneDone = done
+	db.retainedPruneMu.Unlock()
 	go func() {
-		defer db.retainedPruneWG.Done()
-		defer db.retainedPruneRunning.Store(false)
+		defer func() {
+			db.retainedPruneMu.Lock()
+			close(done)
+			db.retainedPruneDone = nil
+			db.retainedPruneMu.Unlock()
+		}()
 		db.pruneRetainedValueLogs()
 	}()
+}
+
+func (db *DB) retainedPruneActive() bool {
+	if db == nil || !db.valueLogEnabled() {
+		return false
+	}
+	db.retainedPruneMu.Lock()
+	defer db.retainedPruneMu.Unlock()
+	return db.retainedPruneDone != nil
 }
 
 func (db *DB) waitForRetainedValueLogPrune() {
 	if db == nil || !db.valueLogEnabled() {
 		return
 	}
-	if !db.retainedPruneRunning.Load() {
-		return
+	db.retainedPruneMu.Lock()
+	done := db.retainedPruneDone
+	db.retainedPruneMu.Unlock()
+	if done != nil {
+		<-done
 	}
-	db.retainedPruneWG.Wait()
 }
 
 func (db *DB) checkpointForBackendMaintenance() error {
@@ -3539,8 +3542,8 @@ type DB struct {
 	checkpointAutoVacuumLastPages         atomic.Uint64
 	checkpointAutoVacuumLastInternalP50   atomic.Uint64
 	checkpointAutoVacuumLastInternalAvg   atomic.Uint64
-	retainedPruneRunning                  atomic.Bool
-	retainedPruneWG                       sync.WaitGroup
+	retainedPruneMu                       sync.Mutex
+	retainedPruneDone                     chan struct{}
 	vlogGenerationRemapSuccesses          atomic.Uint64
 	vlogGenerationRemapFailures           atomic.Uint64
 	vlogGenerationRewriteBytesIn          atomic.Uint64
@@ -10863,7 +10866,7 @@ func (db *DB) Close() error {
 		db.syncDirBestEffort(db.dir)
 	}
 
-	db.retainedPruneWG.Wait()
+	db.waitForRetainedValueLogPrune()
 
 	if err := db.backend.Close(); err != nil {
 		errs = append(errs, err)
