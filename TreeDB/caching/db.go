@@ -2834,6 +2834,7 @@ func (db *DB) scheduleRetainedValueLogPrune() {
 			db.retainedPruneDone = nil
 			db.retainedPruneMu.Unlock()
 		}()
+		db.waitForForegroundMaintenanceQuiet()
 		db.pruneRetainedValueLogs()
 	}()
 }
@@ -3542,6 +3543,7 @@ type DB struct {
 	checkpointAutoVacuumLastPages         atomic.Uint64
 	checkpointAutoVacuumLastInternalP50   atomic.Uint64
 	checkpointAutoVacuumLastInternalAvg   atomic.Uint64
+	lastForegroundWriteUnixNano           atomic.Int64
 	retainedPruneMu                       sync.Mutex
 	retainedPruneDone                     chan struct{}
 	vlogGenerationRemapSuccesses          atomic.Uint64
@@ -3651,6 +3653,9 @@ const (
 	vlogGenerationGCMinBytes         = int64(1 << 20)
 	vlogGenerationRewriteMinInterval = 30 * time.Second
 	vlogGenerationGCMinInterval      = 60 * time.Second
+	// Best-effort background maintenance should not immediately compete with
+	// a just-active foreground write stream.
+	vlogForegroundQuietWindow = 2 * time.Second
 	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
 	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
 	vlogGenerationVacuumMinInterval         = 5 * time.Minute
@@ -5389,8 +5394,41 @@ func (db *DB) TriggerAutoCheckpoint() {
 	}
 }
 
+func (db *DB) foregroundWriteQuiet(now time.Time) bool {
+	if db == nil {
+		return true
+	}
+	last := db.lastForegroundWriteUnixNano.Load()
+	if last <= 0 {
+		return true
+	}
+	return now.Sub(time.Unix(0, last)) >= vlogForegroundQuietWindow
+}
+
+func (db *DB) waitForForegroundMaintenanceQuiet() {
+	if db == nil || vlogForegroundQuietWindow <= 0 {
+		return
+	}
+	timer := time.NewTicker(vlogGenerationLoopInterval / 10)
+	defer timer.Stop()
+	for {
+		if db.closing.Load() || db.foregroundWriteQuiet(time.Now()) {
+			return
+		}
+		select {
+		case <-db.closeCh:
+			return
+		case <-timer.C:
+		}
+	}
+}
+
 func (db *DB) noteWrite() {
-	if db == nil || !db.autoCheckpointOn.Load() {
+	if db == nil {
+		return
+	}
+	db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
+	if !db.autoCheckpointOn.Load() {
 		return
 	}
 	if db.disableJournal {
@@ -9599,6 +9637,9 @@ func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
 
 func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	if !runGC && !db.foregroundWriteQuiet(time.Now()) {
 		return
 	}
 	// In WAL-off mode, do not start rewrite/GC planning before the first
