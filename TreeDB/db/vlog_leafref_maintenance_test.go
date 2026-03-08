@@ -1198,10 +1198,10 @@ func TestValueLogRewriteOnline_WALOnLeafRefsPreserveNestedValueSegments(t *testi
 	db.SetLeafPageLog(leafLog)
 
 	const (
-		seedBatches = 12
+		seedBatches  = 12
 		keysPerBatch = 4096
-		valSize = 1024
-		valueLane = 253
+		valSize      = 1024
+		valueLane    = 253
 	)
 	for batchNum := 0; batchNum < seedBatches; batchNum++ {
 		ptrs := appendPointersInNewSegment(t, dir, valueLane, uint32(batchNum+1), uint64(batchNum*keysPerBatch+1), keysPerBatch, func(i int) []byte {

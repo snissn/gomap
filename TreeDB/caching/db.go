@@ -3648,7 +3648,6 @@ const (
 	vlogGenerationGCMinBytes         = int64(1 << 20)
 	vlogGenerationRewriteMinInterval = 30 * time.Second
 	vlogGenerationGCMinInterval      = 60 * time.Second
-	vlogGenerationRewriteMinAge      = 2 * time.Minute
 	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
 	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
 	vlogGenerationVacuumMinInterval         = 5 * time.Minute
@@ -9606,7 +9605,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	// caused real restore stalls. Keep WAL-on profiles eligible for maintenance
 	// before the first checkpoint; starving that path causes the main value-log
 	// lane to grow unchecked during restore.
-	if db.disableJournal && db.checkpointRuns.Load() == 0 {
+	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC {
 		return
 	}
 	db.waitForRetainedValueLogPrune()
@@ -9676,7 +9675,6 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			MaxSourceBytes:       maxSourceBytes,
 			MinSegmentStaleRatio: minStaleRatio,
 			MinSegmentStaleBytes: 1,
-			MinSegmentAge:        vlogGenerationRewriteMinAge,
 		})
 		cancel()
 		db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
@@ -9726,7 +9724,6 @@ planned:
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 					MaxSourceSegments: 0,
 					MaxSourceBytes:    maxSourceBytes,
-					MinSegmentAge:     vlogGenerationRewriteMinAge,
 				})
 				cancel()
 				if err != nil {
@@ -9775,7 +9772,6 @@ planned:
 				SyncEachBatch:   false,
 				MaxSegmentBytes: db.valueLogGenerationWarmTarget,
 				ProtectedPaths:  db.valueLogProtectedPaths(),
-				MinSegmentAge:   vlogGenerationRewriteMinAge,
 				ReserveRIDs: func(count int) (uint64, error) {
 					if count <= 0 {
 						return 0, nil
