@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -1196,5 +1197,85 @@ func TestGroupedRecordKeyForPtr_UsesFullOffsetWidth(t *testing.T) {
 	}
 	if keyA == keyB {
 		t.Fatalf("grouped record keys collided: %+v", keyA)
+	}
+}
+
+func TestSelectRewriteSourceSegments_SkipsFullyDeadSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte("a"), 100), 0o600); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte("b"), 100), 0o600); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	active := map[uint32]struct{}{}
+	liveByID := map[uint32]int64{
+		1: 0,  // fully dead; should be GC-only
+		2: 80, // partially stale; should remain eligible
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    2,
+		MinSegmentStaleBytes: 1,
+	}, files, active, liveByID)
+
+	if _, ok := selected[1]; ok {
+		t.Fatalf("fully dead segment 1 selected for rewrite: %v", selected)
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected partially live segment 2 selected, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_SkipsYoungSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	pathOld := filepath.Join(dir, "value-l0-000010.log")
+	pathYoung := filepath.Join(dir, "value-l0-000011.log")
+	if err := os.WriteFile(pathOld, bytes.Repeat([]byte("o"), 100), 0o600); err != nil {
+		t.Fatalf("write old path: %v", err)
+	}
+	if err := os.WriteFile(pathYoung, bytes.Repeat([]byte("y"), 100), 0o600); err != nil {
+		t.Fatalf("write young path: %v", err)
+	}
+	now := time.Now()
+	oldTime := now.Add(-5 * time.Minute)
+	youngTime := now.Add(-30 * time.Second)
+	if err := os.Chtimes(pathOld, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+	if err := os.Chtimes(pathYoung, youngTime, youngTime); err != nil {
+		t.Fatalf("chtimes young: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		10: {Path: pathOld},
+		11: {Path: pathYoung},
+	}
+	active := map[uint32]struct{}{}
+	liveByID := map[uint32]int64{
+		10: 80,
+		11: 80,
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    4,
+		MinSegmentStaleBytes: 1,
+		MinSegmentAge:        2 * time.Minute,
+	}, files, active, liveByID)
+
+	if _, ok := selected[11]; ok {
+		t.Fatalf("young segment 11 selected for rewrite: %v", selected)
+	}
+	if _, ok := selected[10]; !ok {
+		t.Fatalf("expected older segment 10 selected, got=%v", selected)
 	}
 }

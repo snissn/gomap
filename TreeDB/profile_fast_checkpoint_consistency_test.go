@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math/rand"
+	"strconv"
 	"testing"
 )
 
@@ -86,5 +87,134 @@ func TestProfileFast_CheckpointMaintainsLatestValues(t *testing.T) {
 			live := runCheckpointConsistencyWorkload(t, db, 2)
 			assertCheckpointConsistencyLiveSet(t, db, live)
 		})
+	}
+}
+
+func TestProfileFast_SetSyncRemainsVisibleAndPersistsAfterCheckpoint(t *testing.T) {
+	opts := OptionsFor(ProfileFast, t.TempDir())
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.FlushThreshold = 64 << 20
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.DisableBackgroundPrune = true
+	opts.MaxQueuedMemtables = -1
+	opts.WriterFlushMaxMemtables = 0
+	opts.WriterFlushMaxDuration = 0
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	live := make(map[int][]byte, 256)
+	for i := 0; i < 256; i++ {
+		key := profileFastKey(i)
+		value := bytes.Repeat([]byte{byte(i), byte(i >> 3), 0x5a, 0xc3}, 256)
+		if err := db.SetSync(key, value); err != nil {
+			t.Fatalf("SetSync key=%d: %v", i, err)
+		}
+		live[i] = append([]byte(nil), value...)
+		got, err := db.Get(key)
+		if err != nil {
+			t.Fatalf("immediate get key=%d: %v", i, err)
+		}
+		if !bytes.Equal(got, value) {
+			t.Fatalf("immediate get key=%d mismatch got_len=%d want_len=%d", i, len(got), len(value))
+		}
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	db, err = Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+
+	assertCheckpointConsistencyLiveSet(t, db, live)
+}
+
+func TestProfileFast_SetSyncDefersBackendCommitUntilCheckpoint(t *testing.T) {
+	opts := OptionsFor(ProfileFast, t.TempDir())
+	opts.ValueLog.ForcePointers = true
+	opts.ValueLog.PointerThreshold = 1
+	opts.FlushThreshold = 64 << 20
+	opts.BackgroundIndexVacuumInterval = -1
+	opts.BackgroundCheckpointInterval = -1
+	opts.BackgroundCheckpointIdleDuration = -1
+	opts.DisableBackgroundPrune = true
+	opts.MaxQueuedMemtables = -1
+	opts.WriterFlushMaxMemtables = 0
+	opts.WriterFlushMaxDuration = 0
+	opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	commitSeqBefore, err := strconv.ParseUint(db.Stats()["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse commit_seq before: %v", err)
+	}
+
+	key := profileFastKey(42)
+	value := bytes.Repeat([]byte("fast-sync-visible"), 256)
+	if err := db.SetSync(key, value); err != nil {
+		t.Fatalf("SetSync: %v", err)
+	}
+
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("immediate get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("immediate get mismatch got_len=%d want_len=%d", len(got), len(value))
+	}
+
+	commitSeqAfterSync, err := strconv.ParseUint(db.Stats()["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse commit_seq after sync: %v", err)
+	}
+	if commitSeqAfterSync != commitSeqBefore {
+		t.Fatalf("commit_seq after SetSync=%d want %d before checkpoint", commitSeqAfterSync, commitSeqBefore)
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	commitSeqAfterCheckpoint, err := strconv.ParseUint(db.Stats()["treedb.commit_seq"], 10, 64)
+	if err != nil {
+		t.Fatalf("parse commit_seq after checkpoint: %v", err)
+	}
+	if commitSeqAfterCheckpoint <= commitSeqAfterSync {
+		t.Fatalf("commit_seq after checkpoint=%d want > %d", commitSeqAfterCheckpoint, commitSeqAfterSync)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	db, err = Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+
+	got, err = db.Get(key)
+	if err != nil {
+		t.Fatalf("reopen get: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("reopen get mismatch got_len=%d want_len=%d", len(got), len(value))
 	}
 }

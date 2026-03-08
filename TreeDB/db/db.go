@@ -100,6 +100,7 @@ type DB struct {
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
 	commitMu         sync.Mutex
+	maintenanceMu    sync.Mutex
 	combineMu        sync.RWMutex
 	combineReqCh     chan *commitCombineReq
 	combineStopCh    chan struct{}
@@ -149,7 +150,9 @@ const (
 	DurabilityDurable DurabilityMode = iota
 	// DurabilityWALOnRelaxed keeps WAL enabled but disables fsync (crash-consistent).
 	DurabilityWALOnRelaxed
-	// DurabilityWALOffRelaxed disables WAL and fsync (unsafe; recent writes may be lost).
+	// DurabilityWALOffRelaxed disables WAL and fsync (unsafe; recent writes
+	// may be lost and sync calls may defer backend publication until a later
+	// checkpoint/flush boundary).
 	DurabilityWALOffRelaxed
 )
 

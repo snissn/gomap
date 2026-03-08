@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"testing"
 	"time"
 
@@ -322,6 +323,52 @@ func collectLeafRefs(t *testing.T, p *pager.Pager, rootID uint64) []uint64 {
 	return out
 }
 
+func collectNestedLeafValueLogFileCounts(t *testing.T, reader interface {
+	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
+}, p *pager.Pager, rootID uint64, sourceSet map[uint32]struct{}) map[uint32]int {
+	t.Helper()
+	out := make(map[uint32]int, 128)
+	if reader == nil || p == nil || rootID == 0 {
+		return out
+	}
+	for _, id := range collectLeafRefs(t, p, rootID) {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		if len(sourceSet) > 0 {
+			if _, ok := sourceSet[ptr.FileID]; !ok {
+				continue
+			}
+		}
+		leafPage, err := reader.ReadUnsafe(ptr)
+		if err != nil {
+			t.Fatalf("read leaf page file=%d offset=%d: %v", ptr.FileID, ptr.Offset, err)
+		}
+		if len(leafPage) != page.PageSize {
+			t.Fatalf("leaf page size file=%d offset=%d got=%d want=%d", ptr.FileID, ptr.Offset, len(leafPage), page.PageSize)
+		}
+		leaf := node.NewNodeView(leafPage)
+		if leaf.Type() != page.PageTypeLeaf {
+			t.Fatalf("expected leaf page in value log file=%d offset=%d, got type=%d", ptr.FileID, ptr.Offset, leaf.Type())
+		}
+		if !leaf.VerifyChecksum() {
+			t.Fatalf("leaf page checksum mismatch file=%d offset=%d", ptr.FileID, ptr.Offset)
+		}
+		for i := uint16(0); i < leaf.Count(); i++ {
+			_, _, valPtr, flags, err := leaf.GetLeafEntryView(i)
+			if err != nil {
+				t.Fatalf("GetLeafEntryView(file=%d, idx=%d): %v", ptr.FileID, i, err)
+			}
+			if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(valPtr.FileID) {
+				continue
+			}
+			out[valPtr.FileID]++
+		}
+	}
+	return out
+}
+
 func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T) {
 	dir := t.TempDir()
 
@@ -528,5 +575,767 @@ func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T)
 	want := bytes.Repeat([]byte{10}, valSize)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("value mismatch after reopen: got=%x want=%x", got, want)
+	}
+}
+
+func TestValueLogRewriteOnline_RewritesMultipleLeafRefSourceSegmentsAndReopensRW(t *testing.T) {
+	dir := t.TempDir()
+
+	var leafLog *rewriteWriter
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		if leafLog != nil {
+			_ = leafLog.Close()
+		}
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	leafLog = newRewriteWriter(walDir, 0, 0, 64<<10)
+	leafLog.blockCompression = false
+	leafLog.blockCodec = valuelog.BlockCodecSnappy
+	db.SetLeafPageLog(leafLog)
+
+	const (
+		keyCount = 24000
+		valSize  = 64
+	)
+	b := db.NewBatch().(*Batch)
+	for i := 0; i < keyCount; i++ {
+		key := []byte(fmt.Sprintf("k%06d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, valSize)
+		if err := b.Set(key, val); err != nil {
+			t.Fatalf("seed set %q: %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	state := db.State()
+	if state == nil {
+		t.Fatalf("missing state")
+	}
+	refs := collectLeafRefs(t, db.Pager(), state.RootPageID)
+	if len(refs) < 8 {
+		t.Fatalf("expected many leaf refs, got %d", len(refs))
+	}
+	refsByFile := make(map[uint32]int, 16)
+	for _, id := range refs {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		refsByFile[ptr.FileID]++
+	}
+
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	active := currentValueLogIDs(set)
+	if set != nil {
+		_ = db.valueLogManager.Release(set)
+	}
+
+	sourceIDs := make([]uint32, 0, 8)
+	for fileID, count := range refsByFile {
+		if count < 8 {
+			continue
+		}
+		if _, ok := active[fileID]; ok {
+			continue
+		}
+		sourceIDs = append(sourceIDs, fileID)
+	}
+	sort.Slice(sourceIDs, func(i, j int) bool { return sourceIDs[i] < sourceIDs[j] })
+	if len(sourceIDs) < 4 {
+		t.Fatalf("expected at least four non-active leafref source segments, got %d", len(sourceIDs))
+	}
+	sourceIDs = sourceIDs[:4]
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	stats, err := db.ValueLogRewriteOnline(ctx, ValueLogRewriteOnlineOptions{
+		BatchSize:     32,
+		SyncEachBatch: true,
+		SourceFileIDs: sourceIDs,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected rewrite to copy records, stats=%+v", stats)
+	}
+
+	state2 := db.State()
+	if state2 == nil {
+		t.Fatalf("missing state after rewrite")
+	}
+	refs2 := collectLeafRefs(t, db.Pager(), state2.RootPageID)
+	sourceSet := make(map[uint32]struct{}, len(sourceIDs))
+	for _, id := range sourceIDs {
+		sourceSet[id] = struct{}{}
+	}
+	for _, id := range refs2 {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		if _, ok := sourceSet[ptr.FileID]; ok {
+			t.Fatalf("leaf ref still points at rewritten source segment %d", ptr.FileID)
+		}
+	}
+
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("leafLog close: %v", err)
+	}
+	leafLog = nil
+	if err := db.Close(); err != nil {
+		t.Fatalf("db close: %v", err)
+	}
+	db = nil
+
+	reopen, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatalf("reopen rw: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("k000100"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	want := bytes.Repeat([]byte{byte(100 % 251)}, valSize)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after reopen: got=%x want=%x", got, want)
+	}
+}
+
+func TestValueLogRewriteOnline_PostRewriteWritesDoNotReintroduceLeafRefSources(t *testing.T) {
+	dir := t.TempDir()
+
+	var leafLog *rewriteWriter
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		if leafLog != nil {
+			_ = leafLog.Close()
+		}
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	leafLog = newRewriteWriter(walDir, 0, 0, 64<<10)
+	leafLog.blockCompression = false
+	leafLog.blockCodec = valuelog.BlockCodecSnappy
+	db.SetLeafPageLog(leafLog)
+
+	const (
+		keyCount = 24000
+		valSize  = 64
+	)
+	b := db.NewBatch().(*Batch)
+	for i := 0; i < keyCount; i++ {
+		key := []byte(fmt.Sprintf("k%06d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, valSize)
+		if err := b.Set(key, val); err != nil {
+			t.Fatalf("seed set %q: %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	state := db.State()
+	if state == nil {
+		t.Fatalf("missing state")
+	}
+	refs := collectLeafRefs(t, db.Pager(), state.RootPageID)
+	refsByFile := make(map[uint32]int, 16)
+	for _, id := range refs {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		refsByFile[ptr.FileID]++
+	}
+
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	active := currentValueLogIDs(set)
+	if set != nil {
+		_ = db.valueLogManager.Release(set)
+	}
+
+	sourceIDs := make([]uint32, 0, 8)
+	for fileID, count := range refsByFile {
+		if count < 8 {
+			continue
+		}
+		if _, ok := active[fileID]; ok {
+			continue
+		}
+		sourceIDs = append(sourceIDs, fileID)
+	}
+	sort.Slice(sourceIDs, func(i, j int) bool { return sourceIDs[i] < sourceIDs[j] })
+	if len(sourceIDs) < 4 {
+		t.Fatalf("expected at least four non-active leafref source segments, got %d", len(sourceIDs))
+	}
+	sourceIDs = sourceIDs[:4]
+	sourceSet := make(map[uint32]struct{}, len(sourceIDs))
+	for _, id := range sourceIDs {
+		sourceSet[id] = struct{}{}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if _, err := db.ValueLogRewriteOnline(ctx, ValueLogRewriteOnlineOptions{
+		BatchSize:     32,
+		SyncEachBatch: true,
+		SourceFileIDs: sourceIDs,
+	}); err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+
+	postRewriteRefs := collectLeafRefs(t, db.Pager(), db.State().RootPageID)
+	for _, id := range postRewriteRefs {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		if _, ok := sourceSet[ptr.FileID]; ok {
+			t.Fatalf("leaf ref still points at rewritten source segment %d after rewrite", ptr.FileID)
+		}
+	}
+
+	post := db.NewBatch().(*Batch)
+	for i := 0; i < 2048; i++ {
+		key := []byte(fmt.Sprintf("post-%06d", i))
+		val := bytes.Repeat([]byte{byte((i + 17) % 251)}, valSize)
+		if err := post.Set(key, val); err != nil {
+			t.Fatalf("post set %q: %v", key, err)
+		}
+	}
+	if err := post.WriteSync(); err != nil {
+		t.Fatalf("post write: %v", err)
+	}
+	_ = post.Close()
+
+	postWriteRefs := collectLeafRefs(t, db.Pager(), db.State().RootPageID)
+	for _, id := range postWriteRefs {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		if _, ok := sourceSet[ptr.FileID]; ok {
+			t.Fatalf("post-rewrite write reintroduced source segment %d", ptr.FileID)
+		}
+	}
+
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("leafLog close: %v", err)
+	}
+	leafLog = nil
+	if err := db.Close(); err != nil {
+		t.Fatalf("db close: %v", err)
+	}
+	db = nil
+
+	reopen, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatalf("reopen rw: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("post-000042"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	want := bytes.Repeat([]byte{byte((42 + 17) % 251)}, valSize)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after reopen")
+	}
+}
+
+func TestValueLogRewriteOnline_UnsyncedLeafRefRewriteRemainsReopenable(t *testing.T) {
+	dir := t.TempDir()
+
+	var leafLog *rewriteWriter
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		if leafLog != nil {
+			_ = leafLog.Close()
+		}
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	leafLog = newRewriteWriter(walDir, 0, 0, 64<<10)
+	leafLog.blockCompression = false
+	leafLog.blockCodec = valuelog.BlockCodecSnappy
+	db.SetLeafPageLog(leafLog)
+
+	const (
+		keyCount = 24000
+		valSize  = 64
+	)
+	b := db.NewBatch().(*Batch)
+	for i := 0; i < keyCount; i++ {
+		key := []byte(fmt.Sprintf("k%06d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, valSize)
+		if err := b.Set(key, val); err != nil {
+			t.Fatalf("seed set %q: %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	refs := collectLeafRefs(t, db.Pager(), db.State().RootPageID)
+	refsByFile := make(map[uint32]int, 16)
+	for _, id := range refs {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		refsByFile[ptr.FileID]++
+	}
+
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	active := currentValueLogIDs(set)
+	if set != nil {
+		_ = db.valueLogManager.Release(set)
+	}
+
+	sourceIDs := make([]uint32, 0, 8)
+	for fileID, count := range refsByFile {
+		if count < 8 {
+			continue
+		}
+		if _, ok := active[fileID]; ok {
+			continue
+		}
+		sourceIDs = append(sourceIDs, fileID)
+	}
+	sort.Slice(sourceIDs, func(i, j int) bool { return sourceIDs[i] < sourceIDs[j] })
+	if len(sourceIDs) < 4 {
+		t.Fatalf("expected at least four non-active leafref source segments, got %d", len(sourceIDs))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if _, err := db.ValueLogRewriteOnline(ctx, ValueLogRewriteOnlineOptions{
+		BatchSize:     32,
+		SyncEachBatch: false,
+		SourceFileIDs: sourceIDs[:4],
+	}); err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("leafLog close: %v", err)
+	}
+	leafLog = nil
+	if err := db.Close(); err != nil {
+		t.Fatalf("db close: %v", err)
+	}
+	db = nil
+
+	reopen, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatalf("reopen rw: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("k000100"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	want := bytes.Repeat([]byte{byte(100 % 251)}, valSize)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after reopen: got=%x want=%x", got, want)
+	}
+}
+
+func TestValueLogRewriteOnline_UnsyncedRewriteThenVacuumRemainsReopenable(t *testing.T) {
+	dir := t.TempDir()
+
+	var leafLog *rewriteWriter
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		if leafLog != nil {
+			_ = leafLog.Close()
+		}
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	leafLog = newRewriteWriter(walDir, 0, 0, 64<<10)
+	leafLog.blockCompression = false
+	leafLog.blockCodec = valuelog.BlockCodecSnappy
+	db.SetLeafPageLog(leafLog)
+
+	const (
+		keyCount = 24000
+		valSize  = 64
+	)
+	b := db.NewBatch().(*Batch)
+	for i := 0; i < keyCount; i++ {
+		key := []byte(fmt.Sprintf("k%06d", i))
+		val := bytes.Repeat([]byte{byte(i % 251)}, valSize)
+		if err := b.Set(key, val); err != nil {
+			t.Fatalf("seed set %q: %v", key, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	refs := collectLeafRefs(t, db.Pager(), db.State().RootPageID)
+	refsByFile := make(map[uint32]int, 16)
+	for _, id := range refs {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		refsByFile[ptr.FileID]++
+	}
+
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	active := currentValueLogIDs(set)
+	if set != nil {
+		_ = db.valueLogManager.Release(set)
+	}
+
+	sourceIDs := make([]uint32, 0, 8)
+	for fileID, count := range refsByFile {
+		if count < 8 {
+			continue
+		}
+		if _, ok := active[fileID]; ok {
+			continue
+		}
+		sourceIDs = append(sourceIDs, fileID)
+	}
+	sort.Slice(sourceIDs, func(i, j int) bool { return sourceIDs[i] < sourceIDs[j] })
+	if len(sourceIDs) < 4 {
+		t.Fatalf("expected at least four non-active leafref source segments, got %d", len(sourceIDs))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	stats, err := db.ValueLogRewriteOnline(ctx, ValueLogRewriteOnlineOptions{
+		BatchSize:     32,
+		SyncEachBatch: false,
+		SourceFileIDs: sourceIDs[:4],
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected rewrite copies")
+	}
+	if err := db.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("VacuumIndexOnline: %v", err)
+	}
+
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("leafLog close: %v", err)
+	}
+	leafLog = nil
+	if err := db.Close(); err != nil {
+		t.Fatalf("db close: %v", err)
+	}
+	db = nil
+
+	reopen, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOffRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+	})
+	if err != nil {
+		t.Fatalf("reopen rw: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("k000100"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	want := bytes.Repeat([]byte{byte(100 % 251)}, valSize)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after reopen: got=%x want=%x", got, want)
+	}
+}
+
+func TestValueLogRewriteOnline_WALOnLeafRefsPreserveNestedValueSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	var leafLog *rewriteWriter
+	db, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOnRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		if leafLog != nil {
+			_ = leafLog.Close()
+		}
+		if db != nil {
+			_ = db.Close()
+		}
+	}()
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	leafLog = newRewriteWriter(walDir, 0, 0, 64<<10)
+	leafLog.blockCompression = false
+	leafLog.blockCodec = valuelog.BlockCodecSnappy
+	db.SetLeafPageLog(leafLog)
+
+	const (
+		seedBatches = 12
+		keysPerBatch = 4096
+		valSize = 1024
+		valueLane = 253
+	)
+	for batchNum := 0; batchNum < seedBatches; batchNum++ {
+		ptrs := appendPointersInNewSegment(t, dir, valueLane, uint32(batchNum+1), uint64(batchNum*keysPerBatch+1), keysPerBatch, func(i int) []byte {
+			return bytes.Repeat([]byte{byte((batchNum + i) % 251)}, valSize)
+		})
+		b := db.NewBatch().(*Batch)
+		for i, ptr := range ptrs {
+			key := []byte(fmt.Sprintf("seed-%02d-%05d", batchNum, i))
+			if err := b.SetPointer(key, ptr); err != nil {
+				t.Fatalf("seed set batch=%d key=%d: %v", batchNum, i, err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("seed write batch=%d: %v", batchNum, err)
+		}
+		_ = b.Close()
+	}
+
+	state := db.State()
+	if state == nil {
+		t.Fatalf("missing state")
+	}
+	refs := collectLeafRefs(t, db.Pager(), state.RootPageID)
+	if len(refs) < 8 {
+		t.Fatalf("expected many leaf refs, got %d", len(refs))
+	}
+	refsByFile := make(map[uint32]int, 32)
+	for _, id := range refs {
+		ptr, ok := page.DecodeLeafRef(id)
+		if !ok {
+			continue
+		}
+		refsByFile[ptr.FileID]++
+	}
+
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	active := currentValueLogIDs(set)
+	if set != nil {
+		_ = db.valueLogManager.Release(set)
+	}
+
+	sourceIDs := make([]uint32, 0, 8)
+	for fileID, count := range refsByFile {
+		if count < 8 {
+			continue
+		}
+		if _, ok := active[fileID]; ok {
+			continue
+		}
+		sourceIDs = append(sourceIDs, fileID)
+	}
+	sort.Slice(sourceIDs, func(i, j int) bool { return sourceIDs[i] < sourceIDs[j] })
+	if len(sourceIDs) < 4 {
+		t.Fatalf("expected at least four non-active leafref source segments, got %d", len(sourceIDs))
+	}
+	sourceIDs = sourceIDs[:4]
+	sourceSet := make(map[uint32]struct{}, len(sourceIDs))
+	for _, id := range sourceIDs {
+		sourceSet[id] = struct{}{}
+	}
+
+	nestedCounts := collectNestedLeafValueLogFileCounts(t, db.valueLogManager, db.Pager(), state.RootPageID, sourceSet)
+	if len(nestedCounts) == 0 {
+		t.Fatalf("expected nested value-log pointers inside rewritten leaf pages")
+	}
+	nonActiveNested := make([]uint32, 0, len(nestedCounts))
+	for fileID, count := range nestedCounts {
+		if count == 0 {
+			continue
+		}
+		if _, ok := active[fileID]; ok {
+			continue
+		}
+		nonActiveNested = append(nonActiveNested, fileID)
+	}
+	sort.Slice(nonActiveNested, func(i, j int) bool { return nonActiveNested[i] < nonActiveNested[j] })
+	if len(nonActiveNested) == 0 {
+		t.Fatalf("expected non-active nested value-log segments referenced by source leaf pages")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	stats, err := db.ValueLogRewriteOnline(ctx, ValueLogRewriteOnlineOptions{
+		BatchSize:     32,
+		SyncEachBatch: true,
+		SourceFileIDs: sourceIDs,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected rewrite copies, stats=%+v", stats)
+	}
+
+	for _, fileID := range nonActiveNested {
+		lane, seq := valuelog.DecodeFileID(fileID)
+		path := filepath.Join(walDir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("nested live value-log segment removed file=%d path=%s err=%v", fileID, path, err)
+		}
+	}
+
+	if err := leafLog.Close(); err != nil {
+		t.Fatalf("leafLog close: %v", err)
+	}
+	leafLog = nil
+	if err := db.Close(); err != nil {
+		t.Fatalf("db close: %v", err)
+	}
+	db = nil
+
+	reopen, err := Open(Options{
+		Dir:                        dir,
+		Durability:                 DurabilityWALOnRelaxed,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		LeafPrefixCompression:      true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("reopen rw: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get([]byte("seed-03-00123"))
+	if err != nil {
+		t.Fatalf("get after reopen: %v", err)
+	}
+	want := bytes.Repeat([]byte{byte((3 + 123) % 251)}, valSize)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("value mismatch after reopen")
 	}
 }

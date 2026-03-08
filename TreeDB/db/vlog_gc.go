@@ -52,6 +52,8 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if db.readOnly {
 		return stats, ErrReadOnly
 	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}

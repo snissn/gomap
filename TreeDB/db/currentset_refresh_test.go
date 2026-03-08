@@ -247,6 +247,62 @@ func TestOuterLeafCommitPublishesRegisteredSegmentWithoutExplicitRefresh(t *test
 	}
 }
 
+func TestRegisterValueLogSegment_DoesNotPublishCurrentSetWithoutExplicitRefresh(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing initial value-log set")
+	}
+
+	fileID, err := valuelog.EncodeFileID(7, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "wal", "value-l7-000001.log")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(wal): %v", err)
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("x"), 256)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+
+	st2 := d.State()
+	if st2 == nil || st2.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set after register")
+	}
+	if _, ok := st2.ValueLogSet.Files[fileID]; ok {
+		t.Fatalf("registered segment %d unexpectedly published without refresh", fileID)
+	}
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	st3 := d.State()
+	if st3 == nil || st3.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set after refresh")
+	}
+	if _, ok := st3.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("registered segment %d missing after explicit refresh", fileID)
+	}
+}
+
 func TestCurrentSetRefresh_InlineThenPointerThenInline(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})

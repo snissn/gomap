@@ -772,7 +772,8 @@ const (
 	envDisableVlogGenerationRewrite = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
 	envDisableVlogGenerationGC      = "TREEDB_DISABLE_VLOG_GENERATION_GC"
 	envDisableVlogGenerationVacuum  = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
-
+	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
+	envDisableCheckpointAutoVacuum   = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
 	minMemtablePrealloc              = 64 * 1024
 	maxMemtablePrealloc              = 256 << 20
 	adaptiveMinWrites                = 1024
@@ -2556,6 +2557,47 @@ func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 	if db == nil || !db.valueLogEnabled() {
 		return make(map[uint32]struct{}), nil
 	}
+	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+		if err := refresher.RefreshValueLogSet(); err != nil {
+			return nil, err
+		}
+	}
+	live := make(map[uint32]struct{})
+	if snapper, ok := db.backend.(interface{ AcquireSnapshot() *backenddb.Snapshot }); ok {
+		snap := snapper.AcquireSnapshot()
+		if snap != nil {
+			state := snap.State()
+			p := snap.Pager()
+			if state != nil && p != nil {
+				reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
+				if state.RootPageID != 0 {
+					if err := db.collectIteratorValueLogLiveIDs(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live); err != nil {
+						_ = snap.Close()
+						return nil, err
+					}
+				}
+				if state.SystemRootPageID != 0 {
+					if err := db.collectIteratorValueLogLiveIDs(tree.New(p, reader, state.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live); err != nil {
+						_ = snap.Close()
+						return nil, err
+					}
+				}
+				if err := collectLeafRefValueLogLiveIDs(p, state.RootPageID, reader, live); err != nil {
+					_ = snap.Close()
+					return nil, err
+				}
+				if err := collectLeafRefValueLogLiveIDs(p, state.SystemRootPageID, reader, live); err != nil {
+					_ = snap.Close()
+					return nil, err
+				}
+			}
+			if err := snap.Close(); err != nil {
+				return nil, err
+			}
+			return live, nil
+		}
+	}
+
 	var (
 		it  iterator.UnsafeIterator
 		err error
@@ -2568,48 +2610,29 @@ func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer it.Close()
+	if err := db.collectIteratorValueLogLiveIDs(it, live); err != nil {
+		return nil, err
+	}
 
-	live := make(map[uint32]struct{})
+	return live, nil
+}
+
+func (db *DB) collectIteratorValueLogLiveIDs(it iterator.UnsafeIterator, live map[uint32]struct{}) error {
+	if it == nil {
+		return nil
+	}
+	defer it.Close()
 	for it.Valid() {
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			live[ptr.FileID] = struct{}{}
 			if err := db.collectNestedValueLogLiveIDsFromOuterLeaf(ptr, live); err != nil {
-				if err := it.Close(); err != nil {
-					return nil, err
-				}
-				return nil, err
+				return err
 			}
 		}
 		it.Next()
 	}
-	if err := it.Error(); err != nil {
-		return nil, err
-	}
-
-	if snapper, ok := db.backend.(interface{ AcquireSnapshot() *backenddb.Snapshot }); ok {
-		snap := snapper.AcquireSnapshot()
-		if snap != nil {
-			state := snap.State()
-			p := snap.Pager()
-			if state != nil && p != nil {
-				if err := collectLeafRefValueLogLiveIDs(p, state.RootPageID, live); err != nil {
-					_ = snap.Close()
-					return nil, err
-				}
-				if err := collectLeafRefValueLogLiveIDs(p, state.SystemRootPageID, live); err != nil {
-					_ = snap.Close()
-					return nil, err
-				}
-			}
-			if err := snap.Close(); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	return live, nil
+	return it.Error()
 }
 
 func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live map[uint32]struct{}) error {
@@ -2809,6 +2832,9 @@ func (db *DB) scheduleRetainedValueLogPrune() {
 	if db == nil || !db.valueLogEnabled() {
 		return
 	}
+	if db.testSkipRetainedPrune {
+		return
+	}
 	if !db.retainedPruneRunning.CompareAndSwap(false, true) {
 		return
 	}
@@ -2818,6 +2844,54 @@ func (db *DB) scheduleRetainedValueLogPrune() {
 		defer db.retainedPruneRunning.Store(false)
 		db.pruneRetainedValueLogs()
 	}()
+}
+
+func (db *DB) waitForRetainedValueLogPrune() {
+	if db == nil || !db.valueLogEnabled() {
+		return
+	}
+	if !db.retainedPruneRunning.Load() {
+		return
+	}
+	db.retainedPruneWG.Wait()
+}
+
+func (db *DB) checkpointForBackendMaintenance() error {
+	return db.runWithBackendMaintenance(nil)
+}
+
+func (db *DB) runWithBackendMaintenance(fn func() error) error {
+	if db == nil {
+		if fn != nil {
+			return fn()
+		}
+		return nil
+	}
+	db.checkpointMu.Lock()
+	for db.checkpointing.Load() || db.maintenanceActive.Load() {
+		db.checkpointCond.Wait()
+	}
+	db.maintenanceActive.Store(true)
+	db.checkpointMu.Unlock()
+	defer func() {
+		db.checkpointMu.Lock()
+		db.maintenanceActive.Store(false)
+		db.checkpointCond.Broadcast()
+		db.checkpointMu.Unlock()
+	}()
+	if err := db.Checkpoint(); err != nil {
+		return err
+	}
+	db.waitForRetainedValueLogPrune()
+	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
+		if err := refresher.RefreshValueLogSet(); err != nil {
+			return err
+		}
+	}
+	if fn != nil {
+		return fn()
+	}
+	return nil
 }
 
 func hashKey(key []byte) uint64 {
@@ -3237,9 +3311,10 @@ type DB struct {
 
 	// Commit workers removed; backend commits are synchronous.
 
-	checkpointMu   sync.Mutex
-	checkpointCond *sync.Cond
-	checkpointing  atomic.Bool
+	checkpointMu      sync.Mutex
+	checkpointCond    *sync.Cond
+	checkpointing     atomic.Bool
+	maintenanceActive atomic.Bool
 
 	// Level 0 (Memory)
 	mutableShards           []memShard
@@ -3292,9 +3367,10 @@ type DB struct {
 	nextRID       atomic.Uint64
 
 	// Legacy flags removed from public options; retained internally for code paths.
-	disableValueLog          bool
-	splitValueLog            bool
-	memtableValueLogPointers bool
+	disableValueLog            bool
+	splitValueLog              bool
+	memtableValueLogPointers   bool
+	indexOuterLeavesInValueLog bool
 
 	inlineThreshold                int
 	valueLogThreshold              int
@@ -3542,11 +3618,12 @@ type DB struct {
 	publishWatermarkLagMu            sync.Mutex
 	publishWatermarkLastBacklogBytes int64
 	publishWatermarkLastUnixNano     int64
-
 	// testing hooks
-	testOnVlogFlush      func(laneID int)
-	testOnVlogSync       func(laneID int)
-	testBeforeVlogUnlock func(laneID int)
+	testOnVlogFlush              func(laneID int)
+	testOnVlogSync               func(laneID int)
+	testBeforeVlogUnlock         func(laneID int)
+	testSkipRetainedPrune        bool
+	testSkipCheckpointAutoVacuum bool
 }
 
 const (
@@ -3571,6 +3648,7 @@ const (
 	vlogGenerationGCMinBytes         = int64(1 << 20)
 	vlogGenerationRewriteMinInterval = 30 * time.Second
 	vlogGenerationGCMinInterval      = 60 * time.Second
+	vlogGenerationRewriteMinAge      = 2 * time.Minute
 	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
 	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
 	vlogGenerationVacuumMinInterval         = 5 * time.Minute
@@ -4977,6 +5055,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		valueLogRewriteTriggerBytes:          valueLogRewriteTriggerBytes,
 		valueLogRewriteTriggerChurn:          valueLogRewriteTriggerChurn,
 		memtableValueLogPointers:             true,
+		indexOuterLeavesInValueLog:           opts.IndexOuterLeavesInValueLog,
 		valueLogReader:                       valueLogReader,
 		valueLogRetain:                       retained,
 		debugFlushPointers:                   debugFlushPointers,
@@ -9520,6 +9599,17 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
+	// In WAL-off mode, do not start rewrite/GC planning before the first
+	// explicit checkpoint. During snapshot restore, the app can issue large
+	// volumes of writes while local height is still 0. Background value-log
+	// maintenance at that stage competes with import/publication work and has
+	// caused real restore stalls. Keep WAL-on profiles eligible for maintenance
+	// before the first checkpoint; starving that path causes the main value-log
+	// lane to grow unchecked during restore.
+	if db.disableJournal && db.checkpointRuns.Load() == 0 {
+		return
+	}
+	db.waitForRetainedValueLogPrune()
 	if db.checkpointing.Load() {
 		return
 	}
@@ -9586,6 +9676,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			MaxSourceBytes:       maxSourceBytes,
 			MinSegmentStaleRatio: minStaleRatio,
 			MinSegmentStaleBytes: 1,
+			MinSegmentAge:        vlogGenerationRewriteMinAge,
 		})
 		cancel()
 		db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
@@ -9616,44 +9707,26 @@ planned:
 			}
 		}
 	}
-	if shouldRewrite && hasRewriter {
-		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
-		db.vlogGenerationLastReason.Store(reason)
-		// Establish a stable backend boundary before rewriting value-log pointers.
-		// Online rewrite scans and publishes pointer swaps against the backend
-		// index; without draining cached writes first, it can miss in-memory
-		// pointers and subsequently mark still-needed segments as zombies.
-		if err := db.Checkpoint(); err != nil {
-			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-			db.vlogGenerationRemapFailures.Add(1)
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("cachingdb: generational rewrite checkpoint: %w", err))
-			}
-			return
+	if shouldRewrite && hasRewriter && !haveRewritePlan && hasPlanner {
+		maxSourceBytes := db.vlogGenerationRewriteBudgetTokensBytes.Load()
+		if maxSourceBytes < 0 {
+			maxSourceBytes = 0
 		}
-		now = time.Now()
-		db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
-		maxSourceBytes := int64(0)
-		if !haveRewritePlan {
-			maxSourceBytes = db.vlogGenerationRewriteBudgetTokensBytes.Load()
-			if maxSourceBytes < 0 {
-				maxSourceBytes = 0
-			}
-			// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". In
-			// token-bucket mode, an empty bucket means "wait", not "run an
-			// unbounded rewrite".
-			if maxSourceBytes == 0 && db.vlogGenerationRewriteBudgetEnabled() {
-				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
-				return
-			}
+		// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". In
+		// token-bucket mode, an empty bucket means "wait", not "run an unbounded
+		// rewrite".
+		if maxSourceBytes == 0 && db.vlogGenerationRewriteBudgetEnabled() {
+			shouldRewrite = false
+		} else {
 			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 				maxSourceBytes = totalBytes
 			}
-			if maxSourceBytes > 0 && hasPlanner {
+			if maxSourceBytes > 0 {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 					MaxSourceSegments: 0,
 					MaxSourceBytes:    maxSourceBytes,
+					MinSegmentAge:     vlogGenerationRewriteMinAge,
 				})
 				cancel()
 				if err != nil {
@@ -9665,52 +9738,83 @@ planned:
 					return
 				}
 				if len(plan.SourceFileIDs) == 0 {
+					shouldRewrite = false
+				} else {
+					rewritePlan = plan
+					haveRewritePlan = true
+				}
+			}
+		}
+	}
+	if shouldRewrite && hasRewriter {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+		db.vlogGenerationLastReason.Store(reason)
+		err := db.runWithBackendMaintenance(func() error {
+			now = time.Now()
+			db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
+			maxSourceBytes := int64(0)
+			if !haveRewritePlan {
+				maxSourceBytes = db.vlogGenerationRewriteBudgetTokensBytes.Load()
+				if maxSourceBytes < 0 {
+					maxSourceBytes = 0
+				}
+				// ValueLogRewriteOnline interprets MaxSourceBytes=0 as "no limit". In
+				// token-bucket mode, an empty bucket means "wait", not "run an
+				// unbounded rewrite".
+				if maxSourceBytes == 0 && db.vlogGenerationRewriteBudgetEnabled() {
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
-					return
+					return nil
 				}
-				rewritePlan = plan
-				haveRewritePlan = true
+				if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
+					maxSourceBytes = totalBytes
+				}
 			}
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
-			BatchSize:       db.valueLogRewriteBatchSize(),
-			SyncEachBatch:   false,
-			MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-			ProtectedPaths:  db.valueLogProtectedPaths(),
-			ReserveRIDs: func(count int) (uint64, error) {
-				if count <= 0 {
-					return 0, nil
-				}
-				end := db.nextRID.Add(uint64(count))
-				start := end - uint64(count) + 1
-				if start == 0 || end < start {
-					return 0, fmt.Errorf("value-log rid space exhausted")
-				}
-				return start, nil
-			},
-		}
-		if haveRewritePlan {
-			rewriteOpts.SourceFileIDs = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-		} else {
-			rewriteOpts.MaxSourceSegments = 0
-			rewriteOpts.MaxSourceBytes = maxSourceBytes
-			rewriteOpts.MinSegmentStaleRatio = func() float64 {
-				if db.valueLogRewriteTriggerRatioPPM <= 0 {
-					return 0
-				}
-				return float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
-			}()
-		}
-		stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
-		cancel()
-		if err != nil {
-			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-			db.vlogGenerationRemapFailures.Add(1)
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("cachingdb: generational rewrite: %w", err))
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
+				BatchSize:       db.valueLogRewriteBatchSize(),
+				SyncEachBatch:   false,
+				MaxSegmentBytes: db.valueLogGenerationWarmTarget,
+				ProtectedPaths:  db.valueLogProtectedPaths(),
+				MinSegmentAge:   vlogGenerationRewriteMinAge,
+				ReserveRIDs: func(count int) (uint64, error) {
+					if count <= 0 {
+						return 0, nil
+					}
+					end := db.nextRID.Add(uint64(count))
+					start := end - uint64(count) + 1
+					if start == 0 || end < start {
+						return 0, fmt.Errorf("value-log rid space exhausted")
+					}
+					return start, nil
+				},
 			}
-		} else {
+			if haveRewritePlan {
+				rewriteOpts.SourceFileIDs = append([]uint32(nil), rewritePlan.SourceFileIDs...)
+			} else {
+				rewriteOpts.MaxSourceSegments = 0
+				rewriteOpts.MaxSourceBytes = maxSourceBytes
+				rewriteOpts.MinSegmentStaleRatio = func() float64 {
+					if db.valueLogRewriteTriggerRatioPPM <= 0 {
+						return 0
+					}
+					return float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
+				}()
+			}
+			stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
+			cancel()
+			if err != nil {
+				return fmt.Errorf("generational rewrite: %w", err)
+			}
+			if gcer, ok := db.backend.(backendValueLogGCer); ok {
+				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
+					ProtectedPaths: db.valueLogProtectedPaths(),
+				})
+				gcCancel()
+				if gcErr != nil {
+					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
+				}
+			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
 			rewriteBytesIn := int64(0)
@@ -9742,6 +9846,14 @@ planned:
 				db.vlogGenerationConsumeRewriteBudgetBytes(consumed)
 			}
 			db.maybeRunVlogGenerationIndexVacuum(int64(stats.BytesBefore))
+			return nil
+		})
+		if err != nil {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+			db.vlogGenerationRemapFailures.Add(1)
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: %w", err))
+			}
 		}
 	}
 
@@ -9755,8 +9867,21 @@ planned:
 	if queueLen != 0 {
 		return
 	}
-	if !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps) {
+	gcer, ok := db.backend.(backendValueLogGCer)
+	if !ok {
 		return
+	}
+	if !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps) {
+		gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
+		if err != nil {
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: generational gc dry-run: %w", err))
+			}
+			return
+		}
+		if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
+			return
+		}
 	}
 	now = time.Now()
 	lastGC := db.vlogGenerationLastGCUnixNano.Load()
@@ -9766,42 +9891,34 @@ planned:
 			return
 		}
 	}
-	gcer, ok := db.backend.(backendValueLogGCer)
-	if !ok {
-		return
-	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
-	// Establish a stable backend boundary before computing reachability. A GC
-	// pass that scans only the backend index can otherwise miss in-memory
-	// pointers (e.g. mutable memtables) and delete still-needed segments.
-	if err := db.Checkpoint(); err != nil {
-		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-		if db.notifyError != nil {
-			db.notifyError(fmt.Errorf("cachingdb: generational gc checkpoint: %w", err))
+	err := db.runWithBackendMaintenance(func() error {
+		now = time.Now()
+		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
+		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("generational gc: %w", err)
 		}
-		return
-	}
-	now = time.Now()
-	db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
-	gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
-	cancel()
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+		db.vlogGenerationGCRuns.Add(1)
+		if gcStats.SegmentsDeleted > 0 {
+			db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
+		}
+		if gcStats.BytesDeleted > 0 {
+			db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
+		}
+		return nil
+	})
 	if err != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 		if db.notifyError != nil {
-			db.notifyError(fmt.Errorf("cachingdb: generational gc: %w", err))
+			db.notifyError(fmt.Errorf("cachingdb: %w", err))
 		}
 		return
-	}
-	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
-	db.vlogGenerationGCRuns.Add(1)
-	if gcStats.SegmentsDeleted > 0 {
-		db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
-	}
-	if gcStats.BytesDeleted > 0 {
-		db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
 	}
 }
 
@@ -9822,19 +9939,18 @@ func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
 	}
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPostRewriteVacuum)
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
-	// Ensure cached writes are drained before swapping index.db underneath
-	// cached-mode readers. This mirrors the public VacuumIndexOnline behavior.
-	if err := db.Checkpoint(); err != nil {
-		db.vlogGenerationVacuumFailures.Add(1)
-		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-		if db.notifyError != nil {
-			db.notifyError(fmt.Errorf("cachingdb: generational index vacuum checkpoint: %w", err))
-		}
-		return
+	runVacuum := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := vacuumer.VacuumIndexOnline(ctx)
+		cancel()
+		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	err := vacuumer.VacuumIndexOnline(ctx)
-	cancel()
+	var err error
+	if db.maintenanceActive.Load() {
+		err = runVacuum()
+	} else {
+		err = db.runWithBackendMaintenance(runVacuum)
+	}
 	if err != nil {
 		db.vlogGenerationVacuumFailures.Add(1)
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -9879,6 +9995,18 @@ func (db *DB) shouldRunVlogGenerationGC(retained valueLogRetainedGenerationStats
 		return true
 	}
 	return false
+}
+
+func (db *DB) estimateVlogGenerationGCEligible(gcer backendValueLogGCer) (backenddb.ValueLogGCStats, error) {
+	if db == nil || gcer == nil {
+		return backenddb.ValueLogGCStats{}, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
+		DryRun:         true,
+		ProtectedPaths: db.valueLogProtectedPaths(),
+	})
 }
 
 func (db *DB) vlogGenerationEstimateChurnBps() int64 {
@@ -10013,11 +10141,11 @@ func (db *DB) thresholdsLocked() (slowdownBytes, stopBytes, resumeBytes int64) {
 }
 
 func (db *DB) waitForCheckpoint() {
-	if !db.checkpointing.Load() {
+	if !db.checkpointing.Load() && !db.maintenanceActive.Load() {
 		return
 	}
 	db.checkpointMu.Lock()
-	for db.checkpointing.Load() {
+	for db.checkpointing.Load() || db.maintenanceActive.Load() {
 		db.checkpointCond.Wait()
 	}
 	db.checkpointMu.Unlock()
@@ -10067,6 +10195,21 @@ func parseCheckpointFragUint(report map[string]string, key string) (uint64, bool
 
 func (db *DB) maybeVacuumSparseIndexOnCheckpoint() error {
 	if db == nil || !db.disableJournal {
+		return nil
+	}
+	// When outer leaves already live in the value log, checkpoint-time online
+	// vacuum is too expensive for the fast profile. Even with leaf-ref-preserving
+	// vacuum, swapping index.db during every catch-up window materially hurts live
+	// progress, and the outer-leaf tree does not need this automatic path to stay
+	// correct. Keep manual/public vacuum available; skip the automatic checkpoint
+	// trigger for this layout.
+	if db.indexOuterLeavesInValueLog {
+		return nil
+	}
+	if envBool(envDisableCheckpointAutoVacuum) {
+		return nil
+	}
+	if db.testSkipCheckpointAutoVacuum {
 		return nil
 	}
 	frag, ok := db.backend.(backendIndexFragmenter)
@@ -10584,6 +10727,7 @@ func (db *DB) Close() error {
 	hadMemtables := false
 	db.closing.Store(true)
 	db.stopDomainIngressWorkers()
+	db.waitForRetainedValueLogPrune()
 
 	// Lock order must match Checkpoint (flushMu -> writeMu) to avoid a deadlock
 	// with the auto-checkpoint goroutine:
@@ -10794,6 +10938,16 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 		return nil
 	}
 	if db.relaxedSync {
+		if db.indexOuterLeavesInValueLog {
+			// ProfileFast-style workloads rely on WriteSync for immediate
+			// read-after-write visibility, not per-batch backend publication.
+			// Forcing a backend flush boundary on every sync write with WAL off and
+			// outer leaves in the value log turns live catch-up into thousands of
+			// tiny backend commits, which explodes page count and sparse internal
+			// nodes. Keep these writes visible in memory and let checkpoint/rotation
+			// establish the backend boundary.
+			return nil
+		}
 		// Journal disabled: enforce a backend flush boundary without fsync.
 		return db.flushAllMemtablesForSync(false)
 	}
@@ -16996,6 +17150,15 @@ func parseLogSeq(name string) (int, int, bool, bool) {
 }
 
 func (b *Batch) writeBypass(sync bool) error {
+	// WAL-off + outer-leaf-in-vlog workloads are highly sensitive to write
+	// coalescing. Direct backend sync writes can preserve correctness but still
+	// explode the live leaf-page count because each batch mutates the backend tree
+	// incrementally instead of letting the cached flush path rebuild denser pages.
+	// Keep the direct bypass for other cases, but route this profile through the
+	// regular cached path.
+	if sync && b.db.disableJournal && b.db.indexOuterLeavesInValueLog {
+		return b.writeRegular(sync)
+	}
 	// Fast path: if none of these keys exist in mutable/queue, we can write directly
 	// to the backend without flushing (no in-memory shadowing possible).
 	// Cheap append-only check: if the batch key range does not overlap with any

@@ -108,6 +108,8 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	if runtime.GOOS == "windows" {
 		return ErrVacuumUnsupported
 	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
 
 	if !db.vacuumInProgress.CompareAndSwap(false, true) {
 		return ErrVacuumInProgress
@@ -185,18 +187,19 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
 	var newRoot uint64
-	baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	buildOpts := bulk.BuildOptions{
-		LeafPrefixCompression: db.leafPrefixCompression,
-		LeafColumnar:          db.indexColumnarLeaves,
-		PackedValuePtr:        db.indexPackedValuePtr,
-		InternalBaseDelta:     db.indexInternalBaseDelta,
-	}
 	if db.indexOuterLeavesInValueLog {
-		buildOpts.LeafPageLog = db.leafPageLog
+		newRoot, err = vacuumClonePagerTreeWithLeafRefs(baseSnap.idx.pager, baseSnap.state.RootPageID, newAlloc, newPager)
+	} else {
+		baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+		buildOpts := bulk.BuildOptions{
+			LeafPrefixCompression: db.leafPrefixCompression,
+			LeafColumnar:          db.indexColumnarLeaves,
+			PackedValuePtr:        db.indexPackedValuePtr,
+			InternalBaseDelta:     db.indexInternalBaseDelta,
+		}
+		newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, buildOpts)
+		_ = baseIter.Close()
 	}
-	newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, buildOpts)
-	_ = baseIter.Close()
 	_ = baseSnap.Close()
 	if err != nil {
 		cleanupNewPager()
@@ -317,15 +320,20 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			return errors.New("vacuum: missing db state")
 		}
 
-		sysIter := tree.New(oldGen.pager, newValueReader(state.ValueLogSet), state.SystemRootPageID).
-			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		newSysRoot, err := bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
-			LeafPrefixCompression: db.leafPrefixCompression,
-			LeafColumnar:          db.indexColumnarLeaves,
-			PackedValuePtr:        db.indexPackedValuePtr,
-			InternalBaseDelta:     db.indexInternalBaseDelta,
-		})
-		_ = sysIter.Close()
+		var newSysRoot uint64
+		if db.indexOuterLeavesInValueLog {
+			newSysRoot, err = vacuumClonePagerTreeWithLeafRefs(oldGen.pager, state.SystemRootPageID, newAlloc, newPager)
+		} else {
+			sysIter := tree.New(oldGen.pager, newValueReader(state.ValueLogSet), state.SystemRootPageID).
+				IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+			newSysRoot, err = bulk.BuildWithOptions(sysIter, newAlloc, newPager, bulk.BuildOptions{
+				LeafPrefixCompression: db.leafPrefixCompression,
+				LeafColumnar:          db.indexColumnarLeaves,
+				PackedValuePtr:        db.indexPackedValuePtr,
+				InternalBaseDelta:     db.indexInternalBaseDelta,
+			})
+			_ = sysIter.Close()
+		}
 		if err != nil {
 			db.writeMu.Unlock()
 			cleanupNewPager()
@@ -505,14 +513,12 @@ type vacuumCloneCtx struct {
 	alloc    interface {
 		Alloc(hint uint64) (uint64, error)
 	}
-	leafPageLog  LeafPageLog
-	outerLeafLog bool
-	remap        map[uint64]uint64
+	remap map[uint64]uint64
 }
 
 func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, alloc interface {
 	Alloc(hint uint64) (uint64, error)
-}, newPager *pager.Pager, leafPageLog LeafPageLog) (uint64, error) {
+}, newPager *pager.Pager) (uint64, error) {
 	if _, ok := page.DecodeLeafRef(rootID); ok {
 		return rootID, nil
 	}
@@ -523,12 +529,10 @@ func vacuumClonePagerTreeWithLeafRefs(oldPager *pager.Pager, rootID uint64, allo
 		return 0, errors.New("vacuum: missing destination pager")
 	}
 	c := &vacuumCloneCtx{
-		oldPager:     oldPager,
-		newPager:     newPager,
-		alloc:        alloc,
-		leafPageLog:  leafPageLog,
-		outerLeafLog: true,
-		remap:        make(map[uint64]uint64, 1024),
+		oldPager: oldPager,
+		newPager: newPager,
+		alloc:    alloc,
+		remap:    make(map[uint64]uint64, 1024),
 	}
 	return c.cloneNode(rootID)
 }
@@ -589,17 +593,6 @@ func (c *vacuumCloneCtx) cloneNode(oldID uint64) (uint64, error) {
 		return newID, nil
 
 	case page.PageTypeLeaf:
-		if c.outerLeafLog {
-			if c.leafPageLog == nil {
-				return 0, errors.New("vacuum: leaf page log not configured")
-			}
-			ptr, err := c.leafPageLog.AppendLeafPage(data)
-			if err != nil {
-				return 0, err
-			}
-			return page.EncodeLeafRef(ptr)
-		}
-
 		newID, err := c.alloc.Alloc(oldID)
 		if err != nil {
 			return 0, err

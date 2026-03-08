@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -70,15 +71,27 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-
 	b := db.NewBatch()
-	if err := b.Set([]byte("k1"), []byte("v1")); err != nil {
+	if err := b.Set([]byte("k1"), make([]byte, 4096)); err != nil {
 		t.Fatalf("set: %v", err)
 	}
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob wal files: %v", err)
+	}
+	old := time.Now().Add(-5 * time.Minute)
+	for _, path := range paths {
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("chtimes %s: %v", path, err)
+		}
+	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1)
 	db.maybeRunVlogGenerationMaintenance(false)
@@ -182,12 +195,21 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-
-	if err := db.Set([]byte("k1"), []byte("value-1")); err != nil {
+	if err := db.Set([]byte("k1"), make([]byte, 4096)); err != nil {
 		t.Fatalf("set k1: %v", err)
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob wal files: %v", err)
+	}
+	old := time.Now().Add(-5 * time.Minute)
+	for _, path := range paths {
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("chtimes %s: %v", path, err)
+		}
 	}
 
 	before := db.nextRID.Load()

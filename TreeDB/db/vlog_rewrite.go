@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -90,6 +91,10 @@ type ValueLogRewriteOnlineOptions struct {
 	// MinSegmentStaleBytes requires estimated stale bytes to be at least this
 	// threshold when sparse segment selection is used.
 	MinSegmentStaleBytes int64
+	// MinSegmentAge excludes very recent source segments from sparse selection.
+	// This is useful for cached maintenance so freshly-written segments are not
+	// immediately churned by rewrite during sustained ingest.
+	MinSegmentAge time.Duration
 	// ReserveRIDs allocates a contiguous RID range for rewrite-created records.
 	// Cached-mode callers should provide the live runtime allocator here so
 	// online rewrite and foreground writes share one RID namespace.
@@ -297,7 +302,7 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	if err := db.valueLogManager.Refresh(); err != nil {
 		return plan, err
 	}
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSet()
 	if set != nil {
 		defer func() { _ = db.valueLogManager.Release(set) }()
 	}
@@ -620,7 +625,7 @@ func (db *DB) valueLogRecordLengthForRewrite(ptr page.ValuePtr) (uint32, error) 
 	if db == nil || db.valueLogManager == nil {
 		return 0, fmt.Errorf("vlog-rewrite: value-log manager unavailable")
 	}
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSet()
 	if set == nil {
 		return 0, fmt.Errorf("vlog-rewrite: value-log set unavailable")
 	}
@@ -656,6 +661,8 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 	minStaleBytes := opts.MinSegmentStaleBytes
 	maxSourceSegments := opts.MaxSourceSegments
 	maxSourceBytes := opts.MaxSourceBytes
+	minSegmentAge := opts.MinSegmentAge
+	now := time.Now()
 
 	candidates := make([]rewriteSourceSegment, 0, len(files))
 	for id, f := range files {
@@ -666,12 +673,24 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 		if size <= 0 {
 			continue
 		}
+		if minSegmentAge > 0 && f.Path != "" {
+			if info, err := os.Stat(f.Path); err == nil {
+				if age := now.Sub(info.ModTime()); age >= 0 && age < minSegmentAge {
+					continue
+				}
+			}
+		}
 		liveBytes := liveByID[id]
 		if liveBytes < 0 {
 			liveBytes = 0
 		}
 		if liveBytes > size {
 			liveBytes = size
+		}
+		// Fully dead segments should be reclaimed by GC, not repeatedly selected
+		// for rewrite work that has nothing left to copy.
+		if liveBytes == 0 {
+			continue
 		}
 		staleBytes := size - liveBytes
 		if staleBytes <= 0 {
@@ -742,6 +761,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if db.valueLogManager == nil {
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
+	db.maintenanceMu.Lock()
+	defer db.maintenanceMu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -749,7 +770,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err := db.valueLogManager.Refresh(); err != nil {
 		return stats, err
 	}
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSet()
 	if set == nil || len(set.Files) == 0 {
 		if set != nil {
 			_ = db.valueLogManager.Release(set)
@@ -962,7 +983,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		protectedIDs map[uint32]struct{}
 		activeIDs    map[uint32]struct{}
 	)
-	currentSet := db.valueLogManager.CurrentSetNoRefresh()
+	currentSet := db.valueLogManager.CurrentSet()
 	if currentSet != nil {
 		if allowActiveSkip {
 			activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
@@ -1032,8 +1053,9 @@ type leafRefRewriteCtx struct {
 	ctx context.Context
 	db  *DB
 
-	pager *pager.Pager
-	alloc interface {
+	pager      *pager.Pager
+	leafReader tree.SlabReader
+	alloc      interface {
 		Alloc(hint uint64) (uint64, error)
 	}
 
@@ -1073,13 +1095,13 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 				return id, false, nil
 			}
 		}
-		if c.db == nil || c.db.valueLogManager == nil {
-			return id, false, fmt.Errorf("vlog-rewrite: value-log manager unavailable")
+		if c.leafReader == nil {
+			return id, false, fmt.Errorf("vlog-rewrite: value-log snapshot reader unavailable")
 		}
 		if c.writer == nil || c.ridAlloc == nil {
 			return id, false, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
 		}
-		leafPage, err := c.db.valueLogManager.ReadUnsafe(ptr)
+		leafPage, err := c.leafReader.ReadUnsafe(ptr)
 		if err != nil {
 			return id, false, err
 		}
@@ -1231,18 +1253,18 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
 
-	idx := db.idx.Load()
-	if idx == nil {
-		return 0, fmt.Errorf("missing index")
+	snap := db.AcquireSnapshot()
+	if snap == nil || snap.idx == nil || snap.state == nil {
+		if snap != nil {
+			_ = snap.Close()
+		}
+		return 0, fmt.Errorf("missing snapshot state")
 	}
+	defer func() { _ = snap.Close() }()
 
-	db.mu.RLock()
-	rootID := db.meta.UserRootPageID
-	sysRoot := db.meta.SystemRootPageID
-	baseSeq := db.meta.CommitSeq
-	regID := idx.registry.Register(baseSeq)
-	db.mu.RUnlock()
-	defer idx.registry.Unregister(regID)
+	idx := snap.idx
+	rootID := snap.state.RootPageID
+	sysRoot := snap.state.SystemRootPageID
 
 	tracker := newAllocTracker(idx.allocator)
 	defer func() {
@@ -1261,13 +1283,14 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	}()
 
 	leafCtx := &leafRefRewriteCtx{
-		ctx:       ctx,
-		db:        db,
-		pager:     idx.pager,
-		alloc:     tracker,
-		writer:    writer,
-		ridAlloc:  ridAlloc,
-		sourceIDs: sourceIDs,
+		ctx:        ctx,
+		db:         db,
+		pager:      idx.pager,
+		leafReader: &snap.reader,
+		alloc:      tracker,
+		writer:     writer,
+		ridAlloc:   ridAlloc,
+		sourceIDs:  sourceIDs,
 	}
 
 	newSysRoot, sysChanged, err := leafCtx.rewriteNode(sysRoot)

@@ -28,9 +28,9 @@ const (
 	valueLogRefCountsFileName = "vlog_ref_counts.meta"
 	// valueLogRefCountsVersion is the on-disk version for vlog_ref_counts.meta.
 	//
-	// Version 2 includes leaf-page LeafRef reachability for IndexOuterLeavesInValueLog
-	// trees (and is robust to callers opening the backend without the option).
-	valueLogRefCountsVersion = uint32(2)
+	// Version 3 includes nested value-log pointers embedded inside leaf pages
+	// stored in the value log, in addition to direct LeafRef reachability.
+	valueLogRefCountsVersion = uint32(3)
 )
 
 var (
@@ -354,12 +354,13 @@ func (db *DB) mergeLeafRefValueLogRefs(ctx context.Context, refs map[uint32]stru
 		return fmt.Errorf("missing db state")
 	}
 	counts := make(map[uint32]uint64, 8)
-	userFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts)
+	reader := ValueReaderForState(snap.state)
+	userFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, reader, counts)
 	if err != nil {
 		_ = snap.Close()
 		return err
 	}
-	systemFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts)
+	systemFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, reader, counts)
 	if err != nil {
 		_ = snap.Close()
 		return err
@@ -390,6 +391,7 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	}
 	commitSeq := snap.state.CommitSeq
 	counts := make(map[uint32]uint64)
+	reader := ValueReaderForState(snap.state)
 
 	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := collectValueLogRefCounts(ctx, db, userIter, counts); err != nil {
@@ -409,12 +411,12 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	_ = sysIter.Close()
 
 	if snap.idx != nil && snap.idx.pager != nil {
-		userFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, counts)
+		userFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, reader, counts)
 		if err != nil {
 			_ = snap.Close()
 			return nil, 0, err
 		}
-		systemFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, counts)
+		systemFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.SystemRootPageID, reader, counts)
 		if err != nil {
 			_ = snap.Close()
 			return nil, 0, err
@@ -428,7 +430,7 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	return counts, commitSeq, nil
 }
 
-func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID uint64, refs map[uint32]uint64) (bool, error) {
+func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID uint64, reader tree.SlabReader, refs map[uint32]uint64) (bool, error) {
 	if p == nil || rootID == 0 || refs == nil {
 		return false, nil
 	}
@@ -450,9 +452,41 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 		}
 		refs[ptr.FileID]++
 		found = true
-		return nil
+		return collectNestedLeafPageValueLogRefCounts(ptr, reader, refs)
 	})
 	return found, err
+}
+
+func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabReader, refs map[uint32]uint64) error {
+	if refs == nil || !page.IsValueLogFileID(ptr.FileID) || reader == nil {
+		return nil
+	}
+	leafPage, err := reader.ReadUnsafe(ptr)
+	if err != nil {
+		return err
+	}
+	if len(leafPage) != page.PageSize {
+		return fmt.Errorf("treedb: invalid leaf page size in value log file=%d offset=%d got=%d want=%d", ptr.FileID, ptr.Offset, len(leafPage), page.PageSize)
+	}
+	n := node.NewNodeView(leafPage)
+	if n.Type() != page.PageTypeLeaf {
+		return fmt.Errorf("treedb: expected leaf page in value log file=%d offset=%d, got type=%d", ptr.FileID, ptr.Offset, n.Type())
+	}
+	if !n.VerifyChecksum() {
+		return fmt.Errorf("treedb: checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
+	}
+	count := n.Count()
+	for i := uint16(0); i < count; i++ {
+		_, _, valPtr, flags, err := n.GetLeafEntryView(i)
+		if err != nil {
+			return err
+		}
+		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(valPtr.FileID) {
+			continue
+		}
+		refs[valPtr.FileID]++
+	}
+	return nil
 }
 
 func (db *DB) shouldScanLeafRefValueLogRefs() bool {

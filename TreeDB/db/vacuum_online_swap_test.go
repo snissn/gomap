@@ -10,7 +10,36 @@ import (
 	"strconv"
 	"testing"
 	"time"
+
+	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
+
+func collectLeafRefIDsFromRoot(t *testing.T, d *DB, rootID uint64) map[uint64]struct{} {
+	t.Helper()
+	out := make(map[uint64]struct{})
+	if d == nil || rootID == 0 {
+		return out
+	}
+	err := leafrefscan.Walk(context.Background(), rootID, d.Pager().Get, func(pageID uint64, n node.Node) error {
+		if !n.VerifyChecksum() {
+			return fmt.Errorf("checksum mismatch on page %d", pageID)
+		}
+		return nil
+	}, func(ptr page.ValuePtr) error {
+		id, err := page.EncodeLeafRef(ptr)
+		if err != nil {
+			return err
+		}
+		out[id] = struct{}{}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("collect leaf refs: %v", err)
+	}
+	return out
+}
 
 func TestVacuumIndexOnline_ShrinksAndPreservesData(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -291,6 +320,8 @@ func TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs(t *testing.T) {
 	}
 	beforeP50 := parse(before, "treedb.user.internal_fill_ppm_p50")
 	beforeAvg := parse(before, "treedb.user.internal_fill_ppm_avg")
+	beforeSpanRatio := parse(before, "treedb.user.pages.span_ratio_ppm")
+	beforePagesTotal := parse(before, "treedb.pages.total")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -305,13 +336,84 @@ func TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs(t *testing.T) {
 	afterP50 := parse(after, "treedb.user.internal_fill_ppm_p50")
 	afterAvg := parse(after, "treedb.user.internal_fill_ppm_avg")
 
-	if afterP50 <= beforeP50 {
-		t.Fatalf("expected vacuum to improve internal fill p50: before=%d after=%d before=%v after=%v", beforeP50, afterP50, before, after)
+	afterSpanRatio := parse(after, "treedb.user.pages.span_ratio_ppm")
+	afterPagesTotal := parse(after, "treedb.pages.total")
+	if afterSpanRatio >= beforeSpanRatio {
+		t.Fatalf("expected vacuum to compact internal page span: before=%d after=%d before=%v after=%v", beforeSpanRatio, afterSpanRatio, before, after)
 	}
-	if afterAvg <= beforeAvg {
-		t.Fatalf("expected vacuum to improve internal fill avg: before=%d after=%d before=%v after=%v", beforeAvg, afterAvg, before, after)
+	if afterPagesTotal >= beforePagesTotal {
+		t.Fatalf("expected vacuum to reduce total page count: before=%d after=%d before=%v after=%v", beforePagesTotal, afterPagesTotal, before, after)
 	}
-	if afterP50 < 200_000 || afterAvg < 350_000 {
-		t.Fatalf("expected packed internal tree after vacuum, got p50=%d avg=%d after=%v", afterP50, afterAvg, after)
+	if afterP50 < beforeP50 || afterAvg < beforeAvg {
+		t.Fatalf("expected vacuum to preserve internal fill while compacting span: beforeP50=%d afterP50=%d beforeAvg=%d afterAvg=%d before=%v after=%v", beforeP50, afterP50, beforeAvg, afterAvg, before, after)
+	}
+}
+
+func TestVacuumIndexOnline_PreservesExistingLeafRefsWhenOuterLeavesInValueLog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("online vacuum not supported on windows")
+	}
+	dir := t.TempDir()
+
+	d, err := Open(Options{
+		Dir:                        dir,
+		KeepRecent:                 1,
+		Durability:                 DurabilityWALOffRelaxed,
+		IndexOuterLeavesInValueLog: true,
+		PreferAppendAlloc:          true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+	leafLog := &registeredLeafPageLog{db: d, dir: dir}
+	if err := leafLog.ensureWriter(); err != nil {
+		t.Fatalf("ensure leaf writer: %v", err)
+	}
+	d.SetLeafPageLog(leafLog)
+
+	val := bytes.Repeat([]byte("v"), 64)
+	for version := 1; version <= 48; version++ {
+		b := d.NewBatch()
+		for i := 0; i < 512; i++ {
+			key := []byte(fmt.Sprintf("s/k:store/n/%08d/%08d", version, i))
+			val[0] = byte(version)
+			if err := b.Set(key, val); err != nil {
+				t.Fatalf("set version=%d key=%d: %v", version, i, err)
+			}
+		}
+		if err := b.WriteSync(); err != nil {
+			t.Fatalf("writesync version=%d: %v", version, err)
+		}
+		_ = b.Close()
+	}
+
+	stateBefore := d.State()
+	if stateBefore == nil {
+		t.Fatalf("missing state before vacuum")
+	}
+	beforeRefs := collectLeafRefIDsFromRoot(t, d, stateBefore.RootPageID)
+	if len(beforeRefs) == 0 {
+		t.Fatalf("expected outer-leaf refs before vacuum")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := d.VacuumIndexOnline(ctx); err != nil {
+		t.Fatalf("vacuum: %v", err)
+	}
+
+	stateAfter := d.State()
+	if stateAfter == nil {
+		t.Fatalf("missing state after vacuum")
+	}
+	afterRefs := collectLeafRefIDsFromRoot(t, d, stateAfter.RootPageID)
+	if len(afterRefs) != len(beforeRefs) {
+		t.Fatalf("leafref count changed across vacuum: before=%d after=%d", len(beforeRefs), len(afterRefs))
+	}
+	for id := range beforeRefs {
+		if _, ok := afterRefs[id]; !ok {
+			t.Fatalf("vacuum rewrote untouched leafref %d", id)
+		}
 	}
 }
