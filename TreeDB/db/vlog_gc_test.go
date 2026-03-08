@@ -119,6 +119,63 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 }
 
+func TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	appendPointersInNewSegment(t, dir, 0, 1, 1_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane0-seq1|"), 32)
+	})
+	appendPointersInNewSegment(t, dir, 0, 2, 2_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane0-seq2|"), 32)
+	})
+	appendPointersInNewSegment(t, dir, 250, 1, 3_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane250-seq1|"), 32)
+	})
+	appendPointersInNewSegment(t, dir, 250, 2, 4_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane250-seq2|"), 32)
+	})
+
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	protected := []string{
+		filepath.Join(dir, "wal", "value-l0-000002.log"),
+	}
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{ProtectedPaths: protected})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted < 2 {
+		t.Fatalf("expected GC to delete historical unprotected rewrite-lane segments, got %+v", stats)
+	}
+
+	for _, path := range []string{
+		filepath.Join(dir, "wal", "value-l250-000001.log"),
+		filepath.Join(dir, "wal", "value-l250-000002.log"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be deleted, err=%v", filepath.Base(path), err)
+		}
+	}
+
+	for _, path := range []string{
+		filepath.Join(dir, "wal", "value-l0-000001.log"),
+		filepath.Join(dir, "wal", "value-l0-000002.log"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected protected-lane window to retain %s, err=%v", filepath.Base(path), err)
+		}
+	}
+}
+
 func TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog(t *testing.T) {
 	dir := t.TempDir()
 

@@ -965,7 +965,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	currentSet := db.valueLogManager.CurrentSetNoRefresh()
 	if currentSet != nil {
 		if allowActiveSkip {
-			activeIDs = currentValueLogIDs(currentSet)
+			activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
 		}
 		if len(protectedPaths) > 0 {
 			protectedIDs = make(map[uint32]struct{})

@@ -333,6 +333,78 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 	}
 }
 
+func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	livePtr := appendPointersInNewSegment(t, dir, 0, 1, 90_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("live|"), 64)
+	})[0]
+	appendPointersInNewSegment(t, dir, 0, 2, 91_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("protected|"), 64)
+	})
+	appendPointersInNewSegment(t, dir, 250, 1, 92_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("dead-a|"), 64)
+	})
+	appendPointersInNewSegment(t, dir, 250, 2, 93_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("dead-b|"), 64)
+	})
+
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	b := db.NewBatch()
+	ptrBatch, ok := b.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch")
+	}
+	if err := ptrBatch.SetPointer([]byte("k"), livePtr); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	protected := []string{
+		filepath.Join(dir, "wal", "value-l0-000002.log"),
+	}
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		ProtectedPaths: protected,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected rewrite to copy at least one record, got %+v", stats)
+	}
+
+	for _, path := range []string{
+		filepath.Join(dir, "wal", "value-l250-000001.log"),
+		filepath.Join(dir, "wal", "value-l250-000002.log"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be deleted after rewrite cleanup, err=%v", filepath.Base(path), err)
+		}
+	}
+
+	got, err := db.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, bytes.Repeat([]byte("live|"), 64)) {
+		t.Fatalf("rewritten value mismatch")
+	}
+}
+
 func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 	dir := t.TempDir()
 

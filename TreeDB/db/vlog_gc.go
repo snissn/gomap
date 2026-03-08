@@ -65,10 +65,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	}
 
 	set := db.valueLogManager.CurrentSet()
-	activeIDs := currentValueLogIDs(set)
-	keptIDs := activeIDs
+	keptIDs := currentValueLogIDs(set)
 	if len(opts.ProtectedPaths) > 0 {
-		keptIDs = recentValueLogIDs(set, valueLogKeepRecentSegmentsPerLane)
+		keptIDs = recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
 	}
 	protectedPaths := make(map[string]struct{}, len(opts.ProtectedPaths))
 	for _, path := range opts.ProtectedPaths {
@@ -188,30 +187,67 @@ func recentValueLogIDs(set *valuelog.Set, keepPerLane int) map[uint32]struct{} {
 	if keepPerLane <= 1 {
 		return currentValueLogIDs(set)
 	}
-	active := make(map[uint32]struct{})
-	if set == nil || len(set.Files) == 0 {
-		return active
+	return recentValueLogIDsForProtectedPaths(set, keepPerLane, nil)
+}
+
+func recentValueLogIDsForProtectedPaths(set *valuelog.Set, keepPerLane int, protectedPaths []string) map[uint32]struct{} {
+	if keepPerLane <= 1 || set == nil || len(set.Files) == 0 {
+		return nil
 	}
+	if len(protectedPaths) == 0 {
+		return nil
+	}
+	protected := make(map[string]struct{}, len(protectedPaths))
+	for _, path := range protectedPaths {
+		if path == "" {
+			continue
+		}
+		protected[path] = struct{}{}
+	}
+	if len(protected) == 0 {
+		return nil
+	}
+	protectedLanes := make(map[uint32]struct{})
+	for id, f := range set.Files {
+		if f == nil || f.Path == "" {
+			continue
+		}
+		if _, ok := protected[f.Path]; !ok {
+			continue
+		}
+		lane, _ := valuelog.DecodeFileID(id)
+		protectedLanes[lane] = struct{}{}
+	}
+	if len(protectedLanes) == 0 {
+		return nil
+	}
+	kept := make(map[uint32]struct{})
 	maxByLane := make(map[uint32]uint32)
 	for id := range set.Files {
 		lane, seq := valuelog.DecodeFileID(id)
+		if _, ok := protectedLanes[lane]; !ok {
+			continue
+		}
 		if cur, ok := maxByLane[lane]; !ok || seq > cur {
 			maxByLane[lane] = seq
 		}
 	}
 	for id := range set.Files {
 		lane, seq := valuelog.DecodeFileID(id)
+		if _, ok := protectedLanes[lane]; !ok {
+			continue
+		}
 		maxSeq := maxByLane[lane]
 		if maxSeq <= seq {
-			active[id] = struct{}{}
+			kept[id] = struct{}{}
 			continue
 		}
 		delta := int64(maxSeq) - int64(seq)
 		if delta < int64(keepPerLane) {
-			active[id] = struct{}{}
+			kept[id] = struct{}{}
 		}
 	}
-	return active
+	return kept
 }
 
 func fileSize(f *valuelog.File) int64 {
