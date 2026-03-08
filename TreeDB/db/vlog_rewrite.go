@@ -389,8 +389,53 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	return plan, nil
 }
 
+func rewritePlanLiveBytesKeyForState(state *DBState) valueLogRewriteLiveBytesKey {
+	if state == nil {
+		return valueLogRewriteLiveBytesKey{}
+	}
+	return valueLogRewriteLiveBytesKey{
+		commitSeq:  state.CommitSeq,
+		rootID:     state.RootPageID,
+		systemRoot: state.SystemRootPageID,
+	}
+}
+
+func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[uint32]int64, bool) {
+	if db == nil || key == (valueLogRewriteLiveBytesKey{}) {
+		return nil, false
+	}
+	db.rewritePlanLiveBytesMu.Lock()
+	defer db.rewritePlanLiveBytesMu.Unlock()
+	if db.rewritePlanLiveBytesCache.key != key || db.rewritePlanLiveBytesCache.liveByID == nil {
+		return nil, false
+	}
+	return db.rewritePlanLiveBytesCache.liveByID, true
+}
+
+func cloneValueLogLiveBytesMap(src map[uint32]int64) map[uint32]int64 {
+	if len(src) == 0 {
+		return map[uint32]int64{}
+	}
+	dst := make(map[uint32]int64, len(src))
+	for id, live := range src {
+		dst[id] = live
+	}
+	return dst
+}
+
+func (db *DB) storeCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey, liveByID map[uint32]int64) {
+	if db == nil || key == (valueLogRewriteLiveBytesKey{}) {
+		return
+	}
+	db.rewritePlanLiveBytesMu.Lock()
+	db.rewritePlanLiveBytesCache = valueLogRewriteLiveBytesCache{
+		key:      key,
+		liveByID: cloneValueLogLiveBytesMap(liveByID),
+	}
+	db.rewritePlanLiveBytesMu.Unlock()
+}
+
 func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint32]int64, error) {
-	liveByID := make(map[uint32]int64)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -402,6 +447,15 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 		}
 		return nil, fmt.Errorf("missing snapshot state")
 	}
+	cacheKey := rewritePlanLiveBytesKeyForState(snap.state)
+	if liveByID, ok := db.loadCachedValueLogLiveBytes(cacheKey); ok {
+		if err := snap.Close(); err != nil {
+			return nil, err
+		}
+		return liveByID, nil
+	}
+	db.testRewritePlanLiveEstimateRuns.Add(1)
+	liveByID := make(map[uint32]int64)
 
 	// Pointer-projection iterators can return many keys pointing at the same
 	// grouped value-log record. When estimating live bytes we must count each
@@ -444,6 +498,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	if err := snap.Close(); err != nil {
 		return nil, err
 	}
+	db.storeCachedValueLogLiveBytes(cacheKey, liveByID)
 	return liveByID, nil
 }
 

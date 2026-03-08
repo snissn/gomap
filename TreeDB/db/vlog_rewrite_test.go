@@ -1128,6 +1128,114 @@ func TestValueLogRewritePlan_NoSelectionKnobs_ReturnsTotalsOnly(t *testing.T) {
 	}
 }
 
+func TestValueLogRewritePlan_CachesLiveBytesForUnchangedState(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 246_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("x"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 246_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("y"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    1,
+		MaxSourceBytes:       4 << 20,
+		MinSegmentStaleRatio: 0.10,
+		MinSegmentStaleBytes: 1,
+	}
+	plan1, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("first ValueLogRewritePlan: %v", err)
+	}
+	plan2, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("second ValueLogRewritePlan: %v", err)
+	}
+	if !reflect.DeepEqual(plan1, plan2) {
+		t.Fatalf("cached plan mismatch:\nplan1=%+v\nplan2=%+v", plan1, plan2)
+	}
+	if got := db.testRewritePlanLiveEstimateRuns.Load(); got != 1 {
+		t.Fatalf("live-byte estimate runs=%d want 1", got)
+	}
+}
+
+func TestValueLogRewritePlan_InvalidatesCachedLiveBytesAfterCommit(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 247_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("x"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 247_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("y"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    1,
+		MaxSourceBytes:       4 << 20,
+		MinSegmentStaleRatio: 0.10,
+		MinSegmentStaleBytes: 1,
+	}
+	if _, err := db.ValueLogRewritePlan(context.Background(), opts); err != nil {
+		t.Fatalf("first ValueLogRewritePlan: %v", err)
+	}
+	if got := db.testRewritePlanLiveEstimateRuns.Load(); got != 1 {
+		t.Fatalf("live-byte estimate runs=%d want 1 after first plan", got)
+	}
+
+	b = db.NewBatch().(*Batch)
+	if err := b.Set([]byte("new-key"), []byte("new-value")); err != nil {
+		t.Fatalf("set new-key: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write new-key: %v", err)
+	}
+	_ = b.Close()
+
+	if _, err := db.ValueLogRewritePlan(context.Background(), opts); err != nil {
+		t.Fatalf("second ValueLogRewritePlan: %v", err)
+	}
+	if got := db.testRewritePlanLiveEstimateRuns.Load(); got != 2 {
+		t.Fatalf("live-byte estimate runs=%d want 2 after commit", got)
+	}
+}
+
 func readProjectedPointerByKey(t *testing.T, db *DB, key []byte) (page.ValuePtr, byte) {
 	t.Helper()
 	it, err := db.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
