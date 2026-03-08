@@ -72,6 +72,7 @@ func TestCheckpoint_DeletesRetainedValueLogWhenBackendManagerForgotSegment(t *te
 	if err := db.rotateValueLogLocked(&db.lanes[0]); err != nil {
 		t.Fatalf("rotateValueLogLocked: %v", err)
 	}
+	seedRetainedPrunePressure(db, retainedPath, 2<<30)
 	if _, err := os.Stat(retainedPath); err != nil {
 		t.Fatalf("stat retained path: %v", err)
 	}

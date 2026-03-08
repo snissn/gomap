@@ -48,10 +48,10 @@ func TestCheckpoint_IgnoresMissingRetainedValueLogPath(t *testing.T) {
 	db.markValueLogRetain(stalePath)
 	l := &db.lanes[0]
 	l.vlogMu.Lock()
-	l.vlogClosedSizes = map[string]int64{stalePath: 5}
-	l.vlogClosedBytes.Store(5)
+	l.vlogClosedSizes = map[string]int64{stalePath: 2 << 30}
+	l.vlogClosedBytes.Store(2 << 30)
 	l.vlogMu.Unlock()
-	db.valueLogRetainedClosedBytes.Store(5)
+	db.valueLogRetainedClosedBytes.Store(2 << 30)
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)

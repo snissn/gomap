@@ -2553,7 +2553,20 @@ type backendPointerProjectionIterator interface {
 	IteratorWithOptions(start, end []byte, opts tree.IteratorOptions) (iterator.UnsafeIterator, error)
 }
 
+var errForegroundWritesResumed = errors.New("cachingdb: foreground writes resumed")
+
+func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
+	if db == nil || lastWrite <= 0 {
+		return false
+	}
+	return db.lastForegroundWriteUnixNano.Load() > lastWrite
+}
+
 func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
+	return db.collectValueLogLiveIDsUntil(0)
+}
+
+func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{}, error) {
 	if db == nil || !db.valueLogEnabled() {
 		return make(map[uint32]struct{}), nil
 	}
@@ -2571,20 +2584,28 @@ func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 			if state != nil && p != nil {
 				reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
 				if state.RootPageID != 0 {
-					if err := db.collectIteratorValueLogLiveIDs(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live); err != nil {
+					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
 						_ = snap.Close()
 						return nil, err
 					}
 				}
 				if state.SystemRootPageID != 0 {
-					if err := db.collectIteratorValueLogLiveIDs(tree.New(p, reader, state.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live); err != nil {
+					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
 						_ = snap.Close()
 						return nil, err
 					}
 				}
+				if db.foregroundWritesResumedSince(lastWrite) {
+					_ = snap.Close()
+					return nil, errForegroundWritesResumed
+				}
 				if err := collectLeafRefValueLogLiveIDs(p, state.RootPageID, reader, live); err != nil {
 					_ = snap.Close()
 					return nil, err
+				}
+				if db.foregroundWritesResumedSince(lastWrite) {
+					_ = snap.Close()
+					return nil, errForegroundWritesResumed
 				}
 				if err := collectLeafRefValueLogLiveIDs(p, state.SystemRootPageID, reader, live); err != nil {
 					_ = snap.Close()
@@ -2610,7 +2631,7 @@ func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.collectIteratorValueLogLiveIDs(it, live); err != nil {
+	if err := db.collectIteratorValueLogLiveIDsUntil(it, live, lastWrite); err != nil {
 		return nil, err
 	}
 
@@ -2618,11 +2639,19 @@ func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
 }
 
 func (db *DB) collectIteratorValueLogLiveIDs(it iterator.UnsafeIterator, live map[uint32]struct{}) error {
+	return db.collectIteratorValueLogLiveIDsUntil(it, live, 0)
+}
+
+func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, live map[uint32]struct{}, lastWrite int64) error {
 	if it == nil {
 		return nil
 	}
 	defer it.Close()
+	seen := 0
 	for it.Valid() {
+		if seen&255 == 0 && db.foregroundWritesResumedSince(lastWrite) {
+			return errForegroundWritesResumed
+		}
 		_, ptr, flags := it.UnsafeEntry()
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			live[ptr.FileID] = struct{}{}
@@ -2631,6 +2660,10 @@ func (db *DB) collectIteratorValueLogLiveIDs(it iterator.UnsafeIterator, live ma
 			}
 		}
 		it.Next()
+		seen++
+	}
+	if db.foregroundWritesResumedSince(lastWrite) {
+		return errForegroundWritesResumed
 	}
 	return it.Error()
 }
@@ -2749,8 +2782,11 @@ func (db *DB) pruneRetainedValueLogs() {
 		return
 	}
 
-	live, err := db.collectValueLogLiveIDs()
+	live, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
 	if err != nil {
+		if errors.Is(err, errForegroundWritesResumed) {
+			return
+		}
 		db.reportError(fmt.Errorf("cachingdb: failed to scan value-log pointers: %w", err))
 		return
 	}
@@ -2812,6 +2848,43 @@ func (db *DB) pruneRetainedValueLogs() {
 	}
 }
 
+func (db *DB) retainedPrunePressureBytes() int64 {
+	if db == nil || !db.valueLogEnabled() {
+		return 0
+	}
+	if limit := db.maxValueLogRetainedBytes; limit > 0 {
+		return limit
+	}
+	if limit := db.maxValueLogRetainedBytesHard; limit > 0 {
+		if limit <= 1 {
+			return 1
+		}
+		return max(limit/2, int64(1))
+	}
+	pressure := db.valueLogMaxSegmentBytes * 4
+	if pressure <= 0 {
+		pressure = 1 << 30
+	}
+	if ft := db.flushThreshold * 8; ft > pressure {
+		pressure = ft
+	}
+	if pressure < 1<<30 {
+		pressure = 1 << 30
+	}
+	return pressure
+}
+
+func (db *DB) shouldScheduleRetainedValueLogPrune() bool {
+	if db == nil || !db.valueLogEnabled() {
+		return false
+	}
+	closed := db.valueLogRetainedClosedBytes.Load()
+	if closed <= 0 {
+		return false
+	}
+	return closed >= db.retainedPrunePressureBytes()
+}
+
 func (db *DB) scheduleRetainedValueLogPrune() {
 	if db == nil || !db.valueLogEnabled() {
 		return
@@ -2834,7 +2907,16 @@ func (db *DB) scheduleRetainedValueLogPrune() {
 			db.retainedPruneDone = nil
 			db.retainedPruneMu.Unlock()
 		}()
-		db.waitForForegroundMaintenanceQuiet()
+		db.waitForForegroundMaintenanceQuietWindow(retainedPruneQuietWindow)
+		if !db.shouldScheduleRetainedValueLogPrune() {
+			return
+		}
+		now := time.Now()
+		last := db.retainedPruneLastStartUnixNano.Load()
+		if last > 0 && now.Sub(time.Unix(0, last)) < retainedPruneMinInterval {
+			return
+		}
+		db.retainedPruneLastStartUnixNano.Store(now.UnixNano())
 		db.pruneRetainedValueLogs()
 	}()
 }
@@ -3544,6 +3626,7 @@ type DB struct {
 	checkpointAutoVacuumLastInternalP50   atomic.Uint64
 	checkpointAutoVacuumLastInternalAvg   atomic.Uint64
 	lastForegroundWriteUnixNano           atomic.Int64
+	retainedPruneLastStartUnixNano        atomic.Int64
 	retainedPruneMu                       sync.Mutex
 	retainedPruneDone                     chan struct{}
 	vlogGenerationRemapSuccesses          atomic.Uint64
@@ -3656,6 +3739,13 @@ const (
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
 	vlogForegroundQuietWindow = 2 * time.Second
+	// Retained-path prune performs a full live-ID scan and is pure best-effort
+	// reclaim. Require a meaningfully idle window before starting it so hot
+	// write workloads do not pay for a large scan between active phases.
+	retainedPruneQuietWindow = 15 * time.Second
+	// Retained-path prune is opportunistic reclaim. Do not restart a full live-ID
+	// scan on every periodic checkpoint during a hot workload.
+	retainedPruneMinInterval = 30 * time.Second
 	// Coordinate index vacuum with major rewrite windows; do not run on every GC.
 	vlogGenerationVacuumTriggerRewriteBytes = int64(64 << 20)
 	vlogGenerationVacuumMinInterval         = 5 * time.Minute
@@ -5394,7 +5484,7 @@ func (db *DB) TriggerAutoCheckpoint() {
 	}
 }
 
-func (db *DB) foregroundWriteQuiet(now time.Time) bool {
+func (db *DB) foregroundWriteQuietFor(now time.Time, quietWindow time.Duration) bool {
 	if db == nil {
 		return true
 	}
@@ -5402,17 +5492,21 @@ func (db *DB) foregroundWriteQuiet(now time.Time) bool {
 	if last <= 0 {
 		return true
 	}
-	return now.Sub(time.Unix(0, last)) >= vlogForegroundQuietWindow
+	return now.Sub(time.Unix(0, last)) >= quietWindow
 }
 
-func (db *DB) waitForForegroundMaintenanceQuiet() {
-	if db == nil || vlogForegroundQuietWindow <= 0 {
+func (db *DB) foregroundWriteQuiet(now time.Time) bool {
+	return db.foregroundWriteQuietFor(now, vlogForegroundQuietWindow)
+}
+
+func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration) {
+	if db == nil || quietWindow <= 0 {
 		return
 	}
 	timer := time.NewTicker(vlogGenerationLoopInterval / 10)
 	defer timer.Stop()
 	for {
-		if db.closing.Load() || db.foregroundWriteQuiet(time.Now()) {
+		if db.closing.Load() || db.foregroundWriteQuietFor(time.Now(), quietWindow) {
 			return
 		}
 		select {
@@ -5421,6 +5515,10 @@ func (db *DB) waitForForegroundMaintenanceQuiet() {
 		case <-timer.C:
 		}
 	}
+}
+
+func (db *DB) waitForForegroundMaintenanceQuiet() {
+	db.waitForForegroundMaintenanceQuietWindow(vlogForegroundQuietWindow)
 }
 
 func (db *DB) noteWrite() {
