@@ -185,18 +185,18 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
 	var newRoot uint64
-	if db.indexOuterLeavesInValueLog {
-		newRoot, err = vacuumClonePagerTreeWithLeafRefs(baseSnap.Pager(), baseSnap.treeRoot, newAlloc, newPager, db.leafPageLog)
-	} else {
-		baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, bulk.BuildOptions{
-			LeafPrefixCompression: db.leafPrefixCompression,
-			LeafColumnar:          db.indexColumnarLeaves,
-			PackedValuePtr:        db.indexPackedValuePtr,
-			InternalBaseDelta:     db.indexInternalBaseDelta,
-		})
-		_ = baseIter.Close()
+	baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	buildOpts := bulk.BuildOptions{
+		LeafPrefixCompression: db.leafPrefixCompression,
+		LeafColumnar:          db.indexColumnarLeaves,
+		PackedValuePtr:        db.indexPackedValuePtr,
+		InternalBaseDelta:     db.indexInternalBaseDelta,
 	}
+	if db.indexOuterLeavesInValueLog {
+		buildOpts.LeafPageLog = db.leafPageLog
+	}
+	newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, buildOpts)
+	_ = baseIter.Close()
 	_ = baseSnap.Close()
 	if err != nil {
 		cleanupNewPager()

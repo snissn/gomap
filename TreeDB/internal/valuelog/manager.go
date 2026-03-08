@@ -102,6 +102,9 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 	return vf, nil
 }
 
+var openSegmentFile = openFile
+var scanSegmentPaths = listSegments
+
 func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 	if f.cacheRawPooled && cap(f.cacheRaw) > 0 {
 		f.stashDecodeScratchLocked(f.cacheRaw)
@@ -689,24 +692,50 @@ func (m *Manager) SegmentPath(id uint32) string {
 
 // Refresh scans the directory and registers any new segments.
 func (m *Manager) Refresh() error {
-	segments, err := listSegments(m.dir)
+	segments, err := scanSegmentPaths(m.dir)
 	if err != nil {
 		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, seg := range segments {
-		if _, ok := m.files[seg.id]; ok {
-			continue
-		}
-		f, err := openFile(seg.path, seg.id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
-		if err != nil {
+		if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// Online rewrite/GC can delete a segment after listSegments() sees it
+				// but before we open it. Treat that as a benign refresh race and
+				// keep scanning the remaining segments.
+				continue
+			}
 			return err
 		}
-		f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
-		f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
-		m.files[seg.id] = f
 	}
+	return nil
+}
+
+// RegisterSegment registers a newly created segment without scanning the
+// filesystem. Callers that create value-log segments in-process should use this
+// on the hot path so CurrentSetNoRefresh remains sufficient for immediate
+// publish/read-after-write visibility.
+func (m *Manager) RegisterSegment(path string, id uint32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.registerSegmentLocked(path, id)
+}
+
+func (m *Manager) registerSegmentLocked(path string, id uint32) error {
+	if m.files == nil {
+		m.files = make(map[uint32]*File, 16)
+	}
+	if _, ok := m.files[id]; ok {
+		return nil
+	}
+	f, err := openSegmentFile(path, id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
+	if err != nil {
+		return err
+	}
+	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
+	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
+	m.files[id] = f
 	return nil
 }
 

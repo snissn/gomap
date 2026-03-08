@@ -1309,6 +1309,9 @@ func nextRewriteRIDStart(segments []logSegment) (uint64, error) {
 		}
 		reader, err := valuelog.NewReader(segment.path, segment.fileID)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return 0, err
 		}
 		reader.DisableValueDecode()
@@ -1809,12 +1812,12 @@ func (w *rewriteWriter) ensureWriter() error {
 }
 
 func (w *rewriteWriter) rotate() error {
-	w.seq++
-	fileID, err := valuelog.EncodeFileID(w.lane, w.seq)
+	nextSeq := w.seq + 1
+	fileID, err := valuelog.EncodeFileID(w.lane, nextSeq)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(w.walDir, fmt.Sprintf("value-l%d-%06d.log", w.lane, w.seq))
+	path := filepath.Join(w.walDir, fmt.Sprintf("value-l%d-%06d.log", w.lane, nextSeq))
 	if w.w == nil {
 		writer, err := valuelog.NewWriter(path, fileID)
 		if err != nil {
@@ -1822,12 +1825,14 @@ func (w *rewriteWriter) rotate() error {
 		}
 		writer.SetBlockCompression(w.blockCodec, w.blockCompression)
 		w.w = writer
+		w.seq = nextSeq
 		return nil
 	}
 	if err := w.w.RotateTo(path, fileID); err != nil {
 		return err
 	}
 	w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
+	w.seq = nextSeq
 	return nil
 }
 

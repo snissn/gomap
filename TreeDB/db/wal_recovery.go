@@ -179,6 +179,9 @@ func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup)
 		}
 		reader, err := valuelog.NewReader(segment.path, segment.fileID)
 		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			return nil, err
 		}
 		reader.DisableValueDecode()

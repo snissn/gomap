@@ -30,3 +30,14 @@ func (db *DB) SetLeafPageLog(log LeafPageLog) {
 	}
 	db.writeMu.Unlock()
 }
+
+// RegisterValueLogSegment registers a newly created value-log segment with the
+// backend read manager without scanning the filesystem. Cached mode uses this
+// when it rotates the shared value log so outer-leaf commits can publish a
+// current ValueLogSet via CurrentSetNoRefresh.
+func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
+	if db == nil || db.valueLogManager == nil || path == "" || fileID == 0 {
+		return nil
+	}
+	return db.valueLogManager.RegisterSegment(path, fileID)
+}

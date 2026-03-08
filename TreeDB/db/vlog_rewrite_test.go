@@ -137,6 +137,32 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	}
 }
 
+func TestNextRewriteRIDStart_IgnoresSegmentRemovedAfterScan(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	if err := os.WriteFile(path, []byte{0x01}, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	segments := []logSegment{
+		{path: path, fileID: fileID, valueLog: true},
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	start, err := nextRewriteRIDStart(segments)
+	if err != nil {
+		t.Fatalf("nextRewriteRIDStart: %v", err)
+	}
+	if start != 1 {
+		t.Fatalf("start=%d want 1", start)
+	}
+}
+
 func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 

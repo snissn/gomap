@@ -1,6 +1,8 @@
 package db
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -89,5 +91,31 @@ func TestReplayWALIntoBackend_IgnoresEmptyCommitSegments(t *testing.T) {
 	}
 	if err := replayWALIntoBackend(nil, segments, 0, nil); err != nil {
 		t.Fatalf("replayWALIntoBackend: %v", err)
+	}
+}
+
+func TestScanValueLogSegments_IgnoresSegmentRemovedAfterScan(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-l0-000001.log")
+	if err := os.WriteFile(path, []byte{0x01}, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	segments := []logSegment{
+		{path: path, fileID: fileID, valueLog: true},
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+
+	ridMap, err := scanValueLogSegments(segments, nil)
+	if err != nil {
+		t.Fatalf("scanValueLogSegments: %v", err)
+	}
+	if len(ridMap) != 0 {
+		t.Fatalf("ridMap len=%d want 0", len(ridMap))
 	}
 }

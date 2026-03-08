@@ -18,20 +18,26 @@ import (
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
 // MockBackend implements BackendDB
 type MockBackend struct {
-	mu         sync.RWMutex
-	data       map[string][]byte
-	writeCalls int
-	writeSyncs int
-	writeErr   error
-	setOpsErr  error
-	setErr     error
-	deleteErr  error
+	mu                     sync.RWMutex
+	data                   map[string][]byte
+	lastOps                []batch.Entry
+	writeCalls             int
+	writeSyncs             int
+	iteratorCalls          int
+	iteratorStartedCh      chan struct{}
+	iteratorBlockCh        chan struct{}
+	writeErr               error
+	setOpsErr              error
+	setErr                 error
+	deleteErr              error
+	setOpsInlineValueLimit int
 }
 
 func NewMockBackend() *MockBackend {
@@ -273,12 +279,25 @@ func (m *MockBackend) Set(key, val []byte) {
 }
 
 func (m *MockBackend) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
-	m.mu.RLock()
+	m.mu.Lock()
+	m.iteratorCalls++
+	startedCh := m.iteratorStartedCh
+	blockCh := m.iteratorBlockCh
 	keys := make([]string, 0, len(m.data))
 	for k := range m.data {
 		keys = append(keys, k)
 	}
-	m.mu.RUnlock()
+	m.mu.Unlock()
+	if startedCh != nil {
+		select {
+		case <-startedCh:
+		default:
+			close(startedCh)
+		}
+	}
+	if blockCh != nil {
+		<-blockCh
+	}
 	sort.Strings(keys)
 	it := &MockIterator{backend: m, keys: keys, idx: -1}
 	it.Seek(start)
@@ -381,7 +400,11 @@ func (b *MockBatch) SetOps(ops []batch.Entry) error {
 	}
 	b.mb.mu.Lock()
 	defer b.mb.mu.Unlock()
+	b.mb.lastOps = append(b.mb.lastOps[:0], ops...)
 	for _, op := range ops {
+		if b.mb.setOpsInlineValueLimit > 0 && op.Type == batch.OpPut && !op.IsPtr && len(op.Value) > b.mb.setOpsInlineValueLimit {
+			return batch.ErrValueTooLarge
+		}
 		if op.Type == batch.OpDelete {
 			delete(b.mb.data, string(op.Key))
 		} else {
@@ -554,6 +577,380 @@ func TestCachingDB_FlushAllCombinesMemtables(t *testing.T) {
 
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
+	}
+}
+
+func TestBatchWriteSync_WALOffSmallNonOverlappingBypassesQueuedFlush(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldKey := []byte("a/queued")
+	oldVal := []byte("queued")
+	db.mu.Lock()
+	setMutable(db, oldKey, oldVal)
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	queueLenBefore := len(db.queue)
+	if queueLenBefore == 0 {
+		t.Fatalf("queue len before=%d want > 0", queueLenBefore)
+	}
+
+	b := db.NewBatch()
+	if b == nil {
+		t.Fatalf("NewBatch returned nil")
+	}
+	newKey := []byte("z/new")
+	newVal := []byte("fresh")
+	if err := b.Set(newKey, newVal); err != nil {
+		_ = b.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	backend.mu.RLock()
+	writeCalls := backend.writeCalls
+	_, oldPersisted := backend.data[string(oldKey)]
+	newPersisted := backend.data[string(newKey)]
+	backend.mu.RUnlock()
+
+	if writeCalls != 1 {
+		t.Fatalf("backend writeCalls=%d want 1", writeCalls)
+	}
+	if oldPersisted {
+		t.Fatalf("queued key should not have been flushed by unrelated bypassed sync batch")
+	}
+	if string(newPersisted) != string(newVal) {
+		t.Fatalf("backend new value=%q want %q", newPersisted, newVal)
+	}
+	if got := len(db.queue); got != queueLenBefore {
+		t.Fatalf("queue len after=%d want %d", got, queueLenBefore)
+	}
+
+	gotOld, err := db.Get(oldKey)
+	if err != nil {
+		t.Fatalf("Get old: %v", err)
+	}
+	if string(gotOld) != string(oldVal) {
+		t.Fatalf("Get old=%q want %q", gotOld, oldVal)
+	}
+	gotNew, err := db.Get(newKey)
+	if err != nil {
+		t.Fatalf("Get new: %v", err)
+	}
+	if string(gotNew) != string(newVal) {
+		t.Fatalf("Get new=%q want %q", gotNew, newVal)
+	}
+}
+
+func TestBatchWrite_WALOffSmallNonOverlappingDoesNotBypassQueuedFlush(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldKey := []byte("a/queued")
+	oldVal := []byte("queued")
+	db.mu.Lock()
+	setMutable(db, oldKey, oldVal)
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	queueLenBefore := len(db.queue)
+	if queueLenBefore == 0 {
+		t.Fatalf("queue len before=%d want > 0", queueLenBefore)
+	}
+
+	b := db.NewBatch()
+	if b == nil {
+		t.Fatalf("NewBatch returned nil")
+	}
+	newKey := []byte("z/new")
+	newVal := []byte("fresh")
+	if err := b.Set(newKey, newVal); err != nil {
+		_ = b.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("Write: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	backend.mu.RLock()
+	writeCalls := backend.writeCalls
+	_, oldPersisted := backend.data[string(oldKey)]
+	newPersisted := backend.data[string(newKey)]
+	backend.mu.RUnlock()
+
+	if writeCalls != 0 {
+		t.Fatalf("backend writeCalls=%d want 0", writeCalls)
+	}
+	if oldPersisted {
+		t.Fatalf("queued key should not have been flushed by unrelated small batch")
+	}
+	if len(newPersisted) != 0 {
+		t.Fatalf("new key should not have been persisted eagerly, got %q", newPersisted)
+	}
+	if got := len(db.queue); got != queueLenBefore {
+		t.Fatalf("queue len after=%d want %d", got, queueLenBefore)
+	}
+
+	gotOld, err := db.Get(oldKey)
+	if err != nil {
+		t.Fatalf("Get old: %v", err)
+	}
+	if string(gotOld) != string(oldVal) {
+		t.Fatalf("Get old=%q want %q", gotOld, oldVal)
+	}
+	gotNew, err := db.Get(newKey)
+	if err != nil {
+		t.Fatalf("Get new: %v", err)
+	}
+	if string(gotNew) != string(newVal) {
+		t.Fatalf("Get new=%q want %q", gotNew, newVal)
+	}
+}
+
+func TestPrepareBypassValueLogOps_RewritesLargeValuesToPointers(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ops := []batch.Entry{{
+		Type:  batch.OpPut,
+		Key:   []byte("large/key"),
+		Value: bytes.Repeat([]byte("v"), 8<<10),
+	}}
+	rewritten, err := db.prepareBypassValueLogOps(ops, true)
+	if err != nil {
+		t.Fatalf("prepareBypassValueLogOps: %v", err)
+	}
+	if len(rewritten) != 1 {
+		t.Fatalf("rewritten len=%d want 1", len(rewritten))
+	}
+	if !rewritten[0].IsPtr {
+		t.Fatalf("expected large value to be rewritten as pointer op")
+	}
+	if rewritten[0].Value != nil {
+		t.Fatalf("expected pointer op value cleared, len=%d", len(rewritten[0].Value))
+	}
+	if rewritten[0].ValuePtr.FileID == 0 {
+		t.Fatalf("expected non-zero value-log file id")
+	}
+}
+
+func TestBatchWriteSync_WALOffLargeNonOverlappingBypassesAsPointers(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.setOpsInlineValueLimit = 1024
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	oldKey := []byte("a/queued")
+	oldVal := []byte("queued")
+	db.mu.Lock()
+	setMutable(db, oldKey, oldVal)
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	db.mu.Unlock()
+
+	queueLenBefore := len(db.queue)
+	if queueLenBefore == 0 {
+		t.Fatalf("queue len before=%d want > 0", queueLenBefore)
+	}
+
+	b := db.NewBatch()
+	if b == nil {
+		t.Fatalf("NewBatch returned nil")
+	}
+	newKey := []byte("z/large")
+	newVal := bytes.Repeat([]byte("x"), 8<<10)
+	if err := b.Set(newKey, newVal); err != nil {
+		_ = b.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	backend.mu.RLock()
+	writeCalls := backend.writeCalls
+	_, oldPersisted := backend.data[string(oldKey)]
+	lastOps := append([]batch.Entry(nil), backend.lastOps...)
+	backend.mu.RUnlock()
+
+	if writeCalls != 1 {
+		t.Fatalf("backend writeCalls=%d want 1", writeCalls)
+	}
+	if oldPersisted {
+		t.Fatalf("queued key should not have been flushed by large bypassed sync batch")
+	}
+	if len(lastOps) != 1 {
+		t.Fatalf("lastOps len=%d want 1", len(lastOps))
+	}
+	if !lastOps[0].IsPtr {
+		t.Fatalf("expected bypassed large op to be committed as pointer")
+	}
+	if lastOps[0].Value != nil {
+		t.Fatalf("expected committed pointer op value cleared, len=%d", len(lastOps[0].Value))
+	}
+	if lastOps[0].ValuePtr.FileID == 0 {
+		t.Fatalf("expected committed pointer op to reference value log")
+	}
+	if got := len(db.queue); got != queueLenBefore {
+		t.Fatalf("queue len after=%d want %d", got, queueLenBefore)
+	}
+
+	gotOld, err := db.Get(oldKey)
+	if err != nil {
+		t.Fatalf("Get old: %v", err)
+	}
+	if string(gotOld) != string(oldVal) {
+		t.Fatalf("Get old=%q want %q", gotOld, oldVal)
+	}
+}
+
+func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	b := db.NewBatch()
+	if b == nil {
+		t.Fatalf("NewBatch returned nil")
+	}
+	key := []byte("z/large")
+	val := []byte("inline-visible")
+	if err := b.Set(key, val); err != nil {
+		_ = b.Close()
+		t.Fatalf("Set: %v", err)
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		t.Fatalf("WriteSync: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if got := db.mutableBytes.Load(); got != 0 {
+		t.Fatalf("mutableBytes=%d want 0", got)
+	}
+	if got := len(db.queue); got != 0 {
+		t.Fatalf("queue len=%d want 0", got)
+	}
+	if db.hasDirtyValueLogLanes() {
+		t.Fatalf("expected no dirty value-log lanes after sync bypass write")
+	}
+
+	seqBefore := make([]int, len(db.lanes))
+	pathsBefore := make([]string, len(db.lanes))
+	for i := range db.lanes {
+		seqBefore[i] = db.currentValueLogSeq(&db.lanes[i])
+		pathsBefore[i] = db.currentValueLogPath(&db.lanes[i])
+	}
+	backend.mu.RLock()
+	writeCallsBefore := backend.writeCalls
+	backend.mu.RUnlock()
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	if got := db.checkpointNoopSkips.Load(); got == 0 {
+		t.Fatalf("checkpointNoopSkips=%d want > 0", got)
+	}
+	for i := range db.lanes {
+		if got := db.currentValueLogSeq(&db.lanes[i]); got != seqBefore[i] {
+			t.Fatalf("lane %d seq=%d want %d", i, got, seqBefore[i])
+		}
+		if got := db.currentValueLogPath(&db.lanes[i]); got != pathsBefore[i] {
+			t.Fatalf("lane %d path=%q want %q", i, got, pathsBefore[i])
+		}
+	}
+	backend.mu.RLock()
+	writeCallsAfter := backend.writeCalls
+	backend.mu.RUnlock()
+	if writeCallsAfter != writeCallsBefore {
+		t.Fatalf("backend writeCalls after checkpoint=%d want %d", writeCallsAfter, writeCallsBefore)
+	}
+
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(got) != string(val) {
+		t.Fatalf("Get=%q want %q", got, val)
 	}
 }
 
@@ -1203,5 +1600,113 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	}
 	if segments != 0 {
 		t.Fatalf("expected retained segments to be pruned after checkpoint, got %d", segments)
+	}
+}
+
+func TestPruneRetainedValueLogs_SkipsLiveScanWhenAllRetainedPathsInUse(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	retained := cache.currentValueLogPath(&cache.lanes[0])
+	if retained == "" {
+		t.Fatalf("expected current value-log path")
+	}
+	cache.markValueLogRetain(retained)
+
+	cache.pruneRetainedValueLogs()
+
+	backend.mu.RLock()
+	iteratorCalls := backend.iteratorCalls
+	backend.mu.RUnlock()
+	if iteratorCalls != 0 {
+		t.Fatalf("iteratorCalls=%d want 0", iteratorCalls)
+	}
+	if !cache.valueLogRetained(retained) {
+		t.Fatalf("expected in-use retained path to remain retained")
+	}
+}
+
+func TestCheckpoint_SchedulesRetainedValueLogPruneAsynchronously(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.iteratorStartedCh = make(chan struct{})
+	backend.iteratorBlockCh = make(chan struct{})
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 99)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000099.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("r"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cache.Checkpoint()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatalf("Checkpoint blocked on retained prune")
+	}
+
+	select {
+	case <-backend.iteratorStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("background prune did not start backend iterator")
+	}
+	close(backend.iteratorBlockCh)
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if !cache.retainedPruneRunning.Load() {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("background retained prune did not finish")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
