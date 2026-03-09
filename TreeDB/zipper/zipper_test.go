@@ -235,6 +235,49 @@ func TestZipperUpdates(t *testing.T) {
 	}
 }
 
+func TestCoalesceInternalChildren_SkipsLeafRefsWhenOuterLeavesInValueLog(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+
+	leftID, err := page.EncodeLeafRef(page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 4})
+	if err != nil {
+		t.Fatalf("EncodeLeafRef left: %v", err)
+	}
+	rightID, err := page.EncodeLeafRef(page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 4096})
+	if err != nil {
+		t.Fatalf("EncodeLeafRef right: %v", err)
+	}
+
+	entries := []internalEntry{
+		{key: []byte("a"), child: leftID},
+		{key: []byte("b"), child: rightID},
+	}
+
+	got, retired, err := z.coalesceInternalChildren(entries, nil, &adaptive.Metrics{})
+	if err != nil {
+		t.Fatalf("coalesceInternalChildren: %v", err)
+	}
+	if len(retired) != 0 {
+		t.Fatalf("retired=%v want none", retired)
+	}
+	if len(got) != len(entries) {
+		t.Fatalf("len(got)=%d want %d", len(got), len(entries))
+	}
+	for i := range entries {
+		if !bytes.Equal(got[i].key, entries[i].key) || got[i].child != entries[i].child {
+			t.Fatalf("entry[%d]=(%q,%d) want (%q,%d)", i, got[i].key, got[i].child, entries[i].key, entries[i].child)
+		}
+	}
+}
+
 func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
