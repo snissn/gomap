@@ -16,7 +16,7 @@ import (
 const leafRefCancellationCheckInterval = 256
 
 func shouldCheckLeafRefCancellation(i uint16) bool {
-	return i > 0 && i%leafRefCancellationCheckInterval == 0
+	return i > 0 && i&(leafRefCancellationCheckInterval-1) == 0
 }
 
 type pageGetter interface {
