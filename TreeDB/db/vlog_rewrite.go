@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -391,7 +392,25 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 
 // rewritePlanLiveEstimateHook is a test hook used to count uncached live-byte
 // estimation passes without carrying test-only state in the production DB type.
-var rewritePlanLiveEstimateHook func()
+var (
+	rewritePlanLiveEstimateHookMu sync.RWMutex
+	rewritePlanLiveEstimateHook   func()
+)
+
+func loadRewritePlanLiveEstimateHook() func() {
+	rewritePlanLiveEstimateHookMu.RLock()
+	hook := rewritePlanLiveEstimateHook
+	rewritePlanLiveEstimateHookMu.RUnlock()
+	return hook
+}
+
+func swapRewritePlanLiveEstimateHook(hook func()) (prev func()) {
+	rewritePlanLiveEstimateHookMu.Lock()
+	prev = rewritePlanLiveEstimateHook
+	rewritePlanLiveEstimateHook = hook
+	rewritePlanLiveEstimateHookMu.Unlock()
+	return prev
+}
 
 func rewritePlanLiveBytesKeyForState(state *DBState) (valueLogRewriteLiveBytesKey, bool) {
 	if state == nil {
@@ -409,11 +428,13 @@ func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[
 		return nil, false
 	}
 	db.rewritePlanLiveBytesMu.Lock()
-	defer db.rewritePlanLiveBytesMu.Unlock()
 	if db.rewritePlanLiveBytesCache.key != key || db.rewritePlanLiveBytesCache.liveByID == nil {
+		db.rewritePlanLiveBytesMu.Unlock()
 		return nil, false
 	}
-	return cloneValueLogLiveBytesMap(db.rewritePlanLiveBytesCache.liveByID), true
+	liveByID := db.rewritePlanLiveBytesCache.liveByID
+	db.rewritePlanLiveBytesMu.Unlock()
+	return cloneValueLogLiveBytesMap(liveByID), true
 }
 
 func cloneValueLogLiveBytesMap(src map[uint32]int64) map[uint32]int64 {
@@ -431,10 +452,11 @@ func (db *DB) storeCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey, live
 	if db == nil {
 		return
 	}
+	cloned := cloneValueLogLiveBytesMap(liveByID)
 	db.rewritePlanLiveBytesMu.Lock()
 	db.rewritePlanLiveBytesCache = valueLogRewriteLiveBytesCache{
 		key:      key,
-		liveByID: cloneValueLogLiveBytesMap(liveByID),
+		liveByID: cloned,
 	}
 	db.rewritePlanLiveBytesMu.Unlock()
 }
@@ -460,8 +482,8 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 			return liveByID, nil
 		}
 	}
-	if rewritePlanLiveEstimateHook != nil {
-		rewritePlanLiveEstimateHook()
+	if hook := loadRewritePlanLiveEstimateHook(); hook != nil {
+		hook()
 	}
 	liveByID := make(map[uint32]int64)
 
