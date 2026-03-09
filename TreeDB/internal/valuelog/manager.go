@@ -102,8 +102,41 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 	return vf, nil
 }
 
-var openSegmentFile = openFile
-var scanSegmentPaths = listSegments
+var (
+	managerTestHookMu sync.RWMutex
+	openSegmentFile   = openFile
+	scanSegmentPaths  = listSegments
+)
+
+func swapOpenSegmentFileForTest(hook func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error)) (prev func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error)) {
+	managerTestHookMu.Lock()
+	prev = openSegmentFile
+	openSegmentFile = hook
+	managerTestHookMu.Unlock()
+	return prev
+}
+
+func swapScanSegmentPathsForTest(hook func(string) ([]segmentInfo, error)) (prev func(string) ([]segmentInfo, error)) {
+	managerTestHookMu.Lock()
+	prev = scanSegmentPaths
+	scanSegmentPaths = hook
+	managerTestHookMu.Unlock()
+	return prev
+}
+
+func currentOpenSegmentFile() func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
+	managerTestHookMu.RLock()
+	hook := openSegmentFile
+	managerTestHookMu.RUnlock()
+	return hook
+}
+
+func currentScanSegmentPaths() func(string) ([]segmentInfo, error) {
+	managerTestHookMu.RLock()
+	hook := scanSegmentPaths
+	managerTestHookMu.RUnlock()
+	return hook
+}
 
 func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 	if f.cacheRawPooled && cap(f.cacheRaw) > 0 {
@@ -692,7 +725,7 @@ func (m *Manager) SegmentPath(id uint32) string {
 
 // Refresh scans the directory and registers any new segments.
 func (m *Manager) Refresh() error {
-	segments, err := scanSegmentPaths(m.dir)
+	segments, err := currentScanSegmentPaths()(m.dir)
 	if err != nil {
 		return err
 	}
@@ -729,7 +762,7 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	if _, ok := m.files[id]; ok {
 		return nil
 	}
-	f, err := openSegmentFile(path, id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
+	f, err := currentOpenSegmentFile()(path, id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
 	if err != nil {
 		return err
 	}

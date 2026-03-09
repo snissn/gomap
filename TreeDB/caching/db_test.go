@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -37,7 +38,13 @@ type MockBackend struct {
 	setOpsErr              error
 	setErr                 error
 	deleteErr              error
+	registerValueLogErr    error
+	markValueLogZombieErr  error
+	markValueLogZombieID   uint32
 	setOpsInlineValueLimit int
+	fragReport             map[string]string
+	fragErr                error
+	vacuumErr              error
 }
 
 func NewMockBackend() *MockBackend {
@@ -74,6 +81,47 @@ func (m *MockBackend) getSetOpsErr() error {
 func (m *MockBackend) getDeleteErr() error {
 	m.mu.RLock()
 	err := m.deleteErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) RegisterValueLogSegment(path string, fileID uint32) error {
+	m.mu.RLock()
+	err := m.registerValueLogErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) MarkValueLogZombie(id uint32) error {
+	m.mu.RLock()
+	err := m.markValueLogZombieErr
+	failID := m.markValueLogZombieID
+	m.mu.RUnlock()
+	if err != nil && (failID == 0 || failID == id) {
+		return err
+	}
+	return nil
+}
+
+func (m *MockBackend) FragmentationReport() (map[string]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.fragErr != nil {
+		return nil, m.fragErr
+	}
+	if m.fragReport == nil {
+		return nil, nil
+	}
+	out := make(map[string]string, len(m.fragReport))
+	for k, v := range m.fragReport {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (m *MockBackend) VacuumIndexOnline(ctx context.Context) error {
+	m.mu.RLock()
+	err := m.vacuumErr
 	m.mu.RUnlock()
 	return err
 }
@@ -931,6 +979,174 @@ func TestBatchWriteSync_WALOffLargeNonOverlappingBypassesAsPointers(t *testing.T
 	}
 	if string(gotOld) != string(oldVal) {
 		t.Fatalf("Get old=%q want %q", gotOld, oldVal)
+	}
+}
+
+func TestBatchWriteBypass_FallbackReusesPreparedPointerOps(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.setOpsInlineValueLimit = 128
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	largeKey := []byte("large/key")
+	largeVal := bytes.Repeat([]byte("v"), 8<<10)
+	inlineKey := []byte("inline/key")
+	inlineVal := bytes.Repeat([]byte("i"), 256)
+
+	b := db.NewBatch()
+	if err := b.Set(largeKey, largeVal); err != nil {
+		t.Fatalf("Set large: %v", err)
+	}
+	if err := b.Set(inlineKey, inlineVal); err != nil {
+		t.Fatalf("Set inline: %v", err)
+	}
+	if err := b.writeBypass(false); err != nil {
+		t.Fatalf("writeBypass: %v", err)
+	}
+	if got := db.nextRID.Load(); got != 1 {
+		t.Fatalf("nextRID=%d want 1", got)
+	}
+	gotLarge, err := db.Get(largeKey)
+	if err != nil {
+		t.Fatalf("Get large: %v", err)
+	}
+	if !bytes.Equal(gotLarge, largeVal) {
+		t.Fatalf("Get large len=%d want %d", len(gotLarge), len(largeVal))
+	}
+	gotInline, err := db.Get(inlineKey)
+	if err != nil {
+		t.Fatalf("Get inline: %v", err)
+	}
+	if !bytes.Equal(gotInline, inlineVal) {
+		t.Fatalf("Get inline len=%d want %d", len(gotInline), len(inlineVal))
+	}
+}
+
+func TestRotateValueLogMuHeld_RestoresUsableWriterAfterRegisterFailure(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.registerValueLogErr = errors.New("test: register failed")
+
+	oldSeq := 59
+	oldPath := filepath.Join(dir, valueLogName(0, oldSeq))
+	oldFileID, err := valuelog.EncodeFileID(0, uint32(oldSeq))
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	writer, err := valuelog.NewWriter(oldPath, oldFileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	l := &lane{
+		id:       0,
+		vlog:     writer,
+		vlogSeq:  oldSeq,
+		vlogPath: oldPath,
+	}
+	db := &DB{dir: dir, backend: backend}
+	t.Cleanup(func() {
+		if l.vlog != nil {
+			_ = l.vlog.Close()
+			l.vlog = nil
+		}
+		_ = db.removeFileRetry(oldPath)
+		_ = db.removeFileRetry(filepath.Join(dir, valueLogName(0, oldSeq+1)))
+	})
+
+	err = db.rotateValueLogLocked(l)
+	if err == nil || !strings.Contains(err.Error(), "register failed") {
+		t.Fatalf("rotateValueLogLocked err=%v want register failure", err)
+	}
+	if got := l.vlogSeq; got != oldSeq {
+		t.Fatalf("vlogSeq=%d want %d", got, oldSeq)
+	}
+	if got := l.vlogPath; got != oldPath {
+		t.Fatalf("vlogPath=%q want %q", got, oldPath)
+	}
+	if l.vlog == nil {
+		t.Fatalf("expected usable writer restored after register failure")
+	}
+	ptrs, err := db.appendValueLog(l, 0, nil, []valuelog.Record{{RID: 1, Value: []byte("value")}}, journalDurabilityNone)
+	if err != nil {
+		t.Fatalf("appendValueLog after rollback: %v", err)
+	}
+	if len(ptrs) != 1 {
+		t.Fatalf("ptrs len=%d want 1", len(ptrs))
+	}
+	if got := ptrs[0].FileID; got != page.ValueLogFileID(oldFileID) {
+		t.Fatalf("ptr fileID=%d want %d", got, oldFileID)
+	}
+	putValueLogPtrs(ptrs)
+}
+
+func TestRegisterValueLogSegment_RollsBackReaderOnBackendFailure(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.registerValueLogErr = errors.New("test: register failed")
+
+	reader, err := valuelog.NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	db := &DB{
+		dir:            dir,
+		backend:        backend,
+		valueLogReader: reader,
+	}
+
+	path := filepath.Join(dir, valueLogName(0, 1))
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err = db.registerValueLogSegment(path, fileID)
+	if err == nil || !strings.Contains(err.Error(), "register failed") {
+		t.Fatalf("registerValueLogSegment err=%v want register failure", err)
+	}
+
+	set := reader.CurrentSetNoRefresh()
+	if _, ok := set.Files[fileID]; ok {
+		t.Fatalf("segment %d remained registered after backend failure", fileID)
+	}
+}
+
+func TestCheckpoint_IgnoresUnsupportedSparseVacuum(t *testing.T) {
+	backend := NewMockBackend()
+	backend.fragReport = map[string]string{
+		"treedb.user.pages":                 strconv.FormatUint(checkpointSparseIndexMinPages, 10),
+		"treedb.user.internal_fill_ppm_p50": strconv.FormatUint(checkpointSparseIndexMaxInternalFillP50PPM-1, 10),
+		"treedb.user.internal_fill_ppm_avg": strconv.FormatUint(checkpointSparseIndexMaxInternalFillAvgPPM-1, 10),
+	}
+	backend.vacuumErr = db.ErrVacuumUnsupported
+
+	db := &DB{
+		backend:        backend,
+		disableJournal: true,
+	}
+	db.checkpointRuns.Store(checkpointSparseIndexCheckEveryNoops)
+
+	if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+		t.Fatalf("maybeVacuumSparseIndexOnCheckpoint: %v", err)
+	}
+	if got := db.checkpointAutoVacuumRuns.Load(); got != 0 {
+		t.Fatalf("checkpointAutoVacuumRuns=%d want 0", got)
 	}
 }
 
@@ -1925,6 +2141,7 @@ func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
+		cache.noteWrite()
 		if time.Now().After(deadline) {
 			t.Fatalf("foreground write timestamp did not advance")
 		}
@@ -2003,6 +2220,7 @@ func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
 	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
+		cache.noteWrite()
 		if time.Now().After(deadline) {
 			t.Fatalf("foreground write timestamp did not advance")
 		}
