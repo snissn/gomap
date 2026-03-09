@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -402,12 +403,16 @@ var rewritePlanLiveEstimateHook = func() atomic.Value {
 	return v
 }()
 
+var rewritePlanLiveEstimateHookMu sync.Mutex
+
 func loadRewritePlanLiveEstimateHook() func() {
 	v, _ := rewritePlanLiveEstimateHook.Load().(rewritePlanLiveEstimateHookValue)
 	return v.fn
 }
 
 func swapRewritePlanLiveEstimateHook(hook func()) (prev func()) {
+	rewritePlanLiveEstimateHookMu.Lock()
+	defer rewritePlanLiveEstimateHookMu.Unlock()
 	prev = loadRewritePlanLiveEstimateHook()
 	rewritePlanLiveEstimateHook.Store(rewritePlanLiveEstimateHookValue{fn: hook})
 	return prev
