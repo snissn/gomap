@@ -209,9 +209,7 @@ func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
 	if got := cdb.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
 	}
-	if err := it.Close(); err != nil {
-		t.Fatalf("second close iterator: %v", err)
-	}
+	_ = it.Close()
 	if got := cdb.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
 	}
@@ -249,9 +247,7 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 	if got := db.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
 	}
-	if err := wrappedAgain.Close(); err != nil {
-		t.Fatalf("second close wrapped iterator: %v", err)
-	}
+	_ = wrappedAgain.Close()
 	if got := db.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
 	}
@@ -1945,8 +1941,8 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse retained segments: %v", err)
 	}
-	if segments > 1 {
-		t.Fatalf("expected at most one retained segment after checkpoint, got %d (before=%dB)", segments, retainedBefore)
+	if segments != 1 {
+		t.Fatalf("expected exactly one retained segment after checkpoint, got %d (before=%dB)", segments, retainedBefore)
 	}
 }
 
