@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/bits"
 	"os"
 	"path/filepath"
@@ -2916,7 +2917,7 @@ func (db *DB) retainedPrunePressureBytes() int64 {
 		if limit <= 1 {
 			return 1
 		}
-		return max(limit/2, int64(1))
+		return limit / 2
 	}
 	const (
 		retainedPruneSegmentPressureMultiplier = 4
@@ -2928,8 +2929,16 @@ func (db *DB) retainedPrunePressureBytes() int64 {
 	if pressure <= 0 {
 		pressure = retainedPrunePressureFloorBytes
 	}
-	if ft := db.flushThreshold * 8; ft > pressure {
-		pressure = ft
+	if db.flushThreshold > 0 {
+		ft := db.flushThreshold
+		if ft > math.MaxInt64/8 {
+			ft = math.MaxInt64
+		} else {
+			ft *= 8
+		}
+		if ft > pressure {
+			pressure = ft
+		}
 	}
 	if pressure < retainedPrunePressureFloorBytes {
 		pressure = retainedPrunePressureFloorBytes
