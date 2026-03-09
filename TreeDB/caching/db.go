@@ -14352,6 +14352,7 @@ func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
 
 // GetUnsafe returns a safe copy of the value.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
+	db.noteRead()
 	return db.Get(key)
 }
 
@@ -15387,6 +15388,9 @@ func (it *foregroundTrackedIterator) Close() error {
 func (db *DB) wrapForegroundIterator(it merging.Iterator) merging.Iterator {
 	if db == nil || it == nil {
 		return it
+	}
+	if tracked, ok := it.(*foregroundTrackedIterator); ok {
+		return tracked
 	}
 	db.activeForegroundIterators.Add(1)
 	return &foregroundTrackedIterator{Iterator: it, db: db}

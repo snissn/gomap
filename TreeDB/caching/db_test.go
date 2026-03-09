@@ -124,6 +124,70 @@ func deleteMutable(db *DB, key []byte) {
 	db.mutableBytes.Add(delta)
 }
 
+func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	base := &MockIterator{}
+	wrapped := db.wrapForegroundIterator(base)
+	if got := db.activeForegroundIterators.Load(); got != 1 {
+		t.Fatalf("activeForegroundIterators after first wrap=%d want=1", got)
+	}
+	wrappedAgain := db.wrapForegroundIterator(wrapped)
+	if wrappedAgain != wrapped {
+		t.Fatalf("double wrap returned different iterator")
+	}
+	if got := db.activeForegroundIterators.Load(); got != 1 {
+		t.Fatalf("activeForegroundIterators after second wrap=%d want=1", got)
+	}
+	if err := wrappedAgain.Close(); err != nil {
+		t.Fatalf("close wrapped iterator: %v", err)
+	}
+	if got := db.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
+	}
+	if err := wrappedAgain.Close(); err != nil {
+		t.Fatalf("second close wrapped iterator: %v", err)
+	}
+	if got := db.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
+	}
+}
+
+func TestForegroundMaintenanceContext_CancelsOnGetUnsafe(t *testing.T) {
+	backend := NewMockBackend()
+	backend.data["k"] = []byte("value")
+	db := &DB{
+		closeCh: make(chan struct{}),
+		backend: backend,
+	}
+	ctx, cancel := db.foregroundMaintenanceContext(250 * time.Millisecond)
+	defer cancel()
+
+	if _, err := db.GetUnsafe([]byte("k")); err != nil {
+		t.Fatalf("GetUnsafe: %v", err)
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("foreground maintenance context did not cancel after GetUnsafe")
+	}
+}
+
+func TestForegroundMaintenanceContext_CancelsOnActiveIterator(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	ctx, cancel := db.foregroundMaintenanceContext(250 * time.Millisecond)
+	defer cancel()
+
+	it := db.wrapForegroundIterator(&MockIterator{})
+	defer it.Close()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("foreground maintenance context did not cancel with active iterator")
+	}
+}
+
 func countSnapshotLeafEntries(t *testing.T, snap *db.Snapshot) int {
 	t.Helper()
 	if snap == nil {

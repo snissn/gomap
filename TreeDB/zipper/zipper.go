@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/bits"
 	"runtime"
 	"sort"
@@ -1120,12 +1121,13 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	target := builder
 	appendInternal := func(key []byte, childID uint64, first bool) error {
+		pageCount := z.pager.PageCount()
 		if z.outerLeavesInValueLog {
-			if _, ok := page.DecodeLeafRef(childID); !ok && childID >= z.pager.PageCount() {
-				return errors.New("zipper: detected OOB child ID")
+			if _, ok := page.DecodeLeafRef(childID); !ok && childID >= pageCount {
+				return fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", childID, pageCount)
 			}
-		} else if childID >= z.pager.PageCount() {
-			return errors.New("zipper: detected OOB child ID")
+		} else if childID >= pageCount {
+			return fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", childID, pageCount)
 		}
 		if first && key == nil {
 			key = []byte{}
