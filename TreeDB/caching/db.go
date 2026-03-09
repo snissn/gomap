@@ -15207,17 +15207,17 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-		if hasMemSource && view != nil {
-			leasedView := view
-			view = nil
-			releaseView = false
-			return &leasedMergingIterator{
-				Iterator: it,
-				release: func() {
-					db.releaseMemtableView(leasedView)
-				},
+			if hasMemSource && view != nil {
+				leasedView := view
+				view = nil
+				releaseView = false
+				return &leasedMergingIterator{
+					Iterator: it,
+					release: func() {
+						db.releaseMemtableView(leasedView)
+					},
+				}
 			}
-		}
 		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil
@@ -15536,17 +15536,17 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-		if hasMemSource && view != nil {
-			leasedView := view
-			view = nil
-			releaseView = false
-			return &leasedMergingIterator{
-				Iterator: it,
-				release: func() {
-					db.releaseMemtableView(leasedView)
-				},
+			if hasMemSource && view != nil {
+				leasedView := view
+				view = nil
+				releaseView = false
+				return &leasedMergingIterator{
+					Iterator: it,
+					release: func() {
+						db.releaseMemtableView(leasedView)
+					},
+				}
 			}
-		}
 		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil
