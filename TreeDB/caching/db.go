@@ -2694,7 +2694,7 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 	defer it.Close()
 	seen := 0
 	for it.Valid() {
-		if seen&255 == 0 && db.foregroundWritesResumedSince(lastWrite) {
+		if seen > 0 && seen&255 == 0 && db.foregroundWritesResumedSince(lastWrite) {
 			return errForegroundWritesResumed
 		}
 		_, ptr, flags := it.UnsafeEntry()
@@ -2906,15 +2906,21 @@ func (db *DB) retainedPrunePressureBytes() int64 {
 		}
 		return max(limit/2, int64(1))
 	}
-	pressure := db.valueLogMaxSegmentBytes * 4
+	const (
+		retainedPruneSegmentPressureMultiplier = 4
+		// Keep retained-prune pressure comfortably above tiny test/default
+		// segment sizes so prune cadence stays tied to substantial backlog.
+		retainedPrunePressureFloorBytes = 1 << 30
+	)
+	pressure := db.valueLogMaxSegmentBytes * retainedPruneSegmentPressureMultiplier
 	if pressure <= 0 {
-		pressure = 1 << 30
+		pressure = retainedPrunePressureFloorBytes
 	}
 	if ft := db.flushThreshold * 8; ft > pressure {
 		pressure = ft
 	}
-	if pressure < 1<<30 {
-		pressure = 1 << 30
+	if pressure < retainedPrunePressureFloorBytes {
+		pressure = retainedPrunePressureFloorBytes
 	}
 	return pressure
 }
