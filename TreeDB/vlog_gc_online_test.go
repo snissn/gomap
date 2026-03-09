@@ -21,6 +21,9 @@ func TestValueLogGCOnline_ProtectedSetSafety(t *testing.T) {
 		BackgroundIndexVacuumInterval: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
+			Generational: treedb.ValueLogGenerationConfig{
+				Policy: treedb.ValueLogGenerationOff,
+			},
 		},
 	})
 	if err != nil {
@@ -103,6 +106,9 @@ func TestValueLogGC_OnlineMode_HealthStateNoUnsafeDeletes(t *testing.T) {
 		BackgroundIndexVacuumInterval: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
+			Generational: treedb.ValueLogGenerationConfig{
+				Policy: treedb.ValueLogGenerationOff,
+			},
 		},
 	})
 	if err != nil {
