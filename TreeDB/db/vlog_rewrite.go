@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -390,23 +391,44 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	return plan, nil
 }
 
-// rewritePlanLiveEstimateHook is a test hook used to count uncached live-byte
-// estimation passes without carrying test-only state in the production DB type.
-type rewritePlanLiveEstimateHookValue struct {
-	fn func()
+// rewrite-plan tests need to count uncached live-byte estimation passes without
+// serializing the entire package. Keep the hook registry unexported and make
+// registration/removal cheap so tests can install independent counters.
+var (
+	rewritePlanLiveEstimateHooksMu   sync.RWMutex
+	rewritePlanLiveEstimateHooks     = map[uint64]func(){}
+	rewritePlanLiveEstimateHookNextID atomic.Uint64
+)
+
+func registerRewritePlanLiveEstimateHook(hook func()) func() {
+	if hook == nil {
+		return func() {}
+	}
+	id := rewritePlanLiveEstimateHookNextID.Add(1)
+	rewritePlanLiveEstimateHooksMu.Lock()
+	rewritePlanLiveEstimateHooks[id] = hook
+	rewritePlanLiveEstimateHooksMu.Unlock()
+	return func() {
+		rewritePlanLiveEstimateHooksMu.Lock()
+		delete(rewritePlanLiveEstimateHooks, id)
+		rewritePlanLiveEstimateHooksMu.Unlock()
+	}
 }
 
-var rewritePlanLiveEstimateHook atomic.Value
-
-func loadRewritePlanLiveEstimateHook() func() {
-	v, _ := rewritePlanLiveEstimateHook.Load().(rewritePlanLiveEstimateHookValue)
-	return v.fn
-}
-
-func swapRewritePlanLiveEstimateHook(hook func()) (prev func()) {
-	prev = loadRewritePlanLiveEstimateHook()
-	rewritePlanLiveEstimateHook.Store(rewritePlanLiveEstimateHookValue{fn: hook})
-	return prev
+func runRewritePlanLiveEstimateHooks() {
+	rewritePlanLiveEstimateHooksMu.RLock()
+	if len(rewritePlanLiveEstimateHooks) == 0 {
+		rewritePlanLiveEstimateHooksMu.RUnlock()
+		return
+	}
+	hooks := make([]func(), 0, len(rewritePlanLiveEstimateHooks))
+	for _, hook := range rewritePlanLiveEstimateHooks {
+		hooks = append(hooks, hook)
+	}
+	rewritePlanLiveEstimateHooksMu.RUnlock()
+	for _, hook := range hooks {
+		hook()
+	}
 }
 
 func rewritePlanLiveBytesKeyForState(state *DBState) (valueLogRewriteLiveBytesKey, bool) {
@@ -470,18 +492,14 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 		}
 		return nil, fmt.Errorf("missing snapshot state")
 	}
+	defer func() { _ = snap.Close() }()
 	cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
 	if cacheable {
 		if liveByID, ok := db.loadCachedValueLogLiveBytes(cacheKey); ok {
-			if err := snap.Close(); err != nil {
-				return nil, err
-			}
 			return liveByID, nil
 		}
 	}
-	if hook := loadRewritePlanLiveEstimateHook(); hook != nil {
-		hook()
-	}
+	runRewritePlanLiveEstimateHooks()
 	liveByID := make(map[uint32]int64)
 
 	// Pointer-projection iterators can return many keys pointing at the same
@@ -493,7 +511,6 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords); err != nil {
 		_ = userIter.Close()
-		_ = snap.Close()
 		return nil, err
 	}
 	_ = userIter.Close()
@@ -502,7 +519,6 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID, &seenGroupedRecords); err != nil {
 		_ = sysIter.Close()
-		_ = snap.Close()
 		return nil, err
 	}
 	_ = sysIter.Close()
@@ -513,17 +529,11 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	// that are actually pinned by live leaf pages.
 	if snap.idx != nil && snap.idx.pager != nil {
 		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords); err != nil {
-			_ = snap.Close()
 			return nil, err
 		}
 		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByID, &seenGroupedRecords); err != nil {
-			_ = snap.Close()
 			return nil, err
 		}
-	}
-
-	if err := snap.Close(); err != nil {
-		return nil, err
 	}
 	if cacheable {
 		db.storeCachedValueLogLiveBytes(cacheKey, liveByID)
