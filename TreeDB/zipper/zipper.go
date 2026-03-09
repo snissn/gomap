@@ -1120,8 +1120,8 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	}
 
 	target := builder
-	pageCount := z.pager.PageCount()
 	appendInternal := func(key []byte, childID uint64, first bool) error {
+		pageCount := z.pager.PageCount()
 		if z.outerLeavesInValueLog {
 			if _, ok := page.DecodeLeafRef(childID); !ok && childID >= pageCount {
 				return fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", childID, pageCount)
