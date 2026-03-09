@@ -67,7 +67,9 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	set := db.valueLogManager.CurrentSet()
 	keptIDs := currentValueLogIDs(set)
 	if len(opts.ProtectedPaths) > 0 {
-		keptIDs = recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
+		if recent := recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths); len(recent) > 0 {
+			keptIDs = recent
+		}
 	}
 	protectedPaths := make(map[string]struct{}, len(opts.ProtectedPaths))
 	for _, path := range opts.ProtectedPaths {
@@ -187,7 +189,25 @@ func recentValueLogIDs(set *valuelog.Set, keepPerLane int) map[uint32]struct{} {
 	if keepPerLane <= 1 {
 		return currentValueLogIDs(set)
 	}
-	return recentValueLogIDsForProtectedPaths(set, keepPerLane, nil)
+	if set == nil || len(set.Files) == 0 {
+		return nil
+	}
+	kept := make(map[uint32]struct{})
+	maxByLane := make(map[uint32]uint32)
+	for id := range set.Files {
+		lane, seq := valuelog.DecodeFileID(id)
+		if cur, ok := maxByLane[lane]; !ok || seq > cur {
+			maxByLane[lane] = seq
+		}
+	}
+	for id := range set.Files {
+		lane, seq := valuelog.DecodeFileID(id)
+		maxSeq := maxByLane[lane]
+		if maxSeq <= seq || int64(maxSeq)-int64(seq) < int64(keepPerLane) {
+			kept[id] = struct{}{}
+		}
+	}
+	return kept
 }
 
 func recentValueLogIDsForProtectedPaths(set *valuelog.Set, keepPerLane int, protectedPaths []string) map[uint32]struct{} {

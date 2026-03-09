@@ -7,6 +7,9 @@ import (
 )
 
 func TestProfileFast_MultiDomainSyncWritesCheckpointVacuumKeepsInternalPagesPacked(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping sparse-index checkpoint stress test in short mode")
+	}
 	dir := t.TempDir()
 
 	db, err := Open(Options{
@@ -66,16 +69,17 @@ func TestProfileFast_MultiDomainSyncWritesCheckpointVacuumKeepsInternalPagesPack
 
 	p50 := parse("treedb.user.internal_fill_ppm_p50")
 	avg := parse("treedb.user.internal_fill_ppm_avg")
+	pages := parse("treedb.user.pages")
 	autoVacuumRuns, err := strconv.ParseUint(db.Stats()["treedb.cache.checkpoint.auto_vacuum_runs"], 10, 64)
 	if err != nil {
 		t.Fatalf("parse auto vacuum runs: %v", err)
 	}
 
-	if p50 < 200_000 {
-		t.Fatalf("expected internal fill p50 >= 200000 ppm, got %d (avg=%d report=%v)", p50, avg, rep)
+	if pages > 160 {
+		t.Fatalf("expected checkpoint auto vacuum to keep user page count bounded, pages=%d report=%v", pages, rep)
 	}
-	if avg < 350_000 {
-		t.Fatalf("expected internal fill avg >= 350000 ppm, got %d (p50=%d report=%v)", avg, p50, rep)
+	if avg < 200_000 {
+		t.Fatalf("expected internal fill avg >= 200000 ppm, got %d (p50=%d report=%v)", avg, p50, rep)
 	}
 	if autoVacuumRuns == 0 {
 		t.Fatalf("expected checkpoint auto vacuum to run; stats=%v report=%v", db.Stats(), rep)

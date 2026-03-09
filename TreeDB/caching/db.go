@@ -2708,24 +2708,8 @@ func (db *DB) pruneRetainedValueLogs() {
 	}
 
 	inUse := make(map[string]struct{})
-	if db.splitValueLogEnabled() {
-		for _, path := range db.currentValueLogPaths() {
-			inUse[path] = struct{}{}
-		}
-		for _, paths := range db.queueValueLogPaths {
-			for _, path := range paths {
-				inUse[path] = struct{}{}
-			}
-		}
-	} else {
-		for _, path := range db.currentWALPaths() {
-			inUse[path] = struct{}{}
-		}
-		for _, paths := range db.queueWALPaths {
-			for _, path := range paths {
-				inUse[path] = struct{}{}
-			}
-		}
+	for _, path := range db.valueLogInUsePaths() {
+		inUse[path] = struct{}{}
 	}
 
 	candidatePaths := make([]string, 0, len(paths))
@@ -10079,14 +10063,9 @@ func (db *DB) maybeVacuumSparseIndexOnCheckpoint() error {
 	}
 
 	runs := db.checkpointRuns.Load() + 1
-	for {
-		last := db.checkpointAutoVacuumLastCheckRun.Load()
-		if runs-last < checkpointSparseIndexCheckEveryNoops {
-			return nil
-		}
-		if db.checkpointAutoVacuumLastCheckRun.CompareAndSwap(last, runs) {
-			break
-		}
+	last := db.checkpointAutoVacuumLastCheckRun.Load()
+	if runs-last < checkpointSparseIndexCheckEveryNoops {
+		return nil
 	}
 
 	report, err := frag.FragmentationReport()
@@ -10104,6 +10083,15 @@ func (db *DB) maybeVacuumSparseIndexOnCheckpoint() error {
 	avg, ok := parseCheckpointFragUint(report, "treedb.user.internal_fill_ppm_avg")
 	if !ok {
 		return nil
+	}
+	for {
+		last = db.checkpointAutoVacuumLastCheckRun.Load()
+		if runs-last < checkpointSparseIndexCheckEveryNoops {
+			return nil
+		}
+		if db.checkpointAutoVacuumLastCheckRun.CompareAndSwap(last, runs) {
+			break
+		}
 	}
 
 	db.checkpointAutoVacuumLastPages.Store(pages)
@@ -12013,6 +12001,8 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 
 func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	nextSeq := l.vlogSeq + 1
+	oldSeq := l.vlogSeq
+	oldPath := l.vlogPath
 	name := valueLogName(l.id, nextSeq)
 	path := filepath.Join(db.dir, name)
 	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(nextSeq))
@@ -12021,7 +12011,6 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	}
 
 	if l.vlog != nil {
-		oldPath := l.vlogPath
 		oldSize := l.vlog.Size()
 		if err := l.vlog.RotateTo(path, fileID); err != nil {
 			return err
@@ -12061,17 +12050,26 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		l.vlogSeq = nextSeq
 		l.vlogLiveBytes.Store(0)
 	}
-	l.vlogPath = path
-	l.vlogLiveBytes.Store(0)
 	if err := db.registerValueLogSegment(path, fileID); err != nil {
+		if l.vlog != nil && oldSeq == 0 && oldPath == "" {
+			_ = l.vlog.Close()
+			l.vlog = nil
+		}
+		l.vlogSeq = oldSeq
+		l.vlogPath = oldPath
 		return err
 	}
+	l.vlogPath = path
+	l.vlogLiveBytes.Store(0)
 	return nil
 }
 
 func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
-	if db == nil || path == "" || fileID == 0 {
+	if db == nil {
 		return nil
+	}
+	if path == "" || fileID == 0 {
+		return fmt.Errorf("invalid value-log segment registration: path=%q file_id=%d", path, fileID)
 	}
 	if db.valueLogReader != nil {
 		if err := db.valueLogReader.RegisterSegment(path, fileID); err != nil {
@@ -14779,17 +14777,17 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-			if hasMemSource && view != nil {
-				leasedView := view
-				view = nil
-				releaseView = false
-				return &leasedMergingIterator{
-					Iterator: it,
-					release: func() {
-						db.releaseMemtableView(leasedView)
-					},
-				}
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return &leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
 			}
+		}
 		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil
@@ -15108,17 +15106,17 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-			if hasMemSource && view != nil {
-				leasedView := view
-				view = nil
-				releaseView = false
-				return &leasedMergingIterator{
-					Iterator: it,
-					release: func() {
-						db.releaseMemtableView(leasedView)
-					},
-				}
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return &leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
 			}
+		}
 		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil

@@ -193,6 +193,12 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 		InternalBaseDelta:     db.indexInternalBaseDelta,
 	}
 	if db.indexOuterLeavesInValueLog {
+		if db.leafPageLog == nil {
+			_ = baseIter.Close()
+			_ = baseSnap.Close()
+			cleanupNewPager()
+			return fmt.Errorf("vacuum: leaf page log not configured")
+		}
 		buildOpts.LeafPageLog = db.leafPageLog
 	}
 	newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, buildOpts)
