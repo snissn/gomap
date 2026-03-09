@@ -13,6 +13,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
+const leafRefCancellationCheckInterval = 256
+
 type pageGetter interface {
 	Get(pageID uint64) ([]byte, error)
 }
@@ -108,7 +110,7 @@ func collectNestedLeafPageValueLogLiveIDs(ctx context.Context, ptr page.ValuePtr
 		return fmt.Errorf("checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
 	for i := uint16(0); i < leaf.Count(); i++ {
-		if i&255 == 0 {
+		if i%leafRefCancellationCheckInterval == 0 {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
