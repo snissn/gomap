@@ -23,11 +23,11 @@ import (
 func withRewritePlanEstimateCounter(t *testing.T) *atomic.Uint64 {
 	t.Helper()
 	var counter atomic.Uint64
-	rewritePlanLiveEstimateHook = func() {
+	prev := swapRewritePlanLiveEstimateHook(func() {
 		counter.Add(1)
-	}
+	})
 	t.Cleanup(func() {
-		rewritePlanLiveEstimateHook = nil
+		swapRewritePlanLiveEstimateHook(prev)
 	})
 	return &counter
 }
