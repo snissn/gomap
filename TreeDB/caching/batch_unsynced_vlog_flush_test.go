@@ -26,6 +26,48 @@ func unsyncedFlushScanBounds() ([]byte, []byte) {
 	return start, end
 }
 
+func findKeysForDistinctLanes(t *testing.T, db *DB, wantedLanes, perLane int) [][]byte {
+	t.Helper()
+	seen := make(map[int][][]byte, wantedLanes)
+	for i := 0; i < 1<<18; i++ {
+		key := []byte{byte(i >> 8), byte(i), byte(i >> 4), byte(i * 7)}
+		laneID := db.laneForShardIndex(db.shardIndex(key))
+		if len(seen) >= wantedLanes {
+			if _, ok := seen[laneID]; !ok {
+				continue
+			}
+		}
+		bucket := seen[laneID]
+		if len(bucket) >= perLane {
+			continue
+		}
+		seen[laneID] = append(bucket, append([]byte(nil), key...))
+		ready := len(seen) >= wantedLanes
+		if ready {
+			for _, keys := range seen {
+				if len(keys) < perLane {
+					ready = false
+					break
+				}
+			}
+		}
+		if ready {
+			break
+		}
+	}
+	if len(seen) < wantedLanes {
+		t.Fatalf("found %d distinct lanes, want at least %d", len(seen), wantedLanes)
+	}
+	keys := make([][]byte, 0, wantedLanes*perLane)
+	for _, laneKeys := range seen {
+		if len(laneKeys) < perLane {
+			t.Fatalf("lane produced %d keys, want at least %d", len(laneKeys), perLane)
+		}
+		keys = append(keys, laneKeys[:perLane]...)
+	}
+	return keys
+}
+
 func TestProfileFast_BatchWriteFlushesPointerValueLogBeforeMetadataSync(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -167,8 +209,9 @@ func TestProfileFast_BatchWriteFlushesPointerValueLogAcrossMultipleLanes(t *test
 
 	b := db.NewBatch()
 	value := bytes.Repeat([]byte("M"), vlogQueueMinValueSize+256)
+	keys := findKeysForDistinctLanes(t, db, 2, multiLaneValueLogMinRecords/2+1)
 	for i := 0; i < multiLaneValueLogMinRecords; i++ {
-		key := []byte{byte(i >> 8), byte(i), byte(i >> 4), byte(i * 7)}
+		key := keys[i]
 		if err := b.Set(key, value); err != nil {
 			t.Fatalf("set key %d: %v", i, err)
 		}

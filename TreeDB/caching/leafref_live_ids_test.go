@@ -8,18 +8,18 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-type panicSlabReader struct{}
-type panicPageGetter struct{}
+type errorSlabReader struct{}
+type errorPageGetter struct{}
 
-func (panicPageGetter) Get(pageID uint64) ([]byte, error) {
+func (errorPageGetter) Get(pageID uint64) ([]byte, error) {
 	return nil, errors.New("unexpected Get call")
 }
 
-func (panicSlabReader) Read(ptr page.ValuePtr) ([]byte, error) {
+func (errorSlabReader) Read(ptr page.ValuePtr) ([]byte, error) {
 	return nil, errors.New("unexpected Read call")
 }
 
-func (panicSlabReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+func (errorSlabReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	return nil, errors.New("unexpected ReadUnsafe call")
 }
 
@@ -33,7 +33,7 @@ func TestCollectLeafRefValueLogLiveIDs_RespectsCanceledContext(t *testing.T) {
 	cancel()
 	live := make(map[uint32]struct{})
 
-	err = collectLeafRefValueLogLiveIDs(ctx, panicPageGetter{}, rootID, panicSlabReader{}, live)
+	err = collectLeafRefValueLogLiveIDs(ctx, errorPageGetter{}, rootID, errorSlabReader{}, live)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("collectLeafRefValueLogLiveIDs err=%v want context.Canceled", err)
 	}

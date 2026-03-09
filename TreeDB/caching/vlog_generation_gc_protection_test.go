@@ -196,9 +196,9 @@ func TestVlogGenerationGC_CheckpointsBeforeGCWhenRetainedPathsIncomplete(t *test
 	db.valueLogMu.Lock()
 	db.valueLogRetain = map[string]struct{}{keepPath: {}}
 	db.valueLogMu.Unlock()
-	db.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano())
-	db.lastForegroundReadUnixNano.Store(time.Now().Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
-
+	now := time.Now()
+	db.lastForegroundWriteUnixNano.Store(now.Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano())
+	db.lastForegroundReadUnixNano.Store(now.Add(-2 * vlogForegroundReadQuietWindow).UnixNano())
 	db.maybeRunVlogGenerationMaintenance(true)
 
 	// The maintenance path establishes a stable backend boundary before GC, so

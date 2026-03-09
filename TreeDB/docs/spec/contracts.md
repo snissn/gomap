@@ -43,8 +43,9 @@ When the cached layer is enabled (default `treedb.Open` behavior):
 ### 3.2 Batches
 
 - `NewBatch` accumulates operations.
-- `Write` commits without strict sync guarantee.
-- `WriteSync` commits with sync guarantee only in durable mode.
+- `Write` commits without strict crash-durability guarantee.
+- `WriteSync` commits with stronger crash-durability intent, but relaxed modes still do not promise fsync durability.
+- After either `Write` or `WriteSync` succeeds, normal DB reads on the same open DB (`Get`, `Has`, iterators, snapshots acquired after the write) MUST observe the committed state.
 
 For WAL replay, commit-log batches are treated atomically at replay boundaries.
 
@@ -99,14 +100,14 @@ When the cached layer is enabled:
 
 ## 7. Durability Contract Summary
 
-Durability mode controls guarantees for sync calls:
+Durability mode controls crash-durability and backend-publication guarantees for sync calls. It does not weaken ordinary read-your-writes visibility on an open DB.
 
 - `DurabilityDurable`:
   - `*Sync` methods use fsync durability boundaries.
 - `DurabilityWALOnRelaxed`:
   - WAL remains on, but `*Sync` is relaxed (no fsync boundary).
 - `DurabilityWALOffRelaxed`:
-  - WAL off, relaxed sync; durability boundary is typically checkpoint-based.
+  - WAL off, relaxed sync; backend publication and cleanup boundaries are typically checkpoint-based.
 
 Detailed semantics are in `TreeDB/docs/spec/write-path-and-durability.md`.
 
