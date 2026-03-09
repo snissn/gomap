@@ -1387,15 +1387,17 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	defer func() { putInternalEntrySlice(entries) }()
 	for i := range children {
 		child := children[i]
-		if (!z.outerLeavesInValueLog || !isLeafRef(child.newChild)) && child.newChild >= z.pager.PageCount() {
-			return 0, nil, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", child.newChild, z.pager.PageCount())
+		pageCount := z.pager.PageCount()
+		if (!z.outerLeavesInValueLog || !isLeafRef(child.newChild)) && child.newChild >= pageCount {
+			return 0, nil, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", child.newChild, pageCount)
 		}
 		entries = append(entries, internalEntry{key: child.key, child: child.newChild})
 
 		// Add sibling splits
 		for _, s := range child.splits {
-			if (!z.outerLeavesInValueLog || !isLeafRef(s.NodeID)) && s.NodeID >= z.pager.PageCount() {
-				return 0, nil, fmt.Errorf("zipper: detected OOB split child ID %d (page_count=%d)", s.NodeID, z.pager.PageCount())
+			pageCount := z.pager.PageCount()
+			if (!z.outerLeavesInValueLog || !isLeafRef(s.NodeID)) && s.NodeID >= pageCount {
+				return 0, nil, fmt.Errorf("zipper: detected OOB split child ID %d (page_count=%d)", s.NodeID, pageCount)
 			}
 			entries = append(entries, internalEntry{key: s.Key, child: s.NodeID})
 		}
@@ -1969,8 +1971,9 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 				return nil, false, nil
 			}
 		}
-		if id >= z.pager.PageCount() {
-			return nil, false, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", id, z.pager.PageCount())
+		pageCount := z.pager.PageCount()
+		if id >= pageCount {
+			return nil, false, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", id, pageCount)
 		}
 		data, err := z.pager.Get(id)
 		if err != nil {
