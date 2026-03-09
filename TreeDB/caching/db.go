@@ -5729,7 +5729,8 @@ func (db *DB) noteRead() {
 	if db == nil {
 		return
 	}
-	if db.foregroundReadStampCounter.Add(1)%foregroundReadStampStride != 0 {
+	n := db.foregroundReadStampCounter.Add(1)
+	if n != 1 && n%foregroundReadStampStride != 0 {
 		return
 	}
 	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
