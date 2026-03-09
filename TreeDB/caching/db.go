@@ -14352,7 +14352,6 @@ func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
 
 // GetUnsafe returns a safe copy of the value.
 func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
-	db.noteRead()
 	return db.Get(key)
 }
 
