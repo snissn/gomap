@@ -35,6 +35,9 @@ func schedulerTestWait(t *testing.T) time.Duration {
 			if remain > 10*time.Second {
 				return 10 * time.Second
 			}
+			if remain < 100*time.Millisecond {
+				return 100 * time.Millisecond
+			}
 			return remain
 		}
 	}
@@ -876,6 +879,9 @@ func TestVlogGenerationMaintenance_SkipsDuringActiveForegroundIterator(t *testin
 
 	if _, calls := recorder.recordedPlan(); calls != 0 {
 		t.Fatalf("plan calls=%d want=0 while foreground iterator is active", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want=0 while foreground iterator is active", calls)
 	}
 }
 
