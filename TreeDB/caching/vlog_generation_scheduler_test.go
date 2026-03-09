@@ -31,9 +31,9 @@ func forceVlogMaintenanceIdle(db *DB) {
 func schedulerTestWait(t *testing.T) time.Duration {
 	t.Helper()
 	const (
-		defaultWait = 5 * time.Second
-		maxWait     = 10 * time.Second
-		minWait     = 2 * time.Second
+		defaultWait = 2 * time.Second
+		maxWait     = 4 * time.Second
+		minWait     = 250 * time.Millisecond
 		safety      = 10 * time.Millisecond
 	)
 	if deadline, ok := t.Deadline(); ok {
@@ -466,7 +466,9 @@ func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -531,7 +533,9 @@ func TestVlogGenerationRewrite_DoesNotRunWithZeroBudgetTokens(t *testing.T) {
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -588,7 +592,9 @@ func TestVlogGenerationRewritePlan_DoesNotRunWithZeroBudgetTokens(t *testing.T) 
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -639,7 +645,9 @@ func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -768,7 +776,9 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundWrites_GCPath(t *t
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -823,7 +833,9 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundReads(t *testing.T
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -879,14 +891,24 @@ func TestVlogGenerationMaintenance_SkipsDuringActiveForegroundIterator(t *testin
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	forceVlogMaintenanceIdle(db)
-	db.activeForegroundIterators.Store(1)
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("iterator: %v", err)
+	}
+	defer func() {
+		if err := it.Close(); err != nil {
+			t.Fatalf("close iterator: %v", err)
+		}
+	}()
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	if _, calls := recorder.recordedPlan(); calls != 0 {
@@ -932,7 +954,9 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -1003,7 +1027,9 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -1075,7 +1101,9 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -1137,7 +1165,9 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -1194,7 +1224,9 @@ func TestVlogGenerationGC_SkipsDuringRecentForegroundWrites(t *testing.T) {
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}

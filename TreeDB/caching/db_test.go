@@ -211,7 +211,9 @@ func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
 	if got := cdb.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
 	}
-	_ = it.Close()
+	if err := it.Close(); err != nil {
+		t.Fatalf("second close iterator: %v", err)
+	}
 	if got := cdb.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
 	}
@@ -249,7 +251,9 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 	if got := db.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
 	}
-	_ = wrappedAgain.Close()
+	if err := wrappedAgain.Close(); err != nil {
+		t.Fatalf("second close wrapped iterator: %v", err)
+	}
 	if got := db.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
 	}
@@ -2193,7 +2197,6 @@ func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 	}
 
 	lastWrite := cache.lastForegroundWriteUnixNano.Load()
-	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
 		if time.Now().After(deadline) {
@@ -2272,7 +2275,6 @@ func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
 		t.Fatalf("first prune did not start")
 	}
 	lastWrite := cache.lastForegroundWriteUnixNano.Load()
-	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
 		if time.Now().After(deadline) {

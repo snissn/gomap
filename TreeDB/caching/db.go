@@ -2720,10 +2720,13 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 		it.Next()
 		seen++
 	}
+	if err := it.Error(); err != nil {
+		return err
+	}
 	if db.foregroundWritesResumedSince(lastWrite) {
 		return errForegroundWritesResumed
 	}
-	return it.Error()
+	return nil
 }
 
 func (db *DB) collectNestedValueLogLiveIDsFromOuterLeaf(ptr page.ValuePtr, live map[uint32]struct{}) error {
