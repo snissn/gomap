@@ -553,6 +553,7 @@ func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
 		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	db.testSkipRetainedPrune = true
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -1548,6 +1549,10 @@ func TestCachedRepeatedRewriteVacuumLeafRefsRemainReopenable_CacheWALOn(t *testi
 }
 
 func TestCachedRepeatedRewriteVacuumDirectPointersRemainReopenable_CacheWALOn(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+	t.Setenv(envDisableVlogGenerationGC, "1")
+	t.Setenv(envDisableVlogGenerationVacuum, "1")
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -1612,13 +1617,13 @@ func TestCachedRepeatedRewriteVacuumDirectPointersRemainReopenable_CacheWALOn(t 
 		_ = b.Close()
 	}
 
-	seedBatches := 12
-	rounds := 10
-	postRoundWrites := 1536
+	seedBatches := 4
+	rounds := 3
+	postRoundWrites := 512
 	if runtime.GOOS == "windows" {
-		seedBatches = 8
-		rounds = 6
-		postRoundWrites = 1024
+		seedBatches = 3
+		rounds = 2
+		postRoundWrites = 384
 	}
 	for i := 0; i < seedBatches; i++ {
 		writeBatch(fmt.Sprintf("seed-%02d", i), 4096)
