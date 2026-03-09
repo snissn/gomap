@@ -928,7 +928,7 @@ func TestVlogGenerationGC_SkipsDuringRecentForegroundWrites(t *testing.T) {
 
 	db.vlogGenerationLastGCUnixNano.Store(0)
 	db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
-	db.maybeRunVlogGenerationMaintenance(true)
+	db.maybeRunVlogGenerationMaintenance(false)
 
 	dryRunCalls, realCalls, _ := recorder.recordedCalls()
 	if dryRunCalls != 0 || realCalls != 0 {
