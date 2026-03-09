@@ -254,7 +254,6 @@ func TestManagerRefresh_IgnoresSegmentRemovedAfterScan(t *testing.T) {
 
 func TestManagerRegisterSegment_ReinitializesNilFilesMap(t *testing.T) {
 	dir := t.TempDir()
-	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("m"), 64))
 
 	mgr, err := NewManager(dir)
 	if err != nil {
@@ -269,6 +268,8 @@ func TestManagerRegisterSegment_ReinitializesNilFilesMap(t *testing.T) {
 	mgr.mu.Lock()
 	mgr.files = nil
 	mgr.mu.Unlock()
+
+	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("m"), 64))
 
 	path := filepath.Join(dir, "value-l0-000001.log")
 	if err := mgr.RegisterSegment(path, segID); err != nil {
