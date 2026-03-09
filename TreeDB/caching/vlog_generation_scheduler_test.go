@@ -830,7 +830,9 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundReads(t *testing.T
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	forceVlogMaintenanceIdle(db)
-	db.noteRead()
+	if _, err := db.Get([]byte("k1")); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	if _, calls := recorder.recordedPlan(); calls != 0 {
