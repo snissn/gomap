@@ -759,9 +759,12 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 		}
 		if minSegmentAge > 0 && f.Path != "" {
 			if info, err := os.Stat(f.Path); err == nil {
-				if age := now.Sub(info.ModTime()); age >= 0 && age < minSegmentAge {
+				if age := now.Sub(info.ModTime()); age < minSegmentAge {
 					continue
 				}
+			} else if !os.IsNotExist(err) {
+				// Keep the candidate when age is unknown rather than silently
+				// suppressing rewrite work based on a failed stat call.
 			}
 		}
 		liveBytes := liveByID[id]
@@ -1071,6 +1074,9 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if currentSet != nil {
 		if allowActiveSkip {
 			activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
+			if len(activeIDs) == 0 {
+				activeIDs = currentValueLogIDs(currentSet)
+			}
 		}
 		if len(protectedPaths) > 0 {
 			protectedIDs = make(map[uint32]struct{})

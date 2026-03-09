@@ -93,7 +93,7 @@ func (l *registeredLeafPageLog) Sync() error {
 	if err := l.ensureWriter(); err != nil {
 		return err
 	}
-	return l.w.Flush()
+	return l.w.Sync()
 }
 
 func (l *registeredLeafPageLog) Close() error {
