@@ -1813,7 +1813,8 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	}
 
 	// Delete the key and checkpoint. Retained segments with only unreachable
-	// payloads should be pruned, but the newly active segment remains open.
+	// payloads should be pruned. The active segment stays open for writing, but
+	// it is not counted as a retained closed segment.
 	if err := cache.Delete(key); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -1826,8 +1827,8 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse retained segments: %v", err)
 	}
-	if segments != 1 {
-		t.Fatalf("expected exactly one retained segment after checkpoint, got %d (before=%dB)", segments, retainedBefore)
+	if segments != 0 {
+		t.Fatalf("expected no retained closed segments after checkpoint, got %d (before=%dB)", segments, retainedBefore)
 	}
 }
 
