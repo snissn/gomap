@@ -1861,6 +1861,7 @@ func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
+		cache.noteWrite()
 		if time.Now().After(deadline) {
 			t.Fatalf("foreground write timestamp did not advance")
 		}
@@ -1939,6 +1940,7 @@ func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
 	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
+		cache.noteWrite()
 		if time.Now().After(deadline) {
 			t.Fatalf("foreground write timestamp did not advance")
 		}
