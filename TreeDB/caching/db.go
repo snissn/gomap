@@ -5749,6 +5749,8 @@ const (
 	autoCheckpointMinIdleWALBytesMin int64 = 1 << 20  // 1MiB
 	autoCheckpointMinIdleWALBytesMax int64 = 32 << 20 // 32MiB
 	autoCheckpointMinIdleInterval          = 10 * time.Second
+	// Sample every 64 foreground reads to amortize time.Now() overhead while
+	// keeping maintenance idle detection responsive during scan-heavy phases.
 	foregroundReadStampStride              = 64
 )
 
