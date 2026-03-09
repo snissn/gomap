@@ -30,6 +30,9 @@ const (
 	//
 	// Version 3 includes nested value-log pointers embedded inside leaf pages
 	// stored in the value log, in addition to direct LeafRef reachability.
+	// Older metadata is intentionally treated as stale/corrupt and rebuilt from
+	// a full scan. TreeDB is still pre-alpha, so we do not preserve old
+	// vlog_ref_counts.meta encodings yet.
 	valueLogRefCountsVersion = uint32(3)
 )
 
@@ -475,6 +478,9 @@ func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabR
 	if !n.VerifyChecksum() {
 		return fmt.Errorf("treedb: checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
+	// Nested leaf pages are a terminal reachability source here. We count the
+	// payload pointers embedded in that page, but we do not recurse again through
+	// those payloads as if they were more leaf pages.
 	count := n.Count()
 	for i := uint16(0); i < count; i++ {
 		_, _, valPtr, flags, err := n.GetLeafEntryView(i)
