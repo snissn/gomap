@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"testing"
+	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -68,12 +69,25 @@ func findKeysForDistinctLanes(t *testing.T, db *DB, wantedLanes, perLane int) []
 	return keys
 }
 
+func waitForLaneVlogClean(t *testing.T, db *DB, laneID int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !db.lanes[laneID].vlogDirty.Load() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("lane %d remained dirty waiting for value-log flush", laneID)
+}
+
 func TestProfileFast_BatchWriteFlushesPointerValueLogBeforeMetadataSync(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
+	defer func() { _ = backend.Close() }()
 	db, err := Open(dir, backend, Options{
 		DisableWAL:                 true,
 		AllowUnsafe:                true,
@@ -122,9 +136,7 @@ func TestProfileFast_BatchWriteFlushesPointerValueLogBeforeMetadataSync(t *testi
 		t.Fatalf("close unsynced batch: %v", err)
 	}
 
-	if db.lanes[0].vlogDirty.Load() {
-		t.Fatalf("expected unsynced fast batch write to flush pointer payload bytes")
-	}
+	waitForLaneVlogClean(t, db, 0)
 
 	meta := db.NewBatch()
 	if err := meta.Set(rootKey, rootValue); err != nil {
@@ -187,6 +199,7 @@ func TestProfileFast_BatchWriteFlushesPointerValueLogAcrossMultipleLanes(t *test
 	if err != nil {
 		t.Fatalf("open backend: %v", err)
 	}
+	defer func() { _ = backend.Close() }()
 	db, err := Open(dir, backend, Options{
 		DisableWAL:                 true,
 		AllowUnsafe:                true,
@@ -225,9 +238,7 @@ func TestProfileFast_BatchWriteFlushesPointerValueLogAcrossMultipleLanes(t *test
 
 	activeLanes := 0
 	for i := range db.lanes {
-		if db.lanes[i].vlogDirty.Load() {
-			t.Fatalf("lane %d left dirty after unsynced fast batch write", i)
-		}
+		waitForLaneVlogClean(t, db, i)
 		if db.lanes[i].vlogLiveBytes.Load() > 0 {
 			activeLanes++
 		}

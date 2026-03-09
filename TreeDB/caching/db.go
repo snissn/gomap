@@ -16819,6 +16819,9 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 		multiLanePointers = allowPointers &&
 			b.db.disableJournal &&
+			// journalDurabilityFlush is still an unsynced fast-path write. We widen
+			// multi-lane pointer batching to include it so unsynced importer batches
+			// can flush pointer payload bytes without collapsing back to a single lane.
 			(durability == journalDurabilityNone || durability == journalDurabilityFlush) &&
 			len(b.db.lanes) > 1 &&
 			eligibleCount >= multiLaneValueLogMinRecords

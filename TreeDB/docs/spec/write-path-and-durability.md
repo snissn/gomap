@@ -23,8 +23,8 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 - Commit log disabled.
 - Value log remains enabled.
 - Sync operations are relaxed.
-- Normal reads on the open DB must still observe successful writes immediately.
-- Crash-durability and backend publication boundaries for recent writes are checkpoint/flush based, not per-write journal replay.
+  - Normal reads on the open DB must still observe successful writes immediately.
+  - Crash-durability and backend publication boundaries for recent writes are checkpoint/flush based, not per-write journal replay.
 
 ## 2. Value Placement (Inline vs Pointer)
 
