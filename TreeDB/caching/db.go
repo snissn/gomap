@@ -2604,10 +2604,10 @@ func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
 	}
-	current := db.lastForegroundWriteUnixNano.Load()
 	if lastWrite <= 0 {
 		return false
 	}
+	current := db.lastForegroundWriteUnixNano.Load()
 	return current > lastWrite
 }
 
@@ -5617,9 +5617,7 @@ func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duratio
 		return ctx, cancel
 	}
 	go func(lastWrite int64) {
-		// Poll at 1/10th of the generation loop interval so resumed foreground
-		// writes are detected promptly without a busy timer.
-		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
 		for {
 			select {
