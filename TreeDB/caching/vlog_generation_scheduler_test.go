@@ -30,18 +30,30 @@ func forceVlogMaintenanceIdle(db *DB) {
 
 func schedulerTestWait(t *testing.T) time.Duration {
 	t.Helper()
+	const (
+		defaultWait = 5 * time.Second
+		maxWait     = 10 * time.Second
+		minWait     = 2 * time.Second
+		safety      = 10 * time.Millisecond
+	)
 	if deadline, ok := t.Deadline(); ok {
-		if remain := time.Until(deadline) / 8; remain > 0 {
-			if remain > 10*time.Second {
-				return 10 * time.Second
-			}
-			if remain < 100*time.Millisecond {
-				return 100 * time.Millisecond
-			}
+		remain := time.Until(deadline) - safety
+		if remain <= 0 {
+			return 0
+		}
+		wait := remain / 8
+		if wait > maxWait {
+			wait = maxWait
+		}
+		if wait < minWait {
+			wait = minWait
+		}
+		if wait > remain {
 			return remain
 		}
+		return wait
 	}
-	return 5 * time.Second
+	return defaultWait
 }
 
 func (b *blockingRewritePlannerBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
