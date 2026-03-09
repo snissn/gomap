@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,18 +20,14 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-var rewritePlanEstimateHookMu sync.Mutex
-
 func withRewritePlanEstimateCounter(t *testing.T) *atomic.Uint64 {
 	t.Helper()
-	rewritePlanEstimateHookMu.Lock()
 	var counter atomic.Uint64
-	prev := swapRewritePlanLiveEstimateHook(func() {
+	unregister := registerRewritePlanLiveEstimateHook(func() {
 		counter.Add(1)
 	})
 	t.Cleanup(func() {
-		swapRewritePlanLiveEstimateHook(prev)
-		rewritePlanEstimateHookMu.Unlock()
+		unregister()
 	})
 	return &counter
 }
@@ -329,7 +324,7 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 120_000, 1, func(i int) []byte {
 		return bytes.Repeat([]byte("p"), 512)
@@ -567,7 +562,7 @@ func TestValueLogRewrite_BatchedPointerSwap_SnapshotIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 110_000, 2, func(i int) []byte {
 		return bytes.Repeat([]byte{byte(10 + i)}, 512)
