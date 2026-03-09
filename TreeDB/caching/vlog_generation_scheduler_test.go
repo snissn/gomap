@@ -38,8 +38,8 @@ func schedulerTestWait(t *testing.T) time.Duration {
 	)
 	if deadline, ok := t.Deadline(); ok {
 		remain := time.Until(deadline) - safety
-		if remain <= 0 {
-			return 0
+		if remain <= minWait {
+			t.Skipf("insufficient test deadline budget remaining: %s", remain)
 		}
 		wait := remain / 8
 		if wait > maxWait {
