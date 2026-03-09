@@ -349,7 +349,7 @@ func TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs(t *testing.T) {
 	}
 }
 
-func TestVacuumIndexOnline_PreservesExistingLeafRefsWhenOuterLeavesInValueLog(t *testing.T) {
+func TestVacuumIndexOnline_PreservesOuterLeafRefsAndDataWhenOuterLeavesInValueLog(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("online vacuum not supported on windows")
 	}
@@ -408,12 +408,26 @@ func TestVacuumIndexOnline_PreservesExistingLeafRefsWhenOuterLeavesInValueLog(t 
 		t.Fatalf("missing state after vacuum")
 	}
 	afterRefs := collectLeafRefIDsFromRoot(t, d, stateAfter.RootPageID)
+	if len(afterRefs) == 0 {
+		t.Fatalf("expected outer-leaf refs after vacuum")
+	}
 	if len(afterRefs) != len(beforeRefs) {
 		t.Fatalf("leafref count changed across vacuum: before=%d after=%d", len(beforeRefs), len(afterRefs))
 	}
-	for id := range beforeRefs {
-		if _, ok := afterRefs[id]; !ok {
-			t.Fatalf("vacuum rewrote untouched leafref %d", id)
+
+	for _, version := range []int{1, 24, 48} {
+		for _, idx := range []int{0, 127, 511} {
+			key := []byte(fmt.Sprintf("s/k:store/n/%08d/%08d", version, idx))
+			got, err := d.Get(key)
+			if err != nil {
+				t.Fatalf("get version=%d key=%d after vacuum: %v", version, idx, err)
+			}
+			if len(got) != len(val) {
+				t.Fatalf("value length mismatch version=%d key=%d: got=%d want=%d", version, idx, len(got), len(val))
+			}
+			if got[0] != byte(version) {
+				t.Fatalf("value content mismatch version=%d key=%d: got[0]=%d want=%d", version, idx, got[0], byte(version))
+			}
 		}
 	}
 }
