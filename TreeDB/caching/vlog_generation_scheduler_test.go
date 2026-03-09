@@ -730,7 +730,7 @@ func TestVlogGenerationMaintenance_SkipsBeforeFirstCheckpointInWALOffMode(t *tes
 	}
 }
 
-func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundWrites(t *testing.T) {
+func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundWrites_GCPath(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
