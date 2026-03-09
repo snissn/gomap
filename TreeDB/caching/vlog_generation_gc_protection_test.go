@@ -279,6 +279,7 @@ func TestVlogGenerationGC_ProtectedPathsSnapshotDoesNotDeleteNewerSegments(t *te
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	db.waitForRetainedValueLogPrune()
 
 	protected := append(db.valueLogRetainedPaths(), db.currentValueLogPaths()...)
 	if len(protected) == 0 {
@@ -306,6 +307,15 @@ func TestVlogGenerationGC_ProtectedPathsSnapshotDoesNotDeleteNewerSegments(t *te
 	if k1Path == "" {
 		t.Fatalf("expected non-empty value-log path for k1")
 	}
+
+	// Publish k1 into the backend before testing direct backend GC with the stale
+	// protected-path snapshot. The point of this test is that backend reachability
+	// must keep the segment alive even if the caller's protected-path snapshot
+	// predates the segment.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint(after k1): %v", err)
+	}
+	db.waitForRetainedValueLogPrune()
 
 	// Force rotate again so k1 points at a non-active segment. The GC must not
 	// delete it, even though the protected-path snapshot pre-dates the segment.
