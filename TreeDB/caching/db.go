@@ -2920,7 +2920,7 @@ func (db *DB) retainedPrunePressureBytes() int64 {
 	if db.flushThreshold > 0 {
 		ft := db.flushThreshold
 		if ft > math.MaxInt64/8 {
-			ft = math.MaxInt64
+			ft = (math.MaxInt64 / 8) * 8
 		} else {
 			ft *= 8
 		}
@@ -5580,7 +5580,7 @@ func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration)
 	}
 }
 
-const foregroundWriteResumeCheckMask = 255
+const foregroundWriteResumeCheckMask = 255 // bitmask: check every 256 iterations
 
 func foregroundMaintenancePollInterval() time.Duration {
 	if interval := vlogGenerationLoopInterval / 10; interval > 0 {
