@@ -931,6 +931,7 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 
 	db.vlogGenerationLastGCUnixNano.Store(0)
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	dryRunCalls, realCalls, _ := recorder.recordedCalls()
@@ -942,7 +943,6 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 	}
 	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
 		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
->>>>>>> origin/pr/fast-maintenance-quiet-window
 	}
 }
 
