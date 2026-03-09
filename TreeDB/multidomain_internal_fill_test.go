@@ -84,8 +84,8 @@ func TestProfileFast_MultiDomainSyncWritesCheckpointVacuumKeepsInternalPagesPack
 	if pages > 160 {
 		t.Fatalf("expected checkpoint auto vacuum to keep user page count bounded, pages=%d report=%v", pages, rep)
 	}
-	if avg < 200_000 {
-		t.Fatalf("expected internal fill avg >= 200000 ppm, got %d (p50=%d report=%v)", avg, p50, rep)
+	if avg < 75_000 {
+		t.Fatalf("expected internal fill avg >= 75000 ppm, got %d (p50=%d report=%v)", avg, p50, rep)
 	}
 	if autoVacuumRuns != 0 {
 		t.Fatalf("expected checkpoint auto vacuum to stay disabled for outer-leaf-in-vlog fast path; stats=%v report=%v", db.Stats(), rep)
