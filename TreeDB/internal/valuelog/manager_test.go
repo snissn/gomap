@@ -76,13 +76,13 @@ func TestManagerCurrentSetNoRefresh(t *testing.T) {
 func TestManagerRegisterSegment_CurrentSetNoRefresh(t *testing.T) {
 	dir := t.TempDir()
 
-	origScan := scanSegmentPaths
+	origScan := currentScanSegmentPaths()
 	scanCalls := 0
-	scanSegmentPaths = func(scanDir string) ([]segmentInfo, error) {
+	swapScanSegmentPathsForTest(func(scanDir string) ([]segmentInfo, error) {
 		scanCalls++
 		return origScan(scanDir)
-	}
-	t.Cleanup(func() { scanSegmentPaths = origScan })
+	})
+	t.Cleanup(func() { swapScanSegmentPathsForTest(origScan) })
 
 	mgr, err := NewManager(dir)
 	if err != nil {
@@ -206,16 +206,16 @@ func TestManagerRefresh_IgnoresSegmentRemovedAfterScan(t *testing.T) {
 
 	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("z"), 64))
 
-	origOpen := openSegmentFile
-	openSegmentFile = func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
+	origOpen := currentOpenSegmentFile()
+	swapOpenSegmentFileForTest(func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
 		if id == segID {
 			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("Remove(%s): %v", path, err)
 			}
 		}
 		return origOpen(path, id, dictLookup, templateLookup, templateOpts, templateCache)
-	}
-	t.Cleanup(func() { openSegmentFile = origOpen })
+	})
+	t.Cleanup(func() { swapOpenSegmentFileForTest(origOpen) })
 
 	if err := mgr.Refresh(); err != nil {
 		t.Fatalf("Refresh: %v", err)

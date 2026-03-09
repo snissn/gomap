@@ -10032,6 +10032,7 @@ const (
 	checkpointSparseIndexMinPages              = 128
 	checkpointSparseIndexMaxInternalFillP50PPM = 200_000
 	checkpointSparseIndexMaxInternalFillAvgPPM = 350_000
+	checkpointAutoVacuumTimeout                = 10 * time.Second
 )
 
 func parseCheckpointFragUint(report map[string]string, key string) (uint64, bool) {
@@ -10102,7 +10103,9 @@ func (db *DB) maybeVacuumSparseIndexOnCheckpoint() error {
 		return nil
 	}
 
-	if err := vacuumer.VacuumIndexOnline(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), checkpointAutoVacuumTimeout)
+	defer cancel()
+	if err := vacuumer.VacuumIndexOnline(ctx); err != nil {
 		return err
 	}
 	db.checkpointAutoVacuumRuns.Add(1)
