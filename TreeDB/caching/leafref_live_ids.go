@@ -98,6 +98,9 @@ func collectNestedLeafPageValueLogLiveIDs(ptr page.ValuePtr, reader tree.SlabRea
 	if !leaf.VerifyChecksum() {
 		return fmt.Errorf("checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
+	// Leaf pages stored in the value log are treated as terminal containers for
+	// payload pointers here. Their entries may point at value-log payloads, but we
+	// do not recursively interpret those payload pointers as more leaf pages.
 	for i := uint16(0); i < leaf.Count(); i++ {
 		_, _, valPtr, flags, err := leaf.GetLeafEntryView(i)
 		if err != nil {
