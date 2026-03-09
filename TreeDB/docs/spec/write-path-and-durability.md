@@ -23,7 +23,8 @@ This document defines write semantics for TreeDB cached mode and backend mode.
 - Commit log disabled.
 - Value log remains enabled.
 - Sync operations are relaxed.
-- Durable boundary for recent writes is checkpoint/flush based, not per-write journal replay.
+- Normal reads on the open DB must still observe successful writes immediately.
+- Crash-durability and backend publication boundaries for recent writes are checkpoint/flush based, not per-write journal replay.
 
 ## 2. Value Placement (Inline vs Pointer)
 
@@ -90,11 +91,16 @@ Commit visibility sequence:
 
 - `SetSync`, `DeleteSync`, `Batch.WriteSync`:
   - in durable mode: fsync durability boundary,
-  - in relaxed modes: relaxed boundary only.
+  - in relaxed modes: relaxed crash-durability boundary only.
+
+Regardless of durability mode:
+
+- `Set`, `Delete`, `Batch.Write`, `Batch.WriteSync` must all preserve read-your-writes semantics for normal readers on the same open DB.
+- `Checkpoint` is not part of the ordinary read path contract.
 
 ## 6. Checkpoint Semantics
 
-`DB.Checkpoint()` in cached mode is a forced durability/cleanup boundary.
+`DB.Checkpoint()` in cached mode is a forced backend publication, durability, and cleanup boundary.
 
 Current behavior:
 
@@ -107,6 +113,8 @@ Current behavior:
 7. run value-log retention checks and pruning.
 
 In backend-only mode, checkpoint is implemented as an empty sync batch write.
+
+Checkpoint is not required for same-process readers to observe successful writes; it exists to force backend publication and maintenance boundaries.
 
 ## 7. Auto-Checkpoint Defaults (Cached Mode)
 
