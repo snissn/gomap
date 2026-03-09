@@ -170,6 +170,11 @@ type internalEntry struct {
 	child uint64
 }
 
+func isLeafRefPageID(id uint64) bool {
+	_, ok := page.DecodeLeafRef(id)
+	return ok
+}
+
 type childWork struct {
 	key       []byte
 	low       []byte
@@ -1123,7 +1128,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	appendInternal := func(key []byte, childID uint64, first bool) error {
 		pageCount := z.pager.PageCount()
 		if z.outerLeavesInValueLog {
-			if _, ok := page.DecodeLeafRef(childID); !ok && childID >= pageCount {
+			if !isLeafRef(childID) && childID >= pageCount {
 				return fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", childID, pageCount)
 			}
 		} else if childID >= pageCount {
@@ -1379,23 +1384,19 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	for i := range children {
 		totalEntries += len(children[i].splits)
 	}
-	isLeafRef := func(id uint64) bool {
-		_, ok := page.DecodeLeafRef(id)
-		return ok
-	}
 	entries := getInternalEntrySlice(totalEntries)
 	defer func() { putInternalEntrySlice(entries) }()
 	pageCount := z.pager.PageCount()
 	for i := range children {
 		child := children[i]
-		if (!z.outerLeavesInValueLog || !isLeafRef(child.newChild)) && child.newChild >= pageCount {
+		if (!z.outerLeavesInValueLog || !isLeafRefPageID(child.newChild)) && child.newChild >= pageCount {
 			return 0, nil, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", child.newChild, pageCount)
 		}
 		entries = append(entries, internalEntry{key: child.key, child: child.newChild})
 
 		// Add sibling splits
 		for _, s := range child.splits {
-			if (!z.outerLeavesInValueLog || !isLeafRef(s.NodeID)) && s.NodeID >= pageCount {
+			if (!z.outerLeavesInValueLog || !isLeafRefPageID(s.NodeID)) && s.NodeID >= pageCount {
 				return 0, nil, fmt.Errorf("zipper: detected OOB split child ID %d (page_count=%d)", s.NodeID, pageCount)
 			}
 			entries = append(entries, internalEntry{key: s.Key, child: s.NodeID})
