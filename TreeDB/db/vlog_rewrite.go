@@ -675,7 +675,7 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 		}
 		if minSegmentAge > 0 && f.Path != "" {
 			if info, err := os.Stat(f.Path); err == nil {
-				if age := now.Sub(info.ModTime()); age >= 0 && age < minSegmentAge {
+				if age := now.Sub(info.ModTime()); age < minSegmentAge {
 					continue
 				}
 			} else if !os.IsNotExist(err) {
