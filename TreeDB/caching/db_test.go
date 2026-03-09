@@ -24,6 +24,8 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+const retainedPruneNegativeAssertWait = 150 * time.Millisecond
+
 // MockBackend implements BackendDB
 type MockBackend struct {
 	mu                     sync.RWMutex
@@ -2116,7 +2118,7 @@ func TestCheckpoint_DefersRetainedValueLogPruneUntilForegroundQuiet(t *testing.T
 	select {
 	case <-backend.iteratorStartedCh:
 		t.Fatalf("background prune started during quiet-window defer")
-	case <-time.After(150 * time.Millisecond):
+	case <-time.After(retainedPruneNegativeAssertWait):
 	}
 
 	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
@@ -2300,7 +2302,7 @@ func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
 	select {
 	case <-backend.iteratorStartedCh:
 		t.Fatalf("second prune started despite rate limit")
-	case <-time.After(150 * time.Millisecond):
+	case <-time.After(retainedPruneNegativeAssertWait):
 	}
 }
 
@@ -2351,7 +2353,7 @@ func TestCheckpoint_SkipsRetainedValueLogPruneBelowPressureThreshold(t *testing.
 	select {
 	case <-backend.iteratorStartedCh:
 		t.Fatalf("background prune started below retained-byte pressure threshold")
-	case <-time.After(150 * time.Millisecond):
+	case <-time.After(retainedPruneNegativeAssertWait):
 	}
 	if cache.retainedPruneActive() {
 		cache.waitForRetainedValueLogPrune()
