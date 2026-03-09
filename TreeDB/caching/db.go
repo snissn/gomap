@@ -2694,7 +2694,7 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 	defer it.Close()
 	seen := 0
 	for it.Valid() {
-		if seen > 0 && seen&255 == 0 && db.foregroundWritesResumedSince(lastWrite) {
+		if seen > 0 && seen&foregroundWriteResumeCheckMask == 0 && db.foregroundWritesResumedSince(lastWrite) {
 			return errForegroundWritesResumed
 		}
 		_, ptr, flags := it.UnsafeEntry()
@@ -3347,7 +3347,8 @@ type Options struct {
 	// When false, Open will reject DisableWAL or RelaxedSync.
 	AllowUnsafe bool
 	// MaxValueLogRetainedBytes emits a warning once retained value-log bytes
-	// reach or exceed this threshold (0 disables warnings).
+	// reach or exceed this threshold and also acts as the soft retained-byte
+	// trigger for background prune scheduling (0 disables both).
 	MaxValueLogRetainedBytes int64
 	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
 	// values once retained bytes exceed this threshold (0 disables the cap).
@@ -5560,7 +5561,7 @@ func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration)
 	if db == nil || quietWindow <= 0 {
 		return
 	}
-	ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+	ticker := time.NewTicker(foregroundMaintenancePollInterval())
 	defer ticker.Stop()
 	for {
 		if db.closing.Load() || db.foregroundWriteQuietFor(time.Now(), quietWindow) {
@@ -5572,6 +5573,15 @@ func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration)
 		case <-ticker.C:
 		}
 	}
+}
+
+const foregroundWriteResumeCheckMask = 255
+
+func foregroundMaintenancePollInterval() time.Duration {
+	if interval := vlogGenerationLoopInterval / 10; interval > 0 {
+		return interval
+	}
+	return time.Millisecond
 }
 
 func (db *DB) waitForForegroundMaintenanceQuiet() {
