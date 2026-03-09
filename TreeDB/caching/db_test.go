@@ -193,7 +193,9 @@ func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("close batch: %v", err)
+	}
 	if err := cdb.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
