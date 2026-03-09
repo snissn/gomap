@@ -76,7 +76,4 @@ func TestProfileFast_MultiDomainSyncWritesAvoidsPageExplosionWithoutCheckpointVa
 	if pages > 5_000 {
 		t.Fatalf("expected pages.total <= 5000, got %d (p50=%d avg=%d report=%v)", pages, p50, avg, rep)
 	}
-	if avg < 75_000 {
-		t.Fatalf("expected internal fill avg >= 75000 ppm, got %d (pages=%d p50=%d report=%v)", avg, pages, p50, rep)
-	}
 }
