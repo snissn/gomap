@@ -38,10 +38,34 @@ jobs:
 
       - name: Test
         working-directory: TreeDB
+        shell: bash
         env:
           GOMEMLIMIT: 4GiB
           GOMAXPROCS: 2
-        run: go test -p 1 ./...
+        run: |
+          set -o pipefail
+          go test -json -p 1 ./... | tee treedb-test.jsonl
+
+      - name: Summarize test timings
+        if: always()
+        working-directory: TreeDB
+        shell: bash
+        run: |
+          python ../.github/scripts/summarize_go_test_json.py treedb-test.jsonl | tee treedb-test-summary.md
+          {
+            echo "### TreeDB test timing summary"
+            echo
+            cat treedb-test-summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test timing log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: treedb-test-json-${{ matrix.os }}
+          path: |
+            TreeDB/treedb-test.jsonl
+            TreeDB/treedb-test.jsonl.summary.md
 
   race:
     name: race-check (linux)
@@ -61,7 +85,31 @@ jobs:
 
       - name: Test Race
         working-directory: TreeDB
-        run: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./...
+        shell: bash
+        run: |
+          set -o pipefail
+          GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 ./... | tee treedb-race.jsonl
+
+      - name: Summarize race timing
+        if: always()
+        working-directory: TreeDB
+        shell: bash
+        run: |
+          python ../.github/scripts/summarize_go_test_json.py treedb-race.jsonl | tee treedb-race-summary.md
+          {
+            echo "### TreeDB race timing summary"
+            echo
+            cat treedb-race-summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload race timing log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: treedb-race-json-linux
+          path: |
+            TreeDB/treedb-race.jsonl
+            TreeDB/treedb-race.jsonl.summary.md
 
   perf:
     name: perf-smoke (linux)
