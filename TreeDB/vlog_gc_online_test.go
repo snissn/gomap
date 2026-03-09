@@ -18,6 +18,7 @@ func TestValueLogGCOnline_ProtectedSetSafety(t *testing.T) {
 
 	db, err := treedb.Open(treedb.Options{
 		Dir: dir,
+		BackgroundIndexVacuumInterval: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
 		},
@@ -99,6 +100,7 @@ func TestValueLogGC_OnlineMode_HealthStateNoUnsafeDeletes(t *testing.T) {
 
 	db, err := treedb.Open(treedb.Options{
 		Dir: dir,
+		BackgroundIndexVacuumInterval: -1,
 		ValueLog: treedb.ValueLogOptions{
 			PointerThreshold: 1,
 		},
