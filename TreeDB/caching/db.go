@@ -2561,7 +2561,7 @@ func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
 	}
 	current := db.lastForegroundWriteUnixNano.Load()
 	if lastWrite <= 0 {
-		return current > 0
+		return false
 	}
 	return current > lastWrite
 }
@@ -2588,27 +2588,24 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 			if state != nil && p != nil {
 				reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
 				leafCtx, leafCancel := db.foregroundWriteResumeContext(lastWrite, 0)
+				defer leafCancel()
 				if state.RootPageID != 0 {
 					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
-						leafCancel()
 						_ = snap.Close()
 						return nil, err
 					}
 				}
 				if state.SystemRootPageID != 0 {
 					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
-						leafCancel()
 						_ = snap.Close()
 						return nil, err
 					}
 				}
 				if db.foregroundWritesResumedSince(lastWrite) {
-					leafCancel()
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
 				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.RootPageID, reader, live); err != nil {
-					leafCancel()
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
@@ -2616,19 +2613,16 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					return nil, err
 				}
 				if db.foregroundWritesResumedSince(lastWrite) {
-					leafCancel()
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
 				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.SystemRootPageID, reader, live); err != nil {
-					leafCancel()
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
 					_ = snap.Close()
 					return nil, err
 				}
-				leafCancel()
 			}
 			if err := snap.Close(); err != nil {
 				return nil, err
@@ -5557,7 +5551,7 @@ func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duratio
 		return ctx, cancel
 	}
 	if lastWrite <= 0 {
-		lastWrite = db.lastForegroundWriteUnixNano.Load()
+		return ctx, cancel
 	}
 	go func(lastWrite int64) {
 		// Poll at 1/10th of the generation loop interval so resumed foreground
