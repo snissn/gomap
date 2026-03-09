@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
@@ -76,6 +77,7 @@ func TestCheckpoint_DeletesRetainedValueLogWhenBackendManagerForgotSegment(t *te
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	db.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
 	db.waitForRetainedValueLogPrune()
 	if err := db.backgroundError(); err != nil {
 		t.Fatalf("backgroundError: %v", err)
