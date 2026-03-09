@@ -100,7 +100,7 @@ type DB struct {
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
 	commitMu         sync.Mutex
-	maintenanceMu    sync.Mutex
+	maintenanceMu    sync.Mutex // Serializes long-running backend maintenance (rewrite/GC/vacuum).
 	combineMu        sync.RWMutex
 	combineReqCh     chan *commitCombineReq
 	combineStopCh    chan struct{}

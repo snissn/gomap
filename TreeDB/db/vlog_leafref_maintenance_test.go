@@ -438,7 +438,7 @@ func TestValueLogRewriteOnline_RewritesLeafRefsAndReclaimsSegments(t *testing.T)
 	}
 
 	active := map[uint32]struct{}{}
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSet()
 	if set != nil {
 		active = currentValueLogIDs(set)
 		_ = db.valueLogManager.Release(set)
@@ -647,7 +647,7 @@ func TestValueLogRewriteOnline_RewritesMultipleLeafRefSourceSegmentsAndReopensRW
 		refsByFile[ptr.FileID]++
 	}
 
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSet()
 	active := currentValueLogIDs(set)
 	if set != nil {
 		_ = db.valueLogManager.Release(set)
@@ -800,7 +800,7 @@ func TestValueLogRewriteOnline_PostRewriteWritesDoNotReintroduceLeafRefSources(t
 		refsByFile[ptr.FileID]++
 	}
 
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSet()
 	active := currentValueLogIDs(set)
 	if set != nil {
 		_ = db.valueLogManager.Release(set)
@@ -965,7 +965,7 @@ func TestValueLogRewriteOnline_UnsyncedLeafRefRewriteRemainsReopenable(t *testin
 		refsByFile[ptr.FileID]++
 	}
 
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSet()
 	active := currentValueLogIDs(set)
 	if set != nil {
 		_ = db.valueLogManager.Release(set)
@@ -1090,7 +1090,7 @@ func TestValueLogRewriteOnline_UnsyncedRewriteThenVacuumRemainsReopenable(t *tes
 		refsByFile[ptr.FileID]++
 	}
 
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSet()
 	active := currentValueLogIDs(set)
 	if set != nil {
 		_ = db.valueLogManager.Release(set)
@@ -1241,7 +1241,7 @@ func TestValueLogRewriteOnline_WALOnLeafRefsPreserveNestedValueSegments(t *testi
 		refsByFile[ptr.FileID]++
 	}
 
-	set := db.valueLogManager.CurrentSetNoRefresh()
+	set := db.valueLogManager.CurrentSet()
 	active := currentValueLogIDs(set)
 	if set != nil {
 		_ = db.valueLogManager.Release(set)

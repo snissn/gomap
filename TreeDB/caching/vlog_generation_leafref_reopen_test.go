@@ -659,7 +659,7 @@ func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
 	}
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_WALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_CacheWALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -758,7 +758,7 @@ func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_WALOn(t 
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_CacheWALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -865,7 +865,7 @@ func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_WALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_CacheWALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -1014,7 +1014,7 @@ func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_WALOn(t *tes
 	}
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_WALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_CacheWALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -1138,7 +1138,7 @@ func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_WALOn(t *tes
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersManualGC_WALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_DirectPointersManualGC_CacheWALOn(t *testing.T) {
 	t.Setenv(envDisableVlogGenerationRewrite, "1")
 	t.Setenv(envDisableVlogGenerationGC, "1")
 	t.Setenv(envDisableVlogGenerationVacuum, "1")
@@ -1452,7 +1452,7 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 				currentPath := ""
 				currentSeq := 0
 				currentRetained := false
-				if laneID >= 0 && laneID < len(db.lanes) {
+				if laneID < len(db.lanes) {
 					lane := &db.lanes[laneID]
 					lane.vlogMu.Lock()
 					currentPath = lane.vlogPath
@@ -1538,11 +1538,11 @@ func TestCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T) {
 	testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t, true)
 }
 
-func TestCachedRepeatedRewriteVacuumLeafRefsRemainReopenable_WALOn(t *testing.T) {
+func TestCachedRepeatedRewriteVacuumLeafRefsRemainReopenable_CacheWALOn(t *testing.T) {
 	testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t, false)
 }
 
-func TestCachedRepeatedRewriteVacuumDirectPointersRemainReopenable_WALOn(t *testing.T) {
+func TestCachedRepeatedRewriteVacuumDirectPointersRemainReopenable_CacheWALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{

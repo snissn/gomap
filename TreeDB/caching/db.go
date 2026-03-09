@@ -2319,7 +2319,7 @@ func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
 	}
 	if db.valueLogReader != nil {
 		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
-		if ok && valueLog && laneID >= 0 {
+		if ok && valueLog {
 			if id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq)); err == nil {
 				var removeErr error
 				backoff := 25 * time.Millisecond
@@ -9951,7 +9951,6 @@ planned:
 		if err != nil {
 			return fmt.Errorf("generational gc: %w", err)
 		}
-		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 		db.vlogGenerationGCRuns.Add(1)
 		if gcStats.SegmentsDeleted > 0 {
 			db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
@@ -10792,6 +10791,8 @@ func (db *DB) Close() error {
 	hadMemtables := false
 	db.closing.Store(true)
 	db.stopDomainIngressWorkers()
+	// After closing is published, new retained-prune work will not be scheduled.
+	// Drain any prune already in flight before Close begins rotating/flushing state.
 	db.waitForRetainedValueLogPrune()
 
 	// Lock order must match Checkpoint (flushMu -> writeMu) to avoid a deadlock
@@ -10936,7 +10937,6 @@ func (db *DB) Close() error {
 		db.syncDirBestEffort(db.dir)
 	}
 
-	db.waitForRetainedValueLogPrune()
 	if err := db.backend.Close(); err != nil {
 		errs = append(errs, err)
 	}
