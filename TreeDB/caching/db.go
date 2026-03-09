@@ -5784,11 +5784,15 @@ func (db *DB) noteRead() {
 	if db == nil {
 		return
 	}
-	n := db.foregroundReadStampCounter.Add(1)
-	if n != 1 && n%foregroundReadStampStride != 0 {
-		return
+	now := time.Now().UnixNano()
+	last := db.lastForegroundReadUnixNano.Load()
+	if last > 0 && now-last < int64(foregroundReadStampMaxAge) {
+		n := db.foregroundReadStampCounter.Add(1)
+		if n != 1 && n%foregroundReadStampStride != 0 {
+			return
+		}
 	}
-	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	db.lastForegroundReadUnixNano.Store(now)
 }
 
 type autoCheckpointMode uint8
@@ -5806,7 +5810,10 @@ const (
 	autoCheckpointMinIdleInterval          = 10 * time.Second
 	// Sample every 64 foreground reads to amortize time.Now() overhead while
 	// keeping maintenance idle detection responsive during scan-heavy phases.
-	foregroundReadStampStride              = 64
+	foregroundReadStampStride = 64
+	// Low-but-steady reads should still refresh the foreground timestamp often
+	// enough to suppress background maintenance.
+	foregroundReadStampMaxAge = 250 * time.Millisecond
 )
 
 func autoCheckpointReasonString(v uint32) string {
