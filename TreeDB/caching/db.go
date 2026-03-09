@@ -5595,10 +5595,10 @@ func (db *DB) foregroundReadQuietFor(now time.Time, quietWindow time.Duration) b
 		return false
 	}
 	last := db.lastForegroundReadUnixNano.Load()
-	if last <= 0 {
-		return true
+	if last > 0 && now.Sub(time.Unix(0, last)) < quietWindow {
+		return false
 	}
-	return now.Sub(time.Unix(0, last)) >= quietWindow
+	return db.activeForegroundIterators.Load() == 0
 }
 
 func (db *DB) lastForegroundActivityUnixNano() int64 {
