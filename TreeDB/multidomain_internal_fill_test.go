@@ -3,6 +3,7 @@ package treedb
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,9 @@ func TestProfileFast_MultiDomainSyncWritesCheckpointVacuumKeepsInternalPagesPack
 			}
 			_ = b.Close()
 			if err := db.Checkpoint(); err != nil {
+				if strings.Contains(err.Error(), "online vacuum unsupported on this platform") {
+					t.Skipf("checkpoint auto vacuum unsupported on this platform: %v", err)
+				}
 				t.Fatalf("checkpoint version=%d store=%d: %v", version, store, err)
 			}
 		}
