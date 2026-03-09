@@ -5793,11 +5793,15 @@ func (db *DB) noteRead() {
 	if db == nil {
 		return
 	}
-	n := db.foregroundReadStampCounter.Add(1)
-	if n != 1 && n%foregroundReadStampStride != 0 {
-		return
+	now := time.Now().UnixNano()
+	last := db.lastForegroundReadUnixNano.Load()
+	if last > 0 && now-last < int64(foregroundReadStampMaxAge) {
+		n := db.foregroundReadStampCounter.Add(1)
+		if n != 1 && n%foregroundReadStampStride != 0 {
+			return
+		}
 	}
-	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	db.lastForegroundReadUnixNano.Store(now)
 }
 
 type autoCheckpointMode uint8
@@ -5813,7 +5817,12 @@ const (
 	autoCheckpointMinIdleWALBytesMin int64 = 1 << 20  // 1MiB
 	autoCheckpointMinIdleWALBytesMax int64 = 32 << 20 // 32MiB
 	autoCheckpointMinIdleInterval          = 10 * time.Second
-	foregroundReadStampStride              = 64
+	// Sample every 64 foreground reads to amortize time.Now() overhead while
+	// keeping maintenance idle detection responsive during scan-heavy phases.
+	foregroundReadStampStride = 64
+	// Low-but-steady reads should still refresh the foreground timestamp often
+	// enough to suppress background maintenance.
+	foregroundReadStampMaxAge = 250 * time.Millisecond
 )
 
 func autoCheckpointReasonString(v uint32) string {
@@ -10045,24 +10054,28 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			MinSegmentStaleBytes: 1,
 		})
 		cancel()
+		updatePlanTimestamp := false
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 				return
 			}
-			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+			updatePlanTimestamp = true
 			// Best-effort planning: keep legacy triggers (total-bytes/churn) alive,
 			// but surface the failure for observability.
 			if db.notifyError != nil {
 				db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
 			}
 		} else if len(plan.SourceFileIDs) > 0 {
-			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+			updatePlanTimestamp = true
 			shouldRewrite = true
 			reason = vlogGenerationReasonStaleRatio
 			rewritePlan = plan
 			haveRewritePlan = true
 		} else {
+			updatePlanTimestamp = true
+		}
+		if updatePlanTimestamp {
 			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
 		}
 	}
@@ -10301,6 +10314,7 @@ planned:
 		}
 		return
 	}
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 }
 
 func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
@@ -16979,7 +16993,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 		multiLanePointers = allowPointers &&
 			b.db.disableJournal &&
-			durability == journalDurabilityNone &&
+			// journalDurabilityFlush is still an unsynced fast-path write. We widen
+			// multi-lane pointer batching to include it so unsynced importer batches
+			// can flush pointer payload bytes without collapsing back to a single lane.
+			(durability == journalDurabilityNone || durability == journalDurabilityFlush) &&
 			len(b.db.lanes) > 1 &&
 			eligibleCount >= multiLaneValueLogMinRecords
 	}
