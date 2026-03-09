@@ -3635,6 +3635,7 @@ type DB struct {
 	checkpointAutoVacuumLastInternalAvg   atomic.Uint64
 	lastForegroundWriteUnixNano           atomic.Int64
 	lastForegroundReadUnixNano            atomic.Int64
+	foregroundReadStampCounter            atomic.Uint32
 	activeForegroundIterators             atomic.Int64
 	retainedPruneLastStartUnixNano        atomic.Int64
 	retainedPruneMu                       sync.Mutex
@@ -5711,6 +5712,9 @@ func (db *DB) noteWrite() {
 
 func (db *DB) noteRead() {
 	if db == nil {
+		return
+	}
+	if db.foregroundReadStampCounter.Add(1)%64 != 0 {
 		return
 	}
 	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
