@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -392,23 +392,20 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 
 // rewritePlanLiveEstimateHook is a test hook used to count uncached live-byte
 // estimation passes without carrying test-only state in the production DB type.
-var (
-	rewritePlanLiveEstimateHookMu sync.RWMutex
-	rewritePlanLiveEstimateHook   func()
-)
+type rewritePlanLiveEstimateHookValue struct {
+	fn func()
+}
+
+var rewritePlanLiveEstimateHook atomic.Value
 
 func loadRewritePlanLiveEstimateHook() func() {
-	rewritePlanLiveEstimateHookMu.RLock()
-	hook := rewritePlanLiveEstimateHook
-	rewritePlanLiveEstimateHookMu.RUnlock()
-	return hook
+	v, _ := rewritePlanLiveEstimateHook.Load().(rewritePlanLiveEstimateHookValue)
+	return v.fn
 }
 
 func swapRewritePlanLiveEstimateHook(hook func()) (prev func()) {
-	rewritePlanLiveEstimateHookMu.Lock()
-	prev = rewritePlanLiveEstimateHook
-	rewritePlanLiveEstimateHook = hook
-	rewritePlanLiveEstimateHookMu.Unlock()
+	prev = loadRewritePlanLiveEstimateHook()
+	rewritePlanLiveEstimateHook.Store(rewritePlanLiveEstimateHookValue{fn: hook})
 	return prev
 }
 
