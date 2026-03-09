@@ -10054,24 +10054,28 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			MinSegmentStaleBytes: 1,
 		})
 		cancel()
+		updatePlanTimestamp := false
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 				return
 			}
-			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+			updatePlanTimestamp = true
 			// Best-effort planning: keep legacy triggers (total-bytes/churn) alive,
 			// but surface the failure for observability.
 			if db.notifyError != nil {
 				db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
 			}
 		} else if len(plan.SourceFileIDs) > 0 {
-			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+			updatePlanTimestamp = true
 			shouldRewrite = true
 			reason = vlogGenerationReasonStaleRatio
 			rewritePlan = plan
 			haveRewritePlan = true
 		} else {
+			updatePlanTimestamp = true
+		}
+		if updatePlanTimestamp {
 			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
 		}
 	}
@@ -10310,6 +10314,7 @@ planned:
 		}
 		return
 	}
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 }
 
 func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
