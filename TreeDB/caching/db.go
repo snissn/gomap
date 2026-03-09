@@ -2965,6 +2965,10 @@ func (db *DB) scheduleRetainedValueLogPrune() {
 		return
 	}
 	db.retainedPruneMu.Lock()
+	if db.closing.Load() {
+		db.retainedPruneMu.Unlock()
+		return
+	}
 	if db.retainedPruneDone != nil {
 		db.retainedPruneMu.Unlock()
 		return
@@ -10719,6 +10723,12 @@ func (db *DB) observePublishWatermarkLagDrift(backlogBytes int64, now time.Time)
 //   - forces a backend sync boundary (even if the queue is empty),
 //   - removes all older WAL segments (keeping only the currently-open one).
 func (db *DB) Checkpoint() error {
+	if db == nil {
+		return nil
+	}
+	if db.closing.Load() {
+		return errDBClosing
+	}
 	start := time.Now()
 	defer func() {
 		dur := uint64(time.Since(start))
