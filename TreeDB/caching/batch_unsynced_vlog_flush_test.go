@@ -30,7 +30,7 @@ func unsyncedFlushScanBounds() ([]byte, []byte) {
 func findKeysForDistinctLanes(t *testing.T, db *DB, wantedLanes, perLane int) [][]byte {
 	t.Helper()
 	seen := make(map[int][][]byte, wantedLanes)
-	for i := 0; i < 1<<18; i++ {
+	for i := 0; i < 1<<16; i++ {
 		key := []byte{byte(i >> 8), byte(i), byte(i >> 4), byte(i * 7)}
 		laneID := db.laneForShardIndex(db.shardIndex(key))
 		if len(seen) >= wantedLanes {
