@@ -3340,8 +3340,8 @@ type Options struct {
 	// AllowUnsafe acknowledges unsafe durability options.
 	// When false, Open will reject DisableWAL or RelaxedSync.
 	AllowUnsafe bool
-	// MaxValueLogRetainedBytes emits a warning when retained value-log bytes exceed
-	// this threshold (0 disables warnings).
+	// MaxValueLogRetainedBytes emits a warning once retained value-log bytes
+	// reach or exceed this threshold (0 disables warnings).
 	MaxValueLogRetainedBytes int64
 	// MaxValueLogRetainedBytesHard disables value-log pointers for new large
 	// values once retained bytes exceed this threshold (0 disables the cap).
@@ -5554,8 +5554,8 @@ func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration)
 	if db == nil || quietWindow <= 0 {
 		return
 	}
-	timer := time.NewTicker(vlogGenerationLoopInterval / 10)
-	defer timer.Stop()
+	ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+	defer ticker.Stop()
 	for {
 		if db.closing.Load() || db.foregroundWriteQuietFor(time.Now(), quietWindow) {
 			return
@@ -5563,7 +5563,7 @@ func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration)
 		select {
 		case <-db.closeCh:
 			return
-		case <-timer.C:
+		case <-ticker.C:
 		}
 	}
 }
@@ -9788,6 +9788,8 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
+	// Explicit GC runs bypass the foreground quiet-window gate so callers can
+	// force a safety/cleanup pass even while foreground activity is ongoing.
 	if !runGC && !db.foregroundWriteQuiet(time.Now()) {
 		return
 	}
@@ -15207,17 +15209,17 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-			if hasMemSource && view != nil {
-				leasedView := view
-				view = nil
-				releaseView = false
-				return &leasedMergingIterator{
-					Iterator: it,
-					release: func() {
-						db.releaseMemtableView(leasedView)
-					},
-				}
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return &leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
 			}
+		}
 		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil
@@ -15536,17 +15538,17 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-			if hasMemSource && view != nil {
-				leasedView := view
-				view = nil
-				releaseView = false
-				return &leasedMergingIterator{
-					Iterator: it,
-					release: func() {
-						db.releaseMemtableView(leasedView)
-					},
-				}
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return &leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
 			}
+		}
 		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil
