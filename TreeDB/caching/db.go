@@ -2556,10 +2556,14 @@ type backendPointerProjectionIterator interface {
 var errForegroundWritesResumed = errors.New("cachingdb: foreground writes resumed")
 
 func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
-	if db == nil || lastWrite <= 0 {
+	if db == nil {
 		return false
 	}
-	return db.lastForegroundWriteUnixNano.Load() > lastWrite
+	current := db.lastForegroundWriteUnixNano.Load()
+	if lastWrite <= 0 {
+		return current > 0
+	}
+	return current > lastWrite
 }
 
 func (db *DB) collectValueLogLiveIDs() (map[uint32]struct{}, error) {
@@ -2584,24 +2588,27 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 			if state != nil && p != nil {
 				reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
 				leafCtx, leafCancel := db.foregroundWriteResumeContext(lastWrite, 0)
-				defer leafCancel()
 				if state.RootPageID != 0 {
 					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
+						leafCancel()
 						_ = snap.Close()
 						return nil, err
 					}
 				}
 				if state.SystemRootPageID != 0 {
 					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
+						leafCancel()
 						_ = snap.Close()
 						return nil, err
 					}
 				}
 				if db.foregroundWritesResumedSince(lastWrite) {
+					leafCancel()
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
 				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.RootPageID, reader, live); err != nil {
+					leafCancel()
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
@@ -2609,16 +2616,19 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 					return nil, err
 				}
 				if db.foregroundWritesResumedSince(lastWrite) {
+					leafCancel()
 					_ = snap.Close()
 					return nil, errForegroundWritesResumed
 				}
 				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.SystemRootPageID, reader, live); err != nil {
+					leafCancel()
 					if errors.Is(err, context.Canceled) {
 						err = errForegroundWritesResumed
 					}
 					_ = snap.Close()
 					return nil, err
 				}
+				leafCancel()
 			}
 			if err := snap.Close(); err != nil {
 				return nil, err
@@ -5596,23 +5606,12 @@ func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duratio
 		return ctx, cancel
 	}
 	if lastWrite <= 0 {
-		return ctx, cancel
+		lastWrite = db.lastForegroundWriteUnixNano.Load()
 	}
-	db.watchForegroundResume(ctx, cancel, vlogGenerationLoopInterval/10, func() bool {
-		return db.foregroundWritesResumedSince(lastWrite)
-	})
-	return ctx, cancel
-}
-
-func (db *DB) watchForegroundResume(ctx context.Context, cancel context.CancelFunc, interval time.Duration, resumed func() bool) {
-	if db == nil || cancel == nil || resumed == nil {
-		return
-	}
-	if interval <= 0 {
-		interval = vlogGenerationLoopInterval / 10
-	}
-	go func() {
-		ticker := time.NewTicker(interval)
+	go func(lastWrite int64) {
+		// Poll at 1/10th of the generation loop interval so resumed foreground
+		// writes are detected promptly without a busy timer.
+		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
 		defer ticker.Stop()
 		for {
 			select {
@@ -5622,13 +5621,14 @@ func (db *DB) watchForegroundResume(ctx context.Context, cancel context.CancelFu
 				cancel()
 				return
 			case <-ticker.C:
-				if resumed() {
+				if db.foregroundWritesResumedSince(lastWrite) {
 					cancel()
 					return
 				}
 			}
 		}
-	}()
+	}(lastWrite)
+	return ctx, cancel
 }
 
 func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -5648,9 +5648,24 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 		ctx, cancel = context.WithCancel(context.Background())
 	}
 	lastActivity := db.lastForegroundActivityUnixNano()
-	db.watchForegroundResume(ctx, cancel, vlogGenerationLoopInterval/10, func() bool {
-		return db.foregroundActivityResumedSince(lastActivity)
-	})
+	go func(lastActivity int64) {
+		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-db.closeCh:
+				cancel()
+				return
+			case <-ticker.C:
+				if db.foregroundActivityResumedSince(lastActivity) {
+					cancel()
+					return
+				}
+			}
+		}
+	}(lastActivity)
 	return ctx, cancel
 }
 
