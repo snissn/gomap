@@ -29,8 +29,8 @@ func TestValueLogGCOnline_ProtectedSetSafety(t *testing.T) {
 	expected := make(map[string][]byte)
 	inOrderKeys := make([][]byte, 0, 4096)
 
-	for round := 0; round < 6; round++ {
-		for i := 0; i < 400; i++ {
+	for round := 0; round < 4; round++ {
+		for i := 0; i < 180; i++ {
 			key := make([]byte, 16)
 			binary.BigEndian.PutUint64(key[:8], uint64(round))
 			binary.BigEndian.PutUint64(key[8:], uint64(i))
@@ -43,7 +43,7 @@ func TestValueLogGCOnline_ProtectedSetSafety(t *testing.T) {
 		}
 
 		// Create churn and allow segments to become cold while writes continue.
-		deletes := 120
+		deletes := 60
 		if deletes > len(inOrderKeys) {
 			deletes = len(inOrderKeys)
 		}

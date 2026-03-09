@@ -42,7 +42,11 @@ func TestManagerCurrentSetNoRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
 
 	set1 := mgr.CurrentSetNoRefresh()
 	if _, ok := set1.Files[seg1]; !ok {
@@ -88,7 +92,11 @@ func TestManagerRegisterSegment_CurrentSetNoRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
 	if scanCalls != 1 {
 		t.Fatalf("scan calls after open=%d want 1", scanCalls)
 	}
@@ -123,7 +131,11 @@ func TestManagerReleaseZombieDeletesSegmentOnSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
 
 	set := mgr.CurrentSet()
 	f, ok := set.Files[segID]
@@ -159,7 +171,11 @@ func TestManagerReleaseZombieDeleteFailureKeepsSegmentTracked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
 
 	set := mgr.CurrentSet()
 	f, ok := set.Files[segID]
@@ -202,7 +218,11 @@ func TestManagerRefresh_IgnoresSegmentRemovedAfterScan(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
 
 	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("z"), 64))
 
@@ -240,7 +260,11 @@ func TestManagerRegisterSegment_ReinitializesNilFilesMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
 
 	mgr.mu.Lock()
 	mgr.files = nil
@@ -257,4 +281,8 @@ func TestManagerRegisterSegment_ReinitializesNilFilesMap(t *testing.T) {
 	if !ok {
 		t.Fatalf("segment %d missing after RegisterSegment reinitialized files map", segID)
 	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	mgr = nil
 }

@@ -861,7 +861,8 @@ func (db *DB) syncDirBestEffort(dir string) {
 
 func (db *DB) removeFileRetry(path string) error {
 	var err error
-	for i := 0; i < 20; i++ {
+	backoff := 25 * time.Millisecond
+	for i := 0; i < 40; i++ {
 		err = os.Remove(path)
 		if err == nil || os.IsNotExist(err) {
 			return nil
@@ -869,10 +870,27 @@ func (db *DB) removeFileRetry(path string) error {
 		if runtime.GOOS != "windows" {
 			return err
 		}
-		// Windows: Retry with exponential backoff up to ~1s total
-		time.Sleep(time.Duration(i+1) * 5 * time.Millisecond)
+		if !isWindowsSharingViolationError(err) {
+			return err
+		}
+		time.Sleep(backoff)
+		if backoff < 200*time.Millisecond {
+			backoff *= 2
+		}
 	}
 	return err
+}
+
+func isWindowsSharingViolationError(err error) bool {
+	if runtime.GOOS != "windows" || err == nil {
+		return false
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && pathErr.Err != nil {
+		err = pathErr.Err
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "sharing violation") || strings.Contains(msg, "used by another process")
 }
 
 func warnInsecureDir(dir string, notify func(error)) {
@@ -2303,17 +2321,24 @@ func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
 		if ok && valueLog && laneID >= 0 {
 			if id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq)); err == nil {
 				var removeErr error
-				for i := 0; i < 20; i++ {
+				backoff := 25 * time.Millisecond
+				for i := 0; i < 40; i++ {
 					removeErr = db.valueLogReader.RemoveSegment(id)
-					if removeErr == nil {
+					if removeErr == nil || errors.Is(removeErr, valuelog.ErrFileNotFound) {
 						break
 					}
 					if runtime.GOOS != "windows" {
 						return false
 					}
-					time.Sleep(time.Duration(i+1) * 5 * time.Millisecond)
+					if !isWindowsSharingViolationError(removeErr) {
+						return false
+					}
+					time.Sleep(backoff)
+					if backoff < 200*time.Millisecond {
+						backoff *= 2
+					}
 				}
-				if removeErr != nil {
+				if removeErr != nil && !errors.Is(removeErr, valuelog.ErrFileNotFound) {
 					return false
 				}
 			}
@@ -10133,6 +10158,9 @@ func (db *DB) maybeVacuumSparseIndexOnCheckpoint() error {
 	ctx, cancel := context.WithTimeout(context.Background(), checkpointAutoVacuumTimeout)
 	defer cancel()
 	if err := vacuumer.VacuumIndexOnline(ctx); err != nil {
+		if errors.Is(err, backenddb.ErrVacuumUnsupported) {
+			return nil
+		}
 		return err
 	}
 	db.checkpointAutoVacuumRuns.Add(1)
@@ -12166,6 +12194,9 @@ func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
 		RegisterValueLogSegment(path string, fileID uint32) error
 	}); ok {
 		if err := registrar.RegisterValueLogSegment(path, fileID); err != nil {
+			if db.valueLogReader != nil {
+				_ = db.valueLogReader.RemoveSegment(fileID)
+			}
 			return err
 		}
 	}

@@ -2,6 +2,7 @@ package caching
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +40,9 @@ type MockBackend struct {
 	deleteErr              error
 	registerValueLogErr    error
 	setOpsInlineValueLimit int
+	fragReport             map[string]string
+	fragErr                error
+	vacuumErr              error
 }
 
 func NewMockBackend() *MockBackend {
@@ -82,6 +86,29 @@ func (m *MockBackend) getDeleteErr() error {
 func (m *MockBackend) RegisterValueLogSegment(path string, fileID uint32) error {
 	m.mu.RLock()
 	err := m.registerValueLogErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) FragmentationReport() (map[string]string, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.fragErr != nil {
+		return nil, m.fragErr
+	}
+	if m.fragReport == nil {
+		return nil, nil
+	}
+	out := make(map[string]string, len(m.fragReport))
+	for k, v := range m.fragReport {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func (m *MockBackend) VacuumIndexOnline(ctx context.Context) error {
+	m.mu.RLock()
+	err := m.vacuumErr
 	m.mu.RUnlock()
 	return err
 }
@@ -982,6 +1009,66 @@ func TestRotateValueLogMuHeld_RestoresUsableWriterAfterRegisterFailure(t *testin
 		t.Fatalf("ptr fileID=%d want %d", got, oldFileID)
 	}
 	putValueLogPtrs(ptrs)
+}
+
+func TestRegisterValueLogSegment_RollsBackReaderOnBackendFailure(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.registerValueLogErr = errors.New("test: register failed")
+
+	reader, err := valuelog.NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = reader.Close() }()
+
+	db := &DB{
+		dir:            dir,
+		backend:        backend,
+		valueLogReader: reader,
+	}
+
+	path := filepath.Join(dir, valueLogName(0, 1))
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	err = db.registerValueLogSegment(path, fileID)
+	if err == nil || !strings.Contains(err.Error(), "register failed") {
+		t.Fatalf("registerValueLogSegment err=%v want register failure", err)
+	}
+
+	set := reader.CurrentSetNoRefresh()
+	if _, ok := set.Files[fileID]; ok {
+		t.Fatalf("segment %d remained registered after backend failure", fileID)
+	}
+}
+
+func TestCheckpoint_IgnoresUnsupportedSparseVacuum(t *testing.T) {
+	backend := NewMockBackend()
+	backend.fragReport = map[string]string{
+		"treedb.user.pages":                 strconv.FormatUint(checkpointSparseIndexMinPages, 10),
+		"treedb.user.internal_fill_ppm_p50": strconv.FormatUint(checkpointSparseIndexMaxInternalFillP50PPM-1, 10),
+		"treedb.user.internal_fill_ppm_avg": strconv.FormatUint(checkpointSparseIndexMaxInternalFillAvgPPM-1, 10),
+	}
+	backend.vacuumErr = db.ErrVacuumUnsupported
+
+	db := &DB{
+		backend:        backend,
+		disableJournal: true,
+	}
+	db.checkpointRuns.Store(checkpointSparseIndexCheckEveryNoops)
+
+	if err := db.maybeVacuumSparseIndexOnCheckpoint(); err != nil {
+		t.Fatalf("maybeVacuumSparseIndexOnCheckpoint: %v", err)
+	}
+	if got := db.checkpointAutoVacuumRuns.Load(); got != 0 {
+		t.Fatalf("checkpointAutoVacuumRuns=%d want 0", got)
+	}
 }
 
 func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {
