@@ -1945,8 +1945,8 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse retained segments: %v", err)
 	}
-	if segments > 1 {
-		t.Fatalf("expected at most one retained segment after checkpoint, got %d (before=%dB)", segments, retainedBefore)
+	if segments != 1 {
+		t.Fatalf("expected exactly one retained segment after checkpoint, got %d (before=%dB)", segments, retainedBefore)
 	}
 }
 
