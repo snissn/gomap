@@ -1000,6 +1000,7 @@ func TestReopenVerify_IndexColumnarLeaves(t *testing.T) {
 		IndexColumnarLeaves: true,
 		ChunkSize:           64 * 1024,
 	}
+	opts.ValueLog.Generational.Policy = treedb.ValueLogGenerationOff
 
 	db, err := treedb.Open(opts)
 	if err != nil {
