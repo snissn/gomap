@@ -37,6 +37,7 @@ type MockBackend struct {
 	setOpsErr              error
 	setErr                 error
 	deleteErr              error
+	registerValueLogErr    error
 	setOpsInlineValueLimit int
 }
 
@@ -74,6 +75,13 @@ func (m *MockBackend) getSetOpsErr() error {
 func (m *MockBackend) getDeleteErr() error {
 	m.mu.RLock()
 	err := m.deleteErr
+	m.mu.RUnlock()
+	return err
+}
+
+func (m *MockBackend) RegisterValueLogSegment(path string, fileID uint32) error {
+	m.mu.RLock()
+	err := m.registerValueLogErr
 	m.mu.RUnlock()
 	return err
 }
@@ -868,6 +876,106 @@ func TestBatchWriteSync_WALOffLargeNonOverlappingBypassesAsPointers(t *testing.T
 	if string(gotOld) != string(oldVal) {
 		t.Fatalf("Get old=%q want %q", gotOld, oldVal)
 	}
+}
+
+func TestBatchWriteBypass_FallbackReusesPreparedPointerOps(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.setOpsInlineValueLimit = 128
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		RelaxedSync:    true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 20,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	largeKey := []byte("large/key")
+	largeVal := bytes.Repeat([]byte("v"), 8<<10)
+	inlineKey := []byte("inline/key")
+	inlineVal := bytes.Repeat([]byte("i"), 256)
+
+	b := db.NewBatch()
+	if err := b.Set(largeKey, largeVal); err != nil {
+		t.Fatalf("Set large: %v", err)
+	}
+	if err := b.Set(inlineKey, inlineVal); err != nil {
+		t.Fatalf("Set inline: %v", err)
+	}
+	if err := b.writeBypass(false); err != nil {
+		t.Fatalf("writeBypass: %v", err)
+	}
+	if got := db.nextRID.Load(); got != 1 {
+		t.Fatalf("nextRID=%d want 1", got)
+	}
+	gotLarge, err := db.Get(largeKey)
+	if err != nil {
+		t.Fatalf("Get large: %v", err)
+	}
+	if !bytes.Equal(gotLarge, largeVal) {
+		t.Fatalf("Get large len=%d want %d", len(gotLarge), len(largeVal))
+	}
+	gotInline, err := db.Get(inlineKey)
+	if err != nil {
+		t.Fatalf("Get inline: %v", err)
+	}
+	if !bytes.Equal(gotInline, inlineVal) {
+		t.Fatalf("Get inline len=%d want %d", len(gotInline), len(inlineVal))
+	}
+}
+
+func TestRotateValueLogMuHeld_RestoresUsableWriterAfterRegisterFailure(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	backend.registerValueLogErr = errors.New("test: register failed")
+
+	oldSeq := 59
+	oldPath := filepath.Join(dir, valueLogName(0, oldSeq))
+	oldFileID, err := valuelog.EncodeFileID(0, uint32(oldSeq))
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	writer, err := valuelog.NewWriter(oldPath, oldFileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+
+	l := &lane{
+		id:       0,
+		vlog:     writer,
+		vlogSeq:  oldSeq,
+		vlogPath: oldPath,
+	}
+	db := &DB{dir: dir, backend: backend}
+
+	err = db.rotateValueLogLocked(l)
+	if err == nil || !strings.Contains(err.Error(), "register failed") {
+		t.Fatalf("rotateValueLogLocked err=%v want register failure", err)
+	}
+	if got := l.vlogSeq; got != oldSeq {
+		t.Fatalf("vlogSeq=%d want %d", got, oldSeq)
+	}
+	if got := l.vlogPath; got != oldPath {
+		t.Fatalf("vlogPath=%q want %q", got, oldPath)
+	}
+	if l.vlog == nil {
+		t.Fatalf("expected usable writer restored after register failure")
+	}
+	ptrs, err := db.appendValueLog(l, 0, nil, []valuelog.Record{{RID: 1, Value: []byte("value")}}, journalDurabilityNone)
+	if err != nil {
+		t.Fatalf("appendValueLog after rollback: %v", err)
+	}
+	if len(ptrs) != 1 {
+		t.Fatalf("ptrs len=%d want 1", len(ptrs))
+	}
+	if got := ptrs[0].FileID; got != page.ValueLogFileID(oldFileID) {
+		t.Fatalf("ptr fileID=%d want %d", got, oldFileID)
+	}
+	putValueLogPtrs(ptrs)
 }
 
 func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {

@@ -12015,6 +12015,10 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	nextSeq := l.vlogSeq + 1
 	oldSeq := l.vlogSeq
 	oldPath := l.vlogPath
+	var (
+		closedPrev    int64
+		hadClosedPrev bool
+	)
 	name := valueLogName(l.id, nextSeq)
 	path := filepath.Join(db.dir, name)
 	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(nextSeq))
@@ -12041,7 +12045,9 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 			if l.vlogClosedSizes == nil {
 				l.vlogClosedSizes = make(map[string]int64)
 			}
-			prev := l.vlogClosedSizes[oldPath]
+			prev, ok := l.vlogClosedSizes[oldPath]
+			closedPrev = prev
+			hadClosedPrev = ok
 			l.vlogClosedSizes[oldPath] = oldSize
 			l.vlogClosedBytes.Add(oldSize - prev)
 			if oldPath == l.vlogRetainedPath {
@@ -12063,16 +12069,64 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		l.vlogLiveBytes.Store(0)
 	}
 	if err := db.registerValueLogSegment(path, fileID); err != nil {
-		if l.vlog != nil && oldSeq == 0 && oldPath == "" {
-			_ = l.vlog.Close()
-			l.vlog = nil
+		if oldPath != "" {
+			if hadClosedPrev {
+				l.vlogClosedSizes[oldPath] = closedPrev
+			} else {
+				delete(l.vlogClosedSizes, oldPath)
+			}
+			curClosed := int64(0)
+			if l.vlog != nil {
+				curClosed = l.vlog.Size()
+			}
+			l.vlogClosedBytes.Add(closedPrev - curClosed)
+			if oldPath == l.vlogRetainedPath {
+				db.valueLogRetainedClosedBytes.Add(closedPrev - curClosed)
+			}
+		}
+		if rollbackErr := db.restoreValueLogWriterMuHeld(l, oldPath, oldSeq); rollbackErr != nil {
+			l.vlogSeq = oldSeq
+			l.vlogPath = oldPath
+			l.vlogLiveBytes.Store(0)
+			return errors.Join(err, rollbackErr)
 		}
 		l.vlogSeq = oldSeq
 		l.vlogPath = oldPath
+		l.vlogLiveBytes.Store(0)
 		return err
 	}
 	l.vlogPath = path
 	l.vlogLiveBytes.Store(0)
+	return nil
+}
+
+func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
+	if l == nil {
+		return nil
+	}
+	if l.vlog != nil {
+		_ = l.vlog.Close()
+		l.vlog = nil
+	}
+	l.vlogCaps = vlogWriterCaps{}
+	l.vlogModeSet = false
+	l.vlogModeWriter = nil
+	if path == "" || seq == 0 {
+		return nil
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(seq))
+	if err != nil {
+		return err
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		return err
+	}
+	w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
+	db.setVlogWriterMode(l, w, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
+	w.SetRawWritevStrategy(db.valueLogRawWritevMinAvgBytes, db.valueLogRawWritevMinRecords)
+	l.vlog = w
+	l.vlogCaps = computeVlogWriterCaps(w)
 	return nil
 }
 
@@ -16164,7 +16218,12 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	// workloads.
 	ops := getEntrySlice(len(b.entries))
 	ops = append(ops, b.entries...)
-	defer putEntrySlice(ops)
+	releaseOps := true
+	defer func() {
+		if releaseOps {
+			putEntrySlice(ops)
+		}
+	}()
 
 	ops, err := b.db.deferValueLogOps(ops, sync && !b.db.relaxedSync)
 	if err != nil {
@@ -17115,7 +17174,15 @@ func (b *Batch) writeBypass(sync bool) error {
 	if err := backendBatch.SetOps(ops); err != nil {
 		_ = backendBatch.Close()
 		if errors.Is(err, batch.ErrValueTooLarge) {
-			return b.writeRegular(sync)
+			origEntries := b.entries
+			b.entries = ops
+			err = b.writeRegular(sync)
+			if err != nil {
+				b.entries = origEntries
+				return err
+			}
+			b.entries = nil
+			return nil
 		}
 		return err
 	}
