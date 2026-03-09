@@ -409,7 +409,7 @@ func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[
 	if db.rewritePlanLiveBytesCache.key != key || db.rewritePlanLiveBytesCache.liveByID == nil {
 		return nil, false
 	}
-	return db.rewritePlanLiveBytesCache.liveByID, true
+	return cloneValueLogLiveBytesMap(db.rewritePlanLiveBytesCache.liveByID), true
 }
 
 func cloneValueLogLiveBytesMap(src map[uint32]int64) map[uint32]int64 {
