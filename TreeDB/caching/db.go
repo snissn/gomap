@@ -862,7 +862,8 @@ func (db *DB) syncDirBestEffort(dir string) {
 
 func (db *DB) removeFileRetry(path string) error {
 	var err error
-	for i := 0; i < 20; i++ {
+	backoff := 25 * time.Millisecond
+	for i := 0; i < 40; i++ {
 		err = os.Remove(path)
 		if err == nil || os.IsNotExist(err) {
 			return nil
@@ -870,10 +871,27 @@ func (db *DB) removeFileRetry(path string) error {
 		if runtime.GOOS != "windows" {
 			return err
 		}
-		// Windows: Retry with exponential backoff up to ~1s total
-		time.Sleep(time.Duration(i+1) * 5 * time.Millisecond)
+		if !isWindowsSharingViolationError(err) {
+			return err
+		}
+		time.Sleep(backoff)
+		if backoff < 200*time.Millisecond {
+			backoff *= 2
+		}
 	}
 	return err
+}
+
+func isWindowsSharingViolationError(err error) bool {
+	if runtime.GOOS != "windows" || err == nil {
+		return false
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && pathErr.Err != nil {
+		err = pathErr.Err
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "sharing violation") || strings.Contains(msg, "used by another process")
 }
 
 func warnInsecureDir(dir string, notify func(error)) {
@@ -2299,7 +2317,34 @@ func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
 	if path == "" {
 		return false
 	}
-	db.dropValueLogSegment(path)
+	if db.valueLogReader != nil {
+		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+		if ok && valueLog && laneID >= 0 {
+			if id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq)); err == nil {
+				var removeErr error
+				backoff := 25 * time.Millisecond
+				for i := 0; i < 40; i++ {
+					removeErr = db.valueLogReader.RemoveSegment(id)
+					if removeErr == nil || errors.Is(removeErr, valuelog.ErrFileNotFound) {
+						break
+					}
+					if runtime.GOOS != "windows" {
+						return false
+					}
+					if !isWindowsSharingViolationError(removeErr) {
+						return false
+					}
+					time.Sleep(backoff)
+					if backoff < 200*time.Millisecond {
+						backoff *= 2
+					}
+				}
+				if removeErr != nil && !errors.Is(removeErr, valuelog.ErrFileNotFound) {
+					return false
+				}
+			}
+		}
+	}
 	if err := db.removeFileRetry(path); err != nil {
 		return false
 	}
@@ -2661,7 +2706,7 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 	defer it.Close()
 	seen := 0
 	for it.Valid() {
-		if seen&255 == 0 && db.foregroundWritesResumedSince(lastWrite) {
+		if seen > 0 && seen&255 == 0 && db.foregroundWritesResumedSince(lastWrite) {
 			return errForegroundWritesResumed
 		}
 		_, ptr, flags := it.UnsafeEntry()
@@ -2873,15 +2918,21 @@ func (db *DB) retainedPrunePressureBytes() int64 {
 		}
 		return max(limit/2, int64(1))
 	}
-	pressure := db.valueLogMaxSegmentBytes * 4
+	const (
+		retainedPruneSegmentPressureMultiplier = 4
+		// Keep retained-prune pressure comfortably above tiny test/default
+		// segment sizes so prune cadence stays tied to substantial backlog.
+		retainedPrunePressureFloorBytes = 1 << 30
+	)
+	pressure := db.valueLogMaxSegmentBytes * retainedPruneSegmentPressureMultiplier
 	if pressure <= 0 {
-		pressure = 1 << 30
+		pressure = retainedPrunePressureFloorBytes
 	}
 	if ft := db.flushThreshold * 8; ft > pressure {
 		pressure = ft
 	}
-	if pressure < 1<<30 {
-		pressure = 1 << 30
+	if pressure < retainedPrunePressureFloorBytes {
+		pressure = retainedPrunePressureFloorBytes
 	}
 	return pressure
 }
@@ -2969,6 +3020,8 @@ func (db *DB) runWithBackendMaintenance(fn func() error) error {
 	for db.checkpointing.Load() || db.maintenanceActive.Load() {
 		db.checkpointCond.Wait()
 	}
+	// Publish the maintenance-active flag while checkpointMu is held so Checkpoint
+	// and background maintenance serialize through the same mutex/cond state.
 	db.maintenanceActive.Store(true)
 	db.checkpointMu.Unlock()
 	defer func() {
@@ -10091,18 +10144,7 @@ planned:
 	if !ok {
 		return
 	}
-	if !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps) {
-		gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
-		if err != nil {
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("cachingdb: generational gc dry-run: %w", err))
-			}
-			return
-		}
-		if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
-			return
-		}
-	}
+	needEligibilityEstimate := !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
 	now = time.Now()
 	lastGC := db.vlogGenerationLastGCUnixNano.Load()
 	if lastGC > 0 {
@@ -10114,6 +10156,15 @@ planned:
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
 	err := db.runWithBackendMaintenance(func() error {
+		if needEligibilityEstimate {
+			gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
+			if err != nil {
+				return fmt.Errorf("generational gc dry-run: %w", err)
+			}
+			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
+				return nil
+			}
+		}
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
@@ -10400,6 +10451,7 @@ const (
 	checkpointSparseIndexMinPages              = 128
 	checkpointSparseIndexMaxInternalFillP50PPM = 200_000
 	checkpointSparseIndexMaxInternalFillAvgPPM = 350_000
+	checkpointAutoVacuumTimeout                = 10 * time.Second
 )
 
 func parseCheckpointFragUint(report map[string]string, key string) (uint64, bool) {
@@ -10446,14 +10498,9 @@ func (db *DB) maybeVacuumSparseIndexOnCheckpoint() error {
 	}
 
 	runs := db.checkpointRuns.Load() + 1
-	for {
-		last := db.checkpointAutoVacuumLastCheckRun.Load()
-		if runs-last < checkpointSparseIndexCheckEveryNoops {
-			return nil
-		}
-		if db.checkpointAutoVacuumLastCheckRun.CompareAndSwap(last, runs) {
-			break
-		}
+	last := db.checkpointAutoVacuumLastCheckRun.Load()
+	if runs-last < checkpointSparseIndexCheckEveryNoops {
+		return nil
 	}
 
 	report, err := frag.FragmentationReport()
@@ -10472,6 +10519,15 @@ func (db *DB) maybeVacuumSparseIndexOnCheckpoint() error {
 	if !ok {
 		return nil
 	}
+	for {
+		last = db.checkpointAutoVacuumLastCheckRun.Load()
+		if runs-last < checkpointSparseIndexCheckEveryNoops {
+			return nil
+		}
+		if db.checkpointAutoVacuumLastCheckRun.CompareAndSwap(last, runs) {
+			break
+		}
+	}
 
 	db.checkpointAutoVacuumLastPages.Store(pages)
 	db.checkpointAutoVacuumLastInternalP50.Store(p50)
@@ -10481,7 +10537,12 @@ func (db *DB) maybeVacuumSparseIndexOnCheckpoint() error {
 		return nil
 	}
 
-	if err := vacuumer.VacuumIndexOnline(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), checkpointAutoVacuumTimeout)
+	defer cancel()
+	if err := vacuumer.VacuumIndexOnline(ctx); err != nil {
+		if errors.Is(err, backenddb.ErrVacuumUnsupported) {
+			return nil
+		}
 		return err
 	}
 	db.checkpointAutoVacuumRuns.Add(1)
@@ -10992,6 +11053,10 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.flushMu.Unlock()
 	db.wg.Wait()
+	// Retained-prune scans use the live value-log reader and backend state.
+	// Wait for any in-flight prune before tearing down readers or removing
+	// lane files so Close cannot race a background live-ID walk.
+	db.waitForRetainedValueLogPrune()
 	db.valueLogDictTrainerMu.Lock()
 	trainer := db.valueLogDictTrainer
 	db.valueLogDictTrainer = nil
@@ -11092,7 +11157,6 @@ func (db *DB) Close() error {
 	}
 
 	db.waitForRetainedValueLogPrune()
-
 	if err := db.backend.Close(); err != nil {
 		errs = append(errs, err)
 	}
@@ -12391,6 +12455,12 @@ func (db *DB) rotateValueLogLocked(l *lane) error {
 
 func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	nextSeq := l.vlogSeq + 1
+	oldSeq := l.vlogSeq
+	oldPath := l.vlogPath
+	var (
+		closedPrev    int64
+		hadClosedPrev bool
+	)
 	name := valueLogName(l.id, nextSeq)
 	path := filepath.Join(db.dir, name)
 	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(nextSeq))
@@ -12399,7 +12469,6 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	}
 
 	if l.vlog != nil {
-		oldPath := l.vlogPath
 		oldSize := l.vlog.Size()
 		if err := l.vlog.RotateTo(path, fileID); err != nil {
 			return err
@@ -12418,7 +12487,9 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 			if l.vlogClosedSizes == nil {
 				l.vlogClosedSizes = make(map[string]int64)
 			}
-			prev := l.vlogClosedSizes[oldPath]
+			prev, ok := l.vlogClosedSizes[oldPath]
+			closedPrev = prev
+			hadClosedPrev = ok
 			l.vlogClosedSizes[oldPath] = oldSize
 			l.vlogClosedBytes.Add(oldSize - prev)
 			if oldPath == l.vlogRetainedPath {
@@ -12439,17 +12510,74 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		l.vlogSeq = nextSeq
 		l.vlogLiveBytes.Store(0)
 	}
-	l.vlogPath = path
-	l.vlogLiveBytes.Store(0)
 	if err := db.registerValueLogSegment(path, fileID); err != nil {
+		if oldPath != "" {
+			if hadClosedPrev {
+				l.vlogClosedSizes[oldPath] = closedPrev
+			} else {
+				delete(l.vlogClosedSizes, oldPath)
+			}
+			curClosed := int64(0)
+			if l.vlog != nil {
+				curClosed = l.vlog.Size()
+			}
+			l.vlogClosedBytes.Add(closedPrev - curClosed)
+			if oldPath == l.vlogRetainedPath {
+				db.valueLogRetainedClosedBytes.Add(closedPrev - curClosed)
+			}
+		}
+		if rollbackErr := db.restoreValueLogWriterMuHeld(l, oldPath, oldSeq); rollbackErr != nil {
+			l.vlogSeq = oldSeq
+			l.vlogPath = oldPath
+			l.vlogLiveBytes.Store(0)
+			return errors.Join(err, rollbackErr)
+		}
+		l.vlogSeq = oldSeq
+		l.vlogPath = oldPath
+		l.vlogLiveBytes.Store(0)
 		return err
 	}
+	l.vlogPath = path
+	l.vlogLiveBytes.Store(0)
+	return nil
+}
+
+func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
+	if l == nil {
+		return nil
+	}
+	if l.vlog != nil {
+		_ = l.vlog.Close()
+		l.vlog = nil
+	}
+	l.vlogCaps = vlogWriterCaps{}
+	l.vlogModeSet = false
+	l.vlogModeWriter = nil
+	if path == "" || seq == 0 {
+		return nil
+	}
+	fileID, err := valuelog.EncodeFileID(uint32(l.id), uint32(seq))
+	if err != nil {
+		return err
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		return err
+	}
+	w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
+	db.setVlogWriterMode(l, w, db.defaultVlogWriteMode(), db.valueLogBlockCodec)
+	w.SetRawWritevStrategy(db.valueLogRawWritevMinAvgBytes, db.valueLogRawWritevMinRecords)
+	l.vlog = w
+	l.vlogCaps = computeVlogWriterCaps(w)
 	return nil
 }
 
 func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
-	if db == nil || path == "" || fileID == 0 {
+	if db == nil {
 		return nil
+	}
+	if path == "" || fileID == 0 {
+		return fmt.Errorf("invalid value-log segment registration: path=%q file_id=%d", path, fileID)
 	}
 	if db.valueLogReader != nil {
 		if err := db.valueLogReader.RegisterSegment(path, fileID); err != nil {
@@ -12460,6 +12588,9 @@ func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
 		RegisterValueLogSegment(path string, fileID uint32) error
 	}); ok {
 		if err := registrar.RegisterValueLogSegment(path, fileID); err != nil {
+			if db.valueLogReader != nil {
+				_ = db.valueLogReader.RemoveSegment(fileID)
+			}
 			return err
 		}
 	}
@@ -16534,7 +16665,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	ops = append(ops, b.entries...)
 	defer putEntrySlice(ops)
 
-	ops, err := b.db.deferValueLogOps(ops, sync && !b.db.relaxedSync)
+	ops, err := b.db.deferValueLogOps(ops, sync)
 	if err != nil {
 		return false, err
 	}
@@ -17373,7 +17504,7 @@ func parseLogSeq(name string) (int, int, bool, bool) {
 	return 0, 0, false, false
 }
 
-func (b *Batch) writeBypass(sync bool) error {
+func (b *Batch) writeBypass(sync bool) (err error) {
 	// WAL-off + outer-leaf-in-vlog workloads are highly sensitive to write
 	// coalescing. Direct backend sync writes can preserve correctness but still
 	// explode the live leaf-page count because each batch mutates the backend tree
@@ -17476,13 +17607,24 @@ func (b *Batch) writeBypass(sync bool) error {
 
 	// Write directly to backend
 	backendBatch := b.db.backend.NewBatch()
+	defer func() {
+		if backendBatch != nil {
+			if cerr := backendBatch.Close(); err == nil {
+				err = cerr
+			}
+		}
+	}()
 
 	ops := getEntrySlice(len(b.entries))
 	ops = append(ops, b.entries...)
-	defer putEntrySlice(ops)
+	releaseOps := true
+	defer func() {
+		if releaseOps {
+			putEntrySlice(ops)
+		}
+	}()
 
 	if rewritten, err := b.db.prepareBypassValueLogOps(ops, sync); err != nil {
-		_ = backendBatch.Close()
 		return err
 	} else {
 		ops = rewritten
@@ -17490,14 +17632,24 @@ func (b *Batch) writeBypass(sync bool) error {
 
 	// Use SetOps for bulk transfer (backend will resolve value-log pointers).
 	if err := backendBatch.SetOps(ops); err != nil {
-		_ = backendBatch.Close()
 		if errors.Is(err, batch.ErrValueTooLarge) {
-			return b.writeRegular(sync)
+			origEntries := b.entries
+			b.entries = ops
+			err = b.writeRegular(sync)
+			if err != nil {
+				b.entries = origEntries
+				return err
+			}
+			if origEntries != nil {
+				b.entries = origEntries[:0]
+			} else {
+				b.entries = nil
+			}
+			return nil
 		}
 		return err
 	}
 
-	var err error
 	if sync && !b.db.relaxedSync {
 		b.db.flushMu.Lock()
 		err = backendBatch.WriteSync()
@@ -17511,6 +17663,7 @@ func (b *Batch) writeBypass(sync bool) error {
 	if err != nil {
 		return err
 	}
+	backendBatch = nil
 
 	b.db.mu.Lock()
 	if batchRange.valid {

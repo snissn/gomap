@@ -113,6 +113,9 @@ func collectNestedLeafPageValueLogLiveIDs(ctx context.Context, ptr page.ValuePtr
 	if !leaf.VerifyChecksum() {
 		return fmt.Errorf("checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
+	// Leaf pages stored in the value log are treated as terminal containers for
+	// payload pointers here. Their entries may point at value-log payloads, but we
+	// do not recursively interpret those payload pointers as more leaf pages.
 	for i := uint16(0); i < leaf.Count(); i++ {
 		if shouldCheckLeafRefCancellation(i) {
 			if err := ctx.Err(); err != nil {
