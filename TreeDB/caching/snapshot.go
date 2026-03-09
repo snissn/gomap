@@ -54,13 +54,27 @@ type backendSnapshotProvider interface {
 	AcquireSnapshot() *backenddb.Snapshot
 }
 
+func (db *DB) tryAcquireSnapshotMemtableViewFast() *memtableView {
+	if db == nil {
+		return nil
+	}
+	view := db.memtables.Load()
+	if view == nil {
+		return nil
+	}
+	if len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+		return db.retainMemtableView()
+	}
+	return nil
+}
+
 // AcquireSnapshot returns a cached snapshot that includes queued memtable writes.
 func (db *DB) AcquireSnapshot() *Snapshot {
 	if db == nil || db.backend == nil || db.closing.Load() {
 		return nil
 	}
 
-	view := db.retainMemtableView()
+	view := db.tryAcquireSnapshotMemtableViewFast()
 	needsRotate := db.mutableBytes.Load() > 0
 	if !needsRotate && view != nil {
 		for _, mt := range view.mutables {
