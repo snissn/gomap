@@ -39,6 +39,8 @@ type MockBackend struct {
 	setErr                 error
 	deleteErr              error
 	registerValueLogErr    error
+	markValueLogZombieErr  error
+	markValueLogZombieID   uint32
 	setOpsInlineValueLimit int
 	fragReport             map[string]string
 	fragErr                error
@@ -88,6 +90,17 @@ func (m *MockBackend) RegisterValueLogSegment(path string, fileID uint32) error 
 	err := m.registerValueLogErr
 	m.mu.RUnlock()
 	return err
+}
+
+func (m *MockBackend) MarkValueLogZombie(id uint32) error {
+	m.mu.RLock()
+	err := m.markValueLogZombieErr
+	failID := m.markValueLogZombieID
+	m.mu.RUnlock()
+	if err != nil && (failID == 0 || failID == id) {
+		return err
+	}
+	return nil
 }
 
 func (m *MockBackend) FragmentationReport() (map[string]string, error) {
@@ -983,6 +996,8 @@ func TestRotateValueLogMuHeld_RestoresUsableWriterAfterRegisterFailure(t *testin
 			_ = l.vlog.Close()
 			l.vlog = nil
 		}
+		_ = db.removeFileRetry(oldPath)
+		_ = db.removeFileRetry(filepath.Join(dir, valueLogName(0, oldSeq+1)))
 	})
 
 	err = db.rotateValueLogLocked(l)

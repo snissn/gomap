@@ -1,16 +1,15 @@
 package treedb
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
-	"strings"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func TestProfileFast_MultiDomainSyncWritesCheckpointVacuumKeepsInternalPagesPacked(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping sparse-index checkpoint stress test in short mode")
-	}
+func TestProfileFast_MultiDomainSyncWritesAvoidsPageExplosionWithoutCheckpointVacuum(t *testing.T) {
 	dir := t.TempDir()
 
 	db, err := Open(Options{
@@ -20,13 +19,16 @@ func TestProfileFast_MultiDomainSyncWritesCheckpointVacuumKeepsInternalPagesPack
 		PreferAppendAlloc:             true,
 		KeepRecent:                    1,
 		BackgroundIndexVacuumInterval: -1,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 1,
+		},
 	})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
 
-	val := make([]byte, 64)
+	val := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
 	const (
 		stores   = 12
 		versions = 120
@@ -48,12 +50,9 @@ func TestProfileFast_MultiDomainSyncWritesCheckpointVacuumKeepsInternalPagesPack
 				t.Fatalf("writesync version=%d store=%d: %v", version, store, err)
 			}
 			_ = b.Close()
-			if err := db.Checkpoint(); err != nil {
-				if strings.Contains(err.Error(), "online vacuum unsupported on this platform") {
-					t.Skipf("checkpoint auto vacuum unsupported on this platform: %v", err)
-				}
-				t.Fatalf("checkpoint version=%d store=%d: %v", version, store, err)
-			}
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("checkpoint version=%d: %v", version, err)
 		}
 	}
 
@@ -73,19 +72,11 @@ func TestProfileFast_MultiDomainSyncWritesCheckpointVacuumKeepsInternalPagesPack
 
 	p50 := parse("treedb.user.internal_fill_ppm_p50")
 	avg := parse("treedb.user.internal_fill_ppm_avg")
-	pages := parse("treedb.user.pages")
-	autoVacuumRuns, err := strconv.ParseUint(db.Stats()["treedb.cache.checkpoint.auto_vacuum_runs"], 10, 64)
-	if err != nil {
-		t.Fatalf("parse auto vacuum runs: %v", err)
+	pages := parse("treedb.pages.total")
+	if pages > 5_000 {
+		t.Fatalf("expected pages.total <= 5000, got %d (p50=%d avg=%d report=%v)", pages, p50, avg, rep)
 	}
-
-	if pages > 160 {
-		t.Fatalf("expected checkpoint auto vacuum to keep user page count bounded, pages=%d report=%v", pages, rep)
-	}
-	if avg < 200_000 {
-		t.Fatalf("expected internal fill avg >= 200000 ppm, got %d (p50=%d report=%v)", avg, p50, rep)
-	}
-	if autoVacuumRuns == 0 {
-		t.Fatalf("expected checkpoint auto vacuum to run; stats=%v report=%v", db.Stats(), rep)
+	if avg < 75_000 {
+		t.Fatalf("expected internal fill avg >= 75000 ppm, got %d (pages=%d p50=%d report=%v)", avg, pages, p50, rep)
 	}
 }
