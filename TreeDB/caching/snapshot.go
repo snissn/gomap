@@ -3,6 +3,7 @@ package caching
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -25,8 +26,28 @@ type Snapshot struct {
 	view    *memtableView
 	backend *backenddb.Snapshot
 
-	closeOnce sync.Once
-	closeErr  error
+	closed atomic.Bool
+}
+
+var snapshotPool = sync.Pool{
+	New: func() any {
+		return &Snapshot{}
+	},
+}
+
+func getSnapshot() *Snapshot {
+	return snapshotPool.Get().(*Snapshot)
+}
+
+func putSnapshot(s *Snapshot) {
+	if s == nil {
+		return
+	}
+	s.db = nil
+	s.view = nil
+	s.backend = nil
+	s.closed.Store(false)
+	snapshotPool.Put(s)
 }
 
 type backendSnapshotProvider interface {
@@ -99,7 +120,12 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
-	return &Snapshot{db: db, view: view, backend: backendSnap}
+	snap := getSnapshot()
+	snap.db = db
+	snap.view = view
+	snap.backend = backendSnap
+	snap.closed.Store(false)
+	return snap
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -120,19 +146,21 @@ func (s *Snapshot) Close() error {
 	if s == nil {
 		return nil
 	}
-	s.closeOnce.Do(func() {
-		var errs []error
-		if s.backend != nil {
-			errs = append(errs, s.backend.Close())
-			s.backend = nil
-		}
-		if s.view != nil && s.db != nil {
-			s.db.releaseMemtableView(s.view)
-			s.view = nil
-		}
-		s.closeErr = errors.Join(errs...)
-	})
-	return s.closeErr
+	if !s.closed.CompareAndSwap(false, true) {
+		return nil
+	}
+	var errs []error
+	if s.backend != nil {
+		errs = append(errs, s.backend.Close())
+		s.backend = nil
+	}
+	if s.view != nil && s.db != nil {
+		s.db.releaseMemtableView(s.view)
+		s.view = nil
+	}
+	err := errors.Join(errs...)
+	putSnapshot(s)
+	return err
 }
 
 func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
