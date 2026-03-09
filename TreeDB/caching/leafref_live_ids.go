@@ -15,6 +15,10 @@ import (
 
 const leafRefCancellationCheckInterval = 256
 
+func shouldCheckLeafRefCancellation(i uint16) bool {
+	return i > 0 && i%leafRefCancellationCheckInterval == 0
+}
+
 type pageGetter interface {
 	Get(pageID uint64) ([]byte, error)
 }
@@ -109,8 +113,11 @@ func collectNestedLeafPageValueLogLiveIDs(ctx context.Context, ptr page.ValuePtr
 	if !leaf.VerifyChecksum() {
 		return fmt.Errorf("checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
+	// Leaf pages stored in the value log are treated as terminal containers for
+	// payload pointers here. Their entries may point at value-log payloads, but we
+	// do not recursively interpret those payload pointers as more leaf pages.
 	for i := uint16(0); i < leaf.Count(); i++ {
-		if i%leafRefCancellationCheckInterval == 0 {
+		if shouldCheckLeafRefCancellation(i) {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
