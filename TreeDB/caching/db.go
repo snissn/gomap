@@ -16760,6 +16760,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		} else {
 			durability = journalDurabilitySync
 		}
+	} else if b.db.disableJournal && b.db.relaxedSync && b.db.indexOuterLeavesInValueLog {
+		// In WAL-off fast profiles, staged importer batches can publish pointer
+		// metadata via later sync writes before a fresh logical reader reloads the
+		// version. Keep unsynced batch commits cheap, but flush value-log writer
+		// buffers so pointer-backed payload bytes are visible to subsequent readers.
+		durability = journalDurabilityFlush
 	}
 	debugPtr := b.db.debugFlushPointers
 	valueLogEnabled := b.db.valueLogEnabled()
