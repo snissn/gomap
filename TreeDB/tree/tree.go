@@ -93,6 +93,11 @@ type slabUnsafeKeyBatchAppender interface {
 	ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][]byte, dst [][]byte) ([][]byte, error)
 }
 
+// Optional capability gate for checksum verification on slab-backed pages.
+type slabReadChecksumCapability interface {
+	SkipReadChecksum() bool
+}
+
 // Optional capability gate for key-aware pointer read interfaces.
 type slabKeyAwareCapability interface {
 	KeyAwareEnabled() bool
@@ -103,6 +108,13 @@ func keyAwarePointerReadsEnabled(sr SlabReader) bool {
 		return gate.KeyAwareEnabled()
 	}
 	return true
+}
+
+func slabReadChecksumDisabled(sr SlabReader) bool {
+	if gate, ok := sr.(slabReadChecksumCapability); ok {
+		return gate.SkipReadChecksum()
+	}
+	return false
 }
 
 type Tree struct {
@@ -202,7 +214,7 @@ func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error)
 			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
 		}
 		n := node.NewNodeView(data)
-		if !n.VerifyChecksum() {
+		if !slabReadChecksumDisabled(t.slabReader) && !n.VerifyChecksum() {
 			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		if n.Type() != page.PageTypeLeaf {
@@ -329,7 +341,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				}
 				leafScratchHandle.buf = data[:0]
 				n = node.NewNodeView(data)
-				if !n.VerifyChecksum() {
+				if !slabReadChecksumDisabled(t.slabReader) && !n.VerifyChecksum() {
 					putLeafRefPageScratch(leafScratchHandle)
 					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("checksum mismatch on page %d", currID)
 				}
