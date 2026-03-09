@@ -7,30 +7,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
-
-type missingZombieBackend struct {
-	*backenddb.DB
-	failID uint32
-}
-
-func (b *missingZombieBackend) MarkValueLogZombie(id uint32) error {
-	if b != nil && b.failID != 0 && id == b.failID {
-		return fmt.Errorf("%w: %d", valuelog.ErrFileNotFound, id)
-	}
-	return b.DB.MarkValueLogZombie(id)
-}
 
 func TestCheckpoint_DeletesRetainedValueLogWhenBackendManagerForgotSegment(t *testing.T) {
 	dir := t.TempDir()
 
-	realBackend, err := backenddb.Open(backenddb.Options{Dir: dir})
-	if err != nil {
-		t.Fatalf("backend open: %v", err)
-	}
-	backend := &missingZombieBackend{DB: realBackend}
+	backend := NewMockBackend()
 
 	db, err := Open(dir, backend, Options{
 		FlushThreshold:           256 << 20,
@@ -42,10 +25,9 @@ func TestCheckpoint_DeletesRetainedValueLogWhenBackendManagerForgotSegment(t *te
 		ValueLogCompression:      1,
 		ValueLogPointerThreshold: 1,
 		ValueLogMaxSegmentBytes:  4 << 10,
-		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
+		ValueLogGenerationPolicy: 0,
 	})
 	if err != nil {
-		_ = realBackend.Close()
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() {
@@ -84,7 +66,8 @@ func TestCheckpoint_DeletesRetainedValueLogWhenBackendManagerForgotSegment(t *te
 	if err != nil {
 		t.Fatalf("EncodeFileID: %v", err)
 	}
-	backend.failID = failID
+	backend.markValueLogZombieID = failID
+	backend.markValueLogZombieErr = fmt.Errorf("%w: %d", valuelog.ErrFileNotFound, failID)
 
 	if err := db.Delete([]byte("k1")); err != nil {
 		t.Fatalf("Delete k1: %v", err)
