@@ -2193,7 +2193,6 @@ func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 	}
 
 	lastWrite := cache.lastForegroundWriteUnixNano.Load()
-	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
 		if time.Now().After(deadline) {
@@ -2272,7 +2271,6 @@ func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
 		t.Fatalf("first prune did not start")
 	}
 	lastWrite := cache.lastForegroundWriteUnixNano.Load()
-	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
 		if time.Now().After(deadline) {
