@@ -5597,8 +5597,21 @@ func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duratio
 	if lastWrite <= 0 {
 		return ctx, cancel
 	}
-	go func(lastWrite int64) {
-		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+	db.watchForegroundResume(ctx, cancel, vlogGenerationLoopInterval/10, func() bool {
+		return db.foregroundWritesResumedSince(lastWrite)
+	})
+	return ctx, cancel
+}
+
+func (db *DB) watchForegroundResume(ctx context.Context, cancel context.CancelFunc, interval time.Duration, resumed func() bool) {
+	if db == nil || cancel == nil || resumed == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = vlogGenerationLoopInterval / 10
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {
@@ -5608,14 +5621,13 @@ func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duratio
 				cancel()
 				return
 			case <-ticker.C:
-				if db.foregroundWritesResumedSince(lastWrite) {
+				if resumed() {
 					cancel()
 					return
 				}
 			}
 		}
-	}(lastWrite)
-	return ctx, cancel
+	}()
 }
 
 func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
@@ -5635,24 +5647,9 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 		ctx, cancel = context.WithCancel(context.Background())
 	}
 	lastActivity := db.lastForegroundActivityUnixNano()
-	go func(lastActivity int64) {
-		ticker := time.NewTicker(10 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-db.closeCh:
-				cancel()
-				return
-			case <-ticker.C:
-				if db.foregroundActivityResumedSince(lastActivity) {
-					cancel()
-					return
-				}
-			}
-		}
-	}(lastActivity)
+	db.watchForegroundResume(ctx, cancel, vlogGenerationLoopInterval/10, func() bool {
+		return db.foregroundActivityResumedSince(lastActivity)
+	})
 	return ctx, cancel
 }
 

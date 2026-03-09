@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/bits"
 	"runtime"
 	"sort"
@@ -1968,7 +1969,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 			}
 		}
 		if id >= z.pager.PageCount() {
-			return nil, false, errors.New("zipper: detected OOB child ID")
+			return nil, false, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", id, z.pager.PageCount())
 		}
 		data, err := z.pager.Get(id)
 		if err != nil {

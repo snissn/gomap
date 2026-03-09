@@ -434,7 +434,7 @@ func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[
 	}
 	liveByID := db.rewritePlanLiveBytesCache.liveByID
 	db.rewritePlanLiveBytesMu.Unlock()
-	return cloneValueLogLiveBytesMap(liveByID), true
+	return liveByID, true
 }
 
 func cloneValueLogLiveBytesMap(src map[uint32]int64) map[uint32]int64 {
