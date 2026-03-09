@@ -1395,7 +1395,6 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 		// Add sibling splits
 		for _, s := range child.splits {
-			pageCount := z.pager.PageCount()
 			if (!z.outerLeavesInValueLog || !isLeafRef(s.NodeID)) && s.NodeID >= pageCount {
 				return 0, nil, fmt.Errorf("zipper: detected OOB split child ID %d (page_count=%d)", s.NodeID, pageCount)
 			}

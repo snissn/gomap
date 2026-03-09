@@ -396,7 +396,11 @@ type rewritePlanLiveEstimateHookValue struct {
 	fn func()
 }
 
-var rewritePlanLiveEstimateHook atomic.Value
+var rewritePlanLiveEstimateHook = func() atomic.Value {
+	var v atomic.Value
+	v.Store(rewritePlanLiveEstimateHookValue{})
+	return v
+}()
 
 func loadRewritePlanLiveEstimateHook() func() {
 	v, _ := rewritePlanLiveEstimateHook.Load().(rewritePlanLiveEstimateHookValue)
