@@ -424,13 +424,13 @@ func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[
 	if db == nil {
 		return nil, false
 	}
-	db.rewritePlanLiveBytesMu.Lock()
+	db.rewritePlanLiveBytesMu.RLock()
 	if db.rewritePlanLiveBytesCache.key != key || db.rewritePlanLiveBytesCache.liveByID == nil {
-		db.rewritePlanLiveBytesMu.Unlock()
+		db.rewritePlanLiveBytesMu.RUnlock()
 		return nil, false
 	}
 	liveByID := db.rewritePlanLiveBytesCache.liveByID
-	db.rewritePlanLiveBytesMu.Unlock()
+	db.rewritePlanLiveBytesMu.RUnlock()
 	return cloneValueLogLiveBytesMap(liveByID), true
 }
 
