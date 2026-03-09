@@ -1385,9 +1385,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	}
 	entries := getInternalEntrySlice(totalEntries)
 	defer func() { putInternalEntrySlice(entries) }()
+	pageCount := z.pager.PageCount()
 	for i := range children {
 		child := children[i]
-		pageCount := z.pager.PageCount()
 		if (!z.outerLeavesInValueLog || !isLeafRef(child.newChild)) && child.newChild >= pageCount {
 			return 0, nil, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", child.newChild, pageCount)
 		}

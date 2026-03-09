@@ -28,6 +28,34 @@ func forceVlogMaintenanceIdle(db *DB) {
 	}
 }
 
+func schedulerTestWait(t *testing.T) time.Duration {
+	t.Helper()
+	const (
+		defaultWait = 5 * time.Second
+		maxWait     = 10 * time.Second
+		minWait     = 2 * time.Second
+		safety      = 10 * time.Millisecond
+	)
+	if deadline, ok := t.Deadline(); ok {
+		remain := time.Until(deadline) - safety
+		if remain <= 0 {
+			return 0
+		}
+		wait := remain / 8
+		if wait > maxWait {
+			wait = maxWait
+		}
+		if wait < minWait {
+			wait = minWait
+		}
+		if wait > remain {
+			return remain
+		}
+		return wait
+	}
+	return defaultWait
+}
+
 func (b *blockingRewritePlannerBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
 	b.startOnce.Do(func() { close(b.planStart) })
 	select {
@@ -635,9 +663,10 @@ func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
 		close(doneMaintenance)
 	}()
 
+	wait := schedulerTestWait(t)
 	select {
 	case <-blocking.planStart:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait):
 		t.Fatalf("rewrite plan did not start")
 	}
 
@@ -800,7 +829,8 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundReads(t *testing.T
 	}
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
-	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.noteRead()
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	if _, calls := recorder.recordedPlan(); calls != 0 {
@@ -862,6 +892,9 @@ func TestVlogGenerationMaintenance_SkipsDuringActiveForegroundIterator(t *testin
 	if _, calls := recorder.recordedPlan(); calls != 0 {
 		t.Fatalf("plan calls=%d want=0 while foreground iterator is active", calls)
 	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want=0 while foreground iterator is active", calls)
+	}
 }
 
 func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.T) {
@@ -915,7 +948,7 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 
 	select {
 	case <-blocking.planStart:
-	case <-time.After(2 * time.Second):
+	case <-time.After(schedulerTestWait(t)):
 		t.Fatalf("rewrite plan did not start")
 	}
 
@@ -984,9 +1017,10 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T
 		close(doneMaintenance)
 	}()
 
+	wait := schedulerTestWait(t)
 	select {
 	case <-blocking.planStart:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait):
 		t.Fatalf("rewrite plan did not start")
 	}
 
@@ -994,7 +1028,7 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T
 
 	select {
 	case <-doneMaintenance:
-	case <-time.After(2 * time.Second):
+	case <-time.After(schedulerTestWait(t)):
 		t.Fatalf("maintenance did not cancel after foreground reads resumed")
 	}
 
