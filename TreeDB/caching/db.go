@@ -16269,12 +16269,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 	// workloads.
 	ops := getEntrySlice(len(b.entries))
 	ops = append(ops, b.entries...)
-	releaseOps := true
-	defer func() {
-		if releaseOps {
-			putEntrySlice(ops)
-		}
-	}()
+	defer putEntrySlice(ops)
 
 	ops, err := b.db.deferValueLogOps(ops, sync)
 	if err != nil {
@@ -17115,7 +17110,7 @@ func parseLogSeq(name string) (int, int, bool, bool) {
 	return 0, 0, false, false
 }
 
-func (b *Batch) writeBypass(sync bool) error {
+func (b *Batch) writeBypass(sync bool) (err error) {
 	// Fast path: if none of these keys exist in mutable/queue, we can write directly
 	// to the backend without flushing (no in-memory shadowing possible).
 	// Cheap append-only check: if the batch key range does not overlap with any
@@ -17209,13 +17204,24 @@ func (b *Batch) writeBypass(sync bool) error {
 
 	// Write directly to backend
 	backendBatch := b.db.backend.NewBatch()
+	defer func() {
+		if backendBatch != nil {
+			if cerr := backendBatch.Close(); err == nil {
+				err = cerr
+			}
+		}
+	}()
 
 	ops := getEntrySlice(len(b.entries))
 	ops = append(ops, b.entries...)
-	defer putEntrySlice(ops)
+	releaseOps := true
+	defer func() {
+		if releaseOps {
+			putEntrySlice(ops)
+		}
+	}()
 
 	if rewritten, err := b.db.prepareBypassValueLogOps(ops, sync); err != nil {
-		_ = backendBatch.Close()
 		return err
 	} else {
 		ops = rewritten
@@ -17223,7 +17229,6 @@ func (b *Batch) writeBypass(sync bool) error {
 
 	// Use SetOps for bulk transfer (backend will resolve value-log pointers).
 	if err := backendBatch.SetOps(ops); err != nil {
-		_ = backendBatch.Close()
 		if errors.Is(err, batch.ErrValueTooLarge) {
 			origEntries := b.entries
 			b.entries = ops
@@ -17232,13 +17237,16 @@ func (b *Batch) writeBypass(sync bool) error {
 				b.entries = origEntries
 				return err
 			}
-			b.entries = nil
+			if origEntries != nil {
+				b.entries = origEntries[:0]
+			} else {
+				b.entries = nil
+			}
 			return nil
 		}
 		return err
 	}
 
-	var err error
 	if sync && !b.db.relaxedSync {
 		b.db.flushMu.Lock()
 		err = backendBatch.WriteSync()
@@ -17252,6 +17260,7 @@ func (b *Batch) writeBypass(sync bool) error {
 	if err != nil {
 		return err
 	}
+	backendBatch = nil
 
 	b.db.mu.Lock()
 	if batchRange.valid {

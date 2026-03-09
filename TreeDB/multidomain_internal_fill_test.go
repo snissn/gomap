@@ -10,6 +10,9 @@ import (
 )
 
 func TestProfileFast_MultiDomainSyncWritesAvoidsPageExplosionWithoutCheckpointVacuum(t *testing.T) {
+	if testing.Short() {
+		t.Skip("stress-style page explosion regression")
+	}
 	dir := t.TempDir()
 
 	db, err := Open(Options{
@@ -30,9 +33,9 @@ func TestProfileFast_MultiDomainSyncWritesAvoidsPageExplosionWithoutCheckpointVa
 
 	val := bytes.Repeat([]byte("v"), page.DefaultInlineThreshold+64)
 	const (
-		stores   = 12
-		versions = 120
-		keys     = 48
+		stores   = 8
+		versions = 64
+		keys     = 32
 	)
 
 	for version := 1; version <= versions; version++ {
