@@ -1543,7 +1543,7 @@ func TestCachedRepeatedRewriteVacuumLeafRefsRemainReopenable_WALOn(t *testing.T)
 	testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t, false)
 }
 
-func TestCachedRepeatedRewriteVacuumDirectPointersRemainReopenable_WALOn(t *testing.T) {
+func TestCachedManualMaintenanceDirectPointersRemainReopenable_WALOn(t *testing.T) {
 	t.Setenv(envDisableVlogGenerationRewrite, "1")
 	t.Setenv(envDisableVlogGenerationGC, "1")
 	t.Setenv(envDisableVlogGenerationVacuum, "1")

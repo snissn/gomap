@@ -71,14 +71,20 @@ func findKeysForDistinctLanes(t *testing.T, db *DB, wantedLanes, perLane int) []
 
 func waitForLaneVlogClean(t *testing.T, db *DB, laneID int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	waitFor := 2 * time.Second
+	if ddl, ok := t.Deadline(); ok {
+		if remaining := time.Until(ddl) / 10; remaining > 0 && remaining < waitFor {
+			waitFor = remaining
+		}
+	}
+	deadline := time.Now().Add(waitFor)
 	for time.Now().Before(deadline) {
 		if !db.lanes[laneID].vlogDirty.Load() {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("lane %d remained dirty waiting for value-log flush", laneID)
+	t.Fatalf("lane %d remained dirty waiting for value-log flush after %s", laneID, waitFor)
 }
 
 func TestProfileFast_BatchWriteFlushesPointerValueLogBeforeMetadataSync(t *testing.T) {
