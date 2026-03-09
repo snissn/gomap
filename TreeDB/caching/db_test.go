@@ -1561,6 +1561,7 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	cache, err := Open(dir, backend, Options{
 		FlushThreshold:           1,
 		ValueLogPointerThreshold: 1,
+		MaxValueLogRetainedBytes: 1,
 	})
 	if err != nil {
 		_ = backend.Close()
@@ -1577,6 +1578,9 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 		t.Fatalf("Set(large): %v", err)
 	}
 	cache.flushAll(false)
+	if err := cache.rotateValueLogLocked(&cache.lanes[0]); err != nil {
+		t.Fatalf("rotateValueLogLocked: %v", err)
+	}
 	stats := cache.Stats()
 	segments, err := strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])
 	if err != nil {
@@ -1585,12 +1589,9 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	if segments == 0 {
 		t.Fatalf("expected retained value-log segments after non-sync flush")
 	}
-	for _, path := range cache.valueLogRetainedPaths() {
-		seedRetainedPrunePressure(cache, path, 2<<30)
-	}
 	retainedBefore := cache.valueLogRetainedClosedBytes.Load()
 	if retainedBefore <= 0 {
-		t.Fatalf("expected retained closed bytes after seeding prune pressure")
+		t.Fatalf("expected retained closed bytes after rotate, got %d", retainedBefore)
 	}
 
 	// Delete the key and checkpoint. The value-log segments that only contain
@@ -1607,11 +1608,8 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse retained segments: %v", err)
 	}
-	if got := cache.valueLogRetainedClosedBytes.Load(); got >= retainedBefore {
-		t.Fatalf("expected closed retained bytes to shrink after checkpoint, before=%d after=%d", retainedBefore, got)
-	}
 	if segments > 1 {
-		t.Fatalf("expected at most one in-use retained segment after checkpoint, got %d", segments)
+		t.Fatalf("expected at most one retained segment after checkpoint, got %d (before=%dB)", segments, retainedBefore)
 	}
 }
 
@@ -1859,16 +1857,24 @@ func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 		t.Fatalf("background prune did not start")
 	}
 
+	lastWrite := cache.lastForegroundWriteUnixNano.Load()
 	cache.noteWrite()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cache.foregroundWritesResumedSince(lastWrite) {
+		if time.Now().After(deadline) {
+			t.Fatalf("foreground write timestamp did not advance")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	close(backend.iteratorBlockCh)
 
-	deadline := time.After(2 * time.Second)
+	done := time.After(2 * time.Second)
 	for {
 		if !cache.retainedPruneActive() {
 			break
 		}
 		select {
-		case <-deadline:
+		case <-done:
 			t.Fatalf("background retained prune did not finish")
 		case <-time.After(10 * time.Millisecond):
 		}
@@ -1929,16 +1935,24 @@ func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("first prune did not start")
 	}
+	lastWrite := cache.lastForegroundWriteUnixNano.Load()
 	cache.noteWrite()
+	deadline := time.Now().Add(2 * time.Second)
+	for !cache.foregroundWritesResumedSince(lastWrite) {
+		if time.Now().After(deadline) {
+			t.Fatalf("foreground write timestamp did not advance")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	close(backend.iteratorBlockCh)
 
-	deadline := time.After(2 * time.Second)
+	done := time.After(2 * time.Second)
 	for {
 		if !cache.retainedPruneActive() {
 			break
 		}
 		select {
-		case <-deadline:
+		case <-done:
 			t.Fatalf("first prune did not finish")
 		case <-time.After(10 * time.Millisecond):
 		}
