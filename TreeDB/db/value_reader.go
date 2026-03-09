@@ -15,6 +15,10 @@ type unsafeAppendBatchReader interface {
 	ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error)
 }
 
+type readChecksumCapability interface {
+	SkipReadChecksum() bool
+}
+
 // valueReader resolves value-log pointers for tree lookups/iterators.
 type valueReader struct {
 	vlogs tree.SlabReader
@@ -82,4 +86,14 @@ func (r valueReader) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) (
 		dst[i] = append(dst[i][:0], val...)
 	}
 	return dst, nil
+}
+
+func (r valueReader) SkipReadChecksum() bool {
+	if r.vlogs == nil {
+		return false
+	}
+	if cap, ok := r.vlogs.(readChecksumCapability); ok {
+		return cap.SkipReadChecksum()
+	}
+	return false
 }

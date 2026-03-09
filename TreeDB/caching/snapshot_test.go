@@ -117,3 +117,49 @@ func TestIteratorSnapshotIsolation(t *testing.T) {
 		t.Error("Iterator saw key 'b' written AFTER iterator creation (Snapshot Isolation violation)")
 	}
 }
+
+func TestAcquireSnapshot_FastPathSkipsMemtableLeaseWhenPublishedViewIsEmpty(t *testing.T) {
+	dir, err := os.MkdirTemp("", "treedb-snapshot-fastpath-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+
+	cached, err := Open(dir, backend, Options{FlushThreshold: 1024 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cached.Close()
+
+	view := &memtableView{
+		mutables: []memtable.Table{memtable.NewAppendOnlyWithCapacity(0)},
+	}
+	view.refs.Store(1)
+	cached.memtables.Store(view)
+	cached.mutableBytes.Store(0)
+
+	snap := cached.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer snap.Close()
+
+	if snap.view != nil {
+		t.Fatalf("snapshot view=%p want nil on fast path", snap.view)
+	}
+	if refs := view.refs.Load(); refs != 1 {
+		t.Fatalf("published view refs=%d want 1", refs)
+	}
+	if got := cached.memtableViewTelemetry.retainTotal.Load(); got != 0 {
+		t.Fatalf("retainTotal=%d want 0", got)
+	}
+	if got := cached.memtableViewTelemetry.releaseTotal.Load(); got != 0 {
+		t.Fatalf("releaseTotal=%d want 0", got)
+	}
+}

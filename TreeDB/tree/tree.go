@@ -14,25 +14,37 @@ import (
 
 var ErrKeyNotFound = errors.New("key not found")
 
+type leafRefPageScratchHandle struct {
+	buf []byte
+}
+
 var leafRefPageScratchPool = sync.Pool{
 	New: func() any {
-		return make([]byte, 0, page.PageSize)
+		return &leafRefPageScratchHandle{buf: make([]byte, 0, page.PageSize)}
 	},
 }
 
-func getLeafRefPageScratch() []byte {
-	buf, _ := leafRefPageScratchPool.Get().([]byte)
-	if cap(buf) != page.PageSize {
-		return make([]byte, 0, page.PageSize)
+func getLeafRefPageScratch() *leafRefPageScratchHandle {
+	h, _ := leafRefPageScratchPool.Get().(*leafRefPageScratchHandle)
+	if h == nil {
+		return &leafRefPageScratchHandle{buf: make([]byte, 0, page.PageSize)}
 	}
-	return buf[:0]
+	if cap(h.buf) != page.PageSize {
+		h.buf = make([]byte, 0, page.PageSize)
+	} else {
+		h.buf = h.buf[:0]
+	}
+	return h
 }
 
-func putLeafRefPageScratch(buf []byte) {
-	if cap(buf) != page.PageSize {
+func putLeafRefPageScratch(h *leafRefPageScratchHandle) {
+	if h == nil {
 		return
 	}
-	leafRefPageScratchPool.Put(buf[:0])
+	if cap(h.buf) != page.PageSize {
+		h.buf = nil
+	}
+	leafRefPageScratchPool.Put(h)
 }
 
 func compareTreeKey(a, b []byte) int {
@@ -81,6 +93,11 @@ type slabUnsafeKeyBatchAppender interface {
 	ReadUnsafeAppendBatchForKeys(ptrs []page.ValuePtr, keys [][]byte, dst [][]byte) ([][]byte, error)
 }
 
+// Optional capability gate for checksum verification on slab-backed pages.
+type slabReadChecksumCapability interface {
+	SkipReadChecksum() bool
+}
+
 // Optional capability gate for key-aware pointer read interfaces.
 type slabKeyAwareCapability interface {
 	KeyAwareEnabled() bool
@@ -91,6 +108,13 @@ func keyAwarePointerReadsEnabled(sr SlabReader) bool {
 		return gate.KeyAwareEnabled()
 	}
 	return true
+}
+
+func slabReadChecksumDisabled(sr SlabReader) bool {
+	if gate, ok := sr.(slabReadChecksumCapability); ok {
+		return gate.SkipReadChecksum()
+	}
+	return false
 }
 
 type Tree struct {
@@ -190,7 +214,7 @@ func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error)
 			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
 		}
 		n := node.NewNodeView(data)
-		if !n.VerifyChecksum() {
+		if !slabReadChecksumDisabled(t.slabReader) && !n.VerifyChecksum() {
 			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		if n.Type() != page.PageTypeLeaf {
@@ -299,29 +323,30 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 
 	for depth := 0; depth < 50; depth++ {
 		var (
-			n              node.Node
-			leafScratch    []byte
-			leafScratchRef bool
+			n                 node.Node
+			leafScratchHandle *leafRefPageScratchHandle
+			leafScratchRef    bool
 		)
 		if appendMode && t.slabAppender != nil {
 			if ptr, ok := page.DecodeLeafRef(currID); ok {
-				leafScratch = getLeafRefPageScratch()
-				data, err := t.slabAppender.ReadUnsafeAppend(ptr, leafScratch[:0])
+				leafScratchHandle = getLeafRefPageScratch()
+				data, err := t.slabAppender.ReadUnsafeAppend(ptr, leafScratchHandle.buf[:0])
 				if err != nil {
-					putLeafRefPageScratch(leafScratch)
+					putLeafRefPageScratch(leafScratchHandle)
 					return nil, page.ValuePtr{}, 0, false, err
 				}
 				if len(data) != page.PageSize {
-					putLeafRefPageScratch(leafScratch)
+					putLeafRefPageScratch(leafScratchHandle)
 					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid leaf page size %d for page %d", len(data), currID)
 				}
+				leafScratchHandle.buf = data[:0]
 				n = node.NewNodeView(data)
-				if !n.VerifyChecksum() {
-					putLeafRefPageScratch(leafScratch)
+				if !slabReadChecksumDisabled(t.slabReader) && !n.VerifyChecksum() {
+					putLeafRefPageScratch(leafScratchHandle)
 					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("checksum mismatch on page %d", currID)
 				}
 				if n.Type() != page.PageTypeLeaf {
-					putLeafRefPageScratch(leafScratch)
+					putLeafRefPageScratch(leafScratchHandle)
 					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
 				}
 				leafScratchRef = true
@@ -359,13 +384,13 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 			idx, found, err := n.SearchLeaf(key)
 			if err != nil {
 				if leafScratchRef {
-					putLeafRefPageScratch(leafScratch)
+					putLeafRefPageScratch(leafScratchHandle)
 				}
 				return nil, page.ValuePtr{}, 0, false, err
 			}
 			if !found {
 				if leafScratchRef {
-					putLeafRefPageScratch(leafScratch)
+					putLeafRefPageScratch(leafScratchHandle)
 				}
 				return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
 			}
@@ -373,7 +398,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 			val, ptr, flags, err := n.GetLeafValueView(idx)
 			if err != nil {
 				if leafScratchRef {
-					putLeafRefPageScratch(leafScratch)
+					putLeafRefPageScratch(leafScratchHandle)
 				}
 				return nil, page.ValuePtr{}, 0, false, err
 			}
@@ -383,18 +408,18 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 					out = append(dst, val...)
 				}
 				if leafScratchRef {
-					putLeafRefPageScratch(leafScratch)
+					putLeafRefPageScratch(leafScratchHandle)
 				}
 				return out, ptr, flags, true, nil
 			}
 			if leafScratchRef {
-				putLeafRefPageScratch(leafScratch)
+				putLeafRefPageScratch(leafScratchHandle)
 			}
 			return val, ptr, flags, false, nil
 
 		default:
 			if leafScratchRef {
-				putLeafRefPageScratch(leafScratch)
+				putLeafRefPageScratch(leafScratchHandle)
 			}
 			return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
 		}

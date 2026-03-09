@@ -11,6 +11,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/compress/s2"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -438,7 +439,7 @@ func decodePayloadInto(codec uint8, payload []byte, rawLen int, dst []byte, pref
 		copy(dst, payload)
 		return dst, pooled, nil
 	case blockCodecSnappy:
-		decodedLen, err := snappy.DecodedLen(payload)
+		decodedLen, err := s2.DecodedLen(payload)
 		if err != nil {
 			return nil, false, err
 		}
@@ -457,7 +458,7 @@ func decodePayloadInto(codec uint8, payload []byte, rawLen int, dst []byte, pref
 		} else {
 			dst = dst[:rawLen]
 		}
-		out, err := snappy.Decode(dst, payload)
+		out, err := s2.Decode(dst, payload)
 		if err != nil {
 			if pooled {
 				putPooledBytes(dst)
