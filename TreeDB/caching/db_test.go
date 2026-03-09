@@ -211,7 +211,9 @@ func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
 	if got := cdb.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
 	}
-	_ = it.Close()
+	if err := it.Close(); err != nil {
+		t.Fatalf("second close iterator: %v", err)
+	}
 	if got := cdb.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
 	}
@@ -249,7 +251,9 @@ func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.
 	if got := db.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
 	}
-	_ = wrappedAgain.Close()
+	if err := wrappedAgain.Close(); err != nil {
+		t.Fatalf("second close wrapped iterator: %v", err)
+	}
 	if got := db.activeForegroundIterators.Load(); got != 0 {
 		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
 	}

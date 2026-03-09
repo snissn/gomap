@@ -466,7 +466,9 @@ func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -531,7 +533,9 @@ func TestVlogGenerationRewrite_DoesNotRunWithZeroBudgetTokens(t *testing.T) {
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -588,7 +592,9 @@ func TestVlogGenerationRewritePlan_DoesNotRunWithZeroBudgetTokens(t *testing.T) 
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -639,7 +645,9 @@ func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -768,7 +776,9 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundWrites_GCPath(t *t
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -823,7 +833,9 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundReads(t *testing.T
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -879,7 +891,9 @@ func TestVlogGenerationMaintenance_SkipsDuringActiveForegroundIterator(t *testin
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -932,7 +946,9 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -1003,7 +1019,9 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -1075,7 +1093,9 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -1137,7 +1157,9 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -1194,7 +1216,9 @@ func TestVlogGenerationGC_SkipsDuringRecentForegroundWrites(t *testing.T) {
 		_ = b.Close()
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	if err := b.Close(); err != nil {
+		t.Fatalf("batch close: %v", err)
+	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
