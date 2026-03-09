@@ -1971,8 +1971,9 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 				return nil, false, nil
 			}
 		}
-		if id >= z.pager.PageCount() {
-			return nil, false, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", id, z.pager.PageCount())
+		pageCount := z.pager.PageCount()
+		if id >= pageCount {
+			return nil, false, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", id, pageCount)
 		}
 		data, err := z.pager.Get(id)
 		if err != nil {
