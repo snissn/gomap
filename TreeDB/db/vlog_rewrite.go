@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
