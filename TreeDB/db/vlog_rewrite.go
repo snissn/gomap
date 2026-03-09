@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -389,8 +391,96 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	return plan, nil
 }
 
+// rewrite-plan tests need to count uncached live-byte estimation passes without
+// serializing the entire package. Keep the hook registry unexported and make
+// registration/removal cheap so tests can install independent counters.
+var (
+	rewritePlanLiveEstimateHooksMu   sync.RWMutex
+	rewritePlanLiveEstimateHooks     = map[uint64]func(){}
+	rewritePlanLiveEstimateHookNextID atomic.Uint64
+)
+
+func registerRewritePlanLiveEstimateHook(hook func()) func() {
+	if hook == nil {
+		return func() {}
+	}
+	id := rewritePlanLiveEstimateHookNextID.Add(1)
+	rewritePlanLiveEstimateHooksMu.Lock()
+	rewritePlanLiveEstimateHooks[id] = hook
+	rewritePlanLiveEstimateHooksMu.Unlock()
+	return func() {
+		rewritePlanLiveEstimateHooksMu.Lock()
+		delete(rewritePlanLiveEstimateHooks, id)
+		rewritePlanLiveEstimateHooksMu.Unlock()
+	}
+}
+
+func runRewritePlanLiveEstimateHooks() {
+	rewritePlanLiveEstimateHooksMu.RLock()
+	if len(rewritePlanLiveEstimateHooks) == 0 {
+		rewritePlanLiveEstimateHooksMu.RUnlock()
+		return
+	}
+	hooks := make([]func(), 0, len(rewritePlanLiveEstimateHooks))
+	for _, hook := range rewritePlanLiveEstimateHooks {
+		hooks = append(hooks, hook)
+	}
+	rewritePlanLiveEstimateHooksMu.RUnlock()
+	for _, hook := range hooks {
+		hook()
+	}
+}
+
+func rewritePlanLiveBytesKeyForState(state *DBState) (valueLogRewriteLiveBytesKey, bool) {
+	if state == nil {
+		return valueLogRewriteLiveBytesKey{}, false
+	}
+	return valueLogRewriteLiveBytesKey{
+		commitSeq:  state.CommitSeq,
+		rootID:     state.RootPageID,
+		systemRoot: state.SystemRootPageID,
+	}, true
+}
+
+func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[uint32]int64, bool) {
+	if db == nil {
+		return nil, false
+	}
+	db.rewritePlanLiveBytesMu.RLock()
+	if db.rewritePlanLiveBytesCache.key != key || db.rewritePlanLiveBytesCache.liveByID == nil {
+		db.rewritePlanLiveBytesMu.RUnlock()
+		return nil, false
+	}
+	liveByID := cloneValueLogLiveBytesMap(db.rewritePlanLiveBytesCache.liveByID)
+	db.rewritePlanLiveBytesMu.RUnlock()
+	return liveByID, true
+}
+
+func cloneValueLogLiveBytesMap(src map[uint32]int64) map[uint32]int64 {
+	if len(src) == 0 {
+		return map[uint32]int64{}
+	}
+	dst := make(map[uint32]int64, len(src))
+	for id, live := range src {
+		dst[id] = live
+	}
+	return dst
+}
+
+func (db *DB) storeCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey, liveByID map[uint32]int64) {
+	if db == nil {
+		return
+	}
+	cloned := cloneValueLogLiveBytesMap(liveByID)
+	db.rewritePlanLiveBytesMu.Lock()
+	db.rewritePlanLiveBytesCache = valueLogRewriteLiveBytesCache{
+		key:      key,
+		liveByID: cloned,
+	}
+	db.rewritePlanLiveBytesMu.Unlock()
+}
+
 func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint32]int64, error) {
-	liveByID := make(map[uint32]int64)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -402,6 +492,15 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 		}
 		return nil, fmt.Errorf("missing snapshot state")
 	}
+	defer func() { _ = snap.Close() }()
+	cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
+	if cacheable {
+		if liveByID, ok := db.loadCachedValueLogLiveBytes(cacheKey); ok {
+			return liveByID, nil
+		}
+	}
+	runRewritePlanLiveEstimateHooks()
+	liveByID := make(map[uint32]int64)
 
 	// Pointer-projection iterators can return many keys pointing at the same
 	// grouped value-log record. When estimating live bytes we must count each
@@ -412,7 +511,6 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords); err != nil {
 		_ = userIter.Close()
-		_ = snap.Close()
 		return nil, err
 	}
 	_ = userIter.Close()
@@ -421,7 +519,6 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID, &seenGroupedRecords); err != nil {
 		_ = sysIter.Close()
-		_ = snap.Close()
 		return nil, err
 	}
 	_ = sysIter.Close()
@@ -432,17 +529,14 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 	// that are actually pinned by live leaf pages.
 	if snap.idx != nil && snap.idx.pager != nil {
 		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords); err != nil {
-			_ = snap.Close()
 			return nil, err
 		}
 		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByID, &seenGroupedRecords); err != nil {
-			_ = snap.Close()
 			return nil, err
 		}
 	}
-
-	if err := snap.Close(); err != nil {
-		return nil, err
+	if cacheable {
+		db.storeCachedValueLogLiveBytes(cacheKey, liveByID)
 	}
 	return liveByID, nil
 }
