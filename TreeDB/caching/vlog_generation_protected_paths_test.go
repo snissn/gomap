@@ -11,17 +11,6 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
-func disableVlogGenerationLoopProtected(t *testing.T) {
-	t.Helper()
-	t.Setenv(envDisableVlogGenerationLoop, "1")
-}
-
-func skipRetainedPruneProtected(db *DB) {
-	if db != nil {
-		db.testSkipRetainedPrune = true
-	}
-}
-
 type rewriteRecordingBackend struct {
 	*backenddb.DB
 
@@ -59,7 +48,7 @@ func (b *rewriteRecordingBackend) recordedReservedStarts() []uint64 {
 }
 
 func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *testing.T) {
-	disableVlogGenerationLoopProtected(t)
+	disableVlogGenerationLoop(t)
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -83,7 +72,7 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	skipRetainedPruneProtected(db)
+	skipRetainedPrune(db)
 	b := db.NewBatch()
 	if err := b.Set([]byte("k1"), make([]byte, 4096)); err != nil {
 		t.Fatalf("set: %v", err)
@@ -185,7 +174,7 @@ func TestValueLogProtectedPaths_IncludeRetainedPaths(t *testing.T) {
 }
 
 func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
-	disableVlogGenerationLoopProtected(t)
+	disableVlogGenerationLoop(t)
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -210,7 +199,7 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 		t.Fatalf("open cachingdb: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	skipRetainedPruneProtected(db)
+	skipRetainedPrune(db)
 	if err := db.Set([]byte("k1"), make([]byte, 4096)); err != nil {
 		t.Fatalf("set k1: %v", err)
 	}
