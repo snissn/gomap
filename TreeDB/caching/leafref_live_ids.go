@@ -13,7 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
-const leafRefCancellationCheckInterval = 256
+const leafRefCancellationCheckInterval = 256 // power of two: checked via bitmask in shouldCheckLeafRefCancellation
 
 func shouldCheckLeafRefCancellation(i uint16) bool {
 	return i > 0 && i&(leafRefCancellationCheckInterval-1) == 0
