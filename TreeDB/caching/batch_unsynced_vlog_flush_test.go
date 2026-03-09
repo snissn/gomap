@@ -138,3 +138,58 @@ func TestProfileFast_BatchWriteFlushesPointerValueLogBeforeMetadataSync(t *testi
 		t.Fatalf("reverse iterator close: %v", err)
 	}
 }
+
+func TestProfileFast_BatchWriteFlushesPointerValueLogAcrossMultipleLanes(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	db, err := Open(dir, backend, Options{
+		DisableWAL:                 true,
+		AllowUnsafe:                true,
+		RelaxedSync:                true,
+		FlushThreshold:             1 << 30,
+		JournalLanes:               4,
+		MemtableShards:             16,
+		IndexOuterLeavesInValueLog: true,
+		ValueLogPointerThreshold:   1,
+		ValueLogGenerationPolicy:   uint8(backenddb.ValueLogGenerationOff),
+		WriterFlushMaxMemtables:    0,
+		WriterFlushMaxDuration:     0,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() {
+		_ = db.Close()
+	}()
+
+	b := db.NewBatch()
+	value := bytes.Repeat([]byte("M"), vlogQueueMinValueSize+256)
+	for i := 0; i < multiLaneValueLogMinRecords; i++ {
+		key := []byte{byte(i >> 8), byte(i), byte(i >> 4), byte(i * 7)}
+		if err := b.Set(key, value); err != nil {
+			t.Fatalf("set key %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write unsynced batch: %v", err)
+	}
+	if err := b.Close(); err != nil {
+		t.Fatalf("close unsynced batch: %v", err)
+	}
+
+	activeLanes := 0
+	for i := range db.lanes {
+		if db.lanes[i].vlogDirty.Load() {
+			t.Fatalf("lane %d left dirty after unsynced fast batch write", i)
+		}
+		if db.lanes[i].vlogLiveBytes.Load() > 0 {
+			activeLanes++
+		}
+	}
+	if activeLanes < 2 {
+		t.Fatalf("expected multi-lane pointer fan-out, active_lanes=%d", activeLanes)
+	}
+}
