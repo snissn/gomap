@@ -2298,7 +2298,27 @@ func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
 	if path == "" {
 		return false
 	}
-	db.dropValueLogSegment(path)
+	if db.valueLogReader != nil {
+		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+		if ok && valueLog && laneID >= 0 {
+			if id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq)); err == nil {
+				var removeErr error
+				for i := 0; i < 20; i++ {
+					removeErr = db.valueLogReader.RemoveSegment(id)
+					if removeErr == nil {
+						break
+					}
+					if runtime.GOOS != "windows" {
+						return false
+					}
+					time.Sleep(time.Duration(i+1) * 5 * time.Millisecond)
+				}
+				if removeErr != nil {
+					return false
+				}
+			}
+		}
+	}
 	if err := db.removeFileRetry(path); err != nil {
 		return false
 	}

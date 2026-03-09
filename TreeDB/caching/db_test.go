@@ -951,6 +951,12 @@ func TestRotateValueLogMuHeld_RestoresUsableWriterAfterRegisterFailure(t *testin
 		vlogPath: oldPath,
 	}
 	db := &DB{dir: dir, backend: backend}
+	t.Cleanup(func() {
+		if l.vlog != nil {
+			_ = l.vlog.Close()
+			l.vlog = nil
+		}
+	})
 
 	err = db.rotateValueLogLocked(l)
 	if err == nil || !strings.Contains(err.Error(), "register failed") {
