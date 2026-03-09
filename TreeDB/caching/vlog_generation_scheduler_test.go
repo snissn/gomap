@@ -21,7 +21,10 @@ type blockingRewritePlannerBackend struct {
 
 func forceVlogMaintenanceIdle(db *DB) {
 	if db != nil {
-		db.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano())
+		idleAt := time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow)
+		db.lastForegroundWriteUnixNano.Store(idleAt.UnixNano())
+		db.lastForegroundReadUnixNano.Store(idleAt.UnixNano())
+		db.activeForegroundIterators.Store(0)
 	}
 }
 
@@ -883,6 +886,63 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 	}
 	if got := db.vlogGenerationLastReason.Load(); got != vlogGenerationReasonPeriodicGC {
 		t.Fatalf("last gc reason=%d want=%d", got, vlogGenerationReasonPeriodicGC)
+	}
+}
+
+func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T) {
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		dryRunStats: backenddb.ValueLogGCStats{},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), make([]byte, 2048)); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.vlogGenerationLastGCUnixNano.Store(0)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	dryRunCalls, realCalls, _ := recorder.recordedCalls()
+	if dryRunCalls != 1 {
+		t.Fatalf("dry-run calls=%d want=1", dryRunCalls)
+	}
+	if realCalls != 0 {
+		t.Fatalf("real gc calls=%d want=0", realCalls)
+	}
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
+		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
 	}
 }
 
