@@ -1929,8 +1929,8 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 		t.Fatalf("expected retained closed bytes after rotate, got %d", retainedBefore)
 	}
 
-	// Delete the key and checkpoint. The value-log segments that only contain
-	// now-unreferenced payloads should become reclaimable and be pruned.
+	// Delete the key and checkpoint. Retained segments with only unreachable
+	// payloads should be pruned, but the newly active segment remains open.
 	if err := cache.Delete(key); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
@@ -2196,10 +2196,10 @@ func TestRetainedValueLogPrune_AbortsWhenForegroundWritesResume(t *testing.T) {
 	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
-		cache.noteWrite()
 		if time.Now().After(deadline) {
 			t.Fatalf("foreground write timestamp did not advance")
 		}
+		cache.noteWrite()
 		time.Sleep(time.Millisecond)
 	}
 	close(backend.iteratorBlockCh)
@@ -2275,10 +2275,10 @@ func TestCheckpoint_RateLimitsRetainedValueLogPrune(t *testing.T) {
 	cache.noteWrite()
 	deadline := time.Now().Add(2 * time.Second)
 	for !cache.foregroundWritesResumedSince(lastWrite) {
-		cache.noteWrite()
 		if time.Now().After(deadline) {
 			t.Fatalf("foreground write timestamp did not advance")
 		}
+		cache.noteWrite()
 		time.Sleep(time.Millisecond)
 	}
 	close(backend.iteratorBlockCh)
