@@ -830,7 +830,7 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundReads(t *testing.T
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	forceVlogMaintenanceIdle(db)
-	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
+	db.noteRead()
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	if _, calls := recorder.recordedPlan(); calls != 0 {
@@ -946,10 +946,9 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 		close(doneMaintenance)
 	}()
 
-	wait := schedulerTestWait(t)
 	select {
 	case <-blocking.planStart:
-	case <-time.After(wait):
+	case <-time.After(schedulerTestWait(t)):
 		t.Fatalf("rewrite plan did not start")
 	}
 
@@ -1029,7 +1028,7 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T
 
 	select {
 	case <-doneMaintenance:
-	case <-time.After(wait):
+	case <-time.After(schedulerTestWait(t)):
 		t.Fatalf("maintenance did not cancel after foreground reads resumed")
 	}
 
