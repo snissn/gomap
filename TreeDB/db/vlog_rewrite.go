@@ -395,8 +395,8 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 // serializing the entire package. Keep the hook registry unexported and make
 // registration/removal cheap so tests can install independent counters.
 var (
-	rewritePlanLiveEstimateHooksMu   sync.RWMutex
-	rewritePlanLiveEstimateHooks     = map[uint64]func(){}
+	rewritePlanLiveEstimateHooksMu    sync.RWMutex
+	rewritePlanLiveEstimateHooks      = map[uint64]func(){}
 	rewritePlanLiveEstimateHookNextID atomic.Uint64
 )
 
