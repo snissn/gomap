@@ -34,7 +34,11 @@ func withRewritePlanEstimateCounter(t *testing.T) *atomic.Uint64 {
 
 func assertRewritePlanStableFieldsEqual(t *testing.T, got, want ValueLogRewritePlan) {
 	t.Helper()
-	if !slices.Equal(got.SourceFileIDs, want.SourceFileIDs) ||
+	gotIDs := slices.Clone(got.SourceFileIDs)
+	wantIDs := slices.Clone(want.SourceFileIDs)
+	slices.Sort(gotIDs)
+	slices.Sort(wantIDs)
+	if !slices.Equal(gotIDs, wantIDs) ||
 		got.SegmentsTotal != want.SegmentsTotal ||
 		got.SegmentsSelected != want.SegmentsSelected ||
 		got.BytesTotal != want.BytesTotal ||

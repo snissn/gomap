@@ -5729,7 +5729,7 @@ func (db *DB) noteRead() {
 	if db == nil {
 		return
 	}
-	if db.foregroundReadStampCounter.Add(1)%64 != 0 {
+	if db.foregroundReadStampCounter.Add(1)%foregroundReadStampStride != 0 {
 		return
 	}
 	db.lastForegroundReadUnixNano.Store(time.Now().UnixNano())
@@ -5748,6 +5748,7 @@ const (
 	autoCheckpointMinIdleWALBytesMin int64 = 1 << 20  // 1MiB
 	autoCheckpointMinIdleWALBytesMax int64 = 32 << 20 // 32MiB
 	autoCheckpointMinIdleInterval          = 10 * time.Second
+	foregroundReadStampStride              = 64
 )
 
 func autoCheckpointReasonString(v uint32) string {

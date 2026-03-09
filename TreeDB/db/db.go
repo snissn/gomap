@@ -117,7 +117,7 @@ type DB struct {
 	bgErrMu     sync.Mutex
 	bgErr       error
 
-	rewritePlanLiveBytesMu    sync.Mutex
+	rewritePlanLiveBytesMu    sync.RWMutex
 	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache
 
 	// Stage-5 publish watermark metrics (backend commit publish path).
