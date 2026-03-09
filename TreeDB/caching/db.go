@@ -16245,7 +16245,7 @@ func (b *Batch) tryWriteWALOffStreamBypass(sync bool) (bool, error) {
 		}
 	}()
 
-	ops, err := b.db.deferValueLogOps(ops, sync && !b.db.relaxedSync)
+	ops, err := b.db.deferValueLogOps(ops, sync)
 	if err != nil {
 		return false, err
 	}
