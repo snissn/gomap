@@ -117,6 +117,9 @@ type DB struct {
 	bgErrMu     sync.Mutex
 	bgErr       error
 
+	rewritePlanLiveBytesMu    sync.Mutex
+	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache
+
 	// Stage-5 publish watermark metrics (backend commit publish path).
 	publishWatermarkWaitTotalNs    atomic.Uint64
 	publishWatermarkHoldTotalNs    atomic.Uint64
@@ -128,6 +131,17 @@ type DB struct {
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit atomic.Bool
 	closing                atomic.Bool
+}
+
+type valueLogRewriteLiveBytesKey struct {
+	commitSeq  uint64
+	rootID     uint64
+	systemRoot uint64
+}
+
+type valueLogRewriteLiveBytesCache struct {
+	key      valueLogRewriteLiveBytesKey
+	liveByID map[uint32]int64
 }
 
 const (

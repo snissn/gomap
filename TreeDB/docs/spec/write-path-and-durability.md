@@ -95,7 +95,7 @@ Commit visibility sequence:
 
 Regardless of durability mode:
 
-- `Set`, `Delete`, `Batch.Write`, `Batch.WriteSync` must all preserve read-your-writes semantics for normal readers on the same open DB.
+- All successful write APIs (`Set`, `SetSync`, `Delete`, `DeleteSync`, `Batch.Write`, `Batch.WriteSync`) must preserve read-your-writes semantics for normal readers on the same open DB.
 - `Checkpoint` is not part of the ordinary read path contract.
 
 ## 6. Checkpoint Semantics

@@ -389,8 +389,57 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	return plan, nil
 }
 
+// rewritePlanLiveEstimateHook is a test hook used to count uncached live-byte
+// estimation passes without carrying test-only state in the production DB type.
+var rewritePlanLiveEstimateHook func()
+
+func rewritePlanLiveBytesKeyForState(state *DBState) (valueLogRewriteLiveBytesKey, bool) {
+	if state == nil {
+		return valueLogRewriteLiveBytesKey{}, false
+	}
+	return valueLogRewriteLiveBytesKey{
+		commitSeq:  state.CommitSeq,
+		rootID:     state.RootPageID,
+		systemRoot: state.SystemRootPageID,
+	}, true
+}
+
+func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[uint32]int64, bool) {
+	if db == nil {
+		return nil, false
+	}
+	db.rewritePlanLiveBytesMu.Lock()
+	defer db.rewritePlanLiveBytesMu.Unlock()
+	if db.rewritePlanLiveBytesCache.key != key || db.rewritePlanLiveBytesCache.liveByID == nil {
+		return nil, false
+	}
+	return cloneValueLogLiveBytesMap(db.rewritePlanLiveBytesCache.liveByID), true
+}
+
+func cloneValueLogLiveBytesMap(src map[uint32]int64) map[uint32]int64 {
+	if len(src) == 0 {
+		return map[uint32]int64{}
+	}
+	dst := make(map[uint32]int64, len(src))
+	for id, live := range src {
+		dst[id] = live
+	}
+	return dst
+}
+
+func (db *DB) storeCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey, liveByID map[uint32]int64) {
+	if db == nil {
+		return
+	}
+	db.rewritePlanLiveBytesMu.Lock()
+	db.rewritePlanLiveBytesCache = valueLogRewriteLiveBytesCache{
+		key:      key,
+		liveByID: cloneValueLogLiveBytesMap(liveByID),
+	}
+	db.rewritePlanLiveBytesMu.Unlock()
+}
+
 func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint32]int64, error) {
-	liveByID := make(map[uint32]int64)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -402,6 +451,19 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 		}
 		return nil, fmt.Errorf("missing snapshot state")
 	}
+	cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
+	if cacheable {
+		if liveByID, ok := db.loadCachedValueLogLiveBytes(cacheKey); ok {
+			if err := snap.Close(); err != nil {
+				return nil, err
+			}
+			return liveByID, nil
+		}
+	}
+	if rewritePlanLiveEstimateHook != nil {
+		rewritePlanLiveEstimateHook()
+	}
+	liveByID := make(map[uint32]int64)
 
 	// Pointer-projection iterators can return many keys pointing at the same
 	// grouped value-log record. When estimating live bytes we must count each
@@ -443,6 +505,9 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint3
 
 	if err := snap.Close(); err != nil {
 		return nil, err
+	}
+	if cacheable {
+		db.storeCachedValueLogLiveBytes(cacheKey, liveByID)
 	}
 	return liveByID, nil
 }

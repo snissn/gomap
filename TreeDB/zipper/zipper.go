@@ -1962,6 +1962,14 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 	var retired []uint64
 
 	loadInternal := func(id uint64) (*node.Node, bool, error) {
+		if z.outerLeavesInValueLog {
+			if _, ok := page.DecodeLeafRef(id); ok {
+				return nil, false, nil
+			}
+		}
+		if id >= z.pager.PageCount() {
+			return nil, false, errors.New("zipper: detected OOB child ID")
+		}
 		data, err := z.pager.Get(id)
 		if err != nil {
 			return nil, false, err
