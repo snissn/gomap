@@ -773,6 +773,7 @@ const (
 	envDisableVlogGenerationRewrite = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
 	envDisableVlogGenerationGC      = "TREEDB_DISABLE_VLOG_GENERATION_GC"
 	envDisableVlogGenerationVacuum  = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
+	envDisableVlogGenerationLoop    = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
 	envDisableCheckpointAutoVacuum   = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
 	minMemtablePrealloc              = 64 * 1024
@@ -9790,6 +9791,10 @@ func (db *DB) maybeAutoCheckpoint(maxWALBytes int64, mode autoCheckpointMode) {
 
 func (db *DB) startVlogGenerationLoop() {
 	if db == nil {
+		return
+	}
+	if envBool(envDisableVlogGenerationLoop) {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
