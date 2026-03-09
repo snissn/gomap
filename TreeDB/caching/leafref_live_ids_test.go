@@ -38,3 +38,21 @@ func TestCollectLeafRefValueLogLiveIDs_RespectsCanceledContext(t *testing.T) {
 		t.Fatalf("collectLeafRefValueLogLiveIDs err=%v want context.Canceled", err)
 	}
 }
+
+func TestShouldCheckLeafRefCancellation(t *testing.T) {
+	cases := []struct {
+		i    uint16
+		want bool
+	}{
+		{i: 0, want: false},
+		{i: 1, want: false},
+		{i: leafRefCancellationCheckInterval - 1, want: false},
+		{i: leafRefCancellationCheckInterval, want: true},
+		{i: leafRefCancellationCheckInterval + 1, want: false},
+	}
+	for _, tc := range cases {
+		if got := shouldCheckLeafRefCancellation(tc.i); got != tc.want {
+			t.Fatalf("shouldCheckLeafRefCancellation(%d)=%v want %v", tc.i, got, tc.want)
+		}
+	}
+}

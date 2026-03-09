@@ -773,7 +773,6 @@ const (
 	envDisableVlogGenerationRewrite = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
 	envDisableVlogGenerationGC      = "TREEDB_DISABLE_VLOG_GENERATION_GC"
 	envDisableVlogGenerationVacuum  = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
-	envDisableVlogGenerationLoop    = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
 	envDisableCheckpointAutoVacuum   = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
 	minMemtablePrealloc              = 64 * 1024
@@ -2321,7 +2320,7 @@ func (db *DB) cleanupOrphanedRetainedValueLog(path string) bool {
 	}
 	if db.valueLogReader != nil {
 		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
-		if ok && valueLog {
+		if ok && valueLog && laneID >= 0 {
 			if id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq)); err == nil {
 				var removeErr error
 				backoff := 25 * time.Millisecond
@@ -2606,10 +2605,10 @@ func (db *DB) foregroundWritesResumedSince(lastWrite int64) bool {
 	if db == nil {
 		return false
 	}
-	current := db.lastForegroundWriteUnixNano.Load()
 	if lastWrite <= 0 {
-		return current > 0
+		return false
 	}
+	current := db.lastForegroundWriteUnixNano.Load()
 	return current > lastWrite
 }
 
@@ -2635,47 +2634,41 @@ func (db *DB) collectValueLogLiveIDsUntil(lastWrite int64) (map[uint32]struct{},
 			if state != nil && p != nil {
 				reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
 				leafCtx, leafCancel := db.foregroundWriteResumeContext(lastWrite, 0)
+				defer leafCancel()
 				if state.RootPageID != 0 {
 					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.RootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
-						leafCancel()
 						_ = snap.Close()
 						return nil, err
 					}
 				}
 				if state.SystemRootPageID != 0 {
 					if err := db.collectIteratorValueLogLiveIDsUntil(tree.New(p, reader, state.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), live, lastWrite); err != nil {
-						leafCancel()
 						_ = snap.Close()
 						return nil, err
 					}
 				}
-					if db.foregroundWritesResumedSince(lastWrite) {
-						leafCancel()
-						_ = snap.Close()
-						return nil, errForegroundWritesResumed
-					}
-					if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.RootPageID, reader, live); err != nil {
-						leafCancel()
-						if errors.Is(err, context.Canceled) {
-							err = errForegroundWritesResumed
-						}
-						_ = snap.Close()
-						return nil, err
-					}
 				if db.foregroundWritesResumedSince(lastWrite) {
-					leafCancel()
-						_ = snap.Close()
-						return nil, errForegroundWritesResumed
+					_ = snap.Close()
+					return nil, errForegroundWritesResumed
+				}
+				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.RootPageID, reader, live); err != nil {
+					if errors.Is(err, context.Canceled) {
+						err = errForegroundWritesResumed
 					}
-					if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.SystemRootPageID, reader, live); err != nil {
-						leafCancel()
-						if errors.Is(err, context.Canceled) {
-							err = errForegroundWritesResumed
-						}
-						_ = snap.Close()
-						return nil, err
+					_ = snap.Close()
+					return nil, err
+				}
+				if db.foregroundWritesResumedSince(lastWrite) {
+					_ = snap.Close()
+					return nil, errForegroundWritesResumed
+				}
+				if err := collectLeafRefValueLogLiveIDs(leafCtx, p, state.SystemRootPageID, reader, live); err != nil {
+					if errors.Is(err, context.Canceled) {
+						err = errForegroundWritesResumed
 					}
-				leafCancel()
+					_ = snap.Close()
+					return nil, err
+				}
 			}
 			if err := snap.Close(); err != nil {
 				return nil, err
@@ -3715,6 +3708,9 @@ type DB struct {
 	checkpointAutoVacuumLastInternalP50   atomic.Uint64
 	checkpointAutoVacuumLastInternalAvg   atomic.Uint64
 	lastForegroundWriteUnixNano           atomic.Int64
+	lastForegroundReadUnixNano            atomic.Int64
+	foregroundReadStampCounter            atomic.Uint32
+	activeForegroundIterators             atomic.Int64
 	retainedPruneLastStartUnixNano        atomic.Int64
 	retainedPruneMu                       sync.Mutex
 	retainedPruneDone                     chan struct{}
@@ -3828,6 +3824,9 @@ const (
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
 	vlogForegroundQuietWindow = 2 * time.Second
+	// Foreground reads/iterators are latency-sensitive; do not start heavy
+	// value-log maintenance while they are active or have just resumed.
+	vlogForegroundReadQuietWindow = 2 * time.Second
 	// Generational rewrite planning / rewrite / GC can scan a large live tree
 	// and should only run when the foreground has been quiet for a meaningfully
 	// longer window than lightweight maintenance.
@@ -5588,6 +5587,39 @@ func (db *DB) foregroundWriteQuietFor(now time.Time, quietWindow time.Duration) 
 	return now.Sub(time.Unix(0, last)) >= quietWindow
 }
 
+func (db *DB) foregroundReadQuietFor(now time.Time, quietWindow time.Duration) bool {
+	if db == nil {
+		return true
+	}
+	if db.activeForegroundIterators.Load() > 0 {
+		return false
+	}
+	last := db.lastForegroundReadUnixNano.Load()
+	if last <= 0 {
+		return true
+	}
+	return now.Sub(time.Unix(0, last)) >= quietWindow
+}
+
+func (db *DB) lastForegroundActivityUnixNano() int64 {
+	if db == nil {
+		return 0
+	}
+	lastWrite := db.lastForegroundWriteUnixNano.Load()
+	lastRead := db.lastForegroundReadUnixNano.Load()
+	if lastRead > lastWrite {
+		return lastRead
+	}
+	return lastWrite
+}
+
+func (db *DB) foregroundActivityQuietFor(now time.Time, writeQuietWindow, readQuietWindow time.Duration) bool {
+	if db == nil {
+		return true
+	}
+	return db.foregroundWriteQuietFor(now, writeQuietWindow) && db.foregroundReadQuietFor(now, readQuietWindow)
+}
+
 func (db *DB) foregroundWriteQuiet(now time.Time) bool {
 	return db.foregroundWriteQuietFor(now, vlogForegroundQuietWindow)
 }
@@ -5599,7 +5631,7 @@ func (db *DB) waitForForegroundMaintenanceQuietWindow(quietWindow time.Duration)
 	ticker := time.NewTicker(foregroundMaintenancePollInterval())
 	defer ticker.Stop()
 	for {
-		if db.closing.Load() || db.foregroundWriteQuietFor(time.Now(), quietWindow) {
+		if db.closing.Load() || db.foregroundActivityQuietFor(time.Now(), quietWindow, vlogForegroundReadQuietWindow) {
 			return
 		}
 		select {
@@ -5622,6 +5654,20 @@ func foregroundMaintenancePollInterval() time.Duration {
 	return time.Millisecond
 }
 
+func (db *DB) waitForForegroundMaintenanceQuiet() {
+	db.waitForForegroundMaintenanceQuietWindow(vlogForegroundQuietWindow)
+}
+
+func (db *DB) foregroundActivityResumedSince(lastActivity int64) bool {
+	if db == nil {
+		return false
+	}
+	if db.activeForegroundIterators.Load() > 0 {
+		return true
+	}
+	return db.lastForegroundActivityUnixNano() > lastActivity
+}
+
 func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duration) (context.Context, context.CancelFunc) {
 	var (
 		ctx    context.Context
@@ -5636,12 +5682,10 @@ func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duratio
 		return ctx, cancel
 	}
 	if lastWrite <= 0 {
-		lastWrite = db.lastForegroundWriteUnixNano.Load()
+		return ctx, cancel
 	}
 	go func(lastWrite int64) {
-		// Poll at 1/10th of the generation loop interval so resumed foreground
-		// writes are detected promptly without a busy timer.
-		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
 		for {
 			select {
@@ -5668,7 +5712,35 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 		}
 		return context.WithCancel(context.Background())
 	}
-	return db.foregroundWriteResumeContext(db.lastForegroundWriteUnixNano.Load(), timeout)
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+	}
+	lastActivity := db.lastForegroundActivityUnixNano()
+	go func(lastActivity int64) {
+		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-db.closeCh:
+				cancel()
+				return
+			case <-ticker.C:
+				if db.foregroundActivityResumedSince(lastActivity) {
+					cancel()
+					return
+				}
+			}
+		}
+	}(lastActivity)
+	return ctx, cancel
 }
 
 func (db *DB) noteWrite() {
@@ -5727,6 +5799,21 @@ func (db *DB) noteWrite() {
 	}
 }
 
+func (db *DB) noteRead() {
+	if db == nil {
+		return
+	}
+	now := time.Now().UnixNano()
+	last := db.lastForegroundReadUnixNano.Load()
+	if last > 0 && now-last < int64(foregroundReadStampMaxAge) {
+		n := db.foregroundReadStampCounter.Add(1)
+		if n != 1 && n%foregroundReadStampStride != 0 {
+			return
+		}
+	}
+	db.lastForegroundReadUnixNano.Store(now)
+}
+
 type autoCheckpointMode uint8
 
 const (
@@ -5740,6 +5827,12 @@ const (
 	autoCheckpointMinIdleWALBytesMin int64 = 1 << 20  // 1MiB
 	autoCheckpointMinIdleWALBytesMax int64 = 32 << 20 // 32MiB
 	autoCheckpointMinIdleInterval          = 10 * time.Second
+	// Sample every 64 foreground reads to amortize time.Now() overhead while
+	// keeping maintenance idle detection responsive during scan-heavy phases.
+	foregroundReadStampStride = 64
+	// Low-but-steady reads should still refresh the foreground timestamp often
+	// enough to suppress background maintenance.
+	foregroundReadStampMaxAge = 250 * time.Millisecond
 )
 
 func autoCheckpointReasonString(v uint32) string {
@@ -9699,10 +9792,6 @@ func (db *DB) startVlogGenerationLoop() {
 	if db == nil {
 		return
 	}
-	if envBool(envDisableVlogGenerationLoop) {
-		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
-		return
-	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
@@ -9893,7 +9982,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
-	if !runGC && !db.foregroundWriteQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow) {
+	if !runGC && !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
 		return
 	}
 	// In WAL-off mode, do not start rewrite/GC planning before the first
@@ -9975,24 +10064,28 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 			MinSegmentStaleBytes: 1,
 		})
 		cancel()
+		updatePlanTimestamp := false
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 				return
 			}
-			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+			updatePlanTimestamp = true
 			// Best-effort planning: keep legacy triggers (total-bytes/churn) alive,
 			// but surface the failure for observability.
 			if db.notifyError != nil {
 				db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
 			}
 		} else if len(plan.SourceFileIDs) > 0 {
-			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
+			updatePlanTimestamp = true
 			shouldRewrite = true
 			reason = vlogGenerationReasonStaleRatio
 			rewritePlan = plan
 			haveRewritePlan = true
 		} else {
+			updatePlanTimestamp = true
+		}
+		if updatePlanTimestamp {
 			db.vlogGenerationLastRewritePlanUnixNano.Store(now.UnixNano())
 		}
 	}
@@ -10210,6 +10303,7 @@ planned:
 		if err != nil {
 			return fmt.Errorf("generational gc: %w", err)
 		}
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 		db.vlogGenerationGCRuns.Add(1)
 		if gcStats.SegmentsDeleted > 0 {
 			db.vlogGenerationGCSegmentsDeleted.Add(uint64(gcStats.SegmentsDeleted))
@@ -11054,8 +11148,6 @@ func (db *DB) Close() error {
 	hadMemtables := false
 	db.closing.Store(true)
 	db.stopDomainIngressWorkers()
-	// After closing is published, new retained-prune work will not be scheduled.
-	// Drain any prune already in flight before Close begins rotating/flushing state.
 	db.waitForRetainedValueLogPrune()
 
 	// Lock order must match Checkpoint (flushMu -> writeMu) to avoid a deadlock
@@ -11200,6 +11292,7 @@ func (db *DB) Close() error {
 		db.syncDirBestEffort(db.dir)
 	}
 
+	db.waitForRetainedValueLogPrune()
 	if err := db.backend.Close(); err != nil {
 		errs = append(errs, err)
 	}
@@ -14442,6 +14535,7 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 
 // Get returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
+	db.noteRead()
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableRead(view, key)
 	if view != nil {
@@ -14478,6 +14572,7 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	if len(keys) == 0 {
 		return make([][]byte, 0), nil
 	}
+	db.noteRead()
 
 	// Fast path: no mutable/queued state and all touched mutable shards are
 	// observably empty, so we can delegate to backend single-snapshot GetMany.
@@ -14547,6 +14642,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (db *DB) Has(key []byte) (bool, error) {
+	db.noteRead()
 	view := db.retainMemtableView()
 	if view != nil {
 		defer db.releaseMemtableView(view)
@@ -15232,6 +15328,7 @@ func (db *DB) Drain() error {
 
 // Iterator implements DB.Iterator
 func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
+	db.noteRead()
 	if err := db.ensureBackendRange(); err != nil {
 		return nil, err
 	}
@@ -15284,9 +15381,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if queueLenLocked == 0 {
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
 			if iteratorDebugEnabled.Load() {
-				return &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
+				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
 			}
-			return it
+			return db.wrapForegroundIterator(it)
 		}
 		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
 			out := merging.Iterator(&emptyIterator{start: start, end: end})
@@ -15331,23 +15428,23 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-			if hasMemSource && view != nil {
-				leasedView := view
-				view = nil
-				releaseView = false
-				return &leasedMergingIterator{
-					Iterator: it,
-					release: func() {
-						db.releaseMemtableView(leasedView)
-					},
-				}
-			}
-			if view != nil {
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return db.wrapForegroundIterator(&leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
+			})
+		}
+		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil
 			releaseView = false
 		}
-		return it
+		return db.wrapForegroundIterator(it)
 	}
 
 	// Fast path for full scans: if the in-memory key ranges are disjoint from the
@@ -15446,6 +15543,34 @@ func (it *leasedMergingIterator) Close() error {
 		}
 	})
 	return it.closeErr
+}
+
+type foregroundTrackedIterator struct {
+	merging.Iterator
+	db        *DB
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (it *foregroundTrackedIterator) Close() error {
+	it.closeOnce.Do(func() {
+		it.closeErr = it.Iterator.Close()
+		if it.db != nil {
+			it.db.activeForegroundIterators.Add(-1)
+		}
+	})
+	return it.closeErr
+}
+
+func (db *DB) wrapForegroundIterator(it merging.Iterator) merging.Iterator {
+	if db == nil || it == nil {
+		return it
+	}
+	if tracked, ok := it.(*foregroundTrackedIterator); ok {
+		return tracked
+	}
+	db.activeForegroundIterators.Add(1)
+	return &foregroundTrackedIterator{Iterator: it, db: db}
 }
 
 type concatUnsafeIterator struct {
@@ -15566,6 +15691,7 @@ func (it *concatUnsafeIterator) Error() error {
 func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
+	db.noteRead()
 	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
@@ -15614,9 +15740,9 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	if queueLenLocked == 0 {
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
 			if iteratorDebugEnabled.Load() {
-				return &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
+				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
 			}
-			return it
+			return db.wrapForegroundIterator(it)
 		}
 		if backendRangeKnown && !overlapsQuery(start, end, backendRange) {
 			out := merging.Iterator(&emptyIterator{start: start, end: end})
@@ -15660,23 +15786,23 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-			if hasMemSource && view != nil {
-				leasedView := view
-				view = nil
-				releaseView = false
-				return &leasedMergingIterator{
-					Iterator: it,
-					release: func() {
-						db.releaseMemtableView(leasedView)
-					},
-				}
-			}
-			if view != nil {
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return db.wrapForegroundIterator(&leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
+			})
+		}
+		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil
 			releaseView = false
 		}
-		return it
+		return db.wrapForegroundIterator(it)
 	}
 
 	var sources []merging.IteratorSource
@@ -16831,6 +16957,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		} else {
 			durability = journalDurabilitySync
 		}
+	} else if b.db.disableJournal && b.db.relaxedSync && b.db.indexOuterLeavesInValueLog {
+		// In WAL-off fast profiles, staged importer batches can publish pointer
+		// metadata via later sync writes before a fresh logical reader reloads the
+		// version. Keep unsynced batch commits cheap, but flush value-log writer
+		// buffers so pointer-backed payload bytes are visible to subsequent readers.
+		durability = journalDurabilityFlush
 	}
 	debugPtr := b.db.debugFlushPointers
 	valueLogEnabled := b.db.valueLogEnabled()
@@ -16877,7 +17009,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 		multiLanePointers = allowPointers &&
 			b.db.disableJournal &&
-			durability == journalDurabilityNone &&
+			// journalDurabilityFlush is still an unsynced fast-path write. We widen
+			// multi-lane pointer batching to include it so unsynced importer batches
+			// can flush pointer payload bytes without collapsing back to a single lane.
+			(durability == journalDurabilityNone || durability == journalDurabilityFlush) &&
 			len(b.db.lanes) > 1 &&
 			eligibleCount >= multiLaneValueLogMinRecords
 	}
