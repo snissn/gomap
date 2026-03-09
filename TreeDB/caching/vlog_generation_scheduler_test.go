@@ -31,9 +31,9 @@ func forceVlogMaintenanceIdle(db *DB) {
 func schedulerTestWait(t *testing.T) time.Duration {
 	t.Helper()
 	const (
-		defaultWait = 5 * time.Second
-		maxWait     = 10 * time.Second
-		minWait     = 2 * time.Second
+		defaultWait = 2 * time.Second
+		maxWait     = 4 * time.Second
+		minWait     = 250 * time.Millisecond
 		safety      = 10 * time.Millisecond
 	)
 	if deadline, ok := t.Deadline(); ok {
@@ -900,7 +900,15 @@ func TestVlogGenerationMaintenance_SkipsDuringActiveForegroundIterator(t *testin
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	forceVlogMaintenanceIdle(db)
-	db.activeForegroundIterators.Store(1)
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("iterator: %v", err)
+	}
+	defer func() {
+		if err := it.Close(); err != nil {
+			t.Fatalf("close iterator: %v", err)
+		}
+	}()
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	if _, calls := recorder.recordedPlan(); calls != 0 {
