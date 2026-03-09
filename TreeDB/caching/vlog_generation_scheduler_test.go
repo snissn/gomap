@@ -21,7 +21,7 @@ type blockingRewritePlannerBackend struct {
 
 func forceVlogMaintenanceIdle(db *DB) {
 	if db != nil {
-		db.lastForegroundWriteUnixNano.Store(time.Now().Add(-time.Minute).UnixNano())
+		db.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationMaintenanceQuietWindow).UnixNano())
 	}
 }
 
