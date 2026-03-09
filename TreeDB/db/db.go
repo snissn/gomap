@@ -129,9 +129,8 @@ type DB struct {
 
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
-	testFailFinalizeCommit          atomic.Bool
-	closing                         atomic.Bool
-	testRewritePlanLiveEstimateRuns atomic.Uint64
+	testFailFinalizeCommit atomic.Bool
+	closing                atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {

@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +19,33 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+func withRewritePlanEstimateCounter(t *testing.T) *atomic.Uint64 {
+	t.Helper()
+	var counter atomic.Uint64
+	rewritePlanLiveEstimateHook = func() {
+		counter.Add(1)
+	}
+	t.Cleanup(func() {
+		rewritePlanLiveEstimateHook = nil
+	})
+	return &counter
+}
+
+func assertRewritePlanStableFieldsEqual(t *testing.T, got, want ValueLogRewritePlan) {
+	t.Helper()
+	if !slices.Equal(got.SourceFileIDs, want.SourceFileIDs) ||
+		got.SegmentsTotal != want.SegmentsTotal ||
+		got.SegmentsSelected != want.SegmentsSelected ||
+		got.BytesTotal != want.BytesTotal ||
+		got.BytesLive != want.BytesLive ||
+		got.BytesStale != want.BytesStale ||
+		got.SelectedBytesTotal != want.SelectedBytesTotal ||
+		got.SelectedBytesLive != want.SelectedBytesLive ||
+		got.SelectedBytesStale != want.SelectedBytesStale {
+		t.Fatalf("rewrite plans differ on stable fields:\ngot=%+v\nwant=%+v", got, want)
+	}
+}
 
 func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	dir := t.TempDir()
@@ -1130,6 +1159,7 @@ func TestValueLogRewritePlan_NoSelectionKnobs_ReturnsTotalsOnly(t *testing.T) {
 
 func TestValueLogRewritePlan_CachesLiveBytesForUnchangedState(t *testing.T) {
 	dir := t.TempDir()
+	counter := withRewritePlanEstimateCounter(t)
 
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -1170,16 +1200,15 @@ func TestValueLogRewritePlan_CachesLiveBytesForUnchangedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second ValueLogRewritePlan: %v", err)
 	}
-	if !reflect.DeepEqual(plan1, plan2) {
-		t.Fatalf("cached plan mismatch:\nplan1=%+v\nplan2=%+v", plan1, plan2)
-	}
-	if got := db.testRewritePlanLiveEstimateRuns.Load(); got != 1 {
+	assertRewritePlanStableFieldsEqual(t, plan1, plan2)
+	if got := counter.Load(); got != 1 {
 		t.Fatalf("live-byte estimate runs=%d want 1", got)
 	}
 }
 
 func TestValueLogRewritePlan_InvalidatesCachedLiveBytesAfterCommit(t *testing.T) {
 	dir := t.TempDir()
+	counter := withRewritePlanEstimateCounter(t)
 
 	db, err := Open(Options{Dir: dir})
 	if err != nil {
@@ -1215,7 +1244,7 @@ func TestValueLogRewritePlan_InvalidatesCachedLiveBytesAfterCommit(t *testing.T)
 	if _, err := db.ValueLogRewritePlan(context.Background(), opts); err != nil {
 		t.Fatalf("first ValueLogRewritePlan: %v", err)
 	}
-	if got := db.testRewritePlanLiveEstimateRuns.Load(); got != 1 {
+	if got := counter.Load(); got != 1 {
 		t.Fatalf("live-byte estimate runs=%d want 1 after first plan", got)
 	}
 
@@ -1231,7 +1260,7 @@ func TestValueLogRewritePlan_InvalidatesCachedLiveBytesAfterCommit(t *testing.T)
 	if _, err := db.ValueLogRewritePlan(context.Background(), opts); err != nil {
 		t.Fatalf("second ValueLogRewritePlan: %v", err)
 	}
-	if got := db.testRewritePlanLiveEstimateRuns.Load(); got != 2 {
+	if got := counter.Load(); got != 2 {
 		t.Fatalf("live-byte estimate runs=%d want 2 after commit", got)
 	}
 }
