@@ -5724,7 +5724,7 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 	}
 	lastActivity := db.lastForegroundActivityUnixNano()
 	go func(lastActivity int64) {
-		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
 		for {
 			select {
