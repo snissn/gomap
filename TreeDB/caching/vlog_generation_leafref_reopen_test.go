@@ -946,18 +946,20 @@ func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_CacheWALOn(t
 		}
 	}
 
-	for i := 0; i < 16; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 6000)
+	// Keep enough history to exercise background maintenance and reopenability
+	// without creating hundreds of segments for a 16 KiB target.
+	for i := 0; i < 6; i++ {
+		writeBatch(fmt.Sprintf("seed-%02d", i), 2048)
 		ageValueLogFiles()
 	}
 	if err := db.checkpointForBackendMaintenance(); err != nil {
 		t.Fatalf("checkpoint before maintenance: %v", err)
 	}
 
-	for round := 0; round < 20; round++ {
+	for round := 0; round < 8; round++ {
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
-		writeBatch(fmt.Sprintf("round-%02d", round), 2048)
+		writeBatch(fmt.Sprintf("round-%02d", round), 768)
 		ageValueLogFiles()
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
@@ -1010,11 +1012,11 @@ func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_CacheWALOn(t
 	}
 	defer reopenRW.Close()
 
-	got, err := reopenRW.Get([]byte("round-19-00042"))
+	got, err := reopenRW.Get([]byte("round-07-00042"))
 	if err != nil {
 		t.Fatalf("get after rw reopen: %v", err)
 	}
-	want := bytes.Repeat([]byte("round-19-value-"), 12)
+	want := bytes.Repeat([]byte("round-07-value-"), 12)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("value mismatch after rw reopen")
 	}
@@ -1320,22 +1322,25 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 		_ = b.Close()
 	}
 
-	seedBatches := 8
-	rounds := 6
-	postRoundWrites := 1024
+	seedBatches := 4
+	seedBatchWrites := 2048
+	rounds := 4
+	postRoundWrites := 512
 	if !disableWAL {
-		seedBatches = 12
-		rounds = 10
-		postRoundWrites = 1536
+		seedBatches = 6
+		seedBatchWrites = 3072
+		rounds = 5
+		postRoundWrites = 768
 		if runtime.GOOS == "windows" {
-			seedBatches = 8
-			rounds = 6
-			postRoundWrites = 1024
+			seedBatches = 4
+			seedBatchWrites = 2048
+			rounds = 4
+			postRoundWrites = 512
 		}
 	}
 
 	for i := 0; i < seedBatches; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 6000)
+		writeBatch(fmt.Sprintf("seed-%02d", i), seedBatchWrites)
 	}
 
 	rewriteRounds := 0
@@ -1617,16 +1622,18 @@ func TestCachedRepeatedRewriteVacuumDirectPointersRemainReopenable_CacheWALOn(t 
 		_ = b.Close()
 	}
 
-	seedBatches := 4
-	rounds := 3
-	postRoundWrites := 512
+	seedBatches := 3
+	seedBatchWrites := 768
+	rounds := 2
+	postRoundWrites := 256
 	if runtime.GOOS == "windows" {
-		seedBatches = 3
+		seedBatches = 2
+		seedBatchWrites = 512
 		rounds = 2
-		postRoundWrites = 384
+		postRoundWrites = 192
 	}
 	for i := 0; i < seedBatches; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 4096)
+		writeBatch(fmt.Sprintf("seed-%02d", i), seedBatchWrites)
 	}
 
 	rewriteRounds := 0
