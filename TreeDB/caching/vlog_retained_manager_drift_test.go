@@ -92,6 +92,7 @@ func TestCheckpoint_DeletesRetainedValueLogWhenBackendManagerForgotSegment(t *te
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	db.waitForRetainedValueLogPrune()
 	if err := db.backgroundError(); err != nil {
 		t.Fatalf("backgroundError: %v", err)
 	}

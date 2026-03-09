@@ -2804,6 +2804,13 @@ func (db *DB) scheduleRetainedValueLogPrune() {
 	}()
 }
 
+func (db *DB) waitForRetainedValueLogPrune() {
+	if db == nil {
+		return
+	}
+	db.retainedPruneWG.Wait()
+}
+
 func hashKey(key []byte) uint64 {
 	return xxhash.Sum64(key)
 }
@@ -10615,6 +10622,10 @@ func (db *DB) Close() error {
 	db.writeMu.Unlock()
 	db.flushMu.Unlock()
 	db.wg.Wait()
+	// Retained-prune scans use the live value-log reader and backend state.
+	// Wait for any in-flight prune before tearing down readers or removing
+	// lane files so Close cannot race a background live-ID walk.
+	db.retainedPruneWG.Wait()
 	db.valueLogDictTrainerMu.Lock()
 	trainer := db.valueLogDictTrainer
 	db.valueLogDictTrainer = nil
@@ -10713,8 +10724,6 @@ func (db *DB) Close() error {
 	if removed {
 		db.syncDirBestEffort(db.dir)
 	}
-
-	db.retainedPruneWG.Wait()
 
 	if err := db.backend.Close(); err != nil {
 		errs = append(errs, err)
