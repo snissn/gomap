@@ -187,19 +187,24 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	// Build a fresh user tree from a stable snapshot.
 	baseSnap := db.AcquireSnapshot()
 	var newRoot uint64
-	if db.indexOuterLeavesInValueLog {
-		newRoot, err = vacuumClonePagerTreeWithLeafRefs(baseSnap.idx.pager, baseSnap.state.RootPageID, newAlloc, newPager)
-	} else {
-		baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-		buildOpts := bulk.BuildOptions{
-			LeafPrefixCompression: db.leafPrefixCompression,
-			LeafColumnar:          db.indexColumnarLeaves,
-			PackedValuePtr:        db.indexPackedValuePtr,
-			InternalBaseDelta:     db.indexInternalBaseDelta,
-		}
-		newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, buildOpts)
-		_ = baseIter.Close()
+	baseIter := baseSnap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	buildOpts := bulk.BuildOptions{
+		LeafPrefixCompression: db.leafPrefixCompression,
+		LeafColumnar:          db.indexColumnarLeaves,
+		PackedValuePtr:        db.indexPackedValuePtr,
+		InternalBaseDelta:     db.indexInternalBaseDelta,
 	}
+	if db.indexOuterLeavesInValueLog {
+		if db.leafPageLog == nil {
+			_ = baseIter.Close()
+			_ = baseSnap.Close()
+			cleanupNewPager()
+			return fmt.Errorf("vacuum: leaf page log not configured")
+		}
+		buildOpts.LeafPageLog = db.leafPageLog
+	}
+	newRoot, err = bulk.BuildWithOptions(baseIter, newAlloc, newPager, buildOpts)
+	_ = baseIter.Close()
 	_ = baseSnap.Close()
 	if err != nil {
 		cleanupNewPager()
