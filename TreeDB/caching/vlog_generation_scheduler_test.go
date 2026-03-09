@@ -970,9 +970,10 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 		close(doneMaintenance)
 	}()
 
+	wait := schedulerTestWait(t)
 	select {
 	case <-blocking.planStart:
-	case <-time.After(schedulerTestWait(t)):
+	case <-time.After(wait):
 		t.Fatalf("rewrite plan did not start")
 	}
 
@@ -980,7 +981,7 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 
 	select {
 	case <-doneMaintenance:
-	case <-time.After(2 * time.Second):
+	case <-time.After(wait):
 		t.Fatalf("maintenance did not cancel after foreground writes resumed")
 	}
 
@@ -1054,7 +1055,7 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T
 
 	select {
 	case <-doneMaintenance:
-	case <-time.After(schedulerTestWait(t)):
+	case <-time.After(wait):
 		t.Fatalf("maintenance did not cancel after foreground reads resumed")
 	}
 
