@@ -968,6 +968,7 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 	db.vlogGenerationLastGCUnixNano.Store(0)
 	forceVlogMaintenanceIdle(db)
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	dryRunCalls, realCalls, _ := recorder.recordedCalls()
