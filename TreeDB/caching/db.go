@@ -9964,6 +9964,7 @@ planned:
 		}
 		return
 	}
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 }
 
 func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
