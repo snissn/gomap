@@ -15234,12 +15234,12 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			leasedView := view
 			view = nil
 			releaseView = false
-			return &leasedMergingIterator{
+			return db.wrapForegroundIterator(&leasedMergingIterator{
 				Iterator: it,
 				release: func() {
 					db.releaseMemtableView(leasedView)
 				},
-			}
+			})
 		}
 		if view != nil {
 			db.releaseMemtableView(view)
@@ -15589,12 +15589,12 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 			leasedView := view
 			view = nil
 			releaseView = false
-			return &leasedMergingIterator{
+			return db.wrapForegroundIterator(&leasedMergingIterator{
 				Iterator: it,
 				release: func() {
 					db.releaseMemtableView(leasedView)
 				},
-			}
+			})
 		}
 		if view != nil {
 			db.releaseMemtableView(view)
