@@ -678,6 +678,9 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 				if age := now.Sub(info.ModTime()); age >= 0 && age < minSegmentAge {
 					continue
 				}
+			} else if !os.IsNotExist(err) {
+				// Keep the candidate when age is unknown rather than silently
+				// suppressing rewrite work based on a failed stat call.
 			}
 		}
 		liveBytes := liveByID[id]

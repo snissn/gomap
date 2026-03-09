@@ -15,6 +15,7 @@ import (
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -55,9 +56,7 @@ func missingLeafRefPaths(root string, counts map[uint32]int) []string {
 		if count == 0 {
 			continue
 		}
-		seg := page.ValueLogSegmentID(fileID)
-		lane := seg >> 23
-		seq := seg & ((1 << 23) - 1)
+		lane, seq := valuelog.DecodeFileID(fileID)
 		path := filepath.Join(root, "wal", fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 		if _, err := os.Stat(path); err == nil {
 			continue
@@ -416,17 +415,6 @@ func TestCachedRewriteLeafRefs_RemainReopenableAfterLaterCheckpoint(t *testing.T
 		t.Fatalf("expected many leafref source files, got %d", len(leafCounts))
 	}
 
-	set := backend.State().ValueLogSet
-	active := make(map[uint32]struct{})
-	if set != nil {
-		for id := range set.Files {
-			lane, seq := page.ValueLogSegmentID(id)>>23, page.ValueLogSegmentID(id)&((1<<23)-1)
-			cur, ok := active[lane]
-			_ = cur
-			_ = ok
-			_ = seq
-		}
-	}
 	currentSet := backend.State().ValueLogSet
 	if currentSet == nil {
 		t.Fatalf("missing current value-log set")
@@ -835,9 +823,26 @@ func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t
 		_ = b.Close()
 	}
 
+	ageCurrentValueLogFiles := func(age time.Duration) {
+		t.Helper()
+		state := backend.State()
+		if state == nil || state.ValueLogSet == nil {
+			return
+		}
+		at := time.Now().Add(-age)
+		for _, f := range state.ValueLogSet.Files {
+			if f.Path == "" {
+				continue
+			}
+			if err := os.Chtimes(f.Path, at, at); err != nil && !os.IsNotExist(err) {
+				t.Fatalf("age %s: %v", f.Path, err)
+			}
+		}
+	}
+
 	for i := 0; i < 5; i++ {
 		writeBatch(fmt.Sprintf("seed-%02d", i), 1024)
-		time.Sleep(1200 * time.Millisecond)
+		ageCurrentValueLogFiles(2 * time.Second)
 	}
 
 	if err := db.checkpointForBackendMaintenance(); err != nil {

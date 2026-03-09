@@ -2874,6 +2874,8 @@ func (db *DB) runWithBackendMaintenance(fn func() error) error {
 	for db.checkpointing.Load() || db.maintenanceActive.Load() {
 		db.checkpointCond.Wait()
 	}
+	// Publish the maintenance-active flag while checkpointMu is held so Checkpoint
+	// and background maintenance serialize through the same mutex/cond state.
 	db.maintenanceActive.Store(true)
 	db.checkpointMu.Unlock()
 	defer func() {
@@ -9870,18 +9872,7 @@ planned:
 	if !ok {
 		return
 	}
-	if !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps) {
-		gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
-		if err != nil {
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("cachingdb: generational gc dry-run: %w", err))
-			}
-			return
-		}
-		if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
-			return
-		}
-	}
+	needEligibilityEstimate := !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
 	now = time.Now()
 	lastGC := db.vlogGenerationLastGCUnixNano.Load()
 	if lastGC > 0 {
@@ -9893,6 +9884,15 @@ planned:
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
 	err := db.runWithBackendMaintenance(func() error {
+		if needEligibilityEstimate {
+			gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
+			if err != nil {
+				return fmt.Errorf("generational gc dry-run: %w", err)
+			}
+			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
+				return nil
+			}
+		}
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -14932,17 +14932,17 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-			if hasMemSource && view != nil {
-				leasedView := view
-				view = nil
-				releaseView = false
-				return &leasedMergingIterator{
-					Iterator: it,
-					release: func() {
-						db.releaseMemtableView(leasedView)
-					},
-				}
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return &leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
 			}
+		}
 		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil
@@ -15261,17 +15261,17 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		if iteratorDebugEnabled.Load() {
 			it = &debugIterator{Iterator: it, queueLen: queueLen, sourcesUsed: sourcesUsed}
 		}
-			if hasMemSource && view != nil {
-				leasedView := view
-				view = nil
-				releaseView = false
-				return &leasedMergingIterator{
-					Iterator: it,
-					release: func() {
-						db.releaseMemtableView(leasedView)
-					},
-				}
+		if hasMemSource && view != nil {
+			leasedView := view
+			view = nil
+			releaseView = false
+			return &leasedMergingIterator{
+				Iterator: it,
+				release: func() {
+					db.releaseMemtableView(leasedView)
+				},
 			}
+		}
 		if view != nil {
 			db.releaseMemtableView(view)
 			view = nil
