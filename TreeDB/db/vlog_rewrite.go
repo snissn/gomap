@@ -393,28 +393,22 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 
 // rewritePlanLiveEstimateHook is a test hook used to count uncached live-byte
 // estimation passes without carrying test-only state in the production DB type.
-type rewritePlanLiveEstimateHookValue struct {
-	fn func()
-}
-
-var rewritePlanLiveEstimateHook = func() atomic.Value {
-	var v atomic.Value
-	v.Store(rewritePlanLiveEstimateHookValue{})
-	return v
-}()
-
-var rewritePlanLiveEstimateHookMu sync.Mutex
+var (
+	rewritePlanLiveEstimateHookMu sync.RWMutex
+	rewritePlanLiveEstimateHook   func()
+)
 
 func loadRewritePlanLiveEstimateHook() func() {
-	v, _ := rewritePlanLiveEstimateHook.Load().(rewritePlanLiveEstimateHookValue)
-	return v.fn
+	rewritePlanLiveEstimateHookMu.RLock()
+	defer rewritePlanLiveEstimateHookMu.RUnlock()
+	return rewritePlanLiveEstimateHook
 }
 
 func swapRewritePlanLiveEstimateHook(hook func()) (prev func()) {
 	rewritePlanLiveEstimateHookMu.Lock()
 	defer rewritePlanLiveEstimateHookMu.Unlock()
-	prev = loadRewritePlanLiveEstimateHook()
-	rewritePlanLiveEstimateHook.Store(rewritePlanLiveEstimateHookValue{fn: hook})
+	prev = rewritePlanLiveEstimateHook
+	rewritePlanLiveEstimateHook = hook
 	return prev
 }
 
@@ -438,9 +432,9 @@ func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[
 		db.rewritePlanLiveBytesMu.RUnlock()
 		return nil, false
 	}
-	liveByID := cloneValueLogLiveBytesMap(db.rewritePlanLiveBytesCache.liveByID)
+	liveByID := db.rewritePlanLiveBytesCache.liveByID
 	db.rewritePlanLiveBytesMu.RUnlock()
-	return liveByID, true
+	return cloneValueLogLiveBytesMap(liveByID), true
 }
 
 func cloneValueLogLiveBytesMap(src map[uint32]int64) map[uint32]int64 {
