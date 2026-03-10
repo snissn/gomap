@@ -8,14 +8,11 @@ import (
 	"hash/crc32"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
-	"strings"
 	"sync"
-	"syscall"
-	"time"
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -671,61 +668,5 @@ func decodeValueLogRefCounts(data []byte) (valueLogRefCountsDisk, error) {
 }
 
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	if path == "" {
-		return nil
-	}
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	f, err := os.CreateTemp(dir, base+".tmp.*")
-	if err != nil {
-		return err
-	}
-	tmp := f.Name()
-	defer func() { _ = os.Remove(tmp) }()
-	if err := f.Chmod(perm); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-
-	const attempts = 8
-	sleep := 5 * time.Millisecond
-	var lastErr error
-	for i := 0; i < attempts; i++ {
-		if err := os.Rename(tmp, path); err == nil {
-			return nil
-		} else {
-			lastErr = err
-			if runtime.GOOS != "windows" {
-				return err
-			}
-			if isWindowsRenameRetryable(err) {
-				time.Sleep(sleep)
-				if sleep < 100*time.Millisecond {
-					sleep *= 2
-				}
-				continue
-			}
-			return err
-		}
-	}
-	return lastErr
-}
-
-func isWindowsRenameRetryable(err error) bool {
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
-		switch errno {
-		case syscall.Errno(5), syscall.Errno(32), syscall.Errno(33):
-			return true
-		}
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "used by another process") || strings.Contains(msg, "access is denied")
+	return atomicfile.Write(path, data, perm)
 }

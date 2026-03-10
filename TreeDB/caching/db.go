@@ -10438,7 +10438,9 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		return
 	}
 	db.vlogGenerationLastCheckpointKickUnixNano.Store(now.UnixNano())
+	db.wg.Add(1)
 	go func() {
+		defer db.wg.Done()
 		defer db.vlogGenerationCheckpointKickActive.Store(false)
 		db.checkpointMu.Lock()
 		for db.checkpointing.Load() {
