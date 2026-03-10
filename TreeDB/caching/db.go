@@ -10990,7 +10990,10 @@ func (db *DB) Checkpoint() error {
 	wroteDuringWALRotate := db.nextRID.Load() != ridBeforeWALRotate
 	if db.splitValueLogEnabled() {
 		for i := range db.lanes {
-			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
+			if !db.lanes[i].vlogDirty.Load() {
+				continue
+			}
+			if err := db.syncValueLogLane(&db.lanes[i]); err != nil {
 				return err
 			}
 		}

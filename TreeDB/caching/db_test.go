@@ -1292,6 +1292,188 @@ func TestCheckpoint_WALOffNoPendingStateSkipsRotation(t *testing.T) {
 	}
 }
 
+func TestCheckpoint_WALOffSplitValueLogSkipsIdleLaneRotation(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		JournalLanes:             2,
+		ValueLogGenerationPolicy: uint8(db.ValueLogGenerationOff),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	dirtyLane := &db.lanes[0]
+	idleLane := &db.lanes[1]
+	idleSeqBefore := db.currentValueLogSeq(idleLane)
+	idlePathBefore := db.currentValueLogPath(idleLane)
+	dirtySeqBefore := db.currentValueLogSeq(dirtyLane)
+	dirtyPathBefore := db.currentValueLogPath(dirtyLane)
+	syncCalls := 0
+	db.testOnVlogSync = func(id int) {
+		if id == int(dirtyLane.id) {
+			syncCalls++
+		}
+	}
+
+	rid := db.nextRID.Add(1)
+	if _, _, err := db.appendValueLogOneRaw(dirtyLane, 0, nil, rid, []byte("lane-0-dirty"), journalDurabilityNone); err != nil {
+		t.Fatalf("appendValueLogOneRaw: %v", err)
+	}
+
+	if got := db.mutableBytes.Load(); got != 0 {
+		t.Fatalf("mutableBytes=%d want 0", got)
+	}
+	if got := len(db.queue); got != 0 {
+		t.Fatalf("queue len=%d want 0", got)
+	}
+	if !dirtyLane.vlogDirty.Load() {
+		t.Fatalf("dirty lane was not marked dirty after raw append")
+	}
+	if idleLane.vlogDirty.Load() {
+		t.Fatalf("idle lane unexpectedly marked dirty")
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+
+	if got := db.currentValueLogSeq(dirtyLane); got != dirtySeqBefore {
+		t.Fatalf("dirty lane seq=%d want %d", got, dirtySeqBefore)
+	}
+	if got := db.currentValueLogPath(dirtyLane); got != dirtyPathBefore {
+		t.Fatalf("dirty lane path=%q want %q", got, dirtyPathBefore)
+	}
+	if syncCalls == 0 {
+		t.Fatalf("expected checkpoint to sync dirty lane without rotating it")
+	}
+	if dirtyLane.vlogDirty.Load() {
+		t.Fatalf("dirty lane remained dirty after checkpoint sync")
+	}
+
+	if got := db.currentValueLogSeq(idleLane); got != idleSeqBefore {
+		t.Fatalf("idle lane seq=%d want %d", got, idleSeqBefore)
+	}
+	if got := db.currentValueLogPath(idleLane); got != idlePathBefore {
+		t.Fatalf("idle lane path=%q want %q", got, idlePathBefore)
+	}
+}
+
+func TestCheckpoint_WALOffSplitValueLogRepeatedDirtyLaneSkipsIdleLaneRotation(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		JournalLanes:             2,
+		ValueLogGenerationPolicy: uint8(db.ValueLogGenerationOff),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	dirtyLane := &db.lanes[0]
+	idleLane := &db.lanes[1]
+	idleSeqBefore := db.currentValueLogSeq(idleLane)
+	idlePathBefore := db.currentValueLogPath(idleLane)
+	dirtySeqBefore := db.currentValueLogSeq(dirtyLane)
+	dirtyPathBefore := db.currentValueLogPath(dirtyLane)
+	syncCalls := 0
+	db.testOnVlogSync = func(id int) {
+		if id == int(dirtyLane.id) {
+			syncCalls++
+		}
+	}
+
+	for i := 0; i < 4; i++ {
+		rid := db.nextRID.Add(1)
+		payload := []byte(fmt.Sprintf("lane-0-dirty-%d", i))
+		if _, _, err := db.appendValueLogOneRaw(dirtyLane, 0, nil, rid, payload, journalDurabilityNone); err != nil {
+			t.Fatalf("appendValueLogOneRaw(%d): %v", i, err)
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint(%d): %v", i, err)
+		}
+		if got := db.currentValueLogSeq(dirtyLane); got != dirtySeqBefore {
+			t.Fatalf("dirty lane seq=%d want %d after checkpoint %d", got, dirtySeqBefore, i)
+		}
+		if got := db.currentValueLogPath(dirtyLane); got != dirtyPathBefore {
+			t.Fatalf("dirty lane path=%q want %q after checkpoint %d", got, dirtyPathBefore, i)
+		}
+		if dirtyLane.vlogDirty.Load() {
+			t.Fatalf("dirty lane remained dirty after checkpoint %d", i)
+		}
+		if got := db.currentValueLogSeq(idleLane); got != idleSeqBefore {
+			t.Fatalf("idle lane seq=%d want %d after checkpoint %d", got, idleSeqBefore, i)
+		}
+		if got := db.currentValueLogPath(idleLane); got != idlePathBefore {
+			t.Fatalf("idle lane path=%q want %q after checkpoint %d", got, idlePathBefore, i)
+		}
+	}
+	if syncCalls < 4 {
+		t.Fatalf("syncCalls=%d want >= 4", syncCalls)
+	}
+}
+
+func TestCheckpoint_WALOffSplitValueLogRepeatedSmallDirtyLaneDoesNotRollover(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	maxSegBytes := int64(1 << 20)
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		JournalLanes:             2,
+		ValueLogGenerationPolicy: uint8(db.ValueLogGenerationOff),
+		ValueLogMaxSegmentBytes:  maxSegBytes,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	dirtyLane := &db.lanes[0]
+	seqBefore := db.currentValueLogSeq(dirtyLane)
+	pathBefore := db.currentValueLogPath(dirtyLane)
+
+	for i := 0; i < 6; i++ {
+		rid := db.nextRID.Add(1)
+		payload := []byte(fmt.Sprintf("small-payload-%02d", i))
+		if _, _, err := db.appendValueLogOneRaw(dirtyLane, 0, nil, rid, payload, journalDurabilityNone); err != nil {
+			t.Fatalf("appendValueLogOneRaw(%d): %v", i, err)
+		}
+		if err := db.Checkpoint(); err != nil {
+			t.Fatalf("Checkpoint(%d): %v", i, err)
+		}
+		if got := db.currentValueLogSeq(dirtyLane); got != seqBefore {
+			t.Fatalf("dirty lane seq=%d want %d after checkpoint %d", got, seqBefore, i)
+		}
+		if got := db.currentValueLogPath(dirtyLane); got != pathBefore {
+			t.Fatalf("dirty lane path=%q want %q after checkpoint %d", got, pathBefore, i)
+		}
+	}
+
+	info, err := os.Stat(pathBefore)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", pathBefore, err)
+	}
+	if info.Size() >= maxSegBytes {
+		t.Fatalf("dirty lane segment size=%d want < %d", info.Size(), maxSegBytes)
+	}
+}
+
 func TestCachingDB_FlushAllCombinesMemtablesParallel(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
