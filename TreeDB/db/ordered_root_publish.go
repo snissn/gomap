@@ -9,6 +9,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -58,7 +59,8 @@ func materializeOrderedRootTable(iter iterator.UnsafeIterator) (memtable.Table, 
 		return nil, err
 	}
 	for iter.Valid() {
-		table.Set(iter.UnsafeKey(), iter.UnsafeValue())
+		val, ptr, flags := iter.UnsafeEntry()
+		table.SetEntry(iter.UnsafeKey(), val, ptr, flags)
 		iter.Next()
 	}
 	if err := iter.Error(); err != nil {
@@ -68,25 +70,90 @@ func materializeOrderedRootTable(iter iterator.UnsafeIterator) (memtable.Table, 
 	return table, nil
 }
 
-func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator) (*batch.Batch, int, error) {
+func orderedRootEntryEqual(baseIter, targetIter iterator.UnsafeIterator) bool {
+	baseVal, basePtr, baseFlags := baseIter.UnsafeEntry()
+	targetVal, targetPtr, targetFlags := targetIter.UnsafeEntry()
+	if baseFlags != targetFlags {
+		return false
+	}
+	if baseFlags&node.FlagPointer != 0 {
+		return basePtr == targetPtr
+	}
+	return bytes.Equal(baseVal, targetVal)
+}
+
+func orderedRootEntryValueLogFileID(iter iterator.UnsafeIterator) (uint32, bool) {
+	if iter == nil || !iter.Valid() {
+		return 0, false
+	}
+	_, ptr, flags := iter.UnsafeEntry()
+	if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(ptr.FileID) {
+		return 0, false
+	}
+	return ptr.FileID, true
+}
+
+func orderedRootBatchPut(delta *batch.Batch, iter iterator.UnsafeIterator) error {
+	if delta == nil || iter == nil || !iter.Valid() {
+		return nil
+	}
+	val, ptr, flags := iter.UnsafeEntry()
+	if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
+		return delta.SetPointer(iter.UnsafeKey(), ptr)
+	}
+	return delta.Set(iter.UnsafeKey(), val)
+}
+
+func collectValueLogRefDeltaFromIterator(iter iterator.UnsafeIterator) (*valueLogRefDelta, error) {
+	if iter == nil {
+		return nil, nil
+	}
+	delta := newValueLogRefDelta()
+	for iter.Valid() {
+		if fileID, ok := orderedRootEntryValueLogFileID(iter); ok {
+			delta.add(fileID, 1)
+		}
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	return delta, nil
+}
+
+func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator, trackRefs bool) (*batch.Batch, int, *valueLogRefDelta, error) {
 	delta := batch.New(nil, page.DefaultInlineThreshold)
 	baseValid := baseIter.Valid()
 	targetValid := targetIter.Valid()
 	deltaOps := 0
+	var vlogRefDelta *valueLogRefDelta
+	if trackRefs {
+		vlogRefDelta = newValueLogRefDelta()
+	}
 	for baseValid || targetValid {
 		switch {
 		case !targetValid:
+			if vlogRefDelta != nil {
+				if fileID, ok := orderedRootEntryValueLogFileID(baseIter); ok {
+					vlogRefDelta.add(fileID, -1)
+				}
+			}
 			if err := delta.Delete(baseIter.UnsafeKey()); err != nil {
 				_ = delta.Close()
-				return nil, 0, err
+				return nil, 0, nil, err
 			}
 			deltaOps++
 			baseIter.Next()
 			baseValid = baseIter.Valid()
 		case !baseValid:
-			if err := delta.Set(targetIter.UnsafeKey(), targetIter.UnsafeValue()); err != nil {
+			if vlogRefDelta != nil {
+				if fileID, ok := orderedRootEntryValueLogFileID(targetIter); ok {
+					vlogRefDelta.add(fileID, 1)
+				}
+			}
+			if err := orderedRootBatchPut(delta, targetIter); err != nil {
 				_ = delta.Close()
-				return nil, 0, err
+				return nil, 0, nil, err
 			}
 			deltaOps++
 			targetIter.Next()
@@ -94,26 +161,44 @@ func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator) (*
 		default:
 			switch cmp := bytes.Compare(baseIter.UnsafeKey(), targetIter.UnsafeKey()); {
 			case cmp < 0:
+				if vlogRefDelta != nil {
+					if fileID, ok := orderedRootEntryValueLogFileID(baseIter); ok {
+						vlogRefDelta.add(fileID, -1)
+					}
+				}
 				if err := delta.Delete(baseIter.UnsafeKey()); err != nil {
 					_ = delta.Close()
-					return nil, 0, err
+					return nil, 0, nil, err
 				}
 				deltaOps++
 				baseIter.Next()
 				baseValid = baseIter.Valid()
 			case cmp > 0:
-				if err := delta.Set(targetIter.UnsafeKey(), targetIter.UnsafeValue()); err != nil {
+				if vlogRefDelta != nil {
+					if fileID, ok := orderedRootEntryValueLogFileID(targetIter); ok {
+						vlogRefDelta.add(fileID, 1)
+					}
+				}
+				if err := orderedRootBatchPut(delta, targetIter); err != nil {
 					_ = delta.Close()
-					return nil, 0, err
+					return nil, 0, nil, err
 				}
 				deltaOps++
 				targetIter.Next()
 				targetValid = targetIter.Valid()
 			default:
-				if !bytes.Equal(baseIter.UnsafeValue(), targetIter.UnsafeValue()) {
-					if err := delta.Set(targetIter.UnsafeKey(), targetIter.UnsafeValue()); err != nil {
+				if !orderedRootEntryEqual(baseIter, targetIter) {
+					if vlogRefDelta != nil {
+						if fileID, ok := orderedRootEntryValueLogFileID(baseIter); ok {
+							vlogRefDelta.add(fileID, -1)
+						}
+						if fileID, ok := orderedRootEntryValueLogFileID(targetIter); ok {
+							vlogRefDelta.add(fileID, 1)
+						}
+					}
+					if err := orderedRootBatchPut(delta, targetIter); err != nil {
 						_ = delta.Close()
-						return nil, 0, err
+						return nil, 0, nil, err
 					}
 					deltaOps++
 				}
@@ -126,16 +211,16 @@ func buildOrderedRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator) (*
 	}
 	if err := baseIter.Error(); err != nil {
 		_ = delta.Close()
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	if err := targetIter.Error(); err != nil {
 		_ = delta.Close()
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
-	return delta, deltaOps, nil
+	return delta, deltaOps, vlogRefDelta, nil
 }
 
-func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIterator, opts orderedRootPublishOptions) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, stats orderedRootPublishStats, err error) {
+func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIterator, opts orderedRootPublishOptions, trackValueLogRefs bool) (newRoot uint64, retired []uint64, metrics adaptive.Metrics, stats orderedRootPublishStats, vlogRefDelta *valueLogRefDelta, err error) {
 	if db == nil {
 		err = ErrClosed
 		return
@@ -162,6 +247,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 
 	newRoot = baseRoot
 	var buildIter iterator.UnsafeIterator
+	trackValueLogRefs = trackValueLogRefs && db.valueLogRefTracker != nil && db.valueLogRefTracker.canTrack(db.currentCommitSeq()) && !db.indexOuterLeavesInValueLog
 	if baseRoot != 0 {
 		rootTree := tree.New(idx.pager, newValueReader(state.ValueLogSet), baseRoot)
 		pageIDs, collectErr := rootTree.CollectPageIDs()
@@ -185,12 +271,18 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 			return
 		}
 		if !hasExistingEntries {
+			if trackValueLogRefs {
+				vlogRefDelta, err = collectValueLogRefDeltaFromIterator(targetTable.NewIterator(nil, nil))
+				if err != nil {
+					return
+				}
+			}
 			retired = append(retired, pageIDs...)
 			buildIter = targetTable.NewIterator(nil, nil)
 		} else {
 			baseIter := rootTree.Iterator(nil, nil)
 			targetIter := targetTable.NewIterator(nil, nil)
-			delta, deltaOps, deltaErr := buildOrderedRootDeltaBatch(baseIter, targetIter)
+			delta, deltaOps, refDelta, deltaErr := buildOrderedRootDeltaBatch(baseIter, targetIter, trackValueLogRefs)
 			baseIter.Close()
 			targetIter.Close()
 			if deltaErr != nil {
@@ -198,6 +290,7 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 				return
 			}
 			defer delta.Close()
+			vlogRefDelta = refDelta
 			switch selectOrderedRootWarmPublishPlan(hasExistingEntries, deltaOps, opts.maxWarmDeltaOps) {
 			case orderedRootPublishPlanWarmNativeApply:
 				stats.warmAttempts++
@@ -214,15 +307,34 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 			case orderedRootPublishPlanWarmFallbackRebuild:
 				stats.warmAttempts++
 				stats.warmRebuildFallbacks++
+				if vlogRefDelta != nil {
+					vlogRefDelta = nil
+				}
 				retired = append(retired, pageIDs...)
 				buildIter = targetTable.NewIterator(nil, nil)
 			default:
+				if vlogRefDelta != nil {
+					vlogRefDelta = nil
+				}
 				retired = append(retired, pageIDs...)
 				buildIter = targetTable.NewIterator(nil, nil)
 			}
 		}
 	} else {
-		buildIter = iter
+		if trackValueLogRefs {
+			targetTable, materializeErr := materializeOrderedRootTable(iter)
+			if materializeErr != nil {
+				err = materializeErr
+				return
+			}
+			vlogRefDelta, err = collectValueLogRefDeltaFromIterator(targetTable.NewIterator(nil, nil))
+			if err != nil {
+				return
+			}
+			buildIter = targetTable.NewIterator(nil, nil)
+		} else {
+			buildIter = iter
+		}
 	}
 
 	if buildIter != nil && buildIter != iter {
@@ -294,7 +406,7 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	systemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	newRoot, retired, metrics, _, err := db.publishOrderedRootIterator(baseRoot, iter, systemRootOrderedPublishOptions(db))
+	newRoot, retired, metrics, _, _, err := db.publishOrderedRootIterator(baseRoot, iter, systemRootOrderedPublishOptions(db), false)
 	if err != nil {
 		return 0, err
 	}
@@ -338,9 +450,10 @@ func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 	var retired []uint64
 	var merged adaptive.Metrics
 	var systemStats orderedRootPublishStats
+	var vlogRefDelta *valueLogRefDelta
 
 	if systemIter != nil {
-		rootID, rootRetired, metrics, publishStats, err := db.publishOrderedRootIterator(baseSystemRoot, systemIter, opts)
+		rootID, rootRetired, metrics, publishStats, refDelta, err := db.publishOrderedRootIterator(baseSystemRoot, systemIter, opts, true)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -348,11 +461,12 @@ func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		retired = append(retired, rootRetired...)
 		mergeOrderedRootPublishMetrics(&merged, metrics)
 		systemStats = publishStats
+		vlogRefDelta = refDelta
 	}
 
 	rootIDs := make([]uint64, len(ordered))
 	for idx := range ordered {
-		rootID, rootRetired, metrics, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
+		rootID, rootRetired, metrics, _, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts, false)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -369,7 +483,7 @@ func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordere
 		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, nil); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, vlogRefDelta); err != nil {
 		return 0, nil, err
 	}
 	if systemIter != nil {

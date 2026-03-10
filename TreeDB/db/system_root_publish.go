@@ -96,7 +96,7 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	baseSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	newSystemRoot, retired, metrics, publishStats, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemRootOrderedPublishOptions(db))
+	newSystemRoot, retired, metrics, publishStats, vlogRefDelta, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemRootOrderedPublishOptions(db), true)
 	if err != nil {
 		return 0, err
 	}
@@ -114,7 +114,7 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 		return 0, errors.New("concurrent modification detected during system root publish")
 	}
 
-	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, nil, true, nil); err != nil {
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, metrics, nil, true, vlogRefDelta); err != nil {
 		return 0, err
 	}
 	return newSystemRoot, nil
