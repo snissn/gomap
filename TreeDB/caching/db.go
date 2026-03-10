@@ -770,10 +770,11 @@ const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
 	envDebugFlushTiming   = "TREEDB_DEBUG_FLUSH_TIMING"
 	// Generational maintenance toggles (forensics / isolation).
-	envDisableVlogGenerationRewrite = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
-	envDisableVlogGenerationGC      = "TREEDB_DISABLE_VLOG_GENERATION_GC"
-	envDisableVlogGenerationVacuum  = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
-	envDisableVlogGenerationLoop    = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
+	envDisableVlogGenerationRewrite        = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
+	envDisableVlogGenerationGC             = "TREEDB_DISABLE_VLOG_GENERATION_GC"
+	envDisableVlogGenerationVacuum         = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
+	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
+	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
 	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
 	envDisableCheckpointAutoVacuum   = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
 	minMemtablePrealloc              = 64 * 1024
@@ -3026,7 +3027,16 @@ func (db *DB) checkpointForBackendMaintenance() error {
 	return db.runWithBackendMaintenance(nil)
 }
 
+type backendMaintenanceOptions struct {
+	skipCheckpoint        bool
+	skipRetainedPruneWait bool
+}
+
 func (db *DB) runWithBackendMaintenance(fn func() error) error {
+	return db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{}, fn)
+}
+
+func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, fn func() error) error {
 	if db == nil {
 		if fn != nil {
 			return fn()
@@ -3047,10 +3057,14 @@ func (db *DB) runWithBackendMaintenance(fn func() error) error {
 		db.checkpointCond.Broadcast()
 		db.checkpointMu.Unlock()
 	}()
-	if err := db.Checkpoint(); err != nil {
-		return err
+	if !opts.skipCheckpoint {
+		if err := db.Checkpoint(); err != nil {
+			return err
+		}
 	}
-	db.waitForRetainedValueLogPrune()
+	if !opts.skipRetainedPruneWait {
+		db.waitForRetainedValueLogPrune()
+	}
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {
 			return err
@@ -3687,57 +3701,59 @@ type DB struct {
 	valueLogMaxSegmentBytes   int64
 	journalCompression        bool
 
-	disableJournal                        bool
-	relaxedSync                           bool
-	notifyError                           func(error)
-	debugFlushPointers                    bool
-	debugFlushTiming                      bool
-	debugPtrEligible                      atomic.Int64
-	debugPtrUsed                          atomic.Int64
-	debugPtrNoPtr                         atomic.Int64
-	debugPtrDenied                        atomic.Int64
-	debugPtrDisabled                      atomic.Int64
-	checkpointRuns                        atomic.Uint64
-	checkpointTotalNs                     atomic.Uint64
-	checkpointMaxNs                       atomic.Uint64
-	checkpointNoopSkips                   atomic.Uint64
-	checkpointFlushMuWaitNs               atomic.Uint64
-	checkpointFlushMuWaitMaxNs            atomic.Uint64
-	checkpointAutoVacuumRuns              atomic.Uint64
-	checkpointAutoVacuumLastCheckRun      atomic.Uint64
-	checkpointAutoVacuumLastPages         atomic.Uint64
-	checkpointAutoVacuumLastInternalP50   atomic.Uint64
-	checkpointAutoVacuumLastInternalAvg   atomic.Uint64
-	lastForegroundWriteUnixNano           atomic.Int64
-	lastForegroundReadUnixNano            atomic.Int64
-	foregroundReadStampCounter            atomic.Uint32
-	activeForegroundIterators             atomic.Int64
-	retainedPruneLastStartUnixNano        atomic.Int64
-	retainedPruneMu                       sync.Mutex
-	retainedPruneDone                     chan struct{}
-	vlogGenerationRemapSuccesses          atomic.Uint64
-	vlogGenerationRemapFailures           atomic.Uint64
-	vlogGenerationRewriteBytesIn          atomic.Uint64
-	vlogGenerationRewriteBytesOut         atomic.Uint64
-	vlogGenerationRewriteRuns             atomic.Uint64
-	vlogGenerationGCSegmentsDeleted       atomic.Uint64
-	vlogGenerationGCBytesDeleted          atomic.Uint64
-	vlogGenerationGCRuns                  atomic.Uint64
-	vlogGenerationVacuumRuns              atomic.Uint64
-	vlogGenerationVacuumFailures          atomic.Uint64
-	vlogGenerationLastVacuumUnixNano      atomic.Int64
-	vlogGenerationLastRewritePlanUnixNano atomic.Int64
-	vlogGenerationLastRewriteUnixNano     atomic.Int64
-	vlogGenerationLastGCUnixNano          atomic.Int64
-	vlogGenerationChurnBytes              atomic.Uint64
-	vlogGenerationSchedulerState          atomic.Uint32
-	vlogGenerationLastReason              atomic.Uint32
-	vlogGenerationRewriteQueueMu          sync.Mutex
-	vlogGenerationRewriteQueue            []uint32
-	vlogGenerationRewriteQueueLoaded      bool
-	vlogGenerationLastChurnBps            atomic.Int64
-	vlogGenerationLastChurnSampleBytes    atomic.Uint64
-	vlogGenerationLastChurnSampleNS       atomic.Int64
+	disableJournal                           bool
+	relaxedSync                              bool
+	notifyError                              func(error)
+	debugFlushPointers                       bool
+	debugFlushTiming                         bool
+	debugPtrEligible                         atomic.Int64
+	debugPtrUsed                             atomic.Int64
+	debugPtrNoPtr                            atomic.Int64
+	debugPtrDenied                           atomic.Int64
+	debugPtrDisabled                         atomic.Int64
+	checkpointRuns                           atomic.Uint64
+	checkpointTotalNs                        atomic.Uint64
+	checkpointMaxNs                          atomic.Uint64
+	checkpointNoopSkips                      atomic.Uint64
+	checkpointFlushMuWaitNs                  atomic.Uint64
+	checkpointFlushMuWaitMaxNs               atomic.Uint64
+	checkpointAutoVacuumRuns                 atomic.Uint64
+	checkpointAutoVacuumLastCheckRun         atomic.Uint64
+	checkpointAutoVacuumLastPages            atomic.Uint64
+	checkpointAutoVacuumLastInternalP50      atomic.Uint64
+	checkpointAutoVacuumLastInternalAvg      atomic.Uint64
+	lastForegroundWriteUnixNano              atomic.Int64
+	lastForegroundReadUnixNano               atomic.Int64
+	foregroundReadStampCounter               atomic.Uint32
+	activeForegroundIterators                atomic.Int64
+	retainedPruneLastStartUnixNano           atomic.Int64
+	retainedPruneMu                          sync.Mutex
+	retainedPruneDone                        chan struct{}
+	vlogGenerationRemapSuccesses             atomic.Uint64
+	vlogGenerationRemapFailures              atomic.Uint64
+	vlogGenerationRewriteBytesIn             atomic.Uint64
+	vlogGenerationRewriteBytesOut            atomic.Uint64
+	vlogGenerationRewriteRuns                atomic.Uint64
+	vlogGenerationGCSegmentsDeleted          atomic.Uint64
+	vlogGenerationGCBytesDeleted             atomic.Uint64
+	vlogGenerationGCRuns                     atomic.Uint64
+	vlogGenerationVacuumRuns                 atomic.Uint64
+	vlogGenerationVacuumFailures             atomic.Uint64
+	vlogGenerationLastVacuumUnixNano         atomic.Int64
+	vlogGenerationLastRewritePlanUnixNano    atomic.Int64
+	vlogGenerationLastRewriteUnixNano        atomic.Int64
+	vlogGenerationLastGCUnixNano             atomic.Int64
+	vlogGenerationLastCheckpointKickUnixNano atomic.Int64
+	vlogGenerationChurnBytes                 atomic.Uint64
+	vlogGenerationSchedulerState             atomic.Uint32
+	vlogGenerationLastReason                 atomic.Uint32
+	vlogGenerationRewriteQueueMu             sync.Mutex
+	vlogGenerationCheckpointKickActive       atomic.Bool
+	vlogGenerationRewriteQueue               []uint32
+	vlogGenerationRewriteQueueLoaded         bool
+	vlogGenerationLastChurnBps               atomic.Int64
+	vlogGenerationLastChurnSampleBytes       atomic.Uint64
+	vlogGenerationLastChurnSampleNS          atomic.Int64
 	// Rewrite budget token bucket (bytes) for online maintenance. This lets us
 	// interpret ValueLogRewriteBudgetBytesPerSec as a true per-second bandwidth
 	// budget while still running maintenance at coarse intervals.
@@ -3800,6 +3816,7 @@ type DB struct {
 	testOnVlogSync               func(laneID int)
 	testBeforeVlogUnlock         func(laneID int)
 	testSkipRetainedPrune        bool
+	testSkipVlogCheckpointKick   bool
 	testSkipCheckpointAutoVacuum bool
 }
 
@@ -3821,11 +3838,12 @@ const (
 )
 
 const (
-	vlogGenerationLoopInterval       = 1 * time.Second
-	vlogGenerationGCEvery            = 5
-	vlogGenerationGCMinBytes         = int64(1 << 20)
-	vlogGenerationRewriteMinInterval = 30 * time.Second
-	vlogGenerationGCMinInterval      = 60 * time.Second
+	vlogGenerationLoopInterval              = 1 * time.Second
+	vlogGenerationGCEvery                   = 5
+	vlogGenerationGCMinBytes                = int64(1 << 20)
+	vlogGenerationRewriteMinInterval        = 30 * time.Second
+	vlogGenerationGCMinInterval             = 60 * time.Second
+	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
 	vlogForegroundQuietWindow = 2 * time.Second
@@ -9987,7 +10005,17 @@ func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
 	}
 }
 
+type vlogGenerationMaintenanceOptions struct {
+	bypassQuiet           bool
+	skipRetainedPruneWait bool
+	skipCheckpoint        bool
+}
+
 func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
+	db.maybeRunVlogGenerationMaintenanceWithOptions(runGC, vlogGenerationMaintenanceOptions{})
+}
+
+func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlogGenerationMaintenanceOptions) {
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
@@ -10001,7 +10029,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
-	if !runGC && !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
+	if !runGC && !opts.bypassQuiet && !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
 		return
 	}
 	// In WAL-off mode, do not start rewrite/GC planning before the first
@@ -10011,14 +10039,16 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	// caused real restore stalls. Keep WAL-on profiles eligible for maintenance
 	// before the first checkpoint; starving that path causes the main value-log
 	// lane to grow unchecked during restore.
-	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 {
+	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 && !opts.skipCheckpoint {
 		return
 	}
 	// Retained-prune and generation maintenance use the same foreground quiet-window gate.
 	// That means a scheduled-but-not-yet-running prune can only delay this path by at most
 	// foregroundMaintenancePollInterval(), not by the full quiet window. Waiting here keeps
 	// active retained-prune scans serialized with rewrite/GC planning once the system has gone quiet.
-	db.waitForRetainedValueLogPrune()
+	if !opts.skipRetainedPruneWait {
+		db.waitForRetainedValueLogPrune()
+	}
 	if db.checkpointing.Load() {
 		return
 	}
@@ -10179,7 +10209,10 @@ planned:
 	if shouldRewrite && hasRewriter {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 		db.vlogGenerationLastReason.Store(reason)
-		err := db.runWithBackendMaintenance(func() error {
+		err := db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{
+			skipCheckpoint:        opts.skipCheckpoint,
+			skipRetainedPruneWait: opts.skipRetainedPruneWait,
+		}, func() error {
 			now = time.Now()
 			db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
 			maxSourceBytes := int64(0)
@@ -10334,7 +10367,10 @@ planned:
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
-	err = db.runWithBackendMaintenance(func() error {
+	err = db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{
+		skipCheckpoint:        opts.skipCheckpoint,
+		skipRetainedPruneWait: opts.skipRetainedPruneWait,
+	}, func() error {
 		if needEligibilityEstimate {
 			gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
 			if err != nil {
@@ -10375,6 +10411,49 @@ planned:
 		return
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+}
+
+func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	if envBool(envDisableVlogGenerationCheckpointKick) {
+		return
+	}
+	if db.testSkipVlogCheckpointKick {
+		return
+	}
+	if !db.disableJournal {
+		return
+	}
+	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	now := time.Now()
+	last := db.vlogGenerationLastCheckpointKickUnixNano.Load()
+	if last > 0 && now.Sub(time.Unix(0, last)) < vlogGenerationCheckpointKickMinInterval {
+		return
+	}
+	if !db.vlogGenerationCheckpointKickActive.CompareAndSwap(false, true) {
+		return
+	}
+	db.vlogGenerationLastCheckpointKickUnixNano.Store(now.UnixNano())
+	go func() {
+		defer db.vlogGenerationCheckpointKickActive.Store(false)
+		db.checkpointMu.Lock()
+		for db.checkpointing.Load() {
+			db.checkpointCond.Wait()
+		}
+		db.checkpointMu.Unlock()
+		if db.closing.Load() {
+			return
+		}
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        true,
+		})
+	}()
 }
 
 func (db *DB) maybeRunVlogGenerationIndexVacuum(rewriteBytesIn int64) {
@@ -10972,6 +11051,7 @@ func (db *DB) Checkpoint() error {
 		return err
 	}
 	db.checkValueLogRetention()
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
 	db.scheduleRetainedValueLogPrune()
 
 	return nil

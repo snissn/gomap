@@ -45,6 +45,7 @@ func disableVlogGenerationLoop(t *testing.T) {
 func prepareDirectSchedulerTest(t *testing.T) {
 	t.Helper()
 	disableVlogGenerationLoop(t)
+	t.Setenv(envDisableVlogGenerationCheckpointKick, "1")
 }
 
 func skipRetainedPrune(db *DB) {
@@ -352,6 +353,7 @@ func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRec
 	if err != nil {
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	db.testSkipVlogCheckpointKick = true
 	value := make([]byte, 2048)
 	b := db.NewBatch()
 	if err := b.Set([]byte("k"), value); err != nil {
@@ -657,6 +659,130 @@ func TestVlogGenerationRewriteQueue_PreservedOnRewriteError(t *testing.T) {
 	}
 	if got := db.vlogGenerationRemapFailures.Load(); got != 1 {
 		t.Fatalf("rewrite failure count=%d want=1", got)
+	}
+}
+
+func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t *testing.T) {
+	disableVlogGenerationLoop(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = false
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("trigger"), []byte("v")); err != nil {
+		_ = b.Close()
+		t.Fatalf("set trigger: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write trigger: %v", err)
+	}
+	_ = b.Close()
+
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, rewriteCalls := recorder.recordedRewrite()
+			_, planCalls := recorder.recordedPlan()
+			t.Fatalf("checkpoint kick did not run rewrite in time: planCalls=%d rewriteCalls=%d", planCalls, rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls=%d want=1", calls)
+	}
+}
+
+func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		realGCStats: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: 64},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("trigger"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set trigger: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write trigger: %v", err)
+	}
+	_ = b.Close()
+
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		_, realCalls, _ := recorder.recordedCalls()
+		if realCalls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			dryCalls, realCalls, _ := recorder.recordedCalls()
+			t.Fatalf("checkpoint kick did not run gc in time: dryCalls=%d realCalls=%d", dryCalls, realCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if dryCalls, realCalls, _ := recorder.recordedCalls(); dryCalls != 0 || realCalls != 1 {
+		t.Fatalf("gc calls dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
 	}
 }
 
