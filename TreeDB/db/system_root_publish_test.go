@@ -1,10 +1,14 @@
 package db
 
 import (
+	"context"
 	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func mustFrozenSystemMemtable(tb testing.TB, kvs ...string) memtable.Table {
@@ -16,6 +20,17 @@ func mustFrozenSystemMemtable(tb testing.TB, kvs ...string) memtable.Table {
 	for i := 0; i+1 < len(kvs); i += 2 {
 		mt.Set([]byte(kvs[i]), []byte(kvs[i+1]))
 	}
+	mt.Freeze()
+	return mt
+}
+
+func mustFrozenSystemPointerMemtable(tb testing.TB, key string, ptr page.ValuePtr) memtable.Table {
+	tb.Helper()
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		tb.Fatalf("new memtable: %v", err)
+	}
+	mt.SetEntry([]byte(key), nil, ptr, node.FlagPointer)
 	mt.Freeze()
 	return mt
 }
@@ -536,5 +551,55 @@ func TestPublishSystemRootIterator_UsesGenericOrderedRootPublishHelper(t *testin
 	}
 	if calls != 2 {
 		t.Fatalf("ordered root helper calls=%d want 2", calls)
+	}
+}
+
+func TestPublishSystemRootIterator_WarmApplyUpdatesValueLogRefTrackerInline(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	oldPtr := appendPointersInNewSegment(t, dir, 0, 11, 10_000, 1, func(int) []byte {
+		return []byte("old-system-pointer")
+	})[0]
+	newPtr := appendPointersInNewSegment(t, dir, 0, 12, 20_000, 1, func(int) []byte {
+		return []byte("new-system-pointer")
+	})[0]
+
+	initial := mustFrozenSystemPointerMemtable(t, "sys/p", oldPtr)
+	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish initial system root: %v", err)
+	}
+
+	target := mustFrozenSystemPointerMemtable(t, "sys/p", newPtr)
+	if _, err := db.PublishSystemRootIterator(target.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish warm system root: %v", err)
+	}
+
+	seq := db.currentCommitSeq()
+	incRefs, ok := db.valueLogRefTracker.referencedSet(seq)
+	if !ok {
+		t.Fatalf("expected incremental ref set for seq=%d", seq)
+	}
+	if _, ok := incRefs[newPtr.FileID]; !ok {
+		t.Fatalf("expected new pointer file %d in ref set", newPtr.FileID)
+	}
+	if _, ok := incRefs[oldPtr.FileID]; ok {
+		t.Fatalf("expected old pointer file %d to be removed", oldPtr.FileID)
+	}
+
+	fullCounts, fullSeq, err := db.scanValueLogRefCounts(context.Background())
+	if err != nil {
+		t.Fatalf("scanValueLogRefCounts: %v", err)
+	}
+	if fullSeq != seq {
+		t.Fatalf("scan seq mismatch: got=%d want=%d", fullSeq, seq)
+	}
+	fullRefs := valueLogRefSetFromCounts(fullCounts)
+	if !reflect.DeepEqual(incRefs, fullRefs) {
+		t.Fatalf("incremental/full-scan mismatch: incremental=%v full=%v", incRefs, fullRefs)
 	}
 }
