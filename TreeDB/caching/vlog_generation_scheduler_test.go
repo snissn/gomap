@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -373,6 +374,38 @@ func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRec
 	return db, func() { _ = db.Close() }
 }
 
+func openGCQueueTestDB(t *testing.T, dir string, recorder *dryRunGCRecordingBackend) (*DB, func()) {
+	t.Helper()
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	db.testSkipVlogCheckpointKick = true
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	forceVlogMaintenanceIdle(db)
+	db.vlogGenerationLastGCUnixNano.Store(0)
+	return db, func() { _ = db.Close() }
+}
+
 type dryRunGCRecordingBackend struct {
 	*backenddb.DB
 
@@ -382,6 +415,8 @@ type dryRunGCRecordingBackend struct {
 	realCalls      int
 	realGCStats    backenddb.ValueLogGCStats
 	protectedPaths [][]string
+	sourceFileIDs  [][]uint32
+	realGCErr      error
 }
 
 func (b *dryRunGCRecordingBackend) ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error) {
@@ -390,21 +425,30 @@ func (b *dryRunGCRecordingBackend) ValueLogGC(ctx context.Context, opts backendd
 	if opts.DryRun {
 		b.dryRunCalls++
 		b.protectedPaths = append(b.protectedPaths, append([]string(nil), opts.ProtectedPaths...))
+		b.sourceFileIDs = append(b.sourceFileIDs, append([]uint32(nil), opts.SourceFileIDs...))
 		return b.dryRunStats, nil
 	}
 	b.realCalls++
 	b.protectedPaths = append(b.protectedPaths, append([]string(nil), opts.ProtectedPaths...))
+	b.sourceFileIDs = append(b.sourceFileIDs, append([]uint32(nil), opts.SourceFileIDs...))
+	if b.realGCErr != nil {
+		return backenddb.ValueLogGCStats{}, b.realGCErr
+	}
 	return b.realGCStats, nil
 }
 
-func (b *dryRunGCRecordingBackend) recordedCalls() (int, int, [][]string) {
+func (b *dryRunGCRecordingBackend) recordedCalls() (int, int, [][]string, [][]uint32) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	paths := make([][]string, len(b.protectedPaths))
 	for i := range b.protectedPaths {
 		paths[i] = append([]string(nil), b.protectedPaths[i]...)
 	}
-	return b.dryRunCalls, b.realCalls, paths
+	sourceIDs := make([][]uint32, len(b.sourceFileIDs))
+	for i := range b.sourceFileIDs {
+		sourceIDs[i] = append([]uint32(nil), b.sourceFileIDs[i]...)
+	}
+	return b.dryRunCalls, b.realCalls, paths, sourceIDs
 }
 
 func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
@@ -773,22 +817,173 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 
 	deadline := time.Now().Add(2 * schedulerTestWait(t))
 	for {
-		_, realCalls, _ := recorder.recordedCalls()
+		_, realCalls, _, _ := recorder.recordedCalls()
 		if realCalls == 1 {
 			break
 		}
 		if time.Now().After(deadline) {
-			dryCalls, realCalls, _ := recorder.recordedCalls()
+			dryCalls, realCalls, _, _ := recorder.recordedCalls()
 			t.Fatalf("checkpoint kick did not run gc in time: dryCalls=%d realCalls=%d", dryCalls, realCalls)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if dryCalls, realCalls, _ := recorder.recordedCalls(); dryCalls != 0 || realCalls != 1 {
+	if dryCalls, realCalls, _, _ := recorder.recordedCalls(); dryCalls != 0 || realCalls != 1 {
 		t.Fatalf("gc calls dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
 	}
 	if got := db.checkpointRuns.Load(); got < 2 {
 		t.Fatalf("checkpoint runs=%d want >=2", got)
+	}
+}
+
+func TestVlogGenerationGCQueue_ResumesWithoutRedryRun(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes, EligibleFileIDs: []uint32{11, 22}},
+		realGCStats: backenddb.ValueLogGCStats{SegmentsDeleted: 1, BytesDeleted: 64},
+	}
+
+	db, cleanup := openGCQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+	dryCalls, realCalls, _, sourceFileIDs := recorder.recordedCalls()
+	if dryCalls != 1 || realCalls != 1 {
+		t.Fatalf("calls after first run dry=%d real=%d want dry=1 real=1", dryCalls, realCalls)
+	}
+	if got, want := sourceFileIDs[1], []uint32{11}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first real gc source ids=%v want=%v", got, want)
+	}
+	queue, err := db.currentVlogGenerationGCQueue()
+	if err != nil {
+		t.Fatalf("current gc queue after first run: %v", err)
+	}
+	if got, want := queue, []uint32{22}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gc queue after first run=%v want=%v", got, want)
+	}
+
+	db.vlogGenerationLastGCUnixNano.Store(time.Now().Add(-2 * vlogGenerationGCMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	dryCalls, realCalls, _, sourceFileIDs = recorder.recordedCalls()
+	if dryCalls != 1 || realCalls != 2 {
+		t.Fatalf("calls after second run dry=%d real=%d want dry=1 real=2", dryCalls, realCalls)
+	}
+	if got, want := sourceFileIDs[2], []uint32{22}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second real gc source ids=%v want=%v", got, want)
+	}
+	queue, err = db.currentVlogGenerationGCQueue()
+	if err != nil {
+		t.Fatalf("current gc queue after second run: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("gc queue after second run=%v want empty", queue)
+	}
+}
+
+func TestVlogGenerationGCQueue_SurvivesReopen(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes, EligibleFileIDs: []uint32{11, 22}},
+		realGCStats: backenddb.ValueLogGCStats{SegmentsDeleted: 1, BytesDeleted: 64},
+	}
+
+	db, _ := openGCQueueTestDB(t, dir, recorder)
+	db.maybeRunVlogGenerationMaintenance(false)
+	if err := db.Close(); err != nil {
+		t.Fatalf("close first db: %v", err)
+	}
+
+	backend2, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen backend: %v", err)
+	}
+	recorder2 := &dryRunGCRecordingBackend{
+		DB:          backend2,
+		realGCStats: backenddb.ValueLogGCStats{SegmentsDeleted: 1, BytesDeleted: 64},
+	}
+	db2, err := Open(dir, recorder2, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("reopen cachingdb: %v", err)
+	}
+	defer func() { _ = db2.Close() }()
+	db2.testSkipVlogCheckpointKick = true
+	forceVlogMaintenanceIdle(db2)
+	db2.vlogGenerationLastGCUnixNano.Store(0)
+
+	queue, err := db2.currentVlogGenerationGCQueue()
+	if err != nil {
+		t.Fatalf("current gc queue after reopen: %v", err)
+	}
+	if got, want := queue, []uint32{22}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gc queue after reopen=%v want=%v", got, want)
+	}
+
+	db2.maybeRunVlogGenerationMaintenance(false)
+	dryCalls, realCalls, _, sourceFileIDs := recorder2.recordedCalls()
+	if dryCalls != 0 || realCalls != 1 {
+		t.Fatalf("calls after reopen dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
+	}
+	if got, want := sourceFileIDs[0], []uint32{22}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("reopen gc source ids=%v want=%v", got, want)
+	}
+}
+
+func TestVlogGenerationGCQueue_PreservedOnGCError(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes, EligibleFileIDs: []uint32{11, 22}},
+		realGCErr:   errors.New("gc failed"),
+	}
+
+	db, cleanup := openGCQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+	queue, err := db.currentVlogGenerationGCQueue()
+	if err != nil {
+		t.Fatalf("current gc queue after failed gc: %v", err)
+	}
+	if got, want := queue, []uint32{11, 22}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gc queue after failed gc=%v want=%v", got, want)
+	}
+	dryCalls, realCalls, _, sourceFileIDs := recorder.recordedCalls()
+	if dryCalls != 1 || realCalls != 1 {
+		t.Fatalf("calls after failed gc dry=%d real=%d want dry=1 real=1", dryCalls, realCalls)
+	}
+	if got, want := sourceFileIDs[1], []uint32{11}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("failed gc source ids=%v want=%v", got, want)
 	}
 }
 
@@ -1456,7 +1651,7 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 	}
 	recorder := &dryRunGCRecordingBackend{
 		DB:          backend,
-		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes},
+		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes, EligibleFileIDs: []uint32{11, 22}},
 	}
 
 	db, err := Open(dir, recorder, Options{
@@ -1489,7 +1684,7 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	dryRunCalls, realCalls, protected := recorder.recordedCalls()
+	dryRunCalls, realCalls, protected, sourceFileIDs := recorder.recordedCalls()
 	if dryRunCalls != 1 {
 		t.Fatalf("dry-run calls=%d want=1", dryRunCalls)
 	}
@@ -1498,6 +1693,15 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 	}
 	if len(protected) != 2 {
 		t.Fatalf("protected path snapshots=%d want=2", len(protected))
+	}
+	if len(sourceFileIDs) != 2 {
+		t.Fatalf("gc source snapshots=%d want=2", len(sourceFileIDs))
+	}
+	if len(sourceFileIDs[0]) != 0 {
+		t.Fatalf("dry-run source ids=%v want empty", sourceFileIDs[0])
+	}
+	if got, want := sourceFileIDs[1], []uint32{11}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("real gc source ids=%v want=%v", got, want)
 	}
 	if db.vlogGenerationGCRuns.Load() != 1 {
 		t.Fatalf("gc runs=%d want=1", db.vlogGenerationGCRuns.Load())
@@ -1554,7 +1758,7 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	dryRunCalls, realCalls, _ := recorder.recordedCalls()
+	dryRunCalls, realCalls, _, _ := recorder.recordedCalls()
 	if dryRunCalls != 1 {
 		t.Fatalf("dry-run calls=%d want=1", dryRunCalls)
 	}
@@ -1579,7 +1783,7 @@ func TestVlogGenerationGC_SkipsDuringRecentForegroundWrites(t *testing.T) {
 	}
 	recorder := &dryRunGCRecordingBackend{
 		DB:          backend,
-		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes},
+		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes, EligibleFileIDs: []uint32{11, 22}},
 	}
 
 	db, err := Open(dir, recorder, Options{
@@ -1612,7 +1816,7 @@ func TestVlogGenerationGC_SkipsDuringRecentForegroundWrites(t *testing.T) {
 	db.lastForegroundWriteUnixNano.Store(time.Now().UnixNano())
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	dryRunCalls, realCalls, _ := recorder.recordedCalls()
+	dryRunCalls, realCalls, _, _ := recorder.recordedCalls()
 	if dryRunCalls != 0 || realCalls != 0 {
 		t.Fatalf("gc calls=%d/%d want 0/0 while foreground writes are hot", dryRunCalls, realCalls)
 	}

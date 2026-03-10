@@ -19,6 +19,7 @@ const valueLogKeepRecentSegmentsPerLane = 2
 type ValueLogGCOptions struct {
 	DryRun         bool
 	ProtectedPaths []string
+	SourceFileIDs  []uint32
 }
 
 // ValueLogGCStats summarizes value-log GC work.
@@ -35,6 +36,7 @@ type ValueLogGCStats struct {
 	BytesProtected     int64
 	BytesEligible      int64
 	BytesDeleted       int64
+	EligibleFileIDs    []uint32
 }
 
 // ValueLogGC deletes fully-unreferenced value-log segments.
@@ -86,6 +88,10 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		size int64
 	}
 	candidates := make(map[uint32]candidate)
+	requestedIDs := make(map[uint32]struct{}, len(opts.SourceFileIDs))
+	for _, id := range opts.SourceFileIDs {
+		requestedIDs[id] = struct{}{}
+	}
 
 	for id, f := range set.Files {
 		if err := ctx.Err(); err != nil {
@@ -110,9 +116,15 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 			stats.BytesProtected += size
 			continue
 		}
+		if len(requestedIDs) > 0 {
+			if _, ok := requestedIDs[id]; !ok {
+				continue
+			}
+		}
 
 		stats.SegmentsEligible++
 		stats.BytesEligible += size
+		stats.EligibleFileIDs = append(stats.EligibleFileIDs, id)
 
 		if opts.DryRun {
 			continue

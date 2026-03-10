@@ -3747,10 +3747,11 @@ type DB struct {
 	vlogGenerationChurnBytes                 atomic.Uint64
 	vlogGenerationSchedulerState             atomic.Uint32
 	vlogGenerationLastReason                 atomic.Uint32
-	vlogGenerationRewriteQueueMu             sync.Mutex
+	vlogGenerationQueueMu                    sync.Mutex
 	vlogGenerationCheckpointKickActive       atomic.Bool
 	vlogGenerationRewriteQueue               []uint32
-	vlogGenerationRewriteQueueLoaded         bool
+	vlogGenerationGCQueue                    []uint32
+	vlogGenerationQueuesLoaded               bool
 	vlogGenerationLastChurnBps               atomic.Int64
 	vlogGenerationLastChurnSampleBytes       atomic.Uint64
 	vlogGenerationLastChurnSampleNS          atomic.Int64
@@ -10027,6 +10028,14 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 		return
 	}
+	gcQueue, err := db.currentVlogGenerationGCQueue()
+	if err != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: load generational gc queue: %w", err))
+		}
+		return
+	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
 	if !runGC && !opts.bypassQuiet && !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
@@ -10039,7 +10048,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// caused real restore stalls. Keep WAL-on profiles eligible for maintenance
 	// before the first checkpoint; starving that path causes the main value-log
 	// lane to grow unchecked during restore.
-	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 && !opts.skipCheckpoint {
+	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 && len(gcQueue) == 0 && !opts.skipCheckpoint {
 		return
 	}
 	// Retained-prune and generation maintenance use the same foreground quiet-window gate.
@@ -10357,6 +10366,9 @@ planned:
 		return
 	}
 	needEligibilityEstimate := !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
+	if len(gcQueue) > 0 {
+		needEligibilityEstimate = false
+	}
 	now = time.Now()
 	lastGC := db.vlogGenerationLastGCUnixNano.Load()
 	if lastGC > 0 {
@@ -10379,15 +10391,30 @@ planned:
 			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
 				return nil
 			}
+			if len(gcStats.EligibleFileIDs) > 0 {
+				if err := db.setVlogGenerationGCQueue(gcStats.EligibleFileIDs); err != nil {
+					return fmt.Errorf("persist generational gc queue: %w", err)
+				}
+				gcQueue = append([]uint32(nil), gcStats.EligibleFileIDs...)
+			}
 		}
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
+		processedGCIDs := vlogGenerationGCQueueChunk(gcQueue, vlogGenerationGCResumeMaxSegments)
+		if len(processedGCIDs) > 0 {
+			gcOpts.SourceFileIDs = processedGCIDs
+		}
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("generational gc: %w", err)
+		}
+		if len(processedGCIDs) > 0 {
+			if err := db.consumeVlogGenerationGCQueueChunk(processedGCIDs); err != nil {
+				return fmt.Errorf("consume generational gc queue: %w", err)
+			}
 		}
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 		db.vlogGenerationGCRuns.Add(1)
