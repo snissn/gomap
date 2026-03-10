@@ -3842,7 +3842,7 @@ const (
 	vlogGenerationGCEvery                   = 5
 	vlogGenerationGCMinBytes                = int64(1 << 20)
 	vlogGenerationRewriteMinInterval        = 30 * time.Second
-	vlogGenerationGCMinInterval             = 60 * time.Second
+	vlogGenerationGCMinInterval             = 45 * time.Second
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
