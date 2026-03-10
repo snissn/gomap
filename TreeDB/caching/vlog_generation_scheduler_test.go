@@ -3,6 +3,7 @@ package caching
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -611,6 +612,13 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("queue after reopen=%v want=%v", got, want)
 	}
+	stats := db2.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_len"]; got != "1" {
+		t.Fatalf("rewrite queue len after reopen=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_loaded"]; got != "true" {
+		t.Fatalf("rewrite queue loaded after reopen=%q want true", got)
+	}
 
 	db2.maybeRunVlogGenerationMaintenance(false)
 	if _, calls := recorder2.recordedPlan(); calls != 0 {
@@ -722,6 +730,16 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 	if got := db.checkpointRuns.Load(); got < 2 {
 		t.Fatalf("checkpoint runs=%d want >=2", got)
 	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
+		t.Fatalf("checkpoint kick runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"]; got != "1" {
+		t.Fatalf("checkpoint kick rewrite runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.active"]; got != "false" {
+		t.Fatalf("checkpoint kick active=%q want false", got)
+	}
 }
 
 func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *testing.T) {
@@ -789,6 +807,16 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 	}
 	if got := db.checkpointRuns.Load(); got < 2 {
 		t.Fatalf("checkpoint runs=%d want >=2", got)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
+		t.Fatalf("checkpoint kick runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "1" {
+		t.Fatalf("checkpoint kick gc runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.active"]; got != "false" {
+		t.Fatalf("checkpoint kick active=%q want false", got)
 	}
 }
 
@@ -1504,6 +1532,16 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 	}
 	if got := db.vlogGenerationLastReason.Load(); got != vlogGenerationReasonPeriodicGC {
 		t.Fatalf("last gc reason=%d want=%d", got, vlogGenerationReasonPeriodicGC)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_bytes"]; got != fmt.Sprintf("%d", vlogGenerationGCMinBytes) {
+		t.Fatalf("gc dry-run eligible bytes=%q want %d", got, vlogGenerationGCMinBytes)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_segments"]; got != "2" {
+		t.Fatalf("gc dry-run eligible segments=%q want 2", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.gc.dry_run.last_unix_nano"]; got == "0" {
+		t.Fatalf("gc dry-run last_unix_nano=%q want non-zero", got)
 	}
 }
 

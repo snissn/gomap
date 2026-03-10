@@ -3744,9 +3744,15 @@ type DB struct {
 	vlogGenerationLastRewriteUnixNano        atomic.Int64
 	vlogGenerationLastGCUnixNano             atomic.Int64
 	vlogGenerationLastCheckpointKickUnixNano atomic.Int64
+	vlogGenerationLastGCDryRunUnixNano       atomic.Int64
+	vlogGenerationLastGCDryRunBytesEligible  atomic.Int64
+	vlogGenerationLastGCDryRunSegsEligible   atomic.Int64
 	vlogGenerationChurnBytes                 atomic.Uint64
 	vlogGenerationSchedulerState             atomic.Uint32
 	vlogGenerationLastReason                 atomic.Uint32
+	vlogGenerationCheckpointKickRuns         atomic.Uint64
+	vlogGenerationCheckpointKickRewriteRuns  atomic.Uint64
+	vlogGenerationCheckpointKickGCRuns       atomic.Uint64
 	vlogGenerationRewriteQueueMu             sync.Mutex
 	vlogGenerationCheckpointKickActive       atomic.Bool
 	vlogGenerationRewriteQueue               []uint32
@@ -10438,6 +10444,7 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		return
 	}
 	db.vlogGenerationLastCheckpointKickUnixNano.Store(now.UnixNano())
+	db.vlogGenerationCheckpointKickRuns.Add(1)
 	db.wg.Add(1)
 	go func() {
 		defer db.wg.Done()
@@ -10450,6 +10457,8 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		if db.closing.Load() {
 			return
 		}
+		rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
+		gcRunsBefore := db.vlogGenerationGCRuns.Load()
 		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
@@ -10459,6 +10468,12 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 			// checkpointing, and the kick-active guard prevents recursive kicks.
 			skipCheckpoint: false,
 		})
+		if db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore {
+			db.vlogGenerationCheckpointKickRewriteRuns.Add(1)
+		}
+		if db.vlogGenerationGCRuns.Load() > gcRunsBefore {
+			db.vlogGenerationCheckpointKickGCRuns.Add(1)
+		}
 	}()
 }
 
@@ -10543,10 +10558,16 @@ func (db *DB) estimateVlogGenerationGCEligible(gcer backendValueLogGCer) (backen
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
+	stats, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
 		DryRun:         true,
 		ProtectedPaths: db.valueLogProtectedPaths(),
 	})
+	if err == nil {
+		db.vlogGenerationLastGCDryRunUnixNano.Store(time.Now().UnixNano())
+		db.vlogGenerationLastGCDryRunBytesEligible.Store(stats.BytesEligible)
+		db.vlogGenerationLastGCDryRunSegsEligible.Store(int64(stats.SegmentsEligible))
+	}
+	return stats, err
 }
 
 func (db *DB) vlogGenerationEstimateChurnBps() int64 {
@@ -15066,14 +15087,25 @@ func (db *DB) Stats() map[string]string {
 	}
 	retained := db.valueLogRetainedStatsDetailed()
 	vlogSegments, vlogBytes := retained.SegmentsTotal, retained.BytesTotal
+	db.vlogGenerationRewriteQueueMu.Lock()
+	rewriteQueueLen := len(db.vlogGenerationRewriteQueue)
+	rewriteQueueLoaded := db.vlogGenerationRewriteQueueLoaded
+	db.vlogGenerationRewriteQueueMu.Unlock()
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
 	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastCheckpointKickUnixNano.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRuns.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRewriteRuns.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickGCRuns.Load())
 	stats["treedb.cache.vlog_generation.churn_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationChurnBytes.Load())
 	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", db.vlogGenerationLastChurnBps.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
+	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
 	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
 	stats["treedb.cache.vlog_generation.warm.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationWarmTarget)
 	stats["treedb.cache.vlog_generation.cold.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationColdTarget)
@@ -15109,6 +15141,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
 	stats["treedb.cache.vlog_generation.gc.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCUnixNano.Load())
+	stats["treedb.cache.vlog_generation.gc.dry_run.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunUnixNano.Load())
+	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunBytesEligible.Load())
+	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunSegsEligible.Load())
 	stats["treedb.cache.vlog_generation.vacuum.runs"] = fmt.Sprintf("%d", db.vlogGenerationVacuumRuns.Load())
 	stats["treedb.cache.vlog_generation.vacuum.failures"] = fmt.Sprintf("%d", db.vlogGenerationVacuumFailures.Load())
 	stats["treedb.cache.vlog_generation.vacuum.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastVacuumUnixNano.Load())
