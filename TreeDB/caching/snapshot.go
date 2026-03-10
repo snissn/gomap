@@ -23,9 +23,14 @@ import (
 // Mutable memtables are intentionally ignored so that writes after AcquireSnapshot
 // are not visible through the snapshot.
 type Snapshot struct {
-	db      *DB
-	view    *memtableView
-	backend *backenddb.Snapshot
+	db                  *DB
+	view                *memtableView
+	backend             *backenddb.Snapshot
+	rootVersion         uint64
+	rootPointShards     []rootDomainSnapshot
+	rootIterator        rootDomainSnapshot
+	rootPublished       rootDomainLookup
+	rootPublishedRootID uint64
 
 	closeOnce sync.Once
 	closeErr  error
@@ -101,7 +106,17 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		return nil
 	}
 
-	return &Snapshot{db: db, view: view, backend: backendSnap}
+	snap := &Snapshot{db: db, view: view, backend: backendSnap}
+	if view != nil {
+		snap.rootVersion = view.rootVersion
+		snap.rootPointShards = view.rootSnapshotShards
+		snap.rootIterator = view.rootIterator
+	}
+	snap.rootPublished = backendSnapshotLookup{snapshot: backendSnap}
+	if state := backendSnap.State(); state != nil {
+		snap.rootPublishedRootID = state.RootPageID
+	}
+	return snap
 }
 
 func (s *Snapshot) Pager() *pager.Pager {
@@ -132,6 +147,11 @@ func (s *Snapshot) Close() error {
 			s.db.releaseMemtableView(s.view)
 			s.view = nil
 		}
+		s.rootPointShards = nil
+		s.rootIterator = rootDomainSnapshot{}
+		s.rootPublished = nil
+		s.rootPublishedRootID = 0
+		s.rootVersion = 0
 		s.closeErr = errors.Join(errs...)
 	})
 	return s.closeErr
@@ -149,7 +169,10 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 	if s == nil || s.backend == nil {
 		return nil, backenddb.ErrClosed
 	}
-	queue := rootDomainSnapshotFromMemtableView(s.view, -1, false).immutables
+	queue := s.rootIterator.immutables
+	if queue == nil {
+		queue = rootDomainSnapshotFromMemtableView(s.view, -1, false).immutables
+	}
 	sources := make([]merging.IteratorSource, 0, len(queue)+1)
 	prio := 0
 	for idx := len(queue) - 1; idx >= 0; idx-- {
@@ -169,7 +192,7 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 	}
 	var (
 		diskIter iterator.UnsafeIterator
-		err     error
+		err      error
 	)
 	if reverse {
 		diskIter, err = s.backend.ReverseIterator(start, end)

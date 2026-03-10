@@ -3524,6 +3524,7 @@ type DB struct {
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
 	memtables             atomic.Pointer[memtableView]
+	rootDomainVersion     atomic.Uint64
 	hashSortedIndexer     *memtable.HashSortedIndexer
 	appendOnlyMemPool     sync.Pool
 	appendOnlyMemLeaseMu  sync.Mutex
@@ -3968,6 +3969,10 @@ type memtableView struct {
 	queue                    []memtable.Table
 	queueShardIDs            []uint16
 	queueRanges              []keyRange
+	rootVersion              uint64
+	rootPointShards          []rootDomainSnapshot
+	rootSnapshotShards       []rootDomainSnapshot
+	rootIterator             rootDomainSnapshot
 	refs                     atomic.Int64
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
@@ -4400,6 +4405,8 @@ func (db *DB) publishMemtablesLocked() {
 		copy(qr, db.queueRanges)
 		view.queueRanges = qr
 	}
+	view.rootVersion = db.rootDomainVersion.Add(1)
+	populateRootDomainSnapshots(view)
 	view.refs.Store(1)
 	retired := db.pendingRetiredMems
 	db.pendingRetiredMems = nil

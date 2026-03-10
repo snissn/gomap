@@ -54,6 +54,23 @@ func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includ
 	if view == nil {
 		return rootDomainSnapshot{}
 	}
+	if shardIdx < 0 {
+		snap := view.rootIterator
+		if snap.immutables != nil || snap.mutable != nil || snap.published != nil || snap.publishedRootID != 0 {
+			return snap
+		}
+	}
+	if shardIdx >= 0 && shardIdx < len(view.rootPointShards) {
+		if includeMutable {
+			return view.rootPointShards[shardIdx]
+		}
+		if shardIdx < len(view.rootSnapshotShards) {
+			return view.rootSnapshotShards[shardIdx]
+		}
+		snap := view.rootPointShards[shardIdx]
+		snap.mutable = nil
+		return snap
+	}
 	snap := rootDomainSnapshot{}
 	if includeMutable && shardIdx >= 0 && shardIdx < len(view.mutables) {
 		snap.mutable = view.mutables[shardIdx]
@@ -78,6 +95,74 @@ func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includ
 	return snap
 }
 
+func populateRootDomainSnapshots(view *memtableView) {
+	if view == nil {
+		return
+	}
+	if len(view.queue) > 0 {
+		view.rootIterator = rootDomainSnapshot{immutables: view.queue}
+	} else {
+		view.rootIterator = rootDomainSnapshot{}
+	}
+	if len(view.mutables) == 0 {
+		view.rootPointShards = nil
+		view.rootSnapshotShards = nil
+		return
+	}
+	points := make([]rootDomainSnapshot, len(view.mutables))
+	snapshots := make([]rootDomainSnapshot, len(view.mutables))
+	for idx := range view.mutables {
+		points[idx].mutable = view.mutables[idx]
+	}
+	if len(view.queue) == 0 {
+		view.rootPointShards = points
+		view.rootSnapshotShards = snapshots
+		return
+	}
+	if len(view.queueShardIDs) != len(view.queue) {
+		for idx := range points {
+			points[idx].immutables = view.queue
+			snapshots[idx].immutables = view.queue
+		}
+		view.rootPointShards = points
+		view.rootSnapshotShards = snapshots
+		return
+	}
+	counts := make([]int, len(points))
+	for idx, mt := range view.queue {
+		if mt == nil {
+			continue
+		}
+		shardIdx := int(view.queueShardIDs[idx])
+		if shardIdx < 0 || shardIdx >= len(counts) {
+			continue
+		}
+		counts[shardIdx]++
+	}
+	runs := make([][]memtable.Table, len(points))
+	for idx, count := range counts {
+		if count > 0 {
+			runs[idx] = make([]memtable.Table, 0, count)
+		}
+	}
+	for idx, mt := range view.queue {
+		if mt == nil {
+			continue
+		}
+		shardIdx := int(view.queueShardIDs[idx])
+		if shardIdx < 0 || shardIdx >= len(runs) {
+			continue
+		}
+		runs[shardIdx] = append(runs[shardIdx], mt)
+	}
+	for idx := range points {
+		points[idx].immutables = runs[idx]
+		snapshots[idx].immutables = runs[idx]
+	}
+	view.rootPointShards = points
+	view.rootSnapshotShards = snapshots
+}
+
 func rootDomainSnapshotFromCachedSnapshot(s *Snapshot, key []byte) rootDomainSnapshot {
 	if s == nil {
 		return rootDomainSnapshot{}
@@ -86,8 +171,16 @@ func rootDomainSnapshotFromCachedSnapshot(s *Snapshot, key []byte) rootDomainSna
 	if s.db != nil {
 		shardIdx = s.db.shardIndex(key)
 	}
-	snap := rootDomainSnapshotFromMemtableView(s.view, shardIdx, false)
-	if s.backend != nil {
+	var snap rootDomainSnapshot
+	if shardIdx >= 0 && shardIdx < len(s.rootPointShards) {
+		snap = s.rootPointShards[shardIdx]
+	} else {
+		snap = rootDomainSnapshotFromMemtableView(s.view, shardIdx, false)
+	}
+	if s.rootPublished != nil {
+		snap.published = s.rootPublished
+		snap.publishedRootID = s.rootPublishedRootID
+	} else if s.backend != nil {
 		snap.published = backendSnapshotLookup{snapshot: s.backend}
 		if state := s.backend.State(); state != nil {
 			snap.publishedRootID = state.RootPageID
