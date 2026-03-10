@@ -325,8 +325,9 @@ func TestRootDomainSnapshotFromCachedSnapshot_QueueTombstoneBeatsPublishedState(
 			mutableShards:    make([]memShard, 1),
 			mutableShardMask: 0,
 		},
-		view:    view,
-		backend: backendSnap,
+		view:            view,
+		backend:         backendSnap,
+		rootPointShards: []rootDomainSnapshot{{immutables: []memtable.Table{view.queue[0]}}},
 	}
 	rootSnap := rootDomainSnapshotFromCachedSnapshot(snap, []byte("k"))
 	if rootSnap.mutable != nil {

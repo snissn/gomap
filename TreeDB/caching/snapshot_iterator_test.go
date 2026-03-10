@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestSnapshotIterator_QueueValueOverridesPublishedAndTombstoneHidesPublished(t *testing.T) {
@@ -288,5 +289,191 @@ func TestAcquireSnapshot_CapturesRootDomainStateAcrossLaterPublishes(t *testing.
 	}
 	if !reflect.DeepEqual(gotKeys, []string{"a"}) {
 		t.Fatalf("stale snapshot reverse keys=%v want [a]", gotKeys)
+	}
+}
+
+func TestSnapshot_PointReadsUseCapturedRootDomainStateAsAuthority(t *testing.T) {
+	snap := &Snapshot{
+		db: &DB{
+			mutableShards:    make([]memShard, 1),
+			mutableShardMask: 0,
+		},
+		rootPointShards: []rootDomainSnapshot{
+			{
+				immutables: []memtable.Table{
+					newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "captured"}),
+				},
+			},
+		},
+		view: &memtableView{
+			rootSnapshotShards: []rootDomainSnapshot{
+				{
+					immutables: []memtable.Table{
+						newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "wrong"}),
+					},
+				},
+			},
+			queue: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "wrong-queue"}),
+			},
+			queueShardIDs: []uint16{0},
+		},
+	}
+
+	got, err := snap.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("snapshot get: %v", err)
+	}
+	if string(got) != "captured" {
+		t.Fatalf("snapshot value=%q want %q", string(got), "captured")
+	}
+}
+
+func TestSnapshot_IteratorUsesCapturedRootDomainStateAsAuthority(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		t.Fatal("expected backend snapshot")
+	}
+	defer backendSnap.Close()
+
+	snap := &Snapshot{
+		db: &DB{
+			mutableShards:    make([]memShard, 1),
+			mutableShardMask: 0,
+		},
+		backend: backendSnap,
+		rootIterator: rootDomainSnapshot{
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "a", value: "captured-a"}),
+			},
+		},
+		view: &memtableView{
+			rootIterator: rootDomainSnapshot{
+				immutables: []memtable.Table{
+					newRootDomainTestTable(t, rootDomainTestOp{key: "b", value: "wrong-b"}),
+				},
+			},
+			queue: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "c", value: "wrong-c"}),
+			},
+		},
+	}
+
+	it, err := snap.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("snapshot iterator: %v", err)
+	}
+	defer it.Close()
+
+	var got []string
+	for it.Valid() {
+		got = append(got, string(it.Key()))
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"a"}) {
+		t.Fatalf("keys=%v want [a]", got)
+	}
+}
+
+func TestSnapshot_HasDoesNotFallBackToViewWhenNoCapturedRuns(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		t.Fatal("expected backend snapshot")
+	}
+	defer backendSnap.Close()
+
+	snap := &Snapshot{
+		db: &DB{
+			mutableShards:    make([]memShard, 1),
+			mutableShardMask: 0,
+		},
+		backend:             backendSnap,
+		rootPublished:       backendSnapshotLookup{snapshot: backendSnap},
+		rootPublishedRootID: backendSnap.State().RootPageID,
+		view: &memtableView{
+			rootSnapshotShards: []rootDomainSnapshot{
+				{
+					immutables: []memtable.Table{
+						newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "wrong"}),
+					},
+				},
+			},
+			queue: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "wrong-queue"}),
+			},
+			queueShardIDs: []uint16{0},
+		},
+	}
+
+	ok, err := snap.Has([]byte("k"))
+	if err != nil {
+		t.Fatalf("snapshot has: %v", err)
+	}
+	if ok {
+		t.Fatal("expected snapshot Has to ignore uncaptured view state")
+	}
+}
+
+func TestSnapshot_IteratorDoesNotFallBackToViewWhenNoCapturedRuns(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		t.Fatal("expected backend snapshot")
+	}
+	defer backendSnap.Close()
+
+	snap := &Snapshot{
+		db: &DB{
+			mutableShards:    make([]memShard, 1),
+			mutableShardMask: 0,
+		},
+		backend:             backendSnap,
+		rootPublished:       backendSnapshotLookup{snapshot: backendSnap},
+		rootPublishedRootID: backendSnap.State().RootPageID,
+		view: &memtableView{
+			rootIterator: rootDomainSnapshot{
+				immutables: []memtable.Table{
+					newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "wrong"}),
+				},
+			},
+			queue: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "wrong-queue"}),
+			},
+		},
+	}
+
+	it, err := snap.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("snapshot iterator: %v", err)
+	}
+	defer it.Close()
+	if it.Valid() {
+		t.Fatalf("expected iterator to ignore uncaptured view state; first key=%q", string(it.Key()))
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
 	}
 }

@@ -233,10 +233,13 @@ func TestSnapshotPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
 
 	snap := &Snapshot{
 		db: db,
-		view: &memtableView{
-			queue:         queue,
-			queueShardIDs: queueShardIDs,
-		},
+		rootPointShards: func() []rootDomainSnapshot {
+			shardsSnap := make([]rootDomainSnapshot, shards)
+			for shard := 0; shard < shards; shard++ {
+				shardsSnap[shard].immutables = []memtable.Table{queue[shard]}
+			}
+			return shardsSnap
+		}(),
 	}
 
 	got, err := snap.Get(wantKey)
