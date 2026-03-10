@@ -133,6 +133,39 @@ func liveIteratorRootDomainSnapshot(view *memtableView) (rootDomainSnapshot, boo
 	return rootDomainSnapshotFromMemtableView(view, -1, false), true
 }
 
+func (db *DB) rawMemtableEntryFallback(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	if db == nil {
+		return nil, page.ValuePtr{}, 0, false
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	shardIdx := 0
+	if len(db.mutableShards) > 1 {
+		shardIdx = db.shardIndex(key)
+	}
+	if shardIdx >= 0 && shardIdx < len(db.mutableShards) {
+		if mt := db.mutableShards[shardIdx].mem; mt != nil {
+			if val, ptr, flags, found = mt.GetEntry(key); found {
+				return val, ptr, flags, true
+			}
+		}
+	}
+	for idx := len(db.queue) - 1; idx >= 0; idx-- {
+		mt := db.queue[idx]
+		if mt == nil {
+			continue
+		}
+		if len(db.queueShardIDs) > idx && int(db.queueShardIDs[idx]) != shardIdx {
+			continue
+		}
+		if val, ptr, flags, found = mt.GetEntry(key); found {
+			return val, ptr, flags, true
+		}
+	}
+	return nil, page.ValuePtr{}, 0, false
+}
+
 func populateRootDomainSnapshots(view *memtableView) {
 	if view == nil {
 		return

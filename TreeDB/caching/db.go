@@ -14492,38 +14492,36 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	if view != nil {
 		defer db.releaseMemtableView(view)
 	}
-	var snap rootDomainSnapshot
-	var haveSnapshot bool
 	if view != nil {
-		snap, haveSnapshot = livePointRootDomainSnapshot(view, db, key)
-	} else {
-		// Defensive fallback: should not happen after Open(), but keep safe
-		// behavior for zero-value DBs and tests.
-		db.mu.RLock()
-		fallbackView := &memtableView{
-			queue:         append([]memtable.Table(nil), db.queue...),
-			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
+		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
+		if db.canBypassMemtableRead(view, key) {
+			return nil, false, nil
 		}
-		if len(db.mutableShards) > 0 {
-			fallbackView.mutables = make([]memtable.Table, len(db.mutableShards))
-			for i := range db.mutableShards {
-				fallbackView.mutables[i] = db.mutableShards[i].mem
+		if haveSnapshot {
+			val, ptr, flags, found := snap.getEntry(key)
+			if found {
+				if flags&node.FlagTombstone != 0 {
+					return nil, true, nil
+				}
+				if flags&node.FlagPointer != 0 {
+					if val == nil {
+						readVal, err := db.readValueLog(key, ptr)
+						if err != nil {
+							return nil, true, err
+						}
+						return readVal, true, nil
+					}
+					return val, true, nil
+				}
+				if val == nil {
+					return []byte{}, true, nil
+				}
+				return val, true, nil
 			}
 		}
-		db.mu.RUnlock()
-		shardIdx := 0
-		if len(fallbackView.mutables) > 0 {
-			shardIdx = db.shardIndex(key)
-		}
-		snap = rootDomainSnapshotFromMemtableView(fallbackView, shardIdx, true)
-		haveSnapshot = true
-	}
-
-	if db.canBypassMemtableRead(view, key) {
 		return nil, false, nil
-	}
-	if haveSnapshot {
-		val, ptr, flags, found := snap.getEntry(key)
+	} else {
+		val, ptr, flags, found := db.rawMemtableEntryFallback(key)
 		if found {
 			if flags&node.FlagTombstone != 0 {
 				return nil, true, nil
@@ -14543,8 +14541,8 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 			}
 			return val, true, nil
 		}
+		return nil, false, nil
 	}
-	return nil, false, nil
 }
 
 func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
@@ -14552,36 +14550,36 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	if view != nil {
 		defer db.releaseMemtableView(view)
 	}
-	var snap rootDomainSnapshot
-	var haveSnapshot bool
 	if view != nil {
-		snap, haveSnapshot = livePointRootDomainSnapshot(view, db, key)
-	} else {
-		db.mu.RLock()
-		fallbackView := &memtableView{
-			queue:         append([]memtable.Table(nil), db.queue...),
-			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
+		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
+		if db.canBypassMemtableRead(view, key) {
+			return dst, false, nil
 		}
-		if len(db.mutableShards) > 0 {
-			fallbackView.mutables = make([]memtable.Table, len(db.mutableShards))
-			for i := range db.mutableShards {
-				fallbackView.mutables[i] = db.mutableShards[i].mem
+		if haveSnapshot {
+			val, ptr, flags, found := snap.getEntry(key)
+			if found {
+				if flags&node.FlagTombstone != 0 {
+					return dst, true, tree.ErrKeyNotFound
+				}
+				if flags&node.FlagPointer != 0 {
+					if val == nil {
+						out, err := db.readValueLogAppend(key, ptr, dst)
+						if err != nil {
+							return dst, true, err
+						}
+						return out, true, nil
+					}
+					return append(dst, val...), true, nil
+				}
+				if val == nil {
+					return dst, true, nil
+				}
+				return append(dst, val...), true, nil
 			}
 		}
-		db.mu.RUnlock()
-		shardIdx := 0
-		if len(fallbackView.mutables) > 0 {
-			shardIdx = db.shardIndex(key)
-		}
-		snap = rootDomainSnapshotFromMemtableView(fallbackView, shardIdx, true)
-		haveSnapshot = true
-	}
-
-	if db.canBypassMemtableRead(view, key) {
 		return dst, false, nil
-	}
-	if haveSnapshot {
-		val, ptr, flags, found := snap.getEntry(key)
+	} else {
+		val, ptr, flags, found := db.rawMemtableEntryFallback(key)
 		if found {
 			if flags&node.FlagTombstone != 0 {
 				return dst, true, tree.ErrKeyNotFound
@@ -14601,8 +14599,8 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 			}
 			return append(dst, val...), true, nil
 		}
+		return dst, false, nil
 	}
-	return dst, false, nil
 }
 
 type backendManyGetter interface {
@@ -14772,39 +14770,22 @@ func (db *DB) Has(key []byte) (bool, error) {
 	if view != nil {
 		defer db.releaseMemtableView(view)
 	}
-	var snap rootDomainSnapshot
-	var haveSnapshot bool
 	if view != nil {
-		snap, haveSnapshot = livePointRootDomainSnapshot(view, db, key)
-	} else {
-		db.mu.RLock()
-		fallbackView := &memtableView{
-			queue:         append([]memtable.Table(nil), db.queue...),
-			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
-		}
-		if len(db.mutableShards) > 0 {
-			fallbackView.mutables = make([]memtable.Table, len(db.mutableShards))
-			for i := range db.mutableShards {
-				fallbackView.mutables[i] = db.mutableShards[i].mem
+		snap, haveSnapshot := livePointRootDomainSnapshot(view, db, key)
+		if haveSnapshot {
+			_, _, flags, found := snap.getEntry(key)
+			if found {
+				return flags&node.FlagTombstone == 0, nil
 			}
 		}
-		db.mu.RUnlock()
-		shardIdx := 0
-		if len(fallbackView.mutables) > 0 {
-			shardIdx = db.shardIndex(key)
-		}
-		snap = rootDomainSnapshotFromMemtableView(fallbackView, shardIdx, true)
-		haveSnapshot = true
-	}
-
-	if haveSnapshot {
-		_, _, flags, found := snap.getEntry(key)
+		return db.backend.Has(key)
+	} else {
+		_, _, flags, found := db.rawMemtableEntryFallback(key)
 		if found {
 			return flags&node.FlagTombstone == 0, nil
 		}
+		return db.backend.Has(key)
 	}
-
-	return db.backend.Has(key)
 }
 
 func (db *DB) Stats() map[string]string {
@@ -15483,6 +15464,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	queueLenLocked := 0
 	if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
 		queueLenLocked = len(snap.immutables)
+	} else if view == nil {
+		queueLenLocked = len(db.queue)
 	}
 
 	db.mu.Unlock()
@@ -15533,17 +15516,13 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		}
 		queueRanges = view.queueRanges
 	} else {
-		// Defensive fallback: should not happen after Open(), but keeps Iterator safe
-		// for zero-value DBs and tests.
 		db.mu.RLock()
-		fallbackView := &memtableView{
-			queue:         append([]memtable.Table(nil), db.queue...),
-			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
+		if len(db.queue) > 0 {
+			queue = append([]memtable.Table(nil), db.queue...)
 		}
-		if snap, ok := liveIteratorRootDomainSnapshot(fallbackView); ok {
-			queue = snap.immutables
+		if len(db.queueRanges) > 0 {
+			queueRanges = append([]keyRange(nil), db.queueRanges...)
 		}
-		queueRanges = append([]keyRange(nil), db.queueRanges...)
 		db.mu.RUnlock()
 	}
 	queueLen := len(queue)
@@ -15849,6 +15828,8 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	queueLenLocked := 0
 	if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
 		queueLenLocked = len(snap.immutables)
+	} else if view == nil {
+		queueLenLocked = len(db.queue)
 	}
 
 	db.mu.Unlock()
@@ -15905,16 +15886,13 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		}
 		queueRanges = view.queueRanges
 	} else {
-		// Defensive fallback: should not happen after Open().
 		db.mu.RLock()
-		fallbackView := &memtableView{
-			queue:         append([]memtable.Table(nil), db.queue...),
-			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
+		if len(db.queue) > 0 {
+			queue = append([]memtable.Table(nil), db.queue...)
 		}
-		if snap, ok := liveIteratorRootDomainSnapshot(fallbackView); ok {
-			queue = snap.immutables
+		if len(db.queueRanges) > 0 {
+			queueRanges = append([]keyRange(nil), db.queueRanges...)
 		}
-		queueRanges = append([]keyRange(nil), db.queueRanges...)
 		db.mu.RUnlock()
 	}
 	queueLen := len(queue)
