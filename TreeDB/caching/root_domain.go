@@ -374,6 +374,51 @@ func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
 	return nil
 }
 
+func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
+	if db == nil {
+		return nil
+	}
+
+	db.mu.Lock()
+	cloned := clonePublishedRootSet(set)
+	if err := db.validatePublishedRootSetLocked(cloned); err != nil {
+		db.mu.Unlock()
+		return err
+	}
+	group := db.buildRootPublishGroupLocked(cloned)
+	hook := db.rootPublishHook
+	db.mu.Unlock()
+
+	if hook != nil {
+		if err := hook(group); err != nil {
+			db.mu.Lock()
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			db.mu.Unlock()
+			return err
+		}
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	if cloned != nil && db.rootPublishedSet != nil &&
+		cloned.generation != 0 && db.rootPublishedSet.generation != 0 &&
+		db.rootPublishedSet.generation > cloned.generation {
+		db.rootPublishRetryPending = false
+		return nil
+	}
+	if err := db.validatePublishedRootSetLocked(cloned); err != nil {
+		return err
+	}
+	db.applyPublishedRootSetLocked(cloned)
+	db.clearDirtyRootPublishGroupLocked()
+	if db.rootPublishRetryPending {
+		db.rootPublishStats.retrySuccesses.Add(1)
+		db.rootPublishRetryPending = false
+	}
+	return nil
+}
+
 func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) bool {
 	if db == nil {
 		return false
@@ -396,8 +441,9 @@ func (db *DB) attemptDirtyRootPublish() (attempted, ok bool) {
 		db.mu.Unlock()
 		return false, false
 	}
-	err := db.publishInstalledRootSetLocked(db.rootPublishedSet)
+	set := clonePublishedRootSet(db.rootPublishedSet)
 	db.mu.Unlock()
+	err := db.publishInstalledRootSet(set)
 	if err != nil {
 		return true, false
 	}
