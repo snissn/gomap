@@ -145,6 +145,54 @@ func TestRootDomainSnapshot_SameHandleVisibilityIncludesMutableRun(t *testing.T)
 	assertRootDomainVisibleValue(t, snap, "k", "v")
 }
 
+func TestRootDomainSnapshotFromMemtableView_ForKeyIncludesMutableAndMatchingQueueRuns(t *testing.T) {
+	t.Parallel()
+
+	view := &memtableView{
+		mutables: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "a", value: "wrong-shard"}),
+			newRootDomainTestTable(t,
+				rootDomainTestOp{key: "a", value: "mutable-a"},
+				rootDomainTestOp{key: "b", value: "mutable-b"},
+			),
+		},
+		queue: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "a", value: "queue-older"}),
+			newRootDomainTestTable(t, rootDomainTestOp{key: "a", value: "ignored-other-shard"}),
+			newRootDomainTestTable(t, rootDomainTestOp{key: "c", value: "queue-newer"}),
+		},
+		queueShardIDs: []uint16{1, 0, 1},
+	}
+
+	snap := rootDomainSnapshotFromMemtableView(view, 1, true)
+	assertRootDomainVisibleValue(t, snap, "a", "mutable-a")
+	assertRootDomainVisibleValue(t, snap, "b", "mutable-b")
+	assertRootDomainVisibleValue(t, snap, "c", "queue-newer")
+	if got, want := len(snap.immutables), 2; got != want {
+		t.Fatalf("immutables=%d want %d", got, want)
+	}
+}
+
+func TestRootDomainSnapshotFromMemtableView_ForSnapshotReadsExcludesMutableRun(t *testing.T) {
+	t.Parallel()
+
+	view := &memtableView{
+		mutables: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "mutable"}),
+		},
+		queue: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "queue"}),
+		},
+		queueShardIDs: []uint16{0},
+	}
+
+	snap := rootDomainSnapshotFromMemtableView(view, 0, false)
+	assertRootDomainVisibleValue(t, snap, "k", "queue")
+	if snap.mutable != nil {
+		t.Fatal("expected snapshot view to exclude mutable run")
+	}
+}
+
 func BenchmarkRootDomainSnapshotVisibleValue(b *testing.B) {
 	published, err := newRootDomainTable(rootDomainTestOp{key: "a", value: "published-a"})
 	if err != nil {
