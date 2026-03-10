@@ -1,9 +1,13 @@
 package caching
 
 import (
+	"errors"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 type rootDomainLookup interface {
@@ -28,6 +32,24 @@ type rootDomainSnapshot struct {
 	immutables      []memtable.Table // oldest-to-newest
 }
 
+type backendSnapshotLookup struct {
+	snapshot *backenddb.Snapshot
+}
+
+func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+	if l.snapshot == nil {
+		return nil, page.ValuePtr{}, 0, false
+	}
+	entry, err := l.snapshot.GetEntry(key)
+	if err != nil {
+		if errors.Is(err, tree.ErrKeyNotFound) {
+			return nil, page.ValuePtr{}, 0, false
+		}
+		return nil, page.ValuePtr{}, 0, false
+	}
+	return entry.Value, entry.ValuePtr, entry.Flags, true
+}
+
 func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includeMutable bool) rootDomainSnapshot {
 	if view == nil {
 		return rootDomainSnapshot{}
@@ -48,6 +70,24 @@ func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includ
 			continue
 		}
 		snap.immutables = append(snap.immutables, mt)
+	}
+	return snap
+}
+
+func rootDomainSnapshotFromCachedSnapshot(s *Snapshot, key []byte) rootDomainSnapshot {
+	if s == nil {
+		return rootDomainSnapshot{}
+	}
+	shardIdx := 0
+	if s.db != nil {
+		shardIdx = s.db.shardIndex(key)
+	}
+	snap := rootDomainSnapshotFromMemtableView(s.view, shardIdx, false)
+	if s.backend != nil {
+		snap.published = backendSnapshotLookup{snapshot: s.backend}
+		if state := s.backend.State(); state != nil {
+			snap.publishedRootID = state.RootPageID
+		}
 	}
 	return snap
 }

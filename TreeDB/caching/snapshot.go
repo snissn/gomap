@@ -136,11 +136,10 @@ func (s *Snapshot) Close() error {
 }
 
 func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
-	if s == nil || s.view == nil || len(s.view.queue) == 0 || s.db == nil {
+	if s == nil {
 		return nil, page.ValuePtr{}, 0, false
 	}
-	shardIdx := s.db.shardIndex(key)
-	snap := rootDomainSnapshotFromMemtableView(s.view, shardIdx, false)
+	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
 	return snap.getEntry(key)
 }
 
