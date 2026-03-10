@@ -45,6 +45,11 @@ type ValueLogRewriteStats struct {
 type ValueLogRewritePlan struct {
 	// SourceFileIDs are the selected value-log segment IDs. The slice is sorted.
 	SourceFileIDs []uint32
+	// SelectedSources carries the selected source segments with their estimated
+	// live bytes in the same sort order as SourceFileIDs. Estimates are used by
+	// cached maintenance for resumable chunking only; they are not correctness
+	// data and may be rebuilt on the next plan.
+	SelectedSources []ValueLogRewritePlanSource
 
 	SegmentsTotal    int
 	SegmentsSelected int
@@ -56,6 +61,11 @@ type ValueLogRewritePlan struct {
 	SelectedBytesTotal int64
 	SelectedBytesLive  int64
 	SelectedBytesStale int64
+}
+
+type ValueLogRewritePlanSource struct {
+	FileID             uint32
+	EstimatedLiveBytes int64
 }
 
 // ValueLogRewriteOnlineOptions controls online rewrite behavior.
@@ -361,6 +371,7 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		}
 		sort.Slice(plan.SourceFileIDs, func(i, j int) bool { return plan.SourceFileIDs[i] < plan.SourceFileIDs[j] })
 		plan.SegmentsSelected = len(plan.SourceFileIDs)
+		plan.SelectedSources = make([]ValueLogRewritePlanSource, 0, len(plan.SourceFileIDs))
 
 		for _, id := range plan.SourceFileIDs {
 			f := set.Files[id]
@@ -373,6 +384,7 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 			}
 			plan.SelectedBytesTotal += size
 			if liveByID == nil {
+				plan.SelectedSources = append(plan.SelectedSources, ValueLogRewritePlanSource{FileID: id})
 				continue
 			}
 			live := liveByID[id]
@@ -384,6 +396,10 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 			}
 			plan.SelectedBytesLive += live
 			plan.SelectedBytesStale += size - live
+			plan.SelectedSources = append(plan.SelectedSources, ValueLogRewritePlanSource{
+				FileID:             id,
+				EstimatedLiveBytes: live,
+			})
 		}
 	}
 

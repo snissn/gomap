@@ -373,6 +373,18 @@ func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRec
 	return db, func() { _ = db.Close() }
 }
 
+func equalRewriteQueueEntries(got, want []valueLogGenerationRewriteQueueEntry) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 type dryRunGCRecordingBackend struct {
 	*backenddb.DB
 
@@ -505,14 +517,20 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	recorder := &rewriteBudgetRecordingBackend{
 		DB: backend,
 		planResponse: backenddb.ValueLogRewritePlan{
-			SourceFileIDs:     []uint32{11, 22},
-			SelectedBytesLive: 128,
+			SourceFileIDs: []uint32{11, 22, 33},
+			SelectedSources: []backenddb.ValueLogRewritePlanSource{
+				{FileID: 11, EstimatedLiveBytes: 40},
+				{FileID: 22, EstimatedLiveBytes: 50},
+				{FileID: 33, EstimatedLiveBytes: 60},
+			},
+			SelectedBytesLive: 150,
 		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
 	}
 
 	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
 	t.Cleanup(cleanup)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(90)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	if _, calls := recorder.recordedPlan(); calls != 1 {
@@ -522,15 +540,15 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("rewrite calls after first run=%d want=1", calls)
 	}
-	if got, want := opts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+	if got, want := opts.SourceFileIDs, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("first rewrite source ids=%v want=%v", got, want)
 	}
 	queue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		t.Fatalf("current queue after first run: %v", err)
 	}
-	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("queue after first run=%v want=%v", got, want)
+	if want := []valueLogGenerationRewriteQueueEntry{{FileID: 33, EstLiveBytes: 60}}; !equalRewriteQueueEntries(queue, want) {
+		t.Fatalf("queue after first run=%v want=%v", queue, want)
 	}
 
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
@@ -544,7 +562,7 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("rewrite calls after second run=%d want=2", calls)
 	}
-	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+	if got, want := opts.SourceFileIDs, []uint32{33}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("second rewrite source ids=%v want=%v", got, want)
 	}
 	queue, err = db.currentVlogGenerationRewriteQueue()
@@ -568,13 +586,19 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	recorder := &rewriteBudgetRecordingBackend{
 		DB: backend,
 		planResponse: backenddb.ValueLogRewritePlan{
-			SourceFileIDs:     []uint32{11, 22},
-			SelectedBytesLive: 128,
+			SourceFileIDs: []uint32{11, 22, 33},
+			SelectedSources: []backenddb.ValueLogRewritePlanSource{
+				{FileID: 11, EstimatedLiveBytes: 40},
+				{FileID: 22, EstimatedLiveBytes: 50},
+				{FileID: 33, EstimatedLiveBytes: 60},
+			},
+			SelectedBytesLive: 150,
 		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
 	}
 
 	db, _ := openRewriteQueueTestDB(t, dir, recorder)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(90)
 	db.maybeRunVlogGenerationMaintenance(false)
 	if err := db.Close(); err != nil {
 		t.Fatalf("close first db: %v", err)
@@ -601,15 +625,17 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 		t.Fatalf("reopen cachingdb: %v", err)
 	}
 	defer func() { _ = db2.Close() }()
-	db2.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	db2.vlogGenerationRewriteBudgetTokensBytes.Store(50)
 	forceVlogMaintenanceIdle(db2)
 
 	queue, err := db2.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		t.Fatalf("current queue after reopen: %v", err)
 	}
-	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("queue after reopen=%v want=%v", got, want)
+	if want := []valueLogGenerationRewriteQueueEntry{
+		{FileID: 33, EstLiveBytes: 60},
+	}; !equalRewriteQueueEntries(queue, want) {
+		t.Fatalf("queue after reopen=%v want=%v", queue, want)
 	}
 
 	db2.maybeRunVlogGenerationMaintenance(false)
@@ -620,7 +646,7 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("rewrite calls after reopen=%d want=1", calls)
 	}
-	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+	if got, want := opts.SourceFileIDs, []uint32{33}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite source ids after reopen=%v want=%v", got, want)
 	}
 }
@@ -637,22 +663,32 @@ func TestVlogGenerationRewriteQueue_PreservedOnRewriteError(t *testing.T) {
 	recorder := &rewriteBudgetRecordingBackend{
 		DB: backend,
 		planResponse: backenddb.ValueLogRewritePlan{
-			SourceFileIDs:     []uint32{11, 22},
-			SelectedBytesLive: 128,
+			SourceFileIDs: []uint32{11, 22, 33},
+			SelectedSources: []backenddb.ValueLogRewritePlanSource{
+				{FileID: 11, EstimatedLiveBytes: 40},
+				{FileID: 22, EstimatedLiveBytes: 50},
+				{FileID: 33, EstimatedLiveBytes: 60},
+			},
+			SelectedBytesLive: 150,
 		},
 		rewriteErr: errors.New("rewrite failed"),
 	}
 
 	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
 	t.Cleanup(cleanup)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(90)
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	queue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		t.Fatalf("current queue after failed rewrite: %v", err)
 	}
-	if got, want := queue, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
-		t.Fatalf("queue after failed rewrite=%v want=%v", got, want)
+	if want := []valueLogGenerationRewriteQueueEntry{
+		{FileID: 11, EstLiveBytes: 40},
+		{FileID: 22, EstLiveBytes: 50},
+		{FileID: 33, EstLiveBytes: 60},
+	}; !equalRewriteQueueEntries(queue, want) {
+		t.Fatalf("queue after failed rewrite=%v want=%v", queue, want)
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls after failed rewrite=%d want=1", calls)

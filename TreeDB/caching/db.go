@@ -3749,7 +3749,7 @@ type DB struct {
 	vlogGenerationLastReason                 atomic.Uint32
 	vlogGenerationRewriteQueueMu             sync.Mutex
 	vlogGenerationCheckpointKickActive       atomic.Bool
-	vlogGenerationRewriteQueue               []uint32
+	vlogGenerationRewriteQueue               []valueLogGenerationRewriteQueueEntry
 	vlogGenerationRewriteQueueLoaded         bool
 	vlogGenerationLastChurnBps               atomic.Int64
 	vlogGenerationLastChurnSampleBytes       atomic.Uint64
@@ -10250,15 +10250,17 @@ planned:
 					return start, nil
 				},
 			}
+			resumeBudgetBytes := db.vlogGenerationRewriteResumeBudgetBytes()
 			processedRewriteIDs := []uint32(nil)
 			if len(rewriteQueue) > 0 {
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				processedRewriteIDs = valueLogGenerationRewriteQueueIDs(vlogGenerationRewriteQueueChunk(rewriteQueue, resumeBudgetBytes))
 			} else if haveRewritePlan {
-				if err := db.setVlogGenerationRewriteQueue(rewritePlan.SourceFileIDs); err != nil {
+				queuedRewriteEntries := valueLogGenerationRewriteQueueEntriesFromPlan(rewritePlan)
+				if err := db.setVlogGenerationRewriteQueue(queuedRewriteEntries); err != nil {
 					return fmt.Errorf("persist generational rewrite queue: %w", err)
 				}
-				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				rewriteQueue = append([]valueLogGenerationRewriteQueueEntry(nil), queuedRewriteEntries...)
+				processedRewriteIDs = valueLogGenerationRewriteQueueIDs(vlogGenerationRewriteQueueChunk(rewriteQueue, resumeBudgetBytes))
 			}
 			if len(processedRewriteIDs) > 0 {
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
@@ -10297,8 +10299,8 @@ planned:
 			rewriteBytesIn := int64(0)
 			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				rewriteBytesIn = int64(stats.BytesBefore)
-			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
-				rewriteBytesIn = rewritePlan.SelectedBytesLive
+			} else if len(processedRewriteIDs) > 0 {
+				rewriteBytesIn = valueLogGenerationRewriteQueueSelectedLiveBytes(rewriteQueue, processedRewriteIDs)
 			} else if maxSourceBytes > 0 {
 				rewriteBytesIn = maxSourceBytes
 			} else if stats.BytesBefore > 0 {
@@ -10313,8 +10315,8 @@ planned:
 			consumed := int64(0)
 			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				consumed = int64(stats.BytesBefore)
-			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
-				consumed = rewritePlan.SelectedBytesLive
+			} else if len(processedRewriteIDs) > 0 {
+				consumed = valueLogGenerationRewriteQueueSelectedLiveBytes(rewriteQueue, processedRewriteIDs)
 			} else if maxSourceBytes > 0 {
 				consumed = maxSourceBytes
 			} else if stats.BytesBefore > 0 {
@@ -10709,6 +10711,29 @@ func (db *DB) recordCheckpointCutover(d time.Duration) {
 			break
 		}
 	}
+}
+
+func (db *DB) vlogGenerationRewriteResumeBudgetBytes() int64 {
+	if db == nil {
+		return 0
+	}
+	budget := db.valueLogGenerationWarmTarget
+	if budget <= 0 {
+		budget = maxPositiveInt64
+	}
+	if db.vlogGenerationRewriteBudgetEnabled() {
+		tokens := db.vlogGenerationRewriteBudgetTokensBytes.Load()
+		if tokens <= 0 {
+			return 0
+		}
+		if tokens < budget {
+			budget = tokens
+		}
+	}
+	if budget < 0 {
+		return 0
+	}
+	return budget
 }
 
 const (
