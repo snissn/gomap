@@ -1,0 +1,84 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestBuildReportAndRenderMarkdown(t *testing.T) {
+	input := strings.NewReader(strings.Join([]string{
+		`{"Action":"output","Output":"BenchmarkCollectionInsertProvidedID-12\t1000\t2000 ns/op\t128 B/op\t4 allocs/op\n"}`,
+		`{"Action":"output","Output":"BenchmarkCollectionInsertProvidedID-12\t900\t2200 ns/op\t136 B/op\t5 allocs/op\n"}`,
+		`{"Action":"output","Output":"BenchmarkSecondaryLookupNonUnique-12\t5000\t450 ns/op\t96 B/op\t2 allocs/op\n"}`,
+		`{"Action":"output","Output":"BenchmarkCollectionDeleteWithSecondaryIndexes-12\t"}`,
+		`{"Action":"output","Output":"123\t9000 ns/op\t512 B/op\t8 allocs/op\n"}`,
+		`{"Action":"output","Output":"PASS\n"}`,
+	}, "\n"))
+
+	samples, err := parseBenchmarkSamples(input)
+	if err != nil {
+		t.Fatalf("parseBenchmarkSamples: %v", err)
+	}
+	if got, want := len(samples), 4; got != want {
+		t.Fatalf("len(samples)=%d want %d", got, want)
+	}
+
+	aggregates := aggregateSamples(samples)
+	insert := aggregates["BenchmarkCollectionInsertProvidedID"]
+	if got, want := insert.Samples, 2; got != want {
+		t.Fatalf("insert samples=%d want %d", got, want)
+	}
+	if got, want := insert.MeanNsPerOp, 2100.0; got != want {
+		t.Fatalf("insert mean ns/op=%v want %v", got, want)
+	}
+
+	rep := &report{
+		GeneratedAt:     "2026-03-05T00:00:00Z",
+		Status:          "ok",
+		ExecutionPath:   "oracle",
+		BenchmarkEngine: "cached",
+		Worktree:        "/tmp/oracle",
+		Branch:          "pr/oracle",
+		Commit:          "deadbeef",
+		RawJSONPath:     "/tmp/collections_bench.json",
+		Sections:        buildSections(aggregates),
+	}
+	md := renderMarkdown(rep)
+	if !strings.Contains(md, "- execution path: `oracle`") {
+		t.Fatalf("markdown missing execution path:\n%s", md)
+	}
+	if !strings.Contains(md, "- worktree: `/tmp/oracle`") {
+		t.Fatalf("markdown missing worktree:\n%s", md)
+	}
+	if !strings.Contains(md, "## Document Path") {
+		t.Fatalf("markdown missing document section:\n%s", md)
+	}
+	if !strings.Contains(md, "`BenchmarkSecondaryLookupNonUnique`") {
+		t.Fatalf("markdown missing secondary benchmark row:\n%s", md)
+	}
+}
+
+func TestBuildReportUnavailable(t *testing.T) {
+	rep, err := buildReport(config{
+		outDir:            t.TempDir(),
+		branch:            "pr/native-fastpath-r0-oracle-baseline",
+		commit:            "abc1234",
+		worktree:          "/tmp/native",
+		executionPath:     "native-fastpath",
+		benchmarkEngine:   "cached",
+		unavailableReason: "N/A before R0 harness bring-up",
+	})
+	if err != nil {
+		t.Fatalf("buildReport: %v", err)
+	}
+	if got, want := rep.Status, "unavailable"; got != want {
+		t.Fatalf("status=%q want %q", got, want)
+	}
+	if got, want := rep.UnavailableReason, "N/A before R0 harness bring-up"; got != want {
+		t.Fatalf("unavailableReason=%q want %q", got, want)
+	}
+	md := renderMarkdown(rep)
+	if !strings.Contains(md, "This branch does not currently contain a runnable collections benchmark harness.") {
+		t.Fatalf("markdown missing unavailable explanation:\n%s", md)
+	}
+}
