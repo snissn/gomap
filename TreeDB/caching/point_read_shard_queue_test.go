@@ -87,6 +87,7 @@ type countingBackend struct {
 	getCalls       int
 	getAppendCalls int
 	getManyCalls   int
+	lastGetMany    [][]byte
 }
 
 func (b *countingBackend) Get(_ []byte) ([]byte, error) {
@@ -101,6 +102,10 @@ func (b *countingBackend) GetAppend(_ []byte, dst []byte) ([]byte, error) {
 
 func (b *countingBackend) GetMany(keys [][]byte) ([][]byte, error) {
 	b.getManyCalls++
+	b.lastGetMany = make([][]byte, len(keys))
+	for i := range keys {
+		b.lastGetMany[i] = append([]byte(nil), keys[i]...)
+	}
 	out := make([][]byte, len(keys))
 	for i := range keys {
 		out[i] = []byte("backend")
@@ -541,6 +546,77 @@ func TestGetMany_UsesPublishedRootPointShardsAsAuthority(t *testing.T) {
 	}
 }
 
+func TestGetMany_DuplicateHitsReuseSingleProbeWithoutResultAliasing(t *testing.T) {
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	ct := &countingTable{inner: mt}
+	key := []byte("k")
+	ct.SetEntry(key, []byte("value"), page.ValuePtr{}, node.FlagInline)
+	db.memtables.Store(&memtableView{
+		rootPointShards: []rootDomainSnapshot{
+			{immutables: []memtable.Table{ct}},
+		},
+	})
+
+	got, err := db.GetMany([][]byte{key, key, key})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 3 || string(got[0]) != "value" || string(got[1]) != "value" || string(got[2]) != "value" {
+		t.Fatalf("unexpected GetMany values: %#v", got)
+	}
+	if ct.iterCalls != 1 {
+		t.Fatalf("expected one iterator probe, got %d", ct.iterCalls)
+	}
+	got[0][0] = 'X'
+	if string(got[1]) != "value" || string(got[2]) != "value" {
+		t.Fatalf("duplicate outputs must not alias: %#v", got)
+	}
+}
+
+func TestGetMany_DuplicateMissesCollapseToSingleBackendKey(t *testing.T) {
+	backend := &countingBackend{}
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	mt.Set([]byte("other"), []byte("v"))
+	db.memtables.Store(&memtableView{
+		rootPointShards: []rootDomainSnapshot{
+			{immutables: []memtable.Table{mt}},
+		},
+	})
+
+	key := []byte("missing")
+	got, err := db.GetMany([][]byte{key, key, key})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if len(got) != 3 || string(got[0]) != "backend" || string(got[1]) != "backend" || string(got[2]) != "backend" {
+		t.Fatalf("unexpected GetMany values: %#v", got)
+	}
+	if backend.getManyCalls != 1 {
+		t.Fatalf("expected one backend GetMany call, got %d", backend.getManyCalls)
+	}
+	if len(backend.lastGetMany) != 1 || string(backend.lastGetMany[0]) != "missing" {
+		t.Fatalf("expected one deduped backend key, got %#v", backend.lastGetMany)
+	}
+}
+
 func BenchmarkGetMany_PublishedRootPointShards(b *testing.B) {
 	cases := []struct {
 		name string
@@ -563,12 +639,36 @@ func BenchmarkGetMany_PublishedRootPointShards(b *testing.B) {
 				return keys
 			}(),
 		},
+		{
+			name: "duplicate256_hit",
+			keys: func() [][]byte {
+				keys := make([][]byte, 256)
+				for i := range keys {
+					keys[i] = []byte("k0")
+				}
+				return keys
+			}(),
+		},
+		{
+			name: "duplicate256_miss",
+			keys: func() [][]byte {
+				keys := make([][]byte, 256)
+				for i := range keys {
+					keys[i] = []byte("missing")
+				}
+				return keys
+			}(),
+		},
 	}
 
 	for _, tc := range cases {
 		b.Run(tc.name, func(b *testing.B) {
+			var backend BackendDB = &panicBackend{}
+			if tc.name == "duplicate256_miss" {
+				backend = &countingBackend{}
+			}
 			db := &DB{
-				backend:          panicBackend{},
+				backend:          backend,
 				mutableShards:    make([]memShard, 1),
 				mutableShardMask: 0,
 			}
