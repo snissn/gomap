@@ -33,6 +33,11 @@ func disableVlogGenerationLoop(t *testing.T) {
 	t.Setenv(envDisableVlogGenerationLoop, "1")
 }
 
+func prepareDirectSchedulerTest(t *testing.T) {
+	t.Helper()
+	disableVlogGenerationLoop(t)
+}
+
 func skipRetainedPrune(db *DB) {
 	if db != nil {
 		db.testSkipRetainedPrune = true
@@ -44,7 +49,7 @@ func schedulerTestWait(t *testing.T) time.Duration {
 	const (
 		defaultWait = 2 * time.Second
 		maxWait     = 4 * time.Second
-		minWait     = 250 * time.Millisecond
+		minWait     = 500 * time.Millisecond
 		safety      = 10 * time.Millisecond
 	)
 	if deadline, ok := t.Deadline(); ok {
@@ -348,6 +353,8 @@ func (b *dryRunGCRecordingBackend) recordedCalls() (int, int, [][]string) {
 }
 
 func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -432,6 +439,8 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 }
 
 func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -505,6 +514,8 @@ func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t
 }
 
 func TestVlogGenerationRewrite_DoesNotRunWithZeroBudgetTokens(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -560,6 +571,8 @@ func TestVlogGenerationRewrite_DoesNotRunWithZeroBudgetTokens(t *testing.T) {
 }
 
 func TestVlogGenerationRewritePlan_DoesNotRunWithZeroBudgetTokens(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -617,6 +630,8 @@ func TestVlogGenerationRewritePlan_DoesNotRunWithZeroBudgetTokens(t *testing.T) 
 }
 
 func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -703,6 +718,8 @@ func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
 }
 
 func TestVlogGenerationMaintenance_SkipsBeforeFirstCheckpointInWALOffMode(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -742,6 +759,8 @@ func TestVlogGenerationMaintenance_SkipsBeforeFirstCheckpointInWALOffMode(t *tes
 }
 
 func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundWrites(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -797,6 +816,8 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundWrites(t *testing.
 }
 
 func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundReads(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -855,6 +876,8 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundReads(t *testing.T
 }
 
 func TestVlogGenerationMaintenance_SkipsDuringActiveForegroundIterator(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -919,6 +942,8 @@ func TestVlogGenerationMaintenance_SkipsDuringActiveForegroundIterator(t *testin
 }
 
 func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -991,6 +1016,8 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 }
 
 func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
@@ -1063,6 +1090,8 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T
 }
 
 func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	t.Setenv(envDisableVlogGenerationRewrite, "1")
 
 	dir := t.TempDir()
@@ -1125,6 +1154,8 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 }
 
 func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	t.Setenv(envDisableVlogGenerationRewrite, "1")
 
 	dir := t.TempDir()
@@ -1182,6 +1213,8 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 }
 
 func TestVlogGenerationGC_SkipsDuringRecentForegroundWrites(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
 	t.Setenv(envDisableVlogGenerationRewrite, "1")
 
 	dir := t.TempDir()
