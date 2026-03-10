@@ -792,6 +792,67 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 	}
 }
 
+func TestVlogGenerationGC_AllowsQueuedWorkAfterMaintenanceCheckpoint(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		realGCStats: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: 64},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	db.mu.Lock()
+	setMutable(db, []byte("queued"), []byte("value"))
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	queueLenBefore := len(db.queue)
+	db.mu.Unlock()
+	if queueLenBefore == 0 {
+		t.Fatalf("queue len before=%d want > 0", queueLenBefore)
+	}
+
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:                 true,
+		skipRetainedPruneWait:       true,
+		allowQueuedGCPostCheckpoint: true,
+	})
+
+	if dryCalls, realCalls, _ := recorder.recordedCalls(); dryCalls != 0 || realCalls != 1 {
+		t.Fatalf("gc calls dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
+	}
+	if got := db.checkpointRuns.Load(); got < 1 {
+		t.Fatalf("checkpoint runs=%d want >=1", got)
+	}
+	if got := len(db.queue); got != 0 {
+		t.Fatalf("queue len after=%d want 0", got)
+	}
+	if view := db.memtables.Load(); view != nil && len(view.queue) != 0 {
+		t.Fatalf("published queue len after=%d want 0", len(view.queue))
+	}
+}
+
 func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

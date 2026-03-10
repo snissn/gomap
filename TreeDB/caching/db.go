@@ -10006,9 +10006,10 @@ func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
 }
 
 type vlogGenerationMaintenanceOptions struct {
-	bypassQuiet           bool
-	skipRetainedPruneWait bool
-	skipCheckpoint        bool
+	bypassQuiet                 bool
+	skipRetainedPruneWait       bool
+	skipCheckpoint              bool
+	allowQueuedGCPostCheckpoint bool
 }
 
 func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
@@ -10348,8 +10349,10 @@ planned:
 	// GC is a best-effort background maintenance task. It requires a checkpoint
 	// barrier to be safe, and that barrier can be very expensive during sustained
 	// ingest/restore when the flush queue is non-empty. Avoid introducing long
-	// stalls by only running the GC path when the cached write queue is drained.
-	if queueLen != 0 {
+	// stalls by only running the generic periodic GC path when the cached write
+	// queue is drained. Checkpoint-kicked GC may re-evaluate queue emptiness
+	// after its maintenance checkpoint so it can consume a just-flushed queue.
+	if queueLen != 0 && !opts.allowQueuedGCPostCheckpoint {
 		return
 	}
 	gcer, ok := db.backend.(backendValueLogGCer)
@@ -10371,6 +10374,15 @@ planned:
 		skipCheckpoint:        opts.skipCheckpoint,
 		skipRetainedPruneWait: opts.skipRetainedPruneWait,
 	}, func() error {
+		if opts.allowQueuedGCPostCheckpoint {
+			postCheckpointQueueLen := 0
+			if view := db.memtables.Load(); view != nil {
+				postCheckpointQueueLen = len(view.queue)
+			}
+			if postCheckpointQueueLen != 0 {
+				return nil
+			}
+		}
 		if needEligibilityEstimate {
 			gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
 			if err != nil {
@@ -10451,8 +10463,9 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 			return
 		}
 		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
-			bypassQuiet:           true,
-			skipRetainedPruneWait: true,
+			bypassQuiet:                 true,
+			skipRetainedPruneWait:       true,
+			allowQueuedGCPostCheckpoint: true,
 			// Checkpoint-triggered maintenance still needs a fresh serialized
 			// backend view before iterator-based rewrite/GC scans run. Re-entering
 			// Checkpoint here is safe: the just-finished caller has already cleared
