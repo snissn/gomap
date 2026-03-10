@@ -1015,3 +1015,85 @@ func TestPublishInstalledRootSet_PublishesSystemDescriptorRunWithoutBackendBatch
 		t.Fatalf("installed system root id=%d want %d", got, want)
 	}
 }
+
+func TestPublishInstalledRootSet_RetriesWholeGroupedPrimaryIndexStateSecondaryAndSystem(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 3),
+		mutableShardMask: 3,
+	}
+
+	setA := &publishedRootSet{
+		generation: 30,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "p-old"}), rootID: 301},
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "index-state/doc", value: "s-old"}), rootID: 302},
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "secondary/email", value: "i-old"}), rootID: 303},
+		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/catalog", value: "c-old"}), rootID: 304,
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/doc", value: "it-old"}), rootID: 305,
+		},
+	}
+	setB := &publishedRootSet{
+		generation: 31,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "p-new"}), rootID: 311},
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "index-state/doc", value: "s-new"}), rootID: 312},
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "secondary/email", value: "i-new"}), rootID: 313},
+		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/catalog", value: "c-new"}), rootID: 314,
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/doc", value: "it-new"}), rootID: 315,
+		},
+	}
+
+	db.mu.Lock()
+	if !db.installPublishedRootSetLocked(setA) {
+		db.mu.Unlock()
+		t.Fatal("expected initial grouped install to succeed")
+	}
+	db.rootPublishHook = func(*rootPublishGroup) error { return errors.New("boom") }
+	err := db.publishInstalledRootSetLocked(setB)
+	viewAfterFail := db.retainMemtableView()
+	db.rootPublishHook = nil
+	db.mu.Unlock()
+	if err == nil {
+		t.Fatal("expected grouped publish failure")
+	}
+	if viewAfterFail == nil {
+		t.Fatal("expected retained view after failed grouped publish")
+	}
+	defer db.releaseMemtableView(viewAfterFail)
+
+	assertRootDomainVisibleValue(t, viewAfterFail.rootPointShards[0], "primary/doc", "p-old")
+	assertRootDomainVisibleValue(t, viewAfterFail.rootPointShards[1], "index-state/doc", "s-old")
+	assertRootDomainVisibleValue(t, viewAfterFail.rootPointShards[2], "secondary/email", "i-old")
+	assertRootDomainVisibleValue(t, viewAfterFail.rootSystem, "sys/catalog", "c-old")
+	assertRootDomainVisibleValue(t, viewAfterFail.rootIterator, "iter/doc", "it-old")
+
+	db.mu.Lock()
+	if err := db.publishInstalledRootSetLocked(setB); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("retry grouped publish: %v", err)
+	}
+	viewAfterRetry := db.retainMemtableView()
+	stats := db.rootDomainPublishStatsSnapshot()
+	db.mu.Unlock()
+	if viewAfterRetry == nil {
+		t.Fatal("expected retained view after retry")
+	}
+	defer db.releaseMemtableView(viewAfterRetry)
+
+	assertRootDomainVisibleValue(t, viewAfterRetry.rootPointShards[0], "primary/doc", "p-new")
+	assertRootDomainVisibleValue(t, viewAfterRetry.rootPointShards[1], "index-state/doc", "s-new")
+	assertRootDomainVisibleValue(t, viewAfterRetry.rootPointShards[2], "secondary/email", "i-new")
+	assertRootDomainVisibleValue(t, viewAfterRetry.rootSystem, "sys/catalog", "c-new")
+	assertRootDomainVisibleValue(t, viewAfterRetry.rootIterator, "iter/doc", "it-new")
+	if stats.retrySuccesses != 1 {
+		t.Fatalf("retrySuccesses=%d want 1", stats.retrySuccesses)
+	}
+}
