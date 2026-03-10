@@ -43,6 +43,17 @@ type rootDomainSnapshot struct {
 	immutables      []memtable.Table // oldest-to-newest
 }
 
+type publishedRootRef struct {
+	lookup rootDomainLookup
+	rootID uint64
+}
+
+type publishedRootSet struct {
+	generation  uint64
+	pointShards []publishedRootRef
+	iterator    publishedRootRef
+}
+
 type rootDomainProbeResult struct {
 	val   []byte
 	ptr   page.ValuePtr
@@ -399,10 +410,21 @@ func rootDomainSnapshotFromCachedSnapshot(s *Snapshot, key []byte) rootDomainSna
 	if shardIdx >= 0 && shardIdx < len(s.rootPointShards) {
 		snap = s.rootPointShards[shardIdx]
 	}
-	if s.rootPublished != nil {
-		snap.published = s.rootPublished
-		snap.publishedRootID = s.rootPublishedRootID
-	} else if s.backend != nil {
+	if s.publishedRoots != nil {
+		ref := publishedRootRef{}
+		switch {
+		case shardIdx >= 0 && shardIdx < len(s.publishedRoots.pointShards):
+			ref = s.publishedRoots.pointShards[shardIdx]
+		case len(s.publishedRoots.pointShards) == 1:
+			ref = s.publishedRoots.pointShards[0]
+		}
+		if ref.lookup != nil {
+			snap.published = ref.lookup
+			snap.publishedRootID = ref.rootID
+			return snap
+		}
+	}
+	if s.backend != nil {
 		snap.published = backendSnapshotLookup{snapshot: s.backend}
 		if state := s.backend.State(); state != nil {
 			snap.publishedRootID = state.RootPageID
@@ -416,10 +438,12 @@ func rootDomainIteratorSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapsho
 		return rootDomainSnapshot{}
 	}
 	snap := s.rootIterator
-	if s.rootPublished != nil {
-		snap.published = s.rootPublished
-		snap.publishedRootID = s.rootPublishedRootID
-	} else if s.backend != nil {
+	if s.publishedRoots != nil && s.publishedRoots.iterator.lookup != nil {
+		snap.published = s.publishedRoots.iterator.lookup
+		snap.publishedRootID = s.publishedRoots.iterator.rootID
+		return snap
+	}
+	if s.backend != nil {
 		snap.published = backendSnapshotLookup{snapshot: s.backend}
 		if state := s.backend.State(); state != nil {
 			snap.publishedRootID = state.RootPageID

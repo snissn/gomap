@@ -25,14 +25,13 @@ import (
 // Mutable memtables are intentionally ignored so that writes after AcquireSnapshot
 // are not visible through the snapshot.
 type Snapshot struct {
-	db                  *DB
-	view                *memtableView
-	backend             *backenddb.Snapshot
-	rootVersion         uint64
-	rootPointShards     []rootDomainSnapshot
-	rootIterator        rootDomainSnapshot
-	rootPublished       rootDomainLookup
-	rootPublishedRootID uint64
+	db              *DB
+	view            *memtableView
+	backend         *backenddb.Snapshot
+	rootVersion     uint64
+	rootPointShards []rootDomainSnapshot
+	rootIterator    rootDomainSnapshot
+	publishedRoots  *publishedRootSet
 
 	closeOnce sync.Once
 	closeErr  error
@@ -114,9 +113,22 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		snap.rootPointShards = view.rootSnapshotShards
 		snap.rootIterator = view.rootIterator
 	}
-	snap.rootPublished = backendSnapshotLookup{snapshot: backendSnap}
+	rootRef := publishedRootRef{lookup: backendSnapshotLookup{snapshot: backendSnap}}
 	if state := backendSnap.State(); state != nil {
-		snap.rootPublishedRootID = state.RootPageID
+		rootRef.rootID = state.RootPageID
+	}
+	pointCount := len(db.mutableShards)
+	if pointCount == 0 && view != nil {
+		pointCount = len(view.rootSnapshotShards)
+	}
+	pointShards := make([]publishedRootRef, pointCount)
+	for i := range pointShards {
+		pointShards[i] = rootRef
+	}
+	snap.publishedRoots = &publishedRootSet{
+		generation:  snap.rootVersion,
+		pointShards: pointShards,
+		iterator:    rootRef,
 	}
 	return snap
 }
@@ -151,8 +163,7 @@ func (s *Snapshot) Close() error {
 		}
 		s.rootPointShards = nil
 		s.rootIterator = rootDomainSnapshot{}
-		s.rootPublished = nil
-		s.rootPublishedRootID = 0
+		s.publishedRoots = nil
 		s.rootVersion = 0
 		s.closeErr = errors.Join(errs...)
 	})
