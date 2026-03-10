@@ -3,6 +3,7 @@ package caching
 import (
 	"testing"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 )
@@ -190,6 +191,80 @@ func TestRootDomainSnapshotFromMemtableView_ForSnapshotReadsExcludesMutableRun(t
 	assertRootDomainVisibleValue(t, snap, "k", "queue")
 	if snap.mutable != nil {
 		t.Fatal("expected snapshot view to exclude mutable run")
+	}
+}
+
+func TestRootDomainSnapshotFromCachedSnapshot_IncludesPublishedBackendState(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	if err := backend.SetSync([]byte("k"), []byte("backend-v")); err != nil {
+		t.Fatalf("set backend value: %v", err)
+	}
+
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		t.Fatal("expected backend snapshot")
+	}
+	defer backendSnap.Close()
+
+	snap := &Snapshot{backend: backendSnap}
+	rootSnap := rootDomainSnapshotFromCachedSnapshot(snap, []byte("k"))
+	if got, want := rootSnap.publishedRootID, backendSnap.State().RootPageID; got != want {
+		t.Fatalf("publishedRootID=%d want %d", got, want)
+	}
+	assertRootDomainVisibleValue(t, rootSnap, "k", "backend-v")
+}
+
+func TestRootDomainSnapshotFromCachedSnapshot_QueueTombstoneBeatsPublishedState(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	if err := backend.SetSync([]byte("k"), []byte("backend-v")); err != nil {
+		t.Fatalf("set backend value: %v", err)
+	}
+
+	backendSnap := backend.AcquireSnapshot()
+	if backendSnap == nil {
+		t.Fatal("expected backend snapshot")
+	}
+	defer backendSnap.Close()
+
+	view := &memtableView{
+		mutables: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "mutable-v"}),
+		},
+		queue: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "k", tombstone: true}),
+		},
+		queueShardIDs: []uint16{0},
+	}
+	snap := &Snapshot{
+		db: &DB{
+			mutableShards:    make([]memShard, 1),
+			mutableShardMask: 0,
+		},
+		view:    view,
+		backend: backendSnap,
+	}
+	rootSnap := rootDomainSnapshotFromCachedSnapshot(snap, []byte("k"))
+	if rootSnap.mutable != nil {
+		t.Fatal("expected cached snapshot tuple to exclude mutable run")
+	}
+	if rootSnap.hasVisibleKey([]byte("k")) {
+		t.Fatal("expected queue tombstone to hide published backend state")
 	}
 }
 
