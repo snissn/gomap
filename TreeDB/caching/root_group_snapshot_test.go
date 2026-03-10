@@ -3,6 +3,8 @@ package caching
 import (
 	"encoding/binary"
 	"testing"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func rootGroupTestShardKey(t *testing.T, db *DB, shard int) []byte {
@@ -70,4 +72,114 @@ func TestRootDomainIteratorSnapshotFromCachedSnapshot_UsesPinnedPublishedSet(t *
 		t.Fatalf("iterator published id=%d want 303", iterSnap.publishedRootID)
 	}
 	assertRootDomainVisibleValue(t, iterSnap, "iter/a", "published-a")
+}
+
+func TestAcquireSnapshot_PinsInstalledPublishedRootSet(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 2),
+		mutableShardMask: 1,
+	}
+
+	key0 := rootGroupTestShardKey(t, db, 0)
+	key1 := rootGroupTestShardKey(t, db, 1)
+	setA := &publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key0), value: "a0"}), rootID: 101},
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key1), value: "a1"}), rootID: 202},
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "aiter"}),
+			rootID: 303,
+		},
+	}
+	setB := &publishedRootSet{
+		generation: 2,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key0), value: "b0"}), rootID: 111},
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key1), value: "b1"}), rootID: 222},
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "biter"}),
+			rootID: 333,
+		},
+	}
+
+	db.mu.Lock()
+	db.installPublishedRootSetLocked(setA)
+	db.mu.Unlock()
+
+	snapA := db.AcquireSnapshot()
+	if snapA == nil {
+		t.Fatal("expected snapshot A")
+	}
+	defer snapA.Close()
+
+	db.mu.Lock()
+	db.installPublishedRootSetLocked(setB)
+	db.mu.Unlock()
+
+	snapB := db.AcquireSnapshot()
+	if snapB == nil {
+		t.Fatal("expected snapshot B")
+	}
+	defer snapB.Close()
+
+	rootA0 := rootDomainSnapshotFromCachedSnapshot(snapA, key0)
+	rootA1 := rootDomainSnapshotFromCachedSnapshot(snapA, key1)
+	iterA := rootDomainIteratorSnapshotFromCachedSnapshot(snapA)
+	assertRootDomainVisibleValue(t, rootA0, string(key0), "a0")
+	assertRootDomainVisibleValue(t, rootA1, string(key1), "a1")
+	assertRootDomainVisibleValue(t, iterA, "iter/a", "aiter")
+	if rootA0.publishedRootID != 101 || rootA1.publishedRootID != 202 || iterA.publishedRootID != 303 {
+		t.Fatalf("unexpected snapshot A published ids: %d %d %d", rootA0.publishedRootID, rootA1.publishedRootID, iterA.publishedRootID)
+	}
+
+	rootB0 := rootDomainSnapshotFromCachedSnapshot(snapB, key0)
+	rootB1 := rootDomainSnapshotFromCachedSnapshot(snapB, key1)
+	iterB := rootDomainIteratorSnapshotFromCachedSnapshot(snapB)
+	assertRootDomainVisibleValue(t, rootB0, string(key0), "b0")
+	assertRootDomainVisibleValue(t, rootB1, string(key1), "b1")
+	assertRootDomainVisibleValue(t, iterB, "iter/a", "biter")
+	if rootB0.publishedRootID != 111 || rootB1.publishedRootID != 222 || iterB.publishedRootID != 333 {
+		t.Fatalf("unexpected snapshot B published ids: %d %d %d", rootB0.publishedRootID, rootB1.publishedRootID, iterB.publishedRootID)
+	}
+}
+
+func TestAcquireSnapshot_FallsBackToBackendPublishedSetWithoutInstalledGroup(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	if err := backend.SetSync([]byte("k"), []byte("backend-v")); err != nil {
+		t.Fatalf("backend set: %v", err)
+	}
+
+	db := &DB{
+		backend:       backend,
+		mutableShards: make([]memShard, 1),
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+
+	rootSnap := rootDomainSnapshotFromCachedSnapshot(snap, []byte("k"))
+	assertRootDomainVisibleValue(t, rootSnap, "k", "backend-v")
+	if rootSnap.publishedRootID == 0 {
+		t.Fatal("expected backend published root id")
+	}
 }
