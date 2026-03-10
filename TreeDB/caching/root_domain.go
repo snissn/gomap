@@ -503,6 +503,42 @@ func probeRootDomainTableSorted(mt memtable.Table, keys [][]byte, out []rootDoma
 	return it.Error()
 }
 
+func probeRootDomainTableSortedRefs(mt memtable.Table, refs []getManyProbeRef, out []rootDomainProbeResult) error {
+	if mt == nil || len(refs) == 0 {
+		return nil
+	}
+	it := mt.NewIterator(refs[0].key, nil)
+	defer func() { _ = it.Close() }()
+
+	refIdx := 0
+	for refIdx < len(refs) && it.Valid() {
+		for refIdx < len(refs) && out[refIdx].found {
+			refIdx++
+		}
+		if refIdx >= len(refs) {
+			break
+		}
+		cmp := bytes.Compare(it.UnsafeKey(), refs[refIdx].key)
+		switch {
+		case cmp < 0:
+			it.Next()
+		case cmp > 0:
+			refIdx++
+		default:
+			val, ptr, flags := it.UnsafeEntry()
+			out[refIdx] = rootDomainProbeResult{
+				val:   val,
+				ptr:   ptr,
+				flags: flags,
+				found: true,
+			}
+			refIdx++
+			it.Next()
+		}
+	}
+	return it.Error()
+}
+
 func (s rootDomainSnapshot) getManySorted(keys [][]byte, out []rootDomainProbeResult) error {
 	if len(keys) == 0 {
 		return nil
@@ -515,6 +551,24 @@ func (s rootDomainSnapshot) getManySorted(keys [][]byte, out []rootDomainProbeRe
 	}
 	for idx := len(s.immutables) - 1; idx >= 0; idx-- {
 		if err := probeRootDomainTableSorted(s.immutables[idx], keys, out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s rootDomainSnapshot) getManySortedRefs(refs []getManyProbeRef, out []rootDomainProbeResult) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	if len(refs) != len(out) {
+		return errors.New("cachingdb: root-domain sorted ref probe input/output length mismatch")
+	}
+	if err := probeRootDomainTableSortedRefs(s.mutable, refs, out); err != nil {
+		return err
+	}
+	for idx := len(s.immutables) - 1; idx >= 0; idx-- {
+		if err := probeRootDomainTableSortedRefs(s.immutables[idx], refs, out); err != nil {
 			return err
 		}
 	}

@@ -14504,6 +14504,17 @@ type getManyProbeRef struct {
 	shard int
 }
 
+func copyGetManyValueToRefs(out [][]byte, refs []getManyProbeRef, val []byte) {
+	if val == nil {
+		return
+	}
+	for _, ref := range refs {
+		cpy := make([]byte, len(val))
+		copy(cpy, val)
+		out[ref.idx] = cpy
+	}
+}
+
 func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
 	if view == nil || len(view.rootPointShards) == 0 {
@@ -14525,12 +14536,12 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 	})
 
 	unique := make([]getManyProbeRef, 0, len(refs))
-	refToUnique := make([]int, len(refs))
+	groupStarts := make([]int, 0, len(refs))
 	for i, ref := range refs {
 		if len(unique) == 0 || ref.shard != unique[len(unique)-1].shard || !bytes.Equal(ref.key, unique[len(unique)-1].key) {
 			unique = append(unique, ref)
+			groupStarts = append(groupStarts, i)
 		}
-		refToUnique[i] = len(unique) - 1
 	}
 
 	results := make([]rootDomainProbeResult, len(unique))
@@ -14541,11 +14552,7 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 		for end < len(unique) && unique[end].shard == shard {
 			end++
 		}
-		keysForShard := make([][]byte, end-start)
-		for i := start; i < end; i++ {
-			keysForShard[i-start] = unique[i].key
-		}
-		if err := view.rootPointShards[shard].getManySorted(keysForShard, results[start:end]); err != nil {
+		if err := view.rootPointShards[shard].getManySortedRefs(unique[start:end], results[start:end]); err != nil {
 			return nil, err
 		}
 		start = end
@@ -14553,28 +14560,31 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 
 	backendIdx := make([]int, 0, len(unique))
 	backendKeys := make([][]byte, 0, len(unique))
-	uniqueVals := make([][]byte, len(unique))
 	for i, res := range results {
+		groupEnd := len(refs)
+		if i+1 < len(groupStarts) {
+			groupEnd = groupStarts[i+1]
+		}
+		groupRefs := refs[groupStarts[i]:groupEnd]
 		switch {
 		case !res.found:
 			backendIdx = append(backendIdx, i)
 			backendKeys = append(backendKeys, unique[i].key)
 		case res.flags&node.FlagTombstone != 0:
-			uniqueVals[i] = nil
 		case res.flags&node.FlagPointer != 0:
 			if res.val != nil {
-				uniqueVals[i] = res.val
+				copyGetManyValueToRefs(out, groupRefs, res.val)
 				break
 			}
 			readVal, err := db.readValueLog(unique[i].key, res.ptr)
 			if err != nil {
 				return nil, err
 			}
-			uniqueVals[i] = readVal
+			copyGetManyValueToRefs(out, groupRefs, readVal)
 		case res.val == nil:
-			uniqueVals[i] = []byte{}
+			copyGetManyValueToRefs(out, groupRefs, []byte{})
 		default:
-			uniqueVals[i] = res.val
+			copyGetManyValueToRefs(out, groupRefs, res.val)
 		}
 	}
 	if len(backendKeys) > 0 {
@@ -14586,17 +14596,12 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 			return nil, fmt.Errorf("cachingdb: backend GetMany returned %d values for %d keys", len(backendVals), len(backendKeys))
 		}
 		for i, uniqueIdx := range backendIdx {
-			uniqueVals[uniqueIdx] = backendVals[i]
+			groupEnd := len(refs)
+			if uniqueIdx+1 < len(groupStarts) {
+				groupEnd = groupStarts[uniqueIdx+1]
+			}
+			copyGetManyValueToRefs(out, refs[groupStarts[uniqueIdx]:groupEnd], backendVals[i])
 		}
-	}
-	for i, ref := range refs {
-		val := uniqueVals[refToUnique[i]]
-		if val == nil {
-			continue
-		}
-		cpy := make([]byte, len(val))
-		copy(cpy, val)
-		out[ref.idx] = cpy
 	}
 	return out, nil
 }
