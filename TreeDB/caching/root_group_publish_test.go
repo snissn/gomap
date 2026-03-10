@@ -18,7 +18,13 @@ type panicBatchSystemPublishBackend struct {
 	orderedPublishes int
 	orderedBaseRoot  uint64
 	orderedValues    map[string]string
+	orderedCalls     []orderedRootPublishCall
 	orderedErr       error
+}
+
+type orderedRootPublishCall struct {
+	baseRoot uint64
+	values   map[string]string
 }
 
 func (b *panicBatchSystemPublishBackend) State() *backenddb.DBState {
@@ -58,6 +64,14 @@ func (b *panicBatchSystemPublishBackend) PublishOrderedRootIterator(baseRoot uin
 	}
 	b.orderedPublishes++
 	b.orderedBaseRoot = baseRoot
+	callValues := make(map[string]string, len(b.orderedValues))
+	for k, v := range b.orderedValues {
+		callValues[k] = v
+	}
+	b.orderedCalls = append(b.orderedCalls, orderedRootPublishCall{
+		baseRoot: baseRoot,
+		values:   callValues,
+	})
 	if b.state.RootPageID == 0 {
 		b.state.RootPageID = 1
 	} else {
@@ -1165,6 +1179,139 @@ func TestPublishInstalledRootSet_IteratorRootPublishFailureKeepsPreviousGenerati
 	}
 }
 
+func TestPublishInstalledRootSet_WarmGroupedNonSystemRoots_PublishesAtomically(t *testing.T) {
+	backend := &panicBatchSystemPublishBackend{
+		state: backenddb.DBState{RootPageID: 90},
+	}
+	oldPoint := newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "old-p"})
+	oldIter := newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "old-i"})
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootPointStates: []rootDomainState{{
+			published:       oldPoint,
+			publishedRootID: 90,
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}),
+			},
+		}},
+		rootIteratorState: rootDomainState{
+			published:       oldIter,
+			publishedRootID: 91,
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-i"}),
+			},
+		},
+	}
+	if !db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{
+			{lookup: oldPoint, rootID: 90},
+		},
+		iterator: publishedRootRef{lookup: oldIter, rootID: 91},
+	}) {
+		t.Fatal("expected initial install")
+	}
+
+	if err := db.publishInstalledRootSet(&publishedRootSet{
+		generation: 2,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}), rootID: 90},
+		},
+		iterator: publishedRootRef{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-i"}), rootID: 91},
+	}); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+
+	if backend.orderedPublishes != 2 {
+		t.Fatalf("orderedPublishes=%d want 2", backend.orderedPublishes)
+	}
+	if len(backend.orderedCalls) != 2 {
+		t.Fatalf("orderedCalls=%d want 2", len(backend.orderedCalls))
+	}
+	if got := backend.orderedCalls[0].values["primary/doc"]; got != "new-p" {
+		t.Fatalf("first ordered publish value=%q want new-p", got)
+	}
+	if got := backend.orderedCalls[1].values["iter/a"]; got != "new-i" {
+		t.Fatalf("second ordered publish value=%q want new-i", got)
+	}
+	if db.rootPublishedSet == nil {
+		t.Fatal("expected installed published root set")
+	}
+	if got := db.rootPublishedSet.generation; got != 2 {
+		t.Fatalf("generation=%d want 2", got)
+	}
+	if db.rootPublishedSet.pointShards[0].rootID == 90 {
+		t.Fatal("expected point shard root id to advance")
+	}
+	if db.rootPublishedSet.iterator.rootID == 91 {
+		t.Fatal("expected iterator root id to advance")
+	}
+}
+
+func TestPublishInstalledRootSet_WarmGroupedNonSystemRoots_FailureKeepsPreviousGeneration(t *testing.T) {
+	backend := &panicBatchSystemPublishBackend{
+		state:      backenddb.DBState{RootPageID: 90},
+		orderedErr: errors.New("boom"),
+	}
+	oldPoint := newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "old-p"})
+	oldIter := newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "old-i"})
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootPointStates: []rootDomainState{{
+			published:       oldPoint,
+			publishedRootID: 90,
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}),
+			},
+		}},
+		rootIteratorState: rootDomainState{
+			published:       oldIter,
+			publishedRootID: 91,
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-i"}),
+			},
+		},
+	}
+	if !db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{
+			{lookup: oldPoint, rootID: 90},
+		},
+		iterator: publishedRootRef{lookup: oldIter, rootID: 91},
+	}) {
+		t.Fatal("expected initial install")
+	}
+
+	if err := db.publishInstalledRootSet(&publishedRootSet{
+		generation: 2,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "primary/doc", value: "new-p"}), rootID: 90},
+		},
+		iterator: publishedRootRef{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-i"}), rootID: 91},
+	}); err == nil {
+		t.Fatal("expected grouped non-system publish failure")
+	}
+	if db.rootPublishedSet == nil {
+		t.Fatal("expected prior published root set")
+	}
+	if got := db.rootPublishedSet.generation; got != 1 {
+		t.Fatalf("generation=%d want 1", got)
+	}
+	if got := db.rootPublishedSet.pointShards[0].rootID; got != 90 {
+		t.Fatalf("point root id=%d want 90", got)
+	}
+	if got := db.rootPublishedSet.iterator.rootID; got != 91 {
+		t.Fatalf("iterator root id=%d want 91", got)
+	}
+	if !db.rootPublishRetryPending {
+		t.Fatal("expected retry pending")
+	}
+}
+
 func TestPublishInstalledRootSet_RetriesWholeGroupedPrimaryIndexStateSecondaryAndSystem(t *testing.T) {
 	db := &DB{
 		mutableShards:    make([]memShard, 3),
@@ -1300,6 +1447,55 @@ func BenchmarkPublishInstalledRootSet_GroupedSystemRootPublish(b *testing.B) {
 		b.Fatalf("nativeSystemPublishes=%d want %d", stats.nativeSystemPublishes, b.N)
 	}
 	b.ReportMetric(float64(stats.nativeSystemPublishes), "native_system_publishes")
+}
+
+func BenchmarkPublishInstalledRootSet_GroupedNonSystemOrderedPublish(b *testing.B) {
+	oldPrimary := newRootDomainBenchTable(b, rootDomainTestOp{key: "primary/doc", value: "p-old"})
+	oldIter := newRootDomainBenchTable(b, rootDomainTestOp{key: "iter/doc", value: "it-old"})
+	newPrimary := newRootDomainBenchTable(b, rootDomainTestOp{key: "primary/doc", value: "p-new"})
+	newIter := newRootDomainBenchTable(b, rootDomainTestOp{key: "iter/doc", value: "it-new"})
+
+	backend := &panicBatchSystemPublishBackend{
+		state: backenddb.DBState{RootPageID: 1000},
+	}
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootPointStates: []rootDomainState{{
+			published:       oldPrimary,
+			publishedRootID: 1001,
+			immutables:      []memtable.Table{newPrimary},
+		}},
+		rootIteratorState: rootDomainState{
+			published:       oldIter,
+			publishedRootID: 1002,
+			immutables:      []memtable.Table{newIter},
+		},
+	}
+
+	template := publishedRootSet{
+		pointShards: []publishedRootRef{
+			{lookup: newPrimary, rootID: 1001},
+		},
+		iterator: publishedRootRef{
+			lookup: newIter,
+			rootID: 1002,
+		},
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		set := template
+		set.generation = uint64(i + 1)
+		if err := db.publishInstalledRootSet(&set); err != nil {
+			b.Fatalf("publishInstalledRootSet: %v", err)
+		}
+		if backend.orderedPublishes != (i+1)*2 {
+			b.Fatalf("orderedPublishes=%d want %d", backend.orderedPublishes, (i+1)*2)
+		}
+	}
+	b.ReportMetric(float64(backend.orderedPublishes), "native_ordered_publishes")
 }
 
 func newRootDomainBenchTable(b *testing.B, ops ...rootDomainTestOp) memtable.Table {
