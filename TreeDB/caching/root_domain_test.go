@@ -320,6 +320,54 @@ func TestRawIteratorRootDomainSnapshot_CopiesQueuedRunsAndRanges(t *testing.T) {
 	}
 }
 
+func TestRawPointRootDomainEntry_NewestWinsAcrossMutableAndQueue(t *testing.T) {
+	t.Parallel()
+
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	db.mutableShards[0].mem = newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "mutable"})
+	db.queue = []memtable.Table{
+		newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "older"}),
+		newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "newer"}),
+	}
+	db.queueShardIDs = []uint16{0, 0}
+
+	val, _, flags, found := db.rawPointRootDomainEntry([]byte("k"))
+	if !found {
+		t.Fatal("expected raw point entry hit")
+	}
+	if flags != node.FlagInline {
+		t.Fatalf("flags=%08b want inline", flags)
+	}
+	if string(val) != "mutable" {
+		t.Fatalf("value=%q want %q", string(val), "mutable")
+	}
+}
+
+func TestRawPointRootDomainEntry_TombstoneHidesOlderQueue(t *testing.T) {
+	t.Parallel()
+
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		queue: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "older"}),
+			newRootDomainTestTable(t, rootDomainTestOp{key: "k", tombstone: true}),
+		},
+		queueShardIDs: []uint16{0, 0},
+	}
+
+	_, _, flags, found := db.rawPointRootDomainEntry([]byte("k"))
+	if !found {
+		t.Fatal("expected raw point entry hit")
+	}
+	if flags&node.FlagTombstone == 0 {
+		t.Fatalf("flags=%08b want tombstone", flags)
+	}
+}
+
 func TestRootDomainSnapshotFromCachedSnapshot_QueueTombstoneBeatsPublishedState(t *testing.T) {
 	t.Parallel()
 
