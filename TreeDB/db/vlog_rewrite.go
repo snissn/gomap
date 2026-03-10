@@ -451,9 +451,12 @@ func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[
 		db.rewritePlanLiveBytesMu.RUnlock()
 		return nil, false
 	}
-	liveByID := cloneValueLogLiveBytesMap(db.rewritePlanLiveBytesCache.liveByID)
+	// The cached live-byte map is published by clone-and-replace and never mutated
+	// in place after publication, so it is safe to snapshot the map header under
+	// RLock and clone outside the lock to minimize writer blockage.
+	liveByID := db.rewritePlanLiveBytesCache.liveByID
 	db.rewritePlanLiveBytesMu.RUnlock()
-	return liveByID, true
+	return cloneValueLogLiveBytesMap(liveByID), true
 }
 
 func cloneValueLogLiveBytesMap(src map[uint32]int64) map[uint32]int64 {
