@@ -375,6 +375,12 @@ Do not advance a phase unless all of the following are true.
 
 - raw TreeDB anchors were rerun if the phase can affect TreeDB fast paths,
 - collection-focused benches were rerun if the phase can affect collections,
+- before collections is reintroduced on the rewrite branch, seam-level
+  microbenches are supplemental only and do not replace the raw end-to-end
+  TreeDB anchor bundle,
+- before collections is reintroduced on the rewrite branch, every relevant
+  perf review must attach the full raw TreeDB `fast`, `wal_on_fast`, and
+  `flushdrain` snapshot bundle for that branch tip,
 - mixed-under-debt and settled-after-checkpoint behavior were both considered
   when relevant,
 - deferred-work behavior was measured if the phase could shift work across the
