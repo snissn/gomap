@@ -1,6 +1,9 @@
 package caching
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestInstallPublishedRootSetLocked_PublishesOnePinnedGeneration(t *testing.T) {
 	db := &DB{
@@ -210,5 +213,138 @@ func TestInstallPublishedRootSetLocked_RejectsStaleGeneration(t *testing.T) {
 	}
 	if stats.staleRejects != 1 {
 		t.Fatalf("staleRejects=%d want 1", stats.staleRejects)
+	}
+	if stats.publishFailures != 0 {
+		t.Fatalf("publishFailures=%d want 0", stats.publishFailures)
+	}
+}
+
+func TestPublishInstalledRootSetLocked_HookFailureKeepsPreviousGeneration(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 2),
+		mutableShardMask: 1,
+	}
+	key0 := rootGroupTestShardKey(t, db, 0)
+	key1 := rootGroupTestShardKey(t, db, 1)
+
+	setA := &publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key0), value: "a0"}), rootID: 101},
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key1), value: "a1"}), rootID: 202},
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "aiter"}), rootID: 303,
+		},
+	}
+	setB := &publishedRootSet{
+		generation: 2,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key0), value: "b0"}), rootID: 111},
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key1), value: "b1"}), rootID: 222},
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "biter"}), rootID: 333,
+		},
+	}
+
+	db.mu.Lock()
+	if err := db.publishInstalledRootSetLocked(setA); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("publish setA: %v", err)
+	}
+	viewA := db.retainMemtableView()
+	db.rootPublishHook = func(*publishedRootSet) error { return errors.New("boom") }
+	err := db.publishInstalledRootSetLocked(setB)
+	viewB := db.retainMemtableView()
+	stats := db.rootDomainPublishStatsSnapshot()
+	db.rootPublishHook = nil
+	db.mu.Unlock()
+	if viewA == nil || viewB == nil {
+		t.Fatal("expected published views")
+	}
+	defer db.releaseMemtableView(viewA)
+	defer db.releaseMemtableView(viewB)
+
+	if err == nil {
+		t.Fatal("expected hook failure")
+	}
+	if viewB.rootVersion != viewA.rootVersion {
+		t.Fatalf("rootVersion changed on failed publish: got %d want %d", viewB.rootVersion, viewA.rootVersion)
+	}
+	assertRootDomainVisibleValue(t, viewB.rootPointShards[0], string(key0), "a0")
+	assertRootDomainVisibleValue(t, viewB.rootPointShards[1], string(key1), "a1")
+	assertRootDomainVisibleValue(t, viewB.rootIterator, "iter/a", "aiter")
+	if stats.publishFailures != 1 {
+		t.Fatalf("publishFailures=%d want 1", stats.publishFailures)
+	}
+}
+
+func TestPublishInstalledRootSetLocked_RetryPublishesExactlyOnce(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	setA := &publishedRootSet{
+		generation: 1,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "a"}), rootID: 101},
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/k", value: "aiter"}), rootID: 201,
+		},
+	}
+	setB := &publishedRootSet{
+		generation: 2,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "b"}), rootID: 102},
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/k", value: "biter"}), rootID: 202,
+		},
+	}
+
+	db.mu.Lock()
+	if err := db.publishInstalledRootSetLocked(setA); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("publish setA: %v", err)
+	}
+	failOnce := true
+	db.rootPublishHook = func(*publishedRootSet) error {
+		if failOnce {
+			failOnce = false
+			return errors.New("retry me")
+		}
+		return nil
+	}
+	if err := db.publishInstalledRootSetLocked(setB); err == nil {
+		db.mu.Unlock()
+		t.Fatal("expected first publish of setB to fail")
+	}
+	viewAfterFail := db.retainMemtableView()
+	if err := db.publishInstalledRootSetLocked(setB); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("retry publish setB: %v", err)
+	}
+	db.rootPublishHook = nil
+	viewAfterRetry := db.retainMemtableView()
+	stats := db.rootDomainPublishStatsSnapshot()
+	db.mu.Unlock()
+	if viewAfterFail == nil || viewAfterRetry == nil {
+		t.Fatal("expected published views")
+	}
+	defer db.releaseMemtableView(viewAfterFail)
+	defer db.releaseMemtableView(viewAfterRetry)
+
+	assertRootDomainVisibleValue(t, viewAfterFail.rootPointShards[0], "k", "a")
+	assertRootDomainVisibleValue(t, viewAfterFail.rootIterator, "iter/k", "aiter")
+	assertRootDomainVisibleValue(t, viewAfterRetry.rootPointShards[0], "k", "b")
+	assertRootDomainVisibleValue(t, viewAfterRetry.rootIterator, "iter/k", "biter")
+	if stats.publishFailures != 1 {
+		t.Fatalf("publishFailures=%d want 1", stats.publishFailures)
+	}
+	if stats.retrySuccesses != 1 {
+		t.Fatalf("retrySuccesses=%d want 1", stats.retrySuccesses)
 	}
 }
