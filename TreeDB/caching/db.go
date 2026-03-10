@@ -3755,7 +3755,7 @@ type DB struct {
 	vlogGenerationCheckpointKickGCRuns       atomic.Uint64
 	vlogGenerationRewriteQueueMu             sync.Mutex
 	vlogGenerationCheckpointKickActive       atomic.Bool
-	vlogGenerationRewriteQueue               []uint32
+	vlogGenerationRewriteQueue               []valueLogGenerationRewriteQueueEntry
 	vlogGenerationRewriteQueueLoaded         bool
 	vlogGenerationLastChurnBps               atomic.Int64
 	vlogGenerationLastChurnSampleBytes       atomic.Uint64
@@ -10025,7 +10025,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
-	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
+	rewriteQueue, err := db.currentVlogGenerationRewriteQueueEntries()
 	if err != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 		if db.notifyError != nil {
@@ -10256,16 +10256,39 @@ planned:
 					return start, nil
 				},
 			}
-			processedRewriteIDs := []uint32(nil)
+			processedRewriteEntries := []valueLogGenerationRewriteQueueEntry(nil)
 			if len(rewriteQueue) > 0 {
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				processedRewriteEntries = vlogGenerationRewriteQueueChunkEntries(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
 			} else if haveRewritePlan {
-				if err := db.setVlogGenerationRewriteQueue(rewritePlan.SourceFileIDs); err != nil {
+				queueEntries := make([]valueLogGenerationRewriteQueueEntry, 0, len(rewritePlan.SelectedSegments))
+				if len(rewritePlan.SelectedSegments) > 0 {
+					for _, segment := range rewritePlan.SelectedSegments {
+						if segment.FileID == 0 {
+							continue
+						}
+						queueEntries = append(queueEntries, valueLogGenerationRewriteQueueEntry{
+							FileID:        segment.FileID,
+							LiveBytes:     segment.LiveBytes,
+							StaleBytes:    segment.StaleBytes,
+							StaleRatioPPM: segment.StaleRatioPPM,
+						})
+					}
+				}
+				if len(queueEntries) == 0 {
+					for _, id := range rewritePlan.SourceFileIDs {
+						if id == 0 {
+							continue
+						}
+						queueEntries = append(queueEntries, valueLogGenerationRewriteQueueEntry{FileID: id})
+					}
+				}
+				if err := db.setVlogGenerationRewriteQueueEntries(queueEntries); err != nil {
 					return fmt.Errorf("persist generational rewrite queue: %w", err)
 				}
-				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				rewriteQueue = append([]valueLogGenerationRewriteQueueEntry(nil), queueEntries...)
+				processedRewriteEntries = vlogGenerationRewriteQueueChunkEntries(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
 			}
+			processedRewriteIDs := rewriteQueueEntryIDs(processedRewriteEntries)
 			if len(processedRewriteIDs) > 0 {
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
 			} else {
@@ -10283,8 +10306,8 @@ planned:
 			if err != nil {
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
-			if len(processedRewriteIDs) > 0 {
-				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
+			if len(processedRewriteEntries) > 0 {
+				if err := db.consumeVlogGenerationRewriteQueueChunkEntries(processedRewriteEntries); err != nil {
 					return fmt.Errorf("consume generational rewrite queue: %w", err)
 				}
 			}
@@ -10301,8 +10324,14 @@ planned:
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
 			rewriteBytesIn := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if len(processedRewriteEntries) > 0 && stats.BytesBefore > 0 {
 				rewriteBytesIn = int64(stats.BytesBefore)
+			} else if len(processedRewriteEntries) > 0 {
+				for _, entry := range processedRewriteEntries {
+					if entry.LiveBytes > 0 {
+						rewriteBytesIn += entry.LiveBytes
+					}
+				}
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				rewriteBytesIn = rewritePlan.SelectedBytesLive
 			} else if maxSourceBytes > 0 {
@@ -10317,8 +10346,14 @@ planned:
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
 			consumed := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if len(processedRewriteEntries) > 0 && stats.BytesBefore > 0 {
 				consumed = int64(stats.BytesBefore)
+			} else if len(processedRewriteEntries) > 0 {
+				for _, entry := range processedRewriteEntries {
+					if entry.LiveBytes > 0 {
+						consumed += entry.LiveBytes
+					}
+				}
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				consumed = rewritePlan.SelectedBytesLive
 			} else if maxSourceBytes > 0 {
@@ -15090,6 +15125,12 @@ func (db *DB) Stats() map[string]string {
 	db.vlogGenerationRewriteQueueMu.Lock()
 	rewriteQueueLen := len(db.vlogGenerationRewriteQueue)
 	rewriteQueueLoaded := db.vlogGenerationRewriteQueueLoaded
+	rewriteQueueLiveBytes := int64(0)
+	rewriteQueueStaleBytes := int64(0)
+	for _, entry := range db.vlogGenerationRewriteQueue {
+		rewriteQueueLiveBytes += entry.LiveBytes
+		rewriteQueueStaleBytes += entry.StaleBytes
+	}
 	db.vlogGenerationRewriteQueueMu.Unlock()
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
@@ -15106,6 +15147,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.churn_bytes_per_sec"] = fmt.Sprintf("%d", db.vlogGenerationLastChurnBps.Load())
 	stats["treedb.cache.vlog_generation.rewrite.queue_len"] = fmt.Sprintf("%d", rewriteQueueLen)
 	stats["treedb.cache.vlog_generation.rewrite.queue_loaded"] = fmt.Sprintf("%t", rewriteQueueLoaded)
+	stats["treedb.cache.vlog_generation.rewrite.queue_live_bytes_estimate"] = fmt.Sprintf("%d", rewriteQueueLiveBytes)
+	stats["treedb.cache.vlog_generation.rewrite.queue_stale_bytes_estimate"] = fmt.Sprintf("%d", rewriteQueueStaleBytes)
 	stats["treedb.cache.vlog_generation.hot.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationHotTarget)
 	stats["treedb.cache.vlog_generation.warm.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationWarmTarget)
 	stats["treedb.cache.vlog_generation.cold.segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogGenerationColdTarget)
