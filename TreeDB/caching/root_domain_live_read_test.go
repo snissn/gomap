@@ -142,3 +142,45 @@ func TestReverseIterator_UsesPublishedRootDomainIteratorAsAuthority(t *testing.T
 		t.Fatalf("keys=%v want [b a]", got)
 	}
 }
+
+func TestIterator_RawFallbackWithoutPublishedViewStillReadsQueuedState(t *testing.T) {
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	db.backendRangeInit.Do(func() {})
+
+	mt, err := newRootDomainTable(
+		rootDomainTestOp{key: "a", value: "va"},
+		rootDomainTestOp{key: "b", value: "vb"},
+	)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+
+	db.mu.Lock()
+	db.queue = []memtable.Table{mt}
+	db.queueShardIDs = []uint16{0}
+	db.queueRanges = []keyRange{{valid: true, min: []byte("a"), max: []byte("b")}}
+	db.backendRangeKnown = true
+	db.mu.Unlock()
+
+	it, err := db.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("Iterator: %v", err)
+	}
+	defer it.Close()
+
+	var got []string
+	for it.Valid() {
+		got = append(got, string(it.Key()))
+		it.Next()
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Fatalf("keys=%v want [a b]", got)
+	}
+}

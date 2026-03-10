@@ -11,6 +11,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -394,6 +395,58 @@ func TestSnapshot_HasAllocsIndependentOfQueuedShards(t *testing.T) {
 
 	if allocs > 0.5 {
 		t.Fatalf("expected Snapshot.Has allocations to stay at 0 for queued shard hits; got %.2f allocs/op", allocs)
+	}
+}
+
+func TestPointReads_RawFallbackHasAllocsIndependentOfQueuedShards(t *testing.T) {
+	const shards = 8
+	const targetShard = 5
+
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var key [8]byte
+	for i := uint64(0); ; i++ {
+		binary.BigEndian.PutUint64(key[:], i)
+		if db.shardIndex(key[:]) == targetShard {
+			break
+		}
+	}
+	targetKey := append([]byte(nil), key[:]...)
+
+	queue := make([]memtable.Table, 0, shards)
+	queueShardIDs := make([]uint16, 0, shards)
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		queue = append(queue, mt)
+		queueShardIDs = append(queueShardIDs, uint16(shard))
+	}
+	queue[targetShard].SetEntry(targetKey, []byte("v"), page.ValuePtr{}, node.FlagInline)
+
+	db.mu.Lock()
+	db.queue = queue
+	db.queueShardIDs = queueShardIDs
+	db.mu.Unlock()
+
+	runtime.GC()
+	allocs := testing.AllocsPerRun(1000, func() {
+		ok, err := db.Has(targetKey)
+		if err != nil {
+			panic(err)
+		}
+		if !ok {
+			panic("expected raw fallback queued hit")
+		}
+	})
+
+	if allocs > 0.5 {
+		t.Fatalf("expected raw fallback Has allocations to stay at 0 for queued shard hits; got %.2f allocs/op", allocs)
 	}
 }
 
