@@ -52,12 +52,14 @@ type publishedRootRef struct {
 type publishedRootSet struct {
 	generation  uint64
 	pointShards []publishedRootRef
+	system      publishedRootRef
 	iterator    publishedRootRef
 }
 
 type rootPublishGroup struct {
 	generation  uint64
 	pointShards []rootDomainSnapshot
+	system      rootDomainSnapshot
 	iterator    rootDomainSnapshot
 	published   *publishedRootSet
 }
@@ -111,6 +113,7 @@ func (db *DB) resetRootDomainStatesLocked() {
 	for i := range db.mutableShards {
 		db.rootPointStates[i].mutable = db.mutableShards[i].mem
 	}
+	db.rootSystemState = rootDomainState{}
 	db.rootIteratorState = rootDomainState{}
 	db.rootPublishedSet = nil
 	db.dirtyRootPublishGroupID = 0
@@ -184,6 +187,8 @@ func (db *DB) publishRootDomainSnapshotsLocked(view *memtableView) {
 	}
 	view.rootPointShards = points
 	view.rootSnapshotShards = snapshots
+	view.rootSystem = db.rootSystemState.snapshot()
+	view.rootSystem.mutable = nil
 	view.rootIterator = db.rootIteratorState.snapshot()
 	view.rootIterator.mutable = nil
 	view.rootIteratorRanges = view.queueRanges
@@ -200,6 +205,7 @@ func clonePublishedRootSet(set *publishedRootSet) *publishedRootSet {
 	}
 	cloned := &publishedRootSet{
 		generation: set.generation,
+		system:     set.system,
 		iterator:   set.iterator,
 	}
 	if len(set.pointShards) > 0 {
@@ -266,6 +272,8 @@ func (db *DB) buildRootPublishGroupLocked(set *publishedRootSet) *rootPublishGro
 			group.pointShards[i] = snap
 		}
 	}
+	group.system = db.rootSystemState.snapshot()
+	group.system.mutable = nil
 	group.iterator = db.rootIteratorState.snapshot()
 	group.iterator.mutable = nil
 	return group
@@ -293,6 +301,8 @@ func (db *DB) applyPublishedRootSetLocked(cloned *publishedRootSet) {
 		db.rootPointStates[i].published = nil
 		db.rootPointStates[i].publishedRootID = 0
 	}
+	db.rootSystemState.published = nil
+	db.rootSystemState.publishedRootID = 0
 	db.rootIteratorState.published = nil
 	db.rootIteratorState.publishedRootID = 0
 	db.rootPublishedSet = cloned
@@ -317,6 +327,8 @@ func (db *DB) applyPublishedRootSetLocked(cloned *publishedRootSet) {
 				db.rootPointStates[i].publishedRootID = ref.rootID
 			}
 		}
+		db.rootSystemState.published = cloned.system.lookup
+		db.rootSystemState.publishedRootID = cloned.system.rootID
 		db.rootIteratorState.published = cloned.iterator.lookup
 		db.rootIteratorState.publishedRootID = cloned.iterator.rootID
 		if want := cloned.generation; want != 0 {
@@ -509,11 +521,19 @@ func publishedRootSetFromMemtableView(view *memtableView) *publishedRootSet {
 		}
 	}
 	iterRef := publishedRootRef{}
+	systemRef := publishedRootRef{}
 	if rootDomainSnapshotHasPublishedState(view.rootIterator) {
 		hasPublished = true
 		iterRef = publishedRootRef{
 			lookup: view.rootIterator.published,
 			rootID: view.rootIterator.publishedRootID,
+		}
+	}
+	if rootDomainSnapshotHasPublishedState(view.rootSystem) {
+		hasPublished = true
+		systemRef = publishedRootRef{
+			lookup: view.rootSystem.published,
+			rootID: view.rootSystem.publishedRootID,
 		}
 	}
 	if !hasPublished {
@@ -522,8 +542,21 @@ func publishedRootSetFromMemtableView(view *memtableView) *publishedRootSet {
 	return &publishedRootSet{
 		generation:  view.rootVersion,
 		pointShards: pointShards,
+		system:      systemRef,
 		iterator:    iterRef,
 	}
+}
+
+func rootDomainSystemSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot {
+	if s == nil {
+		return rootDomainSnapshot{}
+	}
+	snap := s.rootSystem
+	if s.publishedRoots != nil && s.publishedRoots.system.lookup != nil {
+		snap.published = s.publishedRoots.system.lookup
+		snap.publishedRootID = s.publishedRoots.system.rootID
+	}
+	return snap
 }
 
 func livePointRootDomainSnapshot(view *memtableView, db *DB, key []byte) (rootDomainSnapshot, bool) {

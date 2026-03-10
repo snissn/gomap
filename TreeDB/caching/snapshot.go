@@ -30,6 +30,7 @@ type Snapshot struct {
 	backend         *backenddb.Snapshot
 	rootVersion     uint64
 	rootPointShards []rootDomainSnapshot
+	rootSystem      rootDomainSnapshot
 	rootIterator    rootDomainSnapshot
 	publishedRoots  *publishedRootSet
 
@@ -115,6 +116,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if view != nil {
 		snap.rootVersion = view.rootVersion
 		snap.rootPointShards = view.rootSnapshotShards
+		snap.rootSystem = view.rootSystem
 		snap.rootIterator = view.rootIterator
 		snap.publishedRoots = viewPublishedRoots
 	}
@@ -170,6 +172,7 @@ func (s *Snapshot) Close() error {
 			s.view = nil
 		}
 		s.rootPointShards = nil
+		s.rootSystem = rootDomainSnapshot{}
 		s.rootIterator = rootDomainSnapshot{}
 		s.publishedRoots = nil
 		s.rootVersion = 0

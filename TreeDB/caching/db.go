@@ -3526,6 +3526,7 @@ type DB struct {
 	memtables                    atomic.Pointer[memtableView]
 	rootDomainVersion            atomic.Uint64
 	rootPointStates              []rootDomainState
+	rootSystemState              rootDomainState
 	rootIteratorState            rootDomainState
 	rootPublishedSet             *publishedRootSet
 	rootPublishStats             rootDomainPublishTelemetry
@@ -3987,6 +3988,7 @@ type memtableView struct {
 	rootVersion              uint64
 	rootPointShards          []rootDomainSnapshot
 	rootSnapshotShards       []rootDomainSnapshot
+	rootSystem               rootDomainSnapshot
 	rootIterator             rootDomainSnapshot
 	rootIteratorRanges       []keyRange
 	publishedRoots           *publishedRootSet
