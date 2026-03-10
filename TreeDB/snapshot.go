@@ -19,6 +19,8 @@ type Snapshot interface {
 	GetAppend(key, dst []byte) ([]byte, error)
 	GetUnsafe(key []byte) ([]byte, error)
 	Has(key []byte) (bool, error)
+	HasMany(keys [][]byte) ([]bool, error)
+	HasPrefixes(prefixes [][]byte) ([]bool, error)
 
 	GetEntry(key []byte) (node.LeafEntry, error)
 	GetEntryExact(key []byte) (node.LeafEntry, error)
