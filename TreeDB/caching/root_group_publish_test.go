@@ -889,3 +889,65 @@ func TestPublishInstalledRootSet_HookReceivesCurrentSystemRootPageID(t *testing.
 		t.Fatalf("systemRootPageID=%d want %d", got, want)
 	}
 }
+
+func TestPublishInstalledRootSet_PublishesSystemDescriptorRunToBackend(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	sysTable := newRootDomainTestTable(t, rootDomainTestOp{key: "sys/a", value: "sv"})
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootSystemState: rootDomainState{
+			immutables: []memtable.Table{sysTable},
+		},
+	}
+
+	before := backend.State()
+	if before == nil {
+		t.Fatal("expected backend state")
+	}
+	oldSystemRoot := before.SystemRootPageID
+
+	if err := db.publishInstalledRootSet(&publishedRootSet{
+		generation: 23,
+		system: publishedRootRef{
+			lookup: sysTable,
+			rootID: oldSystemRoot,
+		},
+	}); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+
+	after := backend.State()
+	if after == nil {
+		t.Fatal("expected backend state after publish")
+	}
+	if after.SystemRootPageID == oldSystemRoot {
+		t.Fatalf("system root did not change: still %d", oldSystemRoot)
+	}
+	if db.rootPublishedSet == nil {
+		t.Fatal("expected installed published root set")
+	}
+	if got := db.rootPublishedSet.system.rootID; got != after.SystemRootPageID {
+		t.Fatalf("installed system root id=%d want %d", got, after.SystemRootPageID)
+	}
+
+	snap := backend.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected backend snapshot")
+	}
+	defer snap.Close()
+	entry, err := snap.GetEntryAtRoot(after.SystemRootPageID, []byte("sys/a"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(system): %v", err)
+	}
+	if got := string(entry.Value); got != "sv" {
+		t.Fatalf("system value=%q want %q", got, "sv")
+	}
+}
