@@ -407,22 +407,12 @@ func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
 	}
-	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok &&
-		rootDomainSnapshotNeedsPublish(group.iterator) &&
-		!rootPublishGroupHasNonIteratorPublish(group) {
-		iter, err := group.iterator.publishIterator(nil, nil)
-		if err != nil {
+	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok && !rootDomainSnapshotNeedsPublish(group.system) {
+		if err := publishGroupedNonSystemRootsLocked(publisher, group, cloned); err != nil {
 			db.rootPublishStats.publishFailures.Add(1)
 			db.rootPublishRetryPending = true
 			return err
 		}
-		newIteratorRootID, err := publisher.PublishOrderedRootIterator(group.iterator.publishedRootID, iter)
-		if err != nil {
-			db.rootPublishStats.publishFailures.Add(1)
-			db.rootPublishRetryPending = true
-			return err
-		}
-		cloned.iterator.rootID = newIteratorRootID
 	}
 	db.applyPublishedRootSetLocked(cloned)
 	db.clearDirtyRootPublishGroupLocked()
@@ -481,26 +471,14 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
 	}
-	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok &&
-		rootDomainSnapshotNeedsPublish(group.iterator) &&
-		!rootPublishGroupHasNonIteratorPublish(group) {
-		iter, err := group.iterator.publishIterator(nil, nil)
-		if err != nil {
+	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok && !rootDomainSnapshotNeedsPublish(group.system) {
+		if err := publishGroupedNonSystemRootsUnlocked(publisher, group, cloned); err != nil {
 			db.mu.Lock()
 			db.rootPublishStats.publishFailures.Add(1)
 			db.rootPublishRetryPending = true
 			db.mu.Unlock()
 			return err
 		}
-		newIteratorRootID, err := publisher.PublishOrderedRootIterator(group.iterator.publishedRootID, iter)
-		if err != nil {
-			db.mu.Lock()
-			db.rootPublishStats.publishFailures.Add(1)
-			db.rootPublishRetryPending = true
-			db.mu.Unlock()
-			return err
-		}
-		cloned.iterator.rootID = newIteratorRootID
 	}
 
 	db.mu.Lock()
@@ -523,19 +501,46 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 	return nil
 }
 
-func rootPublishGroupHasNonIteratorPublish(group *rootPublishGroup) bool {
-	if group == nil {
-		return false
-	}
-	if rootDomainSnapshotNeedsPublish(group.system) {
-		return true
+func publishGroupedNonSystemRootsLocked(publisher backendOrderedRootPublisher, group *rootPublishGroup, cloned *publishedRootSet) error {
+	return publishGroupedNonSystemRoots(publisher, group, cloned)
+}
+
+func publishGroupedNonSystemRootsUnlocked(publisher backendOrderedRootPublisher, group *rootPublishGroup, cloned *publishedRootSet) error {
+	return publishGroupedNonSystemRoots(publisher, group, cloned)
+}
+
+func publishGroupedNonSystemRoots(publisher backendOrderedRootPublisher, group *rootPublishGroup, cloned *publishedRootSet) error {
+	if publisher == nil || group == nil || cloned == nil {
+		return nil
 	}
 	for i := range group.pointShards {
-		if rootDomainSnapshotNeedsPublish(group.pointShards[i]) {
-			return true
+		if !rootDomainSnapshotNeedsPublish(group.pointShards[i]) {
+			continue
+		}
+		iter, err := group.pointShards[i].publishIterator(nil, nil)
+		if err != nil {
+			return err
+		}
+		newRootID, err := publisher.PublishOrderedRootIterator(group.pointShards[i].publishedRootID, iter)
+		if err != nil {
+			return err
+		}
+		if i < len(cloned.pointShards) {
+			cloned.pointShards[i].rootID = newRootID
 		}
 	}
-	return false
+	if rootDomainSnapshotNeedsPublish(group.iterator) {
+		iter, err := group.iterator.publishIterator(nil, nil)
+		if err != nil {
+			return err
+		}
+		newIteratorRootID, err := publisher.PublishOrderedRootIterator(group.iterator.publishedRootID, iter)
+		if err != nil {
+			return err
+		}
+		cloned.iterator.rootID = newIteratorRootID
+	}
+	return nil
 }
 
 func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) bool {
