@@ -156,6 +156,56 @@ func (db *DB) publishRootDomainSnapshotsLocked(view *memtableView) {
 	view.rootIteratorRanges = view.queueRanges
 }
 
+func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) {
+	if db == nil {
+		return
+	}
+	db.ensureRootDomainStatesLocked()
+	for i := range db.rootPointStates {
+		db.rootPointStates[i].published = nil
+		db.rootPointStates[i].publishedRootID = 0
+	}
+	db.rootIteratorState.published = nil
+	db.rootIteratorState.publishedRootID = 0
+
+	if set != nil {
+		switch len(set.pointShards) {
+		case 0:
+		case 1:
+			ref := set.pointShards[0]
+			for i := range db.rootPointStates {
+				db.rootPointStates[i].published = ref.lookup
+				db.rootPointStates[i].publishedRootID = ref.rootID
+			}
+		default:
+			limit := len(set.pointShards)
+			if limit > len(db.rootPointStates) {
+				limit = len(db.rootPointStates)
+			}
+			for i := 0; i < limit; i++ {
+				ref := set.pointShards[i]
+				db.rootPointStates[i].published = ref.lookup
+				db.rootPointStates[i].publishedRootID = ref.rootID
+			}
+		}
+		db.rootIteratorState.published = set.iterator.lookup
+		db.rootIteratorState.publishedRootID = set.iterator.rootID
+		if want := set.generation; want != 0 {
+			for {
+				cur := db.rootDomainVersion.Load()
+				if cur >= want {
+					break
+				}
+				if db.rootDomainVersion.CompareAndSwap(cur, want-1) {
+					break
+				}
+			}
+		}
+	}
+
+	db.publishMemtablesLocked()
+}
+
 func (db *DB) promoteRootDomainMutableLocked(shardIdx int, sealed, next memtable.Table) {
 	if db == nil {
 		return
