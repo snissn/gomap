@@ -69,7 +69,7 @@ stable main-based baseline and a stable oracle reference.
 
 ## Raw TreeDB Anchor Commands
 
-### `fast`
+### `fast` write/read/scan bundle
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
@@ -80,14 +80,14 @@ OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
   -keys 500000 \
   -valsize 100 \
   -batchsize 8000 \
-  -test write_seq,write_rand,batch_write,batch_random,batch_delete,delete_rand,random_read,random_read_parallel_acquire_snapshot,full_scan,prefix_scan \
+  -test sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_random,batch_small_seq,random_read,random_read_parallel_acquire_snapshot,full_scan,prefix_scan \
   -checkpoint-between-tests \
   -read-require-hit \
   -profile-dir "$OUT" \
   -progress=false
 ```
 
-### `wal_on_fast`
+### `wal_on_fast` write/read/scan bundle
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
@@ -98,12 +98,52 @@ OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
   -keys 500000 \
   -valsize 100 \
   -batchsize 8000 \
-  -test write_seq,write_rand,batch_write,batch_random,batch_delete,delete_rand,random_read,random_read_parallel_acquire_snapshot,full_scan,prefix_scan \
+  -test sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_random,batch_small_seq,random_read,random_read_parallel_acquire_snapshot,full_scan,prefix_scan \
   -checkpoint-between-tests \
   -read-require-hit \
   -profile-dir "$OUT" \
   -progress=false
 ```
+
+### Delete bundles
+
+Capture delete-focused anchors separately so read-hit guarantees remain valid.
+
+`batch_delete`:
+
+```bash
+OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -dbs treedb \
+  -profile fast \
+  -keys 500000 \
+  -valsize 100 \
+  -batchsize 8000 \
+  -test random_write,batch_delete \
+  -checkpoint-between-tests \
+  -profile-dir "$OUT" \
+  -progress=false
+```
+
+`delete_rand`:
+
+```bash
+OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -dbs treedb \
+  -profile fast \
+  -keys 500000 \
+  -valsize 100 \
+  -batchsize 8000 \
+  -test random_write,random_delete \
+  -checkpoint-between-tests \
+  -profile-dir "$OUT" \
+  -progress=false
+```
+
+Repeat both delete bundles with `-profile wal_on_fast`.
 
 ### Deferred-work anchor
 

@@ -16,7 +16,6 @@ See also:
 - `TreeDB/docs/spec/collections-native-fastpath-roadmap.md`
 - `TreeDB/docs/spec/collections-native-fastpath-baseline-template.md`
 - `TreeDB/docs/spec/collections-native-fastpath-pr-note-template.md`
-- `TreeDB/docs/spec/collections-native-fastpath-issue-768-amendment.md`
 
 ## 1. Purpose
 
@@ -213,7 +212,7 @@ It must:
 
 ## 5. Canonical Command Set
 
-### 5.1 Raw TreeDB write/read anchor capture
+### 5.1 Raw TreeDB write/read/scan anchor capture
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
@@ -224,7 +223,7 @@ OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
   -keys 500000 \
   -valsize 100 \
   -batchsize 8000 \
-  -test write_seq,write_rand,batch_write,batch_random,batch_delete,delete_rand,random_read,random_read_parallel_acquire_snapshot,full_scan,prefix_scan \
+  -test sequential_write,random_write,dataset_write_random,dataset_write_sorted,batch_write,batch_random,batch_small_seq,random_read,random_read_parallel_acquire_snapshot,full_scan,prefix_scan \
   -checkpoint-between-tests \
   -read-require-hit \
   -profile-dir "$OUT" \
@@ -237,7 +236,54 @@ Repeat with:
 -profile wal_on_fast
 ```
 
-### 5.2 Deferred-work anchor capture
+Use the dataset-write support tests in this bundle. They keep the read/scan
+anchors valid without mixing delete-heavy phases into the same run.
+
+### 5.2 Raw TreeDB delete-anchor capture
+
+Capture delete-focused anchors separately so read-hit guarantees remain valid.
+
+Batch delete:
+
+```bash
+OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -dbs treedb \
+  -profile fast \
+  -keys 500000 \
+  -valsize 100 \
+  -batchsize 8000 \
+  -test random_write,batch_delete \
+  -checkpoint-between-tests \
+  -profile-dir "$OUT" \
+  -progress=false
+```
+
+Random delete:
+
+```bash
+OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
+
+./bin/unified-bench \
+  -dbs treedb \
+  -profile fast \
+  -keys 500000 \
+  -valsize 100 \
+  -batchsize 8000 \
+  -test random_write,random_delete \
+  -checkpoint-between-tests \
+  -profile-dir "$OUT" \
+  -progress=false
+```
+
+Repeat both delete captures with:
+
+```bash
+-profile wal_on_fast
+```
+
+### 5.3 Deferred-work anchor capture
 
 ```bash
 OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
@@ -253,7 +299,7 @@ OUT=$(mktemp -d /tmp/gomap_profiles_XXXXXX)
   -progress=false
 ```
 
-### 5.3 Collection-focused capture
+### 5.4 Collection-focused capture
 
 ```bash
 ORACLE_WORKTREE=/path/to/oracle-worktree
