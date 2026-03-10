@@ -162,6 +162,63 @@ func TestTailValueLogSegmentsByLane(t *testing.T) {
 	}
 }
 
+func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := db.Open(db.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	backendOwnedByDB := false
+	t.Cleanup(func() {
+		if !backendOwnedByDB {
+			_ = backend.Close()
+		}
+	})
+
+	cdb, err := Open(dir, backend, Options{
+		AllowUnsafe:           true,
+		DisableWAL:            true,
+		ForceValueLogPointers: true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	backendOwnedByDB = true
+	t.Cleanup(func() { _ = cdb.Close() })
+
+	b := cdb.NewBatch()
+	if err := b.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := cdb.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	it, err := cdb.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("iterator: %v", err)
+	}
+	if got := cdb.activeForegroundIterators.Load(); got != 1 {
+		t.Fatalf("activeForegroundIterators=%d want=1", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("close iterator: %v", err)
+	}
+	if got := cdb.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
+	}
+	if err := it.Close(); err != nil {
+		t.Fatalf("second close iterator: %v", err)
+	}
+	if got := cdb.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
+	}
+}
+
 func deleteMutable(db *DB, key []byte) {
 	shard := db.shardForKey(key)
 	shard.mu.Lock()
@@ -172,6 +229,68 @@ func deleteMutable(db *DB, key []byte) {
 	shard.bytes = newBytes
 	shard.mu.Unlock()
 	db.mutableBytes.Add(delta)
+}
+
+func TestWrapForegroundIterator_AvoidsDoubleWrapAndCloseIsIdempotent(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	base := &MockIterator{}
+	wrapped := db.wrapForegroundIterator(base)
+	if got := db.activeForegroundIterators.Load(); got != 1 {
+		t.Fatalf("activeForegroundIterators after first wrap=%d want=1", got)
+	}
+	wrappedAgain := db.wrapForegroundIterator(wrapped)
+	if wrappedAgain != wrapped {
+		t.Fatalf("double wrap returned different iterator")
+	}
+	if got := db.activeForegroundIterators.Load(); got != 1 {
+		t.Fatalf("activeForegroundIterators after second wrap=%d want=1", got)
+	}
+	if err := wrappedAgain.Close(); err != nil {
+		t.Fatalf("close wrapped iterator: %v", err)
+	}
+	if got := db.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("activeForegroundIterators after close=%d want=0", got)
+	}
+	_ = wrappedAgain.Close()
+	if got := db.activeForegroundIterators.Load(); got != 0 {
+		t.Fatalf("activeForegroundIterators after second close=%d want=0", got)
+	}
+}
+
+func TestForegroundMaintenanceContext_CancelsOnGetUnsafe(t *testing.T) {
+	backend := NewMockBackend()
+	backend.data["k"] = []byte("value")
+	db := &DB{
+		closeCh: make(chan struct{}),
+		backend: backend,
+	}
+	ctx, cancel := db.foregroundMaintenanceContext(250 * time.Millisecond)
+	defer cancel()
+
+	if _, err := db.GetUnsafe([]byte("k")); err != nil {
+		t.Fatalf("GetUnsafe: %v", err)
+	}
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("foreground maintenance context did not cancel after GetUnsafe")
+	}
+}
+
+func TestForegroundMaintenanceContext_CancelsOnActiveIterator(t *testing.T) {
+	db := &DB{closeCh: make(chan struct{})}
+	ctx, cancel := db.foregroundMaintenanceContext(250 * time.Millisecond)
+	defer cancel()
+
+	it := db.wrapForegroundIterator(&MockIterator{})
+	defer it.Close()
+
+	select {
+	case <-ctx.Done():
+	case <-time.After(500 * time.Millisecond):
+		t.Fatalf("foreground maintenance context did not cancel with active iterator")
+	}
 }
 
 func countSnapshotLeafEntries(t *testing.T, snap *db.Snapshot) int {
