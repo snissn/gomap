@@ -140,7 +140,10 @@ type valueLogRewriteLiveBytesKey struct {
 }
 
 type valueLogRewriteLiveBytesCache struct {
-	key      valueLogRewriteLiveBytesKey
+	key valueLogRewriteLiveBytesKey
+	// liveByID is published by clone-and-replace and treated as immutable after
+	// publication, so readers may snapshot the map header under RLock and clone
+	// after unlocking without racing a writer mutating the same map.
 	liveByID map[uint32]int64
 }
 
