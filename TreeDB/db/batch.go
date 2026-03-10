@@ -9,11 +9,23 @@ import (
 
 // Batch implements the cosmos-db Batch interface.
 type Batch struct {
-	db    *DB
-	batch *batch.Batch
+	db         *DB
+	batch      *batch.Batch
+	targetRoot batchRootTarget
 }
 
 const optimisticWriteMaxAttempts = 3
+
+type batchRootTarget uint8
+
+const (
+	batchRootUser batchRootTarget = iota
+	batchRootSystem
+)
+
+const errConcurrentBatchWrite = "concurrent modification detected during batch write"
+
+var errConcurrentBatchWriteInternal = fmt.Errorf("treedb: " + errConcurrentBatchWrite)
 
 func (db *DB) NewBatch() batch.Interface {
 	return db.NewBatchWithSize(0)
@@ -33,8 +45,39 @@ func (db *DB) NewBatchWithSize(size int) batch.Interface {
 	}
 	internal.Reserve(size)
 	return &Batch{
-		db:    db,
-		batch: internal,
+		db:         db,
+		batch:      internal,
+		targetRoot: batchRootUser,
+	}
+}
+
+// NewSystemBatch targets writes into the system catalog root.
+func (db *DB) NewSystemBatch() batch.Interface {
+	if db == nil {
+		return nil
+	}
+	internal := db.NewBatch()
+	internalBatch, ok := internal.(*Batch)
+	if !ok {
+		return internal
+	}
+	internalBatch.targetRoot = batchRootSystem
+	return internalBatch
+}
+
+func (b *Batch) targetRoots(db *DB) (targetRootID uint64, peerRootID uint64, err error) {
+	if b == nil || db == nil {
+		return 0, 0, fmt.Errorf("missing db")
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	switch b.targetRoot {
+	case batchRootSystem:
+		return db.meta.SystemRootPageID, db.meta.UserRootPageID, nil
+	case batchRootUser:
+		fallthrough
+	default:
+		return db.meta.UserRootPageID, db.meta.SystemRootPageID, nil
 	}
 }
 
@@ -120,8 +163,12 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, fmt.Errorf("missing index")
 	}
 
+	targetRootID, peerRootID, err := b.targetRoots(b.db)
+	if err != nil {
+		b.db.writeMu.RUnlock()
+		return false, err
+	}
 	b.db.mu.RLock()
-	rootID := b.db.meta.UserRootPageID
 	baseSeq := b.db.meta.CommitSeq
 	// Register this writer as a "reader" of the base state to prevent the
 	// pruner from reclaiming pages we are about to read during z.Apply.
@@ -132,7 +179,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 
 	tracker := newAllocTracker(idx.allocator)
 	z := idx.zipper.CloneWithAllocator(tracker)
-	newRoot, retired, metrics, err := z.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := z.Apply(targetRootID, b.batch)
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -142,7 +189,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, err
 	}
 	entries := b.batch.SortedEntries()
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, targetRootID, baseSeq, entries)
 	if err != nil {
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -153,10 +200,12 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 	}
 	b.db.commitMu.Lock()
 	b.db.mu.RLock()
-	currentRoot := b.db.meta.UserRootPageID
-	sysRoot := b.db.meta.SystemRootPageID
+	currentTargetRoot, currentPeerRoot := b.db.meta.UserRootPageID, b.db.meta.SystemRootPageID
+	if b.targetRoot == batchRootSystem {
+		currentTargetRoot, currentPeerRoot = currentPeerRoot, currentTargetRoot
+	}
 	b.db.mu.RUnlock()
-	if currentRoot != rootID {
+	if currentTargetRoot != targetRootID || currentPeerRoot != peerRootID {
 		b.db.commitMu.Unlock()
 		freeErr := tracker.FreeAll()
 		b.db.writeMu.RUnlock()
@@ -165,8 +214,16 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		}
 		return false, nil
 	}
+	var userRootID, systemRootID uint64
+	if b.targetRoot == batchRootSystem {
+		userRootID = currentTargetRoot
+		systemRootID = newRoot
+	} else {
+		userRootID = newRoot
+		systemRootID = currentPeerRoot
+	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta)
+	post, err := b.db.finalizeCommitLocked(userRootID, systemRootID, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -192,33 +249,49 @@ func (b *Batch) writeSerialized(sync bool) error {
 	}
 
 	b.db.mu.RLock()
-	rootID := b.db.meta.UserRootPageID
+	targetRootID, peerRootID, err := b.targetRoots(b.db)
+	if err != nil {
+		b.db.writeMu.Unlock()
+		return err
+	}
 	baseSeq := b.db.meta.CommitSeq
 	regID := idx.registry.Register(baseSeq)
 	b.db.mu.RUnlock()
 
 	defer idx.registry.Unregister(regID)
 
-	newRoot, retired, metrics, err := idx.zipper.Apply(rootID, b.batch)
+	newRoot, retired, metrics, err := idx.zipper.Apply(targetRootID, b.batch)
 	if err != nil {
 		return err
 	}
 	entries := b.batch.SortedEntries()
-	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, rootID, baseSeq, entries)
+	vlogRefDelta, err := b.db.buildValueLogRefDelta(idx.pager, targetRootID, baseSeq, entries)
 	if err != nil {
 		return err
 	}
 
 	b.db.mu.Lock()
-	if b.db.meta.UserRootPageID != rootID {
+	currentTargetRoot := b.db.meta.UserRootPageID
+	currentPeerRoot := b.db.meta.SystemRootPageID
+	if b.targetRoot == batchRootSystem {
+		currentTargetRoot, currentPeerRoot = currentPeerRoot, currentTargetRoot
+	}
+	if currentTargetRoot != targetRootID || currentPeerRoot != peerRootID {
 		// This should not happen if writeMu is held and we are the only writer.
 		b.db.mu.Unlock()
-		return fmt.Errorf("concurrent modification detected during batch write")
+		return errConcurrentBatchWriteInternal
 	}
-	sysRoot := b.db.meta.SystemRootPageID
+	var userRootID, systemRootID uint64
+	if b.targetRoot == batchRootSystem {
+		userRootID = currentPeerRoot
+		systemRootID = newRoot
+	} else {
+		userRootID = newRoot
+		systemRootID = currentPeerRoot
+	}
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
+	if err := b.db.finalizeCommit(userRootID, systemRootID, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
 		return err
 	}
 	if b.db.vacuum.Active() {

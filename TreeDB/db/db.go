@@ -104,6 +104,8 @@ type DB struct {
 	combineReqCh     chan *commitCombineReq
 	combineStopCh    chan struct{}
 	combineDoneCh    chan struct{}
+	inlineAppendMu   sync.Mutex
+	inlineAppender   *replayInlineAppender
 	vacuumInProgress atomic.Bool
 	vacuum           vacuumRecorder
 	leafRefState     atomic.Uint32
@@ -1119,6 +1121,11 @@ func (db *DB) Close() error {
 		db.ghostManager.stop()
 	}
 
+	db.inlineAppendMu.Lock()
+	inlineAppender := db.inlineAppender
+	db.inlineAppender = nil
+	db.inlineAppendMu.Unlock()
+
 	db.mu.Lock()
 	db.clearSnapshotView()
 	vm := db.valueLogManager
@@ -1140,6 +1147,11 @@ func (db *DB) Close() error {
 	}
 	if err := db.closeAllIndexes(); err != nil {
 		errs = append(errs, err)
+	}
+	if inlineAppender != nil {
+		if err := inlineAppender.close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if vm != nil {
 		if err := vm.Close(); err != nil {

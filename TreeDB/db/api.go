@@ -77,12 +77,86 @@ func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
 
 // --- Public API ---
 
+func (db *DB) acquireSnapshotWithRoot(rootID uint64) (*Snapshot, error) {
+	if db == nil || db.closing.Load() {
+		return nil, ErrClosed
+	}
+	snap := db.snapPool.Get()
+	if snap.registryShardHint == snapshotShardHintUnset {
+		snap.registryShardHint = registryHintFromSnapshot(snap)
+	}
+	view := db.snapshotViewRO.Load()
+	if view == nil || view.idx == nil || view.state == nil {
+		db.snapPool.Put(snap)
+		return nil, ErrClosed
+	}
+	idx := view.idx
+	state := view.state
+	vm := view.vlogManager
+	vlogSet := state.ValueLogSet
+	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
+	if vlogNeedsPin {
+		if vm == nil {
+			db.snapPool.Put(snap)
+			return nil, ErrClosed
+		}
+		vm.Acquire(vlogSet)
+	}
+
+	var registryID int64
+	if idx != nil {
+		if idx.registry == nil {
+			if vlogNeedsPin && vm != nil {
+				_ = vm.Release(vlogSet)
+			}
+			db.snapPool.Put(snap)
+			return nil, ErrClosed
+		}
+		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
+	}
+
+	snap.db = db
+	snap.idx = idx
+	snap.state = state
+	snap.vlogManager = vm
+	snap.vlogPinned = vlogNeedsPin
+	snap.reader.reconfigure(vlogSet)
+	snap.registryID = registryID
+	if idx != nil {
+		sameTree := snap.treePager == idx.pager && snap.treeRoot == rootID
+		if !sameTree {
+			snap.tree.Reset(idx.pager, &snap.reader, rootID)
+			snap.treePager = idx.pager
+			snap.treeRoot = rootID
+		}
+	} else {
+		if snap.treePager != nil || snap.treeRoot != 0 {
+			snap.tree.Reset(nil, nil, 0)
+			snap.treePager = nil
+			snap.treeRoot = 0
+		}
+	}
+	snap.closed.Store(false)
+	return snap, nil
+}
+
 func (db *DB) acquireSnapshotOrErr() (*Snapshot, error) {
 	snap := db.AcquireSnapshot()
 	if snap == nil {
 		return nil, ErrClosed
 	}
 	return snap, nil
+}
+
+func (db *DB) acquireSystemSnapshotOrErr() (*Snapshot, error) {
+	state := db.State()
+	if state == nil {
+		return nil, ErrClosed
+	}
+	if state.SystemRootPageID == 0 {
+		return nil, fmt.Errorf("missing system root")
+	}
+	return db.acquireSnapshotWithRoot(state.SystemRootPageID)
 }
 
 // Get returns the value for a key.
@@ -234,6 +308,30 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	return val, nil
 }
 
+// GetSystem returns a value from the system catalog root.
+func (db *DB) GetSystem(key []byte) ([]byte, error) {
+	snap, err := db.acquireSystemSnapshotOrErr()
+	if err != nil {
+		return nil, err
+	}
+	defer snap.Close()
+	val, err := snap.Get(key)
+	if err == tree.ErrKeyNotFound {
+		return nil, nil
+	}
+	return val, err
+}
+
+// HasSystem reports whether the key exists in the system catalog root.
+func (db *DB) HasSystem(key []byte) (bool, error) {
+	snap, err := db.acquireSystemSnapshotOrErr()
+	if err != nil {
+		return false, err
+	}
+	defer snap.Close()
+	return snap.Has(key)
+}
+
 // Has checks if a key exists.
 func (db *DB) Has(key []byte) (bool, error) {
 	snap, err := db.acquireSnapshotOrErr()
@@ -242,6 +340,74 @@ func (db *DB) Has(key []byte) (bool, error) {
 	}
 	defer snap.Close()
 	return snap.Has(key)
+}
+
+// SetSystem writes a value to the system catalog root.
+func (db *DB) SetSystem(key, value []byte) error {
+	b := db.NewSystemBatch()
+	if b == nil {
+		return fmt.Errorf("missing db")
+	}
+	if err := b.Set(key, value); err != nil {
+		_ = b.Close()
+		return err
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		return err
+	}
+	return b.Close()
+}
+
+// SetSystemSync writes and syncs a value to the system catalog root.
+func (db *DB) SetSystemSync(key, value []byte) error {
+	b := db.NewSystemBatch()
+	if b == nil {
+		return fmt.Errorf("missing db")
+	}
+	if err := b.Set(key, value); err != nil {
+		_ = b.Close()
+		return err
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		return err
+	}
+	return b.Close()
+}
+
+// DeleteSystem removes a key from the system catalog root.
+func (db *DB) DeleteSystem(key []byte) error {
+	b := db.NewSystemBatch()
+	if b == nil {
+		return fmt.Errorf("missing db")
+	}
+	if err := b.Delete(key); err != nil {
+		_ = b.Close()
+		return err
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		return err
+	}
+	return b.Close()
+}
+
+// DeleteSystemSync removes a key from the system catalog root and syncs.
+func (db *DB) DeleteSystemSync(key []byte) error {
+	b := db.NewSystemBatch()
+	if b == nil {
+		return fmt.Errorf("missing db")
+	}
+	if err := b.Delete(key); err != nil {
+		_ = b.Close()
+		return err
+	}
+	if err := b.WriteSync(); err != nil {
+		_ = b.Close()
+		return err
+	}
+	return b.Close()
 }
 
 // Set sets the value for a key.
@@ -399,6 +565,36 @@ func (db *DB) IteratorWithOptions(start, end []byte, opts IteratorOptions) (iter
 		return nil, err
 	}
 	it := snap.tree.IteratorWithOptions(start, end, opts)
+	return &DBIterator{snap: snap, iter: it}, nil
+}
+
+// SystemIterator returns an iterator for the system catalog root.
+func (db *DB) SystemIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return db.SystemIteratorWithOptions(start, end, IteratorOptions{})
+}
+
+// SystemIteratorWithOptions returns a system-root iterator with explicit materialization controls.
+func (db *DB) SystemIteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
+	snap, err := db.acquireSystemSnapshotOrErr()
+	if err != nil {
+		return nil, err
+	}
+	it := snap.tree.IteratorWithOptions(start, end, opts)
+	return &DBIterator{snap: snap, iter: it}, nil
+}
+
+// ReverseSystemIterator returns a reverse iterator for the system catalog root.
+func (db *DB) ReverseSystemIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	return db.ReverseSystemIteratorWithOptions(start, end, IteratorOptions{})
+}
+
+// ReverseSystemIteratorWithOptions returns a reverse system-root iterator with explicit controls.
+func (db *DB) ReverseSystemIteratorWithOptions(start, end []byte, opts IteratorOptions) (iterator.UnsafeIterator, error) {
+	snap, err := db.acquireSystemSnapshotOrErr()
+	if err != nil {
+		return nil, err
+	}
+	it := snap.tree.ReverseIteratorWithOptions(start, end, opts)
 	return &DBIterator{snap: snap, iter: it}, nil
 }
 

@@ -429,3 +429,107 @@ func TestNewBatchWithSize_ForcePointersOverridesDomainThresholds(t *testing.T) {
 		t.Fatalf("batch.Close: %v", err)
 	}
 }
+
+func TestSet_LargeValueFallsBackToPointer_CommitCombiner(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("docs/"), InlineThreshold: 8},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	key := []byte("docs/large")
+	value := bytes.Repeat([]byte("x"), 1024)
+	if err := d.Set(key, value); err != nil {
+		t.Fatalf("Set large: %v", err)
+	}
+
+	got, err := d.Get(key)
+	if err != nil {
+		t.Fatalf("Get large: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("large round-trip mismatch: got=%d want=%d", len(got), len(value))
+	}
+
+	it, err := d.IteratorWithOptions([]byte("docs/"), []byte("docs0"), IteratorOptions{Mode: IteratorModePointerProjection})
+	if err != nil {
+		t.Fatalf("IteratorWithOptions: %v", err)
+	}
+	defer it.Close()
+
+	found := false
+	for ; it.Valid(); it.Next() {
+		if !bytes.Equal(it.UnsafeKey(), key) {
+			continue
+		}
+		found = true
+		if len(it.UnsafeValue()) != 0 {
+			t.Fatalf("expected pointer-projection value to be omitted")
+		}
+		break
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if !found {
+		t.Fatalf("expected key in pointer-projection iterator")
+	}
+}
+
+func TestSet_LargeValueFallsBackToPointer_DirectPath(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("docs/"), InlineThreshold: 8},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.stopCommitCombiner()
+
+	key := []byte("docs/direct-large")
+	value := bytes.Repeat([]byte("y"), 1024)
+	if err := d.SetSync(key, value); err != nil {
+		_ = d.Close()
+		t.Fatalf("SetSync large: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("close before reopen: %v", err)
+	}
+
+	reopen, err := Open(Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			PointerThreshold: 256,
+			DomainInlineThresholds: []ValueLogDomainThreshold{
+				{Prefix: []byte("docs/"), InlineThreshold: 8},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	got, err := reopen.Get(key)
+	if err != nil {
+		t.Fatalf("Get after reopen: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("large round-trip after reopen mismatch: got=%d want=%d", len(got), len(value))
+	}
+}
