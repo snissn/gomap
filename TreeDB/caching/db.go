@@ -3529,6 +3529,8 @@ type DB struct {
 	rootIteratorState     rootDomainState
 	rootPublishedSet      *publishedRootSet
 	rootPublishStats      rootDomainPublishTelemetry
+	rootPublishHook       func(*publishedRootSet) error
+	rootPublishRetryPending bool
 	hashSortedIndexer     *memtable.HashSortedIndexer
 	appendOnlyMemPool     sync.Pool
 	appendOnlyMemLeaseMu  sync.Mutex

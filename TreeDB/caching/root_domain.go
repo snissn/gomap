@@ -60,6 +60,8 @@ type rootDomainPublishTelemetry struct {
 	clears           atomic.Uint64
 	staleRejects     atomic.Uint64
 	backendFallbacks atomic.Uint64
+	publishFailures  atomic.Uint64
+	retrySuccesses   atomic.Uint64
 }
 
 type rootDomainPublishStats struct {
@@ -67,7 +69,11 @@ type rootDomainPublishStats struct {
 	clears           uint64
 	staleRejects     uint64
 	backendFallbacks uint64
+	publishFailures  uint64
+	retrySuccesses   uint64
 }
+
+var errStalePublishedRootGeneration = errors.New("caching: stale published root generation")
 
 type rootDomainProbeResult struct {
 	val   []byte
@@ -201,21 +207,29 @@ func (db *DB) rootDomainPublishStatsSnapshot() rootDomainPublishStats {
 		clears:           db.rootPublishStats.clears.Load(),
 		staleRejects:     db.rootPublishStats.staleRejects.Load(),
 		backendFallbacks: db.rootPublishStats.backendFallbacks.Load(),
+		publishFailures:  db.rootPublishStats.publishFailures.Load(),
+		retrySuccesses:   db.rootPublishStats.retrySuccesses.Load(),
 	}
 }
 
-func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) bool {
+func (db *DB) validatePublishedRootSetLocked(set *publishedRootSet) error {
 	if db == nil {
-		return false
+		return nil
+	}
+	if set != nil && db.rootPublishedSet != nil &&
+		set.generation != 0 && db.rootPublishedSet.generation != 0 &&
+		set.generation < db.rootPublishedSet.generation {
+		db.rootPublishStats.staleRejects.Add(1)
+		return errStalePublishedRootGeneration
+	}
+	return nil
+}
+
+func (db *DB) applyPublishedRootSetLocked(cloned *publishedRootSet) {
+	if db == nil {
+		return
 	}
 	db.ensureRootDomainStatesLocked()
-	cloned := clonePublishedRootSet(set)
-	if cloned != nil && db.rootPublishedSet != nil &&
-		cloned.generation != 0 && db.rootPublishedSet.generation != 0 &&
-		cloned.generation < db.rootPublishedSet.generation {
-		db.rootPublishStats.staleRejects.Add(1)
-		return false
-	}
 	for i := range db.rootPointStates {
 		db.rootPointStates[i].published = nil
 		db.rootPointStates[i].publishedRootID = 0
@@ -263,6 +277,40 @@ func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) bool {
 	}
 
 	db.publishMemtablesLocked()
+}
+
+func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
+	if db == nil {
+		return nil
+	}
+	cloned := clonePublishedRootSet(set)
+	if err := db.validatePublishedRootSetLocked(cloned); err != nil {
+		return err
+	}
+	if db.rootPublishHook != nil {
+		if err := db.rootPublishHook(cloned); err != nil {
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			return err
+		}
+	}
+	db.applyPublishedRootSetLocked(cloned)
+	if db.rootPublishRetryPending {
+		db.rootPublishStats.retrySuccesses.Add(1)
+		db.rootPublishRetryPending = false
+	}
+	return nil
+}
+
+func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) bool {
+	if db == nil {
+		return false
+	}
+	cloned := clonePublishedRootSet(set)
+	if err := db.validatePublishedRootSetLocked(cloned); err != nil {
+		return false
+	}
+	db.applyPublishedRootSetLocked(cloned)
 	return true
 }
 
