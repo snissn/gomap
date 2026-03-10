@@ -74,6 +74,7 @@ func TestVlogGenerationGC_ProtectsRetainedSegmentsBeforeFlush(t *testing.T) {
 	// Run the same GC path used by the generational scheduler. Without retained
 	// path protection this can delete the just-rotated segment and corrupt the
 	// in-memory pointers before they are flushed to the backend.
+	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(true)
 
 	if err := db.Checkpoint(); err != nil {
@@ -281,6 +282,7 @@ func TestVlogGenerationGC_ProtectedPathsSnapshotDoesNotDeleteNewerSegments(t *te
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	forceRetainedPruneIdle(db)
 	db.waitForRetainedValueLogPrune()
 
 	protected := append(db.valueLogRetainedPaths(), db.currentValueLogPaths()...)
@@ -317,6 +319,7 @@ func TestVlogGenerationGC_ProtectedPathsSnapshotDoesNotDeleteNewerSegments(t *te
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint(after k1): %v", err)
 	}
+	forceRetainedPruneIdle(db)
 	db.waitForRetainedValueLogPrune()
 
 	// Force rotate again so k1 points at a non-active segment. The GC must not

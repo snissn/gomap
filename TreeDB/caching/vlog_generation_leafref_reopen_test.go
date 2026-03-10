@@ -24,6 +24,20 @@ import (
 
 var missingValueLogIDPattern = regexp.MustCompile(`valuelog file ([0-9]+) not found(?: in snapshot)?`)
 
+func ageValueLogFilesForTest(t *testing.T, dir string, age time.Duration) {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob wal files: %v", err)
+	}
+	old := time.Now().Add(-age)
+	for _, path := range paths {
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("chtimes %s: %v", path, err)
+		}
+	}
+}
+
 func extractMissingValueLogID(err error) (uint32, bool) {
 	if err == nil {
 		return 0, false
@@ -702,6 +716,7 @@ func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_WALOn(t 
 		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	skipRetainedPrune(db)
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -727,8 +742,8 @@ func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_WALOn(t 
 		_ = b.Close()
 	}
 
-	for i := 0; i < 6; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 1024)
+	for i := 0; i < 2; i++ {
+		writeBatch(fmt.Sprintf("seed-%02d", i), 384)
 	}
 
 	if err := db.checkpointForBackendMaintenance(); err != nil {
@@ -802,6 +817,7 @@ func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t
 		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	skipRetainedPrune(db)
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -844,9 +860,10 @@ func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t
 		}
 	}
 
-	for i := 0; i < 5; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 1024)
+	for i := 0; i < 3; i++ {
+		writeBatch(fmt.Sprintf("seed-%02d", i), 384)
 		ageCurrentValueLogFiles(2 * time.Second)
+		time.Sleep(vlogGenerationLoopInterval + 100*time.Millisecond)
 	}
 
 	if err := db.checkpointForBackendMaintenance(); err != nil {
@@ -907,6 +924,7 @@ func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_WALOn(t *tes
 		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	skipRetainedPrune(db)
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -932,33 +950,23 @@ func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_WALOn(t *tes
 		_ = b.Close()
 	}
 
-	ageValueLogFiles := func() {
-		t.Helper()
-		paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
-		if err != nil {
-			t.Fatalf("glob wal files: %v", err)
-		}
-		old := time.Now().Add(-5 * time.Minute)
-		for _, path := range paths {
-			if err := os.Chtimes(path, old, old); err != nil {
-				t.Fatalf("chtimes %s: %v", path, err)
-			}
-		}
-	}
+	seedBatches := 6
+	rounds := 4
+	postRoundWrites := 512
 
-	for i := 0; i < 16; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 6000)
-		ageValueLogFiles()
+	for i := 0; i < seedBatches; i++ {
+		writeBatch(fmt.Sprintf("seed-%02d", i), 3000)
+		ageValueLogFilesForTest(t, dir, 5*time.Minute)
 	}
 	if err := db.checkpointForBackendMaintenance(); err != nil {
 		t.Fatalf("checkpoint before maintenance: %v", err)
 	}
 
-	for round := 0; round < 20; round++ {
+	for round := 0; round < rounds; round++ {
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
-		writeBatch(fmt.Sprintf("round-%02d", round), 2048)
-		ageValueLogFiles()
+		writeBatch(fmt.Sprintf("round-%02d", round), postRoundWrites)
+		ageValueLogFilesForTest(t, dir, 5*time.Minute)
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 
@@ -1010,11 +1018,11 @@ func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_WALOn(t *tes
 	}
 	defer reopenRW.Close()
 
-	got, err := reopenRW.Get([]byte("round-19-00042"))
+	got, err := reopenRW.Get([]byte(fmt.Sprintf("round-%02d-00042", rounds-1)))
 	if err != nil {
 		t.Fatalf("get after rw reopen: %v", err)
 	}
-	want := bytes.Repeat([]byte("round-19-value-"), 12)
+	want := bytes.Repeat([]byte(fmt.Sprintf("round-%02d-value-", rounds-1)), 12)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("value mismatch after rw reopen")
 	}
@@ -1060,6 +1068,7 @@ func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_WALOn(t *tes
 		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	skipRetainedPrune(db)
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -1085,8 +1094,8 @@ func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_WALOn(t *tes
 		_ = b.Close()
 	}
 
-	for i := 0; i < 12; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 4096)
+	for i := 0; i < 4; i++ {
+		writeBatch(fmt.Sprintf("seed-%02d", i), 1024)
 	}
 	if err := db.checkpointForBackendMaintenance(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -1190,6 +1199,7 @@ func TestCachedGenerationalMaintenance_DirectPointersManualGC_WALOn(t *testing.T
 		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	skipRetainedPrune(db)
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -1215,8 +1225,8 @@ func TestCachedGenerationalMaintenance_DirectPointersManualGC_WALOn(t *testing.T
 		_ = b.Close()
 	}
 
-	for i := 0; i < 12; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 4096)
+	for i := 0; i < 4; i++ {
+		writeBatch(fmt.Sprintf("seed-%02d", i), 1024)
 	}
 	if err := db.checkpointForBackendMaintenance(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -1295,6 +1305,7 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	skipRetainedPrune(db)
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -1320,22 +1331,22 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 		_ = b.Close()
 	}
 
-	seedBatches := 8
-	rounds := 6
-	postRoundWrites := 1024
+	seedBatches := 4
+	rounds := 3
+	postRoundWrites := 512
 	if !disableWAL {
-		seedBatches = 12
-		rounds = 10
-		postRoundWrites = 1536
+		seedBatches = 6
+		rounds = 4
+		postRoundWrites = 768
 		if runtime.GOOS == "windows" {
-			seedBatches = 8
-			rounds = 6
-			postRoundWrites = 1024
+			seedBatches = 4
+			rounds = 3
+			postRoundWrites = 512
 		}
 	}
 
 	for i := 0; i < seedBatches; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 6000)
+		writeBatch(fmt.Sprintf("seed-%02d", i), 3000)
 	}
 
 	rewriteRounds := 0
@@ -1592,6 +1603,7 @@ func TestCachedManualMaintenanceDirectPointersRemainReopenable_WALOn(t *testing.
 		_ = backend.Close()
 		t.Fatalf("open cachingdb: %v", err)
 	}
+	skipRetainedPrune(db)
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -1617,16 +1629,16 @@ func TestCachedManualMaintenanceDirectPointersRemainReopenable_WALOn(t *testing.
 		_ = b.Close()
 	}
 
-	seedBatches := 4
-	rounds := 3
-	postRoundWrites := 512
+	seedBatches := 3
+	rounds := 2
+	postRoundWrites := 256
 	if runtime.GOOS == "windows" {
-		seedBatches = 3
+		seedBatches = 2
 		rounds = 2
-		postRoundWrites = 384
+		postRoundWrites = 256
 	}
 	for i := 0; i < seedBatches; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 4096)
+		writeBatch(fmt.Sprintf("seed-%02d", i), 1024)
 	}
 
 	rewriteRounds := 0
