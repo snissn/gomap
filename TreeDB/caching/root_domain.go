@@ -66,7 +66,7 @@ func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includ
 		if mt == nil {
 			continue
 		}
-		if len(view.queueShardIDs) > idx && int(view.queueShardIDs[idx]) != shardIdx {
+		if shardIdx >= 0 && len(view.queueShardIDs) > idx && int(view.queueShardIDs[idx]) != shardIdx {
 			continue
 		}
 		snap.immutables = append(snap.immutables, mt)

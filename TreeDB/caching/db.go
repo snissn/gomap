@@ -15483,13 +15483,17 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	var queue []memtable.Table
 	var queueRanges []keyRange
 	if view != nil {
-		queue = view.queue
+		queue = rootDomainSnapshotFromMemtableView(view, -1, false).immutables
 		queueRanges = view.queueRanges
 	} else {
 		// Defensive fallback: should not happen after Open(), but keeps Iterator safe
 		// for zero-value DBs and tests.
 		db.mu.RLock()
-		queue = append([]memtable.Table(nil), db.queue...)
+		fallbackView := &memtableView{
+			queue:         append([]memtable.Table(nil), db.queue...),
+			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
+		}
+		queue = rootDomainSnapshotFromMemtableView(fallbackView, -1, false).immutables
 		queueRanges = append([]keyRange(nil), db.queueRanges...)
 		db.mu.RUnlock()
 	}
@@ -15842,12 +15846,16 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	var queue []memtable.Table
 	var queueRanges []keyRange
 	if view != nil {
-		queue = view.queue
+		queue = rootDomainSnapshotFromMemtableView(view, -1, false).immutables
 		queueRanges = view.queueRanges
 	} else {
 		// Defensive fallback: should not happen after Open().
 		db.mu.RLock()
-		queue = append([]memtable.Table(nil), db.queue...)
+		fallbackView := &memtableView{
+			queue:         append([]memtable.Table(nil), db.queue...),
+			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
+		}
+		queue = rootDomainSnapshotFromMemtableView(fallbackView, -1, false).immutables
 		queueRanges = append([]keyRange(nil), db.queueRanges...)
 		db.mu.RUnlock()
 	}
