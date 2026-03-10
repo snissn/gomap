@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -30,6 +31,13 @@ type rootDomainSnapshot struct {
 	published       rootDomainLookup
 	mutable         memtable.Table
 	immutables      []memtable.Table // oldest-to-newest
+}
+
+type rootDomainProbeResult struct {
+	val   []byte
+	ptr   page.ValuePtr
+	flags byte
+	found bool
 }
 
 func (db *DB) ensureRootDomainStatesLocked() {
@@ -440,4 +448,58 @@ func (s rootDomainSnapshot) visibleValue(key []byte) ([]byte, bool) {
 func (s rootDomainSnapshot) hasVisibleKey(key []byte) bool {
 	_, ok := s.visibleValue(key)
 	return ok
+}
+
+func probeRootDomainTableSorted(mt memtable.Table, keys [][]byte, out []rootDomainProbeResult) error {
+	if mt == nil || len(keys) == 0 {
+		return nil
+	}
+	it := mt.NewIterator(keys[0], nil)
+	defer func() { _ = it.Close() }()
+
+	keyIdx := 0
+	for keyIdx < len(keys) && it.Valid() {
+		for keyIdx < len(keys) && out[keyIdx].found {
+			keyIdx++
+		}
+		if keyIdx >= len(keys) {
+			break
+		}
+		cmp := bytes.Compare(it.UnsafeKey(), keys[keyIdx])
+		switch {
+		case cmp < 0:
+			it.Next()
+		case cmp > 0:
+			keyIdx++
+		default:
+			val, ptr, flags := it.UnsafeEntry()
+			out[keyIdx] = rootDomainProbeResult{
+				val:   val,
+				ptr:   ptr,
+				flags: flags,
+				found: true,
+			}
+			keyIdx++
+			it.Next()
+		}
+	}
+	return it.Error()
+}
+
+func (s rootDomainSnapshot) getManySorted(keys [][]byte, out []rootDomainProbeResult) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	if len(keys) != len(out) {
+		return errors.New("cachingdb: root-domain sorted probe input/output length mismatch")
+	}
+	if err := probeRootDomainTableSorted(s.mutable, keys, out); err != nil {
+		return err
+	}
+	for idx := len(s.immutables) - 1; idx >= 0; idx-- {
+		if err := probeRootDomainTableSorted(s.immutables[idx], keys, out); err != nil {
+			return err
+		}
+	}
+	return nil
 }

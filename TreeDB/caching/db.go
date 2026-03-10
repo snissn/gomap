@@ -14498,6 +14498,109 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 	return true
 }
 
+type getManyProbeRef struct {
+	key   []byte
+	idx   int
+	shard int
+}
+
+func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]byte) ([][]byte, error) {
+	out := make([][]byte, len(keys))
+	if view == nil || len(view.rootPointShards) == 0 {
+		return out, nil
+	}
+	refs := make([]getManyProbeRef, len(keys))
+	for i, key := range keys {
+		shard := 0
+		if len(view.rootPointShards) > 1 {
+			shard = db.shardIndex(key)
+		}
+		refs[i] = getManyProbeRef{key: key, idx: i, shard: shard}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].shard != refs[j].shard {
+			return refs[i].shard < refs[j].shard
+		}
+		return bytes.Compare(refs[i].key, refs[j].key) < 0
+	})
+
+	unique := make([]getManyProbeRef, 0, len(refs))
+	refToUnique := make([]int, len(refs))
+	for i, ref := range refs {
+		if len(unique) == 0 || ref.shard != unique[len(unique)-1].shard || !bytes.Equal(ref.key, unique[len(unique)-1].key) {
+			unique = append(unique, ref)
+		}
+		refToUnique[i] = len(unique) - 1
+	}
+
+	results := make([]rootDomainProbeResult, len(unique))
+	start := 0
+	for start < len(unique) {
+		end := start + 1
+		shard := unique[start].shard
+		for end < len(unique) && unique[end].shard == shard {
+			end++
+		}
+		keysForShard := make([][]byte, end-start)
+		for i := start; i < end; i++ {
+			keysForShard[i-start] = unique[i].key
+		}
+		if err := view.rootPointShards[shard].getManySorted(keysForShard, results[start:end]); err != nil {
+			return nil, err
+		}
+		start = end
+	}
+
+	backendIdx := make([]int, 0, len(unique))
+	backendKeys := make([][]byte, 0, len(unique))
+	uniqueVals := make([][]byte, len(unique))
+	for i, res := range results {
+		switch {
+		case !res.found:
+			backendIdx = append(backendIdx, i)
+			backendKeys = append(backendKeys, unique[i].key)
+		case res.flags&node.FlagTombstone != 0:
+			uniqueVals[i] = nil
+		case res.flags&node.FlagPointer != 0:
+			if res.val != nil {
+				uniqueVals[i] = res.val
+				break
+			}
+			readVal, err := db.readValueLog(unique[i].key, res.ptr)
+			if err != nil {
+				return nil, err
+			}
+			uniqueVals[i] = readVal
+		case res.val == nil:
+			uniqueVals[i] = []byte{}
+		default:
+			uniqueVals[i] = res.val
+		}
+	}
+	if len(backendKeys) > 0 {
+		backendVals, err := db.backendGetMany(backendKeys)
+		if err != nil {
+			return nil, err
+		}
+		if len(backendVals) != len(backendKeys) {
+			return nil, fmt.Errorf("cachingdb: backend GetMany returned %d values for %d keys", len(backendVals), len(backendKeys))
+		}
+		for i, uniqueIdx := range backendIdx {
+			uniqueVals[uniqueIdx] = backendVals[i]
+		}
+	}
+	for i, ref := range refs {
+		val := uniqueVals[refToUnique[i]]
+		if val == nil {
+			continue
+		}
+		cpy := make([]byte, len(val))
+		copy(cpy, val)
+		out[ref.idx] = cpy
+	}
+	return out, nil
+}
+
 func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	view := db.retainMemtableView()
 	if view != nil {
@@ -14713,10 +14816,13 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	view := db.retainMemtableView()
 	bypass := db.canBypassMemtableReadMany(view, keys)
 	if view != nil {
-		db.releaseMemtableView(view)
+		defer db.releaseMemtableView(view)
 	}
 	if bypass {
 		return db.backendGetMany(keys)
+	}
+	if view != nil && len(view.rootPointShards) > 0 {
+		return db.getManyFromPublishedRootPointShards(view, keys)
 	}
 
 	out := make([][]byte, len(keys))
