@@ -73,6 +73,7 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = true
 	b := db.NewBatch()
 	if err := b.Set([]byte("k1"), make([]byte, 4096)); err != nil {
 		t.Fatalf("set: %v", err)
@@ -200,6 +201,7 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = true
 	if err := db.Set([]byte("k1"), make([]byte, 4096)); err != nil {
 		t.Fatalf("set k1: %v", err)
 	}

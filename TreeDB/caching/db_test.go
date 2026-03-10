@@ -185,6 +185,7 @@ func TestIteratorTracksActiveForegroundIterators(t *testing.T) {
 	}
 	backendOwnedByDB = true
 	t.Cleanup(func() { _ = cdb.Close() })
+	cdb.testSkipVlogCheckpointKick = true
 
 	b := cdb.NewBatch()
 	if err := b.Set([]byte("k1"), []byte("v1")); err != nil {

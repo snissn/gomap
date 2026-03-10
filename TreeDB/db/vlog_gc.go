@@ -57,7 +57,8 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if db.valueLogManager == nil {
+	vm := db.valueLogManager
+	if vm == nil {
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
 
@@ -66,7 +67,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		return stats, err
 	}
 
-	set := db.valueLogManager.CurrentSet()
+	set := vm.CurrentSet()
 	keptIDs := currentValueLogIDs(set)
 	if len(opts.ProtectedPaths) > 0 {
 		if recent := recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths); len(recent) > 0 {
@@ -116,7 +117,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		if opts.DryRun {
 			continue
 		}
-		if err := db.valueLogManager.MarkZombie(id); err != nil {
+		if err := vm.MarkZombie(id); err != nil {
 			return stats, err
 		}
 		candidates[id] = candidate{path: f.Path, size: size}
@@ -124,14 +125,14 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 
 	if opts.DryRun {
 		if set != nil {
-			_ = db.valueLogManager.Release(set)
+			_ = vm.Release(set)
 		}
 		db.persistValueLogRefTrackerBestEffort()
 		return stats, nil
 	}
 
 	if set != nil {
-		_ = db.valueLogManager.Release(set)
+		_ = vm.Release(set)
 	}
 
 	if err := db.RefreshValueLogSet(); err != nil {
@@ -152,14 +153,14 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		}
 	}
 
-	currentSet := db.valueLogManager.CurrentSetNoRefresh()
+	currentSet := vm.CurrentSetNoRefresh()
 	if currentSet != nil {
 		if err := updateValueLogHealthAfterGC(db.dir, currentSet, referenced); err != nil {
 			if db.notifyError != nil {
 				db.notifyError(fmt.Errorf("value-log health update after gc: %w", err))
 			}
 		}
-		_ = db.valueLogManager.Release(currentSet)
+		_ = vm.Release(currentSet)
 	}
 
 	db.persistValueLogRefTrackerBestEffort()
