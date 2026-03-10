@@ -5,7 +5,9 @@ import (
 	"errors"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
@@ -13,6 +15,14 @@ import (
 
 type rootDomainLookup interface {
 	GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool)
+}
+
+type rootDomainIteratorFactory interface {
+	Iterator(start, end []byte) (iterator.UnsafeIterator, error)
+}
+
+type rootDomainUnsafeIteratorFactory interface {
+	NewIterator(start, end []byte) iterator.UnsafeIterator
 }
 
 // rootDomainState is the native cached state shape for one logical root-domain.
@@ -166,6 +176,13 @@ func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValueP
 		return nil, page.ValuePtr{}, 0, false
 	}
 	return entry.Value, entry.ValuePtr, entry.Flags, true
+}
+
+func (l backendSnapshotLookup) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	if l.snapshot == nil {
+		return nil, backenddb.ErrClosed
+	}
+	return l.snapshot.Iterator(start, end)
 }
 
 func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includeMutable bool) rootDomainSnapshot {
@@ -502,4 +519,95 @@ func (s rootDomainSnapshot) getManySorted(keys [][]byte, out []rootDomainProbeRe
 		}
 	}
 	return nil
+}
+
+func (s rootDomainSnapshot) prefixIteratorSources(start []byte) ([]merging.IteratorSource, error) {
+	sources := make([]merging.IteratorSource, 0, 1+len(s.immutables)+1)
+	prio := 0
+	if s.mutable != nil {
+		sources = append(sources, merging.IteratorSource{
+			Iter:     s.mutable.NewIterator(start, nil),
+			Priority: prio,
+		})
+		prio++
+	}
+	for idx := len(s.immutables) - 1; idx >= 0; idx-- {
+		if s.immutables[idx] == nil {
+			continue
+		}
+		sources = append(sources, merging.IteratorSource{
+			Iter:     s.immutables[idx].NewIterator(start, nil),
+			Priority: prio,
+		})
+		prio++
+	}
+	switch published := s.published.(type) {
+	case rootDomainUnsafeIteratorFactory:
+		sources = append(sources, merging.IteratorSource{
+			Iter:     published.NewIterator(start, nil),
+			Priority: prio,
+		})
+	case rootDomainIteratorFactory:
+		iter, err := published.Iterator(start, nil)
+		if err != nil {
+			for i := range sources {
+				_ = sources[i].Iter.Close()
+			}
+			return nil, err
+		}
+		sources = append(sources, merging.IteratorSource{
+			Iter:     iter,
+			Priority: prio,
+		})
+	}
+	return sources, nil
+}
+
+func (s rootDomainSnapshot) hasPrefixesSorted(prefixes [][]byte, out []bool) error {
+	if len(prefixes) == 0 {
+		return nil
+	}
+	if len(prefixes) != len(out) {
+		return errors.New("cachingdb: root-domain sorted prefix probe input/output length mismatch")
+	}
+	sources, err := s.prefixIteratorSources(prefixes[0])
+	if err != nil {
+		return err
+	}
+	if len(sources) == 0 {
+		return nil
+	}
+
+	var it merging.Iterator
+	if len(sources) == 1 {
+		it = newSingleSourceIterator(sources[0].Iter, prefixes[0], nil)
+	} else {
+		it = merging.NewMergingIterator(sources, prefixes[0], nil)
+	}
+	defer func() { _ = it.Close() }()
+
+	prefixIdx := 0
+	for prefixIdx < len(prefixes) && it.Valid() {
+		key := it.Key()
+		for prefixIdx < len(prefixes) {
+			prefix := prefixes[prefixIdx]
+			if bytes.HasPrefix(key, prefix) {
+				out[prefixIdx] = true
+				prefixIdx++
+				continue
+			}
+			if bytes.Compare(key, prefix) > 0 {
+				prefixIdx++
+				continue
+			}
+			break
+		}
+		if prefixIdx >= len(prefixes) {
+			break
+		}
+		if bytes.Compare(key, prefixes[prefixIdx]) < 0 {
+			it.Next()
+		}
+	}
+	return it.Error()
 }
