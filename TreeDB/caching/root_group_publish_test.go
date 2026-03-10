@@ -6,6 +6,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
 func TestInstallPublishedRootSetLocked_PublishesOnePinnedGeneration(t *testing.T) {
@@ -257,7 +258,7 @@ func TestPublishInstalledRootSetLocked_HookFailureKeepsPreviousGeneration(t *tes
 		t.Fatalf("publish setA: %v", err)
 	}
 	viewA := db.retainMemtableView()
-	db.rootPublishHook = func(*publishedRootSet) error { return errors.New("boom") }
+	db.rootPublishHook = func(*rootPublishGroup) error { return errors.New("boom") }
 	err := db.publishInstalledRootSetLocked(setB)
 	viewB := db.retainMemtableView()
 	stats := db.rootDomainPublishStatsSnapshot()
@@ -314,7 +315,7 @@ func TestPublishInstalledRootSetLocked_RetryPublishesExactlyOnce(t *testing.T) {
 		t.Fatalf("publish setA: %v", err)
 	}
 	failOnce := true
-	db.rootPublishHook = func(*publishedRootSet) error {
+	db.rootPublishHook = func(*rootPublishGroup) error {
 		if failOnce {
 			failOnce = false
 			return errors.New("retry me")
@@ -430,7 +431,7 @@ func TestPublishInstalledRootSetLocked_FailureLeavesDirtyPublishGroupPending(t *
 		db.mu.Unlock()
 		t.Fatal("expected install to succeed")
 	}
-	db.rootPublishHook = func(*publishedRootSet) error { return errors.New("boom") }
+	db.rootPublishHook = func(*rootPublishGroup) error { return errors.New("boom") }
 	err := db.publishInstalledRootSetLocked(set)
 	dirtyPending := db.dirtyRootPublishGroupPending
 	dirtyID := db.dirtyRootPublishGroupID
@@ -518,7 +519,7 @@ func TestFlushSome_PrefersDirtyRootPublishGroupBeforeLaneWork(t *testing.T) {
 		t.Fatal("expected install to succeed")
 	}
 	hookCalls := 0
-	db.rootPublishHook = func(*publishedRootSet) error {
+	db.rootPublishHook = func(*rootPublishGroup) error {
 		hookCalls++
 		return nil
 	}
@@ -579,7 +580,7 @@ func TestFlushSome_DirtyRootPublishFailureStopsBeforeLaneWork(t *testing.T) {
 		t.Fatal("expected install to succeed")
 	}
 	hookCalls := 0
-	db.rootPublishHook = func(*publishedRootSet) error {
+	db.rootPublishHook = func(*rootPublishGroup) error {
 		hookCalls++
 		return errors.New("boom")
 	}
@@ -609,4 +610,121 @@ func TestFlushSome_DirtyRootPublishFailureStopsBeforeLaneWork(t *testing.T) {
 	if dirtyID != 11 {
 		t.Fatalf("dirty publish group id=%d want 11", dirtyID)
 	}
+}
+
+func TestPublishInstalledRootSetLocked_HookSeesOrderedRunsAsOneGroup(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 2),
+		mutableShardMask: 1,
+		rootPointStates: []rootDomainState{
+			{mutable: newRootDomainTestTable(t, rootDomainTestOp{key: "live-0", value: "mutable-0"}), immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "p0", value: "queue-0"}),
+			}},
+			{mutable: newRootDomainTestTable(t, rootDomainTestOp{key: "live-1", value: "mutable-1"}), immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "p1", value: "queue-1"}),
+			}},
+		},
+		rootIteratorState: rootDomainState{
+			mutable: newRootDomainTestTable(t, rootDomainTestOp{key: "live-iter", value: "mutable-iter"}),
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "queue-iter"}),
+			},
+		},
+	}
+	set := &publishedRootSet{
+		generation: 12,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "p0", value: "published-0"}), rootID: 121},
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "p1", value: "published-1"}), rootID: 122},
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "published-iter"}), rootID: 123,
+		},
+	}
+
+	var captured *rootPublishGroup
+	db.mu.Lock()
+	db.rootPublishHook = func(group *rootPublishGroup) error {
+		captured = group
+		return nil
+	}
+	if err := db.publishInstalledRootSetLocked(set); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("publishInstalledRootSetLocked: %v", err)
+	}
+	db.rootPublishHook = nil
+	db.mu.Unlock()
+
+	if captured == nil {
+		t.Fatal("expected grouped publish payload")
+	}
+	if captured.generation != 12 {
+		t.Fatalf("group generation=%d want 12", captured.generation)
+	}
+	if len(captured.pointShards) != 2 {
+		t.Fatalf("point shard count=%d want 2", len(captured.pointShards))
+	}
+	if captured.pointShards[0].mutable != nil || captured.pointShards[1].mutable != nil || captured.iterator.mutable != nil {
+		t.Fatal("expected grouped publish ordered runs to exclude live mutable state")
+	}
+	assertRootDomainVisibleValue(t, captured.pointShards[0], "p0", "queue-0")
+	assertRootDomainVisibleValue(t, captured.pointShards[1], "p1", "queue-1")
+	assertRootDomainVisibleValue(t, captured.iterator, "iter/a", "queue-iter")
+	if captured.published == nil || captured.published.generation != 12 {
+		t.Fatalf("captured published metadata=%v", captured.published)
+	}
+}
+
+func TestPublishInstalledRootSetLocked_HookClonesOrderedRunSlices(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootPointStates: []rootDomainState{
+			{immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "queue-0"}),
+			}},
+		},
+		rootIteratorState: rootDomainState{
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "iter-0"}),
+			},
+		},
+	}
+
+	var captured *rootPublishGroup
+	db.mu.Lock()
+	db.rootPublishHook = func(group *rootPublishGroup) error {
+		captured = group
+		return nil
+	}
+	if err := db.publishInstalledRootSetLocked(&publishedRootSet{
+		generation: 13,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "published"}), rootID: 131},
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "published-iter"}), rootID: 132,
+		},
+	}); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("publishInstalledRootSetLocked: %v", err)
+	}
+	db.rootPointStates[0].immutables = append(db.rootPointStates[0].immutables,
+		newRootDomainTestTable(t, rootDomainTestOp{key: "k2", value: "queue-1"}))
+	db.rootIteratorState.immutables = append(db.rootIteratorState.immutables,
+		newRootDomainTestTable(t, rootDomainTestOp{key: "iter/b", value: "iter-1"}))
+	db.rootPublishHook = nil
+	db.mu.Unlock()
+
+	if captured == nil {
+		t.Fatal("expected grouped publish payload")
+	}
+	if got := len(captured.pointShards[0].immutables); got != 1 {
+		t.Fatalf("captured point immutables=%d want 1", got)
+	}
+	if got := len(captured.iterator.immutables); got != 1 {
+		t.Fatalf("captured iterator immutables=%d want 1", got)
+	}
+	assertRootDomainVisibleValue(t, captured.pointShards[0], "k", "queue-0")
+	assertRootDomainVisibleValue(t, captured.iterator, "iter/a", "iter-0")
 }
