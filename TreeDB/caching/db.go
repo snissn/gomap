@@ -3529,7 +3529,7 @@ type DB struct {
 	rootIteratorState            rootDomainState
 	rootPublishedSet             *publishedRootSet
 	rootPublishStats             rootDomainPublishTelemetry
-	rootPublishHook              func(*publishedRootSet) error
+	rootPublishHook              func(*rootPublishGroup) error
 	dirtyRootPublishGroupID      uint64
 	dirtyRootPublishGroupPending bool
 	rootPublishRetryPending      bool

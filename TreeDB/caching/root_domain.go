@@ -55,6 +55,13 @@ type publishedRootSet struct {
 	iterator    publishedRootRef
 }
 
+type rootPublishGroup struct {
+	generation  uint64
+	pointShards []rootDomainSnapshot
+	iterator    rootDomainSnapshot
+	published   *publishedRootSet
+}
+
 type rootDomainPublishTelemetry struct {
 	installs         atomic.Uint64
 	clears           atomic.Uint64
@@ -240,6 +247,30 @@ func (db *DB) clearDirtyRootPublishGroupLocked() {
 	db.dirtyRootPublishGroupPending = false
 }
 
+func (db *DB) buildRootPublishGroupLocked(set *publishedRootSet) *rootPublishGroup {
+	if db == nil {
+		return nil
+	}
+	db.ensureRootDomainStatesLocked()
+	group := &rootPublishGroup{
+		published: clonePublishedRootSet(set),
+	}
+	if set != nil {
+		group.generation = set.generation
+	}
+	if len(db.rootPointStates) > 0 {
+		group.pointShards = make([]rootDomainSnapshot, len(db.rootPointStates))
+		for i := range db.rootPointStates {
+			snap := db.rootPointStates[i].snapshot()
+			snap.mutable = nil
+			group.pointShards[i] = snap
+		}
+	}
+	group.iterator = db.rootIteratorState.snapshot()
+	group.iterator.mutable = nil
+	return group
+}
+
 func (db *DB) validatePublishedRootSetLocked(set *publishedRootSet) error {
 	if db == nil {
 		return nil
@@ -316,7 +347,7 @@ func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
 		return err
 	}
 	if db.rootPublishHook != nil {
-		if err := db.rootPublishHook(cloned); err != nil {
+		if err := db.rootPublishHook(db.buildRootPublishGroupLocked(cloned)); err != nil {
 			db.rootPublishStats.publishFailures.Add(1)
 			db.rootPublishRetryPending = true
 			return err
