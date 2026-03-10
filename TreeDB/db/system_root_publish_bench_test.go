@@ -19,6 +19,7 @@ func BenchmarkPublishSystemRootIterator_WarmSparseDelta(b *testing.B) {
 	left := mustFrozenSystemMemtable(b, systemRangeKVs(2048, map[int]string{17: "value-0017-left"})...)
 	right := mustFrozenSystemMemtable(b, systemRangeKVs(2048, map[int]string{17: "value-0017-right"})...)
 
+	start := db.systemRootPublishStatsSnapshot()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		table := left
@@ -29,6 +30,18 @@ func BenchmarkPublishSystemRootIterator_WarmSparseDelta(b *testing.B) {
 			b.Fatalf("warm sparse publish: %v", err)
 		}
 	}
+	b.StopTimer()
+
+	end := db.systemRootPublishStatsSnapshot()
+	nativeApplies := end.warmNativeApplyAttempts - start.warmNativeApplyAttempts
+	fallbacks := end.warmRebuildFallbacks - start.warmRebuildFallbacks
+	if nativeApplies != uint64(b.N) {
+		b.Fatalf("warmNativeApplyAttempts=%d want %d", nativeApplies, b.N)
+	}
+	if fallbacks != 0 {
+		b.Fatalf("warmRebuildFallbacks=%d want 0", fallbacks)
+	}
+	b.ReportMetric(float64(nativeApplies), "warm_native_apply")
 }
 
 func BenchmarkPublishSystemRootIterator_WarmDenseDelta(b *testing.B) {
@@ -54,6 +67,7 @@ func BenchmarkPublishSystemRootIterator_WarmDenseDelta(b *testing.B) {
 	left := mustFrozenSystemMemtable(b, systemRangeKVs(2048, leftOverrides)...)
 	right := mustFrozenSystemMemtable(b, systemRangeKVs(2048, rightOverrides)...)
 
+	start := db.systemRootPublishStatsSnapshot()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		table := left
@@ -64,4 +78,16 @@ func BenchmarkPublishSystemRootIterator_WarmDenseDelta(b *testing.B) {
 			b.Fatalf("warm dense publish: %v", err)
 		}
 	}
+	b.StopTimer()
+
+	end := db.systemRootPublishStatsSnapshot()
+	nativeApplies := end.warmNativeApplyAttempts - start.warmNativeApplyAttempts
+	fallbacks := end.warmRebuildFallbacks - start.warmRebuildFallbacks
+	if nativeApplies != 0 {
+		b.Fatalf("warmNativeApplyAttempts=%d want 0", nativeApplies)
+	}
+	if fallbacks != uint64(b.N) {
+		b.Fatalf("warmRebuildFallbacks=%d want %d", fallbacks, b.N)
+	}
+	b.ReportMetric(float64(fallbacks), "warm_rebuild_fallback")
 }
