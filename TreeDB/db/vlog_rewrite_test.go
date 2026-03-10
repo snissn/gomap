@@ -1430,3 +1430,90 @@ func TestSelectRewriteSourceSegments_SkipsYoungSegments(t *testing.T) {
 		t.Fatalf("expected older segment 10 selected, got=%v", selected)
 	}
 }
+
+func TestSelectRewriteSourceSegments_MaxSourceBytes_PrefersHigherStaleYield(t *testing.T) {
+	dir := t.TempDir()
+
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	path3 := filepath.Join(dir, "value-l0-000003.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte("a"), 20), 0o600); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte("b"), 100), 0o600); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	if err := os.WriteFile(path3, bytes.Repeat([]byte("c"), 100), 0o600); err != nil {
+		t.Fatalf("write path3: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+		3: {Path: path3},
+	}
+	active := map[uint32]struct{}{}
+	liveByID := map[uint32]int64{
+		1: 5,  // stale 15, ratio 0.75
+		2: 60, // stale 40, ratio 0.40
+		3: 60, // stale 40, ratio 0.40
+	}
+
+	selected := listRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceBytes:       120,
+		MaxSourceSegments:    2,
+		MinSegmentStaleBytes: 1,
+	}, files, active, liveByID)
+
+	got := make([]uint32, 0, len(selected))
+	for _, segment := range selected {
+		got = append(got, segment.fileID)
+	}
+	if !reflect.DeepEqual(got, []uint32{2, 3}) {
+		t.Fatalf("selected segments=%v want [2 3]", got)
+	}
+	if got := rewriteSourceSegmentsTotalStaleBytes(selected); got != 80 {
+		t.Fatalf("selected stale bytes=%d want 80", got)
+	}
+}
+
+func TestSelectRewriteSourceSegments_NoBudget_KeepsRatioPriority(t *testing.T) {
+	dir := t.TempDir()
+
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	path3 := filepath.Join(dir, "value-l0-000003.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte("a"), 20), 0o600); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte("b"), 100), 0o600); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	if err := os.WriteFile(path3, bytes.Repeat([]byte("c"), 100), 0o600); err != nil {
+		t.Fatalf("write path3: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+		3: {Path: path3},
+	}
+	active := map[uint32]struct{}{}
+	liveByID := map[uint32]int64{
+		1: 5,  // stale 15, ratio 0.75
+		2: 60, // stale 40, ratio 0.40
+		3: 60, // stale 40, ratio 0.40
+	}
+
+	selected := listRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    1,
+		MinSegmentStaleBytes: 1,
+	}, files, active, liveByID)
+
+	if len(selected) != 1 {
+		t.Fatalf("selected len=%d want 1", len(selected))
+	}
+	if selected[0].fileID != 1 {
+		t.Fatalf("selected segment=%d want 1", selected[0].fileID)
+	}
+}

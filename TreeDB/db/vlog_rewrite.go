@@ -749,6 +749,36 @@ type rewriteSourceSegment struct {
 	staleRatio float64
 }
 
+func greedySelectRewriteSourceSegments(candidates []rewriteSourceSegment, maxSourceSegments int, maxSourceBytes int64) []rewriteSourceSegment {
+	if len(candidates) == 0 {
+		return nil
+	}
+	selected := make([]rewriteSourceSegment, 0, len(candidates))
+	var selectedBytes int64
+	for _, candidate := range candidates {
+		if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
+			break
+		}
+		if maxSourceBytes > 0 {
+			next := selectedBytes + candidate.liveBytes
+			if next > maxSourceBytes && len(selected) > 0 {
+				continue
+			}
+		}
+		selected = append(selected, candidate)
+		selectedBytes += candidate.liveBytes
+	}
+	return selected
+}
+
+func rewriteSourceSegmentsTotalStaleBytes(segments []rewriteSourceSegment) int64 {
+	var total int64
+	for _, segment := range segments {
+		total += segment.staleBytes
+	}
+	return total
+}
+
 func listRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) []rewriteSourceSegment {
 	if len(opts.SourceFileIDs) > 0 {
 		selected := make([]rewriteSourceSegment, 0, len(opts.SourceFileIDs))
@@ -844,20 +874,24 @@ func listRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint
 		return a.fileID < b.fileID
 	})
 
-	selected := make([]rewriteSourceSegment, 0, len(candidates))
-	var selectedBytes int64
-	for _, candidate := range candidates {
-		if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
-			break
-		}
-		if maxSourceBytes > 0 {
-			next := selectedBytes + candidate.liveBytes
-			if next > maxSourceBytes && len(selected) > 0 {
-				continue
+	selected := greedySelectRewriteSourceSegments(candidates, maxSourceSegments, maxSourceBytes)
+	if maxSourceBytes > 0 && len(candidates) > 1 {
+		staleFirst := append([]rewriteSourceSegment(nil), candidates...)
+		sort.SliceStable(staleFirst, func(i, j int) bool {
+			a := staleFirst[i]
+			b := staleFirst[j]
+			if a.staleBytes != b.staleBytes {
+				return a.staleBytes > b.staleBytes
 			}
+			if a.liveBytes != b.liveBytes {
+				return a.liveBytes < b.liveBytes
+			}
+			return a.fileID < b.fileID
+		})
+		staleSelected := greedySelectRewriteSourceSegments(staleFirst, maxSourceSegments, maxSourceBytes)
+		if rewriteSourceSegmentsTotalStaleBytes(staleSelected) > rewriteSourceSegmentsTotalStaleBytes(selected) {
+			selected = staleSelected
 		}
-		selected = append(selected, candidate)
-		selectedBytes += candidate.liveBytes
 	}
 	return selected
 }
