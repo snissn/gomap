@@ -3,6 +3,7 @@ package treedb
 import (
 	"bytes"
 	"reflect"
+	"strconv"
 	"testing"
 )
 
@@ -188,4 +189,31 @@ func TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites(t *testing.T) 
 	if !reflect.DeepEqual(liveHasPrefixes, wantLivePrefixes) {
 		t.Fatalf("db HasPrefixes mismatch: got=%v want=%v", liveHasPrefixes, wantLivePrefixes)
 	}
+
+	stats := db.Stats()
+	if got := mustStatUint64(t, stats, "treedb.cache.root_domain_probes.snapshot_hasmany.native_calls"); got != 2 {
+		t.Fatalf("snapshot HasMany native calls=%d want 2", got)
+	}
+	if got := mustStatUint64(t, stats, "treedb.cache.root_domain_probes.snapshot_hasmany.backend_fallback_calls"); got != 1 {
+		t.Fatalf("snapshot HasMany backend fallback calls=%d want 1", got)
+	}
+	if got := mustStatUint64(t, stats, "treedb.cache.root_domain_probes.snapshot_hasprefixes.native_calls"); got != 2 {
+		t.Fatalf("snapshot HasPrefixes native calls=%d want 2", got)
+	}
+	if got := mustStatUint64(t, stats, "treedb.cache.root_domain_probes.snapshot_hasprefixes.fallback_calls"); got != 0 {
+		t.Fatalf("snapshot HasPrefixes fallback calls=%d want 0", got)
+	}
+}
+
+func mustStatUint64(t *testing.T, stats map[string]string, key string) uint64 {
+	t.Helper()
+	raw, ok := stats[key]
+	if !ok {
+		t.Fatalf("missing stat %q", key)
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		t.Fatalf("parse stat %q=%q: %v", key, raw, err)
+	}
+	return v
 }
