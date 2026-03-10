@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"reflect"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -289,6 +290,34 @@ func TestRootDomainSnapshotFromCachedSnapshot_IncludesPublishedBackendState(t *t
 		t.Fatalf("publishedRootID=%d want %d", got, want)
 	}
 	assertRootDomainVisibleValue(t, rootSnap, "k", "backend-v")
+}
+
+func TestRawIteratorRootDomainSnapshot_CopiesQueuedRunsAndRanges(t *testing.T) {
+	t.Parallel()
+
+	db := &DB{
+		queue: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "a", value: "va"}),
+			newRootDomainTestTable(t, rootDomainTestOp{key: "b", value: "vb"}),
+		},
+		queueRanges: []keyRange{
+			{valid: true, min: []byte("a"), max: []byte("a")},
+			{valid: true, min: []byte("b"), max: []byte("b")},
+		},
+	}
+
+	snap, ranges := db.rawIteratorRootDomainSnapshot()
+	if got, want := len(snap.immutables), 2; got != want {
+		t.Fatalf("immutables=%d want %d", got, want)
+	}
+	if !reflect.DeepEqual(ranges, db.queueRanges) {
+		t.Fatalf("ranges=%v want %v", ranges, db.queueRanges)
+	}
+
+	ranges[0] = keyRange{}
+	if !db.queueRanges[0].valid {
+		t.Fatal("expected raw iterator ranges to be copied")
+	}
 }
 
 func TestRootDomainSnapshotFromCachedSnapshot_QueueTombstoneBeatsPublishedState(t *testing.T) {
