@@ -767,3 +767,88 @@ func TestPublishInstalledRootSetLocked_HookClonesOrderedRunSlices(t *testing.T) 
 	assertRootDomainVisibleValue(t, captured.system, "sys/a", "sys-0")
 	assertRootDomainVisibleValue(t, captured.iterator, "iter/a", "iter-0")
 }
+
+func TestPublishInstalledRootSet_HookRunsOutsideDBMu(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	set := &publishedRootSet{
+		generation: 14,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "v"}), rootID: 141},
+		},
+	}
+
+	hookSawUnlocked := false
+	db.rootPublishHook = func(*rootPublishGroup) error {
+		if db.mu.TryLock() {
+			hookSawUnlocked = true
+			db.mu.Unlock()
+		}
+		return nil
+	}
+	if err := db.publishInstalledRootSet(set); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+	db.rootPublishHook = nil
+
+	if !hookSawUnlocked {
+		t.Fatal("expected publish hook to run outside db.mu")
+	}
+}
+
+func TestPublishInstalledRootSet_NewerGenerationInstalledDuringHookWins(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	setA := &publishedRootSet{
+		generation: 20,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "a"}), rootID: 201},
+		},
+	}
+	setB := &publishedRootSet{
+		generation: 21,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "b"}), rootID: 211},
+		},
+	}
+
+	db.rootPublishHook = func(*rootPublishGroup) error {
+		db.mu.Lock()
+		defer db.mu.Unlock()
+		if !db.installPublishedRootSetLocked(setB) {
+			t.Fatal("expected newer install to succeed")
+		}
+		return nil
+	}
+	if err := db.publishInstalledRootSet(setA); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+	db.rootPublishHook = nil
+
+	db.mu.Lock()
+	view := db.retainMemtableView()
+	dirtyPending := db.dirtyRootPublishGroupPending
+	dirtyID := db.dirtyRootPublishGroupID
+	db.mu.Unlock()
+	if view == nil {
+		t.Fatal("expected published view")
+	}
+	defer db.releaseMemtableView(view)
+
+	assertRootDomainVisibleValue(t, view.rootPointShards[0], "k", "b")
+	if view.rootPointShards[0].publishedRootID != 211 {
+		t.Fatalf("published root id=%d want 211", view.rootPointShards[0].publishedRootID)
+	}
+	if !dirtyPending {
+		t.Fatal("expected newer dirty publish group to remain pending")
+	}
+	if dirtyID != 21 {
+		t.Fatalf("dirty publish group id=%d want 21", dirtyID)
+	}
+}
