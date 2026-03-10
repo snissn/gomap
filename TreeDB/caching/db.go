@@ -10000,6 +10000,10 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC {
 		return
 	}
+	// Retained-prune and generation maintenance use the same foreground quiet-window gate.
+	// That means a scheduled-but-not-yet-running prune can only delay this path by at most
+	// foregroundMaintenancePollInterval(), not by the full quiet window. Waiting here keeps
+	// active retained-prune scans serialized with rewrite/GC planning once the system has gone quiet.
 	db.waitForRetainedValueLogPrune()
 	if db.checkpointing.Load() {
 		return
