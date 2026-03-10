@@ -66,6 +66,7 @@ var (
 	cpuProfile         = flag.String("cpuprofile", "", "write cpu profile to file")
 	cpuProfileTestsArg = flag.String("cpuprofile-tests", "", "Comma-separated list of tests to profile when -cpuprofile is set (default: all selected tests)")
 	profileDir         = flag.String("profile-dir", "", "Write profiling artifacts to this directory (enables defaults for -cpuprofile, -allocsprofile, -checkpoint-cpuprofile, -blockprofile, -mutexprofile, -trace unless explicitly set)")
+	pathLabel          = flag.String("path-label", "", "Optional benchmark execution-path label for profile-dir artifacts (oracle|native-fastpath)")
 	allocsProfile      = flag.String("allocsprofile", "", "write per-test allocation delta profile prefix to file")
 	allocsProfileTests = flag.String("allocsprofile-tests", "", "Comma-separated list of tests to profile when -allocsprofile is set (default: all selected tests)")
 	allocsProfileRate  = flag.Int("allocsprofilerate", 512*1024, "runtime.MemProfileRate sampling rate in bytes for -allocsprofile")
@@ -207,9 +208,10 @@ type benchprofExport struct {
 }
 
 type benchprofExportRun struct {
-	Keys    int                           `json:"keys"`
-	Profile string                        `json:"profile,omitempty"`
-	Results map[string]map[string]float64 `json:"results,omitempty"`
+	Keys          int                           `json:"keys"`
+	Profile       string                        `json:"profile,omitempty"`
+	ExecutionPath string                        `json:"execution_path,omitempty"`
+	Results       map[string]map[string]float64 `json:"results,omitempty"`
 }
 
 type scanDiag struct {
@@ -950,7 +952,7 @@ func maybeWriteBenchprofArtifacts(dir string, runs []BenchRun) bool {
 	if dir == "" || len(runs) == 0 {
 		return false
 	}
-	if err := writeBenchprofArtifacts(dir, runs); err != nil {
+	if err := writeBenchprofArtifacts(dir, strings.TrimSpace(*pathLabel), runs); err != nil {
 		log.Printf("benchprof artifacts: %v", err)
 		return false
 	}
@@ -963,9 +965,12 @@ func runBenchprof(dir string) {
 	}
 }
 
-func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
+func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %q: %w", dir, err)
+	}
+	if executionPath != "" && executionPath != "oracle" && executionPath != "native-fastpath" {
+		return fmt.Errorf("invalid execution path %q", executionPath)
 	}
 
 	out := benchprofExport{
@@ -974,9 +979,10 @@ func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
 	}
 	for _, run := range runs {
 		out.Runs = append(out.Runs, benchprofExportRun{
-			Keys:    run.Config.Keys,
-			Profile: strings.TrimSpace(run.Config.Profile),
-			Results: run.Results,
+			Keys:          run.Config.Keys,
+			Profile:       strings.TrimSpace(run.Config.Profile),
+			ExecutionPath: executionPath,
+			Results:       run.Results,
 		})
 	}
 
@@ -993,6 +999,9 @@ func writeBenchprofArtifacts(dir string, runs []BenchRun) error {
 		md = renderMarkdownSingle(runs[0])
 	} else {
 		md = renderMarkdownSweep(runs)
+	}
+	if executionPath != "" {
+		md = fmt.Sprintf("- execution path: `%s`\n\n%s", executionPath, md)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "benchprof_results.md"), []byte(md), 0o644); err != nil {
 		return fmt.Errorf("write benchprof_results.md: %w", err)
