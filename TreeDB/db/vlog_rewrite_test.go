@@ -1332,6 +1332,93 @@ func TestSelectRewriteSourceSegments_OversizeCandidates_SelectsOne(t *testing.T)
 	}
 }
 
+func TestSelectRewriteSourceSegments_MaxSourceBytes_PrefersHigherTotalStaleBytes(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	path3 := filepath.Join(dir, "value-l0-000003.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte("a"), 100), 0o600); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte("b"), 140), 0o600); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	if err := os.WriteFile(path3, bytes.Repeat([]byte("c"), 140), 0o600); err != nil {
+		t.Fatalf("write path3: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+		3: {Path: path3},
+	}
+	active := map[uint32]struct{}{}
+	liveByID := map[uint32]int64{
+		1: 40, // stale 60, highest stale ratio
+		2: 60, // stale 80
+		3: 60, // stale 80
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceBytes:       120,
+		MaxSourceSegments:    2,
+		MinSegmentStaleBytes: 1,
+	}, files, active, liveByID)
+
+	if len(selected) != 2 {
+		t.Fatalf("expected two selected segments, got %d (%v)", len(selected), selected)
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected segment 2 selected, got=%v", selected)
+	}
+	if _, ok := selected[3]; !ok {
+		t.Fatalf("expected segment 3 selected, got=%v", selected)
+	}
+	if _, ok := selected[1]; ok {
+		t.Fatalf("expected stale-bytes selection to skip segment 1, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_NoMaxSourceBytes_KeepsRatioPriority(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	path3 := filepath.Join(dir, "value-l0-000003.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte("a"), 100), 0o600); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte("b"), 140), 0o600); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	if err := os.WriteFile(path3, bytes.Repeat([]byte("c"), 140), 0o600); err != nil {
+		t.Fatalf("write path3: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+		3: {Path: path3},
+	}
+	active := map[uint32]struct{}{}
+	liveByID := map[uint32]int64{
+		1: 40, // stale 60, highest stale ratio
+		2: 60, // stale 80
+		3: 60, // stale 80
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    1,
+		MinSegmentStaleBytes: 1,
+	}, files, active, liveByID)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected one selected segment, got %d (%v)", len(selected), selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected highest-ratio segment 1 selected without byte budget, got=%v", selected)
+	}
+}
+
 func TestGroupedRecordKeyForPtr_UsesFullOffsetWidth(t *testing.T) {
 	ptrA := page.ValuePtr{FileID: 7, Offset: (1 << 32) + 12}
 	ptrB := page.ValuePtr{FileID: 7, Offset: (1 << 33) + 12}

@@ -743,6 +743,59 @@ type rewriteSourceSegment struct {
 	staleRatio float64
 }
 
+func sortRewriteSourceSegmentsByRatio(candidates []rewriteSourceSegment) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.staleRatio != b.staleRatio {
+			return a.staleRatio > b.staleRatio
+		}
+		if a.staleBytes != b.staleBytes {
+			return a.staleBytes > b.staleBytes
+		}
+		if a.liveBytes != b.liveBytes {
+			return a.liveBytes < b.liveBytes
+		}
+		return a.fileID < b.fileID
+	})
+}
+
+func sortRewriteSourceSegmentsByStaleBytes(candidates []rewriteSourceSegment) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.staleBytes != b.staleBytes {
+			return a.staleBytes > b.staleBytes
+		}
+		if a.liveBytes != b.liveBytes {
+			return a.liveBytes < b.liveBytes
+		}
+		if a.staleRatio != b.staleRatio {
+			return a.staleRatio > b.staleRatio
+		}
+		return a.fileID < b.fileID
+	})
+}
+
+func pickRewriteSourceSegmentsGreedy(candidates []rewriteSourceSegment, maxSourceSegments int, maxSourceBytes int64) (selected map[uint32]struct{}, selectedBytes int64, selectedStaleBytes int64) {
+	selected = make(map[uint32]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
+			break
+		}
+		if maxSourceBytes > 0 {
+			next := selectedBytes + candidate.liveBytes
+			if next > maxSourceBytes && len(selected) > 0 {
+				continue
+			}
+		}
+		selected[candidate.fileID] = struct{}{}
+		selectedBytes += candidate.liveBytes
+		selectedStaleBytes += candidate.staleBytes
+	}
+	return selected, selectedBytes, selectedStaleBytes
+}
+
 func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) map[uint32]struct{} {
 	if len(opts.SourceFileIDs) > 0 {
 		selected := make(map[uint32]struct{}, len(opts.SourceFileIDs))
@@ -816,35 +869,19 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 		return map[uint32]struct{}{}
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		a := candidates[i]
-		b := candidates[j]
-		if a.staleRatio != b.staleRatio {
-			return a.staleRatio > b.staleRatio
-		}
-		if a.staleBytes != b.staleBytes {
-			return a.staleBytes > b.staleBytes
-		}
-		if a.liveBytes != b.liveBytes {
-			return a.liveBytes < b.liveBytes
-		}
-		return a.fileID < b.fileID
-	})
+	ratioOrdered := append([]rewriteSourceSegment(nil), candidates...)
+	sortRewriteSourceSegmentsByRatio(ratioOrdered)
+	selected, selectedBytes, selectedStaleBytes := pickRewriteSourceSegmentsGreedy(ratioOrdered, maxSourceSegments, maxSourceBytes)
 
-	selected := make(map[uint32]struct{}, len(candidates))
-	var selectedBytes int64
-	for _, candidate := range candidates {
-		if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
-			break
+	if maxSourceBytes > 0 {
+		staleOrdered := append([]rewriteSourceSegment(nil), candidates...)
+		sortRewriteSourceSegmentsByStaleBytes(staleOrdered)
+		staleSelected, staleSelectedBytes, staleSelectedStaleBytes := pickRewriteSourceSegmentsGreedy(staleOrdered, maxSourceSegments, maxSourceBytes)
+		if staleSelectedStaleBytes > selectedStaleBytes || (staleSelectedStaleBytes == selectedStaleBytes && staleSelectedBytes < selectedBytes) {
+			selected = staleSelected
+			selectedBytes = staleSelectedBytes
+			selectedStaleBytes = staleSelectedStaleBytes
 		}
-		if maxSourceBytes > 0 {
-			next := selectedBytes + candidate.liveBytes
-			if next > maxSourceBytes && len(selected) > 0 {
-				continue
-			}
-		}
-		selected[candidate.fileID] = struct{}{}
-		selectedBytes += candidate.liveBytes
 	}
 	return selected
 }
