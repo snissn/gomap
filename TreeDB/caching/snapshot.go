@@ -5,6 +5,8 @@ import (
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -141,6 +143,81 @@ func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, 
 	}
 	snap := rootDomainSnapshotFromCachedSnapshot(s, key)
 	return snap.getEntry(key)
+}
+
+func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.IteratorSource, error) {
+	if s == nil || s.backend == nil {
+		return nil, backenddb.ErrClosed
+	}
+	queue := rootDomainSnapshotFromMemtableView(s.view, -1, false).immutables
+	sources := make([]merging.IteratorSource, 0, len(queue)+1)
+	prio := 0
+	for idx := len(queue) - 1; idx >= 0; idx-- {
+		var qIter iterator.UnsafeIterator
+		if reverse {
+			qIter = queue[idx].NewReverseIterator(start, end)
+		} else {
+			qIter = queue[idx].NewIterator(start, end)
+		}
+		if s.db != nil && s.db.memtableValueLogPointers {
+			qIter = newValueLogIterator(qIter, func(key []byte, ptr page.ValuePtr) ([]byte, error) {
+				return s.db.readValueLog(key, ptr)
+			})
+		}
+		sources = append(sources, merging.IteratorSource{Iter: qIter, Priority: prio})
+		prio++
+	}
+	var (
+		diskIter iterator.UnsafeIterator
+		err     error
+	)
+	if reverse {
+		diskIter, err = s.backend.ReverseIterator(start, end)
+	} else {
+		diskIter, err = s.backend.Iterator(start, end)
+	}
+	if err != nil {
+		for i := range sources {
+			if sources[i].Iter != nil {
+				_ = sources[i].Iter.Close()
+			}
+		}
+		return nil, err
+	}
+	sources = append(sources, merging.IteratorSource{Iter: diskIter, Priority: prio})
+	return sources, nil
+}
+
+// Iterator returns a stable iterator over the snapshot's queued memtables plus
+// its backend snapshot.
+func (s *Snapshot) Iterator(start, end []byte) (merging.Iterator, error) {
+	sources, err := s.iteratorSources(start, end, false)
+	if err != nil {
+		return nil, err
+	}
+	if len(sources) == 0 {
+		return &emptyIterator{start: start, end: end}, nil
+	}
+	if len(sources) == 1 {
+		return newSingleSourceIterator(sources[0].Iter, start, end), nil
+	}
+	return merging.NewMergingIterator(sources, start, end), nil
+}
+
+// ReverseIterator returns a stable reverse iterator over the snapshot's queued
+// memtables plus its backend snapshot.
+func (s *Snapshot) ReverseIterator(start, end []byte) (merging.Iterator, error) {
+	sources, err := s.iteratorSources(start, end, true)
+	if err != nil {
+		return nil, err
+	}
+	if len(sources) == 0 {
+		return &emptyIterator{start: start, end: end}, nil
+	}
+	if len(sources) == 1 {
+		return newSingleSourceIterator(sources[0].Iter, start, end), nil
+	}
+	return merging.NewReverseMergingIterator(sources, start, end), nil
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {

@@ -61,6 +61,10 @@ func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includ
 	if len(view.queue) == 0 {
 		return snap
 	}
+	if shardIdx < 0 {
+		snap.immutables = view.queue
+		return snap
+	}
 	snap.immutables = make([]memtable.Table, 0, len(view.queue))
 	for idx, mt := range view.queue {
 		if mt == nil {
