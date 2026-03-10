@@ -330,10 +330,10 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 
 	var liveByID map[uint32]int64
 	var err error
-	// SourceFileIDs selection does not require live-byte estimation; the other
-	// sparse-selection modes do. Without any selection knobs, the plan is just
-	// the global totals and should not scan the tree to estimate live bytes.
-	if hasRewriteSourceSelection(opts) && len(opts.SourceFileIDs) == 0 {
+	// Any planning call with source-selection knobs needs live-byte estimation so
+	// the returned debt is meaningful. Without selection knobs, the plan is only
+	// the global totals and should not scan the tree.
+	if hasRewriteSourceSelection(opts) {
 		liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 		if err != nil {
 			return plan, err
@@ -788,10 +788,29 @@ func listRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint
 				continue
 			}
 			size := fileSize(f)
+			if size <= 0 {
+				selected = append(selected, rewriteSourceSegment{
+					fileID: id,
+				})
+				continue
+			}
+			liveBytes := size
+			if liveByID != nil {
+				liveBytes = liveByID[id]
+				if liveBytes < 0 {
+					liveBytes = 0
+				}
+				if liveBytes > size {
+					liveBytes = size
+				}
+			}
+			staleBytes := size - liveBytes
 			selected = append(selected, rewriteSourceSegment{
 				fileID:     id,
 				totalBytes: size,
-				liveBytes:  size,
+				liveBytes:  liveBytes,
+				staleBytes: staleBytes,
+				staleRatio: normalizeStaleRatio(float64(staleBytes) / float64(size)),
 			})
 		}
 		return selected

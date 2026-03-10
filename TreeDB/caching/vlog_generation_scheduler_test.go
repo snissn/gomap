@@ -290,15 +290,17 @@ func TestMulDivClampInt64_ClampsOverflowAndCap(t *testing.T) {
 type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 
-	mu              sync.Mutex
-	planOpts        backenddb.ValueLogRewriteOnlineOptions
-	planCalls       int
-	planResponse    backenddb.ValueLogRewritePlan
-	planErr         error
-	rewriteOpts     backenddb.ValueLogRewriteOnlineOptions
-	rewriteCalls    int
-	rewriteResponse backenddb.ValueLogRewriteStats
-	rewriteErr      error
+	mu                   sync.Mutex
+	planOpts             backenddb.ValueLogRewriteOnlineOptions
+	planCalls            int
+	planResponse         backenddb.ValueLogRewritePlan
+	exactIDPlanResponse  *backenddb.ValueLogRewritePlan
+	exactIDPlanResponses map[uint32]backenddb.ValueLogRewritePlan
+	planErr              error
+	rewriteOpts          backenddb.ValueLogRewriteOnlineOptions
+	rewriteCalls         int
+	rewriteResponse      backenddb.ValueLogRewriteStats
+	rewriteErr           error
 }
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -306,6 +308,21 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context,
 	b.planOpts = cloneRewriteOptsForTest(opts)
 	b.planCalls++
 	plan := b.planResponse
+	if len(opts.SourceFileIDs) > 0 {
+		if len(opts.SourceFileIDs) == 1 && b.exactIDPlanResponses != nil {
+			if exactPlan, ok := b.exactIDPlanResponses[opts.SourceFileIDs[0]]; ok {
+				plan = cloneRewritePlanForTest(exactPlan)
+			} else if b.exactIDPlanResponse != nil {
+				plan = cloneRewritePlanForTest(*b.exactIDPlanResponse)
+			}
+		} else if b.exactIDPlanResponse != nil {
+			plan = cloneRewritePlanForTest(*b.exactIDPlanResponse)
+		} else {
+			plan = cloneRewritePlanForTest(plan)
+		}
+	} else {
+		plan = cloneRewritePlanForTest(plan)
+	}
 	err := b.planErr
 	b.mu.Unlock()
 	return plan, err
@@ -331,6 +348,13 @@ func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backen
 	cloned := opts
 	cloned.SourceFileIDs = append([]uint32(nil), opts.SourceFileIDs...)
 	cloned.ProtectedPaths = append([]string(nil), opts.ProtectedPaths...)
+	return cloned
+}
+
+func cloneRewritePlanForTest(plan backenddb.ValueLogRewritePlan) backenddb.ValueLogRewritePlan {
+	cloned := plan
+	cloned.SourceFileIDs = append([]uint32(nil), plan.SourceFileIDs...)
+	cloned.SelectedSegments = append([]backenddb.ValueLogRewritePlanSegment(nil), plan.SelectedSegments...)
 	return cloned
 }
 
@@ -483,14 +507,11 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	planOpts, planCalls := recorder.recordedPlan()
-	if planCalls != 1 {
-		t.Fatalf("plan calls=%d want=1", planCalls)
+	if planCalls != 2 {
+		t.Fatalf("plan calls=%d want=2", planCalls)
 	}
-	if planOpts.MaxSourceBytes <= 0 {
-		t.Fatalf("plan MaxSourceBytes=%d want > 0", planOpts.MaxSourceBytes)
-	}
-	if planOpts.MaxSourceBytes > initialTokens {
-		t.Fatalf("plan MaxSourceBytes=%d initialTokens=%d", planOpts.MaxSourceBytes, initialTokens)
+	if len(planOpts.SourceFileIDs) == 0 {
+		t.Fatalf("last plan SourceFileIDs=%v want non-empty", planOpts.SourceFileIDs)
 	}
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -526,6 +547,22 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 			},
 			SelectedBytesLive: 128,
 		},
+		exactIDPlanResponses: map[uint32]backenddb.ValueLogRewritePlan{
+			11: {
+				SourceFileIDs: []uint32{11},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				},
+				SelectedBytesLive: 96,
+			},
+			22: {
+				SourceFileIDs: []uint32{22},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+				},
+				SelectedBytesLive: 32,
+			},
+		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
 	}
 
@@ -533,8 +570,12 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	t.Cleanup(cleanup)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls after first run=%d want=1", calls)
+	planOpts, calls := recorder.recordedPlan()
+	if calls != 2 {
+		t.Fatalf("plan calls after first run=%d want=2", calls)
+	}
+	if got, want := planOpts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("first refreshed plan source ids=%v want=%v", got, want)
 	}
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
@@ -563,8 +604,12 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls after second run=%d want=1", calls)
+	planOpts, calls = recorder.recordedPlan()
+	if calls != 3 {
+		t.Fatalf("plan calls after second run=%d want=3", calls)
+	}
+	if got, want := planOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("refreshed plan source ids=%v want=%v", got, want)
 	}
 	opts, calls = recorder.recordedRewrite()
 	if calls != 2 {
@@ -601,6 +646,22 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 			},
 			SelectedBytesLive: 128,
 		},
+		exactIDPlanResponses: map[uint32]backenddb.ValueLogRewritePlan{
+			11: {
+				SourceFileIDs: []uint32{11},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				},
+				SelectedBytesLive: 96,
+			},
+			22: {
+				SourceFileIDs: []uint32{22},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+				},
+				SelectedBytesLive: 32,
+			},
+		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
 	}
 
@@ -615,7 +676,16 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 		t.Fatalf("reopen backend: %v", err)
 	}
 	recorder2 := &rewriteBudgetRecordingBackend{
-		DB:              backend2,
+		DB: backend2,
+		exactIDPlanResponses: map[uint32]backenddb.ValueLogRewritePlan{
+			22: {
+				SourceFileIDs: []uint32{22},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+				},
+				SelectedBytesLive: 32,
+			},
+		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
 	}
 	db2, err := Open(dir, recorder2, Options{
@@ -658,8 +728,12 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	}
 
 	db2.maybeRunVlogGenerationMaintenance(false)
-	if _, calls := recorder2.recordedPlan(); calls != 0 {
-		t.Fatalf("plan calls after reopen=%d want=0", calls)
+	planOpts, calls := recorder2.recordedPlan()
+	if calls != 1 {
+		t.Fatalf("plan calls after reopen=%d want=1", calls)
+	}
+	if got, want := planOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("reopen refreshed plan source ids=%v want=%v", got, want)
 	}
 	opts, calls := recorder2.recordedRewrite()
 	if calls != 1 {
@@ -689,6 +763,22 @@ func TestVlogGenerationRewriteQueue_DoesNotResumeWithZeroBudgetTokens(t *testing
 			},
 			SelectedBytesLive: 128,
 		},
+		exactIDPlanResponses: map[uint32]backenddb.ValueLogRewritePlan{
+			11: {
+				SourceFileIDs: []uint32{11},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				},
+				SelectedBytesLive: 96,
+			},
+			22: {
+				SourceFileIDs: []uint32{22},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+				},
+				SelectedBytesLive: 32,
+			},
+		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
 	}
 
@@ -705,8 +795,12 @@ func TestVlogGenerationRewriteQueue_DoesNotResumeWithZeroBudgetTokens(t *testing
 
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls after zero-budget resume=%d want=1", calls)
+	planOpts, calls := recorder.recordedPlan()
+	if calls != 2 {
+		t.Fatalf("plan calls after zero-budget resume=%d want=2", calls)
+	}
+	if got, want := planOpts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("last refreshed plan source ids=%v want=%v", got, want)
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls after zero-budget resume=%d want=1", calls)
@@ -741,6 +835,22 @@ func TestVlogGenerationRewriteQueue_DoesNotResumeWithZeroBudgetTokensAfterReopen
 				{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
 			},
 			SelectedBytesLive: 128,
+		},
+		exactIDPlanResponses: map[uint32]backenddb.ValueLogRewritePlan{
+			11: {
+				SourceFileIDs: []uint32{11},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				},
+				SelectedBytesLive: 96,
+			},
+			22: {
+				SourceFileIDs: []uint32{22},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+				},
+				SelectedBytesLive: 32,
+			},
 		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
 	}
@@ -860,6 +970,22 @@ func TestVlogGenerationRewriteQueue_ConsumesQueuedDebtLiveBytes(t *testing.T) {
 			},
 			SelectedBytesLive: 128,
 		},
+		exactIDPlanResponses: map[uint32]backenddb.ValueLogRewritePlan{
+			11: {
+				SourceFileIDs: []uint32{11},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				},
+				SelectedBytesLive: 96,
+			},
+			22: {
+				SourceFileIDs: []uint32{22},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+				},
+				SelectedBytesLive: 32,
+			},
+		},
 		// Intentionally smaller than the persisted queued live-bytes so the test
 		// fails if resume accounting regresses to BytesBefore.
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 8, BytesAfter: 4, RecordsCopied: 1},
@@ -880,8 +1006,81 @@ func TestVlogGenerationRewriteQueue_ConsumesQueuedDebtLiveBytes(t *testing.T) {
 	if _, calls := recorder.recordedRewrite(); calls != 2 {
 		t.Fatalf("rewrite calls after queued resume=%d want=2", calls)
 	}
+	planOpts, planCalls := recorder.recordedPlan()
+	if planCalls != 3 {
+		t.Fatalf("plan calls after queued resume=%d want=3", planCalls)
+	}
+	if got, want := planOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("queued resume refreshed plan source ids=%v want=%v", got, want)
+	}
 	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), int64(1024-96-32); got != want {
 		t.Fatalf("tokens after second queued rewrite=%d want=%d", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteQueue_RefreshEmptyDropsQueuedDebt(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{11, 22},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+			},
+			SelectedBytesLive: 128,
+		},
+		exactIDPlanResponses: map[uint32]backenddb.ValueLogRewritePlan{
+			11: {
+				SourceFileIDs: []uint32{11},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				},
+				SelectedBytesLive: 96,
+			},
+			22: {},
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	planOpts, planCalls := recorder.recordedPlan()
+	if planCalls != 3 {
+		t.Fatalf("plan calls after refresh-empty resume=%d want=3", planCalls)
+	}
+	if got, want := planOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("refresh-empty plan source ids=%v want=%v", got, want)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls after refresh-empty resume=%d want=1", calls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue after refresh-empty resume: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("queue after refresh-empty resume=%v want empty", queue)
+	}
+	debt, err := db.currentVlogGenerationRewriteDebt()
+	if err != nil {
+		t.Fatalf("current debt after refresh-empty resume: %v", err)
+	}
+	if len(debt) != 0 {
+		t.Fatalf("rewrite debt after refresh-empty resume=%+v want empty", debt)
 	}
 }
 
@@ -939,8 +1138,8 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls=%d want=1", calls)
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls=%d want=2", calls)
 	}
 	if got := db.checkpointRuns.Load(); got < 2 {
 		t.Fatalf("checkpoint runs=%d want >=2", got)
@@ -1092,8 +1291,8 @@ func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls=%d want=1", calls)
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls=%d want=2", calls)
 	}
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {

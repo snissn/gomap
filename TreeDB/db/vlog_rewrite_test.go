@@ -750,6 +750,80 @@ func TestValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet(t *testing.T) {
 	}
 }
 
+func TestValueLogRewritePlan_SourceFileIDs_EstimatesLiveBytes(t *testing.T) {
+	dir := t.TempDir()
+	counter := withRewritePlanEstimateCounter(t)
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 205_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('a' + i)}, 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	plan, err := db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs[0].FileID},
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewritePlan: %v", err)
+	}
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("estimate calls=%d want=1", got)
+	}
+	if got, want := plan.SourceFileIDs, []uint32{ptrs[0].FileID}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("planned source ids=%v want=%v", got, want)
+	}
+	if plan.SegmentsTotal != 1 {
+		t.Fatalf("SegmentsTotal=%d want=1", plan.SegmentsTotal)
+	}
+	if plan.SegmentsSelected != 1 {
+		t.Fatalf("SegmentsSelected=%d want=1", plan.SegmentsSelected)
+	}
+	if len(plan.SelectedSegments) != 1 {
+		t.Fatalf("expected one selected segment, got %d", len(plan.SelectedSegments))
+	}
+	seg := plan.SelectedSegments[0]
+	if seg.FileID != ptrs[0].FileID {
+		t.Fatalf("selected segment id=%d want=%d", seg.FileID, ptrs[0].FileID)
+	}
+	if seg.BytesLive <= 0 {
+		t.Fatalf("selected live bytes=%d want > 0", seg.BytesLive)
+	}
+	if seg.BytesStale <= 0 {
+		t.Fatalf("selected stale bytes=%d want > 0", seg.BytesStale)
+	}
+	if seg.BytesLive >= seg.BytesTotal {
+		t.Fatalf("selected live bytes=%d total=%d want live < total", seg.BytesLive, seg.BytesTotal)
+	}
+	if plan.SelectedBytesLive != seg.BytesLive {
+		t.Fatalf("SelectedBytesLive=%d want %d", plan.SelectedBytesLive, seg.BytesLive)
+	}
+	if plan.SelectedBytesStale != seg.BytesStale {
+		t.Fatalf("SelectedBytesStale=%d want %d", plan.SelectedBytesStale, seg.BytesStale)
+	}
+	if plan.BytesTotal != seg.BytesTotal {
+		t.Fatalf("BytesTotal=%d want %d", plan.BytesTotal, seg.BytesTotal)
+	}
+	if plan.BytesLive != seg.BytesLive {
+		t.Fatalf("BytesLive=%d want %d", plan.BytesLive, seg.BytesLive)
+	}
+	if plan.BytesStale != seg.BytesStale {
+		t.Fatalf("BytesStale=%d want %d", plan.BytesStale, seg.BytesStale)
+	}
+}
+
 func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	dir := t.TempDir()
 

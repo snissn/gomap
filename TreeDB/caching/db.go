@@ -10221,6 +10221,34 @@ planned:
 		}, func() error {
 			now = time.Now()
 			db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
+			rewriteDebtFromPlan := func(plan backenddb.ValueLogRewritePlan, estimatedAt int64) []valueLogGenerationRewriteDebtEntry {
+				rewriteDebt := make([]valueLogGenerationRewriteDebtEntry, 0, len(plan.SelectedSegments))
+				for _, seg := range plan.SelectedSegments {
+					if seg.FileID == 0 {
+						continue
+					}
+					rewriteDebt = append(rewriteDebt, valueLogGenerationRewriteDebtEntry{
+						FileID:               seg.FileID,
+						BytesTotal:           seg.BytesTotal,
+						BytesLive:            seg.BytesLive,
+						BytesStale:           seg.BytesStale,
+						StaleRatioPPM:        seg.StaleRatioPPM,
+						LastEstimateUnixNano: estimatedAt,
+					})
+				}
+				if len(rewriteDebt) == 0 && len(plan.SourceFileIDs) > 0 {
+					for _, id := range plan.SourceFileIDs {
+						if id == 0 {
+							continue
+						}
+						rewriteDebt = append(rewriteDebt, valueLogGenerationRewriteDebtEntry{
+							FileID:               id,
+							LastEstimateUnixNano: estimatedAt,
+						})
+					}
+				}
+				return rewriteDebt
+			}
 			maxSourceBytes := int64(0)
 			if len(rewriteQueue) == 0 && !haveRewritePlan {
 				maxSourceBytes = db.vlogGenerationRewriteBudgetTokensBytes.Load()
@@ -10268,32 +10296,7 @@ planned:
 				}
 				processedRewriteIDs = vlogGenerationRewriteDebtFileIDs(processedRewriteDebt)
 			} else if haveRewritePlan {
-				rewriteDebt := make([]valueLogGenerationRewriteDebtEntry, 0, len(rewritePlan.SelectedSegments))
-				estimatedAt := now.UnixNano()
-				for _, seg := range rewritePlan.SelectedSegments {
-					if seg.FileID == 0 {
-						continue
-					}
-					rewriteDebt = append(rewriteDebt, valueLogGenerationRewriteDebtEntry{
-						FileID:               seg.FileID,
-						BytesTotal:           seg.BytesTotal,
-						BytesLive:            seg.BytesLive,
-						BytesStale:           seg.BytesStale,
-						StaleRatioPPM:        seg.StaleRatioPPM,
-						LastEstimateUnixNano: estimatedAt,
-					})
-				}
-				if len(rewriteDebt) == 0 && len(rewritePlan.SourceFileIDs) > 0 {
-					for _, id := range rewritePlan.SourceFileIDs {
-						if id == 0 {
-							continue
-						}
-						rewriteDebt = append(rewriteDebt, valueLogGenerationRewriteDebtEntry{
-							FileID:               id,
-							LastEstimateUnixNano: estimatedAt,
-						})
-					}
-				}
+				rewriteDebt := rewriteDebtFromPlan(rewritePlan, now.UnixNano())
 				if err := db.setVlogGenerationRewriteDebt(rewriteDebt); err != nil {
 					return fmt.Errorf("persist generational rewrite queue: %w", err)
 				}
@@ -10306,6 +10309,32 @@ planned:
 					processedRewriteDebt = vlogGenerationRewriteDebtChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments, maxResumeBytes)
 				}
 				processedRewriteIDs = vlogGenerationRewriteDebtFileIDs(processedRewriteDebt)
+			}
+			if len(rewriteQueue) > 0 && len(processedRewriteIDs) > 0 && hasPlanner {
+				refreshCtx, refreshCancel := db.foregroundMaintenanceContext(30 * time.Second)
+				refreshPlan, err := planner.ValueLogRewritePlan(refreshCtx, backenddb.ValueLogRewriteOnlineOptions{
+					SourceFileIDs: append([]uint32(nil), processedRewriteIDs...),
+				})
+				refreshCancel()
+				if err != nil {
+					if errors.Is(err, context.Canceled) {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return nil
+					}
+					return fmt.Errorf("refresh generational rewrite queue debt: %w", err)
+				}
+				originalProcessedDebt := append([]valueLogGenerationRewriteDebtEntry(nil), processedRewriteDebt...)
+				processedRewriteDebt = rewriteDebtFromPlan(refreshPlan, time.Now().UnixNano())
+				processedRewriteIDs = vlogGenerationRewriteDebtFileIDs(processedRewriteDebt)
+				if len(processedRewriteIDs) == 0 {
+					if len(originalProcessedDebt) > 0 {
+						if err := db.consumeVlogGenerationRewriteDebtChunk(originalProcessedDebt); err != nil {
+							return fmt.Errorf("drop stale generational rewrite queue chunk: %w", err)
+						}
+					}
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return nil
+				}
 			}
 			if len(processedRewriteIDs) > 0 {
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
