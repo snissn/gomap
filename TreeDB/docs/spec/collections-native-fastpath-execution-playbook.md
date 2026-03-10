@@ -138,6 +138,27 @@ For collection-focused artifacts, the attachment must also record:
 Use `TreeDB/docs/spec/collections-native-fastpath-baseline-template.md`
 verbatim for the initial freeze record.
 
+### 2.6 Tooling and harness preflight
+
+Before capturing any baseline, verify the required tooling on the relevant
+worktree:
+
+```bash
+make unified-bench
+test -x ./bin/unified-bench
+```
+
+For collection benchmarks, verify whether the harness exists on the worktree
+being measured:
+
+```bash
+test -x ./scripts/bench_collections_report.sh
+```
+
+If the native execution worktree does not yet contain the collection benchmark
+harness, record the native collection bundle as `N/A before R0 harness
+bring-up` and do not fabricate a native baseline.
+
 ## 3. Branch and PR Topology
 
 The rewrite should use one stacked sequence rooted from the frozen semantic
@@ -240,7 +261,7 @@ ORACLE_WORKTREE=/path/to/oracle-worktree
 TREEDB_COLLECTION_BENCH_ENGINE=cached \
 BENCHTIME=1s \
 COUNT=1 \
-(cd "$ORACLE_WORKTREE" && git rev-parse HEAD && scripts/bench_collections_report.sh)
+(cd "$ORACLE_WORKTREE" && git rev-parse HEAD && scripts/bench_collections_report.sh) | tee /tmp/oracle_collection_bench_stdout.txt
 ```
 
 Native-path equivalent:
@@ -251,7 +272,7 @@ NATIVE_WORKTREE=/home/mikers/dev/snissn/gomap
 TREEDB_COLLECTION_BENCH_ENGINE=cached \
 BENCHTIME=1s \
 COUNT=1 \
-(cd "$NATIVE_WORKTREE" && git rev-parse HEAD && scripts/bench_collections_report.sh)
+(cd "$NATIVE_WORKTREE" && git rev-parse HEAD && scripts/bench_collections_report.sh) | tee /tmp/native_collection_bench_stdout.txt
 ```
 
 If the native worktree does not yet contain `scripts/bench_collections_report.sh`,
@@ -337,8 +358,14 @@ The exact number may be tuned for the host, but the rule is:
 
 As a starting point:
 
-- treat changes smaller than roughly `2-5%` as suspect until rerun,
+- raw TreeDB anchors:
+  - treat changes smaller than `3%` as suspect until rerun,
+- collection benchmarks:
+  - treat changes smaller than `5%` as suspect until rerun,
 - treat larger regressions as blockers unless there is a documented tradeoff.
+
+When a result falls inside the noise band, rerun at least `count=3` and compare
+medians before calling it a win or loss.
 
 ## 9. Stop Conditions
 

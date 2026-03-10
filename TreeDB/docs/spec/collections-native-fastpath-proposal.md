@@ -202,6 +202,13 @@ The mutable ordered run MAY use an append/sort representation or another
 structure that can be sealed as an immutable run without reinserting every key
 into another in-memory tree.
 
+The first-class write representation on the native batch path MUST itself be a
+run builder, append-sort buffer, or equivalent ordered-run producer.
+
+An implementation that accumulates native batch writes in a generic mutable map
+or tree and only later converts that structure into runs is not acceptable as
+the steady-state native batch path.
+
 An auxiliary point-read or tiny-write index MAY exist for engineering reasons,
 but it MUST NOT define the steady-state batch ingest fast path.
 
@@ -424,6 +431,14 @@ If coalescing is allowed, it MUST preserve:
 The steady-state scheduler MUST NOT starve one publish group indefinitely while
 newer groups continue to make progress.
 
+Grouped publish MUST consume stable run or table views directly.
+
+The native grouped-publish path MUST NOT re-materialize one publish group into:
+
+- copied per-root entry slices,
+- copied replay buffers,
+- detached batch transport structures.
+
 ### 6.5.2 Multi-root snapshot pinning
 
 The backend and cached layers MUST support a pinned multi-root snapshot view for
@@ -483,6 +498,11 @@ page-aware sorted-delta merge.
 
 The implementation MUST avoid an `Iterator(nil, nil)`-equivalent full base-tree
 scan on the steady-state warm path.
+
+The implementation MUST bound work to the touched-page frontier plus the
+required search or descent structure needed to reach it. A steady-state warm
+apply implementation that walks most of the tree while only changing a small
+delta is not acceptable.
 
 The implementation MUST avoid broad page-id enumeration whose cost is
 asymptotically equivalent to full warm-root rebuild, even if it is described as
@@ -711,7 +731,7 @@ The native path SHOULD also expose counters for:
 
 - tiny-batch fallback usage,
 - per-item probe fallback usage,
-- grouped publish replay fallback usage.
+- grouped publish replay or copy fallback usage.
 
 ## 11. Test Plan
 

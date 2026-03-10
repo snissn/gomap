@@ -85,9 +85,6 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - `TreeDB/docs/spec/collections-native-fastpath-pr-note-template.md`
   - required PR note template for rewrite phases, including benchmark tables,
     artifact references, and go/no-go decisions.
-- `TreeDB/docs/spec/collections-native-fastpath-issue-768-amendment.md`
-  - remote issue sync draft so GitHub issue `#768` stays aligned with the
-    current main-based oracle model and benchmark discipline.
 
 ## Relationship to Existing Docs
 
