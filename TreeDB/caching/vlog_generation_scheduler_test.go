@@ -719,6 +719,9 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 	if _, calls := recorder.recordedPlan(); calls != 1 {
 		t.Fatalf("plan calls=%d want=1", calls)
 	}
+	if got := db.checkpointRuns.Load(); got < 2 {
+		t.Fatalf("checkpoint runs=%d want >=2", got)
+	}
 }
 
 func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *testing.T) {
@@ -783,6 +786,9 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 
 	if dryCalls, realCalls, _ := recorder.recordedCalls(); dryCalls != 0 || realCalls != 1 {
 		t.Fatalf("gc calls dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
+	}
+	if got := db.checkpointRuns.Load(); got < 2 {
+		t.Fatalf("checkpoint runs=%d want >=2", got)
 	}
 }
 

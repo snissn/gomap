@@ -10451,7 +10451,11 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
-			skipCheckpoint:        true,
+			// Checkpoint-triggered maintenance still needs a fresh serialized
+			// backend view before iterator-based rewrite/GC scans run. Re-entering
+			// Checkpoint here is safe: the just-finished caller has already cleared
+			// checkpointing, and the kick-active guard prevents recursive kicks.
+			skipCheckpoint: false,
 		})
 	}()
 }
