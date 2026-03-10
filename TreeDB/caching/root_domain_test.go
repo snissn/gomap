@@ -2,6 +2,7 @@ package caching
 
 import (
 	"reflect"
+	"sync"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -415,6 +416,138 @@ func TestRootDomainSnapshotFromCachedSnapshot_QueueTombstoneBeatsPublishedState(
 	}
 }
 
+func TestPublishMemtablesLocked_UsesRootDomainStateAuthority(t *testing.T) {
+	t.Parallel()
+
+	legacyQueued := newRootDomainTestTable(t, rootDomainTestOp{key: "scan", value: "legacy-iter"})
+	stateMutable := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "state-mutable"})
+	stateQueued := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "state-queued"})
+	iterQueued := newRootDomainTestTable(t, rootDomainTestOp{key: "scan", value: "state-iter"})
+
+	db := &DB{
+		mutableShards: []memShard{
+			{mem: stateMutable},
+		},
+		queue:         []memtable.Table{legacyQueued},
+		queueShardIDs: []uint16{0},
+		queueRanges:   []keyRange{{valid: true, min: []byte("scan"), max: []byte("scan")}},
+		rootPointStates: []rootDomainState{
+			{
+				mutable:    stateMutable,
+				immutables: []memtable.Table{stateQueued},
+			},
+		},
+		rootIteratorState: rootDomainState{
+			immutables: []memtable.Table{iterQueued},
+		},
+	}
+
+	db.publishMemtablesLocked()
+	view := db.retainMemtableView()
+	if view == nil {
+		t.Fatal("expected published memtable view")
+	}
+	defer db.releaseMemtableView(view)
+
+	if got := len(view.rootPointShards); got != 1 {
+		t.Fatalf("root point shards=%d want 1", got)
+	}
+	assertRootDomainVisibleValue(t, view.rootPointShards[0], "k", "state-mutable")
+	if got := len(view.rootSnapshotShards); got != 1 {
+		t.Fatalf("snapshot shards=%d want 1", got)
+	}
+	assertRootDomainVisibleValue(t, view.rootSnapshotShards[0], "k", "state-queued")
+	assertRootDomainVisibleValue(t, view.rootIterator, "scan", "state-iter")
+}
+
+func TestRotateMutableShardsLocked_UpdatesRootDomainStates(t *testing.T) {
+	t.Parallel()
+
+	mutable, err := memtable.NewWithCapacityMode(0, memtable.ModeAppendOnly)
+	if err != nil {
+		t.Fatalf("new mutable: %v", err)
+	}
+	mutable.Set([]byte("k"), []byte("v"))
+
+	db := &DB{
+		mutableShards: []memShard{
+			{mem: mutable, rng: keyRange{valid: true, min: []byte("k"), max: []byte("k")}},
+		},
+		memtableMode:    memtable.ModeAppendOnly,
+		rootPointStates: []rootDomainState{{mutable: mutable}},
+	}
+	db.bpCond = sync.NewCond(&db.bpMu)
+
+	db.mu.Lock()
+	err = db.rotateMutableShardsLocked(0, false)
+	db.mu.Unlock()
+	if err != nil {
+		t.Fatalf("rotate mutable shards: %v", err)
+	}
+
+	if got := len(db.rootPointStates); got != 1 {
+		t.Fatalf("root point states=%d want 1", got)
+	}
+	if got := len(db.rootPointStates[0].immutables); got != 1 {
+		t.Fatalf("root point immutables=%d want 1", got)
+	}
+	assertRootDomainVisibleValue(t, db.rootPointStates[0].snapshot(), "k", "v")
+	if db.rootPointStates[0].mutable == nil {
+		t.Fatal("expected replacement mutable after rotate")
+	}
+	if db.rootPointStates[0].mutable == mutable {
+		t.Fatal("expected rotate to install a new mutable memtable")
+	}
+	if got := len(db.rootIteratorState.immutables); got != 1 {
+		t.Fatalf("iterator immutables=%d want 1", got)
+	}
+	assertRootDomainVisibleValue(t, db.rootIteratorState.snapshot(), "k", "v")
+}
+
+func TestRemoveQueuedUnitsLocked_TrimsRootDomainStates(t *testing.T) {
+	t.Parallel()
+
+	first := newRootDomainTestTable(t, rootDomainTestOp{key: "a", value: "first"})
+	second := newRootDomainTestTable(t, rootDomainTestOp{key: "b", value: "second"})
+
+	db := &DB{
+		mutableShards: make([]memShard, 1),
+		queue:         []memtable.Table{first, second},
+		queueShardIDs: []uint16{0, 0},
+		queueIDs:      []uint64{11, 12},
+		rootPointStates: []rootDomainState{
+			{immutables: []memtable.Table{first, second}},
+		},
+		rootIteratorState: rootDomainState{
+			immutables: []memtable.Table{first, second},
+		},
+	}
+
+	units := []flushUnit{
+		{mem: first, id: 11},
+	}
+	db.removeQueuedUnitsLocked(map[uint64]struct{}{11: {}}, units, first.Size())
+
+	if got := len(db.queue); got != 1 {
+		t.Fatalf("queue len=%d want 1", got)
+	}
+	if db.queue[0] != second {
+		t.Fatal("expected second memtable to remain queued")
+	}
+	if got := len(db.rootPointStates[0].immutables); got != 1 {
+		t.Fatalf("root point immutables=%d want 1", got)
+	}
+	if db.rootPointStates[0].immutables[0] != second {
+		t.Fatal("expected first queued memtable trimmed from point state")
+	}
+	if got := len(db.rootIteratorState.immutables); got != 1 {
+		t.Fatalf("iterator immutables=%d want 1", got)
+	}
+	if db.rootIteratorState.immutables[0] != second {
+		t.Fatal("expected first queued memtable trimmed from iterator state")
+	}
+}
+
 func BenchmarkRootDomainSnapshotVisibleValue(b *testing.B) {
 	published, err := newRootDomainTable(rootDomainTestOp{key: "a", value: "published-a"})
 	if err != nil {
@@ -462,6 +595,58 @@ func BenchmarkRootDomainStateSealMutable(b *testing.B) {
 		if len(state.immutables) != 1 {
 			b.Fatalf("immutables=%d want 1", len(state.immutables))
 		}
+	}
+}
+
+func BenchmarkPublishMemtablesLocked_RootDomainBuild(b *testing.B) {
+	const (
+		shards         = 8
+		queuedPerShard = 4
+	)
+
+	db := &DB{
+		mutableShards: make([]memShard, shards),
+		queueRanges:   make([]keyRange, 0, shards*queuedPerShard),
+		queueShardIDs: make([]uint16, 0, shards*queuedPerShard),
+	}
+	for shardIdx := 0; shardIdx < shards; shardIdx++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeAppendOnly)
+		if err != nil {
+			b.Fatalf("new mutable shard %d: %v", shardIdx, err)
+		}
+		mt.Set([]byte{byte('m'), byte('0' + shardIdx)}, []byte("v"))
+		db.mutableShards[shardIdx].mem = mt
+	}
+	for run := 0; run < queuedPerShard; run++ {
+		for shardIdx := 0; shardIdx < shards; shardIdx++ {
+			key := []byte{byte('q'), byte('0' + run), byte('a' + shardIdx)}
+			mt, err := newRootDomainTable(rootDomainTestOp{key: string(key), value: "v"})
+			if err != nil {
+				b.Fatalf("new queued table run=%d shard=%d: %v", run, shardIdx, err)
+			}
+			db.queue = append(db.queue, mt)
+			db.queueShardIDs = append(db.queueShardIDs, uint16(shardIdx))
+			db.queueRanges = append(db.queueRanges, keyRange{valid: true, min: append([]byte(nil), key...), max: append([]byte(nil), key...)})
+		}
+	}
+	db.resetRootDomainStatesLocked()
+	db.resyncRootDomainQueuedRunsLocked()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		db.publishMemtablesLocked()
+		view := db.retainMemtableView()
+		if view == nil {
+			b.Fatal("expected published memtable view")
+		}
+		if got := len(view.rootPointShards); got != shards {
+			b.Fatalf("root point shards=%d want %d", got, shards)
+		}
+		if got := len(view.rootIterator.immutables); got != len(db.queue) {
+			b.Fatalf("root iterator immutables=%d want %d", got, len(db.queue))
+		}
+		db.releaseMemtableView(view)
 	}
 }
 
