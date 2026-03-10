@@ -1,16 +1,9 @@
 package db
 
 import (
-	"bytes"
 	"errors"
 
-	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/internal/adaptive"
-	"github.com/snissn/gomap/TreeDB/internal/bulk"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
-	"github.com/snissn/gomap/TreeDB/internal/memtable"
-	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/tree"
 )
 
 type systemRootPublishStats struct {
@@ -61,96 +54,24 @@ func (db *DB) systemRootWarmMaxDeltaOps() int {
 }
 
 func selectSystemRootWarmPublishPlan(hasExistingEntries bool, deltaOps int, maxDeltaOps int) systemRootPublishPlan {
-	if !hasExistingEntries {
+	switch selectOrderedRootWarmPublishPlan(hasExistingEntries, deltaOps, maxDeltaOps) {
+	case orderedRootPublishPlanColdBuild:
 		return systemRootPublishPlanColdBuild
-	}
-	if deltaOps <= maxDeltaOps {
+	case orderedRootPublishPlanWarmNativeApply:
 		return systemRootPublishPlanWarmNativeApply
+	default:
+		return systemRootPublishPlanWarmFallbackRebuild
 	}
-	return systemRootPublishPlanWarmFallbackRebuild
 }
 
-func materializeSystemRootTable(iter iterator.UnsafeIterator) (memtable.Table, error) {
-	table, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
-	if err != nil {
-		return nil, err
+func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
+	return orderedRootPublishOptions{
+		maxWarmDeltaOps:       db.systemRootWarmMaxDeltaOps(),
+		leafPrefixCompression: db.leafPrefixCompression,
+		leafColumnar:          db.indexColumnarLeaves,
+		packedValuePtr:        db.indexPackedValuePtr,
+		internalBaseDelta:     db.indexInternalBaseDelta,
 	}
-	for iter.Valid() {
-		table.Set(iter.UnsafeKey(), iter.UnsafeValue())
-		iter.Next()
-	}
-	if err := iter.Error(); err != nil {
-		return nil, err
-	}
-	table.Freeze()
-	return table, nil
-}
-
-func buildSystemRootDeltaBatch(baseIter, targetIter iterator.UnsafeIterator) (*batch.Batch, int, error) {
-	delta := batch.New(nil, page.DefaultInlineThreshold)
-	baseValid := baseIter.Valid()
-	targetValid := targetIter.Valid()
-	deltaOps := 0
-	for baseValid || targetValid {
-		switch {
-		case !targetValid:
-			if err := delta.Delete(baseIter.UnsafeKey()); err != nil {
-				_ = delta.Close()
-				return nil, 0, err
-			}
-			deltaOps++
-			baseIter.Next()
-			baseValid = baseIter.Valid()
-		case !baseValid:
-			if err := delta.Set(targetIter.UnsafeKey(), targetIter.UnsafeValue()); err != nil {
-				_ = delta.Close()
-				return nil, 0, err
-			}
-			deltaOps++
-			targetIter.Next()
-			targetValid = targetIter.Valid()
-		default:
-			switch cmp := bytes.Compare(baseIter.UnsafeKey(), targetIter.UnsafeKey()); {
-			case cmp < 0:
-				if err := delta.Delete(baseIter.UnsafeKey()); err != nil {
-					_ = delta.Close()
-					return nil, 0, err
-				}
-				deltaOps++
-				baseIter.Next()
-				baseValid = baseIter.Valid()
-			case cmp > 0:
-				if err := delta.Set(targetIter.UnsafeKey(), targetIter.UnsafeValue()); err != nil {
-					_ = delta.Close()
-					return nil, 0, err
-				}
-				deltaOps++
-				targetIter.Next()
-				targetValid = targetIter.Valid()
-			default:
-				if !bytes.Equal(baseIter.UnsafeValue(), targetIter.UnsafeValue()) {
-					if err := delta.Set(targetIter.UnsafeKey(), targetIter.UnsafeValue()); err != nil {
-						_ = delta.Close()
-						return nil, 0, err
-					}
-					deltaOps++
-				}
-				baseIter.Next()
-				targetIter.Next()
-				baseValid = baseIter.Valid()
-				targetValid = targetIter.Valid()
-			}
-		}
-	}
-	if err := baseIter.Error(); err != nil {
-		_ = delta.Close()
-		return nil, 0, err
-	}
-	if err := targetIter.Error(); err != nil {
-		_ = delta.Close()
-		return nil, 0, err
-	}
-	return delta, deltaOps, nil
 }
 
 // PublishSystemRootIterator builds and commits a new system root from an
@@ -163,7 +84,6 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	if iter == nil {
 		return 0, errors.New("nil system root iterator")
 	}
-	defer iter.Close()
 
 	db.writeMu.Lock()
 	defer db.writeMu.Unlock()
@@ -171,97 +91,20 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 	if db.readOnly {
 		return 0, ErrReadOnly
 	}
-	idx := db.idx.Load()
-	if idx == nil {
-		return 0, errors.New("missing index")
-	}
-
 	db.mu.RLock()
-	state := db.state.Load()
 	userRoot := db.meta.UserRootPageID
 	baseSystemRoot := db.meta.SystemRootPageID
 	db.mu.RUnlock()
 
-	retired := make([]uint64, 0)
-	metrics := adaptive.Metrics{}
-	newSystemRoot := baseSystemRoot
-	var buildIter iterator.UnsafeIterator
-	if baseSystemRoot != 0 {
-		sysTree := tree.New(idx.pager, newValueReader(state.ValueLogSet), baseSystemRoot)
-		pageIDs, err := sysTree.CollectPageIDs()
-		if err != nil {
-			return 0, err
-		}
-
-		sysIter := sysTree.Iterator(nil, nil)
-		warm := sysIter.Valid()
-		iterErr := sysIter.Error()
-		sysIter.Close()
-		if iterErr != nil {
-			return 0, iterErr
-		}
-
-		targetTable, err := materializeSystemRootTable(iter)
-		if err != nil {
-			return 0, err
-		}
-		if !warm {
-			retired = append(retired, pageIDs...)
-			buildIter = targetTable.NewIterator(nil, nil)
-		} else {
-			baseIter := sysTree.Iterator(nil, nil)
-			targetIter := targetTable.NewIterator(nil, nil)
-			delta, deltaOps, err := buildSystemRootDeltaBatch(baseIter, targetIter)
-			baseIter.Close()
-			targetIter.Close()
-			if err != nil {
-				return 0, err
-			}
-			defer delta.Close()
-			switch selectSystemRootWarmPublishPlan(warm, deltaOps, db.systemRootWarmMaxDeltaOps()) {
-			case systemRootPublishPlanWarmNativeApply:
-				db.systemRootWarmPublishAttempts.Add(1)
-				db.systemRootWarmNativeApplyAttempts.Add(1)
-				retiredPages, applyMetrics := []uint64(nil), adaptive.Metrics{}
-				newSystemRoot, retiredPages, applyMetrics, err = idx.zipper.Apply(baseSystemRoot, delta)
-				if err != nil {
-					return 0, err
-				}
-				retired = retiredPages
-				metrics = applyMetrics
-				if len(pageIDs) >= len(retiredPages) {
-					db.systemRootWarmPreservedPages.Add(uint64(len(pageIDs) - len(retiredPages)))
-				}
-				db.systemRootWarmRewrittenPages.Add(uint64(len(retiredPages)))
-			case systemRootPublishPlanWarmFallbackRebuild:
-				db.systemRootWarmPublishAttempts.Add(1)
-				db.systemRootWarmPublishRebuildFallbacks.Add(1)
-				retired = append(retired, pageIDs...)
-				buildIter = targetTable.NewIterator(nil, nil)
-			default:
-				retired = append(retired, pageIDs...)
-				buildIter = targetTable.NewIterator(nil, nil)
-			}
-		}
-	} else {
-		buildIter = iter
+	newSystemRoot, retired, metrics, publishStats, err := db.publishOrderedRootIterator(baseSystemRoot, iter, systemRootOrderedPublishOptions(db))
+	if err != nil {
+		return 0, err
 	}
-
-	if buildIter != nil && buildIter != iter {
-		defer buildIter.Close()
-	}
-	if buildIter != nil {
-		var err error
-		newSystemRoot, err = bulk.BuildWithOptions(buildIter, &pagerAllocator{p: idx.pager}, idx.pager, bulk.BuildOptions{
-			LeafPrefixCompression: db.leafPrefixCompression,
-			LeafColumnar:          db.indexColumnarLeaves,
-			PackedValuePtr:        db.indexPackedValuePtr,
-			InternalBaseDelta:     db.indexInternalBaseDelta,
-		})
-		if err != nil {
-			return 0, err
-		}
-	}
+	db.systemRootWarmPublishAttempts.Add(publishStats.warmAttempts)
+	db.systemRootWarmNativeApplyAttempts.Add(publishStats.warmNativeApplyAttempts)
+	db.systemRootWarmPublishRebuildFallbacks.Add(publishStats.warmRebuildFallbacks)
+	db.systemRootWarmPreservedPages.Add(publishStats.warmPreservedPages)
+	db.systemRootWarmRewrittenPages.Add(publishStats.warmRewrittenPages)
 
 	db.mu.Lock()
 	curUserRoot := db.meta.UserRootPageID

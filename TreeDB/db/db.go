@@ -142,6 +142,7 @@ type DB struct {
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit        atomic.Bool
 	testBatchCreateHook           func()
+	testOrderedRootPublishHook    func(baseRoot uint64)
 	testSystemRootWarmMaxDeltaOps int
 	closing                       atomic.Bool
 }
