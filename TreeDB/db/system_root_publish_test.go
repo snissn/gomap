@@ -6,6 +6,19 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
+func mustFrozenSystemMemtable(t *testing.T, kvs ...string) memtable.Table {
+	t.Helper()
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	for i := 0; i+1 < len(kvs); i += 2 {
+		mt.Set([]byte(kvs[i]), []byte(kvs[i+1]))
+	}
+	mt.Freeze()
+	return mt
+}
+
 func TestPublishSystemRootIterator_PersistsAndPreservesUserRoot(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -121,5 +134,134 @@ func TestPublishSystemRootIterator_DoesNotCreateBatch(t *testing.T) {
 	}
 	if called != 0 {
 		t.Fatalf("testBatchCreateHook called %d times; want 0", called)
+	}
+}
+
+func TestPublishSystemRootIterator_ColdPublishDoesNotCountWarmFallback(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	mt := mustFrozenSystemMemtable(t, "sys/a", "sv")
+	if _, err := db.PublishSystemRootIterator(mt.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish system root: %v", err)
+	}
+
+	stats := db.systemRootPublishStatsSnapshot()
+	if stats.warmAttempts != 0 {
+		t.Fatalf("warmAttempts=%d want 0", stats.warmAttempts)
+	}
+	if stats.warmRebuildFallbacks != 0 {
+		t.Fatalf("warmRebuildFallbacks=%d want 0", stats.warmRebuildFallbacks)
+	}
+}
+
+func TestPublishSystemRootIterator_WarmPublishUsesFallbackCounter(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	initial := mustFrozenSystemMemtable(t, "sys/a", "sv-a")
+	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("initial publish system root: %v", err)
+	}
+
+	warm := mustFrozenSystemMemtable(t, "sys/a", "sv-a2", "sys/b", "sv-b")
+	if _, err := db.PublishSystemRootIterator(warm.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("warm publish system root: %v", err)
+	}
+
+	stats := db.systemRootPublishStatsSnapshot()
+	if stats.warmAttempts != 1 {
+		t.Fatalf("warmAttempts=%d want 1", stats.warmAttempts)
+	}
+	if stats.warmRebuildFallbacks != 1 {
+		t.Fatalf("warmRebuildFallbacks=%d want 1", stats.warmRebuildFallbacks)
+	}
+}
+
+func TestPublishSystemRootIterator_PersistsAcrossReopen_AfterWarmFallback(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = db.Close()
+		}
+	}()
+
+	if err := db.Set([]byte("user/a"), []byte("uv")); err != nil {
+		t.Fatalf("set user key: %v", err)
+	}
+
+	initial := mustFrozenSystemMemtable(t, "sys/a", "sv-a")
+	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("initial publish system root: %v", err)
+	}
+
+	warm := mustFrozenSystemMemtable(t, "sys/a", "sv-a2", "sys/b", "sv-b")
+	newSystemRoot, err := db.PublishSystemRootIterator(warm.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("warm publish system root: %v", err)
+	}
+
+	stats := db.systemRootPublishStatsSnapshot()
+	if stats.warmAttempts != 1 {
+		t.Fatalf("warmAttempts=%d want 1", stats.warmAttempts)
+	}
+	if stats.warmRebuildFallbacks != 1 {
+		t.Fatalf("warmRebuildFallbacks=%d want 1", stats.warmRebuildFallbacks)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	closed = true
+
+	reopened, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer reopened.Close()
+
+	reopenState := reopened.State()
+	if reopenState == nil {
+		t.Fatal("expected reopen state")
+	}
+	if reopenState.SystemRootPageID != newSystemRoot {
+		t.Fatalf("reopen system root=%d want %d", reopenState.SystemRootPageID, newSystemRoot)
+	}
+
+	reopenSnap := reopened.AcquireSnapshot()
+	if reopenSnap == nil {
+		t.Fatal("expected reopen snapshot")
+	}
+	defer reopenSnap.Close()
+
+	entry, err := reopenSnap.GetEntryAtRoot(reopenState.SystemRootPageID, []byte("sys/a"))
+	if err != nil {
+		t.Fatalf("reopen GetEntryAtRoot(sys/a): %v", err)
+	}
+	if got := string(entry.Value); got != "sv-a2" {
+		t.Fatalf("reopen sys/a=%q want %q", got, "sv-a2")
+	}
+	entry, err = reopenSnap.GetEntryAtRoot(reopenState.SystemRootPageID, []byte("sys/b"))
+	if err != nil {
+		t.Fatalf("reopen GetEntryAtRoot(sys/b): %v", err)
+	}
+	if got := string(entry.Value); got != "sv-b" {
+		t.Fatalf("reopen sys/b=%q want %q", got, "sv-b")
+	}
+	if got, err := reopenSnap.Get([]byte("user/a")); err != nil || string(got) != "uv" {
+		t.Fatalf("reopen user get got=%q err=%v want uv", string(got), err)
 	}
 }
