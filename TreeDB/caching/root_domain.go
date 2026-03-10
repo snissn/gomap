@@ -127,7 +127,11 @@ func liveIteratorRootDomainSnapshot(view *memtableView) (rootDomainSnapshot, boo
 	return rootDomainSnapshot{}, false
 }
 
-func (db *DB) rawMemtableEntryFallback(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
+// rawPointRootDomainEntry is the low-level stale-window fallback for point
+// reads when no published memtable view is available. It intentionally resolves
+// newest-wins precedence under db.mu without constructing a synthetic snapshot,
+// keeping the fallback zero-allocation on queued-shard hits.
+func (db *DB) rawPointRootDomainEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
 	if db == nil {
 		return nil, page.ValuePtr{}, 0, false
 	}

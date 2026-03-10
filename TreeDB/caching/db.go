@@ -14522,7 +14522,7 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 		}
 		return nil, false, nil
 	} else {
-		val, ptr, flags, found := db.rawMemtableEntryFallback(key)
+		val, ptr, flags, found := db.rawPointRootDomainEntry(key)
 		if found {
 			if flags&node.FlagTombstone != 0 {
 				return nil, true, nil
@@ -14580,7 +14580,7 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 		}
 		return dst, false, nil
 	} else {
-		val, ptr, flags, found := db.rawMemtableEntryFallback(key)
+		val, ptr, flags, found := db.rawPointRootDomainEntry(key)
 		if found {
 			if flags&node.FlagTombstone != 0 {
 				return dst, true, tree.ErrKeyNotFound
@@ -14781,7 +14781,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 		}
 		return db.backend.Has(key)
 	} else {
-		_, _, flags, found := db.rawMemtableEntryFallback(key)
+		_, _, flags, found := db.rawPointRootDomainEntry(key)
 		if found {
 			return flags&node.FlagTombstone == 0, nil
 		}
