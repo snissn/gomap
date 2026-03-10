@@ -1118,8 +1118,12 @@ func TestWriteBenchprofArtifacts_InvalidExecutionPath(t *testing.T) {
 		},
 	}}
 
-	if err := writeBenchprofArtifacts(dir, "mixed", runs); err == nil {
-		t.Fatal("expected invalid execution path to fail")
+	for _, path := range []string{"mixed", "oracle,native-fastpath", "native-fastpath+legacy"} {
+		if err := writeBenchprofArtifacts(dir, path, runs); err == nil {
+			t.Fatalf("expected invalid execution path %q to fail", path)
+		} else if !strings.Contains(err.Error(), "mixed-path labels are forbidden") {
+			t.Fatalf("unexpected error for %q: %v", path, err)
+		}
 	}
 }
 

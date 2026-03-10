@@ -5,6 +5,37 @@ import (
 	"testing"
 )
 
+func TestParseFlagsRejectsMixedExecutionPathLabels(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "comma separated", path: "oracle,native-fastpath"},
+		{name: "plus separated", path: "native-fastpath+legacy"},
+		{name: "mixed literal", path: "mixed"},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := parseFlagsFrom([]string{
+				"-out-dir", t.TempDir(),
+				"-execution-path", tc.path,
+				"-unavailable-reason", "N/A before R0 harness bring-up",
+			})
+			if err == nil {
+				t.Fatalf("expected execution path %q to fail", tc.path)
+			}
+			if !strings.Contains(err.Error(), "mixed-path labels are forbidden") {
+				t.Fatalf("unexpected error for %q: %v", tc.path, err)
+			}
+		})
+	}
+}
+
 func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	input := strings.NewReader(strings.Join([]string{
 		`{"Action":"output","Output":"BenchmarkCollectionInsertProvidedID-12\t1000\t2000 ns/op\t128 B/op\t4 allocs/op\n"}`,
