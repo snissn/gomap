@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -394,39 +393,28 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 // rewrite-plan tests need to count uncached live-byte estimation passes without
 // serializing the entire package. Keep the hook registry unexported and make
 // registration/removal cheap so tests can install independent counters.
-var (
-	rewritePlanLiveEstimateHooksMu    sync.RWMutex
-	rewritePlanLiveEstimateHooks      = map[uint64]func(){}
-	rewritePlanLiveEstimateHookNextID atomic.Uint64
-)
+var rewritePlanLiveEstimateHook struct {
+	mu sync.Mutex
+	fn func()
+}
 
 func registerRewritePlanLiveEstimateHook(hook func()) func() {
-	if hook == nil {
-		return func() {}
-	}
-	id := rewritePlanLiveEstimateHookNextID.Add(1)
-	rewritePlanLiveEstimateHooksMu.Lock()
-	rewritePlanLiveEstimateHooks[id] = hook
-	rewritePlanLiveEstimateHooksMu.Unlock()
+	rewritePlanLiveEstimateHook.mu.Lock()
+	prev := rewritePlanLiveEstimateHook.fn
+	rewritePlanLiveEstimateHook.fn = hook
+	rewritePlanLiveEstimateHook.mu.Unlock()
 	return func() {
-		rewritePlanLiveEstimateHooksMu.Lock()
-		delete(rewritePlanLiveEstimateHooks, id)
-		rewritePlanLiveEstimateHooksMu.Unlock()
+		rewritePlanLiveEstimateHook.mu.Lock()
+		rewritePlanLiveEstimateHook.fn = prev
+		rewritePlanLiveEstimateHook.mu.Unlock()
 	}
 }
 
-func runRewritePlanLiveEstimateHooks() {
-	rewritePlanLiveEstimateHooksMu.RLock()
-	if len(rewritePlanLiveEstimateHooks) == 0 {
-		rewritePlanLiveEstimateHooksMu.RUnlock()
-		return
-	}
-	hooks := make([]func(), 0, len(rewritePlanLiveEstimateHooks))
-	for _, hook := range rewritePlanLiveEstimateHooks {
-		hooks = append(hooks, hook)
-	}
-	rewritePlanLiveEstimateHooksMu.RUnlock()
-	for _, hook := range hooks {
+func runRewritePlanLiveEstimateHook() {
+	rewritePlanLiveEstimateHook.mu.Lock()
+	hook := rewritePlanLiveEstimateHook.fn
+	rewritePlanLiveEstimateHook.mu.Unlock()
+	if hook != nil {
 		hook()
 	}
 }
@@ -452,11 +440,11 @@ func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[
 		return nil, false
 	}
 	// The cached live-byte map is published by clone-and-replace and never mutated
-	// in place after publication, so it is safe to snapshot the map header under
-	// RLock and clone outside the lock to minimize writer blockage.
+	// in place after publication, so internal callers can share the immutable map
+	// directly without cloning on every cache hit.
 	liveByID := db.rewritePlanLiveBytesCache.liveByID
 	db.rewritePlanLiveBytesMu.RUnlock()
-	return cloneValueLogLiveBytesMap(liveByID), true
+	return liveByID, true
 }
 
 func cloneValueLogLiveBytesMap(src map[uint32]int64) map[uint32]int64 {
@@ -483,26 +471,39 @@ func (db *DB) storeCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey, live
 	db.rewritePlanLiveBytesMu.Unlock()
 }
 
-func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (map[uint32]int64, error) {
+func closeRewriteSnapshot(errp *error, snap *Snapshot) {
+	if snap == nil {
+		return
+	}
+	if closeErr := snap.Close(); closeErr != nil {
+		if errp != nil && *errp != nil {
+			*errp = errors.Join(*errp, closeErr)
+			return
+		}
+		if errp != nil {
+			*errp = closeErr
+		}
+	}
+}
+
+func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uint32]int64, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.state == nil || snap.idx == nil {
-		if snap != nil {
-			_ = snap.Close()
-		}
+		closeRewriteSnapshot(&err, snap)
 		return nil, fmt.Errorf("missing snapshot state")
 	}
-	defer func() { _ = snap.Close() }()
+	defer closeRewriteSnapshot(&err, snap)
 	cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
 	if cacheable {
 		if liveByID, ok := db.loadCachedValueLogLiveBytes(cacheKey); ok {
 			return liveByID, nil
 		}
 	}
-	runRewritePlanLiveEstimateHooks()
+	runRewritePlanLiveEstimateHook()
 	liveByID := make(map[uint32]int64)
 
 	// Pointer-projection iterators can return many keys pointing at the same
@@ -850,8 +851,7 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 
 // ValueLogRewriteOnline rewrites pointer-backed values in bounded commit
 // batches, then atomically swaps keys to rewritten pointers.
-func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewriteStats, error) {
-	var stats ValueLogRewriteStats
+func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnlineOptions) (stats ValueLogRewriteStats, err error) {
 	if db == nil {
 		return stats, fmt.Errorf("missing db")
 	}
@@ -886,7 +886,6 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	var (
 		sourceIDs      map[uint32]struct{}
 		restrictSource bool
-		err            error
 	)
 	if hasRewriteSourceSelection(opts) {
 		active := currentValueLogIDs(set)
@@ -987,9 +986,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.state == nil {
-		if snap != nil {
-			_ = snap.Close()
-		}
+		closeRewriteSnapshot(&err, snap)
 		return stats, fmt.Errorf("missing snapshot state")
 	}
 	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
@@ -1015,14 +1012,14 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		if len(candidates) >= batchSize {
 			if err := flushBatch(); err != nil {
 				_ = it.Close()
-				_ = snap.Close()
+				closeRewriteSnapshot(&err, snap)
 				return stats, err
 			}
 		}
 	}
 	iterErr := it.Error()
 	_ = it.Close()
-	_ = snap.Close()
+	closeRewriteSnapshot(&err, snap)
 	if iterErr != nil {
 		return stats, iterErr
 	}
@@ -1358,12 +1355,10 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.idx == nil || snap.state == nil {
-		if snap != nil {
-			_ = snap.Close()
-		}
+		closeRewriteSnapshot(&err, snap)
 		return 0, fmt.Errorf("missing snapshot state")
 	}
-	defer func() { _ = snap.Close() }()
+	defer closeRewriteSnapshot(&err, snap)
 
 	idx := snap.idx
 	rootID := snap.state.RootPageID
