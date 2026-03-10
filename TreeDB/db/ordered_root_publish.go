@@ -233,3 +233,44 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	}
 	return
 }
+
+// PublishOrderedRootIterator builds and commits a non-meta root from an ordered
+// iterator while preserving the current user and system roots in the commit.
+func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIterator) (uint64, error) {
+	if db == nil {
+		return 0, ErrClosed
+	}
+	if iter == nil {
+		return 0, errors.New("nil ordered root iterator")
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	if db.readOnly {
+		return 0, ErrReadOnly
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	systemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+
+	newRoot, retired, metrics, _, err := db.publishOrderedRootIterator(baseRoot, iter, systemRootOrderedPublishOptions(db))
+	if err != nil {
+		return 0, err
+	}
+
+	db.mu.RLock()
+	curUserRoot := db.meta.UserRootPageID
+	curSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if curUserRoot != userRoot || curSystemRoot != systemRoot {
+		return 0, errors.New("concurrent modification detected during ordered root publish")
+	}
+
+	if err := db.finalizeCommit(userRoot, systemRoot, retired, false, metrics, nil, true, nil); err != nil {
+		return 0, err
+	}
+	return newRoot, nil
+}

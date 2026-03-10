@@ -104,6 +104,10 @@ type backendSystemRootPublisher interface {
 	PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, error)
 }
 
+type backendOrderedRootPublisher interface {
+	PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIterator) (uint64, error)
+}
+
 func (db *DB) ensureRootDomainStatesLocked() {
 	if db == nil {
 		return
@@ -403,6 +407,23 @@ func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
 	}
+	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok &&
+		rootDomainSnapshotNeedsPublish(group.iterator) &&
+		!rootPublishGroupHasNonIteratorPublish(group) {
+		iter, err := group.iterator.publishIterator(nil, nil)
+		if err != nil {
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			return err
+		}
+		newIteratorRootID, err := publisher.PublishOrderedRootIterator(group.iterator.publishedRootID, iter)
+		if err != nil {
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			return err
+		}
+		cloned.iterator.rootID = newIteratorRootID
+	}
 	db.applyPublishedRootSetLocked(cloned)
 	db.clearDirtyRootPublishGroupLocked()
 	if db.rootPublishRetryPending {
@@ -460,6 +481,27 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
 	}
+	if publisher, ok := db.backend.(backendOrderedRootPublisher); ok &&
+		rootDomainSnapshotNeedsPublish(group.iterator) &&
+		!rootPublishGroupHasNonIteratorPublish(group) {
+		iter, err := group.iterator.publishIterator(nil, nil)
+		if err != nil {
+			db.mu.Lock()
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			db.mu.Unlock()
+			return err
+		}
+		newIteratorRootID, err := publisher.PublishOrderedRootIterator(group.iterator.publishedRootID, iter)
+		if err != nil {
+			db.mu.Lock()
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			db.mu.Unlock()
+			return err
+		}
+		cloned.iterator.rootID = newIteratorRootID
+	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -479,6 +521,21 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 		db.rootPublishRetryPending = false
 	}
 	return nil
+}
+
+func rootPublishGroupHasNonIteratorPublish(group *rootPublishGroup) bool {
+	if group == nil {
+		return false
+	}
+	if rootDomainSnapshotNeedsPublish(group.system) {
+		return true
+	}
+	for i := range group.pointShards {
+		if rootDomainSnapshotNeedsPublish(group.pointShards[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) bool {
