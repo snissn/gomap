@@ -37,6 +37,11 @@ type orderedRootPublishOptions struct {
 	internalBaseDelta     bool
 }
 
+type OrderedRootPublishInput struct {
+	BaseRoot uint64
+	Iter     iterator.UnsafeIterator
+}
+
 func selectOrderedRootWarmPublishPlan(hasExistingEntries bool, deltaOps int, maxDeltaOps int) orderedRootPublishPlan {
 	if !hasExistingEntries {
 		return orderedRootPublishPlanColdBuild
@@ -234,6 +239,39 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	return
 }
 
+func mergeOrderedRootPublishMetrics(dst *adaptive.Metrics, src adaptive.Metrics) {
+	if dst == nil {
+		return
+	}
+	if src.LeafFill > 0 {
+		if dst.LeafFill == 0 {
+			dst.LeafFill = src.LeafFill
+		} else {
+			dst.LeafFill = (dst.LeafFill + src.LeafFill) / 2
+		}
+	}
+	dst.Splits += src.Splits
+	dst.IndexWriteBytes += src.IndexWriteBytes
+	dst.SlabWriteBytes += src.SlabWriteBytes
+	dst.SlabDeadBytes += src.SlabDeadBytes
+	if len(src.SlabWriteBytesByFile) != 0 {
+		if dst.SlabWriteBytesByFile == nil {
+			dst.SlabWriteBytesByFile = make(map[uint32]int64, len(src.SlabWriteBytesByFile))
+		}
+		for fileID, bytes := range src.SlabWriteBytesByFile {
+			dst.SlabWriteBytesByFile[fileID] += bytes
+		}
+	}
+	if len(src.SlabDeadBytesByFile) != 0 {
+		if dst.SlabDeadBytesByFile == nil {
+			dst.SlabDeadBytesByFile = make(map[uint32]int64, len(src.SlabDeadBytesByFile))
+		}
+		for fileID, bytes := range src.SlabDeadBytesByFile {
+			dst.SlabDeadBytesByFile[fileID] += bytes
+		}
+	}
+}
+
 // PublishOrderedRootIterator builds and commits a non-meta root from an ordered
 // iterator while preserving the current user and system roots in the commit.
 func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIterator) (uint64, error) {
@@ -273,4 +311,73 @@ func (db *DB) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 		return 0, err
 	}
 	return newRoot, nil
+}
+
+// PublishOrderedRootGroup builds and commits a mixed system/non-system root
+// group in one backend commit. Non-system roots are built from ordered
+// iterators and become durable when the grouped commit finalizes.
+func (db *DB) PublishOrderedRootGroup(systemIter iterator.UnsafeIterator, ordered []OrderedRootPublishInput) (uint64, []uint64, error) {
+	if db == nil {
+		return 0, nil, ErrClosed
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	if db.readOnly {
+		return 0, nil, ErrReadOnly
+	}
+
+	db.mu.RLock()
+	userRoot := db.meta.UserRootPageID
+	baseSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+
+	opts := systemRootOrderedPublishOptions(db)
+	newSystemRoot := baseSystemRoot
+	var retired []uint64
+	var merged adaptive.Metrics
+	var systemStats orderedRootPublishStats
+
+	if systemIter != nil {
+		rootID, rootRetired, metrics, publishStats, err := db.publishOrderedRootIterator(baseSystemRoot, systemIter, opts)
+		if err != nil {
+			return 0, nil, err
+		}
+		newSystemRoot = rootID
+		retired = append(retired, rootRetired...)
+		mergeOrderedRootPublishMetrics(&merged, metrics)
+		systemStats = publishStats
+	}
+
+	rootIDs := make([]uint64, len(ordered))
+	for idx := range ordered {
+		rootID, rootRetired, metrics, _, err := db.publishOrderedRootIterator(ordered[idx].BaseRoot, ordered[idx].Iter, opts)
+		if err != nil {
+			return 0, nil, err
+		}
+		rootIDs[idx] = rootID
+		retired = append(retired, rootRetired...)
+		mergeOrderedRootPublishMetrics(&merged, metrics)
+	}
+
+	db.mu.RLock()
+	curUserRoot := db.meta.UserRootPageID
+	curSystemRoot := db.meta.SystemRootPageID
+	db.mu.RUnlock()
+	if curUserRoot != userRoot || curSystemRoot != baseSystemRoot {
+		return 0, nil, errors.New("concurrent modification detected during ordered root group publish")
+	}
+
+	if err := db.finalizeCommit(userRoot, newSystemRoot, retired, false, merged, nil, true, nil); err != nil {
+		return 0, nil, err
+	}
+	if systemIter != nil {
+		db.systemRootWarmPublishAttempts.Add(systemStats.warmAttempts)
+		db.systemRootWarmNativeApplyAttempts.Add(systemStats.warmNativeApplyAttempts)
+		db.systemRootWarmPublishRebuildFallbacks.Add(systemStats.warmRebuildFallbacks)
+		db.systemRootWarmPreservedPages.Add(systemStats.warmPreservedPages)
+		db.systemRootWarmRewrittenPages.Add(systemStats.warmRewrittenPages)
+	}
+	return newSystemRoot, rootIDs, nil
 }
