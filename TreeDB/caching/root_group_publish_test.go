@@ -1014,6 +1014,13 @@ func TestPublishInstalledRootSet_PublishesSystemDescriptorRunWithoutBackendBatch
 	if got, want := db.rootPublishedSet.system.rootID, backend.state.SystemRootPageID; got != want {
 		t.Fatalf("installed system root id=%d want %d", got, want)
 	}
+	stats := db.rootDomainPublishStatsSnapshot()
+	if stats.nativeSystemPublishes != 1 {
+		t.Fatalf("nativeSystemPublishes=%d want 1", stats.nativeSystemPublishes)
+	}
+	if stats.batchReplayFallbacks != 0 {
+		t.Fatalf("batchReplayFallbacks=%d want 0", stats.batchReplayFallbacks)
+	}
 }
 
 func TestPublishInstalledRootSet_RetriesWholeGroupedPrimaryIndexStateSecondaryAndSystem(t *testing.T) {
@@ -1143,6 +1150,14 @@ func BenchmarkPublishInstalledRootSet_GroupedSystemRootPublish(b *testing.B) {
 			b.Fatalf("publishes=%d want %d", backend.publishes, i+1)
 		}
 	}
+	stats := db.rootDomainPublishStatsSnapshot()
+	if stats.batchReplayFallbacks != 0 {
+		b.Fatalf("batchReplayFallbacks=%d want 0", stats.batchReplayFallbacks)
+	}
+	if stats.nativeSystemPublishes != uint64(b.N) {
+		b.Fatalf("nativeSystemPublishes=%d want %d", stats.nativeSystemPublishes, b.N)
+	}
+	b.ReportMetric(float64(stats.nativeSystemPublishes), "native_system_publishes")
 }
 
 func newRootDomainBenchTable(b *testing.B, ops ...rootDomainTestOp) memtable.Table {
