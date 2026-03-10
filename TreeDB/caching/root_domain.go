@@ -32,6 +32,116 @@ type rootDomainSnapshot struct {
 	immutables      []memtable.Table // oldest-to-newest
 }
 
+func (db *DB) ensureRootDomainStatesLocked() {
+	if db == nil {
+		return
+	}
+	if len(db.rootPointStates) != len(db.mutableShards) {
+		db.rootPointStates = make([]rootDomainState, len(db.mutableShards))
+		db.resyncRootDomainQueuedRunsLocked()
+		return
+	}
+	for i := range db.mutableShards {
+		db.rootPointStates[i].mutable = db.mutableShards[i].mem
+	}
+}
+
+func (db *DB) resetRootDomainStatesLocked() {
+	if db == nil {
+		return
+	}
+	db.rootPointStates = make([]rootDomainState, len(db.mutableShards))
+	for i := range db.mutableShards {
+		db.rootPointStates[i].mutable = db.mutableShards[i].mem
+	}
+	db.rootIteratorState = rootDomainState{}
+}
+
+func (db *DB) resyncRootDomainQueuedRunsLocked() {
+	if db == nil {
+		return
+	}
+	if len(db.rootPointStates) != len(db.mutableShards) {
+		db.rootPointStates = make([]rootDomainState, len(db.mutableShards))
+	}
+	for i := range db.mutableShards {
+		db.rootPointStates[i].mutable = db.mutableShards[i].mem
+		if cap(db.rootPointStates[i].immutables) >= len(db.queue) {
+			db.rootPointStates[i].immutables = db.rootPointStates[i].immutables[:0]
+		} else {
+			db.rootPointStates[i].immutables = make([]memtable.Table, 0, len(db.queue))
+		}
+	}
+	if cap(db.rootIteratorState.immutables) >= len(db.queue) {
+		db.rootIteratorState.immutables = db.rootIteratorState.immutables[:0]
+	} else {
+		db.rootIteratorState.immutables = make([]memtable.Table, 0, len(db.queue))
+	}
+	db.rootIteratorState.mutable = nil
+	if len(db.queue) == 0 {
+		return
+	}
+	if len(db.queueShardIDs) != len(db.queue) {
+		for i := range db.rootPointStates {
+			db.rootPointStates[i].immutables = append(db.rootPointStates[i].immutables, db.queue...)
+		}
+		db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, db.queue...)
+		return
+	}
+	for idx, mt := range db.queue {
+		if mt == nil {
+			continue
+		}
+		db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, mt)
+		shardIdx := int(db.queueShardIDs[idx])
+		if shardIdx < 0 || shardIdx >= len(db.rootPointStates) {
+			continue
+		}
+		db.rootPointStates[shardIdx].immutables = append(db.rootPointStates[shardIdx].immutables, mt)
+	}
+}
+
+func (db *DB) publishRootDomainSnapshotsLocked(view *memtableView) {
+	if db == nil || view == nil {
+		return
+	}
+	db.ensureRootDomainStatesLocked()
+	if len(db.rootPointStates) == 0 {
+		view.rootPointShards = nil
+		view.rootSnapshotShards = nil
+		view.rootIterator = rootDomainSnapshot{}
+		view.rootIteratorRanges = nil
+		return
+	}
+	points := make([]rootDomainSnapshot, len(db.rootPointStates))
+	snapshots := make([]rootDomainSnapshot, len(db.rootPointStates))
+	for i := range db.rootPointStates {
+		points[i] = db.rootPointStates[i].snapshot()
+		snapshots[i] = points[i]
+		snapshots[i].mutable = nil
+	}
+	view.rootPointShards = points
+	view.rootSnapshotShards = snapshots
+	view.rootIterator = db.rootIteratorState.snapshot()
+	view.rootIterator.mutable = nil
+	view.rootIteratorRanges = view.queueRanges
+}
+
+func (db *DB) promoteRootDomainMutableLocked(shardIdx int, sealed, next memtable.Table) {
+	if db == nil {
+		return
+	}
+	db.ensureRootDomainStatesLocked()
+	if shardIdx < 0 || shardIdx >= len(db.rootPointStates) {
+		return
+	}
+	if sealed != nil {
+		db.rootPointStates[shardIdx].immutables = append(db.rootPointStates[shardIdx].immutables, sealed)
+		db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, sealed)
+	}
+	db.rootPointStates[shardIdx].mutable = next
+}
+
 type backendSnapshotLookup struct {
 	snapshot *backenddb.Snapshot
 }

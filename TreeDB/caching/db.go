@@ -3525,6 +3525,8 @@ type DB struct {
 	// Readers load it atomically to avoid holding db.mu around memtable access.
 	memtables             atomic.Pointer[memtableView]
 	rootDomainVersion     atomic.Uint64
+	rootPointStates       []rootDomainState
+	rootIteratorState     rootDomainState
 	hashSortedIndexer     *memtable.HashSortedIndexer
 	appendOnlyMemPool     sync.Pool
 	appendOnlyMemLeaseMu  sync.Mutex
@@ -4407,7 +4409,7 @@ func (db *DB) publishMemtablesLocked() {
 		view.queueRanges = qr
 	}
 	view.rootVersion = db.rootDomainVersion.Add(1)
-	populateRootDomainSnapshots(view)
+	db.publishRootDomainSnapshotsLocked(view)
 	view.refs.Store(1)
 	retired := db.pendingRetiredMems
 	db.pendingRetiredMems = nil
@@ -4579,6 +4581,7 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		shard.bytes = 0
 		shard.mu.Unlock()
 	}
+	db.resetRootDomainStatesLocked()
 	db.memtableStats.writes.Store(0)
 	db.memtableStats.seqWrites.Store(0)
 	db.memtableStats.overwriteWrites.Store(0)
@@ -12148,6 +12151,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 			db.queueRanges = dstRanges
 			db.queueWALPaths = dstWALPaths
 			db.queueValueLogPaths = dstValueLogPaths
+			db.resyncRootDomainQueuedRunsLocked()
 			if len(db.queue) == 0 {
 				db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
 			}
@@ -12434,10 +12438,11 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
-		shard.mem.Freeze()
-		memBytes := shard.mem.Size()
+		oldMem := shard.mem
+		oldMem.Freeze()
+		memBytes := oldMem.Size()
 		queueLaneID := db.laneForShardIndex(i)
-		db.queue = append(db.queue, shard.mem)
+		db.queue = append(db.queue, oldMem)
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
 		db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
 		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
@@ -12453,6 +12458,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 			return err
 		}
 		shard.mem = mt
+		db.promoteRootDomainMutableLocked(i, oldMem, mt)
 		shard.rng = keyRange{}
 		shard.bytes = 0
 		shard.mu.Unlock()
@@ -12573,10 +12579,11 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		}
 
 		// Freeze and enqueue the old mutable shard.
-		shard.mem.Freeze()
-		memBytes := shard.mem.Size()
+		oldMem := shard.mem
+		oldMem.Freeze()
+		memBytes := oldMem.Size()
 		queueLaneID := db.laneForShardIndex(i)
-		db.queue = append(db.queue, shard.mem)
+		db.queue = append(db.queue, oldMem)
 		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
 		db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
 		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
@@ -12591,6 +12598,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			return err
 		}
 		shard.mem = mt
+		db.promoteRootDomainMutableLocked(i, oldMem, mt)
 		shard.rng = keyRange{}
 		shard.bytes = 0
 	}
@@ -13235,6 +13243,7 @@ func (db *DB) removeQueuedUnitsLocked(removeIDs map[uint64]struct{}, units []flu
 	db.queueRanges = dstRanges
 	db.queueWALPaths = dstWALPaths
 	db.queueValueLogPaths = dstValueLogPaths
+	db.resyncRootDomainQueuedRunsLocked()
 	db.queueBacklogBytes.Add(-totalBytes)
 	if len(db.queue) == 0 {
 		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
@@ -14294,6 +14303,7 @@ func (db *DB) flushOneLocked(sync bool) bool {
 	if len(db.queueValueLogPaths) > 0 {
 		db.queueValueLogPaths = db.queueValueLogPaths[1:]
 	}
+	db.resyncRootDomainQueuedRunsLocked()
 	db.queueBacklogBytes.Add(-memBytes)
 	if len(db.queue) == 0 {
 		db.materializationLastDrainUnixNano.Store(time.Now().UnixNano())
