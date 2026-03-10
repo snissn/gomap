@@ -791,16 +791,17 @@ func TestVlogGenerationRewriteQueue_DoesNotResumeWithZeroBudgetTokens(t *testing
 	}
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(0)
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(time.Now().UnixNano())
 	forceVlogMaintenanceIdle(db)
 
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	planOpts, calls := recorder.recordedPlan()
-	if calls < 2 || calls > 3 {
-		t.Fatalf("plan calls after zero-budget resume=%d want 2..3", calls)
+	if calls != 2 {
+		t.Fatalf("plan calls after zero-budget resume=%d want=2", calls)
 	}
 	if got, want := planOpts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("last refreshed plan source ids=%v want=%v", got, want)
+		t.Fatalf("last plan source ids after zero-budget resume=%v want=%v", got, want)
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls after zero-budget resume=%d want=1", calls)
@@ -883,6 +884,7 @@ func TestVlogGenerationRewriteQueue_DoesNotResumeWithZeroBudgetTokensAfterReopen
 	}
 	defer func() { _ = db2.Close() }()
 	db2.vlogGenerationRewriteBudgetTokensBytes.Store(0)
+	db2.vlogGenerationRewriteBudgetLastUnixNano.Store(time.Now().UnixNano())
 	forceVlogMaintenanceIdle(db2)
 
 	db2.maybeRunVlogGenerationMaintenance(false)
