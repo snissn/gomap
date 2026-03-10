@@ -182,4 +182,7 @@ func TestAcquireSnapshot_FallsBackToBackendPublishedSetWithoutInstalledGroup(t *
 	if rootSnap.publishedRootID == 0 {
 		t.Fatal("expected backend published root id")
 	}
+	if stats := db.rootDomainPublishStatsSnapshot(); stats.backendFallbacks != 1 {
+		t.Fatalf("backendFallbacks=%d want 1", stats.backendFallbacks)
+	}
 }
