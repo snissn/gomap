@@ -970,7 +970,7 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 		return fmt.Errorf("mkdir %q: %w", dir, err)
 	}
 	if executionPath != "" && executionPath != "oracle" && executionPath != "native-fastpath" {
-		return fmt.Errorf("invalid execution path %q", executionPath)
+		return fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden", executionPath)
 	}
 
 	out := benchprofExport{
