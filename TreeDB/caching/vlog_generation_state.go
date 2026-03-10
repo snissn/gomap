@@ -14,7 +14,7 @@ const valueLogGenerationStateFileName = "vlog_generation_state.json"
 
 const vlogGenerationRewriteResumeMaxSegments = 1
 
-const vlogGenerationRewriteResumeMinInterval = 5 * time.Second
+const vlogGenerationRewriteResumeMinInterval = 1 * time.Second
 
 type valueLogGenerationStateFile struct {
 	RewriteSourceFileIDs []string `json:"rewrite_source_file_ids,omitempty"`
