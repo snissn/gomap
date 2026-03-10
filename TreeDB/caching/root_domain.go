@@ -28,6 +28,30 @@ type rootDomainSnapshot struct {
 	immutables      []memtable.Table // oldest-to-newest
 }
 
+func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includeMutable bool) rootDomainSnapshot {
+	if view == nil {
+		return rootDomainSnapshot{}
+	}
+	snap := rootDomainSnapshot{}
+	if includeMutable && shardIdx >= 0 && shardIdx < len(view.mutables) {
+		snap.mutable = view.mutables[shardIdx]
+	}
+	if len(view.queue) == 0 {
+		return snap
+	}
+	snap.immutables = make([]memtable.Table, 0, len(view.queue))
+	for idx, mt := range view.queue {
+		if mt == nil {
+			continue
+		}
+		if len(view.queueShardIDs) > idx && int(view.queueShardIDs[idx]) != shardIdx {
+			continue
+		}
+		snap.immutables = append(snap.immutables, mt)
+	}
+	return snap
+}
+
 func (s *rootDomainState) snapshot() rootDomainSnapshot {
 	if s == nil {
 		return rootDomainSnapshot{}

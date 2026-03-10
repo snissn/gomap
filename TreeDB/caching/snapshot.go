@@ -139,22 +139,9 @@ func (s *Snapshot) lookupQueueEntry(key []byte) (val []byte, ptr page.ValuePtr, 
 	if s == nil || s.view == nil || len(s.view.queue) == 0 || s.db == nil {
 		return nil, page.ValuePtr{}, 0, false
 	}
-	queue := s.view.queue
-	queueShardIDs := s.view.queueShardIDs
 	shardIdx := s.db.shardIndex(key)
-	// The frozen queue stores entries in chronological order with newer
-	// memtables appended at higher indices. Scan from the end so key lookups see
-	// the newest queued entry first.
-	for i := len(queue) - 1; i >= 0; i-- {
-		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
-			continue
-		}
-		val, ptr, flags, found = queue[i].GetEntry(key)
-		if found {
-			return val, ptr, flags, true
-		}
-	}
-	return nil, page.ValuePtr{}, 0, false
+	snap := rootDomainSnapshotFromMemtableView(s.view, shardIdx, false)
+	return snap.getEntry(key)
 }
 
 func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {

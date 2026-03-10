@@ -14437,71 +14437,43 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	if view != nil {
 		defer db.releaseMemtableView(view)
 	}
-	var (
-		mutables      []memtable.Table
-		queue         []memtable.Table
-		queueShardIDs []uint16
-	)
+	var snap rootDomainSnapshot
+	var haveSnapshot bool
 	if view != nil {
-		mutables = view.mutables
-		queue = view.queue
-		queueShardIDs = view.queueShardIDs
+		shardIdx := 0
+		if len(view.mutables) > 0 {
+			shardIdx = db.shardIndex(key)
+		}
+		snap = rootDomainSnapshotFromMemtableView(view, shardIdx, true)
+		haveSnapshot = true
 	} else {
 		// Defensive fallback: should not happen after Open(), but keep safe
 		// behavior for zero-value DBs and tests.
 		db.mu.RLock()
+		fallbackView := &memtableView{
+			queue:         append([]memtable.Table(nil), db.queue...),
+			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
+		}
 		if len(db.mutableShards) > 0 {
-			mutables = make([]memtable.Table, len(db.mutableShards))
+			fallbackView.mutables = make([]memtable.Table, len(db.mutableShards))
 			for i := range db.mutableShards {
-				mutables[i] = db.mutableShards[i].mem
+				fallbackView.mutables[i] = db.mutableShards[i].mem
 			}
 		}
-		queue = append([]memtable.Table(nil), db.queue...)
-		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
 		db.mu.RUnlock()
+		shardIdx := 0
+		if len(fallbackView.mutables) > 0 {
+			shardIdx = db.shardIndex(key)
+		}
+		snap = rootDomainSnapshotFromMemtableView(fallbackView, shardIdx, true)
+		haveSnapshot = true
 	}
 
 	if db.canBypassMemtableRead(view, key) {
 		return nil, false, nil
 	}
-
-	// check mutable
-	if len(mutables) > 0 {
-		idx := db.shardIndex(key)
-		if idx < len(mutables) && mutables[idx] != nil {
-			val, ptr, flags, found := mutables[idx].GetEntry(key)
-			if found {
-				if flags&node.FlagTombstone != 0 {
-					return nil, true, nil
-				}
-				if flags&node.FlagPointer != 0 {
-					if val == nil {
-						readVal, err := db.readValueLog(key, ptr)
-						if err != nil {
-							return nil, true, err
-						}
-						return readVal, true, nil
-					}
-					return val, true, nil
-				}
-				if val == nil {
-					return []byte{}, true, nil
-				}
-				return val, true, nil
-			}
-		}
-	}
-
-	// check queue backwards (newest first)
-	shardIdx := 0
-	if len(mutables) > 0 {
-		shardIdx = db.shardIndex(key)
-	}
-	for i := len(queue) - 1; i >= 0; i-- {
-		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
-			continue
-		}
-		val, ptr, flags, found := queue[i].GetEntry(key)
+	if haveSnapshot {
+		val, ptr, flags, found := snap.getEntry(key)
 		if found {
 			if flags&node.FlagTombstone != 0 {
 				return nil, true, nil
@@ -14530,69 +14502,41 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	if view != nil {
 		defer db.releaseMemtableView(view)
 	}
-	var (
-		mutables      []memtable.Table
-		queue         []memtable.Table
-		queueShardIDs []uint16
-	)
+	var snap rootDomainSnapshot
+	var haveSnapshot bool
 	if view != nil {
-		mutables = view.mutables
-		queue = view.queue
-		queueShardIDs = view.queueShardIDs
+		shardIdx := 0
+		if len(view.mutables) > 0 {
+			shardIdx = db.shardIndex(key)
+		}
+		snap = rootDomainSnapshotFromMemtableView(view, shardIdx, true)
+		haveSnapshot = true
 	} else {
 		db.mu.RLock()
+		fallbackView := &memtableView{
+			queue:         append([]memtable.Table(nil), db.queue...),
+			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
+		}
 		if len(db.mutableShards) > 0 {
-			mutables = make([]memtable.Table, len(db.mutableShards))
+			fallbackView.mutables = make([]memtable.Table, len(db.mutableShards))
 			for i := range db.mutableShards {
-				mutables[i] = db.mutableShards[i].mem
+				fallbackView.mutables[i] = db.mutableShards[i].mem
 			}
 		}
-		queue = append([]memtable.Table(nil), db.queue...)
-		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
 		db.mu.RUnlock()
+		shardIdx := 0
+		if len(fallbackView.mutables) > 0 {
+			shardIdx = db.shardIndex(key)
+		}
+		snap = rootDomainSnapshotFromMemtableView(fallbackView, shardIdx, true)
+		haveSnapshot = true
 	}
 
 	if db.canBypassMemtableRead(view, key) {
 		return dst, false, nil
 	}
-
-	// check mutable
-	if len(mutables) > 0 {
-		idx := db.shardIndex(key)
-		if idx < len(mutables) && mutables[idx] != nil {
-			val, ptr, flags, found := mutables[idx].GetEntry(key)
-			if found {
-				if flags&node.FlagTombstone != 0 {
-					return dst, true, tree.ErrKeyNotFound
-				}
-				if flags&node.FlagPointer != 0 {
-					if val == nil {
-						out, err := db.readValueLogAppend(key, ptr, dst)
-						if err != nil {
-							return dst, true, err
-						}
-						return out, true, nil
-					}
-					return append(dst, val...), true, nil
-				}
-				if val == nil {
-					return dst, true, nil
-				}
-				return append(dst, val...), true, nil
-			}
-		}
-	}
-
-	// check queue backwards (newest first)
-	shardIdx := 0
-	if len(mutables) > 0 {
-		shardIdx = db.shardIndex(key)
-	}
-	for i := len(queue) - 1; i >= 0; i-- {
-		if len(queueShardIDs) > i && int(queueShardIDs[i]) != shardIdx {
-			continue
-		}
-		val, ptr, flags, found := queue[i].GetEntry(key)
+	if haveSnapshot {
+		val, ptr, flags, found := snap.getEntry(key)
 		if found {
 			if flags&node.FlagTombstone != 0 {
 				return dst, true, tree.ErrKeyNotFound
