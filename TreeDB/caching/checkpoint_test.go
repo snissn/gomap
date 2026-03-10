@@ -104,6 +104,7 @@ func TestCachingDB_AutoCheckpoint_TrimsWAL(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	db.testSkipVlogCheckpointKick = true
 
 	db.StartAutoCheckpoint(5*time.Millisecond, 1<<20 /* 1MiB */, 0)
 
@@ -145,6 +146,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_TrimsWAL(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	db.testSkipVlogCheckpointKick = true
 
 	db.StartAutoCheckpoint(0, 0, 100*time.Millisecond)
 
@@ -246,6 +248,7 @@ func TestCachingDB_AutoCheckpoint_IdleTrigger_SkipsTinyWrites(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	db.testSkipVlogCheckpointKick = true
 
 	db.StartAutoCheckpoint(0, 0, 50*time.Millisecond)
 
@@ -281,6 +284,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_TrimsWAL(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	db.testSkipVlogCheckpointKick = true
 
 	db.StartAutoCheckpoint(0, 1<<20 /* 1MiB */, 0)
 
@@ -347,6 +351,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_SeedsExistingWAL(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	db.testSkipVlogCheckpointKick = true
 
 	db.StartAutoCheckpoint(0, 1<<20 /* 1MiB */, 0)
 
@@ -398,6 +403,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_DoesNotThrashWithRetainedValueLog(
 		t.Fatalf("Open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+	db.testSkipVlogCheckpointKick = true
 
 	db.StartAutoCheckpoint(0, 1<<20 /* 1MiB */, 0)
 
