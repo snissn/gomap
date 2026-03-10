@@ -167,6 +167,7 @@ func TestPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
 			t.Fatalf("expected non-target shard %d GetEntry calls = 0, got %d", shard, calls)
 		}
 	}
+	beforeHasTargetGetEntryCalls := tables[targetShard].getEntryCalls
 
 	ok, err := db.Has(wantKey)
 	if err != nil {
@@ -176,15 +177,86 @@ func TestPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
 		t.Fatalf("expected Has to be true")
 	}
 	for shard := 0; shard < shards; shard++ {
-		calls := tables[shard].getCalls
+		if shard == targetShard {
+			if got := tables[shard].getEntryCalls; got <= beforeHasTargetGetEntryCalls {
+				t.Fatalf("expected target shard GetEntry calls to increase after Has, got before=%d after=%d", beforeHasTargetGetEntryCalls, got)
+			}
+			if got := tables[shard].getCalls; got != 0 {
+				t.Fatalf("expected target shard Get calls = 0, got %d", got)
+			}
+			continue
+		}
+		if got := tables[shard].getCalls; got != 0 {
+			t.Fatalf("expected non-target shard %d Get calls = 0, got %d", shard, got)
+		}
+		if got := tables[shard].getEntryCalls; got != 0 {
+			t.Fatalf("expected non-target shard %d GetEntry calls = 0, got %d", shard, got)
+		}
+	}
+}
+
+func TestSnapshotPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
+	const shards = 8
+	const targetShard = 5
+
+	db := &DB{
+		backend:          panicBackend{},
+		mutableShards:    make([]memShard, shards),
+		mutableShardMask: shards - 1,
+	}
+
+	var key [8]byte
+	for i := uint64(0); ; i++ {
+		binary.BigEndian.PutUint64(key[:], i)
+		if db.shardIndex(key[:]) == targetShard {
+			break
+		}
+	}
+	wantKey := append([]byte(nil), key[:]...)
+
+	queue := make([]memtable.Table, 0, shards)
+	queueShardIDs := make([]uint16, 0, shards)
+	tables := make([]*countingTable, 0, shards)
+
+	for shard := 0; shard < shards; shard++ {
+		mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+		if err != nil {
+			t.Fatalf("new memtable: %v", err)
+		}
+		ct := &countingTable{inner: mt}
+		queue = append(queue, ct)
+		queueShardIDs = append(queueShardIDs, uint16(shard))
+		tables = append(tables, ct)
+	}
+
+	queue[targetShard].SetEntry(wantKey, []byte("v"), page.ValuePtr{}, node.FlagInline)
+
+	snap := &Snapshot{
+		db: db,
+		view: &memtableView{
+			queue:         queue,
+			queueShardIDs: queueShardIDs,
+		},
+	}
+
+	got, err := snap.Get(wantKey)
+	if err != nil {
+		t.Fatalf("Snapshot.Get: %v", err)
+	}
+	if string(got) != "v" {
+		t.Fatalf("unexpected snapshot value: %q", got)
+	}
+
+	for shard := 0; shard < shards; shard++ {
+		calls := tables[shard].getEntryCalls
 		if shard == targetShard {
 			if calls == 0 {
-				t.Fatalf("expected target shard Get calls > 0, got %d", calls)
+				t.Fatalf("expected target shard GetEntry calls > 0, got %d", calls)
 			}
 			continue
 		}
 		if calls != 0 {
-			t.Fatalf("expected non-target shard %d Get calls = 0, got %d", shard, calls)
+			t.Fatalf("expected non-target shard %d GetEntry calls = 0, got %d", shard, calls)
 		}
 	}
 }
