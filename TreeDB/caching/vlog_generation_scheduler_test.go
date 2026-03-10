@@ -847,7 +847,7 @@ func TestVlogGenerationGCQueue_ResumesWithoutRedryRun(t *testing.T) {
 	}
 	recorder := &dryRunGCRecordingBackend{
 		DB:          backend,
-		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes, EligibleFileIDs: []uint32{11, 22}},
+		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 3, BytesEligible: vlogGenerationGCMinBytes, EligibleFileIDs: []uint32{11, 22, 33}},
 		realGCStats: backenddb.ValueLogGCStats{SegmentsDeleted: 1, BytesDeleted: 64},
 	}
 
@@ -866,8 +866,27 @@ func TestVlogGenerationGCQueue_ResumesWithoutRedryRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current gc queue after first run: %v", err)
 	}
+	if got, want := queue, []uint32{33}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gc queue after first run=%v want=%v", got, want)
+	}
+
+	db.vlogGenerationLastGCUnixNano.Store(time.Now().Add(-2 * vlogGenerationGCResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	dryCalls, realCalls, _, sourceFileIDs = recorder.recordedCalls()
+	if dryCalls != 1 || realCalls != 2 {
+		t.Fatalf("calls after second run dry=%d real=%d want dry=1 real=2", dryCalls, realCalls)
+	}
+	if got, want := sourceFileIDs[2], []uint32{33}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second real gc source ids=%v want=%v", got, want)
+	}
+	queue, err = db.currentVlogGenerationGCQueue()
+	if err != nil {
+		t.Fatalf("current gc queue after second run: %v", err)
+	}
 	if len(queue) != 0 {
-		t.Fatalf("gc queue after first run=%v want empty", queue)
+		t.Fatalf("gc queue after second run=%v want empty", queue)
 	}
 }
 
@@ -882,7 +901,7 @@ func TestVlogGenerationGCQueue_SurvivesReopen(t *testing.T) {
 	}
 	recorder := &dryRunGCRecordingBackend{
 		DB:          backend,
-		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes, EligibleFileIDs: []uint32{11, 22}},
+		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 3, BytesEligible: vlogGenerationGCMinBytes, EligibleFileIDs: []uint32{11, 22, 33}},
 		realGCStats: backenddb.ValueLogGCStats{SegmentsDeleted: 1, BytesDeleted: 64},
 	}
 
@@ -919,14 +938,17 @@ func TestVlogGenerationGCQueue_SurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("current gc queue after reopen: %v", err)
 	}
-	if len(queue) != 0 {
-		t.Fatalf("gc queue after reopen=%v want empty", queue)
+	if got, want := queue, []uint32{33}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gc queue after reopen=%v want=%v", got, want)
 	}
 
 	db2.maybeRunVlogGenerationMaintenance(false)
-	dryCalls, realCalls, _, _ := recorder2.recordedCalls()
-	if dryCalls != 0 || realCalls != 0 {
-		t.Fatalf("calls after reopen dry=%d real=%d want dry=0 real=0", dryCalls, realCalls)
+	dryCalls, realCalls, _, sourceFileIDs := recorder2.recordedCalls()
+	if dryCalls != 0 || realCalls != 1 {
+		t.Fatalf("calls after reopen dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
+	}
+	if got, want := sourceFileIDs[0], []uint32{33}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("gc source ids after reopen=%v want=%v", got, want)
 	}
 }
 

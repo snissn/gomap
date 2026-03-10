@@ -18,6 +18,8 @@ const vlogGenerationRewriteResumeMinInterval = 1 * time.Second
 
 const vlogGenerationGCResumeMaxSegments = 2
 
+const vlogGenerationGCResumeMinInterval = 1 * time.Second
+
 type valueLogGenerationStateFile struct {
 	RewriteSourceFileIDs []string `json:"rewrite_source_file_ids,omitempty"`
 	GCSourceFileIDs      []string `json:"gc_source_file_ids,omitempty"`

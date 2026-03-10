@@ -10371,9 +10371,13 @@ planned:
 	}
 	now = time.Now()
 	lastGC := db.vlogGenerationLastGCUnixNano.Load()
+	minInterval := vlogGenerationGCMinInterval
+	if len(gcQueue) > 0 {
+		minInterval = vlogGenerationGCResumeMinInterval
+	}
 	if lastGC > 0 {
 		lastAt := time.Unix(0, lastGC)
-		if now.Sub(lastAt) < vlogGenerationGCMinInterval {
+		if now.Sub(lastAt) < minInterval {
 			return
 		}
 	}
