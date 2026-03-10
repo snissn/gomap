@@ -12,9 +12,13 @@ import (
 
 type panicBatchSystemPublishBackend struct {
 	panicBackend
-	state     backenddb.DBState
-	publishes int
-	values    map[string]string
+	state            backenddb.DBState
+	publishes        int
+	values           map[string]string
+	orderedPublishes int
+	orderedBaseRoot  uint64
+	orderedValues    map[string]string
+	orderedErr       error
 }
 
 func (b *panicBatchSystemPublishBackend) State() *backenddb.DBState {
@@ -33,6 +37,33 @@ func (b *panicBatchSystemPublishBackend) PublishSystemRootIterator(iter iterator
 	b.publishes++
 	b.state.SystemRootPageID++
 	return b.state.SystemRootPageID, iter.Error()
+}
+
+func (b *panicBatchSystemPublishBackend) PublishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIterator) (uint64, error) {
+	if b.orderedErr != nil {
+		return 0, b.orderedErr
+	}
+	if b.orderedValues == nil {
+		b.orderedValues = make(map[string]string)
+	}
+	for k := range b.orderedValues {
+		delete(b.orderedValues, k)
+	}
+	for iter.Valid() {
+		b.orderedValues[string(iter.UnsafeKey())] = string(iter.UnsafeValue())
+		iter.Next()
+	}
+	if err := iter.Error(); err != nil {
+		return 0, err
+	}
+	b.orderedPublishes++
+	b.orderedBaseRoot = baseRoot
+	if b.state.RootPageID == 0 {
+		b.state.RootPageID = 1
+	} else {
+		b.state.RootPageID++
+	}
+	return b.state.RootPageID, nil
 }
 
 func TestInstallPublishedRootSetLocked_PublishesOnePinnedGeneration(t *testing.T) {
@@ -1020,6 +1051,117 @@ func TestPublishInstalledRootSet_PublishesSystemDescriptorRunWithoutBackendBatch
 	}
 	if stats.batchReplayFallbacks != 0 {
 		t.Fatalf("batchReplayFallbacks=%d want 0", stats.batchReplayFallbacks)
+	}
+}
+
+func TestPublishInstalledRootSet_PublishesIteratorRunThroughOrderedRootPublisher(t *testing.T) {
+	backend := &panicBatchSystemPublishBackend{
+		state: backenddb.DBState{RootPageID: 77},
+	}
+	oldIter := newRootDomainTestTable(t,
+		rootDomainTestOp{key: "iter/a", value: "old-a"},
+		rootDomainTestOp{key: "iter/b", value: "old-b"},
+	)
+	targetIter := newRootDomainTestTable(t,
+		rootDomainTestOp{key: "iter/a", value: "new-a"},
+		rootDomainTestOp{key: "iter/b", value: "old-b"},
+	)
+	deltaIter := newRootDomainTestTable(t,
+		rootDomainTestOp{key: "iter/a", value: "new-a"},
+	)
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootPointStates:  make([]rootDomainState, 1),
+		rootIteratorState: rootDomainState{
+			published:       oldIter,
+			publishedRootID: 77,
+			immutables:      []memtable.Table{deltaIter},
+		},
+	}
+
+	if err := db.publishInstalledRootSet(&publishedRootSet{
+		generation: 25,
+		iterator: publishedRootRef{
+			lookup: targetIter,
+			rootID: 77,
+		},
+	}); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+
+	if backend.orderedPublishes != 1 {
+		t.Fatalf("orderedPublishes=%d want 1", backend.orderedPublishes)
+	}
+	if backend.orderedBaseRoot != 77 {
+		t.Fatalf("orderedBaseRoot=%d want 77", backend.orderedBaseRoot)
+	}
+	if got := backend.orderedValues["iter/a"]; got != "new-a" {
+		t.Fatalf("ordered iter/a=%q want %q", got, "new-a")
+	}
+	if got := backend.orderedValues["iter/b"]; got != "old-b" {
+		t.Fatalf("ordered iter/b=%q want %q", got, "old-b")
+	}
+	if db.rootPublishedSet == nil {
+		t.Fatal("expected installed published root set")
+	}
+	if got, want := db.rootPublishedSet.iterator.rootID, backend.state.RootPageID; got != want {
+		t.Fatalf("installed iterator root id=%d want %d", got, want)
+	}
+}
+
+func TestPublishInstalledRootSet_IteratorRootPublishFailureKeepsPreviousGeneration(t *testing.T) {
+	backend := &panicBatchSystemPublishBackend{
+		state:      backenddb.DBState{RootPageID: 70},
+		orderedErr: errors.New("boom"),
+	}
+	oldIter := newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "old-a"})
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootPointStates:  make([]rootDomainState, 1),
+		rootIteratorState: rootDomainState{
+			published:       oldIter,
+			publishedRootID: 70,
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-a"}),
+			},
+		},
+	}
+	if !db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 1,
+		iterator: publishedRootRef{
+			lookup: oldIter,
+			rootID: 70,
+		},
+	}) {
+		t.Fatal("expected initial install")
+	}
+	if err := db.publishInstalledRootSet(&publishedRootSet{
+		generation: 2,
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "new-a"}),
+			rootID: 70,
+		},
+	}); err == nil {
+		t.Fatal("expected iterator publish failure")
+	}
+	if backend.orderedPublishes != 0 {
+		t.Fatalf("orderedPublishes=%d want 0", backend.orderedPublishes)
+	}
+	if db.rootPublishedSet == nil {
+		t.Fatal("expected prior published root set")
+	}
+	if got := db.rootPublishedSet.generation; got != 1 {
+		t.Fatalf("generation=%d want 1", got)
+	}
+	if got := db.rootPublishedSet.iterator.rootID; got != 70 {
+		t.Fatalf("iterator root id=%d want 70", got)
+	}
+	if !db.rootPublishRetryPending {
+		t.Fatal("expected retry pending after iterator publish failure")
 	}
 }
 

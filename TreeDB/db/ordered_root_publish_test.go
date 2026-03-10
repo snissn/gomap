@@ -111,3 +111,81 @@ func TestPublishOrderedRootIterator_ColdBuild_SkipsWarmCounters(t *testing.T) {
 		t.Fatalf("unexpected warm stats: %+v", stats)
 	}
 }
+
+func TestPublishOrderedRootIterator_PersistsAndPreservesMetaRoots(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	closed := false
+	defer func() {
+		if !closed {
+			_ = db.Close()
+		}
+	}()
+
+	if err := db.Set([]byte("user/a"), []byte("uv")); err != nil {
+		t.Fatalf("set user key: %v", err)
+	}
+	sys := mustFrozenSystemMemtable(t, "sys/a", "sv")
+	if _, err := db.PublishSystemRootIterator(sys.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish system root: %v", err)
+	}
+	before := db.State()
+	if before == nil {
+		t.Fatal("expected backend state")
+	}
+
+	rootTable := mustFrozenSystemMemtable(t, "iter/a", "iv")
+	newRoot, err := db.PublishOrderedRootIterator(0, rootTable.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("publish ordered root: %v", err)
+	}
+	after := db.State()
+	if after == nil {
+		t.Fatal("expected backend state after publish")
+	}
+	if after.RootPageID != before.RootPageID {
+		t.Fatalf("user root changed: got %d want %d", after.RootPageID, before.RootPageID)
+	}
+	if after.SystemRootPageID != before.SystemRootPageID {
+		t.Fatalf("system root changed: got %d want %d", after.SystemRootPageID, before.SystemRootPageID)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	entry, err := snap.GetEntryAtRoot(newRoot, []byte("iter/a"))
+	if err != nil {
+		t.Fatalf("GetEntryAtRoot(iter): %v", err)
+	}
+	if got := string(entry.Value); got != "iv" {
+		t.Fatalf("iter value=%q want %q", got, "iv")
+	}
+	_ = snap.Close()
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+	closed = true
+
+	reopened, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	defer reopened.Close()
+	reopenSnap := reopened.AcquireSnapshot()
+	if reopenSnap == nil {
+		t.Fatal("expected reopen snapshot")
+	}
+	defer reopenSnap.Close()
+	entry, err = reopenSnap.GetEntryAtRoot(newRoot, []byte("iter/a"))
+	if err != nil {
+		t.Fatalf("reopen GetEntryAtRoot(iter): %v", err)
+	}
+	if got := string(entry.Value); got != "iv" {
+		t.Fatalf("reopen iter value=%q want %q", got, "iv")
+	}
+}
