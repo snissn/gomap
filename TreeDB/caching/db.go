@@ -10993,7 +10993,7 @@ func (db *DB) Checkpoint() error {
 			if !db.lanes[i].vlogDirty.Load() {
 				continue
 			}
-			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
+			if err := db.syncValueLogLane(&db.lanes[i]); err != nil {
 				return err
 			}
 		}
