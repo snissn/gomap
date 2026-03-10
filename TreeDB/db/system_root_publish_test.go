@@ -265,3 +265,43 @@ func TestPublishSystemRootIterator_PersistsAcrossReopen_AfterWarmFallback(t *tes
 		t.Fatalf("reopen user get got=%q err=%v want uv", string(got), err)
 	}
 }
+
+func TestPublishSystemRootIterator_StatsExposeWarmFallbackCounters(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	initial := mustFrozenSystemMemtable(t, "sys/a", "sv-a")
+	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("initial publish system root: %v", err)
+	}
+	warm := mustFrozenSystemMemtable(t, "sys/a", "sv-a2", "sys/b", "sv-b")
+	if _, err := db.PublishSystemRootIterator(warm.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("warm publish system root: %v", err)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.publish.system_root.warm_attempts"]; got != "1" {
+		t.Fatalf("warm_attempts=%q want 1", got)
+	}
+	if got := stats["treedb.publish.system_root.warm_rebuild_fallbacks"]; got != "1" {
+		t.Fatalf("warm_rebuild_fallbacks=%q want 1", got)
+	}
+}
+
+func TestSelectSystemRootPublishPlan_EmptySystemRootUsesColdBuild(t *testing.T) {
+	plan := selectSystemRootPublishPlan(false)
+	if plan != systemRootPublishPlanColdBuild {
+		t.Fatalf("plan=%v want %v", plan, systemRootPublishPlanColdBuild)
+	}
+}
+
+func TestSelectSystemRootPublishPlan_NonEmptySystemRootUsesWarmFallback(t *testing.T) {
+	plan := selectSystemRootPublishPlan(true)
+	if plan != systemRootPublishPlanWarmFallbackRebuild {
+		t.Fatalf("plan=%v want %v", plan, systemRootPublishPlanWarmFallbackRebuild)
+	}
+}
