@@ -97,3 +97,29 @@ func TestPublishSystemRootIterator_PersistsAndPreservesUserRoot(t *testing.T) {
 		t.Fatalf("reopen system value=%q want %q", got, "sv")
 	}
 }
+
+func TestPublishSystemRootIterator_DoesNotCreateBatch(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	called := 0
+	db.testBatchCreateHook = func() { called++ }
+
+	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
+	if err != nil {
+		t.Fatalf("new memtable: %v", err)
+	}
+	mt.Set([]byte("sys/a"), []byte("sv"))
+	mt.Freeze()
+
+	if _, err := db.PublishSystemRootIterator(mt.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("publish system root: %v", err)
+	}
+	if called != 0 {
+		t.Fatalf("testBatchCreateHook called %d times; want 0", called)
+	}
+}
