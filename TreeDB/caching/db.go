@@ -3675,6 +3675,7 @@ type DB struct {
 	memtableCap               int
 	memtableMode              memtable.Mode
 	memtableStats             memtableStats
+	rootDomainProbeStats      rootDomainProbeStats
 	memtableAdaptive          bool
 	memtableAdaptiveObserve   atomic.Bool
 	adaptiveShardedStats      bool
@@ -14543,6 +14544,7 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 			groupStarts = append(groupStarts, i)
 		}
 	}
+	db.noteRootDomainGetManyNative(len(keys), len(unique))
 
 	results := make([]rootDomainProbeResult, len(unique))
 	start := 0
@@ -14588,6 +14590,7 @@ func (db *DB) getManyFromPublishedRootPointShards(view *memtableView, keys [][]b
 		}
 	}
 	if len(backendKeys) > 0 {
+		db.noteRootDomainGetManyBackendFallback(len(backendKeys))
 		backendVals, err := db.backendGetMany(backendKeys)
 		if err != nil {
 			return nil, err
@@ -14829,6 +14832,7 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	if view != nil && len(view.rootPointShards) > 0 {
 		return db.getManyFromPublishedRootPointShards(view, keys)
 	}
+	db.noteRootDomainGetManyFallback(len(keys))
 
 	out := make([][]byte, len(keys))
 	backendIdx := make([]int, 0, len(keys))
@@ -15068,6 +15072,7 @@ func (db *DB) Stats() map[string]string {
 	if memIters > 0 {
 		stats["treedb.cache.memtable_stats.range_iter_pct"] = fmt.Sprintf("%.4f", float64(memRangeIters)/float64(memIters))
 	}
+	db.rootDomainProbeStats.appendStats(stats)
 	stats["treedb.cache.memtable_view.retain_total"] = fmt.Sprintf("%d", memViewRetainTotal)
 	stats["treedb.cache.memtable_view.release_total"] = fmt.Sprintf("%d", memViewReleaseTotal)
 	stats["treedb.cache.memtable_view.leases_inflight"] = fmt.Sprintf("%d", memViewLeasesInFlight)

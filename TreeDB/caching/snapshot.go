@@ -348,6 +348,9 @@ func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
 			groupStarts = append(groupStarts, i)
 		}
 	}
+	if len(s.rootPointShards) > 0 {
+		s.db.noteRootDomainSnapshotHasManyNative(len(keys), len(unique))
+	}
 
 	results := make([]rootDomainProbeResult, len(unique))
 	if len(s.rootPointShards) > 0 {
@@ -381,6 +384,11 @@ func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
 				out[ref.idx] = true
 			}
 		}
+	}
+	if len(s.rootPointShards) == 0 {
+		s.db.noteRootDomainSnapshotHasManyBackendFallback(len(unique))
+	} else {
+		s.db.noteRootDomainSnapshotHasManyBackendFallback(len(backendIdx))
 	}
 	for _, uniqueIdx := range backendIdx {
 		ok, err := s.backend.Has(unique[uniqueIdx].key)
@@ -431,6 +439,7 @@ func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 			groupStarts = append(groupStarts, i)
 		}
 	}
+	s.db.noteRootDomainSnapshotHasPrefixesNative(len(prefixes), len(unique))
 
 	probe := make([]bool, len(unique))
 	if err := rootDomainIteratorSnapshotFromCachedSnapshot(s).hasPrefixesSorted(unique, probe); err != nil {
