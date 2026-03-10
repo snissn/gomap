@@ -133,13 +133,17 @@ type DB struct {
 	// yet, so steady-state warm system-root publishes currently record an
 	// explicit rebuild fallback selection.
 	systemRootWarmPublishAttempts         atomic.Uint64
+	systemRootWarmNativeApplyAttempts     atomic.Uint64
 	systemRootWarmPublishRebuildFallbacks atomic.Uint64
+	systemRootWarmPreservedPages          atomic.Uint64
+	systemRootWarmRewrittenPages          atomic.Uint64
 
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
-	testFailFinalizeCommit atomic.Bool
-	testBatchCreateHook    func()
-	closing                atomic.Bool
+	testFailFinalizeCommit        atomic.Bool
+	testBatchCreateHook           func()
+	testSystemRootWarmMaxDeltaOps int
+	closing                       atomic.Bool
 }
 
 type valueLogRewriteLiveBytesKey struct {
