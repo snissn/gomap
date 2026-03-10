@@ -14,6 +14,14 @@ type systemRootPublishStats struct {
 	warmRebuildFallbacks uint64
 }
 
+type systemRootPublishPlan uint8
+
+const (
+	systemRootPublishPlanColdBuild systemRootPublishPlan = iota
+	systemRootPublishPlanWarmFallbackRebuild
+	systemRootPublishPlanWarmNativeApply
+)
+
 func (db *DB) systemRootPublishStatsSnapshot() systemRootPublishStats {
 	if db == nil {
 		return systemRootPublishStats{}
@@ -22,6 +30,15 @@ func (db *DB) systemRootPublishStatsSnapshot() systemRootPublishStats {
 		warmAttempts:         db.systemRootWarmPublishAttempts.Load(),
 		warmRebuildFallbacks: db.systemRootWarmPublishRebuildFallbacks.Load(),
 	}
+}
+
+func selectSystemRootPublishPlan(hasExistingEntries bool) systemRootPublishPlan {
+	if !hasExistingEntries {
+		return systemRootPublishPlanColdBuild
+	}
+	// R4 scaffolding: until warm native apply exists, non-empty steady-state
+	// system-root publishes explicitly select rebuild fallback.
+	return systemRootPublishPlanWarmFallbackRebuild
 }
 
 // PublishSystemRootIterator builds and commits a new system root from an
@@ -69,13 +86,16 @@ func (db *DB) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, e
 		if iterErr != nil {
 			return 0, iterErr
 		}
-		if warm {
+		switch selectSystemRootPublishPlan(warm) {
+		case systemRootPublishPlanWarmFallbackRebuild:
 			db.systemRootWarmPublishAttempts.Add(1)
 			// R4 scaffolding: warm native apply is not implemented yet, so
 			// steady-state publishes over an existing non-empty system root
 			// explicitly record rebuild fallback selection and use the current
 			// full-build path below.
 			db.systemRootWarmPublishRebuildFallbacks.Add(1)
+		case systemRootPublishPlanWarmNativeApply:
+			db.systemRootWarmPublishAttempts.Add(1)
 		}
 	}
 
