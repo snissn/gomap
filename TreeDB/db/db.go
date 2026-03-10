@@ -129,6 +129,12 @@ type DB struct {
 	publishWatermarkLatencyMaxNs   atomic.Uint64
 	publishWatermarkLatencyBuckets [publishWatermarkLatencyBucketCount]atomic.Uint64
 
+	// R4 warm-publish scaffolding. The warm native apply path is not implemented
+	// yet, so steady-state warm system-root publishes currently record an
+	// explicit rebuild fallback selection.
+	systemRootWarmPublishAttempts         atomic.Uint64
+	systemRootWarmPublishRebuildFallbacks atomic.Uint64
+
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit atomic.Bool
