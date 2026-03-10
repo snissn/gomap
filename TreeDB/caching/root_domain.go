@@ -66,21 +66,25 @@ type rootPublishGroup struct {
 }
 
 type rootDomainPublishTelemetry struct {
-	installs         atomic.Uint64
-	clears           atomic.Uint64
-	staleRejects     atomic.Uint64
-	backendFallbacks atomic.Uint64
-	publishFailures  atomic.Uint64
-	retrySuccesses   atomic.Uint64
+	installs              atomic.Uint64
+	clears                atomic.Uint64
+	staleRejects          atomic.Uint64
+	backendFallbacks      atomic.Uint64
+	publishFailures       atomic.Uint64
+	retrySuccesses        atomic.Uint64
+	nativeSystemPublishes atomic.Uint64
+	batchReplayFallbacks  atomic.Uint64
 }
 
 type rootDomainPublishStats struct {
-	installs         uint64
-	clears           uint64
-	staleRejects     uint64
-	backendFallbacks uint64
-	publishFailures  uint64
-	retrySuccesses   uint64
+	installs              uint64
+	clears                uint64
+	staleRejects          uint64
+	backendFallbacks      uint64
+	publishFailures       uint64
+	retrySuccesses        uint64
+	nativeSystemPublishes uint64
+	batchReplayFallbacks  uint64
 }
 
 var errStalePublishedRootGeneration = errors.New("caching: stale published root generation")
@@ -228,12 +232,14 @@ func (db *DB) rootDomainPublishStatsSnapshot() rootDomainPublishStats {
 		return rootDomainPublishStats{}
 	}
 	return rootDomainPublishStats{
-		installs:         db.rootPublishStats.installs.Load(),
-		clears:           db.rootPublishStats.clears.Load(),
-		staleRejects:     db.rootPublishStats.staleRejects.Load(),
-		backendFallbacks: db.rootPublishStats.backendFallbacks.Load(),
-		publishFailures:  db.rootPublishStats.publishFailures.Load(),
-		retrySuccesses:   db.rootPublishStats.retrySuccesses.Load(),
+		installs:              db.rootPublishStats.installs.Load(),
+		clears:                db.rootPublishStats.clears.Load(),
+		staleRejects:          db.rootPublishStats.staleRejects.Load(),
+		backendFallbacks:      db.rootPublishStats.backendFallbacks.Load(),
+		publishFailures:       db.rootPublishStats.publishFailures.Load(),
+		retrySuccesses:        db.rootPublishStats.retrySuccesses.Load(),
+		nativeSystemPublishes: db.rootPublishStats.nativeSystemPublishes.Load(),
+		batchReplayFallbacks:  db.rootPublishStats.batchReplayFallbacks.Load(),
 	}
 }
 
@@ -393,6 +399,7 @@ func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
 			db.rootPublishRetryPending = true
 			return err
 		}
+		db.rootPublishStats.nativeSystemPublishes.Add(1)
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
 	}
@@ -447,6 +454,9 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 			db.mu.Unlock()
 			return err
 		}
+		db.mu.Lock()
+		db.rootPublishStats.nativeSystemPublishes.Add(1)
+		db.mu.Unlock()
 		group.systemRootPageID = newSystemRootID
 		cloned.system.rootID = newSystemRootID
 	}
