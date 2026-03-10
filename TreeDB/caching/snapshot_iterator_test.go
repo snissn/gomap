@@ -180,3 +180,113 @@ func TestSnapshotReverseIterator_QueueValueOverridesPublishedAndTombstoneHidesPu
 		t.Fatal("unexpected post-open backend key e")
 	}
 }
+
+func TestAcquireSnapshot_CapturesRootDomainStateAcrossLaterPublishes(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	if err := backend.SetSync([]byte("a"), []byte("backend_a")); err != nil {
+		t.Fatalf("backend set a: %v", err)
+	}
+	if err := backend.SetSync([]byte("b"), []byte("backend_b")); err != nil {
+		t.Fatalf("backend set b: %v", err)
+	}
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableShards: 8,
+	})
+	if err != nil {
+		t.Fatalf("open caching db: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("a"), []byte("queue_a")); err != nil {
+		t.Fatalf("set queued a: %v", err)
+	}
+	if err := db.Delete([]byte("b")); err != nil {
+		t.Fatalf("delete queued b: %v", err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+
+	if snap.rootVersion == 0 {
+		t.Fatal("expected captured rootVersion")
+	}
+	if len(snap.rootPointShards) != len(db.mutableShards) {
+		t.Fatalf("captured point shards=%d want %d", len(snap.rootPointShards), len(db.mutableShards))
+	}
+	if len(snap.rootIterator.immutables) == 0 {
+		t.Fatal("expected captured iterator immutables")
+	}
+
+	firstVersion := snap.rootVersion
+	if got, err := snap.Get([]byte("a")); err != nil || string(got) != "queue_a" {
+		t.Fatalf("snapshot get a: got=%q err=%v", string(got), err)
+	}
+	if ok, err := snap.Has([]byte("b")); err != nil || ok {
+		t.Fatalf("snapshot has b: ok=%v err=%v", ok, err)
+	}
+
+	if err := db.Set([]byte("a"), []byte("post_publish_queue_a")); err != nil {
+		t.Fatalf("set later queued a: %v", err)
+	}
+	if err := db.Set([]byte("c"), []byte("post_publish_queue_c")); err != nil {
+		t.Fatalf("set later queued c: %v", err)
+	}
+	if err := backend.SetSync([]byte("d"), []byte("backend_d")); err != nil {
+		t.Fatalf("backend set d: %v", err)
+	}
+	next := db.AcquireSnapshot()
+	if next == nil {
+		t.Fatal("expected later snapshot")
+	}
+	defer next.Close()
+	if next.rootVersion <= firstVersion {
+		t.Fatalf("later rootVersion=%d want > %d", next.rootVersion, firstVersion)
+	}
+
+	if got, err := snap.Get([]byte("a")); err != nil || string(got) != "queue_a" {
+		t.Fatalf("stale snapshot get a: got=%q err=%v", string(got), err)
+	}
+	if ok, err := snap.Has([]byte("b")); err != nil || ok {
+		t.Fatalf("stale snapshot has b: ok=%v err=%v", ok, err)
+	}
+
+	it, err := snap.Iterator(nil, nil)
+	if err != nil {
+		t.Fatalf("stale snapshot iterator: %v", err)
+	}
+	defer it.Close()
+	var gotKeys []string
+	for it.Valid() {
+		gotKeys = append(gotKeys, string(it.Key()))
+		it.Next()
+	}
+	if !reflect.DeepEqual(gotKeys, []string{"a"}) {
+		t.Fatalf("stale snapshot keys=%v want [a]", gotKeys)
+	}
+
+	rit, err := snap.ReverseIterator(nil, nil)
+	if err != nil {
+		t.Fatalf("stale snapshot reverse iterator: %v", err)
+	}
+	defer rit.Close()
+	gotKeys = gotKeys[:0]
+	for rit.Valid() {
+		gotKeys = append(gotKeys, string(rit.Key()))
+		rit.Next()
+	}
+	if !reflect.DeepEqual(gotKeys, []string{"a"}) {
+		t.Fatalf("stale snapshot reverse keys=%v want [a]", gotKeys)
+	}
+}

@@ -219,6 +219,50 @@ func TestRootDomainSnapshotFromMemtableView_ForIteratorReadsIncludesAllQueueRuns
 	assertRootDomainVisibleValue(t, snap, "b", "queue-newer")
 }
 
+func TestRootDomainSnapshotFromMemtableView_UsesPublishedShardAndIteratorSnapshots(t *testing.T) {
+	t.Parallel()
+
+	view := &memtableView{
+		rootVersion: 17,
+		rootPointShards: []rootDomainSnapshot{
+			{
+				publishedRootID: 101,
+				immutables: []memtable.Table{
+					newRootDomainTestTable(t, rootDomainTestOp{key: "a", value: "shard-0"}),
+				},
+			},
+			{
+				publishedRootID: 202,
+				immutables: []memtable.Table{
+					newRootDomainTestTable(t, rootDomainTestOp{key: "b", value: "shard-1"}),
+				},
+			},
+		},
+		rootIterator: rootDomainSnapshot{
+			publishedRootID: 303,
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t,
+					rootDomainTestOp{key: "a", value: "iter-a"},
+					rootDomainTestOp{key: "b", value: "iter-b"},
+				),
+			},
+		},
+	}
+
+	point := rootDomainSnapshotFromMemtableView(view, 1, true)
+	if got, want := point.publishedRootID, uint64(202); got != want {
+		t.Fatalf("point publishedRootID=%d want %d", got, want)
+	}
+	assertRootDomainVisibleValue(t, point, "b", "shard-1")
+
+	iter := rootDomainSnapshotFromMemtableView(view, -1, false)
+	if got, want := iter.publishedRootID, uint64(303); got != want {
+		t.Fatalf("iterator publishedRootID=%d want %d", got, want)
+	}
+	assertRootDomainVisibleValue(t, iter, "a", "iter-a")
+	assertRootDomainVisibleValue(t, iter, "b", "iter-b")
+}
+
 func TestRootDomainSnapshotFromCachedSnapshot_IncludesPublishedBackendState(t *testing.T) {
 	t.Parallel()
 

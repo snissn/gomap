@@ -2,11 +2,13 @@ package caching
 
 import (
 	"bytes"
+	"encoding/binary"
 	"runtime"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -78,6 +80,62 @@ func TestDB_HasNoAllocsWithQueuedMemtables(t *testing.T) {
 	})
 	if allocs > 0.5 {
 		t.Fatalf("expected Has to avoid allocations with queued memtables; got %.2f allocs/op", allocs)
+	}
+}
+
+func TestSnapshot_HasAllocsIndependentOfQueuedMemtables(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	db, err := Open(dir, backend, Options{DisableWAL: true, AllowUnsafe: true, FlushThreshold: 1 << 30, MemtableMode: "skiplist", MemtableShards: 8})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("00000005")
+
+	emptySnap := db.AcquireSnapshot()
+	if emptySnap == nil {
+		t.Fatal("expected empty snapshot")
+	}
+	runtime.GC()
+	allocsEmpty := testing.AllocsPerRun(1000, func() {
+		ok, err := emptySnap.Has([]byte("missing"))
+		if err != nil {
+			panic(err)
+		}
+		if ok {
+			panic("expected missing key")
+		}
+	})
+	_ = emptySnap.Close()
+
+	if err := db.Set(key, []byte("vb")); err != nil {
+		t.Fatalf("set queued: %v", err)
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected queued snapshot")
+	}
+	defer snap.Close()
+
+	runtime.GC()
+	allocsQueued := testing.AllocsPerRun(1000, func() {
+		ok, err := snap.Has(key)
+		if err != nil {
+			panic(err)
+		}
+		if !ok {
+			panic("expected key to exist")
+		}
+	})
+	if allocsQueued > allocsEmpty+0.5 {
+		t.Fatalf("expected Snapshot.Has allocations to be independent of queued memtables; empty=%.2f allocs/op queued=%.2f allocs/op", allocsEmpty, allocsQueued)
 	}
 }
 
@@ -275,6 +333,67 @@ func TestDB_IteratorAllocsIndependentOfQueueLen(t *testing.T) {
 
 	if allocsQueued > allocsEmpty+0.5 {
 		t.Fatalf("expected Iterator allocations to be independent of queued memtables; empty=%.2f allocs/op queued=%.2f allocs/op", allocsEmpty, allocsQueued)
+	}
+}
+
+func TestSnapshot_HasAllocsIndependentOfQueuedShards(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:     true,
+		AllowUnsafe:    true,
+		FlushThreshold: 1 << 30,
+		MemtableMode:   "skiplist",
+		MemtableShards: 8,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	var key [8]byte
+	for i := uint64(0); ; i++ {
+		binary.BigEndian.PutUint64(key[:], i)
+		if db.shardIndex(key[:]) == 5 {
+			break
+		}
+	}
+	targetKey := append([]byte(nil), key[:]...)
+
+	if err := db.Set(targetKey, []byte("v")); err != nil {
+		t.Fatalf("set target: %v", err)
+	}
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate target: %v", err)
+	}
+	db.mu.Unlock()
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+
+	runtime.GC()
+	allocs := testing.AllocsPerRun(1000, func() {
+		ok, err := snap.Has(targetKey)
+		if err != nil {
+			panic(err)
+		}
+		if !ok {
+			panic("expected queued snapshot hit")
+		}
+	})
+
+	if allocs > 0.5 {
+		t.Fatalf("expected Snapshot.Has allocations to stay at 0 for queued shard hits; got %.2f allocs/op", allocs)
 	}
 }
 
