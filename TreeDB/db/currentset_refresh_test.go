@@ -36,6 +36,75 @@ func writeValueLogRecord(t *testing.T, dir string, lane, seq uint32, value []byt
 	return fileID, ptr
 }
 
+type registeredLeafPageLog struct {
+	db         *DB
+	dir        string
+	w          *valuelog.Writer
+	fileID     uint32
+	nextRID    uint64
+	registered bool
+}
+
+func (l *registeredLeafPageLog) ensureWriter() error {
+	if l.w != nil {
+		return nil
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(l.dir, "wal", "value-l0-000001.log")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		return err
+	}
+	l.w = w
+	l.fileID = fileID
+	if !l.registered {
+		if err := l.db.RegisterValueLogSegment(path, fileID); err != nil {
+			_ = w.Close()
+			l.w = nil
+			return err
+		}
+		l.registered = true
+	}
+	return nil
+}
+
+func (l *registeredLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+	if err := l.ensureWriter(); err != nil {
+		return page.ValuePtr{}, err
+	}
+	l.nextRID++
+	return l.w.Append(0, nil, l.nextRID, leafPage)
+}
+
+func (l *registeredLeafPageLog) Flush() error {
+	if err := l.ensureWriter(); err != nil {
+		return err
+	}
+	return l.w.Flush()
+}
+
+func (l *registeredLeafPageLog) Sync() error {
+	if err := l.ensureWriter(); err != nil {
+		return err
+	}
+	return l.w.Sync()
+}
+
+func (l *registeredLeafPageLog) Close() error {
+	if l.w == nil {
+		return nil
+	}
+	err := l.w.Close()
+	l.w = nil
+	return err
+}
+
 func TestInlineCommitSkipsValueLogRefresh(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir})
@@ -142,6 +211,95 @@ func TestPointerCommitRefreshesValueLogSet(t *testing.T) {
 	}
 	if !bytes.Equal(got, value) {
 		t.Fatalf("Get pointer value mismatch: got %d bytes, want %d", len(got), len(value))
+	}
+}
+
+func TestOuterLeafCommitPublishesRegisteredSegmentWithoutExplicitRefresh(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	leafLog := &registeredLeafPageLog{db: d, dir: dir}
+	defer func() { _ = leafLog.Close() }()
+	d.SetLeafPageLog(leafLog)
+
+	if err := d.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[leafLog.fileID]; !ok {
+		t.Fatalf("registered outer-leaf segment %d missing from published state", leafLog.fileID)
+	}
+
+	got, err := d.Get([]byte("k"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("Get mismatch: got %q want %q", got, "v")
+	}
+}
+
+func TestRegisterValueLogSegment_DoesNotPublishCurrentSetWithoutExplicitRefresh(t *testing.T) {
+	dir := t.TempDir()
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing initial value-log set")
+	}
+
+	fileID, err := valuelog.EncodeFileID(7, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "wal", "value-l7-000001.log")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(wal): %v", err)
+	}
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("x"), 256)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	if err := d.RegisterValueLogSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterValueLogSegment: %v", err)
+	}
+
+	st2 := d.State()
+	if st2 == nil || st2.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set after register")
+	}
+	if _, ok := st2.ValueLogSet.Files[fileID]; ok {
+		t.Fatalf("registered segment %d unexpectedly published without refresh", fileID)
+	}
+	if err := d.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	st3 := d.State()
+	if st3 == nil || st3.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set after refresh")
+	}
+	if _, ok := st3.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("registered segment %d missing after explicit refresh", fileID)
 	}
 }
 

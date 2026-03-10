@@ -14,7 +14,7 @@ const (
 	PageSize = 4096
 
 	// DefaultInlineThreshold determines when a value is stored in the value log.
-	DefaultInlineThreshold = 256
+	DefaultInlineThreshold = 512
 
 	// PageHeaderSize is the size of the PageHeader struct.
 	PageHeaderSize = 16

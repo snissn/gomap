@@ -20,7 +20,11 @@ import (
 
 const headerWithoutCRC = HeaderSize - 4
 
-const defaultBufferSize = 16 << 20
+// defaultBufferSize controls the default per-writer buffering in file-backed
+// value-log writers (bufio + append buffer + scratch). A smaller default keeps
+// heap high-watermarks reasonable when workloads open many concurrent writers
+// (e.g. sharded cached mode under state-sync restore).
+const defaultBufferSize = 4 << 20
 
 var syncDirFn = syncDir
 
@@ -352,8 +356,10 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		return nil, err
 	}
 	return &Writer{
-		f:                     f,
-		bw:                    bufio.NewWriterSize(f, defaultBufferSize),
+		f: f,
+		// File-backed writers use direct writes and append buffers; bufio is only
+		// needed for sink-backed writers (tests/benchmarks).
+		bw:                    nil,
 		size:                  info.Size(),
 		fileID:                fileID,
 		appendMax:             defaultBufferSize,
@@ -387,7 +393,7 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 }
 
 // NewWriterWithSink creates a value-log writer that writes to the provided sink.
-// Intended for deterministic tests/benchmarks (no file-backed durability).
+// Use this for sink-backed/custom outputs that do not provide file-backed durability.
 func NewWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 	if sink == nil {
 		return newWriterWithSink(io.Discard, fileID)
@@ -584,7 +590,7 @@ func (w *Writer) Flush() error {
 	if err := w.flushAppendBuf(); err != nil {
 		return err
 	}
-	if w.f == nil {
+	if w.bw != nil {
 		return w.bw.Flush()
 	}
 	return nil
@@ -596,6 +602,12 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	}
 
 	if w.f == nil {
+		if w.bw != nil {
+			// Preserve sink semantics for tests before switching to file-backed.
+			if err := w.bw.Flush(); err != nil {
+				return err
+			}
+		}
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			return err
@@ -610,7 +622,8 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 			return err
 		}
 		w.f = f
-		w.bw.Reset(f)
+		// File-backed writers do not use bufio; drop any sink buffer.
+		w.bw = nil
 		w.size = info.Size()
 		w.fileID = fileID
 		w.appendMax = defaultBufferSize
@@ -647,8 +660,16 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	}
 
 	old := w.f
+	if w.bw != nil {
+		if err := w.bw.Flush(); err != nil {
+			_ = f.Close()
+			return err
+		}
+	}
 	w.f = f
-	w.bw.Reset(f)
+	// File-backed writers do not use bufio. Drop any leftover sink buffer
+	// rather than retargeting it across rotations.
+	w.bw = nil
 	w.size = info.Size()
 	w.fileID = fileID
 	w.appendBuf = w.appendBuf[:0]

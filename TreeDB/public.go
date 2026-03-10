@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/db"
@@ -29,12 +29,13 @@ type Options = db.Options
 const (
 	defaultChunkSize     = 256 * 1024
 	defaultDictChunkSize = 64 * 1024
+	// Template side-store pages intentionally use the same default size as dictdb
+	// pages so both auxiliary stores behave consistently under the unified layout.
+	defaultTemplateChunkSize = defaultDictChunkSize
 
-	defaultSlowdownBacklogSeconds              = 1.0
-	defaultStopBacklogSeconds                  = 2.0
-	defaultV2FenceSlowdownBacklogSeconds       = 0.5
-	defaultV2FenceStopBacklogSeconds           = 1.0
-	defaultAdaptiveMaxBacklogBytes       int64 = 2 << 30
+	defaultSlowdownBacklogSeconds        = 1.0
+	defaultStopBacklogSeconds            = 2.0
+	defaultAdaptiveMaxBacklogBytes int64 = 2 << 30
 )
 
 // Iterator is the public iterator contract returned by TreeDB.
@@ -268,48 +269,14 @@ func normalizeBackpressureDefaults(opts *Options) {
 
 	slowdown := defaultSlowdownBacklogSeconds
 	stop := defaultStopBacklogSeconds
-	indexOuterLeafMode := normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
-	if opts.Durability == db.DurabilityWALOffRelaxed &&
-		indexOuterLeafMode == db.IndexOuterLeafModeV2FencePtr {
-		slowdown = defaultV2FenceSlowdownBacklogSeconds
-		stop = defaultV2FenceStopBacklogSeconds
-	}
 
 	opts.SlowdownBacklogSeconds = slowdown
 	opts.StopBacklogSeconds = stop
 	opts.MaxBacklogBytes = defaultAdaptiveMaxBacklogBytes
 }
 
-func normalizePublicOuterLeafMode(mode string) string {
-	trimmed := strings.TrimSpace(mode)
-	if trimmed == "" {
-		return db.IndexOuterLeafModeV2FencePtr
-	}
-	normalized := strings.ToLower(trimmed)
-	switch normalized {
-	case db.IndexOuterLeafModeV1:
-		return db.IndexOuterLeafModeV1
-	case db.IndexOuterLeafModeV1LeafLog:
-		return db.IndexOuterLeafModeV1LeafLog
-	case db.IndexOuterLeafModeV1LeafLogLegacy:
-		return db.IndexOuterLeafModeV1LeafLogLegacy
-	case db.IndexOuterLeafModeV1LeafLogRoute:
-		return db.IndexOuterLeafModeV1LeafLogRoute
-	case db.IndexOuterLeafModeV2BlockPtr:
-		return db.IndexOuterLeafModeV2BlockPtr
-	case db.IndexOuterLeafModeV2FencePtr:
-		return db.IndexOuterLeafModeV2FencePtr
-	default:
-		// Keep non-alias values unchanged to avoid broad behavior drift in
-		// cached-mode parsing/validation paths.
-		return trimmed
-	}
-}
-
 // Open opens TreeDB. By default it enables caching (write-back layer).
 func Open(opts Options) (*DB, error) {
-	opts.IndexOuterLeafMode = normalizePublicOuterLeafMode(opts.IndexOuterLeafMode)
-
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
 	// can therefore delay page reuse for a very long time (and cause index.db to
@@ -325,7 +292,7 @@ func Open(opts Options) (*DB, error) {
 	}
 	templateChunkSize := opts.TemplateDBChunkSize
 	if templateChunkSize <= 0 {
-		templateChunkSize = defaultDictChunkSize
+		templateChunkSize = defaultTemplateChunkSize
 	}
 	if opts.KeepRecent == 0 && !opts.ReadOnly {
 		opts.KeepRecent = 1
@@ -334,20 +301,60 @@ func Open(opts Options) (*DB, error) {
 		opts.ValueLog.Compression = db.ValueLogCompressionAuto
 	}
 
+	applyEnvMaintenanceOverrides(&opts)
+
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {
 		fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
 	}
 
-	rootDir := opts.Dir
-	maindbDir := filepath.Join(rootDir, "maindb")
-	dictdbDir := filepath.Join(rootDir, "dictdb")
-	templatedbDir := filepath.Join(rootDir, "templatedb")
-	if opts.DisableSideStores {
-		maindbDir = rootDir
-		dictdbDir = ""
-		templatedbDir = ""
+	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
+	if err != nil {
+		return nil, err
 	}
+	rootDir := layout.rootDir
+	maindbDir := layout.mainDir
+	dictdbDir := layout.dictdbDir
+	templatedbDir := layout.templatedbDir
+
+	// Apply persisted index encoding knobs so tools and apps can open existing
+	// dirs without needing to re-specify format-affecting flags.
+	//
+	// This is intentionally limited to index encoding flags; runtime policies
+	// (like value-log compression) remain controlled by opts/env unless the
+	// caller opts out via IgnoreFormatConfig.
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := db.LoadFormatConfig(maindbDir); err != nil {
+			return nil, err
+		} else if ok {
+			cfg.ApplyIndexFormatToOptions(&opts)
+		}
+	}
+
+	// Keep opts.DisableSideStores consistent with the resolved layout.
+	opts.DisableSideStores = layout.disableSideStores
+
+	// Dict compression requires a persistent dict store so dictionaries can be
+	// published and older dict-compressed frames remain decodable.
+	//
+	// DisableSideStores removes dictdb/templatedb plumbing. When it is enabled,
+	// auto compression automatically runs in a no-dict configuration by
+	// disabling dictionary training so block/off decisions can continue to work.
+	if opts.DisableSideStores {
+		switch opts.ValueLog.Compression {
+		case ValueLogCompressionDict:
+			return nil, fmt.Errorf("treedb: dict compression requires side stores (dictdb); set DisableSideStores=false")
+		case ValueLogCompressionAuto:
+			// Side stores disabled means we cannot publish dictionaries. In this
+			// configuration auto mode behaves as "no-dict auto" (block/off only).
+			if opts.ValueLog.DictTrain.TrainBytes >= 0 {
+				train := opts.ValueLog.DictTrain
+				train.TrainBytes = -1
+				opts.ValueLog.DictTrain = train
+			}
+		}
+	}
+
 	if opts.ReadOnly {
 		if _, err := os.Stat(maindbDir); err != nil {
 			if os.IsNotExist(err) {
@@ -394,12 +401,20 @@ func Open(opts Options) (*DB, error) {
 	if !opts.DisableSideStores {
 		dictOpts := opts
 		dictOpts.Dir = dictdbDir
+		// Side stores are opened via the backend (no caching layer). They must
+		// not inherit outer-leaf-in-value-log from the main DB, since that mode
+		// requires a leaf-page log wired by the cached layer.
+		dictOpts.IndexOuterLeavesInValueLog = false
 		dictOpts.DisableBackgroundPrune = true
 		dictOpts.ValueLog.DictLookup = nil
 		dictOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
 		// dictdb stores small metadata values (e.g. current dict id, hash->id map)
 		// inline. ForcePointers would set InlineThreshold=0 and break these writes.
 		dictOpts.ValueLog.ForcePointers = false
+		// Avoid inheriting pointer/domain placement rules from the main DB. Side
+		// stores keep small values inline by default.
+		dictOpts.ValueLog.PointerThreshold = 0
+		dictOpts.ValueLog.DomainInlineThresholds = nil
 		dictOpts.ValueLog.Compression = db.ValueLogCompressionOff
 		dictOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		dictOpts.ChunkSize = dictChunkSize
@@ -420,11 +435,17 @@ func Open(opts Options) (*DB, error) {
 		templateOpts.Dir = templatedbDir
 		templateOpts.DisableSideStores = true
 		templateOpts.DisableBackgroundPrune = true
+		// Like dictdb, templatedb is an internal side store; avoid inheriting the
+		// main DB's outer-leaf value-log layout (not needed here, and it adds
+		// unnecessary value-log churn).
+		templateOpts.IndexOuterLeavesInValueLog = false
 		templateOpts.ValueLog.DictLookup = nil
 		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
 		// templatedb uses batch.Set for small routing/index entries. Do not
 		// propagate ForcePointers from the main DB into this internal store.
 		templateOpts.ValueLog.ForcePointers = false
+		templateOpts.ValueLog.PointerThreshold = 0
+		templateOpts.ValueLog.DomainInlineThresholds = nil
 		templateOpts.ValueLog.Compression = db.ValueLogCompressionOff
 		templateOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		templateOpts.ValueLog.TemplateMode = template.TemplateOff
@@ -481,7 +502,7 @@ func Open(opts Options) (*DB, error) {
 	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
 	valueLogMaxSegmentBytes := int64(0)
-	if opts.IndexPackedValuePtr {
+	if opts.IndexPackedValuePtr || opts.IndexOuterLeavesInValueLog {
 		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
 	}
 
@@ -514,8 +535,7 @@ func Open(opts Options) (*DB, error) {
 		RelaxedSync:                              relaxedSync,
 		DisableReadChecksum:                      disableReadChecksum,
 		ValueLogPointerThreshold:                 opts.ValueLog.PointerThreshold,
-		IndexOuterLeafMode:                       opts.IndexOuterLeafMode,
-		ValueLogWALFenceMode:                     string(opts.ValueLog.WALFenceMode),
+		IndexOuterLeavesInValueLog:               opts.IndexOuterLeavesInValueLog,
 		ValueLogDomainInlineThresholds:           opts.ValueLog.DomainInlineThresholds,
 		ValueLogRawWritevMinAvgBytes:             opts.ValueLog.RawWritevMinAvgBytes,
 		ValueLogRawWritevMinBatchRecords:         opts.ValueLog.RawWritevMinBatchRecords,
@@ -523,10 +543,6 @@ func Open(opts Options) (*DB, error) {
 		ValueLogCompression:                      uint8(opts.ValueLog.Compression),
 		ValueLogBlockCodec:                       uint8(opts.ValueLog.BlockCodec),
 		ValueLogBlockTargetCompressedBytes:       opts.ValueLog.BlockTargetCompressedBytes,
-		ValueLogOuterLeafBlockTargetBytes:        opts.ValueLog.OuterLeafBlockTargetBytes,
-		ValueLogOuterLeafBlockCodec:              uint8(opts.ValueLog.OuterLeafBlockCodec),
-		ValueLogOuterLeafBlockRestartInterval:    opts.ValueLog.OuterLeafBlockRestartInterval,
-		ValueLogOuterLeafBlobThresholdBytes:      opts.ValueLog.OuterLeafBlobThresholdBytes,
 		ValueLogIncompressibleHoldBytes:          opts.ValueLog.IncompressibleHoldBytes,
 		ValueLogIncompressibleProbeBytes:         opts.ValueLog.IncompressibleProbeIntervalBytes,
 		ValueLogAutoPolicy:                       uint8(opts.ValueLog.AutoPolicy),
@@ -623,6 +639,149 @@ func Open(opts Options) (*DB, error) {
 	return out, nil
 }
 
+const (
+	envDisableBackgroundPrune       = "TREEDB_DISABLE_BACKGROUND_PRUNE"
+	envDisableBackgroundIndexVacuum = "TREEDB_DISABLE_BACKGROUND_INDEX_VACUUM"
+	envDisableVlogGeneration        = "TREEDB_DISABLE_VLOG_GENERATION"
+
+	// Value-log compression knobs (cached mode).
+	//
+	// These are env-driven so downstream apps can toggle behavior without
+	// plumbing new CLI flags through multiple repos.
+	envVlogCompression      = "TREEDB_VLOG_COMPRESSION"        // auto|dict|block|off
+	envVlogAutoPolicy       = "TREEDB_VLOG_AUTO_POLICY"        // balanced|throughput|size
+	envVlogBlockCodec       = "TREEDB_VLOG_BLOCK_CODEC"        // snappy|lz4
+	envVlogBlockTargetBytes = "TREEDB_VLOG_BLOCK_TARGET_BYTES" // int (compressed target bytes)
+
+	// Value-log dictionary compression knobs (cached mode).
+	//
+	// Enabling dict compression requires:
+	//   - ValueLog compression mode that allows dicts (auto/dict), and
+	//   - Dict training enabled (TrainBytes > 0), and
+	//   - Side stores enabled (dictdb), and
+	//   - Split value log enabled (value pointers used).
+	envVlogDictEnable            = "TREEDB_VLOG_DICT_ENABLE"                    // bool
+	envVlogDictTrainBytes        = "TREEDB_VLOG_DICT_TRAIN_BYTES"               // int
+	envVlogDictBytes             = "TREEDB_VLOG_DICT_BYTES"                     // int
+	envVlogDictMinRecords        = "TREEDB_VLOG_DICT_MIN_RECORDS"               // int
+	envVlogDictMaxRecordBytes    = "TREEDB_VLOG_DICT_MAX_RECORD_BYTES"          // int
+	envVlogDictSampleStride      = "TREEDB_VLOG_DICT_SAMPLE_STRIDE"             // int
+	envVlogDictDedupWindow       = "TREEDB_VLOG_DICT_DEDUP_WINDOW"              // int
+	envVlogDictTrainLevel        = "TREEDB_VLOG_DICT_TRAIN_LEVEL"               // int
+	envVlogDictMaxK              = "TREEDB_VLOG_DICT_MAX_K"                     // int
+	envVlogDictZstdLevel         = "TREEDB_VLOG_DICT_ZSTD_LEVEL"                // fastest|default|better|best|int
+	envVlogDictEntropy           = "TREEDB_VLOG_DICT_ENTROPY"                   // bool
+	envVlogDictAdaptiveRatio     = "TREEDB_VLOG_DICT_ADAPTIVE_RATIO"            // float64
+	envVlogDictMinPayloadSavings = "TREEDB_VLOG_DICT_MIN_PAYLOAD_SAVINGS_RATIO" // float64
+)
+
+func applyEnvMaintenanceOverrides(opts *Options) {
+	if opts == nil {
+		return
+	}
+	if envBool(envDisableBackgroundPrune) {
+		opts.DisableBackgroundPrune = true
+	}
+	if envBool(envDisableBackgroundIndexVacuum) {
+		opts.BackgroundIndexVacuumInterval = -1
+	}
+	if envBool(envDisableVlogGeneration) {
+		opts.ValueLog.Generational.Policy = ValueLogGenerationOff
+	}
+
+	if val, ok := envString(envVlogCompression); ok {
+		switch strings.ToLower(val) {
+		case "auto":
+			opts.ValueLog.Compression = ValueLogCompressionAuto
+		case "dict":
+			opts.ValueLog.Compression = ValueLogCompressionDict
+		case "block":
+			opts.ValueLog.Compression = ValueLogCompressionBlock
+		case "off", "none", "0":
+			opts.ValueLog.Compression = ValueLogCompressionOff
+		}
+	}
+	if val, ok := envString(envVlogAutoPolicy); ok {
+		switch strings.ToLower(val) {
+		case "balanced":
+			opts.ValueLog.AutoPolicy = ValueLogAutoBalanced
+		case "throughput":
+			opts.ValueLog.AutoPolicy = ValueLogAutoThroughput
+		case "size":
+			opts.ValueLog.AutoPolicy = ValueLogAutoSize
+		}
+	}
+	if val, ok := envString(envVlogBlockCodec); ok {
+		switch strings.ToLower(val) {
+		case "snappy":
+			opts.ValueLog.BlockCodec = ValueLogBlockSnappy
+		case "lz4":
+			opts.ValueLog.BlockCodec = ValueLogBlockLZ4
+		}
+	}
+	if v, ok := envInt(envVlogBlockTargetBytes); ok {
+		opts.ValueLog.BlockTargetCompressedBytes = v
+	}
+
+	if enabled, ok := envBoolSet(envVlogDictEnable); ok {
+		if enabled {
+			EnableValueLogDictCompression(opts)
+		} else {
+			DisableValueLogDictCompression(opts)
+		}
+	}
+	train := opts.ValueLog.DictTrain
+	trainTouched := false
+	if v, ok := envInt(envVlogDictTrainBytes); ok {
+		train.TrainBytes = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictBytes); ok {
+		train.DictBytes = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictMinRecords); ok {
+		train.MinRecords = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictMaxRecordBytes); ok {
+		train.MaxRecordBytes = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictSampleStride); ok {
+		train.SampleStride = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictDedupWindow); ok {
+		train.DedupWindow = v
+		trainTouched = true
+	}
+	if v, ok := envInt(envVlogDictTrainLevel); ok {
+		train.Level = v
+		trainTouched = true
+	}
+	if trainTouched {
+		opts.ValueLog.DictTrain = train
+	}
+	if v, ok := envInt(envVlogDictMaxK); ok {
+		opts.ValueLog.DictMaxK = v
+	}
+	if v, ok := envString(envVlogDictZstdLevel); ok {
+		if level, ok := parseZstdEncoderLevel(v); ok {
+			opts.ValueLog.DictFrameEncodeLevel = level
+		}
+	}
+	if enabled, ok := envBoolSet(envVlogDictEntropy); ok {
+		opts.ValueLog.DictFrameEnableEntropy = enabled
+	}
+	if v, ok := envFloat64(envVlogDictAdaptiveRatio); ok {
+		opts.ValueLog.DictAdaptiveRatio = v
+	}
+	if v, ok := envFloat64(envVlogDictMinPayloadSavings); ok {
+		opts.ValueLog.DictMinPayloadSavingsRatio = v
+	}
+}
+
 func computeDurabilityMode(opts Options) string {
 	if opts.ReadOnly {
 		return "read_only"
@@ -667,6 +826,92 @@ func envBool(name string) bool {
 	}
 	parsed, err := strconv.ParseBool(val)
 	return err == nil && parsed
+}
+
+func envBoolSet(name string) (bool, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return false, false
+	}
+	if val == "" {
+		return true, true
+	}
+	parsed, err := strconv.ParseBool(val)
+	if err != nil {
+		return false, false
+	}
+	return parsed, true
+}
+
+func envString(name string) (string, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return "", false
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return "", false
+	}
+	return val, true
+}
+
+func envInt(name string) (int, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return 0, false
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func envFloat64(name string) (float64, bool) {
+	val, ok := os.LookupEnv(name)
+	if !ok {
+		return 0, false
+	}
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(val, 64)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func parseZstdEncoderLevel(val string) (zstd.EncoderLevel, bool) {
+	v := strings.TrimSpace(strings.ToLower(val))
+	switch v {
+	case "fastest":
+		return zstd.SpeedFastest, true
+	case "default":
+		return zstd.SpeedDefault, true
+	case "better":
+		return zstd.SpeedBetterCompression, true
+	case "best":
+		return zstd.SpeedBestCompression, true
+	default:
+		// Accept integer levels for convenience.
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			return 0, false
+		}
+		level := zstd.EncoderLevel(i)
+		switch level {
+		case zstd.SpeedFastest, zstd.SpeedDefault, zstd.SpeedBetterCompression, zstd.SpeedBestCompression:
+			return level, true
+		default:
+			return 0, false
+		}
+	}
 }
 
 func envDuration(name string, def time.Duration) time.Duration {
@@ -1003,7 +1248,15 @@ func (db *DB) NewBatch() Batch {
 	return db.backend.NewBatch()
 }
 
-// NewBatchWithSize creates a new batch with a hint for the expected entry size.
+// NewBatchWithSize creates a new batch with a best-effort capacity hint.
+//
+// The size parameter is a best-effort hint, not a strict limit. Small hints are
+// treated like approximate entry reserves. Larger hints may be interpreted as a
+// byte budget and normalized into an internal entry estimate instead.
+// Extremely large hints may also be capped internally.
+//
+// Callers must not rely on an exact 1:1 mapping between size and the number of
+// entries or bytes that can be written to the batch.
 func (db *DB) NewBatchWithSize(size int) Batch {
 	if db == nil || (db.cached == nil && db.backend == nil) {
 		return nil
@@ -1014,12 +1267,20 @@ func (db *DB) NewBatchWithSize(size int) Batch {
 	return db.backend.NewBatchWithSize(size)
 }
 
-// Snapshot is a consistent point-in-time view of the database.
-type Snapshot = db.Snapshot
-
 // AcquireSnapshot returns a new snapshot.
-func (db *DB) AcquireSnapshot() *Snapshot {
-	if db == nil || db.backend == nil {
+//
+// In cached mode, snapshots include writes that are buffered in memtables.
+// In read-only mode (no caching), snapshots are backend-only.
+//
+// Callers may use GetUnsafe to obtain zero-copy views tied to the snapshot lifetime.
+func (db *DB) AcquireSnapshot() Snapshot {
+	if db == nil {
+		return nil
+	}
+	if db.cached != nil {
+		return db.cached.AcquireSnapshot()
+	}
+	if db.backend == nil {
 		return nil
 	}
 	return db.backend.AcquireSnapshot()
@@ -1147,11 +1408,29 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 //
 // It is an offline operation: it acquires the exclusive open lock for opts.Dir.
 func VacuumIndexOffline(opts Options) error {
-	maindbDir, err := resolveMainDBDir(opts.Dir)
+	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)
 	if err != nil {
 		return err
 	}
-	opts.Dir = maindbDir
+	opts.Dir = layout.mainDir
+	opts.DisableSideStores = layout.disableSideStores
+
+	// Preserve the persisted on-disk format knobs by default so offline index
+	// maintenance doesn't accidentally rewrite the DB into a different layout.
+	if !opts.IgnoreFormatConfig {
+		if cfg, ok, err := db.LoadFormatConfig(layout.mainDir); err != nil {
+			return err
+		} else if ok {
+			cfg.ApplyToOptions(&opts)
+		}
+	}
+
+	sideCleanup, err := wireSideStoreLookups(layout.rootDir, &opts)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sideCleanup() }()
+
 	return db.VacuumIndexOffline(opts)
 }
 

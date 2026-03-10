@@ -2,10 +2,10 @@ package caching
 
 import (
 	"encoding/binary"
+	"sync"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -15,6 +15,14 @@ type pointerBatch struct {
 	entries      []batch.Entry
 	reserveCalls int
 	lastReserve  int
+}
+
+var entrySlicePoolTestMu sync.Mutex
+
+func lockEntrySlicePoolStateForTest(t *testing.T) {
+	t.Helper()
+	entrySlicePoolTestMu.Lock()
+	t.Cleanup(entrySlicePoolTestMu.Unlock)
 }
 
 func (b *pointerBatch) Set(key, value []byte) error {
@@ -242,7 +250,6 @@ func TestFlushDeferredValueLogUnitsInlinePointerChunkingNoDropsOrDuplicates(t *t
 		ForceValueLogPointers:    true,
 		ValueLogPointerThreshold: 1,
 		FlushBuildChunkCap:       1024,
-		IndexOuterLeafMode:       backenddb.IndexOuterLeafModeV1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -306,7 +313,7 @@ func TestFlushDeferredValueLogMemtableReservesBackendBatch(t *testing.T) {
 	db := &DB{valueLogThreshold: page.DefaultInlineThreshold}
 	const reserveHint = 7
 
-	if emitted, err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, false, 0, nil, nil); err != nil {
+	if emitted, err := db.flushDeferredValueLogMemtable(iter, backendBatch, reserveHint, false, 0); err != nil {
 		_ = iter.Close()
 		t.Fatalf("flushDeferredValueLogMemtable: %v", err)
 	} else if emitted != 2 {
@@ -437,21 +444,44 @@ func TestOuterLeafArenaReuseBoundCapsOversizedArena(t *testing.T) {
 	}
 }
 
-func resetEntrySliceLeasesForTest(t *testing.T) {
+func resetEntrySlicePoolStateForTest(t *testing.T) {
 	t.Helper()
 	entrySliceLeaseMu.Lock()
 	saved := entrySliceLeases
 	entrySliceLeases = [entrySliceLeaseClassCount][][]batch.Entry{}
 	entrySliceLeaseMu.Unlock()
+	savedBytes := entrySlicePoolBytes.Load()
+	savedLastGC := entrySlicePoolLastGC.Load()
+	entrySlicePoolBytes.Store(0)
+	entrySlicePoolLastGC.Store(0)
+	for i := range entrySlicePools {
+		entrySlicePools[i] = sync.Pool{}
+	}
 	t.Cleanup(func() {
 		entrySliceLeaseMu.Lock()
 		entrySliceLeases = saved
 		entrySliceLeaseMu.Unlock()
+		entrySlicePoolBytes.Store(savedBytes)
+		entrySlicePoolLastGC.Store(savedLastGC)
+		for i := range entrySlicePools {
+			entrySlicePools[i] = sync.Pool{}
+		}
+	})
+}
+
+func resetEntrySlicePoolsForTest(t *testing.T) {
+	t.Helper()
+	resetEntrySlicePoolStateForTest(t)
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 0
+	t.Cleanup(func() {
+		entrySlicePoolBudgetBytes = savedBudget
 	})
 }
 
 func TestEntrySliceLeaseRoundTrip(t *testing.T) {
-	resetEntrySliceLeasesForTest(t)
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolStateForTest(t)
 
 	entries := make([]batch.Entry, 1, 256)
 	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
@@ -477,7 +507,8 @@ func TestEntrySliceLeaseRoundTrip(t *testing.T) {
 }
 
 func TestEntrySliceLeaseRoundTripWithOversizeReuse(t *testing.T) {
-	resetEntrySliceLeasesForTest(t)
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolStateForTest(t)
 
 	entries := make([]batch.Entry, 1, 512)
 	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
@@ -492,7 +523,8 @@ func TestEntrySliceLeaseRoundTripWithOversizeReuse(t *testing.T) {
 }
 
 func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
-	resetEntrySliceLeasesForTest(t)
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolStateForTest(t)
 
 	big := make([]batch.Entry, 0, 1<<18)
 	putEntrySlice(big)
@@ -520,7 +552,180 @@ func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
 	}
 }
 
+func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolStateForTest(t)
+
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 0
+	t.Cleanup(func() { entrySlicePoolBudgetBytes = savedBudget })
+
+	entries := make([]batch.Entry, 1, 64)
+	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
+	putEntrySlice(entries)
+
+	if entries[0].Key != nil || entries[0].Value != nil {
+		t.Fatalf("expected putEntrySlice to clear backing entries on budget early return; got key=%v value=%v", entries[0].Key, entries[0].Value)
+	}
+}
+
+func TestPutEntrySliceClearsEntriesOnUnclassifiedEarlyReturn(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
+
+	entries := make([]batch.Entry, 1, 96)
+	entries[0] = batch.Entry{Type: batch.OpPut, Key: []byte("k"), Value: []byte("v")}
+	putEntrySlice(entries)
+
+	if entries[0].Key != nil || entries[0].Value != nil {
+		t.Fatalf("expected putEntrySlice to clear backing entries on unclassed early return; got key=%v value=%v", entries[0].Key, entries[0].Value)
+	}
+}
+
+func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
+	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
+	entrySlicePoolBytes.Store(0)
+
+	leaseIdx, ok := entrySliceLeaseClassForCap(64)
+	if !ok {
+		t.Fatalf("expected lease class for cap=%d", 64)
+	}
+
+	putEntrySlice(make([]batch.Entry, 0, 64))
+	putEntrySlice(make([]batch.Entry, 0, 64))
+
+	if got := entrySlicePoolBytes.Load(); got < 0 || got > entrySlicePoolBudgetBytes {
+		t.Fatalf("entrySlicePoolBytes=%d want within [0,%d]", got, entrySlicePoolBudgetBytes)
+	}
+
+	entrySliceLeaseMu.Lock()
+	leased := len(entrySliceLeases[leaseIdx])
+	entrySliceLeaseMu.Unlock()
+	if leased > 1 {
+		t.Fatalf("expected budget to cap retained entry slices; leased=%d", leased)
+	}
+}
+
+func TestGetEntrySliceMissResetsPoolBytesAfterGC(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
+	batchArenaPoolTestMu.Lock()
+	t.Cleanup(batchArenaPoolTestMu.Unlock)
+
+	origNumGC := entrySlicePoolNumGC
+	defer func() { entrySlicePoolNumGC = origNumGC }()
+
+	var fakeNumGC uint64 = 9
+	entrySlicePoolNumGC = func() uint64 { return fakeNumGC }
+
+	entrySlicePoolBytes.Store(1234)
+	entrySlicePoolLastGC.Store(fakeNumGC)
+	fakeNumGC++
+
+	got := getEntrySlice(64)
+	if cap(got) < 64 {
+		t.Fatalf("entry slice cap=%d want >= 64", cap(got))
+	}
+	if gotBytes := entrySlicePoolBytes.Load(); gotBytes != 0 {
+		t.Fatalf("entrySlicePoolBytes after GC miss=%d want 0", gotBytes)
+	}
+	if gotGC := entrySlicePoolLastGC.Load(); gotGC != fakeNumGC {
+		t.Fatalf("entrySlicePoolLastGC=%d want %d", gotGC, fakeNumGC)
+	}
+}
+
+func TestPutEntrySliceDoesNotAdvanceGCEpochWhenPoolAlreadyAccounted(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
+	batchArenaPoolTestMu.Lock()
+	t.Cleanup(batchArenaPoolTestMu.Unlock)
+
+	origNumGC := entrySlicePoolNumGC
+	defer func() { entrySlicePoolNumGC = origNumGC }()
+
+	var fakeNumGC uint64 = 11
+	entrySlicePoolNumGC = func() uint64 { return fakeNumGC }
+
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
+	t.Cleanup(func() { entrySlicePoolBudgetBytes = savedBudget })
+
+	entrySlicePoolBytes.Store(1234)
+	entrySlicePoolLastGC.Store(fakeNumGC - 1)
+
+	putEntrySlice(make([]batch.Entry, 0, 64))
+
+	if gotGC := entrySlicePoolLastGC.Load(); gotGC != fakeNumGC-1 {
+		t.Fatalf("entrySlicePoolLastGC=%d want %d", gotGC, fakeNumGC-1)
+	}
+}
+
+func TestMaybeResetEntrySlicePoolBytesAfterGC_FirstEpochKeepsAccountedBytes(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
+	batchArenaPoolTestMu.Lock()
+	t.Cleanup(batchArenaPoolTestMu.Unlock)
+
+	origNumGC := entrySlicePoolNumGC
+	defer func() { entrySlicePoolNumGC = origNumGC }()
+
+	const fakeNumGC uint64 = 5
+	entrySlicePoolNumGC = func() uint64 { return fakeNumGC }
+
+	entrySlicePoolBytes.Store(1234)
+	entrySlicePoolLastGC.Store(0)
+
+	maybeResetEntrySlicePoolBytesAfterGC()
+
+	if got := entrySlicePoolBytes.Load(); got != 1234 {
+		t.Fatalf("entrySlicePoolBytes=%d want 1234", got)
+	}
+	if got := entrySlicePoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("entrySlicePoolLastGC=%d want %d", got, fakeNumGC)
+	}
+}
+
+func TestMaybeResetEntrySlicePoolBytesAfterGC_PreservesLeaseBytes(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
+	batchArenaPoolTestMu.Lock()
+	t.Cleanup(batchArenaPoolTestMu.Unlock)
+
+	origNumGC := entrySlicePoolNumGC
+	defer func() { entrySlicePoolNumGC = origNumGC }()
+
+	var fakeNumGC uint64 = 17
+	entrySlicePoolNumGC = func() uint64 { return fakeNumGC }
+
+	savedBudget := entrySlicePoolBudgetBytes
+	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
+	t.Cleanup(func() { entrySlicePoolBudgetBytes = savedBudget })
+
+	putEntrySlice(make([]batch.Entry, 0, 64))
+	expected := int64(64) * entrySliceEntrySizeBytes
+	if got := entrySlicePoolBytes.Load(); got != expected {
+		t.Fatalf("entrySlicePoolBytes=%d want %d before GC", got, expected)
+	}
+
+	entrySlicePoolLastGC.Store(fakeNumGC)
+	entrySlicePoolBytes.Store(expected + 1234)
+	fakeNumGC++
+
+	maybeResetEntrySlicePoolBytesAfterGC()
+
+	if got := entrySlicePoolBytes.Load(); got != expected {
+		t.Fatalf("entrySlicePoolBytes=%d want %d after GC", got, expected)
+	}
+	if got := entrySlicePoolLastGC.Load(); got != fakeNumGC {
+		t.Fatalf("entrySlicePoolLastGC=%d want %d", got, fakeNumGC)
+	}
+}
+
 func TestGetEntrySliceIgnoresUnexpectedPoolType(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
 	capacity := 64
 	idx, _, ok := entrySliceLeaseClassForLen(capacity)
 	if !ok {

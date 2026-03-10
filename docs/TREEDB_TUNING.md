@@ -8,7 +8,7 @@ This doc describes the knobs exposed via `treedb.Options` and the cached write-b
 - `ChunkSize`: defaults to 256 KiB in `treedb.Open` (mmap chunk size for `index.db`)
 - `FlushThreshold`: defaults to 64 MiB in cached mode (memtable/journal rotation threshold)
 - `KeepRecent`: defaults to `1` in `treedb.Open` (aggressive page reuse)
-- Inline values: values up to 256 bytes are stored inline; larger values go to the value log.
+- Inline values: values up to 512 bytes are stored inline; larger values go to the value log.
 - Background index vacuum: defaults to 30s interval (auto-on) with span ratio threshold `1_200_000`
 - Cached-mode auto checkpointing:
   - `BackgroundCheckpointInterval`: defaults to 30s

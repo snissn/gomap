@@ -115,3 +115,22 @@ Invariant:
 Coverage:
 - `TreeDB/docs/docs_lint_test.go`:
   - docs terminology lint test
+
+## 10. Cached Reads Include Cached Writes
+
+Invariant:
+- In cached mode, snapshots and iterators include writes buffered in memtables and are snapshot-isolated (writes after acquisition are not visible).
+
+Coverage:
+- `TreeDB/snapshot_cached_writes_test.go`:
+  - `TestAcquireSnapshot_IncludesCachedWrites`
+  - `TestAcquireSnapshot_IncludesCachedWrites_ValuePointers`
+- `TreeDB/caching/snapshot_test.go`:
+  - `TestIteratorSnapshotIsolation`
+- `TreeDB/caching/iterator_cached_writes_test.go`:
+  - `TestIterator_IncludesCachedWrites_SnapshotIsolated`
+  - `TestIterator_IncludesCachedWrites_ValuePointers`
+- `TreeDB/caching/reverse_iterator_cached_writes_test.go`:
+  - `TestReverseIterator_IncludesCachedWrites_SnapshotIsolated`
+- `kvstore/adapters/treedb/read_snapshot_cached_writes_test.go`
+- Unified-bench correctness guardrail: `cmd/unified_bench/read_snapshot_guardrail_test.go` and `BenchConfig.ReadRequireHit`

@@ -6,17 +6,10 @@ import (
 	"os"
 	"sort"
 	"strings"
-
-	treedb "github.com/snissn/gomap/TreeDB"
 )
 
 var (
 	profileArg = flag.String("profile", "", "Benchmark profile to use (fast, wal_on_fast, durable, balanced). Overrides default flags unless explicitly set.")
-)
-
-const (
-	defaultOuterLeafBlockCacheEntries           = 8192
-	defaultOuterLeafBlockCacheEntriesV2FencePtr = 16384
 )
 
 type Profile struct {
@@ -35,13 +28,6 @@ func init() {
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
-		// Fence-pointer outer-leaf reads are decode-heavy without a decoded-block
-		// cache; keep a moderate default in throughput profiles.
-		outerLeafCacheDefault := defaultOuterLeafBlockCacheEntries
-		if strings.EqualFold(strings.TrimSpace(*treedbIndexOuterLeafMode), treedb.IndexOuterLeafModeV2FencePtr) {
-			outerLeafCacheDefault = defaultOuterLeafBlockCacheEntriesV2FencePtr
-		}
-		setIntIfUnset("treedb-outer-leaf-block-cache-entries", outerLeafCacheDefault, isSet, treedbOuterLeafBlockCacheEntries)
 
 		// Badger
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)
@@ -71,12 +57,6 @@ func init() {
 		setBoolIfUnset("treedb-allow-unsafe", true, isSet, treedbAllowUnsafe)
 		setBoolIfUnset("treedb-index-optimizations", true, isSet, treedbIndexOptimizations)
 		setStringIfUnset("treedb-vlog-auto-policy", "throughput", isSet, treedbVlogAutoPolicy)
-		// Match fast profile defaults for decode-heavy fence-pointer reads.
-		outerLeafCacheDefault := defaultOuterLeafBlockCacheEntries
-		if strings.EqualFold(strings.TrimSpace(*treedbIndexOuterLeafMode), treedb.IndexOuterLeafModeV2FencePtr) {
-			outerLeafCacheDefault = defaultOuterLeafBlockCacheEntriesV2FencePtr
-		}
-		setIntIfUnset("treedb-outer-leaf-block-cache-entries", outerLeafCacheDefault, isSet, treedbOuterLeafBlockCacheEntries)
 
 		// Other DBs: match "fast" behavior (nosync).
 		setBoolIfUnset("badger-nosync", true, isSet, badgerNoSync)

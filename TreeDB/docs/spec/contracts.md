@@ -26,6 +26,13 @@ This document specifies externally-observable behavior expected by callers.
 - `Has(key)` returns `(true, nil)` only for a visible non-deleted key.
 - Deleted/missing keys return `(false, nil)`.
 
+### 2.4 Cached-mode visibility
+
+When the cached layer is enabled (default `treedb.Open` behavior):
+
+- Point reads (`Get`, `GetMany`, `Has`, `GetAppend`) MUST reflect writes buffered in memtables (mutable + queued), even if they have not been flushed to the backend B+Tree yet.
+- Newer memtable entries MUST shadow older backend state ("newest wins"), including tombstones.
+
 ## 3. Write Contracts
 
 ### 3.1 Point ops
@@ -62,11 +69,20 @@ For WAL replay, commit-log batches are treated atomically at replay boundaries.
 - `KeyCopy`/`ValueCopy` provide stable copies.
 - Iterator must be closed.
 
+### 4.4 Cached-mode iterator semantics
+
+When the cached layer is enabled:
+
+- Iterators MUST include buffered memtable writes (queued + rotated mutable state) and be snapshot-isolated.
+- Iterators merge multiple sorted sources: immutable memtables (newest first) + a backend snapshot.
+- When the same key exists in multiple sources, the newest entry wins; tombstones suppress older versions of the key.
+- `ReverseIterator` follows the same visibility rules but yields keys in descending order.
+
 ## 5. Snapshot Contracts
 
-- Snapshot captures a stable commit sequence.
-- Snapshot pins index generation and value-log segment set needed for reads.
-- Snapshot must be closed to release retention pressure.
+- Snapshots are point-in-time readers and MUST be closed to release retention pressure.
+- In cached mode, snapshots MUST include buffered memtable writes and MUST be snapshot-isolated (writes after snapshot acquisition are not visible through the snapshot).
+- `Snapshot.Get` / `Snapshot.GetAppend` return `ErrKeyNotFound` for missing/tombstoned keys (unlike `DB.Get`, which returns `(nil, nil)` on miss).
 
 ## 6. Concurrency and Locking
 

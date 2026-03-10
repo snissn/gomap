@@ -89,6 +89,7 @@ If `DisableSideStores=true`, the main DB is opened directly at `<root>`.
 
 - Readers use snapshots (`AcquireSnapshot`) with a pinned commit sequence.
 - Snapshots pin the index generation and referenced value-log set.
+- In cached mode, snapshots and iterators also include buffered memtable writes by reading from immutable queued memtables (newest-first) plus a backend snapshot.
 - Iterators are point-in-time views and must be closed.
 - Writers are serialized; readers run concurrently.
 

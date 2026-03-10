@@ -4,10 +4,14 @@
 // layer for improved write throughput.
 //
 // Durability:
-// Use SetSync / Batch.WriteSync if the write must survive process crashes.
-// In relaxed durability modes (Options.Durability = DurabilityWALOnRelaxed or
-// DurabilityWALOffRelaxed), Sync operations are crash-consistent only (no
-// fsync) and may not survive power loss.
+// Use SetSync / Batch.WriteSync if the write must cross the next configured
+// durability boundary. In relaxed durability modes
+// (Options.Durability = DurabilityWALOnRelaxed or DurabilityWALOffRelaxed),
+// Sync operations do not fsync and may not survive power loss. In
+// DurabilityWALOffRelaxed specifically, recent writes may remain buffered in
+// TreeDB until a later checkpoint/flush boundary even after SetSync /
+// Batch.WriteSync; they remain visible to readers in the current process but
+// are still part of an unsafe durability mode.
 //
 // Iteration:
 // Iterators are point-in-time views of the DB and must be closed.

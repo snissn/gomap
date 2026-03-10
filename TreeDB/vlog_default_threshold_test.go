@@ -6,10 +6,9 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/node"
-	"github.com/snissn/gomap/TreeDB/page"
 )
 
-func TestDefaultValueLogPointerThreshold_RelaxedDurability_UsesPointersFor128B(t *testing.T) {
+func TestDefaultValueLogPointerThreshold_RelaxedDurability_Keeps128BInline(t *testing.T) {
 	dir := t.TempDir()
 	opts := Options{
 		Dir:            dir,
@@ -42,9 +41,9 @@ func TestDefaultValueLogPointerThreshold_RelaxedDurability_UsesPointersFor128B(t
 		_ = snap.Close()
 		t.Fatalf("GetEntry: %v", err)
 	}
-	if entry.Flags&node.FlagPointer == 0 || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+	if entry.Flags&node.FlagPointer != 0 {
 		_ = snap.Close()
-		t.Fatalf("expected value-log pointer for 128B value under relaxed durability, got flags=%#x file_id=%#x", entry.Flags, entry.ValuePtr.FileID)
+		t.Fatalf("expected inline value for 128B value under relaxed durability, got flags=%#x file_id=%#x", entry.Flags, entry.ValuePtr.FileID)
 	}
 	if err := snap.Close(); err != nil {
 		t.Fatalf("snapshot close: %v", err)

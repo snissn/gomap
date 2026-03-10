@@ -16,8 +16,47 @@ const btreeUseLoadFastPath = false
 const btreeArenaChunkSize = 1 << 20
 
 type btreeEntry struct {
-	value []byte
+	value []byte // inline bytes (if pointer, may store inline tail bytes)
+	ptr   page.ValuePtr
 	flags byte
+}
+
+func canonicalizeBTreePointerValue(flags byte, value []byte) []byte {
+	if flags&node.FlagPointer != 0 && len(value) == 0 {
+		return nil
+	}
+	return value
+}
+
+func canonicalizeBTreeInlineValue(value []byte) []byte {
+	if len(value) == 0 {
+		return nil
+	}
+	return value
+}
+
+// btreeEntryPayloadSize tracks the logical value payload bytes contributing to
+// memtable flush thresholds, not the fixed in-memory struct footprint.
+func btreeEntryPayloadSize(flags byte, value []byte) int {
+	if flags&node.FlagPointer != 0 {
+		// page.ValuePtrSize is defined as the in-memory ValuePtr struct size.
+		// layout_assert.go keeps the constant and struct layout in sync.
+		return page.ValuePtrSize + len(value)
+	}
+	if flags&node.FlagTombstone != 0 {
+		return 0
+	}
+	return len(value)
+}
+
+func normalizeBTreeEntryFlags(flags byte) byte {
+	if flags&node.FlagTombstone != 0 {
+		return flags &^ node.FlagPointer
+	}
+	if flags&node.FlagPointer != 0 {
+		return flags &^ node.FlagTombstone
+	}
+	return flags &^ (node.FlagPointer | node.FlagTombstone)
 }
 
 type BTree struct {
@@ -46,50 +85,46 @@ func (m *BTree) ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key [
 		var replaced bool
 
 		if op.Type == batchpkg.OpDelete {
+			entry := btreeEntry{flags: node.FlagTombstone}
 			if m.hasLast && keyStr > m.lastKey {
-				prev, replaced = m.tree.Load(keyStr, btreeEntry{flags: node.FlagTombstone})
+				prev, replaced = m.tree.Load(keyStr, entry)
 			} else {
-				prev, replaced = m.tree.Set(keyStr, btreeEntry{flags: node.FlagTombstone})
+				prev, replaced = m.tree.Set(keyStr, entry)
 			}
 			if replaced {
 				if prev.flags&node.FlagTombstone == 0 {
-					m.sizeBytes -= int64(len(prev.value))
+					m.sizeBytes -= int64(btreeEntryPayloadSize(prev.flags, prev.value))
 				}
 			} else {
 				m.sizeBytes += int64(len(op.Key))
 			}
 		} else if op.IsPtr {
-			valCopy := m.encodeEntryValue(op.Value, op.ValuePtr, node.FlagPointer, true)
-			entry := btreeEntry{value: valCopy, flags: node.FlagPointer}
+			entry := btreeEntry{value: canonicalizeBTreePointerValue(node.FlagPointer, op.Value), ptr: op.ValuePtr, flags: node.FlagPointer}
 			if m.hasLast && keyStr > m.lastKey {
 				prev, replaced = m.tree.Load(keyStr, entry)
 			} else {
 				prev, replaced = m.tree.Set(keyStr, entry)
 			}
+			newSize := btreeEntryPayloadSize(entry.flags, entry.value)
 			if replaced {
-				oldLen := len(prev.value)
-				if prev.flags&node.FlagTombstone != 0 {
-					oldLen = 0
-				}
-				m.sizeBytes += int64(len(valCopy) - oldLen)
+				oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
+				m.sizeBytes += int64(newSize - oldSize)
 			} else {
-				m.sizeBytes += int64(len(op.Key) + len(valCopy))
+				m.sizeBytes += int64(len(op.Key) + newSize)
 			}
 		} else {
-			entry := btreeEntry{value: op.Value, flags: node.FlagInline}
+			entry := btreeEntry{value: canonicalizeBTreeInlineValue(op.Value), flags: node.FlagInline}
 			if m.hasLast && keyStr > m.lastKey {
 				prev, replaced = m.tree.Load(keyStr, entry)
 			} else {
 				prev, replaced = m.tree.Set(keyStr, entry)
 			}
+			newSize := btreeEntryPayloadSize(entry.flags, entry.value)
 			if replaced {
-				oldLen := len(prev.value)
-				if prev.flags&node.FlagTombstone != 0 {
-					oldLen = 0
-				}
-				m.sizeBytes += int64(len(op.Value) - oldLen)
+				oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
+				m.sizeBytes += int64(newSize - oldSize)
 			} else {
-				m.sizeBytes += int64(len(op.Key) + len(op.Value))
+				m.sizeBytes += int64(len(op.Key) + newSize)
 			}
 		}
 
@@ -150,18 +185,20 @@ func (m *BTree) PutWithCallback(key, value []byte, cb func(k, v []byte) error) e
 	defer m.mu.Unlock()
 
 	keyStored := m.arena.Copy(key)
-	valStored := m.encodeEntryValue(value, page.ValuePtr{}, node.FlagInline, false)
+	valStored := []byte(nil)
+	if len(value) > 0 {
+		valStored = m.arena.Copy(value)
+	}
 	keyStr := bytesToStringNoCopy(keyStored)
-	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valStored, flags: node.FlagInline})
+	entry := btreeEntry{value: valStored, flags: node.FlagInline}
+	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
+	newSize := btreeEntryPayloadSize(entry.flags, entry.value)
 	if replaced {
-		oldLen := len(prev.value)
-		if prev.flags&node.FlagTombstone != 0 {
-			oldLen = 0
-		}
-		m.sizeBytes += int64(len(valStored) - oldLen)
+		oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
+		m.sizeBytes += int64(newSize - oldSize)
 		return nil
 	}
-	m.sizeBytes += int64(len(keyStored) + len(valStored))
+	m.sizeBytes += int64(len(keyStored) + newSize)
 	if !m.hasLast || keyStr > m.lastKey {
 		m.lastKey = keyStr
 		m.hasLast = true
@@ -181,18 +218,32 @@ func (m *BTree) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	defer m.mu.Unlock()
 
 	keyCopy := m.arena.Copy(key)
-	valCopy := m.encodeEntryValue(value, ptr, flags, false)
 	keyStr := bytesToStringNoCopy(keyCopy)
-	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valCopy, flags: flags})
-	if replaced {
-		oldLen := len(prev.value)
-		if prev.flags&node.FlagTombstone != 0 {
-			oldLen = 0
+	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags)}
+	switch {
+	case entry.flags&node.FlagTombstone != 0:
+		entry.value = nil
+		entry.ptr = page.ValuePtr{}
+	case entry.flags&node.FlagPointer != 0:
+		entry.ptr = ptr
+		value = canonicalizeBTreePointerValue(entry.flags, value)
+		if len(value) > 0 {
+			entry.value = m.arena.Copy(value)
 		}
-		m.sizeBytes += int64(len(valCopy) - oldLen)
+	default:
+		value = canonicalizeBTreeInlineValue(value)
+		if len(value) > 0 {
+			entry.value = m.arena.Copy(value)
+		}
+	}
+	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
+	newSize := btreeEntryPayloadSize(entry.flags, entry.value)
+	if replaced {
+		oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
+		m.sizeBytes += int64(newSize - oldSize)
 		return
 	}
-	m.sizeBytes += int64(len(keyCopy) + len(valCopy))
+	m.sizeBytes += int64(len(keyCopy) + newSize)
 	if !m.hasLast || keyStr > m.lastKey {
 		m.lastKey = keyStr
 		m.hasLast = true
@@ -208,17 +259,25 @@ func (m *BTree) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) 
 	defer m.mu.Unlock()
 
 	keyStr := bytesToStringNoCopy(key)
-	valCopy := m.encodeEntryValue(value, ptr, flags, true)
-	prev, replaced := m.setMaybeLoadLocked(keyStr, btreeEntry{value: valCopy, flags: flags})
+	entry := btreeEntry{flags: normalizeBTreeEntryFlags(flags)}
+	switch {
+	case entry.flags&node.FlagTombstone != 0:
+		entry.value = nil
+		entry.ptr = page.ValuePtr{}
+	case entry.flags&node.FlagPointer != 0:
+		entry.ptr = ptr
+		entry.value = canonicalizeBTreePointerValue(entry.flags, value)
+	default:
+		entry.value = canonicalizeBTreeInlineValue(value)
+	}
+	prev, replaced := m.setMaybeLoadLocked(keyStr, entry)
+	newSize := btreeEntryPayloadSize(entry.flags, entry.value)
 	if replaced {
-		oldLen := len(prev.value)
-		if prev.flags&node.FlagTombstone != 0 {
-			oldLen = 0
-		}
-		m.sizeBytes += int64(len(valCopy) - oldLen)
+		oldSize := btreeEntryPayloadSize(prev.flags, prev.value)
+		m.sizeBytes += int64(newSize - oldSize)
 		return
 	}
-	m.sizeBytes += int64(len(key) + len(valCopy))
+	m.sizeBytes += int64(len(key) + newSize)
 	if !m.hasLast || keyStr > m.lastKey {
 		m.lastKey = keyStr
 		m.hasLast = true
@@ -245,10 +304,11 @@ func (m *BTree) DeleteWithCallback(key []byte, cb func(k, v []byte) error) error
 
 	keyStored := m.arena.Copy(key)
 	keyStr := bytesToStringNoCopy(keyStored)
-	prev, replaced := m.tree.Set(keyStr, btreeEntry{flags: node.FlagTombstone})
+	entry := btreeEntry{flags: node.FlagTombstone}
+	prev, replaced := m.tree.Set(keyStr, entry)
 	if replaced {
 		if prev.flags&node.FlagTombstone == 0 {
-			m.sizeBytes -= int64(len(prev.value))
+			m.sizeBytes -= int64(btreeEntryPayloadSize(prev.flags, prev.value))
 		}
 		return nil
 	}
@@ -260,25 +320,6 @@ func (m *BTree) DeleteSteal(key []byte) {
 	m.SetEntrySteal(key, nil, page.ValuePtr{}, node.FlagTombstone)
 }
 
-func (m *BTree) encodeEntryValue(value []byte, ptr page.ValuePtr, flags byte, steal bool) []byte {
-	if flags&node.FlagPointer != 0 {
-		size := page.ValuePtrSize + len(value)
-		dst := m.arena.alloc(size)
-		ptr.Encode(dst[:page.ValuePtrSize])
-		if len(value) > 0 {
-			copy(dst[page.ValuePtrSize:], value)
-		}
-		return dst[:size]
-	}
-	if flags&node.FlagTombstone != 0 {
-		return nil
-	}
-	if steal {
-		return value
-	}
-	return m.arena.Copy(value)
-}
-
 func (m *BTree) Get(key []byte) ([]byte, bool, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -287,10 +328,7 @@ func (m *BTree) Get(key []byte) ([]byte, bool, bool) {
 		return nil, false, false
 	}
 	if val.flags&node.FlagPointer != 0 {
-		if len(val.value) > page.ValuePtrSize {
-			return val.value[page.ValuePtrSize:], val.flags&node.FlagTombstone != 0, true
-		}
-		return nil, val.flags&node.FlagTombstone != 0, true
+		return canonicalizeBTreePointerValue(val.flags, val.value), val.flags&node.FlagTombstone != 0, true
 	}
 	return val.value, val.flags&node.FlagTombstone != 0, true
 }
@@ -303,14 +341,7 @@ func (m *BTree) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 		return nil, page.ValuePtr{}, 0, false
 	}
 	if val.flags&node.FlagPointer != 0 {
-		if len(val.value) >= page.ValuePtrSize {
-			inline := []byte(nil)
-			if len(val.value) > page.ValuePtrSize {
-				inline = val.value[page.ValuePtrSize:]
-			}
-			return inline, page.DecodeValuePtr(val.value[:page.ValuePtrSize]), val.flags, true
-		}
-		return nil, page.ValuePtr{}, val.flags, true
+		return canonicalizeBTreePointerValue(val.flags, val.value), val.ptr, val.flags, true
 	}
 	return val.value, page.ValuePtr{}, val.flags, true
 }
@@ -362,6 +393,51 @@ func (m *BTree) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	return it
 }
 
+func (m *BTree) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	startKey := ""
+	hasStart := false
+	if start != nil {
+		startKey = bytesToStringNoCopy(start)
+		hasStart = true
+	}
+	endKey := ""
+	hasEnd := false
+	if end != nil {
+		endKey = bytesToStringNoCopy(end)
+		hasEnd = true
+	}
+
+	m.mu.RLock()
+	iter := m.tree.Iter()
+
+	valid := false
+	if !hasEnd {
+		valid = iter.Last()
+	} else {
+		valid = iter.Seek(endKey)
+		if valid {
+			// Seek positions at the first key >= end. Reverse iteration is over
+			// [start, end), so step back to the last key < end.
+			valid = iter.Prev()
+		} else {
+			// seek(end) fell off the end.
+			valid = iter.Last()
+		}
+	}
+
+	it := &btreeReverseIterator{
+		iter:     iter,
+		start:    startKey,
+		hasStart: hasStart,
+		end:      endKey,
+		hasEnd:   hasEnd,
+		valid:    valid,
+		mu:       &m.mu,
+	}
+	it.refresh()
+	return it
+}
+
 type btreeIterator struct {
 	iter   btree.MapIter[string, btreeEntry]
 	end    string
@@ -406,12 +482,6 @@ func (it *btreeIterator) UnsafeValue() []byte {
 	if !it.hasCur {
 		return nil
 	}
-	if it.cur.flags&node.FlagPointer != 0 {
-		if len(it.cur.value) > page.ValuePtrSize {
-			return it.cur.value[page.ValuePtrSize:]
-		}
-		return nil
-	}
 	return it.cur.value
 }
 
@@ -423,16 +493,9 @@ func (it *btreeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 		return nil, page.ValuePtr{}, node.FlagTombstone
 	}
 	if it.cur.flags&node.FlagPointer != 0 {
-		if len(it.cur.value) >= page.ValuePtrSize {
-			inline := []byte(nil)
-			if len(it.cur.value) > page.ValuePtrSize {
-				inline = it.cur.value[page.ValuePtrSize:]
-			}
-			return inline, page.DecodeValuePtr(it.cur.value[:page.ValuePtrSize]), it.cur.flags
-		}
-		return nil, page.ValuePtr{}, it.cur.flags
+		return it.cur.value, it.cur.ptr, it.cur.flags
 	}
-	return it.cur.value, page.ValuePtr{}, node.FlagInline
+	return it.cur.value, page.ValuePtr{}, it.cur.flags
 }
 
 func (it *btreeIterator) Key() []byte {
@@ -491,6 +554,181 @@ func (it *btreeIterator) refresh() {
 		return
 	}
 	if it.hasEnd && strings.Compare(it.iter.Key(), it.end) >= 0 {
+		it.valid = false
+		return
+	}
+	it.cur = it.iter.Value()
+	it.hasCur = true
+}
+
+type btreeReverseIterator struct {
+	iter     btree.MapIter[string, btreeEntry]
+	start    string
+	hasStart bool
+	end      string
+	hasEnd   bool
+	valid    bool
+	cur      btreeEntry
+	hasCur   bool
+	mu       *sync.RWMutex
+}
+
+func (it *btreeReverseIterator) Seek(key []byte) {
+	seekToReverseEnd := func() {
+		if !it.hasEnd {
+			it.valid = it.iter.Last()
+			return
+		}
+		it.valid = it.iter.Seek(it.end)
+		if it.valid {
+			// Seek positions at the first key >= end. Reverse iteration is over
+			// [start, end), so step back to the last key < end.
+			it.valid = it.iter.Prev()
+			return
+		}
+		it.valid = it.iter.Last()
+	}
+
+	if key == nil {
+		seekToReverseEnd()
+		it.refresh()
+		return
+	}
+	keyStr := bytesToStringNoCopy(key)
+	if it.hasEnd && strings.Compare(keyStr, it.end) >= 0 {
+		seekToReverseEnd()
+		it.refresh()
+		return
+	}
+	found := it.iter.Seek(keyStr)
+	if !found {
+		it.valid = it.iter.Last()
+		it.refresh()
+		return
+	}
+	it.valid = true
+	if strings.Compare(it.iter.Key(), keyStr) > 0 {
+		it.valid = it.iter.Prev()
+	}
+	it.refresh()
+}
+
+func (it *btreeReverseIterator) Next() {
+	if !it.valid {
+		return
+	}
+	it.valid = it.iter.Prev()
+	it.refresh()
+}
+
+func (it *btreeReverseIterator) Valid() bool {
+	if !it.valid || !it.hasCur {
+		return false
+	}
+	if it.hasEnd && strings.Compare(it.iter.Key(), it.end) >= 0 {
+		return false
+	}
+	if it.hasStart && strings.Compare(it.iter.Key(), it.start) < 0 {
+		return false
+	}
+	return true
+}
+
+func (it *btreeReverseIterator) UnsafeKey() []byte {
+	if !it.hasCur {
+		return nil
+	}
+	return stringToBytesNoCopy(it.iter.Key())
+}
+
+func (it *btreeReverseIterator) UnsafeValue() []byte {
+	if !it.hasCur {
+		return nil
+	}
+	return it.cur.value
+}
+
+func (it *btreeReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.hasCur {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if it.cur.flags&node.FlagTombstone != 0 {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if it.cur.flags&node.FlagPointer != 0 {
+		return it.cur.value, it.cur.ptr, it.cur.flags
+	}
+	return it.cur.value, page.ValuePtr{}, it.cur.flags
+}
+
+func (it *btreeReverseIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *btreeReverseIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *btreeReverseIterator) KeyCopy(dst []byte) []byte {
+	k := it.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *btreeReverseIterator) ValueCopy(dst []byte) []byte {
+	v := it.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
+func (it *btreeReverseIterator) IsDeleted() bool {
+	if !it.hasCur {
+		return false
+	}
+	return it.cur.flags&node.FlagTombstone != 0
+}
+
+func (it *btreeReverseIterator) Error() error {
+	return nil
+}
+
+func (it *btreeReverseIterator) Close() error {
+	if it.mu != nil {
+		it.mu.RUnlock()
+		it.mu = nil
+	}
+	return nil
+}
+
+func (it *btreeReverseIterator) Domain() (start, end []byte) {
+	if !it.hasEnd && !it.hasStart {
+		return nil, nil
+	}
+	var s []byte
+	if it.hasStart {
+		s = []byte(it.start)
+	}
+	var e []byte
+	if it.hasEnd {
+		e = []byte(it.end)
+	}
+	return s, e
+}
+
+func (it *btreeReverseIterator) refresh() {
+	it.hasCur = false
+	if !it.valid {
+		return
+	}
+	if it.hasEnd && strings.Compare(it.iter.Key(), it.end) >= 0 {
+		it.valid = false
+		return
+	}
+	if it.hasStart && strings.Compare(it.iter.Key(), it.start) < 0 {
 		it.valid = false
 		return
 	}

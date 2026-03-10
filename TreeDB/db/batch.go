@@ -2,10 +2,8 @@ package db
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/snissn/gomap/TreeDB/batch"
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -17,15 +15,69 @@ type Batch struct {
 
 const optimisticWriteMaxAttempts = 3
 
+const (
+	// Public NewBatchWithSize comes from cosmos-db, where callers often pass a
+	// byte-oriented flush threshold rather than an entry count. Keep small hints
+	// behaving like entry reserves, but normalize larger hints conservatively so
+	// a 100kB budget does not preallocate 100k entries.
+	publicBatchHintExactEntryReserveMax = 8 * 1024
+	publicBatchHintApproxBytesPerEntry  = 256
+	publicBatchHintNormalizedEntryCap   = publicBatchHintExactEntryReserveMax
+)
+
 func (db *DB) NewBatch() batch.Interface {
-	return db.NewBatchWithSize(0)
+	return db.newBatchWithEntryReserve(0)
 }
 
+// NewBatchWithSize accepts the public cosmos-db style size hint. Small values
+// are treated like exact entry reserves; larger values are normalized as
+// approximate byte budgets and capped to avoid preallocating one entry per
+// byte. The normalization is intentionally discontinuous at the cutover:
+// `publicBatchHintExactEntryReserveMax` still means "reserve that many
+// entries", while the next value is treated as a byte budget and normalized
+// downward.
 func (db *DB) NewBatchWithSize(size int) batch.Interface {
+	reserveHint := NormalizePublicBatchReserveHint(size)
+	return db.newBatchWithReserveHint(reserveHint)
+}
+
+// NormalizePublicBatchReserveHint keeps small public hints behaving like entry
+// reserves, but treats larger hints as approximate byte budgets so callers do
+// not accidentally preallocate one entry per byte. This is intentionally
+// discontinuous at the cutover for compatibility with small entry-count hints.
+//
+// For internal use; behavior may change without notice and is not part of the
+// supported external API surface of the db package.
+func NormalizePublicBatchReserveHint(size int) int {
+	if size <= 0 {
+		return 0
+	}
+	if size <= publicBatchHintExactEntryReserveMax {
+		return size
+	}
+	entries := size / publicBatchHintApproxBytesPerEntry
+	if size%publicBatchHintApproxBytesPerEntry != 0 {
+		entries++
+	}
+	// Defensive guard in case the cutover/bytes-per-entry constants change.
+	if entries < 1 {
+		entries = 1
+	}
+	if entries > publicBatchHintNormalizedEntryCap {
+		entries = publicBatchHintNormalizedEntryCap
+	}
+	return entries
+}
+
+func (db *DB) newBatchWithEntryReserve(entries int) batch.Interface {
+	return db.newBatchWithReserveHint(entries)
+}
+
+func (db *DB) newBatchWithReserveHint(reserveHint int) batch.Interface {
 	threshold := db.InlineThreshold()
 	domains := db.valueLogDomainThresholds
-	if size < 0 {
-		size = 0
+	if reserveHint < 0 {
+		reserveHint = 0
 	}
 	internal := batch.New(db.valueLogManager, threshold)
 	if threshold > 0 {
@@ -33,7 +85,7 @@ func (db *DB) NewBatchWithSize(size int) batch.Interface {
 			return ResolveInlineThresholdForKey(threshold, key, domains)
 		})
 	}
-	internal.Reserve(size)
+	internal.Reserve(reserveHint)
 	return &Batch{
 		db:    db,
 		batch: internal,
@@ -168,7 +220,7 @@ func (b *Batch) writeOptimistic(sync bool) (bool, error) {
 		return false, nil
 	}
 
-	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, false, vlogRefDelta)
+	post, err := b.db.finalizeCommitLocked(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta)
 	b.db.commitMu.Unlock()
 	if err != nil {
 		b.db.writeMu.RUnlock()
@@ -220,7 +272,7 @@ func (b *Batch) writeSerialized(sync bool) error {
 	sysRoot := b.db.meta.SystemRootPageID
 	b.db.mu.Unlock()
 
-	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, false, vlogRefDelta); err != nil {
+	if err := b.db.finalizeCommit(newRoot, sysRoot, retired, sync, metrics, touchedValueLogSegments, b.db.indexOuterLeavesInValueLog, vlogRefDelta); err != nil {
 		return err
 	}
 	if b.db.vacuum.Active() {
@@ -264,30 +316,6 @@ func (b *Batch) Replay(fn func(batch.Entry) error) error {
 			val, err := b.db.valueLogManager.Read(ptr)
 			if err != nil {
 				return err
-			}
-			if outerleaf.ModeEnabled(b.db.indexOuterLeafMode) {
-				decoded, ok, found, _, decErr := outerleaf.DecodeEntryForKey(val, entry.Key, nil)
-				if decErr != nil {
-					return decErr
-				}
-				if !ok {
-					if strings.TrimSpace(b.db.indexOuterLeafMode) == outerleaf.ModeV2FencePtr {
-						return fmt.Errorf("outerleaf: expected wrapped payload in fence mode replay")
-					}
-				}
-				if ok {
-					if !found {
-						return fmt.Errorf("outerleaf: key lookup miss in replay")
-					}
-					if decoded.Kind == outerleaf.EntryKindBlobRef {
-						val, err = b.db.valueLogManager.Read(decoded.BlobPtr)
-						if err != nil {
-							return err
-						}
-					} else {
-						val = decoded.Value
-					}
-				}
 			}
 			entry.Value = val
 		}

@@ -15,7 +15,10 @@ const (
 	// Scale trainer sampling by payload bytes so large batches of small values
 	// can bootstrap a dictionary quickly.
 	valueLogDictCollectMinPerBatchRecords = 32
-	valueLogDictCollectMaxPerBatchRecords = 2048
+	// Large batches of tiny values (e.g. forced-pointer streams) need more than a
+	// couple thousand samples to hit bootstrap bytes quickly. Keep a hard cap to
+	// bound hot-path CPU even when TrainBytes is large.
+	valueLogDictCollectMaxPerBatchRecords = 16384
 	valueLogDictCollectMinPerBatchBytes   = 32 << 10
 )
 
@@ -30,8 +33,9 @@ type dictStoreK interface {
 }
 
 func (db *DB) valueLogDictTrainingEnabled() bool {
-	// Default-off: dictionary training is CPU-heavy and should be enabled
-	// explicitly (TrainBytes > 0).
+	// Dict training is enabled when TrainBytes > 0. caching.Open defaults this
+	// to a safe value for dict/auto compression modes so "turning it on" does
+	// not require additional flag choreography.
 	if db == nil || db.valueLogDictTrain.TrainBytes <= 0 {
 		return false
 	}
@@ -355,7 +359,9 @@ func (db *DB) valueLogDictCollectBudget(records []valuelog.Record, paused bool) 
 		}
 	}
 
-	budget := uint64(targetBytes) / avgBytes
+	// Use ceil division so small values don't under-collect and delay the first
+	// dictionary publication.
+	budget := (uint64(targetBytes) + avgBytes - 1) / avgBytes
 	if budget < valueLogDictCollectMinPerBatchRecords {
 		budget = valueLogDictCollectMinPerBatchRecords
 	}

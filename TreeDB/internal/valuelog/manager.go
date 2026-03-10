@@ -102,6 +102,42 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 	return vf, nil
 }
 
+var (
+	managerTestHookMu sync.RWMutex
+	openSegmentFile   = openFile
+	scanSegmentPaths  = listSegments
+)
+
+func swapOpenSegmentFileForTest(hook func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error)) (prev func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error)) {
+	managerTestHookMu.Lock()
+	prev = openSegmentFile
+	openSegmentFile = hook
+	managerTestHookMu.Unlock()
+	return prev
+}
+
+func swapScanSegmentPathsForTest(hook func(string) ([]segmentInfo, error)) (prev func(string) ([]segmentInfo, error)) {
+	managerTestHookMu.Lock()
+	prev = scanSegmentPaths
+	scanSegmentPaths = hook
+	managerTestHookMu.Unlock()
+	return prev
+}
+
+func currentOpenSegmentFile() func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
+	managerTestHookMu.RLock()
+	hook := openSegmentFile
+	managerTestHookMu.RUnlock()
+	return hook
+}
+
+func currentScanSegmentPaths() func(string) ([]segmentInfo, error) {
+	managerTestHookMu.RLock()
+	hook := scanSegmentPaths
+	managerTestHookMu.RUnlock()
+	return hook
+}
+
 func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 	if f.cacheRawPooled && cap(f.cacheRaw) > 0 {
 		f.stashDecodeScratchLocked(f.cacheRaw)
@@ -404,26 +440,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 					return nil, ErrCorrupt
 				}
 
-				n := int(valEnd - valStart)
-				oldLen := len(dst)
-				dst = grow(dst, n)
-				if _, err := f.File.ReadAt(dst[oldLen:], frameOff+int64(prefixLen)+int64(valStart)); err != nil {
-					return nil, err
-				}
-				if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-					payload := dst[oldLen:]
-					decodedStart := len(dst)
-					dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-						return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-					}, f.templateDecodeOpts)
-					if err != nil {
-						return nil, err
-					}
-					decodedLen := len(dst) - decodedStart
-					copy(dst[oldLen:], dst[decodedStart:])
-					dst = dst[:oldLen+decodedLen]
-				}
-				return dst, nil
+				return f.appendPayloadFromFile(dst, frameOff+int64(prefixLen)+int64(valStart), int(valEnd-valStart))
 			}
 			f.cacheMu.Unlock()
 		}
@@ -503,26 +520,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		f.cacheStart.Store(start)
 		f.cacheMu.Unlock()
 
-		n := int(valEnd - valStart)
-		oldLen := len(dst)
-		dst = grow(dst, n)
-		if _, err := f.File.ReadAt(dst[oldLen:], frameOff+int64(prefixLen)+int64(valStart)); err != nil {
-			return nil, err
-		}
-		if f.templateLookup != nil && templ.IsEncodedPayload(dst[oldLen:]) {
-			payload := dst[oldLen:]
-			decodedStart := len(dst)
-			dst, err := templ.DecodePayloadAppend(dst, payload, func(id uint64) (templ.TemplateDef, error) {
-				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
-			}, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err
-			}
-			decodedLen := len(dst) - decodedStart
-			copy(dst[oldLen:], dst[decodedStart:])
-			dst = dst[:oldLen+decodedLen]
-		}
-		return dst, nil
+		return f.appendPayloadFromFile(dst, frameOff+int64(prefixLen)+int64(valStart), int(valEnd-valStart))
 	}
 
 	// Slow path: use existing decoder and append.
@@ -540,6 +538,20 @@ func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) (
 	return f.ReadAppend(ptr, verifyCRC, dst)
 }
 
+func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]byte, error) {
+	oldLen := len(dst)
+	dst = grow(dst, payloadLen)
+	payload := dst[oldLen : oldLen+payloadLen]
+	if _, err := f.File.ReadAt(payload, off); err != nil {
+		return nil, err
+	}
+	if f.templateLookup == nil || !templ.IsEncodedPayload(payload) {
+		return dst, nil
+	}
+	encoded := append([]byte(nil), payload...)
+	return appendDecodedTemplatePayload(dst[:oldLen], encoded, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+}
+
 // Set is an immutable snapshot of value-log files for snapshot isolation.
 type Set struct {
 	Files               map[uint32]*File
@@ -550,7 +562,7 @@ type Set struct {
 func (s *Set) Read(ptr page.ValuePtr) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
-		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.Read(ptr, !s.disableReadChecksum)
 }
@@ -558,7 +570,7 @@ func (s *Set) Read(ptr page.ValuePtr) ([]byte, error) {
 func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
-		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.ReadUnsafe(ptr, !s.disableReadChecksum)
 }
@@ -566,7 +578,7 @@ func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 func (s *Set) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
-		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.ReadAppend(ptr, !s.disableReadChecksum, dst)
 }
@@ -574,7 +586,7 @@ func (s *Set) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 func (s *Set) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
-		return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.ReadUnsafeAppend(ptr, !s.disableReadChecksum, dst)
 }
@@ -598,7 +610,7 @@ func (s *Set) ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byt
 		if i == 0 || ptr.FileID != fileID {
 			next, ok := s.Files[ptr.FileID]
 			if !ok {
-				return nil, fmt.Errorf("valuelog file %d not found in snapshot", ptr.FileID)
+				return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 			}
 			fileID = ptr.FileID
 			f = next
@@ -713,24 +725,50 @@ func (m *Manager) SegmentPath(id uint32) string {
 
 // Refresh scans the directory and registers any new segments.
 func (m *Manager) Refresh() error {
-	segments, err := listSegments(m.dir)
+	segments, err := currentScanSegmentPaths()(m.dir)
 	if err != nil {
 		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, seg := range segments {
-		if _, ok := m.files[seg.id]; ok {
-			continue
-		}
-		f, err := openFile(seg.path, seg.id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
-		if err != nil {
+		if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// Online rewrite/GC can delete a segment after listSegments() sees it
+				// but before we open it. Treat that as a benign refresh race and
+				// keep scanning the remaining segments.
+				continue
+			}
 			return err
 		}
-		f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
-		f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
-		m.files[seg.id] = f
 	}
+	return nil
+}
+
+// RegisterSegment registers a newly created segment without scanning the
+// filesystem. Callers that create value-log segments in-process should use this
+// on the hot path so CurrentSetNoRefresh remains sufficient for immediate
+// publish/read-after-write visibility.
+func (m *Manager) RegisterSegment(path string, id uint32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.registerSegmentLocked(path, id)
+}
+
+func (m *Manager) registerSegmentLocked(path string, id uint32) error {
+	if m.files == nil {
+		m.files = make(map[uint32]*File, 16)
+	}
+	if _, ok := m.files[id]; ok {
+		return nil
+	}
+	f, err := currentOpenSegmentFile()(path, id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
+	if err != nil {
+		return err
+	}
+	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
+	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
+	m.files[id] = f
 	return nil
 }
 
@@ -849,7 +887,7 @@ func (m *Manager) fileFor(id uint32) (*File, error) {
 	if ok {
 		return f, nil
 	}
-	return nil, fmt.Errorf("valuelog file %d not found", id)
+	return nil, &fileNotFoundError{id: id}
 }
 
 // Acquire increments the Set refcount (O(1)).
@@ -945,7 +983,7 @@ func (m *Manager) MarkZombie(id uint32) error {
 	defer m.mu.Unlock()
 	f, ok := m.files[id]
 	if !ok {
-		return fmt.Errorf("valuelog file %d not found", id)
+		return &fileNotFoundError{id: id}
 	}
 	f.IsZombie.Store(true)
 	return nil

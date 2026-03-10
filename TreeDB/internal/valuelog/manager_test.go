@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
 func writeTestSegment(t *testing.T, dir string, lane, seq uint32, rid uint64, value []byte) uint32 {
@@ -40,7 +42,11 @@ func TestManagerCurrentSetNoRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
 
 	set1 := mgr.CurrentSetNoRefresh()
 	if _, ok := set1.Files[seg1]; !ok {
@@ -71,6 +77,52 @@ func TestManagerCurrentSetNoRefresh(t *testing.T) {
 	}
 }
 
+func TestManagerRegisterSegment_CurrentSetNoRefresh(t *testing.T) {
+	dir := t.TempDir()
+
+	origScan := currentScanSegmentPaths()
+	scanCalls := 0
+	swapScanSegmentPathsForTest(func(scanDir string) ([]segmentInfo, error) {
+		scanCalls++
+		return origScan(scanDir)
+	})
+	t.Cleanup(func() { swapScanSegmentPathsForTest(origScan) })
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
+	if scanCalls != 1 {
+		t.Fatalf("scan calls after open=%d want 1", scanCalls)
+	}
+
+	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("r"), 64))
+	path := filepath.Join(dir, "value-l0-000001.log")
+	if err := mgr.RegisterSegment(path, segID); err != nil {
+		t.Fatalf("RegisterSegment: %v", err)
+	}
+	if scanCalls != 1 {
+		t.Fatalf("RegisterSegment unexpectedly scanned filesystem, calls=%d", scanCalls)
+	}
+
+	set := mgr.CurrentSetNoRefresh()
+	if _, ok := set.Files[segID]; !ok {
+		_ = mgr.Release(set)
+		t.Fatalf("CurrentSetNoRefresh missing registered segment %d", segID)
+	}
+	if err := mgr.Release(set); err != nil {
+		t.Fatalf("Release(set): %v", err)
+	}
+	if scanCalls != 1 {
+		t.Fatalf("CurrentSetNoRefresh unexpectedly scanned filesystem, calls=%d", scanCalls)
+	}
+}
+
 func TestManagerReleaseZombieDeletesSegmentOnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("x"), 64))
@@ -79,7 +131,11 @@ func TestManagerReleaseZombieDeletesSegmentOnSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
 
 	set := mgr.CurrentSet()
 	f, ok := set.Files[segID]
@@ -115,7 +171,11 @@ func TestManagerReleaseZombieDeleteFailureKeepsSegmentTracked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer func() { _ = mgr.Close() }()
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
 
 	set := mgr.CurrentSet()
 	f, ok := set.Files[segID]
@@ -149,4 +209,81 @@ func TestManagerReleaseZombieDeleteFailureKeepsSegmentTracked(t *testing.T) {
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected segment file to remain on disk, stat err=%v", err)
 	}
+}
+
+func TestManagerRefresh_IgnoresSegmentRemovedAfterScan(t *testing.T) {
+	dir := t.TempDir()
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
+
+	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("z"), 64))
+
+	origOpen := currentOpenSegmentFile()
+	swapOpenSegmentFileForTest(func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
+		if id == segID {
+			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("Remove(%s): %v", path, err)
+			}
+		}
+		return origOpen(path, id, dictLookup, templateLookup, templateOpts, templateCache)
+	})
+	t.Cleanup(func() { swapOpenSegmentFileForTest(origOpen) })
+
+	if err := mgr.Refresh(); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+
+	mgr.mu.RLock()
+	_, tracked := mgr.files[segID]
+	mgr.mu.RUnlock()
+	if tracked {
+		t.Fatalf("segment %d should not be tracked after disappearing during refresh", segID)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "value-l0-000001.log")); !os.IsNotExist(err) {
+		t.Fatalf("expected segment to be removed, stat err=%v", err)
+	}
+}
+
+func TestManagerRegisterSegment_ReinitializesNilFilesMap(t *testing.T) {
+	dir := t.TempDir()
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() {
+		if mgr != nil {
+			_ = mgr.Close()
+		}
+	}()
+
+	mgr.mu.Lock()
+	mgr.files = nil
+	mgr.mu.Unlock()
+
+	segID := writeTestSegment(t, dir, 0, 1, 1, bytes.Repeat([]byte("m"), 64))
+
+	path := filepath.Join(dir, "value-l0-000001.log")
+	if err := mgr.RegisterSegment(path, segID); err != nil {
+		t.Fatalf("RegisterSegment: %v", err)
+	}
+
+	mgr.mu.RLock()
+	_, ok := mgr.files[segID]
+	mgr.mu.RUnlock()
+	if !ok {
+		t.Fatalf("segment %d missing after RegisterSegment reinitialized files map", segID)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	mgr = nil
 }

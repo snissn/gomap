@@ -10,18 +10,32 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestValueLogGC_EmptySet_NoValueLogSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats != (ValueLogGCStats{}) {
+		t.Fatalf("expected zero stats for empty value-log set, got %+v", stats)
+	}
+}
+
 func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{
-		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1,
-	})
+	db, err := Open(Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -105,111 +119,170 @@ func TestValueLogGC_RemovesUnreferencedSegment(t *testing.T) {
 	}
 }
 
-func TestValueLogGC_FenceMode_NestedBlobRefSegmentLiveness(t *testing.T) {
-	testValueLogGCNestedBlobRefSegmentLiveness(t, IndexOuterLeafModeV2FencePtr)
-}
-
-func TestValueLogGC_V1LeafLogRoute_NestedBlobRefSegmentLiveness(t *testing.T) {
-	testValueLogGCNestedBlobRefSegmentLiveness(t, IndexOuterLeafModeV1LeafLogRoute)
-}
-
-func testValueLogGCNestedBlobRefSegmentLiveness(t *testing.T, mode string) {
+func TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{
-		Dir:                dir,
-		IndexOuterLeafMode: mode,
-		ValueLog: ValueLogOptions{
-			ForcePointers: true,
-		},
-	})
+	db, err := Open(Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer func() { _ = db.Close() }()
+
+	appendPointersInNewSegment(t, dir, 0, 1, 1_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane0-seq1|"), 32)
+	})
+	appendPointersInNewSegment(t, dir, 0, 2, 2_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane0-seq2|"), 32)
+	})
+	appendPointersInNewSegment(t, dir, 250, 1, 3_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane250-seq1|"), 32)
+	})
+	appendPointersInNewSegment(t, dir, 250, 2, 4_000, 1, func(int) []byte {
+		return bytes.Repeat([]byte("lane250-seq2|"), 32)
+	})
+
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+
+	protected := []string{
+		filepath.Join(dir, "wal", "value-l0-000002.log"),
+	}
+
+	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{ProtectedPaths: protected})
+	if err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+	if stats.SegmentsDeleted < 2 {
+		t.Fatalf("expected GC to delete historical unprotected rewrite-lane segments, got %+v", stats)
+	}
+
+	for _, path := range []string{
+		filepath.Join(dir, "wal", "value-l250-000001.log"),
+		filepath.Join(dir, "wal", "value-l250-000002.log"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be deleted, err=%v", filepath.Base(path), err)
+		}
+	}
+
+	for _, path := range []string{
+		filepath.Join(dir, "wal", "value-l0-000001.log"),
+		filepath.Join(dir, "wal", "value-l0-000002.log"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected protected-lane window to retain %s, err=%v", filepath.Base(path), err)
+		}
+	}
+}
+
+func TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog(t *testing.T) {
+	dir := t.TempDir()
 
 	walDir := filepath.Join(dir, "wal")
 	if err := os.MkdirAll(walDir, 0o755); err != nil {
 		t.Fatalf("mkdir wal: %v", err)
 	}
 
-	blobPath := filepath.Join(walDir, "value-l0-000001.log")
-	blobFileID, err := valuelog.EncodeFileID(0, 1)
+	// Use an otherwise-unused lane so TreeDB can create its own lane0 segments
+	// for outer leaves without colliding with this test's explicit segments.
+	const lane uint32 = 100
+
+	path1 := filepath.Join(walDir, "value-l100-000001.log")
+	id1, err := valuelog.EncodeFileID(lane, 1)
 	if err != nil {
-		t.Fatalf("blob file id: %v", err)
+		t.Fatalf("fileid1: %v", err)
 	}
-	blobWriter, err := valuelog.NewWriter(blobPath, blobFileID)
+	w1, err := valuelog.NewWriter(path1, id1)
 	if err != nil {
-		t.Fatalf("blob writer: %v", err)
+		t.Fatalf("writer1: %v", err)
 	}
-	blobPtr, err := blobWriter.Append(0, nil, 10_000, bytes.Repeat([]byte("blob|"), 128))
+	ptr1, err := w1.Append(0, nil, 1, bytes.Repeat([]byte("value-1|"), 64))
 	if err != nil {
-		_ = blobWriter.Close()
-		t.Fatalf("append blob: %v", err)
+		t.Fatalf("append1: %v", err)
 	}
-	if err := blobWriter.Close(); err != nil {
-		t.Fatalf("close blob writer: %v", err)
+	if err := w1.Close(); err != nil {
+		t.Fatalf("close1: %v", err)
 	}
 
-	key := []byte("k-nested")
-	outerPayload, err := outerleaf.EncodeSingleBlobRef(nil, key, blobPtr, uint8(ValueLogBlockSnappy), 16)
+	path2 := filepath.Join(walDir, "value-l100-000002.log")
+	id2, err := valuelog.EncodeFileID(lane, 2)
 	if err != nil {
-		t.Fatalf("EncodeSingleBlobRef: %v", err)
+		t.Fatalf("fileid2: %v", err)
 	}
-	outerPath := filepath.Join(walDir, "value-l0-000002.log")
-	outerFileID, err := valuelog.EncodeFileID(0, 2)
+	w2, err := valuelog.NewWriter(path2, id2)
 	if err != nil {
-		t.Fatalf("outer file id: %v", err)
+		t.Fatalf("writer2: %v", err)
 	}
-	outerWriter, err := valuelog.NewWriter(outerPath, outerFileID)
+	ptr2, err := w2.Append(0, nil, 2, bytes.Repeat([]byte("value-2|"), 64))
 	if err != nil {
-		t.Fatalf("outer writer: %v", err)
+		t.Fatalf("append2: %v", err)
 	}
-	outerPtr, err := outerWriter.Append(0, nil, 10_001, outerPayload)
-	if err != nil {
-		_ = outerWriter.Close()
-		t.Fatalf("append outer: %v", err)
-	}
-	if err := outerWriter.Close(); err != nil {
-		t.Fatalf("close outer writer: %v", err)
+	if err := w2.Close(); err != nil {
+		t.Fatalf("close2: %v", err)
 	}
 
-	b := db.NewBatch().(*Batch)
-	if err := b.SetPointer(key, outerPtr); err != nil {
-		_ = b.Close()
-		t.Fatalf("SetPointer: %v", err)
+	db, err := Open(Options{
+		Dir:                        dir,
+		DisableBackgroundPrune:     true,
+		IndexOuterLeavesInValueLog: true,
+		IndexColumnarLeaves:        true,
+		IndexPackedValuePtr:        true,
+		LeafPrefixCompression:      true,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	leafLog := newRewriteWriter(filepath.Join(dir, "wal"), 0, 0, 0)
+	leafLog.blockCompression = false
+	leafLog.blockCodec = valuelog.BlockCodecSnappy
+	db.SetLeafPageLog(leafLog)
+	defer func() {
+		_ = leafLog.Close()
+		_ = db.Close()
+	}()
+
+	b := db.NewBatch()
+	ptrBatch, ok := b.(interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+	})
+	if !ok {
+		t.Fatalf("missing SetPointer on batch")
+	}
+	if err := ptrBatch.SetPointer([]byte("k1"), ptr1); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := ptrBatch.SetPointer([]byte("k2"), ptr2); err != nil {
+		t.Fatalf("set k2: %v", err)
 	}
 	if err := b.Write(); err != nil {
-		_ = b.Close()
-		t.Fatalf("write pointer batch: %v", err)
+		t.Fatalf("write: %v", err)
 	}
 	_ = b.Close()
 
+	// Lane100 seq2 is active; the GC must still treat the older referenced
+	// segment (seq1) as referenced and keep it.
 	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
-		t.Fatalf("ValueLogGC while referenced: %v", err)
-	}
-	if _, err := os.Stat(blobPath); err != nil {
-		t.Fatalf("expected nested blob segment to remain while referenced: %v", err)
+		t.Fatalf("ValueLogGC: %v", err)
 	}
 
-	if err := db.Delete(key); err != nil {
-		t.Fatalf("Delete: %v", err)
+	if _, err := os.Stat(path1); err != nil {
+		t.Fatalf("expected referenced non-active segment to remain, err=%v", err)
 	}
-	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
-		t.Fatalf("ValueLogGC after delete: %v", err)
+
+	got, err := db.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("get k1: %v", err)
 	}
-	if _, err := os.Stat(blobPath); err == nil || !os.IsNotExist(err) {
-		t.Fatalf("expected nested blob segment to be collected after delete, err=%v", err)
+	if !bytes.Equal(got, bytes.Repeat([]byte("value-1|"), 64)) {
+		t.Fatalf("k1 mismatch after GC")
 	}
 }
 
 func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{
-		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1,
-	})
+	db, err := Open(Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -272,10 +345,7 @@ func TestValueLogGC_IncrementalParityWithFullScan(t *testing.T) {
 func TestValueLogGC_IncrementalCounterRollbackOnFailedCommit(t *testing.T) {
 	dir := t.TempDir()
 
-	db, err := Open(Options{
-		Dir:                dir,
-		IndexOuterLeafMode: IndexOuterLeafModeV1,
-	})
+	db, err := Open(Options{Dir: dir})
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

@@ -1,6 +1,7 @@
 package dictdb
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -146,5 +147,58 @@ func TestStoreRehydratesHashForExistingBytes(t *testing.T) {
 	}
 	if gotID := binary.BigEndian.Uint64(val); gotID != id {
 		t.Fatalf("expected hash id %d, got %d", id, gotID)
+	}
+}
+
+func TestStorePutGet_PointerPath_Reopen(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if store != nil {
+			_ = store.Close()
+		}
+	})
+
+	ctx := context.Background()
+	inline := store.backend.InlineThreshold()
+	if inline <= 0 {
+		inline = 64
+	}
+	payload := bytes.Repeat([]byte("compressible-"), (inline/len("compressible-")+1)*8)
+	if len(payload) <= inline {
+		t.Fatalf("expected payload > inline threshold (%d), got %d", inline, len(payload))
+	}
+
+	id, err := store.PutDictBytes(ctx, payload)
+	if err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	got, err := store.GetDictBytes(ctx, id)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("get mismatch (len=%d)", len(got))
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	store = nil
+
+	reopen, err := Open(dir, db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer reopen.Close()
+
+	got2, err := reopen.GetDictBytes(ctx, id)
+	if err != nil {
+		t.Fatalf("get reopen: %v", err)
+	}
+	if !bytes.Equal(got2, payload) {
+		t.Fatalf("get reopen mismatch (len=%d)", len(got2))
 	}
 }

@@ -563,6 +563,65 @@ func (s *SkipList) Count() int {
 	return s.count
 }
 
+func (s *SkipList) seekGE(key []byte) uint32 {
+	if key == nil {
+		return s.getNext(s.head, 0)
+	}
+
+	x := s.head
+	top := s.height
+	if top < 1 {
+		top = 1
+	}
+	for i := top - 1; i >= 0; i-- {
+		for {
+			next := s.getNext(x, i)
+			if next == 0 {
+				break
+			}
+			k := s.getKey(next)
+			if bytes.Compare(k, key) >= 0 {
+				break
+			}
+			x = next
+		}
+	}
+	return s.getNext(x, 0)
+}
+
+func (s *SkipList) findLessThan(key []byte) uint32 {
+	if key == nil {
+		last := s.tail[0]
+		if last == 0 || last == s.head {
+			return 0
+		}
+		return last
+	}
+
+	x := s.head
+	top := s.height
+	if top < 1 {
+		top = 1
+	}
+	for i := top - 1; i >= 0; i-- {
+		for {
+			next := s.getNext(x, i)
+			if next == 0 {
+				break
+			}
+			k := s.getKey(next)
+			if bytes.Compare(k, key) >= 0 {
+				break
+			}
+			x = next
+		}
+	}
+	if x == s.head {
+		return 0
+	}
+	return x
+}
+
 // Iterator support
 type Iterator struct {
 	sl    *SkipList
@@ -577,27 +636,7 @@ func (s *SkipList) NewIterator(start, end []byte) *Iterator {
 }
 
 func (it *Iterator) Seek(key []byte) {
-	if key == nil {
-		it.curr = it.sl.getNext(it.sl.head, 0)
-		it.valid = it.curr != 0
-		return
-	}
-
-	x := it.sl.head
-	for i := maxHeight - 1; i >= 0; i-- {
-		for {
-			next := it.sl.getNext(x, i)
-			if next == 0 {
-				break
-			}
-			k := it.sl.getKey(next)
-			if bytes.Compare(k, key) >= 0 {
-				break
-			}
-			x = next
-		}
-	}
-	it.curr = it.sl.getNext(x, 0)
+	it.curr = it.sl.seekGE(key)
 	it.valid = it.curr != 0
 }
 
@@ -683,4 +722,147 @@ func (it *Iterator) Error() error {
 
 func (it *Iterator) Domain() (start, end []byte) {
 	return nil, nil
+}
+
+type ReverseIterator struct {
+	sl    *SkipList
+	start []byte
+	end   []byte
+	curr  uint32
+	valid bool
+}
+
+func (s *SkipList) NewReverseIterator(start, end []byte) *ReverseIterator {
+	it := &ReverseIterator{sl: s, start: start, end: end}
+	it.Seek(nil)
+	return it
+}
+
+func (it *ReverseIterator) Seek(key []byte) {
+	if it == nil || it.sl == nil {
+		return
+	}
+	if key == nil || (it.end != nil && bytes.Compare(key, it.end) >= 0) {
+		if it.end == nil {
+			it.curr = it.sl.findLessThan(nil)
+		} else {
+			it.curr = it.sl.findLessThan(it.end)
+		}
+		it.valid = it.curr != 0
+		it.clampStart()
+		return
+	}
+	pos := it.sl.seekGE(key)
+	if pos == 0 {
+		it.curr = it.sl.findLessThan(nil)
+		it.valid = it.curr != 0
+		it.clampStart()
+		return
+	}
+	k := it.sl.getKey(pos)
+	if bytes.Equal(k, key) {
+		it.curr = pos
+		it.valid = true
+		it.clampStart()
+		return
+	}
+	it.curr = it.sl.findLessThan(key)
+	it.valid = it.curr != 0
+	it.clampStart()
+}
+
+func (it *ReverseIterator) Next() {
+	if !it.valid {
+		return
+	}
+	key := it.sl.getKey(it.curr)
+	it.curr = it.sl.findLessThan(key)
+	it.valid = it.curr != 0
+	it.clampStart()
+}
+
+func (it *ReverseIterator) Valid() bool { return it.valid }
+
+func (it *ReverseIterator) UnsafeKey() []byte {
+	if !it.valid || it.curr == 0 {
+		return nil
+	}
+	return it.sl.getKey(it.curr)
+}
+
+func (it *ReverseIterator) UnsafeValue() []byte {
+	if !it.valid || it.curr == 0 {
+		return nil
+	}
+	flags := it.sl.getFlags(it.curr)
+	if flags&flagPointer != 0 {
+		val := it.sl.getValue(it.curr)
+		if len(val) > page.ValuePtrSize {
+			return val[page.ValuePtrSize:]
+		}
+		return nil
+	}
+	return it.sl.getValue(it.curr)
+}
+
+func (it *ReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.valid || it.curr == 0 {
+		return nil, page.ValuePtr{}, 0
+	}
+	val := it.sl.getValue(it.curr)
+	flags := it.sl.getFlags(it.curr)
+	if flags&flagPointer != 0 {
+		if len(val) >= page.ValuePtrSize {
+			inline := []byte(nil)
+			if len(val) > page.ValuePtrSize {
+				inline = val[page.ValuePtrSize:]
+			}
+			return inline, page.DecodeValuePtr(val[:page.ValuePtrSize]), flags
+		}
+		return nil, page.ValuePtr{}, flags
+	}
+	return val, page.ValuePtr{}, flags
+}
+
+func (it *ReverseIterator) IsDeleted() bool {
+	if !it.valid || it.curr == 0 {
+		return false
+	}
+	return it.sl.getFlags(it.curr)&flagDeleted != 0
+}
+
+func (it *ReverseIterator) Close() error { return nil }
+
+func (it *ReverseIterator) Key() []byte { return it.UnsafeKey() }
+
+func (it *ReverseIterator) Value() []byte { return it.UnsafeValue() }
+
+func (it *ReverseIterator) KeyCopy(dst []byte) []byte {
+	k := it.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *ReverseIterator) ValueCopy(dst []byte) []byte {
+	v := it.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
+func (it *ReverseIterator) Error() error { return nil }
+
+func (it *ReverseIterator) Domain() (start, end []byte) { return it.start, it.end }
+
+func (it *ReverseIterator) clampStart() {
+	if !it.valid || it.start == nil {
+		return
+	}
+	if key := it.sl.getKey(it.curr); bytes.Compare(key, it.start) < 0 {
+		it.curr = 0
+		it.valid = false
+	}
 }

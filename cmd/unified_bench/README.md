@@ -54,7 +54,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - Uses `GetMany` when available.
 - Falls back to per-key `Get` otherwise.
 - Any `GetMany`/`Get` error fails the test.
-- Missing keys are not treated as benchmark-fatal by adapter/API contract.
+- Missing keys are not treated as benchmark-fatal by default (adapter/API contract). Use `-read-require-hit` to fail fast on misses and validate value lengths.
 
 ## Common flags
 
@@ -74,6 +74,7 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-val-pool-size` number of distinct values to cycle through for `-val-pattern` (`0` = auto)
 - `-batchsize` batch size (default 8000)
 - `-read-workers` number of goroutines for `random_read_parallel` and `random_read_parallel_acquire_snapshot` (default `GOMAXPROCS`)
+- `-read-require-hit` fail read benchmarks (`random_read*`, `random_read_batch`) on misses and validate value length matches `-valsize`
 - `-range-queries` number of prefix/range queries (default 200)
 - `-range-span` number of keys per range (default 100)
 - `-leveldb-block-compression` LevelDB: block compression mode (`default|on|off|both`)
@@ -96,19 +97,6 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-treedb-vlog-auto-policy` TreeDB: value-log auto policy (`balanced|throughput|size`)
 - `-treedb-vlog-dict-frame-encode-level` TreeDB: dict frame zstd encoder level (`engine|fastest|default|better|best|all|<int>`)
 - `-treedb-vlog-dict-frame-entropy` TreeDB: dict frame entropy mode (`engine|on|off|both`)
-- `-treedb-index-outer-leaf-mode` TreeDB: outer-leaf mode selector (`v1|v2_blockptr|v2_fenceptr`, default `v2_fenceptr`)
-- `-treedb-outer-leaf-block-target-bytes` TreeDB: target block size for v2 outer-leaf block payloads
-- `-treedb-outer-leaf-block-codec` TreeDB: block codec for v2 outer-leaf payloads (`snappy|lz4`)
-- `-treedb-outer-leaf-block-restart-interval` TreeDB: restart interval metadata for v2 outer-leaf payloads
-- `-treedb-outer-leaf-block-cache-entries` TreeDB: decoded outer-leaf block cache capacity in entries (`0` disables cache)
-- `-outerleaf-approx-value-sizes` outerleaf_approx matrix value sizes (CSV, default `128,1024`)
-- `-outerleaf-approx-block-cache-mb` outerleaf_approx simulated outer-block cache size in MiB (default `256`; `0` disables cache model)
-- `-outerleaf-approx-lookup-steady-state` outerleaf_approx lookup p95 mode (`true` prewarms simulated cache before timing; `false` measures cold-start)
-- `-outerleaf-approx-fence-fpr` outerleaf_approx simulated fence-index false-positive rate `[0,1]`
-- `-outerleaf-approx-wal-bytes-per-record` outerleaf_approx WAL metadata-byte model per record
-- `-outerleaf-approx-vlog-record-overhead-bytes` outerleaf_approx value-log per-record overhead model
-- `-outerleaf-approx-gate-wa-increase` outerleaf_approx write-amplification increase gate threshold
-- `-outerleaf-approx-report-json` optional JSON report output path for outerleaf_approx
 - `-seed` PRNG seed for randomized tests (default 1; `0` = time-based)
 - `-keep` keep temp DB directories after run
 - `-settle-before-scans` close+reopen DBs before `full_scan`/`prefix_scan` to measure scan performance on a “settled” (fully flushed) state
@@ -127,8 +115,9 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
 - `-trace` write runtime execution trace to file
 - `-max-wall` abort the run if wall time exceeds this duration (guardrail; `0` = disabled)
 - `-max-rss-mb` abort the run if RSS exceeds this many MiB (guardrail; `0` = disabled; Linux-only)
-- `-checkpoint-between-tests` force a best-effort durability checkpoint between tests (DBs that support `Checkpoint()`)
+- `-checkpoint-between-tests` force a best-effort durability checkpoint between tests (DBs that support `Checkpoint()`), and also once after the final test so end-of-run disk usage reflects a settled state
 - `-vacuum-between-tests` vacuum supported DBs between tests (implies `-checkpoint-between-tests`; TreeDB uses `VacuumIndexOnline`)
+- `-treedb-vlog-rewrite-after-run` run a full TreeDB value-log rewrite after the run and report before/after disk usage + the data directory path
 - `-checkpoint-every-ops` force a best-effort durability checkpoint every N ops during write-heavy tests (DBs that support `Checkpoint()`)
 - `-checkpoint-every-bytes` force a best-effort durability checkpoint every N approx bytes during write-heavy tests (DBs that support `Checkpoint()`)
 - `-suite` named suite:
@@ -140,27 +129,8 @@ GOWORK=off GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -p 1 . \
   - `bigkeys_guard` — small TreeDB flush threshold + large keycount, with wall/RSS caps for CI guardrails
   - `longmix` — long-ish mixed workload + settle boundary with fragmentation reports
   - `sload_readheavy` — settled point reads with value-log pointers + forkchoice-style batch commits
-  - `outerleaf_approx` — fidelity-first approximation matrix for fence-key -> outer-block design across `random_write_parallel`, `random_read`, `prefix_scan`, `churn_settle` at value sizes `128B` and `1KB`, with size/lookup/write/WA gates and optional JSON report
   - `maintenance_budget` — sweep TreeDB maintenance K values; reports checkpoint time vs index size, recommends K
 - `-outdir` output directory for suite artifacts (plots/images; used by `-suite readme`)
-
-## outerleaf_approx Gate Troubleshooting
-
-- `bytes` gate failing:
-  - check `index_bytes_source` in the report assumptions.
-  - if chunk-rounded `index.db` bytes dominate, compare `treedb.pages.total*page_size` (logical index pages) and/or run post-write `VacuumIndex*` to remove slack before interpreting density deltas.
-  - tune `-treedb-outer-leaf-block-target-bytes` and codec (`snappy|lz4`) to improve payload density.
-- `lookup` gate failing:
-  - inspect `lookup_phase`, `cache_hits`, `cache_misses`, `fallback_searches`, and `fence_false_positives`.
-  - increase `-outerleaf-approx-block-cache-mb` and/or reduce block count (larger outer blocks) to raise hit ratio on random reads.
-  - if `lookup_phase=steady_state_prewarmed_cache`, misses usually indicate cache-capacity pressure rather than cold-start effects.
-  - reduce `-outerleaf-approx-fence-fpr` when evaluating idealized predecessor routing.
-- `write` gate failing:
-  - compare `write_proxy_ops_baseline` vs `write_proxy_ops_outer`.
-  - if outer path regresses, check codec/target choices and block-builder overhead from very small targets.
-- `wa` gate failing:
-  - validate `-outerleaf-approx-wal-bytes-per-record` and `-outerleaf-approx-vlog-record-overhead-bytes` assumptions.
-  - compare `wa_*_total_bytes` to isolate whether WAL model or value payload size drives the increase.
 
 ## Standard Profile Workflow (`benchprof`)
 

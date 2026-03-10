@@ -27,6 +27,9 @@ func (t *Tree) UpdateValuePtrInPlace(key []byte, oldPtr, newPtr page.ValuePtr) (
 	verifyAlways := t.pager.VerifyOnRead()
 
 	for depth := 0; depth < 50; depth++ {
+		if _, ok := page.DecodeLeafRef(currID); ok {
+			return false, 0, errors.New("cannot update value pointer in-place with value-log-backed leaf pages")
+		}
 		data, err := t.pager.Get(currID)
 		if err != nil {
 			return false, 0, err

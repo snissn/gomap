@@ -558,6 +558,82 @@ func (m *HashSorted) NewIterator(start, end []byte) iterator.UnsafeIterator {
 	return it
 }
 
+func (m *HashSorted) NewReverseIterator(start, end []byte) iterator.UnsafeIterator {
+	m.mu.RLock()
+	frozen := m.frozen
+	finalizeDone := m.finalizeDone
+	sortedValid := m.sortedValid
+	m.mu.RUnlock()
+
+	startKey := ""
+	hasStart := false
+	if start != nil {
+		startKey = bytesToStringNoCopy(start)
+		hasStart = true
+	}
+	endKey := ""
+	hasEnd := false
+	if end != nil {
+		endKey = bytesToStringNoCopy(end)
+		hasEnd = true
+	}
+
+	if frozen {
+		if finalizeDone != nil {
+			<-finalizeDone
+		}
+		m.ensureIndexFrozen()
+
+		m.mu.RLock()
+		keys := m.sortedKeys
+		idx := len(keys) - 1
+		if hasEnd {
+			pos := sort.SearchStrings(keys, endKey)
+			idx = pos - 1
+		}
+		it := hashReverseIteratorPool.Get().(*hashReverseIterator)
+		*it = hashReverseIterator{
+			mt:       m,
+			keys:     keys,
+			idx:      idx,
+			start:    startKey,
+			hasStart: hasStart,
+			end:      endKey,
+			hasEnd:   hasEnd,
+			mu:       &m.mu,
+		}
+		it.refresh()
+		return it
+	}
+
+	if !sortedValid {
+		m.mu.Lock()
+		m.ensureSortedLocked()
+		m.mu.Unlock()
+	}
+
+	m.mu.RLock()
+	keys := m.sortedKeys
+	idx := len(keys) - 1
+	if hasEnd {
+		pos := sort.SearchStrings(keys, endKey)
+		idx = pos - 1
+	}
+	it := hashReverseIteratorPool.Get().(*hashReverseIterator)
+	*it = hashReverseIterator{
+		mt:       m,
+		keys:     keys,
+		idx:      idx,
+		start:    startKey,
+		hasStart: hasStart,
+		end:      endKey,
+		hasEnd:   hasEnd,
+		mu:       &m.mu,
+	}
+	it.refresh()
+	return it
+}
+
 func (m *HashSorted) ensureSortedLocked() {
 	if m.sortedValid {
 		return
@@ -1103,6 +1179,196 @@ var hashIteratorPool = sync.Pool{
 	New: func() any {
 		return new(hashIterator)
 	},
+}
+
+type hashReverseIterator struct {
+	mt       *HashSorted
+	keys     []string
+	idx      int
+	start    string
+	hasStart bool
+	end      string
+	hasEnd   bool
+	curKey   string
+	cur      hashEntry
+	loaded   bool
+	valid    bool
+	mu       *sync.RWMutex
+}
+
+var hashReverseIteratorPool = sync.Pool{
+	New: func() any {
+		return new(hashReverseIterator)
+	},
+}
+
+func (it *hashReverseIterator) Seek(key []byte) {
+	if it.keys == nil {
+		it.valid = false
+		it.loaded = false
+		return
+	}
+	if key == nil || (it.hasEnd && strings.Compare(bytesToStringNoCopy(key), it.end) >= 0) {
+		if it.hasEnd {
+			it.idx = sort.SearchStrings(it.keys, it.end) - 1
+		} else {
+			it.idx = len(it.keys) - 1
+		}
+		it.refresh()
+		return
+	}
+	seekKey := bytesToStringNoCopy(key)
+	pos := sort.Search(len(it.keys), func(i int) bool {
+		return strings.Compare(it.keys[i], seekKey) > 0
+	})
+	it.idx = pos - 1
+	it.refresh()
+}
+
+func (it *hashReverseIterator) Next() {
+	it.idx--
+	it.refresh()
+}
+
+func (it *hashReverseIterator) Valid() bool {
+	return it.valid
+}
+
+func (it *hashReverseIterator) UnsafeKey() []byte {
+	if !it.valid {
+		return nil
+	}
+	return stringToBytesNoCopy(it.curKey)
+}
+
+func (it *hashReverseIterator) UnsafeValue() []byte {
+	if !it.valid {
+		return nil
+	}
+	it.ensureLoaded()
+	return it.cur.value
+}
+
+func (it *hashReverseIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.valid {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	it.ensureLoaded()
+	if it.cur.flags&node.FlagTombstone != 0 {
+		return nil, page.ValuePtr{}, node.FlagTombstone
+	}
+	if it.cur.flags&node.FlagPointer != 0 {
+		return it.cur.value, it.cur.ptr, it.cur.flags
+	}
+	return it.cur.value, page.ValuePtr{}, node.FlagInline
+}
+
+func (it *hashReverseIterator) Key() []byte {
+	return it.UnsafeKey()
+}
+
+func (it *hashReverseIterator) Value() []byte {
+	return it.UnsafeValue()
+}
+
+func (it *hashReverseIterator) KeyCopy(dst []byte) []byte {
+	k := it.UnsafeKey()
+	if k == nil {
+		return nil
+	}
+	return append(dst[:0], k...)
+}
+
+func (it *hashReverseIterator) ValueCopy(dst []byte) []byte {
+	v := it.UnsafeValue()
+	if v == nil {
+		return nil
+	}
+	return append(dst[:0], v...)
+}
+
+func (it *hashReverseIterator) IsDeleted() bool {
+	if !it.valid {
+		return false
+	}
+	if !it.mt.hasDeletes {
+		return false
+	}
+	if it.mt.frozen {
+		if it.idx >= 0 && it.idx < len(it.mt.sortedDel) {
+			return it.mt.sortedDel[it.idx]
+		}
+	}
+	it.ensureLoaded()
+	return it.cur.flags&node.FlagTombstone != 0
+}
+
+func (it *hashReverseIterator) Error() error {
+	return nil
+}
+
+func (it *hashReverseIterator) Close() error {
+	if it.mu != nil {
+		it.mu.RUnlock()
+	}
+	*it = hashReverseIterator{}
+	hashReverseIteratorPool.Put(it)
+	return nil
+}
+
+func (it *hashReverseIterator) Domain() (start, end []byte) {
+	if !it.hasStart && !it.hasEnd {
+		return nil, nil
+	}
+	var s []byte
+	if it.hasStart {
+		s = []byte(it.start)
+	}
+	var e []byte
+	if it.hasEnd {
+		e = []byte(it.end)
+	}
+	return s, e
+}
+
+func (it *hashReverseIterator) refresh() {
+	it.valid = false
+	it.loaded = false
+	it.curKey = ""
+	if it.idx < 0 || it.idx >= len(it.keys) {
+		return
+	}
+	k := it.keys[it.idx]
+	if it.hasEnd && strings.Compare(k, it.end) >= 0 {
+		return
+	}
+	if it.hasStart && strings.Compare(k, it.start) < 0 {
+		return
+	}
+	it.curKey = k
+	it.valid = true
+}
+
+func (it *hashReverseIterator) ensureLoaded() {
+	if it.loaded {
+		return
+	}
+	if !it.valid || it.curKey == "" {
+		return
+	}
+	idx, ok := it.mt.items[it.curKey]
+	if !ok {
+		it.valid = false
+		return
+	}
+	i := int(idx)
+	if i < 0 || i >= len(it.mt.entries) {
+		it.valid = false
+		return
+	}
+	ent := it.mt.entries[i]
+	it.cur = ent
+	it.loaded = true
 }
 
 func (it *hashIterator) Seek(key []byte) {

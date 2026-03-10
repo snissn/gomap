@@ -29,6 +29,7 @@ import (
 	"time"
 	"unicode"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/internal/benchprof"
 	"github.com/snissn/gomap/kvstore"
@@ -46,6 +47,7 @@ var (
 	batchSize          = flag.Int("batchsize", 8000, "Size of batches")
 	writeWorkers       = flag.Int("write-workers", 1, "Number of goroutines for *_parallel write tests (default 1)")
 	readWorkers        = flag.Int("read-workers", runtime.GOMAXPROCS(0), "Number of goroutines for random_read_parallel and random_read_parallel_acquire_snapshot (default GOMAXPROCS)")
+	readRequireHit     = flag.Bool("read-require-hit", false, "Fail read benchmarks on misses and validate value length matches -valsize")
 	rangeQueries       = flag.Int("range-queries", 200, "number of range queries")
 	rangeSpan          = flag.Int("range-span", 100, "number of keys per range")
 	keyCountsArg       = flag.String("keycounts", "", "Comma-separated key counts to sweep over (overrides -keys)")
@@ -90,6 +92,7 @@ var (
 	settleBeforeScans           = flag.Bool("settle-before-scans", false, "Close+reopen DBs before scan tests to measure settled scan performance (flushes caches/WAL)")
 	treedbCacheStatsBeforeReads = flag.Bool("treedb-cache-stats-before-reads", false, "Print select treedb.cache.* stats before read/scan tests (treedb only)")
 	treedbCacheStatsAfterTests  = flag.Bool("treedb-cache-stats-after-tests", false, "Print select treedb.cache.* stats after each benchmark test (treedb only)")
+	treedbVlogRewriteAfterRun   = flag.Bool("treedb-vlog-rewrite-after-run", false, "Run a full TreeDB value-log rewrite after the benchmark run and report before/after disk usage (treedb only)")
 )
 
 var explicitFlags = map[string]bool{}
@@ -97,6 +100,8 @@ var explicitFlags = map[string]bool{}
 func flagExplicit(name string) bool {
 	return explicitFlags[name]
 }
+
+const checkpointPostRunLabel = "post-run"
 
 type DBInstance struct {
 	Name    string
@@ -115,6 +120,13 @@ type BenchConfig struct {
 	RangeSpan     int
 	ValuePattern  string
 	ValuePoolSize int
+	// ReadRequireHit makes read benchmarks fail fast when a read misses.
+	// It is intended for correctness guardrails, not throughput reporting.
+	//
+	// When enabled, read paths assert both:
+	//   - no error (or miss) is returned
+	//   - the returned value length equals ValueSize
+	ReadRequireHit bool
 
 	DBsArg        string
 	DBsExcludeArg string
@@ -166,6 +178,7 @@ type BenchConfig struct {
 
 	TreeDBCacheStatsBeforeReads bool
 	TreeDBCacheStatsAfterTests  bool
+	TreeDBVlogRewriteAfterRun   bool
 }
 
 type dirDiskUsage struct {
@@ -183,6 +196,7 @@ type BenchRun struct {
 	VacuumDurations     map[string]map[string]time.Duration
 	VacuumIndexBytes    map[string]map[string][2]uint64 // [0]=before, [1]=after (best-effort; treedb only)
 	TreeDBDiskUsage     map[string]treeDBDiskUsage
+	TreeDBVlogRewrite   map[string]treeDBVlogRewriteReport
 	TreeDBStats         map[string]map[string]string
 	DiskUsage           map[string]dirDiskUsage
 }
@@ -234,6 +248,22 @@ type treeDBDiskUsage struct {
 
 	DictIndexBytes uint64
 	DictWAL        walDiskUsage
+}
+
+type treeDBVlogRewriteReport struct {
+	Dir string
+
+	BeforeUsage dirDiskUsage
+	AfterUsage  dirDiskUsage
+
+	BeforeTree treeDBDiskUsage
+	AfterTree  treeDBDiskUsage
+
+	SegmentsBefore int
+	SegmentsAfter  int
+	BytesBefore    int64
+	BytesAfter     int64
+	RecordsCopied  int
 }
 
 type benchKeyShape uint8
@@ -357,6 +387,7 @@ func main() {
 		RangeSpan:                        *rangeSpan,
 		ValuePattern:                     *valPattern,
 		ValuePoolSize:                    *valPoolSize,
+		ReadRequireHit:                   *readRequireHit,
 		DBsArg:                           *dbsArg,
 		DBsExcludeArg:                    *dbsExcludeArg,
 		TestsArg:                         *testArg,
@@ -383,6 +414,7 @@ func main() {
 		SettleBeforeScans:                *settleBeforeScans,
 		TreeDBCacheStatsBeforeReads:      *treedbCacheStatsBeforeReads,
 		TreeDBCacheStatsAfterTests:       *treedbCacheStatsAfterTests,
+		TreeDBVlogRewriteAfterRun:        *treedbVlogRewriteAfterRun,
 		TreeDBIterDebug:                  *treedbIterDebug,
 		TreeDBIterDebugLimit:             *treedbIterDebugLimit,
 		TreeDBDisableWAL:                 *treedbDisableWAL,
@@ -550,12 +582,6 @@ func main() {
 				log.Fatalf("storage_ceiling suite: %v", err)
 			}
 			fmt.Print(out)
-		case "outerleaf_approx", "outerleaf-approx":
-			out, err := runOuterLeafApproxSuite(baseCfg)
-			if err != nil {
-				log.Fatalf("outerleaf_approx suite: %v", err)
-			}
-			fmt.Print(out)
 		case "vlog_dict", "vlog-dict":
 			out, err := runValueLogDictSuite(baseCfg)
 			if err != nil {
@@ -637,6 +663,11 @@ func main() {
 				}
 			}
 		}
+		if len(run.TreeDBVlogRewrite) > 0 {
+			fmt.Println()
+			fmt.Println("TreeDB ValueLog Rewrite (After Run)")
+			fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
+		}
 		if hasArtifacts {
 			runBenchprof(*profileDir)
 		}
@@ -685,6 +716,11 @@ func main() {
 						fmt.Printf("  %s\n", line)
 					}
 				}
+			}
+			if len(run.TreeDBVlogRewrite) > 0 {
+				fmt.Println()
+				fmt.Println("TreeDB ValueLog Rewrite (After Run)")
+				fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 			}
 		}
 	case "markdown":
@@ -1058,14 +1094,6 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_generation.vacuum.failures",
 		"treedb.cache.vlog_generation.remap.successes",
 		"treedb.cache.vlog_generation.remap.failures",
-		"treedb.cache.v2_fenceptr.deferred_candidates",
-		"treedb.cache.v2_fenceptr.deferred_groups",
-		"treedb.cache.v2_fenceptr.deferred_pending_keys_estimate",
-		"treedb.cache.v2_fenceptr.deferred_pending_bytes_estimate",
-		"treedb.cache.v2_fenceptr.avg_keys_per_group",
-		"treedb.cache.v2_fenceptr.assist_calls",
-		"treedb.cache.v2_fenceptr.assist_flushed_memtables",
-		"treedb.cache.v2_fenceptr.assist_early_triggers",
 		"treedb.vlog.outer_leaf_block_cache.policy",
 		"treedb.vlog.outer_leaf_block_cache.hits",
 		"treedb.vlog.outer_leaf_block_cache.misses",
@@ -2255,9 +2283,26 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				}
 				encodeKey(k[:], uint64(rng.Intn(cfg.Keys)))
 				if hasAppendGetter {
-					buf, _ = appendGetter.GetAppend(k[:], buf[:0])
+					var err error
+					buf, err = appendGetter.GetAppend(k[:], buf[:0])
+					if cfg.ReadRequireHit {
+						if err != nil {
+							return 0, fmt.Errorf("random_read: miss: %w", err)
+						}
+						if len(buf) != cfg.ValueSize {
+							return 0, fmt.Errorf("random_read: value length mismatch: got=%d want=%d", len(buf), cfg.ValueSize)
+						}
+					}
 				} else {
-					_, _ = db.Get(k[:])
+					val, err := db.Get(k[:])
+					if cfg.ReadRequireHit {
+						if err != nil {
+							return 0, fmt.Errorf("random_read: miss: %w", err)
+						}
+						if len(val) != cfg.ValueSize {
+							return 0, fmt.Errorf("random_read: value length mismatch: got=%d want=%d", len(val), cfg.ValueSize)
+						}
+					}
 				}
 			}
 			return float64(cfg.Keys) / time.Since(start).Seconds(), nil
@@ -2314,9 +2359,26 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					}
 					encodeKey(k[:], uint64(workerRng.Intn(cfg.Keys)))
 					if workerAppendGetter != nil {
-						buf, _ = workerAppendGetter.GetAppend(k[:], buf[:0])
+						var err error
+						buf, err = workerAppendGetter.GetAppend(k[:], buf[:0])
+						if cfg.ReadRequireHit {
+							if err != nil {
+								return err
+							}
+							if len(buf) != cfg.ValueSize {
+								return fmt.Errorf("random_read_parallel: value length mismatch: got=%d want=%d", len(buf), cfg.ValueSize)
+							}
+						}
 					} else {
-						_, _ = getter.Get(k[:])
+						val, err := getter.Get(k[:])
+						if cfg.ReadRequireHit {
+							if err != nil {
+								return err
+							}
+							if len(val) != cfg.ValueSize {
+								return fmt.Errorf("random_read_parallel: value length mismatch: got=%d want=%d", len(val), cfg.ValueSize)
+							}
+						}
 					}
 				}
 				return nil
@@ -2410,6 +2472,16 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					if closeErr != nil {
 						return fmt.Errorf("random_read_parallel_acquire_snapshot close: %w", closeErr)
 					}
+					if cfg.ReadRequireHit {
+						if getErr != nil {
+							return getErr
+						}
+						if len(nextBuf) != cfg.ValueSize {
+							return fmt.Errorf("random_read_parallel_acquire_snapshot: value length mismatch: got=%d want=%d", len(nextBuf), cfg.ValueSize)
+						}
+						buf = nextBuf
+						continue
+					}
 					// Keep parity with random_read/random_read_parallel semantics:
 					// this benchmark does not fail on point-read misses.
 					if getErr == nil {
@@ -2484,13 +2556,28 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 					encodeKey(keys[j], uint64(rng.Intn(cfg.Keys)))
 				}
 				if hasMany {
-					if _, err := mg.GetMany(keys[:n]); err != nil {
+					vals, err := mg.GetMany(keys[:n])
+					if err != nil {
 						return 0, fmt.Errorf("random_read_batch: %w", err)
+					}
+					if cfg.ReadRequireHit {
+						if len(vals) != n {
+							return 0, fmt.Errorf("random_read_batch: GetMany returned %d values for %d keys", len(vals), n)
+						}
+						for j := 0; j < n; j++ {
+							if len(vals[j]) != cfg.ValueSize {
+								return 0, fmt.Errorf("random_read_batch: value length mismatch: got=%d want=%d", len(vals[j]), cfg.ValueSize)
+							}
+						}
 					}
 				} else {
 					for j := 0; j < n; j++ {
-						if _, err := db.Get(keys[j]); err != nil {
+						val, err := db.Get(keys[j])
+						if err != nil {
 							return 0, fmt.Errorf("random_read_batch: %w", err)
+						}
+						if cfg.ReadRequireHit && len(val) != cfg.ValueSize {
+							return 0, fmt.Errorf("random_read_batch: value length mismatch: got=%d want=%d", len(val), cfg.ValueSize)
 						}
 					}
 				}
@@ -3236,8 +3323,50 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 	// Final clear of live table
 	_ = liveTbl.Clear()
 
+	// If the user requests checkpoints between tests, also checkpoint after the
+	// final test so disk usage reflects a settled backend state (especially for
+	// front-end ingest benchmarks like TreeDB batch_write).
+	if cfg.CheckpointBetweenTests {
+		chkMap := make(map[string]time.Duration)
+		for _, inst := range instances {
+			cp, ok := inst.Wrapper.(checkpointer)
+			if !ok {
+				continue
+			}
+
+			var (
+				checkpointCPUFile *os.File
+				err               error
+			)
+			if shouldCheckpointCPUProfile(cfg, checkpointPostRunLabel) {
+				checkpointCPUFile, err = startCheckpointCPUProfile(cfg, checkpointPostRunLabel, inst.Wrapper.Name())
+				if err != nil {
+					return BenchRun{}, fmt.Errorf("checkpoint %s after run profiling: %w", inst.Name, err)
+				}
+			}
+
+			start := time.Now()
+			checkpointErr := cp.Checkpoint()
+
+			if checkpointCPUFile != nil {
+				stopCPUProfileFn()
+				_ = checkpointCPUFile.Close()
+			}
+
+			if checkpointErr != nil {
+				return BenchRun{}, fmt.Errorf("checkpoint %s after run: %w", inst.Name, checkpointErr)
+			}
+			chkMap[inst.Wrapper.Name()] = time.Since(start)
+		}
+		if len(chkMap) > 0 {
+			checkpointDurations[checkpointPostRunLabel] = chkMap
+			displayNames[checkpointPostRunLabel] = "After Run"
+		}
+	}
+
 	// Shutdown
 	treedbDisk := make(map[string]treeDBDiskUsage)
+	treedbRewrite := make(map[string]treeDBVlogRewriteReport)
 	treedbStats := make(map[string]map[string]string)
 	diskUsage := make(map[string]dirDiskUsage)
 	for _, inst := range instances {
@@ -3252,6 +3381,34 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 			}
 		}
 		_ = inst.Wrapper.Close()
+		if cfg.TreeDBVlogRewriteAfterRun && isTreeDBInstance(inst) {
+			beforeUsage, _ := computeDirDiskUsage(inst.Dir)
+			beforeTree, _ := computeTreeDBDiskUsage(inst.Dir)
+
+			opts, _, err := buildTreeDBOptions(inst.Dir)
+			if err != nil {
+				return BenchRun{}, err
+			}
+			stats, err := treedb.ValueLogRewriteOffline(opts)
+			if err != nil {
+				return BenchRun{}, err
+			}
+
+			afterUsage, _ := computeDirDiskUsage(inst.Dir)
+			afterTree, _ := computeTreeDBDiskUsage(inst.Dir)
+			treedbRewrite[inst.Wrapper.Name()] = treeDBVlogRewriteReport{
+				Dir:            inst.Dir,
+				BeforeUsage:    beforeUsage,
+				AfterUsage:     afterUsage,
+				BeforeTree:     beforeTree,
+				AfterTree:      afterTree,
+				SegmentsBefore: stats.SegmentsBefore,
+				SegmentsAfter:  stats.SegmentsAfter,
+				BytesBefore:    stats.BytesBefore,
+				BytesAfter:     stats.BytesAfter,
+				RecordsCopied:  stats.RecordsCopied,
+			}
+		}
 		if usage, err := computeDirDiskUsage(inst.Dir); err == nil {
 			if usage.TotalBytes > 0 || usage.TotalFiles > 0 {
 				diskUsage[inst.Wrapper.Name()] = usage
@@ -3279,6 +3436,7 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		VacuumDurations:     vacuumDurations,
 		VacuumIndexBytes:    vacuumIndexBytes,
 		TreeDBDiskUsage:     treedbDisk,
+		TreeDBVlogRewrite:   treedbRewrite,
 		TreeDBStats:         treedbStats,
 		DiskUsage:           diskUsage,
 	}, nil
@@ -3494,6 +3652,50 @@ func renderTreeDBDiskUsageString(usage map[string]treeDBDiskUsage) string {
 	return sb.String()
 }
 
+func renderTreeDBVlogRewriteString(reports map[string]treeDBVlogRewriteReport) string {
+	if len(reports) == 0 {
+		return ""
+	}
+
+	names := make([]string, 0, len(reports))
+	for name := range reports {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	formatBytesSigned := func(v int64) string {
+		if v <= 0 {
+			return "0 B"
+		}
+		return formatBytes(uint64(v))
+	}
+
+	var sb strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		rep := reports[name]
+		sb.WriteString(name)
+		sb.WriteString(":\n")
+		if strings.TrimSpace(rep.Dir) != "" {
+			sb.WriteString(fmt.Sprintf("  dir: %s\n", rep.Dir))
+		}
+		sb.WriteString(fmt.Sprintf("  bytes: %s -> %s\n", formatBytes(rep.BeforeUsage.TotalBytes), formatBytes(rep.AfterUsage.TotalBytes)))
+		if rep.BeforeTree.MainIndexBytes > 0 || rep.AfterTree.MainIndexBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/index.db: %s -> %s\n", formatBytes(rep.BeforeTree.MainIndexBytes), formatBytes(rep.AfterTree.MainIndexBytes)))
+		}
+		if rep.BeforeTree.MainWAL.TotalBytes > 0 || rep.AfterTree.MainWAL.TotalBytes > 0 {
+			sb.WriteString(fmt.Sprintf("  maindb/wal: %s -> %s\n", formatBytes(rep.BeforeTree.MainWAL.TotalBytes), formatBytes(rep.AfterTree.MainWAL.TotalBytes)))
+		}
+		sb.WriteString(fmt.Sprintf("  vlog-rewrite: segments %d -> %d bytes %s -> %s records=%d\n",
+			rep.SegmentsBefore, rep.SegmentsAfter,
+			formatBytesSigned(rep.BytesBefore), formatBytesSigned(rep.BytesAfter),
+			rep.RecordsCopied))
+	}
+	return sb.String()
+}
+
 func renderDirDiskUsageString(usage map[string]dirDiskUsage) string {
 	if len(usage) == 0 {
 		return ""
@@ -3595,7 +3797,11 @@ func renderMarkdownSingle(run BenchRun) string {
 
 	if len(run.CheckpointDurations) > 0 {
 		sb.WriteString("\n")
-		sb.WriteString("## Checkpoint Time (Between Tests)\n\n")
+		title := "## Checkpoint Time (Between Tests)\n\n"
+		if _, ok := run.CheckpointDurations[checkpointPostRunLabel]; ok {
+			title = "## Checkpoint Time (Between Tests + Post-run)\n\n"
+		}
+		sb.WriteString(title)
 		sb.WriteString("```text\n")
 		sb.WriteString(renderCheckpointDurationsTableString(run.Instances, run.TestOrder, run.DisplayNames, run.CheckpointDurations))
 		sb.WriteString("```\n")
@@ -3635,6 +3841,13 @@ func renderMarkdownSingle(run BenchRun) string {
 		} else {
 			sb.WriteString(renderDirDiskUsageString(run.DiskUsage))
 		}
+		sb.WriteString("```\n")
+	}
+	if len(run.TreeDBVlogRewrite) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString("## TreeDB ValueLog Rewrite (After Run)\n\n")
+		sb.WriteString("```text\n")
+		sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		sb.WriteString("```\n")
 	}
 	return sb.String()
@@ -3725,6 +3938,26 @@ func renderMarkdownSweep(runs []BenchRun) string {
 			} else {
 				sb.WriteString(renderDirDiskUsageString(run.DiskUsage))
 			}
+			sb.WriteString("```\n\n")
+		}
+	}
+
+	anyRewrite := false
+	for _, run := range runs {
+		if len(run.TreeDBVlogRewrite) > 0 {
+			anyRewrite = true
+			break
+		}
+	}
+	if anyRewrite {
+		sb.WriteString("## TreeDB ValueLog Rewrite (After Run)\n\n")
+		for _, run := range runs {
+			if len(run.TreeDBVlogRewrite) == 0 {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 			sb.WriteString("```\n\n")
 		}
 	}
@@ -4240,12 +4473,23 @@ func printResultsTable(instances []*DBInstance, finalTestOrder []string, display
 func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrder []string, displayNames map[string]string, durs map[string]map[string]time.Duration) string {
 
 	rows := make([]string, 0, len(finalTestOrder))
+	inOrder := make(map[string]struct{}, len(finalTestOrder))
 	for _, testName := range finalTestOrder {
+		inOrder[testName] = struct{}{}
 		if _, ok := durs[testName]; ok {
 
 			rows = append(rows, testName)
 		}
 	}
+	extra := make([]string, 0, len(durs))
+	for testName := range durs {
+		if _, ok := inOrder[testName]; ok {
+			continue
+		}
+		extra = append(extra, testName)
+	}
+	sort.Strings(extra)
+	rows = append(rows, extra...)
 	if len(rows) == 0 {
 		return ""
 	}
@@ -4262,6 +4506,9 @@ func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrde
 
 	for _, testName := range rows {
 		disp := displayNames[testName]
+		if disp == "" {
+			disp = testName
+		}
 		if len(disp) > colWidths["Before Test"] {
 			colWidths["Before Test"] = len(disp)
 		}
@@ -4302,7 +4549,11 @@ func renderCheckpointDurationsTableString(instances []*DBInstance, finalTestOrde
 	sb.WriteString("\n")
 
 	for _, testName := range rows {
-		dataRow := fmt.Sprintf("%*s", colWidths["Before Test"], displayNames[testName])
+		disp := displayNames[testName]
+		if disp == "" {
+			disp = testName
+		}
+		dataRow := fmt.Sprintf("%*s", colWidths["Before Test"], disp)
 		perDB := durs[testName]
 		for _, inst := range instances {
 			dbName := inst.Wrapper.Name()
@@ -4326,7 +4577,11 @@ func printCheckpointDurationsTable(instances []*DBInstance, finalTestOrder []str
 	if table == "" {
 		return
 	}
-	fmt.Println("Checkpoint Time (Between Tests)")
+	title := "Checkpoint Time (Between Tests)"
+	if _, ok := durs[checkpointPostRunLabel]; ok {
+		title = "Checkpoint Time (Between Tests + Post-run)"
+	}
+	fmt.Println(title)
 	fmt.Print(table)
 }
 

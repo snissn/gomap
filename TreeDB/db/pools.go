@@ -43,18 +43,12 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	if s == nil {
 		return
 	}
-	releaseDecodeCtx := s.db != nil && s.db.closing.Load()
 	s.db = nil
 	s.idx = nil
 	s.state = nil
 	s.vlogManager = nil
 	s.vlogPinned = false
-	if releaseDecodeCtx {
-		s.reader.releaseDecodeContext()
-		s.reader = valueReader{}
-	} else {
-		s.reader.clearForPoolReuse()
-	}
+	s.reader = valueReader{}
 	s.registryID = 0
 	s.closed.Store(false)
 	// treePager/treeRoot are intentionally preserved as a pooled cache key for

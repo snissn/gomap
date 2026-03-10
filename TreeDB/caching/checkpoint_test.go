@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func countCommitLogFiles(entries []os.DirEntry) int {
@@ -394,8 +392,7 @@ func TestCachingDB_AutoCheckpoint_SizeTrigger_DoesNotThrashWithRetainedValueLog(
 	backend := NewMockBackend()
 
 	db, err := Open(dir, backend, Options{
-		FlushThreshold:     1,
-		IndexOuterLeafMode: backenddb.IndexOuterLeafModeV1,
+		FlushThreshold: 1,
 	})
 	if err != nil {
 		t.Fatalf("Open: %v", err)

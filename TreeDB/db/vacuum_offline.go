@@ -40,6 +40,9 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 	if opts.Dir == "" {
 		return errors.New("db dir required")
 	}
+	if err := applyFormatConfigForMaintenance(&opts); err != nil {
+		return err
+	}
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = defaultChunkSize
 	}
@@ -95,7 +98,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 
 	alloc := &pagerAllocator{p: newPager}
 
-	sysIter := tree.New(d.Pager(), newValueReader(state.ValueLogSet, "", false, nil, nil), state.SystemRootPageID).
+	sysIter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	sysRoot, err := bulk.BuildWithOptions(sysIter, alloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: opts.LeafPrefixCompression,
@@ -110,7 +113,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) error {
 		return err
 	}
 
-	userIter := tree.New(d.Pager(), newValueReader(state.ValueLogSet, "", false, nil, nil), state.RootPageID).
+	userIter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), state.RootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	userRoot, err := bulk.BuildWithOptions(userIter, alloc, newPager, bulk.BuildOptions{
 		LeafPrefixCompression: opts.LeafPrefixCompression,

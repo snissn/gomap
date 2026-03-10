@@ -134,6 +134,91 @@ func TestConcurrentReads(t *testing.T) {
 	}
 }
 
+func TestSnapshotGet_ReturnsSafeCopyForValueLogPointer(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	key := []byte("k")
+	val := bytes.Repeat([]byte("v"), 4096)
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	vw, err := valuelog.NewWriter(filepath.Join(walDir, "value-l0-000001.log"), fileID)
+	if err != nil {
+		t.Fatalf("new valuelog writer: %v", err)
+	}
+	ptr, err := vw.Append(0, key, 1, val)
+	if err != nil {
+		_ = vw.Close()
+		t.Fatalf("append valuelog: %v", err)
+	}
+	if err := vw.Close(); err != nil {
+		t.Fatalf("close valuelog writer: %v", err)
+	}
+	rawBatch := db.NewBatch()
+	type pointerBatch interface {
+		SetPointer(key []byte, ptr page.ValuePtr) error
+		Write() error
+		Close() error
+	}
+	b, ok := rawBatch.(pointerBatch)
+	if !ok {
+		t.Skipf("NewBatch() returned %T, which does not support SetPointer", rawBatch)
+	}
+	t.Cleanup(func() {
+		if err := b.Close(); err != nil {
+			t.Errorf("Close pointer batch: %v", err)
+		}
+	})
+	if err := b.SetPointer(key, ptr); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write pointer batch: %v", err)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("AcquireSnapshot returned nil")
+	}
+	defer snap.Close()
+
+	got, err := snap.Get(key)
+	if err != nil {
+		t.Fatalf("Snapshot.Get failed: %v", err)
+	}
+	if !bytes.Equal(got, val) {
+		t.Fatalf("Snapshot.Get mismatch")
+	}
+
+	got[0] = 'x'
+
+	gotAgain, err := snap.Get(key)
+	if err != nil {
+		t.Fatalf("Snapshot.Get second read failed: %v", err)
+	}
+	if !bytes.Equal(gotAgain, val) {
+		t.Fatalf("Snapshot.Get did not return a safe copy")
+	}
+
+	unsafeVal, err := snap.GetUnsafe(key)
+	if err != nil {
+		t.Fatalf("Snapshot.GetUnsafe failed: %v", err)
+	}
+	if !bytes.Equal(unsafeVal, val) {
+		t.Fatalf("Snapshot.GetUnsafe mismatch")
+	}
+}
+
 func TestIteratorKeyValueAreDefensiveCopies(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir})
@@ -195,38 +280,12 @@ func TestStatsIncludesWatermarkLagDriftMetric(t *testing.T) {
 	}
 }
 
-func TestStatsIncludesV1LeafLogAnchorScaffolding(t *testing.T) {
-	dir := t.TempDir()
-	db, err := Open(Options{Dir: dir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-
-	stats := db.Stats()
-	keys := []string{
-		"treedb.v1_leaflog.anchor_lookups",
-		"treedb.v1_leaflog.anchor_block_decodes",
-		"treedb.v1_leaflog.anchor_misses",
-		"treedb.v1_leaflog.anchor_max_probes",
-	}
-	for _, key := range keys {
-		got, ok := stats[key]
-		if !ok {
-			t.Fatalf("missing %s", key)
-		}
-		if got != "0" {
-			t.Fatalf("%s=%q want 0", key, got)
-		}
-	}
-}
-
 func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{
 		Dir: dir,
 		ValueLog: ValueLogOptions{
-			PointerThreshold: 1,
+			PointerThreshold: page.DefaultInlineThreshold,
 		},
 	})
 	if err != nil {
@@ -250,7 +309,7 @@ func TestIteratorOptions_SnapshotCompatibility(t *testing.T) {
 		t.Fatalf("new valuelog writer: %v", err)
 	}
 	large := bytes.Repeat([]byte("p"), 8*1024)
-	ptr, err := vw.Append(0, nil, 1, large)
+	ptr, err := vw.Append(0, []byte("k-pointer"), 1, large)
 	if err != nil {
 		_ = vw.Close()
 		t.Fatalf("append valuelog: %v", err)
