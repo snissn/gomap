@@ -1,22 +1,54 @@
 package db
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
-func mustFrozenSystemMemtable(t *testing.T, kvs ...string) memtable.Table {
-	t.Helper()
+func mustFrozenSystemMemtable(tb testing.TB, kvs ...string) memtable.Table {
+	tb.Helper()
 	mt, err := memtable.NewWithCapacityMode(0, memtable.ModeHashSorted)
 	if err != nil {
-		t.Fatalf("new memtable: %v", err)
+		tb.Fatalf("new memtable: %v", err)
 	}
 	for i := 0; i+1 < len(kvs); i += 2 {
 		mt.Set([]byte(kvs[i]), []byte(kvs[i+1]))
 	}
 	mt.Freeze()
 	return mt
+}
+
+func systemRangeKVs(count int, overrides map[int]string) []string {
+	kvs := make([]string, 0, count*2)
+	for i := 0; i < count; i++ {
+		key := fmt.Sprintf("sys/%04d", i)
+		value := fmt.Sprintf("value-%04d", i)
+		if override, ok := overrides[i]; ok {
+			value = override
+		}
+		kvs = append(kvs, key, value)
+	}
+	return kvs
+}
+
+func collectRootPageIDs(tb testing.TB, db *DB, rootID uint64) []uint64 {
+	tb.Helper()
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		tb.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+	tr, err := snap.treeAtRoot(rootID)
+	if err != nil {
+		tb.Fatalf("treeAtRoot(%d): %v", rootID, err)
+	}
+	pageIDs, err := tr.CollectPageIDs()
+	if err != nil {
+		tb.Fatalf("CollectPageIDs(%d): %v", rootID, err)
+	}
+	return pageIDs
 }
 
 func TestPublishSystemRootIterator_PersistsAndPreservesUserRoot(t *testing.T) {
@@ -167,6 +199,8 @@ func TestPublishSystemRootIterator_WarmPublishUsesFallbackCounter(t *testing.T) 
 	}
 	defer db.Close()
 
+	db.testSystemRootWarmMaxDeltaOps = 1
+
 	initial := mustFrozenSystemMemtable(t, "sys/a", "sv-a")
 	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
 		t.Fatalf("initial publish system root: %v", err)
@@ -198,6 +232,8 @@ func TestPublishSystemRootIterator_PersistsAcrossReopen_AfterWarmFallback(t *tes
 			_ = db.Close()
 		}
 	}()
+
+	db.testSystemRootWarmMaxDeltaOps = 1
 
 	if err := db.Set([]byte("user/a"), []byte("uv")); err != nil {
 		t.Fatalf("set user key: %v", err)
@@ -274,6 +310,8 @@ func TestPublishSystemRootIterator_StatsExposeWarmFallbackCounters(t *testing.T)
 	}
 	defer db.Close()
 
+	db.testSystemRootWarmMaxDeltaOps = 1
+
 	initial := mustFrozenSystemMemtable(t, "sys/a", "sv-a")
 	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
 		t.Fatalf("initial publish system root: %v", err)
@@ -303,5 +341,176 @@ func TestSelectSystemRootPublishPlan_NonEmptySystemRootUsesWarmFallback(t *testi
 	plan := selectSystemRootPublishPlan(true)
 	if plan != systemRootPublishPlanWarmFallbackRebuild {
 		t.Fatalf("plan=%v want %v", plan, systemRootPublishPlanWarmFallbackRebuild)
+	}
+}
+
+func TestPublishSystemRootIterator_WarmSparseDelta_PreservesSomePages(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	db.testSystemRootWarmMaxDeltaOps = 8
+
+	initial := mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+	initialRoot, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("initial publish system root: %v", err)
+	}
+	oldPages := collectRootPageIDs(t, db, initialRoot)
+
+	sparse := mustFrozenSystemMemtable(t, systemRangeKVs(2048, map[int]string{
+		1024: "value-1024-updated",
+	})...)
+	newRoot, err := db.PublishSystemRootIterator(sparse.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("sparse warm publish system root: %v", err)
+	}
+	if newRoot == initialRoot {
+		t.Fatalf("expected new system root id after sparse warm publish")
+	}
+
+	stats := db.systemRootPublishStatsSnapshot()
+	if stats.warmAttempts != 1 {
+		t.Fatalf("warmAttempts=%d want 1", stats.warmAttempts)
+	}
+	if stats.warmNativeApplyAttempts != 1 {
+		t.Fatalf("warmNativeApplyAttempts=%d want 1", stats.warmNativeApplyAttempts)
+	}
+	if stats.warmRebuildFallbacks != 0 {
+		t.Fatalf("warmRebuildFallbacks=%d want 0", stats.warmRebuildFallbacks)
+	}
+	if stats.warmPreservedPages == 0 {
+		t.Fatalf("warmPreservedPages=%d want >0", stats.warmPreservedPages)
+	}
+	if stats.warmRewrittenPages >= uint64(len(oldPages)) {
+		t.Fatalf("warmRewrittenPages=%d want <%d", stats.warmRewrittenPages, len(oldPages))
+	}
+}
+
+func TestPublishSystemRootIterator_WarmSparseDelta_DoesNotFallbackBelowThreshold(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	db.testSystemRootWarmMaxDeltaOps = 8
+
+	initial := mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("initial publish system root: %v", err)
+	}
+	sparse := mustFrozenSystemMemtable(t, systemRangeKVs(2048, map[int]string{
+		17: "value-0017-updated",
+	})...)
+	if _, err := db.PublishSystemRootIterator(sparse.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("sparse warm publish system root: %v", err)
+	}
+
+	stats := db.systemRootPublishStatsSnapshot()
+	if stats.warmAttempts != 1 {
+		t.Fatalf("warmAttempts=%d want 1", stats.warmAttempts)
+	}
+	if stats.warmNativeApplyAttempts != 1 {
+		t.Fatalf("warmNativeApplyAttempts=%d want 1", stats.warmNativeApplyAttempts)
+	}
+	if stats.warmRebuildFallbacks != 0 {
+		t.Fatalf("warmRebuildFallbacks=%d want 0", stats.warmRebuildFallbacks)
+	}
+}
+
+func TestPublishSystemRootIterator_WarmDenseDelta_UsesRebuildFallbackAboveThreshold(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	db.testSystemRootWarmMaxDeltaOps = 8
+
+	initial := mustFrozenSystemMemtable(t, systemRangeKVs(2048, nil)...)
+	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("initial publish system root: %v", err)
+	}
+	denseOverrides := make(map[int]string, 1024)
+	for i := 0; i < 1024; i++ {
+		denseOverrides[i] = fmt.Sprintf("value-%04d-updated", i)
+	}
+	dense := mustFrozenSystemMemtable(t, systemRangeKVs(2048, denseOverrides)...)
+	if _, err := db.PublishSystemRootIterator(dense.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("dense warm publish system root: %v", err)
+	}
+
+	stats := db.systemRootPublishStatsSnapshot()
+	if stats.warmAttempts != 1 {
+		t.Fatalf("warmAttempts=%d want 1", stats.warmAttempts)
+	}
+	if stats.warmNativeApplyAttempts != 0 {
+		t.Fatalf("warmNativeApplyAttempts=%d want 0", stats.warmNativeApplyAttempts)
+	}
+	if stats.warmRebuildFallbacks != 1 {
+		t.Fatalf("warmRebuildFallbacks=%d want 1", stats.warmRebuildFallbacks)
+	}
+}
+
+func TestPublishSystemRootIterator_WarmApplyHandlesInsertUpdateDelete(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	db.testSystemRootWarmMaxDeltaOps = 8
+
+	initial := mustFrozenSystemMemtable(t,
+		"sys/a", "va",
+		"sys/b", "vb",
+		"sys/c", "vc",
+	)
+	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("initial publish system root: %v", err)
+	}
+
+	target := mustFrozenSystemMemtable(t,
+		"sys/a", "va",
+		"sys/b", "vb2",
+		"sys/d", "vd",
+	)
+	newSystemRoot, err := db.PublishSystemRootIterator(target.NewIterator(nil, nil))
+	if err != nil {
+		t.Fatalf("warm publish system root: %v", err)
+	}
+
+	stats := db.systemRootPublishStatsSnapshot()
+	if stats.warmNativeApplyAttempts != 1 {
+		t.Fatalf("warmNativeApplyAttempts=%d want 1", stats.warmNativeApplyAttempts)
+	}
+	if stats.warmRebuildFallbacks != 0 {
+		t.Fatalf("warmRebuildFallbacks=%d want 0", stats.warmRebuildFallbacks)
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+
+	if entry, err := snap.GetEntryAtRoot(newSystemRoot, []byte("sys/a")); err != nil || string(entry.Value) != "va" {
+		t.Fatalf("sys/a got=%q err=%v want va", string(entry.Value), err)
+	}
+	if entry, err := snap.GetEntryAtRoot(newSystemRoot, []byte("sys/b")); err != nil || string(entry.Value) != "vb2" {
+		t.Fatalf("sys/b got=%q err=%v want vb2", string(entry.Value), err)
+	}
+	if _, err := snap.GetEntryAtRoot(newSystemRoot, []byte("sys/c")); err == nil {
+		t.Fatal("expected sys/c to be deleted")
+	}
+	if entry, err := snap.GetEntryAtRoot(newSystemRoot, []byte("sys/d")); err != nil || string(entry.Value) != "vd" {
+		t.Fatalf("sys/d got=%q err=%v want vd", string(entry.Value), err)
 	}
 }
