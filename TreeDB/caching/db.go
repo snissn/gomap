@@ -10459,7 +10459,7 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		}
 		rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
 		gcRunsBefore := db.vlogGenerationGCRuns.Load()
-		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
 			// Checkpoint-triggered maintenance still needs a fresh serialized

@@ -737,12 +737,15 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"]; got != "1" {
 		t.Fatalf("checkpoint kick rewrite runs=%q want 1", got)
 	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "0" {
+		t.Fatalf("checkpoint kick gc runs=%q want 0", got)
+	}
 	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.active"]; got != "false" {
 		t.Fatalf("checkpoint kick active=%q want false", got)
 	}
 }
 
-func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *testing.T) {
+func TestCheckpoint_DoesNotForceVlogGenerationGCWithoutDebtDespiteRecentForegroundActivity(t *testing.T) {
 	disableVlogGenerationLoop(t)
 	t.Setenv(envDisableVlogGenerationRewrite, "1")
 
@@ -754,6 +757,7 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 	}
 	recorder := &dryRunGCRecordingBackend{
 		DB:          backend,
+		dryRunStats: backenddb.ValueLogGCStats{},
 		realGCStats: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: 64},
 	}
 
@@ -785,6 +789,92 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 	hot := time.Now().UnixNano()
 	db.lastForegroundWriteUnixNano.Store(hot)
 	db.lastForegroundReadUnixNano.Store(hot)
+	db.vlogGenerationLastGCDryRunUnixNano.Store(time.Now().UnixNano())
+	db.vlogGenerationLastGCDryRunBytesEligible.Store(vlogGenerationGCMinBytes)
+	db.vlogGenerationLastGCDryRunSegsEligible.Store(1)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		dryCalls, _, _ := recorder.recordedCalls()
+		if dryCalls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			dryCalls, realCalls, _ := recorder.recordedCalls()
+			t.Fatalf("checkpoint kick did not run gc dry-run in time: dryCalls=%d realCalls=%d", dryCalls, realCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if dryCalls, realCalls, _ := recorder.recordedCalls(); dryCalls != 1 || realCalls != 0 {
+		t.Fatalf("gc calls dry=%d real=%d want dry=1 real=0", dryCalls, realCalls)
+	}
+	if got := db.checkpointRuns.Load(); got < 2 {
+		t.Fatalf("checkpoint runs=%d want >=2", got)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
+		t.Fatalf("checkpoint kick runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "0" {
+		t.Fatalf("checkpoint kick gc runs=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.active"]; got != "false" {
+		t.Fatalf("checkpoint kick active=%q want false", got)
+	}
+}
+
+func TestCheckpoint_KicksVlogGenerationGCOnChurnDebtDespiteRecentForegroundActivity(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		realGCStats: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: 64},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                       true,
+		DisableWAL:                        true,
+		JournalLanes:                      1,
+		ValueLogGenerationPolicy:          uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerChurnPerSec: 1024,
+		ForceValueLogPointers:             true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("trigger"), make([]byte, 2048)); err != nil {
+		_ = b.Close()
+		t.Fatalf("set trigger: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write trigger: %v", err)
+	}
+	_ = b.Close()
+
+	db.vlogGenerationChurnBytes.Store(2048)
+	db.vlogGenerationLastChurnSampleBytes.Store(0)
+	db.vlogGenerationLastChurnSampleNS.Store(time.Now().Add(-time.Second).UnixNano())
+	db.vlogGenerationLastGCUnixNano.Store(0)
+
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -797,7 +887,7 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 		}
 		if time.Now().After(deadline) {
 			dryCalls, realCalls, _ := recorder.recordedCalls()
-			t.Fatalf("checkpoint kick did not run gc in time: dryCalls=%d realCalls=%d", dryCalls, realCalls)
+			t.Fatalf("checkpoint kick did not run churn-triggered gc in time: dryCalls=%d realCalls=%d", dryCalls, realCalls)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -805,15 +895,85 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 	if dryCalls, realCalls, _ := recorder.recordedCalls(); dryCalls != 0 || realCalls != 1 {
 		t.Fatalf("gc calls dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
 	}
-	if got := db.checkpointRuns.Load(); got < 2 {
-		t.Fatalf("checkpoint runs=%d want >=2", got)
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "1" {
+		t.Fatalf("checkpoint kick gc runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.active"]; got != "false" {
+		t.Fatalf("checkpoint kick active=%q want false", got)
+	}
+}
+
+func TestCheckpoint_KickDoesNotForceGCWithoutDebt(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		realGCStats: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: 64},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("trigger"), make([]byte, 2048)); err != nil {
+		_ = b.Close()
+		t.Fatalf("set trigger: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write trigger: %v", err)
+	}
+	_ = b.Close()
+
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+	db.vlogGenerationLastGCDryRunUnixNano.Store(0)
+	db.vlogGenerationLastGCDryRunBytesEligible.Store(0)
+	db.vlogGenerationLastGCDryRunSegsEligible.Store(0)
+	db.vlogGenerationLastChurnBps.Store(0)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if !db.vlogGenerationCheckpointKickActive.Load() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("checkpoint kick did not go idle in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if dryCalls, realCalls, _ := recorder.recordedCalls(); dryCalls != 1 || realCalls != 0 {
+		t.Fatalf("gc calls dry=%d real=%d want dry=1 real=0", dryCalls, realCalls)
 	}
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
 		t.Fatalf("checkpoint kick runs=%q want 1", got)
 	}
-	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "1" {
-		t.Fatalf("checkpoint kick gc runs=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "0" {
+		t.Fatalf("checkpoint kick gc runs=%q want 0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.active"]; got != "false" {
 		t.Fatalf("checkpoint kick active=%q want false", got)
