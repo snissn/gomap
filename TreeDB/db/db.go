@@ -100,7 +100,7 @@ type DB struct {
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
 	commitMu         sync.Mutex
-	maintenanceMu    sync.Mutex // Serializes long-running backend maintenance (rewrite/GC/vacuum).
+	maintenanceMu    sync.Mutex
 	combineMu        sync.RWMutex
 	combineReqCh     chan *commitCombineReq
 	combineStopCh    chan struct{}
@@ -117,6 +117,9 @@ type DB struct {
 	bgErrMu     sync.Mutex
 	bgErr       error
 
+	rewritePlanLiveBytesMu    sync.RWMutex
+	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache
+
 	// Stage-5 publish watermark metrics (backend commit publish path).
 	publishWatermarkWaitTotalNs    atomic.Uint64
 	publishWatermarkHoldTotalNs    atomic.Uint64
@@ -128,6 +131,20 @@ type DB struct {
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit atomic.Bool
 	closing                atomic.Bool
+}
+
+type valueLogRewriteLiveBytesKey struct {
+	commitSeq  uint64
+	rootID     uint64
+	systemRoot uint64
+}
+
+type valueLogRewriteLiveBytesCache struct {
+	key valueLogRewriteLiveBytesKey
+	// liveByID is published by clone-and-replace and treated as immutable after
+	// publication, so readers may snapshot the map header under RLock and clone
+	// after unlocking without racing a writer mutating the same map.
+	liveByID map[uint32]int64
 }
 
 const (

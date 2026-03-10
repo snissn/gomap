@@ -82,15 +82,11 @@ Commit visibility sequence:
 
 ### 5.1 Non-sync APIs
 
-- `Set`, `Delete`, `Batch.Write`:
-  - higher throughput,
-  - no fsync durability guarantee.
+- `Set`, `Delete`, `Batch.Write`: higher throughput, no fsync durability guarantee.
 
 ### 5.2 Sync APIs
 
-- `SetSync`, `DeleteSync`, `Batch.WriteSync`:
-  - in durable mode: fsync durability boundary,
-  - in relaxed modes: relaxed boundary only.
+- `SetSync`, `DeleteSync`, `Batch.WriteSync`: in durable mode, fsync durability boundary; in relaxed modes, relaxed boundary only.
 
 ## 6. Checkpoint Semantics
 
