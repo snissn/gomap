@@ -1127,6 +1127,22 @@ func TestWriteBenchprofArtifacts_InvalidExecutionPath(t *testing.T) {
 	}
 }
 
+func TestWriteBenchprofArtifacts_RequiresExecutionPath(t *testing.T) {
+	dir := t.TempDir()
+	runs := []BenchRun{{
+		Config: BenchConfig{Keys: 1, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"full_scan": {"TreeDB": 1},
+		},
+	}}
+
+	if err := writeBenchprofArtifacts(dir, "", runs); err == nil {
+		t.Fatal("expected missing execution path to fail")
+	} else if !strings.Contains(err.Error(), "execution path is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestWriteRuntimeProfileDeltaProfile_EmptyOutputSkipsFile(t *testing.T) {
 	origRunPprofDeltaCommandFn := runPprofDeltaCommandFn
 	runPprofDeltaCommandFn = func(basePath, afterPath string) ([]byte, string, error) {
