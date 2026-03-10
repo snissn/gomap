@@ -87,9 +87,13 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		db.mu.Unlock()
 	}
 
-	if view != nil && len(view.queue) == 0 {
-		db.releaseMemtableView(view)
-		view = nil
+	var viewPublishedRoots *publishedRootSet
+	if view != nil {
+		viewPublishedRoots = view.publishedRoots
+		if len(view.queue) == 0 && viewPublishedRoots == nil {
+			db.releaseMemtableView(view)
+			view = nil
+		}
 	}
 
 	provider, ok := db.backend.(backendSnapshotProvider)
@@ -112,23 +116,26 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		snap.rootVersion = view.rootVersion
 		snap.rootPointShards = view.rootSnapshotShards
 		snap.rootIterator = view.rootIterator
+		snap.publishedRoots = viewPublishedRoots
 	}
-	rootRef := publishedRootRef{lookup: backendSnapshotLookup{snapshot: backendSnap}}
-	if state := backendSnap.State(); state != nil {
-		rootRef.rootID = state.RootPageID
-	}
-	pointCount := len(db.mutableShards)
-	if pointCount == 0 && view != nil {
-		pointCount = len(view.rootSnapshotShards)
-	}
-	pointShards := make([]publishedRootRef, pointCount)
-	for i := range pointShards {
-		pointShards[i] = rootRef
-	}
-	snap.publishedRoots = &publishedRootSet{
-		generation:  snap.rootVersion,
-		pointShards: pointShards,
-		iterator:    rootRef,
+	if snap.publishedRoots == nil {
+		rootRef := publishedRootRef{lookup: backendSnapshotLookup{snapshot: backendSnap}}
+		if state := backendSnap.State(); state != nil {
+			rootRef.rootID = state.RootPageID
+		}
+		pointCount := len(db.mutableShards)
+		if pointCount == 0 && view != nil {
+			pointCount = len(view.rootSnapshotShards)
+		}
+		pointShards := make([]publishedRootRef, pointCount)
+		for i := range pointShards {
+			pointShards[i] = rootRef
+		}
+		snap.publishedRoots = &publishedRootSet{
+			generation:  snap.rootVersion,
+			pointShards: pointShards,
+			iterator:    rootRef,
+		}
 	}
 	return snap
 }

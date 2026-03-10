@@ -140,6 +140,7 @@ func (db *DB) publishRootDomainSnapshotsLocked(view *memtableView) {
 		view.rootSnapshotShards = nil
 		view.rootIterator = rootDomainSnapshot{}
 		view.rootIteratorRanges = nil
+		view.publishedRoots = nil
 		return
 	}
 	points := make([]rootDomainSnapshot, len(db.rootPointStates))
@@ -154,6 +155,7 @@ func (db *DB) publishRootDomainSnapshotsLocked(view *memtableView) {
 	view.rootIterator = db.rootIteratorState.snapshot()
 	view.rootIterator.mutable = nil
 	view.rootIteratorRanges = view.queueRanges
+	view.publishedRoots = publishedRootSetFromMemtableView(view)
 }
 
 func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) {
@@ -293,6 +295,51 @@ func rootDomainSnapshotFromMemtableView(view *memtableView, shardIdx int, includ
 
 func rootDomainSnapshotHasInMemoryState(snap rootDomainSnapshot) bool {
 	return (snap.mutable != nil && snap.mutable.Len() != 0) || len(snap.immutables) != 0
+}
+
+func rootDomainSnapshotHasPublishedState(snap rootDomainSnapshot) bool {
+	return snap.published != nil || snap.publishedRootID != 0
+}
+
+func publishedRootSetFromMemtableView(view *memtableView) *publishedRootSet {
+	if view == nil {
+		return nil
+	}
+	if view.publishedRoots != nil {
+		return view.publishedRoots
+	}
+	pointSource := view.rootSnapshotShards
+	if len(pointSource) == 0 {
+		pointSource = view.rootPointShards
+	}
+	pointShards := make([]publishedRootRef, len(pointSource))
+	hasPublished := false
+	for i := range pointSource {
+		if !rootDomainSnapshotHasPublishedState(pointSource[i]) {
+			continue
+		}
+		hasPublished = true
+		pointShards[i] = publishedRootRef{
+			lookup: pointSource[i].published,
+			rootID: pointSource[i].publishedRootID,
+		}
+	}
+	iterRef := publishedRootRef{}
+	if rootDomainSnapshotHasPublishedState(view.rootIterator) {
+		hasPublished = true
+		iterRef = publishedRootRef{
+			lookup: view.rootIterator.published,
+			rootID: view.rootIterator.publishedRootID,
+		}
+	}
+	if !hasPublished {
+		return nil
+	}
+	return &publishedRootSet{
+		generation:  view.rootVersion,
+		pointShards: pointShards,
+		iterator:    iterRef,
+	}
 }
 
 func livePointRootDomainSnapshot(view *memtableView, db *DB, key []byte) (rootDomainSnapshot, bool) {

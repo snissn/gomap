@@ -3977,6 +3977,7 @@ type memtableView struct {
 	rootSnapshotShards       []rootDomainSnapshot
 	rootIterator             rootDomainSnapshot
 	rootIteratorRanges       []keyRange
+	publishedRoots           *publishedRootSet
 	refs                     atomic.Int64
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
