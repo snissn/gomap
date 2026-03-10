@@ -3527,6 +3527,8 @@ type DB struct {
 	rootDomainVersion     atomic.Uint64
 	rootPointStates       []rootDomainState
 	rootIteratorState     rootDomainState
+	rootPublishedSet      *publishedRootSet
+	rootPublishStats      rootDomainPublishTelemetry
 	hashSortedIndexer     *memtable.HashSortedIndexer
 	appendOnlyMemPool     sync.Pool
 	appendOnlyMemLeaseMu  sync.Mutex

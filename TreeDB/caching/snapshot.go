@@ -119,6 +119,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		snap.publishedRoots = viewPublishedRoots
 	}
 	if snap.publishedRoots == nil {
+		db.rootPublishStats.backendFallbacks.Add(1)
 		rootRef := publishedRootRef{lookup: backendSnapshotLookup{snapshot: backendSnap}}
 		if state := backendSnap.State(); state != nil {
 			rootRef.rootID = state.RootPageID

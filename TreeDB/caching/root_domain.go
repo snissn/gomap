@@ -3,6 +3,7 @@ package caching
 import (
 	"bytes"
 	"errors"
+	"sync/atomic"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -54,6 +55,20 @@ type publishedRootSet struct {
 	iterator    publishedRootRef
 }
 
+type rootDomainPublishTelemetry struct {
+	installs         atomic.Uint64
+	clears           atomic.Uint64
+	staleRejects     atomic.Uint64
+	backendFallbacks atomic.Uint64
+}
+
+type rootDomainPublishStats struct {
+	installs         uint64
+	clears           uint64
+	staleRejects     uint64
+	backendFallbacks uint64
+}
+
 type rootDomainProbeResult struct {
 	val   []byte
 	ptr   page.ValuePtr
@@ -84,6 +99,7 @@ func (db *DB) resetRootDomainStatesLocked() {
 		db.rootPointStates[i].mutable = db.mutableShards[i].mem
 	}
 	db.rootIteratorState = rootDomainState{}
+	db.rootPublishedSet = nil
 }
 
 func (db *DB) resyncRootDomainQueuedRunsLocked() {
@@ -155,44 +171,82 @@ func (db *DB) publishRootDomainSnapshotsLocked(view *memtableView) {
 	view.rootIterator = db.rootIteratorState.snapshot()
 	view.rootIterator.mutable = nil
 	view.rootIteratorRanges = view.queueRanges
-	view.publishedRoots = publishedRootSetFromMemtableView(view)
+	if db.rootPublishedSet != nil {
+		view.publishedRoots = clonePublishedRootSet(db.rootPublishedSet)
+	} else {
+		view.publishedRoots = publishedRootSetFromMemtableView(view)
+	}
 }
 
-func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) {
+func clonePublishedRootSet(set *publishedRootSet) *publishedRootSet {
+	if set == nil {
+		return nil
+	}
+	cloned := &publishedRootSet{
+		generation: set.generation,
+		iterator:   set.iterator,
+	}
+	if len(set.pointShards) > 0 {
+		cloned.pointShards = append(make([]publishedRootRef, 0, len(set.pointShards)), set.pointShards...)
+	}
+	return cloned
+}
+
+func (db *DB) rootDomainPublishStatsSnapshot() rootDomainPublishStats {
 	if db == nil {
-		return
+		return rootDomainPublishStats{}
+	}
+	return rootDomainPublishStats{
+		installs:         db.rootPublishStats.installs.Load(),
+		clears:           db.rootPublishStats.clears.Load(),
+		staleRejects:     db.rootPublishStats.staleRejects.Load(),
+		backendFallbacks: db.rootPublishStats.backendFallbacks.Load(),
+	}
+}
+
+func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) bool {
+	if db == nil {
+		return false
 	}
 	db.ensureRootDomainStatesLocked()
+	cloned := clonePublishedRootSet(set)
+	if cloned != nil && db.rootPublishedSet != nil &&
+		cloned.generation != 0 && db.rootPublishedSet.generation != 0 &&
+		cloned.generation < db.rootPublishedSet.generation {
+		db.rootPublishStats.staleRejects.Add(1)
+		return false
+	}
 	for i := range db.rootPointStates {
 		db.rootPointStates[i].published = nil
 		db.rootPointStates[i].publishedRootID = 0
 	}
 	db.rootIteratorState.published = nil
 	db.rootIteratorState.publishedRootID = 0
+	db.rootPublishedSet = cloned
 
-	if set != nil {
-		switch len(set.pointShards) {
+	if cloned != nil {
+		switch len(cloned.pointShards) {
 		case 0:
 		case 1:
-			ref := set.pointShards[0]
+			ref := cloned.pointShards[0]
 			for i := range db.rootPointStates {
 				db.rootPointStates[i].published = ref.lookup
 				db.rootPointStates[i].publishedRootID = ref.rootID
 			}
 		default:
-			limit := len(set.pointShards)
+			limit := len(cloned.pointShards)
 			if limit > len(db.rootPointStates) {
 				limit = len(db.rootPointStates)
 			}
 			for i := 0; i < limit; i++ {
-				ref := set.pointShards[i]
+				ref := cloned.pointShards[i]
 				db.rootPointStates[i].published = ref.lookup
 				db.rootPointStates[i].publishedRootID = ref.rootID
 			}
 		}
-		db.rootIteratorState.published = set.iterator.lookup
-		db.rootIteratorState.publishedRootID = set.iterator.rootID
-		if want := set.generation; want != 0 {
+		db.rootIteratorState.published = cloned.iterator.lookup
+		db.rootIteratorState.publishedRootID = cloned.iterator.rootID
+		if want := cloned.generation; want != 0 {
 			for {
 				cur := db.rootDomainVersion.Load()
 				if cur >= want {
@@ -203,9 +257,13 @@ func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) {
 				}
 			}
 		}
+		db.rootPublishStats.installs.Add(1)
+	} else {
+		db.rootPublishStats.clears.Add(1)
 	}
 
 	db.publishMemtablesLocked()
+	return true
 }
 
 func (db *DB) promoteRootDomainMutableLocked(shardIdx int, sealed, next memtable.Table) {
