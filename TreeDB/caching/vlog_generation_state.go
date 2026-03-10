@@ -51,6 +51,8 @@ func loadValueLogGenerationRewriteQueue(path string) ([]uint32, error) {
 	var raw valueLogGenerationStateFile
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &raw); err != nil {
+			// Rewrite queue state is rebuildable from the next maintenance plan, so
+			// tolerate torn/corrupt JSON here.
 			return nil, nil
 		}
 	}
@@ -238,10 +240,16 @@ func writeValueLogGenerationStateAtomic(path string, data []byte, perm os.FileMo
 }
 
 func isWindowsRenameRetryable(err error) bool {
+	const (
+		// See https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes
+		windowsErrAccessDenied     = syscall.Errno(5)  // ERROR_ACCESS_DENIED
+		windowsErrSharingViolation = syscall.Errno(32) // ERROR_SHARING_VIOLATION
+		windowsErrLockViolation    = syscall.Errno(33) // ERROR_LOCK_VIOLATION
+	)
 	var errno syscall.Errno
 	if errors.As(err, &errno) {
 		switch errno {
-		case syscall.Errno(5), syscall.Errno(32), syscall.Errno(33):
+		case windowsErrAccessDenied, windowsErrSharingViolation, windowsErrLockViolation:
 			return true
 		}
 	}
