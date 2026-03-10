@@ -170,9 +170,6 @@ func (s *Snapshot) iteratorSources(start, end []byte, reverse bool) ([]merging.I
 		return nil, backenddb.ErrClosed
 	}
 	queue := s.rootIterator.immutables
-	if queue == nil {
-		queue = rootDomainSnapshotFromMemtableView(s.view, -1, false).immutables
-	}
 	sources := make([]merging.IteratorSource, 0, len(queue)+1)
 	prio := 0
 	for idx := len(queue) - 1; idx >= 0; idx-- {

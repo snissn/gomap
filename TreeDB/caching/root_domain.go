@@ -245,8 +245,6 @@ func rootDomainSnapshotFromCachedSnapshot(s *Snapshot, key []byte) rootDomainSna
 	var snap rootDomainSnapshot
 	if shardIdx >= 0 && shardIdx < len(s.rootPointShards) {
 		snap = s.rootPointShards[shardIdx]
-	} else {
-		snap = rootDomainSnapshotFromMemtableView(s.view, shardIdx, false)
 	}
 	if s.rootPublished != nil {
 		snap.published = s.rootPublished
