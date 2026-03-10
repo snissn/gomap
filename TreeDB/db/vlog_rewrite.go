@@ -43,8 +43,10 @@ type ValueLogRewriteStats struct {
 // rewrite run is worth performing without forcing the rewrite implementation
 // to do expensive live-byte estimation work twice.
 type ValueLogRewritePlan struct {
-	// SourceFileIDs are the selected value-log segment IDs. The slice is sorted.
+	// SourceFileIDs are the selected value-log segment IDs in rewrite priority order.
 	SourceFileIDs []uint32
+	// SelectedSegments preserves the selected segment order and debt estimates.
+	SelectedSegments []ValueLogRewritePlanSegment
 
 	SegmentsTotal    int
 	SegmentsSelected int
@@ -56,6 +58,14 @@ type ValueLogRewritePlan struct {
 	SelectedBytesTotal int64
 	SelectedBytesLive  int64
 	SelectedBytesStale int64
+}
+
+type ValueLogRewritePlanSegment struct {
+	FileID        uint32
+	BytesTotal    int64
+	BytesLive     int64
+	BytesStale    int64
+	StaleRatioPPM uint32
 }
 
 // ValueLogRewriteOnlineOptions controls online rewrite behavior.
@@ -330,9 +340,9 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		}
 	}
 
-	sourceIDs := map[uint32]struct{}(nil)
+	selectedSegments := []rewriteSourceSegment(nil)
 	if hasRewriteSourceSelection(opts) {
-		sourceIDs = selectRewriteSourceSegments(opts, set.Files, active, liveByID)
+		selectedSegments = listRewriteSourceSegments(opts, set.Files, active, liveByID)
 	}
 
 	// Populate live/stale totals when we have a live-byte estimate.
@@ -354,36 +364,31 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		}
 	}
 
-	if len(sourceIDs) > 0 {
-		plan.SourceFileIDs = make([]uint32, 0, len(sourceIDs))
-		for id := range sourceIDs {
-			plan.SourceFileIDs = append(plan.SourceFileIDs, id)
-		}
-		sort.Slice(plan.SourceFileIDs, func(i, j int) bool { return plan.SourceFileIDs[i] < plan.SourceFileIDs[j] })
-		plan.SegmentsSelected = len(plan.SourceFileIDs)
-
-		for _, id := range plan.SourceFileIDs {
-			f := set.Files[id]
-			if f == nil {
+	if len(selectedSegments) > 0 {
+		plan.SourceFileIDs = make([]uint32, 0, len(selectedSegments))
+		plan.SelectedSegments = make([]ValueLogRewritePlanSegment, 0, len(selectedSegments))
+		plan.SegmentsSelected = len(selectedSegments)
+		for _, seg := range selectedSegments {
+			if seg.fileID == 0 {
 				continue
 			}
-			size := fileSize(f)
-			if size <= 0 {
-				continue
+			plan.SourceFileIDs = append(plan.SourceFileIDs, seg.fileID)
+			plan.SelectedSegments = append(plan.SelectedSegments, ValueLogRewritePlanSegment{
+				FileID:        seg.fileID,
+				BytesTotal:    seg.totalBytes,
+				BytesLive:     seg.liveBytes,
+				BytesStale:    seg.staleBytes,
+				StaleRatioPPM: uint32(normalizeStaleRatio(seg.staleRatio) * 1_000_000),
+			})
+			if seg.totalBytes > 0 {
+				plan.SelectedBytesTotal += seg.totalBytes
 			}
-			plan.SelectedBytesTotal += size
-			if liveByID == nil {
-				continue
+			if seg.liveBytes > 0 {
+				plan.SelectedBytesLive += seg.liveBytes
 			}
-			live := liveByID[id]
-			if live < 0 {
-				live = 0
+			if seg.staleBytes > 0 {
+				plan.SelectedBytesStale += seg.staleBytes
 			}
-			if live > size {
-				live = size
-			}
-			plan.SelectedBytesLive += live
-			plan.SelectedBytesStale += size - live
 		}
 	}
 
@@ -738,19 +743,26 @@ func (db *DB) valueLogRecordLengthForRewrite(ptr page.ValuePtr) (uint32, error) 
 
 type rewriteSourceSegment struct {
 	fileID     uint32
+	totalBytes int64
 	liveBytes  int64
 	staleBytes int64
 	staleRatio float64
 }
 
-func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) map[uint32]struct{} {
+func listRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) []rewriteSourceSegment {
 	if len(opts.SourceFileIDs) > 0 {
-		selected := make(map[uint32]struct{}, len(opts.SourceFileIDs))
+		selected := make([]rewriteSourceSegment, 0, len(opts.SourceFileIDs))
 		for _, id := range opts.SourceFileIDs {
-			if _, ok := files[id]; !ok {
+			f, ok := files[id]
+			if !ok {
 				continue
 			}
-			selected[id] = struct{}{}
+			size := fileSize(f)
+			selected = append(selected, rewriteSourceSegment{
+				fileID:     id,
+				totalBytes: size,
+				liveBytes:  size,
+			})
 		}
 		return selected
 	}
@@ -806,6 +818,7 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 		}
 		candidates = append(candidates, rewriteSourceSegment{
 			fileID:     id,
+			totalBytes: size,
 			liveBytes:  liveBytes,
 			staleBytes: staleBytes,
 			staleRatio: staleRatio,
@@ -813,7 +826,7 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 	}
 
 	if len(candidates) == 0 {
-		return map[uint32]struct{}{}
+		return nil
 	}
 
 	sort.SliceStable(candidates, func(i, j int) bool {
@@ -831,7 +844,7 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 		return a.fileID < b.fileID
 	})
 
-	selected := make(map[uint32]struct{}, len(candidates))
+	selected := make([]rewriteSourceSegment, 0, len(candidates))
 	var selectedBytes int64
 	for _, candidate := range candidates {
 		if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
@@ -843,10 +856,22 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 				continue
 			}
 		}
-		selected[candidate.fileID] = struct{}{}
+		selected = append(selected, candidate)
 		selectedBytes += candidate.liveBytes
 	}
 	return selected
+}
+
+func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) map[uint32]struct{} {
+	selected := listRewriteSourceSegments(opts, files, active, liveByID)
+	if len(selected) == 0 {
+		return map[uint32]struct{}{}
+	}
+	out := make(map[uint32]struct{}, len(selected))
+	for _, segment := range selected {
+		out[segment.fileID] = struct{}{}
+	}
+	return out
 }
 
 // ValueLogRewriteOnline rewrites pointer-backed values in bounded commit

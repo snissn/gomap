@@ -41,11 +41,8 @@ func closeNoErr(t *testing.T, c interface{ Close() error }) {
 
 func assertRewritePlanStableFieldsEqual(t *testing.T, got, want ValueLogRewritePlan) {
 	t.Helper()
-	gotIDs := slices.Clone(got.SourceFileIDs)
-	wantIDs := slices.Clone(want.SourceFileIDs)
-	slices.Sort(gotIDs)
-	slices.Sort(wantIDs)
-	if !slices.Equal(gotIDs, wantIDs) ||
+	if !slices.Equal(got.SourceFileIDs, want.SourceFileIDs) ||
+		!reflect.DeepEqual(got.SelectedSegments, want.SelectedSegments) ||
 		got.SegmentsTotal != want.SegmentsTotal ||
 		got.SegmentsSelected != want.SegmentsSelected ||
 		got.BytesTotal != want.BytesTotal ||
@@ -1051,6 +1048,9 @@ func TestValueLogRewritePlan_SparseSelection_SelectsHighStaleSegment(t *testing.
 	if plan.SourceFileIDs[0] != ptrs1[0].FileID {
 		t.Fatalf("expected stale segment %d to be selected, got %d", ptrs1[0].FileID, plan.SourceFileIDs[0])
 	}
+	if len(plan.SelectedSegments) != 1 || plan.SelectedSegments[0].FileID != ptrs1[0].FileID {
+		t.Fatalf("selected segments=%+v want stale segment %d", plan.SelectedSegments, ptrs1[0].FileID)
+	}
 	if plan.SelectedBytesStale <= 0 {
 		t.Fatalf("expected non-zero stale bytes for selected segment, got %d", plan.SelectedBytesStale)
 	}
@@ -1119,6 +1119,9 @@ func TestValueLogRewritePlan_GroupedPointers_DedupLiveBytes(t *testing.T) {
 	}
 	if plan.SourceFileIDs[0] != base.FileID {
 		t.Fatalf("expected stale segment %d to be selected, got %d", base.FileID, plan.SourceFileIDs[0])
+	}
+	if len(plan.SelectedSegments) != 1 || plan.SelectedSegments[0].FileID != base.FileID {
+		t.Fatalf("selected segments=%+v want stale segment %d", plan.SelectedSegments, base.FileID)
 	}
 	if plan.SelectedBytesStale <= 0 {
 		t.Fatalf("expected non-zero stale bytes for selected segment, got %d", plan.SelectedBytesStale)

@@ -334,6 +334,19 @@ func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backen
 	return cloned
 }
 
+func assertRewriteDebtFileIDs(t *testing.T, got []valueLogGenerationRewriteDebtEntry, want []uint32) {
+	t.Helper()
+	ids := vlogGenerationRewriteDebtFileIDs(got)
+	if len(ids) != len(want) {
+		t.Fatalf("rewrite debt ids=%v want=%v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("rewrite debt ids=%v want=%v", ids, want)
+		}
+	}
+}
+
 func (b *rewriteBudgetRecordingBackend) recordedPlan() (backenddb.ValueLogRewriteOnlineOptions, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -506,7 +519,11 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	recorder := &rewriteBudgetRecordingBackend{
 		DB: backend,
 		planResponse: backenddb.ValueLogRewritePlan{
-			SourceFileIDs:     []uint32{11, 22},
+			SourceFileIDs: []uint32{11, 22},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+			},
 			SelectedBytesLive: 128,
 		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
@@ -532,6 +549,14 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	}
 	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("queue after first run=%v want=%v", got, want)
+	}
+	debt, err := db.currentVlogGenerationRewriteDebt()
+	if err != nil {
+		t.Fatalf("current debt after first run: %v", err)
+	}
+	assertRewriteDebtFileIDs(t, debt, []uint32{22})
+	if len(debt) != 1 || debt[0].BytesLive != 32 || debt[0].BytesStale != 736 {
+		t.Fatalf("rewrite debt after first run=%+v want one persisted debt entry for 22", debt)
 	}
 
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
@@ -569,7 +594,11 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	recorder := &rewriteBudgetRecordingBackend{
 		DB: backend,
 		planResponse: backenddb.ValueLogRewritePlan{
-			SourceFileIDs:     []uint32{11, 22},
+			SourceFileIDs: []uint32{11, 22},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+			},
 			SelectedBytesLive: 128,
 		},
 		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
@@ -612,6 +641,14 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("queue after reopen=%v want=%v", got, want)
 	}
+	debt, err := db2.currentVlogGenerationRewriteDebt()
+	if err != nil {
+		t.Fatalf("current debt after reopen: %v", err)
+	}
+	assertRewriteDebtFileIDs(t, debt, []uint32{22})
+	if len(debt) != 1 || debt[0].BytesLive != 32 || debt[0].BytesStale != 736 {
+		t.Fatalf("rewrite debt after reopen=%+v want one persisted debt entry for 22", debt)
+	}
 	stats := db2.Stats()
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_len"]; got != "1" {
 		t.Fatalf("rewrite queue len after reopen=%q want 1", got)
@@ -645,7 +682,11 @@ func TestVlogGenerationRewriteQueue_PreservedOnRewriteError(t *testing.T) {
 	recorder := &rewriteBudgetRecordingBackend{
 		DB: backend,
 		planResponse: backenddb.ValueLogRewritePlan{
-			SourceFileIDs:     []uint32{11, 22},
+			SourceFileIDs: []uint32{11, 22},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 11, BytesTotal: 512, BytesLive: 96, BytesStale: 416, StaleRatioPPM: 812500},
+				{FileID: 22, BytesTotal: 768, BytesLive: 32, BytesStale: 736, StaleRatioPPM: 958333},
+			},
 			SelectedBytesLive: 128,
 		},
 		rewriteErr: errors.New("rewrite failed"),
@@ -661,6 +702,14 @@ func TestVlogGenerationRewriteQueue_PreservedOnRewriteError(t *testing.T) {
 	}
 	if got, want := queue, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("queue after failed rewrite=%v want=%v", got, want)
+	}
+	debt, err := db.currentVlogGenerationRewriteDebt()
+	if err != nil {
+		t.Fatalf("current debt after failed rewrite: %v", err)
+	}
+	assertRewriteDebtFileIDs(t, debt, []uint32{11, 22})
+	if len(debt) != 2 || debt[0].BytesLive != 96 || debt[1].BytesLive != 32 {
+		t.Fatalf("rewrite debt after failed rewrite=%+v want persisted debt entries", debt)
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls after failed rewrite=%d want=1", calls)
