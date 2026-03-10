@@ -3732,6 +3732,9 @@ type DB struct {
 	vlogGenerationChurnBytes              atomic.Uint64
 	vlogGenerationSchedulerState          atomic.Uint32
 	vlogGenerationLastReason              atomic.Uint32
+	vlogGenerationRewriteQueueMu          sync.Mutex
+	vlogGenerationRewriteQueue            []uint32
+	vlogGenerationRewriteQueueLoaded      bool
 	vlogGenerationLastChurnBps            atomic.Int64
 	vlogGenerationLastChurnSampleBytes    atomic.Uint64
 	vlogGenerationLastChurnSampleNS       atomic.Int64
@@ -3814,6 +3817,7 @@ const (
 	vlogGenerationReasonChurn
 	vlogGenerationReasonPeriodicGC
 	vlogGenerationReasonPostRewriteVacuum
+	vlogGenerationReasonRewriteResume
 )
 
 const (
@@ -5880,6 +5884,8 @@ func vlogGenerationReasonString(v uint32) string {
 		return "periodic_gc"
 	case vlogGenerationReasonPostRewriteVacuum:
 		return "post_rewrite_vacuum"
+	case vlogGenerationReasonRewriteResume:
+		return "rewrite_resume"
 	default:
 		return "unknown"
 	}
@@ -9985,6 +9991,14 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
+	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+		if db.notifyError != nil {
+			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite queue: %w", err))
+		}
+		return
+	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
 	if !runGC && !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
@@ -9997,7 +10011,7 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	// caused real restore stalls. Keep WAL-on profiles eligible for maintenance
 	// before the first checkpoint; starving that path causes the main value-log
 	// lane to grow unchecked during restore.
-	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC {
+	if db.disableJournal && db.checkpointRuns.Load() == 0 && !runGC && len(rewriteQueue) == 0 {
 		return
 	}
 	// Retained-prune and generation maintenance use the same foreground quiet-window gate.
@@ -10034,10 +10048,14 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	var rewritePlan backenddb.ValueLogRewritePlan
 	haveRewritePlan := false
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
+	if len(rewriteQueue) > 0 {
+		shouldRewrite = true
+		reason = vlogGenerationReasonRewriteResume
+	}
 	// Stale-ratio trigger: use a sparse rewrite plan (live-byte estimate) to
 	// detect when any segments are meaningfully stale. This avoids relying on
 	// reclaimable-WAL heuristics (which can be 0 in split-value-log mode).
-	if !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
+	if len(rewriteQueue) == 0 && !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
 		lastPlan := db.vlogGenerationLastRewritePlanUnixNano.Load()
 		if lastPlan > 0 {
 			lastAt := time.Unix(0, lastPlan)
@@ -10105,14 +10123,18 @@ planned:
 	rewriter, hasRewriter := db.backend.(backendValueLogRewriter)
 	if shouldRewrite && hasRewriter {
 		last := db.vlogGenerationLastRewriteUnixNano.Load()
+		minInterval := vlogGenerationRewriteMinInterval
+		if len(rewriteQueue) > 0 {
+			minInterval = vlogGenerationRewriteResumeMinInterval
+		}
 		if last > 0 {
 			lastAt := time.Unix(0, last)
-			if now.Sub(lastAt) < vlogGenerationRewriteMinInterval {
+			if now.Sub(lastAt) < minInterval {
 				shouldRewrite = false
 			}
 		}
 	}
-	if shouldRewrite && hasRewriter && !haveRewritePlan && hasPlanner {
+	if len(rewriteQueue) == 0 && shouldRewrite && hasRewriter && !haveRewritePlan && hasPlanner {
 		maxSourceBytes := db.vlogGenerationRewriteBudgetTokensBytes.Load()
 		if maxSourceBytes < 0 {
 			maxSourceBytes = 0
@@ -10161,7 +10183,7 @@ planned:
 			now = time.Now()
 			db.vlogGenerationLastRewriteUnixNano.Store(now.UnixNano())
 			maxSourceBytes := int64(0)
-			if !haveRewritePlan {
+			if len(rewriteQueue) == 0 && !haveRewritePlan {
 				maxSourceBytes = db.vlogGenerationRewriteBudgetTokensBytes.Load()
 				if maxSourceBytes < 0 {
 					maxSourceBytes = 0
@@ -10195,8 +10217,18 @@ planned:
 					return start, nil
 				},
 			}
-			if haveRewritePlan {
-				rewriteOpts.SourceFileIDs = append([]uint32(nil), rewritePlan.SourceFileIDs...)
+			processedRewriteIDs := []uint32(nil)
+			if len(rewriteQueue) > 0 {
+				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+			} else if haveRewritePlan {
+				if err := db.setVlogGenerationRewriteQueue(rewritePlan.SourceFileIDs); err != nil {
+					return fmt.Errorf("persist generational rewrite queue: %w", err)
+				}
+				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
+				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+			}
+			if len(processedRewriteIDs) > 0 {
+				rewriteOpts.SourceFileIDs = processedRewriteIDs
 			} else {
 				rewriteOpts.MaxSourceSegments = 0
 				rewriteOpts.MaxSourceBytes = maxSourceBytes
@@ -10212,6 +10244,11 @@ planned:
 			if err != nil {
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
+			if len(processedRewriteIDs) > 0 {
+				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
+					return fmt.Errorf("consume generational rewrite queue: %w", err)
+				}
+			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
@@ -10225,7 +10262,9 @@ planned:
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
 			rewriteBytesIn := int64(0)
-			if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
+			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+				rewriteBytesIn = int64(stats.BytesBefore)
+			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				rewriteBytesIn = rewritePlan.SelectedBytesLive
 			} else if maxSourceBytes > 0 {
 				rewriteBytesIn = maxSourceBytes
@@ -10239,7 +10278,9 @@ planned:
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
 			consumed := int64(0)
-			if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
+			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+				consumed = int64(stats.BytesBefore)
+			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				consumed = rewritePlan.SelectedBytesLive
 			} else if maxSourceBytes > 0 {
 				consumed = maxSourceBytes
@@ -10293,7 +10334,7 @@ planned:
 	}
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
-	err := db.runWithBackendMaintenance(func() error {
+	err = db.runWithBackendMaintenance(func() error {
 		if needEligibilityEstimate {
 			gcStats, err := db.estimateVlogGenerationGCEligible(gcer)
 			if err != nil {
