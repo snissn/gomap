@@ -142,9 +142,13 @@ func TestPointReads_ConsultOnlyShardImmutableQueue(t *testing.T) {
 	queue[targetShard].SetEntry(wantKey, []byte("v"), page.ValuePtr{}, node.FlagInline)
 
 	db.memtables.Store(&memtableView{
-		mutables:      make([]memtable.Table, shards), // non-nil length enables shard filtering
-		queue:         queue,
-		queueShardIDs: queueShardIDs,
+		rootPointShards: func() []rootDomainSnapshot {
+			shardsSnap := make([]rootDomainSnapshot, shards)
+			for shard := 0; shard < shards; shard++ {
+				shardsSnap[shard].immutables = []memtable.Table{queue[shard]}
+			}
+			return shardsSnap
+		}(),
 	})
 
 	val, found, err := db.getMemtable(wantKey)
@@ -342,6 +346,9 @@ func TestPointReads_EmptyMemtableBypassGuardChecksMutableLen(t *testing.T) {
 	}
 	db.memtables.Store(&memtableView{
 		mutables: []memtable.Table{ct},
+		rootPointShards: []rootDomainSnapshot{
+			{mutable: ct},
+		},
 	})
 
 	got, err := db.Get(key)
