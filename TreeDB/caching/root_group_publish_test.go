@@ -3,6 +3,9 @@ package caching
 import (
 	"errors"
 	"testing"
+	"time"
+
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestInstallPublishedRootSetLocked_PublishesOnePinnedGeneration(t *testing.T) {
@@ -346,5 +349,264 @@ func TestPublishInstalledRootSetLocked_RetryPublishesExactlyOnce(t *testing.T) {
 	}
 	if stats.retrySuccesses != 1 {
 		t.Fatalf("retrySuccesses=%d want 1", stats.retrySuccesses)
+	}
+}
+
+func TestInstallPublishedRootSetLocked_MarksDirtyPublishGroup(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	db.mu.Lock()
+	ok := db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 9,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "v"}), rootID: 91},
+		},
+	})
+	dirtyPending := db.dirtyRootPublishGroupPending
+	dirtyID := db.dirtyRootPublishGroupID
+	db.mu.Unlock()
+
+	if !ok {
+		t.Fatal("expected install to succeed")
+	}
+	if !dirtyPending {
+		t.Fatal("expected dirty publish group to be pending")
+	}
+	if dirtyID != 9 {
+		t.Fatalf("dirty publish group id=%d want 9", dirtyID)
+	}
+}
+
+func TestPublishInstalledRootSetLocked_SuccessClearsDirtyPublishGroup(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	set := &publishedRootSet{
+		generation: 5,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "v"}), rootID: 51},
+		},
+	}
+
+	db.mu.Lock()
+	if !db.installPublishedRootSetLocked(set) {
+		db.mu.Unlock()
+		t.Fatal("expected install to succeed")
+	}
+	if err := db.publishInstalledRootSetLocked(set); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("publishInstalledRootSetLocked: %v", err)
+	}
+	dirtyPending := db.dirtyRootPublishGroupPending
+	dirtyID := db.dirtyRootPublishGroupID
+	db.mu.Unlock()
+
+	if dirtyPending {
+		t.Fatal("expected dirty publish group to clear")
+	}
+	if dirtyID != 0 {
+		t.Fatalf("dirty publish group id=%d want 0", dirtyID)
+	}
+}
+
+func TestPublishInstalledRootSetLocked_FailureLeavesDirtyPublishGroupPending(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+	set := &publishedRootSet{
+		generation: 6,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "v"}), rootID: 61},
+		},
+	}
+
+	db.mu.Lock()
+	if !db.installPublishedRootSetLocked(set) {
+		db.mu.Unlock()
+		t.Fatal("expected install to succeed")
+	}
+	db.rootPublishHook = func(*publishedRootSet) error { return errors.New("boom") }
+	err := db.publishInstalledRootSetLocked(set)
+	dirtyPending := db.dirtyRootPublishGroupPending
+	dirtyID := db.dirtyRootPublishGroupID
+	db.rootPublishHook = nil
+	db.mu.Unlock()
+
+	if err == nil {
+		t.Fatal("expected publish to fail")
+	}
+	if !dirtyPending {
+		t.Fatal("expected dirty publish group to remain pending")
+	}
+	if dirtyID != 6 {
+		t.Fatalf("dirty publish group id=%d want 6", dirtyID)
+	}
+}
+
+func TestInstallPublishedRootSetLocked_NewerGenerationReplacesDirtyPublishGroup(t *testing.T) {
+	db := &DB{
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	db.mu.Lock()
+	if !db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 7,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "a"}), rootID: 71},
+		},
+	}) {
+		db.mu.Unlock()
+		t.Fatal("expected first install to succeed")
+	}
+	if !db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 8,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "b"}), rootID: 81},
+		},
+	}) {
+		db.mu.Unlock()
+		t.Fatal("expected second install to succeed")
+	}
+	dirtyPending := db.dirtyRootPublishGroupPending
+	dirtyID := db.dirtyRootPublishGroupID
+	db.mu.Unlock()
+
+	if !dirtyPending {
+		t.Fatal("expected dirty publish group to remain pending")
+	}
+	if dirtyID != 8 {
+		t.Fatalf("dirty publish group id=%d want 8", dirtyID)
+	}
+}
+
+func TestFlushSome_PrefersDirtyRootPublishGroupBeforeLaneWork(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		JournalLanes:             1,
+		MemtableShards:           1,
+		ValueLogPointerThreshold: 1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
+		AllowUnsafe:              true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	if !db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 10,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "p", value: "v"}), rootID: 101},
+		},
+	}) {
+		db.mu.Unlock()
+		t.Fatal("expected install to succeed")
+	}
+	hookCalls := 0
+	db.rootPublishHook = func(*publishedRootSet) error {
+		hookCalls++
+		return nil
+	}
+	db.mu.Unlock()
+
+	flushed := db.flushSome(false, 1, time.Second)
+
+	db.mu.Lock()
+	queueLen := len(db.queue)
+	dirtyPending := db.dirtyRootPublishGroupPending
+	db.rootPublishHook = nil
+	db.mu.Unlock()
+
+	if flushed != 1 {
+		t.Fatalf("flushSome flushed=%d want 1", flushed)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("hookCalls=%d want 1", hookCalls)
+	}
+	if queueLen != 1 {
+		t.Fatalf("queue len=%d want 1", queueLen)
+	}
+	if dirtyPending {
+		t.Fatal("expected dirty publish group to clear after flushSome publish")
+	}
+}
+
+func TestFlushSome_DirtyRootPublishFailureStopsBeforeLaneWork(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+	db, err := Open(dir, backend, Options{
+		JournalLanes:             1,
+		MemtableShards:           1,
+		ValueLogPointerThreshold: 1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff),
+		AllowUnsafe:              true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked: %v", err)
+	}
+	if !db.installPublishedRootSetLocked(&publishedRootSet{
+		generation: 11,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "p", value: "v"}), rootID: 111},
+		},
+	}) {
+		db.mu.Unlock()
+		t.Fatal("expected install to succeed")
+	}
+	hookCalls := 0
+	db.rootPublishHook = func(*publishedRootSet) error {
+		hookCalls++
+		return errors.New("boom")
+	}
+	db.mu.Unlock()
+
+	flushed := db.flushSome(false, 1, time.Second)
+
+	db.mu.Lock()
+	queueLen := len(db.queue)
+	dirtyPending := db.dirtyRootPublishGroupPending
+	dirtyID := db.dirtyRootPublishGroupID
+	db.rootPublishHook = nil
+	db.mu.Unlock()
+
+	if flushed != 0 {
+		t.Fatalf("flushSome flushed=%d want 0", flushed)
+	}
+	if hookCalls != 1 {
+		t.Fatalf("hookCalls=%d want 1", hookCalls)
+	}
+	if queueLen != 1 {
+		t.Fatalf("queue len=%d want 1", queueLen)
+	}
+	if !dirtyPending {
+		t.Fatal("expected dirty publish group to remain pending")
+	}
+	if dirtyID != 11 {
+		t.Fatalf("dirty publish group id=%d want 11", dirtyID)
 	}
 }
