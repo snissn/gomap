@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +19,44 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
+
+func withRewritePlanEstimateCounter(t *testing.T) *atomic.Uint64 {
+	t.Helper()
+	var counter atomic.Uint64
+	unregister := registerRewritePlanLiveEstimateHook(func() {
+		counter.Add(1)
+	})
+	t.Cleanup(func() {
+		unregister()
+	})
+	return &counter
+}
+
+func closeNoErr(t *testing.T, c interface{ Close() error }) {
+	t.Helper()
+	if err := c.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+func assertRewritePlanStableFieldsEqual(t *testing.T, got, want ValueLogRewritePlan) {
+	t.Helper()
+	gotIDs := slices.Clone(got.SourceFileIDs)
+	wantIDs := slices.Clone(want.SourceFileIDs)
+	slices.Sort(gotIDs)
+	slices.Sort(wantIDs)
+	if !slices.Equal(gotIDs, wantIDs) ||
+		got.SegmentsTotal != want.SegmentsTotal ||
+		got.SegmentsSelected != want.SegmentsSelected ||
+		got.BytesTotal != want.BytesTotal ||
+		got.BytesLive != want.BytesLive ||
+		got.BytesStale != want.BytesStale ||
+		got.SelectedBytesTotal != want.SelectedBytesTotal ||
+		got.SelectedBytesLive != want.SelectedBytesLive ||
+		got.SelectedBytesStale != want.SelectedBytesStale {
+		t.Fatalf("rewrite plans differ on stable fields:\ngot=%+v\nwant=%+v", got, want)
+	}
+}
 
 func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	dir := t.TempDir()
@@ -95,7 +135,7 @@ func TestValueLogRewriteOffline_RewritesAndShrinks(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	if err := db.Close(); err != nil {
 		t.Fatalf("close db: %v", err)
@@ -190,7 +230,7 @@ func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 	if err := db.Close(); err != nil {
 		t.Fatalf("close before rewrite: %v", err)
 	}
@@ -246,7 +286,7 @@ func TestValueLogRewrite_BatchedPointerSwap_ReopenPreservesData(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	if _, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		BatchSize:     2,
@@ -284,7 +324,7 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 120_000, 1, func(i int) []byte {
 		return bytes.Repeat([]byte("p"), 512)
@@ -296,7 +336,7 @@ func TestValueLogRewriteOnline_NoPointerKeys_DoesNotCreateNewSegment(t *testing.
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 	if err := db.Delete([]byte("k1")); err != nil {
 		t.Fatalf("delete pointer key: %v", err)
 	}
@@ -373,7 +413,7 @@ func TestValueLogRewriteOnline_ProtectedPathsDoNotKeepHistoricalRewriteLanes(t *
 	if err := b.Write(); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	protected := []string{
 		filepath.Join(dir, "wal", "value-l0-000002.log"),
@@ -440,7 +480,7 @@ func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	segmentsBefore, err := listWALSegments(dir)
 	if err != nil {
@@ -522,7 +562,7 @@ func TestValueLogRewrite_BatchedPointerSwap_SnapshotIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 110_000, 2, func(i int) []byte {
 		return bytes.Repeat([]byte{byte(10 + i)}, 512)
@@ -537,7 +577,7 @@ func TestValueLogRewrite_BatchedPointerSwap_SnapshotIsolation(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	snap := db.AcquireSnapshot()
 	defer snap.Close()
@@ -668,7 +708,7 @@ func TestValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 200_000, 1, func(i int) []byte {
 		return bytes.Repeat([]byte("a"), 256)
@@ -687,7 +727,7 @@ func TestValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		SourceFileIDs: []uint32{ptrs1[0].FileID},
@@ -734,7 +774,7 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	segmentsBefore, err := listWALSegments(dir)
 	if err != nil {
@@ -860,7 +900,7 @@ func TestValueLogRewriteOnline_SparseSelection_RewritesHighStaleSegment(t *testi
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	// Segment 1: two records (one referenced, one stale).
 	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 210_000, 2, func(i int) []byte {
@@ -881,7 +921,7 @@ func TestValueLogRewriteOnline_SparseSelection_RewritesHighStaleSegment(t *testi
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		BatchSize:            8,
@@ -930,7 +970,7 @@ func TestValueLogRewriteOnline_SparseSelection_NoSelectedSources_IsNoOp(t *testi
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	// One fully-live segment: no stale bytes means sparse source selection should
 	// select nothing and return a deterministic no-op stats result.
@@ -944,7 +984,7 @@ func TestValueLogRewriteOnline_SparseSelection_NoSelectedSources_IsNoOp(t *testi
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
 		BatchSize:            8,
@@ -973,7 +1013,7 @@ func TestValueLogRewritePlan_SparseSelection_SelectsHighStaleSegment(t *testing.
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	// Segment 1: two records (one referenced, one stale).
 	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 230_000, 2, func(i int) []byte {
@@ -994,7 +1034,7 @@ func TestValueLogRewritePlan_SparseSelection_SelectsHighStaleSegment(t *testing.
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	plan, err := db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{
 		MaxSourceSegments:    1,
@@ -1029,7 +1069,7 @@ func TestValueLogRewritePlan_GroupedPointers_DedupLiveBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	// Segment 1: two records, but many keys reference the first record via
 	// grouped pointers (same record, different sub-index). The second record is
@@ -1063,7 +1103,7 @@ func TestValueLogRewritePlan_GroupedPointers_DedupLiveBytes(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	plan, err := db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{
 		MaxSourceSegments:    1,
@@ -1095,7 +1135,7 @@ func TestValueLogRewritePlan_NoSelectionKnobs_ReturnsTotalsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 245_000, 1, func(i int) []byte {
 		return bytes.Repeat([]byte("z"), 256)
@@ -1108,7 +1148,7 @@ func TestValueLogRewritePlan_NoSelectionKnobs_ReturnsTotalsOnly(t *testing.T) {
 	if err := b.Write(); err != nil {
 		t.Fatalf("seed write: %v", err)
 	}
-	_ = b.Close()
+	closeNoErr(t, b)
 
 	plan, err := db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{})
 	if err != nil {
@@ -1125,6 +1165,114 @@ func TestValueLogRewritePlan_NoSelectionKnobs_ReturnsTotalsOnly(t *testing.T) {
 	}
 	if plan.BytesTotal <= 0 {
 		t.Fatalf("expected non-zero total bytes, got %d", plan.BytesTotal)
+	}
+}
+
+func TestValueLogRewritePlan_CachesLiveBytesForUnchangedState(t *testing.T) {
+	dir := t.TempDir()
+	counter := withRewritePlanEstimateCounter(t)
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 246_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("x"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 246_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("y"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    1,
+		MaxSourceBytes:       4 << 20,
+		MinSegmentStaleRatio: 0.10,
+		MinSegmentStaleBytes: 1,
+	}
+	plan1, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("first ValueLogRewritePlan: %v", err)
+	}
+	plan2, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("second ValueLogRewritePlan: %v", err)
+	}
+	assertRewritePlanStableFieldsEqual(t, plan1, plan2)
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("live-byte estimate runs=%d want 1", got)
+	}
+}
+
+func TestValueLogRewritePlan_InvalidatesCachedLiveBytesAfterCommit(t *testing.T) {
+	dir := t.TempDir()
+	counter := withRewritePlanEstimateCounter(t)
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 247_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("x"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 247_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("y"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	opts := ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    1,
+		MaxSourceBytes:       4 << 20,
+		MinSegmentStaleRatio: 0.10,
+		MinSegmentStaleBytes: 1,
+	}
+	if _, err := db.ValueLogRewritePlan(context.Background(), opts); err != nil {
+		t.Fatalf("first ValueLogRewritePlan: %v", err)
+	}
+	if got := counter.Load(); got != 1 {
+		t.Fatalf("live-byte estimate runs=%d want 1 after first plan", got)
+	}
+
+	b = db.NewBatch().(*Batch)
+	if err := b.Set([]byte("new-key"), []byte("new-value")); err != nil {
+		t.Fatalf("set new-key: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write new-key: %v", err)
+	}
+	closeNoErr(t, b)
+
+	if _, err := db.ValueLogRewritePlan(context.Background(), opts); err != nil {
+		t.Fatalf("second ValueLogRewritePlan: %v", err)
+	}
+	if got := counter.Load(); got != 2 {
+		t.Fatalf("live-byte estimate runs=%d want 2 after commit", got)
 	}
 }
 

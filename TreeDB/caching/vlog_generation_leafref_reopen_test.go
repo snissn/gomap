@@ -662,7 +662,7 @@ func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
 	}
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_CacheWALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_WALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -762,7 +762,7 @@ func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_CacheWAL
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_CacheWALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -869,7 +869,7 @@ func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_CacheWA
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_CacheWALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_WALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -946,20 +946,18 @@ func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_CacheWALOn(t
 		}
 	}
 
-	// Keep enough history to exercise background maintenance and reopenability
-	// without creating hundreds of segments for a 16 KiB target.
-	for i := 0; i < 6; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), 2048)
+	for i := 0; i < 16; i++ {
+		writeBatch(fmt.Sprintf("seed-%02d", i), 6000)
 		ageValueLogFiles()
 	}
 	if err := db.checkpointForBackendMaintenance(); err != nil {
 		t.Fatalf("checkpoint before maintenance: %v", err)
 	}
 
-	for round := 0; round < 8; round++ {
+	for round := 0; round < 20; round++ {
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
-		writeBatch(fmt.Sprintf("round-%02d", round), 768)
+		writeBatch(fmt.Sprintf("round-%02d", round), 2048)
 		ageValueLogFiles()
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
@@ -1012,17 +1010,17 @@ func TestCachedGenerationalMaintenance_LeafRefsBackgroundReopenable_CacheWALOn(t
 	}
 	defer reopenRW.Close()
 
-	got, err := reopenRW.Get([]byte("round-07-00042"))
+	got, err := reopenRW.Get([]byte("round-19-00042"))
 	if err != nil {
 		t.Fatalf("get after rw reopen: %v", err)
 	}
-	want := bytes.Repeat([]byte("round-07-value-"), 12)
+	want := bytes.Repeat([]byte("round-19-value-"), 12)
 	if !bytes.Equal(got, want) {
 		t.Fatalf("value mismatch after rw reopen")
 	}
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_CacheWALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_WALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -1146,7 +1144,7 @@ func TestCachedGenerationalMaintenance_DirectPointersSeedPhaseLarge_CacheWALOn(t
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersManualGC_CacheWALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_DirectPointersManualGC_WALOn(t *testing.T) {
 	t.Setenv(envDisableVlogGenerationRewrite, "1")
 	t.Setenv(envDisableVlogGenerationGC, "1")
 	t.Setenv(envDisableVlogGenerationVacuum, "1")
@@ -1322,25 +1320,22 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 		_ = b.Close()
 	}
 
-	seedBatches := 4
-	seedBatchWrites := 2048
-	rounds := 4
-	postRoundWrites := 512
+	seedBatches := 8
+	rounds := 6
+	postRoundWrites := 1024
 	if !disableWAL {
-		seedBatches = 6
-		seedBatchWrites = 3072
-		rounds = 5
-		postRoundWrites = 768
+		seedBatches = 12
+		rounds = 10
+		postRoundWrites = 1536
 		if runtime.GOOS == "windows" {
-			seedBatches = 4
-			seedBatchWrites = 2048
-			rounds = 4
-			postRoundWrites = 512
+			seedBatches = 8
+			rounds = 6
+			postRoundWrites = 1024
 		}
 	}
 
 	for i := 0; i < seedBatches; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), seedBatchWrites)
+		writeBatch(fmt.Sprintf("seed-%02d", i), 6000)
 	}
 
 	rewriteRounds := 0
@@ -1463,7 +1458,7 @@ func testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T, disab
 				currentPath := ""
 				currentSeq := 0
 				currentRetained := false
-				if laneID < len(db.lanes) {
+				if laneID >= 0 && laneID < len(db.lanes) {
 					lane := &db.lanes[laneID]
 					lane.vlogMu.Lock()
 					currentPath = lane.vlogPath
@@ -1549,11 +1544,11 @@ func TestCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t *testing.T) {
 	testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t, true)
 }
 
-func TestCachedRepeatedRewriteVacuumLeafRefsRemainReopenable_CacheWALOn(t *testing.T) {
+func TestCachedRepeatedRewriteVacuumLeafRefsRemainReopenable_WALOn(t *testing.T) {
 	testCachedRepeatedRewriteVacuumLeafRefsRemainReopenable(t, false)
 }
 
-func TestCachedRepeatedRewriteVacuumDirectPointersRemainReopenable_CacheWALOn(t *testing.T) {
+func TestCachedManualMaintenanceDirectPointersRemainReopenable_WALOn(t *testing.T) {
 	t.Setenv(envDisableVlogGenerationRewrite, "1")
 	t.Setenv(envDisableVlogGenerationGC, "1")
 	t.Setenv(envDisableVlogGenerationVacuum, "1")
@@ -1622,18 +1617,16 @@ func TestCachedRepeatedRewriteVacuumDirectPointersRemainReopenable_CacheWALOn(t 
 		_ = b.Close()
 	}
 
-	seedBatches := 3
-	seedBatchWrites := 768
-	rounds := 2
-	postRoundWrites := 256
+	seedBatches := 4
+	rounds := 3
+	postRoundWrites := 512
 	if runtime.GOOS == "windows" {
-		seedBatches = 2
-		seedBatchWrites = 512
+		seedBatches = 3
 		rounds = 2
-		postRoundWrites = 192
+		postRoundWrites = 384
 	}
 	for i := 0; i < seedBatches; i++ {
-		writeBatch(fmt.Sprintf("seed-%02d", i), seedBatchWrites)
+		writeBatch(fmt.Sprintf("seed-%02d", i), 4096)
 	}
 
 	rewriteRounds := 0
