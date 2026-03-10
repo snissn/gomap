@@ -708,7 +708,7 @@ func TestValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 200_000, 1, func(i int) []byte {
 		return bytes.Repeat([]byte("a"), 256)
@@ -900,7 +900,7 @@ func TestValueLogRewriteOnline_SparseSelection_RewritesHighStaleSegment(t *testi
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	// Segment 1: two records (one referenced, one stale).
 	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 210_000, 2, func(i int) []byte {
@@ -970,7 +970,7 @@ func TestValueLogRewriteOnline_SparseSelection_NoSelectedSources_IsNoOp(t *testi
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	// One fully-live segment: no stale bytes means sparse source selection should
 	// select nothing and return a deterministic no-op stats result.
@@ -1013,7 +1013,7 @@ func TestValueLogRewritePlan_SparseSelection_SelectsHighStaleSegment(t *testing.
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	// Segment 1: two records (one referenced, one stale).
 	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 230_000, 2, func(i int) []byte {
@@ -1069,7 +1069,7 @@ func TestValueLogRewritePlan_GroupedPointers_DedupLiveBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	// Segment 1: two records, but many keys reference the first record via
 	// grouped pointers (same record, different sub-index). The second record is
@@ -1135,7 +1135,7 @@ func TestValueLogRewritePlan_NoSelectionKnobs_ReturnsTotalsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 245_000, 1, func(i int) []byte {
 		return bytes.Repeat([]byte("z"), 256)
@@ -1176,7 +1176,7 @@ func TestValueLogRewritePlan_CachesLiveBytesForUnchangedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 246_000, 2, func(i int) []byte {
 		return bytes.Repeat([]byte("x"), 256)
@@ -1225,7 +1225,7 @@ func TestValueLogRewritePlan_InvalidatesCachedLiveBytesAfterCommit(t *testing.T)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	defer db.Close()
+	defer closeNoErr(t, db)
 
 	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 247_000, 2, func(i int) []byte {
 		return bytes.Repeat([]byte("x"), 256)
