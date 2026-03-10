@@ -1070,7 +1070,7 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 		},
 	}
 
-	if err := writeBenchprofArtifacts(dir, runs); err != nil {
+	if err := writeBenchprofArtifacts(dir, "native-fastpath", runs); err != nil {
 		t.Fatalf("writeBenchprofArtifacts: %v", err)
 	}
 
@@ -1081,6 +1081,13 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	}
 	if _, err := os.Stat(mdPath); err != nil {
 		t.Fatalf("expected markdown output: %v", err)
+	}
+	mdData, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatalf("read markdown: %v", err)
+	}
+	if !strings.Contains(string(mdData), "- execution path: `native-fastpath`") {
+		t.Fatalf("markdown missing execution path label:\n%s", string(mdData))
 	}
 
 	var parsed benchprofExport
@@ -1094,8 +1101,25 @@ func TestWriteBenchprofArtifacts_WritesJSONAndMarkdown(t *testing.T) {
 	if len(parsed.Runs) != 1 {
 		t.Fatalf("expected 1 run in json, got %d", len(parsed.Runs))
 	}
+	if got, want := parsed.Runs[0].ExecutionPath, "native-fastpath"; got != want {
+		t.Fatalf("unexpected execution path: got %q want %q", got, want)
+	}
 	if got := parsed.Runs[0].Results["full_scan"]["TreeDB"]; got != 1000 {
 		t.Fatalf("unexpected full_scan value: %v", got)
+	}
+}
+
+func TestWriteBenchprofArtifacts_InvalidExecutionPath(t *testing.T) {
+	dir := t.TempDir()
+	runs := []BenchRun{{
+		Config: BenchConfig{Keys: 1, Profile: "fast"},
+		Results: map[string]map[string]float64{
+			"full_scan": {"TreeDB": 1},
+		},
+	}}
+
+	if err := writeBenchprofArtifacts(dir, "mixed", runs); err == nil {
+		t.Fatal("expected invalid execution path to fail")
 	}
 }
 
