@@ -57,11 +57,12 @@ type publishedRootSet struct {
 }
 
 type rootPublishGroup struct {
-	generation  uint64
-	pointShards []rootDomainSnapshot
-	system      rootDomainSnapshot
-	iterator    rootDomainSnapshot
-	published   *publishedRootSet
+	generation       uint64
+	systemRootPageID uint64
+	pointShards      []rootDomainSnapshot
+	system           rootDomainSnapshot
+	iterator         rootDomainSnapshot
+	published        *publishedRootSet
 }
 
 type rootDomainPublishTelemetry struct {
@@ -89,6 +90,10 @@ type rootDomainProbeResult struct {
 	ptr   page.ValuePtr
 	flags byte
 	found bool
+}
+
+type backendStateProvider interface {
+	State() *backenddb.DBState
 }
 
 func (db *DB) ensureRootDomainStatesLocked() {
@@ -263,6 +268,11 @@ func (db *DB) buildRootPublishGroupLocked(set *publishedRootSet) *rootPublishGro
 	}
 	if set != nil {
 		group.generation = set.generation
+	}
+	if stateDB, ok := db.backend.(backendStateProvider); ok && stateDB != nil {
+		if state := stateDB.State(); state != nil {
+			group.systemRootPageID = state.SystemRootPageID
+		}
 	}
 	if len(db.rootPointStates) > 0 {
 		group.pointShards = make([]rootDomainSnapshot, len(db.rootPointStates))
@@ -598,9 +608,13 @@ func rootDomainSystemSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot 
 		return rootDomainSnapshot{}
 	}
 	snap := s.rootSystem
-	if s.publishedRoots != nil && s.publishedRoots.system.lookup != nil {
-		snap.published = s.publishedRoots.system.lookup
-		snap.publishedRootID = s.publishedRoots.system.rootID
+	if s.publishedRoots != nil {
+		if s.publishedRoots.system.lookup != nil {
+			snap.published = s.publishedRoots.system.lookup
+		}
+		if s.publishedRoots.system.rootID != 0 {
+			snap.publishedRootID = s.publishedRoots.system.rootID
+		}
 	}
 	return snap
 }

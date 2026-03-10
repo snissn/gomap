@@ -123,8 +123,10 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 	if snap.publishedRoots == nil {
 		db.rootPublishStats.backendFallbacks.Add(1)
 		rootRef := publishedRootRef{lookup: backendSnapshotLookup{snapshot: backendSnap}}
+		systemRef := publishedRootRef{}
 		if state := backendSnap.State(); state != nil {
 			rootRef.rootID = state.RootPageID
+			systemRef.rootID = state.SystemRootPageID
 		}
 		pointCount := len(db.mutableShards)
 		if pointCount == 0 && view != nil {
@@ -137,6 +139,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		snap.publishedRoots = &publishedRootSet{
 			generation:  snap.rootVersion,
 			pointShards: pointShards,
+			system:      systemRef,
 			iterator:    rootRef,
 		}
 	}
