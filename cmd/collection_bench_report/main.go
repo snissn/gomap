@@ -186,7 +186,10 @@ func parseFlagsFrom(args []string) (config, error) {
 }
 
 func validateExecutionPath(path string) error {
-	if path == "" || path == "oracle" || path == "native-fastpath" {
+	if path == "" {
+		return fmt.Errorf("-execution-path is required; hidden or implied path labels are forbidden")
+	}
+	if path == "oracle" || path == "native-fastpath" {
 		return nil
 	}
 	return fmt.Errorf("-execution-path must be oracle or native-fastpath; mixed-path labels are forbidden (got %q)", path)
