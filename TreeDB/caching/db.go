@@ -14727,49 +14727,40 @@ func (db *DB) Has(key []byte) (bool, error) {
 	if view != nil {
 		defer db.releaseMemtableView(view)
 	}
-	var (
-		mutables      []memtable.Table
-		queue         []memtable.Table
-		queueShardIDs []uint16
-	)
+	var snap rootDomainSnapshot
+	var haveSnapshot bool
 	if view != nil {
-		mutables = view.mutables
-		queue = view.queue
-		queueShardIDs = view.queueShardIDs
+		shardIdx := 0
+		if len(view.mutables) > 0 {
+			shardIdx = db.shardIndex(key)
+		}
+		snap = rootDomainSnapshotFromMemtableView(view, shardIdx, true)
+		haveSnapshot = true
 	} else {
 		db.mu.RLock()
+		fallbackView := &memtableView{
+			queue:         append([]memtable.Table(nil), db.queue...),
+			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
+		}
 		if len(db.mutableShards) > 0 {
-			mutables = make([]memtable.Table, len(db.mutableShards))
+			fallbackView.mutables = make([]memtable.Table, len(db.mutableShards))
 			for i := range db.mutableShards {
-				mutables[i] = db.mutableShards[i].mem
+				fallbackView.mutables[i] = db.mutableShards[i].mem
 			}
 		}
-		queue = append([]memtable.Table(nil), db.queue...)
-		queueShardIDs = append([]uint16(nil), db.queueShardIDs...)
 		db.mu.RUnlock()
+		shardIdx := 0
+		if len(fallbackView.mutables) > 0 {
+			shardIdx = db.shardIndex(key)
+		}
+		snap = rootDomainSnapshotFromMemtableView(fallbackView, shardIdx, true)
+		haveSnapshot = true
 	}
 
-	if len(mutables) > 0 {
-		idx := db.shardIndex(key)
-		if idx < len(mutables) && mutables[idx] != nil {
-			_, deleted, found := mutables[idx].Get(key)
-			if found {
-				return !deleted, nil
-			}
-		}
-	}
-
-	idx := 0
-	if len(mutables) > 0 {
-		idx = db.shardIndex(key)
-	}
-	for i := len(queue) - 1; i >= 0; i-- {
-		if len(queueShardIDs) > i && int(queueShardIDs[i]) != idx {
-			continue
-		}
-		_, deleted, found := queue[i].Get(key)
+	if haveSnapshot {
+		_, _, flags, found := snap.getEntry(key)
 		if found {
-			return !deleted, nil
+			return flags&node.FlagTombstone == 0, nil
 		}
 	}
 
