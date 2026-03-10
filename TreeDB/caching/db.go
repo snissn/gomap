@@ -3973,6 +3973,7 @@ type memtableView struct {
 	rootPointShards          []rootDomainSnapshot
 	rootSnapshotShards       []rootDomainSnapshot
 	rootIterator             rootDomainSnapshot
+	rootIteratorRanges       []keyRange
 	refs                     atomic.Int64
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
@@ -15513,8 +15514,10 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if view != nil {
 		if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
 			queue = snap.immutables
+			if len(view.rootIteratorRanges) == len(queue) {
+				queueRanges = view.rootIteratorRanges
+			}
 		}
-		queueRanges = view.queueRanges
 	} else {
 		db.mu.RLock()
 		if len(db.queue) > 0 {
@@ -15883,8 +15886,10 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	if view != nil {
 		if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
 			queue = snap.immutables
+			if len(view.rootIteratorRanges) == len(queue) {
+				queueRanges = view.rootIteratorRanges
+			}
 		}
-		queueRanges = view.queueRanges
 	} else {
 		db.mu.RLock()
 		if len(db.queue) > 0 {

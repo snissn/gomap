@@ -105,9 +105,6 @@ func livePointRootDomainSnapshot(view *memtableView, db *DB, key []byte) (rootDo
 	}
 	shardCount := len(view.rootPointShards)
 	if shardCount == 0 {
-		shardCount = len(view.mutables)
-	}
-	if shardCount == 0 {
 		return rootDomainSnapshot{}, false
 	}
 	shardIdx := 0
@@ -117,7 +114,7 @@ func livePointRootDomainSnapshot(view *memtableView, db *DB, key []byte) (rootDo
 	if shardIdx >= 0 && shardIdx < len(view.rootPointShards) {
 		return view.rootPointShards[shardIdx], true
 	}
-	return rootDomainSnapshotFromMemtableView(view, shardIdx, true), true
+	return rootDomainSnapshot{}, false
 }
 
 func liveIteratorRootDomainSnapshot(view *memtableView) (rootDomainSnapshot, bool) {
@@ -127,10 +124,7 @@ func liveIteratorRootDomainSnapshot(view *memtableView) (rootDomainSnapshot, boo
 	if rootDomainSnapshotHasInMemoryState(view.rootIterator) {
 		return view.rootIterator, true
 	}
-	if len(view.queue) == 0 {
-		return rootDomainSnapshot{}, false
-	}
-	return rootDomainSnapshotFromMemtableView(view, -1, false), true
+	return rootDomainSnapshot{}, false
 }
 
 func (db *DB) rawMemtableEntryFallback(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
@@ -172,8 +166,10 @@ func populateRootDomainSnapshots(view *memtableView) {
 	}
 	if len(view.queue) > 0 {
 		view.rootIterator = rootDomainSnapshot{immutables: view.queue}
+		view.rootIteratorRanges = view.queueRanges
 	} else {
 		view.rootIterator = rootDomainSnapshot{}
+		view.rootIteratorRanges = nil
 	}
 	if len(view.mutables) == 0 {
 		view.rootPointShards = nil
