@@ -852,3 +852,40 @@ func TestPublishInstalledRootSet_NewerGenerationInstalledDuringHookWins(t *testi
 		t.Fatalf("dirty publish group id=%d want 21", dirtyID)
 	}
 }
+
+func TestPublishInstalledRootSet_HookReceivesCurrentSystemRootPageID(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	var captured *rootPublishGroup
+	db.rootPublishHook = func(group *rootPublishGroup) error {
+		captured = group
+		return nil
+	}
+	if err := db.publishInstalledRootSet(&publishedRootSet{
+		generation: 22,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "v"}), rootID: 221},
+		},
+	}); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+	db.rootPublishHook = nil
+
+	if captured == nil {
+		t.Fatal("expected grouped publish payload")
+	}
+	if got, want := captured.systemRootPageID, backend.State().SystemRootPageID; got != want {
+		t.Fatalf("systemRootPageID=%d want %d", got, want)
+	}
+}

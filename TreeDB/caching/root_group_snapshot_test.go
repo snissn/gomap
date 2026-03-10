@@ -257,3 +257,28 @@ func TestAcquireSnapshot_FallsBackToBackendPublishedSetWithoutInstalledGroup(t *
 		t.Fatalf("backendFallbacks=%d want 1", stats.backendFallbacks)
 	}
 }
+
+func TestAcquireSnapshot_BackendFallbackPinsSystemRootPageID(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	db := &DB{
+		backend:       backend,
+		mutableShards: make([]memShard, 1),
+	}
+
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		t.Fatal("expected snapshot")
+	}
+	defer snap.Close()
+
+	systemSnap := rootDomainSystemSnapshotFromCachedSnapshot(snap)
+	if got, want := systemSnap.publishedRootID, backend.State().SystemRootPageID; got != want {
+		t.Fatalf("system published root id=%d want %d", got, want)
+	}
+}
