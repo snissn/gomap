@@ -1135,6 +1135,32 @@ func (db *DB) Has(key []byte) (bool, error) {
 	return db.backend.Has(key)
 }
 
+// HasMany reports whether each key exists.
+func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, err
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return nil, ErrClosed
+	}
+	defer snap.Close()
+	return snap.HasMany(keys)
+}
+
+// HasPrefixes reports whether each prefix has at least one visible key.
+func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	if err := db.ensureOpen(); err != nil {
+		return nil, err
+	}
+	snap := db.AcquireSnapshot()
+	if snap == nil {
+		return nil, ErrClosed
+	}
+	defer snap.Close()
+	return snap.HasPrefixes(prefixes)
+}
+
 // Set writes a key/value pair without forcing an fsync boundary.
 func (db *DB) Set(key, value []byte) error {
 	if err := db.ensureOpen(); err != nil {

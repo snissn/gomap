@@ -411,6 +411,23 @@ func rootDomainSnapshotFromCachedSnapshot(s *Snapshot, key []byte) rootDomainSna
 	return snap
 }
 
+func rootDomainIteratorSnapshotFromCachedSnapshot(s *Snapshot) rootDomainSnapshot {
+	if s == nil {
+		return rootDomainSnapshot{}
+	}
+	snap := s.rootIterator
+	if s.rootPublished != nil {
+		snap.published = s.rootPublished
+		snap.publishedRootID = s.rootPublishedRootID
+	} else if s.backend != nil {
+		snap.published = backendSnapshotLookup{snapshot: s.backend}
+		if state := s.backend.State(); state != nil {
+			snap.publishedRootID = state.RootPageID
+		}
+	}
+	return snap
+}
+
 func (s *rootDomainState) snapshot() rootDomainSnapshot {
 	if s == nil {
 		return rootDomainSnapshot{}

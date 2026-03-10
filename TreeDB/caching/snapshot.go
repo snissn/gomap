@@ -1,7 +1,9 @@
 package caching
 
 import (
+	"bytes"
 	"errors"
+	"sort"
 	"sync"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -311,6 +313,142 @@ func (s *Snapshot) Has(key []byte) (bool, error) {
 		return false, nil
 	}
 	return s.backend.Has(key)
+}
+
+func (s *Snapshot) HasMany(keys [][]byte) ([]bool, error) {
+	out := make([]bool, len(keys))
+	if len(keys) == 0 {
+		return out, nil
+	}
+	if s == nil || s.backend == nil {
+		return nil, backenddb.ErrClosed
+	}
+
+	refs := make([]getManyProbeRef, len(keys))
+	shardCount := len(s.rootPointShards)
+	for i, key := range keys {
+		shard := 0
+		if shardCount > 1 && s.db != nil {
+			shard = s.db.shardIndex(key)
+		}
+		refs[i] = getManyProbeRef{key: key, idx: i, shard: shard}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].shard != refs[j].shard {
+			return refs[i].shard < refs[j].shard
+		}
+		return bytes.Compare(refs[i].key, refs[j].key) < 0
+	})
+
+	unique := make([]getManyProbeRef, 0, len(refs))
+	groupStarts := make([]int, 0, len(refs))
+	for i, ref := range refs {
+		if len(unique) == 0 || ref.shard != unique[len(unique)-1].shard || !bytes.Equal(ref.key, unique[len(unique)-1].key) {
+			unique = append(unique, ref)
+			groupStarts = append(groupStarts, i)
+		}
+	}
+
+	results := make([]rootDomainProbeResult, len(unique))
+	if len(s.rootPointShards) > 0 {
+		start := 0
+		for start < len(unique) {
+			end := start + 1
+			shard := unique[start].shard
+			for end < len(unique) && unique[end].shard == shard {
+				end++
+			}
+			if shard >= 0 && shard < len(s.rootPointShards) {
+				if err := s.rootPointShards[shard].getManySortedRefs(unique[start:end], results[start:end]); err != nil {
+					return nil, err
+				}
+			}
+			start = end
+		}
+	}
+
+	backendIdx := make([]int, 0, len(unique))
+	for i, res := range results {
+		groupEnd := len(refs)
+		if i+1 < len(groupStarts) {
+			groupEnd = groupStarts[i+1]
+		}
+		switch {
+		case !res.found:
+			backendIdx = append(backendIdx, i)
+		case res.flags&node.FlagTombstone == 0:
+			for _, ref := range refs[groupStarts[i]:groupEnd] {
+				out[ref.idx] = true
+			}
+		}
+	}
+	for _, uniqueIdx := range backendIdx {
+		ok, err := s.backend.Has(unique[uniqueIdx].key)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		groupEnd := len(refs)
+		if uniqueIdx+1 < len(groupStarts) {
+			groupEnd = groupStarts[uniqueIdx+1]
+		}
+		for _, ref := range refs[groupStarts[uniqueIdx]:groupEnd] {
+			out[ref.idx] = true
+		}
+	}
+	return out, nil
+}
+
+type prefixProbeRef struct {
+	prefix []byte
+	idx    int
+}
+
+func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
+	out := make([]bool, len(prefixes))
+	if len(prefixes) == 0 {
+		return out, nil
+	}
+	if s == nil || s.backend == nil {
+		return nil, backenddb.ErrClosed
+	}
+
+	refs := make([]prefixProbeRef, len(prefixes))
+	for i, prefix := range prefixes {
+		refs[i] = prefixProbeRef{prefix: prefix, idx: i}
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		return bytes.Compare(refs[i].prefix, refs[j].prefix) < 0
+	})
+
+	unique := make([][]byte, 0, len(refs))
+	groupStarts := make([]int, 0, len(refs))
+	for i, ref := range refs {
+		if len(unique) == 0 || !bytes.Equal(ref.prefix, unique[len(unique)-1]) {
+			unique = append(unique, ref.prefix)
+			groupStarts = append(groupStarts, i)
+		}
+	}
+
+	probe := make([]bool, len(unique))
+	if err := rootDomainIteratorSnapshotFromCachedSnapshot(s).hasPrefixesSorted(unique, probe); err != nil {
+		return nil, err
+	}
+	for i, ok := range probe {
+		if !ok {
+			continue
+		}
+		groupEnd := len(refs)
+		if i+1 < len(groupStarts) {
+			groupEnd = groupStarts[i+1]
+		}
+		for _, ref := range refs[groupStarts[i]:groupEnd] {
+			out[ref.idx] = true
+		}
+	}
+	return out, nil
 }
 
 func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
