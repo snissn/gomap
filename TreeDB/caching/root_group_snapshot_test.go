@@ -154,6 +154,77 @@ func TestAcquireSnapshot_PinsInstalledPublishedRootSet(t *testing.T) {
 	}
 }
 
+func TestAcquireSnapshot_PinsInstalledPublishedRootSetIncludingSystem(t *testing.T) {
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	defer backend.Close()
+
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+	}
+
+	setA := &publishedRootSet{
+		generation: 31,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "a"}), rootID: 311},
+		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/k", value: "sys-a"}), rootID: 312,
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/k", value: "iter-a"}), rootID: 313,
+		},
+	}
+	setB := &publishedRootSet{
+		generation: 32,
+		pointShards: []publishedRootRef{
+			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "b"}), rootID: 321},
+		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/k", value: "sys-b"}), rootID: 322,
+		},
+		iterator: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/k", value: "iter-b"}), rootID: 323,
+		},
+	}
+
+	db.mu.Lock()
+	db.installPublishedRootSetLocked(setA)
+	db.mu.Unlock()
+
+	snapA := db.AcquireSnapshot()
+	if snapA == nil {
+		t.Fatal("expected snapshot A")
+	}
+	defer snapA.Close()
+
+	db.mu.Lock()
+	db.installPublishedRootSetLocked(setB)
+	db.mu.Unlock()
+
+	snapB := db.AcquireSnapshot()
+	if snapB == nil {
+		t.Fatal("expected snapshot B")
+	}
+	defer snapB.Close()
+
+	systemA := rootDomainSystemSnapshotFromCachedSnapshot(snapA)
+	systemB := rootDomainSystemSnapshotFromCachedSnapshot(snapB)
+	assertRootDomainVisibleValue(t, systemA, "sys/k", "sys-a")
+	assertRootDomainVisibleValue(t, systemB, "sys/k", "sys-b")
+	if systemA.publishedRootID != 312 {
+		t.Fatalf("systemA published id=%d want 312", systemA.publishedRootID)
+	}
+	if systemB.publishedRootID != 322 {
+		t.Fatalf("systemB published id=%d want 322", systemB.publishedRootID)
+	}
+}
+
 func TestAcquireSnapshot_FallsBackToBackendPublishedSetWithoutInstalledGroup(t *testing.T) {
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})

@@ -237,6 +237,9 @@ func TestPublishInstalledRootSetLocked_HookFailureKeepsPreviousGeneration(t *tes
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key0), value: "a0"}), rootID: 101},
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key1), value: "a1"}), rootID: 202},
 		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/a", value: "asys"}), rootID: 302,
+		},
 		iterator: publishedRootRef{
 			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "aiter"}), rootID: 303,
 		},
@@ -246,6 +249,9 @@ func TestPublishInstalledRootSetLocked_HookFailureKeepsPreviousGeneration(t *tes
 		pointShards: []publishedRootRef{
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key0), value: "b0"}), rootID: 111},
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: string(key1), value: "b1"}), rootID: 222},
+		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/a", value: "bsys"}), rootID: 332,
 		},
 		iterator: publishedRootRef{
 			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "biter"}), rootID: 333,
@@ -278,6 +284,7 @@ func TestPublishInstalledRootSetLocked_HookFailureKeepsPreviousGeneration(t *tes
 	}
 	assertRootDomainVisibleValue(t, viewB.rootPointShards[0], string(key0), "a0")
 	assertRootDomainVisibleValue(t, viewB.rootPointShards[1], string(key1), "a1")
+	assertRootDomainVisibleValue(t, viewB.rootSystem, "sys/a", "asys")
 	assertRootDomainVisibleValue(t, viewB.rootIterator, "iter/a", "aiter")
 	if stats.publishFailures != 1 {
 		t.Fatalf("publishFailures=%d want 1", stats.publishFailures)
@@ -295,6 +302,9 @@ func TestPublishInstalledRootSetLocked_RetryPublishesExactlyOnce(t *testing.T) {
 		pointShards: []publishedRootRef{
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "a"}), rootID: 101},
 		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/k", value: "asys"}), rootID: 151,
+		},
 		iterator: publishedRootRef{
 			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/k", value: "aiter"}), rootID: 201,
 		},
@@ -303,6 +313,9 @@ func TestPublishInstalledRootSetLocked_RetryPublishesExactlyOnce(t *testing.T) {
 		generation: 2,
 		pointShards: []publishedRootRef{
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "b"}), rootID: 102},
+		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/k", value: "bsys"}), rootID: 152,
 		},
 		iterator: publishedRootRef{
 			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/k", value: "biter"}), rootID: 202,
@@ -342,8 +355,10 @@ func TestPublishInstalledRootSetLocked_RetryPublishesExactlyOnce(t *testing.T) {
 	defer db.releaseMemtableView(viewAfterRetry)
 
 	assertRootDomainVisibleValue(t, viewAfterFail.rootPointShards[0], "k", "a")
+	assertRootDomainVisibleValue(t, viewAfterFail.rootSystem, "sys/k", "asys")
 	assertRootDomainVisibleValue(t, viewAfterFail.rootIterator, "iter/k", "aiter")
 	assertRootDomainVisibleValue(t, viewAfterRetry.rootPointShards[0], "k", "b")
+	assertRootDomainVisibleValue(t, viewAfterRetry.rootSystem, "sys/k", "bsys")
 	assertRootDomainVisibleValue(t, viewAfterRetry.rootIterator, "iter/k", "biter")
 	if stats.publishFailures != 1 {
 		t.Fatalf("publishFailures=%d want 1", stats.publishFailures)
@@ -630,12 +645,21 @@ func TestPublishInstalledRootSetLocked_HookSeesOrderedRunsAsOneGroup(t *testing.
 				newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "queue-iter"}),
 			},
 		},
+		rootSystemState: rootDomainState{
+			mutable: newRootDomainTestTable(t, rootDomainTestOp{key: "live-sys", value: "mutable-sys"}),
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "sys/a", value: "queue-sys"}),
+			},
+		},
 	}
 	set := &publishedRootSet{
 		generation: 12,
 		pointShards: []publishedRootRef{
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "p0", value: "published-0"}), rootID: 121},
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "p1", value: "published-1"}), rootID: 122},
+		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/a", value: "published-sys"}), rootID: 124,
 		},
 		iterator: publishedRootRef{
 			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "published-iter"}), rootID: 123,
@@ -664,13 +688,14 @@ func TestPublishInstalledRootSetLocked_HookSeesOrderedRunsAsOneGroup(t *testing.
 	if len(captured.pointShards) != 2 {
 		t.Fatalf("point shard count=%d want 2", len(captured.pointShards))
 	}
-	if captured.pointShards[0].mutable != nil || captured.pointShards[1].mutable != nil || captured.iterator.mutable != nil {
+	if captured.pointShards[0].mutable != nil || captured.pointShards[1].mutable != nil || captured.system.mutable != nil || captured.iterator.mutable != nil {
 		t.Fatal("expected grouped publish ordered runs to exclude live mutable state")
 	}
 	assertRootDomainVisibleValue(t, captured.pointShards[0], "p0", "queue-0")
 	assertRootDomainVisibleValue(t, captured.pointShards[1], "p1", "queue-1")
+	assertRootDomainVisibleValue(t, captured.system, "sys/a", "queue-sys")
 	assertRootDomainVisibleValue(t, captured.iterator, "iter/a", "queue-iter")
-	if captured.published == nil || captured.published.generation != 12 {
+	if captured.published == nil || captured.published.generation != 12 || captured.published.system.rootID != 124 {
 		t.Fatalf("captured published metadata=%v", captured.published)
 	}
 }
@@ -689,6 +714,11 @@ func TestPublishInstalledRootSetLocked_HookClonesOrderedRunSlices(t *testing.T) 
 				newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "iter-0"}),
 			},
 		},
+		rootSystemState: rootDomainState{
+			immutables: []memtable.Table{
+				newRootDomainTestTable(t, rootDomainTestOp{key: "sys/a", value: "sys-0"}),
+			},
+		},
 	}
 
 	var captured *rootPublishGroup
@@ -702,6 +732,9 @@ func TestPublishInstalledRootSetLocked_HookClonesOrderedRunSlices(t *testing.T) 
 		pointShards: []publishedRootRef{
 			{lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "published"}), rootID: 131},
 		},
+		system: publishedRootRef{
+			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "sys/a", value: "published-sys"}), rootID: 133,
+		},
 		iterator: publishedRootRef{
 			lookup: newRootDomainTestTable(t, rootDomainTestOp{key: "iter/a", value: "published-iter"}), rootID: 132,
 		},
@@ -713,6 +746,8 @@ func TestPublishInstalledRootSetLocked_HookClonesOrderedRunSlices(t *testing.T) 
 		newRootDomainTestTable(t, rootDomainTestOp{key: "k2", value: "queue-1"}))
 	db.rootIteratorState.immutables = append(db.rootIteratorState.immutables,
 		newRootDomainTestTable(t, rootDomainTestOp{key: "iter/b", value: "iter-1"}))
+	db.rootSystemState.immutables = append(db.rootSystemState.immutables,
+		newRootDomainTestTable(t, rootDomainTestOp{key: "sys/b", value: "sys-1"}))
 	db.rootPublishHook = nil
 	db.mu.Unlock()
 
@@ -725,6 +760,10 @@ func TestPublishInstalledRootSetLocked_HookClonesOrderedRunSlices(t *testing.T) 
 	if got := len(captured.iterator.immutables); got != 1 {
 		t.Fatalf("captured iterator immutables=%d want 1", got)
 	}
+	if got := len(captured.system.immutables); got != 1 {
+		t.Fatalf("captured system immutables=%d want 1", got)
+	}
 	assertRootDomainVisibleValue(t, captured.pointShards[0], "k", "queue-0")
+	assertRootDomainVisibleValue(t, captured.system, "sys/a", "sys-0")
 	assertRootDomainVisibleValue(t, captured.iterator, "iter/a", "iter-0")
 }
