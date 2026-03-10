@@ -133,6 +133,26 @@ func TestRootDomainState_SealMutablePreservesVisibility(t *testing.T) {
 	}
 }
 
+func TestRootDomainState_SnapshotDoesNotAliasLaterImmutableReuse(t *testing.T) {
+	t.Parallel()
+
+	first := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "first"})
+	second := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "second"})
+
+	state := &rootDomainState{
+		immutables: make([]memtable.Table, 1, 4),
+	}
+	state.immutables[0] = first
+
+	snap := state.snapshot()
+	assertRootDomainVisibleValue(t, snap, "k", "first")
+
+	state.immutables = state.immutables[:0]
+	state.immutables = append(state.immutables, second)
+
+	assertRootDomainVisibleValue(t, snap, "k", "first")
+}
+
 func TestRootDomainSnapshot_SameHandleVisibilityIncludesMutableRun(t *testing.T) {
 	t.Parallel()
 
@@ -458,6 +478,43 @@ func TestPublishMemtablesLocked_UsesRootDomainStateAuthority(t *testing.T) {
 	}
 	assertRootDomainVisibleValue(t, view.rootSnapshotShards[0], "k", "state-queued")
 	assertRootDomainVisibleValue(t, view.rootIterator, "scan", "state-iter")
+}
+
+func TestPublishMemtablesLocked_RootDomainSnapshotsDoNotAliasLaterStateReuse(t *testing.T) {
+	t.Parallel()
+
+	first := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "first"})
+	second := newRootDomainTestTable(t, rootDomainTestOp{key: "k", value: "second"})
+	iterFirst := newRootDomainTestTable(t, rootDomainTestOp{key: "scan", value: "iter-first"})
+	iterSecond := newRootDomainTestTable(t, rootDomainTestOp{key: "scan", value: "iter-second"})
+
+	db := &DB{
+		mutableShards: []memShard{
+			{mem: newRootDomainTestTable(t, rootDomainTestOp{key: "m", value: "mutable"})},
+		},
+		rootPointStates: []rootDomainState{
+			{immutables: []memtable.Table{first}},
+		},
+		rootIteratorState: rootDomainState{
+			immutables: []memtable.Table{iterFirst},
+		},
+	}
+
+	db.publishMemtablesLocked()
+	view := db.retainMemtableView()
+	if view == nil {
+		t.Fatal("expected published memtable view")
+	}
+	defer db.releaseMemtableView(view)
+
+	db.rootPointStates[0].immutables = db.rootPointStates[0].immutables[:0]
+	db.rootPointStates[0].immutables = append(db.rootPointStates[0].immutables, second)
+	db.rootIteratorState.immutables = db.rootIteratorState.immutables[:0]
+	db.rootIteratorState.immutables = append(db.rootIteratorState.immutables, iterSecond)
+
+	assertRootDomainVisibleValue(t, view.rootPointShards[0], "k", "first")
+	assertRootDomainVisibleValue(t, view.rootSnapshotShards[0], "k", "first")
+	assertRootDomainVisibleValue(t, view.rootIterator, "scan", "iter-first")
 }
 
 func TestRotateMutableShardsLocked_UpdatesRootDomainStates(t *testing.T) {
