@@ -1097,3 +1097,59 @@ func TestPublishInstalledRootSet_RetriesWholeGroupedPrimaryIndexStateSecondaryAn
 		t.Fatalf("retrySuccesses=%d want 1", stats.retrySuccesses)
 	}
 }
+
+func BenchmarkPublishInstalledRootSet_GroupedSystemRootPublish(b *testing.B) {
+	primaryTable := newRootDomainBenchTable(b, rootDomainTestOp{key: "primary/doc", value: "p"})
+	indexStateTable := newRootDomainBenchTable(b, rootDomainTestOp{key: "index-state/doc", value: "s"})
+	secondaryTable := newRootDomainBenchTable(b, rootDomainTestOp{key: "secondary/email", value: "i"})
+	iterTable := newRootDomainBenchTable(b, rootDomainTestOp{key: "iter/doc", value: "it"})
+	systemTable := newRootDomainBenchTable(b, rootDomainTestOp{key: "sys/catalog", value: "c"})
+
+	template := publishedRootSet{
+		pointShards: []publishedRootRef{
+			{lookup: primaryTable, rootID: 101},
+			{lookup: indexStateTable, rootID: 102},
+			{lookup: secondaryTable, rootID: 103},
+		},
+		system: publishedRootRef{
+			lookup: systemTable,
+			rootID: 104,
+		},
+		iterator: publishedRootRef{
+			lookup: iterTable,
+			rootID: 105,
+		},
+	}
+	backend := &panicBatchSystemPublishBackend{
+		state: backenddb.DBState{SystemRootPageID: 1000},
+	}
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 3),
+		mutableShardMask: 3,
+		rootSystemState: rootDomainState{
+			immutables: []memtable.Table{systemTable},
+		},
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		set := template
+		set.generation = uint64(i + 1)
+		if err := db.publishInstalledRootSet(&set); err != nil {
+			b.Fatalf("publishInstalledRootSet: %v", err)
+		}
+		if backend.publishes != i+1 {
+			b.Fatalf("publishes=%d want %d", backend.publishes, i+1)
+		}
+	}
+}
+
+func newRootDomainBenchTable(b *testing.B, ops ...rootDomainTestOp) memtable.Table {
+	b.Helper()
+	table, err := newRootDomainTable(ops...)
+	if err != nil {
+		b.Fatalf("newRootDomainTable: %v", err)
+	}
+	return table
+}
