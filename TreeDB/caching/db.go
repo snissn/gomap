@@ -14371,7 +14371,13 @@ func (db *DB) flushOneLocked(sync bool) bool {
 //   - We additionally check the target mutable shard length to avoid races where
 //     mutableBytes is transiently zero while an old view still has entries.
 func (db *DB) canBypassMemtableRead(view *memtableView, key []byte) bool {
-	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+	if view == nil || db.mutableBytes.Load() != 0 {
+		return false
+	}
+	if snap, ok := livePointRootDomainSnapshot(view, db, key); ok {
+		return !rootDomainSnapshotHasInMemoryState(snap)
+	}
+	if len(view.queue) != 0 {
 		return false
 	}
 	if len(view.mutables) == 0 {
@@ -14395,7 +14401,49 @@ func (db *DB) canBypassMemtableReadMany(view *memtableView, keys [][]byte) bool 
 	if len(keys) == 0 {
 		return true
 	}
-	if view == nil || len(view.queue) != 0 || db.mutableBytes.Load() != 0 {
+	if view == nil || db.mutableBytes.Load() != 0 {
+		return false
+	}
+	if len(view.rootPointShards) > 0 {
+		n := len(view.rootPointShards)
+		if n <= 64 {
+			var checkedBits uint64
+			for _, key := range keys {
+				idx := 0
+				if n > 1 {
+					idx = db.shardIndex(key)
+				}
+				if idx >= n {
+					continue
+				}
+				bit := uint64(1) << uint(idx)
+				if checkedBits&bit != 0 {
+					continue
+				}
+				checkedBits |= bit
+				if rootDomainSnapshotHasInMemoryState(view.rootPointShards[idx]) {
+					return false
+				}
+			}
+			return true
+		}
+		checked := make([]bool, n)
+		for _, key := range keys {
+			idx := 0
+			if n > 1 {
+				idx = db.shardIndex(key)
+			}
+			if idx >= n || checked[idx] {
+				continue
+			}
+			checked[idx] = true
+			if rootDomainSnapshotHasInMemoryState(view.rootPointShards[idx]) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(view.queue) != 0 {
 		return false
 	}
 	n := len(view.mutables)
@@ -14447,12 +14495,7 @@ func (db *DB) getMemtable(key []byte) ([]byte, bool, error) {
 	var snap rootDomainSnapshot
 	var haveSnapshot bool
 	if view != nil {
-		shardIdx := 0
-		if len(view.mutables) > 0 {
-			shardIdx = db.shardIndex(key)
-		}
-		snap = rootDomainSnapshotFromMemtableView(view, shardIdx, true)
-		haveSnapshot = true
+		snap, haveSnapshot = livePointRootDomainSnapshot(view, db, key)
 	} else {
 		// Defensive fallback: should not happen after Open(), but keep safe
 		// behavior for zero-value DBs and tests.
@@ -14512,12 +14555,7 @@ func (db *DB) getMemtableAppend(key, dst []byte) ([]byte, bool, error) {
 	var snap rootDomainSnapshot
 	var haveSnapshot bool
 	if view != nil {
-		shardIdx := 0
-		if len(view.mutables) > 0 {
-			shardIdx = db.shardIndex(key)
-		}
-		snap = rootDomainSnapshotFromMemtableView(view, shardIdx, true)
-		haveSnapshot = true
+		snap, haveSnapshot = livePointRootDomainSnapshot(view, db, key)
 	} else {
 		db.mu.RLock()
 		fallbackView := &memtableView{
@@ -14737,12 +14775,7 @@ func (db *DB) Has(key []byte) (bool, error) {
 	var snap rootDomainSnapshot
 	var haveSnapshot bool
 	if view != nil {
-		shardIdx := 0
-		if len(view.mutables) > 0 {
-			shardIdx = db.shardIndex(key)
-		}
-		snap = rootDomainSnapshotFromMemtableView(view, shardIdx, true)
-		haveSnapshot = true
+		snap, haveSnapshot = livePointRootDomainSnapshot(view, db, key)
 	} else {
 		db.mu.RLock()
 		fallbackView := &memtableView{
@@ -15446,9 +15479,10 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 
 	backendRangeKnown := db.backendRangeKnown
 	backendRange := db.backendRange
-	queueLenLocked := len(db.queue)
-	if queueLenLocked > 0 {
-		view = db.retainMemtableView()
+	view = db.retainMemtableView()
+	queueLenLocked := 0
+	if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+		queueLenLocked = len(snap.immutables)
 	}
 
 	db.mu.Unlock()
@@ -15457,6 +15491,10 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// are no in-memory iterator sources to merge. Avoid memtable view retain/release
 	// and construct a backend iterator directly.
 	if queueLenLocked == 0 {
+		if view != nil {
+			db.releaseMemtableView(view)
+			view = nil
+		}
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
 			if iteratorDebugEnabled.Load() {
 				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
@@ -15490,7 +15528,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	var queue []memtable.Table
 	var queueRanges []keyRange
 	if view != nil {
-		queue = rootDomainSnapshotFromMemtableView(view, -1, false).immutables
+		if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+			queue = snap.immutables
+		}
 		queueRanges = view.queueRanges
 	} else {
 		// Defensive fallback: should not happen after Open(), but keeps Iterator safe
@@ -15500,7 +15540,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			queue:         append([]memtable.Table(nil), db.queue...),
 			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
 		}
-		queue = rootDomainSnapshotFromMemtableView(fallbackView, -1, false).immutables
+		if snap, ok := liveIteratorRootDomainSnapshot(fallbackView); ok {
+			queue = snap.immutables
+		}
 		queueRanges = append([]keyRange(nil), db.queueRanges...)
 		db.mu.RUnlock()
 	}
@@ -15803,9 +15845,10 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		}
 	}
 
-	queueLenLocked := len(db.queue)
-	if queueLenLocked > 0 {
-		view = db.retainMemtableView()
+	view = db.retainMemtableView()
+	queueLenLocked := 0
+	if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+		queueLenLocked = len(snap.immutables)
 	}
 
 	db.mu.Unlock()
@@ -15820,6 +15863,10 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 
 	// Backend-only fast path.
 	if queueLenLocked == 0 {
+		if view != nil {
+			db.releaseMemtableView(view)
+			view = nil
+		}
 		decorate := func(it merging.Iterator, sourcesUsed int) merging.Iterator {
 			if iteratorDebugEnabled.Load() {
 				it = &debugIterator{Iterator: it, queueLen: 0, sourcesUsed: sourcesUsed}
@@ -15853,7 +15900,9 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	var queue []memtable.Table
 	var queueRanges []keyRange
 	if view != nil {
-		queue = rootDomainSnapshotFromMemtableView(view, -1, false).immutables
+		if snap, ok := liveIteratorRootDomainSnapshot(view); ok {
+			queue = snap.immutables
+		}
 		queueRanges = view.queueRanges
 	} else {
 		// Defensive fallback: should not happen after Open().
@@ -15862,7 +15911,9 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 			queue:         append([]memtable.Table(nil), db.queue...),
 			queueShardIDs: append([]uint16(nil), db.queueShardIDs...),
 		}
-		queue = rootDomainSnapshotFromMemtableView(fallbackView, -1, false).immutables
+		if snap, ok := liveIteratorRootDomainSnapshot(fallbackView); ok {
+			queue = snap.immutables
+		}
 		queueRanges = append([]keyRange(nil), db.queueRanges...)
 		db.mu.RUnlock()
 	}
