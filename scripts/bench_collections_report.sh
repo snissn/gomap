@@ -9,7 +9,7 @@ BENCH_REGEX="${BENCH_REGEX:-Benchmark(CollectionInsertProvidedID|CollectionGetBy
 COUNT="${COUNT:-3}"
 BENCHTIME="${BENCHTIME:-}"
 BENCH_ENGINE="${TREEDB_COLLECTION_BENCH_ENGINE:-cached}"
-PATH_LABEL="${TREEDB_COLLECTION_PATH_LABEL:-native-fastpath}"
+PATH_LABEL="${TREEDB_COLLECTION_PATH_LABEL:-}"
 
 RAW_JSON="$OUT_DIR/collections_bench.json"
 CPU_PROFILE="$OUT_DIR/collections_cpu.pprof"
@@ -38,6 +38,11 @@ fi
 echo "running focused collections benchmarks into: $OUT_DIR"
 echo "benchmark engine: $BENCH_ENGINE"
 echo "execution path: $PATH_LABEL"
+
+if [[ -z "$PATH_LABEL" ]]; then
+  echo "TREEDB_COLLECTION_PATH_LABEL is required (oracle|native-fastpath)" >&2
+  exit 2
+fi
 
 if [[ ! -d "$ROOT/TreeDB/collections" ]]; then
   GOWORK=off go run ./cmd/collection_bench_report \

@@ -969,7 +969,10 @@ func writeBenchprofArtifacts(dir, executionPath string, runs []BenchRun) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %q: %w", dir, err)
 	}
-	if executionPath != "" && executionPath != "oracle" && executionPath != "native-fastpath" {
+	if executionPath == "" {
+		return fmt.Errorf("execution path is required for profile-dir artifacts; hidden or implied path labels are forbidden")
+	}
+	if executionPath != "oracle" && executionPath != "native-fastpath" {
 		return fmt.Errorf("invalid execution path %q: mixed-path labels are forbidden", executionPath)
 	}
 
