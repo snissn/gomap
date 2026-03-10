@@ -6,8 +6,34 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
+
+type panicBatchSystemPublishBackend struct {
+	panicBackend
+	state     backenddb.DBState
+	publishes int
+	values    map[string]string
+}
+
+func (b *panicBatchSystemPublishBackend) State() *backenddb.DBState {
+	state := b.state
+	return &state
+}
+
+func (b *panicBatchSystemPublishBackend) PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, error) {
+	if b.values == nil {
+		b.values = make(map[string]string)
+	}
+	for iter.Valid() {
+		b.values[string(iter.UnsafeKey())] = string(iter.UnsafeValue())
+		iter.Next()
+	}
+	b.publishes++
+	b.state.SystemRootPageID++
+	return b.state.SystemRootPageID, iter.Error()
+}
 
 func TestInstallPublishedRootSetLocked_PublishesOnePinnedGeneration(t *testing.T) {
 	db := &DB{
@@ -949,5 +975,43 @@ func TestPublishInstalledRootSet_PublishesSystemDescriptorRunToBackend(t *testin
 	}
 	if got := string(entry.Value); got != "sv" {
 		t.Fatalf("system value=%q want %q", got, "sv")
+	}
+}
+
+func TestPublishInstalledRootSet_PublishesSystemDescriptorRunWithoutBackendBatch(t *testing.T) {
+	backend := &panicBatchSystemPublishBackend{
+		state: backenddb.DBState{SystemRootPageID: 77},
+	}
+	sysTable := newRootDomainTestTable(t, rootDomainTestOp{key: "sys/a", value: "sv"})
+	db := &DB{
+		backend:          backend,
+		mutableShards:    make([]memShard, 1),
+		mutableShardMask: 0,
+		rootSystemState: rootDomainState{
+			immutables: []memtable.Table{sysTable},
+		},
+	}
+
+	if err := db.publishInstalledRootSet(&publishedRootSet{
+		generation: 24,
+		system: publishedRootRef{
+			lookup: sysTable,
+			rootID: 77,
+		},
+	}); err != nil {
+		t.Fatalf("publishInstalledRootSet: %v", err)
+	}
+
+	if backend.publishes != 1 {
+		t.Fatalf("publishes=%d want 1", backend.publishes)
+	}
+	if got := backend.values["sys/a"]; got != "sv" {
+		t.Fatalf("published system value=%q want %q", got, "sv")
+	}
+	if db.rootPublishedSet == nil {
+		t.Fatal("expected installed published root set")
+	}
+	if got, want := db.rootPublishedSet.system.rootID, backend.state.SystemRootPageID; got != want {
+		t.Fatalf("installed system root id=%d want %d", got, want)
 	}
 }
