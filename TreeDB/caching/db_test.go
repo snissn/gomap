@@ -1940,6 +1940,7 @@ func TestCachingDB_PrunesRetainedValueLog(t *testing.T) {
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
 	}
+	forceRetainedPruneIdle(cache)
 	cache.waitForRetainedValueLogPrune()
 	stats = cache.Stats()
 	segments, err = strconv.Atoi(stats["treedb.cache.vlog_retained_segments"])

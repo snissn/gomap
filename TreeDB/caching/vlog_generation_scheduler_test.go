@@ -28,6 +28,14 @@ func forceVlogMaintenanceIdle(db *DB) {
 	}
 }
 
+func forceRetainedPruneIdle(db *DB) {
+	if db != nil {
+		idleAt := time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano()
+		db.lastForegroundWriteUnixNano.Store(idleAt)
+		db.checkpointCutoverLastUnixNano.Store(idleAt)
+	}
+}
+
 func disableVlogGenerationLoop(t *testing.T) {
 	t.Helper()
 	t.Setenv(envDisableVlogGenerationLoop, "1")
