@@ -851,6 +851,20 @@ Collection-focused benchmarks remain the direct measure of the new path, but
 `unified-bench` provides the reference ceiling for how close the implementation
 is getting to TreeDB’s native fast paths.
 
+The performance contract is explicit:
+
+- for no-index collection operations, the native path is expected to stay as
+  close as practical to raw cached TreeDB throughput on the same host and
+  profile,
+- for indexed collection operations, exact parity is not expected, but the
+  implementation must remain a bounded multiplier above the no-index path rather
+  than regressing into architecture-bound overhead.
+
+The rewrite therefore has both:
+
+1. a **north star** of raw TreeDB parity for no-index reads and writes, and
+2. a **minimum ship gate** defined by the ratio targets below.
+
 Benchmark reporting SHOULD include both batch/sec and docs/sec for collection
 benchmarks.
 
@@ -888,15 +902,29 @@ The rewrite is not considered complete while profiles are still dominated by:
 
 ### 12.3 Target ratios
 
-The initial rewrite SHOULD target at least:
+The initial rewrite is performance-motivated by raw TreeDB parity, but the
+minimum cutover gates are:
 
 - no-index collection batch ingest within `2x` of raw cached TreeDB batch write
   throughput on the same harness,
+- no-index collection single-document write within `3x` of the comparable raw
+  cached TreeDB point-write anchor on the same harness,
+- no-index collection single-document read within `2x` of raw cached TreeDB
+  `random_read` on the same harness,
+- no-index collection parallel point-read throughput within `2x` of raw cached
+  TreeDB `random_read_parallel_acquire_snapshot` on the same harness,
 - indexed collection batch ingest within `4x` of no-index collection batch
-  ingest on the same harness.
+  ingest on the same harness,
+- indexed point-read and lookup paths within a documented bounded multiplier of
+  the corresponding no-index collection reads on the same harness.
 
 These ratios are intentionally aggressive. Missing them requires explicit
 profiling evidence and rationale.
+
+These are minimum gates, not the ambition ceiling. Passing them does not by
+itself prove that the implementation is close enough to hardware-limited
+behavior; it only means the rewrite is no longer obviously disqualified on
+throughput grounds.
 
 ### 12.4 Phase-gating model
 
@@ -909,6 +937,14 @@ Relevant rewrite phases SHOULD use a two-layer performance gate:
 Scaffolding phases MAY be allowed to show no material improvement, but they
 SHOULD still satisfy raw TreeDB no-regression gates within a documented noise
 margin.
+
+Where a phase touches a collection benchmark family with a direct raw TreeDB
+analog, the phase notes SHOULD state:
+
+- the raw TreeDB anchor it is trying to track,
+- whether the phase is expected to improve parity or merely avoid regression,
+- whether the collection benchmark moved closer to or farther from that raw
+  anchor.
 
 Performance-oriented phases SHOULD demonstrate at least one material improvement
 in the benchmark family they are intended to change, or they SHOULD not advance
