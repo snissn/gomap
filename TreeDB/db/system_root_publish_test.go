@@ -514,3 +514,27 @@ func TestPublishSystemRootIterator_WarmApplyHandlesInsertUpdateDelete(t *testing
 		t.Fatalf("sys/d got=%q err=%v want vd", string(entry.Value), err)
 	}
 }
+
+func TestPublishSystemRootIterator_UsesGenericOrderedRootPublishHelper(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	calls := 0
+	db.testOrderedRootPublishHook = func(uint64) { calls++ }
+
+	initial := mustFrozenSystemMemtable(t, "sys/a", "sv-a")
+	if _, err := db.PublishSystemRootIterator(initial.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("initial publish system root: %v", err)
+	}
+	warm := mustFrozenSystemMemtable(t, "sys/a", "sv-b")
+	if _, err := db.PublishSystemRootIterator(warm.NewIterator(nil, nil)); err != nil {
+		t.Fatalf("warm publish system root: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("ordered root helper calls=%d want 2", calls)
+	}
+}
