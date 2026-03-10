@@ -148,31 +148,48 @@ func main() {
 }
 
 func parseFlags() config {
-	var cfg config
-	flag.StringVar(&cfg.inputPath, "in", "", "Path to go test -json benchmark output")
-	flag.StringVar(&cfg.outDir, "out-dir", "", "Output directory for report artifacts")
-	flag.StringVar(&cfg.branch, "branch", "", "Optional git branch name to include in report metadata")
-	flag.StringVar(&cfg.commit, "commit", "", "Optional git commit to include in report metadata")
-	flag.StringVar(&cfg.worktree, "worktree", "", "Optional worktree path to include in report metadata")
-	flag.StringVar(&cfg.executionPath, "execution-path", "", "Execution-path label (oracle|native-fastpath)")
-	flag.StringVar(&cfg.benchPattern, "bench-pattern", "", "Optional benchmark regex to include in report metadata")
-	flag.IntVar(&cfg.count, "count", 0, "Optional benchmark count to include in report metadata")
-	flag.StringVar(&cfg.benchmarkEngine, "benchmark-engine", "", "Optional benchmark engine label to include in report metadata")
-	flag.StringVar(&cfg.unavailableReason, "unavailable-reason", "", "Emit an explicit unavailable report instead of parsing benchmark input")
-	flag.Parse()
-	if cfg.outDir == "" {
-		fmt.Fprintln(os.Stderr, "collection_bench_report: -out-dir is required")
-		os.Exit(2)
-	}
-	if cfg.executionPath != "" && cfg.executionPath != "oracle" && cfg.executionPath != "native-fastpath" {
-		fmt.Fprintln(os.Stderr, "collection_bench_report: -execution-path must be oracle or native-fastpath")
-		os.Exit(2)
-	}
-	if cfg.unavailableReason == "" && cfg.inputPath == "" {
-		fmt.Fprintln(os.Stderr, "collection_bench_report: -in is required unless -unavailable-reason is set")
+	cfg, err := parseFlagsFrom(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "collection_bench_report: %v\n", err)
 		os.Exit(2)
 	}
 	return cfg
+}
+
+func parseFlagsFrom(args []string) (config, error) {
+	var cfg config
+	fs := flag.NewFlagSet("collection_bench_report", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&cfg.inputPath, "in", "", "Path to go test -json benchmark output")
+	fs.StringVar(&cfg.outDir, "out-dir", "", "Output directory for report artifacts")
+	fs.StringVar(&cfg.branch, "branch", "", "Optional git branch name to include in report metadata")
+	fs.StringVar(&cfg.commit, "commit", "", "Optional git commit to include in report metadata")
+	fs.StringVar(&cfg.worktree, "worktree", "", "Optional worktree path to include in report metadata")
+	fs.StringVar(&cfg.executionPath, "execution-path", "", "Execution-path label (oracle|native-fastpath)")
+	fs.StringVar(&cfg.benchPattern, "bench-pattern", "", "Optional benchmark regex to include in report metadata")
+	fs.IntVar(&cfg.count, "count", 0, "Optional benchmark count to include in report metadata")
+	fs.StringVar(&cfg.benchmarkEngine, "benchmark-engine", "", "Optional benchmark engine label to include in report metadata")
+	fs.StringVar(&cfg.unavailableReason, "unavailable-reason", "", "Emit an explicit unavailable report instead of parsing benchmark input")
+	if err := fs.Parse(args); err != nil {
+		return config{}, err
+	}
+	if cfg.outDir == "" {
+		return config{}, fmt.Errorf("-out-dir is required")
+	}
+	if err := validateExecutionPath(cfg.executionPath); err != nil {
+		return config{}, err
+	}
+	if cfg.unavailableReason == "" && cfg.inputPath == "" {
+		return config{}, fmt.Errorf("-in is required unless -unavailable-reason is set")
+	}
+	return cfg, nil
+}
+
+func validateExecutionPath(path string) error {
+	if path == "" || path == "oracle" || path == "native-fastpath" {
+		return nil
+	}
+	return fmt.Errorf("-execution-path must be oracle or native-fastpath; mixed-path labels are forbidden (got %q)", path)
 }
 
 func buildReport(cfg config) (*report, error) {
