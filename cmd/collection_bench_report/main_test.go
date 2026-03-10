@@ -36,6 +36,21 @@ func TestParseFlagsRejectsMixedExecutionPathLabels(t *testing.T) {
 	}
 }
 
+func TestParseFlagsRequiresExecutionPath(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseFlagsFrom([]string{
+		"-out-dir", t.TempDir(),
+		"-unavailable-reason", "N/A before R0 harness bring-up",
+	})
+	if err == nil {
+		t.Fatal("expected missing execution path to fail")
+	}
+	if !strings.Contains(err.Error(), "-execution-path is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildReportAndRenderMarkdown(t *testing.T) {
 	input := strings.NewReader(strings.Join([]string{
 		`{"Action":"output","Output":"BenchmarkCollectionInsertProvidedID-12\t1000\t2000 ns/op\t128 B/op\t4 allocs/op\n"}`,
