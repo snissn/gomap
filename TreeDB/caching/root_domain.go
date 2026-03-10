@@ -160,6 +160,24 @@ func (db *DB) rawMemtableEntryFallback(key []byte) (val []byte, ptr page.ValuePt
 	return nil, page.ValuePtr{}, 0, false
 }
 
+func (db *DB) rawIteratorRootDomainSnapshot() (rootDomainSnapshot, []keyRange) {
+	if db == nil {
+		return rootDomainSnapshot{}, nil
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
+	snap := rootDomainSnapshot{}
+	if len(db.queue) > 0 {
+		snap.immutables = append([]memtable.Table(nil), db.queue...)
+	}
+	var ranges []keyRange
+	if len(db.queueRanges) > 0 {
+		ranges = append([]keyRange(nil), db.queueRanges...)
+	}
+	return snap, ranges
+}
+
 func populateRootDomainSnapshots(view *memtableView) {
 	if view == nil {
 		return

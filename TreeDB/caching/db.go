@@ -15519,14 +15519,9 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 			}
 		}
 	} else {
-		db.mu.RLock()
-		if len(db.queue) > 0 {
-			queue = append([]memtable.Table(nil), db.queue...)
-		}
-		if len(db.queueRanges) > 0 {
-			queueRanges = append([]keyRange(nil), db.queueRanges...)
-		}
-		db.mu.RUnlock()
+		rawSnap, rawRanges := db.rawIteratorRootDomainSnapshot()
+		queue = rawSnap.immutables
+		queueRanges = rawRanges
 	}
 	queueLen := len(queue)
 	hasMemSource := false
@@ -15891,14 +15886,9 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 			}
 		}
 	} else {
-		db.mu.RLock()
-		if len(db.queue) > 0 {
-			queue = append([]memtable.Table(nil), db.queue...)
-		}
-		if len(db.queueRanges) > 0 {
-			queueRanges = append([]keyRange(nil), db.queueRanges...)
-		}
-		db.mu.RUnlock()
+		rawSnap, rawRanges := db.rawIteratorRootDomainSnapshot()
+		queue = rawSnap.immutables
+		queueRanges = rawRanges
 	}
 	queueLen := len(queue)
 	hasMemSource := false
