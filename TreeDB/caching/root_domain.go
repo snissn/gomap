@@ -96,6 +96,10 @@ type backendStateProvider interface {
 	State() *backenddb.DBState
 }
 
+type backendSystemRootPublisher interface {
+	PublishSystemRootIterator(iter iterator.UnsafeIterator) (uint64, error)
+}
+
 func (db *DB) ensureRootDomainStatesLocked() {
 	if db == nil {
 		return
@@ -368,12 +372,29 @@ func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
 	if err := db.validatePublishedRootSetLocked(cloned); err != nil {
 		return err
 	}
+	group := db.buildRootPublishGroupLocked(cloned)
 	if db.rootPublishHook != nil {
-		if err := db.rootPublishHook(db.buildRootPublishGroupLocked(cloned)); err != nil {
+		if err := db.rootPublishHook(group); err != nil {
 			db.rootPublishStats.publishFailures.Add(1)
 			db.rootPublishRetryPending = true
 			return err
 		}
+	}
+	if publisher, ok := db.backend.(backendSystemRootPublisher); ok && rootDomainSnapshotNeedsPublish(group.system) {
+		iter, err := group.system.publishIterator(nil, nil)
+		if err != nil {
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			return err
+		}
+		newSystemRootID, err := publisher.PublishSystemRootIterator(iter)
+		if err != nil {
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			return err
+		}
+		group.systemRootPageID = newSystemRootID
+		cloned.system.rootID = newSystemRootID
 	}
 	db.applyPublishedRootSetLocked(cloned)
 	db.clearDirtyRootPublishGroupLocked()
@@ -397,6 +418,7 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 	}
 	group := db.buildRootPublishGroupLocked(cloned)
 	hook := db.rootPublishHook
+	publisher, hasPublisher := db.backend.(backendSystemRootPublisher)
 	db.mu.Unlock()
 
 	if hook != nil {
@@ -407,6 +429,26 @@ func (db *DB) publishInstalledRootSet(set *publishedRootSet) error {
 			db.mu.Unlock()
 			return err
 		}
+	}
+	if hasPublisher && rootDomainSnapshotNeedsPublish(group.system) {
+		iter, err := group.system.publishIterator(nil, nil)
+		if err != nil {
+			db.mu.Lock()
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			db.mu.Unlock()
+			return err
+		}
+		newSystemRootID, err := publisher.PublishSystemRootIterator(iter)
+		if err != nil {
+			db.mu.Lock()
+			db.rootPublishStats.publishFailures.Add(1)
+			db.rootPublishRetryPending = true
+			db.mu.Unlock()
+			return err
+		}
+		group.systemRootPageID = newSystemRootID
+		cloned.system.rootID = newSystemRootID
 	}
 
 	db.mu.Lock()
@@ -477,13 +519,22 @@ func (db *DB) promoteRootDomainMutableLocked(shardIdx int, sealed, next memtable
 
 type backendSnapshotLookup struct {
 	snapshot *backenddb.Snapshot
+	rootID   uint64
 }
 
 func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValuePtr, flags byte, found bool) {
 	if l.snapshot == nil {
 		return nil, page.ValuePtr{}, 0, false
 	}
-	entry, err := l.snapshot.GetEntry(key)
+	var (
+		entry node.LeafEntry
+		err   error
+	)
+	if l.rootID != 0 {
+		entry, err = l.snapshot.GetEntryAtRoot(l.rootID, key)
+	} else {
+		entry, err = l.snapshot.GetEntry(key)
+	}
 	if err != nil {
 		if errors.Is(err, tree.ErrKeyNotFound) {
 			return nil, page.ValuePtr{}, 0, false
@@ -496,6 +547,9 @@ func (l backendSnapshotLookup) GetEntry(key []byte) (val []byte, ptr page.ValueP
 func (l backendSnapshotLookup) Iterator(start, end []byte) (iterator.UnsafeIterator, error) {
 	if l.snapshot == nil {
 		return nil, backenddb.ErrClosed
+	}
+	if l.rootID != 0 {
+		return l.snapshot.IteratorAtRoot(l.rootID, start, end)
 	}
 	return l.snapshot.Iterator(start, end)
 }
@@ -990,12 +1044,16 @@ func (s rootDomainSnapshot) getManySortedRefs(refs []getManyProbeRef, out []root
 	return nil
 }
 
-func (s rootDomainSnapshot) prefixIteratorSources(start []byte) ([]merging.IteratorSource, error) {
+func rootDomainSnapshotNeedsPublish(s rootDomainSnapshot) bool {
+	return s.mutable != nil || len(s.immutables) > 0
+}
+
+func (s rootDomainSnapshot) iteratorSources(start, end []byte) ([]merging.IteratorSource, error) {
 	sources := make([]merging.IteratorSource, 0, 1+len(s.immutables)+1)
 	prio := 0
 	if s.mutable != nil {
 		sources = append(sources, merging.IteratorSource{
-			Iter:     s.mutable.NewIterator(start, nil),
+			Iter:     s.mutable.NewIterator(start, end),
 			Priority: prio,
 		})
 		prio++
@@ -1005,7 +1063,7 @@ func (s rootDomainSnapshot) prefixIteratorSources(start []byte) ([]merging.Itera
 			continue
 		}
 		sources = append(sources, merging.IteratorSource{
-			Iter:     s.immutables[idx].NewIterator(start, nil),
+			Iter:     s.immutables[idx].NewIterator(start, end),
 			Priority: prio,
 		})
 		prio++
@@ -1013,11 +1071,11 @@ func (s rootDomainSnapshot) prefixIteratorSources(start []byte) ([]merging.Itera
 	switch published := s.published.(type) {
 	case rootDomainUnsafeIteratorFactory:
 		sources = append(sources, merging.IteratorSource{
-			Iter:     published.NewIterator(start, nil),
+			Iter:     published.NewIterator(start, end),
 			Priority: prio,
 		})
 	case rootDomainIteratorFactory:
-		iter, err := published.Iterator(start, nil)
+		iter, err := published.Iterator(start, end)
 		if err != nil {
 			for i := range sources {
 				_ = sources[i].Iter.Close()
@@ -1032,6 +1090,305 @@ func (s rootDomainSnapshot) prefixIteratorSources(start []byte) ([]merging.Itera
 	return sources, nil
 }
 
+type rootDomainUnsafeMergeItem struct {
+	iter     iterator.UnsafeIterator
+	priority int
+	key      []byte
+}
+
+type rootDomainUnsafeMergeHeap []rootDomainUnsafeMergeItem
+
+func (h rootDomainUnsafeMergeHeap) Len() int { return len(h) }
+func (h rootDomainUnsafeMergeHeap) Less(i, j int) bool {
+	if cmp := bytes.Compare(h[i].key, h[j].key); cmp != 0 {
+		return cmp < 0
+	}
+	return h[i].priority < h[j].priority
+}
+func (h rootDomainUnsafeMergeHeap) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
+
+func (h *rootDomainUnsafeMergeHeap) push(x rootDomainUnsafeMergeItem) {
+	*h = append(*h, x)
+	for j := len(*h) - 1; j > 0; {
+		i := (j - 1) / 2
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		j = i
+	}
+}
+
+func (h *rootDomainUnsafeMergeHeap) pop() rootDomainUnsafeMergeItem {
+	old := *h
+	n := len(old)
+	if n == 0 {
+		return rootDomainUnsafeMergeItem{}
+	}
+	old.Swap(0, n-1)
+	*h = old[:n-1]
+	for i := 0; ; {
+		j1 := 2*i + 1
+		if j1 >= len(*h) {
+			break
+		}
+		j := j1
+		if j2 := j1 + 1; j2 < len(*h) && h.Less(j2, j1) {
+			j = j2
+		}
+		if !h.Less(j, i) {
+			break
+		}
+		h.Swap(i, j)
+		i = j
+	}
+	return old[n-1]
+}
+
+func (h rootDomainUnsafeMergeHeap) peek() *rootDomainUnsafeMergeItem {
+	if len(h) == 0 {
+		return nil
+	}
+	return &h[0]
+}
+
+type rootDomainUnsafeIterator struct {
+	all    []iterator.UnsafeIterator
+	h      rootDomainUnsafeMergeHeap
+	cur    rootDomainUnsafeMergeItem
+	hasCur bool
+	valid  bool
+	err    error
+	start  []byte
+	end    []byte
+}
+
+func newRootDomainUnsafeIterator(sources []merging.IteratorSource, start, end []byte) iterator.UnsafeIterator {
+	if len(sources) == 0 {
+		return &rootDomainEmptyUnsafeIterator{start: start, end: end}
+	}
+	if len(sources) == 1 {
+		return sources[0].Iter
+	}
+	it := &rootDomainUnsafeIterator{
+		all:   make([]iterator.UnsafeIterator, 0, len(sources)),
+		h:     make(rootDomainUnsafeMergeHeap, 0, len(sources)),
+		start: start,
+		end:   end,
+	}
+	for _, src := range sources {
+		it.all = append(it.all, src.Iter)
+		if src.Iter != nil && src.Iter.Valid() {
+			it.h = append(it.h, rootDomainUnsafeMergeItem{
+				iter:     src.Iter,
+				priority: src.Priority,
+				key:      src.Iter.UnsafeKey(),
+			})
+		}
+	}
+	for i := len(it.h)/2 - 1; i >= 0; i-- {
+		for cur := i; ; {
+			j1 := 2*cur + 1
+			if j1 >= len(it.h) {
+				break
+			}
+			j := j1
+			if j2 := j1 + 1; j2 < len(it.h) && it.h.Less(j2, j1) {
+				j = j2
+			}
+			if !it.h.Less(j, cur) {
+				break
+			}
+			it.h.Swap(cur, j)
+			cur = j
+		}
+	}
+	it.advance()
+	return it
+}
+
+func (it *rootDomainUnsafeIterator) advance() {
+	it.valid = false
+	it.hasCur = false
+	for len(it.h) > 0 {
+		top := it.h.pop()
+		currentKey := top.key
+		if it.end != nil && bytes.Compare(currentKey, it.end) >= 0 {
+			it.h.push(top)
+			return
+		}
+		for len(it.h) > 0 {
+			next := it.h.peek()
+			if next == nil || !bytes.Equal(next.key, currentKey) {
+				break
+			}
+			shadowed := it.h.pop()
+			shadowed.iter.Next()
+			if shadowed.iter.Valid() {
+				shadowed.key = shadowed.iter.UnsafeKey()
+				it.h.push(shadowed)
+			}
+		}
+		if top.iter.IsDeleted() {
+			top.iter.Next()
+			if top.iter.Valid() {
+				top.key = top.iter.UnsafeKey()
+				it.h.push(top)
+			}
+			continue
+		}
+		it.cur = top
+		it.hasCur = true
+		it.valid = true
+		return
+	}
+}
+
+func (it *rootDomainUnsafeIterator) Valid() bool { return it.valid }
+
+func (it *rootDomainUnsafeIterator) Next() {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	if it.hasCur {
+		it.cur.iter.Next()
+		if it.cur.iter.Valid() {
+			it.cur.key = it.cur.iter.UnsafeKey()
+			it.h.push(it.cur)
+		}
+		it.hasCur = false
+	}
+	it.advance()
+}
+
+func (it *rootDomainUnsafeIterator) Seek(key []byte) {
+	it.h = it.h[:0]
+	it.cur = rootDomainUnsafeMergeItem{}
+	it.hasCur = false
+	it.valid = false
+	for _, src := range it.all {
+		if src == nil {
+			continue
+		}
+		src.Seek(key)
+		if src.Valid() {
+			it.h.push(rootDomainUnsafeMergeItem{
+				iter: src,
+				key:  src.UnsafeKey(),
+			})
+		}
+	}
+	it.advance()
+}
+
+func (it *rootDomainUnsafeIterator) UnsafeKey() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.cur.iter.UnsafeKey()
+}
+
+func (it *rootDomainUnsafeIterator) UnsafeValue() []byte {
+	if !it.valid {
+		return nil
+	}
+	return it.cur.iter.UnsafeValue()
+}
+
+func (it *rootDomainUnsafeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	if !it.valid {
+		return nil, page.ValuePtr{}, 0
+	}
+	return it.cur.iter.UnsafeEntry()
+}
+
+func (it *rootDomainUnsafeIterator) Key() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.iter.Key()
+}
+
+func (it *rootDomainUnsafeIterator) Value() []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.iter.Value()
+}
+
+func (it *rootDomainUnsafeIterator) KeyCopy(dst []byte) []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.iter.KeyCopy(dst)
+}
+
+func (it *rootDomainUnsafeIterator) ValueCopy(dst []byte) []byte {
+	if !it.valid {
+		panic("iterator invalid")
+	}
+	return it.cur.iter.ValueCopy(dst)
+}
+
+func (it *rootDomainUnsafeIterator) IsDeleted() bool { return false }
+
+func (it *rootDomainUnsafeIterator) Error() error {
+	if it.err != nil {
+		return it.err
+	}
+	for _, src := range it.all {
+		if src != nil && src.Error() != nil {
+			return src.Error()
+		}
+	}
+	return nil
+}
+
+func (it *rootDomainUnsafeIterator) Close() error {
+	var firstErr error
+	for _, src := range it.all {
+		if src == nil {
+			continue
+		}
+		if err := src.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+func (it *rootDomainUnsafeIterator) Domain() (start, end []byte) { return it.start, it.end }
+
+type rootDomainEmptyUnsafeIterator struct {
+	start []byte
+	end   []byte
+}
+
+func (it *rootDomainEmptyUnsafeIterator) Next()               { panic("iterator invalid") }
+func (it *rootDomainEmptyUnsafeIterator) Seek([]byte)         {}
+func (it *rootDomainEmptyUnsafeIterator) Valid() bool         { return false }
+func (it *rootDomainEmptyUnsafeIterator) UnsafeKey() []byte   { return nil }
+func (it *rootDomainEmptyUnsafeIterator) UnsafeValue() []byte { return nil }
+func (it *rootDomainEmptyUnsafeIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	return nil, page.ValuePtr{}, 0
+}
+func (it *rootDomainEmptyUnsafeIterator) Key() []byte                 { panic("iterator invalid") }
+func (it *rootDomainEmptyUnsafeIterator) Value() []byte               { panic("iterator invalid") }
+func (it *rootDomainEmptyUnsafeIterator) KeyCopy([]byte) []byte       { panic("iterator invalid") }
+func (it *rootDomainEmptyUnsafeIterator) ValueCopy([]byte) []byte     { panic("iterator invalid") }
+func (it *rootDomainEmptyUnsafeIterator) IsDeleted() bool             { return false }
+func (it *rootDomainEmptyUnsafeIterator) Error() error                { return nil }
+func (it *rootDomainEmptyUnsafeIterator) Close() error                { return nil }
+func (it *rootDomainEmptyUnsafeIterator) Domain() (start, end []byte) { return it.start, it.end }
+
+func (s rootDomainSnapshot) publishIterator(start, end []byte) (iterator.UnsafeIterator, error) {
+	sources, err := s.iteratorSources(start, end)
+	if err != nil {
+		return nil, err
+	}
+	return newRootDomainUnsafeIterator(sources, start, end), nil
+}
+
 func (s rootDomainSnapshot) hasPrefixesSorted(prefixes [][]byte, out []bool) error {
 	if len(prefixes) == 0 {
 		return nil
@@ -1039,7 +1396,7 @@ func (s rootDomainSnapshot) hasPrefixesSorted(prefixes [][]byte, out []bool) err
 	if len(prefixes) != len(out) {
 		return errors.New("cachingdb: root-domain sorted prefix probe input/output length mismatch")
 	}
-	sources, err := s.prefixIteratorSources(prefixes[0])
+	sources, err := s.iteratorSources(prefixes[0], nil)
 	if err != nil {
 		return err
 	}

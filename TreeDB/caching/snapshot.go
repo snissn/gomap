@@ -127,6 +127,9 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 		if state := backendSnap.State(); state != nil {
 			rootRef.rootID = state.RootPageID
 			systemRef.rootID = state.SystemRootPageID
+			if state.SystemRootPageID != 0 {
+				systemRef.lookup = backendSnapshotLookup{snapshot: backendSnap, rootID: state.SystemRootPageID}
+			}
 		}
 		pointCount := len(db.mutableShards)
 		if pointCount == 0 && view != nil {
