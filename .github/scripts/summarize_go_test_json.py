@@ -34,7 +34,7 @@ with path.open() as f:
         elif test and action in ('pass', 'fail', 'skip'):
             finished.append((float(elapsed or 0), action, pkg, test))
             running.pop((pkg, test), None)
-        elif not test and action in ('pass', 'fail'):
+        elif not test and action in ('pass', 'fail', 'skip'):
             package_elapsed[pkg] = (action, float(elapsed or 0))
 
 finished.sort(reverse=True)

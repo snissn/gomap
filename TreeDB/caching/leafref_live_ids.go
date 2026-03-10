@@ -44,7 +44,7 @@ func (r fallbackSlabReader) Read(ptr page.ValuePtr) ([]byte, error) {
 		if err == nil {
 			return val, nil
 		}
-		if !isValueLogFileNotFound(err) || r.fallback == nil {
+		if !isValueLogFileNotFound(err) {
 			return nil, err
 		}
 	}
@@ -60,7 +60,7 @@ func (r fallbackSlabReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		if err == nil {
 			return val, nil
 		}
-		if !isValueLogFileNotFound(err) || r.fallback == nil {
+		if !isValueLogFileNotFound(err) {
 			return nil, err
 		}
 	}
