@@ -106,6 +106,9 @@ func (db *DB) resetRootDomainStatesLocked() {
 	}
 	db.rootIteratorState = rootDomainState{}
 	db.rootPublishedSet = nil
+	db.dirtyRootPublishGroupID = 0
+	db.dirtyRootPublishGroupPending = false
+	db.rootPublishRetryPending = false
 }
 
 func (db *DB) resyncRootDomainQueuedRunsLocked() {
@@ -212,6 +215,31 @@ func (db *DB) rootDomainPublishStatsSnapshot() rootDomainPublishStats {
 	}
 }
 
+func (db *DB) hasDirtyRootPublishGroupLocked() bool {
+	return db != nil && db.dirtyRootPublishGroupPending && db.rootPublishedSet != nil
+}
+
+func (db *DB) markDirtyRootPublishGroupLocked(set *publishedRootSet) {
+	if db == nil {
+		return
+	}
+	if set == nil {
+		db.dirtyRootPublishGroupID = 0
+		db.dirtyRootPublishGroupPending = false
+		return
+	}
+	db.dirtyRootPublishGroupID = set.generation
+	db.dirtyRootPublishGroupPending = true
+}
+
+func (db *DB) clearDirtyRootPublishGroupLocked() {
+	if db == nil {
+		return
+	}
+	db.dirtyRootPublishGroupID = 0
+	db.dirtyRootPublishGroupPending = false
+}
+
 func (db *DB) validatePublishedRootSetLocked(set *publishedRootSet) error {
 	if db == nil {
 		return nil
@@ -295,6 +323,7 @@ func (db *DB) publishInstalledRootSetLocked(set *publishedRootSet) error {
 		}
 	}
 	db.applyPublishedRootSetLocked(cloned)
+	db.clearDirtyRootPublishGroupLocked()
 	if db.rootPublishRetryPending {
 		db.rootPublishStats.retrySuccesses.Add(1)
 		db.rootPublishRetryPending = false
@@ -311,7 +340,25 @@ func (db *DB) installPublishedRootSetLocked(set *publishedRootSet) bool {
 		return false
 	}
 	db.applyPublishedRootSetLocked(cloned)
+	db.markDirtyRootPublishGroupLocked(cloned)
 	return true
+}
+
+func (db *DB) attemptDirtyRootPublish() (attempted, ok bool) {
+	if db == nil {
+		return false, false
+	}
+	db.mu.Lock()
+	if !db.hasDirtyRootPublishGroupLocked() {
+		db.mu.Unlock()
+		return false, false
+	}
+	err := db.publishInstalledRootSetLocked(db.rootPublishedSet)
+	db.mu.Unlock()
+	if err != nil {
+		return true, false
+	}
+	return true, true
 }
 
 func (db *DB) promoteRootDomainMutableLocked(shardIdx int, sealed, next memtable.Table) {

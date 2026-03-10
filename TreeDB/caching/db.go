@@ -3523,27 +3523,29 @@ type DB struct {
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
-	memtables             atomic.Pointer[memtableView]
-	rootDomainVersion     atomic.Uint64
-	rootPointStates       []rootDomainState
-	rootIteratorState     rootDomainState
-	rootPublishedSet      *publishedRootSet
-	rootPublishStats      rootDomainPublishTelemetry
-	rootPublishHook       func(*publishedRootSet) error
-	rootPublishRetryPending bool
-	hashSortedIndexer     *memtable.HashSortedIndexer
-	appendOnlyMemPool     sync.Pool
-	appendOnlyMemLeaseMu  sync.Mutex
-	appendOnlyMemLeases   []*memtable.AppendOnly
-	pendingRetiredMems    []memtable.Table
-	memtableViewTelemetry memtableViewLifecycleTelemetry
-	queueRanges           []keyRange
-	queueWALPaths         [][]string
-	queueValueLogPaths    [][]string
-	backendRange          keyRange
-	backendRangeKnown     bool
-	backendRangeInit      sync.Once
-	backendRangeErr       error
+	memtables                    atomic.Pointer[memtableView]
+	rootDomainVersion            atomic.Uint64
+	rootPointStates              []rootDomainState
+	rootIteratorState            rootDomainState
+	rootPublishedSet             *publishedRootSet
+	rootPublishStats             rootDomainPublishTelemetry
+	rootPublishHook              func(*publishedRootSet) error
+	dirtyRootPublishGroupID      uint64
+	dirtyRootPublishGroupPending bool
+	rootPublishRetryPending      bool
+	hashSortedIndexer            *memtable.HashSortedIndexer
+	appendOnlyMemPool            sync.Pool
+	appendOnlyMemLeaseMu         sync.Mutex
+	appendOnlyMemLeases          []*memtable.AppendOnly
+	pendingRetiredMems           []memtable.Table
+	memtableViewTelemetry        memtableViewLifecycleTelemetry
+	queueRanges                  []keyRange
+	queueWALPaths                [][]string
+	queueValueLogPaths           [][]string
+	backendRange                 keyRange
+	backendRangeKnown            bool
+	backendRangeInit             sync.Once
+	backendRangeErr              error
 
 	// Durability
 	lanes         []lane
@@ -11266,6 +11268,13 @@ func (db *DB) flushSome(sync bool, maxMemtables int, maxDuration time.Duration) 
 		if maxDuration > 0 && time.Since(start) >= maxDuration {
 			return flushed
 		}
+		if attempted, ok := db.attemptDirtyRootPublish(); attempted {
+			if !ok {
+				return flushed
+			}
+			flushed++
+			continue
+		}
 		laneID, ok := db.pickFlushLane()
 		if !ok {
 			return flushed
@@ -11304,6 +11313,13 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 		}
 		if maxDuration > 0 && time.Since(start) >= maxDuration {
 			return
+		}
+		if attempted, ok := db.attemptDirtyRootPublish(); attempted {
+			if !ok {
+				return
+			}
+			flushed++
+			continue
 		}
 		laneID, ok := db.pickFlushLane()
 		if !ok {
@@ -13049,6 +13065,15 @@ func (db *DB) flushAllLocked(reqSync bool) {
 	if !origSync && syncFlag && db.disableJournal && !db.relaxedSync {
 		db.debugVlogEvent("flushAll_upgraded_sync", -1, "flushMu")
 	}
+	for {
+		attempted, ok := db.attemptDirtyRootPublish()
+		if !attempted {
+			break
+		}
+		if !ok {
+			return
+		}
+	}
 	lanes := len(db.lanes)
 	if lanes == 0 {
 		lanes = 1
@@ -13106,6 +13131,9 @@ func (db *DB) flushOne() bool {
 	db.flushMu.Lock()
 	defer db.flushMu.Unlock()
 
+	if attempted, ok := db.attemptDirtyRootPublish(); attempted {
+		return ok
+	}
 	laneID, ok := db.pickFlushLane()
 	if !ok {
 		return false
