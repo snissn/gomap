@@ -232,6 +232,24 @@ func vlogGenerationRewriteDebtChunk(entries []valueLogGenerationRewriteDebtEntry
 	return chunk
 }
 
+func vlogGenerationRewriteDebtLiveBytes(entries []valueLogGenerationRewriteDebtEntry) int64 {
+	if len(entries) == 0 {
+		return 0
+	}
+	total := int64(0)
+	for _, entry := range entries {
+		if entry.FileID == 0 || entry.BytesLive <= 0 {
+			continue
+		}
+		next := total + entry.BytesLive
+		if next < total {
+			return maxPositiveInt64
+		}
+		total = next
+	}
+	return total
+}
+
 func vlogGenerationRewriteQueueChunk(ids []uint32, maxSegments int) []uint32 {
 	if len(ids) == 0 || maxSegments <= 0 {
 		return nil

@@ -10263,7 +10263,9 @@ planned:
 				if maxResumeBytes < 0 {
 					maxResumeBytes = 0
 				}
-				processedRewriteDebt = vlogGenerationRewriteDebtChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments, maxResumeBytes)
+				if maxResumeBytes > 0 || !db.vlogGenerationRewriteBudgetEnabled() {
+					processedRewriteDebt = vlogGenerationRewriteDebtChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments, maxResumeBytes)
+				}
 				processedRewriteIDs = vlogGenerationRewriteDebtFileIDs(processedRewriteDebt)
 			} else if haveRewritePlan {
 				rewriteDebt := make([]valueLogGenerationRewriteDebtEntry, 0, len(rewritePlan.SelectedSegments))
@@ -10300,12 +10302,18 @@ planned:
 				if maxResumeBytes < 0 {
 					maxResumeBytes = 0
 				}
-				processedRewriteDebt = vlogGenerationRewriteDebtChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments, maxResumeBytes)
+				if maxResumeBytes > 0 || !db.vlogGenerationRewriteBudgetEnabled() {
+					processedRewriteDebt = vlogGenerationRewriteDebtChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments, maxResumeBytes)
+				}
 				processedRewriteIDs = vlogGenerationRewriteDebtFileIDs(processedRewriteDebt)
 			}
 			if len(processedRewriteIDs) > 0 {
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
 			} else {
+				if len(rewriteQueue) > 0 && db.vlogGenerationRewriteBudgetEnabled() {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return nil
+				}
 				rewriteOpts.MaxSourceSegments = 0
 				rewriteOpts.MaxSourceBytes = maxSourceBytes
 				rewriteOpts.MinSegmentStaleRatio = func() float64 {
@@ -10337,8 +10345,11 @@ planned:
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
+			resumeLiveBytes := vlogGenerationRewriteDebtLiveBytes(processedRewriteDebt)
 			rewriteBytesIn := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if resumeLiveBytes > 0 {
+				rewriteBytesIn = resumeLiveBytes
+			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				rewriteBytesIn = int64(stats.BytesBefore)
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				rewriteBytesIn = rewritePlan.SelectedBytesLive
@@ -10354,7 +10365,9 @@ planned:
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
 			consumed := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if resumeLiveBytes > 0 {
+				consumed = resumeLiveBytes
+			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				consumed = int64(stats.BytesBefore)
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				consumed = rewritePlan.SelectedBytesLive
