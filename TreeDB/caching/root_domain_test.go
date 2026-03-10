@@ -194,6 +194,31 @@ func TestRootDomainSnapshotFromMemtableView_ForSnapshotReadsExcludesMutableRun(t
 	}
 }
 
+func TestRootDomainSnapshotFromMemtableView_ForIteratorReadsIncludesAllQueueRuns(t *testing.T) {
+	t.Parallel()
+
+	view := &memtableView{
+		mutables: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "m", value: "mutable"}),
+		},
+		queue: []memtable.Table{
+			newRootDomainTestTable(t, rootDomainTestOp{key: "a", value: "queue-older"}),
+			newRootDomainTestTable(t, rootDomainTestOp{key: "b", value: "queue-newer"}),
+		},
+		queueShardIDs: []uint16{0, 1},
+	}
+
+	snap := rootDomainSnapshotFromMemtableView(view, -1, false)
+	if snap.mutable != nil {
+		t.Fatal("iterator snapshot should not include mutable run")
+	}
+	if got, want := len(snap.immutables), 2; got != want {
+		t.Fatalf("immutables=%d want %d", got, want)
+	}
+	assertRootDomainVisibleValue(t, snap, "a", "queue-older")
+	assertRootDomainVisibleValue(t, snap, "b", "queue-newer")
+}
+
 func TestRootDomainSnapshotFromCachedSnapshot_IncludesPublishedBackendState(t *testing.T) {
 	t.Parallel()
 
