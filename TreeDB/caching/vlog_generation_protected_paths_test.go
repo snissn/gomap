@@ -201,6 +201,93 @@ func TestValueLogProtectedPaths_IncludeRetainedPaths(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationRewrite_ProtectedPaths_DoNotIncludeRetainedPathsNotInUse(t *testing.T) {
+	disableVlogGenerationLoop(t)
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	recorder := &rewriteRecordingBackend{DB: backend}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogCompression:              1, // off; keep segment sizes deterministic
+		ValueLogMaxSegmentBytes:          256 << 10,
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = true
+
+	// Pin a retained-but-not-in-use segment: maintenance should not pass it as a
+	// protected path, otherwise online rewrite/GC cannot reclaim space promptly.
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000999.log")
+	if err := os.WriteFile(retainedPath, []byte("retained"), 0o644); err != nil {
+		t.Fatalf("write retained path: %v", err)
+	}
+	db.valueLogMu.Lock()
+	if db.valueLogRetain == nil {
+		db.valueLogRetain = make(map[string]struct{})
+	}
+	db.valueLogRetain[retainedPath] = struct{}{}
+	db.valueLogMu.Unlock()
+
+	// Create eligible stale bytes (segment has both live and stale bytes) and
+	// ensure it is not the active segment:
+	// 1) Write k1, k2 into segment A.
+	// 2) Overwrite k1 in segment A (k1's first record becomes stale).
+	// 3) Write k3 which triggers rotation, closing segment A.
+	payload := make([]byte, 96<<10)
+	keys := [][]byte{[]byte("k1"), []byte("k2"), []byte("k1"), []byte("k3")}
+	for i := range keys {
+		b := db.NewBatch()
+		if err := b.Set(keys[i], payload); err != nil {
+			_ = b.Close()
+			t.Fatalf("set: %v", err)
+		}
+		if err := b.Write(); err != nil {
+			_ = b.Close()
+			t.Fatalf("write: %v", err)
+		}
+		_ = b.Close()
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	paths, err := filepath.Glob(filepath.Join(dir, "wal", "value-l*.log"))
+	if err != nil {
+		t.Fatalf("glob wal files: %v", err)
+	}
+	old := time.Now().Add(-5 * time.Minute)
+	for _, path := range paths {
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("chtimes %s: %v", path, err)
+		}
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1 << 20)
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	got := recorder.recordedProtectedPaths()
+	for _, path := range got {
+		if path == retainedPath {
+			t.Fatalf("unexpected retained path in rewrite protected paths: %s", retainedPath)
+		}
+	}
+}
+
 func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	disableVlogGenerationLoop(t)
 	dir := t.TempDir()
