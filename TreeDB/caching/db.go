@@ -846,6 +846,39 @@ func (db *DB) hasDirtyValueLogLanes() bool {
 	return false
 }
 
+func (db *DB) checkpointFlushValueLogLanes() error {
+	if db == nil || !db.splitValueLogEnabled() {
+		return nil
+	}
+	// Checkpoint is a durability boundary for cached mode. Ensure any buffered
+	// value-log bytes are visible before publishing pointers durably to the backend.
+	flushOnly := db.relaxedSync
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		if !l.vlogDirty.Load() {
+			continue
+		}
+		l.vlogMu.Lock()
+		w := l.vlog
+		var err error
+		if w != nil {
+			if flushOnly {
+				err = w.Flush()
+			} else {
+				err = w.Sync()
+			}
+		}
+		if err == nil {
+			l.vlogDirty.Store(false)
+		}
+		l.vlogMu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (db *DB) syncDirBestEffort(dir string) {
 	if dir == "" || runtime.GOOS == "windows" {
 		return
@@ -10429,9 +10462,6 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	if db.testSkipVlogCheckpointKick {
 		return
 	}
-	if !db.disableJournal {
-		return
-	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
@@ -10439,6 +10469,16 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	last := db.vlogGenerationLastCheckpointKickUnixNano.Load()
 	if last > 0 && now.Sub(time.Unix(0, last)) < vlogGenerationCheckpointKickMinInterval {
 		return
+	}
+	// Avoid forcing extra checkpoint boundaries when rewrite is clearly ineligible.
+	// Skip this fast-path when rewrite is disabled so GC-only kicks still run.
+	if !envBool(envDisableVlogGenerationRewrite) {
+		if trigger := db.valueLogRewriteTriggerBytes; trigger > 0 {
+			retained, bytes := db.valueLogRetainedStats()
+			if bytes < trigger && retained < 2 {
+				return
+			}
+		}
 	}
 	if !db.vlogGenerationCheckpointKickActive.CompareAndSwap(false, true) {
 		return
@@ -10988,12 +11028,8 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	wroteDuringWALRotate := db.nextRID.Load() != ridBeforeWALRotate
-	if db.splitValueLogEnabled() {
-		for i := range db.lanes {
-			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
-				return err
-			}
-		}
+	if err := db.checkpointFlushValueLogLanes(); err != nil {
+		return err
 	}
 
 	// Flush all queued memtables with backend sync.
