@@ -438,7 +438,7 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 			CommitSeq:        nextMeta.CommitSeq,
 			RootPageID:       nextMeta.UserRootPageID,
 			SystemRootPageID: nextMeta.SystemRootPageID,
-				ValueLogSet:      db.valueLogManager.CurrentSetNoRefresh(),
+			ValueLogSet:      db.valueLogManager.CurrentSetNoRefresh(),
 		}
 		db.state.Store(newState)
 		db.publishSnapshotView(newGen, newState, db.valueLogManager)
