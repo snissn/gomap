@@ -1698,6 +1698,10 @@ func TestVlogGenerationGC_DryRunNoEligibleBytesReturnsSchedulerIdle(t *testing.T
 	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
 		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
 	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.gc.skip.below_threshold"]; got != "1" {
+		t.Fatalf("gc skip below threshold=%q want 1", got)
+	}
 }
 
 func TestVlogGenerationGC_SkipsDuringRecentForegroundWrites(t *testing.T) {
@@ -1749,5 +1753,137 @@ func TestVlogGenerationGC_SkipsDuringRecentForegroundWrites(t *testing.T) {
 	dryRunCalls, realCalls, _ := recorder.recordedCalls()
 	if dryRunCalls != 0 || realCalls != 0 {
 		t.Fatalf("gc calls=%d/%d want 0/0 while foreground writes are hot", dryRunCalls, realCalls)
+	}
+}
+
+func TestVlogGenerationGC_SkipsWhenQueueNotDrained(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	b1 := db.NewBatch()
+	if err := b1.Set([]byte("k1"), make([]byte, 2048)); err != nil {
+		_ = b1.Close()
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b1.Write(); err != nil {
+		_ = b1.Close()
+		t.Fatalf("write k1: %v", err)
+	}
+	_ = b1.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	b2 := db.NewBatch()
+	if err := b2.Set([]byte("k2"), make([]byte, 2048)); err != nil {
+		_ = b2.Close()
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b2.Write(); err != nil {
+		_ = b2.Close()
+		t.Fatalf("write k2: %v", err)
+	}
+	_ = b2.Close()
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotate memtable: %v", err)
+	}
+	db.mu.Unlock()
+	if view := db.memtables.Load(); view == nil || len(view.queue) == 0 {
+		t.Fatalf("expected non-empty queued memtables, got=%v", view)
+	}
+
+	db.vlogGenerationLastGCUnixNano.Store(0)
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	dryRunCalls, realCalls, _ := recorder.recordedCalls()
+	if dryRunCalls != 0 || realCalls != 0 {
+		t.Fatalf("gc calls=%d/%d want 0/0 while queue is not drained", dryRunCalls, realCalls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.gc.skip.queue_not_drained"]; got != "1" {
+		t.Fatalf("gc skip queue_not_drained=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationGC_SkipsForMinInterval(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	t.Setenv(envDisableVlogGenerationRewrite, "1")
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		dryRunStats: backenddb.ValueLogGCStats{SegmentsEligible: 2, BytesEligible: vlogGenerationGCMinBytes},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), make([]byte, 2048)); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.vlogGenerationLastGCUnixNano.Store(time.Now().UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	dryRunCalls, realCalls, _ := recorder.recordedCalls()
+	if dryRunCalls != 0 || realCalls != 0 {
+		t.Fatalf("gc calls=%d/%d want 0/0 inside min interval", dryRunCalls, realCalls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.gc.skip.min_interval"]; got != "1" {
+		t.Fatalf("gc skip min_interval=%q want 1", got)
 	}
 }

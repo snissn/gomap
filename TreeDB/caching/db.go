@@ -3737,6 +3737,9 @@ type DB struct {
 	vlogGenerationGCSegmentsDeleted          atomic.Uint64
 	vlogGenerationGCBytesDeleted             atomic.Uint64
 	vlogGenerationGCRuns                     atomic.Uint64
+	vlogGenerationGCSkipQueueNotDrained      atomic.Uint64
+	vlogGenerationGCSkipMinInterval          atomic.Uint64
+	vlogGenerationGCSkipBelowThreshold       atomic.Uint64
 	vlogGenerationVacuumRuns                 atomic.Uint64
 	vlogGenerationVacuumFailures             atomic.Uint64
 	vlogGenerationLastVacuumUnixNano         atomic.Int64
@@ -10360,6 +10363,7 @@ planned:
 	// ingest/restore when the flush queue is non-empty. Avoid introducing long
 	// stalls by only running the GC path when the cached write queue is drained.
 	if queueLen != 0 {
+		db.vlogGenerationGCSkipQueueNotDrained.Add(1)
 		return
 	}
 	gcer, ok := db.backend.(backendValueLogGCer)
@@ -10372,6 +10376,7 @@ planned:
 	if lastGC > 0 {
 		lastAt := time.Unix(0, lastGC)
 		if now.Sub(lastAt) < vlogGenerationGCMinInterval {
+			db.vlogGenerationGCSkipMinInterval.Add(1)
 			return
 		}
 	}
@@ -10387,6 +10392,7 @@ planned:
 				return fmt.Errorf("generational gc dry-run: %w", err)
 			}
 			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
+				db.vlogGenerationGCSkipBelowThreshold.Add(1)
 				return nil
 			}
 		}
@@ -15161,6 +15167,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
+	stats["treedb.cache.vlog_generation.gc.skip.queue_not_drained"] = fmt.Sprintf("%d", db.vlogGenerationGCSkipQueueNotDrained.Load())
+	stats["treedb.cache.vlog_generation.gc.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationGCSkipMinInterval.Load())
+	stats["treedb.cache.vlog_generation.gc.skip.below_threshold"] = fmt.Sprintf("%d", db.vlogGenerationGCSkipBelowThreshold.Load())
 	stats["treedb.cache.vlog_generation.gc.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.dry_run.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunBytesEligible.Load())
