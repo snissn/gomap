@@ -3761,6 +3761,8 @@ type DB struct {
 	vlogGenerationLastGCDryRunUnixNano       atomic.Int64
 	vlogGenerationLastGCDryRunBytesEligible  atomic.Int64
 	vlogGenerationLastGCDryRunSegsEligible   atomic.Int64
+	vlogGenerationLastGCDryRunProtectedPaths atomic.Int64
+	vlogGenerationLastGCProtectedPaths       atomic.Int64
 	vlogGenerationChurnBytes                 atomic.Uint64
 	vlogGenerationSchedulerState             atomic.Uint32
 	vlogGenerationLastReason                 atomic.Uint32
@@ -10307,9 +10309,11 @@ planned:
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
+				protectedPaths := db.valueLogGCProtectedPaths()
+				db.vlogGenerationLastGCProtectedPaths.Store(int64(len(protectedPaths)))
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
-					ProtectedPaths: db.valueLogGCProtectedPaths(),
+					ProtectedPaths: protectedPaths,
 				})
 				gcCancel()
 				if gcErr != nil {
@@ -10409,8 +10413,10 @@ planned:
 		}
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
+		protectedPaths := db.valueLogGCProtectedPaths()
+		db.vlogGenerationLastGCProtectedPaths.Store(int64(len(protectedPaths)))
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
-		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogGCProtectedPaths()}
+		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: protectedPaths}
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
 		if err != nil {
@@ -10577,11 +10583,13 @@ func (db *DB) estimateVlogGenerationGCEligible(gcer backendValueLogGCer) (backen
 	if db == nil || gcer == nil {
 		return backenddb.ValueLogGCStats{}, nil
 	}
+	protectedPaths := db.valueLogGCProtectedPaths()
+	db.vlogGenerationLastGCDryRunProtectedPaths.Store(int64(len(protectedPaths)))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	stats, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
 		DryRun:         true,
-		ProtectedPaths: db.valueLogGCProtectedPaths(),
+		ProtectedPaths: protectedPaths,
 	})
 	if err == nil {
 		db.vlogGenerationLastGCDryRunUnixNano.Store(time.Now().UnixNano())
@@ -11511,7 +11519,7 @@ func (db *DB) logVlogGenerationCloseSummary() {
 	}
 	queueLen, queueLoaded := db.vlogGenerationRewriteQueueState()
 	log.Printf(
-		"treedb: vlog generation close summary scheduler_state=%s last_reason=%s rewrite_runs=%d rewrite_bytes_in=%d rewrite_bytes_out=%d rewrite_queue_len=%d rewrite_queue_loaded=%t gc_runs=%d gc_deleted_segments=%d gc_deleted_bytes=%d gc_skip_queue_not_drained=%d gc_skip_min_interval=%d gc_skip_below_threshold=%d gc_dry_run_last_eligible_segments=%d gc_dry_run_last_eligible_bytes=%d checkpoint_kicks=%d checkpoint_kick_rewrite_runs=%d checkpoint_kick_gc_runs=%d",
+		"treedb: vlog generation close summary scheduler_state=%s last_reason=%s rewrite_runs=%d rewrite_bytes_in=%d rewrite_bytes_out=%d rewrite_queue_len=%d rewrite_queue_loaded=%t gc_runs=%d gc_deleted_segments=%d gc_deleted_bytes=%d gc_skip_queue_not_drained=%d gc_skip_min_interval=%d gc_skip_below_threshold=%d gc_protected_paths_last=%d gc_dry_run_last_protected_paths=%d gc_dry_run_last_eligible_segments=%d gc_dry_run_last_eligible_bytes=%d checkpoint_kicks=%d checkpoint_kick_rewrite_runs=%d checkpoint_kick_gc_runs=%d",
 		vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load()),
 		vlogGenerationReasonString(db.vlogGenerationLastReason.Load()),
 		db.vlogGenerationRewriteRuns.Load(),
@@ -11525,6 +11533,8 @@ func (db *DB) logVlogGenerationCloseSummary() {
 		db.vlogGenerationGCSkipQueueNotDrained.Load(),
 		db.vlogGenerationGCSkipMinInterval.Load(),
 		db.vlogGenerationGCSkipBelowThreshold.Load(),
+		db.vlogGenerationLastGCProtectedPaths.Load(),
+		db.vlogGenerationLastGCDryRunProtectedPaths.Load(),
 		db.vlogGenerationLastGCDryRunSegsEligible.Load(),
 		db.vlogGenerationLastGCDryRunBytesEligible.Load(),
 		db.vlogGenerationCheckpointKickRuns.Load(),
@@ -15217,7 +15227,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.gc.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationGCSkipMinInterval.Load())
 	stats["treedb.cache.vlog_generation.gc.skip.below_threshold"] = fmt.Sprintf("%d", db.vlogGenerationGCSkipBelowThreshold.Load())
 	stats["treedb.cache.vlog_generation.gc.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCUnixNano.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_paths"] = fmt.Sprintf("%d", db.vlogGenerationLastGCProtectedPaths.Load())
 	stats["treedb.cache.vlog_generation.gc.dry_run.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunUnixNano.Load())
+	stats["treedb.cache.vlog_generation.gc.dry_run.last_protected_paths"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunProtectedPaths.Load())
 	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunBytesEligible.Load())
 	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunSegsEligible.Load())
 	stats["treedb.cache.vlog_generation.vacuum.runs"] = fmt.Sprintf("%d", db.vlogGenerationVacuumRuns.Load())
