@@ -1011,6 +1011,74 @@ func TestVlogGenerationRewritePlan_DoesNotRunWithZeroBudgetTokens(t *testing.T) 
 	}
 }
 
+func TestVlogGenerationRewritePlan_PassesAggregateDebtFallbackToPlanner(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                             true,
+		DisableWAL:                              true,
+		JournalLanes:                            1,
+		ValueLogGenerationPolicy:                uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes:        1 << 30,
+		ValueLogRewriteTriggerStaleRatioPPM:     1,
+		ValueLogGenerationHotSegmentTargetBytes: 1,
+		ValueLogRewriteBudgetBytesPerSec:        1024,
+		ForceValueLogPointers:                   true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	planOpts, calls := recorder.recordedPlan()
+	if calls != 1 {
+		t.Fatalf("plan calls=%d want=1", calls)
+	}
+	if planOpts.MinSegmentStaleRatio <= 0 {
+		t.Fatalf("plan MinSegmentStaleRatio=%f want > 0", planOpts.MinSegmentStaleRatio)
+	}
+	if planOpts.MinAggregateStaleBytes <= 0 {
+		t.Fatalf("plan MinAggregateStaleBytes=%d want > 0", planOpts.MinAggregateStaleBytes)
+	}
+	if planOpts.MaxSourceBytes > 0 && planOpts.MinAggregateStaleBytes > planOpts.MaxSourceBytes {
+		t.Fatalf("plan MinAggregateStaleBytes=%d MaxSourceBytes=%d want debt threshold <= budget", planOpts.MinAggregateStaleBytes, planOpts.MaxSourceBytes)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want=0 with empty planner response", calls)
+	}
+}
+
 func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

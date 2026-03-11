@@ -10121,10 +10121,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
 		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
-			MaxSourceSegments:    0,
-			MaxSourceBytes:       maxSourceBytes,
-			MinSegmentStaleRatio: minStaleRatio,
-			MinSegmentStaleBytes: 1,
+			MaxSourceSegments:      0,
+			MaxSourceBytes:         maxSourceBytes,
+			MinSegmentStaleRatio:   minStaleRatio,
+			MinSegmentStaleBytes:   1,
+			MinAggregateStaleBytes: db.vlogGenerationRewriteAggregateDebtMinBytes(maxSourceBytes),
 		})
 		cancel()
 		updatePlanTimestamp := false
@@ -10610,6 +10611,23 @@ func (db *DB) shouldRunVlogGenerationRewrite(totalBytes int64, staleRatioPPM uin
 		return true, vlogGenerationReasonChurn
 	}
 	return false, vlogGenerationReasonNone
+}
+
+func (db *DB) vlogGenerationRewriteAggregateDebtMinBytes(maxSourceBytes int64) int64 {
+	threshold := db.valueLogGenerationHotTarget / 8
+	if maxSourceBytes > 0 {
+		budgetThreshold := maxSourceBytes / 4
+		if threshold <= 0 || (budgetThreshold > 0 && budgetThreshold < threshold) {
+			threshold = budgetThreshold
+		}
+	}
+	if threshold <= 0 {
+		threshold = vlogGenerationGCMinBytes
+	}
+	if threshold <= 0 {
+		return 1
+	}
+	return threshold
 }
 
 func (db *DB) valueLogRewriteBatchSize() int {

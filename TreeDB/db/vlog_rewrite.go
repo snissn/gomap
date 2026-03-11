@@ -92,6 +92,11 @@ type ValueLogRewriteOnlineOptions struct {
 	// MinSegmentStaleBytes requires estimated stale bytes to be at least this
 	// threshold when sparse segment selection is used.
 	MinSegmentStaleBytes int64
+	// MinAggregateStaleBytes enables a debt-aware sparse-selection fallback.
+	// When MinSegmentStaleRatio filters every candidate out but aggregate stale
+	// bytes across otherwise-eligible segments still meet this threshold,
+	// selection falls back to stale-byte priority instead of reporting no work.
+	MinAggregateStaleBytes int64
 	// MinSegmentAge excludes very recent source segments from sparse selection.
 	// This is useful for cached maintenance so freshly-written segments are not
 	// immediately churned by rewrite during sustained ingest.
@@ -270,6 +275,9 @@ func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
 		return true
 	}
 	if opts.MinSegmentStaleBytes > 0 {
+		return true
+	}
+	if opts.MinAggregateStaleBytes > 0 {
 		return true
 	}
 	return false
@@ -743,6 +751,40 @@ type rewriteSourceSegment struct {
 	staleRatio float64
 }
 
+func sortRewriteSourceSegmentsByRatio(candidates []rewriteSourceSegment) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.staleRatio != b.staleRatio {
+			return a.staleRatio > b.staleRatio
+		}
+		if a.staleBytes != b.staleBytes {
+			return a.staleBytes > b.staleBytes
+		}
+		if a.liveBytes != b.liveBytes {
+			return a.liveBytes < b.liveBytes
+		}
+		return a.fileID < b.fileID
+	})
+}
+
+func sortRewriteSourceSegmentsByDebt(candidates []rewriteSourceSegment) {
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.staleBytes != b.staleBytes {
+			return a.staleBytes > b.staleBytes
+		}
+		if a.staleRatio != b.staleRatio {
+			return a.staleRatio > b.staleRatio
+		}
+		if a.liveBytes != b.liveBytes {
+			return a.liveBytes < b.liveBytes
+		}
+		return a.fileID < b.fileID
+	})
+}
+
 func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) map[uint32]struct{} {
 	if len(opts.SourceFileIDs) > 0 {
 		selected := make(map[uint32]struct{}, len(opts.SourceFileIDs))
@@ -757,12 +799,15 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 
 	minStaleRatio := normalizeStaleRatio(opts.MinSegmentStaleRatio)
 	minStaleBytes := opts.MinSegmentStaleBytes
+	minAggregateStaleBytes := opts.MinAggregateStaleBytes
 	maxSourceSegments := opts.MaxSourceSegments
 	maxSourceBytes := opts.MaxSourceBytes
 	minSegmentAge := opts.MinSegmentAge
 	now := time.Now()
 
 	candidates := make([]rewriteSourceSegment, 0, len(files))
+	debtCandidates := make([]rewriteSourceSegment, 0, len(files))
+	aggregateDebtStaleBytes := int64(0)
 	for id, f := range files {
 		if _, ok := active[id]; ok {
 			continue
@@ -797,39 +842,37 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 		if staleBytes <= 0 {
 			continue
 		}
-		staleRatio := float64(staleBytes) / float64(size)
-		if minStaleRatio > 0 && staleRatio < minStaleRatio {
-			continue
-		}
 		if minStaleBytes > 0 && staleBytes < minStaleBytes {
 			continue
 		}
-		candidates = append(candidates, rewriteSourceSegment{
+		candidate := rewriteSourceSegment{
 			fileID:     id,
 			liveBytes:  liveBytes,
 			staleBytes: staleBytes,
-			staleRatio: staleRatio,
-		})
+			staleRatio: float64(staleBytes) / float64(size),
+		}
+		debtCandidates = append(debtCandidates, candidate)
+		aggregateDebtStaleBytes += staleBytes
+		if minStaleRatio > 0 && candidate.staleRatio < minStaleRatio {
+			continue
+		}
+		candidates = append(candidates, candidate)
 	}
 
+	useDebtFallback := false
+	if len(candidates) == 0 && minStaleRatio > 0 && minAggregateStaleBytes > 0 && aggregateDebtStaleBytes >= minAggregateStaleBytes {
+		candidates = debtCandidates
+		useDebtFallback = true
+	}
 	if len(candidates) == 0 {
 		return map[uint32]struct{}{}
 	}
 
-	sort.SliceStable(candidates, func(i, j int) bool {
-		a := candidates[i]
-		b := candidates[j]
-		if a.staleRatio != b.staleRatio {
-			return a.staleRatio > b.staleRatio
-		}
-		if a.staleBytes != b.staleBytes {
-			return a.staleBytes > b.staleBytes
-		}
-		if a.liveBytes != b.liveBytes {
-			return a.liveBytes < b.liveBytes
-		}
-		return a.fileID < b.fileID
-	})
+	if useDebtFallback {
+		sortRewriteSourceSegmentsByDebt(candidates)
+	} else {
+		sortRewriteSourceSegmentsByRatio(candidates)
+	}
 
 	selected := make(map[uint32]struct{}, len(candidates))
 	var selectedBytes int64
