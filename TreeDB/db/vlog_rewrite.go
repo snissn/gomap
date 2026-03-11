@@ -521,6 +521,53 @@ type valueLogLiveEstimateStats struct {
 	Leaf     time.Duration
 }
 
+type valueLogRecordKey struct {
+	fileID uint32
+	start  uint64
+}
+
+type valueLogRecordLengthLookup struct {
+	files    map[uint32]*valuelog.File
+	lengthBy map[valueLogRecordKey]uint32
+}
+
+func newValueLogRecordLengthLookup(set *valuelog.Set) *valueLogRecordLengthLookup {
+	if set == nil || len(set.Files) == 0 {
+		return &valueLogRecordLengthLookup{}
+	}
+	return &valueLogRecordLengthLookup{
+		files:    set.Files,
+		lengthBy: make(map[valueLogRecordKey]uint32, 1024),
+	}
+}
+
+func (l *valueLogRecordLengthLookup) RecordLength(ptr page.ValuePtr) (uint32, error) {
+	hint := page.ValuePtrRecordLength(ptr)
+	if !valueLogRecordLengthNeedsHeader(ptr, hint) {
+		return hint, nil
+	}
+	if ptr.Offset < 4 {
+		return 0, fmt.Errorf("vlog-rewrite: invalid pointer offset %d", ptr.Offset)
+	}
+	if l == nil || l.files == nil {
+		return 0, fmt.Errorf("vlog-rewrite: value-log set unavailable")
+	}
+	key := valueLogRecordKey{fileID: ptr.FileID, start: ptr.Offset - 4}
+	if length, ok := l.lengthBy[key]; ok {
+		return length, nil
+	}
+	f := l.files[ptr.FileID]
+	if f == nil || f.File == nil {
+		return 0, fmt.Errorf("vlog-rewrite: missing segment for pointer %s", formatValueLogPtr(ptr))
+	}
+	length, err := readValueLogRecordLengthFromHeader(f.File, int64(key.start))
+	if err != nil {
+		return 0, err
+	}
+	l.lengthBy[key] = length
+	return length, nil
+}
+
 func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uint32]int64, stats valueLogLiveEstimateStats, err error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -545,6 +592,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 	}
 	runRewritePlanLiveEstimateHook()
 	liveByID := make(map[uint32]int64)
+	recordLengths := newValueLogRecordLengthLookup(snap.state.ValueLogSet)
 
 	// Pointer-projection iterators can return many keys pointing at the same
 	// grouped value-log record. When estimating live bytes we must count each
@@ -554,7 +602,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 
 	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	startUser := time.Now()
-	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords); err != nil {
+	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords, recordLengths); err != nil {
 		_ = userIter.Close()
 		return nil, stats, err
 	}
@@ -564,7 +612,7 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 	startSystem := time.Now()
-	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID, &seenGroupedRecords); err != nil {
+	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID, &seenGroupedRecords, recordLengths); err != nil {
 		_ = sysIter.Close()
 		return nil, stats, err
 	}
@@ -577,10 +625,10 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 	// that are actually pinned by live leaf pages.
 	if snap.idx != nil && snap.idx.pager != nil {
 		startLeaf := time.Now()
-		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords); err != nil {
+		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords, recordLengths); err != nil {
 			return nil, stats, err
 		}
-		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByID, &seenGroupedRecords); err != nil {
+		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByID, &seenGroupedRecords, recordLengths); err != nil {
 			return nil, stats, err
 		}
 		stats.Leaf = time.Since(startLeaf)
@@ -596,7 +644,7 @@ type groupedRecordKey struct {
 	start  uint64
 }
 
-func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
+func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIterator, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, recordLengths *valueLogRecordLengthLookup) error {
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -629,7 +677,7 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 			seen[k] = struct{}{}
 		}
 
-		recordLen, err := db.valueLogRecordLengthForRewrite(ptr)
+		recordLen, err := recordLengths.RecordLength(ptr)
 		if err != nil {
 			return err
 		}
@@ -639,7 +687,7 @@ func (db *DB) collectValueLogLiveBytes(ctx context.Context, it iterator.UnsafeIt
 	return it.Error()
 }
 
-func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Pager, rootID uint64, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
+func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Pager, rootID uint64, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, recordLengths *valueLogRecordLengthLookup) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -647,7 +695,7 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 		return nil
 	}
 	if ptr, ok := page.DecodeLeafRef(rootID); ok {
-		return db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords)
+		return db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords, recordLengths)
 	}
 	stack := make([]uint64, 0, 128)
 	stack = append(stack, rootID)
@@ -688,7 +736,7 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 					return err
 				}
 				if ptr, ok := page.DecodeLeafRef(childID); ok {
-					if err := db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords); err != nil {
+					if err := db.collectLeafRefPtrLiveBytes(ptr, liveByID, seenGroupedRecords, recordLengths); err != nil {
 						return err
 					}
 					continue
@@ -705,7 +753,7 @@ func (db *DB) collectLeafRefValueLogLiveBytes(ctx context.Context, p *pager.Page
 	return nil
 }
 
-func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}) error {
+func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]int64, seenGroupedRecords *map[groupedRecordKey]struct{}, recordLengths *valueLogRecordLengthLookup) error {
 	if liveByID == nil {
 		return nil
 	}
@@ -734,7 +782,7 @@ func (db *DB) collectLeafRefPtrLiveBytes(ptr page.ValuePtr, liveByID map[uint32]
 		seen[k] = struct{}{}
 	}
 
-	recordLen, err := db.valueLogRecordLengthForRewrite(ptr)
+	recordLen, err := recordLengths.RecordLength(ptr)
 	if err != nil {
 		return err
 	}

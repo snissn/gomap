@@ -1355,6 +1355,41 @@ func TestValueLogRewritePlan_InvalidatesCachedLiveBytesAfterCommit(t *testing.T)
 	}
 }
 
+func TestValueLogRecordLengthLookup_CachesZeroHintLengths(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 246_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("z"), 4096)
+	})
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	state := db.state.Load()
+	if state == nil || state.ValueLogSet == nil {
+		t.Fatal("db state missing ValueLogSet")
+	}
+
+	lookup := newValueLogRecordLengthLookup(state.ValueLogSet)
+	ptr := ptrs[0]
+	ptr.Length = 0
+
+	if got, err := lookup.RecordLength(ptr); err != nil || got == 0 {
+		t.Fatalf("RecordLength(first) len=%d err=%v", got, err)
+	}
+	if got, err := lookup.RecordLength(ptr); err != nil || got == 0 {
+		t.Fatalf("RecordLength(second) len=%d err=%v", got, err)
+	}
+	if got, want := len(lookup.lengthBy), 1; got != want {
+		t.Fatalf("cached zero-hint lengths=%d want %d", got, want)
+	}
+}
+
 func readProjectedPointerByKey(t *testing.T, db *DB, key []byte) (page.ValuePtr, byte) {
 	t.Helper()
 	it, err := db.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
