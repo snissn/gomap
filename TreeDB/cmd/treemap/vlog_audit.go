@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
@@ -34,6 +35,9 @@ type valueLogAuditReport struct {
 	RIDScan        valueLogRIDAudit             `json:"rid_scan"`
 	GCDryRun       treedbdb.ValueLogGCStats     `json:"gc_dry_run"`
 	RewritePlan    treedbdb.ValueLogRewritePlan `json:"rewrite_plan"`
+	RIDScanMS      float64                      `json:"rid_scan_ms,omitempty"`
+	GCDryRunMS     float64                      `json:"gc_dry_run_ms,omitempty"`
+	RewritePlanMS  float64                      `json:"rewrite_plan_ms,omitempty"`
 	Stats          map[string]string            `json:"stats,omitempty"`
 }
 
@@ -149,6 +153,9 @@ func runVlogAudit(dir string, args []string) {
 		report.RIDScan.FirstDuplicateRID,
 		report.RIDScan.MaxRID,
 	)
+	if report.RIDScanMS > 0 {
+		fmt.Printf("rid_scan_ms=%.3f\n", report.RIDScanMS)
+	}
 	if report.RIDScan.TruncatedSegments > 0 {
 		fmt.Printf("rid_scan_truncated_segments=%d\n", report.RIDScan.TruncatedSegments)
 	}
@@ -166,6 +173,9 @@ func runVlogAudit(dir string, args []string) {
 		report.GCDryRun.BytesEligible,
 		report.GCDryRun.BytesDeleted,
 	)
+	if report.GCDryRunMS > 0 {
+		fmt.Printf("gc_dry_run_ms=%.3f\n", report.GCDryRunMS)
+	}
 	fmt.Printf("rewrite_plan: segments_total=%d selected=%d bytes_total=%d bytes_live=%d bytes_stale=%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d source_file_ids=%v\n",
 		report.RewritePlan.SegmentsTotal,
 		report.RewritePlan.SegmentsSelected,
@@ -177,6 +187,9 @@ func runVlogAudit(dir string, args []string) {
 		report.RewritePlan.SelectedBytesStale,
 		report.RewritePlan.SourceFileIDs,
 	)
+	if report.RewritePlanMS > 0 {
+		fmt.Printf("rewrite_plan_ms=%.3f\n", report.RewritePlanMS)
+	}
 	if len(report.Stats) > 0 {
 		keys := make([]string, 0, len(report.Stats))
 		for k := range report.Stats {
@@ -215,7 +228,9 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	report.Segments = segs
 	report.SegmentsOnDisk = len(segs)
 	report.BytesOnDisk = bytesOnDisk
+	start := time.Now()
 	report.RIDScan, err = scanValueLogRIDs(segs, ridOpts)
+	report.RIDScanMS = float64(time.Since(start)) / float64(time.Millisecond)
 	if err != nil {
 		return report, err
 	}
@@ -238,11 +253,15 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	}()
 
 	report.Stats = backend.Stats()
+	start = time.Now()
 	report.GCDryRun, err = backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: true})
+	report.GCDryRunMS = float64(time.Since(start)) / float64(time.Millisecond)
 	if err != nil {
 		return report, err
 	}
+	start = time.Now()
 	report.RewritePlan, err = backend.ValueLogRewritePlan(context.Background(), rewriteOpts)
+	report.RewritePlanMS = float64(time.Since(start)) / float64(time.Millisecond)
 	if err != nil {
 		return report, err
 	}

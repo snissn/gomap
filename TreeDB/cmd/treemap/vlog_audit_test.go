@@ -81,8 +81,17 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	if report.RIDScan.Records == 0 || report.RIDScan.MaxRID == 0 {
 		t.Fatalf("expected RID scan to observe value-log records: %+v", report.RIDScan)
 	}
+	if report.RIDScanMS <= 0 {
+		t.Fatalf("expected positive rid scan timing, got=%f", report.RIDScanMS)
+	}
 	if report.RewritePlan.SegmentsTotal == 0 {
 		t.Fatalf("expected rewrite plan to observe value-log segments: %+v", report.RewritePlan)
+	}
+	if report.GCDryRunMS <= 0 {
+		t.Fatalf("expected positive gc dry-run timing, got=%f", report.GCDryRunMS)
+	}
+	if report.RewritePlanMS <= 0 {
+		t.Fatalf("expected positive rewrite-plan timing, got=%f", report.RewritePlanMS)
 	}
 	if got := report.Stats["cosmos.db.type"]; got != "treedb" {
 		t.Fatalf("unexpected stats db type: %q", got)
@@ -106,8 +115,14 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	if report.GCDryRun.SegmentsTotal == 0 {
 		t.Fatalf("expected GC dry-run to observe value-log segments from maindb path: %+v", report.GCDryRun)
 	}
+	if report.GCDryRunMS <= 0 {
+		t.Fatalf("expected positive gc dry-run timing, got=%f", report.GCDryRunMS)
+	}
 	if report.RewritePlan.SegmentsTotal == 0 {
 		t.Fatalf("expected rewrite plan to observe value-log segments from maindb path: %+v", report.RewritePlan)
+	}
+	if report.RewritePlanMS <= 0 {
+		t.Fatalf("expected positive rewrite-plan timing, got=%f", report.RewritePlanMS)
 	}
 	if got := report.Stats["cosmos.db.type"]; got != "treedb" {
 		t.Fatalf("unexpected stats db type from maindb path: %q", got)
