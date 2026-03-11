@@ -300,10 +300,19 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		ctx = context.Background()
 	}
 
-	if err := db.valueLogManager.Refresh(); err != nil {
-		return plan, err
+	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
+	// path. Fall back to a refresh if the manager has not yet discovered any
+	// segments (or if another process created segments on disk).
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return plan, err
+		}
+		set = db.valueLogManager.CurrentSetNoRefresh()
 	}
-	set := db.valueLogManager.CurrentSet()
 	if set != nil {
 		defer func() { _ = db.valueLogManager.Release(set) }()
 	}
@@ -723,7 +732,16 @@ func (db *DB) valueLogRecordLengthForRewrite(ptr page.ValuePtr) (uint32, error) 
 	if db == nil || db.valueLogManager == nil {
 		return 0, fmt.Errorf("vlog-rewrite: value-log manager unavailable")
 	}
-	set := db.valueLogManager.CurrentSet()
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil || set.Files[ptr.FileID] == nil {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return 0, err
+		}
+		set = db.valueLogManager.CurrentSetNoRefresh()
+	}
 	if set == nil {
 		return 0, fmt.Errorf("vlog-rewrite: value-log set unavailable")
 	}
@@ -867,10 +885,19 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		ctx = context.Background()
 	}
 
-	if err := db.valueLogManager.Refresh(); err != nil {
-		return stats, err
+	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
+	// path. Fall back to a refresh if the manager has not yet discovered any
+	// segments (or if another process created segments on disk).
+	set := db.valueLogManager.CurrentSetNoRefresh()
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = db.valueLogManager.Release(set)
+		}
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return stats, err
+		}
+		set = db.valueLogManager.CurrentSetNoRefresh()
 	}
-	set := db.valueLogManager.CurrentSet()
 	if set == nil || len(set.Files) == 0 {
 		if set != nil {
 			_ = db.valueLogManager.Release(set)
@@ -1051,8 +1078,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		return stats, err
 	}
 	if len(newValueIDs) > 0 {
-		if err := db.valueLogManager.Refresh(); err != nil {
-			return stats, err
+		// Avoid scanning the filesystem after rewrite creates new segments; we
+		// already know their IDs and paths deterministically.
+		for _, id := range newValueIDs {
+			path := db.valueLogManager.SegmentPath(id)
+			if err := db.valueLogManager.RegisterSegment(path, id); err != nil {
+				return stats, err
+			}
 		}
 	}
 
@@ -1080,7 +1112,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		protectedIDs map[uint32]struct{}
 		activeIDs    map[uint32]struct{}
 	)
-	currentSet := db.valueLogManager.CurrentSet()
+	currentSet := db.valueLogManager.CurrentSetNoRefresh()
 	if currentSet != nil {
 		if allowActiveSkip {
 			activeIDs = recentValueLogIDsForProtectedPaths(currentSet, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths)
