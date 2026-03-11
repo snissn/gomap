@@ -1282,6 +1282,15 @@ func TestValueLogRewritePlan_CachesLiveBytesForUnchangedState(t *testing.T) {
 		t.Fatalf("second ValueLogRewritePlan: %v", err)
 	}
 	assertRewritePlanStableFieldsEqual(t, plan1, plan2)
+	if plan1.LiveEstimateCacheHit {
+		t.Fatalf("first plan unexpectedly reported cache hit")
+	}
+	if !plan2.LiveEstimateCacheHit {
+		t.Fatalf("second plan did not report cache hit")
+	}
+	if plan1.LiveEstimateMS <= 0 || plan1.LiveEstimateUserMS <= 0 {
+		t.Fatalf("expected first plan to report positive live-estimate timings, got total=%f user=%f", plan1.LiveEstimateMS, plan1.LiveEstimateUserMS)
+	}
 	if got := counter.Load(); got != 1 {
 		t.Fatalf("live-byte estimate runs=%d want 1", got)
 	}

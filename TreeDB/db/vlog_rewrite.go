@@ -56,6 +56,12 @@ type ValueLogRewritePlan struct {
 	SelectedBytesTotal int64
 	SelectedBytesLive  int64
 	SelectedBytesStale int64
+
+	LiveEstimateCacheHit bool
+	LiveEstimateMS       float64
+	LiveEstimateUserMS   float64
+	LiveEstimateSystemMS float64
+	LiveEstimateLeafMS   float64
 }
 
 // ValueLogRewriteOnlineOptions controls online rewrite behavior.
@@ -327,15 +333,21 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	active := currentValueLogIDs(set)
 
 	var liveByID map[uint32]int64
+	var liveStats valueLogLiveEstimateStats
 	var err error
 	// SourceFileIDs selection does not require live-byte estimation; the other
 	// sparse-selection modes do. Without any selection knobs, the plan is just
 	// the global totals and should not scan the tree to estimate live bytes.
 	if hasRewriteSourceSelection(opts) && len(opts.SourceFileIDs) == 0 {
-		liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
+		liveByID, liveStats, err = db.estimateValueLogLiveBytesBySegment(ctx)
 		if err != nil {
 			return plan, err
 		}
+		plan.LiveEstimateCacheHit = liveStats.CacheHit
+		plan.LiveEstimateMS = durationToMS(liveStats.Total)
+		plan.LiveEstimateUserMS = durationToMS(liveStats.User)
+		plan.LiveEstimateSystemMS = durationToMS(liveStats.System)
+		plan.LiveEstimateLeafMS = durationToMS(liveStats.Leaf)
 	}
 
 	sourceIDs := map[uint32]struct{}(nil)
@@ -396,6 +408,13 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	}
 
 	return plan, nil
+}
+
+func durationToMS(d time.Duration) float64 {
+	if d <= 0 {
+		return 0
+	}
+	return float64(d) / float64(time.Millisecond)
 }
 
 // rewrite-plan tests need to count uncached live-byte estimation passes without
@@ -494,21 +513,34 @@ func closeRewriteSnapshot(errp *error, snap *Snapshot) {
 	}
 }
 
-func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uint32]int64, err error) {
+type valueLogLiveEstimateStats struct {
+	CacheHit bool
+	Total    time.Duration
+	User     time.Duration
+	System   time.Duration
+	Leaf     time.Duration
+}
+
+func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uint32]int64, stats valueLogLiveEstimateStats, err error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	startTotal := time.Now()
+	defer func() {
+		stats.Total = time.Since(startTotal)
+	}()
 
 	snap := db.AcquireSnapshot()
 	if snap == nil || snap.state == nil || snap.idx == nil {
 		closeRewriteSnapshot(&err, snap)
-		return nil, fmt.Errorf("missing snapshot state")
+		return nil, stats, fmt.Errorf("missing snapshot state")
 	}
 	defer closeRewriteSnapshot(&err, snap)
 	cacheKey, cacheable := rewritePlanLiveBytesKeyForState(snap.state)
 	if cacheable {
 		if liveByID, ok := db.loadCachedValueLogLiveBytes(cacheKey); ok {
-			return liveByID, nil
+			stats.CacheHit = true
+			return liveByID, stats, nil
 		}
 	}
 	runRewritePlanLiveEstimateHook()
@@ -521,18 +553,22 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 	var seenGroupedRecords map[groupedRecordKey]struct{}
 
 	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	startUser := time.Now()
 	if err := db.collectValueLogLiveBytes(ctx, userIter, liveByID, &seenGroupedRecords); err != nil {
 		_ = userIter.Close()
-		return nil, err
+		return nil, stats, err
 	}
+	stats.User = time.Since(startUser)
 	_ = userIter.Close()
 
 	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
 		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+	startSystem := time.Now()
 	if err := db.collectValueLogLiveBytes(ctx, sysIter, liveByID, &seenGroupedRecords); err != nil {
 		_ = sysIter.Close()
-		return nil, err
+		return nil, stats, err
 	}
+	stats.System = time.Since(startSystem)
 	_ = sysIter.Close()
 
 	// When outer leaves are stored in the value log, leaf pages are referenced by
@@ -540,17 +576,19 @@ func (db *DB) estimateValueLogLiveBytesBySegment(ctx context.Context) (_ map[uin
 	// live-byte estimation; otherwise rewrite planning can select "stale" segments
 	// that are actually pinned by live leaf pages.
 	if snap.idx != nil && snap.idx.pager != nil {
+		startLeaf := time.Now()
 		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.RootPageID, liveByID, &seenGroupedRecords); err != nil {
-			return nil, err
+			return nil, stats, err
 		}
 		if err := db.collectLeafRefValueLogLiveBytes(ctx, snap.idx.pager, snap.state.SystemRootPageID, liveByID, &seenGroupedRecords); err != nil {
-			return nil, err
+			return nil, stats, err
 		}
+		stats.Leaf = time.Since(startLeaf)
 	}
 	if cacheable {
 		db.storeCachedValueLogLiveBytes(cacheKey, liveByID)
 	}
-	return liveByID, nil
+	return liveByID, stats, nil
 }
 
 type groupedRecordKey struct {
@@ -934,7 +972,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		active := currentValueLogIDs(set)
 		var liveByID map[uint32]int64
 		if len(opts.SourceFileIDs) == 0 {
-			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
+			liveByID, _, err = db.estimateValueLogLiveBytesBySegment(ctx)
 			if err != nil {
 				_ = db.valueLogManager.Release(set)
 				return stats, err
