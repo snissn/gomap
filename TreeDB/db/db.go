@@ -1562,7 +1562,16 @@ func (db *DB) finalizeCommitLocked(newRootID uint64, sysRootID uint64, retired [
 	post.oldState = db.state.Load()
 	var valueLogSet *valuelog.Set
 	if db.valueLogManager != nil {
-		if forceValueLogRefresh || len(touchedValueLogSegments) > 0 {
+		needRefresh := forceValueLogRefresh
+		if !needRefresh && len(touchedValueLogSegments) > 0 {
+			for _, id := range touchedValueLogSegments {
+				if !db.valueLogManager.HasSegment(id) {
+					needRefresh = true
+					break
+				}
+			}
+		}
+		if needRefresh {
 			if err := db.valueLogManager.Refresh(); err != nil {
 				db.mu.Unlock()
 				return post, err
@@ -1823,6 +1832,47 @@ func (db *DB) RefreshValueLogSet() error {
 		RootPageID:       oldState.RootPageID,
 		SystemRootPageID: oldState.SystemRootPageID,
 		ValueLogSet:      db.valueLogManager.CurrentSetNoRefresh(),
+	}
+	db.state.Store(newState)
+	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)
+
+	if oldState.ValueLogSet != nil {
+		return db.valueLogManager.Release(oldState.ValueLogSet)
+	}
+	return nil
+}
+
+// publishValueLogSetNoRefresh publishes a new DBState using the currently
+// registered value-log set, avoiding a filesystem scan when possible.
+func (db *DB) publishValueLogSetNoRefresh() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	if db.valueLogManager == nil {
+		return nil
+	}
+	oldState := db.state.Load()
+	if oldState == nil {
+		return nil
+	}
+
+	valueLogSet := db.valueLogManager.CurrentSetNoRefresh()
+	if valueLogSet == nil || len(valueLogSet.Files) == 0 {
+		// Safety fallback: discover segments created out-of-process.
+		if valueLogSet != nil {
+			_ = db.valueLogManager.Release(valueLogSet)
+		}
+		if err := db.valueLogManager.Refresh(); err != nil {
+			return err
+		}
+		valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
+	}
+
+	newState := &DBState{
+		CommitSeq:        oldState.CommitSeq,
+		RootPageID:       oldState.RootPageID,
+		SystemRootPageID: oldState.SystemRootPageID,
+		ValueLogSet:      valueLogSet,
 	}
 	db.state.Store(newState)
 	db.publishSnapshotView(db.idx.Load(), newState, db.valueLogManager)

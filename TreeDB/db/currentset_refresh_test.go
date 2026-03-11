@@ -214,6 +214,53 @@ func TestPointerCommitRefreshesValueLogSet(t *testing.T) {
 	}
 }
 
+func TestPointerCommitSkipsValueLogRefreshWhenSegmentAlreadyRegistered(t *testing.T) {
+	dir := t.TempDir()
+	value := bytes.Repeat([]byte("p"), 256)
+	fileID, ptr := writeValueLogRecord(t, dir, 0, 1, value, 1)
+
+	d, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = d.Close() }()
+
+	if d.valueLogManager == nil {
+		t.Fatalf("missing value log manager")
+	}
+	before := d.valueLogManager.RefreshScanCount()
+
+	b := d.NewBatch().(*Batch)
+	defer func() { _ = b.Close() }()
+	if err := b.SetPointer([]byte("kp"), ptr); err != nil {
+		t.Fatalf("SetPointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	after := d.valueLogManager.RefreshScanCount()
+	if after != before {
+		t.Fatalf("pointer commit triggered value-log refresh scan: before=%d after=%d", before, after)
+	}
+
+	st := d.State()
+	if st == nil || st.ValueLogSet == nil {
+		t.Fatalf("state missing value-log set")
+	}
+	if _, ok := st.ValueLogSet.Files[fileID]; !ok {
+		t.Fatalf("published state missing pre-registered segment %d", fileID)
+	}
+
+	got, err := d.Get([]byte("kp"))
+	if err != nil {
+		t.Fatalf("Get pointer value: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("Get pointer value mismatch: got %d bytes, want %d", len(got), len(value))
+	}
+}
+
 func TestOuterLeafCommitPublishesRegisteredSegmentWithoutExplicitRefresh(t *testing.T) {
 	dir := t.TempDir()
 	d, err := Open(Options{Dir: dir, IndexOuterLeavesInValueLog: true})

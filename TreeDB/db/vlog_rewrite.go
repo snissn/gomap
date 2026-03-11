@@ -1162,7 +1162,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			return stats, err
 		}
 	}
-	if err := db.RefreshValueLogSet(); err != nil {
+	if err := db.publishValueLogSetNoRefresh(); err != nil {
 		return stats, err
 	}
 	if err := updateValueLogHealthAfterRewrite(db.dir, oldValueIDs); err != nil {

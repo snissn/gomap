@@ -147,7 +147,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		_ = vm.Release(set)
 	}
 
-	if err := db.RefreshValueLogSet(); err != nil {
+	if err := db.publishValueLogSetNoRefresh(); err != nil {
 		return stats, err
 	}
 
