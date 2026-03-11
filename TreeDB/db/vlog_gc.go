@@ -67,7 +67,19 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		return stats, err
 	}
 
-	set := vm.CurrentSet()
+	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
+	// path. Fall back to a refresh if the manager has not yet discovered any
+	// segments (or if another process created segments on disk).
+	set := vm.CurrentSetNoRefresh()
+	if set == nil || len(set.Files) == 0 {
+		if set != nil {
+			_ = vm.Release(set)
+		}
+		if err := vm.Refresh(); err != nil {
+			return stats, err
+		}
+		set = vm.CurrentSetNoRefresh()
+	}
 	keptIDs := currentValueLogIDs(set)
 	if len(opts.ProtectedPaths) > 0 {
 		if recent := recentValueLogIDsForProtectedPaths(set, valueLogKeepRecentSegmentsPerLane, opts.ProtectedPaths); len(recent) > 0 {

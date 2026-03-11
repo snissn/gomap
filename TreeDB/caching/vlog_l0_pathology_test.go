@@ -189,6 +189,7 @@ func TestVlogGenerationMaintenance_WALOnCheckpointKick_ReclaimsL0Segments(t *tes
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = true
 
 	const (
 		segments   = 8
@@ -237,26 +238,28 @@ func TestVlogGenerationMaintenance_WALOnCheckpointKick_ReclaimsL0Segments(t *tes
 
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1 << 20)
 	forceVlogMaintenanceIdle(db)
+	db.testSkipVlogCheckpointKick = false
 
-	rewriteRunsBefore := db.vlogGenerationRewriteRuns.Load()
+	kickRunsBefore := db.vlogGenerationCheckpointKickRuns.Load()
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint kick: %v", err)
 	}
 
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		if db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore {
+		if db.vlogGenerationCheckpointKickRuns.Load() > kickRunsBefore {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if db.vlogGenerationRewriteRuns.Load() == rewriteRunsBefore {
-		t.Fatalf("expected checkpoint kick to run rewrite; state=%d reason=%d kick_runs=%d kick_rewrite_runs=%d",
+	if db.vlogGenerationCheckpointKickRuns.Load() == kickRunsBefore {
+		t.Fatalf("expected checkpoint kick to run; state=%d reason=%d kick_runs=%d kick_rewrite_runs=%d kick_gc_runs=%d",
 			db.vlogGenerationSchedulerState.Load(),
 			db.vlogGenerationLastReason.Load(),
 			db.vlogGenerationCheckpointKickRuns.Load(),
 			db.vlogGenerationCheckpointKickRewriteRuns.Load(),
+			db.vlogGenerationCheckpointKickGCRuns.Load(),
 		)
 	}
 
@@ -268,8 +271,23 @@ func TestVlogGenerationMaintenance_WALOnCheckpointKick_ReclaimsL0Segments(t *tes
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	afterL0 := countValueLogLaneSegments(t, dir, "l0")
+	deadline = time.Now().Add(30 * time.Second)
+	afterL0 := beforeL0
+	for time.Now().Before(deadline) {
+		afterL0 = countValueLogLaneSegments(t, dir, "l0")
+		if afterL0 < beforeL0 {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	if afterL0 >= beforeL0 {
-		t.Fatalf("expected checkpoint-kicked maintenance to reclaim l0 segments; before=%d after=%d", beforeL0, afterL0)
+		t.Fatalf("expected checkpoint-kicked maintenance to reclaim l0 segments; before=%d after=%d rewrite_runs=%d gc_runs=%d kick_rewrite_runs=%d kick_gc_runs=%d",
+			beforeL0,
+			afterL0,
+			db.vlogGenerationRewriteRuns.Load(),
+			db.vlogGenerationGCRuns.Load(),
+			db.vlogGenerationCheckpointKickRewriteRuns.Load(),
+			db.vlogGenerationCheckpointKickGCRuns.Load(),
+		)
 	}
 }
