@@ -494,6 +494,75 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationRewrite_ConsumesLedgerLiveBytesWhenAvailable(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	backendOwnedByDB := false
+	t.Cleanup(func() {
+		if !backendOwnedByDB {
+			_ = backend.Close()
+		}
+	})
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{1},
+			SelectedBytesLive: 128,
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 1, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.5},
+			},
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 128, BytesAfter: 64, RecordsCopied: 1},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	backendOwnedByDB = true
+	t.Cleanup(func() { _ = db.Close() })
+	value := make([]byte, 2048)
+	for i := 0; i < 4; i++ {
+		b := db.NewBatch()
+		key := []byte{byte('k'), byte('0' + i)}
+		if err := b.Set(key, value); err != nil {
+			_ = b.Close()
+			t.Fatalf("set %d: %v", i, err)
+		}
+		if err := b.Write(); err != nil {
+			_ = b.Close()
+			t.Fatalf("write %d: %v", i, err)
+		}
+		_ = b.Close()
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	initialTokens := int64(1024)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(initialTokens)
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), initialTokens-int64(64); got != want {
+		t.Fatalf("tokens after ledger rewrite=%d want=%d", got, want)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

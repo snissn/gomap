@@ -3789,6 +3789,7 @@ type DB struct {
 	vlogGenerationRewriteQueueMu             sync.Mutex
 	vlogGenerationCheckpointKickActive       atomic.Bool
 	vlogGenerationRewriteQueue               []uint32
+	vlogGenerationRewriteLedger              []backenddb.ValueLogRewritePlanSegment
 	vlogGenerationRewriteQueueLoaded         bool
 	vlogGenerationLastChurnBps               atomic.Int64
 	vlogGenerationLastChurnSampleBytes       atomic.Uint64
@@ -10044,6 +10045,26 @@ func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
 	}
 }
 
+func sumVlogRewritePlanLiveBytes(segments []backenddb.ValueLogRewritePlanSegment, ids []uint32) int64 {
+	if len(segments) == 0 || len(ids) == 0 {
+		return 0
+	}
+	byID := make(map[uint32]int64, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		byID[seg.FileID] = seg.BytesLive
+	}
+	sum := int64(0)
+	for _, id := range ids {
+		if live := byID[id]; live > 0 {
+			sum += live
+		}
+	}
+	return sum
+}
+
 type vlogGenerationMaintenanceOptions struct {
 	bypassQuiet           bool
 	skipRetainedPruneWait bool
@@ -10290,16 +10311,25 @@ planned:
 				},
 			}
 			processedRewriteIDs := []uint32(nil)
+			processedLedgerLiveBytes := int64(0)
 			if len(rewriteQueue) > 0 {
 				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
 			} else if haveRewritePlan {
-				if err := db.setVlogGenerationRewriteQueue(rewritePlan.SourceFileIDs); err != nil {
-					return fmt.Errorf("persist generational rewrite queue: %w", err)
+				if len(rewritePlan.SelectedSegments) > 0 {
+					if err := db.setVlogGenerationRewriteLedger(rewritePlan.SelectedSegments); err != nil {
+						return fmt.Errorf("persist generational rewrite ledger: %w", err)
+					}
+				} else {
+					if err := db.setVlogGenerationRewriteQueue(rewritePlan.SourceFileIDs); err != nil {
+						return fmt.Errorf("persist generational rewrite queue: %w", err)
+					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
 				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
 			}
 			if len(processedRewriteIDs) > 0 {
+				ledger, _ := db.currentVlogGenerationRewriteLedger()
+				processedLedgerLiveBytes = sumVlogRewritePlanLiveBytes(ledger, processedRewriteIDs)
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
 			} else {
 				rewriteOpts.MaxSourceSegments = 0
@@ -10334,7 +10364,9 @@ planned:
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
 			rewriteBytesIn := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if processedLedgerLiveBytes > 0 {
+				rewriteBytesIn = processedLedgerLiveBytes
+			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				rewriteBytesIn = int64(stats.BytesBefore)
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				rewriteBytesIn = rewritePlan.SelectedBytesLive
@@ -10350,7 +10382,9 @@ planned:
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
 			consumed := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if processedLedgerLiveBytes > 0 {
+				consumed = processedLedgerLiveBytes
+			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				consumed = int64(stats.BytesBefore)
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				consumed = rewritePlan.SelectedBytesLive

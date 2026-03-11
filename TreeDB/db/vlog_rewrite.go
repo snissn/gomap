@@ -42,9 +42,22 @@ type ValueLogRewriteStats struct {
 // It is intended for cached-mode maintenance schedulers to decide whether a
 // rewrite run is worth performing without forcing the rewrite implementation
 // to do expensive live-byte estimation work twice.
+type ValueLogRewritePlanSegment struct {
+	FileID     uint32
+	BytesTotal int64
+	BytesLive  int64
+	BytesStale int64
+	StaleRatio float64
+}
+
 type ValueLogRewritePlan struct {
 	// SourceFileIDs are the selected value-log segment IDs. The slice is sorted.
 	SourceFileIDs []uint32
+	// SelectedSegments summarizes per-segment live/stale estimates for the
+	// selected SourceFileIDs when live-byte estimation was performed.
+	//
+	// When present, it is ordered by FileID ascending.
+	SelectedSegments []ValueLogRewritePlanSegment
 
 	SegmentsTotal    int
 	SegmentsSelected int
@@ -371,6 +384,9 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 		sort.Slice(plan.SourceFileIDs, func(i, j int) bool { return plan.SourceFileIDs[i] < plan.SourceFileIDs[j] })
 		plan.SegmentsSelected = len(plan.SourceFileIDs)
 
+		if liveByID != nil {
+			plan.SelectedSegments = make([]ValueLogRewritePlanSegment, 0, len(plan.SourceFileIDs))
+		}
 		for _, id := range plan.SourceFileIDs {
 			f := set.Files[id]
 			if f == nil {
@@ -392,7 +408,19 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 				live = size
 			}
 			plan.SelectedBytesLive += live
-			plan.SelectedBytesStale += size - live
+			stale := size - live
+			plan.SelectedBytesStale += stale
+			staleRatio := float64(0)
+			if size > 0 && stale > 0 {
+				staleRatio = float64(stale) / float64(size)
+			}
+			plan.SelectedSegments = append(plan.SelectedSegments, ValueLogRewritePlanSegment{
+				FileID:     id,
+				BytesTotal: size,
+				BytesLive:  live,
+				BytesStale: stale,
+				StaleRatio: staleRatio,
+			})
 		}
 	}
 
