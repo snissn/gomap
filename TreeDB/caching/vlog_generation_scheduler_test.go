@@ -494,7 +494,7 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	}
 }
 
-func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
+func TestVlogGenerationRewrite_ExecutesFullPlannedQueueWithoutResumeChunking(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
 	dir := t.TempDir()
@@ -523,37 +523,15 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("rewrite calls after first run=%d want=1", calls)
 	}
-	if got, want := opts.SourceFileIDs, []uint32{11}; len(got) != len(want) || got[0] != want[0] {
+	if got, want := opts.SourceFileIDs, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("first rewrite source ids=%v want=%v", got, want)
 	}
 	queue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		t.Fatalf("current queue after first run: %v", err)
 	}
-	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("queue after first run=%v want=%v", got, want)
-	}
-
-	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
-	forceVlogMaintenanceIdle(db)
-	db.maybeRunVlogGenerationMaintenance(false)
-
-	if _, calls := recorder.recordedPlan(); calls != 1 {
-		t.Fatalf("plan calls after second run=%d want=1", calls)
-	}
-	opts, calls = recorder.recordedRewrite()
-	if calls != 2 {
-		t.Fatalf("rewrite calls after second run=%d want=2", calls)
-	}
-	if got, want := opts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("second rewrite source ids=%v want=%v", got, want)
-	}
-	queue, err = db.currentVlogGenerationRewriteQueue()
-	if err != nil {
-		t.Fatalf("current queue after second run: %v", err)
-	}
 	if len(queue) != 0 {
-		t.Fatalf("queue after second run=%v want empty", queue)
+		t.Fatalf("queue after first run=%v want empty", queue)
 	}
 }
 
@@ -576,7 +554,9 @@ func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	}
 
 	db, _ := openRewriteQueueTestDB(t, dir, recorder)
-	db.maybeRunVlogGenerationMaintenance(false)
+	if err := db.setVlogGenerationRewriteQueue([]uint32{22}); err != nil {
+		t.Fatalf("set rewrite queue: %v", err)
+	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close first db: %v", err)
 	}
@@ -664,6 +644,10 @@ func TestVlogGenerationRewriteQueue_PreservedOnRewriteError(t *testing.T) {
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls after failed rewrite=%d want=1", calls)
+	}
+	opts, _ := recorder.recordedRewrite()
+	if got, want := opts.SourceFileIDs, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("rewrite source ids after failed rewrite=%v want=%v", got, want)
 	}
 	if got := db.vlogGenerationRemapFailures.Load(); got != 1 {
 		t.Fatalf("rewrite failure count=%d want=1", got)

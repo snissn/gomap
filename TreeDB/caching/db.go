@@ -10265,7 +10265,10 @@ planned:
 					return fmt.Errorf("persist generational rewrite queue: %w", err)
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				// The planner has already bounded this source set by live bytes.
+				// Execute the full planned unit on the initial run and retain the
+				// persisted queue only as a resume/error fallback.
+				processedRewriteIDs = append([]uint32(nil), rewritePlan.SourceFileIDs...)
 			}
 			if len(processedRewriteIDs) > 0 {
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
