@@ -2498,7 +2498,7 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
-func (db *DB) valueLogProtectedPaths() []string {
+func (db *DB) valueLogRewriteProtectedPaths() []string {
 	retained := db.valueLogRetainedPaths()
 	inUse := db.valueLogInUsePaths()
 	if len(retained) == 0 {
@@ -2530,6 +2530,16 @@ func (db *DB) valueLogProtectedPaths() []string {
 		paths = append(paths, path)
 	}
 	return paths
+}
+
+// valueLogProtectedPaths is the legacy broad protection set used by rewrite
+// paths and tests that reason about retained-segment visibility.
+func (db *DB) valueLogProtectedPaths() []string {
+	return db.valueLogRewriteProtectedPaths()
+}
+
+func (db *DB) valueLogGCProtectedPaths() []string {
+	return db.valueLogInUsePaths()
 }
 
 // valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
@@ -10248,7 +10258,7 @@ planned:
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
 				MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-				ProtectedPaths:  db.valueLogProtectedPaths(),
+				ProtectedPaths:  db.valueLogRewriteProtectedPaths(),
 				ReserveRIDs: func(count int) (uint64, error) {
 					if count <= 0 {
 						return 0, nil
@@ -10299,7 +10309,7 @@ planned:
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
-					ProtectedPaths: db.valueLogProtectedPaths(),
+					ProtectedPaths: db.valueLogGCProtectedPaths(),
 				})
 				gcCancel()
 				if gcErr != nil {
@@ -10400,7 +10410,7 @@ planned:
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
-		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
+		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogGCProtectedPaths()}
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
 		if err != nil {
@@ -10571,7 +10581,7 @@ func (db *DB) estimateVlogGenerationGCEligible(gcer backendValueLogGCer) (backen
 	defer cancel()
 	stats, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
 		DryRun:         true,
-		ProtectedPaths: db.valueLogProtectedPaths(),
+		ProtectedPaths: db.valueLogGCProtectedPaths(),
 	})
 	if err == nil {
 		db.vlogGenerationLastGCDryRunUnixNano.Store(time.Now().UnixNano())

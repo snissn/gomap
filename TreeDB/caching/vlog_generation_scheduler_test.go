@@ -1611,6 +1611,16 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000999.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("mkdir wal dir: %v", err)
+	}
+	if err := os.WriteFile(retainedPath, []byte("retained"), 0o644); err != nil {
+		t.Fatalf("write retained path: %v", err)
+	}
+	db.valueLogMu.Lock()
+	db.valueLogRetain[retainedPath] = struct{}{}
+	db.valueLogMu.Unlock()
 
 	db.vlogGenerationLastGCUnixNano.Store(0)
 	forceVlogMaintenanceIdle(db)
@@ -1625,6 +1635,13 @@ func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 	}
 	if len(protected) != 2 {
 		t.Fatalf("protected path snapshots=%d want=2", len(protected))
+	}
+	for i, snapshot := range protected {
+		for _, path := range snapshot {
+			if path == retainedPath {
+				t.Fatalf("protected paths snapshot %d unexpectedly included retained-only segment %s", i, path)
+			}
+		}
 	}
 	if db.vlogGenerationGCRuns.Load() != 1 {
 		t.Fatalf("gc runs=%d want=1", db.vlogGenerationGCRuns.Load())
