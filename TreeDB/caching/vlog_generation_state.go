@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"time"
 
@@ -255,6 +256,56 @@ func vlogGenerationRewriteQueueChunk(ids []uint32, maxSegments int) []uint32 {
 		ids = ids[:maxSegments]
 	}
 	return append([]uint32(nil), ids...)
+}
+
+func vlogGenerationRewriteLedgerChunk(ledger []backenddb.ValueLogRewritePlanSegment, maxSegments int, budgetLiveBytes int64) []uint32 {
+	if len(ledger) == 0 || maxSegments <= 0 {
+		return nil
+	}
+	candidates := make([]backenddb.ValueLogRewritePlanSegment, 0, len(ledger))
+	for _, seg := range ledger {
+		if seg.FileID == 0 {
+			continue
+		}
+		candidates = append(candidates, seg)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a := candidates[i]
+		b := candidates[j]
+		if a.StaleRatio != b.StaleRatio {
+			return a.StaleRatio > b.StaleRatio
+		}
+		if a.BytesStale != b.BytesStale {
+			return a.BytesStale > b.BytesStale
+		}
+		if a.BytesTotal != b.BytesTotal {
+			return a.BytesTotal > b.BytesTotal
+		}
+		return a.FileID < b.FileID
+	})
+
+	ids := make([]uint32, 0, maxSegments)
+	remaining := budgetLiveBytes
+	for _, seg := range candidates {
+		if len(ids) >= maxSegments {
+			break
+		}
+		live := seg.BytesLive
+		if live <= 0 {
+			live = 0
+		}
+		if budgetLiveBytes > 0 && remaining > 0 && live > remaining && len(ids) > 0 {
+			continue
+		}
+		ids = append(ids, seg.FileID)
+		if budgetLiveBytes > 0 && remaining > 0 {
+			remaining -= live
+		}
+	}
+	return ids
 }
 
 func (db *DB) consumeVlogGenerationRewriteQueueChunk(processed []uint32) error {

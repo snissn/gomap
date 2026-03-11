@@ -10312,8 +10312,23 @@ planned:
 			}
 			processedRewriteIDs := []uint32(nil)
 			processedLedgerLiveBytes := int64(0)
+			budgetTokens := int64(0)
+			if db.vlogGenerationRewriteBudgetEnabled() {
+				budgetTokens = db.vlogGenerationRewriteBudgetTokensBytes.Load()
+				// If a queued rewrite is pending, do not run it while the bucket is
+				// empty; that defeats the whole point of a bounded executor.
+				if budgetTokens <= 0 && len(rewriteQueue) > 0 {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return nil
+				}
+			}
 			if len(rewriteQueue) > 0 {
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				ledger, _ := db.currentVlogGenerationRewriteLedger()
+				if len(ledger) > 0 {
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, vlogGenerationRewriteResumeMaxSegments, budgetTokens)
+				} else {
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				}
 			} else if haveRewritePlan {
 				if len(rewritePlan.SelectedSegments) > 0 {
 					if err := db.setVlogGenerationRewriteLedger(rewritePlan.SelectedSegments); err != nil {
@@ -10325,7 +10340,11 @@ planned:
 					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				if len(rewritePlan.SelectedSegments) > 0 {
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(rewritePlan.SelectedSegments, vlogGenerationRewriteResumeMaxSegments, maxSourceBytes)
+				} else {
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				}
 			}
 			if len(processedRewriteIDs) > 0 {
 				ledger, _ := db.currentVlogGenerationRewriteLedger()
