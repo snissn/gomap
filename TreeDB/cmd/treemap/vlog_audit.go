@@ -55,6 +55,13 @@ type valueLogRIDAuditOptions struct {
 	MaxTrackedRIDs       int
 }
 
+type valueLogAuditCollectOptions struct {
+	rewrite treedbdb.ValueLogRewriteOnlineOptions
+	rid     valueLogRIDAuditOptions
+	skipRID bool
+	skipGC  bool
+}
+
 type valueLogAuditRewriteFlagOptions struct {
 	maxSegments             int
 	maxBytes                int64
@@ -111,23 +118,30 @@ func runVlogAudit(dir string, args []string) {
 	schedulerHotTargetBytes := fs.Int64("rewrite-scheduler-hot-target-bytes", 256<<20, "Hot-segment target used to derive scheduler-like aggregate debt threshold")
 	stopOnFirstDuplicate := fs.Bool("rid-scan-stop-on-first-duplicate", false, "Stop the RID scan after the first duplicate is detected")
 	maxTrackedRIDs := fs.Int("rid-scan-max-tracked", 0, "Maximum distinct RIDs to track in-memory during RID scan (0=unbounded exact mode; may use high memory)")
+	skipRIDScan := fs.Bool("skip-rid-scan", false, "Skip RID scan when only GC/rewrite observability is needed")
+	skipGCDryRun := fs.Bool("skip-gc-dry-run", false, "Skip GC dry-run when only rewrite planning observability is needed")
 	_ = fs.Parse(args)
 
 	if !*rw {
 		fatalf("vlog-audit requires -rw")
 	}
 
-	report, err := collectValueLogAudit(dir, buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
-		maxSegments:             *maxSegments,
-		maxBytes:                *maxBytes,
-		minStaleRatio:           *minStaleRatio,
-		minStaleBytes:           *minStaleBytes,
-		minAggregateStaleBytes:  *minAggregateStaleBytes,
-		schedulerLike:           *schedulerLike,
-		schedulerHotTargetBytes: *schedulerHotTargetBytes,
-	}), valueLogRIDAuditOptions{
-		StopOnFirstDuplicate: *stopOnFirstDuplicate,
-		MaxTrackedRIDs:       *maxTrackedRIDs,
+	report, err := collectValueLogAudit(dir, valueLogAuditCollectOptions{
+		rewrite: buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+			maxSegments:             *maxSegments,
+			maxBytes:                *maxBytes,
+			minStaleRatio:           *minStaleRatio,
+			minStaleBytes:           *minStaleBytes,
+			minAggregateStaleBytes:  *minAggregateStaleBytes,
+			schedulerLike:           *schedulerLike,
+			schedulerHotTargetBytes: *schedulerHotTargetBytes,
+		}),
+		rid: valueLogRIDAuditOptions{
+			StopOnFirstDuplicate: *stopOnFirstDuplicate,
+			MaxTrackedRIDs:       *maxTrackedRIDs,
+		},
+		skipRID: *skipRIDScan,
+		skipGC:  *skipGCDryRun,
 	})
 	if err != nil {
 		fatalf("ValueLog audit error: %v", err)
@@ -211,7 +225,7 @@ func runVlogAudit(dir string, args []string) {
 	}
 }
 
-func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions, ridOpts valueLogRIDAuditOptions) (report valueLogAuditReport, err error) {
+func collectValueLogAudit(dir string, opts valueLogAuditCollectOptions) (report valueLogAuditReport, err error) {
 	report = valueLogAuditReport{Dir: dir}
 	mainDir, err := resolveTreemapMainDir(dir)
 	if err != nil {
@@ -228,11 +242,13 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	report.Segments = segs
 	report.SegmentsOnDisk = len(segs)
 	report.BytesOnDisk = bytesOnDisk
-	start := time.Now()
-	report.RIDScan, err = scanValueLogRIDs(segs, ridOpts)
-	report.RIDScanMS = float64(time.Since(start)) / float64(time.Millisecond)
-	if err != nil {
-		return report, err
+	if !opts.skipRID {
+		start := time.Now()
+		report.RIDScan, err = scanValueLogRIDs(segs, opts.rid)
+		report.RIDScanMS = float64(time.Since(start)) / float64(time.Millisecond)
+		if err != nil {
+			return report, err
+		}
 	}
 
 	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: rootDir, ReadOnly: false})
@@ -253,14 +269,16 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	}()
 
 	report.Stats = backend.Stats()
-	start = time.Now()
-	report.GCDryRun, err = backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: true})
-	report.GCDryRunMS = float64(time.Since(start)) / float64(time.Millisecond)
-	if err != nil {
-		return report, err
+	if !opts.skipGC {
+		start := time.Now()
+		report.GCDryRun, err = backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: true})
+		report.GCDryRunMS = float64(time.Since(start)) / float64(time.Millisecond)
+		if err != nil {
+			return report, err
+		}
 	}
-	start = time.Now()
-	report.RewritePlan, err = backend.ValueLogRewritePlan(context.Background(), rewriteOpts)
+	start := time.Now()
+	report.RewritePlan, err = backend.ValueLogRewritePlan(context.Background(), opts.rewrite)
 	report.RewritePlanMS = float64(time.Since(start)) / float64(time.Millisecond)
 	if err != nil {
 		return report, err

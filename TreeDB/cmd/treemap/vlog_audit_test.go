@@ -10,7 +10,6 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
-	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -65,7 +64,7 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(dir, valueLogAuditCollectOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(root): %v", err)
 	}
@@ -102,7 +101,7 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), valueLogAuditCollectOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(maindb): %v", err)
 	}
@@ -158,6 +157,35 @@ func TestParseValueLogAuditFileID_AcceptsLegacyAndLaneNames(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("parseValueLogAuditFileID(%q)=%d want %d", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestCollectValueLogAudit_SkipRIDAndGCStillReportsRewritePlan(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	report, err := collectValueLogAudit(dir, valueLogAuditCollectOptions{
+		skipRID: true,
+		skipGC:  true,
+		rewrite: buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+			schedulerLike: true,
+			maxBytes:      64 << 20,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(skip rid/gc): %v", err)
+	}
+	if report.RIDScan.Records != 0 {
+		t.Fatalf("RID scan unexpectedly populated: %+v", report.RIDScan)
+	}
+	if report.GCDryRun.SegmentsTotal != 0 || report.GCDryRun.BytesTotal != 0 {
+		t.Fatalf("GC dry-run unexpectedly populated: %+v", report.GCDryRun)
+	}
+	if report.RewritePlan.SegmentsTotal == 0 {
+		t.Fatalf("expected rewrite plan to observe segments: %+v", report.RewritePlan)
+	}
+	if report.RewritePlanMS <= 0 {
+		t.Fatalf("expected positive rewrite-plan timing, got=%f", report.RewritePlanMS)
 	}
 }
 
