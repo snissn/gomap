@@ -630,6 +630,8 @@ type Manager struct {
 	mu    sync.RWMutex
 	files map[uint32]*File
 
+	refreshScans atomic.Uint64
+
 	disableReadChecksum      bool
 	dictLookup               DictLookup
 	templateLookup           TemplateLookup
@@ -723,8 +725,29 @@ func (m *Manager) SegmentPath(id uint32) string {
 	return filepath.Join(m.dir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
 }
 
+// HasSegment reports whether id is already registered and not marked zombie.
+func (m *Manager) HasSegment(id uint32) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	f := m.files[id]
+	m.mu.RUnlock()
+	return f != nil && !f.IsZombie.Load()
+}
+
+// RefreshScanCount returns the number of directory scans performed by Refresh().
+// This is used in tests and profiling to guard against accidental rescan loops.
+func (m *Manager) RefreshScanCount() uint64 {
+	if m == nil {
+		return 0
+	}
+	return m.refreshScans.Load()
+}
+
 // Refresh scans the directory and registers any new segments.
 func (m *Manager) Refresh() error {
+	m.refreshScans.Add(1)
 	segments, err := currentScanSegmentPaths()(m.dir)
 	if err != nil {
 		return err
