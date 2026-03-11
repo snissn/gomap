@@ -291,9 +291,6 @@ func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
 	if opts.MinSegmentStaleBytes > 0 {
 		return true
 	}
-	if opts.MinAggregateStaleBytes > 0 {
-		return true
-	}
 	return false
 }
 
