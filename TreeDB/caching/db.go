@@ -846,6 +846,39 @@ func (db *DB) hasDirtyValueLogLanes() bool {
 	return false
 }
 
+func (db *DB) checkpointFlushValueLogLanes() error {
+	if db == nil || !db.splitValueLogEnabled() {
+		return nil
+	}
+	// Checkpoint is a durability boundary for cached mode. Ensure any buffered
+	// value-log bytes are visible before publishing pointers durably to the backend.
+	flushOnly := db.relaxedSync
+	for i := range db.lanes {
+		l := &db.lanes[i]
+		if !l.vlogDirty.Load() {
+			continue
+		}
+		l.vlogMu.Lock()
+		w := l.vlog
+		var err error
+		if w != nil {
+			if flushOnly {
+				err = w.Flush()
+			} else {
+				err = w.Sync()
+			}
+		}
+		if err == nil {
+			l.vlogDirty.Store(false)
+		}
+		l.vlogMu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (db *DB) syncDirBestEffort(dir string) {
 	if dir == "" || runtime.GOOS == "windows" {
 		return
@@ -10988,12 +11021,8 @@ func (db *DB) Checkpoint() error {
 		}
 	}
 	wroteDuringWALRotate := db.nextRID.Load() != ridBeforeWALRotate
-	if db.splitValueLogEnabled() {
-		for i := range db.lanes {
-			if err := db.rotateValueLogLocked(&db.lanes[i]); err != nil {
-				return err
-			}
-		}
+	if err := db.checkpointFlushValueLogLanes(); err != nil {
+		return err
 	}
 
 	// Flush all queued memtables with backend sync.
