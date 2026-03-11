@@ -5465,6 +5465,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.wg.Add(1)
 	go db.flushLoop()
 	db.startVlogGenerationLoop()
+	db.startVlogShapeLoop()
 
 	return db, nil
 }
@@ -12839,6 +12840,7 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	nextSeq := l.vlogSeq + 1
 	oldSeq := l.vlogSeq
 	oldPath := l.vlogPath
+	oldLiveBytes := l.vlogLiveBytes.Load()
 	var (
 		closedPrev    int64
 		hadClosedPrev bool
@@ -12854,6 +12856,10 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		oldSize := l.vlog.Size()
 		if err := l.vlog.RotateTo(path, fileID); err != nil {
 			return err
+		}
+		l.vlogRotateTotal.Add(1)
+		if oldLiveBytes <= 0 {
+			l.vlogRotateIdleTotal.Add(1)
 		}
 		l.vlogSeq = nextSeq
 		l.vlog.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
@@ -12882,6 +12888,11 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		w, err := valuelog.NewWriter(path, fileID)
 		if err != nil {
 			return err
+		}
+		// Segment creation is treated as a rotation from "no current segment" for observability.
+		l.vlogRotateTotal.Add(1)
+		if oldLiveBytes <= 0 {
+			l.vlogRotateIdleTotal.Add(1)
 		}
 		w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
 		l.vlogModeSet = false
@@ -14985,6 +14996,12 @@ func (db *DB) Stats() map[string]string {
 	var rawWriteSyscalls uint64
 	var rawWriteBytes uint64
 	var rawWriteCalls uint64
+	var vlogShapeSegmentsTotal int64
+	var vlogShapeBytesTotal int64
+	var vlogShapeL0Segments int64
+	var vlogShapeL0Bytes int64
+	splitValueLog := db.splitValueLogEnabled()
+	valueLogOn := db.valueLogEnabled()
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		walCurrentBytes += l.walLiveBytes.Load()
@@ -15010,9 +15027,56 @@ func (db *DB) Stats() map[string]string {
 		if depthSnap.PositiveRunMaxNs > queueDepthPositiveRunMaxNs {
 			queueDepthPositiveRunMaxNs = depthSnap.PositiveRunMaxNs
 		}
+		var (
+			vlogWriter  valueWriter
+			vlogPath    string
+			closedSegs  int
+			rotTotal    uint64
+			rotIdle     uint64
+			hasCurrent  bool
+			laneID      = l.id
+			liveBytes   = l.vlogLiveBytes.Load()
+			closedBytes = l.vlogClosedBytes.Load()
+		)
 		l.vlogMu.Lock()
-		vlogWriter := l.vlog
+		vlogWriter = l.vlog
+		vlogPath = l.vlogPath
+		if l.vlogClosedSizes != nil {
+			closedSegs = len(l.vlogClosedSizes)
+		}
+		rotTotal = l.vlogRotateTotal.Load()
+		rotIdle = l.vlogRotateIdleTotal.Load()
 		l.vlogMu.Unlock()
+		hasCurrent = vlogPath != ""
+
+		if splitValueLog && valueLogOn {
+			segs := closedSegs
+			if hasCurrent {
+				segs++
+			}
+			bytes := closedBytes + liveBytes
+			if bytes < 0 {
+				bytes = 0
+			}
+			vlogShapeSegmentsTotal += int64(segs)
+			vlogShapeBytesTotal += bytes
+			if laneID == 0 {
+				vlogShapeL0Segments = int64(segs)
+				vlogShapeL0Bytes = bytes
+			}
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segments_total", laneID)] = fmt.Sprintf("%d", segs)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segments_closed", laneID)] = fmt.Sprintf("%d", closedSegs)
+			if hasCurrent {
+				stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segment_current", laneID)] = "1"
+			} else {
+				stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segment_current", laneID)] = "0"
+			}
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.bytes_total", laneID)] = fmt.Sprintf("%d", bytes)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.bytes_closed", laneID)] = fmt.Sprintf("%d", closedBytes)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.bytes_live", laneID)] = fmt.Sprintf("%d", liveBytes)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.rotations_total", laneID)] = fmt.Sprintf("%d", rotTotal)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.rotations_idle_total", laneID)] = fmt.Sprintf("%d", rotIdle)
+		}
 		if snapper, ok := any(vlogWriter).(interface {
 			RawWritevStats() valuelog.RawWritevStats
 		}); ok {
@@ -15045,6 +15109,17 @@ func (db *DB) Stats() map[string]string {
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_max_ms", i)] = fmt.Sprintf("%.3f", float64(lagSnap.MaxNs)/float64(time.Millisecond))
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p99_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP99)/float64(time.Millisecond))
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p999_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP999)/float64(time.Millisecond))
+	}
+	if splitValueLog && valueLogOn {
+		stats["treedb.cache.vlog_shape.segments_total"] = fmt.Sprintf("%d", vlogShapeSegmentsTotal)
+		stats["treedb.cache.vlog_shape.bytes_total"] = fmt.Sprintf("%d", vlogShapeBytesTotal)
+		stats["treedb.cache.vlog_shape.l0.segments_total"] = fmt.Sprintf("%d", vlogShapeL0Segments)
+		stats["treedb.cache.vlog_shape.l0.bytes_total"] = fmt.Sprintf("%d", vlogShapeL0Bytes)
+	} else {
+		stats["treedb.cache.vlog_shape.segments_total"] = "0"
+		stats["treedb.cache.vlog_shape.bytes_total"] = "0"
+		stats["treedb.cache.vlog_shape.l0.segments_total"] = "0"
+		stats["treedb.cache.vlog_shape.l0.bytes_total"] = "0"
 	}
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
