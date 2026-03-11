@@ -10377,7 +10377,7 @@ planned:
 	// barrier to be safe, and that barrier can be very expensive during sustained
 	// ingest/restore when the flush queue is non-empty. Avoid introducing long
 	// stalls by only running the GC path when the cached write queue is drained.
-	if queueLen != 0 && !opts.skipCheckpoint {
+	if queueLen != 0 {
 		db.vlogGenerationGCSkipQueueNotDrained.Add(1)
 		return
 	}
@@ -10489,10 +10489,11 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
 			bypassQuiet:           true,
 			skipRetainedPruneWait: true,
-			// The checkpoint that triggered this kick already established a safe
-			// serialized backend view. Skip re-entering Checkpoint here so GC can
-			// run even if the memtable queue refills quickly after the flush.
-			skipCheckpoint: true,
+			// Checkpoint-triggered maintenance still needs a fresh serialized
+			// backend view before iterator-based rewrite/GC scans run. Re-entering
+			// Checkpoint here is safe: the just-finished caller has already cleared
+			// checkpointing, and the kick-active guard prevents recursive kicks.
+			skipCheckpoint: false,
 		})
 		if db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore {
 			db.vlogGenerationCheckpointKickRewriteRuns.Add(1)
