@@ -64,6 +64,8 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 		DisableWAL:                       true,
 		JournalLanes:                     1,
 		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogCompression:              1, // off; keep segment sizes deterministic
+		ValueLogMaxSegmentBytes:          256 << 10,
 		ValueLogRewriteTriggerTotalBytes: 1,
 		ForceValueLogPointers:            true,
 	})
@@ -74,14 +76,25 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 	t.Cleanup(func() { _ = db.Close() })
 	skipRetainedPrune(db)
 	db.testSkipVlogCheckpointKick = true
-	b := db.NewBatch()
-	if err := b.Set([]byte("k1"), make([]byte, 4096)); err != nil {
-		t.Fatalf("set: %v", err)
+	// Create eligible stale bytes (segment has both live and stale bytes) and
+	// ensure it is not the active segment:
+	// 1) Write k1, k2 into segment A.
+	// 2) Overwrite k1 in segment A (k1's first record becomes stale).
+	// 3) Write k3 which triggers rotation, closing segment A.
+	payload := make([]byte, 96<<10)
+	keys := [][]byte{[]byte("k1"), []byte("k2"), []byte("k1"), []byte("k3")}
+	for i := range keys {
+		b := db.NewBatch()
+		if err := b.Set(keys[i], payload); err != nil {
+			_ = b.Close()
+			t.Fatalf("set: %v", err)
+		}
+		if err := b.Write(); err != nil {
+			_ = b.Close()
+			t.Fatalf("write: %v", err)
+		}
+		_ = b.Close()
 	}
-	if err := b.Write(); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	_ = b.Close()
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}
@@ -96,8 +109,22 @@ func TestVlogGenerationRewrite_ProtectedPathsIncludeCurrentValueLogPaths(t *test
 		}
 	}
 
-	db.vlogGenerationRewriteBudgetTokensBytes.Store(1)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1 << 20)
 	forceVlogMaintenanceIdle(db)
+	retained := db.valueLogRetainedStatsDetailed()
+	if retained.BytesTotal <= 0 || retained.SegmentsTotal == 0 {
+		t.Fatalf("expected retained value-log bytes before maintenance; got bytes=%d segments=%d", retained.BytesTotal, retained.SegmentsTotal)
+	}
+	if ok, _ := db.shouldRunVlogGenerationRewrite(retained.BytesTotal, 0, 0); !ok {
+		t.Fatalf("expected retained bytes to trigger rewrite; trigger=%d bytes_total=%d", db.valueLogRewriteTriggerBytes, retained.BytesTotal)
+	}
+	plan, err := recorder.ValueLogRewritePlan(context.Background(), backenddb.ValueLogRewriteOnlineOptions{MaxSourceBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("rewrite plan: %v", err)
+	}
+	if len(plan.SourceFileIDs) == 0 {
+		t.Fatalf("expected rewrite plan to select segments; bytes_total=%d bytes_live=%d bytes_stale=%d segments_total=%d", plan.BytesTotal, plan.BytesLive, plan.BytesStale, plan.SegmentsTotal)
+	}
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	got := recorder.recordedProtectedPaths()
@@ -191,6 +218,8 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 		DisableWAL:                       true,
 		JournalLanes:                     1,
 		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogCompression:              1, // off; keep segment sizes deterministic
+		ValueLogMaxSegmentBytes:          256 << 10,
 		ValueLogRewriteTriggerTotalBytes: 1,
 		ForceValueLogPointers:            true,
 		ValueLogPointerThreshold:         1,
@@ -202,8 +231,19 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	skipRetainedPrune(db)
 	db.testSkipVlogCheckpointKick = true
-	if err := db.Set([]byte("k1"), make([]byte, 4096)); err != nil {
+	// Create eligible stale bytes and force rotation (see ProtectedPaths test above).
+	payload := make([]byte, 96<<10)
+	if err := db.Set([]byte("k1"), payload); err != nil {
 		t.Fatalf("set k1: %v", err)
+	}
+	if err := db.Set([]byte("k2"), payload); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := db.Set([]byte("k1"), payload); err != nil {
+		t.Fatalf("overwrite k1: %v", err)
+	}
+	if err := db.Set([]byte("k3"), payload); err != nil {
+		t.Fatalf("set k3: %v", err)
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -224,8 +264,22 @@ func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 		t.Fatalf("expected nextRID to be seeded by pointer write")
 	}
 
-	db.vlogGenerationRewriteBudgetTokensBytes.Store(1)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1 << 20)
 	forceVlogMaintenanceIdle(db)
+	retained := db.valueLogRetainedStatsDetailed()
+	if retained.BytesTotal <= 0 || retained.SegmentsTotal == 0 {
+		t.Fatalf("expected retained value-log bytes before maintenance; got bytes=%d segments=%d", retained.BytesTotal, retained.SegmentsTotal)
+	}
+	if ok, _ := db.shouldRunVlogGenerationRewrite(retained.BytesTotal, 0, 0); !ok {
+		t.Fatalf("expected retained bytes to trigger rewrite; trigger=%d bytes_total=%d", db.valueLogRewriteTriggerBytes, retained.BytesTotal)
+	}
+	plan, err := recorder.ValueLogRewritePlan(context.Background(), backenddb.ValueLogRewriteOnlineOptions{MaxSourceBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("rewrite plan: %v", err)
+	}
+	if len(plan.SourceFileIDs) == 0 {
+		t.Fatalf("expected rewrite plan to select segments; bytes_total=%d bytes_live=%d bytes_stale=%d segments_total=%d", plan.BytesTotal, plan.BytesLive, plan.BytesStale, plan.SegmentsTotal)
+	}
 	db.maybeRunVlogGenerationMaintenance(false)
 
 	got := recorder.recordedReservedStarts()
