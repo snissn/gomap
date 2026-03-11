@@ -64,6 +64,11 @@ const (
 	//
 	// Background maintenance is left enabled by default; it is generally helpful
 	// for keeping the index compact and read-friendly.
+	//
+	// Note: background *index vacuum* is disabled by default in this profile
+	// because it can inject large rebuild work at unpredictable times. If you
+	// want it, explicitly set Options.BackgroundIndexVacuumInterval after
+	// applying the profile.
 	ProfileFast Profile = "fast"
 
 	// ProfileWALOnFast is a "WAL on + relaxed durability" profile intended for
@@ -145,6 +150,10 @@ func applyFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOffRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 	opts.IndexOuterLeavesInValueLog = true
+	// Avoid spiky full index rebuild work unless caller explicitly opts in.
+	if opts.BackgroundIndexVacuumInterval == 0 {
+		opts.BackgroundIndexVacuumInterval = -1
+	}
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}
@@ -164,6 +173,10 @@ func applyWALOnFastProfile(opts *Options) {
 	opts.Durability = DurabilityWALOnRelaxed
 	opts.ValueLog.ReadIntegrity = IntegritySkipChecksums
 	opts.IndexOuterLeavesInValueLog = true
+	// Avoid spiky full index rebuild work unless caller explicitly opts in.
+	if opts.BackgroundIndexVacuumInterval == 0 {
+		opts.BackgroundIndexVacuumInterval = -1
+	}
 	if opts.ValueLog.DictIncompressibleHoldBytes == 0 {
 		opts.ValueLog.DictIncompressibleHoldBytes = 64 << 20
 	}

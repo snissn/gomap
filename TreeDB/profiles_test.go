@@ -31,6 +31,9 @@ func TestApplyProfile_FastSetsPolicyBools(t *testing.T) {
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for fast profile")
 	}
+	if opts.BackgroundIndexVacuumInterval >= 0 {
+		t.Fatalf("expected BackgroundIndexVacuumInterval < 0 for fast profile, got %v", opts.BackgroundIndexVacuumInterval)
+	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for fast profile")
 	}
@@ -64,6 +67,9 @@ func TestApplyProfile_WALOnFastKeepsWALOn(t *testing.T) {
 	if opts.ValueLog.ForcePointers {
 		t.Fatalf("expected ValueLog.ForcePointers=false for wal_on_fast profile")
 	}
+	if opts.BackgroundIndexVacuumInterval >= 0 {
+		t.Fatalf("expected BackgroundIndexVacuumInterval < 0 for wal_on_fast profile, got %v", opts.BackgroundIndexVacuumInterval)
+	}
 	if !opts.LeafPrefixCompression {
 		t.Fatalf("expected LeafPrefixCompression=true for wal_on_fast profile")
 	}
@@ -90,6 +96,9 @@ func TestApplyProfile_BenchDisablesBackgroundDefaults(t *testing.T) {
 	}
 	if opts.MaxWALBytes >= 0 {
 		t.Fatalf("expected MaxWALBytes < 0 for bench profile, got %d", opts.MaxWALBytes)
+	}
+	if opts.BackgroundIndexVacuumInterval >= 0 {
+		t.Fatalf("expected BackgroundIndexVacuumInterval < 0 for bench profile, got %v", opts.BackgroundIndexVacuumInterval)
 	}
 	if !opts.DisableBackgroundPrune {
 		t.Fatalf("expected DisableBackgroundPrune=true for bench profile")
