@@ -15191,6 +15191,13 @@ func (db *DB) Stats() map[string]string {
 	}
 	retained := db.valueLogRetainedStatsDetailed()
 	vlogSegments, vlogBytes := retained.SegmentsTotal, retained.BytesTotal
+	maintenanceProtectedPaths := db.valueLogMaintenanceProtectedPaths()
+	retainedPathCount := 0
+	db.valueLogMu.Lock()
+	if db.valueLogRetain != nil {
+		retainedPathCount = len(db.valueLogRetain)
+	}
+	db.valueLogMu.Unlock()
 	db.vlogGenerationRewriteQueueMu.Lock()
 	rewriteQueueLen := len(db.vlogGenerationRewriteQueue)
 	rewriteQueueLoaded := db.vlogGenerationRewriteQueueLoaded
@@ -15205,6 +15212,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
 	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
+	stats["treedb.cache.vlog_generation.maintenance_protected_paths"] = fmt.Sprintf("%d", len(maintenanceProtectedPaths))
+	stats["treedb.cache.vlog_generation.maintenance_retained_paths"] = fmt.Sprintf("%d", retainedPathCount)
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())
