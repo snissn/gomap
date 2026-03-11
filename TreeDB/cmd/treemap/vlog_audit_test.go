@@ -189,6 +189,39 @@ func TestCollectValueLogAudit_SkipRIDAndGCStillReportsRewritePlan(t *testing.T) 
 	}
 }
 
+func TestCollectValueLogAudit_RewriteCacheProbeReportsWarmPlan(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	report, err := collectValueLogAudit(dir, valueLogAuditCollectOptions{
+		skipRID:    true,
+		skipGC:     true,
+		cacheProbe: true,
+		rewrite: buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+			schedulerLike: true,
+			maxBytes:      64 << 20,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(cache probe): %v", err)
+	}
+	if report.RewritePlan.SegmentsTotal == 0 {
+		t.Fatalf("expected cold rewrite plan to observe segments: %+v", report.RewritePlan)
+	}
+	if report.RewritePlanMS <= 0 {
+		t.Fatalf("expected positive cold rewrite-plan timing, got=%f", report.RewritePlanMS)
+	}
+	if report.RewritePlanWarm.SegmentsTotal == 0 {
+		t.Fatalf("expected warm rewrite plan to observe segments: %+v", report.RewritePlanWarm)
+	}
+	if report.RewritePlanWarmMS <= 0 {
+		t.Fatalf("expected positive warm rewrite-plan timing, got=%f", report.RewritePlanWarmMS)
+	}
+	if !report.RewritePlanWarm.LiveEstimateCacheHit {
+		t.Fatalf("expected warm rewrite plan cache hit, got %+v", report.RewritePlanWarm)
+	}
+}
+
 func TestScanValueLogRIDs_ReportsTruncatedSegments(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-l0-000001.log")
