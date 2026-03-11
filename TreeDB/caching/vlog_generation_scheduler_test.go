@@ -1,11 +1,14 @@
 package caching
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1885,5 +1888,65 @@ func TestVlogGenerationGC_SkipsForMinInterval(t *testing.T) {
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_generation.gc.skip.min_interval"]; got != "1" {
 		t.Fatalf("gc skip min_interval=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationCloseSummary_ReportsGCSkipCounters(t *testing.T) {
+	var db DB
+	db.valueLogGenerationPolicy = uint8(backenddb.ValueLogGenerationHotWarmCold)
+	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
+	db.vlogGenerationLastReason.Store(vlogGenerationReasonPeriodicGC)
+	db.vlogGenerationRewriteRuns.Store(3)
+	db.vlogGenerationRewriteBytesIn.Store(111)
+	db.vlogGenerationRewriteBytesOut.Store(222)
+	db.vlogGenerationRewriteQueue = []uint32{7, 8}
+	db.vlogGenerationRewriteQueueLoaded = true
+	db.vlogGenerationGCRuns.Store(4)
+	db.vlogGenerationGCSegmentsDeleted.Store(5)
+	db.vlogGenerationGCBytesDeleted.Store(666)
+	db.vlogGenerationGCSkipQueueNotDrained.Store(9)
+	db.vlogGenerationGCSkipMinInterval.Store(10)
+	db.vlogGenerationGCSkipBelowThreshold.Store(11)
+	db.vlogGenerationLastGCDryRunSegsEligible.Store(12)
+	db.vlogGenerationLastGCDryRunBytesEligible.Store(777)
+	db.vlogGenerationCheckpointKickRuns.Store(13)
+	db.vlogGenerationCheckpointKickRewriteRuns.Store(14)
+	db.vlogGenerationCheckpointKickGCRuns.Store(15)
+
+	var buf bytes.Buffer
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	}()
+
+	db.logVlogGenerationCloseSummary()
+
+	out := buf.String()
+	for _, want := range []string{
+		"treedb: vlog generation close summary",
+		"scheduler_state=running",
+		"last_reason=periodic_gc",
+		"rewrite_runs=3",
+		"rewrite_queue_len=2",
+		"rewrite_queue_loaded=true",
+		"gc_runs=4",
+		"gc_deleted_segments=5",
+		"gc_deleted_bytes=666",
+		"gc_skip_queue_not_drained=9",
+		"gc_skip_min_interval=10",
+		"gc_skip_below_threshold=11",
+		"gc_dry_run_last_eligible_segments=12",
+		"gc_dry_run_last_eligible_bytes=777",
+		"checkpoint_kicks=13",
+		"checkpoint_kick_rewrite_runs=14",
+		"checkpoint_kick_gc_runs=15",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("close summary missing %q in %q", want, out)
+		}
 	}
 }

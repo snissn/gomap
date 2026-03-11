@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/bits"
 	"os"
@@ -11330,6 +11331,7 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
+	db.logVlogGenerationCloseSummary()
 	db.closing.Store(true)
 	db.stopDomainIngressWorkers()
 	db.waitForRetainedValueLogPrune()
@@ -11491,6 +11493,40 @@ func (db *DB) Close() error {
 		errs = append(errs, bgErr)
 	}
 	return errors.Join(errs...)
+}
+
+func (db *DB) logVlogGenerationCloseSummary() {
+	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	queueLen, queueLoaded := db.vlogGenerationRewriteQueueState()
+	log.Printf(
+		"treedb: vlog generation close summary scheduler_state=%s last_reason=%s rewrite_runs=%d rewrite_bytes_in=%d rewrite_bytes_out=%d rewrite_queue_len=%d rewrite_queue_loaded=%t gc_runs=%d gc_deleted_segments=%d gc_deleted_bytes=%d gc_skip_queue_not_drained=%d gc_skip_min_interval=%d gc_skip_below_threshold=%d gc_dry_run_last_eligible_segments=%d gc_dry_run_last_eligible_bytes=%d checkpoint_kicks=%d checkpoint_kick_rewrite_runs=%d checkpoint_kick_gc_runs=%d",
+		vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load()),
+		vlogGenerationReasonString(db.vlogGenerationLastReason.Load()),
+		db.vlogGenerationRewriteRuns.Load(),
+		db.vlogGenerationRewriteBytesIn.Load(),
+		db.vlogGenerationRewriteBytesOut.Load(),
+		queueLen,
+		queueLoaded,
+		db.vlogGenerationGCRuns.Load(),
+		db.vlogGenerationGCSegmentsDeleted.Load(),
+		db.vlogGenerationGCBytesDeleted.Load(),
+		db.vlogGenerationGCSkipQueueNotDrained.Load(),
+		db.vlogGenerationGCSkipMinInterval.Load(),
+		db.vlogGenerationGCSkipBelowThreshold.Load(),
+		db.vlogGenerationLastGCDryRunSegsEligible.Load(),
+		db.vlogGenerationLastGCDryRunBytesEligible.Load(),
+		db.vlogGenerationCheckpointKickRuns.Load(),
+		db.vlogGenerationCheckpointKickRewriteRuns.Load(),
+		db.vlogGenerationCheckpointKickGCRuns.Load(),
+	)
+}
+
+func (db *DB) vlogGenerationRewriteQueueState() (int, bool) {
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	return len(db.vlogGenerationRewriteQueue), db.vlogGenerationRewriteQueueLoaded
 }
 func (db *DB) Set(key, value []byte) error {
 	if len(key) == 0 {
