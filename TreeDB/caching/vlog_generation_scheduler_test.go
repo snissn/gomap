@@ -535,6 +535,50 @@ func TestVlogGenerationRewrite_ExecutesFullPlannedQueueWithoutResumeChunking(t *
 	}
 }
 
+func TestVlogGenerationRewrite_ConsumesFullPlannedUnitBudget(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11, 22},
+			SelectedBytesLive: 256,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 256, BytesAfter: 64, RecordsCopied: 2},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	initialTokens := int64(1024)
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(initialTokens)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if got, want := opts.SourceFileIDs, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("rewrite source ids=%v want=%v", got, want)
+	}
+	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), initialTokens-int64(recorder.rewriteResponse.BytesBefore); got != want {
+		t.Fatalf("tokens after rewrite=%d want=%d", got, want)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue after rewrite: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("queue after rewrite=%v want empty", queue)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
