@@ -14,6 +14,53 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
+func TestBuildValueLogAuditRewriteOptions_Defaults(t *testing.T) {
+	opts := buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{})
+	if opts.MaxSourceSegments != 0 || opts.MaxSourceBytes != 0 {
+		t.Fatalf("unexpected source caps: %+v", opts)
+	}
+	if opts.MinSegmentStaleRatio != 0 || opts.MinSegmentStaleBytes != 0 || opts.MinAggregateStaleBytes != 0 {
+		t.Fatalf("unexpected stale defaults: %+v", opts)
+	}
+}
+
+func TestBuildValueLogAuditRewriteOptions_SchedulerLikeDefaults(t *testing.T) {
+	opts := buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+		schedulerLike:           true,
+		maxBytes:                128 << 20,
+		schedulerHotTargetBytes: 256 << 20,
+	})
+	if got, want := opts.MinSegmentStaleRatio, 0.20; got != want {
+		t.Fatalf("MinSegmentStaleRatio=%f want=%f", got, want)
+	}
+	if got, want := opts.MinSegmentStaleBytes, int64(1); got != want {
+		t.Fatalf("MinSegmentStaleBytes=%d want=%d", got, want)
+	}
+	if got, want := opts.MinAggregateStaleBytes, int64(32<<20); got != want {
+		t.Fatalf("MinAggregateStaleBytes=%d want=%d", got, want)
+	}
+}
+
+func TestBuildValueLogAuditRewriteOptions_SchedulerLikeHonorsExplicitOverrides(t *testing.T) {
+	opts := buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+		schedulerLike:           true,
+		maxBytes:                64 << 20,
+		minStaleRatio:           0.35,
+		minStaleBytes:           9,
+		minAggregateStaleBytes:  1234,
+		schedulerHotTargetBytes: 256 << 20,
+	})
+	if got, want := opts.MinSegmentStaleRatio, 0.35; got != want {
+		t.Fatalf("MinSegmentStaleRatio=%f want=%f", got, want)
+	}
+	if got, want := opts.MinSegmentStaleBytes, int64(9); got != want {
+		t.Fatalf("MinSegmentStaleBytes=%d want=%d", got, want)
+	}
+	if got, want := opts.MinAggregateStaleBytes, int64(1234); got != want {
+		t.Fatalf("MinAggregateStaleBytes=%d want=%d", got, want)
+	}
+}
+
 func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)

@@ -51,6 +51,49 @@ type valueLogRIDAuditOptions struct {
 	MaxTrackedRIDs       int
 }
 
+type valueLogAuditRewriteFlagOptions struct {
+	maxSegments             int
+	maxBytes                int64
+	minStaleRatio           float64
+	minStaleBytes           int64
+	minAggregateStaleBytes  int64
+	schedulerLike           bool
+	schedulerHotTargetBytes int64
+}
+
+func buildValueLogAuditRewriteOptions(flagOpts valueLogAuditRewriteFlagOptions) treedbdb.ValueLogRewriteOnlineOptions {
+	opts := treedbdb.ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:      flagOpts.maxSegments,
+		MaxSourceBytes:         flagOpts.maxBytes,
+		MinSegmentStaleRatio:   flagOpts.minStaleRatio,
+		MinSegmentStaleBytes:   flagOpts.minStaleBytes,
+		MinAggregateStaleBytes: flagOpts.minAggregateStaleBytes,
+	}
+	if !flagOpts.schedulerLike {
+		return opts
+	}
+	if opts.MinSegmentStaleRatio <= 0 {
+		opts.MinSegmentStaleRatio = 0.20
+	}
+	if opts.MinSegmentStaleBytes <= 0 {
+		opts.MinSegmentStaleBytes = 1
+	}
+	if opts.MinAggregateStaleBytes <= 0 {
+		threshold := flagOpts.schedulerHotTargetBytes / 8
+		if opts.MaxSourceBytes > 0 {
+			budgetThreshold := opts.MaxSourceBytes / 4
+			if threshold <= 0 || (budgetThreshold > 0 && budgetThreshold < threshold) {
+				threshold = budgetThreshold
+			}
+		}
+		if threshold <= 0 {
+			threshold = 1 << 20
+		}
+		opts.MinAggregateStaleBytes = threshold
+	}
+	return opts
+}
+
 func runVlogAudit(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-audit", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
@@ -59,6 +102,9 @@ func runVlogAudit(dir string, args []string) {
 	maxBytes := fs.Int64("rewrite-max-bytes", 0, "Rewrite-plan live-byte selection cap (0=none)")
 	minStaleRatio := fs.Float64("rewrite-min-stale-ratio", 0, "Rewrite-plan minimum per-segment stale ratio (0..1)")
 	minStaleBytes := fs.Int64("rewrite-min-stale-bytes", 0, "Rewrite-plan minimum per-segment stale bytes")
+	minAggregateStaleBytes := fs.Int64("rewrite-min-aggregate-stale-bytes", 0, "Rewrite-plan minimum aggregate stale bytes for debt-aware fallback (0=disabled)")
+	schedulerLike := fs.Bool("rewrite-scheduler-like", false, "Apply cached-maintenance-style rewrite defaults (stale ratio + aggregate debt fallback)")
+	schedulerHotTargetBytes := fs.Int64("rewrite-scheduler-hot-target-bytes", 256<<20, "Hot-segment target used to derive scheduler-like aggregate debt threshold")
 	stopOnFirstDuplicate := fs.Bool("rid-scan-stop-on-first-duplicate", false, "Stop the RID scan after the first duplicate is detected")
 	maxTrackedRIDs := fs.Int("rid-scan-max-tracked", 0, "Maximum distinct RIDs to track in-memory during RID scan (0=unbounded exact mode; may use high memory)")
 	_ = fs.Parse(args)
@@ -67,12 +113,15 @@ func runVlogAudit(dir string, args []string) {
 		fatalf("vlog-audit requires -rw")
 	}
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{
-		MaxSourceSegments:    *maxSegments,
-		MaxSourceBytes:       *maxBytes,
-		MinSegmentStaleRatio: *minStaleRatio,
-		MinSegmentStaleBytes: *minStaleBytes,
-	}, valueLogRIDAuditOptions{
+	report, err := collectValueLogAudit(dir, buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+		maxSegments:             *maxSegments,
+		maxBytes:                *maxBytes,
+		minStaleRatio:           *minStaleRatio,
+		minStaleBytes:           *minStaleBytes,
+		minAggregateStaleBytes:  *minAggregateStaleBytes,
+		schedulerLike:           *schedulerLike,
+		schedulerHotTargetBytes: *schedulerHotTargetBytes,
+	}), valueLogRIDAuditOptions{
 		StopOnFirstDuplicate: *stopOnFirstDuplicate,
 		MaxTrackedRIDs:       *maxTrackedRIDs,
 	})
