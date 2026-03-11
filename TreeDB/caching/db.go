@@ -10462,9 +10462,6 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	if db.testSkipVlogCheckpointKick {
 		return
 	}
-	if !db.disableJournal {
-		return
-	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
@@ -10472,6 +10469,16 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	last := db.vlogGenerationLastCheckpointKickUnixNano.Load()
 	if last > 0 && now.Sub(time.Unix(0, last)) < vlogGenerationCheckpointKickMinInterval {
 		return
+	}
+	// Avoid forcing extra checkpoint boundaries when rewrite is clearly ineligible.
+	// Skip this fast-path when rewrite is disabled so GC-only kicks still run.
+	if !envBool(envDisableVlogGenerationRewrite) {
+		if trigger := db.valueLogRewriteTriggerBytes; trigger > 0 {
+			retained, bytes := db.valueLogRetainedStats()
+			if bytes < trigger && retained < 2 {
+				return
+			}
+		}
 	}
 	if !db.vlogGenerationCheckpointKickActive.CompareAndSwap(false, true) {
 		return
