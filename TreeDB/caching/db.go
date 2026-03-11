@@ -2194,7 +2194,7 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
-			return errWALUnavailable
+			return fmt.Errorf("cachingdb: value log writer unavailable: lane=%d path=%q seq=%d", l.id, l.vlogPath, l.vlogSeq)
 		}
 		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
 		if !l.vlogDirty.Load() {
@@ -2242,7 +2242,7 @@ func (db *DB) syncValueLogLane(l *lane) error {
 		w := l.vlog
 		if w == nil {
 			l.vlogMu.Unlock()
-			return errWALUnavailable
+			return fmt.Errorf("cachingdb: value log writer unavailable: lane=%d path=%q seq=%d", l.id, l.vlogPath, l.vlogSeq)
 		}
 		start := time.Now()
 		err := w.Sync()
