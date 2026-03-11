@@ -9929,6 +9929,20 @@ func (db *DB) vlogGenerationRewriteBudgetEnabled() bool {
 	return db != nil && db.valueLogRewriteBudgetBytes > 0
 }
 
+func (db *DB) vlogGenerationRewriteAggregateDebtMinBytes(maxSourceBytes int64) int64 {
+	// Only used when MinSegmentStaleRatio filters out all candidates; keep this
+	// threshold non-trivial so we don't churn on tiny, diffuse stale debt.
+	if maxSourceBytes <= 0 {
+		return 0
+	}
+	threshold := maxSourceBytes / 8
+	const min = int64(1 << 20) // 1MiB
+	if threshold < min {
+		threshold = min
+	}
+	return threshold
+}
+
 const maxPositiveInt64 = int64(^uint64(0) >> 1)
 
 func addClampInt64(cur, add, limit int64) int64 {
@@ -10121,10 +10135,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
 		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
-			MaxSourceSegments:    0,
-			MaxSourceBytes:       maxSourceBytes,
-			MinSegmentStaleRatio: minStaleRatio,
-			MinSegmentStaleBytes: 1,
+			MaxSourceSegments:      0,
+			MaxSourceBytes:         maxSourceBytes,
+			MinSegmentStaleRatio:   minStaleRatio,
+			MinSegmentStaleBytes:   1,
+			MinAggregateStaleBytes: db.vlogGenerationRewriteAggregateDebtMinBytes(maxSourceBytes),
 		})
 		cancel()
 		updatePlanTimestamp := false
