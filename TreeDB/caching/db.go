@@ -10339,13 +10339,16 @@ planned:
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
 			rewriteBytesIn := int64(0)
-			if len(processedRewriteEntries) > 0 && stats.BytesBefore > 0 {
-				rewriteBytesIn = int64(stats.BytesBefore)
-			} else if len(processedRewriteEntries) > 0 {
+			if len(processedRewriteEntries) > 0 {
 				for _, entry := range processedRewriteEntries {
 					if entry.LiveBytes > 0 {
 						rewriteBytesIn += entry.LiveBytes
 					}
+				}
+				// If the rewrite queue lacks live-byte estimates, prefer not to
+				// over-count: stats.BytesBefore is whole-db value-log bytes.
+				if rewriteBytesIn == 0 && haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
+					rewriteBytesIn = rewritePlan.SelectedBytesLive
 				}
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				rewriteBytesIn = rewritePlan.SelectedBytesLive
@@ -10361,13 +10364,16 @@ planned:
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
 			consumed := int64(0)
-			if len(processedRewriteEntries) > 0 && stats.BytesBefore > 0 {
-				consumed = int64(stats.BytesBefore)
-			} else if len(processedRewriteEntries) > 0 {
+			if len(processedRewriteEntries) > 0 {
 				for _, entry := range processedRewriteEntries {
 					if entry.LiveBytes > 0 {
 						consumed += entry.LiveBytes
 					}
+				}
+				// See rewriteBytesIn comment above: avoid draining the budget using
+				// whole-db bytes when the queue path is used.
+				if consumed == 0 && haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
+					consumed = rewritePlan.SelectedBytesLive
 				}
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				consumed = rewritePlan.SelectedBytesLive

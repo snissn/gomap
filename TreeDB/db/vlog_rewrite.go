@@ -784,12 +784,19 @@ func selectRewriteSourceSegmentsRanked(opts ValueLogRewriteOnlineOptions, files 
 			if size < 0 {
 				size = 0
 			}
-			liveBytes := liveByID[id]
-			if liveBytes < 0 {
-				liveBytes = 0
-			}
-			if size > 0 && liveBytes > size {
-				liveBytes = size
+			// ValueLogRewriteOnline may pass a nil liveByID map in the explicit
+			// SourceFileIDs path to avoid a redundant live-byte estimation scan.
+			// Treat nil as "unknown" and conservatively assume the segment is fully
+			// live so callers do not panic.
+			liveBytes := size
+			if liveByID != nil {
+				liveBytes = liveByID[id]
+				if liveBytes < 0 {
+					liveBytes = 0
+				}
+				if size > 0 && liveBytes > size {
+					liveBytes = size
+				}
 			}
 			staleBytes := size - liveBytes
 			if staleBytes < 0 {
