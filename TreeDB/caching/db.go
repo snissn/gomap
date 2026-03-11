@@ -2531,6 +2531,16 @@ func (db *DB) valueLogProtectedPaths() []string {
 	return paths
 }
 
+func (db *DB) valueLogGCProtectedPaths() []string {
+	// Rewrite cleanup needs the full retained set so concurrent online rewrite
+	// does not zombify segments still reachable from the backend index. GC has a
+	// narrower job: it should only protect segments that may still be referenced
+	// by in-memory cached state or active writers. Reusing the broader retained
+	// set here can over-protect stale rewritten segments and leave pathologically
+	// large l0 debt on disk even after repeated maintenance opportunities.
+	return db.valueLogInUsePaths()
+}
+
 // valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
 // that may be referenced by in-memory state (mutable + queued memtables).
 //
@@ -10291,7 +10301,7 @@ planned:
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
-					ProtectedPaths: db.valueLogProtectedPaths(),
+					ProtectedPaths: db.valueLogGCProtectedPaths(),
 				})
 				gcCancel()
 				if gcErr != nil {
@@ -10389,7 +10399,7 @@ planned:
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
-		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
+		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogGCProtectedPaths()}
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
 		if err != nil {
@@ -10560,7 +10570,7 @@ func (db *DB) estimateVlogGenerationGCEligible(gcer backendValueLogGCer) (backen
 	defer cancel()
 	stats, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
 		DryRun:         true,
-		ProtectedPaths: db.valueLogProtectedPaths(),
+		ProtectedPaths: db.valueLogGCProtectedPaths(),
 	})
 	if err == nil {
 		db.vlogGenerationLastGCDryRunUnixNano.Store(time.Now().UnixNano())
