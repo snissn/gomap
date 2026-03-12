@@ -111,7 +111,7 @@ func TestTreeGet(t *testing.T) {
 	}
 }
 
-func TestTreeGet_UsesUnsafeReaderForPointersAndReturnsSafeCopy(t *testing.T) {
+func TestTreeGet_UsesAppendReaderForPointersAndReturnsSafeCopy(t *testing.T) {
 	dir := t.TempDir()
 	idxPath := filepath.Join(dir, "index.db")
 	p, err := pager.Open(idxPath, 65536)
@@ -146,11 +146,11 @@ func TestTreeGet_UsesUnsafeReaderForPointersAndReturnsSafeCopy(t *testing.T) {
 	if !bytes.Equal(got, expected) {
 		t.Fatalf("unexpected value: %q", got)
 	}
-	if tracked.readUnsafeCalls != 1 {
-		t.Fatalf("expected ReadUnsafe to be used once, got %d", tracked.readUnsafeCalls)
+	if tracked.readUnsafeAppendCalls != 1 {
+		t.Fatalf("expected ReadUnsafeAppend to be used once, got %d", tracked.readUnsafeAppendCalls)
 	}
-	if tracked.readUnsafeAppendCalls != 0 {
-		t.Fatalf("expected ReadUnsafeAppend to be bypassed, got %d calls", tracked.readUnsafeAppendCalls)
+	if tracked.readUnsafeCalls != 0 {
+		t.Fatalf("expected ReadUnsafe to be bypassed, got %d", tracked.readUnsafeCalls)
 	}
 
 	got[0] = 'X'
