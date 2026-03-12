@@ -15534,6 +15534,21 @@ func (db *DB) Stats() map[string]string {
 		}
 	}
 	if db.valueLogReader != nil {
+		remaps, deadMappings := db.valueLogReader.RemapStats()
+		stats["treedb.cache.vlog_mmap.remaps"] = fmt.Sprintf("%d", remaps)
+		stats["treedb.cache.vlog_mmap.dead_mappings"] = fmt.Sprintf("%d", deadMappings)
+		stats["treedb.cache.vlog_mmap.dead_mappings_cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
+
+		mmapHits, mmapMissOutOfRange, mmapMissNoMapping, mmapMissDeadCap, mmapFallbackReadAt := db.valueLogReader.MmapReadStats()
+		stats["treedb.cache.vlog_mmap.read.hits"] = fmt.Sprintf("%d", mmapHits)
+		stats["treedb.cache.vlog_mmap.read.miss_out_of_range"] = fmt.Sprintf("%d", mmapMissOutOfRange)
+		stats["treedb.cache.vlog_mmap.read.miss_no_mapping"] = fmt.Sprintf("%d", mmapMissNoMapping)
+		stats["treedb.cache.vlog_mmap.read.miss_dead_mapping_cap"] = fmt.Sprintf("%d", mmapMissDeadCap)
+		stats["treedb.cache.vlog_mmap.read.fallback_readat"] = fmt.Sprintf("%d", mmapFallbackReadAt)
+		if total := mmapHits + mmapFallbackReadAt; total > 0 {
+			stats["treedb.cache.vlog_mmap.read.hit_ratio"] = fmt.Sprintf("%.6f", float64(mmapHits)/float64(total))
+		}
+
 		hits, misses, entries, capacity := db.valueLogReader.TemplateDefCacheStats()
 		stats["treedb.cache.vlog_template_def_cache.hits"] = fmt.Sprintf("%d", hits)
 		stats["treedb.cache.vlog_template_def_cache.misses"] = fmt.Sprintf("%d", misses)
