@@ -10386,8 +10386,14 @@ planned:
 					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
+				// If the token bucket is enabled and empty, persist the plan/ledger but
+				// skip running the rewrite until we have budget to spend.
+				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return nil
+				}
 				if len(rewritePlan.SelectedSegments) > 0 {
-					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(rewritePlan.SelectedSegments, vlogGenerationRewriteResumeMaxSegments, maxSourceBytes)
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(rewritePlan.SelectedSegments, vlogGenerationRewriteResumeMaxSegments, budgetTokens)
 				} else {
 					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
 				}

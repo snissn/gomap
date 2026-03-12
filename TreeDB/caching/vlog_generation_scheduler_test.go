@@ -669,6 +669,10 @@ func TestVlogGenerationRewriteQueue_DoesNotRunWhenBudgetEmpty(t *testing.T) {
 		t.Fatalf("set queue: %v", err)
 	}
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(0)
+	// Prevent budget accrual from re-filling the token bucket between the Store(0)
+	// above and maybeRunVlogGenerationMaintenance(), which would defeat this
+	// "empty budget" assertion on slow/loaded CI runners.
+	db.vlogGenerationRewriteBudgetLastUnixNano.Store(time.Now().Add(10 * time.Second).UnixNano())
 	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)

@@ -299,6 +299,9 @@ func vlogGenerationRewriteLedgerChunk(ledger []backenddb.ValueLogRewritePlanSegm
 		if len(ids) >= maxSegments {
 			break
 		}
+		if budgetLiveBytes > 0 && remaining <= 0 && len(ids) > 0 {
+			break
+		}
 		live := seg.BytesLive
 		if live <= 0 {
 			live = 0
