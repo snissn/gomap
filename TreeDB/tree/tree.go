@@ -516,16 +516,16 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 // compatibility with the long-standing TreeDB API, when the stored value is
 // zero-length but the key is present, Get returns (nil, nil).
 func (t *Tree) Get(key []byte) ([]byte, error) {
-	val, err := t.GetUnsafe(key)
+	out, err := t.GetAppend(key, nil)
 	if err != nil {
 		return nil, err
 	}
-	if len(val) == 0 {
+	if len(out) == 0 {
+		// Preserve long-standing TreeDB API behavior: empty-but-present values
+		// return (nil, nil) instead of a 0-length slice.
 		return nil, nil
 	}
-	buf := make([]byte, len(val))
-	copy(buf, val)
-	return buf, nil
+	return out, nil
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {
