@@ -66,6 +66,12 @@ type slabUnsafeBatchAppender interface {
 	ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error)
 }
 
+// Optional fast path for scratch-based unsafe reads. Callers can provide a
+// reusable dst buffer to avoid allocating decode scratch and extra copies.
+type slabUnsafeToReader interface {
+	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
+}
+
 // Optional key-aware pointer reads for outer-leaf block payloads.
 type slabUnsafeKeyReader interface {
 	ReadUnsafeForKey(ptr page.ValuePtr, key []byte) ([]byte, error)
@@ -98,6 +104,7 @@ type Tree struct {
 	slabReader      SlabReader
 	slabAppender    slabUnsafeAppender
 	slabBatcher     slabUnsafeBatchAppender
+	slabToReader    slabUnsafeToReader
 	slabKeyReader   slabUnsafeKeyReader
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
@@ -116,6 +123,9 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	}
 	if batcher, ok := sr.(slabUnsafeBatchAppender); ok {
 		t.slabBatcher = batcher
+	}
+	if toer, ok := sr.(slabUnsafeToReader); ok {
+		t.slabToReader = toer
 	}
 	if keyAwareEnabled {
 		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
@@ -144,6 +154,11 @@ func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 		t.slabBatcher = batcher
 	} else {
 		t.slabBatcher = nil
+	}
+	if toer, ok := sr.(slabUnsafeToReader); ok {
+		t.slabToReader = toer
+	} else {
+		t.slabToReader = nil
 	}
 	if keyAwarePointerReadsEnabled(sr) {
 		if keyReader, ok := sr.(slabUnsafeKeyReader); ok {
@@ -299,35 +314,69 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 
 	for depth := 0; depth < 50; depth++ {
 		var (
-			n              node.Node
-			leafScratch    []byte
-			leafScratchRef bool
+			n                node.Node
+			leafScratch      []byte
+			leafScratchOwned bool
+			loadedLeafRef    bool
 		)
-		if appendMode && t.slabAppender != nil {
-			if ptr, ok := page.DecodeLeafRef(currID); ok {
+
+		if appendMode {
+			if ptr, ok := page.DecodeLeafRef(currID); ok && t.slabReader != nil {
 				leafScratch = getLeafRefPageScratch()
-				data, err := t.slabAppender.ReadUnsafeAppend(ptr, leafScratch[:0])
-				if err != nil {
+				var (
+					data []byte
+					err  error
+				)
+				if t.slabToReader != nil {
+					var usedDst bool
+					data, usedDst, err = t.slabToReader.ReadUnsafeTo(ptr, leafScratch)
+					if err != nil {
+						putLeafRefPageScratch(leafScratch)
+						return nil, page.ValuePtr{}, 0, false, err
+					}
+					loadedLeafRef = true
+					leafScratchOwned = usedDst
+					if !usedDst {
+						putLeafRefPageScratch(leafScratch)
+						leafScratch = nil
+					}
+				} else if t.slabAppender != nil {
+					data, err = t.slabAppender.ReadUnsafeAppend(ptr, leafScratch[:0])
+					if err != nil {
+						putLeafRefPageScratch(leafScratch)
+						return nil, page.ValuePtr{}, 0, false, err
+					}
+					loadedLeafRef = true
+					leafScratchOwned = true
+				} else {
 					putLeafRefPageScratch(leafScratch)
-					return nil, page.ValuePtr{}, 0, false, err
+					leafScratch = nil
 				}
-				if len(data) != page.PageSize {
-					putLeafRefPageScratch(leafScratch)
-					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid leaf page size %d for page %d", len(data), currID)
+				if loadedLeafRef {
+					if len(data) != page.PageSize {
+						if leafScratchOwned {
+							putLeafRefPageScratch(leafScratch)
+						}
+						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid leaf page size %d for page %d", len(data), currID)
+					}
+					n = node.NewNodeView(data)
+					if !n.VerifyChecksum() {
+						if leafScratchOwned {
+							putLeafRefPageScratch(leafScratch)
+						}
+						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("checksum mismatch on page %d", currID)
+					}
+					if n.Type() != page.PageTypeLeaf {
+						if leafScratchOwned {
+							putLeafRefPageScratch(leafScratch)
+						}
+						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
+					}
 				}
-				n = node.NewNodeView(data)
-				if !n.VerifyChecksum() {
-					putLeafRefPageScratch(leafScratch)
-					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("checksum mismatch on page %d", currID)
-				}
-				if n.Type() != page.PageTypeLeaf {
-					putLeafRefPageScratch(leafScratch)
-					return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
-				}
-				leafScratchRef = true
 			}
 		}
-		if !leafScratchRef {
+
+		if !loadedLeafRef {
 			var err error
 			n, err = t.loadNodeView(currID, verifyAlways)
 			if err != nil {
@@ -358,13 +407,13 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 		case page.PageTypeLeaf:
 			idx, found, err := n.SearchLeaf(key)
 			if err != nil {
-				if leafScratchRef {
+				if leafScratchOwned {
 					putLeafRefPageScratch(leafScratch)
 				}
 				return nil, page.ValuePtr{}, 0, false, err
 			}
 			if !found {
-				if leafScratchRef {
+				if leafScratchOwned {
 					putLeafRefPageScratch(leafScratch)
 				}
 				return nil, page.ValuePtr{}, 0, false, ErrKeyNotFound
@@ -372,7 +421,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 
 			val, ptr, flags, err := n.GetLeafValueView(idx)
 			if err != nil {
-				if leafScratchRef {
+				if leafScratchOwned {
 					putLeafRefPageScratch(leafScratch)
 				}
 				return nil, page.ValuePtr{}, 0, false, err
@@ -382,18 +431,18 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				if val != nil {
 					out = append(dst, val...)
 				}
-				if leafScratchRef {
+				if leafScratchOwned {
 					putLeafRefPageScratch(leafScratch)
 				}
 				return out, ptr, flags, true, nil
 			}
-			if leafScratchRef {
+			if leafScratchOwned {
 				putLeafRefPageScratch(leafScratch)
 			}
 			return val, ptr, flags, false, nil
 
 		default:
-			if leafScratchRef {
+			if leafScratchOwned {
 				putLeafRefPageScratch(leafScratch)
 			}
 			return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid page type %d at page %d", n.Type(), currID)
