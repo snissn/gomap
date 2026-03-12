@@ -56,6 +56,7 @@ type Interface interface {
 type Batch struct {
 	entries         []Entry
 	copyArena       []byte
+	copyArenaChunks [][]byte
 	byteSize        int
 	inlineThreshold int
 	thresholdForKey func([]byte) int
@@ -66,8 +67,46 @@ type Batch struct {
 	reader          ValueReader
 }
 
-const maxBatchPoolCap = 1 << 16
-const maxBatchCopyArenaPoolBytes = 32 << 20
+const (
+	maxBatchPoolCap = 1 << 16
+	// Copy arenas are chunked to avoid realloc-copy behavior for large batches.
+	// Keep pooled chunks capped to prevent inflated RSS from underfilled tails.
+	batchCopyArenaMinChunk    = 4 << 10
+	batchCopyArenaUnsizedInit = 8 << 10
+	batchCopyArenaMaxRetain   = 2 << 20
+)
+
+var copyArenaPool = sync.Pool{
+	New: func() any { return make([]byte, 0, batchCopyArenaUnsizedInit) },
+}
+
+func getCopyArena(capacity int) []byte {
+	if capacity <= 0 {
+		capacity = batchCopyArenaUnsizedInit
+	}
+	if capacity < batchCopyArenaMinChunk {
+		capacity = batchCopyArenaMinChunk
+	}
+	if capacity > batchCopyArenaMaxRetain {
+		// Large one-off arenas are not pooled.
+		return make([]byte, 0, capacity)
+	}
+	buf, _ := copyArenaPool.Get().([]byte)
+	if cap(buf) < capacity {
+		return make([]byte, 0, capacity)
+	}
+	return buf[:0]
+}
+
+func putCopyArena(buf []byte) {
+	if buf == nil {
+		return
+	}
+	if cap(buf) > batchCopyArenaMaxRetain {
+		return
+	}
+	copyArenaPool.Put(buf[:0])
+}
 
 var batchPool = sync.Pool{
 	New: func() any {
@@ -124,7 +163,18 @@ func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
-	if b.copyArena != nil {
+	if len(b.copyArenaChunks) > 1 {
+		// Keep the most recently used chunk and return the rest.
+		for i := 0; i < len(b.copyArenaChunks)-1; i++ {
+			putCopyArena(b.copyArenaChunks[i])
+		}
+		last := b.copyArenaChunks[len(b.copyArenaChunks)-1]
+		b.copyArenaChunks = b.copyArenaChunks[:1]
+		b.copyArenaChunks[0] = last
+		b.copyArena = last[:0]
+	} else if len(b.copyArenaChunks) == 1 {
+		b.copyArena = b.copyArenaChunks[0][:0]
+	} else if b.copyArena != nil {
 		b.copyArena = b.copyArena[:0]
 	}
 	if len(b.touchedValueLog) > 0 {
@@ -144,13 +194,13 @@ func (b *Batch) resetForPool() {
 			b.entries = b.entries[:0]
 		}
 	}
-	if b.copyArena != nil {
-		if cap(b.copyArena) > maxBatchCopyArenaPoolBytes {
-			b.copyArena = nil
-		} else {
-			b.copyArena = b.copyArena[:0]
+	if len(b.copyArenaChunks) > 0 {
+		for i := range b.copyArenaChunks {
+			putCopyArena(b.copyArenaChunks[i])
 		}
 	}
+	b.copyArena = nil
+	b.copyArenaChunks = nil
 	b.byteSize = 0
 	if len(b.touchedValueLog) > 1024 {
 		b.touchedValueLog = nil
@@ -206,24 +256,30 @@ func (b *Batch) noteKeyOrder(key []byte) {
 
 func (b *Batch) arenaAlloc(n int) []byte {
 	if n <= 0 {
-		return b.copyArena[:0:0]
+		return nil
 	}
-	oldLen := len(b.copyArena)
-	need := oldLen + n
-	if cap(b.copyArena) < need {
-		newCap := cap(b.copyArena) * 2
-		if newCap < need {
-			newCap = need
+	if cap(b.copyArena)-len(b.copyArena) < n {
+		chunkCap := cap(b.copyArena) * 2
+		if chunkCap < batchCopyArenaMinChunk {
+			chunkCap = batchCopyArenaMinChunk
 		}
-		if newCap < 1024 {
-			newCap = 1024
+		if cap(b.copyArena) == 0 {
+			chunkCap = batchCopyArenaUnsizedInit
 		}
-		next := make([]byte, oldLen, newCap)
-		copy(next, b.copyArena)
-		b.copyArena = next
+		if chunkCap < n {
+			chunkCap = n
+		}
+		// Avoid retaining huge underfilled tail chunks once we reach the pooling limit.
+		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
+			chunkCap = batchCopyArenaMaxRetain
+		}
+		chunk := getCopyArena(chunkCap)
+		b.copyArena = chunk[:0]
+		b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
 	}
-	b.copyArena = b.copyArena[:need]
-	return b.copyArena[oldLen:need]
+	start := len(b.copyArena)
+	b.copyArena = b.copyArena[:start+n]
+	return b.copyArena[start : start+n : start+n]
 }
 
 func (b *Batch) arenaCopy(src []byte) []byte {
