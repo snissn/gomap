@@ -3025,6 +3025,17 @@ func (db *DB) scheduleRetainedValueLogPrune() {
 		if !db.shouldScheduleRetainedValueLogPrune() {
 			return
 		}
+		// Retained prune is opportunistic reclaim; do not compete with checkpoint
+		// cutovers or other backend maintenance windows.
+		db.checkpointMu.Lock()
+		for db.checkpointing.Load() || db.maintenanceActive.Load() {
+			if db.closing.Load() {
+				db.checkpointMu.Unlock()
+				return
+			}
+			db.checkpointCond.Wait()
+		}
+		db.checkpointMu.Unlock()
 		now := time.Now()
 		last := db.retainedPruneLastStartUnixNano.Load()
 		if last > 0 && now.Sub(time.Unix(0, last)) < retainedPruneMinInterval {
@@ -3094,9 +3105,6 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 		if err := db.Checkpoint(); err != nil {
 			return err
 		}
-	}
-	if !opts.skipRetainedPruneWait {
-		db.waitForRetainedValueLogPrune()
 	}
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {

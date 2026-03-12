@@ -2440,3 +2440,84 @@ func TestCheckpoint_DoesNotWaitForPriorRetainedValueLogPrune(t *testing.T) {
 		}
 	}
 }
+
+func TestBackendMaintenance_DoesNotBlockOnRetainedValueLogPruneQuietWindow(t *testing.T) {
+	dir := t.TempDir()
+	backend := NewMockBackend()
+
+	cache, err := Open(dir, backend, Options{
+		DisableWAL:               true,
+		RelaxedSync:              true,
+		AllowUnsafe:              true,
+		FlushThreshold:           1 << 20,
+		ValueLogPointerThreshold: 1,
+	})
+	if err != nil {
+		t.Fatalf("cache open: %v", err)
+	}
+	defer cache.Close()
+
+	fileID, err := valuelog.EncodeFileID(0, 321)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000321.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	w, err := valuelog.NewWriter(retainedPath, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, bytes.Repeat([]byte("m"), 128)); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+	cache.markValueLogRetain(retainedPath)
+	seedRetainedPrunePressure(cache, retainedPath, 2<<30)
+
+	stopReads := make(chan struct{})
+	var readWG sync.WaitGroup
+	readWG.Add(1)
+	go func() {
+		defer readWG.Done()
+		for {
+			select {
+			case <-stopReads:
+				return
+			default:
+				cache.noteRead()
+				time.Sleep(time.Millisecond)
+			}
+		}
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cache.runWithBackendMaintenance(func() error { return nil })
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			close(stopReads)
+			readWG.Wait()
+			t.Fatalf("backend maintenance: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		close(stopReads)
+		readWG.Wait()
+		t.Fatalf("backend maintenance blocked on retained prune quiet-window")
+	}
+
+	close(stopReads)
+	readWG.Wait()
+
+	// Let the retained prune drain so Close() does not block.
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+	cache.lastForegroundReadUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+	cache.waitForRetainedValueLogPrune()
+}
