@@ -103,13 +103,26 @@ func putDecodeScratch(buf []byte) {
 	}
 }
 
+func sliceDataPtr(b []byte) (uintptr, bool) {
+	if cap(b) == 0 {
+		return 0, false
+	}
+	if len(b) > 0 {
+		return uintptr(unsafe.Pointer(&b[0])), true
+	}
+	return uintptr(unsafe.Pointer(&b[:1][0])), true
+}
+
 func sliceAliasesBytes(buf, candidate []byte) bool {
-	if len(buf) == 0 || len(candidate) == 0 {
+	bufStart, ok := sliceDataPtr(buf)
+	if !ok {
 		return false
 	}
-	bufStart := uintptr(unsafe.Pointer(unsafe.SliceData(buf)))
-	bufEnd := bufStart + uintptr(len(buf))
-	candidateStart := uintptr(unsafe.Pointer(unsafe.SliceData(candidate)))
+	candidateStart, ok := sliceDataPtr(candidate)
+	if !ok {
+		return false
+	}
+	bufEnd := bufStart + uintptr(cap(buf))
 	return candidateStart >= bufStart && candidateStart < bufEnd
 }
 
