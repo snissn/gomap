@@ -10046,9 +10046,9 @@ func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
 	}
 }
 
-func sumVlogRewritePlanLiveBytes(segments []backenddb.ValueLogRewritePlanSegment, ids []uint32) int64 {
+func sumVlogRewritePlanLiveBytes(segments []backenddb.ValueLogRewritePlanSegment, ids []uint32) (sum int64, ok bool) {
 	if len(segments) == 0 || len(ids) == 0 {
-		return 0
+		return 0, false
 	}
 	byID := make(map[uint32]int64, len(segments))
 	for _, seg := range segments {
@@ -10057,13 +10057,15 @@ func sumVlogRewritePlanLiveBytes(segments []backenddb.ValueLogRewritePlanSegment
 		}
 		byID[seg.FileID] = seg.BytesLive
 	}
-	sum := int64(0)
 	for _, id := range ids {
-		if live := byID[id]; live > 0 {
-			sum += live
+		live, found := byID[id]
+		if !found {
+			continue
 		}
+		ok = true
+		sum += live
 	}
-	return sum
+	return sum, ok
 }
 
 type vlogGenerationMaintenanceOptions struct {
@@ -10355,6 +10357,7 @@ planned:
 			}
 			processedRewriteIDs := []uint32(nil)
 			processedLedgerLiveBytes := int64(0)
+			processedLedgerOK := false
 			budgetTokens := int64(0)
 			if db.vlogGenerationRewriteBudgetEnabled() {
 				budgetTokens = db.vlogGenerationRewriteBudgetTokensBytes.Load()
@@ -10391,7 +10394,7 @@ planned:
 			}
 			if len(processedRewriteIDs) > 0 {
 				ledger, _ := db.currentVlogGenerationRewriteLedger()
-				processedLedgerLiveBytes = sumVlogRewritePlanLiveBytes(ledger, processedRewriteIDs)
+				processedLedgerLiveBytes, processedLedgerOK = sumVlogRewritePlanLiveBytes(ledger, processedRewriteIDs)
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
 			} else {
 				rewriteOpts.MaxSourceSegments = 0
@@ -10451,7 +10454,7 @@ planned:
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
 			rewriteBytesIn := int64(0)
-			if processedLedgerLiveBytes > 0 {
+			if processedLedgerOK {
 				rewriteBytesIn = processedLedgerLiveBytes
 			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				rewriteBytesIn = int64(stats.BytesBefore)
@@ -10469,7 +10472,7 @@ planned:
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
 			consumed := int64(0)
-			if processedLedgerLiveBytes > 0 {
+			if processedLedgerOK {
 				consumed = processedLedgerLiveBytes
 			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				consumed = int64(stats.BytesBefore)

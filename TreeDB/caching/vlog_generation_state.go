@@ -101,6 +101,9 @@ func loadValueLogGenerationRewriteState(path string) ([]uint32, []backenddb.Valu
 			if err != nil {
 				continue
 			}
+			if id64 == 0 {
+				continue
+			}
 			ledger = append(ledger, backenddb.ValueLogRewritePlanSegment{
 				FileID:     uint32(id64),
 				BytesTotal: e.BytesTotal,
@@ -126,6 +129,9 @@ func loadValueLogGenerationRewriteState(path string) ([]uint32, []backenddb.Valu
 	for _, s := range raw.RewriteSourceFileIDs {
 		id64, err := strconv.ParseUint(s, 10, 32)
 		if err != nil {
+			continue
+		}
+		if id64 == 0 {
 			continue
 		}
 		out = append(out, uint32(id64))
