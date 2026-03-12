@@ -202,6 +202,79 @@ func TestValueLogAppendRead(t *testing.T) {
 	}
 }
 
+func TestValueLogReaderReadNextMeta(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	ptrs, err := writer.AppendFrame(0, nil, []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append frame: %v", err)
+	}
+	ptr3, err := writer.Append(0, nil, 3, []byte("gamma"))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reader, err := NewReader(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("new reader: %v", err)
+	}
+	rid1, gotPtr1, err := reader.ReadNextMeta()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read next meta: %v", err)
+	}
+	if rid1 != 1 {
+		_ = reader.Close()
+		t.Fatalf("rid1 mismatch")
+	}
+	rid2, gotPtr2, err := reader.ReadNextMeta()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read next meta: %v", err)
+	}
+	if rid2 != 2 {
+		_ = reader.Close()
+		t.Fatalf("rid2 mismatch")
+	}
+	rid3, gotPtr3, err := reader.ReadNextMeta()
+	if err != nil {
+		_ = reader.Close()
+		t.Fatalf("read next meta: %v", err)
+	}
+	if rid3 != 3 {
+		_ = reader.Close()
+		t.Fatalf("rid3 mismatch")
+	}
+	if _, _, err := reader.ReadNextMeta(); !errors.Is(err, io.EOF) {
+		_ = reader.Close()
+		t.Fatalf("expected EOF, got %v", err)
+	}
+	_ = reader.Close()
+
+	if gotPtr1 != ptrs[0] {
+		t.Fatalf("ptr1 mismatch")
+	}
+	if gotPtr2 != ptrs[1] {
+		t.Fatalf("ptr2 mismatch")
+	}
+	if gotPtr3 != ptr3 {
+		t.Fatalf("ptr3 mismatch")
+	}
+}
+
 func TestValueLogManager_MmapReadAppend(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
