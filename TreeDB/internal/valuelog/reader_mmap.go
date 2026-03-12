@@ -41,6 +41,15 @@ func (f *File) maybeScheduleRemap() {
 	if f == nil || f.closed.Load() {
 		return
 	}
+	if MaxDeadMappings > 0 && f.deadMappingsCount.Load() >= uint64(MaxDeadMappings) {
+		// If we have already exhausted our dead-mapping budget, we will not be
+		// able to remap again without risking use-after-unmap for callers holding
+		// unsafe mmap views. Avoid spawning remap goroutines that will just bail.
+		data, _ := f.mmapData.Load().([]byte)
+		if data != nil {
+			return
+		}
+	}
 	if !f.remapRequested.CompareAndSwap(false, true) {
 		return
 	}
@@ -61,6 +70,14 @@ func (f *File) remapToFileSize() {
 		return
 	}
 
+	// If we have already hit the dead-mapping cap, we cannot remap again without
+	// risking use-after-unmap for callers holding unsafe mmap views. Avoid the
+	// per-call Stat allocation when reads keep missing the current mapping.
+	data, _ := f.mmapData.Load().([]byte)
+	if data != nil && MaxDeadMappings > 0 && len(f.deadMappings) >= MaxDeadMappings {
+		return
+	}
+
 	info, err := f.File.Stat()
 	if err != nil {
 		return
@@ -73,7 +90,6 @@ func (f *File) remapToFileSize() {
 		return
 	}
 
-	data, _ := f.mmapData.Load().([]byte)
 	if data != nil && int64(len(data)) >= currentSize {
 		return
 	}

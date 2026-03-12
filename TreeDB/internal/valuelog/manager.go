@@ -424,9 +424,13 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
 		return val, usedDst, err
 	}
-	f.remapToFileSize()
-	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
-		return val, usedDst, err
+	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
+	// budget: remapToFileSize won't be able to grow the mapping safely again.
+	if !(MaxDeadMappings > 0 && f.deadMappingsCount.Load() >= uint64(MaxDeadMappings)) {
+		f.remapToFileSize()
+		if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+			return val, usedDst, err
+		}
 	}
 	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
 }
