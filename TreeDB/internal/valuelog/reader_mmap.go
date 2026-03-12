@@ -306,16 +306,43 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			return out, nil, true
 		}
 
-		raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, nil)
+		cacheableRaw := false
+		f.cacheMu.Lock()
+		if f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
+			cacheableRaw = true
+		}
+		f.cacheMu.Unlock()
+
+		retainRaw := cacheableRaw || readViaMmapViewPrefixCacheEnabled
+		raw := f.takeDecodeScratch(int(rawLen))
+		pooledRaw := true
+		if retainRaw {
+			// Cached grouped payload bytes must not be backed by pooled decode
+			// scratch, since readViaMmapView may hand out views into cached raw.
+			raw = make([]byte, 0, int(rawLen))
+			pooledRaw = false
+		}
+
+		raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
 		if err != nil {
+			if pooledRaw {
+				f.releaseDecodeScratch(raw)
+			}
 			return nil, err, true
 		}
 		if uint32(len(raw)) != rawLen {
+			if pooledRaw {
+				f.releaseDecodeScratch(raw)
+			}
 			return nil, ErrCorrupt, true
 		}
 
-		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
+		groupedStored := false
+		if cacheableRaw {
+			groupedStored = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
+		}
 
+		prefixStored := false
 		if readViaMmapViewPrefixCacheEnabled {
 			// Publish cache for subsequent reads from this grouped record.
 			f.cacheMu.Lock()
@@ -323,11 +350,16 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			f.cacheFlags = fFlags
 			f.cacheLen = prefixLen
 			f.cacheOffs = offsets
-			// readViaMmapView can return a view into cached raw bytes, so this cache
-			// must never own pooled decode scratch memory.
-			f.setCacheRawLocked(raw, false)
+			if groupedStored || !pooledRaw {
+				f.setCacheRawLocked(raw, false)
+			} else {
+				owned := make([]byte, len(raw))
+				copy(owned, raw)
+				f.setCacheRawLocked(owned, false)
+			}
 			f.cacheStart.Store(start)
 			f.cacheMu.Unlock()
+			prefixStored = true
 		}
 
 		val := raw[valStart:valEnd]
@@ -336,12 +368,21 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
 			if err != nil {
+				if pooledRaw && !groupedStored && !prefixStored {
+					f.releaseDecodeScratch(raw)
+				}
 				return nil, err, true
+			}
+			if pooledRaw && !groupedStored && !prefixStored {
+				f.releaseDecodeScratch(raw)
 			}
 			return decoded, nil, true
 		}
 		out := make([]byte, int(valEnd-valStart))
 		copy(out, val)
+		if pooledRaw && !groupedStored && !prefixStored {
+			f.releaseDecodeScratch(raw)
+		}
 		return out, nil, true
 	}
 
