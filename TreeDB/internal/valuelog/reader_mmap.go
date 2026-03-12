@@ -314,13 +314,14 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 		f.cacheMu.Unlock()
 
 		retainRaw := cacheableRaw || readViaMmapViewPrefixCacheEnabled
-		raw := f.takeDecodeScratch(int(rawLen))
-		pooledRaw := true
+		pooledRaw := !retainRaw
+		var raw []byte
 		if retainRaw {
 			// Cached grouped payload bytes must not be backed by pooled decode
 			// scratch, since readViaMmapView may hand out views into cached raw.
 			raw = make([]byte, 0, int(rawLen))
-			pooledRaw = false
+		} else {
+			raw = f.takeDecodeScratch(int(rawLen))
 		}
 
 		raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
