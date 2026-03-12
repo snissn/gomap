@@ -810,48 +810,28 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	f.cacheMu.Unlock()
 
-	var raw []byte
-	pooledRaw := false
-	if cacheableRaw {
-		raw = make([]byte, 0, int(rawLen))
-	} else {
-		raw = f.takeDecodeScratch(int(rawLen))
-		pooledRaw = true
-	}
+	raw := f.takeDecodeScratch(int(rawLen))
 	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
 	if err != nil {
-		if pooledRaw {
-			f.releaseDecodeScratch(raw)
-		}
+		f.releaseDecodeScratch(raw)
 		return nil, err, true
 	}
 	if uint32(len(raw)) != rawLen {
-		if pooledRaw {
-			f.releaseDecodeScratch(raw)
-		}
+		f.releaseDecodeScratch(raw)
 		return nil, ErrCorrupt, true
 	}
+	cacheOwnsRaw := false
 	if cacheableRaw {
-		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
+		// Store pooled decoded payloads in the per-file grouped-frame cache so
+		// append-style call sites can avoid per-read allocations while still
+		// benefiting from decode reuse for multiple sub-record reads.
+		cacheOwnsRaw = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true)
 	}
 
 	oldLen := len(dst)
 
-	f.cacheMu.Lock()
-	f.cacheK = k
-	f.cacheFlags = fFlags
-	f.cacheLen = prefixLen
-	f.cacheOffs = offsets
-	if cacheableRaw {
-		f.setCacheRawLocked(raw, false)
-	} else {
-		f.setCacheRawLocked(nil, false)
-	}
-	f.cacheStart.Store(start)
-	f.cacheMu.Unlock()
-
 	dst, err = appendDecodedTemplatePayload(dst, raw[valStart:valEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-	if pooledRaw {
+	if !cacheOwnsRaw {
 		f.releaseDecodeScratch(raw)
 	}
 	if err != nil {

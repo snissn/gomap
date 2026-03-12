@@ -2124,7 +2124,7 @@ func (db *DB) readValueLogAppend(key []byte, ptr page.ValuePtr, dst []byte) ([]b
 			return nil, err
 		}
 	}
-	return db.valueLogReader.ReadAppend(ptr, dst[:0])
+	return db.valueLogReader.ReadAppend(ptr, dst)
 }
 
 func (db *DB) flushValueLogForPtr(ptr page.ValuePtr) error {
@@ -14931,18 +14931,42 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	out := make([][]byte, len(keys))
 	backendIdx := make([]int, 0, len(keys))
 	backendKeys := make([][]byte, 0, len(keys))
+
+	// Copy all found values into a single arena to avoid one allocation per key.
+	// Each returned slice is capacity-capped to preserve safe-copy semantics.
+	//
+	// The cache layer may need to resolve value-log pointers for memtable hits;
+	// by using the append path, those decodes can write directly into this arena
+	// instead of allocating per key.
+	const (
+		getManyValueGuessBytes = 128
+		getManyMaxArenaBytes   = 1 << 20
+	)
+	arenaCap := len(keys) * getManyValueGuessBytes
+	if arenaCap < 0 {
+		arenaCap = 0
+	}
+	if arenaCap > getManyMaxArenaBytes {
+		arenaCap = getManyMaxArenaBytes
+	}
+	arena := make([]byte, 0, arenaCap)
+	emptyValue := []byte{}
 	for i, key := range keys {
-		val, found, err := db.getMemtable(key)
-		if err != nil {
-			return nil, err
-		}
+		start := len(arena)
+		nextArena, found, err := db.getMemtableAppend(key, arena)
 		if found {
-			if val == nil {
+			if err == tree.ErrKeyNotFound {
 				continue
 			}
-			cpy := make([]byte, len(val))
-			copy(cpy, val)
-			out[i] = cpy
+			if err != nil {
+				return nil, err
+			}
+			arena = nextArena
+			if len(arena) == start {
+				out[i] = emptyValue
+				continue
+			}
+			out[i] = arena[start:len(arena):len(arena)]
 			continue
 		}
 		backendIdx = append(backendIdx, i)

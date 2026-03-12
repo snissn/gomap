@@ -486,16 +486,12 @@ func TestValueLogManager_MmapReadAppendCompressedGroupedCache(t *testing.T) {
 		}
 	}
 
-	f.cacheMu.Lock()
-	defer f.cacheMu.Unlock()
-	if f.cacheFlags&FrameFlagCompressed == 0 {
-		t.Fatalf("expected compressed frame cache flags, got=%d", f.cacheFlags)
+	hits, misses, entries, capacity := f.groupedFrameCacheStats()
+	if entries == 0 {
+		t.Fatalf("expected grouped-frame cache entries > 0 for compressed frame reads (capacity=%d)", capacity)
 	}
-	if f.cacheK != len(records) {
-		t.Fatalf("cacheK=%d want=%d", f.cacheK, len(records))
-	}
-	if len(f.cacheRaw) == 0 {
-		t.Fatalf("expected cached decoded raw payload for compressed frame")
+	if hits == 0 {
+		t.Fatalf("expected grouped-frame cache hits > 0 for repeated compressed frame reads (misses=%d entries=%d capacity=%d)", misses, entries, capacity)
 	}
 }
 
