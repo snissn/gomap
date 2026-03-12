@@ -12934,7 +12934,8 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 			return err
 		}
 		l.vlogRotateTotal.Add(1)
-		if oldLiveBytes <= 0 {
+		// Avoid counting an "idle rotation" when there was no previous segment.
+		if oldPath != "" && oldLiveBytes <= 0 {
 			l.vlogRotateIdleTotal.Add(1)
 		}
 		l.vlogSeq = nextSeq
@@ -12967,7 +12968,8 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		}
 		// Segment creation is treated as a rotation from "no current segment" for observability.
 		l.vlogRotateTotal.Add(1)
-		if oldLiveBytes <= 0 {
+		// Avoid counting an "idle rotation" when there was no previous segment.
+		if oldPath != "" && oldLiveBytes <= 0 {
 			l.vlogRotateIdleTotal.Add(1)
 		}
 		w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
