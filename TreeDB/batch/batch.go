@@ -163,19 +163,40 @@ func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
-	if len(b.copyArenaChunks) > 1 {
-		// Keep the most recently used chunk and return the rest.
-		for i := 0; i < len(b.copyArenaChunks)-1; i++ {
-			putCopyArena(b.copyArenaChunks[i])
+	if len(b.copyArenaChunks) > 0 {
+		// Keep at most one chunk for reuse, but never retain a huge underfilled tail
+		// chunk across resets (it can pin substantial heap and inflate RSS).
+		keepIdx := -1
+		for i := len(b.copyArenaChunks) - 1; i >= 0; i-- {
+			if cap(b.copyArenaChunks[i]) <= batchCopyArenaMaxRetain {
+				keepIdx = i
+				break
+			}
 		}
-		last := b.copyArenaChunks[len(b.copyArenaChunks)-1]
-		b.copyArenaChunks = b.copyArenaChunks[:1]
-		b.copyArenaChunks[0] = last
-		b.copyArena = last[:0]
-	} else if len(b.copyArenaChunks) == 1 {
-		b.copyArena = b.copyArenaChunks[0][:0]
+		if keepIdx < 0 {
+			for i := range b.copyArenaChunks {
+				putCopyArena(b.copyArenaChunks[i])
+			}
+			b.copyArenaChunks = nil
+			b.copyArena = nil
+		} else {
+			keep := b.copyArenaChunks[keepIdx]
+			for i := range b.copyArenaChunks {
+				if i == keepIdx {
+					continue
+				}
+				putCopyArena(b.copyArenaChunks[i])
+			}
+			b.copyArenaChunks = b.copyArenaChunks[:1]
+			b.copyArenaChunks[0] = keep
+			b.copyArena = keep[:0]
+		}
 	} else if b.copyArena != nil {
-		b.copyArena = b.copyArena[:0]
+		if cap(b.copyArena) > batchCopyArenaMaxRetain {
+			b.copyArena = nil
+		} else {
+			b.copyArena = b.copyArena[:0]
+		}
 	}
 	if len(b.touchedValueLog) > 0 {
 		clear(b.touchedValueLog)
