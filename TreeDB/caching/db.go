@@ -3789,6 +3789,7 @@ type DB struct {
 	vlogGenerationRewriteQueueMu             sync.Mutex
 	vlogGenerationCheckpointKickActive       atomic.Bool
 	vlogGenerationRewriteQueue               []uint32
+	vlogGenerationRewriteLedger              []backenddb.ValueLogRewritePlanSegment
 	vlogGenerationRewriteQueueLoaded         bool
 	vlogGenerationLastChurnBps               atomic.Int64
 	vlogGenerationLastChurnSampleBytes       atomic.Uint64
@@ -5464,6 +5465,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.wg.Add(1)
 	go db.flushLoop()
 	db.startVlogGenerationLoop()
+	db.startVlogShapeLoop()
 
 	return db, nil
 }
@@ -10044,6 +10046,28 @@ func (db *DB) vlogGenerationConsumeRewriteBudgetBytes(n int64) {
 	}
 }
 
+func sumVlogRewritePlanLiveBytes(segments []backenddb.ValueLogRewritePlanSegment, ids []uint32) (sum int64, ok bool) {
+	if len(segments) == 0 || len(ids) == 0 {
+		return 0, false
+	}
+	byID := make(map[uint32]int64, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		byID[seg.FileID] = seg.BytesLive
+	}
+	for _, id := range ids {
+		live, found := byID[id]
+		if !found {
+			continue
+		}
+		ok = true
+		sum += live
+	}
+	return sum, ok
+}
+
 type vlogGenerationMaintenanceOptions struct {
 	bypassQuiet           bool
 	skipRetainedPruneWait bool
@@ -10153,6 +10177,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
+		planStart := time.Now()
 		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 			MaxSourceSegments:    0,
 			MaxSourceBytes:       maxSourceBytes,
@@ -10160,6 +10185,21 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			MinSegmentStaleBytes: 1,
 		})
 		cancel()
+		db.debugVlogMaintf(
+			"rewrite_plan stale_ratio_trigger min_ratio=%.6f max_source_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+			minStaleRatio,
+			maxSourceBytes,
+			plan.SegmentsSelected,
+			plan.SegmentsTotal,
+			plan.SelectedBytesTotal,
+			plan.SelectedBytesLive,
+			plan.SelectedBytesStale,
+			plan.BytesTotal,
+			plan.BytesLive,
+			plan.BytesStale,
+			float64(time.Since(planStart).Microseconds())/1000,
+			err,
+		)
 		updatePlanTimestamp := false
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -10219,11 +10259,26 @@ planned:
 			}
 			if maxSourceBytes > 0 {
 				ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
+				planStart := time.Now()
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 					MaxSourceSegments: 0,
 					MaxSourceBytes:    maxSourceBytes,
 				})
 				cancel()
+				db.debugVlogMaintf(
+					"rewrite_plan pre_rewrite max_source_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+					maxSourceBytes,
+					plan.SegmentsSelected,
+					plan.SegmentsTotal,
+					plan.SelectedBytesTotal,
+					plan.SelectedBytesLive,
+					plan.SelectedBytesStale,
+					plan.BytesTotal,
+					plan.BytesLive,
+					plan.BytesStale,
+					float64(time.Since(planStart).Microseconds())/1000,
+					err,
+				)
 				if err != nil {
 					if errors.Is(err, context.Canceled) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
@@ -10246,6 +10301,17 @@ planned:
 		}
 	}
 	if shouldRewrite && hasRewriter {
+		db.debugVlogMaintf(
+			"rewrite_start reason=%s total_bytes=%d stale_ratio_ppm=%d churn_bps=%d rewrite_queue=%d checkpoint_runs=%d disable_journal=%t have_plan=%t",
+			vlogGenerationReasonString(reason),
+			totalBytes,
+			staleRatioPPM,
+			churnBps,
+			len(rewriteQueue),
+			db.checkpointRuns.Load(),
+			db.disableJournal,
+			haveRewritePlan,
+		)
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 		db.vlogGenerationLastReason.Store(reason)
 		err := db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{
@@ -10290,16 +10356,51 @@ planned:
 				},
 			}
 			processedRewriteIDs := []uint32(nil)
+			processedLedgerLiveBytes := int64(0)
+			processedLedgerOK := false
+			budgetTokens := int64(0)
+			if db.vlogGenerationRewriteBudgetEnabled() {
+				budgetTokens = db.vlogGenerationRewriteBudgetTokensBytes.Load()
+				// If a queued rewrite is pending, do not run it while the bucket is
+				// empty; that defeats the whole point of a bounded executor.
+				if budgetTokens <= 0 && len(rewriteQueue) > 0 {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return nil
+				}
+			}
 			if len(rewriteQueue) > 0 {
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				ledger, _ := db.currentVlogGenerationRewriteLedger()
+				if len(ledger) > 0 {
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, vlogGenerationRewriteResumeMaxSegments, budgetTokens)
+				} else {
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				}
 			} else if haveRewritePlan {
-				if err := db.setVlogGenerationRewriteQueue(rewritePlan.SourceFileIDs); err != nil {
-					return fmt.Errorf("persist generational rewrite queue: %w", err)
+				if len(rewritePlan.SelectedSegments) > 0 {
+					if err := db.setVlogGenerationRewriteLedger(rewritePlan.SelectedSegments); err != nil {
+						return fmt.Errorf("persist generational rewrite ledger: %w", err)
+					}
+				} else {
+					if err := db.setVlogGenerationRewriteQueue(rewritePlan.SourceFileIDs); err != nil {
+						return fmt.Errorf("persist generational rewrite queue: %w", err)
+					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				// If the token bucket is enabled and empty, persist the plan/ledger but
+				// skip running the rewrite until we have budget to spend.
+				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+					return nil
+				}
+				if len(rewritePlan.SelectedSegments) > 0 {
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(rewritePlan.SelectedSegments, vlogGenerationRewriteResumeMaxSegments, budgetTokens)
+				} else {
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				}
 			}
 			if len(processedRewriteIDs) > 0 {
+				ledger, _ := db.currentVlogGenerationRewriteLedger()
+				processedLedgerLiveBytes, processedLedgerOK = sumVlogRewritePlanLiveBytes(ledger, processedRewriteIDs)
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
 			} else {
 				rewriteOpts.MaxSourceSegments = 0
@@ -10311,11 +10412,33 @@ planned:
 					return float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
 				}()
 			}
+			db.debugVlogMaintf(
+				"rewrite_exec reason=%s source_ids=%d budget_tokens=%d max_source_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
+				vlogGenerationReasonString(reason),
+				len(rewriteOpts.SourceFileIDs),
+				budgetTokens,
+				maxSourceBytes,
+				rewriteOpts.MinSegmentStaleRatio,
+				len(rewriteQueue),
+				processedLedgerLiveBytes,
+			)
+			rewriteStart := time.Now()
 			stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
 			cancel()
 			if err != nil {
+				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(time.Since(rewriteStart).Microseconds())/1000)
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
+			db.debugVlogMaintf(
+				"rewrite_done reason=%s segments_before=%d segments_after=%d bytes_before=%d bytes_after=%d records=%d dur_ms=%.3f",
+				vlogGenerationReasonString(reason),
+				stats.SegmentsBefore,
+				stats.SegmentsAfter,
+				stats.BytesBefore,
+				stats.BytesAfter,
+				stats.RecordsCopied,
+				float64(time.Since(rewriteStart).Microseconds())/1000,
+			)
 			if len(processedRewriteIDs) > 0 {
 				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
 					return fmt.Errorf("consume generational rewrite queue: %w", err)
@@ -10323,18 +10446,23 @@ planned:
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				gcStart := time.Now()
 				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
 					ProtectedPaths: db.valueLogProtectedPaths(),
 				})
 				gcCancel()
 				if gcErr != nil {
+					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(time.Since(gcStart).Microseconds())/1000)
 					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
 				}
+				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
 			rewriteBytesIn := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if processedLedgerOK {
+				rewriteBytesIn = processedLedgerLiveBytes
+			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				rewriteBytesIn = int64(stats.BytesBefore)
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				rewriteBytesIn = rewritePlan.SelectedBytesLive
@@ -10350,7 +10478,9 @@ planned:
 				db.vlogGenerationRewriteBytesOut.Add(uint64(stats.BytesAfter))
 			}
 			consumed := int64(0)
-			if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
+			if processedLedgerOK {
+				consumed = processedLedgerLiveBytes
+			} else if len(processedRewriteIDs) > 0 && stats.BytesBefore > 0 {
 				consumed = int64(stats.BytesBefore)
 			} else if haveRewritePlan && rewritePlan.SelectedBytesLive > 0 {
 				consumed = rewritePlan.SelectedBytesLive
@@ -12786,6 +12916,7 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 	nextSeq := l.vlogSeq + 1
 	oldSeq := l.vlogSeq
 	oldPath := l.vlogPath
+	oldLiveBytes := l.vlogLiveBytes.Load()
 	var (
 		closedPrev    int64
 		hadClosedPrev bool
@@ -12801,6 +12932,11 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		oldSize := l.vlog.Size()
 		if err := l.vlog.RotateTo(path, fileID); err != nil {
 			return err
+		}
+		l.vlogRotateTotal.Add(1)
+		// Avoid counting an "idle rotation" when there was no previous segment.
+		if oldPath != "" && oldLiveBytes <= 0 {
+			l.vlogRotateIdleTotal.Add(1)
 		}
 		l.vlogSeq = nextSeq
 		l.vlog.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
@@ -12829,6 +12965,12 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 		w, err := valuelog.NewWriter(path, fileID)
 		if err != nil {
 			return err
+		}
+		// Segment creation is treated as a rotation from "no current segment" for observability.
+		l.vlogRotateTotal.Add(1)
+		// Avoid counting an "idle rotation" when there was no previous segment.
+		if oldPath != "" && oldLiveBytes <= 0 {
+			l.vlogRotateIdleTotal.Add(1)
 		}
 		w.SetDictFrameEncoderOptions(db.valueLogDictFrameEncodeLevel, db.valueLogDictFrameEnableEntropy)
 		l.vlogModeSet = false
@@ -14932,6 +15074,12 @@ func (db *DB) Stats() map[string]string {
 	var rawWriteSyscalls uint64
 	var rawWriteBytes uint64
 	var rawWriteCalls uint64
+	var vlogShapeSegmentsTotal int64
+	var vlogShapeBytesTotal int64
+	var vlogShapeL0Segments int64
+	var vlogShapeL0Bytes int64
+	splitValueLog := db.splitValueLogEnabled()
+	valueLogOn := db.valueLogEnabled()
 	for i := range db.lanes {
 		l := &db.lanes[i]
 		walCurrentBytes += l.walLiveBytes.Load()
@@ -14957,9 +15105,56 @@ func (db *DB) Stats() map[string]string {
 		if depthSnap.PositiveRunMaxNs > queueDepthPositiveRunMaxNs {
 			queueDepthPositiveRunMaxNs = depthSnap.PositiveRunMaxNs
 		}
+		var (
+			vlogWriter  valueWriter
+			vlogPath    string
+			closedSegs  int
+			rotTotal    uint64
+			rotIdle     uint64
+			hasCurrent  bool
+			laneID      = l.id
+			liveBytes   = l.vlogLiveBytes.Load()
+			closedBytes = l.vlogClosedBytes.Load()
+		)
 		l.vlogMu.Lock()
-		vlogWriter := l.vlog
+		vlogWriter = l.vlog
+		vlogPath = l.vlogPath
+		if l.vlogClosedSizes != nil {
+			closedSegs = len(l.vlogClosedSizes)
+		}
+		rotTotal = l.vlogRotateTotal.Load()
+		rotIdle = l.vlogRotateIdleTotal.Load()
 		l.vlogMu.Unlock()
+		hasCurrent = vlogPath != ""
+
+		if splitValueLog && valueLogOn {
+			segs := closedSegs
+			if hasCurrent {
+				segs++
+			}
+			bytes := closedBytes + liveBytes
+			if bytes < 0 {
+				bytes = 0
+			}
+			vlogShapeSegmentsTotal += int64(segs)
+			vlogShapeBytesTotal += bytes
+			if laneID == 0 {
+				vlogShapeL0Segments = int64(segs)
+				vlogShapeL0Bytes = bytes
+			}
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segments_total", laneID)] = fmt.Sprintf("%d", segs)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segments_closed", laneID)] = fmt.Sprintf("%d", closedSegs)
+			if hasCurrent {
+				stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segment_current", laneID)] = "1"
+			} else {
+				stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.segment_current", laneID)] = "0"
+			}
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.bytes_total", laneID)] = fmt.Sprintf("%d", bytes)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.bytes_closed", laneID)] = fmt.Sprintf("%d", closedBytes)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.bytes_live", laneID)] = fmt.Sprintf("%d", liveBytes)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.rotations_total", laneID)] = fmt.Sprintf("%d", rotTotal)
+			stats[fmt.Sprintf("treedb.cache.vlog_shape.lane.%d.rotations_idle_total", laneID)] = fmt.Sprintf("%d", rotIdle)
+		}
 		if snapper, ok := any(vlogWriter).(interface {
 			RawWritevStats() valuelog.RawWritevStats
 		}); ok {
@@ -14992,6 +15187,17 @@ func (db *DB) Stats() map[string]string {
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_max_ms", i)] = fmt.Sprintf("%.3f", float64(lagSnap.MaxNs)/float64(time.Millisecond))
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p99_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP99)/float64(time.Millisecond))
 		stats[fmt.Sprintf("treedb.cache.vlog_queue.lane.%d.lag_p999_ms", i)] = fmt.Sprintf("%.3f", float64(laneLagP999)/float64(time.Millisecond))
+	}
+	if splitValueLog && valueLogOn {
+		stats["treedb.cache.vlog_shape.segments_total"] = fmt.Sprintf("%d", vlogShapeSegmentsTotal)
+		stats["treedb.cache.vlog_shape.bytes_total"] = fmt.Sprintf("%d", vlogShapeBytesTotal)
+		stats["treedb.cache.vlog_shape.l0.segments_total"] = fmt.Sprintf("%d", vlogShapeL0Segments)
+		stats["treedb.cache.vlog_shape.l0.bytes_total"] = fmt.Sprintf("%d", vlogShapeL0Bytes)
+	} else {
+		stats["treedb.cache.vlog_shape.segments_total"] = "0"
+		stats["treedb.cache.vlog_shape.bytes_total"] = "0"
+		stats["treedb.cache.vlog_shape.l0.segments_total"] = "0"
+		stats["treedb.cache.vlog_shape.l0.bytes_total"] = "0"
 	}
 
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
