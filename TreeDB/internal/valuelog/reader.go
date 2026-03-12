@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -100,6 +101,29 @@ func putDecodeScratch(buf []byte) {
 		}
 		return
 	}
+}
+
+func sliceDataPtr(b []byte) (uintptr, bool) {
+	if cap(b) == 0 {
+		return 0, false
+	}
+	if len(b) > 0 {
+		return uintptr(unsafe.Pointer(&b[0])), true
+	}
+	return uintptr(unsafe.Pointer(&b[:1][0])), true
+}
+
+func sliceAliasesBytes(buf, candidate []byte) bool {
+	bufStart, ok := sliceDataPtr(buf)
+	if !ok {
+		return false
+	}
+	candidateStart, ok := sliceDataPtr(candidate)
+	if !ok {
+		return false
+	}
+	bufEnd := bufStart + uintptr(cap(buf))
+	return candidateStart >= bufStart && candidateStart < bufEnd
 }
 
 type Reader struct {
@@ -602,6 +626,12 @@ func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	return ReadAtWithDict(f, ptr, verifyCRC, nil, nil, nil, templ.DecodeOptions{})
 }
 
+// ReadAtTo decodes ptr from f and, when possible, writes decoded bytes into
+// dst. It returns the decoded value, whether dst backed the returned slice, and
+// an error.
+//
+// Callers must treat the returned bytes as immutable. When usedDst is true,
+// the returned slice aliases dst.
 func ReadAtTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error) {
 	return ReadAtWithDictTo(f, ptr, verifyCRC, nil, nil, nil, templ.DecodeOptions{}, dst)
 }
@@ -664,9 +694,10 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 				return nil, ErrCorrupt
 			}
 
-			const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
-			var prefix [maxPrefixLen]byte
-			if _, err := f.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+			const maxRIDOffsetsLen = (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+			var ridOffsets [maxRIDOffsetsLen]byte
+			ridOffsetsLen := ridBytes + offsetBytes
+			if _, err := f.ReadAt(ridOffsets[:ridOffsetsLen], frameOff+FrameHeaderSize); err != nil {
 				return nil, err
 			}
 
@@ -676,20 +707,20 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 			}
 
 			// Validate RIDs and parse offsets.
-			ridOff := FrameHeaderSize
+			ridOff := 0
 			for i := 0; i < k; i++ {
-				rid := binary.LittleEndian.Uint64(prefix[ridOff : ridOff+8])
+				rid := binary.LittleEndian.Uint64(ridOffsets[ridOff : ridOff+8])
 				if rid == 0 {
 					return nil, ErrCorrupt
 				}
 				ridOff += 8
 			}
 
-			off := FrameHeaderSize + ridBytes
+			off := ridBytes
 			var offsets [MaxFrameK + 1]uint32
 			prev := uint32(0)
 			for i := 0; i < k+1; i++ {
-				cur := binary.LittleEndian.Uint32(prefix[off : off+4])
+				cur := binary.LittleEndian.Uint32(ridOffsets[off : off+4])
 				if cur < prev {
 					return nil, ErrCorrupt
 				}
@@ -702,7 +733,7 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 			if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 				return nil, ErrRecordTooLarge
 			}
-			if prefixLen+int(rawLen) != int(valueLen) {
+			if uint64(prefixLen)+uint64(rawLen) != uint64(valueLen) {
 				return nil, ErrCorrupt
 			}
 
@@ -743,6 +774,10 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 	return decodeRecord(header[:], payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts)
 }
 
+// ReadAtWithDictTo is ReadAtWithDict with caller-provided decode storage.
+//
+// The returned slice may alias dst when usedDst is true. The returned bytes are
+// immutable from the caller perspective.
 func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte) ([]byte, bool, error) {
 	if f == nil {
 		return nil, false, errors.New("valuelog: nil file")
@@ -801,9 +836,10 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 				return nil, false, ErrCorrupt
 			}
 
-			const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
-			var prefix [maxPrefixLen]byte
-			if _, err := f.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+			const maxRIDOffsetsLen = (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+			var ridOffsets [maxRIDOffsetsLen]byte
+			ridOffsetsLen := ridBytes + offsetBytes
+			if _, err := f.ReadAt(ridOffsets[:ridOffsetsLen], frameOff+FrameHeaderSize); err != nil {
 				return nil, false, err
 			}
 
@@ -813,20 +849,20 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			}
 
 			// Validate RIDs and parse offsets.
-			ridOff := FrameHeaderSize
+			ridOff := 0
 			for i := 0; i < k; i++ {
-				rid := binary.LittleEndian.Uint64(prefix[ridOff : ridOff+8])
+				rid := binary.LittleEndian.Uint64(ridOffsets[ridOff : ridOff+8])
 				if rid == 0 {
 					return nil, false, ErrCorrupt
 				}
 				ridOff += 8
 			}
 
-			off := FrameHeaderSize + ridBytes
+			off := ridBytes
 			var offsets [MaxFrameK + 1]uint32
 			prev := uint32(0)
 			for i := 0; i < k+1; i++ {
-				cur := binary.LittleEndian.Uint32(prefix[off : off+4])
+				cur := binary.LittleEndian.Uint32(ridOffsets[off : off+4])
 				if cur < prev {
 					return nil, false, ErrCorrupt
 				}
@@ -839,7 +875,7 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 				return nil, false, ErrRecordTooLarge
 			}
-			if prefixLen+int(rawLen) != int(valueLen) {
+			if uint64(prefixLen)+uint64(rawLen) != uint64(valueLen) {
 				return nil, false, ErrCorrupt
 			}
 
@@ -925,9 +961,9 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
 	}
-	// Safe to return payload scratch to the pool only when we know the returned
-	// slice is backed by dst (not by payload).
-	if usedDst {
+	// Safe to return payload scratch to the pool whenever the returned slice
+	// does not alias the payload buffer backed by payloadScratch.
+	if usedDst || !sliceAliasesBytes(payload, val) {
 		putDecodeScratch(payloadScratch)
 	}
 	return val, usedDst, nil
@@ -980,23 +1016,14 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 		return nil, ErrCorrupt
 	}
 
-	frameHeader, rids, offsets, framePayload, err := DecodeFrame(payload)
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	frameHeader, start, end, rawLen, framePayload, err := decodeFrameValueBounds(payload, subIndex)
 	if err != nil {
 		return nil, err
 	}
-	if len(rids) == 0 || len(offsets) < 2 {
-		return nil, ErrCorrupt
-	}
-	subIndex := int(page.ValuePtrSubIndex(ptr))
-	if subIndex < 0 || subIndex >= len(rids) {
-		return nil, ErrCorrupt
-	}
-	rawLen := offsets[len(offsets)-1]
 	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return nil, ErrRecordTooLarge
 	}
-	start := offsets[subIndex]
-	end := offsets[subIndex+1]
 	if frameHeader.Flags&FrameFlagCompressed != 0 {
 		// Random-access decode wants only a single value. Decode into a pooled
 		// buffer and then copy just the requested range so we don't retain the
@@ -1095,23 +1122,14 @@ func decodeRecordTo(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC 
 		return nil, false, ErrCorrupt
 	}
 
-	frameHeader, rids, offsets, framePayload, err := DecodeFrame(payload)
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	frameHeader, start, end, rawLen, framePayload, err := decodeFrameValueBounds(payload, subIndex)
 	if err != nil {
 		return nil, false, err
 	}
-	if len(rids) == 0 || len(offsets) < 2 {
-		return nil, false, ErrCorrupt
-	}
-	subIndex := int(page.ValuePtrSubIndex(ptr))
-	if subIndex < 0 || subIndex >= len(rids) {
-		return nil, false, ErrCorrupt
-	}
-	rawLen := offsets[len(offsets)-1]
 	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return nil, false, ErrRecordTooLarge
 	}
-	start := offsets[subIndex]
-	end := offsets[subIndex+1]
 	if end < start || end > rawLen {
 		return nil, false, ErrCorrupt
 	}

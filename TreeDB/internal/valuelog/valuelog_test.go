@@ -1484,6 +1484,150 @@ func TestEncodeFrameSkipsCompressionWithoutDict(t *testing.T) {
 	}
 }
 
+func TestDecodeFrameValueBounds(t *testing.T) {
+	records := []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+		{RID: 3, Value: []byte("gamma")},
+	}
+	body, header, err := EncodeFrame(0, nil, records)
+	if err != nil {
+		t.Fatalf("encode frame: %v", err)
+	}
+
+	gotHeader, start, end, rawLen, payload, err := decodeFrameValueBounds(body, 1)
+	if err != nil {
+		t.Fatalf("decode bounds: %v", err)
+	}
+	if gotHeader != header {
+		t.Fatalf("header mismatch: got=%+v want=%+v", gotHeader, header)
+	}
+	if start != uint32(len(records[0].Value)) {
+		t.Fatalf("unexpected start: got=%d", start)
+	}
+	if end != uint32(len(records[0].Value)+len(records[1].Value)) {
+		t.Fatalf("unexpected end: got=%d", end)
+	}
+	wantRawLen := uint32(len(records[0].Value) + len(records[1].Value) + len(records[2].Value))
+	if rawLen != wantRawLen {
+		t.Fatalf("unexpected rawLen: got=%d want=%d", rawLen, wantRawLen)
+	}
+	if !bytes.Equal(payload[start:end], records[1].Value) {
+		t.Fatalf("payload slice mismatch: got=%q want=%q", payload[start:end], records[1].Value)
+	}
+}
+
+func TestDecodeFrameValueBoundsCompressed(t *testing.T) {
+	const dictID = 7
+	samples := make([][]byte, 16)
+	for i := range samples {
+		samples[i] = []byte(fmt.Sprintf("{\"kind\":\"frame\",\"id\":%d,\"payload\":\"%s\"}", i, bytes.Repeat([]byte("z"), 192)))
+	}
+	history := make([]byte, 0, 8<<10)
+	for i := range samples {
+		if len(history) >= cap(history) {
+			break
+		}
+		need := cap(history) - len(history)
+		sample := samples[i]
+		if len(sample) > need {
+			sample = sample[:need]
+		}
+		history = append(history, sample...)
+	}
+	if len(history) < 8 {
+		history = append(history, bytes.Repeat([]byte("x"), 8-len(history))...)
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict: empty dict")
+	}
+
+	records := []Record{
+		{RID: 1, Value: bytes.Repeat([]byte("alpha-"), 64)},
+		{RID: 2, Value: bytes.Repeat([]byte("beta-"), 64)},
+		{RID: 3, Value: bytes.Repeat([]byte("gamma-"), 64)},
+	}
+	body, header, err := EncodeFrameWithOptions(dictID, dict, records, zstd.SpeedFastest, false)
+	if err != nil {
+		t.Fatalf("EncodeFrameWithOptions: %v", err)
+	}
+	if header.Flags&FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame")
+	}
+
+	gotHeader, start, end, rawLen, payload, err := decodeFrameValueBounds(body, 1)
+	if err != nil {
+		t.Fatalf("decode bounds: %v", err)
+	}
+	if gotHeader != header {
+		t.Fatalf("header mismatch: got=%+v want=%+v", gotHeader, header)
+	}
+	wantStart := uint32(len(records[0].Value))
+	if start != wantStart {
+		t.Fatalf("unexpected start: got=%d want=%d", start, wantStart)
+	}
+	wantEnd := wantStart + uint32(len(records[1].Value))
+	if end != wantEnd {
+		t.Fatalf("unexpected end: got=%d want=%d", end, wantEnd)
+	}
+	wantRawLen := uint32(len(records[0].Value) + len(records[1].Value) + len(records[2].Value))
+	if rawLen != wantRawLen {
+		t.Fatalf("unexpected rawLen: got=%d want=%d", rawLen, wantRawLen)
+	}
+	if len(payload) == 0 {
+		t.Fatalf("expected compressed payload bytes")
+	}
+}
+
+func TestDecodeFrameValueBoundsRejectsCorruptInputs(t *testing.T) {
+	body, _, err := EncodeFrame(0, nil, []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
+	if err != nil {
+		t.Fatalf("encode frame: %v", err)
+	}
+
+	if _, _, _, _, _, err := decodeFrameValueBounds(body, 2); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for bad subIndex, got %v", err)
+	}
+
+	badRID := append([]byte(nil), body...)
+	ridOff := FrameHeaderSize + 8
+	for i := 0; i < 8; i++ {
+		badRID[ridOff+i] = 0
+	}
+	if _, _, _, _, _, err := decodeFrameValueBounds(badRID, 0); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for zero rid, got %v", err)
+	}
+
+	badOffsets := append([]byte(nil), body...)
+	offsetOff := FrameHeaderSize + (2 * 8)
+	binary.LittleEndian.PutUint32(badOffsets[offsetOff+8:offsetOff+12], 1)
+	if _, _, _, _, _, err := decodeFrameValueBounds(badOffsets, 0); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for non-monotonic offsets, got %v", err)
+	}
+
+	truncated := append([]byte(nil), body...)
+	if len(truncated) == 0 {
+		t.Fatal("encoded frame body is unexpectedly empty")
+	}
+	truncated = truncated[:len(truncated)-1]
+	if _, _, _, _, _, err := decodeFrameValueBounds(truncated, 0); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for truncated payload, got %v", err)
+	}
+}
+
 func TestValueLogBlockCodecRoundTrip(t *testing.T) {
 	codecs := []BlockCodec{BlockCodecSnappy, BlockCodecLZ4}
 	for _, codec := range codecs {
