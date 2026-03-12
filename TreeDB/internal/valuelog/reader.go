@@ -21,6 +21,27 @@ var decodeScratchPool = sync.Pool{
 	New: func() any { return make([]byte, 0, 8<<10) }, // 8KiB default
 }
 
+var noDictDecoderPool sync.Pool
+
+func getNoDictDecoder() (*zstd.Decoder, error) {
+	if v := noDictDecoderPool.Get(); v != nil {
+		if dec, ok := v.(*zstd.Decoder); ok && dec != nil {
+			return dec, nil
+		}
+	}
+	return zstd.NewReader(nil)
+}
+
+func putNoDictDecoder(dec *zstd.Decoder) {
+	if dec == nil {
+		return
+	}
+	// DecodeAll doesn't require a reader, but Reset is the supported way to
+	// prepare the decoder for reuse and drop any lingering state.
+	_ = dec.Reset(nil)
+	noDictDecoderPool.Put(dec)
+}
+
 func getDecodeScratch(minCap int) []byte {
 	if minCap <= 0 {
 		return nil
@@ -282,11 +303,12 @@ func decodeFramePayloadTo(header FrameHeader, payload []byte, dictLookup DictLoo
 		dec = codecs.decPool.Get().(*zstd.Decoder)
 		release = func() { codecs.decPool.Put(dec) }
 	} else {
-		dec, err := zstd.NewReader(nil)
+		pooled, err := getNoDictDecoder()
 		if err != nil {
 			return nil, err
 		}
-		release = dec.Close
+		dec = pooled
+		release = func() { putNoDictDecoder(dec) }
 	}
 	defer release()
 

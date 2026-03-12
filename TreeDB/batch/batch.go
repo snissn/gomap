@@ -248,7 +248,7 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrKeyEmpty
 	}
 
-	// Copy key to ensure immutability
+	// Copy key to ensure immutability.
 	k := make([]byte, len(key))
 	copy(k, key)
 
@@ -305,7 +305,6 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
 	}
 
-	// Copy key
 	k := make([]byte, len(key))
 	copy(k, key)
 
@@ -358,7 +357,6 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	// Copy key
 	k := make([]byte, len(key))
 	copy(k, key)
 
