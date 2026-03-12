@@ -1113,6 +1113,15 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.vlog.outer_leaf_block_cache.put_admitted",
 		"treedb.vlog.outer_leaf_block_cache.put_duplicate_drops",
 		"treedb.vlog.outer_leaf_block_cache.put_lock_contention",
+		"treedb.vlog.mmap_remaps",
+		"treedb.vlog.mmap_dead_mappings",
+		"treedb.vlog.mmap_dead_mappings.cap_base",
+		"treedb.vlog.mmap_read.hits",
+		"treedb.vlog.mmap_read.miss_out_of_range",
+		"treedb.vlog.mmap_read.miss_no_mapping",
+		"treedb.vlog.mmap_read.miss_dead_mapping_cap",
+		"treedb.vlog.mmap_read.fallback_readat",
+		"treedb.vlog.mmap_read.hit_ratio",
 	}
 
 	fmt.Fprintf(w, "%s (%s):", prefix, inst.Wrapper.Name())
