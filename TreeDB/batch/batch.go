@@ -55,6 +55,7 @@ type Interface interface {
 // Batch accumulates writes and deletes before committing them.
 type Batch struct {
 	entries         []Entry
+	copyArena       []byte
 	byteSize        int
 	inlineThreshold int
 	thresholdForKey func([]byte) int
@@ -66,6 +67,7 @@ type Batch struct {
 }
 
 const maxBatchPoolCap = 1 << 16
+const maxBatchCopyArenaPoolBytes = 32 << 20
 
 var batchPool = sync.Pool{
 	New: func() any {
@@ -122,6 +124,9 @@ func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
+	if b.copyArena != nil {
+		b.copyArena = b.copyArena[:0]
+	}
 	if len(b.touchedValueLog) > 0 {
 		clear(b.touchedValueLog)
 	}
@@ -137,6 +142,13 @@ func (b *Batch) resetForPool() {
 			b.entries = nil
 		} else {
 			b.entries = b.entries[:0]
+		}
+	}
+	if b.copyArena != nil {
+		if cap(b.copyArena) > maxBatchCopyArenaPoolBytes {
+			b.copyArena = nil
+		} else {
+			b.copyArena = b.copyArena[:0]
 		}
 	}
 	b.byteSize = 0
@@ -190,6 +202,34 @@ func (b *Batch) noteKeyOrder(key []byte) {
 		return
 	}
 	b.lastKey = key
+}
+
+func (b *Batch) arenaAlloc(n int) []byte {
+	if n <= 0 {
+		return b.copyArena[:0:0]
+	}
+	oldLen := len(b.copyArena)
+	need := oldLen + n
+	if cap(b.copyArena) < need {
+		newCap := cap(b.copyArena) * 2
+		if newCap < need {
+			newCap = need
+		}
+		if newCap < 1024 {
+			newCap = 1024
+		}
+		next := make([]byte, oldLen, newCap)
+		copy(next, b.copyArena)
+		b.copyArena = next
+	}
+	b.copyArena = b.copyArena[:need]
+	return b.copyArena[oldLen:need]
+}
+
+func (b *Batch) arenaCopy(src []byte) []byte {
+	dst := b.arenaAlloc(len(src))
+	copy(dst, src)
+	return dst
 }
 
 // Reserve grows internal buffers to accommodate roughly n entries without
@@ -248,9 +288,9 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrKeyEmpty
 	}
 
-	// Copy key to ensure immutability
-	k := make([]byte, len(key))
-	copy(k, key)
+	// Copy key/value to ensure immutability, but avoid per-entry heap churn by
+	// allocating from a batch-local arena.
+	k := b.arenaCopy(key)
 
 	entry := Entry{
 		Type: OpPut,
@@ -262,9 +302,7 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueTooLarge
 	}
 	// Store inline
-	valCopy := make([]byte, len(value))
-	copy(valCopy, value)
-	entry.Value = valCopy
+	entry.Value = b.arenaCopy(value)
 
 	b.entries = append(b.entries, entry)
 	// Approximate size tracking (optional for now)
@@ -305,9 +343,7 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
 	}
 
-	// Copy key
-	k := make([]byte, len(key))
-	copy(k, key)
+	k := b.arenaCopy(key)
 
 	entry := Entry{
 		Type:     OpPut,
@@ -358,9 +394,7 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	// Copy key
-	k := make([]byte, len(key))
-	copy(k, key)
+	k := b.arenaCopy(key)
 
 	b.entries = append(b.entries, Entry{
 		Type: OpDelete,
