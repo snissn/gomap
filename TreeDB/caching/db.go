@@ -17962,7 +17962,7 @@ func maxValueLogRIDFromSegments(segments []logSegmentInfo) (uint64, error) {
 		}
 		reader.DisableValueDecode()
 		for {
-			rid, _, _, err := reader.ReadNext()
+			rid, _, err := reader.ReadNextMeta()
 			if err == nil {
 				if rid > maxRID {
 					maxRID = rid

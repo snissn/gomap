@@ -188,7 +188,7 @@ func scanValueLogSegments(segments []logSegment, dictLookup valuelog.DictLookup)
 		reader.ValidateDicts()
 		reader.SetDictLookup(dictLookup)
 		for {
-			rid, _, ptr, err := reader.ReadNext()
+			rid, ptr, err := reader.ReadNextMeta()
 			if err == nil {
 				if _, exists := ridMap[rid]; exists {
 					_ = reader.Close()

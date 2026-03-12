@@ -246,6 +246,207 @@ func (r *Reader) ReadNext() (uint64, []byte, page.ValuePtr, error) {
 	return entry.rid, entry.value, entry.ptr, nil
 }
 
+// ReadNextMeta streams the next RID + pointer without allocating or returning
+// the record payload bytes.
+//
+// It mirrors ReadNext's RID/pointer semantics, including grouped-record pending
+// expansion, but always returns a nil value payload.
+func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
+	if r.pendingIndex < len(r.pending) {
+		entry := r.pending[r.pendingIndex]
+		r.pendingIndex++
+		return entry.rid, entry.ptr, nil
+	}
+
+	var header [HeaderSize]byte
+	if _, err := io.ReadFull(r.r, header[:]); err != nil {
+		return 0, page.ValuePtr{}, err
+	}
+
+	crcVal := binary.LittleEndian.Uint32(header[0:4])
+	version := header[4]
+	if version != Version {
+		return 0, page.ValuePtr{}, ErrCorrupt
+	}
+	flags := header[5]
+	rid := binary.LittleEndian.Uint64(header[8:16])
+	valueLenU32 := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLenU32) {
+		return 0, page.ValuePtr{}, ErrRecordTooLarge
+	}
+	valueLen := int(valueLenU32)
+
+	// If checksums are enabled we have to read the bytes anyway; compute the CRC
+	// incrementally while discarding to avoid allocating the full payload.
+	var sum uint32
+	var sumPtr *uint32
+	if r.verifies {
+		sum = crc.Update(0, header[4:])
+		sumPtr = &sum
+	}
+	discardN := func(n int) error {
+		if n <= 0 {
+			return nil
+		}
+		if sumPtr == nil {
+			remain := n
+			for remain > 0 {
+				discarded, err := r.r.Discard(remain)
+				remain -= discarded
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+		var buf [32 << 10]byte
+		remain := n
+		for remain > 0 {
+			chunk := buf[:]
+			if remain < len(chunk) {
+				chunk = buf[:remain]
+			}
+			if _, err := io.ReadFull(r.r, chunk); err != nil {
+				return err
+			}
+			*sumPtr = crc.Update(*sumPtr, chunk)
+			remain -= len(chunk)
+		}
+		return nil
+	}
+
+	start := r.pos
+	recordLen := uint32(headerWithoutCRC) + valueLenU32
+
+	if flags&recordFlagGrouped == 0 {
+		if err := discardN(valueLen); err != nil {
+			return 0, page.ValuePtr{}, err
+		}
+		if r.verifies && sum != crcVal {
+			return 0, page.ValuePtr{}, ErrCorrupt
+		}
+		r.pos += int64(HeaderSize + valueLenU32)
+		if rid == 0 {
+			return 0, page.ValuePtr{}, ErrCorrupt
+		}
+		ptr := page.ValuePtr{
+			Offset: uint64(start + 4),
+			Length: recordLen,
+			FileID: r.fileID,
+		}
+		return rid, ptr, nil
+	}
+
+	// Grouped record: read/validate prefix (frame header + rids + offsets) and
+	// then discard the remaining payload bytes.
+	var fh [FrameHeaderSize]byte
+	if _, err := io.ReadFull(r.r, fh[:]); err != nil {
+		return 0, page.ValuePtr{}, err
+	}
+	if sumPtr != nil {
+		*sumPtr = crc.Update(*sumPtr, fh[:])
+	}
+	if fh[0] != FrameVersion {
+		return 0, page.ValuePtr{}, ErrCorrupt
+	}
+	k := int(fh[2])
+	if k <= 0 || k > MaxFrameK {
+		return 0, page.ValuePtr{}, ErrCorrupt
+	}
+	frameHeader := FrameHeader{
+		Version:  fh[0],
+		Flags:    fh[1],
+		K:        fh[2],
+		Reserved: fh[3],
+		DictID:   binary.LittleEndian.Uint64(fh[4:12]),
+	}
+	if r.validateDicts && frameHeader.Flags&FrameFlagCompressed != 0 && frameHeader.DictID != 0 {
+		if r.dictLookup == nil {
+			return 0, page.ValuePtr{}, ErrMissingDict
+		}
+		dict, err := r.dictLookup(frameHeader.DictID)
+		if err != nil {
+			return 0, page.ValuePtr{}, err
+		}
+		if len(dict) == 0 {
+			return 0, page.ValuePtr{}, ErrMissingDict
+		}
+	}
+
+	var rids [MaxFrameK]uint64
+	for i := 0; i < k; i++ {
+		var ridBytes [8]byte
+		if _, err := io.ReadFull(r.r, ridBytes[:]); err != nil {
+			return 0, page.ValuePtr{}, err
+		}
+		if sumPtr != nil {
+			*sumPtr = crc.Update(*sumPtr, ridBytes[:])
+		}
+		frameRID := binary.LittleEndian.Uint64(ridBytes[:])
+		if frameRID == 0 {
+			return 0, page.ValuePtr{}, ErrCorrupt
+		}
+		rids[i] = frameRID
+	}
+
+	prev := uint32(0)
+	rawLen := uint32(0)
+	for i := 0; i < k+1; i++ {
+		var offBytes [4]byte
+		if _, err := io.ReadFull(r.r, offBytes[:]); err != nil {
+			return 0, page.ValuePtr{}, err
+		}
+		if sumPtr != nil {
+			*sumPtr = crc.Update(*sumPtr, offBytes[:])
+		}
+		cur := binary.LittleEndian.Uint32(offBytes[:])
+		if cur < prev {
+			return 0, page.ValuePtr{}, ErrCorrupt
+		}
+		prev = cur
+		if i == k {
+			rawLen = cur
+		}
+	}
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
+		return 0, page.ValuePtr{}, ErrRecordTooLarge
+	}
+
+	ridBytesLen := k * 8
+	offsetBytesLen := (k + 1) * 4
+	prefixLen := FrameHeaderSize + ridBytesLen + offsetBytesLen
+	if valueLen < prefixLen {
+		return 0, page.ValuePtr{}, ErrCorrupt
+	}
+	if err := discardN(valueLen - prefixLen); err != nil {
+		return 0, page.ValuePtr{}, err
+	}
+	if r.verifies && sum != crcVal {
+		return 0, page.ValuePtr{}, ErrCorrupt
+	}
+	r.pos += int64(HeaderSize + valueLenU32)
+
+	recordLenHint := recordLen
+	if recordLenHint > page.ValuePtrGroupedMaxRecordLen {
+		recordLenHint = 0
+	}
+	r.pending = r.pending[:0]
+	for i := 0; i < k; i++ {
+		ptr := page.ValuePtr{
+			Offset: uint64(start + 4),
+			Length: page.ValuePtrMarkGrouped(recordLenHint, uint8(i)),
+			FileID: r.fileID,
+		}
+		r.pending = append(r.pending, frameEntry{rid: rids[i], value: nil, ptr: ptr})
+	}
+	if len(r.pending) == 0 {
+		return 0, page.ValuePtr{}, ErrCorrupt
+	}
+	entry := r.pending[0]
+	r.pendingIndex = 1
+	return entry.rid, entry.ptr, nil
+}
+
 func (r *Reader) Close() error {
 	if r == nil || r.f == nil {
 		return nil
