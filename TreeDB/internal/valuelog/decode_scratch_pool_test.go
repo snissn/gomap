@@ -51,4 +51,3 @@ func TestFileDecodeScratch_ReusesLargeBuffer(t *testing.T) {
 		t.Fatalf("expected 0 allocs after warm-up, got %f", allocs)
 	}
 }
-
