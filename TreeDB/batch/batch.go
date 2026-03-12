@@ -256,7 +256,36 @@ func (b *Batch) arenaCopy(src []byte) []byte {
 	chunk = chunk[:off+len(src)]
 	copy(chunk[off:], src)
 	b.arenaChunks[last] = chunk
-	return chunk[off : off+len(src)]
+	// Match make([]byte, n) semantics (cap==len) to avoid accidental append
+	// writing into the arena.
+	return chunk[off : off+len(src) : off+len(src)]
+}
+
+func (b *Batch) arenaCopyPair(key, value []byte) ([]byte, []byte) {
+	if len(key) == 0 {
+		// Preserve non-nil empty semantics for callers that pass empty slices.
+		if len(value) == 0 {
+			return []byte{}, []byte{}
+		}
+		return []byte{}, b.arenaCopy(value)
+	}
+	if len(value) == 0 {
+		return b.arenaCopy(key), []byte{}
+	}
+
+	total := len(key) + len(value)
+	b.ensureArenaChunk(total)
+	last := len(b.arenaChunks) - 1
+	chunk := b.arenaChunks[last]
+	off := len(chunk)
+	chunk = chunk[:off+total]
+	copy(chunk[off:], key)
+	copy(chunk[off+len(key):], value)
+	b.arenaChunks[last] = chunk
+
+	k := chunk[off : off+len(key) : off+len(key)]
+	v := chunk[off+len(key) : off+total : off+total]
+	return k, v
 }
 
 // Reserve grows internal buffers to accommodate roughly n entries without
@@ -317,7 +346,7 @@ func (b *Batch) Set(key, value []byte) error {
 
 	// Copy key/value to ensure immutability (reduce per-entry allocations by
 	// copying into a per-batch arena).
-	k := b.arenaCopy(key)
+	k, valCopy := b.arenaCopyPair(key, value)
 
 	entry := Entry{
 		Type: OpPut,
@@ -329,7 +358,6 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueTooLarge
 	}
 	// Store inline
-	valCopy := b.arenaCopy(value)
 	entry.Value = valCopy
 
 	b.entries = append(b.entries, entry)
