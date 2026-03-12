@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -100,6 +101,16 @@ func putDecodeScratch(buf []byte) {
 		}
 		return
 	}
+}
+
+func sliceAliasesBytes(buf, candidate []byte) bool {
+	if len(buf) == 0 || len(candidate) == 0 {
+		return false
+	}
+	bufStart := uintptr(unsafe.Pointer(unsafe.SliceData(buf)))
+	bufEnd := bufStart + uintptr(len(buf))
+	candidateStart := uintptr(unsafe.Pointer(unsafe.SliceData(candidate)))
+	return candidateStart >= bufStart && candidateStart < bufEnd
 }
 
 type Reader struct {
@@ -925,9 +936,9 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
 	}
-	// Safe to return payload scratch to the pool only when we know the returned
-	// slice is backed by dst (not by payload).
-	if usedDst {
+	// Safe to return payload scratch to the pool whenever the returned slice
+	// does not alias the payload buffer backed by payloadScratch.
+	if usedDst || !sliceAliasesBytes(payload, val) {
 		putDecodeScratch(payloadScratch)
 	}
 	return val, usedDst, nil
