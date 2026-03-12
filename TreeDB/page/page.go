@@ -76,7 +76,7 @@ func Checksum(data []byte) uint32 {
 }
 
 // CalculateChecksum computes the checksum of the page data,
-// treating the checksum field (bytes 8-12) as zero.
+// treating checksum bytes 8-11 (data[8:12]) as zero.
 func CalculateChecksum(data []byte) uint32 {
 	if len(data) < PageHeaderSize {
 		return 0
@@ -89,7 +89,8 @@ func CalculateChecksum(data []byte) uint32 {
 }
 
 // UpdateChecksum computes CRC32C for the page while treating checksum bytes
-// (8..12) as zero, then writes the computed checksum back into the page header.
+// 8-11 (data[8:12]) as zero, then writes the computed checksum back into the
+// page header.
 // It mutates data in-place and returns the computed checksum.
 func UpdateChecksum(data []byte) uint32 {
 	if len(data) < PageHeaderSize {
@@ -105,7 +106,7 @@ func UpdateChecksum(data []byte) uint32 {
 }
 
 // VerifyChecksumNonMutating verifies that the page checksum matches the data,
-// assuming the checksum field (bytes 8-12) is zero for the calculation.
+// assuming checksum bytes 8-11 (data[8:12]) are zero for the calculation.
 // It avoids modifying the underlying buffer.
 func VerifyChecksumNonMutating(data []byte) bool {
 	if len(data) < PageHeaderSize {
