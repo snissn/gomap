@@ -392,6 +392,24 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
 
+// ReadUnsafeTo is like ReadUnsafe, but it decodes compressed grouped frames
+// into dst (when provided) and returns a view into that buffer. Callers must
+// keep dst alive as long as they use the returned slice when usedDst is true.
+func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error) {
+	if f == nil || f.File == nil {
+		return nil, false, errors.New("valuelog: nil file")
+	}
+	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+		return val, usedDst, err
+	}
+	f.remapToFileSize()
+	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+		return val, usedDst, err
+	}
+	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	return val, false, err
+}
+
 func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
 	if f == nil || f.File == nil {
 		return nil, errors.New("valuelog: nil file")
@@ -573,6 +591,14 @@ func (s *Set) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
 	}
 	return f.ReadUnsafe(ptr, !s.disableReadChecksum)
+}
+
+func (s *Set) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	f, ok := s.Files[ptr.FileID]
+	if !ok {
+		return nil, false, &fileNotFoundError{id: ptr.FileID, inSnapshot: true}
+	}
+	return f.ReadUnsafeTo(ptr, !s.disableReadChecksum, dst)
 }
 
 func (s *Set) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
@@ -845,6 +871,14 @@ func (m *Manager) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, err
 	}
 	return f.ReadUnsafe(ptr, !m.disableReadChecksum)
+}
+
+func (m *Manager) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	f, err := m.fileFor(ptr.FileID)
+	if err != nil {
+		return nil, false, err
+	}
+	return f.ReadUnsafeTo(ptr, !m.disableReadChecksum, dst)
 }
 
 func (m *Manager) ReadAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {

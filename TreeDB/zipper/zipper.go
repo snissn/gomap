@@ -30,6 +30,31 @@ type LeafPageReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
 
+type leafPageUnsafeToReader interface {
+	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
+}
+
+var leafPageScratchPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 0, page.PageSize)
+	},
+}
+
+func getLeafPageScratch() []byte {
+	buf, _ := leafPageScratchPool.Get().([]byte)
+	if cap(buf) != page.PageSize {
+		return make([]byte, 0, page.PageSize)
+	}
+	return buf[:0]
+}
+
+func putLeafPageScratch(buf []byte) {
+	if cap(buf) != page.PageSize {
+		return
+	}
+	leafPageScratchPool.Put(buf[:0])
+}
+
 type Zipper struct {
 	pager     *pager.Pager
 	allocator PageAllocator
@@ -706,9 +731,9 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 	return newRoot, retired, metrics, nil
 }
 
-func (z *Zipper) loadNode(id uint64) (*node.Node, bool, error) {
+func (z *Zipper) loadNode(id uint64) (*node.Node, bool, []byte, bool, error) {
 	if z == nil || z.pager == nil {
-		return nil, false, errors.New("zipper: missing pager")
+		return nil, false, nil, false, errors.New("zipper: missing pager")
 	}
 	if ptr, ok := page.DecodeLeafRef(id); ok {
 		if z.outerLeavesInValueLog {
@@ -717,36 +742,66 @@ func (z *Zipper) loadNode(id uint64) (*node.Node, bool, error) {
 			z.leafRefCacheMu.RUnlock()
 			if cached {
 				if len(data) != page.PageSize {
-					return nil, false, errors.New("zipper: cached leaf page has invalid size")
+					return nil, false, nil, false, errors.New("zipper: cached leaf page has invalid size")
 				}
 				n := node.NewNode(data)
 				if n.Type() != page.PageTypeLeaf {
-					return nil, false, errors.New("zipper: cached leafref resolved to non-leaf page")
+					return nil, false, nil, false, errors.New("zipper: cached leafref resolved to non-leaf page")
 				}
-				return n, false, nil
+				return n, false, nil, false, nil
 			}
 		}
 		if z.leafPageReader == nil {
-			return nil, false, errors.New("zipper: missing leaf page reader")
+			return nil, false, nil, false, errors.New("zipper: missing leaf page reader")
 		}
+		if r, ok := z.leafPageReader.(leafPageUnsafeToReader); ok {
+			scratch := getLeafPageScratch()
+			data, usedScratch, err := r.ReadUnsafeTo(ptr, scratch[:0])
+			if err != nil {
+				putLeafPageScratch(scratch)
+				return nil, false, nil, false, err
+			}
+			if !usedScratch {
+				putLeafPageScratch(scratch)
+				scratch = nil
+			}
+			if len(data) != page.PageSize {
+				if scratch != nil {
+					putLeafPageScratch(scratch)
+				}
+				return nil, false, nil, false, errors.New("zipper: leaf page has invalid size")
+			}
+			n := node.NewNode(data)
+			if n.Type() != page.PageTypeLeaf {
+				if scratch != nil {
+					putLeafPageScratch(scratch)
+				}
+				return nil, false, nil, false, errors.New("zipper: leafref resolved to non-leaf page")
+			}
+			if scratch != nil {
+				return n, false, scratch, true, nil
+			}
+			return n, false, nil, false, nil
+		}
+
 		data, err := z.leafPageReader.ReadUnsafe(ptr)
 		if err != nil {
-			return nil, false, err
+			return nil, false, nil, false, err
 		}
 		if len(data) != page.PageSize {
-			return nil, false, errors.New("zipper: leaf page has invalid size")
+			return nil, false, nil, false, errors.New("zipper: leaf page has invalid size")
 		}
 		n := node.NewNode(data)
 		if n.Type() != page.PageTypeLeaf {
-			return nil, false, errors.New("zipper: leafref resolved to non-leaf page")
+			return nil, false, nil, false, errors.New("zipper: leafref resolved to non-leaf page")
 		}
-		return n, false, nil
+		return n, false, nil, false, nil
 	}
 	data, err := z.pager.Get(id)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, false, err
 	}
-	return node.NewNode(data), true, nil
+	return node.NewNode(data), true, nil, false, nil
 }
 
 func (z *Zipper) persistLeafPage(b *node.Builder) (uint64, error) {
@@ -778,9 +833,12 @@ func (z *Zipper) persistLeafPage(b *node.Builder) (uint64, error) {
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, error.
 func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64) (uint64, []Split, error) {
-	oldNode, oldFromPager, err := z.loadNode(pageID)
+	oldNode, oldFromPager, leafScratch, leafScratchRef, err := z.loadNode(pageID)
 	if err != nil {
 		return 0, nil, err
+	}
+	if leafScratchRef {
+		defer putLeafPageScratch(leafScratch)
 	}
 	if oldFromPager && retired != nil && pageID != 0 {
 		*retired = append(*retired, pageID)
@@ -1476,15 +1534,21 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 
 	var retired []uint64
 
-	loadLeaf := func(id uint64) (*node.Node, bool, bool, error) {
-		n, fromPager, err := z.loadNode(id)
+	loadLeaf := func(id uint64) (*node.Node, bool, bool, []byte, bool, error) {
+		n, fromPager, leafScratch, leafScratchRef, err := z.loadNode(id)
 		if err != nil {
-			return nil, false, false, err
+			if leafScratchRef {
+				putLeafPageScratch(leafScratch)
+			}
+			return nil, false, false, nil, false, err
 		}
 		if n.Type() != page.PageTypeLeaf {
-			return nil, false, false, nil
+			if leafScratchRef {
+				putLeafPageScratch(leafScratch)
+			}
+			return nil, false, false, nil, false, nil
 		}
-		return n, fromPager, true, nil
+		return n, fromPager, true, leafScratch, leafScratchRef, nil
 	}
 
 	// First pass: prune empty leaf children (except keep the first slot).
@@ -1497,15 +1561,21 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			out = append(out, e)
 			continue
 		}
-		n, fromPager, ok, err := loadLeaf(e.child)
+		n, fromPager, ok, leafScratch, leafScratchRef, err := loadLeaf(e.child)
 		if err != nil {
 			return nil, nil, err
 		}
 		if ok && n.Count() == 0 {
+			if leafScratchRef {
+				putLeafPageScratch(leafScratch)
+			}
 			if fromPager {
 				retired = append(retired, e.child)
 			}
 			continue
+		}
+		if leafScratchRef {
+			putLeafPageScratch(leafScratch)
 		}
 		out = append(out, e)
 	}
@@ -1620,12 +1690,18 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 	}
 
 	copyLeaf := func(id uint64, hint uint64) (uint64, error) {
-		n, _, ok, err := loadLeaf(id)
+		n, _, ok, leafScratch, leafScratchRef, err := loadLeaf(id)
 		if err != nil {
 			return 0, err
 		}
 		if !ok {
+			if leafScratchRef {
+				putLeafPageScratch(leafScratch)
+			}
 			return 0, errors.New("copyLeaf: not a leaf")
+		}
+		if leafScratchRef {
+			defer putLeafPageScratch(leafScratch)
 		}
 
 		var (
@@ -1847,21 +1923,38 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		leftID := entries[i].child
 		rightID := entries[i+1].child
 
-		left, leftFromPager, okL, err := loadLeaf(leftID)
+		left, leftFromPager, okL, leftScratch, leftScratchRef, err := loadLeaf(leftID)
 		if err != nil {
 			return nil, nil, err
 		}
-		right, rightFromPager, okR, err := loadLeaf(rightID)
+		right, rightFromPager, okR, rightScratch, rightScratchRef, err := loadLeaf(rightID)
 		if err != nil {
+			if leftScratchRef {
+				putLeafPageScratch(leftScratch)
+			}
 			return nil, nil, err
+		}
+		releaseLeafScratch := func() {
+			if leftScratchRef {
+				putLeafPageScratch(leftScratch)
+				leftScratch = nil
+				leftScratchRef = false
+			}
+			if rightScratchRef {
+				putLeafPageScratch(rightScratch)
+				rightScratch = nil
+				rightScratchRef = false
+			}
 		}
 		if !okL || !okR {
+			releaseLeafScratch()
 			i++
 			continue
 		}
 
 		if left.Count() == 0 {
 			// If this is a non-first child it would have been pruned already.
+			releaseLeafScratch()
 			i++
 			continue
 		}
@@ -1894,16 +1987,19 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 					}
 				}
 			}
+			releaseLeafScratch()
 			i++
 			continue
 		}
 
 		leftBytes, err := leafRequiredBytes(left)
 		if err != nil {
+			releaseLeafScratch()
 			return nil, nil, err
 		}
 		rightBytes, err := leafRequiredBytes(right)
 		if err != nil {
+			releaseLeafScratch()
 			return nil, nil, err
 		}
 
@@ -1914,6 +2010,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		if leftBytes+rightBytes <= mergeCap {
 			mergedID, ok, err := buildMergedLeaf(left, right)
 			if err != nil {
+				releaseLeafScratch()
 				return nil, nil, err
 			}
 			if ok {
@@ -1929,6 +2026,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 				if i > 0 {
 					i--
 				}
+				releaseLeafScratch()
 				continue
 			}
 		}
@@ -1936,6 +2034,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 		// If merge isn't possible, attempt a bounded rebalance.
 		leftNewID, rightNewID, rightStart, ok, err := rebalanceLeaves(left, right)
 		if err != nil {
+			releaseLeafScratch()
 			return nil, nil, err
 		}
 		if ok && len(rightStart) > 0 {
@@ -1949,6 +2048,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			entries[i+1].child = rightNewID
 			entries[i+1].key = rightStart
 		}
+		releaseLeafScratch()
 		i++
 	}
 
