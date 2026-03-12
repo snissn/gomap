@@ -1067,7 +1067,7 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.vlog_io.bytes_per_syscall",
 		"treedb.cache.vlog_mmap.remaps",
 		"treedb.cache.vlog_mmap.dead_mappings",
-		"treedb.cache.vlog_mmap.dead_mappings_cap_base",
+		"treedb.cache.vlog_mmap.dead_mappings.cap_base",
 		"treedb.cache.vlog_mmap.read.hits",
 		"treedb.cache.vlog_mmap.read.miss_out_of_range",
 		"treedb.cache.vlog_mmap.read.miss_no_mapping",

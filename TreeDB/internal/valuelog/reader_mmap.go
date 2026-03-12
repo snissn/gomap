@@ -83,14 +83,22 @@ func effectiveMaxDeadMappings(mappedLen int) int {
 		return maxMappings
 	}
 	boost := mappedLen / deadMappingBytesPerStep
-	if boost < 0 {
-		boost = 0
+	if boost <= 0 {
+		return maxMappings
 	}
-	effective := maxMappings + boost
-	if effective > maxAdaptiveDeadMappings {
-		effective = maxAdaptiveDeadMappings
+
+	base := uint64(maxMappings)
+	maxCap := uint64(maxAdaptiveDeadMappings)
+	// Never let adaptive clamping reduce the configured base cap.
+	if base >= maxCap {
+		return maxMappings
 	}
-	return effective
+	boost64 := uint64(boost)
+	maxBoost := maxCap - base
+	if boost64 > maxBoost {
+		boost64 = maxBoost
+	}
+	return int(base + boost64)
 }
 
 func deadMappingsCapExhausted(deadMappingsCount uint64, mappedLen int) bool {

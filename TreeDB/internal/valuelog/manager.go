@@ -405,8 +405,10 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		return nil, errors.New("valuelog: nil file")
 	}
 	if val, err, ok := f.readViaMmap(ptr, verifyCRC); ok {
+		f.mmapReadHits.Add(1)
 		return val, err
 	}
+	f.mmapReadFallbackReadAt.Add(1)
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
 
@@ -415,12 +417,22 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		return nil, errors.New("valuelog: nil file")
 	}
 	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
+		f.mmapReadHits.Add(1)
 		return val, err
 	}
-	f.remapToFileSize()
-	if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
-		return val, err
+	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
+	// budget: remapToFileSize won't be able to grow the mapping safely again.
+	data, _ := f.mmapData.Load().([]byte)
+	if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		f.remapToFileSize()
+		if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
+			f.mmapReadHits.Add(1)
+			return val, err
+		}
+	} else {
+		f.mmapReadMissDeadMappingCap.Add(1)
 	}
+	f.mmapReadFallbackReadAt.Add(1)
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
 
@@ -456,6 +468,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		return nil, errors.New("valuelog: nil file")
 	}
 	if val, err, ok := f.readViaMmapAppend(ptr, verifyCRC, dst); ok {
+		f.mmapReadHits.Add(1)
 		return val, err
 	}
 	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
@@ -519,6 +532,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
 			// Fallback to the full decoder (will allocate).
+			f.mmapReadFallbackReadAt.Add(1)
 			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 			if err != nil {
 				return nil, err
@@ -583,6 +597,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	}
 
 	// Slow path: use existing decoder and append.
+	f.mmapReadFallbackReadAt.Add(1)
 	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err
