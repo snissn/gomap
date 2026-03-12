@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -460,6 +461,17 @@ func (db *DB) Stats() map[string]string {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
+		stats["treedb.vlog.mmap_dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
+
+		mmapHits, mmapMissOutOfRange, mmapMissNoMapping, mmapMissDeadCap, mmapFallbackReadAt := db.valueLogManager.MmapReadStats()
+		stats["treedb.vlog.mmap_read.hits"] = fmt.Sprintf("%d", mmapHits)
+		stats["treedb.vlog.mmap_read.miss_out_of_range"] = fmt.Sprintf("%d", mmapMissOutOfRange)
+		stats["treedb.vlog.mmap_read.miss_no_mapping"] = fmt.Sprintf("%d", mmapMissNoMapping)
+		stats["treedb.vlog.mmap_read.miss_dead_mapping_cap"] = fmt.Sprintf("%d", mmapMissDeadCap)
+		stats["treedb.vlog.mmap_read.fallback_readat"] = fmt.Sprintf("%d", mmapFallbackReadAt)
+		if total := mmapHits + mmapFallbackReadAt; total > 0 {
+			stats["treedb.vlog.mmap_read.hit_ratio"] = fmt.Sprintf("%.6f", float64(mmapHits)/float64(total))
+		}
 
 		gHits, gMisses, gEntries, gCapacity := db.valueLogManager.GroupedFrameCacheStats()
 		stats["treedb.vlog.grouped_frame_cache.hits"] = fmt.Sprintf("%d", gHits)

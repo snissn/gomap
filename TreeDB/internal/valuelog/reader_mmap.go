@@ -2,7 +2,10 @@ package valuelog
 
 import (
 	"encoding/binary"
+	"os"
 	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
@@ -35,17 +38,75 @@ const readViaMmapViewPrefixCacheEnabled = false
 //
 // Each remap retains the previous mapping until the file is closed to avoid
 // use-after-unmap with concurrent readers.
-var MaxDeadMappings = 64
+var MaxDeadMappings = defaultMaxDeadMappings
+
+const (
+	defaultMaxDeadMappings    = 64
+	maxAdaptiveDeadMappings   = 4096
+	deadMappingBytesPerStep   = 256 << 10 // increase cap by 1 per 256KiB mapped
+	maxDeadMappingsEnvKey     = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
+	enableAdaptiveCapEnvKey   = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
+	defaultAdaptiveCapEnabled = true
+)
+
+var (
+	maxDeadMappingsExplicit bool
+	adaptiveDeadMappings    = defaultAdaptiveCapEnabled
+)
+
+func init() {
+	if raw := strings.TrimSpace(os.Getenv(maxDeadMappingsEnvKey)); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil {
+			MaxDeadMappings = v
+			maxDeadMappingsExplicit = true
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(enableAdaptiveCapEnvKey)); raw != "" {
+		switch strings.ToLower(raw) {
+		case "0", "false", "off", "no":
+			adaptiveDeadMappings = false
+		case "1", "true", "on", "yes":
+			adaptiveDeadMappings = true
+		}
+	}
+}
+
+func effectiveMaxDeadMappings(mappedLen int) int {
+	maxMappings := MaxDeadMappings
+	if maxMappings <= 0 {
+		return maxMappings
+	}
+	if maxDeadMappingsExplicit || !adaptiveDeadMappings {
+		return maxMappings
+	}
+	if mappedLen <= 0 {
+		return maxMappings
+	}
+	boost := mappedLen / deadMappingBytesPerStep
+	if boost < 0 {
+		boost = 0
+	}
+	effective := maxMappings + boost
+	if effective > maxAdaptiveDeadMappings {
+		effective = maxAdaptiveDeadMappings
+	}
+	return effective
+}
+
+func deadMappingCapReached(deadMappings int, mappedLen int) bool {
+	maxMappings := effectiveMaxDeadMappings(mappedLen)
+	return maxMappings > 0 && deadMappings >= maxMappings
+}
 
 func (f *File) maybeScheduleRemap() {
 	if f == nil || f.closed.Load() {
 		return
 	}
-	if MaxDeadMappings > 0 && f.deadMappingsCount.Load() >= uint64(MaxDeadMappings) {
+	data, _ := f.mmapData.Load().([]byte)
+	if deadMappingCapReached(int(f.deadMappingsCount.Load()), len(data)) {
 		// If we have already exhausted our dead-mapping budget, we will not be
 		// able to remap again without risking use-after-unmap for callers holding
 		// unsafe mmap views. Avoid spawning remap goroutines that will just bail.
-		data, _ := f.mmapData.Load().([]byte)
 		if data != nil {
 			return
 		}
@@ -74,7 +135,7 @@ func (f *File) remapToFileSize() {
 	// risking use-after-unmap for callers holding unsafe mmap views. Avoid the
 	// per-call Stat allocation when reads keep missing the current mapping.
 	data, _ := f.mmapData.Load().([]byte)
-	if data != nil && MaxDeadMappings > 0 && len(f.deadMappings) >= MaxDeadMappings {
+	if data != nil && deadMappingCapReached(len(f.deadMappings), len(data)) {
 		return
 	}
 
@@ -93,7 +154,7 @@ func (f *File) remapToFileSize() {
 	if data != nil && int64(len(data)) >= currentSize {
 		return
 	}
-	if data != nil && MaxDeadMappings > 0 && len(f.deadMappings) >= MaxDeadMappings {
+	if data != nil && deadMappingCapReached(len(f.deadMappings), len(data)) {
 		return
 	}
 	if data != nil {
@@ -126,6 +187,7 @@ func (f *File) readViaMmap(ptr page.ValuePtr, verifyCRC bool) ([]byte, error, bo
 func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error, bool) {
 	data, _ := f.mmapData.Load().([]byte)
 	if data == nil {
+		f.mmapReadMissNoMapping.Add(1)
 		f.maybeScheduleRemap()
 		return nil, nil, false
 	}
@@ -134,6 +196,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	}
 	start := int64(ptr.Offset - 4)
 	if start < 0 || start+HeaderSize > int64(len(data)) {
+		f.mmapReadMissOutOfRange.Add(1)
 		f.maybeScheduleRemap()
 		return nil, nil, false
 	}
@@ -156,6 +219,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 
 	end := start + HeaderSize + int64(valueLen)
 	if end > int64(len(data)) {
+		f.mmapReadMissOutOfRange.Add(1)
 		f.maybeScheduleRemap()
 		return nil, nil, false
 	}
@@ -392,6 +456,7 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error, bool) {
 	data, _ := f.mmapData.Load().([]byte)
 	if data == nil {
+		f.mmapReadMissNoMapping.Add(1)
 		f.maybeScheduleRemap()
 		return nil, false, nil, false
 	}
@@ -400,6 +465,7 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	start := int64(ptr.Offset - 4)
 	if start < 0 || start+HeaderSize > int64(len(data)) {
+		f.mmapReadMissOutOfRange.Add(1)
 		f.maybeScheduleRemap()
 		return nil, false, nil, false
 	}
@@ -422,6 +488,7 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 
 	end := start + HeaderSize + int64(valueLen)
 	if end > int64(len(data)) {
+		f.mmapReadMissOutOfRange.Add(1)
 		f.maybeScheduleRemap()
 		return nil, false, nil, false
 	}
@@ -592,6 +659,7 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error, bool) {
 	data, _ := f.mmapData.Load().([]byte)
 	if data == nil {
+		f.mmapReadMissNoMapping.Add(1)
 		f.maybeScheduleRemap()
 		return nil, nil, false
 	}
@@ -600,6 +668,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	}
 	start := int64(ptr.Offset - 4)
 	if start < 0 || start+HeaderSize > int64(len(data)) {
+		f.mmapReadMissOutOfRange.Add(1)
 		f.maybeScheduleRemap()
 		return nil, nil, false
 	}
@@ -622,6 +691,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 
 	end := start + HeaderSize + int64(valueLen)
 	if end > int64(len(data)) {
+		f.mmapReadMissOutOfRange.Add(1)
 		f.maybeScheduleRemap()
 		return nil, nil, false
 	}

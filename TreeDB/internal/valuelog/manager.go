@@ -77,9 +77,19 @@ type File struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings      [][]byte
-	remapCount        atomic.Uint64
-	deadMappingsCount atomic.Uint64
+	deadMappings          [][]byte
+	remapCount            atomic.Uint64
+	deadMappingsCount     atomic.Uint64
+	mmapReadHits          atomic.Uint64
+	mmapReadMissNoMapping atomic.Uint64
+	// mmapReadMissOutOfRange counts reads that miss because the requested record
+	// range is not currently covered by the active mmap.
+	mmapReadMissOutOfRange atomic.Uint64
+	// mmapReadMissDeadMappingCap counts fallback reads where remap growth is
+	// skipped because the dead-mapping budget is exhausted.
+	mmapReadMissDeadMappingCap atomic.Uint64
+	// mmapReadFallbackReadAt counts reads that ultimately fall back to ReadAt.
+	mmapReadFallbackReadAt atomic.Uint64
 }
 
 func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
@@ -422,16 +432,22 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 		return nil, false, errors.New("valuelog: nil file")
 	}
 	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+		f.mmapReadHits.Add(1)
 		return val, usedDst, err
 	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
-	if !(MaxDeadMappings > 0 && f.deadMappingsCount.Load() >= uint64(MaxDeadMappings)) {
+	data, _ := f.mmapData.Load().([]byte)
+	if !deadMappingCapReached(int(f.deadMappingsCount.Load()), len(data)) {
 		f.remapToFileSize()
 		if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+			f.mmapReadHits.Add(1)
 			return val, usedDst, err
 		}
+	} else {
+		f.mmapReadMissDeadMappingCap.Add(1)
 	}
+	f.mmapReadFallbackReadAt.Add(1)
 	return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
 }
 
@@ -1097,6 +1113,22 @@ func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
 		deadMappings += f.deadMappingsCount.Load()
 	}
 	return remaps, deadMappings
+}
+
+func (m *Manager) MmapReadStats() (hits uint64, missesOutOfRange uint64, missesNoMapping uint64, missesDeadMappingCap uint64, fallbacksReadAt uint64) {
+	if m == nil {
+		return 0, 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		hits += f.mmapReadHits.Load()
+		missesOutOfRange += f.mmapReadMissOutOfRange.Load()
+		missesNoMapping += f.mmapReadMissNoMapping.Load()
+		missesDeadMappingCap += f.mmapReadMissDeadMappingCap.Load()
+		fallbacksReadAt += f.mmapReadFallbackReadAt.Load()
+	}
+	return hits, missesOutOfRange, missesNoMapping, missesDeadMappingCap, fallbacksReadAt
 }
 
 func (m *Manager) TemplateDefCacheStats() (hits, misses uint64, entries, capacity int) {
