@@ -1553,13 +1553,16 @@ func TestDecodeFrameValueBoundsCompressed(t *testing.T) {
 	}
 
 	records := []Record{
-		{RID: 1, Value: bytes.Repeat([]byte("alpha-"), 64)},
-		{RID: 2, Value: bytes.Repeat([]byte("beta-"), 64)},
-		{RID: 3, Value: bytes.Repeat([]byte("gamma-"), 64)},
+		{RID: 1, Value: append([]byte(nil), samples[0]...)},
+		{RID: 2, Value: append([]byte(nil), samples[1]...)},
+		{RID: 3, Value: append([]byte(nil), samples[2]...)},
 	}
 	body, header, err := EncodeFrameWithOptions(dictID, dict, records, zstd.SpeedFastest, false)
 	if err != nil {
 		t.Fatalf("EncodeFrameWithOptions: %v", err)
+	}
+	if header.Flags&FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame")
 	}
 
 	gotHeader, start, end, rawLen, payload, err := decodeFrameValueBounds(body, 1)
@@ -1581,16 +1584,8 @@ func TestDecodeFrameValueBoundsCompressed(t *testing.T) {
 	if rawLen != wantRawLen {
 		t.Fatalf("unexpected rawLen: got=%d want=%d", rawLen, wantRawLen)
 	}
-	if header.Flags&FrameFlagCompressed != 0 {
-		if len(payload) == 0 {
-			t.Fatalf("expected compressed payload bytes")
-		}
-		return
-	}
-	t.Logf("EncodeFrameWithOptions returned uncompressed frame; validating raw bounds path")
-	wantPayload := append(append(append([]byte(nil), records[0].Value...), records[1].Value...), records[2].Value...)
-	if !bytes.Equal(payload, wantPayload) {
-		t.Fatalf("unexpected raw payload bytes when uncompressed")
+	if len(payload) == 0 {
+		t.Fatalf("expected compressed payload bytes")
 	}
 }
 
