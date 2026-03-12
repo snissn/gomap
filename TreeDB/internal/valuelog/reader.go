@@ -907,17 +907,30 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		return payload, usedDst, nil
 	}
 
-	payload := make([]byte, int(valueLen))
+	payloadScratch := getDecodeScratch(int(valueLen))
+	payload := payloadScratch[:int(valueLen)]
 	if _, err := f.ReadAt(payload, start+HeaderSize); err != nil {
+		putDecodeScratch(payloadScratch)
 		return nil, false, err
 	}
 	if verifyCRC {
 		sum := crc.ChecksumParts(header[4:], payload)
 		if sum != crcVal {
+			putDecodeScratch(payloadScratch)
 			return nil, false, ErrCorrupt
 		}
 	}
-	return decodeRecordTo(header[:], payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts, dst)
+	val, usedDst, err := decodeRecordTo(header[:], payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts, dst)
+	if err != nil {
+		putDecodeScratch(payloadScratch)
+		return nil, false, err
+	}
+	// Safe to return payload scratch to the pool only when we know the returned
+	// slice is backed by dst (not by payload).
+	if usedDst {
+		putDecodeScratch(payloadScratch)
+	}
+	return val, usedDst, nil
 }
 
 func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions) ([]byte, error) {
