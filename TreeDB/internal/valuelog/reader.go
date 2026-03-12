@@ -980,23 +980,14 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 		return nil, ErrCorrupt
 	}
 
-	frameHeader, rids, offsets, framePayload, err := DecodeFrame(payload)
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	frameHeader, start, end, rawLen, framePayload, err := decodeFrameValueBounds(payload, subIndex)
 	if err != nil {
 		return nil, err
 	}
-	if len(rids) == 0 || len(offsets) < 2 {
-		return nil, ErrCorrupt
-	}
-	subIndex := int(page.ValuePtrSubIndex(ptr))
-	if subIndex < 0 || subIndex >= len(rids) {
-		return nil, ErrCorrupt
-	}
-	rawLen := offsets[len(offsets)-1]
 	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return nil, ErrRecordTooLarge
 	}
-	start := offsets[subIndex]
-	end := offsets[subIndex+1]
 	if frameHeader.Flags&FrameFlagCompressed != 0 {
 		// Random-access decode wants only a single value. Decode into a pooled
 		// buffer and then copy just the requested range so we don't retain the
@@ -1095,23 +1086,14 @@ func decodeRecordTo(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC 
 		return nil, false, ErrCorrupt
 	}
 
-	frameHeader, rids, offsets, framePayload, err := DecodeFrame(payload)
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	frameHeader, start, end, rawLen, framePayload, err := decodeFrameValueBounds(payload, subIndex)
 	if err != nil {
 		return nil, false, err
 	}
-	if len(rids) == 0 || len(offsets) < 2 {
-		return nil, false, ErrCorrupt
-	}
-	subIndex := int(page.ValuePtrSubIndex(ptr))
-	if subIndex < 0 || subIndex >= len(rids) {
-		return nil, false, ErrCorrupt
-	}
-	rawLen := offsets[len(offsets)-1]
 	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 		return nil, false, ErrRecordTooLarge
 	}
-	start := offsets[subIndex]
-	end := offsets[subIndex+1]
 	if end < start || end > rawLen {
 		return nil, false, ErrCorrupt
 	}
