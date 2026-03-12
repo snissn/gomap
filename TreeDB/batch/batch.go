@@ -143,9 +143,9 @@ func (b *Batch) resetLocked() {
 
 func (b *Batch) resetForPool() {
 	if b.entries != nil {
-		// Clear the full backing array: SortedEntries compaction can leave
-		// pointers in the tail beyond len, which would otherwise pin arenas.
-		clear(b.entries[:cap(b.entries)])
+		// SortedEntries clears the compacted tail, so clearing len is sufficient
+		// here while avoiding O(cap) work for large pooled batches.
+		clear(b.entries)
 		if cap(b.entries) > maxBatchPoolCap {
 			b.entries = nil
 		} else {
