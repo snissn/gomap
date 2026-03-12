@@ -602,6 +602,12 @@ func ReadAt(f *os.File, ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	return ReadAtWithDict(f, ptr, verifyCRC, nil, nil, nil, templ.DecodeOptions{})
 }
 
+// ReadAtTo decodes ptr from f and, when possible, writes decoded bytes into
+// dst. It returns the decoded value, whether dst backed the returned slice, and
+// an error.
+//
+// Callers must treat the returned bytes as immutable. When usedDst is true,
+// the returned slice aliases dst.
 func ReadAtTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error) {
 	return ReadAtWithDictTo(f, ptr, verifyCRC, nil, nil, nil, templ.DecodeOptions{}, dst)
 }
@@ -664,9 +670,10 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 				return nil, ErrCorrupt
 			}
 
-			const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
-			var prefix [maxPrefixLen]byte
-			if _, err := f.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+			const maxRIDOffsetsLen = (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+			var ridOffsets [maxRIDOffsetsLen]byte
+			ridOffsetsLen := ridBytes + offsetBytes
+			if _, err := f.ReadAt(ridOffsets[:ridOffsetsLen], frameOff+FrameHeaderSize); err != nil {
 				return nil, err
 			}
 
@@ -676,20 +683,20 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 			}
 
 			// Validate RIDs and parse offsets.
-			ridOff := FrameHeaderSize
+			ridOff := 0
 			for i := 0; i < k; i++ {
-				rid := binary.LittleEndian.Uint64(prefix[ridOff : ridOff+8])
+				rid := binary.LittleEndian.Uint64(ridOffsets[ridOff : ridOff+8])
 				if rid == 0 {
 					return nil, ErrCorrupt
 				}
 				ridOff += 8
 			}
 
-			off := FrameHeaderSize + ridBytes
+			off := ridBytes
 			var offsets [MaxFrameK + 1]uint32
 			prev := uint32(0)
 			for i := 0; i < k+1; i++ {
-				cur := binary.LittleEndian.Uint32(prefix[off : off+4])
+				cur := binary.LittleEndian.Uint32(ridOffsets[off : off+4])
 				if cur < prev {
 					return nil, ErrCorrupt
 				}
@@ -702,7 +709,7 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 			if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 				return nil, ErrRecordTooLarge
 			}
-			if prefixLen+int(rawLen) != int(valueLen) {
+			if uint64(prefixLen)+uint64(rawLen) != uint64(valueLen) {
 				return nil, ErrCorrupt
 			}
 
@@ -743,6 +750,10 @@ func ReadAtWithDict(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup Di
 	return decodeRecord(header[:], payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts)
 }
 
+// ReadAtWithDictTo is ReadAtWithDict with caller-provided decode storage.
+//
+// The returned slice may alias dst when usedDst is true. The returned bytes are
+// immutable from the caller perspective.
 func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte) ([]byte, bool, error) {
 	if f == nil {
 		return nil, false, errors.New("valuelog: nil file")
@@ -801,9 +812,10 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 				return nil, false, ErrCorrupt
 			}
 
-			const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
-			var prefix [maxPrefixLen]byte
-			if _, err := f.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+			const maxRIDOffsetsLen = (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
+			var ridOffsets [maxRIDOffsetsLen]byte
+			ridOffsetsLen := ridBytes + offsetBytes
+			if _, err := f.ReadAt(ridOffsets[:ridOffsetsLen], frameOff+FrameHeaderSize); err != nil {
 				return nil, false, err
 			}
 
@@ -813,20 +825,20 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			}
 
 			// Validate RIDs and parse offsets.
-			ridOff := FrameHeaderSize
+			ridOff := 0
 			for i := 0; i < k; i++ {
-				rid := binary.LittleEndian.Uint64(prefix[ridOff : ridOff+8])
+				rid := binary.LittleEndian.Uint64(ridOffsets[ridOff : ridOff+8])
 				if rid == 0 {
 					return nil, false, ErrCorrupt
 				}
 				ridOff += 8
 			}
 
-			off := FrameHeaderSize + ridBytes
+			off := ridBytes
 			var offsets [MaxFrameK + 1]uint32
 			prev := uint32(0)
 			for i := 0; i < k+1; i++ {
-				cur := binary.LittleEndian.Uint32(prefix[off : off+4])
+				cur := binary.LittleEndian.Uint32(ridOffsets[off : off+4])
 				if cur < prev {
 					return nil, false, ErrCorrupt
 				}
@@ -839,7 +851,7 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
 				return nil, false, ErrRecordTooLarge
 			}
-			if prefixLen+int(rawLen) != int(valueLen) {
+			if uint64(prefixLen)+uint64(rawLen) != uint64(valueLen) {
 				return nil, false, ErrCorrupt
 			}
 
