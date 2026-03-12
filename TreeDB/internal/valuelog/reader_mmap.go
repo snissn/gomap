@@ -33,8 +33,9 @@ func appendDecodedTemplatePayload(dst, payload []byte, lookup TemplateLookup, ca
 // lock-contention amplification on the unsafe view path.
 const readViaMmapViewPrefixCacheEnabled = false
 
-// MaxDeadMappings caps the number of old mmaps retained to avoid exhausting
-// vm.max_map_count. Set <= 0 to disable the cap.
+// MaxDeadMappings is the base cap for old mmaps retained to avoid exhausting
+// vm.max_map_count. Unless explicitly configured, the effective cap can grow
+// with mapped size up to maxAdaptiveDeadMappings. Set <= 0 to disable the cap.
 //
 // Each remap retains the previous mapping until the file is closed to avoid
 // use-after-unmap with concurrent readers.

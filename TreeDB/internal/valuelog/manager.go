@@ -408,6 +408,10 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		f.mmapReadHits.Add(1)
 		return val, err
 	}
+	data, _ := f.mmapData.Load().([]byte)
+	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+		f.mmapReadMissDeadMappingCap.Add(1)
+	}
 	f.mmapReadFallbackReadAt.Add(1)
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
@@ -473,6 +477,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 	}
 	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
 	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {
+		f.mmapReadFallbackReadAt.Add(1)
 		start := int64(ptr.Offset - 4)
 
 		// Read header to discover the frame length/flags.
@@ -532,7 +537,6 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
 			// Fallback to the full decoder (will allocate).
-			f.mmapReadFallbackReadAt.Add(1)
 			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 			if err != nil {
 				return nil, err

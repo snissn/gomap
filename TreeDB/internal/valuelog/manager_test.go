@@ -11,6 +11,131 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
+func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
+	mgr := &Manager{
+		files: map[uint32]*File{
+			1: {},
+			2: {},
+		},
+	}
+	mgr.files[1].mmapReadHits.Add(3)
+	mgr.files[1].mmapReadMissOutOfRange.Add(5)
+	mgr.files[1].mmapReadMissNoMapping.Add(7)
+	mgr.files[1].mmapReadMissDeadMappingCap.Add(11)
+	mgr.files[1].mmapReadFallbackReadAt.Add(13)
+	mgr.files[2].mmapReadHits.Add(17)
+	mgr.files[2].mmapReadMissOutOfRange.Add(19)
+	mgr.files[2].mmapReadMissNoMapping.Add(23)
+	mgr.files[2].mmapReadMissDeadMappingCap.Add(29)
+	mgr.files[2].mmapReadFallbackReadAt.Add(31)
+
+	hits, missOutOfRange, missNoMapping, missDeadCap, fallbacks := mgr.MmapReadStats()
+	if hits != 20 || missOutOfRange != 24 || missNoMapping != 30 || missDeadCap != 40 || fallbacks != 44 {
+		t.Fatalf("MmapReadStats mismatch: hits=%d missOutOfRange=%d missNoMapping=%d missDeadCap=%d fallbacks=%d", hits, missOutOfRange, missNoMapping, missDeadCap, fallbacks)
+	}
+}
+
+func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := writer.Append(0, nil, 1, []byte("alpha")); err != nil {
+		_ = writer.Close()
+		t.Fatalf("Append(alpha): %v", err)
+	}
+	ptr, err := writer.Append(0, nil, 2, []byte("beta"))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("Append(beta): %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	fh, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open(%s): %v", path, err)
+	}
+	defer func() { _ = fh.Close() }()
+
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	truncated := contents[:int(ptr.Offset)-1]
+
+	f := &File{ID: fileID, Path: path, File: fh}
+	f.mmapData.Store(truncated)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(truncated))))
+
+	got, err := f.Read(ptr, false)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if string(got) != "beta" {
+		t.Fatalf("Read mismatch: got=%q want=%q", string(got), "beta")
+	}
+	if got := f.mmapReadMissDeadMappingCap.Load(); got != 1 {
+		t.Fatalf("mmapReadMissDeadMappingCap=%d want 1", got)
+	}
+	if got := f.mmapReadFallbackReadAt.Load(); got != 1 {
+		t.Fatalf("mmapReadFallbackReadAt=%d want 1", got)
+	}
+}
+
+func TestFileReadAppend_CountsGroupedFallbackReadAt(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	ptrs, err := writer.AppendFrame(0, nil, []Record{
+		{RID: 1, Value: []byte("alpha")},
+		{RID: 2, Value: []byte("beta")},
+	})
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("AppendFrame: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	fh, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open(%s): %v", path, err)
+	}
+	defer func() { _ = fh.Close() }()
+
+	f := &File{ID: fileID, Path: path, File: fh}
+	f.mmapData.Store([]byte(nil))
+
+	got, err := f.ReadAppend(ptrs[1], false, nil)
+	if err != nil {
+		t.Fatalf("ReadAppend: %v", err)
+	}
+	if string(got) != "beta" {
+		t.Fatalf("ReadAppend mismatch: got=%q want=%q", string(got), "beta")
+	}
+	if got := f.mmapReadFallbackReadAt.Load(); got != 1 {
+		t.Fatalf("mmapReadFallbackReadAt=%d want 1", got)
+	}
+}
+
 func writeTestSegment(t *testing.T, dir string, lane, seq uint32, rid uint64, value []byte) uint32 {
 	t.Helper()
 
