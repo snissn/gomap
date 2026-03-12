@@ -10175,6 +10175,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		}
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
+		planStart := time.Now()
 		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 			MaxSourceSegments:    0,
 			MaxSourceBytes:       maxSourceBytes,
@@ -10182,6 +10183,21 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			MinSegmentStaleBytes: 1,
 		})
 		cancel()
+		db.debugVlogMaintf(
+			"rewrite_plan stale_ratio_trigger min_ratio=%.6f max_source_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+			minStaleRatio,
+			maxSourceBytes,
+			plan.SegmentsSelected,
+			plan.SegmentsTotal,
+			plan.SelectedBytesTotal,
+			plan.SelectedBytesLive,
+			plan.SelectedBytesStale,
+			plan.BytesTotal,
+			plan.BytesLive,
+			plan.BytesStale,
+			float64(time.Since(planStart).Microseconds())/1000,
+			err,
+		)
 		updatePlanTimestamp := false
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -10241,11 +10257,26 @@ planned:
 			}
 			if maxSourceBytes > 0 {
 				ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
+				planStart := time.Now()
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 					MaxSourceSegments: 0,
 					MaxSourceBytes:    maxSourceBytes,
 				})
 				cancel()
+				db.debugVlogMaintf(
+					"rewrite_plan pre_rewrite max_source_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+					maxSourceBytes,
+					plan.SegmentsSelected,
+					plan.SegmentsTotal,
+					plan.SelectedBytesTotal,
+					plan.SelectedBytesLive,
+					plan.SelectedBytesStale,
+					plan.BytesTotal,
+					plan.BytesLive,
+					plan.BytesStale,
+					float64(time.Since(planStart).Microseconds())/1000,
+					err,
+				)
 				if err != nil {
 					if errors.Is(err, context.Canceled) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
@@ -10268,6 +10299,17 @@ planned:
 		}
 	}
 	if shouldRewrite && hasRewriter {
+		db.debugVlogMaintf(
+			"rewrite_start reason=%s total_bytes=%d stale_ratio_ppm=%d churn_bps=%d rewrite_queue=%d checkpoint_runs=%d disable_journal=%t have_plan=%t",
+			vlogGenerationReasonString(reason),
+			totalBytes,
+			staleRatioPPM,
+			churnBps,
+			len(rewriteQueue),
+			db.checkpointRuns.Load(),
+			db.disableJournal,
+			haveRewritePlan,
+		)
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerRunning)
 		db.vlogGenerationLastReason.Store(reason)
 		err := db.runWithBackendMaintenanceOptions(backendMaintenanceOptions{
@@ -10361,11 +10403,33 @@ planned:
 					return float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
 				}()
 			}
+			db.debugVlogMaintf(
+				"rewrite_exec reason=%s source_ids=%d budget_tokens=%d max_source_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
+				vlogGenerationReasonString(reason),
+				len(rewriteOpts.SourceFileIDs),
+				budgetTokens,
+				maxSourceBytes,
+				rewriteOpts.MinSegmentStaleRatio,
+				len(rewriteQueue),
+				processedLedgerLiveBytes,
+			)
+			rewriteStart := time.Now()
 			stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
 			cancel()
 			if err != nil {
+				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(time.Since(rewriteStart).Microseconds())/1000)
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
+			db.debugVlogMaintf(
+				"rewrite_done reason=%s segments_before=%d segments_after=%d bytes_before=%d bytes_after=%d records=%d dur_ms=%.3f",
+				vlogGenerationReasonString(reason),
+				stats.SegmentsBefore,
+				stats.SegmentsAfter,
+				stats.BytesBefore,
+				stats.BytesAfter,
+				stats.RecordsCopied,
+				float64(time.Since(rewriteStart).Microseconds())/1000,
+			)
 			if len(processedRewriteIDs) > 0 {
 				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
 					return fmt.Errorf("consume generational rewrite queue: %w", err)
@@ -10373,13 +10437,16 @@ planned:
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				gcStart := time.Now()
 				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
 					ProtectedPaths: db.valueLogProtectedPaths(),
 				})
 				gcCancel()
 				if gcErr != nil {
+					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(time.Since(gcStart).Microseconds())/1000)
 					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
 				}
+				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
