@@ -14932,32 +14932,45 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	backendIdx := make([]int, 0, len(keys))
 	backendKeys := make([][]byte, 0, len(keys))
 
-	// Copy all found values into a single arena to avoid one allocation per key.
-	// Each returned slice is capacity-capped to preserve safe-copy semantics.
+	// Copy all found values into a shared arena-style buffer to avoid one
+	// allocation per key. Each returned slice is capacity-capped to preserve
+	// safe-copy semantics.
 	//
 	// The cache layer may need to resolve value-log pointers for memtable hits;
 	// by using the append path, those decodes can write directly into this arena
-	// instead of allocating per key.
+	// instead of allocating per key. The limit below bounds only the initial
+	// arena capacity; subsequent appends may still grow the backing array, so
+	// multiple underlying allocations may be retained.
 	const (
-		getManyValueGuessBytes = 128
-		getManyMaxArenaBytes   = 1 << 20
+		getManyValueGuessBytes         = 128
+		getManyMaxArenaInitialCapBytes = 1 << 20
 	)
 	arenaCap := len(keys) * getManyValueGuessBytes
 	if arenaCap < 0 {
 		arenaCap = 0
 	}
-	if arenaCap > getManyMaxArenaBytes {
-		arenaCap = getManyMaxArenaBytes
+	if arenaCap > getManyMaxArenaInitialCapBytes {
+		arenaCap = getManyMaxArenaInitialCapBytes
 	}
 	arena := make([]byte, 0, arenaCap)
 	emptyValue := []byte{}
 	for i, key := range keys {
 		start := len(arena)
 		nextArena, found, err := db.getMemtableAppend(key, arena)
-		if found {
+		if err != nil {
 			if err == tree.ErrKeyNotFound {
-				continue
+				// Tombstone in cache layers: treat as a missing key and do not fall
+				// through to backend.
+				if found {
+					continue
+				}
+			} else {
+				// Defensive: if getMemtableAppend ever returns errors with found=false,
+				// do not silently route those keys to backend reads.
+				return nil, err
 			}
+		}
+		if found {
 			if err != nil {
 				return nil, err
 			}
