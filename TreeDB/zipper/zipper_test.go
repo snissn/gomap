@@ -95,9 +95,12 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 		t.Fatalf("persistLeafPage: %v", err)
 	}
 
-	loaded, fromPager, err := z.loadNode(leafID)
+	loaded, fromPager, leafScratch, leafScratchRef, err := z.loadNode(leafID)
 	if err != nil {
 		t.Fatalf("loadNode: %v", err)
+	}
+	if leafScratchRef {
+		putLeafPageScratch(leafScratch)
 	}
 	if fromPager {
 		t.Fatalf("fromPager=%t want false", fromPager)

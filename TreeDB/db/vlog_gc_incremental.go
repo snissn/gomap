@@ -436,6 +436,7 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 	}
 	verifyAlways := p.VerifyOnRead()
 	found := false
+	var leafScratch []byte
 	err := leafrefscan.Walk(ctx, rootID, p.Get, func(pageID uint64, n node.Node) error {
 		if verifyAlways || !p.IsVerified(pageID) {
 			if !n.VerifyChecksum() {
@@ -452,16 +453,29 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 		}
 		refs[ptr.FileID]++
 		found = true
-		return collectNestedLeafPageValueLogRefCounts(ptr, reader, refs)
+		return collectNestedLeafPageValueLogRefCounts(ptr, reader, refs, &leafScratch)
 	})
 	return found, err
 }
 
-func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabReader, refs map[uint32]uint64) error {
+func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabReader, refs map[uint32]uint64, scratch *[]byte) error {
 	if refs == nil || !page.IsValueLogFileID(ptr.FileID) || reader == nil {
 		return nil
 	}
-	leafPage, err := reader.ReadUnsafe(ptr)
+	var (
+		leafPage []byte
+		err      error
+	)
+	if toer, ok := reader.(unsafeToReader); ok && scratch != nil {
+		if cap(*scratch) < page.PageSize {
+			*scratch = make([]byte, 0, page.PageSize)
+		} else {
+			*scratch = (*scratch)[:0]
+		}
+		leafPage, _, err = toer.ReadUnsafeTo(ptr, (*scratch)[:0])
+	} else {
+		leafPage, err = reader.ReadUnsafe(ptr)
+	}
 	if err != nil {
 		return err
 	}

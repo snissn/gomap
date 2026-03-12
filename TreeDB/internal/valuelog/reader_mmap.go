@@ -337,6 +337,194 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	return val, nil, true
 }
 
+// readViaMmapViewTo is like readViaMmapView, but decodes compressed grouped
+// frames into dst (when provided) and returns a view into that buffer.
+//
+// This avoids allocating a fresh decode buffer on the unsafe view path while
+// also avoiding the extra copy that readViaMmapAppend performs.
+func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error, bool) {
+	data, _ := f.mmapData.Load().([]byte)
+	if data == nil {
+		f.maybeScheduleRemap()
+		return nil, false, nil, false
+	}
+	if ptr.Offset < 4 {
+		return nil, false, ErrCorrupt, true
+	}
+	start := int64(ptr.Offset - 4)
+	if start < 0 || start+HeaderSize > int64(len(data)) {
+		f.maybeScheduleRemap()
+		return nil, false, nil, false
+	}
+
+	header := data[start : start+HeaderSize]
+	crcVal := binary.LittleEndian.Uint32(header[0:4])
+	version := header[4]
+	if version != Version {
+		return nil, false, ErrCorrupt, true
+	}
+	flags := header[5]
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	if recordSizeExceedsMax(valueLen) {
+		return nil, false, ErrRecordTooLarge, true
+	}
+	expectedLen := uint32(headerWithoutCRC) + valueLen
+	if !page.ValuePtrRecordLengthHintMatches(ptr, expectedLen) {
+		return nil, false, ErrCorrupt, true
+	}
+
+	end := start + HeaderSize + int64(valueLen)
+	if end > int64(len(data)) {
+		f.maybeScheduleRemap()
+		return nil, false, nil, false
+	}
+
+	payload := data[start+HeaderSize : end]
+	if verifyCRC {
+		sum := crc.ChecksumParts(header[4:], payload)
+		if sum != crcVal {
+			return nil, false, ErrCorrupt, true
+		}
+	}
+
+	// Non-grouped record: the payload is the value.
+	if flags&recordFlagGrouped == 0 {
+		if f.templateLookup != nil && templ.IsEncodedPayload(payload) {
+			decoded, err := templ.DecodePayloadAppend(nil, payload, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				return nil, false, err, true
+			}
+			return decoded, false, nil, true
+		}
+		return payload, false, nil, true
+	}
+
+	if !page.ValuePtrIsGrouped(ptr) {
+		return nil, false, ErrCorrupt, true
+	}
+	if int64(FrameHeaderSize) > int64(len(payload)) {
+		return nil, false, ErrCorrupt, true
+	}
+	frameHeader := payload[:FrameHeaderSize]
+	if frameHeader[0] != FrameVersion {
+		return nil, false, ErrCorrupt, true
+	}
+	k := int(frameHeader[2])
+	if k <= 0 || k > MaxFrameK {
+		return nil, false, ErrCorrupt, true
+	}
+	fFlags := frameHeader[1]
+
+	decodeTemplatePayload := func(val []byte) ([]byte, bool, error) {
+		if f.templateLookup == nil || !templ.IsEncodedPayload(val) {
+			return val, false, nil
+		}
+		decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+			return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+		}, f.templateDecodeOpts)
+		if err != nil {
+			return nil, false, err
+		}
+		return decoded, true, nil
+	}
+
+	subIndex := int(page.ValuePtrSubIndex(ptr))
+	if subIndex < 0 || subIndex >= k {
+		return nil, false, ErrCorrupt, true
+	}
+	ridBytes := k * 8
+	offsetBytes := (k + 1) * 4
+	prefixLen := FrameHeaderSize + ridBytes + offsetBytes
+	if int(valueLen) < prefixLen {
+		return nil, false, ErrCorrupt, true
+	}
+
+	if fFlags&FrameFlagCompressed != 0 {
+		if cachedRaw, valStart, valEnd, rawLen, hit := f.groupedFrameCacheLookup(start, verifyCRC, subIndex); hit {
+			if uint32(len(cachedRaw)) != rawLen || valEnd < valStart || valEnd > rawLen {
+				return nil, false, ErrCorrupt, true
+			}
+			val, _, err := decodeTemplatePayload(cachedRaw[valStart:valEnd])
+			if err != nil {
+				return nil, false, err, true
+			}
+			return val, false, nil, true
+		}
+	}
+
+	off := FrameHeaderSize + ridBytes
+	var offsets [MaxFrameK + 1]uint32
+	prev := uint32(0)
+	for i := 0; i < k+1; i++ {
+		cur := binary.LittleEndian.Uint32(payload[off : off+4])
+		if cur < prev {
+			return nil, false, ErrCorrupt, true
+		}
+		offsets[i] = cur
+		prev = cur
+		off += 4
+	}
+
+	rawLen := offsets[k]
+	if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
+		return nil, false, ErrRecordTooLarge, true
+	}
+	if fFlags&FrameFlagCompressed == 0 && prefixLen+int(rawLen) != int(valueLen) {
+		return nil, false, ErrCorrupt, true
+	}
+	valStart := offsets[subIndex]
+	valEnd := offsets[subIndex+1]
+	if valEnd < valStart || valEnd > rawLen {
+		return nil, false, ErrCorrupt, true
+	}
+
+	if fFlags&FrameFlagCompressed == 0 {
+		srcStart := prefixLen + int(valStart)
+		srcEnd := prefixLen + int(valEnd)
+		if srcStart < 0 || srcEnd < srcStart || srcEnd > len(payload) {
+			return nil, false, ErrCorrupt, true
+		}
+		val, _, err := decodeTemplatePayload(payload[srcStart:srcEnd])
+		if err != nil {
+			return nil, false, err, true
+		}
+		return val, false, nil, true
+	}
+
+	if len(payload) < prefixLen {
+		return nil, false, ErrCorrupt, true
+	}
+	frame := FrameHeader{
+		Version:  frameHeader[0],
+		Flags:    fFlags,
+		K:        uint8(k),
+		Reserved: frameHeader[3],
+		DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
+	}
+	raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, dst)
+	if err != nil {
+		return nil, false, err, true
+	}
+	if uint32(len(raw)) != rawLen {
+		return nil, false, ErrCorrupt, true
+	}
+	// dst is used iff it was provided with enough capacity to hold rawLen.
+	usedDst := dst != nil && cap(dst) >= int(rawLen)
+
+	val, decoded, err := decodeTemplatePayload(raw[valStart:valEnd])
+	if err != nil {
+		return nil, false, err, true
+	}
+	// Template decoding allocates new bytes; the returned slice is no longer
+	// backed by dst even if we decoded into it.
+	if decoded {
+		usedDst = false
+	}
+	return val, usedDst, nil, true
+}
+
 func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error, bool) {
 	data, _ := f.mmapData.Load().([]byte)
 	if data == nil {

@@ -15,6 +15,10 @@ type unsafeAppendBatchReader interface {
 	ReadUnsafeAppendBatch(ptrs []page.ValuePtr, dst [][]byte) ([][]byte, error)
 }
 
+type unsafeToReader interface {
+	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
+}
+
 // valueReader resolves value-log pointers for tree lookups/iterators.
 type valueReader struct {
 	vlogs tree.SlabReader
@@ -51,6 +55,20 @@ func (r valueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, errors.New("treedb: missing value-log reader")
 	}
 	return r.vlogs.ReadUnsafe(ptr)
+}
+
+func (r valueReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	if r.vlogs == nil {
+		return nil, false, errors.New("treedb: missing value-log reader")
+	}
+	if toer, ok := r.vlogs.(unsafeToReader); ok {
+		return toer.ReadUnsafeTo(ptr, dst)
+	}
+	val, err := r.vlogs.ReadUnsafe(ptr)
+	if err != nil {
+		return nil, false, err
+	}
+	return val, false, nil
 }
 
 func (r valueReader) ReadUnsafeAppend(ptr page.ValuePtr, dst []byte) ([]byte, error) {
