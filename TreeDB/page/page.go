@@ -5,6 +5,8 @@ import (
 	"errors"
 	"hash/crc32"
 	"unsafe"
+
+	crc "github.com/snissn/gomap/TreeDB/internal/crc"
 )
 
 var ErrInvalidPageType = errors.New("invalid page type")
@@ -68,6 +70,7 @@ type ValuePtr struct {
 
 // CRC32C Table using Castagnoli polynomial.
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
+var checksumZeroField = [4]byte{}
 
 // Checksum returns the CRC32C checksum of data.
 func Checksum(data []byte) uint32 {
@@ -80,13 +83,10 @@ func CalculateChecksum(data []byte) uint32 {
 	if len(data) < PageHeaderSize {
 		return 0
 	}
-	// CRC over 0..8
-	sum := crc32.Checksum(data[0:8], crcTable)
-	// CRC over zeroed checksum field (4 bytes)
-	var zero [4]byte
-	sum = crc32.Update(sum, crcTable, zero[:])
-	// CRC over rest (12..)
-	sum = crc32.Update(sum, crcTable, data[12:])
+	// CRC over 0..8, zeroed checksum field, then the rest.
+	sum := crc.Checksum(data[0:8])
+	sum = crc.Update(sum, checksumZeroField[:])
+	sum = crc.Update(sum, data[12:])
 	return sum
 }
 
