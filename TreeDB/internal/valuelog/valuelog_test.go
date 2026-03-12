@@ -1512,8 +1512,80 @@ func TestDecodeFrameValueBounds(t *testing.T) {
 	if rawLen != wantRawLen {
 		t.Fatalf("unexpected rawLen: got=%d want=%d", rawLen, wantRawLen)
 	}
-	if string(payload[start:end]) != string(records[1].Value) {
+	if !bytes.Equal(payload[start:end], records[1].Value) {
 		t.Fatalf("payload slice mismatch: got=%q want=%q", payload[start:end], records[1].Value)
+	}
+}
+
+func TestDecodeFrameValueBoundsCompressed(t *testing.T) {
+	const dictID = 7
+	samples := make([][]byte, 16)
+	for i := range samples {
+		samples[i] = []byte(fmt.Sprintf("{\"kind\":\"frame\",\"id\":%d,\"payload\":\"%s\"}", i, bytes.Repeat([]byte("z"), 192)))
+	}
+	history := make([]byte, 0, 8<<10)
+	for i := range samples {
+		if len(history) >= cap(history) {
+			break
+		}
+		need := cap(history) - len(history)
+		sample := samples[i]
+		if len(sample) > need {
+			sample = sample[:need]
+		}
+		history = append(history, sample...)
+	}
+	if len(history) < 8 {
+		history = append(history, bytes.Repeat([]byte("x"), 8-len(history))...)
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict: empty dict")
+	}
+
+	records := []Record{
+		{RID: 1, Value: bytes.Repeat([]byte("alpha-"), 64)},
+		{RID: 2, Value: bytes.Repeat([]byte("beta-"), 64)},
+		{RID: 3, Value: bytes.Repeat([]byte("gamma-"), 64)},
+	}
+	body, header, err := EncodeFrameWithOptions(dictID, dict, records, zstd.SpeedFastest, false)
+	if err != nil {
+		t.Fatalf("EncodeFrameWithOptions: %v", err)
+	}
+	if header.Flags&FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame")
+	}
+
+	gotHeader, start, end, rawLen, payload, err := decodeFrameValueBounds(body, 1)
+	if err != nil {
+		t.Fatalf("decode bounds: %v", err)
+	}
+	if gotHeader != header {
+		t.Fatalf("header mismatch: got=%+v want=%+v", gotHeader, header)
+	}
+	wantStart := uint32(len(records[0].Value))
+	if start != wantStart {
+		t.Fatalf("unexpected start: got=%d want=%d", start, wantStart)
+	}
+	wantEnd := wantStart + uint32(len(records[1].Value))
+	if end != wantEnd {
+		t.Fatalf("unexpected end: got=%d want=%d", end, wantEnd)
+	}
+	wantRawLen := uint32(len(records[0].Value) + len(records[1].Value) + len(records[2].Value))
+	if rawLen != wantRawLen {
+		t.Fatalf("unexpected rawLen: got=%d want=%d", rawLen, wantRawLen)
+	}
+	if len(payload) == 0 {
+		t.Fatalf("expected compressed payload bytes")
 	}
 }
 
