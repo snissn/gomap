@@ -14971,9 +14971,6 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 			}
 		}
 		if found {
-			if err != nil {
-				return nil, err
-			}
 			arena = nextArena
 			if len(arena) == start {
 				out[i] = emptyValue
