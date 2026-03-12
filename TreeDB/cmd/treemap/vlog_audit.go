@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
@@ -25,16 +26,21 @@ type valueLogSegmentAudit struct {
 }
 
 type valueLogAuditReport struct {
-	Dir            string                       `json:"dir"`
-	MainDir        string                       `json:"main_dir"`
-	ValueLogDir    string                       `json:"value_log_dir"`
-	Segments       []valueLogSegmentAudit       `json:"segments"`
-	SegmentsOnDisk int                          `json:"segments_on_disk"`
-	BytesOnDisk    int64                        `json:"bytes_on_disk"`
-	RIDScan        valueLogRIDAudit             `json:"rid_scan"`
-	GCDryRun       treedbdb.ValueLogGCStats     `json:"gc_dry_run"`
-	RewritePlan    treedbdb.ValueLogRewritePlan `json:"rewrite_plan"`
-	Stats          map[string]string            `json:"stats,omitempty"`
+	Dir               string                       `json:"dir"`
+	MainDir           string                       `json:"main_dir"`
+	ValueLogDir       string                       `json:"value_log_dir"`
+	Segments          []valueLogSegmentAudit       `json:"segments"`
+	SegmentsOnDisk    int                          `json:"segments_on_disk"`
+	BytesOnDisk       int64                        `json:"bytes_on_disk"`
+	RIDScan           valueLogRIDAudit             `json:"rid_scan"`
+	GCDryRun          treedbdb.ValueLogGCStats     `json:"gc_dry_run"`
+	RewritePlan       treedbdb.ValueLogRewritePlan `json:"rewrite_plan"`
+	RIDScanMS         float64                      `json:"rid_scan_ms,omitempty"`
+	GCDryRunMS        float64                      `json:"gc_dry_run_ms,omitempty"`
+	RewritePlanMS     float64                      `json:"rewrite_plan_ms,omitempty"`
+	RewritePlanWarm   treedbdb.ValueLogRewritePlan `json:"rewrite_plan_warm,omitempty"`
+	RewritePlanWarmMS float64                      `json:"rewrite_plan_warm_ms,omitempty"`
+	Stats             map[string]string            `json:"stats,omitempty"`
 }
 
 type valueLogRIDAudit struct {
@@ -51,6 +57,57 @@ type valueLogRIDAuditOptions struct {
 	MaxTrackedRIDs       int
 }
 
+type valueLogAuditCollectOptions struct {
+	rewrite    treedbdb.ValueLogRewriteOnlineOptions
+	rid        valueLogRIDAuditOptions
+	skipRID    bool
+	skipGC     bool
+	cacheProbe bool
+}
+
+type valueLogAuditRewriteFlagOptions struct {
+	maxSegments             int
+	maxBytes                int64
+	minStaleRatio           float64
+	minStaleBytes           int64
+	minAggregateStaleBytes  int64
+	schedulerLike           bool
+	schedulerHotTargetBytes int64
+}
+
+func buildValueLogAuditRewriteOptions(flagOpts valueLogAuditRewriteFlagOptions) treedbdb.ValueLogRewriteOnlineOptions {
+	opts := treedbdb.ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:      flagOpts.maxSegments,
+		MaxSourceBytes:         flagOpts.maxBytes,
+		MinSegmentStaleRatio:   flagOpts.minStaleRatio,
+		MinSegmentStaleBytes:   flagOpts.minStaleBytes,
+		MinAggregateStaleBytes: flagOpts.minAggregateStaleBytes,
+	}
+	if !flagOpts.schedulerLike {
+		return opts
+	}
+	if opts.MinSegmentStaleRatio <= 0 {
+		opts.MinSegmentStaleRatio = 0.20
+	}
+	if opts.MinSegmentStaleBytes <= 0 {
+		opts.MinSegmentStaleBytes = 1
+	}
+	if opts.MinAggregateStaleBytes <= 0 {
+		threshold := flagOpts.schedulerHotTargetBytes / 8
+		if opts.MaxSourceBytes > 0 {
+			budgetThreshold := opts.MaxSourceBytes / 4
+			if threshold <= 0 || (budgetThreshold > 0 && budgetThreshold < threshold) {
+				threshold = budgetThreshold
+			}
+		}
+		if threshold <= 0 {
+			threshold = 1 << 20
+		}
+		opts.MinAggregateStaleBytes = threshold
+	}
+	return opts
+}
+
 func runVlogAudit(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-audit", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
@@ -59,22 +116,37 @@ func runVlogAudit(dir string, args []string) {
 	maxBytes := fs.Int64("rewrite-max-bytes", 0, "Rewrite-plan live-byte selection cap (0=none)")
 	minStaleRatio := fs.Float64("rewrite-min-stale-ratio", 0, "Rewrite-plan minimum per-segment stale ratio (0..1)")
 	minStaleBytes := fs.Int64("rewrite-min-stale-bytes", 0, "Rewrite-plan minimum per-segment stale bytes")
+	minAggregateStaleBytes := fs.Int64("rewrite-min-aggregate-stale-bytes", 0, "Rewrite-plan minimum aggregate stale bytes for debt-aware fallback (0=disabled)")
+	schedulerLike := fs.Bool("rewrite-scheduler-like", false, "Apply cached-maintenance-style rewrite defaults (stale ratio + aggregate debt fallback)")
+	schedulerHotTargetBytes := fs.Int64("rewrite-scheduler-hot-target-bytes", 256<<20, "Hot-segment target used to derive scheduler-like aggregate debt threshold")
 	stopOnFirstDuplicate := fs.Bool("rid-scan-stop-on-first-duplicate", false, "Stop the RID scan after the first duplicate is detected")
 	maxTrackedRIDs := fs.Int("rid-scan-max-tracked", 0, "Maximum distinct RIDs to track in-memory during RID scan (0=unbounded exact mode; may use high memory)")
+	skipRIDScan := fs.Bool("skip-rid-scan", false, "Skip RID scan when only GC/rewrite observability is needed")
+	skipGCDryRun := fs.Bool("skip-gc-dry-run", false, "Skip GC dry-run when only rewrite planning observability is needed")
+	rewriteCacheProbe := fs.Bool("rewrite-cache-probe", false, "Run rewrite planning twice in-process and report warm-cache timing")
 	_ = fs.Parse(args)
 
 	if !*rw {
 		fatalf("vlog-audit requires -rw")
 	}
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{
-		MaxSourceSegments:    *maxSegments,
-		MaxSourceBytes:       *maxBytes,
-		MinSegmentStaleRatio: *minStaleRatio,
-		MinSegmentStaleBytes: *minStaleBytes,
-	}, valueLogRIDAuditOptions{
-		StopOnFirstDuplicate: *stopOnFirstDuplicate,
-		MaxTrackedRIDs:       *maxTrackedRIDs,
+	report, err := collectValueLogAudit(dir, valueLogAuditCollectOptions{
+		rewrite: buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+			maxSegments:             *maxSegments,
+			maxBytes:                *maxBytes,
+			minStaleRatio:           *minStaleRatio,
+			minStaleBytes:           *minStaleBytes,
+			minAggregateStaleBytes:  *minAggregateStaleBytes,
+			schedulerLike:           *schedulerLike,
+			schedulerHotTargetBytes: *schedulerHotTargetBytes,
+		}),
+		rid: valueLogRIDAuditOptions{
+			StopOnFirstDuplicate: *stopOnFirstDuplicate,
+			MaxTrackedRIDs:       *maxTrackedRIDs,
+		},
+		skipRID:    *skipRIDScan,
+		skipGC:     *skipGCDryRun,
+		cacheProbe: *rewriteCacheProbe,
 	})
 	if err != nil {
 		fatalf("ValueLog audit error: %v", err)
@@ -100,6 +172,9 @@ func runVlogAudit(dir string, args []string) {
 		report.RIDScan.FirstDuplicateRID,
 		report.RIDScan.MaxRID,
 	)
+	if report.RIDScanMS > 0 {
+		fmt.Printf("rid_scan_ms=%.3f\n", report.RIDScanMS)
+	}
 	if report.RIDScan.TruncatedSegments > 0 {
 		fmt.Printf("rid_scan_truncated_segments=%d\n", report.RIDScan.TruncatedSegments)
 	}
@@ -117,6 +192,9 @@ func runVlogAudit(dir string, args []string) {
 		report.GCDryRun.BytesEligible,
 		report.GCDryRun.BytesDeleted,
 	)
+	if report.GCDryRunMS > 0 {
+		fmt.Printf("gc_dry_run_ms=%.3f\n", report.GCDryRunMS)
+	}
 	fmt.Printf("rewrite_plan: segments_total=%d selected=%d bytes_total=%d bytes_live=%d bytes_stale=%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d source_file_ids=%v\n",
 		report.RewritePlan.SegmentsTotal,
 		report.RewritePlan.SegmentsSelected,
@@ -128,6 +206,17 @@ func runVlogAudit(dir string, args []string) {
 		report.RewritePlan.SelectedBytesStale,
 		report.RewritePlan.SourceFileIDs,
 	)
+	if report.RewritePlanMS > 0 {
+		fmt.Printf("rewrite_plan_ms=%.3f\n", report.RewritePlanMS)
+	}
+	if report.RewritePlanWarmMS > 0 {
+		fmt.Printf("rewrite_plan_warm_ms=%.3f cache_hit=%t selected=%d source_file_ids=%v\n",
+			report.RewritePlanWarmMS,
+			report.RewritePlanWarm.LiveEstimateCacheHit,
+			report.RewritePlanWarm.SegmentsSelected,
+			report.RewritePlanWarm.SourceFileIDs,
+		)
+	}
 	if len(report.Stats) > 0 {
 		keys := make([]string, 0, len(report.Stats))
 		for k := range report.Stats {
@@ -149,7 +238,7 @@ func runVlogAudit(dir string, args []string) {
 	}
 }
 
-func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnlineOptions, ridOpts valueLogRIDAuditOptions) (report valueLogAuditReport, err error) {
+func collectValueLogAudit(dir string, opts valueLogAuditCollectOptions) (report valueLogAuditReport, err error) {
 	report = valueLogAuditReport{Dir: dir}
 	mainDir, err := resolveTreemapMainDir(dir)
 	if err != nil {
@@ -166,9 +255,13 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	report.Segments = segs
 	report.SegmentsOnDisk = len(segs)
 	report.BytesOnDisk = bytesOnDisk
-	report.RIDScan, err = scanValueLogRIDs(segs, ridOpts)
-	if err != nil {
-		return report, err
+	if !opts.skipRID {
+		start := time.Now()
+		report.RIDScan, err = scanValueLogRIDs(segs, opts.rid)
+		report.RIDScanMS = float64(time.Since(start)) / float64(time.Millisecond)
+		if err != nil {
+			return report, err
+		}
 	}
 
 	backend, cleanup, err := treedb.OpenBackend(treedb.Options{Dir: rootDir, ReadOnly: false})
@@ -189,13 +282,27 @@ func collectValueLogAudit(dir string, rewriteOpts treedbdb.ValueLogRewriteOnline
 	}()
 
 	report.Stats = backend.Stats()
-	report.GCDryRun, err = backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: true})
+	if !opts.skipGC {
+		start := time.Now()
+		report.GCDryRun, err = backend.ValueLogGC(context.Background(), treedbdb.ValueLogGCOptions{DryRun: true})
+		report.GCDryRunMS = float64(time.Since(start)) / float64(time.Millisecond)
+		if err != nil {
+			return report, err
+		}
+	}
+	start := time.Now()
+	report.RewritePlan, err = backend.ValueLogRewritePlan(context.Background(), opts.rewrite)
+	report.RewritePlanMS = float64(time.Since(start)) / float64(time.Millisecond)
 	if err != nil {
 		return report, err
 	}
-	report.RewritePlan, err = backend.ValueLogRewritePlan(context.Background(), rewriteOpts)
-	if err != nil {
-		return report, err
+	if opts.cacheProbe {
+		start = time.Now()
+		report.RewritePlanWarm, err = backend.ValueLogRewritePlan(context.Background(), opts.rewrite)
+		report.RewritePlanWarmMS = float64(time.Since(start)) / float64(time.Millisecond)
+		if err != nil {
+			return report, err
+		}
 	}
 	return report, nil
 }

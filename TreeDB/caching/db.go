@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/bits"
 	"os"
@@ -2530,7 +2531,7 @@ func (db *DB) ValueLogRetainedPaths() []string {
 	return db.valueLogRetainedPaths()
 }
 
-func (db *DB) valueLogProtectedPaths() []string {
+func (db *DB) valueLogRewriteProtectedPaths() []string {
 	retained := db.valueLogRetainedPaths()
 	inUse := db.valueLogInUsePaths()
 	if len(retained) == 0 {
@@ -2562,6 +2563,16 @@ func (db *DB) valueLogProtectedPaths() []string {
 		paths = append(paths, path)
 	}
 	return paths
+}
+
+// valueLogProtectedPaths is the legacy broad protection set used by rewrite
+// paths and tests that reason about retained-segment visibility.
+func (db *DB) valueLogProtectedPaths() []string {
+	return db.valueLogRewriteProtectedPaths()
+}
+
+func (db *DB) valueLogGCProtectedPaths() []string {
+	return db.valueLogInUsePaths()
 }
 
 // valueLogInUsePaths returns a best-effort snapshot of value-log segment paths
@@ -3770,6 +3781,9 @@ type DB struct {
 	vlogGenerationGCSegmentsDeleted          atomic.Uint64
 	vlogGenerationGCBytesDeleted             atomic.Uint64
 	vlogGenerationGCRuns                     atomic.Uint64
+	vlogGenerationGCSkipQueueNotDrained      atomic.Uint64
+	vlogGenerationGCSkipMinInterval          atomic.Uint64
+	vlogGenerationGCSkipBelowThreshold       atomic.Uint64
 	vlogGenerationVacuumRuns                 atomic.Uint64
 	vlogGenerationVacuumFailures             atomic.Uint64
 	vlogGenerationLastVacuumUnixNano         atomic.Int64
@@ -3780,6 +3794,8 @@ type DB struct {
 	vlogGenerationLastGCDryRunUnixNano       atomic.Int64
 	vlogGenerationLastGCDryRunBytesEligible  atomic.Int64
 	vlogGenerationLastGCDryRunSegsEligible   atomic.Int64
+	vlogGenerationLastGCDryRunProtectedPaths atomic.Int64
+	vlogGenerationLastGCProtectedPaths       atomic.Int64
 	vlogGenerationChurnBytes                 atomic.Uint64
 	vlogGenerationSchedulerState             atomic.Uint32
 	vlogGenerationLastReason                 atomic.Uint32
@@ -10154,10 +10170,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
 		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
-			MaxSourceSegments:    0,
-			MaxSourceBytes:       maxSourceBytes,
-			MinSegmentStaleRatio: minStaleRatio,
-			MinSegmentStaleBytes: 1,
+			MaxSourceSegments:      0,
+			MaxSourceBytes:         maxSourceBytes,
+			MinSegmentStaleRatio:   minStaleRatio,
+			MinSegmentStaleBytes:   1,
+			MinAggregateStaleBytes: db.vlogGenerationRewriteAggregateDebtMinBytes(maxSourceBytes),
 		})
 		cancel()
 		updatePlanTimestamp := false
@@ -10276,7 +10293,7 @@ planned:
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
 				MaxSegmentBytes: db.valueLogGenerationWarmTarget,
-				ProtectedPaths:  db.valueLogProtectedPaths(),
+				ProtectedPaths:  db.valueLogRewriteProtectedPaths(),
 				ReserveRIDs: func(count int) (uint64, error) {
 					if count <= 0 {
 						return 0, nil
@@ -10297,7 +10314,10 @@ planned:
 					return fmt.Errorf("persist generational rewrite queue: %w", err)
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+				// The planner has already bounded this source set by live bytes.
+				// Execute the full planned unit on the initial run and retain the
+				// persisted queue only as a resume/error fallback.
+				processedRewriteIDs = append([]uint32(nil), rewritePlan.SourceFileIDs...)
 			}
 			if len(processedRewriteIDs) > 0 {
 				rewriteOpts.SourceFileIDs = processedRewriteIDs
@@ -10322,9 +10342,11 @@ planned:
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
+				protectedPaths := db.valueLogGCProtectedPaths()
+				db.vlogGenerationLastGCProtectedPaths.Store(int64(len(protectedPaths)))
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
-					ProtectedPaths: db.valueLogProtectedPaths(),
+					ProtectedPaths: protectedPaths,
 				})
 				gcCancel()
 				if gcErr != nil {
@@ -10389,6 +10411,7 @@ planned:
 	// ingest/restore when the flush queue is non-empty. Avoid introducing long
 	// stalls by only running the GC path when the cached write queue is drained.
 	if queueLen != 0 {
+		db.vlogGenerationGCSkipQueueNotDrained.Add(1)
 		return
 	}
 	gcer, ok := db.backend.(backendValueLogGCer)
@@ -10401,6 +10424,7 @@ planned:
 	if lastGC > 0 {
 		lastAt := time.Unix(0, lastGC)
 		if now.Sub(lastAt) < vlogGenerationGCMinInterval {
+			db.vlogGenerationGCSkipMinInterval.Add(1)
 			return
 		}
 	}
@@ -10416,13 +10440,16 @@ planned:
 				return fmt.Errorf("generational gc dry-run: %w", err)
 			}
 			if gcStats.BytesEligible < vlogGenerationGCMinBytes && gcStats.SegmentsEligible == 0 {
+				db.vlogGenerationGCSkipBelowThreshold.Add(1)
 				return nil
 			}
 		}
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
+		protectedPaths := db.valueLogGCProtectedPaths()
+		db.vlogGenerationLastGCProtectedPaths.Store(int64(len(protectedPaths)))
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
-		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
+		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: protectedPaths}
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
 		if err != nil {
@@ -10596,11 +10623,13 @@ func (db *DB) estimateVlogGenerationGCEligible(gcer backendValueLogGCer) (backen
 	if db == nil || gcer == nil {
 		return backenddb.ValueLogGCStats{}, nil
 	}
+	protectedPaths := db.valueLogGCProtectedPaths()
+	db.vlogGenerationLastGCDryRunProtectedPaths.Store(int64(len(protectedPaths)))
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	stats, err := gcer.ValueLogGC(ctx, backenddb.ValueLogGCOptions{
 		DryRun:         true,
-		ProtectedPaths: db.valueLogProtectedPaths(),
+		ProtectedPaths: protectedPaths,
 	})
 	if err == nil {
 		db.vlogGenerationLastGCDryRunUnixNano.Store(time.Now().UnixNano())
@@ -10650,6 +10679,23 @@ func (db *DB) shouldRunVlogGenerationRewrite(totalBytes int64, staleRatioPPM uin
 		return true, vlogGenerationReasonChurn
 	}
 	return false, vlogGenerationReasonNone
+}
+
+func (db *DB) vlogGenerationRewriteAggregateDebtMinBytes(maxSourceBytes int64) int64 {
+	threshold := db.valueLogGenerationHotTarget / 8
+	if maxSourceBytes > 0 {
+		budgetThreshold := maxSourceBytes / 4
+		if threshold <= 0 || (budgetThreshold > 0 && budgetThreshold < threshold) {
+			threshold = budgetThreshold
+		}
+	}
+	if threshold <= 0 {
+		threshold = vlogGenerationGCMinBytes
+	}
+	if threshold <= 0 {
+		return 1
+	}
+	return threshold
 }
 
 func (db *DB) valueLogRewriteBatchSize() int {
@@ -11339,6 +11385,7 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
+	db.logVlogGenerationCloseSummary()
 	db.closing.Store(true)
 	db.stopDomainIngressWorkers()
 	db.waitForRetainedValueLogPrune()
@@ -11500,6 +11547,42 @@ func (db *DB) Close() error {
 		errs = append(errs, bgErr)
 	}
 	return errors.Join(errs...)
+}
+
+func (db *DB) logVlogGenerationCloseSummary() {
+	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	queueLen, queueLoaded := db.vlogGenerationRewriteQueueState()
+	log.Printf(
+		"treedb: vlog generation close summary scheduler_state=%s last_reason=%s rewrite_runs=%d rewrite_bytes_in=%d rewrite_bytes_out=%d rewrite_queue_len=%d rewrite_queue_loaded=%t gc_runs=%d gc_deleted_segments=%d gc_deleted_bytes=%d gc_skip_queue_not_drained=%d gc_skip_min_interval=%d gc_skip_below_threshold=%d gc_protected_paths_last=%d gc_dry_run_last_protected_paths=%d gc_dry_run_last_eligible_segments=%d gc_dry_run_last_eligible_bytes=%d checkpoint_kicks=%d checkpoint_kick_rewrite_runs=%d checkpoint_kick_gc_runs=%d",
+		vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load()),
+		vlogGenerationReasonString(db.vlogGenerationLastReason.Load()),
+		db.vlogGenerationRewriteRuns.Load(),
+		db.vlogGenerationRewriteBytesIn.Load(),
+		db.vlogGenerationRewriteBytesOut.Load(),
+		queueLen,
+		queueLoaded,
+		db.vlogGenerationGCRuns.Load(),
+		db.vlogGenerationGCSegmentsDeleted.Load(),
+		db.vlogGenerationGCBytesDeleted.Load(),
+		db.vlogGenerationGCSkipQueueNotDrained.Load(),
+		db.vlogGenerationGCSkipMinInterval.Load(),
+		db.vlogGenerationGCSkipBelowThreshold.Load(),
+		db.vlogGenerationLastGCProtectedPaths.Load(),
+		db.vlogGenerationLastGCDryRunProtectedPaths.Load(),
+		db.vlogGenerationLastGCDryRunSegsEligible.Load(),
+		db.vlogGenerationLastGCDryRunBytesEligible.Load(),
+		db.vlogGenerationCheckpointKickRuns.Load(),
+		db.vlogGenerationCheckpointKickRewriteRuns.Load(),
+		db.vlogGenerationCheckpointKickGCRuns.Load(),
+	)
+}
+
+func (db *DB) vlogGenerationRewriteQueueState() (int, bool) {
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	return len(db.vlogGenerationRewriteQueue), db.vlogGenerationRewriteQueueLoaded
 }
 func (db *DB) Set(key, value []byte) error {
 	if len(key) == 0 {
@@ -15176,8 +15259,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
+	stats["treedb.cache.vlog_generation.gc.skip.queue_not_drained"] = fmt.Sprintf("%d", db.vlogGenerationGCSkipQueueNotDrained.Load())
+	stats["treedb.cache.vlog_generation.gc.skip.min_interval"] = fmt.Sprintf("%d", db.vlogGenerationGCSkipMinInterval.Load())
+	stats["treedb.cache.vlog_generation.gc.skip.below_threshold"] = fmt.Sprintf("%d", db.vlogGenerationGCSkipBelowThreshold.Load())
 	stats["treedb.cache.vlog_generation.gc.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCUnixNano.Load())
+	stats["treedb.cache.vlog_generation.gc.last_protected_paths"] = fmt.Sprintf("%d", db.vlogGenerationLastGCProtectedPaths.Load())
 	stats["treedb.cache.vlog_generation.gc.dry_run.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunUnixNano.Load())
+	stats["treedb.cache.vlog_generation.gc.dry_run.last_protected_paths"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunProtectedPaths.Load())
 	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_bytes"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunBytesEligible.Load())
 	stats["treedb.cache.vlog_generation.gc.dry_run.last_eligible_segments"] = fmt.Sprintf("%d", db.vlogGenerationLastGCDryRunSegsEligible.Load())
 	stats["treedb.cache.vlog_generation.vacuum.runs"] = fmt.Sprintf("%d", db.vlogGenerationVacuumRuns.Load())

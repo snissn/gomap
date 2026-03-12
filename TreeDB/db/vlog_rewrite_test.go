@@ -1128,6 +1128,76 @@ func TestValueLogRewritePlan_GroupedPointers_DedupLiveBytes(t *testing.T) {
 	}
 }
 
+func TestValueLogRewritePlan_MinAggregateStaleBytes_FallsBackBelowPerSegmentRatio(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 244_000, 6, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 244_100, 6, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 256)
+	})
+	appendPointersInNewSegment(t, dir, 0, 3, 244_200, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("c"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	for i := 0; i < 5; i++ {
+		if err := b.SetPointer([]byte(fmt.Sprintf("k1-%d", i)), ptrs1[i]); err != nil {
+			t.Fatalf("set k1-%d: %v", i, err)
+		}
+		if err := b.SetPointer([]byte(fmt.Sprintf("k2-%d", i)), ptrs2[i]); err != nil {
+			t.Fatalf("set k2-%d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	plan, err := db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:    1,
+		MaxSourceBytes:       4 << 20,
+		MinSegmentStaleRatio: 0.20,
+		MinSegmentStaleBytes: 1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewritePlan without aggregate fallback: %v", err)
+	}
+	if len(plan.SourceFileIDs) != 0 {
+		t.Fatalf("expected no selected source segments without aggregate fallback, got %v", plan.SourceFileIDs)
+	}
+	if plan.BytesStale <= 0 {
+		t.Fatalf("expected non-zero aggregate stale bytes, got %d", plan.BytesStale)
+	}
+
+	plan, err = db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{
+		MaxSourceSegments:      1,
+		MaxSourceBytes:         4 << 20,
+		MinSegmentStaleRatio:   0.20,
+		MinSegmentStaleBytes:   1,
+		MinAggregateStaleBytes: 1,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewritePlan with aggregate fallback: %v", err)
+	}
+	if len(plan.SourceFileIDs) != 1 {
+		t.Fatalf("expected one selected source segment with aggregate fallback, got %d (%v)", len(plan.SourceFileIDs), plan.SourceFileIDs)
+	}
+	if plan.SourceFileIDs[0] != ptrs1[0].FileID && plan.SourceFileIDs[0] != ptrs2[0].FileID {
+		t.Fatalf("expected one of the partially stale l0 segments selected, got %d", plan.SourceFileIDs[0])
+	}
+	if plan.SelectedBytesStale <= 0 {
+		t.Fatalf("expected selected stale bytes with aggregate fallback, got %d", plan.SelectedBytesStale)
+	}
+}
+
 func TestValueLogRewritePlan_NoSelectionKnobs_ReturnsTotalsOnly(t *testing.T) {
 	dir := t.TempDir()
 
@@ -1212,6 +1282,15 @@ func TestValueLogRewritePlan_CachesLiveBytesForUnchangedState(t *testing.T) {
 		t.Fatalf("second ValueLogRewritePlan: %v", err)
 	}
 	assertRewritePlanStableFieldsEqual(t, plan1, plan2)
+	if plan1.LiveEstimateCacheHit {
+		t.Fatalf("first plan unexpectedly reported cache hit")
+	}
+	if !plan2.LiveEstimateCacheHit {
+		t.Fatalf("second plan did not report cache hit")
+	}
+	if plan1.LiveEstimateMS <= 0 || plan1.LiveEstimateUserMS <= 0 {
+		t.Fatalf("expected first plan to report positive live-estimate timings, got total=%f user=%f", plan1.LiveEstimateMS, plan1.LiveEstimateUserMS)
+	}
 	if got := counter.Load(); got != 1 {
 		t.Fatalf("live-byte estimate runs=%d want 1", got)
 	}
@@ -1273,6 +1352,41 @@ func TestValueLogRewritePlan_InvalidatesCachedLiveBytesAfterCommit(t *testing.T)
 	}
 	if got := counter.Load(); got != 2 {
 		t.Fatalf("live-byte estimate runs=%d want 2 after commit", got)
+	}
+}
+
+func TestValueLogRecordLengthLookup_CachesZeroHintLengths(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 246_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("z"), 4096)
+	})
+	if err := db.RefreshValueLogSet(); err != nil {
+		t.Fatalf("RefreshValueLogSet: %v", err)
+	}
+	state := db.state.Load()
+	if state == nil || state.ValueLogSet == nil {
+		t.Fatal("db state missing ValueLogSet")
+	}
+
+	lookup := newValueLogRecordLengthLookup(state.ValueLogSet)
+	ptr := ptrs[0]
+	ptr.Length = 0
+
+	if got, err := lookup.RecordLength(ptr); err != nil || got == 0 {
+		t.Fatalf("RecordLength(first) len=%d err=%v", got, err)
+	}
+	if got, err := lookup.RecordLength(ptr); err != nil || got == 0 {
+		t.Fatalf("RecordLength(second) len=%d err=%v", got, err)
+	}
+	if got, want := len(lookup.lengthBy), 1; got != want {
+		t.Fatalf("cached zero-hint lengths=%d want %d", got, want)
 	}
 }
 

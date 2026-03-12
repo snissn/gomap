@@ -10,15 +10,61 @@ import (
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
-	treedbdb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
+
+func TestBuildValueLogAuditRewriteOptions_Defaults(t *testing.T) {
+	opts := buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{})
+	if opts.MaxSourceSegments != 0 || opts.MaxSourceBytes != 0 {
+		t.Fatalf("unexpected source caps: %+v", opts)
+	}
+	if opts.MinSegmentStaleRatio != 0 || opts.MinSegmentStaleBytes != 0 || opts.MinAggregateStaleBytes != 0 {
+		t.Fatalf("unexpected stale defaults: %+v", opts)
+	}
+}
+
+func TestBuildValueLogAuditRewriteOptions_SchedulerLikeDefaults(t *testing.T) {
+	opts := buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+		schedulerLike:           true,
+		maxBytes:                128 << 20,
+		schedulerHotTargetBytes: 256 << 20,
+	})
+	if got, want := opts.MinSegmentStaleRatio, 0.20; got != want {
+		t.Fatalf("MinSegmentStaleRatio=%f want=%f", got, want)
+	}
+	if got, want := opts.MinSegmentStaleBytes, int64(1); got != want {
+		t.Fatalf("MinSegmentStaleBytes=%d want=%d", got, want)
+	}
+	if got, want := opts.MinAggregateStaleBytes, int64(32<<20); got != want {
+		t.Fatalf("MinAggregateStaleBytes=%d want=%d", got, want)
+	}
+}
+
+func TestBuildValueLogAuditRewriteOptions_SchedulerLikeHonorsExplicitOverrides(t *testing.T) {
+	opts := buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+		schedulerLike:           true,
+		maxBytes:                64 << 20,
+		minStaleRatio:           0.35,
+		minStaleBytes:           9,
+		minAggregateStaleBytes:  1234,
+		schedulerHotTargetBytes: 256 << 20,
+	})
+	if got, want := opts.MinSegmentStaleRatio, 0.35; got != want {
+		t.Fatalf("MinSegmentStaleRatio=%f want=%f", got, want)
+	}
+	if got, want := opts.MinSegmentStaleBytes, int64(9); got != want {
+		t.Fatalf("MinSegmentStaleBytes=%d want=%d", got, want)
+	}
+	if got, want := opts.MinAggregateStaleBytes, int64(1234); got != want {
+		t.Fatalf("MinAggregateStaleBytes=%d want=%d", got, want)
+	}
+}
 
 func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(dir, valueLogAuditCollectOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(root): %v", err)
 	}
@@ -34,8 +80,17 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	if report.RIDScan.Records == 0 || report.RIDScan.MaxRID == 0 {
 		t.Fatalf("expected RID scan to observe value-log records: %+v", report.RIDScan)
 	}
+	if report.RIDScanMS <= 0 {
+		t.Fatalf("expected positive rid scan timing, got=%f", report.RIDScanMS)
+	}
 	if report.RewritePlan.SegmentsTotal == 0 {
 		t.Fatalf("expected rewrite plan to observe value-log segments: %+v", report.RewritePlan)
+	}
+	if report.GCDryRunMS <= 0 {
+		t.Fatalf("expected positive gc dry-run timing, got=%f", report.GCDryRunMS)
+	}
+	if report.RewritePlanMS <= 0 {
+		t.Fatalf("expected positive rewrite-plan timing, got=%f", report.RewritePlanMS)
 	}
 	if got := report.Stats["cosmos.db.type"]; got != "treedb" {
 		t.Fatalf("unexpected stats db type: %q", got)
@@ -46,7 +101,7 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), valueLogAuditCollectOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(maindb): %v", err)
 	}
@@ -59,8 +114,14 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	if report.GCDryRun.SegmentsTotal == 0 {
 		t.Fatalf("expected GC dry-run to observe value-log segments from maindb path: %+v", report.GCDryRun)
 	}
+	if report.GCDryRunMS <= 0 {
+		t.Fatalf("expected positive gc dry-run timing, got=%f", report.GCDryRunMS)
+	}
 	if report.RewritePlan.SegmentsTotal == 0 {
 		t.Fatalf("expected rewrite plan to observe value-log segments from maindb path: %+v", report.RewritePlan)
+	}
+	if report.RewritePlanMS <= 0 {
+		t.Fatalf("expected positive rewrite-plan timing, got=%f", report.RewritePlanMS)
 	}
 	if got := report.Stats["cosmos.db.type"]; got != "treedb" {
 		t.Fatalf("unexpected stats db type from maindb path: %q", got)
@@ -96,6 +157,68 @@ func TestParseValueLogAuditFileID_AcceptsLegacyAndLaneNames(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("parseValueLogAuditFileID(%q)=%d want %d", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestCollectValueLogAudit_SkipRIDAndGCStillReportsRewritePlan(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	report, err := collectValueLogAudit(dir, valueLogAuditCollectOptions{
+		skipRID: true,
+		skipGC:  true,
+		rewrite: buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+			schedulerLike: true,
+			maxBytes:      64 << 20,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(skip rid/gc): %v", err)
+	}
+	if report.RIDScan.Records != 0 {
+		t.Fatalf("RID scan unexpectedly populated: %+v", report.RIDScan)
+	}
+	if report.GCDryRun.SegmentsTotal != 0 || report.GCDryRun.BytesTotal != 0 {
+		t.Fatalf("GC dry-run unexpectedly populated: %+v", report.GCDryRun)
+	}
+	if report.RewritePlan.SegmentsTotal == 0 {
+		t.Fatalf("expected rewrite plan to observe segments: %+v", report.RewritePlan)
+	}
+	if report.RewritePlanMS <= 0 {
+		t.Fatalf("expected positive rewrite-plan timing, got=%f", report.RewritePlanMS)
+	}
+}
+
+func TestCollectValueLogAudit_RewriteCacheProbeReportsWarmPlan(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	report, err := collectValueLogAudit(dir, valueLogAuditCollectOptions{
+		skipRID:    true,
+		skipGC:     true,
+		cacheProbe: true,
+		rewrite: buildValueLogAuditRewriteOptions(valueLogAuditRewriteFlagOptions{
+			schedulerLike: true,
+			maxBytes:      64 << 20,
+		}),
+	})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(cache probe): %v", err)
+	}
+	if report.RewritePlan.SegmentsTotal == 0 {
+		t.Fatalf("expected cold rewrite plan to observe segments: %+v", report.RewritePlan)
+	}
+	if report.RewritePlanMS <= 0 {
+		t.Fatalf("expected positive cold rewrite-plan timing, got=%f", report.RewritePlanMS)
+	}
+	if report.RewritePlanWarm.SegmentsTotal == 0 {
+		t.Fatalf("expected warm rewrite plan to observe segments: %+v", report.RewritePlanWarm)
+	}
+	if report.RewritePlanWarmMS <= 0 {
+		t.Fatalf("expected positive warm rewrite-plan timing, got=%f", report.RewritePlanWarmMS)
+	}
+	if !report.RewritePlanWarm.LiveEstimateCacheHit {
+		t.Fatalf("expected warm rewrite plan cache hit, got %+v", report.RewritePlanWarm)
 	}
 }
 

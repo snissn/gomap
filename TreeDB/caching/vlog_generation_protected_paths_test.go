@@ -201,6 +201,48 @@ func TestValueLogProtectedPaths_IncludeRetainedPaths(t *testing.T) {
 	}
 }
 
+func TestValueLogGCProtectedPaths_ExcludeRetainedPaths(t *testing.T) {
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	recorder := &rewriteRecordingBackend{DB: backend}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	retainedPath := filepath.Join(dir, "wal", "value-l0-000999.log")
+	if err := os.MkdirAll(filepath.Dir(retainedPath), 0o755); err != nil {
+		t.Fatalf("mkdir wal dir: %v", err)
+	}
+	if err := os.WriteFile(retainedPath, []byte("retained"), 0o644); err != nil {
+		t.Fatalf("write retained path: %v", err)
+	}
+	db.valueLogMu.Lock()
+	db.valueLogRetain = map[string]struct{}{retainedPath: {}}
+	db.valueLogMu.Unlock()
+
+	got := db.valueLogGCProtectedPaths()
+	for _, path := range got {
+		if path == retainedPath {
+			t.Fatalf("gc protected paths unexpectedly included retained-only segment: %s", path)
+		}
+	}
+}
+
 func TestVlogGenerationRewrite_UsesSharedRIDAllocator(t *testing.T) {
 	disableVlogGenerationLoop(t)
 	dir := t.TempDir()
