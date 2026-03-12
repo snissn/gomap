@@ -93,9 +93,6 @@ func (f *File) remapToFileSize() {
 	if data != nil && int64(len(data)) >= currentSize {
 		return
 	}
-	if data != nil && MaxDeadMappings > 0 && len(f.deadMappings) >= MaxDeadMappings {
-		return
-	}
 	if data != nil {
 		f.deadMappings = append(f.deadMappings, data)
 		f.deadMappingsCount.Add(1)
