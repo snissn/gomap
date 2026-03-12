@@ -37,11 +37,15 @@ const readViaMmapViewPrefixCacheEnabled = false
 // use-after-unmap with concurrent readers.
 var MaxDeadMappings = 64
 
+func deadMappingsCapExhausted(deadMappingsCount uint64) bool {
+	return MaxDeadMappings > 0 && deadMappingsCount >= uint64(MaxDeadMappings)
+}
+
 func (f *File) maybeScheduleRemap() {
 	if f == nil || f.closed.Load() {
 		return
 	}
-	if MaxDeadMappings > 0 && f.deadMappingsCount.Load() >= uint64(MaxDeadMappings) {
+	if deadMappingsCapExhausted(f.deadMappingsCount.Load()) {
 		// If we have already exhausted our dead-mapping budget, we will not be
 		// able to remap again without risking use-after-unmap for callers holding
 		// unsafe mmap views. Avoid spawning remap goroutines that will just bail.
@@ -74,7 +78,7 @@ func (f *File) remapToFileSize() {
 	// risking use-after-unmap for callers holding unsafe mmap views. Avoid the
 	// per-call Stat allocation when reads keep missing the current mapping.
 	data, _ := f.mmapData.Load().([]byte)
-	if data != nil && MaxDeadMappings > 0 && len(f.deadMappings) >= MaxDeadMappings {
+	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load()) {
 		return
 	}
 
