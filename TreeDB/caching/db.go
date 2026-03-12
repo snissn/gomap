@@ -14937,17 +14937,18 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 	//
 	// The cache layer may need to resolve value-log pointers for memtable hits;
 	// by using the append path, those decodes can write directly into this arena
-	// instead of allocating per key.
+	// instead of allocating per key. The limit below bounds only the initial
+	// arena capacity; subsequent appends may still grow the backing array.
 	const (
-		getManyValueGuessBytes = 128
-		getManyMaxArenaBytes   = 1 << 20
+		getManyValueGuessBytes         = 128
+		getManyMaxArenaInitialCapBytes = 1 << 20
 	)
 	arenaCap := len(keys) * getManyValueGuessBytes
 	if arenaCap < 0 {
 		arenaCap = 0
 	}
-	if arenaCap > getManyMaxArenaBytes {
-		arenaCap = getManyMaxArenaBytes
+	if arenaCap > getManyMaxArenaInitialCapBytes {
+		arenaCap = getManyMaxArenaInitialCapBytes
 	}
 	arena := make([]byte, 0, arenaCap)
 	emptyValue := []byte{}
