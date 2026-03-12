@@ -55,8 +55,6 @@ type Interface interface {
 // Batch accumulates writes and deletes before committing them.
 type Batch struct {
 	entries         []Entry
-	copyArena       []byte
-	copyArenaChunks [][]byte
 	byteSize        int
 	inlineThreshold int
 	thresholdForKey func([]byte) int
@@ -67,46 +65,7 @@ type Batch struct {
 	reader          ValueReader
 }
 
-const (
-	maxBatchPoolCap = 1 << 16
-	// Copy arenas are chunked to avoid realloc-copy behavior for large batches.
-	// Keep pooled chunks capped to prevent inflated RSS from underfilled tails.
-	batchCopyArenaMinChunk    = 4 << 10
-	batchCopyArenaUnsizedInit = 8 << 10
-	batchCopyArenaMaxRetain   = 2 << 20
-)
-
-var copyArenaPool = sync.Pool{
-	New: func() any { return make([]byte, 0, batchCopyArenaUnsizedInit) },
-}
-
-func getCopyArena(capacity int) []byte {
-	if capacity <= 0 {
-		capacity = batchCopyArenaUnsizedInit
-	}
-	if capacity < batchCopyArenaMinChunk {
-		capacity = batchCopyArenaMinChunk
-	}
-	if capacity > batchCopyArenaMaxRetain {
-		// Large one-off arenas are not pooled.
-		return make([]byte, 0, capacity)
-	}
-	buf, _ := copyArenaPool.Get().([]byte)
-	if cap(buf) < capacity {
-		return make([]byte, 0, capacity)
-	}
-	return buf[:0]
-}
-
-func putCopyArena(buf []byte) {
-	if buf == nil {
-		return
-	}
-	if cap(buf) > batchCopyArenaMaxRetain {
-		return
-	}
-	copyArenaPool.Put(buf[:0])
-}
+const maxBatchPoolCap = 1 << 16
 
 var batchPool = sync.Pool{
 	New: func() any {
@@ -163,41 +122,6 @@ func (b *Batch) resetLocked() {
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
-	if len(b.copyArenaChunks) > 0 {
-		// Keep at most one chunk for reuse, but never retain a huge underfilled tail
-		// chunk across resets (it can pin substantial heap and inflate RSS).
-		keepIdx := -1
-		for i := len(b.copyArenaChunks) - 1; i >= 0; i-- {
-			if cap(b.copyArenaChunks[i]) <= batchCopyArenaMaxRetain {
-				keepIdx = i
-				break
-			}
-		}
-		if keepIdx < 0 {
-			for i := range b.copyArenaChunks {
-				putCopyArena(b.copyArenaChunks[i])
-			}
-			b.copyArenaChunks = nil
-			b.copyArena = nil
-		} else {
-			keep := b.copyArenaChunks[keepIdx]
-			for i := range b.copyArenaChunks {
-				if i == keepIdx {
-					continue
-				}
-				putCopyArena(b.copyArenaChunks[i])
-			}
-			b.copyArenaChunks = b.copyArenaChunks[:1]
-			b.copyArenaChunks[0] = keep
-			b.copyArena = keep[:0]
-		}
-	} else if b.copyArena != nil {
-		if cap(b.copyArena) > batchCopyArenaMaxRetain {
-			b.copyArena = nil
-		} else {
-			b.copyArena = b.copyArena[:0]
-		}
-	}
 	if len(b.touchedValueLog) > 0 {
 		clear(b.touchedValueLog)
 	}
@@ -215,13 +139,6 @@ func (b *Batch) resetForPool() {
 			b.entries = b.entries[:0]
 		}
 	}
-	if len(b.copyArenaChunks) > 0 {
-		for i := range b.copyArenaChunks {
-			putCopyArena(b.copyArenaChunks[i])
-		}
-	}
-	b.copyArena = nil
-	b.copyArenaChunks = nil
 	b.byteSize = 0
 	if len(b.touchedValueLog) > 1024 {
 		b.touchedValueLog = nil
@@ -273,40 +190,6 @@ func (b *Batch) noteKeyOrder(key []byte) {
 		return
 	}
 	b.lastKey = key
-}
-
-func (b *Batch) arenaAlloc(n int) []byte {
-	if n <= 0 {
-		return nil
-	}
-	if cap(b.copyArena)-len(b.copyArena) < n {
-		chunkCap := cap(b.copyArena) * 2
-		if chunkCap < batchCopyArenaMinChunk {
-			chunkCap = batchCopyArenaMinChunk
-		}
-		if cap(b.copyArena) == 0 {
-			chunkCap = batchCopyArenaUnsizedInit
-		}
-		if chunkCap < n {
-			chunkCap = n
-		}
-		// Avoid retaining huge underfilled tail chunks once we reach the pooling limit.
-		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
-			chunkCap = batchCopyArenaMaxRetain
-		}
-		chunk := getCopyArena(chunkCap)
-		b.copyArena = chunk[:0]
-		b.copyArenaChunks = append(b.copyArenaChunks, b.copyArena)
-	}
-	start := len(b.copyArena)
-	b.copyArena = b.copyArena[:start+n]
-	return b.copyArena[start : start+n : start+n]
-}
-
-func (b *Batch) arenaCopy(src []byte) []byte {
-	dst := b.arenaAlloc(len(src))
-	copy(dst, src)
-	return dst
 }
 
 // Reserve grows internal buffers to accommodate roughly n entries without
@@ -365,9 +248,9 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrKeyEmpty
 	}
 
-	// Copy key/value to ensure immutability, but avoid per-entry heap churn by
-	// allocating from a batch-local arena.
-	k := b.arenaCopy(key)
+	// Copy key to ensure immutability.
+	k := make([]byte, len(key))
+	copy(k, key)
 
 	entry := Entry{
 		Type: OpPut,
@@ -379,7 +262,9 @@ func (b *Batch) Set(key, value []byte) error {
 		return ErrValueTooLarge
 	}
 	// Store inline
-	entry.Value = b.arenaCopy(value)
+	valCopy := make([]byte, len(value))
+	copy(valCopy, value)
+	entry.Value = valCopy
 
 	b.entries = append(b.entries, entry)
 	// Approximate size tracking (optional for now)
@@ -420,7 +305,8 @@ func (b *Batch) SetPointer(key []byte, ptr page.ValuePtr) error {
 		return fmt.Errorf("invalid value-log pointer: file %d", ptr.FileID)
 	}
 
-	k := b.arenaCopy(key)
+	k := make([]byte, len(key))
+	copy(k, key)
 
 	entry := Entry{
 		Type:     OpPut,
@@ -471,7 +357,8 @@ func (b *Batch) Delete(key []byte) error {
 		return ErrKeyEmpty
 	}
 
-	k := b.arenaCopy(key)
+	k := make([]byte, len(key))
+	copy(k, key)
 
 	b.entries = append(b.entries, Entry{
 		Type: OpDelete,

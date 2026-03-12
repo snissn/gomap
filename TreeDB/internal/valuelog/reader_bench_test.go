@@ -87,4 +87,3 @@ func BenchmarkMmapReadUnsafe_CompressedGrouped(b *testing.B) {
 		}
 	}
 }
-
