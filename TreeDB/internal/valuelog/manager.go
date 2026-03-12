@@ -414,9 +414,9 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 }
 
-// ReadUnsafeTo is like ReadUnsafe, but it decodes compressed grouped frames
-// into dst (when provided) and returns a view into that buffer. Callers must
-// keep dst alive as long as they use the returned slice when usedDst is true.
+// ReadUnsafeTo is like ReadUnsafe, but it may return a slice backed by dst
+// when dst has enough capacity for the decoded value. Callers must keep dst
+// alive and avoid reusing it while they use the returned slice when usedDst is true.
 func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, bool, error) {
 	if f == nil || f.File == nil {
 		return nil, false, errors.New("valuelog: nil file")
@@ -426,7 +426,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
-	if !(MaxDeadMappings > 0 && f.deadMappingsCount.Load() >= uint64(MaxDeadMappings)) {
+	if !deadMappingsCapExhausted(f.deadMappingsCount.Load()) {
 		f.remapToFileSize()
 		if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
 			return val, usedDst, err

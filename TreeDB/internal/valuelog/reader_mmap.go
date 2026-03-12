@@ -37,11 +37,15 @@ const readViaMmapViewPrefixCacheEnabled = false
 // use-after-unmap with concurrent readers.
 var MaxDeadMappings = 64
 
+func deadMappingsCapExhausted(deadMappingsCount uint64) bool {
+	return MaxDeadMappings > 0 && deadMappingsCount >= uint64(MaxDeadMappings)
+}
+
 func (f *File) maybeScheduleRemap() {
 	if f == nil || f.closed.Load() {
 		return
 	}
-	if MaxDeadMappings > 0 && f.deadMappingsCount.Load() >= uint64(MaxDeadMappings) {
+	if deadMappingsCapExhausted(f.deadMappingsCount.Load()) {
 		// If we have already exhausted our dead-mapping budget, we will not be
 		// able to remap again without risking use-after-unmap for callers holding
 		// unsafe mmap views. Avoid spawning remap goroutines that will just bail.
@@ -74,7 +78,7 @@ func (f *File) remapToFileSize() {
 	// risking use-after-unmap for callers holding unsafe mmap views. Avoid the
 	// per-call Stat allocation when reads keep missing the current mapping.
 	data, _ := f.mmapData.Load().([]byte)
-	if data != nil && MaxDeadMappings > 0 && len(f.deadMappings) >= MaxDeadMappings {
+	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load()) {
 		return
 	}
 
@@ -91,9 +95,6 @@ func (f *File) remapToFileSize() {
 	}
 
 	if data != nil && int64(len(data)) >= currentSize {
-		return
-	}
-	if data != nil && MaxDeadMappings > 0 && len(f.deadMappings) >= MaxDeadMappings {
 		return
 	}
 	if data != nil {
@@ -322,16 +323,43 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			return out, nil, true
 		}
 
-		raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, nil)
+		cacheableRaw := false
+		f.cacheMu.Lock()
+		if f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
+			cacheableRaw = true
+		}
+		f.cacheMu.Unlock()
+
+		retainRaw := cacheableRaw || readViaMmapViewPrefixCacheEnabled
+		raw := f.takeDecodeScratch(int(rawLen))
+		pooledRaw := true
+		if retainRaw {
+			// Cached grouped payload bytes must not be backed by pooled decode
+			// scratch, since readViaMmapView may hand out views into cached raw.
+			raw = make([]byte, 0, int(rawLen))
+			pooledRaw = false
+		}
+
+		raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
 		if err != nil {
+			if pooledRaw {
+				f.releaseDecodeScratch(raw)
+			}
 			return nil, err, true
 		}
 		if uint32(len(raw)) != rawLen {
+			if pooledRaw {
+				f.releaseDecodeScratch(raw)
+			}
 			return nil, ErrCorrupt, true
 		}
 
-		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
+		groupedStored := false
+		if cacheableRaw {
+			groupedStored = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
+		}
 
+		prefixStored := false
 		if readViaMmapViewPrefixCacheEnabled {
 			// Publish cache for subsequent reads from this grouped record.
 			f.cacheMu.Lock()
@@ -339,11 +367,16 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			f.cacheFlags = fFlags
 			f.cacheLen = prefixLen
 			f.cacheOffs = offsets
-			// readViaMmapView can return a view into cached raw bytes, so this cache
-			// must never own pooled decode scratch memory.
-			f.setCacheRawLocked(raw, false)
+			if groupedStored || !pooledRaw {
+				f.setCacheRawLocked(raw, false)
+			} else {
+				owned := make([]byte, len(raw))
+				copy(owned, raw)
+				f.setCacheRawLocked(owned, false)
+			}
 			f.cacheStart.Store(start)
 			f.cacheMu.Unlock()
+			prefixStored = true
 		}
 
 		val := raw[valStart:valEnd]
@@ -352,12 +385,21 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
 			}, f.templateDecodeOpts)
 			if err != nil {
+				if pooledRaw && !groupedStored && !prefixStored {
+					f.releaseDecodeScratch(raw)
+				}
 				return nil, err, true
+			}
+			if pooledRaw && !groupedStored && !prefixStored {
+				f.releaseDecodeScratch(raw)
 			}
 			return decoded, nil, true
 		}
 		out := make([]byte, int(valEnd-valStart))
 		copy(out, val)
+		if pooledRaw && !groupedStored && !prefixStored {
+			f.releaseDecodeScratch(raw)
+		}
 		return out, nil, true
 	}
 
