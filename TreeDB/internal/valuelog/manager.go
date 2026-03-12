@@ -31,6 +31,7 @@ type groupedFrameCacheEntry struct {
 	k         int
 	offsets   [MaxFrameK + 1]uint32
 	raw       []byte
+	rawPooled bool
 	used      uint64
 }
 
@@ -147,7 +148,11 @@ func (f *File) setCacheRawLocked(raw []byte, pooled bool) {
 }
 
 func (f *File) stashDecodeScratchLocked(buf []byte) {
-	if cap(buf) == 0 || cap(buf) > maxDecodeScratchKeep {
+	if cap(buf) == 0 {
+		return
+	}
+	if cap(buf) > maxDecodeScratchKeep {
+		putDecodeScratch(buf)
 		return
 	}
 	buf = buf[:0]
@@ -182,7 +187,11 @@ func (f *File) takeDecodeScratch(minCap int) []byte {
 }
 
 func (f *File) releaseDecodeScratch(buf []byte) {
-	if cap(buf) == 0 || cap(buf) > maxDecodeScratchKeep {
+	if cap(buf) == 0 {
+		return
+	}
+	if cap(buf) > maxDecodeScratchKeep {
+		putDecodeScratch(buf)
 		return
 	}
 	buf = buf[:0]
@@ -205,8 +214,12 @@ func (f *File) releaseDecodeScratch(buf []byte) {
 
 func (f *File) clearGroupedFrameCacheLocked() {
 	for i := range f.groupedFrameCache {
+		if f.groupedFrameCache[i].rawPooled {
+			f.stashDecodeScratchLocked(f.groupedFrameCache[i].raw)
+		}
 		f.groupedFrameCache[i].raw = nil
 		f.groupedFrameCache[i].k = 0
+		f.groupedFrameCache[i].rawPooled = false
 	}
 	f.groupedFrameCache = nil
 	f.groupedFrameCacheClock = 0
@@ -257,17 +270,17 @@ func (f *File) groupedFrameCacheLookup(start int64, verifyCRC bool, subIndex int
 	return nil, 0, 0, 0, false
 }
 
-func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte) {
+func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offsets [MaxFrameK + 1]uint32, raw []byte, pooled bool) bool {
 	if k <= 0 || len(raw) == 0 {
-		return
+		return false
 	}
 	f.cacheMu.Lock()
 	defer f.cacheMu.Unlock()
 	if f.groupedFrameCacheEntries <= 0 {
-		return
+		return false
 	}
 	if f.groupedFrameCacheMaxRaw > 0 && len(raw) > f.groupedFrameCacheMaxRaw {
-		return
+		return false
 	}
 
 	f.groupedFrameCacheClock++
@@ -276,11 +289,15 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 	for i := range f.groupedFrameCache {
 		e := &f.groupedFrameCache[i]
 		if e.k > 0 && e.start == start && e.verifyCRC == verifyCRC {
+			if e.rawPooled {
+				f.stashDecodeScratchLocked(e.raw)
+			}
 			e.k = k
 			e.offsets = offsets
 			e.raw = raw
+			e.rawPooled = pooled
 			e.used = used
-			return
+			return true
 		}
 	}
 
@@ -299,14 +316,19 @@ func (f *File) groupedFrameCacheStore(start int64, verifyCRC bool, k int, offset
 		}
 	}
 
+	if idx >= 0 && idx < len(f.groupedFrameCache) && f.groupedFrameCache[idx].rawPooled {
+		f.stashDecodeScratchLocked(f.groupedFrameCache[idx].raw)
+	}
 	f.groupedFrameCache[idx] = groupedFrameCacheEntry{
 		start:     start,
 		verifyCRC: verifyCRC,
 		k:         k,
 		offsets:   offsets,
 		raw:       raw,
+		rawPooled: pooled,
 		used:      used,
 	}
+	return true
 }
 
 func (f *File) groupedFrameCacheStats() (hits, misses uint64, entries, capacity int) {

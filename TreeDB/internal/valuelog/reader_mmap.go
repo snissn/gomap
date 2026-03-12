@@ -211,7 +211,15 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			if err != nil {
 				return nil, err, true
 			}
-			return val, nil, true
+			// ReadUnsafe must not return a view into cached decoded bytes for
+			// compressed grouped frames, otherwise small callers retain the full
+			// decoded frame allocation.
+			if val == nil {
+				return nil, nil, true
+			}
+			out := make([]byte, len(val))
+			copy(out, val)
+			return out, nil, true
 		}
 	} else if readViaMmapViewPrefixCacheEnabled && f.cacheStart.Load() == start {
 		f.cacheMu.Lock()
@@ -282,35 +290,58 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			Reserved: frameHeader[3],
 			DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
 		}
-		raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, nil)
+
+		// Special-case: a single-entry grouped frame where the selected value
+		// spans the full decoded payload. Decode directly into the output slice
+		// to avoid an intermediate decode scratch + copy.
+		if f.templateLookup == nil && k == 1 && valStart == 0 && valEnd == rawLen {
+			out := make([]byte, 0, int(rawLen))
+			out, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, out)
+			if err != nil {
+				return nil, err, true
+			}
+			if uint32(len(out)) != rawLen {
+				return nil, ErrCorrupt, true
+			}
+			return out, nil, true
+		}
+
+		// For compressed grouped frames, ReadUnsafe must avoid retaining the full
+		// decoded frame allocation (rawLen) when callers only need one entry.
+		// Decode into pooled scratch and then copy just the requested range.
+		raw := f.takeDecodeScratch(int(rawLen))
+		raw, err := decodeFramePayloadTo(frame, payload[prefixLen:], f.dictLookup, rawLen, raw)
 		if err != nil {
+			f.releaseDecodeScratch(raw)
 			return nil, err, true
 		}
 		if uint32(len(raw)) != rawLen {
+			f.releaseDecodeScratch(raw)
 			return nil, ErrCorrupt, true
 		}
 
-		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw)
-
-		if readViaMmapViewPrefixCacheEnabled {
-			// Publish cache for subsequent reads from this grouped record.
-			f.cacheMu.Lock()
-			f.cacheK = k
-			f.cacheFlags = fFlags
-			f.cacheLen = prefixLen
-			f.cacheOffs = offsets
-			// readViaMmapView can return a view into cached raw bytes, so this cache
-			// must never own pooled decode scratch memory.
-			f.setCacheRawLocked(raw, false)
-			f.cacheStart.Store(start)
-			f.cacheMu.Unlock()
+		val := raw[valStart:valEnd]
+		if f.templateLookup != nil && templ.IsEncodedPayload(val) {
+			decoded, err := templ.DecodePayloadAppend(nil, val, func(id uint64) (templ.TemplateDef, error) {
+				return resolveTemplateDef(id, f.templateLookup, f.templateDefCache)
+			}, f.templateDecodeOpts)
+			if err != nil {
+				f.releaseDecodeScratch(raw)
+				return nil, err, true
+			}
+			// Cache the full decoded frame bytes in pooled scratch to avoid
+			// repeated decode work across adjacent reads.
+			if !f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true) {
+				f.releaseDecodeScratch(raw)
+			}
+			return decoded, nil, true
 		}
-
-		val, err := decodeTemplatePayload(raw[valStart:valEnd])
-		if err != nil {
-			return nil, err, true
+		out := make([]byte, int(valEnd-valStart))
+		copy(out, val)
+		if !f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true) {
+			f.releaseDecodeScratch(raw)
 		}
-		return val, nil, true
+		return out, nil, true
 	}
 
 	if readViaMmapViewPrefixCacheEnabled {
@@ -446,11 +477,28 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 			if uint32(len(cachedRaw)) != rawLen || valEnd < valStart || valEnd > rawLen {
 				return nil, false, ErrCorrupt, true
 			}
-			val, _, err := decodeTemplatePayload(cachedRaw[valStart:valEnd])
+			val, decoded, err := decodeTemplatePayload(cachedRaw[valStart:valEnd])
 			if err != nil {
 				return nil, false, err, true
 			}
-			return val, false, nil, true
+			// Template decoding allocates new bytes; the returned slice is not
+			// backed by cachedRaw.
+			if decoded {
+				return val, false, nil, true
+			}
+			// ReadUnsafeTo must never return a view into cached decoded bytes: the
+			// cache may evict and return pooled buffers to scratch reuse.
+			if val == nil {
+				return nil, false, nil, true
+			}
+			if dst == nil || cap(dst) < len(val) {
+				out := make([]byte, len(val))
+				copy(out, val)
+				return out, false, nil, true
+			}
+			out := dst[:len(val)]
+			copy(out, val)
+			return out, true, nil, true
 		}
 	}
 
@@ -784,7 +832,7 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 		return nil, ErrCorrupt, true
 	}
 	if cacheableRaw {
-		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw)
+		f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
 	}
 
 	oldLen := len(dst)
