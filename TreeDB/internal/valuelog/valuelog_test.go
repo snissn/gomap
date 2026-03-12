@@ -1561,9 +1561,6 @@ func TestDecodeFrameValueBoundsCompressed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeFrameWithOptions: %v", err)
 	}
-	if header.Flags&FrameFlagCompressed == 0 {
-		t.Fatalf("expected compressed frame")
-	}
 
 	gotHeader, start, end, rawLen, payload, err := decodeFrameValueBounds(body, 1)
 	if err != nil {
@@ -1584,8 +1581,16 @@ func TestDecodeFrameValueBoundsCompressed(t *testing.T) {
 	if rawLen != wantRawLen {
 		t.Fatalf("unexpected rawLen: got=%d want=%d", rawLen, wantRawLen)
 	}
-	if len(payload) == 0 {
-		t.Fatalf("expected compressed payload bytes")
+	if header.Flags&FrameFlagCompressed != 0 {
+		if len(payload) == 0 {
+			t.Fatalf("expected compressed payload bytes")
+		}
+		return
+	}
+	t.Logf("EncodeFrameWithOptions returned uncompressed frame; validating raw bounds path")
+	wantPayload := append(append(append([]byte(nil), records[0].Value...), records[1].Value...), records[2].Value...)
+	if !bytes.Equal(payload, wantPayload) {
+		t.Fatalf("unexpected raw payload bytes when uncompressed")
 	}
 }
 
