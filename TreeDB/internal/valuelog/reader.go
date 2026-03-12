@@ -17,6 +17,8 @@ import (
 
 const maxDecodeScratchKeep = 256 << 10 // 256KiB
 
+const discardScratchSize = 32 << 10 // 32KiB
+
 var decodeScratchPool = sync.Pool{
 	New: func() any { return make([]byte, 0, 8<<10) }, // 8KiB default
 }
@@ -77,6 +79,11 @@ type Reader struct {
 	templateDefCache   *templateDefCache
 	pending            []frameEntry
 	pendingIndex       int
+	headerScratch      [HeaderSize]byte
+	frameHeaderScratch [FrameHeaderSize]byte
+	ridScratch         [8]byte
+	offScratch         [4]byte
+	discardScratch     []byte
 }
 
 type frameEntry struct {
@@ -258,8 +265,8 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 		return entry.rid, entry.ptr, nil
 	}
 
-	var header [HeaderSize]byte
-	if _, err := io.ReadFull(r.r, header[:]); err != nil {
+	header := r.headerScratch[:]
+	if _, err := io.ReadFull(r.r, header); err != nil {
 		return 0, page.ValuePtr{}, err
 	}
 
@@ -279,51 +286,27 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 	// If checksums are enabled we have to read the bytes anyway; compute the CRC
 	// incrementally while discarding to avoid allocating the full payload.
 	var sum uint32
-	var sumPtr *uint32
 	if r.verifies {
 		sum = crc.Update(0, header[4:])
-		sumPtr = &sum
-	}
-	discardN := func(n int) error {
-		if n <= 0 {
-			return nil
-		}
-		if sumPtr == nil {
-			remain := n
-			for remain > 0 {
-				discarded, err := r.r.Discard(remain)
-				remain -= discarded
-				if err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		var buf [32 << 10]byte
-		remain := n
-		for remain > 0 {
-			chunk := buf[:]
-			if remain < len(chunk) {
-				chunk = buf[:remain]
-			}
-			if _, err := io.ReadFull(r.r, chunk); err != nil {
-				return err
-			}
-			*sumPtr = crc.Update(*sumPtr, chunk)
-			remain -= len(chunk)
-		}
-		return nil
 	}
 
 	start := r.pos
 	recordLen := uint32(headerWithoutCRC) + valueLenU32
 
 	if flags&recordFlagGrouped == 0 {
-		if err := discardN(valueLen); err != nil {
-			return 0, page.ValuePtr{}, err
-		}
-		if r.verifies && sum != crcVal {
-			return 0, page.ValuePtr{}, ErrCorrupt
+		if r.verifies {
+			updated, err := r.discardNUpdateSum(valueLen, sum)
+			if err != nil {
+				return 0, page.ValuePtr{}, err
+			}
+			sum = updated
+			if sum != crcVal {
+				return 0, page.ValuePtr{}, ErrCorrupt
+			}
+		} else {
+			if err := r.discardN(valueLen); err != nil {
+				return 0, page.ValuePtr{}, err
+			}
 		}
 		r.pos += int64(HeaderSize + valueLenU32)
 		if rid == 0 {
@@ -339,12 +322,12 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 
 	// Grouped record: read/validate prefix (frame header + rids + offsets) and
 	// then discard the remaining payload bytes.
-	var fh [FrameHeaderSize]byte
-	if _, err := io.ReadFull(r.r, fh[:]); err != nil {
+	fh := r.frameHeaderScratch[:]
+	if _, err := io.ReadFull(r.r, fh); err != nil {
 		return 0, page.ValuePtr{}, err
 	}
-	if sumPtr != nil {
-		*sumPtr = crc.Update(*sumPtr, fh[:])
+	if r.verifies {
+		sum = crc.Update(sum, fh)
 	}
 	if fh[0] != FrameVersion {
 		return 0, page.ValuePtr{}, ErrCorrupt
@@ -375,14 +358,14 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 
 	var rids [MaxFrameK]uint64
 	for i := 0; i < k; i++ {
-		var ridBytes [8]byte
-		if _, err := io.ReadFull(r.r, ridBytes[:]); err != nil {
+		ridBytes := r.ridScratch[:]
+		if _, err := io.ReadFull(r.r, ridBytes); err != nil {
 			return 0, page.ValuePtr{}, err
 		}
-		if sumPtr != nil {
-			*sumPtr = crc.Update(*sumPtr, ridBytes[:])
+		if r.verifies {
+			sum = crc.Update(sum, ridBytes)
 		}
-		frameRID := binary.LittleEndian.Uint64(ridBytes[:])
+		frameRID := binary.LittleEndian.Uint64(ridBytes)
 		if frameRID == 0 {
 			return 0, page.ValuePtr{}, ErrCorrupt
 		}
@@ -392,14 +375,14 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 	prev := uint32(0)
 	rawLen := uint32(0)
 	for i := 0; i < k+1; i++ {
-		var offBytes [4]byte
-		if _, err := io.ReadFull(r.r, offBytes[:]); err != nil {
+		offBytes := r.offScratch[:]
+		if _, err := io.ReadFull(r.r, offBytes); err != nil {
 			return 0, page.ValuePtr{}, err
 		}
-		if sumPtr != nil {
-			*sumPtr = crc.Update(*sumPtr, offBytes[:])
+		if r.verifies {
+			sum = crc.Update(sum, offBytes)
 		}
-		cur := binary.LittleEndian.Uint32(offBytes[:])
+		cur := binary.LittleEndian.Uint32(offBytes)
 		if cur < prev {
 			return 0, page.ValuePtr{}, ErrCorrupt
 		}
@@ -418,11 +401,19 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 	if valueLen < prefixLen {
 		return 0, page.ValuePtr{}, ErrCorrupt
 	}
-	if err := discardN(valueLen - prefixLen); err != nil {
-		return 0, page.ValuePtr{}, err
-	}
-	if r.verifies && sum != crcVal {
-		return 0, page.ValuePtr{}, ErrCorrupt
+	if r.verifies {
+		updated, err := r.discardNUpdateSum(valueLen-prefixLen, sum)
+		if err != nil {
+			return 0, page.ValuePtr{}, err
+		}
+		sum = updated
+		if sum != crcVal {
+			return 0, page.ValuePtr{}, ErrCorrupt
+		}
+	} else {
+		if err := r.discardN(valueLen - prefixLen); err != nil {
+			return 0, page.ValuePtr{}, err
+		}
 	}
 	r.pos += int64(HeaderSize + valueLenU32)
 
@@ -445,6 +436,44 @@ func (r *Reader) ReadNextMeta() (uint64, page.ValuePtr, error) {
 	entry := r.pending[0]
 	r.pendingIndex = 1
 	return entry.rid, entry.ptr, nil
+}
+
+func (r *Reader) discardN(n int) error {
+	if n <= 0 {
+		return nil
+	}
+	remain := n
+	for remain > 0 {
+		discarded, err := r.r.Discard(remain)
+		remain -= discarded
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Reader) discardNUpdateSum(n int, sum uint32) (uint32, error) {
+	if n <= 0 {
+		return sum, nil
+	}
+	if cap(r.discardScratch) < discardScratchSize {
+		r.discardScratch = make([]byte, discardScratchSize)
+	}
+	buf := r.discardScratch[:discardScratchSize]
+	remain := n
+	for remain > 0 {
+		chunk := buf
+		if remain < len(chunk) {
+			chunk = buf[:remain]
+		}
+		if _, err := io.ReadFull(r.r, chunk); err != nil {
+			return 0, err
+		}
+		sum = crc.Update(sum, chunk)
+		remain -= len(chunk)
+	}
+	return sum, nil
 }
 
 func (r *Reader) Close() error {
