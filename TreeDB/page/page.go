@@ -83,7 +83,7 @@ func CalculateChecksum(data []byte) uint32 {
 	if len(data) < PageHeaderSize {
 		return 0
 	}
-	// CRC over 0..8, zeroed checksum field, then the rest.
+	// CRC over bytes 0-7, then the zeroed checksum field (bytes 8-11), then the rest.
 	sum := crc.Checksum(data[0:8])
 	sum = crc.Update(sum, checksumZeroField[:])
 	sum = crc.Update(sum, data[12:])
