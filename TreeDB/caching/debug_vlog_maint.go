@@ -3,8 +3,10 @@ package caching
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"sync/atomic"
+	"time"
 )
 
 var (
@@ -38,5 +40,19 @@ func (db *DB) debugVlogMaintf(format string, args ...any) {
 	if debugVlogMaintBudget.Add(-1) < 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "treedb debug vlog_maint "+format+"\n", args...)
+	walDir := ""
+	if db != nil {
+		walDir = db.dir
+	}
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	// Prefix with timestamp and a DB identity tag since multiple TreeDB instances
+	// can interleave in a single process log.
+	if walDir != "" {
+		a := make([]any, 0, 3+len(args))
+		a = append(a, ts, filepath.Base(filepath.Dir(walDir)), walDir)
+		a = append(a, args...)
+		fmt.Fprintf(os.Stderr, "ts=%s treedb debug vlog_maint db=%s wal_dir=%s "+format+"\n", a...)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "ts=%s treedb debug vlog_maint "+format+"\n", append([]any{ts}, args...)...)
 }
