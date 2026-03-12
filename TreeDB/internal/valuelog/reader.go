@@ -15,13 +15,22 @@ import (
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
 
-const maxDecodeScratchKeep = 256 << 10 // 256KiB
+const (
+	maxDecodeScratchKeep      = 256 << 10 // 256KiB (small scratch, sync.Pool + per-file stash)
+	maxLargeDecodeScratchKeep = 4 << 20   // 4MiB (bounded pool to cap RSS overhead)
+)
+
+const largeDecodeScratchPoolEntries = 8
 
 const discardScratchSize = 32 << 10 // 32KiB
 
 var decodeScratchPool = sync.Pool{
 	New: func() any { return make([]byte, 0, 8<<10) }, // 8KiB default
 }
+
+// largeDecodeScratchPool is a bounded pool for larger decode scratch buffers.
+// We avoid sync.Pool here to keep a hard cap on retained multi-MiB slices.
+var largeDecodeScratchPool = make(chan []byte, largeDecodeScratchPoolEntries)
 
 var noDictDecoderPool sync.Pool
 
@@ -48,6 +57,22 @@ func getDecodeScratch(minCap int) []byte {
 	if minCap <= 0 {
 		return nil
 	}
+	if minCap > maxDecodeScratchKeep {
+		// Bounded large-slice pool to reduce alloc churn on large grouped frames.
+		// If empty, fall back to allocating; we intentionally don't block.
+		if minCap <= maxLargeDecodeScratchKeep {
+			select {
+			case buf := <-largeDecodeScratchPool:
+				if cap(buf) < minCap {
+					buf = make([]byte, 0, minCap)
+				}
+				return buf[:0]
+			default:
+				return make([]byte, 0, minCap)
+			}
+		}
+		return make([]byte, 0, minCap)
+	}
 	buf, _ := decodeScratchPool.Get().([]byte)
 	if cap(buf) < minCap {
 		buf = make([]byte, 0, minCap)
@@ -59,10 +84,22 @@ func putDecodeScratch(buf []byte) {
 	if buf == nil {
 		return
 	}
-	if cap(buf) > maxDecodeScratchKeep {
+	c := cap(buf)
+	if c == 0 {
 		return
 	}
-	decodeScratchPool.Put(buf[:0])
+	buf = buf[:0]
+	if c <= maxDecodeScratchKeep {
+		decodeScratchPool.Put(buf)
+		return
+	}
+	if c <= maxLargeDecodeScratchKeep {
+		select {
+		case largeDecodeScratchPool <- buf:
+		default:
+		}
+		return
+	}
 }
 
 type Reader struct {
