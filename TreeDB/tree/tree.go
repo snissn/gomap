@@ -14,25 +14,31 @@ import (
 
 var ErrKeyNotFound = errors.New("key not found")
 
+type leafRefPageScratch struct {
+	buf []byte
+}
+
 var leafRefPageScratchPool = sync.Pool{
 	New: func() any {
-		return make([]byte, 0, page.PageSize)
+		return &leafRefPageScratch{buf: make([]byte, 0, page.PageSize)}
 	},
 }
 
-func getLeafRefPageScratch() []byte {
-	buf, _ := leafRefPageScratchPool.Get().([]byte)
-	if cap(buf) != page.PageSize {
-		return make([]byte, 0, page.PageSize)
+func getLeafRefPageScratch() *leafRefPageScratch {
+	scratch, _ := leafRefPageScratchPool.Get().(*leafRefPageScratch)
+	if scratch == nil || cap(scratch.buf) != page.PageSize {
+		return &leafRefPageScratch{buf: make([]byte, 0, page.PageSize)}
 	}
-	return buf[:0]
+	scratch.buf = scratch.buf[:0]
+	return scratch
 }
 
-func putLeafRefPageScratch(buf []byte) {
-	if cap(buf) != page.PageSize {
+func putLeafRefPageScratch(scratch *leafRefPageScratch) {
+	if scratch == nil || cap(scratch.buf) != page.PageSize {
 		return
 	}
-	leafRefPageScratchPool.Put(buf[:0])
+	scratch.buf = scratch.buf[:0]
+	leafRefPageScratchPool.Put(scratch)
 }
 
 func compareTreeKey(a, b []byte) int {
@@ -315,7 +321,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 	for depth := 0; depth < 50; depth++ {
 		var (
 			n                node.Node
-			leafScratch      []byte
+			leafScratch      *leafRefPageScratch
 			leafScratchOwned bool
 			loadedLeafRef    bool
 		)
@@ -329,7 +335,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 				)
 				if t.slabToReader != nil {
 					var usedDst bool
-					data, usedDst, err = t.slabToReader.ReadUnsafeTo(ptr, leafScratch)
+					data, usedDst, err = t.slabToReader.ReadUnsafeTo(ptr, leafScratch.buf)
 					if err != nil {
 						putLeafRefPageScratch(leafScratch)
 						return nil, page.ValuePtr{}, 0, false, err
@@ -341,7 +347,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						leafScratch = nil
 					}
 				} else if t.slabAppender != nil {
-					data, err = t.slabAppender.ReadUnsafeAppend(ptr, leafScratch[:0])
+					data, err = t.slabAppender.ReadUnsafeAppend(ptr, leafScratch.buf[:0])
 					if err != nil {
 						putLeafRefPageScratch(leafScratch)
 						return nil, page.ValuePtr{}, 0, false, err

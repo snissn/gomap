@@ -26,6 +26,8 @@ import (
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
 
+var errVacuumUnsupported = db.ErrVacuumUnsupported
+
 const (
 	defaultChunkSize     = 256 * 1024
 	defaultDictChunkSize = 64 * 1024
@@ -980,7 +982,13 @@ func (db *DB) closeMaintenance() error {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		if e := db.VacuumIndexOnline(ctx); e != nil {
-			err = errors.Join(err, e)
+			if errors.Is(e, errVacuumUnsupported) {
+				if logEnabled {
+					log.Printf("treedb: close vacuum index online skipped: %v", e)
+				}
+			} else {
+				err = errors.Join(err, e)
+			}
 		}
 		cancel()
 		if logEnabled {
