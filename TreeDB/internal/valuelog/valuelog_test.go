@@ -1617,6 +1617,15 @@ func TestDecodeFrameValueBoundsRejectsCorruptInputs(t *testing.T) {
 	if _, _, _, _, _, err := decodeFrameValueBounds(badOffsets, 0); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("expected ErrCorrupt for non-monotonic offsets, got %v", err)
 	}
+
+	truncated := append([]byte(nil), body...)
+	if len(truncated) == 0 {
+		t.Fatal("encoded frame body is unexpectedly empty")
+	}
+	truncated = truncated[:len(truncated)-1]
+	if _, _, _, _, _, err := decodeFrameValueBounds(truncated, 0); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for truncated payload, got %v", err)
+	}
 }
 
 func TestValueLogBlockCodecRoundTrip(t *testing.T) {

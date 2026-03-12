@@ -285,5 +285,10 @@ func decodeFrameValueBounds(body []byte, subIndex int) (FrameHeader, uint32, uin
 	if len(payload) == 0 && rawLen != 0 {
 		return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
 	}
+	if header.Flags&FrameFlagCompressed == 0 {
+		if uint32(len(payload)) != rawLen {
+			return FrameHeader{}, 0, 0, 0, nil, ErrCorrupt
+		}
+	}
 	return header, start, end, rawLen, payload, nil
 }
