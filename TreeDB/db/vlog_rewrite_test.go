@@ -46,6 +46,7 @@ func assertRewritePlanStableFieldsEqual(t *testing.T, got, want ValueLogRewriteP
 	slices.Sort(gotIDs)
 	slices.Sort(wantIDs)
 	if !slices.Equal(gotIDs, wantIDs) ||
+		!reflect.DeepEqual(got.SelectedSegments, want.SelectedSegments) ||
 		got.SegmentsTotal != want.SegmentsTotal ||
 		got.SegmentsSelected != want.SegmentsSelected ||
 		got.BytesTotal != want.BytesTotal ||
@@ -1125,6 +1126,70 @@ func TestValueLogRewritePlan_GroupedPointers_DedupLiveBytes(t *testing.T) {
 	}
 	if plan.SelectedBytesLive <= 0 {
 		t.Fatalf("expected non-zero live bytes for selected segment, got %d", plan.SelectedBytesLive)
+	}
+}
+
+func TestValueLogRewritePlan_SourceFileIDs_EstimatesLiveBytes(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 244_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 244_100, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k_live"), ptrs1[0]); err != nil {
+		t.Fatalf("set live pointer: %v", err)
+	}
+	if err := b.SetPointer([]byte("k_active"), ptrs2[0]); err != nil {
+		t.Fatalf("set active pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	plan, err := db.ValueLogRewritePlan(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs1[0].FileID},
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewritePlan: %v", err)
+	}
+	if got, want := plan.SourceFileIDs, []uint32{ptrs1[0].FileID}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("SourceFileIDs=%v want=%v", got, want)
+	}
+	if len(plan.SelectedSegments) != 1 {
+		t.Fatalf("expected one selected segment, got %d (%v)", len(plan.SelectedSegments), plan.SelectedSegments)
+	}
+	segment := plan.SelectedSegments[0]
+	if segment.FileID != ptrs1[0].FileID {
+		t.Fatalf("selected segment file id=%d want=%d", segment.FileID, ptrs1[0].FileID)
+	}
+	if segment.LiveBytes <= 0 {
+		t.Fatalf("selected segment live bytes=%d want > 0", segment.LiveBytes)
+	}
+	if segment.StaleBytes <= 0 {
+		t.Fatalf("selected segment stale bytes=%d want > 0", segment.StaleBytes)
+	}
+	if segment.StaleRatioPPM == 0 {
+		t.Fatalf("selected segment stale ratio ppm=%d want > 0", segment.StaleRatioPPM)
+	}
+	if plan.SelectedBytesLive != segment.LiveBytes {
+		t.Fatalf("SelectedBytesLive=%d want=%d", plan.SelectedBytesLive, segment.LiveBytes)
+	}
+	if plan.SelectedBytesStale != segment.StaleBytes {
+		t.Fatalf("SelectedBytesStale=%d want=%d", plan.SelectedBytesStale, segment.StaleBytes)
+	}
+	if plan.SelectedBytesTotal <= 0 {
+		t.Fatalf("SelectedBytesTotal=%d want > 0", plan.SelectedBytesTotal)
 	}
 }
 
