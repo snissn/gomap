@@ -193,6 +193,7 @@ const (
 	appendOnlyDirectValueArenaClassCount      = appendOnlyDirectValueArenaMaxShift - appendOnlyDirectValueArenaMinShift + 1
 	appendOnlyDirectValueArenaDefaultChunk    = 32 << 10
 	appendOnlyDirectValueArenaPoolMaxCap      = 1 << appendOnlyDirectValueArenaMaxShift
+	appendOnlyDirectBorrowMinValueBytes       = 256
 	appendOnlyDirectValueArenaRetainMaxBytes  = 8 << 20
 	// Keep chunk count aligned with the byte cap for the common default-chunk
 	// case; otherwise a low chunk cap can silently reduce effective retention to
@@ -4457,6 +4458,10 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues boo
 		return
 	}
 	mt.Set(op.Key, op.Value)
+}
+
+func shouldBorrowAppendOnlyDirectValue(valueLen int) bool {
+	return valueLen >= appendOnlyDirectBorrowMinValueBytes
 }
 
 func getBatchArenaLease(refs int, chunks [][]byte) *batchArenaLease {
@@ -12205,7 +12210,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		if !db.memtableValueLogPointers {
 			memVal = value
 		}
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 && shouldBorrowAppendOnlyDirectValue(len(memVal)) {
 			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
 			copy(owned, memVal)
 			borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
@@ -12213,7 +12218,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
 		}
 	} else {
-		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 && shouldBorrowAppendOnlyDirectValue(len(value)) {
 			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
 			copy(owned, value)
 			borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)

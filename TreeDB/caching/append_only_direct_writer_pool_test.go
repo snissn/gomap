@@ -24,7 +24,7 @@ func TestAppendOnlyDirectWriterArena_RetainsAcrossRotateCheckpointAndReuse(t *te
 	defer db.Close()
 
 	firstKey := []byte("k1")
-	firstVal := bytes.Repeat([]byte{0x11}, 128)
+	firstVal := bytes.Repeat([]byte{0x11}, appendOnlyDirectBorrowMinValueBytes+32)
 	if err := db.Set(firstKey, firstVal); err != nil {
 		t.Fatalf("set first: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestAppendOnlyDirectWriterArena_RetainsAcrossRotateCheckpointAndReuse(t *te
 	}
 
 	secondKey := []byte("k2")
-	secondVal := bytes.Repeat([]byte{0x22}, 128)
+	secondVal := bytes.Repeat([]byte{0x22}, appendOnlyDirectBorrowMinValueBytes+32)
 	if err := db.Set(secondKey, secondVal); err != nil {
 		t.Fatalf("set second: %v", err)
 	}
@@ -161,6 +161,46 @@ func TestAppendOnlyDirectWriterArena_SkipsPointerOnlyMemtableValues(t *testing.T
 	}
 }
 
+func TestAppendOnlyDirectWriterArena_SkipsBorrowForSmallValues(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "append_only",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	key := []byte("small-inline")
+	value := bytes.Repeat([]byte{0x66}, appendOnlyDirectBorrowMinValueBytes-1)
+	if err := db.Set(key, value); err != nil {
+		t.Fatalf("set small inline: %v", err)
+	}
+
+	shard := &db.mutableShards[0]
+	if got := countMutableAppendOnlyDirectArenaActiveChunks(shard); got != 0 {
+		t.Fatalf("expected no direct-writer arena chunks for value len %d, got=%d", len(value), got)
+	}
+	if got := countMutableAppendOnlyDirectArenaRetainedChunks(shard); got != 0 {
+		t.Fatalf("expected no retained direct-writer chunks for value len %d, got=%d", len(value), got)
+	}
+	if count := countAppendOnlyDirectArenaLeaseChunks(db, shard.mem); count != 0 {
+		t.Fatalf("expected no pinned direct-writer lease for value len %d, got=%d", len(value), count)
+	}
+
+	got, err := db.Get(key)
+	if err != nil {
+		t.Fatalf("get small inline: %v", err)
+	}
+	if !bytes.Equal(got, value) {
+		t.Fatalf("small inline value mismatch: got=%x want=%x", got, value)
+	}
+}
+
 func TestAppendOnlyDirectWriterArena_ReusesRetainedChunksOnReset(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir, NewMockBackend(), Options{
@@ -176,7 +216,7 @@ func TestAppendOnlyDirectWriterArena_ReusesRetainedChunksOnReset(t *testing.T) {
 	defer db.Close()
 
 	key := []byte("before-reset")
-	val := bytes.Repeat([]byte{0x44}, 128)
+	val := bytes.Repeat([]byte{0x44}, appendOnlyDirectBorrowMinValueBytes+32)
 	if err := db.Set(key, val); err != nil {
 		t.Fatalf("set before reset: %v", err)
 	}
@@ -204,7 +244,7 @@ func TestAppendOnlyDirectWriterArena_ReusesRetainedChunksOnReset(t *testing.T) {
 	}
 
 	afterKey := []byte("after-reset")
-	afterVal := bytes.Repeat([]byte{0x55}, 128)
+	afterVal := bytes.Repeat([]byte{0x55}, appendOnlyDirectBorrowMinValueBytes+32)
 	if err := db.Set(afterKey, afterVal); err != nil {
 		t.Fatalf("set after reset: %v", err)
 	}
