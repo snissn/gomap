@@ -528,7 +528,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 	m.latest[appendOnlyKeyString(key)] = idx
 }
 
-func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool) {
+func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
 	if m.count == len(m.entries) {
 		nextCap := appendOnlyNextCapacity(len(m.entries), flags)
 		prev := m.entries
@@ -556,9 +556,13 @@ func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, fla
 			ent.key = cloneOrReuseBytes(ent.key, key, appendOnlyReusableKeyMaxCap)
 		}
 		if len(value) > 0 {
-			ent.value = m.valueArena.alloc(len(value))
-			copy(ent.value, value)
-			ent.valueOwned = true
+			if borrowValue {
+				ent.value = value
+			} else {
+				ent.value = m.valueArena.alloc(len(value))
+				copy(ent.value, value)
+				ent.valueOwned = true
+			}
 		} else {
 			ent.value = nil
 		}
@@ -604,13 +608,19 @@ func (m *AppendOnly) SetSteal(key, value []byte) {
 
 func (m *AppendOnly) SetEntry(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, false)
+	m.appendEntryLocked(key, value, ptr, flags, false, false)
 	m.mu.Unlock()
 }
 
 func (m *AppendOnly) SetEntrySteal(key, value []byte, ptr page.ValuePtr, flags byte) {
 	m.mu.Lock()
-	m.appendEntryLocked(key, value, ptr, flags, true)
+	m.appendEntryLocked(key, value, ptr, flags, true, false)
+	m.mu.Unlock()
+}
+
+func (m *AppendOnly) SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte) {
+	m.mu.Lock()
+	m.appendEntryLocked(key, value, ptr, flags, false, true)
 	m.mu.Unlock()
 }
 
@@ -631,7 +641,7 @@ func (m *AppendOnly) PutWithCallback(key, value []byte, cb func(k, v []byte) err
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true)
+	m.appendEntryLocked(k, v, page.ValuePtr{}, node.FlagInline, true, false)
 	m.mu.Unlock()
 	return nil
 }
@@ -644,7 +654,7 @@ func (m *AppendOnly) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 		}
 	}
 	m.mu.Lock()
-	m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true)
+	m.appendEntryLocked(k, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
 	m.mu.Unlock()
 	return nil
 }
@@ -663,11 +673,11 @@ func (m *AppendOnly) applyStealBatch(entries []batchpkg.Entry, onKey func(key []
 		op := entries[i]
 		switch {
 		case op.Type == batchpkg.OpDelete:
-			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true)
+			m.appendEntryLocked(op.Key, nil, page.ValuePtr{}, node.FlagTombstone, true, false)
 		case op.IsPtr:
-			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true)
+			m.appendEntryLocked(op.Key, op.Value, op.ValuePtr, node.FlagPointer, true, false)
 		default:
-			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true)
+			m.appendEntryLocked(op.Key, op.Value, page.ValuePtr{}, node.FlagInline, true, false)
 		}
 		if onKey != nil {
 			onKey(op.Key)

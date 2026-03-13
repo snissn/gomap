@@ -87,6 +87,15 @@ type SortedBatchApplier interface {
 	ApplyStealSortedBatch(entries []batchpkg.Entry, onKey func(key []byte))
 }
 
+// BatchValueBorrower marks memtables that can safely retain batch-owned value
+// slices while still copying keys into their own storage.
+//
+// Callers must keep the underlying batch arena alive until the memtable is
+// retired or reset. This is intended for cached batch writes only.
+type BatchValueBorrower interface {
+	SetEntryBorrowValue(key, value []byte, ptr page.ValuePtr, flags byte)
+}
+
 // StableUnsafeIteratorTable marks memtable implementations whose
 // iterator.UnsafeIterator key/value views (from UnsafeKey/UnsafeValue/UnsafeEntry)
 // are backed by storage that outlives the iterator itself.

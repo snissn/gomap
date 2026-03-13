@@ -4238,11 +4238,19 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues boo
 			mt.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 			return
 		}
+		if borrower, ok := mt.(memtable.BatchValueBorrower); ok && len(memVal) > 0 {
+			borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+			return
+		}
 		mt.SetEntry(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 		return
 	}
 	if useSteal {
 		mt.SetSteal(op.Key, op.Value)
+		return
+	}
+	if borrower, ok := mt.(memtable.BatchValueBorrower); ok && len(op.Value) > 0 {
+		borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
 		return
 	}
 	mt.Set(op.Key, op.Value)
@@ -4283,30 +4291,16 @@ func (db *DB) retainBatchArenaChunksForMemtables(chunks [][]byte, mems []memtabl
 		putBatchArenas(chunks)
 		return
 	}
-	filtered := mems[:0]
-	for _, mt := range mems {
-		// Lease retention follows the cached batch writer's actual copy/steal
-		// choice; memtables that only receive copied writes here must not pin
-		// batch arenas past the write call.
-		if mt == nil || !cachedBatchWriteNeedsBatchArenaRetention(mt) {
-			continue
-		}
-		filtered = append(filtered, mt)
-	}
-	if len(filtered) == 0 {
-		putBatchArenas(chunks)
-		return
-	}
-	lease := getBatchArenaLease(len(filtered), chunks)
+	lease := getBatchArenaLease(len(mems), chunks)
 	if lease.bytes > 0 {
 		cur := db.batchArenaLeaseBytes.Add(lease.bytes)
 		updateInt64Max(&db.batchArenaLeaseBytesMax, cur)
 	}
 	db.batchArenaLeaseMu.Lock()
 	if db.batchArenaLeasesByMem == nil {
-		db.batchArenaLeasesByMem = make(map[memtable.Table][]*batchArenaLease, len(filtered))
+		db.batchArenaLeasesByMem = make(map[memtable.Table][]*batchArenaLease, len(mems))
 	}
-	for _, mt := range filtered {
+	for _, mt := range mems {
 		db.batchArenaLeasesByMem[mt] = append(db.batchArenaLeasesByMem[mt], lease)
 	}
 	db.batchArenaLeaseMu.Unlock()
@@ -17393,10 +17387,17 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 		shardAdds[idx] += add
 	}
-	touchedMems := make([]memtable.Table, 0, shardCount)
+	retainMainMems := make([]memtable.Table, 0, shardCount)
+	retainMainSeen := make(map[memtable.Table]struct{}, shardCount)
 	for i, count := range shardCounts {
 		if count > 0 {
-			touchedMems = append(touchedMems, b.db.mutableShards[i].mem)
+			mt := b.db.mutableShards[i].mem
+			if cachedBatchWriteNeedsBatchArenaRetention(mt) {
+				if _, ok := retainMainSeen[mt]; !ok {
+					retainMainSeen[mt] = struct{}{}
+					retainMainMems = append(retainMainMems, mt)
+				}
+			}
 		}
 	}
 	for i, add := range shardAdds {
@@ -17867,7 +17868,23 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					if op.Type == batch.OpDelete {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
+						borrowed := false
+						if !useSteal {
+							if _, ok := shard.mem.(memtable.BatchValueBorrower); ok {
+								if op.IsPtr {
+									borrowed = storeInlinePtrValues && len(op.Value) > 0
+								} else {
+									borrowed = len(op.Value) > 0
+								}
+							}
+						}
 						memtableBatchSet(shard.mem, useSteal, storeInlinePtrValues, op)
+						if borrowed {
+							if _, ok := retainMainSeen[shard.mem]; !ok {
+								retainMainSeen[shard.mem] = struct{}{}
+								retainMainMems = append(retainMainMems, shard.mem)
+							}
+						}
 					}
 					if useStream {
 						// Preserve sorted-run accounting even when we avoid Steal.
@@ -17937,7 +17954,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		b.ptrValueIdxs = b.ptrValueIdxs[:0]
 	}
 	ptrChunks := b.drainPtrCopyArenaChunks()
-	b.db.retainBatchArenaChunksForMemtables(mainChunks, touchedMems)
+	b.db.retainBatchArenaChunksForMemtables(mainChunks, retainMainMems)
 	if retainPtrArena {
 		b.db.retainBatchArenaChunksForMemtables(ptrChunks, ptrTouchedMems)
 	} else {
