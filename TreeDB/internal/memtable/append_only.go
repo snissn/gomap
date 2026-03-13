@@ -889,6 +889,14 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	}
 
 	oldCount := m.count
+	maxRetainedEntries := appendOnlyMaxReuseEntries(desiredEntries)
+	retainedEntries := desiredEntries
+	if oldCount > retainedEntries {
+		retainedEntries = oldCount
+		if retainedEntries > maxRetainedEntries {
+			retainedEntries = maxRetainedEntries
+		}
+	}
 	for i := 0; i < m.count; i++ {
 		ent := &m.entries[i]
 		ent.ptr = page.ValuePtr{}
@@ -935,17 +943,23 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 
 	// If the entry slice grew far beyond the configured baseline, shrink it.
 	// This avoids permanently ratcheting heap high-water when a workload briefly
-	// spikes in write volume (common during state-sync restore).
-	if cap(m.entries) > appendOnlyMaxReuseEntries(desiredEntries) {
-		m.entries = make([]appendOnlyEntry, desiredEntries)
+	// spikes in write volume (common during state-sync restore), while still
+	// keeping the next steady-state cycle warm if we just observed a larger-but-
+	// still-bounded mutable memtable.
+	if cap(m.entries) > maxRetainedEntries {
+		m.entries = make([]appendOnlyEntry, retainedEntries)
 		return
 	}
-	if cap(m.entries) < desiredEntries {
-		m.entries = make([]appendOnlyEntry, desiredEntries)
+	if cap(m.entries) < retainedEntries {
+		m.entries = make([]appendOnlyEntry, retainedEntries)
 		return
 	}
-	if len(m.entries) != desiredEntries {
-		m.entries = m.entries[:desiredEntries]
+	reuseEntries := retainedEntries
+	if cap(m.entries) <= maxRetainedEntries && cap(m.entries) > reuseEntries {
+		reuseEntries = cap(m.entries)
+	}
+	if len(m.entries) != reuseEntries {
+		m.entries = m.entries[:reuseEntries]
 	}
 }
 
