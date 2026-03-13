@@ -6318,11 +6318,15 @@ func entrySliceMaxReuseCap(capacity int) int {
 	if capacity <= 0 {
 		return 1 << entrySliceLeaseMinShift
 	}
+	reuseFactor := 8
+	if capacity >= entrySliceLargeReuseMinCap {
+		reuseFactor = entrySliceLargeReuseFactor
+	}
 	// Clamp before multiplication to avoid potential integer overflow.
-	if capacity > maxEntryPoolCap/8 {
+	if capacity > maxEntryPoolCap/reuseFactor {
 		return maxEntryPoolCap
 	}
-	maxCap := capacity * 8
+	maxCap := capacity * reuseFactor
 	if maxCap < 1<<12 {
 		maxCap = 1 << 12
 	}
@@ -16446,6 +16450,9 @@ func (db *DB) batchCopyArenaInitCap(sizeHint int) int {
 		return base
 	}
 	if hint := int(db.batchCopyBytesHint.Load()); hint > base {
+		if maxHint := batchCopyArenaHintCap(sizeHint, base); hint > maxHint {
+			hint = maxHint
+		}
 		base = hint
 	}
 	if base < batchCopyArenaMinChunk {
@@ -17056,12 +17063,22 @@ const (
 	batchCopyArenaUnsizedInit   = 8 << 10
 	batchCopyArenaBytesPerEntry = 192
 	batchCopyArenaInitMax       = 2 << 20
+	// Let recent copy-byte history lift startup sizing for similarly sized
+	// batches, but clamp how much one restore-sized batch can inflate the first
+	// chunk for future cached batches.
+	batchCopyArenaUnsizedHintMax = 512 << 10
+	batchCopyArenaHintMaxFactor  = 8
 	// Avoid retaining 4MiB chunks in the pool/leases; they are easy to
 	// underfill (e.g. a ~2MiB batch spills into a second chunk) and can inflate
 	// peak RSS during restore workloads.
 	batchCopyArenaMaxRetain    = 2 << 20
 	batchEntriesPoolMaxRetain  = 16 << 10
 	batchIntSlicePoolMaxRetain = 16 << 10
+	// Small flush helpers can reuse moderately oversized slices, but large
+	// entry slices should stay closer to the requested size to avoid pinning
+	// multi-megabyte backing arrays for much smaller follow-on requests.
+	entrySliceLargeReuseMinCap = 1 << 13
+	entrySliceLargeReuseFactor = 4
 )
 
 func batchCopyArenaInitCapForEntries(entries int) int {
@@ -17079,6 +17096,23 @@ func batchCopyArenaInitCapForEntries(entries int) int {
 		return batchCopyArenaInitMax
 	}
 	return capHint
+}
+
+func batchCopyArenaHintCap(sizeHint, base int) int {
+	if sizeHint <= 0 {
+		return batchCopyArenaUnsizedHintMax
+	}
+	if base < batchCopyArenaMinChunk {
+		base = batchCopyArenaMinChunk
+	}
+	if base > batchCopyArenaInitMax/batchCopyArenaHintMaxFactor {
+		return batchCopyArenaInitMax
+	}
+	maxHint := base * batchCopyArenaHintMaxFactor
+	if maxHint > batchCopyArenaInitMax {
+		maxHint = batchCopyArenaInitMax
+	}
+	return maxHint
 }
 
 func (b *Batch) maybeSwitchToStreaming() {

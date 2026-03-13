@@ -82,6 +82,32 @@ func TestBatchCopyArenaHint_NewBatchWithSizeCanRaiseInit(t *testing.T) {
 	}
 }
 
+func TestBatchCopyArenaHint_ClampsUnsizedStartupAfterLargeObserve(t *testing.T) {
+	var db DB
+
+	db.observeBatchCopyBytes(batchCopyArenaInitMax)
+
+	if got := db.batchCopyArenaInitCap(0); got != batchCopyArenaUnsizedHintMax {
+		t.Fatalf("unsized init cap=%d want=%d", got, batchCopyArenaUnsizedHintMax)
+	}
+}
+
+func TestBatchCopyArenaHint_ClampsSmallSizedStartupAgainstLargeHistory(t *testing.T) {
+	var db DB
+
+	db.observeBatchCopyBytes(batchCopyArenaInitMax)
+
+	const entries = 64
+	base := batchCopyArenaInitCapForEntries(entries)
+	want := batchCopyArenaHintCap(entries, base)
+	if got := db.batchCopyArenaInitCap(entries); got != want {
+		t.Fatalf("sized init cap=%d want=%d", got, want)
+	}
+	if want <= base {
+		t.Fatalf("expected clamp to remain above base; base=%d want=%d", base, want)
+	}
+}
+
 func TestBatchCopyArenaHint_UsesTotalCopiedBytes(t *testing.T) {
 	var db DB
 	b := &Batch{

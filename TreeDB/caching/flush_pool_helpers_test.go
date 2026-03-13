@@ -552,6 +552,67 @@ func TestEntrySliceLeaseBoundCapsOversizedReuse(t *testing.T) {
 	}
 }
 
+func TestEntrySliceLargeLeaseBoundCapsOversizedReuse(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolStateForTest(t)
+
+	const (
+		requestCap = 1 << 13
+		bigCap     = 1 << 16
+	)
+
+	big := make([]batch.Entry, 0, bigCap)
+	putEntrySlice(big)
+	bigIdx, ok := entrySliceLeaseClassForCap(cap(big))
+	if !ok {
+		t.Fatalf("expected lease class for cap=%d", cap(big))
+	}
+	entrySliceLeaseMu.Lock()
+	before := len(entrySliceLeases[bigIdx])
+	entrySliceLeaseMu.Unlock()
+	if before == 0 {
+		t.Fatalf("expected large entry-slice lease to be retained")
+	}
+
+	got := getEntrySlice(requestCap)
+	if cap(got) > entrySliceMaxReuseCap(requestCap) {
+		t.Fatalf("large request reused excessively oversized lease cap=%d (> %d)", cap(got), entrySliceMaxReuseCap(requestCap))
+	}
+
+	entrySliceLeaseMu.Lock()
+	after := len(entrySliceLeases[bigIdx])
+	entrySliceLeaseMu.Unlock()
+	if after != before {
+		t.Fatalf("expected oversized large lease bucket unchanged: before=%d after=%d", before, after)
+	}
+}
+
+func TestEntrySliceLargePoolBoundCapsOversizedReuse(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolStateForTest(t)
+
+	const (
+		requestCap = 1 << 13
+		bigCap     = 1 << 16
+	)
+
+	big := make([]batch.Entry, 0, bigCap)
+	bigIdx, ok := entrySliceLeaseClassForCap(cap(big))
+	if !ok {
+		t.Fatalf("expected pool class for cap=%d", cap(big))
+	}
+	entrySlicePools[bigIdx].Put(big)
+	entrySlicePoolBytes.Store(int64(cap(big)) * entrySliceEntrySizeBytes)
+
+	got := getEntrySlice(requestCap)
+	if cap(got) > entrySliceMaxReuseCap(requestCap) {
+		t.Fatalf("large request reused excessively oversized pooled slice cap=%d (> %d)", cap(got), entrySliceMaxReuseCap(requestCap))
+	}
+	if held := entrySlicePoolBytes.Load(); held != int64(cap(big))*entrySliceEntrySizeBytes {
+		t.Fatalf("entrySlicePoolBytes=%d want=%d", held, int64(cap(big))*entrySliceEntrySizeBytes)
+	}
+}
+
 func TestPutEntrySliceClearsEntriesOnEarlyReturn(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	resetEntrySlicePoolStateForTest(t)
