@@ -3741,6 +3741,7 @@ type DB struct {
 	nextQueueID             atomic.Uint64
 	batchEntryHint          atomic.Int32
 	batchCopyBytesHint      atomic.Int32
+	appendOnlyEntryHint     atomic.Int32
 	batchArenaLeaseMu       sync.Mutex
 	batchArenaLeasesByMem   map[memtable.Table][]*batchArenaLease
 	batchArenaLeaseBytes    atomic.Int64
@@ -4216,6 +4217,17 @@ type memtableView struct {
 // large over-allocation in real workloads where key bytes dominate.
 const appendOnlyEstimatedBytesPerEntryDefault = 96
 
+const (
+	appendOnlyEntryHintMin          = 128
+	appendOnlyEntryHintMax          = 1 << 20
+	appendOnlyEntryHintHeadroomMul  = 3
+	appendOnlyEntryHintHeadroomDiv  = 2
+	appendOnlyEntryHintGrowWeight   = 3
+	appendOnlyEntryHintGrowDivisor  = 4
+	appendOnlyEntryHintDecayWeight  = 7
+	appendOnlyEntryHintDecayDivisor = 8
+)
+
 // maxAppendOnlyMemLeases bounds strong references to recycled append-only
 // memtables. A very small bound forces frequent fallback to sync.Pool under
 // rotate/checkpoint-heavy write workloads, which regresses entry-slice reuse
@@ -4634,6 +4646,97 @@ func (db *DB) putAppendOnlyMemLease(mt *memtable.AppendOnly) bool {
 	return true
 }
 
+func clampAppendOnlyEntryHint(entries int) int {
+	if entries < appendOnlyEntryHintMin {
+		return appendOnlyEntryHintMin
+	}
+	if entries > appendOnlyEntryHintMax {
+		return appendOnlyEntryHintMax
+	}
+	return entries
+}
+
+func appendOnlyCapacityForEntries(entries int) int {
+	entries = clampAppendOnlyEntryHint(entries)
+	maxInt := int(^uint(0) >> 1)
+	if entries > maxInt/appendOnlyEstimatedBytesPerEntryDefault {
+		return maxInt
+	}
+	return entries * appendOnlyEstimatedBytesPerEntryDefault
+}
+
+func appendOnlyEntriesForCapacity(capacity int) int {
+	if capacity <= 0 {
+		return appendOnlyEntryHintMin
+	}
+	entries := capacity / appendOnlyEstimatedBytesPerEntryDefault
+	return clampAppendOnlyEntryHint(entries)
+}
+
+func (db *DB) observeAppendOnlyMutableEntries(entries int) {
+	if db == nil || entries <= 0 {
+		return
+	}
+	entries = clampAppendOnlyEntryHint(entries)
+	for {
+		old := int(db.appendOnlyEntryHint.Load())
+		next := entries
+		if old > 0 {
+			if entries > old {
+				// Increase quickly to avoid repeated growth allocations as
+				// sustained mutable density rises.
+				next = (old*appendOnlyEntryHintGrowWeight + entries + (appendOnlyEntryHintGrowDivisor - 1)) / appendOnlyEntryHintGrowDivisor
+			} else {
+				// Decay gradually so one-off spikes do not permanently ratchet
+				// append-only mutable startup size.
+				next = (old*appendOnlyEntryHintDecayWeight + entries + (appendOnlyEntryHintDecayDivisor - 1)) / appendOnlyEntryHintDecayDivisor
+			}
+		}
+		next = clampAppendOnlyEntryHint(next)
+		if next == old {
+			return
+		}
+		if db.appendOnlyEntryHint.CompareAndSwap(int32(old), int32(next)) {
+			return
+		}
+	}
+}
+
+func (db *DB) observeAppendOnlyMutableUsage(mt memtable.Table) {
+	if db == nil || mt == nil {
+		return
+	}
+	if _, ok := mt.(*memtable.AppendOnly); !ok {
+		return
+	}
+	db.observeAppendOnlyMutableEntries(mt.Len())
+}
+
+func (db *DB) appendOnlyMutableSeedCapacity(capacity int) int {
+	if db == nil {
+		return capacity
+	}
+	hint := int(db.appendOnlyEntryHint.Load())
+	if hint <= 0 {
+		return capacity
+	}
+	hint = clampAppendOnlyEntryHint(hint)
+	hintWithHeadroom := hint
+	if appendOnlyEntryHintHeadroomDiv > 0 {
+		hintWithHeadroom = (hint*appendOnlyEntryHintHeadroomMul + (appendOnlyEntryHintHeadroomDiv - 1)) / appendOnlyEntryHintHeadroomDiv
+	}
+	hintWithHeadroom = clampAppendOnlyEntryHint(hintWithHeadroom)
+	seedCapacity := appendOnlyCapacityForEntries(hintWithHeadroom)
+	if capacity <= 0 {
+		return seedCapacity
+	}
+	capacityEntries := appendOnlyEntriesForCapacity(capacity)
+	if hintWithHeadroom > capacityEntries {
+		return capacity
+	}
+	return seedCapacity
+}
+
 func (db *DB) recycleMemtables(mems []memtable.Table) {
 	if db == nil || len(mems) == 0 {
 		return
@@ -4641,6 +4744,7 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	for _, mt := range mems {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
+			db.observeAppendOnlyMutableEntries(typed.Len())
 			typed.Reset()
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(typed)
 			if !db.putAppendOnlyMemLease(typed) {
@@ -4653,6 +4757,7 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {
 	if db != nil && mode == memtable.ModeAppendOnly {
 		estimate := appendOnlyEstimatedBytesPerEntryDefault
+		capacity = db.appendOnlyMutableSeedCapacity(capacity)
 		if mt := db.popAppendOnlyMemLease(); mt != nil {
 			mt.ResetWithCapacity(capacity, estimate)
 			return mt, nil
@@ -4845,9 +4950,14 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
+		db.observeAppendOnlyMutableUsage(shard.mem)
 		reused := false
 		if reuse {
-			if r, ok := any(shard.mem).(interface{ Reset() }); ok {
+			if mt, ok := shard.mem.(*memtable.AppendOnly); ok {
+				mt.ResetWithCapacity(db.appendOnlyMutableSeedCapacity(0), appendOnlyEstimatedBytesPerEntryDefault)
+				shard.appendOnlyDirectValueArena.recycleActive()
+				reused = true
+			} else if r, ok := any(shard.mem).(interface{ Reset() }); ok {
 				r.Reset()
 				shard.appendOnlyDirectValueArena.recycleActive()
 				reused = true
@@ -12888,6 +12998,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
+		db.observeAppendOnlyMutableUsage(shard.mem)
 		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
@@ -13028,6 +13139,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		}
 
 		// Freeze and enqueue the old mutable shard.
+		db.observeAppendOnlyMutableUsage(shard.mem)
 		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
