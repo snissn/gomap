@@ -21,10 +21,17 @@ import (
 const headerWithoutCRC = HeaderSize - 4
 
 // defaultBufferSize controls the default per-writer buffering in file-backed
-// value-log writers (bufio + append buffer + scratch). A smaller default keeps
+// value-log writers (bufio + append buffer). A smaller default keeps
 // heap high-watermarks reasonable when workloads open many concurrent writers
 // (e.g. sharded cached mode under state-sync restore).
 const defaultBufferSize = 4 << 20
+
+const (
+	// Retain up to one normal writer buffer of scratch across explicit flush-style
+	// boundaries, but trim larger transient spikes back down once the writer cools.
+	writerScratchKeepCap = defaultBufferSize
+	writerScratchTrimCap = writerScratchKeepCap * 2
+)
 
 var syncDirFn = syncDir
 
@@ -140,6 +147,55 @@ func (w *Writer) flushAppendBuf() error {
 	}
 	w.appendBuf = w.appendBuf[:0]
 	return nil
+}
+
+func (w *Writer) flushNoTrim() error {
+	if w == nil {
+		return nil
+	}
+	if err := w.flushAppendBuf(); err != nil {
+		return err
+	}
+	if w.bw != nil {
+		if err := w.bw.Flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func trimTransientWriterScratch(buf []byte) []byte {
+	if cap(buf) == 0 {
+		return nil
+	}
+	if cap(buf) <= writerScratchTrimCap {
+		return buf[:0]
+	}
+	return make([]byte, 0, writerScratchKeepCap)
+}
+
+func (w *Writer) trimTransientScratchBuffers() {
+	if w == nil {
+		return
+	}
+	w.scratch = trimTransientWriterScratch(w.scratch)
+	w.rawScratch = trimTransientWriterScratch(w.rawScratch)
+	w.encScratch = trimTransientWriterScratch(w.encScratch)
+	w.blockScratch = trimTransientWriterScratch(w.blockScratch)
+	w.encLimiter.buf = nil
+	w.encLimiter.limit = 0
+}
+
+func (w *Writer) releaseTransientScratchBuffers() {
+	if w == nil {
+		return
+	}
+	w.scratch = nil
+	w.rawScratch = nil
+	w.encScratch = nil
+	w.blockScratch = nil
+	w.encLimiter.buf = nil
+	w.encLimiter.limit = 0
 }
 
 func (w *Writer) writeBytes(buf []byte) error {
@@ -366,7 +422,6 @@ func NewWriter(path string, fileID uint32) (*Writer, error) {
 		rawWritevMinAvgBytes:  defaultRawWritevMinAvgBytes,
 		rawWritevMinBatchRecs: defaultRawWritevMinBatchRecords,
 		appendBuf:             make([]byte, 0, defaultBufferSize),
-		scratch:               make([]byte, 0, defaultBufferSize),
 		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		dictFrameEncodeLevel:  zstd.SpeedFastest,
 		blockCodec:            BlockCodecSnappy,
@@ -383,7 +438,6 @@ func newWriterWithSink(sink io.Writer, fileID uint32) *Writer {
 		appendMax:             0,
 		rawWritevMinAvgBytes:  defaultRawWritevMinAvgBytes,
 		rawWritevMinBatchRecs: defaultRawWritevMinBatchRecords,
-		scratch:               make([]byte, 0, defaultBufferSize),
 		prefixBuf:             make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)),
 		dictFrameEncodeLevel:  zstd.SpeedFastest,
 		blockCodec:            BlockCodecSnappy,
@@ -584,15 +638,10 @@ func (w *Writer) Size() int64 {
 }
 
 func (w *Writer) Flush() error {
-	if w == nil {
-		return nil
-	}
-	if err := w.flushAppendBuf(); err != nil {
+	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
-	if w.bw != nil {
-		return w.bw.Flush()
-	}
+	w.trimTransientScratchBuffers()
 	return nil
 }
 
@@ -604,7 +653,7 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	if w.f == nil {
 		if w.bw != nil {
 			// Preserve sink semantics for tests before switching to file-backed.
-			if err := w.bw.Flush(); err != nil {
+			if err := w.flushNoTrim(); err != nil {
 				return err
 			}
 		}
@@ -632,11 +681,11 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 		} else {
 			w.appendBuf = w.appendBuf[:0]
 		}
-		w.scratch = w.scratch[:0]
+		w.trimTransientScratchBuffers()
 		return nil
 	}
 
-	if err := w.Flush(); err != nil {
+	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
 	if w.syncFn != nil {
@@ -673,10 +722,10 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 	w.size = info.Size()
 	w.fileID = fileID
 	w.appendBuf = w.appendBuf[:0]
-	w.scratch = w.scratch[:0]
 	if err := old.Close(); err != nil {
 		return err
 	}
+	w.trimTransientScratchBuffers()
 	return nil
 }
 
@@ -2057,22 +2106,34 @@ func (w *Writer) Sync() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.Flush(); err != nil {
+	if err := w.flushNoTrim(); err != nil {
 		return err
 	}
 	if w.syncFn != nil {
-		return w.syncFn(w.f)
+		if err := w.syncFn(w.f); err != nil {
+			return err
+		}
+		w.trimTransientScratchBuffers()
+		return nil
 	}
-	return w.f.Sync()
+	if err := w.f.Sync(); err != nil {
+		return err
+	}
+	w.trimTransientScratchBuffers()
+	return nil
 }
 
 func (w *Writer) Close() error {
 	if w == nil || w.f == nil {
 		return nil
 	}
-	if err := w.Flush(); err != nil {
+	if err := w.flushNoTrim(); err != nil {
 		_ = w.f.Close()
 		return err
 	}
-	return w.f.Close()
+	if err := w.f.Close(); err != nil {
+		return err
+	}
+	w.releaseTransientScratchBuffers()
+	return nil
 }
