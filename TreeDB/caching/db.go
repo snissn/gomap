@@ -6709,7 +6709,7 @@ func getEntrySlice(capacity int) []batch.Entry {
 		maxIdx = idx
 	}
 	entrySliceLeaseMu.Lock()
-	for bucket := idx; bucket <= maxIdx; bucket++ {
+	for bucket := maxIdx; bucket >= idx; bucket-- {
 		leases := entrySliceLeases[bucket]
 		if n := len(leases); n > 0 {
 			s := leases[n-1]
@@ -6735,7 +6735,7 @@ func getEntrySlice(capacity int) []batch.Entry {
 		}
 	}
 	entrySliceLeaseMu.Unlock()
-	for bucket := idx; bucket <= maxIdx; bucket++ {
+	for bucket := maxIdx; bucket >= idx; bucket-- {
 		if v := entrySlicePools[bucket].Get(); v != nil {
 			s, ok := v.([]batch.Entry)
 			if !ok {
@@ -6771,6 +6771,16 @@ func putEntrySlice(entries []batch.Entry) {
 	leaseBytes := int64(cap(entries)) * entrySliceEntrySizeBytes
 	ok, transitioned := reserveEntrySlicePoolBytes(leaseBytes)
 	if !ok {
+		// If we're at budget but already holding this class, replace the hottest
+		// slot so active large-run classes stay warm under pressure.
+		entries = entries[:0]
+		entrySliceLeaseMu.Lock()
+		if n := len(entrySliceLeases[idx]); n > 0 {
+			entrySliceLeases[idx][n-1] = entries
+			entrySliceLeaseMu.Unlock()
+			return
+		}
+		entrySliceLeaseMu.Unlock()
 		return
 	}
 	if transitioned {

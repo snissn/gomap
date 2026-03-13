@@ -608,6 +608,36 @@ func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
 	}
 }
 
+func entrySliceBackingPtr(entries []batch.Entry) *batch.Entry {
+	if cap(entries) == 0 {
+		return nil
+	}
+	full := entries[:cap(entries)]
+	return &full[0]
+}
+
+func TestPutEntrySliceBudgetFullReplacesWithLatestInBucket(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
+	entrySlicePoolBudgetBytes = 64 * entrySliceEntrySizeBytes
+	entrySlicePoolBytes.Store(0)
+
+	first := make([]batch.Entry, 1, 64)
+	firstPtr := entrySliceBackingPtr(first)
+	putEntrySlice(first)
+
+	second := make([]batch.Entry, 1, 64)
+	secondPtr := entrySliceBackingPtr(second)
+	putEntrySlice(second)
+
+	got := getEntrySlice(64)
+	defer putEntrySlice(got)
+	gotPtr := entrySliceBackingPtr(got)
+	if gotPtr != secondPtr {
+		t.Fatalf("expected latest retained entry slice under budget pressure; got=%p want=%p (first=%p)", gotPtr, secondPtr, firstPtr)
+	}
+}
+
 func TestGetEntrySliceMissResetsPoolBytesAfterGC(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	resetEntrySlicePoolsForTest(t)
