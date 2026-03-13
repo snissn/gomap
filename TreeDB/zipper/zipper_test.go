@@ -561,80 +561,52 @@ func TestShortestSeparatorBE8Bounds(t *testing.T) {
 	}
 }
 
-func TestMergeLeaf_ReturnsGrownSplitKeyArenaToPool(t *testing.T) {
-	dir := t.TempDir()
-	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer p.Close()
+func TestMergeLeaf_SplitKeysDoNotAliasBatchKeys(t *testing.T) {
+	z := New(nil, nil)
+	z.SetOuterLeavesInValueLog(true)
+	z.SetLeafPageLog(&stubLeafPageLog{})
 
-	alloc := &MockAllocator{p: p}
-	z := New(p, alloc)
-
-	rootID, err := p.Alloc(1)
-	if err != nil {
-		t.Fatalf("alloc root: %v", err)
-	}
-	data, err := p.Get(rootID)
-	if err != nil {
-		t.Fatalf("get root: %v", err)
-	}
-	n := node.NewNode(data)
-	n.SetPageID(rootID)
-	n.SetType(page.PageTypeLeaf)
-	n.UpdateChecksum()
-
-	prevHook := TestHookPutLeafSplitKeyArena
-	var maxReturnedCap atomic.Int64
-	TestHookPutLeafSplitKeyArena = func(capacity int) {
-		for {
-			cur := maxReturnedCap.Load()
-			if int64(capacity) <= cur {
-				return
-			}
-			if maxReturnedCap.CompareAndSwap(cur, int64(capacity)) {
-				return
-			}
-		}
-	}
-	t.Cleanup(func() {
-		TestHookPutLeafSplitKeyArena = prevHook
-	})
-
-	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
-	defer func() { _ = b.Close() }()
+	oldData := make([]byte, page.PageSize)
+	oldNode := node.NewNode(oldData)
+	oldNode.SetType(page.PageTypeLeaf)
+	oldNode.UpdateChecksum()
 
 	prefix := bytes.Repeat([]byte{'k'}, 1022)
 	value := bytes.Repeat([]byte("v"), 8)
+	ops := make([]batch.Entry, 0, 240)
 	for i := 0; i < 240; i++ {
 		key := make([]byte, len(prefix)+2)
 		copy(key, prefix)
 		binary.BigEndian.PutUint16(key[len(prefix):], uint16(i))
-		b.Set(key, value)
+		ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
 	}
 
-	newRootID, _, _, err := z.Apply(rootID, b)
+	builder := z.newLeafBuilder(make([]byte, page.PageSize), ops)
+	builder.SetPageID(0)
+
+	var metrics adaptive.Metrics
+	_, splits, err := z.mergeLeaf(oldNode, builder, ops, &metrics)
 	if err != nil {
-		t.Fatalf("Apply failed: %v", err)
+		t.Fatalf("mergeLeaf failed: %v", err)
+	}
+	if len(splits) == 0 {
+		t.Fatalf("expected large keys to force at least one split")
 	}
 
-	tr := tree.New(p, panicValueReader{}, newRootID)
-	for _, idx := range []int{0, 120, 239} {
-		key := make([]byte, len(prefix)+2)
-		copy(key, prefix)
-		binary.BigEndian.PutUint16(key[len(prefix):], uint16(idx))
-		gotVal, getErr := tr.Get(key)
-		if getErr != nil {
-			t.Fatalf("Get(%d) failed: %v", idx, getErr)
-		}
-		if !bytes.Equal(gotVal, value) {
-			t.Fatalf("Get(%d) value mismatch: got=%q want=%q", idx, gotVal, value)
+	wantKeys := make([][]byte, len(splits))
+	for i := range splits {
+		wantKeys[i] = append([]byte(nil), splits[i].Key...)
+	}
+
+	for i := range ops {
+		for j := range ops[i].Key {
+			ops[i].Key[j] ^= 0xff
 		}
 	}
 
-	got := int(maxReturnedCap.Load())
-	if got <= leafSplitKeyArenaInitCap {
-		t.Fatalf("expected returned split-key arena cap > %d after growth, got %d", leafSplitKeyArenaInitCap, got)
+	for i := range splits {
+		if !bytes.Equal(splits[i].Key, wantKeys[i]) {
+			t.Fatalf("split key %d mutated with source key buffer", i)
+		}
 	}
 }

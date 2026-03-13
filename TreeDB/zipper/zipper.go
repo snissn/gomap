@@ -231,33 +231,9 @@ var internalKeyArenaPool = sync.Pool{
 	},
 }
 
-const (
-	leafSplitKeyArenaInitCap = page.PageSize
-	leafSplitKeyArenaMaxCap  = 1 << 16
-)
-
-var leafSplitKeyArenaPool = sync.Pool{
-	New: func() any {
-		return make([]byte, 0, leafSplitKeyArenaInitCap)
-	},
-}
-
-// TestHookPutLeafSplitKeyArena is a test-only hook that observes the capacity
-// of the slice returned to the split-key arena pool.
-var TestHookPutLeafSplitKeyArena func(capacity int)
-
 func putInternalKeyArena(arena []byte) {
 	if cap(arena) <= internalKeyArenaMaxCap {
 		internalKeyArenaPool.Put(arena[:0])
-	}
-}
-
-func putLeafSplitKeyArena(arena []byte) {
-	if TestHookPutLeafSplitKeyArena != nil {
-		TestHookPutLeafSplitKeyArena(cap(arena))
-	}
-	if cap(arena) <= leafSplitKeyArenaMaxCap {
-		leafSplitKeyArenaPool.Put(arena[:0])
 	}
 }
 
@@ -924,8 +900,6 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		pendingSplitIdx int
 	)
 	pendingSplitIdx = -1
-	splitKeyArena := leafSplitKeyArenaPool.Get().([]byte)[:0]
-	defer func() { putLeafSplitKeyArena(splitKeyArena) }()
 
 	// Current target builder
 	target := builder
@@ -1121,11 +1095,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 			// Use the full first key of the right node as the parent separator.
 			// Shortened separators are unsafe for sparse/fence layouts where leaf
 			// entries are not a complete key set.
-			splitKey := cloneKeyIntoArena(key, &splitKeyArena)
-			// Split keys escape this call via the returned []Split, so clone out of
-			// the local arena before appending.
-			splitKey = append([]byte(nil), splitKey...)
-			splitE.Key = splitKey
+			// Split keys escape this call via the returned []Split, so detach them
+			// from the batch key buffer with a single clone.
+			splitE.Key = append([]byte(nil), key...)
 			splits = append(splits, splitE)
 			pendingSplitIdx = len(splits) - 1
 
