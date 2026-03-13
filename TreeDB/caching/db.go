@@ -194,7 +194,10 @@ const (
 	appendOnlyDirectValueArenaDefaultChunk    = 32 << 10
 	appendOnlyDirectValueArenaPoolMaxCap      = 1 << appendOnlyDirectValueArenaMaxShift
 	appendOnlyDirectValueArenaRetainMaxBytes  = 8 << 20
-	appendOnlyDirectValueArenaRetainMaxChunks = 32
+	// Keep chunk count aligned with the byte cap for the common default-chunk
+	// case; otherwise a low chunk cap can silently reduce effective retention to
+	// ~1MB and force unnecessary regrowth allocations each memtable cycle.
+	appendOnlyDirectValueArenaRetainMaxChunks = appendOnlyDirectValueArenaRetainMaxBytes / appendOnlyDirectValueArenaDefaultChunk
 	outerLeafArenaMinShift                    = 12
 	outerLeafArenaMaxShift                    = 24
 	outerLeafArenaClassCount                  = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
