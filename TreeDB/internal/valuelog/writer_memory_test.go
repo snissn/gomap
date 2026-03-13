@@ -1,7 +1,9 @@
 package valuelog
 
 import (
+	"bytes"
 	"io"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -172,5 +174,62 @@ func TestWriterClose_ReleasesScratchBuffers(t *testing.T) {
 	}
 	if writer.encLimiter.buf != nil || writer.encLimiter.limit != 0 {
 		t.Fatalf("encLimiter not cleared on Close: buf=%v limit=%d", writer.encLimiter.buf != nil, writer.encLimiter.limit)
+	}
+}
+
+func TestAppendFrame_BlockCompressedBufferedPath_DoesNotGrowScratch(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "value-000001.log")
+
+	writer, err := NewWriter(path, page.ValueLogFileID(1))
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	records := make([]Record, 4)
+	want := make([][]byte, len(records))
+	for i := range records {
+		v := make([]byte, 2048)
+		for j := range v {
+			v[j] = byte('a' + i)
+		}
+		copy(v, []byte("record-block-compressed"))
+		records[i] = Record{RID: uint64(i + 1), Value: v}
+		want[i] = append([]byte(nil), v...)
+	}
+
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, records, make([]page.ValuePtr, len(records)))
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("AppendFrameWithStatsInto: %v", err)
+	}
+	if !stats.Kept {
+		_ = writer.Close()
+		t.Fatalf("expected block-compressed frame to be kept")
+	}
+	if cap(writer.scratch) != 0 {
+		_ = writer.Close()
+		t.Fatalf("scratch cap after kept block-compressed append = %d, want 0", cap(writer.scratch))
+	}
+
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	for i, ptr := range ptrs {
+		got, err := ReadAt(f, ptr, true)
+		if err != nil {
+			t.Fatalf("ReadAt %d: %v", i, err)
+		}
+		if !bytes.Equal(got, want[i]) {
+			t.Fatalf("ReadAt %d mismatch", i)
+		}
 	}
 }

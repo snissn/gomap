@@ -1876,38 +1876,90 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 
 	recordLen := HeaderSize + bodyLen
 	start := w.size
-	if cap(w.scratch) < recordLen {
-		w.scratch = make([]byte, recordLen)
+	max := w.appendMax
+	if max <= 0 {
+		max = defaultBufferSize
 	}
-	buf := w.scratch[:recordLen]
-	buf[4] = Version
-	buf[5] = recordFlagGrouped
-	buf[6] = 0
-	buf[7] = 0
-	binary.LittleEndian.PutUint64(buf[8:16], 0)
-	binary.LittleEndian.PutUint32(buf[16:20], uint32(bodyLen))
+	if w.f != nil && recordLen <= max {
+		if len(w.appendBuf)+recordLen > max {
+			if err := w.flushAppendBuf(); err != nil {
+				return nil, FrameStats{}, err
+			}
+		}
+		if cap(w.appendBuf) < max {
+			newBuf := make([]byte, len(w.appendBuf), max)
+			copy(newBuf, w.appendBuf)
+			w.appendBuf = newBuf
+		}
 
-	frameOff := HeaderSize
-	buf[frameOff] = FrameVersion
-	buf[frameOff+1] = FrameFlagCompressed
-	buf[frameOff+2] = byte(k)
-	buf[frameOff+3] = byte(w.blockCodec)
-	binary.LittleEndian.PutUint64(buf[frameOff+4:frameOff+12], 0)
-	frameOff += FrameHeaderSize
-	for i := 0; i < k; i++ {
-		binary.LittleEndian.PutUint64(buf[frameOff:frameOff+8], records[i].RID)
-		frameOff += 8
-	}
-	for i := 0; i < k+1; i++ {
-		binary.LittleEndian.PutUint32(buf[frameOff:frameOff+4], offsets[i])
-		frameOff += 4
-	}
-	copy(buf[frameOff:], encoded)
+		base := len(w.appendBuf)
+		w.appendBuf = w.appendBuf[:base+recordLen]
+		buf := w.appendBuf[base : base+recordLen]
+		buf[4] = Version
+		buf[5] = recordFlagGrouped
+		buf[6] = 0
+		buf[7] = 0
+		binary.LittleEndian.PutUint64(buf[8:16], 0)
+		binary.LittleEndian.PutUint32(buf[16:20], uint32(bodyLen))
 
-	sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
-	binary.LittleEndian.PutUint32(buf[0:4], sum)
-	if err := w.writeBytes(buf); err != nil {
-		return nil, FrameStats{}, err
+		frameOff := HeaderSize
+		buf[frameOff] = FrameVersion
+		buf[frameOff+1] = FrameFlagCompressed
+		buf[frameOff+2] = byte(k)
+		buf[frameOff+3] = byte(w.blockCodec)
+		binary.LittleEndian.PutUint64(buf[frameOff+4:frameOff+12], 0)
+		frameOff += FrameHeaderSize
+		for i := 0; i < k; i++ {
+			binary.LittleEndian.PutUint64(buf[frameOff:frameOff+8], records[i].RID)
+			frameOff += 8
+		}
+		for i := 0; i < k+1; i++ {
+			binary.LittleEndian.PutUint32(buf[frameOff:frameOff+4], offsets[i])
+			frameOff += 4
+		}
+		copy(buf[frameOff:], encoded)
+
+		sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
+		binary.LittleEndian.PutUint32(buf[0:4], sum)
+		if len(w.appendBuf) >= max {
+			if err := w.flushAppendBuf(); err != nil {
+				return nil, FrameStats{}, err
+			}
+		}
+	} else {
+		if cap(w.scratch) < recordLen {
+			w.scratch = make([]byte, recordLen)
+		}
+		buf := w.scratch[:recordLen]
+		buf[4] = Version
+		buf[5] = recordFlagGrouped
+		buf[6] = 0
+		buf[7] = 0
+		binary.LittleEndian.PutUint64(buf[8:16], 0)
+		binary.LittleEndian.PutUint32(buf[16:20], uint32(bodyLen))
+
+		frameOff := HeaderSize
+		buf[frameOff] = FrameVersion
+		buf[frameOff+1] = FrameFlagCompressed
+		buf[frameOff+2] = byte(k)
+		buf[frameOff+3] = byte(w.blockCodec)
+		binary.LittleEndian.PutUint64(buf[frameOff+4:frameOff+12], 0)
+		frameOff += FrameHeaderSize
+		for i := 0; i < k; i++ {
+			binary.LittleEndian.PutUint64(buf[frameOff:frameOff+8], records[i].RID)
+			frameOff += 8
+		}
+		for i := 0; i < k+1; i++ {
+			binary.LittleEndian.PutUint32(buf[frameOff:frameOff+4], offsets[i])
+			frameOff += 4
+		}
+		copy(buf[frameOff:], encoded)
+
+		sum := crc.ChecksumParts(buf[4:HeaderSize], buf[HeaderSize:])
+		binary.LittleEndian.PutUint32(buf[0:4], sum)
+		if err := w.writeBytes(buf); err != nil {
+			return nil, FrameStats{}, err
+		}
 	}
 	w.size += int64(recordLen)
 
