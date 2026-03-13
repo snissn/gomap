@@ -22,7 +22,6 @@ const (
 	appendOnlyMinInitialEntries             = 128
 	appendOnlyMaxInitialEntries             = 1 << 20
 	appendOnlyInlineKeyLen                  = 8
-	appendOnlyPointerGrowCutoff             = 1 << 15
 	appendOnlyEntryPoolMaxCap               = 1 << 20
 	appendOnlyIteratorPoolMaxCap            = 1 << 20
 	appendOnlyIteratorPtrPoolMaxCap         = 1 << 20
@@ -36,6 +35,7 @@ const (
 	appendOnlyValueArenaRetainChunks        = 128
 	appendOnlyReuseOversizeFactor           = 4
 	appendOnlyResetDropThresholdEntries     = 1 << 15
+	appendOnlyAggressiveGrowCutoff          = appendOnlyResetDropThresholdEntries * 2
 )
 
 var appendOnlyEntryPool sync.Pool
@@ -391,15 +391,17 @@ func (a *appendOnlyValueArena) reset() {
 	a.curPos = 0
 }
 
-func appendOnlyNextCapacity(current int, flags byte) int {
+func appendOnlyNextCapacity(current int) int {
 	if current < appendOnlyMinInitialEntries {
 		return appendOnlyMinInitialEntries
 	}
 	next := current * 2
-	// Pointer-heavy write paths can spend a disproportionate amount of time
-	// copying entry arrays during growth. Grow more aggressively early, then
-	// fall back to 2x to keep memory expansion bounded.
-	if flags&node.FlagPointer != 0 && current < appendOnlyPointerGrowCutoff {
+	// Entry-heavy write paths can spend a disproportionate amount of time
+	// copying entry arrays during growth, even when values themselves are
+	// borrowed from batch arenas or stored inline. Grow more aggressively up to
+	// the retained warm-reset window, then fall back to 2x to keep expansion
+	// bounded once the memtable is already large.
+	if current < appendOnlyAggressiveGrowCutoff {
 		next = current * 4
 	}
 	if next <= current {
@@ -530,7 +532,7 @@ func (m *AppendOnly) updateLatestIndexLocked(key []byte, idx int) {
 
 func (m *AppendOnly) appendEntryLocked(key, value []byte, ptr page.ValuePtr, flags byte, steal bool, borrowValue bool) {
 	if m.count == len(m.entries) {
-		nextCap := appendOnlyNextCapacity(len(m.entries), flags)
+		nextCap := appendOnlyNextCapacity(len(m.entries))
 		prev := m.entries
 		grown := getAppendOnlyEntries(nextCap)
 		copy(grown, m.entries[:m.count])

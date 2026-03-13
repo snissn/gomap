@@ -13,25 +13,54 @@ func TestAppendOnlyNextCapacityGrowthPolicy(t *testing.T) {
 	tests := []struct {
 		name    string
 		current int
-		flags   byte
 		want    int
 	}{
-		{name: "below-min", current: appendOnlyMinInitialEntries - 1, flags: 0, want: appendOnlyMinInitialEntries},
-		{name: "non-pointer-doubles", current: appendOnlyMinInitialEntries, flags: 0, want: appendOnlyMinInitialEntries * 2},
-		{name: "pointer-below-cutoff-quadruples", current: appendOnlyMinInitialEntries, flags: node.FlagPointer, want: appendOnlyMinInitialEntries * 4},
-		{name: "pointer-just-below-cutoff-quadruples", current: appendOnlyPointerGrowCutoff - 1, flags: node.FlagPointer, want: (appendOnlyPointerGrowCutoff - 1) * 4},
-		{name: "pointer-at-cutoff-doubles", current: appendOnlyPointerGrowCutoff, flags: node.FlagPointer, want: appendOnlyPointerGrowCutoff * 2},
-		{name: "pointer-above-cutoff-doubles", current: appendOnlyPointerGrowCutoff + 1, flags: node.FlagPointer, want: (appendOnlyPointerGrowCutoff + 1) * 2},
-		{name: "non-pointer-below-cutoff-doubles", current: appendOnlyPointerGrowCutoff - 1, flags: 0, want: (appendOnlyPointerGrowCutoff - 1) * 2},
+		{name: "below-min", current: appendOnlyMinInitialEntries - 1, want: appendOnlyMinInitialEntries},
+		{name: "below-cutoff-quadruples", current: appendOnlyMinInitialEntries, want: appendOnlyMinInitialEntries * 4},
+		{name: "just-below-cutoff-quadruples", current: appendOnlyAggressiveGrowCutoff - 1, want: (appendOnlyAggressiveGrowCutoff - 1) * 4},
+		{name: "at-cutoff-doubles", current: appendOnlyAggressiveGrowCutoff, want: appendOnlyAggressiveGrowCutoff * 2},
+		{name: "above-cutoff-doubles", current: appendOnlyAggressiveGrowCutoff + 1, want: (appendOnlyAggressiveGrowCutoff + 1) * 2},
 	}
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			if got := appendOnlyNextCapacity(tc.current, tc.flags); got != tc.want {
-				t.Fatalf("appendOnlyNextCapacity(%d, %#x)=%d want=%d", tc.current, tc.flags, got, tc.want)
+			if got := appendOnlyNextCapacity(tc.current); got != tc.want {
+				t.Fatalf("appendOnlyNextCapacity(%d)=%d want=%d", tc.current, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAppendOnlyInlineGrowthSkipsIntermediateDoublingBelowCutoff(t *testing.T) {
+	mt := &AppendOnly{
+		entries:        make([]appendOnlyEntry, appendOnlyMinInitialEntries),
+		baseEntriesLen: appendOnlyMinInitialEntries,
+		ordered:        true,
+		lastIdx:        -1,
+	}
+	if got := cap(mt.entries); got != appendOnlyMinInitialEntries {
+		t.Fatalf("initial cap(entries)=%d want=%d", got, appendOnlyMinInitialEntries)
+	}
+
+	growthCaps := make([]int, 0, 2)
+	lastCap := cap(mt.entries)
+	value := []byte("v")
+	for i := 0; i < appendOnlyMinInitialEntries*2+1; i++ {
+		var key [8]byte
+		binary.BigEndian.PutUint64(key[:], uint64(i))
+		mt.Set(key[:], value)
+		if got := cap(mt.entries); got != lastCap {
+			growthCaps = append(growthCaps, got)
+			lastCap = got
+		}
+	}
+
+	if len(growthCaps) != 1 {
+		t.Fatalf("growth caps=%v want exactly one growth step", growthCaps)
+	}
+	if growthCaps[0] < appendOnlyMinInitialEntries*4 {
+		t.Fatalf("growth cap=%d want >= %d", growthCaps[0], appendOnlyMinInitialEntries*4)
 	}
 }
 
