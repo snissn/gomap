@@ -50,12 +50,13 @@ var errWALUnavailable = errors.New("cachingdb: wal unavailable")
 
 var iteratorDebugEnabled atomic.Bool
 
-var valueLogEligiblePool sync.Pool                          // stores []int
-var valueLogRecordPool sync.Pool                            // stores []valuelog.Record
-var valueLogKeyPool sync.Pool                               // stores [][]byte
-var valueLogPtrPool sync.Pool                               // stores []page.ValuePtr
-var batchArenaPools [batchArenaClassCount]sync.Pool         // stores []byte
-var batchArenaLeasePool sync.Pool                           // stores *batchArenaLease
+var valueLogEligiblePool sync.Pool                  // stores []int
+var valueLogRecordPool sync.Pool                    // stores []valuelog.Record
+var valueLogKeyPool sync.Pool                       // stores [][]byte
+var valueLogPtrPool sync.Pool                       // stores []page.ValuePtr
+var batchArenaPools [batchArenaClassCount]sync.Pool // stores []byte
+var batchArenaLeasePool sync.Pool                   // stores *batchArenaLease
+var appendOnlyDirectValueArenaPools [appendOnlyDirectValueArenaClassCount]sync.Pool
 var batchEntrySliceRefPool sync.Pool                        // stores *batchEntrySliceRef
 var outerLeafArenaPools [outerLeafArenaClassCount]sync.Pool // stores []byte
 var outerLeafArenaLeaseMu sync.Mutex
@@ -185,12 +186,19 @@ const (
 	// batch arenas are chunked key/value copy buffers that may be leased to
 	// memtables. Keep the max pooled chunk size modest to avoid retaining large
 	// mostly-empty tail chunks during big restore batches.
-	batchArenaMaxShift       = 21
-	batchArenaClassCount     = batchArenaMaxShift - batchArenaMinShift + 1
-	outerLeafArenaMinShift   = 12
-	outerLeafArenaMaxShift   = 24
-	outerLeafArenaClassCount = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
-	maxOuterLeafArenaLeases  = 64
+	batchArenaMaxShift                        = 21
+	batchArenaClassCount                      = batchArenaMaxShift - batchArenaMinShift + 1
+	appendOnlyDirectValueArenaMinShift        = 15
+	appendOnlyDirectValueArenaMaxShift        = 20
+	appendOnlyDirectValueArenaClassCount      = appendOnlyDirectValueArenaMaxShift - appendOnlyDirectValueArenaMinShift + 1
+	appendOnlyDirectValueArenaDefaultChunk    = 32 << 10
+	appendOnlyDirectValueArenaPoolMaxCap      = 1 << appendOnlyDirectValueArenaMaxShift
+	appendOnlyDirectValueArenaRetainMaxBytes  = 8 << 20
+	appendOnlyDirectValueArenaRetainMaxChunks = 32
+	outerLeafArenaMinShift                    = 12
+	outerLeafArenaMaxShift                    = 24
+	outerLeafArenaClassCount                  = outerLeafArenaMaxShift - outerLeafArenaMinShift + 1
+	maxOuterLeafArenaLeases                   = 64
 )
 
 type vlogPreparedFrameBody struct {
@@ -483,6 +491,176 @@ func putBatchArenas(chunks [][]byte) {
 			chunks[i] = nil
 		}
 	}
+}
+
+func appendOnlyDirectValueArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
+	if capacity <= 0 || capacity > appendOnlyDirectValueArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	classCap = 1 << uint(bits.Len(uint(capacity-1)))
+	minCap := 1 << appendOnlyDirectValueArenaMinShift
+	if classCap < minCap {
+		classCap = minCap
+	}
+	if classCap > appendOnlyDirectValueArenaPoolMaxCap {
+		return 0, 0, false
+	}
+	shift := bits.Len(uint(classCap)) - 1
+	idx = shift - appendOnlyDirectValueArenaMinShift
+	if idx < 0 || idx >= appendOnlyDirectValueArenaClassCount {
+		return 0, 0, false
+	}
+	return idx, classCap, true
+}
+
+func appendOnlyDirectValueArenaClassForCap(capacity int) (idx int, ok bool) {
+	minCap := 1 << appendOnlyDirectValueArenaMinShift
+	if capacity < minCap || capacity > appendOnlyDirectValueArenaPoolMaxCap {
+		return 0, false
+	}
+	if capacity&(capacity-1) != 0 {
+		return 0, false
+	}
+	shift := bits.TrailingZeros(uint(capacity))
+	idx = shift - appendOnlyDirectValueArenaMinShift
+	if idx < 0 || idx >= appendOnlyDirectValueArenaClassCount {
+		return 0, false
+	}
+	return idx, true
+}
+
+func getAppendOnlyDirectValueArenaChunk(capacity int) []byte {
+	if capacity <= 0 {
+		capacity = appendOnlyDirectValueArenaDefaultChunk
+	}
+	if capacity < appendOnlyDirectValueArenaDefaultChunk {
+		capacity = appendOnlyDirectValueArenaDefaultChunk
+	}
+	if idx, classCap, ok := appendOnlyDirectValueArenaClassForLen(capacity); ok {
+		if v := appendOnlyDirectValueArenaPools[idx].Get(); v != nil {
+			if b, ok := v.([]byte); ok && cap(b) >= classCap {
+				return b[:0]
+			}
+		}
+		return make([]byte, 0, classCap)
+	}
+	return make([]byte, 0, capacity)
+}
+
+func putAppendOnlyDirectValueArenaChunk(chunk []byte) {
+	if chunk == nil {
+		return
+	}
+	if idx, ok := appendOnlyDirectValueArenaClassForCap(cap(chunk)); ok {
+		appendOnlyDirectValueArenaPools[idx].Put(chunk[:0])
+	}
+}
+
+func putAppendOnlyDirectValueArenaChunks(chunks [][]byte) {
+	for i := range chunks {
+		if chunks[i] != nil {
+			putAppendOnlyDirectValueArenaChunk(chunks[i])
+			chunks[i] = nil
+		}
+	}
+}
+
+func appendOnlyDirectArenaChunksBytes(chunks [][]byte) int64 {
+	var total int64
+	for i := range chunks {
+		if chunks[i] != nil {
+			total += int64(cap(chunks[i]))
+		}
+	}
+	return total
+}
+
+type appendOnlyDirectValueArena struct {
+	retained      [][]byte
+	retainedBytes int64
+	active        [][]byte
+	cur           []byte
+	curPos        int
+}
+
+func (a *appendOnlyDirectValueArena) takeRetainedChunk(length int) []byte {
+	want := length
+	if want < appendOnlyDirectValueArenaDefaultChunk {
+		want = appendOnlyDirectValueArenaDefaultChunk
+	}
+	for i := len(a.retained) - 1; i >= 0; i-- {
+		chunk := a.retained[i]
+		if cap(chunk) < want {
+			continue
+		}
+		last := len(a.retained) - 1
+		a.retained[i] = a.retained[last]
+		a.retained[last] = nil
+		a.retained = a.retained[:last]
+		a.retainedBytes -= int64(cap(chunk))
+		return chunk[:0]
+	}
+	return getAppendOnlyDirectValueArenaChunk(want)
+}
+
+func (a *appendOnlyDirectValueArena) alloc(length int) []byte {
+	if length <= 0 {
+		return nil
+	}
+	if a.cur == nil || cap(a.cur)-a.curPos < length {
+		chunk := a.takeRetainedChunk(length)
+		a.active = append(a.active, chunk)
+		a.cur = chunk[:cap(chunk)]
+		a.curPos = 0
+	}
+	out := a.cur[a.curPos : a.curPos+length : a.curPos+length]
+	a.curPos += length
+	return out
+}
+
+func (a *appendOnlyDirectValueArena) drainActiveChunks() [][]byte {
+	chunks := a.active
+	a.active = nil
+	a.cur = nil
+	a.curPos = 0
+	return chunks
+}
+
+func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
+	for i := range chunks {
+		chunk := chunks[i]
+		if chunk == nil {
+			continue
+		}
+		chunks[i] = nil
+		chunk = chunk[:0]
+		size := int64(cap(chunk))
+		for len(a.retained) > 0 && (len(a.retained) >= appendOnlyDirectValueArenaRetainMaxChunks || a.retainedBytes+size > appendOnlyDirectValueArenaRetainMaxBytes) {
+			last := len(a.retained) - 1
+			evict := a.retained[last]
+			a.retained[last] = nil
+			a.retained = a.retained[:last]
+			a.retainedBytes -= int64(cap(evict))
+			putAppendOnlyDirectValueArenaChunk(evict)
+		}
+		if len(a.retained) >= appendOnlyDirectValueArenaRetainMaxChunks || a.retainedBytes+size > appendOnlyDirectValueArenaRetainMaxBytes {
+			putAppendOnlyDirectValueArenaChunk(chunk)
+			continue
+		}
+		a.retained = append(a.retained, chunk)
+		a.retainedBytes += size
+	}
+}
+
+func (a *appendOnlyDirectValueArena) recycleActive() {
+	a.retainChunks(a.drainActiveChunks())
+}
+
+func (a *appendOnlyDirectValueArena) recycleAll() {
+	putAppendOnlyDirectValueArenaChunks(a.drainActiveChunks())
+	putAppendOnlyDirectValueArenaChunks(a.retained)
+	a.retained = nil
+	a.retainedBytes = 0
 }
 
 func getOuterLeafArena(capacity int) []byte {
@@ -3500,6 +3678,12 @@ type batchArenaLease struct {
 	bytes  int64
 }
 
+type appendOnlyDirectArenaLease struct {
+	shardID uint16
+	chunks  [][]byte
+	bytes   int64
+}
+
 type memtableViewDeferredInfo struct {
 	memtables     int64
 	sinceUnixNano int64
@@ -3564,20 +3748,22 @@ type DB struct {
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
-	memtables             atomic.Pointer[memtableView]
-	hashSortedIndexer     *memtable.HashSortedIndexer
-	appendOnlyMemPool     sync.Pool
-	appendOnlyMemLeaseMu  sync.Mutex
-	appendOnlyMemLeases   []*memtable.AppendOnly
-	pendingRetiredMems    []memtable.Table
-	memtableViewTelemetry memtableViewLifecycleTelemetry
-	queueRanges           []keyRange
-	queueWALPaths         [][]string
-	queueValueLogPaths    [][]string
-	backendRange          keyRange
-	backendRangeKnown     bool
-	backendRangeInit      sync.Once
-	backendRangeErr       error
+	memtables                        atomic.Pointer[memtableView]
+	hashSortedIndexer                *memtable.HashSortedIndexer
+	appendOnlyMemPool                sync.Pool
+	appendOnlyMemLeaseMu             sync.Mutex
+	appendOnlyMemLeases              []*memtable.AppendOnly
+	appendOnlyDirectArenaLeaseMu     sync.Mutex
+	appendOnlyDirectArenaLeasesByMem map[memtable.Table]*appendOnlyDirectArenaLease
+	pendingRetiredMems               []memtable.Table
+	memtableViewTelemetry            memtableViewLifecycleTelemetry
+	queueRanges                      []keyRange
+	queueWALPaths                    [][]string
+	queueValueLogPaths               [][]string
+	backendRange                     keyRange
+	backendRangeKnown                bool
+	backendRangeInit                 sync.Once
+	backendRangeErr                  error
 
 	// Durability
 	lanes         []lane
@@ -4002,11 +4188,12 @@ type keyRange struct {
 }
 
 type memShard struct {
-	mu    sync.Mutex
-	mem   memtable.Table
-	rng   keyRange
-	bytes int64
-	stats memtableStats
+	mu                         sync.Mutex
+	mem                        memtable.Table
+	rng                        keyRange
+	bytes                      int64
+	stats                      memtableStats
+	appendOnlyDirectValueArena appendOnlyDirectValueArena
 }
 
 // memtableView is an immutable snapshot of the in-memory layers.
@@ -4238,7 +4425,7 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues boo
 			mt.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 			return
 		}
-		if borrower, ok := mt.(memtable.BatchValueBorrower); ok && len(memVal) > 0 {
+		if borrower, ok := mt.(memtable.ValueBorrower); ok && len(memVal) > 0 {
 			borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 			return
 		}
@@ -4249,7 +4436,7 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues boo
 		mt.SetSteal(op.Key, op.Value)
 		return
 	}
-	if borrower, ok := mt.(memtable.BatchValueBorrower); ok && len(op.Value) > 0 {
+	if borrower, ok := mt.(memtable.ValueBorrower); ok && len(op.Value) > 0 {
 		borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
 		return
 	}
@@ -4337,6 +4524,66 @@ func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
 	}
 }
 
+func (db *DB) retainAppendOnlyDirectArenaChunksForMemtable(shardID int, mt memtable.Table, chunks [][]byte) {
+	if len(chunks) == 0 {
+		return
+	}
+	if db == nil || mt == nil || shardID < 0 || shardID >= len(db.mutableShards) {
+		putAppendOnlyDirectValueArenaChunks(chunks)
+		return
+	}
+	db.appendOnlyDirectArenaLeaseMu.Lock()
+	if db.appendOnlyDirectArenaLeasesByMem == nil {
+		db.appendOnlyDirectArenaLeasesByMem = make(map[memtable.Table]*appendOnlyDirectArenaLease, 1)
+	}
+	if lease := db.appendOnlyDirectArenaLeasesByMem[mt]; lease != nil {
+		lease.chunks = append(lease.chunks, chunks...)
+		lease.bytes += appendOnlyDirectArenaChunksBytes(chunks)
+		db.appendOnlyDirectArenaLeaseMu.Unlock()
+		return
+	}
+	db.appendOnlyDirectArenaLeasesByMem[mt] = &appendOnlyDirectArenaLease{
+		shardID: uint16(shardID),
+		chunks:  chunks,
+		bytes:   appendOnlyDirectArenaChunksBytes(chunks),
+	}
+	db.appendOnlyDirectArenaLeaseMu.Unlock()
+}
+
+func (db *DB) releaseAppendOnlyDirectArenaLeaseForMemtable(mt memtable.Table) {
+	if db == nil || mt == nil {
+		return
+	}
+	var lease *appendOnlyDirectArenaLease
+	db.appendOnlyDirectArenaLeaseMu.Lock()
+	if db.appendOnlyDirectArenaLeasesByMem != nil {
+		lease = db.appendOnlyDirectArenaLeasesByMem[mt]
+		delete(db.appendOnlyDirectArenaLeasesByMem, mt)
+	}
+	db.appendOnlyDirectArenaLeaseMu.Unlock()
+	if lease == nil || len(lease.chunks) == 0 {
+		return
+	}
+	if int(lease.shardID) >= len(db.mutableShards) {
+		putAppendOnlyDirectValueArenaChunks(lease.chunks)
+		return
+	}
+	shard := &db.mutableShards[lease.shardID]
+	shard.mu.Lock()
+	shard.appendOnlyDirectValueArena.retainChunks(lease.chunks)
+	shard.mu.Unlock()
+}
+
+func (db *DB) retainMutableShardAppendOnlyArenaLocked(shardID int, shard *memShard) {
+	if db == nil || shard == nil {
+		return
+	}
+	if _, ok := shard.mem.(memtable.ValueBorrower); !ok {
+		return
+	}
+	db.retainAppendOnlyDirectArenaChunksForMemtable(shardID, shard.mem, shard.appendOnlyDirectValueArena.drainActiveChunks())
+}
+
 func (db *DB) queueRetiredMemtableLocked(mem memtable.Table) {
 	if db == nil || mem == nil {
 		return
@@ -4391,6 +4638,7 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
 			typed.Reset()
+			db.releaseAppendOnlyDirectArenaLeaseForMemtable(typed)
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
 			}
@@ -4597,10 +4845,12 @@ func (db *DB) resetMutableShardsLocked(nextMode memtable.Mode, reuse bool) error
 		if reuse {
 			if r, ok := any(shard.mem).(interface{ Reset() }); ok {
 				r.Reset()
+				shard.appendOnlyDirectValueArena.recycleActive()
 				reused = true
 			}
 		}
 		if !reused {
+			db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 			db.queueRetiredMemtableLocked(shard.mem)
 			mt, err := db.newMutableMemtableWithCapacityMode(0, nextMode)
 			if err != nil {
@@ -11019,7 +11269,14 @@ func (db *DB) checkpointRotateCapacity() int {
 	if capacity <= 0 {
 		return -1
 	}
-	const checkpointRotateCapMax = 256 * 1024
+	// Checkpoint cutover uses a bounded preallocation to keep lock hold time
+	// predictable. append_only entry slices, however, pay a high regrowth/copy
+	// tax when this cap is too small (notably in settled batch write workloads).
+	// Use a higher cap there while still avoiding full-threshold prealloc.
+	checkpointRotateCapMax := 256 * 1024
+	if db.memtableMode == memtable.ModeAppendOnly {
+		checkpointRotateCapMax = 4 * 1024 * 1024
+	}
 	if capacity > checkpointRotateCapMax {
 		return checkpointRotateCapMax
 	}
@@ -11834,9 +12091,21 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 		if !db.memtableValueLogPointers {
 			memVal = value
 		}
-		shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(memVal) > 0 {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(memVal))
+			copy(owned, memVal)
+			borrower.SetEntryBorrowValue(key, owned, ptr, node.FlagPointer)
+		} else {
+			shard.mem.SetEntry(key, memVal, ptr, node.FlagPointer)
+		}
 	} else {
-		shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+		if borrower, ok := shard.mem.(memtable.ValueBorrower); ok && len(value) > 0 {
+			owned := shard.appendOnlyDirectValueArena.alloc(len(value))
+			copy(owned, value)
+			borrower.SetEntryBorrowValue(key, owned, page.ValuePtr{}, node.FlagInline)
+		} else {
+			shard.mem.SetEntry(key, value, page.ValuePtr{}, node.FlagInline)
+		}
 	}
 	shard.rng.add(key)
 	newBytes := shard.mem.Size()
@@ -12615,6 +12884,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
+		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
 		queueLaneID := db.laneForShardIndex(i)
@@ -12754,6 +13024,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		}
 
 		// Freeze and enqueue the old mutable shard.
+		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
 		queueLaneID := db.laneForShardIndex(i)
@@ -17870,7 +18141,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					} else {
 						borrowed := false
 						if !useSteal {
-							if _, ok := shard.mem.(memtable.BatchValueBorrower); ok {
+							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
 								if op.IsPtr {
 									borrowed = storeInlinePtrValues && len(op.Value) > 0
 								} else {
