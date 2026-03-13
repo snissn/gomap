@@ -16601,6 +16601,24 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 	db.batchIntPool.Put(idxs[:0])
 }
 
+func clearBatchResetScratchRefs(b *Batch) {
+	if b == nil {
+		return
+	}
+	if len(b.entries) > 0 {
+		clear(b.entries)
+	}
+	if len(b.walBuf) > 0 {
+		clear(b.walBuf)
+	}
+	for i := range b.shardEntries {
+		if len(b.shardEntries[i]) > 0 {
+			clear(b.shardEntries[i])
+			b.shardEntries[i] = b.shardEntries[i][:0]
+		}
+	}
+}
+
 // Reset clears the batch for reuse without closing it.
 //
 // This intentionally keeps internal buffers to avoid per-batch allocations in
@@ -16613,6 +16631,11 @@ func (b *Batch) Reset() {
 		_ = b.backend.Close()
 		b.backend = nil
 	}
+	// Batch reuse intentionally retains slice capacity, so clear the live
+	// reference-bearing prefix before truncating. Otherwise old batch entries and
+	// WAL/shard scratch can keep released copy-arena chunks and external byte
+	// slices reachable across resets.
+	clearBatchResetScratchRefs(b)
 	if b.entries != nil {
 		b.entries = b.entries[:0]
 	}
