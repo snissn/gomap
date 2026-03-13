@@ -62,6 +62,108 @@ func (l *stubLeafPageLog) AppendLeafPage(_ []byte) (page.ValuePtr, error) {
 	return ptr, nil
 }
 
+type memoryLeafPageStore struct {
+	z *Zipper
+
+	next  uint32
+	pages map[uint64][]byte
+
+	readCalls  int
+	sawCache   int
+	sawNoCache int
+}
+
+func newMemoryLeafPageStore(z *Zipper) *memoryLeafPageStore {
+	return &memoryLeafPageStore{
+		z:     z,
+		pages: make(map[uint64][]byte),
+	}
+}
+
+func (s *memoryLeafPageStore) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+	if s.z != nil {
+		s.z.leafRefCacheMu.RLock()
+		if s.z.leafRefCache != nil {
+			s.sawCache++
+		} else {
+			s.sawNoCache++
+		}
+		s.z.leafRefCacheMu.RUnlock()
+	}
+	if s.next == 0 {
+		s.next = 4
+	}
+	ptr := page.ValuePtr{
+		FileID: page.ValueLogFileID(1),
+		Offset: uint64(s.next),
+		Length: uint32(len(leafPage)),
+	}
+	s.next += 4096 + 32
+	key, err := page.EncodeLeafRef(ptr)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	s.pages[key] = append([]byte(nil), leafPage...)
+	return ptr, nil
+}
+
+func (s *memoryLeafPageStore) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	s.readCalls++
+	key, err := page.EncodeLeafRef(ptr)
+	if err != nil {
+		return nil, err
+	}
+	data, ok := s.pages[key]
+	if !ok {
+		return nil, io.EOF
+	}
+	return data, nil
+}
+
+func (s *memoryLeafPageStore) resetObservations() {
+	s.readCalls = 0
+	s.sawCache = 0
+	s.sawNoCache = 0
+}
+
+func buildOuterLeafInternalRoot(t *testing.T, z *Zipper) uint64 {
+	t.Helper()
+
+	rootID, err := z.pager.Alloc(1)
+	if err != nil {
+		t.Fatalf("alloc root: %v", err)
+	}
+	data, err := z.pager.Get(rootID)
+	if err != nil {
+		t.Fatalf("get root: %v", err)
+	}
+	n := node.NewNode(data)
+	n.SetPageID(rootID)
+	n.SetType(page.PageTypeLeaf)
+	n.UpdateChecksum()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	for i := 0; i < 200; i++ {
+		key := []byte(fmt.Sprintf("key-%03d", i))
+		val := []byte(fmt.Sprintf("val-%03d", i))
+		b.Set(key, val)
+	}
+
+	newRootID, _, _, err := z.Apply(rootID, b)
+	if err != nil {
+		t.Fatalf("build root apply: %v", err)
+	}
+	rootData, err := z.pager.Get(newRootID)
+	if err != nil {
+		t.Fatalf("get new root: %v", err)
+	}
+	if got := node.NewNode(rootData).Type(); got != page.PageTypeInternal {
+		t.Fatalf("new root type=%d want %d", got, page.PageTypeInternal)
+	}
+	return newRootID
+}
+
 func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 	dir := t.TempDir()
 	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
@@ -110,6 +212,84 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 	}
 	if got := reader.calls.Load(); got != 0 {
 		t.Fatalf("leafPageReader calls=%d want 0", got)
+	}
+}
+
+func TestZipperApply_NonMaintenanceRestorePathDoesNotInstallLeafRefCache(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	store := newMemoryLeafPageStore(z)
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+
+	rootID := buildOuterLeafInternalRoot(t, z)
+	store.resetObservations()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	b.Set([]byte("key-050"), []byte("updated"))
+
+	if _, _, _, err := z.Apply(rootID, b); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if store.readCalls == 0 {
+		t.Fatalf("expected restore path to read existing outer leaf refs")
+	}
+	if store.sawNoCache == 0 {
+		t.Fatalf("expected fresh outer leaf writes to observe no in-flight cache on non-maintenance apply")
+	}
+	if store.sawCache != 0 {
+		t.Fatalf("saw cache on non-maintenance apply: sawCache=%d sawNoCache=%d", store.sawCache, store.sawNoCache)
+	}
+	if z.leafRefCache != nil {
+		t.Fatalf("leafRefCache not cleared after Apply")
+	}
+}
+
+func TestZipperApply_MaintenanceRestorePathInstallsLeafRefCache(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	store := newMemoryLeafPageStore(z)
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+
+	rootID := buildOuterLeafInternalRoot(t, z)
+	store.resetObservations()
+
+	b := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer func() { _ = b.Close() }()
+	b.Delete([]byte("key-050"))
+
+	if _, _, _, err := z.Apply(rootID, b); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+	if store.readCalls == 0 {
+		t.Fatalf("expected restore path to read existing outer leaf refs")
+	}
+	if store.sawCache == 0 {
+		t.Fatalf("expected maintenance apply to install the in-flight outer leaf cache")
+	}
+	if store.sawNoCache != 0 {
+		t.Fatalf("unexpected cache miss observation during maintenance apply: sawCache=%d sawNoCache=%d", store.sawCache, store.sawNoCache)
+	}
+	if z.leafRefCache != nil {
+		t.Fatalf("leafRefCache not cleared after Apply")
 	}
 }
 

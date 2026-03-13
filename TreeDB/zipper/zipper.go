@@ -601,7 +601,19 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 		return rootID, nil, metrics, nil
 	}
 
-	if z != nil && z.outerLeavesInValueLog {
+	// Underfull merge/rebalance maintenance is only beneficial when the batch
+	// includes deletes (can create empty/underfull pages).
+	maintenance, deleteCount := z.shouldRunMaintenance(ops)
+	var budget *maintenanceBudget
+	if maintenance && z.maintenanceOpsPerCoalesce > 0 {
+		budget = newMaintenanceBudget(len(ops), deleteCount, z.maintenanceOpsPerCoalesce)
+	}
+
+	if z != nil && z.outerLeavesInValueLog && maintenance {
+		// Fresh outer-leaf pages only need in-memory ownership during Apply when
+		// maintenance may reload newly written leaf refs before the value log is
+		// flushed. Pure put/restore applies do not revisit those fresh leaves, so
+		// avoid retaining their page buffers for the whole commit.
 		z.leafRefCacheMu.Lock()
 		z.leafRefCache = make(map[uint64][]byte)
 		z.leafRefCacheMu.Unlock()
@@ -610,14 +622,6 @@ func (z *Zipper) Apply(rootID uint64, b *batch.Batch) (uint64, []uint64, adaptiv
 			z.leafRefCache = nil
 			z.leafRefCacheMu.Unlock()
 		}()
-	}
-
-	// Underfull merge/rebalance maintenance is only beneficial when the batch
-	// includes deletes (can create empty/underfull pages).
-	maintenance, deleteCount := z.shouldRunMaintenance(ops)
-	var budget *maintenanceBudget
-	if maintenance && z.maintenanceOpsPerCoalesce > 0 {
-		budget = newMaintenanceBudget(len(ops), deleteCount, z.maintenanceOpsPerCoalesce)
 	}
 
 	var retired []uint64
