@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"runtime/metrics"
 	"sort"
 	"strconv"
@@ -74,6 +75,15 @@ var valueLogKeyLeases [][][]byte
 var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolLastGC atomic.Uint64
 var batchArenaPoolBudgetState atomic.Value
+var poolPressureState atomic.Value
+var poolPressureMu sync.Mutex
+var poolPressureLastLeaseTrimUnixNano atomic.Int64
+
+var poolPressureNow = time.Now
+var poolPressureReadMemStats = runtime.ReadMemStats
+var poolPressureMemoryLimit = func() int64 {
+	return debug.SetMemoryLimit(-1)
+}
 
 var runtimeNumGC = func() uint64 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
@@ -87,6 +97,34 @@ var runtimeNumGC = func() uint64 {
 }
 var batchArenaPoolNumGC = runtimeNumGC
 var entrySlicePoolNumGC = runtimeNumGC
+
+type poolPressureLevel uint8
+
+const (
+	poolPressureNormal poolPressureLevel = iota
+	poolPressureHigh
+	poolPressureCritical
+)
+
+type poolPressureSnapshot struct {
+	sampledUnixNano    int64
+	level              poolPressureLevel
+	heapAllocBytes     uint64
+	heapInuseBytes     uint64
+	heapSysBytes       uint64
+	heapIdleUnreleased uint64
+	memoryLimitBytes   int64
+}
+
+const (
+	poolPressureRefreshInterval = 250 * time.Millisecond
+	// Treat high/critical pressure as heap residency (not alloc churn). These
+	// thresholds target restore-like peaks where pool retention can inflate RSS.
+	poolPressureHighHeapBytes     = uint64(4 << 30)
+	poolPressureCriticalHeapBytes = uint64(8 << 30)
+	poolPressureTrimInterval      = 2 * time.Second
+	poolPressureHighBudgetDivisor = int64(2)
+)
 
 func computeBatchArenaPoolBudgetBytes() int64 {
 	return computeBatchArenaPoolBudgetBytesForProcs(runtime.GOMAXPROCS(0))
@@ -118,6 +156,173 @@ func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 		budget = maxBudgetBytes
 	}
 	return budget
+}
+
+func classifyPoolPressureLevel(usedBytes uint64, memoryLimitBytes int64) poolPressureLevel {
+	high := poolPressureHighHeapBytes
+	critical := poolPressureCriticalHeapBytes
+
+	if memoryLimitBytes > 0 {
+		limit := uint64(memoryLimitBytes)
+		if limit > 0 {
+			limitHigh := (limit * 70) / 100
+			limitCritical := (limit * 85) / 100
+			if limitHigh > 0 && limitHigh < high {
+				high = limitHigh
+			}
+			if limitCritical > 0 && limitCritical < critical {
+				critical = limitCritical
+			}
+			if critical < high {
+				critical = high
+			}
+		}
+	}
+
+	if usedBytes >= critical {
+		return poolPressureCritical
+	}
+	if usedBytes >= high {
+		return poolPressureHigh
+	}
+	return poolPressureNormal
+}
+
+func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
+	var ms runtime.MemStats
+	poolPressureReadMemStats(&ms)
+	heapIdleUnreleased := uint64(0)
+	if ms.HeapIdle > ms.HeapReleased {
+		heapIdleUnreleased = ms.HeapIdle - ms.HeapReleased
+	}
+	used := ms.HeapInuse
+	if ms.HeapAlloc > used {
+		used = ms.HeapAlloc
+	}
+	memLimit := poolPressureMemoryLimit()
+	level := classifyPoolPressureLevel(used, memLimit)
+	return poolPressureSnapshot{
+		sampledUnixNano:    sampledAt.UnixNano(),
+		level:              level,
+		heapAllocBytes:     ms.HeapAlloc,
+		heapInuseBytes:     ms.HeapInuse,
+		heapSysBytes:       ms.HeapSys,
+		heapIdleUnreleased: heapIdleUnreleased,
+		memoryLimitBytes:   memLimit,
+	}
+}
+
+func maybeTrimEntrySliceLeasesUnderPressure(level poolPressureLevel, sampledAt time.Time) {
+	if level == poolPressureNormal {
+		return
+	}
+	nowUnix := sampledAt.UnixNano()
+	last := poolPressureLastLeaseTrimUnixNano.Load()
+	if last != 0 && nowUnix-last < int64(poolPressureTrimInterval) {
+		return
+	}
+	if !poolPressureLastLeaseTrimUnixNano.CompareAndSwap(last, nowUnix) {
+		return
+	}
+
+	keepPerBucket := maxEntrySliceLeasesPerBucket
+	switch level {
+	case poolPressureCritical:
+		keepPerBucket = 0
+	case poolPressureHigh:
+		keepPerBucket = maxEntrySliceLeasesPerBucket / 8
+		if keepPerBucket < 2 {
+			keepPerBucket = 2
+		}
+	}
+
+	var held int64
+	entrySliceLeaseMu.Lock()
+	for i := range entrySliceLeases {
+		leases := entrySliceLeases[i]
+		if len(leases) > keepPerBucket {
+			drop := len(leases) - keepPerBucket
+			for j := 0; j < drop; j++ {
+				leases[j] = nil
+			}
+			if keepPerBucket == 0 {
+				entrySliceLeases[i] = nil
+				leases = nil
+			} else {
+				entrySliceLeases[i] = leases[drop:]
+				leases = entrySliceLeases[i]
+			}
+		}
+		for _, entries := range leases {
+			if entries == nil {
+				continue
+			}
+			held += int64(cap(entries)) * entrySliceEntrySizeBytes
+		}
+	}
+	entrySliceLeaseMu.Unlock()
+	entrySlicePoolBytes.Store(held)
+}
+
+func currentPoolPressureSnapshot() poolPressureSnapshot {
+	now := poolPressureNow()
+	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
+		if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
+			return cached
+		}
+	}
+
+	poolPressureMu.Lock()
+	defer poolPressureMu.Unlock()
+
+	now = poolPressureNow()
+	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
+		if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
+			return cached
+		}
+	}
+
+	snap := samplePoolPressureSnapshot(now)
+	poolPressureState.Store(snap)
+	maybeTrimEntrySliceLeasesUnderPressure(snap.level, now)
+	return snap
+}
+
+func scalePoolBudgetForPressure(base int64, level poolPressureLevel) int64 {
+	if base <= 0 {
+		return 0
+	}
+	switch level {
+	case poolPressureCritical:
+		return 0
+	case poolPressureHigh:
+		return base / poolPressureHighBudgetDivisor
+	default:
+		return base
+	}
+}
+
+func currentBatchArenaRetentionBudgetBytes() int64 {
+	base := currentBatchArenaPoolBudgetBytes()
+	level := currentPoolPressureSnapshot().level
+	return scalePoolBudgetForPressure(base, level)
+}
+
+func currentEntrySlicePoolBudgetBytes() int64 {
+	base := entrySlicePoolBudgetBytes
+	level := currentPoolPressureSnapshot().level
+	return scalePoolBudgetForPressure(base, level)
+}
+
+func poolPressureLevelString(level poolPressureLevel) string {
+	switch level {
+	case poolPressureCritical:
+		return "critical"
+	case poolPressureHigh:
+		return "high"
+	default:
+		return "normal"
+	}
 }
 
 func currentBatchArenaPoolBudgetBytes() int64 {
@@ -162,6 +367,7 @@ type batchArenaPoolBudgetCache struct {
 
 func init() {
 	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
+	poolPressureState.Store(poolPressureSnapshot{})
 }
 
 func noteBatchArenaPoolGC(numGC uint64) {
@@ -461,7 +667,7 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
-	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
+	if budget := currentBatchArenaRetentionBudgetBytes(); budget > 0 {
 		size := int64(cap(buf))
 		noteEpoch := false
 		for {
@@ -6444,7 +6650,7 @@ func reserveEntrySlicePoolBytes(bytes int64) (ok, transitionedFromZero bool) {
 	if bytes <= 0 {
 		return true, false
 	}
-	budget := entrySlicePoolBudgetBytes
+	budget := currentEntrySlicePoolBudgetBytes()
 	if budget <= 0 {
 		return false, false
 	}
@@ -15577,26 +15783,42 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.memtable_view.deferred_oldest_age_ms"] = fmt.Sprintf("%.3f", memViewOldestDeferredAgeMS)
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
+	poolPressure := currentPoolPressureSnapshot()
+	arenaBaseBudget := currentBatchArenaPoolBudgetBytes()
+	arenaEffectiveBudget := scalePoolBudgetForPressure(arenaBaseBudget, poolPressure.level)
+	entrySliceBaseBudget := entrySlicePoolBudgetBytes
+	entrySliceEffectiveBudget := scalePoolBudgetForPressure(entrySliceBaseBudget, poolPressure.level)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
-	arenaPoolBudget := fmt.Sprintf("%d", currentBatchArenaPoolBudgetBytes())
+	arenaPoolBudget := fmt.Sprintf("%d", arenaBaseBudget)
+	arenaPoolBudgetEffective := fmt.Sprintf("%d", arenaEffectiveBudget)
 	arenaPoolEstimate := fmt.Sprintf("%d", arenaPoolBytes)
 	arenaLeased := fmt.Sprintf("%d", arenaLeasedBytes)
 	arenaLeasedMax := fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
 	stats["treedb.cache.batch_arena.pool_budget_bytes"] = arenaPoolBudget
+	stats["treedb.cache.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
 	stats["treedb.cache.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
+	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
 	stats["treedb.process.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
-	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
+	stats["treedb.cache.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
-	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
+	stats["treedb.process.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.process.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
+	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
+	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
+	stats["treedb.process.memory.heap_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.heapInuseBytes)
+	stats["treedb.process.memory.heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.heapSysBytes)
+	stats["treedb.process.memory.heap_idle_unreleased_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleUnreleased)
+	stats["treedb.process.memory.gomemlimit_bytes"] = fmt.Sprintf("%d", poolPressure.memoryLimitBytes)
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
