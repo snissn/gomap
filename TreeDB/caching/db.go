@@ -11269,7 +11269,14 @@ func (db *DB) checkpointRotateCapacity() int {
 	if capacity <= 0 {
 		return -1
 	}
-	const checkpointRotateCapMax = 256 * 1024
+	// Checkpoint cutover uses a bounded preallocation to keep lock hold time
+	// predictable. append_only entry slices, however, pay a high regrowth/copy
+	// tax when this cap is too small (notably in settled batch write workloads).
+	// Use a higher cap there while still avoiding full-threshold prealloc.
+	checkpointRotateCapMax := 256 * 1024
+	if db.memtableMode == memtable.ModeAppendOnly {
+		checkpointRotateCapMax = 4 * 1024 * 1024
+	}
 	if capacity > checkpointRotateCapMax {
 		return checkpointRotateCapMax
 	}
