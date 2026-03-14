@@ -22,6 +22,8 @@ func resetBatchArenaPoolsForTest() {
 	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
 	batchArenaPoolDropHardCapBytesTotal.Store(0)
 	batchArenaBorrowBlockedTotal.Store(0)
+	batchArenaBorrowPreflightBlockedTotal.Store(0)
+	batchArenaBorrowPreflightBlockedBytesTotal.Store(0)
 	for i := range batchArenaPools {
 		batchArenaPools[i] = sync.Pool{}
 	}
@@ -210,6 +212,24 @@ func TestCurrentBatchArenaRetainedHardCap_UsesOverride(t *testing.T) {
 	batchArenaRetainedHardCapOverride.Store(override)
 	if got := currentBatchArenaRetainedHardCapBytes(); got != override {
 		t.Fatalf("currentBatchArenaRetainedHardCapBytes=%d want %d", got, override)
+	}
+}
+
+func TestShouldBorrowBatchArenaBytesForWrite_PreflightBlock(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	const hardCap = int64(64 << 10)
+	batchArenaRetainedHardCapOverride.Store(hardCap)
+	batchArenaPoolBytes.Store(16 << 10)
+	batchArenaLeasedBytesGlobal.Store(16 << 10)
+
+	if allow, preflight := shouldBorrowBatchArenaBytesForWrite(8 << 10); !allow || preflight {
+		t.Fatalf("small prospective retain unexpectedly blocked: allow=%t preflight=%t", allow, preflight)
+	}
+	if allow, preflight := shouldBorrowBatchArenaBytesForWrite(40 << 10); allow || !preflight {
+		t.Fatalf("large prospective retain should preflight-block: allow=%t preflight=%t", allow, preflight)
 	}
 }
 

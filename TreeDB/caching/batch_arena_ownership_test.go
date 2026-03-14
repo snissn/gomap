@@ -210,17 +210,17 @@ func TestBatchArenaRetainedHardCap_BoundsLeaseGrowthAcrossSustainedWrites(t *tes
 	}
 
 	leasedAfterFirst := writeBatch(0x11)
-	if leasedAfterFirst <= 0 {
-		t.Fatalf("leased bytes after first write=%d want >0", leasedAfterFirst)
-	}
-	if leasedAfterFirst < hardCapBytes {
-		t.Fatalf("leased bytes after first write=%d want >= hard cap %d for second-write gating", leasedAfterFirst, hardCapBytes)
+	if leasedAfterFirst < 0 || leasedAfterFirst > hardCapBytes {
+		t.Fatalf("leased bytes after first write=%d want in [0,%d]", leasedAfterFirst, hardCapBytes)
 	}
 
 	blockedBefore := batchArenaBorrowBlockedTotal.Load()
 	leasedAfterSecond := writeBatch(0x22)
 	if leasedAfterSecond > leasedAfterFirst {
 		t.Fatalf("leased bytes grew under hard cap gating: first=%d second=%d", leasedAfterFirst, leasedAfterSecond)
+	}
+	if leasedAfterSecond < 0 || leasedAfterSecond > hardCapBytes {
+		t.Fatalf("leased bytes after second write=%d want in [0,%d]", leasedAfterSecond, hardCapBytes)
 	}
 	if got := batchArenaBorrowBlockedTotal.Load(); got <= blockedBefore {
 		t.Fatalf("borrow_blocked_total did not increase: before=%d after=%d", blockedBefore, got)
@@ -234,6 +234,67 @@ func TestBatchArenaRetainedHardCap_BoundsLeaseGrowthAcrossSustainedWrites(t *tes
 		t.Fatalf("get first key: %v", err)
 	}
 	if len(got) != 1024 || got[0] != 0x11 {
+		t.Fatalf("unexpected first key value len=%d head=%x", len(got), got[:1])
+	}
+}
+
+func TestBatchArenaRetainedHardCap_PreflightBlocksLargeFirstBatchLease(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	const hardCapBytes = int64(32 << 10)
+	batchArenaRetainedHardCapOverride.Store(hardCapBytes)
+	t.Cleanup(func() {
+		batchArenaRetainedHardCapOverride.Store(0)
+		batchArenaLeasedBytesGlobal.Store(0)
+	})
+
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "btree",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	preflightBefore := batchArenaBorrowPreflightBlockedTotal.Load()
+	b := db.NewBatchWithSize(1024)
+	defer func() { _ = b.Close() }()
+	value := bytes.Repeat([]byte{0x44}, 1024)
+	for i := 0; i < 1024; i++ {
+		key := []byte{0x44, byte(i >> 8), byte(i)}
+		if err := b.Set(key, value); err != nil {
+			t.Fatalf("set %d: %v", i, err)
+		}
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if got := db.batchArenaLeaseBytes.Load(); got != 0 {
+		t.Fatalf("expected no batch arena leases after preflight-blocked write, got=%d", got)
+	}
+	if got := batchArenaLeasedBytesGlobal.Load(); got != 0 {
+		t.Fatalf("expected no global batch arena leases after preflight-blocked write, got=%d", got)
+	}
+	if got := batchArenaBorrowPreflightBlockedTotal.Load(); got <= preflightBefore {
+		t.Fatalf("borrow_preflight_blocked_total did not increase: before=%d after=%d", preflightBefore, got)
+	}
+	if got := batchArenaBorrowPreflightBlockedBytesTotal.Load(); got == 0 {
+		t.Fatalf("borrow_preflight_blocked_bytes_total=%d want >0", got)
+	}
+
+	got, err := db.Get([]byte{0x44, 0x00, 0x00})
+	if err != nil {
+		t.Fatalf("get first key: %v", err)
+	}
+	if len(got) != 1024 || got[0] != 0x44 {
 		t.Fatalf("unexpected first key value len=%d head=%x", len(got), got[:1])
 	}
 }

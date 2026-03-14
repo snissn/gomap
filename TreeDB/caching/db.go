@@ -81,6 +81,8 @@ var batchArenaPoolSkipZeroBudgetTotal atomic.Uint64
 var batchArenaPoolDropBytesTotal atomic.Uint64
 var batchArenaPoolDropHardCapBytesTotal atomic.Uint64
 var batchArenaBorrowBlockedTotal atomic.Uint64
+var batchArenaBorrowPreflightBlockedTotal atomic.Uint64
+var batchArenaBorrowPreflightBlockedBytesTotal atomic.Uint64
 var poolPressureState atomic.Value
 var poolPressureMu sync.Mutex
 var poolPressureLastLeaseTrimUnixNano atomic.Int64
@@ -377,6 +379,42 @@ func shouldBorrowBatchArenaBytes() bool {
 		return false
 	}
 	return currentBatchArenaRetainedBytesEstimate() < hardCap
+}
+
+func shouldBorrowBatchArenaBytesForWrite(prospectiveRetainBytes int64) (allow bool, preflightBlocked bool) {
+	hardCap := currentBatchArenaRetainedHardCapBytes()
+	if hardCap <= 0 {
+		return false, false
+	}
+	currentRetained := currentBatchArenaRetainedBytesEstimate()
+	if currentRetained >= hardCap {
+		return false, false
+	}
+	if prospectiveRetainBytes <= 0 {
+		return true, false
+	}
+	if prospectiveRetainBytes >= hardCap || currentRetained > math.MaxInt64-prospectiveRetainBytes {
+		return false, true
+	}
+	if currentRetained+prospectiveRetainBytes > hardCap {
+		return false, true
+	}
+	return true, false
+}
+
+func batchArenaChunksCapBytes(chunks [][]byte) int64 {
+	var total int64
+	for i := range chunks {
+		c := cap(chunks[i])
+		if c <= 0 {
+			continue
+		}
+		if total > math.MaxInt64-int64(c) {
+			return math.MaxInt64
+		}
+		total += int64(c)
+	}
+	return total
 }
 
 func currentEntrySlicePoolBudgetBytes() int64 {
@@ -15993,6 +16031,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
 	stats["treedb.cache.batch_arena.pool_drop_hard_cap_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropHardCapBytesTotal.Load())
 	stats["treedb.cache.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
+	stats["treedb.cache.batch_arena.borrow_preflight_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedTotal.Load())
+	stats["treedb.cache.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
 	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
@@ -16012,6 +16052,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
 	stats["treedb.process.batch_arena.pool_drop_hard_cap_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropHardCapBytesTotal.Load())
 	stats["treedb.process.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
+	stats["treedb.process.batch_arena.borrow_preflight_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedTotal.Load())
+	stats["treedb.process.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
 	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
 	stats["treedb.cache.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
@@ -18312,9 +18354,16 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			return ErrMemtableFull
 		}
 	}
-	allowBatchArenaBorrow := shouldBorrowBatchArenaBytes()
+	prospectiveRetainBytes := batchArenaChunksCapBytes(b.copyArenaChunks) + batchArenaChunksCapBytes(b.ptrCopyArenaChunks)
+	allowBatchArenaBorrow, preflightBlocked := shouldBorrowBatchArenaBytesForWrite(prospectiveRetainBytes)
 	if !allowBatchArenaBorrow {
 		batchArenaBorrowBlockedTotal.Add(1)
+		if preflightBlocked {
+			batchArenaBorrowPreflightBlockedTotal.Add(1)
+			if prospectiveRetainBytes > 0 {
+				batchArenaBorrowPreflightBlockedBytesTotal.Add(uint64(prospectiveRetainBytes))
+			}
+		}
 	}
 
 	// 2. Optional value-log + journal append loop.
