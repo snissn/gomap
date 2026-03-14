@@ -1336,6 +1336,9 @@ func putVlogDictPrepareResults(ch chan vlogDictPrepareResult) {
 const (
 	envDebugFlushPointers = "TREEDB_DEBUG_FLUSH_PTRS"
 	envDebugFlushTiming   = "TREEDB_DEBUG_FLUSH_TIMING"
+	// Optional adaptive-memtable tuning knob for BTree selection safety.
+	// 0 keeps legacy behavior (no iterator-sample gate).
+	envAdaptiveBTreeMinIteratorSamples = "TREEDB_ADAPTIVE_BTREE_MIN_ITERATOR_SAMPLES"
 	// Generational maintenance toggles (forensics / isolation).
 	envDisableVlogGenerationRewrite        = "TREEDB_DISABLE_VLOG_GENERATION_REWRITE"
 	envDisableVlogGenerationGC             = "TREEDB_DISABLE_VLOG_GENERATION_GC"
@@ -1343,23 +1346,24 @@ const (
 	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
 	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
-	envDisableCheckpointAutoVacuum   = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
-	minMemtablePrealloc              = 64 * 1024
-	maxMemtablePrealloc              = 256 << 20
-	adaptiveMinWrites                = 1024
-	adaptiveSequentialWritePct       = 0.85
-	adaptiveRangeIteratorPct         = 0.40
-	adaptiveOverwriteWritePct        = 0.25
-	adaptiveWarmupBytes              = 16 * 1024 * 1024
-	maxMemtableBytesPerShard         = int64(3 << 30)
-	maxOuterLeafArenaPoolCap         = 16 << 20
-	outerLeafBlobRefStackScratchCap  = 256
-	maxOuterLeafEncoderRawScratchCap = 2 << 20
-	maxOuterLeafEncoderEncScratchCap = 2 << 20
-	maxOuterLeafEncoderRestartsCap   = 1 << 15
-	maxVlogPreparedBodyPoolCap       = 8 << 20
-	maxVlogPreparedFramesPoolCap     = 1 << 14
-	maxVlogDictPrepareResultsPoolCap = 1 << 14
+	envDisableCheckpointAutoVacuum         = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
+	minMemtablePrealloc                    = 64 * 1024
+	maxMemtablePrealloc                    = 256 << 20
+	adaptiveMinWrites                      = 1024
+	adaptiveSequentialWritePct             = 0.85
+	adaptiveRangeIteratorPct               = 0.40
+	adaptiveOverwriteWritePct              = 0.25
+	adaptiveBTreeMinIteratorSamplesDefault = 0
+	adaptiveWarmupBytes                    = 16 * 1024 * 1024
+	maxMemtableBytesPerShard               = int64(3 << 30)
+	maxOuterLeafArenaPoolCap               = 16 << 20
+	outerLeafBlobRefStackScratchCap        = 256
+	maxOuterLeafEncoderRawScratchCap       = 2 << 20
+	maxOuterLeafEncoderEncScratchCap       = 2 << 20
+	maxOuterLeafEncoderRestartsCap         = 1 << 15
+	maxVlogPreparedBodyPoolCap             = 8 << 20
+	maxVlogPreparedFramesPoolCap           = 1 << 14
+	maxVlogDictPrepareResultsPoolCap       = 1 << 14
 )
 
 // SetIteratorDebug toggles attaching debug metadata to iterators returned by
@@ -1387,6 +1391,22 @@ func envBool(name string) bool {
 		return n != 0
 	}
 	return false
+}
+
+func envUint64(name string, fallback uint64) uint64 {
+	v, ok := os.LookupEnv(name)
+	if !ok {
+		return fallback
+	}
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 func updateAtomicMaxUint64(dst *atomic.Uint64, value uint64) {
@@ -4290,39 +4310,54 @@ type DB struct {
 	dictCurrentOps    atomic.Uint64
 
 	// Config
-	dir                       string
-	flushThreshold            int64
-	memtableCap               int
-	memtableMode              memtable.Mode
-	memtableStats             memtableStats
-	memtableAdaptive          bool
-	memtableAdaptiveObserve   atomic.Bool
-	adaptiveShardedStats      bool
-	memtableWarmupActive      bool
-	memtableWarmupThreshold   int64
-	domainIngressWorkers      int
-	domainIngressQueueSize    int
-	maxQueuedMemtables        int
-	slowdownBacklogSeconds    float64
-	stopBacklogSeconds        float64
-	maxBacklogBytes           int64
-	writerFlushMaxMemtables   int
-	writerFlushMaxDuration    time.Duration
-	flushBuildConcurrency     int
-	flushBuildAutoConcurrency bool
-	flushBuildMinEntries      int
-	flushBuildMinUnits        int
-	flushBuildChunkCap        int
-	flushBuildChunkTarget     int
-	flushBuildChunkMinBytes   int
-	flushBuildChunkMaxBytes   int
-	flushBuildPrefetchUnits   int
-	flushBackendMaxEntries    int
-	flushBackendInitEntries   int
-	flushBackendMaxBatches    int
-	walMaxSegmentBytes        int64
-	valueLogMaxSegmentBytes   int64
-	journalCompression        bool
+	dir                                               string
+	flushThreshold                                    int64
+	memtableCap                                       int
+	memtableMode                                      memtable.Mode
+	memtableStats                                     memtableStats
+	memtableAdaptive                                  bool
+	memtableAdaptiveObserve                           atomic.Bool
+	memtableAdaptiveBTreeMinIters                     uint64
+	memtableAdaptiveDecisionTotal                     atomic.Uint64
+	memtableAdaptiveDecisionReason                    atomic.Uint32
+	memtableAdaptiveDecisionMode                      atomic.Uint32
+	memtableAdaptiveDecisionWrites                    atomic.Uint64
+	memtableAdaptiveDecisionSeqWrites                 atomic.Uint64
+	memtableAdaptiveDecisionOverwriteWrites           atomic.Uint64
+	memtableAdaptiveDecisionIters                     atomic.Uint64
+	memtableAdaptiveDecisionRangeIters                atomic.Uint64
+	memtableAdaptiveDecisionRangePctPPM               atomic.Uint32
+	memtableAdaptiveDecisionLowDataTotal              atomic.Uint64
+	memtableAdaptiveDecisionBTreeTotal                atomic.Uint64
+	memtableAdaptiveDecisionBTreeBlockedMinItersTotal atomic.Uint64
+	memtableAdaptiveDecisionAppendTotal               atomic.Uint64
+	memtableAdaptiveDecisionHashTotal                 atomic.Uint64
+	adaptiveShardedStats                              bool
+	memtableWarmupActive                              bool
+	memtableWarmupThreshold                           int64
+	domainIngressWorkers                              int
+	domainIngressQueueSize                            int
+	maxQueuedMemtables                                int
+	slowdownBacklogSeconds                            float64
+	stopBacklogSeconds                                float64
+	maxBacklogBytes                                   int64
+	writerFlushMaxMemtables                           int
+	writerFlushMaxDuration                            time.Duration
+	flushBuildConcurrency                             int
+	flushBuildAutoConcurrency                         bool
+	flushBuildMinEntries                              int
+	flushBuildMinUnits                                int
+	flushBuildChunkCap                                int
+	flushBuildChunkTarget                             int
+	flushBuildChunkMinBytes                           int
+	flushBuildChunkMaxBytes                           int
+	flushBuildPrefetchUnits                           int
+	flushBackendMaxEntries                            int
+	flushBackendInitEntries                           int
+	flushBackendMaxBatches                            int
+	walMaxSegmentBytes                                int64
+	valueLogMaxSegmentBytes                           int64
+	journalCompression                                bool
 
 	disableJournal                           bool
 	relaxedSync                              bool
@@ -5135,6 +5170,33 @@ type memtableStats struct {
 	hasLastKey      bool
 }
 
+type adaptiveMemtableDecisionReason uint32
+
+const (
+	adaptiveDecisionLowData adaptiveMemtableDecisionReason = iota + 1
+	adaptiveDecisionBTreeRange
+	adaptiveDecisionBTreeBlockedMinIters
+	adaptiveDecisionAppendSequential
+	adaptiveDecisionHashMixed
+)
+
+func adaptiveDecisionReasonString(v uint32) string {
+	switch adaptiveMemtableDecisionReason(v) {
+	case adaptiveDecisionLowData:
+		return "low_data"
+	case adaptiveDecisionBTreeRange:
+		return "btree_range"
+	case adaptiveDecisionBTreeBlockedMinIters:
+		return "btree_blocked_min_iters"
+	case adaptiveDecisionAppendSequential:
+		return "append_sequential"
+	case adaptiveDecisionHashMixed:
+		return "hash_mixed"
+	default:
+		return "unknown"
+	}
+}
+
 func (r *keyRange) add(key []byte) {
 	if key == nil {
 		return
@@ -5359,6 +5421,56 @@ func (db *DB) mutableFlushThreshold() int64 {
 	return db.mutableThreshold.Load()
 }
 
+func (db *DB) adaptiveBTreeMinIteratorSamples() uint64 {
+	if db == nil {
+		return adaptiveBTreeMinIteratorSamplesDefault
+	}
+	if db.memtableAdaptiveBTreeMinIters > 0 {
+		return db.memtableAdaptiveBTreeMinIters
+	}
+	return adaptiveBTreeMinIteratorSamplesDefault
+}
+
+func (db *DB) noteAdaptiveMemtableDecision(
+	mode memtable.Mode,
+	reason adaptiveMemtableDecisionReason,
+	writes, seqWrites, overwriteWrites, iters, rangeIters uint64,
+	rangeIterPct float64,
+) {
+	if db == nil {
+		return
+	}
+	if rangeIterPct < 0 {
+		rangeIterPct = 0
+	}
+	if rangeIterPct > 1 {
+		rangeIterPct = 1
+	}
+	rangePPM := uint32(rangeIterPct * 1_000_000)
+	db.memtableAdaptiveDecisionTotal.Add(1)
+	db.memtableAdaptiveDecisionReason.Store(uint32(reason))
+	db.memtableAdaptiveDecisionMode.Store(uint32(mode))
+	db.memtableAdaptiveDecisionWrites.Store(writes)
+	db.memtableAdaptiveDecisionSeqWrites.Store(seqWrites)
+	db.memtableAdaptiveDecisionOverwriteWrites.Store(overwriteWrites)
+	db.memtableAdaptiveDecisionIters.Store(iters)
+	db.memtableAdaptiveDecisionRangeIters.Store(rangeIters)
+	db.memtableAdaptiveDecisionRangePctPPM.Store(rangePPM)
+
+	switch reason {
+	case adaptiveDecisionLowData:
+		db.memtableAdaptiveDecisionLowDataTotal.Add(1)
+	case adaptiveDecisionBTreeRange:
+		db.memtableAdaptiveDecisionBTreeTotal.Add(1)
+	case adaptiveDecisionBTreeBlockedMinIters:
+		db.memtableAdaptiveDecisionBTreeBlockedMinItersTotal.Add(1)
+	case adaptiveDecisionAppendSequential:
+		db.memtableAdaptiveDecisionAppendTotal.Add(1)
+	case adaptiveDecisionHashMixed:
+		db.memtableAdaptiveDecisionHashTotal.Add(1)
+	}
+}
+
 func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 	// Read stats atomially (no global lock needed for counts)
 	writes := db.memtableStats.writes.Load()
@@ -5369,7 +5481,9 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 
 	// Default to configured mode if not enough data
 	if writes < adaptiveMinWrites {
-		return db.memtableMode
+		mode := db.memtableMode
+		db.noteAdaptiveMemtableDecision(mode, adaptiveDecisionLowData, writes, seqWrites, overwriteWrites, iters, rangeIters, 0)
+		return mode
 	}
 
 	seqWritePct := float64(seqWrites) / float64(writes)
@@ -5379,17 +5493,30 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 		rangeIterPct = float64(rangeIters) / float64(iters)
 	}
 
+	btreeBlockedByMinIters := false
 	// 1) Range-heavy read paths benefit most from BTree order stability.
 	if rangeIterPct >= adaptiveRangeIteratorPct {
-		return memtable.ModeBTree
+		minIters := db.adaptiveBTreeMinIteratorSamples()
+		if minIters > 0 && (iters < minIters || rangeIters < minIters) {
+			btreeBlockedByMinIters = true
+		} else {
+			db.noteAdaptiveMemtableDecision(memtable.ModeBTree, adaptiveDecisionBTreeRange, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
+			return memtable.ModeBTree
+		}
 	}
 
 	// 2) Mostly increasing writes with low overwrite pressure favor append-only.
 	if seqWritePct >= adaptiveSequentialWritePct && overwriteWritePct < adaptiveOverwriteWritePct {
+		db.noteAdaptiveMemtableDecision(memtable.ModeAppendOnly, adaptiveDecisionAppendSequential, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
 		return memtable.ModeAppendOnly
 	}
 
 	// 3) Overwrite-heavy or mixed-write traffic defaults to hash-sorted.
+	if btreeBlockedByMinIters {
+		db.noteAdaptiveMemtableDecision(memtable.ModeHashSorted, adaptiveDecisionBTreeBlockedMinIters, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
+		return memtable.ModeHashSorted
+	}
+	db.noteAdaptiveMemtableDecision(memtable.ModeHashSorted, adaptiveDecisionHashMixed, writes, seqWrites, overwriteWrites, iters, rangeIters, rangeIterPct)
 	return memtable.ModeHashSorted
 }
 
@@ -5718,6 +5845,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogReader := reader
 	debugFlushPointers := envBool(envDebugFlushPointers)
 	debugFlushTiming := envBool(envDebugFlushTiming)
+	adaptiveBTreeMinIters := envUint64(envAdaptiveBTreeMinIteratorSamples, adaptiveBTreeMinIteratorSamplesDefault)
 
 	valueLogCompressionMode := normalizeVlogCompressionMode(opts.ValueLogCompression)
 	if valueLogCompressionMode == vlogCompressionDefault {
@@ -5912,6 +6040,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		memtableCap:                          memCap,
 		memtableMode:                         mode,
 		memtableAdaptive:                     adaptive,
+		memtableAdaptiveBTreeMinIters:        adaptiveBTreeMinIters,
 		memtableWarmupActive:                 adaptive && warmupThreshold < opts.FlushThreshold,
 		memtableWarmupThreshold:              warmupThreshold,
 		domainIngressWorkers:                 domainIngressWorkers,
@@ -15947,6 +16076,15 @@ func (db *DB) Stats() map[string]string {
 	memOverwriteWrites := db.memtableStats.overwriteWrites.Load()
 	memIters := db.memtableStats.iterators.Load()
 	memRangeIters := db.memtableStats.rangeIters.Load()
+	memAdaptiveDecisionTotal := db.memtableAdaptiveDecisionTotal.Load()
+	memAdaptiveDecisionReason := db.memtableAdaptiveDecisionReason.Load()
+	memAdaptiveDecisionMode := db.memtableAdaptiveDecisionMode.Load()
+	memAdaptiveDecisionWrites := db.memtableAdaptiveDecisionWrites.Load()
+	memAdaptiveDecisionSeqWrites := db.memtableAdaptiveDecisionSeqWrites.Load()
+	memAdaptiveDecisionOverwriteWrites := db.memtableAdaptiveDecisionOverwriteWrites.Load()
+	memAdaptiveDecisionIters := db.memtableAdaptiveDecisionIters.Load()
+	memAdaptiveDecisionRangeIters := db.memtableAdaptiveDecisionRangeIters.Load()
+	memAdaptiveDecisionRangePctPPM := db.memtableAdaptiveDecisionRangePctPPM.Load()
 	memViewRetainTotal := db.memtableViewTelemetry.retainTotal.Load()
 	memViewReleaseTotal := db.memtableViewTelemetry.releaseTotal.Load()
 	memViewLeasesInFlight := db.memtableViewTelemetry.leasesInFlight.Load()
@@ -15976,6 +16114,21 @@ func (db *DB) Stats() map[string]string {
 	if memIters > 0 {
 		stats["treedb.cache.memtable_stats.range_iter_pct"] = fmt.Sprintf("%.4f", float64(memRangeIters)/float64(memIters))
 	}
+	stats["treedb.cache.memtable_adaptive.btree_min_iterator_samples_effective"] = fmt.Sprintf("%d", db.adaptiveBTreeMinIteratorSamples())
+	stats["treedb.cache.memtable_adaptive.decision_total"] = fmt.Sprintf("%d", memAdaptiveDecisionTotal)
+	stats["treedb.cache.memtable_adaptive.last_reason"] = adaptiveDecisionReasonString(memAdaptiveDecisionReason)
+	stats["treedb.cache.memtable_adaptive.last_mode"] = memtable.Mode(memAdaptiveDecisionMode).String()
+	stats["treedb.cache.memtable_adaptive.last_writes"] = fmt.Sprintf("%d", memAdaptiveDecisionWrites)
+	stats["treedb.cache.memtable_adaptive.last_seq_writes"] = fmt.Sprintf("%d", memAdaptiveDecisionSeqWrites)
+	stats["treedb.cache.memtable_adaptive.last_overwrite_writes"] = fmt.Sprintf("%d", memAdaptiveDecisionOverwriteWrites)
+	stats["treedb.cache.memtable_adaptive.last_iterators"] = fmt.Sprintf("%d", memAdaptiveDecisionIters)
+	stats["treedb.cache.memtable_adaptive.last_range_iterators"] = fmt.Sprintf("%d", memAdaptiveDecisionRangeIters)
+	stats["treedb.cache.memtable_adaptive.last_range_iter_pct"] = fmt.Sprintf("%.4f", float64(memAdaptiveDecisionRangePctPPM)/1_000_000.0)
+	stats["treedb.cache.memtable_adaptive.reason_low_data_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionLowDataTotal.Load())
+	stats["treedb.cache.memtable_adaptive.reason_btree_range_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionBTreeTotal.Load())
+	stats["treedb.cache.memtable_adaptive.reason_btree_blocked_min_iters_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionBTreeBlockedMinItersTotal.Load())
+	stats["treedb.cache.memtable_adaptive.reason_append_sequential_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionAppendTotal.Load())
+	stats["treedb.cache.memtable_adaptive.reason_hash_mixed_total"] = fmt.Sprintf("%d", db.memtableAdaptiveDecisionHashTotal.Load())
 	stats["treedb.cache.memtable_view.retain_total"] = fmt.Sprintf("%d", memViewRetainTotal)
 	stats["treedb.cache.memtable_view.release_total"] = fmt.Sprintf("%d", memViewReleaseTotal)
 	stats["treedb.cache.memtable_view.leases_inflight"] = fmt.Sprintf("%d", memViewLeasesInFlight)

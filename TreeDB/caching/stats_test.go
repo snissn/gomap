@@ -145,6 +145,39 @@ func TestChooseAdaptiveMode(t *testing.T) {
 	}
 }
 
+func TestChooseAdaptiveMode_BTreeMinIteratorSamplesOverride(t *testing.T) {
+	db := newAdaptiveStatsDB(memtable.ModeSkiplist)
+	db.memtableAdaptiveBTreeMinIters = 64
+
+	db.memtableStats.writes.Store(adaptiveMinWrites)
+	db.memtableStats.seqWrites.Store(adaptiveMinWrites / 10)
+	db.memtableStats.overwriteWrites.Store(0)
+	db.memtableStats.iterators.Store(32)
+	db.memtableStats.rangeIters.Store(32)
+
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeHashSorted {
+		t.Fatalf("blocked-btree mode = %v, want %v", got, memtable.ModeHashSorted)
+	}
+	if got := db.memtableAdaptiveDecisionBTreeBlockedMinItersTotal.Load(); got != 1 {
+		t.Fatalf("blocked-min-iters count=%d want 1", got)
+	}
+	if got := adaptiveDecisionReasonString(db.memtableAdaptiveDecisionReason.Load()); got != "btree_blocked_min_iters" {
+		t.Fatalf("last reason=%q want btree_blocked_min_iters", got)
+	}
+
+	db.memtableStats.iterators.Store(128)
+	db.memtableStats.rangeIters.Store(96)
+	if got := db.chooseAdaptiveMemtableModeLocked(); got != memtable.ModeBTree {
+		t.Fatalf("range-heavy mode = %v, want %v", got, memtable.ModeBTree)
+	}
+	if got := db.memtableAdaptiveDecisionBTreeTotal.Load(); got != 1 {
+		t.Fatalf("btree decision count=%d want 1", got)
+	}
+	if got := adaptiveDecisionReasonString(db.memtableAdaptiveDecisionReason.Load()); got != "btree_range" {
+		t.Fatalf("last reason=%q want btree_range", got)
+	}
+}
+
 func TestNoteWriteSortedRunMatchesPerKey_NoPrior(t *testing.T) {
 	perKey := newAdaptiveStatsDB(0)
 	perKey.noteWriteKey([]byte("a"))
