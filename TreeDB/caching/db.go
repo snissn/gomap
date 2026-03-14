@@ -10691,13 +10691,19 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
-				return
+				// Foreground activity resumed while planning. Skip rewrite this
+				// cycle, but continue to the GC path below instead of aborting
+				// maintenance entirely.
+				shouldRewrite = false
+				haveRewritePlan = false
 			}
-			updatePlanTimestamp = true
-			// Best-effort planning: keep legacy triggers (total-bytes/churn) alive,
-			// but surface the failure for observability.
-			if db.notifyError != nil {
-				db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
+			if !errors.Is(err, context.Canceled) {
+				updatePlanTimestamp = true
+				// Best-effort planning: keep legacy triggers (total-bytes/churn) alive,
+				// but surface the failure for observability.
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
+				}
 			}
 		} else if len(plan.SourceFileIDs) > 0 {
 			updatePlanTimestamp = true
@@ -10769,14 +10775,19 @@ planned:
 				if err != nil {
 					if errors.Is(err, context.Canceled) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						// Foreground activity resumed while planning. Skip rewrite
+						// this cycle, but still allow GC to run below.
+						shouldRewrite = false
+						haveRewritePlan = false
+					}
+					if !errors.Is(err, context.Canceled) {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						db.vlogGenerationRemapFailures.Add(1)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
+						}
 						return
 					}
-					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
-					db.vlogGenerationRemapFailures.Add(1)
-					if db.notifyError != nil {
-						db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
-					}
-					return
 				}
 				if len(plan.SourceFileIDs) == 0 {
 					shouldRewrite = false
