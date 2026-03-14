@@ -13408,6 +13408,7 @@ func (db *DB) canReuseWALSegments() bool {
 func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity int) error {
 	var walPaths []string
 	var valueLogPaths []string
+	debugRotate := debugMemtableRotateOn()
 	if !db.disableJournal {
 		walPaths = db.currentWALPaths()
 	}
@@ -13424,11 +13425,29 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		db.memtableWarmupActive = false
 		db.updateAdaptiveObservationLocked()
 	}
+	if debugRotate {
+		db.debugMemtableRotatef(
+			"event=start path=with_capacity trigger_flush=%t new_capacity=%d mode=%s mutable_bytes=%d queue_len=%d queue_backlog_bytes=%d",
+			triggerFlush,
+			newCapacity,
+			db.memtableMode.String(),
+			db.mutableBytes.Load(),
+			len(db.queue),
+			db.queueBacklogBytes.Load(),
+		)
+	}
 	db.mutableBytes.Store(0)
 	enqueueNS := time.Now().UnixNano()
 	for i := range db.mutableShards {
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
+		oldMode := ""
+		oldLen := 0
+		if debugRotate {
+			oldMode = debugMemtableModeLabel(shard.mem)
+			oldLen = shard.mem.Len()
+		}
+		oldShardBytes := shard.bytes
 		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
@@ -13451,10 +13470,34 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard.mem = mt
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		if debugRotate {
+			db.debugMemtableRotatef(
+				"event=shard path=with_capacity shard=%d lane=%d old_mode=%s old_len=%d old_size=%d old_bytes=%d new_mode=%s new_capacity=%d queue_len=%d queue_backlog_bytes=%d",
+				i,
+				queueLaneID,
+				oldMode,
+				oldLen,
+				memBytes,
+				oldShardBytes,
+				debugMemtableModeLabel(mt),
+				newCapacity,
+				len(db.queue),
+				db.queueBacklogBytes.Load(),
+			)
+		}
 		shard.mu.Unlock()
 	}
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
+	if debugRotate {
+		db.debugMemtableRotatef(
+			"event=done path=with_capacity trigger_flush=%t queue_len=%d queue_backlog_bytes=%d mutable_threshold=%d",
+			triggerFlush,
+			len(db.queue),
+			db.queueBacklogBytes.Load(),
+			db.mutableFlushThreshold(),
+		)
+	}
 
 	// Optimization: Reuse WAL if small (e.g. < 10MB) to avoid syscall overhead
 	// on frequent rotations (e.g. caused by frequent Iterator creation).
@@ -13495,7 +13538,12 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 //
 // Caller must hold db.mu.
 func (db *DB) rotateMemtableLockedForIterator(newCapacity int) error {
-	return db.rotateMutableShardsLocked(newCapacity, false)
+	// Iterator snapshot rotation can be invoked repeatedly under read-heavy
+	// traffic. If we already have queued immutable shards, request a background
+	// flush so repeated snapshot rotations do not let queue depth grow
+	// unboundedly while still preserving snapshot semantics.
+	triggerFlush := len(db.queue) > 0
+	return db.rotateMutableShardsLocked(newCapacity, triggerFlush)
 }
 
 func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
@@ -13530,6 +13578,7 @@ func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
 // for establishing durable boundaries and trimming old segments. This avoids
 // requiring a global writer barrier around WAL rotation.
 func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) error {
+	debugRotate := debugMemtableRotateOn()
 	if newCapacity < 0 {
 		newCapacity = db.memtableCap
 	}
@@ -13548,6 +13597,17 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	if db.valueLogEnabled() {
 		valueLogPaths = db.currentValueLogPaths()
 	}
+	if debugRotate {
+		db.debugMemtableRotatef(
+			"event=start path=mutable_shards trigger_flush=%t new_capacity=%d mode=%s mutable_bytes=%d queue_len=%d queue_backlog_bytes=%d",
+			triggerFlush,
+			newCapacity,
+			db.memtableMode.String(),
+			db.mutableBytes.Load(),
+			len(db.queue),
+			db.queueBacklogBytes.Load(),
+		)
+	}
 
 	locked := make([]*memShard, 0, len(db.mutableShards))
 	defer func() {
@@ -13561,6 +13621,13 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
 		locked = append(locked, shard)
+		oldMode := ""
+		oldLen := 0
+		if debugRotate {
+			oldMode = debugMemtableModeLabel(shard.mem)
+			oldLen = shard.mem.Len()
+		}
+		oldShardBytes := shard.bytes
 
 		// Remove this shard's contribution from the global byte counter before
 		// resetting it, since writers may still be updating other shards.
@@ -13590,10 +13657,34 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard.mem = mt
 		shard.rng = keyRange{}
 		shard.bytes = 0
+		if debugRotate {
+			db.debugMemtableRotatef(
+				"event=shard path=mutable_shards shard=%d lane=%d old_mode=%s old_len=%d old_size=%d old_bytes=%d new_mode=%s new_capacity=%d queue_len=%d queue_backlog_bytes=%d",
+				i,
+				queueLaneID,
+				oldMode,
+				oldLen,
+				memBytes,
+				oldShardBytes,
+				debugMemtableModeLabel(mt),
+				newCapacity,
+				len(db.queue),
+				db.queueBacklogBytes.Load(),
+			)
+		}
 	}
 
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
+	if debugRotate {
+		db.debugMemtableRotatef(
+			"event=done path=mutable_shards trigger_flush=%t queue_len=%d queue_backlog_bytes=%d mutable_threshold=%d",
+			triggerFlush,
+			len(db.queue),
+			db.queueBacklogBytes.Load(),
+			db.mutableFlushThreshold(),
+		)
+	}
 
 	if triggerFlush {
 		select {
