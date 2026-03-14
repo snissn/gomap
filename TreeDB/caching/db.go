@@ -3973,6 +3973,9 @@ type DB struct {
 	batchArenaAllocClassBytes     atomic.Uint64
 	batchArenaUsedBytes           atomic.Uint64
 	batchArenaTailWasteBytes      atomic.Uint64
+	batchArenaTailCompactRuns     atomic.Uint64
+	batchArenaTailCompactCopied   atomic.Uint64
+	batchArenaTailCompactSaved    atomic.Uint64
 	batchEntriesPool              sync.Pool
 	batchShardEntriesPool         sync.Pool
 	batchIntPool                  sync.Pool
@@ -15816,6 +15819,9 @@ func (db *DB) Stats() map[string]string {
 	arenaAllocClassBytes := db.batchArenaAllocClassBytes.Load()
 	arenaUsedBytes := db.batchArenaUsedBytes.Load()
 	arenaTailWasteBytes := db.batchArenaTailWasteBytes.Load()
+	arenaTailCompactRuns := db.batchArenaTailCompactRuns.Load()
+	arenaTailCompactCopied := db.batchArenaTailCompactCopied.Load()
+	arenaTailCompactSaved := db.batchArenaTailCompactSaved.Load()
 	arenaPoolBudget := fmt.Sprintf("%d", arenaBaseBudget)
 	arenaPoolBudgetEffective := fmt.Sprintf("%d", arenaEffectiveBudget)
 	arenaPoolEstimate := fmt.Sprintf("%d", arenaPoolBytes)
@@ -15831,6 +15837,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
 	stats["treedb.cache.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
 	stats["treedb.cache.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.cache.batch_arena.tail_compact_runs_total"] = fmt.Sprintf("%d", arenaTailCompactRuns)
+	stats["treedb.cache.batch_arena.tail_compact_copied_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactCopied)
+	stats["treedb.cache.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
 	stats["treedb.cache.batch_arena.pool_skip_zero_budget_total"] = fmt.Sprintf("%d", batchArenaPoolSkipZeroBudgetTotal.Load())
 	stats["treedb.cache.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
@@ -15843,6 +15852,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
 	stats["treedb.process.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
 	stats["treedb.process.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.process.batch_arena.tail_compact_runs_total"] = fmt.Sprintf("%d", arenaTailCompactRuns)
+	stats["treedb.process.batch_arena.tail_compact_copied_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactCopied)
+	stats["treedb.process.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
 	stats["treedb.process.batch_arena.pool_skip_zero_budget_total"] = fmt.Sprintf("%d", batchArenaPoolSkipZeroBudgetTotal.Load())
 	stats["treedb.process.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
 	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
@@ -17056,6 +17068,29 @@ func (db *DB) noteBatchArenaChunkFinalize(used, classCap int) {
 	db.batchArenaTailWasteBytes.Add(uint64(classCap - used))
 }
 
+func (db *DB) noteBatchArenaTailCompact(copiedBytes, classCap int) {
+	if db == nil || classCap <= 0 {
+		return
+	}
+	if copiedBytes < 0 {
+		copiedBytes = 0
+	}
+	if copiedBytes > classCap {
+		copiedBytes = classCap
+	}
+	saved := classCap - copiedBytes
+	if saved < 0 {
+		saved = 0
+	}
+	db.batchArenaTailCompactRuns.Add(1)
+	if copiedBytes > 0 {
+		db.batchArenaTailCompactCopied.Add(uint64(copiedBytes))
+	}
+	if saved > 0 {
+		db.batchArenaTailCompactSaved.Add(uint64(saved))
+	}
+}
+
 func (db *DB) getBatchEntries(minCap int) []batch.Entry {
 	if minCap < 0 {
 		minCap = 0
@@ -17378,6 +17413,107 @@ func (b *Batch) clonePtrValue(value []byte) []byte {
 	return dst
 }
 
+func shouldCompactBatchArenaTail(used, classCap int) bool {
+	if classCap < batchArenaTailCompactMinCap || used <= 0 || used >= classCap {
+		return false
+	}
+	waste := classCap - used
+	if waste < batchArenaTailCompactMinWaste {
+		return false
+	}
+	return used*batchArenaTailCompactMaxFillDenominator <= classCap*batchArenaTailCompactMaxFillNumerator
+}
+
+func sliceAliasesArenaTail(s, tail []byte) bool {
+	if len(s) == 0 || len(tail) == 0 {
+		return false
+	}
+	sPtr := uintptr(unsafe.Pointer(unsafe.SliceData(s)))
+	tPtr := uintptr(unsafe.Pointer(unsafe.SliceData(tail)))
+	if sPtr < tPtr {
+		return false
+	}
+	offset := sPtr - tPtr
+	if offset > uintptr(len(tail)) {
+		return false
+	}
+	return uintptr(len(s)) <= uintptr(len(tail))-offset
+}
+
+func (b *Batch) releaseCompactedBatchArenaTail(chunks *[][]byte, arena *[]byte, copiedBytes int) {
+	if b == nil || chunks == nil || arena == nil || len(*chunks) == 0 || cap(*arena) == 0 {
+		return
+	}
+	used := len(*arena)
+	classCap := cap(*arena)
+	last := len(*chunks) - 1
+	tailChunk := (*chunks)[last]
+	if tailChunk != nil {
+		putBatchArena(tailChunk)
+	}
+	(*chunks)[last] = nil
+	*chunks = (*chunks)[:last]
+	if b.db != nil {
+		b.db.noteBatchArenaChunkFinalize(used, classCap)
+		b.db.noteBatchArenaTailCompact(copiedBytes, classCap)
+	}
+	*arena = nil
+}
+
+func (b *Batch) compactUnderfilledMainArenaTail() {
+	if b == nil || len(b.entries) == 0 || cap(b.copyArena) == 0 || len(b.copyArenaChunks) == 0 {
+		return
+	}
+	tail := b.copyArena
+	if !shouldCompactBatchArenaTail(len(tail), cap(tail)) {
+		return
+	}
+	copiedBytes := 0
+	for i := range b.entries {
+		op := &b.entries[i]
+		if len(op.Key) > 0 && sliceAliasesArenaTail(op.Key, tail) {
+			op.Key = bytes.Clone(op.Key)
+			copiedBytes += len(op.Key)
+		}
+		if len(op.Value) > 0 && sliceAliasesArenaTail(op.Value, tail) {
+			op.Value = bytes.Clone(op.Value)
+			copiedBytes += len(op.Value)
+		}
+	}
+	if copiedBytes == 0 {
+		return
+	}
+	b.releaseCompactedBatchArenaTail(&b.copyArenaChunks, &b.copyArena, copiedBytes)
+}
+
+func (b *Batch) compactUnderfilledPtrArenaTail() {
+	if b == nil || len(b.entries) == 0 || cap(b.ptrCopyArena) == 0 || len(b.ptrCopyArenaChunks) == 0 {
+		return
+	}
+	tail := b.ptrCopyArena
+	if !shouldCompactBatchArenaTail(len(tail), cap(tail)) {
+		return
+	}
+	copiedBytes := 0
+	for i := range b.entries {
+		op := &b.entries[i]
+		if len(op.Value) == 0 || !sliceAliasesArenaTail(op.Value, tail) {
+			continue
+		}
+		op.Value = bytes.Clone(op.Value)
+		copiedBytes += len(op.Value)
+	}
+	if copiedBytes == 0 {
+		return
+	}
+	b.releaseCompactedBatchArenaTail(&b.ptrCopyArenaChunks, &b.ptrCopyArena, copiedBytes)
+}
+
+func (b *Batch) maybeCompactUnderfilledArenaTails() {
+	b.compactUnderfilledMainArenaTail()
+	b.compactUnderfilledPtrArenaTail()
+}
+
 func (b *Batch) shouldCopyValueToPtrArena(key, value []byte) bool {
 	if b == nil || b.db == nil || b.backend != nil {
 		return false
@@ -17633,9 +17769,16 @@ const (
 	// Avoid retaining 4MiB chunks in the pool/leases; they are easy to
 	// underfill (e.g. a ~2MiB batch spills into a second chunk) and can inflate
 	// peak RSS during restore workloads.
-	batchCopyArenaMaxRetain    = 2 << 20
-	batchEntriesPoolMaxRetain  = 16 << 10
-	batchIntSlicePoolMaxRetain = 16 << 10
+	batchCopyArenaMaxRetain     = 2 << 20
+	batchArenaTailCompactMinCap = 256 << 10
+	// Only compact tails with meaningful waste so we avoid churn on tiny chunks.
+	batchArenaTailCompactMinWaste = 256 << 10
+	// Require at least 50% slack in the tail chunk before compacting borrowed
+	// slices. This keeps the path focused on pathological underfill.
+	batchArenaTailCompactMaxFillNumerator   = 1
+	batchArenaTailCompactMaxFillDenominator = 2
+	batchEntriesPoolMaxRetain               = 16 << 10
+	batchIntSlicePoolMaxRetain              = 16 << 10
 )
 
 func batchCopyArenaInitCapForEntries(entries int) int {
@@ -18318,6 +18461,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			b.db.writeMu.RUnlock()
 			return err
 		}
+	}
+
+	if !allDeletes {
+		// Before borrowing batch arena chunks into memtables, compact
+		// pathologically underfilled tail chunks by cloning only the aliased
+		// entry slices. This converts a large retained tail into tight slices.
+		b.maybeCompactUnderfilledArenaTails()
 	}
 
 	if allDeletes {
