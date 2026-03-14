@@ -75,12 +75,16 @@ func TestPoolPressureTrimsEntrySliceLeases(t *testing.T) {
 	savedMemLimit := poolPressureMemoryLimit
 	savedPoolBytes := entrySlicePoolBytes.Load()
 	savedLeases := entrySliceLeases
+	savedTrimRuns := entrySlicePoolTrimRunsTotal.Load()
+	savedTrimDrop := entrySlicePoolTrimDropBytesTotal.Load()
 	t.Cleanup(func() {
 		poolPressureNow = savedNow
 		poolPressureReadMemStats = savedReadMemStats
 		poolPressureMemoryLimit = savedMemLimit
 		entrySlicePoolBytes.Store(savedPoolBytes)
 		entrySliceLeases = savedLeases
+		entrySlicePoolTrimRunsTotal.Store(savedTrimRuns)
+		entrySlicePoolTrimDropBytesTotal.Store(savedTrimDrop)
 		resetPoolPressureStateForTest()
 	})
 
@@ -111,6 +115,61 @@ func TestPoolPressureTrimsEntrySliceLeases(t *testing.T) {
 	_ = currentPoolPressureSnapshot()
 	if got := len(entrySliceLeases[0]); got != 0 {
 		t.Fatalf("critical pressure leases=%d want 0", got)
+	}
+}
+
+func TestPoolPressureTrimPreservesNonLeasePoolAccounting(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedPoolBytes := entrySlicePoolBytes.Load()
+	savedLeases := entrySliceLeases
+	savedTrimRuns := entrySlicePoolTrimRunsTotal.Load()
+	savedTrimDrop := entrySlicePoolTrimDropBytesTotal.Load()
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		entrySlicePoolBytes.Store(savedPoolBytes)
+		entrySliceLeases = savedLeases
+		entrySlicePoolTrimRunsTotal.Store(savedTrimRuns)
+		entrySlicePoolTrimDropBytesTotal.Store(savedTrimDrop)
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	for i := range entrySliceLeases {
+		entrySliceLeases[i] = nil
+	}
+
+	keepPerBucket := maxEntrySliceLeasesPerBucket / 8
+	if keepPerBucket < 2 {
+		keepPerBucket = 2
+	}
+	totalLeases := keepPerBucket + 4
+	for i := 0; i < totalLeases; i++ {
+		entrySliceLeases[0] = append(entrySliceLeases[0], make([]batch.Entry, 0, 64))
+	}
+	dropped := int64(totalLeases-keepPerBucket) * 64 * entrySliceEntrySizeBytes
+	const extraPoolBytes int64 = 1 << 20
+	leaseBytesBefore := int64(totalLeases) * 64 * entrySliceEntrySizeBytes
+	entrySlicePoolBytes.Store(leaseBytesBefore + extraPoolBytes)
+	entrySlicePoolTrimRunsTotal.Store(0)
+	entrySlicePoolTrimDropBytesTotal.Store(0)
+
+	maybeTrimEntrySliceLeasesUnderPressure(poolPressureHigh, now)
+	if got := len(entrySliceLeases[0]); got != keepPerBucket {
+		t.Fatalf("high pressure leases=%d want %d", got, keepPerBucket)
+	}
+	if got, want := entrySlicePoolBytes.Load(), leaseBytesBefore+extraPoolBytes-dropped; got != want {
+		t.Fatalf("entrySlicePoolBytes=%d want %d", got, want)
+	}
+	if got := entrySlicePoolTrimRunsTotal.Load(); got != 1 {
+		t.Fatalf("trim runs=%d want 1", got)
+	}
+	if got, want := entrySlicePoolTrimDropBytesTotal.Load(), uint64(dropped); got != want {
+		t.Fatalf("trim drop bytes=%d want %d", got, want)
 	}
 }
 
@@ -152,5 +211,49 @@ func TestBatchArenaRetentionBudgetScalesWithMemoryPressure(t *testing.T) {
 	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
 	if got := currentBatchArenaRetentionBudgetBytes(); got != 0 {
 		t.Fatalf("critical pressure batch budget=%d want 0", got)
+	}
+}
+
+func TestBatchArenaPoolSkipsRetentionWhenBudgetIsZero(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	savedPoolBytes := batchArenaPoolBytes.Load()
+	savedSkip := batchArenaPoolSkipZeroBudgetTotal.Load()
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		batchArenaPoolBytes.Store(savedPoolBytes)
+		batchArenaPoolSkipZeroBudgetTotal.Store(savedSkip)
+		resetPoolPressureStateForTest()
+		batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var fake runtime.MemStats
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	fake.HeapInuse = 9 << 30 // critical pressure -> zero effective budget
+	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
+	if got := currentBatchArenaRetentionBudgetBytes(); got != 0 {
+		t.Fatalf("critical pressure batch budget=%d want 0", got)
+	}
+
+	batchArenaPoolBytes.Store(0)
+	batchArenaPoolSkipZeroBudgetTotal.Store(0)
+	putBatchArena(make([]byte, 0, batchCopyArenaMinChunk))
+	if got := batchArenaPoolBytes.Load(); got != 0 {
+		t.Fatalf("batchArenaPoolBytes=%d want 0", got)
+	}
+	if got := batchArenaPoolSkipZeroBudgetTotal.Load(); got != 1 {
+		t.Fatalf("skip-zero-budget=%d want 1", got)
 	}
 }
