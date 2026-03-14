@@ -17,7 +17,11 @@ var batchArenaPoolTestMu sync.Mutex
 func resetBatchArenaPoolsForTest() {
 	batchArenaPoolBytes.Store(0)
 	batchArenaPoolLastGC.Store(0)
+	batchArenaLeasedBytesGlobal.Store(0)
+	batchArenaRetainedHardCapOverride.Store(0)
 	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
+	batchArenaPoolDropHardCapBytesTotal.Store(0)
+	batchArenaBorrowBlockedTotal.Store(0)
 	for i := range batchArenaPools {
 		batchArenaPools[i] = sync.Pool{}
 	}
@@ -197,7 +201,53 @@ func TestComputeBatchArenaPoolBudgetBytesForProcs_Saturates(t *testing.T) {
 	}
 }
 
+func TestCurrentBatchArenaRetainedHardCap_UsesOverride(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	const override = int64(123456)
+	batchArenaRetainedHardCapOverride.Store(override)
+	if got := currentBatchArenaRetainedHardCapBytes(); got != override {
+		t.Fatalf("currentBatchArenaRetainedHardCapBytes=%d want %d", got, override)
+	}
+}
+
+func TestPutBatchArena_DropsWhenRetainedHardCapExceeded(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
+	if !ok {
+		t.Fatal("batchArenaClassForLen failed")
+	}
+
+	hardCap := int64(classCap * 2)
+	batchArenaRetainedHardCapOverride.Store(hardCap)
+	batchArenaLeasedBytesGlobal.Store(hardCap)
+	batchArenaPoolBytes.Store(0)
+	batchArenaPoolDropBytesTotal.Store(0)
+	batchArenaPoolDropHardCapBytesTotal.Store(0)
+
+	putBatchArena(make([]byte, 0, classCap))
+
+	if got := batchArenaPoolBytes.Load(); got != 0 {
+		t.Fatalf("batchArenaPoolBytes=%d want 0", got)
+	}
+	if got := batchArenaPoolDropBytesTotal.Load(); got != uint64(classCap) {
+		t.Fatalf("pool_drop_bytes_total=%d want %d", got, classCap)
+	}
+	if got := batchArenaPoolDropHardCapBytesTotal.Load(); got != uint64(classCap) {
+		t.Fatalf("pool_drop_hard_cap_bytes_total=%d want %d", got, classCap)
+	}
+}
+
 func TestBatchArenaLeaseBytesTracksRetainReleaseLifecycle(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
 	db := &DB{}
 	mt1 := memtable.NewBTree()
 	mt2 := memtable.NewBTree()
@@ -208,6 +258,9 @@ func TestBatchArenaLeaseBytesTracksRetainReleaseLifecycle(t *testing.T) {
 	want := int64(cap(chunk))
 	if got := db.batchArenaLeaseBytes.Load(); got != want {
 		t.Fatalf("leased bytes after retain=%d want=%d", got, want)
+	}
+	if got := batchArenaLeasedBytesGlobal.Load(); got != want {
+		t.Fatalf("global leased bytes after retain=%d want=%d", got, want)
 	}
 	if got := db.batchArenaLeaseBytesMax.Load(); got != want {
 		t.Fatalf("leased bytes max after retain=%d want=%d", got, want)
@@ -221,6 +274,9 @@ func TestBatchArenaLeaseBytesTracksRetainReleaseLifecycle(t *testing.T) {
 	db.releaseBatchArenaLeasesForMemtable(mt2)
 	if got := db.batchArenaLeaseBytes.Load(); got != 0 {
 		t.Fatalf("leased bytes after final release=%d want=0", got)
+	}
+	if got := batchArenaLeasedBytesGlobal.Load(); got != 0 {
+		t.Fatalf("global leased bytes after final release=%d want=0", got)
 	}
 	if got := db.batchArenaLeaseBytesMax.Load(); got != want {
 		t.Fatalf("leased bytes max after final release=%d want=%d", got, want)

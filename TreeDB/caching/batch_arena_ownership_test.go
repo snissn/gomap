@@ -168,6 +168,76 @@ func TestBatchArenaLeases_ReleasedAfterCheckpoint(t *testing.T) {
 	}
 }
 
+func TestBatchArenaRetainedHardCap_BoundsLeaseGrowthAcrossSustainedWrites(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	const hardCapBytes = int64(32 << 10)
+	batchArenaRetainedHardCapOverride.Store(hardCapBytes)
+	t.Cleanup(func() {
+		batchArenaRetainedHardCapOverride.Store(0)
+		batchArenaLeasedBytesGlobal.Store(0)
+	})
+
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "btree",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	writeBatch := func(prefix byte) int64 {
+		b := db.NewBatchWithSize(512)
+		defer func() { _ = b.Close() }()
+		value := bytes.Repeat([]byte{prefix}, 1024)
+		for i := 0; i < 512; i++ {
+			key := []byte{prefix, byte(i >> 8), byte(i)}
+			if err := b.Set(key, value); err != nil {
+				t.Fatalf("set %d: %v", i, err)
+			}
+		}
+		if err := b.Write(); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return db.batchArenaLeaseBytes.Load()
+	}
+
+	leasedAfterFirst := writeBatch(0x11)
+	if leasedAfterFirst <= 0 {
+		t.Fatalf("leased bytes after first write=%d want >0", leasedAfterFirst)
+	}
+	if leasedAfterFirst < hardCapBytes {
+		t.Fatalf("leased bytes after first write=%d want >= hard cap %d for second-write gating", leasedAfterFirst, hardCapBytes)
+	}
+
+	blockedBefore := batchArenaBorrowBlockedTotal.Load()
+	leasedAfterSecond := writeBatch(0x22)
+	if leasedAfterSecond > leasedAfterFirst {
+		t.Fatalf("leased bytes grew under hard cap gating: first=%d second=%d", leasedAfterFirst, leasedAfterSecond)
+	}
+	if got := batchArenaBorrowBlockedTotal.Load(); got <= blockedBefore {
+		t.Fatalf("borrow_blocked_total did not increase: before=%d after=%d", blockedBefore, got)
+	}
+	if got := batchArenaLeasedBytesGlobal.Load(); got != leasedAfterSecond {
+		t.Fatalf("global leased bytes=%d want %d", got, leasedAfterSecond)
+	}
+
+	got, err := db.Get([]byte{0x11, 0x00, 0x00})
+	if err != nil {
+		t.Fatalf("get first key: %v", err)
+	}
+	if len(got) != 1024 || got[0] != 0x11 {
+		t.Fatalf("unexpected first key value len=%d head=%x", len(got), got[:1])
+	}
+}
+
 func TestCachedBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
 	cases := []struct {
 		name        string

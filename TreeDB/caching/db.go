@@ -75,8 +75,12 @@ var valueLogKeyLeases [][][]byte
 var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolLastGC atomic.Uint64
 var batchArenaPoolBudgetState atomic.Value
+var batchArenaLeasedBytesGlobal atomic.Int64
+var batchArenaRetainedHardCapOverride atomic.Int64
 var batchArenaPoolSkipZeroBudgetTotal atomic.Uint64
 var batchArenaPoolDropBytesTotal atomic.Uint64
+var batchArenaPoolDropHardCapBytesTotal atomic.Uint64
+var batchArenaBorrowBlockedTotal atomic.Uint64
 var poolPressureState atomic.Value
 var poolPressureMu sync.Mutex
 var poolPressureLastLeaseTrimUnixNano atomic.Int64
@@ -141,6 +145,9 @@ const (
 	// Direct append-only arena retention is best-effort reuse. Shrink retained
 	// headroom materially under pressure so reuse does not dominate inuse peaks.
 	appendOnlyDirectArenaHighPressureDivisor = int64(4)
+	// Keep total live batch-arena retention (pool + active memtable leases) bounded.
+	// We derive this from the pool budget so it scales with machine parallelism.
+	batchArenaRetainedHardCapMultiplier = int64(2)
 )
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -330,6 +337,46 @@ func currentBatchArenaRetentionBudgetBytes() int64 {
 	base := currentBatchArenaPoolBudgetBytes()
 	level := currentPoolPressureSnapshot().level
 	return scalePoolBudgetForPressure(base, level)
+}
+
+func currentBatchArenaRetainedHardCapBytes() int64 {
+	if override := batchArenaRetainedHardCapOverride.Load(); override > 0 {
+		return override
+	}
+	base := currentBatchArenaPoolBudgetBytes()
+	if base <= 0 {
+		return 0
+	}
+	hardCap := base * batchArenaRetainedHardCapMultiplier
+	if hardCap < int64(batchCopyArenaMinChunk) {
+		hardCap = int64(batchCopyArenaMinChunk)
+	}
+	level := currentPoolPressureSnapshot().level
+	hardCap = scalePoolBudgetForPressure(hardCap, level)
+	if hardCap < 0 {
+		hardCap = 0
+	}
+	return hardCap
+}
+
+func currentBatchArenaRetainedBytesEstimate() int64 {
+	poolBytes := batchArenaPoolBytes.Load()
+	if poolBytes < 0 {
+		poolBytes = 0
+	}
+	leasedBytes := batchArenaLeasedBytesGlobal.Load()
+	if leasedBytes < 0 {
+		leasedBytes = 0
+	}
+	return poolBytes + leasedBytes
+}
+
+func shouldBorrowBatchArenaBytes() bool {
+	hardCap := currentBatchArenaRetainedHardCapBytes()
+	if hardCap <= 0 {
+		return false
+	}
+	return currentBatchArenaRetainedBytesEstimate() < hardCap
 }
 
 func currentEntrySlicePoolBudgetBytes() int64 {
@@ -737,6 +784,7 @@ func putBatchArena(buf []byte) {
 		batchArenaPoolSkipZeroBudgetTotal.Add(1)
 		return
 	}
+	hardCap := currentBatchArenaRetainedHardCapBytes()
 	size := int64(cap(buf))
 	noteEpoch := false
 	for {
@@ -750,6 +798,17 @@ func putBatchArena(buf []byte) {
 				return
 			}
 			continue
+		}
+		if hardCap > 0 {
+			leased := batchArenaLeasedBytesGlobal.Load()
+			if leased < 0 {
+				leased = 0
+			}
+			if held+leased+size > hardCap {
+				batchArenaPoolDropBytesTotal.Add(uint64(size))
+				batchArenaPoolDropHardCapBytesTotal.Add(uint64(size))
+				return
+			}
 		}
 		if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
 			noteEpoch = held == 0
@@ -4715,7 +4774,7 @@ func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
 // memtableBatchSet applies a cached batch write while preserving the ownership
 // rules selected by cachedBatchWriteUsesSteal. Pointer entries may still keep
 // inline bytes in memtables that do not use value-log pointers internally.
-func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues bool, op batch.Entry) {
+func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeInlinePtrValues bool, op batch.Entry) {
 	if op.IsPtr {
 		memVal := []byte(nil)
 		if storeInlinePtrValues {
@@ -4725,9 +4784,11 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues boo
 			mt.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 			return
 		}
-		if borrower, ok := mt.(memtable.ValueBorrower); ok && len(memVal) > 0 {
-			borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
-			return
+		if allowBorrow {
+			if borrower, ok := mt.(memtable.ValueBorrower); ok && len(memVal) > 0 {
+				borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
+				return
+			}
 		}
 		mt.SetEntry(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 		return
@@ -4736,9 +4797,11 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, storeInlinePtrValues boo
 		mt.SetSteal(op.Key, op.Value)
 		return
 	}
-	if borrower, ok := mt.(memtable.ValueBorrower); ok && len(op.Value) > 0 {
-		borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
-		return
+	if allowBorrow {
+		if borrower, ok := mt.(memtable.ValueBorrower); ok && len(op.Value) > 0 {
+			borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
+			return
+		}
 	}
 	mt.Set(op.Key, op.Value)
 }
@@ -4782,6 +4845,7 @@ func (db *DB) retainBatchArenaChunksForMemtables(chunks [][]byte, mems []memtabl
 	if lease.bytes > 0 {
 		cur := db.batchArenaLeaseBytes.Add(lease.bytes)
 		updateInt64Max(&db.batchArenaLeaseBytesMax, cur)
+		batchArenaLeasedBytesGlobal.Add(lease.bytes)
 	}
 	db.batchArenaLeaseMu.Lock()
 	if db.batchArenaLeasesByMem == nil {
@@ -4810,6 +4874,9 @@ func (db *DB) releaseBatchArenaLeasesForMemtable(mt memtable.Table) {
 			if lease.refs == 0 && len(lease.chunks) > 0 {
 				if lease.bytes > 0 {
 					db.batchArenaLeaseBytes.Add(-lease.bytes)
+					if next := batchArenaLeasedBytesGlobal.Add(-lease.bytes); next < 0 {
+						batchArenaLeasedBytesGlobal.Store(0)
+					}
 					lease.bytes = 0
 				}
 				release = append(release, lease.chunks...)
@@ -15891,6 +15958,9 @@ func (db *DB) Stats() map[string]string {
 	entrySliceEffectiveBudget := scalePoolBudgetForPressure(entrySliceBaseBudget, poolPressure.level)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
+	arenaGlobalLeasedBytes := batchArenaLeasedBytesGlobal.Load()
+	arenaRetainedHardCapBytes := currentBatchArenaRetainedHardCapBytes()
+	arenaRetainedEstimate := currentBatchArenaRetainedBytesEstimate()
 	arenaAllocRequestedBytes := db.batchArenaAllocRequestedBytes.Load()
 	arenaAllocClassBytes := db.batchArenaAllocClassBytes.Load()
 	arenaUsedBytes := db.batchArenaUsedBytes.Load()
@@ -15907,7 +15977,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
 	stats["treedb.cache.batch_arena.leased_bytes"] = arenaLeased
+	stats["treedb.cache.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = arenaLeasedMax
+	stats["treedb.cache.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
+	stats["treedb.cache.batch_arena.retained_bytes_global_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
 	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
 	stats["treedb.cache.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
@@ -15918,12 +15991,16 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
 	stats["treedb.cache.batch_arena.pool_skip_zero_budget_total"] = fmt.Sprintf("%d", batchArenaPoolSkipZeroBudgetTotal.Load())
 	stats["treedb.cache.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
+	stats["treedb.cache.batch_arena.pool_drop_hard_cap_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropHardCapBytesTotal.Load())
+	stats["treedb.cache.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
 	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
 	stats["treedb.process.batch_arena.leased_bytes"] = arenaLeased
+	stats["treedb.process.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
 	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
-	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.process.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
+	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
 	stats["treedb.process.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
 	stats["treedb.process.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
 	stats["treedb.process.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
@@ -15933,6 +16010,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.tail_compact_saved_bytes_total"] = fmt.Sprintf("%d", arenaTailCompactSaved)
 	stats["treedb.process.batch_arena.pool_skip_zero_budget_total"] = fmt.Sprintf("%d", batchArenaPoolSkipZeroBudgetTotal.Load())
 	stats["treedb.process.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
+	stats["treedb.process.batch_arena.pool_drop_hard_cap_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropHardCapBytesTotal.Load())
+	stats["treedb.process.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
 	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
 	stats["treedb.cache.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
@@ -18220,17 +18299,6 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	}
 	retainMainMems := make([]memtable.Table, 0, shardCount)
 	retainMainSeen := make(map[memtable.Table]struct{}, shardCount)
-	for i, count := range shardCounts {
-		if count > 0 {
-			mt := b.db.mutableShards[i].mem
-			if cachedBatchWriteNeedsBatchArenaRetention(mt) {
-				if _, ok := retainMainSeen[mt]; !ok {
-					retainMainSeen[mt] = struct{}{}
-					retainMainMems = append(retainMainMems, mt)
-				}
-			}
-		}
-	}
 	for i, add := range shardAdds {
 		if add == 0 {
 			continue
@@ -18243,6 +18311,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			b.db.writeMu.RUnlock()
 			return ErrMemtableFull
 		}
+	}
+	allowBatchArenaBorrow := shouldBorrowBatchArenaBytes()
+	if !allowBatchArenaBorrow {
+		batchArenaBorrowBlockedTotal.Add(1)
 	}
 
 	// 2. Optional value-log + journal append loop.
@@ -18614,7 +18686,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
-			useSteal := cachedBatchWriteUsesSteal(shard.mem)
+			useSteal := allowBatchArenaBorrow && cachedBatchWriteUsesSteal(shard.mem)
+			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
+				if _, ok := retainMainSeen[shard.mem]; !ok {
+					retainMainSeen[shard.mem] = struct{}{}
+					retainMainMems = append(retainMainMems, shard.mem)
+				}
+			}
 			if b.streamEligible {
 				first := b.entries[idxs[0]].Key
 				last := first
@@ -18678,7 +18756,13 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
 			useStream := b.streamEligible
-			useSteal := cachedBatchWriteUsesSteal(shard.mem)
+			useSteal := allowBatchArenaBorrow && cachedBatchWriteUsesSteal(shard.mem)
+			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
+				if _, ok := retainMainSeen[shard.mem]; !ok {
+					retainMainSeen[shard.mem] = struct{}{}
+					retainMainMems = append(retainMainMems, shard.mem)
+				}
+			}
 			storeInlinePtrValues := !b.db.memtableValueLogPointers
 			if useStream && useSteal {
 				if applier, ok := shard.mem.(memtable.TrustedSortedBatchApplier); ok {
@@ -18690,7 +18774,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						if op.Type == batch.OpDelete {
 							memtableBatchDelete(shard.mem, true, op.Key)
 						} else {
-							memtableBatchSet(shard.mem, true, storeInlinePtrValues, op)
+							memtableBatchSet(shard.mem, true, allowBatchArenaBorrow, storeInlinePtrValues, op)
 						}
 					}
 				}
@@ -18707,7 +18791,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 						memtableBatchDelete(shard.mem, useSteal, op.Key)
 					} else {
 						borrowed := false
-						if !useSteal {
+						if allowBatchArenaBorrow && !useSteal {
 							if _, ok := shard.mem.(memtable.ValueBorrower); ok {
 								if op.IsPtr {
 									borrowed = storeInlinePtrValues && len(op.Value) > 0
@@ -18716,7 +18800,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 								}
 							}
 						}
-						memtableBatchSet(shard.mem, useSteal, storeInlinePtrValues, op)
+						memtableBatchSet(shard.mem, useSteal, allowBatchArenaBorrow, storeInlinePtrValues, op)
 						if borrowed {
 							if _, ok := retainMainSeen[shard.mem]; !ok {
 								retainMainSeen[shard.mem] = struct{}{}
@@ -18761,7 +18845,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 	mainChunks := b.drainCopyArenaChunks()
 	retainPtrArena := false
 	ptrTouchedMems := make([]memtable.Table, 0, len(b.ptrValueIdxs))
-	if len(b.ptrValueIdxs) > 0 {
+	if allowBatchArenaBorrow && len(b.ptrValueIdxs) > 0 {
 		seenPtrMems := make(map[memtable.Table]struct{}, len(b.ptrValueIdxs))
 		for _, idx := range b.ptrValueIdxs {
 			if idx < 0 || idx >= len(b.entries) || idx >= len(shardIdxs) {
