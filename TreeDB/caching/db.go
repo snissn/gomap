@@ -13409,6 +13409,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 	var walPaths []string
 	var valueLogPaths []string
 	debugRotate := debugMemtableRotateOn()
+	retiredMems := make([]memtable.Table, 0, len(db.mutableShards))
 	if !db.disableJournal {
 		walPaths = db.currentWALPaths()
 	}
@@ -13452,15 +13453,20 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
 		queueLaneID := db.laneForShardIndex(i)
-		db.queue = append(db.queue, shard.mem)
-		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
-		db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
-		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
-		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
-		db.queueBacklogBytes.Add(memBytes)
-		db.queueRanges = append(db.queueRanges, shard.rng)
-		db.queueWALPaths = append(db.queueWALPaths, walPaths)
-		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
+		enqueueShard := memBytes > 0 || oldLen > 0
+		if enqueueShard {
+			db.queue = append(db.queue, shard.mem)
+			db.queueShardIDs = append(db.queueShardIDs, uint16(i))
+			db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
+			db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+			db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
+			db.queueBacklogBytes.Add(memBytes)
+			db.queueRanges = append(db.queueRanges, shard.rng)
+			db.queueWALPaths = append(db.queueWALPaths, walPaths)
+			db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
+		} else {
+			retiredMems = append(retiredMems, shard.mem)
+		}
 
 		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.memtableMode)
 		if err != nil {
@@ -13486,6 +13492,9 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 			)
 		}
 		shard.mu.Unlock()
+	}
+	if len(retiredMems) > 0 {
+		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
 	}
 	db.updateMutableThresholdLocked()
 	db.publishMemtablesLocked()
@@ -13579,6 +13588,7 @@ func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
 // requiring a global writer barrier around WAL rotation.
 func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) error {
 	debugRotate := debugMemtableRotateOn()
+	retiredMems := make([]memtable.Table, 0, len(db.mutableShards))
 	if newCapacity < 0 {
 		newCapacity = db.memtableCap
 	}
@@ -13640,15 +13650,20 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard.mem.Freeze()
 		memBytes := shard.mem.Size()
 		queueLaneID := db.laneForShardIndex(i)
-		db.queue = append(db.queue, shard.mem)
-		db.queueShardIDs = append(db.queueShardIDs, uint16(i))
-		db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
-		db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
-		db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
-		db.queueBacklogBytes.Add(memBytes)
-		db.queueRanges = append(db.queueRanges, shard.rng)
-		db.queueWALPaths = append(db.queueWALPaths, walPaths)
-		db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
+		enqueueShard := memBytes > 0 || oldLen > 0
+		if enqueueShard {
+			db.queue = append(db.queue, shard.mem)
+			db.queueShardIDs = append(db.queueShardIDs, uint16(i))
+			db.queueLaneIDs = append(db.queueLaneIDs, uint16(queueLaneID))
+			db.queueIDs = append(db.queueIDs, db.nextQueueID.Add(1))
+			db.queueEnqueueNS = append(db.queueEnqueueNS, enqueueNS)
+			db.queueBacklogBytes.Add(memBytes)
+			db.queueRanges = append(db.queueRanges, shard.rng)
+			db.queueWALPaths = append(db.queueWALPaths, walPaths)
+			db.queueValueLogPaths = append(db.queueValueLogPaths, valueLogPaths)
+		} else {
+			retiredMems = append(retiredMems, shard.mem)
+		}
 
 		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.memtableMode)
 		if err != nil {
@@ -13672,6 +13687,9 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 				db.queueBacklogBytes.Load(),
 			)
 		}
+	}
+	if len(retiredMems) > 0 {
+		db.pendingRetiredMems = append(db.pendingRetiredMems, retiredMems...)
 	}
 
 	db.updateMutableThresholdLocked()
