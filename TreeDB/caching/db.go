@@ -85,6 +85,9 @@ var poolPressureHighSamplesTotal atomic.Uint64
 var poolPressureCriticalSamplesTotal atomic.Uint64
 var entrySlicePoolTrimRunsTotal atomic.Uint64
 var entrySlicePoolTrimDropBytesTotal atomic.Uint64
+var batchEntriesPoolDropUnderPressureTotal atomic.Uint64
+var batchShardEntriesPoolDropUnderPressureTotal atomic.Uint64
+var batchIntPoolDropUnderPressureTotal atomic.Uint64
 
 var poolPressureNow = time.Now
 var poolPressureReadMemStats = runtime.ReadMemStats
@@ -131,6 +134,13 @@ const (
 	poolPressureCriticalHeapBytes = uint64(8 << 30)
 	poolPressureTrimInterval      = 2 * time.Second
 	poolPressureHighBudgetDivisor = int64(2)
+	// Under heap pressure, aggressively cap fresh batch-copy chunk sizing. Keep
+	// large single-copy writes functional by allowing request-size override.
+	batchCopyArenaHighPressureMaxChunk     = 512 << 10
+	batchCopyArenaCriticalPressureMaxChunk = 128 << 10
+	// Direct append-only arena retention is best-effort reuse. Shrink retained
+	// headroom materially under pressure so reuse does not dominate inuse peaks.
+	appendOnlyDirectArenaHighPressureDivisor = int64(4)
 )
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -141,7 +151,7 @@ func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 	// Keep a few max-size chunks per P to avoid thrash while preventing runaway
 	// retention during restore workloads.
 	const maxChunksPerP = 4
-	const maxBudgetBytes = int64(256 << 20)
+	const maxBudgetBytes = int64(128 << 20)
 	const perPBytes = int64(batchCopyArenaMaxRetain) * maxChunksPerP
 	if procs < 1 {
 		procs = 1
@@ -326,6 +336,47 @@ func currentEntrySlicePoolBudgetBytes() int64 {
 	base := entrySlicePoolBudgetBytes
 	level := currentPoolPressureSnapshot().level
 	return scalePoolBudgetForPressure(base, level)
+}
+
+func batchCopyArenaMaxChunkForPressure(level poolPressureLevel) int {
+	switch level {
+	case poolPressureCritical:
+		return batchCopyArenaCriticalPressureMaxChunk
+	case poolPressureHigh:
+		return batchCopyArenaHighPressureMaxChunk
+	default:
+		return batchCopyArenaMaxRetain
+	}
+}
+
+func currentBatchCopyArenaMaxChunk() int {
+	return batchCopyArenaMaxChunkForPressure(currentPoolPressureSnapshot().level)
+}
+
+func shouldRetainBatchAuxPoolEntries(level poolPressureLevel) bool {
+	return level == poolPressureNormal
+}
+
+func appendOnlyDirectArenaRetentionLimitsForPressure(level poolPressureLevel) (maxChunks int, maxBytes int64) {
+	switch level {
+	case poolPressureCritical:
+		return 0, 0
+	case poolPressureHigh:
+		maxBytes = int64(appendOnlyDirectValueArenaRetainMaxBytes) / appendOnlyDirectArenaHighPressureDivisor
+		if maxBytes < appendOnlyDirectValueArenaDefaultChunk {
+			maxBytes = appendOnlyDirectValueArenaDefaultChunk
+		}
+	default:
+		maxBytes = int64(appendOnlyDirectValueArenaRetainMaxBytes)
+	}
+	maxChunks = int(maxBytes) / appendOnlyDirectValueArenaDefaultChunk
+	if maxChunks < 1 {
+		maxChunks = 1
+	}
+	if maxChunks > appendOnlyDirectValueArenaRetainMaxChunks {
+		maxChunks = appendOnlyDirectValueArenaRetainMaxChunks
+	}
+	return maxChunks, maxBytes
 }
 
 func poolPressureLevelString(level poolPressureLevel) string {
@@ -854,6 +905,20 @@ func (a *appendOnlyDirectValueArena) drainActiveChunks() [][]byte {
 }
 
 func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
+	level := currentPoolPressureSnapshot().level
+	maxRetainedChunks, maxRetainedBytes := appendOnlyDirectArenaRetentionLimitsForPressure(level)
+	for len(a.retained) > 0 && (len(a.retained) > maxRetainedChunks || a.retainedBytes > maxRetainedBytes) {
+		last := len(a.retained) - 1
+		evict := a.retained[last]
+		a.retained[last] = nil
+		a.retained = a.retained[:last]
+		a.retainedBytes -= int64(cap(evict))
+		putAppendOnlyDirectValueArenaChunk(evict)
+	}
+	if maxRetainedChunks <= 0 || maxRetainedBytes <= 0 {
+		putAppendOnlyDirectValueArenaChunks(chunks)
+		return
+	}
 	for i := range chunks {
 		chunk := chunks[i]
 		if chunk == nil {
@@ -862,7 +927,7 @@ func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
 		chunks[i] = nil
 		chunk = chunk[:0]
 		size := int64(cap(chunk))
-		for len(a.retained) > 0 && (len(a.retained) >= appendOnlyDirectValueArenaRetainMaxChunks || a.retainedBytes+size > appendOnlyDirectValueArenaRetainMaxBytes) {
+		for len(a.retained) > 0 && (len(a.retained) >= maxRetainedChunks || a.retainedBytes+size > maxRetainedBytes) {
 			last := len(a.retained) - 1
 			evict := a.retained[last]
 			a.retained[last] = nil
@@ -870,7 +935,7 @@ func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
 			a.retainedBytes -= int64(cap(evict))
 			putAppendOnlyDirectValueArenaChunk(evict)
 		}
-		if len(a.retained) >= appendOnlyDirectValueArenaRetainMaxChunks || a.retainedBytes+size > appendOnlyDirectValueArenaRetainMaxBytes {
+		if len(a.retained) >= maxRetainedChunks || a.retainedBytes+size > maxRetainedBytes {
 			putAppendOnlyDirectValueArenaChunk(chunk)
 			continue
 		}
@@ -15878,6 +15943,17 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	stats["treedb.process.entry_slice.trim_runs_total"] = fmt.Sprintf("%d", entrySlicePoolTrimRunsTotal.Load())
 	stats["treedb.process.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
+	appendOnlyRetainChunks, appendOnlyRetainBytes := appendOnlyDirectArenaRetentionLimitsForPressure(poolPressure.level)
+	stats["treedb.cache.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
+	stats["treedb.cache.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
+	stats["treedb.cache.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
+	stats["treedb.cache.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
+	stats["treedb.cache.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
+	stats["treedb.process.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
+	stats["treedb.process.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
+	stats["treedb.process.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
 	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
 	stats["treedb.process.memory.heap_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.heapInuseBytes)
@@ -17013,6 +17089,9 @@ func (db *DB) batchCopyArenaInitCap(sizeHint int) int {
 	if base > batchCopyArenaInitMax {
 		base = batchCopyArenaInitMax
 	}
+	if maxChunk := currentBatchCopyArenaMaxChunk(); maxChunk > 0 && base > maxChunk {
+		base = maxChunk
+	}
 	return base
 }
 
@@ -17025,6 +17104,9 @@ func (db *DB) observeBatchCopyBytes(n int) {
 	}
 	if n > batchCopyArenaInitMax {
 		n = batchCopyArenaInitMax
+	}
+	if maxChunk := currentBatchCopyArenaMaxChunk(); maxChunk > 0 && n > maxChunk {
+		n = maxChunk
 	}
 	for {
 		old := int(db.batchCopyBytesHint.Load())
@@ -17139,6 +17221,10 @@ func (db *DB) putBatchEntries(entries []batch.Entry) {
 	if cap(entries) > batchEntriesPoolMaxRetain {
 		return
 	}
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+		batchEntriesPoolDropUnderPressureTotal.Add(1)
+		return
+	}
 	full := entries[:cap(entries)]
 	clear(full)
 	db.batchEntriesPool.Put(getBatchEntrySliceRef(full[:0]))
@@ -17175,6 +17261,10 @@ func (db *DB) putBatchShardEntries(entries []batch.Entry) {
 	if cap(entries) > batchEntriesPoolMaxRetain {
 		return
 	}
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+		batchShardEntriesPoolDropUnderPressureTotal.Add(1)
+		return
+	}
 	full := entries[:cap(entries)]
 	clear(full)
 	db.batchShardEntriesPool.Put(getBatchEntrySliceRef(full[:0]))
@@ -17204,6 +17294,10 @@ func (db *DB) putBatchIntSlice(idxs []int) {
 		return
 	}
 	if cap(idxs) > batchIntSlicePoolMaxRetain {
+		return
+	}
+	if !shouldRetainBatchAuxPoolEntries(currentPoolPressureSnapshot().level) {
+		batchIntPoolDropUnderPressureTotal.Add(1)
 		return
 	}
 	db.batchIntPool.Put(idxs[:0])
@@ -17381,6 +17475,9 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 		// *single* copy needs it.
 		if n <= batchCopyArenaMaxRetain && chunkCap > batchCopyArenaMaxRetain {
 			chunkCap = batchCopyArenaMaxRetain
+		}
+		if maxChunk := currentBatchCopyArenaMaxChunk(); maxChunk > 0 && chunkCap > maxChunk && n <= maxChunk {
+			chunkCap = maxChunk
 		}
 		// Switch to a fresh chunk when exhausted so existing entry slices keep
 		// their backing arrays without per-op allocations.

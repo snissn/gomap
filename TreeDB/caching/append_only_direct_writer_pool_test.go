@@ -2,7 +2,9 @@ package caching
 
 import (
 	"bytes"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -290,5 +292,57 @@ func TestAppendOnlyDirectWriterArena_RetainChunks_LargeChunkByteBudget(t *testin
 	}
 	if got, want := len(arena.retained), appendOnlyDirectValueArenaRetainMaxBytes/largeChunkCap; got != want {
 		t.Fatalf("retained chunks=%d want=%d", got, want)
+	}
+}
+
+func TestAppendOnlyDirectWriterArena_RetainChunks_PressureAwareLimits(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var fake runtime.MemStats
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	var arena appendOnlyDirectValueArena
+	t.Cleanup(func() { arena.recycleAll() })
+
+	highChunks := append([][]byte(nil), make([][]byte, appendOnlyDirectValueArenaRetainMaxChunks)...)
+	for i := range highChunks {
+		highChunks[i] = make([]byte, 0, appendOnlyDirectValueArenaDefaultChunk)
+	}
+	fake.HeapInuse = 5 << 30 // high
+	arena.retainChunks(highChunks)
+
+	wantHighBytes := int64(appendOnlyDirectValueArenaRetainMaxBytes) / appendOnlyDirectArenaHighPressureDivisor
+	if got := arena.retainedBytes; got != wantHighBytes {
+		t.Fatalf("high-pressure retained bytes=%d want=%d", got, wantHighBytes)
+	}
+
+	criticalChunks := make([][]byte, 32)
+	for i := range criticalChunks {
+		criticalChunks[i] = make([]byte, 0, appendOnlyDirectValueArenaDefaultChunk)
+	}
+	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
+	fake.HeapInuse = 9 << 30 // critical
+	arena.retainChunks(criticalChunks)
+
+	if got := arena.retainedBytes; got != 0 {
+		t.Fatalf("critical-pressure retained bytes=%d want=0", got)
+	}
+	if got := len(arena.retained); got != 0 {
+		t.Fatalf("critical-pressure retained chunks=%d want=0", got)
 	}
 }

@@ -191,7 +191,7 @@ func TestBatchArenaPoolBudgetCacheRecomputesOnProcsMismatch(t *testing.T) {
 }
 
 func TestComputeBatchArenaPoolBudgetBytesForProcs_Saturates(t *testing.T) {
-	const maxBudgetBytes = int64(256 << 20)
+	const maxBudgetBytes = int64(128 << 20)
 	if got := computeBatchArenaPoolBudgetBytesForProcs(int(^uint(0) >> 1)); got != maxBudgetBytes {
 		t.Fatalf("computeBatchArenaPoolBudgetBytesForProcs(maxint)=%d want %d", got, maxBudgetBytes)
 	}
