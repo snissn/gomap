@@ -157,12 +157,12 @@ const (
 	postFlushBatchArenaTargetBytes = int64(64 << 20)
 	postFlushEntrySliceTargetBytes = int64(64 << 20)
 	// Checkpoint trim is intentionally stricter.
-	postCheckpointBatchArenaTargetBytes = int64(32 << 20)
-	postCheckpointEntrySliceTargetBytes = int64(32 << 20)
-	postFlushEntrySliceLeaseKeepPerBucket = 8
+	postCheckpointBatchArenaTargetBytes        = int64(32 << 20)
+	postCheckpointEntrySliceTargetBytes        = int64(32 << 20)
+	postFlushEntrySliceLeaseKeepPerBucket      = 8
 	postCheckpointEntrySliceLeaseKeepPerBucket = 2
-	postFlushAppendOnlyMemLeaseKeep = 8
-	postCheckpointAppendOnlyMemLeaseKeep = 2
+	postFlushAppendOnlyMemLeaseKeep            = 8
+	postCheckpointAppendOnlyMemLeaseKeep       = 2
 )
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -16913,6 +16913,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_mmap.dead_mappings"] = fmt.Sprintf("%d", deadMappings)
 		stats["treedb.cache.vlog_mmap.dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
+		stats["treedb.cache.vlog_mmap.max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
 		currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := db.valueLogReader.MmapResidencyStats()
 		stats["treedb.cache.vlog_mmap.active_segments"] = fmt.Sprintf("%d", currentSegments+sealedSegments)
 		stats["treedb.cache.vlog_mmap.active_bytes"] = fmt.Sprintf("%d", currentBytes+sealedBytes)
@@ -16921,7 +16922,10 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_mmap.sealed_segments"] = fmt.Sprintf("%d", sealedSegments)
 		stats["treedb.cache.vlog_mmap.sealed_bytes"] = fmt.Sprintf("%d", sealedBytes)
 		stats["treedb.cache.vlog_mmap.dead_bytes"] = fmt.Sprintf("%d", deadBytes)
-		stats["treedb.cache.vlog_mmap.sealed_map_denied"] = fmt.Sprintf("%d", db.valueLogReader.SealedMapDeniedStats())
+		sealedDeniedCountCap, sealedDeniedBytesCap := db.valueLogReader.SealedMapDeniedByReasonStats()
+		stats["treedb.cache.vlog_mmap.sealed_map_denied.count_cap"] = fmt.Sprintf("%d", sealedDeniedCountCap)
+		stats["treedb.cache.vlog_mmap.sealed_map_denied.bytes_cap"] = fmt.Sprintf("%d", sealedDeniedBytesCap)
+		stats["treedb.cache.vlog_mmap.sealed_map_denied"] = fmt.Sprintf("%d", sealedDeniedCountCap+sealedDeniedBytesCap)
 
 		mmapHits, mmapMissOutOfRange, mmapMissNoMapping, mmapMissDeadCap, mmapFallbackReadAt := db.valueLogReader.MmapReadStats()
 		stats["treedb.cache.vlog_mmap.read.hits"] = fmt.Sprintf("%d", mmapHits)

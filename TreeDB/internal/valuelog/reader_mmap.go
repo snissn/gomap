@@ -42,20 +42,23 @@ const readViaMmapViewPrefixCacheEnabled = false
 var MaxDeadMappings = defaultMaxDeadMappings
 
 const (
-	defaultMaxDeadMappings    = 64
-	maxAdaptiveDeadMappings   = 4096
-	deadMappingBytesPerStep   = 256 << 10 // increase cap by 1 per 256KiB mapped
-	maxDeadMappingsEnvKey     = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
-	enableAdaptiveCapEnvKey   = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
-	maxMappedSealedEnvKey     = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
-	defaultAdaptiveCapEnabled = true
-	defaultMaxMappedSealed    = 8
+	defaultMaxDeadMappings      = 64
+	maxAdaptiveDeadMappings     = 4096
+	deadMappingBytesPerStep     = 256 << 10 // increase cap by 1 per 256KiB mapped
+	maxDeadMappingsEnvKey       = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
+	enableAdaptiveCapEnvKey     = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
+	maxMappedSealedEnvKey       = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
+	maxMappedSealedBytesEnvKey  = "TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES"
+	defaultAdaptiveCapEnabled   = true
+	defaultMaxMappedSealed      = 8
+	defaultMaxMappedSealedBytes = 64 << 20
 )
 
 var (
 	maxDeadMappingsExplicit bool
-	adaptiveDeadMappings    = defaultAdaptiveCapEnabled
-	MaxMappedSealedSegments = defaultMaxMappedSealed
+	adaptiveDeadMappings          = defaultAdaptiveCapEnabled
+	MaxMappedSealedSegments       = defaultMaxMappedSealed
+	MaxMappedSealedBytes    int64 = defaultMaxMappedSealedBytes
 )
 
 func init() {
@@ -76,6 +79,11 @@ func init() {
 	if raw := strings.TrimSpace(os.Getenv(maxMappedSealedEnvKey)); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
 			MaxMappedSealedSegments = v
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(maxMappedSealedBytesEnvKey)); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil && v >= 0 {
+			MaxMappedSealedBytes = v
 		}
 	}
 }
@@ -138,11 +146,24 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	if m == nil {
 		return false
 	}
+	var targetSize int64
+	if info, err := f.File.Stat(); err == nil {
+		if sz := info.Size(); sz > 0 {
+			targetSize = sz
+		}
+	}
 	m.mu.Lock()
-	allow := m.allowSealedLazyMmapLocked(f)
+	allow, denyReason := m.allowSealedLazyMmapLocked(f, targetSize)
 	m.mu.Unlock()
 	if !allow {
-		f.sealedMapDeniedCount.Add(1)
+		switch denyReason {
+		case sealedLazyMmapDenyCountCap:
+			f.sealedMapDeniedByCount.Add(1)
+		case sealedLazyMmapDenyBytesCap:
+			f.sealedMapDeniedByBytes.Add(1)
+		default:
+			f.sealedMapDeniedByCount.Add(1)
+		}
 		return false
 	}
 	f.remapToFileSize()

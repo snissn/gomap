@@ -21,6 +21,15 @@ func withMappedSealedBudget(t *testing.T, maxMapped int) {
 	})
 }
 
+func withMappedSealedBytesBudget(t *testing.T, maxMappedBytes int64) {
+	t.Helper()
+	prev := MaxMappedSealedBytes
+	MaxMappedSealedBytes = maxMappedBytes
+	t.Cleanup(func() {
+		MaxMappedSealedBytes = prev
+	})
+}
+
 func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
 	mgr := &Manager{
 		files: map[uint32]*File{
@@ -66,11 +75,16 @@ func TestManagerMmapResidencyStatsAggregatesCounters(t *testing.T) {
 	mgr.files[3].mmapData.Store([]byte(nil))
 	mgr.files[3].deadMappingsCount.Store(5)
 	mgr.files[3].deadMappedBytes.Store(31)
-	mgr.files[3].sealedMapDeniedCount.Store(7)
+	mgr.files[3].sealedMapDeniedByCount.Store(5)
+	mgr.files[3].sealedMapDeniedByBytes.Store(2)
 
 	currentSegments, currentBytes, sealedSegments, sealedBytes, deadMappings, deadBytes := mgr.MmapResidencyStats()
 	if currentSegments != 1 || currentBytes != 11 || sealedSegments != 1 || sealedBytes != 23 || deadMappings != 10 || deadBytes != 77 {
 		t.Fatalf("MmapResidencyStats mismatch: currentSegments=%d currentBytes=%d sealedSegments=%d sealedBytes=%d deadMappings=%d deadBytes=%d", currentSegments, currentBytes, sealedSegments, sealedBytes, deadMappings, deadBytes)
+	}
+	deniedByCount, deniedByBytes := mgr.SealedMapDeniedByReasonStats()
+	if deniedByCount != 5 || deniedByBytes != 2 {
+		t.Fatalf("SealedMapDeniedByReasonStats count=%d bytes=%d want count=5 bytes=2", deniedByCount, deniedByBytes)
 	}
 	if got := mgr.SealedMapDeniedStats(); got != 7 {
 		t.Fatalf("SealedMapDeniedStats=%d want 7", got)
@@ -245,6 +259,7 @@ func TestOpenFile_DoesNotEagerlyMap(t *testing.T) {
 
 func TestReadUnsafe_SealedLazyMmapBudgetFallsBackToReadAt(t *testing.T) {
 	withMappedSealedBudget(t, 1)
+	withMappedSealedBytesBudget(t, 1<<30)
 
 	dir := t.TempDir()
 	id1, ptr1 := writeTestSegmentWithPtr(t, dir, 0, 1, 1, bytes.Repeat([]byte("a"), 64))
@@ -295,6 +310,75 @@ func TestReadUnsafe_SealedLazyMmapBudgetFallsBackToReadAt(t *testing.T) {
 	}
 	if got := f2.mmapReadFallbackReadAt.Load(); got == 0 {
 		t.Fatalf("expected fallback ReadAt on second sealed segment")
+	}
+	if got := f2.sealedMapDeniedByCount.Load(); got == 0 {
+		t.Fatalf("expected count-cap deny counter to increment")
+	}
+}
+
+func TestReadUnsafe_SealedLazyMmapByteBudgetFallsBackToReadAt(t *testing.T) {
+	withMappedSealedBudget(t, 8)
+	withMappedSealedBytesBudget(t, 1<<30)
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, 0, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, 1, 1, 2, bytes.Repeat([]byte("b"), 64))
+
+	f1, err := openFile(filepath.Join(dir, "value-l0-000001.log"), id1, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f1): %v", err)
+	}
+	defer func() { _ = f1.Close() }()
+
+	f2, err := openFile(filepath.Join(dir, "value-l1-000001.log"), id2, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f2): %v", err)
+	}
+	defer func() { _ = f2.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{id1: f1, id2: f2},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1.manager = mgr
+	f2.manager = mgr
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	got1, err := set.ReadUnsafe(ptr1)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	}
+	if !bytes.Equal(got1, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ptr1 mismatch")
+	}
+	mapped1, _ := f1.mmapData.Load().([]byte)
+	if len(mapped1) == 0 {
+		t.Fatalf("expected first sealed segment to be mapped")
+	}
+	// Constrain sealed mmap bytes to exactly the current mapped bytes so the
+	// next sealed segment must use ReadAt.
+	MaxMappedSealedBytes = int64(len(mapped1))
+
+	got2, err := set.ReadUnsafe(ptr2)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr2): %v", err)
+	}
+	if !bytes.Equal(got2, bytes.Repeat([]byte("b"), 64)) {
+		t.Fatalf("ptr2 mismatch")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected second sealed segment to stay unmapped once byte budget was exhausted")
+	}
+	if got := f2.mmapReadFallbackReadAt.Load(); got == 0 {
+		t.Fatalf("expected fallback ReadAt on second sealed segment")
+	}
+	if got := f2.sealedMapDeniedByBytes.Load(); got == 0 {
+		t.Fatalf("expected byte-cap deny counter to increment")
+	}
+	if byCount, byBytes := mgr.SealedMapDeniedByReasonStats(); byCount != 0 || byBytes == 0 {
+		t.Fatalf("expected byte-cap deny aggregation, got count=%d bytes=%d", byCount, byBytes)
 	}
 }
 
