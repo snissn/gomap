@@ -103,6 +103,8 @@ var entrySlicePutPoolTotal atomic.Uint64
 var entrySlicePutPoolBytesTotal atomic.Uint64
 var entrySlicePutDropBudgetTotal atomic.Uint64
 var entrySlicePutDropBudgetBytesTotal atomic.Uint64
+var flushMergeShadowedOpsTotal atomic.Uint64
+var flushMergeAppliedOpsTotal atomic.Uint64
 var batchEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchShardEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchIntPoolDropUnderPressureTotal atomic.Uint64
@@ -2607,6 +2609,8 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		return nil
 	}
 
+	shadowedOps := 0
+	appliedOps := 0
 	for len(heap) > 0 {
 		top := heap.pop()
 		currentKey := top.key
@@ -2615,6 +2619,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 			next := heap.peek()
 			if next != nil && bytes.Equal(next.key, currentKey) {
 				shadowed := heap.pop()
+				shadowedOps++
 				shadowed.iter.Next()
 				if shadowed.iter.Valid() {
 					shadowed.key = shadowed.iter.Key()
@@ -2641,6 +2646,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				return 0, err
 			}
 			backendPendingOps++
+			appliedOps++
 		case entry.IsPtr:
 			if err := flushInlinePointerGroup(); err != nil {
 				return 0, err
@@ -2673,6 +2679,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 					return 0, err
 				}
 				backendPendingOps++
+				appliedOps++
 			}
 		}
 
@@ -2693,6 +2700,12 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 		if retainPath != "" {
 			db.markValueLogRetain(retainPath)
 		}
+	}
+	if shadowedOps > 0 {
+		flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
+	}
+	if appliedOps > 0 {
+		flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
 	}
 	return backendPendingOps, nil
 }
@@ -14999,6 +15012,8 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			(&heap).down(i, len(heap))
 		}
 
+		shadowedOps := 0
+		appliedOps := 0
 		for len(heap) > 0 {
 			top := heap.pop()
 			currentKey := top.key
@@ -15007,6 +15022,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				next := heap.peek()
 				if next != nil && bytes.Equal(next.key, currentKey) {
 					shadowed := heap.pop()
+					shadowedOps++
 					shadowed.iter.Next()
 					if shadowed.iter.Valid() {
 						shadowed.key = shadowed.iter.Key()
@@ -15047,6 +15063,7 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 			if applied {
 				backendPendingOps++
+				appliedOps++
 				if err := flushBackendChunk(); err != nil {
 					db.reportError(err)
 					_ = backendBatch.Close()
@@ -15059,6 +15076,12 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 				top.key = top.iter.Key()
 				heap.push(top)
 			}
+		}
+		if shadowedOps > 0 {
+			flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
+		}
+		if appliedOps > 0 {
+			flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
 		}
 
 		if db.valueLogEnabled() {
@@ -16742,6 +16765,13 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
 	stats["treedb.cache.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
 	stats["treedb.cache.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
+	mergeShadowedOpsTotal := flushMergeShadowedOpsTotal.Load()
+	mergeAppliedOpsTotal := flushMergeAppliedOpsTotal.Load()
+	stats["treedb.cache.flush_merge.shadowed_ops_total"] = fmt.Sprintf("%d", mergeShadowedOpsTotal)
+	stats["treedb.cache.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
+	if mergeAppliedOpsTotal > 0 {
+		stats["treedb.cache.flush_merge.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeShadowedOpsTotal)/float64(mergeAppliedOpsTotal))
+	}
 	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
 	stats["treedb.process.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.process.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
@@ -16759,6 +16789,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
 	stats["treedb.process.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
 	stats["treedb.process.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
+	stats["treedb.process.flush_merge.shadowed_ops_total"] = fmt.Sprintf("%d", mergeShadowedOpsTotal)
+	stats["treedb.process.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
+	if mergeAppliedOpsTotal > 0 {
+		stats["treedb.process.flush_merge.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeShadowedOpsTotal)/float64(mergeAppliedOpsTotal))
+	}
 	appendOnlyEntryHint := int(db.appendOnlyEntryHint.Load())
 	appendOnlyHintCapacity := appendOnlyEntriesToCapacity(appendOnlyEntryHint, appendOnlyEstimatedBytesPerEntryDefault)
 	stats["treedb.cache.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
