@@ -40,6 +40,14 @@ var leafPageScratchPool = sync.Pool{
 	},
 }
 
+// outerLeafBuildPagePool recycles page-sized buffers used to build rewritten
+// outer-leaf pages on non-maintenance apply paths.
+var outerLeafBuildPagePool = sync.Pool{
+	New: func() any {
+		return make([]byte, page.PageSize)
+	},
+}
+
 func getLeafPageScratch() []byte {
 	buf, _ := leafPageScratchPool.Get().([]byte)
 	if cap(buf) != page.PageSize {
@@ -53,6 +61,23 @@ func putLeafPageScratch(buf []byte) {
 		return
 	}
 	leafPageScratchPool.Put(buf[:0])
+}
+
+func getOuterLeafBuildPage() []byte {
+	buf, _ := outerLeafBuildPagePool.Get().([]byte)
+	if cap(buf) != page.PageSize {
+		return make([]byte, page.PageSize)
+	}
+	buf = buf[:page.PageSize]
+	clear(buf)
+	return buf
+}
+
+func putOuterLeafBuildPage(buf []byte) {
+	if cap(buf) != page.PageSize {
+		return
+	}
+	outerLeafBuildPagePool.Put(buf[:page.PageSize])
 }
 
 type Zipper struct {
@@ -923,11 +948,22 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 			if z.leafPageLog == nil {
 				return 0, nil, errors.New("zipper: outer leaves in value log enabled without leaf page log")
 			}
-			newData := make([]byte, page.PageSize)
+			reuseOuterLeafPages := !maintenance
+			var newData []byte
+			if reuseOuterLeafPages {
+				newData = getOuterLeafBuildPage()
+			} else {
+				newData = make([]byte, page.PageSize)
+			}
 			builder := z.newPooledLeafBuilder(newData, ops)
-			defer releasePooledBuilder(builder)
+			defer func() {
+				releasePooledBuilder(builder)
+				if reuseOuterLeafPages {
+					putOuterLeafBuildPage(newData)
+				}
+			}()
 			builder.SetPageID(0)
-			return z.mergeLeaf(&oldNode, builder, ops, metrics, scratch)
+			return z.mergeLeaf(&oldNode, builder, ops, metrics, scratch, reuseOuterLeafPages)
 		}
 
 		// Pager-backed leaf.
@@ -942,7 +978,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		builder := z.newPooledLeafBuilder(newData, ops)
 		defer releasePooledBuilder(builder)
 		builder.SetPageID(newPageID)
-		return z.mergeLeaf(&oldNode, builder, ops, metrics, scratch)
+		return z.mergeLeaf(&oldNode, builder, ops, metrics, scratch, false)
 
 	case page.PageTypeInternal:
 		// Internal merge is always pager-backed.
@@ -984,7 +1020,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 	return 0, nil, page.ErrInvalidPageType
 }
 
-func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, metrics *adaptive.Metrics, scratch *mergeScratch) (uint64, []Split, error) {
+func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batch.Entry, metrics *adaptive.Metrics, scratch *mergeScratch, reuseOuterLeafPages bool) (uint64, []Split, error) {
 	oldIdx := uint16(0)
 	oldCount := oldNode.Count()
 	opIdx := 0
@@ -1000,9 +1036,14 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	// Current target builder
 	target := builder
 	targetPooled := false
+	targetOuterLeafData := []byte(nil)
+	targetOuterLeafDataPooled := false
 	defer func() {
 		if target != builder && targetPooled {
 			releasePooledLeafBuilder(target)
+			if targetOuterLeafDataPooled {
+				putOuterLeafBuildPage(targetOuterLeafData)
+			}
 		}
 	}()
 
@@ -1028,7 +1069,12 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 		if target != builder && targetPooled {
 			releasePooledLeafBuilder(target)
+			if targetOuterLeafDataPooled {
+				putOuterLeafBuildPage(targetOuterLeafData)
+			}
 			targetPooled = false
+			targetOuterLeafDataPooled = false
+			targetOuterLeafData = nil
 		}
 
 		return nodeID, nil
@@ -1165,7 +1211,11 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				splitE Split
 			)
 			if z.outerLeavesInValueLog {
-				sdata = make([]byte, page.PageSize)
+				if reuseOuterLeafPages {
+					sdata = getOuterLeafBuildPage()
+				} else {
+					sdata = make([]byte, page.PageSize)
+				}
 				splitE.NodeID = 0
 			} else {
 				sid, err = z.allocator.Alloc(allocHint)
@@ -1199,6 +1249,8 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 			target = splitBuilder
 			targetPooled = true
+			targetOuterLeafData = sdata
+			targetOuterLeafDataPooled = z.outerLeavesInValueLog && reuseOuterLeafPages
 
 			// Retry insert
 			entrySize, prefixLen, suffixLen = target.LeafEntrySizeWithPrefix(key, val, flags)

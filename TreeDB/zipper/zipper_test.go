@@ -586,7 +586,7 @@ func TestMergeLeaf_SplitKeysDoNotAliasBatchKeys(t *testing.T) {
 	scratch := newMergeScratch()
 
 	var metrics adaptive.Metrics
-	_, splits, err := z.mergeLeaf(oldNode, builder, ops, &metrics, scratch)
+	_, splits, err := z.mergeLeaf(oldNode, builder, ops, &metrics, scratch, false)
 	if err != nil {
 		t.Fatalf("mergeLeaf failed: %v", err)
 	}
