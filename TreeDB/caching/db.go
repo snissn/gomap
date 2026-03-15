@@ -152,6 +152,7 @@ const (
 type poolPressureSnapshot struct {
 	sampledUnixNano    int64
 	level              poolPressureLevel
+	usedBytes          uint64
 	heapAllocBytes     uint64
 	heapInuseBytes     uint64
 	heapSysBytes       uint64
@@ -259,6 +260,20 @@ func classifyPoolPressureLevel(usedBytes uint64, memoryLimitBytes int64) poolPre
 	return poolPressureNormal
 }
 
+func poolPressureUsedBytes(ms runtime.MemStats, heapIdleUnreleased uint64) uint64 {
+	used := ms.HeapInuse
+	if ms.HeapAlloc > used {
+		used = ms.HeapAlloc
+	}
+	if heapIdleUnreleased > 0 {
+		if used > math.MaxUint64-heapIdleUnreleased {
+			return math.MaxUint64
+		}
+		used += heapIdleUnreleased
+	}
+	return used
+}
+
 func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
 	var ms runtime.MemStats
 	poolPressureReadMemStats(&ms)
@@ -266,15 +281,13 @@ func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
 	if ms.HeapIdle > ms.HeapReleased {
 		heapIdleUnreleased = ms.HeapIdle - ms.HeapReleased
 	}
-	used := ms.HeapInuse
-	if ms.HeapAlloc > used {
-		used = ms.HeapAlloc
-	}
+	used := poolPressureUsedBytes(ms, heapIdleUnreleased)
 	memLimit := poolPressureMemoryLimit()
 	level := classifyPoolPressureLevel(used, memLimit)
 	return poolPressureSnapshot{
 		sampledUnixNano:    sampledAt.UnixNano(),
 		level:              level,
+		usedBytes:          used,
 		heapAllocBytes:     ms.HeapAlloc,
 		heapInuseBytes:     ms.HeapInuse,
 		heapSysBytes:       ms.HeapSys,
@@ -16941,6 +16954,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
+	stats["treedb.process.memory.pool_pressure_used_bytes"] = fmt.Sprintf("%d", poolPressure.usedBytes)
 	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
 	stats["treedb.process.memory.heap_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.heapInuseBytes)
 	stats["treedb.process.memory.heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.heapSysBytes)
