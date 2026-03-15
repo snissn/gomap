@@ -19,14 +19,24 @@ import (
 const (
 	maxDecodeScratchKeep      = 256 << 10 // 256KiB (small scratch, sync.Pool + per-file stash)
 	maxLargeDecodeScratchKeep = 4 << 20   // 4MiB (bounded pool to cap RSS overhead)
+	decodeScratchDefaultCap   = 8 << 10   // 8KiB default small scratch cap
 )
 
 const largeDecodeScratchPoolEntries = 8
 
 const discardScratchSize = 32 << 10 // 32KiB
 
-var decodeScratchPool = sync.Pool{
-	New: func() any { return make([]byte, 0, 8<<10) }, // 8KiB default
+type decodeScratchHolder struct {
+	buf []byte
+}
+
+// decodeScratchValuePool stores holders with populated small scratch buffers.
+// Holders are pointer-typed to avoid interface boxing allocations on Put/Get.
+var decodeScratchValuePool sync.Pool
+
+// decodeScratchHolderPool stores empty holders used by decodeScratchValuePool.
+var decodeScratchHolderPool = sync.Pool{
+	New: func() any { return &decodeScratchHolder{} },
 }
 
 // largeDecodeScratchPool is a bounded pool for larger decode scratch buffers.
@@ -74,9 +84,20 @@ func getDecodeScratch(minCap int) []byte {
 		}
 		return make([]byte, 0, minCap)
 	}
-	buf, _ := decodeScratchPool.Get().([]byte)
+	var buf []byte
+	if v := decodeScratchValuePool.Get(); v != nil {
+		if h, ok := v.(*decodeScratchHolder); ok && h != nil {
+			buf = h.buf
+			h.buf = nil
+			decodeScratchHolderPool.Put(h)
+		}
+	}
 	if cap(buf) < minCap {
-		buf = make([]byte, 0, minCap)
+		capHint := minCap
+		if capHint < decodeScratchDefaultCap {
+			capHint = decodeScratchDefaultCap
+		}
+		buf = make([]byte, 0, capHint)
 	}
 	return buf[:0]
 }
@@ -91,7 +112,12 @@ func putDecodeScratch(buf []byte) {
 	}
 	buf = buf[:0]
 	if c <= maxDecodeScratchKeep {
-		decodeScratchPool.Put(buf)
+		h, _ := decodeScratchHolderPool.Get().(*decodeScratchHolder)
+		if h == nil {
+			h = &decodeScratchHolder{}
+		}
+		h.buf = buf
+		decodeScratchValuePool.Put(h)
 		return
 	}
 	if c <= maxLargeDecodeScratchKeep {
@@ -956,7 +982,7 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			return nil, false, ErrCorrupt
 		}
 	}
-	val, usedDst, err := decodeRecordTo(header[:], payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts, dst)
+	val, usedDst, err := decodeRecordTo(&header, payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts, dst)
 	if err != nil {
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
@@ -1075,8 +1101,8 @@ func decodeRecord(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bo
 	return val, nil
 }
 
-func decodeRecordTo(header []byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte) ([]byte, bool, error) {
-	if len(header) < HeaderSize {
+func decodeRecordTo(header *[HeaderSize]byte, payload []byte, ptr page.ValuePtr, verifyCRC bool, dictLookup DictLookup, templateLookup TemplateLookup, templateCache *templateDefCache, templateOpts templ.DecodeOptions, dst []byte) ([]byte, bool, error) {
+	if header == nil {
 		return nil, false, ErrCorrupt
 	}
 	crcVal := binary.LittleEndian.Uint32(header[0:4])

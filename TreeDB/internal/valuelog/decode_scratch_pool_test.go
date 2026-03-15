@@ -2,6 +2,27 @@ package valuelog
 
 import "testing"
 
+func TestDecodeScratchPool_ReusesSmallBuffer_NoAllocsAfterWarmup(t *testing.T) {
+	minCap := 1024
+
+	buf := getDecodeScratch(minCap)
+	if cap(buf) < minCap {
+		t.Fatalf("cap(buf)=%d < minCap=%d", cap(buf), minCap)
+	}
+	putDecodeScratch(buf)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		b := getDecodeScratch(minCap)
+		if cap(b) < minCap {
+			t.Fatalf("cap(b)=%d < minCap=%d", cap(b), minCap)
+		}
+		putDecodeScratch(b)
+	})
+	if allocs != 0 {
+		t.Fatalf("expected 0 allocs after warm-up, got %f", allocs)
+	}
+}
+
 func TestDecodeScratchPool_ReusesLargeBuffer(t *testing.T) {
 	// Ensure we exercise the large-scratch pool path (>maxDecodeScratchKeep).
 	minCap := maxDecodeScratchKeep + (64 << 10) // 320KiB
