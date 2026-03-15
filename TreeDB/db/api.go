@@ -462,6 +462,10 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
 		stats["treedb.vlog.mmap_dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
+		activeSegments, activeBytes, _, deadBytes := db.valueLogManager.MmapResidencyStats()
+		stats["treedb.vlog.mmap_active_segments"] = fmt.Sprintf("%d", activeSegments)
+		stats["treedb.vlog.mmap_active_bytes"] = fmt.Sprintf("%d", activeBytes)
+		stats["treedb.vlog.mmap_dead_bytes"] = fmt.Sprintf("%d", deadBytes)
 
 		mmapHits, mmapMissOutOfRange, mmapMissNoMapping, mmapMissDeadCap, mmapFallbackReadAt := db.valueLogManager.MmapReadStats()
 		stats["treedb.vlog.mmap_read.hits"] = fmt.Sprintf("%d", mmapHits)

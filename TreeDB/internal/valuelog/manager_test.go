@@ -35,6 +35,33 @@ func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
 	}
 }
 
+func TestManagerMmapResidencyStatsAggregatesCounters(t *testing.T) {
+	mgr := &Manager{
+		files: map[uint32]*File{
+			1: {},
+			2: {},
+			3: {},
+		},
+	}
+	mgr.files[1].mmapData.Store(make([]byte, 11))
+	mgr.files[1].deadMappingsCount.Store(2)
+	mgr.files[1].deadMappedBytes.Store(17)
+
+	mgr.files[2].mmapData.Store(make([]byte, 23))
+	mgr.files[2].deadMappingsCount.Store(3)
+	mgr.files[2].deadMappedBytes.Store(29)
+
+	// file 3 has no active mapping but contributes dead bytes/counters.
+	mgr.files[3].mmapData.Store([]byte(nil))
+	mgr.files[3].deadMappingsCount.Store(5)
+	mgr.files[3].deadMappedBytes.Store(31)
+
+	activeSegments, activeBytes, deadMappings, deadBytes := mgr.MmapResidencyStats()
+	if activeSegments != 2 || activeBytes != 34 || deadMappings != 10 || deadBytes != 77 {
+		t.Fatalf("MmapResidencyStats mismatch: activeSegments=%d activeBytes=%d deadMappings=%d deadBytes=%d", activeSegments, activeBytes, deadMappings, deadBytes)
+	}
+}
+
 func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(0, 1)
@@ -137,6 +164,39 @@ func TestFileReadAppend_CountsGroupedFallbackReadAt(t *testing.T) {
 	}
 	if got := f.mmapReadFallbackReadAt.Load(); got != 1 {
 		t.Fatalf("mmapReadFallbackReadAt=%d want 1", got)
+	}
+}
+
+func TestOpenFile_DoesNotEagerlyMap(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, []byte("alpha")); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if data, _ := f.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected no eager mmap on open, mapped bytes=%d", len(data))
+	}
+	if got := f.remapCount.Load(); got != 0 {
+		t.Fatalf("expected no eager remap on open, remapCount=%d", got)
 	}
 }
 

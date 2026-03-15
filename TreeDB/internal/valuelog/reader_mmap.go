@@ -166,6 +166,7 @@ func (f *File) remapToFileSize() {
 	if data != nil {
 		f.deadMappings = append(f.deadMappings, data)
 		f.deadMappingsCount.Add(1)
+		f.deadMappedBytes.Add(uint64(len(data)))
 	}
 
 	b, err := mmapReadOnly(f.File, int(currentSize))

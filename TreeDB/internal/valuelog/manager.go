@@ -78,6 +78,7 @@ type File struct {
 	remapRequested atomic.Bool
 
 	deadMappings          [][]byte
+	deadMappedBytes       atomic.Uint64
 	remapCount            atomic.Uint64
 	deadMappingsCount     atomic.Uint64
 	mmapReadHits          atomic.Uint64
@@ -109,7 +110,6 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
 	}
 	vf.mmapData.Store([]byte(nil))
-	vf.maybeScheduleRemap()
 	return vf, nil
 }
 
@@ -394,6 +394,7 @@ func (f *File) Close() error {
 	}
 	f.deadMappings = nil
 	f.deadMappingsCount.Store(0)
+	f.deadMappedBytes.Store(0)
 	f.mmapData.Store([]byte(nil))
 	f.remapMu.Unlock()
 
@@ -1132,6 +1133,25 @@ func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
 		deadMappings += f.deadMappingsCount.Load()
 	}
 	return remaps, deadMappings
+}
+
+// MmapResidencyStats reports current aggregate mmap residency.
+func (m *Manager) MmapResidencyStats() (activeSegments uint64, activeBytes uint64, deadMappings uint64, deadBytes uint64) {
+	if m == nil {
+		return 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		data, _ := f.mmapData.Load().([]byte)
+		if len(data) > 0 {
+			activeSegments++
+			activeBytes += uint64(len(data))
+		}
+		deadMappings += f.deadMappingsCount.Load()
+		deadBytes += f.deadMappedBytes.Load()
+	}
+	return activeSegments, activeBytes, deadMappings, deadBytes
 }
 
 func (m *Manager) MmapReadStats() (hits uint64, missesOutOfRange uint64, missesNoMapping uint64, missesDeadMappingCap uint64, fallbacksReadAt uint64) {
