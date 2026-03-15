@@ -189,7 +189,14 @@ func (s *Snapshot) GetAppend(key, dst []byte) ([]byte, error) {
 }
 
 func (s *Snapshot) Get(key []byte) ([]byte, error) {
-	return s.GetAppend(key, nil)
+	out, err := s.GetAppend(key, nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	return out[:len(out):len(out)], nil
 }
 
 func (s *Snapshot) GetUnsafe(key []byte) ([]byte, error) {
