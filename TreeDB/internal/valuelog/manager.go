@@ -83,6 +83,7 @@ type File struct {
 	deadMappedBytes       atomic.Uint64
 	remapCount            atomic.Uint64
 	deadMappingsCount     atomic.Uint64
+	sealedMapDeniedCount  atomic.Uint64
 	mmapReadHits          atomic.Uint64
 	mmapReadMissNoMapping atomic.Uint64
 	// mmapReadMissOutOfRange counts reads that miss because the requested record
@@ -1189,22 +1190,40 @@ func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
 }
 
 // MmapResidencyStats reports current aggregate mmap residency.
-func (m *Manager) MmapResidencyStats() (activeSegments uint64, activeBytes uint64, deadMappings uint64, deadBytes uint64) {
+func (m *Manager) MmapResidencyStats() (currentSegments uint64, currentBytes uint64, sealedSegments uint64, sealedBytes uint64, deadMappings uint64, deadBytes uint64) {
 	if m == nil {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0, 0
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, f := range m.files {
 		data, _ := f.mmapData.Load().([]byte)
 		if len(data) > 0 {
-			activeSegments++
-			activeBytes += uint64(len(data))
+			if f.currentWritable.Load() {
+				currentSegments++
+				currentBytes += uint64(len(data))
+			} else {
+				sealedSegments++
+				sealedBytes += uint64(len(data))
+			}
 		}
 		deadMappings += f.deadMappingsCount.Load()
 		deadBytes += f.deadMappedBytes.Load()
 	}
-	return activeSegments, activeBytes, deadMappings, deadBytes
+	return currentSegments, currentBytes, sealedSegments, sealedBytes, deadMappings, deadBytes
+}
+
+func (m *Manager) SealedMapDeniedStats() uint64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var denied uint64
+	for _, f := range m.files {
+		denied += f.sealedMapDeniedCount.Load()
+	}
+	return denied
 }
 
 func (m *Manager) allowSealedLazyMmapLocked(target *File) bool {

@@ -142,6 +142,7 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	allow := m.allowSealedLazyMmapLocked(f)
 	m.mu.Unlock()
 	if !allow {
+		f.sealedMapDeniedCount.Add(1)
 		return false
 	}
 	f.remapToFileSize()
