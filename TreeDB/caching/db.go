@@ -76,6 +76,7 @@ var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolLastGC atomic.Uint64
 var batchArenaPoolBudgetState atomic.Value
 var batchArenaLeasedBytesGlobal atomic.Int64
+var batchArenaRetainedBytesMaxGlobal atomic.Int64
 var batchArenaRetainedHardCapOverride atomic.Int64
 var batchArenaPoolSkipZeroBudgetTotal atomic.Uint64
 var batchArenaPoolDropBytesTotal atomic.Uint64
@@ -437,6 +438,14 @@ func currentBatchArenaRetainedBytesEstimate() int64 {
 		leasedBytes = 0
 	}
 	return poolBytes + leasedBytes
+}
+
+func noteBatchArenaRetainedBytesMax() {
+	total := currentBatchArenaRetainedBytesEstimate()
+	if total <= 0 {
+		return
+	}
+	updateInt64Max(&batchArenaRetainedBytesMaxGlobal, total)
 }
 
 func shouldBorrowBatchArenaBytes() bool {
@@ -919,6 +928,7 @@ func putBatchArena(buf []byte) {
 		}
 		if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
 			noteEpoch = held == 0
+			noteBatchArenaRetainedBytesMax()
 			break
 		}
 	}
@@ -5142,6 +5152,7 @@ func (db *DB) retainBatchArenaChunksForMemtables(chunks [][]byte, mems []memtabl
 		cur := db.batchArenaLeaseBytes.Add(lease.bytes)
 		updateInt64Max(&db.batchArenaLeaseBytesMax, cur)
 		batchArenaLeasedBytesGlobal.Add(lease.bytes)
+		noteBatchArenaRetainedBytesMax()
 	}
 	db.batchArenaLeaseMu.Lock()
 	if db.batchArenaLeasesByMem == nil {
@@ -16697,6 +16708,7 @@ func (db *DB) Stats() map[string]string {
 	arenaRetainedHardCapBytes := currentBatchArenaRetainedHardCapBytes()
 	arenaRetainedHardCapEffectiveBytes := db.currentBatchArenaRetainedHardCapEffectiveBytes()
 	arenaRetainedEstimate := currentBatchArenaRetainedBytesEstimate()
+	arenaRetainedMaxEstimate := batchArenaRetainedBytesMaxGlobal.Load()
 	arenaAllocRequestedBytes := db.batchArenaAllocRequestedBytes.Load()
 	arenaAllocClassBytes := db.batchArenaAllocClassBytes.Load()
 	arenaUsedBytes := db.batchArenaUsedBytes.Load()
@@ -16719,6 +16731,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
 	stats["treedb.cache.batch_arena.deferred_pressure_active"] = fmt.Sprintf("%t", db.batchArenaDeferredPressureActive())
 	stats["treedb.cache.batch_arena.retained_bytes_global_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
+	stats["treedb.cache.batch_arena.retained_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaRetainedMaxEstimate)
 	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
 	stats["treedb.cache.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
@@ -16743,6 +16756,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
 	stats["treedb.process.batch_arena.deferred_pressure_active"] = fmt.Sprintf("%t", db.batchArenaDeferredPressureActive())
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
+	stats["treedb.process.batch_arena.retained_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaRetainedMaxEstimate)
 	stats["treedb.process.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
 	stats["treedb.process.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
 	stats["treedb.process.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
