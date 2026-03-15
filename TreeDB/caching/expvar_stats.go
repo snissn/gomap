@@ -70,7 +70,9 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 	out := make(map[string]any)
 	for k, v := range stats {
 		if strings.HasPrefix(k, "treedb.cache.vlog_mmap.") ||
-			strings.HasPrefix(k, "treedb.process.memory.") {
+			strings.HasPrefix(k, "treedb.process.memory.") ||
+			strings.HasPrefix(k, "treedb.cache.batch_arena.") ||
+			strings.HasPrefix(k, "treedb.process.batch_arena.") {
 			out[k] = coerceStatsValue(v)
 		}
 	}

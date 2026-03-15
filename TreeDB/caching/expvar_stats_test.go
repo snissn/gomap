@@ -9,14 +9,16 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.cache.vlog_mmap.enabled":               "true",
 		"treedb.process.memory.heap_inuse_bytes":       "4096",
 		"treedb.process.memory.pool_pressure_level":    "critical",
+		"treedb.cache.batch_arena.pool_bytes_estimate": "65536",
+		"treedb.process.batch_arena.retained_bytes_global_max_estimate": "1048576",
 		"treedb.cache.backpressure_mode":               "adaptive",
 		"treedb.cache.entry_slice.trim_runs_total":     "77",
 		"treedb.process.memory.pool_pressure_high_pct": "85.5",
 	}
 
 	got := selectTreeDBExpvarStats(stats)
-	if len(got) != 6 {
-		t.Fatalf("selectTreeDBExpvarStats len=%d want 6", len(got))
+	if len(got) != 8 {
+		t.Fatalf("selectTreeDBExpvarStats len=%d want 8", len(got))
 	}
 
 	if v, ok := got["treedb.cache.vlog_mmap.active_bytes"].(int64); !ok || v != 12345 {
@@ -33,6 +35,12 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.process.memory.pool_pressure_level"].(string); !ok || v != "critical" {
 		t.Fatalf("pool_pressure_level=%T(%v) want string(critical)", got["treedb.process.memory.pool_pressure_level"], got["treedb.process.memory.pool_pressure_level"])
+	}
+	if v, ok := got["treedb.cache.batch_arena.pool_bytes_estimate"].(int64); !ok || v != 65536 {
+		t.Fatalf("batch_arena.pool_bytes_estimate=%T(%v) want int64(65536)", got["treedb.cache.batch_arena.pool_bytes_estimate"], got["treedb.cache.batch_arena.pool_bytes_estimate"])
+	}
+	if v, ok := got["treedb.process.batch_arena.retained_bytes_global_max_estimate"].(int64); !ok || v != 1048576 {
+		t.Fatalf("batch_arena.retained_bytes_global_max_estimate=%T(%v) want int64(1048576)", got["treedb.process.batch_arena.retained_bytes_global_max_estimate"], got["treedb.process.batch_arena.retained_bytes_global_max_estimate"])
 	}
 	if _, ok := got["treedb.cache.backpressure_mode"]; ok {
 		t.Fatalf("unexpected backpressure_mode key in expvar selection")
