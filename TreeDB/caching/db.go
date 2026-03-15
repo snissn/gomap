@@ -4095,6 +4095,7 @@ type appendOnlyDirectArenaLease struct {
 
 type memtableViewDeferredInfo struct {
 	memtables     int64
+	bytes         int64
 	sinceUnixNano int64
 }
 
@@ -4111,6 +4112,9 @@ type memtableViewLifecycleTelemetry struct {
 	deferredMemtablesCurrent atomic.Int64
 	deferredMemtablesMax     atomic.Int64
 	deferredMemtablesTotal   atomic.Uint64
+	deferredBytesCurrent     atomic.Int64
+	deferredBytesMax         atomic.Int64
+	deferredBytesTotal       atomic.Uint64
 
 	deferredMu sync.Mutex
 	deferred   map[*memtableView]memtableViewDeferredInfo
@@ -4637,6 +4641,7 @@ type memtableView struct {
 	refs                     atomic.Int64
 	retiredMems              []memtable.Table
 	deferredRetiredMemtables atomic.Int64
+	deferredRetiredBytes     atomic.Int64
 }
 
 // appendOnlyEstimatedBytesPerEntryDefault tunes initial append-only memtable
@@ -4662,6 +4667,16 @@ func updateInt64Max(dst *atomic.Int64, value int64) {
 	}
 }
 
+func memtableBytesTotal(mems []memtable.Table) int64 {
+	var total int64
+	for _, mt := range mems {
+		if mt != nil {
+			total += mt.Size()
+		}
+	}
+	return total
+}
+
 func (db *DB) noteMemtableViewRetain() {
 	if db == nil {
 		return
@@ -4681,9 +4696,12 @@ func (db *DB) noteMemtableViewRelease() {
 	tel.leasesInFlight.Add(-1)
 }
 
-func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64) {
+func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64, bytes int64) {
 	if db == nil || view == nil || memtables <= 0 {
 		return
+	}
+	if bytes < 0 {
+		bytes = 0
 	}
 	tel := &db.memtableViewTelemetry
 	since := time.Now().UnixNano()
@@ -4703,6 +4721,7 @@ func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64)
 	}
 	tel.deferred[view] = memtableViewDeferredInfo{
 		memtables:     memtables,
+		bytes:         bytes,
 		sinceUnixNano: since,
 	}
 	oldest := int64(0)
@@ -4719,6 +4738,9 @@ func (db *DB) noteMemtableViewDeferredEnter(view *memtableView, memtables int64)
 	tel.deferredMemtablesTotal.Add(uint64(memtables))
 	deferredMemtablesCurrent := tel.deferredMemtablesCurrent.Add(memtables)
 	updateInt64Max(&tel.deferredMemtablesMax, deferredMemtablesCurrent)
+	tel.deferredBytesTotal.Add(uint64(bytes))
+	deferredBytesCurrent := tel.deferredBytesCurrent.Add(bytes)
+	updateInt64Max(&tel.deferredBytesMax, deferredBytesCurrent)
 }
 
 func (db *DB) noteMemtableViewDeferredExit(view *memtableView) {
@@ -4750,6 +4772,7 @@ func (db *DB) noteMemtableViewDeferredExit(view *memtableView) {
 	}
 	tel.deferredViewsCurrent.Add(-1)
 	tel.deferredMemtablesCurrent.Add(-info.memtables)
+	tel.deferredBytesCurrent.Add(-info.bytes)
 }
 
 func (db *DB) retainMemtableView() *memtableView {
@@ -4797,11 +4820,13 @@ func (db *DB) releaseMemtableViewRef(view *memtableView, leaseRelease bool) {
 	}
 	if refs := view.refs.Add(-1); refs != 0 {
 		if refs > 0 && view.deferredRetiredMemtables.Load() > 0 {
-			db.noteMemtableViewDeferredEnter(view, view.deferredRetiredMemtables.Load())
+			db.noteMemtableViewDeferredEnter(view, view.deferredRetiredMemtables.Load(), view.deferredRetiredBytes.Load())
 		}
 		return
 	}
 	db.noteMemtableViewDeferredExit(view)
+	view.deferredRetiredMemtables.Store(0)
+	view.deferredRetiredBytes.Store(0)
 	db.recycleMemtables(view.retiredMems)
 	view.retiredMems = nil
 }
@@ -5138,6 +5163,7 @@ func (db *DB) publishMemtablesLocked() {
 		if len(retired) > 0 {
 			old.retiredMems = append(old.retiredMems, retired...)
 			old.deferredRetiredMemtables.Store(int64(len(old.retiredMems)))
+			old.deferredRetiredBytes.Add(memtableBytesTotal(retired))
 		}
 		db.releasePublishedMemtableView(old)
 		return
@@ -16204,6 +16230,9 @@ func (db *DB) Stats() map[string]string {
 	memViewDeferredMemtablesCurrent := db.memtableViewTelemetry.deferredMemtablesCurrent.Load()
 	memViewDeferredMemtablesMax := db.memtableViewTelemetry.deferredMemtablesMax.Load()
 	memViewDeferredMemtablesTotal := db.memtableViewTelemetry.deferredMemtablesTotal.Load()
+	memViewDeferredBytesCurrent := db.memtableViewTelemetry.deferredBytesCurrent.Load()
+	memViewDeferredBytesMax := db.memtableViewTelemetry.deferredBytesMax.Load()
+	memViewDeferredBytesTotal := db.memtableViewTelemetry.deferredBytesTotal.Load()
 	memViewOldestDeferredUnixNano := db.memtableViewTelemetry.oldestDeferredUnixNano.Load()
 	memViewOldestDeferredAgeMS := 0.0
 	if memViewOldestDeferredUnixNano > 0 {
@@ -16248,6 +16277,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.memtable_view.deferred_memtables_current"] = fmt.Sprintf("%d", memViewDeferredMemtablesCurrent)
 	stats["treedb.cache.memtable_view.deferred_memtables_max"] = fmt.Sprintf("%d", memViewDeferredMemtablesMax)
 	stats["treedb.cache.memtable_view.deferred_memtables_total"] = fmt.Sprintf("%d", memViewDeferredMemtablesTotal)
+	stats["treedb.cache.memtable_view.deferred_bytes_current"] = fmt.Sprintf("%d", memViewDeferredBytesCurrent)
+	stats["treedb.cache.memtable_view.deferred_bytes_max"] = fmt.Sprintf("%d", memViewDeferredBytesMax)
+	stats["treedb.cache.memtable_view.deferred_bytes_total"] = fmt.Sprintf("%d", memViewDeferredBytesTotal)
 	stats["treedb.cache.memtable_view.deferred_oldest_age_ms"] = fmt.Sprintf("%.3f", memViewOldestDeferredAgeMS)
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
@@ -17904,15 +17936,39 @@ func (b *Batch) clonePtrValue(value []byte) []byte {
 	return dst
 }
 
-func shouldCompactBatchArenaTail(used, classCap int) bool {
+func shouldCompactBatchArenaTailWithPolicy(used, classCap, minWaste, maxFillNumerator, maxFillDenominator int) bool {
 	if classCap < batchArenaTailCompactMinCap || used <= 0 || used >= classCap {
 		return false
 	}
 	waste := classCap - used
-	if waste < batchArenaTailCompactMinWaste {
+	if waste < minWaste {
 		return false
 	}
-	return used*batchArenaTailCompactMaxFillDenominator <= classCap*batchArenaTailCompactMaxFillNumerator
+	return used*maxFillDenominator <= classCap*maxFillNumerator
+}
+
+func shouldCompactBatchArenaTail(used, classCap int) bool {
+	return shouldCompactBatchArenaTailWithPolicy(
+		used,
+		classCap,
+		batchArenaTailCompactMinWaste,
+		batchArenaTailCompactMaxFillNumerator,
+		batchArenaTailCompactMaxFillDenominator,
+	)
+}
+
+func (b *Batch) shouldCompactArenaTail(used, classCap int) bool {
+	minWaste := batchArenaTailCompactMinWaste
+	maxFillNumerator := batchArenaTailCompactMaxFillNumerator
+	maxFillDenominator := batchArenaTailCompactMaxFillDenominator
+	if b != nil && b.db != nil && b.db.memtableViewTelemetry.deferredViewsCurrent.Load() > 0 {
+		if minWaste > batchArenaTailCompactPinnedMinWaste {
+			minWaste = batchArenaTailCompactPinnedMinWaste
+		}
+		maxFillNumerator = batchArenaTailCompactPinnedMaxFillNumerator
+		maxFillDenominator = batchArenaTailCompactPinnedMaxFillDenominator
+	}
+	return shouldCompactBatchArenaTailWithPolicy(used, classCap, minWaste, maxFillNumerator, maxFillDenominator)
 }
 
 func sliceAliasesArenaTail(s, tail []byte) bool {
@@ -17956,7 +18012,7 @@ func (b *Batch) compactUnderfilledMainArenaTail() {
 		return
 	}
 	tail := b.copyArena
-	if !shouldCompactBatchArenaTail(len(tail), cap(tail)) {
+	if !b.shouldCompactArenaTail(len(tail), cap(tail)) {
 		return
 	}
 	copiedBytes := 0
@@ -17982,7 +18038,7 @@ func (b *Batch) compactUnderfilledPtrArenaTail() {
 		return
 	}
 	tail := b.ptrCopyArena
-	if !shouldCompactBatchArenaTail(len(tail), cap(tail)) {
+	if !b.shouldCompactArenaTail(len(tail), cap(tail)) {
 		return
 	}
 	copiedBytes := 0
@@ -18264,12 +18320,18 @@ const (
 	batchArenaTailCompactMinCap = 256 << 10
 	// Only compact tails with meaningful waste so we avoid churn on tiny chunks.
 	batchArenaTailCompactMinWaste = 256 << 10
+	// Under deferred-view pressure, compact earlier so retired memtable leases
+	// don't pin large half-used tail chunks for iterator lifetimes.
+	batchArenaTailCompactPinnedMinWaste = 128 << 10
 	// Require at least 50% slack in the tail chunk before compacting borrowed
 	// slices. This keeps the path focused on pathological underfill.
 	batchArenaTailCompactMaxFillNumerator   = 1
 	batchArenaTailCompactMaxFillDenominator = 2
-	batchEntriesPoolMaxRetain               = 16 << 10
-	batchIntSlicePoolMaxRetain              = 16 << 10
+	// Under deferred-view pressure, compact tails once fill is at most 75%.
+	batchArenaTailCompactPinnedMaxFillNumerator   = 3
+	batchArenaTailCompactPinnedMaxFillDenominator = 4
+	batchEntriesPoolMaxRetain                     = 16 << 10
+	batchIntSlicePoolMaxRetain                    = 16 << 10
 )
 
 func batchCopyArenaInitCapForEntries(entries int) int {

@@ -409,3 +409,52 @@ func TestBatchArenaTailCompaction_SkipsNearFullTail(t *testing.T) {
 		t.Fatalf("tail_compact_saved_bytes_total=%d want 0", got)
 	}
 }
+
+func TestBatchArenaTailCompaction_CompactsNearFullTailWhenDeferredViewsPinned(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	tail := make([]byte, 320<<10, 512<<10)
+	copy(tail[0:6], []byte("key-01"))
+	copy(tail[6:16], []byte("value-0001"))
+	key := tail[0:6:6]
+	value := tail[6:16:16]
+
+	db := &DB{}
+	db.memtableViewTelemetry.deferredViewsCurrent.Store(1)
+	b := &Batch{
+		db:              db,
+		entries:         []batch.Entry{{Type: batch.OpPut, Key: key, Value: value}},
+		copyArena:       tail,
+		copyArenaChunks: [][]byte{tail[:0]},
+	}
+	oldKeyPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Key)))
+	oldValPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Value)))
+
+	b.compactUnderfilledMainArenaTail()
+
+	if b.copyArena != nil {
+		t.Fatalf("copyArena should be nil after compact")
+	}
+	if len(b.copyArenaChunks) != 0 {
+		t.Fatalf("copyArenaChunks len=%d want 0", len(b.copyArenaChunks))
+	}
+	newKeyPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Key)))
+	newValPtr := uintptr(unsafe.Pointer(unsafe.SliceData(b.entries[0].Value)))
+	if newKeyPtr == oldKeyPtr {
+		t.Fatalf("key pointer did not change")
+	}
+	if newValPtr == oldValPtr {
+		t.Fatalf("value pointer did not change")
+	}
+	if got := db.batchArenaTailCompactRuns.Load(); got != 1 {
+		t.Fatalf("tail_compact_runs_total=%d want 1", got)
+	}
+	if got := db.batchArenaTailCompactCopied.Load(); got == 0 {
+		t.Fatalf("tail_compact_copied_bytes_total=%d want >0", got)
+	}
+	if got := db.batchArenaTailCompactSaved.Load(); got == 0 {
+		t.Fatalf("tail_compact_saved_bytes_total=%d want >0", got)
+	}
+}
