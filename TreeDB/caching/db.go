@@ -5283,6 +5283,8 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
 	for i := range dropped {
 		if dropped[i] != nil {
 			dropped[i].ResetWithCapacityHard(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+			db.releaseAppendOnlyDirectArenaLeaseForMemtable(dropped[i])
+			db.appendOnlyMemPool.Put(dropped[i])
 		}
 	}
 }
