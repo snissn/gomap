@@ -91,6 +91,18 @@ var poolPressureHighSamplesTotal atomic.Uint64
 var poolPressureCriticalSamplesTotal atomic.Uint64
 var entrySlicePoolTrimRunsTotal atomic.Uint64
 var entrySlicePoolTrimDropBytesTotal atomic.Uint64
+var entrySliceLeaseHitTotal atomic.Uint64
+var entrySliceLeaseHitBytesTotal atomic.Uint64
+var entrySlicePoolHitTotal atomic.Uint64
+var entrySlicePoolHitBytesTotal atomic.Uint64
+var entrySliceFreshAllocTotal atomic.Uint64
+var entrySliceFreshAllocBytesTotal atomic.Uint64
+var entrySlicePutLeaseTotal atomic.Uint64
+var entrySlicePutLeaseBytesTotal atomic.Uint64
+var entrySlicePutPoolTotal atomic.Uint64
+var entrySlicePutPoolBytesTotal atomic.Uint64
+var entrySlicePutDropBudgetTotal atomic.Uint64
+var entrySlicePutDropBudgetBytesTotal atomic.Uint64
 var batchEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchShardEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchIntPoolDropUnderPressureTotal atomic.Uint64
@@ -7454,6 +7466,8 @@ func getEntrySlice(capacity int) []batch.Entry {
 			leaseBytes := int64(cap(s)) * entrySliceEntrySizeBytes
 			releaseEntrySlicePoolBytes(leaseBytes)
 			if cap(s) >= capacity {
+				entrySliceLeaseHitTotal.Add(1)
+				entrySliceLeaseHitBytesTotal.Add(uint64(leaseBytes))
 				return s[:0]
 			}
 			if capIdx, ok := entrySliceLeaseClassForCap(cap(s)); ok {
@@ -7466,6 +7480,8 @@ func getEntrySlice(capacity int) []batch.Entry {
 					entrySlicePools[capIdx].Put(s[:0])
 				}
 			}
+			entrySliceFreshAllocTotal.Add(1)
+			entrySliceFreshAllocBytesTotal.Add(uint64(classCap) * uint64(entrySliceEntrySizeBytes))
 			return make([]batch.Entry, 0, classCap)
 		}
 	}
@@ -7476,13 +7492,18 @@ func getEntrySlice(capacity int) []batch.Entry {
 			if !ok {
 				continue
 			}
-			releaseEntrySlicePoolBytes(int64(cap(s)) * entrySliceEntrySizeBytes)
+			poolBytes := int64(cap(s)) * entrySliceEntrySizeBytes
+			releaseEntrySlicePoolBytes(poolBytes)
 			if cap(s) >= capacity && cap(s) <= maxReuseCap {
+				entrySlicePoolHitTotal.Add(1)
+				entrySlicePoolHitBytesTotal.Add(uint64(poolBytes))
 				return s[:0]
 			}
 		}
 	}
 	maybeResetEntrySlicePoolBytesAfterGC()
+	entrySliceFreshAllocTotal.Add(1)
+	entrySliceFreshAllocBytesTotal.Add(uint64(classCap) * uint64(entrySliceEntrySizeBytes))
 	return make([]batch.Entry, 0, classCap)
 }
 
@@ -7506,6 +7527,8 @@ func putEntrySlice(entries []batch.Entry) {
 	leaseBytes := int64(cap(entries)) * entrySliceEntrySizeBytes
 	ok, transitioned := reserveEntrySlicePoolBytes(leaseBytes)
 	if !ok {
+		entrySlicePutDropBudgetTotal.Add(1)
+		entrySlicePutDropBudgetBytesTotal.Add(uint64(leaseBytes))
 		return
 	}
 	if transitioned {
@@ -7516,10 +7539,14 @@ func putEntrySlice(entries []batch.Entry) {
 	if len(entrySliceLeases[idx]) < maxEntrySliceLeasesPerBucket {
 		entrySliceLeases[idx] = append(entrySliceLeases[idx], entries)
 		entrySliceLeaseMu.Unlock()
+		entrySlicePutLeaseTotal.Add(1)
+		entrySlicePutLeaseBytesTotal.Add(uint64(leaseBytes))
 		return
 	}
 	entrySliceLeaseMu.Unlock()
 	entrySlicePools[idx].Put(entries)
+	entrySlicePutPoolTotal.Add(1)
+	entrySlicePutPoolBytesTotal.Add(uint64(leaseBytes))
 }
 
 func drainEntrySlicePoolsToTargetBytes(target int64) int64 {
@@ -16703,11 +16730,35 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	stats["treedb.cache.entry_slice.trim_runs_total"] = fmt.Sprintf("%d", entrySlicePoolTrimRunsTotal.Load())
 	stats["treedb.cache.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hits_total"] = fmt.Sprintf("%d", entrySliceLeaseHitTotal.Load())
+	stats["treedb.cache.entry_slice.get.lease_hit_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hits_total"] = fmt.Sprintf("%d", entrySlicePoolHitTotal.Load())
+	stats["treedb.cache.entry_slice.get.pool_hit_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitBytesTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_total"] = fmt.Sprintf("%d", entrySliceFreshAllocTotal.Load())
+	stats["treedb.cache.entry_slice.get.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocBytesTotal.Load())
+	stats["treedb.cache.entry_slice.put.lease_total"] = fmt.Sprintf("%d", entrySlicePutLeaseTotal.Load())
+	stats["treedb.cache.entry_slice.put.lease_bytes_total"] = fmt.Sprintf("%d", entrySlicePutLeaseBytesTotal.Load())
+	stats["treedb.cache.entry_slice.put.pool_total"] = fmt.Sprintf("%d", entrySlicePutPoolTotal.Load())
+	stats["treedb.cache.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
+	stats["treedb.cache.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
+	stats["treedb.cache.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
 	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
 	stats["treedb.process.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.process.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	stats["treedb.process.entry_slice.trim_runs_total"] = fmt.Sprintf("%d", entrySlicePoolTrimRunsTotal.Load())
 	stats["treedb.process.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hits_total"] = fmt.Sprintf("%d", entrySliceLeaseHitTotal.Load())
+	stats["treedb.process.entry_slice.get.lease_hit_bytes_total"] = fmt.Sprintf("%d", entrySliceLeaseHitBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hits_total"] = fmt.Sprintf("%d", entrySlicePoolHitTotal.Load())
+	stats["treedb.process.entry_slice.get.pool_hit_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolHitBytesTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_total"] = fmt.Sprintf("%d", entrySliceFreshAllocTotal.Load())
+	stats["treedb.process.entry_slice.get.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", entrySliceFreshAllocBytesTotal.Load())
+	stats["treedb.process.entry_slice.put.lease_total"] = fmt.Sprintf("%d", entrySlicePutLeaseTotal.Load())
+	stats["treedb.process.entry_slice.put.lease_bytes_total"] = fmt.Sprintf("%d", entrySlicePutLeaseBytesTotal.Load())
+	stats["treedb.process.entry_slice.put.pool_total"] = fmt.Sprintf("%d", entrySlicePutPoolTotal.Load())
+	stats["treedb.process.entry_slice.put.pool_bytes_total"] = fmt.Sprintf("%d", entrySlicePutPoolBytesTotal.Load())
+	stats["treedb.process.entry_slice.put.drop_budget_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetTotal.Load())
+	stats["treedb.process.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
 	appendOnlyEntryHint := int(db.appendOnlyEntryHint.Load())
 	appendOnlyHintCapacity := appendOnlyEntriesToCapacity(appendOnlyEntryHint, appendOnlyEstimatedBytesPerEntryDefault)
 	stats["treedb.cache.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
