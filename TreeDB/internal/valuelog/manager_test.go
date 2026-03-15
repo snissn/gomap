@@ -314,6 +314,20 @@ func TestReadUnsafe_SealedLazyMmapBudgetFallsBackToReadAt(t *testing.T) {
 	if got := f2.sealedMapDeniedByCount.Load(); got == 0 {
 		t.Fatalf("expected count-cap deny counter to increment")
 	}
+
+	got2b, err := set.ReadUnsafe(ptr2)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr2 second): %v", err)
+	}
+	if !bytes.Equal(got2b, bytes.Repeat([]byte("b"), 64)) {
+		t.Fatalf("ptr2 second mismatch")
+	}
+	if got := f2.sealedMapDeniedByCount.Load(); got != 1 {
+		t.Fatalf("expected sealed lazy-mmap deny to be memoized; got count-deny=%d want 1", got)
+	}
+	if got := f2.mmapReadFallbackReadAt.Load(); got < 2 {
+		t.Fatalf("expected repeated fallback ReadAt after memoized deny, got=%d", got)
+	}
 }
 
 func TestReadUnsafe_SealedLazyMmapByteBudgetFallsBackToReadAt(t *testing.T) {
@@ -379,6 +393,72 @@ func TestReadUnsafe_SealedLazyMmapByteBudgetFallsBackToReadAt(t *testing.T) {
 	}
 	if byCount, byBytes := mgr.SealedMapDeniedByReasonStats(); byCount != 0 || byBytes == 0 {
 		t.Fatalf("expected byte-cap deny aggregation, got count=%d bytes=%d", byCount, byBytes)
+	}
+}
+
+func TestReadUnsafe_SealedMappedOutOfRangeRemapsToKnownFileSize(t *testing.T) {
+	withMappedSealedBudget(t, 8)
+	withMappedSealedBytesBudget(t, 1<<30)
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, []byte("alpha")); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append(alpha): %v", err)
+	}
+	ptr, err := w.Append(0, nil, 2, bytes.Repeat([]byte("b"), 64))
+	if err != nil {
+		_ = w.Close()
+		t.Fatalf("Append(beta): %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{fileID: f},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f.manager = mgr
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	stale := raw[:int(ptr.Offset)-1]
+	f.mmapData.Store(stale)
+	f.fileSize.Store(int64(len(raw)))
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	got, err := set.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	want := bytes.Repeat([]byte("b"), 64)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ReadUnsafe mismatch: got=%q want=%q", string(got), string(want))
+	}
+	if got := f.remapCount.Load(); got == 0 {
+		t.Fatalf("expected remapCount > 0 for stale sealed mapping")
+	}
+	if got := f.mmapReadFallbackReadAt.Load(); got != 0 {
+		t.Fatalf("expected no ReadAt fallback after sealed remap, got=%d", got)
 	}
 }
 

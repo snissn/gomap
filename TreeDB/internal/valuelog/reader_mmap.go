@@ -142,20 +142,35 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		data, _ := f.mmapData.Load().([]byte)
 		return len(data) > 0
 	}
+	if f.sealedLazyMmapDenied.Load() {
+		return false
+	}
+	// Already mapped sealed segments may still be stale if they were current
+	// writable before sealing; allow one best-effort growth remap without
+	// re-applying sealed mapping budget gates.
+	if data, _ := f.mmapData.Load().([]byte); len(data) > 0 {
+		f.remapToFileSize()
+		data, _ = f.mmapData.Load().([]byte)
+		return len(data) > 0
+	}
 	m := f.manager
 	if m == nil {
 		return false
 	}
-	var targetSize int64
-	if info, err := f.File.Stat(); err == nil {
-		if sz := info.Size(); sz > 0 {
-			targetSize = sz
+	targetSize := f.fileSize.Load()
+	if targetSize <= 0 {
+		if info, err := f.File.Stat(); err == nil {
+			if sz := info.Size(); sz > 0 {
+				targetSize = sz
+				f.fileSize.Store(sz)
+			}
 		}
 	}
 	m.mu.Lock()
 	allow, denyReason := m.allowSealedLazyMmapLocked(f, targetSize)
 	m.mu.Unlock()
 	if !allow {
+		f.sealedLazyMmapDenied.Store(true)
 		switch denyReason {
 		case sealedLazyMmapDenyCountCap:
 			f.sealedMapDeniedByCount.Add(1)
@@ -206,7 +221,9 @@ func (f *File) remapToFileSize() {
 	if !f.usesPersistentMmap() {
 		data, _ := f.mmapData.Load().([]byte)
 		if len(data) > 0 {
-			return
+			if known := f.fileSize.Load(); known > 0 && int64(len(data)) >= known {
+				return
+			}
 		}
 	}
 
@@ -218,11 +235,22 @@ func (f *File) remapToFileSize() {
 		return
 	}
 
-	info, err := f.File.Stat()
-	if err != nil {
-		return
+	var currentSize int64
+	if !f.usesPersistentMmap() {
+		if known := f.fileSize.Load(); known > 0 && data != nil && int64(len(data)) >= known {
+			currentSize = known
+		}
 	}
-	currentSize := info.Size()
+	if currentSize == 0 {
+		info, err := f.File.Stat()
+		if err != nil {
+			return
+		}
+		currentSize = info.Size()
+		if currentSize > 0 {
+			f.fileSize.Store(currentSize)
+		}
+	}
 	if currentSize <= 0 || currentSize > int64(int(currentSize)) {
 		return
 	}
