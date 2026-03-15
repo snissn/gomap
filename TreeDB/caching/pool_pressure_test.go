@@ -310,3 +310,44 @@ func TestBatchAuxPoolsSkipRetentionUnderCriticalPressure(t *testing.T) {
 		t.Fatalf("int pool drop total=%d want 1", got)
 	}
 }
+
+func TestScaleMutableFlushThresholdForPressure(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		base := int64(256 << 20)
+		if got := scaleMutableFlushThresholdForPressure(base, poolPressureNormal); got != base {
+			t.Fatalf("normal scaled=%d want=%d", got, base)
+		}
+	})
+
+	t.Run("high", func(t *testing.T) {
+		base := int64(256 << 20)
+		want := int64(128 << 20)
+		if got := scaleMutableFlushThresholdForPressure(base, poolPressureHigh); got != want {
+			t.Fatalf("high scaled=%d want=%d", got, want)
+		}
+	})
+
+	t.Run("critical", func(t *testing.T) {
+		base := int64(256 << 20)
+		want := int64(64 << 20)
+		if got := scaleMutableFlushThresholdForPressure(base, poolPressureCritical); got != want {
+			t.Fatalf("critical scaled=%d want=%d", got, want)
+		}
+	})
+
+	t.Run("critical floor", func(t *testing.T) {
+		base := int64(64 << 20)
+		want := mutableFlushThresholdPressureFloorBytes
+		if got := scaleMutableFlushThresholdForPressure(base, poolPressureCritical); got != want {
+			t.Fatalf("critical floor scaled=%d want=%d", got, want)
+		}
+	})
+
+	t.Run("small base no floor up", func(t *testing.T) {
+		base := int64(8 << 20)
+		want := int64(2 << 20)
+		if got := scaleMutableFlushThresholdForPressure(base, poolPressureCritical); got != want {
+			t.Fatalf("small base critical scaled=%d want=%d", got, want)
+		}
+	})
+}

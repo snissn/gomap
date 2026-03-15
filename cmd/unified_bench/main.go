@@ -1021,6 +1021,8 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.queue_len",
 		"treedb.cache.queue_backlog_bytes",
 		"treedb.cache.flush_threshold_bytes",
+		"treedb.cache.mutable_flush_threshold_base_bytes",
+		"treedb.cache.mutable_flush_threshold_effective_bytes",
 		"treedb.cache.max_queued_memtables",
 		"treedb.cache.flush_bps_ewma",
 		"treedb.cache.stats.backend_write_batches_total",

@@ -167,6 +167,11 @@ const (
 	poolPressureCriticalHeapBytes = uint64(8 << 30)
 	poolPressureTrimInterval      = 2 * time.Second
 	poolPressureHighBudgetDivisor = int64(2)
+	// Under heap pressure, reduce mutable flush threshold so we rotate/flush
+	// earlier and cap memtable residency growth during restore-like ingest.
+	mutableFlushThresholdHighPressureDivisor     = int64(2)
+	mutableFlushThresholdCriticalPressureDivisor = int64(4)
+	mutableFlushThresholdPressureFloorBytes      = int64(32 << 20)
 	// Under heap pressure, aggressively cap fresh batch-copy chunk sizing. Keep
 	// large single-copy writes functional by allowing request-size override.
 	batchCopyArenaHighPressureMaxChunk     = 512 << 10
@@ -515,6 +520,40 @@ func currentEntrySlicePoolBudgetBytes() int64 {
 	base := entrySlicePoolBudgetBytes
 	level := currentPoolPressureSnapshot().level
 	return scalePoolBudgetForPressure(base, level)
+}
+
+func scaleMutableFlushThresholdForPressure(base int64, level poolPressureLevel) int64 {
+	if base <= 0 {
+		return base
+	}
+	switch level {
+	case poolPressureCritical:
+		scaled := base / mutableFlushThresholdCriticalPressureDivisor
+		if scaled <= 0 {
+			scaled = 1
+		}
+		if base > mutableFlushThresholdPressureFloorBytes && scaled < mutableFlushThresholdPressureFloorBytes {
+			scaled = mutableFlushThresholdPressureFloorBytes
+		}
+		if scaled > base {
+			return base
+		}
+		return scaled
+	case poolPressureHigh:
+		scaled := base / mutableFlushThresholdHighPressureDivisor
+		if scaled <= 0 {
+			scaled = 1
+		}
+		if base > mutableFlushThresholdPressureFloorBytes && scaled < mutableFlushThresholdPressureFloorBytes {
+			scaled = mutableFlushThresholdPressureFloorBytes
+		}
+		if scaled > base {
+			return base
+		}
+		return scaled
+	default:
+		return base
+	}
 }
 
 func batchCopyArenaMaxChunkForPressure(level poolPressureLevel) int {
@@ -5797,7 +5836,12 @@ func (db *DB) updateMutableThresholdLocked() {
 }
 
 func (db *DB) mutableFlushThreshold() int64 {
-	return db.mutableThreshold.Load()
+	base := db.mutableThreshold.Load()
+	if base <= 0 {
+		return base
+	}
+	level := currentPoolPressureSnapshot().level
+	return scaleMutableFlushThresholdForPressure(base, level)
 }
 
 func (db *DB) adaptiveBTreeMinIteratorSamples() uint64 {
@@ -16458,6 +16502,7 @@ func (db *DB) Stats() map[string]string {
 	db.mu.RLock()
 	queueLen := len(db.queue)
 	flushThreshold := db.flushThreshold
+	mutableThresholdBase := db.mutableThreshold.Load()
 	memtableMode := db.memtableMode
 	memtableAdaptive := db.memtableAdaptive
 	memtableWarmupActive := db.memtableWarmupActive
@@ -16622,6 +16667,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.queue_len"] = fmt.Sprintf("%d", queueLen)
 	stats["treedb.cache.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
 	stats["treedb.cache.flush_threshold_bytes"] = fmt.Sprintf("%d", flushThreshold)
+	stats["treedb.cache.mutable_flush_threshold_base_bytes"] = fmt.Sprintf("%d", mutableThresholdBase)
+	stats["treedb.cache.mutable_flush_threshold_effective_bytes"] = fmt.Sprintf("%d", db.mutableFlushThreshold())
 	stats["treedb.cache.checkpoint.runs"] = fmt.Sprintf("%d", db.checkpointRuns.Load())
 	stats["treedb.cache.checkpoint.total_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointTotalNs.Load())/float64(time.Millisecond))
 	stats["treedb.cache.checkpoint.max_ms"] = fmt.Sprintf("%.3f", float64(db.checkpointMaxNs.Load())/float64(time.Millisecond))
