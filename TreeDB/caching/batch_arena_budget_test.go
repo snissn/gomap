@@ -233,6 +233,46 @@ func TestShouldBorrowBatchArenaBytesForWrite_PreflightBlock(t *testing.T) {
 	}
 }
 
+func TestShouldBorrowBatchArenaBytesForWriteWithHardCap_PreflightBlock(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	const hardCap = int64(64 << 10)
+	batchArenaPoolBytes.Store(16 << 10)
+	batchArenaLeasedBytesGlobal.Store(16 << 10)
+
+	if allow, preflight := shouldBorrowBatchArenaBytesForWriteWithHardCap(8<<10, hardCap); !allow || preflight {
+		t.Fatalf("small prospective retain unexpectedly blocked: allow=%t preflight=%t", allow, preflight)
+	}
+	if allow, preflight := shouldBorrowBatchArenaBytesForWriteWithHardCap(40<<10, hardCap); allow || !preflight {
+		t.Fatalf("large prospective retain should preflight-block: allow=%t preflight=%t", allow, preflight)
+	}
+}
+
+func TestBatchArenaRetainedHardCapEffectiveBytes_ReducesUnderDeferredPressure(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	db := &DB{}
+	const hardCap = int64(64 << 20)
+	batchArenaRetainedHardCapOverride.Store(hardCap)
+
+	if got := db.currentBatchArenaRetainedHardCapEffectiveBytes(); got != hardCap {
+		t.Fatalf("effective hard cap without deferred pressure=%d want %d", got, hardCap)
+	}
+
+	db.memtableViewTelemetry.deferredBytesCurrent.Store(batchArenaDeferredPressureThresholdBytes)
+	want := hardCap / batchArenaDeferredPressureHardCapDivisor
+	if minCap := int64(batchCopyArenaMinChunk); want < minCap {
+		want = minCap
+	}
+	if got := db.currentBatchArenaRetainedHardCapEffectiveBytes(); got != want {
+		t.Fatalf("effective hard cap with deferred pressure=%d want %d", got, want)
+	}
+}
+
 func TestPutBatchArena_DropsWhenRetainedHardCapExceeded(t *testing.T) {
 	batchArenaPoolTestMu.Lock()
 	defer batchArenaPoolTestMu.Unlock()

@@ -361,6 +361,26 @@ func currentBatchArenaRetainedHardCapBytes() int64 {
 	return hardCap
 }
 
+func (db *DB) batchArenaDeferredPressureActive() bool {
+	return db != nil && db.memtableViewTelemetry.deferredBytesCurrent.Load() >= batchArenaDeferredPressureThresholdBytes
+}
+
+func (db *DB) currentBatchArenaRetainedHardCapEffectiveBytes() int64 {
+	hardCap := currentBatchArenaRetainedHardCapBytes()
+	if hardCap <= 0 || !db.batchArenaDeferredPressureActive() {
+		return hardCap
+	}
+	reduced := hardCap / batchArenaDeferredPressureHardCapDivisor
+	minCap := int64(batchCopyArenaMinChunk)
+	if reduced < minCap {
+		reduced = minCap
+	}
+	if reduced > hardCap {
+		return hardCap
+	}
+	return reduced
+}
+
 func currentBatchArenaRetainedBytesEstimate() int64 {
 	poolBytes := batchArenaPoolBytes.Load()
 	if poolBytes < 0 {
@@ -382,7 +402,10 @@ func shouldBorrowBatchArenaBytes() bool {
 }
 
 func shouldBorrowBatchArenaBytesForWrite(prospectiveRetainBytes int64) (allow bool, preflightBlocked bool) {
-	hardCap := currentBatchArenaRetainedHardCapBytes()
+	return shouldBorrowBatchArenaBytesForWriteWithHardCap(prospectiveRetainBytes, currentBatchArenaRetainedHardCapBytes())
+}
+
+func shouldBorrowBatchArenaBytesForWriteWithHardCap(prospectiveRetainBytes int64, hardCap int64) (allow bool, preflightBlocked bool) {
 	if hardCap <= 0 {
 		return false, false
 	}
@@ -16292,6 +16315,7 @@ func (db *DB) Stats() map[string]string {
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
 	arenaGlobalLeasedBytes := batchArenaLeasedBytesGlobal.Load()
 	arenaRetainedHardCapBytes := currentBatchArenaRetainedHardCapBytes()
+	arenaRetainedHardCapEffectiveBytes := db.currentBatchArenaRetainedHardCapEffectiveBytes()
 	arenaRetainedEstimate := currentBatchArenaRetainedBytesEstimate()
 	arenaAllocRequestedBytes := db.batchArenaAllocRequestedBytes.Load()
 	arenaAllocClassBytes := db.batchArenaAllocClassBytes.Load()
@@ -16312,6 +16336,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.cache.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
+	stats["treedb.cache.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
+	stats["treedb.cache.batch_arena.deferred_pressure_active"] = fmt.Sprintf("%t", db.batchArenaDeferredPressureActive())
 	stats["treedb.cache.batch_arena.retained_bytes_global_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
 	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
 	stats["treedb.cache.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
@@ -16334,6 +16360,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
 	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.process.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
+	stats["treedb.process.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
+	stats["treedb.process.batch_arena.deferred_pressure_active"] = fmt.Sprintf("%t", db.batchArenaDeferredPressureActive())
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaRetainedEstimate)
 	stats["treedb.process.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
 	stats["treedb.process.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
@@ -18332,6 +18360,10 @@ const (
 	batchArenaTailCompactPinnedMaxFillDenominator = 4
 	batchEntriesPoolMaxRetain                     = 16 << 10
 	batchIntSlicePoolMaxRetain                    = 16 << 10
+	// When deferred iterator views pin retired memtables, reduce retained
+	// batch-arena headroom to limit extra lease growth under that pressure.
+	batchArenaDeferredPressureThresholdBytes = int64(512 << 20)
+	batchArenaDeferredPressureHardCapDivisor = int64(2)
 )
 
 func batchCopyArenaInitCapForEntries(entries int) int {
@@ -18679,7 +18711,10 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 		}
 	}
 	prospectiveRetainBytes := batchArenaChunksCapBytes(b.copyArenaChunks) + batchArenaChunksCapBytes(b.ptrCopyArenaChunks)
-	allowBatchArenaBorrow, preflightBlocked := shouldBorrowBatchArenaBytesForWrite(prospectiveRetainBytes)
+	allowBatchArenaBorrow, preflightBlocked := shouldBorrowBatchArenaBytesForWriteWithHardCap(
+		prospectiveRetainBytes,
+		b.db.currentBatchArenaRetainedHardCapEffectiveBytes(),
+	)
 	if !allowBatchArenaBorrow {
 		batchArenaBorrowBlockedTotal.Add(1)
 		if preflightBlocked {
