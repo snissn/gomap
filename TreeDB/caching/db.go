@@ -14295,6 +14295,10 @@ func (db *DB) registerValueLogSegment(path string, fileID uint32) error {
 		if err := db.valueLogReader.RegisterSegment(path, fileID); err != nil {
 			return err
 		}
+		if err := db.valueLogReader.PromoteCurrentWritable(fileID); err != nil {
+			_ = db.valueLogReader.RemoveSegment(fileID)
+			return err
+		}
 	}
 	if registrar, ok := db.backend.(interface {
 		RegisterValueLogSegment(path string, fileID uint32) error
@@ -16908,6 +16912,7 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_mmap.remaps"] = fmt.Sprintf("%d", remaps)
 		stats["treedb.cache.vlog_mmap.dead_mappings"] = fmt.Sprintf("%d", deadMappings)
 		stats["treedb.cache.vlog_mmap.dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
+		stats["treedb.cache.vlog_mmap.max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
 		activeSegments, activeBytes, _, deadBytes := db.valueLogReader.MmapResidencyStats()
 		stats["treedb.cache.vlog_mmap.active_segments"] = fmt.Sprintf("%d", activeSegments)
 		stats["treedb.cache.vlog_mmap.active_bytes"] = fmt.Sprintf("%d", activeBytes)
