@@ -105,6 +105,10 @@ var entrySlicePutDropBudgetTotal atomic.Uint64
 var entrySlicePutDropBudgetBytesTotal atomic.Uint64
 var flushMergeShadowedOpsTotal atomic.Uint64
 var flushMergeAppliedOpsTotal atomic.Uint64
+var flushMergeDeferredShadowedOpsTotal atomic.Uint64
+var flushMergeDeferredAppliedOpsTotal atomic.Uint64
+var flushMergeParallelShadowedOpsTotal atomic.Uint64
+var flushMergeParallelAppliedOpsTotal atomic.Uint64
 var batchEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchShardEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchIntPoolDropUnderPressureTotal atomic.Uint64
@@ -2703,9 +2707,11 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 	}
 	if shadowedOps > 0 {
 		flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
+		flushMergeDeferredShadowedOpsTotal.Add(uint64(shadowedOps))
 	}
 	if appliedOps > 0 {
 		flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
+		flushMergeDeferredAppliedOpsTotal.Add(uint64(appliedOps))
 	}
 	return backendPendingOps, nil
 }
@@ -15079,9 +15085,11 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 		if shadowedOps > 0 {
 			flushMergeShadowedOpsTotal.Add(uint64(shadowedOps))
+			flushMergeParallelShadowedOpsTotal.Add(uint64(shadowedOps))
 		}
 		if appliedOps > 0 {
 			flushMergeAppliedOpsTotal.Add(uint64(appliedOps))
+			flushMergeParallelAppliedOpsTotal.Add(uint64(appliedOps))
 		}
 
 		if db.valueLogEnabled() {
@@ -16767,10 +16775,24 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.entry_slice.put.drop_budget_bytes_total"] = fmt.Sprintf("%d", entrySlicePutDropBudgetBytesTotal.Load())
 	mergeShadowedOpsTotal := flushMergeShadowedOpsTotal.Load()
 	mergeAppliedOpsTotal := flushMergeAppliedOpsTotal.Load()
+	mergeDeferredShadowedOpsTotal := flushMergeDeferredShadowedOpsTotal.Load()
+	mergeDeferredAppliedOpsTotal := flushMergeDeferredAppliedOpsTotal.Load()
+	mergeParallelShadowedOpsTotal := flushMergeParallelShadowedOpsTotal.Load()
+	mergeParallelAppliedOpsTotal := flushMergeParallelAppliedOpsTotal.Load()
 	stats["treedb.cache.flush_merge.shadowed_ops_total"] = fmt.Sprintf("%d", mergeShadowedOpsTotal)
 	stats["treedb.cache.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
 	if mergeAppliedOpsTotal > 0 {
 		stats["treedb.cache.flush_merge.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeShadowedOpsTotal)/float64(mergeAppliedOpsTotal))
+	}
+	stats["treedb.cache.flush_merge.deferred.shadowed_ops_total"] = fmt.Sprintf("%d", mergeDeferredShadowedOpsTotal)
+	stats["treedb.cache.flush_merge.deferred.applied_ops_total"] = fmt.Sprintf("%d", mergeDeferredAppliedOpsTotal)
+	if mergeDeferredAppliedOpsTotal > 0 {
+		stats["treedb.cache.flush_merge.deferred.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeDeferredShadowedOpsTotal)/float64(mergeDeferredAppliedOpsTotal))
+	}
+	stats["treedb.cache.flush_merge.parallel.shadowed_ops_total"] = fmt.Sprintf("%d", mergeParallelShadowedOpsTotal)
+	stats["treedb.cache.flush_merge.parallel.applied_ops_total"] = fmt.Sprintf("%d", mergeParallelAppliedOpsTotal)
+	if mergeParallelAppliedOpsTotal > 0 {
+		stats["treedb.cache.flush_merge.parallel.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeParallelShadowedOpsTotal)/float64(mergeParallelAppliedOpsTotal))
 	}
 	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
 	stats["treedb.process.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
@@ -16793,6 +16815,16 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.flush_merge.applied_ops_total"] = fmt.Sprintf("%d", mergeAppliedOpsTotal)
 	if mergeAppliedOpsTotal > 0 {
 		stats["treedb.process.flush_merge.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeShadowedOpsTotal)/float64(mergeAppliedOpsTotal))
+	}
+	stats["treedb.process.flush_merge.deferred.shadowed_ops_total"] = fmt.Sprintf("%d", mergeDeferredShadowedOpsTotal)
+	stats["treedb.process.flush_merge.deferred.applied_ops_total"] = fmt.Sprintf("%d", mergeDeferredAppliedOpsTotal)
+	if mergeDeferredAppliedOpsTotal > 0 {
+		stats["treedb.process.flush_merge.deferred.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeDeferredShadowedOpsTotal)/float64(mergeDeferredAppliedOpsTotal))
+	}
+	stats["treedb.process.flush_merge.parallel.shadowed_ops_total"] = fmt.Sprintf("%d", mergeParallelShadowedOpsTotal)
+	stats["treedb.process.flush_merge.parallel.applied_ops_total"] = fmt.Sprintf("%d", mergeParallelAppliedOpsTotal)
+	if mergeParallelAppliedOpsTotal > 0 {
+		stats["treedb.process.flush_merge.parallel.shadowed_per_applied"] = fmt.Sprintf("%.6f", float64(mergeParallelShadowedOpsTotal)/float64(mergeParallelAppliedOpsTotal))
 	}
 	appendOnlyEntryHint := int(db.appendOnlyEntryHint.Load())
 	appendOnlyHintCapacity := appendOnlyEntriesToCapacity(appendOnlyEntryHint, appendOnlyEstimatedBytesPerEntryDefault)
