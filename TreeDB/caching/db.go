@@ -73,9 +73,11 @@ var valueLogKeyLeases [][][]byte
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
 var batchArenaPoolBytes atomic.Int64
+var batchArenaPoolBytesMaxGlobal atomic.Int64
 var batchArenaPoolLastGC atomic.Uint64
 var batchArenaPoolBudgetState atomic.Value
 var batchArenaLeasedBytesGlobal atomic.Int64
+var batchArenaLeasedBytesMaxGlobal atomic.Int64
 var batchArenaRetainedBytesMaxGlobal atomic.Int64
 var batchArenaRetainedHardCapOverride atomic.Int64
 var batchArenaPoolSkipZeroBudgetTotal atomic.Uint64
@@ -446,6 +448,20 @@ func noteBatchArenaRetainedBytesMax() {
 		return
 	}
 	updateInt64Max(&batchArenaRetainedBytesMaxGlobal, total)
+}
+
+func noteBatchArenaPoolBytesMax(value int64) {
+	if value <= 0 {
+		return
+	}
+	updateInt64Max(&batchArenaPoolBytesMaxGlobal, value)
+}
+
+func noteBatchArenaLeasedBytesGlobalMax(value int64) {
+	if value <= 0 {
+		return
+	}
+	updateInt64Max(&batchArenaLeasedBytesMaxGlobal, value)
 }
 
 func shouldBorrowBatchArenaBytes() bool {
@@ -928,6 +944,7 @@ func putBatchArena(buf []byte) {
 		}
 		if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
 			noteEpoch = held == 0
+			noteBatchArenaPoolBytesMax(held + size)
 			noteBatchArenaRetainedBytesMax()
 			break
 		}
@@ -5151,7 +5168,8 @@ func (db *DB) retainBatchArenaChunksForMemtables(chunks [][]byte, mems []memtabl
 	if lease.bytes > 0 {
 		cur := db.batchArenaLeaseBytes.Add(lease.bytes)
 		updateInt64Max(&db.batchArenaLeaseBytesMax, cur)
-		batchArenaLeasedBytesGlobal.Add(lease.bytes)
+		globalLeased := batchArenaLeasedBytesGlobal.Add(lease.bytes)
+		noteBatchArenaLeasedBytesGlobalMax(globalLeased)
 		noteBatchArenaRetainedBytesMax()
 	}
 	db.batchArenaLeaseMu.Lock()
@@ -16703,8 +16721,10 @@ func (db *DB) Stats() map[string]string {
 	entrySliceBaseBudget := entrySlicePoolBudgetBytes
 	entrySliceEffectiveBudget := scalePoolBudgetForPressure(entrySliceBaseBudget, poolPressure.level)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
+	arenaPoolBytesMax := batchArenaPoolBytesMaxGlobal.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
 	arenaGlobalLeasedBytes := batchArenaLeasedBytesGlobal.Load()
+	arenaGlobalLeasedBytesMax := batchArenaLeasedBytesMaxGlobal.Load()
 	arenaRetainedHardCapBytes := currentBatchArenaRetainedHardCapBytes()
 	arenaRetainedHardCapEffectiveBytes := db.currentBatchArenaRetainedHardCapEffectiveBytes()
 	arenaRetainedEstimate := currentBatchArenaRetainedBytesEstimate()
@@ -16724,8 +16744,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.pool_budget_bytes"] = arenaPoolBudget
 	stats["treedb.cache.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
+	stats["treedb.cache.batch_arena.pool_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaPoolBytesMax)
 	stats["treedb.cache.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.cache.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
+	stats["treedb.cache.batch_arena.leased_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytesMax)
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.cache.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
 	stats["treedb.cache.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
@@ -16749,8 +16771,10 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
 	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
+	stats["treedb.process.batch_arena.pool_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaPoolBytesMax)
 	stats["treedb.process.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.process.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
+	stats["treedb.process.batch_arena.leased_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytesMax)
 	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.process.batch_arena.retained_hard_cap_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapBytes)
 	stats["treedb.process.batch_arena.retained_hard_cap_effective_bytes"] = fmt.Sprintf("%d", arenaRetainedHardCapEffectiveBytes)
