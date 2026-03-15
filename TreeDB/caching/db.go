@@ -150,6 +150,19 @@ const (
 	// Keep total live batch-arena retention (pool + active memtable leases) bounded.
 	// We derive this from the pool budget so it scales with machine parallelism.
 	batchArenaRetainedHardCapMultiplier = int64(2)
+	// Regular flushes use a soft trim cadence; checkpoints perform an immediate
+	// stricter trim pass because they are already explicit maintenance boundaries.
+	flushRetainedArenaTrimMinInterval = 2 * time.Second
+	// Keep post-flush pool footprints bounded without forcing full cold-start.
+	postFlushBatchArenaTargetBytes = int64(64 << 20)
+	postFlushEntrySliceTargetBytes = int64(64 << 20)
+	// Checkpoint trim is intentionally stricter.
+	postCheckpointBatchArenaTargetBytes = int64(32 << 20)
+	postCheckpointEntrySliceTargetBytes = int64(32 << 20)
+	postFlushEntrySliceLeaseKeepPerBucket = 8
+	postCheckpointEntrySliceLeaseKeepPerBucket = 2
+	postFlushAppendOnlyMemLeaseKeep = 8
+	postCheckpointAppendOnlyMemLeaseKeep = 2
 )
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -238,6 +251,36 @@ func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
 	}
 }
 
+func trimEntrySliceLeasesToKeep(keepPerBucket int) int64 {
+	if keepPerBucket < 0 {
+		keepPerBucket = 0
+	}
+	var droppedBytes int64
+	entrySliceLeaseMu.Lock()
+	for i := range entrySliceLeases {
+		leases := entrySliceLeases[i]
+		if len(leases) > keepPerBucket {
+			drop := len(leases) - keepPerBucket
+			for j := 0; j < drop; j++ {
+				if entries := leases[j]; entries != nil {
+					droppedBytes += int64(cap(entries)) * entrySliceEntrySizeBytes
+				}
+				leases[j] = nil
+			}
+			if keepPerBucket == 0 {
+				entrySliceLeases[i] = nil
+			} else {
+				entrySliceLeases[i] = leases[drop:]
+			}
+		}
+	}
+	entrySliceLeaseMu.Unlock()
+	if droppedBytes > 0 {
+		releaseEntrySlicePoolBytes(droppedBytes)
+	}
+	return droppedBytes
+}
+
 func maybeTrimEntrySliceLeasesUnderPressure(level poolPressureLevel, sampledAt time.Time) {
 	if level == poolPressureNormal {
 		return
@@ -261,30 +304,9 @@ func maybeTrimEntrySliceLeasesUnderPressure(level poolPressureLevel, sampledAt t
 			keepPerBucket = 2
 		}
 	}
-
-	var droppedBytes int64
-	entrySliceLeaseMu.Lock()
-	for i := range entrySliceLeases {
-		leases := entrySliceLeases[i]
-		if len(leases) > keepPerBucket {
-			drop := len(leases) - keepPerBucket
-			for j := 0; j < drop; j++ {
-				if entries := leases[j]; entries != nil {
-					droppedBytes += int64(cap(entries)) * entrySliceEntrySizeBytes
-				}
-				leases[j] = nil
-			}
-			if keepPerBucket == 0 {
-				entrySliceLeases[i] = nil
-			} else {
-				entrySliceLeases[i] = leases[drop:]
-			}
-		}
-	}
-	entrySliceLeaseMu.Unlock()
+	droppedBytes := trimEntrySliceLeasesToKeep(keepPerBucket)
 	entrySlicePoolTrimRunsTotal.Add(1)
 	if droppedBytes > 0 {
-		releaseEntrySlicePoolBytes(droppedBytes)
 		entrySlicePoolTrimDropBytesTotal.Add(uint64(droppedBytes))
 	}
 }
@@ -891,6 +913,41 @@ func putBatchArenas(chunks [][]byte) {
 	}
 }
 
+func drainBatchArenaPoolToTargetBytes(target int64) int64 {
+	if target < 0 {
+		target = 0
+	}
+	if batchArenaPoolBytes.Load() <= target {
+		return 0
+	}
+	var dropped int64
+	for classIdx := len(batchArenaPools) - 1; classIdx >= 0 && batchArenaPoolBytes.Load() > target; classIdx-- {
+		for batchArenaPoolBytes.Load() > target {
+			v := batchArenaPools[classIdx].Get()
+			if v == nil {
+				break
+			}
+			buf, ok := v.([]byte)
+			if !ok {
+				continue
+			}
+			size := int64(cap(buf))
+			if size <= 0 {
+				continue
+			}
+			dropped += size
+			next := batchArenaPoolBytes.Add(-size)
+			if next < 0 {
+				batchArenaPoolBytes.Store(0)
+			}
+		}
+	}
+	if dropped > 0 {
+		batchArenaPoolDropBytesTotal.Add(uint64(dropped))
+	}
+	return dropped
+}
+
 func appendOnlyDirectValueArenaClassForLen(capacity int) (idx int, classCap int, ok bool) {
 	if capacity <= 0 || capacity > appendOnlyDirectValueArenaPoolMaxCap {
 		return 0, 0, false
@@ -1024,6 +1081,58 @@ func (a *appendOnlyDirectValueArena) drainActiveChunks() [][]byte {
 	return chunks
 }
 
+func (a *appendOnlyDirectValueArena) trimRetained(maxChunks int, maxBytes int64, maxChunkCap int) (droppedBytes int64) {
+	if maxChunks < 0 {
+		maxChunks = 0
+	}
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	if maxChunkCap <= 0 {
+		maxChunkCap = appendOnlyDirectValueArenaPoolMaxCap
+	}
+	trimmed := a.retained[:0]
+	var keptBytes int64
+	for i := range a.retained {
+		chunk := a.retained[i]
+		if chunk == nil {
+			continue
+		}
+		size := int64(cap(chunk))
+		if cap(chunk) > maxChunkCap {
+			putAppendOnlyDirectValueArenaChunk(chunk)
+			droppedBytes += size
+			continue
+		}
+		trimmed = append(trimmed, chunk[:0])
+		keptBytes += size
+	}
+	for i := len(trimmed); i < len(a.retained); i++ {
+		a.retained[i] = nil
+	}
+	a.retained = trimmed
+	a.retainedBytes = keptBytes
+
+	for len(a.retained) > maxChunks || a.retainedBytes > maxBytes {
+		if len(a.retained) == 0 {
+			break
+		}
+		evict := a.retained[0]
+		copy(a.retained, a.retained[1:])
+		last := len(a.retained) - 1
+		a.retained[last] = nil
+		a.retained = a.retained[:last]
+		size := int64(cap(evict))
+		a.retainedBytes -= size
+		if a.retainedBytes < 0 {
+			a.retainedBytes = 0
+		}
+		putAppendOnlyDirectValueArenaChunk(evict)
+		droppedBytes += size
+	}
+	return droppedBytes
+}
+
 func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
 	level := currentPoolPressureSnapshot().level
 	maxRetainedChunks, maxRetainedBytes := appendOnlyDirectArenaRetentionLimitsForPressure(level)
@@ -1045,6 +1154,12 @@ func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
 			continue
 		}
 		chunks[i] = nil
+		if cap(chunk) > appendOnlyDirectValueArenaPoolMaxCap {
+			// Never retain oversize one-off chunks; they cannot be pooled by class
+			// and would otherwise pin large backing arrays across rotations.
+			putAppendOnlyDirectValueArenaChunk(chunk)
+			continue
+		}
 		chunk = chunk[:0]
 		size := int64(cap(chunk))
 		for len(a.retained) > 0 && (len(a.retained) >= maxRetainedChunks || a.retainedBytes+size > maxRetainedBytes) {
@@ -4200,6 +4315,7 @@ type DB struct {
 	appendOnlyDirectArenaLeasesByMem map[memtable.Table]*appendOnlyDirectArenaLease
 	pendingRetiredMems               []memtable.Table
 	memtableViewTelemetry            memtableViewLifecycleTelemetry
+	retainedArenaTrimLastUnixNano    atomic.Int64
 	queueRanges                      []keyRange
 	queueWALPaths                    [][]string
 	queueValueLogPaths               [][]string
@@ -5122,16 +5238,138 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	if db == nil || len(mems) == 0 {
 		return
 	}
+	resetCapacity := db.checkpointRotateCapacity()
+	estimate := appendOnlyEstimatedBytesPerEntryDefault
 	for _, mt := range mems {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
-			typed.Reset()
+			typed.ResetWithCapacityHard(resetCapacity, estimate)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(typed)
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
 			}
 		}
 	}
+}
+
+func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
+	if db == nil {
+		return
+	}
+	if maxLeases < 0 {
+		maxLeases = 0
+	}
+	var dropped []*memtable.AppendOnly
+	db.appendOnlyMemLeaseMu.Lock()
+	if n := len(db.appendOnlyMemLeases); n > maxLeases {
+		drop := n - maxLeases
+		dropped = append(dropped, db.appendOnlyMemLeases[:drop]...)
+		copy(db.appendOnlyMemLeases, db.appendOnlyMemLeases[drop:])
+		for i := n - drop; i < n; i++ {
+			db.appendOnlyMemLeases[i] = nil
+		}
+		db.appendOnlyMemLeases = db.appendOnlyMemLeases[:n-drop]
+	}
+	db.appendOnlyMemLeaseMu.Unlock()
+
+	if len(dropped) == 0 {
+		return
+	}
+	for i := range dropped {
+		if dropped[i] != nil {
+			dropped[i].ResetWithCapacityHard(resetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+		}
+	}
+}
+
+func (db *DB) trimMutableShardAppendOnlyDirectArenas(checkpoint bool) {
+	if db == nil || len(db.mutableShards) == 0 {
+		return
+	}
+	level := currentPoolPressureSnapshot().level
+	maxChunks, maxBytes := appendOnlyDirectArenaRetentionLimitsForPressure(level)
+	if checkpoint {
+		checkpointBytes := int64(appendOnlyDirectValueArenaRetainMaxBytes / 4)
+		if maxBytes > checkpointBytes {
+			maxBytes = checkpointBytes
+		}
+	} else {
+		flushBytes := int64(appendOnlyDirectValueArenaRetainMaxBytes / 2)
+		if maxBytes > flushBytes {
+			maxBytes = flushBytes
+		}
+	}
+	if maxBytes <= 0 || maxChunks <= 0 {
+		maxBytes = 0
+		maxChunks = 0
+	} else {
+		derivedChunks := int(maxBytes) / appendOnlyDirectValueArenaDefaultChunk
+		if derivedChunks < 1 {
+			derivedChunks = 1
+		}
+		if derivedChunks < maxChunks {
+			maxChunks = derivedChunks
+		}
+	}
+	for i := range db.mutableShards {
+		shard := &db.mutableShards[i]
+		shard.mu.Lock()
+		shard.appendOnlyDirectValueArena.trimRetained(maxChunks, maxBytes, appendOnlyDirectValueArenaPoolMaxCap)
+		shard.mu.Unlock()
+	}
+}
+
+func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
+	if db == nil {
+		return
+	}
+	now := time.Now()
+	if checkpoint {
+		db.retainedArenaTrimLastUnixNano.Store(now.UnixNano())
+	} else {
+		nowUnix := now.UnixNano()
+		last := db.retainedArenaTrimLastUnixNano.Load()
+		if last != 0 && nowUnix-last < int64(flushRetainedArenaTrimMinInterval) {
+			return
+		}
+		if !db.retainedArenaTrimLastUnixNano.CompareAndSwap(last, nowUnix) {
+			return
+		}
+	}
+
+	batchTarget := postFlushBatchArenaTargetBytes
+	entryTarget := postFlushEntrySliceTargetBytes
+	leaseKeepPerBucket := postFlushEntrySliceLeaseKeepPerBucket
+	appendOnlyLeaseKeep := postFlushAppendOnlyMemLeaseKeep
+	if checkpoint {
+		batchTarget = postCheckpointBatchArenaTargetBytes
+		entryTarget = postCheckpointEntrySliceTargetBytes
+		leaseKeepPerBucket = postCheckpointEntrySliceLeaseKeepPerBucket
+		appendOnlyLeaseKeep = postCheckpointAppendOnlyMemLeaseKeep
+	}
+	if budget := currentBatchArenaRetentionBudgetBytes(); budget >= 0 && budget < batchTarget {
+		batchTarget = budget
+	}
+	if budget := currentEntrySlicePoolBudgetBytes(); budget >= 0 && budget < entryTarget {
+		entryTarget = budget
+	}
+	if batchTarget < 0 {
+		batchTarget = 0
+	}
+	if entryTarget < 0 {
+		entryTarget = 0
+	}
+
+	drainBatchArenaPoolToTargetBytes(batchTarget)
+	entryDropped := trimEntrySliceLeasesToKeep(leaseKeepPerBucket)
+	entryDropped += drainEntrySlicePoolsToTargetBytes(entryTarget)
+	entrySlicePoolTrimRunsTotal.Add(1)
+	if entryDropped > 0 {
+		entrySlicePoolTrimDropBytesTotal.Add(uint64(entryDropped))
+	}
+
+	db.trimMutableShardAppendOnlyDirectArenas(checkpoint)
+	db.trimAppendOnlyMemLeases(appendOnlyLeaseKeep, db.checkpointRotateCapacity())
 }
 
 func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mode) (memtable.Table, error) {
@@ -7249,6 +7487,32 @@ func putEntrySlice(entries []batch.Entry) {
 	}
 	entrySliceLeaseMu.Unlock()
 	entrySlicePools[idx].Put(entries)
+}
+
+func drainEntrySlicePoolsToTargetBytes(target int64) int64 {
+	if target < 0 {
+		target = 0
+	}
+	if entrySlicePoolBytes.Load() <= target {
+		return 0
+	}
+	var dropped int64
+	for classIdx := len(entrySlicePools) - 1; classIdx >= 0 && entrySlicePoolBytes.Load() > target; classIdx-- {
+		for entrySlicePoolBytes.Load() > target {
+			v := entrySlicePools[classIdx].Get()
+			if v == nil {
+				break
+			}
+			entries, ok := v.([]batch.Entry)
+			if !ok {
+				continue
+			}
+			size := int64(cap(entries)) * entrySliceEntrySizeBytes
+			releaseEntrySlicePoolBytes(size)
+			dropped += size
+		}
+	}
+	return dropped
 }
 
 func getEntryRuns(capacity int) [][]batch.Entry {
@@ -12099,6 +12363,7 @@ func (db *DB) Checkpoint() error {
 	db.checkValueLogRetention()
 	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
 	db.scheduleRetainedValueLogPrune()
+	db.trimRetainedArenasAfterFlush(true)
 
 	return nil
 }
@@ -14232,6 +14497,14 @@ func (db *DB) flushAllLocked(reqSync bool) {
 		}()
 	}
 	wg.Wait()
+	if !db.checkpointing.Load() {
+		db.mu.RLock()
+		queueEmpty := len(db.queue) == 0
+		db.mu.RUnlock()
+		if queueEmpty {
+			db.trimRetainedArenasAfterFlush(false)
+		}
+	}
 }
 
 func (db *DB) flushOne() bool {
@@ -14246,7 +14519,16 @@ func (db *DB) flushOne() bool {
 		db.flushLaneMu[laneID].Lock()
 		defer db.flushLaneMu[laneID].Unlock()
 	}
-	return db.flushLaneOnce(true, laneID)
+	flushed := db.flushLaneOnce(true, laneID)
+	if flushed && !db.checkpointing.Load() {
+		db.mu.RLock()
+		queueEmpty := len(db.queue) == 0
+		db.mu.RUnlock()
+		if queueEmpty {
+			db.trimRetainedArenasAfterFlush(false)
+		}
+	}
+	return flushed
 }
 
 const (

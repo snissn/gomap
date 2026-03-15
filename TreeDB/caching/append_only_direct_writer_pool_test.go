@@ -295,6 +295,47 @@ func TestAppendOnlyDirectWriterArena_RetainChunks_LargeChunkByteBudget(t *testin
 	}
 }
 
+func TestAppendOnlyDirectWriterArena_RetainChunks_DropsOversizeChunksImmediately(t *testing.T) {
+	var arena appendOnlyDirectValueArena
+	t.Cleanup(func() { arena.recycleAll() })
+
+	oversize := make([]byte, 0, appendOnlyDirectValueArenaPoolMaxCap+1)
+	normal := make([]byte, 0, appendOnlyDirectValueArenaDefaultChunk)
+	arena.retainChunks([][]byte{oversize, normal})
+
+	if got := len(arena.retained); got != 1 {
+		t.Fatalf("retained chunks=%d want=1", got)
+	}
+	if got := cap(arena.retained[0]); got != appendOnlyDirectValueArenaDefaultChunk {
+		t.Fatalf("retained chunk cap=%d want=%d", got, appendOnlyDirectValueArenaDefaultChunk)
+	}
+}
+
+func TestAppendOnlyDirectWriterArena_TrimRetained_EnforcesCaps(t *testing.T) {
+	var arena appendOnlyDirectValueArena
+	t.Cleanup(func() { arena.recycleAll() })
+
+	chunks := make([][]byte, 0, 16)
+	for i := 0; i < cap(chunks); i++ {
+		chunks = append(chunks, make([]byte, 0, appendOnlyDirectValueArenaDefaultChunk))
+	}
+	arena.retainChunks(chunks)
+	if len(arena.retained) < 8 {
+		t.Fatalf("test setup retained=%d want >= 8", len(arena.retained))
+	}
+
+	dropped := arena.trimRetained(2, int64(appendOnlyDirectValueArenaDefaultChunk*2), appendOnlyDirectValueArenaPoolMaxCap)
+	if dropped <= 0 {
+		t.Fatalf("trim dropped=%d want > 0", dropped)
+	}
+	if got := len(arena.retained); got > 2 {
+		t.Fatalf("retained chunks=%d want <= 2", got)
+	}
+	if got := arena.retainedBytes; got > int64(appendOnlyDirectValueArenaDefaultChunk*2) {
+		t.Fatalf("retained bytes=%d want <= %d", got, appendOnlyDirectValueArenaDefaultChunk*2)
+	}
+}
+
 func TestAppendOnlyDirectWriterArena_RetainChunks_PressureAwareLimits(t *testing.T) {
 	poolPressureTestMu.Lock()
 	defer poolPressureTestMu.Unlock()

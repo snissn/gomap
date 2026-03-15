@@ -172,6 +172,33 @@ func TestBatchArenaPoolBudgetDoesNotOvercount(t *testing.T) {
 	}
 }
 
+func TestDrainBatchArenaPoolToTargetBytes(t *testing.T) {
+	batchArenaPoolTestMu.Lock()
+	defer batchArenaPoolTestMu.Unlock()
+	resetBatchArenaPoolsForTest()
+
+	_, classCap, ok := batchArenaClassForLen(1 << batchArenaMinShift)
+	if !ok {
+		t.Fatal("batchArenaClassForLen failed")
+	}
+	for i := 0; i < 12; i++ {
+		putBatchArena(make([]byte, 0, classCap))
+	}
+	before := batchArenaPoolBytes.Load()
+	if before <= 0 {
+		t.Fatalf("batchArenaPoolBytes before drain=%d want > 0", before)
+	}
+	target := before / 3
+	dropped := drainBatchArenaPoolToTargetBytes(target)
+	after := batchArenaPoolBytes.Load()
+	if dropped <= 0 {
+		t.Fatalf("drain dropped=%d want > 0", dropped)
+	}
+	if after > target {
+		t.Fatalf("batchArenaPoolBytes after drain=%d want <= %d", after, target)
+	}
+}
+
 func TestBatchArenaPoolBudgetCacheRecomputesOnProcsMismatch(t *testing.T) {
 	batchArenaPoolTestMu.Lock()
 	defer batchArenaPoolTestMu.Unlock()
