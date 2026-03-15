@@ -608,6 +608,43 @@ func TestPutEntrySliceBudgetCapsRetention(t *testing.T) {
 	}
 }
 
+func TestTrimEntrySliceLeasesToKeep_RecycleToPool(t *testing.T) {
+	lockEntrySlicePoolStateForTest(t)
+	resetEntrySlicePoolsForTest(t)
+
+	leaseIdx, ok := entrySliceLeaseClassForCap(64)
+	if !ok {
+		t.Fatalf("expected lease class for cap=%d", 64)
+	}
+
+	const leaseCount = 4
+	for i := 0; i < leaseCount; i++ {
+		entrySliceLeases[leaseIdx] = append(entrySliceLeases[leaseIdx], make([]batch.Entry, 0, 64))
+	}
+	leaseBytes := int64(leaseCount * 64) * entrySliceEntrySizeBytes
+	entrySlicePoolBytes.Store(leaseBytes)
+
+	dropped := trimEntrySliceLeasesToKeep(0, true)
+	if dropped != 0 {
+		t.Fatalf("dropped bytes=%d want 0 when recycling to pool", dropped)
+	}
+	if got := len(entrySliceLeases[leaseIdx]); got != 0 {
+		t.Fatalf("remaining leases=%d want 0", got)
+	}
+	if got := entrySlicePoolBytes.Load(); got != leaseBytes {
+		t.Fatalf("entrySlicePoolBytes=%d want %d", got, leaseBytes)
+	}
+
+	got := getEntrySlice(64)
+	if cap(got) < 64 {
+		t.Fatalf("recycled entry slice cap=%d want >=64", cap(got))
+	}
+	wantAfterGet := leaseBytes - int64(cap(got))*entrySliceEntrySizeBytes
+	if gotBytes := entrySlicePoolBytes.Load(); gotBytes != wantAfterGet {
+		t.Fatalf("entrySlicePoolBytes after get=%d want %d", gotBytes, wantAfterGet)
+	}
+}
+
 func TestGetEntrySliceMissResetsPoolBytesAfterGC(t *testing.T) {
 	lockEntrySlicePoolStateForTest(t)
 	resetEntrySlicePoolsForTest(t)

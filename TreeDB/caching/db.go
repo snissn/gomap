@@ -251,7 +251,7 @@ func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
 	}
 }
 
-func trimEntrySliceLeasesToKeep(keepPerBucket int) int64 {
+func trimEntrySliceLeasesToKeep(keepPerBucket int, recycleToPool bool) int64 {
 	if keepPerBucket < 0 {
 		keepPerBucket = 0
 	}
@@ -263,7 +263,12 @@ func trimEntrySliceLeasesToKeep(keepPerBucket int) int64 {
 			drop := len(leases) - keepPerBucket
 			for j := 0; j < drop; j++ {
 				if entries := leases[j]; entries != nil {
-					droppedBytes += int64(cap(entries)) * entrySliceEntrySizeBytes
+					size := int64(cap(entries)) * entrySliceEntrySizeBytes
+					if recycleToPool {
+						entrySlicePools[i].Put(entries[:0])
+					} else {
+						droppedBytes += size
+					}
 				}
 				leases[j] = nil
 			}
@@ -304,7 +309,7 @@ func maybeTrimEntrySliceLeasesUnderPressure(level poolPressureLevel, sampledAt t
 			keepPerBucket = 2
 		}
 	}
-	droppedBytes := trimEntrySliceLeasesToKeep(keepPerBucket)
+	droppedBytes := trimEntrySliceLeasesToKeep(keepPerBucket, false)
 	entrySlicePoolTrimRunsTotal.Add(1)
 	if droppedBytes > 0 {
 		entrySlicePoolTrimDropBytesTotal.Add(uint64(droppedBytes))
@@ -5368,7 +5373,7 @@ func (db *DB) trimRetainedArenasAfterFlush(checkpoint bool) {
 	}
 
 	drainBatchArenaPoolToTargetBytes(batchTarget)
-	entryDropped := trimEntrySliceLeasesToKeep(leaseKeepPerBucket)
+	entryDropped := trimEntrySliceLeasesToKeep(leaseKeepPerBucket, true)
 	entryDropped += drainEntrySlicePoolsToTargetBytes(entryTarget)
 	entrySlicePoolTrimRunsTotal.Add(1)
 	if entryDropped > 0 {
