@@ -583,9 +583,10 @@ func TestMergeLeaf_SplitKeysDoNotAliasBatchKeys(t *testing.T) {
 
 	builder := z.newLeafBuilder(make([]byte, page.PageSize), ops)
 	builder.SetPageID(0)
+	scratch := newMergeScratch()
 
 	var metrics adaptive.Metrics
-	_, splits, err := z.mergeLeaf(oldNode, builder, ops, &metrics)
+	_, splits, err := z.mergeLeaf(oldNode, builder, ops, &metrics, scratch)
 	if err != nil {
 		t.Fatalf("mergeLeaf failed: %v", err)
 	}
@@ -609,4 +610,38 @@ func TestMergeLeaf_SplitKeysDoNotAliasBatchKeys(t *testing.T) {
 			t.Fatalf("split key %d mutated with source key buffer", i)
 		}
 	}
+}
+
+func TestApplyScratch_ReusedAcrossAcquireRelease(t *testing.T) {
+	z := New(nil, nil)
+
+	first := z.acquireApplyScratch()
+	key := first.cloneSplitKey([]byte("split-key"))
+	if string(key) != "split-key" {
+		t.Fatalf("cloneSplitKey returned %q", key)
+	}
+	z.releaseApplyScratch(first)
+
+	second := z.acquireApplyScratch()
+	if second != first {
+		t.Fatalf("expected apply scratch reuse, got different instance")
+	}
+	if got := len(second.splitKeyArena); got != 0 {
+		t.Fatalf("len(splitKeyArena)=%d want 0 after reset", got)
+	}
+	z.releaseApplyScratch(second)
+}
+
+func TestApplyScratch_TrimsOversizedArena(t *testing.T) {
+	z := New(nil, nil)
+
+	s := z.acquireApplyScratch()
+	s.splitKeyArena = make([]byte, 0, mergeSplitKeyArenaKeepCap+1024)
+	z.releaseApplyScratch(s)
+
+	reused := z.acquireApplyScratch()
+	if cap(reused.splitKeyArena) > mergeSplitKeyArenaKeepCap {
+		t.Fatalf("cap(splitKeyArena)=%d exceeds keep cap %d", cap(reused.splitKeyArena), mergeSplitKeyArenaKeepCap)
+	}
+	z.releaseApplyScratch(reused)
 }
