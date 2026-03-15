@@ -645,3 +645,37 @@ func TestApplyScratch_TrimsOversizedArena(t *testing.T) {
 	}
 	z.releaseApplyScratch(reused)
 }
+
+func TestApplyScratch_ReusesOuterLeafBuildPages(t *testing.T) {
+	z := New(nil, nil)
+
+	first := z.acquireApplyScratch()
+	p := first.acquireOuterLeafBuildPage()
+	first.releaseOuterLeafBuildPage(p)
+	z.releaseApplyScratch(first)
+
+	second := z.acquireApplyScratch()
+	reused := second.acquireOuterLeafBuildPage()
+	if reused != p {
+		t.Fatalf("expected outer-leaf build page reuse across apply scratch lifecycle")
+	}
+	second.releaseOuterLeafBuildPage(reused)
+	z.releaseApplyScratch(second)
+}
+
+func TestApplyScratch_TrimsOversizedOuterLeafBuildPageCache(t *testing.T) {
+	z := New(nil, nil)
+
+	s := z.acquireApplyScratch()
+	s.outerLeafBuildPages = make([]*outerLeafBuildPage, 0, mergeOuterLeafPageKeepCap+32)
+	for i := 0; i < mergeOuterLeafPageKeepCap+16; i++ {
+		s.outerLeafBuildPages = append(s.outerLeafBuildPages, &outerLeafBuildPage{})
+	}
+	z.releaseApplyScratch(s)
+
+	reused := z.acquireApplyScratch()
+	if cap(reused.outerLeafBuildPages) > mergeOuterLeafPageKeepCap {
+		t.Fatalf("cap(outerLeafBuildPages)=%d exceeds keep cap %d", cap(reused.outerLeafBuildPages), mergeOuterLeafPageKeepCap)
+	}
+	z.releaseApplyScratch(reused)
+}

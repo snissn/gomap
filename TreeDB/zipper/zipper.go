@@ -40,11 +40,15 @@ var leafPageScratchPool = sync.Pool{
 	},
 }
 
+type outerLeafBuildPage struct {
+	buf [page.PageSize]byte
+}
+
 // outerLeafBuildPagePool recycles page-sized buffers used to build rewritten
 // outer-leaf pages on non-maintenance apply paths.
 var outerLeafBuildPagePool = sync.Pool{
 	New: func() any {
-		return make([]byte, page.PageSize)
+		return &outerLeafBuildPage{}
 	},
 }
 
@@ -63,21 +67,20 @@ func putLeafPageScratch(buf []byte) {
 	leafPageScratchPool.Put(buf[:0])
 }
 
-func getOuterLeafBuildPage() []byte {
-	buf, _ := outerLeafBuildPagePool.Get().([]byte)
-	if cap(buf) != page.PageSize {
-		return make([]byte, page.PageSize)
+func getOuterLeafBuildPage() *outerLeafBuildPage {
+	p, _ := outerLeafBuildPagePool.Get().(*outerLeafBuildPage)
+	if p == nil {
+		p = &outerLeafBuildPage{}
 	}
-	buf = buf[:page.PageSize]
-	clear(buf)
-	return buf
+	clear(p.buf[:])
+	return p
 }
 
-func putOuterLeafBuildPage(buf []byte) {
-	if cap(buf) != page.PageSize {
+func putOuterLeafBuildPage(p *outerLeafBuildPage) {
+	if p == nil {
 		return
 	}
-	outerLeafBuildPagePool.Put(buf[:page.PageSize])
+	outerLeafBuildPagePool.Put(p)
 }
 
 type Zipper struct {
@@ -112,16 +115,20 @@ type Split struct {
 const (
 	mergeSplitKeyArenaInitCap = page.PageSize
 	mergeSplitKeyArenaKeepCap = 1 << 20
+	mergeOuterLeafPageInitCap = 16
+	mergeOuterLeafPageKeepCap = 128
 )
 
 type mergeScratch struct {
-	mu            sync.Mutex
-	splitKeyArena []byte
+	mu                  sync.Mutex
+	splitKeyArena       []byte
+	outerLeafBuildPages []*outerLeafBuildPage
 }
 
 func newMergeScratch() *mergeScratch {
 	return &mergeScratch{
-		splitKeyArena: make([]byte, 0, mergeSplitKeyArenaInitCap),
+		splitKeyArena:       make([]byte, 0, mergeSplitKeyArenaInitCap),
+		outerLeafBuildPages: make([]*outerLeafBuildPage, 0, mergeOuterLeafPageInitCap),
 	}
 }
 
@@ -144,11 +151,52 @@ func (s *mergeScratch) reset() {
 	if s == nil {
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if cap(s.splitKeyArena) > mergeSplitKeyArenaKeepCap {
 		s.splitKeyArena = make([]byte, 0, mergeSplitKeyArenaInitCap)
+	} else {
+		s.splitKeyArena = s.splitKeyArena[:0]
+	}
+	if cap(s.outerLeafBuildPages) > mergeOuterLeafPageKeepCap {
+		s.outerLeafBuildPages = make([]*outerLeafBuildPage, 0, mergeOuterLeafPageInitCap)
+	}
+}
+
+func (s *mergeScratch) acquireOuterLeafBuildPage() *outerLeafBuildPage {
+	if s == nil {
+		return getOuterLeafBuildPage()
+	}
+	s.mu.Lock()
+	n := len(s.outerLeafBuildPages)
+	if n > 0 {
+		p := s.outerLeafBuildPages[n-1]
+		s.outerLeafBuildPages[n-1] = nil
+		s.outerLeafBuildPages = s.outerLeafBuildPages[:n-1]
+		s.mu.Unlock()
+		clear(p.buf[:])
+		return p
+	}
+	s.mu.Unlock()
+	return getOuterLeafBuildPage()
+}
+
+func (s *mergeScratch) releaseOuterLeafBuildPage(p *outerLeafBuildPage) {
+	if p == nil {
 		return
 	}
-	s.splitKeyArena = s.splitKeyArena[:0]
+	if s == nil {
+		putOuterLeafBuildPage(p)
+		return
+	}
+	s.mu.Lock()
+	if len(s.outerLeafBuildPages) < mergeOuterLeafPageKeepCap {
+		s.outerLeafBuildPages = append(s.outerLeafBuildPages, p)
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+	putOuterLeafBuildPage(p)
 }
 
 func shortestSeparator(left, right []byte) []byte {
@@ -949,9 +997,13 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 				return 0, nil, errors.New("zipper: outer leaves in value log enabled without leaf page log")
 			}
 			reuseOuterLeafPages := !maintenance
-			var newData []byte
+			var (
+				newData       []byte
+				newDataPooled *outerLeafBuildPage
+			)
 			if reuseOuterLeafPages {
-				newData = getOuterLeafBuildPage()
+				newDataPooled = scratch.acquireOuterLeafBuildPage()
+				newData = newDataPooled.buf[:]
 			} else {
 				newData = make([]byte, page.PageSize)
 			}
@@ -959,7 +1011,7 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 			defer func() {
 				releasePooledBuilder(builder)
 				if reuseOuterLeafPages {
-					putOuterLeafBuildPage(newData)
+					scratch.releaseOuterLeafBuildPage(newDataPooled)
 				}
 			}()
 			builder.SetPageID(0)
@@ -1036,13 +1088,13 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	// Current target builder
 	target := builder
 	targetPooled := false
-	targetOuterLeafData := []byte(nil)
+	targetOuterLeafData := (*outerLeafBuildPage)(nil)
 	targetOuterLeafDataPooled := false
 	defer func() {
 		if target != builder && targetPooled {
 			releasePooledLeafBuilder(target)
 			if targetOuterLeafDataPooled {
-				putOuterLeafBuildPage(targetOuterLeafData)
+				scratch.releaseOuterLeafBuildPage(targetOuterLeafData)
 			}
 		}
 	}()
@@ -1070,7 +1122,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		if target != builder && targetPooled {
 			releasePooledLeafBuilder(target)
 			if targetOuterLeafDataPooled {
-				putOuterLeafBuildPage(targetOuterLeafData)
+				scratch.releaseOuterLeafBuildPage(targetOuterLeafData)
 			}
 			targetPooled = false
 			targetOuterLeafDataPooled = false
@@ -1206,13 +1258,15 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 			// 2. Create NEW split node (right sibling).
 			var (
-				sid    uint64
-				sdata  []byte
-				splitE Split
+				sid         uint64
+				sdata       []byte
+				sdataPooled *outerLeafBuildPage
+				splitE      Split
 			)
 			if z.outerLeavesInValueLog {
 				if reuseOuterLeafPages {
-					sdata = getOuterLeafBuildPage()
+					sdataPooled = scratch.acquireOuterLeafBuildPage()
+					sdata = sdataPooled.buf[:]
 				} else {
 					sdata = make([]byte, page.PageSize)
 				}
@@ -1249,7 +1303,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 
 			target = splitBuilder
 			targetPooled = true
-			targetOuterLeafData = sdata
+			targetOuterLeafData = sdataPooled
 			targetOuterLeafDataPooled = z.outerLeavesInValueLog && reuseOuterLeafPages
 
 			// Retry insert
