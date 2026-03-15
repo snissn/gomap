@@ -387,3 +387,72 @@ func TestAppendOnlyDirectWriterArena_RetainChunks_PressureAwareLimits(t *testing
 		t.Fatalf("critical-pressure retained chunks=%d want=0", got)
 	}
 }
+
+func TestAppendOnlyDirectWriterArena_RetainChunks_EvictsOldestKeepsNewest(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var fake runtime.MemStats
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+	fake.HeapInuse = 512 << 20 // keep pressure in normal band
+
+	var arena appendOnlyDirectValueArena
+	t.Cleanup(func() { arena.recycleAll() })
+
+	maxChunks, _ := appendOnlyDirectArenaRetentionLimitsForPressure(poolPressureNormal)
+	if maxChunks < 4 {
+		t.Fatalf("unexpected max retained chunks=%d", maxChunks)
+	}
+	for i := 0; i < maxChunks; i++ {
+		chunk := make([]byte, 1, appendOnlyDirectValueArenaDefaultChunk)
+		chunk[0] = 1 // old generation marker
+		chunk = chunk[:0]
+		arena.retained = append(arena.retained, chunk)
+		arena.retainedBytes += int64(cap(chunk))
+	}
+
+	const incoming = 64
+	newChunks := make([][]byte, incoming)
+	for i := range newChunks {
+		chunk := make([]byte, 1, appendOnlyDirectValueArenaDefaultChunk)
+		chunk[0] = 2 // new generation marker
+		newChunks[i] = chunk[:0]
+	}
+
+	arena.retainChunks(newChunks)
+
+	var oldCount, newCount int
+	for _, chunk := range arena.retained {
+		if cap(chunk) == 0 {
+			continue
+		}
+		switch chunk[:1][0] {
+		case 1:
+			oldCount++
+		case 2:
+			newCount++
+		default:
+			t.Fatalf("unexpected marker byte=%d", chunk[:1][0])
+		}
+	}
+	if got, want := len(arena.retained), maxChunks; got != want {
+		t.Fatalf("retained chunk count=%d want=%d", got, want)
+	}
+	if got, want := newCount, incoming; got != want {
+		t.Fatalf("retained newest chunk count=%d want=%d (old=%d)", got, want, oldCount)
+	}
+}

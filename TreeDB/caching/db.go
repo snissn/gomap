@@ -94,6 +94,12 @@ var entrySlicePoolTrimDropBytesTotal atomic.Uint64
 var batchEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchShardEntriesPoolDropUnderPressureTotal atomic.Uint64
 var batchIntPoolDropUnderPressureTotal atomic.Uint64
+var appendOnlyDirectArenaPoolHitChunksTotal atomic.Uint64
+var appendOnlyDirectArenaPoolHitBytesTotal atomic.Uint64
+var appendOnlyDirectArenaRetainedHitChunksTotal atomic.Uint64
+var appendOnlyDirectArenaRetainedHitBytesTotal atomic.Uint64
+var appendOnlyDirectArenaFreshAllocChunksTotal atomic.Uint64
+var appendOnlyDirectArenaFreshAllocBytesTotal atomic.Uint64
 
 var poolPressureNow = time.Now
 var poolPressureReadMemStats = runtime.ReadMemStats
@@ -994,11 +1000,17 @@ func getAppendOnlyDirectValueArenaChunk(capacity int) []byte {
 	if idx, classCap, ok := appendOnlyDirectValueArenaClassForLen(capacity); ok {
 		if v := appendOnlyDirectValueArenaPools[idx].Get(); v != nil {
 			if b, ok := v.([]byte); ok && cap(b) >= classCap {
+				appendOnlyDirectArenaPoolHitChunksTotal.Add(1)
+				appendOnlyDirectArenaPoolHitBytesTotal.Add(uint64(cap(b)))
 				return b[:0]
 			}
 		}
+		appendOnlyDirectArenaFreshAllocChunksTotal.Add(1)
+		appendOnlyDirectArenaFreshAllocBytesTotal.Add(uint64(classCap))
 		return make([]byte, 0, classCap)
 	}
+	appendOnlyDirectArenaFreshAllocChunksTotal.Add(1)
+	appendOnlyDirectArenaFreshAllocBytesTotal.Add(uint64(capacity))
 	return make([]byte, 0, capacity)
 }
 
@@ -1053,6 +1065,8 @@ func (a *appendOnlyDirectValueArena) takeRetainedChunk(length int) []byte {
 		a.retained[last] = nil
 		a.retained = a.retained[:last]
 		a.retainedBytes -= int64(cap(chunk))
+		appendOnlyDirectArenaRetainedHitChunksTotal.Add(1)
+		appendOnlyDirectArenaRetainedHitBytesTotal.Add(uint64(cap(chunk)))
 		return chunk[:0]
 	}
 	return getAppendOnlyDirectValueArenaChunk(want)
@@ -1133,16 +1147,30 @@ func (a *appendOnlyDirectValueArena) trimRetained(maxChunks int, maxBytes int64,
 	return droppedBytes
 }
 
+func (a *appendOnlyDirectValueArena) evictOldestRetainedToPool() bool {
+	if len(a.retained) == 0 {
+		return false
+	}
+	evict := a.retained[0]
+	copy(a.retained, a.retained[1:])
+	last := len(a.retained) - 1
+	a.retained[last] = nil
+	a.retained = a.retained[:last]
+	a.retainedBytes -= int64(cap(evict))
+	if a.retainedBytes < 0 {
+		a.retainedBytes = 0
+	}
+	putAppendOnlyDirectValueArenaChunk(evict)
+	return true
+}
+
 func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
 	level := currentPoolPressureSnapshot().level
 	maxRetainedChunks, maxRetainedBytes := appendOnlyDirectArenaRetentionLimitsForPressure(level)
 	for len(a.retained) > 0 && (len(a.retained) > maxRetainedChunks || a.retainedBytes > maxRetainedBytes) {
-		last := len(a.retained) - 1
-		evict := a.retained[last]
-		a.retained[last] = nil
-		a.retained = a.retained[:last]
-		a.retainedBytes -= int64(cap(evict))
-		putAppendOnlyDirectValueArenaChunk(evict)
+		if !a.evictOldestRetainedToPool() {
+			break
+		}
 	}
 	if maxRetainedChunks <= 0 || maxRetainedBytes <= 0 {
 		putAppendOnlyDirectValueArenaChunks(chunks)
@@ -1163,12 +1191,9 @@ func (a *appendOnlyDirectValueArena) retainChunks(chunks [][]byte) {
 		chunk = chunk[:0]
 		size := int64(cap(chunk))
 		for len(a.retained) > 0 && (len(a.retained) >= maxRetainedChunks || a.retainedBytes+size > maxRetainedBytes) {
-			last := len(a.retained) - 1
-			evict := a.retained[last]
-			a.retained[last] = nil
-			a.retained = a.retained[:last]
-			a.retainedBytes -= int64(cap(evict))
-			putAppendOnlyDirectValueArenaChunk(evict)
+			if !a.evictOldestRetainedToPool() {
+				break
+			}
 		}
 		if len(a.retained) >= maxRetainedChunks || a.retainedBytes+size > maxRetainedBytes {
 			putAppendOnlyDirectValueArenaChunk(chunk)
@@ -16692,11 +16717,23 @@ func (db *DB) Stats() map[string]string {
 	appendOnlyRetainChunks, appendOnlyRetainBytes := appendOnlyDirectArenaRetentionLimitsForPressure(poolPressure.level)
 	stats["treedb.cache.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
 	stats["treedb.cache.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
+	stats["treedb.cache.append_only_direct_arena.pool_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitChunksTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.pool_hit_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitBytesTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.retained_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaRetainedHitChunksTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.retained_hit_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaRetainedHitBytesTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.fresh_alloc_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaFreshAllocChunksTotal.Load())
+	stats["treedb.cache.append_only_direct_arena.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaFreshAllocBytesTotal.Load())
 	stats["treedb.cache.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.cache.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.cache.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
 	stats["treedb.process.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
+	stats["treedb.process.append_only_direct_arena.pool_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitChunksTotal.Load())
+	stats["treedb.process.append_only_direct_arena.pool_hit_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaPoolHitBytesTotal.Load())
+	stats["treedb.process.append_only_direct_arena.retained_hit_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaRetainedHitChunksTotal.Load())
+	stats["treedb.process.append_only_direct_arena.retained_hit_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaRetainedHitBytesTotal.Load())
+	stats["treedb.process.append_only_direct_arena.fresh_alloc_chunks_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaFreshAllocChunksTotal.Load())
+	stats["treedb.process.append_only_direct_arena.fresh_alloc_bytes_total"] = fmt.Sprintf("%d", appendOnlyDirectArenaFreshAllocBytesTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.entries_total"] = fmt.Sprintf("%d", batchEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.shard_entries_total"] = fmt.Sprintf("%d", batchShardEntriesPoolDropUnderPressureTotal.Load())
 	stats["treedb.process.batch_pool.drop_under_pressure.int_slices_total"] = fmt.Sprintf("%d", batchIntPoolDropUnderPressureTotal.Load())
