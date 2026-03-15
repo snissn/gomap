@@ -44,6 +44,9 @@ var decodeScratchHolderPool = sync.Pool{
 var largeDecodeScratchPool = make(chan []byte, largeDecodeScratchPoolEntries)
 
 var noDictDecoderPool sync.Pool
+var headerScratchPool = sync.Pool{
+	New: func() any { return &[HeaderSize]byte{} },
+}
 
 func getNoDictDecoder() (*zstd.Decoder, error) {
 	if v := noDictDecoderPool.Get(); v != nil {
@@ -62,6 +65,22 @@ func putNoDictDecoder(dec *zstd.Decoder) {
 	// prepare the decoder for reuse and drop any lingering state.
 	_ = dec.Reset(nil)
 	noDictDecoderPool.Put(dec)
+}
+
+func getHeaderScratch() *[HeaderSize]byte {
+	if v := headerScratchPool.Get(); v != nil {
+		if h, ok := v.(*[HeaderSize]byte); ok && h != nil {
+			return h
+		}
+	}
+	return &[HeaderSize]byte{}
+}
+
+func putHeaderScratch(header *[HeaderSize]byte) {
+	if header == nil {
+		return
+	}
+	headerScratchPool.Put(header)
 }
 
 func getDecodeScratch(minCap int) []byte {
@@ -812,7 +831,8 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 		return nil, false, ErrCorrupt
 	}
 	start := int64(ptr.Offset - 4)
-	var header [HeaderSize]byte
+	header := getHeaderScratch()
+	defer putHeaderScratch(header)
 	if _, err := f.ReadAt(header[:], start); err != nil {
 		return nil, false, err
 	}
@@ -982,7 +1002,7 @@ func ReadAtWithDictTo(f *os.File, ptr page.ValuePtr, verifyCRC bool, dictLookup 
 			return nil, false, ErrCorrupt
 		}
 	}
-	val, usedDst, err := decodeRecordTo(&header, payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts, dst)
+	val, usedDst, err := decodeRecordTo(header, payload, ptr, false, dictLookup, templateLookup, templateCache, templateOpts, dst)
 	if err != nil {
 		putDecodeScratch(payloadScratch)
 		return nil, false, err
