@@ -456,6 +456,23 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.vlog_generation.gc.deleted_bytes"] = "0"
 	stats["treedb.vlog_generation.remap.successes"] = "0"
 	stats["treedb.vlog_generation.remap.failures"] = "0"
+	growStats := valuelog.GrowBufferStatsSnapshot()
+	stats["treedb.vlog.decode_buffer_grow.calls_total"] = fmt.Sprintf("%d", growStats.CallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.realloc_calls_total"] = fmt.Sprintf("%d", growStats.ReallocCallsTotal)
+	stats["treedb.vlog.decode_buffer_grow.requested_bytes_total"] = fmt.Sprintf("%d", growStats.RequestedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.allocated_bytes_total"] = fmt.Sprintf("%d", growStats.AllocatedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.copied_bytes_total"] = fmt.Sprintf("%d", growStats.CopiedBytesTotal)
+	stats["treedb.vlog.decode_buffer_grow.capacity_waste_bytes_total"] = fmt.Sprintf("%d", growStats.CapacityWasteBytesTotal)
+	if growStats.CallsTotal > 0 {
+		stats["treedb.vlog.decode_buffer_grow.realloc_rate"] = fmt.Sprintf("%.6f", float64(growStats.ReallocCallsTotal)/float64(growStats.CallsTotal))
+	}
+	if growStats.ReallocCallsTotal > 0 {
+		stats["treedb.vlog.decode_buffer_grow.avg_allocated_bytes_per_realloc"] = fmt.Sprintf("%.3f", float64(growStats.AllocatedBytesTotal)/float64(growStats.ReallocCallsTotal))
+		stats["treedb.vlog.decode_buffer_grow.avg_copied_bytes_per_realloc"] = fmt.Sprintf("%.3f", float64(growStats.CopiedBytesTotal)/float64(growStats.ReallocCallsTotal))
+	}
+	if growStats.RequestedBytesTotal > 0 {
+		stats["treedb.vlog.decode_buffer_grow.overalloc_ratio"] = fmt.Sprintf("%.6f", float64(growStats.AllocatedBytesTotal)/float64(growStats.RequestedBytesTotal))
+	}
 
 	if db.valueLogManager != nil {
 		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
