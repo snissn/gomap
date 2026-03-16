@@ -79,6 +79,9 @@ func TestBatchCopyArenaHint_NewBatchWithSizeCanRaiseInit(t *testing.T) {
 	const entries = 8000
 	sized := db.batchCopyArenaInitCap(entries)
 	wantMin := batchCopyArenaInitCapForEntries(entries)
+	if maxChunk := currentBatchCopyArenaMaxChunk(); maxChunk > 0 && wantMin > maxChunk {
+		wantMin = maxChunk
+	}
 	if sized < wantMin {
 		t.Fatalf("sized init cap=%d want >= %d", sized, wantMin)
 	}

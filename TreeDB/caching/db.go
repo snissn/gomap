@@ -19051,10 +19051,10 @@ const (
 	batchCopyArenaUnsizedInit   = 8 << 10
 	batchCopyArenaBytesPerEntry = 192
 	batchCopyArenaInitMax       = 2 << 20
-	// Avoid retaining 4MiB chunks in the pool/leases; they are easy to
-	// underfill (e.g. a ~2MiB batch spills into a second chunk) and can inflate
-	// peak RSS during restore workloads.
-	batchCopyArenaMaxRetain     = 2 << 20
+	// Keep retained batch-copy chunks bounded to 1MiB. Larger chunks are often
+	// underfilled in restore-heavy traffic and can disproportionately inflate
+	// peak RSS when multiple memtable views pin retired arenas.
+	batchCopyArenaMaxRetain     = 1 << 20
 	batchArenaTailCompactMinCap = 256 << 10
 	// Only compact tails with meaningful waste so we avoid churn on tiny chunks.
 	batchArenaTailCompactMinWaste = 256 << 10
