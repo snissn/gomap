@@ -156,7 +156,16 @@ type poolPressureSnapshot struct {
 	heapAllocBytes     uint64
 	heapInuseBytes     uint64
 	heapSysBytes       uint64
+	heapIdleBytes      uint64
+	heapReleasedBytes  uint64
 	heapIdleUnreleased uint64
+	stackInuseBytes    uint64
+	stackSysBytes      uint64
+	nextGCBytes        uint64
+	numGC              uint32
+	gcCPUFraction      float64
+	totalSysBytes      uint64
+	nonHeapSysBytes    uint64
 	memoryLimitBytes   int64
 }
 
@@ -291,7 +300,16 @@ func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
 		heapAllocBytes:     ms.HeapAlloc,
 		heapInuseBytes:     ms.HeapInuse,
 		heapSysBytes:       ms.HeapSys,
+		heapIdleBytes:      ms.HeapIdle,
+		heapReleasedBytes:  ms.HeapReleased,
 		heapIdleUnreleased: heapIdleUnreleased,
+		stackInuseBytes:    ms.StackInuse,
+		stackSysBytes:      ms.StackSys,
+		nextGCBytes:        ms.NextGC,
+		numGC:              ms.NumGC,
+		gcCPUFraction:      ms.GCCPUFraction,
+		totalSysBytes:      ms.Sys,
+		nonHeapSysBytes:    ms.Sys - ms.HeapSys,
 		memoryLimitBytes:   memLimit,
 	}
 }
@@ -16958,8 +16976,23 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
 	stats["treedb.process.memory.heap_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.heapInuseBytes)
 	stats["treedb.process.memory.heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.heapSysBytes)
+	stats["treedb.process.memory.heap_idle_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleBytes)
+	stats["treedb.process.memory.heap_released_bytes"] = fmt.Sprintf("%d", poolPressure.heapReleasedBytes)
 	stats["treedb.process.memory.heap_idle_unreleased_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleUnreleased)
+	stats["treedb.process.memory.stack_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.stackInuseBytes)
+	stats["treedb.process.memory.stack_sys_bytes"] = fmt.Sprintf("%d", poolPressure.stackSysBytes)
+	stats["treedb.process.memory.total_sys_bytes"] = fmt.Sprintf("%d", poolPressure.totalSysBytes)
+	stats["treedb.process.memory.non_heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.nonHeapSysBytes)
+	stats["treedb.process.memory.next_gc_bytes"] = fmt.Sprintf("%d", poolPressure.nextGCBytes)
+	stats["treedb.process.memory.num_gc"] = fmt.Sprintf("%d", poolPressure.numGC)
+	stats["treedb.process.memory.gc_cpu_fraction"] = fmt.Sprintf("%.6f", poolPressure.gcCPUFraction)
 	stats["treedb.process.memory.gomemlimit_bytes"] = fmt.Sprintf("%d", poolPressure.memoryLimitBytes)
+	stats["treedb.process.memory.mutable_bytes"] = fmt.Sprintf("%d", db.mutableBytes.Load())
+	stats["treedb.process.memory.memtable_view_deferred_bytes_current"] = fmt.Sprintf("%d", memViewDeferredBytesCurrent)
+	stats["treedb.process.memory.memtable_view_deferred_bytes_max"] = fmt.Sprintf("%d", memViewDeferredBytesMax)
+	stats["treedb.process.memory.memtable_view_deferred_memtables_current"] = fmt.Sprintf("%d", memViewDeferredMemtablesCurrent)
+	stats["treedb.process.memory.memtable_view_deferred_memtables_max"] = fmt.Sprintf("%d", memViewDeferredMemtablesMax)
+	stats["treedb.process.memory.memtable_view_deferred_oldest_age_ms"] = fmt.Sprintf("%.3f", memViewOldestDeferredAgeMS)
 	stats["treedb.process.memory.pool_pressure_normal_samples_total"] = fmt.Sprintf("%d", poolPressureNormalSamplesTotal.Load())
 	stats["treedb.process.memory.pool_pressure_high_samples_total"] = fmt.Sprintf("%d", poolPressureHighSamplesTotal.Load())
 	stats["treedb.process.memory.pool_pressure_critical_samples_total"] = fmt.Sprintf("%d", poolPressureCriticalSamplesTotal.Load())
@@ -17012,6 +17045,7 @@ func (db *DB) Stats() map[string]string {
 	db.vlogGenerationRewriteQueueMu.Unlock()
 	stats["treedb.cache.vlog_retained_segments"] = fmt.Sprintf("%d", vlogSegments)
 	stats["treedb.cache.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
+	stats["treedb.process.memory.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
 	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
@@ -17108,6 +17142,7 @@ func (db *DB) Stats() map[string]string {
 		db.materializationLastDrainUnixNano.Store(now.UnixNano())
 	}
 	stats["treedb.cache.queue_backlog_bytes"] = fmt.Sprintf("%d", backlogBytes)
+	stats["treedb.process.memory.queue_backlog_bytes"] = fmt.Sprintf("%d", backlogBytes)
 	stats["treedb.cache.queue_laneid_misses"] = fmt.Sprintf("%d", db.queueLaneIDMisses.Load())
 	stats["treedb.cache.stats.backend_write_batches_total"] = fmt.Sprintf("%d", db.backendWriteBatchesTotal.Load())
 	watermarkLagDriftBps := db.observePublishWatermarkLagDrift(backlogBytes, now)
@@ -17210,6 +17245,10 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_mmap.sealed_segments"] = fmt.Sprintf("%d", sealedSegments)
 		stats["treedb.cache.vlog_mmap.sealed_bytes"] = fmt.Sprintf("%d", sealedBytes)
 		stats["treedb.cache.vlog_mmap.dead_bytes"] = fmt.Sprintf("%d", deadBytes)
+		stats["treedb.process.memory.vlog_mmap_active_bytes"] = fmt.Sprintf("%d", currentBytes+sealedBytes)
+		stats["treedb.process.memory.vlog_mmap_current_bytes"] = fmt.Sprintf("%d", currentBytes)
+		stats["treedb.process.memory.vlog_mmap_sealed_bytes"] = fmt.Sprintf("%d", sealedBytes)
+		stats["treedb.process.memory.vlog_mmap_dead_bytes"] = fmt.Sprintf("%d", deadBytes)
 		sealedDeniedCountCap, sealedDeniedBytesCap := db.valueLogReader.SealedMapDeniedByReasonStats()
 		stats["treedb.cache.vlog_mmap.sealed_map_denied.count_cap"] = fmt.Sprintf("%d", sealedDeniedCountCap)
 		stats["treedb.cache.vlog_mmap.sealed_map_denied.bytes_cap"] = fmt.Sprintf("%d", sealedDeniedBytesCap)
