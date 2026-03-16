@@ -18151,6 +18151,15 @@ func (db *DB) appendOnlyMemtableCapacityHint(capacity, estimatedBytesPerEntry in
 	if db == nil || capacity <= 0 {
 		return capacity
 	}
+	// Keep append-only preallocation aligned with the *effective* mutable flush
+	// threshold under process pressure. Without this, we can still preallocate
+	// near static memtableCap even after pressure logic has lowered rotation
+	// thresholds, inflating peak RSS during restore workloads.
+	if threshold := db.mutableFlushThreshold(); threshold > 0 {
+		if effectiveCap := memtableCapacity(threshold); effectiveCap > 0 && effectiveCap < capacity {
+			capacity = effectiveCap
+		}
+	}
 	hintEntries := int(db.appendOnlyEntryHint.Load())
 	if hintEntries <= 0 {
 		return capacity
