@@ -203,8 +203,8 @@ const (
 	// Checkpoint trim is intentionally stricter.
 	postCheckpointBatchArenaTargetBytes        = int64(32 << 20)
 	postCheckpointEntrySliceTargetBytes        = int64(32 << 20)
-	postFlushEntrySliceLeaseKeepPerBucket      = 8
-	postCheckpointEntrySliceLeaseKeepPerBucket = 2
+	postFlushEntrySliceLeaseKeepPerBucket      = 16
+	postCheckpointEntrySliceLeaseKeepPerBucket = 8
 	postFlushAppendOnlyMemLeaseKeep            = 24
 	postCheckpointAppendOnlyMemLeaseKeep       = 8
 )
