@@ -1401,8 +1401,8 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	opIdx := 0
 
 	const (
-		minParallelChildren = 4
-		minParallelOps      = 1024
+		minParallelChildren = 8
+		minParallelOps      = 4096
 	)
 	useParallel := int(count) >= minParallelChildren && len(ops) >= minParallelOps && runtime.GOMAXPROCS(0) > 1
 
@@ -1578,6 +1578,22 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 		children[i].ops = ops[startOpIdx:opIdx]
 	}
 
+	activeChildren := 0
+	for i := range children {
+		if len(children[i].ops) > 0 {
+			activeChildren++
+		}
+	}
+	if useParallel {
+		const (
+			minParallelActiveChildren = 2
+			minParallelOpsPerChild    = 256
+		)
+		if activeChildren < minParallelActiveChildren || len(ops)/activeChildren < minParallelOpsPerChild {
+			useParallel = false
+		}
+	}
+
 	// Best-effort: prefetch child pages before we start rewriting them. This can
 	// help overlap read-ahead / fault handling with compute, especially in the
 	// parallel path.
@@ -1592,6 +1608,9 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	if useParallel {
 		maxParallel := runtime.GOMAXPROCS(0)
+		if activeChildren > 0 && maxParallel > activeChildren {
+			maxParallel = activeChildren
+		}
 		if maxParallel < 1 {
 			maxParallel = 1
 		}
