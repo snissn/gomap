@@ -86,6 +86,8 @@ var batchArenaPoolDropHardCapBytesTotal atomic.Uint64
 var batchArenaBorrowBlockedTotal atomic.Uint64
 var batchArenaBorrowPreflightBlockedTotal atomic.Uint64
 var batchArenaBorrowPreflightBlockedBytesTotal atomic.Uint64
+var batchArenaStealSuppressedDeferredTotal atomic.Uint64
+var batchArenaStealSuppressedDeferredEntriesTotal atomic.Uint64
 var poolPressureState atomic.Value
 var poolPressureMu sync.Mutex
 var poolPressureLastLeaseTrimUnixNano atomic.Int64
@@ -5159,6 +5161,21 @@ func cachedBatchWriteUsesSteal(mt memtable.Table) bool {
 	default:
 		return false
 	}
+}
+
+func cachedBatchWriteUseSteal(db *DB, mt memtable.Table) (useSteal bool, suppressedDeferred bool) {
+	if !cachedBatchWriteUsesSteal(mt) {
+		return false, false
+	}
+	// Under deferred memtable-view pressure, BTree Steal extends the lifetime
+	// of batch-owned buffers until retired memtables are released. Prefer the
+	// copy path in this mode to cap retained lease growth.
+	if db != nil && db.batchArenaDeferredPressureActive() {
+		if _, isBTree := mt.(*memtable.BTree); isBTree {
+			return false, true
+		}
+	}
+	return true, false
 }
 
 func memtableBatchDelete(mt memtable.Table, useSteal bool, key []byte) {
@@ -16858,6 +16875,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
 	stats["treedb.cache.batch_arena.borrow_preflight_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedTotal.Load())
 	stats["treedb.cache.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
+	stats["treedb.cache.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
+	stats["treedb.cache.batch_arena.steal_suppressed_deferred_entries_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredEntriesTotal.Load())
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
 	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
@@ -16884,6 +16903,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.borrow_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowBlockedTotal.Load())
 	stats["treedb.process.batch_arena.borrow_preflight_blocked_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedTotal.Load())
 	stats["treedb.process.batch_arena.borrow_preflight_blocked_bytes_total"] = fmt.Sprintf("%d", batchArenaBorrowPreflightBlockedBytesTotal.Load())
+	stats["treedb.process.batch_arena.steal_suppressed_deferred_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredTotal.Load())
+	stats["treedb.process.batch_arena.steal_suppressed_deferred_entries_total"] = fmt.Sprintf("%d", batchArenaStealSuppressedDeferredEntriesTotal.Load())
 	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
 	stats["treedb.cache.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
@@ -19829,7 +19850,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			}
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
-			useSteal := allowBatchArenaBorrow && cachedBatchWriteUsesSteal(shard.mem)
+			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
+			useSteal = allowBatchArenaBorrow && useSteal
+			if stealSuppressedDeferred {
+				batchArenaStealSuppressedDeferredTotal.Add(1)
+				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(idxs)))
+			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
 				if _, ok := retainMainSeen[shard.mem]; !ok {
 					retainMainSeen[shard.mem] = struct{}{}
@@ -19899,7 +19925,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard := &b.db.mutableShards[i]
 			shard.mu.Lock()
 			useStream := b.streamEligible
-			useSteal := allowBatchArenaBorrow && cachedBatchWriteUsesSteal(shard.mem)
+			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
+			useSteal = allowBatchArenaBorrow && useSteal
+			if stealSuppressedDeferred {
+				batchArenaStealSuppressedDeferredTotal.Add(1)
+				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(entries)))
+			}
 			if useSteal && cachedBatchWriteNeedsBatchArenaRetention(shard.mem) {
 				if _, ok := retainMainSeen[shard.mem]; !ok {
 					retainMainSeen[shard.mem] = struct{}{}

@@ -323,6 +323,75 @@ func TestCachedBatchWriteUsesSteal_ExplicitAllowlist(t *testing.T) {
 	}
 }
 
+func TestCachedBatchWriteUseSteal_DeferredPressureBTreeFallback(t *testing.T) {
+	btreeMem := memtable.NewBTree()
+	if useSteal, suppressed := cachedBatchWriteUseSteal(nil, btreeMem); !useSteal || suppressed {
+		t.Fatalf("nil db btree useSteal=%v suppressed=%v want true,false", useSteal, suppressed)
+	}
+
+	db := &DB{}
+	if useSteal, suppressed := cachedBatchWriteUseSteal(db, btreeMem); !useSteal || suppressed {
+		t.Fatalf("no pressure btree useSteal=%v suppressed=%v want true,false", useSteal, suppressed)
+	}
+
+	db.memtableViewTelemetry.deferredBytesCurrent.Store(batchArenaDeferredPressureThresholdBytes)
+	if useSteal, suppressed := cachedBatchWriteUseSteal(db, btreeMem); useSteal || !suppressed {
+		t.Fatalf("deferred pressure btree useSteal=%v suppressed=%v want false,true", useSteal, suppressed)
+	}
+
+	skiplistMem := memtable.NewWithCapacity(0)
+	if useSteal, suppressed := cachedBatchWriteUseSteal(db, skiplistMem); !useSteal || suppressed {
+		t.Fatalf("deferred pressure skiplist useSteal=%v suppressed=%v want true,false", useSteal, suppressed)
+	}
+}
+
+func TestBatchWrite_BTreeStealSuppressedUnderDeferredPressure(t *testing.T) {
+	dir := t.TempDir()
+	db, err := Open(dir, NewMockBackend(), Options{
+		AllowUnsafe:    true,
+		DisableWAL:     true,
+		MemtableMode:   "btree",
+		MemtableShards: 1,
+		FlushThreshold: 1 << 30,
+	})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+
+	suppressedBefore := batchArenaStealSuppressedDeferredTotal.Load()
+	suppressedEntriesBefore := batchArenaStealSuppressedDeferredEntriesTotal.Load()
+	db.memtableViewTelemetry.deferredBytesCurrent.Store(batchArenaDeferredPressureThresholdBytes)
+
+	b := db.NewBatchWithSize(2)
+	defer func() { _ = b.Close() }()
+	if err := b.Set([]byte("k1"), []byte("v1")); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.Set([]byte("k2"), []byte("v2")); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if got := batchArenaStealSuppressedDeferredTotal.Load(); got <= suppressedBefore {
+		t.Fatalf("steal_suppressed_deferred_total=%d before=%d want increased", got, suppressedBefore)
+	}
+	if got := batchArenaStealSuppressedDeferredEntriesTotal.Load(); got < suppressedEntriesBefore+2 {
+		t.Fatalf("steal_suppressed_deferred_entries_total=%d before=%d want >= %d", got, suppressedEntriesBefore, suppressedEntriesBefore+2)
+	}
+	if got := db.batchArenaLeaseBytes.Load(); got != 0 {
+		t.Fatalf("batchArenaLeaseBytes=%d want 0", got)
+	}
+	db.batchArenaLeaseMu.Lock()
+	leasedMemtables := len(db.batchArenaLeasesByMem)
+	db.batchArenaLeaseMu.Unlock()
+	if leasedMemtables != 0 {
+		t.Fatalf("batchArenaLeasesByMem=%d want 0", leasedMemtables)
+	}
+}
+
 func TestBatchArenaLeases_NotNeededForPointerWritesOnCopiedMemtables(t *testing.T) {
 	for _, mode := range []string{"append_only", "hash_sorted"} {
 		t.Run(mode, func(t *testing.T) {
