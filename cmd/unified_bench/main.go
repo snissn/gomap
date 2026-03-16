@@ -1077,6 +1077,8 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.append_only.mutable_from_lease_total",
 		"treedb.cache.append_only.mutable_from_pool_total",
 		"treedb.cache.append_only.mutable_new_alloc_total",
+		"treedb.cache.append_only.mutable_new_alloc_with_queue_total",
+		"treedb.cache.append_only.mutable_new_alloc_queue_bytes_sum",
 		"treedb.cache.append_only_direct_arena.retain_max_bytes_effective",
 		"treedb.cache.append_only_direct_arena.retain_max_chunks_effective",
 		"treedb.cache.append_only_direct_arena.pool_hit_chunks_total",

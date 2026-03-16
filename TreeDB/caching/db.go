@@ -121,6 +121,8 @@ var appendOnlyDirectArenaRetainedHitChunksTotal atomic.Uint64
 var appendOnlyDirectArenaRetainedHitBytesTotal atomic.Uint64
 var appendOnlyDirectArenaFreshAllocChunksTotal atomic.Uint64
 var appendOnlyDirectArenaFreshAllocBytesTotal atomic.Uint64
+var appendOnlyMemNewAllocWithQueueTotal atomic.Uint64
+var appendOnlyMemNewAllocQueueBytesSum atomic.Uint64
 
 var poolPressureNow = time.Now
 var poolPressureReadMemStats = runtime.ReadMemStats
@@ -203,8 +205,8 @@ const (
 	postCheckpointEntrySliceTargetBytes        = int64(32 << 20)
 	postFlushEntrySliceLeaseKeepPerBucket      = 8
 	postCheckpointEntrySliceLeaseKeepPerBucket = 2
-	postFlushAppendOnlyMemLeaseKeep            = 8
-	postCheckpointAppendOnlyMemLeaseKeep       = 2
+	postFlushAppendOnlyMemLeaseKeep            = 24
+	postCheckpointAppendOnlyMemLeaseKeep       = 8
 )
 
 func computeBatchArenaPoolBudgetBytes() int64 {
@@ -5551,6 +5553,10 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 				mt.ResetWithCapacity(capacity, estimate)
 				return mt, nil
 			}
+		}
+		if backlog := db.queueBacklogBytes.Load(); backlog > 0 {
+			appendOnlyMemNewAllocWithQueueTotal.Add(1)
+			appendOnlyMemNewAllocQueueBytesSum.Add(uint64(backlog))
 		}
 		db.appendOnlyMemNewAllocTotal.Add(1)
 		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
@@ -16958,11 +16964,15 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.append_only.mutable_from_lease_total"] = fmt.Sprintf("%d", appendOnlyMemLeaseHitTotal)
 	stats["treedb.cache.append_only.mutable_from_pool_total"] = fmt.Sprintf("%d", appendOnlyMemPoolHitTotal)
 	stats["treedb.cache.append_only.mutable_new_alloc_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocTotal)
+	stats["treedb.cache.append_only.mutable_new_alloc_with_queue_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocWithQueueTotal.Load())
+	stats["treedb.cache.append_only.mutable_new_alloc_queue_bytes_sum"] = fmt.Sprintf("%d", appendOnlyMemNewAllocQueueBytesSum.Load())
 	stats["treedb.process.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
 	stats["treedb.process.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
 	stats["treedb.process.append_only.mutable_from_lease_total"] = fmt.Sprintf("%d", appendOnlyMemLeaseHitTotal)
 	stats["treedb.process.append_only.mutable_from_pool_total"] = fmt.Sprintf("%d", appendOnlyMemPoolHitTotal)
 	stats["treedb.process.append_only.mutable_new_alloc_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocTotal)
+	stats["treedb.process.append_only.mutable_new_alloc_with_queue_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocWithQueueTotal.Load())
+	stats["treedb.process.append_only.mutable_new_alloc_queue_bytes_sum"] = fmt.Sprintf("%d", appendOnlyMemNewAllocQueueBytesSum.Load())
 	appendOnlyRetainChunks, appendOnlyRetainBytes := appendOnlyDirectArenaRetentionLimitsForPressure(poolPressure.level)
 	stats["treedb.cache.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
 	stats["treedb.cache.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
