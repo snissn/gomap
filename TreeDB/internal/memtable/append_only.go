@@ -986,11 +986,11 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 	// keeping the next steady-state cycle warm if we just observed a larger-but-
 	// still-bounded mutable memtable.
 	if cap(m.entries) > maxRetainedEntries {
-		m.entries = make([]appendOnlyEntry, retainedEntries)
+		m.replaceEntriesSlice(retainedEntries)
 		return
 	}
 	if cap(m.entries) < retainedEntries {
-		m.entries = make([]appendOnlyEntry, retainedEntries)
+		m.replaceEntriesSlice(retainedEntries)
 		return
 	}
 	reuseEntries := retainedEntries
@@ -1000,6 +1000,15 @@ func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int,
 	if len(m.entries) != reuseEntries {
 		m.entries = m.entries[:reuseEntries]
 	}
+}
+
+func (m *AppendOnly) replaceEntriesSlice(length int) {
+	if length < 0 {
+		length = 0
+	}
+	prev := m.entries
+	m.entries = getAppendOnlyEntries(length)
+	putAppendOnlyEntries(prev)
 }
 
 func (m *AppendOnly) buildSortedLatestSnapshotLocked() []*appendOnlyEntry {
