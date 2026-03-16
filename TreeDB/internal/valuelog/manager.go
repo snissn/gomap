@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	defaultGroupedFrameCacheEntries     = 4
-	defaultGroupedFrameCacheMaxRawBytes = 4 << 20
+	// Keep grouped-frame cache modest by default so restore workloads with many
+	// open segments do not retain large decoded-raw payloads per file.
+	defaultGroupedFrameCacheEntries     = 2
+	defaultGroupedFrameCacheMaxRawBytes = 1 << 20
 )
 
 type groupedFrameCacheEntry struct {
