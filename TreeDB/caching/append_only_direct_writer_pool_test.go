@@ -189,7 +189,7 @@ func TestAppendOnlyDirectWriterArena_ReusesRetainedChunksOnReset(t *testing.T) {
 	}
 
 	db.mu.Lock()
-	err = db.resetMutableShardsLocked(db.memtableMode, true)
+	err = db.resetMutableShardsLocked(db.currentMemtableMode(), true)
 	db.mu.Unlock()
 	if err != nil {
 		t.Fatalf("reset mutable shards: %v", err)
