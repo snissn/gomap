@@ -78,6 +78,8 @@ var batchArenaPoolLastGC atomic.Uint64
 var batchArenaPoolBudgetState atomic.Value
 var batchArenaLeasedBytesGlobal atomic.Int64
 var batchArenaLeasedBytesMaxGlobal atomic.Int64
+var batchArenaInFlightBytes atomic.Int64
+var batchArenaInFlightBytesMaxGlobal atomic.Int64
 var batchArenaRetainedBytesMaxGlobal atomic.Int64
 var batchArenaRetainedHardCapOverride atomic.Int64
 var batchArenaPoolSkipZeroBudgetTotal atomic.Uint64
@@ -502,6 +504,13 @@ func noteBatchArenaLeasedBytesGlobalMax(value int64) {
 		return
 	}
 	updateInt64Max(&batchArenaLeasedBytesMaxGlobal, value)
+}
+
+func noteBatchArenaInFlightBytesMax(value int64) {
+	if value <= 0 {
+		return
+	}
+	updateInt64Max(&batchArenaInFlightBytesMaxGlobal, value)
 }
 
 func shouldBorrowBatchArenaBytes() bool {
@@ -16829,6 +16838,8 @@ func (db *DB) Stats() map[string]string {
 	entrySliceEffectiveBudget := scalePoolBudgetForPressure(entrySliceBaseBudget, poolPressure.level)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
 	arenaPoolBytesMax := batchArenaPoolBytesMaxGlobal.Load()
+	arenaInFlightBytes := batchArenaInFlightBytes.Load()
+	arenaInFlightBytesMax := batchArenaInFlightBytesMaxGlobal.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
 	arenaGlobalLeasedBytes := batchArenaLeasedBytesGlobal.Load()
 	arenaGlobalLeasedBytesMax := batchArenaLeasedBytesMaxGlobal.Load()
@@ -16852,6 +16863,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
 	stats["treedb.cache.batch_arena.pool_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaPoolBytesMax)
+	stats["treedb.cache.batch_arena.in_flight_bytes_estimate"] = fmt.Sprintf("%d", arenaInFlightBytes)
+	stats["treedb.cache.batch_arena.in_flight_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaInFlightBytesMax)
 	stats["treedb.cache.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.cache.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
 	stats["treedb.cache.batch_arena.leased_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytesMax)
@@ -16881,6 +16894,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
 	stats["treedb.process.batch_arena.pool_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaPoolBytesMax)
+	stats["treedb.process.batch_arena.in_flight_bytes_estimate"] = fmt.Sprintf("%d", arenaInFlightBytes)
+	stats["treedb.process.batch_arena.in_flight_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaInFlightBytesMax)
 	stats["treedb.process.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.process.batch_arena.leased_bytes_global_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytes)
 	stats["treedb.process.batch_arena.leased_bytes_global_max_estimate"] = fmt.Sprintf("%d", arenaGlobalLeasedBytesMax)
@@ -18096,6 +18111,7 @@ type Batch struct {
 	ptrCopyArena       []byte
 	ptrCopyArenaChunks [][]byte
 	ptrCopyBytes       int
+	arenaInFlightBytes int64
 	ptrValueIdxs       []int
 	walBuf             []logRecord
 	shardIdxs          []int
@@ -18537,6 +18553,9 @@ func (b *Batch) Reset() {
 	}
 	b.recycleCopyArenaChunks()
 	b.recyclePtrCopyArenaChunks()
+	if b.arenaInFlightBytes > 0 {
+		b.subArenaInFlightBytes(b.arenaInFlightBytes)
+	}
 	if b.db != nil {
 		b.copyArenaCap = b.db.batchCopyArenaInitCap(0)
 	}
@@ -18587,6 +18606,9 @@ func (b *Batch) drainCopyArenaChunks() [][]byte {
 		b.db.noteBatchArenaChunkFinalize(len(b.copyArena), cap(b.copyArena))
 	}
 	chunks := b.copyArenaChunks
+	if bytes := batchArenaChunksCapBytes(chunks); bytes > 0 {
+		b.subArenaInFlightBytes(bytes)
+	}
 	b.copyArenaChunks = nil
 	b.copyArena = nil
 	b.copyBytes = 0
@@ -18612,6 +18634,9 @@ func (b *Batch) drainPtrCopyArenaChunks() [][]byte {
 		b.db.noteBatchArenaChunkFinalize(len(b.ptrCopyArena), cap(b.ptrCopyArena))
 	}
 	chunks := b.ptrCopyArenaChunks
+	if bytes := batchArenaChunksCapBytes(chunks); bytes > 0 {
+		b.subArenaInFlightBytes(bytes)
+	}
 	b.ptrCopyArenaChunks = nil
 	b.ptrCopyArena = nil
 	b.ptrCopyBytes = 0
@@ -18635,6 +18660,31 @@ func (b *Batch) updateBatchCopyHint() {
 	}
 	if n := b.copyBytes; n > 0 {
 		b.db.observeBatchCopyBytes(n)
+	}
+}
+
+func (b *Batch) addArenaInFlightBytes(n int) {
+	if b == nil || n <= 0 {
+		return
+	}
+	b.arenaInFlightBytes += int64(n)
+	cur := batchArenaInFlightBytes.Add(int64(n))
+	noteBatchArenaInFlightBytesMax(cur)
+}
+
+func (b *Batch) subArenaInFlightBytes(n int64) {
+	if b == nil || n <= 0 {
+		return
+	}
+	if n > b.arenaInFlightBytes {
+		n = b.arenaInFlightBytes
+	}
+	if n <= 0 {
+		return
+	}
+	b.arenaInFlightBytes -= n
+	if next := batchArenaInFlightBytes.Add(-n); next < 0 {
+		batchArenaInFlightBytes.Store(0)
 	}
 }
 
@@ -18681,6 +18731,9 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 		// Switch to a fresh chunk when exhausted so existing entry slices keep
 		// their backing arrays without per-op allocations.
 		chunk := getBatchArena(chunkCap)
+		if cap(chunk) > 0 {
+			b.addArenaInFlightBytes(cap(chunk))
+		}
 		if b != nil && b.db != nil {
 			b.db.noteBatchArenaChunkAlloc(chunkCap, cap(chunk))
 		}
@@ -18780,6 +18833,7 @@ func (b *Batch) releaseCompactedBatchArenaTail(chunks *[][]byte, arena *[]byte, 
 	last := len(*chunks) - 1
 	tailChunk := (*chunks)[last]
 	if tailChunk != nil {
+		b.subArenaInFlightBytes(int64(cap(tailChunk)))
 		putBatchArena(tailChunk)
 	}
 	(*chunks)[last] = nil

@@ -1033,6 +1033,8 @@ func printTreeDBCacheStats(w io.Writer, inst *DBInstance, prefix string) {
 		"treedb.cache.batch_arena.pool_budget_effective_bytes",
 		"treedb.cache.batch_arena.pool_bytes_estimate",
 		"treedb.cache.batch_arena.pool_bytes_global_max_estimate",
+		"treedb.cache.batch_arena.in_flight_bytes_estimate",
+		"treedb.cache.batch_arena.in_flight_bytes_global_max_estimate",
 		"treedb.cache.batch_arena.leased_bytes",
 		"treedb.cache.batch_arena.leased_bytes_max",
 		"treedb.cache.batch_arena.leased_bytes_global_estimate",

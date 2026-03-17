@@ -107,6 +107,39 @@ func TestBatchCopyArenaHint_UsesTotalCopiedBytes(t *testing.T) {
 	}
 }
 
+func TestBatchArenaInFlightBytesTracksBatchChunkLifecycle(t *testing.T) {
+	var db DB
+	b := &Batch{
+		db:           &db,
+		copyArenaCap: batchCopyArenaMinChunk,
+	}
+
+	before := batchArenaInFlightBytes.Load()
+	_ = b.arenaCopy(batchCopyArenaMinChunk)
+	_ = b.arenaCopy(batchCopyArenaMinChunk) // force at least one chunk rollover
+
+	if b.arenaInFlightBytes <= 0 {
+		t.Fatalf("batch arenaInFlightBytes=%d want > 0", b.arenaInFlightBytes)
+	}
+	mid := batchArenaInFlightBytes.Load()
+	if mid <= before {
+		t.Fatalf("global in_flight bytes mid=%d before=%d want increase", mid, before)
+	}
+
+	chunks := b.drainCopyArenaChunks()
+	if len(chunks) == 0 {
+		t.Fatalf("expected drained copy arena chunks")
+	}
+	if b.arenaInFlightBytes != 0 {
+		t.Fatalf("batch arenaInFlightBytes after drain=%d want 0", b.arenaInFlightBytes)
+	}
+	afterDrain := batchArenaInFlightBytes.Load()
+	if afterDrain > mid {
+		t.Fatalf("global in_flight bytes after drain=%d mid=%d want <= mid", afterDrain, mid)
+	}
+	putBatchArenas(chunks)
+}
+
 func TestBatchReset_RefreshesCopyArenaCapFromDecayedHint(t *testing.T) {
 	var db DB
 
