@@ -46,8 +46,9 @@ var MaxDeadMappings = defaultMaxDeadMappings
 var MaxDeadMappedBytes int64 = defaultMaxDeadMappedBytes
 
 const (
-	defaultMaxDeadMappings    = 64
-	defaultMaxDeadMappedBytes = int64(2 << 30) // 2 GiB
+	defaultMaxDeadMappings = 64
+	// 2.5 GiB default balances mmap residency with fallback ReadAt pressure.
+	defaultMaxDeadMappedBytes = int64(5 << 29)
 	maxAdaptiveDeadMappings   = 4096
 	deadMappingBytesPerStep   = 256 << 10 // increase cap by 1 per 256KiB mapped
 	maxDeadMappingsEnvKey     = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
