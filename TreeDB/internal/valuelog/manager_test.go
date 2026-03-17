@@ -120,6 +120,49 @@ func TestManagerPromoteCurrentWritable_SwitchesPriorLaneSegmentToSealed(t *testi
 	}
 }
 
+func TestManagerPromoteCurrentWritable_DemotesPriorSealedMmapResidency(t *testing.T) {
+	mgr := &Manager{
+		files:                 make(map[uint32]*File),
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1 := &File{
+		ID:           mustEncodeFileID(t, 4, 1),
+		deadMappings: [][]byte{make([]byte, 7), make([]byte, 9)},
+	}
+	f1.mmapData.Store(make([]byte, 11))
+	f2 := &File{ID: mustEncodeFileID(t, 4, 2)}
+	mgr.files[f1.ID] = f1
+	mgr.files[f2.ID] = f2
+
+	var advised []int
+	origAdvise := currentAdviseMmapMapping()
+	swapAdviseMmapMappingForTest(func(b []byte) error {
+		advised = append(advised, len(b))
+		return nil
+	})
+	t.Cleanup(func() { swapAdviseMmapMappingForTest(origAdvise) })
+
+	if err := mgr.PromoteCurrentWritable(f1.ID); err != nil {
+		t.Fatalf("PromoteCurrentWritable(first): %v", err)
+	}
+	if len(advised) != 0 {
+		t.Fatalf("unexpected residency demotion before sealing prior segment: %v", advised)
+	}
+
+	if err := mgr.PromoteCurrentWritable(f2.ID); err != nil {
+		t.Fatalf("PromoteCurrentWritable(second): %v", err)
+	}
+	if f1.currentWritable.Load() {
+		t.Fatalf("first file still marked current writable after promotion")
+	}
+	if !f2.currentWritable.Load() {
+		t.Fatalf("second file not marked current writable")
+	}
+	if len(advised) != 3 || advised[0] != 11 || advised[1] != 7 || advised[2] != 9 {
+		t.Fatalf("sealed residency demotion lengths=%v want [11 7 9]", advised)
+	}
+}
+
 func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(0, 1)

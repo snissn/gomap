@@ -138,6 +138,7 @@ var (
 	managerTestHookMu sync.RWMutex
 	openSegmentFile   = openFile
 	scanSegmentPaths  = listSegments
+	adviseMmapMapping = mmapDontNeed
 )
 
 func swapOpenSegmentFileForTest(hook func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error)) (prev func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error)) {
@@ -156,6 +157,14 @@ func swapScanSegmentPathsForTest(hook func(string) ([]segmentInfo, error)) (prev
 	return prev
 }
 
+func swapAdviseMmapMappingForTest(hook func([]byte) error) (prev func([]byte) error) {
+	managerTestHookMu.Lock()
+	prev = adviseMmapMapping
+	adviseMmapMapping = hook
+	managerTestHookMu.Unlock()
+	return prev
+}
+
 func currentOpenSegmentFile() func(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
 	managerTestHookMu.RLock()
 	hook := openSegmentFile
@@ -166,6 +175,13 @@ func currentOpenSegmentFile() func(path string, id uint32, dictLookup DictLookup
 func currentScanSegmentPaths() func(string) ([]segmentInfo, error) {
 	managerTestHookMu.RLock()
 	hook := scanSegmentPaths
+	managerTestHookMu.RUnlock()
+	return hook
+}
+
+func currentAdviseMmapMapping() func([]byte) error {
+	managerTestHookMu.RLock()
+	hook := adviseMmapMapping
 	managerTestHookMu.RUnlock()
 	return hook
 }
@@ -420,6 +436,33 @@ func (f *File) Close() error {
 	f.remapMu.Unlock()
 
 	return f.File.Close()
+}
+
+// demoteSealedMmapResidency preserves mapping safety for unsafe views while
+// asking the kernel to drop resident pages once a segment is no longer current.
+func (f *File) demoteSealedMmapResidency() {
+	if f == nil || f.currentWritable.Load() {
+		return
+	}
+	advise := currentAdviseMmapMapping()
+	if advise == nil {
+		return
+	}
+	f.remapMu.Lock()
+	defer f.remapMu.Unlock()
+	if f.closed.Load() {
+		return
+	}
+	data, _ := f.mmapData.Load().([]byte)
+	if len(data) > 0 {
+		_ = advise(data)
+	}
+	for _, dead := range f.deadMappings {
+		if len(dead) == 0 {
+			continue
+		}
+		_ = advise(dead)
+	}
 }
 
 func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
@@ -947,6 +990,7 @@ func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
 	if prevID, ok := m.currentWritableByLane[lane]; ok && prevID != 0 && prevID != fileID {
 		if prev := m.files[prevID]; prev != nil {
 			prev.currentWritable.Store(false)
+			prev.demoteSealedMmapResidency()
 		}
 	}
 	f.currentWritable.Store(true)
