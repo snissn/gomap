@@ -253,3 +253,42 @@ func countAppendOnlyDirectArenaLeaseChunks(db *DB, mt memtable.Table) int {
 	}
 	return len(lease.chunks)
 }
+
+func TestAppendOnlyDirectWriterArena_RetainChunks_DefaultChunkByteBudget(t *testing.T) {
+	var arena appendOnlyDirectValueArena
+
+	chunks := make([][]byte, 0, appendOnlyDirectValueArenaRetainMaxChunks+64)
+	for i := 0; i < appendOnlyDirectValueArenaRetainMaxChunks+64; i++ {
+		chunks = append(chunks, make([]byte, 0, appendOnlyDirectValueArenaDefaultChunk))
+	}
+
+	arena.retainChunks(chunks)
+	t.Cleanup(func() { arena.recycleAll() })
+
+	if got, want := arena.retainedBytes, int64(appendOnlyDirectValueArenaRetainMaxBytes); got != want {
+		t.Fatalf("retained bytes=%d want=%d", got, want)
+	}
+	if got, want := len(arena.retained), appendOnlyDirectValueArenaRetainMaxChunks; got != want {
+		t.Fatalf("retained chunks=%d want=%d", got, want)
+	}
+}
+
+func TestAppendOnlyDirectWriterArena_RetainChunks_LargeChunkByteBudget(t *testing.T) {
+	var arena appendOnlyDirectValueArena
+	const largeChunkCap = 1 << 20
+
+	chunks := make([][]byte, 0, 32)
+	for i := 0; i < cap(chunks); i++ {
+		chunks = append(chunks, make([]byte, 0, largeChunkCap))
+	}
+
+	arena.retainChunks(chunks)
+	t.Cleanup(func() { arena.recycleAll() })
+
+	if got, want := arena.retainedBytes, int64(appendOnlyDirectValueArenaRetainMaxBytes); got != want {
+		t.Fatalf("retained bytes=%d want=%d", got, want)
+	}
+	if got, want := len(arena.retained), appendOnlyDirectValueArenaRetainMaxBytes/largeChunkCap; got != want {
+		t.Fatalf("retained chunks=%d want=%d", got, want)
+	}
+}
