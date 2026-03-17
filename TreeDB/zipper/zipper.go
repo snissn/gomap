@@ -441,10 +441,7 @@ func (z *Zipper) newLeafBuilder(data []byte, ops []batch.Entry) *node.Builder {
 }
 
 func (z *Zipper) newPooledLeafBuilder(data []byte, ops []batch.Entry) *node.Builder {
-	b := leafBuilderPool.Get().(*node.Builder)
-	opts := z.leafBuilderOptions(ops)
-	b.ResetWithOptions(data, page.PageTypeLeaf, opts)
-	return b
+	return z.newPooledBuilderForType(data, page.PageTypeLeaf, ops)
 }
 
 func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
@@ -505,12 +502,31 @@ func (z *Zipper) leafBuilderOptions(ops []batch.Entry) node.BuilderOptions {
 	return node.AdaptiveLeafBuilderOptions(base, entries)
 }
 
-func releasePooledLeafBuilder(b *node.Builder) {
+func (z *Zipper) newPooledBuilderForType(data []byte, typ page.PageType, ops []batch.Entry) *node.Builder {
+	b := leafBuilderPool.Get().(*node.Builder)
+	if typ == page.PageTypeLeaf {
+		opts := z.leafBuilderOptions(ops)
+		b.ResetWithOptions(data, page.PageTypeLeaf, opts)
+		return b
+	}
+	opts := node.BuilderOptions{}
+	if z != nil {
+		opts.InternalBaseDelta = z.indexInternalBaseDelta
+	}
+	b.ResetWithOptions(data, typ, opts)
+	return b
+}
+
+func releasePooledBuilder(b *node.Builder) {
 	if b == nil {
 		return
 	}
 	b.ReleaseScratch()
 	leafBuilderPool.Put(b)
+}
+
+func releasePooledLeafBuilder(b *node.Builder) {
+	releasePooledBuilder(b)
 }
 
 func (z *Zipper) newBuilderForType(data []byte, typ page.PageType, ops []batch.Entry) *node.Builder {
@@ -831,7 +847,8 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 				return 0, nil, errors.New("zipper: outer leaves in value log enabled without leaf page log")
 			}
 			newData := make([]byte, page.PageSize)
-			builder := z.newLeafBuilder(newData, ops)
+			builder := z.newPooledLeafBuilder(newData, ops)
+			defer releasePooledBuilder(builder)
 			builder.SetPageID(0)
 			return z.mergeLeaf(oldNode, builder, ops, metrics)
 		}
@@ -845,7 +862,8 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		if err != nil {
 			return 0, nil, err
 		}
-		builder := z.newLeafBuilder(newData, ops)
+		builder := z.newPooledLeafBuilder(newData, ops)
+		defer releasePooledBuilder(builder)
 		builder.SetPageID(newPageID)
 		return z.mergeLeaf(oldNode, builder, ops, metrics)
 
@@ -859,7 +877,8 @@ func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bo
 		if err != nil {
 			return 0, nil, err
 		}
-		builder := z.newBuilderForType(newData, page.PageTypeInternal, ops)
+		builder := z.newPooledBuilderForType(newData, page.PageTypeInternal, ops)
+		defer releasePooledBuilder(builder)
 		builder.SetPageID(newPageID)
 		builder.SetInternalFenceBounds(low, high)
 		nr, splits, err := z.mergeInternal(oldNode, builder, ops, maintenance, budget, metrics, retired, low, high)
