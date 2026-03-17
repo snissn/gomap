@@ -117,8 +117,8 @@ const (
 	mergeSplitKeyArenaKeepCap = 1 << 20
 	mergeOuterLeafPageInitCap = 16
 	mergeOuterLeafPageKeepCap = 128
-	mergeLeafPageScratchInit   = 16
-	mergeLeafPageScratchKeep   = 128
+	mergeLeafPageScratchInit  = 16
+	mergeLeafPageScratchKeep  = 128
 )
 
 type mergeScratch struct {
