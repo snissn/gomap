@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"math/bits"
 	"os"
@@ -10467,6 +10468,7 @@ planned:
 			if err != nil {
 				db.vlogGenerationRewriteExecFailures.Add(1)
 				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(time.Since(rewriteStart).Microseconds())/1000)
+				log.Printf("treedb: vlog_generation rewrite_err db=%s reason=%s source_ids=%d err=%v", db.dir, vlogGenerationReasonString(reason), len(rewriteOpts.SourceFileIDs), err)
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
 			db.vlogGenerationRewriteLastBytesBefore.Store(stats.BytesBefore)
@@ -10481,6 +10483,15 @@ planned:
 				stats.BytesAfter,
 				stats.RecordsCopied,
 				float64(time.Since(rewriteStart).Microseconds())/1000,
+			)
+			log.Printf(
+				"treedb: vlog_generation rewrite_done db=%s reason=%s source_ids=%d bytes_before=%d bytes_after=%d records=%d",
+				db.dir,
+				vlogGenerationReasonString(reason),
+				len(rewriteOpts.SourceFileIDs),
+				stats.BytesBefore,
+				stats.BytesAfter,
+				stats.RecordsCopied,
 			)
 			if len(processedRewriteIDs) > 0 {
 				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
@@ -10497,6 +10508,7 @@ planned:
 				if gcErr != nil {
 					db.vlogGenerationPostRewriteGCFailures.Add(1)
 					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(time.Since(gcStart).Microseconds())/1000)
+					log.Printf("treedb: vlog_generation post_rewrite_gc_err db=%s reason=%s err=%v", db.dir, vlogGenerationReasonString(reason), gcErr)
 					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
 				}
 				db.vlogGenerationPostRewriteGCRuns.Add(1)
@@ -10508,6 +10520,13 @@ planned:
 					db.vlogGenerationPostRewriteGCBytesDel.Add(uint64(gcStats.BytesDeleted))
 				}
 				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
+				log.Printf(
+					"treedb: vlog_generation post_rewrite_gc_done db=%s reason=%s deleted_segments=%d deleted_bytes=%d",
+					db.dir,
+					vlogGenerationReasonString(reason),
+					gcStats.SegmentsDeleted,
+					gcStats.BytesDeleted,
+				)
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)
@@ -10617,6 +10636,15 @@ planned:
 		}
 		if gcStats.BytesDeleted > 0 {
 			db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
+		}
+		if gcStats.SegmentsDeleted > 0 || gcStats.BytesDeleted > 0 {
+			log.Printf(
+				"treedb: vlog_generation gc_done db=%s reason=%s deleted_segments=%d deleted_bytes=%d",
+				db.dir,
+				vlogGenerationReasonString(vlogGenerationReasonPeriodicGC),
+				gcStats.SegmentsDeleted,
+				gcStats.BytesDeleted,
+			)
 		}
 		return nil
 	})
