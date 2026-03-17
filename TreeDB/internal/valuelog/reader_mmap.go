@@ -41,11 +41,17 @@ const readViaMmapViewPrefixCacheEnabled = false
 // use-after-unmap with concurrent readers.
 var MaxDeadMappings = defaultMaxDeadMappings
 
+// MaxDeadMappedBytes caps the cumulative bytes retained in dead mmaps.
+// Set <= 0 to disable the byte budget.
+var MaxDeadMappedBytes int64 = defaultMaxDeadMappedBytes
+
 const (
 	defaultMaxDeadMappings    = 64
+	defaultMaxDeadMappedBytes = int64(2 << 30) // 2 GiB
 	maxAdaptiveDeadMappings   = 4096
 	deadMappingBytesPerStep   = 256 << 10 // increase cap by 1 per 256KiB mapped
 	maxDeadMappingsEnvKey     = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
+	maxDeadMappedBytesEnvKey  = "TREEDB_VLOG_MAX_DEAD_MAPPED_BYTES"
 	enableAdaptiveCapEnvKey   = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
 	defaultAdaptiveCapEnabled = true
 )
@@ -60,6 +66,11 @@ func init() {
 		if v, err := strconv.Atoi(raw); err == nil {
 			MaxDeadMappings = v
 			maxDeadMappingsExplicit = true
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(maxDeadMappedBytesEnvKey)); raw != "" {
+		if v, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			MaxDeadMappedBytes = v
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv(enableAdaptiveCapEnvKey)); raw != "" {
@@ -102,9 +113,13 @@ func effectiveMaxDeadMappings(mappedLen int) int {
 	return int(base + boost64)
 }
 
-func deadMappingsCapExhausted(deadMappingsCount uint64, mappedLen int) bool {
+func deadMappingsCapExhausted(deadMappingsCount uint64, deadMappingsBytes uint64, mappedLen int) bool {
 	maxMappings := effectiveMaxDeadMappings(mappedLen)
-	return maxMappings > 0 && deadMappingsCount >= uint64(maxMappings)
+	if maxMappings > 0 && deadMappingsCount >= uint64(maxMappings) {
+		return true
+	}
+	maxBytes := MaxDeadMappedBytes
+	return maxBytes > 0 && deadMappingsBytes >= uint64(maxBytes)
 }
 
 func (f *File) maybeScheduleRemap() {
@@ -112,7 +127,7 @@ func (f *File) maybeScheduleRemap() {
 		return
 	}
 	data, _ := f.mmapData.Load().([]byte)
-	if deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+	if deadMappingsCapExhausted(f.deadMappingsCount.Load(), f.deadMappingsBytes.Load(), len(data)) {
 		// If we have already exhausted our dead-mapping budget, we will not be
 		// able to remap again without risking use-after-unmap for callers holding
 		// unsafe mmap views. Avoid spawning remap goroutines that will just bail.
@@ -144,7 +159,7 @@ func (f *File) remapToFileSize() {
 	// risking use-after-unmap for callers holding unsafe mmap views. Avoid the
 	// per-call Stat allocation when reads keep missing the current mapping.
 	data, _ := f.mmapData.Load().([]byte)
-	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), f.deadMappingsBytes.Load(), len(data)) {
 		return
 	}
 
@@ -166,6 +181,7 @@ func (f *File) remapToFileSize() {
 	if data != nil {
 		f.deadMappings = append(f.deadMappings, data)
 		f.deadMappingsCount.Add(1)
+		f.deadMappingsBytes.Add(uint64(len(data)))
 	}
 
 	b, err := mmapReadOnly(f.File, int(currentSize))

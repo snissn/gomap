@@ -458,10 +458,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.vlog_generation.remap.failures"] = "0"
 
 	if db.valueLogManager != nil {
-		vlogRemaps, vlogDeadMappings := db.valueLogManager.RemapStats()
+		vlogRemaps, vlogDeadMappings, vlogDeadMappingBytes := db.valueLogManager.RemapStatsDetailed()
 		stats["treedb.vlog.mmap_remaps"] = fmt.Sprintf("%d", vlogRemaps)
 		stats["treedb.vlog.mmap_dead_mappings"] = fmt.Sprintf("%d", vlogDeadMappings)
+		stats["treedb.vlog.mmap_dead_mappings.bytes"] = fmt.Sprintf("%d", vlogDeadMappingBytes)
 		stats["treedb.vlog.mmap_dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
+		stats["treedb.vlog.mmap_dead_mappings.cap_bytes"] = fmt.Sprintf("%d", valuelog.MaxDeadMappedBytes)
 
 		mmapHits, mmapMissOutOfRange, mmapMissNoMapping, mmapMissDeadCap, mmapFallbackReadAt := db.valueLogManager.MmapReadStats()
 		stats["treedb.vlog.mmap_read.hits"] = fmt.Sprintf("%d", mmapHits)

@@ -35,6 +35,31 @@ func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
 	}
 }
 
+func TestManagerRemapStatsDetailedAggregatesCounters(t *testing.T) {
+	mgr := &Manager{
+		files: map[uint32]*File{
+			1: {},
+			2: {},
+		},
+	}
+	mgr.files[1].remapCount.Add(3)
+	mgr.files[1].deadMappingsCount.Add(5)
+	mgr.files[1].deadMappingsBytes.Add(7)
+	mgr.files[2].remapCount.Add(11)
+	mgr.files[2].deadMappingsCount.Add(13)
+	mgr.files[2].deadMappingsBytes.Add(17)
+
+	remaps, deadMappings, deadBytes := mgr.RemapStatsDetailed()
+	if remaps != 14 || deadMappings != 18 || deadBytes != 24 {
+		t.Fatalf("RemapStatsDetailed mismatch: remaps=%d deadMappings=%d deadBytes=%d", remaps, deadMappings, deadBytes)
+	}
+
+	remaps2, deadMappings2 := mgr.RemapStats()
+	if remaps2 != remaps || deadMappings2 != deadMappings {
+		t.Fatalf("RemapStats mismatch: remaps=%d/%d deadMappings=%d/%d", remaps2, remaps, deadMappings2, deadMappings)
+	}
+}
+
 func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(0, 1)
