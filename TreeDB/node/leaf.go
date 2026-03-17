@@ -96,7 +96,20 @@ func (n *Node) ensureKeyScratch(size int) []byte {
 		return nil
 	}
 	if cap(n.keyScratch) < size {
-		n.keyScratch = make([]byte, size)
+		nextCap := cap(n.keyScratch)
+		if nextCap < 64 {
+			nextCap = 64
+		}
+		// Grow geometrically so repeated small key-length increases do not
+		// allocate on every decode step.
+		for nextCap < size {
+			if nextCap > int(^uint(0)>>1)/2 {
+				nextCap = size
+				break
+			}
+			nextCap *= 2
+		}
+		n.keyScratch = make([]byte, nextCap)
 	}
 	return n.keyScratch[:size]
 }
