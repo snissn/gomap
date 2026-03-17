@@ -1221,6 +1221,137 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 	}
 }
 
+func TestVlogGenerationGC_PostRewriteFollowupBypassesMinInterval(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		realGCStats: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: vlogGenerationGCMinBytes},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.vlogGenerationPostRewriteGCFollowupPending.Store(true)
+	db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Store(time.Now().Add(-2 * vlogGenerationPostRewriteGCFollowupDelay).UnixNano())
+	db.vlogGenerationLastGCUnixNano.Store(time.Now().UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	dryCalls, realCalls, _ := recorder.recordedCalls()
+	if dryCalls != 0 || realCalls != 1 {
+		t.Fatalf("followup gc calls dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
+	}
+	if db.vlogGenerationPostRewriteGCFollowupPending.Load() {
+		t.Fatalf("expected followup pending to clear after followup GC run")
+	}
+}
+
+func TestCheckpoint_KicksVlogGenerationGCFollowupWhenRewriteIneligible(t *testing.T) {
+	disableVlogGenerationLoop(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		realGCStats: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: vlogGenerationGCMinBytes},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1 << 40, // keep rewrite ineligible by size gate
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = false
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	db.vlogGenerationPostRewriteGCFollowupPending.Store(true)
+	db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Store(time.Now().Add(-2 * vlogGenerationPostRewriteGCFollowupDelay).UnixNano())
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		_, realCalls, _ := recorder.recordedCalls()
+		if realCalls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			dryCalls, realCalls, _ := recorder.recordedCalls()
+			t.Fatalf("followup checkpoint kick did not run gc in time: dryCalls=%d realCalls=%d", dryCalls, realCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
+		t.Fatalf("checkpoint kick runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "1" {
+		t.Fatalf("checkpoint kick gc runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_pending"]; got != "false" {
+		t.Fatalf("followup pending=%q want false", got)
+	}
+}
+
 func TestVlogGenerationRewrite_ConsumesBudgetToZeroWhenRewriteExceedsBudgetCap(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

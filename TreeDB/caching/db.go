@@ -3743,81 +3743,83 @@ type DB struct {
 	valueLogMaxSegmentBytes   int64
 	journalCompression        bool
 
-	disableJournal                           bool
-	relaxedSync                              bool
-	notifyError                              func(error)
-	debugFlushPointers                       bool
-	debugFlushTiming                         bool
-	debugPtrEligible                         atomic.Int64
-	debugPtrUsed                             atomic.Int64
-	debugPtrNoPtr                            atomic.Int64
-	debugPtrDenied                           atomic.Int64
-	debugPtrDisabled                         atomic.Int64
-	checkpointRuns                           atomic.Uint64
-	checkpointTotalNs                        atomic.Uint64
-	checkpointMaxNs                          atomic.Uint64
-	checkpointNoopSkips                      atomic.Uint64
-	checkpointFlushMuWaitNs                  atomic.Uint64
-	checkpointFlushMuWaitMaxNs               atomic.Uint64
-	checkpointAutoVacuumRuns                 atomic.Uint64
-	checkpointAutoVacuumLastCheckRun         atomic.Uint64
-	checkpointAutoVacuumLastPages            atomic.Uint64
-	checkpointAutoVacuumLastInternalP50      atomic.Uint64
-	checkpointAutoVacuumLastInternalAvg      atomic.Uint64
-	lastForegroundWriteUnixNano              atomic.Int64
-	lastForegroundReadUnixNano               atomic.Int64
-	foregroundReadStampCounter               atomic.Uint32
-	activeForegroundIterators                atomic.Int64
-	retainedPruneLastStartUnixNano           atomic.Int64
-	retainedPruneMu                          sync.Mutex
-	retainedPruneDone                        chan struct{}
-	vlogGenerationRemapSuccesses             atomic.Uint64
-	vlogGenerationRemapFailures              atomic.Uint64
-	vlogGenerationRewritePlanCalls           atomic.Uint64
-	vlogGenerationRewritePlanSelectedSegs    atomic.Uint64
-	vlogGenerationRewritePlanSelectedLive    atomic.Uint64
-	vlogGenerationRewriteExecCalls           atomic.Uint64
-	vlogGenerationRewriteExecFailures        atomic.Uint64
-	vlogGenerationRewriteExecBudgetSkips     atomic.Uint64
-	vlogGenerationRewriteLastSourceSegments  atomic.Int64
-	vlogGenerationRewriteLastBytesBefore     atomic.Int64
-	vlogGenerationRewriteLastBytesAfter      atomic.Int64
-	vlogGenerationRewriteLastRecordsCopied   atomic.Int64
-	vlogGenerationRewriteBytesIn             atomic.Uint64
-	vlogGenerationRewriteBytesOut            atomic.Uint64
-	vlogGenerationRewriteRuns                atomic.Uint64
-	vlogGenerationPostRewriteGCRuns          atomic.Uint64
-	vlogGenerationPostRewriteGCFailures      atomic.Uint64
-	vlogGenerationPostRewriteGCSegmentsDel   atomic.Uint64
-	vlogGenerationPostRewriteGCBytesDel      atomic.Uint64
-	vlogGenerationPostRewriteGCLastUnixNano  atomic.Int64
-	vlogGenerationGCSegmentsDeleted          atomic.Uint64
-	vlogGenerationGCBytesDeleted             atomic.Uint64
-	vlogGenerationGCRuns                     atomic.Uint64
-	vlogGenerationVacuumRuns                 atomic.Uint64
-	vlogGenerationVacuumFailures             atomic.Uint64
-	vlogGenerationLastVacuumUnixNano         atomic.Int64
-	vlogGenerationLastRewritePlanUnixNano    atomic.Int64
-	vlogGenerationLastRewriteUnixNano        atomic.Int64
-	vlogGenerationLastGCUnixNano             atomic.Int64
-	vlogGenerationLastCheckpointKickUnixNano atomic.Int64
-	vlogGenerationLastGCDryRunUnixNano       atomic.Int64
-	vlogGenerationLastGCDryRunBytesEligible  atomic.Int64
-	vlogGenerationLastGCDryRunSegsEligible   atomic.Int64
-	vlogGenerationChurnBytes                 atomic.Uint64
-	vlogGenerationSchedulerState             atomic.Uint32
-	vlogGenerationLastReason                 atomic.Uint32
-	vlogGenerationCheckpointKickRuns         atomic.Uint64
-	vlogGenerationCheckpointKickRewriteRuns  atomic.Uint64
-	vlogGenerationCheckpointKickGCRuns       atomic.Uint64
-	vlogGenerationRewriteQueueMu             sync.Mutex
-	vlogGenerationCheckpointKickActive       atomic.Bool
-	vlogGenerationRewriteQueue               []uint32
-	vlogGenerationRewriteLedger              []backenddb.ValueLogRewritePlanSegment
-	vlogGenerationRewriteQueueLoaded         bool
-	vlogGenerationLastChurnBps               atomic.Int64
-	vlogGenerationLastChurnSampleBytes       atomic.Uint64
-	vlogGenerationLastChurnSampleNS          atomic.Int64
+	disableJournal                                   bool
+	relaxedSync                                      bool
+	notifyError                                      func(error)
+	debugFlushPointers                               bool
+	debugFlushTiming                                 bool
+	debugPtrEligible                                 atomic.Int64
+	debugPtrUsed                                     atomic.Int64
+	debugPtrNoPtr                                    atomic.Int64
+	debugPtrDenied                                   atomic.Int64
+	debugPtrDisabled                                 atomic.Int64
+	checkpointRuns                                   atomic.Uint64
+	checkpointTotalNs                                atomic.Uint64
+	checkpointMaxNs                                  atomic.Uint64
+	checkpointNoopSkips                              atomic.Uint64
+	checkpointFlushMuWaitNs                          atomic.Uint64
+	checkpointFlushMuWaitMaxNs                       atomic.Uint64
+	checkpointAutoVacuumRuns                         atomic.Uint64
+	checkpointAutoVacuumLastCheckRun                 atomic.Uint64
+	checkpointAutoVacuumLastPages                    atomic.Uint64
+	checkpointAutoVacuumLastInternalP50              atomic.Uint64
+	checkpointAutoVacuumLastInternalAvg              atomic.Uint64
+	lastForegroundWriteUnixNano                      atomic.Int64
+	lastForegroundReadUnixNano                       atomic.Int64
+	foregroundReadStampCounter                       atomic.Uint32
+	activeForegroundIterators                        atomic.Int64
+	retainedPruneLastStartUnixNano                   atomic.Int64
+	retainedPruneMu                                  sync.Mutex
+	retainedPruneDone                                chan struct{}
+	vlogGenerationRemapSuccesses                     atomic.Uint64
+	vlogGenerationRemapFailures                      atomic.Uint64
+	vlogGenerationRewritePlanCalls                   atomic.Uint64
+	vlogGenerationRewritePlanSelectedSegs            atomic.Uint64
+	vlogGenerationRewritePlanSelectedLive            atomic.Uint64
+	vlogGenerationRewriteExecCalls                   atomic.Uint64
+	vlogGenerationRewriteExecFailures                atomic.Uint64
+	vlogGenerationRewriteExecBudgetSkips             atomic.Uint64
+	vlogGenerationRewriteLastSourceSegments          atomic.Int64
+	vlogGenerationRewriteLastBytesBefore             atomic.Int64
+	vlogGenerationRewriteLastBytesAfter              atomic.Int64
+	vlogGenerationRewriteLastRecordsCopied           atomic.Int64
+	vlogGenerationRewriteBytesIn                     atomic.Uint64
+	vlogGenerationRewriteBytesOut                    atomic.Uint64
+	vlogGenerationRewriteRuns                        atomic.Uint64
+	vlogGenerationPostRewriteGCRuns                  atomic.Uint64
+	vlogGenerationPostRewriteGCFailures              atomic.Uint64
+	vlogGenerationPostRewriteGCSegmentsDel           atomic.Uint64
+	vlogGenerationPostRewriteGCBytesDel              atomic.Uint64
+	vlogGenerationPostRewriteGCLastUnixNano          atomic.Int64
+	vlogGenerationPostRewriteGCFollowupPending       atomic.Bool
+	vlogGenerationPostRewriteGCFollowupArmedUnixNano atomic.Int64
+	vlogGenerationGCSegmentsDeleted                  atomic.Uint64
+	vlogGenerationGCBytesDeleted                     atomic.Uint64
+	vlogGenerationGCRuns                             atomic.Uint64
+	vlogGenerationVacuumRuns                         atomic.Uint64
+	vlogGenerationVacuumFailures                     atomic.Uint64
+	vlogGenerationLastVacuumUnixNano                 atomic.Int64
+	vlogGenerationLastRewritePlanUnixNano            atomic.Int64
+	vlogGenerationLastRewriteUnixNano                atomic.Int64
+	vlogGenerationLastGCUnixNano                     atomic.Int64
+	vlogGenerationLastCheckpointKickUnixNano         atomic.Int64
+	vlogGenerationLastGCDryRunUnixNano               atomic.Int64
+	vlogGenerationLastGCDryRunBytesEligible          atomic.Int64
+	vlogGenerationLastGCDryRunSegsEligible           atomic.Int64
+	vlogGenerationChurnBytes                         atomic.Uint64
+	vlogGenerationSchedulerState                     atomic.Uint32
+	vlogGenerationLastReason                         atomic.Uint32
+	vlogGenerationCheckpointKickRuns                 atomic.Uint64
+	vlogGenerationCheckpointKickRewriteRuns          atomic.Uint64
+	vlogGenerationCheckpointKickGCRuns               atomic.Uint64
+	vlogGenerationRewriteQueueMu                     sync.Mutex
+	vlogGenerationCheckpointKickActive               atomic.Bool
+	vlogGenerationRewriteQueue                       []uint32
+	vlogGenerationRewriteLedger                      []backenddb.ValueLogRewritePlanSegment
+	vlogGenerationRewriteQueueLoaded                 bool
+	vlogGenerationLastChurnBps                       atomic.Int64
+	vlogGenerationLastChurnSampleBytes               atomic.Uint64
+	vlogGenerationLastChurnSampleNS                  atomic.Int64
 	// Rewrite budget token bucket (bytes) for online maintenance. This lets us
 	// interpret ValueLogRewriteBudgetBytesPerSec as a true per-second bandwidth
 	// budget while still running maintenance at coarse intervals.
@@ -3902,12 +3904,13 @@ const (
 )
 
 const (
-	vlogGenerationLoopInterval              = 1 * time.Second
-	vlogGenerationGCEvery                   = 5
-	vlogGenerationGCMinBytes                = int64(1 << 20)
-	vlogGenerationRewriteMinInterval        = 30 * time.Second
-	vlogGenerationGCMinInterval             = 45 * time.Second
-	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
+	vlogGenerationLoopInterval               = 1 * time.Second
+	vlogGenerationGCEvery                    = 5
+	vlogGenerationGCMinBytes                 = int64(1 << 20)
+	vlogGenerationRewriteMinInterval         = 30 * time.Second
+	vlogGenerationGCMinInterval              = 45 * time.Second
+	vlogGenerationPostRewriteGCFollowupDelay = 5 * time.Second
+	vlogGenerationCheckpointKickMinInterval  = 5 * time.Second
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
 	vlogForegroundQuietWindow = 2 * time.Second
@@ -10523,6 +10526,15 @@ planned:
 				if gcStats.BytesDeleted > 0 {
 					db.vlogGenerationPostRewriteGCBytesDel.Add(uint64(gcStats.BytesDeleted))
 				}
+				if gcStats.SegmentsDeleted > 0 || gcStats.BytesDeleted > 0 {
+					db.vlogGenerationPostRewriteGCFollowupPending.Store(false)
+					db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Store(0)
+				} else {
+					// Some segments can become GC-eligible shortly after the rewrite
+					// barrier. Arm a one-shot follow-up GC opportunity.
+					db.vlogGenerationPostRewriteGCFollowupPending.Store(true)
+					db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Store(time.Now().UnixNano())
+				}
 				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
 				log.Printf(
 					"treedb: vlog_generation post_rewrite_gc_done db=%s reason=%s deleted_segments=%d deleted_bytes=%d",
@@ -10589,23 +10601,32 @@ planned:
 	if envBool(envDisableVlogGenerationGC) {
 		return
 	}
+	postRewriteGCFollowupReady := false
+	if db.vlogGenerationPostRewriteGCFollowupPending.Load() {
+		armed := db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Load()
+		if armed <= 0 {
+			postRewriteGCFollowupReady = true
+		} else if now.Sub(time.Unix(0, armed)) >= vlogGenerationPostRewriteGCFollowupDelay {
+			postRewriteGCFollowupReady = true
+		}
+	}
 	// GC is a best-effort background maintenance task. It requires a checkpoint
 	// barrier to be safe, and that barrier can be very expensive during sustained
 	// ingest/restore when the flush queue is non-empty. Avoid introducing long
 	// stalls by only running the GC path when the cached write queue is drained.
-	if queueLen != 0 {
+	if queueLen != 0 && !postRewriteGCFollowupReady {
 		return
 	}
 	gcer, ok := db.backend.(backendValueLogGCer)
 	if !ok {
 		return
 	}
-	needEligibilityEstimate := !runGC && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
+	needEligibilityEstimate := !runGC && !postRewriteGCFollowupReady && !db.shouldRunVlogGenerationGC(retained, reclaimable, churnBps)
 	now = time.Now()
 	lastGC := db.vlogGenerationLastGCUnixNano.Load()
 	if lastGC > 0 {
 		lastAt := time.Unix(0, lastGC)
-		if now.Sub(lastAt) < vlogGenerationGCMinInterval {
+		if now.Sub(lastAt) < vlogGenerationGCMinInterval && !postRewriteGCFollowupReady {
 			return
 		}
 	}
@@ -10640,6 +10661,10 @@ planned:
 		}
 		if gcStats.BytesDeleted > 0 {
 			db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
+		}
+		if postRewriteGCFollowupReady {
+			db.vlogGenerationPostRewriteGCFollowupPending.Store(false)
+			db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Store(0)
 		}
 		if gcStats.SegmentsDeleted > 0 || gcStats.BytesDeleted > 0 {
 			log.Printf(
@@ -10686,7 +10711,7 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	}
 	// Avoid forcing extra checkpoint boundaries when rewrite is clearly ineligible.
 	// Skip this fast-path when rewrite is disabled so GC-only kicks still run.
-	if !envBool(envDisableVlogGenerationRewrite) {
+	if !db.vlogGenerationPostRewriteGCFollowupPending.Load() && !envBool(envDisableVlogGenerationRewrite) {
 		if trigger := db.valueLogRewriteTriggerBytes; trigger > 0 {
 			retained, bytes := db.valueLogRetainedStats()
 			if bytes < trigger && retained < 2 {
@@ -15546,6 +15571,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.post_rewrite_gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCSegmentsDel.Load())
 	stats["treedb.cache.vlog_generation.post_rewrite_gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCBytesDel.Load())
 	stats["treedb.cache.vlog_generation.post_rewrite_gc.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCLastUnixNano.Load())
+	stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_pending"] = fmt.Sprintf("%t", db.vlogGenerationPostRewriteGCFollowupPending.Load())
+	stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_armed_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
