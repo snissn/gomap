@@ -492,6 +492,25 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), initialTokens-recorder.planResponse.SelectedBytesLive; got != want {
 		t.Fatalf("tokens after rewrite=%d want=%d", got, want)
 	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan.calls"]; got != "1" {
+		t.Fatalf("rewrite plan calls=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.calls"]; got != "1" {
+		t.Fatalf("rewrite exec calls=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_before"]; got != "128" {
+		t.Fatalf("rewrite last bytes_before=%q want 128", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_after"]; got != "64" {
+		t.Fatalf("rewrite last bytes_after=%q want 64", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_records_copied"]; got != "1" {
+		t.Fatalf("rewrite last records=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.runs"]; got != "1" {
+		t.Fatalf("post rewrite gc runs=%q want 1", got)
+	}
 }
 
 func TestVlogGenerationRewrite_ConsumesLedgerLiveBytesWhenAvailable(t *testing.T) {
@@ -679,6 +698,10 @@ func TestVlogGenerationRewriteQueue_DoesNotRunWhenBudgetEmpty(t *testing.T) {
 
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls with empty budget=%d want still=1", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.budget_skips"]; got != "1" {
+		t.Fatalf("rewrite exec budget_skips=%q want 1", got)
 	}
 }
 

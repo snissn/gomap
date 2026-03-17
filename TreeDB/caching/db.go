@@ -3772,9 +3772,24 @@ type DB struct {
 	retainedPruneDone                        chan struct{}
 	vlogGenerationRemapSuccesses             atomic.Uint64
 	vlogGenerationRemapFailures              atomic.Uint64
+	vlogGenerationRewritePlanCalls           atomic.Uint64
+	vlogGenerationRewritePlanSelectedSegs    atomic.Uint64
+	vlogGenerationRewritePlanSelectedLive    atomic.Uint64
+	vlogGenerationRewriteExecCalls           atomic.Uint64
+	vlogGenerationRewriteExecFailures        atomic.Uint64
+	vlogGenerationRewriteExecBudgetSkips     atomic.Uint64
+	vlogGenerationRewriteLastSourceSegments  atomic.Int64
+	vlogGenerationRewriteLastBytesBefore     atomic.Int64
+	vlogGenerationRewriteLastBytesAfter      atomic.Int64
+	vlogGenerationRewriteLastRecordsCopied   atomic.Int64
 	vlogGenerationRewriteBytesIn             atomic.Uint64
 	vlogGenerationRewriteBytesOut            atomic.Uint64
 	vlogGenerationRewriteRuns                atomic.Uint64
+	vlogGenerationPostRewriteGCRuns          atomic.Uint64
+	vlogGenerationPostRewriteGCFailures      atomic.Uint64
+	vlogGenerationPostRewriteGCSegmentsDel   atomic.Uint64
+	vlogGenerationPostRewriteGCBytesDel      atomic.Uint64
+	vlogGenerationPostRewriteGCLastUnixNano  atomic.Int64
 	vlogGenerationGCSegmentsDeleted          atomic.Uint64
 	vlogGenerationGCBytesDeleted             atomic.Uint64
 	vlogGenerationGCRuns                     atomic.Uint64
@@ -10186,6 +10201,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
 		planStart := time.Now()
+		db.vlogGenerationRewritePlanCalls.Add(1)
 		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 			MaxSourceSegments:    0,
 			MaxSourceBytes:       maxSourceBytes,
@@ -10226,6 +10242,10 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			reason = vlogGenerationReasonStaleRatio
 			rewritePlan = plan
 			haveRewritePlan = true
+			db.vlogGenerationRewritePlanSelectedSegs.Add(uint64(len(plan.SourceFileIDs)))
+			if plan.SelectedBytesLive > 0 {
+				db.vlogGenerationRewritePlanSelectedLive.Add(uint64(plan.SelectedBytesLive))
+			}
 		} else {
 			updatePlanTimestamp = true
 		}
@@ -10260,6 +10280,7 @@ planned:
 		// token-bucket mode, an empty bucket means "wait", not "run an unbounded
 		// rewrite".
 		if maxSourceBytes == 0 && db.vlogGenerationRewriteBudgetEnabled() {
+			db.vlogGenerationRewriteExecBudgetSkips.Add(1)
 			shouldRewrite = false
 		} else {
 			if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
@@ -10268,6 +10289,7 @@ planned:
 			if maxSourceBytes > 0 {
 				ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 				planStart := time.Now()
+				db.vlogGenerationRewritePlanCalls.Add(1)
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
 					MaxSourceSegments: 0,
 					MaxSourceBytes:    maxSourceBytes,
@@ -10304,6 +10326,10 @@ planned:
 				} else {
 					rewritePlan = plan
 					haveRewritePlan = true
+					db.vlogGenerationRewritePlanSelectedSegs.Add(uint64(len(plan.SourceFileIDs)))
+					if plan.SelectedBytesLive > 0 {
+						db.vlogGenerationRewritePlanSelectedLive.Add(uint64(plan.SelectedBytesLive))
+					}
 				}
 			}
 		}
@@ -10338,6 +10364,7 @@ planned:
 				// token-bucket mode, an empty bucket means "wait", not "run an
 				// unbounded rewrite".
 				if maxSourceBytes == 0 && db.vlogGenerationRewriteBudgetEnabled() {
+					db.vlogGenerationRewriteExecBudgetSkips.Add(1)
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 					return nil
 				}
@@ -10372,6 +10399,7 @@ planned:
 				// If a queued rewrite is pending, do not run it while the bucket is
 				// empty; that defeats the whole point of a bounded executor.
 				if budgetTokens <= 0 && len(rewriteQueue) > 0 {
+					db.vlogGenerationRewriteExecBudgetSkips.Add(1)
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 					return nil
 				}
@@ -10397,6 +10425,7 @@ planned:
 				// If the token bucket is enabled and empty, persist the plan/ledger but
 				// skip running the rewrite until we have budget to spend.
 				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
+					db.vlogGenerationRewriteExecBudgetSkips.Add(1)
 					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 					return nil
 				}
@@ -10430,13 +10459,19 @@ planned:
 				len(rewriteQueue),
 				processedLedgerLiveBytes,
 			)
+			db.vlogGenerationRewriteExecCalls.Add(1)
+			db.vlogGenerationRewriteLastSourceSegments.Store(int64(len(rewriteOpts.SourceFileIDs)))
 			rewriteStart := time.Now()
 			stats, err := rewriter.ValueLogRewriteOnline(ctx, rewriteOpts)
 			cancel()
 			if err != nil {
+				db.vlogGenerationRewriteExecFailures.Add(1)
 				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(time.Since(rewriteStart).Microseconds())/1000)
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
+			db.vlogGenerationRewriteLastBytesBefore.Store(stats.BytesBefore)
+			db.vlogGenerationRewriteLastBytesAfter.Store(stats.BytesAfter)
+			db.vlogGenerationRewriteLastRecordsCopied.Store(int64(stats.RecordsCopied))
 			db.debugVlogMaintf(
 				"rewrite_done reason=%s segments_before=%d segments_after=%d bytes_before=%d bytes_after=%d records=%d dur_ms=%.3f",
 				vlogGenerationReasonString(reason),
@@ -10455,13 +10490,22 @@ planned:
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				gcStart := time.Now()
-				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
+				gcStats, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
 					ProtectedPaths: db.valueLogProtectedPaths(),
 				})
 				gcCancel()
 				if gcErr != nil {
+					db.vlogGenerationPostRewriteGCFailures.Add(1)
 					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(time.Since(gcStart).Microseconds())/1000)
 					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
+				}
+				db.vlogGenerationPostRewriteGCRuns.Add(1)
+				db.vlogGenerationPostRewriteGCLastUnixNano.Store(time.Now().UnixNano())
+				if gcStats.SegmentsDeleted > 0 {
+					db.vlogGenerationPostRewriteGCSegmentsDel.Add(uint64(gcStats.SegmentsDeleted))
+				}
+				if gcStats.BytesDeleted > 0 {
+					db.vlogGenerationPostRewriteGCBytesDel.Add(uint64(gcStats.BytesDeleted))
 				}
 				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
 			}
@@ -15419,8 +15463,23 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan.calls"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCalls.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan.selected_segments_total"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedSegs.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan.selected_live_bytes_total"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelectedLive.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.calls"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecCalls.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.failures"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecFailures.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.budget_skips"] = fmt.Sprintf("%d", db.vlogGenerationRewriteExecBudgetSkips.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_source_segments"] = fmt.Sprintf("%d", db.vlogGenerationRewriteLastSourceSegments.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_before"] = fmt.Sprintf("%d", db.vlogGenerationRewriteLastBytesBefore.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_after"] = fmt.Sprintf("%d", db.vlogGenerationRewriteLastBytesAfter.Load())
+	stats["treedb.cache.vlog_generation.rewrite.exec.last_records_copied"] = fmt.Sprintf("%d", db.vlogGenerationRewriteLastRecordsCopied.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewritePlanUnixNano.Load())
 	stats["treedb.cache.vlog_generation.rewrite.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewriteUnixNano.Load())
+	stats["treedb.cache.vlog_generation.post_rewrite_gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCRuns.Load())
+	stats["treedb.cache.vlog_generation.post_rewrite_gc.failures"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCFailures.Load())
+	stats["treedb.cache.vlog_generation.post_rewrite_gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCSegmentsDel.Load())
+	stats["treedb.cache.vlog_generation.post_rewrite_gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCBytesDel.Load())
+	stats["treedb.cache.vlog_generation.post_rewrite_gc.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCLastUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationGCBytesDeleted.Load())
 	stats["treedb.cache.vlog_generation.gc.runs"] = fmt.Sprintf("%d", db.vlogGenerationGCRuns.Load())
