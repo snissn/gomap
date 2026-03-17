@@ -37,6 +37,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/template"
 	"github.com/snissn/gomap/TreeDB/tree"
+	"github.com/snissn/gomap/TreeDB/zipper"
 )
 
 var errDBClosing = errors.New("cachingdb: db closing")
@@ -410,6 +411,17 @@ func currentPoolPressureSnapshot() poolPressureSnapshot {
 	}
 	maybeTrimEntrySliceLeasesUnderPressure(snap.level, now)
 	return snap
+}
+
+func currentZipperParallelMergePressure() zipper.ParallelMergePressureLevel {
+	switch currentPoolPressureSnapshot().level {
+	case poolPressureCritical:
+		return zipper.ParallelMergePressureCritical
+	case poolPressureHigh:
+		return zipper.ParallelMergePressureHigh
+	default:
+		return zipper.ParallelMergePressureNormal
+	}
 }
 
 func scalePoolBudgetForPressure(base int64, level poolPressureLevel) int64 {
@@ -6729,6 +6741,18 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 			return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
 		}
 		setter.SetLeafPageLog(newCachingLeafPageLog(db, 0))
+	}
+	if opts.DisableWAL {
+		// Stage the adaptive gate on the fastest cached profile first. WAL-on
+		// modes keep the legacy zipper fan-out policy until benchmark data shows
+		// this pressure signal is neutral there as well.
+		if setter, ok := backend.(interface {
+			SetZipperParallelMergePressureSource(src zipper.ParallelMergePressureSource)
+		}); ok {
+			setter.SetZipperParallelMergePressureSource(func() zipper.ParallelMergePressureLevel {
+				return currentZipperParallelMergePressure()
+			})
+		}
 	}
 
 	// Publish initial memtable snapshot for lock-free reads.

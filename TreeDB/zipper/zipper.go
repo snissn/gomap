@@ -102,10 +102,21 @@ type Zipper struct {
 	indexInternalBaseDelta    bool
 	adaptiveLeafEncoding      bool
 	maintenanceOpsPerCoalesce int
+	parallelMergePressure     ParallelMergePressureSource
 
 	scratchMu    sync.Mutex
 	applyScratch *mergeScratch
 }
+
+type ParallelMergePressureLevel uint8
+
+const (
+	ParallelMergePressureNormal ParallelMergePressureLevel = iota
+	ParallelMergePressureHigh
+	ParallelMergePressureCritical
+)
+
+type ParallelMergePressureSource func() ParallelMergePressureLevel
 
 type Split struct {
 	Key    []byte
@@ -117,8 +128,15 @@ const (
 	mergeSplitKeyArenaKeepCap = 1 << 20
 	mergeOuterLeafPageInitCap = 16
 	mergeOuterLeafPageKeepCap = 128
-	mergeLeafPageScratchInit   = 16
-	mergeLeafPageScratchKeep   = 128
+	mergeLeafPageScratchInit  = 16
+	mergeLeafPageScratchKeep  = 128
+
+	mergeInternalMinParallelChildren         = 8
+	mergeInternalMinParallelOps              = 4096
+	mergeInternalHighPressureMinChildren     = 16
+	mergeInternalHighPressureMinOps          = 16 * 1024
+	mergeInternalCriticalPressureMinChildren = 32
+	mergeInternalCriticalPressureMinOps      = 32 * 1024
 )
 
 type mergeScratch struct {
@@ -587,6 +605,7 @@ func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 		indexInternalBaseDelta:    z.indexInternalBaseDelta,
 		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
 		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
+		parallelMergePressure:     z.parallelMergePressure,
 	}
 }
 
@@ -642,6 +661,48 @@ func (z *Zipper) SetAdaptiveLeafEncoding(enabled bool) {
 // Values <= 0 disable maintenance budgeting (full coalesce behavior).
 func (z *Zipper) SetMaintenanceOpsPerCoalesce(opsPerCoalesce int) {
 	z.maintenanceOpsPerCoalesce = opsPerCoalesce
+}
+
+// SetParallelMergePressureSource configures an optional pressure signal for the
+// internal-node merge fan-out gate. Nil preserves the baseline thresholds.
+func (z *Zipper) SetParallelMergePressureSource(src ParallelMergePressureSource) {
+	z.parallelMergePressure = src
+}
+
+func (z *Zipper) parallelMergePressureLevel() ParallelMergePressureLevel {
+	if z == nil || z.parallelMergePressure == nil {
+		return ParallelMergePressureNormal
+	}
+	switch level := z.parallelMergePressure(); level {
+	case ParallelMergePressureHigh, ParallelMergePressureCritical:
+		return level
+	default:
+		return ParallelMergePressureNormal
+	}
+}
+
+func internalMergeParallelThresholds(maintenance bool, pressure ParallelMergePressureLevel) (minChildren, minOps int) {
+	minChildren = mergeInternalMinParallelChildren
+	minOps = mergeInternalMinParallelOps
+	if maintenance {
+		return minChildren, minOps
+	}
+	switch pressure {
+	case ParallelMergePressureCritical:
+		return mergeInternalCriticalPressureMinChildren, mergeInternalCriticalPressureMinOps
+	case ParallelMergePressureHigh:
+		return mergeInternalHighPressureMinChildren, mergeInternalHighPressureMinOps
+	default:
+		return minChildren, minOps
+	}
+}
+
+func shouldUseParallelInternalMerge(childCount, opsCount, gomaxprocs int, maintenance bool, pressure ParallelMergePressureLevel) bool {
+	if gomaxprocs <= 1 {
+		return false
+	}
+	minChildren, minOps := internalMergeParallelThresholds(maintenance, pressure)
+	return childCount >= minChildren && opsCount >= minOps
 }
 
 func (z *Zipper) newLeafBuilder(data []byte, ops []batch.Entry) *node.Builder {
@@ -1400,11 +1461,17 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 
 	opIdx := 0
 
-	const (
-		minParallelChildren = 8
-		minParallelOps      = 4096
-	)
-	useParallel := int(count) >= minParallelChildren && len(ops) >= minParallelOps && runtime.GOMAXPROCS(0) > 1
+	gomaxprocs := runtime.GOMAXPROCS(0)
+	useParallel := shouldUseParallelInternalMerge(int(count), len(ops), gomaxprocs, maintenance, ParallelMergePressureNormal)
+	if useParallel && !maintenance {
+		pressure := z.parallelMergePressureLevel()
+		if pressure != ParallelMergePressureNormal {
+			// Under sampled heap pressure, stay on the streaming path unless the
+			// batch is materially larger. This avoids the childWork allocation and
+			// extra recursive fan-out on the restore/fast path.
+			useParallel = shouldUseParallelInternalMerge(int(count), len(ops), gomaxprocs, maintenance, pressure)
+		}
+	}
 
 	copyKeys := oldNode.InternalBaseDeltaEnabled()
 	var keyArena []byte
@@ -1607,7 +1674,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	}
 
 	if useParallel {
-		maxParallel := runtime.GOMAXPROCS(0)
+		maxParallel := gomaxprocs
 		if activeChildren > 0 && maxParallel > activeChildren {
 			maxParallel = activeChildren
 		}
