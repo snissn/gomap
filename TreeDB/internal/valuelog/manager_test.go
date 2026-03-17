@@ -225,6 +225,112 @@ func TestFileReadAppend_CountsGroupedFallbackReadAt(t *testing.T) {
 	}
 }
 
+func TestFileReadAppend_FallbackReusesDst(t *testing.T) {
+	tests := []struct {
+		name     string
+		compress bool
+		records  []Record
+		ptrIndex int
+		want     []byte
+	}{
+		{
+			name:     "plain",
+			compress: false,
+			records:  []Record{{RID: 1, Value: []byte("alpha")}},
+			ptrIndex: 0,
+			want:     []byte("alpha"),
+		},
+		{
+			name:     "grouped_compressed",
+			compress: true,
+			records: []Record{
+				{RID: 1, Value: bytes.Repeat([]byte("a"), 320)},
+				{RID: 2, Value: bytes.Repeat([]byte("b"), 320)},
+				{RID: 3, Value: bytes.Repeat([]byte("c"), 320)},
+				{RID: 4, Value: bytes.Repeat([]byte("d"), 320)},
+			},
+			ptrIndex: 2,
+			want:     bytes.Repeat([]byte("c"), 320),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			fileID, err := EncodeFileID(0, 1)
+			if err != nil {
+				t.Fatalf("EncodeFileID: %v", err)
+			}
+			path := filepath.Join(dir, "value-l0-000001.log")
+
+			writer, err := NewWriter(path, fileID)
+			if err != nil {
+				t.Fatalf("NewWriter: %v", err)
+			}
+			if tc.compress {
+				writer.SetBlockCompression(BlockCodecSnappy, true)
+			}
+
+			ptrs := make([]page.ValuePtr, len(tc.records))
+			if tc.compress {
+				out, stats, err := writer.AppendFrameWithStatsInto(0, nil, tc.records, ptrs)
+				if err != nil {
+					_ = writer.Close()
+					t.Fatalf("AppendFrameWithStatsInto: %v", err)
+				}
+				if !stats.Kept {
+					_ = writer.Close()
+					t.Fatalf("expected compressed frame to be kept")
+				}
+				ptrs = out
+			} else {
+				for i := range tc.records {
+					ptr, err := writer.Append(0, nil, tc.records[i].RID, tc.records[i].Value)
+					if err != nil {
+						_ = writer.Close()
+						t.Fatalf("Append: %v", err)
+					}
+					ptrs[i] = ptr
+				}
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatalf("Close writer: %v", err)
+			}
+
+			fh, err := os.Open(path)
+			if err != nil {
+				t.Fatalf("Open(%s): %v", path, err)
+			}
+			defer func() { _ = fh.Close() }()
+
+			f := &File{ID: fileID, Path: path, File: fh}
+			// Force ReadAppend down the fallback path without async remaps.
+			mapped := []byte{0}
+			f.mmapData.Store(mapped)
+			f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+
+			prefix := []byte("p:")
+			buf := make([]byte, len(prefix), len(prefix)+len(tc.want))
+			copy(buf, prefix)
+
+			got, err := f.ReadAppend(ptrs[tc.ptrIndex], false, buf)
+			if err != nil {
+				t.Fatalf("ReadAppend: %v", err)
+			}
+			want := append(append([]byte(nil), prefix...), tc.want...)
+			if !bytes.Equal(got, want) {
+				t.Fatalf("ReadAppend mismatch: got=%q want=%q", got, want)
+			}
+			if len(got) > 0 && &got[0] != &buf[0] {
+				t.Fatalf("ReadAppend did not reuse caller storage")
+			}
+			if got := f.mmapReadFallbackReadAt.Load(); got != 1 {
+				t.Fatalf("mmapReadFallbackReadAt=%d want 1", got)
+			}
+		})
+	}
+}
+
 func TestOpenFile_DoesNotEagerlyMap(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(0, 1)

@@ -578,15 +578,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		}
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
-			// Fallback to the full decoder (will allocate).
-			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err
-			}
-			oldLen := len(dst)
-			dst = grow(dst, len(val))
-			copy(dst[oldLen:], val)
-			return dst, nil
+			return f.readAppendViaReadAt(ptr, verifyCRC, dst)
 		}
 		ridBytes := k * 8
 		offsetBytes := (k + 1) * 4
@@ -644,18 +636,38 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 
 	// Slow path: use existing decoder and append.
 	f.mmapReadFallbackReadAt.Add(1)
-	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-	if err != nil {
-		return nil, err
-	}
-	oldLen := len(dst)
-	dst = grow(dst, len(val))
-	copy(dst[oldLen:], val)
-	return dst, nil
+	return f.readAppendViaReadAt(ptr, verifyCRC, dst)
 }
 
 func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
 	return f.ReadAppend(ptr, verifyCRC, dst)
+}
+
+func (f *File) readAppendViaReadAt(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
+	oldLen := len(dst)
+	tail, usedDst, err := ReadAtWithDictTo(
+		f.File,
+		ptr,
+		verifyCRC,
+		f.dictLookup,
+		f.templateLookup,
+		f.templateDefCache,
+		f.templateDecodeOpts,
+		dst[oldLen:oldLen:cap(dst)],
+	)
+	if err != nil {
+		return nil, err
+	}
+	if oldLen == 0 {
+		return tail, nil
+	}
+	if len(tail) == 0 {
+		return dst[:oldLen], nil
+	}
+	if usedDst {
+		return dst[:oldLen+len(tail)], nil
+	}
+	return append(dst[:oldLen], tail...), nil
 }
 
 func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]byte, error) {
