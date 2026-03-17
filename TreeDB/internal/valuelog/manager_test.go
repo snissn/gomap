@@ -149,7 +149,6 @@ func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(%s): %v", path, err)
 	}
-	defer func() { _ = fh.Close() }()
 
 	contents, err := os.ReadFile(path)
 	if err != nil {
@@ -158,6 +157,7 @@ func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	truncated := contents[:int(ptr.Offset)-1]
 
 	f := &File{ID: fileID, Path: path, File: fh}
+	defer func() { _ = f.Close() }()
 	f.mmapData.Store(truncated)
 	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(truncated))))
 
@@ -204,9 +204,9 @@ func TestFileReadAppend_CountsGroupedFallbackReadAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(%s): %v", path, err)
 	}
-	defer func() { _ = fh.Close() }()
 
 	f := &File{ID: fileID, Path: path, File: fh}
+	defer func() { _ = f.Close() }()
 	// Force ReadAppend to take the grouped fallback read path without spawning
 	// an async remap goroutine that can race with test file close in -race CI.
 	mapped := []byte{0}
