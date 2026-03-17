@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"runtime/metrics"
 	"sort"
 	"strconv"
@@ -74,6 +75,22 @@ var valueLogKeyLeases [][][]byte
 var batchArenaPoolBytes atomic.Int64
 var batchArenaPoolLastGC atomic.Uint64
 var batchArenaPoolBudgetState atomic.Value
+var batchArenaPoolSkipZeroBudgetTotal atomic.Uint64
+var batchArenaPoolDropBytesTotal atomic.Uint64
+var poolPressureState atomic.Value
+var poolPressureMu sync.Mutex
+var poolPressureLastLeaseTrimUnixNano atomic.Int64
+var poolPressureNormalSamplesTotal atomic.Uint64
+var poolPressureHighSamplesTotal atomic.Uint64
+var poolPressureCriticalSamplesTotal atomic.Uint64
+var entrySlicePoolTrimRunsTotal atomic.Uint64
+var entrySlicePoolTrimDropBytesTotal atomic.Uint64
+
+var poolPressureNow = time.Now
+var poolPressureReadMemStats = runtime.ReadMemStats
+var poolPressureMemoryLimit = func() int64 {
+	return debug.SetMemoryLimit(-1)
+}
 
 var runtimeNumGC = func() uint64 {
 	samples := []metrics.Sample{{Name: "/gc/cycles/total:gc-cycles"}}
@@ -87,6 +104,34 @@ var runtimeNumGC = func() uint64 {
 }
 var batchArenaPoolNumGC = runtimeNumGC
 var entrySlicePoolNumGC = runtimeNumGC
+
+type poolPressureLevel uint8
+
+const (
+	poolPressureNormal poolPressureLevel = iota
+	poolPressureHigh
+	poolPressureCritical
+)
+
+type poolPressureSnapshot struct {
+	sampledUnixNano    int64
+	level              poolPressureLevel
+	heapAllocBytes     uint64
+	heapInuseBytes     uint64
+	heapSysBytes       uint64
+	heapIdleUnreleased uint64
+	memoryLimitBytes   int64
+}
+
+const (
+	poolPressureRefreshInterval = 250 * time.Millisecond
+	// Treat high/critical pressure as heap residency (not alloc churn). These
+	// thresholds target restore-like peaks where pool retention can inflate RSS.
+	poolPressureHighHeapBytes     = uint64(4 << 30)
+	poolPressureCriticalHeapBytes = uint64(8 << 30)
+	poolPressureTrimInterval      = 2 * time.Second
+	poolPressureHighBudgetDivisor = int64(2)
+)
 
 func computeBatchArenaPoolBudgetBytes() int64 {
 	return computeBatchArenaPoolBudgetBytesForProcs(runtime.GOMAXPROCS(0))
@@ -118,6 +163,180 @@ func computeBatchArenaPoolBudgetBytesForProcs(procs int) int64 {
 		budget = maxBudgetBytes
 	}
 	return budget
+}
+
+func classifyPoolPressureLevel(usedBytes uint64, memoryLimitBytes int64) poolPressureLevel {
+	high := poolPressureHighHeapBytes
+	critical := poolPressureCriticalHeapBytes
+
+	if memoryLimitBytes > 0 {
+		limit := uint64(memoryLimitBytes)
+		if limit > 0 {
+			limitHigh := (limit * 70) / 100
+			limitCritical := (limit * 85) / 100
+			if limitHigh > 0 && limitHigh < high {
+				high = limitHigh
+			}
+			if limitCritical > 0 && limitCritical < critical {
+				critical = limitCritical
+			}
+			if critical < high {
+				critical = high
+			}
+		}
+	}
+
+	if usedBytes >= critical {
+		return poolPressureCritical
+	}
+	if usedBytes >= high {
+		return poolPressureHigh
+	}
+	return poolPressureNormal
+}
+
+func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
+	var ms runtime.MemStats
+	poolPressureReadMemStats(&ms)
+	heapIdleUnreleased := uint64(0)
+	if ms.HeapIdle > ms.HeapReleased {
+		heapIdleUnreleased = ms.HeapIdle - ms.HeapReleased
+	}
+	used := ms.HeapInuse
+	if ms.HeapAlloc > used {
+		used = ms.HeapAlloc
+	}
+	memLimit := poolPressureMemoryLimit()
+	level := classifyPoolPressureLevel(used, memLimit)
+	return poolPressureSnapshot{
+		sampledUnixNano:    sampledAt.UnixNano(),
+		level:              level,
+		heapAllocBytes:     ms.HeapAlloc,
+		heapInuseBytes:     ms.HeapInuse,
+		heapSysBytes:       ms.HeapSys,
+		heapIdleUnreleased: heapIdleUnreleased,
+		memoryLimitBytes:   memLimit,
+	}
+}
+
+func maybeTrimEntrySliceLeasesUnderPressure(level poolPressureLevel, sampledAt time.Time) {
+	if level == poolPressureNormal {
+		return
+	}
+	nowUnix := sampledAt.UnixNano()
+	last := poolPressureLastLeaseTrimUnixNano.Load()
+	if last != 0 && nowUnix-last < int64(poolPressureTrimInterval) {
+		return
+	}
+	if !poolPressureLastLeaseTrimUnixNano.CompareAndSwap(last, nowUnix) {
+		return
+	}
+
+	keepPerBucket := maxEntrySliceLeasesPerBucket
+	switch level {
+	case poolPressureCritical:
+		keepPerBucket = 0
+	case poolPressureHigh:
+		keepPerBucket = maxEntrySliceLeasesPerBucket / 8
+		if keepPerBucket < 2 {
+			keepPerBucket = 2
+		}
+	}
+
+	var droppedBytes int64
+	entrySliceLeaseMu.Lock()
+	for i := range entrySliceLeases {
+		leases := entrySliceLeases[i]
+		if len(leases) > keepPerBucket {
+			drop := len(leases) - keepPerBucket
+			for j := 0; j < drop; j++ {
+				if entries := leases[j]; entries != nil {
+					droppedBytes += int64(cap(entries)) * entrySliceEntrySizeBytes
+				}
+				leases[j] = nil
+			}
+			if keepPerBucket == 0 {
+				entrySliceLeases[i] = nil
+			} else {
+				entrySliceLeases[i] = leases[drop:]
+			}
+		}
+	}
+	entrySliceLeaseMu.Unlock()
+	entrySlicePoolTrimRunsTotal.Add(1)
+	if droppedBytes > 0 {
+		releaseEntrySlicePoolBytes(droppedBytes)
+		entrySlicePoolTrimDropBytesTotal.Add(uint64(droppedBytes))
+	}
+}
+
+func currentPoolPressureSnapshot() poolPressureSnapshot {
+	now := poolPressureNow()
+	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
+		if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
+			return cached
+		}
+	}
+
+	poolPressureMu.Lock()
+	defer poolPressureMu.Unlock()
+
+	now = poolPressureNow()
+	if cached, ok := poolPressureState.Load().(poolPressureSnapshot); ok {
+		if now.UnixNano()-cached.sampledUnixNano <= int64(poolPressureRefreshInterval) {
+			return cached
+		}
+	}
+
+	snap := samplePoolPressureSnapshot(now)
+	poolPressureState.Store(snap)
+	switch snap.level {
+	case poolPressureCritical:
+		poolPressureCriticalSamplesTotal.Add(1)
+	case poolPressureHigh:
+		poolPressureHighSamplesTotal.Add(1)
+	default:
+		poolPressureNormalSamplesTotal.Add(1)
+	}
+	maybeTrimEntrySliceLeasesUnderPressure(snap.level, now)
+	return snap
+}
+
+func scalePoolBudgetForPressure(base int64, level poolPressureLevel) int64 {
+	if base <= 0 {
+		return 0
+	}
+	switch level {
+	case poolPressureCritical:
+		return 0
+	case poolPressureHigh:
+		return base / poolPressureHighBudgetDivisor
+	default:
+		return base
+	}
+}
+
+func currentBatchArenaRetentionBudgetBytes() int64 {
+	base := currentBatchArenaPoolBudgetBytes()
+	level := currentPoolPressureSnapshot().level
+	return scalePoolBudgetForPressure(base, level)
+}
+
+func currentEntrySlicePoolBudgetBytes() int64 {
+	base := entrySlicePoolBudgetBytes
+	level := currentPoolPressureSnapshot().level
+	return scalePoolBudgetForPressure(base, level)
+}
+
+func poolPressureLevelString(level poolPressureLevel) string {
+	switch level {
+	case poolPressureCritical:
+		return "critical"
+	case poolPressureHigh:
+		return "high"
+	default:
+		return "normal"
+	}
 }
 
 func currentBatchArenaPoolBudgetBytes() int64 {
@@ -162,6 +381,7 @@ type batchArenaPoolBudgetCache struct {
 
 func init() {
 	batchArenaPoolBudgetState.Store(batchArenaPoolBudgetCache{})
+	poolPressureState.Store(poolPressureSnapshot{})
 }
 
 func noteBatchArenaPoolGC(numGC uint64) {
@@ -461,28 +681,32 @@ func putBatchArena(buf []byte) {
 	if !ok {
 		return
 	}
-	if budget := currentBatchArenaPoolBudgetBytes(); budget > 0 {
-		size := int64(cap(buf))
-		noteEpoch := false
-		for {
-			held := batchArenaPoolBytes.Load()
-			if held+size > budget {
-				before := held
-				maybeResetBatchArenaPoolBytesAfterGC()
-				held = batchArenaPoolBytes.Load()
-				if held == before || held+size > budget {
-					return
-				}
-				continue
+	budget := currentBatchArenaRetentionBudgetBytes()
+	if budget <= 0 {
+		batchArenaPoolSkipZeroBudgetTotal.Add(1)
+		return
+	}
+	size := int64(cap(buf))
+	noteEpoch := false
+	for {
+		held := batchArenaPoolBytes.Load()
+		if held+size > budget {
+			before := held
+			maybeResetBatchArenaPoolBytesAfterGC()
+			held = batchArenaPoolBytes.Load()
+			if held == before || held+size > budget {
+				batchArenaPoolDropBytesTotal.Add(uint64(size))
+				return
 			}
-			if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
-				noteEpoch = held == 0
-				break
-			}
+			continue
 		}
-		if noteEpoch {
-			noteBatchArenaPoolGC(batchArenaPoolNumGC())
+		if batchArenaPoolBytes.CompareAndSwap(held, held+size) {
+			noteEpoch = held == 0
+			break
 		}
+	}
+	if noteEpoch {
+		noteBatchArenaPoolGC(batchArenaPoolNumGC())
 	}
 	batchArenaPools[idx].Put(buf[:0])
 }
@@ -3728,26 +3952,30 @@ type DB struct {
 	maintenanceActive atomic.Bool
 
 	// Level 0 (Memory)
-	mutableShards           []memShard
-	mutableShardMask        uint64
-	mutableBytes            atomic.Int64
-	mutableThreshold        atomic.Int64
-	rotatePending           atomic.Bool
-	queue                   []memtable.Table
-	queueShardIDs           []uint16
-	queueLaneIDs            []uint16
-	queueIDs                []uint64
-	queueEnqueueNS          []int64
-	nextQueueID             atomic.Uint64
-	batchEntryHint          atomic.Int32
-	batchCopyBytesHint      atomic.Int32
-	batchArenaLeaseMu       sync.Mutex
-	batchArenaLeasesByMem   map[memtable.Table][]*batchArenaLease
-	batchArenaLeaseBytes    atomic.Int64
-	batchArenaLeaseBytesMax atomic.Int64
-	batchEntriesPool        sync.Pool
-	batchShardEntriesPool   sync.Pool
-	batchIntPool            sync.Pool
+	mutableShards                 []memShard
+	mutableShardMask              uint64
+	mutableBytes                  atomic.Int64
+	mutableThreshold              atomic.Int64
+	rotatePending                 atomic.Bool
+	queue                         []memtable.Table
+	queueShardIDs                 []uint16
+	queueLaneIDs                  []uint16
+	queueIDs                      []uint64
+	queueEnqueueNS                []int64
+	nextQueueID                   atomic.Uint64
+	batchEntryHint                atomic.Int32
+	batchCopyBytesHint            atomic.Int32
+	batchArenaLeaseMu             sync.Mutex
+	batchArenaLeasesByMem         map[memtable.Table][]*batchArenaLease
+	batchArenaLeaseBytes          atomic.Int64
+	batchArenaLeaseBytesMax       atomic.Int64
+	batchArenaAllocRequestedBytes atomic.Uint64
+	batchArenaAllocClassBytes     atomic.Uint64
+	batchArenaUsedBytes           atomic.Uint64
+	batchArenaTailWasteBytes      atomic.Uint64
+	batchEntriesPool              sync.Pool
+	batchShardEntriesPool         sync.Pool
+	batchIntPool                  sync.Pool
 
 	// memtables is an RCU-style snapshot of (mutable, queue, queueRanges).
 	// Readers load it atomically to avoid holding db.mu around memtable access.
@@ -6444,7 +6672,7 @@ func reserveEntrySlicePoolBytes(bytes int64) (ok, transitionedFromZero bool) {
 	if bytes <= 0 {
 		return true, false
 	}
-	budget := entrySlicePoolBudgetBytes
+	budget := currentEntrySlicePoolBudgetBytes()
 	if budget <= 0 {
 		return false, false
 	}
@@ -15577,26 +15805,65 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.memtable_view.deferred_oldest_age_ms"] = fmt.Sprintf("%.3f", memViewOldestDeferredAgeMS)
 	stats["treedb.cache.memtable_warmup_active"] = fmt.Sprintf("%t", memtableWarmupActive)
 	stats["treedb.cache.max_queued_memtables"] = fmt.Sprintf("%d", maxQueued)
+	poolPressure := currentPoolPressureSnapshot()
+	arenaBaseBudget := currentBatchArenaPoolBudgetBytes()
+	arenaEffectiveBudget := scalePoolBudgetForPressure(arenaBaseBudget, poolPressure.level)
+	entrySliceBaseBudget := entrySlicePoolBudgetBytes
+	entrySliceEffectiveBudget := scalePoolBudgetForPressure(entrySliceBaseBudget, poolPressure.level)
 	arenaPoolBytes := batchArenaPoolBytes.Load()
 	arenaLeasedBytes := db.batchArenaLeaseBytes.Load()
-	arenaPoolBudget := fmt.Sprintf("%d", currentBatchArenaPoolBudgetBytes())
+	arenaAllocRequestedBytes := db.batchArenaAllocRequestedBytes.Load()
+	arenaAllocClassBytes := db.batchArenaAllocClassBytes.Load()
+	arenaUsedBytes := db.batchArenaUsedBytes.Load()
+	arenaTailWasteBytes := db.batchArenaTailWasteBytes.Load()
+	arenaPoolBudget := fmt.Sprintf("%d", arenaBaseBudget)
+	arenaPoolBudgetEffective := fmt.Sprintf("%d", arenaEffectiveBudget)
 	arenaPoolEstimate := fmt.Sprintf("%d", arenaPoolBytes)
 	arenaLeased := fmt.Sprintf("%d", arenaLeasedBytes)
 	arenaLeasedMax := fmt.Sprintf("%d", db.batchArenaLeaseBytesMax.Load())
 	stats["treedb.cache.batch_arena.pool_budget_bytes"] = arenaPoolBudget
+	stats["treedb.cache.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.cache.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
 	stats["treedb.cache.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.cache.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.cache.batch_arena.pool_plus_db_leases_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
+	stats["treedb.cache.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
+	stats["treedb.cache.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
+	stats["treedb.cache.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
+	stats["treedb.cache.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.cache.batch_arena.pool_skip_zero_budget_total"] = fmt.Sprintf("%d", batchArenaPoolSkipZeroBudgetTotal.Load())
+	stats["treedb.cache.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
 	stats["treedb.process.batch_arena.pool_budget_bytes"] = arenaPoolBudget
+	stats["treedb.process.batch_arena.pool_budget_effective_bytes"] = arenaPoolBudgetEffective
 	stats["treedb.process.batch_arena.pool_bytes_estimate"] = arenaPoolEstimate
 	stats["treedb.process.batch_arena.leased_bytes"] = arenaLeased
 	stats["treedb.process.batch_arena.leased_bytes_max"] = arenaLeasedMax
 	stats["treedb.process.batch_arena.retained_bytes_estimate"] = fmt.Sprintf("%d", arenaPoolBytes+arenaLeasedBytes)
-	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.process.batch_arena.alloc_requested_bytes_total"] = fmt.Sprintf("%d", arenaAllocRequestedBytes)
+	stats["treedb.process.batch_arena.alloc_class_bytes_total"] = fmt.Sprintf("%d", arenaAllocClassBytes)
+	stats["treedb.process.batch_arena.used_bytes_total"] = fmt.Sprintf("%d", arenaUsedBytes)
+	stats["treedb.process.batch_arena.tail_waste_bytes_total"] = fmt.Sprintf("%d", arenaTailWasteBytes)
+	stats["treedb.process.batch_arena.pool_skip_zero_budget_total"] = fmt.Sprintf("%d", batchArenaPoolSkipZeroBudgetTotal.Load())
+	stats["treedb.process.batch_arena.pool_drop_bytes_total"] = fmt.Sprintf("%d", batchArenaPoolDropBytesTotal.Load())
+	stats["treedb.cache.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
+	stats["treedb.cache.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.cache.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
-	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySlicePoolBudgetBytes)
+	stats["treedb.cache.entry_slice.trim_runs_total"] = fmt.Sprintf("%d", entrySlicePoolTrimRunsTotal.Load())
+	stats["treedb.cache.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
+	stats["treedb.process.entry_slice.pool_budget_bytes"] = fmt.Sprintf("%d", entrySliceBaseBudget)
+	stats["treedb.process.entry_slice.pool_budget_effective_bytes"] = fmt.Sprintf("%d", entrySliceEffectiveBudget)
 	stats["treedb.process.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
+	stats["treedb.process.entry_slice.trim_runs_total"] = fmt.Sprintf("%d", entrySlicePoolTrimRunsTotal.Load())
+	stats["treedb.process.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
+	stats["treedb.process.memory.pool_pressure_level"] = poolPressureLevelString(poolPressure.level)
+	stats["treedb.process.memory.heap_alloc_bytes"] = fmt.Sprintf("%d", poolPressure.heapAllocBytes)
+	stats["treedb.process.memory.heap_inuse_bytes"] = fmt.Sprintf("%d", poolPressure.heapInuseBytes)
+	stats["treedb.process.memory.heap_sys_bytes"] = fmt.Sprintf("%d", poolPressure.heapSysBytes)
+	stats["treedb.process.memory.heap_idle_unreleased_bytes"] = fmt.Sprintf("%d", poolPressure.heapIdleUnreleased)
+	stats["treedb.process.memory.gomemlimit_bytes"] = fmt.Sprintf("%d", poolPressure.memoryLimitBytes)
+	stats["treedb.process.memory.pool_pressure_normal_samples_total"] = fmt.Sprintf("%d", poolPressureNormalSamplesTotal.Load())
+	stats["treedb.process.memory.pool_pressure_high_samples_total"] = fmt.Sprintf("%d", poolPressureHighSamplesTotal.Load())
+	stats["treedb.process.memory.pool_pressure_critical_samples_total"] = fmt.Sprintf("%d", poolPressureCriticalSamplesTotal.Load())
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -16763,6 +17030,32 @@ func (db *DB) observeBatchCopyBytes(n int) {
 	}
 }
 
+func (db *DB) noteBatchArenaChunkAlloc(requestedCap, classCap int) {
+	if db == nil {
+		return
+	}
+	if requestedCap > 0 {
+		db.batchArenaAllocRequestedBytes.Add(uint64(requestedCap))
+	}
+	if classCap > 0 {
+		db.batchArenaAllocClassBytes.Add(uint64(classCap))
+	}
+}
+
+func (db *DB) noteBatchArenaChunkFinalize(used, classCap int) {
+	if db == nil || classCap <= 0 {
+		return
+	}
+	if used < 0 {
+		used = 0
+	}
+	if used > classCap {
+		used = classCap
+	}
+	db.batchArenaUsedBytes.Add(uint64(used))
+	db.batchArenaTailWasteBytes.Add(uint64(classCap - used))
+}
+
 func (db *DB) getBatchEntries(minCap int) []batch.Entry {
 	if minCap < 0 {
 		minCap = 0
@@ -16951,6 +17244,9 @@ func (b *Batch) drainCopyArenaChunks() [][]byte {
 	if b == nil {
 		return nil
 	}
+	if b.db != nil && cap(b.copyArena) > 0 {
+		b.db.noteBatchArenaChunkFinalize(len(b.copyArena), cap(b.copyArena))
+	}
 	chunks := b.copyArenaChunks
 	b.copyArenaChunks = nil
 	b.copyArena = nil
@@ -16972,6 +17268,9 @@ func (b *Batch) recycleCopyArenaChunks() {
 func (b *Batch) drainPtrCopyArenaChunks() [][]byte {
 	if b == nil {
 		return nil
+	}
+	if b.db != nil && cap(b.ptrCopyArena) > 0 {
+		b.db.noteBatchArenaChunkFinalize(len(b.ptrCopyArena), cap(b.ptrCopyArena))
 	}
 	chunks := b.ptrCopyArenaChunks
 	b.ptrCopyArenaChunks = nil
@@ -17013,6 +17312,9 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 		return nil
 	}
 	if cap(*arena)-len(*arena) < n {
+		if b != nil && b.db != nil && cap(*arena) > 0 {
+			b.db.noteBatchArenaChunkFinalize(len(*arena), cap(*arena))
+		}
 		chunkCap := cap(*arena) * 2
 		if chunkCap < batchCopyArenaMinChunk {
 			chunkCap = batchCopyArenaMinChunk
@@ -17037,6 +17339,9 @@ func (b *Batch) arenaCopyInto(arena *[]byte, chunks *[][]byte, copyBytes *int, n
 		// Switch to a fresh chunk when exhausted so existing entry slices keep
 		// their backing arrays without per-op allocations.
 		chunk := getBatchArena(chunkCap)
+		if b != nil && b.db != nil {
+			b.db.noteBatchArenaChunkAlloc(chunkCap, cap(chunk))
+		}
 		*arena = chunk[:0]
 		*chunks = append(*chunks, *arena)
 	}

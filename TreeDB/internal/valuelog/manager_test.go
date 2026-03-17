@@ -122,7 +122,11 @@ func TestFileReadAppend_CountsGroupedFallbackReadAt(t *testing.T) {
 
 	f := &File{ID: fileID, Path: path, File: fh}
 	defer func() { _ = f.Close() }()
-	f.mmapData.Store([]byte(nil))
+	// Force ReadAppend to take the grouped fallback read path without spawning
+	// an async remap goroutine that can race with test file close in -race CI.
+	mapped := []byte{0}
+	f.mmapData.Store(mapped)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
 
 	got, err := f.ReadAppend(ptrs[1], false, nil)
 	if err != nil {
