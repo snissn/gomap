@@ -11696,6 +11696,7 @@ func (db *DB) Close() error {
 	}
 
 	db.waitForRetainedValueLogPrune()
+	db.logVlogGenerationSummaryOnClose()
 	if err := db.backend.Close(); err != nil {
 		errs = append(errs, err)
 	}
@@ -11710,6 +11711,39 @@ func (db *DB) Close() error {
 		errs = append(errs, bgErr)
 	}
 	return errors.Join(errs...)
+}
+
+func (db *DB) logVlogGenerationSummaryOnClose() {
+	if db == nil {
+		return
+	}
+	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	log.Printf(
+		"treedb: vlog_generation summary db=%s rewrite_plan_calls=%d rewrite_plan_selected_segments=%d rewrite_plan_selected_live_bytes=%d rewrite_exec_calls=%d rewrite_exec_failures=%d rewrite_exec_budget_skips=%d rewrite_runs=%d rewrite_bytes_in=%d rewrite_bytes_out=%d rewrite_last_source_segments=%d rewrite_last_bytes_before=%d rewrite_last_bytes_after=%d rewrite_last_records=%d post_rewrite_gc_runs=%d post_rewrite_gc_failures=%d post_rewrite_gc_deleted_segments=%d post_rewrite_gc_deleted_bytes=%d gc_runs=%d gc_deleted_segments=%d gc_deleted_bytes=%d",
+		db.dir,
+		db.vlogGenerationRewritePlanCalls.Load(),
+		db.vlogGenerationRewritePlanSelectedSegs.Load(),
+		db.vlogGenerationRewritePlanSelectedLive.Load(),
+		db.vlogGenerationRewriteExecCalls.Load(),
+		db.vlogGenerationRewriteExecFailures.Load(),
+		db.vlogGenerationRewriteExecBudgetSkips.Load(),
+		db.vlogGenerationRewriteRuns.Load(),
+		db.vlogGenerationRewriteBytesIn.Load(),
+		db.vlogGenerationRewriteBytesOut.Load(),
+		db.vlogGenerationRewriteLastSourceSegments.Load(),
+		db.vlogGenerationRewriteLastBytesBefore.Load(),
+		db.vlogGenerationRewriteLastBytesAfter.Load(),
+		db.vlogGenerationRewriteLastRecordsCopied.Load(),
+		db.vlogGenerationPostRewriteGCRuns.Load(),
+		db.vlogGenerationPostRewriteGCFailures.Load(),
+		db.vlogGenerationPostRewriteGCSegmentsDel.Load(),
+		db.vlogGenerationPostRewriteGCBytesDel.Load(),
+		db.vlogGenerationGCRuns.Load(),
+		db.vlogGenerationGCSegmentsDeleted.Load(),
+		db.vlogGenerationGCBytesDeleted.Load(),
+	)
 }
 func (db *DB) Set(key, value []byte) error {
 	if len(key) == 0 {
