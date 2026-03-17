@@ -157,12 +157,12 @@ const (
 	postFlushBatchArenaTargetBytes = int64(64 << 20)
 	postFlushEntrySliceTargetBytes = int64(64 << 20)
 	// Checkpoint trim is intentionally stricter.
-	postCheckpointBatchArenaTargetBytes = int64(32 << 20)
-	postCheckpointEntrySliceTargetBytes = int64(32 << 20)
-	postFlushEntrySliceLeaseKeepPerBucket = 8
+	postCheckpointBatchArenaTargetBytes        = int64(32 << 20)
+	postCheckpointEntrySliceTargetBytes        = int64(32 << 20)
+	postFlushEntrySliceLeaseKeepPerBucket      = 8
 	postCheckpointEntrySliceLeaseKeepPerBucket = 2
-	postFlushAppendOnlyMemLeaseKeep = 8
-	postCheckpointAppendOnlyMemLeaseKeep = 2
+	postFlushAppendOnlyMemLeaseKeep            = 8
+	postCheckpointAppendOnlyMemLeaseKeep       = 2
 )
 
 func computeBatchArenaPoolBudgetBytes() int64 {
