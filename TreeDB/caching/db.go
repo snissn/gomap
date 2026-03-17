@@ -10502,7 +10502,11 @@ planned:
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				gcStart := time.Now()
 				gcStats, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
-					ProtectedPaths: db.valueLogProtectedPaths(),
+					// Post-rewrite GC should only protect paths that may still be
+					// referenced by in-memory mutable/queued state. Protecting the
+					// broader retained set here can defer reclaim of freshly
+					// rewritten source segments.
+					ProtectedPaths: db.valueLogInUsePaths(),
 				})
 				gcCancel()
 				if gcErr != nil {

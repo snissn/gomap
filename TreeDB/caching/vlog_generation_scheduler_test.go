@@ -299,6 +299,8 @@ type rewriteBudgetRecordingBackend struct {
 	rewriteCalls    int
 	rewriteResponse backenddb.ValueLogRewriteStats
 	rewriteErr      error
+	gcOpts          []backenddb.ValueLogGCOptions
+	gcCalls         int
 }
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -321,6 +323,17 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Contex
 	return stats, err
 }
 
+func (b *rewriteBudgetRecordingBackend) ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error) {
+	b.mu.Lock()
+	b.gcOpts = append(b.gcOpts, cloneGCOptsForTest(opts))
+	b.gcCalls++
+	b.mu.Unlock()
+	if b.DB == nil {
+		return backenddb.ValueLogGCStats{}, nil
+	}
+	return b.DB.ValueLogGC(ctx, opts)
+}
+
 func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRewriteOnlineOptions, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -334,10 +347,24 @@ func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backen
 	return cloned
 }
 
+func cloneGCOptsForTest(opts backenddb.ValueLogGCOptions) backenddb.ValueLogGCOptions {
+	cloned := opts
+	cloned.ProtectedPaths = append([]string(nil), opts.ProtectedPaths...)
+	return cloned
+}
+
 func (b *rewriteBudgetRecordingBackend) recordedPlan() (backenddb.ValueLogRewriteOnlineOptions, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.planOpts, b.planCalls
+}
+
+func (b *rewriteBudgetRecordingBackend) recordedGC() ([]backenddb.ValueLogGCOptions, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]backenddb.ValueLogGCOptions, len(b.gcOpts))
+	copy(out, b.gcOpts)
+	return out, b.gcCalls
 }
 
 func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
@@ -510,6 +537,63 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.runs"]; got != "1" {
 		t.Fatalf("post rewrite gc runs=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationRewrite_PostRewriteGC_UsesInUsePathsOnly(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 64,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	retainedOnlyPath := filepath.Join(dir, "maindb", "wal", "value-l9-999999.log")
+	db.valueLogMu.Lock()
+	if db.valueLogRetain == nil {
+		db.valueLogRetain = make(map[string]struct{})
+	}
+	db.valueLogRetain[retainedOnlyPath] = struct{}{}
+	db.valueLogMu.Unlock()
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, rewriteCalls := recorder.recordedRewrite(); rewriteCalls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", rewriteCalls)
+	}
+	gcOpts, gcCalls := recorder.recordedGC()
+	if gcCalls == 0 {
+		t.Fatalf("post-rewrite gc calls=%d want>=1", gcCalls)
+	}
+	realGCCalls := 0
+	for _, call := range gcOpts {
+		if call.DryRun {
+			continue
+		}
+		realGCCalls++
+		for _, protected := range call.ProtectedPaths {
+			if protected == retainedOnlyPath {
+				t.Fatalf("post-rewrite gc unexpectedly protected retained-only path: %s", protected)
+			}
+		}
+	}
+	if realGCCalls == 0 {
+		t.Fatalf("post-rewrite real gc calls=%d want>=1", realGCCalls)
 	}
 }
 
