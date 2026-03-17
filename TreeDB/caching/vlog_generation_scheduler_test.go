@@ -1276,6 +1276,10 @@ func TestVlogGenerationGC_PostRewriteFollowupBypassesMinInterval(t *testing.T) {
 	if db.vlogGenerationPostRewriteGCFollowupPending.Load() {
 		t.Fatalf("expected followup pending to clear after followup GC run")
 	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_runs"]; got != "1" {
+		t.Fatalf("followup runs=%q want 1", got)
+	}
 }
 
 func TestCheckpoint_KicksVlogGenerationGCFollowupWhenRewriteIneligible(t *testing.T) {
@@ -1349,6 +1353,9 @@ func TestCheckpoint_KicksVlogGenerationGCFollowupWhenRewriteIneligible(t *testin
 	}
 	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_pending"]; got != "false" {
 		t.Fatalf("followup pending=%q want false", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_runs"]; got != "1" {
+		t.Fatalf("followup runs=%q want 1", got)
 	}
 }
 

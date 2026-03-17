@@ -3791,6 +3791,8 @@ type DB struct {
 	vlogGenerationPostRewriteGCSegmentsDel           atomic.Uint64
 	vlogGenerationPostRewriteGCBytesDel              atomic.Uint64
 	vlogGenerationPostRewriteGCLastUnixNano          atomic.Int64
+	vlogGenerationPostRewriteGCFollowupArmedTotal    atomic.Uint64
+	vlogGenerationPostRewriteGCFollowupRuns          atomic.Uint64
 	vlogGenerationPostRewriteGCFollowupPending       atomic.Bool
 	vlogGenerationPostRewriteGCFollowupArmedUnixNano atomic.Int64
 	vlogGenerationGCSegmentsDeleted                  atomic.Uint64
@@ -10534,6 +10536,7 @@ planned:
 					// barrier. Arm a one-shot follow-up GC opportunity.
 					db.vlogGenerationPostRewriteGCFollowupPending.Store(true)
 					db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Store(time.Now().UnixNano())
+					db.vlogGenerationPostRewriteGCFollowupArmedTotal.Add(1)
 				}
 				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
 				log.Printf(
@@ -10663,6 +10666,7 @@ planned:
 			db.vlogGenerationGCBytesDeleted.Add(uint64(gcStats.BytesDeleted))
 		}
 		if postRewriteGCFollowupReady {
+			db.vlogGenerationPostRewriteGCFollowupRuns.Add(1)
 			db.vlogGenerationPostRewriteGCFollowupPending.Store(false)
 			db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Store(0)
 		}
@@ -15571,6 +15575,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.post_rewrite_gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCSegmentsDel.Load())
 	stats["treedb.cache.vlog_generation.post_rewrite_gc.deleted_bytes"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCBytesDel.Load())
 	stats["treedb.cache.vlog_generation.post_rewrite_gc.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCLastUnixNano.Load())
+	stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_armed_total"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCFollowupArmedTotal.Load())
+	stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_runs"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCFollowupRuns.Load())
 	stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_pending"] = fmt.Sprintf("%t", db.vlogGenerationPostRewriteGCFollowupPending.Load())
 	stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_armed_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())
