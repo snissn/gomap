@@ -4217,9 +4217,10 @@ type memtableView struct {
 const appendOnlyEstimatedBytesPerEntryDefault = 96
 
 // maxAppendOnlyMemLeases bounds strong references to recycled append-only
-// memtables. Keeping this too high can retain large entry slices after
-// short-lived spikes (e.g. state-sync restore), inflating heap high-water.
-const maxAppendOnlyMemLeases = 8
+// memtables. A very small bound forces frequent fallback to sync.Pool under
+// rotate/checkpoint-heavy write workloads, which regresses entry-slice reuse
+// and increases allocation churn.
+const maxAppendOnlyMemLeases = 32
 
 func updateInt64Max(dst *atomic.Int64, value int64) {
 	for {
