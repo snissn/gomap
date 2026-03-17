@@ -1271,8 +1271,11 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	}
 
 	children := getChildWorkSlice(int(count))
-	defer putChildWorkSlice(children)
+	defer func() {
+		putChildWorkSlice(children)
+	}()
 
+	activeChildren := 0
 	for i := uint16(0); i < count; i++ {
 		key, childID, err := oldNode.GetInternalEntryView(i)
 		if err != nil {
@@ -1309,11 +1312,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 			break
 		}
 		children[i].ops = ops[startOpIdx:opIdx]
-	}
-
-	activeChildren := 0
-	for i := range children {
-		if len(children[i].ops) > 0 {
+		if useParallel && len(children[i].ops) > 0 {
 			activeChildren++
 		}
 	}
