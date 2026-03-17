@@ -35,6 +35,31 @@ func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
 	}
 }
 
+func TestManagerRemapStatsDetailedAggregatesCounters(t *testing.T) {
+	mgr := &Manager{
+		files: map[uint32]*File{
+			1: {},
+			2: {},
+		},
+	}
+	mgr.files[1].remapCount.Add(3)
+	mgr.files[1].deadMappingsCount.Add(5)
+	mgr.files[1].deadMappingsBytes.Add(7)
+	mgr.files[2].remapCount.Add(11)
+	mgr.files[2].deadMappingsCount.Add(13)
+	mgr.files[2].deadMappingsBytes.Add(17)
+
+	remaps, deadMappings, deadBytes := mgr.RemapStatsDetailed()
+	if remaps != 14 || deadMappings != 18 || deadBytes != 24 {
+		t.Fatalf("RemapStatsDetailed mismatch: remaps=%d deadMappings=%d deadBytes=%d", remaps, deadMappings, deadBytes)
+	}
+
+	remaps2, deadMappings2 := mgr.RemapStats()
+	if remaps2 != remaps || deadMappings2 != deadMappings {
+		t.Fatalf("RemapStats mismatch: remaps=%d/%d deadMappings=%d/%d", remaps2, remaps, deadMappings2, deadMappings)
+	}
+}
+
 func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(0, 1)
@@ -64,7 +89,6 @@ func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(%s): %v", path, err)
 	}
-	defer func() { _ = fh.Close() }()
 
 	contents, err := os.ReadFile(path)
 	if err != nil {
@@ -73,6 +97,7 @@ func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	truncated := contents[:int(ptr.Offset)-1]
 
 	f := &File{ID: fileID, Path: path, File: fh}
+	defer func() { _ = f.Close() }()
 	f.mmapData.Store(truncated)
 	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(truncated))))
 
@@ -119,9 +144,9 @@ func TestFileReadAppend_CountsGroupedFallbackReadAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(%s): %v", path, err)
 	}
-	defer func() { _ = fh.Close() }()
 
 	f := &File{ID: fileID, Path: path, File: fh}
+	defer func() { _ = f.Close() }()
 	f.mmapData.Store([]byte(nil))
 
 	got, err := f.ReadAppend(ptrs[1], false, nil)

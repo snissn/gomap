@@ -80,6 +80,7 @@ type File struct {
 	deadMappings          [][]byte
 	remapCount            atomic.Uint64
 	deadMappingsCount     atomic.Uint64
+	deadMappingsBytes     atomic.Uint64
 	mmapReadHits          atomic.Uint64
 	mmapReadMissNoMapping atomic.Uint64
 	// mmapReadMissOutOfRange counts reads that miss because the requested record
@@ -394,6 +395,7 @@ func (f *File) Close() error {
 	}
 	f.deadMappings = nil
 	f.deadMappingsCount.Store(0)
+	f.deadMappingsBytes.Store(0)
 	f.mmapData.Store([]byte(nil))
 	f.remapMu.Unlock()
 
@@ -409,7 +411,7 @@ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		return val, err
 	}
 	data, _ := f.mmapData.Load().([]byte)
-	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+	if data != nil && deadMappingsCapExhausted(f.deadMappingsCount.Load(), f.deadMappingsBytes.Load(), len(data)) {
 		f.mmapReadMissDeadMappingCap.Add(1)
 	}
 	f.mmapReadFallbackReadAt.Add(1)
@@ -427,7 +429,7 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
 	data, _ := f.mmapData.Load().([]byte)
-	if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+	if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), f.deadMappingsBytes.Load(), len(data)) {
 		f.remapToFileSize()
 		if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
 			f.mmapReadHits.Add(1)
@@ -454,7 +456,7 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
 	data, _ := f.mmapData.Load().([]byte)
-	if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), len(data)) {
+	if !deadMappingsCapExhausted(f.deadMappingsCount.Load(), f.deadMappingsBytes.Load(), len(data)) {
 		f.remapToFileSize()
 		if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
 			f.mmapReadHits.Add(1)
@@ -1125,13 +1127,19 @@ func (m *Manager) EvictSegment(id uint32) error {
 }
 
 func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
+	remaps, deadMappings, _ = m.RemapStatsDetailed()
+	return remaps, deadMappings
+}
+
+func (m *Manager) RemapStatsDetailed() (remaps uint64, deadMappings uint64, deadMappingBytes uint64) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, f := range m.files {
 		remaps += f.remapCount.Load()
 		deadMappings += f.deadMappingsCount.Load()
+		deadMappingBytes += f.deadMappingsBytes.Load()
 	}
-	return remaps, deadMappings
+	return remaps, deadMappings, deadMappingBytes
 }
 
 func (m *Manager) MmapReadStats() (hits uint64, missesOutOfRange uint64, missesNoMapping uint64, missesDeadMappingCap uint64, fallbacksReadAt uint64) {

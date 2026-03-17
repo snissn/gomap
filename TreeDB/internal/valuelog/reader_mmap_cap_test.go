@@ -5,13 +5,16 @@ import "testing"
 func withDeadMappingCapConfig(t *testing.T, maxMappings int, explicit, adaptive bool) {
 	t.Helper()
 	prevMax := MaxDeadMappings
+	prevMaxBytes := MaxDeadMappedBytes
 	prevExplicit := maxDeadMappingsExplicit
 	prevAdaptive := adaptiveDeadMappings
 	MaxDeadMappings = maxMappings
+	MaxDeadMappedBytes = 0
 	maxDeadMappingsExplicit = explicit
 	adaptiveDeadMappings = adaptive
 	t.Cleanup(func() {
 		MaxDeadMappings = prevMax
+		MaxDeadMappedBytes = prevMaxBytes
 		maxDeadMappingsExplicit = prevExplicit
 		adaptiveDeadMappings = prevAdaptive
 	})
@@ -61,21 +64,33 @@ func TestEffectiveMaxDeadMappings_ExplicitAndAdaptiveOff(t *testing.T) {
 
 func TestDeadMappingsCapExhausted_Boundaries(t *testing.T) {
 	withDeadMappingCapConfig(t, 0, false, true)
-	if deadMappingsCapExhausted(1, deadMappingBytesPerStep) {
+	if deadMappingsCapExhausted(1, 0, deadMappingBytesPerStep) {
 		t.Fatalf("expected non-positive cap to disable exhaustion checks")
 	}
 
 	withDeadMappingCapConfig(t, -1, false, true)
-	if deadMappingsCapExhausted(1, deadMappingBytesPerStep) {
+	if deadMappingsCapExhausted(1, 0, deadMappingBytesPerStep) {
 		t.Fatalf("expected negative cap to disable exhaustion checks")
 	}
 
 	withDeadMappingCapConfig(t, 2, false, true)
 	mappedLen := deadMappingBytesPerStep * 4 // effective cap = 2 + 4 = 6
-	if deadMappingsCapExhausted(5, mappedLen) {
+	if deadMappingsCapExhausted(5, 0, mappedLen) {
 		t.Fatalf("expected cap to be unexhausted below effective threshold")
 	}
-	if !deadMappingsCapExhausted(6, mappedLen) {
+	if !deadMappingsCapExhausted(6, 0, mappedLen) {
 		t.Fatalf("expected cap to be exhausted at effective threshold")
+	}
+}
+
+func TestDeadMappingsCapExhausted_ByteBudget(t *testing.T) {
+	withDeadMappingCapConfig(t, 0, false, false)
+	MaxDeadMappedBytes = 1 << 20
+	mappedLen := deadMappingBytesPerStep
+	if deadMappingsCapExhausted(0, (1<<20)-1, mappedLen) {
+		t.Fatalf("expected byte budget to allow below-threshold dead mappings")
+	}
+	if !deadMappingsCapExhausted(0, 1<<20, mappedLen) {
+		t.Fatalf("expected byte budget exhaustion at threshold")
 	}
 }

@@ -299,6 +299,8 @@ type rewriteBudgetRecordingBackend struct {
 	rewriteCalls    int
 	rewriteResponse backenddb.ValueLogRewriteStats
 	rewriteErr      error
+	gcOpts          []backenddb.ValueLogGCOptions
+	gcCalls         int
 }
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -321,6 +323,17 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Contex
 	return stats, err
 }
 
+func (b *rewriteBudgetRecordingBackend) ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error) {
+	b.mu.Lock()
+	b.gcOpts = append(b.gcOpts, cloneGCOptsForTest(opts))
+	b.gcCalls++
+	b.mu.Unlock()
+	if b.DB == nil {
+		return backenddb.ValueLogGCStats{}, nil
+	}
+	return b.DB.ValueLogGC(ctx, opts)
+}
+
 func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRewriteOnlineOptions, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -334,10 +347,24 @@ func cloneRewriteOptsForTest(opts backenddb.ValueLogRewriteOnlineOptions) backen
 	return cloned
 }
 
+func cloneGCOptsForTest(opts backenddb.ValueLogGCOptions) backenddb.ValueLogGCOptions {
+	cloned := opts
+	cloned.ProtectedPaths = append([]string(nil), opts.ProtectedPaths...)
+	return cloned
+}
+
 func (b *rewriteBudgetRecordingBackend) recordedPlan() (backenddb.ValueLogRewriteOnlineOptions, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.planOpts, b.planCalls
+}
+
+func (b *rewriteBudgetRecordingBackend) recordedGC() ([]backenddb.ValueLogGCOptions, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]backenddb.ValueLogGCOptions, len(b.gcOpts))
+	copy(out, b.gcOpts)
+	return out, b.gcCalls
 }
 
 func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
@@ -491,6 +518,82 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	}
 	if got, want := db.vlogGenerationRewriteBudgetTokensBytes.Load(), initialTokens-recorder.planResponse.SelectedBytesLive; got != want {
 		t.Fatalf("tokens after rewrite=%d want=%d", got, want)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan.calls"]; got != "1" {
+		t.Fatalf("rewrite plan calls=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.calls"]; got != "1" {
+		t.Fatalf("rewrite exec calls=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_before"]; got != "128" {
+		t.Fatalf("rewrite last bytes_before=%q want 128", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_bytes_after"]; got != "64" {
+		t.Fatalf("rewrite last bytes_after=%q want 64", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.last_records_copied"]; got != "1" {
+		t.Fatalf("rewrite last records=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.runs"]; got != "1" {
+		t.Fatalf("post rewrite gc runs=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationRewrite_PostRewriteGC_UsesInUsePathsOnly(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 64,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	retainedOnlyPath := filepath.Join(dir, "maindb", "wal", "value-l9-999999.log")
+	db.valueLogMu.Lock()
+	if db.valueLogRetain == nil {
+		db.valueLogRetain = make(map[string]struct{})
+	}
+	db.valueLogRetain[retainedOnlyPath] = struct{}{}
+	db.valueLogMu.Unlock()
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, rewriteCalls := recorder.recordedRewrite(); rewriteCalls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", rewriteCalls)
+	}
+	gcOpts, gcCalls := recorder.recordedGC()
+	if gcCalls == 0 {
+		t.Fatalf("post-rewrite gc calls=%d want>=1", gcCalls)
+	}
+	realGCCalls := 0
+	for _, call := range gcOpts {
+		if call.DryRun {
+			continue
+		}
+		realGCCalls++
+		for _, protected := range call.ProtectedPaths {
+			if protected == retainedOnlyPath {
+				t.Fatalf("post-rewrite gc unexpectedly protected retained-only path: %s", protected)
+			}
+		}
+	}
+	if realGCCalls == 0 {
+		t.Fatalf("post-rewrite real gc calls=%d want>=1", realGCCalls)
 	}
 }
 
@@ -679,6 +782,10 @@ func TestVlogGenerationRewriteQueue_DoesNotRunWhenBudgetEmpty(t *testing.T) {
 
 	if _, calls := recorder.recordedRewrite(); calls != 1 {
 		t.Fatalf("rewrite calls with empty budget=%d want still=1", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.exec.budget_skips"]; got != "1" {
+		t.Fatalf("rewrite exec budget_skips=%q want 1", got)
 	}
 }
 
@@ -1111,6 +1218,144 @@ func TestCheckpoint_KicksVlogGenerationGCDespiteRecentForegroundActivity(t *test
 	}
 	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.active"]; got != "false" {
 		t.Fatalf("checkpoint kick active=%q want false", got)
+	}
+}
+
+func TestVlogGenerationGC_PostRewriteFollowupBypassesMinInterval(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		realGCStats: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: vlogGenerationGCMinBytes},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:              true,
+		DisableWAL:               true,
+		JournalLanes:             1,
+		ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ForceValueLogPointers:    true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.vlogGenerationPostRewriteGCFollowupPending.Store(true)
+	db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Store(time.Now().Add(-2 * vlogGenerationPostRewriteGCFollowupDelay).UnixNano())
+	db.vlogGenerationLastGCUnixNano.Store(time.Now().UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	dryCalls, realCalls, _ := recorder.recordedCalls()
+	if dryCalls != 0 || realCalls != 1 {
+		t.Fatalf("followup gc calls dry=%d real=%d want dry=0 real=1", dryCalls, realCalls)
+	}
+	if db.vlogGenerationPostRewriteGCFollowupPending.Load() {
+		t.Fatalf("expected followup pending to clear after followup GC run")
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_runs"]; got != "1" {
+		t.Fatalf("followup runs=%q want 1", got)
+	}
+}
+
+func TestCheckpoint_KicksVlogGenerationGCFollowupWhenRewriteIneligible(t *testing.T) {
+	disableVlogGenerationLoop(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &dryRunGCRecordingBackend{
+		DB:          backend,
+		realGCStats: backenddb.ValueLogGCStats{SegmentsEligible: 1, BytesEligible: vlogGenerationGCMinBytes},
+	}
+
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1 << 40, // keep rewrite ineligible by size gate
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = false
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+
+	db.vlogGenerationPostRewriteGCFollowupPending.Store(true)
+	db.vlogGenerationPostRewriteGCFollowupArmedUnixNano.Store(time.Now().Add(-2 * vlogGenerationPostRewriteGCFollowupDelay).UnixNano())
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		_, realCalls, _ := recorder.recordedCalls()
+		if realCalls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			dryCalls, realCalls, _ := recorder.recordedCalls()
+			t.Fatalf("followup checkpoint kick did not run gc in time: dryCalls=%d realCalls=%d", dryCalls, realCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.runs"]; got != "1" {
+		t.Fatalf("checkpoint kick runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.checkpoint_kick.gc_runs"]; got != "1" {
+		t.Fatalf("checkpoint kick gc runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_pending"]; got != "false" {
+		t.Fatalf("followup pending=%q want false", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.post_rewrite_gc.followup_runs"]; got != "1" {
+		t.Fatalf("followup runs=%q want 1", got)
 	}
 }
 
