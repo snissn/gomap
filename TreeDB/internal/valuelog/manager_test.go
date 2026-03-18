@@ -57,6 +57,7 @@ func TestManagerMmapResidencyStatsAggregatesCounters(t *testing.T) {
 	mgr.files[1].mmapData.Store(make([]byte, 11))
 	mgr.files[1].deadMappingsCount.Store(2)
 	mgr.files[1].deadMappedBytes.Store(17)
+	mgr.files[1].currentWritable.Store(true)
 
 	mgr.files[2].mmapData.Store(make([]byte, 23))
 	mgr.files[2].deadMappingsCount.Store(3)
@@ -66,10 +67,14 @@ func TestManagerMmapResidencyStatsAggregatesCounters(t *testing.T) {
 	mgr.files[3].mmapData.Store([]byte(nil))
 	mgr.files[3].deadMappingsCount.Store(5)
 	mgr.files[3].deadMappedBytes.Store(31)
+	mgr.files[3].sealedMapDeniedCount.Store(7)
 
-	activeSegments, activeBytes, deadMappings, deadBytes := mgr.MmapResidencyStats()
-	if activeSegments != 2 || activeBytes != 34 || deadMappings != 10 || deadBytes != 77 {
-		t.Fatalf("MmapResidencyStats mismatch: activeSegments=%d activeBytes=%d deadMappings=%d deadBytes=%d", activeSegments, activeBytes, deadMappings, deadBytes)
+	currentSegments, currentBytes, sealedSegments, sealedBytes, deadMappings, deadBytes := mgr.MmapResidencyStats()
+	if currentSegments != 1 || currentBytes != 11 || sealedSegments != 1 || sealedBytes != 23 || deadMappings != 10 || deadBytes != 77 {
+		t.Fatalf("MmapResidencyStats mismatch: currentSegments=%d currentBytes=%d sealedSegments=%d sealedBytes=%d deadMappings=%d deadBytes=%d", currentSegments, currentBytes, sealedSegments, sealedBytes, deadMappings, deadBytes)
+	}
+	if got := mgr.SealedMapDeniedStats(); got != 7 {
+		t.Fatalf("SealedMapDeniedStats=%d want 7", got)
 	}
 }
 
