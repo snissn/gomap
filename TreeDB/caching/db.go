@@ -1487,6 +1487,8 @@ const (
 	envDisableCheckpointAutoVacuum         = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
 	minMemtablePrealloc                    = 64 * 1024
 	maxMemtablePrealloc                    = 256 << 20
+	appendOnlyEntryHintMinEntries          = 128
+	appendOnlyEntryHintMaxEntries          = 1 << 20
 	adaptiveMinWrites                      = 1024
 	adaptiveSequentialWritePct             = 0.85
 	adaptiveRangeIteratorPct               = 0.40
@@ -4287,6 +4289,7 @@ type DB struct {
 	queueIDs                      []uint64
 	queueEnqueueNS                []int64
 	nextQueueID                   atomic.Uint64
+	appendOnlyEntryHint           atomic.Int32
 	batchEntryHint                atomic.Int32
 	batchCopyBytesHint            atomic.Int32
 	batchArenaLeaseMu             sync.Mutex
@@ -5240,10 +5243,11 @@ func (db *DB) recycleMemtables(mems []memtable.Table) {
 	}
 	resetCapacity := db.checkpointRotateCapacity()
 	estimate := appendOnlyEstimatedBytesPerEntryDefault
+	appendOnlyResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, estimate)
 	for _, mt := range mems {
 		switch typed := mt.(type) {
 		case *memtable.AppendOnly:
-			typed.ResetWithCapacityHard(resetCapacity, estimate)
+			typed.ResetWithCapacityHard(appendOnlyResetCapacity, estimate)
 			db.releaseAppendOnlyDirectArenaLeaseForMemtable(typed)
 			if !db.putAppendOnlyMemLease(typed) {
 				db.appendOnlyMemPool.Put(typed)
@@ -5275,9 +5279,10 @@ func (db *DB) trimAppendOnlyMemLeases(maxLeases int, resetCapacity int) {
 	if len(dropped) == 0 {
 		return
 	}
+	effectiveResetCapacity := db.appendOnlyMemtableCapacityHint(resetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
 	for i := range dropped {
 		if dropped[i] != nil {
-			dropped[i].ResetWithCapacityHard(resetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
+			dropped[i].ResetWithCapacityHard(effectiveResetCapacity, appendOnlyEstimatedBytesPerEntryDefault)
 		}
 	}
 }
@@ -13962,10 +13967,12 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		shard.mu.Lock()
 		locked = append(locked, shard)
 		oldMode := ""
-		oldLen := 0
+		oldLen := shard.mem.Len()
 		if debugRotate {
 			oldMode = debugMemtableModeLabel(shard.mem)
-			oldLen = shard.mem.Len()
+		}
+		if _, ok := shard.mem.(*memtable.AppendOnly); ok {
+			db.observeAppendOnlyMutableEntries(oldLen)
 		}
 		oldShardBytes := shard.bytes
 
@@ -16688,6 +16695,12 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.entry_slice.retained_bytes_estimate"] = fmt.Sprintf("%d", entrySlicePoolBytes.Load())
 	stats["treedb.process.entry_slice.trim_runs_total"] = fmt.Sprintf("%d", entrySlicePoolTrimRunsTotal.Load())
 	stats["treedb.process.entry_slice.trim_drop_bytes_total"] = fmt.Sprintf("%d", entrySlicePoolTrimDropBytesTotal.Load())
+	appendOnlyEntryHint := int(db.appendOnlyEntryHint.Load())
+	appendOnlyHintCapacity := appendOnlyEntriesToCapacity(appendOnlyEntryHint, appendOnlyEstimatedBytesPerEntryDefault)
+	stats["treedb.cache.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
+	stats["treedb.cache.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
+	stats["treedb.process.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
+	stats["treedb.process.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
 	appendOnlyRetainChunks, appendOnlyRetainBytes := appendOnlyDirectArenaRetentionLimitsForPressure(poolPressure.level)
 	stats["treedb.cache.append_only_direct_arena.retain_max_bytes_effective"] = fmt.Sprintf("%d", appendOnlyRetainBytes)
 	stats["treedb.cache.append_only_direct_arena.retain_max_chunks_effective"] = fmt.Sprintf("%d", appendOnlyRetainChunks)
@@ -17782,6 +17795,80 @@ func (db *DB) NewBatchWithSize(size int) *Batch {
 		copyArenaCap:   db.batchCopyArenaInitCap(reserveHint),
 		streamEligible: true,
 	}
+}
+
+func clampAppendOnlyEntryHint(entries int) int {
+	if entries < appendOnlyEntryHintMinEntries {
+		return appendOnlyEntryHintMinEntries
+	}
+	if entries > appendOnlyEntryHintMaxEntries {
+		return appendOnlyEntryHintMaxEntries
+	}
+	return entries
+}
+
+func (db *DB) observeAppendOnlyMutableEntries(entries int) {
+	if db == nil {
+		return
+	}
+	n := clampAppendOnlyEntryHint(entries)
+	for {
+		old := int(db.appendOnlyEntryHint.Load())
+		next := n
+		if old > 0 {
+			if n > old {
+				// Grow faster so sustained larger mutables avoid repeated regrowth.
+				next = (old*3 + n + 1) / 4
+			} else {
+				// Decay to recent smaller mutables to avoid pinning high-water entry
+				// slices through rotate/checkpoint-heavy workloads.
+				next = (old*7 + n + 3) / 8
+			}
+		}
+		next = clampAppendOnlyEntryHint(next)
+		if next == old {
+			return
+		}
+		if db.appendOnlyEntryHint.CompareAndSwap(int32(old), int32(next)) {
+			return
+		}
+	}
+}
+
+func appendOnlyEntriesToCapacity(entries, estimatedBytesPerEntry int) int {
+	if entries <= 0 {
+		return 0
+	}
+	if estimatedBytesPerEntry <= 0 {
+		estimatedBytesPerEntry = appendOnlyEstimatedBytesPerEntryDefault
+	}
+	maxInt := int(^uint(0) >> 1)
+	if entries > maxInt/estimatedBytesPerEntry {
+		return maxInt
+	}
+	return entries * estimatedBytesPerEntry
+}
+
+func (db *DB) appendOnlyMemtableCapacityHint(capacity, estimatedBytesPerEntry int) int {
+	if db == nil || capacity <= 0 {
+		return capacity
+	}
+	hintEntries := int(db.appendOnlyEntryHint.Load())
+	if hintEntries <= 0 {
+		return capacity
+	}
+	hintEntries = clampAppendOnlyEntryHint(hintEntries)
+	hintCapacity := appendOnlyEntriesToCapacity(hintEntries, estimatedBytesPerEntry)
+	if hintCapacity < minMemtablePrealloc {
+		hintCapacity = minMemtablePrealloc
+	}
+	if hintCapacity > capacity {
+		hintCapacity = capacity
+	}
+	if hintCapacity <= 0 {
+		return capacity
+	}
+	return hintCapacity
 }
 
 func (db *DB) batchEntriesCapHint(minCap int) int {
