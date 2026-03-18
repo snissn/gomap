@@ -147,16 +147,25 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		return false
 	}
 	if f.sealedLazyMmapDenied.Load() {
-		// Denials are memoized to avoid repeated budget checks on hot paths, but
-		// re-check once here so raising sealed mmap budgets can recover in-process.
+		deniedCountCap := int(f.sealedLazyMmapDeniedCountCap.Load())
+		deniedBytesCap := f.sealedLazyMmapDeniedBytesCap.Load()
+		// Preserve the cheap deny fast-path while budgets stay unchanged.
+		if deniedCountCap == MaxMappedSealedSegments && deniedBytesCap == MaxMappedSealedBytes {
+			return false
+		}
+		// Budgets changed; re-check once to allow in-process recovery.
 		targetSize := f.sealedLazyMmapTargetSize()
 		m.mu.Lock()
 		allow, _ := m.allowSealedLazyMmapLocked(f, targetSize)
 		m.mu.Unlock()
 		if !allow {
+			f.sealedLazyMmapDeniedCountCap.Store(int64(MaxMappedSealedSegments))
+			f.sealedLazyMmapDeniedBytesCap.Store(MaxMappedSealedBytes)
 			return false
 		}
 		f.sealedLazyMmapDenied.Store(false)
+		f.sealedLazyMmapDeniedCountCap.Store(0)
+		f.sealedLazyMmapDeniedBytesCap.Store(0)
 	}
 	// Already mapped sealed segments may still be stale if they were current
 	// writable before sealing; allow one best-effort growth remap without
@@ -172,6 +181,8 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	m.mu.Unlock()
 	if !allow {
 		f.sealedLazyMmapDenied.Store(true)
+		f.sealedLazyMmapDeniedCountCap.Store(int64(MaxMappedSealedSegments))
+		f.sealedLazyMmapDeniedBytesCap.Store(MaxMappedSealedBytes)
 		switch denyReason {
 		case sealedLazyMmapDenyCountCap:
 			f.sealedMapDeniedByCount.Add(1)
@@ -182,6 +193,9 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		}
 		return false
 	}
+	f.sealedLazyMmapDenied.Store(false)
+	f.sealedLazyMmapDeniedCountCap.Store(0)
+	f.sealedLazyMmapDeniedBytesCap.Store(0)
 	f.remapToFileSize()
 	data, _ := f.mmapData.Load().([]byte)
 	return len(data) > 0

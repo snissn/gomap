@@ -95,8 +95,12 @@ type File struct {
 	sealedMapDeniedByCount atomic.Uint64
 	sealedMapDeniedByBytes atomic.Uint64
 	sealedLazyMmapDenied   atomic.Bool
-	mmapReadHits           atomic.Uint64
-	mmapReadMissNoMapping  atomic.Uint64
+	// Deny-budget snapshot used to preserve cheap deny fast-paths while still
+	// allowing recovery when global sealed mmap budgets are raised.
+	sealedLazyMmapDeniedCountCap atomic.Int64
+	sealedLazyMmapDeniedBytesCap atomic.Int64
+	mmapReadHits                 atomic.Uint64
+	mmapReadMissNoMapping        atomic.Uint64
 	// mmapReadMissOutOfRange counts reads that miss because the requested record
 	// range is not currently covered by the active mmap.
 	mmapReadMissOutOfRange atomic.Uint64

@@ -248,7 +248,13 @@ func TestOpenFile_DoesNotEagerlyMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openFile: %v", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() {
+		// This test seeds mmapData with a non-mmap stale slice to simulate
+		// out-of-range stale mappings. Clear it before close so Close does not
+		// attempt munmap on heap-backed test data.
+		f.mmapData.Store([]byte(nil))
+		_ = f.Close()
+	}()
 
 	if data, _ := f.mmapData.Load().([]byte); len(data) != 0 {
 		t.Fatalf("expected no eager mmap on open, mapped bytes=%d", len(data))
