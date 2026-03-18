@@ -300,6 +300,10 @@ func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
 	used := poolPressureUsedBytes(ms, heapIdleUnreleased)
 	memLimit := poolPressureMemoryLimit()
 	level := classifyPoolPressureLevel(used, memLimit)
+	nonHeapSysBytes := uint64(0)
+	if ms.Sys > ms.HeapSys {
+		nonHeapSysBytes = ms.Sys - ms.HeapSys
+	}
 	return poolPressureSnapshot{
 		sampledUnixNano:    sampledAt.UnixNano(),
 		level:              level,
@@ -316,7 +320,7 @@ func samplePoolPressureSnapshot(sampledAt time.Time) poolPressureSnapshot {
 		numGC:              ms.NumGC,
 		gcCPUFraction:      ms.GCCPUFraction,
 		totalSysBytes:      ms.Sys,
-		nonHeapSysBytes:    ms.Sys - ms.HeapSys,
+		nonHeapSysBytes:    nonHeapSysBytes,
 		memoryLimitBytes:   memLimit,
 	}
 }
@@ -19944,7 +19948,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			shard.mu.Lock()
 			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
 			useSteal = allowBatchArenaBorrow && useSteal
-			if stealSuppressedDeferred {
+			if stealSuppressedDeferred && allowBatchArenaBorrow {
 				batchArenaStealSuppressedDeferredTotal.Add(1)
 				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(idxs)))
 			}
@@ -20019,7 +20023,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 			useStream := b.streamEligible
 			useSteal, stealSuppressedDeferred := cachedBatchWriteUseSteal(b.db, shard.mem)
 			useSteal = allowBatchArenaBorrow && useSteal
-			if stealSuppressedDeferred {
+			if stealSuppressedDeferred && allowBatchArenaBorrow {
 				batchArenaStealSuppressedDeferredTotal.Add(1)
 				batchArenaStealSuppressedDeferredEntriesTotal.Add(uint64(len(entries)))
 			}
