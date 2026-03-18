@@ -40,3 +40,32 @@ func TestTrimRetainedArenasAfterFlush_CheckpointPathTrimsAppendOnlyCaches(t *tes
 		t.Fatalf("direct arena retained bytes=%d want <= %d", got, maxDirectRetained)
 	}
 }
+
+func TestTrimAppendOnlyMemLeases_DroppedLeasesReturnToPool(t *testing.T) {
+	var db DB
+
+	keep := 2
+	leaseCount := keep + 6
+	for i := 0; i < leaseCount; i++ {
+		mt := memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(4<<20, appendOnlyEstimatedBytesPerEntryDefault)
+		db.appendOnlyMemLeases = append(db.appendOnlyMemLeases, mt)
+	}
+
+	db.trimAppendOnlyMemLeases(keep, 4<<20)
+
+	if got := len(db.appendOnlyMemLeases); got != keep {
+		t.Fatalf("append-only mem leases=%d want %d", got, keep)
+	}
+
+	reused := 0
+	for i := 0; i < leaseCount-keep; i++ {
+		if v := db.appendOnlyMemPool.Get(); v != nil {
+			if _, ok := v.(*memtable.AppendOnly); ok {
+				reused++
+			}
+		}
+	}
+	if reused == 0 {
+		t.Fatalf("expected trimmed append-only leases to be returned to mem pool")
+	}
+}
