@@ -5208,7 +5208,7 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 			mt.SetEntrySteal(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 			return
 		}
-		if allowBorrow {
+		if allowBorrow && op.BorrowSafe {
 			if borrower, ok := mt.(memtable.ValueBorrower); ok && len(memVal) > 0 {
 				borrower.SetEntryBorrowValue(op.Key, memVal, op.ValuePtr, node.FlagPointer)
 				return
@@ -5221,7 +5221,7 @@ func memtableBatchSet(mt memtable.Table, useSteal bool, allowBorrow bool, storeI
 		mt.SetSteal(op.Key, op.Value)
 		return
 	}
-	if allowBorrow {
+	if allowBorrow && op.BorrowSafe {
 		if borrower, ok := mt.(memtable.ValueBorrower); ok && len(op.Value) > 0 {
 			borrower.SetEntryBorrowValue(op.Key, op.Value, page.ValuePtr{}, node.FlagInline)
 			return

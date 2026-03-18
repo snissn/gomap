@@ -32,6 +32,9 @@ type Entry struct {
 	Value    []byte        // For inline values
 	ValuePtr page.ValuePtr // For large values
 	IsPtr    bool          // True if ValuePtr is valid
+	// BorrowSafe marks value bytes that are safe to borrow into memtables without
+	// copying (the backing storage is batch-owned and survives through Write).
+	BorrowSafe bool
 }
 
 // ValueReader resolves value pointers for Replay callers that require full values.
@@ -379,6 +382,8 @@ func (b *Batch) Set(key, value []byte) error {
 	entry := Entry{
 		Type: OpPut,
 		Key:  k,
+		// arenaCopyPair makes value bytes batch-owned for this batch lifetime.
+		BorrowSafe: true,
 	}
 
 	// Check threshold
