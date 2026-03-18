@@ -87,6 +87,7 @@ func isProcessWideExpvarKey(k string) bool {
 		"treedb.process.batch_arena.",
 		"treedb.process.entry_slice.",
 		"treedb.process.flush_merge.",
+		"treedb.process.append_only.",
 		"treedb.process.append_only_direct_arena.",
 		"treedb.process.batch_pool.",
 		"treedb.process.vlog_mmap.",
