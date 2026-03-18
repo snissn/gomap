@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -258,6 +259,9 @@ func TestOpenFile_DoesNotEagerlyMap(t *testing.T) {
 }
 
 func TestReadUnsafe_SealedLazyMmapBudgetFallsBackToReadAt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
 	withMappedSealedBudget(t, 1)
 	withMappedSealedBytesBudget(t, 1<<30)
 
