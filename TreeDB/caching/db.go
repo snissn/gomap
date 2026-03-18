@@ -4871,6 +4871,9 @@ const (
 	defaultVlogRewriteBudgetBytesPerSec  int64  = 128 << 20
 	defaultVlogRewriteTriggerTotalBytes  int64  = 4 << 30
 	defaultVlogRewriteTriggerStalePPM    uint32 = 200000
+	// During checkpoint-kick debt drain, allow a bounded multi-segment rewrite
+	// selection so debt can converge faster than one-segment-per-pass.
+	vlogGenerationRewriteDebtDrainMaxSegments = 8
 )
 
 func (db *DB) flushBackendEntriesCap(totalOps int, sync bool) int {
@@ -11330,6 +11333,49 @@ func (db *DB) vlogGenerationRewriteBudgetEnabled() bool {
 	return db != nil && db.valueLogRewriteBudgetBytes > 0
 }
 
+func (db *DB) vlogGenerationRewriteMaxSegmentsForRun(queueLen int, budgetTokens int64, opts vlogGenerationMaintenanceOptions) int {
+	maxSegments := vlogGenerationRewriteResumeMaxSegments
+	if db == nil || queueLen <= 1 || !opts.rewriteDebtDrain {
+		return maxSegments
+	}
+	if queueLen < maxSegments {
+		maxSegments = queueLen
+	}
+	if queueLen > maxSegments {
+		maxSegments = queueLen
+	}
+	if maxSegments > vlogGenerationRewriteDebtDrainMaxSegments {
+		maxSegments = vlogGenerationRewriteDebtDrainMaxSegments
+	}
+	if maxSegments < 1 {
+		maxSegments = 1
+	}
+	if !db.vlogGenerationRewriteBudgetEnabled() {
+		return maxSegments
+	}
+	if budgetTokens <= 0 {
+		return 1
+	}
+	perSegmentBudget := db.valueLogGenerationWarmTarget
+	if perSegmentBudget <= 0 {
+		perSegmentBudget = defaultVlogGenerationWarmTargetBytes
+	}
+	if perSegmentBudget <= 0 {
+		return 1
+	}
+	byBudget := int(budgetTokens / perSegmentBudget)
+	if byBudget < 1 {
+		byBudget = 1
+	}
+	if byBudget < maxSegments {
+		maxSegments = byBudget
+	}
+	if maxSegments < 1 {
+		maxSegments = 1
+	}
+	return maxSegments
+}
+
 const maxPositiveInt64 = int64(^uint64(0) >> 1)
 
 func addClampInt64(cur, add, limit int64) int64 {
@@ -11438,6 +11484,7 @@ type vlogGenerationMaintenanceOptions struct {
 	bypassQuiet           bool
 	skipRetainedPruneWait bool
 	skipCheckpoint        bool
+	rewriteDebtDrain      bool
 }
 
 func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
@@ -11745,12 +11792,13 @@ planned:
 					return nil
 				}
 			}
+			rewriteMaxSegments := db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
 			if len(rewriteQueue) > 0 {
 				ledger, _ := db.currentVlogGenerationRewriteLedger()
 				if len(ledger) > 0 {
-					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, vlogGenerationRewriteResumeMaxSegments, budgetTokens)
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, rewriteMaxSegments, budgetTokens)
 				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
 				}
 			} else if haveRewritePlan {
 				if len(rewritePlan.SelectedSegments) > 0 {
@@ -11763,6 +11811,7 @@ planned:
 					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
+				rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
 				// If the token bucket is enabled and empty, persist the plan/ledger but
 				// skip running the rewrite until we have budget to spend.
 				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
@@ -11770,9 +11819,9 @@ planned:
 					return nil
 				}
 				if len(rewritePlan.SelectedSegments) > 0 {
-					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(rewritePlan.SelectedSegments, vlogGenerationRewriteResumeMaxSegments, budgetTokens)
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(rewritePlan.SelectedSegments, rewriteMaxSegments, budgetTokens)
 				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, vlogGenerationRewriteResumeMaxSegments)
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
 				}
 			}
 			if len(processedRewriteIDs) > 0 {
@@ -11790,9 +11839,10 @@ planned:
 				}()
 			}
 			db.debugVlogMaintf(
-				"rewrite_exec reason=%s source_ids=%d budget_tokens=%d max_source_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
+				"rewrite_exec reason=%s source_ids=%d max_segments=%d budget_tokens=%d max_source_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
 				vlogGenerationReasonString(reason),
 				len(rewriteOpts.SourceFileIDs),
+				rewriteMaxSegments,
 				budgetTokens,
 				maxSourceBytes,
 				rewriteOpts.MinSegmentStaleRatio,
@@ -12013,7 +12063,8 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 			// backend view before iterator-based rewrite/GC scans run. Re-entering
 			// Checkpoint here is safe: the just-finished caller has already cleared
 			// checkpointing, and the kick-active guard prevents recursive kicks.
-			skipCheckpoint: false,
+			skipCheckpoint:   false,
+			rewriteDebtDrain: true,
 		})
 		if db.vlogGenerationRewriteRuns.Load() > rewriteRunsBefore {
 			db.vlogGenerationCheckpointKickRewriteRuns.Add(1)

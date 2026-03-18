@@ -784,6 +784,60 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationRewriteQueue_DebtDrainProcessesMultipleSegments(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 192, BytesAfter: 96, RecordsCopied: 3},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.2},
+		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.7},
+		{FileID: 33, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.9},
+	}); err != nil {
+		t.Fatalf("set ledger: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(defaultVlogGenerationWarmTargetBytes * 4)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		rewriteDebtDrain:      true,
+	})
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if got := len(opts.SourceFileIDs); got <= 1 {
+		t.Fatalf("rewrite SourceFileIDs=%v want multiple ids in debt-drain mode", opts.SourceFileIDs)
+	}
+	if got := len(opts.SourceFileIDs); got > vlogGenerationRewriteDebtDrainMaxSegments {
+		t.Fatalf("rewrite SourceFileIDs len=%d want <= %d", got, vlogGenerationRewriteDebtDrainMaxSegments)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("queue after debt-drain rewrite=%v want empty", queue)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
