@@ -1261,10 +1261,8 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 	if target.currentWritable.Load() {
 		return true, sealedLazyMmapDenyNone
 	}
-	data, _ := target.mmapData.Load().([]byte)
-	if len(data) > 0 {
-		return true, sealedLazyMmapDenyNone
-	}
+	targetData, _ := target.mmapData.Load().([]byte)
+	targetMapped := len(targetData) > 0
 	mappedSealed := 0
 	var mappedSealedBytes uint64
 	for _, f := range m.files {
@@ -1275,7 +1273,7 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 		if len(data) > 0 {
 			mappedSealed++
 			mappedSealedBytes += uint64(len(data))
-			if mappedSealed >= MaxMappedSealedSegments {
+			if !targetMapped && mappedSealed >= MaxMappedSealedSegments {
 				return false, sealedLazyMmapDenyCountCap
 			}
 		}
@@ -1292,8 +1290,16 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 				}
 			}
 		}
-		if targetBytes > 0 && mappedSealedBytes+targetBytes > uint64(MaxMappedSealedBytes) {
-			return false, sealedLazyMmapDenyBytesCap
+		if targetBytes > 0 {
+			limit := uint64(MaxMappedSealedBytes)
+			if targetMapped {
+				currentBytes := uint64(len(targetData))
+				if targetBytes > currentBytes && mappedSealedBytes-currentBytes+targetBytes > limit {
+					return false, sealedLazyMmapDenyBytesCap
+				}
+			} else if mappedSealedBytes+targetBytes > limit {
+				return false, sealedLazyMmapDenyBytesCap
+			}
 		}
 	}
 	return true, sealedLazyMmapDenyNone
