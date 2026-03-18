@@ -580,7 +580,9 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 		// return (nil, nil) instead of a 0-length slice.
 		return nil, nil
 	}
-	return out, nil
+	// Keep Get semantics as an owned value copy without exposing extra capacity
+	// from append-growth internals, which can otherwise amplify retained heap.
+	return out[:len(out):len(out)], nil
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {
