@@ -404,6 +404,9 @@ func TestReadUnsafe_SealedLazyMmapByteBudgetFallsBackToReadAt(t *testing.T) {
 }
 
 func TestReadUnsafe_SealedMappedOutOfRangeRemapsToKnownFileSize(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
 	withMappedSealedBudget(t, 8)
 	withMappedSealedBytesBudget(t, 1<<30)
 
