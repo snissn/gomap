@@ -253,6 +253,7 @@ func TestOpenFile_DoesNotEagerlyMap(t *testing.T) {
 		// out-of-range stale mappings. Clear it before close so Close does not
 		// attempt munmap on heap-backed test data.
 		f.mmapData.Store([]byte(nil))
+		f.deadMappings = nil
 		_ = f.Close()
 	}()
 

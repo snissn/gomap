@@ -1294,8 +1294,14 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 			limit := uint64(MaxMappedSealedBytes)
 			if targetMapped {
 				currentBytes := uint64(len(targetData))
-				if targetBytes > currentBytes && mappedSealedBytes-currentBytes+targetBytes > limit {
-					return false, sealedLazyMmapDenyBytesCap
+				if targetBytes > currentBytes {
+					projected := targetBytes
+					if mappedSealedBytes > currentBytes {
+						projected += mappedSealedBytes - currentBytes
+					}
+					if projected > limit {
+						return false, sealedLazyMmapDenyBytesCap
+					}
 				}
 			} else if mappedSealedBytes+targetBytes > limit {
 				return false, sealedLazyMmapDenyBytesCap
