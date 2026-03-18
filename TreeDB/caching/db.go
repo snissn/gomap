@@ -4640,7 +4640,7 @@ type DB struct {
 	dir                                               string
 	flushThreshold                                    int64
 	memtableCap                                       int
-	memtableMode                                      memtable.Mode
+	memtableMode                                      atomic.Uint32
 	memtableStats                                     memtableStats
 	memtableAdaptive                                  bool
 	memtableAdaptiveObserve                           atomic.Bool
@@ -5985,7 +5985,7 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 
 	// Default to configured mode if not enough data
 	if writes < adaptiveMinWrites {
-		mode := db.memtableMode
+		mode := db.currentMemtableMode()
 		db.noteAdaptiveMemtableDecision(mode, adaptiveDecisionLowData, writes, seqWrites, overwriteWrites, iters, rangeIters, 0)
 		return mode
 	}
@@ -6026,7 +6026,7 @@ func (db *DB) chooseAdaptiveMemtableModeLocked() memtable.Mode {
 
 func (db *DB) updateAdaptiveObservationLocked() {
 	observe := db.memtableAdaptive
-	if observe && !db.memtableWarmupActive && db.memtableMode == memtable.ModeAppendOnly {
+	if observe && !db.memtableWarmupActive && db.currentMemtableMode() == memtable.ModeAppendOnly {
 		observe = false
 	}
 	db.memtableAdaptiveObserve.Store(observe)
@@ -6034,9 +6034,23 @@ func (db *DB) updateAdaptiveObservationLocked() {
 
 func (db *DB) applyAdaptiveMemtableModeLocked() memtable.Mode {
 	desired := db.chooseAdaptiveMemtableModeLocked()
-	db.memtableMode = desired
+	db.storeMemtableMode(desired)
 	db.updateAdaptiveObservationLocked()
 	return desired
+}
+
+func (db *DB) currentMemtableMode() memtable.Mode {
+	if db == nil {
+		return memtable.ModeSkiplist
+	}
+	return memtable.Mode(db.memtableMode.Load())
+}
+
+func (db *DB) storeMemtableMode(mode memtable.Mode) {
+	if db == nil {
+		return
+	}
+	db.memtableMode.Store(uint32(mode))
 }
 
 func validateValueLogDomainThresholds(domains []backenddb.ValueLogDomainThreshold) error {
@@ -6542,7 +6556,6 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		backend:                              backend,
 		flushThreshold:                       opts.FlushThreshold,
 		memtableCap:                          memCap,
-		memtableMode:                         mode,
 		memtableAdaptive:                     adaptive,
 		memtableAdaptiveBTreeMinIters:        adaptiveBTreeMinIters,
 		memtableWarmupActive:                 adaptive && warmupThreshold < opts.FlushThreshold,
@@ -6639,6 +6652,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		lanes:                 lanes,
 		flushLaneMu:           make([]sync.Mutex, len(lanes)),
 	}
+	db.storeMemtableMode(mode)
 	if maxExistingRID > 0 {
 		db.nextRID.Store(maxExistingRID)
 	}
@@ -12377,7 +12391,7 @@ func (db *DB) checkpointRotateCapacity() int {
 	// tax when this cap is too small (notably in settled batch write workloads).
 	// Use a higher cap there while still avoiding full-threshold prealloc.
 	checkpointRotateCapMax := 256 * 1024
-	if db.memtableMode == memtable.ModeAppendOnly {
+	if db.currentMemtableMode() == memtable.ModeAppendOnly {
 		checkpointRotateCapMax = 4 * 1024 * 1024
 	}
 	if capacity > checkpointRotateCapMax {
@@ -13503,7 +13517,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// currently have buffered in memory, just drop the in-memory state. This
 		// avoids iterator creation, merges, and per-key tombstones.
 		if coversAll && db.disableJournal && backendEmpty {
-			curMode := db.memtableMode
+			curMode := db.currentMemtableMode()
 			nextMode := curMode
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
@@ -13565,7 +13579,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// backend. This avoids building large tombstone sets and avoids per-key
 		// copies into an intermediate slice.
 		if coversInMemory {
-			curMode := db.memtableMode
+			curMode := db.currentMemtableMode()
 			nextMode := curMode
 			if db.memtableAdaptive {
 				nextMode = db.applyAdaptiveMemtableModeLocked()
@@ -13628,7 +13642,7 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		// first so we never mutate a memtable while iterating it.
 		if overlapsQuery(start, end, mutableRange) && db.mutableBytes.Load() > 0 {
 			if queryCoversRange(start, end, mutableRange) {
-				if err := db.resetMutableShardsLocked(db.memtableMode, true); err != nil {
+				if err := db.resetMutableShardsLocked(db.currentMemtableMode(), true); err != nil {
 					db.mu.Unlock()
 					return err
 				}
@@ -13991,7 +14005,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 			"event=start path=with_capacity trigger_flush=%t new_capacity=%d mode=%s mutable_bytes=%d queue_len=%d queue_backlog_bytes=%d",
 			triggerFlush,
 			newCapacity,
-			db.memtableMode.String(),
+			db.currentMemtableMode().String(),
 			db.mutableBytes.Load(),
 			len(db.queue),
 			db.queueBacklogBytes.Load(),
@@ -14028,7 +14042,7 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 			retiredMems = append(retiredMems, shard.mem)
 		}
 
-		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.memtableMode)
+		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.currentMemtableMode())
 		if err != nil {
 			shard.mu.Unlock()
 			return err
@@ -14172,7 +14186,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			"event=start path=mutable_shards trigger_flush=%t new_capacity=%d mode=%s mutable_bytes=%d queue_len=%d queue_backlog_bytes=%d",
 			triggerFlush,
 			newCapacity,
-			db.memtableMode.String(),
+			db.currentMemtableMode().String(),
 			db.mutableBytes.Load(),
 			len(db.queue),
 			db.queueBacklogBytes.Load(),
@@ -14227,7 +14241,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 			retiredMems = append(retiredMems, shard.mem)
 		}
 
-		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.memtableMode)
+		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.currentMemtableMode())
 		if err != nil {
 			return err
 		}
@@ -16596,7 +16610,7 @@ func (db *DB) Stats() map[string]string {
 	queueLen := len(db.queue)
 	flushThreshold := db.flushThreshold
 	mutableThresholdBase := db.mutableThreshold.Load()
-	memtableMode := db.memtableMode
+	memtableMode := db.currentMemtableMode()
 	memtableAdaptive := db.memtableAdaptive
 	memtableWarmupActive := db.memtableWarmupActive
 	maxQueued := db.maxQueuedMemtables
