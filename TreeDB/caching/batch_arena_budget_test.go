@@ -194,8 +194,9 @@ func TestDrainBatchArenaPoolToTargetBytes(t *testing.T) {
 	if dropped <= 0 {
 		t.Fatalf("drain dropped=%d want > 0", dropped)
 	}
-	if after > target {
-		t.Fatalf("batchArenaPoolBytes after drain=%d want <= %d", after, target)
+	// Draining is class-granular; allow one class-cap overshoot over target.
+	if after > target+int64(classCap) {
+		t.Fatalf("batchArenaPoolBytes after drain=%d want <= %d (target %d + classCap %d)", after, target+int64(classCap), target, classCap)
 	}
 }
 
