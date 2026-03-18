@@ -1213,17 +1213,25 @@ func (m *Manager) EvictSegment(id uint32) error {
 	return f.Close()
 }
 
+// RemapStats reports aggregate remap executions and tracked dead mappings.
 func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
+	if m == nil {
+		return 0, 0
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, f := range m.files {
+		if f == nil {
+			continue
+		}
 		remaps += f.remapCount.Load()
 		deadMappings += f.deadMappingsCount.Load()
 	}
 	return remaps, deadMappings
 }
 
-// MmapResidencyStats reports current aggregate mmap residency.
+// MmapResidencyStats reports aggregate mmap residency split by segment type:
+// current writable segments, sealed segments, and dead mappings/bytes.
 func (m *Manager) MmapResidencyStats() (currentSegments uint64, currentBytes uint64, sealedSegments uint64, sealedBytes uint64, deadMappings uint64, deadBytes uint64) {
 	if m == nil {
 		return 0, 0, 0, 0, 0, 0
@@ -1231,6 +1239,9 @@ func (m *Manager) MmapResidencyStats() (currentSegments uint64, currentBytes uin
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, f := range m.files {
+		if f == nil {
+			continue
+		}
 		data, _ := f.mmapData.Load().([]byte)
 		if len(data) > 0 {
 			if f.currentWritable.Load() {
@@ -1247,11 +1258,19 @@ func (m *Manager) MmapResidencyStats() (currentSegments uint64, currentBytes uin
 	return currentSegments, currentBytes, sealedSegments, sealedBytes, deadMappings, deadBytes
 }
 
+// SealedMapDeniedStats reports the total sealed-lazy-map deny count.
 func (m *Manager) SealedMapDeniedStats() uint64 {
 	byCount, byBytes := m.SealedMapDeniedByReasonStats()
 	return byCount + byBytes
 }
 
+// SealedMapDeniedCount is an alias for SealedMapDeniedStats.
+func (m *Manager) SealedMapDeniedCount() uint64 {
+	return m.SealedMapDeniedStats()
+}
+
+// SealedMapDeniedByReasonStats reports sealed lazy-map denials split by budget:
+// count-cap denials and byte-cap denials.
 func (m *Manager) SealedMapDeniedByReasonStats() (countCap uint64, bytesCap uint64) {
 	if m == nil {
 		return 0, 0
@@ -1259,6 +1278,9 @@ func (m *Manager) SealedMapDeniedByReasonStats() (countCap uint64, bytesCap uint
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	for _, f := range m.files {
+		if f == nil {
+			continue
+		}
 		countCap += f.sealedMapDeniedByCount.Load()
 		bytesCap += f.sealedMapDeniedByBytes.Load()
 	}

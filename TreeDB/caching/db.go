@@ -4499,6 +4499,8 @@ type DB struct {
 	appendOnlyMemLeaseHitTotal       atomic.Uint64
 	appendOnlyMemPoolHitTotal        atomic.Uint64
 	appendOnlyMemNewAllocTotal       atomic.Uint64
+	appendOnlyMemNewAllocWithQueue   atomic.Uint64
+	appendOnlyMemNewAllocQueueBytes  atomic.Uint64
 	appendOnlyDirectArenaLeaseMu     sync.Mutex
 	appendOnlyDirectArenaLeasesByMem map[memtable.Table]*appendOnlyDirectArenaLease
 	pendingRetiredMems               []memtable.Table
@@ -5599,6 +5601,8 @@ func (db *DB) newMutableMemtableWithCapacityMode(capacity int, mode memtable.Mod
 		if backlog := db.queueBacklogBytes.Load(); backlog > 0 {
 			appendOnlyMemNewAllocWithQueueTotal.Add(1)
 			appendOnlyMemNewAllocQueueBytesSum.Add(uint64(backlog))
+			db.appendOnlyMemNewAllocWithQueue.Add(1)
+			db.appendOnlyMemNewAllocQueueBytes.Add(uint64(backlog))
 		}
 		db.appendOnlyMemNewAllocTotal.Add(1)
 		return memtable.NewAppendOnlyWithCapacityEstimatedEntryBytes(capacity, estimate), nil
@@ -14021,10 +14025,9 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 		shard := &db.mutableShards[i]
 		shard.mu.Lock()
 		oldMode := ""
-		oldLen := 0
+		oldLen := shard.mem.Len()
 		if debugRotate {
 			oldMode = debugMemtableModeLabel(shard.mem)
-			oldLen = shard.mem.Len()
 		}
 		oldShardBytes := shard.bytes
 		db.retainMutableShardAppendOnlyArenaLocked(i, shard)
@@ -17037,13 +17040,15 @@ func (db *DB) Stats() map[string]string {
 	appendOnlyMemLeaseHitTotal := db.appendOnlyMemLeaseHitTotal.Load()
 	appendOnlyMemPoolHitTotal := db.appendOnlyMemPoolHitTotal.Load()
 	appendOnlyMemNewAllocTotal := db.appendOnlyMemNewAllocTotal.Load()
+	appendOnlyMemNewAllocWithQueue := db.appendOnlyMemNewAllocWithQueue.Load()
+	appendOnlyMemNewAllocQueueBytes := db.appendOnlyMemNewAllocQueueBytes.Load()
 	stats["treedb.cache.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
 	stats["treedb.cache.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
 	stats["treedb.cache.append_only.mutable_from_lease_total"] = fmt.Sprintf("%d", appendOnlyMemLeaseHitTotal)
 	stats["treedb.cache.append_only.mutable_from_pool_total"] = fmt.Sprintf("%d", appendOnlyMemPoolHitTotal)
 	stats["treedb.cache.append_only.mutable_new_alloc_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocTotal)
-	stats["treedb.cache.append_only.mutable_new_alloc_with_queue_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocWithQueueTotal.Load())
-	stats["treedb.cache.append_only.mutable_new_alloc_queue_bytes_sum"] = fmt.Sprintf("%d", appendOnlyMemNewAllocQueueBytesSum.Load())
+	stats["treedb.cache.append_only.mutable_new_alloc_with_queue_total"] = fmt.Sprintf("%d", appendOnlyMemNewAllocWithQueue)
+	stats["treedb.cache.append_only.mutable_new_alloc_queue_bytes_sum"] = fmt.Sprintf("%d", appendOnlyMemNewAllocQueueBytes)
 	stats["treedb.process.append_only.entry_hint_entries"] = fmt.Sprintf("%d", appendOnlyEntryHint)
 	stats["treedb.process.append_only.entry_hint_capacity_bytes"] = fmt.Sprintf("%d", appendOnlyHintCapacity)
 	stats["treedb.process.append_only.mutable_from_lease_total"] = fmt.Sprintf("%d", appendOnlyMemLeaseHitTotal)

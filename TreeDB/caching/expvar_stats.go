@@ -69,9 +69,9 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 	}
 	out := make(map[string]any)
 	for k, v := range stats {
-		// Export all process-scoped telemetry families via treedb.process.*
-		// and select cache families used for mmap/decode/batch-arena tracking.
-		if strings.HasPrefix(k, "treedb.process.") ||
+		// Export only process-wide metric families under treedb.process.* and
+		// select cache families used for mmap/decode/batch-arena tracking.
+		if isProcessWideExpvarKey(k) ||
 			strings.HasPrefix(k, "treedb.cache.vlog_mmap.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_decode_buffer_grow.") ||
 			strings.HasPrefix(k, "treedb.cache.batch_arena.") {
@@ -79,6 +79,24 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 		}
 	}
 	return out
+}
+
+func isProcessWideExpvarKey(k string) bool {
+	processPrefixes := [...]string{
+		"treedb.process.memory.",
+		"treedb.process.batch_arena.",
+		"treedb.process.entry_slice.",
+		"treedb.process.flush_merge.",
+		"treedb.process.append_only_direct_arena.",
+		"treedb.process.batch_pool.",
+		"treedb.process.vlog_mmap.",
+	}
+	for _, prefix := range processPrefixes {
+		if strings.HasPrefix(k, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func coerceStatsValue(v string) any {

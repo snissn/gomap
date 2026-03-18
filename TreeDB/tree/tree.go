@@ -129,16 +129,14 @@ type Tree struct {
 	slabKeyReader   slabUnsafeKeyReader
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
-	slabVerifyCRC   bool
 	rootPageID      uint64
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	t := &Tree{
-		pager:         p,
-		slabReader:    sr,
-		slabVerifyCRC: slabReadChecksumEnabled(sr),
-		rootPageID:    root,
+		pager:      p,
+		slabReader: sr,
+		rootPageID: root,
 	}
 	keyAwareEnabled := keyAwarePointerReadsEnabled(sr)
 	if app, ok := sr.(slabUnsafeAppender); ok {
@@ -168,7 +166,6 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	t.pager = p
 	t.slabReader = sr
-	t.slabVerifyCRC = slabReadChecksumEnabled(sr)
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
 	} else {
@@ -217,7 +214,7 @@ func (t *Tree) shouldVerifyLeafRefChecksum() bool {
 	if t == nil {
 		return true
 	}
-	return t.slabVerifyCRC
+	return slabReadChecksumEnabled(t.slabReader)
 }
 
 func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error) {
@@ -607,7 +604,9 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 	}
 	// Keep Get semantics as an owned value copy without exposing extra capacity
 	// from append-growth internals, which can otherwise amplify retained heap.
-	return out[:len(out):len(out)], nil
+	owned := make([]byte, len(out))
+	copy(owned, out)
+	return owned, nil
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {
