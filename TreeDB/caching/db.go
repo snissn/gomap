@@ -6553,6 +6553,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	go db.flushLoop()
 	db.startVlogGenerationLoop()
 	db.startVlogShapeLoop()
+	registerTreeDBExpvarStatsDB(db)
 
 	return db, nil
 }
@@ -12602,6 +12603,7 @@ func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
 	db.closing.Store(true)
+	unregisterTreeDBExpvarStatsDB(db)
 	db.stopDomainIngressWorkers()
 	db.waitForRetainedValueLogPrune()
 
