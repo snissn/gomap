@@ -47,12 +47,15 @@ const (
 	deadMappingBytesPerStep   = 256 << 10 // increase cap by 1 per 256KiB mapped
 	maxDeadMappingsEnvKey     = "TREEDB_VLOG_MAX_DEAD_MAPPINGS"
 	enableAdaptiveCapEnvKey   = "TREEDB_VLOG_ADAPTIVE_DEAD_MAPPINGS"
+	maxMappedSealedEnvKey     = "TREEDB_VLOG_MAX_MAPPED_SEALED_SEGMENTS"
 	defaultAdaptiveCapEnabled = true
+	defaultMaxMappedSealed    = 8
 )
 
 var (
 	maxDeadMappingsExplicit bool
 	adaptiveDeadMappings    = defaultAdaptiveCapEnabled
+	MaxMappedSealedSegments = defaultMaxMappedSealed
 )
 
 func init() {
@@ -68,6 +71,11 @@ func init() {
 			adaptiveDeadMappings = false
 		case "1", "true", "on", "yes":
 			adaptiveDeadMappings = true
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv(maxMappedSealedEnvKey)); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
+			MaxMappedSealedSegments = v
 		}
 	}
 }
@@ -107,8 +115,42 @@ func deadMappingsCapExhausted(deadMappingsCount uint64, mappedLen int) bool {
 	return maxMappings > 0 && deadMappingsCount >= uint64(maxMappings)
 }
 
+func (f *File) usesPersistentMmap() bool {
+	if f == nil {
+		return false
+	}
+	if f.manager == nil {
+		return true
+	}
+	return f.currentWritable.Load()
+}
+
+func (f *File) tryEnableSealedLazyMmap() bool {
+	if f == nil || f.closed.Load() || f.File == nil {
+		return false
+	}
+	if f.usesPersistentMmap() {
+		f.remapToFileSize()
+		data, _ := f.mmapData.Load().([]byte)
+		return len(data) > 0
+	}
+	m := f.manager
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	allow := m.allowSealedLazyMmapLocked(f)
+	m.mu.Unlock()
+	if !allow {
+		return false
+	}
+	f.remapToFileSize()
+	data, _ := f.mmapData.Load().([]byte)
+	return len(data) > 0
+}
+
 func (f *File) maybeScheduleRemap() {
-	if f == nil || f.closed.Load() {
+	if f == nil || f.closed.Load() || !f.usesPersistentMmap() {
 		return
 	}
 	data, _ := f.mmapData.Load().([]byte)
@@ -139,6 +181,12 @@ func (f *File) remapToFileSize() {
 	if f.closed.Load() || f.File == nil {
 		return
 	}
+	if !f.usesPersistentMmap() {
+		data, _ := f.mmapData.Load().([]byte)
+		if len(data) > 0 {
+			return
+		}
+	}
 
 	// If we have already hit the dead-mapping cap, we cannot remap again without
 	// risking use-after-unmap for callers holding unsafe mmap views. Avoid the
@@ -166,6 +214,7 @@ func (f *File) remapToFileSize() {
 	if data != nil {
 		f.deadMappings = append(f.deadMappings, data)
 		f.deadMappingsCount.Add(1)
+		f.deadMappedBytes.Add(uint64(len(data)))
 	}
 
 	b, err := mmapReadOnly(f.File, int(currentSize))

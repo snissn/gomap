@@ -41,7 +41,7 @@ func TestAcquireSnapshot_NotifyErrorOnRotateFailure(t *testing.T) {
 	}
 
 	// Force the snapshot rotation path to fail inside newMutableMemtableWithCapacityMode.
-	cached.memtableMode = memtable.Mode(255)
+	cached.storeMemtableMode(memtable.Mode(255))
 
 	if snap := cached.AcquireSnapshot(); snap != nil {
 		_ = snap.Close()

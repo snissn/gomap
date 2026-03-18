@@ -1,7 +1,9 @@
 package caching
 
 import (
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 )
@@ -129,5 +131,72 @@ func TestBatchReset_RefreshesCopyArenaCapFromDecayedHint(t *testing.T) {
 
 	if got := b.copyArenaCap; got != decayedCap {
 		t.Fatalf("reset copyArenaCap=%d want=%d", got, decayedCap)
+	}
+}
+
+func TestBatchCopyArenaInitCap_ClampsUnderCriticalPressure(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var fake runtime.MemStats
+	fake.HeapInuse = 9 << 30 // critical
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	var db DB
+	db.observeBatchCopyBytes(1 << 20)
+	got := db.batchCopyArenaInitCap(0)
+	if got > batchCopyArenaCriticalPressureMaxChunk {
+		t.Fatalf("critical-pressure init cap=%d want <=%d", got, batchCopyArenaCriticalPressureMaxChunk)
+	}
+}
+
+func TestBatchArenaCopy_GrowthClampsUnderCriticalPressureButAllowsLargeWrites(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var fake runtime.MemStats
+	fake.HeapInuse = 9 << 30 // critical
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	b := &Batch{copyArenaCap: batchCopyArenaInitMax}
+	_ = b.arenaCopy(batchCopyArenaMinChunk)
+	if got := cap(b.copyArena); got > batchCopyArenaCriticalPressureMaxChunk {
+		t.Fatalf("critical-pressure chunk cap=%d want <=%d", got, batchCopyArenaCriticalPressureMaxChunk)
+	}
+
+	b.copyArena = nil
+	b.copyArenaChunks = nil
+	large := batchCopyArenaCriticalPressureMaxChunk + (64 << 10)
+	_ = b.arenaCopy(large)
+	if got := cap(b.copyArena); got < large {
+		t.Fatalf("large write chunk cap=%d want >=%d", got, large)
 	}
 }

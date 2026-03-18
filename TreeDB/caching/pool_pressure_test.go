@@ -257,3 +257,56 @@ func TestBatchArenaPoolSkipsRetentionWhenBudgetIsZero(t *testing.T) {
 		t.Fatalf("skip-zero-budget=%d want 1", got)
 	}
 }
+
+func TestBatchAuxPoolsSkipRetentionUnderCriticalPressure(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	savedEntriesDrop := batchEntriesPoolDropUnderPressureTotal.Load()
+	savedShardEntriesDrop := batchShardEntriesPoolDropUnderPressureTotal.Load()
+	savedIntDrop := batchIntPoolDropUnderPressureTotal.Load()
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		batchEntriesPoolDropUnderPressureTotal.Store(savedEntriesDrop)
+		batchShardEntriesPoolDropUnderPressureTotal.Store(savedShardEntriesDrop)
+		batchIntPoolDropUnderPressureTotal.Store(savedIntDrop)
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var fake runtime.MemStats
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	fake.HeapInuse = 9 << 30 // critical
+	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
+	if got := currentPoolPressureSnapshot().level; got != poolPressureCritical {
+		t.Fatalf("pressure level=%v want critical", got)
+	}
+
+	batchEntriesPoolDropUnderPressureTotal.Store(0)
+	batchShardEntriesPoolDropUnderPressureTotal.Store(0)
+	batchIntPoolDropUnderPressureTotal.Store(0)
+
+	db := &DB{}
+	db.putBatchEntries(make([]batch.Entry, 0, 32))
+	db.putBatchShardEntries(make([]batch.Entry, 0, 32))
+	db.putBatchIntSlice(make([]int, 0, 32))
+
+	if got := batchEntriesPoolDropUnderPressureTotal.Load(); got != 1 {
+		t.Fatalf("entries pool drop total=%d want 1", got)
+	}
+	if got := batchShardEntriesPoolDropUnderPressureTotal.Load(); got != 1 {
+		t.Fatalf("shard entries pool drop total=%d want 1", got)
+	}
+	if got := batchIntPoolDropUnderPressureTotal.Load(); got != 1 {
+		t.Fatalf("int pool drop total=%d want 1", got)
+	}
+}

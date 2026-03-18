@@ -6,10 +6,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
 )
+
+func withMappedSealedBudget(t *testing.T, maxMapped int) {
+	t.Helper()
+	prev := MaxMappedSealedSegments
+	MaxMappedSealedSegments = maxMapped
+	t.Cleanup(func() {
+		MaxMappedSealedSegments = prev
+	})
+}
 
 func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
 	mgr := &Manager{
@@ -32,6 +43,61 @@ func TestManagerMmapReadStatsAggregatesCounters(t *testing.T) {
 	hits, missOutOfRange, missNoMapping, missDeadCap, fallbacks := mgr.MmapReadStats()
 	if hits != 20 || missOutOfRange != 24 || missNoMapping != 30 || missDeadCap != 40 || fallbacks != 44 {
 		t.Fatalf("MmapReadStats mismatch: hits=%d missOutOfRange=%d missNoMapping=%d missDeadCap=%d fallbacks=%d", hits, missOutOfRange, missNoMapping, missDeadCap, fallbacks)
+	}
+}
+
+func TestManagerMmapResidencyStatsAggregatesCounters(t *testing.T) {
+	mgr := &Manager{
+		files: map[uint32]*File{
+			1: {},
+			2: {},
+			3: {},
+		},
+	}
+	mgr.files[1].mmapData.Store(make([]byte, 11))
+	mgr.files[1].deadMappingsCount.Store(2)
+	mgr.files[1].deadMappedBytes.Store(17)
+
+	mgr.files[2].mmapData.Store(make([]byte, 23))
+	mgr.files[2].deadMappingsCount.Store(3)
+	mgr.files[2].deadMappedBytes.Store(29)
+
+	// file 3 has no active mapping but contributes dead bytes/counters.
+	mgr.files[3].mmapData.Store([]byte(nil))
+	mgr.files[3].deadMappingsCount.Store(5)
+	mgr.files[3].deadMappedBytes.Store(31)
+
+	activeSegments, activeBytes, deadMappings, deadBytes := mgr.MmapResidencyStats()
+	if activeSegments != 2 || activeBytes != 34 || deadMappings != 10 || deadBytes != 77 {
+		t.Fatalf("MmapResidencyStats mismatch: activeSegments=%d activeBytes=%d deadMappings=%d deadBytes=%d", activeSegments, activeBytes, deadMappings, deadBytes)
+	}
+}
+
+func TestManagerPromoteCurrentWritable_SwitchesPriorLaneSegmentToSealed(t *testing.T) {
+	mgr := &Manager{
+		files:                 make(map[uint32]*File),
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1 := &File{ID: mustEncodeFileID(t, 3, 1)}
+	f2 := &File{ID: mustEncodeFileID(t, 3, 2)}
+	mgr.files[f1.ID] = f1
+	mgr.files[f2.ID] = f2
+
+	if err := mgr.PromoteCurrentWritable(f1.ID); err != nil {
+		t.Fatalf("PromoteCurrentWritable(first): %v", err)
+	}
+	if !f1.currentWritable.Load() {
+		t.Fatalf("first file not marked current writable")
+	}
+
+	if err := mgr.PromoteCurrentWritable(f2.ID); err != nil {
+		t.Fatalf("PromoteCurrentWritable(second): %v", err)
+	}
+	if f1.currentWritable.Load() {
+		t.Fatalf("first file still marked current writable after promotion")
+	}
+	if !f2.currentWritable.Load() {
+		t.Fatalf("second file not marked current writable")
 	}
 }
 
@@ -138,6 +204,130 @@ func TestFileReadAppend_CountsGroupedFallbackReadAt(t *testing.T) {
 	if got := f.mmapReadFallbackReadAt.Load(); got != 1 {
 		t.Fatalf("mmapReadFallbackReadAt=%d want 1", got)
 	}
+}
+
+func TestOpenFile_DoesNotEagerlyMap(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Append(0, nil, 1, []byte("alpha")); err != nil {
+		_ = w.Close()
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	f, err := openFile(path, fileID, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if data, _ := f.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected no eager mmap on open, mapped bytes=%d", len(data))
+	}
+	if got := f.remapCount.Load(); got != 0 {
+		t.Fatalf("expected no eager remap on open, remapCount=%d", got)
+	}
+}
+
+func TestReadUnsafe_SealedLazyMmapBudgetFallsBackToReadAt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	withMappedSealedBudget(t, 1)
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, 0, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, 1, 1, 2, bytes.Repeat([]byte("b"), 64))
+
+	f1, err := openFile(filepath.Join(dir, "value-l0-000001.log"), id1, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f1): %v", err)
+	}
+	defer func() { _ = f1.Close() }()
+
+	f2, err := openFile(filepath.Join(dir, "value-l1-000001.log"), id2, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f2): %v", err)
+	}
+	defer func() { _ = f2.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{id1: f1, id2: f2},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1.manager = mgr
+	f2.manager = mgr
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	got1, err := set.ReadUnsafe(ptr1)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	}
+	if !bytes.Equal(got1, bytes.Repeat([]byte("a"), 64)) {
+		t.Fatalf("ptr1 mismatch")
+	}
+	if data, _ := f1.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected first sealed segment to consume the lazy mmap budget")
+	}
+
+	got2, err := set.ReadUnsafe(ptr2)
+	if err != nil {
+		t.Fatalf("ReadUnsafe(ptr2): %v", err)
+	}
+	if !bytes.Equal(got2, bytes.Repeat([]byte("b"), 64)) {
+		t.Fatalf("ptr2 mismatch")
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected second sealed segment to stay unmapped once budget was exhausted")
+	}
+	if got := f2.mmapReadFallbackReadAt.Load(); got == 0 {
+		t.Fatalf("expected fallback ReadAt on second sealed segment")
+	}
+}
+
+func mustEncodeFileID(t *testing.T, lane, seq uint32) uint32 {
+	t.Helper()
+	id, err := EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("EncodeFileID(%d,%d): %v", lane, seq, err)
+	}
+	return id
+}
+
+func writeTestSegmentWithPtr(t *testing.T, dir string, lane, seq uint32, rid uint64, value []byte) (uint32, page.ValuePtr) {
+	t.Helper()
+
+	fileID, err := EncodeFileID(lane, seq)
+	if err != nil {
+		t.Fatalf("EncodeFileID(%d,%d): %v", lane, seq, err)
+	}
+	path := filepath.Join(dir, fmt.Sprintf("value-l%d-%06d.log", lane, seq))
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter(%s): %v", path, err)
+	}
+	defer func() { _ = w.Close() }()
+
+	ptr, err := w.Append(0, nil, rid, value)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+	return fileID, ptr
 }
 
 func writeTestSegment(t *testing.T, dir string, lane, seq uint32, rid uint64, value []byte) uint32 {

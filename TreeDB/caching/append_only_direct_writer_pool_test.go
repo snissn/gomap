@@ -2,7 +2,9 @@ package caching
 
 import (
 	"bytes"
+	"runtime"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -187,7 +189,7 @@ func TestAppendOnlyDirectWriterArena_ReusesRetainedChunksOnReset(t *testing.T) {
 	}
 
 	db.mu.Lock()
-	err = db.resetMutableShardsLocked(db.memtableMode, true)
+	err = db.resetMutableShardsLocked(db.currentMemtableMode(), true)
 	db.mu.Unlock()
 	if err != nil {
 		t.Fatalf("reset mutable shards: %v", err)
@@ -290,5 +292,98 @@ func TestAppendOnlyDirectWriterArena_RetainChunks_LargeChunkByteBudget(t *testin
 	}
 	if got, want := len(arena.retained), appendOnlyDirectValueArenaRetainMaxBytes/largeChunkCap; got != want {
 		t.Fatalf("retained chunks=%d want=%d", got, want)
+	}
+}
+
+func TestAppendOnlyDirectWriterArena_RetainChunks_DropsOversizeChunksImmediately(t *testing.T) {
+	var arena appendOnlyDirectValueArena
+	t.Cleanup(func() { arena.recycleAll() })
+
+	oversize := make([]byte, 0, appendOnlyDirectValueArenaPoolMaxCap+1)
+	normal := make([]byte, 0, appendOnlyDirectValueArenaDefaultChunk)
+	arena.retainChunks([][]byte{oversize, normal})
+
+	if got := len(arena.retained); got != 1 {
+		t.Fatalf("retained chunks=%d want=1", got)
+	}
+	if got := cap(arena.retained[0]); got != appendOnlyDirectValueArenaDefaultChunk {
+		t.Fatalf("retained chunk cap=%d want=%d", got, appendOnlyDirectValueArenaDefaultChunk)
+	}
+}
+
+func TestAppendOnlyDirectWriterArena_TrimRetained_EnforcesCaps(t *testing.T) {
+	var arena appendOnlyDirectValueArena
+	t.Cleanup(func() { arena.recycleAll() })
+
+	chunks := make([][]byte, 0, 16)
+	for i := 0; i < cap(chunks); i++ {
+		chunks = append(chunks, make([]byte, 0, appendOnlyDirectValueArenaDefaultChunk))
+	}
+	arena.retainChunks(chunks)
+	if len(arena.retained) < 8 {
+		t.Fatalf("test setup retained=%d want >= 8", len(arena.retained))
+	}
+
+	dropped := arena.trimRetained(2, int64(appendOnlyDirectValueArenaDefaultChunk*2), appendOnlyDirectValueArenaPoolMaxCap)
+	if dropped <= 0 {
+		t.Fatalf("trim dropped=%d want > 0", dropped)
+	}
+	if got := len(arena.retained); got > 2 {
+		t.Fatalf("retained chunks=%d want <= 2", got)
+	}
+	if got := arena.retainedBytes; got > int64(appendOnlyDirectValueArenaDefaultChunk*2) {
+		t.Fatalf("retained bytes=%d want <= %d", got, appendOnlyDirectValueArenaDefaultChunk*2)
+	}
+}
+
+func TestAppendOnlyDirectWriterArena_RetainChunks_PressureAwareLimits(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var fake runtime.MemStats
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	var arena appendOnlyDirectValueArena
+	t.Cleanup(func() { arena.recycleAll() })
+
+	highChunks := append([][]byte(nil), make([][]byte, appendOnlyDirectValueArenaRetainMaxChunks)...)
+	for i := range highChunks {
+		highChunks[i] = make([]byte, 0, appendOnlyDirectValueArenaDefaultChunk)
+	}
+	fake.HeapInuse = 5 << 30 // high
+	arena.retainChunks(highChunks)
+
+	wantHighBytes := int64(appendOnlyDirectValueArenaRetainMaxBytes) / appendOnlyDirectArenaHighPressureDivisor
+	if got := arena.retainedBytes; got != wantHighBytes {
+		t.Fatalf("high-pressure retained bytes=%d want=%d", got, wantHighBytes)
+	}
+
+	criticalChunks := make([][]byte, 32)
+	for i := range criticalChunks {
+		criticalChunks[i] = make([]byte, 0, appendOnlyDirectValueArenaDefaultChunk)
+	}
+	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
+	fake.HeapInuse = 9 << 30 // critical
+	arena.retainChunks(criticalChunks)
+
+	if got := arena.retainedBytes; got != 0 {
+		t.Fatalf("critical-pressure retained bytes=%d want=0", got)
+	}
+	if got := len(arena.retained); got != 0 {
+		t.Fatalf("critical-pressure retained chunks=%d want=0", got)
 	}
 }

@@ -391,6 +391,17 @@ func (a *appendOnlyValueArena) reset() {
 	a.curPos = 0
 }
 
+func (a *appendOnlyValueArena) dropRetained() {
+	for i := range a.retained {
+		if a.retained[i] != nil {
+			putAppendOnlyValueArenaChunk(a.retained[i])
+			a.retained[i] = nil
+		}
+	}
+	a.retained = nil
+	a.retainedB = 0
+}
+
 func appendOnlyNextCapacity(current int) int {
 	if current < appendOnlyMinInitialEntries {
 		return appendOnlyMinInitialEntries
@@ -877,7 +888,7 @@ func (m *AppendOnly) Reset() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLocked(0, 0)
+	m.resetLockedWithPolicy(0, 0, true)
 }
 
 // ResetWithCapacity resets the memtable and, when needed, shrinks retained
@@ -887,10 +898,23 @@ func (m *AppendOnly) ResetWithCapacity(capacity, estimatedBytesPerEntry int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitIteratorLeasesLocked()
-	m.resetLocked(capacity, estimatedBytesPerEntry)
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
 }
 
 func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, true)
+}
+
+// ResetWithCapacityHard resets and clamps retained internal buffers to the
+// capacity-derived baseline (without carrying over recent spike cardinality).
+func (m *AppendOnly) ResetWithCapacityHard(capacity, estimatedBytesPerEntry int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitIteratorLeasesLocked()
+	m.resetLockedWithPolicy(capacity, estimatedBytesPerEntry, false)
+}
+
+func (m *AppendOnly) resetLockedWithPolicy(capacity, estimatedBytesPerEntry int, retainObserved bool) {
 	desiredEntries := m.baseEntriesLen
 	if capacity > 0 {
 		desiredEntries = appendOnlyInitialEntriesForCapacity(capacity, estimatedBytesPerEntry)
@@ -903,7 +927,7 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	oldCount := m.count
 	maxRetainedEntries := appendOnlyMaxReuseEntries(desiredEntries)
 	retainedEntries := desiredEntries
-	if oldCount > retainedEntries {
+	if retainObserved && oldCount > retainedEntries {
 		retainedEntries = oldCount
 		if retainedEntries > maxRetainedEntries {
 			retainedEntries = maxRetainedEntries
@@ -923,9 +947,12 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 		ent.value = nil
 	}
 	m.valueArena.reset()
+	if !retainObserved {
+		m.valueArena.dropRetained()
+	}
 	// Clear small maps in-place; drop large ones so they don't pin hash tables
 	// after one-off spikes.
-	if oldCount > 0 && oldCount >= appendOnlyResetDropThresholdEntries {
+	if !retainObserved || (oldCount > 0 && oldCount >= appendOnlyResetDropThresholdEntries) {
 		m.latest = nil
 		m.latest64 = nil
 	} else {
@@ -934,13 +961,13 @@ func (m *AppendOnly) resetLocked(capacity, estimatedBytesPerEntry int) {
 	}
 	// Snapshot/index buffers are only needed for unordered memtables; drop large
 	// ones on reset to keep post-spike memory bounded.
-	if cap(m.snapshot) > 0 && cap(m.snapshot) >= appendOnlyResetDropThresholdEntries {
+	if !retainObserved || (cap(m.snapshot) > 0 && cap(m.snapshot) >= appendOnlyResetDropThresholdEntries) {
 		m.snapshot = nil
 		m.snapCount = 0
 	} else {
 		m.clearSnapshotLocked()
 	}
-	if cap(m.indexBuf) > 0 && cap(m.indexBuf) >= appendOnlyResetDropThresholdEntries {
+	if !retainObserved || (cap(m.indexBuf) > 0 && cap(m.indexBuf) >= appendOnlyResetDropThresholdEntries) {
 		m.indexBuf = nil
 	} else if m.indexBuf != nil {
 		m.indexBuf = m.indexBuf[:0]
