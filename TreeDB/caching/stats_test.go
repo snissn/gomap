@@ -13,8 +13,8 @@ func newAdaptiveStatsDB(mode memtable.Mode) *DB {
 	db := &DB{
 		memtableAdaptive: true,
 		memtableStats:    memtableStats{},
-		memtableMode:     mode,
 	}
+	db.storeMemtableMode(mode)
 	db.memtableAdaptiveObserve.Store(true)
 	return db
 }
