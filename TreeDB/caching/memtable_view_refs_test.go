@@ -107,3 +107,16 @@ func TestPublishMemtablesDefersRetiredMemtableRecycleUntilFinalRelease(t *testin
 		t.Fatalf("leased memtable=%p want retired=%p", leased, retired)
 	}
 }
+
+func TestPutAppendOnlyMemLease_RespectsCap(t *testing.T) {
+	db := &DB{}
+	for i := 0; i < maxAppendOnlyMemLeases+8; i++ {
+		mt := memtable.NewAppendOnlyWithCapacity(0)
+		_ = db.putAppendOnlyMemLease(mt)
+	}
+	db.appendOnlyMemLeaseMu.Lock()
+	defer db.appendOnlyMemLeaseMu.Unlock()
+	if got, want := len(db.appendOnlyMemLeases), maxAppendOnlyMemLeases; got != want {
+		t.Fatalf("append-only lease count=%d want=%d", got, want)
+	}
+}

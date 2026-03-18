@@ -167,15 +167,26 @@ func (b *Batch) resetArenaLocked() {
 	if len(b.arenaChunks) == 0 {
 		return
 	}
-	keep := b.arenaChunks[0]
-	if cap(keep) > batchArenaMaxRetainCap {
+	keepIdx := -1
+	keepCap := 0
+	for i := range b.arenaChunks {
+		chunkCap := cap(b.arenaChunks[i])
+		if chunkCap > batchArenaMaxRetainCap {
+			continue
+		}
+		if keepIdx < 0 || chunkCap > keepCap {
+			keepIdx = i
+			keepCap = chunkCap
+		}
+	}
+	if keepIdx < 0 {
 		for i := range b.arenaChunks {
 			b.arenaChunks[i] = nil
 		}
 		b.arenaChunks = nil
 		return
 	}
-	keep = keep[:0]
+	keep := b.arenaChunks[keepIdx][:0]
 	for i := 1; i < len(b.arenaChunks); i++ {
 		b.arenaChunks[i] = nil
 	}
@@ -239,6 +250,23 @@ func (b *Batch) ensureArenaChunk(minFree int) {
 		}
 	}
 	chunkCap := batchArenaDefaultChunkCap
+	if last >= 0 {
+		prevCap := cap(b.arenaChunks[last])
+		if prevCap > chunkCap {
+			chunkCap = prevCap
+		}
+		// Grow arena chunks geometrically (bounded) to reduce repeated chunk
+		// allocations on large batches with many small entries.
+		if prevCap >= batchArenaDefaultChunkCap && prevCap < batchArenaMaxRetainCap {
+			next := prevCap << 1
+			if next > batchArenaMaxRetainCap {
+				next = batchArenaMaxRetainCap
+			}
+			if next > chunkCap {
+				chunkCap = next
+			}
+		}
+	}
 	if chunkCap < minFree {
 		chunkCap = minFree
 	}

@@ -445,6 +445,19 @@ func TestAppendOnlyResetDoesNotPoolStolenValueSlices(t *testing.T) {
 	}
 }
 
+func TestAppendOnlyResetDoesNotPoolBorrowedValueSlices(t *testing.T) {
+	m := NewAppendOnlyWithCapacity(0)
+	external := []byte("borrowed-immutable")
+	m.SetEntryBorrowValue([]byte("k-borrow"), external, page.ValuePtr{}, node.FlagInline)
+	m.Reset()
+
+	newVal := []byte("replacement-value")
+	m.Set([]byte("k-new"), newVal)
+	if string(external) != "borrowed-immutable" {
+		t.Fatalf("borrowed caller value was mutated via pooled reuse: got %q", external)
+	}
+}
+
 func TestAppendOnlyResetKeepsSnapshotBuffersWarm(t *testing.T) {
 	m := NewAppendOnlyWithCapacity(0)
 	// Force unordered mode and a non-empty latest snapshot/index buffer.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -33,6 +34,66 @@ func (r *countingValueReader) Read(ptr page.ValuePtr) ([]byte, error) {
 func (r *countingValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 	r.reads++
 	return r.inner.ReadUnsafe(ptr)
+}
+
+func TestIterator_LeafRefChecksumPolicyHonored(t *testing.T) {
+	makeTree := func(checksumEnabled bool) *Tree {
+		tracked := &trackedValueReaderWithChecksumMode{
+			trackedValueReader:  &trackedValueReader{mapValueReader: newMapValueReader()},
+			readChecksumEnabled: checksumEnabled,
+		}
+		leafData := make([]byte, page.PageSize)
+		leaf := node.NewNode(leafData)
+		leaf.SetType(page.PageTypeLeaf)
+		leaf.SetPageID(1)
+		leaf.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
+		leaf.UpdateChecksum()
+		leafData[8] ^= 0x01 // checksum field
+
+		leafRefID, err := page.EncodeLeafRef(page.ValuePtr{
+			FileID: page.ValueLogFileID(1),
+			Offset: 8,
+		})
+		if err != nil {
+			t.Fatalf("EncodeLeafRef: %v", err)
+		}
+		ptr, ok := page.DecodeLeafRef(leafRefID)
+		if !ok {
+			t.Fatalf("DecodeLeafRef failed")
+		}
+		tracked.values[ptr] = leafData
+		return New(nil, tracked, leafRefID)
+	}
+
+	t.Run("verify_enabled", func(t *testing.T) {
+		tr := makeTree(true)
+		it := tr.Iterator(nil, nil)
+		defer it.Close()
+		if it.Valid() {
+			t.Fatalf("expected invalid iterator on checksum mismatch")
+		}
+		if err := it.Error(); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+			t.Fatalf("expected checksum mismatch error, got %v", err)
+		}
+	})
+
+	t.Run("verify_disabled", func(t *testing.T) {
+		tr := makeTree(false)
+		it := tr.Iterator(nil, nil)
+		defer it.Close()
+		if !it.Valid() {
+			t.Fatalf("expected valid iterator")
+		}
+		if got := string(it.Key()); got != "k" {
+			t.Fatalf("key=%q want %q", got, "k")
+		}
+		if got := string(it.Value()); got != "v" {
+			t.Fatalf("value=%q want %q", got, "v")
+		}
+		if err := it.Error(); err != nil {
+			t.Fatalf("unexpected iterator error: %v", err)
+		}
+	})
 }
 
 func TestIteratorTrimReusableBuffers(t *testing.T) {

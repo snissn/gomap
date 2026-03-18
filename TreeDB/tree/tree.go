@@ -98,9 +98,24 @@ type slabKeyAwareCapability interface {
 	KeyAwareEnabled() bool
 }
 
+// Optional capability gate for slab/leaf-ref checksum verification.
+//
+// Returning false allows tree leaf-ref readers to skip per-page checksum
+// validation on hot paths (unsafe; intended for explicitly relaxed profiles).
+type slabReadChecksumCapability interface {
+	ReadChecksumEnabled() bool
+}
+
 func keyAwarePointerReadsEnabled(sr SlabReader) bool {
 	if gate, ok := sr.(slabKeyAwareCapability); ok {
 		return gate.KeyAwareEnabled()
+	}
+	return true
+}
+
+func slabReadChecksumEnabled(sr SlabReader) bool {
+	if gate, ok := sr.(slabReadChecksumCapability); ok {
+		return gate.ReadChecksumEnabled()
 	}
 	return true
 }
@@ -195,6 +210,13 @@ func (t *Tree) SetRoot(root uint64) {
 	t.rootPageID = root
 }
 
+func (t *Tree) shouldVerifyLeafRefChecksum() bool {
+	if t == nil {
+		return true
+	}
+	return slabReadChecksumEnabled(t.slabReader)
+}
+
 func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error) {
 	if t == nil {
 		return node.Node{}, errors.New("missing tree")
@@ -211,7 +233,7 @@ func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error)
 			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
 		}
 		n := node.NewNodeView(data)
-		if !n.VerifyChecksum() {
+		if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
 			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		if n.Type() != page.PageTypeLeaf {
@@ -366,7 +388,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid leaf page size %d for page %d", len(data), currID)
 					}
 					n = node.NewNodeView(data)
-					if !n.VerifyChecksum() {
+					if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
 						if leafScratchOwned {
 							putLeafRefPageScratch(leafScratch)
 						}
@@ -580,7 +602,14 @@ func (t *Tree) Get(key []byte) ([]byte, error) {
 		// return (nil, nil) instead of a 0-length slice.
 		return nil, nil
 	}
-	return out, nil
+	// GetAppend(key, nil) usually returns an exact-sized owned slice. Only copy
+	// when extra capacity would otherwise retain oversized backing arrays.
+	if cap(out) == len(out) {
+		return out, nil
+	}
+	owned := make([]byte, len(out))
+	copy(owned, out)
+	return owned, nil
 }
 
 func (t *Tree) Has(key []byte) (bool, error) {

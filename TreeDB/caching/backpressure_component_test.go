@@ -140,7 +140,7 @@ func TestStopBackpressureFlushesAndReturns(t *testing.T) {
 	}
 }
 
-func TestFlushRemovesEmptyUnits(t *testing.T) {
+func TestFlushSkipsEmptyUnitsAndRemovesNonEmptyUnits(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
 
@@ -163,8 +163,22 @@ func TestFlushRemovesEmptyUnits(t *testing.T) {
 	db.mu.Unlock()
 
 	stats := db.Stats()
+	if got := mustStatInt64(t, stats, "treedb.cache.queue_len"); got != 0 {
+		t.Fatalf("queue_len=%d want 0 after empty rotate", got)
+	}
+
+	if err := db.Set([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	db.mu.Lock()
+	if err := db.rotateMemtableLocked(false); err != nil {
+		db.mu.Unlock()
+		t.Fatalf("rotateMemtableLocked(non-empty): %v", err)
+	}
+	db.mu.Unlock()
+	stats = db.Stats()
 	if got := mustStatInt64(t, stats, "treedb.cache.queue_len"); got != 1 {
-		t.Fatalf("queue_len=%d want 1", got)
+		t.Fatalf("queue_len=%d want 1 after non-empty rotate", got)
 	}
 
 	db.flushAll(false)

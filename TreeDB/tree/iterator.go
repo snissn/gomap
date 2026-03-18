@@ -1021,7 +1021,7 @@ func (it *Iterator) loadNode(pageID uint64) (node.Node, error) {
 			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
 		}
 		n := node.NewNodeView(data)
-		if !n.VerifyChecksum() {
+		if it.tree.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
 			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		if n.Type() != page.PageTypeLeaf {

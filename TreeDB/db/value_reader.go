@@ -19,6 +19,10 @@ type unsafeToReader interface {
 	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
 }
 
+type readChecksumCapability interface {
+	ReadChecksumEnabled() bool
+}
+
 // valueReader resolves value-log pointers for tree lookups/iterators.
 type valueReader struct {
 	vlogs tree.SlabReader
@@ -55,6 +59,16 @@ func (r valueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
 		return nil, errors.New("treedb: missing value-log reader")
 	}
 	return r.vlogs.ReadUnsafe(ptr)
+}
+
+func (r valueReader) ReadChecksumEnabled() bool {
+	if r.vlogs == nil {
+		return true
+	}
+	if cap, ok := r.vlogs.(readChecksumCapability); ok {
+		return cap.ReadChecksumEnabled()
+	}
+	return true
 }
 
 func (r valueReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {

@@ -93,11 +93,15 @@ func TestIterator_QueuedViewLeaseHeldUntilClose(t *testing.T) {
 	leasesBefore := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.memtable_view.leases_inflight")
 	deferredViewsTotalBefore := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.memtable_view.deferred_views_total")
 	deferredMemtablesTotalBefore := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.memtable_view.deferred_memtables_total")
+	deferredBytesTotalBefore := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.memtable_view.deferred_bytes_total")
 	if deferredViewsCurrent := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.memtable_view.deferred_views_current"); deferredViewsCurrent != 0 {
 		t.Fatalf("deferred views before iterator=%d want=0", deferredViewsCurrent)
 	}
 	if deferredMemtablesCurrent := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.memtable_view.deferred_memtables_current"); deferredMemtablesCurrent != 0 {
 		t.Fatalf("deferred memtables before iterator=%d want=0", deferredMemtablesCurrent)
+	}
+	if deferredBytesCurrent := mustIteratorLeaseStatInt64(t, baselineStats, "treedb.cache.memtable_view.deferred_bytes_current"); deferredBytesCurrent != 0 {
+		t.Fatalf("deferred bytes before iterator=%d want=0", deferredBytesCurrent)
 	}
 
 	it, err := db.Iterator(nil, nil)
@@ -126,6 +130,9 @@ func TestIterator_QueuedViewLeaseHeldUntilClose(t *testing.T) {
 	}
 	if got := mustIteratorLeaseStatInt64(t, openStats, "treedb.cache.memtable_view.deferred_memtables_current"); got != 0 {
 		t.Fatalf("deferred_memtables_current while iterator open=%d want=0", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, openStats, "treedb.cache.memtable_view.deferred_bytes_current"); got != 0 {
+		t.Fatalf("deferred_bytes_current while iterator open=%d want=0", got)
 	}
 
 	db.mu.Lock()
@@ -158,6 +165,15 @@ func TestIterator_QueuedViewLeaseHeldUntilClose(t *testing.T) {
 	}
 	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_memtables_max"); got < 1 {
 		t.Fatalf("deferred_memtables_max after publish=%d want>=1", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_bytes_current"); got <= 0 {
+		t.Fatalf("deferred_bytes_current after publish=%d want>0", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_bytes_total"); got <= deferredBytesTotalBefore {
+		t.Fatalf("deferred_bytes_total after publish=%d want>%d", got, deferredBytesTotalBefore)
+	}
+	if got := mustIteratorLeaseStatInt64(t, deferredStats, "treedb.cache.memtable_view.deferred_bytes_max"); got <= 0 {
+		t.Fatalf("deferred_bytes_max after publish=%d want>0", got)
 	}
 	if got := mustIteratorLeaseStatFloat64(t, deferredStats, "treedb.cache.memtable_view.deferred_oldest_age_ms"); got < 0 {
 		t.Fatalf("deferred_oldest_age_ms after publish=%f want>=0", got)
@@ -196,6 +212,9 @@ func TestIterator_QueuedViewLeaseHeldUntilClose(t *testing.T) {
 	}
 	if got := mustIteratorLeaseStatInt64(t, closedStats, "treedb.cache.memtable_view.deferred_memtables_current"); got != 0 {
 		t.Fatalf("deferred_memtables_current after iterator close=%d want=0", got)
+	}
+	if got := mustIteratorLeaseStatInt64(t, closedStats, "treedb.cache.memtable_view.deferred_bytes_current"); got != 0 {
+		t.Fatalf("deferred_bytes_current after iterator close=%d want=0", got)
 	}
 	if got := mustIteratorLeaseStatFloat64(t, closedStats, "treedb.cache.memtable_view.deferred_oldest_age_ms"); got != 0 {
 		t.Fatalf("deferred_oldest_age_ms after iterator close=%f want=0", got)
