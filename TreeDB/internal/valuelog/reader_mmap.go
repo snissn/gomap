@@ -142,8 +142,21 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		data, _ := f.mmapData.Load().([]byte)
 		return len(data) > 0
 	}
-	if f.sealedLazyMmapDenied.Load() {
+	m := f.manager
+	if m == nil {
 		return false
+	}
+	if f.sealedLazyMmapDenied.Load() {
+		// Denials are memoized to avoid repeated budget checks on hot paths, but
+		// re-check once here so raising sealed mmap budgets can recover in-process.
+		targetSize := f.sealedLazyMmapTargetSize()
+		m.mu.Lock()
+		allow, _ := m.allowSealedLazyMmapLocked(f, targetSize)
+		m.mu.Unlock()
+		if !allow {
+			return false
+		}
+		f.sealedLazyMmapDenied.Store(false)
 	}
 	// Already mapped sealed segments may still be stale if they were current
 	// writable before sealing; allow one best-effort growth remap without
@@ -153,19 +166,7 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 		data, _ = f.mmapData.Load().([]byte)
 		return len(data) > 0
 	}
-	m := f.manager
-	if m == nil {
-		return false
-	}
-	targetSize := f.fileSize.Load()
-	if targetSize <= 0 {
-		if info, err := f.File.Stat(); err == nil {
-			if sz := info.Size(); sz > 0 {
-				targetSize = sz
-				f.fileSize.Store(sz)
-			}
-		}
-	}
+	targetSize := f.sealedLazyMmapTargetSize()
 	m.mu.Lock()
 	allow, denyReason := m.allowSealedLazyMmapLocked(f, targetSize)
 	m.mu.Unlock()
@@ -184,6 +185,22 @@ func (f *File) tryEnableSealedLazyMmap() bool {
 	f.remapToFileSize()
 	data, _ := f.mmapData.Load().([]byte)
 	return len(data) > 0
+}
+
+func (f *File) sealedLazyMmapTargetSize() int64 {
+	if f == nil || f.File == nil {
+		return 0
+	}
+	targetSize := f.fileSize.Load()
+	if targetSize <= 0 {
+		if info, err := f.File.Stat(); err == nil {
+			if sz := info.Size(); sz > 0 {
+				targetSize = sz
+				f.fileSize.Store(sz)
+			}
+		}
+	}
+	return targetSize
 }
 
 func (f *File) maybeScheduleRemap() {
@@ -235,21 +252,13 @@ func (f *File) remapToFileSize() {
 		return
 	}
 
-	var currentSize int64
-	if !f.usesPersistentMmap() {
-		if known := f.fileSize.Load(); known > 0 && data != nil && int64(len(data)) >= known {
-			currentSize = known
-		}
+	info, err := f.File.Stat()
+	if err != nil {
+		return
 	}
-	if currentSize == 0 {
-		info, err := f.File.Stat()
-		if err != nil {
-			return
-		}
-		currentSize = info.Size()
-		if currentSize > 0 {
-			f.fileSize.Store(currentSize)
-		}
+	currentSize := info.Size()
+	if currentSize > 0 {
+		f.fileSize.Store(currentSize)
 	}
 	if currentSize <= 0 || currentSize > int64(int(currentSize)) {
 		return
