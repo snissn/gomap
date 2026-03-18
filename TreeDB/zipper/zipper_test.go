@@ -197,7 +197,7 @@ func TestZipperLeafRefCacheAvoidsUnflushedReads(t *testing.T) {
 		t.Fatalf("persistLeafPage: %v", err)
 	}
 
-	loaded, fromPager, leafScratch, leafScratchRef, err := z.loadNode(leafID)
+	loaded, fromPager, leafScratch, leafScratchRef, err := z.loadNode(leafID, nil)
 	if err != nil {
 		t.Fatalf("loadNode: %v", err)
 	}
@@ -502,7 +502,7 @@ func TestCoalesceLeafChildrenPrefixCompression(t *testing.T) {
 		{key: []byte("b0"), child: rightID},
 	}
 
-	out, _, err := z.coalesceLeafChildren(entries, nil, &adaptive.Metrics{})
+	out, _, err := z.coalesceLeafChildren(entries, nil, &adaptive.Metrics{}, nil)
 	if err != nil {
 		t.Fatalf("coalesceLeafChildren: %v", err)
 	}

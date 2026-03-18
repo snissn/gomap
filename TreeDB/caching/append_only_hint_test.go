@@ -1,6 +1,10 @@
 package caching
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+	"time"
+)
 
 func TestAppendOnlyEntryHint_AdaptiveDecayAndCapacityClamp(t *testing.T) {
 	var cache DB
@@ -48,5 +52,73 @@ func TestAppendOnlyEntriesToCapacity_OverflowSafe(t *testing.T) {
 	}
 	if got := appendOnlyEntriesToCapacity(0, appendOnlyEstimatedBytesPerEntryDefault); got != 0 {
 		t.Fatalf("zero entries capacity=%d want 0", got)
+	}
+}
+
+func TestAppendOnlyEntryHint_CapacityTracksPressureScaledMutableThreshold(t *testing.T) {
+	poolPressureTestMu.Lock()
+	defer poolPressureTestMu.Unlock()
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	var fake runtime.MemStats
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = fake }
+	poolPressureMemoryLimit = func() int64 { return -1 }
+
+	var cache DB
+	const baseThreshold int64 = 128 << 20
+	const requestedCap = 256 << 20
+	cache.mutableThreshold.Store(baseThreshold)
+	cache.appendOnlyEntryHint.Store(appendOnlyEntryHintMaxEntries)
+
+	expectedCapFor := func(level poolPressureLevel) int {
+		effectiveThreshold := scaleMutableFlushThresholdForPressure(baseThreshold, level)
+		want := memtableCapacity(effectiveThreshold)
+		hintCapacity := appendOnlyEntriesToCapacity(appendOnlyEntryHintMaxEntries, appendOnlyEstimatedBytesPerEntryDefault)
+		if hintCapacity < minMemtablePrealloc {
+			hintCapacity = minMemtablePrealloc
+		}
+		if hintCapacity < want {
+			want = hintCapacity
+		}
+		if want > requestedCap {
+			want = requestedCap
+		}
+		return want
+	}
+
+	fake.HeapInuse = 1 << 30 // normal
+	normal := cache.appendOnlyMemtableCapacityHint(requestedCap, appendOnlyEstimatedBytesPerEntryDefault)
+	if want := expectedCapFor(poolPressureNormal); normal != want {
+		t.Fatalf("normal pressure cap=%d want=%d", normal, want)
+	}
+
+	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
+	fake.HeapInuse = 5 << 30 // high
+	high := cache.appendOnlyMemtableCapacityHint(requestedCap, appendOnlyEstimatedBytesPerEntryDefault)
+	if want := expectedCapFor(poolPressureHigh); high != want {
+		t.Fatalf("high pressure cap=%d want=%d", high, want)
+	}
+
+	now = now.Add(poolPressureRefreshInterval + time.Millisecond)
+	fake.HeapInuse = 9 << 30 // critical
+	critical := cache.appendOnlyMemtableCapacityHint(requestedCap, appendOnlyEstimatedBytesPerEntryDefault)
+	if want := expectedCapFor(poolPressureCritical); critical != want {
+		t.Fatalf("critical pressure cap=%d want=%d", critical, want)
+	}
+
+	if !(critical < high && high < normal) {
+		t.Fatalf("expected stricter caps under pressure: normal=%d high=%d critical=%d", normal, high, critical)
 	}
 }

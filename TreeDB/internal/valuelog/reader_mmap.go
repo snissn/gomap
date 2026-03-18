@@ -208,6 +208,30 @@ func (f *File) maybeScheduleRemap() {
 	}()
 }
 
+func (f *File) tryRefreshMmapRange(start, end int64) ([]byte, bool) {
+	if f == nil || start < 0 || end < start {
+		return nil, false
+	}
+	if cur, _ := f.mmapData.Load().([]byte); cur != nil {
+		curLen := int64(len(cur))
+		if known := f.fileSize.Load(); known > 0 && known <= curLen {
+			// Out-of-range on an existing mapping implies our cached file-size hint
+			// may be stale. Nudge it above the current mapping length so
+			// remapToFileSize does a real stat/refresh instead of returning early.
+			f.fileSize.Store(curLen + 1)
+		}
+	}
+	// Perform a synchronous refresh on out-of-range misses so stale mappings
+	// do not repeatedly fall back to ReadAt. This is especially important for
+	// safe read paths, which do not re-enter tryEnableSealedLazyMmap.
+	f.remapToFileSize()
+	data, _ := f.mmapData.Load().([]byte)
+	if data == nil || end > int64(len(data)) {
+		return nil, false
+	}
+	return data, true
+}
+
 func (f *File) remapToFileSize() {
 	if f == nil || f.closed.Load() || f.File == nil {
 		return
@@ -302,8 +326,11 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	start := int64(ptr.Offset - 4)
 	if start < 0 || start+HeaderSize > int64(len(data)) {
 		f.mmapReadMissOutOfRange.Add(1)
-		f.maybeScheduleRemap()
-		return nil, nil, false
+		if refreshed, ok := f.tryRefreshMmapRange(start, start+HeaderSize); ok {
+			data = refreshed
+		} else {
+			return nil, nil, false
+		}
 	}
 
 	header := data[start : start+HeaderSize]
@@ -325,8 +352,12 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 	end := start + HeaderSize + int64(valueLen)
 	if end > int64(len(data)) {
 		f.mmapReadMissOutOfRange.Add(1)
-		f.maybeScheduleRemap()
-		return nil, nil, false
+		if refreshed, ok := f.tryRefreshMmapRange(start, end); ok {
+			data = refreshed
+			header = data[start : start+HeaderSize]
+		} else {
+			return nil, nil, false
+		}
 	}
 
 	payload := data[start+HeaderSize : end]
@@ -336,7 +367,6 @@ func (f *File) readViaMmapView(ptr page.ValuePtr, verifyCRC bool) ([]byte, error
 			return nil, ErrCorrupt, true
 		}
 	}
-
 	// Non-grouped record: the payload is the value.
 	if flags&recordFlagGrouped == 0 {
 		if f.templateLookup != nil && templ.IsEncodedPayload(payload) {
@@ -614,8 +644,11 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	start := int64(ptr.Offset - 4)
 	if start < 0 || start+HeaderSize > int64(len(data)) {
 		f.mmapReadMissOutOfRange.Add(1)
-		f.maybeScheduleRemap()
-		return nil, false, nil, false
+		if refreshed, ok := f.tryRefreshMmapRange(start, start+HeaderSize); ok {
+			data = refreshed
+		} else {
+			return nil, false, nil, false
+		}
 	}
 
 	header := data[start : start+HeaderSize]
@@ -637,8 +670,12 @@ func (f *File) readViaMmapViewTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	end := start + HeaderSize + int64(valueLen)
 	if end > int64(len(data)) {
 		f.mmapReadMissOutOfRange.Add(1)
-		f.maybeScheduleRemap()
-		return nil, false, nil, false
+		if refreshed, ok := f.tryRefreshMmapRange(start, end); ok {
+			data = refreshed
+			header = data[start : start+HeaderSize]
+		} else {
+			return nil, false, nil, false
+		}
 	}
 
 	payload := data[start+HeaderSize : end]
@@ -817,8 +854,11 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	start := int64(ptr.Offset - 4)
 	if start < 0 || start+HeaderSize > int64(len(data)) {
 		f.mmapReadMissOutOfRange.Add(1)
-		f.maybeScheduleRemap()
-		return nil, nil, false
+		if refreshed, ok := f.tryRefreshMmapRange(start, start+HeaderSize); ok {
+			data = refreshed
+		} else {
+			return nil, nil, false
+		}
 	}
 
 	header := data[start : start+HeaderSize]
@@ -840,8 +880,12 @@ func (f *File) readViaMmapAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) 
 	end := start + HeaderSize + int64(valueLen)
 	if end > int64(len(data)) {
 		f.mmapReadMissOutOfRange.Add(1)
-		f.maybeScheduleRemap()
-		return nil, nil, false
+		if refreshed, ok := f.tryRefreshMmapRange(start, end); ok {
+			data = refreshed
+			header = data[start : start+HeaderSize]
+		} else {
+			return nil, nil, false
+		}
 	}
 
 	payload := data[start+HeaderSize : end]

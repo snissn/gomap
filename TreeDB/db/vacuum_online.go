@@ -180,6 +180,10 @@ func (db *DB) VacuumIndexOnline(ctx context.Context) error {
 	newZ.SetLeafPageReader(db.valueLogManager)
 	newZ.SetLeafPageLog(db.leafPageLog)
 	newZ.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
+	db.idxMu.Lock()
+	parallelMergePressureSource := db.zipperParallelMergeSource
+	db.idxMu.Unlock()
+	newZ.SetParallelMergePressureSource(parallelMergePressureSource)
 
 	db.vacuum.Start()
 	defer db.vacuum.Stop()

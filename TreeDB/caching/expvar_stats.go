@@ -69,8 +69,12 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 	}
 	out := make(map[string]any)
 	for k, v := range stats {
-		if strings.HasPrefix(k, "treedb.cache.vlog_mmap.") ||
-			strings.HasPrefix(k, "treedb.process.memory.") {
+		// Export all process-scoped telemetry families via treedb.process.*
+		// and select cache families used for mmap/decode/batch-arena tracking.
+		if strings.HasPrefix(k, "treedb.process.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_mmap.") ||
+			strings.HasPrefix(k, "treedb.cache.vlog_decode_buffer_grow.") ||
+			strings.HasPrefix(k, "treedb.cache.batch_arena.") {
 			out[k] = coerceStatsValue(v)
 		}
 	}

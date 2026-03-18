@@ -96,6 +96,7 @@ type DB struct {
 	indexAdaptiveLeafEncoding  bool
 	piggybackCompaction        bool
 	maintenanceOpsPerCoalesce  int
+	zipperParallelMergeSource  zipper.ParallelMergePressureSource
 
 	mu               sync.RWMutex
 	writeMu          sync.RWMutex
@@ -1764,6 +1765,21 @@ func (db *DB) Zipper() *zipper.Zipper {
 	}
 	return idx.zipper
 }
+
+// SetZipperParallelMergePressureSource installs an optional pressure signal for
+// future zipper generations and the current live zipper.
+func (db *DB) SetZipperParallelMergePressureSource(src zipper.ParallelMergePressureSource) {
+	if db == nil {
+		return
+	}
+	db.idxMu.Lock()
+	db.zipperParallelMergeSource = src
+	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
+		idx.zipper.SetParallelMergePressureSource(src)
+	}
+	db.idxMu.Unlock()
+}
+
 func (db *DB) InlineThreshold() int {
 	if db == nil {
 		return page.DefaultInlineThreshold
