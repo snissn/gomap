@@ -35,6 +35,14 @@ type groupedFrameCacheEntry struct {
 	used      uint64
 }
 
+type sealedLazyMmapDenyReason uint8
+
+const (
+	sealedLazyMmapDenyNone sealedLazyMmapDenyReason = iota
+	sealedLazyMmapDenyCountCap
+	sealedLazyMmapDenyBytesCap
+)
+
 // File represents a value-log segment on disk.
 type File struct {
 	ID                 uint32
@@ -79,13 +87,14 @@ type File struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings          [][]byte
-	deadMappedBytes       atomic.Uint64
-	remapCount            atomic.Uint64
-	deadMappingsCount     atomic.Uint64
-	sealedMapDeniedCount  atomic.Uint64
-	mmapReadHits          atomic.Uint64
-	mmapReadMissNoMapping atomic.Uint64
+	deadMappings           [][]byte
+	deadMappedBytes        atomic.Uint64
+	remapCount             atomic.Uint64
+	deadMappingsCount      atomic.Uint64
+	sealedMapDeniedByCount atomic.Uint64
+	sealedMapDeniedByBytes atomic.Uint64
+	mmapReadHits           atomic.Uint64
+	mmapReadMissNoMapping  atomic.Uint64
 	// mmapReadMissOutOfRange counts reads that miss because the requested record
 	// range is not currently covered by the active mmap.
 	mmapReadMissOutOfRange atomic.Uint64
@@ -1214,33 +1223,39 @@ func (m *Manager) MmapResidencyStats() (currentSegments uint64, currentBytes uin
 }
 
 func (m *Manager) SealedMapDeniedStats() uint64 {
+	byCount, byBytes := m.SealedMapDeniedByReasonStats()
+	return byCount + byBytes
+}
+
+func (m *Manager) SealedMapDeniedByReasonStats() (countCap uint64, bytesCap uint64) {
 	if m == nil {
-		return 0
+		return 0, 0
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	var denied uint64
 	for _, f := range m.files {
-		denied += f.sealedMapDeniedCount.Load()
+		countCap += f.sealedMapDeniedByCount.Load()
+		bytesCap += f.sealedMapDeniedByBytes.Load()
 	}
-	return denied
+	return countCap, bytesCap
 }
 
-func (m *Manager) allowSealedLazyMmapLocked(target *File) bool {
+func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (bool, sealedLazyMmapDenyReason) {
 	if m == nil || target == nil {
-		return false
+		return false, sealedLazyMmapDenyCountCap
 	}
 	if MaxMappedSealedSegments <= 0 {
-		return false
+		return false, sealedLazyMmapDenyCountCap
 	}
 	if target.currentWritable.Load() {
-		return true
+		return true, sealedLazyMmapDenyNone
 	}
 	data, _ := target.mmapData.Load().([]byte)
 	if len(data) > 0 {
-		return true
+		return true, sealedLazyMmapDenyNone
 	}
 	mappedSealed := 0
+	var mappedSealedBytes uint64
 	for _, f := range m.files {
 		if f == nil || f.currentWritable.Load() {
 			continue
@@ -1248,12 +1263,26 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File) bool {
 		data, _ := f.mmapData.Load().([]byte)
 		if len(data) > 0 {
 			mappedSealed++
+			mappedSealedBytes += uint64(len(data))
 			if mappedSealed >= MaxMappedSealedSegments {
-				return false
+				return false, sealedLazyMmapDenyCountCap
 			}
 		}
 	}
-	return true
+	if MaxMappedSealedBytes > 0 {
+		targetBytes := uint64(targetSize)
+		if targetBytes == 0 {
+			if info, err := target.File.Stat(); err == nil {
+				if sz := info.Size(); sz > 0 {
+					targetBytes = uint64(sz)
+				}
+			}
+		}
+		if targetBytes > 0 && mappedSealedBytes+targetBytes > uint64(MaxMappedSealedBytes) {
+			return false, sealedLazyMmapDenyBytesCap
+		}
+	}
+	return true, sealedLazyMmapDenyNone
 }
 
 func (m *Manager) MmapReadStats() (hits uint64, missesOutOfRange uint64, missesNoMapping uint64, missesDeadMappingCap uint64, fallbacksReadAt uint64) {
