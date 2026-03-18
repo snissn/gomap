@@ -270,6 +270,9 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	if !*treedbDisableWAL {
 		t.Fatalf("expected fast profile to disable WAL")
 	}
+	if !*treedbDisableReadChecksum {
+		t.Fatalf("expected fast profile to disable read checksum")
+	}
 
 	resetTreeDBIndexFlagsForTest()
 	if err := applyProfile("wal_on_fast", map[string]bool{}); err != nil {
@@ -286,6 +289,9 @@ func TestApplyProfile_FastAndWALOnFastEnableIndexOptimizations(t *testing.T) {
 	}
 	if !*treedbRelaxedSync {
 		t.Fatalf("expected wal_on_fast profile to enable relaxed sync")
+	}
+	if !*treedbDisableReadChecksum {
+		t.Fatalf("expected wal_on_fast profile to disable read checksum")
 	}
 }
 

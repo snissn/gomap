@@ -3,6 +3,7 @@ package tree
 import (
 	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/node"
@@ -14,6 +15,15 @@ type trackedValueReader struct {
 	*mapValueReader
 	readUnsafeCalls       int
 	readUnsafeAppendCalls int
+}
+
+type trackedValueReaderWithChecksumMode struct {
+	*trackedValueReader
+	readChecksumEnabled bool
+}
+
+func (r *trackedValueReaderWithChecksumMode) ReadChecksumEnabled() bool {
+	return r.readChecksumEnabled
 }
 
 func (r *trackedValueReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
@@ -287,6 +297,59 @@ func TestTreeGetAppend_UsesAppendReaderForLeafRefPages(t *testing.T) {
 	if tracked.readUnsafeCalls != 0 {
 		t.Fatalf("expected ReadUnsafe to be bypassed, got %d calls", tracked.readUnsafeCalls)
 	}
+}
+
+func TestTreeGetAppend_LeafRefChecksumPolicyHonored(t *testing.T) {
+	makeCorruptLeaf := func() []byte {
+		leafData := make([]byte, page.PageSize)
+		leaf := node.NewNode(leafData)
+		leaf.SetType(page.PageTypeLeaf)
+		leaf.SetPageID(1)
+		leaf.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
+		leaf.UpdateChecksum()
+		// Corrupt checksum field only (header bytes [8,12)).
+		leafData[8] ^= 0x01
+		return leafData
+	}
+
+	buildTree := func(checksumEnabled bool) *Tree {
+		tracked := &trackedValueReaderWithChecksumMode{
+			trackedValueReader:  &trackedValueReader{mapValueReader: newMapValueReader()},
+			readChecksumEnabled: checksumEnabled,
+		}
+		leafRefID, err := page.EncodeLeafRef(page.ValuePtr{
+			FileID: page.ValueLogFileID(1),
+			Offset: 8,
+		})
+		if err != nil {
+			t.Fatalf("EncodeLeafRef: %v", err)
+		}
+		ptr, ok := page.DecodeLeafRef(leafRefID)
+		if !ok {
+			t.Fatalf("DecodeLeafRef failed")
+		}
+		tracked.values[ptr] = makeCorruptLeaf()
+		return New(nil, tracked, leafRefID)
+	}
+
+	t.Run("verify_enabled", func(t *testing.T) {
+		tr := buildTree(true)
+		_, err := tr.GetAppend([]byte("k"), nil)
+		if err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+			t.Fatalf("expected checksum mismatch, got %v", err)
+		}
+	})
+
+	t.Run("verify_disabled", func(t *testing.T) {
+		tr := buildTree(false)
+		got, err := tr.GetAppend([]byte("k"), nil)
+		if err != nil {
+			t.Fatalf("GetAppend failed: %v", err)
+		}
+		if string(got) != "v" {
+			t.Fatalf("unexpected value: %q", got)
+		}
+	})
 }
 
 func TestTreeGetUnsafe_UsesUnsafeReaderForPointers(t *testing.T) {
