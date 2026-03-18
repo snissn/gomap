@@ -1765,6 +1765,81 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T
 	}
 }
 
+func TestVlogGenerationRewritePlan_CancelStillRunsForcedGC(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	blocking := &blockingRewritePlannerBackend{
+		DB:        backend,
+		planStart: make(chan struct{}),
+		planBlock: make(chan struct{}),
+	}
+
+	db, err := Open(dir, blocking, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k1"), make([]byte, 4096)); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+
+	doneMaintenance := make(chan struct{})
+	go func() {
+		db.maybeRunVlogGenerationMaintenance(true)
+		close(doneMaintenance)
+	}()
+
+	wait := schedulerTestWait(t)
+	select {
+	case <-blocking.planStart:
+	case <-time.After(wait):
+		t.Fatalf("rewrite plan did not start")
+	}
+
+	// Resume foreground activity so rewrite planning is canceled.
+	db.noteRead()
+
+	select {
+	case <-doneMaintenance:
+	case <-time.After(wait):
+		t.Fatalf("maintenance did not finish after rewrite-plan cancellation")
+	}
+
+	if got := db.vlogGenerationGCRuns.Load(); got == 0 {
+		t.Fatalf("expected forced GC path to run after rewrite-plan cancellation")
+	}
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
+		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
+	}
+}
+
 func TestVlogGenerationGC_DryRunEligibleBytesTriggersRealGC(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

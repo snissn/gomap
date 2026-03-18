@@ -21,8 +21,10 @@ import (
 )
 
 const (
-	defaultGroupedFrameCacheEntries     = 4
-	defaultGroupedFrameCacheMaxRawBytes = 4 << 20
+	// Keep grouped-frame cache modest by default so restore workloads with many
+	// open segments do not retain large decoded-raw payloads per file.
+	defaultGroupedFrameCacheEntries     = 2
+	defaultGroupedFrameCacheMaxRawBytes = 1 << 20
 )
 
 type groupedFrameCacheEntry struct {
@@ -35,14 +37,24 @@ type groupedFrameCacheEntry struct {
 	used      uint64
 }
 
+type sealedLazyMmapDenyReason uint8
+
+const (
+	sealedLazyMmapDenyNone sealedLazyMmapDenyReason = iota
+	sealedLazyMmapDenyCountCap
+	sealedLazyMmapDenyBytesCap
+)
+
 // File represents a value-log segment on disk.
 type File struct {
 	ID                 uint32
 	Path               string
 	File               *os.File
+	manager            *Manager
 	RefCount           atomic.Int64
 	IsZombie           atomic.Bool
 	retryDeletePending atomic.Bool
+	currentWritable    atomic.Bool
 	dictLookup         DictLookup
 	templateLookup     TemplateLookup
 	templateDecodeOpts templ.DecodeOptions
@@ -73,15 +85,20 @@ type File struct {
 
 	// mmapData holds the current read-only mapping. Readers load it without locks.
 	mmapData atomic.Value // stores []byte (may be nil slice)
+	fileSize atomic.Int64 // last known on-disk size; 0 means unknown
 
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings          [][]byte
-	remapCount            atomic.Uint64
-	deadMappingsCount     atomic.Uint64
-	mmapReadHits          atomic.Uint64
-	mmapReadMissNoMapping atomic.Uint64
+	deadMappings           [][]byte
+	deadMappedBytes        atomic.Uint64
+	remapCount             atomic.Uint64
+	deadMappingsCount      atomic.Uint64
+	sealedMapDeniedByCount atomic.Uint64
+	sealedMapDeniedByBytes atomic.Uint64
+	sealedLazyMmapDenied   atomic.Bool
+	mmapReadHits           atomic.Uint64
+	mmapReadMissNoMapping  atomic.Uint64
 	// mmapReadMissOutOfRange counts reads that miss because the requested record
 	// range is not currently covered by the active mmap.
 	mmapReadMissOutOfRange atomic.Uint64
@@ -109,7 +126,11 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
 	}
 	vf.mmapData.Store([]byte(nil))
-	vf.maybeScheduleRemap()
+	if info, err := f.Stat(); err == nil {
+		if sz := info.Size(); sz > 0 {
+			vf.fileSize.Store(sz)
+		}
+	}
 	return vf, nil
 }
 
@@ -394,6 +415,7 @@ func (f *File) Close() error {
 	}
 	f.deadMappings = nil
 	f.deadMappingsCount.Store(0)
+	f.deadMappedBytes.Store(0)
 	f.mmapData.Store([]byte(nil))
 	f.remapMu.Unlock()
 
@@ -424,6 +446,16 @@ func (f *File) ReadUnsafe(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
 		f.mmapReadHits.Add(1)
 		return val, err
 	}
+	if !f.usesPersistentMmap() {
+		if f.tryEnableSealedLazyMmap() {
+			if val, err, ok := f.readViaMmapView(ptr, verifyCRC); ok {
+				f.mmapReadHits.Add(1)
+				return val, err
+			}
+		}
+		f.mmapReadFallbackReadAt.Add(1)
+		return ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
 	data, _ := f.mmapData.Load().([]byte)
@@ -450,6 +482,16 @@ func (f *File) ReadUnsafeTo(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]by
 	if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
 		f.mmapReadHits.Add(1)
 		return val, usedDst, err
+	}
+	if !f.usesPersistentMmap() {
+		if f.tryEnableSealedLazyMmap() {
+			if val, usedDst, err, ok := f.readViaMmapViewTo(ptr, verifyCRC, dst); ok {
+				f.mmapReadHits.Add(1)
+				return val, usedDst, err
+			}
+		}
+		f.mmapReadFallbackReadAt.Add(1)
+		return ReadAtWithDictTo(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts, dst)
 	}
 	// Avoid per-read Stat/lock churn once we have exhausted the dead-mapping
 	// budget: remapToFileSize won't be able to grow the mapping safely again.
@@ -536,15 +578,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		}
 		fFlags := frameHeader[1]
 		if fFlags&FrameFlagCompressed != 0 {
-			// Fallback to the full decoder (will allocate).
-			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err
-			}
-			oldLen := len(dst)
-			dst = grow(dst, len(val))
-			copy(dst[oldLen:], val)
-			return dst, nil
+			return f.readAppendViaReadAt(ptr, verifyCRC, dst)
 		}
 		ridBytes := k * 8
 		offsetBytes := (k + 1) * 4
@@ -602,18 +636,38 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 
 	// Slow path: use existing decoder and append.
 	f.mmapReadFallbackReadAt.Add(1)
-	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-	if err != nil {
-		return nil, err
-	}
-	oldLen := len(dst)
-	dst = grow(dst, len(val))
-	copy(dst[oldLen:], val)
-	return dst, nil
+	return f.readAppendViaReadAt(ptr, verifyCRC, dst)
 }
 
 func (f *File) ReadUnsafeAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
 	return f.ReadAppend(ptr, verifyCRC, dst)
+}
+
+func (f *File) readAppendViaReadAt(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte, error) {
+	oldLen := len(dst)
+	tail, usedDst, err := ReadAtWithDictTo(
+		f.File,
+		ptr,
+		verifyCRC,
+		f.dictLookup,
+		f.templateLookup,
+		f.templateDefCache,
+		f.templateDecodeOpts,
+		dst[oldLen:oldLen:cap(dst)],
+	)
+	if err != nil {
+		return nil, err
+	}
+	if oldLen == 0 {
+		return tail, nil
+	}
+	if len(tail) == 0 {
+		return dst[:oldLen], nil
+	}
+	if usedDst {
+		return dst[:oldLen+len(tail)], nil
+	}
+	return append(dst[:oldLen], tail...), nil
 }
 
 func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]byte, error) {
@@ -715,6 +769,9 @@ type Manager struct {
 
 	mu    sync.RWMutex
 	files map[uint32]*File
+	// currentWritableByLane tracks the one segment per lane that may still grow
+	// and therefore is allowed to remap aggressively for zero-copy unsafe views.
+	currentWritableByLane map[uint32]uint32
 
 	refreshScans atomic.Uint64
 
@@ -731,6 +788,7 @@ func NewManager(dir string) (*Manager, error) {
 	m := &Manager{
 		dir:                      dir,
 		files:                    make(map[uint32]*File),
+		currentWritableByLane:    make(map[uint32]uint32),
 		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
 		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
 	}
@@ -875,9 +933,36 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	if err != nil {
 		return err
 	}
+	f.manager = m
 	f.setGroupedFrameCacheEntries(m.groupedFrameCacheEntries)
 	f.setGroupedFrameCacheMaxRawBytes(m.groupedFrameCacheMaxRaw)
 	m.files[id] = f
+	return nil
+}
+
+// PromoteCurrentWritable marks fileID as the current writable segment for its
+// lane and seals the previous current segment in that lane.
+func (m *Manager) PromoteCurrentWritable(fileID uint32) error {
+	if m == nil {
+		return nil
+	}
+	lane, _ := DecodeFileID(fileID)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.currentWritableByLane == nil {
+		m.currentWritableByLane = make(map[uint32]uint32)
+	}
+	f, ok := m.files[fileID]
+	if !ok {
+		return &fileNotFoundError{id: fileID}
+	}
+	if prevID, ok := m.currentWritableByLane[lane]; ok && prevID != 0 && prevID != fileID {
+		if prev := m.files[prevID]; prev != nil {
+			prev.currentWritable.Store(false)
+		}
+	}
+	f.currentWritable.Store(true)
+	m.currentWritableByLane[lane] = fileID
 	return nil
 }
 
@@ -1132,6 +1217,96 @@ func (m *Manager) RemapStats() (remaps uint64, deadMappings uint64) {
 		deadMappings += f.deadMappingsCount.Load()
 	}
 	return remaps, deadMappings
+}
+
+// MmapResidencyStats reports current aggregate mmap residency.
+func (m *Manager) MmapResidencyStats() (currentSegments uint64, currentBytes uint64, sealedSegments uint64, sealedBytes uint64, deadMappings uint64, deadBytes uint64) {
+	if m == nil {
+		return 0, 0, 0, 0, 0, 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		data, _ := f.mmapData.Load().([]byte)
+		if len(data) > 0 {
+			if f.currentWritable.Load() {
+				currentSegments++
+				currentBytes += uint64(len(data))
+			} else {
+				sealedSegments++
+				sealedBytes += uint64(len(data))
+			}
+		}
+		deadMappings += f.deadMappingsCount.Load()
+		deadBytes += f.deadMappedBytes.Load()
+	}
+	return currentSegments, currentBytes, sealedSegments, sealedBytes, deadMappings, deadBytes
+}
+
+func (m *Manager) SealedMapDeniedStats() uint64 {
+	byCount, byBytes := m.SealedMapDeniedByReasonStats()
+	return byCount + byBytes
+}
+
+func (m *Manager) SealedMapDeniedByReasonStats() (countCap uint64, bytesCap uint64) {
+	if m == nil {
+		return 0, 0
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, f := range m.files {
+		countCap += f.sealedMapDeniedByCount.Load()
+		bytesCap += f.sealedMapDeniedByBytes.Load()
+	}
+	return countCap, bytesCap
+}
+
+func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (bool, sealedLazyMmapDenyReason) {
+	if m == nil || target == nil {
+		return false, sealedLazyMmapDenyCountCap
+	}
+	if MaxMappedSealedSegments <= 0 {
+		return false, sealedLazyMmapDenyCountCap
+	}
+	if target.currentWritable.Load() {
+		return true, sealedLazyMmapDenyNone
+	}
+	data, _ := target.mmapData.Load().([]byte)
+	if len(data) > 0 {
+		return true, sealedLazyMmapDenyNone
+	}
+	mappedSealed := 0
+	var mappedSealedBytes uint64
+	for _, f := range m.files {
+		if f == nil || f.currentWritable.Load() {
+			continue
+		}
+		data, _ := f.mmapData.Load().([]byte)
+		if len(data) > 0 {
+			mappedSealed++
+			mappedSealedBytes += uint64(len(data))
+			if mappedSealed >= MaxMappedSealedSegments {
+				return false, sealedLazyMmapDenyCountCap
+			}
+		}
+	}
+	if MaxMappedSealedBytes > 0 {
+		targetBytes := uint64(targetSize)
+		if targetBytes == 0 {
+			if known := target.fileSize.Load(); known > 0 {
+				targetBytes = uint64(known)
+			} else if info, err := target.File.Stat(); err == nil {
+				if sz := info.Size(); sz > 0 {
+					targetBytes = uint64(sz)
+					target.fileSize.Store(sz)
+				}
+			}
+		}
+		if targetBytes > 0 && mappedSealedBytes+targetBytes > uint64(MaxMappedSealedBytes) {
+			return false, sealedLazyMmapDenyBytesCap
+		}
+	}
+	return true, sealedLazyMmapDenyNone
 }
 
 func (m *Manager) MmapReadStats() (hits uint64, missesOutOfRange uint64, missesNoMapping uint64, missesDeadMappingCap uint64, fallbacksReadAt uint64) {

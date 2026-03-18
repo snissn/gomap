@@ -53,3 +53,68 @@ func TestBatchSet_AllocFreeAfterWarm(t *testing.T) {
 		t.Fatalf("allocs/run=%f want=0", allocs)
 	}
 }
+
+func TestBatchResetArenaLocked_KeepsLargestReusableChunk(t *testing.T) {
+	b := &Batch{
+		arenaChunks: [][]byte{
+			make([]byte, 8, batchArenaDefaultChunkCap),
+			make([]byte, 8, batchArenaDefaultChunkCap*2),
+			make([]byte, 8, batchArenaDefaultChunkCap*4),
+		},
+	}
+
+	b.resetArenaLocked()
+
+	if got := len(b.arenaChunks); got != 1 {
+		t.Fatalf("arena chunk count=%d want=1", got)
+	}
+	if got, want := cap(b.arenaChunks[0]), batchArenaDefaultChunkCap*4; got != want {
+		t.Fatalf("retained chunk cap=%d want=%d", got, want)
+	}
+	if got := len(b.arenaChunks[0]); got != 0 {
+		t.Fatalf("retained chunk len=%d want=0", got)
+	}
+}
+
+func TestBatchResetArenaLocked_DropsOversizedOnlyChunks(t *testing.T) {
+	b := &Batch{
+		arenaChunks: [][]byte{
+			make([]byte, 8, batchArenaMaxRetainCap+1),
+			make([]byte, 8, batchArenaMaxRetainCap*2),
+		},
+	}
+
+	b.resetArenaLocked()
+
+	if len(b.arenaChunks) != 0 {
+		t.Fatalf("expected oversized chunks to be dropped; got=%d", len(b.arenaChunks))
+	}
+}
+
+func TestBatchEnsureArenaChunk_GeometricGrowth(t *testing.T) {
+	b := &Batch{}
+
+	b.ensureArenaChunk(1)
+	if got, want := len(b.arenaChunks), 1; got != want {
+		t.Fatalf("chunk count=%d want=%d", got, want)
+	}
+	firstCap := cap(b.arenaChunks[0])
+	if firstCap != batchArenaDefaultChunkCap {
+		t.Fatalf("first chunk cap=%d want=%d", firstCap, batchArenaDefaultChunkCap)
+	}
+
+	// Exhaust each chunk so ensureArenaChunk allocates the next one.
+	b.arenaChunks[0] = b.arenaChunks[0][:firstCap]
+	b.ensureArenaChunk(1)
+	secondCap := cap(b.arenaChunks[1])
+	if got, want := secondCap, firstCap*2; got != want {
+		t.Fatalf("second chunk cap=%d want=%d", got, want)
+	}
+
+	b.arenaChunks[1] = b.arenaChunks[1][:secondCap]
+	b.ensureArenaChunk(1)
+	thirdCap := cap(b.arenaChunks[2])
+	if got, want := thirdCap, secondCap*2; got != want {
+		t.Fatalf("third chunk cap=%d want=%d", got, want)
+	}
+}
