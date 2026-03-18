@@ -249,15 +249,6 @@ func (f *File) remapToFileSize() {
 	if f.closed.Load() || f.File == nil {
 		return
 	}
-	if !f.usesPersistentMmap() {
-		data, _ := f.mmapData.Load().([]byte)
-		if len(data) > 0 {
-			if known := f.fileSize.Load(); known > 0 && int64(len(data)) >= known {
-				return
-			}
-		}
-	}
-
 	// If we have already hit the dead-mapping cap, we cannot remap again without
 	// risking use-after-unmap for callers holding unsafe mmap views. Avoid the
 	// per-call Stat allocation when reads keep missing the current mapping.
