@@ -98,9 +98,24 @@ type slabKeyAwareCapability interface {
 	KeyAwareEnabled() bool
 }
 
+// Optional capability gate for slab/leaf-ref checksum verification.
+//
+// Returning false allows tree leaf-ref readers to skip per-page checksum
+// validation on hot paths (unsafe; intended for explicitly relaxed profiles).
+type slabReadChecksumCapability interface {
+	ReadChecksumEnabled() bool
+}
+
 func keyAwarePointerReadsEnabled(sr SlabReader) bool {
 	if gate, ok := sr.(slabKeyAwareCapability); ok {
 		return gate.KeyAwareEnabled()
+	}
+	return true
+}
+
+func slabReadChecksumEnabled(sr SlabReader) bool {
+	if gate, ok := sr.(slabReadChecksumCapability); ok {
+		return gate.ReadChecksumEnabled()
 	}
 	return true
 }
@@ -114,14 +129,16 @@ type Tree struct {
 	slabKeyReader   slabUnsafeKeyReader
 	slabKeyAppender slabUnsafeKeyAppender
 	slabKeyBatcher  slabUnsafeKeyBatchAppender
+	slabVerifyCRC   bool
 	rootPageID      uint64
 }
 
 func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 	t := &Tree{
-		pager:      p,
-		slabReader: sr,
-		rootPageID: root,
+		pager:         p,
+		slabReader:    sr,
+		slabVerifyCRC: slabReadChecksumEnabled(sr),
+		rootPageID:    root,
 	}
 	keyAwareEnabled := keyAwarePointerReadsEnabled(sr)
 	if app, ok := sr.(slabUnsafeAppender); ok {
@@ -151,6 +168,7 @@ func New(p *pager.Pager, sr SlabReader, root uint64) *Tree {
 func (t *Tree) Reset(p *pager.Pager, sr SlabReader, root uint64) {
 	t.pager = p
 	t.slabReader = sr
+	t.slabVerifyCRC = slabReadChecksumEnabled(sr)
 	if app, ok := sr.(slabUnsafeAppender); ok {
 		t.slabAppender = app
 	} else {
@@ -195,6 +213,13 @@ func (t *Tree) SetRoot(root uint64) {
 	t.rootPageID = root
 }
 
+func (t *Tree) shouldVerifyLeafRefChecksum() bool {
+	if t == nil {
+		return true
+	}
+	return t.slabVerifyCRC
+}
+
 func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error) {
 	if t == nil {
 		return node.Node{}, errors.New("missing tree")
@@ -211,7 +236,7 @@ func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error)
 			return node.Node{}, fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
 		}
 		n := node.NewNodeView(data)
-		if !n.VerifyChecksum() {
+		if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
 			return node.Node{}, fmt.Errorf("checksum mismatch on page %d", pageID)
 		}
 		if n.Type() != page.PageTypeLeaf {
@@ -366,7 +391,7 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 						return nil, page.ValuePtr{}, 0, false, fmt.Errorf("invalid leaf page size %d for page %d", len(data), currID)
 					}
 					n = node.NewNodeView(data)
-					if !n.VerifyChecksum() {
+					if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
 						if leafScratchOwned {
 							putLeafRefPageScratch(leafScratch)
 						}

@@ -679,6 +679,13 @@ type Set struct {
 	disableReadChecksum bool
 }
 
+func (s *Set) ReadChecksumEnabled() bool {
+	if s == nil {
+		return true
+	}
+	return !s.disableReadChecksum
+}
+
 func (s *Set) Read(ptr page.ValuePtr) ([]byte, error) {
 	f, ok := s.Files[ptr.FileID]
 	if !ok {
@@ -790,6 +797,15 @@ func (m *Manager) SetDisableReadChecksum(disable bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.disableReadChecksum = disable
+}
+
+func (m *Manager) ReadChecksumEnabled() bool {
+	if m == nil {
+		return true
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return !m.disableReadChecksum
 }
 
 func (m *Manager) SetDictLookup(lookup DictLookup) {
