@@ -11836,6 +11836,7 @@ planned:
 		shouldRewrite = false
 	}
 	rewriter, hasRewriter := db.backend.(backendValueLogRewriter)
+	rewriteMinIntervalBlocked := false
 	if shouldRewrite && hasRewriter {
 		last := db.vlogGenerationLastRewriteUnixNano.Load()
 		minInterval := vlogGenerationRewriteMinInterval
@@ -11846,6 +11847,7 @@ planned:
 			lastAt := time.Unix(0, last)
 			if now.Sub(lastAt) < minInterval {
 				shouldRewrite = false
+				rewriteMinIntervalBlocked = true
 			}
 		}
 	}
@@ -11916,6 +11918,25 @@ planned:
 				}
 			}
 		}
+	}
+	if !shouldRewrite && hasRewriter {
+		db.debugVlogMaintf(
+			"rewrite_skip reason=%s quiet=%t queue_len=%d plan_backoff=%t cancel_backoff=%t ineffective_backoff=%t min_interval_blocked=%t run_gc=%t bypass_quiet=%t total_bytes=%d stale_ratio_ppm=%d churn_bps=%d checkpoint_runs=%d disable_journal=%t",
+			vlogGenerationReasonString(reason),
+			quiet,
+			len(rewriteQueue),
+			planBackoff,
+			rewriteCancelBackoff,
+			ineffectiveBackoff,
+			rewriteMinIntervalBlocked,
+			runGC,
+			opts.bypassQuiet,
+			totalBytes,
+			staleRatioPPM,
+			churnBps,
+			db.checkpointRuns.Load(),
+			db.disableJournal,
+		)
 	}
 	if shouldRewrite && hasRewriter {
 		db.debugVlogMaintf(
