@@ -4871,6 +4871,11 @@ const (
 	defaultVlogRewriteBudgetBytesPerSec  int64  = 128 << 20
 	defaultVlogRewriteTriggerTotalBytes  int64  = 4 << 30
 	defaultVlogRewriteTriggerStalePPM    uint32 = 200000
+	// Generic rewrite passes (total-bytes/churn triggers) need an efficacy
+	// floor; rewriting nearly-live segments can amplify bytes and regress wall.
+	vlogGenerationRewriteMinSegmentStaleRatio  = 0.05
+	vlogGenerationRewriteMinSegmentStaleBytes  = int64(1)
+	vlogGenerationRewriteEfficacyMinTotalBytes = int64(512 << 20)
 	// During checkpoint-kick debt drain, allow a bounded multi-segment rewrite
 	// selection so debt can converge faster than one-segment-per-pass.
 	vlogGenerationRewriteDebtDrainMaxSegments = 8
@@ -11679,14 +11684,19 @@ planned:
 			if maxSourceBytes > 0 {
 				ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 				planStart := time.Now()
+				minStaleRatio := db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
-					MaxSourceSegments: 0,
-					MaxSourceBytes:    maxSourceBytes,
+					MaxSourceSegments:    0,
+					MaxSourceBytes:       maxSourceBytes,
+					MinSegmentStaleRatio: minStaleRatio,
+					MinSegmentStaleBytes: vlogGenerationRewriteMinSegmentStaleBytes,
 				})
 				cancel()
 				db.debugVlogMaintf(
-					"rewrite_plan pre_rewrite max_source_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
+					"rewrite_plan pre_rewrite max_source_bytes=%d min_ratio=%.6f min_stale_bytes=%d selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d total_bytes=%d live_bytes=%d stale_bytes=%d dur_ms=%.3f err=%v",
 					maxSourceBytes,
+					minStaleRatio,
+					vlogGenerationRewriteMinSegmentStaleBytes,
 					plan.SegmentsSelected,
 					plan.SegmentsTotal,
 					plan.SelectedBytesTotal,
@@ -11792,7 +11802,11 @@ planned:
 					return nil
 				}
 			}
-			rewriteMaxSegments := db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
+			hadRewriteQueue := len(rewriteQueue) > 0
+			rewriteMaxSegments := vlogGenerationRewriteResumeMaxSegments
+			if hadRewriteQueue {
+				rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
+			}
 			if len(rewriteQueue) > 0 {
 				ledger, _ := db.currentVlogGenerationRewriteLedger()
 				if len(ledger) > 0 {
@@ -11811,7 +11825,9 @@ planned:
 					}
 				}
 				rewriteQueue = append([]uint32(nil), rewritePlan.SourceFileIDs...)
-				rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
+				// Do not debt-drain freshly planned work in the same pass; only apply
+				// multi-segment debt-drain to explicit resume queues.
+				rewriteMaxSegments = vlogGenerationRewriteResumeMaxSegments
 				// If the token bucket is enabled and empty, persist the plan/ledger but
 				// skip running the rewrite until we have budget to spend.
 				if db.vlogGenerationRewriteBudgetEnabled() && budgetTokens <= 0 {
@@ -11831,12 +11847,8 @@ planned:
 			} else {
 				rewriteOpts.MaxSourceSegments = 0
 				rewriteOpts.MaxSourceBytes = maxSourceBytes
-				rewriteOpts.MinSegmentStaleRatio = func() float64 {
-					if db.valueLogRewriteTriggerRatioPPM <= 0 {
-						return 0
-					}
-					return float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
-				}()
+				rewriteOpts.MinSegmentStaleRatio = db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
+				rewriteOpts.MinSegmentStaleBytes = vlogGenerationRewriteMinSegmentStaleBytes
 			}
 			db.debugVlogMaintf(
 				"rewrite_exec reason=%s source_ids=%d max_segments=%d budget_tokens=%d max_source_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
@@ -12208,6 +12220,22 @@ func (db *DB) shouldRunVlogGenerationRewrite(totalBytes int64, staleRatioPPM uin
 		return true, vlogGenerationReasonChurn
 	}
 	return false, vlogGenerationReasonNone
+}
+
+func (db *DB) vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes int64) float64 {
+	if totalBytes < vlogGenerationRewriteEfficacyMinTotalBytes {
+		return 0
+	}
+	if db != nil && db.valueLogRewriteTriggerRatioPPM > 0 {
+		ratio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
+		if ratio > 1 {
+			return 1
+		}
+		if ratio > 0 {
+			return ratio
+		}
+	}
+	return vlogGenerationRewriteMinSegmentStaleRatio
 }
 
 func (db *DB) valueLogRewriteBatchSize() int {

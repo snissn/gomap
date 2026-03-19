@@ -479,6 +479,12 @@ func TestVlogGenerationRewrite_UsesAndConsumesBudgetedBytes(t *testing.T) {
 	if planOpts.MaxSourceBytes > initialTokens {
 		t.Fatalf("plan MaxSourceBytes=%d initialTokens=%d", planOpts.MaxSourceBytes, initialTokens)
 	}
+	if planOpts.MinSegmentStaleRatio < 0 || planOpts.MinSegmentStaleRatio > 1 {
+		t.Fatalf("plan MinSegmentStaleRatio=%f want in [0,1]", planOpts.MinSegmentStaleRatio)
+	}
+	if planOpts.MinSegmentStaleBytes != vlogGenerationRewriteMinSegmentStaleBytes {
+		t.Fatalf("plan MinSegmentStaleBytes=%d want %d", planOpts.MinSegmentStaleBytes, vlogGenerationRewriteMinSegmentStaleBytes)
+	}
 	opts, calls := recorder.recordedRewrite()
 	if calls != 1 {
 		t.Fatalf("rewrite calls=%d want=1", calls)
