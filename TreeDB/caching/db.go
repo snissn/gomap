@@ -12162,23 +12162,52 @@ planned:
 				stats.RecordsCopied,
 				float64(time.Since(rewriteStart).Microseconds())/1000,
 			)
-			if stats.BytesBefore > 0 && stats.BytesAfter >= stats.BytesBefore {
+			effectiveBytesBefore := int64(stats.BytesBefore)
+			effectiveBytesAfter := int64(stats.BytesAfter)
+			gcBytesDeleted := int64(0)
+			if len(processedRewriteIDs) > 0 {
+				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
+					return fmt.Errorf("consume generational rewrite queue: %w", err)
+				}
+			}
+			if gcer, ok := db.backend.(backendValueLogGCer); ok {
+				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				gcStart := time.Now()
+				gcStats, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
+					ProtectedPaths: db.valueLogProtectedPaths(),
+				})
+				gcCancel()
+				if gcErr != nil {
+					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(time.Since(gcStart).Microseconds())/1000)
+					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
+				}
+				if gcStats.BytesDeleted > 0 {
+					gcBytesDeleted = int64(gcStats.BytesDeleted)
+					effectiveBytesAfter -= gcBytesDeleted
+					if effectiveBytesAfter < 0 {
+						effectiveBytesAfter = 0
+					}
+				}
+				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
+			}
+			if effectiveBytesBefore > 0 && effectiveBytesAfter >= effectiveBytesBefore {
 				db.vlogGenerationRewriteIneffectiveRuns.Add(1)
-				db.vlogGenerationRewriteIneffectiveBytesIn.Add(uint64(stats.BytesBefore))
-				db.vlogGenerationRewriteIneffectiveBytesOut.Add(uint64(stats.BytesAfter))
+				db.vlogGenerationRewriteIneffectiveBytesIn.Add(uint64(effectiveBytesBefore))
+				db.vlogGenerationRewriteIneffectiveBytesOut.Add(uint64(effectiveBytesAfter))
 				db.debugVlogMaintf(
-					"rewrite_ineffective reason=%s source_ids=%d bytes_before=%d bytes_after=%d queue_len=%d",
+					"rewrite_ineffective reason=%s source_ids=%d bytes_before=%d bytes_after=%d gc_bytes_deleted=%d queue_len=%d",
 					vlogGenerationReasonString(reason),
 					len(rewriteOpts.SourceFileIDs),
-					stats.BytesBefore,
-					stats.BytesAfter,
+					effectiveBytesBefore,
+					effectiveBytesAfter,
+					gcBytesDeleted,
 					len(rewriteQueue),
 				)
 			}
 			dropRewriteDebt := false
 			dropRewriteDebtReason := ""
-			if len(processedRewriteIDs) > 0 && stats.BytesAfter >= stats.BytesBefore {
-				growth := int64(stats.BytesAfter) - int64(stats.BytesBefore)
+			if len(processedRewriteIDs) > 0 && effectiveBytesAfter >= effectiveBytesBefore {
+				growth := effectiveBytesAfter - effectiveBytesBefore
 				if growth >= vlogGenerationRewriteIneffectiveGrowthMinBytes {
 					dropRewriteDebt = true
 					dropRewriteDebtReason = "material_growth"
@@ -12188,11 +12217,6 @@ planned:
 					// scheduler can re-plan from current state instead of retrying.
 					dropRewriteDebt = true
 					dropRewriteDebtReason = "no_progress"
-				}
-			}
-			if len(processedRewriteIDs) > 0 {
-				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
-					return fmt.Errorf("consume generational rewrite queue: %w", err)
 				}
 			}
 			if dropRewriteDebt {
@@ -12209,26 +12233,14 @@ planned:
 					db.observeVlogGenerationRewriteQueuePrune(dropped)
 				}
 				db.debugVlogMaintf(
-					"rewrite_ineffective_drop_queue reason=%s dropped_ids=%d growth=%d threshold=%d drop_reason=%s",
+					"rewrite_ineffective_drop_queue reason=%s dropped_ids=%d growth=%d threshold=%d drop_reason=%s gc_bytes_deleted=%d",
 					vlogGenerationReasonString(reason),
 					dropped,
-					int64(stats.BytesAfter)-int64(stats.BytesBefore),
+					effectiveBytesAfter-effectiveBytesBefore,
 					vlogGenerationRewriteIneffectiveGrowthMinBytes,
 					dropRewriteDebtReason,
+					gcBytesDeleted,
 				)
-			}
-			if gcer, ok := db.backend.(backendValueLogGCer); ok {
-				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				gcStart := time.Now()
-				_, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
-					ProtectedPaths: db.valueLogProtectedPaths(),
-				})
-				gcCancel()
-				if gcErr != nil {
-					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(time.Since(gcStart).Microseconds())/1000)
-					return fmt.Errorf("generational gc after rewrite: %w", gcErr)
-				}
-				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 			db.vlogGenerationRewriteRuns.Add(1)

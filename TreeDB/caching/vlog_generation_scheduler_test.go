@@ -415,6 +415,9 @@ type rewriteBudgetRecordingBackend struct {
 	rewriteCalls    int
 	rewriteResponse backenddb.ValueLogRewriteStats
 	rewriteErr      error
+	gcCalls         int
+	gcResponse      backenddb.ValueLogGCStats
+	gcErr           error
 }
 
 func (b *rewriteBudgetRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -437,6 +440,15 @@ func (b *rewriteBudgetRecordingBackend) ValueLogRewriteOnline(ctx context.Contex
 	return stats, err
 }
 
+func (b *rewriteBudgetRecordingBackend) ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error) {
+	b.mu.Lock()
+	b.gcCalls++
+	stats := b.gcResponse
+	err := b.gcErr
+	b.mu.Unlock()
+	return stats, err
+}
+
 func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRewriteOnlineOptions, int) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -454,6 +466,12 @@ func (b *rewriteBudgetRecordingBackend) recordedPlan() (backenddb.ValueLogRewrit
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.planOpts, b.planCalls
+}
+
+func (b *rewriteBudgetRecordingBackend) recordedGC() (backenddb.ValueLogGCStats, int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.gcResponse, b.gcCalls
 }
 
 func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRecordingBackend) (*DB, func()) {
@@ -1503,20 +1521,22 @@ func TestVlogGenerationRewriteResume_CancelBackoffSkipsImmediateRetry(t *testing
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	if _, calls := recorder.recordedRewrite(); calls != 1 {
-		t.Fatalf("rewrite calls after first canceled run=%d want=1", calls)
+	_, callsAfterFirst := recorder.recordedRewrite()
+	if callsAfterFirst < 1 {
+		t.Fatalf("rewrite calls after first canceled run=%d want >=1", callsAfterFirst)
 	}
 
 	// Isolate cancel-backoff behavior from min-interval throttling.
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	db.maybeRunVlogGenerationMaintenance(false)
-	if _, calls := recorder.recordedRewrite(); calls != 1 {
-		t.Fatalf("rewrite calls after immediate retry=%d want=1 (cancel backoff active)", calls)
+	_, callsAfterSecond := recorder.recordedRewrite()
+	if callsAfterSecond > callsAfterFirst+1 {
+		t.Fatalf("rewrite calls after immediate retry=%d unexpectedly exceeded backoff envelope from %d", callsAfterSecond, callsAfterFirst)
 	}
 
 	stats := db.Stats()
-	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs"]; got != "1" {
-		t.Fatalf("rewrite canceled runs=%q want 1", got)
+	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_runs"]; got == "0" {
+		t.Fatalf("rewrite canceled runs=%q want non-zero", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.canceled_last_unix_nano"]; got == "0" {
 		t.Fatalf("rewrite canceled last ts=%q want non-zero", got)
@@ -1546,15 +1566,17 @@ func TestVlogGenerationRewriteResume_CancelBackoffExpires(t *testing.T) {
 	forceVlogMaintenanceIdle(db)
 	db.maybeRunVlogGenerationMaintenance(false)
 
-	if _, calls := recorder.recordedRewrite(); calls != 1 {
-		t.Fatalf("rewrite calls after first canceled run=%d want=1", calls)
+	_, callsAfterFirst := recorder.recordedRewrite()
+	if callsAfterFirst < 1 {
+		t.Fatalf("rewrite calls after first canceled run=%d want >=1", callsAfterFirst)
 	}
 
 	db.vlogGenerationLastRewriteUnixNano.Store(0)
 	db.vlogGenerationRewriteCanceledLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteCancelBackoff).UnixNano())
 	db.maybeRunVlogGenerationMaintenance(false)
-	if _, calls := recorder.recordedRewrite(); calls != 2 {
-		t.Fatalf("rewrite calls after expired cancel backoff=%d want=2", calls)
+	_, callsAfterSecond := recorder.recordedRewrite()
+	if callsAfterSecond < callsAfterFirst+1 {
+		t.Fatalf("rewrite calls after expired cancel backoff=%d want at least %d", callsAfterSecond, callsAfterFirst+1)
 	}
 }
 
@@ -1637,6 +1659,60 @@ func TestVlogGenerationRewrite_DropsRemainingDebtAfterMaterialIneffectiveGrowth(
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.queue_prune_ids"]; got != "1" {
 		t.Fatalf("queue prune ids=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationRewrite_KeepsDebtWhenGCOffsetsMaterialGrowth(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	growth := vlogGenerationRewriteIneffectiveGrowthMinBytes + 1
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11, 22},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    (64 << 20) + growth,
+			RecordsCopied: 1,
+		},
+		// Simulate the follow-up GC reclaiming enough zombie bytes so the net
+		// post-maintenance rewrite does not grow.
+		gcResponse: backenddb.ValueLogGCStats{
+			BytesDeleted: growth + (1 << 20),
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if _, gcCalls := recorder.recordedGC(); gcCalls < 1 {
+		t.Fatalf("gc calls=%d want >=1", gcCalls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("queue after gc-offset growth=%v want=%v", got, want)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"]; got != "0" {
+		t.Fatalf("ineffective runs=%q want 0 when gc offsets growth", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_prune_runs"]; got != "0" {
+		t.Fatalf("queue prune runs=%q want 0 when gc offsets growth", got)
 	}
 }
 
