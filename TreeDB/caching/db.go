@@ -7143,6 +7143,19 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 	return ctx, cancel
 }
 
+func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
+	// Checkpoint-kick maintenance is an explicit caller opt-in to run outside the
+	// quiet-window gate. Keep this context timeout-bounded, but do not
+	// self-cancel on immediate foreground activity resumes.
+	if opts.bypassQuiet {
+		if timeout > 0 {
+			return context.WithTimeout(context.Background(), timeout)
+		}
+		return context.WithCancel(context.Background())
+	}
+	return db.foregroundMaintenanceContext(timeout)
+}
+
 func (db *DB) noteWrite() {
 	if db == nil {
 		return
@@ -11503,6 +11516,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
+	quiet := db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -11513,7 +11527,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
-	if !runGC && !opts.bypassQuiet && !db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow) {
+	if !runGC && !opts.bypassQuiet && !quiet {
 		return
 	}
 	// In WAL-off mode, do not start rewrite/GC planning before the first
@@ -11566,10 +11580,20 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		shouldRewrite = true
 		reason = vlogGenerationReasonRewriteResume
 	}
+	// Periodic "runGC" passes can run during foreground activity, but rewrite
+	// planning/execution should remain quiet-window-bound unless explicitly
+	// bypassed (checkpoint-kick).
+	if !quiet && !opts.bypassQuiet {
+		shouldRewrite = false
+		reason = vlogGenerationReasonNone
+	}
 	// Stale-ratio trigger: use a sparse rewrite plan (live-byte estimate) to
 	// detect when any segments are meaningfully stale. This avoids relying on
 	// reclaimable-WAL heuristics (which can be 0 in split-value-log mode).
 	if len(rewriteQueue) == 0 && !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
+		if !quiet && !opts.bypassQuiet {
+			goto planned
+		}
 		lastPlan := db.vlogGenerationLastRewritePlanUnixNano.Load()
 		if lastPlan > 0 {
 			lastAt := time.Unix(0, lastPlan)
@@ -11596,7 +11620,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
 		}
-		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
+		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
 		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
 		planStart := time.Now()
 		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
@@ -11685,7 +11709,7 @@ planned:
 				maxSourceBytes = totalBytes
 			}
 			if maxSourceBytes > 0 {
-				ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
+				ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
 				planStart := time.Now()
 				minStaleRatio := db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
@@ -11774,7 +11798,7 @@ planned:
 					maxSourceBytes = totalBytes
 				}
 			}
-			ctx, cancel := db.foregroundMaintenanceContext(2 * time.Minute)
+			ctx, cancel := db.vlogGenerationMaintenanceContext(2*time.Minute, opts)
 			rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
@@ -12006,7 +12030,7 @@ planned:
 		}
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
-		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
+		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
 		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()

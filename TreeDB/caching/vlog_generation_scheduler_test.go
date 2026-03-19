@@ -19,6 +19,11 @@ type blockingRewritePlannerBackend struct {
 	startOnce sync.Once
 	planStart chan struct{}
 	planBlock chan struct{}
+
+	mu            sync.Mutex
+	rewriteCalls  int
+	planCompleted int
+	planCanceled  int
 }
 
 func forceVlogMaintenanceIdle(db *DB) {
@@ -87,14 +92,35 @@ func (b *blockingRewritePlannerBackend) ValueLogRewritePlan(ctx context.Context,
 	b.startOnce.Do(func() { close(b.planStart) })
 	select {
 	case <-b.planBlock:
+		b.mu.Lock()
+		b.planCompleted++
+		b.mu.Unlock()
 		return backenddb.ValueLogRewritePlan{}, nil
 	case <-ctx.Done():
+		b.mu.Lock()
+		b.planCanceled++
+		b.mu.Unlock()
 		return backenddb.ValueLogRewritePlan{}, ctx.Err()
 	}
 }
 
 func (b *blockingRewritePlannerBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
+	b.mu.Lock()
+	b.rewriteCalls++
+	b.mu.Unlock()
 	return backenddb.ValueLogRewriteStats{}, nil
+}
+
+func (b *blockingRewritePlannerBackend) recordedRewriteCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.rewriteCalls
+}
+
+func (b *blockingRewritePlannerBackend) recordedPlanOutcomes() (completed int, canceled int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.planCompleted, b.planCanceled
 }
 
 func TestShouldRunVlogGenerationRewrite_TotalBytes(t *testing.T) {
@@ -1490,6 +1516,101 @@ func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationMaintenance_BypassQuietPlannerNotCanceledByForegroundActivity(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	blocking := &blockingRewritePlannerBackend{
+		DB:        backend,
+		planStart: make(chan struct{}),
+		planBlock: make(chan struct{}),
+	}
+
+	db, err := Open(dir, blocking, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k1"), make([]byte, 4096)); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+
+	stopHot := make(chan struct{})
+	defer close(stopHot)
+	go func() {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopHot:
+				return
+			case <-ticker.C:
+				hot := time.Now().UnixNano()
+				db.lastForegroundWriteUnixNano.Store(hot)
+				db.lastForegroundReadUnixNano.Store(hot)
+			}
+		}
+	}()
+
+	doneMaintenance := make(chan struct{})
+	go func() {
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        true,
+		})
+		close(doneMaintenance)
+	}()
+
+	wait := schedulerTestWait(t)
+	select {
+	case <-blocking.planStart:
+	case <-time.After(wait):
+		t.Fatalf("rewrite plan did not start")
+	}
+
+	// Hold the planner past the 100ms foreground-cancel polling cadence to
+	// ensure bypass-quiet planning is not canceled by foreground activity.
+	time.Sleep(250 * time.Millisecond)
+	close(blocking.planBlock)
+
+	select {
+	case <-doneMaintenance:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("maintenance did not finish after planner unblock")
+	}
+
+	completed, canceled := blocking.recordedPlanOutcomes()
+	if completed != 1 || canceled != 0 {
+		t.Fatalf("plan outcomes completed=%d canceled=%d want completed=1 canceled=0", completed, canceled)
+	}
+}
+
 func TestVlogGenerationMaintenance_SkipsBeforeFirstCheckpointInWALOffMode(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -1585,6 +1706,42 @@ func TestVlogGenerationMaintenance_SkipsDuringRecentForegroundWrites(t *testing.
 	}
 	if _, calls := recorder.recordedRewrite(); calls != 0 {
 		t.Fatalf("rewrite calls=%d want=0 while foreground writes are hot", calls)
+	}
+}
+
+func TestVlogGenerationMaintenance_RunGCPassSkipsRewriteWhenForegroundHot(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{1},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 128, BytesAfter: 64, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	hot := time.Now().UnixNano()
+	db.lastForegroundWriteUnixNano.Store(hot)
+	db.lastForegroundReadUnixNano.Store(hot)
+	db.activeForegroundIterators.Store(0)
+
+	db.maybeRunVlogGenerationMaintenance(true)
+
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("plan calls=%d want=0 for hot runGC pass", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want=0 for hot runGC pass", calls)
 	}
 }
 
