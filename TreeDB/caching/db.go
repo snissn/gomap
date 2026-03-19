@@ -4725,6 +4725,9 @@ type DB struct {
 	vlogGenerationRewriteBytesIn             atomic.Uint64
 	vlogGenerationRewriteBytesOut            atomic.Uint64
 	vlogGenerationRewriteRuns                atomic.Uint64
+	vlogGenerationRewriteIneffectiveRuns     atomic.Uint64
+	vlogGenerationRewriteIneffectiveBytesIn  atomic.Uint64
+	vlogGenerationRewriteIneffectiveBytesOut atomic.Uint64
 	vlogGenerationGCSegmentsDeleted          atomic.Uint64
 	vlogGenerationGCBytesDeleted             atomic.Uint64
 	vlogGenerationGCRuns                     atomic.Uint64
@@ -11878,6 +11881,19 @@ planned:
 				stats.RecordsCopied,
 				float64(time.Since(rewriteStart).Microseconds())/1000,
 			)
+			if stats.BytesBefore > 0 && stats.BytesAfter >= stats.BytesBefore {
+				db.vlogGenerationRewriteIneffectiveRuns.Add(1)
+				db.vlogGenerationRewriteIneffectiveBytesIn.Add(uint64(stats.BytesBefore))
+				db.vlogGenerationRewriteIneffectiveBytesOut.Add(uint64(stats.BytesAfter))
+				db.debugVlogMaintf(
+					"rewrite_ineffective reason=%s source_ids=%d bytes_before=%d bytes_after=%d queue_len=%d",
+					vlogGenerationReasonString(reason),
+					len(rewriteOpts.SourceFileIDs),
+					stats.BytesBefore,
+					stats.BytesAfter,
+					len(rewriteQueue),
+				)
+			}
 			if len(processedRewriteIDs) > 0 {
 				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
 					return fmt.Errorf("consume generational rewrite queue: %w", err)
@@ -17275,6 +17291,9 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesIn.Load())
+	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesOut.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewritePlanUnixNano.Load())
 	stats["treedb.cache.vlog_generation.rewrite.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastRewriteUnixNano.Load())
 	stats["treedb.cache.vlog_generation.gc.deleted_segments"] = fmt.Sprintf("%d", db.vlogGenerationGCSegmentsDeleted.Load())

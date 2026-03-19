@@ -957,6 +957,43 @@ func TestVlogGenerationRewriteQueue_PreservedOnRewriteError(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationRewrite_TracksIneffectiveRuns(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 64,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 96, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"]; got != "1" {
+		t.Fatalf("ineffective runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_in"]; got != "64" {
+		t.Fatalf("ineffective bytes in=%q want 64", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_out"]; got != "96" {
+		t.Fatalf("ineffective bytes out=%q want 96", got)
+	}
+}
+
 func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t *testing.T) {
 	disableVlogGenerationLoop(t)
 
