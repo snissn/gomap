@@ -307,7 +307,19 @@ func Open(opts Options) (*DB, error) {
 
 	writePath := writePathFromOptions(opts)
 	if envBool(envWritePathLog) {
-		fmt.Fprintf(os.Stderr, "treedb write_path mode=%s value_store=%s redo_log=%s\n", writePath.mode, writePath.valueStore, writePath.redoLog)
+		effectivePolicy := opts.ValueLog.Generational.Policy
+		if effectivePolicy == ValueLogGenerationDefault {
+			effectivePolicy = ValueLogGenerationHotWarmCold
+		}
+		fmt.Fprintf(
+			os.Stderr,
+			"treedb write_path mode=%s value_store=%s redo_log=%s vlog_generation_policy_raw=%d vlog_generation_policy_effective=%d\n",
+			writePath.mode,
+			writePath.valueStore,
+			writePath.redoLog,
+			opts.ValueLog.Generational.Policy,
+			effectivePolicy,
+		)
 	}
 
 	layout, err := resolveOpenDirLayout(opts.Dir, opts.DisableSideStores)

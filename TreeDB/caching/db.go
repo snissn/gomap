@@ -4860,6 +4860,9 @@ const (
 	vlogGenerationRewritePlanCancelBackoff  = 5 * time.Second
 	vlogGenerationRewriteCancelBackoff      = 20 * time.Second
 	vlogGenerationRewriteIneffectiveBackoff = 2 * time.Minute
+	// Keep rewrite planning cancelable, but allow a short grace window so
+	// sub-second plan scans can complete under light foreground jitter.
+	vlogGenerationRewritePlanResumeGrace = 350 * time.Millisecond
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
 	vlogForegroundQuietWindow = 2 * time.Second
@@ -7123,7 +7126,7 @@ func (db *DB) foregroundWriteResumeContext(lastWrite int64, timeout time.Duratio
 	return ctx, cancel
 }
 
-func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+func (db *DB) foregroundMaintenanceContextWithResumeGrace(timeout, resumeGrace time.Duration) (context.Context, context.CancelFunc) {
 	if db == nil {
 		if timeout > 0 {
 			return context.WithTimeout(context.Background(), timeout)
@@ -7140,8 +7143,9 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 		ctx, cancel = context.WithCancel(context.Background())
 	}
 	lastActivity := db.lastForegroundActivityUnixNano()
+	startedAt := time.Now()
 	go func(lastActivity int64) {
-		ticker := time.NewTicker(vlogGenerationLoopInterval / 10)
+		ticker := time.NewTicker(foregroundMaintenancePollInterval())
 		defer ticker.Stop()
 		for {
 			select {
@@ -7151,6 +7155,9 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 				cancel()
 				return
 			case <-ticker.C:
+				if resumeGrace > 0 && time.Since(startedAt) < resumeGrace {
+					continue
+				}
 				if db.foregroundActivityResumedSince(lastActivity) {
 					cancel()
 					return
@@ -7159,6 +7166,10 @@ func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Conte
 		}
 	}(lastActivity)
 	return ctx, cancel
+}
+
+func (db *DB) foregroundMaintenanceContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return db.foregroundMaintenanceContextWithResumeGrace(timeout, 0)
 }
 
 func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
@@ -7172,6 +7183,18 @@ func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogG
 		return context.WithCancel(context.Background())
 	}
 	return db.foregroundMaintenanceContext(timeout)
+}
+
+func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
+	// Keep planner calls quiet-window-gated, but tolerate short foreground
+	// activity resumes so sub-second plan scans can complete.
+	if opts.bypassQuiet {
+		if timeout > 0 {
+			return context.WithTimeout(context.Background(), timeout)
+		}
+		return context.WithCancel(context.Background())
+	}
+	return db.foregroundMaintenanceContextWithResumeGrace(timeout, vlogGenerationRewritePlanResumeGrace)
 }
 
 func (db *DB) noteWrite() {
@@ -11751,7 +11774,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		if maxSourceBytes > 0 && totalBytes > 0 && maxSourceBytes > totalBytes {
 			maxSourceBytes = totalBytes
 		}
-		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
+		ctx, cancel := db.vlogGenerationRewritePlanContext(30*time.Second, opts)
 		minStaleRatio := float64(db.valueLogRewriteTriggerRatioPPM) / 1_000_000.0
 		planStart := time.Now()
 		plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
@@ -11841,7 +11864,7 @@ planned:
 				maxSourceBytes = totalBytes
 			}
 			if maxSourceBytes > 0 {
-				ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
+				ctx, cancel := db.vlogGenerationRewritePlanContext(30*time.Second, opts)
 				planStart := time.Now()
 				minStaleRatio := db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
 				plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{

@@ -123,6 +123,48 @@ func (b *blockingRewritePlannerBackend) recordedPlanOutcomes() (completed int, c
 	return b.planCompleted, b.planCanceled
 }
 
+type timedRewritePlannerBackend struct {
+	*backenddb.DB
+
+	startOnce sync.Once
+	planStart chan struct{}
+	planDelay time.Duration
+
+	mu            sync.Mutex
+	planCompleted int
+	planCanceled  int
+}
+
+func (b *timedRewritePlannerBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
+	b.startOnce.Do(func() { close(b.planStart) })
+	if b.planDelay > 0 {
+		timer := time.NewTimer(b.planDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			b.mu.Lock()
+			b.planCanceled++
+			b.mu.Unlock()
+			return backenddb.ValueLogRewritePlan{}, ctx.Err()
+		}
+	}
+	b.mu.Lock()
+	b.planCompleted++
+	b.mu.Unlock()
+	return backenddb.ValueLogRewritePlan{}, nil
+}
+
+func (b *timedRewritePlannerBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
+	return backenddb.ValueLogRewriteStats{}, nil
+}
+
+func (b *timedRewritePlannerBackend) recordedPlanOutcomes() (completed int, canceled int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.planCompleted, b.planCanceled
+}
+
 type blockingRewriteOnlineBackend struct {
 	*backenddb.DB
 
@@ -2472,6 +2514,89 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected"]; got != "0" {
 		t.Fatalf("plan selected=%q want 0", got)
+	}
+}
+
+func TestVlogGenerationRewritePlan_GraceAllowsShortPlanDuringForegroundResume(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	t.Cleanup(func() { _ = backend.Close() })
+
+	timed := &timedRewritePlannerBackend{
+		DB:        backend,
+		planStart: make(chan struct{}),
+		planDelay: vlogGenerationRewritePlanResumeGrace / 2,
+	}
+
+	db, err := Open(dir, timed, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	b := db.NewBatch()
+	if err := b.Set([]byte("k1"), make([]byte, 4096)); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+
+	doneMaintenance := make(chan struct{})
+	go func() {
+		db.maybeRunVlogGenerationMaintenance(false)
+		close(doneMaintenance)
+	}()
+
+	wait := schedulerTestWait(t)
+	select {
+	case <-timed.planStart:
+	case <-time.After(wait):
+		t.Fatalf("rewrite plan did not start")
+	}
+
+	// Resume foreground activity while the short planner call is in flight.
+	db.noteRead()
+
+	select {
+	case <-doneMaintenance:
+	case <-time.After(2 * wait):
+		t.Fatalf("maintenance did not complete after short rewrite plan")
+	}
+
+	completed, canceled := timed.recordedPlanOutcomes()
+	if completed != 1 || canceled != 0 {
+		t.Fatalf("plan outcomes completed=%d canceled=%d want completed=1 canceled=0", completed, canceled)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "1" {
+		t.Fatalf("plan runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled"]; got != "0" {
+		t.Fatalf("plan canceled=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "1" {
+		t.Fatalf("plan empty=%q want 1", got)
 	}
 }
 
