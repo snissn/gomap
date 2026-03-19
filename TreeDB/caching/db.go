@@ -11747,7 +11747,8 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	var rewritePlan backenddb.ValueLogRewritePlan
 	haveRewritePlan := false
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
-	allowCheckpointKickRetry := opts.bypassQuiet && !opts.skipCheckpoint && len(rewriteQueue) > 0
+	allowCheckpointKickBypass := opts.bypassQuiet && !opts.skipCheckpoint
+	allowCheckpointKickRetry := allowCheckpointKickBypass && len(rewriteQueue) > 0
 	if len(rewriteQueue) > 0 {
 		shouldRewrite = true
 		reason = vlogGenerationReasonRewriteResume
@@ -11757,7 +11758,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
 	}
-	planBackoff := len(rewriteQueue) == 0 && db.vlogGenerationRewritePlanBackoffActive(now)
+	planBackoff := len(rewriteQueue) == 0 && db.vlogGenerationRewritePlanBackoffActive(now) && !allowCheckpointKickBypass
 	if planBackoff {
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
@@ -12369,20 +12370,31 @@ planned:
 
 func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	if db == nil || db.closing.Load() {
+		if db != nil {
+			db.debugVlogMaintf("checkpoint_kick_skip reason=closing")
+		}
 		return
 	}
 	if envBool(envDisableVlogGenerationCheckpointKick) {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=disabled_env")
 		return
 	}
 	if db.testSkipVlogCheckpointKick {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=test_skip")
 		return
 	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=policy_off policy=%d", db.valueLogGenerationPolicy)
 		return
 	}
 	now := time.Now()
 	last := db.vlogGenerationLastCheckpointKickUnixNano.Load()
 	if last > 0 && now.Sub(time.Unix(0, last)) < vlogGenerationCheckpointKickMinInterval {
+		db.debugVlogMaintf(
+			"checkpoint_kick_skip reason=min_interval since_ms=%.3f min_ms=%.3f",
+			float64(now.Sub(time.Unix(0, last)).Microseconds())/1000,
+			float64(vlogGenerationCheckpointKickMinInterval.Microseconds())/1000,
+		)
 		return
 	}
 	// Avoid forcing extra checkpoint boundaries when rewrite is clearly ineligible.
@@ -12400,16 +12412,24 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 			if trigger := db.valueLogRewriteTriggerBytes; trigger > 0 {
 				retained, bytes := db.valueLogRetainedStats()
 				if bytes < trigger && retained < 2 {
+					db.debugVlogMaintf(
+						"checkpoint_kick_skip reason=trigger_floor bytes=%d trigger=%d retained=%d queue_len=0",
+						bytes,
+						trigger,
+						retained,
+					)
 					return
 				}
 			}
 		}
 	}
 	if !db.vlogGenerationCheckpointKickActive.CompareAndSwap(false, true) {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=already_active")
 		return
 	}
 	db.vlogGenerationLastCheckpointKickUnixNano.Store(now.UnixNano())
 	db.vlogGenerationCheckpointKickRuns.Add(1)
+	db.debugVlogMaintf("checkpoint_kick_start")
 	db.wg.Add(1)
 	go func() {
 		defer db.wg.Done()
@@ -12440,6 +12460,14 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 		if db.vlogGenerationGCRuns.Load() > gcRunsBefore {
 			db.vlogGenerationCheckpointKickGCRuns.Add(1)
 		}
+		db.debugVlogMaintf(
+			"checkpoint_kick_done rewrite_runs_before=%d rewrite_runs_after=%d gc_runs_before=%d gc_runs_after=%d pending=%t",
+			rewriteRunsBefore,
+			db.vlogGenerationRewriteRuns.Load(),
+			gcRunsBefore,
+			db.vlogGenerationGCRuns.Load(),
+			db.vlogGenerationCheckpointKickPending.Load(),
+		)
 	}()
 }
 

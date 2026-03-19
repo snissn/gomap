@@ -3044,6 +3044,52 @@ func TestVlogGenerationRewritePlan_CancelBackoffSkipsImmediateRetry(t *testing.T
 	}
 }
 
+func TestVlogGenerationRewritePlan_CancelBackoffCheckpointKickBypasses(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:      backend,
+		planErr: context.Canceled,
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+
+	// First pass: planner is canceled and seeds plan-cancel backoff.
+	db.maybeRunVlogGenerationMaintenance(false)
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls after first canceled run=%d want=1", calls)
+	}
+
+	// Second pass: checkpoint-kick bypass should ignore plan-cancel backoff.
+	recorder.mu.Lock()
+	recorder.planErr = nil
+	recorder.planResponse = backenddb.ValueLogRewritePlan{SourceFileIDs: []uint32{11}, SelectedBytesLive: 64}
+	recorder.mu.Unlock()
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+	})
+
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls after checkpoint-kick bypass=%d want=2", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls after checkpoint-kick bypass=%d want=1", calls)
+	}
+}
+
 func TestVlogGenerationRewritePlan_CancelBackoffExpires(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
