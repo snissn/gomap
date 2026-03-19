@@ -2005,6 +2005,78 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 	}
 }
 
+func TestVlogGenerationRewritePlan_CancelBackoffSkipsImmediateRetry(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:      backend,
+		planErr: context.Canceled,
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls after first canceled run=%d want=1", calls)
+	}
+
+	db.maybeRunVlogGenerationMaintenance(false)
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls after immediate retry=%d want=1 (backoff active)", calls)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "1" {
+		t.Fatalf("plan runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled"]; got != "1" {
+		t.Fatalf("plan canceled=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled_last_unix_nano"]; got == "0" {
+		t.Fatalf("plan canceled last ts=%q want non-zero", got)
+	}
+}
+
+func TestVlogGenerationRewritePlan_CancelBackoffExpires(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:      backend,
+		planErr: context.Canceled,
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls after first canceled run=%d want=1", calls)
+	}
+
+	db.vlogGenerationRewritePlanCanceledLastNS.Store(time.Now().Add(-2 * vlogGenerationRewritePlanCancelBackoff).UnixNano())
+	db.maybeRunVlogGenerationMaintenance(false)
+	if _, calls := recorder.recordedPlan(); calls != 2 {
+		t.Fatalf("plan calls after expired backoff=%d want=2", calls)
+	}
+}
+
 func TestVlogGenerationRewritePlan_CancelsWhenForegroundReadsResume(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

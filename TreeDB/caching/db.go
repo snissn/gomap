@@ -4730,6 +4730,7 @@ type DB struct {
 	vlogGenerationRewritePlanErrors          atomic.Uint64
 	vlogGenerationRewritePlanEmpty           atomic.Uint64
 	vlogGenerationRewritePlanSelected        atomic.Uint64
+	vlogGenerationRewritePlanCanceledLastNS  atomic.Int64
 	vlogGenerationRewriteIneffectiveRuns     atomic.Uint64
 	vlogGenerationRewriteIneffectiveBytesIn  atomic.Uint64
 	vlogGenerationRewriteIneffectiveBytesOut atomic.Uint64
@@ -4850,6 +4851,7 @@ const (
 	vlogGenerationRewriteMinInterval        = 30 * time.Second
 	vlogGenerationGCMinInterval             = 45 * time.Second
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
+	vlogGenerationRewritePlanCancelBackoff  = 5 * time.Second
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
 	vlogForegroundQuietWindow = 2 * time.Second
@@ -11514,6 +11516,7 @@ func (db *DB) observeVlogGenerationRewritePlanOutcome(plan backenddb.ValueLogRew
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			db.vlogGenerationRewritePlanCanceled.Add(1)
+			db.vlogGenerationRewritePlanCanceledLastNS.Store(time.Now().UnixNano())
 		} else {
 			db.vlogGenerationRewritePlanErrors.Add(1)
 		}
@@ -11524,6 +11527,17 @@ func (db *DB) observeVlogGenerationRewritePlanOutcome(plan backenddb.ValueLogRew
 		return
 	}
 	db.vlogGenerationRewritePlanEmpty.Add(1)
+}
+
+func (db *DB) vlogGenerationRewritePlanBackoffActive(now time.Time) bool {
+	if db == nil {
+		return false
+	}
+	lastCanceled := db.vlogGenerationRewritePlanCanceledLastNS.Load()
+	if lastCanceled <= 0 {
+		return false
+	}
+	return now.Sub(time.Unix(0, lastCanceled)) < vlogGenerationRewritePlanCancelBackoff
 }
 
 type vlogGenerationMaintenanceOptions struct {
@@ -11605,6 +11619,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		shouldRewrite = true
 		reason = vlogGenerationReasonRewriteResume
 	}
+	planBackoff := len(rewriteQueue) == 0 && db.vlogGenerationRewritePlanBackoffActive(now)
+	if planBackoff {
+		shouldRewrite = false
+		reason = vlogGenerationReasonNone
+	}
 	// Periodic "runGC" passes can run during foreground activity, but rewrite
 	// planning/execution should remain quiet-window-bound unless explicitly
 	// bypassed (checkpoint-kick).
@@ -11616,6 +11635,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// detect when any segments are meaningfully stale. This avoids relying on
 	// reclaimable-WAL heuristics (which can be 0 in split-value-log mode).
 	if len(rewriteQueue) == 0 && !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
+		if planBackoff {
+			goto planned
+		}
 		if !quiet && !opts.bypassQuiet {
 			goto planned
 		}
@@ -17344,6 +17366,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_canceled"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCanceled.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCanceledLastNS.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_errors"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanErrors.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmpty.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelected.Load())
