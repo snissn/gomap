@@ -1428,6 +1428,50 @@ func TestVlogGenerationRewritePlan_DoesNotRunWithZeroBudgetTokens(t *testing.T) 
 	}
 }
 
+func TestVlogGenerationRewritePlan_TracksEmptyPlanOutcome(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:           backend,
+		planResponse: backenddb.ValueLogRewritePlan{},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls=%d want=1", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want=0", calls)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "1" {
+		t.Fatalf("plan runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "1" {
+		t.Fatalf("plan empty=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected"]; got != "0" {
+		t.Fatalf("plan selected=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled"]; got != "0" {
+		t.Fatalf("plan canceled=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_errors"]; got != "0" {
+		t.Fatalf("plan errors=%q want 0", got)
+	}
+}
+
 func TestVlogGenerationRewritePlan_RunsOutsideMaintenanceBarrier(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -1942,6 +1986,22 @@ func TestVlogGenerationRewritePlan_CancelsWhenForegroundWritesResume(t *testing.
 	}
 	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerIdle {
 		t.Fatalf("scheduler state=%d want=%d", got, vlogGenerationSchedulerIdle)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "1" {
+		t.Fatalf("plan runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled"]; got != "1" {
+		t.Fatalf("plan canceled=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_errors"]; got != "0" {
+		t.Fatalf("plan errors=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_empty"]; got != "0" {
+		t.Fatalf("plan empty=%q want 0", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_selected"]; got != "0" {
+		t.Fatalf("plan selected=%q want 0", got)
 	}
 }
 

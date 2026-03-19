@@ -4725,6 +4725,11 @@ type DB struct {
 	vlogGenerationRewriteBytesIn             atomic.Uint64
 	vlogGenerationRewriteBytesOut            atomic.Uint64
 	vlogGenerationRewriteRuns                atomic.Uint64
+	vlogGenerationRewritePlanRuns            atomic.Uint64
+	vlogGenerationRewritePlanCanceled        atomic.Uint64
+	vlogGenerationRewritePlanErrors          atomic.Uint64
+	vlogGenerationRewritePlanEmpty           atomic.Uint64
+	vlogGenerationRewritePlanSelected        atomic.Uint64
 	vlogGenerationRewriteIneffectiveRuns     atomic.Uint64
 	vlogGenerationRewriteIneffectiveBytesIn  atomic.Uint64
 	vlogGenerationRewriteIneffectiveBytesOut atomic.Uint64
@@ -11501,6 +11506,26 @@ func sumVlogRewritePlanLiveBytes(segments []backenddb.ValueLogRewritePlanSegment
 	return sum, ok
 }
 
+func (db *DB) observeVlogGenerationRewritePlanOutcome(plan backenddb.ValueLogRewritePlan, err error) {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationRewritePlanRuns.Add(1)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			db.vlogGenerationRewritePlanCanceled.Add(1)
+		} else {
+			db.vlogGenerationRewritePlanErrors.Add(1)
+		}
+		return
+	}
+	if len(plan.SourceFileIDs) > 0 || len(plan.SelectedSegments) > 0 || plan.SegmentsSelected > 0 {
+		db.vlogGenerationRewritePlanSelected.Add(1)
+		return
+	}
+	db.vlogGenerationRewritePlanEmpty.Add(1)
+}
+
 type vlogGenerationMaintenanceOptions struct {
 	bypassQuiet           bool
 	skipRetainedPruneWait bool
@@ -11645,6 +11670,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			float64(time.Since(planStart).Microseconds())/1000,
 			err,
 		)
+		db.observeVlogGenerationRewritePlanOutcome(plan, err)
 		updatePlanTimestamp := false
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -11735,6 +11761,7 @@ planned:
 					float64(time.Since(planStart).Microseconds())/1000,
 					err,
 				)
+				db.observeVlogGenerationRewritePlanOutcome(plan, err)
 				if err != nil {
 					if errors.Is(err, context.Canceled) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
@@ -17315,6 +17342,11 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteBytesOut.Load())
 	stats["treedb.cache.vlog_generation.rewrite.runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_canceled"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanCanceled.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_errors"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanErrors.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmpty.Load())
+	stats["treedb.cache.vlog_generation.rewrite.plan_selected"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelected.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesOut.Load())
