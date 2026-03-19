@@ -4759,6 +4759,7 @@ type DB struct {
 	vlogGenerationCheckpointKickRuns         atomic.Uint64
 	vlogGenerationCheckpointKickRewriteRuns  atomic.Uint64
 	vlogGenerationCheckpointKickGCRuns       atomic.Uint64
+	vlogGenerationCheckpointKickPending      atomic.Bool
 	vlogGenerationRewriteQueueMu             sync.Mutex
 	vlogGenerationCheckpointKickActive       atomic.Bool
 	vlogGenerationRewriteQueue               []uint32
@@ -4900,6 +4901,10 @@ const (
 	// Treat rewrites that materially increase bytes as harmful and stop resuming
 	// the remaining queued plan in the same debt cycle.
 	vlogGenerationRewriteIneffectiveGrowthMinBytes = int64(4 << 20)
+	// Resumable queued rewrites are already segment-limited; let them finish
+	// under foreground activity with a bounded timeout instead of immediate
+	// foreground-cancel semantics.
+	vlogGenerationRewriteBoundedExecTimeout = 30 * time.Second
 	// During checkpoint-kick debt drain, allow a bounded multi-segment rewrite
 	// selection so debt can converge faster than one-segment-per-pass.
 	vlogGenerationRewriteDebtDrainMaxSegments = 8
@@ -11623,6 +11628,30 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	db.maybeRunVlogGenerationMaintenanceWithOptions(runGC, vlogGenerationMaintenanceOptions{})
 }
 
+func (db *DB) schedulePendingVlogGenerationCheckpointKick() {
+	if db == nil || db.closing.Load() {
+		return
+	}
+	if !db.vlogGenerationCheckpointKickPending.CompareAndSwap(true, false) {
+		return
+	}
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		if db.closing.Load() {
+			return
+		}
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			// This path retries a checkpoint-triggered kick that collided with an
+			// already-active maintenance pass.
+			skipCheckpoint:   false,
+			rewriteDebtDrain: true,
+		})
+	}()
+}
+
 func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlogGenerationMaintenanceOptions) {
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
@@ -11631,9 +11660,18 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// checkpoint-kick path can race otherwise, which causes overlapping rewrite
 	// runs to compete on the same resume queue.
 	if !db.vlogGenerationMaintenanceActive.CompareAndSwap(false, true) {
+		// Checkpoint-kick retries are high-priority and quiet-window-bypassed by
+		// design. If they collide with an active pass, queue exactly one retry to
+		// run right after the active pass exits.
+		if opts.bypassQuiet && !opts.skipCheckpoint {
+			db.vlogGenerationCheckpointKickPending.Store(true)
+		}
 		return
 	}
-	defer db.vlogGenerationMaintenanceActive.Store(false)
+	defer func() {
+		db.vlogGenerationMaintenanceActive.Store(false)
+		db.schedulePendingVlogGenerationCheckpointKick()
+	}()
 	quiet := db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
@@ -11709,11 +11747,12 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	var rewritePlan backenddb.ValueLogRewritePlan
 	haveRewritePlan := false
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
+	allowCheckpointKickRetry := opts.bypassQuiet && !opts.skipCheckpoint && len(rewriteQueue) > 0
 	if len(rewriteQueue) > 0 {
 		shouldRewrite = true
 		reason = vlogGenerationReasonRewriteResume
 	}
-	rewriteCancelBackoff := len(rewriteQueue) > 0 && db.vlogGenerationRewriteCancelBackoffActive(now)
+	rewriteCancelBackoff := len(rewriteQueue) > 0 && db.vlogGenerationRewriteCancelBackoffActive(now) && !allowCheckpointKickRetry
 	if rewriteCancelBackoff {
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
@@ -11845,7 +11884,7 @@ planned:
 		}
 		if last > 0 {
 			lastAt := time.Unix(0, last)
-			if now.Sub(lastAt) < minInterval {
+			if now.Sub(lastAt) < minInterval && !allowCheckpointKickRetry {
 				shouldRewrite = false
 				rewriteMinIntervalBlocked = true
 			}
@@ -11975,7 +12014,6 @@ planned:
 					maxSourceBytes = totalBytes
 				}
 			}
-			ctx, cancel := db.foregroundMaintenanceContext(2 * time.Minute)
 			rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
@@ -12080,6 +12118,13 @@ planned:
 				rewriteOpts.MinSegmentStaleRatio = db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
 				rewriteOpts.MinSegmentStaleBytes = vlogGenerationRewriteMinSegmentStaleBytes
 			}
+			var ctx context.Context
+			var cancel context.CancelFunc
+			if hadRewriteQueue && len(processedRewriteIDs) > 0 {
+				ctx, cancel = context.WithTimeout(context.Background(), vlogGenerationRewriteBoundedExecTimeout)
+			} else {
+				ctx, cancel = db.foregroundMaintenanceContext(2 * time.Minute)
+			}
 			db.debugVlogMaintf(
 				"rewrite_exec reason=%s source_ids=%d max_segments=%d budget_tokens=%d max_source_bytes=%d min_stale_ratio=%.6f queue_len=%d ledger_live_bytes=%d",
 				vlogGenerationReasonString(reason),
@@ -12098,6 +12143,12 @@ planned:
 				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(time.Since(rewriteStart).Microseconds())/1000)
 				if errors.Is(err, context.Canceled) {
 					db.observeVlogGenerationRewriteCanceled()
+					if len(processedRewriteIDs) > 0 {
+						// A canceled rewrite that already selected a queued chunk should
+						// immediately queue a checkpoint-kick retry. The retry executes
+						// as resumable debt with bounded non-cancel semantics.
+						db.vlogGenerationCheckpointKickPending.Store(true)
+					}
 				}
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
@@ -12325,10 +12376,20 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	// Avoid forcing extra checkpoint boundaries when rewrite is clearly ineligible.
 	// Skip this fast-path when rewrite is disabled so GC-only kicks still run.
 	if !envBool(envDisableVlogGenerationRewrite) {
-		if trigger := db.valueLogRewriteTriggerBytes; trigger > 0 {
-			retained, bytes := db.valueLogRetainedStats()
-			if bytes < trigger && retained < 2 {
-				return
+		rewriteQueue, qerr := db.currentVlogGenerationRewriteQueue()
+		if qerr != nil {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: load generational rewrite queue for checkpoint kick: %w", qerr))
+			}
+			return
+		}
+		if len(rewriteQueue) == 0 {
+			if trigger := db.valueLogRewriteTriggerBytes; trigger > 0 {
+				retained, bytes := db.valueLogRetainedStats()
+				if bytes < trigger && retained < 2 {
+					return
+				}
 			}
 		}
 	}
@@ -17521,6 +17582,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())
+	stats["treedb.cache.vlog_generation.checkpoint_kick.pending"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickPending.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationLastCheckpointKickUnixNano.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRuns.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs"] = fmt.Sprintf("%d", db.vlogGenerationCheckpointKickRewriteRuns.Load())
