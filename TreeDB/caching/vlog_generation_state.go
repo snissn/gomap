@@ -254,6 +254,40 @@ func (db *DB) currentVlogGenerationRewriteLedger() ([]backenddb.ValueLogRewriteP
 	return append([]backenddb.ValueLogRewritePlanSegment(nil), db.vlogGenerationRewriteLedger...), nil
 }
 
+func (db *DB) pruneVlogGenerationRewriteLedgerNonPositiveLive() ([]uint32, int, error) {
+	if db == nil {
+		return nil, 0, nil
+	}
+	db.vlogGenerationRewriteQueueMu.Lock()
+	defer db.vlogGenerationRewriteQueueMu.Unlock()
+	if err := db.loadVlogGenerationRewriteQueueLocked(); err != nil {
+		return nil, 0, err
+	}
+	if len(db.vlogGenerationRewriteLedger) == 0 {
+		return append([]uint32(nil), db.vlogGenerationRewriteQueue...), 0, nil
+	}
+	filteredLedger := make([]backenddb.ValueLogRewritePlanSegment, 0, len(db.vlogGenerationRewriteLedger))
+	filteredIDs := make([]uint32, 0, len(db.vlogGenerationRewriteLedger))
+	dropped := 0
+	for _, seg := range db.vlogGenerationRewriteLedger {
+		if seg.FileID == 0 || seg.BytesLive <= 0 {
+			dropped++
+			continue
+		}
+		filteredLedger = append(filteredLedger, seg)
+		filteredIDs = append(filteredIDs, seg.FileID)
+	}
+	if dropped == 0 {
+		return append([]uint32(nil), db.vlogGenerationRewriteQueue...), 0, nil
+	}
+	if err := saveValueLogGenerationRewriteState(db.valueLogGenerationStatePath(), filteredIDs, filteredLedger); err != nil {
+		return nil, 0, err
+	}
+	db.vlogGenerationRewriteQueue = filteredIDs
+	db.vlogGenerationRewriteLedger = filteredLedger
+	return append([]uint32(nil), filteredIDs...), dropped, nil
+}
+
 func vlogGenerationRewriteQueueChunk(ids []uint32, maxSegments int) []uint32 {
 	if len(ids) == 0 || maxSegments <= 0 {
 		return nil
@@ -271,6 +305,9 @@ func vlogGenerationRewriteLedgerChunk(ledger []backenddb.ValueLogRewritePlanSegm
 	candidates := make([]backenddb.ValueLogRewritePlanSegment, 0, len(ledger))
 	for _, seg := range ledger {
 		if seg.FileID == 0 {
+			continue
+		}
+		if seg.BytesLive <= 0 {
 			continue
 		}
 		candidates = append(candidates, seg)

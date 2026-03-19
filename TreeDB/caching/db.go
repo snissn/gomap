@@ -4736,6 +4736,8 @@ type DB struct {
 	vlogGenerationRewriteIneffectiveBytesOut atomic.Uint64
 	vlogGenerationRewriteCanceledRuns        atomic.Uint64
 	vlogGenerationRewriteCanceledLastNS      atomic.Int64
+	vlogGenerationRewriteQueuePruneRuns      atomic.Uint64
+	vlogGenerationRewriteQueuePruneIDs       atomic.Uint64
 	vlogGenerationGCSegmentsDeleted          atomic.Uint64
 	vlogGenerationGCBytesDeleted             atomic.Uint64
 	vlogGenerationGCRuns                     atomic.Uint64
@@ -11551,6 +11553,14 @@ func (db *DB) observeVlogGenerationRewriteCanceled() {
 	db.vlogGenerationRewriteCanceledLastNS.Store(time.Now().UnixNano())
 }
 
+func (db *DB) observeVlogGenerationRewriteQueuePrune(dropped int) {
+	if db == nil || dropped <= 0 {
+		return
+	}
+	db.vlogGenerationRewriteQueuePruneRuns.Add(1)
+	db.vlogGenerationRewriteQueuePruneIDs.Add(uint64(dropped))
+}
+
 func (db *DB) vlogGenerationRewriteCancelBackoffActive(now time.Time) bool {
 	if db == nil {
 		return false
@@ -11585,6 +11595,21 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.notifyError(fmt.Errorf("cachingdb: load generational rewrite queue: %w", err))
 		}
 		return
+	}
+	if len(rewriteQueue) > 0 {
+		prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
+		if pruneErr != nil {
+			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+			if db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: prune generational rewrite queue: %w", pruneErr))
+			}
+			return
+		}
+		if dropped > 0 {
+			rewriteQueue = prunedQueue
+			db.observeVlogGenerationRewriteQueuePrune(dropped)
+			db.debugVlogMaintf("rewrite_queue_prune dropped=%d remaining=%d", dropped, len(rewriteQueue))
+		}
 	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
@@ -11914,6 +11939,19 @@ planned:
 				ledger, _ := db.currentVlogGenerationRewriteLedger()
 				if len(ledger) > 0 {
 					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, rewriteMaxSegments, budgetTokens)
+					if len(processedRewriteIDs) == 0 {
+						prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
+						if pruneErr != nil {
+							return fmt.Errorf("prune generational rewrite ledger: %w", pruneErr)
+						}
+						if dropped > 0 {
+							db.observeVlogGenerationRewriteQueuePrune(dropped)
+							rewriteQueue = prunedQueue
+							db.debugVlogMaintf("rewrite_skip reason=%s dropped_zero_live=%d queue_len=%d", vlogGenerationReasonString(reason), dropped, len(rewriteQueue))
+						}
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return nil
+					}
 				} else {
 					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
 				}
@@ -11939,6 +11977,19 @@ planned:
 				}
 				if len(rewritePlan.SelectedSegments) > 0 {
 					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(rewritePlan.SelectedSegments, rewriteMaxSegments, budgetTokens)
+					if len(processedRewriteIDs) == 0 {
+						prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
+						if pruneErr != nil {
+							return fmt.Errorf("prune generational rewrite plan ledger: %w", pruneErr)
+						}
+						if dropped > 0 {
+							db.observeVlogGenerationRewriteQueuePrune(dropped)
+							rewriteQueue = prunedQueue
+							db.debugVlogMaintf("rewrite_skip reason=%s planned_zero_live=%d queue_len=%d", vlogGenerationReasonString(reason), dropped, len(rewriteQueue))
+						}
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return nil
+					}
 				} else {
 					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
 				}
@@ -17402,6 +17453,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelected.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledLastNS.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue_prune_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuePruneRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.queue_prune_ids"] = fmt.Sprintf("%d", db.vlogGenerationRewriteQueuePruneIDs.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesOut.Load())
