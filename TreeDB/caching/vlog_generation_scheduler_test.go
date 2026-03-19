@@ -1409,6 +1409,87 @@ func TestVlogGenerationRewrite_DropsRemainingDebtAfterNoProgressResume(t *testin
 	}
 }
 
+func TestVlogGenerationRewrite_IneffectiveBackoffSkipsImmediateGenericRetry(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11, 22},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    (64 << 20) + vlogGenerationRewriteIneffectiveGrowthMinBytes + 1,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls after first ineffective run=%d want=1", calls)
+	}
+	db.vlogGenerationLastRewriteUnixNano.Store(0)
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls after immediate retry=%d want=1 (ineffective backoff active)", calls)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_last_unix_nano"]; got == "0" {
+		t.Fatalf("ineffective last ts=%q want non-zero", got)
+	}
+}
+
+func TestVlogGenerationRewrite_IneffectiveBackoffExpires(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11, 22},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    (64 << 20) + vlogGenerationRewriteIneffectiveGrowthMinBytes + 1,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls after first ineffective run=%d want=1", calls)
+	}
+	db.vlogGenerationLastRewriteUnixNano.Store(0)
+	db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().Add(-2 * vlogGenerationRewriteIneffectiveBackoff).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 2 {
+		t.Fatalf("rewrite calls after expired ineffective backoff=%d want=2", calls)
+	}
+}
+
 func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t *testing.T) {
 	disableVlogGenerationLoop(t)
 
