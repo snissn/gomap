@@ -4753,6 +4753,7 @@ type DB struct {
 	vlogGenerationLastGCDryRunSegsEligible   atomic.Int64
 	vlogGenerationChurnBytes                 atomic.Uint64
 	vlogGenerationSchedulerState             atomic.Uint32
+	vlogGenerationMaintenanceActive          atomic.Bool
 	vlogGenerationLastReason                 atomic.Uint32
 	vlogGenerationCheckpointKickRuns         atomic.Uint64
 	vlogGenerationCheckpointKickRewriteRuns  atomic.Uint64
@@ -4891,6 +4892,9 @@ const (
 	vlogGenerationRewriteMinSegmentStaleRatio  = 0.05
 	vlogGenerationRewriteMinSegmentStaleBytes  = int64(1)
 	vlogGenerationRewriteEfficacyMinTotalBytes = int64(512 << 20)
+	// Treat rewrites that materially increase bytes as harmful and stop resuming
+	// the remaining queued plan in the same debt cycle.
+	vlogGenerationRewriteIneffectiveGrowthMinBytes = int64(4 << 20)
 	// During checkpoint-kick debt drain, allow a bounded multi-segment rewrite
 	// selection so debt can converge faster than one-segment-per-pass.
 	vlogGenerationRewriteDebtDrainMaxSegments = 8
@@ -11587,6 +11591,13 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if db == nil || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		return
 	}
+	// Serialize generation maintenance passes. The periodic loop and
+	// checkpoint-kick path can race otherwise, which causes overlapping rewrite
+	// runs to compete on the same resume queue.
+	if !db.vlogGenerationMaintenanceActive.CompareAndSwap(false, true) {
+		return
+	}
+	defer db.vlogGenerationMaintenanceActive.Store(false)
 	quiet := db.foregroundActivityQuietFor(time.Now(), vlogGenerationMaintenanceQuietWindow, vlogForegroundReadQuietWindow)
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil {
@@ -12048,10 +12059,46 @@ planned:
 					len(rewriteQueue),
 				)
 			}
+			dropRewriteDebt := false
+			dropRewriteDebtReason := ""
+			if len(processedRewriteIDs) > 0 && stats.BytesAfter >= stats.BytesBefore {
+				growth := int64(stats.BytesAfter) - int64(stats.BytesBefore)
+				if growth >= vlogGenerationRewriteIneffectiveGrowthMinBytes {
+					dropRewriteDebt = true
+					dropRewriteDebtReason = "material_growth"
+				} else if growth == 0 && stats.RecordsCopied == 0 {
+					// A queued rewrite that copies nothing and does not reduce bytes is
+					// effectively a no-op resume loop; drop remaining debt so the
+					// scheduler can re-plan from current state instead of retrying.
+					dropRewriteDebt = true
+					dropRewriteDebtReason = "no_progress"
+				}
+			}
 			if len(processedRewriteIDs) > 0 {
 				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
 					return fmt.Errorf("consume generational rewrite queue: %w", err)
 				}
+			}
+			if dropRewriteDebt {
+				remainingQueue, queueErr := db.currentVlogGenerationRewriteQueue()
+				if queueErr != nil {
+					return fmt.Errorf("load generational rewrite queue after ineffective rewrite: %w", queueErr)
+				}
+				dropped := len(remainingQueue)
+				if err := db.setVlogGenerationRewriteQueue(nil); err != nil {
+					return fmt.Errorf("clear generational rewrite queue after ineffective rewrite: %w", err)
+				}
+				if dropped > 0 {
+					db.observeVlogGenerationRewriteQueuePrune(dropped)
+				}
+				db.debugVlogMaintf(
+					"rewrite_ineffective_drop_queue reason=%s dropped_ids=%d growth=%d threshold=%d drop_reason=%s",
+					vlogGenerationReasonString(reason),
+					dropped,
+					int64(stats.BytesAfter)-int64(stats.BytesBefore),
+					vlogGenerationRewriteIneffectiveGrowthMinBytes,
+					dropRewriteDebtReason,
+				)
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)

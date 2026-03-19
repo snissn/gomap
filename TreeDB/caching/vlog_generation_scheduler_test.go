@@ -123,6 +123,42 @@ func (b *blockingRewritePlannerBackend) recordedPlanOutcomes() (completed int, c
 	return b.planCompleted, b.planCanceled
 }
 
+type blockingRewriteOnlineBackend struct {
+	*backenddb.DB
+
+	mu             sync.Mutex
+	planResponse   backenddb.ValueLogRewritePlan
+	rewriteCalls   int
+	rewriteEntered chan struct{}
+	rewriteRelease chan struct{}
+	enterOnce      sync.Once
+}
+
+func (b *blockingRewriteOnlineBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
+	return b.planResponse, nil
+}
+
+func (b *blockingRewriteOnlineBackend) ValueLogRewriteOnline(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewriteStats, error) {
+	b.mu.Lock()
+	b.rewriteCalls++
+	b.mu.Unlock()
+	b.enterOnce.Do(func() {
+		close(b.rewriteEntered)
+	})
+	select {
+	case <-b.rewriteRelease:
+	case <-ctx.Done():
+		return backenddb.ValueLogRewriteStats{}, ctx.Err()
+	}
+	return backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1}, nil
+}
+
+func (b *blockingRewriteOnlineBackend) recordedRewriteCalls() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.rewriteCalls
+}
+
 func TestShouldRunVlogGenerationRewrite_TotalBytes(t *testing.T) {
 	db := &DB{valueLogRewriteTriggerBytes: 100}
 	run, reason := db.shouldRunVlogGenerationRewrite(150, 0, 0)
@@ -398,6 +434,90 @@ func openRewriteQueueTestDB(t *testing.T, dir string, recorder *rewriteBudgetRec
 	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
 	forceVlogMaintenanceIdle(db)
 	return db, func() { _ = db.Close() }
+}
+
+func TestVlogGenerationMaintenance_SerializesConcurrentRuns(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	blocking := &blockingRewriteOnlineBackend{
+		DB:             backend,
+		planResponse:   backenddb.ValueLogRewritePlan{SourceFileIDs: []uint32{11}, SelectedBytesLive: 64},
+		rewriteEntered: make(chan struct{}),
+		rewriteRelease: make(chan struct{}),
+	}
+
+	db, err := Open(dir, blocking, Options{
+		AllowUnsafe:                      true,
+		DisableWAL:                       true,
+		JournalLanes:                     1,
+		ValueLogGenerationPolicy:         uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogRewriteTriggerTotalBytes: 1,
+		ValueLogRewriteBudgetBytesPerSec: 1024,
+		ForceValueLogPointers:            true,
+	})
+	if err != nil {
+		t.Fatalf("open cachingdb: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	value := make([]byte, 2048)
+	b := db.NewBatch()
+	if err := b.Set([]byte("k"), value); err != nil {
+		_ = b.Close()
+		t.Fatalf("set: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		_ = b.Close()
+		t.Fatalf("write: %v", err)
+	}
+	_ = b.Close()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			skipCheckpoint:        true,
+			rewriteDebtDrain:      true,
+		})
+	}()
+
+	select {
+	case <-blocking.rewriteEntered:
+	case <-time.After(2 * schedulerTestWait(t)):
+		t.Fatalf("first rewrite did not start")
+	}
+
+	// While the first pass is still inside rewrite, a concurrent pass should be
+	// skipped by the maintenance-active gate instead of issuing a second rewrite.
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		rewriteDebtDrain:      true,
+	})
+
+	close(blocking.rewriteRelease)
+	select {
+	case <-done:
+	case <-time.After(2 * schedulerTestWait(t)):
+		t.Fatalf("first maintenance pass did not finish")
+	}
+
+	if got := blocking.recordedRewriteCalls(); got != 1 {
+		t.Fatalf("rewrite calls=%d want=1 with concurrent maintenance attempts", got)
+	}
 }
 
 type dryRunGCRecordingBackend struct {
@@ -1158,6 +1278,134 @@ func TestVlogGenerationRewrite_TracksIneffectiveRuns(t *testing.T) {
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_out"]; got != "96" {
 		t.Fatalf("ineffective bytes out=%q want 96", got)
+	}
+}
+
+func TestVlogGenerationRewrite_DropsRemainingDebtAfterMaterialIneffectiveGrowth(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11, 22},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    (64 << 20) + vlogGenerationRewriteIneffectiveGrowthMinBytes + 1,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("queue after material ineffective rewrite=%v want empty", queue)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_prune_runs"]; got != "1" {
+		t.Fatalf("queue prune runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_prune_ids"]; got != "1" {
+		t.Fatalf("queue prune ids=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationRewrite_KeepsRemainingDebtForSmallIneffectiveGrowth(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11, 22},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    (64 << 20) + vlogGenerationRewriteIneffectiveGrowthMinBytes - 1,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if got, want := queue, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("queue after small ineffective rewrite=%v want=%v", got, want)
+	}
+}
+
+func TestVlogGenerationRewrite_DropsRemainingDebtAfterNoProgressResume(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11, 22},
+			SelectedBytesLive: 128,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    64 << 20,
+			RecordsCopied: 0,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("queue after no-progress resume=%v want empty", queue)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_prune_runs"]; got != "1" {
+		t.Fatalf("queue prune runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_prune_ids"]; got != "1" {
+		t.Fatalf("queue prune ids=%q want 1", got)
 	}
 }
 
