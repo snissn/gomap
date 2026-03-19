@@ -4734,6 +4734,8 @@ type DB struct {
 	vlogGenerationRewriteIneffectiveRuns     atomic.Uint64
 	vlogGenerationRewriteIneffectiveBytesIn  atomic.Uint64
 	vlogGenerationRewriteIneffectiveBytesOut atomic.Uint64
+	vlogGenerationRewriteCanceledRuns        atomic.Uint64
+	vlogGenerationRewriteCanceledLastNS      atomic.Int64
 	vlogGenerationGCSegmentsDeleted          atomic.Uint64
 	vlogGenerationGCBytesDeleted             atomic.Uint64
 	vlogGenerationGCRuns                     atomic.Uint64
@@ -4852,6 +4854,7 @@ const (
 	vlogGenerationGCMinInterval             = 45 * time.Second
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
 	vlogGenerationRewritePlanCancelBackoff  = 5 * time.Second
+	vlogGenerationRewriteCancelBackoff      = 20 * time.Second
 	// Best-effort background maintenance should not immediately compete with
 	// a just-active foreground write stream.
 	vlogForegroundQuietWindow = 2 * time.Second
@@ -11540,6 +11543,25 @@ func (db *DB) vlogGenerationRewritePlanBackoffActive(now time.Time) bool {
 	return now.Sub(time.Unix(0, lastCanceled)) < vlogGenerationRewritePlanCancelBackoff
 }
 
+func (db *DB) observeVlogGenerationRewriteCanceled() {
+	if db == nil {
+		return
+	}
+	db.vlogGenerationRewriteCanceledRuns.Add(1)
+	db.vlogGenerationRewriteCanceledLastNS.Store(time.Now().UnixNano())
+}
+
+func (db *DB) vlogGenerationRewriteCancelBackoffActive(now time.Time) bool {
+	if db == nil {
+		return false
+	}
+	lastCanceled := db.vlogGenerationRewriteCanceledLastNS.Load()
+	if lastCanceled <= 0 {
+		return false
+	}
+	return now.Sub(time.Unix(0, lastCanceled)) < vlogGenerationRewriteCancelBackoff
+}
+
 type vlogGenerationMaintenanceOptions struct {
 	bypassQuiet           bool
 	skipRetainedPruneWait bool
@@ -11618,6 +11640,11 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if len(rewriteQueue) > 0 {
 		shouldRewrite = true
 		reason = vlogGenerationReasonRewriteResume
+	}
+	rewriteCancelBackoff := len(rewriteQueue) > 0 && db.vlogGenerationRewriteCancelBackoffActive(now)
+	if rewriteCancelBackoff {
+		shouldRewrite = false
+		reason = vlogGenerationReasonNone
 	}
 	planBackoff := len(rewriteQueue) == 0 && db.vlogGenerationRewritePlanBackoffActive(now)
 	if planBackoff {
@@ -11942,6 +11969,9 @@ planned:
 			cancel()
 			if err != nil {
 				db.debugVlogMaintf("rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), err, float64(time.Since(rewriteStart).Microseconds())/1000)
+				if errors.Is(err, context.Canceled) {
+					db.observeVlogGenerationRewriteCanceled()
+				}
 				return fmt.Errorf("generational rewrite: %w", err)
 			}
 			db.debugVlogMaintf(
@@ -17370,6 +17400,8 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.cache.vlog_generation.rewrite.plan_errors"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanErrors.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_empty"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanEmpty.Load())
 	stats["treedb.cache.vlog_generation.rewrite.plan_selected"] = fmt.Sprintf("%d", db.vlogGenerationRewritePlanSelected.Load())
+	stats["treedb.cache.vlog_generation.rewrite.canceled_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledRuns.Load())
+	stats["treedb.cache.vlog_generation.rewrite.canceled_last_unix_nano"] = fmt.Sprintf("%d", db.vlogGenerationRewriteCanceledLastNS.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_runs"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveRuns.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_in"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesIn.Load())
 	stats["treedb.cache.vlog_generation.rewrite.ineffective_bytes_out"] = fmt.Sprintf("%d", db.vlogGenerationRewriteIneffectiveBytesOut.Load())
