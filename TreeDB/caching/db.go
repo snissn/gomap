@@ -11798,7 +11798,7 @@ planned:
 					maxSourceBytes = totalBytes
 				}
 			}
-			ctx, cancel := db.vlogGenerationMaintenanceContext(2*time.Minute, opts)
+			ctx, cancel := db.foregroundMaintenanceContext(2 * time.Minute)
 			rewriteOpts := backenddb.ValueLogRewriteOnlineOptions{
 				BatchSize:       db.valueLogRewriteBatchSize(),
 				SyncEachBatch:   false,
@@ -12030,7 +12030,7 @@ planned:
 		}
 		now = time.Now()
 		db.vlogGenerationLastGCUnixNano.Store(now.UnixNano())
-		ctx, cancel := db.vlogGenerationMaintenanceContext(30*time.Second, opts)
+		ctx, cancel := db.foregroundMaintenanceContext(30 * time.Second)
 		gcOpts := backenddb.ValueLogGCOptions{ProtectedPaths: db.valueLogProtectedPaths()}
 		gcStats, err := gcer.ValueLogGC(ctx, gcOpts)
 		cancel()
