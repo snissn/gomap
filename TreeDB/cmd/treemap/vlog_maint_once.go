@@ -20,6 +20,11 @@ type valueLogMaintOnceReport struct {
 	Dir            string                              `json:"dir"`
 	Mode           string                              `json:"mode"`
 	Acquired       bool                                `json:"acquired"`
+	OpenMillis     int64                               `json:"open_millis,omitempty"`
+	SeedMillis     int64                               `json:"seed_millis,omitempty"`
+	RunMillis      int64                               `json:"run_millis,omitempty"`
+	WaitIdleMillis int64                               `json:"wait_idle_millis,omitempty"`
+	TotalMillis    int64                               `json:"total_millis,omitempty"`
 	SeededFromPlan bool                                `json:"seeded_from_plan,omitempty"`
 	SeedPlan       *treedbdb.ValueLogRewritePlan       `json:"seed_plan,omitempty"`
 	BeforeState    treedb.DebugValueLogGenerationState `json:"before_state"`
@@ -83,7 +88,10 @@ func runVlogMaintOnce(dir string, args []string) {
 		seedPlan = &audit.RewritePlan
 	}
 
+	totalStart := time.Now()
+	openStart := totalStart
 	db := openTreeDB(dir, true)
+	openDone := time.Now()
 	defer closeTreeDB(db)
 
 	beforeState, err := db.DebugValueLogGenerationState()
@@ -95,10 +103,12 @@ func runVlogMaintOnce(dir string, args []string) {
 	report := valueLogMaintOnceReport{
 		Dir:         dir,
 		Mode:        *mode,
+		OpenMillis:  openDone.Sub(openStart).Milliseconds(),
 		BeforeState: beforeState,
 		BeforeStats: beforeStats,
 	}
 
+	seedStart := time.Now()
 	if *clearState {
 		if err := db.DebugSetValueLogGenerationRewriteQueue(nil); err != nil {
 			fatalf("clear rewrite state: %v", err)
@@ -126,6 +136,7 @@ func runVlogMaintOnce(dir string, args []string) {
 			}
 		}
 	}
+	report.SeedMillis = time.Since(seedStart).Milliseconds()
 
 	opts, err := valueLogMaintModeOptions(*mode)
 	if err != nil {
@@ -147,7 +158,9 @@ func runVlogMaintOnce(dir string, args []string) {
 			fatalf("cpuprofile: %v", err)
 		}
 	}
+	runStart := time.Now()
 	acquired, err := db.DebugRunValueLogGenerationMaintenanceOnce(opts)
+	report.RunMillis = time.Since(runStart).Milliseconds()
 	if cpuFile != nil {
 		runtimepprof.StopCPUProfile()
 		_ = cpuFile.Close()
@@ -157,9 +170,11 @@ func runVlogMaintOnce(dir string, args []string) {
 	}
 	report.Acquired = acquired
 	if *waitIdle > 0 {
+		waitStart := time.Now()
 		if err := db.DebugWaitValueLogGenerationIdle(*waitIdle); err != nil {
 			fatalf("wait idle: %v", err)
 		}
+		report.WaitIdleMillis = time.Since(waitStart).Milliseconds()
 	}
 
 	afterState, err := db.DebugValueLogGenerationState()
@@ -168,6 +183,7 @@ func runVlogMaintOnce(dir string, args []string) {
 	}
 	report.AfterState = afterState
 	report.AfterStats = filterVlogGenerationStats(db.Stats())
+	report.TotalMillis = time.Since(totalStart).Milliseconds()
 
 	if *heapprofile != "" {
 		runtime.GC()
@@ -204,6 +220,7 @@ func runVlogMaintOnce(dir string, args []string) {
 
 	fmt.Printf("dir=%s\n", report.Dir)
 	fmt.Printf("mode=%s acquired=%t seeded_from_plan=%t\n", report.Mode, report.Acquired, report.SeededFromPlan)
+	fmt.Printf("timing_ms: open=%d seed=%d run=%d wait_idle=%d total=%d\n", report.OpenMillis, report.SeedMillis, report.RunMillis, report.WaitIdleMillis, report.TotalMillis)
 	if report.SeedPlan != nil {
 		fmt.Printf(
 			"seed_plan: selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d source_file_ids=%v\n",
