@@ -478,6 +478,49 @@ func TestValueLogGC_IncrementalMode_RebuildOnCorruption(t *testing.T) {
 	}
 }
 
+func TestValueLogRefCountsMetadata_PersistedOnClose(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 90_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('a' + i)}, 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs[1]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	_ = b.Close()
+
+	wantSeq := db.currentCommitSeq()
+	metaPath := db.valueLogRefCountsPath()
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatalf("read metadata: %v", err)
+	}
+	disk, err := decodeValueLogRefCounts(data)
+	if err != nil {
+		t.Fatalf("decode metadata: %v", err)
+	}
+	if disk.commitSeq != wantSeq {
+		t.Fatalf("metadata commit seq=%d want %d", disk.commitSeq, wantSeq)
+	}
+}
+
 func TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite(t *testing.T) {
 	dir := t.TempDir()
 

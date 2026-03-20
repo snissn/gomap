@@ -1140,6 +1140,11 @@ func (db *DB) Close() error {
 		db.ghostManager.stop()
 	}
 
+	var errs []error
+	if err := db.persistValueLogRefTracker(); err != nil {
+		errs = append(errs, err)
+	}
+
 	db.mu.Lock()
 	db.clearSnapshotView()
 	vm := db.valueLogManager
@@ -1148,7 +1153,6 @@ func (db *DB) Close() error {
 	db.lock = nil
 	db.mu.Unlock()
 
-	var errs []error
 	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
 	for db.snapshotAcquireInFlight() > 0 {
 		if time.Now().After(drainDeadline) {
