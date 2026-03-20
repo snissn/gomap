@@ -4357,6 +4357,10 @@ type backendValueLogRewritePlanner interface {
 	ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error)
 }
 
+type backendValueLogSegmentPresence interface {
+	ValueLogHasSegment(id uint32) bool
+}
+
 type backendValueLogGCer interface {
 	ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
 }
@@ -11979,6 +11983,26 @@ func filterVlogGenerationRewriteLedgerByQuality(segments []backenddb.ValueLogRew
 	return filtered
 }
 
+func filterVlogGenerationRewriteLedgerToExistingSegments(segments []backenddb.ValueLogRewritePlanSegment, segmentPresence backendValueLogSegmentPresence) []backenddb.ValueLogRewritePlanSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+	if segmentPresence == nil {
+		return append([]backenddb.ValueLogRewritePlanSegment(nil), segments...)
+	}
+	filtered := make([]backenddb.ValueLogRewritePlanSegment, 0, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		if !segmentPresence.ValueLogHasSegment(seg.FileID) {
+			continue
+		}
+		filtered = append(filtered, seg)
+	}
+	return filtered
+}
+
 func vlogGenerationRewritePlanHasSelectionSignal(plan backenddb.ValueLogRewritePlan) bool {
 	if len(plan.SelectedSegments) > 0 || len(plan.SourceFileIDs) > 0 {
 		return true
@@ -12612,6 +12636,36 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	var rewritePlan backenddb.ValueLogRewritePlan
 	haveRewritePlan := false
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
+	segmentPresence, hasSegmentPresence := db.backend.(backendValueLogSegmentPresence)
+	if hasSegmentPresence && len(rewriteLedger) > 0 {
+		filteredLedger := filterVlogGenerationRewriteLedgerToExistingSegments(rewriteLedger, segmentPresence)
+		if dropped := len(rewriteLedger) - len(filteredLedger); dropped > 0 {
+			nextStagePending := stagePending
+			nextStageObservedAt := stageObservedAt
+			if len(filteredLedger) == 0 {
+				nextStagePending = false
+				nextStageObservedAt = 0
+			}
+			if err := db.setVlogGenerationRewriteLedgerWithStage(filteredLedger, nextStagePending, nextStageObservedAt); err != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: prune missing generational rewrite queue segments: %w", err))
+				}
+				return
+			}
+			db.observeVlogGenerationRewriteQueuePrune(dropped)
+			rewriteLedger = filteredLedger
+			rewriteQueue = vlogGenerationRewriteLedgerIDs(filteredLedger)
+			stagePending = nextStagePending
+			stageObservedAt = nextStageObservedAt
+			db.debugVlogMaintf(
+				"rewrite_queue_missing_prune dropped=%d remaining=%d stage_pending=%t",
+				dropped,
+				len(rewriteQueue),
+				stagePending,
+			)
+		}
+	}
 	stageConfirmUsePersistedLedger := shouldUsePersistedVlogGenerationRewriteLedgerForConfirm(opts, stagePending, stageConfirmDue, rewriteQueue, rewriteLedger)
 	stageConfirmRefresh := hasPlanner && !stageConfirmUsePersistedLedger && shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(opts, stagePending, stageConfirmDue, rewriteQueue)
 	skipStageConfirmSparsePlan := false

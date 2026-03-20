@@ -495,6 +495,7 @@ type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 
 	mu              sync.Mutex
+	segmentExists   map[uint32]bool
 	planOpts        backenddb.ValueLogRewriteOnlineOptions
 	planCalls       int
 	planResponse    backenddb.ValueLogRewritePlan
@@ -539,6 +540,15 @@ func (b *rewriteBudgetRecordingBackend) ValueLogGC(ctx context.Context, opts bac
 	err := b.gcErr
 	b.mu.Unlock()
 	return stats, err
+}
+
+func (b *rewriteBudgetRecordingBackend) ValueLogHasSegment(id uint32) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.segmentExists != nil {
+		return b.segmentExists[id]
+	}
+	return true
 }
 
 func (b *rewriteBudgetRecordingBackend) recordedRewrite() (backenddb.ValueLogRewriteOnlineOptions, int) {
@@ -2069,6 +2079,67 @@ func TestVlogGenerationRewriteQueue_StageConfirmRefreshesStagedLedgerEconomics(t
 	}
 	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteQueue_StageConfirmPrunesMissingPersistedSegments(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:            backend,
+		segmentExists: map[uint32]bool{11: false, 22: true},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	stageObservedAt := time.Now().Add(-2 * vlogGenerationRewriteMinInterval).UnixNano()
+	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 48 << 20, BytesStale: 16 << 20, StaleRatio: 0.25},
+		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+	}, true, stageObservedAt); err != nil {
+		t.Fatalf("seed staged rewrite ledger: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(defaultVlogGenerationWarmTargetBytes * 4)
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm",
+	})
+
+	if _, planCalls := recorder.recordedPlan(); planCalls != 0 {
+		t.Fatalf("plan calls=%d want=0 when due stage-confirm uses persisted ledger", planCalls)
+	}
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", rewriteCalls)
+	}
+	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+	state, err := db.DebugValueLogGenerationState()
+	if err != nil {
+		t.Fatalf("debug state: %v", err)
+	}
+	if len(state.RewriteSourceFileIDs) != 0 {
+		t.Fatalf("after queue=%v want empty", state.RewriteSourceFileIDs)
+	}
+	if state.RewriteStagePending {
+		t.Fatalf("rewrite stage pending after consuming remaining existing segment")
 	}
 }
 

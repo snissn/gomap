@@ -1908,6 +1908,15 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 	return db.valueLogManager.MarkZombie(id)
 }
 
+// ValueLogHasSegment reports whether the value-log manager currently has a
+// registered segment for id.
+func (db *DB) ValueLogHasSegment(id uint32) bool {
+	if db == nil || db.valueLogManager == nil {
+		return false
+	}
+	return db.valueLogManager.HasSegment(id)
+}
+
 // CompactIndex rewrites the entire B-Tree sequentially to the end of the file.
 // This improves Full Scan performance by restoring physical locality.
 // Note: This operation causes file growth as old pages are not immediately reclaimed
