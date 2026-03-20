@@ -4764,6 +4764,7 @@ type DB struct {
 	vlogGenerationCheckpointKickActive       atomic.Bool
 	vlogGenerationRewriteQueue               []uint32
 	vlogGenerationRewriteLedger              []backenddb.ValueLogRewritePlanSegment
+	vlogGenerationRewritePenalties           map[uint32]valueLogGenerationRewritePenalty
 	vlogGenerationRewriteQueueLoaded         bool
 	vlogGenerationLastChurnBps               atomic.Int64
 	vlogGenerationLastChurnSampleBytes       atomic.Uint64
@@ -4897,10 +4898,12 @@ const (
 	// floor; rewriting nearly-live segments can amplify bytes and regress wall.
 	vlogGenerationRewriteMinSegmentStaleRatio  = 0.05
 	vlogGenerationRewriteMinSegmentStaleBytes  = int64(1)
+	vlogGenerationRewriteMinSegmentAge         = 30 * time.Second
 	vlogGenerationRewriteEfficacyMinTotalBytes = int64(512 << 20)
 	// Treat rewrites that materially increase bytes as harmful and stop resuming
 	// the remaining queued plan in the same debt cycle.
 	vlogGenerationRewriteIneffectiveGrowthMinBytes = int64(4 << 20)
+	vlogGenerationRewriteIneffectiveCooldown       = 10 * time.Minute
 	// Resumable queued rewrites are already segment-limited; let them finish
 	// under foreground activity with a bounded timeout instead of immediate
 	// foreground-cancel semantics.
@@ -11626,6 +11629,60 @@ func (db *DB) vlogGenerationRewriteIneffectiveBackoffActive(now time.Time) bool 
 	return now.Sub(time.Unix(0, lastIneffective)) < vlogGenerationRewriteIneffectiveBackoff
 }
 
+func filterVlogGenerationRewritePlanByPenalty(plan backenddb.ValueLogRewritePlan, penalties map[uint32]valueLogGenerationRewritePenalty, now time.Time) backenddb.ValueLogRewritePlan {
+	if len(plan.SourceFileIDs) == 0 || len(penalties) == 0 {
+		return plan
+	}
+	allowed := make(map[uint32]struct{}, len(plan.SourceFileIDs))
+	filteredIDs := make([]uint32, 0, len(plan.SourceFileIDs))
+	for _, id := range plan.SourceFileIDs {
+		if id == 0 {
+			continue
+		}
+		penalty, ok := penalties[id]
+		if ok && penalty.CooldownUntilUnixNano > now.UnixNano() {
+			continue
+		}
+		allowed[id] = struct{}{}
+		filteredIDs = append(filteredIDs, id)
+	}
+	if len(filteredIDs) == len(plan.SourceFileIDs) {
+		return plan
+	}
+	plan.SourceFileIDs = filteredIDs
+	plan.SegmentsSelected = len(filteredIDs)
+	plan.SelectedBytesTotal = 0
+	plan.SelectedBytesLive = 0
+	plan.SelectedBytesStale = 0
+	if len(plan.SelectedSegments) == 0 {
+		return plan
+	}
+	filteredSegments := make([]backenddb.ValueLogRewritePlanSegment, 0, len(plan.SelectedSegments))
+	for _, seg := range plan.SelectedSegments {
+		if _, ok := allowed[seg.FileID]; !ok {
+			continue
+		}
+		filteredSegments = append(filteredSegments, seg)
+		plan.SelectedBytesTotal += seg.BytesTotal
+		plan.SelectedBytesLive += seg.BytesLive
+		plan.SelectedBytesStale += seg.BytesStale
+	}
+	plan.SelectedSegments = filteredSegments
+	plan.SegmentsSelected = len(filteredSegments)
+	return plan
+}
+
+func (db *DB) filterVlogGenerationRewritePlanPenalties(plan backenddb.ValueLogRewritePlan, now time.Time) (backenddb.ValueLogRewritePlan, error) {
+	if db == nil || len(plan.SourceFileIDs) == 0 {
+		return plan, nil
+	}
+	penalties, err := db.currentVlogGenerationRewritePenalties()
+	if err != nil {
+		return backenddb.ValueLogRewritePlan{}, err
+	}
+	return filterVlogGenerationRewritePlanByPenalty(plan, penalties, now), nil
+}
+
 type vlogGenerationMaintenanceOptions struct {
 	bypassQuiet           bool
 	skipRetainedPruneWait bool
@@ -11837,6 +11894,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			MaxSourceBytes:       maxSourceBytes,
 			MinSegmentStaleRatio: minStaleRatio,
 			MinSegmentStaleBytes: 1,
+			MinSegmentAge:        vlogGenerationRewriteMinSegmentAge,
 		})
 		cancel()
 		db.debugVlogMaintf(
@@ -11874,11 +11932,21 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				}
 			}
 		} else if len(plan.SourceFileIDs) > 0 {
+			plan, err = db.filterVlogGenerationRewritePlanPenalties(plan, now)
+			if err != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: filter generational rewrite penalties: %w", err))
+				}
+				return
+			}
 			updatePlanTimestamp = true
-			shouldRewrite = true
-			reason = vlogGenerationReasonStaleRatio
-			rewritePlan = plan
-			haveRewritePlan = true
+			if len(plan.SourceFileIDs) > 0 {
+				shouldRewrite = true
+				reason = vlogGenerationReasonStaleRatio
+				rewritePlan = plan
+				haveRewritePlan = true
+			}
 		} else {
 			updatePlanTimestamp = true
 		}
@@ -11929,6 +11997,7 @@ planned:
 					MaxSourceBytes:       maxSourceBytes,
 					MinSegmentStaleRatio: minStaleRatio,
 					MinSegmentStaleBytes: vlogGenerationRewriteMinSegmentStaleBytes,
+					MinSegmentAge:        vlogGenerationRewriteMinSegmentAge,
 				})
 				cancel()
 				db.debugVlogMaintf(
@@ -11961,6 +12030,17 @@ planned:
 						db.vlogGenerationRemapFailures.Add(1)
 						if db.notifyError != nil {
 							db.notifyError(fmt.Errorf("cachingdb: generational rewrite plan: %w", err))
+						}
+						return
+					}
+				}
+				if len(plan.SourceFileIDs) > 0 {
+					plan, err = db.filterVlogGenerationRewritePlanPenalties(plan, now)
+					if err != nil {
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+						db.vlogGenerationRemapFailures.Add(1)
+						if db.notifyError != nil {
+							db.notifyError(fmt.Errorf("cachingdb: filter generational rewrite penalties: %w", err))
 						}
 						return
 					}
@@ -12133,6 +12213,7 @@ planned:
 				rewriteOpts.MaxSourceBytes = maxSourceBytes
 				rewriteOpts.MinSegmentStaleRatio = db.vlogGenerationRewriteMinStaleRatioForGenericPass(totalBytes)
 				rewriteOpts.MinSegmentStaleBytes = vlogGenerationRewriteMinSegmentStaleBytes
+				rewriteOpts.MinSegmentAge = vlogGenerationRewriteMinSegmentAge
 			}
 			var ctx context.Context
 			var cancel context.CancelFunc
@@ -12220,41 +12301,43 @@ planned:
 					len(rewriteQueue),
 				)
 			}
-			dropRewriteDebt := false
-			dropRewriteDebtReason := ""
+			penalizeProcessedRewriteDebt := false
+			penaltyReason := ""
 			if len(processedRewriteIDs) > 0 && effectiveBytesAfter >= effectiveBytesBefore {
 				growth := effectiveBytesAfter - effectiveBytesBefore
 				if growth >= vlogGenerationRewriteIneffectiveGrowthMinBytes {
-					dropRewriteDebt = true
-					dropRewriteDebtReason = "material_growth"
+					penalizeProcessedRewriteDebt = true
+					penaltyReason = "material_growth"
 				} else if growth == 0 && stats.RecordsCopied == 0 {
 					// A queued rewrite that copies nothing and does not reduce bytes is
-					// effectively a no-op resume loop; drop remaining debt so the
-					// scheduler can re-plan from current state instead of retrying.
-					dropRewriteDebt = true
-					dropRewriteDebtReason = "no_progress"
+					// effectively a no-op resume loop; cool down the processed segment
+					// and let the remaining debt continue instead of discarding it.
+					penalizeProcessedRewriteDebt = true
+					penaltyReason = "no_progress"
 				}
 			}
-			if dropRewriteDebt {
+			if penalizeProcessedRewriteDebt {
 				db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
+				if err := db.recordVlogGenerationRewritePenalty(
+					processedRewriteIDs,
+					time.Now().Add(vlogGenerationRewriteIneffectiveCooldown),
+					effectiveBytesAfter-effectiveBytesBefore,
+				); err != nil {
+					return fmt.Errorf("record generational rewrite penalty: %w", err)
+				}
 				remainingQueue, queueErr := db.currentVlogGenerationRewriteQueue()
 				if queueErr != nil {
-					return fmt.Errorf("load generational rewrite queue after ineffective rewrite: %w", queueErr)
-				}
-				dropped := len(remainingQueue)
-				if err := db.setVlogGenerationRewriteQueue(nil); err != nil {
-					return fmt.Errorf("clear generational rewrite queue after ineffective rewrite: %w", err)
-				}
-				if dropped > 0 {
-					db.observeVlogGenerationRewriteQueuePrune(dropped)
+					return fmt.Errorf("load generational rewrite queue after ineffective rewrite penalty: %w", queueErr)
 				}
 				db.debugVlogMaintf(
-					"rewrite_ineffective_drop_queue reason=%s dropped_ids=%d growth=%d threshold=%d drop_reason=%s gc_bytes_deleted=%d",
+					"rewrite_ineffective_penalty reason=%s processed_ids=%d remaining_ids=%d growth=%d threshold=%d penalty_reason=%s cooldown_ms=%d gc_bytes_deleted=%d",
 					vlogGenerationReasonString(reason),
-					dropped,
+					len(processedRewriteIDs),
+					len(remainingQueue),
 					effectiveBytesAfter-effectiveBytesBefore,
 					vlogGenerationRewriteIneffectiveGrowthMinBytes,
-					dropRewriteDebtReason,
+					penaltyReason,
+					vlogGenerationRewriteIneffectiveCooldown.Milliseconds(),
 					gcBytesDeleted,
 				)
 			}

@@ -601,9 +601,11 @@ func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
 	}
 
 	for round := 0; round < 6; round++ {
+		ageValueLogFilesForTest(t, dir, vlogGenerationRewriteMinSegmentAge+time.Second)
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 		writeBatch(fmt.Sprintf("post-%02d", round), 512)
+		ageValueLogFilesForTest(t, dir, vlogGenerationRewriteMinSegmentAge+time.Second)
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 	}
