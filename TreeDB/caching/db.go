@@ -11637,14 +11637,6 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	db.maybeRunVlogGenerationMaintenanceWithOptions(runGC, vlogGenerationMaintenanceOptions{})
 }
 
-const (
-	// When a pending checkpoint-kick retry collides with an already-active
-	// maintenance pass, retry a few times quickly to avoid starving rewrite/GC
-	// behind repeated short-lived collisions.
-	vlogGenerationPendingKickMaxImmediateRetries = 4
-	vlogGenerationPendingKickRetryStep           = 5 * time.Millisecond
-)
-
 func (db *DB) schedulePendingVlogGenerationCheckpointKick() {
 	if db == nil || db.closing.Load() {
 		return
@@ -11655,27 +11647,17 @@ func (db *DB) schedulePendingVlogGenerationCheckpointKick() {
 	db.wg.Add(1)
 	go func() {
 		defer db.wg.Done()
-		for attempt := 0; attempt < vlogGenerationPendingKickMaxImmediateRetries; attempt++ {
-			if db.closing.Load() {
-				return
-			}
-			db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
-				bypassQuiet:           true,
-				skipRetainedPruneWait: true,
-				// This path retries a checkpoint-triggered kick that collided with an
-				// already-active maintenance pass.
-				skipCheckpoint:   false,
-				rewriteDebtDrain: true,
-			})
-			if !db.vlogGenerationCheckpointKickPending.Load() {
-				return
-			}
-			// A new collision re-queued pending=true. Consume that token and retry.
-			if !db.vlogGenerationCheckpointKickPending.CompareAndSwap(true, false) {
-				return
-			}
-			time.Sleep(time.Duration(attempt+1) * vlogGenerationPendingKickRetryStep)
+		if db.closing.Load() {
+			return
 		}
+		db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+			bypassQuiet:           true,
+			skipRetainedPruneWait: true,
+			// This path retries a checkpoint-triggered kick that collided with an
+			// already-active maintenance pass.
+			skipCheckpoint:   false,
+			rewriteDebtDrain: true,
+		})
 	}()
 }
 
