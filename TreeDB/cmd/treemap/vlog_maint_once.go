@@ -44,6 +44,7 @@ func runVlogMaintOnce(dir string, args []string) {
 	rewritePlanTimeout := fs.Duration("rewrite-plan-timeout", 0, "Override cached rewrite planner timeout for this process (debug/offline analysis only)")
 	waitIdle := fs.Duration("wait-idle", 0, "Wait for cached value-log generation maintenance to go idle before collecting after-state")
 	cpuprofile := fs.String("cpuprofile", "", "Write CPU profile for this maintenance run to file")
+	cpuprofileTotal := fs.Bool("cpuprofile-total", false, "Extend CPU profiling through the idle-wait window instead of stopping after the initial maintenance call")
 	heapprofile := fs.String("heapprofile", "", "Write in-use heap profile after this maintenance run to file")
 	allocsprofile := fs.String("allocsprofile", "", "Write allocs profile after this maintenance run to file")
 	seedStagePending := fs.Bool("seed-stage-pending", false, "When seeding from plan, mark the rewrite debt as stage-pending")
@@ -146,7 +147,10 @@ func runVlogMaintOnce(dir string, args []string) {
 	if *allocsprofile != "" {
 		runtime.MemProfileRate = 1
 	}
-	var cpuFile *os.File
+	var (
+		cpuFile           *os.File
+		cpuProfileStarted bool
+	)
 	if *cpuprofile != "" {
 		f, err := os.Create(*cpuprofile)
 		if err != nil {
@@ -157,13 +161,16 @@ func runVlogMaintOnce(dir string, args []string) {
 			_ = cpuFile.Close()
 			fatalf("cpuprofile: %v", err)
 		}
+		cpuProfileStarted = true
 	}
 	runStart := time.Now()
 	acquired, err := db.DebugRunValueLogGenerationMaintenanceOnce(opts)
 	report.RunMillis = time.Since(runStart).Milliseconds()
-	if cpuFile != nil {
+	if cpuFile != nil && cpuProfileStarted && (!*cpuprofileTotal || *waitIdle <= 0) {
 		runtimepprof.StopCPUProfile()
 		_ = cpuFile.Close()
+		cpuProfileStarted = false
+		cpuFile = nil
 	}
 	if err != nil {
 		fatalf("run maintenance: %v", err)
@@ -175,6 +182,10 @@ func runVlogMaintOnce(dir string, args []string) {
 			fatalf("wait idle: %v", err)
 		}
 		report.WaitIdleMillis = time.Since(waitStart).Milliseconds()
+	}
+	if cpuFile != nil && cpuProfileStarted {
+		runtimepprof.StopCPUProfile()
+		_ = cpuFile.Close()
 	}
 
 	afterState, err := db.DebugValueLogGenerationState()
