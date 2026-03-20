@@ -2007,6 +2007,116 @@ func TestVlogGenerationRewriteQueue_CheckpointKickResumeDoesNotRefreshQueue(t *t
 	}
 }
 
+func TestVlogGenerationRewriteQueue_StageConfirmRefreshesStagedLedgerEconomics(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planFn: func(opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
+			if got, want := opts.SourceFileIDs, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+				t.Fatalf("stage-confirm refresh SourceFileIDs=%v want=%v", got, want)
+			}
+			return backenddb.ValueLogRewritePlan{
+				SourceFileIDs: []uint32{22},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+				},
+				SegmentsSelected:   1,
+				SelectedBytesTotal: 64 << 20,
+				SelectedBytesLive:  8 << 20,
+				SelectedBytesStale: 56 << 20,
+			}, nil
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	stageObservedAt := time.Now().Add(-2 * vlogGenerationRewriteMinInterval).UnixNano()
+	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 48 << 20, BytesStale: 16 << 20, StaleRatio: 0.25},
+		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+	}, true, stageObservedAt); err != nil {
+		t.Fatalf("seed staged rewrite ledger: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(defaultVlogGenerationWarmTargetBytes * 4)
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm",
+	})
+
+	planOpts, planCalls := recorder.recordedPlan()
+	if planCalls != 1 {
+		t.Fatalf("plan calls=%d want=1", planCalls)
+	}
+	if planOpts.MinSegmentAge != 0 {
+		t.Fatalf("plan MinSegmentAge=%s want 0 for explicit staged refresh", planOpts.MinSegmentAge)
+	}
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", rewriteCalls)
+	}
+	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteQueue_StageConfirmCanceledRefreshDoesNotFallbackToSparsePlan(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:      backend,
+		planErr: context.DeadlineExceeded,
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	stageObservedAt := time.Now().Add(-2 * vlogGenerationRewriteMinInterval).UnixNano()
+	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 48 << 20, BytesStale: 16 << 20, StaleRatio: 0.25},
+		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+	}, true, stageObservedAt); err != nil {
+		t.Fatalf("seed staged rewrite ledger: %v", err)
+	}
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm",
+	})
+
+	if _, planCalls := recorder.recordedPlan(); planCalls != 1 {
+		t.Fatalf("plan calls=%d want=1", planCalls)
+	}
+	if _, rewriteCalls := recorder.recordedRewrite(); rewriteCalls != 0 {
+		t.Fatalf("rewrite calls=%d want=0", rewriteCalls)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_DebtDrainProcessesMultipleSegments(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

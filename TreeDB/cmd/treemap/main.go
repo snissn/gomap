@@ -38,6 +38,7 @@ Commands:
   compact         Compact/rebuild the index.db in-place (requires -rw)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   vlog-audit      Audit value-log filesystem, GC, and rewrite-plan state (requires -rw)
+  vlog-maint-once Inspect/seed cached rewrite debt and run one maintenance pass (requires -rw)
   vlog-gc         Delete unreferenced value-log segments (requires -rw)
   vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
   get             Get a single key
@@ -92,6 +93,8 @@ func main() {
 		runVacuum(dir, args)
 	case "vlog-audit":
 		runVlogAudit(dir, args)
+	case "vlog-maint-once":
+		runVlogMaintOnce(dir, args)
 	case "vlog-gc":
 		runVlogGC(dir, args)
 	case "vlog-rewrite":

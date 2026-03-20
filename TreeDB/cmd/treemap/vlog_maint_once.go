@@ -1,0 +1,271 @@
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	treedb "github.com/snissn/gomap/TreeDB"
+	treedbdb "github.com/snissn/gomap/TreeDB/db"
+)
+
+type valueLogMaintOnceReport struct {
+	Dir            string                              `json:"dir"`
+	Mode           string                              `json:"mode"`
+	Acquired       bool                                `json:"acquired"`
+	SeededFromPlan bool                                `json:"seeded_from_plan,omitempty"`
+	SeedPlan       *treedbdb.ValueLogRewritePlan       `json:"seed_plan,omitempty"`
+	BeforeState    treedb.DebugValueLogGenerationState `json:"before_state"`
+	AfterState     treedb.DebugValueLogGenerationState `json:"after_state"`
+	BeforeStats    map[string]string                   `json:"before_stats,omitempty"`
+	AfterStats     map[string]string                   `json:"after_stats,omitempty"`
+}
+
+func runVlogMaintOnce(dir string, args []string) {
+	fs := flag.NewFlagSet("vlog-maint-once", flag.ExitOnError)
+	rw := fs.Bool("rw", false, "Open read-write (required)")
+	asJSON := fs.Bool("json", false, "Emit machine-readable JSON")
+	mode := fs.String("mode", "checkpoint", "Maintenance mode: periodic|checkpoint|stage-confirm|age-blocked")
+	seedFromPlan := fs.Bool("seed-from-plan", false, "Seed cached rewrite debt from a fresh backend rewrite plan before running")
+	clearState := fs.Bool("clear-state", false, "Clear cached rewrite debt before running")
+	disableAutoDeferred := fs.Bool("disable-auto-deferred", false, "Disable automatic deferred stage/age wakes while this command is running")
+	rewritePlanTimeout := fs.Duration("rewrite-plan-timeout", 0, "Override cached rewrite planner timeout for this process (debug/offline analysis only)")
+	waitIdle := fs.Duration("wait-idle", 0, "Wait for cached value-log generation maintenance to go idle before collecting after-state")
+	seedStagePending := fs.Bool("seed-stage-pending", false, "When seeding from plan, mark the rewrite debt as stage-pending")
+	seedStageObservedAgo := fs.Duration("seed-stage-observed-ago", 31*time.Second, "If -seed-stage-pending, record the stage observation this far in the past")
+	maxSegments := fs.Int("rewrite-max-segments", 0, "Seed-plan selection cap in segments (0=none)")
+	maxBytes := fs.Int64("rewrite-max-bytes", 0, "Seed-plan live-byte selection cap (0=none)")
+	minStaleRatio := fs.Float64("rewrite-min-stale-ratio", 0, "Seed-plan minimum per-segment stale ratio (0..1)")
+	minStaleBytes := fs.Int64("rewrite-min-stale-bytes", 0, "Seed-plan minimum per-segment stale bytes")
+	_ = fs.Parse(args)
+
+	if !*rw {
+		fatalf("vlog-maint-once requires -rw")
+	}
+	if *clearState && *seedFromPlan {
+		fatalf("use at most one of -clear-state or -seed-from-plan")
+	}
+	if *disableAutoDeferred {
+		if err := os.Setenv("TREEDB_DISABLE_VLOG_GENERATION_DEFERRED", "1"); err != nil {
+			fatalf("set disable-auto-deferred env: %v", err)
+		}
+	}
+	if *rewritePlanTimeout > 0 {
+		ms := (*rewritePlanTimeout).Milliseconds()
+		if ms <= 0 {
+			fatalf("rewrite-plan-timeout=%s too small", *rewritePlanTimeout)
+		}
+		if err := os.Setenv("TREEDB_DEBUG_VLOG_GENERATION_PLAN_TIMEOUT_MS", strconv.FormatInt(ms, 10)); err != nil {
+			fatalf("set rewrite-plan-timeout env: %v", err)
+		}
+	}
+
+	var seedPlan *treedbdb.ValueLogRewritePlan
+	if *seedFromPlan {
+		audit, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{
+			MaxSourceSegments:    *maxSegments,
+			MaxSourceBytes:       *maxBytes,
+			MinSegmentStaleRatio: *minStaleRatio,
+			MinSegmentStaleBytes: *minStaleBytes,
+		}, valueLogRIDAuditOptions{})
+		if err != nil {
+			fatalf("seed rewrite plan: %v", err)
+		}
+		seedPlan = &audit.RewritePlan
+	}
+
+	db := openTreeDB(dir, true)
+	defer closeTreeDB(db)
+
+	beforeState, err := db.DebugValueLogGenerationState()
+	if err != nil {
+		fatalf("debug state before run: %v", err)
+	}
+	beforeStats := filterVlogGenerationStats(db.Stats())
+
+	report := valueLogMaintOnceReport{
+		Dir:         dir,
+		Mode:        *mode,
+		BeforeState: beforeState,
+		BeforeStats: beforeStats,
+	}
+
+	if *clearState {
+		if err := db.DebugSetValueLogGenerationRewriteQueue(nil); err != nil {
+			fatalf("clear rewrite state: %v", err)
+		}
+	}
+	if *seedFromPlan {
+		report.SeededFromPlan = true
+		report.SeedPlan = seedPlan
+		switch {
+		case len(seedPlan.SelectedSegments) > 0:
+			stageObservedAt := int64(0)
+			if *seedStagePending {
+				stageObservedAt = time.Now().Add(-*seedStageObservedAgo).UnixNano()
+			}
+			if err := db.DebugSetValueLogGenerationRewriteLedger(seedPlan.SelectedSegments, *seedStagePending, stageObservedAt); err != nil {
+				fatalf("seed rewrite ledger: %v", err)
+			}
+		case len(seedPlan.SourceFileIDs) > 0:
+			if err := db.DebugSetValueLogGenerationRewriteQueue(seedPlan.SourceFileIDs); err != nil {
+				fatalf("seed rewrite queue: %v", err)
+			}
+		default:
+			if err := db.DebugSetValueLogGenerationRewriteQueue(nil); err != nil {
+				fatalf("clear empty seed plan: %v", err)
+			}
+		}
+	}
+
+	opts, err := valueLogMaintModeOptions(*mode)
+	if err != nil {
+		fatalf("%v", err)
+	}
+	acquired, err := db.DebugRunValueLogGenerationMaintenanceOnce(opts)
+	if err != nil {
+		fatalf("run maintenance: %v", err)
+	}
+	report.Acquired = acquired
+	if *waitIdle > 0 {
+		if err := db.DebugWaitValueLogGenerationIdle(*waitIdle); err != nil {
+			fatalf("wait idle: %v", err)
+		}
+	}
+
+	afterState, err := db.DebugValueLogGenerationState()
+	if err != nil {
+		fatalf("debug state after run: %v", err)
+	}
+	report.AfterState = afterState
+	report.AfterStats = filterVlogGenerationStats(db.Stats())
+
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(report); err != nil {
+			fatalf("json encode: %v", err)
+		}
+		return
+	}
+
+	fmt.Printf("dir=%s\n", report.Dir)
+	fmt.Printf("mode=%s acquired=%t seeded_from_plan=%t\n", report.Mode, report.Acquired, report.SeededFromPlan)
+	if report.SeedPlan != nil {
+		fmt.Printf(
+			"seed_plan: selected=%d/%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d source_file_ids=%v\n",
+			report.SeedPlan.SegmentsSelected,
+			report.SeedPlan.SegmentsTotal,
+			report.SeedPlan.SelectedBytesTotal,
+			report.SeedPlan.SelectedBytesLive,
+			report.SeedPlan.SelectedBytesStale,
+			report.SeedPlan.SourceFileIDs,
+		)
+	}
+	fmt.Printf(
+		"before: queue=%v ledger=%d stage_pending=%t stage_observed_unix_nano=%d\n",
+		report.BeforeState.RewriteSourceFileIDs,
+		len(report.BeforeState.RewriteDebtLedger),
+		report.BeforeState.RewriteStagePending,
+		report.BeforeState.RewriteStageObservedAtNS,
+	)
+	fmt.Printf(
+		"after: queue=%v ledger=%d stage_pending=%t stage_observed_unix_nano=%d\n",
+		report.AfterState.RewriteSourceFileIDs,
+		len(report.AfterState.RewriteDebtLedger),
+		report.AfterState.RewriteStagePending,
+		report.AfterState.RewriteStageObservedAtNS,
+	)
+	printSelectedVlogGenerationStatChanges(report.BeforeStats, report.AfterStats)
+}
+
+func valueLogMaintModeOptions(mode string) (treedb.DebugValueLogGenerationMaintenanceOptions, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "checkpoint":
+		return treedb.DebugValueLogGenerationMaintenanceOptions{
+			RunGC:                 true,
+			BypassQuiet:           true,
+			SkipCheckpoint:        false,
+			SkipRetainedPruneWait: true,
+			RewriteDebtDrain:      true,
+			Source:                "checkpoint_pending",
+		}, nil
+	case "periodic":
+		return treedb.DebugValueLogGenerationMaintenanceOptions{
+			RunGC:                 true,
+			BypassQuiet:           false,
+			SkipCheckpoint:        false,
+			SkipRetainedPruneWait: false,
+			RewriteDebtDrain:      false,
+			Source:                "periodic",
+		}, nil
+	case "stage-confirm":
+		return treedb.DebugValueLogGenerationMaintenanceOptions{
+			RunGC:                 true,
+			BypassQuiet:           true,
+			SkipCheckpoint:        false,
+			SkipRetainedPruneWait: true,
+			RewriteDebtDrain:      true,
+			Source:                "rewrite_stage_confirm",
+		}, nil
+	case "age-blocked":
+		return treedb.DebugValueLogGenerationMaintenanceOptions{
+			RunGC:                 true,
+			BypassQuiet:           true,
+			SkipCheckpoint:        false,
+			SkipRetainedPruneWait: true,
+			RewriteDebtDrain:      true,
+			Source:                "rewrite_age_blocked",
+		}, nil
+	default:
+		return treedb.DebugValueLogGenerationMaintenanceOptions{}, fmt.Errorf("unsupported -mode=%q (expected periodic|checkpoint|stage-confirm|age-blocked)", mode)
+	}
+}
+
+func filterVlogGenerationStats(stats map[string]string) map[string]string {
+	out := make(map[string]string)
+	for k, v := range stats {
+		if strings.HasPrefix(k, "treedb.cache.vlog_generation.") {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func printSelectedVlogGenerationStatChanges(before, after map[string]string) {
+	keys := []string{
+		"treedb.cache.vlog_generation.last_reason",
+		"treedb.cache.vlog_generation.scheduler_state",
+		"treedb.cache.vlog_generation.rewrite.runs",
+		"treedb.cache.vlog_generation.rewrite.bytes_in",
+		"treedb.cache.vlog_generation.rewrite.bytes_out",
+		"treedb.cache.vlog_generation.rewrite.queue_prune_runs",
+		"treedb.cache.vlog_generation.rewrite.queue_prune_ids",
+		"treedb.cache.vlog_generation.gc.runs",
+		"treedb.cache.vlog_generation.gc.deleted_bytes",
+		"treedb.cache.vlog_generation.checkpoint_kick.runs",
+		"treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs",
+		"treedb.cache.vlog_generation.checkpoint_kick.gc_runs",
+	}
+	sort.Strings(keys)
+	fmt.Println("stats:")
+	for _, k := range keys {
+		beforeVal := before[k]
+		afterVal := after[k]
+		if beforeVal == "" && afterVal == "" {
+			continue
+		}
+		if beforeN, err := strconv.ParseInt(beforeVal, 10, 64); err == nil {
+			if afterN, err := strconv.ParseInt(afterVal, 10, 64); err == nil {
+				fmt.Printf("  %s=%s -> %s (delta=%d)\n", k, beforeVal, afterVal, afterN-beforeN)
+				continue
+			}
+		}
+		fmt.Printf("  %s=%q -> %q\n", k, beforeVal, afterVal)
+	}
+}

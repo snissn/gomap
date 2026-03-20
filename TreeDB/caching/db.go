@@ -1652,6 +1652,8 @@ const (
 	envDisableVlogGenerationVacuum         = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
 	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
+	envDisableVlogGenerationDeferred       = "TREEDB_DISABLE_VLOG_GENERATION_DEFERRED"
+	envDebugVlogGenerationPlanTimeoutMS    = "TREEDB_DEBUG_VLOG_GENERATION_PLAN_TIMEOUT_MS"
 	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
 	envDisableCheckpointAutoVacuum         = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
 	minMemtablePrealloc                    = 64 * 1024
@@ -7404,6 +7406,11 @@ func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogG
 }
 
 func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
+	if s := os.Getenv(envDebugVlogGenerationPlanTimeoutMS); s != "" {
+		if ms, err := strconv.ParseInt(s, 10, 64); err == nil && ms > 0 {
+			timeout = time.Duration(ms) * time.Millisecond
+		}
+	}
 	// Keep planner calls quiet-window-gated, but tolerate short foreground
 	// activity resumes so sub-second plan scans can complete.
 	if opts.bypassQuiet {
@@ -12038,6 +12045,18 @@ func (db *DB) shouldRefreshQueuedVlogGenerationRewriteLedger(
 	return db.vlogGenerationLastRewriteUnixNano.Load() > 0
 }
 
+func shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(
+	opts vlogGenerationMaintenanceOptions,
+	stagePending bool,
+	stageConfirmDue bool,
+	queue []uint32,
+) bool {
+	if !stagePending || !stageConfirmDue || !vlogGenerationIsStageConfirmSource(opts) {
+		return false
+	}
+	return len(queue) > 0
+}
+
 func shouldDeferVlogGenerationRewritePlanForAge(plan backenddb.ValueLogRewritePlan, minSegmentAge time.Duration) bool {
 	if minSegmentAge <= 0 {
 		return false
@@ -12060,6 +12079,9 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time) {
 	wait := time.Until(deadline)
 	if wait < 0 {
 		wait = 0
+	}
+	if envBool(envDisableVlogGenerationDeferred) {
+		return
 	}
 	db.wg.Add(1)
 	go func(expectedUntil int64, delay time.Duration) {
@@ -12112,6 +12134,9 @@ func (db *DB) clearVlogGenerationRewriteStageConfirmation() {
 
 func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 	if db == nil || observedAt <= 0 || db.closing.Load() {
+		return
+	}
+	if envBool(envDisableVlogGenerationDeferred) {
 		return
 	}
 	if db.vlogGenerationRewriteStageWakeObservedNS.Load() == observedAt {
@@ -12470,7 +12495,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.debugVlogMaintf("rewrite_queue_prune dropped=%d remaining=%d", dropped, len(rewriteQueue))
 		}
 	}
-	stagePending, _, stageErr := db.currentVlogGenerationRewriteStage()
+	stagePending, stageObservedAt, stageErr := db.currentVlogGenerationRewriteStage()
 	if stageErr != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 		if db.notifyError != nil {
@@ -12574,17 +12599,40 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	var rewritePlan backenddb.ValueLogRewritePlan
 	haveRewritePlan := false
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
-	if hasPlanner && db.shouldRefreshQueuedVlogGenerationRewriteLedger(opts, stagePending, rewriteQueue, rewriteLedger) {
+	stageConfirmRefresh := hasPlanner && shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(opts, stagePending, stageConfirmDue, rewriteQueue)
+	skipStageConfirmSparsePlan := false
+	stageConfirmReady := false
+	if hasPlanner && (db.shouldRefreshQueuedVlogGenerationRewriteLedger(opts, stagePending, rewriteQueue, rewriteLedger) || stageConfirmRefresh) {
 		queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, vlogGenerationReasonRewriteResume)
 		refreshedPlan, refreshErr := db.refreshQueuedVlogGenerationRewritePlan(planner, rewriteQueue, queueMinStaleRatio, opts)
 		switch {
 		case refreshErr != nil:
+			if stageConfirmRefresh {
+				skipStageConfirmSparsePlan = true
+				shouldRewrite = false
+				reason = vlogGenerationReasonNone
+				haveRewritePlan = false
+			}
 			if !isVlogGenerationPlannerCanceled(refreshErr) && db.notifyError != nil {
 				db.notifyError(fmt.Errorf("cachingdb: refresh generational rewrite queue: %w", refreshErr))
 			}
 		case !vlogGenerationRewritePlanHasSelectionSignal(refreshedPlan):
 			// No useful signal; keep the persisted queue/ledger as-is.
 		case len(refreshedPlan.SelectedSegments) == 0:
+			if stageConfirmRefresh {
+				// Stage-confirm passes are allowed to observe that staged debt is
+				// still not executable (for example an empty rewrite budget) without
+				// consuming or dropping the staged queue. Keep the persisted
+				// queue/ledger intact so a later confirmation can retry.
+				skipStageConfirmSparsePlan = true
+				db.debugVlogMaintf(
+					"rewrite_queue_refresh_stage_keep queued=%d min_ratio=%.6f min_stale_bytes=%d",
+					len(rewriteQueue),
+					queueMinStaleRatio,
+					vlogGenerationRewriteMinSegmentStaleBytes,
+				)
+				break
+			}
 			dropped := len(rewriteQueue)
 			if err := db.setVlogGenerationRewriteLedger(nil); err != nil {
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
@@ -12598,6 +12646,10 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			}
 			rewriteQueue = nil
 			rewriteLedger = nil
+			if stageConfirmRefresh {
+				stagePending = false
+				skipStageConfirmSparsePlan = true
+			}
 			db.debugVlogMaintf(
 				"rewrite_queue_refresh_prune dropped=%d remaining=0 min_ratio=%.6f min_stale_bytes=%d",
 				dropped,
@@ -12605,7 +12657,19 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				vlogGenerationRewriteMinSegmentStaleBytes,
 			)
 		default:
-			if err := db.setVlogGenerationRewriteLedger(refreshedPlan.SelectedSegments); err != nil {
+			persistStagePending := false
+			persistStageObservedAt := int64(0)
+			if stageConfirmRefresh {
+				// Keep the persisted staged state until this pass actually executes;
+				// confirmation finding an executable chunk is not the same thing as
+				// successfully spending it.
+				persistStagePending = true
+				persistStageObservedAt = stageObservedAt
+				if persistStageObservedAt <= 0 {
+					persistStageObservedAt = now.UnixNano()
+				}
+			}
+			if err := db.setVlogGenerationRewriteLedgerWithStage(refreshedPlan.SelectedSegments, persistStagePending, persistStageObservedAt); err != nil {
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 				if db.notifyError != nil {
 					db.notifyError(fmt.Errorf("cachingdb: persist refreshed generational rewrite ledger: %w", err))
@@ -12624,10 +12688,14 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			}
 			rewriteQueue = append(rewriteQueue[:0], refreshedPlan.SourceFileIDs...)
 			rewriteLedger = refreshedPlan.SelectedSegments
+			if stageConfirmRefresh {
+				skipStageConfirmSparsePlan = true
+				stageConfirmReady = true
+			}
 		}
 	}
 	allowCheckpointKickBypass := opts.bypassQuiet && !opts.skipCheckpoint
-	hasExecutableRewriteQueue := len(rewriteQueue) > 0 && !stagePending
+	hasExecutableRewriteQueue := len(rewriteQueue) > 0 && (!stagePending || stageConfirmReady)
 	allowCheckpointKickRetry := allowCheckpointKickBypass && hasExecutableRewriteQueue
 	ageBlockedRetryDue := len(rewriteQueue) == 0 && db.vlogGenerationRewriteAgeBlockedDue(now)
 	if hasExecutableRewriteQueue {
@@ -12659,7 +12727,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// Stale-ratio trigger: use a sparse rewrite plan (live-byte estimate) to
 	// detect when any segments are meaningfully stale. This avoids relying on
 	// reclaimable-WAL heuristics (which can be 0 in split-value-log mode).
-	if (len(rewriteQueue) == 0 || stagePending) && !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
+	if (len(rewriteQueue) == 0 || stagePending) && !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 && !skipStageConfirmSparsePlan {
 		if planBackoff {
 			goto planned
 		}
@@ -13164,6 +13232,7 @@ planned:
 			effectiveBytesAfter := int64(stats.BytesAfter)
 			gcBytesDeleted := int64(0)
 			restagedRemainingQueue := false
+			restageRemainingQueueAfterPass := false
 			if len(processedRewriteIDs) > 0 {
 				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
 					return fmt.Errorf("consume generational rewrite queue: %w", err)
@@ -13172,17 +13241,7 @@ planned:
 				// re-confirm the remaining tail later instead of draining multiple
 				// queued segments back-to-back in the same hot ingest window.
 				if hadRewriteQueue && !opts.skipCheckpoint {
-					if remaining, restaged, err := db.restageVlogGenerationRewriteQueueRemaining(time.Now().UnixNano()); err != nil {
-						return fmt.Errorf("restage remaining generational rewrite queue: %w", err)
-					} else if restaged {
-						restagedRemainingQueue = true
-						db.vlogGenerationCheckpointKickPending.Store(false)
-						db.debugVlogMaintf(
-							"rewrite_queue_restage remaining=%d confirm_delay_ms=%d",
-							remaining,
-							vlogGenerationRewriteMinInterval.Milliseconds(),
-						)
-					}
+					restageRemainingQueueAfterPass = true
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
@@ -13250,6 +13309,22 @@ planned:
 					gcBytesDeleted,
 					stats.RecordsCopied,
 				)
+			}
+			if restageRemainingQueueAfterPass {
+				if remaining, restaged, err := db.restageVlogGenerationRewriteQueueRemaining(time.Now().UnixNano()); err != nil {
+					return fmt.Errorf("restage remaining generational rewrite queue: %w", err)
+				} else if restaged {
+					restagedRemainingQueue = true
+					// A newly-restaged tail should wait for its confirmation delay,
+					// even if checkpoint kicks piled up during the rewrite/GC tail of
+					// the just-finished maintenance pass.
+					db.vlogGenerationCheckpointKickPending.Store(false)
+					db.debugVlogMaintf(
+						"rewrite_queue_restage remaining=%d confirm_delay_ms=%d",
+						remaining,
+						vlogGenerationRewriteMinInterval.Milliseconds(),
+					)
+				}
 			}
 			if penalizeProcessedRewriteDebt {
 				db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
