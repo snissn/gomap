@@ -11972,6 +11972,72 @@ func filterVlogGenerationRewriteLedgerByQuality(segments []backenddb.ValueLogRew
 	return filtered
 }
 
+func vlogGenerationRewritePlanHasSelectionSignal(plan backenddb.ValueLogRewritePlan) bool {
+	if len(plan.SelectedSegments) > 0 || len(plan.SourceFileIDs) > 0 {
+		return true
+	}
+	return plan.SegmentsTotal > 0 ||
+		plan.BytesTotal > 0 ||
+		plan.BytesLive > 0 ||
+		plan.BytesStale > 0 ||
+		plan.AgeBlockedSegments > 0 ||
+		plan.AgeBlockedBytesTotal > 0 ||
+		plan.AgeBlockedBytesLive > 0 ||
+		plan.AgeBlockedBytesStale > 0
+}
+
+func (db *DB) refreshQueuedVlogGenerationRewritePlan(
+	planner backendValueLogRewritePlanner,
+	sourceIDs []uint32,
+	minStaleRatio float64,
+	opts vlogGenerationMaintenanceOptions,
+) (backenddb.ValueLogRewritePlan, error) {
+	if db == nil || planner == nil || len(sourceIDs) == 0 {
+		return backenddb.ValueLogRewritePlan{}, nil
+	}
+	ctx, cancel := db.vlogGenerationRewritePlanContext(30*time.Second, opts)
+	defer cancel()
+	planStart := time.Now()
+	plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
+		SourceFileIDs:        append([]uint32(nil), sourceIDs...),
+		MinSegmentStaleRatio: minStaleRatio,
+		MinSegmentStaleBytes: vlogGenerationRewriteMinSegmentStaleBytes,
+		ProtectedPaths:       db.valueLogInUsePaths(),
+	})
+	db.debugVlogMaintf(
+		"rewrite_queue_refresh min_ratio=%.6f min_stale_bytes=%d queued=%d selected=%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d dur_ms=%.3f err=%v",
+		minStaleRatio,
+		vlogGenerationRewriteMinSegmentStaleBytes,
+		len(sourceIDs),
+		plan.SegmentsSelected,
+		plan.SelectedBytesTotal,
+		plan.SelectedBytesLive,
+		plan.SelectedBytesStale,
+		float64(time.Since(planStart).Microseconds())/1000,
+		err,
+	)
+	db.observeVlogGenerationRewritePlanOutcome(plan, err)
+	if err != nil {
+		return backenddb.ValueLogRewritePlan{}, err
+	}
+	return db.filterVlogGenerationRewritePlanPenalties(plan, time.Now())
+}
+
+func (db *DB) shouldRefreshQueuedVlogGenerationRewriteLedger(
+	opts vlogGenerationMaintenanceOptions,
+	stagePending bool,
+	queue []uint32,
+	ledger []backenddb.ValueLogRewritePlanSegment,
+) bool {
+	if db == nil || stagePending || opts.bypassQuiet {
+		return false
+	}
+	if len(queue) <= 1 || len(ledger) <= 1 {
+		return false
+	}
+	return db.vlogGenerationLastRewriteUnixNano.Load() > 0
+}
+
 func shouldDeferVlogGenerationRewritePlanForAge(plan backenddb.ValueLogRewritePlan, minSegmentAge time.Duration) bool {
 	if minSegmentAge <= 0 {
 		return false
@@ -12500,10 +12566,66 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	}
 	churnBps := db.vlogGenerationEstimateChurnBps()
 
+	var rewriteLedger []backenddb.ValueLogRewritePlanSegment
+	if len(rewriteQueue) > 1 {
+		rewriteLedger, _ = db.currentVlogGenerationRewriteLedger()
+	}
 	shouldRewrite, reason := db.shouldRunVlogGenerationRewrite(totalBytes, staleRatioPPM, churnBps)
 	var rewritePlan backenddb.ValueLogRewritePlan
 	haveRewritePlan := false
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
+	if hasPlanner && db.shouldRefreshQueuedVlogGenerationRewriteLedger(opts, stagePending, rewriteQueue, rewriteLedger) {
+		queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, vlogGenerationReasonRewriteResume)
+		refreshedPlan, refreshErr := db.refreshQueuedVlogGenerationRewritePlan(planner, rewriteQueue, queueMinStaleRatio, opts)
+		switch {
+		case refreshErr != nil:
+			if !isVlogGenerationPlannerCanceled(refreshErr) && db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: refresh generational rewrite queue: %w", refreshErr))
+			}
+		case !vlogGenerationRewritePlanHasSelectionSignal(refreshedPlan):
+			// No useful signal; keep the persisted queue/ledger as-is.
+		case len(refreshedPlan.SelectedSegments) == 0:
+			dropped := len(rewriteQueue)
+			if err := db.setVlogGenerationRewriteLedger(nil); err != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: clear refreshed generational rewrite ledger: %w", err))
+				}
+				return
+			}
+			if dropped > 0 {
+				db.observeVlogGenerationRewriteQueuePrune(dropped)
+			}
+			rewriteQueue = nil
+			rewriteLedger = nil
+			db.debugVlogMaintf(
+				"rewrite_queue_refresh_prune dropped=%d remaining=0 min_ratio=%.6f min_stale_bytes=%d",
+				dropped,
+				queueMinStaleRatio,
+				vlogGenerationRewriteMinSegmentStaleBytes,
+			)
+		default:
+			if err := db.setVlogGenerationRewriteLedger(refreshedPlan.SelectedSegments); err != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: persist refreshed generational rewrite ledger: %w", err))
+				}
+				return
+			}
+			if dropped := len(rewriteQueue) - len(refreshedPlan.SourceFileIDs); dropped > 0 {
+				db.observeVlogGenerationRewriteQueuePrune(dropped)
+				db.debugVlogMaintf(
+					"rewrite_queue_refresh_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
+					dropped,
+					len(refreshedPlan.SourceFileIDs),
+					queueMinStaleRatio,
+					vlogGenerationRewriteMinSegmentStaleBytes,
+				)
+			}
+			rewriteQueue = append(rewriteQueue[:0], refreshedPlan.SourceFileIDs...)
+			rewriteLedger = refreshedPlan.SelectedSegments
+		}
+	}
 	allowCheckpointKickBypass := opts.bypassQuiet && !opts.skipCheckpoint
 	hasExecutableRewriteQueue := len(rewriteQueue) > 0 && !stagePending
 	allowCheckpointKickRetry := allowCheckpointKickBypass && hasExecutableRewriteQueue

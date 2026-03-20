@@ -1850,6 +1850,163 @@ func TestVlogGenerationRewriteQueue_ResumesWithoutReplanning(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationRewriteQueue_RefreshesCurrentEconomicsBeforePeriodicResume(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planFn: func(opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
+			if got, want := opts.SourceFileIDs, []uint32{11, 22}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+				t.Fatalf("refresh plan SourceFileIDs=%v want=%v", got, want)
+			}
+			return backenddb.ValueLogRewritePlan{
+				SourceFileIDs: []uint32{22},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+				},
+				SegmentsSelected:   1,
+				SelectedBytesTotal: 64 << 20,
+				SelectedBytesLive:  8 << 20,
+				SelectedBytesStale: 56 << 20,
+			}, nil
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 48 << 20, BytesStale: 16 << 20, StaleRatio: 0.25},
+		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+	}); err != nil {
+		t.Fatalf("seed rewrite ledger: %v", err)
+	}
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-time.Minute).UnixNano())
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	planOpts, planCalls := recorder.recordedPlan()
+	if planCalls != 1 {
+		t.Fatalf("plan calls=%d want=1", planCalls)
+	}
+	if planOpts.MinSegmentStaleBytes != vlogGenerationRewriteMinSegmentStaleBytes {
+		t.Fatalf("plan MinSegmentStaleBytes=%d want=%d", planOpts.MinSegmentStaleBytes, vlogGenerationRewriteMinSegmentStaleBytes)
+	}
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", rewriteCalls)
+	}
+	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs after queue refresh=%v want=%v", got, want)
+	}
+}
+
+func TestVlogGenerationRewriteQueue_RefreshClearsPeriodicQueueWhenNoSegmentsRemain(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SegmentsTotal:             2,
+			BytesTotal:                128 << 20,
+			BytesLive:                 96 << 20,
+			BytesStale:                32 << 20,
+			AgeBlockedSegments:        0,
+			AgeBlockedMinRemainingAge: 0,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 48 << 20, BytesStale: 16 << 20, StaleRatio: 0.25},
+		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 32 << 20, BytesStale: 32 << 20, StaleRatio: 0.50},
+	}); err != nil {
+		t.Fatalf("seed rewrite ledger: %v", err)
+	}
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-time.Minute).UnixNano())
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+
+	if _, rewriteCalls := recorder.recordedRewrite(); rewriteCalls != 0 {
+		t.Fatalf("rewrite calls=%d want=0", rewriteCalls)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current rewrite queue: %v", err)
+	}
+	if len(queue) != 0 {
+		t.Fatalf("rewrite queue after refresh prune=%v want empty", queue)
+	}
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.queue_prune_runs"]; got != "1" {
+		t.Fatalf("queue prune runs=%q want 1", got)
+	}
+}
+
+func TestVlogGenerationRewriteQueue_CheckpointKickResumeDoesNotRefreshQueue(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 128, BytesLive: 72, BytesStale: 56, StaleRatio: 0.4375},
+		{FileID: 22, BytesTotal: 128, BytesLive: 32, BytesStale: 96, StaleRatio: 0.75},
+	}); err != nil {
+		t.Fatalf("seed rewrite ledger: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(defaultVlogGenerationWarmTargetBytes * 4)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+	})
+
+	if _, planCalls := recorder.recordedPlan(); planCalls != 0 {
+		t.Fatalf("plan calls=%d want=0 on checkpoint-kick resume", planCalls)
+	}
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", rewriteCalls)
+	}
+	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
+	}
+}
+
 func TestVlogGenerationRewriteQueue_DebtDrainProcessesMultipleSegments(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
