@@ -13041,9 +13041,26 @@ planned:
 			effectiveBytesBefore := int64(stats.BytesBefore)
 			effectiveBytesAfter := int64(stats.BytesAfter)
 			gcBytesDeleted := int64(0)
+			restagedRemainingQueue := false
 			if len(processedRewriteIDs) > 0 {
 				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
 					return fmt.Errorf("consume generational rewrite queue: %w", err)
+				}
+				// Checkpoint-coupled resumable work should consume one chunk, then
+				// re-confirm the remaining tail later instead of draining multiple
+				// queued segments back-to-back in the same hot ingest window.
+				if hadRewriteQueue && !opts.skipCheckpoint {
+					if remaining, restaged, err := db.restageVlogGenerationRewriteQueueRemaining(time.Now().UnixNano()); err != nil {
+						return fmt.Errorf("restage remaining generational rewrite queue: %w", err)
+					} else if restaged {
+						restagedRemainingQueue = true
+						db.vlogGenerationCheckpointKickPending.Store(false)
+						db.debugVlogMaintf(
+							"rewrite_queue_restage remaining=%d confirm_delay_ms=%d",
+							remaining,
+							vlogGenerationRewriteMinInterval.Milliseconds(),
+						)
+					}
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
@@ -13135,6 +13152,13 @@ planned:
 					penaltyReason,
 					vlogGenerationRewriteIneffectiveCooldown.Milliseconds(),
 					gcBytesDeleted,
+				)
+			}
+			if restagedRemainingQueue {
+				db.debugVlogMaintf(
+					"rewrite_queue_restaged reason=%s processed_ids=%d",
+					vlogGenerationReasonString(reason),
+					len(processedRewriteIDs),
 				)
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
