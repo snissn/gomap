@@ -435,6 +435,10 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 		return false, nil
 	}
 	verifyAlways := p.VerifyOnRead()
+	verifyLeafPageChecksums := true
+	if cap, ok := reader.(readChecksumCapability); ok {
+		verifyLeafPageChecksums = cap.ReadChecksumEnabled()
+	}
 	found := false
 	var leafScratch []byte
 	err := leafrefscan.Walk(ctx, rootID, p.Get, func(pageID uint64, n node.Node) error {
@@ -453,12 +457,12 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 		}
 		refs[ptr.FileID]++
 		found = true
-		return collectNestedLeafPageValueLogRefCounts(ptr, reader, refs, &leafScratch)
+		return collectNestedLeafPageValueLogRefCounts(ptr, reader, refs, &leafScratch, verifyLeafPageChecksums)
 	})
 	return found, err
 }
 
-func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabReader, refs map[uint32]uint64, scratch *[]byte) error {
+func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabReader, refs map[uint32]uint64, scratch *[]byte, verifyLeafPageChecksums bool) error {
 	if refs == nil || !page.IsValueLogFileID(ptr.FileID) || reader == nil {
 		return nil
 	}
@@ -486,7 +490,7 @@ func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabR
 	if n.Type() != page.PageTypeLeaf {
 		return fmt.Errorf("treedb: expected leaf page in value log file=%d offset=%d, got type=%d", ptr.FileID, ptr.Offset, n.Type())
 	}
-	if !n.VerifyChecksum() {
+	if verifyLeafPageChecksums && !n.VerifyChecksum() {
 		return fmt.Errorf("treedb: checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
 	// Nested leaf pages are a terminal reachability source here. We count the
