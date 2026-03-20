@@ -2,6 +2,7 @@ package tree
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -260,6 +261,56 @@ func (t *Tree) loadNodeView(pageID uint64, verifyAlways bool) (node.Node, error)
 		}
 	}
 	return n, nil
+}
+
+// WalkLeaves visits every leaf page reachable from the current root. It is a
+// traversal helper for full-tree maintenance scans that do not need ordered
+// iteration semantics.
+func (t *Tree) WalkLeaves(ctx context.Context, visit func(pageID uint64, n node.Node) error) error {
+	if t == nil {
+		return errors.New("missing tree")
+	}
+	if visit == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	verifyAlways := false
+	if t.pager != nil {
+		verifyAlways = t.pager.VerifyOnRead()
+	}
+	stack := make([]uint64, 0, 128)
+	stack = append(stack, t.rootPageID)
+	for len(stack) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pageID := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		n, err := t.loadNodeView(pageID, verifyAlways)
+		if err != nil {
+			return err
+		}
+		switch n.Type() {
+		case page.PageTypeLeaf:
+			if err := visit(pageID, n); err != nil {
+				return err
+			}
+		case page.PageTypeInternal:
+			count := n.Count()
+			for i := uint16(0); i < count; i++ {
+				childID, err := n.GetInternalChildID(i)
+				if err != nil {
+					return err
+				}
+				stack = append(stack, childID)
+			}
+		default:
+			return fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
+		}
+	}
+	return nil
 }
 
 // GetEntry returns the persisted leaf entry for key.

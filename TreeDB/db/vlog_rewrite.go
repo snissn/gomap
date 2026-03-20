@@ -1098,39 +1098,54 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		closeRewriteSnapshot(&err, snap)
 		return stats, fmt.Errorf("missing snapshot state")
 	}
-	it := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	for ; it.Valid(); it.Next() {
-		if err := ctx.Err(); err != nil {
-			canceledErr = err
-			break
-		}
-		_, oldPtr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
-			continue
-		}
-		if restrictSource {
-			if _, ok := sourceIDs[oldPtr.FileID]; !ok {
+	walkErr := (&snap.tree).WalkLeaves(ctx, func(pageID uint64, n node.Node) error {
+		count := n.Count()
+		for i := uint16(0); i < count; i++ {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			flags, err := n.GetLeafFlagsView(i)
+			if err != nil {
+				return err
+			}
+			if flags&node.FlagPointer == 0 || flags&node.FlagTombstone != 0 {
 				continue
 			}
-		}
-		key := append([]byte(nil), it.UnsafeKey()...)
-		candidates = append(candidates, rewriteCandidate{
-			key:    key,
-			oldPtr: oldPtr,
-		})
-		if len(candidates) >= batchSize {
-			if err := flushBatch(); err != nil {
-				_ = it.Close()
-				closeRewriteSnapshot(&err, snap)
-				return stats, err
+			_, oldPtr, flags, err := n.GetLeafValueView(i)
+			if err != nil {
+				return err
+			}
+			if flags&node.FlagPointer == 0 || !page.IsValueLogFileID(oldPtr.FileID) {
+				continue
+			}
+			if restrictSource {
+				if _, ok := sourceIDs[oldPtr.FileID]; !ok {
+					continue
+				}
+			}
+			key, _, err := n.GetLeafKeyFlagsView(i)
+			if err != nil {
+				return err
+			}
+			candidates = append(candidates, rewriteCandidate{
+				key:    append([]byte(nil), key...),
+				oldPtr: oldPtr,
+			})
+			if len(candidates) >= batchSize {
+				if err := flushBatch(); err != nil {
+					return err
+				}
 			}
 		}
-	}
-	iterErr := it.Error()
-	_ = it.Close()
+		return nil
+	})
 	closeRewriteSnapshot(&err, snap)
-	if iterErr != nil {
-		return stats, iterErr
+	if walkErr != nil {
+		if errors.Is(walkErr, context.Canceled) || errors.Is(walkErr, context.DeadlineExceeded) {
+			canceledErr = walkErr
+		} else {
+			return stats, walkErr
+		}
 	}
 	if canceledErr == nil {
 		if err := flushBatch(); err != nil {
