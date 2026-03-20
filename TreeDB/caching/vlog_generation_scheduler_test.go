@@ -45,8 +45,8 @@ func forceRetainedPruneIdle(db *DB) {
 	}
 }
 
-func forceRewriteStageConfirmDue(t *testing.T, db *DB) {
-	t.Helper()
+func forceRewriteStageConfirmDue(tb testing.TB, db *DB) {
+	tb.Helper()
 	if db == nil {
 		return
 	}
@@ -575,6 +575,7 @@ type realRewriteRecordingBackend struct {
 	rewriteOpts   backenddb.ValueLogRewriteOnlineOptions
 	rewriteCalls  int
 	beforeRewrite func(backenddb.ValueLogRewriteOnlineOptions)
+	rewriteDelay  time.Duration
 }
 
 func (b *realRewriteRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -590,9 +591,19 @@ func (b *realRewriteRecordingBackend) ValueLogRewriteOnline(ctx context.Context,
 	b.rewriteOpts = cloneRewriteOptsForTest(opts)
 	b.rewriteCalls++
 	beforeRewrite := b.beforeRewrite
+	rewriteDelay := b.rewriteDelay
 	b.mu.Unlock()
 	if beforeRewrite != nil {
 		beforeRewrite(cloneRewriteOptsForTest(opts))
+	}
+	if rewriteDelay > 0 {
+		timer := time.NewTimer(time.Duration(len(opts.SourceFileIDs)) * rewriteDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return backenddb.ValueLogRewriteStats{}, ctx.Err()
+		}
 	}
 	return b.DB.ValueLogRewriteOnline(ctx, opts)
 }
@@ -2158,6 +2169,188 @@ func TestVlogGenerationRewriteQueue_CheckpointKickRestagesRemainingRealBackendDe
 	}
 	if observedAt == 0 {
 		t.Fatalf("expected real-backend restaged debt to record observedAt")
+	}
+}
+
+func seedRealBackendRewriteQueueScenario(tb testing.TB, rewriteDelay time.Duration) (*DB, *realRewriteRecordingBackend, int) {
+	tb.Helper()
+
+	dir := tb.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		tb.Fatalf("open backend: %v", err)
+	}
+	backendOwnedByDB := false
+	tb.Cleanup(func() {
+		if !backendOwnedByDB {
+			_ = backend.Close()
+		}
+	})
+
+	recorder := &realRewriteRecordingBackend{DB: backend, rewriteDelay: rewriteDelay}
+	db, err := Open(dir, recorder, Options{
+		AllowUnsafe:                              true,
+		DisableWAL:                               true,
+		JournalLanes:                             1,
+		ValueLogGenerationPolicy:                 uint8(backenddb.ValueLogGenerationHotWarmCold),
+		ValueLogGenerationHotSegmentTargetBytes:  32 << 10,
+		ValueLogGenerationWarmSegmentTargetBytes: 32 << 10,
+		ValueLogGenerationColdSegmentTargetBytes: 32 << 10,
+		ValueLogRewriteBudgetBytesPerSec:         1 << 20,
+		ValueLogPointerThreshold:                 1,
+		ForceValueLogPointers:                    true,
+		ValueLogCompression:                      1,
+	})
+	if err != nil {
+		tb.Fatalf("open cachingdb: %v", err)
+	}
+	backendOwnedByDB = true
+	tb.Cleanup(func() { _ = db.Close() })
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = false
+
+	writeRound := func(round int) {
+		tb.Helper()
+		writeMiniBatch := func(prefix string, start int, cold bool) {
+			tb.Helper()
+			b := db.NewBatch()
+			for i := start; i < start+2; i++ {
+				key := []byte(fmt.Sprintf("%s-%02d", prefix, i))
+				if cold {
+					key = []byte(fmt.Sprintf("%s-%02d-%02d", prefix, round, i))
+				}
+				value := make([]byte, 8<<10)
+				fill := byte((round + i) % 251)
+				if cold {
+					fill = byte((round + i + 97) % 251)
+				}
+				for j := range value {
+					value[j] = fill
+				}
+				if err := b.Set(key, value); err != nil {
+					_ = b.Close()
+					tb.Fatalf("round %d set %s %d: %v", round, prefix, i, err)
+				}
+			}
+			if err := b.Write(); err != nil {
+				_ = b.Close()
+				tb.Fatalf("round %d write %s[%d:%d]: %v", round, prefix, start, start+2, err)
+			}
+			_ = b.Close()
+		}
+		for i := 0; i < 12; i += 2 {
+			writeMiniBatch("hot", i, false)
+			writeMiniBatch("cold", i, true)
+		}
+		if err := db.Checkpoint(); err != nil {
+			tb.Fatalf("round %d checkpoint: %v", round, err)
+		}
+	}
+
+	for round := 0; round < 8; round++ {
+		writeRound(round)
+		forceVlogMaintenanceIdle(db)
+	}
+
+	state := recorder.State()
+	if state == nil || state.ValueLogSet == nil {
+		tb.Fatalf("missing backend value-log set after synthetic workload")
+	}
+	maxByLane := make(map[uint32]uint32)
+	for fileID := range state.ValueLogSet.Files {
+		lane, seq := uint32(page.ValueLogSegmentID(fileID)>>23), uint32(page.ValueLogSegmentID(fileID)&((1<<23)-1))
+		if cur, ok := maxByLane[lane]; !ok || seq > cur {
+			maxByLane[lane] = seq
+		}
+	}
+	sourceIDs := make([]uint32, 0, len(state.ValueLogSet.Files))
+	for fileID := range state.ValueLogSet.Files {
+		lane, seq := uint32(page.ValueLogSegmentID(fileID)>>23), uint32(page.ValueLogSegmentID(fileID)&((1<<23)-1))
+		if maxByLane[lane] == seq {
+			continue
+		}
+		sourceIDs = append(sourceIDs, fileID)
+	}
+	sort.Slice(sourceIDs, func(i, j int) bool { return sourceIDs[i] < sourceIDs[j] })
+	if len(sourceIDs) < 2 {
+		tb.Fatalf("source ids=%v want at least 2 non-active segments", sourceIDs)
+	}
+
+	ledger := make([]backenddb.ValueLogRewritePlanSegment, 0, min(4, len(sourceIDs)))
+	for _, fileID := range sourceIDs[:min(4, len(sourceIDs))] {
+		ledger = append(ledger, backenddb.ValueLogRewritePlanSegment{
+			FileID:     fileID,
+			BytesTotal: 32 << 10,
+			BytesLive:  16 << 10,
+			BytesStale: 16 << 10,
+			StaleRatio: 0.5,
+		})
+	}
+	if err := db.setVlogGenerationRewriteLedger(ledger); err != nil {
+		tb.Fatalf("seed ledger from real source ids: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(8 << 20)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	return db, recorder, len(ledger)
+}
+
+func BenchmarkVlogGenerationRewriteQueueDrainCheckpointKick(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		db, recorder, initialQueue := seedRealBackendRewriteQueueScenario(b, 25*time.Millisecond)
+		b.StopTimer()
+		var (
+			totalStart    = time.Now()
+			maxKick       time.Duration
+			remaining     int
+			stagePendingF float64
+		)
+		b.StartTimer()
+		for step := 0; step < initialQueue+2; step++ {
+			forceVlogMaintenanceIdle(db)
+			kickStart := time.Now()
+			db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+				bypassQuiet:           true,
+				skipRetainedPruneWait: true,
+				skipCheckpoint:        false,
+				rewriteDebtDrain:      true,
+			})
+			kickDur := time.Since(kickStart)
+			if kickDur > maxKick {
+				maxKick = kickDur
+			}
+			queue, err := db.currentVlogGenerationRewriteQueue()
+			if err != nil {
+				b.Fatalf("current queue after kick: %v", err)
+			}
+			stagePending, _, err := db.currentVlogGenerationRewriteStage()
+			if err != nil {
+				b.Fatalf("current rewrite stage after kick: %v", err)
+			}
+			remaining = len(queue)
+			if stagePending {
+				stagePendingF = 1
+			} else {
+				stagePendingF = 0
+			}
+			if len(queue) == 0 && !stagePending {
+				break
+			}
+			if stagePending {
+				forceRewriteStageConfirmDue(b, db)
+			}
+		}
+		b.StopTimer()
+		totalDrain := time.Since(totalStart)
+		_, rewriteCalls := recorder.recordedRewrite()
+		b.ReportMetric(float64(initialQueue), "initial_queue")
+		b.ReportMetric(float64(rewriteCalls), "rewrite_calls")
+		b.ReportMetric(float64(maxKick.Microseconds())/1000.0, "max_kick_ms")
+		b.ReportMetric(float64(totalDrain.Microseconds())/1000.0, "total_window_ms")
+		b.ReportMetric(float64(remaining), "remaining_queue")
+		b.ReportMetric(stagePendingF, "stage_pending")
 	}
 }
 
