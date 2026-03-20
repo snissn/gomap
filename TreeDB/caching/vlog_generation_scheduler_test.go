@@ -910,6 +910,56 @@ func TestVlogGenerationMaintenance_PrioritizesPendingCheckpointKickOverPeriodicP
 	}
 }
 
+func TestSchedulePendingVlogGenerationCheckpointKick_RetriesAfterCollision(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 64,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64,
+			BytesAfter:    32,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+
+	// Force the first pending retry attempt to collide with active maintenance.
+	db.vlogGenerationCheckpointKickPending.Store(true)
+	db.vlogGenerationMaintenanceActive.Store(true)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		db.vlogGenerationMaintenanceActive.Store(false)
+	}()
+	db.schedulePendingVlogGenerationCheckpointKick()
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending checkpoint-kick retry did not execute rewrite after collision")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if db.vlogGenerationCheckpointKickPending.Load() {
+		t.Fatalf("pending checkpoint-kick retry remained queued after retry execution")
+	}
+}
+
 type dryRunGCRecordingBackend struct {
 	*backenddb.DB
 
