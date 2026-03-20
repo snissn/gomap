@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
@@ -521,8 +522,11 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		f.mmapReadHits.Add(1)
 		return val, err
 	}
-	// Fast path (bench/unsafe reads): grouped + uncompressed + no CRC.
-	if !verifyCRC && page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {
+	// Fast path (bench/unsafe reads): grouped records. We keep the existing
+	// uncompressed no-CRC path, and additionally handle compressed grouped
+	// frames here because the fallback decoder allocates heavily on scan-heavy
+	// planner paths.
+	if page.ValuePtrIsGrouped(ptr) && ptr.Offset >= 4 {
 		f.mmapReadFallbackReadAt.Add(1)
 		start := int64(ptr.Offset - 4)
 
@@ -581,17 +585,6 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 			return nil, ErrCorrupt
 		}
 		fFlags := frameHeader[1]
-		if fFlags&FrameFlagCompressed != 0 {
-			// Fallback to the full decoder (will allocate).
-			val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-			if err != nil {
-				return nil, err
-			}
-			oldLen := len(dst)
-			dst = grow(dst, len(val))
-			copy(dst[oldLen:], val)
-			return dst, nil
-		}
 		ridBytes := k * 8
 		offsetBytes := (k + 1) * 4
 		prefixLen := FrameHeaderSize + ridBytes + offsetBytes
@@ -599,12 +592,14 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 			return nil, ErrCorrupt
 		}
 
-		const maxPrefixLen = FrameHeaderSize + (MaxFrameK * 8) + ((MaxFrameK + 1) * 4)
-		var prefix [maxPrefixLen]byte
-		if _, err := f.File.ReadAt(prefix[:prefixLen], frameOff); err != nil {
+		prefixScratch := f.takeDecodeScratch(prefixLen)
+		prefix := prefixScratch[:prefixLen]
+		if _, err := f.File.ReadAt(prefix, frameOff); err != nil {
+			f.releaseDecodeScratch(prefixScratch)
 			return nil, err
 		}
 		if subIndex < 0 || subIndex >= k {
+			f.releaseDecodeScratch(prefixScratch)
 			return nil, ErrCorrupt
 		}
 
@@ -614,6 +609,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 		for i := 0; i < k+1; i++ {
 			cur := binary.LittleEndian.Uint32(prefix[off : off+4])
 			if cur < prev {
+				f.releaseDecodeScratch(prefixScratch)
 				return nil, ErrCorrupt
 			}
 			offsets[i] = cur
@@ -623,15 +619,121 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 
 		rawLen := offsets[k]
 		if limits.MaxRecordSize > 0 && int64(rawLen) > limits.MaxRecordSize {
+			f.releaseDecodeScratch(prefixScratch)
 			return nil, ErrRecordTooLarge
 		}
-		if prefixLen+int(rawLen) != int(valueLen) {
+		if fFlags&FrameFlagCompressed == 0 && prefixLen+int(rawLen) != int(valueLen) {
+			f.releaseDecodeScratch(prefixScratch)
 			return nil, ErrCorrupt
 		}
 		valStart := offsets[subIndex]
 		valEnd := offsets[subIndex+1]
 		if valEnd < valStart || valEnd > rawLen {
+			f.releaseDecodeScratch(prefixScratch)
 			return nil, ErrCorrupt
+		}
+
+		if fFlags&FrameFlagCompressed != 0 {
+			if cachedRaw, cachedStart, cachedEnd, cachedRawLen, hit := f.groupedFrameCacheLookup(start, verifyCRC, subIndex); hit {
+				f.releaseDecodeScratch(prefixScratch)
+				if uint32(len(cachedRaw)) != cachedRawLen || cachedEnd < cachedStart || cachedEnd > cachedRawLen {
+					return nil, ErrCorrupt
+				}
+				return appendDecodedTemplatePayload(dst, cachedRaw[cachedStart:cachedEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+			}
+
+			payloadLen := int(valueLen) - prefixLen
+			if payloadLen < 0 {
+				f.releaseDecodeScratch(prefixScratch)
+				return nil, ErrCorrupt
+			}
+			framePayload := f.takeDecodeScratch(payloadLen)
+			framePayload = framePayload[:payloadLen]
+			if _, err := f.File.ReadAt(framePayload, frameOff+int64(prefixLen)); err != nil {
+				f.releaseDecodeScratch(prefixScratch)
+				f.releaseDecodeScratch(framePayload)
+				return nil, err
+			}
+			if verifyCRC {
+				sum := crc.ChecksumParts(header[4:], prefix, framePayload)
+				if sum != binary.LittleEndian.Uint32(header[0:4]) {
+					f.releaseDecodeScratch(prefixScratch)
+					f.releaseDecodeScratch(framePayload)
+					return nil, ErrCorrupt
+				}
+			}
+
+			frame := FrameHeader{
+				Version:  frameHeader[0],
+				Flags:    fFlags,
+				K:        uint8(k),
+				Reserved: frameHeader[3],
+				DictID:   binary.LittleEndian.Uint64(frameHeader[4:12]),
+			}
+			if k == 1 && subIndex == 0 && valStart == 0 && valEnd == rawLen && f.templateLookup == nil {
+				oldLen := len(dst)
+				dst = grow(dst, int(rawLen))
+				out, err := decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, dst[oldLen:oldLen])
+				f.releaseDecodeScratch(prefixScratch)
+				f.releaseDecodeScratch(framePayload)
+				if err != nil {
+					return nil, err
+				}
+				if uint32(len(out)) != rawLen {
+					return nil, ErrCorrupt
+				}
+				if len(out) > 0 {
+					base := dst[oldLen : oldLen+len(out)]
+					if &out[0] != &base[0] {
+						copy(base, out)
+					}
+				}
+				return dst[:oldLen+len(out)], nil
+			}
+
+			cacheableRaw := false
+			f.cacheMu.Lock()
+			if k > 1 && f.groupedFrameCacheEntries > 0 && (f.groupedFrameCacheMaxRaw <= 0 || int(rawLen) <= f.groupedFrameCacheMaxRaw) {
+				cacheableRaw = true
+			}
+			f.cacheMu.Unlock()
+
+			var raw []byte
+			pooledRaw := false
+			if cacheableRaw {
+				raw = make([]byte, 0, int(rawLen))
+			} else {
+				raw = f.takeDecodeScratch(int(rawLen))
+				pooledRaw = true
+			}
+			raw, err := decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, raw)
+			f.releaseDecodeScratch(prefixScratch)
+			f.releaseDecodeScratch(framePayload)
+			if err != nil {
+				if pooledRaw {
+					f.releaseDecodeScratch(raw)
+				}
+				return nil, err
+			}
+			if uint32(len(raw)) != rawLen {
+				if pooledRaw {
+					f.releaseDecodeScratch(raw)
+				}
+				return nil, ErrCorrupt
+			}
+			if cacheableRaw {
+				f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
+			}
+
+			out, err := appendDecodedTemplatePayload(dst, raw[valStart:valEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
+			if pooledRaw {
+				f.releaseDecodeScratch(raw)
+			}
+			return out, err
+		}
+		f.releaseDecodeScratch(prefixScratch)
+		if verifyCRC {
+			goto slowPathNoCount
 		}
 
 		// Publish prefix cache for future reads from this same grouped record.
@@ -648,6 +750,7 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 
 	// Slow path: use existing decoder and append.
 	f.mmapReadFallbackReadAt.Add(1)
+slowPathNoCount:
 	val, err := ReadAtWithDict(f.File, ptr, verifyCRC, f.dictLookup, f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
 	if err != nil {
 		return nil, err

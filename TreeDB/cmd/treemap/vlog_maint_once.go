@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
+	runtimepprof "runtime/pprof"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +38,9 @@ func runVlogMaintOnce(dir string, args []string) {
 	disableAutoDeferred := fs.Bool("disable-auto-deferred", false, "Disable automatic deferred stage/age wakes while this command is running")
 	rewritePlanTimeout := fs.Duration("rewrite-plan-timeout", 0, "Override cached rewrite planner timeout for this process (debug/offline analysis only)")
 	waitIdle := fs.Duration("wait-idle", 0, "Wait for cached value-log generation maintenance to go idle before collecting after-state")
+	cpuprofile := fs.String("cpuprofile", "", "Write CPU profile for this maintenance run to file")
+	heapprofile := fs.String("heapprofile", "", "Write in-use heap profile after this maintenance run to file")
+	allocsprofile := fs.String("allocsprofile", "", "Write allocs profile after this maintenance run to file")
 	seedStagePending := fs.Bool("seed-stage-pending", false, "When seeding from plan, mark the rewrite debt as stage-pending")
 	seedStageObservedAgo := fs.Duration("seed-stage-observed-ago", 31*time.Second, "If -seed-stage-pending, record the stage observation this far in the past")
 	maxSegments := fs.Int("rewrite-max-segments", 0, "Seed-plan selection cap in segments (0=none)")
@@ -64,7 +69,6 @@ func runVlogMaintOnce(dir string, args []string) {
 			fatalf("set rewrite-plan-timeout env: %v", err)
 		}
 	}
-
 	var seedPlan *treedbdb.ValueLogRewritePlan
 	if *seedFromPlan {
 		audit, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{
@@ -127,7 +131,27 @@ func runVlogMaintOnce(dir string, args []string) {
 	if err != nil {
 		fatalf("%v", err)
 	}
+
+	if *allocsprofile != "" {
+		runtime.MemProfileRate = 1
+	}
+	var cpuFile *os.File
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fatalf("cpuprofile: %v", err)
+		}
+		cpuFile = f
+		if err := runtimepprof.StartCPUProfile(cpuFile); err != nil {
+			_ = cpuFile.Close()
+			fatalf("cpuprofile: %v", err)
+		}
+	}
 	acquired, err := db.DebugRunValueLogGenerationMaintenanceOnce(opts)
+	if cpuFile != nil {
+		runtimepprof.StopCPUProfile()
+		_ = cpuFile.Close()
+	}
 	if err != nil {
 		fatalf("run maintenance: %v", err)
 	}
@@ -144,6 +168,30 @@ func runVlogMaintOnce(dir string, args []string) {
 	}
 	report.AfterState = afterState
 	report.AfterStats = filterVlogGenerationStats(db.Stats())
+
+	if *heapprofile != "" {
+		runtime.GC()
+		f, err := os.Create(*heapprofile)
+		if err != nil {
+			fatalf("heapprofile: %v", err)
+		}
+		if err := runtimepprof.WriteHeapProfile(f); err != nil {
+			_ = f.Close()
+			fatalf("heapprofile: %v", err)
+		}
+		_ = f.Close()
+	}
+	if *allocsprofile != "" {
+		f, err := os.Create(*allocsprofile)
+		if err != nil {
+			fatalf("allocsprofile: %v", err)
+		}
+		if err := runtimepprof.Lookup("allocs").WriteTo(f, 0); err != nil {
+			_ = f.Close()
+			fatalf("allocsprofile: %v", err)
+		}
+		_ = f.Close()
+	}
 
 	if *asJSON {
 		enc := json.NewEncoder(os.Stdout)

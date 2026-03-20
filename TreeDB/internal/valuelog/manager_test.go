@@ -265,6 +265,84 @@ func TestOpenFile_DoesNotEagerlyMap(t *testing.T) {
 	}
 }
 
+func TestReadAppend_UsesGroupedFrameCacheOnFallbackCompressedFrame(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+	records := []Record{
+		{RID: 1, Value: bytes.Repeat([]byte("a"), page.PageSize)},
+		{RID: 2, Value: bytes.Repeat([]byte("b"), page.PageSize)},
+	}
+	dstPtrs := make([]page.ValuePtr, len(records))
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, records, dstPtrs)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("AppendFrameWithStatsInto: %v", err)
+	}
+	if !stats.Kept {
+		_ = writer.Close()
+		t.Fatalf("expected compressed grouped frame to be kept")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close writer: %v", err)
+	}
+
+	fh, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open(%s): %v", path, err)
+	}
+
+	f := &File{
+		ID:                       fileID,
+		Path:                     path,
+		File:                     fh,
+		groupedFrameCacheEntries: defaultGroupedFrameCacheEntries,
+		groupedFrameCacheMaxRaw:  defaultGroupedFrameCacheMaxRawBytes,
+	}
+	defer func() { _ = f.Close() }()
+	// Force ReadAppend to take the grouped fallback read path without spawning
+	// an async remap goroutine that can race with test file close in -race CI.
+	mapped := []byte{0}
+	f.mmapData.Store(mapped)
+	f.deadMappingsCount.Store(uint64(effectiveMaxDeadMappings(len(mapped))))
+
+	got0, err := f.ReadAppend(ptrs[0], false, nil)
+	if err != nil {
+		t.Fatalf("ReadAppend first: %v", err)
+	}
+	if !bytes.Equal(got0, records[0].Value) {
+		t.Fatalf("first read mismatch")
+	}
+	hits1, misses1, entries1, capacity1 := f.groupedFrameCacheStats()
+	if misses1 == 0 || entries1 == 0 || capacity1 == 0 {
+		t.Fatalf("expected first fallback read to populate grouped cache: hits=%d misses=%d entries=%d capacity=%d", hits1, misses1, entries1, capacity1)
+	}
+
+	got1, err := f.ReadAppend(ptrs[1], false, nil)
+	if err != nil {
+		t.Fatalf("ReadAppend second: %v", err)
+	}
+	if !bytes.Equal(got1, records[1].Value) {
+		t.Fatalf("second read mismatch")
+	}
+	hits2, misses2, entries2, capacity2 := f.groupedFrameCacheStats()
+	if hits2 <= hits1 {
+		t.Fatalf("expected second fallback read to hit grouped cache: hits1=%d hits2=%d misses1=%d misses2=%d", hits1, hits2, misses1, misses2)
+	}
+	if misses2 != misses1 || entries2 != entries1 || capacity2 != capacity1 {
+		t.Fatalf("unexpected grouped cache stats drift: misses %d->%d entries %d->%d capacity %d->%d", misses1, misses2, entries1, entries2, capacity1, capacity2)
+	}
+}
+
 func TestReadUnsafe_SealedLazyMmapBudgetFallsBackToReadAt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")
