@@ -1841,6 +1841,48 @@ func TestVlogGenerationRewrite_IneffectiveBackoffSkipsImmediateGenericRetry(t *t
 	}
 }
 
+func TestVlogGenerationRewrite_IneffectiveBackoffCheckpointKickBypasses(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 64,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64,
+			BytesAfter:    32,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+	})
+
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls with checkpoint-kick ineffective-backoff bypass=%d want=1", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls with checkpoint-kick ineffective-backoff bypass=%d want=1", calls)
+	}
+}
+
 func TestVlogGenerationRewrite_IneffectiveBackoffExpires(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
@@ -3038,6 +3080,50 @@ func TestVlogGenerationRewritePlan_CancelBackoffSkipsImmediateRetry(t *testing.T
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled"]; got != "1" {
 		t.Fatalf("plan canceled=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled_last_unix_nano"]; got == "0" {
+		t.Fatalf("plan canceled last ts=%q want non-zero", got)
+	}
+}
+
+func TestVlogGenerationRewritePlan_DeadlineBackoffSkipsImmediateRetry(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:      backend,
+		planErr: context.DeadlineExceeded,
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+
+	db.maybeRunVlogGenerationMaintenance(false)
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls after first deadline run=%d want=1", calls)
+	}
+
+	db.maybeRunVlogGenerationMaintenance(false)
+	if _, calls := recorder.recordedPlan(); calls != 1 {
+		t.Fatalf("plan calls after immediate retry=%d want=1 (backoff active)", calls)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_runs"]; got != "1" {
+		t.Fatalf("plan runs=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled"]; got != "1" {
+		t.Fatalf("plan canceled=%q want 1", got)
+	}
+	if got := stats["treedb.cache.vlog_generation.rewrite.plan_errors"]; got != "0" {
+		t.Fatalf("plan errors=%q want 0", got)
 	}
 	if got := stats["treedb.cache.vlog_generation.rewrite.plan_canceled_last_unix_nano"]; got == "0" {
 		t.Fatalf("plan canceled last ts=%q want non-zero", got)

@@ -11553,7 +11553,7 @@ func (db *DB) observeVlogGenerationRewritePlanOutcome(plan backenddb.ValueLogRew
 	}
 	db.vlogGenerationRewritePlanRuns.Add(1)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if isVlogGenerationPlannerCanceled(err) {
 			db.vlogGenerationRewritePlanCanceled.Add(1)
 			db.vlogGenerationRewritePlanCanceledLastNS.Store(time.Now().UnixNano())
 		} else {
@@ -11566,6 +11566,10 @@ func (db *DB) observeVlogGenerationRewritePlanOutcome(plan backenddb.ValueLogRew
 		return
 	}
 	db.vlogGenerationRewritePlanEmpty.Add(1)
+}
+
+func isVlogGenerationPlannerCanceled(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 func (db *DB) vlogGenerationRewritePlanBackoffActive(now time.Time) bool {
@@ -11763,7 +11767,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
 	}
-	ineffectiveBackoff := len(rewriteQueue) == 0 && db.vlogGenerationRewriteIneffectiveBackoffActive(now)
+	ineffectiveBackoff := len(rewriteQueue) == 0 && db.vlogGenerationRewriteIneffectiveBackoffActive(now) && !allowCheckpointKickBypass
 	if ineffectiveBackoff {
 		shouldRewrite = false
 		reason = vlogGenerationReasonNone
@@ -11842,7 +11846,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		db.observeVlogGenerationRewritePlanOutcome(plan, err)
 		updatePlanTimestamp := false
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if isVlogGenerationPlannerCanceled(err) {
 				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 				// Foreground activity resumed while planning. Skip rewrite this
 				// cycle, but continue to the GC path below instead of aborting
@@ -11850,7 +11854,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				shouldRewrite = false
 				haveRewritePlan = false
 			}
-			if !errors.Is(err, context.Canceled) {
+			if !isVlogGenerationPlannerCanceled(err) {
 				updatePlanTimestamp = true
 				// Best-effort planning: keep legacy triggers (total-bytes/churn) alive,
 				// but surface the failure for observability.
@@ -11934,14 +11938,14 @@ planned:
 				)
 				db.observeVlogGenerationRewritePlanOutcome(plan, err)
 				if err != nil {
-					if errors.Is(err, context.Canceled) {
+					if isVlogGenerationPlannerCanceled(err) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 						// Foreground activity resumed while planning. Skip rewrite
 						// this cycle, but still allow GC to run below.
 						shouldRewrite = false
 						haveRewritePlan = false
 					}
-					if !errors.Is(err, context.Canceled) {
+					if !isVlogGenerationPlannerCanceled(err) {
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 						db.vlogGenerationRemapFailures.Add(1)
 						if db.notifyError != nil {
