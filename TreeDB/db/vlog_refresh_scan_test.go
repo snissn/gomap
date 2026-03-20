@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	iteriface "github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 func writeValueLogSegment(t *testing.T, dir string, lane, seq uint32) (path string, fileID uint32) {
@@ -90,5 +93,67 @@ func TestValueLogRewritePlan_DoesNotRescanWhenSetAlreadyPopulated(t *testing.T) 
 	after := d.valueLogManager.RefreshScanCount()
 	if after != before {
 		t.Fatalf("ValueLogRewritePlan triggered value-log refresh scan: before=%d after=%d", before, after)
+	}
+}
+
+type projectionOnlyIterator struct {
+	idx              int
+	flags            []byte
+	ptrs             []page.ValuePtr
+	unsafeEntryCalls int
+	projectionCalls  int
+}
+
+func (it *projectionOnlyIterator) Valid() bool { return it.idx >= 0 && it.idx < len(it.flags) }
+func (it *projectionOnlyIterator) Next()       { it.idx++ }
+func (it *projectionOnlyIterator) Seek(key []byte) {
+	it.idx = 0
+}
+func (it *projectionOnlyIterator) UnsafeKey() []byte           { return nil }
+func (it *projectionOnlyIterator) UnsafeValue() []byte         { return nil }
+func (it *projectionOnlyIterator) Key() []byte                 { return nil }
+func (it *projectionOnlyIterator) Value() []byte               { return nil }
+func (it *projectionOnlyIterator) KeyCopy(dst []byte) []byte   { return dst[:0] }
+func (it *projectionOnlyIterator) ValueCopy(dst []byte) []byte { return dst[:0] }
+func (it *projectionOnlyIterator) IsDeleted() bool             { return false }
+func (it *projectionOnlyIterator) Error() error                { return nil }
+func (it *projectionOnlyIterator) Close() error                { return nil }
+func (it *projectionOnlyIterator) Domain() (start, end []byte) { return nil, nil }
+func (it *projectionOnlyIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	it.unsafeEntryCalls++
+	return nil, it.ptrs[it.idx], it.flags[it.idx]
+}
+func (it *projectionOnlyIterator) UnsafePointerProjection() (page.ValuePtr, byte) {
+	it.projectionCalls++
+	return it.ptrs[it.idx], it.flags[it.idx]
+}
+
+var _ iteriface.PointerProjection = (*projectionOnlyIterator)(nil)
+
+func TestCollectValueLogRefCounts_PrefersPointerProjection(t *testing.T) {
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	it := &projectionOnlyIterator{
+		idx:   0,
+		flags: []byte{node.FlagInline, node.FlagPointer},
+		ptrs: []page.ValuePtr{
+			{},
+			{FileID: fileID, Offset: 123, Length: 9},
+		},
+	}
+	refs := make(map[uint32]uint64)
+	if err := collectValueLogRefCounts(context.Background(), nil, it, refs); err != nil {
+		t.Fatalf("collectValueLogRefCounts: %v", err)
+	}
+	if it.unsafeEntryCalls != 0 {
+		t.Fatalf("UnsafeEntry called %d times, want 0", it.unsafeEntryCalls)
+	}
+	if it.projectionCalls != 2 {
+		t.Fatalf("UnsafePointerProjection called %d times, want 2", it.projectionCalls)
+	}
+	if refs[fileID] != 1 {
+		t.Fatalf("refs[%d]=%d want 1", fileID, refs[fileID])
 	}
 }

@@ -3723,12 +3723,21 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 		return nil
 	}
 	defer it.Close()
+	proj, _ := it.(iterator.PointerProjection)
 	seen := 0
 	for it.Valid() {
 		if seen > 0 && seen&foregroundWriteResumeCheckMask == 0 && db.foregroundWritesResumedSince(lastWrite) {
 			return errForegroundWritesResumed
 		}
-		_, ptr, flags := it.UnsafeEntry()
+		var (
+			ptr   page.ValuePtr
+			flags byte
+		)
+		if proj != nil {
+			ptr, flags = proj.UnsafePointerProjection()
+		} else {
+			_, ptr, flags = it.UnsafeEntry()
+		}
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			live[ptr.FileID] = struct{}{}
 			if err := db.collectNestedValueLogLiveIDsFromOuterLeaf(ptr, live); err != nil {

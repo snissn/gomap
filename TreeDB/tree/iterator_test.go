@@ -8,6 +8,7 @@ import (
 	"testing"
 	"unsafe"
 
+	iteriface "github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -597,6 +598,61 @@ func TestIterator_ProjectionMode_PartialDecodeParity(t *testing.T) {
 	}
 	if reader.reads == 0 {
 		t.Fatalf("full iterator expected to perform pointer reads")
+	}
+}
+
+func TestIterator_PointerProjectionExposesFlagsWithoutInlineValueMaterialization(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	p.Alloc(1)
+	reader := newCountingValueReader()
+	ptrA := reader.Add([]byte("pointer-A"))
+
+	d0, _ := p.Get(0)
+	n0 := node.NewNode(d0)
+	n0.SetPageID(0)
+	n0.SetType(page.PageTypeLeaf)
+	n0.AddLeafEntry([]byte("A"), nil, node.FlagPointer, ptrA)
+	n0.AddLeafEntry([]byte("B"), []byte("inline-B"), node.FlagInline, page.ValuePtr{})
+	n0.UpdateChecksum()
+
+	it := New(p, reader, 0).IteratorWithOptions(nil, nil, IteratorOptions{Mode: IteratorModePointerProjection})
+	defer it.Close()
+
+	proj, ok := it.(iteriface.PointerProjection)
+	if !ok {
+		t.Fatalf("iterator does not implement pointer projection interface")
+	}
+
+	type row struct {
+		key   string
+		ptr   page.ValuePtr
+		flags byte
+	}
+	rows := make([]row, 0, 2)
+	for ; it.Valid(); it.Next() {
+		ptr, flags := proj.UnsafePointerProjection()
+		rows = append(rows, row{key: string(it.Key()), ptr: ptr, flags: flags})
+	}
+	if err := it.Error(); err != nil {
+		t.Fatalf("iterator error: %v", err)
+	}
+	if reader.reads != 0 {
+		t.Fatalf("pointer projection performed %d pointer reads, want 0", reader.reads)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 rows, got %d", len(rows))
+	}
+	if rows[0].key != "A" || rows[0].flags&node.FlagPointer == 0 || rows[0].ptr != ptrA {
+		t.Fatalf("unexpected pointer row: %+v want key=A ptr=%+v pointer-flag", rows[0], ptrA)
+	}
+	if rows[1].key != "B" || rows[1].flags&node.FlagPointer != 0 || rows[1].ptr != (page.ValuePtr{}) {
+		t.Fatalf("unexpected inline row: %+v want zero ptr with inline flags", rows[1])
 	}
 }
 

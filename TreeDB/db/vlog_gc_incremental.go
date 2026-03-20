@@ -536,11 +536,20 @@ func (db *DB) noteLeafRefValueLogReachability(found bool) {
 }
 
 func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIterator, refs map[uint32]uint64) error {
+	proj, _ := it.(iterator.PointerProjection)
 	for it.Valid() {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, ptr, flags := it.UnsafeEntry()
+		var (
+			ptr   page.ValuePtr
+			flags byte
+		)
+		if proj != nil {
+			ptr, flags = proj.UnsafePointerProjection()
+		} else {
+			_, ptr, flags = it.UnsafeEntry()
+		}
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			refs[ptr.FileID]++
 		}

@@ -957,6 +957,22 @@ func (it *Iterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return it.currVal, it.currPtr, it.flags
 }
 
+func (it *Iterator) UnsafePointerProjection() (page.ValuePtr, byte) {
+	if it.currKey == nil {
+		return page.ValuePtr{}, 0
+	}
+	if it.mode == IteratorModeKeysOnly {
+		return page.ValuePtr{}, it.flags
+	}
+	if it.flags&node.FlagPointer != 0 {
+		if !it.ensurePointerLoaded() {
+			return page.ValuePtr{}, it.flags
+		}
+		return it.currPtr, it.flags
+	}
+	return page.ValuePtr{}, it.flags
+}
+
 func (it *Iterator) Key() []byte {
 	return it.UnsafeKey()
 }
