@@ -11700,6 +11700,12 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.debugVlogMaintf("rewrite_queue_prune dropped=%d remaining=%d", dropped, len(rewriteQueue))
 		}
 	}
+	// A queued checkpoint-kick retry should run ahead of generic periodic passes.
+	// This avoids repeated active-pass collisions where periodic maintenance keeps
+	// reacquiring the scheduler while the checkpoint retry remains pending.
+	if !opts.bypassQuiet && db.vlogGenerationCheckpointKickPending.Load() {
+		return
+	}
 	// Explicit GC runs bypass the foreground quiet-window gate so callers can
 	// force a safety/cleanup pass even while foreground activity is ongoing.
 	if !runGC && !opts.bypassQuiet && !quiet {

@@ -852,6 +852,64 @@ func TestVlogGenerationMaintenance_DrainsPendingCheckpointKickAfterPass(t *testi
 	db.wg.Wait()
 }
 
+func TestVlogGenerationMaintenance_PrioritizesPendingCheckpointKickOverPeriodicPass(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 64,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64,
+			BytesAfter:    32,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+
+	// Block auto-drain so we can assert the periodic pass itself yields.
+	db.closing.Store(true)
+	db.vlogGenerationCheckpointKickPending.Store(true)
+	db.maybeRunVlogGenerationMaintenance(false)
+	if _, calls := recorder.recordedPlan(); calls != 0 {
+		t.Fatalf("periodic pass should yield while checkpoint-kick pending; plan calls=%d", calls)
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("periodic pass should yield while checkpoint-kick pending; rewrite calls=%d", calls)
+	}
+	if !db.vlogGenerationCheckpointKickPending.Load() {
+		t.Fatalf("pending checkpoint-kick retry unexpectedly cleared")
+	}
+
+	// Re-enable and confirm the pending kick can run and clear.
+	db.closing.Store(false)
+	db.schedulePendingVlogGenerationCheckpointKick()
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pending checkpoint-kick retry did not run rewrite")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if db.vlogGenerationCheckpointKickPending.Load() {
+		t.Fatalf("pending checkpoint-kick retry was not cleared after drain")
+	}
+}
+
 type dryRunGCRecordingBackend struct {
 	*backenddb.DB
 
