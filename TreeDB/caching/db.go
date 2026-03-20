@@ -11405,6 +11405,11 @@ func (db *DB) vlogGenerationRewriteMaxSegmentsForRun(queueLen int, budgetTokens 
 	if db == nil || queueLen <= 1 || !opts.rewriteDebtDrain {
 		return maxSegments
 	}
+	// Checkpoint-kick retries should keep each debt-drain run small to reduce
+	// write amplification when foreground ingest is still active.
+	if opts.bypassQuiet && !opts.skipCheckpoint {
+		return 1
+	}
 	if queueLen < maxSegments {
 		maxSegments = queueLen
 	}

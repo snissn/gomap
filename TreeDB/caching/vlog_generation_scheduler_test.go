@@ -1443,6 +1443,63 @@ func TestVlogGenerationRewriteQueue_DebtDrainProcessesMultipleSegments(t *testin
 	}
 }
 
+func TestVlogGenerationRewriteQueue_CheckpointKickDebtDrainCapsSingleSegment(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+
+	if err := db.setVlogGenerationRewriteLedger([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.2},
+		{FileID: 22, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.7},
+		{FileID: 33, BytesLive: 64, BytesTotal: 128, BytesStale: 64, StaleRatio: 0.9},
+	}); err != nil {
+		t.Fatalf("set ledger: %v", err)
+	}
+
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(defaultVlogGenerationWarmTargetBytes * 4)
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	forceVlogMaintenanceIdle(db)
+	db.maybeRunVlogGenerationMaintenanceWithOptions(true, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+	})
+
+	opts, calls := recorder.recordedRewrite()
+	if calls != 1 {
+		t.Fatalf("rewrite calls=%d want=1", calls)
+	}
+	if got := len(opts.SourceFileIDs); got != 1 {
+		t.Fatalf("checkpoint-kick rewrite SourceFileIDs=%v want single segment", opts.SourceFileIDs)
+	}
+	queue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil {
+		t.Fatalf("current queue: %v", err)
+	}
+	if len(queue) != 2 {
+		t.Fatalf("queue after checkpoint-kick single-segment drain=%v want len=2", queue)
+	}
+	consumed := opts.SourceFileIDs[0]
+	for _, id := range queue {
+		if id == consumed {
+			t.Fatalf("consumed id %d still present in queue=%v", consumed, queue)
+		}
+	}
+}
+
 func TestVlogGenerationRewriteQueue_SurvivesReopen(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 
