@@ -494,7 +494,7 @@ func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabR
 	// those payloads as if they were more leaf pages.
 	count := n.Count()
 	for i := uint16(0); i < count; i++ {
-		_, _, valPtr, flags, err := n.GetLeafEntryView(i)
+		_, valPtr, flags, err := n.GetLeafValueView(i)
 		if err != nil {
 			return err
 		}
