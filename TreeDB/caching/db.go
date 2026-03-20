@@ -12057,6 +12057,19 @@ func shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(
 	return len(queue) > 0
 }
 
+func shouldUsePersistedVlogGenerationRewriteLedgerForConfirm(
+	opts vlogGenerationMaintenanceOptions,
+	stagePending bool,
+	stageConfirmDue bool,
+	queue []uint32,
+	ledger []backenddb.ValueLogRewritePlanSegment,
+) bool {
+	if !stagePending || !stageConfirmDue || !vlogGenerationIsStageConfirmSource(opts) {
+		return false
+	}
+	return len(queue) > 0 && len(ledger) > 0
+}
+
 func shouldDeferVlogGenerationRewritePlanForAge(plan backenddb.ValueLogRewritePlan, minSegmentAge time.Duration) bool {
 	if minSegmentAge <= 0 {
 		return false
@@ -12599,9 +12612,19 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	var rewritePlan backenddb.ValueLogRewritePlan
 	haveRewritePlan := false
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
-	stageConfirmRefresh := hasPlanner && shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(opts, stagePending, stageConfirmDue, rewriteQueue)
+	stageConfirmUsePersistedLedger := shouldUsePersistedVlogGenerationRewriteLedgerForConfirm(opts, stagePending, stageConfirmDue, rewriteQueue, rewriteLedger)
+	stageConfirmRefresh := hasPlanner && !stageConfirmUsePersistedLedger && shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(opts, stagePending, stageConfirmDue, rewriteQueue)
 	skipStageConfirmSparsePlan := false
 	stageConfirmReady := false
+	if stageConfirmUsePersistedLedger {
+		stageConfirmReady = true
+		skipStageConfirmSparsePlan = true
+		db.debugVlogMaintf(
+			"rewrite_stage_confirm_use_persisted queued=%d ledger=%d",
+			len(rewriteQueue),
+			len(rewriteLedger),
+		)
+	}
 	if hasPlanner && (db.shouldRefreshQueuedVlogGenerationRewriteLedger(opts, stagePending, rewriteQueue, rewriteLedger) || stageConfirmRefresh) {
 		queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, vlogGenerationReasonRewriteResume)
 		refreshedPlan, refreshErr := db.refreshQueuedVlogGenerationRewritePlan(planner, rewriteQueue, queueMinStaleRatio, opts)

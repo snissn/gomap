@@ -2060,12 +2060,8 @@ func TestVlogGenerationRewriteQueue_StageConfirmRefreshesStagedLedgerEconomics(t
 		debugSource:           "rewrite_stage_confirm",
 	})
 
-	planOpts, planCalls := recorder.recordedPlan()
-	if planCalls != 1 {
-		t.Fatalf("plan calls=%d want=1", planCalls)
-	}
-	if planOpts.MinSegmentAge != 0 {
-		t.Fatalf("plan MinSegmentAge=%s want 0 for explicit staged refresh", planOpts.MinSegmentAge)
+	if _, planCalls := recorder.recordedPlan(); planCalls != 0 {
+		t.Fatalf("plan calls=%d want=0 when due stage-confirm uses persisted ledger", planCalls)
 	}
 	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
 	if rewriteCalls != 1 {
@@ -2088,6 +2084,11 @@ func TestVlogGenerationRewriteQueue_StageConfirmCanceledRefreshDoesNotFallbackTo
 	recorder := &rewriteBudgetRecordingBackend{
 		DB:      backend,
 		planErr: context.DeadlineExceeded,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
 	}
 
 	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
@@ -2109,11 +2110,15 @@ func TestVlogGenerationRewriteQueue_StageConfirmCanceledRefreshDoesNotFallbackTo
 		debugSource:           "rewrite_stage_confirm",
 	})
 
-	if _, planCalls := recorder.recordedPlan(); planCalls != 1 {
-		t.Fatalf("plan calls=%d want=1", planCalls)
+	if _, planCalls := recorder.recordedPlan(); planCalls != 0 {
+		t.Fatalf("plan calls=%d want=0 when persisted staged ledger avoids planner refresh", planCalls)
 	}
-	if _, rewriteCalls := recorder.recordedRewrite(); rewriteCalls != 0 {
-		t.Fatalf("rewrite calls=%d want=0", rewriteCalls)
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls=%d want=1 when persisted staged ledger avoids planner refresh", rewriteCalls)
+	}
+	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs=%v want=%v", got, want)
 	}
 }
 
