@@ -569,11 +569,12 @@ func (b *rewriteBudgetRecordingBackend) recordedGC() (backenddb.ValueLogGCStats,
 type realRewriteRecordingBackend struct {
 	*backenddb.DB
 
-	mu           sync.Mutex
-	planOpts     backenddb.ValueLogRewriteOnlineOptions
-	planCalls    int
-	rewriteOpts  backenddb.ValueLogRewriteOnlineOptions
-	rewriteCalls int
+	mu            sync.Mutex
+	planOpts      backenddb.ValueLogRewriteOnlineOptions
+	planCalls     int
+	rewriteOpts   backenddb.ValueLogRewriteOnlineOptions
+	rewriteCalls  int
+	beforeRewrite func(backenddb.ValueLogRewriteOnlineOptions)
 }
 
 func (b *realRewriteRecordingBackend) ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
@@ -588,7 +589,11 @@ func (b *realRewriteRecordingBackend) ValueLogRewriteOnline(ctx context.Context,
 	b.mu.Lock()
 	b.rewriteOpts = cloneRewriteOptsForTest(opts)
 	b.rewriteCalls++
+	beforeRewrite := b.beforeRewrite
 	b.mu.Unlock()
+	if beforeRewrite != nil {
+		beforeRewrite(cloneRewriteOptsForTest(opts))
+	}
 	return b.DB.ValueLogRewriteOnline(ctx, opts)
 }
 
@@ -1996,6 +2001,15 @@ func TestVlogGenerationRewriteQueue_CheckpointKickRestagesRemainingRealBackendDe
 	skipRetainedPrune(db)
 	db.testSkipVlogCheckpointKick = false
 
+	rewriteSawConsumedRetained := false
+	recorder.beforeRewrite = func(opts backenddb.ValueLogRewriteOnlineOptions) {
+		if len(opts.SourceFileIDs) != 1 {
+			return
+		}
+		retained := valueLogIDsFromPaths(db.valueLogRetainedPaths())
+		_, rewriteSawConsumedRetained = retained[opts.SourceFileIDs[0]]
+	}
+
 	writeRound := func(round int) {
 		t.Helper()
 		writeMiniBatch := func(prefix string, start int, cold bool) {
@@ -2121,6 +2135,18 @@ func TestVlogGenerationRewriteQueue_CheckpointKickRestagesRemainingRealBackendDe
 		if id == consumed {
 			t.Fatalf("consumed id %d still present in queue=%v", consumed, queue)
 		}
+	}
+	if !rewriteSawConsumedRetained {
+		t.Fatalf("expected consumed source %d to be retained at rewrite start", consumed)
+	}
+	if retained := valueLogIDsFromPaths(db.valueLogRetainedPaths()); retained != nil {
+		if _, ok := retained[consumed]; ok {
+			t.Fatalf("expected consumed source %d to be removed from retained set after rewrite", consumed)
+		}
+	}
+	liveCountsAfter := collectBackendLiveFileCounts(t, recorder)
+	if liveCountsAfter[consumed] != 0 {
+		t.Fatalf("expected consumed source %d to be dead in backend after rewrite, liveCountsAfter=%v", consumed, liveCountsAfter)
 	}
 
 	stagePending, observedAt, err := db.currentVlogGenerationRewriteStage()
