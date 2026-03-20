@@ -23,7 +23,7 @@ func TestLoadValueLogGenerationRewriteState_SkipsZeroFileID(t *testing.T) {
 		t.Fatalf("write state: %v", err)
 	}
 
-	ids, ledger, penalties, err := loadValueLogGenerationRewriteState(path)
+	ids, ledger, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(path)
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
@@ -35,6 +35,9 @@ func TestLoadValueLogGenerationRewriteState_SkipsZeroFileID(t *testing.T) {
 	}
 	if len(penalties) != 0 {
 		t.Fatalf("penalties=%v want empty", penalties)
+	}
+	if stagePending || stageObservedAt != 0 {
+		t.Fatalf("stagePending=%t stageObservedAt=%d want zero values", stagePending, stageObservedAt)
 	}
 }
 
@@ -52,7 +55,7 @@ func TestLoadValueLogGenerationRewriteState_PreservesPenaltiesWithoutQueue(t *te
 		t.Fatalf("write state: %v", err)
 	}
 
-	ids, ledger, penalties, err := loadValueLogGenerationRewriteState(path)
+	ids, ledger, penalties, stagePending, stageObservedAt, err := loadValueLogGenerationRewriteState(path)
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
@@ -71,5 +74,8 @@ func TestLoadValueLogGenerationRewriteState_PreservesPenaltiesWithoutQueue(t *te
 	}
 	if penalty.Attempts != 2 || penalty.CooldownUntilUnixNano != 1234 || penalty.LastGrowthBytes != 5678 {
 		t.Fatalf("penalty=%+v want attempts=2 cooldown=1234 growth=5678", penalty)
+	}
+	if stagePending || stageObservedAt != 0 {
+		t.Fatalf("stagePending=%t stageObservedAt=%d want zero values", stagePending, stageObservedAt)
 	}
 }

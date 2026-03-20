@@ -2163,6 +2163,78 @@ func (db *DB) currentValueLogPaths() []string {
 	return paths
 }
 
+func valueLogIDsFromPaths(paths []string) map[uint32]struct{} {
+	if len(paths) == 0 {
+		return nil
+	}
+	ids := make(map[uint32]struct{}, len(paths))
+	for _, path := range paths {
+		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+		if !ok || !valueLog || laneID < 0 {
+			continue
+		}
+		id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
+		if err != nil {
+			continue
+		}
+		ids[id] = struct{}{}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+func valueLogPathByID(paths []string) map[uint32]string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make(map[uint32]string, len(paths))
+	for _, path := range paths {
+		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+		if !ok || !valueLog || laneID < 0 {
+			continue
+		}
+		id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
+		if err != nil {
+			continue
+		}
+		if _, exists := out[id]; !exists {
+			out[id] = path
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (db *DB) queuedValueLogPathsSnapshot() []string {
+	if db == nil || !db.valueLogEnabled() {
+		return nil
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if len(db.queueValueLogPaths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, paths := range db.queueValueLogPaths {
+		for _, path := range paths {
+			if path == "" {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
 func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, error) {
 	if db == nil || len(ops) == 0 || !db.deferredValueLogEnabled() {
 		return ops, nil
@@ -3850,6 +3922,134 @@ func (db *DB) pruneRetainedValueLogs() {
 	}
 	if removed {
 		db.syncDirBestEffort(db.dir)
+	}
+}
+
+func (db *DB) cleanupProcessedRetainedRewriteSources(reason uint32, processedRewriteIDs []uint32) {
+	if db == nil || len(processedRewriteIDs) == 0 || !db.valueLogEnabled() {
+		return
+	}
+	liveIDs, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
+	if err != nil {
+		db.debugVlogMaintf(
+			"rewrite_retained_cleanup_scan_err reason=%s source_ids=%d err=%v",
+			vlogGenerationReasonString(reason),
+			len(processedRewriteIDs),
+			err,
+		)
+		return
+	}
+	inUseIDs := valueLogIDsFromPaths(db.valueLogInUsePaths())
+	currentIDs := valueLogIDsFromPaths(db.currentValueLogPaths())
+	queuedIDs := valueLogIDsFromPaths(db.queuedValueLogPathsSnapshot())
+	removed := 0
+	for _, id := range processedRewriteIDs {
+		if _, ok := liveIDs[id]; ok {
+			continue
+		}
+		if _, ok := inUseIDs[id]; ok {
+			continue
+		}
+		if _, ok := currentIDs[id]; ok {
+			continue
+		}
+		if _, ok := queuedIDs[id]; ok {
+			continue
+		}
+		if db.valueLogReader == nil {
+			continue
+		}
+		path := db.valueLogReader.SegmentPath(id)
+		if path == "" {
+			continue
+		}
+		if db.cleanupMissingRetainedValueLog(path) {
+			removed++
+			continue
+		}
+		if !db.valueLogRetained(path) {
+			continue
+		}
+		if db.cleanupOrphanedRetainedValueLog(path) {
+			removed++
+		}
+	}
+	if removed > 0 {
+		db.debugVlogMaintf(
+			"rewrite_retained_cleanup_done reason=%s source_ids=%d removed=%d",
+			vlogGenerationReasonString(reason),
+			len(processedRewriteIDs),
+			removed,
+		)
+	}
+}
+
+func (db *DB) debugVlogGenerationProcessedSourceState(reason uint32, processedRewriteIDs []uint32) {
+	if db == nil || len(processedRewriteIDs) == 0 || !debugVlogMaintOn() {
+		return
+	}
+	liveIDs, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
+	if err != nil {
+		db.debugVlogMaintf(
+			"rewrite_source_state_scan_err reason=%s source_ids=%d err=%v",
+			vlogGenerationReasonString(reason),
+			len(processedRewriteIDs),
+			err,
+		)
+		return
+	}
+	retainedPaths := db.valueLogRetainedPaths()
+	inUsePaths := db.valueLogInUsePaths()
+	currentPaths := db.currentValueLogPaths()
+	queuedPaths := db.queuedValueLogPathsSnapshot()
+	retainedIDs := valueLogIDsFromPaths(retainedPaths)
+	inUseIDs := valueLogIDsFromPaths(inUsePaths)
+	currentIDs := valueLogIDsFromPaths(currentPaths)
+	queuedIDs := valueLogIDsFromPaths(queuedPaths)
+	pathByID := valueLogPathByID(retainedPaths)
+	for id, path := range valueLogPathByID(inUsePaths) {
+		if _, ok := pathByID[id]; !ok {
+			pathByID[id] = path
+		}
+	}
+	for id, path := range valueLogPathByID(currentPaths) {
+		if _, ok := pathByID[id]; !ok {
+			pathByID[id] = path
+		}
+	}
+	for id, path := range valueLogPathByID(queuedPaths) {
+		if _, ok := pathByID[id]; !ok {
+			pathByID[id] = path
+		}
+	}
+	for _, id := range processedRewriteIDs {
+		lane, seq := valuelog.DecodeFileID(id)
+		_, live := liveIDs[id]
+		_, retained := retainedIDs[id]
+		_, inUse := inUseIDs[id]
+		_, current := currentIDs[id]
+		_, queued := queuedIDs[id]
+		path := pathByID[id]
+		exists := false
+		if path != "" {
+			if _, statErr := os.Stat(path); statErr == nil {
+				exists = true
+			}
+		}
+		db.debugVlogMaintf(
+			"rewrite_source_state reason=%s file_id=%d lane=%d seq=%d live_backend=%t retained=%t in_use=%t current=%t queued=%t exists=%t path=%s",
+			vlogGenerationReasonString(reason),
+			id,
+			lane,
+			seq,
+			live,
+			retained,
+			inUse,
+			current,
+			queued,
+			exists,
+			path,
+		)
 	}
 }
 
@@ -12866,7 +13066,9 @@ planned:
 				}
 				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
 			}
+			db.cleanupProcessedRetainedRewriteSources(reason, processedRewriteIDs)
 			locallyEffectiveProcessedDebt := len(processedRewriteIDs) > 0 && processedLedgerOK && processedLedgerStaleBytes > 0 && stats.RecordsCopied > 0
+			db.debugVlogGenerationProcessedSourceState(reason, processedRewriteIDs)
 			if effectiveBytesBefore > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyEffectiveProcessedDebt {
 				db.vlogGenerationRewriteIneffectiveRuns.Add(1)
 				db.vlogGenerationRewriteIneffectiveBytesIn.Add(uint64(effectiveBytesBefore))
