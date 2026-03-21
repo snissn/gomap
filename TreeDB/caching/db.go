@@ -3940,7 +3940,7 @@ func (db *DB) cleanupProcessedRetainedRewriteSources(reason uint32, processedRew
 	if db == nil || len(processedRewriteIDs) == 0 || !db.valueLogEnabled() {
 		return
 	}
-	liveIDs, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
+	liveIDs, err := db.currentReferencedValueLogIDs()
 	if err != nil {
 		db.debugVlogMaintf(
 			"rewrite_retained_cleanup_scan_err reason=%s source_ids=%d err=%v",
@@ -3999,7 +3999,7 @@ func (db *DB) debugVlogGenerationProcessedSourceState(reason uint32, processedRe
 	if db == nil || len(processedRewriteIDs) == 0 || !debugVlogMaintOn() {
 		return
 	}
-	liveIDs, err := db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
+	liveIDs, err := db.currentReferencedValueLogIDs()
 	if err != nil {
 		db.debugVlogMaintf(
 			"rewrite_source_state_scan_err reason=%s source_ids=%d err=%v",
@@ -4062,6 +4062,16 @@ func (db *DB) debugVlogGenerationProcessedSourceState(reason uint32, processedRe
 			path,
 		)
 	}
+}
+
+func (db *DB) currentReferencedValueLogIDs() (map[uint32]struct{}, error) {
+	if db == nil {
+		return nil, nil
+	}
+	if refs, ok := db.backend.(backendReferencedValueLogSegmentser); ok {
+		return refs.ReferencedValueLogSegments(context.Background())
+	}
+	return db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
 }
 
 func (db *DB) retainedPrunePressureBytes() int64 {
@@ -4372,6 +4382,10 @@ type backendValueLogSegmentPresence interface {
 
 type backendValueLogGCer interface {
 	ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
+}
+
+type backendReferencedValueLogSegmentser interface {
+	ReferencedValueLogSegments(ctx context.Context) (map[uint32]struct{}, error)
 }
 
 type backendIndexVacuumer interface {

@@ -331,6 +331,12 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 	return refs, nil
 }
 
+// ReferencedValueLogSegments returns the currently reachable value-log segment
+// IDs. This may use the incremental ref tracker when available.
+func (db *DB) ReferencedValueLogSegments(ctx context.Context) (map[uint32]struct{}, error) {
+	return db.referencedValueLogSegments(ctx)
+}
+
 func (db *DB) mergeLeafRefValueLogRefs(ctx context.Context, refs map[uint32]struct{}) error {
 	if db == nil || refs == nil {
 		return nil
