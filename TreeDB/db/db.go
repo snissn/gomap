@@ -120,6 +120,8 @@ type DB struct {
 
 	rewritePlanLiveBytesMu    sync.RWMutex
 	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache
+	lastValueLogGCRefsMu      sync.RWMutex
+	lastValueLogGCRefs        valueLogReferencedSetSnapshot
 
 	// Stage-5 publish watermark metrics (backend commit publish path).
 	publishWatermarkWaitTotalNs    atomic.Uint64

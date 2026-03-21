@@ -72,6 +72,11 @@ type valueLogRefTracker struct {
 	dirty     bool
 }
 
+type valueLogReferencedSetSnapshot struct {
+	commitSeq uint64
+	refs      map[uint32]struct{}
+}
+
 func newValueLogRefTracker() *valueLogRefTracker {
 	return &valueLogRefTracker{
 		counts: make(map[uint32]uint64),
@@ -329,6 +334,43 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 		refs[fileID] = struct{}{}
 	}
 	return refs, nil
+}
+
+func cloneReferencedValueLogSegments(in map[uint32]struct{}) map[uint32]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[uint32]struct{}, len(in))
+	for fileID := range in {
+		out[fileID] = struct{}{}
+	}
+	return out
+}
+
+func (db *DB) cacheLastValueLogGCReferencedSegments(commitSeq uint64, refs map[uint32]struct{}) {
+	if db == nil {
+		return
+	}
+	db.lastValueLogGCRefsMu.Lock()
+	db.lastValueLogGCRefs.commitSeq = commitSeq
+	db.lastValueLogGCRefs.refs = cloneReferencedValueLogSegments(refs)
+	db.lastValueLogGCRefsMu.Unlock()
+}
+
+// LastValueLogGCReferencedSegments returns the referenced value-log segment IDs
+// from the most recent GC pass when they still match the current commit
+// sequence.
+func (db *DB) LastValueLogGCReferencedSegments() (map[uint32]struct{}, bool) {
+	if db == nil {
+		return nil, false
+	}
+	seq := db.currentCommitSeq()
+	db.lastValueLogGCRefsMu.RLock()
+	defer db.lastValueLogGCRefsMu.RUnlock()
+	if db.lastValueLogGCRefs.commitSeq == 0 || db.lastValueLogGCRefs.commitSeq != seq {
+		return nil, false
+	}
+	return cloneReferencedValueLogSegments(db.lastValueLogGCRefs.refs), true
 }
 
 // ReferencedValueLogSegments returns the currently reachable value-log segment

@@ -66,6 +66,7 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if err != nil {
 		return stats, err
 	}
+	db.cacheLastValueLogGCReferencedSegments(db.currentCommitSeq(), referenced)
 
 	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
 	// path. Fall back to a refresh if the manager has not yet discovered any

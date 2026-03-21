@@ -4068,6 +4068,11 @@ func (db *DB) currentReferencedValueLogIDs() (map[uint32]struct{}, error) {
 	if db == nil {
 		return nil, nil
 	}
+	if refs, ok := db.backend.(backendLastValueLogGCReferencedSegmentser); ok {
+		if cached, ok := refs.LastValueLogGCReferencedSegments(); ok {
+			return cached, nil
+		}
+	}
 	if refs, ok := db.backend.(backendReferencedValueLogSegmentser); ok {
 		return refs.ReferencedValueLogSegments(context.Background())
 	}
@@ -4386,6 +4391,10 @@ type backendValueLogGCer interface {
 
 type backendReferencedValueLogSegmentser interface {
 	ReferencedValueLogSegments(ctx context.Context) (map[uint32]struct{}, error)
+}
+
+type backendLastValueLogGCReferencedSegmentser interface {
+	LastValueLogGCReferencedSegments() (map[uint32]struct{}, bool)
 }
 
 type backendIndexVacuumer interface {
