@@ -13,7 +13,6 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -441,22 +440,16 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	counts := make(map[uint32]uint64)
 	reader := ValueReaderForState(snap.state)
 
-	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := collectValueLogRefCounts(ctx, db, userIter, counts); err != nil {
-		_ = userIter.Close()
+	if err := collectValueLogRefCountsTree(ctx, &snap.tree, counts); err != nil {
 		_ = snap.Close()
 		return nil, 0, err
 	}
-	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
-		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := collectValueLogRefCounts(ctx, db, sysIter, counts); err != nil {
-		_ = sysIter.Close()
+	sysTree := tree.New(snap.idx.pager, reader, snap.state.SystemRootPageID)
+	if err := collectValueLogRefCountsTree(ctx, sysTree, counts); err != nil {
 		_ = snap.Close()
 		return nil, 0, err
 	}
-	_ = sysIter.Close()
 
 	if snap.idx != nil && snap.idx.pager != nil {
 		userFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, reader, counts)
@@ -587,27 +580,33 @@ func (db *DB) noteLeafRefValueLogReachability(found bool) {
 	db.leafRefState.Store(leafRefStateAbsent)
 }
 
-func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIterator, refs map[uint32]uint64) error {
-	proj, _ := it.(iterator.PointerProjection)
-	for it.Valid() {
+func collectValueLogRefCountsTree(ctx context.Context, tr *tree.Tree, refs map[uint32]uint64) error {
+	if tr == nil || refs == nil {
+		return nil
+	}
+	return tr.WalkLeaves(ctx, func(_ uint64, n node.Node) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var (
-			ptr   page.ValuePtr
-			flags byte
-		)
-		if proj != nil {
-			ptr, flags = proj.UnsafePointerProjection()
-		} else {
-			_, ptr, flags = it.UnsafeEntry()
+		count := n.Count()
+		for i := uint16(0); i < count; i++ {
+			flags, err := n.GetLeafFlagsView(i)
+			if err != nil {
+				return err
+			}
+			if flags&node.FlagPointer == 0 {
+				continue
+			}
+			_, ptr, _, err := n.GetLeafValueView(i)
+			if err != nil {
+				return err
+			}
+			if page.IsValueLogFileID(ptr.FileID) {
+				refs[ptr.FileID]++
+			}
 		}
-		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
-			refs[ptr.FileID]++
-		}
-		it.Next()
-	}
-	return it.Error()
+		return nil
+	})
 }
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry) (*valueLogRefDelta, error) {
