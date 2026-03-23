@@ -31,6 +31,8 @@ type valueLogMaintOnceReport struct {
 	AfterState     treedb.DebugValueLogGenerationState `json:"after_state"`
 	BeforeStats    map[string]string                   `json:"before_stats,omitempty"`
 	AfterStats     map[string]string                   `json:"after_stats,omitempty"`
+	BeforeVlogIO   map[string]string                   `json:"before_vlog_io,omitempty"`
+	AfterVlogIO    map[string]string                   `json:"after_vlog_io,omitempty"`
 }
 
 func runVlogMaintOnce(dir string, args []string) {
@@ -100,13 +102,15 @@ func runVlogMaintOnce(dir string, args []string) {
 		fatalf("debug state before run: %v", err)
 	}
 	beforeStats := filterVlogGenerationStats(db.Stats())
+	beforeVlogIO := filterVlogIOStats(db.Stats())
 
 	report := valueLogMaintOnceReport{
-		Dir:         dir,
-		Mode:        *mode,
-		OpenMillis:  openDone.Sub(openStart).Milliseconds(),
-		BeforeState: beforeState,
-		BeforeStats: beforeStats,
+		Dir:          dir,
+		Mode:         *mode,
+		OpenMillis:   openDone.Sub(openStart).Milliseconds(),
+		BeforeState:  beforeState,
+		BeforeStats:  beforeStats,
+		BeforeVlogIO: beforeVlogIO,
 	}
 
 	seedStart := time.Now()
@@ -194,6 +198,7 @@ func runVlogMaintOnce(dir string, args []string) {
 	}
 	report.AfterState = afterState
 	report.AfterStats = filterVlogGenerationStats(db.Stats())
+	report.AfterVlogIO = filterVlogIOStats(db.Stats())
 	report.TotalMillis = time.Since(totalStart).Milliseconds()
 
 	if *heapprofile != "" {
@@ -258,6 +263,7 @@ func runVlogMaintOnce(dir string, args []string) {
 		report.AfterState.RewriteStageObservedAtNS,
 	)
 	printSelectedVlogGenerationStatChanges(report.BeforeStats, report.AfterStats)
+	printSelectedVlogGenerationStatChanges(report.BeforeVlogIO, report.AfterVlogIO)
 }
 
 func valueLogMaintModeOptions(mode string) (treedb.DebugValueLogGenerationMaintenanceOptions, error) {
@@ -309,6 +315,21 @@ func filterVlogGenerationStats(stats map[string]string) map[string]string {
 		if strings.HasPrefix(k, "treedb.cache.vlog_generation.") {
 			out[k] = v
 		}
+	}
+	return out
+}
+
+func filterVlogIOStats(stats map[string]string) map[string]string {
+	out := make(map[string]string)
+	for k, v := range stats {
+		if strings.HasPrefix(k, "treedb.vlog.mmap_") ||
+			strings.HasPrefix(k, "treedb.vlog.grouped_frame_cache.") ||
+			strings.HasPrefix(k, "treedb.vlog.template_def_cache.") {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
