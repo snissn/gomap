@@ -288,13 +288,75 @@ func (t *Tree) WalkLeaves(ctx context.Context, visit func(pageID uint64, n node.
 		}
 		pageID := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		n, err := t.loadNodeView(pageID, verifyAlways)
-		if err != nil {
-			return err
+		var (
+			n           node.Node
+			leafScratch *leafRefPageScratch
+			err         error
+		)
+		if ptr, ok := page.DecodeLeafRef(pageID); ok {
+			if t.slabReader == nil {
+				return errors.New("missing slab reader")
+			}
+			leafScratch = getLeafRefPageScratch()
+			var data []byte
+			if t.slabToReader != nil {
+				var usedDst bool
+				data, usedDst, err = t.slabToReader.ReadUnsafeTo(ptr, leafScratch.buf)
+				if err != nil {
+					putLeafRefPageScratch(leafScratch)
+					return err
+				}
+				if !usedDst {
+					putLeafRefPageScratch(leafScratch)
+					leafScratch = nil
+				}
+			} else if t.slabAppender != nil {
+				data, err = t.slabAppender.ReadUnsafeAppend(ptr, leafScratch.buf[:0])
+				if err != nil {
+					putLeafRefPageScratch(leafScratch)
+					return err
+				}
+			} else {
+				data, err = t.slabReader.ReadUnsafe(ptr)
+				if err != nil {
+					putLeafRefPageScratch(leafScratch)
+					return err
+				}
+				putLeafRefPageScratch(leafScratch)
+				leafScratch = nil
+			}
+			if len(data) != page.PageSize {
+				if leafScratch != nil {
+					putLeafRefPageScratch(leafScratch)
+				}
+				return fmt.Errorf("invalid leaf page size %d for page %d", len(data), pageID)
+			}
+			n = node.NewNodeView(data)
+			if t.shouldVerifyLeafRefChecksum() && !n.VerifyChecksum() {
+				if leafScratch != nil {
+					putLeafRefPageScratch(leafScratch)
+				}
+				return fmt.Errorf("checksum mismatch on page %d", pageID)
+			}
+			if n.Type() != page.PageTypeLeaf {
+				if leafScratch != nil {
+					putLeafRefPageScratch(leafScratch)
+				}
+				return fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
+			}
+		} else {
+			n, err = t.loadNodeView(pageID, verifyAlways)
+			if err != nil {
+				return err
+			}
 		}
 		switch n.Type() {
 		case page.PageTypeLeaf:
-			if err := visit(pageID, n); err != nil {
+			err = visit(pageID, n)
+			if leafScratch != nil {
+				putLeafRefPageScratch(leafScratch)
+			}
+			if err != nil {
 				return err
 			}
 		case page.PageTypeInternal:
@@ -306,7 +368,13 @@ func (t *Tree) WalkLeaves(ctx context.Context, visit func(pageID uint64, n node.
 				}
 				stack = append(stack, childID)
 			}
+			if leafScratch != nil {
+				putLeafRefPageScratch(leafScratch)
+			}
 		default:
+			if leafScratch != nil {
+				putLeafRefPageScratch(leafScratch)
+			}
 			return fmt.Errorf("invalid page type %d at page %d", n.Type(), pageID)
 		}
 	}
