@@ -268,6 +268,44 @@ func TestNextRewriteRIDStart_ScansNewestSegmentPerLaneOnly(t *testing.T) {
 	}
 }
 
+func TestRewriteWriter_AppendLeafPages(t *testing.T) {
+	dir := t.TempDir()
+
+	w := newRewriteWriter(dir, 0, 0, 1<<30)
+	leafPages := [][]byte{
+		bytes.Repeat([]byte{0x11}, page.PageSize),
+		bytes.Repeat([]byte{0x22}, page.PageSize),
+		bytes.Repeat([]byte{0x33}, page.PageSize),
+	}
+	ptrs, err := w.AppendLeafPages(leafPages)
+	if err != nil {
+		t.Fatalf("AppendLeafPages: %v", err)
+	}
+	if len(ptrs) != len(leafPages) {
+		t.Fatalf("ptr count=%d want %d", len(ptrs), len(leafPages))
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	path := filepath.Join(dir, "value-l0-000001.log")
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer closeNoErr(t, f)
+
+	for i := range ptrs {
+		got, err := valuelog.ReadAt(f, ptrs[i], true)
+		if err != nil {
+			t.Fatalf("ReadAt(%d): %v", i, err)
+		}
+		if !bytes.Equal(got, leafPages[i]) {
+			t.Fatalf("page %d mismatch", i)
+		}
+	}
+}
+
 func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 

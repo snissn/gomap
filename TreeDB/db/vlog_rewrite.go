@@ -2123,6 +2123,8 @@ type rewriteWriter struct {
 	blockCodec       valuelog.BlockCodec
 	w                *valuelog.Writer
 	records          int
+	leafBatchRecords []valuelog.Record
+	leafBatchPtrs    []page.ValuePtr
 }
 
 func newRewriteWriter(walDir string, lane, startSeq uint32, maxSize int64) *rewriteWriter {
@@ -2142,6 +2144,74 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
 	return w.appendValue(rid, leafPage)
+}
+
+const rewriteLeafPageBatchMax = 8
+
+func estimateGroupedLeafPageBatchBytes(leafPages [][]byte) int {
+	bodyLen := valuelog.FrameHeaderSize + len(leafPages)*8 + (len(leafPages)+1)*4
+	for i := range leafPages {
+		bodyLen += len(leafPages[i])
+	}
+	return valuelog.HeaderSize + bodyLen
+}
+
+func (w *rewriteWriter) AppendLeafPages(leafPages [][]byte) ([]page.ValuePtr, error) {
+	if w == nil {
+		return nil, errors.New("vlog-rewrite: nil writer")
+	}
+	if len(leafPages) == 0 {
+		return nil, nil
+	}
+	if w.nextRID == 0 {
+		w.nextRID = 1
+	}
+	out := make([]page.ValuePtr, 0, len(leafPages))
+	for start := 0; start < len(leafPages); {
+		if err := w.ensureWriter(); err != nil {
+			return nil, err
+		}
+		end := start + rewriteLeafPageBatchMax
+		if end > len(leafPages) {
+			end = len(leafPages)
+		}
+		if w.maxSize > 0 {
+			for end > start+1 && w.w.Size()+int64(estimateGroupedLeafPageBatchBytes(leafPages[start:end])) > w.maxSize {
+				end--
+			}
+			if w.w.Size() > 0 && w.w.Size()+int64(estimateGroupedLeafPageBatchBytes(leafPages[start:end])) > w.maxSize {
+				if err := w.rotate(); err != nil {
+					return nil, err
+				}
+				continue
+			}
+		}
+		n := end - start
+		if cap(w.leafBatchRecords) < n {
+			w.leafBatchRecords = make([]valuelog.Record, n)
+		}
+		if cap(w.leafBatchPtrs) < n {
+			w.leafBatchPtrs = make([]page.ValuePtr, n)
+		}
+		recs := w.leafBatchRecords[:n]
+		dst := w.leafBatchPtrs[:n]
+		for i := 0; i < n; i++ {
+			rid := w.nextRID
+			w.nextRID++
+			if w.nextRID == 0 {
+				return nil, fmt.Errorf("value-log rid space exhausted")
+			}
+			recs[i] = valuelog.Record{RID: rid, Value: leafPages[start+i]}
+		}
+		ptrs, _, err := w.w.AppendFrameWithStatsInto(0, nil, recs, dst)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ptrs...)
+		w.records += len(ptrs)
+		start = end
+	}
+	return out, nil
 }
 
 func (w *rewriteWriter) ensureWriter() error {
