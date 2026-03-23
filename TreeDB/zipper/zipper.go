@@ -26,6 +26,10 @@ type LeafPageLog interface {
 	AppendLeafPage(leafPage []byte) (page.ValuePtr, error)
 }
 
+type LeafPageBatchLog interface {
+	AppendLeafPages(leafPages [][]byte) ([]page.ValuePtr, error)
+}
+
 type LeafPageReader interface {
 	ReadUnsafe(ptr page.ValuePtr) ([]byte, error)
 }
@@ -89,6 +93,7 @@ type Zipper struct {
 
 	outerLeavesInValueLog bool
 	leafPageLog           LeafPageLog
+	leafPageBatchLog      LeafPageBatchLog
 	leafPageReader        LeafPageReader
 	leafRefCacheMu        sync.RWMutex
 	leafRefCache          map[uint64][]byte
@@ -647,6 +652,7 @@ func (z *Zipper) SetOuterLeavesInValueLog(enabled bool) {
 
 func (z *Zipper) SetLeafPageLog(log LeafPageLog) {
 	z.leafPageLog = log
+	z.leafPageBatchLog, _ = log.(LeafPageBatchLog)
 }
 
 func (z *Zipper) SetLeafPageReader(reader LeafPageReader) {
@@ -1102,6 +1108,14 @@ func (z *Zipper) persistLeafPage(b *node.Builder) (uint64, error) {
 	return leafID, nil
 }
 
+func (z *Zipper) cacheLeafPageByRef(leafID uint64, data []byte) {
+	z.leafRefCacheMu.Lock()
+	if z.leafRefCache != nil {
+		z.leafRefCache[leafID] = data
+	}
+	z.leafRefCacheMu.Unlock()
+}
+
 // writeRecursive handles the COW merge.
 // Returns: newPageID, splits, error.
 func (z *Zipper) writeRecursive(pageID uint64, ops []batch.Entry, maintenance bool, budget *maintenanceBudget, metrics *adaptive.Metrics, low, high []byte, retired *[]uint64, scratch *mergeScratch) (uint64, []Split, error) {
@@ -1211,6 +1225,47 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 	)
 	pendingSplitIdx = -1
 
+	type pendingLeafPersist struct {
+		data     []byte
+		root     bool
+		splitIdx int
+	}
+	var pendingLeafPersists []pendingLeafPersist
+	flushPendingLeafPersists := func() error {
+		if len(pendingLeafPersists) == 0 {
+			return nil
+		}
+		if z.leafPageBatchLog == nil {
+			return errors.New("zipper: missing batched leaf page log")
+		}
+		pages := make([][]byte, len(pendingLeafPersists))
+		for i := range pendingLeafPersists {
+			pages[i] = pendingLeafPersists[i].data
+		}
+		ptrs, err := z.leafPageBatchLog.AppendLeafPages(pages)
+		if err != nil {
+			return err
+		}
+		if len(ptrs) != len(pendingLeafPersists) {
+			return fmt.Errorf("zipper: batched leaf page append count mismatch: got=%d want=%d", len(ptrs), len(pendingLeafPersists))
+		}
+		for i := range pendingLeafPersists {
+			leafID, err := page.EncodeLeafRef(ptrs[i])
+			if err != nil {
+				return err
+			}
+			if pendingLeafPersists[i].root {
+				rootNodeID = leafID
+				rootPersisted = true
+			} else if idx := pendingLeafPersists[i].splitIdx; idx >= 0 && idx < len(splits) {
+				splits[idx].NodeID = leafID
+			}
+			z.cacheLeafPageByRef(leafID, pendingLeafPersists[i].data)
+		}
+		pendingLeafPersists = pendingLeafPersists[:0]
+		return nil
+	}
+
 	// Current target builder
 	target := builder
 	targetPooled := false
@@ -1231,6 +1286,22 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		metrics.LeafFill += float64(page.PageSize-target.FreeSpace()) / float64(page.PageSize)
 		if target != builder {
 			metrics.Splits++
+		}
+
+		if z.outerLeavesInValueLog && z.leafPageBatchLog != nil {
+			data := append([]byte(nil), target.Data()...)
+			pendingLeafPersists = append(pendingLeafPersists, pendingLeafPersist{
+				data:     data,
+				root:     target == builder,
+				splitIdx: pendingSplitIdx,
+			})
+			if target == builder {
+				rootPersisted = true
+			}
+			if len(pendingLeafPersists) >= 8 {
+				return 0, flushPendingLeafPersists()
+			}
+			return 0, nil
 		}
 
 		nodeID, err := z.persistLeafPage(target)
@@ -1447,6 +1518,9 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 		if _, err := persistTarget(); err != nil {
 			return 0, nil, err
 		}
+	}
+	if err := flushPendingLeafPersists(); err != nil {
+		return 0, nil, err
 	}
 
 	return rootNodeID, splits, nil

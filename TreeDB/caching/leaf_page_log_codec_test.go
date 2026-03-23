@@ -46,7 +46,7 @@ func readValueLogFrameHeaderAtPtr(t *testing.T, dir string, ptr page.ValuePtr) v
 	}
 }
 
-func TestCachingLeafPageLog_DefaultAutoDoesNotEmitLZ4LeafFrames(t *testing.T) {
+func TestCachingLeafPageLog_AppendLeafPages_DefaultAutoUsesGroupedSnappyFrames(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -77,42 +77,32 @@ func TestCachingLeafPageLog_DefaultAutoDoesNotEmitLZ4LeafFrames(t *testing.T) {
 	}
 	defer db.Close()
 
-	value := make([]byte, 32)
-	for i := 0; i < 1024; i++ {
-		key := []byte(fmt.Sprintf("k%06d", i))
-		if err := db.Set(key, value); err != nil {
-			t.Fatalf("Set(%q): %v", key, err)
-		}
+	log := newCachingLeafPageLog(db, 0)
+	ptrs, err := log.(*cachingLeafPageLog).AppendLeafPages([][]byte{
+		make([]byte, page.PageSize),
+		make([]byte, page.PageSize),
+		make([]byte, page.PageSize),
+		make([]byte, page.PageSize),
+	})
+	if err != nil {
+		t.Fatalf("AppendLeafPages: %v", err)
 	}
-	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
+	if err := db.flushValueLog(0); err != nil {
+		t.Fatalf("flushValueLog: %v", err)
 	}
-
-	proj, ok := db.backend.(pointerProjectionBackend)
-	if !ok {
-		t.Fatalf("backend does not expose pager/state")
-	}
-	state := proj.State()
-	if state == nil {
-		t.Fatalf("missing backend state")
-	}
-	leafRefs := collectLeafRefs(t, proj.Pager(), state.RootPageID)
-	if len(leafRefs) == 0 {
-		t.Fatalf("expected non-empty leaf refs")
+	if len(ptrs) != 4 {
+		t.Fatalf("ptr count=%d want 4", len(ptrs))
 	}
 
 	sawCompressed := false
-	for _, leafID := range leafRefs {
-		ptr, ok := page.DecodeLeafRef(leafID)
-		if !ok {
-			t.Fatalf("DecodeLeafRef(%d): false", leafID)
-		}
+	sawBatched := false
+	for _, ptr := range ptrs {
 		frame := readValueLogFrameHeaderAtPtr(t, dir, ptr)
 		if frame.Version != valuelog.FrameVersion {
 			t.Fatalf("unexpected frame version %d", frame.Version)
 		}
-		if frame.K != 1 {
-			t.Fatalf("expected singleton leaf frame, got k=%d", frame.K)
+		if frame.K > 1 || page.ValuePtrSubIndex(ptr) > 0 {
+			sawBatched = true
 		}
 		if frame.DictID != 0 {
 			t.Fatalf("unexpected dict-compressed leaf frame dictID=%d", frame.DictID)
@@ -127,5 +117,8 @@ func TestCachingLeafPageLog_DefaultAutoDoesNotEmitLZ4LeafFrames(t *testing.T) {
 	}
 	if !sawCompressed {
 		t.Fatalf("expected at least one compressed leaf page frame")
+	}
+	if !sawBatched {
+		t.Fatalf("expected at least one batched leaf page frame")
 	}
 }

@@ -2320,7 +2320,7 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 	for i := range records {
 		records[i].RID = startRID + uint64(i)
 	}
-	ptrs, err := db.appendValueLog(lane, dictID, nil, records, durability)
+	ptrs, err := db.appendValueLog(lane, dictID, nil, records, durability, false)
 	if err != nil {
 		putValueLogRecordsNoClear(records)
 		putOuterLeafArena(outerArena)
@@ -2557,7 +2557,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 		records[i].RID = startRID + uint64(i)
 	}
 
-	ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
+	ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability, false)
 	if err != nil {
 		return 0, err
 	}
@@ -2774,7 +2774,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				records[i].RID = startRID + uint64(i)
 			}
 
-			ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
+			ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability, false)
 			putValueLogRecordsNoClear(records)
 			putOuterLeafArena(outerArena)
 			if err != nil {
@@ -10183,7 +10183,7 @@ func (db *DB) prepareAppendDictFrames(
 	return prepared, time.Since(prepStart).Nanoseconds(), nil
 }
 
-func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, leafPage bool) ([]page.ValuePtr, error) {
 	if !db.splitValueLogEnabled() {
 		return nil, errWALUnavailable
 	}
@@ -10240,6 +10240,9 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes)
+	if leafPage {
+		writeMode, blockCodec, selectorProbe = db.resolveLeafPageVlogWriteMode(l, selectorPayloadBytes, selectorUnitPayloadBytes)
+	}
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false
@@ -10335,6 +10338,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 		if k > valuelog.MaxFrameK {
 			k = valuelog.MaxFrameK
+		}
+	}
+	if leafPage && len(records) > 1 && k < 2 {
+		k = len(records)
+		if k > 8 {
+			k = 8
 		}
 	}
 
@@ -10876,7 +10885,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value))
 	if leafPage {
-		writeMode, blockCodec, selectorProbe = db.resolveLeafPageVlogWriteMode(l, len(value))
+		writeMode, blockCodec, selectorProbe = db.resolveLeafPageVlogWriteMode(l, len(value), len(value))
 	}
 	probeCompression := selectorProbe
 	if writeMode != vlogWriteDict {
@@ -21584,7 +21593,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				wg.Add(1)
 				go func(batch *laneValueLogBatch) {
 					defer wg.Done()
-					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], b.dictID, nil, batch.records, durability)
+					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], b.dictID, nil, batch.records, durability, false)
 				}(lb)
 			}
 			wg.Wait()
@@ -21668,7 +21677,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					}
 				}
 			}
-			ptrs, buildErr = b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
+			ptrs, buildErr = b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability, false)
 			if buildErr != nil {
 				b.db.writeMu.RUnlock()
 				return buildErr

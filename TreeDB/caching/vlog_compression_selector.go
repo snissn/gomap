@@ -1046,7 +1046,7 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 	}
 }
 
-func (db *DB) resolveLeafPageVlogWriteMode(l *lane, rawPayloadBytes int) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
+func (db *DB) resolveLeafPageVlogWriteMode(l *lane, rawPayloadBytes, unitPayloadBytes int) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	switch mode {
 	case vlogCompressionDefault, vlogCompressionAuto:
@@ -1055,7 +1055,7 @@ func (db *DB) resolveLeafPageVlogWriteMode(l *lane, rawPayloadBytes int) (vlogCo
 		// shortcut that dominates runtime read/decode cost for leaf-backed DBs.
 		return vlogWriteBlock, valuelog.BlockCodecSnappy, false
 	default:
-		return db.resolveVlogWriteMode(l, 0, rawPayloadBytes, rawPayloadBytes)
+		return db.resolveVlogWriteMode(l, 0, rawPayloadBytes, unitPayloadBytes)
 	}
 }
 

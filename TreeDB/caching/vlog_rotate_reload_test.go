@@ -144,7 +144,7 @@ func TestAppendValueLog_ReloadWriterAfterRotation(t *testing.T) {
 		{RID: 2, Value: bytes.Repeat([]byte("b"), 32)},
 	}
 
-	ptrs, err := db.appendValueLog(l, 0, nil, records, journalDurabilityNone)
+	ptrs, err := db.appendValueLog(l, 0, nil, records, journalDurabilityNone, false)
 	if err != nil {
 		t.Fatalf("appendValueLog: %v", err)
 	}

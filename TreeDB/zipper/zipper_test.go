@@ -62,6 +62,68 @@ func (l *stubLeafPageLog) AppendLeafPage(_ []byte) (page.ValuePtr, error) {
 	return ptr, nil
 }
 
+type batchingLeafPageStore struct {
+	memoryLeafPageStore
+	singleCalls int
+	batchCalls  int
+	batchPages  int
+}
+
+func newBatchingLeafPageStore(z *Zipper) *batchingLeafPageStore {
+	return &batchingLeafPageStore{
+		memoryLeafPageStore: memoryLeafPageStore{
+			z:     z,
+			pages: make(map[uint64][]byte),
+		},
+	}
+}
+
+func (s *batchingLeafPageStore) appendOne(leafPage []byte) (page.ValuePtr, error) {
+	if s.z != nil {
+		s.z.leafRefCacheMu.RLock()
+		if s.z.leafRefCache != nil {
+			s.sawCache++
+		} else {
+			s.sawNoCache++
+		}
+		s.z.leafRefCacheMu.RUnlock()
+	}
+	if s.next == 0 {
+		s.next = 4
+	}
+	ptr := page.ValuePtr{
+		FileID: page.ValueLogFileID(1),
+		Offset: uint64(s.next),
+		Length: uint32(len(leafPage)),
+	}
+	s.next += 4096 + 32
+	key, err := page.EncodeLeafRef(ptr)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	s.pages[key] = append([]byte(nil), leafPage...)
+	return ptr, nil
+}
+
+func (s *batchingLeafPageStore) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+	s.singleCalls++
+	return s.appendOne(leafPage)
+}
+
+func (s *batchingLeafPageStore) AppendLeafPages(leafPages [][]byte) ([]page.ValuePtr, error) {
+	s.batchCalls++
+	s.batchPages += len(leafPages)
+	ptrs := make([]page.ValuePtr, len(leafPages))
+	for i := range leafPages {
+		ptr, err := s.appendOne(leafPages[i])
+		if err != nil {
+			return nil, err
+		}
+		ptrs[i] = ptr
+	}
+	return ptrs, nil
+}
+
 type memoryLeafPageStore struct {
 	z *Zipper
 
@@ -251,6 +313,36 @@ func TestZipperApply_NonMaintenanceRestorePathDoesNotInstallLeafRefCache(t *test
 	}
 	if z.leafRefCache != nil {
 		t.Fatalf("leafRefCache not cleared after Apply")
+	}
+}
+
+func TestZipperApply_BatchesOuterLeafPersists(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	store := newBatchingLeafPageStore(z)
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+
+	rootID := buildOuterLeafInternalRoot(t, z)
+	if rootID == 0 {
+		t.Fatalf("rootID=0")
+	}
+	if store.batchCalls == 0 {
+		t.Fatalf("expected batched outer-leaf persists")
+	}
+	if store.batchPages < 2 {
+		t.Fatalf("expected batched outer-leaf pages, got %d", store.batchPages)
+	}
+	if store.singleCalls != 0 {
+		t.Fatalf("unexpected single outer-leaf persists: %d", store.singleCalls)
 	}
 }
 

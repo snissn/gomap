@@ -1202,7 +1202,7 @@ func TestRotateValueLogMuHeld_RestoresUsableWriterAfterRegisterFailure(t *testin
 	if l.vlog == nil {
 		t.Fatalf("expected usable writer restored after register failure")
 	}
-	ptrs, err := db.appendValueLog(l, 0, nil, []valuelog.Record{{RID: 1, Value: []byte("value")}}, journalDurabilityNone)
+	ptrs, err := db.appendValueLog(l, 0, nil, []valuelog.Record{{RID: 1, Value: []byte("value")}}, journalDurabilityNone, false)
 	if err != nil {
 		t.Fatalf("appendValueLog after rollback: %v", err)
 	}
