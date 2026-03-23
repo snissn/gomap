@@ -42,6 +42,21 @@ type valueLogMaintExitLoopReport struct {
 	Passes               []valueLogMaintExitLoopPassReport `json:"passes"`
 }
 
+type valueLogMaintExitLoopConfig struct {
+	WaitIdle               time.Duration
+	MaxPasses              int
+	MinReclaimBytes        int64
+	StopQueueNondecrease   bool
+	ReseedFromPlanWhenIdle bool
+	ReseedMaxSegments      int
+	ReseedMaxBytes         int64
+	ReseedMinStaleRatio    float64
+	ReseedMinStaleBytes    int64
+	RewriteBudgetTokens    int64
+	ReseedStageObservedAgo time.Duration
+	MaxReseeds             int
+}
+
 func runVlogMaintExitLoop(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-maint-exit-loop", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required)")
@@ -82,64 +97,22 @@ func runVlogMaintExitLoop(dir string, args []string) {
 			fatalf("set rewrite-plan-timeout env: %v", err)
 		}
 	}
-
-	db := openTreeDB(dir, true)
-	defer closeTreeDB(db)
-
-	initialBytes, err := dirLogicalSizeBytes(dir)
+	report, err := runValueLogMaintExitLoopWithConfig(dir, valueLogMaintExitLoopConfig{
+		WaitIdle:               *waitIdle,
+		MaxPasses:              *maxPasses,
+		MinReclaimBytes:        *minReclaimBytes,
+		StopQueueNondecrease:   *stopQueueNondecrease,
+		ReseedFromPlanWhenIdle: *reseedFromPlanWhenIdle,
+		ReseedMaxSegments:      *reseedMaxSegments,
+		ReseedMaxBytes:         *reseedMaxBytes,
+		ReseedMinStaleRatio:    *reseedMinStaleRatio,
+		ReseedMinStaleBytes:    *reseedMinStaleBytes,
+		RewriteBudgetTokens:    *rewriteBudgetTokens,
+		ReseedStageObservedAgo: *reseedStageObservedAgo,
+		MaxReseeds:             *maxReseeds,
+	})
 	if err != nil {
-		fatalf("dir size before loop: %v", err)
-	}
-	report := valueLogMaintExitLoopReport{
-		Dir:                  dir,
-		MaxPasses:            *maxPasses,
-		MinReclaimBytes:      *minReclaimBytes,
-		StopQueueNondecrease: *stopQueueNondecrease,
-		InitialBytes:         initialBytes,
-		FinalBytes:           initialBytes,
-	}
-
-	reseedCount := 0
-	for pass := 1; pass <= *maxPasses; pass++ {
-		passReport, afterState, err := runOneVlogMaintExitLoopPass(db, dir, pass, *waitIdle, *rewriteBudgetTokens)
-		if err != nil {
-			fatalf("exit maintenance pass %d: %v", pass, err)
-		}
-		if *reseedFromPlanWhenIdle && reseedCount < *maxReseeds && pass < *maxPasses && len(afterState.RewriteSourceFileIDs) == 0 && !afterState.RewriteStagePending {
-			reseeded, selected, err := reseedVlogMaintExitLoopIfIdle(db, treedb.ValueLogRewriteOnlineOptions{
-				MaxSourceSegments:    *reseedMaxSegments,
-				MaxSourceBytes:       *reseedMaxBytes,
-				MinSegmentStaleRatio: *reseedMinStaleRatio,
-				MinSegmentStaleBytes: *reseedMinStaleBytes,
-			}, *reseedStageObservedAgo)
-			if err != nil {
-				fatalf("exit maintenance pass %d reseed: %v", pass, err)
-			}
-			if reseeded {
-				reseedCount++
-				state, err := db.DebugValueLogGenerationState()
-				if err != nil {
-					fatalf("debug state after reseed on pass %d: %v", pass, err)
-				}
-				passReport.Reseeded = true
-				passReport.ReseedSelected = selected
-				passReport.QueueAfter = len(state.RewriteSourceFileIDs)
-				passReport.StageAfter = state.RewriteStagePending
-			}
-		}
-		report.Passes = append(report.Passes, passReport)
-		report.FinalBytes = passReport.AfterBytes
-		report.TotalReclaimedBytes = report.InitialBytes - report.FinalBytes
-		if passReport.Reseeded {
-			continue
-		}
-		if stop, reason := shouldStopVlogMaintExitLoop(passReport, pass, *maxPasses, *minReclaimBytes, *stopQueueNondecrease); stop {
-			report.StopReason = reason
-			break
-		}
-	}
-	if report.StopReason == "" {
-		report.StopReason = "completed"
+		fatalf("vlog-maint-exit-loop: %v", err)
 	}
 
 	if *asJSON {
@@ -172,6 +145,68 @@ func runVlogMaintExitLoop(dir string, args []string) {
 			pass.StageAfter,
 		)
 	}
+}
+
+func runValueLogMaintExitLoopWithConfig(dir string, cfg valueLogMaintExitLoopConfig) (valueLogMaintExitLoopReport, error) {
+	db := openTreeDB(dir, true)
+	defer closeTreeDB(db)
+
+	initialBytes, err := dirLogicalSizeBytes(dir)
+	if err != nil {
+		return valueLogMaintExitLoopReport{}, fmt.Errorf("dir size before loop: %w", err)
+	}
+	report := valueLogMaintExitLoopReport{
+		Dir:                  dir,
+		MaxPasses:            cfg.MaxPasses,
+		MinReclaimBytes:      cfg.MinReclaimBytes,
+		StopQueueNondecrease: cfg.StopQueueNondecrease,
+		InitialBytes:         initialBytes,
+		FinalBytes:           initialBytes,
+	}
+
+	reseedCount := 0
+	for pass := 1; pass <= cfg.MaxPasses; pass++ {
+		passReport, afterState, err := runOneVlogMaintExitLoopPass(db, dir, pass, cfg.WaitIdle, cfg.RewriteBudgetTokens)
+		if err != nil {
+			return valueLogMaintExitLoopReport{}, fmt.Errorf("exit maintenance pass %d: %w", pass, err)
+		}
+		if cfg.ReseedFromPlanWhenIdle && reseedCount < cfg.MaxReseeds && pass < cfg.MaxPasses && len(afterState.RewriteSourceFileIDs) == 0 && !afterState.RewriteStagePending {
+			reseeded, selected, err := reseedVlogMaintExitLoopIfIdle(db, treedb.ValueLogRewriteOnlineOptions{
+				MaxSourceSegments:    cfg.ReseedMaxSegments,
+				MaxSourceBytes:       cfg.ReseedMaxBytes,
+				MinSegmentStaleRatio: cfg.ReseedMinStaleRatio,
+				MinSegmentStaleBytes: cfg.ReseedMinStaleBytes,
+			}, cfg.ReseedStageObservedAgo)
+			if err != nil {
+				return valueLogMaintExitLoopReport{}, fmt.Errorf("exit maintenance pass %d reseed: %w", pass, err)
+			}
+			if reseeded {
+				reseedCount++
+				state, err := db.DebugValueLogGenerationState()
+				if err != nil {
+					return valueLogMaintExitLoopReport{}, fmt.Errorf("debug state after reseed on pass %d: %w", pass, err)
+				}
+				passReport.Reseeded = true
+				passReport.ReseedSelected = selected
+				passReport.QueueAfter = len(state.RewriteSourceFileIDs)
+				passReport.StageAfter = state.RewriteStagePending
+			}
+		}
+		report.Passes = append(report.Passes, passReport)
+		report.FinalBytes = passReport.AfterBytes
+		report.TotalReclaimedBytes = report.InitialBytes - report.FinalBytes
+		if passReport.Reseeded {
+			continue
+		}
+		if stop, reason := shouldStopVlogMaintExitLoop(passReport, pass, cfg.MaxPasses, cfg.MinReclaimBytes, cfg.StopQueueNondecrease); stop {
+			report.StopReason = reason
+			break
+		}
+	}
+	if report.StopReason == "" {
+		report.StopReason = "completed"
+	}
+	return report, nil
 }
 
 func runOneVlogMaintExitLoopPass(db *treedb.DB, dir string, pass int, waitIdle time.Duration, rewriteBudgetTokens int64) (valueLogMaintExitLoopPassReport, treedb.DebugValueLogGenerationState, error) {

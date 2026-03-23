@@ -40,6 +40,7 @@ Commands:
   vlog-audit      Audit value-log filesystem, GC, and rewrite-plan state (requires -rw)
   vlog-maint-once Inspect/seed cached rewrite debt and run one maintenance pass (requires -rw)
   vlog-maint-exit-loop Run bounded explicit stage-confirm-exit maintenance passes (requires -rw)
+  vlog-postsync-optimize Run explicit and/or offline post-sync value-log optimization (requires -rw)
   vlog-gc         Delete unreferenced value-log segments (requires -rw)
   vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
   get             Get a single key
@@ -98,6 +99,8 @@ func main() {
 		runVlogMaintOnce(dir, args)
 	case "vlog-maint-exit-loop":
 		runVlogMaintExitLoop(dir, args)
+	case "vlog-postsync-optimize":
+		runVlogPostsyncOptimize(dir, args)
 	case "vlog-gc":
 		runVlogGC(dir, args)
 	case "vlog-rewrite":
