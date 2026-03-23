@@ -10085,7 +10085,7 @@ func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durab
 	}
 	// Mid-large ordinary values should reach the queued batcher so adjacent
 	// writes can coalesce into grouped frames.
-	if db.shouldPreferGroupedOrdinaryValueWrites(valueLen, false) {
+	if dictID == 0 && db.shouldPreferGroupedOrdinaryValueWrites(valueLen, false) {
 		return true
 	}
 	// Block mode otherwise keeps a direct fast path for small/medium values.
@@ -10314,10 +10314,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	if leafPage {
 		writeMode, blockCodec, selectorProbe = db.resolveLeafPageVlogWriteMode(l, selectorPayloadBytes, selectorUnitPayloadBytes)
 	}
-	if forcedMode, forcedCodec, forced := db.forceGroupedOrdinaryValueWriteMode(mode, writeMode, blockCodec, selectorUnitPayloadBytes, leafPage); forced {
-		writeMode = forcedMode
-		blockCodec = forcedCodec
-		selectorProbe = false
+	if dictID == 0 {
+		if forcedMode, forcedCodec, forced := db.forceGroupedOrdinaryValueWriteMode(mode, writeMode, blockCodec, selectorUnitPayloadBytes, leafPage); forced {
+			writeMode = forcedMode
+			blockCodec = forcedCodec
+			selectorProbe = false
+		}
 	}
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
@@ -10963,10 +10965,12 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	if leafPage {
 		writeMode, blockCodec, selectorProbe = db.resolveLeafPageVlogWriteMode(l, len(value), len(value))
 	}
-	if forcedMode, forcedCodec, forced := db.forceGroupedOrdinaryValueWriteMode(mode, writeMode, blockCodec, len(value), leafPage); forced {
-		writeMode = forcedMode
-		blockCodec = forcedCodec
-		selectorProbe = false
+	if dictID == 0 {
+		if forcedMode, forcedCodec, forced := db.forceGroupedOrdinaryValueWriteMode(mode, writeMode, blockCodec, len(value), leafPage); forced {
+			writeMode = forcedMode
+			blockCodec = forcedCodec
+			selectorProbe = false
+		}
 	}
 	probeCompression := selectorProbe
 	if writeMode != vlogWriteDict {
@@ -11160,7 +11164,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			dictID:           dictID,
 			writeMode:        finalWriteMode,
 			blockCodec:       finalBlockCodec,
-			groupedOrdinary:  db.shouldPreferGroupedOrdinaryValueWrites(len(value), leafPage),
+			groupedOrdinary:  dictID == 0 && db.shouldPreferGroupedOrdinaryValueWrites(len(value), leafPage),
 			probeCompression: probeCompression,
 			durability:       durability,
 			enqueuedAt:       time.Now(),
