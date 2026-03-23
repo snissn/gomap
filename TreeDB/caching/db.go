@@ -12112,7 +12112,10 @@ func shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(
 	stageConfirmDue bool,
 	queue []uint32,
 ) bool {
-	if !stagePending || !stageConfirmDue || !vlogGenerationIsStageConfirmSource(opts) {
+	if !stagePending || !vlogGenerationIsStageConfirmSource(opts) {
+		return false
+	}
+	if !stageConfirmDue && opts.debugSource != "rewrite_stage_confirm_exit" {
 		return false
 	}
 	return len(queue) > 0
@@ -12125,7 +12128,10 @@ func shouldUsePersistedVlogGenerationRewriteLedgerForConfirm(
 	queue []uint32,
 	ledger []backenddb.ValueLogRewritePlanSegment,
 ) bool {
-	if !stagePending || !stageConfirmDue || !vlogGenerationIsStageConfirmSource(opts) {
+	if !stagePending || !vlogGenerationIsStageConfirmSource(opts) {
+		return false
+	}
+	if !stageConfirmDue && opts.debugSource != "rewrite_stage_confirm_exit" {
 		return false
 	}
 	return len(queue) > 0 && len(ledger) > 0
@@ -12442,9 +12448,6 @@ func (db *DB) maybeRunVlogGenerationExitStageConfirm() {
 		return
 	}
 	now := time.Now()
-	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval)) {
-		return
-	}
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil || len(rewriteQueue) == 0 {
 		return
@@ -12456,9 +12459,10 @@ func (db *DB) maybeRunVlogGenerationExitStageConfirm() {
 		return
 	}
 	db.debugVlogMaintf(
-		"rewrite_stage_confirm_exit_schedule queued=%d observed_age_ms=%d",
+		"rewrite_stage_confirm_exit_schedule queued=%d observed_age_ms=%d due=%t",
 		len(rewriteQueue),
 		now.Sub(time.Unix(0, stageObservedAt)).Milliseconds(),
+		!now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval)),
 	)
 	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
