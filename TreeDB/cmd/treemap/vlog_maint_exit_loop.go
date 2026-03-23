@@ -170,26 +170,39 @@ func runValueLogMaintExitLoopWithConfig(dir string, cfg valueLogMaintExitLoopCon
 		if err != nil {
 			return valueLogMaintExitLoopReport{}, fmt.Errorf("exit maintenance pass %d: %w", pass, err)
 		}
-		if cfg.ReseedFromPlanWhenIdle && reseedCount < cfg.MaxReseeds && pass < cfg.MaxPasses && len(afterState.RewriteSourceFileIDs) == 0 && !afterState.RewriteStagePending {
-			reseeded, selected, err := reseedVlogMaintExitLoopIfIdle(db, treedb.ValueLogRewriteOnlineOptions{
-				MaxSourceSegments:    cfg.ReseedMaxSegments,
-				MaxSourceBytes:       cfg.ReseedMaxBytes,
-				MinSegmentStaleRatio: cfg.ReseedMinStaleRatio,
-				MinSegmentStaleBytes: cfg.ReseedMinStaleBytes,
-			}, cfg.ReseedStageObservedAgo)
-			if err != nil {
-				return valueLogMaintExitLoopReport{}, fmt.Errorf("exit maintenance pass %d reseed: %w", pass, err)
-			}
-			if reseeded {
-				reseedCount++
-				state, err := db.DebugValueLogGenerationState()
+		idleAndDrained := len(afterState.RewriteSourceFileIDs) == 0 && !afterState.RewriteStagePending
+		stopIdleNoCandidates := false
+		rewriteOpts := treedb.ValueLogRewriteOnlineOptions{
+			MaxSourceSegments:    cfg.ReseedMaxSegments,
+			MaxSourceBytes:       cfg.ReseedMaxBytes,
+			MinSegmentStaleRatio: cfg.ReseedMinStaleRatio,
+			MinSegmentStaleBytes: cfg.ReseedMinStaleBytes,
+		}
+		if cfg.ReseedFromPlanWhenIdle && pass < cfg.MaxPasses && idleAndDrained {
+			if reseedCount < cfg.MaxReseeds {
+				reseeded, selected, err := reseedVlogMaintExitLoopIfIdle(db, rewriteOpts, cfg.ReseedStageObservedAgo)
 				if err != nil {
-					return valueLogMaintExitLoopReport{}, fmt.Errorf("debug state after reseed on pass %d: %w", pass, err)
+					return valueLogMaintExitLoopReport{}, fmt.Errorf("exit maintenance pass %d reseed: %w", pass, err)
 				}
-				passReport.Reseeded = true
-				passReport.ReseedSelected = selected
-				passReport.QueueAfter = len(state.RewriteSourceFileIDs)
-				passReport.StageAfter = state.RewriteStagePending
+				if reseeded {
+					reseedCount++
+					state, err := db.DebugValueLogGenerationState()
+					if err != nil {
+						return valueLogMaintExitLoopReport{}, fmt.Errorf("debug state after reseed on pass %d: %w", pass, err)
+					}
+					passReport.Reseeded = true
+					passReport.ReseedSelected = selected
+					passReport.QueueAfter = len(state.RewriteSourceFileIDs)
+					passReport.StageAfter = state.RewriteStagePending
+				} else {
+					stopIdleNoCandidates = true
+				}
+			} else {
+				candidateCount, err := countVlogMaintExitLoopCandidates(db, rewriteOpts)
+				if err != nil {
+					return valueLogMaintExitLoopReport{}, fmt.Errorf("exit maintenance pass %d probe: %w", pass, err)
+				}
+				stopIdleNoCandidates = candidateCount == 0
 			}
 		}
 		report.Passes = append(report.Passes, passReport)
@@ -197,6 +210,10 @@ func runValueLogMaintExitLoopWithConfig(dir string, cfg valueLogMaintExitLoopCon
 		report.TotalReclaimedBytes = report.InitialBytes - report.FinalBytes
 		if passReport.Reseeded {
 			continue
+		}
+		if stopIdleNoCandidates {
+			report.StopReason = "idle_no_candidates"
+			break
 		}
 		if stop, reason := shouldStopVlogMaintExitLoop(passReport, pass, cfg.MaxPasses, cfg.MinReclaimBytes, cfg.StopQueueNondecrease); stop {
 			report.StopReason = reason
@@ -288,6 +305,24 @@ func reseedVlogMaintExitLoopIfIdle(db *treedb.DB, opts treedb.ValueLogRewriteOnl
 		return true, len(plan.SourceFileIDs), nil
 	default:
 		return false, 0, nil
+	}
+}
+
+func countVlogMaintExitLoopCandidates(db *treedb.DB, opts treedb.ValueLogRewriteOnlineOptions) (int, error) {
+	if db == nil {
+		return 0, nil
+	}
+	plan, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		return 0, err
+	}
+	switch {
+	case len(plan.SelectedSegments) > 0:
+		return len(plan.SelectedSegments), nil
+	case len(plan.SourceFileIDs) > 0:
+		return len(plan.SourceFileIDs), nil
+	default:
+		return 0, nil
 	}
 }
 
