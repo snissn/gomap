@@ -10825,14 +10825,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 }
 
 func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
-	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true)
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true, false)
 }
 
 func (db *DB) appendValueLogOneRaw(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
-	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true)
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true, false)
 }
 
-func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool) (page.ValuePtr, string, error) {
+func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool, forceUncompressed bool) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
@@ -10920,6 +10920,11 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	if finalWriteMode != vlogWriteBlock {
 		finalBlockCodec = db.valueLogBlockCodec
 	}
+	if forceUncompressed {
+		dictID = 0
+		dict = nil
+		finalWriteMode = vlogWriteOff
+	}
 	switch mode {
 	case vlogCompressionDefault, vlogCompressionDict:
 		db.valueLogDictCollectSample(value)
@@ -10951,6 +10956,12 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			}
 			caps := l.vlogCaps
 			db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
+			if forceUncompressed {
+				if setter, ok := any(w).(blockCompressionSetter); ok {
+					setter.SetBlockCompression(finalBlockCodec, false)
+					defer setter.SetBlockCompression(finalBlockCodec, finalWriteMode == vlogWriteBlock)
+				}
+			}
 			policySetter := caps.keep
 			startSize := w.Size()
 
@@ -11108,6 +11119,12 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 	caps := l.vlogCaps
 	db.setVlogWriterMode(l, w, finalWriteMode, finalBlockCodec)
+	if forceUncompressed {
+		if setter, ok := any(w).(blockCompressionSetter); ok {
+			setter.SetBlockCompression(finalBlockCodec, false)
+			defer setter.SetBlockCompression(finalBlockCodec, finalWriteMode == vlogWriteBlock)
+		}
+	}
 	policySetter := caps.keep
 	statsWriter := caps.stats
 	statsWriterInto := caps.statsInto

@@ -2052,7 +2052,7 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
 	if w.nextRID == 0 {
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
-	return w.appendValue(rid, leafPage)
+	return w.appendValueWithCompression(rid, leafPage, false)
 }
 
 func (w *rewriteWriter) ensureWriter() error {
@@ -2105,6 +2105,10 @@ func (w *rewriteWriter) appendRaw(raw []byte, length uint32) (page.ValuePtr, err
 }
 
 func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, error) {
+	return w.appendValueWithCompression(rid, value, w.blockCompression)
+}
+
+func (w *rewriteWriter) appendValueWithCompression(rid uint64, value []byte, compress bool) (page.ValuePtr, error) {
 	if err := w.ensureWriter(); err != nil {
 		return page.ValuePtr{}, err
 	}
@@ -2112,6 +2116,10 @@ func (w *rewriteWriter) appendValue(rid uint64, value []byte) (page.ValuePtr, er
 		if err := w.rotate(); err != nil {
 			return page.ValuePtr{}, err
 		}
+	}
+	if compress != w.blockCompression {
+		w.w.SetBlockCompression(w.blockCodec, compress)
+		defer w.w.SetBlockCompression(w.blockCodec, w.blockCompression)
 	}
 	ptr, err := w.w.Append(0, nil, rid, value)
 	if err != nil {
