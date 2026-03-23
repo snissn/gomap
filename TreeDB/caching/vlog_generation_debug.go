@@ -85,30 +85,5 @@ func (db *DB) DebugRunValueLogGenerationMaintenanceOnce(opts DebugValueLogGenera
 }
 
 func (db *DB) DebugWaitValueLogGenerationIdle(timeout time.Duration) error {
-	if db == nil {
-		return fmt.Errorf("cachingdb: nil db")
-	}
-	if timeout <= 0 {
-		return nil
-	}
-	deadline := time.Now().Add(timeout)
-	for {
-		state := db.vlogGenerationSchedulerState.Load()
-		active := db.vlogGenerationMaintenanceActive.Load()
-		checkpointPending := db.vlogGenerationCheckpointKickPending.Load()
-		deferredPending := db.vlogGenerationDeferredMaintenancePending.Load()
-		if !active && !checkpointPending && !deferredPending && state != vlogGenerationSchedulerRunning {
-			return nil
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf(
-				"cachingdb: timed out waiting for value-log generation idle: state=%s active=%t checkpoint_pending=%t deferred_pending=%t",
-				vlogGenerationSchedulerStateString(state),
-				active,
-				checkpointPending,
-				deferredPending,
-			)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	return db.waitValueLogGenerationIdle(timeout)
 }

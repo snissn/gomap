@@ -5105,6 +5105,7 @@ const (
 	vlogGenerationGCEvery                   = 5
 	vlogGenerationGCMinBytes                = int64(1 << 20)
 	vlogGenerationRewriteMinInterval        = 30 * time.Second
+	vlogGenerationCloseDeferredWait         = 30 * time.Second
 	vlogGenerationGCMinInterval             = 45 * time.Second
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
 	vlogGenerationCheckpointKickRetryWindow = 5 * time.Second
@@ -12298,6 +12299,35 @@ func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	db.maybeRunVlogGenerationMaintenanceWithOptions(runGC, vlogGenerationMaintenanceOptions{})
 }
 
+func (db *DB) waitValueLogGenerationIdle(timeout time.Duration) error {
+	if db == nil {
+		return fmt.Errorf("cachingdb: nil db")
+	}
+	if timeout <= 0 {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		state := db.vlogGenerationSchedulerState.Load()
+		active := db.vlogGenerationMaintenanceActive.Load()
+		checkpointPending := db.vlogGenerationCheckpointKickPending.Load()
+		deferredPending := db.vlogGenerationDeferredMaintenancePending.Load()
+		if !active && !checkpointPending && !deferredPending && state != vlogGenerationSchedulerRunning {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf(
+				"cachingdb: timed out waiting for value-log generation idle: state=%s active=%t checkpoint_pending=%t deferred_pending=%t",
+				vlogGenerationSchedulerStateString(state),
+				active,
+				checkpointPending,
+				deferredPending,
+			)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (db *DB) vlogGenerationRewriteStageConfirmDue(now time.Time) bool {
 	if db == nil || db.closing.Load() {
 		return false
@@ -12401,6 +12431,45 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 		rewriteDebtDrain:      true,
 		debugSource:           "rewrite_stage_confirm_exit",
 	})
+}
+
+func (db *DB) maybeRunVlogGenerationExitStageConfirm() {
+	if db == nil || db.closing.Load() || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+	if err != nil || !stagePending || stageObservedAt <= 0 {
+		return
+	}
+	now := time.Now()
+	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval)) {
+		return
+	}
+	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil || len(rewriteQueue) == 0 {
+		return
+	}
+	db.mu.Lock()
+	pendingMemtables := db.mutableBytes.Load() > 0 || len(db.queue) > 0
+	db.mu.Unlock()
+	if pendingMemtables {
+		return
+	}
+	db.debugVlogMaintf(
+		"rewrite_stage_confirm_exit_schedule queued=%d observed_age_ms=%d",
+		len(rewriteQueue),
+		now.Sub(time.Unix(0, stageObservedAt)).Milliseconds(),
+	)
+	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm_exit",
+	})
+	if err := db.waitValueLogGenerationIdle(vlogGenerationCloseDeferredWait); err != nil {
+		db.debugVlogMaintf("rewrite_stage_confirm_exit_wait err=%v", err)
+	}
 }
 
 func (db *DB) runVlogGenerationCheckpointKickRetries(opts vlogGenerationMaintenanceOptions) {
@@ -14577,9 +14646,10 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
-	db.closing.Store(true)
 	unregisterTreeDBExpvarStatsDB(db)
 	db.stopDomainIngressWorkers()
+	db.maybeRunVlogGenerationExitStageConfirm()
+	db.closing.Store(true)
 	db.waitForRetainedValueLogPrune()
 
 	// Lock order must match Checkpoint (flushMu -> writeMu) to avoid a deadlock
