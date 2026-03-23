@@ -77,6 +77,8 @@ func BenchmarkAppendValueLogOneParallel(b *testing.B) {
 	b.Run("small/queued", func(b *testing.B) { bench(b, true, 128, 0) })
 	b.Run("large/direct", func(b *testing.B) { bench(b, false, vlogQueueMinValueSize, 0) })
 	b.Run("large/queued", func(b *testing.B) { bench(b, true, vlogQueueMinValueSize, 0) })
+	b.Run("target43k/direct", func(b *testing.B) { bench(b, false, 43629, 0) })
+	b.Run("target43k/queued", func(b *testing.B) { bench(b, true, 43629, 0) })
 	b.Run("large/direct_dict_on", func(b *testing.B) { bench(b, false, vlogQueueMinValueSize, 1) })
 	b.Run("large/queued_dict_on", func(b *testing.B) { bench(b, true, vlogQueueMinValueSize, 1) })
 }
@@ -155,6 +157,8 @@ func BenchmarkAppendValueLogOneParallelFile(b *testing.B) {
 	b.Run("small/queued", func(b *testing.B) { bench(b, true, 128, 0) })
 	b.Run("large/direct", func(b *testing.B) { bench(b, false, 32<<10, 0) })
 	b.Run("large/queued", func(b *testing.B) { bench(b, true, 32<<10, 0) })
+	b.Run("target43k/direct", func(b *testing.B) { bench(b, false, 43629, 0) })
+	b.Run("target43k/queued", func(b *testing.B) { bench(b, true, 43629, 0) })
 	b.Run("large/direct_dict_on", func(b *testing.B) { bench(b, false, 32<<10, 1) })
 	b.Run("large/queued_dict_on", func(b *testing.B) { bench(b, true, 32<<10, 1) })
 }
