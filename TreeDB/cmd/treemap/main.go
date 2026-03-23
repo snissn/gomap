@@ -604,6 +604,7 @@ func resolveMainDBDir(dir string) string {
 func runVlogRewrite(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-rewrite", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	cpuprofile := fs.String("cpuprofile", "", "write cpu profile to file while rewriting the value log")
 	_ = fs.Parse(args)
 
 	if !*rw {
@@ -613,7 +614,20 @@ func runVlogRewrite(dir string, args []string) {
 	rootDir := resolveTreeDBRootDir(dir)
 	opts := treedb.Options{Dir: rootDir}
 	applyPersistedFormatConfig(dir, &opts)
+	var profFile *os.File
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fatalf("cpuprofile: %v", err)
+		}
+		profFile = f
+		runtimepprof.StartCPUProfile(profFile)
+	}
 	stats, err := treedb.ValueLogRewriteOffline(opts)
+	if profFile != nil {
+		runtimepprof.StopCPUProfile()
+		_ = profFile.Close()
+	}
 	if err != nil {
 		fatalf("ValueLogRewriteOffline error: %v", err)
 	}
