@@ -771,3 +771,57 @@ func TestApplyScratch_TrimsOversizedOuterLeafBuildPageCache(t *testing.T) {
 	}
 	z.releaseApplyScratch(reused)
 }
+
+func BenchmarkMergeLeaf_OuterLeafPersistModeCompare(b *testing.B) {
+	prefix := bytes.Repeat([]byte{'k'}, 1022)
+	value := bytes.Repeat([]byte("v"), 8)
+	ops := make([]batch.Entry, 0, 240)
+	for i := 0; i < 240; i++ {
+		key := make([]byte, len(prefix)+2)
+		copy(key, prefix)
+		binary.BigEndian.PutUint16(key[len(prefix):], uint16(i))
+		ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+	}
+
+	oldData := make([]byte, page.PageSize)
+	oldNode := node.NewNode(oldData)
+	oldNode.SetType(page.PageTypeLeaf)
+	oldNode.UpdateChecksum()
+
+	cases := []struct {
+		name string
+		log  func(*Zipper) LeafPageLog
+	}{
+		{
+			name: "single",
+			log: func(z *Zipper) LeafPageLog {
+				return newMemoryLeafPageStore(z)
+			},
+		},
+		{
+			name: "batched",
+			log: func(z *Zipper) LeafPageLog {
+				return newBatchingLeafPageStore(z)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				z := New(nil, nil)
+				z.SetOuterLeavesInValueLog(true)
+				z.SetLeafPageLog(tc.log(z))
+				scratch := newMergeScratch()
+				builder := z.newLeafBuilder(make([]byte, page.PageSize), ops)
+				builder.SetPageID(0)
+				var metrics adaptive.Metrics
+				if _, _, err := z.mergeLeaf(oldNode, builder, ops, &metrics, scratch, false); err != nil {
+					b.Fatalf("mergeLeaf failed: %v", err)
+				}
+			}
+		})
+	}
+}
