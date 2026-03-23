@@ -332,6 +332,19 @@ TreeDB’s value log is persistent storage. Disk space is reclaimed via:
 - **GC**: `db.ValueLogGC(...)` deletes fully-unreferenced value-log segments (after a checkpoint in cached mode).
 - **Rewrite**: `treedb.ValueLogRewriteOffline(treedb.Options{Dir: ...})` rewrites live pointers into fresh segments and swaps `Dir/maindb/index.db` to reference the new log (offline; requires a clean commitlog).
 
+Operationally, the recommended post-sync entrypoint is:
+
+- `treemap vlog-postsync-optimize <db-dir> -rw -strategy=auto`
+  - prefers the offline rewrite path when the DB is closed/clean enough to run it,
+  - falls back to the bounded explicit exit-maintenance loop only when offline rewrite cannot run (for example because the commitlog is not clean).
+
+The explicit path is also available directly when you want bounded incremental reclaim instead of a full offline rewrite:
+
+- `treemap vlog-maint-exit-loop <db-dir> -rw`
+  - runs batched `stage-confirm-exit` maintenance passes,
+  - is most useful when you need a post-sync reclaim step without immediately doing a full offline rewrite,
+  - but typically reclaims less space than offline rewrite.
+
 Details: `docs/TREEDB_STORAGE_FORMAT.md`.
 
 ## Benchmark-Driven Tuning
