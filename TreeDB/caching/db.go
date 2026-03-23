@@ -6567,6 +6567,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogMaxSegmentBytes < 0 {
 		valueLogMaxSegmentBytes = 0
 	}
+	if opts.IndexOuterLeavesInValueLog {
+		leafRefMaxSegmentBytes := int64(page.LeafRefMaxOffset) - 4
+		if valueLogMaxSegmentBytes == 0 || valueLogMaxSegmentBytes > leafRefMaxSegmentBytes {
+			valueLogMaxSegmentBytes = leafRefMaxSegmentBytes
+		}
+	}
 	valueLogGenerationHotTarget := opts.ValueLogGenerationHotSegmentTargetBytes
 	valueLogGenerationWarmTarget := opts.ValueLogGenerationWarmSegmentTargetBytes
 	valueLogGenerationColdTarget := opts.ValueLogGenerationColdSegmentTargetBytes

@@ -1939,13 +1939,20 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if maxBytes <= 0 {
 		maxBytes = defaultValueLogRewriteSegmentBytes
 	}
-	if opts.IndexPackedValuePtr || opts.IndexOuterLeavesInValueLog {
+	if opts.IndexPackedValuePtr {
 		// Packed on-disk pointers store Offset as u32. Ensure rewritten segments
-		// rotate so newly written pointers remain representable. LeafRef ids
-		// (outer leaves in value log) also encode Offset as u32.
+		// rotate so newly written pointers remain representable.
 		const packedMax = int64(^uint32(0)) - 4
 		if maxBytes > packedMax {
 			maxBytes = packedMax
+		}
+	}
+	if opts.IndexOuterLeavesInValueLog {
+		// LeafRef ids reserve a few low bits for grouped sub-index, so the
+		// representable value-log offset range is smaller than plain u32.
+		leafRefMax := int64(page.LeafRefMaxOffset) - 4
+		if maxBytes > leafRefMax {
+			maxBytes = leafRefMax
 		}
 	}
 	writer := newRewriteWriter(walDir, lane, startSeq, maxBytes)

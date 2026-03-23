@@ -600,6 +600,7 @@ func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 		allocator:                 a,
 		outerLeavesInValueLog:     z.outerLeavesInValueLog,
 		leafPageLog:               z.leafPageLog,
+		leafPageBatchLog:          z.leafPageBatchLog,
 		leafPageReader:            z.leafPageReader,
 		leafReserveBytes:          z.leafReserveBytes,
 		internalReserveBytes:      z.internalReserveBytes,
