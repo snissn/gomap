@@ -488,6 +488,110 @@ func TestReadUnsafe_SealedLazyMmapByteBudgetFallsBackToReadAt(t *testing.T) {
 	}
 }
 
+func TestManagerAcquireSealedLazyMmapBudget_OverridesCountCap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	withMappedSealedBudget(t, 1)
+	withMappedSealedBytesBudget(t, 1<<30)
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, 0, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, 1, 1, 2, bytes.Repeat([]byte("b"), 64))
+
+	f1, err := openFile(filepath.Join(dir, "value-l0-000001.log"), id1, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f1): %v", err)
+	}
+	defer func() { _ = f1.Close() }()
+	f2, err := openFile(filepath.Join(dir, "value-l1-000001.log"), id2, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f2): %v", err)
+	}
+	defer func() { _ = f2.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{id1: f1, id2: f2},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1.manager = mgr
+	f2.manager = mgr
+
+	release := mgr.AcquireSealedLazyMmapBudget(2, 0)
+	defer release()
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	if _, err := set.ReadUnsafe(ptr1); err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	}
+	if _, err := set.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2): %v", err)
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected second sealed segment to be mapped under override count budget")
+	}
+	if got := f2.mmapReadFallbackReadAt.Load(); got != 0 {
+		t.Fatalf("unexpected fallback readat under override count budget: %d", got)
+	}
+}
+
+func TestManagerAcquireSealedLazyMmapBudget_OverridesBytesCap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	withMappedSealedBudget(t, 8)
+	withMappedSealedBytesBudget(t, 1<<30)
+
+	dir := t.TempDir()
+	id1, ptr1 := writeTestSegmentWithPtr(t, dir, 0, 1, 1, bytes.Repeat([]byte("a"), 64))
+	id2, ptr2 := writeTestSegmentWithPtr(t, dir, 1, 1, 2, bytes.Repeat([]byte("b"), 64))
+
+	f1, err := openFile(filepath.Join(dir, "value-l0-000001.log"), id1, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f1): %v", err)
+	}
+	defer func() { _ = f1.Close() }()
+	f2, err := openFile(filepath.Join(dir, "value-l1-000001.log"), id2, nil, nil, templ.DecodeOptions{}, nil)
+	if err != nil {
+		t.Fatalf("openFile(f2): %v", err)
+	}
+	defer func() { _ = f2.Close() }()
+
+	mgr := &Manager{
+		files:                 map[uint32]*File{id1: f1, id2: f2},
+		currentWritableByLane: make(map[uint32]uint32),
+	}
+	f1.manager = mgr
+	f2.manager = mgr
+
+	set := mgr.CurrentSetNoRefresh()
+	defer func() { _ = mgr.Release(set) }()
+
+	if _, err := set.ReadUnsafe(ptr1); err != nil {
+		t.Fatalf("ReadUnsafe(ptr1): %v", err)
+	}
+	mapped1, _ := f1.mmapData.Load().([]byte)
+	if len(mapped1) == 0 {
+		t.Fatalf("expected first sealed segment to be mapped")
+	}
+	MaxMappedSealedBytes = int64(len(mapped1))
+
+	release := mgr.AcquireSealedLazyMmapBudget(0, int64(len(mapped1))*2)
+	defer release()
+
+	if _, err := set.ReadUnsafe(ptr2); err != nil {
+		t.Fatalf("ReadUnsafe(ptr2): %v", err)
+	}
+	if data, _ := f2.mmapData.Load().([]byte); len(data) == 0 {
+		t.Fatalf("expected second sealed segment to be mapped under override byte budget")
+	}
+	if got := f2.mmapReadFallbackReadAt.Load(); got != 0 {
+		t.Fatalf("unexpected fallback readat under override byte budget: %d", got)
+	}
+}
+
 func TestReadUnsafe_SealedMappedOutOfRangeRemapsToKnownFileSize(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mmap not supported on windows")

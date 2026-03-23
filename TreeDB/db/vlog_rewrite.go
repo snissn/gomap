@@ -961,6 +961,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if db.valueLogManager == nil {
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
+	releaseSealedMmapBudget := db.acquireValueLogMaintenanceSealedMmapBudget()
+	defer releaseSealedMmapBudget()
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
 	if ctx == nil {

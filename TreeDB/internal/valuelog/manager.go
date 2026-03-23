@@ -877,13 +877,16 @@ type Manager struct {
 
 	refreshScans atomic.Uint64
 
-	disableReadChecksum      bool
-	dictLookup               DictLookup
-	templateLookup           TemplateLookup
-	templateDecodeOpts       templ.DecodeOptions
-	templateDefCache         *templateDefCache
-	groupedFrameCacheEntries int
-	groupedFrameCacheMaxRaw  int
+	disableReadChecksum          bool
+	dictLookup                   DictLookup
+	templateLookup               TemplateLookup
+	templateDecodeOpts           templ.DecodeOptions
+	templateDefCache             *templateDefCache
+	groupedFrameCacheEntries     int
+	groupedFrameCacheMaxRaw      int
+	sealedLazyMmapBudgetDepth    int
+	sealedLazyMmapBudgetSegments int
+	sealedLazyMmapBudgetBytes    int64
 }
 
 func NewManager(dir string) (*Manager, error) {
@@ -1092,6 +1095,42 @@ func (m *Manager) CurrentSetNoRefresh() *Set {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.currentSetLocked()
+}
+
+// AcquireSealedLazyMmapBudget raises this manager's sealed lazy-mmap limits
+// until the returned release func is called. It only ever increases the global
+// defaults for this manager instance; ordinary readers keep using the existing
+// defaults unless a caller explicitly acquires a higher maintenance budget.
+func (m *Manager) AcquireSealedLazyMmapBudget(minSegments int, minBytes int64) func() {
+	if m == nil {
+		return func() {}
+	}
+	if minSegments < 0 {
+		minSegments = 0
+	}
+	if minBytes < 0 {
+		minBytes = 0
+	}
+	m.mu.Lock()
+	m.sealedLazyMmapBudgetDepth++
+	if minSegments > m.sealedLazyMmapBudgetSegments {
+		m.sealedLazyMmapBudgetSegments = minSegments
+	}
+	if minBytes > m.sealedLazyMmapBudgetBytes {
+		m.sealedLazyMmapBudgetBytes = minBytes
+	}
+	m.mu.Unlock()
+	return func() {
+		m.mu.Lock()
+		if m.sealedLazyMmapBudgetDepth > 0 {
+			m.sealedLazyMmapBudgetDepth--
+			if m.sealedLazyMmapBudgetDepth == 0 {
+				m.sealedLazyMmapBudgetSegments = 0
+				m.sealedLazyMmapBudgetBytes = 0
+			}
+		}
+		m.mu.Unlock()
+	}
 }
 
 // currentSetLocked builds a ref-counted snapshot.
@@ -1398,7 +1437,15 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 	if m == nil || target == nil {
 		return false, sealedLazyMmapDenyCountCap
 	}
-	if MaxMappedSealedSegments <= 0 {
+	maxMappedSealedSegments := MaxMappedSealedSegments
+	if m.sealedLazyMmapBudgetSegments > maxMappedSealedSegments {
+		maxMappedSealedSegments = m.sealedLazyMmapBudgetSegments
+	}
+	maxMappedSealedBytes := MaxMappedSealedBytes
+	if m.sealedLazyMmapBudgetBytes > maxMappedSealedBytes {
+		maxMappedSealedBytes = m.sealedLazyMmapBudgetBytes
+	}
+	if maxMappedSealedSegments <= 0 {
 		return false, sealedLazyMmapDenyCountCap
 	}
 	if target.currentWritable.Load() {
@@ -1416,12 +1463,12 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 		if len(data) > 0 {
 			mappedSealed++
 			mappedSealedBytes += uint64(len(data))
-			if !targetMapped && mappedSealed >= MaxMappedSealedSegments {
+			if !targetMapped && mappedSealed >= maxMappedSealedSegments {
 				return false, sealedLazyMmapDenyCountCap
 			}
 		}
 	}
-	if MaxMappedSealedBytes > 0 {
+	if maxMappedSealedBytes > 0 {
 		targetBytes := uint64(targetSize)
 		if targetBytes == 0 {
 			if known := target.fileSize.Load(); known > 0 {
@@ -1434,7 +1481,7 @@ func (m *Manager) allowSealedLazyMmapLocked(target *File, targetSize int64) (boo
 			}
 		}
 		if targetBytes > 0 {
-			limit := uint64(MaxMappedSealedBytes)
+			limit := uint64(maxMappedSealedBytes)
 			if targetMapped {
 				currentBytes := uint64(len(targetData))
 				if targetBytes > currentBytes {

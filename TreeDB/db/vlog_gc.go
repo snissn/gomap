@@ -53,6 +53,8 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 	if db.readOnly {
 		return stats, ErrReadOnly
 	}
+	releaseSealedMmapBudget := db.acquireValueLogMaintenanceSealedMmapBudget()
+	defer releaseSealedMmapBudget()
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
 	if ctx == nil {
