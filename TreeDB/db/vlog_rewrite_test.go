@@ -758,6 +758,108 @@ func TestValueLogRewriteOnline_SourceFileIDs_RestrictsRewriteSet(t *testing.T) {
 	}
 }
 
+func TestValueLogRewriteOnline_SourceFileIDs_UsesCachedReferencedSetForCleanup(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 210_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 210_010, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	if _, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{}); err != nil {
+		t.Fatalf("ValueLogGC: %v", err)
+	}
+
+	var cleanupScans atomic.Uint64
+	unregister := registerRewriteCleanupReferencedScanHook(func() {
+		cleanupScans.Add(1)
+	})
+	defer unregister()
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs1[0].FileID},
+		BatchSize:     8,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one rewritten record, got %d", stats.RecordsCopied)
+	}
+	if got := cleanupScans.Load(); got != 0 {
+		t.Fatalf("cleanup scan hook=%d want 0 with cached referenced set", got)
+	}
+}
+
+func TestValueLogRewriteOnline_SourceFileIDs_FallsBackCleanupScanWithoutCachedRefs(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 220_000, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("a"), 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 220_010, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("b"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	var cleanupScans atomic.Uint64
+	unregister := registerRewriteCleanupReferencedScanHook(func() {
+		cleanupScans.Add(1)
+	})
+	defer unregister()
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), ValueLogRewriteOnlineOptions{
+		SourceFileIDs: []uint32{ptrs1[0].FileID},
+		BatchSize:     8,
+	})
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one rewritten record, got %d", stats.RecordsCopied)
+	}
+	if got := cleanupScans.Load(); got == 0 {
+		t.Fatalf("cleanup scan hook=%d want > 0 without cached referenced set", got)
+	}
+}
+
 func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	dir := t.TempDir()
 

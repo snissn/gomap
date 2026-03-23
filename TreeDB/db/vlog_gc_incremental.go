@@ -366,6 +366,26 @@ func (db *DB) cacheLastValueLogRewriteReferencedSegments(commitSeq uint64, refs 
 	db.lastValueLogRewriteRefsMu.Unlock()
 }
 
+func (db *DB) cachedReferencedValueLogSegmentsForSeq(commitSeq uint64) (map[uint32]struct{}, bool) {
+	if db == nil || commitSeq == 0 {
+		return nil, false
+	}
+	db.lastValueLogRewriteRefsMu.RLock()
+	if db.lastValueLogRewriteRefs.commitSeq == commitSeq && db.lastValueLogRewriteRefs.refs != nil {
+		refs := cloneReferencedValueLogSegments(db.lastValueLogRewriteRefs.refs)
+		db.lastValueLogRewriteRefsMu.RUnlock()
+		return refs, true
+	}
+	db.lastValueLogRewriteRefsMu.RUnlock()
+
+	db.lastValueLogGCRefsMu.RLock()
+	defer db.lastValueLogGCRefsMu.RUnlock()
+	if db.lastValueLogGCRefs.commitSeq == commitSeq && db.lastValueLogGCRefs.refs != nil {
+		return cloneReferencedValueLogSegments(db.lastValueLogGCRefs.refs), true
+	}
+	return nil, false
+}
+
 // LastValueLogGCReferencedSegments returns the referenced value-log segment IDs
 // from the most recent GC pass when they still match the current commit
 // sequence.

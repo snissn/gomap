@@ -466,6 +466,11 @@ var rewritePlanLiveEstimateHook struct {
 	fn func()
 }
 
+var rewriteCleanupReferencedScanHook struct {
+	mu sync.Mutex
+	fn func()
+}
+
 func registerRewritePlanLiveEstimateHook(hook func()) func() {
 	rewritePlanLiveEstimateHook.mu.Lock()
 	prev := rewritePlanLiveEstimateHook.fn
@@ -487,6 +492,27 @@ func runRewritePlanLiveEstimateHook() {
 	}
 }
 
+func registerRewriteCleanupReferencedScanHook(hook func()) func() {
+	rewriteCleanupReferencedScanHook.mu.Lock()
+	prev := rewriteCleanupReferencedScanHook.fn
+	rewriteCleanupReferencedScanHook.fn = hook
+	rewriteCleanupReferencedScanHook.mu.Unlock()
+	return func() {
+		rewriteCleanupReferencedScanHook.mu.Lock()
+		rewriteCleanupReferencedScanHook.fn = prev
+		rewriteCleanupReferencedScanHook.mu.Unlock()
+	}
+}
+
+func runRewriteCleanupReferencedScanHook() {
+	rewriteCleanupReferencedScanHook.mu.Lock()
+	hook := rewriteCleanupReferencedScanHook.fn
+	rewriteCleanupReferencedScanHook.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+}
+
 func rewritePlanLiveBytesKeyForState(state *DBState) (valueLogRewriteLiveBytesKey, bool) {
 	if state == nil {
 		return valueLogRewriteLiveBytesKey{}, false
@@ -496,6 +522,20 @@ func rewritePlanLiveBytesKeyForState(state *DBState) (valueLogRewriteLiveBytesKe
 		rootID:     state.RootPageID,
 		systemRoot: state.SystemRootPageID,
 	}, true
+}
+
+func rewriteCleanupDerivedReferencedSegments(base map[uint32]struct{}, removed map[uint32]struct{}, added []uint32) map[uint32]struct{} {
+	refs := cloneReferencedValueLogSegments(base)
+	if refs == nil {
+		refs = make(map[uint32]struct{}, len(removed)+len(added))
+	}
+	for id := range removed {
+		delete(refs, id)
+	}
+	for _, id := range added {
+		refs[id] = struct{}{}
+	}
+	return refs
 }
 
 func (db *DB) loadCachedValueLogLiveBytes(key valueLogRewriteLiveBytesKey) (map[uint32]int64, bool) {
@@ -968,6 +1008,8 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	baseCommitSeq := db.currentCommitSeq()
+	cachedReferencedBefore, haveCachedReferencedBefore := db.cachedReferencedValueLogSegmentsForSeq(baseCommitSeq)
 
 	// Prefer no-refresh snapshots to avoid repeated filesystem scans on the hot
 	// path. Fall back to a refresh if the manager has not yet discovered any
@@ -1192,9 +1234,15 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	// rewrite is logically committed, so value-log segment bookkeeping must always
 	// complete to keep the value-log set and on-disk metadata consistent with the
 	// already-committed pointer swaps, even if the caller's context is canceled.
-	referencedAfter, err := db.referencedValueLogSegments(context.Background())
-	if err != nil {
-		return stats, err
+	referencedAfter := map[uint32]struct{}(nil)
+	if canceledErr == nil && restrictSource && haveCachedReferencedBefore {
+		referencedAfter = rewriteCleanupDerivedReferencedSegments(cachedReferencedBefore, sourceIDs, newValueIDs)
+	} else {
+		runRewriteCleanupReferencedScanHook()
+		referencedAfter, err = db.referencedValueLogSegments(context.Background())
+		if err != nil {
+			return stats, err
+		}
 	}
 	db.cacheLastValueLogRewriteReferencedSegments(db.currentCommitSeq(), referencedAfter)
 	var protectedPaths map[string]struct{}
@@ -1233,9 +1281,19 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 		}
 		_ = db.valueLogManager.Release(currentSet)
 	}
-	zombieCandidates := make(map[uint32]struct{}, len(oldValueIDs)+len(newValueIDs))
-	for id := range oldValueIDs {
-		zombieCandidates[id] = struct{}{}
+	zombieCandidatesCap := len(oldValueIDs) + len(newValueIDs)
+	if restrictSource {
+		zombieCandidatesCap = len(sourceIDs) + len(newValueIDs)
+	}
+	zombieCandidates := make(map[uint32]struct{}, zombieCandidatesCap)
+	if restrictSource {
+		for id := range sourceIDs {
+			zombieCandidates[id] = struct{}{}
+		}
+	} else {
+		for id := range oldValueIDs {
+			zombieCandidates[id] = struct{}{}
+		}
 	}
 	for _, id := range newValueIDs {
 		zombieCandidates[id] = struct{}{}
