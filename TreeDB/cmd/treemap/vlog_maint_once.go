@@ -39,7 +39,7 @@ func runVlogMaintOnce(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-maint-once", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required)")
 	asJSON := fs.Bool("json", false, "Emit machine-readable JSON")
-	mode := fs.String("mode", "checkpoint", "Maintenance mode: periodic|checkpoint|stage-confirm|age-blocked")
+	mode := fs.String("mode", "checkpoint", "Maintenance mode: periodic|checkpoint|stage-confirm|stage-confirm-exit|age-blocked")
 	seedFromPlan := fs.Bool("seed-from-plan", false, "Seed cached rewrite debt from a fresh backend rewrite plan before running")
 	clearState := fs.Bool("clear-state", false, "Clear cached rewrite debt before running")
 	disableAutoDeferred := fs.Bool("disable-auto-deferred", false, "Disable automatic deferred stage/age wakes while this command is running")
@@ -295,6 +295,16 @@ func valueLogMaintModeOptions(mode string) (treedb.DebugValueLogGenerationMainte
 			RewriteDebtDrain:      true,
 			Source:                "rewrite_stage_confirm",
 		}, nil
+	case "stage-confirm-exit":
+		return treedb.DebugValueLogGenerationMaintenanceOptions{
+			RunGC:                 true,
+			BypassQuiet:           true,
+			SkipCheckpoint:        false,
+			SkipRetainedPruneWait: true,
+			RewriteDebtDrain:      true,
+			SuppressFollowOn:      true,
+			Source:                "rewrite_stage_confirm_exit",
+		}, nil
 	case "age-blocked":
 		return treedb.DebugValueLogGenerationMaintenanceOptions{
 			RunGC:                 true,
@@ -305,7 +315,7 @@ func valueLogMaintModeOptions(mode string) (treedb.DebugValueLogGenerationMainte
 			Source:                "rewrite_age_blocked",
 		}, nil
 	default:
-		return treedb.DebugValueLogGenerationMaintenanceOptions{}, fmt.Errorf("unsupported -mode=%q (expected periodic|checkpoint|stage-confirm|age-blocked)", mode)
+		return treedb.DebugValueLogGenerationMaintenanceOptions{}, fmt.Errorf("unsupported -mode=%q (expected periodic|checkpoint|stage-confirm|stage-confirm-exit|age-blocked)", mode)
 	}
 }
 

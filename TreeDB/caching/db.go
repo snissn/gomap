@@ -12115,7 +12115,7 @@ func shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(
 	if !stagePending || !vlogGenerationIsStageConfirmSource(opts) {
 		return false
 	}
-	if !stageConfirmDue && opts.debugSource != "rewrite_stage_confirm_exit" {
+	if !stageConfirmDue && !vlogGenerationAllowsImmediateStageConfirm(opts) {
 		return false
 	}
 	return len(queue) > 0
@@ -12131,7 +12131,7 @@ func shouldUsePersistedVlogGenerationRewriteLedgerForConfirm(
 	if !stagePending || !vlogGenerationIsStageConfirmSource(opts) {
 		return false
 	}
-	if !stageConfirmDue && opts.debugSource != "rewrite_stage_confirm_exit" {
+	if !stageConfirmDue && !vlogGenerationAllowsImmediateStageConfirm(opts) {
 		return false
 	}
 	return len(queue) > 0 && len(ledger) > 0
@@ -12280,6 +12280,7 @@ type vlogGenerationMaintenanceOptions struct {
 	skipRetainedPruneWait bool
 	skipCheckpoint        bool
 	rewriteDebtDrain      bool
+	suppressFollowOn      bool
 	debugSource           string
 }
 
@@ -12299,6 +12300,10 @@ func vlogGenerationIsStageConfirmSource(opts vlogGenerationMaintenanceOptions) b
 
 func vlogGenerationIsAgeBlockedSource(opts vlogGenerationMaintenanceOptions) bool {
 	return opts.debugSource == "rewrite_age_blocked" || opts.debugSource == "rewrite_age_blocked_exit"
+}
+
+func vlogGenerationAllowsImmediateStageConfirm(opts vlogGenerationMaintenanceOptions) bool {
+	return opts.suppressFollowOn && opts.debugSource == "rewrite_stage_confirm_exit"
 }
 
 func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
@@ -12448,6 +12453,9 @@ func (db *DB) maybeRunVlogGenerationExitStageConfirm() {
 		return
 	}
 	now := time.Now()
+	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval)) {
+		return
+	}
 	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
 	if err != nil || len(rewriteQueue) == 0 {
 		return
@@ -12459,10 +12467,9 @@ func (db *DB) maybeRunVlogGenerationExitStageConfirm() {
 		return
 	}
 	db.debugVlogMaintf(
-		"rewrite_stage_confirm_exit_schedule queued=%d observed_age_ms=%d due=%t",
+		"rewrite_stage_confirm_exit_schedule queued=%d observed_age_ms=%d",
 		len(rewriteQueue),
 		now.Sub(time.Unix(0, stageObservedAt)).Milliseconds(),
-		!now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval)),
 	)
 	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
 		bypassQuiet:           true,
@@ -12610,6 +12617,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.vlogGenerationDeferredMaintenancePending.Load(),
 		)
 		db.vlogGenerationMaintenanceActive.Store(false)
+		if opts.suppressFollowOn {
+			return
+		}
 		// If a deferred confirmation/age wake became due while this pass held the
 		// scheduler active, requeue it immediately on exit instead of relying on
 		// the original retry goroutine to still be alive.
