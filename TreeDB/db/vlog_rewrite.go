@@ -1092,6 +1092,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	swaps := make([]rewriteSwap, 0, batchSize)
 	localityPolicy := normalizeValueLogRewriteLocalityPolicy(opts.LocalityPolicy)
 	candidates := make([]rewriteCandidate, 0, batchSize)
+	var readScratch []byte
 	var canceledErr error
 
 	flushBatch := func() error {
@@ -1105,13 +1106,16 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			return err
 		}
 		for _, candidate := range candidates {
-			val, err := db.valueLogManager.Read(candidate.oldPtr)
+			val, usedDst, err := db.valueLogManager.ReadUnsafeTo(candidate.oldPtr, readScratch[:0])
 			if err != nil {
 				return err
 			}
 			newPtr, err := writer.appendValue(startRID, val)
 			if err != nil {
 				return err
+			}
+			if usedDst {
+				readScratch = val[:0]
 			}
 			startRID++
 			stats.RecordsCopied++
@@ -1354,6 +1358,7 @@ type leafRefRewriteCtx struct {
 
 	sourceIDs map[uint32]struct{}
 
+	leafScratch []byte
 	leafMap     map[uint64]uint64 // old leafref id -> new leafref id
 	internalMap map[uint64]uint64 // old internal page id -> new page id
 
@@ -1391,7 +1396,18 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		if c.writer == nil || c.ridAlloc == nil {
 			return id, false, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
 		}
-		leafPage, err := c.leafReader.ReadUnsafe(ptr)
+		var (
+			leafPage []byte
+			err      error
+		)
+		if toer, ok := c.leafReader.(unsafeToReader); ok {
+			leafPage, _, err = toer.ReadUnsafeTo(ptr, c.leafScratch[:0])
+			if err == nil && len(leafPage) > 0 && len(leafPage) <= cap(c.leafScratch) {
+				c.leafScratch = leafPage[:0]
+			}
+		} else {
+			leafPage, err = c.leafReader.ReadUnsafe(ptr)
+		}
 		if err != nil {
 			return id, false, err
 		}
