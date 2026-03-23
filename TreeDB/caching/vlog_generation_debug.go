@@ -24,6 +24,7 @@ type DebugValueLogGenerationMaintenanceOptions struct {
 	SkipCheckpoint        bool
 	SkipRetainedPruneWait bool
 	RewriteDebtDrain      bool
+	RewriteBudgetTokens   int64
 	SuppressFollowOn      bool
 	Source                string
 }
@@ -74,6 +75,9 @@ func (db *DB) DebugSetValueLogGenerationRewriteLedger(segments []backenddb.Value
 func (db *DB) DebugRunValueLogGenerationMaintenanceOnce(opts DebugValueLogGenerationMaintenanceOptions) (bool, error) {
 	if db == nil {
 		return false, fmt.Errorf("cachingdb: nil db")
+	}
+	if opts.RewriteBudgetTokens > 0 {
+		db.vlogGenerationRewriteBudgetTokensBytes.Store(opts.RewriteBudgetTokens)
 	}
 	acquired := db.maybeRunVlogGenerationMaintenanceWithOptions(opts.RunGC, vlogGenerationMaintenanceOptions{
 		bypassQuiet:           opts.BypassQuiet,

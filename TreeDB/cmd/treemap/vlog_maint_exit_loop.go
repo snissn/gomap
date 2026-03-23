@@ -57,6 +57,7 @@ func runVlogMaintExitLoop(dir string, args []string) {
 	reseedMaxBytes := fs.Int64("reseed-max-bytes", 8<<30, "Backend reseed plan live-byte selection cap (0=none)")
 	reseedMinStaleRatio := fs.Float64("reseed-min-stale-ratio", 0.50, "Backend reseed plan minimum per-segment stale ratio (0..1)")
 	reseedMinStaleBytes := fs.Int64("reseed-min-stale-bytes", 1, "Backend reseed plan minimum per-segment stale bytes")
+	rewriteBudgetTokens := fs.Int64("rewrite-budget-tokens", 1<<30, "Cached rewrite budget tokens to preseed for each explicit exit pass")
 	reseedStageObservedAgo := fs.Duration("reseed-stage-observed-ago", 31*time.Second, "When reseeding a ledger, record the stage observation this far in the past so the next pass can spend it immediately")
 	maxReseeds := fs.Int("max-reseeds", 1, "Maximum number of backend plan reseed waves to inject per loop invocation")
 	_ = fs.Parse(args)
@@ -100,7 +101,7 @@ func runVlogMaintExitLoop(dir string, args []string) {
 
 	reseedCount := 0
 	for pass := 1; pass <= *maxPasses; pass++ {
-		passReport, afterState, err := runOneVlogMaintExitLoopPass(db, dir, pass, *waitIdle)
+		passReport, afterState, err := runOneVlogMaintExitLoopPass(db, dir, pass, *waitIdle, *rewriteBudgetTokens)
 		if err != nil {
 			fatalf("exit maintenance pass %d: %v", pass, err)
 		}
@@ -173,7 +174,7 @@ func runVlogMaintExitLoop(dir string, args []string) {
 	}
 }
 
-func runOneVlogMaintExitLoopPass(db *treedb.DB, dir string, pass int, waitIdle time.Duration) (valueLogMaintExitLoopPassReport, treedb.DebugValueLogGenerationState, error) {
+func runOneVlogMaintExitLoopPass(db *treedb.DB, dir string, pass int, waitIdle time.Duration, rewriteBudgetTokens int64) (valueLogMaintExitLoopPassReport, treedb.DebugValueLogGenerationState, error) {
 	start := time.Now()
 	beforeState, err := db.DebugValueLogGenerationState()
 	if err != nil {
@@ -187,9 +188,10 @@ func runOneVlogMaintExitLoopPass(db *treedb.DB, dir string, pass int, waitIdle t
 	acquired, err := db.DebugRunValueLogGenerationMaintenanceOnce(treedb.DebugValueLogGenerationMaintenanceOptions{
 		RunGC:                 true,
 		BypassQuiet:           true,
-		SkipCheckpoint:        false,
+		SkipCheckpoint:        true,
 		SkipRetainedPruneWait: true,
 		RewriteDebtDrain:      true,
+		RewriteBudgetTokens:   rewriteBudgetTokens,
 		SuppressFollowOn:      true,
 		Source:                "rewrite_stage_confirm_exit",
 	})

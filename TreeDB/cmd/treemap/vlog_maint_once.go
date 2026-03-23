@@ -55,6 +55,7 @@ func runVlogMaintOnce(dir string, args []string) {
 	maxBytes := fs.Int64("rewrite-max-bytes", 0, "Seed-plan live-byte selection cap (0=none)")
 	minStaleRatio := fs.Float64("rewrite-min-stale-ratio", 0, "Seed-plan minimum per-segment stale ratio (0..1)")
 	minStaleBytes := fs.Int64("rewrite-min-stale-bytes", 0, "Seed-plan minimum per-segment stale bytes")
+	rewriteBudgetTokens := fs.Int64("rewrite-budget-tokens", 0, "Override cached rewrite budget tokens for this explicit maintenance pass only (0 keeps runtime value)")
 	_ = fs.Parse(args)
 
 	if !*rw {
@@ -147,6 +148,7 @@ func runVlogMaintOnce(dir string, args []string) {
 	if err != nil {
 		fatalf("%v", err)
 	}
+	opts.RewriteBudgetTokens = *rewriteBudgetTokens
 
 	if *allocsprofile != "" {
 		runtime.MemProfileRate = 1
@@ -299,7 +301,7 @@ func valueLogMaintModeOptions(mode string) (treedb.DebugValueLogGenerationMainte
 		return treedb.DebugValueLogGenerationMaintenanceOptions{
 			RunGC:                 true,
 			BypassQuiet:           true,
-			SkipCheckpoint:        false,
+			SkipCheckpoint:        true,
 			SkipRetainedPruneWait: true,
 			RewriteDebtDrain:      true,
 			SuppressFollowOn:      true,

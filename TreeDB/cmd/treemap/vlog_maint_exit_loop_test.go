@@ -6,6 +6,22 @@ import (
 	"testing"
 )
 
+func TestValueLogMaintModeOptionsStageConfirmExitSkipsCheckpoint(t *testing.T) {
+	opts, err := valueLogMaintModeOptions("stage-confirm-exit")
+	if err != nil {
+		t.Fatalf("valueLogMaintModeOptions: %v", err)
+	}
+	if !opts.SkipCheckpoint {
+		t.Fatalf("SkipCheckpoint=false want true")
+	}
+	if !opts.RewriteDebtDrain {
+		t.Fatalf("RewriteDebtDrain=false want true")
+	}
+	if !opts.SuppressFollowOn {
+		t.Fatalf("SuppressFollowOn=false want true")
+	}
+}
+
 func TestShouldStopVlogMaintExitLoop(t *testing.T) {
 	t.Run("continues while queue shrinks and reclaim stays positive", func(t *testing.T) {
 		stop, reason := shouldStopVlogMaintExitLoop(valueLogMaintExitLoopPassReport{

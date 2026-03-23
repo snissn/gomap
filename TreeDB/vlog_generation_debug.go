@@ -28,6 +28,7 @@ type DebugValueLogGenerationMaintenanceOptions struct {
 	SkipCheckpoint        bool
 	SkipRetainedPruneWait bool
 	RewriteDebtDrain      bool
+	RewriteBudgetTokens   int64
 	SuppressFollowOn      bool
 	Source                string
 }
@@ -82,6 +83,7 @@ func (db *DB) DebugRunValueLogGenerationMaintenanceOnce(opts DebugValueLogGenera
 		SkipCheckpoint:        opts.SkipCheckpoint,
 		SkipRetainedPruneWait: opts.SkipRetainedPruneWait,
 		RewriteDebtDrain:      opts.RewriteDebtDrain,
+		RewriteBudgetTokens:   opts.RewriteBudgetTokens,
 		SuppressFollowOn:      opts.SuppressFollowOn,
 		Source:                opts.Source,
 	})
