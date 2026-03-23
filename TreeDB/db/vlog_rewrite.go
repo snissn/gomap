@@ -1633,10 +1633,18 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 
 func nextRewriteRIDStart(segments []logSegment) (uint64, error) {
 	maxRID := uint64(0)
+	newestByLane := make(map[uint32]logSegment)
 	for _, segment := range segments {
 		if !segment.valueLog {
 			continue
 		}
+		lane, _ := valuelog.DecodeFileID(segment.fileID)
+		current, ok := newestByLane[lane]
+		if !ok || segment.seq > current.seq {
+			newestByLane[lane] = segment
+		}
+	}
+	for _, segment := range newestByLane {
 		reader, err := valuelog.NewReader(segment.path, segment.fileID)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -1975,9 +1983,10 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 
 	alloc := &pagerAllocator{p: newPager}
 	ptrMap := make(map[recordKey]recordLoc)
+	leafReader := newValueReader(state.ValueLogSet)
 
 	buildTree := func(root uint64) (uint64, error) {
-		iter := tree.New(d.Pager(), newValueReader(state.ValueLogSet), root).
+		iter := tree.New(d.Pager(), leafReader, root).
 			IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
 		rewriter := &rewriteIterator{
 			inner:  iter,
@@ -2016,6 +2025,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		_ = d.Close()
 		return stats, err
 	}
+	stats.RecordsCopied = writer.records
 
 	meta := d.meta
 	meta.CommitSeq++
@@ -2248,6 +2258,42 @@ type rewriteIterator struct {
 	flags  byte
 }
 
+func rewriteValueLogPtrWithMap(ptr page.ValuePtr, ptrMap map[recordKey]recordLoc, vlogs *valuelog.Set, writer *rewriteWriter) (page.ValuePtr, error) {
+	if !page.IsValueLogFileID(ptr.FileID) {
+		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: expected value log pointer, got file %d", ptr.FileID)
+	}
+	if ptrMap == nil {
+		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: pointer rewrite map unavailable")
+	}
+	if vlogs == nil {
+		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: value-log snapshot unavailable")
+	}
+	if writer == nil {
+		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: rewrite writer unavailable")
+	}
+	key := recordKey{
+		fileID: ptr.FileID,
+		offset: ptr.Offset,
+	}
+	if cached, ok := ptrMap[key]; ok {
+		return page.ValuePtr{Offset: cached.offset, FileID: cached.fileID, Length: ptr.Length}, nil
+	}
+	f := vlogs.Files[ptr.FileID]
+	if f == nil || f.File == nil {
+		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: missing segment for pointer file=%d offset=%d length=%d", ptr.FileID, ptr.Offset, ptr.Length)
+	}
+	raw, err := readRawRecord(f.File, ptr)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	newPtr, err := writer.appendRaw(raw, ptr.Length)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	ptrMap[key] = recordLoc{fileID: newPtr.FileID, offset: newPtr.Offset}
+	return page.ValuePtr{Offset: newPtr.Offset, FileID: newPtr.FileID, Length: ptr.Length}, nil
+}
+
 type iteratorWithEntry interface {
 	Valid() bool
 	Next()
@@ -2298,33 +2344,10 @@ func (it *rewriteIterator) ensure() {
 }
 
 func (it *rewriteIterator) rewritePtr(ptr page.ValuePtr) (page.ValuePtr, error) {
-	if !page.IsValueLogFileID(ptr.FileID) {
-		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: expected value log pointer, got file %d", ptr.FileID)
-	}
 	if it.ptrMap == nil {
 		it.ptrMap = make(map[recordKey]recordLoc)
 	}
-	key := recordKey{
-		fileID: ptr.FileID,
-		offset: ptr.Offset,
-	}
-	if cached, ok := it.ptrMap[key]; ok {
-		return page.ValuePtr{Offset: cached.offset, FileID: cached.fileID, Length: ptr.Length}, nil
-	}
-	f := it.vlogs.Files[ptr.FileID]
-	if f == nil || f.File == nil {
-		return page.ValuePtr{}, fmt.Errorf("vlog-rewrite: missing segment for pointer file=%d offset=%d length=%d", ptr.FileID, ptr.Offset, ptr.Length)
-	}
-	raw, err := readRawRecord(f.File, ptr)
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	newPtr, err := it.writer.appendRaw(raw, ptr.Length)
-	if err != nil {
-		return page.ValuePtr{}, err
-	}
-	it.ptrMap[key] = recordLoc{fileID: newPtr.FileID, offset: newPtr.Offset}
-	return page.ValuePtr{Offset: newPtr.Offset, FileID: newPtr.FileID, Length: ptr.Length}, nil
+	return rewriteValueLogPtrWithMap(ptr, it.ptrMap, it.vlogs, it.writer)
 }
 
 func (it *rewriteIterator) Valid() bool {

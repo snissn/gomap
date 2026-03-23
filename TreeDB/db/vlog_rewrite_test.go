@@ -209,6 +209,65 @@ func TestNextRewriteRIDStart_IgnoresSegmentRemovedAfterScan(t *testing.T) {
 	}
 }
 
+func TestNextRewriteRIDStart_ScansNewestSegmentPerLaneOnly(t *testing.T) {
+	dir := t.TempDir()
+
+	oldPath := filepath.Join(dir, "value-l0-000001.log")
+	if err := os.WriteFile(oldPath, []byte{0x01}, 0o644); err != nil {
+		t.Fatalf("WriteFile old: %v", err)
+	}
+	oldID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID old: %v", err)
+	}
+
+	newPath := filepath.Join(dir, "value-l0-000002.log")
+	newID, err := valuelog.EncodeFileID(0, 2)
+	if err != nil {
+		t.Fatalf("EncodeFileID new: %v", err)
+	}
+	newWriter, err := valuelog.NewWriter(newPath, newID)
+	if err != nil {
+		t.Fatalf("NewWriter new: %v", err)
+	}
+	if _, err := newWriter.Append(0, nil, 100, []byte("lane0-new")); err != nil {
+		t.Fatalf("Append new: %v", err)
+	}
+	if err := newWriter.Close(); err != nil {
+		t.Fatalf("Close new: %v", err)
+	}
+
+	otherPath := filepath.Join(dir, "value-l1-000001.log")
+	otherID, err := valuelog.EncodeFileID(1, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID other: %v", err)
+	}
+	otherWriter, err := valuelog.NewWriter(otherPath, otherID)
+	if err != nil {
+		t.Fatalf("NewWriter other: %v", err)
+	}
+	if _, err := otherWriter.Append(0, nil, 90, []byte("lane1")); err != nil {
+		t.Fatalf("Append other: %v", err)
+	}
+	if err := otherWriter.Close(); err != nil {
+		t.Fatalf("Close other: %v", err)
+	}
+
+	segments := []logSegment{
+		{path: oldPath, fileID: oldID, valueLog: true, seq: 1},
+		{path: newPath, fileID: newID, valueLog: true, seq: 2},
+		{path: otherPath, fileID: otherID, valueLog: true, seq: 1},
+	}
+
+	start, err := nextRewriteRIDStart(segments)
+	if err != nil {
+		t.Fatalf("nextRewriteRIDStart: %v", err)
+	}
+	if start != 101 {
+		t.Fatalf("start=%d want 101", start)
+	}
+}
+
 func TestValueLogRewrite_HealthMetadata_PreservedAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 
