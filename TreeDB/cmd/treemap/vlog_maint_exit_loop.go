@@ -198,7 +198,7 @@ func shouldStopVlogMaintExitLoop(pass valueLogMaintExitLoopPassReport, passNum i
 	if pass.ReclaimedBytes < minReclaimBytes {
 		return true, "low_reclaim"
 	}
-	if stopQueueNondecrease && pass.QueueAfter >= pass.QueueBefore {
+	if stopQueueNondecrease && pass.QueueBefore > 0 && pass.QueueAfter >= pass.QueueBefore {
 		return true, "queue_nondecreasing"
 	}
 	return false, ""

@@ -18,12 +18,23 @@ func TestShouldStopVlogMaintExitLoop(t *testing.T) {
 		}
 	})
 
-	t.Run("stops when queue does not shrink", func(t *testing.T) {
+	t.Run("stops when existing queue does not shrink", func(t *testing.T) {
 		stop, reason := shouldStopVlogMaintExitLoop(valueLogMaintExitLoopPassReport{
 			ReclaimedBytes: 513 << 20,
 			QueueBefore:    0,
 			QueueAfter:     2,
 		}, 1, 3, 1, true)
+		if stop {
+			t.Fatalf("stop=%t reason=%q want continue", stop, reason)
+		}
+	})
+
+	t.Run("stops when queued work does not shrink", func(t *testing.T) {
+		stop, reason := shouldStopVlogMaintExitLoop(valueLogMaintExitLoopPassReport{
+			ReclaimedBytes: 1,
+			QueueBefore:    2,
+			QueueAfter:     2,
+		}, 2, 3, 1, true)
 		if !stop || reason != "queue_nondecreasing" {
 			t.Fatalf("stop=%t reason=%q want queue_nondecreasing", stop, reason)
 		}
