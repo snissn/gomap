@@ -57,7 +57,7 @@ func runVlogMaintExitLoop(dir string, args []string) {
 	reseedMaxBytes := fs.Int64("reseed-max-bytes", 8<<30, "Backend reseed plan live-byte selection cap (0=none)")
 	reseedMinStaleRatio := fs.Float64("reseed-min-stale-ratio", 0.50, "Backend reseed plan minimum per-segment stale ratio (0..1)")
 	reseedMinStaleBytes := fs.Int64("reseed-min-stale-bytes", 1, "Backend reseed plan minimum per-segment stale bytes")
-	rewriteBudgetTokens := fs.Int64("rewrite-budget-tokens", 1<<30, "Cached rewrite budget tokens to preseed for each explicit exit pass")
+	rewriteBudgetTokens := fs.Int64("rewrite-budget-tokens", 2<<30, "Cached rewrite budget tokens to preseed for each explicit exit pass")
 	reseedStageObservedAgo := fs.Duration("reseed-stage-observed-ago", 31*time.Second, "When reseeding a ledger, record the stage observation this far in the past so the next pass can spend it immediately")
 	maxReseeds := fs.Int("max-reseeds", 1, "Maximum number of backend plan reseed waves to inject per loop invocation")
 	_ = fs.Parse(args)
