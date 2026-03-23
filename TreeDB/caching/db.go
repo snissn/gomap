@@ -10826,14 +10826,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 }
 
 func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
-	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true)
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true, false)
 }
 
 func (db *DB) appendValueLogOneRaw(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
-	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true)
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true, false)
 }
 
-func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool) (page.ValuePtr, string, error) {
+func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool, leafPage bool) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
@@ -10875,6 +10875,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value))
+	if leafPage {
+		writeMode, blockCodec, selectorProbe = db.resolveLeafPageVlogWriteMode(l, len(value))
+	}
 	probeCompression := selectorProbe
 	if writeMode != vlogWriteDict {
 		dictID = 0

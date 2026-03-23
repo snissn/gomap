@@ -126,6 +126,34 @@ func TestVlogCompressionSelector_BlockCodecSelection(t *testing.T) {
 	}
 }
 
+func TestResolveLeafPageVlogWriteMode_DefaultAutoPrefersSnappyBlock(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogBlockCodec:      valuelog.BlockCodecLZ4,
+	}
+	mode, codec, probe := db.resolveLeafPageVlogWriteMode(&lane{}, 4096)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("got mode=%v codec=%v probe=%t want block/snappy/no-probe", mode, codec, probe)
+	}
+
+	db.valueLogCompressionMode = uint8(vlogCompressionDefault)
+	mode, codec, probe = db.resolveLeafPageVlogWriteMode(&lane{}, 4096)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("default got mode=%v codec=%v probe=%t want block/snappy/no-probe", mode, codec, probe)
+	}
+}
+
+func TestResolveLeafPageVlogWriteMode_ExplicitBlockPreservesConfiguredCodec(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionBlock),
+		valueLogBlockCodec:      valuelog.BlockCodecLZ4,
+	}
+	mode, codec, probe := db.resolveLeafPageVlogWriteMode(&lane{}, 4096)
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecLZ4 || probe {
+		t.Fatalf("got mode=%v codec=%v probe=%t want explicit block/lz4/no-probe", mode, codec, probe)
+	}
+}
+
 func TestVlogCompressionSelector_SnapshotCounters(t *testing.T) {
 	s := newVlogCompressionSelector(vlogAutoBalanced, 1024, 256)
 	s.observe(vlogWriteOff, valuelog.BlockCodecSnappy, 256, 256, 256, false)
