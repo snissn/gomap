@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -25,6 +26,8 @@ type valueLogMaintExitLoopPassReport struct {
 	RunMillis      int64 `json:"run_millis"`
 	WaitIdleMillis int64 `json:"wait_idle_millis"`
 	TotalMillis    int64 `json:"total_millis"`
+	Reseeded       bool  `json:"reseeded,omitempty"`
+	ReseedSelected int   `json:"reseed_selected,omitempty"`
 }
 
 type valueLogMaintExitLoopReport struct {
@@ -49,6 +52,13 @@ func runVlogMaintExitLoop(dir string, args []string) {
 	maxPasses := fs.Int("max-passes", 6, "Maximum number of explicit stage-confirm-exit passes to run")
 	minReclaimBytes := fs.Int64("min-reclaim-bytes", 1, "Stop after a pass if reclaimed bytes are below this threshold")
 	stopQueueNondecrease := fs.Bool("stop-queue-nondecrease", true, "Stop after a pass if rewrite queue size does not shrink")
+	reseedFromPlanWhenIdle := fs.Bool("reseed-from-plan-when-idle", true, "When the staged/queued exit debt drains, seed one more explicit wave from a fresh backend rewrite plan")
+	reseedMaxSegments := fs.Int("reseed-max-segments", 64, "Backend reseed plan selection cap in segments (0=none)")
+	reseedMaxBytes := fs.Int64("reseed-max-bytes", 8<<30, "Backend reseed plan live-byte selection cap (0=none)")
+	reseedMinStaleRatio := fs.Float64("reseed-min-stale-ratio", 0, "Backend reseed plan minimum per-segment stale ratio (0..1)")
+	reseedMinStaleBytes := fs.Int64("reseed-min-stale-bytes", 1, "Backend reseed plan minimum per-segment stale bytes")
+	reseedStageObservedAgo := fs.Duration("reseed-stage-observed-ago", 31*time.Second, "When reseeding a ledger, record the stage observation this far in the past so the next pass can spend it immediately")
+	maxReseeds := fs.Int("max-reseeds", 1, "Maximum number of backend plan reseed waves to inject per loop invocation")
 	_ = fs.Parse(args)
 
 	if !*rw {
@@ -88,14 +98,40 @@ func runVlogMaintExitLoop(dir string, args []string) {
 		FinalBytes:           initialBytes,
 	}
 
+	reseedCount := 0
 	for pass := 1; pass <= *maxPasses; pass++ {
-		passReport, err := runOneVlogMaintExitLoopPass(db, dir, pass, *waitIdle)
+		passReport, afterState, err := runOneVlogMaintExitLoopPass(db, dir, pass, *waitIdle)
 		if err != nil {
 			fatalf("exit maintenance pass %d: %v", pass, err)
+		}
+		if *reseedFromPlanWhenIdle && reseedCount < *maxReseeds && pass < *maxPasses && len(afterState.RewriteSourceFileIDs) == 0 && !afterState.RewriteStagePending {
+			reseeded, selected, err := reseedVlogMaintExitLoopIfIdle(db, treedb.ValueLogRewriteOnlineOptions{
+				MaxSourceSegments:    *reseedMaxSegments,
+				MaxSourceBytes:       *reseedMaxBytes,
+				MinSegmentStaleRatio: *reseedMinStaleRatio,
+				MinSegmentStaleBytes: *reseedMinStaleBytes,
+			}, *reseedStageObservedAgo)
+			if err != nil {
+				fatalf("exit maintenance pass %d reseed: %v", pass, err)
+			}
+			if reseeded {
+				reseedCount++
+				state, err := db.DebugValueLogGenerationState()
+				if err != nil {
+					fatalf("debug state after reseed on pass %d: %v", pass, err)
+				}
+				passReport.Reseeded = true
+				passReport.ReseedSelected = selected
+				passReport.QueueAfter = len(state.RewriteSourceFileIDs)
+				passReport.StageAfter = state.RewriteStagePending
+			}
 		}
 		report.Passes = append(report.Passes, passReport)
 		report.FinalBytes = passReport.AfterBytes
 		report.TotalReclaimedBytes = report.InitialBytes - report.FinalBytes
+		if passReport.Reseeded {
+			continue
+		}
 		if stop, reason := shouldStopVlogMaintExitLoop(passReport, pass, *maxPasses, *minReclaimBytes, *stopQueueNondecrease); stop {
 			report.StopReason = reason
 			break
@@ -118,9 +154,11 @@ func runVlogMaintExitLoop(dir string, args []string) {
 	fmt.Printf("initial_bytes=%d final_bytes=%d reclaimed_bytes=%d stop_reason=%s\n", report.InitialBytes, report.FinalBytes, report.TotalReclaimedBytes, report.StopReason)
 	for _, pass := range report.Passes {
 		fmt.Printf(
-			"pass=%d acquired=%t timing_ms: run=%d wait_idle=%d total=%d bytes=%d->%d reclaim=%d queue=%d->%d stage=%t->%t\n",
+			"pass=%d acquired=%t reseeded=%t reseed_selected=%d timing_ms: run=%d wait_idle=%d total=%d bytes=%d->%d reclaim=%d queue=%d->%d stage=%t->%t\n",
 			pass.Pass,
 			pass.Acquired,
+			pass.Reseeded,
+			pass.ReseedSelected,
 			pass.RunMillis,
 			pass.WaitIdleMillis,
 			pass.TotalMillis,
@@ -135,15 +173,15 @@ func runVlogMaintExitLoop(dir string, args []string) {
 	}
 }
 
-func runOneVlogMaintExitLoopPass(db *treedb.DB, dir string, pass int, waitIdle time.Duration) (valueLogMaintExitLoopPassReport, error) {
+func runOneVlogMaintExitLoopPass(db *treedb.DB, dir string, pass int, waitIdle time.Duration) (valueLogMaintExitLoopPassReport, treedb.DebugValueLogGenerationState, error) {
 	start := time.Now()
 	beforeState, err := db.DebugValueLogGenerationState()
 	if err != nil {
-		return valueLogMaintExitLoopPassReport{}, fmt.Errorf("debug state before pass: %w", err)
+		return valueLogMaintExitLoopPassReport{}, treedb.DebugValueLogGenerationState{}, fmt.Errorf("debug state before pass: %w", err)
 	}
 	beforeBytes, err := dirLogicalSizeBytes(dir)
 	if err != nil {
-		return valueLogMaintExitLoopPassReport{}, fmt.Errorf("dir size before pass: %w", err)
+		return valueLogMaintExitLoopPassReport{}, treedb.DebugValueLogGenerationState{}, fmt.Errorf("dir size before pass: %w", err)
 	}
 	runStart := time.Now()
 	acquired, err := db.DebugRunValueLogGenerationMaintenanceOnce(treedb.DebugValueLogGenerationMaintenanceOptions{
@@ -157,23 +195,23 @@ func runOneVlogMaintExitLoopPass(db *treedb.DB, dir string, pass int, waitIdle t
 	})
 	runMillis := time.Since(runStart).Milliseconds()
 	if err != nil {
-		return valueLogMaintExitLoopPassReport{}, fmt.Errorf("run maintenance: %w", err)
+		return valueLogMaintExitLoopPassReport{}, treedb.DebugValueLogGenerationState{}, fmt.Errorf("run maintenance: %w", err)
 	}
 	waitMillis := int64(0)
 	if waitIdle > 0 {
 		waitStart := time.Now()
 		if err := db.DebugWaitValueLogGenerationIdle(waitIdle); err != nil {
-			return valueLogMaintExitLoopPassReport{}, fmt.Errorf("wait idle: %w", err)
+			return valueLogMaintExitLoopPassReport{}, treedb.DebugValueLogGenerationState{}, fmt.Errorf("wait idle: %w", err)
 		}
 		waitMillis = time.Since(waitStart).Milliseconds()
 	}
 	afterState, err := db.DebugValueLogGenerationState()
 	if err != nil {
-		return valueLogMaintExitLoopPassReport{}, fmt.Errorf("debug state after pass: %w", err)
+		return valueLogMaintExitLoopPassReport{}, treedb.DebugValueLogGenerationState{}, fmt.Errorf("debug state after pass: %w", err)
 	}
 	afterBytes, err := dirLogicalSizeBytes(dir)
 	if err != nil {
-		return valueLogMaintExitLoopPassReport{}, fmt.Errorf("dir size after pass: %w", err)
+		return valueLogMaintExitLoopPassReport{}, treedb.DebugValueLogGenerationState{}, fmt.Errorf("dir size after pass: %w", err)
 	}
 	return valueLogMaintExitLoopPassReport{
 		Pass:           pass,
@@ -188,7 +226,32 @@ func runOneVlogMaintExitLoopPass(db *treedb.DB, dir string, pass int, waitIdle t
 		RunMillis:      runMillis,
 		WaitIdleMillis: waitMillis,
 		TotalMillis:    time.Since(start).Milliseconds(),
-	}, nil
+	}, afterState, nil
+}
+
+func reseedVlogMaintExitLoopIfIdle(db *treedb.DB, opts treedb.ValueLogRewriteOnlineOptions, stageObservedAgo time.Duration) (bool, int, error) {
+	if db == nil {
+		return false, 0, nil
+	}
+	plan, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		return false, 0, err
+	}
+	switch {
+	case len(plan.SelectedSegments) > 0:
+		stageObservedAt := time.Now().Add(-stageObservedAgo).UnixNano()
+		if err := db.DebugSetValueLogGenerationRewriteLedger(plan.SelectedSegments, true, stageObservedAt); err != nil {
+			return false, 0, err
+		}
+		return true, len(plan.SelectedSegments), nil
+	case len(plan.SourceFileIDs) > 0:
+		if err := db.DebugSetValueLogGenerationRewriteQueue(plan.SourceFileIDs); err != nil {
+			return false, 0, err
+		}
+		return true, len(plan.SourceFileIDs), nil
+	default:
+		return false, 0, nil
+	}
 }
 
 func shouldStopVlogMaintExitLoop(pass valueLogMaintExitLoopPassReport, passNum int, maxPasses int, minReclaimBytes int64, stopQueueNondecrease bool) (bool, string) {
