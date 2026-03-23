@@ -883,6 +883,13 @@ func TestValueLogRewriteOnline_ReserveRIDsUsesExternalAllocator(t *testing.T) {
 	}
 	closeNoErr(t, b)
 
+	// If ValueLogRewriteOnline still scans on-disk RIDs despite ReserveRIDs
+	// being supplied, this corrupt segment would make nextRewriteRIDStart fail.
+	walDir := filepath.Join(dir, "wal")
+	if err := os.WriteFile(filepath.Join(walDir, "value-l7-999999.log"), []byte("not-a-valid-vlog"), 0o644); err != nil {
+		t.Fatalf("write bogus value-log segment: %v", err)
+	}
+
 	segmentsBefore, err := listWALSegments(dir)
 	if err != nil {
 		t.Fatalf("listWALSegments before: %v", err)

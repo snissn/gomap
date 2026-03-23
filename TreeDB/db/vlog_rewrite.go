@@ -1065,9 +1065,12 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
-	nextRID, err := nextRewriteRIDStart(segments)
-	if err != nil {
-		return stats, err
+	nextRID := uint64(0)
+	if opts.ReserveRIDs == nil {
+		nextRID, err = nextRewriteRIDStart(segments)
+		if err != nil {
+			return stats, err
+		}
 	}
 	ridAlloc := newRewriteRIDAllocator(nextRID, opts.ReserveRIDs)
 	lane, startSeq := chooseRewriteLane(segments)
