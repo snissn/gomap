@@ -8,7 +8,8 @@ func TestParseValueLogPostsyncStrategy(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{in: "", want: "offline"},
+		{in: "", want: "auto"},
+		{in: "auto", want: "auto"},
 		{in: "offline", want: "offline"},
 		{in: "explicit", want: "explicit"},
 		{in: "hybrid", want: "hybrid"},
