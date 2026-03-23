@@ -7,10 +7,12 @@ import (
 
 type referencedSegmentsBackendStub struct {
 	*MockBackend
-	ids        map[uint32]struct{}
-	cached     map[uint32]struct{}
-	calls      int
-	cacheCalls int
+	ids               map[uint32]struct{}
+	cached            map[uint32]struct{}
+	rewriteCached     map[uint32]struct{}
+	calls             int
+	cacheCalls        int
+	rewriteCacheCalls int
 }
 
 func (b *referencedSegmentsBackendStub) LastValueLogGCReferencedSegments() (map[uint32]struct{}, bool) {
@@ -20,6 +22,18 @@ func (b *referencedSegmentsBackendStub) LastValueLogGCReferencedSegments() (map[
 	}
 	out := make(map[uint32]struct{}, len(b.cached))
 	for id := range b.cached {
+		out[id] = struct{}{}
+	}
+	return out, true
+}
+
+func (b *referencedSegmentsBackendStub) LastValueLogRewriteReferencedSegments() (map[uint32]struct{}, bool) {
+	b.rewriteCacheCalls++
+	if len(b.rewriteCached) == 0 {
+		return nil, false
+	}
+	out := make(map[uint32]struct{}, len(b.rewriteCached))
+	for id := range b.rewriteCached {
 		out[id] = struct{}{}
 	}
 	return out, true

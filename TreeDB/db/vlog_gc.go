@@ -19,6 +19,7 @@ const valueLogKeepRecentSegmentsPerLane = 2
 type ValueLogGCOptions struct {
 	DryRun         bool
 	ProtectedPaths []string
+	ReferencedIDs  map[uint32]struct{}
 }
 
 // ValueLogGCStats summarizes value-log GC work.
@@ -62,9 +63,15 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		return stats, fmt.Errorf("value log manager unavailable")
 	}
 
-	referenced, err := db.referencedValueLogSegments(ctx)
-	if err != nil {
-		return stats, err
+	referenced := opts.ReferencedIDs
+	if len(referenced) == 0 {
+		var err error
+		referenced, err = db.referencedValueLogSegments(ctx)
+		if err != nil {
+			return stats, err
+		}
+	} else {
+		referenced = cloneReferencedValueLogSegments(referenced)
 	}
 	db.cacheLastValueLogGCReferencedSegments(db.currentCommitSeq(), referenced)
 

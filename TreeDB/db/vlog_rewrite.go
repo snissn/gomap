@@ -1194,6 +1194,7 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if err != nil {
 		return stats, err
 	}
+	db.cacheLastValueLogRewriteReferencedSegments(db.currentCommitSeq(), referencedAfter)
 	var protectedPaths map[string]struct{}
 	allowActiveSkip := len(opts.ProtectedPaths) > 0
 	if allowActiveSkip {

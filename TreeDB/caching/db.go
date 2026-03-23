@@ -4397,6 +4397,10 @@ type backendLastValueLogGCReferencedSegmentser interface {
 	LastValueLogGCReferencedSegments() (map[uint32]struct{}, bool)
 }
 
+type backendLastValueLogRewriteReferencedSegmentser interface {
+	LastValueLogRewriteReferencedSegments() (map[uint32]struct{}, bool)
+}
+
 type backendIndexVacuumer interface {
 	VacuumIndexOnline(ctx context.Context) error
 }
@@ -13356,9 +13360,15 @@ planned:
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				gcStart := time.Now()
-				gcStats, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
+				gcOpts := backenddb.ValueLogGCOptions{
 					ProtectedPaths: db.valueLogProtectedPaths(),
-				})
+				}
+				if refs, ok := db.backend.(backendLastValueLogRewriteReferencedSegmentser); ok {
+					if cached, ok := refs.LastValueLogRewriteReferencedSegments(); ok {
+						gcOpts.ReferencedIDs = cached
+					}
+				}
+				gcStats, gcErr := gcer.ValueLogGC(gcCtx, gcOpts)
 				gcCancel()
 				if gcErr != nil {
 					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(time.Since(gcStart).Microseconds())/1000)
