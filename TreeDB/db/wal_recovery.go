@@ -407,8 +407,9 @@ func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.ValuePtr, e
 	if a.nextRID == 0 {
 		return page.ValuePtr{}, fmt.Errorf("value-log rid space exhausted")
 	}
+	rid := a.nextRID
 	a.nextRID++
-	ptr, err := a.writer.AppendLeafPage(leafPage)
+	ptr, err := a.writer.appendValue(rid, leafPage)
 	if err != nil {
 		return page.ValuePtr{}, err
 	}

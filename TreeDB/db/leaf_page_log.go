@@ -9,9 +9,9 @@ import (
 // LeafPageLog appends and flushes B+Tree leaf pages stored in the value log.
 //
 // This is used when Options.IndexOuterLeavesInValueLog is enabled.
-// Implementations are expected to reuse the existing value-log record encoding.
-// Leaf pages may intentionally bypass block compression so maintenance scans can
-// read nested leaf pages without paying decompression overhead on hot paths.
+// Implementations are expected to reuse the existing value-log record encoding
+// and compression semantics (i.e. they should append normal value-log records
+// and return ValuePtr references).
 type LeafPageLog interface {
 	AppendLeafPage(leafPage []byte) (page.ValuePtr, error)
 	Flush() error

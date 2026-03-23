@@ -3,10 +3,8 @@ package db
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -103,57 +101,6 @@ func TestValueLogGC_WithLeafPagesInValueLog_KeepsReferencedLeafSegments(t *testi
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("referenced segment removed unexpectedly: %s err=%v", path, err)
 		}
-	}
-}
-
-func TestRewriteWriter_AppendLeafPage_StaysUncompressed(t *testing.T) {
-	dir := t.TempDir()
-	walDir := filepath.Join(dir, "wal")
-	if err := os.MkdirAll(walDir, 0o755); err != nil {
-		t.Fatalf("mkdir wal: %v", err)
-	}
-
-	buf := make([]byte, page.PageSize)
-	n := node.NewNode(buf)
-	n.SetType(page.PageTypeLeaf)
-	n.SetPageID(7)
-	if err := n.AddLeafEntry([]byte("k"), []byte("v"), 0, page.ValuePtr{}); err != nil {
-		t.Fatalf("AddLeafEntry: %v", err)
-	}
-	n.UpdateChecksum()
-
-	w := newRewriteWriter(walDir, 0, 0, 64<<10)
-	w.blockCompression = true
-	w.blockCodec = valuelog.BlockCodecLZ4
-	if _, err := w.AppendLeafPage(buf); err != nil {
-		t.Fatalf("AppendLeafPage: %v", err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	seg := filepath.Join(walDir, "value-l0-000001.log")
-	f, err := os.Open(seg)
-	if err != nil {
-		t.Fatalf("open segment: %v", err)
-	}
-	defer f.Close()
-
-	var header [valuelog.HeaderSize]byte
-	if _, err := io.ReadFull(f, header[:]); err != nil {
-		t.Fatalf("read record header: %v", err)
-	}
-	valueLen := binary.LittleEndian.Uint32(header[16:20])
-	payload := make([]byte, int(valueLen))
-	if _, err := io.ReadFull(f, payload); err != nil {
-		t.Fatalf("read record payload: %v", err)
-	}
-	frameHeader, _, _, _, err := valuelog.DecodeFrame(payload)
-	if err != nil {
-		t.Fatalf("DecodeFrame: %v", err)
-	}
-	if frameHeader.Flags&valuelog.FrameFlagCompressed != 0 {
-		t.Fatalf("expected leaf page frame to stay uncompressed, header=%+v", frameHeader)
 	}
 }
 
