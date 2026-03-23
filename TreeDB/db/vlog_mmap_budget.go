@@ -7,8 +7,8 @@ import (
 )
 
 const (
-	defaultValueLogMaintenanceMaxMappedSealedSegments = 16
-	defaultValueLogMaintenanceMaxMappedSealedBytes    = 512 << 20
+	defaultValueLogMaintenanceMaxMappedSealedSegments = 64
+	defaultValueLogMaintenanceMaxMappedSealedBytes    = 2 << 30
 	valueLogMaintMaxMappedSealedSegmentsEnvKey        = "TREEDB_VLOG_MAINT_MAX_MAPPED_SEALED_SEGMENTS"
 	valueLogMaintMaxMappedSealedBytesEnvKey           = "TREEDB_VLOG_MAINT_MAX_MAPPED_SEALED_BYTES"
 )
