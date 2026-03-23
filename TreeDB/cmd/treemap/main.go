@@ -38,6 +38,7 @@ Commands:
   compact         Compact/rebuild the index.db in-place (requires -rw)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   vlog-audit      Audit value-log filesystem, GC, and rewrite-plan state (requires -rw)
+  vlog-shape      Analyze value-log segment shape, gzip slack, and value cohorts
   vlog-maint-once Inspect/seed cached rewrite debt and run one maintenance pass (requires -rw)
   vlog-maint-exit-loop Run bounded explicit stage-confirm-exit maintenance passes (requires -rw)
   vlog-postsync-optimize Run explicit and/or offline post-sync value-log optimization (requires -rw)
@@ -95,6 +96,8 @@ func main() {
 		runVacuum(dir, args)
 	case "vlog-audit":
 		runVlogAudit(dir, args)
+	case "vlog-shape":
+		runVlogShape(dir, args)
 	case "vlog-maint-once":
 		runVlogMaintOnce(dir, args)
 	case "vlog-maint-exit-loop":
