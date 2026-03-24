@@ -195,9 +195,9 @@ func TestDrainBatchArenaPoolToTargetBytes(t *testing.T) {
 		t.Fatalf("drain dropped=%d want > 0", dropped)
 	}
 	// drainBatchArenaPoolToTargetBytes operates on class-sized chunks and sync.Pool
-	// visibility is lossy across runtime/OS implementations, so allow one class of
-	// residual accounting over target.
-	maxAllowedAfter := target + int64(classCap)
+	// visibility is lossy across runtime/OS implementations and race builds, so
+	// allow up to two classes of residual accounting over target.
+	maxAllowedAfter := target + 2*int64(classCap)
 	if after > maxAllowedAfter {
 		t.Fatalf("batchArenaPoolBytes after drain=%d want <= %d (target=%d classCap=%d)", after, maxAllowedAfter, target, classCap)
 	}

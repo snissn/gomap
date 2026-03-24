@@ -2614,6 +2614,75 @@ func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *t
 	}
 }
 
+func TestVlogGenerationRewritePlan_StageConfirmationReplansEvenWhenOtherTriggersFire(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	planCalls := 0
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planFn: func(opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error) {
+			planCalls++
+			return backenddb.ValueLogRewritePlan{
+				SourceFileIDs: []uint32{22},
+				SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+					{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+				},
+				SegmentsTotal:      2,
+				SegmentsSelected:   1,
+				BytesTotal:         128 << 20,
+				BytesLive:          80 << 20,
+				BytesStale:         48 << 20,
+				SelectedBytesTotal: 64 << 20,
+				SelectedBytesLive:  8 << 20,
+				SelectedBytesStale: 56 << 20,
+			}, nil
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.valueLogRewriteTriggerBytes = 1
+	db.valueLogRewriteTriggerRatioPPM = 1
+	db.valueLogGenerationHotTarget = 0
+	forceVlogMaintenanceIdle(db)
+
+	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 20 << 20, BytesStale: 44 << 20, StaleRatio: 0.6875},
+		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+	}, true, time.Now().Add(-vlogGenerationRewriteMinInterval-time.Second).UnixNano()); err != nil {
+		t.Fatalf("seed staged rewrite ledger: %v", err)
+	}
+	forceRewriteStageConfirmDue(t, db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		debugSource:           "rewrite_stage_confirm",
+	})
+
+	if planCalls != 1 {
+		t.Fatalf("plan calls after staged confirmation=%d want 1", planCalls)
+	}
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls after staged confirmation=%d want 1", rewriteCalls)
+	}
+	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want=%v", got, want)
+	}
+}
+
 func TestVlogGenerationRewritePlan_StageConfirmationClearsStagedDebtWhenPlanEmpties(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

@@ -12408,7 +12408,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// Stale-ratio trigger: use a sparse rewrite plan (live-byte estimate) to
 	// detect when any segments are meaningfully stale. This avoids relying on
 	// reclaimable-WAL heuristics (which can be 0 in split-value-log mode).
-	if (len(rewriteQueue) == 0 || stagePending) && !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
+	if (len(rewriteQueue) == 0 || stagePending) && (!shouldRewrite || stagePending) && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
 		if planBackoff {
 			goto planned
 		}
