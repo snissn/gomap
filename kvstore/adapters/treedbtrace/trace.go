@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/kvstore"
 )
 
@@ -74,7 +76,95 @@ type traceEvent struct {
 var (
 	traceOnce sync.Once
 	traceInst *traceLogger
+	phaseBus  tracePhaseBus
 )
+
+type tracePhaseBus struct {
+	mu    sync.Mutex
+	once  sync.Once
+	phase atomic.Value
+	dbs   map[*treedb.DB]int
+}
+
+func (b *tracePhaseBus) init() {
+	b.once.Do(func() {
+		b.phase.Store(tracePhaseDefault)
+		b.dbs = make(map[*treedb.DB]int)
+	})
+}
+
+func (b *tracePhaseBus) current() string {
+	b.init()
+	if v := b.phase.Load(); v != nil {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	return tracePhaseDefault
+}
+
+func normalizeTracePhase(phase string) string {
+	phase = strings.TrimSpace(strings.ToLower(phase))
+	if phase == "" {
+		return tracePhaseDefault
+	}
+	return phase
+}
+
+func maintenancePhaseForTrace(phase string) treedb.MaintenancePhase {
+	switch normalizeTracePhase(phase) {
+	case "restore":
+		return treedb.MaintenancePhaseRestore
+	case "catchup":
+		return treedb.MaintenancePhaseCatchUp
+	default:
+		return treedb.MaintenancePhaseSteady
+	}
+}
+
+func (b *tracePhaseBus) set(phase string) string {
+	b.init()
+	phase = normalizeTracePhase(phase)
+	b.phase.Store(phase)
+	b.mu.Lock()
+	dbs := make([]*treedb.DB, 0, len(b.dbs))
+	for db := range b.dbs {
+		dbs = append(dbs, db)
+	}
+	b.mu.Unlock()
+	maintenancePhase := maintenancePhaseForTrace(phase)
+	for _, db := range dbs {
+		if db != nil {
+			db.SetMaintenancePhase(maintenancePhase)
+		}
+	}
+	return phase
+}
+
+func (b *tracePhaseBus) register(db *treedb.DB) {
+	if db == nil {
+		return
+	}
+	b.init()
+	b.mu.Lock()
+	b.dbs[db]++
+	b.mu.Unlock()
+	db.SetMaintenancePhase(maintenancePhaseForTrace(b.current()))
+}
+
+func (b *tracePhaseBus) unregister(db *treedb.DB) {
+	if db == nil {
+		return
+	}
+	b.init()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n := b.dbs[db]; n > 1 {
+		b.dbs[db] = n - 1
+		return
+	}
+	delete(b.dbs, db)
+}
 
 func getTrace() *traceLogger {
 	traceOnce.Do(initTrace)
@@ -116,12 +206,10 @@ func initTrace() {
 
 // SetTracePhase updates the current phase tag for trace events.
 func SetTracePhase(phase string) {
+	phase = phaseBus.set(phase)
 	t := getTrace()
 	if t == nil || !t.enabled {
 		return
-	}
-	if phase == "" {
-		phase = tracePhaseDefault
 	}
 	t.phase.Store(phase)
 	t.logEvent(traceEvent{
@@ -129,6 +217,11 @@ func SetTracePhase(phase string) {
 		Phase:  phase,
 		Detail: "SetTracePhase",
 	})
+}
+
+// CurrentTracePhase returns the current phase label used by the trace bridge.
+func CurrentTracePhase() string {
+	return phaseBus.current()
 }
 
 func (t *traceLogger) registerDB() {
