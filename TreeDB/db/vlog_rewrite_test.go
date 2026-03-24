@@ -1428,7 +1428,7 @@ func TestSelectRewriteSourceSegments_SkipsYoungSegments(t *testing.T) {
 	}
 }
 
-func TestSelectRewriteSourceSegments_SourceFileIDsRespectActiveProtectedAndAgeWithoutLiveEstimate(t *testing.T) {
+func TestSelectRewriteSourceSegments_SourceFileIDsRespectAgeWithoutLiveEstimate(t *testing.T) {
 	dir := t.TempDir()
 
 	pathOld := filepath.Join(dir, "value-l0-000001.log")
@@ -1472,17 +1472,17 @@ func TestSelectRewriteSourceSegments_SourceFileIDsRespectActiveProtectedAndAgeWi
 		MinSegmentAge:  2 * time.Minute,
 	}, files, active, nil)
 
-	if len(selected) != 1 {
-		t.Fatalf("expected one eligible explicit source, got=%v", selected)
+	if len(selected) != 3 {
+		t.Fatalf("expected explicit sources except young segment, got=%v", selected)
 	}
 	if _, ok := selected[1]; !ok {
 		t.Fatalf("expected old explicit source selected, got=%v", selected)
 	}
-	if _, ok := selected[2]; ok {
-		t.Fatalf("active explicit source should be skipped, got=%v", selected)
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("active explicit source should remain eligible, got=%v", selected)
 	}
-	if _, ok := selected[3]; ok {
-		t.Fatalf("protected explicit source should be skipped, got=%v", selected)
+	if _, ok := selected[3]; !ok {
+		t.Fatalf("protected explicit source should remain eligible, got=%v", selected)
 	}
 	if _, ok := selected[4]; ok {
 		t.Fatalf("young explicit source should be skipped, got=%v", selected)

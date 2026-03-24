@@ -878,16 +878,19 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 	}
 
 	candidates := make([]rewriteSourceSegment, 0, len(candidateFileIDs))
+	explicitSources := len(opts.SourceFileIDs) > 0
 	for _, id := range candidateFileIDs {
 		f := files[id]
 		if f == nil {
 			continue
 		}
-		if _, ok := active[id]; ok {
-			continue
-		}
-		if _, ok := protectedIDs[id]; ok {
-			continue
+		if !explicitSources {
+			if _, ok := active[id]; ok {
+				continue
+			}
+			if _, ok := protectedIDs[id]; ok {
+				continue
+			}
 		}
 		size := fileSize(f)
 		if size <= 0 {
@@ -922,7 +925,7 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 				// suppressing rewrite work based on a failed stat call.
 			}
 		}
-		if len(opts.SourceFileIDs) > 0 && liveByID == nil {
+		if explicitSources && liveByID == nil {
 			candidates = append(candidates, rewriteSourceSegment{
 				fileID:    id,
 				liveBytes: size,
