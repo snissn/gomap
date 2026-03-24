@@ -3052,6 +3052,57 @@ func TestDeferredMaintenanceRetry_StopsAfterAcquiredRunEvenWhenCheckpointPending
 	}
 }
 
+func TestDeferredMaintenanceRetry_RetriesWithoutCheckpointPendingUntilAcquired(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64,
+			BytesAfter:    32,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+	if err := db.setVlogGenerationRewriteQueue([]uint32{11}); err != nil {
+		t.Fatalf("set rewrite queue: %v", err)
+	}
+	db.vlogGenerationLastRewriteUnixNano.Store(time.Now().Add(-2 * vlogGenerationRewriteResumeMinInterval).UnixNano())
+	db.vlogGenerationMaintenanceActive.Store(true)
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		db.vlogGenerationMaintenanceActive.Store(false)
+	}()
+
+	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm",
+	})
+
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls >= 1 {
+			return
+		}
+		if time.Now().After(deadline) {
+			_, rewriteCalls := recorder.recordedRewrite()
+			t.Fatalf("deferred retry did not re-attempt after initial collision: rewriteCalls=%d", rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestVlogGenerationRewritePlan_AgeBlockedRetryRunsWhenDue(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

@@ -27,6 +27,7 @@ func TestAdaptiveMemtableMode_SwitchesAfterWarmupRotation(t *testing.T) {
 	defer db.Close()
 
 	b := db.NewBatch()
+	defer b.Close()
 	rng := rand.New(rand.NewSource(1))
 	value := make([]byte, 8<<10) // 8KiB
 	for i := 0; i < adaptiveMinWrites*2; i++ {

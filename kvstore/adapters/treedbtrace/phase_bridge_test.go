@@ -119,7 +119,7 @@ func TestTracePhaseBridge_UnregistersOnClose(t *testing.T) {
 
 	phaseBus.mu.Lock()
 	defer phaseBus.mu.Unlock()
-	if got := phaseBus.dbs[db]; got != 0 {
-		t.Fatalf("registration count after close=%d want 0", got)
+	if _, ok := phaseBus.dbs[db]; ok {
+		t.Fatalf("registration still present after close; expected unregistered")
 	}
 }

@@ -12143,7 +12143,7 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 			}
 			return
 		}
-		if !db.vlogGenerationCheckpointKickPending.Load() {
+		if !stopWhenAcquired && !db.vlogGenerationCheckpointKickPending.Load() {
 			if opts.debugSource != "" {
 				db.debugVlogMaintf(
 					"maintenance_retry_done source=%s attempt=%d checkpoint_pending=%t deferred_pending=%t active=%t",
