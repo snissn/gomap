@@ -8,23 +8,37 @@ import "fmt"
 //
 // Layout (little-endian on disk via u64 encoding, but treated as numeric here):
 //   high 32 bits: ValuePtr.FileID (must be a value-log file id)
-//   low  32 bits: ValuePtr.Offset (must fit in u32)
+//   low  32 bits:
+//     bits 31..29: grouped sub-index (0..7)
+//     bits 28..0 : ValuePtr.Offset
 //
-// LeafRef pointers intentionally omit ValuePtr.Length/sub-index. Leaf pages are
-// stored as single-record grouped frames (K=1), so the reader can reconstruct a
-// stable ValuePtr with grouped flag and zero record-length hint.
+// LeafRef pointers omit the record-length hint, but preserve the grouped
+// sub-index so outer leaf pages can be written in small grouped frames.
 
-var leafRefPtrLength = ValuePtrMarkGrouped(0, 0)
+const (
+	leafRefSubIndexBits = 3
+	leafRefOffsetBits   = 32 - leafRefSubIndexBits
+	leafRefOffsetMask   = (uint64(1) << leafRefOffsetBits) - 1
+	leafRefSubIndexMask = (uint64(1) << leafRefSubIndexBits) - 1
+)
+
+// LeafRefMaxOffset is the maximum value-log offset representable in a LeafRef.
+const LeafRefMaxOffset uint64 = leafRefOffsetMask
 
 // EncodeLeafRef encodes ptr as a LeafRef id.
 func EncodeLeafRef(ptr ValuePtr) (uint64, error) {
 	if !IsValueLogFileID(ptr.FileID) {
 		return 0, fmt.Errorf("page: leafref requires value-log file id, got %d", ptr.FileID)
 	}
-	if ptr.Offset > uint64(^uint32(0)) {
-		return 0, fmt.Errorf("page: leafref offset overflows u32: %d", ptr.Offset)
+	if ptr.Offset > LeafRefMaxOffset {
+		return 0, fmt.Errorf("page: leafref offset overflows %d-bit field: %d", leafRefOffsetBits, ptr.Offset)
 	}
-	return (uint64(ptr.FileID) << 32) | uint64(uint32(ptr.Offset)), nil
+	subIndex := uint64(ValuePtrSubIndex(ptr))
+	if subIndex > leafRefSubIndexMask {
+		return 0, fmt.Errorf("page: leafref sub-index overflows %d bits: %d", leafRefSubIndexBits, subIndex)
+	}
+	low := (subIndex << leafRefOffsetBits) | (ptr.Offset & leafRefOffsetMask)
+	return (uint64(ptr.FileID) << 32) | low, nil
 }
 
 // DecodeLeafRef decodes a LeafRef id into a ValuePtr.
@@ -33,9 +47,11 @@ func DecodeLeafRef(id uint64) (ValuePtr, bool) {
 	if !IsValueLogFileID(fileID) {
 		return ValuePtr{}, false
 	}
+	low := uint64(uint32(id))
+	subIndex := uint8((low >> leafRefOffsetBits) & leafRefSubIndexMask)
 	return ValuePtr{
-		Offset: uint64(uint32(id)),
-		Length: leafRefPtrLength,
+		Offset: low & leafRefOffsetMask,
+		Length: ValuePtrMarkGrouped(0, subIndex),
 		FileID: fileID,
 	}, true
 }

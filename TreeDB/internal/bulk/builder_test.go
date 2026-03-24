@@ -96,6 +96,7 @@ type mockLeafPageLog struct {
 	ptrs      []page.ValuePtr
 	pages     [][]byte
 	appendErr error
+	batchCalls int
 }
 
 func (m *mockLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
@@ -110,6 +111,19 @@ func (m *mockLeafPageLog) AppendLeafPage(leafPage []byte) (page.ValuePtr, error)
 	m.ptrs = append(m.ptrs, ptr)
 	m.pages = append(m.pages, append([]byte(nil), leafPage...))
 	return ptr, nil
+}
+
+func (m *mockLeafPageLog) AppendLeafPages(leafPages [][]byte) ([]page.ValuePtr, error) {
+	m.batchCalls++
+	out := make([]page.ValuePtr, 0, len(leafPages))
+	for i := range leafPages {
+		ptr, err := m.AppendLeafPage(leafPages[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ptr)
+	}
+	return out, nil
 }
 
 type mockKVIterator struct {
@@ -212,6 +226,46 @@ func TestBuildWithOptions_NonEmptyLeafPageLogUsesLeafRefsForLeafChildren(t *test
 	}
 	if !foundLeafRef {
 		t.Fatalf("expected root to reference at least one leaf ref child")
+	}
+}
+
+func TestBuildWithOptions_LeafPageLogBatchAppenderBatchesLeafFlushes(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	leafLog := &mockLeafPageLog{}
+	iter := &mockKVIterator{}
+	const n = 4096
+	valuePrefix := bytes.Repeat([]byte("value-"), 16)
+	for i := 0; i < n; i++ {
+		iter.keys = append(iter.keys, []byte(fmt.Sprintf("key-%06d", i)))
+		v := append([]byte(nil), valuePrefix...)
+		binary.BigEndian.PutUint32(v[len(v)-4:], uint32(i))
+		iter.values = append(iter.values, v)
+	}
+
+	rootID, err := BuildWithOptions(iter, alloc, p, BuildOptions{LeafPageLog: leafLog})
+	if err != nil {
+		t.Fatalf("BuildWithOptions: %v", err)
+	}
+	if leafLog.batchCalls == 0 {
+		t.Fatalf("expected batched leaf page appends")
+	}
+	if len(leafLog.ptrs) < 2 {
+		t.Fatalf("expected multiple leaf pages in leaf log, got %d", len(leafLog.ptrs))
+	}
+	data, err := p.Get(rootID)
+	if err != nil {
+		t.Fatalf("pager.Get(root): %v", err)
+	}
+	root := node.NewNodeView(data)
+	if root.Type() != page.PageTypeInternal {
+		t.Fatalf("expected internal root, got %d", root.Type())
 	}
 }
 

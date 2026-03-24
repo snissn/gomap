@@ -13,7 +13,6 @@ import (
 
 	batchpkg "github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/atomicfile"
-	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/leafrefscan"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -70,6 +69,11 @@ type valueLogRefTracker struct {
 	counts    map[uint32]uint64
 	valid     bool
 	dirty     bool
+}
+
+type valueLogReferencedSetSnapshot struct {
+	commitSeq uint64
+	refs      map[uint32]struct{}
 }
 
 func newValueLogRefTracker() *valueLogRefTracker {
@@ -331,6 +335,95 @@ func (db *DB) referencedValueLogSegments(ctx context.Context) (map[uint32]struct
 	return refs, nil
 }
 
+func cloneReferencedValueLogSegments(in map[uint32]struct{}) map[uint32]struct{} {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[uint32]struct{}, len(in))
+	for fileID := range in {
+		out[fileID] = struct{}{}
+	}
+	return out
+}
+
+func (db *DB) cacheLastValueLogGCReferencedSegments(commitSeq uint64, refs map[uint32]struct{}) {
+	if db == nil {
+		return
+	}
+	db.lastValueLogGCRefsMu.Lock()
+	db.lastValueLogGCRefs.commitSeq = commitSeq
+	db.lastValueLogGCRefs.refs = cloneReferencedValueLogSegments(refs)
+	db.lastValueLogGCRefsMu.Unlock()
+}
+
+func (db *DB) cacheLastValueLogRewriteReferencedSegments(commitSeq uint64, refs map[uint32]struct{}) {
+	if db == nil {
+		return
+	}
+	db.lastValueLogRewriteRefsMu.Lock()
+	db.lastValueLogRewriteRefs.commitSeq = commitSeq
+	db.lastValueLogRewriteRefs.refs = cloneReferencedValueLogSegments(refs)
+	db.lastValueLogRewriteRefsMu.Unlock()
+}
+
+func (db *DB) cachedReferencedValueLogSegmentsForSeq(commitSeq uint64) (map[uint32]struct{}, bool) {
+	if db == nil || commitSeq == 0 {
+		return nil, false
+	}
+	db.lastValueLogRewriteRefsMu.RLock()
+	if db.lastValueLogRewriteRefs.commitSeq == commitSeq && db.lastValueLogRewriteRefs.refs != nil {
+		refs := cloneReferencedValueLogSegments(db.lastValueLogRewriteRefs.refs)
+		db.lastValueLogRewriteRefsMu.RUnlock()
+		return refs, true
+	}
+	db.lastValueLogRewriteRefsMu.RUnlock()
+
+	db.lastValueLogGCRefsMu.RLock()
+	defer db.lastValueLogGCRefsMu.RUnlock()
+	if db.lastValueLogGCRefs.commitSeq == commitSeq && db.lastValueLogGCRefs.refs != nil {
+		return cloneReferencedValueLogSegments(db.lastValueLogGCRefs.refs), true
+	}
+	return nil, false
+}
+
+// LastValueLogGCReferencedSegments returns the referenced value-log segment IDs
+// from the most recent GC pass when they still match the current commit
+// sequence.
+func (db *DB) LastValueLogGCReferencedSegments() (map[uint32]struct{}, bool) {
+	if db == nil {
+		return nil, false
+	}
+	seq := db.currentCommitSeq()
+	db.lastValueLogGCRefsMu.RLock()
+	defer db.lastValueLogGCRefsMu.RUnlock()
+	if db.lastValueLogGCRefs.commitSeq == 0 || db.lastValueLogGCRefs.commitSeq != seq {
+		return nil, false
+	}
+	return cloneReferencedValueLogSegments(db.lastValueLogGCRefs.refs), true
+}
+
+// LastValueLogRewriteReferencedSegments returns the referenced value-log
+// segment IDs from the most recent rewrite cleanup scan when they still match
+// the current commit sequence.
+func (db *DB) LastValueLogRewriteReferencedSegments() (map[uint32]struct{}, bool) {
+	if db == nil {
+		return nil, false
+	}
+	seq := db.currentCommitSeq()
+	db.lastValueLogRewriteRefsMu.RLock()
+	defer db.lastValueLogRewriteRefsMu.RUnlock()
+	if db.lastValueLogRewriteRefs.commitSeq == 0 || db.lastValueLogRewriteRefs.commitSeq != seq {
+		return nil, false
+	}
+	return cloneReferencedValueLogSegments(db.lastValueLogRewriteRefs.refs), true
+}
+
+// ReferencedValueLogSegments returns the currently reachable value-log segment
+// IDs. This may use the incremental ref tracker when available.
+func (db *DB) ReferencedValueLogSegments(ctx context.Context) (map[uint32]struct{}, error) {
+	return db.referencedValueLogSegments(ctx)
+}
+
 func (db *DB) mergeLeafRefValueLogRefs(ctx context.Context, refs map[uint32]struct{}) error {
 	if db == nil || refs == nil {
 		return nil
@@ -393,22 +486,16 @@ func (db *DB) scanValueLogRefCounts(ctx context.Context) (map[uint32]uint64, uin
 	counts := make(map[uint32]uint64)
 	reader := ValueReaderForState(snap.state)
 
-	userIter := snap.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := collectValueLogRefCounts(ctx, db, userIter, counts); err != nil {
-		_ = userIter.Close()
+	if err := collectValueLogRefCountsTree(ctx, &snap.tree, counts); err != nil {
 		_ = snap.Close()
 		return nil, 0, err
 	}
-	_ = userIter.Close()
 
-	sysIter := tree.New(snap.idx.pager, newValueReader(snap.state.ValueLogSet), snap.state.SystemRootPageID).
-		IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
-	if err := collectValueLogRefCounts(ctx, db, sysIter, counts); err != nil {
-		_ = sysIter.Close()
+	sysTree := tree.New(snap.idx.pager, reader, snap.state.SystemRootPageID)
+	if err := collectValueLogRefCountsTree(ctx, sysTree, counts); err != nil {
 		_ = snap.Close()
 		return nil, 0, err
 	}
-	_ = sysIter.Close()
 
 	if snap.idx != nil && snap.idx.pager != nil {
 		userFound, err := collectLeafRefValueLogRefCounts(ctx, snap.idx.pager, snap.state.RootPageID, reader, counts)
@@ -435,6 +522,10 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 		return false, nil
 	}
 	verifyAlways := p.VerifyOnRead()
+	verifyLeafPageChecksums := true
+	if cap, ok := reader.(readChecksumCapability); ok {
+		verifyLeafPageChecksums = cap.ReadChecksumEnabled()
+	}
 	found := false
 	var leafScratch []byte
 	err := leafrefscan.Walk(ctx, rootID, p.Get, func(pageID uint64, n node.Node) error {
@@ -453,12 +544,12 @@ func collectLeafRefValueLogRefCounts(ctx context.Context, p *pager.Pager, rootID
 		}
 		refs[ptr.FileID]++
 		found = true
-		return collectNestedLeafPageValueLogRefCounts(ptr, reader, refs, &leafScratch)
+		return collectNestedLeafPageValueLogRefCounts(ptr, reader, refs, &leafScratch, verifyLeafPageChecksums)
 	})
 	return found, err
 }
 
-func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabReader, refs map[uint32]uint64, scratch *[]byte) error {
+func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabReader, refs map[uint32]uint64, scratch *[]byte, verifyLeafPageChecksums bool) error {
 	if refs == nil || !page.IsValueLogFileID(ptr.FileID) || reader == nil {
 		return nil
 	}
@@ -486,7 +577,7 @@ func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabR
 	if n.Type() != page.PageTypeLeaf {
 		return fmt.Errorf("treedb: expected leaf page in value log file=%d offset=%d, got type=%d", ptr.FileID, ptr.Offset, n.Type())
 	}
-	if !n.VerifyChecksum() {
+	if verifyLeafPageChecksums && !n.VerifyChecksum() {
 		return fmt.Errorf("treedb: checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
 	// Nested leaf pages are a terminal reachability source here. We count the
@@ -494,7 +585,7 @@ func collectNestedLeafPageValueLogRefCounts(ptr page.ValuePtr, reader tree.SlabR
 	// those payloads as if they were more leaf pages.
 	count := n.Count()
 	for i := uint16(0); i < count; i++ {
-		_, _, valPtr, flags, err := n.GetLeafEntryView(i)
+		_, valPtr, flags, err := n.GetLeafValueView(i)
 		if err != nil {
 			return err
 		}
@@ -535,18 +626,33 @@ func (db *DB) noteLeafRefValueLogReachability(found bool) {
 	db.leafRefState.Store(leafRefStateAbsent)
 }
 
-func collectValueLogRefCounts(ctx context.Context, db *DB, it iterator.UnsafeIterator, refs map[uint32]uint64) error {
-	for it.Valid() {
+func collectValueLogRefCountsTree(ctx context.Context, tr *tree.Tree, refs map[uint32]uint64) error {
+	if tr == nil || refs == nil {
+		return nil
+	}
+	return tr.WalkLeaves(ctx, func(_ uint64, n node.Node) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, ptr, flags := it.UnsafeEntry()
-		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
-			refs[ptr.FileID]++
+		count := n.Count()
+		for i := uint16(0); i < count; i++ {
+			flags, err := n.GetLeafFlagsView(i)
+			if err != nil {
+				return err
+			}
+			if flags&node.FlagPointer == 0 {
+				continue
+			}
+			_, ptr, _, err := n.GetLeafValueView(i)
+			if err != nil {
+				return err
+			}
+			if page.IsValueLogFileID(ptr.FileID) {
+				refs[ptr.FileID]++
+			}
 		}
-		it.Next()
-	}
-	return it.Error()
+		return nil
+	})
 }
 
 func (db *DB) buildValueLogRefDelta(p *pager.Pager, rootID uint64, baseSeq uint64, entries []batchpkg.Entry) (*valueLogRefDelta, error) {

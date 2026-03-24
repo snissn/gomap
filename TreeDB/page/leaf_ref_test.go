@@ -4,9 +4,9 @@ import "testing"
 
 func TestLeafRef_EncodeDecode_RoundTrip(t *testing.T) {
 	tests := []ValuePtr{
-		{FileID: ValueLogFileID(1), Offset: 0},
-		{FileID: ValueLogFileID(1), Offset: 123},
-		{FileID: ValueLogFileID(1234), Offset: uint64(^uint32(0))},
+		{FileID: ValueLogFileID(1), Offset: 0, Length: ValuePtrMarkGrouped(0, 0)},
+		{FileID: ValueLogFileID(1), Offset: 123, Length: ValuePtrMarkGrouped(0, 3)},
+		{FileID: ValueLogFileID(1234), Offset: LeafRefMaxOffset, Length: ValuePtrMarkGrouped(0, 7)},
 	}
 	for _, in := range tests {
 		id, err := EncodeLeafRef(in)
@@ -26,8 +26,8 @@ func TestLeafRef_EncodeDecode_RoundTrip(t *testing.T) {
 		if !ValuePtrIsGrouped(out) {
 			t.Fatalf("LeafRef ptr should be grouped: %+v", out)
 		}
-		if ValuePtrSubIndex(out) != 0 {
-			t.Fatalf("LeafRef sub-index mismatch: got=%d want=0 (%+v)", ValuePtrSubIndex(out), out)
+		if ValuePtrSubIndex(out) != ValuePtrSubIndex(in) {
+			t.Fatalf("LeafRef sub-index mismatch: got=%d want=%d (%+v)", ValuePtrSubIndex(out), ValuePtrSubIndex(in), out)
 		}
 		if ValuePtrRecordLength(out) != 0 {
 			t.Fatalf("LeafRef record length hint should be 0: got=%d (%+v)", ValuePtrRecordLength(out), out)
@@ -42,8 +42,14 @@ func TestLeafRef_EncodeRejectsNonValueLogFileID(t *testing.T) {
 }
 
 func TestLeafRef_EncodeRejectsOffsetOverflow(t *testing.T) {
-	if _, err := EncodeLeafRef(ValuePtr{FileID: ValueLogFileID(1), Offset: uint64(^uint32(0)) + 1}); err == nil {
-		t.Fatalf("expected EncodeLeafRef to reject u32 overflow offset")
+	if _, err := EncodeLeafRef(ValuePtr{FileID: ValueLogFileID(1), Offset: LeafRefMaxOffset + 1}); err == nil {
+		t.Fatalf("expected EncodeLeafRef to reject leafref offset overflow")
+	}
+}
+
+func TestLeafRef_EncodeRejectsSubIndexOverflow(t *testing.T) {
+	if _, err := EncodeLeafRef(ValuePtr{FileID: ValueLogFileID(1), Offset: 0, Length: ValuePtrMarkGrouped(0, 8)}); err == nil {
+		t.Fatalf("expected EncodeLeafRef to reject sub-index overflow")
 	}
 }
 

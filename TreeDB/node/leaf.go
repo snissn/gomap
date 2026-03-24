@@ -438,6 +438,63 @@ func (n *Node) GetLeafKeyFlagsView(index uint16) (key []byte, flags byte, err er
 	return key, layout.flags, nil
 }
 
+// GetLeafFlagsView returns the flags for the entry at index without decoding
+// either key or value bytes.
+func (n *Node) GetLeafFlagsView(index uint16) (flags byte, err error) {
+	if n.Type() != page.PageTypeLeaf {
+		return 0, ErrInvalidType
+	}
+	if n.leafColumnar() && n.leafPrefixCompressed() && n.leafPrefixV2() {
+		if err := n.leafColumnarPrefixV2EnsureMeta(); err != nil {
+			return 0, err
+		}
+		count := n.Count()
+		if index >= count {
+			return 0, ErrCorruptedNode
+		}
+		return n.data[n.leafColPrefixFlagsStart+int(index)], nil
+	}
+	if n.leafPackedValuePtr() && !n.leafPrefixCompressed() && !n.leafColumnar() {
+		offset, err := n.getOffset(index)
+		if err != nil {
+			return 0, err
+		}
+		if int(offset) >= len(n.data) {
+			return 0, ErrCorruptedNode
+		}
+		ptr := int(offset)
+		if ptr < NodeHeaderSize || ptr+7 > len(n.data) {
+			return 0, ErrCorruptedNode
+		}
+		return n.data[ptr+6], nil
+	}
+	if n.leafColumnar() && n.leafColumnarV2() && !n.leafPrefixCompressed() {
+		count := n.Count()
+		if index >= count {
+			return 0, ErrCorruptedNode
+		}
+		flagsStart := NodeHeaderSize + int(count)*DirectoryEntrySize + int(count)*DirectoryEntrySize
+		flagsOff := flagsStart + int(index)
+		if flagsOff >= len(n.data) {
+			return 0, ErrCorruptedNode
+		}
+		return n.data[flagsOff], nil
+	}
+	offset, err := n.getOffset(index)
+	if err != nil {
+		return 0, err
+	}
+	if int(offset) >= len(n.data) {
+		return 0, ErrCorruptedNode
+	}
+	entryStart := int(offset)
+	layout, err := n.leafEntryLayoutAt(entryStart)
+	if err != nil {
+		return 0, err
+	}
+	return layout.flags, nil
+}
+
 // GetLeafValueView returns the value (inline or pointer) at the given index
 // without reconstructing the key. This is useful for point reads after SearchLeaf.
 func (n *Node) GetLeafValueView(index uint16) (val []byte, valPtr page.ValuePtr, flags byte, err error) {

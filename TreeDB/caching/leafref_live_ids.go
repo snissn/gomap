@@ -23,6 +23,14 @@ type pageGetter interface {
 	Get(pageID uint64) ([]byte, error)
 }
 
+type readChecksumCapability interface {
+	ReadChecksumEnabled() bool
+}
+
+type unsafeToReader interface {
+	ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error)
+}
+
 type fallbackSlabReader struct {
 	primary  tree.SlabReader
 	fallback tree.SlabReader
@@ -78,6 +86,11 @@ func collectLeafRefValueLogLiveIDs(ctx context.Context, p pageGetter, rootID uin
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	verifyLeafPageChecksums := true
+	if cap, ok := reader.(readChecksumCapability); ok {
+		verifyLeafPageChecksums = cap.ReadChecksumEnabled()
+	}
+	var scratch []byte
 	return leafrefscan.Walk(ctx, rootID, p.Get, func(pageID uint64, n node.Node) error {
 		if !n.VerifyChecksum() {
 			return fmt.Errorf("checksum mismatch on page %d", pageID)
@@ -85,11 +98,11 @@ func collectLeafRefValueLogLiveIDs(ctx context.Context, p pageGetter, rootID uin
 		return nil
 	}, func(ptr page.ValuePtr) error {
 		live[ptr.FileID] = struct{}{}
-		return collectNestedLeafPageValueLogLiveIDs(ctx, ptr, reader, live)
+		return collectNestedLeafPageValueLogLiveIDs(ctx, ptr, reader, live, &scratch, verifyLeafPageChecksums)
 	})
 }
 
-func collectNestedLeafPageValueLogLiveIDs(ctx context.Context, ptr page.ValuePtr, reader tree.SlabReader, live map[uint32]struct{}) error {
+func collectNestedLeafPageValueLogLiveIDs(ctx context.Context, ptr page.ValuePtr, reader tree.SlabReader, live map[uint32]struct{}, scratch *[]byte, verifyLeafPageChecksums bool) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -99,7 +112,20 @@ func collectNestedLeafPageValueLogLiveIDs(ctx context.Context, ptr page.ValuePtr
 	if reader == nil || live == nil || !page.IsValueLogFileID(ptr.FileID) {
 		return nil
 	}
-	leafPage, err := reader.ReadUnsafe(ptr)
+	var (
+		leafPage []byte
+		err      error
+	)
+	if toer, ok := reader.(unsafeToReader); ok && scratch != nil {
+		if cap(*scratch) < page.PageSize {
+			*scratch = make([]byte, 0, page.PageSize)
+		} else {
+			*scratch = (*scratch)[:0]
+		}
+		leafPage, _, err = toer.ReadUnsafeTo(ptr, (*scratch)[:0])
+	} else {
+		leafPage, err = reader.ReadUnsafe(ptr)
+	}
 	if err != nil {
 		return err
 	}
@@ -110,7 +136,7 @@ func collectNestedLeafPageValueLogLiveIDs(ctx context.Context, ptr page.ValuePtr
 	if leaf.Type() != page.PageTypeLeaf {
 		return fmt.Errorf("expected leaf page in value log file=%d offset=%d, got type=%d", ptr.FileID, ptr.Offset, leaf.Type())
 	}
-	if !leaf.VerifyChecksum() {
+	if verifyLeafPageChecksums && !leaf.VerifyChecksum() {
 		return fmt.Errorf("checksum mismatch for value-log leaf page file=%d offset=%d", ptr.FileID, ptr.Offset)
 	}
 	// Leaf pages stored in the value log are treated as terminal containers for
@@ -122,7 +148,7 @@ func collectNestedLeafPageValueLogLiveIDs(ctx context.Context, ptr page.ValuePtr
 				return err
 			}
 		}
-		_, _, valPtr, flags, err := leaf.GetLeafEntryView(i)
+		_, valPtr, flags, err := leaf.GetLeafValueView(i)
 		if err != nil {
 			return err
 		}

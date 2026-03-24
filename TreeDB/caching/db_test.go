@@ -511,6 +511,10 @@ func (it *MockIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
 	return it.UnsafeValue(), page.ValuePtr{}, 0
 }
 
+func (it *MockIterator) UnsafePointerProjection() (page.ValuePtr, byte) {
+	return page.ValuePtr{}, 0
+}
+
 func (it *MockIterator) IsDeleted() bool           { return false }
 func (it *MockIterator) Error() error              { return nil }
 func (it *MockIterator) Close() error              { return nil }
@@ -520,6 +524,69 @@ func (it *MockIterator) Value() []byte             { return it.UnsafeValue() }
 func (it *MockIterator) KeyCopy(dst []byte) []byte { return append(dst[:0], it.UnsafeKey()...) }
 func (it *MockIterator) ValueCopy(dst []byte) []byte {
 	return append(dst[:0], it.UnsafeValue()...)
+}
+
+type projectionOnlyScanIterator struct {
+	idx              int
+	flags            []byte
+	ptrs             []page.ValuePtr
+	unsafeEntryCalls int
+	projectionCalls  int
+}
+
+func (it *projectionOnlyScanIterator) Valid() bool { return it.idx >= 0 && it.idx < len(it.flags) }
+func (it *projectionOnlyScanIterator) Next()       { it.idx++ }
+func (it *projectionOnlyScanIterator) Seek(key []byte) {
+	it.idx = 0
+}
+func (it *projectionOnlyScanIterator) UnsafeKey() []byte           { return nil }
+func (it *projectionOnlyScanIterator) UnsafeValue() []byte         { return nil }
+func (it *projectionOnlyScanIterator) Key() []byte                 { return nil }
+func (it *projectionOnlyScanIterator) Value() []byte               { return nil }
+func (it *projectionOnlyScanIterator) KeyCopy(dst []byte) []byte   { return dst[:0] }
+func (it *projectionOnlyScanIterator) ValueCopy(dst []byte) []byte { return dst[:0] }
+func (it *projectionOnlyScanIterator) IsDeleted() bool             { return false }
+func (it *projectionOnlyScanIterator) Error() error                { return nil }
+func (it *projectionOnlyScanIterator) Close() error                { return nil }
+func (it *projectionOnlyScanIterator) Domain() ([]byte, []byte)    { return nil, nil }
+func (it *projectionOnlyScanIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	it.unsafeEntryCalls++
+	return nil, it.ptrs[it.idx], it.flags[it.idx]
+}
+func (it *projectionOnlyScanIterator) UnsafePointerProjection() (page.ValuePtr, byte) {
+	it.projectionCalls++
+	return it.ptrs[it.idx], it.flags[it.idx]
+}
+
+var _ iterator.PointerProjection = (*projectionOnlyScanIterator)(nil)
+
+func TestCollectIteratorValueLogLiveIDsUntil_PrefersPointerProjection(t *testing.T) {
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("EncodeFileID: %v", err)
+	}
+	it := &projectionOnlyScanIterator{
+		idx:   0,
+		flags: []byte{node.FlagInline, node.FlagPointer},
+		ptrs: []page.ValuePtr{
+			{},
+			{FileID: fileID, Offset: 42, Length: 9},
+		},
+	}
+	live := make(map[uint32]struct{})
+	db := &DB{}
+	if err := db.collectIteratorValueLogLiveIDsUntil(it, live, 0); err != nil {
+		t.Fatalf("collectIteratorValueLogLiveIDsUntil: %v", err)
+	}
+	if it.unsafeEntryCalls != 0 {
+		t.Fatalf("UnsafeEntry called %d times, want 0", it.unsafeEntryCalls)
+	}
+	if it.projectionCalls != 2 {
+		t.Fatalf("UnsafePointerProjection called %d times, want 2", it.projectionCalls)
+	}
+	if _, ok := live[fileID]; !ok {
+		t.Fatalf("expected live set to include file %d", fileID)
+	}
 }
 
 func (m *MockBackend) ReverseIterator(start, end []byte) (iterator.UnsafeIterator, error) {
@@ -1135,7 +1202,7 @@ func TestRotateValueLogMuHeld_RestoresUsableWriterAfterRegisterFailure(t *testin
 	if l.vlog == nil {
 		t.Fatalf("expected usable writer restored after register failure")
 	}
-	ptrs, err := db.appendValueLog(l, 0, nil, []valuelog.Record{{RID: 1, Value: []byte("value")}}, journalDurabilityNone)
+	ptrs, err := db.appendValueLog(l, 0, nil, []valuelog.Record{{RID: 1, Value: []byte("value")}}, journalDurabilityNone, false)
 	if err != nil {
 		t.Fatalf("appendValueLog after rollback: %v", err)
 	}

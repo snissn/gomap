@@ -2,57 +2,75 @@ package caching
 
 import (
 	"context"
-	"errors"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
-type errorSlabReader struct{}
-type errorPageGetter struct{}
-
-func (errorPageGetter) Get(pageID uint64) ([]byte, error) {
-	return nil, errors.New("unexpected Get call")
+type nestedLeafLiveIDsReader struct {
+	pageData            []byte
+	readChecksumEnabled bool
 }
 
-func (errorSlabReader) Read(ptr page.ValuePtr) ([]byte, error) {
-	return nil, errors.New("unexpected Read call")
+func (r nestedLeafLiveIDsReader) Read(ptr page.ValuePtr) ([]byte, error) {
+	return append([]byte(nil), r.pageData...), nil
 }
 
-func (errorSlabReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
-	return nil, errors.New("unexpected ReadUnsafe call")
+func (r nestedLeafLiveIDsReader) ReadUnsafe(ptr page.ValuePtr) ([]byte, error) {
+	return r.pageData, nil
 }
 
-func TestCollectLeafRefValueLogLiveIDs_RespectsCanceledContext(t *testing.T) {
-	ptr := page.ValuePtr{FileID: page.ValueLogFileID(1), Offset: 0}
-	rootID, err := page.EncodeLeafRef(ptr)
-	if err != nil {
-		t.Fatalf("EncodeLeafRef: %v", err)
+func (r nestedLeafLiveIDsReader) ReadUnsafeTo(ptr page.ValuePtr, dst []byte) ([]byte, bool, error) {
+	dst = append(dst[:0], r.pageData...)
+	return dst, true, nil
+}
+
+func (r nestedLeafLiveIDsReader) ReadChecksumEnabled() bool {
+	return r.readChecksumEnabled
+}
+
+func buildCorruptedNestedLeafPage(t *testing.T, nested page.ValuePtr) []byte {
+	t.Helper()
+	buf := make([]byte, page.PageSize)
+	n := node.NewNode(buf)
+	n.SetType(page.PageTypeLeaf)
+	n.SetPageID(11)
+	if err := n.AddLeafEntry([]byte("k"), nil, node.FlagPointer, nested); err != nil {
+		t.Fatalf("AddLeafEntry: %v", err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	live := make(map[uint32]struct{})
+	n.UpdateChecksum()
+	buf[8] ^= 0x40
+	return buf
+}
 
-	err = collectLeafRefValueLogLiveIDs(ctx, errorPageGetter{}, rootID, errorSlabReader{}, live)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("collectLeafRefValueLogLiveIDs err=%v want context.Canceled", err)
+func TestCollectNestedLeafPageValueLogLiveIDs_SkipsLeafChecksumWhenReaderDisabled(t *testing.T) {
+	outer := page.ValuePtr{FileID: 1<<31 + 1, Offset: 64, Length: page.PageSize}
+	nested := page.ValuePtr{FileID: 1<<31 + 2, Offset: 128, Length: 32}
+	reader := nestedLeafLiveIDsReader{
+		pageData:            buildCorruptedNestedLeafPage(t, nested),
+		readChecksumEnabled: false,
+	}
+	live := map[uint32]struct{}{}
+	var scratch []byte
+	if err := collectNestedLeafPageValueLogLiveIDs(context.Background(), outer, reader, live, &scratch, false); err != nil {
+		t.Fatalf("collectNestedLeafPageValueLogLiveIDs: %v", err)
+	}
+	if _, ok := live[nested.FileID]; !ok {
+		t.Fatalf("expected nested live id %d", nested.FileID)
 	}
 }
 
-func TestShouldCheckLeafRefCancellation(t *testing.T) {
-	cases := []struct {
-		i    uint16
-		want bool
-	}{
-		{i: 0, want: false},
-		{i: 1, want: false},
-		{i: leafRefCancellationCheckInterval - 1, want: false},
-		{i: leafRefCancellationCheckInterval, want: true},
-		{i: leafRefCancellationCheckInterval + 1, want: false},
+func TestCollectNestedLeafPageValueLogLiveIDs_VerifiesLeafChecksumWhenReaderEnabled(t *testing.T) {
+	outer := page.ValuePtr{FileID: 1<<31 + 1, Offset: 64, Length: page.PageSize}
+	nested := page.ValuePtr{FileID: 1<<31 + 2, Offset: 128, Length: 32}
+	reader := nestedLeafLiveIDsReader{
+		pageData:            buildCorruptedNestedLeafPage(t, nested),
+		readChecksumEnabled: true,
 	}
-	for _, tc := range cases {
-		if got := shouldCheckLeafRefCancellation(tc.i); got != tc.want {
-			t.Fatalf("shouldCheckLeafRefCancellation(%d)=%v want %v", tc.i, got, tc.want)
-		}
+	live := map[uint32]struct{}{}
+	var scratch []byte
+	if err := collectNestedLeafPageValueLogLiveIDs(context.Background(), outer, reader, live, &scratch, true); err == nil {
+		t.Fatalf("expected checksum verification error")
 	}
 }

@@ -120,6 +120,10 @@ type DB struct {
 
 	rewritePlanLiveBytesMu    sync.RWMutex
 	rewritePlanLiveBytesCache valueLogRewriteLiveBytesCache
+	lastValueLogGCRefsMu      sync.RWMutex
+	lastValueLogGCRefs        valueLogReferencedSetSnapshot
+	lastValueLogRewriteRefsMu sync.RWMutex
+	lastValueLogRewriteRefs   valueLogReferencedSetSnapshot
 
 	// Stage-5 publish watermark metrics (backend commit publish path).
 	publishWatermarkWaitTotalNs    atomic.Uint64
@@ -1140,6 +1144,11 @@ func (db *DB) Close() error {
 		db.ghostManager.stop()
 	}
 
+	var errs []error
+	if err := db.persistValueLogRefTracker(); err != nil {
+		errs = append(errs, err)
+	}
+
 	db.mu.Lock()
 	db.clearSnapshotView()
 	vm := db.valueLogManager
@@ -1148,7 +1157,6 @@ func (db *DB) Close() error {
 	db.lock = nil
 	db.mu.Unlock()
 
-	var errs []error
 	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
 	for db.snapshotAcquireInFlight() > 0 {
 		if time.Now().After(drainDeadline) {
@@ -1906,6 +1914,15 @@ func (db *DB) MarkValueLogZombie(id uint32) error {
 		return fmt.Errorf("value log manager unavailable")
 	}
 	return db.valueLogManager.MarkZombie(id)
+}
+
+// ValueLogHasSegment reports whether the value-log manager currently has a
+// registered segment for id.
+func (db *DB) ValueLogHasSegment(id uint32) bool {
+	if db == nil || db.valueLogManager == nil {
+		return false
+	}
+	return db.valueLogManager.HasSegment(id)
 }
 
 // CompactIndex rewrites the entire B-Tree sequentially to the end of the file.

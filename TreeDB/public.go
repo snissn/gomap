@@ -20,6 +20,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/template"
 )
 
@@ -516,8 +517,14 @@ func Open(opts Options) (*DB, error) {
 	disableReadChecksum := opts.ValueLog.ReadIntegrity == db.IntegritySkipChecksums
 	allowUnsafe := disableWAL || relaxedSync || disableReadChecksum
 	valueLogMaxSegmentBytes := int64(0)
-	if opts.IndexPackedValuePtr || opts.IndexOuterLeavesInValueLog {
+	if opts.IndexPackedValuePtr {
 		valueLogMaxSegmentBytes = int64(^uint32(0)) - 4
+	}
+	if opts.IndexOuterLeavesInValueLog {
+		leafRefMaxSegmentBytes := int64(page.LeafRefMaxOffset) - 4
+		if valueLogMaxSegmentBytes == 0 || leafRefMaxSegmentBytes < valueLogMaxSegmentBytes {
+			valueLogMaxSegmentBytes = leafRefMaxSegmentBytes
+		}
 	}
 
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{

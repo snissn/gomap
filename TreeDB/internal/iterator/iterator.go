@@ -25,3 +25,9 @@ type UnsafeIterator interface {
 	Close() error
 	Domain() (start, end []byte)
 }
+
+// PointerProjection exposes pointer metadata without forcing inline-value
+// materialization on iterators that can provide it cheaply.
+type PointerProjection interface {
+	UnsafePointerProjection() (ptr page.ValuePtr, flags byte)
+}

@@ -62,6 +62,68 @@ func (l *stubLeafPageLog) AppendLeafPage(_ []byte) (page.ValuePtr, error) {
 	return ptr, nil
 }
 
+type batchingLeafPageStore struct {
+	memoryLeafPageStore
+	singleCalls int
+	batchCalls  int
+	batchPages  int
+}
+
+func newBatchingLeafPageStore(z *Zipper) *batchingLeafPageStore {
+	return &batchingLeafPageStore{
+		memoryLeafPageStore: memoryLeafPageStore{
+			z:     z,
+			pages: make(map[uint64][]byte),
+		},
+	}
+}
+
+func (s *batchingLeafPageStore) appendOne(leafPage []byte) (page.ValuePtr, error) {
+	if s.z != nil {
+		s.z.leafRefCacheMu.RLock()
+		if s.z.leafRefCache != nil {
+			s.sawCache++
+		} else {
+			s.sawNoCache++
+		}
+		s.z.leafRefCacheMu.RUnlock()
+	}
+	if s.next == 0 {
+		s.next = 4
+	}
+	ptr := page.ValuePtr{
+		FileID: page.ValueLogFileID(1),
+		Offset: uint64(s.next),
+		Length: uint32(len(leafPage)),
+	}
+	s.next += 4096 + 32
+	key, err := page.EncodeLeafRef(ptr)
+	if err != nil {
+		return page.ValuePtr{}, err
+	}
+	s.pages[key] = append([]byte(nil), leafPage...)
+	return ptr, nil
+}
+
+func (s *batchingLeafPageStore) AppendLeafPage(leafPage []byte) (page.ValuePtr, error) {
+	s.singleCalls++
+	return s.appendOne(leafPage)
+}
+
+func (s *batchingLeafPageStore) AppendLeafPages(leafPages [][]byte) ([]page.ValuePtr, error) {
+	s.batchCalls++
+	s.batchPages += len(leafPages)
+	ptrs := make([]page.ValuePtr, len(leafPages))
+	for i := range leafPages {
+		ptr, err := s.appendOne(leafPages[i])
+		if err != nil {
+			return nil, err
+		}
+		ptrs[i] = ptr
+	}
+	return ptrs, nil
+}
+
 type memoryLeafPageStore struct {
 	z *Zipper
 
@@ -251,6 +313,36 @@ func TestZipperApply_NonMaintenanceRestorePathDoesNotInstallLeafRefCache(t *test
 	}
 	if z.leafRefCache != nil {
 		t.Fatalf("leafRefCache not cleared after Apply")
+	}
+}
+
+func TestZipperApply_BatchesOuterLeafPersists(t *testing.T) {
+	dir := t.TempDir()
+	p, err := pager.Open(filepath.Join(dir, "index.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	alloc := &MockAllocator{p: p}
+	z := New(p, alloc)
+	z.SetOuterLeavesInValueLog(true)
+	store := newBatchingLeafPageStore(z)
+	z.SetLeafPageLog(store)
+	z.SetLeafPageReader(store)
+
+	rootID := buildOuterLeafInternalRoot(t, z)
+	if rootID == 0 {
+		t.Fatalf("rootID=0")
+	}
+	if store.batchCalls == 0 {
+		t.Fatalf("expected batched outer-leaf persists")
+	}
+	if store.batchPages < 2 {
+		t.Fatalf("expected batched outer-leaf pages, got %d", store.batchPages)
+	}
+	if store.singleCalls != 0 {
+		t.Fatalf("unexpected single outer-leaf persists: %d", store.singleCalls)
 	}
 }
 
@@ -678,4 +770,58 @@ func TestApplyScratch_TrimsOversizedOuterLeafBuildPageCache(t *testing.T) {
 		t.Fatalf("cap(outerLeafBuildPages)=%d exceeds keep cap %d", cap(reused.outerLeafBuildPages), mergeOuterLeafPageKeepCap)
 	}
 	z.releaseApplyScratch(reused)
+}
+
+func BenchmarkMergeLeaf_OuterLeafPersistModeCompare(b *testing.B) {
+	prefix := bytes.Repeat([]byte{'k'}, 1022)
+	value := bytes.Repeat([]byte("v"), 8)
+	ops := make([]batch.Entry, 0, 240)
+	for i := 0; i < 240; i++ {
+		key := make([]byte, len(prefix)+2)
+		copy(key, prefix)
+		binary.BigEndian.PutUint16(key[len(prefix):], uint16(i))
+		ops = append(ops, batch.Entry{Type: batch.OpPut, Key: key, Value: value})
+	}
+
+	oldData := make([]byte, page.PageSize)
+	oldNode := node.NewNode(oldData)
+	oldNode.SetType(page.PageTypeLeaf)
+	oldNode.UpdateChecksum()
+
+	cases := []struct {
+		name string
+		log  func(*Zipper) LeafPageLog
+	}{
+		{
+			name: "single",
+			log: func(z *Zipper) LeafPageLog {
+				return newMemoryLeafPageStore(z)
+			},
+		},
+		{
+			name: "batched",
+			log: func(z *Zipper) LeafPageLog {
+				return newBatchingLeafPageStore(z)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				z := New(nil, nil)
+				z.SetOuterLeavesInValueLog(true)
+				z.SetLeafPageLog(tc.log(z))
+				scratch := newMergeScratch()
+				builder := z.newLeafBuilder(make([]byte, page.PageSize), ops)
+				builder.SetPageID(0)
+				var metrics adaptive.Metrics
+				if _, _, err := z.mergeLeaf(oldNode, builder, ops, &metrics, scratch, false); err != nil {
+					b.Fatalf("mergeLeaf failed: %v", err)
+				}
+			}
+		})
+	}
 }

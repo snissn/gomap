@@ -1652,6 +1652,8 @@ const (
 	envDisableVlogGenerationVacuum         = "TREEDB_DISABLE_VLOG_GENERATION_VACUUM"
 	envDisableVlogGenerationLoop           = "TREEDB_DISABLE_VLOG_GENERATION_LOOP"
 	envDisableVlogGenerationCheckpointKick = "TREEDB_DISABLE_VLOG_GENERATION_CHECKPOINT_KICK"
+	envDisableVlogGenerationDeferred       = "TREEDB_DISABLE_VLOG_GENERATION_DEFERRED"
+	envDebugVlogGenerationPlanTimeoutMS    = "TREEDB_DEBUG_VLOG_GENERATION_PLAN_TIMEOUT_MS"
 	// Diagnostic toggle for WAL-off checkpoint-time sparse-index vacuum.
 	envDisableCheckpointAutoVacuum         = "TREEDB_DISABLE_CHECKPOINT_AUTO_VACUUM"
 	minMemtablePrealloc                    = 64 * 1024
@@ -2163,6 +2165,78 @@ func (db *DB) currentValueLogPaths() []string {
 	return paths
 }
 
+func valueLogIDsFromPaths(paths []string) map[uint32]struct{} {
+	if len(paths) == 0 {
+		return nil
+	}
+	ids := make(map[uint32]struct{}, len(paths))
+	for _, path := range paths {
+		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+		if !ok || !valueLog || laneID < 0 {
+			continue
+		}
+		id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
+		if err != nil {
+			continue
+		}
+		ids[id] = struct{}{}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+func valueLogPathByID(paths []string) map[uint32]string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make(map[uint32]string, len(paths))
+	for _, path := range paths {
+		laneID, seq, valueLog, ok := parseLogSeq(filepath.Base(path))
+		if !ok || !valueLog || laneID < 0 {
+			continue
+		}
+		id, err := valuelog.EncodeFileID(uint32(laneID), uint32(seq))
+		if err != nil {
+			continue
+		}
+		if _, exists := out[id]; !exists {
+			out[id] = path
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (db *DB) queuedValueLogPathsSnapshot() []string {
+	if db == nil || !db.valueLogEnabled() {
+		return nil
+	}
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	if len(db.queueValueLogPaths) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, paths := range db.queueValueLogPaths {
+		for _, path := range paths {
+			if path == "" {
+				continue
+			}
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
 func (db *DB) deferValueLogOps(ops []batch.Entry, sync bool) ([]batch.Entry, error) {
 	if db == nil || len(ops) == 0 || !db.deferredValueLogEnabled() {
 		return ops, nil
@@ -2246,7 +2320,7 @@ func (db *DB) rewriteValueLogOpsForBackend(ops []batch.Entry, durability journal
 	for i := range records {
 		records[i].RID = startRID + uint64(i)
 	}
-	ptrs, err := db.appendValueLog(lane, dictID, nil, records, durability)
+	ptrs, err := db.appendValueLog(lane, dictID, nil, records, durability, false)
 	if err != nil {
 		putValueLogRecordsNoClear(records)
 		putOuterLeafArena(outerArena)
@@ -2483,7 +2557,7 @@ func (db *DB) flushDeferredValueLogMemtable(
 		records[i].RID = startRID + uint64(i)
 	}
 
-	ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
+	ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability, false)
 	if err != nil {
 		return 0, err
 	}
@@ -2700,7 +2774,7 @@ func (db *DB) flushDeferredValueLogUnits(units []flushUnit, backendBatch batch.I
 				records[i].RID = startRID + uint64(i)
 			}
 
-			ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability)
+			ptrs, err := db.appendValueLog(vlogLane, dictID, nil, records, durability, false)
 			putValueLogRecordsNoClear(records)
 			putOuterLeafArena(outerArena)
 			if err != nil {
@@ -3649,12 +3723,21 @@ func (db *DB) collectIteratorValueLogLiveIDsUntil(it iterator.UnsafeIterator, li
 		return nil
 	}
 	defer it.Close()
+	proj, _ := it.(iterator.PointerProjection)
 	seen := 0
 	for it.Valid() {
 		if seen > 0 && seen&foregroundWriteResumeCheckMask == 0 && db.foregroundWritesResumedSince(lastWrite) {
 			return errForegroundWritesResumed
 		}
-		_, ptr, flags := it.UnsafeEntry()
+		var (
+			ptr   page.ValuePtr
+			flags byte
+		)
+		if proj != nil {
+			ptr, flags = proj.UnsafePointerProjection()
+		} else {
+			_, ptr, flags = it.UnsafeEntry()
+		}
 		if flags&node.FlagPointer != 0 && page.IsValueLogFileID(ptr.FileID) {
 			live[ptr.FileID] = struct{}{}
 			if err := db.collectNestedValueLogLiveIDsFromOuterLeaf(ptr, live); err != nil {
@@ -3851,6 +3934,149 @@ func (db *DB) pruneRetainedValueLogs() {
 	if removed {
 		db.syncDirBestEffort(db.dir)
 	}
+}
+
+func (db *DB) cleanupProcessedRetainedRewriteSources(reason uint32, processedRewriteIDs []uint32) {
+	if db == nil || len(processedRewriteIDs) == 0 || !db.valueLogEnabled() {
+		return
+	}
+	liveIDs, err := db.currentReferencedValueLogIDs()
+	if err != nil {
+		db.debugVlogMaintf(
+			"rewrite_retained_cleanup_scan_err reason=%s source_ids=%d err=%v",
+			vlogGenerationReasonString(reason),
+			len(processedRewriteIDs),
+			err,
+		)
+		return
+	}
+	inUseIDs := valueLogIDsFromPaths(db.valueLogInUsePaths())
+	currentIDs := valueLogIDsFromPaths(db.currentValueLogPaths())
+	queuedIDs := valueLogIDsFromPaths(db.queuedValueLogPathsSnapshot())
+	removed := 0
+	for _, id := range processedRewriteIDs {
+		if _, ok := liveIDs[id]; ok {
+			continue
+		}
+		if _, ok := inUseIDs[id]; ok {
+			continue
+		}
+		if _, ok := currentIDs[id]; ok {
+			continue
+		}
+		if _, ok := queuedIDs[id]; ok {
+			continue
+		}
+		if db.valueLogReader == nil {
+			continue
+		}
+		path := db.valueLogReader.SegmentPath(id)
+		if path == "" {
+			continue
+		}
+		if db.cleanupMissingRetainedValueLog(path) {
+			removed++
+			continue
+		}
+		if !db.valueLogRetained(path) {
+			continue
+		}
+		if db.cleanupOrphanedRetainedValueLog(path) {
+			removed++
+		}
+	}
+	if removed > 0 {
+		db.debugVlogMaintf(
+			"rewrite_retained_cleanup_done reason=%s source_ids=%d removed=%d",
+			vlogGenerationReasonString(reason),
+			len(processedRewriteIDs),
+			removed,
+		)
+	}
+}
+
+func (db *DB) debugVlogGenerationProcessedSourceState(reason uint32, processedRewriteIDs []uint32) {
+	if db == nil || len(processedRewriteIDs) == 0 || !debugVlogMaintOn() {
+		return
+	}
+	liveIDs, err := db.currentReferencedValueLogIDs()
+	if err != nil {
+		db.debugVlogMaintf(
+			"rewrite_source_state_scan_err reason=%s source_ids=%d err=%v",
+			vlogGenerationReasonString(reason),
+			len(processedRewriteIDs),
+			err,
+		)
+		return
+	}
+	retainedPaths := db.valueLogRetainedPaths()
+	inUsePaths := db.valueLogInUsePaths()
+	currentPaths := db.currentValueLogPaths()
+	queuedPaths := db.queuedValueLogPathsSnapshot()
+	retainedIDs := valueLogIDsFromPaths(retainedPaths)
+	inUseIDs := valueLogIDsFromPaths(inUsePaths)
+	currentIDs := valueLogIDsFromPaths(currentPaths)
+	queuedIDs := valueLogIDsFromPaths(queuedPaths)
+	pathByID := valueLogPathByID(retainedPaths)
+	for id, path := range valueLogPathByID(inUsePaths) {
+		if _, ok := pathByID[id]; !ok {
+			pathByID[id] = path
+		}
+	}
+	for id, path := range valueLogPathByID(currentPaths) {
+		if _, ok := pathByID[id]; !ok {
+			pathByID[id] = path
+		}
+	}
+	for id, path := range valueLogPathByID(queuedPaths) {
+		if _, ok := pathByID[id]; !ok {
+			pathByID[id] = path
+		}
+	}
+	for _, id := range processedRewriteIDs {
+		lane, seq := valuelog.DecodeFileID(id)
+		_, live := liveIDs[id]
+		_, retained := retainedIDs[id]
+		_, inUse := inUseIDs[id]
+		_, current := currentIDs[id]
+		_, queued := queuedIDs[id]
+		path := pathByID[id]
+		exists := false
+		if path != "" {
+			if _, statErr := os.Stat(path); statErr == nil {
+				exists = true
+			}
+		}
+		db.debugVlogMaintf(
+			"rewrite_source_state reason=%s file_id=%d lane=%d seq=%d live_backend=%t retained=%t in_use=%t current=%t queued=%t exists=%t path=%s",
+			vlogGenerationReasonString(reason),
+			id,
+			lane,
+			seq,
+			live,
+			retained,
+			inUse,
+			current,
+			queued,
+			exists,
+			path,
+		)
+	}
+}
+
+func (db *DB) currentReferencedValueLogIDs() (map[uint32]struct{}, error) {
+	if db == nil {
+		return nil, nil
+	}
+	if refs, ok := db.backend.(backendLastValueLogGCReferencedSegmentser); ok {
+		if cached, ok := refs.LastValueLogGCReferencedSegments(); ok {
+			return cached, nil
+		}
+	}
+	if refs, ok := db.backend.(backendReferencedValueLogSegmentser); ok {
+		return refs.ReferencedValueLogSegments(context.Background())
+	}
+	return db.collectValueLogLiveIDsUntil(db.lastForegroundWriteUnixNano.Load())
 }
 
 func (db *DB) retainedPrunePressureBytes() int64 {
@@ -4155,8 +4381,24 @@ type backendValueLogRewritePlanner interface {
 	ValueLogRewritePlan(ctx context.Context, opts backenddb.ValueLogRewriteOnlineOptions) (backenddb.ValueLogRewritePlan, error)
 }
 
+type backendValueLogSegmentPresence interface {
+	ValueLogHasSegment(id uint32) bool
+}
+
 type backendValueLogGCer interface {
 	ValueLogGC(ctx context.Context, opts backenddb.ValueLogGCOptions) (backenddb.ValueLogGCStats, error)
+}
+
+type backendReferencedValueLogSegmentser interface {
+	ReferencedValueLogSegments(ctx context.Context) (map[uint32]struct{}, error)
+}
+
+type backendLastValueLogGCReferencedSegmentser interface {
+	LastValueLogGCReferencedSegments() (map[uint32]struct{}, bool)
+}
+
+type backendLastValueLogRewriteReferencedSegmentser interface {
+	LastValueLogRewriteReferencedSegments() (map[uint32]struct{}, bool)
 }
 
 type backendIndexVacuumer interface {
@@ -4863,6 +5105,7 @@ const (
 	vlogGenerationGCEvery                   = 5
 	vlogGenerationGCMinBytes                = int64(1 << 20)
 	vlogGenerationRewriteMinInterval        = 30 * time.Second
+	vlogGenerationCloseDeferredWait         = 30 * time.Second
 	vlogGenerationGCMinInterval             = 45 * time.Second
 	vlogGenerationCheckpointKickMinInterval = 5 * time.Second
 	vlogGenerationCheckpointKickRetryWindow = 5 * time.Second
@@ -6324,6 +6567,12 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogMaxSegmentBytes < 0 {
 		valueLogMaxSegmentBytes = 0
 	}
+	if opts.IndexOuterLeavesInValueLog {
+		leafRefMaxSegmentBytes := int64(page.LeafRefMaxOffset) - 4
+		if valueLogMaxSegmentBytes == 0 || valueLogMaxSegmentBytes > leafRefMaxSegmentBytes {
+			valueLogMaxSegmentBytes = leafRefMaxSegmentBytes
+		}
+	}
 	valueLogGenerationHotTarget := opts.ValueLogGenerationHotSegmentTargetBytes
 	valueLogGenerationWarmTarget := opts.ValueLogGenerationWarmSegmentTargetBytes
 	valueLogGenerationColdTarget := opts.ValueLogGenerationColdSegmentTargetBytes
@@ -7204,6 +7453,11 @@ func (db *DB) vlogGenerationMaintenanceContext(timeout time.Duration, opts vlogG
 }
 
 func (db *DB) vlogGenerationRewritePlanContext(timeout time.Duration, opts vlogGenerationMaintenanceOptions) (context.Context, context.CancelFunc) {
+	if s := os.Getenv(envDebugVlogGenerationPlanTimeoutMS); s != "" {
+		if ms, err := strconv.ParseInt(s, 10, 64); err == nil && ms > 0 {
+			timeout = time.Duration(ms) * time.Millisecond
+		}
+	}
 	// Keep planner calls quiet-window-gated, but tolerate short foreground
 	// activity resumes so sub-second plan scans can complete.
 	if opts.bypassQuiet {
@@ -7485,6 +7739,7 @@ type vlogWriteRequest struct {
 	dictID           uint64
 	writeMode        vlogCompressionWriteMode
 	blockCodec       valuelog.BlockCodec
+	groupedOrdinary  bool
 	probeCompression bool
 	durability       journalDurability
 	enqueuedAt       time.Time
@@ -8211,6 +8466,14 @@ const (
 // appends and to improve value-log batching efficiency.
 const vlogQueueMinValueSize = 1 << 10
 
+// Mid-large ordinary values are the remaining first-write shape outlier on real
+// Celestia data. Route them through the queued batcher so adjacent writes can
+// coalesce into grouped frames instead of landing one-per-record.
+const (
+	vlogGroupedOrdinaryValueMinSize = 20 << 10
+	vlogGroupedOrdinaryValueMinK    = 4
+)
+
 // Linger briefly to coalesce micro-batches for small/medium queued writes.
 const vlogWriteLinger = 75 * time.Microsecond
 
@@ -8663,7 +8926,7 @@ func (db *DB) vlogWriteLoop(l *lane) {
 		backlog := len(l.vlogCh)
 		observeLaneVlogQueueDepthSample(l, backlog)
 		lingerAllowed := backlog < (vlogWriteBatchMax/4) && !l.vlogQueueing.Load()
-		if len(batch) < vlogWriteBatchMax && len(req.value) < vlogQueueMinValueSize && lingerAllowed {
+		if len(batch) < vlogWriteBatchMax && db.shouldLingerQueuedValueLogRequest(req) && lingerAllowed {
 			timer.Reset(vlogWriteLinger)
 			lingerDone := false
 			for len(batch) < vlogWriteBatchMax && !lingerDone {
@@ -8996,6 +9259,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 	for i := 0; i < len(requests); {
 		writeMode := requests[i].writeMode
 		blockCodec := normalizeSelectorBlockCodec(requests[i].blockCodec)
+		groupedOrdinary := requests[i].groupedOrdinary
 		dictID := requests[i].dictID
 		if writeMode != vlogWriteDict {
 			dictID = 0
@@ -9032,6 +9296,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			if nextMode == vlogWriteBlock && nextCodec != blockCodec {
 				break
 			}
+			if requests[end].groupedOrdinary != groupedOrdinary {
+				break
+			}
 			if nextDictID != dictID {
 				break
 			}
@@ -9053,6 +9320,9 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 				}
 			} else if writeMode == vlogWriteBlock {
 				k = db.chooseValueLogBlockWriteK(l, end-i, rawBytes, blockCodec)
+				if groupedOrdinary {
+					k = db.groupedOrdinaryValueWriteK(maxValLen, end-i, k)
+				}
 			} else if rawPaused && db.disableJournal {
 				k = valuelog.MaxFrameK
 			} else if cur := int(db.valueLogDictCurrentK.Load()); cur > 1 {
@@ -9757,6 +10027,51 @@ func (db *DB) shouldUseVlogDictPrepWorkers(l *lane, frameCount, rawPayloadBytes 
 	return true
 }
 
+func (db *DB) shouldPreferGroupedOrdinaryValueWrites(unitPayloadBytes int, leafPage bool) bool {
+	if db == nil || leafPage {
+		return false
+	}
+	return unitPayloadBytes >= vlogGroupedOrdinaryValueMinSize
+}
+
+func (db *DB) groupedOrdinaryValueWriteK(maxValueLen, records, chosenK int) int {
+	if records <= 1 {
+		return 1
+	}
+	if chosenK < vlogGroupedOrdinaryValueMinK {
+		chosenK = vlogGroupedOrdinaryValueMinK
+	}
+	if limits.MaxRecordSize > 0 && maxValueLen > 0 {
+		maxKBySize := int(limits.MaxRecordSize) / maxValueLen
+		if maxKBySize < 1 {
+			maxKBySize = 1
+		}
+		if chosenK > maxKBySize {
+			chosenK = maxKBySize
+		}
+	}
+	return db.clampValueLogDictK(chosenK)
+}
+
+func (db *DB) forceGroupedOrdinaryValueWriteMode(mode vlogCompressionMode, writeMode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, unitPayloadBytes int, leafPage bool) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
+	if !db.shouldPreferGroupedOrdinaryValueWrites(unitPayloadBytes, leafPage) {
+		return writeMode, blockCodec, false
+	}
+	switch mode {
+	case vlogCompressionDefault, vlogCompressionAuto:
+		return vlogWriteBlock, db.valueLogBlockCodec, true
+	default:
+		return writeMode, blockCodec, false
+	}
+}
+
+func (db *DB) shouldLingerQueuedValueLogRequest(req vlogWriteRequest) bool {
+	if len(req.value) < vlogQueueMinValueSize {
+		return true
+	}
+	return db.shouldPreferGroupedOrdinaryValueWrites(len(req.value), false)
+}
+
 func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durability journalDurability, writeMode vlogCompressionWriteMode, wallStart time.Time) bool {
 	if l == nil || l.vlogCh == nil {
 		return false
@@ -9768,8 +10083,12 @@ func (db *DB) shouldQueueValueLogOne(l *lane, dictID uint64, valueLen int, durab
 	if !wallStart.IsZero() {
 		return false
 	}
-	// Block mode requires direct append so per-frame codec metadata and grouping
-	// stay on the caller path.
+	// Mid-large ordinary values should reach the queued batcher so adjacent
+	// writes can coalesce into grouped frames.
+	if dictID == 0 && db.shouldPreferGroupedOrdinaryValueWrites(valueLen, false) {
+		return true
+	}
+	// Block mode otherwise keeps a direct fast path for small/medium values.
 	if writeMode == vlogWriteBlock {
 		return false
 	}
@@ -9935,7 +10254,7 @@ func (db *DB) prepareAppendDictFrames(
 	return prepared, time.Since(prepStart).Nanoseconds(), nil
 }
 
-func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, error) {
+func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, leafPage bool) ([]page.ValuePtr, error) {
 	if !db.splitValueLogEnabled() {
 		return nil, errWALUnavailable
 	}
@@ -9992,6 +10311,16 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		selectorUnitPayloadBytes = rawPayloadBytes / n
 	}
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, selectorPayloadBytes, selectorUnitPayloadBytes)
+	if leafPage {
+		writeMode, blockCodec, selectorProbe = db.resolveLeafPageVlogWriteMode(l, selectorPayloadBytes, selectorUnitPayloadBytes)
+	}
+	if dictID == 0 {
+		if forcedMode, forcedCodec, forced := db.forceGroupedOrdinaryValueWriteMode(mode, writeMode, blockCodec, selectorUnitPayloadBytes, leafPage); forced {
+			writeMode = forcedMode
+			blockCodec = forcedCodec
+			selectorProbe = false
+		}
+	}
 	blockMode := writeMode == vlogWriteBlock
 	probeCompression := selectorProbe
 	paused := false
@@ -10087,6 +10416,12 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 		}
 		if k > valuelog.MaxFrameK {
 			k = valuelog.MaxFrameK
+		}
+	}
+	if leafPage && len(records) > 1 && k < 2 {
+		k = len(records)
+		if k > 8 {
+			k = 8
 		}
 	}
 
@@ -10578,14 +10913,14 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 }
 
 func (db *DB) appendValueLogOne(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
-	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true)
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true, false)
 }
 
 func (db *DB) appendValueLogOneRaw(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability) (page.ValuePtr, string, error) {
-	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true)
+	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true, false)
 }
 
-func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool) (page.ValuePtr, string, error) {
+func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool, leafPage bool) (page.ValuePtr, string, error) {
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
@@ -10627,6 +10962,16 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 
 	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
 	writeMode, blockCodec, selectorProbe := db.resolveVlogWriteMode(l, dictID, len(value), len(value))
+	if leafPage {
+		writeMode, blockCodec, selectorProbe = db.resolveLeafPageVlogWriteMode(l, len(value), len(value))
+	}
+	if dictID == 0 {
+		if forcedMode, forcedCodec, forced := db.forceGroupedOrdinaryValueWriteMode(mode, writeMode, blockCodec, len(value), leafPage); forced {
+			writeMode = forcedMode
+			blockCodec = forcedCodec
+			selectorProbe = false
+		}
+	}
 	probeCompression := selectorProbe
 	if writeMode != vlogWriteDict {
 		dictID = 0
@@ -10683,7 +11028,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 
 	if allowQueue && db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
-		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
+		if dictID == 0 && !db.shouldPreferGroupedOrdinaryValueWrites(len(value), leafPage) && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			w := l.vlog
 			if w == nil {
 				l.vlogMu.Unlock()
@@ -10819,6 +11164,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			dictID:           dictID,
 			writeMode:        finalWriteMode,
 			blockCodec:       finalBlockCodec,
+			groupedOrdinary:  dictID == 0 && db.shouldPreferGroupedOrdinaryValueWrites(len(value), leafPage),
 			probeCompression: probeCompression,
 			durability:       durability,
 			enqueuedAt:       time.Now(),
@@ -11772,6 +12118,123 @@ func filterVlogGenerationRewriteLedgerByQuality(segments []backenddb.ValueLogRew
 	return filtered
 }
 
+func filterVlogGenerationRewriteLedgerToExistingSegments(segments []backenddb.ValueLogRewritePlanSegment, segmentPresence backendValueLogSegmentPresence) []backenddb.ValueLogRewritePlanSegment {
+	if len(segments) == 0 {
+		return nil
+	}
+	if segmentPresence == nil {
+		return append([]backenddb.ValueLogRewritePlanSegment(nil), segments...)
+	}
+	filtered := make([]backenddb.ValueLogRewritePlanSegment, 0, len(segments))
+	for _, seg := range segments {
+		if seg.FileID == 0 {
+			continue
+		}
+		if !segmentPresence.ValueLogHasSegment(seg.FileID) {
+			continue
+		}
+		filtered = append(filtered, seg)
+	}
+	return filtered
+}
+
+func vlogGenerationRewritePlanHasSelectionSignal(plan backenddb.ValueLogRewritePlan) bool {
+	if len(plan.SelectedSegments) > 0 || len(plan.SourceFileIDs) > 0 {
+		return true
+	}
+	return plan.SegmentsTotal > 0 ||
+		plan.BytesTotal > 0 ||
+		plan.BytesLive > 0 ||
+		plan.BytesStale > 0 ||
+		plan.AgeBlockedSegments > 0 ||
+		plan.AgeBlockedBytesTotal > 0 ||
+		plan.AgeBlockedBytesLive > 0 ||
+		plan.AgeBlockedBytesStale > 0
+}
+
+func (db *DB) refreshQueuedVlogGenerationRewritePlan(
+	planner backendValueLogRewritePlanner,
+	sourceIDs []uint32,
+	minStaleRatio float64,
+	opts vlogGenerationMaintenanceOptions,
+) (backenddb.ValueLogRewritePlan, error) {
+	if db == nil || planner == nil || len(sourceIDs) == 0 {
+		return backenddb.ValueLogRewritePlan{}, nil
+	}
+	ctx, cancel := db.vlogGenerationRewritePlanContext(30*time.Second, opts)
+	defer cancel()
+	planStart := time.Now()
+	plan, err := planner.ValueLogRewritePlan(ctx, backenddb.ValueLogRewriteOnlineOptions{
+		SourceFileIDs:        append([]uint32(nil), sourceIDs...),
+		MinSegmentStaleRatio: minStaleRatio,
+		MinSegmentStaleBytes: vlogGenerationRewriteMinSegmentStaleBytes,
+		ProtectedPaths:       db.valueLogInUsePaths(),
+	})
+	db.debugVlogMaintf(
+		"rewrite_queue_refresh min_ratio=%.6f min_stale_bytes=%d queued=%d selected=%d selected_bytes_total=%d selected_bytes_live=%d selected_bytes_stale=%d dur_ms=%.3f err=%v",
+		minStaleRatio,
+		vlogGenerationRewriteMinSegmentStaleBytes,
+		len(sourceIDs),
+		plan.SegmentsSelected,
+		plan.SelectedBytesTotal,
+		plan.SelectedBytesLive,
+		plan.SelectedBytesStale,
+		float64(time.Since(planStart).Microseconds())/1000,
+		err,
+	)
+	db.observeVlogGenerationRewritePlanOutcome(plan, err)
+	if err != nil {
+		return backenddb.ValueLogRewritePlan{}, err
+	}
+	return db.filterVlogGenerationRewritePlanPenalties(plan, time.Now())
+}
+
+func (db *DB) shouldRefreshQueuedVlogGenerationRewriteLedger(
+	opts vlogGenerationMaintenanceOptions,
+	stagePending bool,
+	queue []uint32,
+	ledger []backenddb.ValueLogRewritePlanSegment,
+) bool {
+	if db == nil || stagePending || opts.bypassQuiet {
+		return false
+	}
+	if len(queue) <= 1 || len(ledger) <= 1 {
+		return false
+	}
+	return db.vlogGenerationLastRewriteUnixNano.Load() > 0
+}
+
+func shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(
+	opts vlogGenerationMaintenanceOptions,
+	stagePending bool,
+	stageConfirmDue bool,
+	queue []uint32,
+) bool {
+	if !stagePending || !vlogGenerationIsStageConfirmSource(opts) {
+		return false
+	}
+	if !stageConfirmDue && !vlogGenerationAllowsImmediateStageConfirm(opts) {
+		return false
+	}
+	return len(queue) > 0
+}
+
+func shouldUsePersistedVlogGenerationRewriteLedgerForConfirm(
+	opts vlogGenerationMaintenanceOptions,
+	stagePending bool,
+	stageConfirmDue bool,
+	queue []uint32,
+	ledger []backenddb.ValueLogRewritePlanSegment,
+) bool {
+	if !stagePending || !vlogGenerationIsStageConfirmSource(opts) {
+		return false
+	}
+	if !stageConfirmDue && !vlogGenerationAllowsImmediateStageConfirm(opts) {
+		return false
+	}
+	return len(queue) > 0 && len(ledger) > 0
+}
+
 func shouldDeferVlogGenerationRewritePlanForAge(plan backenddb.ValueLogRewritePlan, minSegmentAge time.Duration) bool {
 	if minSegmentAge <= 0 {
 		return false
@@ -11794,6 +12257,9 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time) {
 	wait := time.Until(deadline)
 	if wait < 0 {
 		wait = 0
+	}
+	if envBool(envDisableVlogGenerationDeferred) {
+		return
 	}
 	db.wg.Add(1)
 	go func(expectedUntil int64, delay time.Duration) {
@@ -11846,6 +12312,9 @@ func (db *DB) clearVlogGenerationRewriteStageConfirmation() {
 
 func (db *DB) scheduleVlogGenerationRewriteStageConfirmation(observedAt int64) {
 	if db == nil || observedAt <= 0 || db.closing.Load() {
+		return
+	}
+	if envBool(envDisableVlogGenerationDeferred) {
 		return
 	}
 	if db.vlogGenerationRewriteStageWakeObservedNS.Load() == observedAt {
@@ -11909,6 +12378,7 @@ type vlogGenerationMaintenanceOptions struct {
 	skipRetainedPruneWait bool
 	skipCheckpoint        bool
 	rewriteDebtDrain      bool
+	suppressFollowOn      bool
 	debugSource           string
 }
 
@@ -11930,8 +12400,41 @@ func vlogGenerationIsAgeBlockedSource(opts vlogGenerationMaintenanceOptions) boo
 	return opts.debugSource == "rewrite_age_blocked" || opts.debugSource == "rewrite_age_blocked_exit"
 }
 
+func vlogGenerationAllowsImmediateStageConfirm(opts vlogGenerationMaintenanceOptions) bool {
+	return opts.suppressFollowOn && opts.debugSource == "rewrite_stage_confirm_exit"
+}
+
 func (db *DB) maybeRunVlogGenerationMaintenance(runGC bool) {
 	db.maybeRunVlogGenerationMaintenanceWithOptions(runGC, vlogGenerationMaintenanceOptions{})
+}
+
+func (db *DB) waitValueLogGenerationIdle(timeout time.Duration) error {
+	if db == nil {
+		return fmt.Errorf("cachingdb: nil db")
+	}
+	if timeout <= 0 {
+		return nil
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		state := db.vlogGenerationSchedulerState.Load()
+		active := db.vlogGenerationMaintenanceActive.Load()
+		checkpointPending := db.vlogGenerationCheckpointKickPending.Load()
+		deferredPending := db.vlogGenerationDeferredMaintenancePending.Load()
+		if !active && !checkpointPending && !deferredPending && state != vlogGenerationSchedulerRunning {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf(
+				"cachingdb: timed out waiting for value-log generation idle: state=%s active=%t checkpoint_pending=%t deferred_pending=%t",
+				vlogGenerationSchedulerStateString(state),
+				active,
+				checkpointPending,
+				deferredPending,
+			)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func (db *DB) vlogGenerationRewriteStageConfirmDue(now time.Time) bool {
@@ -12037,6 +12540,45 @@ func (db *DB) scheduleDueVlogGenerationDeferredMaintenance() {
 		rewriteDebtDrain:      true,
 		debugSource:           "rewrite_stage_confirm_exit",
 	})
+}
+
+func (db *DB) maybeRunVlogGenerationExitStageConfirm() {
+	if db == nil || db.closing.Load() || db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
+		return
+	}
+	stagePending, stageObservedAt, err := db.currentVlogGenerationRewriteStage()
+	if err != nil || !stagePending || stageObservedAt <= 0 {
+		return
+	}
+	now := time.Now()
+	if now.Before(time.Unix(0, stageObservedAt).Add(vlogGenerationRewriteMinInterval)) {
+		return
+	}
+	rewriteQueue, err := db.currentVlogGenerationRewriteQueue()
+	if err != nil || len(rewriteQueue) == 0 {
+		return
+	}
+	db.mu.Lock()
+	pendingMemtables := db.mutableBytes.Load() > 0 || len(db.queue) > 0
+	db.mu.Unlock()
+	if pendingMemtables {
+		return
+	}
+	db.debugVlogMaintf(
+		"rewrite_stage_confirm_exit_schedule queued=%d observed_age_ms=%d",
+		len(rewriteQueue),
+		now.Sub(time.Unix(0, stageObservedAt)).Milliseconds(),
+	)
+	db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        false,
+		rewriteDebtDrain:      true,
+		debugSource:           "rewrite_stage_confirm_exit",
+	})
+	if err := db.waitValueLogGenerationIdle(vlogGenerationCloseDeferredWait); err != nil {
+		db.debugVlogMaintf("rewrite_stage_confirm_exit_wait err=%v", err)
+	}
 }
 
 func (db *DB) runVlogGenerationCheckpointKickRetries(opts vlogGenerationMaintenanceOptions) {
@@ -12173,6 +12715,9 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.vlogGenerationDeferredMaintenancePending.Load(),
 		)
 		db.vlogGenerationMaintenanceActive.Store(false)
+		if opts.suppressFollowOn {
+			return
+		}
 		// If a deferred confirmation/age wake became due while this pass held the
 		// scheduler active, requeue it immediately on exit instead of relying on
 		// the original retry goroutine to still be alive.
@@ -12204,7 +12749,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 			db.debugVlogMaintf("rewrite_queue_prune dropped=%d remaining=%d", dropped, len(rewriteQueue))
 		}
 	}
-	stagePending, _, stageErr := db.currentVlogGenerationRewriteStage()
+	stagePending, stageObservedAt, stageErr := db.currentVlogGenerationRewriteStage()
 	if stageErr != nil {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
 		if db.notifyError != nil {
@@ -12300,12 +12845,151 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	}
 	churnBps := db.vlogGenerationEstimateChurnBps()
 
+	var rewriteLedger []backenddb.ValueLogRewritePlanSegment
+	if len(rewriteQueue) > 1 {
+		rewriteLedger, _ = db.currentVlogGenerationRewriteLedger()
+	}
 	shouldRewrite, reason := db.shouldRunVlogGenerationRewrite(totalBytes, staleRatioPPM, churnBps)
 	var rewritePlan backenddb.ValueLogRewritePlan
 	haveRewritePlan := false
 	planner, hasPlanner := db.backend.(backendValueLogRewritePlanner)
+	segmentPresence, hasSegmentPresence := db.backend.(backendValueLogSegmentPresence)
+	if hasSegmentPresence && len(rewriteLedger) > 0 {
+		filteredLedger := filterVlogGenerationRewriteLedgerToExistingSegments(rewriteLedger, segmentPresence)
+		if dropped := len(rewriteLedger) - len(filteredLedger); dropped > 0 {
+			nextStagePending := stagePending
+			nextStageObservedAt := stageObservedAt
+			if len(filteredLedger) == 0 {
+				nextStagePending = false
+				nextStageObservedAt = 0
+			}
+			if err := db.setVlogGenerationRewriteLedgerWithStage(filteredLedger, nextStagePending, nextStageObservedAt); err != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: prune missing generational rewrite queue segments: %w", err))
+				}
+				return
+			}
+			db.observeVlogGenerationRewriteQueuePrune(dropped)
+			rewriteLedger = filteredLedger
+			rewriteQueue = vlogGenerationRewriteLedgerIDs(filteredLedger)
+			stagePending = nextStagePending
+			stageObservedAt = nextStageObservedAt
+			db.debugVlogMaintf(
+				"rewrite_queue_missing_prune dropped=%d remaining=%d stage_pending=%t",
+				dropped,
+				len(rewriteQueue),
+				stagePending,
+			)
+		}
+	}
+	stageConfirmUsePersistedLedger := shouldUsePersistedVlogGenerationRewriteLedgerForConfirm(opts, stagePending, stageConfirmDue, rewriteQueue, rewriteLedger)
+	stageConfirmRefresh := hasPlanner && !stageConfirmUsePersistedLedger && shouldRefreshStagedVlogGenerationRewriteLedgerForConfirm(opts, stagePending, stageConfirmDue, rewriteQueue)
+	skipStageConfirmSparsePlan := false
+	stageConfirmReady := false
+	if stageConfirmUsePersistedLedger {
+		stageConfirmReady = true
+		skipStageConfirmSparsePlan = true
+		db.debugVlogMaintf(
+			"rewrite_stage_confirm_use_persisted queued=%d ledger=%d",
+			len(rewriteQueue),
+			len(rewriteLedger),
+		)
+	}
+	if hasPlanner && (db.shouldRefreshQueuedVlogGenerationRewriteLedger(opts, stagePending, rewriteQueue, rewriteLedger) || stageConfirmRefresh) {
+		queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, vlogGenerationReasonRewriteResume)
+		refreshedPlan, refreshErr := db.refreshQueuedVlogGenerationRewritePlan(planner, rewriteQueue, queueMinStaleRatio, opts)
+		switch {
+		case refreshErr != nil:
+			if stageConfirmRefresh {
+				skipStageConfirmSparsePlan = true
+				shouldRewrite = false
+				reason = vlogGenerationReasonNone
+				haveRewritePlan = false
+			}
+			if !isVlogGenerationPlannerCanceled(refreshErr) && db.notifyError != nil {
+				db.notifyError(fmt.Errorf("cachingdb: refresh generational rewrite queue: %w", refreshErr))
+			}
+		case !vlogGenerationRewritePlanHasSelectionSignal(refreshedPlan):
+			// No useful signal; keep the persisted queue/ledger as-is.
+		case len(refreshedPlan.SelectedSegments) == 0:
+			if stageConfirmRefresh {
+				// Stage-confirm passes are allowed to observe that staged debt is
+				// still not executable (for example an empty rewrite budget) without
+				// consuming or dropping the staged queue. Keep the persisted
+				// queue/ledger intact so a later confirmation can retry.
+				skipStageConfirmSparsePlan = true
+				db.debugVlogMaintf(
+					"rewrite_queue_refresh_stage_keep queued=%d min_ratio=%.6f min_stale_bytes=%d",
+					len(rewriteQueue),
+					queueMinStaleRatio,
+					vlogGenerationRewriteMinSegmentStaleBytes,
+				)
+				break
+			}
+			dropped := len(rewriteQueue)
+			if err := db.setVlogGenerationRewriteLedger(nil); err != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: clear refreshed generational rewrite ledger: %w", err))
+				}
+				return
+			}
+			if dropped > 0 {
+				db.observeVlogGenerationRewriteQueuePrune(dropped)
+			}
+			rewriteQueue = nil
+			rewriteLedger = nil
+			if stageConfirmRefresh {
+				stagePending = false
+				skipStageConfirmSparsePlan = true
+			}
+			db.debugVlogMaintf(
+				"rewrite_queue_refresh_prune dropped=%d remaining=0 min_ratio=%.6f min_stale_bytes=%d",
+				dropped,
+				queueMinStaleRatio,
+				vlogGenerationRewriteMinSegmentStaleBytes,
+			)
+		default:
+			persistStagePending := false
+			persistStageObservedAt := int64(0)
+			if stageConfirmRefresh {
+				// Keep the persisted staged state until this pass actually executes;
+				// confirmation finding an executable chunk is not the same thing as
+				// successfully spending it.
+				persistStagePending = true
+				persistStageObservedAt = stageObservedAt
+				if persistStageObservedAt <= 0 {
+					persistStageObservedAt = now.UnixNano()
+				}
+			}
+			if err := db.setVlogGenerationRewriteLedgerWithStage(refreshedPlan.SelectedSegments, persistStagePending, persistStageObservedAt); err != nil {
+				db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+				if db.notifyError != nil {
+					db.notifyError(fmt.Errorf("cachingdb: persist refreshed generational rewrite ledger: %w", err))
+				}
+				return
+			}
+			if dropped := len(rewriteQueue) - len(refreshedPlan.SourceFileIDs); dropped > 0 {
+				db.observeVlogGenerationRewriteQueuePrune(dropped)
+				db.debugVlogMaintf(
+					"rewrite_queue_refresh_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
+					dropped,
+					len(refreshedPlan.SourceFileIDs),
+					queueMinStaleRatio,
+					vlogGenerationRewriteMinSegmentStaleBytes,
+				)
+			}
+			rewriteQueue = append(rewriteQueue[:0], refreshedPlan.SourceFileIDs...)
+			rewriteLedger = refreshedPlan.SelectedSegments
+			if stageConfirmRefresh {
+				skipStageConfirmSparsePlan = true
+				stageConfirmReady = true
+			}
+		}
+	}
 	allowCheckpointKickBypass := opts.bypassQuiet && !opts.skipCheckpoint
-	hasExecutableRewriteQueue := len(rewriteQueue) > 0 && !stagePending
+	hasExecutableRewriteQueue := len(rewriteQueue) > 0 && (!stagePending || stageConfirmReady)
 	allowCheckpointKickRetry := allowCheckpointKickBypass && hasExecutableRewriteQueue
 	ageBlockedRetryDue := len(rewriteQueue) == 0 && db.vlogGenerationRewriteAgeBlockedDue(now)
 	if hasExecutableRewriteQueue {
@@ -12337,7 +13021,7 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	// Stale-ratio trigger: use a sparse rewrite plan (live-byte estimate) to
 	// detect when any segments are meaningfully stale. This avoids relying on
 	// reclaimable-WAL heuristics (which can be 0 in split-value-log mode).
-	if (len(rewriteQueue) == 0 || stagePending) && !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 {
+	if (len(rewriteQueue) == 0 || stagePending) && !shouldRewrite && hasPlanner && db.valueLogRewriteTriggerRatioPPM > 0 && !skipStageConfirmSparsePlan {
 		if planBackoff {
 			goto planned
 		}
@@ -12841,17 +13525,31 @@ planned:
 			effectiveBytesBefore := int64(stats.BytesBefore)
 			effectiveBytesAfter := int64(stats.BytesAfter)
 			gcBytesDeleted := int64(0)
+			restagedRemainingQueue := false
+			restageRemainingQueueAfterPass := false
 			if len(processedRewriteIDs) > 0 {
 				if err := db.consumeVlogGenerationRewriteQueueChunk(processedRewriteIDs); err != nil {
 					return fmt.Errorf("consume generational rewrite queue: %w", err)
+				}
+				// Checkpoint-coupled resumable work should consume one chunk, then
+				// re-confirm the remaining tail later instead of draining multiple
+				// queued segments back-to-back in the same hot ingest window.
+				if hadRewriteQueue && !opts.skipCheckpoint {
+					restageRemainingQueueAfterPass = true
 				}
 			}
 			if gcer, ok := db.backend.(backendValueLogGCer); ok {
 				gcCtx, gcCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				gcStart := time.Now()
-				gcStats, gcErr := gcer.ValueLogGC(gcCtx, backenddb.ValueLogGCOptions{
+				gcOpts := backenddb.ValueLogGCOptions{
 					ProtectedPaths: db.valueLogProtectedPaths(),
-				})
+				}
+				if refs, ok := db.backend.(backendLastValueLogRewriteReferencedSegmentser); ok {
+					if cached, ok := refs.LastValueLogRewriteReferencedSegments(); ok {
+						gcOpts.ReferencedIDs = cached
+					}
+				}
+				gcStats, gcErr := gcer.ValueLogGC(gcCtx, gcOpts)
 				gcCancel()
 				if gcErr != nil {
 					db.debugVlogMaintf("gc_after_rewrite_err reason=%s err=%v dur_ms=%.3f", vlogGenerationReasonString(reason), gcErr, float64(time.Since(gcStart).Microseconds())/1000)
@@ -12866,7 +13564,9 @@ planned:
 				}
 				db.debugVlogMaintf("gc_after_rewrite_done reason=%s dur_ms=%.3f", vlogGenerationReasonString(reason), float64(time.Since(gcStart).Microseconds())/1000)
 			}
+			db.cleanupProcessedRetainedRewriteSources(reason, processedRewriteIDs)
 			locallyEffectiveProcessedDebt := len(processedRewriteIDs) > 0 && processedLedgerOK && processedLedgerStaleBytes > 0 && stats.RecordsCopied > 0
+			db.debugVlogGenerationProcessedSourceState(reason, processedRewriteIDs)
 			if effectiveBytesBefore > 0 && effectiveBytesAfter >= effectiveBytesBefore && !locallyEffectiveProcessedDebt {
 				db.vlogGenerationRewriteIneffectiveRuns.Add(1)
 				db.vlogGenerationRewriteIneffectiveBytesIn.Add(uint64(effectiveBytesBefore))
@@ -12910,6 +13610,22 @@ planned:
 					stats.RecordsCopied,
 				)
 			}
+			if restageRemainingQueueAfterPass {
+				if remaining, restaged, err := db.restageVlogGenerationRewriteQueueRemaining(time.Now().UnixNano()); err != nil {
+					return fmt.Errorf("restage remaining generational rewrite queue: %w", err)
+				} else if restaged {
+					restagedRemainingQueue = true
+					// A newly-restaged tail should wait for its confirmation delay,
+					// even if checkpoint kicks piled up during the rewrite/GC tail of
+					// the just-finished maintenance pass.
+					db.vlogGenerationCheckpointKickPending.Store(false)
+					db.debugVlogMaintf(
+						"rewrite_queue_restage remaining=%d confirm_delay_ms=%d",
+						remaining,
+						vlogGenerationRewriteMinInterval.Milliseconds(),
+					)
+				}
+			}
 			if penalizeProcessedRewriteDebt {
 				db.vlogGenerationRewriteIneffectiveLastNS.Store(time.Now().UnixNano())
 				if err := db.recordVlogGenerationRewritePenalty(
@@ -12933,6 +13649,13 @@ planned:
 					penaltyReason,
 					vlogGenerationRewriteIneffectiveCooldown.Milliseconds(),
 					gcBytesDeleted,
+				)
+			}
+			if restagedRemainingQueue {
+				db.debugVlogMaintf(
+					"rewrite_queue_restaged reason=%s processed_ids=%d",
+					vlogGenerationReasonString(reason),
+					len(processedRewriteIDs),
 				)
 			}
 			db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
@@ -14035,9 +14758,10 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 func (db *DB) Close() error {
 	var errs []error
 	hadMemtables := false
-	db.closing.Store(true)
 	unregisterTreeDBExpvarStatsDB(db)
 	db.stopDomainIngressWorkers()
+	db.maybeRunVlogGenerationExitStageConfirm()
+	db.closing.Store(true)
 	db.waitForRetainedValueLogPrune()
 
 	// Lock order must match Checkpoint (flushMu -> writeMu) to avoid a deadlock
@@ -20955,7 +21679,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 				wg.Add(1)
 				go func(batch *laneValueLogBatch) {
 					defer wg.Done()
-					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], b.dictID, nil, batch.records, durability)
+					batch.ptrs, batch.err = b.db.appendValueLog(&b.db.lanes[batch.laneID], b.dictID, nil, batch.records, durability, false)
 				}(lb)
 			}
 			wg.Wait()
@@ -21039,7 +21763,7 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 					}
 				}
 			}
-			ptrs, buildErr = b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability)
+			ptrs, buildErr = b.db.appendValueLog(lane, b.dictID, nil, valueRecords, durability, false)
 			if buildErr != nil {
 				b.db.writeMu.RUnlock()
 				return buildErr

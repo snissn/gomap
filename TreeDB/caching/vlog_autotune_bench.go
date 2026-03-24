@@ -462,7 +462,7 @@ func warmupDictTrainer(db *DB, writer *benchValueWriter, sink *valuelog.VirtualS
 		records = append(records, valuelog.Record{RID: rid, Value: values[i]})
 		rid++
 		if len(records) == cap(records) || i == len(values)-1 {
-			ptrs, err := db.appendValueLog(lane, 0, nil, records, journalDurabilityNone)
+			ptrs, err := db.appendValueLog(lane, 0, nil, records, journalDurabilityNone, false)
 			if err != nil {
 				return err
 			}
@@ -535,7 +535,7 @@ func runBenchSegment(db *DB, writer *benchValueWriter, sink *valuelog.VirtualSin
 					dictID = id
 				}
 			}
-			ptrs, err := db.appendValueLog(lane, dictID, nil, batch, journalDurabilityNone)
+			ptrs, err := db.appendValueLog(lane, dictID, nil, batch, journalDurabilityNone, false)
 			if err != nil {
 				return VlogAutotuneBenchSegmentResult{}, err
 			}

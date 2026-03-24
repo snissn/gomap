@@ -1046,6 +1046,19 @@ func (db *DB) resolveVlogWriteMode(l *lane, dictID uint64, rawPayloadBytes, unit
 	}
 }
 
+func (db *DB) resolveLeafPageVlogWriteMode(l *lane, rawPayloadBytes, unitPayloadBytes int) (vlogCompressionWriteMode, valuelog.BlockCodec, bool) {
+	mode := normalizeVlogCompressionMode(db.valueLogCompressionMode)
+	switch mode {
+	case vlogCompressionDefault, vlogCompressionAuto:
+		// Outer leaf pages are written one page per value-log record on the hot
+		// cached path today. In default/auto mode, avoid the large-payload LZ4
+		// shortcut that dominates runtime read/decode cost for leaf-backed DBs.
+		return vlogWriteBlock, valuelog.BlockCodecSnappy, false
+	default:
+		return db.resolveVlogWriteMode(l, 0, rawPayloadBytes, unitPayloadBytes)
+	}
+}
+
 func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, blockCodec valuelog.BlockCodec, rawPayloadBytes, unitPayloadBytes, storedPayloadBytes int, probe bool, wallNs int64) {
 	if db == nil || l == nil {
 		return

@@ -30,7 +30,7 @@ func BenchmarkAppendValueLogAllocs(b *testing.B) {
 	}
 
 	// Warm the pools and writer scratch.
-	ptrs, err := db.appendValueLog(&db.lanes[0], 0, nil, records, journalDurabilityNone)
+	ptrs, err := db.appendValueLog(&db.lanes[0], 0, nil, records, journalDurabilityNone, false)
 	if err != nil {
 		b.Fatalf("appendValueLog warmup: %v", err)
 	}
@@ -39,7 +39,7 @@ func BenchmarkAppendValueLogAllocs(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		ptrs, err := db.appendValueLog(&db.lanes[0], 0, nil, records, journalDurabilityNone)
+		ptrs, err := db.appendValueLog(&db.lanes[0], 0, nil, records, journalDurabilityNone, false)
 		if err != nil {
 			b.Fatalf("appendValueLog: %v", err)
 		}

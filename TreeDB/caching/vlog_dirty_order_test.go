@@ -126,7 +126,7 @@ func TestAppendValueLog_SetsDirtyBeforeUnlock(t *testing.T) {
 		{RID: 1, Value: []byte("v1")},
 		{RID: 2, Value: []byte("v2")},
 	}
-	ptrs, err := db.appendValueLog(l, 0, nil, records, journalDurabilityNone)
+	ptrs, err := db.appendValueLog(l, 0, nil, records, journalDurabilityNone, false)
 	if err != nil {
 		t.Fatalf("appendValueLog: %v", err)
 	}

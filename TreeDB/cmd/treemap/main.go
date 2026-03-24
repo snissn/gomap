@@ -38,6 +38,10 @@ Commands:
   compact         Compact/rebuild the index.db in-place (requires -rw)
   vacuum          Rebuild index.db via swap (shrinks file; requires -rw)
   vlog-audit      Audit value-log filesystem, GC, and rewrite-plan state (requires -rw)
+  vlog-shape      Analyze value-log segment shape, gzip slack, and value cohorts
+  vlog-maint-once Inspect/seed cached rewrite debt and run one maintenance pass (requires -rw)
+  vlog-maint-exit-loop Run bounded explicit stage-confirm-exit maintenance passes (requires -rw)
+  vlog-postsync-optimize Run explicit and/or offline post-sync value-log optimization (requires -rw)
   vlog-gc         Delete unreferenced value-log segments (requires -rw)
   vlog-rewrite    Rewrite value-log segments and shrink via swap (requires -rw)
   get             Get a single key
@@ -92,6 +96,14 @@ func main() {
 		runVacuum(dir, args)
 	case "vlog-audit":
 		runVlogAudit(dir, args)
+	case "vlog-shape":
+		runVlogShape(dir, args)
+	case "vlog-maint-once":
+		runVlogMaintOnce(dir, args)
+	case "vlog-maint-exit-loop":
+		runVlogMaintExitLoop(dir, args)
+	case "vlog-postsync-optimize":
+		runVlogPostsyncOptimize(dir, args)
 	case "vlog-gc":
 		runVlogGC(dir, args)
 	case "vlog-rewrite":
@@ -595,6 +607,7 @@ func resolveMainDBDir(dir string) string {
 func runVlogRewrite(dir string, args []string) {
 	fs := flag.NewFlagSet("vlog-rewrite", flag.ExitOnError)
 	rw := fs.Bool("rw", false, "Open read-write (required; may replay WAL or repair files)")
+	cpuprofile := fs.String("cpuprofile", "", "write cpu profile to file while rewriting the value log")
 	_ = fs.Parse(args)
 
 	if !*rw {
@@ -604,7 +617,20 @@ func runVlogRewrite(dir string, args []string) {
 	rootDir := resolveTreeDBRootDir(dir)
 	opts := treedb.Options{Dir: rootDir}
 	applyPersistedFormatConfig(dir, &opts)
+	var profFile *os.File
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			fatalf("cpuprofile: %v", err)
+		}
+		profFile = f
+		runtimepprof.StartCPUProfile(profFile)
+	}
 	stats, err := treedb.ValueLogRewriteOffline(opts)
+	if profFile != nil {
+		runtimepprof.StopCPUProfile()
+		_ = profFile.Close()
+	}
 	if err != nil {
 		fatalf("ValueLogRewriteOffline error: %v", err)
 	}

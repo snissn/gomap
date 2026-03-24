@@ -15,6 +15,10 @@ type ValueLogRewriteStats struct {
 	RecordsCopied  int
 }
 
+// ValueLogRewritePlan summarizes which segments a sparse online rewrite would
+// select under the provided options.
+type ValueLogRewritePlan = treedbdb.ValueLogRewritePlan
+
 // ValueLogRewriteOnlineOptions controls online rewrite batching behavior.
 type ValueLogRewriteOnlineOptions = treedbdb.ValueLogRewriteOnlineOptions
 
@@ -97,4 +101,25 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	}
 	success = true
 	return ValueLogRewriteStats(stats), nil
+}
+
+// ValueLogRewritePlan returns the segments that would be selected for sparse
+// online rewrite under the provided options.
+func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlineOptions) (ValueLogRewritePlan, error) {
+	if err := db.ensureOpen(); err != nil {
+		return ValueLogRewritePlan{}, err
+	}
+	if db.backend == nil {
+		return ValueLogRewritePlan{}, ErrClosed
+	}
+	if db.cached != nil {
+		if err := db.Checkpoint(); err != nil {
+			return ValueLogRewritePlan{}, err
+		}
+	}
+	plan, err := db.backend.ValueLogRewritePlan(ctx, treedbdb.ValueLogRewriteOnlineOptions(opts))
+	if err != nil {
+		return ValueLogRewritePlan{}, err
+	}
+	return ValueLogRewritePlan(plan), nil
 }
