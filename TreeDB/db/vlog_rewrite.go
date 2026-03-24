@@ -940,6 +940,13 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 			})
 			continue
 		}
+		if liveByID == nil {
+			candidates = append(candidates, rewriteSourceSegment{
+				fileID:    id,
+				liveBytes: size,
+			})
+			continue
+		}
 		liveBytes := liveByID[id]
 		if liveBytes < 0 {
 			liveBytes = 0

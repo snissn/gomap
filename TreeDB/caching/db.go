@@ -4733,6 +4733,7 @@ type DB struct {
 	vlogGenerationRewritePlanSelected          atomic.Uint64
 	vlogGenerationRewritePlanCanceledLastNS    atomic.Int64
 	vlogGenerationRewriteAgeBlockedUntilNS     atomic.Int64
+	vlogGenerationRewriteAgeBlockedWakeRunning atomic.Bool
 	vlogGenerationRewriteIneffectiveLastNS     atomic.Int64
 	vlogGenerationRewriteIneffectiveRuns       atomic.Uint64
 	vlogGenerationRewriteIneffectiveBytesIn    atomic.Uint64
@@ -11835,43 +11836,52 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time) {
 	}
 	until := deadline.UnixNano()
 	db.vlogGenerationRewriteAgeBlockedUntilNS.Store(until)
-	wait := time.Until(deadline)
-	if wait < 0 {
-		wait = 0
+	if !db.vlogGenerationRewriteAgeBlockedWakeRunning.CompareAndSwap(false, true) {
+		return
 	}
 	db.wg.Add(1)
-	go func(expectedUntil int64, delay time.Duration) {
+	go func() {
 		defer db.wg.Done()
-		if delay > 0 {
-			timer := time.NewTimer(delay)
-			select {
-			case <-timer.C:
-			case <-db.closeCh:
-				if !timer.Stop() {
-					<-timer.C
-				}
+		defer db.vlogGenerationRewriteAgeBlockedWakeRunning.Store(false)
+		for !db.closing.Load() {
+			expectedUntil := db.vlogGenerationRewriteAgeBlockedUntilNS.Load()
+			if expectedUntil <= 0 {
 				return
 			}
-			timer.Stop()
-		}
-		if db.closing.Load() {
+			deadline := time.Unix(0, expectedUntil)
+			delay := time.Until(deadline)
+			if delay > 0 {
+				timer := time.NewTimer(delay)
+				select {
+				case <-timer.C:
+				case <-db.closeCh:
+					if !timer.Stop() {
+						<-timer.C
+					}
+					return
+				}
+				timer.Stop()
+			}
+			if db.closing.Load() {
+				return
+			}
+			if db.vlogGenerationRewriteAgeBlockedUntilNS.Load() != expectedUntil {
+				continue
+			}
+			db.debugVlogMaintf(
+				"rewrite_plan age_blocked_retry_due retry_after_ms=%d",
+				delay.Milliseconds(),
+			)
+			db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
+				bypassQuiet:           true,
+				skipRetainedPruneWait: true,
+				skipCheckpoint:        false,
+				rewriteDebtDrain:      true,
+				debugSource:           "rewrite_age_blocked",
+			})
 			return
 		}
-		if db.vlogGenerationRewriteAgeBlockedUntilNS.Load() != expectedUntil {
-			return
-		}
-		db.debugVlogMaintf(
-			"rewrite_plan age_blocked_retry_due retry_after_ms=%d",
-			delay.Milliseconds(),
-		)
-		db.startVlogGenerationDeferredMaintenance(vlogGenerationMaintenanceOptions{
-			bypassQuiet:           true,
-			skipRetainedPruneWait: true,
-			skipCheckpoint:        false,
-			rewriteDebtDrain:      true,
-			debugSource:           "rewrite_age_blocked",
-		})
-	}(until, wait)
+	}()
 }
 
 func (db *DB) clearVlogGenerationRewriteAgeBlockedUntil() {
@@ -12106,6 +12116,7 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 		)
 	}
 	deadline := time.Now().Add(retryWindow)
+	sleepDelay := 10 * time.Millisecond
 	for !db.closing.Load() {
 		attempt++
 		if opts.debugSource != "" {
@@ -12158,7 +12169,13 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 			}
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(sleepDelay)
+		if sleepDelay < 100*time.Millisecond {
+			sleepDelay *= 2
+			if sleepDelay > 100*time.Millisecond {
+				sleepDelay = 100 * time.Millisecond
+			}
+		}
 	}
 }
 
@@ -12174,7 +12191,6 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 		return
 	}
 	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
-		db.vlogGenerationCheckpointKickPending.Store(false)
 		if opts.debugSource != "" {
 			db.debugVlogMaintf(
 				"maintenance_skip reason=maintenance_phase source=%s phase=%s checkpoint_pending=%t deferred_pending=%t",
@@ -12519,6 +12535,15 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				haveRewritePlan = true
 			}
 		} else if shouldDeferVlogGenerationRewritePlanForAge(plan, planOpts.MinSegmentAge) {
+			if stagePending {
+				if err := db.setVlogGenerationRewriteLedger(nil); err != nil {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+					if db.notifyError != nil {
+						db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite ledger after age-blocked confirmation: %w", err))
+					}
+					return
+				}
+			}
 			db.setVlogGenerationRewriteAgeBlockedUntil(now.Add(plan.AgeBlockedMinRemainingAge))
 			db.debugVlogMaintf(
 				"rewrite_plan stale_ratio_trigger age_blocked segments=%d stale_bytes=%d retry_after_ms=%d min_age_ms=%d",
@@ -12528,6 +12553,15 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 				planOpts.MinSegmentAge.Milliseconds(),
 			)
 		} else {
+			if stagePending {
+				if err := db.setVlogGenerationRewriteLedger(nil); err != nil {
+					db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerError)
+					if db.notifyError != nil {
+						db.notifyError(fmt.Errorf("cachingdb: clear staged generational rewrite ledger after empty confirmation: %w", err))
+					}
+					return
+				}
+			}
 			db.clearVlogGenerationRewriteAgeBlockedUntil()
 			updatePlanTimestamp = true
 		}
@@ -13143,8 +13177,6 @@ func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
 	if phase == MaintenancePhaseSteady {
 		db.scheduleDueVlogGenerationDeferredMaintenance()
 		db.schedulePendingVlogGenerationCheckpointKick()
-	} else {
-		db.vlogGenerationCheckpointKickPending.Store(false)
 	}
 }
 

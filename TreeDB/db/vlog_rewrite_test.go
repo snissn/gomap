@@ -1533,6 +1533,46 @@ func TestSelectRewriteSourceSegments_MinSegmentAgeAloneEnablesSelection(t *testi
 	}
 }
 
+func TestSelectRewriteSourceSegments_MinSegmentAgeOnlyWithoutLiveEstimateSelectsEligibleSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	pathOld := filepath.Join(dir, "value-l0-000001.log")
+	pathYoung := filepath.Join(dir, "value-l0-000002.log")
+	for _, path := range []string{pathOld, pathYoung} {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 100), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	now := time.Now()
+	oldTime := now.Add(-5 * time.Minute)
+	youngTime := now.Add(-30 * time.Second)
+	if err := os.Chtimes(pathOld, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+	if err := os.Chtimes(pathYoung, youngTime, youngTime); err != nil {
+		t.Fatalf("chtimes young: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: pathOld},
+		2: {Path: pathYoung},
+	}
+
+	selected, _ := selectRewriteSourceSegmentsWithStats(ValueLogRewriteOnlineOptions{
+		MinSegmentAge: 2 * time.Minute,
+	}, files, map[uint32]struct{}{}, nil)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected only old segment selected without live estimate, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected old segment selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; ok {
+		t.Fatalf("young segment should be skipped, got=%v", selected)
+	}
+}
+
 func TestSelectRewriteSourceSegments_SourceFileIDsDeduplicatesBeforeBudgeting(t *testing.T) {
 	dir := t.TempDir()
 	path1 := filepath.Join(dir, "value-l0-000001.log")

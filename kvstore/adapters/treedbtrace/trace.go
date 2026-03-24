@@ -218,7 +218,9 @@ func initTrace() {
 	traceInst = t
 }
 
-// SetTracePhase updates the current phase tag for trace events.
+// SetTracePhase updates the current phase tag for trace events and also drives
+// the TreeDB maintenance-phase bridge used by the treedbtrace wrapper, even
+// when JSONL tracing is disabled.
 func SetTracePhase(phase string) {
 	phase = phaseBus.set(phase)
 	t := getTrace()
