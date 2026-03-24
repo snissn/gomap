@@ -7,7 +7,7 @@ import (
 )
 
 func TestVlogGenerationCheckpointKick_SkipsWhenWALOn(t *testing.T) {
-	t.Setenv(envDisableVlogGenerationCheckpointKick, "")
+	t.Setenv(envDisableVlogGenerationCheckpointKick, "0")
 
 	dir := t.TempDir()
 	backend, err := backenddb.Open(backenddb.Options{Dir: dir})

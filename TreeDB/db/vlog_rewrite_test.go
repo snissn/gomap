@@ -1595,6 +1595,18 @@ func TestSelectRewriteSourceSegments_SourceFileIDsIgnoreSparseCaps(t *testing.T)
 	}
 }
 
+func TestRewritePlanNeedsLiveEstimate_MinSegmentAgeOnly(t *testing.T) {
+	if rewritePlanNeedsLiveEstimate(ValueLogRewriteOnlineOptions{MinSegmentAge: time.Minute}) {
+		t.Fatalf("expected MinSegmentAge-only selection to avoid live-byte estimation")
+	}
+	if !rewritePlanNeedsLiveEstimate(ValueLogRewriteOnlineOptions{MinSegmentAge: time.Minute, MaxSourceBytes: 1}) {
+		t.Fatalf("expected MinSegmentAge+MaxSourceBytes to require live-byte estimation")
+	}
+	if !rewritePlanNeedsLiveEstimate(ValueLogRewriteOnlineOptions{MinSegmentAge: time.Minute, MinSegmentStaleRatio: 0.5}) {
+		t.Fatalf("expected stale-ratio selection to require live-byte estimation")
+	}
+}
+
 func TestValueLogRewriteOnline_SourceFileIDsWithStaleFilterMatchesPlanSelection(t *testing.T) {
 	dir := t.TempDir()
 

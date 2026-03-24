@@ -313,7 +313,7 @@ func rewritePlanNeedsLiveEstimate(opts ValueLogRewriteOnlineOptions) bool {
 		return false
 	}
 	if len(opts.SourceFileIDs) == 0 {
-		return true
+		return opts.MinSegmentStaleRatio > 0 || opts.MinSegmentStaleBytes > 0 || opts.MaxSourceSegments > 0 || opts.MaxSourceBytes > 0
 	}
 	return opts.MinSegmentStaleRatio > 0 || opts.MinSegmentStaleBytes > 0
 }

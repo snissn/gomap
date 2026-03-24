@@ -43,13 +43,14 @@ func (d *DB) Inner() kvstore.DB { return d.inner }
 func (d *DB) Name() string { return d.inner.Name() }
 
 func (d *DB) Close() error {
+	err := d.inner.Close()
 	if d.phase != nil {
 		phaseBus.unregister(d.phase)
 	}
 	if t := getTrace(); t != nil {
 		t.closeDB()
 	}
-	return d.inner.Close()
+	return err
 }
 
 func (d *DB) Get(key []byte) ([]byte, error) {

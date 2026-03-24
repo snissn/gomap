@@ -12158,9 +12158,7 @@ func (db *DB) runVlogGenerationMaintenanceRetries(opts vlogGenerationMaintenance
 			}
 			return
 		}
-		timer := time.NewTimer(10 * time.Millisecond)
-		<-timer.C
-		timer.Stop()
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
