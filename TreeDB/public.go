@@ -26,6 +26,14 @@ import (
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
 
+type MaintenancePhase = caching.MaintenancePhase
+
+const (
+	MaintenancePhaseSteady  = caching.MaintenancePhaseSteady
+	MaintenancePhaseRestore = caching.MaintenancePhaseRestore
+	MaintenancePhaseCatchUp = caching.MaintenancePhaseCatchUp
+)
+
 var errVacuumUnsupported = db.ErrVacuumUnsupported
 
 const (
@@ -1339,6 +1347,20 @@ func (db *DB) DurabilityMode() string {
 		return ""
 	}
 	return db.durabilityMode
+}
+
+func (db *DB) MaintenancePhase() MaintenancePhase {
+	if db == nil || db.cached == nil {
+		return MaintenancePhaseSteady
+	}
+	return db.cached.MaintenancePhase()
+}
+
+func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
+	if db == nil || db.cached == nil {
+		return
+	}
+	db.cached.SetMaintenancePhase(phase)
 }
 
 // Print dumps best-effort debug output for the underlying backend.

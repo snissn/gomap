@@ -4458,6 +4458,7 @@ type DB struct {
 	checkpointCond    *sync.Cond
 	checkpointing     atomic.Bool
 	maintenanceActive atomic.Bool
+	maintenancePhase  atomic.Uint32
 
 	// Level 0 (Memory)
 	mutableShards                 []memShard
@@ -6717,6 +6718,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.rebuildGenerationLaneSets()
 	db.valueLogAutotuneMetrics.init(valuelog.RealClock{})
 	db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+	db.maintenancePhase.Store(uint32(MaintenancePhaseSteady))
 	db.bpCond = sync.NewCond(&db.bpMu)
 	db.laneCond = sync.NewCond(&db.laneMu)
 	db.checkpointCond = sync.NewCond(&db.checkpointMu)
@@ -7295,6 +7297,14 @@ const (
 	autoCheckpointModeForce
 )
 
+type MaintenancePhase uint8
+
+const (
+	MaintenancePhaseSteady MaintenancePhase = iota
+	MaintenancePhaseRestore
+	MaintenancePhaseCatchUp
+)
+
 const (
 	autoCheckpointMinIdleWALBytesMin int64 = 1 << 20  // 1MiB
 	autoCheckpointMinIdleWALBytesMax int64 = 32 << 20 // 32MiB
@@ -7319,6 +7329,26 @@ func autoCheckpointReasonString(v uint32) string {
 		return "force"
 	default:
 		return "unknown"
+	}
+}
+
+func normalizeMaintenancePhase(phase MaintenancePhase) MaintenancePhase {
+	switch phase {
+	case MaintenancePhaseSteady, MaintenancePhaseRestore, MaintenancePhaseCatchUp:
+		return phase
+	default:
+		return MaintenancePhaseSteady
+	}
+}
+
+func maintenancePhaseString(v uint32) string {
+	switch normalizeMaintenancePhase(MaintenancePhase(v)) {
+	case MaintenancePhaseRestore:
+		return "restore"
+	case MaintenancePhaseCatchUp:
+		return "catchup"
+	default:
+		return "steady"
 	}
 }
 
@@ -11311,6 +11341,13 @@ func (db *DB) startVlogGenerationLoop() {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
 	}
+	if !db.disableJournal {
+		// WAL-on catch-up has shown real state divergence when the generic
+		// periodic generation loop runs in the background. Keep WAL-on
+		// generation maintenance on explicit/manual paths only.
+		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
+		return
+	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerDisabled)
 		return
@@ -11336,9 +11373,21 @@ func (db *DB) vlogGenerationLoop() {
 			return
 		case <-ticker.C:
 			ticks++
-			db.maybeRunVlogGenerationMaintenance(ticks%vlogGenerationGCEvery == 0)
+			db.maybeRunPeriodicVlogGenerationMaintenance(ticks%vlogGenerationGCEvery == 0)
 		}
 	}
+}
+
+func (db *DB) maybeRunPeriodicVlogGenerationMaintenance(runGC bool) bool {
+	if db == nil {
+		return false
+	}
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		db.debugVlogMaintf("periodic_skip reason=maintenance_phase phase=%s run_gc=%t", maintenancePhaseString(uint32(db.MaintenancePhase())), runGC)
+		return false
+	}
+	db.maybeRunVlogGenerationMaintenance(runGC)
+	return true
 }
 
 func (db *DB) vlogGenerationRewriteBudgetCapBytes() int64 {
@@ -13068,6 +13117,38 @@ planned:
 	return
 }
 
+func (db *DB) MaintenancePhase() MaintenancePhase {
+	if db == nil {
+		return MaintenancePhaseSteady
+	}
+	return normalizeMaintenancePhase(MaintenancePhase(db.maintenancePhase.Load()))
+}
+
+func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
+	if db == nil {
+		return
+	}
+	phase = normalizeMaintenancePhase(phase)
+	prev := normalizeMaintenancePhase(MaintenancePhase(db.maintenancePhase.Swap(uint32(phase))))
+	if prev == phase {
+		return
+	}
+	db.debugVlogMaintf("maintenance_phase_change from=%s to=%s", maintenancePhaseString(uint32(prev)), maintenancePhaseString(uint32(phase)))
+	if phase == MaintenancePhaseSteady {
+		db.scheduleDueVlogGenerationDeferredMaintenance()
+		db.schedulePendingVlogGenerationCheckpointKick()
+	}
+}
+
+func (db *DB) suppressBackgroundVlogGenerationForMaintenancePhase() bool {
+	switch db.MaintenancePhase() {
+	case MaintenancePhaseRestore, MaintenancePhaseCatchUp:
+		return true
+	default:
+		return false
+	}
+}
+
 func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	if db == nil || db.closing.Load() {
 		if db != nil {
@@ -13085,6 +13166,17 @@ func (db *DB) maybeKickVlogGenerationMaintenanceAfterCheckpoint() {
 	}
 	if db.valueLogGenerationPolicy != uint8(backenddb.ValueLogGenerationHotWarmCold) {
 		db.debugVlogMaintf("checkpoint_kick_skip reason=policy_off policy=%d", db.valueLogGenerationPolicy)
+		return
+	}
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		db.debugVlogMaintf("checkpoint_kick_skip reason=maintenance_phase phase=%s", maintenancePhaseString(uint32(db.MaintenancePhase())))
+		return
+	}
+	if !db.disableJournal {
+		// In WAL-on profiles, checkpoint-kick maintenance races with restore/catch-up
+		// work and has produced real post-snapshot state divergence. Keep WAL-on
+		// generation maintenance off the checkpoint-triggered fast path.
+		db.debugVlogMaintf("checkpoint_kick_skip reason=wal_on")
 		return
 	}
 	now := time.Now()
@@ -18337,6 +18429,7 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.memory.vlog_retained_bytes_estimate"] = fmt.Sprintf("%d", vlogBytes)
 	stats["treedb.cache.vlog_generation.policy"] = fmt.Sprintf("%d", db.valueLogGenerationPolicy)
 	stats["treedb.cache.vlog_generation.enabled"] = fmt.Sprintf("%t", db.valueLogGenerationPolicy == uint8(backenddb.ValueLogGenerationHotWarmCold))
+	stats["treedb.cache.vlog_generation.maintenance_phase"] = maintenancePhaseString(db.maintenancePhase.Load())
 	stats["treedb.cache.vlog_generation.scheduler_state"] = vlogGenerationSchedulerStateString(db.vlogGenerationSchedulerState.Load())
 	stats["treedb.cache.vlog_generation.scheduler_last_reason"] = vlogGenerationReasonString(db.vlogGenerationLastReason.Load())
 	stats["treedb.cache.vlog_generation.checkpoint_kick.active"] = fmt.Sprintf("%t", db.vlogGenerationCheckpointKickActive.Load())

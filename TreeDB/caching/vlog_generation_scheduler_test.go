@@ -3289,7 +3289,7 @@ func TestCheckpoint_KicksVlogGenerationRewriteDespiteRecentForegroundActivity(t 
 	}
 }
 
-func TestCheckpoint_KicksVlogGenerationRewrite_WALOn(t *testing.T) {
+func TestCheckpoint_DoesNotKickVlogGenerationRewrite_WALOn(t *testing.T) {
 	disableVlogGenerationLoop(t)
 
 	dir := t.TempDir()
@@ -3342,17 +3342,11 @@ func TestCheckpoint_KicksVlogGenerationRewrite_WALOn(t *testing.T) {
 		t.Fatalf("checkpoint: %v", err)
 	}
 
-	deadline := time.Now().Add(2 * schedulerTestWait(t))
-	for {
-		if _, calls := recorder.recordedRewrite(); calls == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			_, rewriteCalls := recorder.recordedRewrite()
-			_, planCalls := recorder.recordedPlan()
-			t.Fatalf("checkpoint kick did not run rewrite in time: planCalls=%d rewriteCalls=%d", planCalls, rewriteCalls)
-		}
-		time.Sleep(10 * time.Millisecond)
+	time.Sleep(2 * schedulerTestWait(t))
+	_, rewriteCalls := recorder.recordedRewrite()
+	_, planCalls := recorder.recordedPlan()
+	if rewriteCalls != 0 || planCalls != 0 {
+		t.Fatalf("checkpoint kick unexpectedly ran under WAL-on: planCalls=%d rewriteCalls=%d", planCalls, rewriteCalls)
 	}
 }
 
@@ -3603,6 +3597,101 @@ func TestVlogGenerationMaintenance_PeriodicGCSkipsInWALOnMode(t *testing.T) {
 	}
 	if got := db.checkpointRuns.Load(); got != 0 {
 		t.Fatalf("checkpoint runs=%d want 0 for WAL-on periodic GC skip", got)
+	}
+}
+
+func TestVlogGenerationMaintenance_PeriodicSkipsWhenMaintenancePhaseNonSteady(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	if err := db.setVlogGenerationRewriteQueue([]uint32{11}); err != nil {
+		t.Fatalf("seed rewrite queue: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+
+	db.SetMaintenancePhase(MaintenancePhaseRestore)
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); ran {
+		t.Fatal("periodic maintenance unexpectedly ran during restore phase")
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want 0 during restore phase", calls)
+	}
+
+	db.SetMaintenancePhase(MaintenancePhaseSteady)
+	if ran := db.maybeRunPeriodicVlogGenerationMaintenance(false); !ran {
+		t.Fatal("periodic maintenance did not run after returning to steady phase")
+	}
+	if _, calls := recorder.recordedRewrite(); calls != 1 {
+		t.Fatalf("rewrite calls=%d want 1 after returning to steady phase", calls)
+	}
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_generation.maintenance_phase"]; got != "steady" {
+		t.Fatalf("maintenance phase=%q want steady", got)
+	}
+}
+
+func TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady(t *testing.T) {
+	disableVlogGenerationLoop(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB:              backend,
+		rewriteResponse: backenddb.ValueLogRewriteStats{BytesBefore: 64, BytesAfter: 32, RecordsCopied: 1},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	skipRetainedPrune(db)
+	db.testSkipVlogCheckpointKick = false
+	if err := db.setVlogGenerationRewriteQueue([]uint32{11}); err != nil {
+		t.Fatalf("seed rewrite queue: %v", err)
+	}
+	db.vlogGenerationRewriteBudgetTokensBytes.Store(1024)
+	forceVlogMaintenanceIdle(db)
+
+	db.SetMaintenancePhase(MaintenancePhaseCatchUp)
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	time.Sleep(2 * schedulerTestWait(t))
+	if _, calls := recorder.recordedRewrite(); calls != 0 {
+		t.Fatalf("rewrite calls=%d want 0 during catchup phase", calls)
+	}
+	if got := db.vlogGenerationCheckpointKickRuns.Load(); got != 0 {
+		t.Fatalf("checkpoint kick runs=%d want 0 during catchup phase", got)
+	}
+
+	db.SetMaintenancePhase(MaintenancePhaseSteady)
+	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for {
+		if _, calls := recorder.recordedRewrite(); calls >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			_, rewriteCalls := recorder.recordedRewrite()
+			t.Fatalf("checkpoint kick did not run after returning to steady phase: rewriteCalls=%d", rewriteCalls)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := db.vlogGenerationCheckpointKickRuns.Load(); got != 1 {
+		t.Fatalf("checkpoint kick runs=%d want 1 after returning to steady phase", got)
 	}
 }
 
