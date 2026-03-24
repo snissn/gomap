@@ -70,9 +70,10 @@ type ValueLogRewritePlan struct {
 	SelectedBytesLive  int64
 	SelectedBytesStale int64
 
-	// AgeBlocked* summarizes candidate segments that met sparse rewrite
-	// reclaim thresholds but were excluded only because MinSegmentAge had not
-	// yet elapsed.
+	// AgeBlocked* summarizes candidate segments excluded by MinSegmentAge while
+	// evaluating sparse rewrite candidates. These counters are age-filter
+	// diagnostics, not a guarantee that every counted segment would otherwise
+	// satisfy stale/live rewrite thresholds.
 	AgeBlockedSegments        int
 	AgeBlockedBytesTotal      int64
 	AgeBlockedBytesLive       int64

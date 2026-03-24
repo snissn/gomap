@@ -3367,6 +3367,50 @@ func TestVlogGenerationRewritePlan_AgeBlockedRetrySchedulesWakeup(t *testing.T) 
 	}
 }
 
+func TestVlogGenerationRewritePlan_AgeBlockedRetryReschedulesEarlierDeadline(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs:     []uint32{11},
+			SelectedBytesLive: 64,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	forceVlogMaintenanceIdle(db)
+
+	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(2 * time.Second))
+	time.Sleep(20 * time.Millisecond)
+	start := time.Now()
+	db.setVlogGenerationRewriteAgeBlockedUntil(time.Now().Add(30 * time.Millisecond))
+
+	deadline := time.Now().Add(750 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if _, calls := recorder.recordedRewrite(); calls > 0 {
+			if waited := time.Since(start); waited > 500*time.Millisecond {
+				t.Fatalf("age-blocked retry honored shortened deadline too late: waited=%s", waited)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected shortened age-blocked deadline to trigger deferred retry")
+}
+
 func TestVlogGenerationRewrite_IneffectiveBackoffSkipsImmediateGenericRetry(t *testing.T) {
 	prepareDirectSchedulerTest(t)
 

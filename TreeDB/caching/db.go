@@ -11851,7 +11851,11 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time) {
 			deadline := time.Unix(0, expectedUntil)
 			delay := time.Until(deadline)
 			if delay > 0 {
-				timer := time.NewTimer(delay)
+				sleepFor := delay
+				if sleepFor > 100*time.Millisecond {
+					sleepFor = 100 * time.Millisecond
+				}
+				timer := time.NewTimer(sleepFor)
 				select {
 				case <-timer.C:
 				case <-db.closeCh:
@@ -11861,6 +11865,10 @@ func (db *DB) setVlogGenerationRewriteAgeBlockedUntil(deadline time.Time) {
 					return
 				}
 				timer.Stop()
+				// Re-check the deadline after every bounded sleep so a shorter
+				// replacement deadline can fire promptly without spawning extra
+				// wake goroutines.
+				continue
 			}
 			if db.closing.Load() {
 				return

@@ -153,6 +153,7 @@ func TestAdaptiveMemtableMode_DefaultAdaptiveOverwriteHeavySwitchesToHashSorted(
 	defer db.Close()
 
 	b := db.NewBatch()
+	defer b.Close()
 	rng := rand.New(rand.NewSource(1))
 	const uniqueKeys = adaptiveMinWrites + 1200
 	value := make([]byte, 8<<10) // 8KiB
@@ -165,7 +166,7 @@ func TestAdaptiveMemtableMode_DefaultAdaptiveOverwriteHeavySwitchesToHashSorted(
 			t.Fatalf("Batch.Set(first %d): %v", i, err)
 		}
 	}
-	for i := range uniqueKeys {
+	for i := range keys {
 		j := rng.Intn(uniqueKeys)
 		keys[i], keys[j] = keys[j], keys[i]
 	}
