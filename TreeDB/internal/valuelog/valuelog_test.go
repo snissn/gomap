@@ -495,6 +495,79 @@ func TestValueLogManager_MmapReadAppendCompressedGroupedCache(t *testing.T) {
 	}
 }
 
+func TestValueLogManager_MmapReadAppendCompressedGroupedCacheUsesPooledRaw(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("encode file id: %v", err)
+	}
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	writer, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	writer.SetBlockCompression(BlockCodecSnappy, true)
+
+	records := make([]Record, 12)
+	for i := range records {
+		v := make([]byte, 320)
+		copy(v, []byte(fmt.Sprintf("append-cache-record-%02d:", i)))
+		for j := 40; j < len(v); j++ {
+			v[j] = 'z'
+		}
+		records[i] = Record{RID: uint64(i + 1), Value: v}
+	}
+	dst := make([]page.ValuePtr, len(records))
+	ptrs, stats, err := writer.AppendFrameWithStatsInto(0, nil, records, dst)
+	if err != nil {
+		_ = writer.Close()
+		t.Fatalf("append frame: %v", err)
+	}
+	if !stats.Kept {
+		_ = writer.Close()
+		t.Fatalf("expected block-compressed frame to be kept")
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	m, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	m.SetDisableReadChecksum(true)
+	defer func() { _ = m.Close() }()
+
+	f := m.files[fileID]
+	f.remapToFileSize()
+
+	buf := make([]byte, 0, len(records[0].Value))
+	got, err := m.ReadAppend(ptrs[0], buf)
+	if err != nil {
+		t.Fatalf("read append: %v", err)
+	}
+	if !bytes.Equal(got, records[0].Value) {
+		t.Fatalf("value mismatch")
+	}
+	if !f.cacheRawPooled {
+		t.Fatalf("expected mmap append cacheRaw to retain pooled decode scratch")
+	}
+	pooledEntries := 0
+	for i := range f.groupedFrameCache {
+		if f.groupedFrameCache[i].rawPooled {
+			pooledEntries++
+		}
+	}
+	if pooledEntries == 0 {
+		t.Fatalf("expected grouped cache to retain pooled raw decode scratch")
+	}
+}
+
 func appendCompressedFrameForCacheTests(t *testing.T, writer *Writer, frame int, n int) ([]page.ValuePtr, [][]byte) {
 	t.Helper()
 	records := make([]Record, n)

@@ -698,14 +698,8 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 			}
 			f.cacheMu.Unlock()
 
-			var raw []byte
-			pooledRaw := false
-			if cacheableRaw {
-				raw = make([]byte, 0, int(rawLen))
-			} else {
-				raw = f.takeDecodeScratch(int(rawLen))
-				pooledRaw = true
-			}
+			raw := f.takeDecodeScratch(int(rawLen))
+			pooledRaw := true
 			raw, err := decodeFramePayloadTo(frame, framePayload, f.dictLookup, rawLen, raw)
 			f.releaseDecodeScratch(prefixScratch)
 			f.releaseDecodeScratch(framePayload)
@@ -721,12 +715,13 @@ func (f *File) ReadAppend(ptr page.ValuePtr, verifyCRC bool, dst []byte) ([]byte
 				}
 				return nil, ErrCorrupt
 			}
+			storedRaw := false
 			if cacheableRaw {
-				f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, false)
+				storedRaw = f.groupedFrameCacheStore(start, verifyCRC, k, offsets, raw, true)
 			}
 
 			out, err := appendDecodedTemplatePayload(dst, raw[valStart:valEnd], f.templateLookup, f.templateDefCache, f.templateDecodeOpts)
-			if pooledRaw {
+			if pooledRaw && !storedRaw {
 				f.releaseDecodeScratch(raw)
 			}
 			return out, err

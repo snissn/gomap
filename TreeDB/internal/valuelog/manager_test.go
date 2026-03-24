@@ -326,6 +326,15 @@ func TestReadAppend_UsesGroupedFrameCacheOnFallbackCompressedFrame(t *testing.T)
 	if misses1 == 0 || entries1 == 0 || capacity1 == 0 {
 		t.Fatalf("expected first fallback read to populate grouped cache: hits=%d misses=%d entries=%d capacity=%d", hits1, misses1, entries1, capacity1)
 	}
+	pooledEntries := 0
+	for i := range f.groupedFrameCache {
+		if f.groupedFrameCache[i].rawPooled {
+			pooledEntries++
+		}
+	}
+	if pooledEntries == 0 {
+		t.Fatalf("expected grouped cache to retain pooled raw decode scratch")
+	}
 
 	got1, err := f.ReadAppend(ptrs[1], false, nil)
 	if err != nil {
