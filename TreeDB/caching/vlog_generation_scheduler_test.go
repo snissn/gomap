@@ -491,8 +491,8 @@ func TestMulDivClampInt64_ClampsOverflowAndCap(t *testing.T) {
 
 func TestVlogGenerationRewriteMaxSegmentsForRun_ClampsDebtDrainQueue(t *testing.T) {
 	db := &DB{
-		valueLogRewriteBudgetBytes:     1024,
-		valueLogGenerationWarmTarget:   256,
+		valueLogRewriteBudgetBytes:   1024,
+		valueLogGenerationWarmTarget: 256,
 	}
 
 	if got := db.vlogGenerationRewriteMaxSegmentsForRun(2, 1024, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true}); got != 2 {
