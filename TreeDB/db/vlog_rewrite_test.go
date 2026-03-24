@@ -1427,3 +1427,127 @@ func TestSelectRewriteSourceSegments_SkipsYoungSegments(t *testing.T) {
 		t.Fatalf("expected older segment 10 selected, got=%v", selected)
 	}
 }
+
+func TestSelectRewriteSourceSegments_SourceFileIDsRespectActiveProtectedAndAgeWithoutLiveEstimate(t *testing.T) {
+	dir := t.TempDir()
+
+	pathOld := filepath.Join(dir, "value-l0-000001.log")
+	pathActive := filepath.Join(dir, "value-l0-000002.log")
+	pathProtected := filepath.Join(dir, "value-l0-000003.log")
+	pathYoung := filepath.Join(dir, "value-l0-000004.log")
+	for _, path := range []string{pathOld, pathActive, pathProtected, pathYoung} {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 100), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	now := time.Now()
+	oldTime := now.Add(-5 * time.Minute)
+	youngTime := now.Add(-30 * time.Second)
+	if err := os.Chtimes(pathOld, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+	if err := os.Chtimes(pathActive, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes active: %v", err)
+	}
+	if err := os.Chtimes(pathProtected, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes protected: %v", err)
+	}
+	if err := os.Chtimes(pathYoung, youngTime, youngTime); err != nil {
+		t.Fatalf("chtimes young: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: pathOld},
+		2: {Path: pathActive},
+		3: {Path: pathProtected},
+		4: {Path: pathYoung},
+	}
+	active := map[uint32]struct{}{
+		2: {},
+	}
+
+	selected, _ := selectRewriteSourceSegmentsWithStats(ValueLogRewriteOnlineOptions{
+		SourceFileIDs:  []uint32{1, 2, 3, 4},
+		ProtectedPaths: []string{pathProtected},
+		MinSegmentAge:  2 * time.Minute,
+	}, files, active, nil)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected one eligible explicit source, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected old explicit source selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; ok {
+		t.Fatalf("active explicit source should be skipped, got=%v", selected)
+	}
+	if _, ok := selected[3]; ok {
+		t.Fatalf("protected explicit source should be skipped, got=%v", selected)
+	}
+	if _, ok := selected[4]; ok {
+		t.Fatalf("young explicit source should be skipped, got=%v", selected)
+	}
+}
+
+func TestValueLogRewriteOnline_SourceFileIDsWithStaleFilterMatchesPlanSelection(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 210_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('a' + i)}, 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 210_010, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("z"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	opts := ValueLogRewriteOnlineOptions{
+		SourceFileIDs:        []uint32{ptrs1[0].FileID, ptrs2[0].FileID},
+		MinSegmentStaleRatio: 0.25,
+		BatchSize:            8,
+	}
+
+	plan, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewritePlan: %v", err)
+	}
+	if !slices.Equal(plan.SourceFileIDs, []uint32{ptrs1[0].FileID}) {
+		t.Fatalf("plan source IDs=%v want [%d]", plan.SourceFileIDs, ptrs1[0].FileID)
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one rewritten record from selected explicit source, got %d", stats.RecordsCopied)
+	}
+
+	ptrK1, flagsK1 := readProjectedPointerByKey(t, db, []byte("k1"))
+	ptrK2, flagsK2 := readProjectedPointerByKey(t, db, []byte("k2"))
+	if flagsK1&node.FlagPointer == 0 || flagsK2&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer flags for rewritten keys: k1=%#x k2=%#x", flagsK1, flagsK2)
+	}
+	if ptrK1.FileID == ptrs1[0].FileID {
+		t.Fatalf("expected k1 pointer to move off filtered source segment %d", ptrs1[0].FileID)
+	}
+	if ptrK2.FileID != ptrs2[0].FileID {
+		t.Fatalf("expected k2 pointer to remain on fully-live explicit segment %d, got %d", ptrs2[0].FileID, ptrK2.FileID)
+	}
+}

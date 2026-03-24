@@ -12180,6 +12180,19 @@ func (db *DB) maybeRunVlogGenerationMaintenanceWithOptions(runGC bool, opts vlog
 	if runGC && !db.disableJournal && !opts.bypassQuiet {
 		return
 	}
+	if db.suppressBackgroundVlogGenerationForMaintenancePhase() {
+		db.vlogGenerationCheckpointKickPending.Store(false)
+		if opts.debugSource != "" {
+			db.debugVlogMaintf(
+				"maintenance_skip reason=maintenance_phase source=%s phase=%s checkpoint_pending=%t deferred_pending=%t",
+				opts.debugSource,
+				maintenancePhaseString(uint32(db.MaintenancePhase())),
+				db.vlogGenerationCheckpointKickPending.Load(),
+				db.vlogGenerationDeferredMaintenancePending.Load(),
+			)
+		}
+		return
+	}
 	// Serialize generation maintenance passes. The periodic loop and
 	// checkpoint-kick path can race otherwise, which causes overlapping rewrite
 	// runs to compete on the same resume queue.
@@ -13137,6 +13150,8 @@ func (db *DB) SetMaintenancePhase(phase MaintenancePhase) {
 	if phase == MaintenancePhaseSteady {
 		db.scheduleDueVlogGenerationDeferredMaintenance()
 		db.schedulePendingVlogGenerationCheckpointKick()
+	} else {
+		db.vlogGenerationCheckpointKickPending.Store(false)
 	}
 }
 

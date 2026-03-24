@@ -383,7 +383,7 @@ func (db *DB) ValueLogRewritePlan(ctx context.Context, opts ValueLogRewriteOnlin
 	sourceIDs := map[uint32]struct{}(nil)
 	var selectionStats rewriteSourceSelectionStats
 	if hasRewriteSourceSelection(opts) {
-		sourceIDs, selectionStats = selectRewriteSourceSegments(opts, set.Files, active, liveByID)
+		sourceIDs, selectionStats = selectRewriteSourceSegmentsWithStats(opts, set.Files, active, liveByID)
 	}
 	plan.AgeBlockedSegments = selectionStats.ageBlockedSegments
 	plan.AgeBlockedBytesTotal = selectionStats.ageBlockedBytesTotal
@@ -823,18 +823,13 @@ type rewriteSourceSegment struct {
 	staleRatio float64
 }
 
-func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) (map[uint32]struct{}, rewriteSourceSelectionStats) {
+func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) map[uint32]struct{} {
+	selected, _ := selectRewriteSourceSegmentsWithStats(opts, files, active, liveByID)
+	return selected
+}
+
+func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, files map[uint32]*valuelog.File, active map[uint32]struct{}, liveByID map[uint32]int64) (map[uint32]struct{}, rewriteSourceSelectionStats) {
 	var stats rewriteSourceSelectionStats
-	if len(opts.SourceFileIDs) > 0 && liveByID == nil {
-		selected := make(map[uint32]struct{}, len(opts.SourceFileIDs))
-		for _, id := range opts.SourceFileIDs {
-			if _, ok := files[id]; !ok {
-				continue
-			}
-			selected[id] = struct{}{}
-		}
-		return selected, stats
-	}
 
 	minStaleRatio := normalizeStaleRatio(opts.MinSegmentStaleRatio)
 	minStaleBytes := opts.MinSegmentStaleBytes
@@ -928,7 +923,10 @@ func selectRewriteSourceSegments(opts ValueLogRewriteOnlineOptions, files map[ui
 			}
 		}
 		if len(opts.SourceFileIDs) > 0 && liveByID == nil {
-			candidates = append(candidates, rewriteSourceSegment{fileID: id})
+			candidates = append(candidates, rewriteSourceSegment{
+				fileID:    id,
+				liveBytes: size,
+			})
 			continue
 		}
 		liveBytes := liveByID[id]
@@ -1049,14 +1047,14 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 	if hasRewriteSourceSelection(opts) {
 		active := currentValueLogIDs(set)
 		var liveByID map[uint32]int64
-		if len(opts.SourceFileIDs) == 0 {
+		if rewritePlanNeedsLiveEstimate(opts) {
 			liveByID, err = db.estimateValueLogLiveBytesBySegment(ctx)
 			if err != nil {
 				_ = db.valueLogManager.Release(set)
 				return stats, err
 			}
 		}
-		sourceIDs, _ = selectRewriteSourceSegments(opts, set.Files, active, liveByID)
+		sourceIDs, _ = selectRewriteSourceSegmentsWithStats(opts, set.Files, active, liveByID)
 		restrictSource = true
 	}
 	_ = db.valueLogManager.Release(set)

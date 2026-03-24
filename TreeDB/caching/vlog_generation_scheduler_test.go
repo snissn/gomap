@@ -3669,17 +3669,23 @@ func TestCheckpoint_KickSkipsWhenMaintenancePhaseNonSteady(t *testing.T) {
 
 	db.SetMaintenancePhase(MaintenancePhaseCatchUp)
 	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
-	time.Sleep(2 * schedulerTestWait(t))
-	if _, calls := recorder.recordedRewrite(); calls != 0 {
-		t.Fatalf("rewrite calls=%d want 0 during catchup phase", calls)
+	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	for time.Now().Before(deadline) {
+		if _, calls := recorder.recordedRewrite(); calls != 0 {
+			t.Fatalf("rewrite calls=%d want 0 during catchup phase", calls)
+		}
+		if got := db.vlogGenerationCheckpointKickRuns.Load(); got != 0 {
+			t.Fatalf("checkpoint kick runs=%d want 0 during catchup phase", got)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	if got := db.vlogGenerationCheckpointKickRuns.Load(); got != 0 {
-		t.Fatalf("checkpoint kick runs=%d want 0 during catchup phase", got)
+	if db.vlogGenerationCheckpointKickPending.Load() {
+		t.Fatal("checkpoint kick pending should be cleared while maintenance phase is non-steady")
 	}
 
 	db.SetMaintenancePhase(MaintenancePhaseSteady)
 	db.maybeKickVlogGenerationMaintenanceAfterCheckpoint()
-	deadline := time.Now().Add(2 * schedulerTestWait(t))
+	deadline = time.Now().Add(2 * schedulerTestWait(t))
 	for {
 		if _, calls := recorder.recordedRewrite(); calls >= 1 {
 			break
