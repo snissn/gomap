@@ -2,8 +2,10 @@ package caching
 
 import (
 	"encoding/binary"
+	"runtime"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -692,6 +694,24 @@ func TestMaybeResetEntrySlicePoolBytesAfterGC_PreservesLeaseBytes(t *testing.T) 
 	resetEntrySlicePoolsForTest(t)
 	batchArenaPoolTestMu.Lock()
 	t.Cleanup(batchArenaPoolTestMu.Unlock)
+	poolPressureTestMu.Lock()
+	t.Cleanup(poolPressureTestMu.Unlock)
+
+	resetPoolPressureStateForTest()
+	savedNow := poolPressureNow
+	savedReadMemStats := poolPressureReadMemStats
+	savedMemLimit := poolPressureMemoryLimit
+	t.Cleanup(func() {
+		poolPressureNow = savedNow
+		poolPressureReadMemStats = savedReadMemStats
+		poolPressureMemoryLimit = savedMemLimit
+		resetPoolPressureStateForTest()
+	})
+
+	now := time.Unix(1, 0)
+	poolPressureNow = func() time.Time { return now }
+	poolPressureReadMemStats = func(ms *runtime.MemStats) { *ms = runtime.MemStats{} }
+	poolPressureMemoryLimit = func() int64 { return -1 }
 
 	origNumGC := entrySlicePoolNumGC
 	defer func() { entrySlicePoolNumGC = origNumGC }()

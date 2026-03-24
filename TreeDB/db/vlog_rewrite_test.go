@@ -1427,3 +1427,285 @@ func TestSelectRewriteSourceSegments_SkipsYoungSegments(t *testing.T) {
 		t.Fatalf("expected older segment 10 selected, got=%v", selected)
 	}
 }
+
+func TestSelectRewriteSourceSegments_SourceFileIDsRespectAgeWithoutLiveEstimate(t *testing.T) {
+	dir := t.TempDir()
+
+	pathOld := filepath.Join(dir, "value-l0-000001.log")
+	pathActive := filepath.Join(dir, "value-l0-000002.log")
+	pathProtected := filepath.Join(dir, "value-l0-000003.log")
+	pathYoung := filepath.Join(dir, "value-l0-000004.log")
+	for _, path := range []string{pathOld, pathActive, pathProtected, pathYoung} {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 100), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	now := time.Now()
+	oldTime := now.Add(-5 * time.Minute)
+	youngTime := now.Add(-30 * time.Second)
+	if err := os.Chtimes(pathOld, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+	if err := os.Chtimes(pathActive, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes active: %v", err)
+	}
+	if err := os.Chtimes(pathProtected, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes protected: %v", err)
+	}
+	if err := os.Chtimes(pathYoung, youngTime, youngTime); err != nil {
+		t.Fatalf("chtimes young: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: pathOld},
+		2: {Path: pathActive},
+		3: {Path: pathProtected},
+		4: {Path: pathYoung},
+	}
+	active := map[uint32]struct{}{
+		2: {},
+	}
+
+	selected, _ := selectRewriteSourceSegmentsWithStats(ValueLogRewriteOnlineOptions{
+		SourceFileIDs:  []uint32{1, 2, 3, 4},
+		ProtectedPaths: []string{pathProtected},
+		MinSegmentAge:  2 * time.Minute,
+	}, files, active, nil)
+
+	if len(selected) != 3 {
+		t.Fatalf("expected explicit sources except young segment, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected old explicit source selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("active explicit source should remain eligible, got=%v", selected)
+	}
+	if _, ok := selected[3]; !ok {
+		t.Fatalf("protected explicit source should remain eligible, got=%v", selected)
+	}
+	if _, ok := selected[4]; ok {
+		t.Fatalf("young explicit source should be skipped, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_MinSegmentAgeAloneEnablesSelection(t *testing.T) {
+	dir := t.TempDir()
+
+	pathOld := filepath.Join(dir, "value-l0-000001.log")
+	pathYoung := filepath.Join(dir, "value-l0-000002.log")
+	for _, path := range []string{pathOld, pathYoung} {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 100), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	now := time.Now()
+	oldTime := now.Add(-5 * time.Minute)
+	youngTime := now.Add(-30 * time.Second)
+	if err := os.Chtimes(pathOld, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+	if err := os.Chtimes(pathYoung, youngTime, youngTime); err != nil {
+		t.Fatalf("chtimes young: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: pathOld},
+		2: {Path: pathYoung},
+	}
+	liveByID := map[uint32]int64{
+		1: 80,
+		2: 80,
+	}
+
+	selected, _ := selectRewriteSourceSegmentsWithStats(ValueLogRewriteOnlineOptions{
+		MinSegmentAge: 2 * time.Minute,
+	}, files, map[uint32]struct{}{}, liveByID)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected only old segment selected, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected old segment selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; ok {
+		t.Fatalf("young segment should be skipped, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_MinSegmentAgeOnlyWithoutLiveEstimateSelectsEligibleSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	pathOld := filepath.Join(dir, "value-l0-000001.log")
+	pathYoung := filepath.Join(dir, "value-l0-000002.log")
+	for _, path := range []string{pathOld, pathYoung} {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 100), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	now := time.Now()
+	oldTime := now.Add(-5 * time.Minute)
+	youngTime := now.Add(-30 * time.Second)
+	if err := os.Chtimes(pathOld, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+	if err := os.Chtimes(pathYoung, youngTime, youngTime); err != nil {
+		t.Fatalf("chtimes young: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: pathOld},
+		2: {Path: pathYoung},
+	}
+
+	selected, _ := selectRewriteSourceSegmentsWithStats(ValueLogRewriteOnlineOptions{
+		MinSegmentAge: 2 * time.Minute,
+	}, files, map[uint32]struct{}{}, nil)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected only old segment selected without live estimate, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected old segment selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; ok {
+		t.Fatalf("young segment should be skipped, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_SourceFileIDsDeduplicatesBeforeBudgeting(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte("a"), 64), 0o600); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte("b"), 64), 0o600); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		SourceFileIDs:  []uint32{1, 1, 2},
+		MaxSourceBytes: 96,
+	}, files, map[uint32]struct{}{}, nil)
+
+	if len(selected) != 2 {
+		t.Fatalf("expected duplicate explicit IDs collapsed to unique sources, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected source 1 selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected source 2 selected after dedupe, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_SourceFileIDsIgnoreSparseCaps(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte("a"), 64), 0o600); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte("b"), 64), 0o600); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		SourceFileIDs:     []uint32{1, 2},
+		MaxSourceSegments: 1,
+		MaxSourceBytes:    64,
+	}, files, map[uint32]struct{}{}, nil)
+
+	if len(selected) != 2 {
+		t.Fatalf("expected explicit sources to ignore sparse caps, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected source 1 selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected source 2 selected, got=%v", selected)
+	}
+}
+
+func TestRewritePlanNeedsLiveEstimate_MinSegmentAgeOnly(t *testing.T) {
+	if rewritePlanNeedsLiveEstimate(ValueLogRewriteOnlineOptions{MinSegmentAge: time.Minute}) {
+		t.Fatalf("expected MinSegmentAge-only selection to avoid live-byte estimation")
+	}
+	if !rewritePlanNeedsLiveEstimate(ValueLogRewriteOnlineOptions{MinSegmentAge: time.Minute, MaxSourceBytes: 1}) {
+		t.Fatalf("expected MinSegmentAge+MaxSourceBytes to require live-byte estimation")
+	}
+	if !rewritePlanNeedsLiveEstimate(ValueLogRewriteOnlineOptions{MinSegmentAge: time.Minute, MinSegmentStaleRatio: 0.5}) {
+		t.Fatalf("expected stale-ratio selection to require live-byte estimation")
+	}
+}
+
+func TestValueLogRewriteOnline_SourceFileIDsWithStaleFilterMatchesPlanSelection(t *testing.T) {
+	dir := t.TempDir()
+
+	db, err := Open(Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer closeNoErr(t, db)
+
+	ptrs1 := appendPointersInNewSegment(t, dir, 0, 1, 210_000, 2, func(i int) []byte {
+		return bytes.Repeat([]byte{byte('a' + i)}, 256)
+	})
+	ptrs2 := appendPointersInNewSegment(t, dir, 0, 2, 210_010, 1, func(i int) []byte {
+		return bytes.Repeat([]byte("z"), 256)
+	})
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs1[0]); err != nil {
+		t.Fatalf("set k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrs2[0]); err != nil {
+		t.Fatalf("set k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	opts := ValueLogRewriteOnlineOptions{
+		SourceFileIDs:        []uint32{ptrs1[0].FileID, ptrs2[0].FileID},
+		MinSegmentStaleRatio: 0.25,
+		BatchSize:            8,
+	}
+
+	plan, err := db.ValueLogRewritePlan(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewritePlan: %v", err)
+	}
+	if !slices.Equal(plan.SourceFileIDs, []uint32{ptrs1[0].FileID}) {
+		t.Fatalf("plan source IDs=%v want [%d]", plan.SourceFileIDs, ptrs1[0].FileID)
+	}
+
+	stats, err := db.ValueLogRewriteOnline(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOnline: %v", err)
+	}
+	if stats.RecordsCopied != 1 {
+		t.Fatalf("expected one rewritten record from selected explicit source, got %d", stats.RecordsCopied)
+	}
+
+	ptrK1, flagsK1 := readProjectedPointerByKey(t, db, []byte("k1"))
+	ptrK2, flagsK2 := readProjectedPointerByKey(t, db, []byte("k2"))
+	if flagsK1&node.FlagPointer == 0 || flagsK2&node.FlagPointer == 0 {
+		t.Fatalf("expected pointer flags for rewritten keys: k1=%#x k2=%#x", flagsK1, flagsK2)
+	}
+	if ptrK1.FileID == ptrs1[0].FileID {
+		t.Fatalf("expected k1 pointer to move off filtered source segment %d", ptrs1[0].FileID)
+	}
+	if ptrK2.FileID != ptrs2[0].FileID {
+		t.Fatalf("expected k2 pointer to remain on fully-live explicit segment %d, got %d", ptrs2[0].FileID, ptrK2.FileID)
+	}
+}
