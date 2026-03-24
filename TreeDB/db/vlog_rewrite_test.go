@@ -1552,14 +1552,46 @@ func TestSelectRewriteSourceSegments_SourceFileIDsDeduplicatesBeforeBudgeting(t 
 		MaxSourceBytes: 96,
 	}, files, map[uint32]struct{}{}, nil)
 
-	if len(selected) != 1 {
-		t.Fatalf("expected only first unique source within byte budget, got=%v", selected)
+	if len(selected) != 2 {
+		t.Fatalf("expected duplicate explicit IDs collapsed to unique sources, got=%v", selected)
 	}
 	if _, ok := selected[1]; !ok {
 		t.Fatalf("expected source 1 selected, got=%v", selected)
 	}
-	if _, ok := selected[2]; ok {
-		t.Fatalf("source 2 should be skipped after unique byte budget is exhausted, got=%v", selected)
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected source 2 selected after dedupe, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_SourceFileIDsIgnoreSparseCaps(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte("a"), 64), 0o600); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte("b"), 64), 0o600); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		SourceFileIDs:     []uint32{1, 2},
+		MaxSourceSegments: 1,
+		MaxSourceBytes:    64,
+	}, files, map[uint32]struct{}{}, nil)
+
+	if len(selected) != 2 {
+		t.Fatalf("expected explicit sources to ignore sparse caps, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected source 1 selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; !ok {
+		t.Fatalf("expected source 2 selected, got=%v", selected)
 	}
 }
 

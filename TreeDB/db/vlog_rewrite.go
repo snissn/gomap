@@ -996,13 +996,15 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 		if _, dup := selected[candidate.fileID]; dup {
 			continue
 		}
-		if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
-			break
-		}
-		if maxSourceBytes > 0 {
-			next := selectedBytes + candidate.liveBytes
-			if next > maxSourceBytes && len(selected) > 0 {
-				continue
+		if !explicitSources {
+			if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
+				break
+			}
+			if maxSourceBytes > 0 {
+				next := selectedBytes + candidate.liveBytes
+				if next > maxSourceBytes && len(selected) > 0 {
+					continue
+				}
 			}
 		}
 		selected[candidate.fileID] = struct{}{}
