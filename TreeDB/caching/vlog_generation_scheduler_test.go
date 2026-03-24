@@ -489,6 +489,26 @@ func TestMulDivClampInt64_ClampsOverflowAndCap(t *testing.T) {
 	}
 }
 
+func TestVlogGenerationRewriteMaxSegmentsForRun_ClampsDebtDrainQueue(t *testing.T) {
+	db := &DB{
+		valueLogRewriteBudgetBytes:     1024,
+		valueLogGenerationWarmTarget:   256,
+	}
+
+	if got := db.vlogGenerationRewriteMaxSegmentsForRun(2, 1024, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true}); got != 2 {
+		t.Fatalf("queueLen=2 got=%d want=2", got)
+	}
+	if got := db.vlogGenerationRewriteMaxSegmentsForRun(vlogGenerationRewriteDebtDrainMaxSegments+5, 1<<20, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true}); got != vlogGenerationRewriteDebtDrainMaxSegments {
+		t.Fatalf("queueLen>%d got=%d want=%d", vlogGenerationRewriteDebtDrainMaxSegments, got, vlogGenerationRewriteDebtDrainMaxSegments)
+	}
+	if got := db.vlogGenerationRewriteMaxSegmentsForRun(4, 1024, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true, bypassQuiet: true}); got != 1 {
+		t.Fatalf("checkpoint-kick got=%d want=1", got)
+	}
+	if got := db.vlogGenerationRewriteMaxSegmentsForRun(4, 256, vlogGenerationMaintenanceOptions{rewriteDebtDrain: true}); got != 1 {
+		t.Fatalf("budget clamp got=%d want=1", got)
+	}
+}
+
 type rewriteBudgetRecordingBackend struct {
 	*backenddb.DB
 
@@ -2529,6 +2549,68 @@ func TestVlogGenerationRewritePlan_StagesFreshStaleRatioDebtBeforeRewrite(t *tes
 	}
 	if rewriteCalls != 1 {
 		t.Fatalf("rewrite calls after second stale-ratio pass=%d want=1", rewriteCalls)
+	}
+}
+
+func TestVlogGenerationRewritePlan_StageConfirmationExecutesConfirmedSubset(t *testing.T) {
+	prepareDirectSchedulerTest(t)
+
+	dir := t.TempDir()
+	backend, err := backenddb.Open(backenddb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open backend: %v", err)
+	}
+	recorder := &rewriteBudgetRecordingBackend{
+		DB: backend,
+		planResponse: backenddb.ValueLogRewritePlan{
+			SourceFileIDs: []uint32{22},
+			SelectedSegments: []backenddb.ValueLogRewritePlanSegment{
+				{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+			},
+			SegmentsTotal:      2,
+			SegmentsSelected:   1,
+			BytesTotal:         128 << 20,
+			BytesLive:          80 << 20,
+			BytesStale:         48 << 20,
+			SelectedBytesTotal: 64 << 20,
+			SelectedBytesLive:  8 << 20,
+			SelectedBytesStale: 56 << 20,
+		},
+		rewriteResponse: backenddb.ValueLogRewriteStats{
+			BytesBefore:   64 << 20,
+			BytesAfter:    8 << 20,
+			RecordsCopied: 1,
+		},
+	}
+
+	db, cleanup := openRewriteQueueTestDB(t, dir, recorder)
+	t.Cleanup(cleanup)
+	db.valueLogRewriteTriggerBytes = 0
+	db.valueLogRewriteTriggerRatioPPM = 1
+	db.valueLogGenerationHotTarget = 0
+	forceVlogMaintenanceIdle(db)
+
+	if err := db.setVlogGenerationRewriteLedgerWithStage([]backenddb.ValueLogRewritePlanSegment{
+		{FileID: 11, BytesTotal: 64 << 20, BytesLive: 20 << 20, BytesStale: 44 << 20, StaleRatio: 0.6875},
+		{FileID: 22, BytesTotal: 64 << 20, BytesLive: 8 << 20, BytesStale: 56 << 20, StaleRatio: 0.875},
+	}, true, time.Now().Add(-vlogGenerationRewriteMinInterval-time.Second).UnixNano()); err != nil {
+		t.Fatalf("seed staged rewrite ledger: %v", err)
+	}
+	forceRewriteStageConfirmDue(t, db)
+
+	db.maybeRunVlogGenerationMaintenanceWithOptions(false, vlogGenerationMaintenanceOptions{
+		bypassQuiet:           true,
+		skipRetainedPruneWait: true,
+		skipCheckpoint:        true,
+		debugSource:           "rewrite_stage_confirm",
+	})
+
+	rewriteOpts, rewriteCalls := recorder.recordedRewrite()
+	if rewriteCalls != 1 {
+		t.Fatalf("rewrite calls after staged confirmation=%d want=1", rewriteCalls)
+	}
+	if got, want := rewriteOpts.SourceFileIDs, []uint32{22}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("rewrite SourceFileIDs after staged confirmation=%v want=%v", got, want)
 	}
 }
 

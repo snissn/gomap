@@ -11472,12 +11472,7 @@ func (db *DB) vlogGenerationRewriteMaxSegmentsForRun(queueLen int, budgetTokens 
 	if opts.bypassQuiet && !opts.skipCheckpoint {
 		return 1
 	}
-	if queueLen < maxSegments {
-		maxSegments = queueLen
-	}
-	if queueLen > maxSegments {
-		maxSegments = queueLen
-	}
+	maxSegments = queueLen
 	if maxSegments > vlogGenerationRewriteDebtDrainMaxSegments {
 		maxSegments = vlogGenerationRewriteDebtDrainMaxSegments
 	}
@@ -12749,44 +12744,7 @@ planned:
 			if hadRewriteQueue {
 				rewriteMaxSegments = db.vlogGenerationRewriteMaxSegmentsForRun(len(rewriteQueue), budgetTokens, opts)
 			}
-			if len(rewriteQueue) > 0 {
-				ledger, _ := db.currentVlogGenerationRewriteLedger()
-				if len(ledger) > 0 {
-					queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, reason)
-					filteredLedger := filterVlogGenerationRewriteLedgerByQuality(ledger, queueMinStaleRatio, vlogGenerationRewriteMinSegmentStaleBytes)
-					if dropped := len(ledger) - len(filteredLedger); dropped > 0 {
-						if err := db.setVlogGenerationRewriteLedger(filteredLedger); err != nil {
-							return fmt.Errorf("persist filtered generational rewrite ledger: %w", err)
-						}
-						db.observeVlogGenerationRewriteQueuePrune(dropped)
-						rewriteQueue = append(rewriteQueue[:0], vlogGenerationRewriteLedgerIDs(filteredLedger)...)
-						ledger = filteredLedger
-						db.debugVlogMaintf(
-							"rewrite_queue_quality_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
-							dropped,
-							len(ledger),
-							queueMinStaleRatio,
-							vlogGenerationRewriteMinSegmentStaleBytes,
-						)
-					}
-					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, rewriteMaxSegments, budgetTokens)
-					if len(processedRewriteIDs) == 0 {
-						prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
-						if pruneErr != nil {
-							return fmt.Errorf("prune generational rewrite ledger: %w", pruneErr)
-						}
-						if dropped > 0 {
-							db.observeVlogGenerationRewriteQueuePrune(dropped)
-							rewriteQueue = prunedQueue
-							db.debugVlogMaintf("rewrite_skip reason=%s dropped_zero_live=%d queue_len=%d", vlogGenerationReasonString(reason), dropped, len(rewriteQueue))
-						}
-						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
-						return nil
-					}
-				} else {
-					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
-				}
-			} else if haveRewritePlan {
+			if haveRewritePlan {
 				plannedLedgerForExec := rewritePlan.SelectedSegments
 				if reason == vlogGenerationReasonStaleRatio && len(rewritePlan.SelectedSegments) > 0 {
 					prevLedger, _ := db.currentVlogGenerationRewriteLedger()
@@ -12837,6 +12795,43 @@ planned:
 							db.observeVlogGenerationRewriteQueuePrune(dropped)
 							rewriteQueue = prunedQueue
 							db.debugVlogMaintf("rewrite_skip reason=%s planned_zero_live=%d queue_len=%d", vlogGenerationReasonString(reason), dropped, len(rewriteQueue))
+						}
+						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
+						return nil
+					}
+				} else {
+					processedRewriteIDs = vlogGenerationRewriteQueueChunk(rewriteQueue, rewriteMaxSegments)
+				}
+			} else if len(rewriteQueue) > 0 {
+				ledger, _ := db.currentVlogGenerationRewriteLedger()
+				if len(ledger) > 0 {
+					queueMinStaleRatio := db.vlogGenerationRewriteMinStaleRatioForQueuedDebt(totalBytes, reason)
+					filteredLedger := filterVlogGenerationRewriteLedgerByQuality(ledger, queueMinStaleRatio, vlogGenerationRewriteMinSegmentStaleBytes)
+					if dropped := len(ledger) - len(filteredLedger); dropped > 0 {
+						if err := db.setVlogGenerationRewriteLedger(filteredLedger); err != nil {
+							return fmt.Errorf("persist filtered generational rewrite ledger: %w", err)
+						}
+						db.observeVlogGenerationRewriteQueuePrune(dropped)
+						rewriteQueue = append(rewriteQueue[:0], vlogGenerationRewriteLedgerIDs(filteredLedger)...)
+						ledger = filteredLedger
+						db.debugVlogMaintf(
+							"rewrite_queue_quality_prune dropped=%d remaining=%d min_ratio=%.6f min_stale_bytes=%d",
+							dropped,
+							len(ledger),
+							queueMinStaleRatio,
+							vlogGenerationRewriteMinSegmentStaleBytes,
+						)
+					}
+					processedRewriteIDs = vlogGenerationRewriteLedgerChunk(ledger, rewriteMaxSegments, budgetTokens)
+					if len(processedRewriteIDs) == 0 {
+						prunedQueue, dropped, pruneErr := db.pruneVlogGenerationRewriteLedgerNonPositiveLive()
+						if pruneErr != nil {
+							return fmt.Errorf("prune generational rewrite ledger: %w", pruneErr)
+						}
+						if dropped > 0 {
+							db.observeVlogGenerationRewriteQueuePrune(dropped)
+							rewriteQueue = prunedQueue
+							db.debugVlogMaintf("rewrite_skip reason=%s dropped_zero_live=%d queue_len=%d", vlogGenerationReasonString(reason), dropped, len(rewriteQueue))
 						}
 						db.vlogGenerationSchedulerState.Store(vlogGenerationSchedulerIdle)
 						return nil
