@@ -11,6 +11,7 @@ import (
 // DB wraps another kvstore.DB with trace instrumentation.
 type DB struct {
 	inner kvstore.DB
+	phase *treedb.DB
 }
 
 // Wrap creates a traced adapter over TreeDB with default naming.
@@ -26,6 +27,10 @@ func WrapNamed(db *treedb.DB, name string) *DB {
 // New wraps an existing kvstore.DB with tracing.
 func New(inner kvstore.DB) *DB {
 	d := &DB{inner: inner}
+	if wrapped, ok := inner.(*treedbadapter.DB); ok && wrapped.DB != nil {
+		d.phase = wrapped.DB
+		phaseBus.register(wrapped.DB)
+	}
 	if t := getTrace(); t != nil {
 		t.registerDB()
 	}
@@ -39,6 +44,9 @@ func (d *DB) Name() string { return d.inner.Name() }
 
 func (d *DB) Close() error {
 	err := d.inner.Close()
+	if d.phase != nil {
+		phaseBus.unregister(d.phase)
+	}
 	if t := getTrace(); t != nil {
 		t.closeDB()
 	}

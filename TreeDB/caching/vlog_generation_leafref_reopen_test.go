@@ -601,9 +601,11 @@ func TestCachedGenerationalMaintenance_LeafRefsRemainReopenable(t *testing.T) {
 	}
 
 	for round := 0; round < 6; round++ {
+		ageValueLogFilesForTest(t, dir, vlogGenerationRewriteMinSegmentAge+time.Second)
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 		writeBatch(fmt.Sprintf("post-%02d", round), 512)
+		ageValueLogFilesForTest(t, dir, vlogGenerationRewriteMinSegmentAge+time.Second)
 		forceVlogMaintenanceIdle(db)
 		db.maybeRunVlogGenerationMaintenance(false)
 	}
@@ -777,7 +779,7 @@ func TestCachedGenerationalMaintenance_DirectPointersRemainInCurrentSet_WALOn(t 
 	closed = true
 }
 
-func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t *testing.T) {
+func TestCachedGenerationalMaintenance_BackgroundSchedulerDisabled_WALOn(t *testing.T) {
 	dir := t.TempDir()
 
 	backend, err := backenddb.Open(backenddb.Options{
@@ -843,27 +845,12 @@ func TestCachedGenerationalMaintenance_DirectPointersBackgroundScheduler_WALOn(t
 		_ = b.Close()
 	}
 
-	ageCurrentValueLogFiles := func(age time.Duration) {
-		t.Helper()
-		state := backend.State()
-		if state == nil || state.ValueLogSet == nil {
-			return
-		}
-		at := time.Now().Add(-age)
-		for _, f := range state.ValueLogSet.Files {
-			if f.Path == "" {
-				continue
-			}
-			if err := os.Chtimes(f.Path, at, at); err != nil && !os.IsNotExist(err) {
-				t.Fatalf("age %s: %v", f.Path, err)
-			}
-		}
-	}
-
 	for i := 0; i < 3; i++ {
 		writeBatch(fmt.Sprintf("seed-%02d", i), 384)
-		ageCurrentValueLogFiles(2 * time.Second)
-		time.Sleep(vlogGenerationLoopInterval + 100*time.Millisecond)
+	}
+
+	if got := db.vlogGenerationSchedulerState.Load(); got != vlogGenerationSchedulerDisabled {
+		t.Fatalf("scheduler state=%d want disabled", got)
 	}
 
 	if err := db.checkpointForBackendMaintenance(); err != nil {
