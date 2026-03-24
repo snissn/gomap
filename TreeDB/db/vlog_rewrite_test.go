@@ -1489,6 +1489,80 @@ func TestSelectRewriteSourceSegments_SourceFileIDsRespectAgeWithoutLiveEstimate(
 	}
 }
 
+func TestSelectRewriteSourceSegments_MinSegmentAgeAloneEnablesSelection(t *testing.T) {
+	dir := t.TempDir()
+
+	pathOld := filepath.Join(dir, "value-l0-000001.log")
+	pathYoung := filepath.Join(dir, "value-l0-000002.log")
+	for _, path := range []string{pathOld, pathYoung} {
+		if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 100), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	now := time.Now()
+	oldTime := now.Add(-5 * time.Minute)
+	youngTime := now.Add(-30 * time.Second)
+	if err := os.Chtimes(pathOld, oldTime, oldTime); err != nil {
+		t.Fatalf("chtimes old: %v", err)
+	}
+	if err := os.Chtimes(pathYoung, youngTime, youngTime); err != nil {
+		t.Fatalf("chtimes young: %v", err)
+	}
+
+	files := map[uint32]*valuelog.File{
+		1: {Path: pathOld},
+		2: {Path: pathYoung},
+	}
+	liveByID := map[uint32]int64{
+		1: 80,
+		2: 80,
+	}
+
+	selected, _ := selectRewriteSourceSegmentsWithStats(ValueLogRewriteOnlineOptions{
+		MinSegmentAge: 2 * time.Minute,
+	}, files, map[uint32]struct{}{}, liveByID)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected only old segment selected, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected old segment selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; ok {
+		t.Fatalf("young segment should be skipped, got=%v", selected)
+	}
+}
+
+func TestSelectRewriteSourceSegments_SourceFileIDsDeduplicatesBeforeBudgeting(t *testing.T) {
+	dir := t.TempDir()
+	path1 := filepath.Join(dir, "value-l0-000001.log")
+	path2 := filepath.Join(dir, "value-l0-000002.log")
+	if err := os.WriteFile(path1, bytes.Repeat([]byte("a"), 64), 0o600); err != nil {
+		t.Fatalf("write path1: %v", err)
+	}
+	if err := os.WriteFile(path2, bytes.Repeat([]byte("b"), 64), 0o600); err != nil {
+		t.Fatalf("write path2: %v", err)
+	}
+	files := map[uint32]*valuelog.File{
+		1: {Path: path1},
+		2: {Path: path2},
+	}
+	selected := selectRewriteSourceSegments(ValueLogRewriteOnlineOptions{
+		SourceFileIDs:  []uint32{1, 1, 2},
+		MaxSourceBytes: 96,
+	}, files, map[uint32]struct{}{}, nil)
+
+	if len(selected) != 1 {
+		t.Fatalf("expected only first unique source within byte budget, got=%v", selected)
+	}
+	if _, ok := selected[1]; !ok {
+		t.Fatalf("expected source 1 selected, got=%v", selected)
+	}
+	if _, ok := selected[2]; ok {
+		t.Fatalf("source 2 should be skipped after unique byte budget is exhausted, got=%v", selected)
+	}
+}
+
 func TestValueLogRewriteOnline_SourceFileIDsWithStaleFilterMatchesPlanSelection(t *testing.T) {
 	dir := t.TempDir()
 

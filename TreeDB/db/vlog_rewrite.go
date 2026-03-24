@@ -302,6 +302,9 @@ func hasRewriteSourceSelection(opts ValueLogRewriteOnlineOptions) bool {
 	if opts.MinSegmentStaleBytes > 0 {
 		return true
 	}
+	if opts.MinSegmentAge > 0 {
+		return true
+	}
 	return false
 }
 
@@ -864,10 +867,15 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 	candidateFileIDs := make([]uint32, 0, len(files))
 	if len(opts.SourceFileIDs) > 0 {
 		candidateFileIDs = make([]uint32, 0, len(opts.SourceFileIDs))
+		seen := make(map[uint32]struct{}, len(opts.SourceFileIDs))
 		for _, id := range opts.SourceFileIDs {
 			if _, ok := files[id]; !ok {
 				continue
 			}
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
 			candidateFileIDs = append(candidateFileIDs, id)
 		}
 	} else {
@@ -985,6 +993,9 @@ func selectRewriteSourceSegmentsWithStats(opts ValueLogRewriteOnlineOptions, fil
 	selected := make(map[uint32]struct{}, len(candidates))
 	var selectedBytes int64
 	for _, candidate := range candidates {
+		if _, dup := selected[candidate.fileID]; dup {
+			continue
+		}
 		if maxSourceSegments > 0 && len(selected) >= maxSourceSegments {
 			break
 		}
