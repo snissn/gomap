@@ -11,6 +11,7 @@ func resetTracePhaseBusForTest() {
 	phaseBus.set(tracePhaseDefault)
 	phaseBus.mu.Lock()
 	phaseBus.dbs = make(map[*treedb.DB]int)
+	phaseBus.registerBeforeApply = nil
 	phaseBus.mu.Unlock()
 }
 
@@ -65,6 +66,32 @@ func TestTracePhaseBridge_AppliesCurrentPhaseOnWrap(t *testing.T) {
 
 	if got := db.MaintenancePhase(); got != treedb.MaintenancePhaseRestore {
 		t.Fatalf("maintenance phase=%v want restore after wrap", got)
+	}
+}
+
+func TestTracePhaseBridge_AppliesLatestPhaseDuringWrapRace(t *testing.T) {
+	resetTracePhaseBusForTest()
+	defer resetTracePhaseBusForTest()
+
+	phaseBus.mu.Lock()
+	phaseBus.registerBeforeApply = func() {
+		SetTracePhase("restore")
+	}
+	phaseBus.mu.Unlock()
+
+	dir := t.TempDir()
+	db, err := treedb.Open(treedb.Options{Dir: dir})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	wrapped := Wrap(db)
+	defer wrapped.Close()
+
+	if got := CurrentTracePhase(); got != "restore" {
+		t.Fatalf("trace phase=%q want restore", got)
+	}
+	if got := db.MaintenancePhase(); got != treedb.MaintenancePhaseRestore {
+		t.Fatalf("maintenance phase=%v want restore after raced wrap", got)
 	}
 }
 

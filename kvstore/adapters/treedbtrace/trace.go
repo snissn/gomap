@@ -84,6 +84,10 @@ type tracePhaseBus struct {
 	once  sync.Once
 	phase atomic.Value
 	dbs   map[*treedb.DB]int
+
+	// test hook: called after a DB is registered and before the initial phase
+	// application. Nil in production.
+	registerBeforeApply func()
 }
 
 func (b *tracePhaseBus) init() {
@@ -148,8 +152,18 @@ func (b *tracePhaseBus) register(db *treedb.DB) {
 	b.init()
 	b.mu.Lock()
 	b.dbs[db]++
+	beforeApply := b.registerBeforeApply
 	b.mu.Unlock()
-	db.SetMaintenancePhase(maintenancePhaseForTrace(b.current()))
+	if beforeApply != nil {
+		beforeApply()
+	}
+	for {
+		phase := b.current()
+		db.SetMaintenancePhase(maintenancePhaseForTrace(phase))
+		if b.current() == phase {
+			return
+		}
+	}
 }
 
 func (b *tracePhaseBus) unregister(db *treedb.DB) {
