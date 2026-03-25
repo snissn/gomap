@@ -178,6 +178,7 @@ type poolPressureSnapshot struct {
 
 const (
 	poolPressureRefreshInterval = 250 * time.Millisecond
+	processMemorySampleInterval = 1 * time.Second
 	// Treat high/critical pressure as heap residency (not alloc churn). These
 	// thresholds target restore-like peaks where pool retention can inflate RSS.
 	poolPressureHighHeapBytes     = uint64(4 << 30)
@@ -4793,16 +4794,28 @@ type DB struct {
 	bgErr                                   error
 
 	// Backpressure state
-	queueBacklogBytes        atomic.Int64
-	flushBpsEWMA             float64
-	queueLaneIDMisses        atomic.Int64
-	backendWriteBatchesTotal atomic.Int64
-	domainIngressMu          sync.Mutex
-	domainIngressCh          []chan domainIngressRequest
-	domainIngressEnqueued    atomic.Uint64
-	domainIngressProcessed   atomic.Uint64
-	domainIngressFallback    atomic.Uint64
-	domainIngressDepthMax    atomic.Uint64
+	queueBacklogBytes                  atomic.Int64
+	flushBpsEWMA                       float64
+	queueLaneIDMisses                  atomic.Int64
+	backendWriteBatchesTotal           atomic.Int64
+	domainIngressMu                    sync.Mutex
+	domainIngressCh                    []chan domainIngressRequest
+	domainIngressEnqueued              atomic.Uint64
+	domainIngressProcessed             atomic.Uint64
+	domainIngressFallback              atomic.Uint64
+	domainIngressDepthMax              atomic.Uint64
+	processRSSBytes                    atomic.Uint64
+	processRSSHWMBytes                 atomic.Uint64
+	processPeakRSSBytes                atomic.Uint64
+	processPeakHeapAllocBytes          atomic.Uint64
+	processPeakHeapInuseBytes          atomic.Uint64
+	processPeakTotalSysBytes           atomic.Uint64
+	processPeakVlogMmapActiveBytes     atomic.Uint64
+	processPeakVlogMmapCurrentBytes    atomic.Uint64
+	processPeakVlogMmapSealedBytes     atomic.Uint64
+	processPeakVlogMmapActiveSegments  atomic.Uint64
+	processPeakVlogMmapCurrentSegments atomic.Uint64
+	processPeakVlogMmapSealedSegments  atomic.Uint64
 
 	// Lifecycle
 	closeCh chan struct{}
@@ -6855,6 +6868,7 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.mu.Unlock()
 
 	db.startDomainIngressWorkers()
+	db.startProcessMemorySampler()
 
 	// Start background flusher
 	db.wg.Add(1)
@@ -6995,6 +7009,106 @@ func (db *DB) backgroundError() error {
 	db.bgErrMu.Lock()
 	defer db.bgErrMu.Unlock()
 	return db.bgErr
+}
+
+type vlogMmapStatsSnapshot struct {
+	activeSegments  uint64
+	activeBytes     uint64
+	currentSegments uint64
+	currentBytes    uint64
+	sealedSegments  uint64
+	sealedBytes     uint64
+	deadBytes       uint64
+}
+
+func parseUintStat(stats map[string]string, key string) uint64 {
+	if len(stats) == 0 {
+		return 0
+	}
+	raw, ok := stats[key]
+	if !ok || raw == "" {
+		return 0
+	}
+	v, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func backendVlogMmapStatsSnapshot(stats map[string]string) vlogMmapStatsSnapshot {
+	return vlogMmapStatsSnapshot{
+		activeSegments:  parseUintStat(stats, "treedb.vlog.mmap_active_segments"),
+		activeBytes:     parseUintStat(stats, "treedb.vlog.mmap_active_bytes"),
+		currentSegments: parseUintStat(stats, "treedb.vlog.mmap_current_segments"),
+		currentBytes:    parseUintStat(stats, "treedb.vlog.mmap_current_bytes"),
+		sealedSegments:  parseUintStat(stats, "treedb.vlog.mmap_sealed_segments"),
+		sealedBytes:     parseUintStat(stats, "treedb.vlog.mmap_sealed_bytes"),
+		deadBytes:       parseUintStat(stats, "treedb.vlog.mmap_dead_bytes"),
+	}
+}
+
+func cacheVlogMmapStatsSnapshot(reader *valuelog.Manager) vlogMmapStatsSnapshot {
+	if reader == nil {
+		return vlogMmapStatsSnapshot{}
+	}
+	currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := reader.MmapResidencyStats()
+	return vlogMmapStatsSnapshot{
+		activeSegments:  currentSegments + sealedSegments,
+		activeBytes:     currentBytes + sealedBytes,
+		currentSegments: currentSegments,
+		currentBytes:    currentBytes,
+		sealedSegments:  sealedSegments,
+		sealedBytes:     sealedBytes,
+		deadBytes:       deadBytes,
+	}
+}
+
+func (db *DB) sampleProcessMemoryPeaks() {
+	if db == nil {
+		return
+	}
+	snap := samplePoolPressureSnapshot(time.Now())
+	updateAtomicMax(&db.processPeakHeapAllocBytes, snap.heapAllocBytes)
+	updateAtomicMax(&db.processPeakHeapInuseBytes, snap.heapInuseBytes)
+	updateAtomicMax(&db.processPeakTotalSysBytes, snap.totalSysBytes)
+	if rssBytes, rssHWMBytes, ok := currentProcessRSSBytes(); ok {
+		db.processRSSBytes.Store(rssBytes)
+		db.processRSSHWMBytes.Store(rssHWMBytes)
+		updateAtomicMax(&db.processPeakRSSBytes, rssBytes)
+		if rssHWMBytes > 0 {
+			updateAtomicMax(&db.processPeakRSSBytes, rssHWMBytes)
+		}
+	}
+	cacheMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
+	backendMmap := backendVlogMmapStatsSnapshot(db.backend.Stats())
+	updateAtomicMax(&db.processPeakVlogMmapActiveBytes, cacheMmap.activeBytes+backendMmap.activeBytes)
+	updateAtomicMax(&db.processPeakVlogMmapCurrentBytes, cacheMmap.currentBytes+backendMmap.currentBytes)
+	updateAtomicMax(&db.processPeakVlogMmapSealedBytes, cacheMmap.sealedBytes+backendMmap.sealedBytes)
+	updateAtomicMax(&db.processPeakVlogMmapActiveSegments, cacheMmap.activeSegments+backendMmap.activeSegments)
+	updateAtomicMax(&db.processPeakVlogMmapCurrentSegments, cacheMmap.currentSegments+backendMmap.currentSegments)
+	updateAtomicMax(&db.processPeakVlogMmapSealedSegments, cacheMmap.sealedSegments+backendMmap.sealedSegments)
+}
+
+func (db *DB) startProcessMemorySampler() {
+	if db == nil {
+		return
+	}
+	db.sampleProcessMemoryPeaks()
+	db.wg.Add(1)
+	go func() {
+		defer db.wg.Done()
+		ticker := time.NewTicker(processMemorySampleInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				db.sampleProcessMemoryPeaks()
+			case <-db.closeCh:
+				return
+			}
+		}
+	}()
 }
 
 // StartAutoCheckpoint enables a background loop that periodically forces a
@@ -17950,6 +18064,9 @@ func (db *DB) Stats() map[string]string {
 	if stats == nil {
 		stats = make(map[string]string)
 	}
+	stats["treedb.process.identity.wal_dir"] = db.dir
+	db.sampleProcessMemoryPeaks()
+	backendVlogMmap := backendVlogMmapStatsSnapshot(stats)
 	db.mu.RLock()
 	queueLen := len(db.queue)
 	flushThreshold := db.flushThreshold
@@ -18441,6 +18558,24 @@ func (db *DB) Stats() map[string]string {
 	stats["treedb.process.memory.pool_pressure_normal_samples_total"] = fmt.Sprintf("%d", poolPressureNormalSamplesTotal.Load())
 	stats["treedb.process.memory.pool_pressure_high_samples_total"] = fmt.Sprintf("%d", poolPressureHighSamplesTotal.Load())
 	stats["treedb.process.memory.pool_pressure_critical_samples_total"] = fmt.Sprintf("%d", poolPressureCriticalSamplesTotal.Load())
+	rssBytes := db.processRSSBytes.Load()
+	rssHWMBytes := db.processRSSHWMBytes.Load()
+	stats["treedb.process.memory.rss_bytes"] = fmt.Sprintf("%d", rssBytes)
+	stats["treedb.process.memory.rss_hwm_bytes"] = fmt.Sprintf("%d", rssHWMBytes)
+	if rssBytes > poolPressure.heapInuseBytes {
+		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.heapInuseBytes)
+	} else {
+		stats["treedb.process.memory.rss_minus_heap_inuse_bytes"] = "0"
+	}
+	if rssBytes > poolPressure.totalSysBytes {
+		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = fmt.Sprintf("%d", rssBytes-poolPressure.totalSysBytes)
+	} else {
+		stats["treedb.process.memory.rss_minus_total_sys_bytes"] = "0"
+	}
+	stats["treedb.process.memory.peak_rss_bytes"] = fmt.Sprintf("%d", db.processPeakRSSBytes.Load())
+	stats["treedb.process.memory.peak_heap_alloc_bytes"] = fmt.Sprintf("%d", db.processPeakHeapAllocBytes.Load())
+	stats["treedb.process.memory.peak_heap_inuse_bytes"] = fmt.Sprintf("%d", db.processPeakHeapInuseBytes.Load())
+	stats["treedb.process.memory.peak_total_sys_bytes"] = fmt.Sprintf("%d", db.processPeakTotalSysBytes.Load())
 	db.domainIngressMu.Lock()
 	ingressWorkers := len(db.domainIngressCh)
 	ingressQueueSize := db.domainIngressQueueSize
@@ -18692,6 +18827,7 @@ func (db *DB) Stats() map[string]string {
 	if growStats.RequestedBytesTotal > 0 {
 		stats["treedb.cache.vlog_decode_buffer_grow.overalloc_ratio"] = fmt.Sprintf("%.6f", float64(growStats.AllocatedBytesTotal)/float64(growStats.RequestedBytesTotal))
 	}
+	cacheVlogMmap := cacheVlogMmapStatsSnapshot(db.valueLogReader)
 	if db.valueLogReader != nil {
 		remaps, deadMappings := db.valueLogReader.RemapStats()
 		stats["treedb.cache.vlog_mmap.remaps"] = fmt.Sprintf("%d", remaps)
@@ -18699,18 +18835,13 @@ func (db *DB) Stats() map[string]string {
 		stats["treedb.cache.vlog_mmap.dead_mappings.cap_base"] = fmt.Sprintf("%d", valuelog.MaxDeadMappings)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_segments"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedSegments)
 		stats["treedb.cache.vlog_mmap.max_mapped_sealed_bytes"] = fmt.Sprintf("%d", valuelog.MaxMappedSealedBytes)
-		currentSegments, currentBytes, sealedSegments, sealedBytes, _, deadBytes := db.valueLogReader.MmapResidencyStats()
-		stats["treedb.cache.vlog_mmap.active_segments"] = fmt.Sprintf("%d", currentSegments+sealedSegments)
-		stats["treedb.cache.vlog_mmap.active_bytes"] = fmt.Sprintf("%d", currentBytes+sealedBytes)
-		stats["treedb.cache.vlog_mmap.current_segments"] = fmt.Sprintf("%d", currentSegments)
-		stats["treedb.cache.vlog_mmap.current_bytes"] = fmt.Sprintf("%d", currentBytes)
-		stats["treedb.cache.vlog_mmap.sealed_segments"] = fmt.Sprintf("%d", sealedSegments)
-		stats["treedb.cache.vlog_mmap.sealed_bytes"] = fmt.Sprintf("%d", sealedBytes)
-		stats["treedb.cache.vlog_mmap.dead_bytes"] = fmt.Sprintf("%d", deadBytes)
-		stats["treedb.process.memory.vlog_mmap_active_bytes"] = fmt.Sprintf("%d", currentBytes+sealedBytes)
-		stats["treedb.process.memory.vlog_mmap_current_bytes"] = fmt.Sprintf("%d", currentBytes)
-		stats["treedb.process.memory.vlog_mmap_sealed_bytes"] = fmt.Sprintf("%d", sealedBytes)
-		stats["treedb.process.memory.vlog_mmap_dead_bytes"] = fmt.Sprintf("%d", deadBytes)
+		stats["treedb.cache.vlog_mmap.active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments)
+		stats["treedb.cache.vlog_mmap.active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes)
+		stats["treedb.cache.vlog_mmap.current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments)
+		stats["treedb.cache.vlog_mmap.current_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.currentBytes)
+		stats["treedb.cache.vlog_mmap.sealed_segments"] = fmt.Sprintf("%d", cacheVlogMmap.sealedSegments)
+		stats["treedb.cache.vlog_mmap.sealed_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.sealedBytes)
+		stats["treedb.cache.vlog_mmap.dead_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.deadBytes)
 		sealedDeniedCountCap, sealedDeniedBytesCap := db.valueLogReader.SealedMapDeniedByReasonStats()
 		stats["treedb.cache.vlog_mmap.sealed_map_denied.count_cap"] = fmt.Sprintf("%d", sealedDeniedCountCap)
 		stats["treedb.cache.vlog_mmap.sealed_map_denied.bytes_cap"] = fmt.Sprintf("%d", sealedDeniedBytesCap)
@@ -18735,6 +18866,33 @@ func (db *DB) Stats() map[string]string {
 			stats["treedb.cache.vlog_template_def_cache.hit_ratio"] = fmt.Sprintf("%.6f", float64(hits)/float64(total))
 		}
 	}
+	stats["treedb.process.memory.vlog_mmap_backend_active_bytes"] = fmt.Sprintf("%d", backendVlogMmap.activeBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_current_bytes"] = fmt.Sprintf("%d", backendVlogMmap.currentBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_sealed_bytes"] = fmt.Sprintf("%d", backendVlogMmap.sealedBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_dead_bytes"] = fmt.Sprintf("%d", backendVlogMmap.deadBytes)
+	stats["treedb.process.memory.vlog_mmap_backend_active_segments"] = fmt.Sprintf("%d", backendVlogMmap.activeSegments)
+	stats["treedb.process.memory.vlog_mmap_backend_current_segments"] = fmt.Sprintf("%d", backendVlogMmap.currentSegments)
+	stats["treedb.process.memory.vlog_mmap_backend_sealed_segments"] = fmt.Sprintf("%d", backendVlogMmap.sealedSegments)
+	stats["treedb.process.memory.vlog_mmap_cache_active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_current_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.currentBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_sealed_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.sealedBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_dead_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.deadBytes)
+	stats["treedb.process.memory.vlog_mmap_cache_active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments)
+	stats["treedb.process.memory.vlog_mmap_cache_current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments)
+	stats["treedb.process.memory.vlog_mmap_cache_sealed_segments"] = fmt.Sprintf("%d", cacheVlogMmap.sealedSegments)
+	stats["treedb.process.memory.vlog_mmap_active_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.activeBytes+backendVlogMmap.activeBytes)
+	stats["treedb.process.memory.vlog_mmap_current_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.currentBytes+backendVlogMmap.currentBytes)
+	stats["treedb.process.memory.vlog_mmap_sealed_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.sealedBytes+backendVlogMmap.sealedBytes)
+	stats["treedb.process.memory.vlog_mmap_dead_bytes"] = fmt.Sprintf("%d", cacheVlogMmap.deadBytes+backendVlogMmap.deadBytes)
+	stats["treedb.process.memory.vlog_mmap_active_segments"] = fmt.Sprintf("%d", cacheVlogMmap.activeSegments+backendVlogMmap.activeSegments)
+	stats["treedb.process.memory.vlog_mmap_current_segments"] = fmt.Sprintf("%d", cacheVlogMmap.currentSegments+backendVlogMmap.currentSegments)
+	stats["treedb.process.memory.vlog_mmap_sealed_segments"] = fmt.Sprintf("%d", cacheVlogMmap.sealedSegments+backendVlogMmap.sealedSegments)
+	stats["treedb.process.memory.peak_vlog_mmap_active_bytes"] = fmt.Sprintf("%d", db.processPeakVlogMmapActiveBytes.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_current_bytes"] = fmt.Sprintf("%d", db.processPeakVlogMmapCurrentBytes.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_sealed_bytes"] = fmt.Sprintf("%d", db.processPeakVlogMmapSealedBytes.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_active_segments"] = fmt.Sprintf("%d", db.processPeakVlogMmapActiveSegments.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_current_segments"] = fmt.Sprintf("%d", db.processPeakVlogMmapCurrentSegments.Load())
+	stats["treedb.process.memory.peak_vlog_mmap_sealed_segments"] = fmt.Sprintf("%d", db.processPeakVlogMmapSealedSegments.Load())
 	stats["treedb.cache.vlog_dict.pause_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictPauseRemaining.Load())
 	stats["treedb.cache.vlog_dict.incompressible_hold_remaining_bytes"] = fmt.Sprintf("%d", db.valueLogDictIncompressibleHoldRemaining.Load())
 	stats["treedb.cache.vlog_dict.incompressible_hits"] = fmt.Sprintf("%d", db.valueLogDictIncompressibleHits.Load())

@@ -2,6 +2,7 @@ package caching
 
 import (
 	"expvar"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -15,6 +16,8 @@ var (
 	treedbExpvarEnabled     = parseBoolEnvDefault(treedbExpvarEnabledEnvKey, true)
 	treedbExpvarPublishOnce sync.Once
 	treedbExpvarCurrentDB   atomic.Pointer[DB]
+	treedbExpvarDBsMu       sync.RWMutex
+	treedbExpvarDBs         = make(map[*DB]struct{})
 )
 
 func parseBoolEnvDefault(key string, def bool) bool {
@@ -45,6 +48,9 @@ func registerTreeDBExpvarStatsDB(db *DB) {
 		return
 	}
 	publishTreeDBExpvarStats()
+	treedbExpvarDBsMu.Lock()
+	treedbExpvarDBs[db] = struct{}{}
+	treedbExpvarDBsMu.Unlock()
 	treedbExpvarCurrentDB.Store(db)
 }
 
@@ -52,15 +58,51 @@ func unregisterTreeDBExpvarStatsDB(db *DB) {
 	if db == nil || !treedbExpvarEnabled {
 		return
 	}
+	treedbExpvarDBsMu.Lock()
+	delete(treedbExpvarDBs, db)
+	treedbExpvarDBsMu.Unlock()
 	treedbExpvarCurrentDB.CompareAndSwap(db, nil)
 }
 
 func currentTreeDBExpvarStats() map[string]any {
-	db := treedbExpvarCurrentDB.Load()
-	if db == nil {
+	current := treedbExpvarCurrentDB.Load()
+
+	treedbExpvarDBsMu.RLock()
+	dbs := make([]*DB, 0, len(treedbExpvarDBs))
+	for db := range treedbExpvarDBs {
+		dbs = append(dbs, db)
+	}
+	treedbExpvarDBsMu.RUnlock()
+
+	if current == nil && len(dbs) == 0 {
 		return map[string]any{}
 	}
-	return selectTreeDBExpvarStats(db.Stats())
+
+	out := map[string]any{}
+	if current != nil {
+		for k, v := range selectTreeDBExpvarStats(current.Stats()) {
+			out[k] = v
+		}
+		out["treedb.expvar.current_wal_dir"] = current.dir
+	}
+	out["treedb.expvar.instances_count"] = len(dbs)
+
+	instances := make(map[string]any, len(dbs))
+	for _, db := range dbs {
+		if db == nil {
+			continue
+		}
+		key := db.dir
+		if key == "" {
+			key = fmt.Sprintf("db_%p", db)
+		}
+		instanceStats := selectTreeDBExpvarStats(db.Stats())
+		instanceStats["treedb.expvar.wal_dir"] = db.dir
+		instanceStats["treedb.expvar.is_current"] = current == db
+		instances[key] = instanceStats
+	}
+	out["instances"] = instances
+	return out
 }
 
 func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
@@ -70,8 +112,10 @@ func selectTreeDBExpvarStats(stats map[string]string) map[string]any {
 	out := make(map[string]any)
 	for k, v := range stats {
 		// Export only process-wide metric families under treedb.process.* and
-		// select cache families used for mmap/decode/batch-arena tracking.
+		// select cache/backend families used for mmap/decode/batch-arena tracking.
 		if isProcessWideExpvarKey(k) ||
+			strings.HasPrefix(k, "treedb.process.identity.") ||
+			strings.HasPrefix(k, "treedb.vlog.mmap") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_mmap.") ||
 			strings.HasPrefix(k, "treedb.cache.vlog_decode_buffer_grow.") ||
 			strings.HasPrefix(k, "treedb.cache.batch_arena.") {

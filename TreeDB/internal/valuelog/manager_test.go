@@ -120,6 +120,76 @@ func TestManagerPromoteCurrentWritable_SwitchesPriorLaneSegmentToSealed(t *testi
 	}
 }
 
+func TestManagerReadUnsafe_CurrentWritableFallsBackWithoutPersistentMmap(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mmap not supported on windows")
+	}
+	prev := enableCurrentWritableMmap
+	enableCurrentWritableMmap = false
+	t.Cleanup(func() {
+		enableCurrentWritableMmap = prev
+	})
+
+	dir := t.TempDir()
+	fileID := mustEncodeFileID(t, 0, 1)
+	path := filepath.Join(dir, "value-l0-000001.log")
+
+	w, err := NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	defer func() { _ = w.Close() }()
+
+	want := bytes.Repeat([]byte("abc"), 1024)
+	ptr, err := w.Append(0, nil, 1, want)
+	if err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := w.Flush(); err != nil {
+		t.Fatalf("Flush: %v", err)
+	}
+
+	mgr, err := NewManager(dir)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	if err := mgr.RegisterSegment(path, fileID); err != nil {
+		t.Fatalf("RegisterSegment: %v", err)
+	}
+	if err := mgr.PromoteCurrentWritable(fileID); err != nil {
+		t.Fatalf("PromoteCurrentWritable: %v", err)
+	}
+
+	got, err := mgr.ReadUnsafe(ptr)
+	if err != nil {
+		t.Fatalf("ReadUnsafe: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("ReadUnsafe mismatch")
+	}
+
+	f := mgr.files[fileID]
+	if data, _ := f.mmapData.Load().([]byte); len(data) != 0 {
+		t.Fatalf("expected no current-writable mmap, got len=%d", len(data))
+	}
+	if remaps := f.remapCount.Load(); remaps != 0 {
+		t.Fatalf("expected no remaps, got=%d", remaps)
+	}
+	if deadMappings := f.deadMappingsCount.Load(); deadMappings != 0 {
+		t.Fatalf("expected no dead mappings, got=%d", deadMappings)
+	}
+	currentSegs, currentBytes, sealedSegs, sealedBytes, deadMappings, deadBytes := mgr.MmapResidencyStats()
+	if currentSegs != 0 || currentBytes != 0 || sealedSegs != 0 || sealedBytes != 0 || deadMappings != 0 || deadBytes != 0 {
+		t.Fatalf("unexpected mmap residency currentSegs=%d currentBytes=%d sealedSegs=%d sealedBytes=%d deadMappings=%d deadBytes=%d", currentSegs, currentBytes, sealedSegs, sealedBytes, deadMappings, deadBytes)
+	}
+	hits, _, _, _, fallbacks := mgr.MmapReadStats()
+	if hits != 0 || fallbacks == 0 {
+		t.Fatalf("expected mmap miss + fallback, hits=%d fallbacks=%d", hits, fallbacks)
+	}
+}
+
 func TestFileRead_CountsDeadMappingCapFallback(t *testing.T) {
 	dir := t.TempDir()
 	fileID, err := EncodeFileID(0, 1)

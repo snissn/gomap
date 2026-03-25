@@ -5,6 +5,22 @@ import (
 	"testing"
 )
 
+type mockBackendWithStats struct {
+	*MockBackend
+	stats map[string]string
+}
+
+func (m *mockBackendWithStats) Stats() map[string]string {
+	if m.stats == nil {
+		return m.MockBackend.Stats()
+	}
+	out := make(map[string]string, len(m.stats))
+	for k, v := range m.stats {
+		out[k] = v
+	}
+	return out
+}
+
 func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 	dir := t.TempDir()
 	backend := NewMockBackend()
@@ -34,6 +50,34 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 		"treedb.process.memory.memtable_view_deferred_bytes_current",
 		"treedb.process.memory.memtable_view_deferred_bytes_max",
 		"treedb.process.memory.vlog_retained_bytes_estimate",
+		"treedb.process.memory.rss_bytes",
+		"treedb.process.memory.rss_hwm_bytes",
+		"treedb.process.memory.rss_minus_heap_inuse_bytes",
+		"treedb.process.memory.rss_minus_total_sys_bytes",
+		"treedb.process.memory.peak_rss_bytes",
+		"treedb.process.memory.peak_heap_alloc_bytes",
+		"treedb.process.memory.peak_heap_inuse_bytes",
+		"treedb.process.memory.peak_total_sys_bytes",
+		"treedb.process.memory.peak_vlog_mmap_active_bytes",
+		"treedb.process.memory.peak_vlog_mmap_current_bytes",
+		"treedb.process.memory.peak_vlog_mmap_sealed_bytes",
+		"treedb.process.memory.peak_vlog_mmap_active_segments",
+		"treedb.process.memory.peak_vlog_mmap_current_segments",
+		"treedb.process.memory.peak_vlog_mmap_sealed_segments",
+		"treedb.process.memory.vlog_mmap_backend_active_bytes",
+		"treedb.process.memory.vlog_mmap_backend_current_bytes",
+		"treedb.process.memory.vlog_mmap_backend_sealed_bytes",
+		"treedb.process.memory.vlog_mmap_backend_dead_bytes",
+		"treedb.process.memory.vlog_mmap_backend_active_segments",
+		"treedb.process.memory.vlog_mmap_backend_current_segments",
+		"treedb.process.memory.vlog_mmap_backend_sealed_segments",
+		"treedb.process.memory.vlog_mmap_cache_active_bytes",
+		"treedb.process.memory.vlog_mmap_cache_current_bytes",
+		"treedb.process.memory.vlog_mmap_cache_sealed_bytes",
+		"treedb.process.memory.vlog_mmap_cache_dead_bytes",
+		"treedb.process.memory.vlog_mmap_cache_active_segments",
+		"treedb.process.memory.vlog_mmap_cache_current_segments",
+		"treedb.process.memory.vlog_mmap_cache_sealed_segments",
 		"treedb.cache.append_only.mutable_from_lease_total",
 		"treedb.cache.append_only.mutable_from_pool_total",
 		"treedb.cache.append_only.mutable_new_alloc_total",
@@ -66,5 +110,50 @@ func TestProcessMemoryStatsIncludeRuntimeBreakdown(t *testing.T) {
 	}
 	if _, err := strconv.ParseFloat(rawGCFraction, 64); err != nil {
 		t.Fatalf("gc_cpu_fraction parse: %v", err)
+	}
+}
+
+func TestProcessMemoryStatsIncludeBackendVlogMmap(t *testing.T) {
+	dir := t.TempDir()
+	backend := &mockBackendWithStats{
+		MockBackend: NewMockBackend(),
+		stats: map[string]string{
+			"treedb.vlog.mmap_active_bytes":     "111",
+			"treedb.vlog.mmap_current_bytes":    "22",
+			"treedb.vlog.mmap_sealed_bytes":     "89",
+			"treedb.vlog.mmap_dead_bytes":       "7",
+			"treedb.vlog.mmap_active_segments":  "5",
+			"treedb.vlog.mmap_current_segments": "2",
+			"treedb.vlog.mmap_sealed_segments":  "3",
+		},
+	}
+
+	db, err := Open(dir, backend, Options{
+		DisableWAL:  true,
+		AllowUnsafe: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	stats := db.Stats()
+	if got := mustStatInt64(t, stats, "treedb.process.memory.vlog_mmap_active_bytes"); got != 111 {
+		t.Fatalf("process active_bytes=%d want 111", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.memory.vlog_mmap_current_bytes"); got != 22 {
+		t.Fatalf("process current_bytes=%d want 22", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.memory.vlog_mmap_sealed_bytes"); got != 89 {
+		t.Fatalf("process sealed_bytes=%d want 89", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.memory.vlog_mmap_dead_bytes"); got != 7 {
+		t.Fatalf("process dead_bytes=%d want 7", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.memory.vlog_mmap_backend_active_bytes"); got != 111 {
+		t.Fatalf("backend active_bytes=%d want 111", got)
+	}
+	if got := mustStatInt64(t, stats, "treedb.process.memory.vlog_mmap_cache_active_bytes"); got != 0 {
+		t.Fatalf("cache active_bytes=%d want 0", got)
 	}
 }
