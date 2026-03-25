@@ -2,6 +2,7 @@ package compression
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -94,5 +95,40 @@ func TestTrainerSetOnAccept_CallsCallback(t *testing.T) {
 	case <-called:
 	default:
 		t.Fatalf("expected onAccept callback to be invoked")
+	}
+}
+
+func TestTrainerCanSelectExpandedDictCandidates(t *testing.T) {
+	tr := NewTrainer(TrainConfig{
+		TrainBytes:     64 << 10,
+		DictBytes:      32 << 10,
+		MinRecords:     8,
+		MaxRecordBytes: 64 << 10,
+		SampleStride:   1,
+	}, Config{Kind: KindZSTD, Level: zstd.SpeedFastest}, false, false)
+	if tr == nil {
+		t.Fatalf("expected non-nil trainer")
+	}
+	tr.SetAutotuneCandidates([]int{32}, []int{96 << 10}, []int{96 << 10})
+
+	samples := make([][]byte, 128)
+	base := bytes.Repeat([]byte("validator-snapshot-entry/"), 2048)
+	for i := range samples {
+		buf := append([]byte(nil), base[:43635]...)
+		copy(buf[len(buf)-16:], []byte(fmt.Sprintf("%016x", i)))
+		samples[i] = buf
+	}
+
+	tr.train(samples, 32<<10, zstd.SpeedFastest, 1)
+
+	p, ok := tr.lastProfile.Load().(*ActiveProfile)
+	if !ok || p == nil {
+		t.Fatalf("expected accepted profile")
+	}
+	if p.HistoryBytes != 96<<10 {
+		t.Fatalf("history=%d want=%d", p.HistoryBytes, 96<<10)
+	}
+	if p.DictBytes != 96<<10 {
+		t.Fatalf("dict bytes=%d want=%d", p.DictBytes, 96<<10)
 	}
 }

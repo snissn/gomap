@@ -65,10 +65,10 @@ func NormalizeAutotuneOptions(opts AutotuneOptions, valueLogEnabled bool) Autotu
 		opts.CandidateK = []int{1, 2, 4, 8, 16, 32}
 	}
 	if len(opts.CandidateHistoryBytes) == 0 {
-		opts.CandidateHistoryBytes = []int{16 << 10, 32 << 10, 40 << 10}
+		opts.CandidateHistoryBytes = []int{64 << 10, 96 << 10, 128 << 10}
 	}
 	if len(opts.CandidateDictBytes) == 0 {
-		opts.CandidateDictBytes = []int{40 << 10}
+		opts.CandidateDictBytes = []int{40 << 10, 64 << 10, 96 << 10}
 	}
 	if opts.MinGainToSwitch <= 0 {
 		opts.MinGainToSwitch = 0.05

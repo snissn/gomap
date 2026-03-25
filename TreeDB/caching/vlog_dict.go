@@ -452,7 +452,7 @@ func (db *DB) ensureValueLogDictTrainer() {
 		}
 		candidateK = filtered
 	}
-	tr.SetAutotuneCandidates(candidateK, db.valueLogAutotuneOptions.CandidateHistoryBytes)
+	tr.SetAutotuneCandidates(candidateK, db.valueLogAutotuneOptions.CandidateHistoryBytes, db.valueLogAutotuneOptions.CandidateDictBytes)
 	db.valueLogDictTrainer = tr
 	db.valueLogDictMetrics = compression.NewMetrics(compression.MetricsOptions{
 		AdaptiveRatio:  db.valueLogDictAdaptiveRatio,

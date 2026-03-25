@@ -1322,6 +1322,7 @@ func benchOptions(cfg benchConfig) (treedb.Options, benchWritePath, error) {
 		autotune := valuelog.AutotuneOptions{Mode: valuelog.AutotuneMedium}
 		if dictBytes > 0 {
 			autotune.CandidateHistoryBytes = []int{dictBytes}
+			autotune.CandidateDictBytes = []int{dictBytes}
 		}
 		opts.ValueLog.CompressionAutotune = autotune
 	case "block":
