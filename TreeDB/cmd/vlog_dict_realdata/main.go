@@ -2067,7 +2067,10 @@ func trainDictFixedSize(dictID uint32, samples [][]byte, dictBytes int, level zs
 		ID:       dictID,
 		Contents: samples,
 		History:  history,
-		Level:    level,
+		// Match the runtime trainer: zero repeat offsets can yield dictionaries
+		// that fail to load even though BuildDict otherwise succeeds.
+		Offsets: [3]int{1, 4, 8},
+		Level:   level,
 	})
 	if err != nil || len(dict) == 0 {
 		return nil, err
