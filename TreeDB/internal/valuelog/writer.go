@@ -637,6 +637,20 @@ func (w *Writer) Size() int64 {
 	return w.size
 }
 
+// PendingBytes reports bytes accepted by the writer but not yet flushed to the
+// underlying file descriptor. For file-backed writers this is the append-buffer
+// tail that same-process readers cannot see through ReadAt until flushed.
+func (w *Writer) PendingBytes() int {
+	if w == nil {
+		return 0
+	}
+	pending := len(w.appendBuf)
+	if w.bw != nil {
+		pending += w.bw.Buffered()
+	}
+	return pending
+}
+
 func (w *Writer) Flush() error {
 	if err := w.flushNoTrim(); err != nil {
 		return err

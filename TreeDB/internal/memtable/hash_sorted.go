@@ -314,6 +314,19 @@ func (m *HashSorted) entryForWriteLocked(key string) (*hashEntry, bool) {
 	return &m.entries[i], true
 }
 
+func (m *HashSorted) entryForReadLocked(key string) (hashEntry, bool) {
+	idx, ok := m.items[key]
+	if !ok {
+		return hashEntry{}, false
+	}
+	i := int(idx)
+	if i < 0 || i >= len(m.entries) {
+		delete(m.items, key)
+		return hashEntry{}, false
+	}
+	return m.entries[i], true
+}
+
 func (m *HashSorted) PutWithCallback(key, value []byte, cb func(k, v []byte) error) error {
 	if key == nil {
 		return nil
@@ -428,17 +441,27 @@ func (m *HashSorted) DeleteWithCallback(key []byte, cb func(k, v []byte) error) 
 }
 
 func (m *HashSorted) Get(key []byte) ([]byte, bool, bool) {
+	keyLookup := bytesToStringNoCopy(key)
+
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	idx, ok := m.items[bytesToStringNoCopy(key)]
+	idx, ok := m.items[keyLookup]
 	if !ok {
+		m.mu.RUnlock()
 		return nil, false, false
 	}
 	i := int(idx)
 	if i < 0 || i >= len(m.entries) {
-		return nil, false, false
+		m.mu.RUnlock()
+		m.mu.Lock()
+		ent, ok := m.entryForReadLocked(keyLookup)
+		m.mu.Unlock()
+		if !ok {
+			return nil, false, false
+		}
+		return ent.value, ent.flags&node.FlagTombstone != 0, true
 	}
 	ent := m.entries[i]
+	m.mu.RUnlock()
 	if ent.flags&node.FlagPointer != 0 {
 		return ent.value, ent.flags&node.FlagTombstone != 0, true
 	}
@@ -446,17 +469,30 @@ func (m *HashSorted) Get(key []byte) ([]byte, bool, bool) {
 }
 
 func (m *HashSorted) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
+	keyLookup := bytesToStringNoCopy(key)
+
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	idx, ok := m.items[bytesToStringNoCopy(key)]
+	idx, ok := m.items[keyLookup]
 	if !ok {
+		m.mu.RUnlock()
 		return nil, page.ValuePtr{}, 0, false
 	}
 	i := int(idx)
 	if i < 0 || i >= len(m.entries) {
-		return nil, page.ValuePtr{}, 0, false
+		m.mu.RUnlock()
+		m.mu.Lock()
+		ent, ok := m.entryForReadLocked(keyLookup)
+		m.mu.Unlock()
+		if !ok {
+			return nil, page.ValuePtr{}, 0, false
+		}
+		if ent.flags&node.FlagPointer != 0 {
+			return ent.value, ent.ptr, ent.flags, true
+		}
+		return ent.value, page.ValuePtr{}, ent.flags, true
 	}
 	ent := m.entries[i]
+	m.mu.RUnlock()
 	if ent.flags&node.FlagPointer != 0 {
 		return ent.value, ent.ptr, ent.flags, true
 	}
@@ -725,7 +761,7 @@ func (m *HashSorted) ensureIndexFrozen() {
 	}
 
 	m.mu.Lock()
-	if len(m.items) != total {
+	if !m.sortedKeysMatchItemsLocked(dst, total) {
 		m.mu.Unlock()
 
 		// Safety fallback: if indexing missed keys, rebuild directly from the map.
@@ -779,6 +815,23 @@ func (m *HashSorted) ensureIndexFrozen() {
 	m.sortedValid = true
 	m.mu.Unlock()
 	m.index.dropRuns()
+}
+
+func (m *HashSorted) sortedKeysMatchItemsLocked(keys []string, total int) bool {
+	if len(m.items) != total || len(keys) != total {
+		return false
+	}
+	prev := ""
+	for i, k := range keys {
+		if i > 0 && strings.Compare(prev, k) >= 0 {
+			return false
+		}
+		if _, ok := m.items[k]; !ok {
+			return false
+		}
+		prev = k
+	}
+	return true
 }
 
 func (m *HashSorted) startFinalize() {

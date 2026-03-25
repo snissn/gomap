@@ -3081,8 +3081,13 @@ func (db *DB) flushValueLog(laneIDs ...int) error {
 	return nil
 }
 
-func (db *DB) flushDeferredValueLogForBackendRead() error {
-	if db == nil || !db.deferredValueLogEnabled() || !db.valueLogEnabled() {
+// flushValueLogForBackendRead makes value-log bytes visible to backend reads
+// once pointer-bearing backend keys may already reference them. This matters
+// even when deferred value-log mode is disabled: durability-none grouped
+// appends can leave the current segment tail buffered in-process while backend
+// keys already point at those records.
+func (db *DB) flushValueLogForBackendRead() error {
+	if db == nil || !db.valueLogEnabled() {
 		return nil
 	}
 	dirtySeq := db.backendReadVlogDirtySeq.Load()
@@ -3140,8 +3145,10 @@ func (db *DB) flushValueLogLane(l *lane) error {
 		}
 		// Always take vlogMu first so flush acts as a write barrier for in-flight appends.
 		if !l.vlogDirty.Load() {
-			l.vlogMu.Unlock()
-			return nil
+			if pending, ok := w.(interface{ PendingBytes() int }); !ok || pending.PendingBytes() == 0 {
+				l.vlogMu.Unlock()
+				return nil
+			}
 		}
 		start := time.Now()
 		err := w.Flush()
@@ -6711,6 +6718,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		autoCheckpointWriteCh: make(chan struct{}, 1),
 		lanes:                 lanes,
 		flushLaneMu:           make([]sync.Mutex, len(lanes)),
+	}
+	if barrierSetter, ok := backend.(interface {
+		SetCurrentValueLogReadBarrier(func(fileID uint32) error)
+	}); ok {
+		barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
+			laneID, _ := valuelog.DecodeFileID(fileID)
+			if int(laneID) < 0 || int(laneID) >= len(db.lanes) {
+				return nil
+			}
+			return db.flushValueLogLane(&db.lanes[laneID])
+		})
 	}
 	db.storeMemtableMode(mode)
 	if maxExistingRID > 0 {
@@ -16680,7 +16698,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 			}
 		}
 		db.mu.Unlock()
-
 		removed := false
 		for _, walPath := range deletable {
 			db.dropValueLogSegment(walPath)
@@ -16961,7 +16978,6 @@ func (db *DB) flushLaneOnce(sync bool, laneID int) bool {
 		}
 	}
 	db.mu.Unlock()
-
 	removed := false
 	for _, walPath := range deletable {
 		db.dropValueLogSegment(walPath)
@@ -17710,7 +17726,7 @@ func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
 }
 
 func (db *DB) backendGetMany(keys [][]byte) ([][]byte, error) {
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 	if mg, ok := db.backend.(backendManyGetter); ok {
@@ -17741,7 +17757,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		db.releaseMemtableView(view)
 	}
 	if bypass {
-		if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+		if err := db.flushValueLogForBackendRead(); err != nil {
 			return nil, err
 		}
 		return db.backend.Get(key)
@@ -17758,7 +17774,7 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 		copy(cpy, val)
 		return cpy, nil
 	}
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 	return db.backend.Get(key)
@@ -17868,7 +17884,7 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	}
 
 	// 2. Backend
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return dst, err
 	}
 	return db.backend.GetAppend(key, dst)
@@ -18953,7 +18969,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	if err := db.ensureBackendRange(); err != nil {
 		return nil, err
 	}
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 
@@ -19313,7 +19329,7 @@ func (it *concatUnsafeIterator) Domain() (start, end []byte) { return nil, nil }
 
 func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	db.noteRead()
-	if err := db.flushDeferredValueLogForBackendRead(); err != nil {
+	if err := db.flushValueLogForBackendRead(); err != nil {
 		return nil, err
 	}
 
