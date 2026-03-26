@@ -643,6 +643,42 @@ func TestVlogCompressionSelector_LargePayloadDoesNotForceLZ4WithoutVeryStrongRat
 	}
 }
 
+func TestVlogCompressionSelector_LargePayloadThroughputPrefersDictOnStrongSizeWin(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	s.dwellBytes = 0
+	s.currentCandidate = vlogAutoCandidateBlockSnappy
+	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.10, samples: 16}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.74, throughput: 1.06, samples: 16}
+	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 0.50, samples: 8}
+
+	mode, _, probe := s.choose(true, 43<<10, 43<<10)
+	if probe {
+		t.Fatalf("did not expect probe for steady large-payload dict preference")
+	}
+	if mode != vlogWriteDict {
+		t.Fatalf("expected dict mode for large payload with strong observed dict ratio, got %v", mode)
+	}
+}
+
+func TestVlogCompressionSelector_LargePayloadThroughputKeepsBlockWithoutStrongDictSignal(t *testing.T) {
+	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	s.dwellBytes = 0
+	s.currentCandidate = vlogAutoCandidateBlockSnappy
+	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.10, samples: 16}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.74, throughput: 1.06, samples: 16}
+	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.40, throughput: 0.30, samples: 8}
+
+	mode, codec, probe := s.choose(true, 43<<10, 43<<10)
+	if probe {
+		t.Fatalf("did not expect probe in steady throughput selection")
+	}
+	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy {
+		t.Fatalf("expected block snappy to remain preferred without strong dict signal, got mode=%v codec=%v", mode, codec)
+	}
+}
+
 func TestResolveVlogWriteMode_LargePayloadBalancedBypassesSelectorToLZ4(t *testing.T) {
 	db := &DB{
 		valueLogCompressionMode: uint8(vlogCompressionAuto),
@@ -675,6 +711,27 @@ func TestResolveVlogWriteMode_ThroughputPolicyBypassesSelectorForMediumPayload(t
 	mode, codec, probe := db.resolveVlogWriteMode(l, 0, 256, 256)
 	if mode != vlogWriteBlock || codec != valuelog.BlockCodecSnappy || probe {
 		t.Fatalf("expected throughput policy medium payload to force configured block codec, got mode=%v codec=%v probe=%t", mode, codec, probe)
+	}
+}
+
+func TestResolveVlogWriteMode_ThroughputPolicyLargePayloadWithDictCanPreferDict(t *testing.T) {
+	db := &DB{
+		valueLogCompressionMode: uint8(vlogCompressionAuto),
+		valueLogAutoPolicy:      uint8(vlogAutoThroughput),
+		valueLogBlockCodec:      valuelog.BlockCodecSnappy,
+	}
+	s := newVlogCompressionSelector(vlogAutoThroughput, 0, 0)
+	s.dwellBytes = 0
+	s.currentCandidate = vlogAutoCandidateBlockSnappy
+	s.metrics[vlogAutoCandidateOff] = vlogCandidateMetrics{ratio: 1.0, throughput: 1.0, samples: 16}
+	s.metrics[vlogAutoCandidateBlockSnappy] = vlogCandidateMetrics{ratio: 0.70, throughput: 1.10, samples: 16}
+	s.metrics[vlogAutoCandidateBlockLZ4] = vlogCandidateMetrics{ratio: 0.74, throughput: 1.06, samples: 16}
+	s.metrics[vlogAutoCandidateDict] = vlogCandidateMetrics{ratio: 0.08, throughput: 0.50, samples: 8}
+	l := &lane{vlogCompressionSelector: s}
+
+	mode, codec, probe := db.resolveVlogWriteMode(l, 9, 43<<10, 43<<10)
+	if mode != vlogWriteDict || codec != valuelog.BlockCodecSnappy || probe {
+		t.Fatalf("expected large payload with strong dict signal to choose dict mode, got mode=%v codec=%v probe=%t", mode, codec, probe)
 	}
 }
 

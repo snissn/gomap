@@ -1276,6 +1276,135 @@ func TestFramePreparer_KeepPolicySkipsCompression(t *testing.T) {
 	}
 }
 
+func buildLargeDictCompressionFixture(t *testing.T, dictID uint64) ([]byte, []Record) {
+	t.Helper()
+	const payloadSize = 43 << 10
+	makePayload := func(variant int) []byte {
+		prefix := []byte(fmt.Sprintf("{\"bucket\":\"state\",\"variant\":%d,\"payload\":\"", variant))
+		suffix := []byte("\"}")
+		chunk := []byte("ibc/client/07-tendermint/consensusStates/00000000000000000000|")
+		out := make([]byte, 0, payloadSize)
+		out = append(out, prefix...)
+		for len(out)+len(suffix) < payloadSize {
+			out = append(out, chunk...)
+		}
+		out = out[:payloadSize-len(suffix)]
+		out = append(out, suffix...)
+		// Keep values very compressible while ensuring record-to-record variance.
+		out[payloadSize-64] = byte('a' + (variant % 26))
+		out[payloadSize-63] = byte('0' + (variant % 10))
+		return out
+	}
+
+	samples := make([][]byte, 32)
+	history := make([]byte, 0, 8<<10)
+	for i := range samples {
+		s := makePayload(i)
+		samples[i] = s
+		if len(history) < cap(history) {
+			need := cap(history) - len(history)
+			if need > len(s) {
+				need = len(s)
+			}
+			history = append(history, s[:need]...)
+		}
+	}
+	if len(history) < 8 {
+		history = append(history, bytes.Repeat([]byte("x"), 8-len(history))...)
+	}
+
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+
+	records := []Record{
+		{RID: 1, Value: append([]byte(nil), samples[0]...)},
+		{RID: 2, Value: append([]byte(nil), samples[1]...)},
+	}
+	return dict, records
+}
+
+func TestFramePreparer_KeepPolicyLargeDictOverride(t *testing.T) {
+	const dictID = uint64(19)
+	dict, records := buildLargeDictCompressionFixture(t, dictID)
+
+	prep := NewFramePreparer()
+	prep.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	// Deliberately pessimistic keep policy: small payloads should skip.
+	prep.SetKeepPolicy(0.01, 100.0, 0.0)
+
+	body, stats, err := prep.PrepareFrame(dictID, dict, records)
+	if err != nil {
+		t.Fatalf("PrepareFrame: %v", err)
+	}
+	if !stats.Attempted {
+		t.Fatalf("expected large dict payload to probe compression")
+	}
+	if !stats.Kept {
+		t.Fatalf("expected strong large-payload ratio to stay compressed")
+	}
+	hdr, _, _, _, err := DecodeFrame(body)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if hdr.Flags&FrameFlagCompressed == 0 {
+		t.Fatalf("expected compressed frame body")
+	}
+}
+
+func TestWriter_DictLargePayloadBackoffProbe(t *testing.T) {
+	const dictID = uint64(23)
+	dict, compressible := buildLargeDictCompressionFixture(t, dictID)
+
+	w := NewWriterWithSink(io.Discard, page.ValueLogFileID(1))
+	w.SetDictFrameEncoderOptions(zstd.SpeedFastest, false)
+	// Keep policy should not prevent large dict probes.
+	w.SetKeepPolicy(0.01, 100.0, 0.0)
+
+	incompressible := make([]Record, len(compressible))
+	rng := rand.New(rand.NewSource(4242))
+	for i := range incompressible {
+		payload := make([]byte, len(compressible[i].Value))
+		if _, err := rng.Read(payload); err != nil {
+			t.Fatalf("rng read: %v", err)
+		}
+		incompressible[i] = Record{RID: uint64(i + 1), Value: payload}
+	}
+
+	dst := make([]page.ValuePtr, len(compressible))
+	_, stats1, err := w.AppendFrameWithStatsInto(dictID, dict, incompressible, dst)
+	if err != nil {
+		t.Fatalf("append incompressible: %v", err)
+	}
+	if !stats1.Attempted {
+		t.Fatalf("expected initial incompressible frame to attempt compression")
+	}
+	if stats1.Kept {
+		t.Fatalf("expected incompressible frame to fall back to raw")
+	}
+	if w.skipRemain == 0 {
+		t.Fatalf("expected backoff skip window after no-benefit attempt")
+	}
+
+	_, stats2, err := w.AppendFrameWithStatsInto(dictID, dict, compressible, dst)
+	if err != nil {
+		t.Fatalf("append compressible: %v", err)
+	}
+	if !stats2.Attempted {
+		t.Fatalf("expected large payload to probe during backoff")
+	}
+	if !stats2.Kept {
+		t.Fatalf("expected compressible large payload to remain compressed")
+	}
+}
+
 func TestReadAtLargeValueLengthHintOmitted(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "value-000001.log")
