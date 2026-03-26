@@ -848,3 +848,55 @@ func TestObserveVlogWriteMode_UsesUnitPayloadForSkipDecision(t *testing.T) {
 		t.Fatalf("expected selector observe to use unit payload threshold, samples %d -> %d", before, after)
 	}
 }
+
+func TestObserveVlogWriteMode_RecordsWriteModeBytesByBucket(t *testing.T) {
+	db := &DB{}
+	l := &lane{}
+
+	db.observeVlogWriteMode(l, vlogWriteDict, valuelog.BlockCodecSnappy, 40<<10, 40<<10, 12<<10, false, 1000)
+	db.observeVlogWriteMode(l, vlogWriteBlock, valuelog.BlockCodecLZ4, 3<<10, 3<<10, 2<<10, false, 1000)
+	db.observeVlogWriteMode(l, vlogWriteOff, valuelog.BlockCodecSnappy, 700, 700, 700, false, 1000)
+
+	snap := snapshotLaneVlogWriteMode(l)
+	if got := snap.RawBytes[vlogWriteDict]; got != 40<<10 {
+		t.Fatalf("dict raw bytes=%d", got)
+	}
+	if got := snap.StoredBytes[vlogWriteDict]; got != 12<<10 {
+		t.Fatalf("dict stored bytes=%d", got)
+	}
+	if got := snap.BucketRawBytes[vlogWriteDict][vlogPayloadBucketIndex(40<<10)]; got != 40<<10 {
+		t.Fatalf("dict bucket raw bytes=%d", got)
+	}
+	if got := snap.BucketRawBytes[vlogWriteBlock][vlogPayloadBucketIndex(3<<10)]; got != 3<<10 {
+		t.Fatalf("block bucket raw bytes=%d", got)
+	}
+	if got := snap.BucketFrames[vlogWriteOff][vlogPayloadBucketIndex(700)]; got != 1 {
+		t.Fatalf("off bucket frames=%d", got)
+	}
+}
+
+func TestStats_ExposeVlogWriteModeBreakdown(t *testing.T) {
+	dir := t.TempDir()
+	backend := &mockBackendWithStats{MockBackend: NewMockBackend()}
+	db, err := Open(dir, backend, Options{
+		DisableWAL:  true,
+		AllowUnsafe: true,
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	db.observeVlogWriteMode(&db.lanes[0], vlogWriteDict, valuelog.BlockCodecSnappy, 40<<10, 40<<10, 10<<10, false, 1000)
+	db.observeVlogWriteMode(&db.lanes[0], vlogWriteBlock, valuelog.BlockCodecLZ4, 8<<10, 8<<10, 4<<10, false, 1000)
+
+	stats := db.Stats()
+	if got := stats["treedb.cache.vlog_write_mode.raw_bytes.dict"]; got != "40960" {
+		t.Fatalf("dict raw bytes stat=%q", got)
+	}
+	if got := stats["treedb.cache.vlog_write_mode.stored_ratio.block"]; got != "0.500000" {
+		t.Fatalf("block stored ratio stat=%q", got)
+	}
+	if got := stats["treedb.cache.vlog_write_mode.bucket.frames.dict.le_49152"]; got != "1" {
+		t.Fatalf("dict bucket frames stat=%q", got)
+	}
+}
