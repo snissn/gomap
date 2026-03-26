@@ -2,6 +2,7 @@ package caching
 
 import (
 	"math"
+	"strconv"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -33,6 +34,8 @@ const (
 	vlogWriteDict
 )
 
+const vlogCompressionWriteModeCount = int(vlogWriteDict) + 1
+
 type vlogAutoCandidate uint8
 
 const (
@@ -48,7 +51,11 @@ const vlogBlockCodecCount = 2
 
 const vlogBlockKBucketCount = 8
 
+const vlogPayloadBucketCount = 10
+
 var vlogBlockKBucketUpperBounds = [vlogBlockKBucketCount]int{1, 2, 4, 8, 16, 32, 64, valuelog.MaxFrameK}
+
+var vlogPayloadBucketUpperBounds = [vlogPayloadBucketCount - 1]int{1024, 2048, 4096, 8192, 16384, 32768, 49152, 65536, 131072}
 
 var (
 	vlogAutoCandidatesNoDict   = [...]vlogAutoCandidate{vlogAutoCandidateOff, vlogAutoCandidateBlockSnappy, vlogAutoCandidateBlockLZ4}
@@ -345,6 +352,88 @@ func candidateWriteMode(c vlogAutoCandidate, seed valuelog.BlockCodec) (vlogComp
 	default:
 		return vlogWriteOff, normalizeSelectorBlockCodec(seed)
 	}
+}
+
+func vlogWriteModeSuffix(mode vlogCompressionWriteMode) string {
+	switch mode {
+	case vlogWriteBlock:
+		return "block"
+	case vlogWriteDict:
+		return "dict"
+	default:
+		return "off"
+	}
+}
+
+func vlogPayloadBucketIndex(unitPayloadBytes int) int {
+	for i, upper := range vlogPayloadBucketUpperBounds {
+		if unitPayloadBytes <= upper {
+			return i
+		}
+	}
+	return vlogPayloadBucketCount - 1
+}
+
+func vlogPayloadBucketSuffix(idx int) string {
+	if idx < 0 {
+		return "unknown"
+	}
+	if idx < len(vlogPayloadBucketUpperBounds) {
+		return "le_" + strconv.Itoa(vlogPayloadBucketUpperBounds[idx])
+	}
+	if len(vlogPayloadBucketUpperBounds) == 0 {
+		return "gt_0"
+	}
+	return "gt_" + strconv.Itoa(vlogPayloadBucketUpperBounds[len(vlogPayloadBucketUpperBounds)-1])
+}
+
+type vlogWriteModeSnapshot struct {
+	RawBytes          [vlogCompressionWriteModeCount]uint64
+	StoredBytes       [vlogCompressionWriteModeCount]uint64
+	Frames            [vlogCompressionWriteModeCount]uint64
+	BucketRawBytes    [vlogCompressionWriteModeCount][vlogPayloadBucketCount]uint64
+	BucketStoredBytes [vlogCompressionWriteModeCount][vlogPayloadBucketCount]uint64
+	BucketFrames      [vlogCompressionWriteModeCount][vlogPayloadBucketCount]uint64
+}
+
+func recordLaneVlogWriteObservation(l *lane, mode vlogCompressionWriteMode, rawPayloadBytes, unitPayloadBytes, storedPayloadBytes int) {
+	if l == nil || rawPayloadBytes <= 0 {
+		return
+	}
+	if int(mode) >= vlogCompressionWriteModeCount {
+		mode = vlogWriteOff
+	}
+	if unitPayloadBytes <= 0 {
+		unitPayloadBytes = rawPayloadBytes
+	}
+	if storedPayloadBytes <= 0 {
+		storedPayloadBytes = rawPayloadBytes
+	}
+	bucket := vlogPayloadBucketIndex(unitPayloadBytes)
+	l.vlogWriteModeRawBytes[mode].Add(uint64(rawPayloadBytes))
+	l.vlogWriteModeStoredBytes[mode].Add(uint64(storedPayloadBytes))
+	l.vlogWriteModeFrames[mode].Add(1)
+	l.vlogWriteModeBucketRawBytes[mode][bucket].Add(uint64(rawPayloadBytes))
+	l.vlogWriteModeBucketStoredBytes[mode][bucket].Add(uint64(storedPayloadBytes))
+	l.vlogWriteModeBucketFrames[mode][bucket].Add(1)
+}
+
+func snapshotLaneVlogWriteMode(l *lane) vlogWriteModeSnapshot {
+	var out vlogWriteModeSnapshot
+	if l == nil {
+		return out
+	}
+	for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
+		out.RawBytes[mode] = l.vlogWriteModeRawBytes[mode].Load()
+		out.StoredBytes[mode] = l.vlogWriteModeStoredBytes[mode].Load()
+		out.Frames[mode] = l.vlogWriteModeFrames[mode].Load()
+		for bucket := 0; bucket < vlogPayloadBucketCount; bucket++ {
+			out.BucketRawBytes[mode][bucket] = l.vlogWriteModeBucketRawBytes[mode][bucket].Load()
+			out.BucketStoredBytes[mode][bucket] = l.vlogWriteModeBucketStoredBytes[mode][bucket].Load()
+			out.BucketFrames[mode][bucket] = l.vlogWriteModeBucketFrames[mode][bucket].Load()
+		}
+	}
+	return out
 }
 
 func normalizeMetricRatio(v float64) float64 {
@@ -1148,6 +1237,7 @@ func (db *DB) observeVlogWriteMode(l *lane, mode vlogCompressionWriteMode, block
 	if unitPayloadBytes <= 0 {
 		unitPayloadBytes = rawPayloadBytes
 	}
+	recordLaneVlogWriteObservation(l, mode, rawPayloadBytes, unitPayloadBytes, storedPayloadBytes)
 	if mode == vlogWriteBlock {
 		observeLaneVlogBlockRatio(l, blockCodec, rawPayloadBytes, storedPayloadBytes)
 	}
