@@ -7069,6 +7069,17 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	db.materializationLastDrainUnixNano.Store(nowNS)
 	db.publishWatermarkLastUnixNano = nowNS
 
+	var outerLeafPageLogSetter interface {
+		SetLeafPageLog(backenddb.LeafPageLog)
+	}
+	if opts.IndexOuterLeavesInValueLog {
+		setter, ok := backend.(interface{ SetLeafPageLog(backenddb.LeafPageLog) })
+		if !ok {
+			return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
+		}
+		outerLeafPageLogSetter = setter
+	}
+
 	// Open initial value-log segments (if enabled) and journal/commit log
 	// segments (if enabled). Journal and value log are decoupled.
 	if db.valueLogEnabled() {
@@ -7151,12 +7162,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 		}
 	}
 
-	if opts.IndexOuterLeavesInValueLog {
-		setter, ok := backend.(interface{ SetLeafPageLog(backenddb.LeafPageLog) })
-		if !ok {
-			return nil, errors.New("cachingdb: backend does not support value-log leaf pages")
-		}
-		setter.SetLeafPageLog(newCachingLeafPageLog(db, 0))
+	if outerLeafPageLogSetter != nil {
+		outerLeafPageLogSetter.SetLeafPageLog(newCachingLeafPageLog(db, 0))
 	}
 	if opts.DisableWAL {
 		// Stage the adaptive gate on the fastest cached profile first. WAL-on
