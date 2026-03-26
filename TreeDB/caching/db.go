@@ -18949,6 +18949,39 @@ func (db *DB) Stats() map[string]string {
 		}
 		stats["treedb.cache.vlog_block.ratio.samples."+suffix] = fmt.Sprintf("%d", blockRatioSamples[codecIdx])
 	}
+	var writeSnap vlogWriteModeSnapshot
+	for i := range db.lanes {
+		laneSnap := snapshotLaneVlogWriteMode(&db.lanes[i])
+		for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
+			writeSnap.RawBytes[mode] += laneSnap.RawBytes[mode]
+			writeSnap.StoredBytes[mode] += laneSnap.StoredBytes[mode]
+			writeSnap.Frames[mode] += laneSnap.Frames[mode]
+			for bucket := 0; bucket < vlogPayloadBucketCount; bucket++ {
+				writeSnap.BucketRawBytes[mode][bucket] += laneSnap.BucketRawBytes[mode][bucket]
+				writeSnap.BucketStoredBytes[mode][bucket] += laneSnap.BucketStoredBytes[mode][bucket]
+				writeSnap.BucketFrames[mode][bucket] += laneSnap.BucketFrames[mode][bucket]
+			}
+		}
+	}
+	for mode := 0; mode < vlogCompressionWriteModeCount; mode++ {
+		suffix := vlogWriteModeSuffix(vlogCompressionWriteMode(mode))
+		stats["treedb.cache.vlog_write_mode.raw_bytes."+suffix] = fmt.Sprintf("%d", writeSnap.RawBytes[mode])
+		stats["treedb.cache.vlog_write_mode.stored_bytes."+suffix] = fmt.Sprintf("%d", writeSnap.StoredBytes[mode])
+		stats["treedb.cache.vlog_write_mode.frames."+suffix] = fmt.Sprintf("%d", writeSnap.Frames[mode])
+		if writeSnap.RawBytes[mode] > 0 {
+			stats["treedb.cache.vlog_write_mode.stored_ratio."+suffix] = fmt.Sprintf("%.6f", float64(writeSnap.StoredBytes[mode])/float64(writeSnap.RawBytes[mode]))
+		}
+		for bucket := 0; bucket < vlogPayloadBucketCount; bucket++ {
+			bucketSuffix := vlogPayloadBucketSuffix(bucket)
+			stats["treedb.cache.vlog_write_mode.bucket.raw_bytes."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketRawBytes[mode][bucket])
+			stats["treedb.cache.vlog_write_mode.bucket.stored_bytes."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketStoredBytes[mode][bucket])
+			stats["treedb.cache.vlog_write_mode.bucket.frames."+suffix+"."+bucketSuffix] = fmt.Sprintf("%d", writeSnap.BucketFrames[mode][bucket])
+			if writeSnap.BucketRawBytes[mode][bucket] > 0 {
+				key := "treedb.cache.vlog_write_mode.bucket.stored_ratio." + suffix + "." + bucketSuffix
+				stats[key] = fmt.Sprintf("%.6f", float64(writeSnap.BucketStoredBytes[mode][bucket])/float64(writeSnap.BucketRawBytes[mode][bucket]))
+			}
+		}
+	}
 	if normalizeVlogCompressionMode(db.valueLogCompressionMode) == vlogCompressionAuto {
 		var autoSnap vlogCompressionSelectorStats
 		for i := range db.lanes {

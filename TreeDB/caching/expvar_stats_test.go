@@ -10,6 +10,9 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 		"treedb.cache.vlog_mmap.read.hit_ratio":                         "0.625000",
 		"treedb.cache.vlog_mmap.enabled":                                "true",
 		"treedb.cache.vlog_decode_buffer_grow.calls_total":              "42",
+		"treedb.cache.vlog_write_mode.raw_bytes.dict":                   "40960",
+		"treedb.cache.vlog_auto.bytes.dict":                             "8192",
+		"treedb.cache.vlog_dict.current_k":                              "32",
 		"treedb.process.memory.heap_inuse_bytes":                        "4096",
 		"treedb.process.memory.pool_pressure_level":                     "critical",
 		"treedb.cache.batch_arena.pool_bytes_estimate":                  "65536",
@@ -39,6 +42,15 @@ func TestSelectTreeDBExpvarStatsFiltersAndCoerces(t *testing.T) {
 	}
 	if v, ok := got["treedb.cache.vlog_decode_buffer_grow.calls_total"].(int64); !ok || v != 42 {
 		t.Fatalf("decode_buffer_grow.calls_total=%T(%v) want int64(42)", got["treedb.cache.vlog_decode_buffer_grow.calls_total"], got["treedb.cache.vlog_decode_buffer_grow.calls_total"])
+	}
+	if v, ok := got["treedb.cache.vlog_write_mode.raw_bytes.dict"].(int64); !ok || v != 40960 {
+		t.Fatalf("vlog_write_mode.raw_bytes.dict=%T(%v) want int64(40960)", got["treedb.cache.vlog_write_mode.raw_bytes.dict"], got["treedb.cache.vlog_write_mode.raw_bytes.dict"])
+	}
+	if v, ok := got["treedb.cache.vlog_auto.bytes.dict"].(int64); !ok || v != 8192 {
+		t.Fatalf("vlog_auto.bytes.dict=%T(%v) want int64(8192)", got["treedb.cache.vlog_auto.bytes.dict"], got["treedb.cache.vlog_auto.bytes.dict"])
+	}
+	if v, ok := got["treedb.cache.vlog_dict.current_k"].(int64); !ok || v != 32 {
+		t.Fatalf("vlog_dict.current_k=%T(%v) want int64(32)", got["treedb.cache.vlog_dict.current_k"], got["treedb.cache.vlog_dict.current_k"])
 	}
 	if v, ok := got["treedb.process.memory.heap_inuse_bytes"].(int64); !ok || v != 4096 {
 		t.Fatalf("heap_inuse_bytes=%T(%v) want int64(4096)", got["treedb.process.memory.heap_inuse_bytes"], got["treedb.process.memory.heap_inuse_bytes"])
