@@ -16,20 +16,22 @@ import (
 )
 
 const (
-	DefaultTrainBytes           = 1 << 20
-	DefaultTrainDictBytes       = 32 << 10
-	DefaultTrainMinRecords      = 64
-	DefaultTrainMaxRecordBytes  = 64 << 10
-	DefaultTrainQueue           = 128
+	DefaultTrainBytes          = 1 << 20
+	DefaultTrainDictBytes      = 32 << 10
+	DefaultTrainMinRecords     = 64
+	DefaultTrainMaxRecordBytes = 64 << 10
+	// Keep enough buffered samples to bootstrap a first dict during short,
+	// front-end-heavy ingest windows without dropping most candidates.
+	DefaultTrainQueue           = 512
 	DefaultTrainDedupWindow     = 16
 	DefaultTrainMaxHistoryBytes = 128 << 10
 
 	// Bootstrap defaults. These are intentionally smaller than the steady-state
 	// TrainBytes/DictBytes targets so dict compression becomes active quickly,
 	// reducing sensitivity to TrainBytes tuning.
-	DefaultTrainBootstrapBytes      = 128 << 10
+	DefaultTrainBootstrapBytes      = 32 << 10
 	DefaultTrainBootstrapDictBytes  = 8 << 10
-	DefaultTrainBootstrapMinRecords = 16
+	DefaultTrainBootstrapMinRecords = 8
 
 	// Adaptive gating constants for dict+K refresh.
 	MinProfileBytes       = 64 << 20 // 64 MiB

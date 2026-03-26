@@ -783,13 +783,15 @@ func resolvedTreeDBVlogCompressionModeForDictVariants() (uint64, error) {
 
 func resolvedTreeDBVlogTrainDefaults(trainBytes, dictBytes int) (int, int) {
 	if trainBytes == 0 {
-		trainBytes = 4 << 20
+		// Match engine defaults so dict variants preserve self-tuning behavior
+		// while still bootstrapping quickly in short benchmark runs.
+		trainBytes = 1 << 20
 	}
 	if trainBytes < 0 {
 		return trainBytes, dictBytes
 	}
 	if dictBytes <= 0 {
-		dictBytes = 40 << 10
+		dictBytes = 32 << 10
 	}
 	return trainBytes, dictBytes
 }

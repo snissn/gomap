@@ -6907,8 +6907,8 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	if valueLogDictTrain.TrainBytes > 0 &&
 		valueLogDictTrain.MinRecords == 0 &&
 		opts.ForceValueLogPointers &&
-		valueLogCompressionMode == vlogCompressionAuto &&
-		valueLogAutoPolicy == vlogAutoThroughput {
+		(valueLogCompressionMode == vlogCompressionDict ||
+			(valueLogCompressionMode == vlogCompressionAuto && valueLogAutoPolicy == vlogAutoThroughput)) {
 		// Pointer-heavy ingest streams are often front-loaded with the largest
 		// value-log pressure. Lower the initial profile record floor so the first
 		// dictionary can publish earlier and influence more of the run.
@@ -6917,6 +6917,9 @@ func Open(dir string, backend BackendDB, opts Options) (*DB, error) {
 	valueLogDictMaxK := opts.ValueLogDictMaxK
 	if valueLogDictMaxK <= 0 {
 		valueLogDictMaxK = 32
+		if opts.ForceValueLogPointers {
+			valueLogDictMaxK = 128
+		}
 	}
 	if valueLogDictMaxK < 1 {
 		valueLogDictMaxK = 1

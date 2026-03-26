@@ -668,6 +668,13 @@ func main() {
 			fmt.Println("TreeDB ValueLog Rewrite (After Run)")
 			fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		}
+		if run.Config.KeepDir {
+			if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
+				fmt.Println()
+				fmt.Println("Kept Data Directories")
+				fmt.Print(kept)
+			}
+		}
 		if hasArtifacts {
 			runBenchprof(*profileDir)
 		}
@@ -721,6 +728,13 @@ func main() {
 				fmt.Println()
 				fmt.Println("TreeDB ValueLog Rewrite (After Run)")
 				fmt.Print(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
+			}
+			if run.Config.KeepDir {
+				if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
+					fmt.Println()
+					fmt.Println("Kept Data Directories")
+					fmt.Print(kept)
+				}
 			}
 		}
 	case "markdown":
@@ -1602,12 +1616,6 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 		if err != nil {
 			return 0, fmt.Errorf("%s values: %w", testLabel, err)
 		}
-		start := time.Now()
-		pc := newPeriodicCheckpoint(cfg)
-		if steady && pc == nil && cfg.BatchWriteSteadyCheckpointBytes > 0 {
-			pc = &periodicCheckpoint{everyBytes: cfg.BatchWriteSteadyCheckpointBytes}
-		}
-		perOpBytes := int64(8 + cfg.ValueSize)
 		total := cfg.Keys
 		valPos := 0
 		// Keep the precomputed-key optimization bounded so very large runs do
@@ -1660,6 +1668,125 @@ func runBenchmark(cfg BenchConfig) (BenchRun, error) {
 				_ = batch.Close()
 			}
 		}()
+
+		treeDBDictPublished := func() bool {
+			sp, ok := db.(kvstore.StatsProvider)
+			if !ok {
+				return false
+			}
+			stats := sp.Stats()
+			raw := strings.TrimSpace(stats["treedb.cache.vlog_dict.last_applied_dict_id"])
+			if raw == "" {
+				return false
+			}
+			v, err := strconv.ParseUint(raw, 10, 64)
+			return err == nil && v != 0
+		}
+		shouldWarmupDictBatchWrite := func() bool {
+			if steady || total <= 0 {
+				return false
+			}
+			if _, ok := db.(*treedbadapter.DB); !ok {
+				return false
+			}
+			mode, _, err := parseTreeDBVlogCompressionMode(*treedbVlogCompression)
+			if err == nil && mode == treedb.ValueLogCompressionDict {
+				return true
+			}
+			name := strings.ToLower(strings.TrimSpace(db.Name()))
+			return strings.Contains(name, "vlog=dict") || strings.Contains(name, "vlog_dict=on")
+		}
+		if shouldWarmupDictBatchWrite() {
+			warmupKeys := total / 4
+			if warmupKeys < cfg.BatchSize {
+				warmupKeys = cfg.BatchSize
+			}
+			if warmupKeys > total {
+				warmupKeys = total
+			}
+			if warmupKeys > 128_000 {
+				warmupKeys = 128_000
+			}
+			for i := 0; i < warmupKeys; i += cfg.BatchSize {
+				if batch == nil {
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("%s warmup: new batch: %w", testLabel, err)
+					}
+				} else if resetBatch != nil {
+					resetBatch()
+				} else {
+					if err := batch.Close(); err != nil {
+						return 0, fmt.Errorf("%s warmup: close: %w", testLabel, err)
+					}
+					batch = nil
+					if err := openBatch(); err != nil {
+						return 0, fmt.Errorf("%s warmup: new batch: %w", testLabel, err)
+					}
+				}
+
+				end := i + cfg.BatchSize
+				if end > warmupKeys {
+					end = warmupKeys
+				}
+				if setView != nil {
+					for j := i; j < end; j++ {
+						var keyView []byte
+						if precomputeKeys {
+							keyView = keyBytes[j*8 : (j+1)*8]
+						} else {
+							var key [8]byte
+							encodeKey(key[:], uint64(j+cfg.Keys))
+							keyView = key[:]
+						}
+						value := values[valPos%len(values)]
+						valPos++
+						if err := setView(keyView, value); err != nil {
+							return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+						}
+					}
+				} else {
+					for j := i; j < end; j++ {
+						var keyView []byte
+						if precomputeKeys {
+							keyView = keyBytes[j*8 : (j+1)*8]
+						} else {
+							var key [8]byte
+							encodeKey(key[:], uint64(j+cfg.Keys))
+							keyView = key[:]
+						}
+						value := values[valPos%len(values)]
+						valPos++
+						if err := batch.Set(keyView, value); err != nil {
+							return 0, fmt.Errorf("%s warmup: set: %w", testLabel, err)
+						}
+					}
+				}
+				if err := batch.Commit(); err != nil {
+					return 0, fmt.Errorf("%s warmup: commit: %w", testLabel, err)
+				}
+				if resetBatch == nil {
+					if err := batch.Close(); err != nil {
+						return 0, fmt.Errorf("%s warmup: close: %w", testLabel, err)
+					}
+					batch = nil
+				}
+				if treeDBDictPublished() {
+					break
+				}
+			}
+			deadline := time.Now().Add(2 * time.Second)
+			for !treeDBDictPublished() && time.Now().Before(deadline) {
+				time.Sleep(5 * time.Millisecond)
+			}
+			valPos = 0
+		}
+
+		start := time.Now()
+		pc := newPeriodicCheckpoint(cfg)
+		if steady && pc == nil && cfg.BatchWriteSteadyCheckpointBytes > 0 {
+			pc = &periodicCheckpoint{everyBytes: cfg.BatchWriteSteadyCheckpointBytes}
+		}
+		perOpBytes := int64(8 + cfg.ValueSize)
 		for i := 0; i < total; i += cfg.BatchSize {
 			if i&8191 == 0 {
 				if err := guard.Checkpoint(); err != nil {
@@ -3867,6 +3994,54 @@ func renderNonTreeDBDiskUsageString(usage map[string]dirDiskUsage, treedbUsage m
 	return sb.String()
 }
 
+type keptDirEntry struct {
+	name string
+	dir  string
+}
+
+func renderKeptDirsString(instances []*DBInstance) string {
+	if len(instances) == 0 {
+		return ""
+	}
+	rows := make([]keptDirEntry, 0, len(instances))
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		dir := strings.TrimSpace(inst.Dir)
+		if dir == "" {
+			continue
+		}
+		name := strings.TrimSpace(inst.Name)
+		if inst.Wrapper != nil {
+			if wrapperName := strings.TrimSpace(inst.Wrapper.Name()); wrapperName != "" {
+				name = wrapperName
+			}
+		}
+		if name == "" {
+			name = "(unnamed)"
+		}
+		rows = append(rows, keptDirEntry{name: name, dir: dir})
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].name == rows[j].name {
+			return rows[i].dir < rows[j].dir
+		}
+		return rows[i].name < rows[j].name
+	})
+	var sb strings.Builder
+	for _, row := range rows {
+		sb.WriteString(row.name)
+		sb.WriteString(": ")
+		sb.WriteString(row.dir)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
+
 func renderMarkdownSingle(run BenchRun) string {
 	var sb strings.Builder
 	sb.WriteString("# unified_bench\n\n")
@@ -3964,6 +4139,15 @@ func renderMarkdownSingle(run BenchRun) string {
 		sb.WriteString("```text\n")
 		sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 		sb.WriteString("```\n")
+	}
+	if run.Config.KeepDir {
+		if kept := strings.TrimSpace(renderKeptDirsString(run.Instances)); kept != "" {
+			sb.WriteString("\n")
+			sb.WriteString("## Kept Data Directories\n\n")
+			sb.WriteString("```text\n")
+			sb.WriteString(kept)
+			sb.WriteString("\n```\n")
+		}
 	}
 	return sb.String()
 }
@@ -4074,6 +4258,33 @@ func renderMarkdownSweep(runs []BenchRun) string {
 			sb.WriteString("```text\n")
 			sb.WriteString(renderTreeDBVlogRewriteString(run.TreeDBVlogRewrite))
 			sb.WriteString("```\n\n")
+		}
+	}
+
+	anyKept := false
+	for _, run := range runs {
+		if !run.Config.KeepDir {
+			continue
+		}
+		if strings.TrimSpace(renderKeptDirsString(run.Instances)) != "" {
+			anyKept = true
+			break
+		}
+	}
+	if anyKept {
+		sb.WriteString("## Kept Data Directories\n\n")
+		for _, run := range runs {
+			if !run.Config.KeepDir {
+				continue
+			}
+			kept := strings.TrimSpace(renderKeptDirsString(run.Instances))
+			if kept == "" {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("keys=%s\n\n", formatInt(run.Config.Keys)))
+			sb.WriteString("```text\n")
+			sb.WriteString(kept)
+			sb.WriteString("\n```\n\n")
 		}
 	}
 

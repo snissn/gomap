@@ -124,10 +124,10 @@ func TestBuildTreeDBOptions_InvalidVlogAutoPolicy(t *testing.T) {
 
 func TestResolvedTreeDBVlogTrainDefaults(t *testing.T) {
 	train, dict := resolvedTreeDBVlogTrainDefaults(0, 0)
-	if train != 4<<20 {
+	if train != 1<<20 {
 		t.Fatalf("expected default train bytes, got %d", train)
 	}
-	if dict != 40<<10 {
+	if dict != 32<<10 {
 		t.Fatalf("expected default dict bytes, got %d", dict)
 	}
 

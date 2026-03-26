@@ -508,7 +508,12 @@ func (db *DB) ensureValueLogDictTrainer() {
 	if tr == nil {
 		return
 	}
-	tr.SetOnAccept(func(_ *compression.ActiveProfile) { db.valueLogDictKick() })
+	tr.SetOnAccept(func(_ *compression.ActiveProfile) {
+		// Publish accepted profiles immediately so short ingest benchmarks can
+		// start writing dict frames before teardown.
+		db.applyValueLogDictProfile()
+		db.valueLogDictKick()
+	})
 	candidateK := db.valueLogDictCandidateK()
 	if len(candidateK) > 0 {
 		seen := make(map[int]struct{}, len(candidateK))
@@ -545,7 +550,7 @@ func (db *DB) valueLogDictCandidateK() []int {
 		return nil
 	}
 	defaultCandidateK := []int{1, 2, 4, 8, 16, 32}
-	forcePointerCandidateK := []int{8, 16, 32}
+	forcePointerCandidateK := []int{8, 16, 32, 64, 96, 128}
 	if len(db.valueLogAutotuneOptions.CandidateK) > 0 {
 		if db.forceValueLogPointers && !db.valueLogAutotuneCandidateKSet && intSlicesEqual(db.valueLogAutotuneOptions.CandidateK, defaultCandidateK) {
 			out := make([]int, len(forcePointerCandidateK))

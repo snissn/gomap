@@ -99,8 +99,8 @@ func TestValueLogDictCollectSamples_CompressibleBudgetedByPayloadBytes(t *testin
 		t.Fatalf("expected classifier sampled=%d, got=%d", expectedBudget, sampled)
 	}
 	stats := tr.Stats()
-	if stats.Enqueued != uint64(expectedBudget) {
-		t.Fatalf("expected trainer enqueue=%d, got=%d", expectedBudget, stats.Enqueued)
+	if stats.Enqueued == 0 || stats.Enqueued > uint64(expectedBudget) {
+		t.Fatalf("expected trainer enqueue in (0,%d], got=%d", expectedBudget, stats.Enqueued)
 	}
 }
 

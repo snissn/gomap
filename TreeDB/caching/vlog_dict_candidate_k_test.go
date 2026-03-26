@@ -13,7 +13,7 @@ func TestValueLogDictCandidateK_DefaultForcePointers(t *testing.T) {
 		valueLogDictMaxK:      valuelog.MaxFrameK,
 	}
 	got := db.valueLogDictCandidateK()
-	want := []int{8, 16, 32}
+	want := []int{8, 16, 32, 64, 96, 128}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("valueLogDictCandidateK force pointers: got=%v want=%v", got, want)
 	}
@@ -47,7 +47,7 @@ func TestValueLogDictCandidateK_ForcePointersRemapsImplicitDefaultCandidateSet(t
 		},
 	}
 	got := db.valueLogDictCandidateK()
-	want := []int{8, 16, 32}
+	want := []int{8, 16, 32, 64, 96, 128}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("valueLogDictCandidateK remap default: got=%v want=%v", got, want)
 	}
