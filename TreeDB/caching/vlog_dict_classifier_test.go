@@ -267,6 +267,35 @@ func TestValueLogDictShouldAttemptCompression_LargePayloadClampsPauseProbeInterv
 	}
 }
 
+func TestValueLogDictShouldAttemptCompression_LargePayloadPauseProbeDoesNotFireBackToBack(t *testing.T) {
+	const rawLen = 3 << 20
+	db := &DB{
+		valueLogDictProbeBytes: 16 << 20,
+	}
+	db.valueLogDictPauseRemaining.Store(64 << 20)
+	db.valueLogDictProbeRemaining.Store(16 << 20)
+
+	probed := false
+	for i := 0; i < 16; i++ {
+		attempt, probe, paused := db.valueLogDictShouldAttemptCompression(rawLen)
+		if !paused {
+			t.Fatalf("expected paused=true while pause budget remains; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+		}
+		if attempt && probe {
+			probed = true
+			break
+		}
+	}
+	if !probed {
+		t.Fatalf("expected paused large-payload probe within bounded attempts")
+	}
+
+	attempt, probe, paused := db.valueLogDictShouldAttemptCompression(rawLen)
+	if attempt || probe || !paused {
+		t.Fatalf("expected one full payload suppression after probe; got attempt=%v probe=%v paused=%v", attempt, probe, paused)
+	}
+}
+
 func TestValueLogDictShouldAttemptCompression_LargePayloadClampsIncompressibleProbeInterval(t *testing.T) {
 	db := &DB{
 		valueLogDictIncompressibleHoldBytes:  64 << 20,
@@ -292,6 +321,35 @@ func TestValueLogDictShouldAttemptCompression_LargePayloadClampsIncompressiblePr
 	}
 	if !probed {
 		t.Fatalf("expected incompressible-hold large-payload probe within bounded attempts after clamp")
+	}
+}
+
+func TestValueLogDictIncompressibleDecision_LargePayloadProbeDoesNotFireBackToBack(t *testing.T) {
+	const rawLen = uint64(3 << 20)
+	db := &DB{
+		valueLogDictIncompressibleHoldBytes:  64 << 20,
+		valueLogDictIncompressibleProbeBytes: 16 << 20,
+	}
+	db.armValueLogDictIncompressibleHoldBytes(0)
+
+	probed := false
+	for i := 0; i < 16; i++ {
+		attempt, probe, holding := db.valueLogDictIncompressibleDecision(rawLen, true)
+		if !holding {
+			t.Fatalf("expected incompressible hold to remain active during probe window; got attempt=%v probe=%v holding=%v", attempt, probe, holding)
+		}
+		if attempt && probe {
+			probed = true
+			break
+		}
+	}
+	if !probed {
+		t.Fatalf("expected incompressible large-payload probe within bounded attempts")
+	}
+
+	attempt, probe, holding := db.valueLogDictIncompressibleDecision(rawLen, true)
+	if attempt || probe || !holding {
+		t.Fatalf("expected one full payload suppression after incompressible probe; got attempt=%v probe=%v holding=%v", attempt, probe, holding)
 	}
 }
 

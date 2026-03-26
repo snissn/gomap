@@ -786,9 +786,6 @@ func (s *vlogCompressionSelector) choose(dictAvailable bool, rawPayloadBytes, un
 	}
 
 	target := s.preferredCandidate(dictAvailable)
-	if s.shouldPreferLargePayloadDict(dictAvailable, unitPayloadBytes) {
-		target = vlogAutoCandidateDict
-	}
 	target = s.normalizeLargePayloadCandidate(target, unitPayloadBytes)
 	chosen := s.maybeSwitch(target, rawBytes, dictAvailable)
 	mode, codec := candidateWriteMode(chosen, s.seedCodec)

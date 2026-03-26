@@ -10,6 +10,7 @@ import (
 	"math/bits"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"runtime/metrics"
@@ -70,6 +71,8 @@ var valueLogPreparedFramesPool sync.Pool     // stores []preparedDictFrame
 var valueLogDictPrepareResultsPool sync.Pool // stores chan vlogDictPrepareResult
 var valueLogKeyLeaseMu sync.Mutex
 var valueLogKeyLeases [][][]byte
+var backendValueLogReadBarrierRegistryMu sync.Mutex
+var backendValueLogReadBarrierRegistry = make(map[uintptr]map[*DB]struct{})
 
 // Batch arena pooling can retain substantial heap across restore spikes. Track
 // pooled bytes and enforce a byte-budget to cap retention.
@@ -3305,22 +3308,122 @@ func (db *DB) flushValueLogForBackendRead() error {
 	return nil
 }
 
+type valueLogReadBarrierSetter interface {
+	SetCurrentValueLogReadBarrier(func(fileID uint32) error)
+}
+
+func backendValueLogReadBarrierKey(backend any) uintptr {
+	if backend == nil {
+		return 0
+	}
+	v := reflect.ValueOf(backend)
+	if !v.IsValid() {
+		return 0
+	}
+	switch v.Kind() {
+	case reflect.Pointer, reflect.UnsafePointer:
+		return v.Pointer()
+	default:
+		return 0
+	}
+}
+
+func registerBackendValueLogReadBarrierDB(key uintptr, db *DB) {
+	if key == 0 || db == nil {
+		return
+	}
+	backendValueLogReadBarrierRegistryMu.Lock()
+	owners := backendValueLogReadBarrierRegistry[key]
+	if owners == nil {
+		owners = make(map[*DB]struct{})
+		backendValueLogReadBarrierRegistry[key] = owners
+	}
+	owners[db] = struct{}{}
+	backendValueLogReadBarrierRegistryMu.Unlock()
+}
+
+func unregisterBackendValueLogReadBarrierDB(key uintptr, db *DB) int {
+	if key == 0 || db == nil {
+		return 0
+	}
+	backendValueLogReadBarrierRegistryMu.Lock()
+	defer backendValueLogReadBarrierRegistryMu.Unlock()
+	owners := backendValueLogReadBarrierRegistry[key]
+	if owners == nil {
+		return 0
+	}
+	delete(owners, db)
+	if len(owners) == 0 {
+		delete(backendValueLogReadBarrierRegistry, key)
+		return 0
+	}
+	return len(owners)
+}
+
+func snapshotBackendValueLogReadBarrierDBs(key uintptr) []*DB {
+	if key == 0 {
+		return nil
+	}
+	backendValueLogReadBarrierRegistryMu.Lock()
+	owners := backendValueLogReadBarrierRegistry[key]
+	dbs := make([]*DB, 0, len(owners))
+	for db := range owners {
+		dbs = append(dbs, db)
+	}
+	backendValueLogReadBarrierRegistryMu.Unlock()
+	return dbs
+}
+
+func dispatchBackendValueLogReadBarrier(key uintptr, fileID uint32) error {
+	dbs := snapshotBackendValueLogReadBarrierDBs(key)
+	if len(dbs) == 0 {
+		return nil
+	}
+	laneID, _ := valuelog.DecodeFileID(fileID)
+	var firstErr error
+	for _, db := range dbs {
+		if db == nil || db.closing.Load() {
+			continue
+		}
+		if int(laneID) >= len(db.lanes) {
+			continue
+		}
+		if err := db.flushValueLogLane(&db.lanes[laneID]); err != nil {
+			if errors.Is(err, errWALUnavailable) {
+				continue
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		return nil
+	}
+	return firstErr
+}
+
 func (db *DB) installBackendValueLogReadBarrier() {
 	if db == nil {
 		return
 	}
-	barrierSetter, ok := db.backend.(interface {
-		SetCurrentValueLogReadBarrier(func(fileID uint32) error)
-	})
+	barrierSetter, ok := db.backend.(valueLogReadBarrierSetter)
 	if !ok {
 		return
 	}
+	key := backendValueLogReadBarrierKey(db.backend)
+	if key == 0 {
+		barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
+			laneID, _ := valuelog.DecodeFileID(fileID)
+			if int(laneID) >= len(db.lanes) {
+				return nil
+			}
+			return db.flushValueLogLane(&db.lanes[laneID])
+		})
+		return
+	}
+	registerBackendValueLogReadBarrierDB(key, db)
 	barrierSetter.SetCurrentValueLogReadBarrier(func(fileID uint32) error {
-		laneID, _ := valuelog.DecodeFileID(fileID)
-		if int(laneID) < 0 || int(laneID) >= len(db.lanes) {
-			return nil
-		}
-		return db.flushValueLogLane(&db.lanes[laneID])
+		return dispatchBackendValueLogReadBarrier(key, fileID)
 	})
 }
 
@@ -3328,13 +3431,18 @@ func (db *DB) clearBackendValueLogReadBarrier() {
 	if db == nil {
 		return
 	}
-	barrierSetter, ok := db.backend.(interface {
-		SetCurrentValueLogReadBarrier(func(fileID uint32) error)
-	})
+	barrierSetter, ok := db.backend.(valueLogReadBarrierSetter)
 	if !ok {
 		return
 	}
-	barrierSetter.SetCurrentValueLogReadBarrier(nil)
+	key := backendValueLogReadBarrierKey(db.backend)
+	if key == 0 {
+		barrierSetter.SetCurrentValueLogReadBarrier(nil)
+		return
+	}
+	if remaining := unregisterBackendValueLogReadBarrierDB(key, db); remaining == 0 {
+		barrierSetter.SetCurrentValueLogReadBarrier(nil)
+	}
 }
 
 func (db *DB) syncValueLog(laneIDs ...int) error {

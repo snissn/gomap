@@ -817,10 +817,13 @@ func valueLogDictProbeIntervalForPayload(baseProbeBytes, rawBytes uint64) uint64
 	if rawBytes >= valueLogDictLargeProbeMinPayloadBytes && probeBytes > valueLogDictLargeProbeIntervalClampByte {
 		probeBytes = valueLogDictLargeProbeIntervalClampByte
 	}
-	// Avoid probe-on-every-write behavior when payload exceeds the clamped
+	// Avoid probe-on-every-write behavior when payload meets/exceeds the clamped
 	// interval; keep at least one full payload between probes.
-	if rawBytes > 0 && probeBytes < rawBytes {
-		probeBytes = rawBytes
+	if rawBytes > 0 && probeBytes <= rawBytes {
+		if rawBytes == ^uint64(0) {
+			return rawBytes
+		}
+		probeBytes = rawBytes + 1
 	}
 	return probeBytes
 }

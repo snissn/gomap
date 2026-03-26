@@ -2340,7 +2340,6 @@ func (w *rewriteWriter) appendValueWithDict(dictID uint64, dict []byte, rid uint
 	projectedK := len(w.pendingDictRecords) + 1
 	projectedRaw := w.pendingDictRaw + len(value)
 	if w.maxSize > 0 &&
-		w.pendingDictStart > 0 &&
 		w.pendingDictStart+rewriteDictFrameRecordLen(projectedRaw, projectedK) > w.maxSize &&
 		len(w.pendingDictRecords) > 0 {
 		if err := w.flushPendingDictBatch(); err != nil {

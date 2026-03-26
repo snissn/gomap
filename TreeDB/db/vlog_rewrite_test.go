@@ -1043,6 +1043,97 @@ func TestValueLogRewriteOffline_ReencodesGroupedBlockFramesWithObservedDict(t *t
 	}
 }
 
+func TestRewriteWriter_DictBatchMaxSizeGuardAppliesAtOffsetZero(t *testing.T) {
+	walDir := t.TempDir()
+
+	valueA := bytes.Repeat([]byte("offset-zero-guard/value-a|"), 512)
+	valueB := bytes.Repeat([]byte("offset-zero-guard/value-b|"), 512)
+	dictID := uint64(94021)
+	history := append([]byte(nil), valueA...)
+	if len(history) > 8<<10 {
+		history = history[:8<<10]
+	}
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: [][]byte{valueA, valueB},
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	singleEstimate := rewriteDictFrameRecordLen(len(valueA), 1)
+	doubleEstimate := rewriteDictFrameRecordLen(len(valueA)+len(valueB), 2)
+	maxSize := singleEstimate + 64
+	if doubleEstimate <= maxSize {
+		t.Fatalf("invalid test setup: doubleEstimate=%d maxSize=%d", doubleEstimate, maxSize)
+	}
+
+	w := newRewriteWriter(walDir, 0, 0, maxSize)
+	if _, err := w.appendValueWithDict(dictID, dict, 1, valueA); err != nil {
+		t.Fatalf("append first dict value: %v", err)
+	}
+	if _, err := w.appendValueWithDict(dictID, dict, 2, valueB); err != nil {
+		t.Fatalf("append second dict value: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close rewrite writer: %v", err)
+	}
+
+	paths, err := filepath.Glob(filepath.Join(walDir, "value-l0-*.log"))
+	if err != nil {
+		t.Fatalf("glob segments: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("expected rewrite writer to create at least one value-log segment")
+	}
+
+	frames := 0
+	maxK := 0
+	for _, path := range paths {
+		f, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("open %s: %v", filepath.Base(path), err)
+		}
+		func() {
+			defer f.Close()
+			for {
+				var header [valuelog.HeaderSize]byte
+				if _, err := io.ReadFull(f, header[:]); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						return
+					}
+					t.Fatalf("read header %s: %v", filepath.Base(path), err)
+				}
+				bodyLen := binary.LittleEndian.Uint32(header[16:20])
+				body := make([]byte, int(bodyLen))
+				if _, err := io.ReadFull(f, body); err != nil {
+					t.Fatalf("read body %s: %v", filepath.Base(path), err)
+				}
+				frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+				if err != nil {
+					t.Fatalf("DecodeFrame %s: %v", filepath.Base(path), err)
+				}
+				frames++
+				if int(frameHeader.K) > maxK {
+					maxK = int(frameHeader.K)
+				}
+			}
+		}()
+	}
+	if frames == 0 {
+		t.Fatalf("expected at least one frame in rewritten output")
+	}
+	if maxK > 1 {
+		t.Fatalf("expected offset-zero max-size guard to split grouped dict frame, maxK=%d", maxK)
+	}
+}
+
 func TestValueLogRewrite_BatchedPointerSwap_SnapshotIsolation(t *testing.T) {
 	dir := t.TempDir()
 
