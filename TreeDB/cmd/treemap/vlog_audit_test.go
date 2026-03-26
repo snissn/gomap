@@ -18,7 +18,7 @@ func TestCollectValueLogAudit_WiresDictLookupFromRoot(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(root): %v", err)
 	}
@@ -46,7 +46,7 @@ func TestCollectValueLogAudit_AcceptsMainDBDir(t *testing.T) {
 	dir := t.TempDir()
 	buildDictCompressedDBForAudit(t, dir)
 
-	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{})
+	report, err := collectValueLogAudit(filepath.Join(dir, "maindb"), treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{})
 	if err != nil {
 		t.Fatalf("collectValueLogAudit(maindb): %v", err)
 	}
@@ -173,6 +173,39 @@ func TestScanValueLogRIDs_MaxTrackedRIDs(t *testing.T) {
 		MaxTrackedRIDs: 1,
 	}); err == nil {
 		t.Fatal("expected max tracked RIDs error")
+	}
+}
+
+func TestCollectValueLogAudit_FrameScanIncludesModeAndLengthBreakdown(t *testing.T) {
+	dir := t.TempDir()
+	buildDictCompressedDBForAudit(t, dir)
+
+	report, err := collectValueLogAudit(dir, treedbdb.ValueLogRewriteOnlineOptions{}, valueLogRIDAuditOptions{}, valueLogFrameScanAuditOptions{
+		Enabled:    true,
+		TopLengths: 8,
+	})
+	if err != nil {
+		t.Fatalf("collectValueLogAudit(frame scan): %v", err)
+	}
+	if report.FrameScan == nil {
+		t.Fatalf("expected frame scan report")
+	}
+	if report.FrameScan.RecordsTotal == 0 {
+		t.Fatalf("expected non-zero frame scan records")
+	}
+	dictMode, ok := report.FrameScan.Modes["grouped_dict"]
+	if !ok || dictMode.Frames == 0 || dictMode.Subrecords == 0 {
+		t.Fatalf("expected grouped_dict mode stats, got=%+v", report.FrameScan.Modes)
+	}
+	found16K := false
+	for _, row := range report.FrameScan.TopRecordLengthsByBytes {
+		if row.Length == 16<<10 && row.Records > 0 && row.Bytes > 0 {
+			found16K = true
+			break
+		}
+	}
+	if !found16K {
+		t.Fatalf("expected 16KiB record length in top lengths, got=%+v", report.FrameScan.TopRecordLengthsByBytes)
 	}
 }
 

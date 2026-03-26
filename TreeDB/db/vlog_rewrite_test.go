@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -552,6 +553,493 @@ func TestValueLogRewriteOnline_UsesBlockCompressionWhenEnabled(t *testing.T) {
 	}
 	if got, want := frameHeader.Reserved, uint8(valuelog.BlockCodecSnappy); got != want {
 		t.Fatalf("unexpected codec id %d, want %d", got, want)
+	}
+}
+
+func TestValueLogRewriteOffline_ReencodesSingleUncompressedFramesWhenCompressionEnabled(t *testing.T) {
+	dir := t.TempDir()
+
+	opts := Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockSnappy,
+		},
+	}
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
+
+	ptrs := appendPointersInNewSegment(t, dir, 0, 1, 1, 1, func(i int) []byte {
+		// The helper writes dictID=0 records without block compression enabled.
+		return bytes.Repeat([]byte{0}, 4096)
+	})
+	if len(ptrs) != 1 {
+		t.Fatalf("expected 1 pointer, got %d", len(ptrs))
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrs[0]); err != nil {
+		t.Fatalf("set pointer: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+
+	segmentsBefore, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments before rewrite: %v", err)
+	}
+	before := make(map[string]struct{}, len(segmentsBefore))
+	for _, seg := range segmentsBefore {
+		before[seg.path] = struct{}{}
+	}
+
+	closeNoErr(t, db)
+	db = nil
+
+	stats, err := ValueLogRewriteOffline(opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected copied records, got %+v", stats)
+	}
+
+	segmentsAfter, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments after rewrite: %v", err)
+	}
+	var newSeg string
+	for _, seg := range segmentsAfter {
+		if !seg.valueLog {
+			continue
+		}
+		if _, ok := before[seg.path]; ok {
+			continue
+		}
+		newSeg = seg.path
+		break
+	}
+	if newSeg == "" {
+		t.Fatalf("expected rewrite to create a new value-log segment")
+	}
+
+	f, err := os.Open(newSeg)
+	if err != nil {
+		t.Fatalf("open new segment: %v", err)
+	}
+	defer f.Close()
+
+	var header [valuelog.HeaderSize]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		t.Fatalf("read record header: %v", err)
+	}
+	if header[4] != valuelog.Version {
+		t.Fatalf("unexpected valuelog version %d", header[4])
+	}
+
+	valueLen := binary.LittleEndian.Uint32(header[16:20])
+	payload := make([]byte, int(valueLen))
+	if _, err := io.ReadFull(f, payload); err != nil {
+		t.Fatalf("read record payload: %v", err)
+	}
+	frameHeader, _, _, _, err := valuelog.DecodeFrame(payload)
+	if err != nil {
+		t.Fatalf("DecodeFrame: %v", err)
+	}
+	if frameHeader.DictID != 0 {
+		t.Fatalf("expected dictID=0, got %d", frameHeader.DictID)
+	}
+	if frameHeader.Flags&valuelog.FrameFlagCompressed == 0 {
+		t.Fatalf("expected rewritten frame to be block-compressed, header=%+v", frameHeader)
+	}
+	if got, want := frameHeader.Reserved, uint8(valuelog.BlockCodecSnappy); got != want {
+		t.Fatalf("unexpected codec id %d, want %d", got, want)
+	}
+}
+
+func TestValueLogRewriteOffline_ReencodesLargeBlockFramesWithObservedDict(t *testing.T) {
+	dir := t.TempDir()
+
+	value1 := bytes.Repeat([]byte("celestia/state/value/alpha|"), 1700)
+	value2 := bytes.Repeat([]byte("celestia/state/value/beta|"), 1700)
+	value3 := bytes.Repeat([]byte("celestia/state/value/gamma|"), 1700)
+	samples := [][]byte{value1, value2, value3}
+	history := append([]byte(nil), value1[:8<<10]...)
+	dictID := uint64(90321)
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	dictLookup := func(id uint64) ([]byte, error) {
+		if id != dictID {
+			return nil, valuelog.ErrMissingDict
+		}
+		return dict, nil
+	}
+	opts := Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockSnappy,
+			DictLookup:  dictLookup,
+		},
+	}
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("file id: %v", err)
+	}
+	path := filepath.Join(walDir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	w.SetBlockCompression(valuelog.BlockCodecSnappy, true)
+	ptrDict, err := w.Append(dictID, dict, 1, value1)
+	if err != nil {
+		t.Fatalf("append dict: %v", err)
+	}
+	ptrBlock, err := w.Append(0, nil, 2, value2)
+	if err != nil {
+		t.Fatalf("append block: %v", err)
+	}
+	ptrBlock2, err := w.Append(0, nil, 3, value3)
+	if err != nil {
+		t.Fatalf("append block2: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrDict); err != nil {
+		t.Fatalf("set pointer k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrBlock); err != nil {
+		t.Fatalf("set pointer k2: %v", err)
+	}
+	if err := b.SetPointer([]byte("k3"), ptrBlock2); err != nil {
+		t.Fatalf("set pointer k3: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+	closeNoErr(t, db)
+
+	stats, err := ValueLogRewriteOffline(opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected copied records, got %+v", stats)
+	}
+
+	dictFrames := 0
+	blockFrames := 0
+	maxDictK := 0
+	segments, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments: %v", err)
+	}
+	for _, seg := range segments {
+		if !seg.valueLog {
+			continue
+		}
+		f, err := os.Open(seg.path)
+		if err != nil {
+			t.Fatalf("open %s: %v", filepath.Base(seg.path), err)
+		}
+		func() {
+			defer f.Close()
+			for {
+				var header [valuelog.HeaderSize]byte
+				if _, err := io.ReadFull(f, header[:]); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						return
+					}
+					t.Fatalf("read header %s: %v", filepath.Base(seg.path), err)
+				}
+				bodyLen := binary.LittleEndian.Uint32(header[16:20])
+				body := make([]byte, int(bodyLen))
+				if _, err := io.ReadFull(f, body); err != nil {
+					t.Fatalf("read body %s: %v", filepath.Base(seg.path), err)
+				}
+				frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+				if err != nil {
+					t.Fatalf("DecodeFrame %s: %v", filepath.Base(seg.path), err)
+				}
+				if frameHeader.DictID == dictID {
+					dictFrames++
+					if int(frameHeader.K) > maxDictK {
+						maxDictK = int(frameHeader.K)
+					}
+				}
+				if frameHeader.DictID == 0 && frameHeader.Flags&valuelog.FrameFlagCompressed != 0 {
+					blockFrames++
+				}
+			}
+		}()
+	}
+	if dictFrames == 0 {
+		t.Fatalf("expected rewrite to increase dict coverage, dict frames=%d", dictFrames)
+	}
+	if maxDictK < 2 {
+		t.Fatalf("expected rewrite to batch dict re-encodes, max dict k=%d", maxDictK)
+	}
+	if blockFrames != 0 {
+		t.Fatalf("expected no remaining block-compressed frames for test payloads, block frames=%d", blockFrames)
+	}
+
+	db2, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, db2)
+	got1, err := db2.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("Get k1: %v", err)
+	}
+	if !bytes.Equal(got1, value1) {
+		t.Fatalf("k1 mismatch after rewrite")
+	}
+	got2, err := db2.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("Get k2: %v", err)
+	}
+	if !bytes.Equal(got2, value2) {
+		t.Fatalf("k2 mismatch after rewrite")
+	}
+	got3, err := db2.Get([]byte("k3"))
+	if err != nil {
+		t.Fatalf("Get k3: %v", err)
+	}
+	if !bytes.Equal(got3, value3) {
+		t.Fatalf("k3 mismatch after rewrite")
+	}
+}
+
+func TestValueLogRewriteOffline_ReencodesGroupedBlockFramesWithObservedDict(t *testing.T) {
+	dir := t.TempDir()
+
+	value1 := bytes.Repeat([]byte("celestia/state/value/alpha|"), 1700)
+	value2 := bytes.Repeat([]byte("celestia/state/value/beta|"), 1700)
+	value3 := bytes.Repeat([]byte("celestia/state/value/gamma|"), 1700)
+	value4 := bytes.Repeat([]byte("celestia/state/value/delta|"), 1700)
+	samples := [][]byte{value1, value2, value3, value4}
+	history := append([]byte(nil), value1[:8<<10]...)
+	dictID := uint64(90421)
+	dict, err := zstd.BuildDict(zstd.BuildDictOptions{
+		ID:       uint32(dictID),
+		Contents: samples,
+		History:  history,
+		Offsets:  [3]int{1, 4, 8},
+		Level:    zstd.SpeedFastest,
+	})
+	if err != nil {
+		t.Fatalf("BuildDict: %v", err)
+	}
+	if len(dict) == 0 {
+		t.Fatalf("BuildDict returned empty dict")
+	}
+
+	dictLookup := func(id uint64) ([]byte, error) {
+		if id != dictID {
+			return nil, valuelog.ErrMissingDict
+		}
+		return dict, nil
+	}
+	opts := Options{
+		Dir: dir,
+		ValueLog: ValueLogOptions{
+			Compression: ValueLogCompressionBlock,
+			BlockCodec:  ValueLogBlockSnappy,
+			DictLookup:  dictLookup,
+		},
+	}
+
+	db, err := Open(opts)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+
+	walDir := filepath.Join(dir, "wal")
+	if err := os.MkdirAll(walDir, 0o755); err != nil {
+		t.Fatalf("mkdir wal: %v", err)
+	}
+	fileID, err := valuelog.EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatalf("file id: %v", err)
+	}
+	path := filepath.Join(walDir, "value-l0-000001.log")
+	w, err := valuelog.NewWriter(path, fileID)
+	if err != nil {
+		t.Fatalf("new writer: %v", err)
+	}
+	w.SetBlockCompression(valuelog.BlockCodecSnappy, true)
+	ptrDict, err := w.Append(dictID, dict, 1, value1)
+	if err != nil {
+		t.Fatalf("append dict: %v", err)
+	}
+	groupedRecords := []valuelog.Record{
+		{RID: 2, Value: value2},
+		{RID: 3, Value: value3},
+		{RID: 4, Value: value4},
+	}
+	ptrsBlock, _, err := w.AppendFrameWithStats(0, nil, groupedRecords)
+	if err != nil {
+		t.Fatalf("append grouped block frame: %v", err)
+	}
+	if len(ptrsBlock) != len(groupedRecords) {
+		t.Fatalf("grouped pointer count mismatch: got=%d want=%d", len(ptrsBlock), len(groupedRecords))
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("close writer: %v", err)
+	}
+
+	b := db.NewBatch().(*Batch)
+	if err := b.SetPointer([]byte("k1"), ptrDict); err != nil {
+		t.Fatalf("set pointer k1: %v", err)
+	}
+	if err := b.SetPointer([]byte("k2"), ptrsBlock[0]); err != nil {
+		t.Fatalf("set pointer k2: %v", err)
+	}
+	if err := b.SetPointer([]byte("k3"), ptrsBlock[1]); err != nil {
+		t.Fatalf("set pointer k3: %v", err)
+	}
+	if err := b.SetPointer([]byte("k4"), ptrsBlock[2]); err != nil {
+		t.Fatalf("set pointer k4: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("seed write: %v", err)
+	}
+	closeNoErr(t, b)
+	closeNoErr(t, db)
+
+	stats, err := ValueLogRewriteOffline(opts)
+	if err != nil {
+		t.Fatalf("ValueLogRewriteOffline: %v", err)
+	}
+	if stats.RecordsCopied == 0 {
+		t.Fatalf("expected copied records, got %+v", stats)
+	}
+
+	dictFrames := 0
+	blockFrames := 0
+	maxDictK := 0
+	segments, err := listWALSegments(dir)
+	if err != nil {
+		t.Fatalf("list segments: %v", err)
+	}
+	for _, seg := range segments {
+		if !seg.valueLog {
+			continue
+		}
+		f, err := os.Open(seg.path)
+		if err != nil {
+			t.Fatalf("open %s: %v", filepath.Base(seg.path), err)
+		}
+		func() {
+			defer f.Close()
+			for {
+				var header [valuelog.HeaderSize]byte
+				if _, err := io.ReadFull(f, header[:]); err != nil {
+					if err == io.EOF || err == io.ErrUnexpectedEOF {
+						return
+					}
+					t.Fatalf("read header %s: %v", filepath.Base(seg.path), err)
+				}
+				bodyLen := binary.LittleEndian.Uint32(header[16:20])
+				body := make([]byte, int(bodyLen))
+				if _, err := io.ReadFull(f, body); err != nil {
+					t.Fatalf("read body %s: %v", filepath.Base(seg.path), err)
+				}
+				frameHeader, _, _, _, err := valuelog.DecodeFrame(body)
+				if err != nil {
+					t.Fatalf("DecodeFrame %s: %v", filepath.Base(seg.path), err)
+				}
+				if frameHeader.DictID == dictID {
+					dictFrames++
+					if int(frameHeader.K) > maxDictK {
+						maxDictK = int(frameHeader.K)
+					}
+				}
+				if frameHeader.DictID == 0 && frameHeader.Flags&valuelog.FrameFlagCompressed != 0 {
+					blockFrames++
+				}
+			}
+		}()
+	}
+	if dictFrames == 0 {
+		t.Fatalf("expected rewrite to produce dict frames, dictFrames=%d", dictFrames)
+	}
+	if maxDictK < 3 {
+		t.Fatalf("expected grouped block re-encodes to batch under dict, maxDictK=%d", maxDictK)
+	}
+	if blockFrames != 0 {
+		t.Fatalf("expected grouped block frames to be rewritten under dict, blockFrames=%d", blockFrames)
+	}
+
+	db2, err := Open(opts)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer closeNoErr(t, db2)
+	got1, err := db2.Get([]byte("k1"))
+	if err != nil {
+		t.Fatalf("Get k1: %v", err)
+	}
+	if !bytes.Equal(got1, value1) {
+		t.Fatalf("k1 mismatch after rewrite")
+	}
+	got2, err := db2.Get([]byte("k2"))
+	if err != nil {
+		t.Fatalf("Get k2: %v", err)
+	}
+	if !bytes.Equal(got2, value2) {
+		t.Fatalf("k2 mismatch after rewrite")
+	}
+	got3, err := db2.Get([]byte("k3"))
+	if err != nil {
+		t.Fatalf("Get k3: %v", err)
+	}
+	if !bytes.Equal(got3, value3) {
+		t.Fatalf("k3 mismatch after rewrite")
+	}
+	got4, err := db2.Get([]byte("k4"))
+	if err != nil {
+		t.Fatalf("Get k4: %v", err)
+	}
+	if !bytes.Equal(got4, value4) {
+		t.Fatalf("k4 mismatch after rewrite")
 	}
 }
 

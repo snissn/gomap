@@ -604,6 +604,36 @@ func runVlogRewrite(dir string, args []string) {
 	rootDir := resolveTreeDBRootDir(dir)
 	opts := treedb.Options{Dir: rootDir}
 	applyPersistedFormatConfig(dir, &opts)
+
+	var closers []func() error
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			_ = closers[i]()
+		}
+	}()
+
+	// Mirror vlog-gc dict lookup wiring so rewrite can decode/validate dict
+	// frames and, when applicable, reuse dict bytes during rewrite re-encoding.
+	dictDir := filepath.Join(rootDir, "dictdb")
+	dictIndexPath := filepath.Join(dictDir, "index.db")
+	if _, err := os.Stat(dictIndexPath); err == nil {
+		dictOpts := treedbdb.Options{Dir: dictDir, ReadOnly: true}
+		applyPersistedFormatConfig(dictDir, &dictOpts)
+		dictOpts.DisableBackgroundPrune = true
+		dictOpts.ValueLog.Compression = treedbdb.ValueLogCompressionOff
+		dictBackend, err := treedbdb.Open(dictOpts)
+		if err != nil {
+			fatalf("dictdb open: %v", err)
+		}
+		store := dictdb.New(dictBackend)
+		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
+			return store.GetDictBytes(context.Background(), dictID)
+		}
+		closers = append(closers, dictBackend.Close)
+	} else if !os.IsNotExist(err) {
+		fatalf("stat dictdb index: %v", err)
+	}
+
 	stats, err := treedb.ValueLogRewriteOffline(opts)
 	if err != nil {
 		fatalf("ValueLogRewriteOffline error: %v", err)
